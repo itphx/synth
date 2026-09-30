@@ -125,16 +125,17 @@ afterEach(async () => {
 })
 
 describe('ProjectTab — проектный MCP-скоуп (AD-071 §2.4)', () => {
-  it('owner видит управление, системный сервер помечен и не управляется', async () => {
+  it('owner видит управление; системный сервер тоже управляется проектом', async () => {
     const container = await renderTab()
     expect(container.querySelector('[data-testid="project-mcp-list"]')).not.toBeNull()
 
     const sysRow = container.querySelector('[data-testid="project-mcp-sys"]')!
     expect(sysRow.textContent).toContain('system')
-    expect(sysRow.textContent).not.toContain('managed by the administrator')
-    expect(sysRow.querySelectorAll('button[role="switch"]')).toHaveLength(0)
+    expect(sysRow.textContent).not.toContain('the project can also disable access')
+    // Системный сервер теперь тоже можно гасить на уровне проекта: два тумблера.
+    expect(sysRow.querySelectorAll('button[role="switch"]')).toHaveLength(2)
 
-    // У системного сервера systemHint скрыт под катом.
+    // Подсказка для системного сервера скрыта под катом.
     const sysCat = sysRow.querySelector('[data-testid="project-mcp-sys-details-toggle"]') as HTMLButtonElement
     expect(sysCat).toBeTruthy()
     expect(sysCat.getAttribute('aria-expanded')).toBe('false')
@@ -142,7 +143,7 @@ describe('ProjectTab — проектный MCP-скоуп (AD-071 §2.4)', () =
       sysCat.click()
     })
     expect(sysCat.getAttribute('aria-expanded')).toBe('true')
-    expect(container.querySelector('[data-testid="project-mcp-sys-details-content"]')!.textContent).toContain('managed by the administrator')
+    expect(container.querySelector('[data-testid="project-mcp-sys-details-content"]')!.textContent).toContain('the project can also disable access')
 
     const srvRow = container.querySelector('[data-testid="project-mcp-srvB"]')!
     expect(srvRow.querySelectorAll('button[role="switch"]')).toHaveLength(2)

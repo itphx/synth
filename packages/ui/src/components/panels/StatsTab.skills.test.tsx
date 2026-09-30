@@ -81,9 +81,14 @@ function skillsEffective() {
         trusted: false, available: false, unavailableReason: 'capabilities', enabled: false, disabled: true,
         disabledReason: 'session',
       },
+      {
+        name: 'proj-blocked', description: 'Project gate', level: 'project', scope: 'project',
+        trusted: true, available: true, enabled: false, disabled: true,
+        disabledReason: 'project',
+      },
     ],
     enabled: ['api-review'],
-    disabled: ['db-migration'],
+    disabled: ['db-migration', 'proj-blocked'],
   }
 }
 
@@ -179,6 +184,17 @@ describe('StatsTab — секция «Скиллы» (AD-046 §9.3)', () => {
     expect(dbRow.textContent).toContain('capabilities')
     expect(dbRow.textContent).toContain('session opt-out')
     expect(dbRow.textContent).toContain('Untrusted')
+  })
+
+  it('project-гейт: причина в «Включён», источник — project (не stable)', async () => {
+    const container = await renderStats()
+    await expandSection(container, 'Skills')
+    const row = container.querySelector('[data-testid="stats-skill-proj-blocked"]')!
+    const cells = row.querySelectorAll('td')
+    // Колонка «Включён» — disabled + причина project.
+    expect(cells[3]!.textContent).toContain('not allowed by project')
+    // Колонка «Источник» — project, а не stable.
+    expect(cells[cells.length - 1]!.textContent?.trim()).toBe('project')
   })
 
   it('токены скилла — оценка с ~ по ratio манифеста', async () => {

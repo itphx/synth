@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { ProjectStore, SessionManager, McpManager } from '@itphx/synth-core';
-import { createProjectRoutes as createCoreProjectRoutes } from '@itphx/synth-core';
+import type { ProjectStore, SessionManager, McpManager, SkillService, RuntimeSettingsStore, McpRegistryStore } from '@itphx/synth-core';
+import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
 import { ProjectRole } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
@@ -42,6 +42,10 @@ export function createProjectRoutes(
   workspacesRoot: string,
   /** AD-071 §2.4: источник известных MCP-серверов для проектного скоупа. */
   mcpManager?: McpManager,
+  /** AD-046 §4.5: сид скиллов нового проекта (системные дефолты). */
+  skillService?: SkillService,
+  settingsStore?: RuntimeSettingsStore,
+  mcpRegistryStore?: McpRegistryStore,
 ): Hono {
   const { canManageProject, canEditProjectContent } = createProjectAccess(kit);
 
@@ -60,6 +64,24 @@ export function createProjectRoutes(
       },
       autoProvisionWorkspace: true,
       getMcpServers: () => Object.keys(mcpManager?.getConfig() ?? {}),
+      getProjectSeeds: async () => {
+        const defaultMcpServers = mcpRegistryStore
+          ? await mcpRegistryStore.toDefaultServers()
+          : Object.entries(mcpManager?.getConfig() ?? {})
+            .filter(([, cfg]) => cfg.enabledByDefault === true)
+            .map(([name]) => name);
+        return {
+          mcp: { enabled: [...defaultMcpServers], defaultOn: [...defaultMcpServers] },
+          ...(skillService && settingsStore
+            ? {
+                skills: await resolveProjectSkillSeed(
+                  skillService,
+                  await settingsStore.getSkillsDisabledForNewProjects(),
+                ),
+              }
+            : {}),
+        };
+      },
       sessionManager,
       getWorkspacesRoot: () => workspacesRoot,
       getOutsideRootPolicy: () => 'deny',

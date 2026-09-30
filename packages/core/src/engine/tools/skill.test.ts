@@ -130,4 +130,46 @@ describe('core-тул skill (AD-046 §5)', () => {
     const res = await skillTool.execute({}, ctx({ skillRuntime: makeRuntime(discovered('x')) }));
     expect(res.isError).toBe(true);
   });
+
+  it('AD-046 §4.5: projectEnabled=[] → skill.scope_disabled (reason=project)', async () => {
+    const runtime = makeRuntime(discovered('a'));
+    const res = await skillTool.execute(
+      { name: 'a' },
+      ctx({ skillRuntime: runtime, skillScope: { projectEnabled: [], defaultOn: ['a'] } }),
+    );
+    expect(res.isError).toBe(true);
+    expect(res.content).toContain('disabled');
+    expect(res.content).toContain('project');
+    expect(res.metadata).toMatchObject({ disabledReason: 'project' });
+  });
+
+  it('AD-046 §4.5: системный hard-gate → skill.scope_disabled (reason=system)', async () => {
+    const runtime = makeRuntime(discovered('a'));
+    const res = await skillTool.execute(
+      { name: 'a' },
+      ctx({ skillRuntime: runtime, skillScope: { systemDisabled: { skills: ['a'] }, defaultOn: ['a'] } }),
+    );
+    expect(res.isError).toBe(true);
+    expect(res.metadata).toMatchObject({ disabledReason: 'system' });
+  });
+
+  it('AD-046 §4.5: скилл вне снапшота и без включения → scope_disabled (reason=session)', async () => {
+    const runtime = makeRuntime(discovered('a'));
+    const res = await skillTool.execute(
+      { name: 'a' },
+      ctx({ skillRuntime: runtime, skillScope: { defaultOn: [] } }),
+    );
+    expect(res.isError).toBe(true);
+    expect(res.metadata).toMatchObject({ disabledReason: 'session' });
+  });
+
+  it('AD-046 §4.5: снапшот включает скилл → загружается', async () => {
+    const runtime = makeRuntime(discovered('a'));
+    const res = await skillTool.execute(
+      { name: 'a' },
+      ctx({ skillRuntime: runtime, skillScope: { defaultOn: ['a'] } }),
+    );
+    expect(res.isError).toBeFalsy();
+    expect(res.content).toContain('Body of a');
+  });
 });

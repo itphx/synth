@@ -1606,19 +1606,20 @@ export const synthApi = {
   },
 
   // --- Скиллы: instance-wide настройки (AD-046 §4.5) ---
-  /** GET /settings/skills — отключения (группы/категории/имена) и политика. */
+  /** GET /settings/skills — мастер-гейт, сид новых проектов и политика. */
   async getSkillsSettings(): Promise<SkillsSettingsResponse> {
     return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`)
   },
 
-  /** PUT /settings/skills — сохранить отключения и (опционально) политику. */
-  async updateSkillsSettings(
-    disabled: SkillsDisabledRequest,
-    policy?: ToolsPolicy,
-  ): Promise<SkillsSettingsResponse> {
+  /** PUT /settings/skills — сохранить мастер-гейт, сид новых проектов и (опционально) политику. */
+  async updateSkillsSettings(input: {
+    disabled: SkillsDisabledRequest
+    disabledForNewProjects?: SkillsDisabledRequest
+    policy?: ToolsPolicy
+  }): Promise<SkillsSettingsResponse> {
     return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`, {
       method: 'PUT',
-      body: JSON.stringify(policy ? { disabled, policy } : { disabled }),
+      body: JSON.stringify(input),
     })
   },
 
@@ -1913,6 +1914,8 @@ export interface McpSettingsPayload {
 export interface McpRegistryAddInput {
   name: string
   config: McpServerConfig
+  /** Системный мастер-флаг (hard-gate): `false` — сервер недоступен нигде. */
+  enabled?: boolean
   enabledByDefault?: boolean
   origin?: 'instance' | 'user'
 }
@@ -1921,6 +1924,8 @@ export interface McpRegistryAddInput {
 export interface McpRegistryUpdateInput {
   name?: string
   config?: McpServerConfig
+  /** Системный мастер-флаг (hard-gate). */
+  enabled?: boolean
   enabledByDefault?: boolean
 }
 
@@ -2015,7 +2020,7 @@ export interface EffectiveSkillEntry {
   unavailableReason?: string
   enabled: boolean
   disabled: boolean
-  disabledReason?: 'session' | 'system'
+  disabledReason?: 'session' | 'system' | 'project'
 }
 
 /** AD-046 §4.5: ответ GET/PUT /api/v2/sessions/:id/skills. */
@@ -2036,7 +2041,10 @@ export interface ProjectSkillsResponse {
 
 /** AD-046 §4.5: ответ GET/PUT /api/v2/settings/skills. */
 export interface SkillsSettingsResponse {
+  /** Мастер-гейт: скиллы, недоступные нигде. */
   disabled: SkillsDisabledRequest
+  /** Сид новых проектов: что не включать по умолчанию. */
+  disabledForNewProjects: SkillsDisabledRequest
   policy: ToolsPolicy
 }
 

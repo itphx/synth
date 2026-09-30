@@ -230,6 +230,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'skill.untrusted',
   'skill.delegation',
   'skill.file_not_found',
+  'skill.scope_disabled',
   // --- Slash-команды (AD-046 §7) ---
   'command.unknown',
   'command.denied',
@@ -477,6 +478,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'skill.untrusted': ["name"],
   'skill.delegation': ["name","capabilities","agent"],
   'skill.file_not_found': ["path"],
+  'skill.scope_disabled': ["name","reason"],
   // --- Slash-команды (AD-046 §7) ---
   'command.unknown': ["name"],
   'command.denied': ["name"],

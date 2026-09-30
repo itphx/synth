@@ -35,6 +35,8 @@ export interface CommandInvokedEvent {
 
 /** Дефолт instance-отключений (пусто) и политики (`auto`) — для Reset/`isDefault`. */
 export const EMPTY_SKILLS_DISABLED: SkillsDisabledRequest = { categories: [], groups: [], skills: [] }
+/** Дефолт сида новых проектов (пусто — все обнаруженные скиллы включаются). */
+export const EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS: SkillsDisabledRequest = { categories: [], groups: [], skills: [] }
 export const DEFAULT_SKILLS_POLICY: ToolsPolicy = 'auto'
 
 export interface SkillsStore {
@@ -62,6 +64,8 @@ export interface SkillsStore {
 
   // Instance-wide отключения и политика
   settingsDisabled: SkillsDisabledRequest | null
+  /** Сид новых проектов: что не включать по умолчанию. */
+  settingsDisabledForNewProjects: SkillsDisabledRequest | null
   settingsPolicy: ToolsPolicy
   settingsLoading: boolean
   settingsError: string | null
@@ -98,7 +102,11 @@ export interface SkillsStore {
   deleteBundle: (name: string) => Promise<void>
 
   fetchSkillsSettings: () => Promise<void>
-  saveSkillsSettings: (disabled: SkillsDisabledRequest, policy?: ToolsPolicy) => Promise<void>
+  saveSkillsSettings: (input: {
+    disabled: SkillsDisabledRequest
+    disabledForNewProjects?: SkillsDisabledRequest
+    policy?: ToolsPolicy
+  }) => Promise<void>
   resetSkillsSettings: () => Promise<void>
 
   recordSkillInvoked: (event: SkillInvokedEvent) => void
@@ -125,6 +133,7 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
   bundlesError: null,
 
   settingsDisabled: null,
+  settingsDisabledForNewProjects: null,
   settingsPolicy: DEFAULT_SKILLS_POLICY,
   settingsLoading: false,
   settingsError: null,
@@ -345,6 +354,8 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
       const r = await synthApi.getSkillsSettings()
       set({
         settingsDisabled: r.disabled,
+        settingsDisabledForNewProjects: r.disabledForNewProjects
+          ?? EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
         settingsPolicy: r.policy,
         settingsLoading: false,
       })
@@ -356,12 +367,15 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
     }
   },
 
-  saveSkillsSettings: async (disabled, policy) => {
+  saveSkillsSettings: async (input) => {
     set({ settingsLoading: true, settingsError: null })
     try {
-      const r = await synthApi.updateSkillsSettings(disabled, policy)
+      const r = await synthApi.updateSkillsSettings(input)
       set({
         settingsDisabled: r.disabled,
+        settingsDisabledForNewProjects: r.disabledForNewProjects
+          ?? input.disabledForNewProjects
+          ?? EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
         settingsPolicy: r.policy,
         settingsLoading: false,
       })
@@ -380,6 +394,7 @@ export const useSkillsStore = create<SkillsStore>((set, get) => ({
       await synthApi.resetSkillsSettings()
       set({
         settingsDisabled: { ...EMPTY_SKILLS_DISABLED },
+        settingsDisabledForNewProjects: { ...EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS },
         settingsPolicy: DEFAULT_SKILLS_POLICY,
         settingsLoading: false,
       })

@@ -4,13 +4,15 @@ import type { ToolDefinition } from '@itphx/synth-shared';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import { buildSkillContentBlock, truncateSkillOutput } from '../skills/loader.js';
-import { missingCapabilities } from '../skills/scope.js';
-import type { SkillRuntime } from '../skills/types.js';
+import { missingCapabilities, resolveSkillAvailability } from '../skills/scope.js';
+import type { SkillRuntime, SkillScopeOptions } from '../skills/types.js';
 
 /** `ctx.extra` для тула `skill` (пробрасывается оркестратором/саб-агентом). */
 interface SkillToolExtra {
   skillRuntime?: SkillRuntime;
   agentRegistry?: { get(id: string): { capabilities?: readonly string[] } | undefined };
+  /** AD-046 §4.5: scope-гейты скиллов (система/проект/сессия) текущего контекста. */
+  skillScope?: SkillScopeOptions;
 }
 
 /**
@@ -64,6 +66,21 @@ export const skillTool: ToolDefinition = {
         content: sm('skill.untrusted', { name: params.name }),
         isError: true,
         metadata: { i18n: i18nMeta('skill.untrusted', { name: params.name }) },
+      };
+    }
+
+    // AD-046 §4.5: scope-гейты — системный/проектный hard-gate и сессионный
+    // opt-out; отключённый скилл не грузится (причина — i18n-параметр).
+    const availability = resolveSkillAvailability(skill.meta, extra.skillScope);
+    if (!availability.enabled) {
+      const reason = availability.reason ?? 'session';
+      return {
+        content: sm('skill.scope_disabled', { name: params.name, reason }),
+        isError: true,
+        metadata: {
+          i18n: i18nMeta('skill.scope_disabled', { name: params.name, reason }),
+          disabledReason: reason,
+        },
       };
     }
 

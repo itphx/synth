@@ -45,6 +45,7 @@ const ENTRY_SYS = {
   origin: 'instance',
   author: null,
   trust: 'builtin',
+  enabled: true,
   enabledByDefault: true,
   createdAt: '',
   updatedAt: '',
@@ -58,6 +59,7 @@ const ENTRY_COMMUNITY = {
   origin: 'user',
   author: { userId: 'u1', username: 'alice' },
   trust: 'community',
+  enabled: true,
   enabledByDefault: false,
   createdAt: '',
   updatedAt: '',
@@ -186,6 +188,80 @@ describe('McpSettings — реестр MCP (AD-071 §2.5)', () => {
     const comRow = container.querySelector('[data-testid="mcp-registry-community"]')!
     const edit = comRow.querySelector('button[aria-label="Edit"]') as HTMLButtonElement
     expect(edit.disabled).toBe(false)
+  })
+
+  it('мастер-тумблер enabled: выключение шлёт enabled: false', async () => {
+    const container = await renderSettings()
+    const row = container.querySelector('[data-testid="mcp-registry-sys"]')!
+    const toggles = row.querySelectorAll('button[role="switch"]')
+    expect(toggles).toHaveLength(2)
+    const master = toggles[0] as HTMLButtonElement
+    expect(master.getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => {
+      master.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateMcpRegistryEntry).toHaveBeenCalledWith('e-sys', { enabled: false })
+  })
+
+  it('мастер enabled и enabledByDefault сохраняются независимо', async () => {
+    const container = await renderSettings()
+    const row = container.querySelector('[data-testid="mcp-registry-community"]')!
+    const defaultToggle = row.querySelectorAll('button[role="switch"]')[1] as HTMLButtonElement
+    expect(defaultToggle.getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      defaultToggle.click()
+    })
+    await act(async () => {})
+    expect(mocks.updateMcpRegistryEntry).toHaveBeenCalledWith('e-com', { enabledByDefault: true })
+    mocks.updateMcpRegistryEntry.mockClear()
+
+    const master = container.querySelector(
+      '[data-testid="mcp-registry-community"] button[role="switch"]',
+    ) as HTMLButtonElement
+    await act(async () => {
+      master.click()
+    })
+    await act(async () => {})
+    expect(mocks.updateMcpRegistryEntry).toHaveBeenCalledWith('e-com', { enabled: false })
+  })
+
+  it('форма реестра: мастер-тумблер сохраняется в enabled', async () => {
+    const container = await renderSettings()
+    const row = container.querySelector('[data-testid="mcp-registry-community"]')!
+    await act(async () => {
+      ;(row.querySelector('button[aria-label="Edit"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    const nameInput = container.querySelector('input[placeholder="my-server"]') as HTMLInputElement
+    expect(nameInput).toBeTruthy()
+    const form = nameInput.closest('section')!
+    // В форме — мастер `enabled` и `enabledByDefault` (два тумблера).
+    const switches = form.querySelectorAll('button[role="switch"]')
+    expect(switches.length).toBeGreaterThanOrEqual(2)
+    const master = switches[0] as HTMLButtonElement
+    expect(master.getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => {
+      master.click()
+    })
+    const save = [...form.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Save',
+    ) as HTMLButtonElement
+    expect(save).toBeTruthy()
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateMcpRegistryEntry).toHaveBeenCalledWith(
+      'e-com',
+      expect.objectContaining({ enabled: false }),
+    )
   })
 })
 

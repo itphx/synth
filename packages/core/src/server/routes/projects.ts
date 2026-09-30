@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
-import type { Project, Session, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import type { Project, Session, WorkspaceOutsideRootPolicy, ProjectMcpSettings, ProjectSkillSettings } from '@itphx/synth-shared';
 import { projectMcpUpdateSchema, slugifyWorkspaceName, uniqueWorkspaceName } from '@itphx/synth-shared';
 import type { ProjectStore } from '../../storage/project-store.js';
 import { serializeProject } from '../serialize.js';
@@ -74,6 +74,11 @@ export interface ProjectRoutesOptions {
    * `GET/PUT /:id/mcp` (RBAC — через `canManage`). Не задан — роутов нет.
    */
   getMcpServers?: () => string[];
+  /**
+   * AD-071 §2.4 / AD-046 §4.5: сид скоупа нового проекта (снимок системных
+   * дефолтов). Не задан — проект создаётся без `mcp`/`skills` (legacy-гейт открыт).
+   */
+  getProjectSeeds?: () => Promise<{ mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings }> | { mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings };
   /** Менеджер сессий. Задан — регистрируется `GET /:id/stats`. */
   sessionManager?: ProjectStatsSource;
 }
@@ -430,12 +435,16 @@ export function createProjectRoutes(
       return c.json({ error: { code: resolved.code, message: resolved.message } }, resolved.status);
     }
 
+    // AD-071 §2.4 / AD-046 §4.5: сид скоупа проекта из системных дефолтов.
+    const seeds = await Promise.resolve(opts.getProjectSeeds?.()).catch(() => undefined);
+
     const project = store.create(name, await currentUserId(c), {
       description: body.description,
       icon: body.icon,
       color: body.color,
       workspace: resolved.workspace,
       repos: body.repos || undefined,
+      ...(seeds ? { mcp: seeds.mcp, skills: seeds.skills } : {}),
     });
     const planResult = planFieldSchema.safeParse(body.plan);
     if (planResult.success && planResult.data !== undefined) {

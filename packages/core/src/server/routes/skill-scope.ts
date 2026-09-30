@@ -2,15 +2,18 @@ import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
 import {
   skillsDisabledSchema,
+  skillsSystemSettingsSchema,
   sessionSkillUpdateSchema,
   projectSkillUpdateSchema,
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { SkillService } from '../../engine/skills/service.js';
 import type { RuntimeSettingsStore } from '../../storage/runtime-settings.js';
-import type { Project, PermissionConfig, Session } from '@itphx/synth-shared';
+import type { Project, PermissionConfig, Session, SkillsDisabledRequest } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
 import { resolveSkillRule } from '../../engine/permission/evaluator.js';
+import { resolveSkillAvailability } from '../../engine/skills/scope.js';
+import type { SkillScopeOptions } from '../../engine/skills/types.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -40,6 +43,8 @@ export interface SkillScopeRoutesOptions {
   canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
   /** Доступ к управлению проектом (owner/LEAD/ADMIN). Standalone — разрешено. */
   canAccessProject?: (project: Project, c: Context, userId: string) => boolean | Promise<boolean>;
+  /** AD-046 §4.5: live-обновление системного hard-gate скиллов (оркестратор). */
+  onSkillsDisabledChange?: (disabled: SkillsDisabledRequest) => void;
 }
 
 interface EffectiveSkill {
@@ -52,7 +57,7 @@ interface EffectiveSkill {
   unavailableReason?: string;
   enabled: boolean;
   disabled: boolean;
-  disabledReason?: 'session' | 'system';
+  disabledReason?: 'system' | 'project' | 'session';
 }
 
 async function listEffectiveSkills(
@@ -61,8 +66,10 @@ async function listEffectiveSkills(
     projectWorkspace?: string;
     sessionEnabled: string[];
     sessionDisabled: string[];
-    projectEnabled: string[];
-    projectDefaultOn: string[];
+    /** Hard-gate проекта (`project.skills.enabled`); undefined — без гейта. */
+    projectEnabled?: string[];
+    /** Снапшот/сид новых сессий; undefined — legacy-режим. */
+    defaultOn?: string[];
     /** Effective permission-конфиг (session.settings.permission ?? global). */
     permissionConfig?: PermissionConfig;
   },
@@ -70,23 +77,23 @@ async function listEffectiveSkills(
   if (!deps.skillService) return [];
   const { skills } = await deps.skillService.listSummaries({ projectWorkspace: opts.projectWorkspace });
   const systemDisabled = await deps.settingsStore?.getSkillsDisabled();
-  const systemDisabledSet = new Set([
-    ...(systemDisabled?.skills ?? []),
-    ...(systemDisabled?.groups ?? []),
-    ...(systemDisabled?.categories ?? []),
-  ]);
+  const scope: SkillScopeOptions = {
+    systemDisabled,
+    projectEnabled: opts.projectEnabled,
+    defaultOn: opts.defaultOn,
+    sessionEnabled: opts.sessionEnabled,
+    sessionDisabled: opts.sessionDisabled,
+  };
 
   return skills
     // AD-046 §8.1: `deny` скрывает скилл из выдачи (в отличие от disabled).
     .filter((s) => resolveSkillRule(opts.permissionConfig, s.name)?.action !== 'deny')
     .map((s) => {
-      const sessionOff = opts.sessionDisabled.includes(s.name)
-        || (s.category ? opts.sessionDisabled.includes(s.category) : false)
-        || s.groups.some((g) => opts.sessionDisabled.includes(g));
-      const systemOff = systemDisabledSet.has(s.name) || systemDisabledSet.has(s.category ?? '');
+      const availability = resolveSkillAvailability(
+        { name: s.name, category: s.category, groups: s.groups },
+        scope,
+      );
       const sessionOn = opts.sessionEnabled.includes(s.name);
-      const projectOn = opts.projectDefaultOn.includes(s.name);
-      const disabled = sessionOff || systemOff;
       return {
         name: s.name,
         description: s.description,
@@ -95,11 +102,9 @@ async function listEffectiveSkills(
         trusted: s.trusted,
         available: s.available,
         ...(s.unavailableReason ? { unavailableReason: s.unavailableReason } : {}),
-        enabled: !disabled && (sessionOn || projectOn || s.level === 'system' || opts.projectEnabled.includes(s.name)),
-        disabled,
-        ...(disabled
-          ? { disabledReason: (sessionOff ? 'session' : 'system') as 'session' | 'system' }
-          : {}),
+        enabled: availability.enabled,
+        disabled: !availability.enabled,
+        ...(availability.reason ? { disabledReason: availability.reason } : {}),
       };
     });
 }
@@ -156,8 +161,8 @@ export function createSessionSkillScopeRoutes(
       projectWorkspace: workspace,
       sessionEnabled: session.settings.skills ?? [],
       sessionDisabled: session.settings.skillsDisabled ?? [],
-      projectEnabled: project?.skills?.enabled ?? [],
-      projectDefaultOn: project?.skills?.defaultOn ?? [],
+      projectEnabled: project?.skills ? project.skills.enabled : undefined,
+      defaultOn: session.settings.skillsDefaultOn,
       permissionConfig: session.settings.permission ?? deps.permissionConfig,
     });
     return c.json({
@@ -240,8 +245,8 @@ export function createProjectSkillScopeRoutes(
       projectWorkspace: workspace,
       sessionEnabled: [],
       sessionDisabled: [],
-      projectEnabled: project.skills?.enabled ?? [],
-      projectDefaultOn: project.skills?.defaultOn ?? [],
+      projectEnabled: project.skills ? project.skills.enabled : undefined,
+      defaultOn: project.skills ? project.skills.defaultOn : undefined,
       permissionConfig: deps.permissionConfig,
     });
     return c.json({
@@ -284,29 +289,45 @@ export function createSkillSettingsRoutes(
 
   app.get('/skills', auth.requireAuth, async (c) => {
     const disabled = (await deps.settingsStore?.getSkillsDisabled()) ?? { categories: [], groups: [], skills: [] };
+    const disabledForNewProjects = (await deps.settingsStore?.getSkillsDisabledForNewProjects())
+      ?? { categories: [], groups: [], skills: [] };
     const policy = (await deps.settingsStore?.getSkillsPolicy()) ?? 'auto';
-    return c.json({ disabled, policy });
+    return c.json({ disabled, disabledForNewProjects, policy });
   });
 
   app.put('/skills', auth.requireAuth, writeGuard, async (c) => {
     if (!deps.settingsStore) return c.json({ error: { code: 'INTERNAL_ERROR', message: 'settingsStore не настроен' } }, 500);
     const body = await c.req.json().catch(() => ({})) as Record<string, unknown>;
-    const parsed = skillsDisabledSchema.safeParse(body.disabled ?? body);
+    const parsed = skillsSystemSettingsSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректные данные отключения скиллов' } }, 400);
     }
-    await deps.settingsStore.setSkillsDisabled(parsed.data);
-    if (typeof body.policy === 'string') {
-      await deps.settingsStore.setSkillsPolicy(body.policy as never);
+    if (parsed.data.disabled) {
+      await deps.settingsStore.setSkillsDisabled(parsed.data.disabled);
+    } else if (body.disabled === undefined) {
+      // Legacy-совместимость: тело-бакет `{categories,groups,skills}`.
+      const legacy = skillsDisabledSchema.safeParse(body);
+      if (legacy.success) await deps.settingsStore.setSkillsDisabled(legacy.data);
     }
-    const disabled = await deps.settingsStore.getSkillsDisabled();
+    if (parsed.data.disabledForNewProjects) {
+      await deps.settingsStore.setSkillsDisabledForNewProjects(parsed.data.disabledForNewProjects);
+    }
+    if (typeof parsed.data.policy === 'string') {
+      await deps.settingsStore.setSkillsPolicy(parsed.data.policy as never);
+    }
+    const disabled = (await deps.settingsStore.getSkillsDisabled()) ?? { categories: [], groups: [], skills: [] };
+    opts?.onSkillsDisabledChange?.(disabled);
+    const disabledForNewProjects = (await deps.settingsStore.getSkillsDisabledForNewProjects())
+      ?? { categories: [], groups: [], skills: [] };
     const policy = await deps.settingsStore.getSkillsPolicy();
-    return c.json({ disabled, policy: policy ?? 'auto' });
+    return c.json({ disabled, disabledForNewProjects, policy: policy ?? 'auto' });
   });
 
   app.delete('/skills', auth.requireAuth, writeGuard, async (c) => {
     await deps.settingsStore?.clearSkillsDisabled();
+    await deps.settingsStore?.clearSkillsDisabledForNewProjects();
     await deps.settingsStore?.clearSkillsPolicy();
+    opts?.onSkillsDisabledChange?.({ categories: [], groups: [], skills: [] });
     return c.json({ status: 'reset' });
   });
 

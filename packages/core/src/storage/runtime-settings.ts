@@ -43,8 +43,15 @@ export interface RuntimeSettings {
   toolsDisabled?: ToolsDisabledConfig;
   /** AD-046 §4.5: instance-wide отключение скиллов группами/точечно (админка). */
   skillsDisabled?: SkillsDisabledRequest;
+  /**
+   * AD-046 §4.5: сид для НОВЫХ проектов — скиллы, отключённые по умолчанию
+   * (снимок при создании проекта).
+   */
+  skillsDisabledForNewProjects?: SkillsDisabledRequest;
   /** AD-046 §4.5: глобальная политика включения скиллов (админка). */
   skillsPolicy?: ToolsPolicy;
+  /** Разовые идемпотентные миграции: имя → `true` (выполнено). */
+  migrations?: Record<string, boolean>;
   /** AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
   mcpNetworkPolicy?: McpNetworkPolicy;
   /**
@@ -301,6 +308,37 @@ export class RuntimeSettingsStore {
       delete next.skillsDisabled;
       return next;
     });
+  }
+
+  /** AD-046 §4.5: сид «отключено по умолчанию» для новых проектов. */
+  async getSkillsDisabledForNewProjects(): Promise<SkillsDisabledRequest | undefined> {
+    const settings = await this.load();
+    return settings.skillsDisabledForNewProjects;
+  }
+
+  async setSkillsDisabledForNewProjects(config: SkillsDisabledRequest): Promise<void> {
+    await this._update((current) => ({ ...current, skillsDisabledForNewProjects: config }));
+  }
+
+  async clearSkillsDisabledForNewProjects(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.skillsDisabledForNewProjects;
+      return next;
+    });
+  }
+
+  /** Разовые идемпотентные миграции: маркер выполненной миграции. */
+  async getMigrationMarker(name: string): Promise<boolean> {
+    const settings = await this.load();
+    return settings.migrations?.[name] === true;
+  }
+
+  async setMigrationMarker(name: string): Promise<void> {
+    await this._update((current) => ({
+      ...current,
+      migrations: { ...(current.migrations ?? {}), [name]: true },
+    }));
   }
 
   /** AD-046 §4.5: глобальная политика включения скиллов (админка). */

@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 
-import { useSkillsStore, EMPTY_SKILLS_DISABLED } from './skillsStore'
+import { useSkillsStore, EMPTY_SKILLS_DISABLED, EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS } from './skillsStore'
 
 function summary(name: string, overrides: Partial<SkillSummary> = {}): SkillSummary {
   return {
@@ -228,33 +228,45 @@ describe('skillsStore — команды и bundles', () => {
 })
 
 describe('skillsStore — instance-настройки', () => {
-  it('fetchSkillsSettings загружает disabled/policy', async () => {
+  it('fetchSkillsSettings загружает disabled / disabledForNewProjects / policy', async () => {
     mocks.getSkillsSettings.mockResolvedValue({
       disabled: { categories: ['quality'], groups: [], skills: [] },
+      disabledForNewProjects: { categories: [], groups: [], skills: ['legacy'] },
       policy: 'available',
     })
 
     await useSkillsStore.getState().fetchSkillsSettings()
 
     expect(useSkillsStore.getState().settingsDisabled?.categories).toEqual(['quality'])
+    expect(useSkillsStore.getState().settingsDisabledForNewProjects?.skills).toEqual(['legacy'])
     expect(useSkillsStore.getState().settingsPolicy).toBe('available')
   })
 
-  it('saveSkillsSettings сохраняет и обновляет состояние', async () => {
+  it('saveSkillsSettings сохраняет обе оси и политику', async () => {
     mocks.updateSkillsSettings.mockResolvedValue({
       disabled: { categories: [], groups: ['review'], skills: [] },
+      disabledForNewProjects: { categories: [], groups: [], skills: [] },
       policy: 'consistency',
     })
 
-    await useSkillsStore.getState().saveSkillsSettings({ categories: [], groups: ['review'], skills: [] }, 'consistency')
+    await useSkillsStore.getState().saveSkillsSettings({
+      disabled: { categories: [], groups: ['review'], skills: [] },
+      disabledForNewProjects: EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+      policy: 'consistency',
+    })
 
-    expect(mocks.updateSkillsSettings).toHaveBeenCalledWith({ categories: [], groups: ['review'], skills: [] }, 'consistency')
+    expect(mocks.updateSkillsSettings).toHaveBeenCalledWith({
+      disabled: { categories: [], groups: ['review'], skills: [] },
+      disabledForNewProjects: EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+      policy: 'consistency',
+    })
     expect(useSkillsStore.getState().settingsPolicy).toBe('consistency')
   })
 
-  it('resetSkillsSettings сбрасывает disabled и policy к дефолтам', async () => {
+  it('resetSkillsSettings сбрасывает обе оси и policy к дефолтам', async () => {
     useSkillsStore.setState({
       settingsDisabled: { categories: ['x'], groups: ['y'], skills: ['z'] },
+      settingsDisabledForNewProjects: { categories: ['a'], groups: [], skills: [] },
       settingsPolicy: 'available',
     })
     mocks.resetSkillsSettings.mockResolvedValue(undefined)
@@ -262,6 +274,9 @@ describe('skillsStore — instance-настройки', () => {
     await useSkillsStore.getState().resetSkillsSettings()
 
     expect(useSkillsStore.getState().settingsDisabled).toEqual(EMPTY_SKILLS_DISABLED)
+    expect(useSkillsStore.getState().settingsDisabledForNewProjects).toEqual(
+      EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+    )
     expect(useSkillsStore.getState().settingsPolicy).toBe('auto')
   })
 })

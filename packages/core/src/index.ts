@@ -182,10 +182,14 @@ export type {
   DiscoveredSkill,
   SkillScanResult,
   SkillCatalogOptions,
+  SkillScopeOptions,
   LoadedSkill,
   SkillRuntime,
   SkillOrigin,
 } from './engine/skills/types.js';
+export { resolveProjectSkillSeed, resolveProjectMcpSeed } from './engine/skills/seed.js';
+export { migrateSessionScopeSnapshots, SESSION_SCOPE_SNAPSHOT_MIGRATION } from './storage/migrations.js';
+export type { SessionScopeMigrationDeps } from './storage/migrations.js';
 export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
 export { createSkillRoutes } from './server/routes/skills.js';

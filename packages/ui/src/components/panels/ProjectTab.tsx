@@ -515,26 +515,24 @@ function ProjectMcpBlock({
               isSystem ? <RowBadge tone="primary">{t('rightPanel.stats.mcpLevel.system')}</RowBadge> : undefined
             }
             aside={
-              !isSystem ? (
-                <>
-                  <label className="flex items-center gap-1">
-                    <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.available')}</span>
-                    <Toggle
-                      enabled={enabled}
-                      onToggle={() => onToggle(name, 'enabled')}
-                      ariaLabel={`${name}: ${t('projectTab.mcp.available')}`}
-                    />
-                  </label>
-                  <label className="flex items-center gap-1">
-                    <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.defaultOn')}</span>
-                    <Toggle
-                      enabled={defaultOn}
-                      onToggle={() => onToggle(name, 'defaultOn')}
-                      ariaLabel={`${name}: ${t('projectTab.mcp.defaultOn')}`}
-                    />
-                  </label>
-                </>
-              ) : undefined
+              <>
+                <label className="flex items-center gap-1">
+                  <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.available')}</span>
+                  <Toggle
+                    enabled={enabled}
+                    onToggle={() => onToggle(name, 'enabled')}
+                    ariaLabel={`${name}: ${t('projectTab.mcp.available')}`}
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.defaultOn')}</span>
+                  <Toggle
+                    enabled={defaultOn}
+                    onToggle={() => onToggle(name, 'defaultOn')}
+                    ariaLabel={`${name}: ${t('projectTab.mcp.defaultOn')}`}
+                  />
+                </label>
+              </>
             }
             details={isSystem ? t('projectTab.mcp.systemHint') : undefined}
           />

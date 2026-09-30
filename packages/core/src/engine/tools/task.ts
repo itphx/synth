@@ -26,7 +26,7 @@ import { estimatePromptChars } from '../context/token-ratio.js';
 import { renderUnavailableTools, type UnavailableTool } from '../context/state-messages.js';
 import { formatSkillsCatalogBlock } from '../skills/catalog.js';
 import { isRuntimeDepAvailable, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './runtime-deps.js';
-import type { SkillRuntime } from '../skills/types.js';
+import type { SkillRuntime, SkillScopeOptions } from '../skills/types.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 export interface TaskExtra {
@@ -81,6 +81,8 @@ export interface TaskExtra {
    * тул `skill` (тот же объект уходит в ToolContext.extra).
    */
   skillRuntime?: SkillRuntime;
+  /** AD-046 §4.5: scope-гейты скиллов родительского контекста. */
+  skillScope?: SkillScopeOptions;
 }
 
 type ContextMode = 'none' | 'inherit' | 'summary' | 'last_n';
@@ -510,6 +512,7 @@ export const taskTool: ToolDefinition = {
           permissionConfig: extra.permissionConfig,
           sessionEnabled: extra.parentSessionSettings?.skills,
           sessionDisabled: extra.parentSessionSettings?.skillsDisabled,
+          ...(extra.skillScope ?? {}),
         });
         const skillsBlock = [
           formatSkillsCatalogBlock(catalog.stable, lang, 'stable'),

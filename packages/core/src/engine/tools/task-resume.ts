@@ -104,6 +104,8 @@ export interface SubagentResumeDeps {
   modelPriceLoader?: (model: string) => UsagePricing | null;
   /** AD-046 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
   skillRuntime?: import('../skills/types.js').SkillRuntime;
+  /** AD-046 §4.5: scope-гейты скиллов родительского контекста. */
+  skillScope?: import('../skills/types.js').SkillScopeOptions;
   /**
    * AD-069 §7: уже резолвленные проектные инструкции resumed-саб-агента
    * (резолвит оркестратор; в ребёнке повторного резолва нет).
@@ -244,6 +246,7 @@ export async function runSubagentResume(
           permissionConfig: child.settings.permission ?? deps.permissionConfig,
           sessionEnabled: child.settings.skills,
           sessionDisabled: child.settings.skillsDisabled,
+          ...(deps.skillScope ?? {}),
         });
         const skillsBlock = [
           formatSkillsCatalogBlock(catalog.stable, lang, 'stable'),
@@ -305,6 +308,7 @@ export async function runSubagentResume(
       modelPriceLoader: deps.modelPriceLoader,
       // AD-046 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
       skillRuntime: deps.skillRuntime,
+      skillScope: deps.skillScope,
       retry,
     };
 

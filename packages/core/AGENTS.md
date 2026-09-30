@@ -94,7 +94,9 @@
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью.
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
-- `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (AD-046 Фаза 1).
+- `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (AD-046 Фаза 1);
+  гейты уровней (system/project/session) — `scope.ts` (`resolveSkillAvailability`),
+  сид новых проектов — `seed.ts` (мастер `disabled` + `disabledForNewProjects`).
 - `engine/commands/*` — slash-команды и bundles (AD-046 §7): `parser`/`template`/
   `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
   до LLM, событие `command.invoked`.
@@ -113,7 +115,9 @@
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`,
   `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
-  (`secrets/ssh-keys`, шифрование at-rest, AD-076).
+  (`secrets/ssh-keys`, шифрование at-rest, AD-076); `migrations.ts` — идемпотентная
+  разовая миграция снапшотов `mcpDefaultOn`/`skillsDefaultOn` (маркер
+  `session-scope-snapshots-v1`).
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`.
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote.
@@ -156,7 +160,11 @@
 - HTTP: `POST /api/v2/mcp/probe` (`server/routes/mcp.ts`); доступность MCP по
   режимам — `GET/PUT /api/v2/settings/mcp`. Отдельного `/mcp/session/:id` в core нет.
 - Единый реестр серверов — `McpRegistryStore` (AD-071): уровни system/project/session,
-  скоуп — `engine/mcp/scope.ts`, сетевой доступ — `engine/mcp/network-policy.ts`
+  per-item резолвинг эффективного набора — `engine/mcp/scope.ts`
+  (`enabled = systemOn && projectOn && configOn && !sessionOff && (snapshotOn || sessionOn)`,
+  причины `system_disabled`/`project_disabled`/`config`/`session_optout`/`not_default`;
+  мастер `enabled` и проектный `enabled` — live hard-gate (в т.ч. для системных),
+  дефолты — snapshot `mcpDefaultOn`), сетевой доступ — `engine/mcp/network-policy.ts`
   (на старте применяется `mergeMcpNetworkPolicy(config, runtime)`).
 
 ## Тесты и запуск

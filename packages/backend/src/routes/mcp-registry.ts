@@ -22,6 +22,8 @@ const updateServerSchema = mcpServerConfigSchema;
 const registryAddSchema = z.object({
   name: z.string().min(1).max(200),
   config: mcpServerConfigSchema,
+  /** Системный мастер-флаг (дефолт `true`). */
+  enabled: z.boolean().optional(),
   enabledByDefault: z.boolean().optional(),
   /** Только admin может явно запросить instance-запись; иначе — user/community. */
   origin: z.enum(['instance', 'user']).optional(),
@@ -30,6 +32,8 @@ const registryAddSchema = z.object({
 const registryUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   config: mcpServerConfigSchema.optional(),
+  /** Системный мастер-флаг. */
+  enabled: z.boolean().optional(),
   enabledByDefault: z.boolean().optional(),
 });
 
@@ -65,6 +69,7 @@ export function createMcpRegistryRoutes(
     mcpManager.setServerTrusts(maps.trusts);
     mcpManager.setServerAuthors(maps.authors);
     mcpManager.setDefaultServers(maps.defaults);
+    mcpManager.setServerSystemEnabled(maps.systemEnabled);
   };
 
   const isConnected = (name: string): boolean =>
@@ -325,7 +330,7 @@ export function createMcpRegistryRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: parsed.error.message } }, 400);
     }
 
-    const { name, config, enabledByDefault, origin } = parsed.data;
+    const { name, config, enabled, enabledByDefault, origin } = parsed.data;
     const admin = kit.isAdmin(c);
 
     let entryOrigin: 'instance' | 'user';
@@ -361,6 +366,7 @@ export function createMcpRegistryRoutes(
       origin: entryOrigin,
       trust,
       author,
+      enabled,
       enabledByDefault,
     });
     await syncManagerConfig();

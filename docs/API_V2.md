@@ -226,8 +226,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/sessions` | оба | auth | Список сессий; `?project_id=` |
 | POST | `/api/v2/sessions` | оба | auth | Создать; `{name|title, project_id, engine, settings}` → 201 |
 | GET | `/api/v2/sessions/:id` | оба | auth | Сессия (сериализованная) |
-| GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Эффективный MCP-скоуп (AD-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust, chars?, estTokens?, estimated?}], enabled, disabled, mcpServers, mcpDisabledServers}`. Серверы/тулы несут `chars`/`estTokens` (AD-071 §2.8) |
-| PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Переключить MCP: `{name, enabled}` или `{mcpServers?, mcpDisabledServers?}` (opt-out системных — через `enabled:false`) |
+| GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Эффективный MCP-скоуп (AD-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust, chars?, estTokens?, estimated?}], enabled, disabled, mcpServers, mcpDisabledServers}`. `reason` ∈ `system_disabled\|project_disabled\|config\|session_optout\|not_default`; проектный гейт `enabled` применяется и к системным серверам. Серверы/тулы несут `chars`/`estTokens` (AD-071 §2.8) |
+| PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Переключить MCP (один тумблер): `{name, enabled}` → `mcpServers`/`mcpDisabledServers` (opt-out системных — через `enabled:false`), либо `{mcpServers?, mcpDisabledServers?}` |
 | PATCH | `/api/v2/sessions/:id` | оба | auth | `{name, title, engine, mode: plan\|act\|yolo, settings, project_id}` |
 | DELETE | `/api/v2/sessions/:id` | оба | auth | Удалить → 204 |
 | GET | `/api/v2/sessions/:id/secrets` | backend | ADMIN/AUDITOR | Карта обфускации Gateway `{sessionId, secrets}` |
@@ -258,6 +258,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/sessions/:id/notes` | backend | auth | Создать заметку → 201 |
 | PATCH | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Обновить заметку |
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Удалить заметку |
+
+> `SessionSettings` MCP/скиллов (AD-071 §2.4 / AD-046 §4.5): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
 
 ### 5.6 Messages — `/api/v2/messages`
 
@@ -290,7 +292,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PUT | `/api/v2/projects/:id` | оба | auth / owner·EDITOR·LEAD·ADMIN | Обновить поля (name, description, current_task, invariants, icon, color, repos, plan); смена `workspace` — owner/LEAD/ADMIN |
 | DELETE | `/api/v2/projects/:id` | оба | auth / owner·LEAD·ADMIN | Удалить → 204 |
 | GET | `/api/v2/projects/:id/stats` | backend | auth | Агрегаты токенов/сообщений |
-| GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Проектный MCP-скоуп (AD-071 §2.4): `{enabled, defaultOn, knownServers}` |
+| GET | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Проектный MCP-скоуп (AD-071 §2.4): `{enabled, defaultOn, knownServers}`; `enabled[]` — hard-gate (недоступно и в старых сессиях, в т.ч. для системных серверов), `defaultOn[]` — сид новых сессий |
 | PUT | `/api/v2/projects/:id/mcp` | backend | owner/LEAD/ADMIN | Задать `{enabled?, defaultOn?}` (ссылки на реестр по имени) |
 | POST | `/api/v2/projects/:id/publish` | core | auth | Локальный проект → сервер (гибрид) |
 | POST | `/api/v2/projects/:id/fork-local` | core | auth | Серверный проект → локальный мир (гибрид) |
@@ -444,10 +446,12 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (канонический — `/sessions/:id/mcp`) |
 | PUT | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers?, mcpDisabledServers?}` (совместим с `/sessions/:id/mcp`) |
 | POST | `/api/v2/mcp/probe` | оба | auth | `{name}` → `{name, tools}`, `MCP_CONNECT_ERROR` |
-| GET | `/api/v2/mcp/registry` | backend | auth | Единый реестр MCP-серверов (AD-071 §2.5): `{entries}` |
-| POST | `/api/v2/mcp/registry` | backend | auth (stdio — ADMIN) | Добавить запись: `{name, config, enabledByDefault?, origin?}` → 201; stdio — только ADMIN, HTTP — любой |
-| PUT | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Обновить запись |
+| GET | `/api/v2/mcp/registry` | backend | auth | Единый реестр MCP-серверов (AD-071 §2.5): `{entries}`; запись несёт `enabled` (мастер hard-gate, дефолт `true`) и `enabledByDefault` (дефолт для НОВЫХ проектов) |
+| POST | `/api/v2/mcp/registry` | backend | auth (stdio — ADMIN) | Добавить запись: `{name, config, enabled?, enabledByDefault?, origin?}` → 201; stdio — только ADMIN, HTTP — любой |
+| PUT | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Обновить запись (`enabled` — мастер-флаг реестра) |
 | DELETE | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Удалить запись |
+
+> Резолвинг MCP per-item (AD-071 §2.4): `enabled = systemOn && projectOn && configOn && !sessionOff && (snapshotOn || sessionOn)`; дефолт — opt-in (off). Мастер `enabled` (реестр/config) и проектный `enabled` — live hard-gate (в т.ч. старые сессии и системные серверы), `enabledByDefault`/`project.defaultOn` — snapshot (`mcpDefaultOn`). Причины: `system_disabled\|project_disabled\|config\|session_optout\|not_default`. Отсутствие `project.mcp` — гейт не задан (legacy).
 
 ### 5.17 Skills — `/api/v2/skills` (оба, AD-046 Фаза 1)
 
@@ -483,14 +487,16 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
 |---|---|---|---|---|
-| GET | `/api/v2/sessions/:id/skills` | оба | owner/ADMIN | Эффективный скоуп сессии: `{skills:[{name, level, scope, trusted, available, unavailableReason?, enabled, disabled, disabledReason?}], enabled, disabled}` |
+| GET | `/api/v2/sessions/:id/skills` | оба | owner/ADMIN | Эффективный скоуп сессии: `{skills:[{name, level, scope, trusted, available, unavailableReason?, enabled, disabled, disabledReason?}], enabled, disabled}`; `disabledReason` ∈ `system\|project\|session` |
 | GET | `/api/v2/sessions/:id/skills/effective` | оба | owner/ADMIN | Алиас effective-списка |
-| PUT | `/api/v2/sessions/:id/skills` | оба | owner | `{name, enabled}` (точечный toggle) или `{skills?, skillsDisabled?}` |
-| GET | `/api/v2/projects/:id/skills` | оба | owner/LEAD/ADMIN | Проектный скоуп: `{enabled, defaultOn, skills}` |
+| PUT | `/api/v2/sessions/:id/skills` | оба | owner | Один тумблер: `{name, enabled}` (точечный toggle) или `{skills?, skillsDisabled?}` |
+| GET | `/api/v2/projects/:id/skills` | оба | owner/LEAD/ADMIN | Проектный скоуп: `{enabled, defaultOn, skills}`; `enabled[]` — hard-gate (в т.ч. старые сессии), `defaultOn[]` — сид новых сессий |
 | PUT | `/api/v2/projects/:id/skills` | оба | backend ADMIN / core auth | Задать `{enabled?, defaultOn?}` |
-| GET | `/api/v2/settings/skills` | оба | auth | Instance-wide: `{disabled:{categories,groups,skills}, policy}` |
-| PUT | `/api/v2/settings/skills` | оба | backend ADMIN / core auth | Задать `{disabled?, policy?}` |
-| DELETE | `/api/v2/settings/skills` | оба | backend ADMIN / core auth | Сбросить instance-wide отключение/политику |
+| GET | `/api/v2/settings/skills` | оба | auth | Instance-wide: `{disabled:{categories,groups,skills}, disabledForNewProjects:{categories,groups,skills}, policy}`; `disabled` — мастер hard-gate, `disabledForNewProjects` — сид новых проектов |
+| PUT | `/api/v2/settings/skills` | оба | backend ADMIN / core auth | Задать `{disabled?, disabledForNewProjects?, policy?}` (union групп/имён, семантика `tools.disabled`) |
+| DELETE | `/api/v2/settings/skills` | оба | backend ADMIN / core auth | Сбросить instance-wide `disabled`/`disabledForNewProjects`/`policy` |
+
+> Резолвинг скиллов per-item (AD-046 §4.5): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; дефолт — opt-in (off). Системное/проектное отключение — live hard-gate (в т.ч. старые сессии), дефолты — snapshot (`skillsDefaultOn`). Отсутствие `project.skills` — гейт не задан (legacy).
 
 ### 5.18 Audit — `/api/v2/audit` (backend)
 

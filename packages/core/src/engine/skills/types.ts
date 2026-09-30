@@ -47,8 +47,30 @@ export interface SkillScanResult {
   diagnostics: SkillDiagnostic[];
 }
 
+/**
+ * AD-046 §4.5: параметры гейтов скиллов (система/проект/сессия) — общие для
+ * каталога, API скоупа и тула `skill`.
+ */
+export interface SkillScopeOptions {
+  /**
+   * Проектный hard-gate (`project.skills.enabled`). Не задан — гейт не настроен
+   * (legacy, доступно всё); задан — allow-list (пустой = всё выключено).
+   */
+  projectEnabled?: string[];
+  /** СНАПШОТ скиллов «по умолчанию» (`skillsDefaultOn`); не задан — legacy. */
+  defaultOn?: string[];
+  /** Системный hard-gate (категории/группы/имена) — скиллы исключаются. */
+  systemDisabled?: { categories?: readonly string[]; groups?: readonly string[]; skills?: readonly string[] };
+  /** Системный сид для новых проектов (в каталоге не фильтрует). */
+  systemDisabledForNewProjects?: { categories?: readonly string[]; groups?: readonly string[]; skills?: readonly string[] };
+  /** Per-session явное включение имён (§4.5). */
+  sessionEnabled?: string[];
+  /** Per-session opt-out имён/категорий/групп (§4.5). */
+  sessionDisabled?: string[];
+}
+
 /** Параметры сборки каталога для промпта (AD-046 §5/§6). */
-export interface SkillCatalogOptions {
+export interface SkillCatalogOptions extends SkillScopeOptions {
   /** Рабочий каталог проекта (источник project-скиллов и trust-статуса). */
   projectWorkspace?: string;
   /** Привязка агента (`agents`/`groups`, §6.2). */
@@ -59,10 +81,6 @@ export interface SkillCatalogOptions {
   toolsets?: Record<string, readonly string[]>;
   /** Permission-конфиг сессии (deny скрывает скилл, §8.1). */
   permissionConfig?: PermissionConfig;
-  /** Per-session явное включение имён (§4.5). */
-  sessionEnabled?: string[];
-  /** Per-session opt-out имён/категорий/групп (§4.5). */
-  sessionDisabled?: string[];
 }
 
 /** Загруженный скилл (тело + supporting-файлы) для core-тула `skill`. */

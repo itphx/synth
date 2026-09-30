@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -17,7 +17,7 @@ import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, 
 import { ProjectInstructionsResolver, type InstructionsFileInfo } from './context/instructions.js';
 import { LazyInstructionsLoader } from './context/lazy-instructions.js';
 import type { ComposerSkillsCatalog } from './skills/catalog.js';
-import type { SkillRuntime } from './skills/types.js';
+import type { SkillRuntime, SkillScopeOptions } from './skills/types.js';
 import type { CommandRuntime } from '@itphx/synth-shared';
 import { calibrateCharsPerToken, estimateTokens, estimatePromptChars, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
 import {
@@ -202,6 +202,11 @@ export interface OrchestratorOptions {
    */
   toolsDisabled?: ToolsDisabledConfig;
   /**
+   * AD-046 §4.5: системный hard-gate скиллов (категории/группы/имена) из
+   * runtime-настроек. Runtime-обновление — `setSkillsDisabled`.
+   */
+  skillsDisabled?: SkillsDisabledRequest;
+  /**
    * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
    * детекция `detectRuntimeDeps()`. Не задана — fail-open (все доступны).
    * Runtime-обновление — `setRuntimeDeps`.
@@ -325,6 +330,8 @@ export class ChatOrchestrator {
   private _mcpPolicy: ToolsPolicy;
   /** AD-071 §2.6: instance-wide отключение инструментов (runtime-изменяемая, admin). */
   private _toolsDisabled: ToolsDisabledConfig;
+  /** AD-046 §4.5: системный hard-gate скиллов (runtime-изменяемая, admin). */
+  private _skillsDisabled: SkillsDisabledRequest;
   /** AD-070 §2.9.1: доступность внешних программ окружения (runtime-изменяемая). */
   private _runtimeDeps: RuntimeDeps;
   /** AD-071 §2.6: загрузчик chars-per-token модели (калибровка). */
@@ -649,6 +656,7 @@ export class ChatOrchestrator {
     this._mcpPolicy = options.mcpPolicy ?? 'auto';
     // AD-071 §2.6: instance-wide отключение инструментов (admin) + калибровка ratio.
     this._toolsDisabled = options.toolsDisabled ?? { capabilities: [], tools: [] };
+    this._skillsDisabled = options.skillsDisabled ?? { categories: [], groups: [], skills: [] };
     // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — fail-open по умолчанию.
     this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
     this._tokenRatioLoader = options.tokenRatioLoader;
@@ -860,6 +868,18 @@ export class ChatOrchestrator {
     this._toolsDisabled = {
       capabilities: [...(config.capabilities ?? [])],
       tools: [...(config.tools ?? [])],
+    };
+  }
+
+  /**
+   * AD-046 §4.5: live-применение системного hard-gate скиллов (runtime-настройка).
+   * Отключённые скиллы не попадают в каталог промпта и не грузятся тулом `skill`.
+   */
+  setSkillsDisabled(config: SkillsDisabledRequest): void {
+    this._skillsDisabled = {
+      categories: [...(config.categories ?? [])],
+      groups: [...(config.groups ?? [])],
+      skills: [...(config.skills ?? [])],
     };
   }
 
@@ -1418,21 +1438,36 @@ export class ChatOrchestrator {
     effectiveAgentRole: string | undefined;
     workingDir: string;
     permissionConfig: PermissionConfig;
+    project?: Project | null;
   }): Promise<ComposerSkillsCatalog | undefined> {
     if (!this._skillRuntime) return undefined;
-    const { session, agentDef, effectiveAgentRole, workingDir, permissionConfig } = args;
+    const { session, agentDef, effectiveAgentRole, workingDir, permissionConfig, project } = args;
     try {
       return await this._skillRuntime.buildCatalog({
         projectWorkspace: workingDir,
         agent: { id: effectiveAgentRole, groups: agentDef?.groups },
         capabilities: agentDef?.capabilities,
         permissionConfig,
-        sessionEnabled: session.settings.skills,
-        sessionDisabled: session.settings.skillsDisabled,
+        ...this._skillScopeFor(session, project ?? null),
       });
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * AD-046 §4.5: scope-гейты скиллов сессии (система/проект/сессия) — единый
+   * объект для каталога промпта и тула `skill` (в т.ч. у саб-агентов).
+   */
+  private _skillScopeFor(session: Session, project: Project | null): SkillScopeOptions {
+    return {
+      // Проект без `skills` — гейт не задан (legacy, доступно всё).
+      projectEnabled: project?.skills ? project.skills.enabled : undefined,
+      defaultOn: session.settings.skillsDefaultOn,
+      systemDisabled: this._skillsDisabled,
+      sessionEnabled: session.settings.skills,
+      sessionDisabled: session.settings.skillsDisabled,
+    };
   }
 
   /**
@@ -1651,8 +1686,9 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.4: решения по эффективному набору MCP — `(instance.defaultOn ∪
-   * project.defaultOn ∪ session.enabled) − session.disabled`, уровень по
+   * AD-071 §2.4: решения по эффективному набору MCP. Модель per-item:
+   * системный мастер (`systemEnabled`) → проектный hard-gate (`project.enabled`)
+   * → config → сессионный opt-out → снапшот/явное включение. Уровень по
    * приоритету `system > project > session`. Чистый резолвинг — I/O только
    * загрузка проекта (передаётся снаружи, чтобы не читать дважды).
    */
@@ -1663,12 +1699,13 @@ export class ChatOrchestrator {
     const servers = Object.entries(config).map(([name, cfg]) => ({
       name,
       origin: manager.getServerOrigin(name),
-      enabledByDefault: manager.isDefaultServer(name),
+      systemEnabled: manager.isServerSystemEnabled(name),
       configEnabled: cfg.enabled !== false,
     }));
     return resolveMcpScope(servers, project?.mcp, {
       enabled: session.settings.mcpServers,
       disabled: session.settings.mcpDisabledServers,
+      defaultOn: session.settings.mcpDefaultOn,
     });
   }
 
@@ -1868,6 +1905,7 @@ export class ChatOrchestrator {
       effectiveAgentRole,
       workingDir,
       permissionConfig: session.settings.permission ?? this._permissionConfig,
+      project,
     });
     // AD-069 Фаза 1: те же проектные инструкции, что и в запросе (манифест).
     const projectInstructions = await this._resolveProjectInstructions({
@@ -2285,6 +2323,7 @@ export class ChatOrchestrator {
         effectiveAgentRole,
         workingDir,
         permissionConfig: session.settings.permission ?? this._permissionConfig,
+        project: projectForState,
       });
       // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md) —
       // только при project.workspace и без systemPrompt-override.
@@ -2906,6 +2945,8 @@ export class ChatOrchestrator {
                   // AD-046 §5: тул `skill` получает рантайм через ToolContext.extra
                   // (в ToolContext нет dataDir); саб-агенты — тот же объект.
                   skillRuntime: this._skillRuntime ?? undefined,
+                  // AD-046 §4.5: scope-гейты скиллов (система/проект/сессия).
+                  skillScope: this._skillScopeFor(session, projectForState),
                   // AD-069 §7: уже резолвленные проектные инструкции — в extra,
                   // чтобы `task`/`task-resume` не резолвили их повторно в ребёнке.
                   projectInstructions: projectInstructions?.content,

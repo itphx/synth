@@ -32,9 +32,15 @@ export class McpManager {
   private _serverAuthors = new Map<string, McpRegistryAuthor>();
   /**
    * AD-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`).
-   * `null` — явный набор не задан, берётся из `config.enabledByDefault`.
+   * Переосмыслено: сид для НОВЫХ ПРОЕКТОВ. `null` — явный набор не задан, берётся
+   * из `config.enabledByDefault`.
    */
   private _defaultServers: Set<string> | null = null;
+  /**
+   * AD-071 §2.4: системный мастер-флаг серверов (реестр `enabled`). `null` — не
+   * задан, деривируется из `config.enabled !== false`.
+   */
+  private _serverSystemEnabled: Map<string, boolean> | null = null;
 
   setConfig(servers: Record<string, McpServerConfig>): void {
     this._config = servers;
@@ -89,6 +95,19 @@ export class McpManager {
   isDefaultServer(name: string): boolean {
     if (this._defaultServers) return this._defaultServers.has(name);
     return this._config[name]?.enabledByDefault === true;
+  }
+
+  /**
+   * AD-071 §2.4: системный мастер-флаг сервера (реестр `enabled`). Не задан —
+   * дефолт из config (`enabled !== false`, т.е. включён).
+   */
+  setServerSystemEnabled(states: Record<string, boolean>): void {
+    this._serverSystemEnabled = new Map(Object.entries(states));
+  }
+
+  isServerSystemEnabled(name: string): boolean {
+    if (this._serverSystemEnabled) return this._serverSystemEnabled.get(name) ?? true;
+    return this._config[name]?.enabled !== false;
   }
 
   /**

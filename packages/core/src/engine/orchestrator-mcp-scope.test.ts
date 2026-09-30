@@ -125,6 +125,9 @@ function makeMockMcpManager(opts: { defaultOn?: string[] } = {}): McpManager {
     isDefaultServer(name: string) {
       return (opts.defaultOn ?? []).includes(name);
     },
+    isServerSystemEnabled() {
+      return true;
+    },
     getServerTools(name: string) {
       if (!connected.has(name)) return null;
       return (tools[name] ?? []).map((tool) => ({
@@ -183,7 +186,7 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function createSession(mcpServers: string[]): Promise<Session> {
+  async function createSession(mcpServers: string[], mcpDefaultOn: string[] = []): Promise<Session> {
     return sessionManager.createSession({
       title: 'MCP scope',
       settings: {
@@ -191,6 +194,7 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
         model: 'm',
         agentRole: 'developer',
         mcpServers,
+        mcpDefaultOn,
       },
     });
   }
@@ -291,8 +295,8 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     expect(toolNames()).not.toContain('srvB_fetch');
   });
 
-  it('AD-071 §2.4: instance defaultOn включается, session opt-out отключает', async () => {
-    orchestrator = makeOrchestrator(makeMockMcpManager({ defaultOn: ['srvA'] }));
+  it('AD-071 §2.4: snapshot defaultOn включается, session opt-out отключает', async () => {
+    orchestrator = makeOrchestrator(makeMockMcpManager());
     const session = await sessionManager.createSession({
       title: 'opt-out',
       settings: {
@@ -300,18 +304,19 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
         model: 'm',
         agentRole: 'developer',
         mcpServers: [],
+        mcpDefaultOn: ['srvA'],
         mcpDisabledServers: ['srvA'],
       },
     });
     await runTurn(session.id);
 
-    // srvA включён по умолчанию, но сессия сделала opt-out — тулы недоступны.
+    // srvA включён снапшотом, но сессия сделала opt-out — тулы недоступны.
     expect(toolNames()).toContain('read_file');
     expect(toolNames()).not.toContain('srvA_search');
   });
 
   it('AD-071 §2.4: resolveMcpServers отдаёт уровень и причину', async () => {
-    orchestrator = makeOrchestrator(makeMockMcpManager({ defaultOn: ['srvA'] }));
+    orchestrator = makeOrchestrator(makeMockMcpManager());
     const session = await sessionManager.createSession({
       title: 'scope',
       settings: {
@@ -319,6 +324,7 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
         model: 'm',
         agentRole: 'developer',
         mcpServers: ['srvB'],
+        mcpDefaultOn: ['srvA'],
         mcpDisabledServers: ['srvA'],
       },
     });
@@ -335,8 +341,8 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
   });
 
   it('AD-071 §2.6: resolveMcpServers отдаёт chars/estTokens/toolDetails подключённого сервера', async () => {
-    orchestrator = makeOrchestrator(makeMockMcpManager({ defaultOn: ['srvA'] }));
-    const session = await createSession([]);
+    orchestrator = makeOrchestrator(makeMockMcpManager());
+    const session = await createSession([], ['srvA']);
     await runTurn(session.id); // ensureToolsLoaded → srvA подключён
 
     const servers = await orchestrator.resolveMcpServers(session);
@@ -354,9 +360,9 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
   });
 
   it('AD-071 §2.6: capability mcp отключает MCP-тулы из запроса и помечает toolDetails', async () => {
-    orchestrator = makeOrchestrator(makeMockMcpManager({ defaultOn: ['srvA'] }));
+    orchestrator = makeOrchestrator(makeMockMcpManager());
     orchestrator.setToolsDisabled({ capabilities: ['mcp'], tools: [] });
-    const session = await createSession([]);
+    const session = await createSession([], ['srvA']);
     await runTurn(session.id);
 
     expect(toolNames()).not.toContain('srvA_search');

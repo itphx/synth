@@ -237,6 +237,15 @@ export const McpSettings = () => {
     }
   }
 
+  const handleToggleMaster = async (entry: McpRegistryEntry) => {
+    if (!canManageEntry(entry)) return
+    try {
+      await updateRegistryEntry(entry.id, { enabled: entry.enabled === false })
+    } catch {
+      // ошибка уже в сторе
+    }
+  }
+
   const handleToggleDefault = async (entry: McpRegistryEntry) => {
     if (!canManageEntry(entry)) return
     try {
@@ -390,6 +399,12 @@ export const McpSettings = () => {
           extraFields={
             <>
               <ToggleField
+                label={t('mcp.masterEnabled')}
+                description={t('mcp.masterEnabledDescription')}
+                enabled={editor.formEnabled}
+                onToggle={() => editor.setFormEnabled((prev) => !prev)}
+              />
+              <ToggleField
                 label={t('mcp.enabledByDefault')}
                 enabled={editor.formDefault}
                 onToggle={() => editor.setFormDefault((prev) => !prev)}
@@ -436,24 +451,25 @@ export const McpSettings = () => {
           <div className="space-y-2 min-w-0" data-testid="mcp-registry-list">
             {registry.map((entry) => {
               const manageable = canManageEntry(entry)
+              const masterEnabled = entry.enabled !== false
               return (
                 <div
                   key={entry.id}
                   data-testid={`mcp-registry-${entry.name}`}
                   className={cn(
                     'flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors min-w-0',
-                    entry.config.enabled === false && 'opacity-50'
+                    !masterEnabled && 'opacity-50'
                   )}
                 >
                   <span
                     className="shrink-0"
-                    title={entry.enabledByDefault ? t('mcp.enabledByDefaultTitle') : t('mcp.disabledByDefaultTitle')}
+                    title={masterEnabled ? t('mcp.masterEnabledTitle') : t('mcp.masterDisabledTitle')}
                   >
                     <Icon
                       name="checkbox"
                       className={cn(
                         "size-4 shrink-0",
-                        entry.enabledByDefault ? "text-primary" : "text-muted-foreground/40"
+                        masterEnabled ? "text-primary" : "text-muted-foreground/40"
                       )}
                     />
                   </span>
@@ -480,13 +496,25 @@ export const McpSettings = () => {
                       {entry.enabledByDefault && ` · ${t('mcp.autoEnabled')}`}
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Toggle
-                      enabled={entry.enabledByDefault}
-                      disabled={!manageable}
-                      onToggle={() => handleToggleDefault(entry)}
-                      ariaLabel={entry.enabledByDefault ? t('mcp.disable') : t('mcp.enable')}
-                    />
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <label className="flex items-center gap-1" title={t('mcp.masterEnabledTitle')}>
+                      <span className="text-[0.625rem] text-muted-foreground">{t('mcp.masterEnabledShort')}</span>
+                      <Toggle
+                        enabled={masterEnabled}
+                        disabled={!manageable}
+                        onToggle={() => handleToggleMaster(entry)}
+                        ariaLabel={masterEnabled ? t('mcp.masterDisable') : t('mcp.masterEnable')}
+                      />
+                    </label>
+                    <label className="flex items-center gap-1" title={t('mcp.enabledByDefaultTitle')}>
+                      <span className="text-[0.625rem] text-muted-foreground">{t('mcp.defaultOnShort')}</span>
+                      <Toggle
+                        enabled={entry.enabledByDefault}
+                        disabled={!manageable}
+                        onToggle={() => handleToggleDefault(entry)}
+                        ariaLabel={entry.enabledByDefault ? t('mcp.disable') : t('mcp.enable')}
+                      />
+                    </label>
                     <Button
                       variant="ghost"
                       size="sm"

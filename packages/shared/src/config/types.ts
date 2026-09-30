@@ -136,7 +136,12 @@ export const mcpServerConfigSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   url: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
+  /** Config-дефолт системного мастер-флага (`false` — сервер выключен). */
   enabled: z.boolean().optional(),
+  /**
+   * Сид «включён по умолчанию для НОВЫХ ПРОЕКТОВ» (`project.enabled`/
+   * `project.defaultOn`), снимок на момент создания проекта.
+   */
   enabledByDefault: z.boolean().optional(),
   timeout: z.number().int().min(1).optional(),
   connectTimeout: z.number().int().min(1).optional(),

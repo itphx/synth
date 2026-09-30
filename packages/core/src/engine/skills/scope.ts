@@ -73,19 +73,69 @@ export function missingCapabilities(
 }
 
 /**
- * AD-046 §4.5: per-session opt-out по имени, категории или группе.
+ * AD-046 §4.5: opt-out по имени, категории или группе — общий помощник для
+ * сессионного и системного гейтов.
  */
+export function isDisabledInList(
+  meta: Pick<SkillMeta, 'name' | 'category' | 'groups'>,
+  disabled: readonly string[] | undefined,
+): boolean {
+  if (!disabled || disabled.length === 0) return false;
+  if (disabled.includes(meta.name)) return true;
+  if (meta.category && disabled.includes(meta.category)) return true;
+  for (const group of meta.groups ?? []) {
+    if (disabled.includes(group)) return true;
+  }
+  return false;
+}
+
+/** AD-046 §4.5: per-session opt-out по имени, категории или группе. */
 export function isDisabledBySession(
   meta: Pick<SkillMeta, 'name' | 'category' | 'groups'>,
   sessionDisabled: readonly string[] | undefined,
 ): boolean {
-  if (!sessionDisabled || sessionDisabled.length === 0) return false;
-  if (sessionDisabled.includes(meta.name)) return true;
-  if (meta.category && sessionDisabled.includes(meta.category)) return true;
-  for (const group of meta.groups ?? []) {
-    if (sessionDisabled.includes(group)) return true;
+  return isDisabledInList(meta, sessionDisabled);
+}
+
+/**
+ * AD-046 §4.5: системный hard-gate — скилл отключён, если совпал по имени,
+ * категории или группе в любой из трёх осей конфигурации.
+ */
+export function isDisabledBySystem(
+  meta: Pick<SkillMeta, 'name' | 'category' | 'groups'>,
+  disabled:
+    | { categories?: readonly string[]; groups?: readonly string[]; skills?: readonly string[] }
+    | undefined,
+): boolean {
+  if (!disabled) return false;
+  return isDisabledInList(meta, disabled.skills)
+    || isDisabledInList(meta, disabled.categories)
+    || isDisabledInList(meta, disabled.groups);
+}
+
+/** Причина, по которой скилл недоступен (уровень гейта). */
+export type SkillDisabledReason = 'system' | 'project' | 'session';
+
+/**
+ * AD-046 §4.5: эффективная доступность скилла по scope (без I/O). Единая
+ * семантика для каталога, API скоупа и тула `skill`:
+ * `systemOn && projectOn && !sessionOff && (seed || sessionOn)`.
+ * Причина (приоритет): `system` → `project` → `session`.
+ */
+export function resolveSkillAvailability(
+  meta: Pick<SkillMeta, 'name' | 'category' | 'groups'>,
+  scope: import('./types.js').SkillScopeOptions | undefined,
+): { enabled: boolean; reason?: SkillDisabledReason } {
+  if (!scope) return { enabled: true };
+  if (isDisabledBySystem(meta, scope.systemDisabled)) return { enabled: false, reason: 'system' };
+  if (scope.projectEnabled && !scope.projectEnabled.includes(meta.name)) {
+    return { enabled: false, reason: 'project' };
   }
-  return false;
+  if (isDisabledInList(meta, scope.sessionDisabled)) return { enabled: false, reason: 'session' };
+  const seeded = scope.defaultOn === undefined ? true : scope.defaultOn.includes(meta.name);
+  const sessionOn = scope.sessionEnabled?.includes(meta.name) ?? false;
+  if (!seeded && !sessionOn) return { enabled: false, reason: 'session' };
+  return { enabled: true };
 }
 
 /** AD-046 §4.4: каталог проекта доверен, если он явно перечислен. */

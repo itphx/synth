@@ -30,6 +30,7 @@ import {
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
   SkillService, createSkillRoutes,
+  resolveProjectSkillSeed, migrateSessionScopeSnapshots,
   CommandService, createCommandRoutes, createSkillBundleRoutes, SkillBundleStore,
   createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
   ProjectInstructionsResolver, createInstructionsInfoResolver,
@@ -207,8 +208,18 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const dataDir = backendConfig.dataDir;
     await ensureDataDir(dataDir);
     const fileStore = new FileStore({ dataDir });
-    const sessionManager = new SessionManager(fileStore);
     const projectStore = new ProjectStore({ dataDir });
+    const sessionManager = new SessionManager(fileStore, {
+      projectStore,
+      // AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий без проекта.
+      systemDefaultsProvider: async () => ({
+        mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
+        skillsDefaultOn: (await resolveProjectSkillSeed(
+          skillService,
+          await settingsStore.getSkillsDisabledForNewProjects(),
+        )).enabled,
+      }),
+    });
     // AD-076 §T4: SSH-ключи агентов — core-хранилище поверх общего dataDir.
     // Мастер-ключ: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > файл dataDir.
     const sshKeyStore = new SSHKeyStore({
@@ -253,6 +264,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     mcpManager.setServerTrusts(mcpMaps.trusts);
     mcpManager.setServerAuthors(mcpMaps.authors);
     mcpManager.setDefaultServers(mcpMaps.defaults);
+    // AD-071 §2.4: системный мастер-флаг серверов (реестр `enabled`).
+    mcpManager.setServerSystemEnabled(mcpMaps.systemEnabled);
     // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
     // Runtime-настройка из админки (settings.json) приоритетнее config.yaml и
     // переживает рестарт; храним в изменяемой переменной, чтобы registry-роуты
@@ -387,6 +400,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
     const toolsDisabled: ToolsDisabledConfig =
       runtimeToolsDisabled ?? backendConfig.synth.tools.disabled ?? { capabilities: [], tools: [] };
+    // AD-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
+    const skillsDisabled = (await settingsStore.getSkillsDisabled())
+      ?? { categories: [], groups: [], skills: [] };
     const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
     // Orchestrator
@@ -455,6 +471,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       toolsPolicy,
       mcpPolicy,
       toolsDisabled,
+      // AD-046 §4.5: системный hard-gate скиллов (runtime-настройка).
+      skillsDisabled,
       // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
       runtimeDeps: await detectRuntimeDeps(),
       // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
@@ -472,6 +490,20 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     const processMessage = orchestrator.createProcessMessage();
 
+    // AD-071 §2.4 / AD-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
+    await migrateSessionScopeSnapshots({
+      sessionManager,
+      projectStore,
+      settingsStore,
+      resolveSystemDefaults: async () => ({
+        mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
+        skillsDefaultOn: (await resolveProjectSkillSeed(
+          skillService,
+          await settingsStore.getSkillsDisabledForNewProjects(),
+        )).enabled,
+      }),
+    }).catch(() => 0);
+
     // EventHub — центральный диспетчер подписок
     const eventHub = new EventHub(eventBus, sessionManager);
 
@@ -488,7 +520,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 
     // Projects routes
-    app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager));
+    app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore));
 
     // Sessions routes
     app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId));
@@ -630,6 +662,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     }));
     app.route('/api/v2/settings', createSkillSettingsRoutes(auth as unknown as CoreAuthKit, { settingsStore }, {
       writeGuard: auth.requireAdmin,
+      onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
     }));
 
     // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные

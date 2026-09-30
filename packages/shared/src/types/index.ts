@@ -399,6 +399,16 @@ export interface McpRegistryEntry {
   origin: McpRegistryOrigin;
   author: McpRegistryAuthor | null;
   trust: McpRegistryTrust;
+  /**
+   * Системный мастер-флаг (hard-gate): `false` — сервер недоступен НИГДЕ и НИКОГДА
+   * (в т.ч. в старых сессиях). Дефолт `true`.
+   */
+  enabled: boolean;
+  /**
+   * Переосмыслено: «включён по умолчанию для НОВЫХ ПРОЕКТОВ» — сид
+   * `project.mcp.enabled`/`project.mcp.defaultOn` при создании проекта. Снимок:
+   * изменение не влияет на ранее созданные проекты/сессии.
+   */
   enabledByDefault: boolean;
   createdAt: string;
   updatedAt: string;
@@ -442,16 +452,18 @@ export type McpServerLevel = (typeof MCP_SERVER_LEVELS)[number];
 
 /**
  * AD-071 §2.2: почему сервер отключён в эффективном наборе сессии:
+ * - `system_disabled` — выключен системным мастер-флагом (`McpRegistryEntry.enabled === false`);
+ * - `project_disabled` — не разрешён проектом (`project.enabled` — hard-gate);
  * - `config` — выключен в конфиге записи (`config.enabled === false`);
  * - `session_optout` — явный opt-out в сессии (`mcpDisabledServers`);
- * - `project_disabled` — проектный сервер не включён в проекте (`project.defaultOn`);
- * - `not_default` — нет `enabledByDefault` и не включён явно.
+ * - `not_default` — нет в снапшоте сессии (`mcpDefaultOn`) и не включён явно.
  */
 export const MCP_DISABLED_REASONS = [
-  'session_optout',
+  'system_disabled',
   'project_disabled',
-  'not_default',
   'config',
+  'session_optout',
+  'not_default',
 ] as const;
 export type McpDisabledReason = (typeof MCP_DISABLED_REASONS)[number];
 
@@ -520,9 +532,15 @@ export interface SessionSettings {
   mcpServers?: string[];
   /**
    * AD-071 §2.4: явные opt-out серверы сессии (включая системные). Вычитаются
-   * из эффективного набора (`(instance.defaultOn ∪ project.defaultOn ∪ enabled) − disabled`).
+   * из эффективного набора (`(seed ∪ enabled) − disabled`).
    */
   mcpDisabledServers?: string[];
+  /**
+   * AD-071 §2.4: СНАПШОТ MCP-серверов «по умолчанию» на момент создания сессии
+   * (снимок `project.defaultOn` либо системного дефолта `enabledByDefault`).
+   * Изменение дефолта проекта/системы не влияет на существующие сессии.
+   */
+  mcpDefaultOn?: string[];
   contextOptimization: 'none' | 'sliding_window' | 'summarization' | 'sticky_notes';
   slidingWindowMode: 'messages' | 'tokens';
   slidingWindowMessageLimit: number;
@@ -601,6 +619,12 @@ export interface SessionSettings {
   skills?: string[];
   /** AD-046: opt-out сессии — имена, категории или группы скиллов (volatile-каталог). */
   skillsDisabled?: string[];
+  /**
+   * AD-046: СНАПШОТ скиллов «по умолчанию» на момент создания сессии (снимок
+   * `project.skills.defaultOn` либо системного дефолта). Изменение дефолта
+   * проекта/системы не влияет на существующие сессии.
+   */
+  skillsDefaultOn?: string[];
   // === LLM Gateway (AD-036) ===
   /** Per-session override LLM Gateway (AD-036). */
   llmGateway?: { enabled?: boolean };
@@ -788,8 +812,12 @@ export interface ProjectLogEntry {
 
 /**
  * AD-071 §2.4/§2.5: проектный скоуп MCP — ссылки на записи единого реестра по
- * имени. `enabled` — доступные проекту серверы (гейт owner/lead),
- * `defaultOn` — включённые по умолчанию для всех сессий проекта.
+ * имени.
+ * - `enabled` — hard-gate: серверы, разрешённые проекту. Не разрешённый сервер
+ *   недоступен ни в одной сессии проекта (в т.ч. старой). Пустой массив — «всё
+ *   выключено» (opt-in); отсутствие `project.mcp` — гейт не задан (legacy).
+ * - `defaultOn` — сид «по умолчанию для новых сессий»: снапшот `mcpDefaultOn`
+ *   при создании сессии. Изменение не влияет на ранее созданные сессии.
  */
 export interface ProjectMcpSettings {
   enabled: string[];
@@ -798,8 +826,10 @@ export interface ProjectMcpSettings {
 
 /**
  * AD-046 §4.5: проектный скоуп скиллов (owner/lead) — аналог `ProjectMcpSettings`.
- * `enabled` — доступные проекту скиллы (гейт), `defaultOn` — включённые по
- * умолчанию для всех сессий проекта.
+ * - `enabled` — hard-gate: доступные проекту скиллы. Пустой массив — «всё
+ *   выключено» (opt-in); отсутствие `project.skills` — гейт не задан (legacy).
+ * - `defaultOn` — сид «по умолчанию для новых сессий»: снапшот
+ *   `skillsDefaultOn` при создании сессии.
  */
 export interface ProjectSkillSettings {
   enabled: string[];

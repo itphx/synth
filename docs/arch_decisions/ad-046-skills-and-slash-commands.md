@@ -4,6 +4,7 @@
 > **Дата:** 2026-09-17
 > **Реализация:** Фаза 1 — 2026-09-23 (механизм скиллов; отклонения — в разделе «Реализовано в Фазе 1»); Фаза 2 — 2026-09-23 (commit 1 — core/API/CLI, commit 2 — UI; отклонения — в соответствующих разделах); Фаза 3 (часть) — 2026-09-24 (внешние каталоги + `skills.urls` read-only; `skill-creator` как builtin-скилл)
 > **Парный документ:** [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог скиллов и агентов» — контент-платформа, реестр, доверие и распространение
+> **Дополнение (2026-09-30):** §4.5 — единая per-item модель включения (мастер hard-gate + дефолт новых проектов на уровне систем; hard-gate + дефолт новых сессий на уровне проекта; один тумблер в сессии), снапшот-поля `skillsDefaultOn`, миграция `migrateSessionScopeSnapshots`; та же модель у MCP (AD-071 §2.4).
 
 ---
 
@@ -69,7 +70,7 @@ UI-слой скиллов/команд поверх core-API Фазы 2 (commit
 - **API-клиент** (`packages/ui/src/lib/api/synthApi.ts`): skills (`getSkills/getSkill/createSkill/updateSkill/deleteSkill/getSkillFiles/getSkillFile/putSkillFile/deleteSkillFile/reloadSkills`), commands (`getCommands`), bundles (CRUD `/skill-bundles`), scope (`getSessionSkills/updateSessionSkills/getSessionSkillsEffective`, `getProjectSkills/updateProjectSkills`, `getSkillsSettings/updateSkillsSettings/resetSkillsSettings`).
 - **Стор** `stores/skillsStore.ts`: реестр + деталь, commands, bundles, instance-настройки (disabled/policy + дефолты), CRUD-экшены, загрузка/ошибки; счётчики `skillInvocationCounts`/`commandInvocationCounts` и последний вызов.
 - **События**: `transportStore` слушает `skill.invoked`/`command.invoked` (AD-046 §8.2) и пишет в `skillsStore`.
-- **Настройки** (`components/settings/`): user «Скиллы» (`SkillsUserSettings` — просмотр реестра/тела/supporting-файлов; недоверенные — только метаданные + бейдж; reload); admin «Скиллы» (`SkillsAdminSettings` + `SkillEditorForm` — CRUD `SKILL.md`+файлы, system enable/disable группами и точечно, policy); admin «Команды» (`CommandsSettings` — список команд с kind/scope/available + диагностика `shadowed`/`collision`, CRUD bundles). Категории `skills` (user) и `skillsAdmin`, `commands` (ADMIN) в `SettingsModal`.
+- **Настройки** (`components/settings/`): user «Скиллы» (`SkillsUserSettings` — просмотр реестра/тела/supporting-файлов; недоверенные — только метаданные + бейдж; reload); admin «Скиллы» (`SkillsAdminSettings` + `SkillEditorForm` — CRUD `SKILL.md`+файлы, две оси: мастер-отключение `disabled` и дефолт новых проектов `disabledForNewProjects`, группами и точечно, policy); admin «Команды» (`CommandsSettings` — список команд с kind/scope/available + диагностика `shadowed`/`collision`, CRUD bundles). Категории `skills` (user) и `skillsAdmin`, `commands` (ADMIN) в `SettingsModal`.
 - **Правая панель**: тумблеры скиллов в сессии (`SessionSettingsTab` — `getSessionSkills`/`updateSessionSkills { name, enabled }`) и проектный скоуп (`ProjectTab` — `ProjectSkillsBlock`, «Доступен»/«Включён по умолчанию») — по образцу MCP.
 - **Статистика** (`StatsTab`): секция «Скиллы» (имя, scope/уровень, available, enabled сессии с причиной, unavailableReason, trusted, вклад токенов/оценка, source stable/session; блочные размеры `skills.catalog`/`skills.catalog.session` из манифеста); секция «Команды» — счётчики и последние вызовы из `skillsStore`.
 - **`/`-автокомплит** (`components/chat/CommandAutocomplete.tsx` + интеграция в `ChatInput`): источник `GET /api/v2/commands`; kind/scope/description/`argument-hint`, бейдж `unavailable`; клавиатура ArrowUp/Down/Enter/Tab/Escape, клик, закрытие outside; подстановка `/name ` (не отправка); тач-таргеты по AD-044.
@@ -308,21 +309,29 @@ tools:
 
 ### 4.5. Уровни и включение скиллов (модель AD-071)
 
-Скиллы используют ту же модель уровней и включения, что и MCP ([AD-071](./ad-071-mcp-servers-prompt.md) §2.4/§2.9), не дублируя её.
+Скиллы используют ту же per-item модель уровней и включения, что и MCP ([AD-071](./ad-071-mcp-servers-prompt.md) §2.2/§2.4/§2.5), не дублируя её. Ниже — специфика скиллов.
 
-**Уровни** (уточняют scope §4.1):
+**Уровни** (уточняют scope §4.1). У каждого уровня — до двух осей: hard-gate (`enabled`) и дефолт (сид):
 
-| Уровень | Кто управляет | Скоуп | По умолчанию |
+| Уровень | Кто управляет | Hard-gate (`enabled`) | Дефолт (сид) |
 |---|---|---|---|
-| **System** | admin (instance) | все сессии и проекты | включён; пользователь может отключить в своей сессии |
-| **Project** | owner/lead | все сессии проекта | включается owner/lead «по умолчанию для проекта» |
-| **Session** | пользователь | одна сессия | личные/разовые скиллы |
+| **System** | admin (instance) | `disabled {categories,groups,skills}` в `/settings/skills` — скилл недоступен НИГДЕ (включая старые сессии/проекты) | `disabledForNewProjects {categories,groups,skills}` — что НЕ включать в сид новых проектов |
+| **Project** | owner/lead | `project.skills.enabled[]` — недоступен ни в одной сессии проекта (в т.ч. старой); пустой массив — «всё выключено» (opt-in); нет `project.skills` — гейт не задан (legacy) | `project.skills.defaultOn[]` — «включён по умолчанию для новых сессий» |
+| **Session** | пользователь | один тумблер: `skills` (вкл) / `skillsDisabled` (opt-out, включая системные) | снапшот `skillsDefaultOn` — снимок `project.defaultOn` (или системного дефолта) на момент создания сессии; задаётся при создании, пользователь не редактирует |
 
 Merge — `system ∪ project ∪ session`; при конфликте имён приоритет `system > project > session` (жёстко). `metadata.synth.scope` (`instance`/`project`, §3.2) — декларативная подсказка; фактический уровень задаёт источник/реестр.
 
-**Реестр и источник.** Запись скилла несёт уровень и происхождение (`system`/`project`/`session`, `builtin`/`installed`/…); trust — по [AD-068](./ad-068-skills-agents-registry.md). Отключённый скилл **не исчезает** из реестра и диагностики: помечается `disabled` с причиной (уровень, opt-out), по аналогии с MCP (§2.4 AD-071).
+**Резолвинг (per-item).** `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`, где `systemOn` — не сработал системный hard-gate (имя/категория/группа), `projectOn` — имя в `project.skills.enabled` (или гейт не задан), `sessionOff` — сработал `skillsDisabled`, `snapshotOn`/`sessionOn` — имя в `skillsDefaultOn`/`skills`. Дефолт — **opt-in (off)**: без сида/явного включения скилл неактивен, но виден в реестре/диагностике с причиной. Причина (приоритет): `system` → `project` → `session`. Единый резолвер — `resolveSkillAvailability` (`engine/skills/scope.ts`): каталог, scope-API и тул `skill`.
 
-**Включение/отключение.** Enable/disable на уровне `system` (admin, instance-wide), `project` (owner/lead) и `session` (пользователь). Отключать можно **группами** (`metadata.synth.category` / `metadata.synth.groups`) и **отдельными** скиллами (`name`); семантика — как у `tools.disabled` (AD-071 §2.9): union групп и точечных имён, а механизм (резолвинг `/`-команд, core-тул `skill`) неотключаем. Per-skill permissions AD-029 (`deny` скрывает) остаются отдельным механизмом.
+**Live vs snapshot.** Системное и проектное отключение — **live hard-gate** (отключённый скилл пропадает и из старых сессий проекта). Дефолты (`disabledForNewProjects`, `project.defaultOn`, снапшот сессии) — **snapshot**: смена дефолта не влияет на созданные проекты/сессии.
+
+**Legacy-совместимость.** `project.skills` отсутствует → проектный гейт не применяется (каталог как раньше). `session.settings.skillsDefaultOn === undefined` → сессия legacy-режима (скиллы без снапшота доступны как прежде).
+
+**Сид и миграция.** При создании проекта `enabled`/`defaultOn` сидятся из системных дефолтов (`disabledForNewProjects`); при создании сессии — снапшот из `project.defaultOn`/системного дефолта. Существующие сессии материализуются идемпотентной разовой миграцией `migrateSessionScopeSnapshots` (маркер `session-scope-snapshots-v1` в runtime settings).
+
+**Реестр и источник.** Запись скилла несёт уровень и происхождение (`system`/`project`/`session`, `builtin`/`installed`/…); trust — по [AD-068](./ad-068-skills-agents-registry.md). Отключённый скилл **не исчезает** из реестра и диагностики: помечается `disabled` с причиной (уровень/opt-out). Отключать можно **группами** (`metadata.synth.category` / `metadata.synth.groups`) и **отдельными** скиллами (`name`); семантика — как у `tools.disabled` (AD-071 §2.9): union групп и точечных имён, а механизм (резолвинг `/`-команд, core-тул `skill`) неотключаем. Per-skill permissions AD-029 (`deny` скрывает) — отдельный механизм.
+
+**Тул `skill`.** Уважает scope: `skill({name})` для недоступного скилла возвращает не тело, а ошибку с i18n-ключом `skill.scope_disabled` (`{name}`, `{reason}`).
 
 **Представление в промпте.** Каталог скиллов — отдельный слой промпта с тирами AD-070:
 - **стабильная часть** — скиллы, включённые на уровне `system`/`project` (состав константен на сессию) → `stable`, не инвалидирует кэш;

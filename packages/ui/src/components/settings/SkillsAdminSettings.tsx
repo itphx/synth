@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { SkillSummary, SkillsDisabledRequest } from '@itphx/synth-shared'
 import { SKILL_DESCRIPTION_MAX, SKILL_NAME_MAX, SKILL_NAME_REGEX } from '@itphx/synth-shared/schemas'
 import { useI18n } from '@/lib/i18n'
-import { useSkillsStore, EMPTY_SKILLS_DISABLED, DEFAULT_SKILLS_POLICY } from '@/stores/skillsStore'
+import { useSkillsStore, EMPTY_SKILLS_DISABLED, EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS, DEFAULT_SKILLS_POLICY } from '@/stores/skillsStore'
 import { useNotification } from '@/hooks/useNotification'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
@@ -26,6 +26,21 @@ interface EditorState {
 const EMPTY_EDITOR: EditorState = { mode: 'create', name: '', description: '', body: '', files: [] }
 
 /**
+ * Две оси системных гейтов скиллов (AD-046 §4.5):
+ * - `disabled` — мастер: выключенный скилл недоступен нигде;
+ * - `disabledForNewProjects` — сид новых проектов: что не включать по умолчанию.
+ */
+interface SkillsGates {
+  disabled: SkillsDisabledRequest
+  disabledForNewProjects: SkillsDisabledRequest
+}
+
+const EMPTY_SKILLS_GATES: SkillsGates = {
+  disabled: EMPTY_SKILLS_DISABLED,
+  disabledForNewProjects: EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+}
+
+/**
  * AD-046 §4.5/§9.2 / AD-072: админ-категория «Скиллы» — instance-реестр с CRUD
  * (`SKILL.md` + supporting-файлы), system-level enable/disable группами
  * (categories/groups) и точечно (name), политика включения.
@@ -47,6 +62,7 @@ export function SkillsAdminSettings() {
   const deleteSkillFile = useSkillsStore((s) => s.deleteSkillFile)
 
   const settingsDisabled = useSkillsStore((s) => s.settingsDisabled)
+  const settingsDisabledForNewProjects = useSkillsStore((s) => s.settingsDisabledForNewProjects)
   const settingsPolicy = useSkillsStore((s) => s.settingsPolicy)
   const settingsLoading = useSkillsStore((s) => s.settingsLoading)
   const settingsError = useSkillsStore((s) => s.settingsError)
@@ -65,11 +81,27 @@ export function SkillsAdminSettings() {
   const [policySaving, setPolicySaving] = useState(false)
   const [policyError, setPolicyError] = useState<string | null>(null)
 
-  const draft = useSettingsDraft<SkillsDisabledRequest>({
-    value: settingsDisabled,
-    defaultValue: EMPTY_SKILLS_DISABLED,
+  // Обе оси гейтов сохраняются одним PUT: стабильная ссылка нужна для эффекта синхронизации.
+  const settingsGates = useMemo<SkillsGates | null>(
+    () =>
+      settingsDisabled
+        ? {
+            disabled: settingsDisabled,
+            disabledForNewProjects: settingsDisabledForNewProjects
+              ?? EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+          }
+        : null,
+    [settingsDisabled, settingsDisabledForNewProjects],
+  )
+
+  const draft = useSettingsDraft<SkillsGates>({
+    value: settingsGates,
+    defaultValue: EMPTY_SKILLS_GATES,
     onSave: async (next) => {
-      await saveSkillsSettings(next)
+      await saveSkillsSettings({
+        disabled: next.disabled,
+        disabledForNewProjects: next.disabledForNewProjects,
+      })
     },
   })
 
@@ -86,14 +118,18 @@ export function SkillsAdminSettings() {
   const categories = useMemo(() => uniqueValues(skills, (s) => s.category), [skills])
   const groups = useMemo(() => uniqueValues(skills, (s) => s.groups), [skills])
 
-  const draftDisabled = draft.draft ?? EMPTY_SKILLS_DISABLED
+  const draftDisabled = draft.draft ?? EMPTY_SKILLS_GATES
 
-  const toggleDisabled = (kind: 'categories' | 'groups' | 'skills', value: string) => {
+  const toggleDisabled = (
+    dimension: 'disabled' | 'disabledForNewProjects',
+    kind: 'categories' | 'groups' | 'skills',
+    value: string,
+  ) => {
     draft.setDraft((prev) => {
-      const base = prev ?? EMPTY_SKILLS_DISABLED
-      const list = base[kind]
+      const base = prev ?? EMPTY_SKILLS_GATES
+      const list = base[dimension][kind]
       const next = list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
-      return { ...base, [kind]: next }
+      return { ...base, [dimension]: { ...base[dimension], [kind]: next } }
     })
   }
 
@@ -213,7 +249,7 @@ export function SkillsAdminSettings() {
   const handleResetDisabled = async () => {
     try {
       await resetSkillsSettings()
-      draft.setDraft({ ...EMPTY_SKILLS_DISABLED })
+      draft.setDraft({ ...EMPTY_SKILLS_GATES })
       notify({ text: t('skillsAdmin.disabled.saved'), type: 'success', category: 'system' })
     } catch (err) {
       notify({
@@ -228,7 +264,13 @@ export function SkillsAdminSettings() {
     setPolicySaving(true)
     setPolicyError(null)
     try {
-      await saveSkillsSettings(useSkillsStore.getState().settingsDisabled ?? EMPTY_SKILLS_DISABLED, policy)
+      const state = useSkillsStore.getState()
+      await saveSkillsSettings({
+        disabled: state.settingsDisabled ?? EMPTY_SKILLS_DISABLED,
+        disabledForNewProjects:
+          state.settingsDisabledForNewProjects ?? EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+        policy,
+      })
       setSavedPolicy(policy)
       notify({ text: t('skillsPolicy.saved'), type: 'success', category: 'system' })
     } catch (err) {
@@ -247,7 +289,7 @@ export function SkillsAdminSettings() {
       await resetSkillsSettings()
       setPolicy(DEFAULT_SKILLS_POLICY)
       setSavedPolicy(DEFAULT_SKILLS_POLICY)
-      draft.setDraft({ ...EMPTY_SKILLS_DISABLED })
+      draft.setDraft({ ...EMPTY_SKILLS_GATES })
       notify({ text: t('skillsPolicy.saved'), type: 'success', category: 'system' })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'HTTP'
@@ -322,43 +364,40 @@ export function SkillsAdminSettings() {
         )}
       </SettingsSection>
 
-      {/* System-level enable/disable: категории, группы, точечные имена */}
+      {/* Системные гейты: мастер «выключить везде» + сид новых проектов */}
       <SettingsSection
         title={t('skillsAdmin.disabled.title')}
         description={t('skillsAdmin.disabled.description')}
       >
-        {settingsError && !settingsDisabled && (
+        {settingsError && !settingsGates && (
           <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
             {settingsError}
           </div>
         )}
-        {settingsLoading && !settingsDisabled && (
+        {settingsLoading && !settingsGates && (
           <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
         )}
 
-        <DisabledGroup
-          label={t('skillsAdmin.disabled.categories')}
-          testIdPrefix="skills-disabled-category"
-          values={categories}
-          disabledValues={draftDisabled.categories}
-          emptyText={t('skillsAdmin.disabled.noCategories')}
-          onToggle={(value) => toggleDisabled('categories', value)}
+        <DisabledGroupDimension
+          testIdPrefix="skills-disabled"
+          title={t('skillsAdmin.gates.master')}
+          description={t('skillsAdmin.gates.masterHint')}
+          categories={categories}
+          groups={groups}
+          skills={(skills ?? []).map((s) => s.name)}
+          disabledValues={draftDisabled.disabled}
+          onToggle={(kind, value) => toggleDisabled('disabled', kind, value)}
         />
-        <DisabledGroup
-          label={t('skillsAdmin.disabled.groups')}
-          testIdPrefix="skills-disabled-group"
-          values={groups}
-          disabledValues={draftDisabled.groups}
-          emptyText={t('skillsAdmin.disabled.noGroups')}
-          onToggle={(value) => toggleDisabled('groups', value)}
-        />
-        <DisabledGroup
-          label={t('skillsAdmin.disabled.skills')}
-          testIdPrefix="skills-disabled-skill"
-          values={(skills ?? []).map((s) => s.name)}
-          disabledValues={draftDisabled.skills}
-          emptyText={t('skillsAdmin.disabled.noSkills')}
-          onToggle={(value) => toggleDisabled('skills', value)}
+
+        <DisabledGroupDimension
+          testIdPrefix="skills-new-projects"
+          title={t('skillsAdmin.gates.newProjects')}
+          description={t('skillsAdmin.gates.newProjectsHint')}
+          categories={categories}
+          groups={groups}
+          skills={(skills ?? []).map((s) => s.name)}
+          disabledValues={draftDisabled.disabledForNewProjects}
+          onToggle={(kind, value) => toggleDisabled('disabledForNewProjects', kind, value)}
         />
 
         <SettingsActions
@@ -380,7 +419,7 @@ export function SkillsAdminSettings() {
         scope="skills"
         value={policy}
         savedValue={savedPolicy}
-        loading={settingsLoading && !settingsDisabled}
+        loading={settingsLoading && !settingsGates}
         saving={policySaving}
         error={policyError}
         onChange={setPolicy}
@@ -482,6 +521,64 @@ function SkillAdminRow({
           <Icon name="delete-bin" className="size-4" />
         </Button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * AD-046 §4.5: одно измерение системных гейтов (мастер или сид проектов) —
+ * подпись/пояснение + три группы (категории/группы/отдельные скиллы).
+ */
+function DisabledGroupDimension({
+  testIdPrefix,
+  title,
+  description,
+  categories,
+  groups,
+  skills,
+  disabledValues,
+  onToggle,
+}: {
+  testIdPrefix: string
+  title: string
+  description: string
+  categories: string[]
+  groups: string[]
+  skills: string[]
+  disabledValues: SkillsDisabledRequest
+  onToggle: (kind: 'categories' | 'groups' | 'skills', value: string) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="space-y-2 min-w-0 rounded-lg border border-border/60 p-3">
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-foreground break-words">{title}</div>
+        <p className="text-xs text-muted-foreground break-words">{description}</p>
+      </div>
+      <DisabledGroup
+        label={t('skillsAdmin.disabled.categories')}
+        testIdPrefix={`${testIdPrefix}-category`}
+        values={categories}
+        disabledValues={disabledValues.categories}
+        emptyText={t('skillsAdmin.disabled.noCategories')}
+        onToggle={(value) => onToggle('categories', value)}
+      />
+      <DisabledGroup
+        label={t('skillsAdmin.disabled.groups')}
+        testIdPrefix={`${testIdPrefix}-group`}
+        values={groups}
+        disabledValues={disabledValues.groups}
+        emptyText={t('skillsAdmin.disabled.noGroups')}
+        onToggle={(value) => onToggle('groups', value)}
+      />
+      <DisabledGroup
+        label={t('skillsAdmin.disabled.skills')}
+        testIdPrefix={`${testIdPrefix}-skill`}
+        values={skills}
+        disabledValues={disabledValues.skills}
+        emptyText={t('skillsAdmin.disabled.noSkills')}
+        onToggle={(value) => onToggle('skills', value)}
+      />
     </div>
   )
 }

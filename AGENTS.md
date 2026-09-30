@@ -145,12 +145,13 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 | `GET/PUT /api/v2/settings/workspace` | Рабочий каталог по умолчанию (runtime override, `settings.json`) |
 | `GET/PUT/DELETE /api/v2/settings/workspace-policy` | Политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`; managed — read-only `deny`) |
 | `GET/PUT /api/v2/settings/mcp` | Доступность MCP-инструментов по режимам (plan/act) |
+| `GET/PUT/DELETE /api/v2/settings/skills` | Instance-wide скиллы: мастер-отключение (`disabled`) и дефолт новых проектов (`disabledForNewProjects`), `policy` |
 | `GET/PUT /api/v2/settings/tools-policy` | Политика встроенных инструментов (`consistency`/`available`/`auto`) |
 | `GET/PUT /api/v2/settings/mcp-policy` | Политика MCP-инструментов (`consistency`/`available`/`auto`) |
 | `GET/PUT /api/v2/settings/tools-disabled` | Instance-wide отключение встроенных инструментов (группы/тулы; `runtime` неотключаем) |
 | `GET/PUT/DELETE /api/v2/settings/default-agent` | Агент по умолчанию для новых сессий (fallback `assistant`; UI — раздел «Агенты») |
-| `GET/PUT /api/v2/mcp/registry` | Реестр MCP-серверов (stdio — только ADMIN) |
-| `GET/PUT /api/v2/projects/:id/mcp` и `GET/PUT /api/v2/sessions/:id/mcp` | Уровни/скоуп MCP |
+| `GET/PUT /api/v2/mcp/registry` | Реестр MCP-серверов (`enabled` — мастер-флаг, `enabledByDefault` — дефолт новых проектов; stdio — только ADMIN) |
+| `GET/PUT /api/v2/projects/:id/{mcp,skills}` и `GET/PUT /api/v2/sessions/:id/{mcp,skills}` | Уровни/скоуп MCP и скиллов (`enabled` — hard-gate, `defaultOn` — дефолт новых сессий; в сессии — снапшот) |
 | `POST /api/v2/mcp/probe` | Проверка MCP-сервера без регистрации инструментов |
 
 ## Процесс разработки

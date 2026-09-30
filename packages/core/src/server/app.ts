@@ -34,6 +34,7 @@ import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
 import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from '../storage/runtime-settings.js';
+import { migrateSessionScopeSnapshots } from '../storage/migrations.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
@@ -57,6 +58,7 @@ import { createSkillRoutes } from './routes/skills.js';
 import { createContextRoutes } from './routes/context.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../engine/context/instructions.js';
 import { SkillService } from '../engine/skills/service.js';
+import { resolveProjectSkillSeed } from '../engine/skills/seed.js';
 import { createCommandRoutes } from './routes/commands.js';
 import { createSkillBundleRoutes } from './routes/skill-bundles.js';
 import { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './routes/skill-scope.js';
@@ -607,6 +609,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
   const effectiveToolsDisabled: ToolsDisabledConfig =
     runtimeToolsDisabled ?? config.toolsDisabled ?? { capabilities: [], tools: [] };
+  // AD-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
+  const effectiveSkillsDisabled = (await settingsStore.getSkillsDisabled())
+    ?? { categories: [], groups: [], skills: [] };
 
   // AD-075: политика workspace вне root. config/env — дефолт; runtime-override
   // (settings.json) применяется при старте и live через PUT /settings/workspace-policy.
@@ -620,10 +625,21 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
   const fileStore = new FileStore({ dataDir });
+  const projectStore = new ProjectStore({ dataDir });
   const sessionManager = new SessionManager(fileStore, {
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
+    projectStore,
+    // AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий без проекта.
+    systemDefaultsProvider: async () => ({
+      mcpDefaultOn: Object.entries(config.mcpServers ?? {})
+        .filter(([, cfg]) => cfg.enabledByDefault === true)
+        .map(([name]) => name),
+      skillsDefaultOn: (await resolveProjectSkillSeed(
+        skillService,
+        await settingsStore.getSkillsDisabledForNewProjects(),
+      )).enabled,
+    }),
   });
-  const projectStore = new ProjectStore({ dataDir });
   // AD-076: SSH-ключи агентов (шифрование at-rest мастер-ключом из dataDir/env).
   const sshKeyStore = new SSHKeyStore({ dataDir, secretKey: config.secretKey, env: process.env });
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
@@ -731,6 +747,22 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // AD-046 §4.2/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
   void skillService.refreshRemote().catch(() => {});
 
+  // AD-071 §2.4 / AD-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
+  await migrateSessionScopeSnapshots({
+    sessionManager,
+    projectStore,
+    settingsStore,
+    resolveSystemDefaults: async () => ({
+      mcpDefaultOn: Object.entries(config.mcpServers ?? {})
+        .filter(([, cfg]) => cfg.enabledByDefault === true)
+        .map(([name]) => name),
+      skillsDefaultOn: (await resolveProjectSkillSeed(
+        skillService,
+        await settingsStore.getSkillsDisabledForNewProjects(),
+      )).enabled,
+    }),
+  }).catch(() => 0);
+
   // AD-046 §7: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
   const bundleStore = new SkillBundleStore({
     dataDir,
@@ -779,6 +811,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     toolsPolicy: effectiveToolsPolicy,
     mcpPolicy: effectiveMcpPolicy,
     toolsDisabled: effectiveToolsDisabled,
+    // AD-046 §4.5: системный hard-gate скиллов (runtime-настройка).
+    skillsDisabled: effectiveSkillsDisabled,
     // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте,
     // fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы первый
     // же запрос видел корректную доступность.
@@ -823,6 +857,19 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // AD-075: автосоздание/нормализация workspace локальных проектов.
     getWorkspacesRoot: () => config.workspacesRoot ?? join(dataDir, 'workspaces'),
     getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+    // AD-071 §2.4 / AD-046 §4.5: сид скоупа нового проекта (снимок дефолтов).
+    getProjectSeeds: async () => {
+      const defaultMcpServers = Object.entries(config.mcpServers ?? {})
+        .filter(([, cfg]) => cfg.enabledByDefault === true)
+        .map(([name]) => name);
+      return {
+        mcp: { enabled: [...defaultMcpServers], defaultOn: [...defaultMcpServers] },
+        skills: await resolveProjectSkillSeed(
+          skillService,
+          await settingsStore.getSkillsDisabledForNewProjects(),
+        ),
+      };
+    },
   }));
 
   // Перенос проектов между мирами (гибрид, UI publish/fork): те же пути, что у
@@ -1024,7 +1071,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     permissionConfig: config.permissionConfig,
     resolveProjectWorkspace: resolveSkillWorkspace,
   }));
-  app.route('/api/v2/settings', createSkillSettingsRoutes(auth, { settingsStore }));
+  app.route('/api/v2/settings', createSkillSettingsRoutes(auth, { settingsStore }, {
+    onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
+  }));
 
   // AD-069 §9.3: read-only прозрачность проектных инструкций (session/project scope).
   // Резолвер — тот же core-модуль, что у оркестратора (Фаза 1/2a); доступ —

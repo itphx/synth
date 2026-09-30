@@ -118,6 +118,18 @@ function skillEnabledLabel(skill: EffectiveSkillEntry, t: (key: string) => strin
 }
 
 /**
+ * AD-046 §9.3: источник записи скилла — `session` (включён/выключен в сессии),
+ * `project` (гейт проекта) или `stable` (системный каталог промпта).
+ */
+function skillSourceLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
+  if (skill.level === 'session' || skill.disabledReason === 'session') {
+    return t('rightPanel.stats.skillSource.session')
+  }
+  if (skill.disabledReason === 'project') return t('rightPanel.stats.skillSource.project')
+  return t('rightPanel.stats.skillSource.stable')
+}
+
+/**
  * AD-046 §9.3: локальная оценка вклада скилла в каталог промпта —
  * строка `name` + `description`. `~` — оценка, ratio берётся из манифеста.
  */
@@ -870,9 +882,7 @@ export const StatsTab: React.FC = () => {
                           {skillTokenEstimate(skill, manifestRatio, fmt)}
                         </td>
                         <td className="px-2 py-0.5 text-left last:pr-0">
-                          {skill.level === 'session' || skill.disabledReason === 'session'
-                            ? t('rightPanel.stats.skillSource.session')
-                            : t('rightPanel.stats.skillSource.stable')}
+                          {skillSourceLabel(skill, t)}
                         </td>
                       </tr>
                     ))}

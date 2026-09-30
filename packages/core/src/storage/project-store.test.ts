@@ -45,6 +45,21 @@ describe('ProjectStore', () => {
     expect(project.workspace).toBe('/ws');
   });
 
+  it('create сидит скоуп mcp/skills (AD-071 §2.4 / AD-046 §4.5)', () => {
+    const project = store.create('Seeded', 'u1', {
+      mcp: { enabled: ['s'], defaultOn: ['s'] },
+      skills: { enabled: ['a', 'b'], defaultOn: ['a', 'b'] },
+    });
+    expect(project.mcp).toEqual({ enabled: ['s'], defaultOn: ['s'] });
+    expect(project.skills).toEqual({ enabled: ['a', 'b'], defaultOn: ['a', 'b'] });
+  });
+
+  it('create без сида не задаёт mcp/skills (legacy-гейт открыт)', () => {
+    const project = store.create('NoSeed', 'u1');
+    expect(project.mcp).toBeUndefined();
+    expect(project.skills).toBeUndefined();
+  });
+
   it('save сохраняет в файловую систему', async () => {
     const project = store.create('Atomic', 'user-1');
     await store.save(project);

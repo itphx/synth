@@ -1,6 +1,6 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Project, GitRepoConfig } from '@itphx/synth-shared';
+import type { Project, GitRepoConfig, ProjectMcpSettings, ProjectSkillSettings } from '@itphx/synth-shared';
 import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite } from '@itphx/synth-shared';
 
 export interface ProjectStoreConfig {
@@ -92,7 +92,7 @@ export class ProjectStore {
     );
   }
 
-  create(name: string, ownerId: string, data?: { description?: string; icon?: string; color?: string; workspace?: string; repos?: GitRepoConfig[] }): Project {
+  create(name: string, ownerId: string, data?: { description?: string; icon?: string; color?: string; workspace?: string; repos?: GitRepoConfig[]; mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings }): Project {
     const project: Project = {
       id: generateId(),
       name,
@@ -105,6 +105,9 @@ export class ProjectStore {
       color: data?.color,
       workspace: data?.workspace,
       repos: data?.repos,
+      // AD-071 §2.4 / AD-046 §4.5: сид скоупа новых проектов (снимок системных дефолтов).
+      ...(data?.mcp ? { mcp: data.mcp } : {}),
+      ...(data?.skills ? { skills: data.skills } : {}),
       statusMessages: [],
       plan: {
         version: 1,

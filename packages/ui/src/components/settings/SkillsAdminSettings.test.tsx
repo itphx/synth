@@ -28,7 +28,7 @@ vi.mock('@/hooks/useNotification', () => ({
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { SkillsAdminSettings } from './SkillsAdminSettings'
-import { useSkillsStore, EMPTY_SKILLS_DISABLED } from '@/stores/skillsStore'
+import { useSkillsStore, EMPTY_SKILLS_DISABLED, EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS } from '@/stores/skillsStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -98,8 +98,20 @@ beforeEach(() => {
   mocks.putSkillFile.mockResolvedValue({ name: 'api-review', path: 'x' })
   mocks.deleteSkillFile.mockResolvedValue(undefined)
   mocks.reloadSkills.mockResolvedValue(undefined)
-  mocks.getSkillsSettings.mockResolvedValue({ disabled: { ...EMPTY_SKILLS_DISABLED }, policy: 'auto' })
-  mocks.updateSkillsSettings.mockImplementation(async (disabled: unknown) => ({ disabled, policy: 'auto' }))
+  mocks.getSkillsSettings.mockResolvedValue({
+    disabled: { ...EMPTY_SKILLS_DISABLED },
+    disabledForNewProjects: { ...EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS },
+    policy: 'auto',
+  })
+  mocks.updateSkillsSettings.mockImplementation(async (input: {
+    disabled: unknown
+    disabledForNewProjects?: unknown
+    policy?: unknown
+  }) => ({
+    disabled: input.disabled,
+    disabledForNewProjects: input.disabledForNewProjects ?? { categories: [], groups: [], skills: [] },
+    policy: input.policy ?? 'auto',
+  }))
   mocks.resetSkillsSettings.mockResolvedValue(undefined)
 
   useSkillsStore.setState({
@@ -109,6 +121,7 @@ beforeEach(() => {
     skillsError: null,
     selectedSkill: null,
     settingsDisabled: null,
+    settingsDisabledForNewProjects: null,
     settingsPolicy: 'auto',
     settingsLoading: false,
     settingsError: null,
@@ -214,10 +227,41 @@ describe('SkillsAdminSettings — админ-реестр скиллов (AD-046
     await act(async () => {})
 
     expect(mocks.updateSkillsSettings).toHaveBeenCalledWith({
-      categories: ['quality'],
-      groups: ['review'],
-      skills: ['api-review'],
-    }, undefined)
+      disabled: {
+        categories: ['quality'],
+        groups: ['review'],
+        skills: ['api-review'],
+      },
+      disabledForNewProjects: EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+    })
+  })
+
+  it('отключение по умолчанию для новых проектов сохраняется отдельной осью', async () => {
+    const container = await renderSettings()
+    const skillToggle = container.querySelector('[data-testid="skills-new-projects-skill-api-review"]') as HTMLInputElement
+    const groupToggle = container.querySelector('[data-testid="skills-new-projects-group-review"]') as HTMLInputElement
+    expect(skillToggle.checked).toBe(true)
+
+    await act(async () => {
+      skillToggle.click()
+      groupToggle.click()
+    })
+
+    const save = container.querySelector('[data-testid="skills-disabled-save"]') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.updateSkillsSettings).toHaveBeenCalledWith({
+      disabled: EMPTY_SKILLS_DISABLED,
+      disabledForNewProjects: {
+        categories: [],
+        groups: ['review'],
+        skills: ['api-review'],
+      },
+    })
   })
 
   it('политика: смена и Save вызывают PUT с текущим disabled', async () => {
@@ -244,7 +288,11 @@ describe('SkillsAdminSettings — админ-реестр скиллов (AD-046
     })
     await act(async () => {})
 
-    expect(mocks.updateSkillsSettings).toHaveBeenCalledWith(EMPTY_SKILLS_DISABLED, 'available')
+    expect(mocks.updateSkillsSettings).toHaveBeenCalledWith({
+      disabled: EMPTY_SKILLS_DISABLED,
+      disabledForNewProjects: EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS,
+      policy: 'available',
+    })
   })
 
   it('политика: Reset вызывает resetSkillsSettings', async () => {

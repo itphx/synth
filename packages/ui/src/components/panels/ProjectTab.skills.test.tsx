@@ -160,6 +160,33 @@ describe('ProjectTab — проектный скоуп скиллов (AD-046 §
     expect(content.textContent).toContain('Review API')
   })
 
+  it('системный скилл тоже управляем проектом (два тумблера) и hint поясняет семантику', async () => {
+    mocks.getProjectSkills.mockResolvedValue(projectSkills({
+      skills: [
+        { name: 'sys-skill', description: 'System skill', level: 'system', scope: 'instance', trusted: true, available: true, enabled: false, disabled: false },
+      ],
+      enabled: [],
+      defaultOn: [],
+    }))
+    const container = await renderTab()
+
+    const row = container.querySelector('[data-testid="project-skill-sys-skill"]')!
+    const toggles = row.querySelectorAll('button[role="switch"]')
+    expect(toggles).toHaveLength(2)
+
+    // «Доступен» — жёсткий гейт проекта: выключение убирает скилл у всего проекта.
+    await act(async () => {
+      ;(toggles[0] as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    expect(mocks.updateProjectSkills).toHaveBeenCalledWith('p1', {
+      enabled: ['sys-skill'],
+      defaultOn: [],
+    })
+    // Подпись секции поясняет жёсткий гейт и дефолт новых сессий.
+    expect(container.textContent).toContain('is unavailable even in existing sessions')
+  })
+
   it('без описания кат не рендерится', async () => {
     mocks.getProjectSkills.mockResolvedValue(projectSkills({
       skills: [

@@ -861,6 +861,11 @@ export function SessionSettingsTab() {
                         <Toggle
                           enabled={srv.enabled}
                           onToggle={() => handleToggleMcp(srv)}
+                          disabled={
+                            mcpToggling === srv.name
+                            || srv.reason === 'system_disabled'
+                            || srv.reason === 'project_disabled'
+                          }
                           ariaLabel={srv.enabled ? t('mcp.disable') : t('mcp.enable')}
                         />
                       </label>
@@ -903,7 +908,11 @@ export function SessionSettingsTab() {
                         <Toggle
                           enabled={skill.enabled}
                           onToggle={() => handleToggleSkill(skill)}
-                          disabled={skillToggling === skill.name || skill.disabledReason === 'system'}
+                          disabled={
+                            skillToggling === skill.name
+                            || skill.disabledReason === 'system'
+                            || skill.disabledReason === 'project'
+                          }
                           ariaLabel={skill.enabled ? t('sessionSettings.skills.disable') : t('sessionSettings.skills.enable')}
                         />
                       </label>

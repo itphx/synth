@@ -33,6 +33,11 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - AD-046: секции `skills` (`paths`/`trustedProjectDirs`/`inlineShell`/`toolsets`) и
   `commands` (`paths`/`bundlesPath`/`conflict`/лимиты); типы команд/бандлов —
   `src/types/commands.ts`, Zod — `schemas` (`skillBundleSchema`, session/project/settings-skills).
+- Скоп/уровни (AD-046 §4.5 / AD-071 §2.4): `ProjectSkillSettings`/`ProjectMcpSettings`
+  (`enabled` — hard-gate, `defaultOn` — сид новых сессий), `SessionSettings.skillsDefaultOn`/
+  `mcpDefaultOn` (снапшот-дефолты), `McpRegistryEntry.enabled` (мастер hard-gate) +
+  `enabledByDefault` (дефолт новых проектов); Zod — `skillsSystemSettingsSchema`
+  (`disabled`/`disabledForNewProjects`/`policy`), `projectSkillUpdateSchema`/`sessionSkillUpdateSchema`.
 - AD-076: `security.secretKey` (мастер-ключ секретов at-rest; env `SYNTH_SECRET_KEY`,
   резолвер `resolveSecretKey`, пусто — файл `{dataDir}/secrets/master.key`); типы
   `GitRepoConfig` (реестр, `path` обязателен) и `SSHKey`/`SSHKeyMeta` (`agentIds: string[]`),
@@ -52,6 +57,8 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - AD-078: ключи `tool.binary_missing` (`{tool}`/`{binary}`) и
   `permission.dep_unavailable` (`{binary}`) — тул недоступен, т.к. в окружении нет
   внешней программы (`git`/`rg`/`sh`).
+- AD-046: `skill.scope_disabled` (`{name}`/`{reason}`) — скилл недоступен по scope
+  (причина `system`/`project`/`session`).
 
 ## Тесты и сборка
 

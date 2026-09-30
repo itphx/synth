@@ -1,13 +1,25 @@
-import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings } from '@itphx/synth-shared';
+import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project } from '@itphx/synth-shared';
 import { getForkedTitle, MessageRole } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { FileStore } from '../storage/file-store.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
 
+/** Структурный контракт загрузки проекта (для снапшотов скоупа). */
+export interface SessionProjectStoreLike {
+  load(id: string): Promise<Project | null>;
+}
+
 export interface SessionManagerOptions {
   /** Поставщик глобальных настроек доступности MCP-серверов (runtime settings). */
   mcpSettingsProvider?: () => Promise<Record<string, McpServerToolSettings> | undefined>;
+  /** AD-071 §2.4 / AD-046 §4.5: загрузка проекта — снапшот `defaultOn` при создании сессии. */
+  projectStore?: SessionProjectStoreLike;
+  /**
+   * AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий БЕЗ проекта —
+   * снапшоты `mcpDefaultOn`/`skillsDefaultOn` при создании.
+   */
+  systemDefaultsProvider?: () => Promise<{ mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined>;
 }
 
 export interface SessionTree {
@@ -89,6 +101,9 @@ export class SessionManager {
         mcpServers: data.settings?.mcpServers,
         // AD-071 §2.4: явные opt-out сессии (включая системные) не теряются.
         mcpDisabledServers: data.settings?.mcpDisabledServers,
+        // AD-046 §4.5: session-level overrides скиллов (ранее терялись при создании).
+        skills: data.settings?.skills,
+        skillsDisabled: data.settings?.skillsDisabled,
         provider: data.settings?.provider,
         model: data.settings?.model,
         systemPrompt: data.settings?.systemPrompt,
@@ -131,8 +146,46 @@ export class SessionManager {
       cacheWriteTokens: 0,
       reasoningTokens: 0,
     };
+    // AD-071 §2.4 / AD-046 §4.5: снапшоты скоупа на момент создания сессии.
+    await this._materializeScopeSnapshots(session, data.projectId, data.settings);
     await this.store.save(session);
     return session;
+  }
+
+  /**
+   * AD-071 §2.4 / AD-046 §4.5: материализует `mcpDefaultOn`/`skillsDefaultOn`
+   * сессии из `project.defaultOn` (или системного дефолта, если проекта нет).
+   * Явно переданные в `settings` значения не перетираются. Не заданы нигде —
+   * остаются `undefined` (legacy-режим каталога до миграции).
+   */
+  private async _materializeScopeSnapshots(
+    session: Session,
+    projectId: string | undefined,
+    settings?: Partial<SessionSettings>,
+  ): Promise<void> {
+    let mcpDefaultOn = settings?.mcpDefaultOn;
+    let skillsDefaultOn = settings?.skillsDefaultOn;
+    if (mcpDefaultOn !== undefined && skillsDefaultOn !== undefined) {
+      session.settings.mcpDefaultOn = mcpDefaultOn;
+      session.settings.skillsDefaultOn = skillsDefaultOn;
+      return;
+    }
+
+    let project: Project | null = null;
+    if (projectId && this._options.projectStore) {
+      project = await this._options.projectStore.load(projectId).catch(() => null);
+    }
+    if (project) {
+      if (mcpDefaultOn === undefined) mcpDefaultOn = project.mcp?.defaultOn;
+      if (skillsDefaultOn === undefined) skillsDefaultOn = project.skills?.defaultOn;
+    }
+    if ((mcpDefaultOn === undefined || skillsDefaultOn === undefined) && this._options.systemDefaultsProvider) {
+      const systemDefaults = await this._options.systemDefaultsProvider().catch(() => undefined);
+      if (mcpDefaultOn === undefined) mcpDefaultOn = systemDefaults?.mcpDefaultOn;
+      if (skillsDefaultOn === undefined) skillsDefaultOn = systemDefaults?.skillsDefaultOn;
+    }
+    if (mcpDefaultOn !== undefined) session.settings.mcpDefaultOn = mcpDefaultOn;
+    if (skillsDefaultOn !== undefined) session.settings.skillsDefaultOn = skillsDefaultOn;
   }
 
   private async _resolveMcpToolSettings(

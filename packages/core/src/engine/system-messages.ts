@@ -288,6 +288,7 @@ export const SYSTEM_MESSAGES = {
   'skill.untrusted': 'Skill "{name}" belongs to an untrusted project and cannot be loaded',
   'skill.delegation': 'The skill "{name}" requires capabilities: {capabilities}; agent "{agent}" does not have them. Call `task` with an agent that supports these capabilities.',
   'skill.file_not_found': 'Supporting file "{path}" not found in the skill directory',
+  'skill.scope_disabled': 'Skill "{name}" is disabled ({reason}) and cannot be loaded',
 
   // --- Slash-команды (AD-046 §7) ---
   'command.unknown': 'Unknown command: /{name}',

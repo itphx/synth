@@ -458,6 +458,20 @@ export const skillsDisabledSchema = z.object({
 export type SkillsDisabledRequest = z.infer<typeof skillsDisabledSchema>;
 
 /**
+ * AD-046 §4.5: тело `PUT /api/v2/settings/skills` — системные настройки:
+ * - `disabled` — hard-gate: скиллы, недоступные НИГДЕ;
+ * - `disabledForNewProjects` — сид для НОВЫХ проектов (снимок при создании);
+ * - `policy` — политика доступности (строкой, валидируется роутом).
+ */
+export const skillsSystemSettingsSchema = z.object({
+  disabled: skillsDisabledSchema.optional(),
+  disabledForNewProjects: skillsDisabledSchema.optional(),
+  policy: z.string().optional(),
+});
+
+export type SkillsSystemSettingsRequest = z.infer<typeof skillsSystemSettingsSchema>;
+
+/**
  * AD-046 §4.5: тело `PUT /api/v2/sessions/:id/skills`: точечный toggle
  * (`{ name, enabled }`) или полная/частичная замена (`{ skills?, skillsDisabled? }`).
  */

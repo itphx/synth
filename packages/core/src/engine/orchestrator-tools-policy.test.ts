@@ -140,6 +140,9 @@ function makeMockMcpManager(): McpManager {
     isDefaultServer() {
       return false;
     },
+    isServerSystemEnabled() {
+      return true;
+    },
     getServerTools(name: string) {
       if (!connected.has(name)) return null;
       return (tools[name] ?? []).map((tool) => ({
