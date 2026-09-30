@@ -21,7 +21,7 @@ import {
 } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
-import type { ProjectStore } from '../storage/project-store.js';
+import type { ProjectStore } from '@itphx/synth-core';
 
 /**
  * Backend-обёртка над core-фабрикой сессий (ТД-1, фаза B2). Здесь остаются только

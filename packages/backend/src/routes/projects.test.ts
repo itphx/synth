@@ -5,7 +5,7 @@ import { mkdtemp, rm, stat, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createProjectRoutes } from './projects.js';
-import { ProjectStore } from '../storage/project-store.js';
+import { ProjectStore } from '@itphx/synth-core';
 import type { User } from '@itphx/synth-shared';
 import { ProjectRole } from '@itphx/synth-shared';
 

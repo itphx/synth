@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createProviderRoutes } from './providers.js';
-import { JsonStore } from '../storage/json-store.js';
+import { JsonStore } from '@itphx/synth-core';
 import type { ProviderConfig } from '@itphx/synth-shared';
 
 const BASE = '/api/v2/providers';

@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { createGitRoutes } from '@itphx/synth-core';
 import type { User } from '@itphx/synth-shared';
 import { ProjectRole } from '@itphx/synth-shared';
-import { ProjectStore } from '../storage/project-store.js';
+import { ProjectStore } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 import type { AuthKit } from '../auth/middleware.js';
 

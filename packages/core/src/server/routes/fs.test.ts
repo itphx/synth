@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, stat } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import type { WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { createFsRoutes } from './fs.js';
+import { resolveProjectWorkspace } from '../fs-workspace.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { ProtectedPathsPolicy } from '../../engine/security/protected-paths.js';
 
@@ -288,5 +289,243 @@ describe('FS workspace-root routes (AD-075)', () => {
     expect(hidden.status).toBe(200);
     const hiddenBody = (await hidden.json()) as { entries: Array<{ name: string }> };
     expect(hiddenBody.entries.map((e) => e.name).sort()).toEqual(['.hidden.txt', 'visible.txt']);
+  });
+});
+
+describe('FS project-aware routes (AD-075: managed/standalone)', () => {
+  let tmpDir: string;
+  let workspacesRoot: string;
+  let outsideDir: string;
+
+  const jsonHeaders = { 'Content-Type': 'application/json' };
+
+  function makeProjectApp(
+    projects: Record<string, { workspace?: string }>,
+    opts: {
+      policy?: WorkspaceOutsideRootPolicy;
+      requireProjectId?: boolean;
+      strict?: boolean;
+      root?: string;
+    } = {},
+  ): Hono {
+    const wsRoot = opts.root ?? workspacesRoot;
+    const app = new Hono();
+    app.route('/api/v2/fs', createFsRoutes(createMockAuth(), wsRoot, undefined, {
+      getOutsideRootPolicy: () => opts.policy ?? 'deny',
+      getProtectedPathsPolicy: () => NO_PROTECTED,
+      requireProjectId: opts.requireProjectId ?? true,
+      getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
+        workspacesRoot: wsRoot,
+        getProject: async (id) => projects[id] ?? null,
+        outsideRootPolicy: () => opts.policy ?? 'deny',
+        strict: opts.strict ?? true,
+      }),
+    }));
+    return app;
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fs-proj-'));
+    workspacesRoot = join(tmpDir, 'workspaces');
+    outsideDir = join(tmpDir, 'outside');
+    await mkdir(join(workspacesRoot, 'ws'), { recursive: true });
+    await mkdir(outsideDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET / отдаёт файлы workspace проекта, а не плоского root', async () => {
+    await writeFile(join(workspacesRoot, 'root-only.txt'), 'r');
+    await writeFile(join(workspacesRoot, 'ws', 'a.txt'), 'a');
+
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } }).request('/api/v2/fs?project_id=p1');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { path: string; entries: Array<{ name: string }> };
+    expect(body.entries.map((e) => e.name)).toEqual(['a.txt']);
+  });
+
+  it('GET / без project_id (managed) → 400', async () => {
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } }).request('/api/v2/fs');
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PERMISSION_DENIED');
+  });
+
+  it('project не найден → 404 NOT_FOUND', async () => {
+    const res = await makeProjectApp({}).request('/api/v2/fs?project_id=missing');
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+  });
+
+  it('workspace не задан → 400 WORKSPACE_NOT_SET', async () => {
+    const res = await makeProjectApp({ p1: {} }).request('/api/v2/fs?project_id=p1');
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('WORKSPACE_NOT_SET');
+  });
+
+  it('workspace вне root при deny → 403 PATH_TRAVERSAL', async () => {
+    const res = await makeProjectApp({ p1: { workspace: outsideDir } }).request('/api/v2/fs?project_id=p1');
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PATH_TRAVERSAL');
+  });
+
+  it('write + read roundtrip в workspace проекта', async () => {
+    const app = makeProjectApp({ p1: { workspace: 'ws' } });
+    const writeRes = await app.request('/api/v2/fs/write', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ projectId: 'p1', path: 'sub/hello.txt', content: 'hello' }),
+    });
+    expect(writeRes.status).toBe(200);
+
+    const readRes = await app.request('/api/v2/fs/read?project_id=p1&path=sub/hello.txt');
+    expect(readRes.status).toBe(200);
+    const body = (await readRes.json()) as { content: string; encoding: string };
+    expect(body.content).toBe('hello');
+    expect(body.encoding).toBe('utf-8');
+    expect(await readFile(join(workspacesRoot, 'ws', 'sub', 'hello.txt'), 'utf-8')).toBe('hello');
+  });
+
+  it('read бинарного файла (NUL) → encoding binary, content пусто', async () => {
+    await writeFile(join(workspacesRoot, 'ws', 'data.xyz'), Buffer.from([1, 0, 2, 3]));
+
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } })
+      .request('/api/v2/fs/read?project_id=p1&path=data.xyz');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { content: string; encoding: string; size: number };
+    expect(body.encoding).toBe('binary');
+    expect(body.content).toBe('');
+    expect(body.size).toBe(4);
+  });
+
+  it('read директории → 400 IS_DIRECTORY', async () => {
+    await mkdir(join(workspacesRoot, 'ws', 'subdir'), { recursive: true });
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } })
+      .request('/api/v2/fs/read?project_id=p1&path=subdir');
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('IS_DIRECTORY');
+  });
+
+  it('traversal за пределы workspace → 403 PATH_TRAVERSAL', async () => {
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } })
+      .request(`/api/v2/fs?project_id=p1&path=${encodeURIComponent('../root-only.txt')}`);
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PATH_TRAVERSAL');
+  });
+
+  it('mkdir создаёт каталог (201), повтор → 409 ALREADY_EXISTS', async () => {
+    const app = makeProjectApp({ p1: { workspace: 'ws' } });
+    const first = await app.request('/api/v2/fs/mkdir', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ projectId: 'p1', path: 'newdir' }),
+    });
+    expect(first.status).toBe(201);
+    expect((await stat(join(workspacesRoot, 'ws', 'newdir'))).isDirectory()).toBe(true);
+
+    const second = await app.request('/api/v2/fs/mkdir', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ projectId: 'p1', path: 'newdir' }),
+    });
+    expect(second.status).toBe(409);
+    expect(((await second.json()) as { error: { code: string } }).error.code).toBe('ALREADY_EXISTS');
+  });
+
+  it('mkdir с пустым path → 400 PERMISSION_DENIED (паритет с backend)', async () => {
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } }).request('/api/v2/fs/mkdir', {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify({ projectId: 'p1', path: '' }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PERMISSION_DENIED');
+  });
+
+  it('move переименовывает файл в workspace', async () => {
+    await writeFile(join(workspacesRoot, 'ws', 'old.txt'), 'x');
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } }).request('/api/v2/fs/move', {
+      method: 'POST', headers: jsonHeaders,
+      body: JSON.stringify({ projectId: 'p1', sourcePath: 'old.txt', targetPath: 'renamed.txt' }),
+    });
+    expect(res.status).toBe(200);
+    await expect(stat(join(workspacesRoot, 'ws', 'old.txt'))).rejects.toThrow();
+    expect((await stat(join(workspacesRoot, 'ws', 'renamed.txt'))).isFile()).toBe(true);
+  });
+
+  it('delete файла (200) и непустой директории (400 DIR_NOT_EMPTY)', async () => {
+    const app = makeProjectApp({ p1: { workspace: 'ws' } });
+    await writeFile(join(workspacesRoot, 'ws', 'del.txt'), 'x');
+    const del = await app.request('/api/v2/fs?project_id=p1&path=del.txt', { method: 'DELETE' });
+    expect(del.status).toBe(200);
+
+    await mkdir(join(workspacesRoot, 'ws', 'dir'));
+    await writeFile(join(workspacesRoot, 'ws', 'dir', 'f.txt'), 'x');
+    const delDir = await app.request('/api/v2/fs?project_id=p1&path=dir', { method: 'DELETE' });
+    expect(delDir.status).toBe(400);
+    expect(((await delDir.json()) as { error: { code: string } }).error.code).toBe('DIR_NOT_EMPTY');
+  });
+
+  it('upload multipart кладёт файл в workspace проекта (201)', async () => {
+    const app = makeProjectApp({ p1: { workspace: 'ws' } });
+    const fd = new FormData();
+    fd.set('project_id', 'p1');
+    fd.set('path', 'uploads');
+    fd.set('file', new File(['payload'], 'up.txt', { type: 'text/plain' }));
+
+    const res = await app.request('/api/v2/fs/upload', { method: 'POST', body: fd });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { path: string; name: string };
+    expect(body.name).toBe('up.txt');
+    expect(await readFile(join(workspacesRoot, 'ws', 'uploads', 'up.txt'), 'utf-8')).toBe('payload');
+  });
+
+  it('download отдаёт содержимое с Content-Disposition', async () => {
+    await writeFile(join(workspacesRoot, 'ws', 'dl.txt'), 'download-me');
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } })
+      .request('/api/v2/fs/download?project_id=p1&path=dl.txt');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Content-Disposition')).toContain('dl.txt');
+    expect(await res.text()).toBe('download-me');
+  });
+
+  it('maxDepth рекурсивно раскрывает вложенные каталоги', async () => {
+    await mkdir(join(workspacesRoot, 'ws', 'dir1', 'sub'), { recursive: true });
+    await writeFile(join(workspacesRoot, 'ws', 'dir1', 'top.txt'), 'x');
+    await writeFile(join(workspacesRoot, 'ws', 'dir1', 'sub', 'deep.txt'), 'x');
+
+    const res = await makeProjectApp({ p1: { workspace: 'ws' } })
+      .request('/api/v2/fs?project_id=p1&maxDepth=1');
+    expect(res.status).toBe(200);
+    const names = ((await res.json()) as { entries: Array<{ name: string }> }).entries.map((e) => e.name);
+    expect(names).toContain('top.txt');
+    expect(names).not.toContain('deep.txt');
+  });
+
+  it('standalone (strict=false): нет project_id → плоский root', async () => {
+    await writeFile(join(workspacesRoot, 'flat.txt'), 'x');
+    const app = makeProjectApp({}, { requireProjectId: false, strict: false });
+    const res = await app.request('/api/v2/fs');
+    expect(res.status).toBe(200);
+    const names = ((await res.json()) as { entries: Array<{ name: string }> }).entries.map((e) => e.name);
+    expect(names).toContain('flat.txt');
+  });
+
+  it('standalone (confirm): абсолютный workspace вне root разрешён', async () => {
+    await writeFile(join(outsideDir, 'out.txt'), 'x');
+    const app = makeProjectApp(
+      { p1: { workspace: outsideDir } },
+      { policy: 'confirm', requireProjectId: false, strict: false },
+    );
+    const res = await app.request('/api/v2/fs?project_id=p1');
+    expect(res.status).toBe(200);
+    const names = ((await res.json()) as { entries: Array<{ name: string }> }).entries.map((e) => e.name);
+    expect(names).toContain('out.txt');
+  });
+
+  it('browse: абсолютный путь внутри root → 200 и относительный path (паритет с backend)', async () => {
+    await mkdir(join(workspacesRoot, 'proj', 'sub'), { recursive: true });
+    const res = await makeProjectApp({}).request(
+      `/api/v2/fs/workspace-root/browse?path=${encodeURIComponent(join(workspacesRoot, 'proj'))}`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { path: string; entries: Array<{ name: string }> };
+    expect(body.path).toBe('proj');
+    expect(body.entries.map((e) => e.name)).toContain('sub');
   });
 });

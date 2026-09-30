@@ -29,6 +29,7 @@ import { isRemoteRef, toLocalId } from '../remote/aggregate.js';
 import { ConnectionWatcher } from './connection-watcher.js';
 import { setRemoteTokenProvider, removeRemoteTokenProvider } from '../providers/remote.js';
 import { JsonStore } from '../storage/json-store.js';
+import { syncProvidersFromEnv } from '../providers/sync-from-env.js';
 import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
@@ -43,6 +44,7 @@ import { createProviderRoutes } from './routes/providers.js';
 import { createModelRoutes } from './routes/models.js';
 import { createAgentRoutes } from './routes/agents.js';
 import { createFsRoutes } from './routes/fs.js';
+import { resolveProjectWorkspace } from './fs-workspace.js';
 import { createGitRoutes } from './routes/git.js';
 import { createSshKeyRoutes, createAgentSshKeyRoutes } from './routes/ssh-keys.js';
 import { createQueueRoutes } from './routes/queue.js';
@@ -204,68 +206,6 @@ function serveStatic(uiDistPath: string) {
       return null;
     }
   };
-}
-
-async function syncProvidersFromEnv(
-  providerStore: JsonStore<ProviderConfig>,
-  modelStore: JsonStore<ModelConfig>,
-): Promise<void> {
-  const providerPattern = /^SYNTH_PROVIDER_([A-Z][A-Z0-9_]*?)_(API_KEY|URL|MODEL|TYPE)$/;
-  const providers: Map<string, Partial<ProviderConfig> & { model?: string }> = new Map();
-
-  for (const [key, value] of Object.entries(process.env)) {
-    const match = key.match(providerPattern);
-    if (!match || !value) continue;
-
-    const [, rawName, field] = match;
-    if (!rawName) continue;
-    const name = rawName.toLowerCase().replace(/_/g, '-');
-
-    if (!providers.has(name)) {
-      providers.set(name, { name, type: 'openai' });
-    }
-
-    const p = providers.get(name)!;
-    switch (field) {
-      case 'API_KEY': p.apiKey = value; break;
-      case 'URL': p.baseUrl = value; break;
-      case 'MODEL': p.model = value; break;
-      case 'TYPE': p.type = value; break;
-    }
-  }
-
-  for (const [name, envConfig] of providers) {
-    const existing = await providerStore.load(name);
-    const provider: ProviderConfig = {
-      name,
-      type: envConfig.type || existing?.type || 'openai',
-      baseUrl: envConfig.baseUrl || existing?.baseUrl,
-      apiKey: envConfig.apiKey || existing?.apiKey,
-      defaultModel: envConfig.model || existing?.defaultModel,
-      timeout: existing?.timeout ?? 120,
-      enabled: true,
-      icon: existing?.icon ?? '',
-    };
-    await providerStore.save(name, provider);
-
-    // Если указана модель — создаём её
-    if (envConfig.model) {
-      const modelId = `${name}/${envConfig.model}`;
-      const existingModel = await modelStore.load(modelId);
-      if (!existingModel) {
-        await modelStore.save(modelId, {
-          id: modelId,
-          name: envConfig.model,
-          provider: name,
-          description: '',
-          enabled: true,
-          isDefault: true,
-        });
-      }
-    }
-
-    console.log(`  [env] провайдер: ${name} (${provider.type})${provider.baseUrl ? ` → ${provider.baseUrl}` : ''}`);
-  }
 }
 
 /** Описание одного remote-зеркала серверного провайдера для инъекции в кэши. */
@@ -918,6 +858,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
 
   // FS (AD-075: гарантированный корень workspace + мягкая политика путей вне root)
+  // project-aware: с `project_id` база — workspace проекта (fallback на root/default).
   app.route('/api/v2/fs', createFsRoutes(
     auth,
     config.workspacesRoot ?? join(dataDir, 'workspaces'),
@@ -925,6 +866,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     {
       getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
       getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
+      getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
+        workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
+        getProject: (id) => projectStore.load(id),
+        outsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
+        strict: false,
+      }),
     },
   ));
 

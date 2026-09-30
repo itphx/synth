@@ -24,6 +24,7 @@ export {
   RateLimitError,
 } from './providers/index.js';
 export type { LLMMessage, CancellationToken, ProviderConfig } from './providers/index.js';
+export { syncProvidersFromEnv } from './providers/sync-from-env.js';
 
 export {
   debug,
@@ -142,6 +143,19 @@ export { isSshUrl, createSshEnv, SshEnvError } from './git/ssh-env.js';
 export type { CreateSshEnvOptions, SshEnv, SshEnvErrorCode } from './git/ssh-env.js';
 export { createGitRoutes } from './server/routes/git.js';
 export type { GitRoutesAuth, GitProjectStore, GitRoutesOptions } from './server/routes/git.js';
+// AD-014/AD-017/AD-075: единая фабрика проектов (standalone и managed через opts).
+export { createProjectRoutes } from './server/routes/projects.js';
+export type {
+  ProjectRoutesAuth,
+  ProjectRoutesOptions,
+  ProjectRouteMessages,
+  ProjectStatsSource,
+} from './server/routes/projects.js';
+// AD-075: единая project-aware фабрика FS-роутов (standalone + managed через opts).
+export { createFsRoutes } from './server/routes/fs.js';
+export type { FsRoutesOptions, FsRoutesAuth } from './server/routes/fs.js';
+export { resolveProjectWorkspace, isTextFile } from './server/fs-workspace.js';
+export type { ResolveProjectWorkspaceOptions } from './server/fs-workspace.js';
 // AD-076 §T5: SSH-ключи агентов (flat + nested-роуты).
 export { createSshKeyRoutes, createAgentSshKeyRoutes } from './server/routes/ssh-keys.js';
 export type { SshKeyRoutesAuth, SshKeyRoutesOptions } from './server/routes/ssh-keys.js';
@@ -241,6 +255,14 @@ export { createProviderRoutes } from './server/routes/providers.js';
 export type { ProviderRoutesAuth, ProviderRoutesOptions, ProviderRouteMessages } from './server/routes/providers.js';
 export { createModelRoutes } from './server/routes/models.js';
 export type { ModelRoutesAuth, ModelRoutesOptions, ModelRouteMessages } from './server/routes/models.js';
+export { createAgentRoutes } from './server/routes/agents.js';
+export type { AgentRoutesAuth, AgentRoutesOptions, AgentRouteMessages } from './server/routes/agents.js';
+export { createMcpRoutes } from './server/routes/mcp.js';
+export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
+export { createMessageRoutes } from './server/routes/messages.js';
+export type { MessageRoutesAuth, MessageRoutesOptions, MessageRouteMessages } from './server/routes/messages.js';
+export { createQueueRoutes } from './server/routes/queue.js';
+export type { QueueRoutesAuth, QueueRoutesOptions, QueueRouteMessages } from './server/routes/queue.js';
 export { createSessionRoutes } from './server/routes/sessions.js';
 export type { SessionRoutesAuth, SessionRoutesDeps, SessionRoutesOptions, SessionRouteMessages } from './server/routes/sessions.js';
 export { createStandaloneApp } from './server/app.js';

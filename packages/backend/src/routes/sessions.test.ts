@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore, FileProfileStore } from '@itphx/synth-core';
-import { ProjectStore } from '../storage/project-store.js';
+import { ProjectStore } from '@itphx/synth-core';
 import type { User } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';

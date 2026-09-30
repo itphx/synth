@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import { JsonStore } from '../storage/json-store.js';
+import { JsonStore } from '@itphx/synth-core';
 import type { ProviderConfig } from '@itphx/synth-shared';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
 import { createProviderRoutes as createCoreProviderRoutes, evaluateMcpNetworkAccess } from '@itphx/synth-core';

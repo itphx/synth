@@ -1,9 +1,38 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import type { AuthKit } from '../../auth/local.js';
+import type { createMiddleware } from 'hono/factory';
 import type { SessionManager } from '../../index.js';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
+type Middleware = ReturnType<typeof createMiddleware>;
+
+/** Минимальный auth-контракт фабрики: в core и backend общий (структурно). */
+export interface MessageRoutesAuth {
+  requireAuth: Middleware;
+}
+
+/** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
+export interface MessageRouteMessages {
+  sessionNotFound: (c: Context) => string;
+  messageNotFound: (c: Context) => string;
+}
+
+export interface MessageRoutesOptions {
+  /** Переопределение сообщений (backend — i18n). */
+  messages?: Partial<MessageRouteMessages>;
+  /**
+   * Хук после успешной локальной мутации (batch/toggle/pin/delete/retry),
+   * вызывается с await. Backend использует его для пересчёта `canSummarize`.
+   */
+  onMessagesChanged?: (sessionId: string, c: Context) => void | Promise<void>;
+}
+
+const DEFAULT_MESSAGES: MessageRouteMessages = {
+  sessionNotFound: () => 'Сессия не найдена',
+  messageNotFound: () => 'Сообщение не найдено',
+};
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
 function mapRemoteError(c: Context, err: unknown): Response | undefined {
@@ -21,12 +50,15 @@ function remoteUnavailable(c: Context): Response | undefined {
 }
 
 export function createMessageRoutes(
-  auth: AuthKit,
+  auth: MessageRoutesAuth,
   sessionManager: SessionManager,
   getRemoteClient?: () => RemoteBackendClient | null,
+  opts?: MessageRoutesOptions,
 ): Hono {
   const app = new Hono();
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
+  const messages: MessageRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
+  const onMessagesChanged = opts?.onMessagesChanged;
 
   // POST /api/v2/messages/:sessionId/batch — групповая операция
   app.post('/:sessionId/batch', auth.requireAuth, async (c) => {
@@ -56,7 +88,7 @@ export function createMessageRoutes(
     }
 
     const session = await sessionManager.getSession(sessionId);
-    if (!session) return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+    if (!session) return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
 
     const result = await sessionManager.batchMessageOperation(
       sessionId,
@@ -64,6 +96,8 @@ export function createMessageRoutes(
       indices,
       state,
     );
+
+    await onMessagesChanged?.(sessionId, c);
 
     return c.json(result, 200);
   });
@@ -88,10 +122,10 @@ export function createMessageRoutes(
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     if (index < 0 || index >= session.messages.length) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
     const disabled = await sessionManager.withLock(sessionId, async (locked) => {
@@ -99,6 +133,8 @@ export function createMessageRoutes(
       await sessionManager.updateSession(locked);
       return locked.messages[index]!.disabled;
     });
+
+    await onMessagesChanged?.(sessionId, c);
 
     return c.json({ disabled, success: true });
   });
@@ -123,10 +159,10 @@ export function createMessageRoutes(
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     if (index < 0 || index >= session.messages.length) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
     const pinned = await sessionManager.withLock(sessionId, async (locked) => {
@@ -134,6 +170,8 @@ export function createMessageRoutes(
       await sessionManager.updateSession(locked);
       return locked.messages[index]!.pinned;
     });
+
+    await onMessagesChanged?.(sessionId, c);
 
     return c.json({ pinned, success: true });
   });
@@ -158,10 +196,10 @@ export function createMessageRoutes(
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     if (index < 0 || index >= session.messages.length) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
     await sessionManager.withLock(sessionId, async (locked) => {
@@ -169,6 +207,8 @@ export function createMessageRoutes(
       locked.messages.forEach((m, i) => { m.seq = i + 1; });
       await sessionManager.updateSession(locked);
     });
+
+    await onMessagesChanged?.(sessionId, c);
 
     return c.json({ success: true });
   });
@@ -193,10 +233,10 @@ export function createMessageRoutes(
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     if (index < 0 || index >= session.messages.length) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
     const msg = session.messages[index]!;
@@ -209,6 +249,8 @@ export function createMessageRoutes(
       locked.pendingMessages = [];
       await sessionManager.updateSession(locked);
     });
+
+    await onMessagesChanged?.(sessionId, c);
 
     return c.json({ content, success: true });
   });
@@ -233,10 +275,10 @@ export function createMessageRoutes(
 
     const session = await sessionManager.getSession(sessionId);
     if (!session) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сессия не найдена' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
     if (index < 0 || index >= session.messages.length) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Сообщение не найдено' } }, 404);
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.messageNotFound(c) } }, 404);
     }
 
     const msg = session.messages[index]!;

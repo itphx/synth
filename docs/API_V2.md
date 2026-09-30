@@ -95,10 +95,10 @@ In-memory `createRateLimiter(maxRequests, windowMs)`, ключ — `Authorizatio
 { "error": { "code": "NOT_FOUND", "message": "Сессия не найдена" } }
 ```
 
-Исключение — файловые операции **backend** и git-роуты (core-фабрика, AD-076):
+Исключение — файловые операции и git-роуты (единые core-фабрики, AD-075/AD-076):
 они отдают формат `FsError` `{ "error": { "error": "<message>", "code": "<FsErrorCode>" } }`
-(`packages/backend/src/routes/fs.ts`, `packages/core/src/server/routes/git.ts`).
-Core-fs использует стандартный формат.
+(`packages/core/src/server/routes/fs.ts`, `packages/core/src/server/routes/git.ts`);
+backend и standalone монтируют одну и ту же фабрику.
 
 Реальные коды (из кода):
 
@@ -321,7 +321,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 |---|---|---|---|---|
 | GET | `/api/v2/models` | оба | auth / auth | Модели, сгруппированные по провайдеру |
 | POST | `/api/v2/models` | оба | ADMIN / auth | Создать/обновить |
-| POST | `/api/v2/models/fetch` | backend | ADMIN | Синхронизировать с провайдерами |
+| POST | `/api/v2/models/fetch` | оба | ADMIN / auth | Синхронизировать с провайдерами |
 | DELETE | `/api/v2/models/:id` | оба | ADMIN / auth | Удалить |
 
 ### 5.11 Agents — `/api/v2/agents`
@@ -353,9 +353,10 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 > `workspace-root*` (AD-075): абсолютный путь внутри `workspacesRoot` работает; вне root — по политике.
 > `confirm`: browse разрешён, mkdir требует `confirmOutsideRoot: true`, иначе `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
-> `deny`: `403 WORKSPACE_OUTSIDE_ROOT_DENIED`. Traversal `..` → `403 PATH_TRAVERSAL`; protected-paths → `403 PROTECTED_PATH_DENIED`.
+> `deny`: `403 WORKSPACE_OUTSIDE_ROOT_DENIED` (в т.ч. traversal `..`); protected-paths → `403 PROTECTED_PATH_DENIED`.
 > `mkdir` существующего пути → `409 ALREADY_EXISTS`; несуществующий каталог browse → `404 NOT_FOUND`, не каталог → `400 NOT_A_DIRECTORY`.
-> Backend: формат `FsError` и всегда `deny` (managed); core: стандартный формат, политика из `settings/workspace-policy`.
+> Единая (core) реализация: `FsError`-форма; backend монтирует core-фабрику с `deny` (managed) и обязательным `project_id`;
+> standalone — политика из `settings/workspace-policy`, без `project_id` — плоский root, проект без workspace — fallback на root.
 
 ### 5.13 Context — `/api/v2/context` (backend)
 

@@ -85,6 +85,8 @@
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
   `REMOTE_PROXY_PATTERNS` (regex: nested `/api/v2/agents/:id/ssh-keys`; прочие
   подпути `/agents` — локальны).
+- `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
+  (`resolveProjectWorkspace`, AD-075) и детект бинарных файлов (`isTextFile`).
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use).
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit.
 - `engine/router/*` — routing моделей и micro-model слой (AD-034/035).
@@ -139,7 +141,8 @@
   (`getRemoteClient`). Публичные типы — в `src/index.ts`. Существующие фабрики:
   `createSettingsRoutes`, `createDictionaryRoutes`, `createProviderRoutes`,
   `createModelRoutes`, `createSessionRoutes`, `createGitRoutes`,
-  `createSshKeyRoutes`, `createAgentSshKeyRoutes`.
+  `createSshKeyRoutes`, `createAgentSshKeyRoutes`, `createFsRoutes` (project-aware
+  FS: плоский root / workspace проекта через `getProjectWorkspace`, AD-075).
 
 ## MCP
 

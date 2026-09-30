@@ -1004,3 +1004,50 @@
 - **Docs:** `docs/DEVELOPMENT.md` (standalone 4400 + ремарка про одновременный запуск), `docs/arch_decisions/ad-079-...md` (порты скриптов).
 - **Верификация:** `bash -n` OK; `./scripts/standalone.sh --help` → default 4400; smoke `--no-build --check --home /tmp/...` без `--port` → поднялся на `127.0.0.1:4400`, 5/5 `[OK]`, `Результат: OK`; режимы файлов 100755 не менялись.
 - **Дальше:** AD-080.
+
+## 2026-09-30 00:15 — Баг: standalone `POST /api/v2/models/fetch` → 404 «Маршрут не найден» — PASS
+
+- **Задача:** в standalone добавили ollama-провайдера, тест проходит (модели видны), но «Синхронизировать модели» падает `Маршрут не найден: POST /api/v2/models/fetch`.
+- **Тип:** bug fix (роутинг) · **Исполнитель:** @fixer (фикс+тесты), @orchestrator (приёмка) · **Результат:** PASS.
+- **Первопричина:** логика `POST /fetch` жила только в backend-обёртке `packages/backend/src/routes/models.ts`, в core-фабрике `createModelRoutes` роута не было — standalone (core) не видел эндпоинт (UI вызывает его в обоих режимах). Нарушение инварианта «общая логика роутов — в core-фабриках, backend монтирует + RBAC/rate-limit/i18n».
+- **Фикс:** `POST /fetch` перенесён в core-фабрику `createModelRoutes` 1:1 (фильтр `?provider=`, `enabled!==false`, `ProviderFactory.create`+`listModelsDetailed`, обогащение окна/`maxOutputTokens`/цен/`currency`, защита ручных цен, синхронизация `modelCache`); новые опции `fetchGuard`/`fetchMiddleware`/`messages.fetchError`. Backend стал тонкой обёрткой (`fetchGuard: kit.requireAdmin`, `fetchMiddleware: [createRateLimiter(3, 120_000)]`, i18n), ~200 строк дубля удалено.
+- **Файлы:** `packages/core/src/server/routes/models.ts`, новый `packages/core/src/server/routes/models.fetch.test.ts` (5 тестов), `packages/backend/src/routes/models.ts`, `docs/API_V2.md`, `packages/backend/AGENTS.md`.
+- **Верификация:** `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — независимо перепроверено core 2180 PASS, backend 372 PASS (5/5 новых). Standalone curl (`dev.sh core`, :4300, `SYNTH_API_KEY`): без auth 401; `POST /models/fetch?provider=ollama` → 200 `{"fetched":9,...}` — не 404.
+- **Не сделано:** коммит (по инварианту 13 — только по явной просьбе). Опционально — визуальная проверка кнопки синхронизации в UI.
+- **Побочное (вне рамок):** `dev.sh core` запускает `core/dist/main.js serve` напрямую и не вызывает `resolveOrCreateLocalApiKey` — dev-core стартует с пустым ключом (лечится `SYNTH_API_KEY`). Кандидат в отдельную задачу.
+
+## 2026-09-30 00:25 — Баг: после синхронизации модели не появляются в списке (standalone) — PASS
+
+- **Задача:** по кнопке «Синхронизировать модели» сообщение «Синхронизировано N моделей», но модели в списке отсутствуют.
+- **Тип:** bug fix (хранилище) · **Исполнитель:** @fixer (фикс+тесты), @orchestrator (приёмка) · **Результат:** PASS.
+- **Первопричина:** расхождение реализаций `JsonStore.list()` core ↔ backend. Модели сохраняются с полным id `provider/model` → файл `models/<provider>/<model>.json`. Backend `list()` рекурсивный (`_collectItems`), а core `list()` читал только `.json` **верхнего уровня** и подкаталоги игнорировал → `GET /api/v2/models` в standalone не видел ни одной модели (`data/models` содержит только подкаталоги провайдеров). Баг латентный, выявился на кнопке синхронизации (не регрессия предыдущего фикса).
+- **Фикс:** `packages/core/src/storage/json-store.ts` — `list()` сделан рекурсивным (по образцу backend, ключ вычисляется относительно корня subdir), + doc-комментарий о необходимости синхронизации с backend. Backend-класс не объединяли (отличаются `delete`/`exists`) — только doc. `load/save/delete/exists` и `JsonStoreLike<T>` не тронуты.
+- **Файлы:** `packages/core/src/storage/json-store.ts`, новый `packages/core/src/storage/json-store.test.ts` (10 кейсов: вложенные/плоские/несколько подкаталогов, игнор `.tmp.*`/не-json/битого json, пустой каталог, traversal), `packages/backend/src/storage/json-store.ts` (doc).
+- **Верификация:** `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — независимо перепроверено core **2190 PASS**, backend **372 PASS**. E2E standalone (`dev.sh core` :4300): `GET /models?provider=ollama` → 9 моделей (было бы 0 до фикса), `POST /models/fetch?provider=ollama` → `{fetched:9,...}`, после — те же 9 моделей (`deepseek-coder-v2:16b`, `deepseek-r1:14b`, …). Плоские хранилища (`providers`, `agents`) не затронуты.
+- **Не сделано:** коммит (инвариант 13). UI визуально не проверялся (API-доказательство есть).
+- **Побочное (вне рамок):** `dev.sh core` не создаёт авто-ключ (`main.ts` берёт `config || env || ''`) — расходится с формулировкой корневого AGENTS.md про `{dataDir}/secrets/api-key`; кандидат в отдельную задачу.
+
+## 2026-09-30 01:30 — Полный рефакторинг: устранение дублирования core↔backend — PASS
+
+- **Задача:** устранить системное дублирование функционала между `@itphx/synth-core` и `@itphx/synth-backend`; цель — работающие managed/hybrid/standalone без дублей (по ранее принятым AD: AD-005/017/071/075/076). Заказчик: полный рефакторинг.
+- **Тип:** refactoring (крупный, поэтапный) · **Исполнитель:** @orchestrator → @researcher (инвентаризация) + @fixer (этапы A–D) · **Результат:** PASS.
+- **Первопричина/контекст:** рефакторинг на «тонкие обёртки над core-фабриками» был остановлен на полпути; `JsonStore`/`ProjectStore` и 6+ роутов существовали в двух разошедшихся копиях (именно расхождение `JsonStore.list()` дало баг с моделями `provider/model`).
+
+### Этапы (все PASS)
+- **A — хранилища:** backend импортирует `JsonStore`/`ProjectStore` из core; копии удалены (`backend/src/storage/*`), выровнены `exists()` (`load()!==null`) и `delete()` (чистка `_locks`), удалён мёртвый `ProjectStore.stats()`.
+- **B — общие хелперы:** `syncProvidersFromEnv` вынесен в core (`core/src/providers/sync-from-env.ts`), backend переиспользует.
+- **C1 — messages/queue:** backend-копии заменены обёртками над core-фабриками; `opts.messages` (i18n) + `opts.onMessagesChanged` (backend `recalc-can-summarize`); устранена гонка (без `await`), ликвидирован англ. литерал.
+- **C2 — agents/mcp:** core `createAgentRoutes` расширен до надмножества backend (`writeGuard`/`allGuard`/`detailGuard`, `GET /:id`, `PATCH /:id/enabled`, `topK`, builtin-fallback, честный `is_builtin`); core `createMcpRoutes` — `/probe` (+`MCP_CONNECT_ERROR`), backend-only legacy/registry вынесены в `backend/src/routes/mcp-registry.ts`.
+- **D1 — projects:** core `createProjectRoutes` — надмножество (RBAC-хуки `canManage`/`canEditContent`, `getCurrentUserId`, `messages`, `autoProvisionWorkspace`, `getMcpServers`→`/:id/mcp`, `sessionManager`→`/:id/stats`, `plan`); backend — обёртка (+`createProjectAccess` для git).
+- **D2 — fs:** core `createFsRoutes` стал project-aware (AD-075): `getProjectWorkspace` (+`resolveProjectWorkspace`, `isTextFile` в `core/src/server/fs-workspace.ts`), `requireProjectId`, единая `FsError`-форма, `move`/`mkdir` 201/409, upload/download/maxDepth; удалены `backend/src/routes/fs.ts` и `backend/src/lib/workspace-resolver.ts` (+тесты, покрытие перенесено в core).
+- **Docs:** обновлены корневой `AGENTS.md`, `packages/core/AGENTS.md`, `packages/backend/AGENTS.md` (таблица монтирования), `docs/API_V2.md`.
+
+### Верификация (независимо, @orchestrator)
+- `pnpm build` OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors.
+- `pnpm test`: core **2250**, ui **804**, backend **341**, shared 170, runner — нет тестов. Все PASS.
+- **Managed** (`dev.sh backend`, debug-auth): projects CRUD/RBAC/`stats`/`mcp`, project-aware FS (write/read/mkdir 201/409/traversal 403/no project_id 400), `models/fetch?provider=ollama` → `fetched:9`, `agents/all` admin 200 / developer 403, `mcp/registry` 200.
+- **Standalone** (`standalone.sh`): provider+`models/fetch` → `fetched:14`, project-aware FS + fallback на root, `workspace-root`, agents.
+- **Hybrid** (core `serve --connect` к локальному backend): `/hybrid/status` connected, агрегация проектов (`remote:`), **remote-ветки FS** (`fs`/`fs/read` проекта backend через hybrid) — 7/7 PASS.
+- **LLM e2e (standalone):** сессия + prompt на модели `tobestyledintro/qwen3.8-9b-distill:latest` (ollama `http://omn.itphx.loc:11434`) → assistant ответил «Привет».
+- **Не сделано:** коммит (инвариант 13 — только по явной просьбе). Скрипты smoke — в `tmp/` (не коммитятся).
+- **Остаточное (вне scope):** `dev.sh core` без авто-ключа; core-тест remote-веток FS с моком `RemoteBackendClient` (покрыто e2e hybrid, юнита нет).

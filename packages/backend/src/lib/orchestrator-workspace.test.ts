@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { ChatOrchestrator, SessionManager, EventBus, FileStore, createToolRegistry } from '@itphx/synth-core';
 import type { ContextBuilder } from '@itphx/synth-core';
 import type { ToolContext, Session } from '@itphx/synth-shared';
-import { ProjectStore } from '../storage/project-store.js';
+import { ProjectStore } from '@itphx/synth-core';
 import { createBackendApp } from '../app.js';
 
 /**

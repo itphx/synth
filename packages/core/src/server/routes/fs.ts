@@ -4,18 +4,27 @@ import { basename, isAbsolute, join, normalize, relative, resolve, sep } from 'n
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import type { FileEntry, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
-import { fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema } from '@itphx/synth-shared';
-import type { AuthKit } from '../../auth/local.js';
+import type { createMiddleware } from 'hono/factory';
+import type { FileEntry, FsError, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import { FsErrorCode, fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema } from '@itphx/synth-shared';
 import { checkPath, loadProtectedPaths } from '../../engine/security/protected-paths.js';
 import type { ProtectedPathsPolicy } from '../../engine/security/protected-paths.js';
+import { isTextFile } from '../fs-workspace.js';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
+type Middleware = ReturnType<typeof createMiddleware>;
+
+/** Минимальный auth-контракт фабрики (структурно совместим с core/backend AuthKit). */
+export interface FsRoutesAuth {
+  requireAuth: Middleware;
+}
 
 /**
  * AD-075: опции FS-роутов core (standalone) для паритета с backend.
  * Позиционный `workspacesRoot` остаётся обратносовместимым; здесь — мягкая
- * политика путей вне root и защищённые пути.
+ * политика путей вне root, защищённые пути и project-aware режим.
  */
 export interface FsRoutesOptions {
   /**
@@ -29,6 +38,66 @@ export interface FsRoutesOptions {
    * загружается системная политика + пользовательский override.
    */
   getProtectedPathsPolicy?: () => ProtectedPathsPolicy;
+  /**
+   * AD-075: project-aware режим. Возвращает абсолютный каталог workspace проекта
+   * или `null` (standalone — fallback на плоский root). Может бросить `FsError`
+   * (managed: проект/workspace не найдены, нарушение containment). Задано и
+   * передан `project_id` → базой эндпоинтов (кроме `/workspace-root*`) становится
+   * workspace проекта, иначе — плоский root. Гибридные `remote:`-ref'ы
+   * обрабатываются отдельно (до резолва).
+   */
+  getProjectWorkspace?: (projectId: string) => Promise<string | null>;
+  /** Managed: `project_id` обязателен — без него 400 (паритет с backend). */
+  requireProjectId?: boolean;
+}
+
+type FsHttpStatus = 400 | 403 | 404 | 409 | 422 | 500;
+
+/** FsError-форма (`{ error: { error, code } }`) — единый формат ошибок FS. */
+function makeFsError(code: string, error: string): { error: FsError } {
+  return { error: { error, code: code as FsErrorCode } };
+}
+
+/** Ошибка валидации тела/параметров (legacy-код backend `PERMISSION_DENIED`), HTTP 400. */
+function validationError(message: string): { error: FsError } {
+  return makeFsError(FsErrorCode.PERMISSION_DENIED, message);
+}
+
+/** Брошенный FsError — для хелперов резолва (ловится `fsErrorResponse`). */
+function fsError(code: string, error: string): FsError {
+  return { error, code: code as FsErrorCode };
+}
+
+/** Код FsError → HTTP-статус (паритет с backend). Неизвестный код → 500. */
+const FS_STATUS: Record<string, FsHttpStatus> = {
+  NOT_FOUND: 404,
+  WORKSPACE_NOT_FOUND: 400,
+  WORKSPACE_NOT_SET: 400,
+  NOT_A_DIRECTORY: 400,
+  IS_DIRECTORY: 400,
+  DIR_NOT_EMPTY: 400,
+  VALIDATION_ERROR: 400,
+  PERMISSION_DENIED: 400,
+  ALREADY_EXISTS: 409,
+  PATH_TRAVERSAL: 403,
+  FORBIDDEN: 403,
+  WORKSPACE_OUTSIDE_ROOT_DENIED: 403,
+  WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED: 409,
+  PROTECTED_PATH_DENIED: 403,
+  WORKSPACE_CREATE_FAILED: 422,
+};
+
+/** Ответ на брошенную ошибку: FsError → по `FS_STATUS`, прочее → 500. */
+function fsErrorResponse(c: Context, err: unknown): Response {
+  const e = err as Partial<FsError> | undefined;
+  if (e && typeof e.code === 'string') {
+    const status = (FS_STATUS[e.code] ?? 500) as FsHttpStatus;
+    return c.json({ error: { error: e.error ?? e.code, code: e.code } }, status);
+  }
+  return c.json(
+    { error: { error: err instanceof Error ? err.message : String(err), code: FsErrorCode.PERMISSION_DENIED } },
+    500,
+  );
 }
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
@@ -72,6 +141,93 @@ function isPathDenied(abs: string, cwd: string, policy: ProtectedPathsPolicy): b
 }
 
 /**
+ * AD-075 (managed): безопасный путь внутри workspace проекта (backend-семантика):
+ * ведущие `/` срезаются, traversal за пределы workspace → `PATH_TRAVERSAL`.
+ */
+function resolveSafeInWorkspace(workspace: string, requestedPath: string): string {
+  const normalizedRequest = normalize(requestedPath).replace(/^[/\\]+/, '');
+  const fullPath = resolve(workspace, normalizedRequest);
+
+  const rel = relative(workspace, fullPath);
+  if (rel.startsWith('..') || rel.startsWith(`${sep}..`)) {
+    throw fsError(FsErrorCode.PATH_TRAVERSAL, 'Попытка выхода за пределы workspace');
+  }
+  return fullPath;
+}
+
+/** Плоский (standalone/legacy) резолв: текущий core-контракт — только внутри root. */
+function resolveSafeInRoot(root: string, requestedPath: string): string {
+  const full = resolveSafe(root, requestedPath);
+  if (!full) throw fsError('FORBIDDEN', 'Доступ запрещён');
+  return full;
+}
+
+/** Резолв пути от базы: project-aware (workspace проекта) либо плоский root. */
+function resolveRequestedPath(base: string, requestedPath: string, projectAware: boolean): string {
+  return projectAware
+    ? resolveSafeInWorkspace(base, requestedPath)
+    : resolveSafeInRoot(base, requestedPath);
+}
+
+/** Глубина рекурсии листинга (0 — только текущий каталог; максимум 10). */
+function parseMaxDepth(raw: string | undefined): number {
+  if (!raw) return 0;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return 0;
+  return Math.min(n, 10);
+}
+
+/** Рекурсивный листинг (паритет с backend): dir-first, затем по имени. */
+async function listDirectoryRecursive(
+  absDir: string,
+  relBase: string,
+  maxDepth: number,
+  includeHidden: boolean,
+  currentDepth: number,
+): Promise<FileEntry[]> {
+  if (currentDepth > maxDepth) return [];
+
+  const entries = await readdir(absDir, { withFileTypes: true });
+  const result: FileEntry[] = [];
+
+  for (const entry of entries) {
+    if (!includeHidden && entry.name.startsWith('.')) continue;
+
+    const relPath = relBase ? `${relBase}/${entry.name}` : entry.name;
+    let modifiedAt = 0;
+    let size = 0;
+
+    try {
+      const s = await stat(join(absDir, entry.name));
+      modifiedAt = s.mtimeMs;
+      size = s.size;
+    } catch {
+      // ignore stat errors
+    }
+
+    result.push({
+      name: entry.name,
+      path: relPath,
+      isDirectory: entry.isDirectory(),
+      size,
+      modifiedAt,
+    });
+
+    if (entry.isDirectory() && currentDepth < maxDepth) {
+      const children = await listDirectoryRecursive(
+        join(absDir, entry.name), relPath, maxDepth, includeHidden, currentDepth + 1,
+      );
+      result.push(...children);
+    }
+  }
+
+  return result.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+/**
  * AD-075: подкаталоги директории (только `isDirectory`), отсортированные по имени.
  * Запрещённые policy-пути пропускаются (не показываются). `relBase` — база
  * относительного пути для элементов (относительно root или абсолютная для
@@ -107,7 +263,7 @@ async function listChildDirectories(
 }
 
 export function createFsRoutes(
-  auth: AuthKit,
+  auth: FsRoutesAuth,
   workspacesRoot?: string,
   getRemoteClient?: () => RemoteBackendClient | null,
   opts: FsRoutesOptions = {},
@@ -125,12 +281,31 @@ export function createFsRoutes(
   const outsideRootPolicy = (): WorkspaceOutsideRootPolicy => opts.getOutsideRootPolicy?.() ?? 'confirm';
   const protectedPaths = (): ProtectedPathsPolicy =>
     opts.getProtectedPathsPolicy ? opts.getProtectedPathsPolicy() : loadProtectedPaths();
+  const getProjectWorkspace = opts.getProjectWorkspace;
+  const requireProjectId = opts.requireProjectId === true;
+
+  /**
+   * База для path-эндпоинтов: workspace проекта (project-aware) либо плоский root.
+   * Managed (`requireProjectId`) без `project_id` → 400; standalone без проекта → root.
+   */
+  const resolveBase = async (
+    projectId: string | undefined,
+  ): Promise<{ base: string; projectAware: boolean }> => {
+    if (getProjectWorkspace && projectId) {
+      const dir = await getProjectWorkspace(projectId);
+      if (dir) return { base: dir, projectAware: true };
+      if (requireProjectId) throw fsError(FsErrorCode.WORKSPACE_NOT_SET, 'Workspace не задан для проекта');
+      return { base: root, projectAware: false };
+    }
+    if (requireProjectId) throw fsError(FsErrorCode.PERMISSION_DENIED, 'project_id обязателен');
+    return { base: root, projectAware: false };
+  };
 
   /** Корень для новых `/workspace-root*`; без настроенного root — 500. */
   const workspacesRootOrError = (c: Context): string | Response => {
     if (!configuredRoot) {
       return c.json(
-        { error: { code: 'WORKSPACE_ROOT_NOT_CONFIGURED', message: 'Корневой каталог workspace не настроен' } },
+        makeFsError('WORKSPACE_ROOT_NOT_CONFIGURED', 'Корневой каталог workspace не настроен'),
         500,
       );
     }
@@ -153,41 +328,25 @@ export function createFsRoutes(
       }
     }
 
-    const path = c.req.query('path') || '';
-    const includeHidden = c.req.query('includeHidden') === 'true';
-    const fullPath = resolveSafe(root, path);
-    if (!fullPath) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
-    }
-
     try {
-      const entries = await readdir(fullPath, { withFileTypes: true });
-      const result = [];
-      for (const entry of entries) {
-        if (!includeHidden && entry.name.startsWith('.')) continue;
-        const entryPath = join(path, entry.name);
-        let size = 0;
-        let modifiedAt = 0;
-        try {
-          const s = await stat(join(fullPath, entry.name));
-          size = s.size;
-          modifiedAt = s.mtimeMs;
-        } catch { /* ignore */ }
-        result.push({
-          name: entry.name,
-          path: entryPath,
-          isDirectory: entry.isDirectory(),
-          size,
-          modifiedAt,
-        });
+      const { base, projectAware } = await resolveBase(projectId);
+      const path = c.req.query('path') || '';
+      const includeHidden = c.req.query('includeHidden') === 'true';
+      const maxDepth = parseMaxDepth(c.req.query('maxDepth'));
+      const fullPath = resolveRequestedPath(base, path, projectAware);
+
+      const s = await stat(fullPath).catch(() => null);
+      if (!s) {
+        return c.json(makeFsError(FsErrorCode.NOT_FOUND, `Путь не найден: ${path || '/'}`), 404);
       }
-      result.sort((a, b) => {
-        if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      return c.json({ path: path || '/', entries: result });
-    } catch {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Директория не найдена' } }, 404);
+      if (!s.isDirectory()) {
+        return c.json(makeFsError(FsErrorCode.NOT_A_DIRECTORY, 'Указанный путь не является директорией'), 400);
+      }
+
+      const entries = await listDirectoryRecursive(fullPath, path, maxDepth, includeHidden, 0);
+      return c.json({ path: path || '/', entries });
+    } catch (err) {
+      return fsErrorResponse(c, err);
     }
   });
 
@@ -207,21 +366,29 @@ export function createFsRoutes(
       }
     }
 
-    const filePath = c.req.query('path') || '';
-    const fullPath = resolveSafe(root, filePath);
-    if (!fullPath) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
-    }
-
     try {
-      const s = await stat(fullPath);
+      const { base, projectAware } = await resolveBase(projectId);
+      const path = c.req.query('path') || '';
+      if (projectAware && !path) {
+        return c.json(validationError('Ожидается поле path'), 400);
+      }
+
+      const fullPath = resolveRequestedPath(base, path, projectAware);
+      const s = await stat(fullPath).catch(() => null);
+      if (!s) {
+        return c.json(makeFsError(FsErrorCode.NOT_FOUND, `Файл не найден: ${path}`), 404);
+      }
       if (s.isDirectory()) {
-        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Это директория' } }, 400);
+        return c.json(makeFsError(FsErrorCode.IS_DIRECTORY, 'Указанный путь является директорией'), 400);
+      }
+
+      if (!(await isTextFile(fullPath))) {
+        return c.json({ path, content: '', size: s.size, encoding: 'binary' });
       }
       const content = await readFile(fullPath, 'utf-8');
-      return c.json({ path: filePath, content, size: s.size, encoding: 'utf-8' });
-    } catch {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Файл не найден' } }, 404);
+      return c.json({ path, content, size: s.size, encoding: 'utf-8' });
+    } catch (err) {
+      return fsErrorResponse(c, err);
     }
   });
 
@@ -229,8 +396,9 @@ export function createFsRoutes(
   app.post('/write', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => null);
-    const projectId = body?.projectId || body?.project_id;
-    if (typeof projectId === 'string' && isRemoteRef(projectId)) {
+    const projectIdRaw = body?.projectId || body?.project_id;
+    const projectId = typeof projectIdRaw === 'string' ? projectIdRaw : undefined;
+    if (projectId && isRemoteRef(projectId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
         const result = await remoteClient.fsWrite({
@@ -246,24 +414,22 @@ export function createFsRoutes(
       }
     }
 
-    const path = body?.path;
-    const content = body?.content;
-    if (typeof path !== 'string' || !path || typeof content !== 'string') {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Ожидаются поля path и content' } }, 400);
-    }
-
-    const fullPath = resolveSafe(root, path);
-    if (!fullPath) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
-    }
-
     try {
+      const path = body?.path;
+      const content = body?.content;
+      if (typeof path !== 'string' || !path || typeof content !== 'string') {
+        return c.json(validationError('Ожидаются поля path и content'), 400);
+      }
+
+      const { base, projectAware } = await resolveBase(projectId);
+      const fullPath = resolveRequestedPath(base, path, projectAware);
+
       await mkdir(join(fullPath, '..'), { recursive: true }).catch(() => {});
       await writeFile(fullPath, content, 'utf-8');
       const s = await stat(fullPath);
       return c.json({ path, content, size: s.size, encoding: 'utf-8' }, 200);
-    } catch {
-      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Не удалось записать файл' } }, 500);
+    } catch (err) {
+      return fsErrorResponse(c, err);
     }
   });
 
@@ -291,41 +457,35 @@ export function createFsRoutes(
       }
     }
 
-    const dirPath = typeof formData.get('path') === 'string' ? String(formData.get('path')) : '';
-    const file = formData.get('file');
-    const uploadedFile = file;
-
-    if (!uploadedFile || typeof uploadedFile === 'string') {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Файл не передан' } }, 400);
-    }
-
-    const targetDir = resolveSafe(root, dirPath);
-    if (!targetDir) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
-    }
-
-    const rawName = (uploadedFile as { name?: string }).name;
-    const fileName = basename(rawName || 'uploaded-file');
-    const targetPath = join(targetDir, fileName);
-    const safeTarget = resolveSafe(root, relative(root, targetPath));
-    if (!safeTarget) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
-    }
-
     try {
-      await mkdir(join(safeTarget, '..'), { recursive: true }).catch(() => {});
+      const dirPath = typeof formData.get('path') === 'string' ? String(formData.get('path')) : '';
+      const rawFile = formData.get('file');
+      const uploaded = Array.isArray(rawFile) ? rawFile[0] : rawFile;
 
-      let data: ArrayBuffer;
-      if (typeof (uploadedFile as { arrayBuffer?: unknown }).arrayBuffer === 'function') {
-        data = await (uploadedFile as File).arrayBuffer();
-      } else {
-        return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Неподдерживаемый тип файла' } }, 400);
+      if (!uploaded || typeof uploaded === 'string') {
+        return c.json(validationError('Файл не передан'), 400);
       }
 
-      await writeFile(safeTarget, new Uint8Array(data));
-      return c.json({ path: relative(root, safeTarget), name: fileName }, 201);
-    } catch {
-      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Не удалось загрузить файл' } }, 500);
+      const { base, projectAware } = await resolveBase(projectId);
+      const targetDir = resolveRequestedPath(base, dirPath, projectAware);
+
+      const rawName = (uploaded as { name?: string }).name;
+      const fileName = basename(rawName || 'uploaded-file');
+      const targetPath = join(targetDir, fileName);
+
+      await mkdir(join(targetPath, '..'), { recursive: true }).catch(() => {});
+
+      let data: ArrayBuffer;
+      if (typeof (uploaded as { arrayBuffer?: unknown }).arrayBuffer === 'function') {
+        data = await (uploaded as File).arrayBuffer();
+      } else {
+        return c.json(validationError('Неподдерживаемый тип файла'), 400);
+      }
+
+      await writeFile(targetPath, new Uint8Array(data));
+      return c.json({ path: relative(base, targetPath), name: fileName }, 201);
+    } catch (err) {
+      return fsErrorResponse(c, err);
     }
   });
 
@@ -347,33 +507,37 @@ export function createFsRoutes(
       }
     }
 
-    const filePath = c.req.query('path') || '';
-    const fullPath = resolveSafe(root, filePath);
-    if (!fullPath) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
+    try {
+      const { base, projectAware } = await resolveBase(projectId);
+      const path = c.req.query('path') || '';
+      if (projectAware && !path) {
+        return c.json(validationError('Ожидается поле path'), 400);
+      }
+
+      const fullPath = resolveRequestedPath(base, path, projectAware);
+      const s = await stat(fullPath).catch(() => null);
+      if (!s) {
+        return c.json(makeFsError(FsErrorCode.NOT_FOUND, `Файл не найден: ${path}`), 404);
+      }
+      if (s.isDirectory()) {
+        return c.json(makeFsError(FsErrorCode.IS_DIRECTORY, 'Нельзя скачать директорию'), 400);
+      }
+
+      const fileName = basename(fullPath);
+      const fileStream = createReadStream(fullPath);
+      const webStream = Readable.toWeb(fileStream) as ReadableStream;
+
+      return new Response(webStream, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`,
+          'Content-Length': String(s.size),
+        },
+      });
+    } catch (err) {
+      return fsErrorResponse(c, err);
     }
-
-    const s = await stat(fullPath).catch(() => null);
-    if (!s) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Файл не найден' } }, 404);
-    }
-
-    if (s.isDirectory()) {
-      return c.json({ error: { code: 'IS_DIRECTORY', message: 'Нельзя скачать директорию' } }, 400);
-    }
-
-    const fileName = basename(fullPath);
-    const fileStream = createReadStream(fullPath);
-    const webStream = Readable.toWeb(fileStream) as ReadableStream;
-
-    return new Response(webStream, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`,
-        'Content-Length': String(s.size),
-      },
-    });
   });
 
   // DELETE / — удаление файла или пустой директории
@@ -392,40 +556,42 @@ export function createFsRoutes(
       }
     }
 
-    const path = c.req.query('path') || '';
-    const fullPath = resolveSafe(root, path);
-    if (!fullPath) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
-    }
-
-    const s = await stat(fullPath).catch(() => null);
-    if (!s) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Путь не найден' } }, 404);
-    }
-
     try {
+      const { base, projectAware } = await resolveBase(projectId);
+      const path = c.req.query('path') || '';
+      if (projectAware && !path) {
+        return c.json(validationError('Ожидается поле path'), 400);
+      }
+
+      const fullPath = resolveRequestedPath(base, path, projectAware);
+      const s = await stat(fullPath).catch(() => null);
+      if (!s) {
+        return c.json(makeFsError(FsErrorCode.NOT_FOUND, `Путь не найден: ${path}`), 404);
+      }
+
       if (s.isDirectory()) {
         const files = await readdir(fullPath);
         if (files.length > 0) {
-          return c.json({ error: { code: 'DIR_NOT_EMPTY', message: 'Директория не пуста' } }, 400);
+          return c.json(makeFsError(FsErrorCode.DIR_NOT_EMPTY, 'Директория не пуста'), 400);
         }
         await rmdir(fullPath);
       } else {
         await unlink(fullPath);
       }
-    } catch {
-      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Не удалось удалить' } }, 500);
-    }
 
-    return c.json({ deleted: true, path }, 200);
+      return c.json({ deleted: true, path }, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
+    }
   });
 
   // POST /mkdir — создание директории
   app.post('/mkdir', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => null);
-    const projectId = body?.projectId || body?.project_id;
-    if (typeof projectId === 'string' && isRemoteRef(projectId)) {
+    const projectIdRaw = body?.projectId || body?.project_id;
+    const projectId = typeof projectIdRaw === 'string' ? projectIdRaw : undefined;
+    if (projectId && isRemoteRef(projectId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
         const result = await remoteClient.fsMkdir({ projectId: toLocalId(projectId), path: body?.path });
@@ -437,41 +603,40 @@ export function createFsRoutes(
       }
     }
 
-    const path = body?.path;
-    if (typeof path !== 'string' || !path) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Ожидается поле path' } }, 400);
-    }
-
-    const fullPath = resolveSafe(root, path);
-    if (!fullPath) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
-    }
-
     try {
-      const existing = await stat(fullPath);
-      if (existing.isDirectory()) {
-        return c.json({ error: { code: 'ALREADY_EXISTS', message: 'Директория уже существует' } }, 409);
+      const path = body?.path;
+      if (typeof path !== 'string' || !path) {
+        return c.json(validationError('Ожидается поле path'), 400);
       }
-      return c.json({ error: { code: 'ALREADY_EXISTS', message: 'Файл с таким именем уже существует' } }, 409);
-    } catch {
-      // не существует — можно создавать
-    }
 
-    try {
+      const { base, projectAware } = await resolveBase(projectId);
+      const fullPath = resolveRequestedPath(base, path, projectAware);
+
+      const existing = await stat(fullPath).catch(() => null);
+      if (existing) {
+        return c.json(
+          makeFsError(
+            FsErrorCode.ALREADY_EXISTS,
+            existing.isDirectory() ? 'Директория уже существует' : 'Файл с таким именем уже существует',
+          ),
+          409,
+        );
+      }
+
       await mkdir(fullPath, { recursive: true });
-    } catch {
-      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Не удалось создать директорию' } }, 500);
+      return c.json({ created: true, path }, 201);
+    } catch (err) {
+      return fsErrorResponse(c, err);
     }
-
-    return c.json({ created: true, path }, 201);
   });
 
   // POST /move — перемещение/переименование
   app.post('/move', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => null);
-    const projectId = body?.projectId || body?.project_id;
-    if (typeof projectId === 'string' && isRemoteRef(projectId)) {
+    const projectIdRaw = body?.projectId || body?.project_id;
+    const projectId = typeof projectIdRaw === 'string' ? projectIdRaw : undefined;
+    if (projectId && isRemoteRef(projectId)) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
         const result = await remoteClient.fsMove({
@@ -487,31 +652,28 @@ export function createFsRoutes(
       }
     }
 
-    const sourcePath = body?.sourcePath;
-    const targetPath = body?.targetPath;
-    if (typeof sourcePath !== 'string' || !sourcePath || typeof targetPath !== 'string' || !targetPath) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'sourcePath и targetPath обязательны' } }, 400);
-    }
-
-    const fullSource = resolveSafe(root, sourcePath);
-    const fullTarget = resolveSafe(root, targetPath);
-    if (!fullSource || !fullTarget) {
-      return c.json({ error: { code: 'FORBIDDEN', message: 'Доступ запрещён' } }, 403);
-    }
-
-    const sourceStat = await stat(fullSource).catch(() => null);
-    if (!sourceStat) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Путь не найден' } }, 404);
-    }
-
     try {
+      const sourcePath = body?.sourcePath;
+      const targetPath = body?.targetPath;
+      if (typeof sourcePath !== 'string' || !sourcePath || typeof targetPath !== 'string' || !targetPath) {
+        return c.json(validationError('sourcePath и targetPath обязательны'), 400);
+      }
+
+      const { base, projectAware } = await resolveBase(projectId);
+      const fullSource = resolveRequestedPath(base, sourcePath, projectAware);
+      const fullTarget = resolveRequestedPath(base, targetPath, projectAware);
+
+      const sourceStat = await stat(fullSource).catch(() => null);
+      if (!sourceStat) {
+        return c.json(makeFsError(FsErrorCode.NOT_FOUND, `Источник не найден: ${sourcePath}`), 404);
+      }
+
       await mkdir(join(fullTarget, '..'), { recursive: true }).catch(() => {});
       await rename(fullSource, fullTarget);
-    } catch {
-      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Не удалось переместить' } }, 500);
+      return c.json({ moved: true, sourcePath, targetPath }, 200);
+    } catch (err) {
+      return fsErrorResponse(c, err);
     }
-
-    return c.json({ moved: true, sourcePath, targetPath }, 200);
   });
 
   // GET /workspace-root — список поддиректорий корня workspace (AD-075)
@@ -523,7 +685,7 @@ export function createFsRoutes(
       includeHidden: c.req.query('includeHidden'),
     });
     if (!parsed.success) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректный параметр includeHidden' } }, 400);
+      return c.json(makeFsError('VALIDATION_ERROR', 'Некорректный параметр includeHidden'), 400);
     }
 
     const policy = protectedPaths();
@@ -532,12 +694,13 @@ export function createFsRoutes(
       const entries = await listChildDirectories(wsRoot, '', parsed.data.includeHidden, wsRoot, policy);
       return c.json({ root: wsRoot, entries });
     } catch (err) {
-      return c.json({
-        error: {
-          code: 'INTERNAL_ERROR',
-          message: `Не удалось прочитать корень workspace: ${err instanceof Error ? err.message : String(err)}`,
-        },
-      }, 500);
+      return c.json(
+        makeFsError(
+          'INTERNAL_ERROR',
+          `Не удалось прочитать корень workspace: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+        500,
+      );
     }
   });
 
@@ -557,28 +720,29 @@ export function createFsRoutes(
       includeHidden: c.req.query('includeHidden'),
     });
     if (!parsed.success) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректные параметры навигации' } }, 400);
+      return c.json(makeFsError('VALIDATION_ERROR', 'Некорректные параметры навигации'), 400);
     }
 
     const policy = protectedPaths();
     const target = resolveAgainstRoot(wsRoot, parsed.data.path);
     if (isPathDenied(target, wsRoot, policy)) {
-      return c.json({ error: { code: 'PROTECTED_PATH_DENIED', message: 'Путь защищён политикой безопасности' } }, 403);
+      return c.json(makeFsError('PROTECTED_PATH_DENIED', 'Путь защищён политикой безопасности'), 403);
     }
 
     const inside = isInsideRoot(wsRoot, target);
     if (!inside && outsideRootPolicy() === 'deny') {
-      return c.json({
-        error: { code: 'WORKSPACE_OUTSIDE_ROOT_DENIED', message: 'Путь вне корня workspace запрещён политикой' },
-      }, 403);
+      return c.json(
+        makeFsError('WORKSPACE_OUTSIDE_ROOT_DENIED', 'Путь вне корня workspace запрещён политикой'),
+        403,
+      );
     }
 
     const s = await stat(target).catch(() => null);
     if (!s) {
-      return c.json({ error: { code: 'NOT_FOUND', message: `Директория не найдена: ${parsed.data.path || '/'}` } }, 404);
+      return c.json(makeFsError(FsErrorCode.NOT_FOUND, `Директория не найдена: ${parsed.data.path || '/'}`), 404);
     }
     if (!s.isDirectory()) {
-      return c.json({ error: { code: 'NOT_A_DIRECTORY', message: 'Путь не является директорией' } }, 400);
+      return c.json(makeFsError('NOT_A_DIRECTORY', 'Путь не является директорией'), 400);
     }
 
     const relBase = inside ? relative(wsRoot, target) : target;
@@ -586,12 +750,13 @@ export function createFsRoutes(
       const entries = await listChildDirectories(target, relBase, parsed.data.includeHidden, wsRoot, policy);
       return c.json({ root: wsRoot, path: relBase, entries });
     } catch (err) {
-      return c.json({
-        error: {
-          code: 'INTERNAL_ERROR',
-          message: `Не удалось прочитать директорию: ${err instanceof Error ? err.message : String(err)}`,
-        },
-      }, 500);
+      return c.json(
+        makeFsError(
+          'INTERNAL_ERROR',
+          `Не удалось прочитать директорию: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+        500,
+      );
     }
   });
 
@@ -608,50 +773,54 @@ export function createFsRoutes(
     const body = await c.req.json().catch(() => null);
     const parsed = fsWorkspaceMkdirBodySchema.safeParse(body);
     if (!parsed.success) {
-      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Ожидается поле path' } }, 400);
+      return c.json(makeFsError('VALIDATION_ERROR', 'Ожидается поле path'), 400);
     }
 
     const policy = protectedPaths();
     const target = resolveAgainstRoot(wsRoot, parsed.data.path);
     if (isPathDenied(target, wsRoot, policy)) {
-      return c.json({ error: { code: 'PROTECTED_PATH_DENIED', message: 'Путь защищён политикой безопасности' } }, 403);
+      return c.json(makeFsError('PROTECTED_PATH_DENIED', 'Путь защищён политикой безопасности'), 403);
     }
 
     if (!isInsideRoot(wsRoot, target)) {
       if (outsideRootPolicy() === 'deny') {
-        return c.json({
-          error: { code: 'WORKSPACE_OUTSIDE_ROOT_DENIED', message: 'Путь вне корня workspace запрещён политикой' },
-        }, 403);
+        return c.json(
+          makeFsError('WORKSPACE_OUTSIDE_ROOT_DENIED', 'Путь вне корня workspace запрещён политикой'),
+          403,
+        );
       }
       if (parsed.data.confirmOutsideRoot !== true) {
-        return c.json({
-          error: {
-            code: 'WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED',
-            message: 'Создание каталога вне корня workspace требует подтверждения (confirmOutsideRoot: true)',
-          },
-        }, 409);
+        return c.json(
+          makeFsError(
+            'WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED',
+            'Создание каталога вне корня workspace требует подтверждения (confirmOutsideRoot: true)',
+          ),
+          409,
+        );
       }
     }
 
     const existing = await stat(target).catch(() => null);
     if (existing) {
-      return c.json({
-        error: {
-          code: 'ALREADY_EXISTS',
-          message: existing.isDirectory() ? 'Директория уже существует' : 'Файл с таким именем уже существует',
-        },
-      }, 409);
+      return c.json(
+        makeFsError(
+          FsErrorCode.ALREADY_EXISTS,
+          existing.isDirectory() ? 'Директория уже существует' : 'Файл с таким именем уже существует',
+        ),
+        409,
+      );
     }
 
     try {
       await mkdir(target, { recursive: true });
     } catch (err) {
-      return c.json({
-        error: {
-          code: 'WORKSPACE_CREATE_FAILED',
-          message: `Не удалось создать директорию: ${err instanceof Error ? err.message : String(err)}`,
-        },
-      }, 422);
+      return c.json(
+        makeFsError(
+          'WORKSPACE_CREATE_FAILED',
+          `Не удалось создать директорию: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+        422,
+      );
     }
 
     return c.json({ created: true, path: parsed.data.path }, 201);
