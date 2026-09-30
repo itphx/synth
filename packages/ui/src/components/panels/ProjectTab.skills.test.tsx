@@ -140,6 +140,38 @@ describe('ProjectTab — проектный скоуп скиллов (AD-046 §
     expect((toggles[1] as HTMLButtonElement).getAttribute('aria-checked')).toBe('false')
   })
 
+  it('описание скилла скрыто по умолчанию и раскрывается по кату', async () => {
+    const container = await renderTab()
+    const row = container.querySelector('[data-testid="project-skill-api-review"]')!
+    // Описание не выводится в самой строке.
+    expect(row.textContent).not.toContain('Review API')
+    expect(container.querySelector('[data-testid="project-skill-api-review-details-content"]')).toBeNull()
+
+    const toggle = row.querySelector('[data-testid="project-skill-api-review-details-toggle"]') as HTMLButtonElement
+    expect(toggle).toBeTruthy()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => {
+      toggle.click()
+    })
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    const content = container.querySelector('[data-testid="project-skill-api-review-details-content"]')!
+    expect(content.textContent).toContain('Review API')
+  })
+
+  it('без описания кат не рендерится', async () => {
+    mocks.getProjectSkills.mockResolvedValue(projectSkills({
+      skills: [
+        { name: 'no-desc', description: '', level: 'project', scope: 'project', trusted: true, available: true, enabled: false, disabled: false },
+      ],
+      enabled: [],
+    }))
+    const container = await renderTab()
+    expect(container.querySelector('[data-testid="project-skill-no-desc"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="project-skill-no-desc-details-toggle"]')).toBeNull()
+  })
+
   it('defaultOn → PUT /projects/:id/skills с enabled и defaultOn', async () => {
     const container = await renderTab()
     const row = container.querySelector('[data-testid="project-skill-api-review"]')!

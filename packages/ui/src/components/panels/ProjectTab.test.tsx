@@ -131,11 +131,23 @@ describe('ProjectTab — проектный MCP-скоуп (AD-071 §2.4)', () =
 
     const sysRow = container.querySelector('[data-testid="project-mcp-sys"]')!
     expect(sysRow.textContent).toContain('system')
-    expect(sysRow.textContent).toContain('managed by the administrator')
+    expect(sysRow.textContent).not.toContain('managed by the administrator')
     expect(sysRow.querySelectorAll('button[role="switch"]')).toHaveLength(0)
+
+    // У системного сервера systemHint скрыт под катом.
+    const sysCat = sysRow.querySelector('[data-testid="project-mcp-sys-details-toggle"]') as HTMLButtonElement
+    expect(sysCat).toBeTruthy()
+    expect(sysCat.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => {
+      sysCat.click()
+    })
+    expect(sysCat.getAttribute('aria-expanded')).toBe('true')
+    expect(container.querySelector('[data-testid="project-mcp-sys-details-content"]')!.textContent).toContain('managed by the administrator')
 
     const srvRow = container.querySelector('[data-testid="project-mcp-srvB"]')!
     expect(srvRow.querySelectorAll('button[role="switch"]')).toHaveLength(2)
+    // У обычного сервера ката нет.
+    expect(srvRow.querySelector('[data-testid="project-mcp-srvB-details-toggle"]')).toBeNull()
   })
 
   it('owner задаёт defaultOn → PUT /projects/:id/mcp', async () => {
@@ -279,5 +291,23 @@ describe('ProjectTab — рабочий каталог (AD-075)', () => {
     expect(input.readOnly).toBe(true)
     expect(container.querySelector('[data-testid="project-workspace-browse"]')).toBeNull()
     expect(container.querySelector('[data-testid="project-workspace-save"]')).toBeNull()
+  })
+})
+
+describe('ProjectTab — порядок секций', () => {
+  it('«План проекта» расположен выше «Рабочий каталог»', async () => {
+    const container = await renderTab()
+    const sectionByTitle = (title: string): HTMLElement | undefined =>
+      [...container.querySelectorAll('div')].find(
+        (d) => d.firstElementChild?.textContent?.trim() === title,
+      ) as HTMLElement | undefined
+
+    const plan = sectionByTitle('Project plan')
+    const workspace = sectionByTitle('Working directory')
+    expect(plan, 'секция «План проекта»').toBeTruthy()
+    expect(workspace, 'секция «Рабочий каталог»').toBeTruthy()
+    expect(
+      plan!.compareDocumentPosition(workspace!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 })

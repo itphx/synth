@@ -230,12 +230,25 @@ describe('SessionSettingsTab — MCP-скоуп сессии (AD-071 §2.4)', ()
 
     const sysRow = container.querySelector('[data-testid="session-mcp-sys"]')!
     expect(sysRow.textContent).toContain('system')
-    expect(sysRow.textContent).toContain('connected')
+    // Статус скрыт под катом по умолчанию.
+    expect(sysRow.textContent).not.toContain('connected')
+    const sysCat = sysRow.querySelector('[data-testid="session-mcp-sys-details-toggle"]') as HTMLButtonElement
+    expect(sysCat).toBeTruthy()
+    expect(sysCat.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => {
+      sysCat.click()
+    })
+    expect(container.querySelector('[data-testid="session-mcp-sys-details-content"]')!.textContent).toContain('connected')
 
     const projRow = container.querySelector('[data-testid="session-mcp-proj"]')!
     expect(projRow.textContent).toContain('project')
-    expect(projRow.textContent).toContain('disabled')
-    expect(projRow.textContent).toContain('session opt-out')
+    const projCat = projRow.querySelector('[data-testid="session-mcp-proj-details-toggle"]') as HTMLButtonElement
+    await act(async () => {
+      projCat.click()
+    })
+    const projContent = container.querySelector('[data-testid="session-mcp-proj-details-content"]')!
+    expect(projContent.textContent).toContain('disabled')
+    expect(projContent.textContent).toContain('session opt-out')
   })
 
   it('opt-out системного сервера вызывает PUT с { name, enabled: false }', async () => {
@@ -260,9 +273,13 @@ describe('SessionSettingsTab — MCP-скоуп сессии (AD-071 §2.4)', ()
     })
 
     expect(mocks.updateSessionMcp).toHaveBeenCalledWith('s1', { name: 'sys', enabled: false })
-    // Эффективный список перечитан с сервера.
+    // Эффективный список перечитан с сервера; причина — в раскрываемом контенте.
     const updatedRow = container.querySelector('[data-testid="session-mcp-sys"]')!
-    expect(updatedRow.textContent).toContain('session opt-out')
+    const updatedCat = updatedRow.querySelector('[data-testid="session-mcp-sys-details-toggle"]') as HTMLButtonElement
+    await act(async () => {
+      updatedCat.click()
+    })
+    expect(container.querySelector('[data-testid="session-mcp-sys-details-content"]')!.textContent).toContain('session opt-out')
   })
 
   it('включение отключённого сервера вызывает PUT с { name, enabled: true }', async () => {

@@ -14,6 +14,7 @@ import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
 import { ModelSelector } from '../chat/ModelSelector'
 import { ProjectInstructions } from './ProjectInstructions'
+import { ExpandableListRow, RowBadge } from './ExpandableListRow'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import { SelectContent, SelectItem } from '../ui/select'
 import { InfoField as Field, InfoSection as Section, ModelPairSelect, SelectField, SliderField } from '../ui/settings'
@@ -811,30 +812,29 @@ export function SessionSettingsTab() {
             ) : (
               <div className="flex flex-col gap-1.5" data-testid="session-mcp-list">
                 {mcpEffective.map((srv) => (
-                  <div
+                  <ExpandableListRow
                     key={srv.name}
-                    data-testid={`session-mcp-${srv.name}`}
-                    className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="truncate text-xs text-foreground">{srv.name}</span>
-                        <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
-                          {t(`rightPanel.stats.mcpLevel.${srv.level}`)}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70">
-                        {srv.enabled
-                          ? t(`rightPanel.stats.mcpStatus.${srv.status ?? 'connected'}`)
-                          : `${t('rightPanel.stats.mcpStatus.disabled')}${srv.reason ? ` · ${t(`rightPanel.stats.mcpReason.${srv.reason}`)}` : ''}`}
-                      </div>
-                    </div>
-                    <Toggle
-                      enabled={srv.enabled}
-                      onToggle={() => handleToggleMcp(srv)}
-                      ariaLabel={srv.enabled ? t('mcp.disable') : t('mcp.enable')}
-                    />
-                  </div>
+                    testId={`session-mcp-${srv.name}`}
+                    name={srv.name}
+                    badges={
+                      <RowBadge tone="neutral">{t(`rightPanel.stats.mcpLevel.${srv.level}`)}</RowBadge>
+                    }
+                    aside={
+                      <label className="flex items-center gap-1">
+                        <span className="text-[0.625rem] text-muted-foreground">{t('sessionSettings.mcp.toggleLabel')}</span>
+                        <Toggle
+                          enabled={srv.enabled}
+                          onToggle={() => handleToggleMcp(srv)}
+                          ariaLabel={srv.enabled ? t('mcp.disable') : t('mcp.enable')}
+                        />
+                      </label>
+                    }
+                    details={
+                      srv.enabled
+                        ? t(`rightPanel.stats.mcpStatus.${srv.status ?? 'connected'}`)
+                        : `${t('rightPanel.stats.mcpStatus.disabled')}${srv.reason ? ` · ${t(`rightPanel.stats.mcpReason.${srv.reason}`)}` : ''}`
+                    }
+                  />
                 ))}
               </div>
             )}
@@ -849,46 +849,42 @@ export function SessionSettingsTab() {
             ) : (
               <div className="flex flex-col gap-1.5" data-testid="session-skills-list">
                 {sessionSkills.map((skill) => (
-                  <div
+                  <ExpandableListRow
                     key={skill.name}
-                    data-testid={`session-skill-${skill.name}`}
-                    className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="truncate text-xs text-foreground">{skill.name}</span>
-                        <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
-                          {t(`skills.scope.${skill.scope}`)}
+                    testId={`session-skill-${skill.name}`}
+                    name={skill.name}
+                    badges={
+                      <>
+                        <RowBadge tone="neutral">{t(`skills.scope.${skill.scope}`)}</RowBadge>
+                        <RowBadge tone="neutral">{t(`skills.level.${skill.level}`)}</RowBadge>
+                        {!skill.trusted && <RowBadge tone="danger">{t('skills.untrusted')}</RowBadge>}
+                        {!skill.available && <RowBadge tone="muted">{t('skills.unavailable')}</RowBadge>}
+                      </>
+                    }
+                    aside={
+                      <label className="flex items-center gap-1">
+                        <span className="text-[0.625rem] text-muted-foreground">{t('sessionSettings.skills.toggleLabel')}</span>
+                        <Toggle
+                          enabled={skill.enabled}
+                          onToggle={() => handleToggleSkill(skill)}
+                          disabled={skillToggling === skill.name || skill.disabledReason === 'system'}
+                          ariaLabel={skill.enabled ? t('sessionSettings.skills.disable') : t('sessionSettings.skills.enable')}
+                        />
+                      </label>
+                    }
+                    details={
+                      <div className="flex flex-col gap-0.5">
+                        {skill.description && <span>{skill.description}</span>}
+                        <span>
+                          {skill.disabled
+                            ? `${t('sessionSettings.skills.disabled')}${skill.disabledReason ? ` · ${t(`sessionSettings.skills.disabledReason.${skill.disabledReason}`)}` : ''}`
+                            : skill.enabled
+                              ? t('sessionSettings.skills.enabled')
+                              : t('sessionSettings.skills.notEnabled')}
                         </span>
-                        <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
-                          {t(`skills.level.${skill.level}`)}
-                        </span>
-                        {!skill.trusted && (
-                          <span className="rounded bg-destructive/15 px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-destructive">
-                            {t('skills.untrusted')}
-                          </span>
-                        )}
-                        {!skill.available && (
-                          <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground/70">
-                            {t('skills.unavailable')}
-                          </span>
-                        )}
                       </div>
-                      <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70">
-                        {skill.disabled
-                          ? `${t('sessionSettings.skills.disabled')}${skill.disabledReason ? ` · ${t(`sessionSettings.skills.disabledReason.${skill.disabledReason}`)}` : ''}`
-                          : skill.enabled
-                            ? t('sessionSettings.skills.enabled')
-                            : t('sessionSettings.skills.notEnabled')}
-                      </div>
-                    </div>
-                    <Toggle
-                      enabled={skill.enabled}
-                      onToggle={() => handleToggleSkill(skill)}
-                      disabled={skillToggling === skill.name || skill.disabledReason === 'system'}
-                      ariaLabel={skill.enabled ? t('sessionSettings.skills.disable') : t('sessionSettings.skills.enable')}
-                    />
-                  </div>
+                    }
+                  />
                 ))}
               </div>
             )}

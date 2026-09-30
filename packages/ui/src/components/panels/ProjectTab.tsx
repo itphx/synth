@@ -13,6 +13,7 @@ import { InfoField as Field, InfoSection as Section } from '@/components/ui/sett
 import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { CreateProjectPopover } from '@/components/panels/CreateProjectPopover'
+import { ExpandableListRow, RowBadge } from '@/components/panels/ExpandableListRow'
 import type { ProjectPlan, McpRegistryEntry } from '@itphx/synth-shared'
 
 export function ProjectTab() {
@@ -357,6 +358,8 @@ export function ProjectTab() {
         </div>
       </Section>
 
+      <PlanSection project={project} />
+
       <Section title={t('projectTab.workspace.title')}>
         <div className="flex gap-2">
           <input
@@ -462,8 +465,6 @@ export function ProjectTab() {
       <Section title={t('projectTab.log.title')}>
         <ProjectLogBlock project={project} />
       </Section>
-
-      <PlanSection project={project} />
     </div>
   )
 }
@@ -501,45 +502,37 @@ function ProjectMcpBlock({
         const enabled = mcp.enabled.includes(name) || mcp.defaultOn.includes(name)
         const defaultOn = mcp.defaultOn.includes(name)
         return (
-          <div
+          <ExpandableListRow
             key={name}
-            data-testid={`project-mcp-${name}`}
-            className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="truncate text-xs text-foreground">{name}</span>
-                {isSystem && (
-                  <span className="rounded bg-primary/15 px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-primary">
-                    {t('rightPanel.stats.mcpLevel.system')}
-                  </span>
-                )}
-              </div>
-              {isSystem && (
-                <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70">{t('projectTab.mcp.systemHint')}</div>
-              )}
-            </div>
-            {!isSystem && (
-              <div className="flex shrink-0 items-center gap-2">
-                <label className="flex items-center gap-1">
-                  <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.available')}</span>
-                  <Toggle
-                    enabled={enabled}
-                    onToggle={() => onToggle(name, 'enabled')}
-                    ariaLabel={`${name}: ${t('projectTab.mcp.available')}`}
-                  />
-                </label>
-                <label className="flex items-center gap-1">
-                  <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.defaultOn')}</span>
-                  <Toggle
-                    enabled={defaultOn}
-                    onToggle={() => onToggle(name, 'defaultOn')}
-                    ariaLabel={`${name}: ${t('projectTab.mcp.defaultOn')}`}
-                  />
-                </label>
-              </div>
-            )}
-          </div>
+            testId={`project-mcp-${name}`}
+            name={name}
+            badges={
+              isSystem ? <RowBadge tone="primary">{t('rightPanel.stats.mcpLevel.system')}</RowBadge> : undefined
+            }
+            aside={
+              !isSystem ? (
+                <>
+                  <label className="flex items-center gap-1">
+                    <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.available')}</span>
+                    <Toggle
+                      enabled={enabled}
+                      onToggle={() => onToggle(name, 'enabled')}
+                      ariaLabel={`${name}: ${t('projectTab.mcp.available')}`}
+                    />
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.mcp.defaultOn')}</span>
+                    <Toggle
+                      enabled={defaultOn}
+                      onToggle={() => onToggle(name, 'defaultOn')}
+                      ariaLabel={`${name}: ${t('projectTab.mcp.defaultOn')}`}
+                    />
+                  </label>
+                </>
+              ) : undefined
+            }
+            details={isSystem ? t('projectTab.mcp.systemHint') : undefined}
+          />
         )
       })}
       <p className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.mcp.hint')}</p>
@@ -577,48 +570,40 @@ function ProjectSkillsBlock({
         const enabled = skills.enabled.includes(skill.name) || skills.defaultOn.includes(skill.name)
         const defaultOn = skills.defaultOn.includes(skill.name)
         return (
-          <div
+          <ExpandableListRow
             key={skill.name}
-            data-testid={`project-skill-${skill.name}`}
-            className="flex items-center gap-2 rounded-lg border border-border/60 bg-input px-2.5 py-1.5"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="truncate text-xs text-foreground">{skill.name}</span>
-                <span className="rounded bg-muted px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-muted-foreground">
-                  {t(`skills.scope.${skill.scope}`)}
-                </span>
-                {!skill.trusted && (
-                  <span className="rounded bg-destructive/15 px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide text-destructive">
-                    {t('skills.untrusted')}
-                  </span>
-                )}
-              </div>
-              {skill.description && (
-                <div className="mt-0.5 text-[0.625rem] text-muted-foreground/70 break-words">{skill.description}</div>
-              )}
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <label className="flex items-center gap-1">
-                <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.skills.available')}</span>
-                <Toggle
-                  enabled={enabled}
-                  onToggle={() => onToggle(skill.name, 'enabled')}
-                  disabled={saving}
-                  ariaLabel={`${skill.name}: ${t('projectTab.skills.available')}`}
-                />
-              </label>
-              <label className="flex items-center gap-1">
-                <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.skills.defaultOn')}</span>
-                <Toggle
-                  enabled={defaultOn}
-                  onToggle={() => onToggle(skill.name, 'defaultOn')}
-                  disabled={saving}
-                  ariaLabel={`${skill.name}: ${t('projectTab.skills.defaultOn')}`}
-                />
-              </label>
-            </div>
-          </div>
+            testId={`project-skill-${skill.name}`}
+            name={skill.name}
+            badges={
+              <>
+                <RowBadge tone="neutral">{t(`skills.scope.${skill.scope}`)}</RowBadge>
+                {!skill.trusted && <RowBadge tone="danger">{t('skills.untrusted')}</RowBadge>}
+              </>
+            }
+            aside={
+              <>
+                <label className="flex items-center gap-1">
+                  <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.skills.available')}</span>
+                  <Toggle
+                    enabled={enabled}
+                    onToggle={() => onToggle(skill.name, 'enabled')}
+                    disabled={saving}
+                    ariaLabel={`${skill.name}: ${t('projectTab.skills.available')}`}
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  <span className="text-[0.625rem] text-muted-foreground">{t('projectTab.skills.defaultOn')}</span>
+                  <Toggle
+                    enabled={defaultOn}
+                    onToggle={() => onToggle(skill.name, 'defaultOn')}
+                    disabled={saving}
+                    ariaLabel={`${skill.name}: ${t('projectTab.skills.defaultOn')}`}
+                  />
+                </label>
+              </>
+            }
+            details={skill.description || undefined}
+          />
         )
       })}
       <p className="text-[0.625rem] text-muted-foreground/60">{t('projectTab.skills.hint')}</p>

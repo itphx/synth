@@ -142,9 +142,34 @@ describe('SessionSettingsTab — скиллы сессии (AD-046 §4.5)', () =
     expect(dbRow.textContent).toContain('Unavailable')
 
     const blockedRow = container.querySelector('[data-testid="session-skill-blocked"]')!
-    expect(blockedRow.textContent).toContain('disabled by administrator')
     const blockedToggle = blockedRow.querySelector('button[role="switch"]') as HTMLButtonElement
     expect(blockedToggle.disabled).toBe(true)
+    // Причина блокировки — в раскрываемом контенте.
+    expect(blockedRow.textContent).not.toContain('disabled by administrator')
+    const blockedCat = blockedRow.querySelector('[data-testid="session-skill-blocked-details-toggle"]') as HTMLButtonElement
+    await act(async () => {
+      blockedCat.click()
+    })
+    expect(container.querySelector('[data-testid="session-skill-blocked-details-content"]')!.textContent).toContain('disabled by administrator')
+  })
+
+  it('описание скилла скрыто по умолчанию и раскрывается по кату', async () => {
+    const container = await renderTab()
+    const row = container.querySelector('[data-testid="session-skill-api-review"]')!
+    expect(row.textContent).not.toContain('Review API')
+    expect(container.querySelector('[data-testid="session-skill-api-review-details-content"]')).toBeNull()
+
+    const toggle = row.querySelector('[data-testid="session-skill-api-review-details-toggle"]') as HTMLButtonElement
+    expect(toggle).toBeTruthy()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+
+    await act(async () => {
+      toggle.click()
+    })
+
+    const content = container.querySelector('[data-testid="session-skill-api-review-details-content"]')!
+    expect(content.textContent).toContain('Review API')
+    expect(content.textContent).toContain('enabled in this session')
   })
 
   it('включение скилла вызывает PUT { name, enabled: true }', async () => {

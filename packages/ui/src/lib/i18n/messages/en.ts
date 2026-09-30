@@ -1113,11 +1113,13 @@ export const dict = {
   'sessionSettings.mcp.title': 'MCP servers',
   'sessionSettings.mcp.hint': 'Turn servers on/off for this session, including system and project ones. Off means an explicit opt-out; leave untouched to follow the project/admin default.',
   'sessionSettings.mcp.toggleError': 'Failed to change MCP server state',
+  'sessionSettings.mcp.toggleLabel': 'Enabled',
 
   // AD-046 §4.5/§8.2/§9.3: skills & commands (panels, stats, autocomplete)
   'sessionSettings.skills.title': 'Skills',
   'sessionSettings.skills.hint': 'Turn skills on/off for this session. Off is an explicit opt-out; leave untouched to follow the system/project default. Skills disabled by the administrator cannot be enabled here.',
   'sessionSettings.skills.toggleError': 'Failed to change skill state',
+  'sessionSettings.skills.toggleLabel': 'Enabled',
   'sessionSettings.skills.enabled': 'enabled in this session',
   'sessionSettings.skills.notEnabled': 'not enabled',
   'sessionSettings.skills.disabled': 'disabled',

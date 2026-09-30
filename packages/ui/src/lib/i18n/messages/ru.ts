@@ -1109,11 +1109,13 @@ export const dict = {
   'sessionSettings.mcp.title': 'MCP-серверы',
   'sessionSettings.mcp.hint': 'Включайте/выключайте серверы для этой сессии, включая системные и проектные. Выключено — явный opt-out; не трогайте, чтобы следовать дефолту проекта/админа.',
   'sessionSettings.mcp.toggleError': 'Не удалось изменить состояние MCP-сервера',
+  'sessionSettings.mcp.toggleLabel': 'Включён',
 
   // AD-046 §4.5/§8.2/§9.3: скиллы и команды (панели, статистика, автокомплит)
   'sessionSettings.skills.title': 'Скиллы',
   'sessionSettings.skills.hint': 'Включение/отключение скиллов в этой сессии. Отключение — явный opt-out; не трогайте, чтобы следовать системному/проектному дефолту. Скиллы, отключённые администратором, включить здесь нельзя.',
   'sessionSettings.skills.toggleError': 'Не удалось изменить состояние скилла',
+  'sessionSettings.skills.toggleLabel': 'Включён',
   'sessionSettings.skills.enabled': 'включён в сессии',
   'sessionSettings.skills.notEnabled': 'не включён',
   'sessionSettings.skills.disabled': 'отключён',
