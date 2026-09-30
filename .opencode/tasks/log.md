@@ -1051,3 +1051,14 @@
 - **LLM e2e (standalone):** сессия + prompt на модели `tobestyledintro/qwen3.8-9b-distill:latest` (ollama `http://omn.itphx.loc:11434`) → assistant ответил «Привет».
 - **Не сделано:** коммит (инвариант 13 — только по явной просьбе). Скрипты smoke — в `tmp/` (не коммитятся).
 - **Остаточное (вне scope):** `dev.sh core` без авто-ключа; core-тест remote-веток FS с моком `RemoteBackendClient` (покрыто e2e hybrid, юнита нет).
+
+## 2026-09-30 02:20 — Релиз 0.8.0 + деплой на test — PASS
+
+- **Задача:** бампнуть версию до 0.8.0, закоммитить, собрать, задеплоить на test (по явной просьбе пользователя).
+- **Тип:** release + deploy · **Исполнитель:** @devops (скиллы `synth-release`/`synth-build-publish`/`synth-k3s-deploy`) · **Результат:** PASS.
+- **Bump:** `./scripts/version-bump.sh 0.8.0` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml` (0.7.3 → 0.8.0).
+- **Коммиты `synth/` (ветка `feat/ad-075-workspace-provisioning`, запушена):** `f25e556` refactor (устранение дублирования core↔backend), `35759ee` `chore(release): 0.8.0`. Тег `v0.8.0` и npm-публикация **не** делались (релизный workflow preprod/prod вне задачи).
+- **Docker:** собраны из исходников и запушены в `git.itphx.ru`: `synth-backend:0.8.0` (298 MB), `synth-ui:0.8.0` (116 MB); версия внутри образа проверена.
+- **`synth-deploy` (main):** `values.yaml` image tags → 0.8.0, `helm lint`/`template` OK, коммит `96032d1` запушен → Fleet раскатал.
+- **Верификация (независимо, @orchestrator):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.0"}`; UI `/` → 200; `kubectl -n synth get deploy` — образы `:0.8.0`; поды backend/ui `1/1 Running`, RESTARTS 0; оба репозитория clean.
+- **Осталось:** preprod/prod не трогались (нужен тег/`workflow_dispatch` или публикация Helm-чарта — отдельной задачей).
