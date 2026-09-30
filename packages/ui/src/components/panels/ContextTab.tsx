@@ -180,6 +180,7 @@ export function ContextTab() {
           title={t('rightPanel.context.optimization.sliding_window')}
           enabled={windowEnabled}
           onToggle={toggleWindow}
+          pending={saving}
         >
           <SectionHeader label={t('rightPanel.context.sectionWindowSize')} />
           <RadioSetting
@@ -210,6 +211,7 @@ export function ContextTab() {
           title={t('rightPanel.context.optimization.summarization')}
           enabled={sumEnabled}
           onToggle={toggleSum}
+          pending={saving}
         >
           <SectionHeader label={t('rightPanel.context.triggersGroup')} />
           <RadioSetting
@@ -266,18 +268,21 @@ function Block({
   children,
   enabled,
   onToggle,
+  pending = false,
 }: {
   title: string
   children: React.ReactNode
   enabled?: boolean
   onToggle?: () => void
+  /** Идёт сохранение (тумблеры сохраняют сразу) — индикация на Toggle. */
+  pending?: boolean
 }) {
   return (
     <div className="rounded-lg border border-border p-3">
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-foreground">{title}</span>
         {onToggle && enabled !== undefined && (
-          <Toggle enabled={enabled} onToggle={onToggle} />
+          <Toggle enabled={enabled} onToggle={onToggle} pending={pending} />
         )}
       </div>
       {children && <div className="space-y-1.5">{children}</div>}

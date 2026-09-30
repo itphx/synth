@@ -30,13 +30,15 @@ afterEach(async () => {
 })
 
 describe('Toggle', () => {
-  it('обычное состояние: кликабелен, без aria-busy и не not-allowed', async () => {
+  it('обычное состояние: курсор-указатель, без aria-busy и без «запрета»', async () => {
     const onToggle = vi.fn()
     const el = await renderToggle({ enabled: false, onToggle, ariaLabel: 'x' })
 
     expect(el.disabled).toBe(false)
     expect(el.getAttribute('aria-busy')).toBeNull()
+    expect(el.classList.contains('cursor-pointer')).toBe(true)
     expect(el.classList.contains('cursor-progress')).toBe(false)
+    expect(el.classList.contains('cursor-default')).toBe(false)
     expect(el.classList.contains('cursor-not-allowed')).toBe(false)
 
     await act(async () => {
@@ -52,7 +54,7 @@ describe('Toggle', () => {
     expect(el.disabled).toBe(false)
     expect(el.getAttribute('aria-busy')).toBe('true')
     expect(el.classList.contains('cursor-progress')).toBe(true)
-    // «Запрет» — это только disabled-вариант (`disabled:cursor-not-allowed`), не активный класс.
+    expect(el.classList.contains('cursor-pointer')).toBe(false)
     expect(el.classList.contains('cursor-not-allowed')).toBe(false)
     expect(el.classList.contains('opacity-60')).toBe(true)
 
@@ -63,13 +65,16 @@ describe('Toggle', () => {
     expect(onToggle).toHaveBeenCalledTimes(1)
   })
 
-  it('disabled: реально недоступен — атрибут disabled, без aria-busy, есть disabled:cursor-not-allowed', async () => {
+  it('disabled: реально недоступен — атрибут disabled, серый cursor-default без «запрета»', async () => {
     const onToggle = vi.fn()
     const el = await renderToggle({ enabled: false, onToggle, ariaLabel: 'x', disabled: true })
 
     expect(el.disabled).toBe(true)
     expect(el.getAttribute('aria-busy')).toBeNull()
-    expect(el.className).toContain('disabled:cursor-not-allowed')
+    expect(el.className).toContain('disabled:cursor-default')
+    expect(el.className).not.toContain('cursor-not-allowed')
+    expect(el.classList.contains('cursor-default')).toBe(true)
+    expect(el.classList.contains('cursor-pointer')).toBe(false)
     expect(el.classList.contains('cursor-progress')).toBe(false)
 
     await act(async () => {
@@ -90,5 +95,7 @@ describe('Toggle', () => {
     expect(el.disabled).toBe(true)
     expect(el.getAttribute('aria-busy')).toBe('true')
     expect(el.classList.contains('cursor-progress')).toBe(false)
+    expect(el.classList.contains('cursor-default')).toBe(true)
+    expect(el.className).not.toContain('cursor-not-allowed')
   })
 })

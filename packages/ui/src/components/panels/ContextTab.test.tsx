@@ -5,6 +5,7 @@ import React from 'react'
 
 const mocks = vi.hoisted(() => ({
   getOptimization: vi.fn(),
+  updateOptimization: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -75,6 +76,7 @@ async function renderContext(): Promise<HTMLElement> {
 
 beforeEach(() => {
   mocks.getOptimization.mockResolvedValue(OPTIMIZATION)
+  mocks.updateOptimization.mockResolvedValue({})
 
   useUIStore.setState({
     activeCenterTabId: 'tab-1',
@@ -101,5 +103,33 @@ describe('ContextTab — базовая отрисовка', () => {
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sticky_notes'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.sliding_window'])
     expect(container.textContent).toContain(enDict['rightPanel.context.optimization.summarization'])
+  })
+
+  it('тумблеры сохраняют сразу: во время сохранения — pending-индикация без «запрета»', async () => {
+    let resolveUpdate: (value: unknown) => void = () => {}
+    mocks.updateOptimization.mockImplementation(
+      () => new Promise((resolve) => { resolveUpdate = resolve }),
+    )
+    const container = await renderContext()
+
+    const switchAt = (i: number) =>
+      container.querySelectorAll<HTMLButtonElement>('button[role="switch"]')[i]
+    expect(container.querySelectorAll('button[role="switch"]')).toHaveLength(2)
+
+    await act(async () => {
+      switchAt(0).click()
+    })
+
+    const pending = switchAt(0)
+    expect(pending.disabled).toBe(false)
+    expect(pending.getAttribute('aria-busy')).toBe('true')
+    expect(pending.classList.contains('cursor-progress')).toBe(true)
+    expect(container.querySelectorAll('button[role="switch"]')[1].getAttribute('aria-busy')).toBe('true')
+
+    await act(async () => {
+      resolveUpdate({})
+    })
+    expect(switchAt(0).getAttribute('aria-busy')).toBeNull()
+    expect(switchAt(0).classList.contains('cursor-progress')).toBe(false)
   })
 })
