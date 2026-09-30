@@ -130,10 +130,16 @@ describe('sshKeyCreateSchema (AD-076)', () => {
 
 describe('иконки/цвета проектов и сессий', () => {
   it('канонические списки непустые, уникальные и без дублей', () => {
-    expect(PROJECT_ICON_KEYS.length).toBe(19);
+    expect(PROJECT_ICON_KEYS.length).toBeGreaterThanOrEqual(19 + 18);
     expect(PROJECT_COLOR_KEYS.length).toBe(8);
     expect(new Set(PROJECT_ICON_KEYS).size).toBe(PROJECT_ICON_KEYS.length);
     expect(new Set(PROJECT_COLOR_KEYS).size).toBe(PROJECT_COLOR_KEYS.length);
+  });
+
+  it('дефолтные иконки (folder/chat/cpu) входят в канонический список', () => {
+    expect(PROJECT_ICON_KEYS).toContain('folder');
+    expect(PROJECT_ICON_KEYS).toContain('chat');
+    expect(PROJECT_ICON_KEYS).toContain('cpu');
   });
 
   it('isProjectIconKey/isProjectColorKey: только канонические ключи', () => {

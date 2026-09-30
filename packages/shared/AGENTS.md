@@ -52,7 +52,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 ## Схемы и типы
 
 `src/types/index.ts` + `src/schemas/index.ts` — единые контракты сущностей; схемы `projectCreate/Update`, `sessionCreate/Update`.
-- Канонические ключи иконок/цветов проекта и сессии: `PROJECT_ICON_KEYS` (19) / `PROJECT_COLOR_KEYS` (8) + типы `ProjectIconKey`/`ProjectColorKey` (`types`); схемы `projectIconKeySchema`/`projectColorKeySchema` и хелперы `isProjectIconKey`/`isProjectColorKey` (strict, для записи) и `normalizeIconKey`/`normalizeColorKey` (legacy-алиасы при чтении) (`schemas`). `null`/`undefined` — сброс значения.
+- Канонические ключи иконок/цветов проекта и сессии: `PROJECT_ICON_KEYS` (37) / `PROJECT_COLOR_KEYS` (8) + типы `ProjectIconKey`/`ProjectColorKey` (`types`) (включая дефолтные `folder`/`chat`/`cpu`); схемы `projectIconKeySchema`/`projectColorKeySchema` и хелперы `isProjectIconKey`/`isProjectColorKey` (strict, для записи) и `normalizeIconKey`/`normalizeColorKey` (legacy-алиасы при чтении) (`schemas`). `null`/`undefined` — сброс значения.
 
 ## i18n-контракт
 

@@ -278,7 +278,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 ### Иконки и цвета проектов и сессий
 
-Канонические ключи — реестры `PROJECT_ICON_KEYS` (19) / `PROJECT_COLOR_KEYS` (8) в `shared/types`; на записи значения валидируются (невалидное → 400 `VALIDATION_ERROR`), при чтении legacy нормализуется (`normalizeIconKey`/`normalizeColorKey`), `null`/`undefined` — сброс. В UI — общий пикер `EntityIconPicker` (только ключи реестра и палитра CSS-переменных, без загружаемых картинок) и инлайн-вывод `<Icon>` в дереве, табах, шапке и панелях. У закрытых сессий (нет таба и не активны) иконка серая, у открытых — цвет сессии. Подробности — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
+Канонические ключи — реестры `PROJECT_ICON_KEYS` (37) / `PROJECT_COLOR_KEYS` (8) в `shared/types` (включая дефолтные `folder`/`chat`/`cpu`); на записи значения валидируются (невалидное → 400 `VALIDATION_ERROR`), при чтении legacy нормализуется (`normalizeIconKey`/`normalizeColorKey`), `null`/`undefined` — сброс. В UI — общий пикер `EntityIconPicker` (только ключи реестра и палитра CSS-переменных, без загружаемых картинок) и инлайн-вывод `<Icon>` в дереве, табах, шапке и панелях. У закрытых сессий (нет таба и не активны) иконка серая, у открытых — цвет сессии. Подробности — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
 
 ### Мобильный адаптив + PWA
 
