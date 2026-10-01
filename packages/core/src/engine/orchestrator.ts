@@ -63,6 +63,7 @@ import { GitService } from '../git/git-service.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
+import { resolveFsChange } from './fs-change.js';
 import {
   ALL_RUNTIME_DEPS_AVAILABLE,
   RUNTIME_DEP_BINARY,
@@ -1018,6 +1019,8 @@ export class ChatOrchestrator {
     sessionMode: SessionMode;
     planMode: PlanMode;
     planApproved: boolean;
+    /** AD-075: задан ли рабочий каталог проекта (гейт `workspace` для file/shell/git). */
+    workspaceReady: boolean;
   }): {
     toolsPolicy: Exclude<ToolsPolicy, 'auto'>;
     mcpPolicy: Exclude<ToolsPolicy, 'auto'>;
@@ -1026,13 +1029,13 @@ export class ChatOrchestrator {
   } {
     const {
       session, agentDef, effectiveAgentRole, activeMcpServers,
-      providerType, sessionMode, planMode, planApproved,
+      providerType, sessionMode, planMode, planApproved, workspaceReady,
     } = args;
     const toolsPolicy = this._resolveToolsPolicy(session, providerType);
     const mcpPolicy = this._resolveMcpPolicy(session, providerType);
     // AD-071 §2.3: встроенные и MCP фильтруются независимо — своя политика на слой.
     const availabilityPredicate = (toolsPolicy === 'available' || mcpPolicy === 'available')
-      ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef)
+      ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef, workspaceReady)
       : undefined;
     // AD-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
     const toolPredicates = {
@@ -1305,6 +1308,10 @@ export class ChatOrchestrator {
         truncated: Buffer.byteLength(exec.output, 'utf-8') > TEMPLATE_SHELL_MAX_BYTES,
         ...(exec.isError ? { failed: true } : {}),
       });
+      // fs.changed: inline shell мог изменить файлы workspace — обновляем UI.
+      if (!exec.isError) {
+        this._publishFsChange(session, 'execute_shell', { isError: false }, workingDir);
+      }
       return { output: exec.output, isError: exec.isError };
     };
 
@@ -1628,6 +1635,7 @@ export class ChatOrchestrator {
     planMode: PlanMode,
     planApproved: boolean,
     agentDef: AgentDefinition | undefined,
+    workspaceReady: boolean,
   ): (tool: { name: string; capabilities: readonly string[] }) => boolean {
     const opts = {
       sessionMode,
@@ -1636,6 +1644,7 @@ export class ChatOrchestrator {
       mcpToolSettings: session.settings.mcpToolSettings,
       agentCapabilities: agentDef?.capabilities,
       runtimeDeps: this._runtimeDeps,
+      workspaceReady,
     };
     return (tool) => computeToolAvailability(tool.name, tool.capabilities, opts).available;
   }
@@ -1683,11 +1692,13 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Рабочий каталог сессии: `project.workspace` → `defaultWorkingDir`.
-   * `project` можно передать уже загруженным (AD-071 §2.4) — тогда повторного
-   * чтения `projectStore` не происходит; `undefined` — загрузить, `null` — проекта нет.
+   * Рабочий каталог проекта (AD-075): абсолютный путь `project.workspace`
+   * (абсолютный — как есть; относительный — от `workspacesRoot`) с гарантированным
+   * созданием каталога, либо `null`, если проекта/workspace нет. Отдельно от
+   * `_resolveWorkingDir`, чтобы permission-слой мог отличить «workspace задан»
+   * от fallback-каталога.
    */
-  private async _resolveWorkingDir(session: Session, project?: Project | null): Promise<string> {
+  private async _resolveProjectWorkspace(session: Session, project?: Project | null): Promise<string | null> {
     let resolved: Project | null;
     if (project !== undefined) {
       resolved = project;
@@ -1697,21 +1708,30 @@ export class ChatOrchestrator {
         try {
           resolved = await this._projectStore.load(session.projectId);
         } catch {
-          // проект не загрузился — используем fallback
+          // проект не загрузился — workspace отсутствует
         }
       }
     }
-    if (resolved?.workspace) {
-      // Абсолютный workspace — как есть (normalize); относительный —
-      // резолвим относительно workspacesRoot (AD-014).
-      const dir = isAbsolute(resolved.workspace)
-        ? normalize(resolved.workspace)
-        : resolve(this._workspacesRoot, resolved.workspace);
-      // AD-075: каталог проектного workspace гарантированно создаётся к моменту
-      // работы инструмента (как и для дефолтного ниже).
-      await mkdir(dir, { recursive: true }).catch(() => {});
-      return dir;
-    }
+    if (!resolved?.workspace) return null;
+    // Абсолютный workspace — как есть (normalize); относительный —
+    // резолвим относительно workspacesRoot (AD-014).
+    const dir = isAbsolute(resolved.workspace)
+      ? normalize(resolved.workspace)
+      : resolve(this._workspacesRoot, resolved.workspace);
+    // AD-075: каталог проектного workspace гарантированно создаётся к моменту
+    // работы инструмента.
+    await mkdir(dir, { recursive: true }).catch(() => {});
+    return dir;
+  }
+
+  /**
+   * Рабочий каталог сессии: `project.workspace` → `defaultWorkingDir`.
+   * `project` можно передать уже загруженным (AD-071 §2.4) — тогда повторного
+   * чтения `projectStore` не происходит; `undefined` — загрузить, `null` — проекта нет.
+   */
+  private async _resolveWorkingDir(session: Session, project?: Project | null): Promise<string> {
+    const projectWorkspace = await this._resolveProjectWorkspace(session, project);
+    if (projectWorkspace) return projectWorkspace;
     const dir = this._defaultWorkingDir;
     await mkdir(dir, { recursive: true }).catch(() => {});
     return dir;
@@ -1736,6 +1756,11 @@ export class ChatOrchestrator {
      * недоступных тулах не нужны.
      */
     include: { builtin: boolean; mcp: boolean } = { builtin: true, mcp: true },
+    /**
+     * AD-075: задан ли рабочий каталог проекта. `false` — file/shell/git-тулы
+     * помечаются причиной `workspace` в подсказках модели.
+     */
+    workspaceReady = true,
   ): UnavailableTool[] {
     if (!this._toolRegistry) return [];
     const unavailable: UnavailableTool[] = [];
@@ -1760,6 +1785,7 @@ export class ChatOrchestrator {
         mcpToolSettings: session.settings.mcpToolSettings,
         agentCapabilities: agentDef?.capabilities,
         runtimeDeps: this._runtimeDeps,
+        workspaceReady,
       });
       if (!availability.available && availability.reason) {
         const dep = availability.reason === 'dependency' ? TOOL_RUNTIME_DEP[tool.name] : undefined;
@@ -1781,6 +1807,30 @@ export class ChatOrchestrator {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * fs.changed: после успешного мутирующего тула публикуем событие для UI
+   * (дерево Files, открытые редакторы, Git-вкладка). Read-only тулы и
+   * неуспешные операции событий не дают (`resolveFsChange` → null).
+   */
+  private _publishFsChange(
+    session: Session,
+    toolName: string,
+    toolResult: { isError?: boolean; metadata?: Record<string, unknown> },
+    workingDir: string,
+  ): void {
+    if (toolResult.isError) return;
+    const change = resolveFsChange(toolName, toolResult.metadata, workingDir);
+    if (!change) return;
+    this._eventBus.publish(session.id, 'fs.changed', {
+      session_id: session.id,
+      project_id: session.projectId ?? null,
+      scope: change.scope,
+      ...(change.paths ? { paths: change.paths } : {}),
+      ...(change.workspaceChanged ? { workspace_changed: true } : {}),
+      tool: toolName,
+    });
   }
 
   /**
@@ -1965,6 +2015,7 @@ export class ChatOrchestrator {
     // AD-071 §2.4: проект загружаем один раз — для рабочего каталога и Composer.
     const project = await this._loadProject(session);
     const workingDir = await this._resolveWorkingDir(session, project);
+    const workspaceReady = (await this._resolveProjectWorkspace(session, project)) !== null;
     const language = session.settings.language || 'ru';
 
     const optimizedMessages = this._optimizer
@@ -1987,7 +2038,7 @@ export class ChatOrchestrator {
     const providerType = this._sessionProviderType(session);
     const { toolsPolicy, mcpPolicy, select } = this._buildToolSelection({
       session, agentDef, effectiveAgentRole, activeMcpServers, providerType,
-      sessionMode, planMode, planApproved,
+      sessionMode, planMode, planApproved, workspaceReady,
     });
     const toolSelection = select();
     // AD-071 §2.6: chars-per-token модели (калибровка) для оценок токенов.
@@ -2039,6 +2090,7 @@ export class ChatOrchestrator {
         mcpToolSettings: session.settings.mcpToolSettings,
         agentCapabilities: agentDef?.capabilities,
         runtimeDeps: this._runtimeDeps,
+        workspaceReady,
       });
       const adminDisabled = this._isAdminDisabled(tool);
       // chars = JSON.stringify LLM-определения (тот же расчёт, что слой `tools`).
@@ -2185,7 +2237,12 @@ export class ChatOrchestrator {
         projectForState = null;
       }
     }
-    const workingDir = await this._resolveWorkingDir(session, projectForState);
+    let workingDir = await this._resolveWorkingDir(session, projectForState);
+    // AD-075: permission-гейт `workspace` — file/shell/git-тулы блокируются,
+    // пока у проекта не задан рабочий каталог. `workingDir` при этом всё равно
+    // резолвится (fallback default) — он нужен промпту/контексту, но путь
+    // инструментов остаётся невалидным до появления workspace.
+    let workspaceReady = (await this._resolveProjectWorkspace(session, projectForState)) !== null;
     // AD-070 §2.6: старт прогона — для per-message duration_ms (полная
     // длительность у финального сообщения потока, включая tool-chain).
     const streamStartedAt = Date.now();
@@ -2359,10 +2416,13 @@ export class ChatOrchestrator {
       // независимо; в `available` слой фильтруется по доступности, а подсказки
       // `unavailable` для него не нужны. `select()` вызывается позже — после
       // ленивой регистрации MCP-тулов сессии.
-      const { toolsPolicy, mcpPolicy, select } = this._buildToolSelection({
+      // AD-075: гейт `workspace` — если агент в ходе задаст workspace проекта,
+      // выборку пересобираем тем же набором аргументов (см. ниже).
+      const selectionArgs = {
         session, agentDef, effectiveAgentRole, activeMcpServers, providerType: provider.type,
-        sessionMode, planMode, planApproved,
-      });
+        sessionMode, planMode, planApproved, workspaceReady,
+      };
+      const { toolsPolicy, mcpPolicy, select } = this._buildToolSelection(selectionArgs);
       const stateSync = syncStateMessages(session, {
         contextConfig: this._contextConfig,
         language,
@@ -2374,6 +2434,7 @@ export class ChatOrchestrator {
         unavailableTools: this._collectUnavailableTools(
           session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
           { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
+          workspaceReady,
         ),
       });
       if (stateSync.changed) {
@@ -2534,7 +2595,7 @@ export class ChatOrchestrator {
       // модель получает НИКАКИХ инструментов (safety-fallback).
       // `select()` — после ensureToolsLoaded (реестр уже содержит MCP-тулы).
       const toolSelection = select();
-      const tools = this._toolRegistry
+      let tools = this._toolRegistry
         ? [...toolSelection.builtin, ...toolSelection.mcp]
         : undefined;
       // AD-071 §2.1: граница stable-слоя инструментов для кэш-брейкпоинта
@@ -2909,6 +2970,7 @@ export class ChatOrchestrator {
             protectedPaths: this._getProtectedPaths() ?? undefined,
             protectedPathsEnabled: this._getProtectedPathsEnabled(),
             runtimeDeps: this._runtimeDeps,
+            workspaceReady,
           });
 
           // Doom loop detection — только для вызовов, НЕ заблокированных
@@ -3076,6 +3138,9 @@ export class ChatOrchestrator {
                   // в permission-слой саб-агента (enforce `dependency`) и его
                   // `[НЕДОСТУПНЫЕ ТУЛЫ]`.
                   runtimeDeps: this._runtimeDeps,
+                  // AD-075: гейт `workspace` наследуется саб-агентом —
+                  // его permission-слой не даёт обойти отсутствие рабочего каталога.
+                  workspaceReady,
                   shellPolicy: this._getProtectedPaths() ?? undefined,
                   protectedPaths: this._getProtectedPaths() ?? undefined,
                   protectedPathsEnabled: this._getProtectedPathsEnabled(),
@@ -3253,6 +3318,7 @@ export class ChatOrchestrator {
               this._collectUnavailableTools(
                 session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
                 { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
+                workspaceReady,
               ),
             );
           } else if (!toolResult.isError && toolName === 'plan_exit') {
@@ -3263,9 +3329,46 @@ export class ChatOrchestrator {
               this._collectUnavailableTools(
                 session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
                 { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
+                workspaceReady,
               ),
             );
           }
+
+          // AD-075: смена рабочего каталога проекта в ходе (project_create/
+          // project_attach/project_workspace_set) разблокирует file/shell/git-тулы
+          // без прерывания хода: перечитываем проект, пересчитываем `workspaceReady`
+          // и пересобираем выборку инструментов для следующих итераций. System
+          // prompt mid-turn не пересобирается (как у plan_enter/plan_exit).
+          if (
+            !toolResult.isError
+            && (toolName === 'project_create' || toolName === 'project_attach' || toolName === 'project_workspace_set')
+          ) {
+            // FileStore.load возвращает новый объект, а `attachSessionToProject`
+            // через sessionManager.withLock меняет projectId (и сбрасывает
+            // planApproved) в свежей копии — локальный `session` остаётся старым.
+            // Синхронизируем только поля, которые меняют эти тулы, не трогая
+            // локальные накопления (messages и т.п.).
+            const refreshed = await this._sessionManager.getSession(session.id);
+            if (refreshed) {
+              session.projectId = refreshed.projectId;
+              session.planApproved = refreshed.planApproved;
+              planApproved = Boolean(refreshed.planApproved);
+            }
+            projectForState = await this._loadProject(session);
+            workingDir = await this._resolveWorkingDir(session, projectForState);
+            workspaceReady = (await this._resolveProjectWorkspace(session, projectForState)) !== null;
+            const rebuilt = this._buildToolSelection({
+              session, agentDef, effectiveAgentRole, activeMcpServers, providerType: provider.type,
+              sessionMode, planMode, planApproved, workspaceReady,
+            });
+            const rebuiltSelection = rebuilt.select();
+            tools = this._toolRegistry ? [...rebuiltSelection.builtin, ...rebuiltSelection.mcp] : undefined;
+            finalSystemPrompt.stableToolCount = rebuiltSelection.builtin.length;
+          }
+
+          // fs.changed: уведомляем UI об успешной мутации (после мид-ходового
+          // refresh workspace — projectId/workingDir актуальны).
+          this._publishFsChange(session, toolName, toolResult, workingDir);
 
           allToolCalls.push({
             name: toolName,
@@ -3810,6 +3913,8 @@ export class ChatOrchestrator {
       },
       getProvider: (child) => this._getProvider(child.settings.provider || '', child, child.settings.reasoningLevel),
       getWorkingDir: (child) => this._resolveWorkingDir(child),
+      // AD-075: workspace-гейт resumed-саб-агента — по проекту дочерней сессии.
+      getWorkspaceReady: async (child) => (await this._resolveProjectWorkspace(child)) !== null,
     };
   }
 

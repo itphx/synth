@@ -19,10 +19,10 @@ import { renderTodosMarkdown } from '../tools/todo.js';
 
 export type StateMessageType = 'mode_change' | 'plan_updated' | 'todos_updated' | 'agent_switch';
 
-/** AD-070 §2.9.1: недоступный тул и причина — режим, роль или зависимость окружения. */
+/** AD-070 §2.9.1: недоступный тул и причина — режим, роль, зависимость окружения или отсутствие workspace. */
 export interface UnavailableTool {
   name: string;
-  reason: 'mode' | 'role' | 'dependency';
+  reason: 'mode' | 'role' | 'dependency' | 'workspace';
   /** Для `dependency` — человекочитаемое имя отсутствующей программы. */
   binary?: string;
 }
@@ -66,6 +66,15 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
       const hint = en
         ? 'install the program or contact the administrator'
         : 'установите программу или обратитесь к администратору';
+      return `- ${name} — ${cause}: ${hint}`;
+    }
+    if (reason === 'workspace') {
+      const cause = en
+        ? 'the project working directory is not set'
+        : 'не задан рабочий каталог проекта';
+      const hint = en
+        ? 'create or attach a project and set its working directory'
+        : 'создайте/привяжите проект и задайте рабочий каталог';
       return `- ${name} — ${cause}: ${hint}`;
     }
     const cause = reason === 'mode'

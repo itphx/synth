@@ -59,6 +59,12 @@ export interface TaskExtra {
    * `[НЕДОСТУПНЫЕ ТУЛЫ]` его системного промпта. Не задана — fail-open.
    */
   runtimeDeps?: RuntimeDeps;
+  /**
+   * AD-075: задан ли рабочий каталог проекта у родителя. Передаётся в
+   * permission-слой саб-агента — file/shell/git-тулы заблокированы с причиной
+   * `workspace`, если у проекта нет рабочего каталога. `undefined` — fail-open.
+   */
+  workspaceReady?: boolean;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
   /** Язык сессии (для локализованных сообщений безопасности). */
@@ -1505,6 +1511,8 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           protectedPathsEnabled: extra.protectedPathsEnabled,
           // AD-070 §2.9.1: зависимость окружения (git/rg/sh) — как у родителя.
           runtimeDeps: extra.runtimeDeps,
+          // AD-075: гейт рабочего каталога проекта — как у родителя.
+          workspaceReady: extra.workspaceReady,
         });
 
         if (permissionDecision.action === 'deny') {

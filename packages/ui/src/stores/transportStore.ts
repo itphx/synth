@@ -4,6 +4,7 @@ import { useChatStore } from './chatStore'
 import { useSessionsStore } from './sessionsStore'
 import { useProjectsStore } from './projectsStore'
 import { useGitStore } from './gitStore'
+import { useFilesStore } from './filesStore'
 import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import { useSkillsStore } from './skillsStore'
@@ -24,6 +25,24 @@ function refreshSessionFromApi(sid: string) {
   synthApi.getSession(sid)
     .then((sess) => useSessionsStore.getState().upsertSession(sess))
     .catch(() => {})
+}
+
+/** fs.changed: окно коалесинга refresh Git-вкладки на проект. */
+const GIT_REFRESH_DEBOUNCE_MS = 400
+const gitRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/**
+ * fs.changed: перечитывает реестр репозиториев проекта (git-операции агента
+ * могли изменить workspace). Debounce — не чаще ~400 мс на проект.
+ */
+function scheduleGitRefresh(projectId: string) {
+  const existing = gitRefreshTimers.get(projectId)
+  if (existing) clearTimeout(existing)
+  gitRefreshTimers.set(projectId, setTimeout(() => {
+    gitRefreshTimers.delete(projectId)
+    const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)
+    if (project) void useGitStore.getState().loadRepos(projectId, project.repos ?? null)
+  }, GIT_REFRESH_DEBOUNCE_MS))
 }
 
 /** AD-070 §2.6: usage live-события (camelCase из ядра) → snake_case стора. */
@@ -453,10 +472,29 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // fs.changed: ядро опубликовало после успешного мутирующего тула.
+      // Обновляем дерево Files (debounce) и реестр Git-вкладки. project_id
+      // берём из payload, с fallback на проект сессии.
+      case 'fs.changed': {
+        const explicitProjectId = payload.project_id as string | null | undefined
+        const projectId = explicitProjectId
+          || useSessionsStore.getState().sessions.find((sess) => sess.id === sid)?.project_id
+          || undefined
+        if (!projectId) break
+        const scope = payload.scope === 'file' ? 'file' : 'all'
+        const paths = Array.isArray(payload.paths) ? (payload.paths as string[]) : undefined
+        const workspaceChanged = Boolean(payload.workspace_changed)
+        useFilesStore.getState().scheduleRefresh(projectId, { scope, paths, workspaceChanged })
+        scheduleGitRefresh(projectId)
+        break
+      }
+
       // Проект изменён тулами (project_update/workspace_set/repo_*): перечитываем
-      // список проектов с сервера и синхронизируем Git-вкладку (AD-076).
+      // список проектов с сервера и синхронизируем Git-вкладку (AD-076) и дерево
+      // Files (AD-075: смена workspace меняет содержимое).
       case 'project.updated': {
         const projectId = payload.project_id as string | undefined
+        if (projectId) void useFilesStore.getState().refreshProject(projectId)
         useProjectsStore.getState().loadProjects().then(() => {
           if (!projectId) return
           const project = useProjectsStore.getState().projects.find((p) => p.id === projectId)

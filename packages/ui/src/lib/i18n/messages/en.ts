@@ -822,6 +822,8 @@ export const dict = {
   'file.saved': 'Saved',
   'file.edit': 'Edit',
   'file.close': 'Close',
+  'file.changedOnDisk': 'File changed on disk',
+  'file.reload': 'Reload',
 
   // Workspace picker
   'workspace.selectDirectory': 'Select workspace directory',

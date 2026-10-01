@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeToolAvailability } from './availability.js';
+import { computeToolAvailability, isWorkspaceDependentTool } from './availability.js';
 
 describe('computeToolAvailability (AD-070 §2.9.1)', () => {
   it('доступен по умолчанию', () => {
@@ -136,5 +136,59 @@ describe('computeToolAvailability (AD-070 §2.9.1)', () => {
         runtimeDeps: { git: false, rg: true, sh: true },
       }),
     ).toEqual({ available: false, reason: 'role' });
+  });
+});
+
+describe('computeToolAvailability — workspace (AD-075)', () => {
+  it('workspaceReady:false блокирует file/shell/git/search причиной workspace', () => {
+    const cases: Array<[string, string]> = [
+      ['read_file', 'file_read'],
+      ['write_file', 'file_write'],
+      ['execute_shell', 'shell'],
+      ['grep_files', 'search'],
+      ['git_status', 'git_read'],
+      ['git_commit', 'git_write'],
+    ];
+    for (const [tool, cap] of cases) {
+      expect(computeToolAvailability(tool, [cap], { workspaceReady: false })).toEqual({
+        available: false,
+        reason: 'workspace',
+      });
+    }
+  });
+
+  it('workspaceReady:false не блокирует web/task/runtime', () => {
+    expect(computeToolAvailability('web_fetch', ['web'], { workspaceReady: false })).toEqual({ available: true });
+    expect(computeToolAvailability('task', ['task'], { workspaceReady: false })).toEqual({ available: true });
+    expect(computeToolAvailability('classify_conversation', ['runtime'], { workspaceReady: false })).toEqual({ available: true });
+  });
+
+  it('workspaceReady undefined/true → fail-open', () => {
+    expect(computeToolAvailability('read_file', ['file_read'], {})).toEqual({ available: true });
+    expect(computeToolAvailability('read_file', ['file_read'], { workspaceReady: true })).toEqual({ available: true });
+  });
+
+  it('isWorkspaceDependentTool: file/shell/git/search — да, web/task/runtime — нет', () => {
+    expect(isWorkspaceDependentTool(['file_read'])).toBe(true);
+    expect(isWorkspaceDependentTool(['file_write'])).toBe(true);
+    expect(isWorkspaceDependentTool(['shell'])).toBe(true);
+    expect(isWorkspaceDependentTool(['search'])).toBe(true);
+    expect(isWorkspaceDependentTool(['git_read'])).toBe(true);
+    expect(isWorkspaceDependentTool(['git_write'])).toBe(true);
+    expect(isWorkspaceDependentTool(['web'])).toBe(false);
+    expect(isWorkspaceDependentTool(['task'])).toBe(false);
+    expect(isWorkspaceDependentTool(['runtime'])).toBe(false);
+    expect(isWorkspaceDependentTool(undefined)).toBe(false);
+    expect(isWorkspaceDependentTool([])).toBe(false);
+  });
+
+  it('mode приоритетнее workspace (plan-рестрикция write)', () => {
+    expect(
+      computeToolAvailability('write_file', ['file_write'], {
+        sessionMode: 'plan',
+        planMode: 'auto',
+        workspaceReady: false,
+      }),
+    ).toEqual({ available: false, reason: 'mode' });
   });
 });

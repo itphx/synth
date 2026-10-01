@@ -265,6 +265,37 @@ describe('state-messages', () => {
     expect(mode!.content).toContain('установите программу');
   });
 
+  it('mode_change с workspace-тулом: причина и подсказка про рабочий каталог проекта', () => {
+    const session = makeSession({ mode: 'act', planMode: 'auto' });
+
+    const { added } = syncStateMessages(session, {
+      contextConfig: makeContextConfig(),
+      language: 'ru',
+      unavailableTools: [{ name: 'write_file', reason: 'workspace' }],
+    });
+
+    const mode = added.find((m) => m.metadata?.type === 'mode_change');
+    expect(mode).toBeDefined();
+    expect(mode!.content).toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
+    expect(mode!.content).toContain('write_file');
+    expect(mode!.content).toContain('рабочий каталог проекта');
+    expect(mode!.content).toContain('создайте/привяжите проект');
+  });
+
+  it('workspace-подсказка локализуется (en)', () => {
+    const session = makeSession({ mode: 'act', planMode: 'auto', language: 'en' });
+
+    const { added } = syncStateMessages(session, {
+      contextConfig: makeContextConfig(),
+      language: 'en',
+      unavailableTools: [{ name: 'write_file', reason: 'workspace' }],
+    });
+
+    const mode = added.find((m) => m.metadata?.type === 'mode_change');
+    expect(mode!.content).toContain('[UNAVAILABLE TOOLS]');
+    expect(mode!.content).toContain('working directory');
+  });
+
   it('agent_switch не включает dependency-тулы (только role)', () => {
     const session = makeSession({ mode: 'act', planMode: 'auto' });
 

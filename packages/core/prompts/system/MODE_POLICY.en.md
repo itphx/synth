@@ -20,4 +20,8 @@ Some tools may be **unavailable** at the moment:
   mode; do not look for workarounds — complete the available part of the work and
   suggest switching the mode (plan/act/yolo);
 - if the reason is the **role** (the tool is unavailable to the current agent), it
-  is available to another agent — suggest delegating the task via `@`.
+  is available to another agent — suggest delegating the task via `@`;
+- if the reason is the **working directory** (the project has no workspace set),
+  file/shell/git tools are unavailable until a project is created/attached and its
+  working directory is set; do this via `project_create`/`project_attach` and
+  `project_workspace_set`, then continue the work.

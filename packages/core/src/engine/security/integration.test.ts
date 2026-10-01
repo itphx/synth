@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { ChatOrchestrator } from '../orchestrator.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
+import { ProjectStore } from '../../storage/project-store.js';
 import { EventBus } from '../../events/bus.js';
 import { createToolRegistry } from '../tools/index.js';
 import { ProviderFactory, BaseProvider, resolveSystemPromptText } from '../../providers/base.js';
@@ -104,6 +105,8 @@ function stubWebFetch(content: string) {
 describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let projectId: string;
   let eventBus: EventBus;
   let tmpDir: string;
 
@@ -111,6 +114,11 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-ipi-'));
     store = new FileStore({ dataDir: tmpDir });
     sessionManager = new SessionManager(store);
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+    const project = projectStore.create('IPI', 'u1', { workspace: tmpDir });
+    await projectStore.save(project);
+    projectId = project.id;
     eventBus = new EventBus();
     ProviderFactory.register('mockipi', MockIPIProvider);
     MockIPIProvider.calls = 0;
@@ -143,11 +151,13 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
       // AD-076: secretKey в тестах не важен — добавляем пустой.
       securityConfig: { ...securityConfig, secretKey: '' },
+      projectStore,
       defaultWorkingDir: tmpDir,
     });
 
     const session = await sessionManager.createSession({
       title: 'IPI smoke',
+      projectId,
       settings: {
         provider: 'mockipi',
         model: 'm',

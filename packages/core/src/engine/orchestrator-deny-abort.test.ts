@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { ChatOrchestrator } from './orchestrator.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
+import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
 import { createToolRegistry } from './tools/index.js';
 import { ContextConfig } from './context/config.js';
@@ -292,6 +293,10 @@ async function makeHarness(providerName: string): Promise<Harness> {
   const store = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(store);
   const eventBus = new EventBus();
+  // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+  const projectStore = new ProjectStore({ dataDir: tmpDir });
+  const project = projectStore.create('DenyAbort', 'u1', { workspace: tmpDir });
+  await projectStore.save(project);
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -301,6 +306,7 @@ async function makeHarness(providerName: string): Promise<Harness> {
     },
     toolRegistry: createToolRegistry(),
     permissionConfig: { rules: {}, askTimeoutMs: 1000 } as PermissionConfig,
+    projectStore,
     defaultWorkingDir: tmpDir,
     contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
     // Цены модели 'm' — проверка cost_usd при отмене (Bug 2/3).
@@ -308,6 +314,7 @@ async function makeHarness(providerName: string): Promise<Harness> {
   });
   const session = await sessionManager.createSession({
     title: 'DenyAbort',
+    projectId: project.id,
     settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'developer' },
   });
   const msg = makeMessage();

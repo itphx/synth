@@ -78,6 +78,11 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
     return (orch as unknown as { _resolveWorkingDir(s: Session): Promise<string> })._resolveWorkingDir(session);
   }
 
+  async function resolveWorkspace(orch: ChatOrchestrator, session: Session): Promise<string | null> {
+    return (orch as unknown as { _resolveProjectWorkspace(s: Session): Promise<string | null> })
+      ._resolveProjectWorkspace(session);
+  }
+
   it('относительный workspace резолвится относительно workspacesRoot', async () => {
     const wsRoot = join(tmpDir, 'ws-root');
     await mkdir(wsRoot, { recursive: true });
@@ -129,6 +134,30 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
 
     const orch = makeOrchestrator({ defaultWorkingDir: def });
     await expect(resolveDir(orch, session)).resolves.toBe(def);
+  });
+
+  it('_resolveProjectWorkspace: null без проекта', async () => {
+    const session = await sessionManager.createSession({ title: 'S' });
+    const orch = makeOrchestrator();
+    await expect(resolveWorkspace(orch, session)).resolves.toBeNull();
+  });
+
+  it('_resolveProjectWorkspace: null для проекта без workspace', async () => {
+    const project = projectStore.create('P6', 'u1');
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+    const orch = makeOrchestrator({ workspacesRoot: join(tmpDir, 'ws-root') });
+    await expect(resolveWorkspace(orch, session)).resolves.toBeNull();
+  });
+
+  it('_resolveProjectWorkspace: абсолютный путь для проекта с workspace', async () => {
+    const absWs = join(tmpDir, 'abs-ws2');
+    await mkdir(absWs, { recursive: true });
+    const project = projectStore.create('P7', 'u1', { workspace: absWs });
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ projectId: project.id, title: 'S' });
+    const orch = makeOrchestrator();
+    await expect(resolveWorkspace(orch, session)).resolves.toBe(absWs);
   });
 
   it('fallback workspacesRoot: join(dataDir, "workspaces") при отсутствии опции', async () => {

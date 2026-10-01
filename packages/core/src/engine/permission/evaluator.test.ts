@@ -803,3 +803,57 @@ describe('PermissionEvaluator — устойчивость к permission: {} б�
   });
 });
 
+describe('PermissionEvaluator — workspace (AD-075)', () => {
+  function wsCheck(
+    toolName: string,
+    params: Record<string, unknown>,
+    capabilities: readonly string[] | undefined,
+    workspaceReady: boolean,
+  ) {
+    return new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName,
+      params,
+      workingDir: CWD,
+      capabilities,
+      workspaceReady,
+    });
+  }
+
+  it('workspaceReady:false — write_file/execute_shell/git_status → deny unavailable(workspace)', () => {
+    const cases: Array<[string, Record<string, unknown>, readonly string[]]> = [
+      ['write_file', { file_path: 'a.txt', content: 'x' }, ['file_write']],
+      ['execute_shell', { command: 'ls' }, ['shell']],
+      ['git_status', {}, ['git_read']],
+    ];
+    for (const [tool, params, caps] of cases) {
+      const d = wsCheck(tool, params, caps, false);
+      expect(d.action).toBe('deny');
+      expect(d.unavailable).toEqual({ reason: 'workspace' });
+      expect(d.messageId).toBe('tool-unavailable-workspace');
+      expect(d.matchedRule).toBe('workspace.unavailable');
+    }
+  });
+
+  it('workspaceReady:true — read_file/write_file → обычный allow', () => {
+    expect(wsCheck('read_file', { file_path: 'a.txt' }, ['file_read'], true).action).toBe('allow');
+    expect(wsCheck('write_file', { file_path: 'a.txt', content: 'x' }, ['file_write'], true).action).toBe('allow');
+  });
+
+  it('workspaceReady:false не влияет на web/task-тулы', () => {
+    expect(wsCheck('web_fetch', { url: 'https://x' }, ['web'], false).action).toBe('allow');
+    expect(wsCheck('task', {}, ['task'], false).action).toBe('allow');
+  });
+
+  it('dependency приоритетнее workspace (нет git и нет workspace → dependency)', () => {
+    const d = new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
+      toolName: 'git_status',
+      params: {},
+      workingDir: CWD,
+      capabilities: ['git_read'],
+      runtimeDeps: { git: false, rg: true, sh: true },
+      workspaceReady: false,
+    });
+    expect(d.unavailable).toEqual({ reason: 'dependency' });
+  });
+});
+

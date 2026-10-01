@@ -1299,3 +1299,30 @@
 - **Выкат 0.8.4:** образы из исходников → Gitea: `synth-backend:0.8.4` (268 MB, digest `d3cca3bc…`), `synth-ui:0.8.4` (116 MB, digest `5bf705f8…`); `synth-deploy/main` `8cd1114` запушен → Fleet bundle `synth` **1/1**.
 - **Верификация выката (@orchestrator, независимо):** `GET /api/v2/health` → `{"status":"healthy","version":"0.8.4"}`; UI `/` → HTTP 200; deploy `:0.8.4` ready=1/1; поды backend/ui `1/1 Running`, RESTARTS 0. Тег/npm/preprod не трогались.
 - **Осталось/риски:** mtime-гранулярность (перезапись в ту же мс/размер не инвалидирует); URL TTL-слот может вызвать пересчёт на слот раньше; `stream_id='unknown'` fallback; публичный CLI не передаёт `skillsConfig` (внешние `skills.trustedProjectDirs` там не работают — только авто-trust); AD-068 (реестр/каталог) вне объёма; ветка не смержена.
+
+## 2026-10-01 07:31 — fix(core): file/shell/git-тулы доступны только внутри workspace проекта — PASS
+
+- **Задача:** относительные пути file/shell/git-тулов должны резолвиться только внутри рабочего каталога ПРОЕКТА; если проекта/`project.workspace` нет — инструменты блокировать; при задании каталога агентом прямо в ходе — разблокировать без прерывания хода.
+- **Тип:** bug fix (core/permission) · **Исполнитель:** @fixer ×2 → верификация @orchestrator · **Результат:** PASS.
+- **Корень:** `_resolveWorkingDir` (`orchestrator.ts:1690`) откатывался на `_defaultWorkingDir` при отсутствии проекта/workspace; permission-слой не знал причины `workspace`; `workingDir`/`tools` в `_processMessage` были `const` и не пересчитывались после `project_workspace_set`/`project_create`/`project_attach` мид-ходом.
+- **Сделано:** новый `ToolUnavailableReason 'workspace'` + `workspaceReady` в `computeToolAvailability`/`PermissionCheckInput` + `isWorkspaceDependentTool` (FILE_READ/WRITE/SHELL/SEARCH/GIT_READ/WRITE); deny `workspace.unavailable` (`messageId tool-unavailable-workspace`, промпты security en/ru); `_resolveProjectWorkspace` (null без проекта/workspace) отделён от `_resolveWorkingDir`; проброс `workspaceReady` в check/`_collectUnavailableTools`/`_availabilityPredicate`/`getPromptInfo`/саб-агентов (`task`/`task-resume`); мид-ход: после успешного project_create/attach/workspace_set — refresh локальной сессии (projectId/planApproved), пересчёт `workingDir`/`workspaceReady` и пересборка `tools`; i18n `permission.workspace_unavailable` (core/shared/ui), `UnavailableTool.reason:'workspace'` + подсказка, MODE_POLICY.
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors (175 warnings предсуществующих); `pnpm test` — shared 181 · core 2355 · ui 910 · backend 341 = **3787 PASS, 0 failed**. Новый `orchestrator-workspace.test.ts` покрывает сценарий из ТЗ (без проекта → deny; project_create с workspace в том же ходе → write_file проходит и файл в workspace; проект без workspace → project_workspace_set → файл создан).
+- **Остаточные ограничения:** `buildSubagentUnavailableToolsSection` не добавляет причину `workspace` в промпт саб-агента (enforce в permission-слое есть); мид-ходовая пересборка не трогает system prompt (как `plan_enter`/`plan_exit`); `security.tool_unavailable_workspace` — виртуальный ключ (UI показывает `content`).
+- **Коммит:** не делался (по инварианту «коммит — только по явной просьбе пользователя»).
+- **Документация:** не обновлялась — требуется согласование правок `AGENTS.md` (инвариант 15).
+
+## 2026-10-01 07:57 — feat(core+ui): FS-событие fs.changed и refresh файлов проекта в UI — PASS
+
+- **Задача:** после file/shell/git-тулов агента UI не обновлял Files-панель, открытые редакторы и Git-вкладку; плюс смена workspace не отражалась в дереве.
+- **Тип:** feature (core/shared/ui) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Решения пользователя:** вариант A (отдельное WS-событие `fs.changed` из core + debounce-refresh UI); обновлять всё — дерево, открытые редакторы, Git-статус, смену workspace.
+- **Сделано:**
+  - `shared/types`: `EventType` + `'fs.changed'` (мост `RemoteEventBridge` форвардит любые типы; core-bus/WS/SSE не трогались).
+  - `core/engine/fs-change.ts` (новый): `resolveFsChange(tool, metadata, workingDir)` — file-тулы внутри workspace → `scope:'file'` + POSIX-относительный путь; shell/git-write/`project_repo_*`/`project_create|attach`/`task` → `scope:'all'`; `project_workspace_set` → `all` + `workspaceChanged`; read-only → `null`.
+  - `core/orchestrator.ts`: `_publishFsChange` (после успешного тула в основном цикле — после мид-ходового refresh workspace, и после inline-shell). Payload: `session_id`, `project_id`, `scope`, опц. `paths`/`workspace_changed`, `tool`.
+  - `ui/filesStore.ts`: `revisionByProject` (неперсистируемый), `refreshProject` (перечитывает корень + загруженные каталоги, инкрементит ревизию), `scheduleRefresh` (debounce 400 мс, коалесинг по проекту).
+  - `ui/transportStore.ts`: ветка `fs.changed` → `scheduleRefresh` + debounce Git-refresh; `project.updated` теперь ещё и `refreshProject` (смена workspace).
+  - `ui/FileEditorTab.tsx`: подписка на ревизию проекта — чистый файл молча перечитывается, грязный → баннер `file.changedOnDisk` + кнопка `file.reload` без затирания ввода; i18n ru/en.
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors (175 warning предсуществующих); `pnpm test` — shared 181 · core 2365 · ui 918 · backend 341 = **3805 PASS, 0 failed**. Новые тесты: core `fs-change.test.ts` + `orchestrator-fs-change.test.ts`; ui `filesStore.test.ts` + `transportStore.fs-change.test.ts`.
+- **Остаточные ограничения:** `scope:'file'`/`paths` — пока сигнал (перечитывается весь загруженный набор каталогов проекта, ревизия проектная — редакторы проекта инвалидируются все); при удалении файла открытый редактор уходит в error (как и раньше); `session.moved` (project_create/attach) UI не обрабатывает — обновление проекта в UI после привязки сессии агентом остаётся прежним; Git-refresh зависит от уже загруженного `projectsStore`.
+- **Коммит:** не делался. **Документация:** требуется согласование правок `AGENTS.md` (AD-024/транспорт, UI-конвенции).

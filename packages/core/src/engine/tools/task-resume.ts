@@ -130,6 +130,11 @@ export interface SubagentResumeDeps {
   getProvider: (child: Session) => BaseProvider | null;
   /** Рабочий каталог дочерней сессии. */
   getWorkingDir: (child: Session) => Promise<string>;
+  /**
+   * AD-075: задан ли рабочий каталог проекта дочерней сессии (гейт `workspace`
+   * в permission-слое resumed-саб-агента). Не задан — fail-open.
+   */
+  getWorkspaceReady?: (child: Session) => Promise<boolean>;
 }
 
 export interface ValidatedResume {
@@ -207,6 +212,8 @@ export async function runSubagentResume(
       throw new SubagentResumeError('NO_PROVIDER', sm('task.resume_provider_unavailable', { id: child.id }));
     }
     const workingDir = await deps.getWorkingDir(child);
+    // AD-075: workspace-гейт resumed-саб-агента — как у родителя.
+    const workspaceReady = deps.getWorkspaceReady ? await deps.getWorkspaceReady(child) : undefined;
 
     // ─── 2. Synthetic user-маркер resume в историю дочерней сессии ──
     const markerText = sm('task.resume_marker');
@@ -312,6 +319,8 @@ export async function runSubagentResume(
       permissionConfig: child.settings.permission ?? deps.permissionConfig,
       // AD-070 §2.9.1: dependency-гейт permission-слоя resumed-саб-агента.
       runtimeDeps: deps.runtimeDeps,
+      // AD-075: workspace-гейт permission-слоя resumed-саб-агента.
+      workspaceReady,
       securityConfig: deps.securityConfig,
       language: child.settings.language || 'ru',
       shellPolicy: deps.shellPolicy ?? undefined,

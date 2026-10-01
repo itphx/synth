@@ -802,6 +802,8 @@ export const dict = {
   'file.saved': 'Сохранено',
   'file.edit': 'Редактировать',
   'file.close': 'Закрыть',
+  'file.changedOnDisk': 'Файл изменён агентом на диске',
+  'file.reload': 'Перечитать',
 
   // Workspace picker
   'workspace.selectDirectory': 'Выбрать рабочую директорию',
@@ -1934,6 +1936,7 @@ export const dict = {
   'permission.plan_shell_denied': 'режим планирования: shell-команда изменяет состояние',
   'permission.mcp_unavailable': 'MCP-инструмент недоступен в режиме {mode}',
   'permission.dep_unavailable': 'Инструмент недоступен: в окружении не установлена программа «{binary}»',
+  'permission.workspace_unavailable': 'Инструмент недоступен: не задан рабочий каталог проекта. Сначала создайте/привяжите проект и задайте его рабочий каталог.',
   'permission.no_rules': 'нет правил доступа для «{tool}» — разрешено по умолчанию',
   'permission.rule_matched': 'правило «{key}» → {action}',
   'permission.rule_pattern_matched': 'правило «{key}.{pattern}» → {action} (путь: {path})',

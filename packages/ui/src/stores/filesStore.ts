@@ -3,8 +3,20 @@ import { persist } from 'zustand/middleware'
 import type { FileEntry } from '@/lib/api/synthApi'
 import { synthApi } from '@/lib/api/synthApi'
 
+/** fs.changed: окно коалесинга refresh дерева на проект. */
+const FS_REFRESH_DEBOUNCE_MS = 400
+const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+export interface FsChangeHint {
+  scope: 'file' | 'all'
+  paths?: string[]
+  workspaceChanged?: boolean
+}
+
 interface FilesStore {
   treesByProject: Record<string, FileEntry[]>
+  /** fs.changed: счётчик успешных серверных refresh на проект (инвалидация редакторов). */
+  revisionByProject: Record<string, number>
   loading: boolean
   error: string | null
   expandedProjects: Set<string>
@@ -23,6 +35,11 @@ interface FilesStore {
   deleteEntry: (projectId: string, path: string) => Promise<boolean>
   moveEntry: (projectId: string, sourcePath: string, targetPath: string) => Promise<boolean>
   clearTree: (projectId: string) => void
+
+  /** fs.changed: перечитывает корень и все загруженные каталоги проекта. */
+  refreshProject: (projectId: string) => Promise<void>
+  /** fs.changed: debounce-обёртка над refreshProject (коалесинг по проекту). */
+  scheduleRefresh: (projectId: string, change: FsChangeHint) => void
 
   toggleProjectExpand: (projectId: string) => void
   expandProject: (projectId: string) => void
@@ -74,6 +91,7 @@ export const useFilesStore = create<FilesStore>()(
 
       return {
         treesByProject: {},
+        revisionByProject: {},
         loading: false,
         error: null,
         expandedProjects: new Set<string>(),
@@ -207,6 +225,49 @@ export const useFilesStore = create<FilesStore>()(
             delete trees[projectId]
             return { treesByProject: trees }
           })
+        },
+
+        refreshProject: async (projectId) => {
+          const { treesByProject, showHidden } = get()
+          const projectPrefix = `${projectId}/`
+          // Корень + все уже загруженные (в т.ч. раскрытые) каталоги проекта.
+          const loadedDirs: string[] = []
+          if (treesByProject[projectId]) loadedDirs.push('')
+          for (const key of Object.keys(treesByProject)) {
+            if (key.startsWith(projectPrefix)) loadedDirs.push(key.slice(projectPrefix.length))
+          }
+
+          await Promise.all(loadedDirs.map(async (dir) => {
+            try {
+              const result = await synthApi.listDirectory(projectId, dir, showHidden)
+              set((s) => ({
+                treesByProject: {
+                  ...s.treesByProject,
+                  [dir ? `${projectId}/${dir}` : projectId]: result.entries,
+                },
+              }))
+            } catch {
+              // Оставляем прежнее дерево — точечный refresh не должен его ломать.
+            }
+          }))
+
+          // Инвалидация открытых редакторов: даже без загруженного дерева
+          // (файл, открытый напрямую) ревизия должна вырасти.
+          set((s) => ({
+            revisionByProject: {
+              ...s.revisionByProject,
+              [projectId]: (s.revisionByProject[projectId] ?? 0) + 1,
+            },
+          }))
+        },
+
+        scheduleRefresh: (projectId, _change) => {
+          const existing = refreshTimers.get(projectId)
+          if (existing) clearTimeout(existing)
+          refreshTimers.set(projectId, setTimeout(() => {
+            refreshTimers.delete(projectId)
+            void get().refreshProject(projectId)
+          }, FS_REFRESH_DEBOUNCE_MS))
         },
 
         toggleProjectExpand: (projectId) => {
