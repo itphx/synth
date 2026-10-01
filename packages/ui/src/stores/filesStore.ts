@@ -61,6 +61,8 @@ interface FilesStore {
   refreshDirs: (projectId: string, dirs: string[]) => Promise<void>
   /** fs.changed: снять пометку «удалён агентом» после успешного перечитывания. */
   clearDeletedFile: (projectId: string, path: string) => void
+  /** Детект удаления по факту (404 при чтении): пометить файл удалённым. */
+  markDeletedFile: (projectId: string, path: string) => void
   /** fs.changed: debounce-обёртка над refreshProject (коалесинг по проекту). */
   scheduleRefresh: (projectId: string, change: FsChangeHint) => void
 
@@ -359,6 +361,14 @@ export const useFilesStore = create<FilesStore>()(
             const deletedFiles = { ...s.deletedFiles }
             delete deletedFiles[key]
             return { deletedFiles }
+          })
+        },
+
+        markDeletedFile: (projectId, path) => {
+          const key = `${projectId}::${path}`
+          set((s) => {
+            if (s.deletedFiles[key]) return s
+            return { deletedFiles: { ...s.deletedFiles, [key]: true } }
           })
         },
 

@@ -105,6 +105,34 @@ describe('FileEditorTab — состояние «файл удалён»', () =>
     expect(container.querySelector('textarea')).toBeNull()
   })
 
+  it('404/NOT_FOUND (удаление широким тулом) → пометка deletedFiles и экран «файл удалён»', async () => {
+    useFilesStore.setState({ deletedFiles: {}, fileRevisions: {} })
+    mocks.readFile.mockRejectedValue(
+      Object.assign(new Error('Файл не найден'), { status: 404, code: 'NOT_FOUND' }),
+    )
+
+    const container = await render(<FileEditorTab tab={tab} />)
+
+    expect(container.textContent).toContain('file.deletedOnDisk')
+    expect(container.textContent).not.toContain('Файл не найден')
+    expect(container.querySelector('textarea')).toBeNull()
+    expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBe(true)
+  })
+
+  it('ошибка 500 (не 404) → экран ошибки, не удаление', async () => {
+    useFilesStore.setState({ deletedFiles: {}, fileRevisions: {} })
+    mocks.readFile.mockRejectedValue(
+      Object.assign(new Error('Internal Server Error'), { status: 500 }),
+    )
+
+    const container = await render(<FileEditorTab tab={tab} />)
+
+    expect(container.textContent).toContain('Internal Server Error')
+    expect(container.textContent).not.toContain('file.deletedOnDisk')
+    expect(container.querySelector('textarea')).toBeNull()
+    expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBeUndefined()
+  })
+
   it('при успешном перечитывании (файл пересоздан) снимает пометку и возвращает редактор', async () => {
     useFilesStore.setState({ deletedFiles: { 'p1::a.txt': true }, fileRevisions: {} })
     mocks.readFile.mockResolvedValue({ content: 'restored', encoding: 'text', size: 8 })

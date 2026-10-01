@@ -250,3 +250,27 @@ describe('filesStore.refreshDirs / scheduleRefresh (точная инвалид�
     expect(useFilesStore.getState().revisionByProject.p1).toBe(1)
   })
 })
+
+describe('filesStore.markDeletedFile / clearDeletedFile', () => {
+  beforeEach(() => {
+    useFilesStore.setState({ deletedFiles: {} })
+  })
+
+  it('markDeletedFile выставляет пометку', () => {
+    useFilesStore.getState().markDeletedFile('p1', 'a.txt')
+    expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBe(true)
+  })
+
+  it('повторный вызов идемпотентен (не меняет ссылку на объект)', () => {
+    useFilesStore.getState().markDeletedFile('p1', 'a.txt')
+    const first = useFilesStore.getState().deletedFiles
+    useFilesStore.getState().markDeletedFile('p1', 'a.txt')
+    expect(useFilesStore.getState().deletedFiles).toBe(first)
+  })
+
+  it('clearDeletedFile снимает пометку', () => {
+    useFilesStore.getState().markDeletedFile('p1', 'a.txt')
+    useFilesStore.getState().clearDeletedFile('p1', 'a.txt')
+    expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBeUndefined()
+  })
+})

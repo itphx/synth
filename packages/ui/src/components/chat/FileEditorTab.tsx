@@ -44,11 +44,16 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
       }
       setChangedOnDisk(false)
     } catch (e) {
-      // Файл помечен удалённым агентом — не затираем состояние удаления ошибкой:
-      // рендерится `file.deletedOnDisk` с кнопкой «Перечитать». Пометка снимается
-      // только успешным перечитыванием (файл пересоздан).
+      // Файл отсутствует на диске — сервер отдаёт 404/NOT_FOUND. Так удаляют
+      // «широкие» тулы (`execute_shell rm`, `git_checkout`), для которых в
+      // `fs.changed` нет `op:'delete'`. Помечаем удаление: рендерится
+      // `file.deletedOnDisk` с кнопкой «Перечитать». Иначе не затираем уже
+      // выставленное состояние удаления ошибкой.
+      const e2 = e as { status?: number; code?: string }
       const key = `${projectId}::${filePath}`
-      if (!useFilesStore.getState().deletedFiles[key]) {
+      if (e2.status === 404 || e2.code === 'NOT_FOUND') {
+        useFilesStore.getState().markDeletedFile(projectId, filePath)
+      } else if (!useFilesStore.getState().deletedFiles[key]) {
         setError((e as Error).message)
       }
     } finally {
