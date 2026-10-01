@@ -1,6 +1,7 @@
 {
   "name": "@itphx/synth-core",
   "version": "0.8.8",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

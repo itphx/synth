@@ -74,3 +74,7 @@ secrets/
 
 # Changelog
 changelog-partial.md
+
+# Лицензии, материализуемые при публикации (единственный источник — корневой LICENSE)
+/packages/*/LICENSE
+/packages/*/LICENSE.ru.md

@@ -1,6 +1,7 @@
 {
   "name": "synth",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "pnpm --filter @itphx/synth-backend dev",

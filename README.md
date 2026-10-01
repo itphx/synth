@@ -155,4 +155,5 @@ synth serve --connect https://synth.k3s.itphx.loc \
 
 ## Лицензия
 
-MIT
+MIT — см. [LICENSE](LICENSE) (английский текст, имеющий юридическую силу) и
+[LICENSE.ru.md](LICENSE.ru.md) (русский перевод).

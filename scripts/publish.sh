@@ -181,6 +181,32 @@ publish_to_gitverse() {
 
 echo "[3/4] Публикация пакетов..."
 
+# Лицензии для пакетов: LICENSE/LICENSE.ru.md хранятся в корне репозитория
+# (единственный источник). npm/pnpm не упаковывают файлы-симлинки, поэтому на
+# время публикации материализуем копии в каждом пакете. Пути — в .gitignore.
+LICENSE_FILES=(LICENSE LICENSE.ru.md)
+
+materialize_licenses() {
+    local p f
+    for p in "${PACKAGES[@]}"; do
+        for f in "${LICENSE_FILES[@]}"; do
+            cp "$SYNTH/$f" "$SYNTH/packages/$p/$f"
+        done
+    done
+}
+
+cleanup_licenses() {
+    local p f
+    for p in "${PACKAGES[@]}"; do
+        for f in "${LICENSE_FILES[@]}"; do
+            rm -f "$SYNTH/packages/$p/$f"
+        done
+    done
+}
+
+trap cleanup_licenses EXIT INT TERM
+materialize_licenses
+
 for pkg in "${PACKAGES[@]}"; do
     if $NPMJS_OK; then
         publish_to_npmjs "$pkg"

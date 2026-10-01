@@ -1,6 +1,7 @@
 {
   "name": "@itphx/synth-ui",
   "version": "0.8.8",
+  "license": "MIT",
   "type": "module",
   "files": [
     "dist"
