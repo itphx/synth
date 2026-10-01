@@ -9,8 +9,9 @@
  *
  * Фаза 2a: дополнительные `config.instructions.sources` (`before` → chain →
  * `after`), URL-fetch с TTL-кэшем `{dataDir}/instructions-cache/<sha1(url)>`
- * (атомарная запись tmp→rename, AD-005), project-trust гейт (`skills.trustedProjectDirs`),
- * install-tree guard и `excludeProjects`.
+ * (атомарная запись tmp→rename, AD-005), project-trust гейт (`skills.trustedProjectDirs`)
+ * с авто-trust для workspace внутри `workspacesRoot` (R1/R3), install-tree guard
+ * и `excludeProjects`.
  *
  * Глобальные файлы (`~/.config`, `~/.claude`) намеренно не читаются.
  */
@@ -164,6 +165,8 @@ export interface ProjectInstructionsDeps {
   runGitFn?: (args: string[], cwd: string, signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
   /** AD-069 §3.5: `config.skills.trustedProjectDirs` — project-trust гейт. */
   trustedProjectDirs?: readonly string[];
+  /** AD-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
+  workspacesRoot?: string;
   /** Корень данных для URL-кэша `{dataDir}/instructions-cache`. */
   dataDir?: string;
   /** Подменяемый fetch (тесты). */
@@ -235,6 +238,37 @@ export async function selectInstructionFile(
 export function isInsideDir(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/** Контекст trust-гейта проектных инструкций (AD-069 §3.5/R1/R3). */
+export interface InstructionsTrustOptions {
+  /** AD-046 project-trust: явный список доверенных проектных каталогов. */
+  trustedProjectDirs?: readonly string[];
+  /** AD-069 R3: workspace внутри `workspacesRoot` доверяется автоматически. */
+  workspacesRoot?: string;
+  /** Домашний каталог для раскрытия `~` в `trustedProjectDirs`. */
+  home?: string;
+}
+
+/**
+ * AD-069 §3.5/R1/R3: единый trust-гейт проектных инструкций — общий для
+ * merged-chain (`ProjectInstructionsResolver`) и lazy-догрузки
+ * (`LazyInstructionsLoader`).
+ *
+ * Доверено, если каталог явно в `trustedProjectDirs` (project-trust AD-046)
+ * ИЛИ лежит внутри `workspacesRoot` (рабочие каталоги Synth получают
+ * авто-trust — инструкции там не несут риска чужого клона).
+ *
+ * На project-trust скиллов (`isProjectTrusted`) не влияет.
+ */
+export function resolveInstructionsTrusted(
+  workspace: string,
+  opts: InstructionsTrustOptions,
+): boolean {
+  if (isProjectTrusted(workspace, opts.trustedProjectDirs ?? [], opts.home)) return true;
+  const root = opts.workspacesRoot?.trim();
+  if (root && isInsideDir(root, workspace)) return true;
+  return false;
 }
 
 /** `true`, если в строке есть glob-метасимволы. */
@@ -476,6 +510,7 @@ export class ProjectInstructionsResolver {
   private readonly _dictionaryStore: DictionaryStore | null;
   private readonly _runGit: NonNullable<ProjectInstructionsDeps['runGitFn']>;
   private readonly _trustedProjectDirs: readonly string[];
+  private readonly _workspacesRoot: string;
   private readonly _dataDir: string | null;
   private readonly _fetchImpl: FetchLike;
   private readonly _home: string;
@@ -486,6 +521,7 @@ export class ProjectInstructionsResolver {
     this._dictionaryStore = deps.dictionaryStore ?? null;
     this._runGit = deps.runGitFn ?? runGit;
     this._trustedProjectDirs = deps.trustedProjectDirs ?? [];
+    this._workspacesRoot = deps.workspacesRoot ?? '';
     this._dataDir = deps.dataDir ?? null;
     this._fetchImpl = deps.fetchImpl ?? ((input, init) => fetch(input, init));
     this._home = deps.home ?? expandHome('~');
@@ -507,7 +543,11 @@ export class ProjectInstructionsResolver {
     }
 
     const guard: GuardContext = {
-      trusted: isProjectTrusted(workspace, this._trustedProjectDirs, this._home),
+      trusted: resolveInstructionsTrusted(workspace, {
+        trustedProjectDirs: this._trustedProjectDirs,
+        workspacesRoot: this._workspacesRoot,
+        home: this._home,
+      }),
       installTree: await this._isInstallTree(workspace),
       allowInstallTree: config.allowInstallTreeFallback,
     };

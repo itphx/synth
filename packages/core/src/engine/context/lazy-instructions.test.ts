@@ -55,6 +55,7 @@ describe('LazyInstructionsLoader (AD-069 Фаза 2b)', () => {
   function makeLoader(
     overrides: Partial<InstructionsLazyConfig> = {},
     dict?: DictionaryStore,
+    depsOverride: Partial<LazyInstructionsDeps> = {},
   ): LazyInstructionsLoader {
     const deps: LazyInstructionsDeps = {
       config: makeLazy(overrides),
@@ -63,6 +64,10 @@ describe('LazyInstructionsLoader (AD-069 Фаза 2b)', () => {
       headRatio: 0.7,
       tailRatio: 0.2,
       dictionaryStore: dict,
+      // AD-069 R1/R3: по умолчанию workspace доверен (temp-каталог в trustedProjectDirs);
+      // тесты trust/auto-trust переопределяют.
+      trustedProjectDirs: [base],
+      ...depsOverride,
     };
     return new LazyInstructionsLoader(deps);
   }
@@ -141,6 +146,39 @@ describe('LazyInstructionsLoader (AD-069 Фаза 2b)', () => {
     });
     expect(result.block).toBe('');
     expect(result.files).toEqual([]);
+  });
+
+  it('trust (R1): недоверенный workspace — подкаталожный AGENTS.md не грузится, статус untrusted', async () => {
+    await write('pkg/AGENTS.md', 'SECRET-RULES');
+    const loader = makeLoader({}, undefined, {
+      trustedProjectDirs: [join(base, 'other')],
+      workspacesRoot: undefined,
+    });
+
+    const result = await loader.resolve({
+      ...readArgs(),
+      toolName: 'read_file',
+      toolArgs: { file_path: 'pkg/f.ts' },
+    });
+    expect(result.block).toBe('');
+    expect(result.files).toEqual([]);
+    expect(result.diagnostics[0]).toMatchObject({ status: 'untrusted', reason: 'untrusted-project' });
+  });
+
+  it('trust (R3): workspace внутри workspacesRoot доверен автоматически (без trustedProjectDirs)', async () => {
+    await write('pkg/AGENTS.md', 'AUTO-TRUSTED');
+    const loader = makeLoader({}, undefined, {
+      trustedProjectDirs: [],
+      workspacesRoot: base,
+    });
+
+    const result = await loader.resolve({
+      ...readArgs(),
+      toolName: 'read_file',
+      toolArgs: { file_path: 'pkg/f.ts' },
+    });
+    expect(result.block).toContain('AUTO-TRUSTED');
+    expect(result.files.map((f) => f.path)).toEqual(['./pkg/AGENTS.md']);
   });
 
   it('лимит предков (maxAncestors=5): дальний предок не догружается, ближний — да', async () => {

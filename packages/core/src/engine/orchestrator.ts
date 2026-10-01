@@ -728,6 +728,8 @@ export class ChatOrchestrator {
             dictionaryStore: this._dictionaryStore,
             dataDir: options.dataDir,
             trustedProjectDirs: options.instructionsTrustedProjectDirs,
+            // AD-069 R3: workspace внутри workspacesRoot доверяется автоматически.
+            workspacesRoot: this._workspacesRoot,
           })
         : null;
     // AD-069 Фаза 2b: lazy-загрузчик подкаталогов (те же словарь/политики, что
@@ -741,6 +743,9 @@ export class ChatOrchestrator {
             headRatio: this._instructionsConfig.headRatio,
             tailRatio: this._instructionsConfig.tailRatio,
             dictionaryStore: this._dictionaryStore,
+            // AD-069 R1: общий trust-гейт с system-chain (project-trust + workspacesRoot).
+            trustedProjectDirs: options.instructionsTrustedProjectDirs,
+            workspacesRoot: this._workspacesRoot,
           })
         : null;
     // Фабрика обёртки для пула: у пула нет сессии, поэтому оборачиваем с пустой

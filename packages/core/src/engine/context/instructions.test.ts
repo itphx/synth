@@ -14,6 +14,7 @@ import {
   ProjectInstructionsResolver,
   buildProvenanceHeader,
   resolveInstructionsCap,
+  resolveInstructionsTrusted,
   sanitizeUrlForDisplay,
   truncateHeadTail,
   waterFillAllocate,
@@ -524,6 +525,33 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
     expect(trusted.content).toContain('SECRET-RULES');
   });
 
+  it('trust (R3): workspace внутри workspacesRoot доверен автоматически (без trustedProjectDirs)', async () => {
+    await write('workspaces/proj/AGENTS.md', 'AUTO-RULES');
+    const workspacesRoot = join(base, 'workspaces');
+    const workspace = join(workspacesRoot, 'proj');
+
+    const result = await makeResolver(makeConfig(), undefined, {
+      trustedProjectDirs: [],
+      workspacesRoot,
+    }).resolve({ workspace });
+
+    expect(result.content).toContain('AUTO-RULES');
+    expect(result.diagnostics.some((d) => d.status === 'untrusted')).toBe(false);
+  });
+
+  it('trust (R1/c): workspace вне workspacesRoot и не в trustedProjectDirs → untrusted', async () => {
+    await write('outside/AGENTS.md', 'OUT-RULES');
+    const workspace = join(base, 'outside');
+
+    const result = await makeResolver(makeConfig(), undefined, {
+      trustedProjectDirs: [],
+      workspacesRoot: join(base, 'workspaces'),
+    }).resolve({ workspace });
+
+    expect(result.content).toBe('');
+    expect(result.diagnostics.some((d) => d.status === 'untrusted' && d.kind === 'chain')).toBe(true);
+  });
+
   it('install-tree: workspace внутри исходников Synth → skip; allowInstallTreeFallback=true → грузит', async () => {
     await write('synth-src/package.json', JSON.stringify({ name: '@itphx/synth-core' }));
     await write('synth-src/packages/app/AGENTS.md', 'APP-RULES');
@@ -547,6 +575,37 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
 
     expect(result.content).toBe('');
     expect(result.diagnostics[0]).toMatchObject({ status: 'excluded', reason: 'excludeProjects' });
+  });
+});
+
+describe('resolveInstructionsTrusted (AD-069 R1/R3)', () => {
+  it('explicit trustedProjectDirs ИЛИ containment в workspacesRoot; иначе false', () => {
+    const root = join(tmpdir(), 'synth-ws-root');
+    // Явный trustedProjectDirs.
+    expect(
+      resolveInstructionsTrusted(join(tmpdir(), 'explicit'), {
+        trustedProjectDirs: [join(tmpdir(), 'explicit')],
+      }),
+    ).toBe(true);
+    // Авто-trust: workspace внутри workspacesRoot (включая сам корень).
+    expect(
+      resolveInstructionsTrusted(join(root, 'proj'), { trustedProjectDirs: [], workspacesRoot: root }),
+    ).toBe(true);
+    expect(
+      resolveInstructionsTrusted(root, { trustedProjectDirs: [], workspacesRoot: root }),
+    ).toBe(true);
+    // Вне root и не в trustedProjectDirs.
+    expect(
+      resolveInstructionsTrusted(join(tmpdir(), 'outside'), {
+        trustedProjectDirs: [],
+        workspacesRoot: root,
+      }),
+    ).toBe(false);
+    // Пустой/незаданный root авто-trust не даёт.
+    expect(
+      resolveInstructionsTrusted(join(tmpdir(), 'x'), { trustedProjectDirs: [], workspacesRoot: '' }),
+    ).toBe(false);
+    expect(resolveInstructionsTrusted(join(tmpdir(), 'x'), { trustedProjectDirs: [] })).toBe(false);
   });
 });
 
