@@ -1,6 +1,6 @@
 # AD-069: Проектные инструкции (AGENTS.md) и `/init`
 
-> **Статус:** ✅ Реализовано (Фазы 1–3, 2026-09-24). Отклонения: глобальные instruction-файлы (`~/.config`, `~/.claude`) не читаются (покрыто тиром identity); `config.instructions.sources` — список источников с `position: before|after`; URL-источники — fetch при старте + TTL-кэш без фонового таймера; кап динамический от окна модели; скилл `synth-agents-md` использует команду `/agents-md` во избежание конфликта с builtin `/init`; `/init` реализован как builtin-команда со статусом `prompt`.
+> **Статус:** ✅ Реализовано (Фазы 1–3, 2026-09-24; остатки R1–R4, 2026-10-01). Отклонения: глобальные instruction-файлы (`~/.config`, `~/.claude`) не читаются (покрыто тиром identity); `config.instructions.sources` — список источников с `position: before|after`; URL-источники — fetch при старте + TTL-кэш без фонового таймера; кап динамический от окна модели; скилл `synth-agents-md` использует команду `/agents-md` во избежание конфликта с builtin `/init`; `/init` реализован как builtin-команда со статусом `prompt`. R1–R4: общий trust-гейт для lazy-догрузки; авто-trust workspace внутри `workspacesRoot`; CLI-флаги `--ignore-rules`/`--safe-mode` (+ env `SYNTH_IGNORE_RULES`) реально реализованы для `serve`/`chat`. Открытым остаётся R5 (кэш/инвалидация watcher).
 > **Дата:** 2026-09-17
 > **Парные документы:**
 > - [AD-046](./ad-046-skills-and-slash-commands.md) «Скиллы и slash-команды» — механизм скиллов и `/`-команд, в рамках которого реализуется встроенная команда `/init` и скилл `synth-agents-md`;
@@ -493,11 +493,13 @@ instructions:
 | Уровень | Флаг | Действие |
 |---|---|---|
 | Глобально | `instructions.enabled: false` | Не грузить проектные инструкции вообще |
-| CLI | `--ignore-rules` / `SYNTH_IGNORE_RULES=1` | Разовая нейтральная сессия |
-| Безопасный режим | `--safe-mode` | Инструкции не грузятся (как hermes) |
-| Проект | `excludeProjects` / project-trust | Для конкретного проекта |
+| CLI | `--ignore-rules` (serve/chat) / env `SYNTH_IGNORE_RULES=1\|true` | Разовая нейтральная сессия; флаг приоритетнее env |
+| Безопасный режим | `--safe-mode` (serve/chat) | Инструкции не грузятся (как hermes) |
+| Проект | `excludeProjects` / project-trust (авто-trust внутри `workspacesRoot`) | Для конкретного проекта |
 | Саб-агенты | `skip_context_files=True` для субагентов в `task` | Не раздувать промпт дочерних сессий |
 | Сессия | `session.settings.systemPrompt` override | Заменяет системный промпт → инструкции не добавляются (как каталог скиллов AD-046) |
+
+**Реализация (R2, 2026-10-01):** флаги `--ignore-rules`/`--safe-mode` добавлены командам `serve` и `chat` в core (`packages/core/src/main.ts`) и публичном CLI (`packages/synth/src/cli.ts`); env-резолвер — `resolveIgnoreRules` (`shared/config/resolve.ts`, `SYNTH_IGNORE_RULES`). Эффективная конфигурация собирается как `{ ...synth.instructions, enabled: false }` (без мутации) и передаётся в `createStandaloneApp`/`runSingleChat`.
 
 ### 9.3. Прозрачность в UI
 
@@ -567,6 +569,8 @@ instructions:
 | Threat-scan | `detectPromptInjection` на malicious-контенте; `flag`/`sanitize`/`block`; `block` не грузит |
 | Lazy-догрузка | Триггеры по file/shell-тулам; 5 предков; boundaries workspace; исключения; кап 8k; один раз на сообщение; sha256-дедуп |
 | Install-tree guard | cwd внутри дерева Synth → skip; `allowInstallTreeFallback=true` → грузит |
+| Trust-гейт (R1/R3) | Общий гейт system-chain и lazy: недоверенный workspace → подкаталожный `AGENTS.md` не грузится (статус `untrusted`); workspace внутри `workspacesRoot` доверен автоматически; skills project-trust не затронут |
+| CLI-отключение (R2) | `resolveIgnoreRules`: `--ignore-rules`/`--safe-mode` приоритетнее env `SYNTH_IGNORE_RULES` → `instructions.enabled=false` (serve/chat) |
 | Identity vs project | Тир 1 (`SOUL.md`/`COMPANY.md`/`ABOUT.md`) отдельно; не смешивается |
 | Саб-агенты | `skip_context_files`; инструкции в `resolveSubagentPrompt` |
 | `/init` | Резолвинг в core; `$ARGUMENTS`; merge in place; промпт содержит investigate/extract/questions/writing rules |
@@ -593,11 +597,11 @@ instructions:
 ## 13. Открытые вопросы
 
 1. **`config.instructions` — место в приоритете:** доп. пути/URL должны идти после merged chain (приоритетнее проектных) или перед ним? Или конфигурируемо?
-2. **Глобальные instruction-файлы:** поддерживать `~/.config/synth/AGENTS.md` / `~/.claude/CLAUDE.md` (как opencode) или ограничиться `SOUL.md` из тира 1?
+2. **Глобальные instruction-файлы** — решение: **не поддерживаем** `~/.config/synth/AGENTS.md`/`~/.claude/CLAUDE.md`; глобальный тир остаётся за `SOUL.md`/`COMPANY.md`/`ABOUT.md` (тир identity, §6.2).
 3. **Формат маркера обрезки:** точный синтаксис для `read_file` (`offset`/`limit` — строки или байты?) и политика, сколько середины сохранять.
 4. **Динамический кап:** формула от окна модели (доля, floor/ceiling) — фиксируем ~6% (hermes) или подбираем под роутинг моделей AD-034?
 5. **`.cursorrules`** — включать ли в v1 как ещё одну совместимость?
 6. **Границы в гибриде (AD-042):** кто резолвит инструкции для удалённого проекта — сервер (он владеет workspace) или клиент? Куда попадает контент — в удалённый промпт?
-7. **Project-trust UX:** показывать ли недоверенные инструкции read-only до trust или только метаданные (граница с AD-046/AD-068)?
+7. **Project-trust UX** — решено (R3, 2026-10-01): workspace внутри `storage.workspacesRoot` доверяется автоматически (плюс явный `skills.trustedProjectDirs`); общий гейт для system-chain и lazy. Недоверенные инструкции в промпт/диагностику не грузятся (статус `untrusted`).
 8. **Install-tree guard — эвристика:** как детектировать «внутри дерева исходников Synth» (по `package.json` с `@itphx/synth-core`, по маркеру, по пути установки npm-пакета)?
-9. **Кэш и инвалидация:** watcher на instruction-файлы (mtime/hash) — общий с AD-046 или отдельный?
+9. **(R5, открыто) Кэш и инвалидация:** watcher на instruction-файлы (mtime/hash) — общий с AD-046 или отдельный; повторное чтение/пересканирование при изменении файлов.
