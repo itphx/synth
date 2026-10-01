@@ -422,6 +422,8 @@ export const dict = {
   'leftPanel.editProject.general': 'General',
   'leftPanel.editProject.appearance': 'Appearance',
   'leftPanel.editProject.repos': 'Repositories',
+  'leftPanel.editSession': 'Edit session',
+  'leftPanel.editSession.title': 'Session settings',
   'project.name': 'Name',
   'project.description': 'Description',
   'project.save': 'Save',

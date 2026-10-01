@@ -19,7 +19,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import type { EntityOrigin, ProjectData } from '@/lib/api/synthApi'
 import type { SSHKeyMeta } from '@itphx/synth-shared'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
-import { EntityIconPicker } from '@/components/ui/EntityIconPicker'
+import { useEntityEditStore } from '@/stores/entityEditStore'
 import { formatDateTime, formatRelativeTime, parseISODate } from '@/lib/formatDate'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
@@ -140,7 +140,6 @@ function ProjectsTab() {
   const forkSession = useSessionsStore(s => s.forkSession)
   const deleteSession = useSessionsStore(s => s.deleteSession)
   const moveSession = useSessionsStore(s => s.moveSession)
-  const { notify } = useNotification()
   const { isTouch } = useDevice()
   const collapsedProjects = useUIStore((s) => s.collapsedProjects)
   const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
@@ -161,8 +160,8 @@ function ProjectsTab() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [editingProject, setEditingProject] = useState<any>(null)
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null)
   const pendingDeleteRef = useRef<Set<string>>(new Set())
   const [forwardTarget, setForwardTarget] = useState<{ sessionId: string; sessionName: string } | null>(null)
@@ -170,39 +169,6 @@ function ProjectsTab() {
   // Гибрид: перенос проектов между мирами — проект, для которого открыт диалог.
   const [publishTarget, setPublishTarget] = useState<ProjectData | null>(null)
   const [forkTarget, setForkTarget] = useState<ProjectData | null>(null)
-  // Единый пикер «Иконка и цвет» для проекта/сессии (контекстное меню дерева).
-  const [iconColorTarget, setIconColorTarget] = useState<{
-    kind: 'session' | 'project'
-    id: string
-    name: string
-    icon: string | null
-    color: string | null
-  } | null>(null)
-  const [iconDraft, setIconDraft] = useState<string | null>(null)
-  const [colorDraft, setColorDraft] = useState<string | null>(null)
-
-  const openIconColor = (target: NonNullable<typeof iconColorTarget>) => {
-    setIconColorTarget(target)
-    setIconDraft(target.icon)
-    setColorDraft(target.color)
-  }
-
-  // Немедленное сохранение иконки/цвета из диалога дерева. Оптимистично меняем
-  // драфт, а при ошибке откатываемся к актуальному серверному значению.
-  const persistIconColor = async (icon: string | null, color: string | null) => {
-    const target = iconColorTarget
-    if (!target) return
-    const ok = target.kind === 'session'
-      ? await useSessionsStore.getState().updateSessionMeta(target.id, { icon, color })
-      : await useProjectsStore.getState().updateProject(target.id, { icon, color })
-    if (ok) {
-      setIconColorTarget({ ...target, icon: icon ?? null, color: color ?? null })
-    } else {
-      notify({ text: t('panel.saveError'), type: 'error', category: 'error' })
-      setIconDraft(target.icon)
-      setColorDraft(target.color)
-    }
-  }
 
   // Switch to Projects tab when forward mode activates
   useEffect(() => {
@@ -307,16 +273,22 @@ function ProjectsTab() {
     }
   }, [activeCenterTabId])
 
-  const handleProjectSave = async () => {
-    if (!editingProject) return
-    await synthApi.updateProject(editingProject.id, {
-      name: editingProject.name,
-      description: editingProject.description,
-      icon: editingProject.icon,
-      color: editingProject.color,
-    })
-    setEditingProject(null)
-    loadProjects()
+  // Инлайн-переименование проекта (быстрый путь, как у сессий): коммит по Enter
+  // или галочке, отмена по Esc/крестику.
+  const commitProjectRename = async () => {
+    const id = renamingProjectId
+    const name = renameValue.trim()
+    if (id && name) {
+      await useProjectsStore.getState().updateProject(id, { name })
+      await loadProjects()
+    }
+    setRenamingProjectId(null)
+    setRenameValue('')
+  }
+
+  const cancelProjectRename = () => {
+    setRenamingProjectId(null)
+    setRenameValue('')
   }
 
   const renderSessionNode = (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void): TreeNodeBase => {
@@ -370,7 +342,7 @@ function ProjectsTab() {
       title: isOfflineRemote ? t('hybrid.unavailableNode') : undefined,
       contextItems: [
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
-        { label: t('leftPanel.iconColor'), icon: 'palette', onClick: () => openIconColor({
+        { label: t('leftPanel.editSession'), icon: 'settings-3', onClick: () => useEntityEditStore.getState().openEntityEdit({
           kind: 'session',
           id: session.id,
           name: session.name || session.id,
@@ -590,68 +562,6 @@ function ProjectsTab() {
         </Dialog>
       )}
 
-      {editingProject && (
-        <Popover open={!!editingProject} onOpenChange={(open) => { if (!open) setEditingProject(null) }}>
-          <PopoverTrigger asChild>
-            <span className="absolute opacity-0 pointer-events-none" />
-          </PopoverTrigger>
-          <PopoverContent side="bottom" align="start" sideOffset={4} className="w-72 p-3 space-y-2">
-            <div>
-              <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('project.name')}</label>
-              <input
-                type="text"
-                value={editingProject.name || ''}
-                onChange={(e) => setEditingProject((prev: any) => ({ ...prev, name: e.target.value }))}
-                className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
-                autoFocus
-              />
-            </div>
-            <div>
-              <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('project.description')}</label>
-              <input
-                type="text"
-                value={editingProject.description || ''}
-                onChange={(e) => setEditingProject((prev: any) => ({ ...prev, description: e.target.value }))}
-                className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
-              />
-            </div>
-            <EntityIconPicker
-              icon={editingProject.icon}
-              color={editingProject.color}
-              onIconChange={(icon) => setEditingProject((prev: any) => ({ ...prev, icon }))}
-              onColorChange={(color) => setEditingProject((prev: any) => ({ ...prev, color }))}
-            />
-            <div className="flex gap-2">
-              <button onClick={handleProjectSave} className="flex-1 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 transition-colors">{t('project.save')}</button>
-              <button onClick={() => setEditingProject(null)} className="flex-1 rounded bg-interactive px-3 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors">{t('common.cancel')}</button>
-            </div>
-          </PopoverContent>
-        </Popover>
-      )}
-
-      {iconColorTarget && (
-        <Dialog open={!!iconColorTarget} onOpenChange={(open) => { if (!open) setIconColorTarget(null) }}>
-          <DialogContent className="max-w-sm p-4 gap-3" showCloseButton={true} data-testid="entity-icon-dialog">
-            <h3 className="text-sm font-semibold">{t('leftPanel.iconColor')}</h3>
-            <p className="truncate text-xs text-muted-foreground">{iconColorTarget.name}</p>
-            <EntityIconPicker
-              icon={iconDraft}
-              color={colorDraft}
-              onIconChange={(icon) => { setIconDraft(icon); void persistIconColor(icon, colorDraft) }}
-              onColorChange={(color) => { setColorDraft(color); void persistIconColor(iconDraft, color) }}
-            />
-            <div className="flex justify-end">
-              <button
-                onClick={() => setIconColorTarget(null)}
-                className="rounded bg-interactive px-3 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors"
-              >
-                {t('common.close')}
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-
       <GroupNode
         id="__none__"
         label={t('leftPanel.noProject')}
@@ -687,11 +597,12 @@ function ProjectsTab() {
             ? { label: t('hybrid.cloneProject'), icon: 'download' as const, onClick: () => setForkTarget(project) }
             : null
         const projectContextItems: any[] = [
-          { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => { setEditingProject({ ...project }) } },
-          { label: t('leftPanel.iconColor'), icon: 'palette' as const, onClick: () => openIconColor({
+          { label: t('leftPanel.rename'), icon: 'pencil-ai' as const, onClick: () => { setRenamingProjectId(project.id); setRenameValue(project.name) } },
+          { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => useEntityEditStore.getState().openEntityEdit({
             kind: 'project',
             id: project.id,
             name: project.name,
+            description: project.description ?? '',
             icon: project.icon ?? null,
             color: project.color ?? null,
           }) },
@@ -736,6 +647,11 @@ function ProjectsTab() {
             projectActions={projectActions}
             onDropSession={async (sessionId) => { await moveSession(sessionId, project.id) }}
             projectContextItems={projectContextItems}
+            isRenaming={renamingProjectId === project.id}
+            renameValue={renamingProjectId === project.id ? renameValue : ''}
+            onRenameChange={setRenameValue}
+            onRenameCommit={() => void commitProjectRename()}
+            onRenameCancel={cancelProjectRename}
             isTouch={isTouch}
             t={t}
           />
@@ -794,6 +710,7 @@ function GroupNode({
   projectId, onCreateSession, onDropSession,
   projectActions, projectContextItems, t,
   origin, offline, isTouch,
+  isRenaming, renameValue, onRenameChange, onRenameCommit, onRenameCancel,
 }: {
   id: string; label: string; icon: string; iconColor?: string
   isCollapsed: boolean; onToggle: () => void
@@ -807,6 +724,10 @@ function GroupNode({
   offline?: boolean
   isTouch?: boolean
   t: any
+  isRenaming?: boolean; renameValue?: string
+  onRenameChange?: (v: string) => void
+  onRenameCommit?: () => void
+  onRenameCancel?: () => void
 }) {
   const expandKey = projectId ? `project:${projectId}` : `group:__none__`
   const isExpanded = expandedGroups.has(expandKey)
@@ -847,6 +768,11 @@ function GroupNode({
     badge: <OriginBadge origin={origin} />,
     actions,
     contextItems: projectContextItems,
+    isRenaming,
+    renameValue,
+    onRenameChange,
+    onRenameCommit,
+    onRenameCancel,
     className: isOfflineNode ? 'opacity-60' : undefined,
     title: isOfflineNode ? t('hybrid.unavailableNode') : undefined,
   }

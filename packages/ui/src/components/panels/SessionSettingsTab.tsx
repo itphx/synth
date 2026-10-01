@@ -10,8 +10,8 @@ import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type AgentInfo, type EffectiveSkillEntry, type ToolsPolicy } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '../ui/Toggle'
-import { EntityIconTrigger } from '@/components/ui/EntityIconTrigger'
-import { DEFAULT_SESSION_ICON_COLOR } from '@/lib/entityIcon'
+import { DEFAULT_SESSION_ICON_COLOR, resolveIconName, resolveIconColor } from '@/lib/entityIcon'
+import { useEntityEditStore } from '@/stores/entityEditStore'
 import { ModelSelector } from '../chat/ModelSelector'
 import { ProjectInstructions } from './ProjectInstructions'
 import { ExpandableListRow, RowBadge } from './ExpandableListRow'
@@ -707,25 +707,6 @@ export function SessionSettingsTab() {
   }
 
   /** AD-071 §2.3: метка наследования — «Глобальная (<короткое имя>)», фоллбек — «Глобальная». */
-  /** AD-075: иконка/цвет сессии (немедленное сохранение через PATCH). */
-  const handleSessionIconChange = async (icon: string | null) => {
-    if (!sessionId) return
-    await run({
-      key: 'sessionIcon',
-      run: () => synthApi.updateSession(sessionId, { icon }),
-      onSuccess: (updated) => useSessionsStore.getState().upsertSession(updated),
-    })
-  }
-
-  const handleSessionColorChange = async (color: string | null) => {
-    if (!sessionId) return
-    await run({
-      key: 'sessionColor',
-      run: () => synthApi.updateSession(sessionId, { color }),
-      onSuccess: (updated) => useSessionsStore.getState().upsertSession(updated),
-    })
-  }
-
   const inheritLabel = (prefix: 'toolsPolicy' | 'mcpPolicy', value: ToolsPolicy | null) =>
     value
       ? t(`${prefix}.inherit`, { policy: t(`policy.short.${value}`) })
@@ -747,20 +728,26 @@ export function SessionSettingsTab() {
           <Field
             label={t('rightPanel.params.name')}
             valueNode={
-              <span className="inline-flex min-w-0 items-center justify-end gap-1.5 align-middle">
-                <EntityIconTrigger
-                  icon={session.icon}
-                  color={session.color}
-                  onIconChange={handleSessionIconChange}
-                  onColorChange={handleSessionColorChange}
-                  disabled={isPending('sessionIcon') || isPending('sessionColor')}
-                  fallbackIcon={session.session_origin === 'subagent' ? 'cpu' : 'chat-new'}
-                  defaultColor={DEFAULT_SESSION_ICON_COLOR}
-                  testId="session-icon-color-trigger"
-                  label={t('leftPanel.iconColor')}
+              <button
+                type="button"
+                data-testid="session-edit-trigger"
+                onClick={() => useEntityEditStore.getState().openEntityEdit({
+                  kind: 'session',
+                  id: session.id,
+                  name: session.name || session.id,
+                  icon: session.icon ?? null,
+                  color: session.color ?? null,
+                })}
+                title={t('leftPanel.editSession')}
+                className="inline-flex min-w-0 items-center justify-end gap-1.5 rounded-md px-1 py-0.5 align-middle transition-colors hover:bg-interactive-hover"
+              >
+                <Icon
+                  name={resolveIconName(session.icon) ?? (session.session_origin === 'subagent' ? 'cpu' : 'chat-new')}
+                  className="size-4 shrink-0"
+                  style={{ color: resolveIconColor(session.color) ?? DEFAULT_SESSION_ICON_COLOR }}
                 />
                 <span className="min-w-0 break-words">{session.name || t('rightPanel.params.none')}</span>
-              </span>
+              </button>
             }
           />
           <Field label="ID" value={session.id} mono />

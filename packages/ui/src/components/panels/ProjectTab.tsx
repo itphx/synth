@@ -10,7 +10,8 @@ import { formatDateTime } from '@/lib/formatDate'
 import { synthApi, type ProjectData, type ProjectMcpResponse, type ProjectSkillsResponse, type EffectiveSkillEntry } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Toggle } from '@/components/ui/Toggle'
-import { EntityIconTrigger } from '@/components/ui/EntityIconTrigger'
+import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
+import { useEntityEditStore } from '@/stores/entityEditStore'
 import { InfoField as Field, InfoSection as Section } from '@/components/ui/settings'
 import { DirectoryPickerDialog } from '@/components/ui/DirectoryPickerDialog'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -50,6 +51,13 @@ export function ProjectTab() {
 
   const projectId = session?.project_id ?? null
   const projects = useProjectsStore((s) => s.projects)
+  // Актуальная запись проекта из стора — единственный источник правды. Локальная
+  // копия ниже нужна для черновиков (workspace/invariants), но обязана следовать
+  // за стором: изменения извне вкладки (например, `EntityEditDialog`) приходят
+  // через `updateProjectInList` и без синхронизации здесь не отображались.
+  const storeProject = useProjectsStore((s) =>
+    projectId ? s.projects.find((p) => p.id === projectId) ?? null : null,
+  )
 
   const { run, isPending } = usePanelSettingSave({ sessionId: sessionId || undefined })
 
@@ -199,6 +207,16 @@ export function ProjectTab() {
       cancelled = true
     }
   }, [projectId, sessionId, notify, t])
+
+  // Синхронизация локальной копии со стором: изменения проекта извне вкладки
+  // (сохранение в `EntityEditDialog` → `updateProjectInList`) обновляют стор, но
+  // не локальный `project`. Сравниваем по ссылке: все локальные обработчики
+  // записывают в стор тот же объект, поэтому черновики (workspace/invariants) не
+  // затираются и лишних ререндеров нет.
+  useEffect(() => {
+    if (!storeProject) return
+    setProject((prev) => (prev === storeProject ? prev : storeProject))
+  }, [storeProject])
 
   if (!session) {
     return (
@@ -350,31 +368,15 @@ export function ProjectTab() {
     })
   }
 
-  const handleIconChange = async (icon: string | null) => {
+  const openProjectEdit = () => {
     if (!project) return
-    const prevIcon = project.icon
-    await run({
-      key: 'icon',
-      run: () => synthApi.updateProject(project.id, { icon }),
-      onSuccess: (updated) => {
-        setProject(updated)
-        useProjectsStore.getState().updateProjectInList(updated)
-      },
-      onError: () => setProject((p) => (p ? { ...p, icon: prevIcon } : p)),
-    })
-  }
-
-  const handleColorChange = async (color: string | null) => {
-    if (!project) return
-    const prevColor = project.color
-    await run({
-      key: 'color',
-      run: () => synthApi.updateProject(project.id, { color }),
-      onSuccess: (updated) => {
-        setProject(updated)
-        useProjectsStore.getState().updateProjectInList(updated)
-      },
-      onError: () => setProject((p) => (p ? { ...p, color: prevColor } : p)),
+    useEntityEditStore.getState().openEntityEdit({
+      kind: 'project',
+      id: project.id,
+      name: project.name,
+      description: project.description ?? '',
+      icon: project.icon ?? null,
+      color: project.color ?? null,
     })
   }
 
@@ -385,19 +387,21 @@ export function ProjectTab() {
           <Field
             label={t('projectTab.info.name')}
             valueNode={
-              <span className="inline-flex min-w-0 items-center justify-end gap-1.5 align-middle">
-                <EntityIconTrigger
-                  icon={project?.icon}
-                  color={project?.color}
-                  onIconChange={handleIconChange}
-                  onColorChange={handleColorChange}
-                  disabled={isPending('icon') || isPending('color')}
-                  fallbackIcon="folder-3"
-                  testId="project-icon-color-trigger"
-                  label={t('leftPanel.iconColor')}
+              <button
+                type="button"
+                data-testid="project-edit-trigger"
+                onClick={openProjectEdit}
+                disabled={!project}
+                title={t('leftPanel.editProject')}
+                className="inline-flex min-w-0 items-center justify-end gap-1.5 rounded-md px-1 py-0.5 text-left align-middle transition-colors hover:bg-interactive-hover disabled:cursor-default"
+              >
+                <Icon
+                  name={resolveIconName(project?.icon) ?? 'folder-3'}
+                  className="size-4 shrink-0"
+                  style={resolveIconColor(project?.color) ? { color: resolveIconColor(project?.color) } : undefined}
                 />
                 <span className="min-w-0 break-words">{project?.name || '—'}</span>
-              </span>
+              </button>
             }
           />
           <Field label={t('projectTab.info.id')} value={project?.id || '—'} mono />

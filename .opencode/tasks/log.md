@@ -1435,3 +1435,18 @@
 - **Раскатка:** Fleet `synth` синхронизирован на `6a886d6`, bundle Ready=True; `kubectl -n synth rollout status` обоих деплойментов — successfully rolled out; поды Running 1/1 на образах `0.8.6`.
 - **Внешняя проверка:** `GET /health` и `GET /api/v2/health` → `"version":"0.8.6"`; `GET /sw.js` → `synth-shell-0.8.6`; `index.html` → `cache-control: no-cache`. Браузером (Playwright) на реальном managed-логине: 2 поля — `#synth-login-username` (text, autocomplete=username, label «Логин») и `#synth-login-password` (password, autocomplete=current-password, label «Пароль»), форма `name=synth-login autocomplete=on`, password-only ветки и `#synth-login-apikey` нет.
 - **Оговорки:** живая проверка сохранения/автозаполнения KeePassXC — за пользователем; существующим клиентам баннер обновления может появиться один раз (миграция схемы регистрации SW + расхождение версий).
+
+## 2026-10-01 — fix(ui): унификация окна редактирования проекта/сессии (EntityEditDialog) — PASS
+
+- **Задача:** унифицировать редактирование имени/описания/иконки/цвета проекта и сессии в одно центральное модальное окно (дерево левой панели + вкладки правой панели); десктоп — шире (вся линейка цветов в один ряд), мобильный — как войдёт; убрать мелкие отдельные окна; сохранить инлайн-ренейм как быстрый путь (в т.ч. для проектов) и починить его на мобильном.
+- **Тип:** feature/refactor (ui) · **Исполнитель:** @fixer ×2 → верификация @orchestrator · **Результат:** PASS.
+- **Что сделано:**
+  - `stores/entityEditStore.ts` (новый) + `components/ui/EntityEditDialog.tsx` (новый): единое окно на примитивах AD-072 (`useSettingsDraft` + `SettingsActions`), секции «Основные» (имя; описание — только проект) и «Внешний вид» (общий `EntityIconPicker`), сохранение черновиком по кнопке, `sm:max-w-2xl`, мобильный — центрированная модалка со скроллом; один экземпляр в `App.tsx`.
+  - `LeftPanel.tsx`: удалены поповер `editingProject`, диалог «Иконка и цвет» (`iconColorTarget`/`persistIconColor`/`handleProjectSave`); пункты меню открывают `EntityEditDialog`; добавлен инлайн-ренейм проектов (пропсы через `GroupNode`).
+  - `ProjectTab.tsx` / `SessionSettingsTab.tsx`: `EntityIconTrigger` заменён кликабельными имя+иконка (открывают диалог). Компонент `EntityIconTrigger` и его тест удалены.
+  - **Мобильный баг ренейма — первопричина:** `ContextMenu` (Radix `Popover`, портал) — React-событие клика по пункту меню всплывало до `onClick` строки `TreeNode` → `openTab(...)` → `mobileLeftOpen: false` (дровер сворачивался; на десктопе побочно открывалась вкладка). Фикс: `e.stopPropagation()` в `contextMenu.tsx`. Воспроизведено и подтверждено Playwright (390×844).
+  - `ProjectTab`: синхронизация локальной копии `project` со стором (deфект: после сохранения из окна вкладка показывала старое имя) + регресс-тест.
+  - i18n: задействованы `leftPanel.editProject.title/general/appearance`; добавлены `leftPanel.editSession(.title)` (ru/en).
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors (только ранее существовавшие warning'и); `pnpm test` — shared 181 · core 2384 · ui 973 · backend 341 = **3879 PASS, 0 failed**. Браузер Playwright (desktop 1440×900): диалог открывается из меню дерева и с вкладки «Проект»; линейка цветов 9/9 в один ряд; Save → PUT 200 + тост «Настройки сохранены» + закрытие; Cancel → без запросов; имя на вкладке обновляется. Мобильный (390×844) — проверял @fixer: дровер не сворачивается, ренейм сессии/проекта работает.
+- **Остаточные риски/оговорки:** `packages/ui/AGENTS.md` содержит stale-упоминания `EntityIconTrigger` (строки 25, 65) — обновление требует согласования с пользователем. Коммит не делался.
+- **Коммит:** не делался (по инварианту «коммит — только по явной просьбе пользователя»).

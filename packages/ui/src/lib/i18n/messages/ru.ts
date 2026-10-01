@@ -415,6 +415,8 @@ export const dict = {
   'leftPanel.editProject.general': 'Основные',
   'leftPanel.editProject.appearance': 'Внешний вид',
   'leftPanel.editProject.repos': 'Репозитории',
+  'leftPanel.editSession': 'Редактировать сессию',
+  'leftPanel.editSession.title': 'Настройки сессии',
   'project.name': 'Название',
   'project.description': 'Описание',
   'project.save': 'Сохранить',

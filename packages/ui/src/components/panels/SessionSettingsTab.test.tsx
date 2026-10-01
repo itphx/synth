@@ -59,6 +59,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProvidersStore } from '@/stores/providersStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useEntityEditStore } from '@/stores/entityEditStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -194,6 +195,7 @@ beforeEach(() => {
     selectedProviderName: null,
     selectedModelName: null,
   })
+  useEntityEditStore.setState({ target: null })
 })
 
 afterEach(async () => {
@@ -734,58 +736,35 @@ describe('SessionSettingsTab — автосохранение настроек',
   })
 })
 
-describe('SessionSettingsTab — иконка в строке «Имя» (AD-075)', () => {
-  beforeEach(() => {
-    // Сохраняем settings сессии при PATCH icon/color (иначе рендер упадёт на
-    // «settings.permission» — мок возвращает только переданные поля).
-    mocks.updateSession.mockImplementation(async (_id: string, data: { settings?: Record<string, unknown>; icon?: string | null; color?: string | null }) => ({
-      id: 's1',
-      name: 'S',
-      project_id: null,
-      engine: 'synth',
-      settings: { model: 'm', ...(data.settings ?? {}) },
-      icon: data.icon ?? null,
-      color: data.color ?? null,
-    }))
-  })
-
-  it('триггер иконки встроен в строку «Имя» секции «Сессия», отдельной секции нет', async () => {
+describe('SessionSettingsTab — клик по имени/иконке открывает центральный диалог', () => {
+  it('триггер встроен в строку «Имя» секции «Сессия», отдельной секции пикера нет', async () => {
     const container = await renderTab()
     const section = findSection(container, 'Session')!
     const nameLabel = [...section.querySelectorAll('span')].find((s) => s.textContent === 'Name')
     expect(nameLabel, 'поле Name').toBeTruthy()
     expect(
-      nameLabel!.parentElement!.querySelector('[data-testid="session-icon-color-trigger"]'),
-      'триггер иконки в строке «Имя»',
+      nameLabel!.parentElement!.querySelector('[data-testid="session-edit-trigger"]'),
+      'триггер редактирования в строке «Имя»',
     ).not.toBeNull()
     expect(findSection(container, 'Icon & color'), 'отдельная секция «Иконка и цвет»').toBeUndefined()
   })
 
-  it('клик по ключу иконки сохраняет канонический ключ через updateSession', async () => {
+  it('клик открывает EntityEditDialog с данными сессии', async () => {
     const container = await renderTab()
-    expect(container.querySelector('[data-testid="session-icon-color-trigger"]')).not.toBeNull()
+    const trigger = container.querySelector('[data-testid="session-edit-trigger"]') as HTMLButtonElement
+    expect(trigger).toBeTruthy()
+    await act(async () => { trigger.click() })
 
-    const iconBtn = container.querySelector('[data-testid="entity-icon-rocket"]') as HTMLButtonElement
-    expect(iconBtn).toBeTruthy()
-    await act(async () => { iconBtn.click() })
-
-    expect(mocks.updateSession).toHaveBeenCalledWith('s1', { icon: 'rocket' })
-  })
-
-  it('выбор и сброс цвета уходят ключом и null', async () => {
-    const container = await renderTab()
-    const colorBtn = container.querySelector('[data-testid="entity-color-primary"]') as HTMLButtonElement
-    await act(async () => { colorBtn.click() })
-    expect(mocks.updateSession).toHaveBeenCalledWith('s1', { color: 'primary' })
-
-    const none = container.querySelector('[data-testid="entity-color-none"]') as HTMLButtonElement
-    await act(async () => { none.click() })
-    expect(mocks.updateSession).toHaveBeenLastCalledWith('s1', { color: null })
+    expect(useEntityEditStore.getState().target).toMatchObject({
+      kind: 'session',
+      id: 's1',
+      name: 'S',
+    })
   })
 
   it('при пустом session.color иконка рендерится акцентом --primary', async () => {
     const container = await renderTab()
-    const svg = container.querySelector('[data-testid="session-icon-color-trigger"] svg') as SVGElement
+    const svg = container.querySelector('[data-testid="session-edit-trigger"] svg') as SVGElement
     expect(svg).not.toBeNull()
     expect(svg.style.color).toBe('var(--primary)')
   })
@@ -804,7 +783,7 @@ describe('SessionSettingsTab — иконка в строке «Имя» (AD-075
       ],
     } as never)
     const container = await renderTab()
-    const svg = container.querySelector('[data-testid="session-icon-color-trigger"] svg') as SVGElement
+    const svg = container.querySelector('[data-testid="session-edit-trigger"] svg') as SVGElement
     expect(svg.style.color).toBe('var(--status-success)')
   })
 })

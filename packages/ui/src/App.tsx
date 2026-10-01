@@ -21,6 +21,7 @@ import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { SettingsModal } from './components/settings/SettingsModal'
 import { LogsModal } from './components/logviewer/LogsModal'
 import { ConfirmDialog } from './components/ui/confirm-dialog'
+import { EntityEditDialog } from './components/ui/EntityEditDialog'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import {
@@ -224,6 +225,7 @@ function App() {
 
         <SettingsModal />
         <LogsModal />
+        <EntityEditDialog />
         <ConfirmDialog
           open={confirmOpen}
           onOpenChange={(open) => { if (!open) closeConfirm(false) }}

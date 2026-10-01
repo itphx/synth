@@ -22,7 +22,7 @@
 | `components/chat/` | Чат: сообщения, стриминг, файловые вкладки, tool-рендер, саб-агенты |
 | `components/settings/` + `components/admin/` | Настройки и админ-панели (провайдеры, модели, безопасность, routing) |
 | `components/auth/` | `AuthGate`, логин (в т.ч. гибридный) |
-| `components/ui/` | Примитивы: dialog, popover, select, tooltip, toggle, `SynthLogo`, `EntityIconPicker` (пикер иконки/цвета сущностей), `EntityIconTrigger` (иконка + пикер в поповере) |
+| `components/ui/` | Примитивы: dialog, popover, select, tooltip, toggle, `SynthLogo`, `EntityIconPicker` (пикер иконки/цвета сущностей), `EntityEditDialog` (единое центральное окно редактирования проекта/сессии) |
 | `components/icon/` | `Icon` + реестр `icons.ts` — единственная точка иконок |
 | `components/{tree,projects,logviewer}/` | Деревья, проекты, просмотр логов |
 | `stores/` | Zustand-сторы (см. «Соглашения») |
@@ -62,7 +62,7 @@
 - Иконки — только `<Icon name="..." />` из `components/icon/Icon.tsx` (реестр `icons.ts`). Не тащить svg/`@remixicon` напрямую (единственное исключение — `SynthLogo.tsx`); неизвестное имя не в `iconMap` → `Icon` вернёт `null`.
 - Иконки/подписи инструментов — `lib/toolIcons.ts` (`getToolIcon`, `getToolDisplayName`); новый тул добавлять в `TOOL_ICON_MAP`, а не маппинг inline в компоненте.
 - Иконка/цвет проекта и сессии — только через `lib/entityIcon.ts` (`resolveIconName`/`resolveIconColor`) и общий пикер `components/ui/EntityIconPicker.tsx` (ключи реестра + палитра CSS-переменных, без загружаемых картинок). Реестры ключей и маппинги — `lib/projectMeta.ts` из shared (`PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS`); в UI их не дублировать.
-- Пикер вызывается в поповере редактирования проекта (левая панель), диалоге из контекстного меню дерева (проект/сессия) и по клику на иконку в строке «Имя» верхней секции панелей «Сессия» (`SessionSettingsTab`) и «Проект» (`ProjectTab`) через `components/ui/EntityIconTrigger.tsx` (иконка + `Popover` с пикером) с немедленным сохранением (`usePanelSettingSave`, откат при ошибке). Иконка выводится инлайн (`<Icon>`): дерево, табы, шапка, панели.
+- Пикер используется внутри `components/ui/EntityEditDialog.tsx` — единого центрального окна редактирования проекта/сессии (имя; у проекта — ещё описание; иконка + цвет). Открывается из контекстного меню дерева (проект/сессия) и по клику на имя/иконку во вкладках «Сессия» (`SessionSettingsTab`) и «Проект» (`ProjectTab`); один экземпляр монтируется в `App.tsx` через `stores/entityEditStore`. Сохранение — черновик + кнопка Save (`useSettingsDraft` + `SettingsActions`); «Отмена» всегда активна и закрывает окно без сохранения. Отдельные поповеры/диалоги иконки/цвета и компонент `EntityIconTrigger` удалены. Инлайн-переименование в дереве — по-прежнему быстрый путь и доступно как для сессий, так и для проектов (мобильный фикс: `stopPropagation` на пунктах в `components/ui/contextMenu.tsx`). Иконка выводится инлайн (`<Icon>`): дерево, табы, шапка, панели.
 - Резолвер — единственная точка перевода серверного значения (или legacy-алиаса) в имя реестра `Icon`/CSS-переменную; неизвестное даёт `undefined` (компонент подставляет фоллбек). У закрытых сессий (нет таба и не активны) иконка серая (`text-muted-foreground`), у открытых — цвет сессии (без цвета — `text-primary`); у проектов иконка всегда цветная. Дефолтный цвет иконки сессии — `--primary` (акцент открытой сессии; `resolveSessionIconColor`/`DEFAULT_SESSION_ICON_COLOR`), в панели «Сессия» и табе сессии — тоже `--primary`, у проекта дефолт остаётся нейтральным.
 
 ### Чат: упоминания агентов
