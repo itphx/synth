@@ -1424,3 +1424,14 @@
 - **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2384 · ui 975 · backend 341 = **3881 PASS, 0 failed**; `pnpm --filter @itphx/synth-ui build` OK, `dist/sw.js` → `synth-shell-0.8.5` (плейсхолдер `__SYNTH_VERSION__` — 0 вхождений).
 - **Остаточные риски/оговорки:** health-проверка и SW-регистрация активны только в PROD; при миграции схемы регистрации (`?v=` → `/sw.js`) возможен однократный повторный баннер; сравнение версий — по любому расхождению (при кратковременном рассинхроне UI/backend в managed возможен ложный баннер); живая проверка KeePassXC — за пользователем (unit/typecheck/lint зелёные).
 - **Коммит:** не делался (по инварианту «коммит — только по явной просьбе пользователя»).
+
+## 2026-10-01 — deploy(test): K3s 0.8.6 (login/KeePassXC + проверка обновлений) — PASS
+
+- **Задача:** задеплоить реализованные правки на test-инстанс (managed, `https://synth.k3s.itphx.loc`).
+- **Тип:** infra/deploy · **Исполнитель:** @orchestrator · **Результат:** PASS.
+- **Коммиты (synth):** `ba09259` fix(ui): поля логина в managed + надёжная проверка обновлений; `04fe47f` chore: bump version to v0.8.6. Не пушились (только локально, push/tag не запрашивались).
+- **Коммит (synth-deploy):** `6a886d6` release: bump synth-ui/backend images to v0.8.6 (запушен в `origin/main` → Fleet).
+- **Образы:** собраны из исходников монорепо `docker/Dockerfile.backend` и `Dockerfile.ui`, запушены в `git.itphx.ru/itphx/synth-{backend,ui}:0.8.6`; в образе UI проверено: `sw.js` → `synth-shell-0.8.6`, в бандле есть `#synth-login-username` и `pwa.updateAvailable`.
+- **Раскатка:** Fleet `synth` синхронизирован на `6a886d6`, bundle Ready=True; `kubectl -n synth rollout status` обоих деплойментов — successfully rolled out; поды Running 1/1 на образах `0.8.6`.
+- **Внешняя проверка:** `GET /health` и `GET /api/v2/health` → `"version":"0.8.6"`; `GET /sw.js` → `synth-shell-0.8.6`; `index.html` → `cache-control: no-cache`. Браузером (Playwright) на реальном managed-логине: 2 поля — `#synth-login-username` (text, autocomplete=username, label «Логин») и `#synth-login-password` (password, autocomplete=current-password, label «Пароль»), форма `name=synth-login autocomplete=on`, password-only ветки и `#synth-login-apikey` нет.
+- **Оговорки:** живая проверка сохранения/автозаполнения KeePassXC — за пользователем; существующим клиентам баннер обновления может появиться один раз (миграция схемы регистрации SW + расхождение версий).
