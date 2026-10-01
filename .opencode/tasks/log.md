@@ -1354,3 +1354,15 @@
 - **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2373 · ui 932 · backend 341 = **3827 PASS, 0 failed**. Новые тесты: core `fs-change.test.ts` (op), ui `filesStore.test.ts` (точная инвалидация/удаление), `transportStore.fs-change.test.ts` (op), `FileEditorTab.test.tsx`.
 - **Детект удаления по факту:** закрыто ограничение для «широких» тулов. `FileEditorTab` при `readFile` с `status:404`/`code:'NOT_FOUND'` помечает файл удалённым (`filesStore.markDeletedFile`) и рендерит `file.deletedOnDisk`; прочие ошибки (500 и т.п.) — прежний экран ошибки. Тесты `FileEditorTab.test.tsx` (+кейсы 404/500) и `filesStore.test.ts` (`markDeletedFile` идемпотентен). Верификация: typecheck/lint 0 errors; `pnpm test` shared 181 · core 2373 · ui 939 · backend 341 PASS. Коммит `83ced20` + ниже.
 - **Дополнение:** убрана шероховатость — при пометке «удалён» и неудачном «Перечитать» (файла всё ещё нет) `FileEditorTab` не затирает состояние удаления ошибкой (`file.deletedOnDisk`); тесты в `FileEditorTab.test.tsx` (4). Верификация: typecheck/lint 0 errors; `pnpm test` shared 181 · core 2373 · ui 934 · backend 341 PASS. Коммит `91d1ad4` + ниже.
+
+## 2026-10-01 08:30 — Релиз 0.8.5 + деплой на test — PASS
+
+- **Задача:** «закоммить, задеплой на тест» (ветка `feat/ad-069-residuals`, HEAD `60988b4`).
+- **Тип:** release + deploy · **Исполнитель:** @devops (скиллы `synth-release`/`synth-build-publish`/`synth-k3s-deploy`) · **Результат:** PASS.
+- **Решения пользователя (политика выката):** ветку `synth` в origin не пушить; тег `v0.8.5` и npm-публикацию не создавать.
+- **Bump:** `./scripts/version-bump.sh 0.8.5` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml` (0.8.4 → 0.8.5); коммит `ce81541` `chore: bump version to v0.8.5` — локально, не запушен.
+- **Проверки:** `pnpm install --frozen-lockfile` OK; shared/core build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors (175 предсуществующих warning). Полный `pnpm test` не гонялся (изменение только метаданных; ветка верифицирована на 60988b4: shared 181 · core 2373 · ui 939 · backend 341).
+- **Docker:** собраны из исходников (Dockerfile.backend/ui) и запушены в `git.itphx.ru`: `synth-backend:0.8.5` (268 MB, digest `sha256:40ad3499efbd…`), `synth-ui:0.8.5` (116 MB, digest `sha256:c007bbba5c00…`); версия внутри (`SYNTH_VERSION = '0.8.5'`) проверена. Логи — `tmp/docker-build-{backend,ui}-0.8.5.log`.
+- **`synth-deploy` (main):** `values.yaml` tags → 0.8.5, `helm lint`/`template` OK (render 0.8.5), коммит `4ed0560` запушен (`8cd1114..4ed0560`) → Fleet bundle `synth` **1/1**.
+- **Верификация:** `GET /api/v2/health` → `{"status":"healthy","version":"0.8.5"}`; UI `/` → HTTP 200 (asset `index-BU7nsL7u.js` совпал с образом); deploy `:0.8.5` ready=1/1; поды backend/ui `1/1 Running`, RESTARTS 0.
+- **Осталось/риски:** ветка `synth` не запушена (по решению пользователя); тег `v0.8.5`, npm-публикация, preprod/prod — не трогались.
