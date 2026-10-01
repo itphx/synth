@@ -6,22 +6,25 @@ vi.mock('@/lib/i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
 }))
 
-vi.mock('@/stores/authStore', () => {
-  const state = {
-    login: vi.fn(),
-    loginWithPassword: vi.fn(),
-    isLoading: false,
-    error: null,
-    clearError: vi.fn(),
-  }
-  return {
-    useAuthStore: (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state),
-  }
-})
+/** Мутабельное состояние authStore: компонент читает возможности сервера (oidc/debug/deployment) из стора. */
+const authState = vi.hoisted(() => ({
+  login: vi.fn(),
+  loginWithPassword: vi.fn(),
+  isLoading: false,
+  error: null as string | null,
+  clearError: vi.fn(),
+  oidcEnabled: false,
+  debugMode: false,
+  deployment: null as 'standalone' | 'managed' | null,
+}))
+
+vi.mock('@/stores/authStore', () => ({
+  useAuthStore: (selector?: (s: typeof authState) => unknown) =>
+    selector ? selector(authState) : authState,
+}))
 
 vi.mock('@/lib/api/client', () => ({
   api: {
-    getStatus: vi.fn(),
     getUsers: vi.fn(),
   },
 }))
@@ -33,6 +36,7 @@ vi.mock('@/lib/api/synthApi', () => ({
 }))
 
 import { api } from '@/lib/api/client'
+import { synthApi } from '@/lib/api/synthApi'
 import { LoginForm } from './LoginForm'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -47,7 +51,8 @@ async function renderLoginForm(): Promise<HTMLElement> {
   await act(async () => {
     root.render(<LoginForm />)
   })
-  // эффект checkStatus() асинхронный — даём микротаскам завершиться
+  // эффекты (debug-users / hybrid) асинхронные — даём микротаскам завершиться
+  await act(async () => {})
   await act(async () => {})
   return host
 }
@@ -66,6 +71,13 @@ function getLabel(host: HTMLElement, id: string): HTMLLabelElement {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Дефолт: возможности сервера пусты, LoginForm рендерится в API-key ветке.
+  authState.oidcEnabled = false
+  authState.debugMode = false
+  authState.deployment = null
+  authState.error = null
+  authState.isLoading = false
+  vi.mocked(api.getUsers).mockResolvedValue({ users: [] })
 })
 
 afterEach(async () => {
@@ -81,13 +93,8 @@ afterEach(async () => {
 
 describe('LoginForm: атрибуты полей для автозаполнения', () => {
   it('OIDC-режим: username/password размечены id/name/autocomplete и связаны с label', async () => {
-    vi.mocked(api.getStatus).mockResolvedValue({
-      oidc_enabled: true,
-      debug_mode: false,
-      authenticated: false,
-      user: null,
-      deployment: 'managed',
-    })
+    authState.oidcEnabled = true
+    authState.deployment = 'managed'
 
     const host = await renderLoginForm()
 
@@ -113,16 +120,30 @@ describe('LoginForm: атрибуты полей для автозаполнен
     expect(password.getAttribute('autocomplete')).toBe('current-password')
     expect(password.getAttribute('id')).toBe('synth-login-password')
     expect(getLabel(host, 'synth-login-password').htmlFor).toBe(password.id)
+
+    // Managed-сервер: /hybrid/status не запрашиваем (эндпоинта нет → без 404-шума).
+    expect(synthApi.getHybridStatus).not.toHaveBeenCalled()
+  })
+
+  it('managed + oidcEnabled: с первого кадра есть И логин, И пароль (нет password-only формы)', async () => {
+    authState.oidcEnabled = true
+    authState.deployment = 'managed'
+
+    const host = await renderLoginForm()
+
+    // Оба поля присутствуют сразу — менеджер паролей не увидит промежуточную форму
+    // с одиноким полем пароля и не перепутает слоты логина/пароля.
+    const username = getInput(host, '#synth-login-username')
+    const password = getInput(host, '#synth-login-password')
+    expect(username.getAttribute('type')).toBe('text')
+    expect(username.getAttribute('autocomplete')).toBe('username')
+    expect(password.getAttribute('type')).toBe('password')
+    expect(host.querySelector('#synth-login-apikey')).toBeNull()
   })
 
   it('режим API-ключа: поле не выглядит как пароль учётной записи', async () => {
-    vi.mocked(api.getStatus).mockResolvedValue({
-      oidc_enabled: false,
-      debug_mode: false,
-      authenticated: false,
-      user: null,
-      deployment: 'managed',
-    })
+    authState.oidcEnabled = false
+    authState.deployment = 'managed'
 
     const host = await renderLoginForm()
 
@@ -135,16 +156,15 @@ describe('LoginForm: атрибуты полей для автозаполнен
     // name не подсказывает браузеру, что это логин/пароль учётной записи
     const name = apiKey.getAttribute('name') ?? ''
     expect(name).not.toMatch(/username|password/i)
+
+    // В API-key ветке поля логина учётной записи нет
+    expect(host.querySelector('#synth-login-username')).toBeNull()
   })
 
   it('debug-режим: select выбора пользователя размечен id/name и связан с label', async () => {
-    vi.mocked(api.getStatus).mockResolvedValue({
-      oidc_enabled: false,
-      debug_mode: true,
-      authenticated: false,
-      user: null,
-      deployment: 'managed',
-    })
+    authState.oidcEnabled = false
+    authState.debugMode = true
+    authState.deployment = 'managed'
     vi.mocked(api.getUsers).mockResolvedValue({
       users: [{ id: 'u1', username: 'admin' }],
     })

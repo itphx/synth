@@ -54,6 +54,7 @@ import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useUIStore } from '@/stores/useUIStore'
+import { useEntityEditStore } from '@/stores/entityEditStore'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -118,6 +119,7 @@ beforeEach(() => {
   } as never)
   useProjectsStore.setState({ projects: [PROJECT] as never })
   useAuthStore.setState({ user: { id: 'u1', username: 'owner', roles: [] }, deployment: null } as never)
+  useEntityEditStore.setState({ target: null })
 })
 
 afterEach(async () => {
@@ -335,19 +337,19 @@ describe('ProjectTab — порядок секций', () => {
   })
 })
 
-describe('ProjectTab — иконка в строке «Имя» (AD-075)', () => {
+describe('ProjectTab — клик по имени/иконке открывает центральный диалог', () => {
   const findFieldRow = (container: HTMLElement, label: string): HTMLElement | undefined => {
     const labelSpan = [...container.querySelectorAll('span')].find((s) => s.textContent === label)
     return labelSpan?.parentElement as HTMLElement | undefined
   }
 
-  it('триггер иконки встроен в строку «Имя» верхней секции, отдельной секции нет', async () => {
+  it('триггер встроен в строку «Имя» верхней секции, отдельной секции пикера нет', async () => {
     const container = await renderTab()
     const nameRow = findFieldRow(container, 'Name')
     expect(nameRow, 'строка «Имя»').toBeTruthy()
     expect(
-      nameRow!.querySelector('[data-testid="project-icon-color-trigger"]'),
-      'триггер иконки в строке «Имя»',
+      nameRow!.querySelector('[data-testid="project-edit-trigger"]'),
+      'триггер редактирования в строке «Имя»',
     ).not.toBeNull()
 
     const iconColorSection = [...container.querySelectorAll('div')].find(
@@ -356,22 +358,36 @@ describe('ProjectTab — иконка в строке «Имя» (AD-075)', () =
     expect(iconColorSection, 'отдельная секция «Иконка и цвет»').toBeUndefined()
   })
 
-  it('клик по ключу иконки сохраняет канонический ключ через updateProject', async () => {
+  it('клик открывает EntityEditDialog с данными проекта и не дёргает API напрямую', async () => {
     const container = await renderTab()
-    expect(container.querySelector('[data-testid="project-icon-color-trigger"]')).not.toBeNull()
+    const trigger = container.querySelector('[data-testid="project-edit-trigger"]') as HTMLButtonElement
+    expect(trigger).toBeTruthy()
+    await act(async () => { trigger.click() })
 
-    const iconBtn = container.querySelector('[data-testid="entity-icon-rocket"]') as HTMLButtonElement
-    expect(iconBtn).toBeTruthy()
-    await act(async () => { iconBtn.click() })
-
-    expect(mocks.updateProject).toHaveBeenCalledWith('p1', { icon: 'rocket' })
+    expect(useEntityEditStore.getState().target).toMatchObject({
+      kind: 'project',
+      id: 'p1',
+      name: 'P',
+    })
+    expect(mocks.updateProject).not.toHaveBeenCalled()
   })
 
-  it('сброс цвета отправляет null', async () => {
+  // Регресс: сохранение в EntityEditDialog обновляет стор (`updateProjectInList`),
+  // но локальная копия ProjectTab раньше оставалась старой — вкладка показывала
+  // прежнее имя.
+  it('обновление проекта в сторе обновляет имя на вкладке', async () => {
     const container = await renderTab()
-    const none = container.querySelector('[data-testid="entity-color-none"]') as HTMLButtonElement
-    expect(none).toBeTruthy()
-    await act(async () => { none.click() })
-    expect(mocks.updateProject).toHaveBeenCalledWith('p1', { color: null })
+    expect(container.querySelector('[data-testid="project-edit-trigger"]')!.textContent).toContain('P')
+
+    await act(async () => {
+      useProjectsStore.getState().updateProjectInList({
+        ...PROJECT,
+        name: 'Renamed project',
+        updated_at: '2026-01-02T00:00:00.000Z',
+      })
+    })
+    await act(async () => {})
+
+    expect(container.querySelector('[data-testid="project-edit-trigger"]')!.textContent).toContain('Renamed project')
   })
 })

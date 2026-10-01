@@ -1283,3 +1283,183 @@
 - **`synth-deploy` (main):** `values.yaml` tags → 0.8.2, `helm lint`/`template` OK, коммит `5fc988a` запушен (`9c37c89..5fc988a`) → Fleet раскатал.
 - **Верификация (@orchestrator, независимо):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.2"}`; UI `/` → 200; deploy-образы `:0.8.2`; поды backend/ui `1/1 Running`, RESTARTS 0.
 - **Осталось:** ветка `synth` не запушена (по решению пользователя); тег `v0.8.2`, npm-публикация и preprod/prod — не трогались.
+
+## 2026-10-01 06:50 — AD-069 остатки R1–R5 + выкат 0.8.4 на test — PASS
+
+- **Задача:** закрыть остатки AD-069 (проектные инструкции AGENTS.md): trust-гейт lazy, авто-trust, CLI-флаги отключения, документация, кэш/инвалидация; затем выкатить на test.
+- **Тип:** feature/security/perf/docs + deploy · **Исполнитель:** @fixer ×2 + @devops → верификация @orchestrator · **Результат:** PASS.
+- **Решения пользователя:** R3 — авто-trust workspace внутри `workspacesRoot`; R5 — делать A+B (кэш по mtime-подписи + per-turn мемо) с обобщением `SkillWatcher`; версия выката — 0.8.4 (patch).
+- **R1 `a87d23b` (security):** lazy-догрузка не проверяла project-trust. Единый `resolveInstructionsTrusted(workspace, {trustedProjectDirs, workspacesRoot, home})` (`engine/context/instructions.ts`), общий для system-chain и lazy; `LazyInstructionsLoader` получил trust, статус `untrusted`; `isProjectTrusted`/скиллы AD-046 не тронуты.
+- **R3 `a87d23b`:** trust для инструкций = `isProjectTrusted(...)` ИЛИ containment в `workspacesRoot`; применён в резолвере, lazy и роутах прозрачности (`core/server/app.ts`, `backend/app.ts`); оркестратор прокидывает `this._workspacesRoot`.
+- **R2 `0f53606`:** `--ignore-rules`/`--safe-mode` у `serve`/`chat` в обоих CLI (`packages/core/src/main.ts`, `packages/synth/src/cli.ts`) + env `SYNTH_IGNORE_RULES` (`resolveIgnoreRules` в `shared/config/resolve.ts`); эффективный `instructions.enabled=false` без мутации конфига. Заодно публичный CLI `synth` теперь передаёт `instructionsConfig` (ранее — нет).
+- **R4 `00c0926` (docs):** `docs/CONFIGURATION.md`; AD-069 — шапка/§9.2/§11/§13.
+- **R5 `0b30d85` (perf):** новый `engine/file-signature.ts` (`filesSignature`/`dirsSignature`, `id:floor(mtimeMs):size`, missing `!`, впрыскиваемый `stat`), `SkillWatcher` → тонкая обёртка; результатный кэш `ProjectInstructionsResolver` по подписи кандидатов (chain + `sources` + URL TTL-слот), `clear()`, FIFO ≤64; per-turn мемо в оркестраторе (`turnId=streamId`, ≤256). Кэшируются и пустые/`untrusted` результаты. Docs `c48690d` (AD-069 §3.5/§13, CONFIGURATION.md).
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2338 · ui 910 · backend 341 = **3770 PASS, 0 failed**.
+- **Коммиты (ветка `feat/ad-069-residuals`, локально, НЕ запушена):** `a87d23b` R1/R3 · `0f53606` R2 · `00c0926` R4 · `0b30d85` R5 · `c48690d` docs · `a3abf31` bump 0.8.4.
+- **Выкат 0.8.4:** образы из исходников → Gitea: `synth-backend:0.8.4` (268 MB, digest `d3cca3bc…`), `synth-ui:0.8.4` (116 MB, digest `5bf705f8…`); `synth-deploy/main` `8cd1114` запушен → Fleet bundle `synth` **1/1**.
+- **Верификация выката (@orchestrator, независимо):** `GET /api/v2/health` → `{"status":"healthy","version":"0.8.4"}`; UI `/` → HTTP 200; deploy `:0.8.4` ready=1/1; поды backend/ui `1/1 Running`, RESTARTS 0. Тег/npm/preprod не трогались.
+- **Осталось/риски:** mtime-гранулярность (перезапись в ту же мс/размер не инвалидирует); URL TTL-слот может вызвать пересчёт на слот раньше; `stream_id='unknown'` fallback; публичный CLI не передаёт `skillsConfig` (внешние `skills.trustedProjectDirs` там не работают — только авто-trust); AD-068 (реестр/каталог) вне объёма; ветка не смержена.
+
+## 2026-10-01 07:31 — fix(core): file/shell/git-тулы доступны только внутри workspace проекта — PASS
+
+- **Задача:** относительные пути file/shell/git-тулов должны резолвиться только внутри рабочего каталога ПРОЕКТА; если проекта/`project.workspace` нет — инструменты блокировать; при задании каталога агентом прямо в ходе — разблокировать без прерывания хода.
+- **Тип:** bug fix (core/permission) · **Исполнитель:** @fixer ×2 → верификация @orchestrator · **Результат:** PASS.
+- **Корень:** `_resolveWorkingDir` (`orchestrator.ts:1690`) откатывался на `_defaultWorkingDir` при отсутствии проекта/workspace; permission-слой не знал причины `workspace`; `workingDir`/`tools` в `_processMessage` были `const` и не пересчитывались после `project_workspace_set`/`project_create`/`project_attach` мид-ходом.
+- **Сделано:** новый `ToolUnavailableReason 'workspace'` + `workspaceReady` в `computeToolAvailability`/`PermissionCheckInput` + `isWorkspaceDependentTool` (FILE_READ/WRITE/SHELL/SEARCH/GIT_READ/WRITE); deny `workspace.unavailable` (`messageId tool-unavailable-workspace`, промпты security en/ru); `_resolveProjectWorkspace` (null без проекта/workspace) отделён от `_resolveWorkingDir`; проброс `workspaceReady` в check/`_collectUnavailableTools`/`_availabilityPredicate`/`getPromptInfo`/саб-агентов (`task`/`task-resume`); мид-ход: после успешного project_create/attach/workspace_set — refresh локальной сессии (projectId/planApproved), пересчёт `workingDir`/`workspaceReady` и пересборка `tools`; i18n `permission.workspace_unavailable` (core/shared/ui), `UnavailableTool.reason:'workspace'` + подсказка, MODE_POLICY.
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors (175 warnings предсуществующих); `pnpm test` — shared 181 · core 2355 · ui 910 · backend 341 = **3787 PASS, 0 failed**. Новый `orchestrator-workspace.test.ts` покрывает сценарий из ТЗ (без проекта → deny; project_create с workspace в том же ходе → write_file проходит и файл в workspace; проект без workspace → project_workspace_set → файл создан).
+- **Остаточные ограничения:** `buildSubagentUnavailableToolsSection` не добавляет причину `workspace` в промпт саб-агента (enforce в permission-слое есть); мид-ходовая пересборка не трогает system prompt (как `plan_enter`/`plan_exit`); `security.tool_unavailable_workspace` — виртуальный ключ (UI показывает `content`).
+- **Коммит:** не делался (по инварианту «коммит — только по явной просьбе пользователя»).
+- **Документация:** не обновлялась — требуется согласование правок `AGENTS.md` (инвариант 15).
+
+## 2026-10-01 07:57 — feat(core+ui): FS-событие fs.changed и refresh файлов проекта в UI — PASS
+
+- **Задача:** после file/shell/git-тулов агента UI не обновлял Files-панель, открытые редакторы и Git-вкладку; плюс смена workspace не отражалась в дереве.
+- **Тип:** feature (core/shared/ui) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Решения пользователя:** вариант A (отдельное WS-событие `fs.changed` из core + debounce-refresh UI); обновлять всё — дерево, открытые редакторы, Git-статус, смену workspace.
+- **Сделано:**
+  - `shared/types`: `EventType` + `'fs.changed'` (мост `RemoteEventBridge` форвардит любые типы; core-bus/WS/SSE не трогались).
+  - `core/engine/fs-change.ts` (новый): `resolveFsChange(tool, metadata, workingDir)` — file-тулы внутри workspace → `scope:'file'` + POSIX-относительный путь; shell/git-write/`project_repo_*`/`project_create|attach`/`task` → `scope:'all'`; `project_workspace_set` → `all` + `workspaceChanged`; read-only → `null`.
+  - `core/orchestrator.ts`: `_publishFsChange` (после успешного тула в основном цикле — после мид-ходового refresh workspace, и после inline-shell). Payload: `session_id`, `project_id`, `scope`, опц. `paths`/`workspace_changed`, `tool`.
+  - `ui/filesStore.ts`: `revisionByProject` (неперсистируемый), `refreshProject` (перечитывает корень + загруженные каталоги, инкрементит ревизию), `scheduleRefresh` (debounce 400 мс, коалесинг по проекту).
+  - `ui/transportStore.ts`: ветка `fs.changed` → `scheduleRefresh` + debounce Git-refresh; `project.updated` теперь ещё и `refreshProject` (смена workspace).
+  - `ui/FileEditorTab.tsx`: подписка на ревизию проекта — чистый файл молча перечитывается, грязный → баннер `file.changedOnDisk` + кнопка `file.reload` без затирания ввода; i18n ru/en.
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors (175 warning предсуществующих); `pnpm test` — shared 181 · core 2365 · ui 918 · backend 341 = **3805 PASS, 0 failed**. Новые тесты: core `fs-change.test.ts` + `orchestrator-fs-change.test.ts`; ui `filesStore.test.ts` + `transportStore.fs-change.test.ts`.
+- **Остаточные ограничения:** `scope:'file'`/`paths` — пока сигнал (перечитывается весь загруженный набор каталогов проекта, ревизия проектная — редакторы проекта инвалидируются все); при удалении файла открытый редактор уходит в error (как и раньше); `session.moved` (project_create/attach) UI не обрабатывает — обновление проекта в UI после привязки сессии агентом остаётся прежним; Git-refresh зависит от уже загруженного `projectsStore`.
+- **Коммит:** `c5c6e5a` (одним коммитом, т.к. `orchestrator.ts` содержит обе фичи).
+
+## 2026-10-01 08:20 — fix(core+ui): остатки workspace-гейта и fs.changed + docs — PASS
+
+- **Задача:** закрыть остаточные ограничения предыдущих двух задач: (1.1) подсказка `workspace` саб-агенту, (1.4) шумный блок недоступных тулов, `session.moved` в UI, документация.
+- **Тип:** fix (core/ui/docs) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Сделано:**
+  - `task.ts`/`task-resume.ts`: `buildSubagentUnavailableToolsSection` получил `opts.workspaceReady`/`capabilitiesOf`; без workspace саб-агент получает `[НЕДОСТУПНЫЕ ТУЛЫ]` с причиной `workspace` (через `isWorkspaceDependentTool`), дедуп с `dependency` (dependency приоритетнее).
+  - `context/state-messages.ts`: все записи `reason:'workspace'` схлопываются в одну строку (file/shell/git-инструменты — не задан рабочий каталог); прочие причины — как раньше.
+  - `ui/transportStore.ts`: новый `case 'session.moved'` — патч `project_id`, `refreshSessionFromApi`, `loadProjects()`, `refreshProject` (закрывает `project_create`/`project_attach` агентом).
+  - Docs: корневой `AGENTS.md` (гейт workspace + fs.changed/session.moved), `core/AGENTS.md` (`engine/fs-change.ts`, причина workspace), `ui/AGENTS.md` (транспорт + Files refresh), `shared/AGENTS.md` (`EventType`).
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2370 · ui 920 · backend 341 = **3812 PASS, 0 failed**. Новые/обновлённые тесты: `task.test.ts` (4 кейса), `state-messages.test.ts` (схлопывание/порядок), `transportStore.session-moved.test.ts`.
+- **Не закрыто (осознанно, отдельное решение):** 1.3 — в UI не локализуются security-сообщения через i18n: `security.tool_unavailable_workspace/mode/role/dependency` и `security.deny_protected_path` и т.п. не зарегистрированы в `ENGINE_MESSAGE_KEYS`, UI показывает `content` (en). Это системное поведение для всех security-сообщений, не дефект нового кода. **Решение пользователя (2026-10-01): оставить как есть** (engine-строки на en, UI показывает их как есть).
+- **Коммит:** `643e5c9`.
+- **Дополнение:** resume-сабагент (`runSubagentResume`) теперь тоже публикует `fs.changed` родителю (`scope:'all'`, `tool:'task_resume'`) в `.finally` — изменения файлов возобновлённого агента отражаются в UI. Тест в `task-resume.test.ts`. Верификация: typecheck/lint 0 errors; `pnpm test` shared 181 · core 2370 · ui 920 · backend 341 PASS. Коммит `8222bf0`.
+
+## 2026-10-01 08:45 — feat(core+ui): точная инвалидация fs.changed по путям + «файл удалён» — PASS
+
+- **Задача:** вместо перечитывания всех загруженных каталогов проекта — точечная инвалидация по `paths`; состояние «файл удалён агентом» для открытого редактора.
+- **Тип:** feature (core/ui) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Сделано:**
+  - core `fs-change.ts`: `FsChange.op: 'write'|'delete'|'mkdir'` (`write_file`/`edit_file`→write, `delete_file`→delete, `create_directory`→mkdir); `orchestrator._publishFsChange` кладёт `op` в payload (у broad-тулов `op` нет).
+  - ui `filesStore`: `fileRevisions` (по `${projectId}::${path}`) и `deletedFiles`; `refreshDirs` (только уже загруженные каталоги, при ошибке удаляет ключ); `refreshProject` при ошибке удаляет ключ (чинит смену workspace); `scheduleRefresh` коалесит за окно debounce (`all` поглощает; по пути — «последняя операция wins») и маршрутизирует: `all`/workspace → `refreshProject`+`revisionByProject`, `file` → `refreshDirs`+`fileRevisions`+`deletedFiles` (без проектной ревизии).
+  - ui `transportStore`: проброс `op` (с валидацией).
+  - ui `FileEditorTab`: подписка на файловую ревизию/удаление; удалён → экран `file.deletedOnDisk` + «Перечитать»; грязный → баннер `file.changedOnDisk`; иначе тихий reload; успешный reload снимает пометку.
+  - i18n `file.deletedOnDisk` (ru/en, UI-only); docs (корневой/`core`/`ui` AGENTS.md).
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2373 · ui 932 · backend 341 = **3827 PASS, 0 failed**. Новые тесты: core `fs-change.test.ts` (op), ui `filesStore.test.ts` (точная инвалидация/удаление), `transportStore.fs-change.test.ts` (op), `FileEditorTab.test.tsx`.
+- **Детект удаления по факту:** закрыто ограничение для «широких» тулов. `FileEditorTab` при `readFile` с `status:404`/`code:'NOT_FOUND'` помечает файл удалённым (`filesStore.markDeletedFile`) и рендерит `file.deletedOnDisk`; прочие ошибки (500 и т.п.) — прежний экран ошибки. Тесты `FileEditorTab.test.tsx` (+кейсы 404/500) и `filesStore.test.ts` (`markDeletedFile` идемпотентен). Верификация: typecheck/lint 0 errors; `pnpm test` shared 181 · core 2373 · ui 939 · backend 341 PASS. Коммит `83ced20` + ниже.
+- **Дополнение:** убрана шероховатость — при пометке «удалён» и неудачном «Перечитать» (файла всё ещё нет) `FileEditorTab` не затирает состояние удаления ошибкой (`file.deletedOnDisk`); тесты в `FileEditorTab.test.tsx` (4). Верификация: typecheck/lint 0 errors; `pnpm test` shared 181 · core 2373 · ui 934 · backend 341 PASS. Коммит `91d1ad4` + ниже.
+
+## 2026-10-01 08:30 — Релиз 0.8.5 + деплой на test — PASS
+
+- **Задача:** «закоммить, задеплой на тест» (ветка `feat/ad-069-residuals`, HEAD `60988b4`).
+- **Тип:** release + deploy · **Исполнитель:** @devops (скиллы `synth-release`/`synth-build-publish`/`synth-k3s-deploy`) · **Результат:** PASS.
+- **Решения пользователя (политика выката):** ветку `synth` в origin не пушить; тег `v0.8.5` и npm-публикацию не создавать.
+- **Bump:** `./scripts/version-bump.sh 0.8.5` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml` (0.8.4 → 0.8.5); коммит `ce81541` `chore: bump version to v0.8.5` — локально, не запушен.
+- **Проверки:** `pnpm install --frozen-lockfile` OK; shared/core build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors (175 предсуществующих warning). Полный `pnpm test` не гонялся (изменение только метаданных; ветка верифицирована на 60988b4: shared 181 · core 2373 · ui 939 · backend 341).
+- **Docker:** собраны из исходников (Dockerfile.backend/ui) и запушены в `git.itphx.ru`: `synth-backend:0.8.5` (268 MB, digest `sha256:40ad3499efbd…`), `synth-ui:0.8.5` (116 MB, digest `sha256:c007bbba5c00…`); версия внутри (`SYNTH_VERSION = '0.8.5'`) проверена. Логи — `tmp/docker-build-{backend,ui}-0.8.5.log`.
+- **`synth-deploy` (main):** `values.yaml` tags → 0.8.5, `helm lint`/`template` OK (render 0.8.5), коммит `4ed0560` запушен (`8cd1114..4ed0560`) → Fleet bundle `synth` **1/1**.
+- **Верификация:** `GET /api/v2/health` → `{"status":"healthy","version":"0.8.5"}`; UI `/` → HTTP 200 (asset `index-BU7nsL7u.js` совпал с образом); deploy `:0.8.5` ready=1/1; поды backend/ui `1/1 Running`, RESTARTS 0.
+- **Осталось/риски:** ветка `synth` не запушена (по решению пользователя); тег `v0.8.5`, npm-публикация, preprod/prod — не трогались.
+
+## 2026-10-01 — feat(ui): прозрачный перенос файлов/вкладок, черновики редакторов, корень в диалоге переноса — PASS
+
+- **Задача:** перенос/переименование файла или каталога в Files-панели должен прозрачно переезжать для дерева и открытых вкладок (viewer/editor) с сохранением несохранённых черновиков; в диалог переноса добавить корень workspace.
+- **Тип:** feature (ui) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Сделано:**
+  - `stores/filesStore.ts`: `moveEntry` больше не вызывает `removeSubTree`, а перемапливает префиксные ключи поддерева `sourcePath → targetPath` в `treesByProject`/`expandedDirs` (`${pid}/${rel}`), `fileRevisions`/`deletedFiles`/`draftContents` (`${pid}::${path}`) через `remapRecord`/`remapSet`/`remapKey` (без изменений — исходная ссылка), затем перечитывает родителей src/dst (поддерево сохранено перемапленным). Новое поле `draftContents` (runtime-only, не в `partialize`) и экшены `setDraft` (равен оригиналу → удаление; идемпотентно) / `clearDraft` (идемпотентно). `removeSubTree` оставлен для `deleteEntry`/`deleteSelectedEntries`.
+  - `stores/useUIStore.ts`: `remapFileTabs(sourceProjectId, sourcePath, targetProjectId, targetPath)` — переводит вкладки `file-viewer`/`file-editor` с путём = source или потомком, меняет id с префиксом `file-`/`edit-`, `title` = basename, `data`, сохраняет `editingState`, ремапит `activeCenterTabId`; без изменений — та же ссылка.
+  - `components/panels/LeftPanel.tsx`: `projectDirPaths` всегда содержит корень `''` первой строкой; корень рендерится с иконкой `folder-3`, label `/`, title `file.workspaceRoot` и выбирается по умолчанию. Ручные close/open-блоки заменены единым путём `moveEntry` → при `true` `remapFileTabs` (rename, move dialog, same-project DnD). Cross-project DnD/`handleDropOnProject`: у грязного файла берётся черновик вместо диска, после write+delete — `clearDraft` + `remapFileTabs` (при ошибке не ремапит).
+  - `components/chat/FileEditorTab.tsx`: `loadFromServer` восстанавливает черновик (файл остаётся грязным), иначе очищает его; `onChange` пишет `setDraft`; успешный `doSave` — `clearDraft`.
+  - i18n `file.workspaceRoot` (ru/en); docs (корневой/`ui` AGENTS.md).
+- **Дефект, найденный при верификации:** при переносе каталога ключи `treesByProject` перемапливались, но `entry.path` в кэшированных листингах оставались старыми (раскрытый перемещённый каталог открывал бы несуществующие пути). Исправлено: `remapTrees` + `remapTreeEntries` переписывают `path` записей только у перенесённого поддерева (родитель перечитывается с сервера); тесты обновлены.
+- **Верификация (@orchestrator, независимо):** `pnpm --filter @itphx/synth-shared build` OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2373 · ui 954 · backend 341 = **3849 PASS, 0 failed**. Новые тесты: `filesStore.test.ts` (перемап поддерева, в т.ч. `entry.path`, /ошибка, `setDraft`/`clearDraft`), `useUIStore.test.ts` (`remapFileTabs`), `FileEditorTab.test.tsx` (восстановление/запись/очистка черновика).
+- **Остаточные ограничения:** список каталогов в диалоге переноса — по-прежнему корень + каталоги из загруженных веток дерева (незагруженные не перечисляются); cross-project перенос по-прежнему только одиночного пути (каталог через `readFile` не проходит); тест `LeftPanel` на корень в диалоге не добавлен (открытие radix-контекст-меню в jsdom — тяжёлая инфраструктура), поведение покрыто стор-тестами.
+- **Коммит:** не делался (по инварианту «коммит — только по явной просьбе пользователя»).
+
+## 2026-10-01 — feat(ui): кнопка «Создать файл» в корне проекта, скачивание файла — кнопкой строки — PASS
+
+- **Задача:** добавить в корневой узел проекта Files-панели кнопку создания файла (`new-file-root`) рядом с upload/new-folder; перенести скачивание файла из пункта контекстного меню в кнопку действия строки.
+- **Тип:** feature (ui) · **Исполнитель:** @fixer · **Результат:** PASS.
+- **Сделано (`packages/ui/src/components/panels/LeftPanel.tsx`):**
+  - `renderFilesProject`: в `actions` корня проекта добавлен `{ id: 'new-file-root', icon: 'file-add', title: t('files.newFile'), onClick: () => setPopover({ type: 'newFile', projectId: project.id, parentPath: '' }) }` перед `new-folder-root` (порядок upload → new-file → new-folder, как у действий каталога в `renderEntry`); используется существующий `popover`/`handlePopoverSubmit`.
+  - `renderEntry`: логика скачивания вынесена в локальный хелпер `handleDownload(projectId, entry)` (рядом с `handleUpload`), для файлов (`!isDir`) добавлено действие строки `download-${entry.path}` с `icon: 'download'`; из `entryContextItems` удалён пункт `download` и ставший лишним ведущий `'separator'` (осталось `move`, `rename`, `delete`). Поведение каталогов не менялось.
+- **Проверки (из `synth/`):** `pnpm typecheck` — 6/6 OK; `pnpm lint` — 0 errors (175 предсуществующих warning); `pnpm test` — ui 954 PASS (файлы не добавлялись, инфраструктуры рендера `FilesTab` нет).
+- **Коммит:** не делался (по инварианту «коммит — только по явной просьбе пользователя»).
+
+## 2026-10-01 — feat/fix: закрыты остаточные ограничения переноса файлов + `common.ok` — PASS
+
+- **Задача:** закрыть все шесть остаточных ограничений UI-переноса и добавить отсутствующий i18n-ключ `common.ok`. Решение пользователя: «закрыть все, коммить на своё усмотрение».
+- **Тип:** feature/fix (core+ui) · **Исполнитель:** @fixer ×3 (core, UI-1, UI-2) → верификация @orchestrator · **Результат:** PASS.
+- **1. Список каталогов в диалоге переноса.** `synthApi.listDirectory(..., maxDepth?)`; при открытии диалога — рекурсивный листинг workspace (`GET /fs?maxDepth=10`, инфраструктура уже была) → все каталоги, не только раскрытые; кэш на сессию + фоновая ревалидация, fallback на дерево при ошибке. Остаточное: серверный cap `maxDepth=10`.
+- **2. Межпроектный перенос (файлы и каталоги).** Core `/fs/move` принимает `targetProjectId`: одна база — `rename`, разные — `cp(recursive, errorOnExist, force:false)` + `rm`; маппинг `EEXIST`/`ERR_FS_CP_*` → 409, перенос в потомка → 400, remote-участник → 400. UI `synthApi.moveEntry(..., targetProjectId?)`, `filesStore.moveEntry(..., targetProjectId?)`; DnD между проектами переведён с `readFile/writeFile/delete` на серверный move.
+- **3. Коллизия id вкладок.** `useUIStore.remapFileTabs` удаляет чужую неперемапленную вкладку с занятым новым id (приоритет у перемапленной с её `editingState`/черновиком); активная корректируется.
+- **4. Закрытие грязной вкладки.** `CenterTabs.handleClose` при `editingState==='dirty'` — `confirm({ title: center.closeTab, message: file.unsavedChanges, variant:'warning' })`; `useUIStore.closeTab` чистит `draftContents` (черновик больше не «залипает»).
+- **5. Тост об ошибке переноса.** `FilesTab` — `useNotification`, тост `file.moveError` при `false` от `moveEntry` (rename, диалог, same/cross-project DnD).
+- **6. Перенос из shell/агента.** Core `fs-change.ts`: `FsChangeOp += 'move'`, `from`/`to`; `resolveFsChange(..., args?)` разбирает простую `mv`/`git mv` из `execute_shell` (метасимволы/glob/абсолютные/`..`/цепочки → fallback `scope:'all'`); `_publishFsChange` прокидывает `toolArgs` и payload `from`/`to`; inline-shell передаёт `{command}`. UI `transportStore` на `op:'move'` синхронно `remapPath → remapFileTabs → scheduleRefresh` (черновики переезжают до перечитывания редактором).
+- **7. `common.ok`.** Добавлен в ru/en (`ОК`/`OK`); сверены все 37 usage-ключей `common.*` — отсутствовал только он.
+- **Файлы:** core `server/routes/fs.ts` (+`fs.test.ts`), `engine/fs-change.ts` (+тест), `engine/orchestrator.ts`, `docs/API_V2.md`, `packages/core/AGENTS.md`; ui `lib/api/synthApi.ts`, `stores/{filesStore,useUIStore,transportStore}.ts` + тесты, `components/panels/LeftPanel.tsx`, `components/layout/CenterTabs.tsx` (+тест), i18n ru/en, `packages/ui/AGENTS.md`, корневой `AGENTS.md`.
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2384 · ui 968 · backend 341 = **3874 PASS, 0 failed**.
+- **Остаточные риски:** межпроектный перенос неатомарен (`cp` затем `rm`); парсер `mv` намеренно консервативен (составные команды → `scope:'all'`, вкладки не переезжают); `maxDepth=10` в диалоге; фактическая UI-проверка DnD в браузере не выполнялась (unit/typecheck/lint).
+
+## 2026-10-01 — fix(ui): поля логина managed (KeePassXC) + переработка проверки обновлений — PASS
+
+- **Задача:** (1) вход в managed-инстансе — браузер/KeePassXC не распознают поля логина/пароля (пароль сохраняется в слот логина, логина нет); (2) уведомление об обновлении появляется только после ручной перезагрузки — нужна проверка по таймеру (30 мин) на экране входа и по действию после простоя >1 ч на обоих экранах.
+- **Тип:** bug (ui) · **Исполнитель:** @fixer ×2 (login, update) + @general (docs) → верификация @orchestrator · **Результат:** PASS.
+- **Баг 1 — причина:** `LoginForm` рендерился со стартовыми `oidcEnabled=false`/`debugMode=false` → первый кадр = ветка API-ключа (одинокое `type=password` без username), после ответа `/auth/status` React подменял ветку; менеджеры паролей цеплялись к промежуточному DOM (прошлый фикс ec67160 добавил id/name/autocomplete, но «мигание» осталось). `authStore.reauthenticate()` уже запрашивал `/auth/status`, но oidc/debug в стор не клал.
+  - `stores/authStore.ts`: + `oidcEnabled`/`debugMode` (заполняются в `reauthenticate` из `/auth/status`, `catch` → false; после `logout`/`sessionExpired` сохраняются — описывают сервер и нужны форме).
+  - `components/auth/LoginForm.tsx`: убран собственный `api.getStatus()`; ветка полей — из стора; `getUsers()` только при `debugMode`; `getHybridStatus()` только при `standalone && oidcEnabled`. `AuthGate` гарантирует `isInitialized` → первый кадр корректный.
+  - Тесты: регресс «managed+oidc → сразу username+password, нет `#synth-login-apikey`»; обновлены `LoginForm.test.tsx`/`authStore.test.ts`.
+- **Баг 2 — причина:** `register('/sw.js?v=' + SYNTH_VERSION)` при статичном `public/sw.js` → у открытого приложения байты SW не меняются, баннер только после ручной перезагрузки; `/updates/check` требует auth и смонтирован только в core (в managed 404).
+  - `public/sw.js`: `CACHE='synth-shell-__SYNTH_VERSION__'`; `vite.config.ts`: плагин `serviceWorkerVersionPlugin` (`closeBundle`) подставляет версию из `packages/shared/package.json`.
+  - `layout/PwaUpdatePrompt.tsx`: стабильный `/sw.js` + `updateViaCache:'none'`; второй источник — `synthApi.getHealth()` (`/api/v2/health`, без auth) vs `SYNTH_VERSION`; триггеры: монтирование, 30 мин, `visibilitychange`, первое действие после простоя >1 ч (`pointerdown/keydown/wheel/touchstart`, passive); «Позже» per-версия; «Обновить» → `SKIP_WAITING`/reload. Компонент вне `AuthGate` → работает на экране входа.
+  - `lib/api/synthApi.ts`: `getHealth()`; удалён мёртвый `UpdateNotification` (гейт `VITE_ENABLE_UPDATE_CHECK`).
+  - Тесты `PwaUpdatePrompt.test.tsx`: стабильный URL, mismatch/match версии, интервал 30 мин, idle>1 ч, «Позже»+новая версия и др. (12 тестов).
+- **Docs:** корневой `AGENTS.md` и `packages/ui/AGENTS.md` — пункт про механизм обновлений.
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2384 · ui 975 · backend 341 = **3881 PASS, 0 failed**; `pnpm --filter @itphx/synth-ui build` OK, `dist/sw.js` → `synth-shell-0.8.5` (плейсхолдер `__SYNTH_VERSION__` — 0 вхождений).
+- **Остаточные риски/оговорки:** health-проверка и SW-регистрация активны только в PROD; при миграции схемы регистрации (`?v=` → `/sw.js`) возможен однократный повторный баннер; сравнение версий — по любому расхождению (при кратковременном рассинхроне UI/backend в managed возможен ложный баннер); живая проверка KeePassXC — за пользователем (unit/typecheck/lint зелёные).
+- **Коммит:** не делался (по инварианту «коммит — только по явной просьбе пользователя»).
+
+## 2026-10-01 — deploy(test): K3s 0.8.6 (login/KeePassXC + проверка обновлений) — PASS
+
+- **Задача:** задеплоить реализованные правки на test-инстанс (managed, `https://synth.k3s.itphx.loc`).
+- **Тип:** infra/deploy · **Исполнитель:** @orchestrator · **Результат:** PASS.
+- **Коммиты (synth):** `ba09259` fix(ui): поля логина в managed + надёжная проверка обновлений; `04fe47f` chore: bump version to v0.8.6. Не пушились (только локально, push/tag не запрашивались).
+- **Коммит (synth-deploy):** `6a886d6` release: bump synth-ui/backend images to v0.8.6 (запушен в `origin/main` → Fleet).
+- **Образы:** собраны из исходников монорепо `docker/Dockerfile.backend` и `Dockerfile.ui`, запушены в `git.itphx.ru/itphx/synth-{backend,ui}:0.8.6`; в образе UI проверено: `sw.js` → `synth-shell-0.8.6`, в бандле есть `#synth-login-username` и `pwa.updateAvailable`.
+- **Раскатка:** Fleet `synth` синхронизирован на `6a886d6`, bundle Ready=True; `kubectl -n synth rollout status` обоих деплойментов — successfully rolled out; поды Running 1/1 на образах `0.8.6`.
+- **Внешняя проверка:** `GET /health` и `GET /api/v2/health` → `"version":"0.8.6"`; `GET /sw.js` → `synth-shell-0.8.6`; `index.html` → `cache-control: no-cache`. Браузером (Playwright) на реальном managed-логине: 2 поля — `#synth-login-username` (text, autocomplete=username, label «Логин») и `#synth-login-password` (password, autocomplete=current-password, label «Пароль»), форма `name=synth-login autocomplete=on`, password-only ветки и `#synth-login-apikey` нет.
+- **Оговорки:** живая проверка сохранения/автозаполнения KeePassXC — за пользователем; существующим клиентам баннер обновления может появиться один раз (миграция схемы регистрации SW + расхождение версий).
+
+## 2026-10-01 — fix(ui): унификация окна редактирования проекта/сессии (EntityEditDialog) — PASS
+
+- **Задача:** унифицировать редактирование имени/описания/иконки/цвета проекта и сессии в одно центральное модальное окно (дерево левой панели + вкладки правой панели); десктоп — шире (вся линейка цветов в один ряд), мобильный — как войдёт; убрать мелкие отдельные окна; сохранить инлайн-ренейм как быстрый путь (в т.ч. для проектов) и починить его на мобильном.
+- **Тип:** feature/refactor (ui) · **Исполнитель:** @fixer ×2 → верификация @orchestrator · **Результат:** PASS.
+- **Что сделано:**
+  - `stores/entityEditStore.ts` (новый) + `components/ui/EntityEditDialog.tsx` (новый): единое окно на примитивах AD-072 (`useSettingsDraft` + `SettingsActions`), секции «Основные» (имя; описание — только проект) и «Внешний вид» (общий `EntityIconPicker`), сохранение черновиком по кнопке, `sm:max-w-2xl`, мобильный — центрированная модалка со скроллом; один экземпляр в `App.tsx`.
+  - `LeftPanel.tsx`: удалены поповер `editingProject`, диалог «Иконка и цвет» (`iconColorTarget`/`persistIconColor`/`handleProjectSave`); пункты меню открывают `EntityEditDialog`; добавлен инлайн-ренейм проектов (пропсы через `GroupNode`).
+  - `ProjectTab.tsx` / `SessionSettingsTab.tsx`: `EntityIconTrigger` заменён кликабельными имя+иконка (открывают диалог). Компонент `EntityIconTrigger` и его тест удалены.
+  - **Мобильный баг ренейма — первопричина:** `ContextMenu` (Radix `Popover`, портал) — React-событие клика по пункту меню всплывало до `onClick` строки `TreeNode` → `openTab(...)` → `mobileLeftOpen: false` (дровер сворачивался; на десктопе побочно открывалась вкладка). Фикс: `e.stopPropagation()` в `contextMenu.tsx`. Воспроизведено и подтверждено Playwright (390×844).
+  - `ProjectTab`: синхронизация локальной копии `project` со стором (deфект: после сохранения из окна вкладка показывала старое имя) + регресс-тест.
+  - i18n: задействованы `leftPanel.editProject.title/general/appearance`; добавлены `leftPanel.editSession(.title)` (ru/en).
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors (только ранее существовавшие warning'и); `pnpm test` — shared 181 · core 2384 · ui 973 · backend 341 = **3879 PASS, 0 failed**. Браузер Playwright (desktop 1440×900): диалог открывается из меню дерева и с вкладки «Проект»; линейка цветов 9/9 в один ряд; Save → PUT 200 + тост «Настройки сохранены» + закрытие; Cancel → без запросов; имя на вкладке обновляется. Мобильный (390×844) — проверял @fixer: дровер не сворачивается, ренейм сессии/проекта работает.
+- **Остаточные риски/оговорки:** `packages/ui/AGENTS.md` содержит stale-упоминания `EntityIconTrigger` (строки 25, 65) — обновление требует согласования с пользователем. Коммит не делался.
+- **Коммит:** 2ad42f4 feat(ui): единое окно редактирования проекта/сессии.
+
+## 2026-10-01 — fix(ui): адаптивные строки MCP/скиллов в правой панели (mobile) — PASS
+
+- **Задача:** на телефоне строки MCP/скиллов «разъезжались» (имя сжималось, бейджи переносились) + заметный зазор между шевроном и правым краем; убрать лишнюю подпись «Включён».
+- **Тип:** fix (ui, mobile) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Диагноз (замеры Playwright, 390×844):** строка ≈286px; проектный `aside` («Доступен» + «По умолчанию») = 177px → имя сжато до 61px; сессионный `aside` («Включён») = 70px, имя 168px + бейджи в 2 строки.
+- **Что сделано:**
+  - `components/panels/ExpandableListRow.tsx`: адаптив — десктоп прежний (inline), телефон/планшет (`useDevice`) две строки: имя+бейджи+шеврон, ниже `aside` справа (`data-layout="inline|stacked"`).
+  - `components/panels/SessionSettingsTab.tsx`: убраны видимые подписи «Включён» у сессионных MCP/skills-тумблеров (`aria-label` сохранён); проектные «Доступен»/«По умолчанию» оставлены.
+  - `components/panels/ExpandableListRow.test.tsx` (новый): мок `useDevice`, тесты inline/stacked.
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2384 · ui 976 · backend 341 = **3882 PASS, 0 failed**. Скриншоты (390×844): имя занимает всю строку (267/286), управление второй строкой справа, «Включён» нет; десктоп 1440×900 — inline как прежде.
+- **Остаточные риски/оговорки:** живая проверка на реальном телефоне пользователя — за пользователем; подписи «Доступен»/«По умолчанию» у проектных тумблеров намеренно сохранены.
+- **Коммит:** в этом же коммите.

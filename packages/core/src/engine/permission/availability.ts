@@ -3,10 +3,11 @@
  *
  * Список tool-дефинишенов постоянен (не фильтруется по режиму/роли/окружению), а
  * доступность конкретного тула вычисляется здесь и передаётся permission-слою
- * как эффект `unavailable(mode | role | dependency)`:
+ * как эффект `unavailable(mode | role | dependency | workspace)`:
  *  - `mode` — тул откроется, если пользователь переключит режим (plan/act/yolo);
  *  - `role` — тул недоступен текущему агенту, но доступен другому (делегировать);
- *  - `dependency` — в окружении нет нужного бинарника (git/rg/sh).
+ *  - `dependency` — в окружении нет нужного бинарника (git/rg/sh);
+ *  - `workspace` — у проекта сессии не задан рабочий каталог (file/shell/git).
  *
  * `allow`/`ask`/`deny` — прежние эффекты AD-029; `deny` — жёсткий запрет без
  * подсказок о переключении/делегировании.
@@ -17,7 +18,26 @@ import type { McpServerToolSettings, PlanMode, SessionMode } from '@itphx/synth-
 import { getMcpToolAvailability, isPlanBlockedTool, isPlanRestricted } from './evaluator.js';
 import { isRuntimeDepAvailable, TOOL_RUNTIME_DEP, type RuntimeDeps } from '../tools/runtime-deps.js';
 
-export type ToolUnavailableReason = 'mode' | 'role' | 'dependency';
+export type ToolUnavailableReason = 'mode' | 'role' | 'dependency' | 'workspace';
+
+/**
+ * Capabilities, привязанные к рабочему каталогу проекта: без него относительные
+ * пути не имеют определённой базы, поэтому file/shell/git-тулы блокируются.
+ */
+const WORKSPACE_CAPABILITIES: ReadonlySet<string> = new Set([
+  ToolCapability.FILE_READ,
+  ToolCapability.FILE_WRITE,
+  ToolCapability.SHELL,
+  ToolCapability.SEARCH,
+  ToolCapability.GIT_READ,
+  ToolCapability.GIT_WRITE,
+]);
+
+/** Зависит ли тул от рабочего каталога проекта (file/shell/git/search). */
+export function isWorkspaceDependentTool(capabilities?: readonly string[]): boolean {
+  if (!capabilities || capabilities.length === 0) return false;
+  return capabilities.some((cap) => WORKSPACE_CAPABILITIES.has(cap));
+}
 
 export interface ToolAvailability {
   available: boolean;
@@ -32,6 +52,11 @@ export interface ToolAvailabilityOptions {
   agentCapabilities?: readonly string[];
   /** Доступность внешних программ окружения (git/rg/sh). Не задана — fail-open. */
   runtimeDeps?: RuntimeDeps;
+  /**
+   * Задан ли рабочий каталог проекта (AD-075). `false` — file/shell/git-тулы
+   * недоступны (`workspace`); `true`/`undefined` — fail-open (обратная совместимость).
+   */
+  workspaceReady?: boolean;
 }
 
 /**
@@ -44,7 +69,8 @@ export interface ToolAvailabilityOptions {
  *  2. mode — plan-рестрикция write/edit/git-write (AD-025) либо MCP-тул,
  *     выключенный в текущем режиме настройками сессии.
  *  3. dependency — в окружении нет внешней программы тула (`TOOL_RUNTIME_DEP`).
- *  4. иначе — доступен.
+ *  4. workspace — не задан рабочий каталог проекта, а тул зависит от него.
+ *  5. иначе — доступен.
  */
 export function computeToolAvailability(
   toolName: string,
@@ -84,6 +110,12 @@ export function computeToolAvailability(
     return { available: false, reason: 'dependency' };
   }
 
-  // 4. Доступен.
+  // 4. Рабочий каталог проекта: без `project.workspace` относительные пути
+  // файловых/shell/git-тулов не имеют определённой базы — недоступны.
+  if (opts.workspaceReady === false && isWorkspaceDependentTool(capabilities)) {
+    return { available: false, reason: 'workspace' };
+  }
+
+  // 5. Доступен.
   return { available: true };
 }

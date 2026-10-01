@@ -19,7 +19,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import type { EntityOrigin, ProjectData } from '@/lib/api/synthApi'
 import type { SSHKeyMeta } from '@itphx/synth-shared'
 import { resolveIconName, resolveIconColor } from '@/lib/entityIcon'
-import { EntityIconPicker } from '@/components/ui/EntityIconPicker'
+import { useEntityEditStore } from '@/stores/entityEditStore'
 import { formatDateTime, formatRelativeTime, parseISODate } from '@/lib/formatDate'
 import { TreeNode, TreeChildren, TreeContainer } from '@/components/tree'
 import type { TreeNodeBase, TreeAction } from '@/components/tree'
@@ -140,7 +140,6 @@ function ProjectsTab() {
   const forkSession = useSessionsStore(s => s.forkSession)
   const deleteSession = useSessionsStore(s => s.deleteSession)
   const moveSession = useSessionsStore(s => s.moveSession)
-  const { notify } = useNotification()
   const { isTouch } = useDevice()
   const collapsedProjects = useUIStore((s) => s.collapsedProjects)
   const toggleProjectCollapse = useUIStore((s) => s.toggleProjectCollapse)
@@ -161,8 +160,8 @@ function ProjectsTab() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set())
   const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [editingProject, setEditingProject] = useState<any>(null)
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null)
   const pendingDeleteRef = useRef<Set<string>>(new Set())
   const [forwardTarget, setForwardTarget] = useState<{ sessionId: string; sessionName: string } | null>(null)
@@ -170,39 +169,6 @@ function ProjectsTab() {
   // Гибрид: перенос проектов между мирами — проект, для которого открыт диалог.
   const [publishTarget, setPublishTarget] = useState<ProjectData | null>(null)
   const [forkTarget, setForkTarget] = useState<ProjectData | null>(null)
-  // Единый пикер «Иконка и цвет» для проекта/сессии (контекстное меню дерева).
-  const [iconColorTarget, setIconColorTarget] = useState<{
-    kind: 'session' | 'project'
-    id: string
-    name: string
-    icon: string | null
-    color: string | null
-  } | null>(null)
-  const [iconDraft, setIconDraft] = useState<string | null>(null)
-  const [colorDraft, setColorDraft] = useState<string | null>(null)
-
-  const openIconColor = (target: NonNullable<typeof iconColorTarget>) => {
-    setIconColorTarget(target)
-    setIconDraft(target.icon)
-    setColorDraft(target.color)
-  }
-
-  // Немедленное сохранение иконки/цвета из диалога дерева. Оптимистично меняем
-  // драфт, а при ошибке откатываемся к актуальному серверному значению.
-  const persistIconColor = async (icon: string | null, color: string | null) => {
-    const target = iconColorTarget
-    if (!target) return
-    const ok = target.kind === 'session'
-      ? await useSessionsStore.getState().updateSessionMeta(target.id, { icon, color })
-      : await useProjectsStore.getState().updateProject(target.id, { icon, color })
-    if (ok) {
-      setIconColorTarget({ ...target, icon: icon ?? null, color: color ?? null })
-    } else {
-      notify({ text: t('panel.saveError'), type: 'error', category: 'error' })
-      setIconDraft(target.icon)
-      setColorDraft(target.color)
-    }
-  }
 
   // Switch to Projects tab when forward mode activates
   useEffect(() => {
@@ -307,16 +273,22 @@ function ProjectsTab() {
     }
   }, [activeCenterTabId])
 
-  const handleProjectSave = async () => {
-    if (!editingProject) return
-    await synthApi.updateProject(editingProject.id, {
-      name: editingProject.name,
-      description: editingProject.description,
-      icon: editingProject.icon,
-      color: editingProject.color,
-    })
-    setEditingProject(null)
-    loadProjects()
+  // Инлайн-переименование проекта (быстрый путь, как у сессий): коммит по Enter
+  // или галочке, отмена по Esc/крестику.
+  const commitProjectRename = async () => {
+    const id = renamingProjectId
+    const name = renameValue.trim()
+    if (id && name) {
+      await useProjectsStore.getState().updateProject(id, { name })
+      await loadProjects()
+    }
+    setRenamingProjectId(null)
+    setRenameValue('')
+  }
+
+  const cancelProjectRename = () => {
+    setRenamingProjectId(null)
+    setRenameValue('')
   }
 
   const renderSessionNode = (session: any, depth: number, hasChildren: boolean, isExpanded: boolean, onToggle: () => void): TreeNodeBase => {
@@ -370,7 +342,7 @@ function ProjectsTab() {
       title: isOfflineRemote ? t('hybrid.unavailableNode') : undefined,
       contextItems: [
         { label: t('leftPanel.rename'), icon: 'pencil-ai', onClick: () => { setRenamingId(session.id); setRenameValue(session.name || session.id) } },
-        { label: t('leftPanel.iconColor'), icon: 'palette', onClick: () => openIconColor({
+        { label: t('leftPanel.editSession'), icon: 'settings-3', onClick: () => useEntityEditStore.getState().openEntityEdit({
           kind: 'session',
           id: session.id,
           name: session.name || session.id,
@@ -590,68 +562,6 @@ function ProjectsTab() {
         </Dialog>
       )}
 
-      {editingProject && (
-        <Popover open={!!editingProject} onOpenChange={(open) => { if (!open) setEditingProject(null) }}>
-          <PopoverTrigger asChild>
-            <span className="absolute opacity-0 pointer-events-none" />
-          </PopoverTrigger>
-          <PopoverContent side="bottom" align="start" sideOffset={4} className="w-72 p-3 space-y-2">
-            <div>
-              <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('project.name')}</label>
-              <input
-                type="text"
-                value={editingProject.name || ''}
-                onChange={(e) => setEditingProject((prev: any) => ({ ...prev, name: e.target.value }))}
-                className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
-                autoFocus
-              />
-            </div>
-            <div>
-              <label className="block text-[0.65rem] text-muted-foreground mb-0.5">{t('project.description')}</label>
-              <input
-                type="text"
-                value={editingProject.description || ''}
-                onChange={(e) => setEditingProject((prev: any) => ({ ...prev, description: e.target.value }))}
-                className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
-              />
-            </div>
-            <EntityIconPicker
-              icon={editingProject.icon}
-              color={editingProject.color}
-              onIconChange={(icon) => setEditingProject((prev: any) => ({ ...prev, icon }))}
-              onColorChange={(color) => setEditingProject((prev: any) => ({ ...prev, color }))}
-            />
-            <div className="flex gap-2">
-              <button onClick={handleProjectSave} className="flex-1 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 transition-colors">{t('project.save')}</button>
-              <button onClick={() => setEditingProject(null)} className="flex-1 rounded bg-interactive px-3 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors">{t('common.cancel')}</button>
-            </div>
-          </PopoverContent>
-        </Popover>
-      )}
-
-      {iconColorTarget && (
-        <Dialog open={!!iconColorTarget} onOpenChange={(open) => { if (!open) setIconColorTarget(null) }}>
-          <DialogContent className="max-w-sm p-4 gap-3" showCloseButton={true} data-testid="entity-icon-dialog">
-            <h3 className="text-sm font-semibold">{t('leftPanel.iconColor')}</h3>
-            <p className="truncate text-xs text-muted-foreground">{iconColorTarget.name}</p>
-            <EntityIconPicker
-              icon={iconDraft}
-              color={colorDraft}
-              onIconChange={(icon) => { setIconDraft(icon); void persistIconColor(icon, colorDraft) }}
-              onColorChange={(color) => { setColorDraft(color); void persistIconColor(iconDraft, color) }}
-            />
-            <div className="flex justify-end">
-              <button
-                onClick={() => setIconColorTarget(null)}
-                className="rounded bg-interactive px-3 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors"
-              >
-                {t('common.close')}
-              </button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-
       <GroupNode
         id="__none__"
         label={t('leftPanel.noProject')}
@@ -687,11 +597,12 @@ function ProjectsTab() {
             ? { label: t('hybrid.cloneProject'), icon: 'download' as const, onClick: () => setForkTarget(project) }
             : null
         const projectContextItems: any[] = [
-          { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => { setEditingProject({ ...project }) } },
-          { label: t('leftPanel.iconColor'), icon: 'palette' as const, onClick: () => openIconColor({
+          { label: t('leftPanel.rename'), icon: 'pencil-ai' as const, onClick: () => { setRenamingProjectId(project.id); setRenameValue(project.name) } },
+          { label: t('leftPanel.editProject'), icon: 'settings-3' as const, onClick: () => useEntityEditStore.getState().openEntityEdit({
             kind: 'project',
             id: project.id,
             name: project.name,
+            description: project.description ?? '',
             icon: project.icon ?? null,
             color: project.color ?? null,
           }) },
@@ -736,6 +647,11 @@ function ProjectsTab() {
             projectActions={projectActions}
             onDropSession={async (sessionId) => { await moveSession(sessionId, project.id) }}
             projectContextItems={projectContextItems}
+            isRenaming={renamingProjectId === project.id}
+            renameValue={renamingProjectId === project.id ? renameValue : ''}
+            onRenameChange={setRenameValue}
+            onRenameCommit={() => void commitProjectRename()}
+            onRenameCancel={cancelProjectRename}
             isTouch={isTouch}
             t={t}
           />
@@ -794,6 +710,7 @@ function GroupNode({
   projectId, onCreateSession, onDropSession,
   projectActions, projectContextItems, t,
   origin, offline, isTouch,
+  isRenaming, renameValue, onRenameChange, onRenameCommit, onRenameCancel,
 }: {
   id: string; label: string; icon: string; iconColor?: string
   isCollapsed: boolean; onToggle: () => void
@@ -807,6 +724,10 @@ function GroupNode({
   offline?: boolean
   isTouch?: boolean
   t: any
+  isRenaming?: boolean; renameValue?: string
+  onRenameChange?: (v: string) => void
+  onRenameCommit?: () => void
+  onRenameCancel?: () => void
 }) {
   const expandKey = projectId ? `project:${projectId}` : `group:__none__`
   const isExpanded = expandedGroups.has(expandKey)
@@ -847,6 +768,11 @@ function GroupNode({
     badge: <OriginBadge origin={origin} />,
     actions,
     contextItems: projectContextItems,
+    isRenaming,
+    renameValue,
+    onRenameChange,
+    onRenameCommit,
+    onRenameCancel,
     className: isOfflineNode ? 'opacity-60' : undefined,
     title: isOfflineNode ? t('hybrid.unavailableNode') : undefined,
   }
@@ -886,6 +812,7 @@ function GroupNode({
 
 function FilesTab() {
   const { t } = useI18n()
+  const { notify } = useNotification()
   const projects = useProjectsStore(s => s.projects)
   const loadProjects = useProjectsStore(s => s.loadProjects)
   const { isTouch } = useDevice()
@@ -921,6 +848,12 @@ function FilesTab() {
   const [activeUploadPath, setActiveUploadPath] = useState<string>('')
   const [moveTarget, setMoveTarget] = useState<{ projectId: string; entry: any } | null>(null)
   const [moveDest, setMoveDest] = useState<string>('')
+  // Каталоги для диалога переноса: рекурсивный листинг workspace (maxDepth 10).
+  const [moveDirs, setMoveDirs] = useState<string[]>([])
+  const [moveDirsLoading, setMoveDirsLoading] = useState(false)
+  const [moveDirsFailed, setMoveDirsFailed] = useState(false)
+  const moveDirsCacheRef = useRef<Map<string, string[]>>(new Map())
+  const moveLoadProjectRef = useRef<string | null>(null)
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null)
   const pendingDeleteRef = useRef<Set<string>>(new Set())
   const [dragState, setDragState] = useState<{ projectId: string; path: string } | null>(null)
@@ -947,28 +880,77 @@ function FilesTab() {
   }, [currentProjectId])
 
 
+  /**
+   * Рекурсивный листинг каталогов workspace для диалога переноса (maxDepth 10,
+   * относительные пути). Кэш на время сессии: повторное открытие проекта
+   * показывает список сразу и перепроверяет его в фоне.
+   */
+  const loadMoveDirs = useCallback(async (projectId: string) => {
+    moveLoadProjectRef.current = projectId
+    const cached = moveDirsCacheRef.current.get(projectId)
+    if (cached) {
+      setMoveDirs(cached)
+      setMoveDirsFailed(false)
+      setMoveDirsLoading(false)
+    } else {
+      setMoveDirs([])
+      setMoveDirsFailed(false)
+      setMoveDirsLoading(true)
+    }
+    try {
+      const { showHidden } = useFilesStore.getState()
+      const result = await synthApi.listDirectory(projectId, '', showHidden, 10)
+      const dirs = result.entries
+        .filter((e) => e.isDirectory)
+        .map((e) => e.path)
+        .sort((a, b) => a.localeCompare(b))
+      moveDirsCacheRef.current.set(projectId, dirs)
+      if (moveLoadProjectRef.current !== projectId) return
+      setMoveDirs(dirs)
+      setMoveDirsFailed(false)
+    } catch {
+      if (moveLoadProjectRef.current !== projectId) return
+      // Запрос не удался — не блокируем диалог, отдаём каталоги из дерева.
+      if (!cached) {
+        setMoveDirs([])
+        setMoveDirsFailed(true)
+      }
+    } finally {
+      if (moveLoadProjectRef.current === projectId) setMoveDirsLoading(false)
+    }
+  }, [])
+
   const projectDirPaths = useMemo(() => {
     if (!moveTarget) return []
     const pid = moveTarget.projectId
-    const prefix = `${pid}/`
-    const dirs = new Set<string>()
-    for (const [key, entries] of Object.entries(treesByProject)) {
-      if (key === pid || key.startsWith(prefix)) {
-        for (const e of entries) {
-          if (e.isDirectory) dirs.add(e.path)
+    const src = moveTarget.entry.path
+    // Корень workspace — всегда доступная цель (пустая строка = '').
+    const all = new Set<string>([''])
+    if (!moveDirsFailed) {
+      // Полный список из рекурсивного листинга (или уже загруженный кэш).
+      for (const d of moveDirs) all.add(d)
+    } else {
+      // Fallback: каталоги из уже загруженных веток дерева.
+      const prefix = `${pid}/`
+      for (const [key, entries] of Object.entries(treesByProject)) {
+        if (key === pid || key.startsWith(prefix)) {
+          for (const e of entries) {
+            if (e.isDirectory) all.add(e.path)
+          }
+        }
+        if (key.startsWith(prefix)) {
+          all.add(key.slice(prefix.length))
         }
       }
-      if (key.startsWith(prefix)) {
-        dirs.add(key.slice(prefix.length))
-      }
     }
-    const src = moveTarget.entry.path
-    dirs.delete(src)
-    for (const d of [...dirs]) {
-      if (d.startsWith(`${src}/`)) dirs.delete(d)
+    all.delete(src)
+    for (const d of [...all]) {
+      if (d.startsWith(`${src}/`)) all.delete(d)
     }
-    return [...dirs].sort((a, b) => a.localeCompare(b))
-  }, [treesByProject, moveTarget])
+    // Корень — первой строкой, подкаталоги — по алфавиту.
+    const rest = [...all].filter((d) => d !== '').sort((a, b) => a.localeCompare(b))
+    return ['', ...rest]
+  }, [treesByProject, moveDirs, moveDirsFailed, moveTarget])
 
   const openFilePathSet = useMemo(() => {
     const set = new Set<string>()
@@ -1064,6 +1046,16 @@ function FilesTab() {
     e.target.value = ''
   }
 
+  const handleDownload = (projectId: string, entry: any) => {
+    const url = synthApi.downloadFile(projectId, entry.path)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = entry.name
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
   const handlePopoverSubmit = async () => {
     const name = popoverName.trim()
     if (!name || !popover) return
@@ -1095,13 +1087,11 @@ function FilesTab() {
     const parts = entry.path.split('/')
     parts[parts.length - 1] = newName
     const targetPath = parts.join('/')
-    await moveEntry(projectId, entry.path, targetPath)
-    const oldTabId = `file-${projectId}/${entry.path}`
-    const ui = useUIStore.getState()
-    const existing = ui.centerTabs.find((tab) => tab.id === oldTabId)
-    if (existing) {
-      ui.closeTab(oldTabId)
-      ui.openTab({ id: `file-${projectId}/${targetPath}`, type: 'file-viewer', title: newName, data: { filePath: targetPath, projectId } })
+    const ok = await moveEntry(projectId, entry.path, targetPath)
+    if (ok) {
+      useUIStore.getState().remapFileTabs(projectId, entry.path, projectId, targetPath)
+    } else {
+      notify({ text: t('file.moveError'), type: 'error', category: 'error' })
     }
     setRenamingPath(null)
     setRenamingProject(null)
@@ -1111,6 +1101,7 @@ function FilesTab() {
   const openMoveDialog = (projectId: string, entry: any) => {
     setMoveTarget({ projectId, entry })
     setMoveDest('')
+    void loadMoveDirs(projectId)
   }
 
   const handleMoveSubmit = async () => {
@@ -1120,13 +1111,11 @@ function FilesTab() {
     const name = entry.path.split('/').pop() || entry.name
     const targetPath = dest ? `${dest}/${name}` : name
     if (targetPath !== entry.path) {
-      await moveEntry(projectId, entry.path, targetPath)
-      const oldTabId = `file-${projectId}/${entry.path}`
-      const ui = useUIStore.getState()
-      const existing = ui.centerTabs.find((tab) => tab.id === oldTabId)
-      if (existing) {
-        ui.closeTab(oldTabId)
-        ui.openTab({ id: `file-${projectId}/${targetPath}`, type: 'file-viewer', title: name, data: { filePath: targetPath, projectId } })
+      const ok = await moveEntry(projectId, entry.path, targetPath)
+      if (ok) {
+        useUIStore.getState().remapFileTabs(projectId, entry.path, projectId, targetPath)
+      } else {
+        notify({ text: t('file.moveError'), type: 'error', category: 'error' })
       }
     }
     setMoveTarget(null)
@@ -1155,23 +1144,21 @@ function FilesTab() {
       if (srcProject === targetProjectId && srcPath === targetDirPath) return
       const name = srcPath.split('/').pop() || 'moved'
       const targetPath = targetDirPath ? `${targetDirPath}/${name}` : name
-      const ui = useUIStore.getState()
       if (srcProject === targetProjectId) {
-        await moveEntry(targetProjectId, srcPath, targetPath)
-        const oldTabId = `file-${targetProjectId}/${srcPath}`
-        const newTabId = `file-${targetProjectId}/${targetPath}`
-        const existing = ui.centerTabs.find((t) => t.id === oldTabId)
-        if (existing) {
-          ui.closeTab(oldTabId)
-          ui.openTab({ id: newTabId, type: 'file-viewer', title: name, data: { filePath: targetPath, projectId: targetProjectId } })
+        const ok = await moveEntry(targetProjectId, srcPath, targetPath)
+        if (ok) {
+          useUIStore.getState().remapFileTabs(targetProjectId, srcPath, targetProjectId, targetPath)
+        } else {
+          notify({ text: t('file.moveError'), type: 'error', category: 'error' })
         }
       } else {
-        const { content } = await synthApi.readFile(srcProject, srcPath)
-        await synthApi.writeFile(targetProjectId, targetPath, content)
-        await deleteEntry(srcProject, srcPath)
-        const oldTabId = `file-${srcProject}/${srcPath}`
-        if (ui.centerTabs.some((t) => t.id === oldTabId)) {
-          ui.closeTab(oldTabId)
+        // Перенос между проектами — серверным /fs/move с targetProjectId
+        // (черновики переносятся внутри moveEntry через remapPath).
+        const ok = await moveEntry(srcProject, srcPath, targetPath, targetProjectId)
+        if (ok) {
+          useUIStore.getState().remapFileTabs(srcProject, srcPath, targetProjectId, targetPath)
+        } else {
+          notify({ text: t('file.moveError'), type: 'error', category: 'error' })
         }
       }
     } catch { /* ignore */ }
@@ -1186,9 +1173,12 @@ function FilesTab() {
       const { projectId: srcProject, path: srcPath } = JSON.parse(raw) as { projectId: string; path: string }
       if (srcProject === targetProjectId) return
       const name = srcPath.split('/').pop() || 'moved'
-      const { content } = await synthApi.readFile(srcProject, srcPath)
-      await synthApi.writeFile(targetProjectId, name, content)
-      await deleteEntry(srcProject, srcPath)
+      const ok = await moveEntry(srcProject, srcPath, name, targetProjectId)
+      if (ok) {
+        useUIStore.getState().remapFileTabs(srcProject, srcPath, targetProjectId, name)
+      } else {
+        notify({ text: t('file.moveError'), type: 'error', category: 'error' })
+      }
     } catch { /* ignore */ }
   }
 
@@ -1218,16 +1208,16 @@ function FilesTab() {
         title: t('file.newFolder'),
         onClick: () => setPopover({ type: 'newFolder', projectId, parentPath: entry.path }),
       })
+    } else {
+      entryActions.push({
+        id: `download-${entry.path}`,
+        icon: 'download',
+        title: t('file.download'),
+        onClick: () => handleDownload(projectId, entry),
+      })
     }
 
     const entryContextItems: any[] = [
-      ...(isDir ? [] : [
-        { label: t('file.download'), icon: 'download' as const, onClick: () => {
-          const url = synthApi.downloadFile(projectId, entry.path)
-          const a = document.createElement('a'); a.href = url; a.download = entry.name; document.body.appendChild(a); a.click(); document.body.removeChild(a)
-        }},
-      ] as any),
-      'separator' as const,
       { label: t('file.move'), icon: 'folder-received' as const, onClick: () => openMoveDialog(projectId, entry) },
       { label: t('files.rename'), icon: 'pencil-ai' as const, onClick: () => handleRenameStart(projectId, entry) },
       { label: t('common.delete'), icon: 'delete-bin' as const, onClick: () => {
@@ -1317,6 +1307,7 @@ function FilesTab() {
           onDrop={isTouch ? undefined : (e) => handleDropOnProject(e, project.id)}
           actions={[
             { id: 'upload', icon: 'upload', title: t('file.upload'), onClick: () => handleUpload(project.id) },
+            { id: 'new-file-root', icon: 'file-add', title: t('files.newFile'), onClick: () => setPopover({ type: 'newFile', projectId: project.id, parentPath: '' }) },
             { id: 'new-folder-root', icon: 'folder-add', title: t('file.newFolder'), onClick: () => setPopover({ type: 'newFolder', projectId: project.id, parentPath: '' }) },
           ]}
         />
@@ -1393,18 +1384,27 @@ function FilesTab() {
               onKeyDown={(e) => { if (e.key === 'Enter') handleMoveSubmit() }}
               className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
             />
-            {projectDirPaths.length > 0 && (
+            {moveDirsLoading ? (
+              <div className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
+                <Icon name="loader-2" className="size-3.5 animate-spin" />
+                {t('common.loading')}
+              </div>
+            ) : projectDirPaths.length > 0 && (
               <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
-                {projectDirPaths.map((dir) => (
-                  <button
-                    key={dir}
-                    onClick={() => setMoveDest(dir === moveDest ? '' : dir)}
-                    className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-accent flex items-center gap-1.5 ${dir === moveDest ? 'bg-accent' : ''}`}
-                  >
-                    <Icon name="folder" className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{dir}</span>
-                  </button>
-                ))}
+                {projectDirPaths.map((dir) => {
+                  const isRoot = dir === ''
+                  return (
+                    <button
+                      key={dir || '__root__'}
+                      onClick={() => setMoveDest(isRoot ? '' : (dir === moveDest ? '' : dir))}
+                      title={isRoot ? t('file.workspaceRoot') : dir}
+                      className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-accent flex items-center gap-1.5 ${dir === moveDest ? 'bg-accent' : ''}`}
+                    >
+                      <Icon name={isRoot ? 'folder-3' : 'folder'} className="h-3 w-3 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{isRoot ? '/' : dir}</span>
+                    </button>
+                  )
+                })}
               </div>
             )}
             <div className="flex gap-2">

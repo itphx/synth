@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { ChatOrchestrator } from '../orchestrator.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { FileStore } from '../../storage/file-store.js';
+import { ProjectStore } from '../../storage/project-store.js';
 import { EventBus } from '../../events/bus.js';
 import { PermissionEvaluator, extractPaths } from '../permission/evaluator.js';
 import { createToolRegistry } from '../tools/index.js';
@@ -95,6 +96,8 @@ function makeMessage(): Message {
 describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let projectId: string;
   let eventBus: EventBus;
   let tmpDir: string;
 
@@ -102,6 +105,11 @@ describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-perm-'));
     store = new FileStore({ dataDir: tmpDir });
     sessionManager = new SessionManager(store);
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    // AD-075: файловые тулы доступны только при заданном workspace проекта.
+    const project = projectStore.create('Perm', 'u1', { workspace: tmpDir });
+    await projectStore.save(project);
+    projectId = project.id;
     eventBus = new EventBus();
     ProviderFactory.register('mockperm', MockWriteProvider);
   });
@@ -125,11 +133,13 @@ describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
       },
       toolRegistry,
       permissionConfig,
+      projectStore,
       defaultWorkingDir: tmpDir,
     });
 
     const session = await sessionManager.createSession({
       title: 'Smoke',
+      projectId,
       settings: {
         provider: 'mockperm',
         model: 'm',
@@ -399,6 +409,8 @@ class MockReadProvider extends BaseProvider {
 describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let projectId: string;
   let eventBus: EventBus;
   let tmpDir: string;
 
@@ -406,6 +418,11 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-perm2-'));
     store = new FileStore({ dataDir: tmpDir });
     sessionManager = new SessionManager(store);
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    // AD-075: файловые тулы доступны только при заданном workspace проекта.
+    const project = projectStore.create('Perm2', 'u1', { workspace: tmpDir });
+    await projectStore.save(project);
+    projectId = project.id;
     eventBus = new EventBus();
     ProviderFactory.register('mockdouble', MockDoubleWriteProvider);
     ProviderFactory.register('mockdeny', MockDenyProvider);
@@ -435,11 +452,13 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
       },
       toolRegistry,
       permissionConfig,
+      projectStore,
       defaultWorkingDir: tmpDir,
     });
 
     const session = await sessionManager.createSession({
       title: 'Smoke2',
+      projectId,
       settings: { provider: providerName, model: 'm', systemPrompt: 'test', agentRole: 'developer' },
     });
     opts?.onSession?.(session.id);
@@ -542,10 +561,11 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
   });
 
   it('ask в дочерней сессии (parentId) с once:false — грант появляется и в родителе', async () => {
-    const parent = await sessionManager.createSession({ title: 'Parent' });
+    const parent = await sessionManager.createSession({ title: 'Parent', projectId });
     const child = await sessionManager.createSession({
       title: 'Child',
       parentId: parent.id,
+      projectId,
       settings: { provider: 'mockread', model: 'm', systemPrompt: 'test', agentRole: 'explore' },
     });
 
@@ -578,6 +598,7 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
       },
       toolRegistry,
       permissionConfig: { rules: { read_file: 'ask' }, askTimeoutMs: 2000 },
+      projectStore,
       defaultWorkingDir: tmpDir,
     });
 

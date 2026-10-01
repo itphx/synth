@@ -199,8 +199,10 @@ export {
   ProjectInstructionsResolver,
   buildInstructionsInfo,
   createInstructionsInfoResolver,
+  resolveInstructionsTrusted,
 } from './engine/context/instructions.js';
 export type {
+  InstructionsTrustOptions,
   InstructionsInfo,
   InstructionsInfoQuery,
   InstructionsInfoResolver,

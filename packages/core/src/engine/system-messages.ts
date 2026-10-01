@@ -225,6 +225,8 @@ export const SYSTEM_MESSAGES = {
   'permission.mcp_unavailable': 'MCP tool unavailable in {mode} mode',
   'permission.dep_unavailable':
     'Tool is unavailable: the required program "{binary}" is not installed in the environment',
+  'permission.workspace_unavailable':
+    'Tool is unavailable: the project working directory is not set. Create or attach a project and set its working directory first.',
   'permission.no_rules': 'no permission rules for "{tool}" — allowed by default',
   'permission.rule_matched': 'rule "{key}" → {action}',
   'permission.rule_pattern_matched': 'rule "{key}.{pattern}" → {action} (path: {path})',

@@ -787,6 +787,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         dictionaryStore,
         dataDir,
         trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
+        // AD-069 R3: авто-trust workspace внутри workspacesRoot (managed-каталоги).
+        workspacesRoot: backendConfig.workspacesRoot,
       }),
       backendConfig.synth.instructions,
     );

@@ -16,12 +16,12 @@ import { CenterPanel } from './components/layout/CenterPanel'
 import { MobileDrawer } from './components/layout/MobileDrawer'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { ConnectionGuard } from './components/layout/ConnectionGuard'
-import { UpdateNotification } from './components/layout/UpdateNotification'
 import { PwaUpdatePrompt } from './components/layout/PwaUpdatePrompt'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { SettingsModal } from './components/settings/SettingsModal'
 import { LogsModal } from './components/logviewer/LogsModal'
 import { ConfirmDialog } from './components/ui/confirm-dialog'
+import { EntityEditDialog } from './components/ui/EntityEditDialog'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import {
@@ -218,7 +218,6 @@ function App() {
       <AuthGate>
         <BackendConnection />
         <ConnectionGuard />
-        <UpdateNotification />
         <TooltipProvider>
           <TitleTooltipBridge />
           {isMobile ? mobileLayout : desktopLayout}
@@ -226,6 +225,7 @@ function App() {
 
         <SettingsModal />
         <LogsModal />
+        <EntityEditDialog />
         <ConfirmDialog
           open={confirmOpen}
           onOpenChange={(open) => { if (!open) closeConfirm(false) }}

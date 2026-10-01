@@ -3,7 +3,7 @@ import { globMatch, ToolCapability } from '@itphx/synth-shared';
 import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
 import { resolvePath } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
-import { computeToolAvailability } from './availability.js';
+import { computeToolAvailability, isWorkspaceDependentTool } from './availability.js';
 import {
   isRuntimeDepAvailable,
   RUNTIME_DEP_BINARY,
@@ -47,6 +47,12 @@ export interface PermissionCheckInput {
    * `unavailable(dependency)`.
    */
   runtimeDeps?: RuntimeDeps;
+  /**
+   * AD-075: задан ли рабочий каталог проекта. `false` — file/shell/git-тулы
+   * получают `deny` с `unavailable(workspace)` (относительные пути не имеют
+   * базы). `true`/`undefined` — fail-open (обратная совместимость).
+   */
+  workspaceReady?: boolean;
 }
 
 /**
@@ -165,7 +171,7 @@ export class PermissionEvaluator {
   }
 
   private _computeDecision(input: PermissionCheckInput): PermissionDecision {
-    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps } = input;
+    const { toolName, params, workingDir, capabilities, sessionMode, planMode, planApproved, mcpToolSettings, shellPolicy, protectedPaths, protectedPathsEnabled, runtimeDeps, workspaceReady } = input;
     const paths = extractPaths(toolName, params, workingDir);
     const isFile = paths.length > 0;
 
@@ -214,6 +220,19 @@ export class PermissionEvaluator {
         unavailable: { reason: 'dependency' },
         messageId: 'tool-unavailable-dependency',
         params: { binary },
+      };
+    }
+
+    // 4. Рабочий каталог проекта (AD-075): без `project.workspace` file/shell/git-
+    // тулы недоступны — deny с подсказкой создать/привязать проект и задать
+    // рабочий каталог. Тул виден модели (набор дефинишенов постоянен).
+    if (workspaceReady === false && isWorkspaceDependentTool(capabilities)) {
+      return {
+        action: 'deny',
+        reason: sm('permission.workspace_unavailable'),
+        matchedRule: 'workspace.unavailable',
+        unavailable: { reason: 'workspace' },
+        messageId: 'tool-unavailable-workspace',
       };
     }
 

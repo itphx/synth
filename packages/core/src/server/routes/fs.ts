@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
+import { cp, mkdir, readdir, readFile, rename, rm, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -630,13 +630,25 @@ export function createFsRoutes(
     }
   });
 
-  // POST /move — перемещение/переименование
+  // POST /move — перемещение/переименование; `targetProjectId` — межпроектный перенос
   app.post('/move', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
     const body = await c.req.json().catch(() => null);
     const projectIdRaw = body?.projectId || body?.project_id;
     const projectId = typeof projectIdRaw === 'string' ? projectIdRaw : undefined;
-    if (projectId && isRemoteRef(projectId)) {
+    const targetProjectIdRaw = body?.targetProjectId || body?.target_project_id;
+    const targetProjectId =
+      typeof targetProjectIdRaw === 'string' && targetProjectIdRaw ? targetProjectIdRaw : undefined;
+
+    const projectRemote = !!projectId && isRemoteRef(projectId);
+    const targetRemote = !!targetProjectId && isRemoteRef(targetProjectId);
+
+    // Межпроектный перенос с удалённым проектом (в любую сторону) не поддерживается.
+    if (targetProjectId && (projectRemote || targetRemote)) {
+      return c.json(validationError('Межпроектный перенос с удалённым проектом не поддерживается'), 400);
+    }
+
+    if (projectRemote) {
       if (!remoteClient) return remoteUnavailable(c);
       try {
         const result = await remoteClient.fsMove({
@@ -659,17 +671,57 @@ export function createFsRoutes(
         return c.json(validationError('sourcePath и targetPath обязательны'), 400);
       }
 
-      const { base, projectAware } = await resolveBase(projectId);
-      const fullSource = resolveRequestedPath(base, sourcePath, projectAware);
-      const fullTarget = resolveRequestedPath(base, targetPath, projectAware);
+      // База источника; при `targetProjectId` — база назначения (иначе та же).
+      const source = await resolveBase(projectId);
+      const target = targetProjectId ? await resolveBase(targetProjectId) : source;
+      const fullSource = resolveRequestedPath(source.base, sourcePath, source.projectAware);
+      const fullTarget = resolveRequestedPath(target.base, targetPath, target.projectAware);
 
       const sourceStat = await stat(fullSource).catch(() => null);
       if (!sourceStat) {
         return c.json(makeFsError(FsErrorCode.NOT_FOUND, `Источник не найден: ${sourcePath}`), 404);
       }
 
-      await mkdir(join(fullTarget, '..'), { recursive: true }).catch(() => {});
-      await rename(fullSource, fullTarget);
+      // Запрет переноса каталога в самого себя/потомка (rename/cp дал бы невнятную ошибку).
+      if (sourceStat.isDirectory()) {
+        const relToTarget = relative(fullSource, fullTarget);
+        if (!relToTarget.startsWith('..') && !isAbsolute(relToTarget)) {
+          return c.json(
+            validationError('Нельзя переместить каталог в самого себя или вложенный каталог'),
+            400,
+          );
+        }
+      }
+
+      const targetDir = dirname(fullTarget);
+      if (resolve(source.base) === resolve(target.base)) {
+        // Одна база (проект/ФС) — быстрое переименование.
+        await mkdir(targetDir, { recursive: true }).catch(() => {});
+        await rename(fullSource, fullTarget);
+      } else {
+        // Разные базы — межпроектный перенос: копируем (файл/каталог), затем удаляем источник.
+        await mkdir(targetDir, { recursive: true });
+        try {
+          await cp(fullSource, fullTarget, { recursive: true, errorOnExist: true, force: false });
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          // `cp` с `force:false`/`errorOnExist` сигналит о существующей цели
+          // (в т.ч. несовпадением типов) — единый контракт: 409 ALREADY_EXISTS.
+          if (
+            code === 'EEXIST' ||
+            code === 'ERR_FS_CP_EEXIST' ||
+            code === 'ERR_FS_CP_NON_DIR_TO_DIR' ||
+            code === 'ERR_FS_CP_DIR_TO_NON_DIR'
+          ) {
+            return c.json(
+              makeFsError(FsErrorCode.ALREADY_EXISTS, `Цель уже существует: ${targetPath}`),
+              409,
+            );
+          }
+          throw err;
+        }
+        await rm(fullSource, { recursive: true, force: false });
+      }
       return c.json({ moved: true, sourcePath, targetPath }, 200);
     } catch (err) {
       return fsErrorResponse(c, err);

@@ -348,7 +348,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/fs/download` | оба | auth | Скачать; `?project_id=&path=` |
 | DELETE | `/api/v2/fs` | оба | auth | Удалить файл/пустой каталог; `?project_id=&path=` |
 | POST | `/api/v2/fs/mkdir` | оба | auth | `{projectId, path}` |
-| POST | `/api/v2/fs/move` | оба | auth | `{projectId, sourcePath, targetPath}` |
+| POST | `/api/v2/fs/move` | оба | auth | `{projectId, sourcePath, targetPath, targetProjectId?}` |
 | GET | `/api/v2/fs/workspace-root` | оба | auth | Подкаталоги корня workspace (AD-075); `?includeHidden=` → `{root, entries}` |
 | GET | `/api/v2/fs/workspace-root/browse` | оба | auth | Список внутри корня (AD-075); `?path=&includeHidden=` → `{root, path, entries}` |
 | POST | `/api/v2/fs/workspace-root/mkdir` | оба | auth | Создать каталог в корне (AD-075); `{path, confirmOutsideRoot?}` → 201 `{created, path}` |
@@ -357,6 +357,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > `confirm`: browse разрешён, mkdir требует `confirmOutsideRoot: true`, иначе `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > `deny`: `403 WORKSPACE_OUTSIDE_ROOT_DENIED` (в т.ч. traversal `..`); protected-paths → `403 PROTECTED_PATH_DENIED`.
 > `mkdir` существующего пути → `409 ALREADY_EXISTS`; несуществующий каталог browse → `404 NOT_FOUND`, не каталог → `400 NOT_A_DIRECTORY`.
+> `move` с необязательным `targetProjectId`/`target_project_id` — межпроектный перенос (файл/каталог), локально между workspace; с удалённым (`remote:`) проектом в любой стороне → `400`; существующая цель → `409 ALREADY_EXISTS`, отсутствующий источник → `404 NOT_FOUND`.
 > Единая (core) реализация: `FsError`-форма; backend монтирует core-фабрику с `deny` (managed) и обязательным `project_id`;
 > standalone — политика из `settings/workspace-policy`, без `project_id` — плоский root, проект без workspace — fallback на root.
 

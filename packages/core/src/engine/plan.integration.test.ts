@@ -146,6 +146,11 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
   ): Promise<{ deniedRules: string[]; session: Session | null }> {
     ScriptedProvider.configure(script);
 
+    // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const project = projectStore.create('PlanInt', 'u1', { workspace: tmpDir });
+    await projectStore.save(project);
+
     const toolRegistry = createToolRegistry();
     const orchestrator = new ChatOrchestrator({
       sessionManager,
@@ -156,11 +161,13 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
       },
       toolRegistry,
       permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      projectStore,
       defaultWorkingDir: tmpDir,
     });
 
     const session = await sessionManager.createSession({
       title: 'Plan',
+      projectId: project.id,
       settings: { provider: 'scripted', model: 'm', systemPrompt: 'test', agentRole: 'developer', ...settings },
     });
     const msg = makeMessage();
@@ -227,7 +234,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
 
   it('plan_exit переводит в act, ставит planApproved и встраивает план проекта в system prompt', async () => {
     const projectStore = new ProjectStore({ dataDir: tmpDir });
-    const project = projectStore.create('Proj', 'u1');
+    const project = projectStore.create('Proj', 'u1', { workspace: tmpDir });
     project.plan = {
       version: 1,
       updatedAt: nowISO(),

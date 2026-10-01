@@ -1088,6 +1088,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         dictionaryStore,
         dataDir,
         trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+        // AD-069 R3: авто-trust workspace внутри workspacesRoot (как в оркестраторе).
+        workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
       }),
       config.instructionsConfig,
     );

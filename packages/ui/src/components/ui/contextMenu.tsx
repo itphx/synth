@@ -57,7 +57,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
             return (
               <PopoverPrimitive.Close key={item.label + index} asChild>
                 <button
-                  onClick={item.onClick}
+                  // Radix Popover порталит контент в body, но React-события всё равно
+                  // всплывают по дереву компонентов до родителя-триггера (например,
+                  // строки дерева). Без stopPropagation клик по пункту меню вызывал
+                  // onClick строки: на мобильном это закрывало левый дровер (openTab
+                  // сбрасывает mobileLeftOpen), на десктопе — открывало вкладку сессии.
+                  onClick={(e) => { e.stopPropagation(); item.onClick() }}
                   disabled={item.disabled}
                   className={cn(
                     'flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left outline-none transition-colors',

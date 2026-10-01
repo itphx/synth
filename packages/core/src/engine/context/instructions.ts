@@ -9,16 +9,18 @@
  *
  * Фаза 2a: дополнительные `config.instructions.sources` (`before` → chain →
  * `after`), URL-fetch с TTL-кэшем `{dataDir}/instructions-cache/<sha1(url)>`
- * (атомарная запись tmp→rename, AD-005), project-trust гейт (`skills.trustedProjectDirs`),
- * install-tree guard и `excludeProjects`.
+ * (атомарная запись tmp→rename, AD-005), project-trust гейт (`skills.trustedProjectDirs`)
+ * с авто-trust для workspace внутри `workspacesRoot` (R1/R3), install-tree guard
+ * и `excludeProjects`.
  *
  * Глобальные файлы (`~/.config`, `~/.claude`) намеренно не читаются.
  */
 
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { atomicWrite, globMatch, type InstructionSourceConfig, type InstructionsConfig } from '@itphx/synth-shared';
+import { dirsSignature, filesSignature, type FileSignatureEntry } from '../file-signature.js';
 import { runGit } from '../tools/git.js';
 import {
   applyPolicy,
@@ -164,6 +166,8 @@ export interface ProjectInstructionsDeps {
   runGitFn?: (args: string[], cwd: string, signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
   /** AD-069 §3.5: `config.skills.trustedProjectDirs` — project-trust гейт. */
   trustedProjectDirs?: readonly string[];
+  /** AD-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
+  workspacesRoot?: string;
   /** Корень данных для URL-кэша `{dataDir}/instructions-cache`. */
   dataDir?: string;
   /** Подменяемый fetch (тесты). */
@@ -235,6 +239,37 @@ export async function selectInstructionFile(
 export function isInsideDir(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/** Контекст trust-гейта проектных инструкций (AD-069 §3.5/R1/R3). */
+export interface InstructionsTrustOptions {
+  /** AD-046 project-trust: явный список доверенных проектных каталогов. */
+  trustedProjectDirs?: readonly string[];
+  /** AD-069 R3: workspace внутри `workspacesRoot` доверяется автоматически. */
+  workspacesRoot?: string;
+  /** Домашний каталог для раскрытия `~` в `trustedProjectDirs`. */
+  home?: string;
+}
+
+/**
+ * AD-069 §3.5/R1/R3: единый trust-гейт проектных инструкций — общий для
+ * merged-chain (`ProjectInstructionsResolver`) и lazy-догрузки
+ * (`LazyInstructionsLoader`).
+ *
+ * Доверено, если каталог явно в `trustedProjectDirs` (project-trust AD-046)
+ * ИЛИ лежит внутри `workspacesRoot` (рабочие каталоги Synth получают
+ * авто-trust — инструкции там не несут риска чужого клона).
+ *
+ * На project-trust скиллов (`isProjectTrusted`) не влияет.
+ */
+export function resolveInstructionsTrusted(
+  workspace: string,
+  opts: InstructionsTrustOptions,
+): boolean {
+  if (isProjectTrusted(workspace, opts.trustedProjectDirs ?? [], opts.home)) return true;
+  const root = opts.workspacesRoot?.trim();
+  if (root && isInsideDir(root, workspace)) return true;
+  return false;
 }
 
 /** `true`, если в строке есть glob-метасимволы. */
@@ -476,16 +511,26 @@ export class ProjectInstructionsResolver {
   private readonly _dictionaryStore: DictionaryStore | null;
   private readonly _runGit: NonNullable<ProjectInstructionsDeps['runGitFn']>;
   private readonly _trustedProjectDirs: readonly string[];
+  private readonly _workspacesRoot: string;
   private readonly _dataDir: string | null;
   private readonly _fetchImpl: FetchLike;
   private readonly _home: string;
   private readonly _now: () => number;
+  /**
+   * AD-069 §3.5/R5: результатный кэш по подписи кандидатов (mtime:size).
+   * Ключ — все входы, влияющие на результат; значение — объект результата
+   * (read-only на стороне вызовов).
+   */
+  private readonly _resultCache = new Map<string, { signature: string; result: ProjectInstructionsResult }>();
+  /** Ограничение размера кэша (простая FIFO-эвикция). */
+  private static readonly MAX_RESULT_CACHE = 64;
 
   constructor(deps: ProjectInstructionsDeps) {
     this._config = deps.config;
     this._dictionaryStore = deps.dictionaryStore ?? null;
     this._runGit = deps.runGitFn ?? runGit;
     this._trustedProjectDirs = deps.trustedProjectDirs ?? [];
+    this._workspacesRoot = deps.workspacesRoot ?? '';
     this._dataDir = deps.dataDir ?? null;
     this._fetchImpl = deps.fetchImpl ?? ((input, init) => fetch(input, init));
     this._home = deps.home ?? expandHome('~');
@@ -506,13 +551,41 @@ export class ProjectInstructionsResolver {
       return this._empty({ status: 'excluded', reason: 'excludeProjects', path: workspace });
     }
 
+    // AD-069 §3.5/R5: дешёвая подпись кандидатов (stat без readFile/scan) и
+    // результатный кэш — повторный resolve с той же подписью не перечитывает
+    // диск. Кэшируются в т.ч. пустые/untrusted-результаты.
+    const { signature, cacheable, chain } = await this._signature(workspace, args);
+    const key = this._resultKey(workspace, args);
+    if (cacheable) {
+      const cached = this._resultCache.get(key);
+      if (cached && cached.signature === signature) return cached.result;
+    }
+
+    const result = await this._resolveUncached(workspace, args, chain);
+    if (cacheable) this._storeResult(key, signature, result);
+    return result;
+  }
+
+  /**
+   * Полный резолв без результатного кэша: guard → chain/sources → дедуп/scan →
+   * сборка блока. `chain` — прекомпьют из `_signature` (без повторного git).
+   */
+  private async _resolveUncached(
+    workspace: string,
+    args: ProjectInstructionsResolveArgs,
+    chain: string[],
+  ): Promise<ProjectInstructionsResult> {
+    const config = this._config;
     const guard: GuardContext = {
-      trusted: isProjectTrusted(workspace, this._trustedProjectDirs, this._home),
+      trusted: resolveInstructionsTrusted(workspace, {
+        trustedProjectDirs: this._trustedProjectDirs,
+        workspacesRoot: this._workspacesRoot,
+        home: this._home,
+      }),
       installTree: await this._isInstallTree(workspace),
       allowInstallTree: config.allowInstallTreeFallback,
     };
 
-    const chain = await this._buildChain(workspace, args.signal);
     const before = config.sources.filter((source) => source.position === 'before');
     const after = config.sources.filter((source) => source.position !== 'before');
 
@@ -640,6 +713,115 @@ export class ProjectInstructionsResolver {
       ...(entry.label ? { label: entry.label } : {}),
       ...(entry.url ? { url: entry.url } : {}),
     };
+  }
+
+  /**
+   * AD-069 §3.5/R5: подпись всех кандидатов (chain + `config.sources`) без
+   * чтения контента — только `stat`/`access`. `cacheable=false`, если
+   * URL-источник не представим стабильной подписью (нет `dataDir` или TTL=0):
+   * тогда fetch идёт каждый resolve, как и раньше.
+   */
+  private async _signature(
+    workspace: string,
+    args: ProjectInstructionsResolveArgs,
+  ): Promise<{ signature: string; cacheable: boolean; chain: string[] }> {
+    const chain = await this._buildChain(workspace, args.signal);
+    // Локальные кандидаты цепочки — тот же приоритет имён, что у `_selectCandidate`.
+    const chainSignature = await dirsSignature(chain, this._candidateFileNames());
+
+    const entries: FileSignatureEntry[] = [];
+    const urlParts: string[] = [];
+    let cacheable = true;
+    let index = 0;
+    for (const source of this._config.sources) {
+      const value = source.value.trim();
+      index += 1;
+      if (!value) continue;
+      if (source.kind === 'path') {
+        entries.push({ id: `source-${index}`, path: await this._resolvePathValue(value, workspace) });
+      } else {
+        const part = await this._urlSignaturePart(value, source);
+        urlParts.push(part.part);
+        if (!part.cacheable) cacheable = false;
+      }
+    }
+
+    const sourceSignature = await filesSignature(entries);
+    urlParts.sort();
+    const signature = [chainSignature, sourceSignature, urlParts.join('|')].join('||');
+    return { signature, cacheable, chain };
+  }
+
+  /** Имена-кандидаты на каталог в порядке приоритета (с учётом opt-in compat). */
+  private _candidateFileNames(): string[] {
+    const names: string[] = [...PRIMARY_CANDIDATES];
+    if (this._config.claudeCompat) names.push('CLAUDE.md');
+    if (this._config.contextCompat) names.push('CONTEXT.md');
+    return names;
+  }
+
+  /**
+   * Подпись URL-источника (stat-only, без чтения кэш-JSON). В подпись входит
+   * TTL-слот `floor(now/ttl)`: смена слота гарантированно наступает не позже
+   * реального истечения TTL (`fetchedAt` пишется в том же слоте), поэтому
+   * результатный кэш никогда не отдаёт просроченный контент. Внутри слота
+   * учитываются mtime/size кэш-файла — внешняя правка инвалидирует результат.
+   * `cacheable=false`, если `dataDir`/TTL нет: fetch идёт каждый resolve, как раньше.
+   */
+  private async _urlSignaturePart(
+    url: string,
+    source: InstructionSourceConfig,
+  ): Promise<{ part: string; cacheable: boolean }> {
+    const hash = createHash('sha1').update(url).digest('hex');
+    if ('error' in validateRemoteUrl(url)) {
+      return { part: `url:${hash}:invalid`, cacheable: true };
+    }
+
+    const cachePath = this._cachePath(url);
+    const ttlMs = (source.ttlSec ?? this._config.fetch.cacheTtlSec) * 1000;
+    if (!cachePath || ttlMs <= 0) {
+      return { part: `url:${hash}:nocache`, cacheable: false };
+    }
+
+    const slot = Math.floor(this._now() / ttlMs);
+    try {
+      const info = await stat(cachePath);
+      return {
+        part: `url:${hash}:${slot}:${Math.floor(info.mtimeMs)}:${info.size}`,
+        cacheable: true,
+      };
+    } catch {
+      return { part: `url:${hash}:${slot}:miss`, cacheable: true };
+    }
+  }
+
+  /** Ключ результатного кэша — все входы, влияющие на результат. */
+  private _resultKey(workspace: string, args: ProjectInstructionsResolveArgs): string {
+    const injection = args.injection;
+    return JSON.stringify([
+      workspace,
+      args.contextWindow ?? 0,
+      args.language ?? '',
+      args.projectId ?? '',
+      injection ? `${injection.enabled ? 1 : 0}:${injection.mode}` : 'off',
+    ]);
+  }
+
+  /** Запись в результатный кэш с FIFO-эвикцией (≤ `MAX_RESULT_CACHE`). */
+  private _storeResult(key: string, signature: string, result: ProjectInstructionsResult): void {
+    if (
+      this._resultCache.size >= ProjectInstructionsResolver.MAX_RESULT_CACHE &&
+      !this._resultCache.has(key)
+    ) {
+      const oldest = this._resultCache.keys().next().value;
+      if (oldest !== undefined) this._resultCache.delete(oldest);
+    }
+    this._resultCache.set(key, { signature, result });
+  }
+
+  /** Сброс результатного кэша (принудительный reload, AD-069 §3.5/R5). */
+  clear(): void {
+    this._resultCache.clear();
   }
 
   /** `excludeProjects`: по projectId либо по пути workspace. */
@@ -788,6 +970,20 @@ export class ProjectInstructionsResolver {
     return { candidates, diagnostics };
   }
 
+  /**
+   * Резолвит path-источник до абсолютного пути (first-match, glob-aware);
+   * `null` — не найден. Общий для резолва и подписи кандидатов.
+   */
+  private async _resolvePathValue(value: string, workspace: string): Promise<string | null> {
+    const base = value === '~' || value.startsWith('~/') || value.startsWith('~\\')
+      ? this._home
+      : isAbsolute(value)
+        ? '/'
+        : workspace;
+    const pattern = value === '~' ? '' : value.startsWith('~/') || value.startsWith('~\\') ? value.slice(2) : value;
+    return pattern ? findFirstMatch(base, pattern, this._config.lazy.excludeDirs) : null;
+  }
+
   /** Резолвит path-источник (first-match) и читает его. */
   private async _collectPathSource(
     source: InstructionSourceConfig,
@@ -795,14 +991,7 @@ export class ProjectInstructionsResolver {
     workspace: string,
     guard: GuardContext,
   ): Promise<{ candidates: Candidate[]; diagnostics: InstructionsDiagnostic[] }> {
-    const base = value === '~' || value.startsWith('~/') || value.startsWith('~\\')
-      ? this._home
-      : isAbsolute(value)
-        ? '/'
-        : workspace;
-    const pattern = value === '~' ? '' : value.startsWith('~/') || value.startsWith('~\\') ? value.slice(2) : value;
-
-    const abs = pattern ? await findFirstMatch(base, pattern, this._config.lazy.excludeDirs) : null;
+    const abs = await this._resolvePathValue(value, workspace);
     if (!abs) {
       return {
         candidates: [],

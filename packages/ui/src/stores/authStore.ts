@@ -11,6 +11,11 @@ interface AuthState {
   error: string | null
   /** Тип развёртывания сервера ('standalone'|'managed') — runtime-детекция. */
   deployment: DeploymentKind | null
+  /** OIDC-вход включён на сервере (GET /auth/status.oidc_enabled). Нужен логин-форме
+   *  для выбора ветки полей (username+password vs apiKey) без «мигающей» промежуточной формы. */
+  oidcEnabled: boolean
+  /** Debug-режим сервера (GET /auth/status.debug_mode) — список тестовых пользователей. */
+  debugMode: boolean
 
   initialize: () => Promise<void>
   reauthenticate: () => Promise<void>
@@ -32,6 +37,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isInitialized: false,
   error: null,
   deployment: null,
+  oidcEnabled: false,
+  debugMode: false,
 
   initialize: async () => {
     if (get().isLoading || get().isInitialized) return
@@ -54,6 +61,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isAuthenticated: status.authenticated,
         isLoading: false,
         deployment: status.deployment ?? null,
+        oidcEnabled: status.oidc_enabled,
+        debugMode: status.debug_mode,
       })
       if (status.authenticated) {
         await profileService.initialize()
@@ -67,6 +76,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isLoading: false,
         isInitialized: true,
         deployment: null,
+        oidcEnabled: false,
+        debugMode: false,
       })
     }
   },
@@ -142,12 +153,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       localStorage.removeItem('useSystemTheme')
       localStorage.removeItem('selectedThemeId')
       localStorage.removeItem('selectedThemeVariant')
-      set({ user: null, profile: null, isAuthenticated: false, isLoading: false, deployment: null })
+      // deployment/oidcEnabled/debugMode описывают сервер, а не сессию, и после
+      // выхода нужны LoginForm для корректной ветки полей. Сбрасывать их нельзя:
+      // reauthenticate() здесь не вызывается (isInitialized остаётся true), и при
+      // сбросе логин-форма снова показала бы промежуточную password-only форму
+      // (managed OIDC) либо спрятала поле «Сервер» (гибрид).
+      set({ user: null, profile: null, isAuthenticated: false, isLoading: false })
     }
   },
 
   sessionExpired: () =>
-    set({ user: null, profile: null, isAuthenticated: false, isLoading: false, deployment: null }),
+    set({ user: null, profile: null, isAuthenticated: false, isLoading: false }),
 
   clearError: () => set({ error: null }),
 }))

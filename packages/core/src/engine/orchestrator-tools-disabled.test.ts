@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { ChatOrchestrator } from './orchestrator.js';
 import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
+import { ProjectStore } from '../storage/project-store.js';
 import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { LLMMessage } from '../providers/base.js';
@@ -89,11 +90,18 @@ class ToolCaptureProvider extends BaseProvider {
 describe('ChatOrchestrator — tools.disabled (AD-071 §2.6)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let projectId: string;
   let orchestrator: ChatOrchestrator;
 
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-disabled-'));
     sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+    const project = projectStore.create('Disabled', 'u1', { workspace: tmpDir });
+    await projectStore.save(project);
+    projectId = project.id;
     ToolCaptureProvider.lastTools = undefined;
     ProviderFactory.register('toolcapture', ToolCaptureProvider);
 
@@ -112,6 +120,7 @@ describe('ChatOrchestrator — tools.disabled (AD-071 §2.6)', () => {
           defaultModel: 'm',
         }) as unknown as import('@itphx/synth-shared').ProviderConfig,
       defaultWorkingDir: tmpDir,
+      projectStore,
       toolRegistry,
       agentRegistry: createAgentRegistry(toolRegistry),
     });
@@ -125,6 +134,7 @@ describe('ChatOrchestrator — tools.disabled (AD-071 §2.6)', () => {
   async function createSession(mode: SessionMode = 'act'): Promise<Session> {
     return sessionManager.createSession({
       title: 'tools disabled',
+      projectId,
       settings: { provider: 'toolcapture', model: 'm', agentRole: 'developer' },
     }).then(async (session) => {
       session.mode = mode;

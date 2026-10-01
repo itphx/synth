@@ -98,7 +98,7 @@
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use).
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit.
 - `engine/router/*` — routing моделей и micro-model слой (AD-034/035).
-- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причину `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, AD-078); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
+- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, AD-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, AD-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью.
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
@@ -129,6 +129,7 @@
   бинарников (`git`/`rg`/`sh`, fail-open, кэш) и карта `TOOL_RUNTIME_DEP`; отсутствие
   программы даёт `unavailable(dependency)` (AD-078), тулы из реестра не удаляются.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
+- `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).

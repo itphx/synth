@@ -529,3 +529,123 @@ describe('FS project-aware routes (AD-075: managed/standalone)', () => {
     expect(body.entries.map((e) => e.name)).toContain('sub');
   });
 });
+
+describe('FS межпроектный перенос (POST /move, targetProjectId)', () => {
+  let tmpDir: string;
+  let workspacesRoot: string;
+
+  const jsonHeaders = { 'Content-Type': 'application/json' };
+  const projects: Record<string, { workspace?: string }> = {
+    p1: { workspace: 'p1' },
+    p2: { workspace: 'p2' },
+  };
+
+  function makeApp(): Hono {
+    const app = new Hono();
+    app.route('/api/v2/fs', createFsRoutes(createMockAuth(), workspacesRoot, undefined, {
+      getOutsideRootPolicy: () => 'deny',
+      getProtectedPathsPolicy: () => NO_PROTECTED,
+      requireProjectId: true,
+      getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
+        workspacesRoot,
+        getProject: async (id) => projects[id] ?? null,
+        outsideRootPolicy: () => 'deny',
+        strict: true,
+      }),
+    }));
+    return app;
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fs-move-'));
+    workspacesRoot = join(tmpDir, 'workspaces');
+    await mkdir(join(workspacesRoot, 'p1'), { recursive: true });
+    await mkdir(join(workspacesRoot, 'p2'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('перенос файла между проектами: появился в целевом, исчез в исходном', async () => {
+    await writeFile(join(workspacesRoot, 'p1', 'a.txt'), 'payload');
+    const res = await makeApp().request('/api/v2/fs/move', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        projectId: 'p1', targetProjectId: 'p2', sourcePath: 'a.txt', targetPath: 'nested/a.txt',
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await readFile(join(workspacesRoot, 'p2', 'nested', 'a.txt'), 'utf-8')).toBe('payload');
+    await expect(stat(join(workspacesRoot, 'p1', 'a.txt'))).rejects.toThrow();
+  });
+
+  it('перенос каталога с вложенным файлом между проектами', async () => {
+    await mkdir(join(workspacesRoot, 'p1', 'dir', 'sub'), { recursive: true });
+    await writeFile(join(workspacesRoot, 'p1', 'dir', 'sub', 'f.txt'), 'deep');
+    const res = await makeApp().request('/api/v2/fs/move', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        projectId: 'p1', target_project_id: 'p2', sourcePath: 'dir', targetPath: 'moved',
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await readFile(join(workspacesRoot, 'p2', 'moved', 'sub', 'f.txt'), 'utf-8')).toBe('deep');
+    await expect(stat(join(workspacesRoot, 'p1', 'dir'))).rejects.toThrow();
+  });
+
+  it('цель уже существует → 409 ALREADY_EXISTS, источник не тронут', async () => {
+    await writeFile(join(workspacesRoot, 'p1', 'a.txt'), 'src');
+    await writeFile(join(workspacesRoot, 'p2', 'a.txt'), 'dst');
+    const res = await makeApp().request('/api/v2/fs/move', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        projectId: 'p1', targetProjectId: 'p2', sourcePath: 'a.txt', targetPath: 'a.txt',
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('ALREADY_EXISTS');
+    expect(await readFile(join(workspacesRoot, 'p1', 'a.txt'), 'utf-8')).toBe('src');
+    expect(await readFile(join(workspacesRoot, 'p2', 'a.txt'), 'utf-8')).toBe('dst');
+  });
+
+  it('цель-каталог существует, переносим файл → 409 ALREADY_EXISTS', async () => {
+    await writeFile(join(workspacesRoot, 'p1', 'a.txt'), 'src');
+    await mkdir(join(workspacesRoot, 'p2', 'a.txt'), { recursive: true });
+    const res = await makeApp().request('/api/v2/fs/move', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        projectId: 'p1', targetProjectId: 'p2', sourcePath: 'a.txt', targetPath: 'a.txt',
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('ALREADY_EXISTS');
+    expect(await readFile(join(workspacesRoot, 'p1', 'a.txt'), 'utf-8')).toBe('src');
+  });
+
+  it('источник не найден → 404 NOT_FOUND', async () => {
+    const res = await makeApp().request('/api/v2/fs/move', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        projectId: 'p1', targetProjectId: 'p2', sourcePath: 'missing.txt', targetPath: 'x.txt',
+      }),
+    });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+  });
+
+  it('перенос каталога в собственный потомок → 400', async () => {
+    await mkdir(join(workspacesRoot, 'p1', 'dir'), { recursive: true });
+    const res = await makeApp().request('/api/v2/fs/move', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ projectId: 'p1', sourcePath: 'dir', targetPath: 'dir/sub' }),
+    });
+    expect(res.status).toBe(400);
+  });
+});

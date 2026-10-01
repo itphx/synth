@@ -24,6 +24,7 @@ const storage = vi.hoisted(() => {
 })
 
 import { useUIStore, OTHER_PROJECTS_COLLAPSE_KEY, type CenterTab } from './useUIStore'
+import { useFilesStore } from './filesStore'
 
 const tab = (id: string, title = id): CenterTab => ({
   id,
@@ -105,5 +106,179 @@ describe('useUIStore.onlyActiveProject (variant C)', () => {
     await useUIStore.persist.rehydrate()
     expect(useUIStore.getState().onlyActiveProject).toBe(false)
     expect(useUIStore.getState().leftPanelTab).toBe('files')
+  })
+})
+
+describe('useUIStore.remapFileTabs', () => {
+  const fileViewer = (projectId: string, filePath: string): CenterTab => ({
+    id: `file-${projectId}/${filePath}`,
+    type: 'file-viewer',
+    title: filePath.split('/').pop() ?? filePath,
+    data: { projectId, filePath },
+  })
+
+  const fileEditor = (projectId: string, filePath: string): CenterTab => ({
+    id: `edit-${projectId}/${filePath}`,
+    type: 'file-editor',
+    title: filePath.split('/').pop() ?? filePath,
+    data: { projectId, filePath },
+    editingState: 'dirty',
+  })
+
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+  })
+
+  it('viewer: переименование файла, ремап активной вкладки', () => {
+    useUIStore.setState({
+      centerTabs: [fileViewer('p1', 'a.txt')],
+      activeCenterTabId: 'file-p1/a.txt',
+    })
+
+    useUIStore.getState().remapFileTabs('p1', 'a.txt', 'p1', 'b.txt')
+
+    const s = useUIStore.getState()
+    expect(s.centerTabs[0].id).toBe('file-p1/b.txt')
+    expect(s.centerTabs[0].title).toBe('b.txt')
+    expect(s.centerTabs[0].data.filePath).toBe('b.txt')
+    expect(s.activeCenterTabId).toBe('file-p1/b.txt')
+  })
+
+  it('editor: смена проекта, префикс edit- и сохранение editingState', () => {
+    useUIStore.setState({ centerTabs: [fileEditor('p1', 'a.txt')], activeCenterTabId: null })
+
+    useUIStore.getState().remapFileTabs('p1', 'a.txt', 'p2', 'a.txt')
+
+    const s = useUIStore.getState()
+    expect(s.centerTabs[0].id).toBe('edit-p2/a.txt')
+    expect(s.centerTabs[0].data.projectId).toBe('p2')
+    expect(s.centerTabs[0].data.filePath).toBe('a.txt')
+    expect(s.centerTabs[0].editingState).toBe('dirty')
+  })
+
+  it('каталог: перемап вкладок-потомков, посторонняя вкладка не тронута', () => {
+    useUIStore.setState({
+      centerTabs: [
+        fileViewer('p1', 'src/a.ts'),
+        fileEditor('p1', 'src/nested/b.ts'),
+        fileViewer('p1', 'other/c.ts'),
+      ],
+      activeCenterTabId: 'file-p1/src/a.ts',
+    })
+
+    useUIStore.getState().remapFileTabs('p1', 'src', 'p1', 'lib')
+
+    const s = useUIStore.getState()
+    expect(s.centerTabs.map((t) => t.id)).toEqual([
+      'file-p1/lib/a.ts',
+      'edit-p1/lib/nested/b.ts',
+      'file-p1/other/c.ts',
+    ])
+    expect(s.centerTabs[1].data.filePath).toBe('lib/nested/b.ts')
+    expect(s.centerTabs[1].title).toBe('b.ts')
+    expect(s.activeCenterTabId).toBe('file-p1/lib/a.ts')
+  })
+
+  it('нерелевантный путь не меняет состояние (та же ссылка)', () => {
+    const tabs = [fileViewer('p1', 'a.txt'), tab('chat-x')]
+    useUIStore.setState({ centerTabs: tabs, activeCenterTabId: 'chat-x' })
+
+    useUIStore.getState().remapFileTabs('p1', 'missing.txt', 'p2', 'x.txt')
+
+    expect(useUIStore.getState().centerTabs).toBe(tabs)
+    expect(useUIStore.getState().activeCenterTabId).toBe('chat-x')
+  })
+
+  it('ремап неактивной вкладки не меняет activeCenterTabId', () => {
+    useUIStore.setState({
+      centerTabs: [fileViewer('p1', 'a.txt'), fileViewer('p1', 'b.txt')],
+      activeCenterTabId: 'file-p1/b.txt',
+    })
+
+    useUIStore.getState().remapFileTabs('p1', 'a.txt', 'p1', 'c.txt')
+
+    const s = useUIStore.getState()
+    expect(s.activeCenterTabId).toBe('file-p1/b.txt')
+    expect(s.centerTabs[0].id).toBe('file-p1/c.txt')
+  })
+
+  it('коллизия id: чужая вкладка удаляется, перемапленная остаётся с editingState', () => {
+    useUIStore.setState({
+      centerTabs: [fileEditor('p1', 'a.txt'), fileEditor('p1', 'b.txt')],
+      activeCenterTabId: 'edit-p1/b.txt',
+    })
+
+    useUIStore.getState().remapFileTabs('p1', 'a.txt', 'p1', 'b.txt')
+
+    const s = useUIStore.getState()
+    expect(s.centerTabs).toHaveLength(1)
+    expect(s.centerTabs[0].id).toBe('edit-p1/b.txt')
+    expect(s.centerTabs[0].data.filePath).toBe('b.txt')
+    expect(s.centerTabs[0].editingState).toBe('dirty')
+    // Активной была удалённая чужая — ею стала перемапленная с тем же id.
+    expect(s.activeCenterTabId).toBe('edit-p1/b.txt')
+  })
+
+  it('коллизия id: активная посторонняя вкладка сохраняется', () => {
+    useUIStore.setState({
+      centerTabs: [fileViewer('p1', 'a.txt'), fileViewer('p1', 'b.txt'), fileViewer('p1', 'c.txt')],
+      activeCenterTabId: 'file-p1/c.txt',
+    })
+
+    useUIStore.getState().remapFileTabs('p1', 'a.txt', 'p1', 'b.txt')
+
+    const s = useUIStore.getState()
+    expect(s.centerTabs.map((t) => t.id)).toEqual(['file-p1/b.txt', 'file-p1/c.txt'])
+    expect(s.activeCenterTabId).toBe('file-p1/c.txt')
+  })
+})
+
+describe('useUIStore.closeTab — очистка черновика', () => {
+  beforeEach(() => {
+    storage.clear()
+    useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
+    useFilesStore.setState({ draftContents: {} })
+  })
+
+  it('file-editor: закрытие очищает черновик', () => {
+    const editor: CenterTab = {
+      id: 'edit-p1/a.txt',
+      type: 'file-editor',
+      title: 'a.txt',
+      data: { projectId: 'p1', filePath: 'a.txt' },
+      editingState: 'dirty',
+    }
+    useUIStore.setState({ centerTabs: [editor], activeCenterTabId: editor.id })
+    useFilesStore.setState({ draftContents: { 'p1::a.txt': 'changed' } })
+
+    useUIStore.getState().closeTab(editor.id)
+
+    expect(useUIStore.getState().centerTabs).toHaveLength(0)
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBeUndefined()
+  })
+
+  it('file-viewer: закрытие тоже очищает черновик', () => {
+    const viewer: CenterTab = {
+      id: 'file-p1/a.txt',
+      type: 'file-viewer',
+      title: 'a.txt',
+      data: { projectId: 'p1', filePath: 'a.txt' },
+    }
+    useUIStore.setState({ centerTabs: [viewer], activeCenterTabId: viewer.id })
+    useFilesStore.setState({ draftContents: { 'p1::a.txt': 'changed' } })
+
+    useUIStore.getState().closeTab(viewer.id)
+
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBeUndefined()
+  })
+
+  it('chat-вкладка: черновики не затрагиваются', () => {
+    useUIStore.setState({ centerTabs: [tab('chat-1')], activeCenterTabId: 'chat-1' })
+    useFilesStore.setState({ draftContents: { 'p1::a.txt': 'changed' } })
+
+    useUIStore.getState().closeTab('chat-1')
+
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBe('changed')
   })
 })

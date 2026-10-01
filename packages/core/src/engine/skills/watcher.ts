@@ -1,5 +1,6 @@
-import { readdir, stat } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { filesSignature } from '../file-signature.js';
 
 /**
  * AD-046 §8.3 / решение 2: ленивая инвалидация кэша скиллов по mtime.
@@ -7,6 +8,8 @@ import { join } from 'node:path';
  * `fs.watch`/chokidar не используются: реестр при каждом обращении сравнивает
  * дешёвую подпись каталога-источника с сохранённой и пере-сканирует только при
  * изменении. Явный `POST /api/v2/skills/reload` вызывает `SkillRegistry.reload()`.
+ *
+ * Тонкая обёртка над общим `filesSignature` (AD-069 §3.5/R5).
  */
 export class SkillWatcher {
   private readonly _snapshots = new Map<string, string>();
@@ -23,18 +26,10 @@ export class SkillWatcher {
       return '';
     }
 
-    const parts: string[] = [];
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      try {
-        const info = await stat(join(sourceDir, entry.name, 'SKILL.md'));
-        parts.push(`${entry.name}:${Math.floor(info.mtimeMs)}:${info.size}`);
-      } catch {
-        // нет SKILL.md — не скилл
-      }
-    }
-    parts.sort();
-    return parts.join('|');
+    const dirs = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    return filesSignature(
+      dirs.map((name) => ({ id: name, path: join(sourceDir, name, 'SKILL.md') })),
+    );
   }
 
   /** Сохранённая подпись каталога (последний успешный скан). */

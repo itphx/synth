@@ -10,6 +10,8 @@
  *   `write_file`/`edit_file`/`delete_file`/`create_directory`/`execute_shell`;
  * - вверх от каталога файла не более `lazy.maxAncestors` (5), только внутри
  *   `project.workspace`, с исключением `lazy.excludeDirs`;
+ * - trust-гейт как у system-chain (AD-069 §3.5/R1): недоверенный workspace
+ *   (`untrusted`) инструкции не догружает;
  * - на каталог — приоритет файлов как в резолвере
  *   (`AGENTS.override.md` > `AGENTS.md` > `agents.md`; `CLAUDE.md` при
  *   `claudeCompat`);
@@ -29,6 +31,7 @@ import type { InstructionsLazyConfig } from '@itphx/synth-shared';
 import {
   displayPathFor,
   isInsideDir,
+  resolveInstructionsTrusted,
   selectInstructionFile,
   truncateHeadTail,
   waterFillAllocate,
@@ -78,7 +81,7 @@ export interface LazyInstructionsFileInfo {
 
 export interface LazyInstructionsDiagnostic {
   path?: string;
-  status: 'loaded' | 'truncated' | 'blocked' | 'dedup' | 'empty';
+  status: 'loaded' | 'truncated' | 'blocked' | 'dedup' | 'empty' | 'untrusted';
   reason?: string;
 }
 
@@ -99,6 +102,10 @@ export interface LazyInstructionsDeps {
   /** Доли head/tail при обрезке (из `instructions`). */
   headRatio: number;
   tailRatio: number;
+  /** AD-069 §3.5/R1: `config.skills.trustedProjectDirs` — project-trust гейт. */
+  trustedProjectDirs?: readonly string[];
+  /** AD-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
+  workspacesRoot?: string;
   /** Словарь threat-scan (AD-036). */
   dictionaryStore?: DictionaryStore | null;
 }
@@ -230,6 +237,21 @@ export class LazyInstructionsLoader {
     if (!targetDir) return empty;
     // Граница: только внутри project.workspace (AD-069 §4.3.3).
     if (!isInsideDir(workspace, targetDir)) return empty;
+
+    // AD-069 §3.5/R1: общий с project-chain trust-гейт — вложенные инструкции
+    // недоверенного workspace не грузятся (причина `untrusted`).
+    if (
+      !resolveInstructionsTrusted(workspace, {
+        trustedProjectDirs: this._deps.trustedProjectDirs,
+        workspacesRoot: this._deps.workspacesRoot,
+      })
+    ) {
+      return {
+        block: '',
+        files: [],
+        diagnostics: [{ status: 'untrusted', reason: 'untrusted-project' }],
+      };
+    }
 
     const maxAncestors = Math.max(0, cfg.maxAncestors);
     if (maxAncestors === 0) return empty;

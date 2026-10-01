@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, ensureFirstRun } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -257,6 +257,34 @@ describe('resolveSecretKey (AD-076)', () => {
   it('НЕ читает реальный process.env, если передан env без переменной', () => {
     vi.stubEnv('SYNTH_SECRET_KEY', 'should-not-be-used');
     expect(resolveSecretKey(cfg, {})).toBe('');
+  });
+});
+
+describe('resolveIgnoreRules (AD-069 §9.2)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('явный флаг (--ignore-rules/--safe-mode) приоритетнее env', () => {
+    expect(resolveIgnoreRules(true, { SYNTH_IGNORE_RULES: '0' })).toBe(true);
+  });
+
+  it('env SYNTH_IGNORE_RULES=1|true включает нейтральный режим', () => {
+    expect(resolveIgnoreRules(false, { SYNTH_IGNORE_RULES: '1' })).toBe(true);
+    expect(resolveIgnoreRules(undefined, { SYNTH_IGNORE_RULES: 'true' })).toBe(true);
+    expect(resolveIgnoreRules(undefined, { SYNTH_IGNORE_RULES: 'TRUE' })).toBe(true);
+  });
+
+  it('прочие значения env и отсутствие флага — выключено', () => {
+    expect(resolveIgnoreRules(false, { SYNTH_IGNORE_RULES: '0' })).toBe(false);
+    expect(resolveIgnoreRules(false, { SYNTH_IGNORE_RULES: '' })).toBe(false);
+    expect(resolveIgnoreRules(false, {})).toBe(false);
+    expect(resolveIgnoreRules(undefined, undefined)).toBe(false);
+  });
+
+  it('НЕ читает реальный process.env, если передан env без переменной', () => {
+    vi.stubEnv('SYNTH_IGNORE_RULES', '1');
+    expect(resolveIgnoreRules(undefined, {})).toBe(false);
   });
 });
 

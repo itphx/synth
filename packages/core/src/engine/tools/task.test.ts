@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { taskTool } from './task.js';
+import { taskTool, buildSubagentUnavailableToolsSection } from './task.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { computeSessionStats } from '../../sessions/stats.js';
 import { FileStore } from '../../storage/file-store.js';
 import { EventBus } from '../../events/bus.js';
 import { ToolCapability, MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { Message, Session, TokenUsage } from '@itphx/synth-shared';
+import type { Message, Session, TokenUsage, ToolForLLM } from '@itphx/synth-shared';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import { createToolRegistry } from './index.js';
 
@@ -2182,5 +2182,77 @@ describe('taskTool — metadata финального child-сообщения (A
     const errMsg = child.messages.find((m) => m.metadata?.error === true);
     expect(errMsg).toBeDefined();
     expect(errMsg!.metadata?.status).toBe('error');
+  });
+});
+
+describe('buildSubagentUnavailableToolsSection — workspace-гейт (AD-075)', () => {
+  function makeTool(name: string): ToolForLLM {
+    return {
+      type: 'function',
+      function: { name, description: '', parameters: { type: 'object', properties: {} } },
+    };
+  }
+
+  const CAPS: Record<string, readonly string[]> = {
+    read_file: [ToolCapability.FILE_READ],
+    execute_shell: [ToolCapability.SHELL],
+    git_status: [ToolCapability.GIT_READ],
+    web_fetch: [ToolCapability.WEB],
+  };
+  const capabilitiesOf = (n: string) => CAPS[n];
+
+  it('workspaceReady=false: file/shell/git-тулы помечаются workspace, web-тул — нет', () => {
+    const section = buildSubagentUnavailableToolsSection(
+      [makeTool('read_file'), makeTool('execute_shell'), makeTool('git_status'), makeTool('web_fetch')],
+      { git: true, rg: true, sh: true },
+      'ru',
+      { workspaceReady: false, capabilitiesOf },
+    );
+
+    expect(section).toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
+    // Все workspace-тулы схлопнуты в одну строку, имена не перечисляются.
+    expect(section).toContain('file/shell/git-инструменты');
+    expect(section).not.toContain('read_file');
+    expect(section).not.toContain('execute_shell');
+    expect(section).not.toContain('git_status');
+    expect(section).not.toContain('web_fetch');
+  });
+
+  it('workspaceReady=true/undefined: секции недоступных тулов нет', () => {
+    const tools = [makeTool('read_file'), makeTool('web_fetch')];
+    expect(buildSubagentUnavailableToolsSection(tools, { git: true, rg: true, sh: true }, 'ru', {
+      workspaceReady: true,
+      capabilitiesOf,
+    })).toBe('');
+    expect(buildSubagentUnavailableToolsSection(tools, { git: true, rg: true, sh: true }, 'ru', {
+      capabilitiesOf,
+    })).toBe('');
+  });
+
+  it('dependency-тул остаётся отдельной строкой и не дублируется как workspace', () => {
+    const section = buildSubagentUnavailableToolsSection(
+      [makeTool('git_status'), makeTool('read_file'), makeTool('web_fetch')],
+      { git: false, rg: true, sh: true },
+      'ru',
+      { workspaceReady: false, capabilitiesOf },
+    );
+
+    // git_status — dependency (приоритет), read_file — workspace, отдельными строками.
+    expect(section).toContain('git_status');
+    expect(section).toContain('«git»');
+    expect(section).toContain('file/shell/git-инструменты');
+    expect(section).not.toContain('read_file');
+    expect(section).not.toContain('web_fetch');
+  });
+
+  it('нет tools: пустая строка (даже при workspaceReady=false)', () => {
+    expect(buildSubagentUnavailableToolsSection(undefined, undefined, 'ru', {
+      workspaceReady: false,
+      capabilitiesOf,
+    })).toBe('');
+    expect(buildSubagentUnavailableToolsSection([], undefined, 'en', {
+      workspaceReady: false,
+      capabilitiesOf,
+    })).toBe('');
   });
 });
