@@ -501,7 +501,10 @@ export function createDispatcher(): EventDispatcher {
         const scope = payload.scope === 'file' ? 'file' : 'all'
         const paths = Array.isArray(payload.paths) ? (payload.paths as string[]) : undefined
         const workspaceChanged = Boolean(payload.workspace_changed)
-        useFilesStore.getState().scheduleRefresh(projectId, { scope, paths, workspaceChanged })
+        const op = payload.op === 'write' || payload.op === 'delete' || payload.op === 'mkdir'
+          ? payload.op
+          : undefined
+        useFilesStore.getState().scheduleRefresh(projectId, { scope, paths, workspaceChanged, op })
         scheduleGitRefresh(projectId)
         break
       }

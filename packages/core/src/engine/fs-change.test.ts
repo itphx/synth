@@ -4,17 +4,27 @@ import { resolveFsChange } from './fs-change.js';
 const WS = '/tmp/project-ws';
 
 describe('resolveFsChange', () => {
-  it('write_file внутри workspace → file + относительный POSIX-путь', () => {
+  it('write_file внутри workspace → file + относительный POSIX-путь + op write', () => {
     expect(resolveFsChange('write_file', { path: '/tmp/project-ws/src/a.ts' }, WS))
-      .toEqual({ scope: 'file', paths: ['src/a.ts'] });
+      .toEqual({ scope: 'file', paths: ['src/a.ts'], op: 'write' });
   });
 
-  it('create_directory внутри workspace → file', () => {
+  it('edit_file внутри workspace → op write', () => {
+    expect(resolveFsChange('edit_file', { path: '/tmp/project-ws/src/a.ts' }, WS))
+      .toEqual({ scope: 'file', paths: ['src/a.ts'], op: 'write' });
+  });
+
+  it('delete_file внутри workspace → op delete', () => {
+    expect(resolveFsChange('delete_file', { path: '/tmp/project-ws/src/a.ts' }, WS))
+      .toEqual({ scope: 'file', paths: ['src/a.ts'], op: 'delete' });
+  });
+
+  it('create_directory внутри workspace → file + op mkdir', () => {
     expect(resolveFsChange('create_directory', { path: '/tmp/project-ws/dir' }, WS))
-      .toEqual({ scope: 'file', paths: ['dir'] });
+      .toEqual({ scope: 'file', paths: ['dir'], op: 'mkdir' });
   });
 
-  it('нет metadata.path → all', () => {
+  it('нет metadata.path → all (без op)', () => {
     expect(resolveFsChange('write_file', {}, WS)).toEqual({ scope: 'all' });
     expect(resolveFsChange('edit_file', undefined, WS)).toEqual({ scope: 'all' });
   });
@@ -46,6 +56,13 @@ describe('resolveFsChange', () => {
     ]) {
       expect(resolveFsChange(tool, { path: '/tmp/project-ws/x' }, WS), tool).toEqual({ scope: 'all' });
     }
+  });
+
+  it('broad-тулы не задают op (execute_shell / git_commit)', () => {
+    const shell = resolveFsChange('execute_shell', { path: '/tmp/project-ws/x' }, WS);
+    const git = resolveFsChange('git_commit', { path: '/tmp/project-ws/x' }, WS);
+    expect(shell).not.toHaveProperty('op');
+    expect(git).not.toHaveProperty('op');
   });
 
   it('project_workspace_set → all + workspaceChanged', () => {

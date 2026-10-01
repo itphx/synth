@@ -14,21 +14,29 @@
 
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
+/** Операция, которую выполнил инструмент (для точной инвалидации в UI). */
+export type FsChangeOp = 'write' | 'delete' | 'mkdir';
+
 export interface FsChange {
   scope: 'file' | 'all';
   /** Относительные пути внутри workspace проекта, POSIX (`foo/bar.txt`, `dir`). */
   paths?: string[];
   /** Смена рабочего каталога проекта (`project_workspace_set`). */
   workspaceChanged?: boolean;
+  /** Тип операции для `scope:'file'`; у «широких» тулов не задаётся. */
+  op?: FsChangeOp;
 }
 
+/** Тулы записи в единичный файл/каталог → операция события `fs.changed`. */
+const FILE_TOOL_OPS: Record<string, FsChangeOp> = {
+  write_file: 'write',
+  edit_file: 'write',
+  delete_file: 'delete',
+  create_directory: 'mkdir',
+};
+
 /** Тулы записи в единичный файл/каталог — могут дать точный относительный путь. */
-const FILE_MUTATING_TOOLS = new Set([
-  'write_file',
-  'edit_file',
-  'delete_file',
-  'create_directory',
-]);
+const FILE_MUTATING_TOOLS = new Set(Object.keys(FILE_TOOL_OPS));
 
 /** «Широкие» мутирующие тулы — обновляем всё дерево проекта. */
 const BROAD_MUTATING_TOOLS = new Set([
@@ -80,5 +88,5 @@ export function resolveFsChange(
 
   // Приводим разделители к POSIX (контракт события).
   const posixRel = rel.split(sep).join('/');
-  return { scope: 'file', paths: [posixRel] };
+  return { scope: 'file', paths: [posixRel], op: FILE_TOOL_OPS[toolName] };
 }

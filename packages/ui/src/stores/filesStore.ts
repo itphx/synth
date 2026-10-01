@@ -7,16 +7,35 @@ import { synthApi } from '@/lib/api/synthApi'
 const FS_REFRESH_DEBOUNCE_MS = 400
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+/** Операция мутирующего тула, пришедшая в `fs.changed` (scope:'file'). */
+export type FsChangeOp = 'write' | 'delete' | 'mkdir'
+
+/** fs.changed: накопленные за окно debounce подсказки по проекту. */
+interface PendingFsChange {
+  /** Хотя бы одно событие было широким (`scope:'all'`) — обновляем всё дерево. */
+  all: boolean
+  workspaceChanged: boolean
+  /** Последняя операция по каждому пути за окно (coalescing: «последний wins»). */
+  ops: Map<string, FsChangeOp | undefined>
+}
+
+const pendingChanges = new Map<string, PendingFsChange>()
+
 export interface FsChangeHint {
   scope: 'file' | 'all'
   paths?: string[]
   workspaceChanged?: boolean
+  op?: FsChangeOp
 }
 
 interface FilesStore {
   treesByProject: Record<string, FileEntry[]>
   /** fs.changed: счётчик успешных серверных refresh на проект (инвалидация редакторов). */
   revisionByProject: Record<string, number>
+  /** fs.changed: пер-файловые ревизии, ключ `${projectId}::${path}` (инвалидация редакторов). */
+  fileRevisions: Record<string, number>
+  /** fs.changed: файлы, удалённые агентом, ключ `${projectId}::${path}`. */
+  deletedFiles: Record<string, true>
   loading: boolean
   error: string | null
   expandedProjects: Set<string>
@@ -38,6 +57,10 @@ interface FilesStore {
 
   /** fs.changed: перечитывает корень и все загруженные каталоги проекта. */
   refreshProject: (projectId: string) => Promise<void>
+  /** fs.changed: точечно перечитывает только указанные загруженные каталоги. */
+  refreshDirs: (projectId: string, dirs: string[]) => Promise<void>
+  /** fs.changed: снять пометку «удалён агентом» после успешного перечитывания. */
+  clearDeletedFile: (projectId: string, path: string) => void
   /** fs.changed: debounce-обёртка над refreshProject (коалесинг по проекту). */
   scheduleRefresh: (projectId: string, change: FsChangeHint) => void
 
@@ -89,9 +112,44 @@ export const useFilesStore = create<FilesStore>()(
         })
       }
 
+      /**
+       * fs.changed: применяет накопленные за окно debounce подсказки.
+       * `all` — полный refresh проекта; иначе — точечно родительские каталоги,
+       * пер-файловые ревизии и пометки об удалении.
+       */
+      const applyFsChange = async (projectId: string, acc: PendingFsChange) => {
+        if (acc.all || acc.workspaceChanged) {
+          await get().refreshProject(projectId)
+          return
+        }
+        const paths = [...acc.ops.keys()]
+        if (paths.length === 0) return
+
+        const parents = [...new Set(paths.map((p) => getParentPath(p)))]
+        await get().refreshDirs(projectId, parents)
+
+        set((s) => {
+          const fileRevisions = { ...s.fileRevisions }
+          const deletedFiles = { ...s.deletedFiles }
+          for (const path of paths) {
+            const key = `${projectId}::${path}`
+            fileRevisions[key] = (fileRevisions[key] ?? 0) + 1
+            const op = acc.ops.get(path)
+            if (op === 'delete') {
+              deletedFiles[key] = true
+            } else if (op === 'write' || op === 'mkdir') {
+              delete deletedFiles[key]
+            }
+          }
+          return { fileRevisions, deletedFiles }
+        })
+      }
+
       return {
         treesByProject: {},
         revisionByProject: {},
+        fileRevisions: {},
+        deletedFiles: {},
         loading: false,
         error: null,
         expandedProjects: new Set<string>(),
@@ -238,16 +296,24 @@ export const useFilesStore = create<FilesStore>()(
           }
 
           await Promise.all(loadedDirs.map(async (dir) => {
+            const key = dir ? `${projectId}/${dir}` : projectId
             try {
               const result = await synthApi.listDirectory(projectId, dir, showHidden)
               set((s) => ({
                 treesByProject: {
                   ...s.treesByProject,
-                  [dir ? `${projectId}/${dir}` : projectId]: result.entries,
+                  [key]: result.entries,
                 },
               }))
             } catch {
-              // Оставляем прежнее дерево — точечный refresh не должен его ломать.
+              // Каталог мог исчезнуть (смена workspace/удаление) — убираем только
+              // его ключ, не ломая остальные.
+              set((s) => {
+                if (!(key in s.treesByProject)) return s
+                const trees = { ...s.treesByProject }
+                delete trees[key]
+                return { treesByProject: trees }
+              })
             }
           }))
 
@@ -261,12 +327,60 @@ export const useFilesStore = create<FilesStore>()(
           }))
         },
 
-        scheduleRefresh: (projectId, _change) => {
+        refreshDirs: async (projectId, dirs) => {
+          const { treesByProject, showHidden } = get()
+          const unique = [...new Set(dirs)]
+          await Promise.all(unique.map(async (dir) => {
+            const key = dir ? `${projectId}/${dir}` : projectId
+            // Только уже загруженные каталоги: незагруженный UI не показывает,
+            // новые ключи не создаём.
+            if (!treesByProject[key]) return
+            try {
+              const result = await synthApi.listDirectory(projectId, dir, showHidden)
+              set((s) => ({
+                treesByProject: { ...s.treesByProject, [key]: result.entries },
+              }))
+            } catch {
+              // Каталог мог исчезнуть — убираем только его ключ.
+              set((s) => {
+                if (!(key in s.treesByProject)) return s
+                const trees = { ...s.treesByProject }
+                delete trees[key]
+                return { treesByProject: trees }
+              })
+            }
+          }))
+        },
+
+        clearDeletedFile: (projectId, path) => {
+          const key = `${projectId}::${path}`
+          set((s) => {
+            if (!(key in s.deletedFiles)) return s
+            const deletedFiles = { ...s.deletedFiles }
+            delete deletedFiles[key]
+            return { deletedFiles }
+          })
+        },
+
+        scheduleRefresh: (projectId, change) => {
+          const acc = pendingChanges.get(projectId)
+            ?? { all: false, workspaceChanged: false, ops: new Map() }
+          if (change.scope === 'all' || change.workspaceChanged) acc.all = true
+          if (change.workspaceChanged) acc.workspaceChanged = true
+          for (const path of change.paths ?? []) {
+            // «Последний wins» за окно: записан → удалён даёт delete и наоборот.
+            acc.ops.set(path, change.op)
+          }
+          pendingChanges.set(projectId, acc)
+
           const existing = refreshTimers.get(projectId)
           if (existing) clearTimeout(existing)
           refreshTimers.set(projectId, setTimeout(() => {
             refreshTimers.delete(projectId)
-            void get().refreshProject(projectId)
+            const pending = pendingChanges.get(projectId)
+            pendingChanges.delete(projectId)
+            if (!pending) return
+            void applyFsChange(projectId, pending)
           }, FS_REFRESH_DEBOUNCE_MS))
         },
 

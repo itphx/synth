@@ -52,6 +52,41 @@ describe('transportStore dispatcher: fs.changed / project.updated', () => {
       scope: 'file',
       paths: ['a.txt'],
       workspaceChanged: false,
+      op: undefined,
+    })
+  })
+
+  it('fs.changed пробрасывает op в scheduleRefresh', () => {
+    dispatch(makeEvent('fs.changed', 's1', {
+      session_id: 's1',
+      project_id: 'p1',
+      scope: 'file',
+      paths: ['a.txt'],
+      op: 'delete',
+      tool: 'delete_file',
+    }))
+    expect(scheduleSpy).toHaveBeenCalledWith('p1', {
+      scope: 'file',
+      paths: ['a.txt'],
+      workspaceChanged: false,
+      op: 'delete',
+    })
+  })
+
+  it('fs.changed с некорректным op не пробрасывает его', () => {
+    dispatch(makeEvent('fs.changed', 's1', {
+      session_id: 's1',
+      project_id: 'p1',
+      scope: 'file',
+      paths: ['a.txt'],
+      op: 'bogus',
+      tool: 'write_file',
+    }))
+    expect(scheduleSpy).toHaveBeenCalledWith('p1', {
+      scope: 'file',
+      paths: ['a.txt'],
+      workspaceChanged: false,
+      op: undefined,
     })
   })
 
@@ -67,6 +102,7 @@ describe('transportStore dispatcher: fs.changed / project.updated', () => {
       scope: 'all',
       paths: undefined,
       workspaceChanged: false,
+      op: undefined,
     })
   })
 
@@ -92,6 +128,7 @@ describe('transportStore dispatcher: fs.changed / project.updated', () => {
       scope: 'all',
       paths: undefined,
       workspaceChanged: true,
+      op: undefined,
     })
   })
 

@@ -39,6 +39,8 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
         setIsBinary(false)
         setContent(result.content)
         setOriginalContent(result.content)
+        // Файл успешно перечитан — пометка «удалён агентом» больше не актуальна.
+        useFilesStore.getState().clearDeletedFile(projectId, filePath)
       }
       setChangedOnDisk(false)
     } catch (e) {
@@ -57,21 +59,33 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
     void loadFromServer()
   }, [projectId, filePath, t, loadFromServer])
 
-  // fs.changed (fsStore.revisionByProject): если файл не грязный — молча
-  // перечитываем с диска; если у пользователя есть правки — не затираем их,
-  // показываем баннер с кнопкой «Перечитать».
+  // fs.changed (fsStore.revisionByProject/fileRevisions): если файл не грязный —
+  // молча перечитываем с диска; если у пользователя есть правки — не затираем их,
+  // показываем баннер с кнопкой «Перечитать»; если файл удалён агентом — состояние
+  // «Файл удалён» с кнопкой «Перечитать».
   const revision = useFilesStore((s) => (projectId ? s.revisionByProject[projectId] : undefined))
+  const fileKey = projectId && filePath ? `${projectId}::${filePath}` : ''
+  const fileRevision = useFilesStore((s) => (fileKey ? s.fileRevisions[fileKey] : undefined))
+  const isDeleted = useFilesStore((s) => (fileKey ? Boolean(s.deletedFiles[fileKey]) : false))
   const revisionRef = useRef(revision)
+  const fileRevisionRef = useRef(fileRevision)
   useEffect(() => {
-    if (revision === revisionRef.current) return
+    const revisionChanged = revision !== revisionRef.current
+    const fileRevisionChanged = fileRevision !== fileRevisionRef.current
     revisionRef.current = revision
+    fileRevisionRef.current = fileRevision
+    if (!revisionChanged && !fileRevisionChanged) return
     if (!projectId || !filePath) return
+    if (isDeleted) {
+      setChangedOnDisk(false)
+      return
+    }
     if (content !== originalContent) {
       setChangedOnDisk(true)
       return
     }
     void loadFromServer()
-  }, [revision, projectId, filePath, content, originalContent, loadFromServer])
+  }, [revision, fileRevision, projectId, filePath, content, originalContent, isDeleted, loadFromServer])
 
   const isDirty = content !== originalContent
 
@@ -150,6 +164,24 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
         <div className="flex flex-col items-center gap-3 text-muted-foreground">
           <Icon name="file-3" className="size-12" />
           <span className="text-sm">{t('file.binaryFile', { size: String(binarySize) })}</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (isDeleted) {
+    return (
+      <div className="flex flex-1 items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+          <Icon name="delete-bin" className="size-12" />
+          <span className="text-sm">{t('file.deletedOnDisk')}</span>
+          <button
+            type="button"
+            onClick={() => void loadFromServer()}
+            className="rounded border border-border px-3 py-1 text-xs text-foreground hover:bg-muted"
+          >
+            {t('file.reload')}
+          </button>
         </div>
       </div>
     )

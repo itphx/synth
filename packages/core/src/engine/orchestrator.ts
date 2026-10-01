@@ -1828,6 +1828,7 @@ export class ChatOrchestrator {
       project_id: session.projectId ?? null,
       scope: change.scope,
       ...(change.paths ? { paths: change.paths } : {}),
+      ...(change.op ? { op: change.op } : {}),
       ...(change.workspaceChanged ? { workspace_changed: true } : {}),
       tool: toolName,
     });

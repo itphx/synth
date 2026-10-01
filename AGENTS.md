@@ -275,7 +275,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 Панель «Сессия» в правой панели показывает план (`planContent`) и ToDo (`todos`); обновляется по WS-событиям `plan.approved`/`todos.updated` (полный refresh с сервера).
 
-Мутирующие тулы ядра публикуют `fs.changed` (`engine/fs-change.ts`): UI обновляет дерево Files, открытые редакторы и Git-вкладку с debounce; read-only тулы события не шлют. Перенос сессии между проектами (`session.moved`, в т.ч. `project_create`/`project_attach` агентом) обновляет `project_id` в сторе, список проектов и дерево Files.
+Мутирующие тулы ядра публикуют `fs.changed` (`engine/fs-change.ts`): UI обновляет дерево Files, открытые редакторы и Git-вкладку с debounce; read-only тулы события не шлют. Файловые события несут `op` (`write`/`delete`/`mkdir`) — дерево перечитывает только родительские каталоги (точная инвалидация `refreshDirs`/`fileRevisions`/`deletedFiles`), редактор переключается в состояние «файл удалён» (`file.deletedOnDisk`). Перенос сессии между проектами (`session.moved`, в т.ч. `project_create`/`project_attach` агентом) обновляет `project_id` в сторе, список проектов и дерево Files.
 
 Вкладки Files/Git левой панели — контекст-ориентированные: закреплённый блок «Текущий проект» (по активному центр-табу — сессия/файл/коммит, хук `useActiveProject`) + сворачиваемые «Другие проекты (N)»; тумблер «Только текущий проект» (`ProjectScopeToggle`, persist `onlyActiveProject`) в шапке тулбара. Подробности — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
 

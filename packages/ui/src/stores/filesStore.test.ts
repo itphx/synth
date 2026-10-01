@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // persist (zustand) в useFilesStore пишет в localStorage — мок для детерминизма.
 vi.hoisted(() => {
@@ -40,6 +40,8 @@ describe('filesStore.refreshProject (fs.changed)', () => {
     useFilesStore.setState({
       treesByProject: {},
       revisionByProject: {},
+      fileRevisions: {},
+      deletedFiles: {},
       expandedProjects: new Set<string>(),
       expandedDirs: new Set<string>(),
     })
@@ -82,5 +84,169 @@ describe('filesStore.refreshProject (fs.changed)', () => {
     await useFilesStore.getState().refreshProject('p9')
     expect(mocks.listDirectory).not.toHaveBeenCalled()
     expect(useFilesStore.getState().revisionByProject.p9).toBe(1)
+  })
+
+  it('при ошибке перечитывания каталога удаляет только его ключ', async () => {
+    useFilesStore.setState({
+      treesByProject: {
+        p1: [entry('dir', 'dir', true)],
+        'p1/dir': [entry('a.txt', 'dir/a.txt', false)],
+      },
+    })
+    mocks.listDirectory.mockImplementation(async (_pid: string, path?: string) => {
+      if (path === 'dir') throw new Error('gone')
+      return { entries: [entry('dir', 'dir', true)] }
+    })
+
+    await useFilesStore.getState().refreshProject('p1')
+
+    expect(useFilesStore.getState().treesByProject['p1/dir']).toBeUndefined()
+    expect(useFilesStore.getState().treesByProject['p1']).toHaveLength(1)
+    expect(useFilesStore.getState().revisionByProject.p1).toBe(1)
+  })
+})
+
+describe('filesStore.refreshDirs / scheduleRefresh (точная инвалидация)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.clearAllMocks()
+    useFilesStore.setState({
+      treesByProject: {},
+      revisionByProject: {},
+      fileRevisions: {},
+      deletedFiles: {},
+      expandedProjects: new Set<string>(),
+      expandedDirs: new Set<string>(),
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  async function flushMicrotasks() {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve()
+  }
+
+  it('refreshDirs перечитывает только загруженные каталоги, не создаёт новые ключи', async () => {
+    useFilesStore.setState({
+      treesByProject: {
+        p1: [entry('dir', 'dir', true)],
+        'p1/dir': [entry('a.txt', 'dir/a.txt', false)],
+      },
+    })
+    mocks.listDirectory.mockResolvedValue({ entries: [entry('x', 'x', false)] })
+
+    await useFilesStore.getState().refreshDirs('p1', ['dir', 'missing', ''])
+
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', 'dir', false)
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', '', false)
+    expect(mocks.listDirectory).not.toHaveBeenCalledWith('p1', 'missing', false)
+    expect(useFilesStore.getState().treesByProject['p1/missing']).toBeUndefined()
+    expect(useFilesStore.getState().treesByProject['p1']).toHaveLength(1)
+  })
+
+  it('refreshDirs при ошибке удаляет ключ каталога', async () => {
+    useFilesStore.setState({
+      treesByProject: {
+        p1: [entry('dir', 'dir', true)],
+        'p1/dir': [entry('a.txt', 'dir/a.txt', false)],
+      },
+    })
+    mocks.listDirectory.mockRejectedValue(new Error('gone'))
+
+    await useFilesStore.getState().refreshDirs('p1', ['dir'])
+
+    expect(useFilesStore.getState().treesByProject['p1/dir']).toBeUndefined()
+    expect(useFilesStore.getState().treesByProject['p1']).toHaveLength(1)
+  })
+
+  it('scheduleRefresh scope:file перечитывает родителя, не трогает revisionByProject, инкрементит fileRevisions', async () => {
+    useFilesStore.setState({
+      treesByProject: {
+        p1: [entry('dir', 'dir', true)],
+        'p1/dir': [entry('a.txt', 'dir/a.txt', false)],
+      },
+    })
+    mocks.listDirectory.mockResolvedValue({ entries: [entry('a.txt', 'dir/a.txt', false)] })
+
+    useFilesStore.getState().scheduleRefresh('p1', {
+      scope: 'file',
+      paths: ['dir/a.txt'],
+      op: 'write',
+    })
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', 'dir', false)
+    expect(mocks.listDirectory).not.toHaveBeenCalledWith('p1', '', false)
+    expect(useFilesStore.getState().revisionByProject.p1).toBeUndefined()
+    expect(useFilesStore.getState().fileRevisions['p1::dir/a.txt']).toBe(1)
+  })
+
+  it('op:delete выставляет deletedFiles, op:write снимает', async () => {
+    useFilesStore.setState({ treesByProject: { p1: [] } })
+    mocks.listDirectory.mockResolvedValue({ entries: [] })
+
+    useFilesStore.getState().scheduleRefresh('p1', {
+      scope: 'file', paths: ['a.txt'], op: 'delete',
+    })
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+    expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBe(true)
+
+    useFilesStore.getState().scheduleRefresh('p1', {
+      scope: 'file', paths: ['a.txt'], op: 'write',
+    })
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+    expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBeUndefined()
+    expect(useFilesStore.getState().fileRevisions['p1::a.txt']).toBe(2)
+  })
+
+  it('коалесинг: последняя операция за окно побеждает (write → delete)', async () => {
+    useFilesStore.setState({ treesByProject: { p1: [] } })
+    mocks.listDirectory.mockResolvedValue({ entries: [] })
+
+    useFilesStore.getState().scheduleRefresh('p1', { scope: 'file', paths: ['a.txt'], op: 'write' })
+    useFilesStore.getState().scheduleRefresh('p1', { scope: 'file', paths: ['a.txt'], op: 'delete' })
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+
+    expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBe(true)
+    // Один коалесцированный refresh — одна инкрементация ревизии файла.
+    expect(useFilesStore.getState().fileRevisions['p1::a.txt']).toBe(1)
+  })
+
+  it('коалесинг: file-события + all-событие → полный refresh', async () => {
+    useFilesStore.setState({
+      treesByProject: { p1: [], 'p1/dir': [] },
+    })
+    mocks.listDirectory.mockResolvedValue({ entries: [] })
+
+    useFilesStore.getState().scheduleRefresh('p1', { scope: 'file', paths: ['dir/a.txt'], op: 'write' })
+    useFilesStore.getState().scheduleRefresh('p1', { scope: 'all' })
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', '', false)
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', 'dir', false)
+    expect(useFilesStore.getState().revisionByProject.p1).toBe(1)
+    expect(useFilesStore.getState().fileRevisions['p1::dir/a.txt']).toBeUndefined()
+  })
+
+  it('scheduleRefresh scope:all перечитывает загруженные каталоги и инкрементит revisionByProject', async () => {
+    useFilesStore.setState({
+      treesByProject: { p1: [], 'p1/dir': [] },
+    })
+    mocks.listDirectory.mockResolvedValue({ entries: [] })
+
+    useFilesStore.getState().scheduleRefresh('p1', { scope: 'all' })
+    await vi.advanceTimersByTimeAsync(400)
+    await flushMicrotasks()
+
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', '', false)
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', 'dir', false)
+    expect(useFilesStore.getState().revisionByProject.p1).toBe(1)
   })
 })

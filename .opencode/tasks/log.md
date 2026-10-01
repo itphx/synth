@@ -1340,3 +1340,16 @@
 - **Не закрыто (осознанно, отдельное решение):** 1.3 — в UI не локализуются security-сообщения через i18n: `security.tool_unavailable_workspace/mode/role/dependency` и `security.deny_protected_path` и т.п. не зарегистрированы в `ENGINE_MESSAGE_KEYS`, UI показывает `content` (en). Это системное поведение для всех security-сообщений, не дефект нового кода. **Решение пользователя (2026-10-01): оставить как есть** (engine-строки на en, UI показывает их как есть).
 - **Коммит:** `643e5c9`.
 - **Дополнение:** resume-сабагент (`runSubagentResume`) теперь тоже публикует `fs.changed` родителю (`scope:'all'`, `tool:'task_resume'`) в `.finally` — изменения файлов возобновлённого агента отражаются в UI. Тест в `task-resume.test.ts`. Верификация: typecheck/lint 0 errors; `pnpm test` shared 181 · core 2370 · ui 920 · backend 341 PASS. Коммит `8222bf0`.
+
+## 2026-10-01 08:45 — feat(core+ui): точная инвалидация fs.changed по путям + «файл удалён» — PASS
+
+- **Задача:** вместо перечитывания всех загруженных каталогов проекта — точечная инвалидация по `paths`; состояние «файл удалён агентом» для открытого редактора.
+- **Тип:** feature (core/ui) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Сделано:**
+  - core `fs-change.ts`: `FsChange.op: 'write'|'delete'|'mkdir'` (`write_file`/`edit_file`→write, `delete_file`→delete, `create_directory`→mkdir); `orchestrator._publishFsChange` кладёт `op` в payload (у broad-тулов `op` нет).
+  - ui `filesStore`: `fileRevisions` (по `${projectId}::${path}`) и `deletedFiles`; `refreshDirs` (только уже загруженные каталоги, при ошибке удаляет ключ); `refreshProject` при ошибке удаляет ключ (чинит смену workspace); `scheduleRefresh` коалесит за окно debounce (`all` поглощает; по пути — «последняя операция wins») и маршрутизирует: `all`/workspace → `refreshProject`+`revisionByProject`, `file` → `refreshDirs`+`fileRevisions`+`deletedFiles` (без проектной ревизии).
+  - ui `transportStore`: проброс `op` (с валидацией).
+  - ui `FileEditorTab`: подписка на файловую ревизию/удаление; удалён → экран `file.deletedOnDisk` + «Перечитать»; грязный → баннер `file.changedOnDisk`; иначе тихий reload; успешный reload снимает пометку.
+  - i18n `file.deletedOnDisk` (ru/en, UI-only); docs (корневой/`core`/`ui` AGENTS.md).
+- **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2373 · ui 932 · backend 341 = **3827 PASS, 0 failed**. Новые тесты: core `fs-change.test.ts` (op), ui `filesStore.test.ts` (точная инвалидация/удаление), `transportStore.fs-change.test.ts` (op), `FileEditorTab.test.tsx`.
+- **Остаточное ограничение:** удаление файла «широким» тулом (`execute_shell rm`, `git_checkout`) не несёт `op:'delete'` — открытый редактор при перечитывании покажет прежний экран ошибки, а не «файл удалён»; точечное состояние работает для `delete_file`.

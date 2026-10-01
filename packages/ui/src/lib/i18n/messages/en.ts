@@ -823,6 +823,7 @@ export const dict = {
   'file.edit': 'Edit',
   'file.close': 'Close',
   'file.changedOnDisk': 'File changed on disk',
+  'file.deletedOnDisk': 'File was deleted on disk',
   'file.reload': 'Reload',
 
   // Workspace picker

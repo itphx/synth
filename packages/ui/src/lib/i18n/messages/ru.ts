@@ -803,6 +803,7 @@ export const dict = {
   'file.edit': 'Редактировать',
   'file.close': 'Закрыть',
   'file.changedOnDisk': 'Файл изменён агентом на диске',
+  'file.deletedOnDisk': 'Файл удалён агентом',
   'file.reload': 'Перечитать',
 
   // Workspace picker
