@@ -3841,6 +3841,16 @@ export class ChatOrchestrator {
         });
       })
       .finally(async () => {
+        // Resume-саб-агент писал файлы/git/shell — сообщаем UI об изменениях
+        // workspace родительской сессии (как свежий `task`). Публикуем всегда,
+        // даже при частичном/ошибочном прогоне: файлы могли измениться, а
+        // лишний refresh безопасен (UI игнорирует `project_id: null`).
+        this._eventBus.publish(parent.id, 'fs.changed', {
+          session_id: parent.id,
+          project_id: parent.projectId ?? null,
+          scope: 'all',
+          tool: 'task_resume',
+        });
         this.unregisterCancelToken(streamId);
         try {
           await this._sessionManager.withLock(childSessionId, async (s) => {

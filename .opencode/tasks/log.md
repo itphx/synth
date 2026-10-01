@@ -1338,4 +1338,5 @@
   - Docs: корневой `AGENTS.md` (гейт workspace + fs.changed/session.moved), `core/AGENTS.md` (`engine/fs-change.ts`, причина workspace), `ui/AGENTS.md` (транспорт + Files refresh), `shared/AGENTS.md` (`EventType`).
 - **Верификация (@orchestrator, независимо):** shared build OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2370 · ui 920 · backend 341 = **3812 PASS, 0 failed**. Новые/обновлённые тесты: `task.test.ts` (4 кейса), `state-messages.test.ts` (схлопывание/порядок), `transportStore.session-moved.test.ts`.
 - **Не закрыто (осознанно, отдельное решение):** 1.3 — в UI не локализуются security-сообщения через i18n: `security.tool_unavailable_workspace/mode/role/dependency` и `security.deny_protected_path` и т.п. не зарегистрированы в `ENGINE_MESSAGE_KEYS`, UI показывает `content` (en). Это системное поведение для всех security-сообщений, не дефект нового кода.
-- **Коммит:** см. ниже.
+- **Коммит:** `643e5c9`.
+- **Дополнение:** resume-сабагент (`runSubagentResume`) теперь тоже публикует `fs.changed` родителю (`scope:'all'`, `tool:'task_resume'`) в `.finally` — изменения файлов возобновлённого агента отражаются в UI. Тест в `task-resume.test.ts`. Верификация: typecheck/lint 0 errors; `pnpm test` shared 181 · core 2370 · ui 920 · backend 341 PASS. Коммит `b?` (см. ниже).

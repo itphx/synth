@@ -422,6 +422,16 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(newEvents.some((e) => e.sessionId === parent && e.type === 'session.updated')).toBe(true);
     expect(newEvents.some((e) => e.sessionId === child && e.type === 'subagent.resume.finished')).toBe(true);
 
+    // fs.changed у родителя: resume-саб-агент мог писать файлы/git/shell —
+    // UI должен обновить дерево/редакторы/Git (как после свежего task).
+    await vi.waitFor(() => {
+      const fsChange = events.find((e) => e.sessionId === parent && e.type === 'fs.changed');
+      expect(fsChange).toBeDefined();
+      expect(fsChange!.data.scope).toBe('all');
+      expect(fsChange!.data.tool).toBe('task_resume');
+      expect(fsChange!.data.session_id).toBe(parent);
+    }, { timeout: 5000 });
+
     // Блокировка и currentStream сняты
     expect(c.status.blocked).toBeFalsy();
     expect(c.currentStream).toBeUndefined();
