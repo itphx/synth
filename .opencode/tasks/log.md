@@ -1463,3 +1463,15 @@
 - **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2384 · ui 976 · backend 341 = **3882 PASS, 0 failed**. Скриншоты (390×844): имя занимает всю строку (267/286), управление второй строкой справа, «Включён» нет; десктоп 1440×900 — inline как прежде.
 - **Остаточные риски/оговорки:** живая проверка на реальном телефоне пользователя — за пользователем; подписи «Доступен»/«По умолчанию» у проектных тумблеров намеренно сохранены.
 - **Коммит:** в этом же коммите.
+
+## 2026-10-01 16:35 — Merge AD-069 R1–R5 в master, релиз 0.8.7, выкат на test — PASS
+
+- **Задача:** слить `feat/ad-069-residuals` в master (`--no-ff`), бампнуть версию, раскатать на test; удалить 0.8.2 из GitVerse.
+- **Тип:** release + deploy · **Исполнитель:** @orchestrator (+ @devops на образы/Fleet) · **Результат:** PASS.
+- **Merge:** `871a388` `Merge branch 'feat/ad-069-residuals'` (`--no-ff`; 23 коммита — AD-069 R1–R5, `fs.changed`/перенос файлов, единое окно редактирования проекта/сессии, проверка обновлений PWA, логин managed).
+- **Bump:** `4cd1df7` `chore(release): 0.8.7` — `version.ts` + 6× `package.json` + `charts/synth/Chart.yaml`. Оба коммита **локальные, без push** (master впереди origin на 26).
+- **0.8.2 в GitVerse удалён:** Release `v0.8.2` (id `548823616`, HTTP 204) и тег `v0.8.2` (origin и локально); тег указывал на `4b42bb0`, коммиты не тронуты. npm/Helm/Docker-артефакты 0.8.2 не трогались.
+- **Docker:** собраны из исходников и запушены в `git.itphx.ru` — `synth-backend:0.8.7` (268 MB, `sha256:b0c92c16…`), `synth-ui:0.8.7` (116 MB, `sha256:eca6c8fd…`); внутри образов проверены `SYNTH_VERSION = '0.8.7'` и `sw.js → synth-shell-0.8.7`.
+- **`synth-deploy`:** `02cd1d3` `release: bump synth-ui/backend images to v0.8.7` → push в `origin/main` → Fleet раскатал.
+- **Верификация (@orchestrator, независимо):** `GET /api/v2/health` и `/health` → `"version":"0.8.7"`; UI `/` → 200; deploy-образы `:0.8.7`; поды backend/ui `1/1 Running`, RESTARTS 0.
+- **Осталось:** проверка пользователем на test; при OK — полный релиз 0.8.7 (push master, тег `v0.8.7`, npm/Helm/Docker в GitVerse, preprod) с учётом опыта 0.8.3 (оптимизированная публикация уже в master).
