@@ -141,46 +141,48 @@ function InstructionFileRow({ file }: { file: InstructionFileInfo }) {
       data-testid="instructions-file"
       className="min-w-0 rounded-lg border border-border/60 bg-input px-2 py-1.5"
     >
+      {/* Имя файла + бейджи статуса в одну строку (как в ExpandableListRow):
+          путь сжимается/обрезается, бейджи остаются видимыми, `chars` — справа. */}
       <div className="flex min-w-0 items-center gap-1.5">
         <Icon
           name={file.kind === 'url' ? 'link' : 'file-text'}
           className="size-3 shrink-0 text-muted-foreground"
         />
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground" title={title} dir="ltr">
-          {displayPath}
-        </span>
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+          <span className="min-w-0 truncate font-mono text-xs text-foreground" title={title} dir="ltr">
+            {displayPath}
+          </span>
+          <span
+            data-testid="instructions-status"
+            className={cn(
+              'rounded px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide',
+              STATUS_CLASS[file.status],
+            )}
+          >
+            {t(`sessionTab.instructions.status.${file.status}`)}
+          </span>
+          {file.truncated && (
+            <span className="text-[0.5625rem] text-foreground">
+              {t('sessionTab.instructions.truncated')}
+            </span>
+          )}
+          {file.scan?.suspicious && (
+            <span
+              data-testid="instructions-suspicious"
+              className="text-[0.5625rem] text-destructive"
+              title={file.scan.matches.join(' | ') || undefined}
+            >
+              {t('sessionTab.instructions.suspicious')}
+              {file.scan.matches.length > 0 && ` (${file.scan.matches.length})`}
+            </span>
+          )}
+        </div>
         <span
           className="shrink-0 text-[0.625rem] text-muted-foreground tabular-nums"
           title={t('sessionTab.instructions.chars')}
         >
           {formatTokens(file.chars)}
         </span>
-      </div>
-      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 pl-5">
-        <span
-          data-testid="instructions-status"
-          className={cn(
-            'rounded px-1 py-0.5 text-[0.5625rem] uppercase tracking-wide',
-            STATUS_CLASS[file.status],
-          )}
-        >
-          {t(`sessionTab.instructions.status.${file.status}`)}
-        </span>
-        {file.truncated && (
-          <span className="text-[0.5625rem] text-foreground">
-            {t('sessionTab.instructions.truncated')}
-          </span>
-        )}
-        {file.scan?.suspicious && (
-          <span
-            data-testid="instructions-suspicious"
-            className="text-[0.5625rem] text-destructive"
-            title={file.scan.matches.join(' | ') || undefined}
-          >
-            {t('sessionTab.instructions.suspicious')}
-            {file.scan.matches.length > 0 && ` (${file.scan.matches.length})`}
-          </span>
-        )}
       </div>
     </li>
   )

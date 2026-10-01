@@ -130,6 +130,35 @@ describe('ProjectInstructions (AD-069 §9.3)', () => {
     expect(container.querySelector('[data-testid="instructions-suspicious"]')?.textContent).toContain('(1)')
   })
 
+  it('бейдж статуса — в одной строке с именем файла (одна строка, путь truncate)', async () => {
+    mocks.getSessionInstructions.mockResolvedValue(info({
+      files: [
+        {
+          path: './AGENTS.md',
+          kind: 'chain',
+          chars: 10,
+          truncated: false,
+          status: 'loaded',
+          scan: { scanned: true, blocked: false, suspicious: false, matches: [] },
+        },
+      ],
+    }))
+    const container = await render()
+    await toggle(container)
+
+    const file = container.querySelector('[data-testid="instructions-file"]')!
+    // Одна строка: единственный прямой потомок-контейнер.
+    expect(file.children).toHaveLength(1)
+    const row = file.children[0] as HTMLElement
+    const path = row.querySelector('.font-mono') as HTMLElement
+    const badge = row.querySelector('[data-testid="instructions-status"]') as HTMLElement
+    expect(path, 'путь файла').toBeTruthy()
+    expect(badge, 'бейдж статуса').toBeTruthy()
+    // Путь обрезается и лежит в том же контейнере строки, что и бейдж.
+    expect(path.className).toContain('truncate')
+    expect(path.parentElement).toBe(badge.parentElement)
+  })
+
   it('enabled:false — понятное пустое состояние без списка', async () => {
     mocks.getSessionInstructions.mockResolvedValue(info({ enabled: false }))
     const container = await render()

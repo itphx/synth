@@ -1462,6 +1462,15 @@
   - `components/panels/ExpandableListRow.test.tsx` (новый): мок `useDevice`, тесты inline/stacked.
 - **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2384 · ui 976 · backend 341 = **3882 PASS, 0 failed**. Скриншоты (390×844): имя занимает всю строку (267/286), управление второй строкой справа, «Включён» нет; десктоп 1440×900 — inline как прежде.
 - **Остаточные риски/оговорки:** живая проверка на реальном телефоне пользователя — за пользователем; подписи «Доступен»/«По умолчанию» у проектных тумблеров намеренно сохранены.
+- **Коммит:** 16fc1d5 fix(ui): адаптивные строки MCP/скиллов в правой панели на телефоне.
+
+## 2026-10-01 — fix(ui): бейдж статуса файла в одну строку с именем (ProjectInstructions) — PASS
+
+- **Задача:** в правой панели «Сессия» → «Проектные инструкции» бейдж статуса должен быть в одну строку с именем файла (как в строках MCP/скиллов).
+- **Тип:** fix (ui) · **Исполнитель:** @fixer → верификация @orchestrator · **Результат:** PASS.
+- **Что сделано:** `components/panels/ProjectInstructions.tsx` — `InstructionFileRow` сведён к одной строке: `[icon] имя [бейдж статуса] [truncated] [suspicious] … chars`; убраны вторая строка и `pl-5`; путь `truncate`, бейджи видимы, `data-testid`/`STATUS_CLASS`/`title`/`dir` сохранены. `ProjectInstructions.test.tsx` — структурный регресс-тест (+1).
+- **Верификация (@orchestrator):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2384 · ui 977 · backend 341 = **3883 PASS, 0 failed**. Скриншот 390×844: `./AGENTS.md [ОБРЕЗАН] обрезано … 54k` в одну строку.
+- **Комментарий (ответ пользователю):** несколько файлов — штатный случай (AD-069): merged chain `git root → … → workspace` (по одному файлу на каталог) + `config.instructions.sources` (путь/glob/URL), дедуп по sha256, обрезка по капу; глобальные `~/.config`, `~/.claude` не читаются.
 - **Коммит:** в этом же коммите.
 
 ## 2026-10-01 16:35 — Merge AD-069 R1–R5 в master, релиз 0.8.7, выкат на test — PASS
