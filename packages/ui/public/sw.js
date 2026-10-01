@@ -1,5 +1,5 @@
 /* Synth PWA — service worker (app-shell, runtime-кэш). */
-const CACHE = 'synth-shell-v2'
+const CACHE = 'synth-shell-__SYNTH_VERSION__'
 
 // Пути, которые НЕ кэшируем: данные/авторизация/реалтайм/служебные.
 const NO_CACHE_URL = /\/api\/|\/ws|\/auth|\/admin|\/health|sw\.js$/

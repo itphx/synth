@@ -404,6 +404,11 @@ export const synthApi = {
     return fetchJSON<T>(url, options)
   },
 
+  /** Публичный health-эндпоинт (без auth): проверка версии сервера на клиенте. */
+  async getHealth(): Promise<{ status: string; version: string; time: string }> {
+    return fetchJSON(`${BASE_URL}/health`)
+  },
+
   // Проекты
   async getProjects(): Promise<ProjectData[]> {
     return fetchJSON<ProjectData[]>(`${BASE_URL}/projects`)

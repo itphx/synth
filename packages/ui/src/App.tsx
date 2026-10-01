@@ -16,7 +16,6 @@ import { CenterPanel } from './components/layout/CenterPanel'
 import { MobileDrawer } from './components/layout/MobileDrawer'
 import { BackendConnection } from './components/layout/BackendConnection'
 import { ConnectionGuard } from './components/layout/ConnectionGuard'
-import { UpdateNotification } from './components/layout/UpdateNotification'
 import { PwaUpdatePrompt } from './components/layout/PwaUpdatePrompt'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
 import { SettingsModal } from './components/settings/SettingsModal'
@@ -218,7 +217,6 @@ function App() {
       <AuthGate>
         <BackendConnection />
         <ConnectionGuard />
-        <UpdateNotification />
         <TooltipProvider>
           <TitleTooltipBridge />
           {isMobile ? mobileLayout : desktopLayout}

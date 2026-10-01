@@ -19,14 +19,19 @@ export const LoginForm = () => {
   const isLoading = useAuthStore(s => s.isLoading)
   const error = useAuthStore(s => s.error)
   const clearError = useAuthStore(s => s.clearError)
+  // Возможности сервера берём из стора: их заполняет reauthenticate() из GET /auth/status.
+  // AuthGate рендерит LoginForm только после isInitialized, поэтому первый кадр формы
+  // сразу корректный — без промежуточной password-only ветки, к которой цеплялись
+  // менеджеры паролей (KeePassXC/браузер).
+  const oidcEnabled = useAuthStore(s => s.oidcEnabled)
+  const debugMode = useAuthStore(s => s.debugMode)
+  const deployment = useAuthStore(s => s.deployment)
   const [keyboardReserve, setKeyboardReserve] = useState(false)
   const [apiKey, setApiKey] = useState('')
   const [server, setServer] = useState('')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [debugUsers, setDebugUsers] = useState<DebugUser[]>([])
-  const [isDebugMode, setIsDebugMode] = useState(false)
-  const [oidcEnabled, setOidcEnabled] = useState(false)
   /** Гибридный режим реально включён (эндпоинт /hybrid/status ответил И enabled=true). */
   const [hybridEnabled, setHybridEnabled] = useState(false)
   /** Известные серверы из реестра профилей core (варианты для datalist поля «Сервер»). */
@@ -36,46 +41,57 @@ export const LoginForm = () => {
   const loginRef = useRef<HTMLDivElement>(null)
   const blurTimerRef = useRef<number | null>(null)
 
+  // Список debug-пользователей грузим только в debug-режиме (debugMode из стора).
   useEffect(() => {
-    const checkStatus = async () => {
+    if (!debugMode) return
+    let cancelled = false
+    const loadUsers = async () => {
       try {
-        const status = await api.getStatus()
-        setOidcEnabled(status.oidc_enabled)
-        setIsDebugMode(status.debug_mode)
-        if (status.debug_mode) {
-          const users = await api.getUsers()
-          setDebugUsers(users.users)
-        }
-        // Гибрид: если сервер — standalone-core (имеет /hybrid/status), уточняем,
-        // включён ли гибрид. Поле «Сервер» в гибриде показывается ВСЕГДА (даже
-        // когда адрес известен core при старте): при протухшем токене пользователь
-        // может сменить адрес. backendUrl/lastServer используем как предзаполнение.
-        // На managed-бэкенде эндпоинта нет — запрос НЕ выполняем (0 сетевых
-        // запросов → нет 404), поле адреса скрыто (hybridEnabled=false).
-        if (status.deployment === 'standalone' && status.oidc_enabled) {
-          const hybrid = await synthApi.getHybridStatus().catch(() => null)
-          if (hybrid) {
-            // Эндпоинт ответил — реально включён гибрид.
-            setHybridEnabled(hybrid.enabled ?? false)
-            setKnownServers(hybrid.knownServers ?? [])
-            // Предзаполнение поля адреса: последний использованный сервер
-            // (реестр профилей) приоритетнее текущего backendUrl core.
-            const initial = hybrid.lastServer || hybrid.backendUrl || ''
-            if (initial) setServer((prev) => prev || initial)
-          } else {
-            // Гибрид не настроен (или core без hybrid) → поле адреса скрываем.
-            setHybridEnabled(false)
-          }
-        } else {
-          // Managed-бэкенд (нет /hybrid/status) → гибрида нет, поле адреса скрыто.
-          setHybridEnabled(false)
-        }
+        const users = await api.getUsers()
+        if (!cancelled) setDebugUsers(users.users)
       } catch {
-        setIsDebugMode(false)
+        // Список недоступен — остаётся ручной ввод логина (input вместо select).
       }
     }
-    checkStatus()
-  }, [])
+    void loadUsers()
+    return () => {
+      cancelled = true
+    }
+  }, [debugMode])
+
+  // Гибрид: если сервер — standalone-core (имеет /hybrid/status), уточняем,
+  // включён ли гибрид. Поле «Сервер» в гибриде показывается ВСЕГДА (даже
+  // когда адрес известен core при старте): при протухшем токене пользователь
+  // может сменить адрес. backendUrl/lastServer используем как предзаполнение.
+  // На managed-бэкенде эндпоинта нет — запрос НЕ выполняем (0 сетевых
+  // запросов → нет 404), поле адреса скрыто (hybridEnabled=false).
+  useEffect(() => {
+    if (!(deployment === 'standalone' && oidcEnabled)) {
+      setHybridEnabled(false)
+      return
+    }
+    let cancelled = false
+    const loadHybrid = async () => {
+      const hybrid = await synthApi.getHybridStatus().catch(() => null)
+      if (cancelled) return
+      if (hybrid) {
+        // Эндпоинт ответил — реально включён гибрид.
+        setHybridEnabled(hybrid.enabled ?? false)
+        setKnownServers(hybrid.knownServers ?? [])
+        // Предзаполнение поля адреса: последний использованный сервер
+        // (реестр профилей) приоритетнее текущего backendUrl core.
+        const initial = hybrid.lastServer || hybrid.backendUrl || ''
+        if (initial) setServer((prev) => prev || initial)
+      } else {
+        // Гибрид не настроен (или core без hybrid) → поле адреса скрываем.
+        setHybridEnabled(false)
+      }
+    }
+    void loadHybrid()
+    return () => {
+      cancelled = true
+    }
+  }, [deployment, oidcEnabled])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -249,7 +265,7 @@ export const LoginForm = () => {
             </>
           ) : (
             <>
-              {isDebugMode && (
+              {debugMode && (
                 <div className="flex flex-col gap-2">
                   <label htmlFor="synth-login-username" className="text-sm font-medium text-foreground">
                     {t('auth.username')}
@@ -330,7 +346,7 @@ export const LoginForm = () => {
               isLoading ||
               (oidcEnabled
                 ? !username || !password
-                : !apiKey || (isDebugMode && !username))
+                : !apiKey || (debugMode && !username))
             }
             className={cn(
               "w-full px-4 py-2.5 rounded-lg font-medium text-foreground",

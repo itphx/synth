@@ -29,6 +29,8 @@ const INITIAL_STATE = {
   isInitialized: false,
   error: null,
   deployment: null,
+  oidcEnabled: false,
+  debugMode: false,
 }
 
 describe('authStore: loginWithPassword (лёгкий runtime-вход)', () => {
@@ -100,11 +102,11 @@ describe('authStore: reauthenticate (только /auth/status, без 401-шу�
     vi.unstubAllGlobals()
   })
 
-  it('authenticated=true → user/isAuthenticated/deployment + профиль, getSession не вызывается', async () => {
+  it('authenticated=true → user/isAuthenticated/deployment/oidcEnabled/debugMode + профиль, getSession не вызывается', async () => {
     vi.mocked(api.getStatus).mockResolvedValue({
       authenticated: true,
-      debug_mode: false,
-      oidc_enabled: false,
+      debug_mode: true,
+      oidc_enabled: true,
       deployment: 'managed',
       user: { id: 'u1', username: 'dev', email: null, roles: ['USER'] },
     })
@@ -115,6 +117,8 @@ describe('authStore: reauthenticate (только /auth/status, без 401-шу�
     expect(s.isAuthenticated).toBe(true)
     expect(s.user?.username).toBe('dev')
     expect(s.deployment).toBe('managed')
+    expect(s.oidcEnabled).toBe(true)
+    expect(s.debugMode).toBe(true)
     expect(s.isInitialized).toBe(true)
     expect(profileService.initialize).toHaveBeenCalledTimes(1)
     expect(api.getSession).not.toHaveBeenCalled()
@@ -151,6 +155,8 @@ describe('authStore: reauthenticate (только /auth/status, без 401-шу�
     expect(s.isInitialized).toBe(true)
     expect(s.isLoading).toBe(false)
     expect(s.deployment).toBeNull()
+    expect(s.oidcEnabled).toBe(false)
+    expect(s.debugMode).toBe(false)
     expect(profileService.initialize).not.toHaveBeenCalled()
   })
 })
@@ -159,7 +165,15 @@ describe('authStore: logout', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubGlobal('localStorage', { removeItem: vi.fn() })
-    useAuthStore.setState({ ...INITIAL_STATE, user: { id: 'u1', username: 'dev', email: null, roles: ['USER'] }, isAuthenticated: true, isInitialized: true })
+    useAuthStore.setState({
+      ...INITIAL_STATE,
+      user: { id: 'u1', username: 'dev', email: null, roles: ['USER'] },
+      isAuthenticated: true,
+      isInitialized: true,
+      deployment: 'managed',
+      oidcEnabled: true,
+      debugMode: true,
+    })
   })
 
   afterEach(async () => {
@@ -167,7 +181,7 @@ describe('authStore: logout', () => {
     vi.unstubAllGlobals()
   })
 
-  it('вызывает api.logout и сбрасывает состояние (личность очищена)', async () => {
+  it('вызывает api.logout и сбрасывает личность, сохраняя возможности сервера', async () => {
     await useAuthStore.getState().logout()
 
     const s = useAuthStore.getState()
@@ -176,6 +190,11 @@ describe('authStore: logout', () => {
     expect(s.profile).toBeNull()
     expect(s.isAuthenticated).toBe(false)
     expect(s.isLoading).toBe(false)
+    // deployment/oidcEnabled/debugMode описывают сервер, а не сессию: после выхода
+    // LoginForm должен сразу показать правильную ветку полей (без повторного /auth/status).
+    expect(s.deployment).toBe('managed')
+    expect(s.oidcEnabled).toBe(true)
+    expect(s.debugMode).toBe(true)
   })
 
   it('api.logout упал → состояние всё равно сбрасывается', async () => {
@@ -200,6 +219,8 @@ describe('authStore: sessionExpired', () => {
       isAuthenticated: true,
       isInitialized: true,
       deployment: 'managed',
+      oidcEnabled: true,
+      debugMode: true,
     })
   })
 
@@ -207,7 +228,7 @@ describe('authStore: sessionExpired', () => {
     vi.unstubAllGlobals()
   })
 
-  it('сбрасывает авторизацию без сетевых вызовов и без очистки localStorage', () => {
+  it('сбрасывает авторизацию, сохраняя возможности сервера, без сети и без очистки localStorage', () => {
     useAuthStore.getState().sessionExpired()
 
     const s = useAuthStore.getState()
@@ -215,7 +236,11 @@ describe('authStore: sessionExpired', () => {
     expect(s.profile).toBeNull()
     expect(s.isAuthenticated).toBe(false)
     expect(s.isLoading).toBe(false)
-    expect(s.deployment).toBeNull()
+    // Возможности сервера сохраняются — LoginForm после истечения сессии сразу
+    // рендерит корректную ветку (см. logout).
+    expect(s.deployment).toBe('managed')
+    expect(s.oidcEnabled).toBe(true)
+    expect(s.debugMode).toBe(true)
     expect(api.logout).not.toHaveBeenCalled()
     expect(api.getStatus).not.toHaveBeenCalled()
     expect(localStorage.removeItem).not.toHaveBeenCalled()

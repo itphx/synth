@@ -294,6 +294,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - `window.confirm` → `ConfirmDialog`; для zustand — `lib/confirm.ts` + `stores/confirmStore.ts` (рендер в `App`). Модалки/админка на телефоне — скролл-табы на всю ширину.
 - Клавиатура: `useKeyboardInset` (visualViewport → `--kb-inset` → `padding-bottom` композера); Enter на таче — перенос строки, на fine-pointer — отправка; IME учтён.
 - PWA (ручной app-shell, без vite-plugin-pwa): `public/manifest.webmanifest` (standalone, theme `#09090b`), `public/sw.js` (кэш шела; `/api,/ws,/auth,/admin,/health` не кэшируются, навигация network-first → офлайн-заглушка), иконки в `public/icons/`, меты в `index.html`; `usePwaInstall`/`PwaInstallButton`; регистрация SW только в prod.
+- Обновление: баннер `PwaUpdatePrompt` (вне `AuthGate`) — по ожидающему SW или расхождению версии с публичным `GET /api/v2/health`; проверка при монтировании, раз в 30 мин, при возврате в приложение (`visibilitychange`) и на первом действии после простоя >1 ч. SW регистрируется по стабильному `/sw.js` (`updateViaCache: 'none'`), версия в имени кэша подставляется при сборке — браузер сам видит новую версию.
 - Раздача: `docker/nginx-ui.conf` и `packages/core/src/server/app.ts` — MIME `.webmanifest` + no-cache для sw/manifest.
 - Фикс логина: в гибриде (standalone-core, `/hybrid/status` enabled=true) поле «Сервер» показывается всегда (смена адреса при протухшем токене), предзаполняется lastServer/backendUrl, варианты — knownServers; на managed-бэкенде поле скрыто. Enter в «Логин» → фокус на «Пароль».
 
