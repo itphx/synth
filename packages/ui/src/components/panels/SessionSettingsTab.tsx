@@ -1125,7 +1125,6 @@ export function SessionSettingsTab() {
                     }
                     aside={
                       <label className="flex items-center gap-1">
-                        <span className="text-[0.625rem] text-muted-foreground">{t('sessionSettings.mcp.toggleLabel')}</span>
                         <Toggle
                           enabled={srv.enabled}
                           onToggle={() => handleToggleMcp(srv)}
@@ -1169,7 +1168,6 @@ export function SessionSettingsTab() {
                     }
                     aside={
                       <label className="flex items-center gap-1">
-                        <span className="text-[0.625rem] text-muted-foreground">{t('sessionSettings.skills.toggleLabel')}</span>
                         <Toggle
                           enabled={skill.enabled}
                           onToggle={() => handleToggleSkill(skill)}
