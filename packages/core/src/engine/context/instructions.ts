@@ -17,9 +17,10 @@
  */
 
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { atomicWrite, globMatch, type InstructionSourceConfig, type InstructionsConfig } from '@itphx/synth-shared';
+import { dirsSignature, filesSignature, type FileSignatureEntry } from '../file-signature.js';
 import { runGit } from '../tools/git.js';
 import {
   applyPolicy,
@@ -515,6 +516,14 @@ export class ProjectInstructionsResolver {
   private readonly _fetchImpl: FetchLike;
   private readonly _home: string;
   private readonly _now: () => number;
+  /**
+   * AD-069 §3.5/R5: результатный кэш по подписи кандидатов (mtime:size).
+   * Ключ — все входы, влияющие на результат; значение — объект результата
+   * (read-only на стороне вызовов).
+   */
+  private readonly _resultCache = new Map<string, { signature: string; result: ProjectInstructionsResult }>();
+  /** Ограничение размера кэша (простая FIFO-эвикция). */
+  private static readonly MAX_RESULT_CACHE = 64;
 
   constructor(deps: ProjectInstructionsDeps) {
     this._config = deps.config;
@@ -542,6 +551,31 @@ export class ProjectInstructionsResolver {
       return this._empty({ status: 'excluded', reason: 'excludeProjects', path: workspace });
     }
 
+    // AD-069 §3.5/R5: дешёвая подпись кандидатов (stat без readFile/scan) и
+    // результатный кэш — повторный resolve с той же подписью не перечитывает
+    // диск. Кэшируются в т.ч. пустые/untrusted-результаты.
+    const { signature, cacheable, chain } = await this._signature(workspace, args);
+    const key = this._resultKey(workspace, args);
+    if (cacheable) {
+      const cached = this._resultCache.get(key);
+      if (cached && cached.signature === signature) return cached.result;
+    }
+
+    const result = await this._resolveUncached(workspace, args, chain);
+    if (cacheable) this._storeResult(key, signature, result);
+    return result;
+  }
+
+  /**
+   * Полный резолв без результатного кэша: guard → chain/sources → дедуп/scan →
+   * сборка блока. `chain` — прекомпьют из `_signature` (без повторного git).
+   */
+  private async _resolveUncached(
+    workspace: string,
+    args: ProjectInstructionsResolveArgs,
+    chain: string[],
+  ): Promise<ProjectInstructionsResult> {
+    const config = this._config;
     const guard: GuardContext = {
       trusted: resolveInstructionsTrusted(workspace, {
         trustedProjectDirs: this._trustedProjectDirs,
@@ -552,7 +586,6 @@ export class ProjectInstructionsResolver {
       allowInstallTree: config.allowInstallTreeFallback,
     };
 
-    const chain = await this._buildChain(workspace, args.signal);
     const before = config.sources.filter((source) => source.position === 'before');
     const after = config.sources.filter((source) => source.position !== 'before');
 
@@ -680,6 +713,115 @@ export class ProjectInstructionsResolver {
       ...(entry.label ? { label: entry.label } : {}),
       ...(entry.url ? { url: entry.url } : {}),
     };
+  }
+
+  /**
+   * AD-069 §3.5/R5: подпись всех кандидатов (chain + `config.sources`) без
+   * чтения контента — только `stat`/`access`. `cacheable=false`, если
+   * URL-источник не представим стабильной подписью (нет `dataDir` или TTL=0):
+   * тогда fetch идёт каждый resolve, как и раньше.
+   */
+  private async _signature(
+    workspace: string,
+    args: ProjectInstructionsResolveArgs,
+  ): Promise<{ signature: string; cacheable: boolean; chain: string[] }> {
+    const chain = await this._buildChain(workspace, args.signal);
+    // Локальные кандидаты цепочки — тот же приоритет имён, что у `_selectCandidate`.
+    const chainSignature = await dirsSignature(chain, this._candidateFileNames());
+
+    const entries: FileSignatureEntry[] = [];
+    const urlParts: string[] = [];
+    let cacheable = true;
+    let index = 0;
+    for (const source of this._config.sources) {
+      const value = source.value.trim();
+      index += 1;
+      if (!value) continue;
+      if (source.kind === 'path') {
+        entries.push({ id: `source-${index}`, path: await this._resolvePathValue(value, workspace) });
+      } else {
+        const part = await this._urlSignaturePart(value, source);
+        urlParts.push(part.part);
+        if (!part.cacheable) cacheable = false;
+      }
+    }
+
+    const sourceSignature = await filesSignature(entries);
+    urlParts.sort();
+    const signature = [chainSignature, sourceSignature, urlParts.join('|')].join('||');
+    return { signature, cacheable, chain };
+  }
+
+  /** Имена-кандидаты на каталог в порядке приоритета (с учётом opt-in compat). */
+  private _candidateFileNames(): string[] {
+    const names: string[] = [...PRIMARY_CANDIDATES];
+    if (this._config.claudeCompat) names.push('CLAUDE.md');
+    if (this._config.contextCompat) names.push('CONTEXT.md');
+    return names;
+  }
+
+  /**
+   * Подпись URL-источника (stat-only, без чтения кэш-JSON). В подпись входит
+   * TTL-слот `floor(now/ttl)`: смена слота гарантированно наступает не позже
+   * реального истечения TTL (`fetchedAt` пишется в том же слоте), поэтому
+   * результатный кэш никогда не отдаёт просроченный контент. Внутри слота
+   * учитываются mtime/size кэш-файла — внешняя правка инвалидирует результат.
+   * `cacheable=false`, если `dataDir`/TTL нет: fetch идёт каждый resolve, как раньше.
+   */
+  private async _urlSignaturePart(
+    url: string,
+    source: InstructionSourceConfig,
+  ): Promise<{ part: string; cacheable: boolean }> {
+    const hash = createHash('sha1').update(url).digest('hex');
+    if ('error' in validateRemoteUrl(url)) {
+      return { part: `url:${hash}:invalid`, cacheable: true };
+    }
+
+    const cachePath = this._cachePath(url);
+    const ttlMs = (source.ttlSec ?? this._config.fetch.cacheTtlSec) * 1000;
+    if (!cachePath || ttlMs <= 0) {
+      return { part: `url:${hash}:nocache`, cacheable: false };
+    }
+
+    const slot = Math.floor(this._now() / ttlMs);
+    try {
+      const info = await stat(cachePath);
+      return {
+        part: `url:${hash}:${slot}:${Math.floor(info.mtimeMs)}:${info.size}`,
+        cacheable: true,
+      };
+    } catch {
+      return { part: `url:${hash}:${slot}:miss`, cacheable: true };
+    }
+  }
+
+  /** Ключ результатного кэша — все входы, влияющие на результат. */
+  private _resultKey(workspace: string, args: ProjectInstructionsResolveArgs): string {
+    const injection = args.injection;
+    return JSON.stringify([
+      workspace,
+      args.contextWindow ?? 0,
+      args.language ?? '',
+      args.projectId ?? '',
+      injection ? `${injection.enabled ? 1 : 0}:${injection.mode}` : 'off',
+    ]);
+  }
+
+  /** Запись в результатный кэш с FIFO-эвикцией (≤ `MAX_RESULT_CACHE`). */
+  private _storeResult(key: string, signature: string, result: ProjectInstructionsResult): void {
+    if (
+      this._resultCache.size >= ProjectInstructionsResolver.MAX_RESULT_CACHE &&
+      !this._resultCache.has(key)
+    ) {
+      const oldest = this._resultCache.keys().next().value;
+      if (oldest !== undefined) this._resultCache.delete(oldest);
+    }
+    this._resultCache.set(key, { signature, result });
+  }
+
+  /** Сброс результатного кэша (принудительный reload, AD-069 §3.5/R5). */
+  clear(): void {
+    this._resultCache.clear();
   }
 
   /** `excludeProjects`: по projectId либо по пути workspace. */
@@ -828,6 +970,20 @@ export class ProjectInstructionsResolver {
     return { candidates, diagnostics };
   }
 
+  /**
+   * Резолвит path-источник до абсолютного пути (first-match, glob-aware);
+   * `null` — не найден. Общий для резолва и подписи кандидатов.
+   */
+  private async _resolvePathValue(value: string, workspace: string): Promise<string | null> {
+    const base = value === '~' || value.startsWith('~/') || value.startsWith('~\\')
+      ? this._home
+      : isAbsolute(value)
+        ? '/'
+        : workspace;
+    const pattern = value === '~' ? '' : value.startsWith('~/') || value.startsWith('~\\') ? value.slice(2) : value;
+    return pattern ? findFirstMatch(base, pattern, this._config.lazy.excludeDirs) : null;
+  }
+
   /** Резолвит path-источник (first-match) и читает его. */
   private async _collectPathSource(
     source: InstructionSourceConfig,
@@ -835,14 +991,7 @@ export class ProjectInstructionsResolver {
     workspace: string,
     guard: GuardContext,
   ): Promise<{ candidates: Candidate[]; diagnostics: InstructionsDiagnostic[] }> {
-    const base = value === '~' || value.startsWith('~/') || value.startsWith('~\\')
-      ? this._home
-      : isAbsolute(value)
-        ? '/'
-        : workspace;
-    const pattern = value === '~' ? '' : value.startsWith('~/') || value.startsWith('~\\') ? value.slice(2) : value;
-
-    const abs = pattern ? await findFirstMatch(base, pattern, this._config.lazy.excludeDirs) : null;
+    const abs = await this._resolvePathValue(value, workspace);
     if (!abs) {
       return {
         candidates: [],

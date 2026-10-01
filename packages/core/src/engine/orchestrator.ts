@@ -265,6 +265,19 @@ interface ResolvedProjectInstructions {
   files: InstructionsFileInfo[];
 }
 
+/**
+ * AD-069 §3.5/R5: запись мемоизации проектных инструкций на время хода —
+ * хранится только последний ход на сессию, `key` — входы, влияющие на результат.
+ */
+interface InstructionsTurnMemoEntry {
+  turnId: string;
+  key: string;
+  result: ResolvedProjectInstructions | undefined;
+}
+
+/** Верхняя граница числа сессий в мемо инструкций (простая FIFO-эвикция). */
+const MAX_INSTRUCTIONS_TURN_MEMO = 256;
+
 /** AD-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
 export interface PromptDiagnostics {  manifest: PromptManifest;
   /** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
@@ -358,6 +371,8 @@ export class ChatOrchestrator {
   private readonly _instructionsConfig: InstructionsConfig | null;
   /** AD-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
   private readonly _instructionsResolver: ProjectInstructionsResolver | null;
+  /** AD-069 §3.5/R5: мемоизация инструкций на время хода (последний ход на сессию). */
+  private readonly _instructionsTurnMemo = new Map<string, InstructionsTurnMemoEntry>();
   /** AD-069 Фаза 2b: lazy-догрузка вложенных инструкций в tool result. */
   private readonly _lazyInstructions: LazyInstructionsLoader | null;
   private _providerPool: ProviderPool | null;
@@ -1111,7 +1126,10 @@ export class ChatOrchestrator {
    * - только при `project.workspace` (AD-040: сессия без проекта инструкции не грузит);
    * - `session.settings.systemPrompt` override → инструкции не добавляются (как
    *   каталог скиллов AD-046);
-   * - кап — от окна модели (AD-069 §5.1), окно резолвится как в провайдере.
+   * - кап — от окна модели (AD-069 §5.1), окно резолвится как в провайдере;
+   * - AD-069 §3.5/R5: при заданном `turnId` результат мемоизируется на время
+   *   хода (последний ход на сессию; ключ включает workspace/модель/язык/
+   *   injection/projectId) — повторные вызовы внутри хода не дёргают резолвер.
    */
   private async _resolveProjectInstructions(args: {
     session: Session;
@@ -1120,6 +1138,8 @@ export class ChatOrchestrator {
     model?: string;
     language: string;
     signal?: AbortSignal;
+    /** AD-069 §3.5/R5: id хода для мемоизации внутри хода. */
+    turnId?: string;
   }): Promise<ResolvedProjectInstructions | undefined> {
     const resolver = this._instructionsResolver;
     if (!resolver) return undefined;
@@ -1128,19 +1148,75 @@ export class ChatOrchestrator {
     // AD-046 §5/AD-069 §9.2: override заменяет system prompt целиком.
     if (args.session.settings.systemPrompt?.trim()) return undefined;
 
-    const contextWindow = this._resolveModelContextWindow(
-      args.model || args.session.settings.model || '',
-    );
+    const model = args.model || args.session.settings.model || '';
+    const input = {
+      workingDir: args.workingDir,
+      contextWindow: this._resolveModelContextWindow(model),
+      model,
+      language: args.language,
+      projectId: args.session.projectId ?? args.project.id,
+      injection: this._instructionsInjectionPolicy(),
+      signal: args.signal,
+    };
 
+    if (!args.turnId) return this._resolveProjectInstructionsUncached(resolver, input);
+
+    const memoKey = this._instructionsMemoKey(input);
+    const memo = this._instructionsTurnMemo.get(args.session.id);
+    if (memo && memo.turnId === args.turnId && memo.key === memoKey) return memo.result;
+
+    const result = await this._resolveProjectInstructionsUncached(resolver, input);
+    if (
+      this._instructionsTurnMemo.size >= MAX_INSTRUCTIONS_TURN_MEMO &&
+      !this._instructionsTurnMemo.has(args.session.id)
+    ) {
+      const oldest = this._instructionsTurnMemo.keys().next().value;
+      if (oldest !== undefined) this._instructionsTurnMemo.delete(oldest);
+    }
+    this._instructionsTurnMemo.set(args.session.id, { turnId: args.turnId, key: memoKey, result });
+    return result;
+  }
+
+  /** Ключ мемоизации хода — все входы, влияющие на результат. */
+  private _instructionsMemoKey(input: {
+    workingDir: string;
+    contextWindow: number;
+    model: string;
+    language: string;
+    projectId?: string;
+    injection: { enabled: boolean; mode: InjectionPolicy };
+  }): string {
+    return JSON.stringify([
+      input.workingDir,
+      input.model,
+      input.contextWindow,
+      input.language,
+      input.projectId ?? '',
+      `${input.injection.enabled ? 1 : 0}:${input.injection.mode}`,
+    ]);
+  }
+
+  /** Резолв без per-turn мемоизации (кэш уровня резолвера при этом работает). */
+  private async _resolveProjectInstructionsUncached(
+    resolver: ProjectInstructionsResolver,
+    input: {
+      workingDir: string;
+      contextWindow: number;
+      language: string;
+      projectId?: string;
+      injection: { enabled: boolean; mode: InjectionPolicy };
+      signal?: AbortSignal;
+    },
+  ): Promise<ResolvedProjectInstructions | undefined> {
     let result;
     try {
       result = await resolver.resolve({
-        workspace: args.workingDir,
-        contextWindow,
-        language: args.language,
-        projectId: args.session.projectId ?? args.project.id,
-        signal: args.signal,
-        injection: this._instructionsInjectionPolicy(),
+        workspace: input.workingDir,
+        contextWindow: input.contextWindow,
+        language: input.language,
+        projectId: input.projectId,
+        signal: input.signal,
+        injection: input.injection,
       });
     } catch (e) {
       warning('ORCHESTRATOR', `Не удалось загрузить проектные инструкции: ${e instanceof Error ? e.message : String(e)}`);
@@ -2356,6 +2432,8 @@ export class ChatOrchestrator {
         model: provider.model,
         language,
         signal,
+        // AD-069 §3.5/R5: мемоизация в пределах хода (streamId).
+        turnId: streamId,
       });
       // AD-069 §9.3: прозрачность — событие о загруженных проектных инструкциях.
       // Публикуется только в реальном ходе (manifest/getPromptInfo — read-only).

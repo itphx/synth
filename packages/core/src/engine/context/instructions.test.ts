@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { InstructionsConfig, InstructionsLazyConfig } from '@itphx/synth-shared';
@@ -575,6 +575,77 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
 
     expect(result.content).toBe('');
     expect(result.diagnostics[0]).toMatchObject({ status: 'excluded', reason: 'excludeProjects' });
+  });
+
+  // --- AD-069 §3.5/R5: результатный кэш по подписи ---
+
+  it('результатный кэш: повторный resolve без изменений возвращает тот же объект', async () => {
+    await write('AGENTS.md', 'CACHE-V1');
+    const resolver = makeResolver(makeConfig());
+
+    const r1 = await resolver.resolve({ workspace: base });
+    const r2 = await resolver.resolve({ workspace: base });
+
+    expect(r1.content).toContain('CACHE-V1');
+    expect(r2).toBe(r1);
+  });
+
+  it('результатный кэш: изменение содержимого+mtime → новый результат', async () => {
+    const abs = join(base, 'AGENTS.md');
+    await write('AGENTS.md', 'CACHE-V1');
+    const resolver = makeResolver(makeConfig());
+    const r1 = await resolver.resolve({ workspace: base });
+
+    // Контент той же длины — инвалидация только по mtime.
+    await writeFile(abs, 'CACHE-V2', 'utf-8');
+    const future = new Date(Date.now() + 10_000);
+    await utimes(abs, future, future);
+
+    const r2 = await resolver.resolve({ workspace: base });
+    expect(r2).not.toBe(r1);
+    expect(r2.content).toContain('CACHE-V2');
+    expect(r2.content).not.toContain('CACHE-V1');
+  });
+
+  it('результатный кэш: добавление кандидата в цепочке → пересчёт', async () => {
+    await write('AGENTS.md', 'BASE-RULES');
+    const resolver = makeResolver(makeConfig());
+    const r1 = await resolver.resolve({ workspace: base });
+    expect(r1.content).toContain('BASE-RULES');
+
+    await write('AGENTS.override.md', 'OVERRIDE-RULES');
+    const r2 = await resolver.resolve({ workspace: base });
+
+    expect(r2).not.toBe(r1);
+    expect(r2.content).toContain('OVERRIDE-RULES');
+  });
+
+  it('результатный кэш: clear() форсирует пересчёт', async () => {
+    await write('AGENTS.md', 'CACHE-V1');
+    const resolver = makeResolver(makeConfig());
+    const r1 = await resolver.resolve({ workspace: base });
+    expect(await resolver.resolve({ workspace: base })).toBe(r1);
+
+    resolver.clear();
+    const r2 = await resolver.resolve({ workspace: base });
+
+    expect(r2).not.toBe(r1);
+    expect(r2.content).toBe(r1.content);
+  });
+
+  it('результатный кэш: untrusted-результат тоже кэшируется', async () => {
+    await write('AGENTS.md', 'CACHE-V1');
+    const resolver = makeResolver(makeConfig(), undefined, {
+      trustedProjectDirs: [],
+      workspacesRoot: join(base, 'workspaces'),
+    });
+
+    const r1 = await resolver.resolve({ workspace: base });
+    const r2 = await resolver.resolve({ workspace: base });
+
+    expect(r1.content).toBe('');
+    expect(r1.diagnostics.some((d) => d.status === 'untrusted')).toBe(true);
+    expect(r2).toBe(r1);
   });
 });
 

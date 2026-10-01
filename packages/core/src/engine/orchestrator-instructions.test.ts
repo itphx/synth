@@ -6,7 +6,7 @@
  * `context`), `enabled:false` и сессия без проекта инструкции не грузят.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -336,5 +336,46 @@ describe('ChatOrchestrator — проектные инструкции (AD-069 �
     expect(lazyEvent).toBeDefined();
     const lazyFiles = lazyEvent!.data.files as Array<{ path: string }>;
     expect(lazyFiles[0]!.path).toBe('./packages/core/AGENTS.md');
+  });
+
+  it('R5: мемоизация на время хода — resolver.resolve один раз на turnId', async () => {
+    const orchestrator = makeOrchestrator(makeInstructionsConfig());
+    const session = await createSession(true);
+    const internal = orchestrator as unknown as {
+      _instructionsResolver: { resolve: (...args: unknown[]) => Promise<unknown> } | null;
+      _resolveProjectInstructions: (
+        args: Record<string, unknown>,
+      ) => Promise<{ content: string } | undefined>;
+    };
+    const resolver = internal._instructionsResolver!;
+    const spy = vi.spyOn(resolver, 'resolve');
+    const project = await projectStore.load('p1');
+
+    const call = (turnId: string, workingDir = wsDir) =>
+      internal._resolveProjectInstructions({
+        session,
+        project,
+        workingDir,
+        model: 'm',
+        language: 'ru',
+        turnId,
+      });
+
+    const r1 = await call('turn-1');
+    const r2 = await call('turn-1');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(r2).toBe(r1);
+
+    // Другой ход — снова резолв.
+    await call('turn-2');
+    expect(spy).toHaveBeenCalledTimes(2);
+
+    // Смена workspace внутри того же turnId не отдаёт чужой результат.
+    const otherWs = join(tmpDir, 'ws2');
+    await mkdir(otherWs, { recursive: true });
+    await writeFile(join(otherWs, 'AGENTS.md'), 'OTHER-RULES', 'utf-8');
+    const r3 = await call('turn-2', otherWs);
+    expect(spy).toHaveBeenCalledTimes(3);
+    expect(r3?.content).toContain('OTHER-RULES');
   });
 });
