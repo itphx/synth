@@ -1283,3 +1283,19 @@
 - **`synth-deploy` (main):** `values.yaml` tags → 0.8.2, `helm lint`/`template` OK, коммит `5fc988a` запушен (`9c37c89..5fc988a`) → Fleet раскатал.
 - **Верификация (@orchestrator, независимо):** `https://synth.k3s.itphx.loc/api/v2/health` → `{"status":"healthy","version":"0.8.2"}`; UI `/` → 200; deploy-образы `:0.8.2`; поды backend/ui `1/1 Running`, RESTARTS 0.
 - **Осталось:** ветка `synth` не запушена (по решению пользователя); тег `v0.8.2`, npm-публикация и preprod/prod — не трогались.
+
+## 2026-10-01 06:50 — AD-069 остатки R1–R5 + выкат 0.8.4 на test — PASS
+
+- **Задача:** закрыть остатки AD-069 (проектные инструкции AGENTS.md): trust-гейт lazy, авто-trust, CLI-флаги отключения, документация, кэш/инвалидация; затем выкатить на test.
+- **Тип:** feature/security/perf/docs + deploy · **Исполнитель:** @fixer ×2 + @devops → верификация @orchestrator · **Результат:** PASS.
+- **Решения пользователя:** R3 — авто-trust workspace внутри `workspacesRoot`; R5 — делать A+B (кэш по mtime-подписи + per-turn мемо) с обобщением `SkillWatcher`; версия выката — 0.8.4 (patch).
+- **R1 `a87d23b` (security):** lazy-догрузка не проверяла project-trust. Единый `resolveInstructionsTrusted(workspace, {trustedProjectDirs, workspacesRoot, home})` (`engine/context/instructions.ts`), общий для system-chain и lazy; `LazyInstructionsLoader` получил trust, статус `untrusted`; `isProjectTrusted`/скиллы AD-046 не тронуты.
+- **R3 `a87d23b`:** trust для инструкций = `isProjectTrusted(...)` ИЛИ containment в `workspacesRoot`; применён в резолвере, lazy и роутах прозрачности (`core/server/app.ts`, `backend/app.ts`); оркестратор прокидывает `this._workspacesRoot`.
+- **R2 `0f53606`:** `--ignore-rules`/`--safe-mode` у `serve`/`chat` в обоих CLI (`packages/core/src/main.ts`, `packages/synth/src/cli.ts`) + env `SYNTH_IGNORE_RULES` (`resolveIgnoreRules` в `shared/config/resolve.ts`); эффективный `instructions.enabled=false` без мутации конфига. Заодно публичный CLI `synth` теперь передаёт `instructionsConfig` (ранее — нет).
+- **R4 `00c0926` (docs):** `docs/CONFIGURATION.md`; AD-069 — шапка/§9.2/§11/§13.
+- **R5 `0b30d85` (perf):** новый `engine/file-signature.ts` (`filesSignature`/`dirsSignature`, `id:floor(mtimeMs):size`, missing `!`, впрыскиваемый `stat`), `SkillWatcher` → тонкая обёртка; результатный кэш `ProjectInstructionsResolver` по подписи кандидатов (chain + `sources` + URL TTL-слот), `clear()`, FIFO ≤64; per-turn мемо в оркестраторе (`turnId=streamId`, ≤256). Кэшируются и пустые/`untrusted` результаты. Docs `c48690d` (AD-069 §3.5/§13, CONFIGURATION.md).
+- **Верификация (@orchestrator, независимо):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` — shared 181 · core 2338 · ui 910 · backend 341 = **3770 PASS, 0 failed**.
+- **Коммиты (ветка `feat/ad-069-residuals`, локально, НЕ запушена):** `a87d23b` R1/R3 · `0f53606` R2 · `00c0926` R4 · `0b30d85` R5 · `c48690d` docs · `a3abf31` bump 0.8.4.
+- **Выкат 0.8.4:** образы из исходников → Gitea: `synth-backend:0.8.4` (268 MB, digest `d3cca3bc…`), `synth-ui:0.8.4` (116 MB, digest `5bf705f8…`); `synth-deploy/main` `8cd1114` запушен → Fleet bundle `synth` **1/1**.
+- **Верификация выката (@orchestrator, независимо):** `GET /api/v2/health` → `{"status":"healthy","version":"0.8.4"}`; UI `/` → HTTP 200; deploy `:0.8.4` ready=1/1; поды backend/ui `1/1 Running`, RESTARTS 0. Тег/npm/preprod не трогались.
+- **Осталось/риски:** mtime-гранулярность (перезапись в ту же мс/размер не инвалидирует); URL TTL-слот может вызвать пересчёт на слот раньше; `stream_id='unknown'` fallback; публичный CLI не передаёт `skillsConfig` (внешние `skills.trustedProjectDirs` там не работают — только авто-trust); AD-068 (реестр/каталог) вне объёма; ветка не смержена.
