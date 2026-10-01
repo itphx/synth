@@ -94,6 +94,28 @@ describe('FileEditorTab — состояние «файл удалён»', () =>
     expect(container.querySelector('textarea')).toBeNull()
   })
 
+  it('показывает «файл удалён», а не экран ошибки, если перечитывание падает', async () => {
+    useFilesStore.setState({ deletedFiles: { 'p1::a.txt': true }, fileRevisions: {} })
+    mocks.readFile.mockRejectedValue(new Error('ENOENT: no such file'))
+
+    const container = await render(<FileEditorTab tab={tab} />)
+
+    expect(container.textContent).toContain('file.deletedOnDisk')
+    expect(container.textContent).not.toContain('ENOENT')
+    expect(container.querySelector('textarea')).toBeNull()
+  })
+
+  it('при успешном перечитывании (файл пересоздан) снимает пометку и возвращает редактор', async () => {
+    useFilesStore.setState({ deletedFiles: { 'p1::a.txt': true }, fileRevisions: {} })
+    mocks.readFile.mockResolvedValue({ content: 'restored', encoding: 'text', size: 8 })
+
+    const container = await render(<FileEditorTab tab={tab} />)
+
+    expect(container.textContent).toContain('restored')
+    expect(container.querySelector('textarea')).not.toBeNull()
+    expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBeUndefined()
+  })
+
   it('keeps dirty content and shows changed-on-disk banner for a live file revision', async () => {
     mocks.readFile.mockResolvedValue({ content: 'disk', encoding: 'text', size: 4 })
     const container = await render(<FileEditorTab tab={tab} />)

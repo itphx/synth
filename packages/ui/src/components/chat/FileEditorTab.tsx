@@ -44,7 +44,13 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
       }
       setChangedOnDisk(false)
     } catch (e) {
-      setError((e as Error).message)
+      // Файл помечен удалённым агентом — не затираем состояние удаления ошибкой:
+      // рендерится `file.deletedOnDisk` с кнопкой «Перечитать». Пометка снимается
+      // только успешным перечитыванием (файл пересоздан).
+      const key = `${projectId}::${filePath}`
+      if (!useFilesStore.getState().deletedFiles[key]) {
+        setError((e as Error).message)
+      }
     } finally {
       setLoading(false)
     }
