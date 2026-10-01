@@ -265,7 +265,7 @@ describe('state-messages', () => {
     expect(mode!.content).toContain('установите программу');
   });
 
-  it('mode_change с workspace-тулом: причина и подсказка про рабочий каталог проекта', () => {
+  it('mode_change с workspace-тулом: одна агрегированная строка про рабочий каталог проекта', () => {
     const session = makeSession({ mode: 'act', planMode: 'auto' });
 
     const { added } = syncStateMessages(session, {
@@ -277,9 +277,11 @@ describe('state-messages', () => {
     const mode = added.find((m) => m.metadata?.type === 'mode_change');
     expect(mode).toBeDefined();
     expect(mode!.content).toContain('[НЕДОСТУПНЫЕ ТУЛЫ]');
-    expect(mode!.content).toContain('write_file');
+    expect(mode!.content).toContain('file/shell/git-инструменты');
     expect(mode!.content).toContain('рабочий каталог проекта');
-    expect(mode!.content).toContain('создайте/привяжите проект');
+    expect(mode!.content).toContain('Создайте/привяжите проект');
+    // Имена workspace-тулов не перечисляются — шумный список схлопнут.
+    expect(mode!.content).not.toContain('write_file');
   });
 
   it('workspace-подсказка локализуется (en)', () => {
@@ -294,6 +296,35 @@ describe('state-messages', () => {
     const mode = added.find((m) => m.metadata?.type === 'mode_change');
     expect(mode!.content).toContain('[UNAVAILABLE TOOLS]');
     expect(mode!.content).toContain('working directory');
+    expect(mode!.content).toContain('file/shell/git tools');
+    expect(mode!.content).not.toContain('write_file');
+  });
+
+  it('несколько workspace-тулов схлопываются в одну строку (первой), остальные — следом', () => {
+    const session = makeSession({ mode: 'act', planMode: 'auto' });
+
+    const { added } = syncStateMessages(session, {
+      contextConfig: makeContextConfig(),
+      language: 'ru',
+      unavailableTools: [
+        { name: 'read_file', reason: 'workspace' },
+        { name: 'execute_shell', reason: 'workspace' },
+        { name: 'git_status', reason: 'workspace' },
+        { name: 'web_fetch', reason: 'mode' },
+      ],
+    });
+
+    const mode = added.find((m) => m.metadata?.type === 'mode_change');
+    expect(mode).toBeDefined();
+    const toolLines = mode!.content.split('\n').filter((l) => l.startsWith('- '));
+    // ровно две строки списка: агрегированная workspace + одна mode.
+    expect(toolLines).toHaveLength(2);
+    expect(toolLines[0]).toContain('file/shell/git-инструменты');
+    expect(toolLines[1]).toContain('web_fetch');
+    // Имена workspace-тулов не перечисляются.
+    expect(mode!.content).not.toContain('read_file');
+    expect(mode!.content).not.toContain('execute_shell');
+    expect(mode!.content).not.toContain('git_status');
   });
 
   it('agent_switch не включает dependency-тулы (только role)', () => {

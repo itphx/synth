@@ -463,6 +463,23 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // AD-040: сессия перенесена между проектами (PATCH /sessions/:id или
+      // project_create/project_attach от агента). Локально патчим project_id,
+      // догружаем сессию (план/workspace/plan_approved сброшены), перечитываем
+      // список проектов (новый проект может отсутствовать в сторе) и дерево Files.
+      case 'session.moved': {
+        const projectId = (payload.project_id as string | null | undefined) ?? null
+        useSessionsStore.setState((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === sid ? { ...sess, project_id: projectId } : sess,
+          ),
+        }))
+        refreshSessionFromApi(sid)
+        useProjectsStore.getState().loadProjects().catch(() => {})
+        if (projectId) void useFilesStore.getState().refreshProject(projectId)
+        break
+      }
+
       // План утверждён (AD-039): план живёт в проекте (project.plan), событие
       // plan.approved несёт только session_id/project_id — достаточно полного
       // refresh сессии (план проекта рендерится во вкладке «Проект» отдельно).

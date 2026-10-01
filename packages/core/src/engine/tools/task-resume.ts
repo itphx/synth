@@ -298,6 +298,10 @@ export async function runSubagentResume(
       subagentTools,
       deps.runtimeDeps,
       child.settings.language || 'ru',
+      {
+        workspaceReady,
+        capabilitiesOf: (n) => deps.toolRegistry?.get(n)?.capabilities,
+      },
     );
     if (unavailableSection) systemPrompt += `\n\n${unavailableSection}`;
 

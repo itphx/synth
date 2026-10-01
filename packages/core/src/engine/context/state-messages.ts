@@ -57,7 +57,16 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
   if (tools.length === 0) return '';
   const en = language === 'en';
   const header = en ? '[UNAVAILABLE TOOLS]' : '[НЕДОСТУПНЫЕ ТУЛЫ]';
-  const lines = tools.map(({ name, reason, binary }) => {
+  const lines: string[] = [];
+  // AD-075: все file/shell/git-тулы без workspace схлопываются в одну строку —
+  // их десятки, перечислять имена бессмысленно и шумно.
+  if (tools.some((t) => t.reason === 'workspace')) {
+    lines.push(en
+      ? '- file/shell/git tools — unavailable: the project working directory is not set. Create/attach a project and set its working directory (project_create/project_attach + project_workspace_set)'
+      : '- file/shell/git-инструменты — недоступны: не задан рабочий каталог проекта. Создайте/привяжите проект и задайте рабочий каталог (project_create/project_attach + project_workspace_set)');
+  }
+  for (const { name, reason, binary } of tools) {
+    if (reason === 'workspace') continue;
     if (reason === 'dependency') {
       const program = binary ?? (en ? 'required program' : 'необходимая программа');
       const cause = en
@@ -66,16 +75,8 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
       const hint = en
         ? 'install the program or contact the administrator'
         : 'установите программу или обратитесь к администратору';
-      return `- ${name} — ${cause}: ${hint}`;
-    }
-    if (reason === 'workspace') {
-      const cause = en
-        ? 'the project working directory is not set'
-        : 'не задан рабочий каталог проекта';
-      const hint = en
-        ? 'create or attach a project and set its working directory'
-        : 'создайте/привяжите проект и задайте рабочий каталог';
-      return `- ${name} — ${cause}: ${hint}`;
+      lines.push(`- ${name} — ${cause}: ${hint}`);
+      continue;
     }
     const cause = reason === 'mode'
       ? (en ? 'unavailable in the current mode' : 'недоступно в текущем режиме')
@@ -83,8 +84,8 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
     const hint = reason === 'mode'
       ? (en ? 'switch the mode (plan/act/yolo)' : 'переключите режим (plan/act/yolo)')
       : (en ? 'delegate via @' : 'делегируйте через @');
-    return `- ${name} — ${cause}: ${hint}`;
-  });
+    lines.push(`- ${name} — ${cause}: ${hint}`);
+  }
   return [header, ...lines].join('\n');
 }
 

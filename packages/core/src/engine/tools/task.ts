@@ -24,6 +24,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { estimatePromptChars } from '../context/token-ratio.js';
 import { renderUnavailableTools, type UnavailableTool } from '../context/state-messages.js';
+import { isWorkspaceDependentTool } from '../permission/availability.js';
 import { formatSkillsCatalogBlock } from '../skills/catalog.js';
 import { isRuntimeDepAvailable, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './runtime-deps.js';
 import type { SkillRuntime, SkillScopeOptions } from '../skills/types.js';
@@ -162,17 +163,33 @@ export function buildSubagentUnavailableToolsSection(
   tools: ToolForLLM[] | undefined,
   runtimeDeps: RuntimeDeps | undefined,
   language: string,
+  opts?: {
+    workspaceReady?: boolean;
+    capabilitiesOf?: (toolName: string) => readonly string[] | undefined;
+  },
 ): string {
-  if (!runtimeDeps || !tools || tools.length === 0) return '';
+  if (!tools || tools.length === 0) return '';
   const unavailable: UnavailableTool[] = [];
+  const seen = new Set<string>();
+  const workspaceReady = opts?.workspaceReady;
+  const capabilitiesOf = opts?.capabilitiesOf;
   for (const tool of tools) {
-    const dep = TOOL_RUNTIME_DEP[tool.function.name];
-    if (dep && !isRuntimeDepAvailable(runtimeDeps, dep)) {
+    const name = tool.function.name;
+    const dep = TOOL_RUNTIME_DEP[name];
+    if (runtimeDeps && dep && !isRuntimeDepAvailable(runtimeDeps, dep)) {
       unavailable.push({
-        name: tool.function.name,
+        name,
         reason: 'dependency',
         binary: RUNTIME_DEP_BINARY[dep],
       });
+      seen.add(name);
+      continue;
+    }
+    // AD-075: без рабочего каталога проекта file/shell/git-тулы недоступны.
+    // Дедупликация по имени: тул не попадает одновременно и как dependency, и как workspace.
+    if (workspaceReady === false && !seen.has(name) && isWorkspaceDependentTool(capabilitiesOf?.(name))) {
+      unavailable.push({ name, reason: 'workspace' });
+      seen.add(name);
     }
   }
   return renderUnavailableTools(unavailable, language);
@@ -552,6 +569,10 @@ export const taskTool: ToolDefinition = {
       tools,
       extra.runtimeDeps,
       extra.parentSessionSettings?.language || 'ru',
+      {
+        workspaceReady: extra.workspaceReady,
+        capabilitiesOf: (n) => extra.toolRegistry?.get(n)?.capabilities,
+      },
     );
     if (unavailableSection) llmSystemPrompt += `\n\n${unavailableSection}`;
 

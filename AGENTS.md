@@ -252,6 +252,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - Каталог `project.workspace` (AD-075): managed — авто-имя `slugify(name)`+суффикс под `workspacesRoot`, смена workspace — владелец/LEAD/ADMIN; standalone — нормализация/создание + ручной выбор через FS-диалог. Путь вне `workspacesRoot` — по политике `storage.workspaceOutsideRoot` / `/api/v2/settings/workspace-policy` (`confirm` в standalone, `deny` в managed — read-only).
 - Тулы `plan_enter`, `plan_exit`, `get_project_info`, `list_repos` жёстко привязаны к `project.workspace`/сессии — path-параметры не принимают.
 - Тулы `project_update`/`project_workspace_set`/`project_repo_clone|init|add|fetch|remove` работают с проектом сессии (подставить id/path другого проекта агент не может); смена workspace идёт через общий provisioning (`engine/workspace-provision.ts`) с политикой `workspaceOutsideRoot` — той же, что у HTTP-роута.
+- Гейт `workspace` (AD-075): file/shell/git-тулы доступны только при заданном `project.workspace`; иначе остаются в промпте, но permission-слой отклоняет их с причиной `workspace` (`engine/permission/availability.ts`, `isWorkspaceDependentTool`), а модели уходит схлопнутая подсказка. Относительные пути — только внутри `project.workspace`. После `project_create`/`project_attach`/`project_workspace_set` оркестратор перечитывает готовность workspace в том же ходе и разблокирует тулы.
 - Git-тулы (AD-076) принимают необязательный `repo_path` — относительный путь внутри `project.workspace` (containment; абсолютный/`..` → `git.repo_path_invalid`); `list_repos` отдаёт записи реестра `project.repos` (`destination`/`name`/`url`/`type`/`sshKeyId`/`lastFetch` + git-детект). SSH-ключи per-agent хранятся зашифрованными (`secrets/ssh-keys/`), мастер-ключ — `SYNTH_SECRET_KEY`/`security.secretKey`/`secrets/master.key`.
 
 | Группа | Тулы |
@@ -273,6 +274,8 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 ## UI-конвенции
 
 Панель «Сессия» в правой панели показывает план (`planContent`) и ToDo (`todos`); обновляется по WS-событиям `plan.approved`/`todos.updated` (полный refresh с сервера).
+
+Мутирующие тулы ядра публикуют `fs.changed` (`engine/fs-change.ts`): UI обновляет дерево Files, открытые редакторы и Git-вкладку с debounce; read-only тулы события не шлют. Перенос сессии между проектами (`session.moved`, в т.ч. `project_create`/`project_attach` агентом) обновляет `project_id` в сторе, список проектов и дерево Files.
 
 Вкладки Files/Git левой панели — контекст-ориентированные: закреплённый блок «Текущий проект» (по активному центр-табу — сессия/файл/коммит, хук `useActiveProject`) + сворачиваемые «Другие проекты (N)»; тумблер «Только текущий проект» (`ProjectScopeToggle`, persist `onlyActiveProject`) в шапке тулбара. Подробности — [packages/ui/AGENTS.md](./packages/ui/AGENTS.md).
 

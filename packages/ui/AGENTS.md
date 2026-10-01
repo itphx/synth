@@ -44,7 +44,7 @@
 
 **Новая левая вкладка с тулбаром**: toolbar выбирается по `leftPanelTab` в `App.tsx:140-143` (`ProjectsTabToolbar`/`FilesTabToolbar`/`GitTabToolbar`) — добавить свой `case`, иначе шапка панели останется пустой.
 
-**Контекст-ориентированные вкладки Files/Git.** Обе вкладки строятся как закреплённый блок «Текущий проект» (авто-раскрыт) + сворачиваемые «Другие проекты ({count})»; активный проект — хук `useActiveProject` (`hooks/useActiveProject.ts`: чат → `project_id` сессии, file/commit-таб → `projectId` вкладки). Ключ сворачивания блока «другие» — `OTHER_PROJECTS_COLLAPSE_KEY` (`stores/useUIStore.ts`). Тумблер «Только текущий проект» — `ProjectScopeToggle` (`components/panels/ProjectScopeToggle.tsx`, persist `useUIStore.onlyActiveProject`, disabled без валидного workspace у текущего проекта); в разметке помечен `data-project-scope-toggle`. При включённом тумблере expand/collapse-all действует только на видимые проекты — учитывать это в новых тулбарах.
+**Контекст-ориентированные вкладки Files/Git.** Обе вкладки строятся как закреплённый блок «Текущий проект» (авто-раскрыт) + сворачиваемые «Другие проекты ({count})»; активный проект — хук `useActiveProject` (`hooks/useActiveProject.ts`: чат → `project_id` сессии, file/commit-таб → `projectId` вкладки). Ключ сворачивания блока «другие» — `OTHER_PROJECTS_COLLAPSE_KEY` (`stores/useUIStore.ts`). Тумблер «Только текущий проект» — `ProjectScopeToggle` (`components/panels/ProjectScopeToggle.tsx`, persist `useUIStore.onlyActiveProject`, disabled без валидного workspace у текущего проекта); в разметке помечен `data-project-scope-toggle`. При включённом тумблере expand/collapse-all действует только на видимые проекты — учитывать это в новых тулбарах. Обновление дерева — `filesStore.refreshProject` (точечно перечитывает загруженные каталоги и инкрементит `revisionByProject`) и его debounce-обёртка `scheduleRefresh` (вызывается из `fs.changed`); `FileEditorTab` по росту ревизии перечитывает открытый файл и при расхождении показывает баннер `file.changedOnDisk`.
 
 **Новый раздел настроек**: элемент `CATEGORIES` (`components/settings/SettingsModal.tsx:35`) с `labelKey` + `icon`. Админ-раздел помечается `roles[]` (`:32`); по первому такому элементу рисуется граница (`adminBoundaryIndex`, `:70`). Ключ `labelKey` добавлять в **оба** словаря.
 
@@ -94,6 +94,7 @@
 
 ### Транспорт
 - Единственный `TransportClient` (`lib/api/transport.ts:23`) + `stores/transportStore.ts` (`:626`). События обрабатывать через стор; не открывать второй WebSocket/EventSource (AD-024).
+- `fs.changed` — мутирующий тул ядра изменил workspace: стор вызывает `filesStore.scheduleRefresh` (debounce) и debounce-refresh реестра Git (`scheduleGitRefresh`). `session.moved` — сессия перенесена между проектами (в т.ч. `project_create`/`project_attach` агентом): патч `project_id`, refresh сессии, `loadProjects` и `filesStore.refreshProject`.
 
 ### Роли и доступ
 - Роль — из `useAuthStore(s => s.user)?.roles`; UI лишь прячет недоступное, защита — на сервере. Примеры: `secrets` (ADMIN/AUDITOR, `RightPanel.tsx:31`), админ-разделы настроек (`roles[]`, `SettingsModal.tsx:32`).
