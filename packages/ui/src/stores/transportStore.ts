@@ -501,9 +501,19 @@ export function createDispatcher(): EventDispatcher {
         const scope = payload.scope === 'file' ? 'file' : 'all'
         const paths = Array.isArray(payload.paths) ? (payload.paths as string[]) : undefined
         const workspaceChanged = Boolean(payload.workspace_changed)
-        const op = payload.op === 'write' || payload.op === 'delete' || payload.op === 'mkdir'
+        const op = payload.op === 'write' || payload.op === 'delete' || payload.op === 'mkdir' || payload.op === 'move'
           ? payload.op
           : undefined
+        const from = typeof payload.from === 'string' ? payload.from : undefined
+        const to = typeof payload.to === 'string' ? payload.to : undefined
+        // `op:'move'` (execute_shell `mv`/`git mv`): синхронно, до debounce,
+        // перемапливаем ключи поддерева (включая черновики) и открытые вкладки —
+        // иначе активный редактор успеет перечитать диск по старому/новому пути
+        // и потерять несохранённые правки. Порядок: дерево → вкладки → refresh.
+        if (op === 'move' && from && to) {
+          useFilesStore.getState().remapPath(projectId, from, projectId, to)
+          useUIStore.getState().remapFileTabs(projectId, from, projectId, to)
+        }
         useFilesStore.getState().scheduleRefresh(projectId, { scope, paths, workspaceChanged, op })
         scheduleGitRefresh(projectId)
         break

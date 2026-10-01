@@ -886,6 +886,7 @@ function GroupNode({
 
 function FilesTab() {
   const { t } = useI18n()
+  const { notify } = useNotification()
   const projects = useProjectsStore(s => s.projects)
   const loadProjects = useProjectsStore(s => s.loadProjects)
   const { isTouch } = useDevice()
@@ -921,6 +922,12 @@ function FilesTab() {
   const [activeUploadPath, setActiveUploadPath] = useState<string>('')
   const [moveTarget, setMoveTarget] = useState<{ projectId: string; entry: any } | null>(null)
   const [moveDest, setMoveDest] = useState<string>('')
+  // Каталоги для диалога переноса: рекурсивный листинг workspace (maxDepth 10).
+  const [moveDirs, setMoveDirs] = useState<string[]>([])
+  const [moveDirsLoading, setMoveDirsLoading] = useState(false)
+  const [moveDirsFailed, setMoveDirsFailed] = useState(false)
+  const moveDirsCacheRef = useRef<Map<string, string[]>>(new Map())
+  const moveLoadProjectRef = useRef<string | null>(null)
   const [confirm, setConfirm] = useState<ConfirmAction | null>(null)
   const pendingDeleteRef = useRef<Set<string>>(new Set())
   const [dragState, setDragState] = useState<{ projectId: string; path: string } | null>(null)
@@ -947,28 +954,77 @@ function FilesTab() {
   }, [currentProjectId])
 
 
+  /**
+   * Рекурсивный листинг каталогов workspace для диалога переноса (maxDepth 10,
+   * относительные пути). Кэш на время сессии: повторное открытие проекта
+   * показывает список сразу и перепроверяет его в фоне.
+   */
+  const loadMoveDirs = useCallback(async (projectId: string) => {
+    moveLoadProjectRef.current = projectId
+    const cached = moveDirsCacheRef.current.get(projectId)
+    if (cached) {
+      setMoveDirs(cached)
+      setMoveDirsFailed(false)
+      setMoveDirsLoading(false)
+    } else {
+      setMoveDirs([])
+      setMoveDirsFailed(false)
+      setMoveDirsLoading(true)
+    }
+    try {
+      const { showHidden } = useFilesStore.getState()
+      const result = await synthApi.listDirectory(projectId, '', showHidden, 10)
+      const dirs = result.entries
+        .filter((e) => e.isDirectory)
+        .map((e) => e.path)
+        .sort((a, b) => a.localeCompare(b))
+      moveDirsCacheRef.current.set(projectId, dirs)
+      if (moveLoadProjectRef.current !== projectId) return
+      setMoveDirs(dirs)
+      setMoveDirsFailed(false)
+    } catch {
+      if (moveLoadProjectRef.current !== projectId) return
+      // Запрос не удался — не блокируем диалог, отдаём каталоги из дерева.
+      if (!cached) {
+        setMoveDirs([])
+        setMoveDirsFailed(true)
+      }
+    } finally {
+      if (moveLoadProjectRef.current === projectId) setMoveDirsLoading(false)
+    }
+  }, [])
+
   const projectDirPaths = useMemo(() => {
     if (!moveTarget) return []
     const pid = moveTarget.projectId
-    const prefix = `${pid}/`
-    const dirs = new Set<string>()
-    for (const [key, entries] of Object.entries(treesByProject)) {
-      if (key === pid || key.startsWith(prefix)) {
-        for (const e of entries) {
-          if (e.isDirectory) dirs.add(e.path)
+    const src = moveTarget.entry.path
+    // Корень workspace — всегда доступная цель (пустая строка = '').
+    const all = new Set<string>([''])
+    if (!moveDirsFailed) {
+      // Полный список из рекурсивного листинга (или уже загруженный кэш).
+      for (const d of moveDirs) all.add(d)
+    } else {
+      // Fallback: каталоги из уже загруженных веток дерева.
+      const prefix = `${pid}/`
+      for (const [key, entries] of Object.entries(treesByProject)) {
+        if (key === pid || key.startsWith(prefix)) {
+          for (const e of entries) {
+            if (e.isDirectory) all.add(e.path)
+          }
+        }
+        if (key.startsWith(prefix)) {
+          all.add(key.slice(prefix.length))
         }
       }
-      if (key.startsWith(prefix)) {
-        dirs.add(key.slice(prefix.length))
-      }
     }
-    const src = moveTarget.entry.path
-    dirs.delete(src)
-    for (const d of [...dirs]) {
-      if (d.startsWith(`${src}/`)) dirs.delete(d)
+    all.delete(src)
+    for (const d of [...all]) {
+      if (d.startsWith(`${src}/`)) all.delete(d)
     }
-    return [...dirs].sort((a, b) => a.localeCompare(b))
-  }, [treesByProject, moveTarget])
+    // Корень — первой строкой, подкаталоги — по алфавиту.
+    const rest = [...all].filter((d) => d !== '').sort((a, b) => a.localeCompare(b))
+    return ['', ...rest]
+  }, [treesByProject, moveDirs, moveDirsFailed, moveTarget])
 
   const openFilePathSet = useMemo(() => {
     const set = new Set<string>()
@@ -1064,6 +1120,16 @@ function FilesTab() {
     e.target.value = ''
   }
 
+  const handleDownload = (projectId: string, entry: any) => {
+    const url = synthApi.downloadFile(projectId, entry.path)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = entry.name
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+  }
+
   const handlePopoverSubmit = async () => {
     const name = popoverName.trim()
     if (!name || !popover) return
@@ -1095,13 +1161,11 @@ function FilesTab() {
     const parts = entry.path.split('/')
     parts[parts.length - 1] = newName
     const targetPath = parts.join('/')
-    await moveEntry(projectId, entry.path, targetPath)
-    const oldTabId = `file-${projectId}/${entry.path}`
-    const ui = useUIStore.getState()
-    const existing = ui.centerTabs.find((tab) => tab.id === oldTabId)
-    if (existing) {
-      ui.closeTab(oldTabId)
-      ui.openTab({ id: `file-${projectId}/${targetPath}`, type: 'file-viewer', title: newName, data: { filePath: targetPath, projectId } })
+    const ok = await moveEntry(projectId, entry.path, targetPath)
+    if (ok) {
+      useUIStore.getState().remapFileTabs(projectId, entry.path, projectId, targetPath)
+    } else {
+      notify({ text: t('file.moveError'), type: 'error', category: 'error' })
     }
     setRenamingPath(null)
     setRenamingProject(null)
@@ -1111,6 +1175,7 @@ function FilesTab() {
   const openMoveDialog = (projectId: string, entry: any) => {
     setMoveTarget({ projectId, entry })
     setMoveDest('')
+    void loadMoveDirs(projectId)
   }
 
   const handleMoveSubmit = async () => {
@@ -1120,13 +1185,11 @@ function FilesTab() {
     const name = entry.path.split('/').pop() || entry.name
     const targetPath = dest ? `${dest}/${name}` : name
     if (targetPath !== entry.path) {
-      await moveEntry(projectId, entry.path, targetPath)
-      const oldTabId = `file-${projectId}/${entry.path}`
-      const ui = useUIStore.getState()
-      const existing = ui.centerTabs.find((tab) => tab.id === oldTabId)
-      if (existing) {
-        ui.closeTab(oldTabId)
-        ui.openTab({ id: `file-${projectId}/${targetPath}`, type: 'file-viewer', title: name, data: { filePath: targetPath, projectId } })
+      const ok = await moveEntry(projectId, entry.path, targetPath)
+      if (ok) {
+        useUIStore.getState().remapFileTabs(projectId, entry.path, projectId, targetPath)
+      } else {
+        notify({ text: t('file.moveError'), type: 'error', category: 'error' })
       }
     }
     setMoveTarget(null)
@@ -1155,23 +1218,21 @@ function FilesTab() {
       if (srcProject === targetProjectId && srcPath === targetDirPath) return
       const name = srcPath.split('/').pop() || 'moved'
       const targetPath = targetDirPath ? `${targetDirPath}/${name}` : name
-      const ui = useUIStore.getState()
       if (srcProject === targetProjectId) {
-        await moveEntry(targetProjectId, srcPath, targetPath)
-        const oldTabId = `file-${targetProjectId}/${srcPath}`
-        const newTabId = `file-${targetProjectId}/${targetPath}`
-        const existing = ui.centerTabs.find((t) => t.id === oldTabId)
-        if (existing) {
-          ui.closeTab(oldTabId)
-          ui.openTab({ id: newTabId, type: 'file-viewer', title: name, data: { filePath: targetPath, projectId: targetProjectId } })
+        const ok = await moveEntry(targetProjectId, srcPath, targetPath)
+        if (ok) {
+          useUIStore.getState().remapFileTabs(targetProjectId, srcPath, targetProjectId, targetPath)
+        } else {
+          notify({ text: t('file.moveError'), type: 'error', category: 'error' })
         }
       } else {
-        const { content } = await synthApi.readFile(srcProject, srcPath)
-        await synthApi.writeFile(targetProjectId, targetPath, content)
-        await deleteEntry(srcProject, srcPath)
-        const oldTabId = `file-${srcProject}/${srcPath}`
-        if (ui.centerTabs.some((t) => t.id === oldTabId)) {
-          ui.closeTab(oldTabId)
+        // Перенос между проектами — серверным /fs/move с targetProjectId
+        // (черновики переносятся внутри moveEntry через remapPath).
+        const ok = await moveEntry(srcProject, srcPath, targetPath, targetProjectId)
+        if (ok) {
+          useUIStore.getState().remapFileTabs(srcProject, srcPath, targetProjectId, targetPath)
+        } else {
+          notify({ text: t('file.moveError'), type: 'error', category: 'error' })
         }
       }
     } catch { /* ignore */ }
@@ -1186,9 +1247,12 @@ function FilesTab() {
       const { projectId: srcProject, path: srcPath } = JSON.parse(raw) as { projectId: string; path: string }
       if (srcProject === targetProjectId) return
       const name = srcPath.split('/').pop() || 'moved'
-      const { content } = await synthApi.readFile(srcProject, srcPath)
-      await synthApi.writeFile(targetProjectId, name, content)
-      await deleteEntry(srcProject, srcPath)
+      const ok = await moveEntry(srcProject, srcPath, name, targetProjectId)
+      if (ok) {
+        useUIStore.getState().remapFileTabs(srcProject, srcPath, targetProjectId, name)
+      } else {
+        notify({ text: t('file.moveError'), type: 'error', category: 'error' })
+      }
     } catch { /* ignore */ }
   }
 
@@ -1218,16 +1282,16 @@ function FilesTab() {
         title: t('file.newFolder'),
         onClick: () => setPopover({ type: 'newFolder', projectId, parentPath: entry.path }),
       })
+    } else {
+      entryActions.push({
+        id: `download-${entry.path}`,
+        icon: 'download',
+        title: t('file.download'),
+        onClick: () => handleDownload(projectId, entry),
+      })
     }
 
     const entryContextItems: any[] = [
-      ...(isDir ? [] : [
-        { label: t('file.download'), icon: 'download' as const, onClick: () => {
-          const url = synthApi.downloadFile(projectId, entry.path)
-          const a = document.createElement('a'); a.href = url; a.download = entry.name; document.body.appendChild(a); a.click(); document.body.removeChild(a)
-        }},
-      ] as any),
-      'separator' as const,
       { label: t('file.move'), icon: 'folder-received' as const, onClick: () => openMoveDialog(projectId, entry) },
       { label: t('files.rename'), icon: 'pencil-ai' as const, onClick: () => handleRenameStart(projectId, entry) },
       { label: t('common.delete'), icon: 'delete-bin' as const, onClick: () => {
@@ -1317,6 +1381,7 @@ function FilesTab() {
           onDrop={isTouch ? undefined : (e) => handleDropOnProject(e, project.id)}
           actions={[
             { id: 'upload', icon: 'upload', title: t('file.upload'), onClick: () => handleUpload(project.id) },
+            { id: 'new-file-root', icon: 'file-add', title: t('files.newFile'), onClick: () => setPopover({ type: 'newFile', projectId: project.id, parentPath: '' }) },
             { id: 'new-folder-root', icon: 'folder-add', title: t('file.newFolder'), onClick: () => setPopover({ type: 'newFolder', projectId: project.id, parentPath: '' }) },
           ]}
         />
@@ -1393,18 +1458,27 @@ function FilesTab() {
               onKeyDown={(e) => { if (e.key === 'Enter') handleMoveSubmit() }}
               className="w-full rounded bg-interactive px-2 py-1.5 text-xs text-foreground outline-none"
             />
-            {projectDirPaths.length > 0 && (
+            {moveDirsLoading ? (
+              <div className="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
+                <Icon name="loader-2" className="size-3.5 animate-spin" />
+                {t('common.loading')}
+              </div>
+            ) : projectDirPaths.length > 0 && (
               <div className="flex flex-col gap-1 max-h-40 overflow-y-auto">
-                {projectDirPaths.map((dir) => (
-                  <button
-                    key={dir}
-                    onClick={() => setMoveDest(dir === moveDest ? '' : dir)}
-                    className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-accent flex items-center gap-1.5 ${dir === moveDest ? 'bg-accent' : ''}`}
-                  >
-                    <Icon name="folder" className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{dir}</span>
-                  </button>
-                ))}
+                {projectDirPaths.map((dir) => {
+                  const isRoot = dir === ''
+                  return (
+                    <button
+                      key={dir || '__root__'}
+                      onClick={() => setMoveDest(isRoot ? '' : (dir === moveDest ? '' : dir))}
+                      title={isRoot ? t('file.workspaceRoot') : dir}
+                      className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-accent flex items-center gap-1.5 ${dir === moveDest ? 'bg-accent' : ''}`}
+                    >
+                      <Icon name={isRoot ? 'folder-3' : 'folder'} className="h-3 w-3 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{isRoot ? '/' : dir}</span>
+                    </button>
+                  )
+                })}
               </div>
             )}
             <div className="flex gap-2">

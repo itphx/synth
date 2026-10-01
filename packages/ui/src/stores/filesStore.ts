@@ -8,7 +8,7 @@ const FS_REFRESH_DEBOUNCE_MS = 400
 const refreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /** Операция мутирующего тула, пришедшая в `fs.changed` (scope:'file'). */
-export type FsChangeOp = 'write' | 'delete' | 'mkdir'
+export type FsChangeOp = 'write' | 'delete' | 'mkdir' | 'move'
 
 /** fs.changed: накопленные за окно debounce подсказки по проекту. */
 interface PendingFsChange {
@@ -26,6 +26,10 @@ export interface FsChangeHint {
   paths?: string[]
   workspaceChanged?: boolean
   op?: FsChangeOp
+  /** Для `op:'move'` — исходный относительный POSIX-путь внутри workspace. */
+  from?: string
+  /** Для `op:'move'` — целевой относительный POSIX-путь внутри workspace. */
+  to?: string
 }
 
 interface FilesStore {
@@ -36,6 +40,8 @@ interface FilesStore {
   fileRevisions: Record<string, number>
   /** fs.changed: файлы, удалённые агентом, ключ `${projectId}::${path}`. */
   deletedFiles: Record<string, true>
+  /** Черновики открытых редакторов, ключ `${projectId}::${path}`. Runtime-only. */
+  draftContents: Record<string, string>
   loading: boolean
   error: string | null
   expandedProjects: Set<string>
@@ -52,8 +58,24 @@ interface FilesStore {
   createDirectory: (projectId: string, path: string) => Promise<boolean>
   createFile: (projectId: string, path: string) => Promise<boolean>
   deleteEntry: (projectId: string, path: string) => Promise<boolean>
-  moveEntry: (projectId: string, sourcePath: string, targetPath: string) => Promise<boolean>
+  moveEntry: (
+    projectId: string,
+    sourcePath: string,
+    targetPath: string,
+    targetProjectId?: string,
+  ) => Promise<boolean>
+  /** Префиксный перемап ключей поддерева при переносе/переименовании (без сети). */
+  remapPath: (
+    sourceProjectId: string,
+    sourcePath: string,
+    targetProjectId: string,
+    targetPath: string,
+  ) => void
   clearTree: (projectId: string) => void
+  /** Запомнить черновик открытого редактора (равен оригиналу → удалить). */
+  setDraft: (projectId: string, path: string, content: string, originalContent: string) => void
+  /** Убрать черновик открытого редактора (идемпотентно). */
+  clearDraft: (projectId: string, path: string) => void
 
   /** fs.changed: перечитывает корень и все загруженные каталоги проекта. */
   refreshProject: (projectId: string) => Promise<void>
@@ -101,6 +123,99 @@ export const useFilesStore = create<FilesStore>()(
         }))
       }
 
+      /**
+       * Новый ключ при перемапе префикса: ровно `prefix` → `newPrefix`,
+       * `prefix + '/'` → `newPrefix + остаток`. Иначе — `null` (не относится).
+       */
+      const remapKey = (key: string, prefix: string, newPrefix: string): string | null => {
+        if (key === prefix) return newPrefix
+        if (key.startsWith(`${prefix}/`)) return newPrefix + key.slice(prefix.length)
+        return null
+      }
+
+      /** Перемап префиксных ключей записи; без изменений возвращает исходную ссылку. */
+      const remapRecord = <T>(record: Record<string, T>, prefix: string, newPrefix: string): Record<string, T> => {
+        let changed = false
+        const next: Record<string, T> = {}
+        for (const [key, value] of Object.entries(record)) {
+          const mapped = remapKey(key, prefix, newPrefix)
+          if (mapped === null) {
+            next[key] = value
+          } else {
+            if (mapped !== key) changed = true
+            next[mapped] = value
+          }
+        }
+        return changed ? next : record
+      }
+
+      /**
+       * Переписывает `path` записей листинга при переносе поддерева
+       * (относительные пути): `sourcePath` → `targetPath` и `sourcePath/...` →
+       * `targetPath/...`. Без изменений возвращает исходный массив.
+       */
+      const remapTreeEntries = (
+        entries: FileEntry[],
+        sourcePath: string,
+        targetPath: string,
+      ): FileEntry[] => {
+        let changed = false
+        const next = entries.map((e) => {
+          let newPath: string | null = null
+          if (e.path === sourcePath) {
+            newPath = targetPath
+          } else if (e.path.startsWith(`${sourcePath}/`)) {
+            newPath = targetPath + e.path.slice(sourcePath.length)
+          }
+          if (newPath === null || newPath === e.path) return e
+          changed = true
+          return { ...e, path: newPath }
+        })
+        return changed ? next : entries
+      }
+
+      /**
+       * Перемап ключей `treesByProject` + переписывание `path` записей у
+       * перенесённого поддерева (ключи под `treePrefix`). Родительский листинг
+       * (srcParent) остаётся как есть — он перечитывается с сервера.
+       */
+      const remapTrees = (
+        trees: Record<string, FileEntry[]>,
+        treePrefix: string,
+        treeNewPrefix: string,
+        sourcePath: string,
+        targetPath: string,
+      ): Record<string, FileEntry[]> => {
+        let changed = false
+        const next: Record<string, FileEntry[]> = {}
+        for (const [key, entries] of Object.entries(trees)) {
+          const mapped = remapKey(key, treePrefix, treeNewPrefix)
+          const nextKey = mapped ?? key
+          const nextEntries = mapped === null
+            ? entries
+            : remapTreeEntries(entries, sourcePath, targetPath)
+          if (nextKey !== key || nextEntries !== entries) changed = true
+          next[nextKey] = nextEntries
+        }
+        return changed ? next : trees
+      }
+
+      /** Перемап префиксных ключей Set; без изменений возвращает исходную ссылку. */
+      const remapSet = (set: Set<string>, prefix: string, newPrefix: string): Set<string> => {
+        let changed = false
+        const next = new Set<string>()
+        for (const key of set) {
+          const mapped = remapKey(key, prefix, newPrefix)
+          if (mapped === null) {
+            next.add(key)
+          } else {
+            if (mapped !== key) changed = true
+            next.add(mapped)
+          }
+        }
+        return changed ? next : set
+      }
+
       const removeSubTree = (projectId: string, subPath: string) => {
         set((s) => {
           const trees = { ...s.treesByProject }
@@ -142,6 +257,8 @@ export const useFilesStore = create<FilesStore>()(
             } else if (op === 'write' || op === 'mkdir') {
               delete deletedFiles[key]
             }
+            // op === 'move': файл перенесён (не удалён) — пометку удаления не
+            // выставляем и не снимаем; ключи уже перемаплены `remapPath`.
           }
           return { fileRevisions, deletedFiles }
         })
@@ -152,6 +269,7 @@ export const useFilesStore = create<FilesStore>()(
         revisionByProject: {},
         fileRevisions: {},
         deletedFiles: {},
+        draftContents: {},
         loading: false,
         error: null,
         expandedProjects: new Set<string>(),
@@ -248,17 +366,47 @@ export const useFilesStore = create<FilesStore>()(
           }
         },
 
-        moveEntry: async (projectId, sourcePath, targetPath) => {
+        remapPath: (sourceProjectId, sourcePath, targetProjectId, targetPath) => {
+          set((s) => {
+            // Префиксы ключей: `${pid}/${rel}` — деревья/раскрытие,
+            // `${pid}::${rel}` — ревизии/удаления/черновики.
+            const treePrefix = `${sourceProjectId}/${sourcePath}`
+            const treeNewPrefix = `${targetProjectId}/${targetPath}`
+            const filePrefix = `${sourceProjectId}::${sourcePath}`
+            const fileNewPrefix = `${targetProjectId}::${targetPath}`
+            const treesByProject = remapTrees(s.treesByProject, treePrefix, treeNewPrefix, sourcePath, targetPath)
+            const expandedDirs = remapSet(s.expandedDirs, treePrefix, treeNewPrefix)
+            const fileRevisions = remapRecord(s.fileRevisions, filePrefix, fileNewPrefix)
+            const deletedFiles = remapRecord(s.deletedFiles, filePrefix, fileNewPrefix)
+            const draftContents = remapRecord(s.draftContents, filePrefix, fileNewPrefix)
+            if (
+              treesByProject === s.treesByProject
+              && expandedDirs === s.expandedDirs
+              && fileRevisions === s.fileRevisions
+              && deletedFiles === s.deletedFiles
+              && draftContents === s.draftContents
+            ) {
+              return s
+            }
+            return { treesByProject, expandedDirs, fileRevisions, deletedFiles, draftContents }
+          })
+        },
+
+        moveEntry: async (projectId, sourcePath, targetPath, targetProjectId) => {
+          const dstProjectId = targetProjectId ?? projectId
           try {
-            await synthApi.moveEntry(projectId, sourcePath, targetPath)
+            await synthApi.moveEntry(projectId, sourcePath, targetPath, targetProjectId)
+            // Перемап поддерева по префиксу: дерево, раскрытие, файловые ревизии,
+            // пометки удаления и черновики редакторов. Родителей перечитываем ниже
+            // (актуальная запись перемещённого элемента), а содержимое поддерева
+            // сохраняем перемапленным, чтобы раскрытый каталог не схлопывался.
+            get().remapPath(projectId, sourcePath, dstProjectId, targetPath)
+
             const srcParent = getParentPath(sourcePath)
             const dstParent = getParentPath(targetPath)
-
-            removeSubTree(projectId, sourcePath)
-
             await reloadDir(projectId, srcParent)
-            if (dstParent !== srcParent) {
-              await reloadDir(projectId, dstParent)
+            if (dstProjectId !== projectId || dstParent !== srcParent) {
+              await reloadDir(dstProjectId, dstParent)
             }
             return true
           } catch (e) {
@@ -284,6 +432,30 @@ export const useFilesStore = create<FilesStore>()(
             const trees = { ...s.treesByProject }
             delete trees[projectId]
             return { treesByProject: trees }
+          })
+        },
+
+        setDraft: (projectId, path, content, originalContent) => {
+          const key = `${projectId}::${path}`
+          set((s) => {
+            if (content === originalContent) {
+              if (!(key in s.draftContents)) return s
+              const draftContents = { ...s.draftContents }
+              delete draftContents[key]
+              return { draftContents }
+            }
+            if (s.draftContents[key] === content) return s
+            return { draftContents: { ...s.draftContents, [key]: content } }
+          })
+        },
+
+        clearDraft: (projectId, path) => {
+          const key = `${projectId}::${path}`
+          set((s) => {
+            if (!(key in s.draftContents)) return s
+            const draftContents = { ...s.draftContents }
+            delete draftContents[key]
+            return { draftContents }
           })
         },
 
@@ -377,7 +549,12 @@ export const useFilesStore = create<FilesStore>()(
             ?? { all: false, workspaceChanged: false, ops: new Map() }
           if (change.scope === 'all' || change.workspaceChanged) acc.all = true
           if (change.workspaceChanged) acc.workspaceChanged = true
-          for (const path of change.paths ?? []) {
+          // `op:'move'` несёт from/to; дублируем их в paths, чтобы refreshDirs
+          // перечитал родителей источника и назначения, даже если paths не задан.
+          const paths = change.paths ? [...change.paths] : []
+          if (change.from && !paths.includes(change.from)) paths.push(change.from)
+          if (change.to && !paths.includes(change.to)) paths.push(change.to)
+          for (const path of paths) {
             // «Последний wins» за окно: записан → удалён даёт delete и наоборот.
             acc.ops.set(path, change.op)
           }

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { ThemeMode } from '../lib/theme/themes'
 import { profileService } from '@/lib/api/profileService'
+import { useFilesStore } from './filesStore'
 import { applyUiScale, normalizeUiScale, persistUiScale, readUiScale } from '@/lib/uiScale'
 
 export type TransportMode = 'auto' | 'ws' | 'sse'
@@ -125,6 +126,13 @@ interface UIStore {
   closeTab: (tabId: string) => void
   setActiveCenterTab: (tabId: string) => void
   reorderTabs: (fromIndex: number, toIndex: number) => void
+  /** Прозрачно перевести вкладки viewer/editor с путём sourcePath (и потомками) на targetPath. */
+  remapFileTabs: (
+    sourceProjectId: string,
+    sourcePath: string,
+    targetProjectId: string,
+    targetPath: string,
+  ) => void
 
   transportMode: TransportMode
   setTransportMode: (mode: TransportMode) => void
@@ -140,7 +148,7 @@ interface UIStore {
 
 export const useUIStore = create<UIStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       leftPanel: {
         isOpen: true,
         width: LEFT_PANEL_MIN_WIDTH,
@@ -311,7 +319,16 @@ export const useUIStore = create<UIStore>()(
           ),
         })),
 
-      closeTab: (tabId) =>
+      closeTab: (tabId) => {
+        // Закрываем файловую вкладку — убираем её черновик, чтобы он не «залипал».
+        const tab = get().centerTabs.find((t) => t.id === tabId)
+        if (
+          (tab?.type === 'file-editor' || tab?.type === 'file-viewer') &&
+          tab.data.projectId &&
+          tab.data.filePath
+        ) {
+          useFilesStore.getState().clearDraft(tab.data.projectId, tab.data.filePath)
+        }
         set((state) => {
           const idx = state.centerTabs.findIndex((t) => t.id === tabId)
           const nextTabs = state.centerTabs.filter((t) => t.id !== tabId)
@@ -325,7 +342,8 @@ export const useUIStore = create<UIStore>()(
             }
           }
           return { centerTabs: nextTabs, activeCenterTabId: nextActive }
-        }),
+        })
+      },
 
       setActiveCenterTab: (tabId) => set({ activeCenterTabId: tabId }),
 
@@ -335,6 +353,72 @@ export const useUIStore = create<UIStore>()(
           const [moved] = tabs.splice(fromIndex, 1)
           tabs.splice(toIndex, 0, moved!)
           return { centerTabs: tabs }
+        }),
+
+      remapFileTabs: (sourceProjectId, sourcePath, targetProjectId, targetPath) =>
+        set((state) => {
+          // 1. Собрать ремап затронутых вкладок viewer/editor.
+          const remapped = new Map<string, CenterTab>()
+          const newIds = new Set<string>()
+          for (const tab of state.centerTabs) {
+            if (tab.type !== 'file-viewer' && tab.type !== 'file-editor') continue
+            const { projectId, filePath } = tab.data
+            if (projectId !== sourceProjectId || !filePath) continue
+            const isSelf = filePath === sourcePath
+            const isDescendant = filePath.startsWith(`${sourcePath}/`)
+            if (!isSelf && !isDescendant) continue
+            const rest = filePath.slice(sourcePath.length) // '' или '/...'
+            const newFilePath = `${targetPath}${rest}`
+            const prefix = tab.type === 'file-editor' ? 'edit' : 'file'
+            const newId = `${prefix}-${targetProjectId}/${newFilePath}`
+            if (newId === tab.id && projectId === targetProjectId && filePath === newFilePath) continue
+            remapped.set(tab.id, {
+              ...tab,
+              id: newId,
+              title: newFilePath.split('/').pop() ?? newFilePath,
+              data: { ...tab.data, projectId: targetProjectId, filePath: newFilePath },
+            })
+            newIds.add(newId)
+          }
+          if (remapped.size === 0) return state
+
+          // 2. Чужие (не перемапленные) вкладки, чей id занят перемапленной,
+          // удаляем — их файл перезаписан/перенесён; приоритет у перемапленной
+          // (сохраняются её editingState и черновик).
+          let nextActive = state.activeCenterTabId
+          const removedIds = new Set<string>()
+          const centerTabs: CenterTab[] = []
+          for (const tab of state.centerTabs) {
+            const mapped = remapped.get(tab.id)
+            if (mapped) {
+              centerTabs.push(mapped)
+              continue
+            }
+            if (newIds.has(tab.id)) {
+              removedIds.add(tab.id)
+              continue
+            }
+            centerTabs.push(tab)
+          }
+
+          // 3. Активная вкладка: перемапленную — перевести на новый id; если
+          // активной была удалённая чужая — ею становится перемапленная с тем же id.
+          if (state.activeCenterTabId && remapped.has(state.activeCenterTabId)) {
+            nextActive = remapped.get(state.activeCenterTabId)!.id
+          } else if (nextActive && removedIds.has(nextActive)) {
+            for (const mapped of remapped.values()) {
+              if (mapped.id === nextActive) {
+                nextActive = mapped.id
+                break
+              }
+            }
+          }
+
+          if (centerTabs.length === state.centerTabs.length
+            && centerTabs.every((tab, i) => tab === state.centerTabs[i])) {
+            return state
+          }
+          return { centerTabs, activeCenterTabId: nextActive }
         }),
 
       transportMode: 'auto',

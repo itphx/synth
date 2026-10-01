@@ -32,9 +32,10 @@ vi.mock('@/lib/i18n', () => ({
 
 const mocks = vi.hoisted(() => ({
   readFile: vi.fn(),
+  writeFile: vi.fn(),
 }))
 
-vi.mock('@/lib/api/synthApi', () => ({ synthApi: { readFile: mocks.readFile } }))
+vi.mock('@/lib/api/synthApi', () => ({ synthApi: { readFile: mocks.readFile, writeFile: mocks.writeFile } }))
 
 import { FileEditorTab } from './FileEditorTab'
 import { useFilesStore } from '@/stores/filesStore'
@@ -65,8 +66,9 @@ const tab: CenterTab = {
 describe('FileEditorTab — состояние «файл удалён»', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    useFilesStore.setState({ fileRevisions: {}, deletedFiles: {} })
+    useFilesStore.setState({ fileRevisions: {}, deletedFiles: {}, draftContents: {} })
     mocks.readFile.mockResolvedValue({ content: 'hello', encoding: 'text', size: 5 })
+    mocks.writeFile.mockResolvedValue({ content: 'hello', encoding: 'text', size: 5 })
   })
 
   afterEach(async () => {
@@ -166,5 +168,44 @@ describe('FileEditorTab — состояние «файл удалён»', () =>
 
     expect(container.textContent).toContain('file.changedOnDisk')
     expect(container.textContent).toContain('local edit')
+  })
+
+  it('восстанавливает черновик при монтировании (файл остаётся грязным)', async () => {
+    useFilesStore.setState({ draftContents: { 'p1::a.txt': 'draft text' } })
+
+    const container = await render(<FileEditorTab tab={tab} />)
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    expect(textarea).not.toBeNull()
+    expect(textarea.value).toBe('draft text')
+    // Черновик не потерян и остаётся в сторе.
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBe('draft text')
+  })
+
+  it('onChange пишет черновик в стор', async () => {
+    const container = await render(<FileEditorTab tab={tab} />)
+    const textarea = container.querySelector('textarea')!
+
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype, 'value',
+      )!.set!
+      setValue.call(textarea, 'edited')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBe('edited')
+  })
+
+  it('успешное сохранение очищает черновик', async () => {
+    useFilesStore.setState({ draftContents: { 'p1::a.txt': 'edited' } })
+    await render(<FileEditorTab tab={tab} />)
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true }))
+    })
+
+    expect(mocks.writeFile).toHaveBeenCalledWith('p1', 'a.txt', 'edited')
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBeUndefined()
   })
 })

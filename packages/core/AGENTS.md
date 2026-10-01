@@ -129,7 +129,7 @@
   бинарников (`git`/`rg`/`sh`, fail-open, кэш) и карта `TOOL_RUNTIME_DEP`; отсутствие
   программы даёт `unavailable(dependency)` (AD-078), тулы из реестра не удаляются.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
-- `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'` для файловых тулов); read-only → `null` (событие не публикуется).
+- `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).

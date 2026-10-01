@@ -728,10 +728,16 @@ export const synthApi = {
   },
 
   // Файловая система (API v2 — /fs?project_id=&path=)
-  async listDirectory(projectId: string, path?: string, includeHidden?: boolean): Promise<DirectoryListResult> {
+  async listDirectory(
+    projectId: string,
+    path?: string,
+    includeHidden?: boolean,
+    maxDepth?: number,
+  ): Promise<DirectoryListResult> {
     const params = new URLSearchParams({ project_id: projectId })
     if (path) params.set('path', path)
     if (includeHidden) params.set('includeHidden', 'true')
+    if (maxDepth) params.set('maxDepth', String(maxDepth))
     return fetchJSON<DirectoryListResult>(`${BASE_URL}/fs?${params.toString()}`)
   },
 
@@ -849,10 +855,13 @@ export const synthApi = {
     projectId: string,
     sourcePath: string,
     targetPath: string,
+    targetProjectId?: string,
   ): Promise<{ moved: boolean; sourcePath: string; targetPath: string }> {
+    const body: Record<string, unknown> = { projectId, sourcePath, targetPath }
+    if (targetProjectId) body.targetProjectId = targetProjectId
     return fetchJSON(`${BASE_URL}/fs/move`, {
       method: 'POST',
-      body: JSON.stringify({ projectId, sourcePath, targetPath }),
+      body: JSON.stringify(body),
     })
   },
 

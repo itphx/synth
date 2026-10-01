@@ -23,6 +23,7 @@ vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   listDirectory: vi.fn(),
+  moveEntry: vi.fn(),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
@@ -272,5 +273,253 @@ describe('filesStore.markDeletedFile / clearDeletedFile', () => {
     useFilesStore.getState().markDeletedFile('p1', 'a.txt')
     useFilesStore.getState().clearDeletedFile('p1', 'a.txt')
     expect(useFilesStore.getState().deletedFiles['p1::a.txt']).toBeUndefined()
+  })
+})
+
+describe('filesStore.moveEntry (перемап поддерева)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useFilesStore.setState({
+      treesByProject: {},
+      fileRevisions: {},
+      deletedFiles: {},
+      draftContents: {},
+      expandedDirs: new Set<string>(),
+      error: null,
+    })
+    mocks.listDirectory.mockResolvedValue({ entries: [] })
+  })
+
+  it('перемапливает ключи поддерева и перечитывает src/dst родителей', async () => {
+    useFilesStore.setState({
+      treesByProject: {
+        p1: [entry('dir', 'dir', true), entry('other', 'other', true)],
+        'p1/dir': [entry('a.txt', 'dir/a.txt', false)],
+        'p1/dir/sub': [entry('b.txt', 'dir/sub/b.txt', false)],
+      },
+      expandedDirs: new Set(['p1/dir', 'p1/dir/sub', 'p1/other']),
+      fileRevisions: { 'p1::dir/a.txt': 2 },
+      deletedFiles: { 'p1::dir/sub/b.txt': true },
+      draftContents: { 'p1::dir/a.txt': 'draft' },
+    })
+    mocks.moveEntry.mockResolvedValue({ moved: true, sourcePath: 'dir', targetPath: 'other/dir' })
+
+    const ok = await useFilesStore.getState().moveEntry('p1', 'dir', 'other/dir')
+
+    expect(ok).toBe(true)
+    const s = useFilesStore.getState()
+    // treesByProject: поддерево переехало, старые ключи исчезли,
+    // а `path` записей листингов переписан на новый префикс.
+    expect(s.treesByProject['p1/other/dir']).toEqual([entry('a.txt', 'other/dir/a.txt', false)])
+    expect(s.treesByProject['p1/other/dir/sub']).toEqual([entry('b.txt', 'other/dir/sub/b.txt', false)])
+    expect(s.treesByProject['p1/dir']).toBeUndefined()
+    expect(s.treesByProject['p1/dir/sub']).toBeUndefined()
+    // expandedDirs: раскрытие поддерева переехало, чужие не тронуты.
+    expect(s.expandedDirs.has('p1/other/dir')).toBe(true)
+    expect(s.expandedDirs.has('p1/other/dir/sub')).toBe(true)
+    expect(s.expandedDirs.has('p1/dir')).toBe(false)
+    expect(s.expandedDirs.has('p1/other')).toBe(true)
+    // fileRevisions / deletedFiles / draftContents.
+    expect(s.fileRevisions['p1::other/dir/a.txt']).toBe(2)
+    expect(s.fileRevisions['p1::dir/a.txt']).toBeUndefined()
+    expect(s.deletedFiles['p1::other/dir/sub/b.txt']).toBe(true)
+    expect(s.deletedFiles['p1::dir/sub/b.txt']).toBeUndefined()
+    expect(s.draftContents['p1::other/dir/a.txt']).toBe('draft')
+    expect(s.draftContents['p1::dir/a.txt']).toBeUndefined()
+    // Перечитывание родителей: src='' и dst='other'.
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', '', false)
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', 'other', false)
+  })
+
+  it('ошибка moveEntry → false, без перемапа, error выставлен', async () => {
+    useFilesStore.setState({
+      draftContents: { 'p1::dir/a.txt': 'x' },
+      expandedDirs: new Set(['p1/dir']),
+      treesByProject: { 'p1/dir': [entry('a.txt', 'dir/a.txt', false)] },
+    })
+    mocks.moveEntry.mockRejectedValue(new Error('nope'))
+    const beforeTrees = useFilesStore.getState().treesByProject
+    const beforeDrafts = useFilesStore.getState().draftContents
+
+    const ok = await useFilesStore.getState().moveEntry('p1', 'dir', 'other/dir')
+
+    expect(ok).toBe(false)
+    expect(useFilesStore.getState().error).toBe('nope')
+    expect(useFilesStore.getState().treesByProject).toBe(beforeTrees)
+    expect(useFilesStore.getState().draftContents).toBe(beforeDrafts)
+    expect(useFilesStore.getState().expandedDirs.has('p1/dir')).toBe(true)
+    expect(mocks.listDirectory).not.toHaveBeenCalled()
+  })
+
+  it('переименование каталога: path записей обновлён, name не изменился', async () => {
+    useFilesStore.setState({
+      treesByProject: {
+        'p1/src': [entry('sub', 'src/sub', true), entry('a.ts', 'src/a.ts', false)],
+        'p1/src/sub': [entry('f.ts', 'src/sub/f.ts', false)],
+      },
+      expandedDirs: new Set(['p1/src', 'p1/src/sub']),
+    })
+    mocks.moveEntry.mockResolvedValue({ moved: true, sourcePath: 'src', targetPath: 'lib' })
+
+    await useFilesStore.getState().moveEntry('p1', 'src', 'lib')
+
+    const s = useFilesStore.getState()
+    expect(s.treesByProject['p1/lib']).toEqual([
+      entry('sub', 'lib/sub', true),
+      entry('a.ts', 'lib/a.ts', false),
+    ])
+    expect(s.treesByProject['p1/lib/sub']).toEqual([entry('f.ts', 'lib/sub/f.ts', false)])
+    expect(s.expandedDirs.has('p1/lib')).toBe(true)
+    expect(s.expandedDirs.has('p1/lib/sub')).toBe(true)
+    expect(s.expandedDirs.has('p1/src')).toBe(false)
+  })
+
+  it('межпроектный перенос: targetProjectId уходит на сервер, оба проекта перечитываются', async () => {
+    useFilesStore.setState({
+      treesByProject: {
+        'p1/src': [entry('a.ts', 'src/a.ts', false)],
+        p2: [entry('x', 'x', false)],
+      },
+      expandedDirs: new Set(['p1/src']),
+      fileRevisions: { 'p1::src/a.ts': 3 },
+      draftContents: { 'p1::src/a.ts': 'draft' },
+    })
+    mocks.moveEntry.mockResolvedValue({ moved: true, sourcePath: 'src', targetPath: 'lib' })
+
+    const ok = await useFilesStore.getState().moveEntry('p1', 'src', 'lib', 'p2')
+
+    expect(ok).toBe(true)
+    expect(mocks.moveEntry).toHaveBeenCalledWith('p1', 'src', 'lib', 'p2')
+    const s = useFilesStore.getState()
+    // Ключи переехали в пространство целевого проекта.
+    expect(s.treesByProject['p2/lib']).toEqual([entry('a.ts', 'lib/a.ts', false)])
+    expect(s.treesByProject['p1/src']).toBeUndefined()
+    expect(s.expandedDirs.has('p2/lib')).toBe(true)
+    expect(s.expandedDirs.has('p1/src')).toBe(false)
+    expect(s.fileRevisions['p2::lib/a.ts']).toBe(3)
+    expect(s.draftContents['p2::lib/a.ts']).toBe('draft')
+    // Родитель источника ('') и родитель назначения ('') — в обоих проектах.
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p1', '', false)
+    expect(mocks.listDirectory).toHaveBeenCalledWith('p2', '', false)
+  })
+})
+
+describe('filesStore.remapPath (префиксный перемап)', () => {
+  beforeEach(() => {
+    useFilesStore.setState({
+      treesByProject: {},
+      fileRevisions: {},
+      deletedFiles: {},
+      draftContents: {},
+      expandedDirs: new Set<string>(),
+    })
+  })
+
+  it('внутрипроектный: ключи и entry.path переезжают на новый префикс', () => {
+    useFilesStore.setState({
+      treesByProject: {
+        p1: [entry('dir', 'dir', true), entry('other', 'other', true)],
+        'p1/dir': [entry('a.txt', 'dir/a.txt', false)],
+        'p1/dir/sub': [entry('b.txt', 'dir/sub/b.txt', false)],
+      },
+      expandedDirs: new Set(['p1/dir', 'p1/dir/sub', 'p1/other']),
+      fileRevisions: { 'p1::dir/a.txt': 2 },
+      deletedFiles: { 'p1::dir/sub/b.txt': true },
+      draftContents: { 'p1::dir/a.txt': 'draft' },
+    })
+
+    useFilesStore.getState().remapPath('p1', 'dir', 'p1', 'other/dir')
+
+    const s = useFilesStore.getState()
+    expect(s.treesByProject['p1/other/dir']).toEqual([entry('a.txt', 'other/dir/a.txt', false)])
+    expect(s.treesByProject['p1/other/dir/sub']).toEqual([entry('b.txt', 'other/dir/sub/b.txt', false)])
+    expect(s.treesByProject['p1/dir']).toBeUndefined()
+    expect(s.treesByProject['p1/dir/sub']).toBeUndefined()
+    expect(s.expandedDirs.has('p1/other/dir')).toBe(true)
+    expect(s.expandedDirs.has('p1/other/dir/sub')).toBe(true)
+    expect(s.expandedDirs.has('p1/other')).toBe(true)
+    expect(s.expandedDirs.has('p1/dir')).toBe(false)
+    expect(s.fileRevisions['p1::other/dir/a.txt']).toBe(2)
+    expect(s.deletedFiles['p1::other/dir/sub/b.txt']).toBe(true)
+    expect(s.draftContents['p1::other/dir/a.txt']).toBe('draft')
+  })
+
+  it('межпроектный: ключи переезжают в пространство целевого проекта', () => {
+    useFilesStore.setState({
+      treesByProject: {
+        'p1/src': [entry('a.ts', 'src/a.ts', false)],
+        p2: [entry('x', 'x', false)],
+      },
+      expandedDirs: new Set(['p1/src']),
+      fileRevisions: { 'p1::src/a.ts': 3 },
+      deletedFiles: { 'p1::src/a.ts': true },
+      draftContents: { 'p1::src/a.ts': 'draft' },
+    })
+
+    useFilesStore.getState().remapPath('p1', 'src', 'p2', 'lib')
+
+    const s = useFilesStore.getState()
+    expect(s.treesByProject['p2/lib']).toEqual([entry('a.ts', 'lib/a.ts', false)])
+    expect(s.treesByProject['p1/src']).toBeUndefined()
+    expect(s.treesByProject.p2).toEqual([entry('x', 'x', false)])
+    expect(s.expandedDirs.has('p2/lib')).toBe(true)
+    expect(s.expandedDirs.has('p1/src')).toBe(false)
+    expect(s.fileRevisions['p2::lib/a.ts']).toBe(3)
+    expect(s.fileRevisions['p1::src/a.ts']).toBeUndefined()
+    expect(s.deletedFiles['p2::lib/a.ts']).toBe(true)
+    expect(s.draftContents['p2::lib/a.ts']).toBe('draft')
+    expect(s.draftContents['p1::src/a.ts']).toBeUndefined()
+  })
+
+  it('нерелевантный путь — состояние не меняется (те же ссылки)', () => {
+    const treesByProject = { p1: [entry('x', 'x', false)] }
+    const expandedDirs = new Set(['p1/y'])
+    const fileRevisions = { 'p1::x': 1 }
+    const deletedFiles: Record<string, true> = { 'p1::z': true }
+    const draftContents = { 'p1::x': 'd' }
+    useFilesStore.setState({ treesByProject, expandedDirs, fileRevisions, deletedFiles, draftContents })
+
+    useFilesStore.getState().remapPath('p1', 'missing', 'p2', 'x')
+
+    const s = useFilesStore.getState()
+    expect(s.treesByProject).toBe(treesByProject)
+    expect(s.expandedDirs).toBe(expandedDirs)
+    expect(s.fileRevisions).toBe(fileRevisions)
+    expect(s.deletedFiles).toBe(deletedFiles)
+    expect(s.draftContents).toBe(draftContents)
+  })
+})
+
+describe('filesStore.setDraft / clearDraft', () => {
+  beforeEach(() => {
+    useFilesStore.setState({ draftContents: {} })
+  })
+
+  it('пишет черновик при отличии от оригинала', () => {
+    useFilesStore.getState().setDraft('p1', 'a.txt', 'edit', 'orig')
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBe('edit')
+  })
+
+  it('удаляет черновик при равенстве содержимого оригиналу', () => {
+    useFilesStore.getState().setDraft('p1', 'a.txt', 'edit', 'orig')
+    useFilesStore.getState().setDraft('p1', 'a.txt', 'orig', 'orig')
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBeUndefined()
+  })
+
+  it('идемпотентен — не меняет ссылку при том же значении', () => {
+    useFilesStore.getState().setDraft('p1', 'a.txt', 'edit', 'orig')
+    const first = useFilesStore.getState().draftContents
+    useFilesStore.getState().setDraft('p1', 'a.txt', 'edit', 'orig')
+    expect(useFilesStore.getState().draftContents).toBe(first)
+  })
+
+  it('clearDraft идемпотентен и удаляет запись', () => {
+    const empty = useFilesStore.getState().draftContents
+    useFilesStore.getState().clearDraft('p1', 'missing')
+    expect(useFilesStore.getState().draftContents).toBe(empty)
+
+    useFilesStore.getState().setDraft('p1', 'a.txt', 'edit', 'orig')
+    useFilesStore.getState().clearDraft('p1', 'a.txt')
+    expect(useFilesStore.getState().draftContents['p1::a.txt']).toBeUndefined()
   })
 })

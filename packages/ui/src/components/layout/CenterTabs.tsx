@@ -19,6 +19,7 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Tooltip, TooltipTrigger, TooltipContent } from '../ui/tooltip'
 import { useI18n } from '@/lib/i18n'
+import { confirm } from '@/lib/confirm'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useSessionsStore } from '@/stores/sessionsStore'
@@ -191,6 +192,7 @@ function DraggingTabOverlay({ tab }: { tab: CenterTab }) {
 }
 
 export function CenterTabs() {
+  const { t } = useI18n()
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
   const closeTab = useUIStore((s) => s.closeTab)
@@ -221,8 +223,20 @@ export function CenterTabs() {
   }, [centerTabs, reorderTabs])
 
   const handleClose = useCallback((tabId: string) => {
+    const tab = useUIStore.getState().centerTabs.find((t) => t.id === tabId)
+    // Подтверждаем только несохранённые изменения (saving/saved/error — без вопроса).
+    if (tab?.editingState === 'dirty') {
+      void confirm({
+        title: t('center.closeTab'),
+        message: t('file.unsavedChanges'),
+        variant: 'warning',
+      }).then((ok) => {
+        if (ok) closeTab(tabId)
+      })
+      return
+    }
     closeTab(tabId)
-  }, [closeTab])
+  }, [closeTab, t])
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return

@@ -13,6 +13,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { createDispatcher } from './transportStore'
 import { useFilesStore } from './filesStore'
+import { useUIStore } from './useUIStore'
 import { useSessionsStore } from './sessionsStore'
 import type { WSEvent } from '@/lib/api/transport'
 
@@ -88,6 +89,47 @@ describe('transportStore dispatcher: fs.changed / project.updated', () => {
       workspaceChanged: false,
       op: undefined,
     })
+  })
+
+  it("fs.changed op:'move' синхронно ремапит дерево и вкладки, затем scheduleRefresh", () => {
+    const remapSpy = vi.spyOn(useFilesStore.getState(), 'remapPath').mockImplementation(() => {})
+    const remapTabsSpy = vi.spyOn(useUIStore.getState(), 'remapFileTabs').mockImplementation(() => {})
+
+    dispatch(makeEvent('fs.changed', 's1', {
+      session_id: 's1',
+      project_id: 'p1',
+      scope: 'file',
+      paths: ['a.txt', 'b.txt'],
+      op: 'move',
+      from: 'a.txt',
+      to: 'b.txt',
+      tool: 'execute_shell',
+    }))
+
+    expect(remapSpy).toHaveBeenCalledWith('p1', 'a.txt', 'p1', 'b.txt')
+    expect(remapTabsSpy).toHaveBeenCalledWith('p1', 'a.txt', 'p1', 'b.txt')
+    expect(scheduleSpy).toHaveBeenCalledWith('p1', {
+      scope: 'file',
+      paths: ['a.txt', 'b.txt'],
+      workspaceChanged: false,
+      op: 'move',
+    })
+    // Порядок: дерево (черновики) → вкладки → refresh.
+    expect(remapSpy.mock.invocationCallOrder[0]).toBeLessThan(remapTabsSpy.mock.invocationCallOrder[0]!)
+    expect(remapTabsSpy.mock.invocationCallOrder[0]!).toBeLessThan(scheduleSpy.mock.invocationCallOrder[0]!)
+  })
+
+  it('fs.changed без move не трогает вкладки', () => {
+    const remapTabsSpy = vi.spyOn(useUIStore.getState(), 'remapFileTabs').mockImplementation(() => {})
+    dispatch(makeEvent('fs.changed', 's1', {
+      session_id: 's1',
+      project_id: 'p1',
+      scope: 'file',
+      paths: ['a.txt'],
+      op: 'write',
+      tool: 'write_file',
+    }))
+    expect(remapTabsSpy).not.toHaveBeenCalled()
   })
 
   it('fs.changed без project_id — fallback на проект сессии', () => {

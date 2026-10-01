@@ -65,6 +65,52 @@ describe('resolveFsChange', () => {
     expect(git).not.toHaveProperty('op');
   });
 
+  describe('execute_shell → op move', () => {
+    it('простая mv внутри workspace → move с from/to/paths', () => {
+      expect(resolveFsChange('execute_shell', undefined, WS, { command: 'mv src/a.txt src/b.txt' }))
+        .toEqual({
+          scope: 'file',
+          paths: ['src/a.txt', 'src/b.txt'],
+          op: 'move',
+          from: 'src/a.txt',
+          to: 'src/b.txt',
+        });
+    });
+
+    it('git mv внутри workspace → move', () => {
+      expect(resolveFsChange('execute_shell', undefined, WS, { command: 'git mv a b' }))
+        .toEqual({ scope: 'file', paths: ['a', 'b'], op: 'move', from: 'a', to: 'b' });
+    });
+
+    it('mv с флагами и кавычками → move, кавычки снимаются', () => {
+      expect(resolveFsChange('execute_shell', undefined, WS, { command: 'mv -f a b' }))
+        .toEqual({ scope: 'file', paths: ['a', 'b'], op: 'move', from: 'a', to: 'b' });
+      expect(resolveFsChange('execute_shell', undefined, WS, { command: "mv 'a b' c" }))
+        .toEqual({ scope: 'file', paths: ['a b', 'c'], op: 'move', from: 'a b', to: 'c' });
+    });
+
+    it('непростая команда/вне workspace → fallback all', () => {
+      const fallback = { scope: 'all' } as const;
+      for (const command of [
+        'mv *.txt dir/',
+        'mv a b && echo',
+        'mv /abs/b c',
+        'mv ../x y',
+        'mv a',
+        'rm x',
+        'echo mv a b',
+      ]) {
+        expect(resolveFsChange('execute_shell', undefined, WS, { command }), command).toEqual(fallback);
+      }
+    });
+
+    it('execute_shell без args/без command/с не-строкой → all', () => {
+      expect(resolveFsChange('execute_shell', undefined, WS)).toEqual({ scope: 'all' });
+      expect(resolveFsChange('execute_shell', undefined, WS, {})).toEqual({ scope: 'all' });
+      expect(resolveFsChange('execute_shell', undefined, WS, { command: 42 })).toEqual({ scope: 'all' });
+    });
+  });
+
   it('project_workspace_set → all + workspaceChanged', () => {
     expect(resolveFsChange('project_workspace_set', undefined, WS))
       .toEqual({ scope: 'all', workspaceChanged: true });

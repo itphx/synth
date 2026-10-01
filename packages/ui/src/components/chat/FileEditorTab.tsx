@@ -37,8 +37,17 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
         setBinarySize(result.size)
       } else {
         setIsBinary(false)
-        setContent(result.content)
-        setOriginalContent(result.content)
+        // Восстанавливаем несохранённый черновик (если есть): файл остаётся
+        // «грязным», а актуальное серверное содержимое становится оригиналом.
+        const draft = useFilesStore.getState().draftContents[`${projectId}::${filePath}`]
+        if (draft !== undefined && draft !== result.content) {
+          setContent(draft)
+          setOriginalContent(result.content)
+        } else {
+          setContent(result.content)
+          setOriginalContent(result.content)
+          useFilesStore.getState().clearDraft(projectId, filePath)
+        }
         // Файл успешно перечитан — пометка «удалён агентом» больше не актуальна.
         useFilesStore.getState().clearDeletedFile(projectId, filePath)
       }
@@ -117,6 +126,7 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
     const ok = await writeFile(projectId, filePath, content)
     if (ok) {
       setOriginalContent(content)
+      useFilesStore.getState().clearDraft(projectId, filePath)
       setChangedOnDisk(false)
       syncEditingState('saved')
       setTimeout(() => syncEditingState('idle'), 2000)
@@ -219,7 +229,11 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
         className="flex-1 w-full resize-none bg-background p-4 text-sm font-mono text-foreground outline-none border-0 focus:ring-0"
         value={content}
         onChange={(e) => {
-          setContent(e.target.value)
+          const v = e.target.value
+          setContent(v)
+          if (projectId && filePath) {
+            useFilesStore.getState().setDraft(projectId, filePath, v, originalContent)
+          }
         }}
         spellCheck={false}
       />

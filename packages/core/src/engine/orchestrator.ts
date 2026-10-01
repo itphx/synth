@@ -1310,7 +1310,7 @@ export class ChatOrchestrator {
       });
       // fs.changed: inline shell мог изменить файлы workspace — обновляем UI.
       if (!exec.isError) {
-        this._publishFsChange(session, 'execute_shell', { isError: false }, workingDir);
+        this._publishFsChange(session, 'execute_shell', { isError: false }, workingDir, { command });
       }
       return { output: exec.output, isError: exec.isError };
     };
@@ -1819,9 +1819,10 @@ export class ChatOrchestrator {
     toolName: string,
     toolResult: { isError?: boolean; metadata?: Record<string, unknown> },
     workingDir: string,
+    args?: Record<string, unknown>,
   ): void {
     if (toolResult.isError) return;
-    const change = resolveFsChange(toolName, toolResult.metadata, workingDir);
+    const change = resolveFsChange(toolName, toolResult.metadata, workingDir, args);
     if (!change) return;
     this._eventBus.publish(session.id, 'fs.changed', {
       session_id: session.id,
@@ -1829,6 +1830,8 @@ export class ChatOrchestrator {
       scope: change.scope,
       ...(change.paths ? { paths: change.paths } : {}),
       ...(change.op ? { op: change.op } : {}),
+      ...(change.from ? { from: change.from } : {}),
+      ...(change.to ? { to: change.to } : {}),
       ...(change.workspaceChanged ? { workspace_changed: true } : {}),
       tool: toolName,
     });
@@ -3369,7 +3372,7 @@ export class ChatOrchestrator {
 
           // fs.changed: уведомляем UI об успешной мутации (после мид-ходового
           // refresh workspace — projectId/workingDir актуальны).
-          this._publishFsChange(session, toolName, toolResult, workingDir);
+          this._publishFsChange(session, toolName, toolResult, workingDir, toolArgs);
 
           allToolCalls.push({
             name: toolName,

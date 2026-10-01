@@ -3,6 +3,7 @@ export const dict = {
   'common.language.english': 'English',
   'common.language.russian': 'Russian',
   'common.cancel': 'Cancel',
+  'common.ok': 'OK',
   'common.confirm': 'Confirm',
   'common.empty': 'Empty',
   'common.showMore': '{count} more',
@@ -811,6 +812,7 @@ export const dict = {
   'file.upload': 'Upload file',
   'file.download': 'Download',
   'file.move': 'Move',
+  'file.moveError': 'Failed to move',
   'file.newFolder': 'New folder',
   'file.fileName': 'File name',
   'file.folderName': 'Folder name',
@@ -825,6 +827,7 @@ export const dict = {
   'file.changedOnDisk': 'File changed on disk',
   'file.deletedOnDisk': 'File was deleted on disk',
   'file.reload': 'Reload',
+  'file.workspaceRoot': 'Workspace root',
 
   // Workspace picker
   'workspace.selectDirectory': 'Select workspace directory',

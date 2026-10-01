@@ -3,6 +3,7 @@ export const dict = {
   'common.language.english': 'English',
   'common.language.russian': 'Русский',
   'common.cancel': 'Отмена',
+  'common.ok': 'ОК',
   'common.confirm': 'Подтвердить',
   'common.empty': 'Пусто',
   'common.showMore': 'Ещё {count}',
@@ -791,6 +792,7 @@ export const dict = {
   'file.upload': 'Загрузить файл',
   'file.download': 'Скачать',
   'file.move': 'Переместить',
+  'file.moveError': 'Не удалось переместить',
   'file.newFolder': 'Новая папка',
   'file.fileName': 'Имя файла',
   'file.folderName': 'Имя папки',
@@ -805,6 +807,7 @@ export const dict = {
   'file.changedOnDisk': 'Файл изменён агентом на диске',
   'file.deletedOnDisk': 'Файл удалён агентом',
   'file.reload': 'Перечитать',
+  'file.workspaceRoot': 'Корень рабочего каталога',
 
   // Workspace picker
   'workspace.selectDirectory': 'Выбрать рабочую директорию',
