@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -31,6 +31,8 @@ program
   .option('--token <key>', 'API-ключ для аутентификации на удалённом backend (гибридный режим)')
   .option('--runner', 'запустить in-process раннер')
   .option('--ui <path>', 'путь к собранному UI (dist)')
+  .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
+  .option('--safe-mode', 'безопасный режим: проектные инструкции не грузятся')
   .action(async (options) => {
     // AD-079: единый home-каталог локального инстанса (config/data/profiles/credentials).
     const home = resolveHome(options.home);
@@ -90,6 +92,10 @@ program
 
     const uiPath = options.ui || undefined;
 
+    // AD-069 §9.2: `--ignore-rules`/`--safe-mode` (или env SYNTH_IGNORE_RULES) —
+    // нейтральная сессия без проектных инструкций. Конфиг не мутируем.
+    const ignoreRules = resolveIgnoreRules(!!(options.ignoreRules || options.safeMode), process.env);
+
     // AD-079: credentials — явный --credentials > config > home-относительный;
     // profiles — явный --profiles > home-относительный (иначе XDG-дефолт).
     const credentialsPath =
@@ -121,7 +127,8 @@ program
       // AD-046 §7: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
       commandsConfig: synth.commands,
       // AD-069 Фаза 1: конфигурация проектных инструкций (AGENTS.md).
-      instructionsConfig: synth.instructions,
+      // AD-069 §9.2: ignore-rules/safe-mode → enabled=false (без мутации конфига).
+      instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
@@ -423,6 +430,8 @@ program
   .option('--config <path>', 'путь к config.yaml')
   .option('--data-dir <path>', 'каталог данных')
   .option('--api-key <key>', 'API-ключ провайдера')
+  .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
+  .option('--safe-mode', 'безопасный режим: проектные инструкции не грузятся')
   .action(async (message, options) => {
     // Если нет сообщения — интерактивный режим
     if (!message) {
@@ -448,6 +457,10 @@ program
       agent: options.agent,
       dataDir,
       config: synth,
+      // AD-069 §9.2: ignore-rules/safe-mode → instructions.enabled=false.
+      instructionsConfig: resolveIgnoreRules(!!(options.ignoreRules || options.safeMode), process.env)
+        ? { ...synth.instructions, enabled: false }
+        : synth.instructions,
     });
   });
 
@@ -574,6 +587,13 @@ async function startRepl(options: Record<string, unknown>) {
       agent: options.agent as string,
       dataDir,
       config: synth,
+      // AD-069 §9.2: флаги chat пробрасываются и в интерактивный REPL.
+      instructionsConfig: resolveIgnoreRules(
+        !!(options.ignoreRules ?? options['ignore-rules'] ?? options.safeMode ?? options['safe-mode']),
+        process.env,
+      )
+        ? { ...synth.instructions, enabled: false }
+        : synth.instructions,
     });
 
     rl.prompt();

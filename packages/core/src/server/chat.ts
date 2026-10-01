@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
-import type { SynthConfig } from '@itphx/synth-shared';
+import type { SynthConfig, InstructionsConfig } from '@itphx/synth-shared';
 import { resolveDefaultWorkspace, resolveWorkspacesRoot } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus,
@@ -26,6 +26,8 @@ export interface SingleChatOptions {
   agent?: string;
   dataDir: string;
   config: SynthConfig;
+  /** AD-069 §9.2: override проектных инструкций (CLI `--ignore-rules`/`--safe-mode`). */
+  instructionsConfig?: InstructionsConfig;
 }
 
 export async function runSingleChat(options: SingleChatOptions): Promise<void> {
@@ -192,7 +194,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     skillRuntime: skillService,
     commandRuntime: commandService,
     // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
-    instructionsConfig: options.config.instructions,
+    instructionsConfig: options.instructionsConfig ?? options.config.instructions,
     // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
     instructionsTrustedProjectDirs: options.config.skills?.trustedProjectDirs,
     // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.

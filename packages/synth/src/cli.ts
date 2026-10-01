@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { join, dirname, resolve } from 'node:path';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
@@ -45,6 +45,8 @@ program
   .option('--oidc-issuer <url>', 'OIDC issuer — fallback дискавери для входа в UI (гибридный режим)')
   .option('--oidc-client-id <id>', 'OIDC client_id — fallback дискавери для входа в UI (гибридный режим)')
   .option('--token <key>', 'API-ключ для аутентификации на удалённом backend (гибридный режим)')
+  .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
+  .option('--safe-mode', 'безопасный режим: проектные инструкции не грузятся')
   .action(async (options) => {
     // Единый каталог данных локального мира — НЕ зависит от удалённого сервера.
     // Профили серверов (profiles.json) остаются мета-реестром для UX (известные
@@ -104,6 +106,10 @@ program
 
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
 
+    // AD-069 §9.2: `--ignore-rules`/`--safe-mode` (или env SYNTH_IGNORE_RULES) —
+    // проектные инструкции не грузятся (конфиг не мутируем).
+    const ignoreRules = resolveIgnoreRules(!!(options.ignoreRules || options.safeMode), process.env);
+
     // Приоритет API-ключа: --api-key/synth.core.apiKey > SYNTH_API_KEY >
     // сохранённый локальный ключ > сгенерировать и сохранить. Пустой ключ в
     // standalone-режиме означает невозможность входа в UI (401), поэтому
@@ -158,6 +164,9 @@ program
       workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
       uiDistPath,
+      // AD-069: конфигурация проектных инструкций (AGENTS.md); при
+      // --ignore-rules/--safe-mode — выключена.
+      instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
@@ -468,6 +477,8 @@ program
   .option('--agent <agent>', 'агент (developer, assistant)')
   .option('--data-dir <path>', 'каталог данных')
   .option('--api-key <key>', 'API-ключ провайдера')
+  .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
+  .option('--safe-mode', 'безопасный режим: проектные инструкции не грузятся')
   .action(async (message, options) => {
     if (!message) {
       console.log('Интерактивный режим (введите "exit" для выхода)');
@@ -485,6 +496,10 @@ program
       agent: options.agent,
       dataDir,
       config: synth,
+      // AD-069 §9.2: ignore-rules/safe-mode → instructions.enabled=false.
+      instructionsConfig: resolveIgnoreRules(!!(options.ignoreRules || options.safeMode), process.env)
+        ? { ...synth.instructions, enabled: false }
+        : synth.instructions,
     });
   });
 

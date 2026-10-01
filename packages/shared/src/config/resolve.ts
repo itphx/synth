@@ -259,6 +259,18 @@ export function resolveSecretKey(config: SynthConfig, env?: NodeJS.ProcessEnv): 
   return '';
 }
 
+/**
+ * AD-069 §9.2: нейтральная сессия без проектных инструкций.
+ * Приоритет: явный флаг CLI `--ignore-rules`/`--safe-mode` (`explicit`) >
+ * env `SYNTH_IGNORE_RULES` (`1`/`true`). Значение — эффективный
+ * `instructions.enabled=false`.
+ */
+export function resolveIgnoreRules(explicit?: boolean, env?: NodeJS.ProcessEnv): boolean {
+  if (explicit) return true;
+  const envVal = (env ?? process.env).SYNTH_IGNORE_RULES;
+  return envVal === '1' || envVal?.toLowerCase() === 'true';
+}
+
 export async function ensureDataDir(dataDir: string): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   for (const subdir of DATA_SUBDIRS) {
