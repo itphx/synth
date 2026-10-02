@@ -101,7 +101,7 @@ pnpm clean                  # очистка dist/
 
 ### Запуск
 
-`./scripts/dev.sh [backend|ui|core|all]` из `synth/` (или `./synth/scripts/dev.sh` из корня проекта). Скрипт ставит: `SYNTH_AUTH_DEBUG=true` (debug-аутентификация), `SYNTH_DATA_DIR=/home/eof/dev/Synth/data`, `SYNTH_PORT`/`SYNTH_CORE_PORT`/`VITE_PORT`, а также `SYNTH_CONFIG=packages/backend/config.yaml` (только если файл существует) — поэтому `mcp.servers` из backend-конфига подхватываются в dev; `loadConfig` учитывает `SYNTH_CONFIG` (AD-023). Подробности — [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md).
+`./scripts/dev.sh [backend|ui|core|all]` из `synth/` (или `./synth/scripts/dev.sh` из корня проекта). Скрипт ставит: `SYNTH_AUTH_DEBUG=true` (debug-аутентификация), `SYNTH_DATA_DIR` (по умолчанию `<repo>/../data`; переопределяется env), `SYNTH_PORT`/`SYNTH_CORE_PORT`/`VITE_PORT`, а также `SYNTH_CONFIG=packages/backend/config.yaml` (только если файл существует) — поэтому `mcp.servers` из backend-конфига подхватываются в dev; `loadConfig` учитывает `SYNTH_CONFIG` (AD-023). Подробности — [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md).
 
 ### Данные
 
@@ -385,6 +385,8 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 
 | Трогаешь | Читай |
 |---|---|
+| пользовательская документация / портал | https://docs.synth.itphx.ru/ |
+| документация (портал и dev-доки) | скилл `synth-docs` |
 | storage / JSON / FileStore | [AD-005](./docs/arch_decisions/ad-005-json-storage.md) |
 | события / WS / SSE | [AD-008](./docs/arch_decisions/ad-008-websocket-events.md), [AD-009](./docs/arch_decisions/ad-009-session-event-bus.md), [AD-024](./docs/arch_decisions/ad-024-eventhub-transport.md) |
 | проект / сессии / ветвление / merge | [AD-014](./docs/arch_decisions/ad-014-project-container.md), [AD-033](./docs/arch_decisions/ad-033-session-branching-merge.md), [AD-040](./docs/arch_decisions/ad-040-sessions-without-project.md) |
@@ -421,6 +423,11 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | иконки/цвета проекта и сессии | [packages/ui/AGENTS.md](./packages/ui/AGENTS.md), [packages/shared/AGENTS.md](./packages/shared/AGENTS.md) |
 
 ## Документация
+
+Разделение аудиторий: **пользовательская документация** — канонический источник на портале
+[docs.synth.itphx.ru](https://docs.synth.itphx.ru/) (RU по умолчанию, EN — `/en/`; быстрый старт,
+провайдеры, гибрид, администрирование, CLI/FAQ), в репозитории не дублируется; **документация для
+разработчиков** — в `docs/` репозитория и в `AGENTS.md` (этот файл, архитектурные соглашения и AD).
 
 | Файл | Назначение |
 |------|------------|

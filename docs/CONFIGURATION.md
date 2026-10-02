@@ -1,5 +1,9 @@
 # Конфигурация Synth
 
+> [!NOTE]
+> Пользовательская часть по настройке — в портале документации:
+> https://docs.synth.itphx.ru/admin/configuration/.
+
 ## Приоритет
 
 ```
@@ -16,7 +20,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 | Переменная | Назначение | По умолчанию |
 |-----------|------------|--------------|
-| `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль USER). Если не задан, `synth serve` генерирует устойчивый локальный ключ в `{dataDir}/secrets/api-key` | — |
+| `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль ADMIN). Если не задан, `synth serve` генерирует устойчивый локальный ключ в `{dataDir}/secrets/api-key` | — |
 | `SYNTH_DATA_DIR` | Каталог данных (сессии, проекты, провайдеры, модели) | по режиму: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
 | `SYNTH_WORKSPACES_ROOT` | Корень каталогов workspace проектов (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |

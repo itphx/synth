@@ -63,7 +63,7 @@ Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 
 | Механизм | Описание |
 |---|---|
-| `Authorization: Bearer <apiKey>` | Совпал с `config.apiKey` → пользователь `local` (роль `USER`). |
+| `Authorization: Bearer <apiKey>` | Совпал с `config.apiKey` → пользователь `local` (роль `ADMIN`). |
 | Cookie `synth_session` | HMAC-подписанный API-ключ (v1) либо JSON `{v:2, kind:'local'\|'server', user}` (v2, гибридная личность). |
 | `requireAuth` | Единственный guard; `403`/`ADMIN`-проверок в standalone нет. |
 

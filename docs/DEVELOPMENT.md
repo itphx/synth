@@ -41,7 +41,7 @@ pnpm lint
 ### Переменные окружения dev.sh
 
 - `SYNTH_AUTH_DEBUG=true` — режим отладки с тестовыми пользователями
-- `SYNTH_DATA_DIR=/home/eof/dev/Synth/data` — каталог данных вне репозитория
+- `SYNTH_DATA_DIR=${SYNTH_DATA_DIR:-<repo>/../data}` — каталог данных вне репозитория; значение по умолчанию — соседний с монорепо каталог `data/`, переопределяется переменной окружения
 - `SYNTH_LOG_DIR=$ROOT/tmp` — каталог логов (эндпоинт `/api/v2/logs`)
 - `SYNTH_PORT=5000`, `SYNTH_CORE_PORT=4300`, `SYNTH_RUNNER_PORT=5200`, `VITE_PORT=5002`
 - `SYNTH_HOST=0.0.0.0` — хост для всех сервисов

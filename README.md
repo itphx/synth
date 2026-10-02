@@ -5,7 +5,7 @@
 # Synth
 
 **Корпоративная AI-агентная платформа.**  
-*Статус: MVP — активная разработка, ядро стабильно. Версия: 0.3.0.*
+*Статус: MVP — активная разработка, ядро стабильно. Версия: 0.8.8.*
 
 Synth — система для командной работы с AI-агентами. Легко разворачивается на инфраструктуре компании, но при этом работает и на личной машине — без бэкенда, Keycloak и Kubernetes.
 
@@ -21,6 +21,28 @@ flowchart LR
     Core --> Anthropic["Anthropic"]
     Core --> Runners["opencode / cline"]
 ```
+
+---
+
+## Скриншоты
+
+<p align="center">
+  <img src="docs/resources/screens/app-dark.png" alt="Synth — чат, файлы проекта и статистика" width="100%"/>
+</p>
+
+| Чат и инструменты | Статистика | Агенты |
+|---|---|---|
+| ![Чат](docs/resources/screens/chat.png) | ![Статистика](docs/resources/screens/stats.png) | ![Агенты](docs/resources/screens/agents.png) |
+
+| Журнал аудита | Мобильный чат | Мобильное меню |
+|---|---|---|
+| ![Аудит](docs/resources/screens/audit.png) | ![Мобильный чат](docs/resources/screens/mobile-chat.png) | ![Мобильное меню](docs/resources/screens/mobile-menu.png) |
+
+Темы оформления:
+
+| Светлая (Flexoki) | Dracula | Nord |
+|---|---|---|
+| ![Светлая](docs/resources/screens/app-light.png) | ![Dracula](docs/resources/screens/theme-dracula.png) | ![Nord](docs/resources/screens/theme-nord.png) |
 
 ---
 
@@ -40,6 +62,9 @@ flowchart LR
 ---
 
 ## Быстрый старт
+
+> Пошаговое руководство (установка, настройка провайдера, первый запуск) — на портале:
+> [docs.synth.itphx.ru/getting-started/quickstart](https://docs.synth.itphx.ru/getting-started/quickstart/).
 
 ### npm (глобальная установка)
 
@@ -61,7 +86,7 @@ synth serve
 ### Docker Compose
 
 ```bash
-git clone <repo-url> synth && cd synth
+git clone https://gitverse.ru/itphx/synth synth && cd synth
 echo "SYNTH_API_KEY=my-secret-key" > .env
 docker compose up -d
 ```
@@ -71,7 +96,7 @@ docker compose up -d
 ### Из исходников (разработка)
 
 ```bash
-git clone <repo-url> synth && cd synth
+git clone https://gitverse.ru/itphx/synth synth && cd synth
 pnpm install
 pnpm build
 
@@ -98,28 +123,46 @@ synth chat --provider ollama --model qwen3:14b
 synth
 ```
 
-Подробнее о настройке провайдеров — [LLM-провайдеры](docs/LLM_PROVIDERS.md) и [Быстрый старт](docs/QUICKSTART.md).
+Подробнее о настройке провайдеров — [LLM-провайдеры](docs/LLM_PROVIDERS.md) и [Быстрый старт на портале](https://docs.synth.itphx.ru/getting-started/quickstart/).
 
 ---
 
 ## Документация
 
-| Раздел | О чём |
-|--------|-------|
-| [Быстрый старт](docs/QUICKSTART.md) | Установка, настройка провайдера, первый запуск |
+### Пользовательская документация
+
+Канонический источник пользовательских руководств — портал
+**[docs.synth.itphx.ru](https://docs.synth.itphx.ru/)** (на русском; английская
+версия — в планах):
+
+- [Быстрый старт](https://docs.synth.itphx.ru/getting-started/quickstart/)
+- [Провайдеры](https://docs.synth.itphx.ru/getting-started/providers/)
+- [Гибридный режим](https://docs.synth.itphx.ru/deploy/hybrid/)
+- [Администрирование](https://docs.synth.itphx.ru/admin/configuration/)
+- [CLI](https://docs.synth.itphx.ru/help/cli/)
+- [FAQ](https://docs.synth.itphx.ru/help/faq/)
+
+### Документация для разработчиков
+
+| Файл | О чём |
+|------|-------|
 | [Архитектура](docs/ARCHITECTURE.md) | Компоненты, сценарии развёртывания, полная схема |
 | [Конфигурация](docs/CONFIGURATION.md) | Переменные окружения, `config.yaml`, приоритет настроек |
+| [Разработка](docs/DEVELOPMENT.md) | Сборка, тесты, `dev.sh`, структура монорепозитория |
+| [Публикация и релиз](docs/PUBLISHING.md) | npm-пакеты, Docker, CI-релиз |
+| [API v2](docs/API_V2.md) | Справочник HTTP API: эндпоинты, RBAC, ошибки |
+| [Маршрутизация](docs/ROUTING.md) | Быстрые ответы, выбор модели, эмбеддинги |
 | [Keycloak (OIDC)](docs/KEYCLOAK.md) | Настройка Keycloak, выдача ролей, параметры Synth для связки |
 | [LLM-провайдеры](docs/LLM_PROVIDERS.md) | Ollama, OpenAI, Anthropic — настройка и модели |
-| [Разработка](docs/DEVELOPMENT.md) | Сборка, тесты, `dev.sh`, структура монорепозитория |
-| [Маршрутизация](docs/ROUTING.md) | Быстрые ответы, выбор модели, эмбеддинги |
-| [Публикация и релиз](docs/PUBLISHING.md) | npm-пакеты, Docker, CI-релиз |
 | [Диагностика](docs/TROUBLESHOOTING.md) | Известные проблемы и решения |
 | [Архитектурные решения](AGENTS.md) | AD, мотивировка, история решений |
 
 ---
 
 ## Гибридный режим (локально + сервер)
+
+> Пользовательское руководство по гибридному режиму — на портале:
+> [docs.synth.itphx.ru/deploy/hybrid](https://docs.synth.itphx.ru/deploy/hybrid/).
 
 Synth подключается к корпоративному серверу (например `https://synth.k3s.itphx.loc`),
 объединяя локальные и удалённые проекты/сессии в одном UI. LLM-запросы

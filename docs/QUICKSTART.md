@@ -1,5 +1,9 @@
 # Быстрый старт
 
+> [!NOTE]
+> Актуальная пользовательская версия этого документа — в портале документации:
+> https://docs.synth.itphx.ru/getting-started/quickstart/.
+
 Короткая инструкция для конечного пользователя: установка, настройка провайдера и первый запуск Synth.
 
 ## Требования
@@ -26,7 +30,7 @@ docker run -p 4300:4300 -e SYNTH_API_KEY=my-secret-key gitverse.ru/itphx/synth
 Либо docker-compose из корня репозитория (`docker-compose.yml`):
 
 ```bash
-git clone <repo-url> synth && cd synth
+git clone https://gitverse.ru/itphx/synth synth && cd synth
 echo "SYNTH_API_KEY=my-secret-key" > .env
 docker compose up -d
 ```
@@ -34,7 +38,7 @@ docker compose up -d
 ### Способ 3: из исходников
 
 ```bash
-git clone <repo-url> synth && cd synth
+git clone https://gitverse.ru/itphx/synth synth && cd synth
 pnpm install
 pnpm build
 
@@ -111,7 +115,7 @@ synth
 | Режим | Где | Механизм |
 |-------|-----|----------|
 | API Key | backend (`SYNTH_API_KEY`) | Один ключ → роль ADMIN |
-| API Key | core standalone (`synth serve`, `--api-key`/`SYNTH_API_KEY`; иначе авто-ключ `{dataDir}/secrets/api-key`) | Один ключ → роль USER |
+| API Key | core standalone (`synth serve`, `--api-key`/`SYNTH_API_KEY`; иначе авто-ключ `{dataDir}/secrets/api-key`) | Один ключ → роль ADMIN |
 | Debug | backend (`SYNTH_AUTH_DEBUG=true`) | Тестовые пользователи (admin-key-123, user-key-456, lead-key-789, auditor-key-012) |
 | OIDC | backend (Keycloak) | JWT + cookie `user_session` |
 

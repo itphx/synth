@@ -29,8 +29,8 @@ export SYNTH_LOG_DIR="$LOGDIR"
 # Режим разработки: debug-аутентификация с тестовыми пользователями
 export SYNTH_AUTH_DEBUG=true
 
-# Каталог данных — вне репозитория
-export SYNTH_DATA_DIR="/home/eof/dev/Synth/data"
+# Каталог данных — вне репозитория; по умолчанию <repo>/../data, переопределяется env
+export SYNTH_DATA_DIR="${SYNTH_DATA_DIR:-$ROOT/../data}"
 
 # Конфиг backend. dev.sh запускает backend с cwd=synth/, а findConfigPath()
 # ищет config.yaml только в cwd (в dev-режиме → null), поэтому mcp.servers из
