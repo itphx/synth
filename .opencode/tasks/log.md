@@ -1662,3 +1662,13 @@
 - **Скилл:** `.opencode/skills/synth-docs/SKILL.md` (99 строк, 9 разделов) — два контура документации (портал `synth-docs` vs dev-доки `synth/docs`), распределение контента, стиль портала (RU, Material, `#c33b04`, JetBrains Mono, запрет AD/внутренних путей/хостов/секретов), согласование основного репо и репо доков, процесс обновления, сборка/деплой (Fleet GitRepo, `.fleetignore`, pull-secret), чек-лист верификации, типичные ошибки. Триггер `документация (портал и dev-доки) → скилл synth-docs` добавлен в корневой `AGENTS.md`.
 - **Коммиты `synth/`** (ветка `master`, push `357bff4..fe7d2cb`): `3a072c0` docs (README/AGENTS/dev-доки/`scripts/dev.sh`/скриншоты); `97a6372` docs(skills) — скилл; `fe7d2cb` chore(tasks) — журнал. После — рабочее дерево чистое.
 - **Замечание:** правки только markdown/shell/PNG, TypeScript не менялся — typecheck/lint/test не запускались; `bash -n scripts/dev.sh` — OK.
+
+## 2026-10-02 12:25 — Портал: фикс «выглядывания» бейджа из шапки + подпись футера — PASS
+
+- **Задача:** убрать артефакт, выглядывающий из-под шапки при прокрутке вверх; в футере заменить подпись ссылки `docs.synth.itphx.ru` на «Документация».
+- **Тип:** fix (docs/UI) · **Исполнитель:** @fixer (правка) + оркестратор (выкат) · **Результат:** PASS.
+- **Причина артефакта (диагностика в браузере):** `.synth-header__badge` («docs») не задавал `line-height` и наследовал `48px` от `.md-header`; при `font-size:12px` + padding + border высота бейджа = **54px** при шапке **48px** → 6px вылезали под шапку (у поискового дропдауна предок `opacity:0`, он невидим и не при чём).
+- **Правка:** `.synth-header__badge` — добавлены `line-height: 1` и `white-space: nowrap`; в `overrides/partials/footer.html` текст ссылки → «Документация» (href прежний).
+- **Выкат:** коммит `fd693ac` → push `origin/main`; образ `git.itphx.ru/itphx/synth-docs@sha256:86a3203e11c24c60e9e7e5695019ba8bab92203683d5dc2e17f855fd42d938ea`; Fleet GitRepo `synth-docs` → `fd693ac`, 1/1 Ready.
+- **Проверка live (Playwright):** бейдж `top=16, bottom=34, height=18` — внутри шапки (bottom ≤ 48), переполнений нет; при прокрутке вверх артефакт отсутствует; в футере `<a href="https://docs.synth.itphx.ru/">Документация</a>`; `https://docs.synth.itphx.ru/` → 200.
+- **Замечание:** бейдж «docs» фактически невидим (оранжевый текст/рамка `#c33b04` на оранжевой шапке) — при желании можно убрать или перекрасить.
