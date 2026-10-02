@@ -1654,3 +1654,11 @@
 - **Выкат:** коммит `76b4ca2` → push `origin/main`; образ `git.itphx.ru/itphx/synth-docs@sha256:503ad24fdabed8c703769eb42b595a92af5fe6d45a690cd0b024f717639064eb`; `rollout restart`; Fleet GitRepo `synth-docs` → `76b4ca2`, 1/1 Ready.
 - **Проверка:** `https://docs.synth.itphx.ru/` → 200; в live HTML вхождений «Документация в разработке» / «Помочь с наполнением» / `synth-announce` / `md-banner` = 0 (пустой контейнер `data-md-component="announce"` от Material остаётся, но без содержимого и высоты); quickstart внутренний/внешний → 200.
 - **Примечание:** репозиторий `itphx/synth-docs` остаётся приватным (как и просил пользователь).
+
+## 2026-10-02 12:05 — Скилл synth-docs и коммит основного репозитория — PASS
+
+- **Задача:** зафиксировать процесс ведения документации в скилле; закоммитить и запушить основной репозиторий `synth`.
+- **Тип:** docs/process · **Исполнитель:** @fixer (скилл) + оркестратор (commit/push) · **Результат:** PASS.
+- **Скилл:** `.opencode/skills/synth-docs/SKILL.md` (99 строк, 9 разделов) — два контура документации (портал `synth-docs` vs dev-доки `synth/docs`), распределение контента, стиль портала (RU, Material, `#c33b04`, JetBrains Mono, запрет AD/внутренних путей/хостов/секретов), согласование основного репо и репо доков, процесс обновления, сборка/деплой (Fleet GitRepo, `.fleetignore`, pull-secret), чек-лист верификации, типичные ошибки. Триггер `документация (портал и dev-доки) → скилл synth-docs` добавлен в корневой `AGENTS.md`.
+- **Коммиты `synth/`** (ветка `master`, push `357bff4..fe7d2cb`): `3a072c0` docs (README/AGENTS/dev-доки/`scripts/dev.sh`/скриншоты); `97a6372` docs(skills) — скилл; `fe7d2cb` chore(tasks) — журнал. После — рабочее дерево чистое.
+- **Замечание:** правки только markdown/shell/PNG, TypeScript не менялся — typecheck/lint/test не запускались; `bash -n scripts/dev.sh` — OK.
