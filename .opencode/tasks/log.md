@@ -1691,3 +1691,35 @@
 - **Выкат:** коммит `f278683` → push `origin/main`; образ `git.itphx.ru/itphx/synth-docs@sha256:479d8e0347639e7b2febf9d9b5a62c54ced780ba67d045b790f4f1965a6dfe34`; Fleet GitRepo `synth-docs` → `f278683`, 1/1 Ready.
 - **Проверка live:** `https://docs.synth.itphx.ru/` → 200; вхождений `git.itphx.ru/itphx/synth-docs` — 0; разметки `md-header__source`/`md-source` — 0; кнопки редактирования — 0; футер: Репозиторий → `gitverse.ru/itphx/synth`, Лэндинг → `synth.itphx.ru`, Документация → `docs.synth.itphx.ru`.
 - **Итог серии:** портал публичен, но приватный репозиторий документации нигде не раскрывается.
+
+## 2026-10-02 — Лэндинг: контакты — 4 плашки в двух группах — PASS
+
+- **Задача:** обновить контакты связи с автором и сделать 4 плашки — 2 для связи (отдельный аккаунт), 2 для каналов/новостей; у каждой пары единый стиль подписей и ссылок.
+- **Тип:** feat (лендинг) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Структура:** `.contacts` → 2 × `.contacts__group` (заголовок + `.contacts__pair` из 2 `.contact`); label = платформа (Telegram/MAX), value = хэндл/название — единый стиль внутри пары.
+- **Ссылки:** связь — Telegram `t.me/synth_dev_admin` (`@synth_dev_admin`), MAX `max.ru/u/f9LHodD0cOLYp-ArA7EERFtbyIv9wg48uTQbpiSZ8lkAlH6j3kJ_6EfFcJ8`; каналы — Telegram `t.me/synth_dev` (`@synth_dev`), MAX join `max.ru/join/96yJ3gTevBA32ajnT7oGan8ZLKmQeDSw0dBvYZc_YDw`.
+- **i18n:** добавлены `contacts_group_author`, `contacts_group_channels`, `contact_author_tg_*`, `contact_author_max_*`; `contact_tg_label`/`contact_max_label` → `Telegram`/`MAX`; удалены `contact_author_label`/`contact_author_value`. RU=EN=183 ключа.
+- **CSS:** `.contacts` 2 колонки, `calc(var(--gap)+8px) var(--gap)`; `.contacts__group`/`__group-title`/`__pair`; на ≤560px пара — 1 колонка (на ≤960px группы уже в 1 колонку).
+- **Верификация:** RU — 2 группы, 4 плашки с верными label/value/href, карточки в паре выровнены (sameTop/sameH); EN — заголовки переведены; мобильный 390px — pair в 1 колонку (342px, stacked). Скриншоты — десктоп/мобайл.
+- **Выкат:** коммит `a0b933c`, образ `sha256:22fc73a3…`; поды 1/1; оба хоста 200; sha256 live == коммит; grep: `synth_dev_admin`=1, MAX-профиль=1, `t.me/ramazanov_dv`=0.
+
+## 2026-10-02 — Лэндинг: логотип и favicon из набора orange-2 — PASS
+
+- **Задача:** заменить логотип и favicon лэндинга на новые из `synth-design/icons/kits/orange-2`.
+- **Тип:** feat (лендинг) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Что сделано:**
+  - `public/synth-icon.svg` ← `orange-2/logo/synth-logo.svg` (градиент `#fdba74/#c2410c/#7c2d12`, прозрачный фон) — используется как логотип в шапке (32px) и футере (24px); плоский `#c33b04` заменён. Имя файла сохранено, HTML header/footer не правились.
+  - Добавлен комплект favicon: `public/favicon.ico`, `favicon.svg` (осветлённая палитра `#fed7aa/#ea580c/#9a3412`), `favicon-16/32/48.png`; `public/apple-touch-icon.png` ← `apple-touch-icon-180.png` (180×180).
+  - `<head>`: 5 ссылок — ico (sizes=any), svg, png 32, png 16, apple-touch 180. Старая `<link rel=icon ... synth-icon.svg>` убрана.
+- **Верификация:** локально все 7 ассетов 200; логотипы грузятся (naturalWidth 126, отображение 30/22px); визуально в шапке/футере — оранжевый градиент. Прод: sha256 страницы == коммиту, все ассеты 200 с ожидаемыми размерами, stop-цвета совпадают.
+- **Выкат:** коммит `68f763d`, образ `sha256:011a5dca…`; поды 1/1; оба хоста 200.
+- **Примечание:** `synth-design` README: каноничный логотип продукта — плоский `#c2410c` (UI: `packages/ui/public/favicon.svg`, `SynthLogo`), градиентные комплекты — для внешних поверхностей. Лендинг — внешняя поверхность; UI не трогали.
+
+## 2026-10-02 13:25 — Портал: новый логотип/favicon (orange-2) + тёмная шапка — PASS
+
+- **Задача:** заменить логотип и favicon портала на новые из `synth-design/icons/kits/orange-2`; шапку сделать тёмной (в духе docs.opencode.ai) с оранжевыми акцентами. Область — только портал.
+- **Тип:** feature (docs/UI/branding) · **Исполнитель:** @fixer (правки) + оркестратор (выкат) · **Результат:** PASS.
+- **Ассеты:** в `synth-docs/docs/assets/` добавлены `logo.svg` (из `logo/synth-logo.svg`), `favicon.svg`, `favicon.ico`, `apple-touch-icon.png`; старый `synth-icon.svg` удалён как мёртвый.
+- **Конфиг/тема:** `mkdocs.yml` — `theme.logo: assets/logo.svg`, `theme.favicon: assets/favicon.svg`; `overrides/main.html` — добавлен `apple-touch-icon`; `extra.css` — тёмная шапка `#120c0a` с оранжевой линией `rgba(195,59,4,.5)` снизу, светлая полупрозрачная плашка поиска (collapsed/hover/expanded), тёмный заголовок мобильного дровера; `--md-primary-fg-color` не тронут — акценты оранжевые.
+- **Выкат:** коммит `d2e9728` → push `origin/main`; образ `git.itphx.ru/itphx/synth-docs@sha256:f7ee131cef2d11770ce81d7821ed08e48a6c95f5259c1d6034475a49c484034e`; Fleet GitRepo `synth-docs` → `d2e9728`, 1/1 Ready.
+- **Проверка live (Playwright + curl):** шапка `rgb(18,12,10)` + оранжевая граница, белый текст; логотип `assets/logo.svg` загружается и виден; favicon `assets/favicon.svg`; apple-touch на месте; активный пункт меню оранжевый (`rgb(224,90,30)`); все новые ассеты → 200; `synth-icon` — 0 вхождений; HTTP 200.
