@@ -1484,3 +1484,173 @@
 - **`synth-deploy`:** `02cd1d3` `release: bump synth-ui/backend images to v0.8.7` → push в `origin/main` → Fleet раскатал.
 - **Верификация (@orchestrator, независимо):** `GET /api/v2/health` и `/health` → `"version":"0.8.7"`; UI `/` → 200; deploy-образы `:0.8.7`; поды backend/ui `1/1 Running`, RESTARTS 0.
 - **Осталось:** проверка пользователем на test; при OK — полный релиз 0.8.7 (push master, тег `v0.8.7`, npm/Helm/Docker в GitVerse, preprod) с учётом опыта 0.8.3 (оптимизированная публикация уже в master).
+
+## 2026-10-01 20:22 — Лэндинг: обновление текстов, roadmap из AD/AD-DRAFTS — PASS
+
+- **Задача:** обновить лэндинг — 1) применить «Правку» из `Лендинг — строки.md`; 2) убрать реализованное из планов; 3) добавить новые задумки из AD/AD-DRAFTS в roadmap; 4) не упоминать детали реализации, AD и процесс разработки.
+- **Тип:** feature (контент, статика) · **Исполнитель:** @fixer (правки) + @devops (сборка/выкат) · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Решения с пользователем:** roadmap — ≈10 крупных направлений + карточка «И многое другое»; реализованное (Скиллы, Мобильный доступ) — в «Возможности»; секция Deploy — переписана продуктово; MCP и Keycloak сохранены, прочие детали вычищены.
+- **Что сделано:** `synth-landing/{index.html,js/main.js}` — чистка AD-ссылок, списка ролей, npm-пакетов, `⟦SYNTH_SECRET_N⟧`/JSONL/`context_snapshot`/`$SYNTH_DATA_DIR`/`SYNTH_API_KEY` и техн. терминалов; удалена карточка «выбор движка» (opencode/cline); features 6→8 (Мобильный доступ, Скиллы и команды); roadmap 7→11; deploy → «Разворачивайте где удобно»; title/meta/footer. `Лендинг — строки.md` пересобран (148 ключей + 14 HTML-строк, «Правка» сброшена).
+- **Верификация:** `node --check` OK; RU=EN=148 ключей, фолбэки=RU, 0 «сирот»; Playwright desktop 1440×900 RU/EN — консоль 0 ошибок, features=8, roadmap=11, arch=5, запрещённых вхождений нет; в браузере обе локали и терминалы корректны.
+- **Выкат:** коммит `b6233f8`, push origin/main; Docker `git.itphx.ru/itphx/synth-landing:latest` (`sha256:5359e706…`); `kubectl rollout restart` → поды 1/1; `synth-landing.k3s.itphx.loc` и `synth.itphx.ru` → 200; sha256 отданного HTML совпал с коммитом на обоих хостах байт-в-байт.
+- **Остаточное:** в «И многое другое» (worktrees/CLI/TUI/образы/гайдлайны/метрики/бизнес-сценарии) сознательно без деталей; проверка пользователем вживую.
+
+## 2026-10-01 21:33 — Лэндинг: harness-тезис, нативные приложения, расширение планов — PASS
+
+- **Задача:** по итогам анализа конкурента (Astra AI Code) и чужих harness (Claude Code / Codex / Cursor) — заявить harness-тезис, добавить направления, подчеркнуть «где угодно»; фокус позиционирования оставить на разработке.
+- **Тип:** feature (контент, статика) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator · **Результат:** PASS.
+- **Исследование:** «Астра ИИ [КОД]» — локальный агент + серверный «контур безопасности» (SSO/RBAC/SIEM ФСТЭК-план Q4 2027, air-gap, GitFlic), построен, вероятно, на OpenCode; PR-боты/расписание не заявлены. Claude Code / Codex / Cursor — verification, hooks, admin/audit/OTel, SCIM, PR-боты (Bugbot/`@claude`/Codex review), Routines/Automations, Cloud Agents, exec-policy/egress-proxy.
+- **Что сделано:** `synth-landing/{index.html,js/main.js}` — новая карточка архитектуры `arch7` «Надёжность — в обвязке» (EN «Reliability lives in the harness»); `feat7_tx` — ПК/планшет/телефон; roadmap 12 карточек (добавлены «Нативные приложения», в «Каталог скиллов и агентов» — предметные области, в «Интеграции и публичный API» — ревью-боты и метрики). Hero оставлен с фокусом на разработку.
+- **Верификация:** RU=EN=152 ключа, 0 «сирот», фолбэки=RU; arch=6, roadmap=12; Playwright RU/EN — консоль 0 ошибок, запрещённых вхождений нет.
+- **Выкат:** коммит `a7a13d8`, push origin/main; образ `sha256:7d16718a…`; rollout → 1/1; оба хоста 200; sha256 live == коммит на `synth.itphx.ru` и `synth-landing.k3s.itphx.loc`.
+- **Остаточное:** «Астра: сертификация — план Q4 2027» (не получена) — проверять при обновлении материала; приоритизация 14 пунктов «что взять» (verification AD-031, hooks AD-030, admin/audit/OTel, PR-боты) — за пользователем.
+
+## 2026-10-01 22:05 — Лэндинг: прозрачный фон favicon/логотипа — PASS
+
+- **Задача:** сделать фон favicon прозрачным.
+- **Тип:** fix (статика) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator · **Результат:** PASS.
+- **Что сделано:** `synth-landing/public/synth-icon.svg` — удалён тёмный `<rect fill:#120c0a>` (фон); знак `#c33b04` не тронут. Файл используется и как favicon, и как логотип бренда.
+- **Верификация:** XML OK; `grep '<rect'`=0, `120c0a` нет; `rsvg-convert` → srgba, фон прозрачный; Playwright canvas — альфа угла = 0 (прозрачно), знак виден на белом и на тёмном.
+- **Выкат:** коммит `960da07`, push origin/main; образ `sha256:71c40832…`; rollout → 1/1; `synth.itphx.ru/public/synth-icon.svg` → 200, sha256 live == коммит, `120c0a` = 0.
+
+## 2026-10-01 22:35 — Лэндинг: ссылка на репозиторий в шапке и Telegram в футере — PASS
+
+- **Задача:** добавить контакты и ссылку на репозиторий «в начале»; решить по почте и донатам.
+- **Тип:** feature (контент/вёрстка) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Решения с пользователем:** почту не добавляем; Telegram — личный `@ramazanov_dv` (пока); донаты — CloudTips, но позже (пользователь изучит условия/зарегистрируется); CTA — объяснён.
+- **Что сделано:** `index.html` — в шапке (`.`nav__actions`) ссылка на `https://gitverse.ru/itphx/synth` с иконкой git и подписью (переиспользован ключ `cta_github`); в футере — внешняя ссылка `Telegram` на `https://t.me/ramazanov_dv`. `css/styles.css` — стили `.nav__repo`/`.nav__repo-icon` + скрытие подписи на ≤560px.
+- **Верификация:** RU=EN=152, «сирот» нет; desktop 1440 — ссылка видна; mobile 390 — только иконка (computed display none); console 0 ошибок; проверка на свежем origin (8092) из-за кэша браузера 8090.
+- **Выкат:** коммит `c54fe9b`, push origin/main; образ `sha256:09e379c3…`; rollout → 1/1; оба хоста 200; sha256 live == коммит; grep `t.me/ramazanov_dv`=1, `gitverse.ru/itphx/synth`=2.
+- **Остаточное:** донат-секцию (CloudTips/Boosty) добавить после регистрации; исследование по донатам — РФ: CloudTips/Boosty/DonationAlerts/ЮKassa, донат ≠ пожертвование, при регулярном приёме НПД/ИП, международные (GitHub Sponsors/Stripe/PayPal) для РФ недоступны.
+
+## 2026-10-01 22:50 — Лэндинг: убрана ссылка на репозиторий из шапки — PASS
+
+- **Задача:** ссылка на репозиторий в шапке оказалась лишней — убрать, оставить только кнопку «Попробовать».
+- **Тип:** revert (вёрстка) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator · **Результат:** PASS.
+- **Что сделано:** удалены `a.nav__repo` (иконка+подпись) и CSS `.nav__repo*`; в шапке остались переключатель языка и кнопка. Футер (Telegram) и CTA-кнопка «Репозиторий» не тронуты.
+- **Верификация:** `nav__repo`=0; `.nav__actions` = [lang-switch, btn]; Telegram в футере = 1; CTA `gitverse.ru/itphx/synth` сохранён; Playwright header чистый.
+- **Выкат:** коммит `1363220`, образ `sha256:47fc206f…`; rollout → 1/1; оба хоста 200; sha256 live == коммит; grep live `nav__repo`=0, `t.me/ramazanov_dv`=1.
+
+## 2026-10-02 — Скриншоты UI (лендинг + README) и секция «Интерфейс» — PASS
+
+- **Задача:** снять скриншоты Synth (темы, чат, агенты, статистика, аудит, общий экран, мобильный) для лэндинга и README; сделать тестовую сессию с интересными запросами; разместить на лэндинге секцией «Интерфейс».
+- **Тип:** контент/артефакты + feature (лендинг) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Тестовая сессия:** проект «Synth — демо», сессия «Демо: возможности Synth» (провайдер routerai, модель qwen/qwen3.7-flash): обзор платформы, TS-хук `useDebouncedValue` (инструмент Write), план-таблица, сравнение JSON vs PostgreSQL. Оставлена в dev-стенде (`/home/eof/dev/Synth/data`).
+- **Снято 10 кадров** (1600×1000; темы: Fields of the Shire dark, Flexoki light, Dracula, Nord): app-dark, app-light, chat, stats, agents, audit, theme-dracula, theme-nord, mobile-chat (390×844), mobile-menu.
+- **Куда:** `synth-landing/public/screens/*.webp` (10 файлов) и `synth/docs/resources/screens/*.png` (10); в `synth/README.md` добавлен раздел «Скриншоты».
+- **Лэндинг:** новая секция `#interface` между «Потоком» и «Планами» (крупный скриншот + галерея 4 разделов + 3 темы + 2 телефона), пункт навигации «Интерфейс» в шапке и футере, i18n RU/EN (163/163). Коммиты `1bb7025` (секция), `2cbe3ec` (fix Dockerfile).
+- **Инцидент и фикс:** скриншоты отдавались 403 — в Dockerfile `chmod -R a+r` не давал `x` на каталог `public/screens`; исправлено на `a+rX`. Образ `sha256:3baad938…`, поды 1/1, оба хоста 200, все 10 картинок 200, sha256 live == коммит.
+- **Остаточное:** правки README и `docs/resources/screens/*.png` в репозитории `synth` — в рабочем дереве, без коммита (коммит — по запросу).
+
+## 2026-10-02 — Лэндинг: лайтбокс, «Поддержать», «Контакты», SEO — PASS
+
+- **Задача:** клик по скриншотам увеличивает их (ПК+мобильный); ссылка поддержки CloudTips + QR; отдельная секция «Контакты» (автор + 2 канала); SEO для поисковых роботов.
+- **Тип:** feature (лендинг) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Лайтбокс:** JS + CSS; клик/тап по `.showcase__img` и `.shots img`; закрытие — фон/кнопка/Esc; `role=dialog`, `aria-modal`, возврат фокуса, Enter/Space; блокировка скролла body.
+- **Поддержка:** секция `#support` — кнопка на `https://pay.cloudtips.ru/p/0ff8fcc7` + QR `public/support-qr.png` (перенесён из корня).
+- **Контакты:** секция `#contacts` — «Связаться с автором» (`t.me/ramazanov_dv`), Telegram-канал (`t.me/synth_dev`), Max (`max.ru/join/96yJ3gTevBA32ajnT7oGan8ZLKmQeDSw0dBvYZc_YDw`). Ссылки в шапке («Поддержать») и футере («Поддержать»/«Контакты»).
+- **SEO:** canonical, robots(index,follow), author, keywords; Open Graph (type/site_name/locale/url/image 1200×630/alt) + Twitter summary_large_image; JSON-LD `SoftwareApplication`; `apple-touch-icon.png` 180×180; `robots.txt` + `sitemap.xml` (добавлены в Dockerfile). OG-картинка `public/og.jpg`.
+- **Верификация:** Playwright — лайтбокс open/close (мышь, Esc, фон) на 1440 и 390; секции и ссылки корректны; JSON-LD валиден.
+- **Выкат:** коммит `ea3bf3f`, образ `sha256:c4157639…`; поды 1/1; оба хоста 200; `/robots.txt`,`/sitemap.xml`, ассеты — 200; sha256 live == коммит.
+- **Остаточное (SEO):** EN-версия клиентская (тот же URL) — отдельно не индексируется (hreflang не применим); по желанию — PNG-favicon 32/16 и регистрация в Search Console/Яндекс.Вебмастере.
+
+## 2026-10-02 — Лэндинг: правки лайтбокса/поддержки/футера — PASS
+
+- **Задача:** крестик вместо слова «Закрыть» на лайтбоксе; убрать «Поддержать» из шапки; формат строки копирайта; QR по высоте кнопки + увеличение по клику; убрать подпись QR; поправить текст секции поддержки.
+- **Тип:** fix (лендинг) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Что сделано:** кнопка закрытия лайтбокса = «×» (aria-label из `lightbox_close`, обновляется при смене языка); QR добавлен в цели лайтбокса; `nav_support` убран из шапки (в футере остался); `footer_copy` = `© 2026 Synth · MIT License` (итог: `© 2026 Synth · MIT License · сделано людьми и ИИ`); `support_lead` = «Synth — OpenSource проект под лицензией MIT. Токены LLM и инфраструктура стоят денег: если проект полезен для вас — поддержите разработку.»; `<figcaption>` и ключ `support_qr_caption` удалены; CSS: `--support-h: 52px`, кнопка и QR ровно 52px (верх/низ совпадают).
+- **Верификация:** Playwright — btnH=qrH=52, topDiff/bottomDiff=0; клик по QR открывает лайтбокс (`support-qr.png`), closeText «×», aria «Закрыть»; шапка без «Поддержать», футер с ним; строка футера корректна.
+- **Выкат:** коммит `e0a433f`, образ `sha256:e029cd55…`; поды 1/1; оба хоста 200; sha256 live == коммит.
+
+## 2026-10-02 — Лэндинг: футер (без «Поддержать», ровные интервалы) — PASS
+
+- **Задача:** убрать «Поддержать» из футера; сделать равные интервалы между символами в строке копирайта.
+- **Тип:** fix (лендинг) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Что сделано:** из `nav.footer__links` удалён пункт `#support`; строка копирайта стала единым текстом `footer_line` = `© 2026 Synth · MIT License · сделано людьми и ИИ` (EN: `... made by humans & AI`); удалены ключи `footer_copy`/`footer_made`/`nav_support` и CSS `.footer__sep` (его `margin: 0 6px` и давал неравные промежутки).
+- **Верификация:** один текстовый узел, `letter-spacing: normal`, моноширинный шрифт; в футере нет `#support`, «Контакты» на месте; в шапке «Поддержать» тоже нет.
+- **Выкат:** коммит `1ca5e94`, образ `sha256:2561f27e…`; поды 1/1; оба хоста 200; sha256 live == коммит; grep live: `nav_support`=0, `footer_line`=1, `footer__sep`=0.
+
+## 2026-10-02 — Лэндинг: узкий исчезающий скролл + затенение краёв — PASS
+
+- **Задача:** скроллбар узкий и исчезающий (как в области чата Synth) + затенение у верхней/нижней границы, когда контент уходит за них.
+- **Тип:** feat (лендинг) · **Исполнитель:** @fixer + @devops · **Верификация:** @orchestrator (Playwright) · **Результат:** PASS.
+- **Как в Synth:** скроллбар 6px pill (`--synth-scrollbar-thumb`), автоскрытие по таймауту ~1000 мс; затенение краёв — градиент 3rem, включается по положению скролла.
+- **Что сделано (лендинг):**
+  - скроллбар `html`: `::-webkit-scrollbar` 8px, transparent track, pill-thumb `--sb-thumb` (0.26) / hover 0.5; после простоя `html.scroll-idle` → thumb прозрачный (0). Только Firefox — стандартные `scrollbar-width: thin`/`scrollbar-color` под `@supports not selector(::-webkit-scrollbar)` (чтобы в Chromium не терять pill).
+  - затенение: `.nav::after` — тень под шапкой при `html`/`.nav.is-scrolled` (scrollY>0); `.scroll-edge--bottom` — фиксированный нижний градиент, `.is-visible` пока не достигнут низ страницы.
+  - `initScrollUI()` (passive scroll + rAF-free update, debounce 1000 мс → `scroll-idle`; сброс на resize/load; начальное состояние — «спящий» скроллбар).
+- **Верификация (Chromium):** `CSS.supports('selector(::-webkit-scrollbar)')`=true → стандартные свойства не мешают; thumb 8px: idle `rgba(230,230,230,0)` ↔ скролл `rgba(230,230,230,0.26)`; `.nav.is-scrolled` (opacity 0→1), нижняя тень: наверху true, в середине true, в самом низу false; lazy-картинки предзагружены для корректного теста низа.
+- **Выкат:** коммит `6ec52f1`, образ `sha256:b0c57934…`; поды 1/1; оба хоста 200; sha256 live == коммит; grep: `scroll-edge--bottom`=1, `initScrollUI`=2, `scroll-idle`=3.
+
+## 2026-10-02 11:07 — Лэндинг → портал документации (MkDocs) + чистка README/dev-доков — PASS
+
+- **Задача:** 1) оживить кнопку «Попробовать» (вела на якоря `#cta`/`#top` — «в никуда»); 2) привести в порядок README и остальную документацию по разработке; 3) сделать отдельный пользовательский портал документации на MkDocs в стиле docs.opencode.ai, но с оранжевыми акцентами лэндинга `#c33b04` и моно-шрифтом.
+- **Решения с пользователем:** портал — только пользовательская документация (dev-доки остаются в репо); новый отдельный репозиторий `synth-docs`; роутинг — отдельный поддомен `docs.synth.itphx.ru` (+ внутренний `synth-docs.k3s.itphx.loc`); тема — `mkdocs-material` + кастомный override; языки — RU сейчас, EN отдельным этапом; `scripts/dev.sh` — data dir через env с дефолтом.
+- **Тип:** feature (docs/статика) · **Исполнители:** @researcher (ревизия) + @fixer×5 (контент/тема/лендинг/README) + @devops (Helm/Fleet) · **Верификация:** @tester (независимо, Playwright) · **Результат:** PASS.
+
+### Новый репозиторий `synth-docs` (локально, без remote и коммитов)
+- Скелет: `mkdocs.yml` (Material 9.7.x, i18n `mkdocs-static-i18n`), `requirements.txt`, `Makefile`, `Dockerfile` (python build → `nginx:alpine`), `.gitignore`/`.dockerignore`/`.helmignore`, `README.md`, `overrides/` (header/logo/footer), `docs/assets/` (лого `synth-icon.svg`, `extra.css`, скриншоты).
+- Тема: тёмная по умолчанию, оранжевый `#c33b04`, базовый шрифт JetBrains Mono, левое меню по группам, правый TOC, Ctrl+K, «Редактировать страницу».
+- Контент RU: 23 страницы, 6 разделов (Обзор, Начало работы, Использование, Развёртывание, Администрирование, Помощь) — ~2950 строк. Наполнены все страницы, админ/пользовательская подача без AD-ссылок, внутренних путей и dev-хостов.
+- EN: структура готова (`locale/name/nav_translations`), но `build: false` — `/en/` с русским фолбэком не публикуется; включить после перевода.
+- Деплой: Helm-чарт `synth-docs` (Deployment/Service/Ingress на `docs.synth.itphx.ru` и `synth-docs.k3s.itphx.loc`, `tls: []` — TLS на шлюзе/traefik) + `fleet.yaml` (`defaultNamespace: synth-docs`). `helm lint` → 0 failed, `helm template` → 3 ресурса.
+- **Статус:** репозиторий локальный, без git-remote; образ/образ-пуш, `helm install`, DNS+серт — за пользователем (не применялось).
+
+### Лэндинг `synth-landing`
+- Кнопки «Попробовать»: навбар/hero → `https://docs.synth.itphx.ru/`; CTA → `.../getting-started/quickstart/`. Добавлены пункты «Документация» в шапку и футер (ключи `nav_docs`/`footer_docs`, RU/EN). Мёртвых `#cta`/`#top` у кнопок нет. `node --check` OK; баланс i18n HTML=178 уникальных, RU=EN=179, «сирот» нет.
+
+### README + dev-доки `synth/`
+- `README.md`: версия `0.3.0`→`0.8.8`; `<repo-url>`→`https://gitverse.ru/itphx/synth`; раздел «Документация» → «Пользовательская (портал)» + «Для разработчиков» (добавлен `API_V2`); ссылки на точные страницы портала.
+- `AGENTS.md`: убран хардкод `SYNTH_DATA_DIR=/home/eof/dev/Synth/data`; добавлено разделение аудиторий и портал в «Куда смотреть».
+- `scripts/dev.sh`: `SYNTH_DATA_DIR="${SYNTH_DATA_DIR:-$ROOT/../data}"` (проверено: тот же inode, что прежний путь).
+- `docs/DEVELOPMENT.md`: тот же дефолт через env.
+- Фактология: роль локального ключа core `USER`→`ADMIN` (по коду `packages/core/src/auth/local.ts`) в `QUICKSTART`/`CONFIGURATION`/`API_V2`; в `HYBRID` убраны устаревшие ветки/статус/версия `0.4.2`, устранено противоречие device flow↔ROPC; `ARCHITECTURE` — снята ветка, неполная таблица AD заменена ссылкой на индекс; в user-доки добавлены note-ссылки на портал. `changelog-partial.md` не трогался (генерируемый gitignore-артефакт релиза).
+
+### Верификация (@tester, независимо)
+- Портал: `mkdocs build --strict` exit 0; `site/en` отсутствует; 137 относительных ссылок — 0 битых; утечек (AD/AGENTS/`itphx.loc`/тестовые ключи) — 0; Playwright — тёмная тема, `--md-primary-fg-color=#c33b04`, `JetBrains Mono`, 6 групп навигации, Ctrl+K, 8 страниц 200, mobile-дровер 390px, консоль 0 ошибок.
+- Лэндинг: все «Попробовать»/«Документация» ведут на портал, RU/EN переключается, консоль 0 ошибок.
+- Репо: `bash -n dev.sh` OK, запрещённые строки вычищены, роль ADMIN во всех трёх доках, README содержит портал/разделение/API_V2.
+- **VERDICT: PASS.**
+
+### Осталось / за пользователем
+- Создать git-remote `synth-docs` (предполагается `git@git.itphx.ru:itphx/synth-docs.git`), сделать первый коммит.
+- Собрать и запушить Docker-образ, `helm install synth-docs . -n synth-docs --create-namespace` (или через Fleet), завести DNS `docs.synth.itphx.ru` + серт на web-шлюз.
+- До деплоя портала ссылки с лэндинга дадут 404 — это ожидаемо.
+- EN-перевод — отдельный этап (включить `build: true` у локали `en`).
+- Коммиты в `synth/` и `synth-landing/` не делались (правки незакоммичены).
+
+## 2026-10-02 11:35 — Деплой портала synth-docs + выкат лэндинга со ссылками — PASS
+
+- **Задача:** создать закрытый репозиторий в Gitea, запушить и задеплоить портал; выкатить лэндинг с рабочими ссылками (деплой по аналогии с лэндингом).
+- **Тип:** infra/deploy · **Исполнитель:** @devops (репозиторий создан оркестратором через Gitea API) · **Результат:** DEPLOYED.
+
+### Репозиторий `synth-docs`
+- Создан приватный репозиторий `itphx/synth-docs` (`git@git.itphx.loc:itphx/synth-docs.git`, default `main`).
+- Коммиты: `6da3d6e` feat: портал документации (начальная версия, 57 файлов, без `.venv`/`site`); `6bdeb1c` fix(deploy): `.fleetignore`; `0caa011` docs: предусловия деплоя. HEAD/main = `0caa0119`.
+- Образ: `git.itphx.ru/itphx/synth-docs@sha256:30156b4f7f27c63e09f6ef19941ddfcffbd846b2591e1ed5a42db5105bcf5331`.
+
+### Fleet / K3s
+- GitRepo `synth-docs` в `fleet-local` (repo `git@git.itphx.loc:itphx/synth-docs.git`, branch main, `clientSecretName: auth-kb424`, polling 1m) — по образцу `synth-landing`. `BUNDLEDEPLOYMENTS-READY 1/1`, commit `0caa0119`.
+- Ресурсы ns `synth-docs`: Deployment 1/1, Service ClusterIP, Ingress (traefik) на `docs.synth.itphx.ru` + `synth-docs.k3s.itphx.loc`, pod Running.
+- **Грабли и фиксы:** (1) Fleet не учитывает `.helmignore` → весь корень репо уходил в Helm-чарт, release-secret > 1 MB; исправлено корневым `.fleetignore`. (2) `ImagePullBackOff`/`no basic auth` → в ns `synth-docs` не было pull-secret `git.itphx.ru` (в `synth`/`synth-landing` создаётся вручную); создан docker-registry Secret копированием из ns `synth`; предусловие описано в README.
+- Проверка: внутренний `https://synth-docs.k3s.itphx.loc/` → 200; внешний `https://docs.synth.itphx.ru/` → 200 (Let's Encrypt `CN=docs.synth.itphx.ru`, действителен до 31.12.2026); `/en/` → 404 (EN отключён штатно); все 23 страницы разделов → 200; `<html lang="ru">`, акцент `#c33b04`.
+
+### Лэндинг
+- Коммит `4e33413` (кнопки «Попробовать» → портал, добавлены `nav_docs`/`footer_docs`) запушен в `origin/main`.
+- Образ `git.itphx.ru/itphx/synth-landing:latest` → `sha256:cffb634af06a0a1f760a5f522d3fb80221f5006d3442418894a14e6f15f00b37`; `rollout restart` выполнен.
+- Fleet GitRepo `synth-landing` → commit `4e33413`, `1/1 Ready`. Live sha256 `index.html` == коммит (`8cc006cc…`).
+- Живые ссылки: навбар/hero/footer → `https://docs.synth.itphx.ru/` (4), CTA → `.../getting-started/quickstart/` (1); `#top` остался только у логотипа (back-to-top) — не кнопка. `main.js` содержит `nav_docs`/`footer_docs` в RU/EN.
+- HTTP: `synth.itphx.ru` → 200, `synth-landing.k3s.itphx.loc` → 200, `docs.synth.itphx.ru` → 200, quickstart → 200.
+
+### Осталось
+- В репозитории `synth/` правки README/AGENTS/dev.sh/docs **не закоммичены** — ждут решения пользователя (там же предсуществующие незакоммиченные скриншоты и журнал).
+- EN-перевод — отдельный этап (включить `build: true` у локали `en`).
+
+## 2026-10-02 11:50 — Портал: убран панель-баннер «Документация в разработке» — PASS
+
+- **Задача:** убрать верхнюю announce-панель портала (слишком широкая); репозиторий документации оставить закрытым.
+- **Тип:** fix (docs/UI) · **Исполнитель:** @fixer (правка) + оркестратор (выкат) · **Результат:** PASS.
+- **Что сделано:** удалён `{% block announce %}` из `overrides/main.html`; удалены CSS-правила `[data-md-component="announce"] .md-banner*` из `extra.css`; поправлено упоминание в README портала.
+- **Выкат:** коммит `76b4ca2` → push `origin/main`; образ `git.itphx.ru/itphx/synth-docs@sha256:503ad24fdabed8c703769eb42b595a92af5fe6d45a690cd0b024f717639064eb`; `rollout restart`; Fleet GitRepo `synth-docs` → `76b4ca2`, 1/1 Ready.
+- **Проверка:** `https://docs.synth.itphx.ru/` → 200; в live HTML вхождений «Документация в разработке» / «Помочь с наполнением» / `synth-announce` / `md-banner` = 0 (пустой контейнер `data-md-component="announce"` от Material остаётся, но без содержимого и высоты); quickstart внутренний/внешний → 200.
+- **Примечание:** репозиторий `itphx/synth-docs` остаётся приватным (как и просил пользователь).
