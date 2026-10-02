@@ -1672,3 +1672,13 @@
 - **Выкат:** коммит `fd693ac` → push `origin/main`; образ `git.itphx.ru/itphx/synth-docs@sha256:86a3203e11c24c60e9e7e5695019ba8bab92203683d5dc2e17f855fd42d938ea`; Fleet GitRepo `synth-docs` → `fd693ac`, 1/1 Ready.
 - **Проверка live (Playwright):** бейдж `top=16, bottom=34, height=18` — внутри шапки (bottom ≤ 48), переполнений нет; при прокрутке вверх артефакт отсутствует; в футере `<a href="https://docs.synth.itphx.ru/">Документация</a>`; `https://docs.synth.itphx.ru/` → 200.
 - **Замечание:** бейдж «docs» фактически невидим (оранжевый текст/рамка `#c33b04` на оранжевой шапке) — при желании можно убрать или перекрасить.
+
+## 2026-10-02 12:40 — Портал: ссылки на репозиторий в футере → основной репозиторий — PASS
+
+- **Задача:** в футере ссылка «Репозиторий» должна вести на основной репозиторий Synth, а не на закрытый репозиторий документации.
+- **Тип:** fix (docs/UI) · **Исполнитель:** @fixer (правки) + оркестратор (выкат) · **Результат:** PASS.
+- **Правки:** `overrides/partials/footer.html` — «Репозиторий» → `https://gitverse.ru/itphx/synth`; `mkdocs.yml` (`extra.social`) — соц-иконка git → `https://gitverse.ru/itphx/synth`, подпись «Репозиторий Synth». «Лэндинг» и «Документация» не тронуты.
+- **Выкат:** коммит `3d502ee` → push `origin/main`; образ `git.itphx.ru/itphx/synth-docs@sha256:6622d15111015b87363fd3e17e659525f2bdbb5aab946cfc8fed54584e613b4e`; Fleet GitRepo `synth-docs` → `3d502ee`, 1/1 Ready.
+- **Проверка live:** в футере нет ни одного `git.itphx.ru/itphx/synth-docs` (0); «Репозиторий» и соц-иконка ведут на `https://gitverse.ru/itphx/synth`; `https://docs.synth.itphx.ru/` → 200.
+- **Осталось (на решение):** в шапке `repo_url`/`edit_uri` по-прежнему указывают на закрытый `synth-docs` (кнопка-источник «itphx/synth-docs» и «Редактировать страницу»); для анонимных посетителей это нерабочие ссылки на приватный репозиторий — можно убрать или оставить для мейнтейнеров.
+- **Прочее:** ранее не завершившийся push основного репозитория (`5d1e44b`) подтверждён в `origin/master` (gitverse).
