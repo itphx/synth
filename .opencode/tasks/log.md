@@ -1737,3 +1737,15 @@
 - **Проверки:** `pnpm --filter @itphx/synth-shared build` → `pnpm build` → `pnpm typecheck` → `pnpm lint` → `pnpm test` — зелёные (shared 181, core 2384, ui 977, backend 341).
 - **Визуально (Playwright):** дефолт `synthesis` (#C2410C), переключение на GitHub (#58a6ff dark / #0969da light), пары light/dark по id, `--palette-1..16`, 0 ошибок консоли.
 - **Данные:** коммита нет (пользователь не просил).
+
+## 2026-10-03 — Релиз 0.8.9 и деплой на test — PASS
+
+- **Задача:** «Бампни до 0.8.9, закоммить изменения, задеплой на тест».
+- **Тип:** release / deploy (ui/shared/core/backend) · **Исполнитель:** @orchestrator → @tester (верификация) + @devops (сборка/деплой) · **Результат:** PASS.
+- **Коммиты (synth, ветка master; в origin не пушились — деплой на test этого не требует):** `97b7a78` feat(ui): новый набор тем и палитра проектов/сессий 16 (121 файл); `571b3bb` chore: bump version to v0.8.9.
+- **Верификация перед релизом:** `pnpm --filter @itphx/synth-shared build` → `pnpm build` → `pnpm typecheck` → `pnpm lint` → `pnpm test` — зелёные; 3883 теста (shared 181, core 2384, ui 977, backend 341), 0 failed; typecheck 0 ошибок, lint 0 errors (392 warning `no-explicit-any`).
+- **Bump:** `./scripts/version-bump.sh 0.8.9` (version.ts + 6 package.json + charts/synth/Chart.yaml), хардкода старой версии не найдено.
+- **Образы (из исходников монорепо):** `git.itphx.ru/itphx/synth-backend:0.8.9` digest `sha256:1c8f7c4167b8…3c84a0`; `git.itphx.ru/itphx/synth-ui:0.8.9` digest `sha256:9e46a401ecbf…6a3a90`; собраны через `docker/Dockerfile.backend` / `Dockerfile.ui`, запушены в Gitea `git.itphx.ru`.
+- **synth-deploy:** коммит `22b4079` («release: bump synth-ui/backend images to v0.8.9»), push `4cde0e6..22b4079 main`; в `values.yaml` изменены только `backend.image.tag` и `ui.image.tag` 0.8.8→0.8.9.
+- **Test (независимая проверка оркестратора):** GitRepo `synth` 1/1 на `22b4079`; rollout `synth-backend`/`synth-ui` успешен, поды 1/1 Running на `:0.8.9`; `GET /` → 200; `/api/v2/health` → `{"status":"healthy","version":"0.8.9"}`; `/sw.js` → маркер `synth-shell-0.8.9`.
+- **Замечания:** транзиентное двойное пересоздание подов (Fleet ре-apply) — сошлось за ~30 c, на итог не повлияло. Синхронизация изменений в origin/master репозитория `synth` — отдельным решением (не требуется для test-деплоя).
