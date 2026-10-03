@@ -1723,3 +1723,17 @@
 - **Конфиг/тема:** `mkdocs.yml` — `theme.logo: assets/logo.svg`, `theme.favicon: assets/favicon.svg`; `overrides/main.html` — добавлен `apple-touch-icon`; `extra.css` — тёмная шапка `#120c0a` с оранжевой линией `rgba(195,59,4,.5)` снизу, светлая полупрозрачная плашка поиска (collapsed/hover/expanded), тёмный заголовок мобильного дровера; `--md-primary-fg-color` не тронут — акценты оранжевые.
 - **Выкат:** коммит `d2e9728` → push `origin/main`; образ `git.itphx.ru/itphx/synth-docs@sha256:f7ee131cef2d11770ce81d7821ed08e48a6c95f5259c1d6034475a49c484034e`; Fleet GitRepo `synth-docs` → `d2e9728`, 1/1 Ready.
 - **Проверка live (Playwright + curl):** шапка `rgb(18,12,10)` + оранжевая граница, белый текст; логотип `assets/logo.svg` загружается и виден; favicon `assets/favicon.svg`; apple-touch на месте; активный пункт меню оранжевый (`rgb(224,90,30)`); все новые ассеты → 200; `synth-icon` — 0 вхождений; HTTP 200.
+
+## 2026-10-03 — UI: новый набор тем + палитра 16 — PASS
+
+- **Задача:** перенести набор тем из `synth-design` в UI, перевести выбор темы на `metadata.id`, сменить дефолт на `synthesis`, палитра цветов проектов/сессий 8 → 16.
+- **Тип:** feature (ui/shared/core/backend) · **Исполнитель:** @fixer ×2 · **Верификация:** @tester (PASS) + оркестратор (Playwright, PASS) · **Результат:** PASS.
+- **Набор:** 58 старых JSON → 62 новых (31 схема: 8 своих + 54 порт.); переписаны `presets.ts`/`index.ts`, `themes = presetThemes`, `DEFAULT_LIGHT/DARK_THEME_ID = synthesis-*`; `ThemePreset = {id,name,lightId,darkId}` с группировкой по id-префиксу.
+- **Резолвинг:** было `metadata.name`-slug → стало `metadata.id`-префикс (`ThemeSystemContext`, `AppearanceSettings`, `DefaultsPanel`, `appearance-controls`); неизвестная/устаревшая тема откатывается на дефолт варианта (`synthesis`), а не на первую тему списка.
+- **Дефолт `synthesis`:** `useUIStore`, `profileService`, `lib/defaults.ts`, `shared/config/{defaults,types}.ts`, `backend/routes/auth.ts`.
+- **Типы/generator:** `types/theme.ts` — живой набор блоков + `palette`; `isValidCustomTheme` под формат v2; `cssGenerator` эмитит `--palette-1..16` и `--palette-N-fg`.
+- **Палитра:** `PROJECT_COLOR_KEYS` 8 → 16 (`a1..a16`), legacy-алиасы удалены (старые значения → `undefined`/сброс); UI `projectMeta` → `var(--palette-N)`; i18n `entityColor.a1..a16` (ru/en). Сохранённые `project.color`/`session.color` сбрасываются (решение пользователя).
+- **Фиксы в процессе:** fallback темы на `synthesis`; селект темы передаёт `items` (подпись `Synthesis` вместо сырого `synthesis`).
+- **Проверки:** `pnpm --filter @itphx/synth-shared build` → `pnpm build` → `pnpm typecheck` → `pnpm lint` → `pnpm test` — зелёные (shared 181, core 2384, ui 977, backend 341).
+- **Визуально (Playwright):** дефолт `synthesis` (#C2410C), переключение на GitHub (#58a6ff dark / #0969da light), пары light/dark по id, `--palette-1..16`, 0 ошибок консоли.
+- **Данные:** коммита нет (пользователь не просил).

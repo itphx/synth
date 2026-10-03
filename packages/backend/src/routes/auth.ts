@@ -17,7 +17,7 @@ const OIDC_STATE_COOKIE = 'oidc_state';
 // по умолчанию: packages/ui/src/lib/defaults.ts + uiScale.ts).
 const BUILT_IN_DEFAULTS = {
   themeMode: 'system' as const,
-  theme: 'flexoki',
+  theme: 'synthesis',
   uiScaleMobile: null as number | null,
   uiScaleDesktop: null as number | null,
 };

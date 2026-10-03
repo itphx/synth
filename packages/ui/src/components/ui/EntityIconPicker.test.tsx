@@ -82,9 +82,9 @@ describe('EntityIconPicker', () => {
 
   it('клик по цвету отдаёт ключ палитры, по «без цвета» — null', async () => {
     const { container, onColor } = await render()
-    await click(container.querySelector('[data-testid="entity-color-primary"]')!)
-    expect(onColor).toHaveBeenLastCalledWith('primary')
-    expect(container.querySelector('[data-testid="entity-color-primary"]')!.className).toContain('scale-110')
+    await click(container.querySelector('[data-testid="entity-color-a1"]')!)
+    expect(onColor).toHaveBeenLastCalledWith('a1')
+    expect(container.querySelector('[data-testid="entity-color-a1"]')!.className).toContain('scale-110')
 
     await click(container.querySelector('[data-testid="entity-color-none"]')!)
     expect(onColor).toHaveBeenLastCalledWith(null)

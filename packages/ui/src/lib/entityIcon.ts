@@ -16,8 +16,9 @@ export function resolveIconName(value?: string | null): IconName | undefined {
 }
 
 /**
- * Единый резолвер цвета сущности: канонический ключ палитры (или legacy-алиас)
- * → CSS-переменная для инлайн-стиля; всё прочее → `undefined`.
+ * Единый резолвер цвета сущности: канонический ключ палитры (`a1..a16`) →
+ * CSS-переменная `--palette-*` для инлайн-стиля; всё прочее (включая старые
+ * значения/алиасы) → `undefined`.
  */
 export function resolveIconColor(value?: string | null): string | undefined {
   const key = normalizeColorKey(value)

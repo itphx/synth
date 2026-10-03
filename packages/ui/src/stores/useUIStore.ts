@@ -266,7 +266,7 @@ export const useUIStore = create<UIStore>()(
         set({ forwardMode: { active: false, sourceSessionId: null, sourceIndices: [], mode: 'forward' } }),
       forwardConfirmAction: null,
 
-      theme: 'flexoki',
+      theme: 'synthesis',
       setTheme: (theme) => {
         set({ theme })
         profileService.syncThemeToProfile(theme)

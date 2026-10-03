@@ -466,12 +466,12 @@ describe('project_update', () => {
   });
 
   it('обновляет валидные icon/color', async () => {
-    const result = await projectUpdateTool.execute({ icon: 'rocket', color: 'primary' }, makeCtx());
+    const result = await projectUpdateTool.execute({ icon: 'rocket', color: 'a11' }, makeCtx());
     expect(result.isError).toBeUndefined();
 
     const stored = (await projectStore.load(projectId))!;
     expect(stored.icon).toBe('rocket');
-    expect(stored.color).toBe('primary');
+    expect(stored.color).toBe('a11');
   });
 
   it('невалидный icon → project.invalid_icon с перечнем ключей, проект не изменён', async () => {
@@ -490,7 +490,7 @@ describe('project_update', () => {
     expect(result.isError).toBe(true);
     const meta = result.metadata as { i18n?: { key: string; params?: Record<string, string> } } | undefined;
     expect(meta?.i18n).toMatchObject({ key: 'project.invalid_color' });
-    expect(meta?.i18n?.params?.allowed).toContain('primary');
+    expect(meta?.i18n?.params?.allowed).toContain('a1');
 
     const stored = (await projectStore.load(projectId))!;
     expect(stored.color).toBeUndefined();

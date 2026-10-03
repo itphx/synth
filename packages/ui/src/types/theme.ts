@@ -3,11 +3,26 @@
 export interface ThemeMetadata {
   id: string;
   name: string;
-  description: string;
+  description?: string;
   author?: string;
   version: string;
   variant: 'light' | 'dark';
   tags: string[];
+  source?: Record<string, unknown>;
+  validation?: Record<string, unknown>;
+}
+
+export interface PaletteColor {
+  key: string;
+  name: string;
+  hex: string;
+  foreground: string;
+  contrast: number;
+}
+
+export interface ThemePalette {
+  version: number;
+  colors: PaletteColor[];
 }
 
 export type ThemeMode = 'system' | 'light' | 'dark';
@@ -91,8 +106,6 @@ export interface SyntaxBaseColors {
 export interface SyntaxColors {
   base: SyntaxBaseColors;
   tokens?: Partial<Record<string, string>>;
-  languages?: Record<string, Record<string, string>>;
-  highlights?: Record<string, string>;
 }
 
 export interface ButtonVariant {
@@ -201,10 +214,9 @@ export interface Theme {
 
     syntax: SyntaxColors;
 
-    header?: Record<string, string>;
-    sidebar?: Record<string, string>;
+    charts?: Record<string, string | string[]>;
     chat?: Record<string, string>;
-    markdown?: Record<string, string>;
+    loading?: Record<string, string>;
     tools?: {
       background?: string;
       border?: string;
@@ -213,34 +225,11 @@ export interface Theme {
       title?: string;
       description?: string;
       edit?: Record<string, string>;
-      bash?: Record<string, string>;
-      lsp?: Record<string, string>;
     };
-    forms?: Record<string, string>;
-    buttons?: {
-      primary?: ButtonVariant;
-      secondary?: ButtonVariant;
-      ghost?: ButtonVariant;
-      destructive?: ButtonVariant;
-    };
-    modal?: Record<string, string>;
-    popover?: Record<string, string>;
-    commandPalette?: Record<string, string>;
-    fileAttachment?: Record<string, string>;
-    sessions?: Record<string, string>;
-    modelSelector?: Record<string, string>;
-    permissions?: Record<string, string>;
-    loading?: Record<string, string>;
-    scrollbar?: Record<string, string>;
-    badges?: Record<string, ButtonVariant>;
-    toast?: Record<string, string | Record<string, string>>;
-    emptyState?: Record<string, string>;
-    table?: Record<string, string>;
-    charts?: Record<string, string | string[]>;
-    a11y?: Record<string, string | boolean>;
-    shadows?: Record<string, string>;
-    animation?: Record<string, string>;
+    markdown?: Record<string, string>;
   };
+
+  palette?: ThemePalette;
 
   config?: {
     fonts?: {

@@ -19,33 +19,12 @@ export const statusMessageTypeSchema = z.nativeEnum(StatusMessageType);
 export const projectIconKeySchema = z.enum(PROJECT_ICON_KEYS);
 export const projectColorKeySchema = z.enum(PROJECT_COLOR_KEYS);
 
-/**
- * Legacy-алиасы цветов (нормализация при ЧТЕНИИ, не при записи):
- * `blue→primary`, `red→error`, `green→success`, а также CSS-переменные
- * `--primary`/`--status-info`/`--syntax-*`, которыми пользуются агенты.
- * `--status-info` отдельного ключа не имеет — трактуем как `primary`.
- */
-const COLOR_KEY_ALIASES: Record<string, ProjectColorKey> = {
-  blue: 'primary',
-  red: 'error',
-  green: 'success',
-  '--primary': 'primary',
-  '--status-info': 'primary',
-  '--syntax-keyword': 'keyword',
-  '--syntax-string': 'string',
-  '--syntax-number': 'number',
-  '--syntax-type': 'type',
-  '--syntax-comment': 'comment',
-  '--status-error': 'error',
-  '--status-success': 'success',
-};
-
-/** true, если значение — канонический ключ иконки (без алиасов; для записи). */
+/** true, если значение — канонический ключ иконки (для записи и чтения). */
 export function isProjectIconKey(value: unknown): value is ProjectIconKey {
   return typeof value === 'string' && (PROJECT_ICON_KEYS as readonly string[]).includes(value);
 }
 
-/** true, если значение — канонический ключ цвета (без алиасов; для записи). */
+/** true, если значение — канонический ключ цвета (без алиасов; для записи и чтения). */
 export function isProjectColorKey(value: unknown): value is ProjectColorKey {
   return typeof value === 'string' && (PROJECT_COLOR_KEYS as readonly string[]).includes(value);
 }
@@ -59,13 +38,11 @@ export function normalizeIconKey(value: unknown): ProjectIconKey | undefined {
 }
 
 /**
- * Нормализация цвета при ЧТЕНИИ: канонический ключ или legacy-алиас → ключ
- * палитры; всё прочее → `undefined`.
+ * Нормализация цвета при ЧТЕНИИ: канонический ключ палитры → как есть; всё
+ * прочее (включая legacy-алиасы) → `undefined`.
  */
 export function normalizeColorKey(value: unknown): ProjectColorKey | undefined {
-  if (typeof value !== 'string') return undefined;
-  const canonical = COLOR_KEY_ALIASES[value] ?? value;
-  return isProjectColorKey(canonical) ? canonical : undefined;
+  return isProjectColorKey(value) ? value : undefined;
 }
 
 export const tokenUsageSchema = z.object({

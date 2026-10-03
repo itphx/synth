@@ -677,7 +677,7 @@ export interface Session {
   title?: string;
   /** Канонический ключ иконки (PROJECT_ICON_KEYS); legacy-значения → undefined. */
   icon?: string;
-  /** Канонический ключ цвета (PROJECT_COLOR_KEYS); legacy-значения нормализуются. */
+  /** Канонический ключ цвета (PROJECT_COLOR_KEYS); невалидные значения сбрасываются. */
   color?: string;
   sessionOrigin: SessionOrigin;
   parentId?: string;
@@ -935,16 +935,15 @@ export const PROJECT_ICON_KEYS = [
 
 export type ProjectIconKey = (typeof PROJECT_ICON_KEYS)[number];
 
-/** Канонические ключи цветов проектов и сессий (единый список для server и UI). */
+/**
+ * Канонические ключи цветов проектов и сессий — 16 цветов палитры темы
+ * (`palette.colors[].key` в `a1..a16`; единый список для server и UI).
+ */
 export const PROJECT_COLOR_KEYS = [
-  'keyword',
-  'string',
-  'number',
-  'type',
-  'comment',
-  'error',
-  'primary',
-  'success',
+  'a1', 'a2', 'a3', 'a4',
+  'a5', 'a6', 'a7', 'a8',
+  'a9', 'a10', 'a11', 'a12',
+  'a13', 'a14', 'a15', 'a16',
 ] as const;
 
 export type ProjectColorKey = (typeof PROJECT_COLOR_KEYS)[number];

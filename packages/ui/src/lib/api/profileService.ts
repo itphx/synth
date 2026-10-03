@@ -37,7 +37,7 @@ export const profileService = {
       return {
         locale: 'ru',
         themeMode: 'system',
-        theme: 'flexoki',
+        theme: 'synthesis',
         uiScaleMobile: null,
         uiScaleDesktop: null,
       }

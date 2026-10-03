@@ -1,0 +1,318 @@
+{
+  "metadata": {
+    "id": "synthesis-light",
+    "name": "Synthesis",
+    "description": "Собственная тема Synth «Synthesis» (light)",
+    "author": "Synth",
+    "version": "2.0.0",
+    "variant": "light",
+    "tags": [
+      "light",
+      "synth",
+      "own"
+    ],
+    "source": {
+      "file": "tools/lib/make_themes.py",
+      "project": "synth",
+      "url": null,
+      "upstreamFile": null,
+      "license": "собственная (Synth)",
+      "authoring": "tools/lib/make_themes.py"
+    },
+    "validation": {
+      "checks": 22,
+      "fails": [],
+      "paletteMinDeltaE": 18.9,
+      "syntaxMinDeltaE": 28.3,
+      "syntaxVsTextMinDeltaE": 37.4,
+      "chartsMinDeltaE": 23.0,
+      "authorialCollisions": [
+        {
+          "a": "comment",
+          "b": "operator",
+          "deltaE": 0.0
+        }
+      ],
+      "modeLabel": "light",
+      "modeFromLuminance": "light",
+      "paletteIdenticalToPeer": false
+    }
+  },
+  "colors": {
+    "primary": {
+      "base": "#C2410C",
+      "hover": "#af3a0b",
+      "active": "#9f350a",
+      "foreground": "#ffffff",
+      "muted": "#c2410c80",
+      "emphasis": "#C2410C"
+    },
+    "surface": {
+      "background": "#FAF8F3",
+      "foreground": "#1C1917",
+      "muted": "#f0eee9",
+      "mutedForeground": "#6c6b67",
+      "elevated": "#fdfcfa",
+      "elevatedForeground": "#1C1917",
+      "overlay": "#faf8f333",
+      "subtle": "#f4f2ee"
+    },
+    "interactive": {
+      "border": "#cccac5",
+      "borderHover": "#bcbab5",
+      "borderFocus": "#C2410C",
+      "selection": "#1c191716",
+      "selectionForeground": "#1C1917",
+      "focus": "#c2410c59",
+      "focusRing": "#c2410c47",
+      "cursor": "#100f0f",
+      "hover": "#1c19170e",
+      "active": "#1c191716"
+    },
+    "status": {
+      "error": "#AF3029",
+      "errorForeground": "#ffffff",
+      "errorBackground": "#af30291a",
+      "errorBorder": "#af302959",
+      "warning": "#8f6c01",
+      "warningForeground": "#ffffff",
+      "warningBackground": "#8f6c011a",
+      "warningBorder": "#8f6c0159",
+      "success": "#627b0b",
+      "successForeground": "#ffffff",
+      "successBackground": "#627b0b1a",
+      "successBorder": "#627b0b59",
+      "info": "#237f77",
+      "infoForeground": "#ffffff",
+      "infoBackground": "#237f771a",
+      "infoBorder": "#237f7759"
+    },
+    "pr": {
+      "open": "#627b0b",
+      "draft": "#6c6b67",
+      "blocked": "#8f6c01",
+      "merged": "#BC5215",
+      "closed": "#AF3029"
+    },
+    "syntax": {
+      "base": {
+        "background": "#fdfcfa",
+        "foreground": "#1C1917",
+        "comment": "#6F6E69",
+        "keyword": "#627b0b",
+        "string": "#237f77",
+        "number": "#5E409D",
+        "function": "#BC5215",
+        "variable": "#205EA6",
+        "type": "#8f6c01",
+        "operator": "#6F6E69"
+      },
+      "tokens": {
+        "commentDoc": "#6F6E69",
+        "stringEscape": "#6F6E69",
+        "keywordImport": "#627b0b",
+        "storageModifier": "#627b0b",
+        "functionCall": "#BC5215",
+        "method": "#BC5215",
+        "variableProperty": "#BC5215",
+        "variableOther": "#205EA6",
+        "variableGlobal": "#5E409D",
+        "variableLocal": "#6F6E69",
+        "parameter": "#205EA6",
+        "constant": "#5E409D",
+        "class": "#8f6c01",
+        "className": "#8f6c01",
+        "interface": "#8f6c01",
+        "struct": "#8f6c01",
+        "enum": "#8f6c01",
+        "typeParameter": "#8f6c01",
+        "namespace": "#8f6c01",
+        "module": "#627b0b",
+        "tag": "#627b0b",
+        "jsxTag": "#627b0b",
+        "tagAttribute": "#BC5215",
+        "tagAttributeValue": "#237f77",
+        "boolean": "#5E409D",
+        "decorator": "#627b0b",
+        "label": "#BC5215",
+        "regexp": "#237f77"
+      }
+    },
+    "charts": {
+      "series": [
+        "#C2410C",
+        "#237f77",
+        "#627b0b",
+        "#8f6c01",
+        "#af5d29"
+      ]
+    },
+    "chat": {
+      "background": "#FAF8F3",
+      "userMessage": "#1C1917",
+      "userMessageBackground": "#fdfcfa",
+      "assistantMessage": "#1C1917",
+      "assistantMessageBackground": "#f0eee9",
+      "timestamp": "#6c6b67",
+      "divider": "#cccac5",
+      "typing": "#6c6b67"
+    },
+    "loading": {
+      "spinner": "#C2410C",
+      "spinnerTrack": "#f0eee9",
+      "skeleton": "#f0eee9",
+      "shimmer": "#e3e1dc"
+    },
+    "tools": {
+      "background": "#f0eee9",
+      "border": "#cccac5",
+      "headerHover": "#e5e3de",
+      "icon": "#C2410C",
+      "title": "#1C1917",
+      "description": "#6c6b67",
+      "edit": {
+        "added": "#627b0b",
+        "addedBackground": "#627b0b1a",
+        "removed": "#AF3029",
+        "removedBackground": "#af30291a",
+        "modified": "#237f77",
+        "modifiedBackground": "#237f771a",
+        "lineNumber": "#6c6b67"
+      }
+    },
+    "markdown": {
+      "heading1": "#1C1917",
+      "heading2": "#1C1917",
+      "heading3": "#1C1917",
+      "heading4": "#1C1917",
+      "link": "#C2410C",
+      "linkHover": "#af3a0b",
+      "inlineCode": "#217770",
+      "inlineCodeBackground": "#f0eee9",
+      "blockquote": "#6c6b67",
+      "blockquoteBorder": "#cccac5",
+      "listMarker": "#c2410cbf",
+      "bold": "#1C1917",
+      "italic": "#1c1917e6",
+      "strikethrough": "#6c6b67",
+      "hr": "#cccac5"
+    }
+  },
+  "palette": {
+    "version": 1,
+    "colors": [
+      {
+        "key": "a1",
+        "name": "Красный",
+        "hex": "#af0e0e",
+        "foreground": "#ffffff",
+        "contrast": 7.26
+      },
+      {
+        "key": "a2",
+        "name": "Оранжевый",
+        "hex": "#e17432",
+        "foreground": "#000000",
+        "contrast": 6.75
+      },
+      {
+        "key": "a3",
+        "name": "Жёлтый",
+        "hex": "#af860e",
+        "foreground": "#000000",
+        "contrast": 6.24
+      },
+      {
+        "key": "a4",
+        "name": "Лаймовый",
+        "hex": "#cce132",
+        "foreground": "#000000",
+        "contrast": 14.38
+      },
+      {
+        "key": "a5",
+        "name": "Лаймовый 2",
+        "hex": "#5eaf0e",
+        "foreground": "#000000",
+        "contrast": 7.61
+      },
+      {
+        "key": "a6",
+        "name": "Зелёный",
+        "hex": "#48e132",
+        "foreground": "#000000",
+        "contrast": 12.09
+      },
+      {
+        "key": "a7",
+        "name": "Зелёный 2",
+        "hex": "#0eaf36",
+        "foreground": "#000000",
+        "contrast": 7.2
+      },
+      {
+        "key": "a8",
+        "name": "Изумрудный",
+        "hex": "#32e1a0",
+        "foreground": "#000000",
+        "contrast": 12.41
+      },
+      {
+        "key": "a9",
+        "name": "Бирюзовый",
+        "hex": "#0eafaf",
+        "foreground": "#000000",
+        "contrast": 7.77
+      },
+      {
+        "key": "a10",
+        "name": "Голубой",
+        "hex": "#32a0e1",
+        "foreground": "#000000",
+        "contrast": 7.25
+      },
+      {
+        "key": "a11",
+        "name": "Синий",
+        "hex": "#0e36af",
+        "foreground": "#ffffff",
+        "contrast": 9.7
+      },
+      {
+        "key": "a12",
+        "name": "Синий 2",
+        "hex": "#4832e1",
+        "foreground": "#ffffff",
+        "contrast": 7.45
+      },
+      {
+        "key": "a13",
+        "name": "Индиго",
+        "hex": "#5e0eaf",
+        "foreground": "#ffffff",
+        "contrast": 9.73
+      },
+      {
+        "key": "a14",
+        "name": "Фиолетовый",
+        "hex": "#cc32e1",
+        "foreground": "#000000",
+        "contrast": 5.11
+      },
+      {
+        "key": "a15",
+        "name": "Пурпурный",
+        "hex": "#af0e86",
+        "foreground": "#ffffff",
+        "contrast": 6.5
+      },
+      {
+        "key": "a16",
+        "name": "Розовый",
+        "hex": "#e13274",
+        "foreground": "#000000",
+        "contrast": 4.91
+      }
+    ]
+  }
+}

@@ -90,7 +90,7 @@ export const runnerConfigSchema = z.object({
 export const uiConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(5002),
   backendUrl: z.string().default('http://localhost:5000'),
-  theme: z.string().default('flexoki'),
+  theme: z.string().default('synthesis'),
   themeMode: z.enum(['system', 'light', 'dark']).default('system'),
   locale: z.string().default('ru'),
 });

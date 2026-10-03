@@ -35,14 +35,12 @@ interface DefaultsDraft {
 }
 
 const themeToPresetName = (theme: string): string =>
-  THEME_PRESETS.find((p) => p.name.toLowerCase().replace(/\s+/g, '-') === theme)?.name ?? ''
-
-const presetNameToTheme = (name: string): string => name.toLowerCase().replace(/\s+/g, '-')
+  THEME_PRESETS.find((p) => p.id === theme)?.id ?? ''
 
 const toDraft = (defaults: UserPreferences): DefaultsDraft => ({
   locale: defaults.locale ?? 'ru',
   themeMode: defaults.themeMode ?? 'system',
-  theme: defaults.theme ?? 'flexoki',
+  theme: defaults.theme ?? 'synthesis',
   uiScaleMobile: normalizeUiScale(defaults.uiScaleMobile ?? UI_SCALE_MOBILE_DEFAULT),
   uiScaleDesktop: normalizeUiScale(defaults.uiScaleDesktop ?? UI_SCALE_DESKTOP_DEFAULT),
 })
@@ -131,7 +129,7 @@ export const DefaultsPanel = () => {
               <ThemeControl
                 label={t('settings.appearance.theme.label')}
                 value={themeToPresetName(current.theme)}
-                onChange={(name) => update({ theme: presetNameToTheme(name) })}
+                onChange={(name) => update({ theme: name })}
                 ariaLabel={t('settings.appearance.theme.label')}
               />
             </SettingsSection>

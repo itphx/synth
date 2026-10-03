@@ -80,7 +80,7 @@ const P1 = {
   current_task: '',
   invariants: '',
   icon: 'code' as string | null,
-  color: 'primary' as string | null,
+  color: 'a11' as string | null,
   workspace: '/ws/p1',
   repos: [],
   status_messages: [],
@@ -94,7 +94,7 @@ const S1 = {
   project_id: 'p1',
   name: 'Sess',
   icon: 'rocket' as string | null,
-  color: 'primary' as string | null,
+  color: 'a11' as string | null,
   updated_at: '2026-01-01T00:00:00Z',
 }
 
@@ -160,7 +160,7 @@ describe('LeftPanel — иконка/цвет проектов и сессий (
     const node = container.querySelector('[data-tree-node="file-project:p1"]')
     expect(node).not.toBeNull()
     expect(node!.querySelector('svg')).not.toBeNull()
-    expect(svgHasColor(node!, 'var(--primary)')).toBe(true)
+    expect(svgHasColor(node!, 'var(--palette-11)')).toBe(true)
   })
 
   it('проект с неизвестным значением иконки не роняет узел — фоллбек folder-3', async () => {
@@ -176,7 +176,7 @@ describe('LeftPanel — иконка/цвет проектов и сессий (
     const node = container.querySelector('[data-tree-node="session:s1"]')
     expect(node).not.toBeNull()
     expect(node!.querySelector('svg')).not.toBeNull()
-    expect(svgHasColor(node!, 'var(--primary)')).toBe(true)
+    expect(svgHasColor(node!, 'var(--palette-11)')).toBe(true)
   })
 
   it('закрытая сессия (нет таба) — иконка серая, без кастомного цвета (регрессия)', async () => {
@@ -186,7 +186,7 @@ describe('LeftPanel — иконка/цвет проектов и сессий (
     const node = container.querySelector('[data-tree-node="session:s1"]')
     expect(node).not.toBeNull()
     // inline-цвета нет → класс TreeNode даёт muted-foreground (не перебит).
-    expect(svgHasColor(node!, 'var(--primary)')).toBe(false)
+    expect(svgHasColor(node!, 'var(--palette-11)')).toBe(false)
   })
 
   it('сессия с открытым фоновым табом сохраняет кастомный цвет иконки', async () => {
@@ -199,7 +199,7 @@ describe('LeftPanel — иконка/цвет проектов и сессий (
     })
     const container = await render('projects')
     const node = container.querySelector('[data-tree-node="session:s1"]')
-    expect(svgHasColor(node!, 'var(--primary)')).toBe(true)
+    expect(svgHasColor(node!, 'var(--palette-11)')).toBe(true)
   })
 
   it('закрытая сессия с непрочитанным сохраняет оранжевую подсветку иконки', async () => {

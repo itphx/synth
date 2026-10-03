@@ -55,6 +55,8 @@ export class CSSVariableGenerator {
 
     cssVars.push(...this.generateComponentColors(theme.colors, theme));
 
+    cssVars.push(...this.generatePaletteVariables(theme));
+
     cssVars.push(...this.generateTypographyVariables());
 
     if (theme.config) {
@@ -493,6 +495,27 @@ const sidebarBaseRgb = hexToRgb(theme.colors.surface.muted);
     vars.push(`  --tools-edit-modified: ${theme.colors.status.info};`);
     vars.push(`  --tools-edit-modified-bg: ${this.addTransparency(this.removeTransparency(theme.colors.status.infoBackground), 0.15)};`);
     vars.push(`  --tools-edit-line-number: ${this.opacity(theme.colors.surface.mutedForeground, 0.6)};`);
+
+    return vars;
+  }
+
+  private generatePaletteVariables(theme: Theme): string[] {
+    const vars: string[] = [];
+    const colors = theme.palette?.colors;
+
+    if (!Array.isArray(colors)) {
+      return vars;
+    }
+
+    colors.forEach((color, index) => {
+      const slot = index + 1;
+      if (color?.hex) {
+        vars.push(`  --palette-${slot}: ${color.hex};`);
+      }
+      if (color?.foreground) {
+        vars.push(`  --palette-${slot}-fg: ${color.foreground};`);
+      }
+    });
 
     return vars;
   }

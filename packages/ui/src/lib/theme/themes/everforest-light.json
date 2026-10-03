@@ -1,0 +1,317 @@
+{
+  "metadata": {
+    "id": "everforest-light",
+    "name": "Everforest",
+    "description": "Портировано из темы «Everforest» (light)",
+    "author": "OpenCode",
+    "version": "2.0.0",
+    "variant": "light",
+    "tags": [
+      "light",
+      "ported",
+      "everforest"
+    ],
+    "source": {
+      "file": "everforest.json",
+      "project": "sainnhe",
+      "url": "https://github.com/sainnhe/everforest",
+      "upstreamFile": "packages/ui/src/theme/themes/everforest.json",
+      "license": "MIT"
+    },
+    "validation": {
+      "checks": 22,
+      "fails": [],
+      "paletteMinDeltaE": 18.9,
+      "syntaxMinDeltaE": 25.6,
+      "syntaxVsTextMinDeltaE": 17.2,
+      "chartsMinDeltaE": 22.8,
+      "authorialCollisions": [
+        {
+          "a": "function",
+          "b": "operator",
+          "deltaE": 0.0
+        }
+      ],
+      "modeLabel": "light",
+      "modeFromLuminance": "light",
+      "paletteIdenticalToPeer": false
+    }
+  },
+  "colors": {
+    "primary": {
+      "base": "#849701",
+      "hover": "#778801",
+      "active": "#6c7c01",
+      "foreground": "#000000",
+      "muted": "#84970180",
+      "emphasis": "#849701"
+    },
+    "surface": {
+      "background": "#fdf6e3",
+      "foreground": "#5c6a72",
+      "muted": "#f6f0de",
+      "mutedForeground": "#636f5c",
+      "elevated": "#fefbf4",
+      "elevatedForeground": "#5c6a72",
+      "overlay": "#fdf6e333",
+      "subtle": "#f9f2e0"
+    },
+    "interactive": {
+      "border": "#d0cbb1",
+      "borderHover": "#c5c4b5",
+      "borderFocus": "#849701",
+      "selection": "#5c6a7216",
+      "selectionForeground": "#5c6a72",
+      "focus": "#84970159",
+      "focusRing": "#84970147",
+      "cursor": "#5c6a72",
+      "hover": "#5c6a720e",
+      "active": "#5c6a7216"
+    },
+    "status": {
+      "error": "#e00d09",
+      "errorForeground": "#ffffff",
+      "errorBackground": "#e00d091a",
+      "errorBorder": "#e00d0959",
+      "warning": "#b75208",
+      "warningForeground": "#ffffff",
+      "warningBackground": "#b752081a",
+      "warningBorder": "#b7520859",
+      "success": "#697801",
+      "successForeground": "#ffffff",
+      "successBackground": "#6978011a",
+      "successBorder": "#69780159",
+      "info": "#277c5c",
+      "infoForeground": "#ffffff",
+      "infoBackground": "#277c5c1a",
+      "infoBorder": "#277c5c59"
+    },
+    "pr": {
+      "open": "#697801",
+      "draft": "#636f5c",
+      "blocked": "#b75208",
+      "merged": "#dd61b6",
+      "closed": "#e00d09"
+    },
+    "syntax": {
+      "base": {
+        "background": "#fefbf4",
+        "foreground": "#5c6a72",
+        "comment": "#6b7763",
+        "keyword": "#cf2c9c",
+        "string": "#697801",
+        "number": "#bc5409",
+        "function": "#29805f",
+        "variable": "#e50d09",
+        "type": "#926900",
+        "operator": "#29805f"
+      },
+      "tokens": {
+        "commentDoc": "#6b7763",
+        "stringEscape": "#29805f",
+        "keywordImport": "#cf2c9c",
+        "storageModifier": "#cf2c9c",
+        "functionCall": "#29805f",
+        "method": "#29805f",
+        "variableProperty": "#29805f",
+        "variableOther": "#e50d09",
+        "variableGlobal": "#bc5409",
+        "variableLocal": "#29805f",
+        "parameter": "#e50d09",
+        "constant": "#bc5409",
+        "class": "#926900",
+        "className": "#926900",
+        "interface": "#926900",
+        "struct": "#926900",
+        "enum": "#926900",
+        "typeParameter": "#926900",
+        "namespace": "#926900",
+        "module": "#cf2c9c",
+        "tag": "#cf2c9c",
+        "jsxTag": "#cf2c9c",
+        "tagAttribute": "#29805f",
+        "tagAttributeValue": "#697801",
+        "boolean": "#bc5409",
+        "decorator": "#cf2c9c",
+        "label": "#29805f",
+        "regexp": "#697801"
+      }
+    },
+    "charts": {
+      "series": [
+        "#849701",
+        "#277c5c",
+        "#417801",
+        "#b75208",
+        "#e00d09"
+      ]
+    },
+    "chat": {
+      "background": "#fdf6e3",
+      "userMessage": "#5c6a72",
+      "userMessageBackground": "#fefbf4",
+      "assistantMessage": "#5c6a72",
+      "assistantMessageBackground": "#f6f0de",
+      "timestamp": "#636f5c",
+      "divider": "#d0cbb1",
+      "typing": "#636f5c"
+    },
+    "loading": {
+      "spinner": "#849701",
+      "spinnerTrack": "#f6f0de",
+      "skeleton": "#f6f0de",
+      "shimmer": "#ede8d8"
+    },
+    "tools": {
+      "background": "#f6f0de",
+      "border": "#d0cbb1",
+      "headerHover": "#eee9d9",
+      "icon": "#809201",
+      "title": "#5c6a72",
+      "description": "#636f5c",
+      "edit": {
+        "added": "#697801",
+        "addedBackground": "#6978011a",
+        "removed": "#e00d09",
+        "removedBackground": "#e00d091a",
+        "modified": "#277c5c",
+        "modifiedBackground": "#277c5c1a",
+        "lineNumber": "#636f5c"
+      }
+    },
+    "markdown": {
+      "heading1": "#5c6a72",
+      "heading2": "#5c6a72",
+      "heading3": "#5c6a72",
+      "heading4": "#5c6a72",
+      "link": "#657401",
+      "linkHover": "#657401",
+      "inlineCode": "#657301",
+      "inlineCodeBackground": "#f6f0de",
+      "blockquote": "#636f5c",
+      "blockquoteBorder": "#d0cbb1",
+      "listMarker": "#809201",
+      "bold": "#5c6a72",
+      "italic": "#5c6a72e6",
+      "strikethrough": "#636f5c",
+      "hr": "#d0cbb1"
+    }
+  },
+  "palette": {
+    "version": 1,
+    "colors": [
+      {
+        "key": "a1",
+        "name": "Красный",
+        "hex": "#af0e0e",
+        "foreground": "#ffffff",
+        "contrast": 7.26
+      },
+      {
+        "key": "a2",
+        "name": "Оранжевый",
+        "hex": "#e17432",
+        "foreground": "#000000",
+        "contrast": 6.75
+      },
+      {
+        "key": "a3",
+        "name": "Жёлтый",
+        "hex": "#af860e",
+        "foreground": "#000000",
+        "contrast": 6.24
+      },
+      {
+        "key": "a4",
+        "name": "Лаймовый",
+        "hex": "#cce132",
+        "foreground": "#000000",
+        "contrast": 14.38
+      },
+      {
+        "key": "a5",
+        "name": "Лаймовый 2",
+        "hex": "#5eaf0e",
+        "foreground": "#000000",
+        "contrast": 7.61
+      },
+      {
+        "key": "a6",
+        "name": "Зелёный",
+        "hex": "#48e132",
+        "foreground": "#000000",
+        "contrast": 12.09
+      },
+      {
+        "key": "a7",
+        "name": "Зелёный 2",
+        "hex": "#0eaf36",
+        "foreground": "#000000",
+        "contrast": 7.2
+      },
+      {
+        "key": "a8",
+        "name": "Изумрудный",
+        "hex": "#32e1a0",
+        "foreground": "#000000",
+        "contrast": 12.41
+      },
+      {
+        "key": "a9",
+        "name": "Бирюзовый",
+        "hex": "#0eafaf",
+        "foreground": "#000000",
+        "contrast": 7.77
+      },
+      {
+        "key": "a10",
+        "name": "Голубой",
+        "hex": "#32a0e1",
+        "foreground": "#000000",
+        "contrast": 7.25
+      },
+      {
+        "key": "a11",
+        "name": "Синий",
+        "hex": "#0e36af",
+        "foreground": "#ffffff",
+        "contrast": 9.7
+      },
+      {
+        "key": "a12",
+        "name": "Синий 2",
+        "hex": "#4832e1",
+        "foreground": "#ffffff",
+        "contrast": 7.45
+      },
+      {
+        "key": "a13",
+        "name": "Индиго",
+        "hex": "#5e0eaf",
+        "foreground": "#ffffff",
+        "contrast": 9.73
+      },
+      {
+        "key": "a14",
+        "name": "Фиолетовый",
+        "hex": "#cc32e1",
+        "foreground": "#000000",
+        "contrast": 5.11
+      },
+      {
+        "key": "a15",
+        "name": "Пурпурный",
+        "hex": "#af0e86",
+        "foreground": "#ffffff",
+        "contrast": 6.5
+      },
+      {
+        "key": "a16",
+        "name": "Розовый",
+        "hex": "#e13274",
+        "foreground": "#000000",
+        "contrast": 4.91
+      }
+    ]
+  }
+}

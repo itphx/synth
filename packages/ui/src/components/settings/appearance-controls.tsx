@@ -40,10 +40,11 @@ export const ThemeControl: React.FC<{
     value={value}
     onValueChange={onChange}
     ariaLabel={ariaLabel}
+    items={THEME_PRESETS.map((preset) => ({ value: preset.id, label: preset.name }))}
   >
     <SelectContent>
       {THEME_PRESETS.map((preset) => (
-        <SelectItem key={preset.name} value={preset.name}>
+        <SelectItem key={preset.id} value={preset.id}>
           {preset.name}
         </SelectItem>
       ))}

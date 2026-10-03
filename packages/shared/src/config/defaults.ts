@@ -42,7 +42,7 @@ export const defaultConfig: SynthConfig = {
   ui: {
     port: 5002,
     backendUrl: 'http://localhost:5000',
-    theme: 'flexoki',
+    theme: 'synthesis',
     themeMode: 'system',
     locale: 'ru',
   },

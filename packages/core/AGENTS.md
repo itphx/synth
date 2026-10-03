@@ -119,7 +119,7 @@
   `PROJECT_ICON_KEYS`/`PROJECT_COLOR_KEYS` (невалидно → ошибка с перечнем ключей).
   Метаданные `icon`/`color` проекта и сессии — канонические ключи shared:
   валидация на записи (роуты `projects`/`sessions` → 400 `VALIDATION_ERROR`),
-  нормализация legacy при чтении (`ProjectStore.load`, `FileStore.deserializeSession`,
+  сброс невалидных значений при чтении (`ProjectStore.load`, `FileStore.deserializeSession`,
   `remote/transfer`); у сессий — сквозной проход (`Session`, `SessionManager.createSession`
   и fork, `serializeSession`). Запись проектных данных (`project_log_write`/
   `project_invariants_write`/`plan_write`) гейтится `engine/tools/project-access.ts`

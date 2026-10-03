@@ -506,12 +506,12 @@ describe('Project API Routes (icon/color)', () => {
   it('POST сохраняет валидные icon/color', async () => {
     const res = await app.request('/api/v2/projects', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: 'P', icon: 'rocket', color: 'primary' }),
+      body: JSON.stringify({ name: 'P', icon: 'rocket', color: 'a11' }),
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as { id: string; icon: string | null; color: string | null };
     expect(body.icon).toBe('rocket');
-    expect(body.color).toBe('primary');
+    expect(body.color).toBe('a11');
     expect((await store.load(body.id))!.icon).toBe('rocket');
   });
 
@@ -536,17 +536,17 @@ describe('Project API Routes (icon/color)', () => {
   });
 
   it('PUT обновляет icon/color и сбрасывает через null', async () => {
-    const project = store.create('P', 'local', { icon: 'rocket', color: 'primary' });
+    const project = store.create('P', 'local', { icon: 'rocket', color: 'a11' });
     await store.save(project);
 
     const put = await app.request(`/api/v2/projects/${project.id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ icon: 'heart', color: 'error' }),
+      body: JSON.stringify({ icon: 'heart', color: 'a1' }),
     });
     expect(put.status).toBe(200);
     const body = (await put.json()) as { icon: string | null; color: string | null };
     expect(body.icon).toBe('heart');
-    expect(body.color).toBe('error');
+    expect(body.color).toBe('a1');
 
     const reset = await app.request(`/api/v2/projects/${project.id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -557,7 +557,7 @@ describe('Project API Routes (icon/color)', () => {
   });
 
   it('PUT невалидный color → 400, проект не меняется', async () => {
-    const project = store.create('P', 'local', { color: 'primary' });
+    const project = store.create('P', 'local', { color: 'a11' });
     await store.save(project);
     const res = await app.request(`/api/v2/projects/${project.id}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -565,6 +565,6 @@ describe('Project API Routes (icon/color)', () => {
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
-    expect((await store.load(project.id))!.color).toBe('primary');
+    expect((await store.load(project.id))!.color).toBe('a11');
   });
 });

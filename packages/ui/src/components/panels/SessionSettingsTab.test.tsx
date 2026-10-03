@@ -777,14 +777,14 @@ describe('SessionSettingsTab — клик по имени/иконке откр�
           name: 'S',
           project_id: null,
           engine: 'synth',
-          color: 'success',
+          color: 'a7',
           settings: { model: 'm' },
         },
       ],
     } as never)
     const container = await renderTab()
     const svg = container.querySelector('[data-testid="session-edit-trigger"] svg') as SVGElement
-    expect(svg.style.color).toBe('var(--status-success)')
+    expect(svg.style.color).toBe('var(--palette-7)')
   })
 })
 

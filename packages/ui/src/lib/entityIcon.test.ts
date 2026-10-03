@@ -29,15 +29,15 @@ describe('resolveIconName — единый резолвер иконок (AD-075
 
 describe('resolveIconColor — единый резолвер цветов (AD-075)', () => {
   it('канонические ключи → CSS-переменные палитры', () => {
-    expect(resolveIconColor('primary')).toBe('var(--primary)')
-    expect(resolveIconColor('error')).toBe('var(--status-error)')
-    expect(resolveIconColor('success')).toBe('var(--status-success)')
+    expect(resolveIconColor('a11')).toBe('var(--palette-11)')
+    expect(resolveIconColor('a1')).toBe('var(--palette-1)')
+    expect(resolveIconColor('a7')).toBe('var(--palette-7)')
   })
 
-  it('legacy-алиасы нормализуются при чтении', () => {
-    expect(resolveIconColor('blue')).toBe('var(--primary)')
-    expect(resolveIconColor('red')).toBe('var(--status-error)')
-    expect(resolveIconColor('--syntax-keyword')).toBe('var(--syntax-keyword)')
+  it('legacy-алиасы больше не нормализуются → undefined', () => {
+    expect(resolveIconColor('blue')).toBeUndefined()
+    expect(resolveIconColor('red')).toBeUndefined()
+    expect(resolveIconColor('--syntax-keyword')).toBeUndefined()
   })
 
   it('неизвестное значение → undefined', () => {
@@ -49,8 +49,8 @@ describe('resolveIconColor — единый резолвер цветов (AD-07
 
 describe('resolveSessionIconColor — дефолт иконки сессии (акцент открытой сессии)', () => {
   it('заданный канонический ключ → CSS-переменная (как у обычного резолвера)', () => {
-    expect(resolveSessionIconColor('success')).toBe('var(--status-success)')
-    expect(resolveSessionIconColor('blue')).toBe('var(--primary)')
+    expect(resolveSessionIconColor('a7')).toBe('var(--palette-7)')
+    expect(resolveSessionIconColor('a11')).toBe('var(--palette-11)')
   })
 
   it('пустой/неизвестный цвет → дефолтный акцент --primary', () => {

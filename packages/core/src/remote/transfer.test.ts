@@ -142,7 +142,7 @@ describe('transfer helpers', () => {
       const client = makeFakeRemoteClient();
       const projectStore = new ProjectStore({ dataDir: tmpDir });
       const project = projectStore.create('My Project', 'local', {
-        description: 'desc', icon: 'rocket', color: 'error',
+        description: 'desc', icon: 'rocket', color: 'a1',
         repos: [{ path: 'repo1' }],
         workspace: 'my-project',
       });
@@ -180,7 +180,7 @@ describe('transfer helpers', () => {
         name: 'My Project',
         description: 'desc',
         icon: 'rocket',
-        color: 'error',
+        color: 'a1',
         workspace: 'my-project',
       }));
       expect(client.fsWorkspaceMkdir).toHaveBeenCalledWith({ path: 'my-project' });

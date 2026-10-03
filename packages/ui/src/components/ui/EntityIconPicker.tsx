@@ -91,13 +91,13 @@ export function EntityIconPicker({
           >
             <span className="text-muted-foreground">—</span>
           </button>
-          {PROJECT_COLORS.map(({ key, label, cssVar }) => (
+          {PROJECT_COLORS.map(({ key, labelKey, cssVar }) => (
             <button
               key={key}
               type="button"
               disabled={disabled}
               onClick={() => onColorChange(key)}
-              title={label}
+              title={t(labelKey)}
               data-testid={`entity-color-${key}`}
               className={cn(
                 'size-6 rounded-full border-2 transition-transform',

@@ -145,7 +145,7 @@ afterEach(async () => {
 describe('EntityEditDialog', () => {
   it('открывается с данными проекта: имя, описание, пикер', async () => {
     await renderDialog()
-    await open({ kind: 'project', id: 'p1', name: 'P', description: 'old description', icon: 'rocket', color: 'primary' })
+    await open({ kind: 'project', id: 'p1', name: 'P', description: 'old description', icon: 'rocket', color: 'a11' })
 
     const dialog = document.body.querySelector('[data-testid="entity-edit-dialog"]')
     expect(dialog, 'диалог открыт').not.toBeNull()
@@ -169,7 +169,7 @@ describe('EntityEditDialog', () => {
 
     await setInputValue(document.body.querySelector('[data-testid="entity-edit-name"]')!, 'New name')
     await click(document.body.querySelector('[data-testid="entity-icon-rocket"]'))
-    await click(document.body.querySelector('[data-testid="entity-color-primary"]'))
+    await click(document.body.querySelector('[data-testid="entity-color-a1"]'))
     await click(document.body.querySelector('[data-testid="entity-edit-save"]'))
     await act(async () => {})
 
@@ -177,7 +177,7 @@ describe('EntityEditDialog', () => {
       name: 'New name',
       description: 'old description',
       icon: 'rocket',
-      color: 'primary',
+      color: 'a1',
     })
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ text: enDict['panel.saved'], type: 'success' }))
     expect(useEntityEditStore.getState().target).toBeNull()

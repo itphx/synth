@@ -272,7 +272,7 @@ const projectUpdateSchema = z.object({
   icon: z.enum(PROJECT_ICON_KEYS).nullable().optional()
     .describe(`Project icon key. Allowed: ${PROJECT_ICON_KEYS.join(', ')}`),
   color: z.enum(PROJECT_COLOR_KEYS).nullable().optional()
-    .describe(`Project color key. Allowed: ${PROJECT_COLOR_KEYS.join(', ')}`),
+    .describe(`Project color key (palette a1..a16). Allowed: ${PROJECT_COLOR_KEYS.join(', ')}`),
 });
 
 /** Понятная ошибка невалидного значения метаданных проекта (i18n + допустимые ключи). */

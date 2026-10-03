@@ -59,21 +59,31 @@ export const PROJECT_ICON_MAP: Record<string, IconName> = Object.fromEntries(
 )
 
 /**
- * Палитра проектов/сессий. Состав и порядок — из shared `PROJECT_COLOR_KEYS`.
- * `cssVar` — ссылка на CSS-переменную (инлайн-цвет только через переменные).
+ * Палитра проектов/сессий — 16 цветов темы (`PROJECT_COLOR_KEYS` = `a1..a16`).
+ * `labelKey` — i18n-ключ подписи (`entityColor.<key>`); `cssVar` — ссылка на
+ * CSS-переменную `--palette-<index+1>` (инлайн-цвет только через переменные).
+ * Порядок ключей совпадает с `palette.colors`.
  */
-const COLOR_META: Record<ProjectColorKey, { label: string; cssVar: string }> = {
-  keyword: { label: 'Фиолетовый', cssVar: 'var(--syntax-keyword)' },
-  string:  { label: 'Зелёный',    cssVar: 'var(--syntax-string)' },
-  number:  { label: 'Розовый',    cssVar: 'var(--syntax-number)' },
-  type:    { label: 'Золотой',    cssVar: 'var(--syntax-type)' },
-  comment: { label: 'Серый',      cssVar: 'var(--syntax-comment)' },
-  error:   { label: 'Красный',    cssVar: 'var(--status-error)' },
-  primary: { label: 'Синий',      cssVar: 'var(--primary)' },
-  success: { label: 'Зелёный',    cssVar: 'var(--status-success)' },
+const COLOR_META: Record<ProjectColorKey, { labelKey: string; cssVar: string }> = {
+  a1:  { labelKey: 'entityColor.a1',  cssVar: 'var(--palette-1)' },
+  a2:  { labelKey: 'entityColor.a2',  cssVar: 'var(--palette-2)' },
+  a3:  { labelKey: 'entityColor.a3',  cssVar: 'var(--palette-3)' },
+  a4:  { labelKey: 'entityColor.a4',  cssVar: 'var(--palette-4)' },
+  a5:  { labelKey: 'entityColor.a5',  cssVar: 'var(--palette-5)' },
+  a6:  { labelKey: 'entityColor.a6',  cssVar: 'var(--palette-6)' },
+  a7:  { labelKey: 'entityColor.a7',  cssVar: 'var(--palette-7)' },
+  a8:  { labelKey: 'entityColor.a8',  cssVar: 'var(--palette-8)' },
+  a9:  { labelKey: 'entityColor.a9',  cssVar: 'var(--palette-9)' },
+  a10: { labelKey: 'entityColor.a10', cssVar: 'var(--palette-10)' },
+  a11: { labelKey: 'entityColor.a11', cssVar: 'var(--palette-11)' },
+  a12: { labelKey: 'entityColor.a12', cssVar: 'var(--palette-12)' },
+  a13: { labelKey: 'entityColor.a13', cssVar: 'var(--palette-13)' },
+  a14: { labelKey: 'entityColor.a14', cssVar: 'var(--palette-14)' },
+  a15: { labelKey: 'entityColor.a15', cssVar: 'var(--palette-15)' },
+  a16: { labelKey: 'entityColor.a16', cssVar: 'var(--palette-16)' },
 }
 
-export const PROJECT_COLORS: Array<{ key: ProjectColorKey; label: string; cssVar: string }> =
+export const PROJECT_COLORS: Array<{ key: ProjectColorKey; labelKey: string; cssVar: string }> =
   PROJECT_COLOR_KEYS.map((key) => ({ key, ...COLOR_META[key] }))
 
 export const PROJECT_COLOR_MAP: Record<string, string> = Object.fromEntries(

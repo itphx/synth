@@ -1,33 +1,20 @@
 import type { Theme } from '@/types/theme';
 import { presetThemes } from './presets';
-import { withPrColors } from './prColors';
-import flexokiLightRaw from './flexoki-light.json';
-import flexokiDarkRaw from './flexoki-dark.json';
-import synthLightRaw from './fields-of-the-shire-light.json';
-import synthDarkRaw from './fields-of-the-shire-dark.json';
 
-export const flexokiLightTheme = withPrColors(flexokiLightRaw as Theme);
-export const flexokiDarkTheme = withPrColors(flexokiDarkRaw as Theme);
-export const synthLightTheme = withPrColors(synthLightRaw as Theme);
-export const synthDarkTheme = withPrColors(synthDarkRaw as Theme);
+export const DEFAULT_LIGHT_THEME_ID = 'synthesis-light';
+export const DEFAULT_DARK_THEME_ID = 'synthesis-dark';
 
-export const DEFAULT_LIGHT_THEME_ID = 'flexoki-light' as const;
-export const DEFAULT_DARK_THEME_ID = 'flexoki-dark' as const;
+export const themes: Theme[] = presetThemes;
 
-export const themes: Theme[] = [
-  synthLightTheme,
-  synthDarkTheme,
-  flexokiLightTheme,
-  flexokiDarkTheme,
-  ...presetThemes.filter(
-    (theme) => theme.metadata.id !== 'synth-light' && theme.metadata.id !== 'synth-dark',
-  ),
-];
+/** id записи темы без суффикса варианта: `nightowl-dark` → `nightowl`. */
+export function themePrefixFromId(id: string): string {
+  return id.replace(/-(light|dark)$/, '');
+}
 
 export function getThemeById(id: string): Theme | undefined {
   const resolvedId =
-    id === 'app-light' ? 'flexoki-light' :
-    id === 'app-dark' ? 'flexoki-dark' :
+    id === 'app-light' ? DEFAULT_LIGHT_THEME_ID :
+    id === 'app-dark' ? DEFAULT_DARK_THEME_ID :
     id;
 
   return themes.find(theme => theme.metadata.id === resolvedId);
@@ -42,33 +29,38 @@ export function getDefaultTheme(prefersDark: boolean): Theme {
     return defaultTheme;
   }
 
-  return themes.find((theme) => theme.metadata.variant === variant) ?? themes[0] ?? flexokiLightTheme;
+  return themes.find((theme) => theme.metadata.variant === variant) ?? themes[0];
 }
 
 export type ThemePreset = {
+  /** Префикс id темы без `-light`/`-dark` (например `nightowl`). */
+  id: string
+  /** Человекочитаемое имя для отображения. */
   name: string
   lightId: string | null
   darkId: string | null
 }
 
 export function getThemePresets(): ThemePreset[] {
-  const grouped = new Map<string, { light?: Theme; dark?: Theme }>()
+  const grouped = new Map<string, { light?: Theme; dark?: Theme; name?: string }>()
 
   for (const theme of themes) {
-    const name = theme.metadata.name
-    const existing = grouped.get(name) ?? {}
+    const id = themePrefixFromId(theme.metadata.id)
+    const existing = grouped.get(id) ?? {}
     if (theme.metadata.variant === 'light') {
       existing.light = theme
     } else {
       existing.dark = theme
     }
-    grouped.set(name, existing)
+    existing.name = existing.name ?? theme.metadata.name
+    grouped.set(id, existing)
   }
 
   const presets: ThemePreset[] = []
-  for (const [name, { light, dark }] of grouped) {
+  for (const [id, { light, dark, name }] of grouped) {
     presets.push({
-      name,
+      id,
+      name: name ?? id,
       lightId: light?.metadata.id ?? null,
       darkId: dark?.metadata.id ?? null,
     })

@@ -36,32 +36,32 @@ describe('ProjectStore', () => {
     const project = store.create('Test', 'u1', {
       description: 'desc',
       icon: 'rocket',
-      color: 'primary',
+      color: 'a11',
       workspace: '/ws',
     });
     expect(project.description).toBe('desc');
     expect(project.icon).toBe('rocket');
-    expect(project.color).toBe('primary');
+    expect(project.color).toBe('a11');
     expect(project.workspace).toBe('/ws');
   });
 
-  it('load нормализует legacy icon/color (эмодзи → undefined, алиасы → канон)', async () => {
+  it('load нормализует невалидные/legacy icon/color → undefined', async () => {
     const project = store.create('Legacy', 'u1', { icon: '🚀', color: 'blue' });
     await store.save(project);
     const loaded = await store.load(project.id);
     expect(loaded!.icon).toBeUndefined();
-    expect(loaded!.color).toBe('primary');
+    expect(loaded!.color).toBeUndefined();
 
     project.color = 'weird';
     await store.save(project);
     expect((await store.load(project.id))!.color).toBeUndefined();
 
     project.icon = 'heart';
-    project.color = 'success';
+    project.color = 'a7';
     await store.save(project);
     const ok = await store.load(project.id);
     expect(ok!.icon).toBe('heart');
-    expect(ok!.color).toBe('success');
+    expect(ok!.color).toBe('a7');
   });
 
   it('create сидит скоуп mcp/skills (AD-071 §2.4 / AD-046 §4.5)', () => {

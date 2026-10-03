@@ -17,15 +17,13 @@ interface AppearanceDraft {
   uiScale: number
 }
 
-const toThemeName = (presetName: string): string => presetName.toLowerCase().replace(/\s+/g, '-')
-
-const presetNameFromTheme = (themeName: string): string => {
-  if (!themeName) return ''
-  return THEME_PRESETS.find((p) => toThemeName(p.name) === themeName)?.name ?? ''
+const presetNameFromTheme = (themeId: string): string => {
+  if (!themeId) return ''
+  return THEME_PRESETS.find((p) => p.id === themeId)?.id ?? ''
 }
 
 const DEFAULT_THEME_PRESET_NAME =
-  presetNameFromTheme('flexoki') || 'Flexoki'
+  THEME_PRESETS.find((p) => p.id === 'synthesis')?.id ?? 'synthesis'
 
 export const AppearanceSettings = () => {
   const { locale: i18nLocale, setLocale: setI18nLocale, t } = useI18n()
@@ -55,13 +53,13 @@ export const AppearanceSettings = () => {
   // AD-072 (фидбек): live-preview без персиста. Все визуальные настройки
   // применяются к UI сразу, но в профиль/localStorage попадают только по Save.
   const applyAppearance = (next: AppearanceDraft) => {
-    const preset = THEME_PRESETS.find((p) => p.name === next.themePresetName)
+    const preset = THEME_PRESETS.find((p) => p.id === next.themePresetName)
     if (preset) {
       const themeId = preset.lightId || preset.darkId
       if (themeId) setThemePreference(themeId)
       // Прямой setState вместо экшена стора: экшены `setTheme*`/`setLocale`
       // сразу пишут в профиль, а preview не должен персистить.
-      useUIStore.getState().setAppearancePreview({ theme: toThemeName(preset.name) })
+      useUIStore.getState().setAppearancePreview({ theme: preset.id })
     }
     setThemeMode(next.themeMode)
     // Язык применяется через `useI18nStore` (единственный источник истины).
@@ -78,11 +76,11 @@ export const AppearanceSettings = () => {
     value: snapshot,
     defaultValue: defaultAppearance,
     onSave: async (next) => {
-      const themeName = toThemeName(next.themePresetName)
+      const themeId = next.themePresetName
       await profileService.syncThemeModeToProfile(next.themeMode)
       // Кастомная тема может не входить в пресеты — не затираем её пустым значением.
-      if (themeName) {
-        await profileService.syncThemeToProfile(themeName)
+      if (themeId) {
+        await profileService.syncThemeToProfile(themeId)
       }
       await profileService.syncLocaleToProfile(next.locale)
       persistUiScale(next.uiScale)

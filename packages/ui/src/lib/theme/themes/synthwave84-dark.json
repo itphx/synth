@@ -1,0 +1,322 @@
+{
+  "metadata": {
+    "id": "synthwave84-dark",
+    "name": "Synthwave '84",
+    "description": "Портировано из темы «Synthwave '84» (dark)",
+    "author": "OpenCode",
+    "version": "2.0.0",
+    "variant": "dark",
+    "tags": [
+      "dark",
+      "ported",
+      "synthwave84"
+    ],
+    "source": {
+      "file": "synthwave84.json",
+      "project": "robb0wen",
+      "url": "https://github.com/robb0wen/synthwave-vscode",
+      "upstreamFile": "packages/ui/src/theme/themes/synthwave84.json",
+      "license": "MIT"
+    },
+    "validation": {
+      "checks": 22,
+      "fails": [],
+      "paletteMinDeltaE": 22.6,
+      "syntaxMinDeltaE": 31.8,
+      "syntaxVsTextMinDeltaE": 43.8,
+      "chartsMinDeltaE": 29.0,
+      "authorialCollisions": [
+        {
+          "a": "keyword",
+          "b": "operator",
+          "deltaE": 0.0
+        },
+        {
+          "a": "number",
+          "b": "function",
+          "deltaE": 0.0
+        }
+      ],
+      "modeLabel": "dark",
+      "modeFromLuminance": "dark",
+      "paletteIdenticalToPeer": false
+    }
+  },
+  "colors": {
+    "primary": {
+      "base": "#36f9f6",
+      "hover": "#4efaf7",
+      "active": "#5efaf8",
+      "foreground": "#000000",
+      "muted": "#36f9f680",
+      "emphasis": "#36f9f6"
+    },
+    "surface": {
+      "background": "#262335",
+      "foreground": "#ffffff",
+      "muted": "#333041",
+      "mutedForeground": "#9198c4",
+      "elevated": "#312e3f",
+      "elevatedForeground": "#ffffff",
+      "overlay": "#262335cc",
+      "subtle": "#2e2b3c"
+    },
+    "interactive": {
+      "border": "#565361",
+      "borderHover": "#63616e",
+      "borderFocus": "#36f9f6",
+      "selection": "#ffffff1f",
+      "selectionForeground": "#ffffff",
+      "focus": "#36f9f659",
+      "focusRing": "#36f9f661",
+      "cursor": "#ffffff",
+      "hover": "#ffffff17",
+      "active": "#ffffff1f"
+    },
+    "status": {
+      "error": "#fe4955",
+      "errorForeground": "#000000",
+      "errorBackground": "#fe495524",
+      "errorBorder": "#fe495573",
+      "warning": "#fede5d",
+      "warningForeground": "#000000",
+      "warningBackground": "#fede5d24",
+      "warningBorder": "#fede5d73",
+      "success": "#72f1b8",
+      "successForeground": "#000000",
+      "successBackground": "#72f1b824",
+      "successBorder": "#72f1b873",
+      "info": "#ff8b39",
+      "infoForeground": "#000000",
+      "infoBackground": "#ff8b3924",
+      "infoBorder": "#ff8b3973"
+    },
+    "pr": {
+      "open": "#72f1b8",
+      "draft": "#9198c4",
+      "blocked": "#fede5d",
+      "merged": "#b084eb",
+      "closed": "#fe4955"
+    },
+    "syntax": {
+      "base": {
+        "background": "#312e3f",
+        "foreground": "#ffffff",
+        "comment": "#9198c4",
+        "keyword": "#ff7edb",
+        "string": "#fede5d",
+        "number": "#b084eb",
+        "function": "#b084eb",
+        "variable": "#ffffff",
+        "type": "#36f9f6",
+        "operator": "#ff7edb"
+      },
+      "tokens": {
+        "commentDoc": "#9198c4",
+        "stringEscape": "#ff7edb",
+        "keywordImport": "#ff7edb",
+        "storageModifier": "#ff7edb",
+        "functionCall": "#b084eb",
+        "method": "#b084eb",
+        "variableProperty": "#b084eb",
+        "variableOther": "#ffffff",
+        "variableGlobal": "#b084eb",
+        "variableLocal": "#ff7edb",
+        "parameter": "#ffffff",
+        "constant": "#b084eb",
+        "class": "#36f9f6",
+        "className": "#36f9f6",
+        "interface": "#36f9f6",
+        "struct": "#36f9f6",
+        "enum": "#36f9f6",
+        "typeParameter": "#36f9f6",
+        "namespace": "#36f9f6",
+        "module": "#ff7edb",
+        "tag": "#ff7edb",
+        "jsxTag": "#ff7edb",
+        "tagAttribute": "#b084eb",
+        "tagAttributeValue": "#fede5d",
+        "boolean": "#b084eb",
+        "decorator": "#ff7edb",
+        "label": "#b084eb",
+        "regexp": "#fede5d"
+      }
+    },
+    "charts": {
+      "series": [
+        "#36f9f6",
+        "#ff8b39",
+        "#72f1b8",
+        "#fede5d",
+        "#fe4955"
+      ]
+    },
+    "chat": {
+      "background": "#262335",
+      "userMessage": "#ffffff",
+      "userMessageBackground": "#312e3f",
+      "assistantMessage": "#ffffff",
+      "assistantMessageBackground": "#333041",
+      "timestamp": "#9198c4",
+      "divider": "#565361",
+      "typing": "#9198c4"
+    },
+    "loading": {
+      "spinner": "#36f9f6",
+      "spinnerTrack": "#333041",
+      "skeleton": "#333041",
+      "shimmer": "#3f3c4c"
+    },
+    "tools": {
+      "background": "#333041",
+      "border": "#565361",
+      "headerHover": "#3d3a4a",
+      "icon": "#36f9f6",
+      "title": "#ffffff",
+      "description": "#9198c4",
+      "edit": {
+        "added": "#72f1b8",
+        "addedBackground": "#72f1b824",
+        "removed": "#fe4955",
+        "removedBackground": "#fe495524",
+        "modified": "#ff8b39",
+        "modifiedBackground": "#ff8b3924",
+        "lineNumber": "#9198c4"
+      }
+    },
+    "markdown": {
+      "heading1": "#ffffff",
+      "heading2": "#ffffff",
+      "heading3": "#ffffff",
+      "heading4": "#ffffff",
+      "link": "#36f9f6",
+      "linkHover": "#4efaf7",
+      "inlineCode": "#fede5d",
+      "inlineCodeBackground": "#333041",
+      "blockquote": "#9198c4",
+      "blockquoteBorder": "#565361",
+      "listMarker": "#36f9f6bf",
+      "bold": "#ffffff",
+      "italic": "#ffffffe6",
+      "strikethrough": "#9198c4",
+      "hr": "#565361"
+    }
+  },
+  "palette": {
+    "version": 1,
+    "colors": [
+      {
+        "key": "a1",
+        "name": "Красный",
+        "hex": "#ef3434",
+        "foreground": "#000000",
+        "contrast": 5.21
+      },
+      {
+        "key": "a2",
+        "name": "Оранжевый",
+        "hex": "#eeb08b",
+        "foreground": "#000000",
+        "contrast": 11.22
+      },
+      {
+        "key": "a3",
+        "name": "Жёлтый",
+        "hex": "#efc034",
+        "foreground": "#000000",
+        "contrast": 12.26
+      },
+      {
+        "key": "a4",
+        "name": "Лаймовый",
+        "hex": "#e2ee8b",
+        "foreground": "#000000",
+        "contrast": 16.84
+      },
+      {
+        "key": "a5",
+        "name": "Лаймовый 2",
+        "hex": "#91ef34",
+        "foreground": "#000000",
+        "contrast": 14.6
+      },
+      {
+        "key": "a6",
+        "name": "Зелёный",
+        "hex": "#98ee8b",
+        "foreground": "#000000",
+        "contrast": 14.94
+      },
+      {
+        "key": "a7",
+        "name": "Зелёный 2",
+        "hex": "#34ef63",
+        "foreground": "#000000",
+        "contrast": 13.67
+      },
+      {
+        "key": "a8",
+        "name": "Изумрудный",
+        "hex": "#8beec9",
+        "foreground": "#000000",
+        "contrast": 15.17
+      },
+      {
+        "key": "a9",
+        "name": "Бирюзовый",
+        "hex": "#34efef",
+        "foreground": "#000000",
+        "contrast": 14.74
+      },
+      {
+        "key": "a10",
+        "name": "Голубой",
+        "hex": "#8bc9ee",
+        "foreground": "#000000",
+        "contrast": 11.69
+      },
+      {
+        "key": "a11",
+        "name": "Голубой 2",
+        "hex": "#3463ef",
+        "foreground": "#ffffff",
+        "contrast": 5.03
+      },
+      {
+        "key": "a12",
+        "name": "Синий",
+        "hex": "#988bee",
+        "foreground": "#000000",
+        "contrast": 7.26
+      },
+      {
+        "key": "a13",
+        "name": "Индиго",
+        "hex": "#9134ef",
+        "foreground": "#ffffff",
+        "contrast": 5.33
+      },
+      {
+        "key": "a14",
+        "name": "Фиолетовый",
+        "hex": "#e28bee",
+        "foreground": "#000000",
+        "contrast": 9.16
+      },
+      {
+        "key": "a15",
+        "name": "Пурпурный",
+        "hex": "#ef34c0",
+        "foreground": "#000000",
+        "contrast": 5.92
+      },
+      {
+        "key": "a16",
+        "name": "Розовый",
+        "hex": "#ee8bb0",
+        "foreground": "#000000",
+        "contrast": 8.96
+      }
+    ]
+  }
+}

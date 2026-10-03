@@ -34,9 +34,12 @@ type ThemeSyncPayload = {
   darkThemeId?: unknown;
 };
 
-const DEFAULT_THEME_ID = 'flexoki'
+const DEFAULT_THEME_ID = 'synthesis'
 const DEFAULT_LIGHT_ID = `${DEFAULT_THEME_ID}-light`
 const DEFAULT_DARK_ID = `${DEFAULT_THEME_ID}-dark`
+
+/** id записи темы без суффикса варианта: `nightowl-dark` → `nightowl`. */
+const themePrefixFromId = (id: string): string => id.replace(/-(dark|light)$/, '')
 
 function deriveThemeIds(themeName: string): { lightThemeId: string; darkThemeId: string } {
   return {
@@ -141,15 +144,17 @@ const isValidCustomTheme = (value: unknown): value is Theme => {
     ['colors', 'syntax', 'base', 'type'],
     ['colors', 'syntax', 'base', 'comment'],
     ['colors', 'syntax', 'base', 'operator'],
-    ['colors', 'syntax', 'highlights', 'diffAdded'],
-    ['colors', 'syntax', 'highlights', 'diffRemoved'],
-    ['colors', 'syntax', 'highlights', 'lineNumber'],
   ];
 
   for (const path of requiredPaths) {
     if (!isNonEmptyString(getNested(value, path))) {
       return false;
     }
+  }
+
+  const paletteColors = getNested(value, ['palette', 'colors']);
+  if (!Array.isArray(paletteColors) || paletteColors.length === 0) {
+    return false;
   }
 
   const variant = getNested(value, ['metadata', 'variant']);
@@ -269,6 +274,14 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
       const theme = getThemeByIdFromAvailable(themeId);
       if (theme && theme.metadata.variant === variant) {
         return theme;
+      }
+
+      // Устаревший/неизвестный id откатываем на дефолт варианта (synthesis), а не
+      // на первую попавшуюся тему списка.
+      const defaultId = variant === 'dark' ? DEFAULT_DARK_ID : DEFAULT_LIGHT_ID;
+      const defaultForVariant = getThemeByIdFromAvailable(defaultId);
+      if (defaultForVariant && defaultForVariant.metadata.variant === variant) {
+        return defaultForVariant;
       }
 
       const fallback = availableThemes.find((candidate) => candidate.metadata.variant === variant);
@@ -717,7 +730,7 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
         return
       }
 
-      const themeName = theme.metadata.name.toLowerCase().replace(/\s+/g, '-')
+      const themeName = themePrefixFromId(theme.metadata.id)
       const derived = deriveThemeIds(themeName)
 
       setPreferences((prev) => {
@@ -742,7 +755,7 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
         return
       }
 
-      const themeName = theme.metadata.name.toLowerCase().replace(/\s+/g, '-')
+      const themeName = themePrefixFromId(theme.metadata.id)
       const derived = deriveThemeIds(themeName)
 
       setPreferences((prev) => {
