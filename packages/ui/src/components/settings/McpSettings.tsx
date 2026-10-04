@@ -414,7 +414,7 @@ export const McpSettings = () => {
                   className={cn(
                     'p-2 rounded text-sm',
                     testSucceeded
-                      ? 'bg-success/10 text-success'
+                      ? 'bg-status-success/10 text-status-success'
                       : testSucceeded === false
                         ? 'bg-destructive/10 text-destructive'
                         : 'bg-interactive-hover text-muted-foreground',
@@ -457,7 +457,7 @@ export const McpSettings = () => {
                   key={entry.id}
                   data-testid={`mcp-registry-${entry.name}`}
                   className={cn(
-                    'flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors min-w-0',
+                    'flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border bg-background hover:border-primary/50 transition-colors min-w-0',
                     !masterEnabled && 'opacity-50'
                   )}
                 >
@@ -772,7 +772,7 @@ function ServerAvailabilityCard({
   const hasProbed = tools !== undefined
 
   return (
-    <SettingsSection>
+    <SettingsSection className="bg-background">
       <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
         <div className="text-sm font-medium min-w-0 break-words">{name}</div>
         <Button

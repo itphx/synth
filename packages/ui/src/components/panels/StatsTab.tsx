@@ -1198,7 +1198,7 @@ function StatCell({ icon, color, label, value }: { icon: string; color: string; 
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-border bg-interactive p-3">
+    <div className="rounded-lg border border-border bg-card p-3">
       <h4 className="mb-2 text-xs font-medium text-muted-foreground uppercase tracking-wide">
         {title}
       </h4>

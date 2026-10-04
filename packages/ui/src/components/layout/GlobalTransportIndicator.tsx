@@ -15,17 +15,17 @@ export function GlobalTransportIndicator() {
 
   const dotColor =
     transportMode === 'sse'
-      ? 'bg-yellow-400'
+      ? 'bg-status-warning'
       : connected
-        ? 'bg-green-400'
-        : 'bg-red-400'
+        ? 'bg-status-success'
+        : 'bg-status-error'
 
   const labelColor =
     transportMode === 'sse'
-      ? 'text-yellow-400'
+      ? 'text-status-warning'
       : connected
-        ? 'text-green-400'
-        : 'text-red-400'
+        ? 'text-status-success'
+        : 'text-status-error'
 
   const handleClick = () => {
     const idx = MODE_ORDER.indexOf(transportMode)

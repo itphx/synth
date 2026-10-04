@@ -40,8 +40,8 @@ export function HybridStatusIndicator() {
   const tooltip = isOffline
     ? `${t('hybrid.offline')}${backendUrl ? ` — ${backendUrl}` : ''}`
     : `${t('hybrid.connected')}${backendUrl ? ` — ${backendUrl}` : ''}`
-  const dotColor = connected ? 'bg-green-400' : 'bg-red-400'
-  const labelColor = connected ? 'text-green-400' : 'text-red-400'
+  const dotColor = connected ? 'bg-status-success' : 'bg-status-error'
+  const labelColor = connected ? 'text-status-success' : 'text-status-error'
 
   return (
     <button

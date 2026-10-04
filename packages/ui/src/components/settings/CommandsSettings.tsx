@@ -212,7 +212,7 @@ export function CommandsSettings() {
 
         {editor && (
           <div
-            className="space-y-3 rounded-lg border border-border/60 bg-surface-subtle/30 p-3 min-w-0"
+            className="space-y-3 rounded-lg border border-border/60 bg-card p-3 min-w-0"
             data-testid="bundle-form"
           >
             <h4 className="text-sm font-medium text-foreground">

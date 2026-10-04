@@ -153,7 +153,7 @@ export const LoginForm = () => {
       onFocus={handleScreenFocus}
       onBlur={handleScreenBlur}
     >
-      <div className="my-auto w-full max-w-md p-8 rounded-xl border bg-background-secondary">
+      <div className="my-auto w-full max-w-md p-8 rounded-xl border bg-card shadow-xl">
         <div className="flex flex-col items-center gap-4 mb-8">
           <SynthLogo width={80} height={80} className="text-foreground" />
           <h1 className="text-2xl font-bold text-foreground">{t('auth.loginTitle')}</h1>

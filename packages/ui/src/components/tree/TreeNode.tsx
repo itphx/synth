@@ -8,10 +8,10 @@ import type { TreeNodeBase, TreeAction, TreeStatus } from './types'
 const iconSizeMap = { sm: 'h-3.5 w-3.5', md: 'h-4 w-4' } as const
 
 const statusConfig: Record<TreeStatus, { className: string; title: string }> = {
-  streaming: { className: 'bg-syntax-keyword animate-notification-blink', title: '' },
+  streaming: { className: 'bg-status-info animate-notification-blink', title: '' },
   blocked: { className: 'bg-destructive', title: '' },
-  stalled: { className: 'bg-syntax-element animate-notification-blink', title: '' },
-  pending: { className: 'bg-syntax-accent', title: '' },
+  stalled: { className: 'bg-status-warning animate-notification-blink', title: '' },
+  pending: { className: 'bg-muted-foreground', title: '' },
 }
 
 function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVisible: boolean }) {

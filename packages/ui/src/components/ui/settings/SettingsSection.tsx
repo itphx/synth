@@ -22,7 +22,7 @@ export function SettingsSection({
   return (
     <section
       className={cn(
-        'w-full min-w-0 rounded-xl border border-border/60 bg-surface-subtle/30 p-4 space-y-3',
+        'w-full min-w-0 rounded-xl border border-border/60 bg-card p-4 space-y-3',
         className,
       )}
     >

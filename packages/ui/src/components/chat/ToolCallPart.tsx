@@ -205,22 +205,22 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
   const toolDisplayName = getToolDisplayName(toolCall.name)
 
   const headerColor = isError
-    ? 'text-red-400'
+    ? 'text-status-error'
     : isSubagent
-      ? 'text-purple-400'
+      ? 'text-primary'
       : isRunning
         ? ''
         : isDone
           ? ''
           : ''
 
-  const nameColor = isError ? 'text-red-400' : ''
+  const nameColor = isError ? 'text-status-error' : ''
 
   return (
     <div className={nested ? 'mb-1 ml-3' : 'mb-2'}>
-      <div className="rounded-md border border-border/50 overflow-hidden">
+      <div className="rounded-md border border-border bg-muted overflow-hidden">
         <button
-          className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors bg-muted/30"
+          className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => setExpanded(!expanded)}
         >
           <Icon
@@ -248,7 +248,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
           )}
         </button>
         {expanded && (
-          <div className="border-t border-border/50 bg-muted/10">
+          <div className="border-t border-border">
             {hasResult && !isRunning && (
               <div className="flex gap-0 border-b border-border/30">
                 <button
@@ -338,7 +338,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
               )}
               {!isSubagent && viewMode === 'result' && hasResult && !diff && (
                 <pre className={`text-xs whitespace-pre-wrap overflow-x-auto font-mono ${
-                  isError ? 'text-red-400' : 'text-muted-foreground'
+                  isError ? 'text-status-error' : 'text-muted-foreground'
                 }`}>
                   {truncate(localizedResult, 4000)}
                 </pre>

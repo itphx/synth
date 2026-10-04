@@ -60,7 +60,7 @@ export function SkillEditorForm({
 
   return (
     <div
-      className="w-full min-w-0 rounded-xl border border-border/60 bg-surface-subtle/30 p-4 space-y-3"
+      className="w-full min-w-0 rounded-xl border border-border/60 bg-card p-4 space-y-3"
       data-testid="skill-editor-form"
     >
       <h3 className="text-sm font-medium text-foreground break-words">

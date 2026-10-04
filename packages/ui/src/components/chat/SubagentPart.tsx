@@ -143,12 +143,12 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
     : null
 
   return (
-    <div className="mb-2 rounded-md border border-border/50 overflow-hidden">
+    <div className="mb-2 rounded-md border border-border bg-muted overflow-hidden">
       <div
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors bg-muted/30"
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
         onClick={() => setExpanded(!expanded)}
         onKeyDown={handleHeaderKeyDown}
       >
@@ -181,7 +181,7 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
         )}
       </div>
       {expanded && (
-        <div className="p-3 border-t border-border/50 bg-muted/10 space-y-2">
+        <div className="p-3 border-t border-border space-y-2">
           {subagent.prompt && (
             <div>
               <div className="text-[0.625rem] text-muted-foreground/60 mb-1 uppercase tracking-wide">Prompt</div>

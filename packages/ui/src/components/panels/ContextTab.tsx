@@ -335,7 +335,7 @@ function Block({
   pending?: boolean
 }) {
   return (
-    <div className="rounded-lg border border-border p-3">
+    <div className="rounded-lg border border-border bg-card p-3">
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-foreground">{title}</span>
         {onToggle && enabled !== undefined && (
