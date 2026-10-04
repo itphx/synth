@@ -20,9 +20,17 @@
       "authoring": "tools/lib/make_themes.py"
     },
     "validation": {
-      "checks": 22,
+      "checks": 24,
       "fails": [],
-      "paletteMinDeltaE": 18.2,
+      "paletteMinDeltaE": 21.2,
+      "paletteTarget": 20.0,
+      "paletteFloor": 18.0,
+      "paletteAvgS": 0.334,
+      "paletteMaxS": 0.369,
+      "paletteAcid": 0,
+      "surfacesMinDeltaE": 8.3,
+      "surfacesTarget": 8.0,
+      "surfacesAway": false,
       "syntaxMinDeltaE": 19.5,
       "syntaxVsTextMinDeltaE": 22.9,
       "chartsMinDeltaE": 38.8,
@@ -30,7 +38,7 @@
         {
           "a": "comment",
           "b": "operator",
-          "deltaE": 11.8
+          "deltaE": 17.9
         },
         {
           "a": "keyword",
@@ -55,12 +63,12 @@
     "surface": {
       "background": "#101613",
       "foreground": "#DCE5DC",
-      "muted": "#1c221f",
+      "muted": "#323935",
       "mutedForeground": "#9aa89a",
-      "elevated": "#1a201d",
+      "elevated": "#454c47",
       "elevatedForeground": "#DCE5DC",
       "overlay": "#101613cc",
-      "subtle": "#171d1a"
+      "subtle": "#202723"
     },
     "interactive": {
       "border": "#3d443f",
@@ -101,9 +109,9 @@
     },
     "syntax": {
       "base": {
-        "background": "#1a201d",
+        "background": "#323935",
         "foreground": "#DCE5DC",
-        "comment": "#7a8a7a",
+        "comment": "#97a497",
         "keyword": "#A7C957",
         "string": "#52B788",
         "number": "#E0A458",
@@ -113,7 +121,7 @@
         "operator": "#9AA89A"
       },
       "tokens": {
-        "commentDoc": "#7a8a7a",
+        "commentDoc": "#97a497",
         "stringEscape": "#9AA89A",
         "keywordImport": "#A7C957",
         "storageModifier": "#A7C957",
@@ -155,23 +163,23 @@
     "chat": {
       "background": "#101613",
       "userMessage": "#DCE5DC",
-      "userMessageBackground": "#1a201d",
+      "userMessageBackground": "#454c47",
       "assistantMessage": "#DCE5DC",
-      "assistantMessageBackground": "#1c221f",
+      "assistantMessageBackground": "#323935",
       "timestamp": "#9aa89a",
       "divider": "#3d443f",
       "typing": "#9aa89a"
     },
     "loading": {
       "spinner": "#7FB069",
-      "spinnerTrack": "#1c221f",
-      "skeleton": "#1c221f",
-      "shimmer": "#282e2a"
+      "spinnerTrack": "#323935",
+      "skeleton": "#323935",
+      "shimmer": "#3c433f"
     },
     "tools": {
-      "background": "#1c221f",
+      "background": "#323935",
       "border": "#3d443f",
-      "headerHover": "#262c28",
+      "headerHover": "#3a423d",
       "icon": "#7FB069",
       "title": "#DCE5DC",
       "description": "#9aa89a",
@@ -193,7 +201,7 @@
       "link": "#7FB069",
       "linkHover": "#8eb97b",
       "inlineCode": "#52B788",
-      "inlineCodeBackground": "#1c221f",
+      "inlineCodeBackground": "#323935",
       "blockquote": "#9aa89a",
       "blockquoteBorder": "#3d443f",
       "listMarker": "#7fb069bf",
@@ -209,114 +217,114 @@
       {
         "key": "a1",
         "name": "Красный",
-        "hex": "#b86b6b",
-        "foreground": "#000000",
-        "contrast": 5.35
+        "hex": "#ab5353",
+        "foreground": "#ffffff",
+        "contrast": 5.13
       },
       {
         "key": "a2",
-        "name": "Оранжевый",
-        "hex": "#d1b8a8",
+        "name": "Лососевый",
+        "hex": "#b68d81",
         "foreground": "#000000",
-        "contrast": 11.13
+        "contrast": 7.12
       },
       {
         "key": "a3",
-        "name": "Жёлтый",
-        "hex": "#b8a56b",
+        "name": "Янтарный",
+        "hex": "#b09059",
         "foreground": "#000000",
-        "contrast": 8.63
+        "contrast": 6.98
       },
       {
         "key": "a4",
-        "name": "Лаймовый",
-        "hex": "#ccd1a8",
+        "name": "Салатовый",
+        "hex": "#d4d2a3",
         "foreground": "#000000",
-        "contrast": 13.25
+        "contrast": 13.55
       },
       {
         "key": "a5",
-        "name": "Лаймовый 2",
-        "hex": "#91b86b",
+        "name": "Лаймовый",
+        "hex": "#9bc27e",
         "foreground": "#000000",
-        "contrast": 9.27
+        "contrast": 10.41
       },
       {
         "key": "a6",
-        "name": "Зелёный",
-        "hex": "#a0d9ac",
+        "name": "Светло-зелёный",
+        "hex": "#5db15a",
         "foreground": "#000000",
-        "contrast": 13.02
+        "contrast": 7.9
       },
       {
         "key": "a7",
-        "name": "Изумрудный",
-        "hex": "#77ac96",
+        "name": "Зелёный",
+        "hex": "#679f7d",
         "foreground": "#000000",
-        "contrast": 8.13
+        "contrast": 6.83
       },
       {
         "key": "a8",
-        "name": "Бирюзовый",
-        "hex": "#a8d1d0",
+        "name": "Мятный",
+        "hex": "#a2d3c2",
         "foreground": "#000000",
-        "contrast": 12.7
+        "contrast": 12.63
       },
       {
         "key": "a9",
-        "name": "Голубой",
-        "hex": "#6b9eb8",
+        "name": "Бирюзовый",
+        "hex": "#5ba7b0",
         "foreground": "#000000",
-        "contrast": 7.21
+        "contrast": 7.6
       },
       {
         "key": "a10",
-        "name": "Голубой 2",
-        "hex": "#bdc9e5",
+        "name": "Голубой",
+        "hex": "#537dac",
         "foreground": "#000000",
-        "contrast": 12.65
+        "contrast": 4.9
       },
       {
         "key": "a11",
         "name": "Синий",
-        "hex": "#6b7eb8",
+        "hex": "#9eb2d0",
         "foreground": "#000000",
-        "contrast": 5.3
+        "contrast": 9.73
       },
       {
         "key": "a12",
-        "name": "Индиго",
-        "hex": "#baa0d9",
-        "foreground": "#000000",
-        "contrast": 9.12
+        "name": "Васильковый",
+        "hex": "#4d50a7",
+        "foreground": "#ffffff",
+        "contrast": 6.95
       },
       {
         "key": "a13",
-        "name": "Индиго 2",
-        "hex": "#916bb8",
+        "name": "Фиолетовый",
+        "hex": "#9076bb",
         "foreground": "#000000",
-        "contrast": 5.0
+        "contrast": 5.49
       },
       {
         "key": "a14",
-        "name": "Пурпурный",
-        "hex": "#e5bddc",
-        "foreground": "#000000",
-        "contrast": 12.64
+        "name": "Орхидея",
+        "hex": "#ad55a3",
+        "foreground": "#ffffff",
+        "contrast": 4.56
       },
       {
         "key": "a15",
-        "name": "Пурпурный 2",
-        "hex": "#b86ba5",
+        "name": "Пурпурный",
+        "hex": "#d09fc7",
         "foreground": "#000000",
-        "contrast": 5.68
+        "contrast": 9.47
       },
       {
         "key": "a16",
-        "name": "Красный 2",
-        "hex": "#fbf8f8",
-        "foreground": "#000000",
-        "contrast": 19.88
+        "name": "Розовый",
+        "hex": "#a15d7f",
+        "foreground": "#ffffff",
+        "contrast": 4.79
       }
     ]
   }

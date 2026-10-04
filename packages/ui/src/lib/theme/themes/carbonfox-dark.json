@@ -8,22 +8,30 @@
     "variant": "dark",
     "tags": [
       "dark",
-      "ported",
-      "carbonfox"
+      "ported"
     ],
     "source": {
       "file": "carbonfox.json",
       "project": "EdenEast",
       "url": "https://github.com/EdenEast/nightfox.nvim",
       "upstreamFile": "packages/ui/src/theme/themes/carbonfox.json",
-      "license": "MIT"
+      "license": "MIT",
+      "authoring": null
     },
     "validation": {
-      "checks": 22,
+      "checks": 24,
       "fails": [],
-      "paletteMinDeltaE": 22.6,
-      "syntaxMinDeltaE": 10.5,
-      "syntaxVsTextMinDeltaE": 14.2,
+      "paletteMinDeltaE": 25.3,
+      "paletteTarget": 20.0,
+      "paletteFloor": 18.0,
+      "paletteAvgS": 0.461,
+      "paletteMaxS": 0.517,
+      "paletteAcid": 0,
+      "surfacesMinDeltaE": 8.1,
+      "surfacesTarget": 8.0,
+      "surfacesAway": false,
+      "syntaxMinDeltaE": 19.1,
+      "syntaxVsTextMinDeltaE": 4.4,
       "chartsMinDeltaE": 46.5,
       "authorialCollisions": [],
       "modeLabel": "dark",
@@ -43,12 +51,12 @@
     "surface": {
       "background": "#393939",
       "foreground": "#f2f4f8",
-      "muted": "#444444",
-      "mutedForeground": "#b1b3b5",
-      "elevated": "#424243",
-      "elevatedForeground": "#f2f4f8",
+      "muted": "#5f5f60",
+      "mutedForeground": "#d8d9da",
+      "elevated": "#737374",
+      "elevatedForeground": "#f9fafc",
       "overlay": "#393939cc",
-      "subtle": "#3f4040"
+      "subtle": "#4b4c4c"
     },
     "interactive": {
       "border": "#626263",
@@ -82,53 +90,53 @@
     },
     "pr": {
       "open": "#42be65",
-      "draft": "#b1b3b5",
+      "draft": "#d8d9da",
       "blocked": "#f1c21b",
       "merged": "#ff8389",
       "closed": "#ff8389"
     },
     "syntax": {
       "base": {
-        "background": "#424243",
+        "background": "#5f5f60",
         "foreground": "#f2f4f8",
-        "comment": "#afafaf",
-        "keyword": "#c49fff",
-        "string": "#55c574",
-        "number": "#ff8d93",
-        "function": "#82afff",
+        "comment": "#eee3c4",
+        "keyword": "#f7ceff",
+        "string": "#b4e5c2",
+        "number": "#ffd0d2",
+        "function": "#c5daff",
         "variable": "#f2f4f8",
-        "type": "#f1c21b",
-        "operator": "#cbcccd"
+        "type": "#f6d768",
+        "operator": "#ffffff"
       },
       "tokens": {
-        "commentDoc": "#afafaf",
-        "stringEscape": "#cbcccd",
-        "keywordImport": "#c49fff",
-        "storageModifier": "#c49fff",
-        "functionCall": "#82afff",
-        "method": "#82afff",
-        "variableProperty": "#82afff",
+        "commentDoc": "#eee3c4",
+        "stringEscape": "#ffffff",
+        "keywordImport": "#f7ceff",
+        "storageModifier": "#f7ceff",
+        "functionCall": "#c5daff",
+        "method": "#c5daff",
+        "variableProperty": "#c5daff",
         "variableOther": "#f2f4f8",
-        "variableGlobal": "#ff8d93",
-        "variableLocal": "#cbcccd",
+        "variableGlobal": "#ffd0d2",
+        "variableLocal": "#ffffff",
         "parameter": "#f2f4f8",
-        "constant": "#ff8d93",
-        "class": "#f1c21b",
-        "className": "#f1c21b",
-        "interface": "#f1c21b",
-        "struct": "#f1c21b",
-        "enum": "#f1c21b",
-        "typeParameter": "#f1c21b",
-        "namespace": "#f1c21b",
-        "module": "#c49fff",
-        "tag": "#c49fff",
-        "jsxTag": "#c49fff",
-        "tagAttribute": "#82afff",
-        "tagAttributeValue": "#55c574",
-        "boolean": "#ff8d93",
-        "decorator": "#c49fff",
-        "label": "#82afff",
-        "regexp": "#55c574"
+        "constant": "#ffd0d2",
+        "class": "#f6d768",
+        "className": "#f6d768",
+        "interface": "#f6d768",
+        "struct": "#f6d768",
+        "enum": "#f6d768",
+        "typeParameter": "#f6d768",
+        "namespace": "#f6d768",
+        "module": "#f7ceff",
+        "tag": "#f7ceff",
+        "jsxTag": "#f7ceff",
+        "tagAttribute": "#c5daff",
+        "tagAttributeValue": "#b4e5c2",
+        "boolean": "#ffd0d2",
+        "decorator": "#f7ceff",
+        "label": "#c5daff",
+        "regexp": "#b4e5c2"
       }
     },
     "charts": {
@@ -142,27 +150,27 @@
     },
     "chat": {
       "background": "#393939",
-      "userMessage": "#f2f4f8",
-      "userMessageBackground": "#424243",
+      "userMessage": "#f9fafc",
+      "userMessageBackground": "#737374",
       "assistantMessage": "#f2f4f8",
-      "assistantMessageBackground": "#444444",
-      "timestamp": "#b1b3b5",
+      "assistantMessageBackground": "#5f5f60",
+      "timestamp": "#d8d9da",
       "divider": "#626263",
-      "typing": "#b1b3b5"
+      "typing": "#d8d9da"
     },
     "loading": {
       "spinner": "#33b1ff",
-      "spinnerTrack": "#444444",
-      "skeleton": "#444444",
-      "shimmer": "#4e4f4f"
+      "spinnerTrack": "#5f5f60",
+      "skeleton": "#5f5f60",
+      "shimmer": "#686869"
     },
     "tools": {
-      "background": "#444444",
+      "background": "#5f5f60",
       "border": "#626263",
-      "headerHover": "#4d4d4d",
-      "icon": "#33b1ff",
+      "headerHover": "#666668",
+      "icon": "#52bdff",
       "title": "#f2f4f8",
-      "description": "#b1b3b5",
+      "description": "#d8d9da",
       "edit": {
         "added": "#42be65",
         "addedBackground": "#42be6524",
@@ -170,7 +178,7 @@
         "removedBackground": "#ff838924",
         "modified": "#78a9ff",
         "modifiedBackground": "#78a9ff24",
-        "lineNumber": "#b1b3b5"
+        "lineNumber": "#d8d9da"
       }
     },
     "markdown": {
@@ -180,14 +188,14 @@
       "heading4": "#f2f4f8",
       "link": "#33b1ff",
       "linkHover": "#4bbaff",
-      "inlineCode": "#59c677",
-      "inlineCodeBackground": "#444444",
-      "blockquote": "#b1b3b5",
+      "inlineCode": "#b4e5c2",
+      "inlineCodeBackground": "#5f5f60",
+      "blockquote": "#d8d9da",
       "blockquoteBorder": "#626263",
       "listMarker": "#33b1ffbf",
       "bold": "#f2f4f8",
       "italic": "#f2f4f8e6",
-      "strikethrough": "#b1b3b5",
+      "strikethrough": "#d8d9da",
       "hr": "#626263"
     }
   },
@@ -197,114 +205,114 @@
       {
         "key": "a1",
         "name": "Красный",
-        "hex": "#ef3434",
-        "foreground": "#000000",
-        "contrast": 5.21
+        "hex": "#be4541",
+        "foreground": "#ffffff",
+        "contrast": 5.1
       },
       {
         "key": "a2",
-        "name": "Оранжевый",
-        "hex": "#eeb08b",
+        "name": "Лососевый",
+        "hex": "#bd7e5b",
         "foreground": "#000000",
-        "contrast": 11.22
+        "contrast": 6.3
       },
       {
         "key": "a3",
-        "name": "Жёлтый",
-        "hex": "#efc034",
+        "name": "Янтарный",
+        "hex": "#e1c8a5",
         "foreground": "#000000",
-        "contrast": 12.26
+        "contrast": 13.01
       },
       {
         "key": "a4",
-        "name": "Лаймовый",
-        "hex": "#e2ee8b",
+        "name": "Салатовый",
+        "hex": "#c2bd65",
         "foreground": "#000000",
-        "contrast": 16.84
+        "contrast": 10.76
       },
       {
         "key": "a5",
-        "name": "Лаймовый 2",
-        "hex": "#91ef34",
+        "name": "Лаймовый",
+        "hex": "#8ac652",
         "foreground": "#000000",
-        "contrast": 14.6
+        "contrast": 10.28
       },
       {
         "key": "a6",
-        "name": "Зелёный",
-        "hex": "#98ee8b",
+        "name": "Светло-зелёный",
+        "hex": "#b4e3a7",
         "foreground": "#000000",
-        "contrast": 14.94
+        "contrast": 14.49
       },
       {
         "key": "a7",
-        "name": "Зелёный 2",
-        "hex": "#34ef63",
+        "name": "Зелёный",
+        "hex": "#54c57b",
         "foreground": "#000000",
-        "contrast": 13.67
+        "contrast": 9.65
       },
       {
         "key": "a8",
-        "name": "Изумрудный",
-        "hex": "#8beec9",
+        "name": "Мятный",
+        "hex": "#59bb9e",
         "foreground": "#000000",
-        "contrast": 15.17
+        "contrast": 9.03
       },
       {
         "key": "a9",
         "name": "Бирюзовый",
-        "hex": "#34efef",
+        "hex": "#abd7dd",
         "foreground": "#000000",
-        "contrast": 14.74
+        "contrast": 13.5
       },
       {
         "key": "a10",
         "name": "Голубой",
-        "hex": "#8bc9ee",
+        "hex": "#4c9fc1",
         "foreground": "#000000",
-        "contrast": 11.69
+        "contrast": 7.04
       },
       {
         "key": "a11",
-        "name": "Голубой 2",
-        "hex": "#3463ef",
+        "name": "Синий",
+        "hex": "#465fb1",
         "foreground": "#ffffff",
-        "contrast": 5.03
+        "contrast": 5.95
       },
       {
         "key": "a12",
-        "name": "Синий",
-        "hex": "#988bee",
+        "name": "Васильковый",
+        "hex": "#aba6d9",
         "foreground": "#000000",
-        "contrast": 7.26
+        "contrast": 9.19
       },
       {
         "key": "a13",
-        "name": "Индиго",
-        "hex": "#9134ef",
+        "name": "Фиолетовый",
+        "hex": "#8944bb",
         "foreground": "#ffffff",
-        "contrast": 5.33
+        "contrast": 5.82
       },
       {
         "key": "a14",
-        "name": "Фиолетовый",
-        "hex": "#e28bee",
+        "name": "Орхидея",
+        "hex": "#c784cc",
         "foreground": "#000000",
-        "contrast": 9.16
+        "contrast": 7.6
       },
       {
         "key": "a15",
         "name": "Пурпурный",
-        "hex": "#ef34c0",
+        "hex": "#c048a9",
         "foreground": "#000000",
-        "contrast": 5.92
+        "contrast": 4.74
       },
       {
         "key": "a16",
         "name": "Розовый",
-        "hex": "#ee8bb0",
+        "hex": "#dfa2b4",
         "foreground": "#000000",
-        "contrast": 8.96
+        "contrast": 9.96
       }
     ]
   }

@@ -8,22 +8,30 @@
     "variant": "dark",
     "tags": [
       "dark",
-      "ported",
-      "ayu"
+      "ported"
     ],
     "source": {
       "file": "ayu.json",
       "project": "ayu-theme",
       "url": "https://github.com/ayu-theme/ayu-vim",
       "upstreamFile": "packages/ui/src/theme/themes/ayu.json",
-      "license": "Apache-2.0"
+      "license": "Apache-2.0",
+      "authoring": null
     },
     "validation": {
-      "checks": 22,
+      "checks": 24,
       "fails": [],
-      "paletteMinDeltaE": 20.8,
-      "syntaxMinDeltaE": 19.2,
-      "syntaxVsTextMinDeltaE": 27.2,
+      "paletteMinDeltaE": 24.7,
+      "paletteTarget": 20.0,
+      "paletteFloor": 18.0,
+      "paletteAvgS": 0.453,
+      "paletteMaxS": 0.533,
+      "paletteAcid": 0,
+      "surfacesMinDeltaE": 8.0,
+      "surfacesTarget": 8.0,
+      "surfacesAway": false,
+      "syntaxMinDeltaE": 20.9,
+      "syntaxVsTextMinDeltaE": 13.5,
       "chartsMinDeltaE": 32.1,
       "authorialCollisions": [
         {
@@ -49,12 +57,12 @@
     "surface": {
       "background": "#0f1419",
       "foreground": "#d6dae0",
-      "muted": "#1b2025",
-      "mutedForeground": "#90959a",
-      "elevated": "#191e23",
+      "muted": "#32373c",
+      "mutedForeground": "#9b9fa4",
+      "elevated": "#44494f",
       "elevatedForeground": "#d6dae0",
       "overlay": "#0f1419cc",
-      "subtle": "#161b20"
+      "subtle": "#20252a"
     },
     "interactive": {
       "border": "#3b4045",
@@ -88,27 +96,27 @@
     },
     "pr": {
       "open": "#78d05c",
-      "draft": "#90959a",
+      "draft": "#9b9fa4",
       "blocked": "#e4a75c",
       "merged": "#f2856f",
       "closed": "#f58572"
     },
     "syntax": {
       "base": {
-        "background": "#191e23",
+        "background": "#32373c",
         "foreground": "#d6dae0",
-        "comment": "#798796",
+        "comment": "#8fa5bc",
         "keyword": "#ff8f40",
         "string": "#aad94c",
         "number": "#d2a6ff",
         "function": "#39bae6",
         "variable": "#d6dae0",
         "type": "#59c2ff",
-        "operator": "#8d9d8d"
+        "operator": "#b6c0b6"
       },
       "tokens": {
-        "commentDoc": "#798796",
-        "stringEscape": "#8d9d8d",
+        "commentDoc": "#8fa5bc",
+        "stringEscape": "#b6c0b6",
         "keywordImport": "#ff8f40",
         "storageModifier": "#ff8f40",
         "functionCall": "#39bae6",
@@ -116,7 +124,7 @@
         "variableProperty": "#39bae6",
         "variableOther": "#d6dae0",
         "variableGlobal": "#d2a6ff",
-        "variableLocal": "#8d9d8d",
+        "variableLocal": "#b6c0b6",
         "parameter": "#d6dae0",
         "constant": "#d2a6ff",
         "class": "#59c2ff",
@@ -149,26 +157,26 @@
     "chat": {
       "background": "#0f1419",
       "userMessage": "#d6dae0",
-      "userMessageBackground": "#191e23",
+      "userMessageBackground": "#44494f",
       "assistantMessage": "#d6dae0",
-      "assistantMessageBackground": "#1b2025",
-      "timestamp": "#90959a",
+      "assistantMessageBackground": "#32373c",
+      "timestamp": "#9b9fa4",
       "divider": "#3b4045",
-      "typing": "#90959a"
+      "typing": "#9b9fa4"
     },
     "loading": {
       "spinner": "#3fb7e3",
-      "spinnerTrack": "#1b2025",
-      "skeleton": "#1b2025",
-      "shimmer": "#262b30"
+      "spinnerTrack": "#32373c",
+      "skeleton": "#32373c",
+      "shimmer": "#3c4146"
     },
     "tools": {
-      "background": "#1b2025",
+      "background": "#32373c",
       "border": "#3b4045",
-      "headerHover": "#24292e",
+      "headerHover": "#3a3f44",
       "icon": "#3fb7e3",
       "title": "#d6dae0",
-      "description": "#90959a",
+      "description": "#9b9fa4",
       "edit": {
         "added": "#78d05c",
         "addedBackground": "#78d05c24",
@@ -176,7 +184,7 @@
         "removedBackground": "#f5857224",
         "modified": "#66c6f1",
         "modifiedBackground": "#66c6f124",
-        "lineNumber": "#90959a"
+        "lineNumber": "#9b9fa4"
       }
     },
     "markdown": {
@@ -187,13 +195,13 @@
       "link": "#3fb7e3",
       "linkHover": "#56c0e6",
       "inlineCode": "#aad94c",
-      "inlineCodeBackground": "#1b2025",
-      "blockquote": "#90959a",
+      "inlineCodeBackground": "#32373c",
+      "blockquote": "#9b9fa4",
       "blockquoteBorder": "#3b4045",
       "listMarker": "#3fb7e3bf",
       "bold": "#d6dae0",
       "italic": "#d6dae0e6",
-      "strikethrough": "#90959a",
+      "strikethrough": "#9b9fa4",
       "hr": "#3b4045"
     }
   },
@@ -203,114 +211,114 @@
       {
         "key": "a1",
         "name": "Красный",
-        "hex": "#e34040",
-        "foreground": "#000000",
+        "hex": "#be454c",
+        "foreground": "#ffffff",
         "contrast": 5.07
       },
       {
         "key": "a2",
-        "name": "Оранжевый",
-        "hex": "#e8b291",
+        "name": "Лососевый",
+        "hex": "#c07246",
         "foreground": "#000000",
-        "contrast": 11.21
+        "contrast": 5.74
       },
       {
         "key": "a3",
-        "name": "Жёлтый",
-        "hex": "#e3ba40",
+        "name": "Янтарный",
+        "hex": "#d9bfa1",
         "foreground": "#000000",
-        "contrast": 11.36
+        "contrast": 11.92
       },
       {
         "key": "a4",
-        "name": "Лаймовый",
-        "hex": "#dde891",
+        "name": "Салатовый",
+        "hex": "#bcbb5a",
         "foreground": "#000000",
-        "contrast": 16.03
+        "contrast": 10.39
       },
       {
         "key": "a5",
-        "name": "Лаймовый 2",
-        "hex": "#91e340",
+        "name": "Лаймовый",
+        "hex": "#8ac652",
         "foreground": "#000000",
-        "contrast": 13.27
+        "contrast": 10.28
       },
       {
         "key": "a6",
-        "name": "Зелёный",
-        "hex": "#9ce891",
+        "name": "Светло-зелёный",
+        "hex": "#b0dba3",
         "foreground": "#000000",
-        "contrast": 14.37
+        "contrast": 13.51
       },
       {
         "key": "a7",
-        "name": "Зелёный 2",
-        "hex": "#40e368",
+        "name": "Зелёный",
+        "hex": "#54c57b",
         "foreground": "#000000",
-        "contrast": 12.41
+        "contrast": 9.65
       },
       {
         "key": "a8",
-        "name": "Изумрудный",
-        "hex": "#91e8c8",
+        "name": "Мятный",
+        "hex": "#59bb9e",
         "foreground": "#000000",
-        "contrast": 14.58
+        "contrast": 9.03
       },
       {
         "key": "a9",
         "name": "Бирюзовый",
-        "hex": "#40e3e3",
+        "hex": "#a4dadb",
         "foreground": "#000000",
-        "contrast": 13.31
+        "contrast": 13.63
       },
       {
         "key": "a10",
         "name": "Голубой",
-        "hex": "#91c8e8",
+        "hex": "#529ab7",
         "foreground": "#000000",
-        "contrast": 11.63
+        "contrast": 6.66
       },
       {
         "key": "a11",
         "name": "Синий",
-        "hex": "#4068e3",
+        "hex": "#4a73b3",
         "foreground": "#ffffff",
-        "contrast": 4.88
+        "contrast": 4.78
       },
       {
         "key": "a12",
-        "name": "Синий 2",
-        "hex": "#9c91e8",
-        "foreground": "#000000",
-        "contrast": 7.63
+        "name": "Васильковый",
+        "hex": "#3841b8",
+        "foreground": "#ffffff",
+        "contrast": 8.03
       },
       {
         "key": "a13",
-        "name": "Индиго",
-        "hex": "#9140e3",
-        "foreground": "#ffffff",
-        "contrast": 5.19
+        "name": "Фиолетовый",
+        "hex": "#ba9ed6",
+        "foreground": "#000000",
+        "contrast": 8.95
       },
       {
         "key": "a14",
-        "name": "Фиолетовый",
-        "hex": "#dd91e8",
+        "name": "Орхидея",
+        "hex": "#b971cd",
         "foreground": "#000000",
-        "contrast": 9.29
+        "contrast": 6.31
       },
       {
         "key": "a15",
         "name": "Пурпурный",
-        "hex": "#e340ba",
-        "foreground": "#000000",
-        "contrast": 5.71
+        "hex": "#bf4792",
+        "foreground": "#ffffff",
+        "contrast": 4.63
       },
       {
         "key": "a16",
         "name": "Розовый",
-        "hex": "#e891b2",
+        "hex": "#c77895",
         "foreground": "#000000",
-        "contrast": 9.12
+        "contrast": 6.55
       }
     ]
   }
