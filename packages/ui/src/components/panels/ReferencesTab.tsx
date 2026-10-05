@@ -115,11 +115,11 @@ export function ReferencesTab({ sessionId }: ReferencesTabProps) {
           <div
             key={ref.sessionId}
             onClick={() => handleOpen(ref.sessionId)}
-            className="flex items-start gap-2 p-2 rounded-lg border border-border/50 bg-card text-xs group cursor-pointer hover:border-blue-500/30 hover:bg-accent/50 transition-colors"
+            className="flex items-start gap-2 p-2 rounded-lg border border-border/50 bg-card text-xs group cursor-pointer hover:border-status-info/30 hover:bg-accent/50 transition-colors"
           >
             <Icon
               name="link"
-              className="h-3.5 w-3.5 text-blue-500 mt-0.5 shrink-0"
+              className="h-3.5 w-3.5 text-status-info mt-0.5 shrink-0"
             />
             <div className="min-w-0 flex-1">
               <div className="font-medium truncate">{name}</div>

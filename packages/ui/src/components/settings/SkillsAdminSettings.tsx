@@ -477,7 +477,7 @@ function SkillAdminRow({
     <div
       data-testid={`skills-admin-${skill.name}`}
       className={cn(
-        'flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors min-w-0',
+        'flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border bg-surface-inset hover:border-primary/50 transition-colors min-w-0',
         !skill.available && 'opacity-60',
       )}
     >
@@ -612,9 +612,9 @@ function DisabledGroup({
                 key={value}
                 className={cn(
                   'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer min-w-0',
-                  'transition-colors duration-150 ease-out hover:bg-interactive-hover/50',
+                  'transition-colors duration-150 ease-out hover:bg-interactive-hover',
                   'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
-                  !enabled && 'bg-interactive-hover/30',
+                  !enabled && 'bg-interactive-selection',
                 )}
               >
                 <input

@@ -229,7 +229,7 @@ export function SshKeysSettings() {
 
         {editor && (
           <div
-            className="w-full min-w-0 rounded-xl border border-border/60 bg-background/40 p-4 space-y-3"
+            className="w-full min-w-0 rounded-xl border border-border/60 bg-surface-inset p-4 space-y-3"
             data-testid="ssh-key-editor"
           >
             <h4 className="text-sm font-medium text-foreground break-words">
@@ -286,9 +286,9 @@ export function SshKeysSettings() {
                         key={agent.id}
                         className={cn(
                           'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer min-w-0',
-                          'transition-colors duration-150 ease-out hover:bg-interactive-hover/50',
+                          'transition-colors duration-150 ease-out hover:bg-interactive-hover',
                           'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
-                          checked && 'bg-interactive-hover/30',
+                          checked && 'bg-interactive-selection',
                         )}
                       >
                         <input
@@ -345,7 +345,7 @@ export function SshKeysSettings() {
               <div
                 key={key.id}
                 data-testid={`ssh-key-${key.id}`}
-                className="flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors min-w-0"
+                className="flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border bg-surface-inset hover:border-primary/50 transition-colors min-w-0"
               >
                 <div className="flex-1 min-w-0 space-y-1">
                   <div className="flex items-center gap-1.5 flex-wrap min-w-0">

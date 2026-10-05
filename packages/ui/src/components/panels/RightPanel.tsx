@@ -63,7 +63,7 @@ export const RightPanel: React.FC = () => {
           border-r border-sidebar-border last:border-r-0
           flex-1
           ${iconsOnly ? 'min-w-0 px-2' : 'min-w-[4.5rem] px-3'}
-          ${active ? 'bg-primary/15 text-foreground' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'}
+          ${active ? 'bg-card text-foreground' : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'}
         `}
       >
         <Icon name={tab.icon} className="h-4 w-4 shrink-0" />

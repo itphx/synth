@@ -232,9 +232,9 @@ export function SubagentPart({ subagent }: { subagent: SubagentPartData }) {
 
       {/* Внизу блока: статус ретрая / возобновление / ошибка. Видны и у свёрнутого блока. */}
       {retryVisible && (
-        <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-yellow-500/20 bg-yellow-500/5">
-          <Icon name="refresh" className="size-3.5 text-yellow-600 dark:text-yellow-400 shrink-0" />
-          <span className="text-xs text-yellow-700 dark:text-yellow-400">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 border-t border-status-warning/20 bg-status-warning/5">
+          <Icon name="refresh" className="size-3.5 text-status-warning shrink-0" />
+          <span className="text-xs text-status-warning">
             {t('chat.retry.inProgress', {
               current: String(subagentRetry?.attempt ?? 1),
               max: String(subagentRetry?.maxRetries ?? 3),

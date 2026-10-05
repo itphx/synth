@@ -21,6 +21,25 @@ const DEFAULT_CONTEXT_WINDOW = 200_000
 /** Порог предупреждения «контекст близко к лимиту», %. */
 const CONTEXT_NEAR_LIMIT_PCT = 90
 
+/**
+ * Легенда цветов метрик статистики: фиксированный слот палитры темы
+ * (`--palette-N`, `palette.colors`). Одна метрика — один слот во всех секциях,
+ * чтобы подпись и цвет совпадали; хардкод Tailwind-палитры не использовать
+ * (см. `docs/UI-KIT.md`). Слоты подобраны по тону близко к прежним цветам.
+ */
+const METRIC_COLORS = {
+  input: 'var(--palette-11)',
+  output: 'var(--palette-7)',
+  cacheRead: 'var(--palette-3)',
+  cacheWrite: 'var(--palette-13)',
+  reasoning: 'var(--palette-15)',
+  cacheHit: 'var(--palette-9)',
+  speed: 'var(--palette-2)',
+  duration: 'var(--palette-10)',
+  cost: 'var(--palette-5)',
+  subagents: 'var(--palette-8)',
+} as const
+
 function dash(v: number | undefined, format: (v: number) => string): string {
   if (v === undefined) return '\u2014'
   return format(v)
@@ -516,30 +535,30 @@ export const StatsTab: React.FC = () => {
             )}
           </div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-            <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={`${displayTokenPrefix}${fmt(displayInputTokens)}`} />
-            <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={`${displayTokenPrefix}${fmt(displayUsage!.output_tokens)}`} />
-            <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(displayUsage!.cache_read_tokens, fmt)} />
-            <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(displayUsage!.cache_write_tokens, fmt)} />
+            <StatCell icon="arrow-down" color={METRIC_COLORS.input} label={t('rightPanel.stats.inputTokens')} value={`${displayTokenPrefix}${fmt(displayInputTokens)}`} />
+            <StatCell icon="arrow-up" color={METRIC_COLORS.output} label={t('rightPanel.stats.outputTokens')} value={`${displayTokenPrefix}${fmt(displayUsage!.output_tokens)}`} />
+            <StatCell icon="database-2" color={METRIC_COLORS.cacheRead} label={t('rightPanel.stats.cacheReadTokens')} value={dash(displayUsage!.cache_read_tokens, fmt)} />
+            <StatCell icon="server" color={METRIC_COLORS.cacheWrite} label={t('rightPanel.stats.cacheWriteTokens')} value={dash(displayUsage!.cache_write_tokens, fmt)} />
             <div className="col-span-2">
-              <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(displayUsage!.reasoning_tokens, fmt)} />
+              <StatCell icon="brain" color={METRIC_COLORS.reasoning} label={t('rightPanel.stats.reasoningTokens')} value={dash(displayUsage!.reasoning_tokens, fmt)} />
             </div>
             <div className="col-span-2">
               <StatCell
                 icon="line-chart"
-                color="text-teal-400"
+                color={METRIC_COLORS.cacheHit}
                 label={t('rightPanel.stats.cacheHitRate')}
                 value={`${cacheHitPct(displayUsage!.cache_read_tokens, displayInputTokens)}%`}
               />
             </div>
             {displayTps !== undefined && (
-              <StatCell icon="rocket" color="text-orange-400" label={t('rightPanel.stats.speed')} value={formatTps(displayTps)} />
+              <StatCell icon="rocket" color={METRIC_COLORS.speed} label={t('rightPanel.stats.speed')} value={formatTps(displayTps)} />
             )}
             {displayDurationMs !== undefined && (
-              <StatCell icon="time" color="text-sky-400" label={t('rightPanel.stats.duration')} value={formatDuration(displayDurationMs)} />
+              <StatCell icon="time" color={METRIC_COLORS.duration} label={t('rightPanel.stats.duration')} value={formatDuration(displayDurationMs)} />
             )}
             {displayCostUsd !== undefined && (
               <div className="col-span-2">
-                <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCost(displayCostUsd, displayCostCurrency)} />
+                <StatCell icon="bar-chart-2" color={METRIC_COLORS.cost} label={t('rightPanel.stats.cost')} value={formatCost(displayCostUsd, displayCostCurrency)} />
               </div>
             )}
           </div>
@@ -551,12 +570,12 @@ export const StatsTab: React.FC = () => {
                 <span>{t('rightPanel.stats.subagentsTitle')}</span>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                <StatCell icon="chat-new" color="text-cyan-400" label={t('rightPanel.stats.subagentsSessions')} value={fmt(lastSubagents!.sessions)} />
-                <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={formatTokens(lastSubagents!.input_tokens)} />
-                <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={formatTokens(lastSubagents!.output_tokens)} />
-                <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={formatTokens(lastSubagents!.cache_read_tokens)} />
+                <StatCell icon="chat-new" color={METRIC_COLORS.subagents} label={t('rightPanel.stats.subagentsSessions')} value={fmt(lastSubagents!.sessions)} />
+                <StatCell icon="arrow-down" color={METRIC_COLORS.input} label={t('rightPanel.stats.inputTokens')} value={formatTokens(lastSubagents!.input_tokens)} />
+                <StatCell icon="arrow-up" color={METRIC_COLORS.output} label={t('rightPanel.stats.outputTokens')} value={formatTokens(lastSubagents!.output_tokens)} />
+                <StatCell icon="database-2" color={METRIC_COLORS.cacheRead} label={t('rightPanel.stats.cacheReadTokens')} value={formatTokens(lastSubagents!.cache_read_tokens)} />
                 <div className="col-span-2">
-                  <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCostMap(lastSubagents!.cost_by_currency, lastSubagents!.cost_usd)} />
+                  <StatCell icon="bar-chart-2" color={METRIC_COLORS.cost} label={t('rightPanel.stats.cost')} value={formatCostMap(lastSubagents!.cost_by_currency, lastSubagents!.cost_usd)} />
                 </div>
               </div>
               <div className="text-[0.6875rem] text-muted-foreground">
@@ -575,24 +594,24 @@ export const StatsTab: React.FC = () => {
 
       <Section title={t('rightPanel.stats.session')}>
         <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-          <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={fmt(sessionInput)} />
-          <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={fmt(sessionOutput)} />
-          <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(sessionCacheRead, fmt)} />
-          <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(sessionCacheWrite, fmt)} />
+          <StatCell icon="arrow-down" color={METRIC_COLORS.input} label={t('rightPanel.stats.inputTokens')} value={fmt(sessionInput)} />
+          <StatCell icon="arrow-up" color={METRIC_COLORS.output} label={t('rightPanel.stats.outputTokens')} value={fmt(sessionOutput)} />
+          <StatCell icon="database-2" color={METRIC_COLORS.cacheRead} label={t('rightPanel.stats.cacheReadTokens')} value={dash(sessionCacheRead, fmt)} />
+          <StatCell icon="server" color={METRIC_COLORS.cacheWrite} label={t('rightPanel.stats.cacheWriteTokens')} value={dash(sessionCacheWrite, fmt)} />
           <div className="col-span-2">
-            <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(sessionReasoning, fmt)} />
+            <StatCell icon="brain" color={METRIC_COLORS.reasoning} label={t('rightPanel.stats.reasoningTokens')} value={dash(sessionReasoning, fmt)} />
           </div>
           <div className="col-span-2">
             <StatCell
               icon="line-chart"
-              color="text-teal-400"
+              color={METRIC_COLORS.cacheHit}
               label={t('rightPanel.stats.cacheHitRate')}
               value={`${sessionHitPct}%`}
             />
           </div>
           {hasSessionCost && (
             <div className="col-span-2">
-              <StatCell icon="bar-chart-2" color="text-emerald-400" label={t('rightPanel.stats.cost')} value={formatCostMap(sessionCostMap, 0)} />
+              <StatCell icon="bar-chart-2" color={METRIC_COLORS.cost} label={t('rightPanel.stats.cost')} value={formatCostMap(sessionCostMap, 0)} />
             </div>
           )}
           {hasSessionSubagents && (
@@ -631,20 +650,20 @@ export const StatsTab: React.FC = () => {
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
               <StatCell
                 icon="database-2"
-                color="text-amber-400"
+                color={METRIC_COLORS.cacheRead}
                 label={t('rightPanel.stats.promptTotal')}
                 value={`${fmt(promptInfo.manifest.totalChars)}\n~${fmt(promptInfo.manifest.estTokens)}`}
               />
               <StatCell
                 icon="server"
-                color="text-purple-400"
+                color={METRIC_COLORS.cacheWrite}
                 label={t('rightPanel.stats.promptStaticPrefix')}
                 value={fmt(promptInfo.manifest.staticPrefixChars)}
               />
               <div className="col-span-2">
                 <StatCell
                   icon="line-chart"
-                  color="text-teal-400"
+                  color={METRIC_COLORS.cacheHit}
                   label={t('rightPanel.stats.promptCache')}
                   value={promptCacheLabel(promptInfo, t, fmt)}
                 />
@@ -965,20 +984,20 @@ export const StatsTab: React.FC = () => {
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
             <StatCell
               icon="chat-new"
-              color="text-blue-400"
+              color={METRIC_COLORS.input}
               label={t('rightPanel.stats.historyMessages')}
               value={fmt(promptInfo.history.messages.count)}
             />
             <StatCell
               icon="file-text"
-              color="text-amber-400"
+              color={METRIC_COLORS.cacheRead}
               label={t('rightPanel.stats.promptColChars')}
               value={fmt(promptInfo.history.messages.chars)}
             />
             <div className="col-span-2">
               <StatCell
                 icon="line-chart"
-                color="text-teal-400"
+                color={METRIC_COLORS.cacheHit}
                 label={t('rightPanel.stats.promptColTokens')}
                 value={`~${fmt(promptInfo.history.messages.estTokens)}`}
               />
@@ -1168,12 +1187,12 @@ export const StatsTab: React.FC = () => {
       <Section title={t('rightPanel.stats.project')}>
         {projectStats ? (
           <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-            <StatCell icon="arrow-down" color="text-blue-400" label={t('rightPanel.stats.inputTokens')} value={fmt(projectStats.total_input_tokens)} />
-            <StatCell icon="arrow-up" color="text-green-400" label={t('rightPanel.stats.outputTokens')} value={fmt(projectStats.total_output_tokens)} />
-            <StatCell icon="database-2" color="text-amber-400" label={t('rightPanel.stats.cacheReadTokens')} value={dash(projectStats.total_cache_read_tokens, fmt)} />
-            <StatCell icon="server" color="text-purple-400" label={t('rightPanel.stats.cacheWriteTokens')} value={dash(projectStats.total_cache_write_tokens, fmt)} />
+            <StatCell icon="arrow-down" color={METRIC_COLORS.input} label={t('rightPanel.stats.inputTokens')} value={fmt(projectStats.total_input_tokens)} />
+            <StatCell icon="arrow-up" color={METRIC_COLORS.output} label={t('rightPanel.stats.outputTokens')} value={fmt(projectStats.total_output_tokens)} />
+            <StatCell icon="database-2" color={METRIC_COLORS.cacheRead} label={t('rightPanel.stats.cacheReadTokens')} value={dash(projectStats.total_cache_read_tokens, fmt)} />
+            <StatCell icon="server" color={METRIC_COLORS.cacheWrite} label={t('rightPanel.stats.cacheWriteTokens')} value={dash(projectStats.total_cache_write_tokens, fmt)} />
             <div className="col-span-2">
-              <StatCell icon="brain" color="text-pink-400" label={t('rightPanel.stats.reasoningTokens')} value={dash(projectStats.total_reasoning_tokens, fmt)} />
+              <StatCell icon="brain" color={METRIC_COLORS.reasoning} label={t('rightPanel.stats.reasoningTokens')} value={dash(projectStats.total_reasoning_tokens, fmt)} />
             </div>
           </div>
         ) : (
@@ -1186,10 +1205,11 @@ export const StatsTab: React.FC = () => {
   )
 }
 
+/** `color` — значение CSS-цвета метрики (`var(--palette-N)`), не Tailwind-класс. */
 function StatCell({ icon, color, label, value }: { icon: string; color: string; label: string; value: string }) {
   return (
     <div className="flex items-center gap-1.5">
-      <Icon name={icon} className={`size-3 ${color} shrink-0`} />
+      <Icon name={icon} className="size-3 shrink-0" style={{ color }} />
       <span className="whitespace-pre-line text-muted-foreground">{label}</span>
       <span className="ml-auto whitespace-pre-line text-right tabular-nums text-foreground">{value}</span>
     </div>

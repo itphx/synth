@@ -206,9 +206,9 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
       <div className={cn(
         'max-w-[85%] rounded-lg px-4 py-3 text-foreground',
         isSummary
-          ? 'bg-yellow-500/5 border border-yellow-500/20'
+          ? 'bg-status-warning/5 border border-status-warning/20'
           : isDebug
-            ? 'bg-amber-500/5 border border-amber-500/30 text-amber-600 dark:text-amber-400'
+            ? 'bg-status-warning/5 border border-status-warning/30 text-status-warning'
             : 'bg-card border border-border/50 rounded-bl-sm',
       )}>
         <div className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/70 mb-1">
@@ -220,7 +220,7 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
           )}
 
           {isDebug && (
-            <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-amber-600 dark:text-amber-400">
+            <span className="inline-flex items-center gap-1 rounded-sm py-0.5 text-status-warning">
               <Icon name="laptop" className="size-3" />
               <span>Debug</span>
             </span>

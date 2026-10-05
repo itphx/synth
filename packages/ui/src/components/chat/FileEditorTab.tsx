@@ -172,7 +172,7 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
     return (
       <div className="flex flex-1 items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3 text-muted-foreground">
-          <Icon name="alert-triangle" className="size-8 text-red-500" />
+          <Icon name="alert-triangle" className="size-8 text-status-error" />
           <span className="text-sm">{error}</span>
         </div>
       </div>
@@ -211,15 +211,15 @@ export function FileEditorTab({ tab }: FileEditorTabProps) {
   return (
     <div className="flex flex-1 h-full flex-col bg-background">
       {changedOnDisk && (
-        <div className="flex items-center justify-between gap-3 border-b border-amber-500/40 bg-amber-500/10 px-3 py-1.5">
-          <span className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+        <div className="flex items-center justify-between gap-3 border-b border-status-warning/40 bg-status-warning/10 px-3 py-1.5">
+          <span className="flex items-center gap-1.5 text-xs text-status-warning">
             <Icon name="alert-triangle" className="size-3.5 shrink-0" />
             {t('file.changedOnDisk')}
           </span>
           <button
             type="button"
             onClick={() => void loadFromServer()}
-            className="shrink-0 rounded border border-amber-500/50 px-2 py-0.5 text-xs text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+            className="shrink-0 rounded border border-status-warning/50 px-2 py-0.5 text-xs text-status-warning hover:bg-status-warning/15"
           >
             {t('file.reload')}
           </button>

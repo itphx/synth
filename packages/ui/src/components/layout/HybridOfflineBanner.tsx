@@ -16,7 +16,7 @@ export function HybridOfflineBanner() {
   return (
     <div
       role="status"
-      className="flex items-center gap-2 border-b border-amber-500/20 bg-amber-500/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-300"
+      className="flex items-center gap-2 border-b border-status-warning/20 bg-status-warning/10 px-3 py-1 text-xs text-status-warning"
     >
       <Icon name="error-warning" className="size-3.5 shrink-0" />
       <span className="truncate">{t('hybrid.offlineBanner')}</span>

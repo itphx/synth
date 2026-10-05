@@ -137,8 +137,8 @@ function MessageHeaderInner({ message, isSubagent, onOriginClick, processing, me
               title={message.source_msg_id ? `Из сообщения ${message.source_msg_id.slice(0, 8)}...` : undefined}
               onClick={onOriginClick}
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[0.625rem] font-medium cursor-pointer hover:opacity-80 transition-opacity border ${
-                message.origin === 'merged' ? 'bg-blue-500/10 text-blue-600 border-blue-500/20' :
-                'bg-teal-500/10 text-teal-600 border-teal-500/20'
+                message.origin === 'merged' ? 'bg-status-info/10 text-status-info border-status-info/20' :
+                'bg-status-success/10 text-status-success border-status-success/20'
               }`}
             >
               <Icon

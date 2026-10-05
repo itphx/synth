@@ -28,11 +28,11 @@ export function QueuePanel({
   if (pending.length === 0 && !isStalled) return null
 
   const borderClass = isStalled
-    ? 'border-yellow-500/20'
+    ? 'border-status-warning/20'
     : 'border-border/60'
   const bgClass = isStalled
-    ? 'bg-yellow-500/5'
-    : 'bg-surface-subtle/50'
+    ? 'bg-status-warning/5'
+    : 'bg-surface-inset'
 
   return (
     <div className={`shrink-0 mx-auto w-4/5 rounded-lg border ${borderClass} ${bgClass}`}>
@@ -46,11 +46,11 @@ export function QueuePanel({
             className="size-3"
           />
           {isStalled ? (
-            <Icon name="error-warning" className="size-3.5 text-yellow-500 shrink-0" />
+            <Icon name="error-warning" className="size-3.5 text-status-warning shrink-0" />
           ) : (
             <Icon name="time" className="size-3.5 text-foreground shrink-0" />
           )}
-          <span className={isStalled ? 'text-yellow-600 dark:text-yellow-400' : ''}>
+          <span className={isStalled ? 'text-status-warning' : ''}>
             {isStalled
               ? t('chat.queue.stalled', { count: String(pendingCount) })
               : t('chat.queue.pending', { count: String(pending.length) })}
@@ -60,7 +60,7 @@ export function QueuePanel({
           {isStalled && (
             <button
               onClick={onResume}
-              className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-yellow-500/20 text-yellow-700 dark:text-yellow-300 hover:bg-yellow-500/30 transition-colors"
+              className="rounded px-2 py-0.5 text-[0.6875rem] font-medium bg-status-warning/20 text-status-warning hover:bg-status-warning/30 transition-colors"
             >
               {t('chat.queue.resume')}
             </button>
@@ -87,8 +87,8 @@ export function QueuePanel({
               key={i}
               className={`flex items-center gap-2 px-2 py-1 rounded text-xs border group ${
                 isStalled
-                  ? 'bg-yellow-500/10 border-yellow-500/10'
-                  : 'bg-muted/30 border-border/20'
+                  ? 'bg-status-warning/10 border-status-warning/10'
+                  : 'bg-surface-card border-border/20'
               }`}
             >
               <span className="text-muted-foreground shrink-0">

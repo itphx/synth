@@ -90,7 +90,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
         <DropdownMenu.Content
           side="top"
           sideOffset={4}
-          className="w-[min(280px,calc(100vw-2rem))] p-0 flex flex-col bg-popover border border-border rounded-lg shadow-lg z-50"
+          className="w-[min(280px,calc(100vw-2rem))] p-0 flex flex-col bg-popover text-popover-foreground border border-border rounded-lg shadow-lg z-50"
           align="end"
           alignOffset={-40}
           collisionPadding={8}
@@ -122,7 +122,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
                     setOpen(false)
                     setSearchQuery('')
                   }}
-                  className="text-xs flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover/50 data-[highlighted]:bg-interactive-selection outline-none"
+                  className="text-xs flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover data-[highlighted]:bg-interactive-selection outline-none"
                 >
                   <Icon name="arrow-go-back" className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="font-medium">{t('chat.modelControls.resetToDefault')}</span>
@@ -153,7 +153,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
                   className={`text-xs group flex flex-col gap-0.5 px-2 py-1.5 rounded-md outline-none ${
                     disabled
                       ? 'opacity-40 cursor-not-allowed'
-                      : 'cursor-pointer hover:bg-interactive-hover/50 data-[highlighted]:bg-interactive-selection data-[highlighted]:text-foreground'
+                      : 'cursor-pointer hover:bg-interactive-hover data-[highlighted]:bg-interactive-selection data-[highlighted]:text-foreground'
                   }`}
                 >
                   <div className="flex items-center gap-1.5">

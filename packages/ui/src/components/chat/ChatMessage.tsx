@@ -539,11 +539,11 @@ function SessionReferenceCard({
   }
 
   return (
-    <div className="flex flex-col gap-2 p-3 rounded-lg bg-blue-500/5 border border-blue-500/15 text-xs">
+    <div className="flex flex-col gap-2 p-3 rounded-lg bg-status-info/5 border border-status-info/15 text-xs">
       {/* Заголовок с иконкой и названием */}
       <div className="flex items-center gap-2">
-        <Icon name="link" className="h-4 w-4 text-blue-500 shrink-0" />
-        <span className="font-medium text-blue-600 dark:text-blue-400 truncate">
+        <Icon name="link" className="h-4 w-4 text-status-info shrink-0" />
+        <span className="font-medium text-status-info truncate">
           {displayName}
         </span>
         {displayName !== shortId && (
@@ -568,7 +568,7 @@ function SessionReferenceCard({
       <div className="flex gap-2">
         <button
           onClick={handleOpen}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[0.6875rem] font-medium text-blue-600 hover:bg-blue-500/10 transition-colors"
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-[0.6875rem] font-medium text-status-info hover:bg-status-info/10 transition-colors"
         >
           <Icon name="external-link" className="h-3 w-3" />
           Открыть сессию

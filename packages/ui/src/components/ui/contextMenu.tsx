@@ -42,7 +42,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
           sideOffset={sideOffset}
           collisionPadding={8}
           className={cn(
-            'z-50 min-w-[11.25rem] rounded-lg border border-border bg-popover p-1 shadow-lg',
+            'z-50 min-w-[11.25rem] rounded-lg border border-border bg-popover text-popover-foreground p-1 shadow-lg',
           )}
         >
           {items.map((item, index) => {
@@ -69,7 +69,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
                     '[&>svg]:size-3.5',
                     item.destructive
                       ? 'text-status-error hover:bg-status-error/10 focus:bg-status-error/10'
-                      : 'text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground focus:bg-interactive-hover/50 focus:text-foreground',
+                      : 'text-popover-foreground hover:bg-interactive-hover focus:bg-interactive-hover',
                     item.disabled && 'opacity-50 pointer-events-none',
                   )}
                 >

@@ -13,11 +13,11 @@ const CONTROL_CLASS =
   'rounded-md bg-input border border-border px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring'
 
 const TYPE_COLORS: Record<string, string> = {
-  obfuscated: 'bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300',
-  blocked: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-  revealed: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-  rate_limited: 'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300',
-  output_guard: 'bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300',
+  obfuscated: 'bg-status-info/15 text-status-info',
+  blocked: 'bg-status-error/15 text-status-error',
+  revealed: 'bg-status-success/15 text-status-success',
+  rate_limited: 'bg-status-warning/15 text-status-warning',
+  output_guard: 'bg-primary/15 text-primary',
 }
 
 interface AuditFilters {
@@ -247,7 +247,7 @@ export const AuditLogPanel = () => {
       ) : (
         <div className="bg-background rounded-xl border overflow-auto max-h-[60vh]">
           <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 bg-muted/50 text-muted-foreground">
+            <thead className="sticky top-0 bg-muted text-muted-foreground">
               <tr>
                 <th className="px-3 py-2 font-medium whitespace-nowrap">{t('logs.audit.time')}</th>
                 <th className="px-3 py-2 font-medium whitespace-nowrap">{t('logs.audit.type')}</th>

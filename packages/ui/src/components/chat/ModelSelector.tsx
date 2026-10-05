@@ -79,7 +79,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           <DropdownMenu.Content
             side="top"
             sideOffset={4}
-            className="min-w-[12.5rem] p-1 bg-popover border border-border rounded-lg shadow-lg z-50"
+            className="min-w-[12.5rem] p-1 bg-popover text-popover-foreground border border-border rounded-lg shadow-lg z-50"
             align="end"
             collisionPadding={8}
           >
@@ -92,7 +92,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                   setSelectedProvider(m.provider)
                   setSelectedModel(m.name)
                 }}
-                className="text-xs flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover/50 data-[highlighted]:bg-interactive-selection outline-none"
+                className="text-xs flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover data-[highlighted]:bg-interactive-selection outline-none"
               >
                 <ProviderIcon icon={p?.icon ?? ''} baseUrl={p?.url} size={14} className="text-muted-foreground shrink-0" />
                 <span className="font-medium truncate flex-1">{m.name}</span>
@@ -314,7 +314,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
         <DropdownMenu.Content
           side="top"
           sideOffset={4}
-          className="w-[min(380px,calc(100vw-2rem))] p-0 flex flex-col bg-popover border border-border rounded-lg shadow-lg z-50"
+          className="w-[min(380px,calc(100vw-2rem))] p-0 flex flex-col bg-popover text-popover-foreground border border-border rounded-lg shadow-lg z-50"
           align="end"
           alignOffset={-40}
           collisionPadding={8}
@@ -336,7 +336,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                     e.stopPropagation()
                     setSearchQuery('')
                   }}
-                  className="absolute right-[3.125rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover/50 text-muted-foreground hover:text-foreground transition-colors"
+                  className="absolute right-[3.125rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <Icon name="close" className="h-3.5 w-3.5" />
                 </button>
@@ -347,7 +347,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                     e.stopPropagation()
                     virtualizer.scrollToIndex(0, { align: 'start' })
                   }}
-                  className="absolute right-[4.5rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover/50 text-muted-foreground hover:text-foreground transition-colors"
+                  className="absolute right-[4.5rem] top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <Icon name="arrow-up-s" className="h-3.5 w-3.5" />
                 </button>
@@ -358,7 +358,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                   handleRefresh()
                 }}
                 disabled={loading}
-                className="absolute right-7 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover/50 text-muted-foreground hover:text-foreground transition-colors"
+                className="absolute right-7 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
                 title={t('chat.modelControls.refresh')}
               >
                 <Icon name="refresh" className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -373,7 +373,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                     setCollapsedProviders(new Set(groupedByProvider.map((g) => g.provider.name)))
                   }
                 }}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover/50 text-muted-foreground hover:text-foreground transition-colors"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-interactive-hover text-muted-foreground hover:text-foreground transition-colors"
                 title={collapsedProviders.size === groupedByProvider.length ? t('chat.modelControls.expandAll') : t('chat.modelControls.collapseAll')}
               >
                 <Icon
@@ -426,7 +426,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                           key={item.id}
                           style={style}
                           onClick={() => toggleCollapse(item.text)}
-                          className="flex items-center gap-2 px-2 py-1.5 border-b border-border/30 cursor-pointer hover:bg-interactive-hover/50 rounded-none"
+                          className="flex items-center gap-2 px-2 py-1.5 border-b border-border/30 cursor-pointer hover:bg-interactive-hover rounded-none"
                         >
                           <ProviderIcon icon={item.icon} baseUrl={item.providerUrl} size={16} />
                           <span className="font-semibold text-xs text-foreground flex-1">{item.text}</span>
@@ -501,7 +501,7 @@ const VirtualModelRow = memo(function VirtualModelRow({
   return (
     <div
       onClick={onSelect}
-      className="text-xs group flex items-center gap-2 pl-4 pr-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover/50 outline-none"
+      className="text-xs group flex items-center gap-2 pl-4 pr-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover outline-none"
     >
       <ProviderIcon icon={provider.icon || ''} baseUrl={provider.url} size={14} className="text-muted-foreground shrink-0" />
       <span className="font-medium truncate flex-1">{model.name}</span>

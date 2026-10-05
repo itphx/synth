@@ -583,13 +583,13 @@ export function ChatTab({ tab }: ChatTabProps) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden bg-background w-full">
       {summarizationPending && !isSubagent && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-yellow-500/10 border-b border-yellow-500/20">
-          <span className="text-xs text-yellow-600 dark:text-yellow-400 flex-1">
+        <div className="flex items-center gap-2 px-4 py-2 bg-status-warning/10 border-b border-status-warning/20">
+          <span className="text-xs text-status-warning flex-1">
             {t('rightPanel.context.summarizationPendingBanner')}
           </span>
           <button
             onClick={handleSummarizeNow}
-            className="rounded px-2 py-0.5 text-xs font-medium text-yellow-600 hover:bg-yellow-500/10 transition-colors"
+            className="rounded px-2 py-0.5 text-xs font-medium text-status-warning hover:bg-status-warning/10 transition-colors"
           >
             {t('rightPanel.context.summarizeNow')}
           </button>

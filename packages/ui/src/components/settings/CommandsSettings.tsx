@@ -33,9 +33,9 @@ const EMPTY_BUNDLE: BundleEditorState = {
 }
 
 const KIND_BADGE: Record<string, string> = {
-  builtin: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  builtin: 'bg-status-success/15 text-status-success',
   template: 'bg-primary/15 text-primary',
-  skill: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  skill: 'bg-status-warning/15 text-status-warning',
   bundle: 'bg-muted text-muted-foreground',
 }
 
@@ -280,7 +280,7 @@ export function CommandsSettings() {
               <div
                 key={bundle.name}
                 data-testid={`bundle-${bundle.name}`}
-                className="flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors min-w-0"
+                className="flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border bg-surface-inset hover:border-primary/50 transition-colors min-w-0"
               >
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium break-words">{bundle.name}</div>
@@ -337,7 +337,7 @@ function CommandRow({ command }: { command: CommandSummary }) {
     <div
       data-testid={`command-${command.name}`}
       className={cn(
-        'flex flex-wrap items-start gap-2 p-3 rounded-lg border border-border min-w-0',
+        'flex flex-wrap items-start gap-2 p-3 rounded-lg border border-border bg-surface-inset min-w-0',
         !command.available && 'opacity-60',
       )}
     >

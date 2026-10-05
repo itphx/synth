@@ -18,7 +18,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function JsonBlock({ data }: { data: unknown }) {
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
   return (
-    <pre className="bg-muted/30 rounded p-2 overflow-auto max-h-64 text-[0.6875rem] leading-relaxed whitespace-pre-wrap">
+    <pre className="bg-surface-inset rounded p-2 overflow-auto max-h-64 text-[0.6875rem] leading-relaxed whitespace-pre-wrap">
       {text}
     </pre>
   );
@@ -148,7 +148,7 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
           {/* Reasoning */}
           {reasoning && (
             <Section title="Рассуждения (Reasoning)">
-              <div className="whitespace-pre-wrap bg-muted/30 rounded p-2 text-[0.6875rem] max-h-48 overflow-auto">
+              <div className="whitespace-pre-wrap bg-surface-inset rounded p-2 text-[0.6875rem] max-h-48 overflow-auto">
                 {reasoning}
               </div>
             </Section>
@@ -219,9 +219,9 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
               {mcpCalls.map((mc, i) => {
                 const isError = Boolean(mc.is_error)
                 return (
-                <details key={i} className={`border rounded p-2 mb-1 ${isError ? 'border-red-500/40 bg-red-500/5' : 'border-border/20'}`}>
+                <details key={i} className={`border rounded p-2 mb-1 ${isError ? 'border-status-error/40 bg-status-error/5' : 'border-border/20'}`}>
                   <summary className="text-xs font-medium cursor-pointer">
-                    {isError && <span className="text-red-500 mr-1">✗</span>}
+                    {isError && <span className="text-status-error mr-1">✗</span>}
                     {String(mc.tool || `MCP Call #${i}`)}
                   </summary>
                   <div className="mt-1 space-y-1">
@@ -232,7 +232,7 @@ export function DebugModal({ debug, onClose }: DebugModalProps) {
                     {mc.result != null && (
                       <details className="mt-1">
                         <summary className="text-muted-foreground cursor-pointer text-[0.625rem] uppercase">Result</summary>
-                        <div className="whitespace-pre-wrap text-[0.6875rem] bg-muted/30 rounded p-2 max-h-64 overflow-auto">
+                        <div className="whitespace-pre-wrap text-[0.6875rem] bg-surface-inset rounded p-2 max-h-64 overflow-auto">
                           {typeof mc.result === 'string' && mc.result.length > 1000
                             ? mc.result.slice(0, 1000) + '\n...(обрезано)'
                             : String(mc.result)}

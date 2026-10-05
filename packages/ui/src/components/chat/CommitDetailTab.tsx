@@ -60,7 +60,7 @@ export function CommitDetailTab({ tab }: CommitDetailTabProps) {
     return (
       <div className="flex flex-1 items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3 text-muted-foreground">
-          <Icon name="alert-triangle" className="size-8 text-red-500" />
+          <Icon name="alert-triangle" className="size-8 text-status-error" />
           <span className="text-sm">{error || t('errors.notFound.route')}</span>
         </div>
       </div>
@@ -112,16 +112,16 @@ export function CommitDetailTab({ tab }: CommitDetailTabProps) {
             {commit.files.map((f) => (
               <div key={f.path} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <span className={`w-3.5 text-center text-[0.625rem] font-mono ${
-                  f.status === 'added' ? 'text-green-500' :
-                  f.status === 'deleted' ? 'text-red-500' :
-                  f.status === 'renamed' ? 'text-yellow-500' :
+                  f.status === 'added' ? 'text-status-success' :
+                  f.status === 'deleted' ? 'text-status-error' :
+                  f.status === 'renamed' ? 'text-status-warning' :
                   'text-foreground'
                 }`}>
                   {f.status === 'added' ? 'A' : f.status === 'deleted' ? 'D' : f.status === 'renamed' ? 'R' : 'M'}
                 </span>
                 <span className="truncate">{f.path}</span>
-                {f.additions > 0 && <span className="text-[0.625rem] text-green-500">+{f.additions}</span>}
-                {f.deletions > 0 && <span className="text-[0.625rem] text-red-500">-{f.deletions}</span>}
+                {f.additions > 0 && <span className="text-[0.625rem] text-status-success">+{f.additions}</span>}
+                {f.deletions > 0 && <span className="text-[0.625rem] text-status-error">-{f.deletions}</span>}
               </div>
             ))}
           </div>
@@ -136,9 +136,9 @@ export function CommitDetailTab({ tab }: CommitDetailTabProps) {
               <span
                 key={i}
                 className={
-                  line.startsWith('+') && !line.startsWith('+++') ? 'text-green-500' :
-                  line.startsWith('-') && !line.startsWith('---') ? 'text-red-500' :
-                  line.startsWith('@@') ? 'text-blue-400' :
+                  line.startsWith('+') && !line.startsWith('+++') ? 'text-status-success' :
+                  line.startsWith('-') && !line.startsWith('---') ? 'text-status-error' :
+                  line.startsWith('@@') ? 'text-status-info' :
                   ''
                 }
               >

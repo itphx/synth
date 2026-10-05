@@ -34,7 +34,7 @@ export function CurrencyPicker({ value, onChange }: CurrencyPickerProps) {
             type="button"
             onClick={() => onChange(currency)}
             className={cn(
-              'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-interactive-hover/50 hover:text-foreground',
+              'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground',
             )}
           >
             <span className="w-3 text-center">{currencySymbol(currency)}</span>

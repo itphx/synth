@@ -28,7 +28,7 @@ function ContentBlock({ content }: { content: string }) {
 
   return (
     <div className="space-y-1">
-      <pre className="bg-muted/40 rounded-lg p-2 overflow-auto text-[0.6875rem] leading-relaxed font-mono whitespace-pre-wrap break-all text-foreground">
+      <pre className="bg-surface-inset rounded-lg p-2 overflow-auto text-[0.6875rem] leading-relaxed font-mono whitespace-pre-wrap break-all text-foreground">
         {shown}
         {truncated && '…'}
       </pre>

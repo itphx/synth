@@ -24,7 +24,7 @@ function ActionButton({ action, alwaysVisible }: { action: TreeAction; alwaysVis
     ? 'hover:bg-status-error/10 hover:text-status-error'
     : action.variant === 'primary'
       ? 'bg-primary/10 text-primary hover:bg-primary/20'
-      : 'bg-interactive-hover/40 text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
+      : 'bg-interactive text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
 
   const visibilityClass = alwaysVisible
     ? ''

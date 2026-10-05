@@ -4,13 +4,15 @@
  * Вынесены в отдельный модуль для unit-тестов (logFormat.test.ts).
  */
 
+// Семантика уровней — только `status-*` токены: они тематические (light/dark
+// обеспечивает сама тема), поэтому парность `-100/-900`/`dark:` больше не нужна.
 export const LOG_LEVEL_COLORS: Record<string, string> = {
-  DEBUG: 'bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-300',
-  INFO: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
-  WARNING: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
-  ERROR: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
-  OK: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
-  DONE: 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300',
+  DEBUG: 'bg-status-info/15 text-status-info',
+  INFO: 'bg-status-success/15 text-status-success',
+  WARNING: 'bg-status-warning/15 text-status-warning',
+  ERROR: 'bg-status-error/15 text-status-error',
+  OK: 'bg-status-success/15 text-status-success',
+  DONE: 'bg-status-success/15 text-status-success',
 }
 
 export const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'OK', 'DONE'] as const

@@ -380,7 +380,7 @@ function DictionarySection() {
           const categoryKey = DICTIONARY_CATEGORY_LABELS[entry.category] ?? entry.category
           const isEditing = editing?.category === entry.category && editing?.language === entry.language
           return (
-            <div key={key} className="space-y-3 rounded-lg border border-border/60 bg-background/40 p-3 min-w-0">
+            <div key={key} className="space-y-3 rounded-lg border border-border/60 bg-surface-inset p-3 min-w-0">
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="text-sm font-medium text-foreground min-w-0 break-words">{t(categoryKey)}</span>

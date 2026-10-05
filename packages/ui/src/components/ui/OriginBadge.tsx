@@ -25,7 +25,7 @@ export function OriginBadge({
       className={cn(
         'ml-1 inline-flex shrink-0 items-center rounded px-1 py-px text-[0.6rem] font-medium leading-none',
         origin === 'remote'
-          ? 'border border-sky-500/30 bg-sky-500/15 text-sky-500'
+          ? 'border border-status-info/30 bg-status-info/15 text-status-info'
           : 'border border-border bg-interactive text-muted-foreground',
         className,
       )}

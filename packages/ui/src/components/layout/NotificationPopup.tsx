@@ -13,11 +13,11 @@ const STATUS_ICONS: Record<string, string> = {
 }
 
 const STATUS_ICON_CLASSES: Record<string, string> = {
-  info: 'text-blue-400',
-  warning: 'text-yellow-400',
-  error: 'text-red-400',
-  success: 'text-green-400',
-  stream: 'text-blue-400 animate-spin',
+  info: 'text-status-info',
+  warning: 'text-status-warning',
+  error: 'text-status-error',
+  success: 'text-status-success',
+  stream: 'text-primary animate-spin',
 }
 
 const CATEGORY_LABELS: Record<NotifyCategory, string> = {
@@ -30,11 +30,11 @@ const CATEGORY_LABELS: Record<NotifyCategory, string> = {
 }
 
 const CATEGORY_COLORS: Record<NotifyCategory, string> = {
-  connection: 'bg-cyan-500/20 text-cyan-400',
-  streaming: 'bg-purple-500/20 text-purple-400',
-  queue: 'bg-orange-500/20 text-orange-400',
-  message: 'bg-blue-500/20 text-blue-400',
-  error: 'bg-red-500/20 text-red-400',
+  connection: 'bg-status-info/20 text-status-info',
+  streaming: 'bg-primary/20 text-primary',
+  queue: 'bg-status-warning/20 text-status-warning',
+  message: 'bg-status-info/20 text-status-info',
+  error: 'bg-status-error/20 text-status-error',
   system: 'bg-muted text-muted-foreground',
 }
 
@@ -129,7 +129,7 @@ export function NotificationPopup() {
       >
         <Icon name="notification-3" className="h-5 w-5" />
         {unreadCount > 0 && (
-          <span className="absolute top-0.5 right-0 h-3.5 min-w-[0.875rem] rounded-full bg-orange-500 text-[0.5rem] font-medium text-white flex items-center justify-center px-0.5 leading-none pointer-events-none">
+          <span className="absolute top-0.5 right-0 h-3.5 min-w-[0.875rem] rounded-full bg-primary text-[0.5rem] font-medium text-primary-foreground flex items-center justify-center px-0.5 leading-none pointer-events-none">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}

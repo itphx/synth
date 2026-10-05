@@ -469,7 +469,7 @@ export const ModelsPanel = () => {
                     <button
                       onClick={() => handleFetch(group.provider.name)}
                       disabled={fetching !== null}
-                      className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-muted hover:bg-muted/70 disabled:opacity-50 shrink-0"
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-muted hover:bg-interactive-hover disabled:opacity-50 shrink-0"
                     >
                       <Icon
                         name="refresh"
@@ -505,7 +505,7 @@ export const ModelsPanel = () => {
                             return (
                               <div
                                 key={model.id}
-                                className="flex gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-muted/30 text-sm"
+                                className="flex gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-interactive-hover text-sm"
                               >
                                 {/* Название модели + иконка */}
                                 <div className="flex flex-1 min-w-0 items-center gap-2">
@@ -611,7 +611,7 @@ export const ModelsPanel = () => {
                                       'px-2 py-0.5 rounded text-[0.625rem] font-medium transition-colors cursor-pointer',
                                       model.enabled
                                         ? 'bg-status-success/10 text-status-success hover:bg-status-success/20'
-                                        : 'bg-secondary text-muted-foreground hover:bg-secondary/80'
+                                        : 'bg-secondary text-muted-foreground hover:bg-interactive-hover'
                                     )}
                                     title={model.enabled ? t('admin.models.disableModel') : t('admin.models.enableModel')}
                                   >

@@ -10,11 +10,11 @@ import { SettingsPanel, SettingsSection } from '../ui/settings'
 /** Цвета бейджей уровня/scope/trust/доступности (только токены темы). */
 const SCOPE_BADGE: Record<string, string> = {
   instance: 'bg-primary/15 text-primary',
-  project: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  project: 'bg-status-warning/15 text-status-warning',
 }
 
 const LEVEL_BADGE: Record<string, string> = {
-  system: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  system: 'bg-status-success/15 text-status-success',
   project: 'bg-primary/15 text-primary',
   session: 'bg-muted text-muted-foreground',
 }
@@ -112,7 +112,7 @@ export function SkillsUserSettings() {
 
             {!selectedSkill.trusted ? (
               <div
-                className="p-2 rounded-lg bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs"
+                className="p-2 rounded-lg bg-status-warning/10 text-status-warning text-xs"
                 data-testid="skills-untrusted-hint"
               >
                 {t('skills.untrustedHint')}
@@ -125,7 +125,7 @@ export function SkillsUserSettings() {
                   </div>
                   <pre
                     data-testid="skills-user-detail-body"
-                    className="max-h-64 overflow-auto rounded-lg border border-border/60 bg-surface-subtle/40 p-3 text-xs whitespace-pre-wrap break-words"
+                    className="max-h-64 overflow-auto rounded-lg border border-border/60 bg-surface-inset p-3 text-xs whitespace-pre-wrap break-words"
                   >
                     {selectedSkill.body || t('skills.detail.noBody')}
                   </pre>

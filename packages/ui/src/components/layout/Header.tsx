@@ -416,7 +416,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
                       : 'text-muted-foreground opacity-30 cursor-default',
                   )}
                 >
-                  <Icon name="subtract" className="size-3.5 text-amber-400" />
+                  <Icon name="subtract" className="size-3.5 text-status-warning" />
                 </button>
               )}
               {!isSubagentSession && (
@@ -542,10 +542,10 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
             </span>
             <span className={cn(
               'text-xs',
-              editingState === 'saving' && 'text-yellow-500',
-              editingState === 'saved' && 'text-green-500',
-              editingState === 'error' && 'text-red-500',
-              isEditorDirty && 'text-yellow-500',
+              editingState === 'saving' && 'text-status-warning',
+              editingState === 'saved' && 'text-status-success',
+              editingState === 'error' && 'text-status-error',
+              isEditorDirty && 'text-status-warning',
               (!editingState || editingState === 'idle') && 'text-muted-foreground',
             )}>
               {editingState === 'saving' ? t('file.saving')

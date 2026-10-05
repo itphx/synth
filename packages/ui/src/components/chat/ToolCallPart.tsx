@@ -276,7 +276,7 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
                 <button
                   className={`ml-auto px-2 py-1 text-[0.625rem] font-mono transition-colors ${
                     showDebug
-                      ? 'text-amber-400'
+                      ? 'text-status-warning'
                       : 'text-muted-foreground/40 hover:text-muted-foreground'
                   }`}
                   onClick={() => setShowDebug(!showDebug)}
@@ -287,13 +287,13 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
             )}
             {isRunning && (
               <div className="flex items-center gap-0 border-b border-border/30">
-                <div className="px-3 py-1 text-[0.6875rem] font-medium text-blue-400">
+                <div className="px-3 py-1 text-[0.6875rem] font-medium text-status-info">
                   {t('chat.toolCall.arguments')}
                 </div>
                 <button
                   className={`ml-auto px-2 py-1 text-[0.625rem] font-mono transition-colors ${
                     showDebug
-                      ? 'text-amber-400'
+                      ? 'text-status-warning'
                       : 'text-muted-foreground/40 hover:text-muted-foreground'
                   }`}
                   onClick={() => setShowDebug(!showDebug)}
@@ -303,8 +303,8 @@ export function ToolCallPart({ toolCall, nested, secrets, sessionId, children }:
               </div>
             )}
             {showDebug && (
-              <div className="px-3 py-2 border-b border-amber-500/20 bg-amber-500/5">
-                <pre className="text-[0.6875rem] text-amber-600 dark:text-amber-400 whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed">
+              <div className="px-3 py-2 border-b border-status-warning/20 bg-status-warning/5">
+                <pre className="text-[0.6875rem] text-status-warning whitespace-pre-wrap overflow-x-auto font-mono leading-relaxed">
                   {JSON.stringify({
                     name: toolCall.name,
                     args: toolCall.args,

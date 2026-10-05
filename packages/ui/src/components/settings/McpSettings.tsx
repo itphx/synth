@@ -58,11 +58,11 @@ const availabilityEquals = (
 
 const ORIGIN_BADGE: Record<string, string> = {
   instance: 'bg-primary/15 text-primary',
-  user: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  user: 'bg-status-warning/15 text-status-warning',
 }
 
 const TRUST_BADGE: Record<string, string> = {
-  builtin: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  builtin: 'bg-status-success/15 text-status-success',
   community: 'bg-muted text-muted-foreground',
 }
 

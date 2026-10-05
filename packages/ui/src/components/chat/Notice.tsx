@@ -22,11 +22,11 @@ interface NoticeVariantStyle {
 }
 
 const VARIANT_STYLES: Record<NoticeVariant, NoticeVariantStyle> = {
-  command: { icon: 'terminal-box', box: 'bg-muted/30 border-border/40 text-foreground', mono: true },
-  summary: { icon: 'subtract', box: 'bg-yellow-500/5 border-yellow-500/20 text-foreground' },
-  debug: { icon: 'bug', box: 'bg-amber-500/5 border-amber-500/30 text-amber-600 dark:text-amber-400' },
+  command: { icon: 'terminal-box', box: 'bg-surface-inset border-border/40 text-foreground', mono: true },
+  summary: { icon: 'subtract', box: 'bg-status-warning/5 border-status-warning/20 text-foreground' },
+  debug: { icon: 'bug', box: 'bg-status-warning/5 border-status-warning/30 text-status-warning' },
   error: { icon: 'error-warning', box: 'bg-destructive/10 border-destructive/30 text-destructive' },
-  info: { icon: 'information', box: 'bg-muted/30 border-border/30 text-muted-foreground', compact: true },
+  info: { icon: 'information', box: 'bg-surface-inset border-border/30 text-muted-foreground', compact: true },
 }
 
 export interface NoticeProps {

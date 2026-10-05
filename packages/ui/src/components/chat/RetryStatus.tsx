@@ -39,9 +39,9 @@ export function RetryStatus({
   const secondsLeft = useRetryCountdown(retry.retryInMs)
 
   return (
-    <div className={cn('flex flex-wrap items-center gap-2 mt-2 pt-1.5 border-t border-yellow-500/20', className)}>
-      <Icon name="refresh" className="size-3.5 text-yellow-600 dark:text-yellow-400 shrink-0" />
-      <span className="text-xs text-yellow-700 dark:text-yellow-400">
+    <div className={cn('flex flex-wrap items-center gap-2 mt-2 pt-1.5 border-t border-status-warning/20', className)}>
+      <Icon name="refresh" className="size-3.5 text-status-warning shrink-0" />
+      <span className="text-xs text-status-warning">
         {t('chat.retry.inProgress', {
           current: String(retry.attempt),
           max: String(retry.maxRetries),
@@ -52,7 +52,7 @@ export function RetryStatus({
         <button
           onClick={onRetryNow}
           title={t('chat.retry.now')}
-          className="rounded p-1 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-500/10 transition-colors"
+          className="rounded p-1 text-status-warning hover:bg-status-warning/10 transition-colors"
         >
           <Icon name="refresh" className="size-3.5" />
         </button>

@@ -806,7 +806,7 @@ export function SessionSettingsTab() {
         {/* Сессионные одобрения (AD-029) */}
         <Section title={t('sessionSettings.allow.title')}>
           {sessionAllowRules.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border px-3 py-2">
+            <div className="rounded-lg border border-border bg-surface-inset px-3 py-2">
               <div className="text-xs text-muted-foreground">{t('sessionSettings.allow.empty')}</div>
               <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">
                 {t('sessionSettings.allow.hint')}
@@ -1264,15 +1264,15 @@ export function SessionSettingsTab() {
 }
 
 const TODO_STATUS_STYLES: Record<TodoStatus, { labelKey: string; className: string }> = {
-  pending: { labelKey: 'sessionTab.todo.status.pending', className: 'bg-muted/60 text-muted-foreground' },
-  in_progress: { labelKey: 'sessionTab.todo.status.in_progress', className: 'bg-blue-500/15 text-blue-600 dark:text-blue-400' },
-  completed: { labelKey: 'sessionTab.todo.status.completed', className: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' },
+  pending: { labelKey: 'sessionTab.todo.status.pending', className: 'bg-muted text-muted-foreground' },
+  in_progress: { labelKey: 'sessionTab.todo.status.in_progress', className: 'bg-status-info/15 text-status-info' },
+  completed: { labelKey: 'sessionTab.todo.status.completed', className: 'bg-status-success/15 text-status-success' },
   cancelled: { labelKey: 'sessionTab.todo.status.cancelled', className: 'bg-destructive/10 text-destructive line-through' },
 }
 
 const TODO_PRIORITY_STYLES: Record<TodoPriority, { labelKey: string; className: string }> = {
-  high: { labelKey: 'sessionTab.todo.priority.high', className: 'text-red-600 dark:text-red-400' },
-  medium: { labelKey: 'sessionTab.todo.priority.medium', className: 'text-amber-600 dark:text-amber-400' },
+  high: { labelKey: 'sessionTab.todo.priority.high', className: 'text-status-error' },
+  medium: { labelKey: 'sessionTab.todo.priority.medium', className: 'text-status-warning' },
   low: { labelKey: 'sessionTab.todo.priority.low', className: 'text-muted-foreground' },
 }
 
@@ -1281,7 +1281,7 @@ function SessionTodosBlock({ todos }: { todos?: TodoItem[] | null }) {
 
   if (!todos || todos.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-border px-3 py-2">
+      <div className="rounded-lg border border-border bg-surface-inset px-3 py-2">
         <div className="text-xs text-muted-foreground">{t('sessionTab.todos.empty')}</div>
         <div className="mt-0.5 text-[0.625rem] text-muted-foreground/60">{t('sessionTab.todos.hint')}</div>
       </div>

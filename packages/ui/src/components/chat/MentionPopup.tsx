@@ -86,7 +86,7 @@ export function MentionPopup({ query, agents, position, onSelect, onClose }: Men
   return (
     <div
       ref={ref}
-      className="absolute z-50 rounded-lg border border-border bg-popover shadow-lg overflow-hidden"
+      className="absolute z-50 rounded-lg border border-border bg-popover text-popover-foreground shadow-lg overflow-hidden"
       style={{ bottom: POPUP_LIFT, left: position.left, minWidth: '12.5rem' }}
       onMouseDown={(e) => e.stopPropagation()}
     >

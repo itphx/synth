@@ -62,7 +62,7 @@ export function FileViewerTab({ tab }: FileViewerTabProps) {
     return (
       <div className="flex flex-1 items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3 text-muted-foreground">
-          <Icon name="alert-triangle" className="size-8 text-red-500" />
+          <Icon name="alert-triangle" className="size-8 text-status-error" />
           <span className="text-sm">{error}</span>
         </div>
       </div>

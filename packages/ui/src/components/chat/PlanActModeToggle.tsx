@@ -20,19 +20,19 @@ const MODE_OPTIONS: ModeOption[] = [
     mode: 'plan',
     labelKey: 'chat.mode.plan',
     icon: 'todo',
-    activeClass: 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300',
+    activeClass: 'bg-status-warning/15 text-status-warning',
   },
   {
     mode: 'act',
     labelKey: 'chat.mode.act',
     icon: 'rocket',
-    activeClass: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300',
+    activeClass: 'bg-status-success/15 text-status-success',
   },
   {
     mode: 'yolo',
     labelKey: 'chat.mode.yolo',
     icon: 'alert-triangle',
-    activeClass: 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300',
+    activeClass: 'bg-status-error/15 text-status-error',
     hintKey: 'chat.mode.yoloHint',
   },
 ]
@@ -102,7 +102,7 @@ export function PlanActModeToggle({ sessionId }: { sessionId: string }) {
             className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               active
                 ? opt.activeClass
-                : 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover/50'
+                : 'text-muted-foreground hover:text-foreground hover:bg-interactive-hover'
             }`}
           >
             <Icon name={opt.icon} className="size-3 shrink-0" />

@@ -78,8 +78,8 @@ export function SecretPlaceholder({ placeholder, value, sessionId }: SecretPlace
       className={cn(
         'secret-placeholder [font:inherit] cursor-pointer select-none align-baseline transition-colors',
         revealed
-          ? 'text-amber-700 dark:text-amber-300'
-          : 'text-violet-700 hover:text-violet-900 dark:text-violet-300',
+          ? 'text-[color:var(--palette-3)]'
+          : 'text-[color:var(--palette-13)] hover:opacity-80',
       )}
     >
       {revealed ? value : t('gateway.secret.hidden')}
@@ -97,8 +97,8 @@ interface SecretMarkdownProps {
 /** Базовые классы inline-маркера секрета в markdown (наследует шрифт от .markdown-content). */
 const SECRET_PH_BASE_CLASS =
   'synth-secret-ph cursor-pointer select-none [font:inherit] align-baseline transition-colors'
-const SECRET_PH_HIDDEN_CLASS = `${SECRET_PH_BASE_CLASS} text-violet-700 hover:text-violet-900 dark:text-violet-300`
-const SECRET_PH_REVEALED_CLASS = `${SECRET_PH_BASE_CLASS} text-amber-700 dark:text-amber-300`
+const SECRET_PH_HIDDEN_CLASS = `${SECRET_PH_BASE_CLASS} text-[color:var(--palette-13)] hover:opacity-80`
+const SECRET_PH_REVEALED_CLASS = `${SECRET_PH_BASE_CLASS} text-[color:var(--palette-3)]`
 const SECRET_PH_UNAVAILABLE_CLASS = `${SECRET_PH_BASE_CLASS} cursor-default text-muted-foreground`
 
 /**
@@ -160,14 +160,14 @@ export function SecretMarkdown({ content, secrets, sessionId, className = '' }: 
 
     const revealed = el.getAttribute('data-revealed') === '1'
     if (!revealed) {
-      // Раскрытие: «Значение скрыто» → реальное значение, amber, аудит fire-and-forget.
+      // Раскрытие: «Значение скрыто» → реальное значение (слот палитры, «янтарный»), аудит fire-and-forget.
       el.textContent = value
       el.setAttribute('data-revealed', '1')
       el.className = SECRET_PH_REVEALED_CLASS
       el.title = 'Скрыть значение'
       synthApi.auditRevealed(sessionId, placeholder).catch(() => {})
     } else {
-      // Сворачивание: значение → «Значение скрыто», violet.
+      // Сворачивание: значение → «Значение скрыто» (слот палитры, «фиолетовый»).
       el.textContent = t('gateway.secret.hidden')
       el.setAttribute('data-revealed', '0')
       el.className = SECRET_PH_HIDDEN_CLASS

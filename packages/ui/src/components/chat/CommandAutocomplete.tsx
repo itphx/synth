@@ -23,9 +23,9 @@ export interface CommandAutocompleteProps {
 const POPUP_LIFT = 'calc(100% + 17px)'
 
 const KIND_BADGE: Record<string, string> = {
-  builtin: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400',
+  builtin: 'bg-status-success/15 text-status-success',
   template: 'bg-primary/15 text-primary',
-  skill: 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
+  skill: 'bg-status-warning/15 text-status-warning',
   bundle: 'bg-muted text-muted-foreground',
 }
 
@@ -135,18 +135,18 @@ export function CommandAutocomplete({
     <div
       ref={ref}
       data-testid="command-autocomplete"
-      className="absolute z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-lg max-h-[min(24rem,60vh)]"
+      className="absolute z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-lg max-h-[min(24rem,60vh)]"
       style={{ bottom: POPUP_LIFT, left: position.left, width: '32rem', maxWidth: '100%' }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="border-b border-border/50 px-3 py-1.5 text-[0.625rem] uppercase tracking-wide text-muted-foreground/60">
+      <div className="border-b border-border/50 px-3 py-1.5 text-[0.625rem] uppercase tracking-wide text-popover-foreground/60">
         {t('chat.commandAutocomplete.title')}
       </div>
 
       {loading && (commands?.length ?? 0) === 0 ? (
-        <div className="px-3 py-2 text-xs text-muted-foreground">{t('common.loading')}</div>
+        <div className="px-3 py-2 text-xs text-popover-foreground/70">{t('common.loading')}</div>
       ) : filtered.length === 0 ? (
-        <div className="px-3 py-2 text-xs text-muted-foreground" data-testid="command-autocomplete-empty">
+        <div className="px-3 py-2 text-xs text-popover-foreground/70" data-testid="command-autocomplete-empty">
           {t('chat.commandAutocomplete.empty')}
         </div>
       ) : (
@@ -167,7 +167,7 @@ export function CommandAutocomplete({
                 !command.available && 'opacity-60',
               )}
             >
-              <Icon name="terminal-box" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+              <Icon name="terminal-box" className="mt-0.5 size-3.5 shrink-0 text-popover-foreground/70" />
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-1.5 flex-wrap min-w-0">
                   <span className="font-mono text-xs font-medium break-words">/{command.name}</span>
@@ -189,13 +189,13 @@ export function CommandAutocomplete({
                   )}
                 </span>
                 {command.description && (
-                  <span className="mt-0.5 block whitespace-normal break-words text-[0.6875rem] text-muted-foreground">
+                  <span className="mt-0.5 block whitespace-normal break-words text-[0.6875rem] text-popover-foreground/70">
                     {command.description}
                   </span>
                 )}
               </span>
               {command.argumentHint && (
-                <span className="shrink-0 self-center font-mono text-[0.625rem] text-muted-foreground/60">
+                <span className="shrink-0 self-center font-mono text-[0.625rem] text-popover-foreground/60">
                   {command.argumentHint}
                 </span>
               )}
@@ -204,7 +204,7 @@ export function CommandAutocomplete({
         </div>
       )}
 
-      <div className="border-t border-border/50 px-3 py-1 text-[0.625rem] text-muted-foreground/60">
+      <div className="border-t border-border/50 px-3 py-1 text-[0.625rem] text-popover-foreground/60">
         {t('chat.commandAutocomplete.keyboardHint')}
       </div>
     </div>

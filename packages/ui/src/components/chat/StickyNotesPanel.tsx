@@ -16,7 +16,7 @@ export function StickyNotesPanel({ notes, onUpdate, onToggle, onDelete }: Sticky
   if (notes.length === 0) return null
 
   return (
-    <div className="shrink-0 mx-2 mt-2 rounded-lg border border-border/60 bg-surface-subtle/50">
+    <div className="shrink-0 mx-2 mt-2 rounded-lg border border-border/60 bg-surface-inset">
       <div className="flex items-center justify-between px-3 py-1.5">
         <button
           onClick={() => setCollapsed(!collapsed)}
@@ -26,7 +26,7 @@ export function StickyNotesPanel({ notes, onUpdate, onToggle, onDelete }: Sticky
             name={collapsed ? 'arrow-right-s' : 'arrow-down-s'}
             className="size-3"
           />
-          <Icon name="pushpin" className="size-3.5 text-amber-600/70 dark:text-amber-400/70" />
+          <Icon name="pushpin" className="size-3.5 text-status-warning/70" />
           <span>Заметки: {activeNotes.length}</span>
         </button>
       </div>
@@ -86,7 +86,7 @@ function StickyNoteItem({
       className={`flex items-start gap-1.5 rounded px-2 py-1 text-xs group ${
         note.disabled
           ? 'opacity-40'
-          : 'bg-muted/30 border border-border/20'
+          : 'bg-surface-card border border-border/20'
       }`}
     >
       {editing ? (

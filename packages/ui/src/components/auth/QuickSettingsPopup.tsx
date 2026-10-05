@@ -106,7 +106,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1 w-64 rounded-lg border border-border bg-popover shadow-lg z-50">
+        <div className="absolute right-0 top-full mt-1 w-64 rounded-lg border border-border bg-popover text-popover-foreground shadow-lg z-50">
           <div className="px-3 py-2 border-b border-border/30">
             <p className="text-xs font-medium text-foreground">{profile?.display_name || user.username}</p>
             {user.email && (
@@ -182,7 +182,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
               }}
               className={cn(
                 "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
+                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
                 "transition-colors"
               )}
             >
@@ -194,7 +194,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                 onClick={() => toggleFullscreen()}
                 className={cn(
                   "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                  "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
+                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
                   "transition-colors"
                 )}
               >
@@ -209,7 +209,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
               }}
               className={cn(
                 "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
+                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
                 "transition-colors"
               )}
             >
@@ -225,7 +225,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                 }}
                 className={cn(
                   "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                  "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
+                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
                   "transition-colors"
                 )}
               >
@@ -240,7 +240,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
               }}
               className={cn(
                 "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                "text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground",
+                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
                 "transition-colors"
               )}
             >

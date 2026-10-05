@@ -101,7 +101,7 @@ export function McpUserSettings() {
                 key={entry.id}
                 data-testid={`mcp-user-${entry.name}`}
                 className={cn(
-                  'flex flex-wrap items-center gap-3 p-3 rounded-lg border border-border hover:border-primary/50 transition-colors',
+                  'flex flex-wrap items-center gap-3 p-3 rounded-lg border border-border bg-surface-inset hover:border-primary/50 transition-colors',
                   entry.config.enabled === false && 'opacity-50',
                 )}
               >
