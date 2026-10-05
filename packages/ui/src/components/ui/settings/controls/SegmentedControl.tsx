@@ -46,7 +46,7 @@ export const SegmentedControl = <T extends string>({
           disabled={disabled}
           onClick={() => onChange(option.value)}
           className={cn(
-            'rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            'flex-1 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             active
               ? 'bg-interactive-selection text-interactive-selection-foreground'
               : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'

@@ -75,13 +75,13 @@
       "border": "#908aa1",
       "borderHover": "#bdb7ca",
       "borderFocus": "#9b6dff",
-      "selection": "#2d264016",
+      "selection": "#2d264024",
       "selectionForeground": "#2d2640",
       "focus": "#9b6dff59",
       "focusRing": "#9b6dff47",
       "cursor": "#2d2640",
-      "hover": "#2d26400e",
-      "active": "#2d264016"
+      "hover": "#2d264017",
+      "active": "#2d264024"
     },
     "status": {
       "error": "#d22d2d",

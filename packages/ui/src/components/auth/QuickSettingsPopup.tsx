@@ -11,6 +11,7 @@ import { isPwaStandalone } from '@/lib/pwa'
 import { useFullscreen } from '@/hooks/useFullscreen'
 import { UiScaleControl } from '@/components/settings/UiScaleControl'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { SegmentedControl } from '@/components/ui/settings'
 
 interface QuickSettingsPopupProps {
   onSettingsClick: () => void
@@ -73,10 +74,10 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
     setThemeSystemMode(mode)
   }
 
-  const themeOptions: Array<{ value: 'system' | 'light' | 'dark'; label: string; title: string }> = [
-    { value: 'system', label: t('settings.appearance.themeMode.system'), title: t('settings.appearance.themeMode.system') },
-    { value: 'light', label: t('settings.appearance.themeMode.light'), title: t('settings.appearance.themeMode.light') },
-    { value: 'dark', label: t('settings.appearance.themeMode.dark'), title: t('settings.appearance.themeMode.dark') },
+  const themeOptions: Array<{ value: 'system' | 'light' | 'dark'; label: string }> = [
+    { value: 'system', label: t('settings.appearance.themeMode.system') },
+    { value: 'light', label: t('settings.appearance.themeMode.light') },
+    { value: 'dark', label: t('settings.appearance.themeMode.dark') },
   ]
 
   return (
@@ -106,7 +107,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1 w-64 rounded-lg border border-border bg-popover text-popover-foreground shadow-lg z-50">
+        <div className="absolute right-0 top-full mt-1 w-72 rounded-xl border border-border bg-popover text-popover-foreground shadow-xl z-50">
           <div className="px-3 py-2 border-b border-border/30">
             <p className="text-xs font-medium text-foreground">{profile?.display_name || user.username}</p>
             {user.email && (
@@ -117,24 +118,13 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
           <div className="p-3 space-y-3">
             <div>
               <p className="text-xs text-muted-foreground mb-2">{t('settings.appearance.themeMode.label')}</p>
-              <div className="flex gap-1">
-                {themeOptions.map((opt) => (
-                  <button
-                    key={opt.value}
-                    onClick={() => handleThemeModeChange(opt.value)}
-                    title={opt.title}
-                    data-compact
-                    className={cn(
-                      "flex-1 px-2 py-1.5 rounded-md text-base leading-none font-medium transition-colors",
-                      themeMode === opt.value
-                        ? "bg-interactive-selection text-interactive-selection-foreground"
-                        : "bg-interactive-hover text-muted-foreground hover:text-foreground"
-                    )}
-                  >
-                    {opt.value === 'system' ? '●' : opt.value === 'light' ? '◐' : '◑'}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl
+                value={themeMode}
+                options={themeOptions}
+                onChange={handleThemeModeChange}
+                ariaLabel={t('settings.appearance.themeMode.label')}
+                className="w-full"
+              />
             </div>
 
             <div>
@@ -151,23 +141,13 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
                   </SelectContent>
                 </Select>
               ) : (
-                <div className="flex gap-1">
-                  {locales.map((opt) => (
-                    <button
-                      key={opt.value}
-                      onClick={() => handleLocaleChange(opt.value)}
-                      data-compact
-                      className={cn(
-                        "flex-1 px-2 py-1.5 rounded-md text-xs font-medium transition-colors",
-                        uiLocale === opt.value
-                          ? "bg-interactive-selection text-interactive-selection-foreground"
-                          : "bg-interactive-hover text-muted-foreground hover:text-foreground"
-                      )}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
+                <SegmentedControl
+                  value={uiLocale}
+                  options={locales}
+                  onChange={handleLocaleChange}
+                  ariaLabel={t('settings.appearance.language.label')}
+                  className="w-full"
+                />
               )}
             </div>
 
