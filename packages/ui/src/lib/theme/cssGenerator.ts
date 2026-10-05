@@ -78,8 +78,8 @@ export class CSSVariableGenerator {
     vars.push(`  --card: ${theme.colors.surface.elevated} !important;`);
     vars.push(`  --card-foreground: ${theme.colors.surface.elevatedForeground} !important;`);
 
-    vars.push(`  --popover: ${theme.colors.surface.elevated} !important;`);
-    vars.push(`  --popover-foreground: ${theme.colors.surface.elevatedForeground} !important;`);
+    vars.push(`  --popover: ${theme.colors.surface.raised || theme.colors.surface.elevated} !important;`);
+    vars.push(`  --popover-foreground: ${theme.colors.surface.raisedForeground || theme.colors.surface.elevatedForeground} !important;`);
 
     vars.push(`  --border: ${theme.colors.interactive.border} !important;`);
     vars.push(`  --input: ${theme.colors.interactive.border} !important;`);
@@ -209,6 +209,8 @@ const sidebarBaseRgb = hexToRgb(theme.colors.surface.muted);
     vars.push(`  --surface-muted-foreground: ${surface.mutedForeground};`);
     vars.push(`  --surface-elevated: ${surface.elevated};`);
     vars.push(`  --surface-elevated-foreground: ${surface.elevatedForeground};`);
+    vars.push(`  --surface-raised: ${surface.raised || surface.elevated};`);
+    vars.push(`  --surface-raised-foreground: ${surface.raisedForeground || surface.elevatedForeground};`);
     vars.push(`  --surface-overlay: ${surface.overlay};`);
     vars.push(`  --surface-subtle: ${surface.subtle};`);
     return vars;

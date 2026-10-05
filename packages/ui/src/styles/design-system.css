@@ -331,6 +331,14 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --color-surface-subtle: var(--surface-subtle);
 
+  /* Surface role aliases (см. docs/UI-KIT.md). Значения с фоллбеком на статические
+     токены — до применения темы `--surface-*` может быть не задан. */
+  --color-surface-page: var(--surface-background, var(--background));
+  --color-surface-panel: var(--surface-muted, var(--sidebar));
+  --color-surface-card: var(--surface-elevated, var(--card));
+  --color-surface-inset: var(--surface-subtle);
+  --color-surface-menu: var(--surface-raised, var(--popover));
+
   /* Interactive state tokens (Theme.colors.interactive.*) */
   --color-interactive: var(--surface-subtle);
   --color-interactive-hover: var(--interactive-hover);

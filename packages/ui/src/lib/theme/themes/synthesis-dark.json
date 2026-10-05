@@ -20,7 +20,7 @@
       "authoring": "tools/lib/make_themes.py"
     },
     "validation": {
-      "checks": 24,
+      "checks": 34,
       "fails": [],
       "paletteMinDeltaE": 25.0,
       "paletteTarget": 20.0,
@@ -30,10 +30,15 @@
       "paletteAcid": 0,
       "surfacesMinDeltaE": 8.2,
       "surfacesTarget": 8.0,
+      "surfacesRaisedTarget": 10.0,
       "surfacesAway": false,
       "syntaxMinDeltaE": 20.9,
       "syntaxVsTextMinDeltaE": 22.3,
       "chartsMinDeltaE": 31.2,
+      "textSeparationDeltaE": 12.8,
+      "textSeparationTarget": 10.0,
+      "textSeparationFloor": 8.0,
+      "textSeparationTinted": false,
       "authorialCollisions": [],
       "modeLabel": "dark",
       "modeFromLuminance": "dark",
@@ -53,14 +58,16 @@
       "background": "#1C1917",
       "foreground": "#E7E5E4",
       "muted": "#3f3c3a",
-      "mutedForeground": "#ada7a3",
+      "mutedForeground": "#c5c1be",
       "elevated": "#524f4d",
       "elevatedForeground": "#E7E5E4",
+      "raised": "#6a6766",
+      "raisedForeground": "#e9e8e7",
       "overlay": "#1c1917cc",
       "subtle": "#2d2a28"
     },
     "interactive": {
-      "border": "#494644",
+      "border": "#6e6c6a",
       "borderHover": "#555250",
       "borderFocus": "#CA6008",
       "selection": "#e7e5e41f",
@@ -156,7 +163,7 @@
       "assistantMessage": "#E7E5E4",
       "assistantMessageBackground": "#3f3c3a",
       "timestamp": "#ada7a3",
-      "divider": "#494644",
+      "divider": "#6e6c6a",
       "typing": "#ada7a3"
     },
     "loading": {
@@ -167,7 +174,7 @@
     },
     "tools": {
       "background": "#3f3c3a",
-      "border": "#494644",
+      "border": "#6e6c6a",
       "headerHover": "#474442",
       "icon": "#d96709",
       "title": "#E7E5E4",
@@ -192,12 +199,12 @@
       "inlineCode": "#3fb8ad",
       "inlineCodeBackground": "#3f3c3a",
       "blockquote": "#ada7a3",
-      "blockquoteBorder": "#494644",
+      "blockquoteBorder": "#6e6c6a",
       "listMarker": "#cf6208",
       "bold": "#E7E5E4",
       "italic": "#e7e5e4e6",
       "strikethrough": "#ada7a3",
-      "hr": "#494644"
+      "hr": "#6e6c6a"
     }
   },
   "palette": {

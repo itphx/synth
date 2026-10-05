@@ -43,6 +43,10 @@ export interface SurfaceColors {
   mutedForeground: string;
   elevated: string;
   elevatedForeground: string;
+  /** Плавающие слои (меню/поповер). Опционально — фоллбек на `elevated`. */
+  raised?: string;
+  /** Текст на `raised`. Опционально — фоллбек на `elevatedForeground`. */
+  raisedForeground?: string;
   overlay: string;
   subtle: string;
 }

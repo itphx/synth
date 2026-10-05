@@ -20,7 +20,7 @@
       "authoring": "tools/lib/make_themes.py"
     },
     "validation": {
-      "checks": 24,
+      "checks": 34,
       "fails": [],
       "paletteMinDeltaE": 21.0,
       "paletteTarget": 20.0,
@@ -30,10 +30,15 @@
       "paletteAcid": 0,
       "surfacesMinDeltaE": 8.1,
       "surfacesTarget": 8.0,
+      "surfacesRaisedTarget": 10.0,
       "surfacesAway": false,
       "syntaxMinDeltaE": 18.2,
       "syntaxVsTextMinDeltaE": 22.4,
       "chartsMinDeltaE": 28.2,
+      "textSeparationDeltaE": 16.5,
+      "textSeparationTarget": 10.0,
+      "textSeparationFloor": 8.0,
+      "textSeparationTinted": false,
       "authorialCollisions": [
         {
           "a": "comment",
@@ -64,14 +69,16 @@
       "background": "#F4F7F1",
       "foreground": "#1B231C",
       "muted": "#c5c9c2",
-      "mutedForeground": "#4c554c",
+      "mutedForeground": "#3f473f",
       "elevated": "#aeb3ad",
       "elevatedForeground": "#1B231C",
+      "raised": "#939891",
+      "raisedForeground": "#1B231C",
       "overlay": "#f4f7f133",
       "subtle": "#dce0d9"
     },
     "interactive": {
-      "border": "#c7cbc4",
+      "border": "#8c918a",
       "borderHover": "#b7bcb5",
       "borderFocus": "#3F6B4A",
       "selection": "#1b231c16",
@@ -167,7 +174,7 @@
       "assistantMessage": "#1B231C",
       "assistantMessageBackground": "#c5c9c2",
       "timestamp": "#4c554c",
-      "divider": "#c7cbc4",
+      "divider": "#8c918a",
       "typing": "#4c554c"
     },
     "loading": {
@@ -178,7 +185,7 @@
     },
     "tools": {
       "background": "#c5c9c2",
-      "border": "#c7cbc4",
+      "border": "#8c918a",
       "headerHover": "#bcc1ba",
       "icon": "#3F6B4A",
       "title": "#1B231C",
@@ -203,12 +210,12 @@
       "inlineCode": "#195b4b",
       "inlineCodeBackground": "#c5c9c2",
       "blockquote": "#4c554c",
-      "blockquoteBorder": "#c7cbc4",
+      "blockquoteBorder": "#8c918a",
       "listMarker": "#3f6b4abf",
       "bold": "#1B231C",
       "italic": "#1b231ce6",
       "strikethrough": "#4c554c",
-      "hr": "#c7cbc4"
+      "hr": "#8c918a"
     }
   },
   "palette": {

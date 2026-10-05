@@ -19,7 +19,7 @@
       "authoring": null
     },
     "validation": {
-      "checks": 24,
+      "checks": 34,
       "fails": [],
       "paletteMinDeltaE": 25.4,
       "paletteTarget": 20.0,
@@ -29,10 +29,15 @@
       "paletteAcid": 0,
       "surfacesMinDeltaE": 8.1,
       "surfacesTarget": 8.0,
+      "surfacesRaisedTarget": 10.0,
       "surfacesAway": false,
       "syntaxMinDeltaE": 18.9,
       "syntaxVsTextMinDeltaE": 14.2,
       "chartsMinDeltaE": 23.0,
+      "textSeparationDeltaE": 14.1,
+      "textSeparationTarget": 10.0,
+      "textSeparationFloor": 8.0,
+      "textSeparationTinted": false,
       "authorialCollisions": [
         {
           "a": "type",
@@ -58,14 +63,16 @@
       "background": "#1F1F28",
       "foreground": "#DCD7BA",
       "muted": "#424245",
-      "mutedForeground": "#b0afa9",
+      "mutedForeground": "#c8c8c4",
       "elevated": "#555453",
       "elevatedForeground": "#DCD7BA",
+      "raised": "#6d6c66",
+      "raisedForeground": "#f1efe3",
       "overlay": "#1f1f28cc",
       "subtle": "#303036"
     },
     "interactive": {
-      "border": "#494748",
+      "border": "#72716a",
       "borderHover": "#545351",
       "borderFocus": "#7E9CD8",
       "selection": "#dcd7ba1f",
@@ -161,7 +168,7 @@
       "assistantMessage": "#DCD7BA",
       "assistantMessageBackground": "#424245",
       "timestamp": "#b0afa9",
-      "divider": "#494748",
+      "divider": "#72716a",
       "typing": "#b0afa9"
     },
     "loading": {
@@ -172,7 +179,7 @@
     },
     "tools": {
       "background": "#424245",
-      "border": "#494748",
+      "border": "#72716a",
       "headerHover": "#4a494b",
       "icon": "#7E9CD8",
       "title": "#DCD7BA",
@@ -197,12 +204,12 @@
       "inlineCode": "#98BB6C",
       "inlineCodeBackground": "#424245",
       "blockquote": "#b0afa9",
-      "blockquoteBorder": "#494748",
+      "blockquoteBorder": "#72716a",
       "listMarker": "#7e9cd8bf",
       "bold": "#DCD7BA",
       "italic": "#dcd7bae6",
       "strikethrough": "#b0afa9",
-      "hr": "#494748"
+      "hr": "#72716a"
     }
   },
   "palette": {

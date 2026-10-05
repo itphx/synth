@@ -19,7 +19,7 @@
       "authoring": null
     },
     "validation": {
-      "checks": 24,
+      "checks": 34,
       "fails": [],
       "paletteMinDeltaE": 23.8,
       "paletteTarget": 20.0,
@@ -29,10 +29,15 @@
       "paletteAcid": 0,
       "surfacesMinDeltaE": 8.0,
       "surfacesTarget": 8.0,
+      "surfacesRaisedTarget": 10.0,
       "surfacesAway": false,
       "syntaxMinDeltaE": 20.5,
       "syntaxVsTextMinDeltaE": 5.0,
       "chartsMinDeltaE": 32.2,
+      "textSeparationDeltaE": 10.4,
+      "textSeparationTarget": 10.0,
+      "textSeparationFloor": 8.0,
+      "textSeparationTinted": false,
       "authorialCollisions": [
         {
           "a": "type",
@@ -56,16 +61,18 @@
     },
     "surface": {
       "background": "#F2E9DE",
-      "foreground": "#54433A",
+      "foreground": "#2f2520",
       "muted": "#c7bbb0",
-      "mutedForeground": "#504942",
+      "mutedForeground": "#423c36",
       "elevated": "#b2a59b",
       "elevatedForeground": "#483932",
+      "raised": "#988a80",
+      "raisedForeground": "#2d241f",
       "overlay": "#f2e9de33",
       "subtle": "#ddd2c8"
     },
     "interactive": {
-      "border": "#cbbcae",
+      "border": "#93847a",
       "borderHover": "#c4b8ad",
       "borderFocus": "#2D4F67",
       "selection": "#54433a16",
@@ -161,7 +168,7 @@
       "assistantMessage": "#54433A",
       "assistantMessageBackground": "#c7bbb0",
       "timestamp": "#504942",
-      "divider": "#cbbcae",
+      "divider": "#93847a",
       "typing": "#504942"
     },
     "loading": {
@@ -172,7 +179,7 @@
     },
     "tools": {
       "background": "#c7bbb0",
-      "border": "#cbbcae",
+      "border": "#93847a",
       "headerHover": "#c1b5aa",
       "icon": "#2D4F67",
       "title": "#54433A",
@@ -197,12 +204,12 @@
       "inlineCode": "#3f5326",
       "inlineCodeBackground": "#c7bbb0",
       "blockquote": "#504942",
-      "blockquoteBorder": "#cbbcae",
+      "blockquoteBorder": "#93847a",
       "listMarker": "#2d4f67bf",
       "bold": "#54433A",
       "italic": "#54433ae6",
       "strikethrough": "#504942",
-      "hr": "#cbbcae"
+      "hr": "#93847a"
     }
   },
   "palette": {
