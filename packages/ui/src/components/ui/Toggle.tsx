@@ -23,11 +23,13 @@ export function Toggle({ enabled, onToggle, ariaLabel, disabled = false, pending
       className={cn(
         'inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40 disabled:cursor-default',
         disabled ? 'cursor-default' : pending ? 'cursor-progress opacity-60' : 'cursor-pointer',
-        enabled ? 'bg-primary' : 'bg-muted-foreground/20',
+        // off-трек: сплошной muted-foreground — гарантированно ≥3:1 к background/muted/elevated
+        // во всех 62 темах (WCAG 1.4.11 для границы контрола).
+        enabled ? 'bg-primary' : 'bg-muted-foreground',
       )}
     >
       <span
-        className={`block h-3.5 w-3.5 rounded-full bg-card shadow-sm transition-transform ${
+        className={`block h-3.5 w-3.5 rounded-full bg-background shadow-sm transition-transform ${
           enabled ? 'translate-x-[1.1875rem]' : 'translate-x-[0.1875rem]'
         }`}
       />

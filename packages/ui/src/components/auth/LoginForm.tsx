@@ -153,9 +153,18 @@ export const LoginForm = () => {
       onFocus={handleScreenFocus}
       onBlur={handleScreenBlur}
     >
-      <div className="my-auto w-full max-w-md p-8 rounded-xl border bg-card shadow-xl">
+      <div className="relative my-auto w-full max-w-md p-8 rounded-2xl border border-border/60 bg-card shadow-2xl">
+        {/* Тонкая акцентная линия сверху карточки — цвет акцента темы */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 rounded-t-2xl bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
         <div className="flex flex-col items-center gap-4 mb-8">
-          <SynthLogo width={80} height={80} className="text-foreground" />
+          <div className="relative isolate">
+            {/* Мягкое свечение за логотипом; не перекрывает контент */}
+            <div
+              className="pointer-events-none absolute inset-0 -z-10 rounded-full bg-primary/20 blur-2xl"
+              aria-hidden="true"
+            />
+            <SynthLogo variant="brand" width={88} height={88} />
+          </div>
           <h1 className="text-2xl font-bold text-foreground">{t('auth.loginTitle')}</h1>
           <p className="text-sm text-muted-foreground text-center">
             {oidcEnabled ? t('auth.loginSubtitleOidc') : t('auth.loginSubtitle')}
@@ -349,8 +358,9 @@ export const LoginForm = () => {
                 : !apiKey || (debugMode && !username))
             }
             className={cn(
-              "w-full px-4 py-2.5 rounded-lg font-medium text-foreground",
-              "bg-interactive-selection hover:bg-interactive-selection/90",
+              "w-full px-4 py-2.5 rounded-lg font-medium text-primary-foreground",
+              "bg-primary hover:bg-primary/90",
+              "shadow-lg shadow-primary/25",
               "disabled:opacity-50 disabled:cursor-not-allowed",
               "transition-colors"
             )}

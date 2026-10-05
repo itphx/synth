@@ -47,6 +47,18 @@ describe('Toggle', () => {
     expect(onToggle).toHaveBeenCalledTimes(1)
   })
 
+  it('фон трека: on — bg-primary, off — сплошной bg-muted-foreground; кружок — bg-background', async () => {
+    const on = await renderToggle({ enabled: true, onToggle: vi.fn(), ariaLabel: 'on' })
+    expect(on.classList.contains('bg-primary')).toBe(true)
+    expect(on.classList.contains('bg-muted-foreground')).toBe(false)
+    expect(on.querySelector('span')?.classList.contains('bg-background')).toBe(true)
+
+    const off = await renderToggle({ enabled: false, onToggle: vi.fn(), ariaLabel: 'off' })
+    expect(off.classList.contains('bg-muted-foreground')).toBe(true)
+    expect(off.classList.contains('bg-foreground/30')).toBe(false)
+    expect(off.querySelector('span')?.classList.contains('bg-background')).toBe(true)
+  })
+
   it('pending: не disabled, aria-busy=true, курсор занятости (не «запрет»)', async () => {
     const onToggle = vi.fn()
     const el = await renderToggle({ enabled: true, onToggle, ariaLabel: 'x', pending: true })
