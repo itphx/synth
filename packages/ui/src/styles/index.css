@@ -204,6 +204,9 @@ html.device-phone .login-screen,
 html.device-tablet .login-screen {
   align-items: flex-start;
   padding-top: max(1.5rem, env(safe-area-inset-top));
+  /* Небольшой боковой зазор, чтобы карточка входа не касалась краёв экрана;
+     safe-area учитывает вырез/скругления в горизонтальной ориентации. */
+  padding-inline: max(1rem, env(safe-area-inset-left)) max(1rem, env(safe-area-inset-right));
 }
 
 /* Пока поле в фокусе — резервируем нижнюю половину экрана (клавиатура любой высоты). */

@@ -60,7 +60,10 @@ function SelectContent({
 }: React.ComponentProps<typeof BaseSelect.Popup>) {
   return (
     <BaseSelect.Portal>
-      <BaseSelect.Positioner sideOffset={4} collisionPadding={8} className="z-[120]">
+      {/* iOS-режим «пункт выравнивается по триггеру» (`alignItemWithTrigger`) — проп
+          именно `Positioner`, не `Root`. Выключаем везде, чтобы был обычный компактный
+          дропдаун; на тач-вводе Base UI и так его не включает (`openMethod === 'touch'`). */}
+      <BaseSelect.Positioner sideOffset={4} collisionPadding={8} alignItemWithTrigger={false} className="z-[120]">
         <BaseSelect.Popup
           data-slot="select-content"
           className={cn(

@@ -129,11 +129,15 @@
 
 **Скроллируемый контент в попапе `SelectContent`.** У `BaseSelect.Popup`
 (`components/ui/select.tsx`) обязателен `overflow-y-auto overscroll-contain`
-вместо `overflow-hidden`: `SelectPositioner` включает iOS-режим с inline
+вместо `overflow-hidden`: `SelectPositioner` по умолчанию включает iOS-режим с inline
 `overflow: hidden auto; height: 100%` только при открытии мышью, а при
 открытии тапом (`openMethod === 'touch'`) — нет. Без своей прокрутки длинный
 список на телефоне обрезается `max-h-60` и не скроллится пальцем. `rounded-xl`
 при этом продолжает обрезать контент, так что скругления не страдают.
+
+iOS-режим (`alignItemWithTrigger`) в китовом `Select` **выключен**
+(`alignItemWithTrigger={false}` на `SelectPositioner`) для единообразного
+компактного дропдауна на всех устройствах и способах открытия.
 
 Карточка входа (`components/auth/LoginForm.tsx`) следует рецепту
 плавающего слоя, но на поверхности **card** (`bg-card`): `rounded-xl` +
