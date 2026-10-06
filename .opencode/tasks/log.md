@@ -1759,3 +1759,13 @@
 - **Решения AD-084:** ввести класс decision-моделей (отдельный `DecisionProvider`/адаптер, не chat-провайдер) и использовать в «Быстрых ответах»/маршрутизации: **Clef-Flash** — быстрый слой вместо/рядом с `micro_llm` в каскаде AD-035 (`rules → embedding → Clef-Flash → [Clef] → LLM fallback`), **Clef** — на эскалацию и мультимодальность; chat-LLM остаётся для генерации/рассуждений. Все вызовы — через `GatewayProvider` (AD-036, инвариант 3); конфиг в `shared` (локальный инференс vs Workers AI, AD-023); отдельный decision-классификатор для стратегии `content` AD-034. Безопасность: `state` может содержать пользовательский контент → для managed/чувствительных данных локальный инференс по умолчанию, remote — только по политике (AD-073/AD-080/AD-081), `state` с секретами в аудит не логировать. Метрики — расширение `DebugCollector` (`decision.*`). Данные бенчмарков помечены как заявленные Cloudflare и требующие проверки на задачах Synth.
 - **Изменённые файлы:** `docs/arch_decisions/ad-084-decision-models-clef.md` (новый), `docs/arch_decisions/README.md`, `AGENTS.md`.
 - **Коммит:** нет (по правилу «коммит только по просьбе пользователя»).
+
+## 2026-10-06 — Бамп 0.8.9 → 0.8.10 и выкат на test — PASS
+- **Задача:** «Бампни версию, залей в test».
+- **Тип:** release / deploy · **Исполнитель:** @orchestrator → @devops (образы/Fleet) · **Результат:** PASS.
+- **Коммиты (synth, master; в origin не пушились — test-деплой этого не требует):** `1ee9f64` docs: AD-084 + индекс и лог; `43c1f7a` chore: bump version to v0.8.10.
+- **Bump:** `./scripts/version-bump.sh patch` (version.ts + 6 package.json + charts/synth/Chart.yaml), хардкода старой версии нет.
+- **Образы (из исходников монорепо):** `git.itphx.ru/itphx/synth-backend:0.8.10` digest `sha256:4301e0079011…480a7b1`; `git.itphx.ru/itphx/synth-ui:0.8.10` digest `sha256:99b0abf89b9e…e455e6f5e1`; собраны через `docker/Dockerfile.backend` / `Dockerfile.ui`, запушены в Gitea `git.itphx.ru`.
+- **synth-deploy:** коммит `aa65cc9` («release: bump synth-ui/backend images to v0.8.10»), push `22b4079..aa65cc9 main`; изменены только `backend.image.tag` и `ui.image.tag`.
+- **Test (независимая проверка оркестратора):** GitRepo `synth` на `aa65cc9`; поды `synth-backend`/`synth-ui` 1/1 Running на `:0.8.10`; `GET /` → 200; `/api/v2/health` → `{"status":"healthy","version":"0.8.10"}`; `/sw.js` → маркер `synth-shell-0.8.10`.
+- **Замечания:** Fleet применяет чарт с задержкой ~30–40 c после обновления commit — проверять `spec.template…image` деплойментов, а не только GitRepo; транзиентный `Pending termination` старых подов. Синхронизация изменений в origin/master репозитория `synth` — отдельным решением (не требуется для test-деплоя).
