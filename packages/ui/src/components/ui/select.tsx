@@ -25,7 +25,10 @@ function SelectTrigger({
   size = "default",
   children,
   ...props
-}: React.ComponentProps<typeof BaseSelect.Trigger> & { size?: "sm" | "default" | "lg" }) {
+}: React.ComponentProps<typeof BaseSelect.Trigger> & {
+  /** `none` — без фиксированной высоты/паддингов, размер задаёт вызывающий через `className`. */
+  size?: "sm" | "default" | "lg" | "none"
+}) {
   return (
     <BaseSelect.Trigger
       data-slot="select-trigger"

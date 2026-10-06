@@ -161,7 +161,7 @@ describe('LoginForm: атрибуты полей для автозаполнен
     expect(host.querySelector('#synth-login-username')).toBeNull()
   })
 
-  it('debug-режим: select выбора пользователя размечен id/name и связан с label', async () => {
+  it('debug-режим: триггер выбора пользователя размечен id и связан с label', async () => {
     authState.oidcEnabled = false
     authState.debugMode = true
     authState.deployment = 'managed'
@@ -171,10 +171,10 @@ describe('LoginForm: атрибуты полей для автозаполнен
 
     const host = await renderLoginForm()
 
-    const select = host.querySelector('#synth-login-username')
-    expect(select).toBeTruthy()
-    expect(select!.tagName).toBe('SELECT')
-    expect(select!.getAttribute('name')).toBe('username')
-    expect(getLabel(host, 'synth-login-username').htmlFor).toBe(select!.id)
+    // Нативный <select> заменён китовым Base UI Select: триггер — кнопка с ролью combobox.
+    const trigger = host.querySelector('#synth-login-username')
+    expect(trigger).toBeTruthy()
+    expect(trigger!.getAttribute('role')).toBe('combobox')
+    expect(getLabel(host, 'synth-login-username').htmlFor).toBe(trigger!.id)
   })
 })

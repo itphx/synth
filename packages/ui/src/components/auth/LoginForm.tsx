@@ -5,6 +5,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
 import { SynthLogo } from '@/components/ui'
 import { Icon } from '@/components/icon/Icon'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
 interface DebugUser {
@@ -281,31 +282,24 @@ export const LoginForm = () => {
                     {t('auth.username')}
                   </label>
                   {debugUsers.length > 0 ? (
-                    <div className="relative w-full">
-                      <select
+                    <Select value={username} onValueChange={setUsername}>
+                      <SelectTrigger
                         id="synth-login-username"
-                        name="username"
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        className={cn(
-                          "w-full appearance-none cursor-pointer px-4 py-2.5 pr-10 rounded-lg border bg-background text-foreground",
-                          "focus:outline-none focus:ring-2 focus:ring-ring",
-                          "transition-colors"
-                        )}
+                        size="none"
+                        className="w-full rounded-lg border bg-background px-4 py-2.5 pr-4 text-base text-foreground"
                       >
-                        <option value="">{t('auth.selectUser')}</option>
+                        <span className="truncate flex-1 text-left">
+                          {username || t('auth.selectUser')}
+                        </span>
+                        <Icon name="arrow-down-s" className="size-4 shrink-0 opacity-50" aria-hidden="true" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">{t('auth.selectUser')}</SelectItem>
                         {debugUsers.map((u) => (
-                          <option key={u.id} value={u.username}>
-                            {u.username}
-                          </option>
+                          <SelectItem key={u.id} value={u.username}>{u.username}</SelectItem>
                         ))}
-                      </select>
-                      <Icon
-                        name="arrow-down-s"
-                        className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                        aria-hidden="true"
-                      />
-                    </div>
+                      </SelectContent>
+                    </Select>
                   ) : (
                     <input
                       id="synth-login-username"
