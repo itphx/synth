@@ -64,7 +64,7 @@ function SelectContent({
         <BaseSelect.Popup
           data-slot="select-content"
           className={cn(
-            "z-[120] max-h-60 min-w-[8rem] overflow-hidden rounded-xl bg-popover text-popover-foreground p-1 ring-1 ring-foreground/10 shadow-lg",
+            "z-[120] max-h-60 min-w-[8rem] overflow-y-auto overscroll-contain rounded-xl bg-popover text-popover-foreground p-1 ring-1 ring-foreground/10 shadow-lg",
             "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
             className
           )}

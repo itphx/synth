@@ -127,6 +127,14 @@
 | Радиусы | концентрические: контейнер `rounded-xl` + `p-1`, пункты внутри `rounded-lg` (разница радиусов = паддинг контейнера) |
 | Разделители | компонент `Divider` (`components/ui/Divider.tsx`): в плавающем слое `tone="raised"` + `inset` (линия не касается краёв), на обычных поверхностях `tone="default"` (= `bg-border`) |
 
+**Скроллируемый контент в попапе `SelectContent`.** У `BaseSelect.Popup`
+(`components/ui/select.tsx`) обязателен `overflow-y-auto overscroll-contain`
+вместо `overflow-hidden`: `SelectPositioner` включает iOS-режим с inline
+`overflow: hidden auto; height: 100%` только при открытии мышью, а при
+открытии тапом (`openMethod === 'touch'`) — нет. Без своей прокрутки длинный
+список на телефоне обрезается `max-h-60` и не скроллится пальцем. `rounded-xl`
+при этом продолжает обрезать контент, так что скругления не страдают.
+
 Карточка входа (`components/auth/LoginForm.tsx`) следует рецепту
 плавающего слоя, но на поверхности **card** (`bg-card`): `rounded-xl` +
 `ring-1 ring-foreground/10` + `shadow-xl`; внутренние поля — `rounded-lg`
