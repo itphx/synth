@@ -281,24 +281,31 @@ export const LoginForm = () => {
                     {t('auth.username')}
                   </label>
                   {debugUsers.length > 0 ? (
-                    <select
-                      id="synth-login-username"
-                      name="username"
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      className={cn(
-                        "w-full px-4 py-2.5 rounded-lg border bg-background text-foreground",
-                        "focus:outline-none focus:ring-2 focus:ring-ring",
-                        "transition-colors"
-                      )}
-                    >
-                      <option value="">{t('auth.selectUser')}</option>
-                      {debugUsers.map((u) => (
-                        <option key={u.id} value={u.username}>
-                          {u.username}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative w-full">
+                      <select
+                        id="synth-login-username"
+                        name="username"
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                        className={cn(
+                          "w-full appearance-none cursor-pointer px-4 py-2.5 pr-10 rounded-lg border bg-background text-foreground",
+                          "focus:outline-none focus:ring-2 focus:ring-ring",
+                          "transition-colors"
+                        )}
+                      >
+                        <option value="">{t('auth.selectUser')}</option>
+                        {debugUsers.map((u) => (
+                          <option key={u.id} value={u.username}>
+                            {u.username}
+                          </option>
+                        ))}
+                      </select>
+                      <Icon
+                        name="arrow-down-s"
+                        className="pointer-events-none absolute right-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                    </div>
                   ) : (
                     <input
                       id="synth-login-username"
