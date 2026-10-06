@@ -108,7 +108,7 @@ export function SkillEditorForm({
         {files.map((file, index) => (
           <div
             key={`${index}-${file.path}`}
-            className="space-y-2 rounded-lg border border-border/60 p-3 min-w-0"
+            className="space-y-2 rounded-lg border border-border/60 bg-surface-inset p-3 min-w-0"
             data-testid={`skill-file-row-${index}`}
           >
             <div className="flex flex-wrap items-start gap-2 min-w-0">

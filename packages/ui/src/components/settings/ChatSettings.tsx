@@ -3,6 +3,7 @@ import { useI18n } from "@/lib/i18n"
 import {
   SegmentedControl,
   SettingsActions,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   useSettingsDraft,
@@ -39,12 +40,14 @@ export const ChatSettings = () => {
       description={t('chatSettings.intermediateTextDescription')}
     >
       <SettingsSection title={t('chatSettings.intermediateTextDisplay')}>
-        <SegmentedControl<IntermediateTextDisplay>
-          value={display}
-          options={options}
-          onChange={(value) => draft.setDraft(value)}
-          ariaLabel={t('chatSettings.intermediateTextDisplay')}
-        />
+        <SettingsItem>
+          <SegmentedControl<IntermediateTextDisplay>
+            value={display}
+            options={options}
+            onChange={(value) => draft.setDraft(value)}
+            ariaLabel={t('chatSettings.intermediateTextDisplay')}
+          />
+        </SettingsItem>
       </SettingsSection>
 
       <SettingsActions

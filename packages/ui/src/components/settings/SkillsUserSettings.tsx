@@ -180,7 +180,7 @@ function SkillListItem({
       onClick={onSelect}
       aria-pressed={active}
       className={cn(
-        'w-full text-left flex flex-wrap items-start gap-2 p-3 rounded-lg border transition-colors min-w-0',
+        'w-full text-left flex flex-wrap items-start gap-2 p-3 rounded-lg border bg-surface-inset transition-colors min-w-0',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         active ? 'border-primary/60 bg-primary/5' : 'border-border hover:border-primary/50',
         !skill.available && 'opacity-70',

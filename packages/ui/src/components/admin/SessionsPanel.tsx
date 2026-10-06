@@ -4,7 +4,7 @@ import { synthApi, type SessionData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '../ui/button'
 import { cn } from '@/lib/utils'
-import { SettingsPanel, SettingsSection } from '../ui/settings'
+import { SettingsItem, SettingsPanel, SettingsSection } from '../ui/settings'
 import { notifyMessage } from '@/hooks/useNotification'
 
 export const SessionsPanel = () => {
@@ -64,13 +64,13 @@ export const SessionsPanel = () => {
           <p className="py-4 text-center text-muted-foreground">{t('admin.sessions.empty')}</p>
         </SettingsSection>
       ) : (
-        <div className="space-y-2">
+        <SettingsSection>
           {sessions.map((s) => {
             const isBlocked = !!s.status.blocked
             const isExpanded = expandedId === s.id
 
             return (
-              <SettingsSection key={s.id} className="p-0">
+              <SettingsItem key={s.id} className="p-0">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center justify-between gap-3 p-4">
                     <div className="flex items-center gap-3 min-w-0">
@@ -135,10 +135,10 @@ export const SessionsPanel = () => {
                     </div>
                   )}
                 </div>
-              </SettingsSection>
+              </SettingsItem>
             )
           })}
-        </div>
+        </SettingsSection>
       )}
     </SettingsPanel>
   )

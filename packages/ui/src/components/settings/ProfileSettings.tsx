@@ -8,6 +8,7 @@ import { SelectContent, SelectItem } from '@/components/ui/select'
 import {
   SelectField,
   SettingsActions,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   TextArea,
@@ -171,42 +172,44 @@ export const ProfileSettings = () => {
       description={t('auth.profileDescription')}
     >
       <SettingsSection>
-        <div className="flex flex-wrap items-center gap-4 min-w-0">
-          <div
-            className="size-20 shrink-0 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {form.avatar ? (
-              <img src={form.avatar} alt="Avatar" className="size-full object-cover" />
-            ) : (
-              <span className="text-2xl font-medium text-interactive-selection-foreground">
-                {avatarInitial}
-              </span>
-            )}
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleAvatarChange}
-            className="hidden"
-          />
-          <div className="flex flex-wrap items-center gap-2 min-w-0">
-            <Button
+        <SettingsItem>
+          <div className="flex flex-wrap items-center gap-4 min-w-0">
+            <div
+              className="size-20 shrink-0 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden cursor-pointer hover:opacity-80 transition-opacity"
               onClick={() => fileInputRef.current?.click()}
             >
-              {form.avatar ? t('auth.changeAvatar') : t('auth.uploadAvatar')}
-            </Button>
-            {form.avatar && (
+              {form.avatar ? (
+                <img src={form.avatar} alt="Avatar" className="size-full object-cover" />
+              ) : (
+                <span className="text-2xl font-medium text-interactive-selection-foreground">
+                  {avatarInitial}
+                </span>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleAvatarChange}
+              className="hidden"
+            />
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               <Button
-                variant="ghost"
-                onClick={() => setForm({ ...form, avatar: null })}
+                onClick={() => fileInputRef.current?.click()}
               >
-                {t('auth.removeAvatar')}
+                {form.avatar ? t('auth.changeAvatar') : t('auth.uploadAvatar')}
               </Button>
-            )}
+              {form.avatar && (
+                <Button
+                  variant="ghost"
+                  onClick={() => setForm({ ...form, avatar: null })}
+                >
+                  {t('auth.removeAvatar')}
+                </Button>
+              )}
+            </div>
           </div>
-        </div>
+        </SettingsItem>
       </SettingsSection>
 
       <SettingsSection>

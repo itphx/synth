@@ -438,7 +438,7 @@ export const ModelsPanel = () => {
           {filteredGroups.map((group) => {
             const isCollapsed = collapsedGroups.has(group.provider.name)
             return (
-              <SettingsSection key={group.provider.name} className="p-0">
+              <SettingsSection key={group.provider.name} className="p-0 overflow-hidden">
                 <div className="min-w-0">
                   {/* Заголовок группы */}
                   <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-b min-w-0">
@@ -505,7 +505,7 @@ export const ModelsPanel = () => {
                             return (
                               <div
                                 key={model.id}
-                                className="flex gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 hover:bg-interactive-hover text-sm"
+                                className="flex gap-2 px-4 py-2 items-center border-b border-dashed last:border-b-0 bg-surface-inset hover:bg-interactive-hover text-sm"
                               >
                                 {/* Название модели + иконка */}
                                 <div className="flex flex-1 min-w-0 items-center gap-2">

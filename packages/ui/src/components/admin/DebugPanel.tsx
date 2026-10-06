@@ -5,6 +5,7 @@ import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
   SettingsActions,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   useSettingsDraft,
@@ -81,7 +82,7 @@ function DebugCategorySection({
       {Object.entries(groups).map(([group, savedLevel]) => {
         const level = current[group] ?? savedLevel
         return (
-          <div key={group} className="flex flex-wrap items-center justify-between gap-3 min-w-0">
+          <SettingsItem key={group} className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <span className="text-sm font-medium min-w-0 break-words">{group}</span>
               <span
@@ -103,7 +104,7 @@ function DebugCategorySection({
                 ))}
               </SelectContent>
             </Select>
-          </div>
+          </SettingsItem>
         )
       })}
 

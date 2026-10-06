@@ -7,6 +7,7 @@ import { useI18n } from '@/lib/i18n'
 import { confirm } from '@/lib/confirm'
 import {
   SettingsActions,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   Tabs,
@@ -207,9 +208,9 @@ export const ContextPanel = () => {
           </p>
         </SettingsSection>
       ) : (
-        <div className="space-y-1">
+        <SettingsSection>
           {filtered.map((f) => (
-            <SettingsSection key={f.name} className="p-2.5">
+            <SettingsItem key={f.name} className="p-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   {f.category === 'user' ? (
@@ -255,9 +256,9 @@ export const ContextPanel = () => {
                   )}
                 </div>
               </div>
-            </SettingsSection>
+            </SettingsItem>
           ))}
-        </div>
+        </SettingsSection>
       )}
     </SettingsPanel>
   )

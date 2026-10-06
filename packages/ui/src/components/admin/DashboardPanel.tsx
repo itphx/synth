@@ -50,7 +50,7 @@ export const DashboardPanel = () => {
         {loading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {cards.map((c) => (
-              <div key={c.label} className="min-w-0 bg-background rounded-xl border p-5 animate-pulse">
+              <div key={c.label} className="min-w-0 bg-surface-inset rounded-xl border p-5 animate-pulse">
                 <div className="h-4 bg-muted rounded w-24 mb-3" />
                 <div className="h-8 bg-muted rounded w-16" />
               </div>
@@ -59,7 +59,7 @@ export const DashboardPanel = () => {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {cards.map((c) => (
-              <div key={c.label} className="min-w-0 bg-background rounded-xl border p-5">
+              <div key={c.label} className="min-w-0 bg-surface-inset rounded-xl border p-5">
                 <div className="flex items-center gap-2 text-muted-foreground text-sm mb-2 min-w-0">
                   <Icon name={c.icon} className={cn('size-4 shrink-0', c.color)} />
                   <span className="min-w-0 break-words">{c.label}</span>

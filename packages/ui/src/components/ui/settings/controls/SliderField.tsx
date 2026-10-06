@@ -24,6 +24,12 @@ export interface SliderFieldProps {
    * По умолчанию — `true` на телефоне/планшете и `false` на десктопе.
    */
   stacked?: boolean
+  /**
+   * `true` — в строчной раскладке правая часть и `input[type=range]` растягиваются
+   * (`flex-1 min-w-0`) вместо фиксированной ширины; подпись слева сжимается/обрезка.
+   * Для узких контейнеров (например, поповер быстрых настроек).
+   */
+  fluid?: boolean
   /** Дополнительные классы контейнера. */
   className?: string
 }
@@ -52,10 +58,12 @@ export function SliderField({
   resetDisabled,
   resetTitle,
   stacked,
+  fluid,
   className,
 }: SliderFieldProps) {
   const { deviceType } = useDevice()
   const isStacked = stacked ?? deviceType !== 'desktop'
+  const isFluid = Boolean(fluid) && !isStacked
   const displayValue = formatValue ? formatValue(value) : String(value)
   const fill = computeSliderFill(value, min, max)
 
@@ -73,14 +81,21 @@ export function SliderField({
             (isStacked ? (
               <p className="text-xs text-muted-foreground break-words">{label}</p>
             ) : (
-              <span className="text-xs text-muted-foreground break-words">{label}</span>
+              <span
+                className={cn(
+                  'text-xs text-muted-foreground',
+                  isFluid ? 'block truncate' : 'break-words',
+                )}
+              >
+                {label}
+              </span>
             ))}
           {description && (
             <p className="text-xs text-muted-foreground/80 break-words">{description}</p>
           )}
         </div>
       )}
-      <div className="flex items-center gap-2 min-w-0">
+      <div className={cn('flex items-center gap-2 min-w-0', isFluid && 'flex-1')}>
         <input
           type="range"
           min={min}
@@ -92,7 +107,7 @@ export function SliderField({
           onChange={(e) => onValueChange(Number.parseFloat(e.target.value))}
           className={cn(
             'ui-range focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0 rounded-full',
-            isStacked ? 'flex-1 min-w-0' : 'w-24 sm:w-32',
+            isStacked || isFluid ? 'flex-1 min-w-0' : 'w-24 sm:w-32',
             disabled && 'cursor-not-allowed opacity-50',
           )}
           style={{ ['--ui-range-fill' as string]: fill }}

@@ -9,6 +9,7 @@ import { confirm } from '@/lib/confirm'
 import {
   SettingsActions,
   SettingsField,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   TextArea,
@@ -238,9 +239,9 @@ export const UsersPanel = () => {
           <p className="py-4 text-center text-muted-foreground">{t('admin.users.empty')}</p>
         </SettingsSection>
       ) : (
-        <div className="space-y-2">
+        <SettingsSection>
           {users.map((u) => (
-            <SettingsSection key={u.id} className={cn(!u.is_active && 'opacity-50')}>
+            <SettingsItem key={u.id} className={cn(!u.is_active && 'opacity-50')}>
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-3 min-w-0">
                   <div className="size-8 rounded-full bg-muted flex items-center justify-center text-sm font-medium shrink-0">
@@ -285,9 +286,9 @@ export const UsersPanel = () => {
                   {t('admin.users.delete')}
                 </Button>
               </div>
-            </SettingsSection>
+            </SettingsItem>
           ))}
-        </div>
+        </SettingsSection>
       )}
     </SettingsPanel>
   )

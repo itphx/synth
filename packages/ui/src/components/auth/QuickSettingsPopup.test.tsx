@@ -74,8 +74,9 @@ async function openMenu(host: HTMLElement): Promise<void> {
   const trigger = host.querySelector('[data-icon="arrow-down-s"]')?.closest('button')
   expect(trigger).toBeTruthy()
   await act(async () => {
-    trigger!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    ;(trigger as HTMLElement).click()
   })
+  await act(async () => {})
 }
 
 function buttonsByText(host: HTMLElement, text: string): HTMLButtonElement[] {
@@ -103,6 +104,9 @@ afterEach(async () => {
     })
     host.remove()
   }
+  // PopoverContent рендерится в портал (document.body) — чистим его остатки,
+  // чтобы контент поповера не «протекал» в следующие тесты.
+  document.body.innerHTML = ''
   vi.restoreAllMocks()
   delete (document as unknown as Record<string, unknown>).fullscreenEnabled
   delete (document as unknown as Record<string, unknown>).fullscreenElement
@@ -115,7 +119,7 @@ describe('QuickSettingsPopup: пункт «Обновить страницу»',
     pwaState.standalone = false
     const host = await renderPopup()
     await openMenu(host)
-    const reloadBtn = buttonsByText(host, 'auth.reloadPage')[0]
+    const reloadBtn = buttonsByText(document.body, 'auth.reloadPage')[0]
     expect(reloadBtn).toBeTruthy()
     expect(reloadBtn!.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('refresh')
   })
@@ -125,7 +129,9 @@ describe('QuickSettingsPopup: пункт «Полный экран»', () => {
   it('без Fullscreen API пункт не отображается (jsdom)', async () => {
     const host = await renderPopup()
     await openMenu(host)
-    expect(fullscreenButton(host)).toBeUndefined()
+    // Контент поповера реально отрисован в портале (иначе проверка ниже ничего не доказывает).
+    expect(buttonsByText(document.body, 'auth.reloadPage')[0]).toBeTruthy()
+    expect(fullscreenButton(document.body)).toBeUndefined()
   })
 
   it('в PWA standalone пункт скрыт даже при поддержке API', async () => {
@@ -133,7 +139,8 @@ describe('QuickSettingsPopup: пункт «Полный экран»', () => {
     pwaState.standalone = true
     const host = await renderPopup()
     await openMenu(host)
-    expect(fullscreenButton(host)).toBeUndefined()
+    expect(buttonsByText(document.body, 'auth.reloadPage')[0]).toBeTruthy()
+    expect(fullscreenButton(document.body)).toBeUndefined()
   })
 
   it('клик вызывает requestFullscreen, fullscreenchange меняет текст и иконку', async () => {
@@ -150,7 +157,7 @@ describe('QuickSettingsPopup: пункт «Полный экран»', () => {
     const host = await renderPopup()
     await openMenu(host)
 
-    const btn = fullscreenButton(host)
+    const btn = fullscreenButton(document.body)
     expect(btn).toBeTruthy()
     expect(btn!.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('fullscreen')
 
@@ -164,7 +171,7 @@ describe('QuickSettingsPopup: пункт «Полный экран»', () => {
       document.dispatchEvent(new Event('fullscreenchange'))
     })
 
-    const exitBtn = buttonsByText(host, 'auth.exitFullscreen')[0]
+    const exitBtn = buttonsByText(document.body, 'auth.exitFullscreen')[0]
     expect(exitBtn).toBeTruthy()
     expect(exitBtn!.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('fullscreen-exit')
 

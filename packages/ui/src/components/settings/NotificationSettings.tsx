@@ -2,6 +2,7 @@ import { useI18n } from '@/lib/i18n'
 import { DEFAULT_ENABLED, useNotificationStore, type NotifyCategory } from '@/stores/notificationStore'
 import {
   SettingsActions,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   ToggleField,
@@ -43,13 +44,14 @@ export function NotificationSettings() {
     <SettingsPanel title={t('notifications.title')} description={t('notifications.description')}>
       <SettingsSection>
         {CATEGORIES.map((cat) => (
-          <ToggleField
-            key={cat.id}
-            label={t(cat.labelKey)}
-            description={t(cat.descKey)}
-            enabled={enabled[cat.id]}
-            onToggle={() => toggle(cat.id)}
-          />
+          <SettingsItem key={cat.id}>
+            <ToggleField
+              label={t(cat.labelKey)}
+              description={t(cat.descKey)}
+              enabled={enabled[cat.id]}
+              onToggle={() => toggle(cat.id)}
+            />
+          </SettingsItem>
         ))}
       </SettingsSection>
 

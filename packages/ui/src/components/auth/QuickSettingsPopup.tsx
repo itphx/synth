@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useAuthStore } from '@/stores/authStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { useThemeSystem } from '@/contexts/useThemeSystem'
@@ -6,10 +6,12 @@ import { useI18n } from '@/lib/i18n'
 import { api } from '@/lib/api/client'
 import { profileService } from '@/lib/api/profileService'
 import { Icon } from '@/components/icon/Icon'
+import type { IconName } from '@/components/icon/icons'
 import { cn } from '@/lib/utils'
 import { isPwaStandalone } from '@/lib/pwa'
 import { useFullscreen } from '@/hooks/useFullscreen'
 import { UiScaleControl } from '@/components/settings/UiScaleControl'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SegmentedControl } from '@/components/ui/settings'
 
@@ -29,7 +31,6 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
   const [isOpen, setIsOpen] = useState(false)
   const [locales, setLocales] = useState<Array<{ value: string; label: string }>>([])
   const { isFullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } = useFullscreen()
-  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const loadLocales = async () => {
@@ -49,18 +50,6 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
     loadLocales()
   }, [t])
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
-    }
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [isOpen])
-
   if (!user) return null
 
   const handleLocaleChange = (newLocale: string) => {
@@ -74,162 +63,167 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
     setThemeSystemMode(mode)
   }
 
-  const themeOptions: Array<{ value: 'system' | 'light' | 'dark'; label: string }> = [
-    { value: 'system', label: t('settings.appearance.themeMode.system') },
-    { value: 'light', label: t('settings.appearance.themeMode.light') },
-    { value: 'dark', label: t('settings.appearance.themeMode.dark') },
+  const themeOptions: Array<{ value: 'system' | 'light' | 'dark'; label: string; icon: IconName }> = [
+    { value: 'system', label: t('settings.appearance.themeMode.system'), icon: 'computer' },
+    { value: 'light', label: t('settings.appearance.themeMode.light'), icon: 'sun' },
+    { value: 'dark', label: t('settings.appearance.themeMode.dark'), icon: 'moon' },
   ]
 
-  return (
-    <div className="relative" ref={menuRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className={cn(
-          "flex items-center gap-2 rounded-lg px-2 py-1.5",
-          "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
-          "transition-colors"
-        )}
-      >
-        <div className="size-5 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden">
-          {profile?.preferences?.avatar ? (
-            <img
-              src={profile.preferences.avatar}
-              alt={user.username}
-              className="size-full object-cover"
-            />
-          ) : (
-            <span className="text-xs font-medium text-interactive-selection-foreground">
-              {user.username.charAt(0).toUpperCase()}
-            </span>
-          )}
-        </div>
-        <Icon name={isOpen ? 'arrow-up-s' : 'arrow-down-s'} className="size-4" />
-      </button>
+  const actionItemClass = cn(
+    'w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-left',
+    'text-muted-foreground hover:bg-interactive-hover hover:text-foreground',
+    'transition-colors'
+  )
 
-      {isOpen && (
-        <div className="absolute right-0 top-full mt-1 w-72 rounded-xl border border-border bg-popover text-popover-foreground shadow-xl z-50">
-          <div className="px-3 py-2 border-b border-border/30">
-            <p className="text-xs font-medium text-foreground">{profile?.display_name || user.username}</p>
+  const settingRowClass = 'flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5'
+
+  return (
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'flex items-center gap-2 rounded-lg px-2 py-1.5',
+            'text-muted-foreground hover:bg-interactive-hover hover:text-foreground',
+            'transition-colors'
+          )}
+        >
+          <div className="size-5 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden">
+            {profile?.preferences?.avatar ? (
+              <img
+                src={profile.preferences.avatar}
+                alt={user.username}
+                className="size-full object-cover"
+              />
+            ) : (
+              <span className="text-xs font-medium text-interactive-selection-foreground">
+                {user.username.charAt(0).toUpperCase()}
+              </span>
+            )}
+          </div>
+          <Icon name={isOpen ? 'arrow-up-s' : 'arrow-down-s'} className="size-4" />
+        </button>
+      </PopoverTrigger>
+
+      <PopoverContent align="end" sideOffset={4} className="w-72 p-0">
+        <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-border/40">
+          <div className="size-8 shrink-0 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden">
+            {profile?.preferences?.avatar ? (
+              <img
+                src={profile.preferences.avatar}
+                alt={user.username}
+                className="size-full object-cover"
+              />
+            ) : (
+              <span className="text-xs font-medium text-interactive-selection-foreground">
+                {user.username.charAt(0).toUpperCase()}
+              </span>
+            )}
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-foreground truncate">{profile?.display_name || user.username}</p>
             {user.email && (
               <p className="text-xs text-muted-foreground truncate">{user.email}</p>
             )}
           </div>
+        </div>
 
-          <div className="p-3 space-y-3">
-            <div>
-              <p className="text-xs text-muted-foreground mb-2">{t('settings.appearance.themeMode.label')}</p>
-              <SegmentedControl
-                value={themeMode}
-                options={themeOptions}
-                onChange={handleThemeModeChange}
-                ariaLabel={t('settings.appearance.themeMode.label')}
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <p className="text-xs text-muted-foreground mb-2">{t('settings.appearance.language.label')}</p>
-              {locales.length > 2 ? (
-                <Select value={uiLocale} onValueChange={handleLocaleChange}>
-                  <SelectTrigger className="w-full" aria-label={t('settings.appearance.language.label')}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {locales.map((loc) => (
-                      <SelectItem key={loc.value} value={loc.value}>{loc.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <SegmentedControl
-                  value={uiLocale}
-                  options={locales}
-                  onChange={handleLocaleChange}
-                  ariaLabel={t('settings.appearance.language.label')}
-                  className="w-full"
-                />
-              )}
-            </div>
-
-            <UiScaleControl stacked />
+        <div className="p-1.5 space-y-0.5">
+          <div className={settingRowClass}>
+            <span className="text-xs text-muted-foreground">{t('settings.appearance.themeMode.label')}</span>
+            <SegmentedControl
+              value={themeMode}
+              options={themeOptions}
+              onChange={handleThemeModeChange}
+              ariaLabel={t('settings.appearance.themeMode.label')}
+            />
           </div>
 
-          <div className="p-1 border-t border-border/30">
+          <div className={settingRowClass}>
+            <span className="text-xs text-muted-foreground">{t('settings.appearance.language.label')}</span>
+            {locales.length > 2 ? (
+              <Select value={uiLocale} onValueChange={handleLocaleChange}>
+                <SelectTrigger className="w-32" aria-label={t('settings.appearance.language.label')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {locales.map((loc) => (
+                    <SelectItem key={loc.value} value={loc.value}>{loc.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <SegmentedControl
+                value={uiLocale}
+                options={locales}
+                onChange={handleLocaleChange}
+                ariaLabel={t('settings.appearance.language.label')}
+              />
+            )}
+          </div>
+
+          <div className="rounded-lg px-2.5 py-1.5">
+            <UiScaleControl stacked={false} fluid />
+          </div>
+        </div>
+
+        <div className="p-1.5 border-t border-border/40">
+          <button
+            onClick={() => {
+              setIsOpen(false)
+              window.location.reload()
+            }}
+            className={actionItemClass}
+          >
+            <Icon name="refresh" className="size-3.5" />
+            {t('auth.reloadPage')}
+          </button>
+          {fullscreenSupported && !isPwaStandalone() && (
+            <button
+              onClick={() => toggleFullscreen()}
+              className={actionItemClass}
+            >
+              <Icon name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'} className="size-3.5" />
+              {isFullscreen ? t('auth.exitFullscreen') : t('auth.fullscreen')}
+            </button>
+          )}
+          <button
+            onClick={() => {
+              onSettingsClick()
+              setIsOpen(false)
+            }}
+            className={actionItemClass}
+          >
+            <Icon name="settings" className="size-3.5" />
+            {t('auth.openSettings')}
+          </button>
+          {user?.roles?.includes('ADMIN') && (
             <button
               onClick={() => {
-                setIsOpen(false)
-                window.location.reload()
-              }}
-              className={cn(
-                "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
-                "transition-colors"
-              )}
-            >
-              <Icon name="refresh" className="size-3.5" />
-              {t('auth.reloadPage')}
-            </button>
-            {fullscreenSupported && !isPwaStandalone() && (
-              <button
-                onClick={() => toggleFullscreen()}
-                className={cn(
-                  "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
-                  "transition-colors"
-                )}
-              >
-                <Icon name={isFullscreen ? 'fullscreen-exit' : 'fullscreen'} className="size-3.5" />
-                {isFullscreen ? t('auth.exitFullscreen') : t('auth.fullscreen')}
-              </button>
-            )}
-            <button
-              onClick={() => {
-                onSettingsClick()
+                setSettingsPage('dashboard')
+                setSettingsDialogOpen(true)
                 setIsOpen(false)
               }}
-              className={cn(
-                "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
-                "transition-colors"
-              )}
+              className={actionItemClass}
             >
-              <Icon name="settings" className="size-3.5" />
-              {t('auth.openSettings')}
+              <Icon name="admin" className="size-3.5" />
+              {t('auth.admin')}
             </button>
-            {user?.roles?.includes('ADMIN') && (
-              <button
-                onClick={() => {
-                  setSettingsPage('dashboard')
-                  setSettingsDialogOpen(true)
-                  setIsOpen(false)
-                }}
-                className={cn(
-                  "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                  "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
-                  "transition-colors"
-                )}
-              >
-                <Icon name="admin" className="size-3.5" />
-                {t('auth.admin')}
-              </button>
-            )}
+          )}
+          <div className="mt-1 pt-1 border-t border-border/40">
             <button
               onClick={() => {
                 setIsOpen(false)
                 useAuthStore.getState().logout()
               }}
-              className={cn(
-                "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left",
-                "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
-                "transition-colors"
-              )}
+              className={actionItemClass}
             >
               <Icon name="logout" className="size-3.5" />
               {t('auth.logout')}
             </button>
           </div>
         </div>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   )
 }

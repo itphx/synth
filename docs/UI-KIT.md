@@ -111,6 +111,69 @@
    hover:bg-interactive-hover`. Ориентир — `ui/settings/controls/Tabs.tsx`;
    `RightPanel` следует тому же виду.
 
+## Плавающие слои (рецептура, реализовано)
+
+Глубина плавающего слоя задаётся **тенью-как-рамкой**, а не сплошной `border`.
+Контейнер несёт тонкий ореол `ring-1 ring-foreground/10` по контуру тени плюс
+саму тень; сплошная рамка при этом не используется.
+
+| Часть рецептуры | Значение |
+|---|---|
+| Ореол-рамка | `ring-1 ring-foreground/10` |
+| Поверхность | `bg-popover` + `text-popover-foreground` (роль `menu`) |
+| Тень: меню/поповер/селект/контекст-меню, в т.ч. `ModelSelector`, `AgentModeSelector`, `ReasoningLevelSelector`, `MentionPopup`, `CommandAutocomplete` | `shadow-lg` |
+| Тень: тултип | `shadow-md` |
+| Тень: диалог | `shadow-xl` (поверхность диалога — `bg-background`) |
+| Радиусы | концентрические: контейнер `rounded-xl` + `p-1`, пункты внутри `rounded-lg` (разница радиусов = паддинг контейнера) |
+| Разделители | остаются рамками (`border-t border-border/…`), не отдельными прямоугольниками |
+
+Затронутые компоненты: `components/ui/contextMenu.tsx`,
+`components/ui/popover.tsx`, `components/ui/select.tsx`,
+`components/ui/dialog.tsx`, `components/ui/tooltip.tsx`,
+`chat/ModelSelector.tsx`, `chat/AgentModeSelector.tsx`,
+`chat/ReasoningLevelSelector.tsx`, `chat/MentionPopup.tsx`,
+`chat/CommandAutocomplete.tsx`.
+
+## Блоки настроек (AD-072)
+
+Двухуровневый контракт «секция → пункт»: фон пункта всегда отличается от фона
+секции.
+
+| Элемент | Роль | Классы |
+|---|---|---|
+| `SettingsSection` (`components/ui/settings/SettingsSection.tsx`) | группа (surface **elevated**) | `rounded-xl border border-border/60 bg-card p-4 space-y-3` |
+| `SettingsItem` (`components/ui/settings/SettingsItem.tsx`) | пункт (surface **subtle**) | `rounded-lg border border-border bg-surface-inset p-3` |
+
+Правила:
+
+- **«фон пункта ≠ фон секции»** — внутри `bg-card` пункт всегда `bg-surface-inset`
+  (не `bg-card` и не `bg-popover`).
+- **Не вкладывать секции друг в друга** — вложенную группу выносить отдельной
+  `SettingsSection`; одинаковые поверхности подряд не ставить.
+- **Интерактивные строки** (checkbox/radio, hover-выбор) обязаны иметь
+  `bg-surface-inset` — например
+  `flex … rounded-lg border border-border/60 bg-surface-inset … cursor-pointer`;
+  заблокированная строка — тот же фон + `border-dashed … opacity-* cursor-not-allowed`.
+
+Эталоны: `NotificationSettings` (`SettingsSection` + `SettingsItem`/`ToggleField`),
+`ToolsDisabledSettings` (строки чекбоксов, в т.ч. disabled), `CommandsSettings`
+(списки/строки).
+
+## Подавление transition при смене темы
+
+`ThemeCssGenerator.apply` (`packages/ui/src/lib/theme/cssGenerator.ts`) перед
+применением новых CSS-переменных гасит анимации, иначе смена темы «плывёт» —
+перекраска всех поверхностей анимируется.
+
+Порядок:
+
+1. снять прежний элемент `#theme-transition-suppress`, если остался;
+2. вставить
+   `<style id="theme-transition-suppress">*,*::before,*::after{transition:none!important}</style>`;
+3. форсировать reflow (`void document.body?.offsetHeight`);
+4. применить переменные темы;
+5. снять подавление через два кадра (`requestAnimationFrame` → `requestAnimationFrame` → `remove()`).
+
 ## Осознанно оставленные хардкод-цвета
 
 Полный список намеренных исключений из правила «только токены темы». Каждое
@@ -133,5 +196,7 @@
   `--color-surface-*`, `--color-status-*`).
 - Резолвер палитры сущностей: `packages/ui/src/lib/projectMeta.ts`
   (`PROJECT_COLOR_MAP` → `var(--palette-N)`).
-- Примитивы: `components/ui/popover.tsx` (menu), `components/ui/select.tsx` (menu),
-  `components/ui/dialog.tsx` (scrim).
+- Примитивы плавающих слоёв: `components/ui/popover.tsx` (menu),
+  `components/ui/select.tsx` (menu), `components/ui/dialog.tsx` (scrim).
+- Примитивы блоков настроек: `components/ui/settings/SettingsSection.tsx`,
+  `components/ui/settings/SettingsItem.tsx` (AD-072).

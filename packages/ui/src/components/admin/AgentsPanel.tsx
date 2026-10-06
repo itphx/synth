@@ -15,6 +15,7 @@ import {
   NumberField,
   SettingsActions,
   SettingsField,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   SelectField,
@@ -603,98 +604,100 @@ export const AgentsPanel = () => {
           ))}
         </div>
       ) : (
-        <div className="agents-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {filteredAgents.map((a) => (
-            <SettingsSection key={a.id} className={cn(!a.enabled && 'opacity-50')}>
-              <div className="flex items-start justify-between gap-2 min-w-0">
-                <div className="flex items-start gap-2 min-w-0 flex-1">
-                  <Icon name={isIconName(a.icon) ? a.icon : 'robot-2'} className="size-4 shrink-0 mt-0.5" style={a.color ? { color: `var(${a.color})` } : undefined} />
-                  <div className="min-w-0 flex-1">
-                    <span className="font-medium text-sm break-words">{a.display_name}</span>
-                    <code className="block text-[0.625rem] text-muted-foreground break-all">{a.id}</code>
+        <SettingsSection>
+          <div className="agents-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {filteredAgents.map((a) => (
+              <SettingsItem key={a.id} className={cn('space-y-3', !a.enabled && 'opacity-50')}>
+                <div className="flex items-start justify-between gap-2 min-w-0">
+                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                    <Icon name={isIconName(a.icon) ? a.icon : 'robot-2'} className="size-4 shrink-0 mt-0.5" style={a.color ? { color: `var(${a.color})` } : undefined} />
+                    <div className="min-w-0 flex-1">
+                      <span className="font-medium text-sm break-words">{a.display_name}</span>
+                      <code className="block text-[0.625rem] text-muted-foreground break-all">{a.id}</code>
+                    </div>
+                  </div>
+                  <div className="ml-1 shrink-0">
+                    <Toggle enabled={a.enabled} onToggle={() => handleToggle(a)} />
                   </div>
                 </div>
-                <div className="ml-1 shrink-0">
-                  <Toggle enabled={a.enabled} onToggle={() => handleToggle(a)} />
+
+                {/* Badges row */}
+                <div className="flex flex-wrap gap-1 min-w-0">
+                  {(!a.agent_mode || a.agent_mode.includes('primary')) && (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">
+                      {t('admin.agents.agentMode.primary')}
+                    </span>
+                  )}
+                  {a.agent_mode?.includes('subagent') && (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-success/10 text-status-success">
+                      {t('admin.agents.agentMode.subagent')}
+                    </span>
+                  )}
+                  {a.agent_mode?.includes('system') && (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-info/10 text-status-info">
+                      {t('admin.agents.system')}
+                    </span>
+                  )}
+                  {a.provider && (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.provider}</span>
+                  )}
+                  {a.model && (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.model}</span>
+                  )}
+                  {a.context_file && (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{a.context_file}</span>
+                  )}
+                  {a.is_builtin && (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-muted text-muted-foreground">{t('admin.agents.builtin')}</span>
+                  )}
+                  {a.is_builtin && a.is_overridden && (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{t('admin.agents.modified')}</span>
+                  )}
                 </div>
-              </div>
 
-              {/* Badges row */}
-              <div className="flex flex-wrap gap-1 min-w-0">
-                {(!a.agent_mode || a.agent_mode.includes('primary')) && (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">
-                    {t('admin.agents.agentMode.primary')}
-                  </span>
-                )}
-                {a.agent_mode?.includes('subagent') && (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-success/10 text-status-success">
-                    {t('admin.agents.agentMode.subagent')}
-                  </span>
-                )}
-                {a.agent_mode?.includes('system') && (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-info/10 text-status-info">
-                    {t('admin.agents.system')}
-                  </span>
-                )}
-                {a.provider && (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.provider}</span>
-                )}
-                {a.model && (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">{a.model}</span>
-                )}
-                {a.context_file && (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{a.context_file}</span>
-                )}
-                {a.is_builtin && (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-muted text-muted-foreground">{t('admin.agents.builtin')}</span>
-                )}
-                {a.is_builtin && a.is_overridden && (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-warning/15 text-status-warning">{t('admin.agents.modified')}</span>
-                )}
-              </div>
+                {/* Capabilities */}
+                <div className="flex flex-wrap gap-1 min-w-0">
+                  {a.capabilities.slice(0, 6).map((c) => (
+                    <span key={c} className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
+                      {t(`admin.agents.cap.${c}`)}
+                    </span>
+                  ))}
+                  {a.capabilities.length > 6 && (
+                    <span className="text-[0.625rem] text-muted-foreground">+{a.capabilities.length - 6}</span>
+                  )}
+                  {a.capabilities.length === 0 && (
+                    <span className="text-[0.625rem] text-muted-foreground">{t('admin.agents.noCapabilities')}</span>
+                  )}
+                </div>
 
-              {/* Capabilities */}
-              <div className="flex flex-wrap gap-1 min-w-0">
-                {a.capabilities.slice(0, 6).map((c) => (
-                  <span key={c} className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
-                    {t(`admin.agents.cap.${c}`)}
-                  </span>
-                ))}
-                {a.capabilities.length > 6 && (
-                  <span className="text-[0.625rem] text-muted-foreground">+{a.capabilities.length - 6}</span>
-                )}
-                {a.capabilities.length === 0 && (
-                  <span className="text-[0.625rem] text-muted-foreground">{t('admin.agents.noCapabilities')}</span>
-                )}
-              </div>
+                {/* Agent steps info */}
+                <div className="flex flex-wrap gap-1 min-w-0">
+                  {a.max_steps === 0 || a.max_steps == null ? (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-success/10 text-status-success">
+                      {t('admin.agents.stepsCount')}: {t('admin.agents.unlimited')}
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
+                      {t('admin.agents.stepsCount')}: ≤{a.max_steps}
+                    </span>
+                  )}
+                </div>
 
-              {/* Agent steps info */}
-              <div className="flex flex-wrap gap-1 min-w-0">
-                {a.max_steps === 0 || a.max_steps == null ? (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-status-success/10 text-status-success">
-                    {t('admin.agents.stepsCount')}: {t('admin.agents.unlimited')}
-                  </span>
-                ) : (
-                  <span className="px-1.5 py-0.5 rounded text-[0.625rem] bg-secondary text-secondary-foreground">
-                    {t('admin.agents.stepsCount')}: ≤{a.max_steps}
-                  </span>
-                )}
-              </div>
-
-              {/* Actions */}
-              <div className="flex flex-wrap gap-1 min-w-0">
-                <Button variant="ghost" onClick={() => handleEdit(a)}>{t('common.edit')}</Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => handleDelete(a)}
-                  className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
-                >
-                  {a.is_builtin ? t('admin.agents.reset') : t('common.delete')}
-                </Button>
-              </div>
-            </SettingsSection>
-          ))}
-        </div>
+                {/* Actions */}
+                <div className="flex flex-wrap gap-1 min-w-0">
+                  <Button variant="ghost" onClick={() => handleEdit(a)}>{t('common.edit')}</Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => handleDelete(a)}
+                    className="text-muted-foreground hover:bg-status-error/10 hover:text-status-error"
+                  >
+                    {a.is_builtin ? t('admin.agents.reset') : t('common.delete')}
+                  </Button>
+                </div>
+              </SettingsItem>
+            ))}
+          </div>
+        </SettingsSection>
       )}
 
       {/* AD-076: реестр SSH-ключей per-agent (в разделе «Агенты») */}

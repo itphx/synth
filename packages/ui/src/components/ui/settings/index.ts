@@ -4,6 +4,9 @@ export type { SettingsPanelProps } from './SettingsPanel'
 export { SettingsSection } from './SettingsSection'
 export type { SettingsSectionProps } from './SettingsSection'
 
+export { SettingsItem } from './SettingsItem'
+export type { SettingsItemProps } from './SettingsItem'
+
 export { SettingsField } from './SettingsField'
 export type { SettingsFieldProps } from './SettingsField'
 

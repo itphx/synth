@@ -1,10 +1,13 @@
 import React from 'react'
 
+import { Icon } from '@/components/icon/Icon'
+import type { IconName } from '@/components/icon/icons'
 import { cn } from '@/lib/utils'
 
 export interface SegmentedControlOption<T extends string> {
   value: T
   label: string
+  icon?: IconName
 }
 
 /**
@@ -45,14 +48,20 @@ export const SegmentedControl = <T extends string>({
           aria-checked={active}
           disabled={disabled}
           onClick={() => onChange(option.value)}
+          aria-label={option.icon ? option.label : undefined}
+          title={option.icon ? option.label : undefined}
           className={cn(
             'flex-1 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
             active
-              ? 'bg-interactive-selection text-interactive-selection-foreground'
+              ? 'bg-surface-card text-foreground shadow-sm'
               : 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
           )}
         >
-          {option.label}
+          {option.icon ? (
+            <Icon name={option.icon} className="size-3.5" aria-hidden />
+          ) : (
+            <span>{option.label}</span>
+          )}
         </button>
       )
     })}

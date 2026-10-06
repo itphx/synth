@@ -18,6 +18,7 @@ import {
   SegmentedControl,
   SelectField,
   SettingsActions,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   TextArea,
@@ -109,77 +110,89 @@ export function RoutingSettings() {
     >
       {/* Вкл/Выкл */}
       <SettingsSection>
-        <ToggleField
-          label={t('settings.category.routing')}
-          description={stateLabel(settings.routingEnabled)}
-          enabled={settings.routingEnabled}
-          onToggle={() => update({ routingEnabled: !settings.routingEnabled })}
-        />
+        <SettingsItem>
+          <ToggleField
+            label={t('settings.category.routing')}
+            description={stateLabel(settings.routingEnabled)}
+            enabled={settings.routingEnabled}
+            onToggle={() => update({ routingEnabled: !settings.routingEnabled })}
+          />
+        </SettingsItem>
       </SettingsSection>
 
       {/* Стратегия */}
       <SettingsSection title={t('routing.strategy')}>
-        <SelectField
-          value={settings.routingStrategy}
-          onValueChange={(v) => update({ routingStrategy: v as RoutingDefaults['routingStrategy'] })}
-          ariaLabel={t('routing.strategy')}
-        >
-          <SelectContent>
-            <SelectItem value="auto">{t('routing.strategy.auto')}</SelectItem>
-            <SelectItem value="content">{t('routing.strategy.content')}</SelectItem>
-            <SelectItem value="cost">{t('routing.strategy.cost')}</SelectItem>
-            <SelectItem value="content+cost">{t('routing.strategy.contentCost')}</SelectItem>
-          </SelectContent>
-        </SelectField>
+        <SettingsItem>
+          <SelectField
+            value={settings.routingStrategy}
+            onValueChange={(v) => update({ routingStrategy: v as RoutingDefaults['routingStrategy'] })}
+            ariaLabel={t('routing.strategy')}
+          >
+            <SelectContent>
+              <SelectItem value="auto">{t('routing.strategy.auto')}</SelectItem>
+              <SelectItem value="content">{t('routing.strategy.content')}</SelectItem>
+              <SelectItem value="cost">{t('routing.strategy.cost')}</SelectItem>
+              <SelectItem value="content+cost">{t('routing.strategy.contentCost')}</SelectItem>
+            </SelectContent>
+          </SelectField>
+        </SettingsItem>
       </SettingsSection>
 
       {/* Контентная */}
       <SettingsSection title={t('routing.content')}>
-        <ModelPairSelect
-          label={t('routing.content.coding')}
-          provider={settings.routingContent.coding.provider}
-          model={settings.routingContent.coding.model}
-          providers={availableProviders}
-          models={filteredModels(settings.routingContent.coding.provider)}
-          providerLabel={t('common.provider')}
-          modelLabel={t('common.model')}
-          onProviderChange={(v) => updateContent('coding', { provider: v, model: '' })}
-          onModelChange={(v) => updateContent('coding', { model: v })}
-        />
-        <ModelPairSelect
-          label={t('routing.content.chat')}
-          provider={settings.routingContent.chat.provider}
-          model={settings.routingContent.chat.model}
-          providers={availableProviders}
-          models={filteredModels(settings.routingContent.chat.provider)}
-          providerLabel={t('common.provider')}
-          modelLabel={t('common.model')}
-          onProviderChange={(v) => updateContent('chat', { provider: v, model: '' })}
-          onModelChange={(v) => updateContent('chat', { model: v })}
-        />
-        <ModelPairSelect
-          label={t('routing.content.research')}
-          provider={settings.routingContent.research.provider}
-          model={settings.routingContent.research.model}
-          providers={availableProviders}
-          models={filteredModels(settings.routingContent.research.provider)}
-          providerLabel={t('common.provider')}
-          modelLabel={t('common.model')}
-          onProviderChange={(v) => updateContent('research', { provider: v, model: '' })}
-          onModelChange={(v) => updateContent('research', { model: v })}
-        />
+        <SettingsItem>
+          <ModelPairSelect
+            label={t('routing.content.coding')}
+            provider={settings.routingContent.coding.provider}
+            model={settings.routingContent.coding.model}
+            providers={availableProviders}
+            models={filteredModels(settings.routingContent.coding.provider)}
+            providerLabel={t('common.provider')}
+            modelLabel={t('common.model')}
+            onProviderChange={(v) => updateContent('coding', { provider: v, model: '' })}
+            onModelChange={(v) => updateContent('coding', { model: v })}
+          />
+        </SettingsItem>
+        <SettingsItem>
+          <ModelPairSelect
+            label={t('routing.content.chat')}
+            provider={settings.routingContent.chat.provider}
+            model={settings.routingContent.chat.model}
+            providers={availableProviders}
+            models={filteredModels(settings.routingContent.chat.provider)}
+            providerLabel={t('common.provider')}
+            modelLabel={t('common.model')}
+            onProviderChange={(v) => updateContent('chat', { provider: v, model: '' })}
+            onModelChange={(v) => updateContent('chat', { model: v })}
+          />
+        </SettingsItem>
+        <SettingsItem>
+          <ModelPairSelect
+            label={t('routing.content.research')}
+            provider={settings.routingContent.research.provider}
+            model={settings.routingContent.research.model}
+            providers={availableProviders}
+            models={filteredModels(settings.routingContent.research.provider)}
+            providerLabel={t('common.provider')}
+            modelLabel={t('common.model')}
+            onProviderChange={(v) => updateContent('research', { provider: v, model: '' })}
+            onModelChange={(v) => updateContent('research', { model: v })}
+          />
+        </SettingsItem>
       </SettingsSection>
 
       {/* Эскалация */}
       <SettingsSection>
-        <ToggleField
-          label={t('routing.escalation')}
-          description={stateLabel(settings.routingEscalation.enabled)}
-          enabled={settings.routingEscalation.enabled}
-          onToggle={() => updateEscalation({ enabled: !settings.routingEscalation.enabled })}
-        />
+        <SettingsItem>
+          <ToggleField
+            label={t('routing.escalation')}
+            description={stateLabel(settings.routingEscalation.enabled)}
+            enabled={settings.routingEscalation.enabled}
+            onToggle={() => updateEscalation({ enabled: !settings.routingEscalation.enabled })}
+          />
+        </SettingsItem>
         {settings.routingEscalation.enabled && (
-          <>
+          <SettingsItem className="space-y-3">
             <ModelPairSelect
               label={t('routing.escalation.fallback')}
               provider={settings.routingEscalation.fallbackProvider}
@@ -197,20 +210,22 @@ export function RoutingSettings() {
               value={settings.routingEscalation.minLength}
               onChange={(e) => updateEscalation({ minLength: Number(e.target.value) || 1 })}
             />
-          </>
+          </SettingsItem>
         )}
       </SettingsSection>
 
       {/* Стоимость */}
       <SettingsSection>
-        <ToggleField
-          label={t('routing.cost')}
-          description={stateLabel(settings.routingCost.enabled)}
-          enabled={settings.routingCost.enabled}
-          onToggle={() => updateCost({ enabled: !settings.routingCost.enabled })}
-        />
+        <SettingsItem>
+          <ToggleField
+            label={t('routing.cost')}
+            description={stateLabel(settings.routingCost.enabled)}
+            enabled={settings.routingCost.enabled}
+            onToggle={() => updateCost({ enabled: !settings.routingCost.enabled })}
+          />
+        </SettingsItem>
         {settings.routingCost.enabled && (
-          <>
+          <SettingsItem className="space-y-3">
             <ModelPairSelect
               label={t('routing.cost.cheap')}
               provider={settings.routingCost.cheapProvider}
@@ -228,41 +243,45 @@ export function RoutingSettings() {
               value={settings.routingCost.maxCheapTokens}
               onChange={(e) => updateCost({ maxCheapTokens: Number(e.target.value) || 1 })}
             />
-          </>
+          </SettingsItem>
         )}
       </SettingsSection>
 
       {/* Саб-агенты */}
       <SettingsSection>
-        <ToggleField
-          label={t('routing.subagent')}
-          description={stateLabel(settings.subagentRouting.enabled)}
-          enabled={settings.subagentRouting.enabled}
-          onToggle={() => updateSubagent({ enabled: !settings.subagentRouting.enabled })}
-        />
+        <SettingsItem>
+          <ToggleField
+            label={t('routing.subagent')}
+            description={stateLabel(settings.subagentRouting.enabled)}
+            enabled={settings.subagentRouting.enabled}
+            onToggle={() => updateSubagent({ enabled: !settings.subagentRouting.enabled })}
+          />
+        </SettingsItem>
         {settings.subagentRouting.enabled && (
-          <SelectField
-            label={t('routing.subagent.model')}
-            value={subagentModel}
-            onValueChange={(value) => {
-              if (value === 'auto') {
-                updateSubagent({ provider: '', model: '' })
-              } else {
-                const [p, ...rest] = value.split(':')
-                updateSubagent({ provider: p!, model: rest.join(':') })
-              }
-            }}
-            ariaLabel={t('routing.subagent.model')}
-          >
-            <SelectContent>
-              <SelectItem value="auto">{t('routing.subagent.modelAuto')}</SelectItem>
-              {models.filter((m) => m.enabled).map((m) => (
-                <SelectItem key={`${m.provider}:${m.name}`} value={`${m.provider}:${m.name}`}>
-                  {m.provider}/{m.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </SelectField>
+          <SettingsItem>
+            <SelectField
+              label={t('routing.subagent.model')}
+              value={subagentModel}
+              onValueChange={(value) => {
+                if (value === 'auto') {
+                  updateSubagent({ provider: '', model: '' })
+                } else {
+                  const [p, ...rest] = value.split(':')
+                  updateSubagent({ provider: p!, model: rest.join(':') })
+                }
+              }}
+              ariaLabel={t('routing.subagent.model')}
+            >
+              <SelectContent>
+                <SelectItem value="auto">{t('routing.subagent.modelAuto')}</SelectItem>
+                {models.filter((m) => m.enabled).map((m) => (
+                  <SelectItem key={`${m.provider}:${m.name}`} value={`${m.provider}:${m.name}`}>
+                    {m.provider}/{m.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </SelectField>
+          </SettingsItem>
         )}
       </SettingsSection>
 
@@ -361,15 +380,17 @@ function DictionarySection() {
 
   return (
     <SettingsSection title={t('routing.dictionaries.title')}>
-      <SegmentedControl<DictionaryLanguage>
-        value={language}
-        options={[
-          { value: 'ru', label: t('common.language.russian') },
-          { value: 'en', label: t('common.language.english') },
-        ]}
-        onChange={setLanguage}
-        ariaLabel={t('routing.dictionaries.title')}
-      />
+      <SettingsItem>
+        <SegmentedControl<DictionaryLanguage>
+          value={language}
+          options={[
+            { value: 'ru', label: t('common.language.russian') },
+            { value: 'en', label: t('common.language.english') },
+          ]}
+          onChange={setLanguage}
+          ariaLabel={t('routing.dictionaries.title')}
+        />
+      </SettingsItem>
 
       {loadError && <p className="text-sm text-destructive min-w-0 break-words">{t('routing.dictionaries.loadError')}</p>}
       {!loadError && entries === null && <p className="text-sm text-muted-foreground min-w-0">{t('common.loading')}</p>}

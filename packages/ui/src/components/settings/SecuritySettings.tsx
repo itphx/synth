@@ -18,6 +18,7 @@ import {
   SelectField,
   SettingsActions,
   SettingsField,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   TextField,
@@ -342,34 +343,40 @@ export function SecuritySettings() {
     <SettingsPanel title={t('gateway.title')} description={t('gateway.description')}>
       {/* Шлюз безопасности (llmGateway) */}
       <SettingsSection>
-        <ToggleField
-          label={gatewayDraft.enabled ? t('common.enabled') : t('common.disabled')}
-          enabled={gatewayDraft.enabled}
-          onToggle={() => gateway.update({ enabled: !gatewayDraft.enabled })}
-        />
+        <SettingsItem>
+          <ToggleField
+            label={gatewayDraft.enabled ? t('common.enabled') : t('common.disabled')}
+            enabled={gatewayDraft.enabled}
+            onToggle={() => gateway.update({ enabled: !gatewayDraft.enabled })}
+          />
+        </SettingsItem>
 
-        <ToggleField
-          label={t('gateway.logPayloads')}
-          description={t('gateway.logPayloadsHelp')}
-          enabled={gatewayDraft.logPayloads ?? false}
-          onToggle={() => gateway.update({ logPayloads: !(gatewayDraft.logPayloads ?? false) })}
-        />
+        <SettingsItem>
+          <ToggleField
+            label={t('gateway.logPayloads')}
+            description={t('gateway.logPayloadsHelp')}
+            enabled={gatewayDraft.logPayloads ?? false}
+            onToggle={() => gateway.update({ logPayloads: !(gatewayDraft.logPayloads ?? false) })}
+          />
+        </SettingsItem>
 
-        <SelectField
-          label={t('gateway.inputMode')}
-          value={gatewayDraft.inputMode}
-          onValueChange={(value) =>
-            gateway.update({ inputMode: value as LlmGatewaySettings['inputMode'] })
-          }
-          ariaLabel={t('gateway.inputMode')}
-        >
-          <SelectContent>
-            <SelectItem value="obfuscate">{t('gateway.inputMode.obfuscate')}</SelectItem>
-            <SelectItem value="block">{t('gateway.inputMode.block')}</SelectItem>
-          </SelectContent>
-        </SelectField>
+        <SettingsItem>
+          <SelectField
+            label={t('gateway.inputMode')}
+            value={gatewayDraft.inputMode}
+            onValueChange={(value) =>
+              gateway.update({ inputMode: value as LlmGatewaySettings['inputMode'] })
+            }
+            ariaLabel={t('gateway.inputMode')}
+          >
+            <SelectContent>
+              <SelectItem value="obfuscate">{t('gateway.inputMode.obfuscate')}</SelectItem>
+              <SelectItem value="block">{t('gateway.inputMode.block')}</SelectItem>
+            </SelectContent>
+          </SelectField>
+        </SettingsItem>
 
-        <div className="space-y-3 min-w-0">
+        <SettingsItem className="space-y-3">
           <div className="text-sm font-medium text-foreground">{t('gateway.rateLimit')}</div>
           <NumberField
             label={t('gateway.rateLimit.user')}
@@ -397,7 +404,7 @@ export function SecuritySettings() {
               })
             }
           />
-        </div>
+        </SettingsItem>
 
         <SettingsActions
           onSave={() => void gateway.save()}
@@ -440,7 +447,10 @@ export function SecuritySettings() {
               {patterns.map((p, idx) => {
                 const regexInvalid = !isValidRegex(p.regex)
                 return (
-                  <div key={patternKeys[idx]} className="flex flex-wrap items-start gap-2 min-w-0">
+                  <div
+                    key={patternKeys[idx]}
+                    className="flex flex-wrap items-start gap-2 min-w-0 rounded-lg border border-border bg-surface-inset p-2"
+                  >
                     <TextField
                       value={p.type}
                       onChange={(e) => updatePattern(idx, { type: e.target.value })}
@@ -500,31 +510,35 @@ export function SecuritySettings() {
         description={t('security.protectedPaths.description')}
         actions={!policyOverridden ? <DefaultsBadge /> : undefined}
       >
-        <ToggleField
-          label={security.protectedPaths.enabled ? t('common.enabled') : t('common.disabled')}
-          enabled={security.protectedPaths.enabled}
-          onToggle={() =>
-            setSecurity((s) => ({ ...s, protectedPaths: { enabled: !s.protectedPaths.enabled } }))
-          }
-        />
-
-        <div className="text-sm font-medium text-foreground">{t('sessionSettings.askTimeout')}</div>
-
-        <ToggleField
-          label={askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
-          enabled={askTimeoutEnabled}
-          onToggle={() => setAskTimeoutEnabled(!askTimeoutEnabled)}
-        />
-
-        {askTimeoutEnabled && (
-          <NumberField
-            label={t('sessionSettings.askTimeoutSeconds')}
-            min={0}
-            value={askTimeoutSec}
-            onChange={(e) => setAskTimeoutSec(e.target.value)}
-            placeholder="30"
+        <SettingsItem>
+          <ToggleField
+            label={security.protectedPaths.enabled ? t('common.enabled') : t('common.disabled')}
+            enabled={security.protectedPaths.enabled}
+            onToggle={() =>
+              setSecurity((s) => ({ ...s, protectedPaths: { enabled: !s.protectedPaths.enabled } }))
+            }
           />
-        )}
+        </SettingsItem>
+
+        <SettingsItem className="space-y-3">
+          <div className="text-sm font-medium text-foreground">{t('sessionSettings.askTimeout')}</div>
+
+          <ToggleField
+            label={askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
+            enabled={askTimeoutEnabled}
+            onToggle={() => setAskTimeoutEnabled(!askTimeoutEnabled)}
+          />
+
+          {askTimeoutEnabled && (
+            <NumberField
+              label={t('sessionSettings.askTimeoutSeconds')}
+              min={0}
+              value={askTimeoutSec}
+              onChange={(e) => setAskTimeoutSec(e.target.value)}
+              placeholder="30"
+            />
+          )}
+        </SettingsItem>
 
         {policyLoadError && (
           <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{policyLoadError}</div>

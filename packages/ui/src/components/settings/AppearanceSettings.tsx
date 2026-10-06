@@ -6,7 +6,7 @@ import { useThemeSystem } from "@/contexts/useThemeSystem"
 import { useI18n } from "@/lib/i18n"
 import { profileService } from '@/lib/api/profileService'
 import { applyUiScale, getDefaultUiScale, persistUiScale } from '@/lib/uiScale'
-import { SettingsActions, SettingsPanel, SettingsSection, useSettingsDraft } from '../ui/settings'
+import { SettingsActions, SettingsItem, SettingsPanel, SettingsSection, useSettingsDraft } from '../ui/settings'
 import { UiScaleControl } from './UiScaleControl'
 import { ThemeModeControl, ThemeControl, LanguageControl } from './appearance-controls'
 
@@ -119,35 +119,43 @@ export const AppearanceSettings = () => {
       description={t('settings.appearance.description')}
     >
       <SettingsSection title={t('settings.appearance.themeMode.label')}>
-        <ThemeModeControl
-          value={current.themeMode}
-          onChange={(mode) => update({ themeMode: mode })}
-          ariaLabel={t('settings.appearance.themeMode.label')}
-        />
-        <ThemeControl
-          value={current.themePresetName}
-          onChange={(name) => update({ themePresetName: name })}
-          label={t('settings.appearance.theme.label')}
-          ariaLabel={t('settings.appearance.theme.label')}
-        />
+        <SettingsItem>
+          <ThemeModeControl
+            value={current.themeMode}
+            onChange={(mode) => update({ themeMode: mode })}
+            ariaLabel={t('settings.appearance.themeMode.label')}
+          />
+        </SettingsItem>
+        <SettingsItem>
+          <ThemeControl
+            value={current.themePresetName}
+            onChange={(name) => update({ themePresetName: name })}
+            label={t('settings.appearance.theme.label')}
+            ariaLabel={t('settings.appearance.theme.label')}
+          />
+        </SettingsItem>
       </SettingsSection>
 
       <SettingsSection title={t('settings.appearance.uiScale.label')}>
-        <UiScaleControl
-          value={current.uiScale}
-          onChange={(value) => update({ uiScale: value })}
-        />
+        <SettingsItem>
+          <UiScaleControl
+            value={current.uiScale}
+            onChange={(value) => update({ uiScale: value })}
+          />
+        </SettingsItem>
       </SettingsSection>
 
       <SettingsSection title={t('settings.appearance.language.label')}>
-        <LanguageControl
-          value={current.locale}
-          onChange={(locale) => update({ locale })}
-          labels={{
-            ru: t('common.language.russian'),
-            en: t('common.language.english'),
-          }}
-        />
+        <SettingsItem>
+          <LanguageControl
+            value={current.locale}
+            onChange={(locale) => update({ locale })}
+            labels={{
+              ru: t('common.language.russian'),
+              en: t('common.language.english'),
+            }}
+          />
+        </SettingsItem>
       </SettingsSection>
 
       <SettingsActions

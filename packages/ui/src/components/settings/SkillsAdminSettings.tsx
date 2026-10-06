@@ -364,10 +364,10 @@ export function SkillsAdminSettings() {
         )}
       </SettingsSection>
 
-      {/* Системные гейты: мастер «выключить везде» + сид новых проектов */}
+      {/* Системные гейты, ось 1: мастер «выключить везде» */}
       <SettingsSection
-        title={t('skillsAdmin.disabled.title')}
-        description={t('skillsAdmin.disabled.description')}
+        title={t('skillsAdmin.gates.master')}
+        description={t('skillsAdmin.gates.masterHint')}
       >
         {settingsError && !settingsGates && (
           <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
@@ -380,19 +380,21 @@ export function SkillsAdminSettings() {
 
         <DisabledGroupDimension
           testIdPrefix="skills-disabled"
-          title={t('skillsAdmin.gates.master')}
-          description={t('skillsAdmin.gates.masterHint')}
           categories={categories}
           groups={groups}
           skills={(skills ?? []).map((s) => s.name)}
           disabledValues={draftDisabled.disabled}
           onToggle={(kind, value) => toggleDisabled('disabled', kind, value)}
         />
+      </SettingsSection>
 
+      {/* Системные гейты, ось 2: сид новых проектов */}
+      <SettingsSection
+        title={t('skillsAdmin.gates.newProjects')}
+        description={t('skillsAdmin.gates.newProjectsHint')}
+      >
         <DisabledGroupDimension
           testIdPrefix="skills-new-projects"
-          title={t('skillsAdmin.gates.newProjects')}
-          description={t('skillsAdmin.gates.newProjectsHint')}
           categories={categories}
           groups={groups}
           skills={(skills ?? []).map((s) => s.name)}
@@ -527,12 +529,11 @@ function SkillAdminRow({
 
 /**
  * AD-046 §4.5: одно измерение системных гейтов (мастер или сид проектов) —
- * подпись/пояснение + три группы (категории/группы/отдельные скиллы).
+ * три группы (категории/группы/отдельные скиллы). Заголовок оси даёт
+ * родительская `SettingsSection` (AD-072: секции не вкладывать).
  */
 function DisabledGroupDimension({
   testIdPrefix,
-  title,
-  description,
   categories,
   groups,
   skills,
@@ -540,8 +541,6 @@ function DisabledGroupDimension({
   onToggle,
 }: {
   testIdPrefix: string
-  title: string
-  description: string
   categories: string[]
   groups: string[]
   skills: string[]
@@ -550,11 +549,7 @@ function DisabledGroupDimension({
 }) {
   const { t } = useI18n()
   return (
-    <div className="space-y-2 min-w-0 rounded-lg border border-border/60 p-3">
-      <div className="min-w-0">
-        <div className="text-sm font-medium text-foreground break-words">{title}</div>
-        <p className="text-xs text-muted-foreground break-words">{description}</p>
-      </div>
+    <>
       <DisabledGroup
         label={t('skillsAdmin.disabled.categories')}
         testIdPrefix={`${testIdPrefix}-category`}
@@ -579,7 +574,7 @@ function DisabledGroupDimension({
         emptyText={t('skillsAdmin.disabled.noSkills')}
         onToggle={(value) => onToggle('skills', value)}
       />
-    </div>
+    </>
   )
 }
 
@@ -611,7 +606,7 @@ function DisabledGroup({
               <label
                 key={value}
                 className={cn(
-                  'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer min-w-0',
+                  'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
                   'transition-colors duration-150 ease-out hover:bg-interactive-hover',
                   'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
                   !enabled && 'bg-interactive-selection',

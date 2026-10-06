@@ -50,8 +50,11 @@ export function SettingsPanel({
 
     const update = () => {
       const { scrollTop, scrollHeight, clientHeight } = el
-      const hasTop = scrollTop > 1
-      const hasBottom = scrollHeight - scrollTop - clientHeight > 1
+      // Допуск на дробные пиксели при UI-масштабе (layout может давать
+      // остаток ~1–2px у самого дна скролла): у края фейд гарантированно снимается.
+      const EDGE = 4
+      const hasTop = scrollTop > EDGE
+      const hasBottom = Math.ceil(scrollHeight - scrollTop - clientHeight) > EDGE
       if (hasTop && hasBottom) {
         el.setAttribute('data-scroll-shadow', 'top-bottom')
       } else if (hasTop) {

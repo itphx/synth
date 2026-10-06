@@ -13,6 +13,7 @@ import {
   ListField,
   SelectField,
   SettingsActions,
+  SettingsItem,
   SettingsPanel,
   SettingsRow,
   SettingsSection,
@@ -398,17 +399,21 @@ export const McpSettings = () => {
           onCancel={editor.closeForm}
           extraFields={
             <>
-              <ToggleField
-                label={t('mcp.masterEnabled')}
-                description={t('mcp.masterEnabledDescription')}
-                enabled={editor.formEnabled}
-                onToggle={() => editor.setFormEnabled((prev) => !prev)}
-              />
-              <ToggleField
-                label={t('mcp.enabledByDefault')}
-                enabled={editor.formDefault}
-                onToggle={() => editor.setFormDefault((prev) => !prev)}
-              />
+              <SettingsItem>
+                <ToggleField
+                  label={t('mcp.masterEnabled')}
+                  description={t('mcp.masterEnabledDescription')}
+                  enabled={editor.formEnabled}
+                  onToggle={() => editor.setFormEnabled((prev) => !prev)}
+                />
+              </SettingsItem>
+              <SettingsItem>
+                <ToggleField
+                  label={t('mcp.enabledByDefault')}
+                  enabled={editor.formDefault}
+                  onToggle={() => editor.setFormDefault((prev) => !prev)}
+                />
+              </SettingsItem>
               {testResult && (
                 <div
                   className={cn(
@@ -457,7 +462,7 @@ export const McpSettings = () => {
                   key={entry.id}
                   data-testid={`mcp-registry-${entry.name}`}
                   className={cn(
-                    'flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border bg-background hover:border-primary/50 transition-colors min-w-0',
+                    'flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border bg-surface-inset hover:border-primary/50 transition-colors min-w-0',
                     !masterEnabled && 'opacity-50'
                   )}
                 >
@@ -772,7 +777,7 @@ function ServerAvailabilityCard({
   const hasProbed = tools !== undefined
 
   return (
-    <SettingsSection className="bg-background">
+    <SettingsItem className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
         <div className="text-sm font-medium min-w-0 break-words">{name}</div>
         <Button
@@ -837,7 +842,7 @@ function ServerAvailabilityCard({
           )}
         </div>
       )}
-    </SettingsSection>
+    </SettingsItem>
   )
 }
 

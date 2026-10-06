@@ -12,6 +12,8 @@ export interface UiScaleSliderProps {
   resetDisabled?: boolean
   resetTitle?: string
   stacked?: boolean
+  /** Проброс `fluid` в Kit `SliderField` (растянуть слайдер в узком контейнере). */
+  fluid?: boolean
 }
 
 /**
@@ -26,6 +28,7 @@ export const UiScaleSlider: React.FC<UiScaleSliderProps> = ({
   resetDisabled,
   resetTitle,
   stacked,
+  fluid,
 }) => (
   <SliderField
     label={label}
@@ -38,6 +41,7 @@ export const UiScaleSlider: React.FC<UiScaleSliderProps> = ({
     resetDisabled={resetDisabled}
     resetTitle={resetTitle}
     stacked={stacked}
+    fluid={fluid}
     formatValue={(v) => `${Math.round(v * 100)}%`}
   />
 )
@@ -50,9 +54,11 @@ export interface UiScaleControlProps {
   value?: number
   onChange?: (value: number) => void
   stacked?: boolean
+  /** Проброс `fluid` (узкий контейнер: поповер быстрых настроек). */
+  fluid?: boolean
 }
 
-export const UiScaleControl = ({ value, onChange, stacked }: UiScaleControlProps) => {
+export const UiScaleControl = ({ value, onChange, stacked, fluid }: UiScaleControlProps) => {
   const { t } = useI18n()
   const storeScale = useUIStore((state) => state.uiScale)
   const setStoreScale = useUIStore((state) => state.setUiScale)
@@ -78,6 +84,7 @@ export const UiScaleControl = ({ value, onChange, stacked }: UiScaleControlProps
       resetDisabled={isDefault}
       resetTitle={t('settings.appearance.uiScale.reset')}
       stacked={stacked}
+      fluid={fluid}
     />
   )
 }

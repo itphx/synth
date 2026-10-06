@@ -243,7 +243,7 @@ export function ToolsDisabledSettings() {
                 <label
                   key={capability}
                   className={cn(
-                    'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer min-w-0',
+                    'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
                     'transition-colors duration-150 ease-out hover:bg-interactive-hover',
                     'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
                     !enabled && 'bg-interactive-selection',
@@ -302,7 +302,7 @@ export function ToolsDisabledSettings() {
                   <label
                     key={tool.name}
                     className={cn(
-                      'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 px-2.5 py-1.5 cursor-pointer min-w-0',
+                      'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
                       'transition-colors duration-150 ease-out hover:bg-interactive-hover',
                       'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
                       disabledByGroup ? 'cursor-not-allowed opacity-50' : !enabled && 'bg-interactive-selection',

@@ -141,6 +141,26 @@ describe('SliderField', () => {
     expect(input.classList.contains('w-24')).toBe(true)
   })
 
+  it('fluid в строке: слайдер растягивается (flex-1 min-w-0), подпись обрезается', async () => {
+    const host = await renderSlider({
+      label: 'Scale',
+      min: 0,
+      max: 1,
+      value: 0.5,
+      onValueChange: vi.fn(),
+      stacked: false,
+      fluid: true,
+    })
+    const root = host.firstElementChild as HTMLElement
+    const input = host.querySelector('input[type="range"]') as HTMLInputElement
+    expect(root.classList.contains('flex')).toBe(true)
+    expect(input.classList.contains('flex-1')).toBe(true)
+    expect(input.classList.contains('min-w-0')).toBe(true)
+    expect(input.classList.contains('w-24')).toBe(false)
+    const label = host.querySelector('span') as HTMLElement
+    expect(label.classList.contains('truncate')).toBe(true)
+  })
+
   it('рендерит компактную кнопку сброса и вызывает onReset', async () => {
     const onReset = vi.fn()
     const host = await renderSlider({

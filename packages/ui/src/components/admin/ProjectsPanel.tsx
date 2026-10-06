@@ -7,6 +7,7 @@ import { confirm } from '@/lib/confirm'
 import { useNotification } from '@/hooks/useNotification'
 import {
   SettingsActions,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   TextField,
@@ -176,9 +177,9 @@ export const ProjectsPanel = () => {
           <p className="py-4 text-center text-muted-foreground">{t('admin.projects.empty')}</p>
         </SettingsSection>
       ) : (
-        <div className="space-y-2">
+        <SettingsSection>
           {projects.map((p) => (
-            <SettingsSection key={p.id}>
+            <SettingsItem key={p.id}>
               <div className="flex items-start justify-between gap-3 min-w-0">
                 <div className="min-w-0">
                   <h4 className="font-medium text-sm truncate">{p.name}</h4>
@@ -200,9 +201,9 @@ export const ProjectsPanel = () => {
                   <Icon name="delete-bin" className="size-4" />
                 </Button>
               </div>
-            </SettingsSection>
+            </SettingsItem>
           ))}
-        </div>
+        </SettingsSection>
       )}
     </SettingsPanel>
   )

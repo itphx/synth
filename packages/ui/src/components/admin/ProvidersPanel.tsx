@@ -9,6 +9,7 @@ import { Button } from '../ui/button'
 import {
   SettingsActions,
   SettingsField,
+  SettingsItem,
   SettingsPanel,
   SettingsSection,
   SelectField,
@@ -405,9 +406,9 @@ export const ProvidersPanel = () => {
           <p className="py-4 text-center text-muted-foreground">{t('admin.providers.noProviders')}</p>
         </SettingsSection>
       ) : (
-        <div className="space-y-2">
+        <SettingsSection>
           {providers.map((p) => (
-            <SettingsSection key={p.name} className={cn(p.enabled === false && 'opacity-50')}>
+            <SettingsItem key={p.name} className={cn(p.enabled === false && 'opacity-50')}>
               <div className="flex flex-wrap items-center justify-between gap-3 min-w-0">
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <ProviderIcon icon={p.icon} baseUrl={p.url} size={22} title={p.name} />
@@ -436,9 +437,9 @@ export const ProvidersPanel = () => {
                   </Button>
                 </div>
               </div>
-            </SettingsSection>
+            </SettingsItem>
           ))}
-        </div>
+        </SettingsSection>
       )}
     </SettingsPanel>
   )
