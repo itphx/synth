@@ -125,7 +125,15 @@
 | Тень: тултип | `shadow-md` |
 | Тень: диалог | `shadow-xl` (поверхность диалога — `bg-background`) |
 | Радиусы | концентрические: контейнер `rounded-xl` + `p-1`, пункты внутри `rounded-lg` (разница радиусов = паддинг контейнера) |
-| Разделители | остаются рамками (`border-t border-border/…`), не отдельными прямоугольниками |
+| Разделители | компонент `Divider` (`components/ui/Divider.tsx`): в плавающем слое `tone="raised"` + `inset` (линия не касается краёв), на обычных поверхностях `tone="default"` (= `bg-border`) |
+
+**Разделители.** Любой разделитель — компонент `Divider`
+(`components/ui/Divider.tsx`), а не ad-hoc `border-t`/`border-b` и не самостоятельный
+`<hr>`. В плавающем слое (`bg-popover`) — `tone="raised"`
+(`bg-popover-foreground/25`) + `inset`, чтобы линия не касалась краёв контейнера;
+отступ подбирается по контейнеру (внутри `p-1` меню — `mx-2`). На обычных
+поверхностях — `tone="default"` (`bg-border`), без `inset`, если линия должна делить
+контейнер целиком.
 
 Затронутые компоненты: `components/ui/contextMenu.tsx`,
 `components/ui/popover.tsx`, `components/ui/select.tsx`,

@@ -4,6 +4,7 @@ import { useI18n } from '@/lib/i18n'
 import { useSkillsStore } from '@/stores/skillsStore'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
+import { Divider } from '../ui/Divider'
 
 export interface CommandAutocompleteProps {
   /** Текст после ведущего `/` (без него). */
@@ -139,9 +140,10 @@ export function CommandAutocomplete({
       style={{ bottom: POPUP_LIFT, left: position.left, width: '32rem', maxWidth: '100%' }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="border-b border-border/50 px-3 py-1.5 text-[0.625rem] uppercase tracking-wide text-popover-foreground/60">
+      <div className="px-3 py-1.5 text-[0.625rem] uppercase tracking-wide text-popover-foreground/60">
         {t('chat.commandAutocomplete.title')}
       </div>
+      <Divider inset tone="raised" />
 
       {loading && (commands?.length ?? 0) === 0 ? (
         <div className="px-3 py-2 text-xs text-popover-foreground/70">{t('common.loading')}</div>
@@ -204,7 +206,8 @@ export function CommandAutocomplete({
         </div>
       )}
 
-      <div className="border-t border-border/50 px-3 py-1 text-[0.625rem] text-popover-foreground/60">
+      <Divider inset tone="raised" />
+      <div className="px-3 py-1 text-[0.625rem] text-popover-foreground/60">
         {t('chat.commandAutocomplete.keyboardHint')}
       </div>
     </div>

@@ -9,6 +9,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import { ProviderIcon } from '@/components/admin/ProviderIcon'
 import { Icon } from '../icon/Icon'
 import { OverlayScrollbar } from '../ui/OverlayScrollbar'
+import { Divider } from '../ui/Divider'
 import type { ModelInfo, ProviderInfo } from '@/lib/api/synthApi'
 
 type DropdownItem =
@@ -319,7 +320,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           alignOffset={-40}
           collisionPadding={8}
         >
-          <div className="p-2 border-b border-border/40">
+          <div className="p-2">
             <div className="relative flex items-center gap-1">
               <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <input
@@ -384,6 +385,8 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
             </div>
           </div>
 
+          <Divider inset tone="raised" />
+
           <div className="relative flex flex-col flex-1 min-h-0 w-full max-h-[min(400px,calc(100dvh-12rem))]">
             <div
               ref={(el) => {
@@ -422,31 +425,35 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                     const iconName = item.icon as string
                     if (item.isProvider) {
                       return (
-                        <div
-                          key={item.id}
-                          style={style}
-                          onClick={() => toggleCollapse(item.text)}
-                          className="flex items-center gap-2 px-2 py-1.5 border-b border-border/30 cursor-pointer hover:bg-interactive-hover rounded-none"
-                        >
-                          <ProviderIcon icon={item.icon} baseUrl={item.providerUrl} size={16} />
-                          <span className="font-semibold text-xs text-foreground flex-1">{item.text}</span>
-                          <Icon
-                            name={item.collapsed ? 'arrow-right-s' : 'arrow-down-s'}
-                            className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
-                          />
+                        <div key={item.id} style={style} className="flex flex-col">
+                          <div
+                            onClick={() => toggleCollapse(item.text)}
+                            className="flex flex-1 items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-interactive-hover rounded-none"
+                          >
+                            <ProviderIcon icon={item.icon} baseUrl={item.providerUrl} size={16} />
+                            <span className="font-semibold text-xs text-foreground flex-1">{item.text}</span>
+                            <Icon
+                              name={item.collapsed ? 'arrow-right-s' : 'arrow-down-s'}
+                              className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                            />
+                          </div>
+                          <Divider inset tone="raised" />
                         </div>
                       )
                     }
                     return (
-                      <div key={item.id} style={style} className="flex items-center gap-2 px-3 py-1.5 border-b border-border/30">
-                        <Icon name={iconName as 'star-fill' | 'time'} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="text-[0.625rem] font-semibold text-muted-foreground uppercase tracking-wider">{item.text}</span>
+                      <div key={item.id} style={style} className="flex flex-col">
+                        <div className="flex flex-1 items-center gap-2 px-3 py-1.5">
+                          <Icon name={iconName as 'star-fill' | 'time'} className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span className="text-[0.625rem] font-semibold text-muted-foreground uppercase tracking-wider">{item.text}</span>
+                        </div>
+                        <Divider inset tone="raised" />
                       </div>
                     )
                   }
 
                   if (item.type === 'separator') {
-                    return <div key={item.id} style={style} className="flex items-center px-2"><hr className="w-full border-t border-border/30" /></div>
+                    return <div key={item.id} style={style} className="flex items-center px-2"><Divider tone="raised" className="w-full" /></div>
                   }
 
                   if (item.type === 'model') {

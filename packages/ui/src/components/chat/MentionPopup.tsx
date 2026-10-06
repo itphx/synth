@@ -1,5 +1,6 @@
 import { useMemo, useEffect, useRef, useState, useCallback } from 'react'
 import { Icon } from '../icon/Icon'
+import { Divider } from '../ui/Divider'
 import { useI18n } from '@/lib/i18n'
 import { resolveColor } from '@/lib/utils'
 import type { AgentInfo } from '@/lib/api/synthApi'
@@ -90,9 +91,10 @@ export function MentionPopup({ query, agents, position, onSelect, onClose }: Men
       style={{ bottom: POPUP_LIFT, left: position.left, minWidth: '12.5rem' }}
       onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="px-3 py-1.5 border-b border-border/50 text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
+      <div className="px-3 py-1.5 text-[0.625rem] text-muted-foreground/60 uppercase tracking-wide">
         {t('chat.input.mentionHint')}
       </div>
+      <Divider inset tone="raised" />
       <div className="max-h-72 overflow-y-auto p-1">
         {filtered.map((agent, idx) => (
           <button

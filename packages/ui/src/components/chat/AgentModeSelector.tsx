@@ -8,6 +8,7 @@ import { synthApi } from '@/lib/api/synthApi'
 import { resolveColor } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { ScrollableOverlay } from '../ui/ScrollableOverlay'
+import { Divider } from '../ui/Divider'
 
 interface AgentModeSelectorProps {
   sessionId: string
@@ -95,7 +96,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
           alignOffset={-40}
           collisionPadding={8}
         >
-          <div className="p-2 border-b border-border/40">
+          <div className="p-2">
             <div className="relative">
               <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
               <input
@@ -108,6 +109,8 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
               />
             </div>
           </div>
+
+          <Divider inset tone="raised" />
 
           <ScrollableOverlay
             outerClassName="max-h-[min(800px,calc(100dvh-12rem))] flex-1"
@@ -127,7 +130,7 @@ export function AgentModeSelector({ sessionId }: AgentModeSelectorProps) {
                   <Icon name="arrow-go-back" className="h-3.5 w-3.5 text-muted-foreground" />
                   <span className="font-medium">{t('chat.modelControls.resetToDefault')}</span>
                 </DropdownMenu.Item>
-                <DropdownMenu.Separator className="my-1 border-t border-border/30" />
+                <Divider tone="raised" className="mx-2 my-1" />
               </>
             )}
 

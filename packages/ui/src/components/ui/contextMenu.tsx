@@ -3,6 +3,7 @@ import * as PopoverPrimitive from '@radix-ui/react-popover'
 import { Icon } from '@/components/icon/Icon'
 import type { IconName } from '@/components/icon/icons'
 import { cn } from '@/lib/utils'
+import { Divider } from '@/components/ui/Divider'
 
 export interface ContextMenuItem {
   label: string
@@ -47,12 +48,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({
         >
           {items.map((item, index) => {
             if (item === 'separator') {
-              return (
-                <div
-                  key={`sep-${index}`}
-                  className="my-1 border-t border-border/30"
-                />
-              )
+              return <Divider key={`sep-${index}`} tone="raised" className="mx-2 my-1" />
             }
             return (
               <PopoverPrimitive.Close key={item.label + index} asChild>

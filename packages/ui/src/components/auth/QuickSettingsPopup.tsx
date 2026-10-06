@@ -14,6 +14,7 @@ import { UiScaleControl } from '@/components/settings/UiScaleControl'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SegmentedControl } from '@/components/ui/settings'
+import { Divider } from '@/components/ui/Divider'
 
 interface QuickSettingsPopupProps {
   onSettingsClick: () => void
@@ -106,7 +107,7 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
       </PopoverTrigger>
 
       <PopoverContent align="end" sideOffset={4} className="w-72 p-0">
-        <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-border/40">
+        <div className="flex items-center gap-2.5 px-3 py-2.5">
           <div className="size-8 shrink-0 rounded-full bg-interactive-selection flex items-center justify-center overflow-hidden">
             {profile?.preferences?.avatar ? (
               <img
@@ -127,6 +128,8 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
             )}
           </div>
         </div>
+
+        <Divider inset tone="raised" />
 
         <div className="p-1.5 space-y-0.5">
           <div className={settingRowClass}>
@@ -163,11 +166,13 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
           </div>
 
           <div className="rounded-lg px-2.5 py-1.5">
-            <UiScaleControl stacked={false} fluid />
+            <UiScaleControl stacked />
           </div>
         </div>
 
-        <div className="p-1.5 border-t border-border/40">
+        <Divider inset tone="raised" />
+
+        <div className="p-1.5">
           <button
             onClick={() => {
               setIsOpen(false)
@@ -210,18 +215,21 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
               {t('auth.admin')}
             </button>
           )}
-          <div className="mt-1 pt-1 border-t border-border/40">
-            <button
-              onClick={() => {
-                setIsOpen(false)
-                useAuthStore.getState().logout()
-              }}
-              className={actionItemClass}
-            >
-              <Icon name="logout" className="size-3.5" />
-              {t('auth.logout')}
-            </button>
-          </div>
+        </div>
+
+        <Divider inset tone="raised" />
+
+        <div className="p-1.5">
+          <button
+            onClick={() => {
+              setIsOpen(false)
+              useAuthStore.getState().logout()
+            }}
+            className={actionItemClass}
+          >
+            <Icon name="logout" className="size-3.5" />
+            {t('auth.logout')}
+          </button>
         </div>
       </PopoverContent>
     </Popover>
