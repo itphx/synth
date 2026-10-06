@@ -139,6 +139,12 @@ iOS-режим (`alignItemWithTrigger`) в китовом `Select` **выклю�
 (`alignItemWithTrigger={false}` на `SelectPositioner`) для единообразного
 компактного дропдауна на всех устройствах и способах открытия.
 
+Ширина попапа `SelectContent` равна ширине триггера, который его открыл:
+`w-[var(--anchor-width)]` (Base UI кладёт ширину анкора в CSS-переменную
+`--anchor-width` на позиционере) + `max-w-[var(--available-width)]`, чтобы
+попап не вылезал за узкий вьюпорт. Длинные подписи пунктов усекаются
+(`truncate` на `BaseSelect.ItemText`), поэтому текст не ломает вёрстку.
+
 Карточка входа (`components/auth/LoginForm.tsx`) следует рецепту
 плавающего слоя, но на поверхности **card** (`bg-card`): `rounded-xl` +
 `ring-1 ring-foreground/10` + `shadow-xl`; внутренние поля — `rounded-lg`
