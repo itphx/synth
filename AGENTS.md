@@ -379,6 +379,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-081 | Политики гибрида и защита от утечек: серверные политики (forbidden/remote-only/full; publish/fork allow\|deny\|approval), явные эндпоинты переноса, discovery, аудит, панель «Гибрид» | ⏳ Не реализовано | [ad-081](./docs/arch_decisions/ad-081-hybrid-policy-leak-protection.md) |
 | AD-082 | Flavor-образы с toolchain (`slim`/`core`/`dev`/`devops`/`browser`/`full`; alpine + debian) для local containerized и managed single-instance (промежуточный шаг до AD-077) | ⏳ Не реализовано | [ad-082](./docs/arch_decisions/ad-082-full-images-deployment.md) |
 | AD-083 | Кастомизация инстанса и брендинг: приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings (блокировка настроек даже для ADMIN инстанса) | ⏳ Не реализовано | [ad-083](./docs/arch_decisions/ad-083-instance-customization-branding.md) |
+| AD-084 | Decision-модели (Clef/Clef-Flash) в маршрутизации и быстрых ответах: класс decision-моделей (Jev/SystemOne-совместимый API), Clef-Flash в micro/быстрых ответах, Clef на эскалацию/мультимодальность, через GatewayProvider, политики local/remote | ⏳ Не реализовано | [ad-084](./docs/arch_decisions/ad-084-decision-models-clef.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -397,7 +398,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | саб-агенты / контекст | [AD-026](./docs/arch_decisions/ad-026-subagent-context-modes.md), [AD-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
 | permissions / plan-act | [AD-025](./docs/arch_decisions/ad-025-plan-act-toggle.md), [AD-028](./docs/arch_decisions/ad-028-plan-build-strictness.md), [AD-029](./docs/arch_decisions/ad-029-granular-permissions.md) |
 | конфиг | [AD-023](./docs/arch_decisions/ad-023-configuration.md), [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) |
-| routing / микро-слой | [AD-034](./docs/arch_decisions/ad-034-model-routing.md), [AD-035](./docs/arch_decisions/ad-035-micro-model-first.md), [docs/ROUTING.md](./docs/ROUTING.md) |
+| routing / микро-слой | [AD-034](./docs/arch_decisions/ad-034-model-routing.md), [AD-035](./docs/arch_decisions/ad-035-micro-model-first.md), [AD-084](./docs/arch_decisions/ad-084-decision-models-clef.md), [docs/ROUTING.md](./docs/ROUTING.md) |
 | безопасность / gateway | [AD-036](./docs/arch_decisions/ad-036-llm-gateway.md) |
 | безопасность клиента / целостность / аттестация гибрида | [AD-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md) |
 | soft-delete / скрытие / retention / аудит-режим | [AD-074](./docs/arch_decisions/ad-074-soft-delete-retention.md) |

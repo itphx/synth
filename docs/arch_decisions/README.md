@@ -72,3 +72,4 @@
 | AD-081 | [Политики гибрида и защита от утечек](./ad-081-hybrid-policy-leak-protection.md): серверные политики (forbidden/remote-only/full, publish/fork allow|deny|approval), явные эндпоинты переноса, discovery, аудит, панель «Гибрид» |
 | AD-082 | [Flavor-образы с toolchain](./ad-082-full-images-deployment.md): `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance |
 | AD-083 | [Кастомизация инстанса и брендинг](./ad-083-instance-customization-branding.md): приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings |
+| AD-084 | [Decision-модели (Clef/Clef-Flash)](./ad-084-decision-models-clef.md) в маршрутизации и быстрых ответах |
