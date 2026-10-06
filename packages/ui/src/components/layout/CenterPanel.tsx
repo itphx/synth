@@ -12,7 +12,14 @@ function EmptyState() {
   return (
     <div className="flex flex-1 items-center justify-center bg-background">
       <div className="flex flex-col items-center gap-4">
-        <SynthLogo width={120} height={120} className="text-foreground" />
+        <div className="relative isolate">
+          {/* Мягкое свечение вокруг логотипа; не перекрывает контент и не влияет на лейаут */}
+          <div
+            className="pointer-events-none absolute inset-0 -z-10 rounded-full bg-primary/20 blur-3xl"
+            aria-hidden="true"
+          />
+          <SynthLogo width={120} height={120} className="text-primary" />
+        </div>
         <h1 className="text-2xl font-bold tracking-tight text-foreground">{t('app.title')}</h1>
         <p className="text-muted-foreground">{t('app.subtitle')}</p>
         <p className="text-xs text-muted-foreground/60 mt-4">{t('center.noTabs')}</p>
