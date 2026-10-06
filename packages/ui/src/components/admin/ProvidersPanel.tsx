@@ -329,7 +329,7 @@ export const ProvidersPanel = () => {
                         'p-1.5 rounded-md border',
                         form.icon === `ri:${riName}`
                           ? 'border-primary bg-primary/10'
-                          : 'border-border hover:bg-interactive-hover',
+                          : 'border-border bg-surface-inset hover:bg-interactive-hover',
                       )}
                     >
                       <Icon name={riName} className="size-4" />
@@ -349,7 +349,7 @@ export const ProvidersPanel = () => {
                         'p-1.5 rounded-md border',
                         form.icon === `brand:${brand}`
                           ? 'border-primary bg-primary/10'
-                          : 'border-border hover:bg-interactive-hover',
+                          : 'border-border bg-surface-inset hover:bg-interactive-hover',
                       )}
                     >
                       <img src={`/assets/providers/${brand}.svg`} width={16} height={16} alt={brand} />

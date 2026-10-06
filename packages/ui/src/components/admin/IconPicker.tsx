@@ -52,7 +52,7 @@ export const IconPicker = ({ value, onChange }: IconPickerProps) => {
               'p-1.5 rounded-md border transition-colors',
               value === name
                 ? 'border-primary bg-primary/10'
-                : 'border-border hover:bg-interactive-hover',
+                : 'border-border bg-surface-inset hover:bg-interactive-hover',
             )}
           >
             <Icon name={name} className="size-4" />

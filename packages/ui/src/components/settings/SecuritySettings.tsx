@@ -436,21 +436,18 @@ export function SecuritySettings() {
             <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
           )}
 
-          {!patternsLoading && !patternsLoadError && patterns.length === 0 && (
-            <div className="text-center text-muted-foreground py-6 text-sm">
-              {t('gateway.patterns.empty')}
-            </div>
-          )}
+          {!patternsLoading && !patternsLoadError && (
+            <SettingsItem className="space-y-2">
+              {patterns.length === 0 && (
+                <div className="text-center text-muted-foreground py-6 text-sm">
+                  {t('gateway.patterns.empty')}
+                </div>
+              )}
 
-          {!patternsLoading && patterns.length > 0 && (
-            <div className="space-y-2 min-w-0">
               {patterns.map((p, idx) => {
                 const regexInvalid = !isValidRegex(p.regex)
                 return (
-                  <div
-                    key={patternKeys[idx]}
-                    className="flex flex-wrap items-start gap-2 min-w-0 rounded-lg border border-border bg-surface-inset p-2"
-                  >
+                  <div key={patternKeys[idx]} className="flex flex-wrap items-start gap-2 min-w-0">
                     <TextField
                       value={p.type}
                       onChange={(e) => updatePattern(idx, { type: e.target.value })}
@@ -477,17 +474,17 @@ export function SecuritySettings() {
                   </div>
                 )
               })}
-            </div>
-          )}
 
-          <Button
-            variant="outline"
-            className="shrink-0 self-start"
-            onClick={() => setPatterns((prev) => [...prev, { type: '', regex: '' }])}
-            disabled={patternsLoading}
-          >
-            {t('gateway.patterns.add')}
-          </Button>
+              <Button
+                variant="outline"
+                className="shrink-0 self-start"
+                onClick={() => setPatterns((prev) => [...prev, { type: '', regex: '' }])}
+                disabled={patternsLoading}
+              >
+                {t('gateway.patterns.add')}
+              </Button>
+            </SettingsItem>
+          )}
         </SettingsField>
 
         <SettingsActions
@@ -549,40 +546,48 @@ export function SecuritySettings() {
         )}
 
         {!policyLoading && !policyLoadError && (
-          <div className="flex flex-col gap-3 min-w-0">
-            <ListField
-              label={t('security.protectedPaths.deniedPaths')}
-              values={policy.deniedPaths}
-              onChange={(v) => updatePolicyList('deniedPaths', v)}
-              placeholder={t('security.protectedPaths.placeholder')}
-              addLabel={t('security.protectedPaths.add')}
-              removeLabel={t('security.protectedPaths.remove')}
-            />
-            <ListField
-              label={t('security.protectedPaths.deniedPrefixes')}
-              values={policy.deniedPrefixes}
-              onChange={(v) => updatePolicyList('deniedPrefixes', v)}
-              placeholder={t('security.protectedPaths.placeholder')}
-              addLabel={t('security.protectedPaths.add')}
-              removeLabel={t('security.protectedPaths.remove')}
-            />
-            <ListField
-              label={t('security.protectedPaths.approvalPaths')}
-              values={policy.approvalPaths}
-              onChange={(v) => updatePolicyList('approvalPaths', v)}
-              placeholder={t('security.protectedPaths.placeholder')}
-              addLabel={t('security.protectedPaths.add')}
-              removeLabel={t('security.protectedPaths.remove')}
-            />
-            <ListField
-              label={t('security.protectedPaths.deniedCommandPrefixes')}
-              values={policy.deniedCommandPrefixes}
-              onChange={(v) => updatePolicyList('deniedCommandPrefixes', v)}
-              placeholder={t('security.protectedPaths.placeholder')}
-              addLabel={t('security.protectedPaths.add')}
-              removeLabel={t('security.protectedPaths.remove')}
-            />
-          </div>
+          <>
+            <SettingsItem>
+              <ListField
+                label={t('security.protectedPaths.deniedPaths')}
+                values={policy.deniedPaths}
+                onChange={(v) => updatePolicyList('deniedPaths', v)}
+                placeholder={t('security.protectedPaths.placeholder')}
+                addLabel={t('security.protectedPaths.add')}
+                removeLabel={t('security.protectedPaths.remove')}
+              />
+            </SettingsItem>
+            <SettingsItem>
+              <ListField
+                label={t('security.protectedPaths.deniedPrefixes')}
+                values={policy.deniedPrefixes}
+                onChange={(v) => updatePolicyList('deniedPrefixes', v)}
+                placeholder={t('security.protectedPaths.placeholder')}
+                addLabel={t('security.protectedPaths.add')}
+                removeLabel={t('security.protectedPaths.remove')}
+              />
+            </SettingsItem>
+            <SettingsItem>
+              <ListField
+                label={t('security.protectedPaths.approvalPaths')}
+                values={policy.approvalPaths}
+                onChange={(v) => updatePolicyList('approvalPaths', v)}
+                placeholder={t('security.protectedPaths.placeholder')}
+                addLabel={t('security.protectedPaths.add')}
+                removeLabel={t('security.protectedPaths.remove')}
+              />
+            </SettingsItem>
+            <SettingsItem>
+              <ListField
+                label={t('security.protectedPaths.deniedCommandPrefixes')}
+                values={policy.deniedCommandPrefixes}
+                onChange={(v) => updatePolicyList('deniedCommandPrefixes', v)}
+                placeholder={t('security.protectedPaths.placeholder')}
+                addLabel={t('security.protectedPaths.add')}
+                removeLabel={t('security.protectedPaths.remove')}
+              />
+            </SettingsItem>
+          </>
         )}
 
         <SettingsActions

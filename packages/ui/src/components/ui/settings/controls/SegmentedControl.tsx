@@ -33,7 +33,7 @@ export const SegmentedControl = <T extends string>({
     role="radiogroup"
     aria-label={ariaLabel}
     className={cn(
-      'inline-flex items-center gap-0.5 rounded-lg border border-border/80 bg-background p-0.5',
+      'inline-flex items-center gap-0.5 rounded-lg border border-border/80 bg-background p-1',
       disabled && 'opacity-60',
       className
     )}

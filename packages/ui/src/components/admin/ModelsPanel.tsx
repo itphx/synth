@@ -531,7 +531,7 @@ export const ModelsPanel = () => {
                                     onChange={(e) => handleContextEdit(model, e.target.value)}
                                     onFocus={(e) => e.target.select()}
                                     className={cn(
-                                      'w-full text-center bg-transparent border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-ring tabular-nums',
+                                      'w-full text-center bg-background border rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring tabular-nums',
                                       model.context_source === 'reference' && 'italic text-muted-foreground',
                                     )}
                                     title={model.context_window
@@ -555,7 +555,7 @@ export const ModelsPanel = () => {
                                     value={currency}
                                     onChange={(next) => setCurrency(model, next)}
                                   />
-                                  <div className="flex flex-1 flex-wrap gap-0.5">
+                                  <div className="flex flex-1 flex-wrap gap-1">
                                     <input
                                       type="number"
                                       min="0"
@@ -564,7 +564,7 @@ export const ModelsPanel = () => {
                                       value={editing?.inputPrice ?? model.input_price ?? ''}
                                       onChange={(e) => updatePriceField(model.id, 'inputPrice', e.target.value)}
                                       onFocus={() => !editing && startEditPrice(model)}
-                                      className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                      className="w-[calc(50%-0.125rem)] text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                                       title={formatPrice(model.input_price, currency) || t('admin.models.priceInTitle')}
                                     />
                                     <input
@@ -575,7 +575,7 @@ export const ModelsPanel = () => {
                                       value={editing?.outputPrice ?? model.output_price ?? ''}
                                       onChange={(e) => updatePriceField(model.id, 'outputPrice', e.target.value)}
                                       onFocus={() => !editing && startEditPrice(model)}
-                                      className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                      className="w-[calc(50%-0.125rem)] text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                                       title={formatPrice(model.output_price, currency) || t('admin.models.priceOutTitle')}
                                     />
                                     <input
@@ -586,7 +586,7 @@ export const ModelsPanel = () => {
                                       value={editing?.cacheReadPrice ?? model.cache_read_price ?? ''}
                                       onChange={(e) => updatePriceField(model.id, 'cacheReadPrice', e.target.value)}
                                       onFocus={() => !editing && startEditPrice(model)}
-                                      className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                      className="w-[calc(50%-0.125rem)] text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                                       title={formatPrice(model.cache_read_price, currency) || t('admin.models.priceCrTitle')}
                                     />
                                     <input
@@ -597,7 +597,7 @@ export const ModelsPanel = () => {
                                       value={editing?.cacheWritePrice ?? model.cache_write_price ?? ''}
                                       onChange={(e) => updatePriceField(model.id, 'cacheWritePrice', e.target.value)}
                                       onFocus={() => !editing && startEditPrice(model)}
-                                      className="w-[calc(50%-0.125rem)] text-center bg-transparent border rounded px-0.5 py-0.5 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
+                                      className="w-[calc(50%-0.125rem)] text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
                                       title={formatPrice(model.cache_write_price, currency) || t('admin.models.priceCwTitle')}
                                     />
                                   </div>
