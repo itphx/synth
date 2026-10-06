@@ -27,12 +27,12 @@
       "paletteAvgS": 0.472,
       "paletteMaxS": 0.526,
       "paletteAcid": 0,
-      "surfacesMinDeltaE": 8.2,
-      "surfacesTarget": 8.0,
-      "surfacesRaisedTarget": 10.0,
+      "surfacesMinDeltaE": 4.4,
+      "surfacesTarget": 4.0,
+      "surfacesRaisedTarget": 5.0,
       "surfacesAway": false,
-      "syntaxMinDeltaE": 22.3,
-      "syntaxVsTextMinDeltaE": 18.0,
+      "syntaxMinDeltaE": 21.8,
+      "syntaxVsTextMinDeltaE": 22.7,
       "chartsMinDeltaE": 63.5,
       "textSeparationDeltaE": 31.9,
       "textSeparationTarget": 10.0,
@@ -56,17 +56,17 @@
     "surface": {
       "background": "#000000",
       "foreground": "#ffffff",
-      "muted": "#292929",
+      "muted": "#1e1e1e",
       "mutedForeground": "#a6a6a6",
-      "elevated": "#3b3b3b",
+      "elevated": "#272727",
       "elevatedForeground": "#ffffff",
-      "raised": "#525252",
+      "raised": "#434343",
       "raisedForeground": "#ffffff",
       "overlay": "#000000cc",
-      "subtle": "#181818"
+      "subtle": "#121212"
     },
     "interactive": {
-      "border": "#575757",
+      "border": "#464646",
       "borderHover": "#474747",
       "borderFocus": "#b388ff",
       "selection": "#ffffff29",
@@ -158,22 +158,22 @@
     "chat": {
       "background": "#000000",
       "userMessage": "#ffffff",
-      "userMessageBackground": "#3b3b3b",
+      "userMessageBackground": "#272727",
       "assistantMessage": "#ffffff",
-      "assistantMessageBackground": "#292929",
+      "assistantMessageBackground": "#1e1e1e",
       "timestamp": "#a6a6a6",
-      "divider": "#575757",
+      "divider": "#464646",
       "typing": "#a6a6a6"
     },
     "loading": {
       "spinner": "#b388ff",
-      "spinnerTrack": "#292929",
-      "skeleton": "#292929",
+      "spinnerTrack": "#1e1e1e",
+      "skeleton": "#1e1e1e",
       "shimmer": "#363636"
     },
     "tools": {
-      "background": "#292929",
-      "border": "#575757",
+      "background": "#1e1e1e",
+      "border": "#464646",
       "headerHover": "#343434",
       "icon": "#b388ff",
       "title": "#ffffff",
@@ -196,14 +196,14 @@
       "link": "#b388ff",
       "linkHover": "#bc96ff",
       "inlineCode": "#00ff88",
-      "inlineCodeBackground": "#292929",
+      "inlineCodeBackground": "#1e1e1e",
       "blockquote": "#a6a6a6",
-      "blockquoteBorder": "#575757",
+      "blockquoteBorder": "#464646",
       "listMarker": "#b388ffbf",
       "bold": "#ffffff",
       "italic": "#ffffffe6",
       "strikethrough": "#a6a6a6",
-      "hr": "#575757"
+      "hr": "#464646"
     }
   },
   "palette": {
