@@ -210,7 +210,11 @@ describe('SecuritySettings — миграция на Settings UI Kit (AD-072)', 
     ]) {
       expect(container.textContent).toContain(label)
     }
-    // Каждый ListField даёт минимум одно текстовое поле ввода.
-    expect(container.querySelectorAll('input[type="text"]').length).toBeGreaterThanOrEqual(4)
+    // Постоянных полей ввода в списках нет — только кнопки «Добавить» (по одной на список).
+    expect(container.querySelectorAll('input[type="text"]').length).toBe(0)
+    const addButtons = Array.from(container.querySelectorAll('button')).filter(
+      (b) => b.textContent?.trim() === 'Add',
+    )
+    expect(addButtons.length).toBeGreaterThanOrEqual(4)
   })
 })

@@ -41,6 +41,39 @@ function buttonByText(host: HTMLElement, text: string): HTMLButtonElement {
   return button
 }
 
+function buttonsByText(host: HTMLElement, text: string): HTMLButtonElement[] {
+  return Array.from(host.querySelectorAll('button')).filter(
+    (b) => b.textContent?.trim() === text,
+  ) as HTMLButtonElement[]
+}
+
+function StatefulList({
+  initial,
+  ...props
+}: { initial: string[] } & Omit<React.ComponentProps<typeof ListField>, 'values' | 'onChange'>) {
+  const [values, setValues] = React.useState(initial)
+  return <ListField {...props} values={values} onChange={setValues} />
+}
+
+async function renderStatefulList(
+  initial: string[],
+  props: Omit<React.ComponentProps<typeof ListField>, 'values' | 'onChange'>,
+): Promise<HTMLElement> {
+  useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  mounted.push({ root, host })
+  await act(async () => {
+    root.render(
+      <I18nProvider>
+        <StatefulList initial={initial} {...props} />
+      </I18nProvider>,
+    )
+  })
+  return host
+}
+
 beforeEach(() => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
 })
@@ -80,20 +113,30 @@ describe('ListField', () => {
     expect(onChange).toHaveBeenCalledWith(['b'])
   })
 
-  it('list: добавление строки из драфта', async () => {
-    const onChange = vi.fn()
-    const host = await renderList({ label: 'Paths', values: ['a'], onChange })
+  it('list: кнопка «Добавить» добавляет пустую строку с кнопкой удаления', async () => {
+    const host = await renderStatefulList(['a'], { label: 'Paths' })
 
-    const inputs = host.querySelectorAll('input')
-    const draftInput = inputs[inputs.length - 1] as HTMLInputElement
-    await act(async () => {
-      setInputValue(draftInput, 'new')
-    })
+    expect(host.querySelectorAll('input').length).toBe(1)
+    expect(buttonsByText(host, 'Delete')).toHaveLength(1)
+
     await act(async () => {
       buttonByText(host, 'Add').click()
     })
 
-    expect(onChange).toHaveBeenCalledWith(['a', 'new'])
+    const inputs = host.querySelectorAll('input')
+    expect(inputs.length).toBe(2)
+    const added = inputs[inputs.length - 1] as HTMLInputElement
+    expect(added.value).toBe('')
+    // Новая строка сразу получает свою кнопку удаления.
+    expect(buttonsByText(host, 'Delete')).toHaveLength(2)
+  })
+
+  it('list: при пустом списке нет постоянного поля ввода — только кнопка «Добавить»', async () => {
+    const host = await renderList({ label: 'Paths', values: [], onChange: vi.fn() })
+
+    expect(host.querySelectorAll('input').length).toBe(0)
+    expect(host.querySelectorAll('button')).toHaveLength(1)
+    expect(buttonByText(host, 'Add')).toBeDefined()
   })
 
   it('chips: рендерит чипы, удаляет по ×, добавляет из драфта', async () => {
@@ -125,10 +168,9 @@ describe('ListField', () => {
     expect(onChange).toHaveBeenCalledWith(['x', 'y', 'z'])
   })
 
-  it('не переполняет контейнер: есть min-w-0 и flex-wrap (оба варианта)', async () => {
+  it('не переполняет контейнер: есть min-w-0; чипы — flex-wrap', async () => {
     const listHost = await renderList({ label: 'Paths', values: ['a'], onChange: vi.fn() })
     expect(listHost.querySelectorAll('.min-w-0').length).toBeGreaterThan(0)
-    expect(listHost.querySelectorAll('.flex-wrap').length).toBeGreaterThan(0)
 
     const chipsHost = await renderList({
       label: 'Patterns',

@@ -57,6 +57,10 @@ export function ListField({
     setDraft('')
   }
 
+  const addRow = () => {
+    onChange([...values, ''])
+  }
+
   const removeAt = (index: number) => {
     onChange(values.filter((_, i) => i !== index))
   }
@@ -75,7 +79,7 @@ export function ListField({
         {variant === 'list' ? (
           <div className="flex flex-col gap-1.5 min-w-0">
             {values.map((value, index) => (
-              <div key={itemKeys[index]} className="flex flex-wrap items-center gap-2 min-w-0">
+              <div key={itemKeys[index]} className="flex items-center gap-2 min-w-0">
                 <input
                   type="text"
                   value={value}
@@ -92,6 +96,14 @@ export function ListField({
                 </Button>
               </div>
             ))}
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0 self-start"
+              onClick={addRow}
+            >
+              {resolvedAdd}
+            </Button>
           </div>
         ) : (
           <div className="flex flex-wrap gap-1.5 min-w-0">
@@ -114,24 +126,26 @@ export function ListField({
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2 min-w-0">
-          <input
-            type="text"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                add()
-              }
-            }}
-            placeholder={placeholder}
-            className={INPUT_CLASSES}
-          />
-          <Button variant="outline" size="sm" className="shrink-0" onClick={add}>
-            {resolvedAdd}
-          </Button>
-        </div>
+        {variant === 'chips' && (
+          <div className="min-w-0 flex flex-wrap gap-2">
+            <input
+              type="text"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  add()
+                }
+              }}
+              placeholder={placeholder}
+              className={INPUT_CLASSES}
+            />
+            <Button variant="outline" size="sm" className="shrink-0" onClick={add}>
+              {resolvedAdd}
+            </Button>
+          </div>
+        )}
       </div>
     </SettingsField>
   )

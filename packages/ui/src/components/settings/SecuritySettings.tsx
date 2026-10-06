@@ -380,6 +380,7 @@ export function SecuritySettings() {
           <div className="text-sm font-medium text-foreground">{t('gateway.rateLimit')}</div>
           <NumberField
             label={t('gateway.rateLimit.user')}
+            inline
             min={1}
             value={gatewayDraft.rateLimit.userPerMinute}
             onChange={(e) =>
@@ -393,6 +394,7 @@ export function SecuritySettings() {
           />
           <NumberField
             label={t('gateway.rateLimit.provider')}
+            inline
             min={1}
             value={gatewayDraft.rateLimit.providerPerMinute}
             onChange={(e) =>
