@@ -197,6 +197,20 @@ describe('authStore: logout', () => {
     expect(s.debugMode).toBe(true)
   })
 
+  it('не удаляет ключи темы — экран входа сохраняет последнюю тему', async () => {
+    await useAuthStore.getState().logout()
+
+    const removedKeys = vi.mocked(localStorage.removeItem).mock.calls.map(([key]) => key)
+    expect(removedKeys).not.toContain('theme')
+    expect(removedKeys).not.toContain('themeMode')
+    expect(removedKeys).not.toContain('useSystemTheme')
+    expect(removedKeys).not.toContain('selectedThemeId')
+    expect(removedKeys).not.toContain('selectedThemeVariant')
+    // Остальные очистки сохранены.
+    expect(removedKeys).toContain('synth-ui.i18n.v1')
+    expect(removedKeys).toContain('synth-ui-settings')
+  })
+
   it('api.logout упал → состояние всё равно сбрасывается', async () => {
     vi.mocked(api.logout).mockRejectedValue(new Error('network'))
 

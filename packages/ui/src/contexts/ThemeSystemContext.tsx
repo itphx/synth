@@ -17,6 +17,10 @@ import {
   getThemeById,
   getDefaultTheme,
 } from '@/lib/theme/themes';
+import {
+  readThemePersistence,
+  writeThemePersistence,
+} from '@/lib/theme/theme-persistence';
 import { ThemeSystemContext, type ThemeContextValue } from './theme-system-context';
 import { useUIStore } from '@/stores/useUIStore';
 
@@ -45,15 +49,6 @@ function deriveThemeIds(themeName: string): { lightThemeId: string; darkThemeId:
   return {
     lightThemeId: `${themeName}-light`,
     darkThemeId: `${themeName}-dark`,
-  }
-}
-
-function readStorePrefs(): { theme: string; themeMode: ThemeMode } | null {
-  try {
-    const state = useUIStore.getState()
-    return { theme: state.theme, themeMode: state.themeMode }
-  } catch {
-    return null
   }
 }
 
@@ -163,60 +158,48 @@ const isValidCustomTheme = (value: unknown): value is Theme => {
 
 const buildInitialPreferences = (defaultThemeName?: string): ThemePreferences => {
   let theme: string = DEFAULT_THEME_ID
-  let lightThemeId: string = DEFAULT_LIGHT_ID
-  let darkThemeId: string = DEFAULT_DARK_ID
   let themeMode: ThemeMode = 'system'
 
-  const storePrefs = readStorePrefs()
-  if (storePrefs) {
-    theme = storePrefs.theme
-    themeMode = storePrefs.themeMode
-    const derived = deriveThemeIds(theme)
-    lightThemeId = derived.lightThemeId
-    darkThemeId = derived.darkThemeId
-  } else if (typeof window !== 'undefined') {
-    const storedMode = localStorage.getItem('themeMode')
-    const storedTheme = localStorage.getItem('theme')
-    const legacyUseSystem = localStorage.getItem('useSystemTheme')
-    const legacyThemeId = localStorage.getItem('selectedThemeId')
-    const legacyVariant = localStorage.getItem('selectedThemeVariant')
+  // Последняя использованная тема — в cookie/localStorage (переживает logout).
+  // Профиль пользователя (сервер) применяется позже через DefaultsSync и
+  // перезаписывает это значение.
+  const persisted = readThemePersistence()
 
-    if (storedMode === 'light' || storedMode === 'dark' || storedMode === 'system') {
-      themeMode = storedMode
-    } else if (legacyUseSystem !== null) {
-      const useSystem = legacyUseSystem === 'true'
-      if (useSystem) {
+  if (persisted.theme) {
+    theme = persisted.theme
+  }
+
+  if (persisted.themeMode) {
+    themeMode = persisted.themeMode
+  } else if (typeof window !== 'undefined') {
+    // Legacy-ключи: до появления cookie/localStorage-пары режим выводился
+    // из useSystemTheme + selectedThemeId/selectedThemeVariant.
+    const legacyUseSystem = localStorage.getItem('useSystemTheme')
+    if (legacyUseSystem !== null) {
+      if (legacyUseSystem === 'true') {
         themeMode = 'system'
-      } else if (legacyThemeId) {
-        const legacyTheme = getThemeById(legacyThemeId)
+      } else if (persisted.selectedThemeId) {
+        const legacyTheme = getThemeById(persisted.selectedThemeId)
         if (legacyTheme) {
           themeMode = legacyTheme.metadata.variant === 'dark' ? 'dark' : 'light'
         }
       }
-    } else if (legacyVariant === 'light' || legacyVariant === 'dark') {
-      themeMode = legacyVariant
-    }
-
-    if (typeof storedTheme === 'string' && storedTheme.trim().length > 0) {
-      theme = storedTheme.trim()
-      const derived = deriveThemeIds(theme)
-      lightThemeId = derived.lightThemeId
-      darkThemeId = derived.darkThemeId
+    } else if (persisted.selectedThemeVariant) {
+      themeMode = persisted.selectedThemeVariant
     }
   }
 
   if (defaultThemeName) {
     theme = defaultThemeName
-    const derived = deriveThemeIds(theme)
-    lightThemeId = derived.lightThemeId
-    darkThemeId = derived.darkThemeId
   }
+
+  const derived = deriveThemeIds(theme)
 
   return {
     themeMode,
     theme,
-    lightThemeId,
-    darkThemeId,
+    lightThemeId: derived.lightThemeId,
+    darkThemeId: derived.darkThemeId,
   }
 }
 
@@ -509,6 +492,18 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
     localStorage.setItem('splashFgLight', lightTheme.colors.surface.foreground);
     localStorage.setItem('splashBgDark', darkTheme.colors.surface.background);
     localStorage.setItem('splashFgDark', darkTheme.colors.surface.foreground);
+
+    // Дублируем тему в cookie: экран входа и pre-paint читают последнюю тему
+    // до загрузки профиля. После логина тема профиля приходит сюда же и
+    // перезаписывает локальное значение.
+    writeThemePersistence({
+      theme: preferences.theme,
+      themeMode: preferences.themeMode,
+      selectedThemeId: currentTheme.metadata.id,
+      selectedThemeVariant: currentTheme.metadata.variant === 'light' ? 'light' : 'dark',
+      splashBgLight: lightTheme.colors.surface.background,
+      splashBgDark: darkTheme.colors.surface.background,
+    })
   }, [preferences, currentTheme, ensureThemeById]);
 
   useEffect(() => {

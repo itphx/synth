@@ -127,6 +127,11 @@
 | Радиусы | концентрические: контейнер `rounded-xl` + `p-1`, пункты внутри `rounded-lg` (разница радиусов = паддинг контейнера) |
 | Разделители | компонент `Divider` (`components/ui/Divider.tsx`): в плавающем слое `tone="raised"` + `inset` (линия не касается краёв), на обычных поверхностях `tone="default"` (= `bg-border`) |
 
+Карточка входа (`components/auth/LoginForm.tsx`) следует рецепту
+плавающего слоя, но на поверхности **card** (`bg-card`): `rounded-xl` +
+`ring-1 ring-foreground/10` + `shadow-xl`; внутренние поля — `rounded-lg`
+(концентрические радиусы), акцентная полоска сверху — `rounded-t-xl`.
+
 **Разделители.** Любой разделитель — компонент `Divider`
 (`components/ui/Divider.tsx`), а не ad-hoc `border-t`/`border-b` и не самостоятельный
 `<hr>`. В плавающем слое (`bg-popover`) — `tone="raised"`

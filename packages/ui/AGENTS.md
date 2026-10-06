@@ -13,6 +13,14 @@
 - `ResizeObserver` в `App.tsx:97-118` вешает `html.central-narrow` при ширине центральной колонки < 800px; на этот класс реагирует CSS (`styles/index.css:290+`). Логику не дублировать в компонентах — читать класс/`centralNarrow` из стора.
 - UI-строки/события/ошибки приходят с backend тем же контрактом, что у core/backend — не изобретать свои форматы.
 
+## Тема и экран входа
+
+- Последняя использованная тема хранится в `lib/theme/theme-persistence.ts`: cookie `synth_theme*` (приоритет при чтении; доступна pre-paint-скрипту `index.html`) + legacy-ключи localStorage (`theme`, `themeMode`, `selectedThemeId`, `selectedThemeVariant`, `splashBgLight/Dark`). Значения — `encodeURIComponent`, `path=/; SameSite=Lax; Max-Age=1 год`, `Secure` только на https.
+- Boot: `ThemeSystemContext.buildInitialPreferences` читает `readThemePersistence()` (раньше — мёртвая ветка `readStorePrefs()`, т.к. `useUIStore.partialize` не сохраняет тему); эффект записи localStorage зеркалит тему в cookie через `writeThemePersistence(...)`.
+- После логина побеждает профиль: `DefaultsSync` (авторизован) берёт `prefs.theme/themeMode` из `GET /auth/profile` и записывает их в cookie/localStorage тем же эффектом.
+- `DefaultsSync` (гость) тему/режим **не** сбрасывает; `authStore.logout()` не чистит ключи темы — экран входа остаётся в последней теме.
+- Экран входа (`components/auth/LoginForm.tsx`) — карточка кита: `bg-card` + `ring-1 ring-foreground/10` + `shadow-xl`, радиус `rounded-xl` (концентрично с полями `rounded-lg`).
+
 ## Карта src/
 
 | Зона | Что там |

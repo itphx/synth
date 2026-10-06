@@ -148,11 +148,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       localStorage.removeItem('synth-ui.i18n.v1')
       localStorage.removeItem('synth-ui-settings')
-      localStorage.removeItem('theme')
-      localStorage.removeItem('themeMode')
-      localStorage.removeItem('useSystemTheme')
-      localStorage.removeItem('selectedThemeId')
-      localStorage.removeItem('selectedThemeVariant')
+      // Тема — браузерная настройка, а не часть личности пользователя: она
+      // переживает выход, чтобы экран входа был в последней использованной
+      // теме (cookie + localStorage, см. lib/theme/theme-persistence).
       // deployment/oidcEnabled/debugMode описывают сервер, а не сессию, и после
       // выхода нужны LoginForm для корректной ветки полей. Сбрасывать их нельзя:
       // reauthenticate() здесь не вызывается (isInitialized остаётся true), и при

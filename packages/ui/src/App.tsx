@@ -45,10 +45,10 @@ function DefaultsSync() {
     }
 
     if (!isAuthenticated) {
-      useUIStore.setState({
-        theme: DEFAULT_THEME,
-        themeMode: DEFAULT_THEME_MODE,
-      })
+      // Тему/режим НЕ сбрасываем: ThemeSystemContext на старте применил
+      // последнюю использованную тему из cookie/localStorage
+      // (theme-persistence), и экран входа должен остаться в ней.
+      // Авторизованная ветка ниже перезапишет её темой профиля с сервера.
       useI18nStore.getState().setLocale(DEFAULT_LOCALE)
       return
     }

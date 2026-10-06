@@ -7,7 +7,7 @@
     <meta name="color-scheme" content="only light" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#09090b" />
+    <meta name="theme-color" content="#1C1917" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -17,8 +17,30 @@
     <script>
       (function () {
         try {
+          // Pre-paint: читаем последнюю тему. localStorage — legacy-хранилище,
+          // cookie (synth_*) — новое и приоритетное при рассинхроне.
+          function readCookie(name) {
+            var raw = document.cookie;
+            if (!raw) return null;
+            var prefix = name + '=';
+            var parts = raw.split(';');
+            for (var i = 0; i < parts.length; i++) {
+              var segment = parts[i].trim();
+              if (segment.indexOf(prefix) === 0) {
+                var value = segment.slice(prefix.length);
+                try { return decodeURIComponent(value); } catch (err) { return value; }
+              }
+            }
+            return null;
+          }
+          function stored(key, cookieName) {
+            // cookie — приоритетное хранилище (см. theme-persistence);
+            // localStorage — legacy-fallback, когда cookie ещё нет.
+            var fromCookie = readCookie(cookieName);
+            return fromCookie !== null ? fromCookie : localStorage.getItem(key);
+          }
           var isDark;
-          var mode = localStorage.getItem('themeMode');
+          var mode = stored('themeMode', 'synth_theme_mode');
           if (mode === 'dark') {
             isDark = true;
           } else if (mode === 'light') {
@@ -27,7 +49,7 @@
             isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
           } else {
             var useSystem = localStorage.getItem('useSystemTheme');
-            var variant = localStorage.getItem('selectedThemeVariant');
+            var variant = stored('selectedThemeVariant', 'synth_theme_variant');
             if (useSystem === 'false' && (variant === 'light' || variant === 'dark')) {
               isDark = variant === 'dark';
             } else {
@@ -59,7 +81,10 @@
             document.head.appendChild(colorScheme);
           }
           colorScheme.setAttribute('content', isHuawei ? 'dark' : (isDark ? 'only dark' : 'only light'));
-          var bg = localStorage.getItem(isDark ? 'splashBgDark' : 'splashBgLight');
+          var bg = stored(
+            isDark ? 'splashBgDark' : 'splashBgLight',
+            isDark ? 'synth_splash_bg_dark' : 'synth_splash_bg_light'
+          );
           if (bg) {
             root.style.backgroundColor = bg;
             var meta = document.querySelector('meta[name="theme-color"]');

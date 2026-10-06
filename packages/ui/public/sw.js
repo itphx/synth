@@ -77,7 +77,7 @@ self.addEventListener('fetch', (event) => {
 // Минимальный офлайн-шелле, когда кэша ещё нет.
 function offlineResponse() {
   return new Response(
-    '<!DOCTYPE html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;background:#09090b;color:#f4f4f5;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h1>Вы офлайн</h1><p>Нет соединения с Synth-сервером. Проверьте сеть и перезагрузите страницу.</p></div></body></html>',
+    '<!DOCTYPE html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui;background:#1C1917;color:#E7E5E4;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center"><h1>Вы офлайн</h1><p>Нет соединения с Synth-сервером. Проверьте сеть и перезагрузите страницу.</p></div></body></html>',
     { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
   )
 }
