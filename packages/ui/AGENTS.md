@@ -20,6 +20,9 @@
 - После логина побеждает профиль: `DefaultsSync` (авторизован) берёт `prefs.theme/themeMode` из `GET /auth/profile` и записывает их в cookie/localStorage тем же эффектом.
 - `DefaultsSync` (гость) тему/режим **не** сбрасывает; `authStore.logout()` не чистит ключи темы — экран входа остаётся в последней теме.
 - Экран входа (`components/auth/LoginForm.tsx`) — карточка кита: `bg-card` + `ring-1 ring-foreground/10` + `shadow-xl`, радиус `rounded-xl` (концентрично с полями `rounded-lg`).
+- Наклонное освещение экрана входа (свет из верхнего-левого угла): brand-градиент логотипа диагональный, у верхнего радиального градиента фона (`.login-screen`, `styles/index.css`) origin смещён влево (`at 30% 0%`, интенсивность 12%/60%), у блика верхней кромки карточки (`bg-gradient-to-r from-transparent via-primary/70 via-30% to-transparent`) стоп `via` — на 30%. Нижний правый (`at 100% 100%`, 10%/55%) — тихий ambient. Ореол за логотипом (`bg-primary/20 blur-2xl`, контейнер `relative isolate`) сохранён.
+- Brand-градиент логотипа (`SynthLogo variant="brand"`) — диагональный `x1=0,y1=0,x2=1,y2=1` (из верхнего-левого в нижний-правый); сам `SYNTH_LOGO_PATH` вынесен в `lib/theme/logo-path.ts` (импортируется в `SynthLogo.tsx` и используется favicon-ом, без дублирования).
+- Favicon вкладки красится в `--primary` текущей темы: `lib/theme/favicon.ts` (`applyThemedFavicon`) вызывается в layout-эффекте `ThemeSystemContext` (`cssGenerator.apply`), подменяя `href` у `link[rel="icon"]` на data-URI-SVG. `public/favicon.svg` — статический фолбэк до загрузки JS; PNG-иконки PWA/manifest не темизируются.
 
 ## Карта src/
 

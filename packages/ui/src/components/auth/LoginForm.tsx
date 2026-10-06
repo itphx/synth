@@ -154,8 +154,9 @@ export const LoginForm = () => {
       onBlur={handleScreenBlur}
     >
       <div className="relative my-auto w-full max-w-md rounded-xl bg-card p-8 ring-1 ring-foreground/10 shadow-xl">
-        {/* Тонкая акцентная линия сверху карточки — цвет акцента темы */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 rounded-t-xl bg-gradient-to-r from-transparent via-primary/70 to-transparent" />
+        {/* Тонкая акцентная линия сверху карточки — цвет акцента темы.
+            Блик смещён влево (via-30%) под наклонный свет из верхнего-левого угла. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-0.5 rounded-t-xl bg-gradient-to-r from-transparent via-primary/70 via-30% to-transparent" />
         <div className="flex flex-col items-center gap-4 mb-8">
           <div className="relative isolate">
             {/* Мягкое свечение за логотипом; не перекрывает контент */}

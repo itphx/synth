@@ -189,10 +189,12 @@ html.device-tablet .chat-composer {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   /* Мягкие радиальные подсветки акцентом темы (работают и в light, и в dark).
-     База — var(--background); градиенты не «неон», низкой интенсивности. */
+     База — var(--background); градиенты не «неон», низкой интенсивности.
+     Верхний центрирован со сдвигом влево (30% 0%) — наклонный свет из
+     верхнего-левого угла; нижний правый — тихий ambient. */
   background-color: var(--background);
   background-image:
-    radial-gradient(circle at 50% 0%, color-mix(in oklab, var(--primary) 12%, transparent), transparent 60%),
+    radial-gradient(circle at 30% 0%, color-mix(in oklab, var(--primary) 12%, transparent), transparent 60%),
     radial-gradient(circle at 100% 100%, color-mix(in oklab, var(--primary) 10%, transparent), transparent 55%);
   background-repeat: no-repeat;
 }

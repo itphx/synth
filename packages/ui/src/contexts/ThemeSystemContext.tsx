@@ -21,6 +21,7 @@ import {
   readThemePersistence,
   writeThemePersistence,
 } from '@/lib/theme/theme-persistence';
+import { applyThemedFavicon } from '@/lib/theme/favicon';
 import { ThemeSystemContext, type ThemeContextValue } from './theme-system-context';
 import { useUIStore } from '@/stores/useUIStore';
 
@@ -444,6 +445,7 @@ export function ThemeSystemProvider({ children, defaultThemeId }: ThemeSystemPro
     }
     const restoreTransitions = suppressTransitionsForThemeSwitch();
     cssGenerator.apply(currentTheme);
+    applyThemedFavicon(currentTheme.colors.primary.base);
     applyVSCodeRuntimeClass(isVSCode);
     updateBrowserChrome(currentTheme);
 
