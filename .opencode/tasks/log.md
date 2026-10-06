@@ -1769,3 +1769,14 @@
 - **synth-deploy:** коммит `aa65cc9` («release: bump synth-ui/backend images to v0.8.10»), push `22b4079..aa65cc9 main`; изменены только `backend.image.tag` и `ui.image.tag`.
 - **Test (независимая проверка оркестратора):** GitRepo `synth` на `aa65cc9`; поды `synth-backend`/`synth-ui` 1/1 Running на `:0.8.10`; `GET /` → 200; `/api/v2/health` → `{"status":"healthy","version":"0.8.10"}`; `/sw.js` → маркер `synth-shell-0.8.10`.
 - **Замечания:** Fleet применяет чарт с задержкой ~30–40 c после обновления commit — проверять `spec.template…image` деплойментов, а не только GitRepo; транзиентный `Pending termination` старых подов. Синхронизация изменений в origin/master репозитория `synth` — отдельным решением (не требуется для test-деплоя).
+
+## 2026-10-07 — Бамп 0.8.10 → 0.8.11 и выкат на test — PASS
+- **Задача:** «Давай ещё раз. Бамп и деплой на тест».
+- **Тип:** release / deploy · **Исполнитель:** @orchestrator → @devops (образы/Fleet) · **Результат:** PASS.
+- **Коммиты (synth, master; в origin не пушились — test-деплой этого не требует):** `6149f54` chore: bump version to v0.8.11.
+- **Новое с 0.8.10:** 3 UI-коммита (`9e9c030`, `d85f993`, `2235e4c` — фиксы Select на экране логина).
+- **Bump:** `./scripts/version-bump.sh patch` (version.ts + 6 package.json + charts/synth/Chart.yaml), хардкода старой версии нет.
+- **Образы (из исходников монорепо):** `git.itphx.ru/itphx/synth-backend:0.8.11` digest `sha256:b24de861f211…d1d89d6`; `git.itphx.ru/itphx/synth-ui:0.8.11` digest `sha256:ef6ba6be077d…31919e68`; собраны через `docker/Dockerfile.backend` / `Dockerfile.ui`, запушены в Gitea `git.itphx.ru`.
+- **synth-deploy:** коммит `6a53304` («release: bump synth-ui/backend images to v0.8.11»), push `aa65cc9..6a53304 main`; изменены только `backend.image.tag` и `ui.image.tag`.
+- **Test (независимая проверка оркестратора):** GitRepo `synth` Ready=True на `6a53304`; поды `synth-backend`/`synth-ui` 1/1 Running на `:0.8.11`; `GET /` → 200; `/api/v2/health` → `{"status":"healthy","version":"0.8.11"}`; `/sw.js` → маркер `synth-shell-0.8.11`.
+- **Замечания:** у GitRepo пуст `.status.ready` в jsonpath — готовность в `.status.conditions[type=Ready]`/`resourceCounts`; рассинхрон часов K3s-ноды и рабочей станции ~11.5 мин (сверяться по времени ноды); `zsh` глотает `custom-columns` с `[*]` без кавычек. Сабагент @devops по ошибке дописал в этот лог постороннюю запись (favicon, 02.10) — откачена оркестратором.
