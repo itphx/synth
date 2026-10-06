@@ -74,7 +74,7 @@ function DialogContent({
         <BaseDialog.Popup
           data-slot="dialog-content"
           className={cn(
-            "relative pointer-events-auto bg-background text-foreground flex flex-col w-full max-w-lg max-h-full gap-4 rounded-xl border p-6 shadow-none overflow-y-auto origin-center",
+            "relative pointer-events-auto bg-background text-foreground flex flex-col w-full max-w-lg max-h-full gap-4 rounded-xl p-6 ring-1 ring-foreground/10 shadow-xl overflow-y-auto origin-center",
             "transition-all duration-150 ease-out",
             "data-[starting-style]:opacity-0 data-[starting-style]:scale-[0.98]",
             "data-[ending-style]:opacity-0 data-[ending-style]:scale-[0.98]",

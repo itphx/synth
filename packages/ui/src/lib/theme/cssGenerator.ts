@@ -161,6 +161,21 @@ const sidebarBaseRgb = hexToRgb(theme.colors.surface.muted);
   }
 
   apply(theme: Theme): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    // Подавляем transition на время смены темы: иначе перекраска всех
+    // поверхностей анимируется и смена темы «плывёт». Ставим блокирующий
+    // style, форсируем reflow и снимаем его через два кадра (после того как
+    // новые переменные уже применены).
+    document.getElementById('theme-transition-suppress')?.remove();
+    const suppress = document.createElement('style');
+    suppress.id = 'theme-transition-suppress';
+    suppress.textContent = '*,*::before,*::after{transition:none!important}';
+    document.head.appendChild(suppress);
+    void document.body?.offsetHeight;
+
     const cssVars = this.generate(theme);
     const style = document.createElement('style');
     style.id = 'opencode-theme-variables';
@@ -188,6 +203,8 @@ const sidebarBaseRgb = hexToRgb(theme.colors.surface.muted);
     document.head.appendChild(style);
 
     document.documentElement.setAttribute('data-theme', theme.metadata.variant);
+
+    requestAnimationFrame(() => requestAnimationFrame(() => suppress.remove()));
   }
 
   private generatePrimaryColors(primary: Theme['colors']['primary']): string[] {

@@ -135,7 +135,7 @@ export function CommandAutocomplete({
     <div
       ref={ref}
       data-testid="command-autocomplete"
-      className="absolute z-50 flex flex-col overflow-hidden rounded-lg border border-border bg-popover text-popover-foreground shadow-lg max-h-[min(24rem,60vh)]"
+      className="absolute z-50 flex flex-col overflow-hidden rounded-xl bg-popover text-popover-foreground ring-1 ring-foreground/10 shadow-lg max-h-[min(24rem,60vh)]"
       style={{ bottom: POPUP_LIFT, left: position.left, width: '32rem', maxWidth: '100%' }}
       onMouseDown={(e) => e.stopPropagation()}
     >
@@ -161,7 +161,7 @@ export function CommandAutocomplete({
               onMouseEnter={() => setHighlightedIdx(idx)}
               onClick={() => onSelect(command)}
               className={cn(
-                'flex w-full min-h-10 items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
+                'flex w-full min-h-10 items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 idx === highlightedIdx ? 'bg-interactive-selection text-interactive-selection-foreground' : 'hover:bg-interactive-hover',
                 !command.available && 'opacity-60',

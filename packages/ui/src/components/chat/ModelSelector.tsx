@@ -79,7 +79,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
           <DropdownMenu.Content
             side="top"
             sideOffset={4}
-            className="min-w-[12.5rem] p-1 bg-popover text-popover-foreground border border-border rounded-lg shadow-lg z-50"
+            className="min-w-[12.5rem] p-1 bg-popover text-popover-foreground rounded-xl ring-1 ring-foreground/10 shadow-lg z-50"
             align="end"
             collisionPadding={8}
           >
@@ -92,7 +92,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
                   setSelectedProvider(m.provider)
                   setSelectedModel(m.name)
                 }}
-                className="text-xs flex items-center gap-2 px-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover data-[highlighted]:bg-interactive-selection outline-none"
+                className="text-xs flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-interactive-hover data-[highlighted]:bg-interactive-selection outline-none"
               >
                 <ProviderIcon icon={p?.icon ?? ''} baseUrl={p?.url} size={14} className="text-muted-foreground shrink-0" />
                 <span className="font-medium truncate flex-1">{m.name}</span>
@@ -314,7 +314,7 @@ export function ModelSelector({ compact = false, sessionId, alwaysShowLabel = fa
         <DropdownMenu.Content
           side="top"
           sideOffset={4}
-          className="w-[min(380px,calc(100vw-2rem))] p-0 flex flex-col bg-popover text-popover-foreground border border-border rounded-lg shadow-lg z-50"
+          className="w-[min(380px,calc(100vw-2rem))] p-0 flex flex-col bg-popover text-popover-foreground rounded-xl ring-1 ring-foreground/10 shadow-lg z-50"
           align="end"
           alignOffset={-40}
           collisionPadding={8}
@@ -501,7 +501,7 @@ const VirtualModelRow = memo(function VirtualModelRow({
   return (
     <div
       onClick={onSelect}
-      className="text-xs group flex items-center gap-2 pl-4 pr-2 py-1.5 rounded-md cursor-pointer hover:bg-interactive-hover outline-none"
+      className="text-xs group flex items-center gap-2 pl-4 pr-2 py-1.5 rounded-lg cursor-pointer hover:bg-interactive-hover outline-none"
     >
       <ProviderIcon icon={provider.icon || ''} baseUrl={provider.url} size={14} className="text-muted-foreground shrink-0" />
       <span className="font-medium truncate flex-1">{model.name}</span>

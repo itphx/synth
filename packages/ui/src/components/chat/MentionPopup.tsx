@@ -86,7 +86,7 @@ export function MentionPopup({ query, agents, position, onSelect, onClose }: Men
   return (
     <div
       ref={ref}
-      className="absolute z-50 rounded-lg border border-border bg-popover text-popover-foreground shadow-lg overflow-hidden"
+      className="absolute z-50 rounded-xl bg-popover text-popover-foreground ring-1 ring-foreground/10 shadow-lg overflow-hidden"
       style={{ bottom: POPUP_LIFT, left: position.left, minWidth: '12.5rem' }}
       onMouseDown={(e) => e.stopPropagation()}
     >
@@ -97,7 +97,7 @@ export function MentionPopup({ query, agents, position, onSelect, onClose }: Men
         {filtered.map((agent, idx) => (
           <button
             key={agent.id}
-            className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors text-left group ${
+            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-foreground hover:bg-interactive-hover transition-colors text-left group ${
               idx === highlightedIdx ? 'bg-interactive-hover' : ''
             }`}
             onClick={() => onSelect(agent.id)}

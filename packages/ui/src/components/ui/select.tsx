@@ -31,7 +31,7 @@ function SelectTrigger({
       data-slot="select-trigger"
       data-size={size}
       className={cn(
-        "border-input data-[placeholder]:text-muted-foreground [&_svg:not([class*='text-'])]:text-muted-foreground focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 aria-invalid:border-destructive flex w-fit items-center justify-between gap-2 rounded-lg border bg-transparent px-2 py-1.5 text-sm whitespace-nowrap shadow-none outline-none focus-visible:outline-none hover:bg-interactive-hover data-[popup-open]:bg-interactive-active focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=lg]:h-10 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "border-input data-[placeholder]:text-muted-foreground [&_svg:not([class*='text-'])]:text-muted-foreground focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 aria-invalid:border-destructive flex w-fit items-center justify-between gap-2 rounded-lg border bg-background px-2 py-1.5 text-sm whitespace-nowrap shadow-none outline-none focus-visible:outline-none hover:bg-interactive-hover data-[popup-open]:bg-interactive-active focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 data-[size=default]:h-8 data-[size=sm]:h-7 data-[size=lg]:h-10 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}
@@ -61,13 +61,13 @@ function SelectContent({
         <BaseSelect.Popup
           data-slot="select-content"
           className={cn(
-            "z-[120] max-h-60 min-w-[8rem] overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-md",
+            "z-[120] max-h-60 min-w-[8rem] overflow-hidden rounded-xl bg-popover text-popover-foreground p-1 ring-1 ring-foreground/10 shadow-lg",
             "data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1",
             className
           )}
           {...props}
         >
-          <div className="p-1">{children}</div>
+          <div>{children}</div>
         </BaseSelect.Popup>
       </BaseSelect.Positioner>
     </BaseSelect.Portal>
