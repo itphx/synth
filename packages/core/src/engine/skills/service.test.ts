@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SkillService } from './service.js';
 import { urlCacheDir } from './discovery.js';
+import { SkillStore, type UpdateSkillMarkdownInput } from '../../storage/skill-store.js';
 
 let root: string;
 
@@ -218,5 +219,34 @@ describe('SkillService — skills.urls (AD-046 §4.2/§4.3)', () => {
     await service.refreshRemote();
 
     expect(await readFile(join(cacheDir, 'keep', 'SKILL.md'), 'utf-8')).toContain('keep');
+  });
+});
+
+describe('SkillService — instance CRUD инвалидирует кэш реестра (AD-046 §8.3)', () => {
+  it('updateInstance отдаёт новое содержимое при совпадении floor(mtime) и размера SKILL.md', async () => {
+    // Стор восстанавливает mtime после перезаписи — эмуляция create+update в одну
+    // миллисекунду; сигнатура ленивой инвалидации (`floor(mtimeMs):size`) тогда не
+    // меняется, и без явного сброса `detail()` вернул бы устаревшие данные.
+    class SameMtimeStore extends SkillStore {
+      restoreSeconds: number | null = null;
+      override async updateMarkdown(name: string, patch: UpdateSkillMarkdownInput): Promise<void> {
+        await super.updateMarkdown(name, patch);
+        if (this.restoreSeconds !== null) {
+          await utimes(join(this.skillDir(name), 'SKILL.md'), this.restoreSeconds, this.restoreSeconds);
+        }
+      }
+    }
+
+    const dataDir = join(root, 'data');
+    const store = new SameMtimeStore({ dataDir });
+    const service = new SkillService({ dataDir, home: join(root, 'home'), store });
+
+    await service.createInstance({ name: 'a', description: 'old', body: 'old body' });
+    // Точное значение `mtimeMs` (без потери субмиллисекунд) — floor совпадёт с кэшем.
+    store.restoreSeconds = Math.floor((await stat(join(dataDir, 'skills', 'a', 'SKILL.md'))).mtimeMs) / 1000;
+
+    const detail = await service.updateInstance('a', { description: 'new', body: 'new body' });
+    expect(detail?.description).toBe('new');
+    expect(detail?.body).toContain('new body');
   });
 });

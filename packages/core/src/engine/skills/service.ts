@@ -185,16 +185,24 @@ export class SkillService {
 
   async createInstance(input: CreateSkillInput): Promise<SkillDetail | undefined> {
     await this._store.create(input);
+    this.reload();
     return this.detail(input.name);
   }
 
   async updateInstance(name: string, patch: UpdateSkillMarkdownInput): Promise<SkillDetail | undefined> {
     await this._store.updateMarkdown(name, patch);
+    // Инвалидация кэша реестра: сигнатура ленивой инвалидации
+    // (`floor(mtimeMs):size`) не отличает перезапись `SKILL.md` в ту же
+    // миллисекунду при неизменном размере — без сброса `detail()` вернёт
+    // устаревшее содержимое (AD-046 §8.3).
+    this.reload();
     return this.detail(name);
   }
 
   async removeInstance(name: string): Promise<boolean> {
-    return this._store.remove(name);
+    const removed = await this._store.remove(name);
+    if (removed) this.reload();
+    return removed;
   }
 
   /** `true`, если скилл принадлежит instance-дереву (редактируем). */
@@ -212,10 +220,14 @@ export class SkillService {
 
   async writeInstanceFile(name: string, relPath: string, content: string): Promise<void> {
     await this._store.writeFile(name, relPath, content);
+    // `relPath` может быть самим `SKILL.md` — кэш реестра инвалидируем всегда.
+    this.reload();
   }
 
   async deleteInstanceFile(name: string, relPath: string): Promise<boolean> {
-    return this._store.deleteFile(name, relPath);
+    const deleted = await this._store.deleteFile(name, relPath);
+    if (deleted) this.reload();
+    return deleted;
   }
 
   /** Абсолютный путь каталога instance-скилла (для API-ответов). */
