@@ -1806,3 +1806,13 @@
 - **Коммиты:** `synth-design` `325aecb`; `synth-landing` `5156d04`; `synth-docs` `44a840b`; `synth` `77fac7e` (запись в логе). `synth-design` — без remote (не пушился).
 - **Выкат (Fleet/K3s):** образы собраны и запушены в `git.itphx.ru`: `synth-landing:latest` digest `sha256:07efb35a…`, `synth-docs:latest` digest `sha256:b61f9b1d…`; `git push origin main` в оба репо; `kubectl rollout restart` + status (оба successfully rolled out).
 - **Проверка (независимо, оркестратор):** лэндинг `https://synth.itphx.ru/` → 200, новые ассеты `theme-matrix-curated.webp`/`login-arctic-dark.webp` → 200; доки `https://docs.synth.itphx.ru/` → 200, `/usage/design-system/` → 200, `theme-matrix.png` → 200. Под imageID совпадают с запушенными digest'ами.
+
+## 2026-10-07 — Замена мобильных скриншотов + README synth-design + перевыкат — PASS
+- **Задача:** «Замени скрины мобильного UI на эти. Подрежь снизу/сверху, если есть разница по высоте. Пересобери, задеплой. README.md в synth-design обнови».
+- **Вход:** 3 вложения пользователя (login/chat/drawer, разной ширины, высота 2000). Извлечены из хранилища сессии (`session_message.files`), нормализованы ImageMagick к единой пропорции 800×1486 (кроп сверху/снизу по центру — выравнивание высоты).
+- **Ассеты:** лендинг — `mobile-login.webp` (новый), `mobile-chat.webp`, `mobile-menu.webp` (заменены); доки — аналогично `.png`.
+- **synth-landing:** блок «Мобильный вид» — три экрана в ряд (login/chat/menu), CSS `.shots--phones` на 3 колонки (в т.ч. мобильный медиазапрос). Коммит `ec67187`.
+- **synth-docs:** `mobile-pwa.md` — новый раздел «Вход с телефона» + `mobile-login.png`; `first-run.md` — упоминание и картинка. Коммит `a5296c5`.
+- **synth-design:** `README.md` актуализирован (рабочий набор 31 схема/62 файла, UI-кит и режим матрицы, публикация в GitVerse). Коммит `6343bb2`.
+- **Выкат:** образы `synth-landing:latest` digest `sha256:a3827bbd…`, `synth-docs:latest` digest `sha256:2c8c89de…`; push origin main обоих репо; rollout restart+status — оба успешно.
+- **Проверка (независимо):** лендинг и доки 200; `mobile-login.*` отдаётся (200), в HTML/странице присутствует; 3 телефона на лендинге выровнены (одинаковые 280×520); под imageID == digest; origin/main в синхроне.
