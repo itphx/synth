@@ -1780,3 +1780,13 @@
 - **synth-deploy:** коммит `6a53304` («release: bump synth-ui/backend images to v0.8.11»), push `aa65cc9..6a53304 main`; изменены только `backend.image.tag` и `ui.image.tag`.
 - **Test (независимая проверка оркестратора):** GitRepo `synth` Ready=True на `6a53304`; поды `synth-backend`/`synth-ui` 1/1 Running на `:0.8.11`; `GET /` → 200; `/api/v2/health` → `{"status":"healthy","version":"0.8.11"}`; `/sw.js` → маркер `synth-shell-0.8.11`.
 - **Замечания:** у GitRepo пуст `.status.ready` в jsonpath — готовность в `.status.conditions[type=Ready]`/`resourceCounts`; рассинхрон часов K3s-ноды и рабочей станции ~11.5 мин (сверяться по времени ноды); `zsh` глотает `custom-columns` с `[*]` без кавычек. Сабагент @devops по ошибке дописал в этот лог постороннюю запись (favicon, 02.10) — откачена оркестратором.
+
+## 2026-10-07 — Favicon обрезался сверху/снизу в synth, synth-docs и лэндинге — PASS
+- **Задача:** «У лэндинга favicon нормальная, у synth и synth-docs обрезается немного сверху и снизу. Разобраться и починить (в synth favicon меняет цвет от темы — сохранить)».
+- **Тип:** bug fix · **Исполнитель:** @orchestrator → @fixer (×2) · **Результат:** PASS.
+- **Причина:** SVG-логотип заполняет `viewBox="0 0 199.85217 237.13795"` ровно (фактический bbox ≈200×238, без полей). В квадратном favicon браузер вписывает его по высоте (`preserveAspectRatio="xMidYMid meet"`) → верх/низ упираются в край и на 16–32px выглядят обрезанными. Лэндинг не страдал, т.к. браузер брал его растровые `favicon.ico`/`-16/32/48.png`, отрисованные из квадратного кадра с полями.
+- **Фикс:** `viewBox` → `-36 -17 272 272` (лого 200×238 центрируется в квадрате: поля 36 по бокам, 17 сверху/снизу). Файлы: `synth/packages/ui/public/favicon.svg`, `synth/packages/ui/src/lib/theme/favicon.ts` (динамическая подстановка `${color}` сохранена), `synth-docs/docs/assets/favicon.svg`, `synth-landing/public/favicon.svg`. Путь/`transform`/цвета — без изменений.
+- **Не тронуты:** `SynthLogo.tsx` (внутренний логотип), `synth-landing/public/synth-icon.svg` (лого шапки 32×32), `docs/assets/logo.svg`/`Synth-v0.svg`, растровые `.ico/.png`, `site/` (gitignored build).
+- **Коммиты:** `synth` `96f4914`; `synth-docs` `479217c`; `synth-landing` `4a6a0c0` (по явной просьбе пользователя).
+- **Верификация (независимо, оркестратор):** рендер 16/32/48px — зазор сверху/снизу стал 1/1, 2/2, 3/3 px (было 0/0), совпадение с эталонными landing-PNG в пределах 1px. `@fixer`: `pnpm typecheck`/`lint`/`test` зелёные (favicon.test.ts 4/4). Деревья всех трёх репо чисты.
+- **Замечания:** правка вступает в силу после пересборки (UI — `pnpm build`/рестарт dev; docs — `mkdocs build`). Лэндинг почищен «на будущее» — визуально дефект там не проявлялся.
