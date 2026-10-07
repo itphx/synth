@@ -1800,3 +1800,9 @@
 - **synth-docs:** новая страница `docs/ru/usage/design-system.md` (5 ролей поверхностей, типографика, статусы, контраст WCAG AA, палитра 16 цветов, 62 набора, скриншоты, ссылка на `https://gitverse.ru/itphx/synth-design`); nav + EN-translation в `mkdocs.yml`; обновлён устаревший подраздел «Темы оформления» в `first-run.md`; секция в `features.md`. `mkdocs build --strict` → exit 0, `site/en` отсутствует, утечек AD/AGENTS.md/`.itphx.loc`/секретов нет.
 - **Коммиты:** нет (по правилу «коммит только по просьбе пользователя»); изменения во всех трёх репо — в рабочем дереве.
 - **Замечания:** (1) скриншот аудита содержит внутренние имена провайдера/модели (`itphx` / `omn.qwen3.8:27b`) — при необходимости заменить на тестовые данные перед публикацией; (2) ссылка на репозиторий `synth-design` заработает после его публикации в GitVerse; (3) `synth-design/README.md` устарел (публикация — «после ревизии»).
+
+## 2026-10-07 — Коммит и выкат лендинга/доков — PASS
+- **Задача:** «Закоммить все, выкати лэндинг и доки».
+- **Коммиты:** `synth-design` `325aecb`; `synth-landing` `5156d04`; `synth-docs` `44a840b`; `synth` `77fac7e` (запись в логе). `synth-design` — без remote (не пушился).
+- **Выкат (Fleet/K3s):** образы собраны и запушены в `git.itphx.ru`: `synth-landing:latest` digest `sha256:07efb35a…`, `synth-docs:latest` digest `sha256:b61f9b1d…`; `git push origin main` в оба репо; `kubectl rollout restart` + status (оба successfully rolled out).
+- **Проверка (независимо, оркестратор):** лэндинг `https://synth.itphx.ru/` → 200, новые ассеты `theme-matrix-curated.webp`/`login-arctic-dark.webp` → 200; доки `https://docs.synth.itphx.ru/` → 200, `/usage/design-system/` → 200, `theme-matrix.png` → 200. Под imageID совпадают с запушенными digest'ами.
