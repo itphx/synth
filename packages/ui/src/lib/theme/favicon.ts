@@ -11,7 +11,7 @@ export function applyThemedFavicon(color: string): void {
   }
 
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 199.85217 237.13795">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-36 -17 272 272">` +
     `<g transform="translate(-5.0739065,-29.931031)">` +
     `<path fill="${color}" d="${SYNTH_LOGO_PATH}"/>` +
     `</g></svg>`
