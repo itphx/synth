@@ -1833,3 +1833,113 @@
   2. **npmjs-стадия**: верификация `publish-packages.sh` падает на репликационном лаге сразу после публикации (таймаут «ещё не видны») — сделать ретраи терпимее/длиннее.
   3. **Release-джоб** не поднимается при перезапуске ранее *пропущенного* job'а (`waiting`) — при необходимости создавать релиз вручную или перезапускать весь run.
   4. Локальный npm-токен в `secrets/tokens` невалиден (`401`) — обновить для ручных публикаций.
+
+## 2026-10-07 — synth-media: заведена подсистема публикаций/медиа (каркас)
+- **Задача:** «Автоматизировать публикацию новостей о релизах и новых AD; настроить MCP для Telegram; отдельный каталог + приватный репозиторий в gitea с README.md и AGENTS.md; позже Max/VK/блог». В ходе обсуждения рамка расширялась до отдельного продукта, затем откатана: **synth-media — внутренняя кухня Synth** (деплой в K3s через Fleet, как синт-docs/ландинг); движок генерации контента — внешний **opencode**.
+- **Тип:** design / docs / infra-заготовка
+- **Исполнитель:** @orchestrator → @general (README + AGENTS.md)
+- **Результат:** PASS
+- **Принятые решения:**
+  - Компоненты: `apps/telegram-mcp` (MCP + бот), `apps/receiver` (ядро/приёмник: HTTP+MCP, реестр источников, черновики/ревью/публикация), `apps/ui` (SPA). Контент — git (`content/`), состояние — БД receiver, секреты — вне git.
+  - **opencode вступает ровно в двух точках:** генерация черновика по skill и переписывание по правкам. Всё остальное — сервисы; LLM/Gateway в сервисы не тащим.
+  - **Контекст — вариант A:** opencode собирает факты локально и присылает готовый черновик; receiver хранит refs и workflow, репозитории не клонит.
+  - **Шедулер:** встроенного в opencode нет (`opencode run` — headless-точка автоматизации; Warming — не расписание). Расписание — внешний `systemd timer`/`cron` → `opencode run`, агент опрашивает `GET /tasks/pending`. K8s CronJob — позже.
+  - Мультиканальность: канало-нейтральный контент + подключаемые коннекторы (Telegram → Max/VK/блог).
+- **Что сделано:** создан приватный репозиторий `itphx/synth-media` (gitea), склонирован как соседний каталог `synth-media/`; написаны `README.md` и `AGENTS.md` (целевой дизайн-контракт: граница ответственности, компоненты и MCP-тулы, решения, потоки, доменная модель, хранилище, деплой, дорожная карта, безопасность).
+- **Коммит:** `22b6957` (synth-media, docs, 2 files, +319). В `synth/` код не менялся (typecheck/lint/test не применимы).
+- **Осталось:** Фаза 1 — receiver + MCP + skill (сквозная цепочка релиза в Telegram, approve в opencode); затем Telegram gateway, UI, мультиканал, автоматизация. В `synth/AGENTS.md` правило-триггер «при релизе/новом AD → skill `media-hub`» пока не добавлялось (ждёт реализации сервиса).
+
+## 2026-10-07 — synth-media: Фаза 1 (receiver + telegram-mcp + skill)
+- **Задача:** «Запускай» — реализовать Фазу 1 подсистемы synth-media: ядро (receiver + MCP), Telegram MCP-сервис, skill `media-hub`; skills хранить в synth-media, ссылка в `.opencode/skills`; креды бота — в `synth-media/secrets`.
+- **Тип:** feature / infra-заготовка
+- **Исполнитель:** @orchestrator → @general ×2 (порциями: каркас+receiver; telegram-mcp+skill+wiring)
+- **Результат:** PASS
+- **Коммит:** `5a06587` (synth-media, 76 files, +6930) — запушен в `git.itphx.loc:itphx/synth-media`.
+- **Что сделано:**
+  - **Каркас:** pnpm workspaces, TS ESM strict, Hono, `@modelcontextprotocol/sdk`, zod, Vitest; `.gitignore` (`data/`, `secrets/`, `dist/`, `*.tsbuildinfo`); `content/{sources.yaml,posts,inbox,templates}`.
+  - **`apps/receiver`** (ядро): домен (Project/ContextSource/Task/Idea/Draft/Revision/Review/Publication), JSON-FileStore (tmp→rename), сервисы, HTTP API (`/api`, bearer-auth, `/health`, `/tasks/pending`, draft→render→submit→review→publish, ideas), MCP stdio с 17 тулами (`project_list … idea_list`), рендер под Telegram, адаптер канала (dry-run без токена).
+  - **`apps/telegram-mcp`:** MCP stdio с 6 тулами (`tg_send_message/edit/delete/get_me/inbox_list/review_notify`), бот `--bot` (long-polling `getUpdates` → `POST /api/ideas`, дедуп), receiver-клиент на fetch+bearer; `packages/telegram` расширен `getUpdates` и `replyMarkup`.
+  - **Skill `skills/media-hub`:** `SKILL.md` (сценарии release/ad/idea/repost/rewrite; «текст пишет агент», публикация только после approve) + `reference/tools.md` + `reference/agents-md-snippet.md`.
+  - **Связка:** симлинк `synth/.opencode/skills/media-hub → ../../../synth-media/skills/media-hub`; проектный `/mnt/data/Agent/dev/Synth/.opencode/opencode.json` с двумя MCP (`synth-media-receiver`, `synth-media-telegram`), секреты через `{env:...}`.
+- **Проверки (оркестратор):** `pnpm build`/`typecheck`/`lint` — 0 ошибок; `pnpm test` — 54 passed (telegram 9, telegram-mcp 23, receiver 22). MCP-серверы и skill подхватились харнессом.
+- **Осталось (Фаза 2+):** inline-кнопки ревью и обработка callback; реальный `systemd timer`/`cron` → `opencode run` + `GET /tasks/pending`; UI (`apps/ui`); Docker/Helm/`fleet.yaml` + регистрация в `synth-deploy` (K3s) + Streamable-HTTP MCP с токеном; Max/VK/блог. Правило-триггер в `synth/AGENTS.md` — сниппет готов, ждёт согласования. Секреты бота — ждём от пользователя в `synth-media/secrets/`.
+- **Не закоммичено в `synth/`:** симлинк `synth/.opencode/skills/media-hub` и этот журнал (ждут решения пользователя).
+
+## 2026-10-08 — synth-media: проверка MCP + фикс пустых env
+- **Задача:** «Проверь доступность новых MCP-серверов».
+- **Тип:** bug fix / verification
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS
+- **Найдено:** opencode подставляет `{env:VAR}` как **пустую строку**; в конфигах receiver/telegram-mcp env читался через `??`, поэтому пустая строка не откатывалась к дефолту → `tg_inbox_list` падал с `Failed to parse URL from /api/ideas` (baseUrl = '').
+- **Фикс:** helper `envOr` (пустая/whitespace-строка → fallback, иначе `trim()`), применён ко всем env-чтениям в `apps/receiver/src/config.ts` и `apps/telegram-mcp/src/config.ts`; добавлены тесты на пустые/whitespace env.
+- **Коммит:** `synth-media` — «fix: пустые env-значения трактуются как отсутствие…» (запушен).
+- **Верификация:** build/typecheck/lint — 0 ошибок; tests — 63 passed (telegram 9, telegram-mcp 27, receiver 27). MCP-вызовы: `project_list` → `{items:[]}`; `tg_get_me` → dry-run ok; `tg_inbox_list` → `{items:[]}` (URL-ошибки нет).
+- **Грабли:** MCP-серверы спавнятся при старте сервера; после пересборки `dist` их нужно перезапустить (смена кода «на лету» не подхватывается). Перезапуск сервера opencode поднял оба MCP-сервера с новым кодом.
+
+## 2026-10-08 — synth-media: проверка доступности MCP + фикс пустых env
+- **Задача:** «Проверь доступность новых MCP-серверов».
+- **Тип:** verification / bug fix
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS
+- **Что сделано:**
+  - **Проверка:** `synth-media-receiver.project_list` → `{items:[]}`; `synth-media-telegram.tg_get_me` → dry-run `{ok:true,dryRun:true}`; `tg_inbox_list` сначала падал (`Failed to parse URL from /api/ideas`).
+  - **Причина:** opencode подставляет `{env:SYNTH_MEDIA_URL}` как **пустую строку**; в `config.ts` использовался `??`, поэтому пустая строка не откатывалась к дефолту (`baseUrl=''`). Диагностировано через `/proc/<pid>/environ` (env=`SYNTH_MEDIA_URL=`).
+  - **Фикс:** helper `envOr(env,key,fallback)` (пустая/whitespace → fallback), применён ко всем env-чтениям в `apps/receiver/src/config.ts` и `apps/telegram-mcp/src/config.ts`; добавлены тесты на пустые/whitespace env.
+  - **Грабли:** MCP-серверы спавнятся при старте opencode-сервера; после правки/пересборки их нужно перезапустить (env в процессы передаётся при спавне). Перезапуск сервера поднял оба сервера с новым кодом.
+- **Проверки (оркестратор):** `pnpm build/typecheck/lint` — OK; `pnpm test` — **63 passed** (telegram 9, telegram-mcp 27, receiver 27). После перезапуска все три MCP-вызова зелёные; `tg_inbox_list` → `{items:[]}`.
+- **Коммит:** `ba75327` (synth-media, 4 files, +165/−15) — запушен.
+- **Замечание:** на `127.0.0.1:7000` остался тестовый HTTP-receiver (pid 3043547, запущен при отладке) — нужен для `tg_inbox_list`/`publish`; можно остановить.
+
+## 2026-10-08 09:45 — Проверка бага «скиллы выключены в проекте, но включены в новой сессии» — уже исправлено (правок не требуется)
+
+- **Задача:** разобраться, почему при выключенных в «Проекте» скиллах новая сессия показывает их включёнными.
+- **Тип:** investigation (проверка существующего фикса) · **Исполнитель:** @orchestrator · **Результат:** PASS (код менять не нужно).
+- **Причина на момент сообщения:** в `server/routes/skill-scope.ts` формула эффективности обходила проектный скоуп для скиллов уровня `system` (`level === 'system'`), а каталог промпта проектный скоуп не учитывал вовсе.
+- **Уже закрыто на master:** коммит `7a1420e` «единая модель включения скиллов и MCP (система/проект/сессия)» + `981b3ee` (курсор тумблеров и MCP config-гейт). Единая формула — `resolveSkillAvailability` (`engine/skills/scope.ts`): `systemOn && projectOn && !sessionOff && (seed || sessionOn)`, причина с приоритетом `system → project → session`; та же функция используется в каталоге промпта (`engine/skills/catalog.ts` → `projectGate`) и в оркестраторе (`orchestrator.ts:1570` передаёт `projectEnabled`).
+- **Проверка на живом dev (master, admin/debug):**
+  - проект «Тестовый проект»: `enabled: []`, `defaultOn: []` → `GET /projects/:id/skills` отдаёт `enabled: false`, `reason: project` для всех 4 скиллов (ранее `true`);
+  - сессия этого проекта (`GET /sessions/:id/skills`): все скиллы `enabled: false`, `reason: project`;
+  - UI: в «Сессии» тумблеры скиллов выключены и заблокированы (`disabled`), в кате — «отключён · не разрешён проектом» (`sessionSettings.skills.disabledReason.project`); в проекте «Synth — демо», где скиллы разрешены, тумблеры включены — гейт работает по данным проекта.
+- **Тесты:** `@itphx/synth-core` — 2385 passed; `@itphx/synth-ui` — 998 passed (в т.ч. кейс `disabledReason: 'project'` в `SessionSettingsTab.skills.test.tsx:271`).
+- **Остаточное (на решение):** подпись секции «Включение/отключение на уровне сессии. Переопределяет настройки проекта.» неточна для скиллов, заблокированных проектом — сессия их включить не может (тумблер заблокирован).
+- **Не сделано:** коммит (правок нет). Замечено вне задачи: незакоммиченные `.opencode/tasks/log.md` и untracked `.opencode/skills/media-hub` — из другой задачи (synth-media), не трогал.
+
+## 2026-10-08 — synth-media: прокси для Telegram API
+- **Задача:** «Telegram напрямую недоступен, ходить через прокси `http://top.itphx.loc:3128` или `socks5://top.itphx.loc:9050`; реализуй поддержку».
+- **Тип:** feature
+- **Исполнитель:** @orchestrator → @fixer
+- **Результат:** PASS
+- **Разведка:** напрямую — timeout; HTTP `:3128` — timeout с этой машины; **SOCKS5 `:9050` — работает** (`302`). Node — v26.
+- **Что сделано:** `packages/telegram/src/transport.ts` — `requestJson`/`createProxyAgent`: пусто → `fetch`, `socks*` → `SocksProxyAgent`, `http(s)://` → `HttpsProxyAgent` (CONNECT). `TelegramClient` получил `proxyUrl`; проброс в receiver (`channels/telegram.ts`) и telegram-mcp (флаг `--proxy`). Env-приоритет: `TELEGRAM_PROXY_URL` → `ALL_PROXY` → `HTTPS_PROXY` → `HTTP_PROXY` → `secrets/telegram_proxy_url`. В проектный `.opencode/opencode.json` добавлен `TELEGRAM_PROXY_URL` в env MCP-серверов.
+- **Зависимости:** `socks-proxy-agent@^10.1.0`, `https-proxy-agent@^9.1.0`.
+- **Проверки:** build/typecheck/lint — 0 ошибок; tests — **80 passed** (telegram 18, telegram-mcp 31, receiver 31). Ручной smoke через SOCKS с невалидным токеном: `getMe` → `{"ok":false,"error_code":401,"description":"Unauthorized"}` (сквозной проход до api.telegram.org подтверждён); без прокси — `fetch failed` (ожидаемо).
+- **Коммит:** `synth-media` — «feat: поддержка прокси для Telegram API (HTTP CONNECT и SOCKS5)» (запушен).
+- **Грабли:** MCP-серверы читают env при спавне — после задания `TELEGRAM_PROXY_URL` нужен перезапуск opencode-сервера. HTTP-прокси `:3128` с этой машины недоступен, CONNECT-путь вживую не проверялся (юнит-тест выбора агента есть).
+
+### Поправка (2026-10-08): порт HTTP-прокси
+- HTTP-прокси — **`http://top.itphx.loc:3129`** (не `:3128`; `:3128` даёт timeout). Проверено `curl -x http://top.itphx.loc:3129 https://api.telegram.org/` → `302`.
+- Оба пути проверены вживую через наш клиент с невалидным токеном: `http://top.itphx.loc:3129` и `socks5://top.itphx.loc:9050` → `{"ok":false,"error_code":401,"description":"Unauthorized"}`.
+- Подготовлены `synth-media/secrets/`: `telegram_bot_token`, `telegram_channel_id`, `telegram_owner_chat_id` (пустые, 600), `telegram_proxy_url` = `socks5://top.itphx.loc:9050`.
+
+### Настройка Telegram (2026-10-08)
+- Бот: **@synth_itphx_bot** («Synth Admin», id 8853737717). Канал: **@synth_dev** (id `-1004298066060`, «Synth AI»).
+- Владелец (owner chat id) = **450316139** (личка `ramazanov_dv`) — записан в `synth-media/secrets/telegram_owner_chat_id`.
+- `synth-media/secrets/telegram_channel_id` = `@synth_dev`; `telegram_proxy_url` = `socks5://top.itphx.loc:9050`.
+- Проверено: `getMe` ок; `getChat` канала ок; тестовое `sendMessage` владельцу → `ok:true, message_id=3`.
+- Осталось: перезапустить opencode-сервер (MCP читает secrets при спавне), затем реальная публикация в канал (после approve).
+
+### Тестовый пост в канал (2026-10-08)
+- Опубликован тестовый пост в **@synth_dev** через `TelegramClient` (SOCKS5-прокси): `ok:true`, `message_id=20`, chat `-1004298066060` («Synth AI»). Ссылка: https://t.me/synth_dev/20.
+- Подтверждено: токен, прокси, права бота в канале и публикация работают. Прямой `sendMessage` (не через цепочку receiver) — сквозной сценарий draft→approve→publish ещё не проверялся.
+
+## 2026-10-08 — synth-media: Фаза 2 (кнопки ревью) + UI
+- **Задача:** «Фаза 2 + UI».
+- **Тип:** feature
+- **Исполнитель:** @orchestrator → @fixer (Фаза 2, герметичные тесты) + @general (UI)
+- **Результат:** PASS
+- **Коммиты:** `a3966e8` (fix(test): герметичные config-тесты), `b212423` (feat: Фаза 2 — inline-кнопки), `6d9e3cb` (feat(ui): SPA) — запушены.
+- **Фаза 2:** `tg_review_notify` шлёт владельцу черновик с клавиатурой `✅ Опубликовать / 🔁 Переписать / 🗑 Отклонить` (`callback_data = rv:<draftId>:<action>`, ≤64 байт; без `title/preview` подтягивает черновик из receiver). Бот `--bot` обрабатывает `callback_query`: approve → review+publish(telegram)+ссылка, reject → reject, rewrite → запрос комментария (состояние в памяти, TTL 1 ч) → следующее текстовое сообщение уходит в review(rewrite). Добавлены `answerCallbackQuery`, `editMessageReplyMarkup`; receiver-client получил `getDraft/reviewDraft/publishDraft`. Ручной smoke: уведомление с кнопками ушло владельцу (`message_id=4`).
+- **UI:** новый `apps/ui` (Vite + React 19 + TS, без UI-китов, hash-роутинг): черновики (доска + детали/ревизии/превью по каналам + действия render/submit/approve/rewrite/reject/publish), проекты+источники, инбокс, публикации, настройки (API/token/health). Dev-прокси `/api` → `:7000`, порт 7010, токен в `localStorage`. Скрипт `pnpm dev:ui`.
+- **Герметичность тестов:** `loadConfig` получил `secretsDir` (`overrides.secretsDir` > `SYNTH_MEDIA_SECRETS_DIR` > `<repo>/secrets`); тесты используют tmp-каталог, не зависят от реального `secrets/`.
+- **Проверки (оркестратор):** build/typecheck/lint — 0 ошибок; tests — **116 passed** (telegram 23, ui 6, telegram-mcp 50, receiver 37).
+- **Осталось:** живые нажатия кнопок владельцем; перезапуск opencode-сервера для свежих MCP-схем/секретов; деплой (Docker/Helm/Fleet); автоматизация (таймер); правило-триггер в `synth/AGENTS.md` и коммит симлинка/журнала в `synth/`.
