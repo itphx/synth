@@ -45,7 +45,8 @@
 |----|---------|--------|------|
 | AD-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ | [ad-018-session-engine-selection.md](./ad-018-session-engine-selection.md) |
 | AD-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов (AD-086) — нет | ⚠️ | [ad-030-hooks-agent-events.md](./ad-030-hooks-agent-events.md) |
-| AD-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, journal)/UI; источники AD-051/052/086 — нет | ⚠️ | [ad-089-external-events-automation.md](./ad-089-external-events-automation.md) |
+| AD-051 | Шедулер: минимальный срез — `SchedulerService` + cron/interval-источник `schedule_fired` через Router (AD-089), API/UI расписаний; Job-история, catch-up, пайплайны — нет | ⚠️ | [ad-051-scheduler-pipelines.md](./ad-051-scheduler-pipelines.md) |
+| AD-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, journal)/UI, источник AD-051 (cron); AD-052/086 — нет | ⚠️ | [ad-089-external-events-automation.md](./ad-089-external-events-automation.md) |
 
 ## Deprecated AD
 
@@ -68,7 +69,6 @@
 | AD-048 | [Self-help скиллы и admin-MCP](./ad-048-self-help-skills-admin-mcp.md): dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN |
 | AD-049 | [Git worktrees](./ad-049-git-worktrees.md): тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI |
 | AD-050 | [Внешние движки (opencode/cline) — Runner](./ad-050-external-engines-runner.md): EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 |
-| AD-051 | [Шедулер и пайплайны (облегчённый n8n)](./ad-051-scheduler-pipelines.md): `SchedulerService`, Schedule/Job, cron-воркер, событийные триггеры |
 | AD-052 | [Публичная API-платформа](./ad-052-public-api-platform.md): per-service ключи со скоупами/тенантами, OpenAPI, SDK, webhooks |
 | AD-053 | [CLI и TUI](./ad-053-cli-tui.md): паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI |
 | AD-054 | [Kanban-доска, backlog](./ad-054-kanban-backlog.md): интерактивная доска поверх `project.plan`, глобальный backlog, assignee/WIP |

@@ -157,6 +157,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 | `POST /api/v2/events` | Приём внешнего события (ingest; `requireAuth` + rate limit) |
 | `GET/POST/DELETE /api/v2/events/bindings` | Биндинги событий источник→сессия (чтение — `requireAuth`, мутации — ADMIN) |
 | `GET /api/v2/events/journal` | Журнал решений Router (последние записи, `limit`) |
+| `GET/POST/DELETE /api/v2/schedules` и `POST /api/v2/schedules/:id/run` | Расписания-источник `cron` (AD-051): CRUD + принудительный запуск (чтение — `requireAuth`, мутации/`run` — ADMIN) |
 
 ## Процесс разработки
 
@@ -281,8 +282,9 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 - **Внешние события (AD-089).** `engine/events/`: `EventRouter` (порядок `allowedSources` → dedup → явный `EventBinding` → `RouteRuleProvider` → `drop no_route`; решения журналируются), `RequestSessionService` (единый funnel создания сессии; explicit → `direct` + hook `session_requested`, внешнее → hook `external_event` → Router), `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam), `EventDelivery` (`run`/`defer`). Хранилища: `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`).
 - **Единый funnel.** Создание сессии — только через `RequestSessionService` (инвариант 16); внешние события входят только через Router; `forkSession`/backend `/import`/`remote/transfer.ts`/`chat.ts` — materialization, не request.
 - **Ephemeral TTL.** `Session.expiresAt`/`archivedAt`; `sessions/ephemeral.ts` (`parseTtl` `30s|15m|24h|7d`, `startEphemeralSweeper`, sweep 60 c, unref); `listSessions`/`listActiveSessions` по умолчанию исключают архив.
-- **Конфиг.** Секция `events` (`enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`, `allowedSources`). **i18n:** `event.*`, `hook.blocked`.
-- **API.** `POST /api/v2/events` (ingest), `GET/POST/DELETE /api/v2/events/bindings`, `GET /api/v2/events/journal`; SSE `GET /api/v2/events` сохранён. UI — админ-раздел «События» (bindings + журнал).
+- **Источник cron (AD-051, минимальный срез).** `engine/scheduler/`: `SchedulerService` (тикер `unref`, без catch-up, идемпотентный `dedupKey = cron:<id>:<минута>`, `runNow`), `SchedulerRuleProvider` (cron-событие → `bound`/`queue`/`ephemeral` по `Schedule.target`), `cron.ts` (5 полей, UTC) + `duration.ts`; `ScheduleStore` (`{dataDir}/schedules.json`). Планировщик не создаёт сессии сам — публикует `{source:'cron', type:'schedule_fired'}` через `EventIngress`. Job-история, catch-up, пайплайны — не реализованы.
+- **Конфиг.** Секция `events` (`enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`, `allowedSources`), секция `scheduler` (`enabled`, `tickSec`). **i18n:** `event.*`, `hook.blocked`.
+- **API.** `POST /api/v2/events` (ingest), `GET/POST/DELETE /api/v2/events/bindings`, `GET /api/v2/events/journal`, `GET/POST/DELETE /api/v2/schedules` + `POST /api/v2/schedules/:id/run`; SSE `GET /api/v2/events` сохранён. UI — админ-раздел «События» (bindings + журнал), вкладка правой панели «Шедулер».
 
 ## UI-конвенции
 
@@ -380,7 +382,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-048 | Self-help скиллы и admin-MCP: dogfooding-развёртывание, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | ⏳ Не реализовано | [ad-048](./docs/arch_decisions/ad-048-self-help-skills-admin-mcp.md) |
 | AD-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI | ⏳ Не реализовано | [ad-049](./docs/arch_decisions/ad-049-git-worktrees.md) |
 | AD-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090, маршрутизация по `Session.engine` | ⏳ Не реализовано | [ad-050](./docs/arch_decisions/ad-050-external-engines-runner.md) |
-| AD-051 | Шедулер и пайплайны (облегчённый n8n): `SchedulerService`, Schedule/Job, cron-воркер, UI правил, событийные триггеры (AD-030) | ⏳ Не реализовано | [ad-051](./docs/arch_decisions/ad-051-scheduler-pipelines.md) |
+| AD-051 | Шедулер и пайплайны (облегчённый n8n): `SchedulerService`, cron/interval-источник `schedule_fired` через Router (AD-089), API/UI расписаний; Job-история, catch-up, пайплайны — нет | ⚠️ Частично | [ad-051](./docs/arch_decisions/ad-051-scheduler-pipelines.md) |
 | AD-052 | Публичная API-платформа: per-service ключи со скоупами/тенантами, OpenAPI-спека, SDK, webhooks | ⏳ Не реализовано | [ad-052](./docs/arch_decisions/ad-052-public-api-platform.md) |
 | AD-053 | CLI и TUI: паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI | ⏳ Не реализовано | [ad-053](./docs/arch_decisions/ad-053-cli-tui.md) |
 | AD-054 | Kanban-доска, backlog, управление проектами: интерактивная доска поверх `project.plan`, глобальный backlog, assignee/WIP-лимиты | ⏳ Не реализовано | [ad-054](./docs/arch_decisions/ad-054-kanban-backlog.md) |
@@ -418,7 +420,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-086 | Расширяемость Synth: плагины, editions, вклад в mainline и внешние сервисы-надстройки: Extension API, каталог editions, contribution flow, add-ons (первый случай — Telegram gateway) | ⏳ Не реализовано | [ad-086](./docs/arch_decisions/ad-086-extensibility-plugins-editions.md) |
 | AD-087 | Gateway для подключения к мессенджерам | ⛔ Поглощён AD-086 | [ad-087](./docs/arch_decisions/ad-087-messenger-gateway-merged.md) |
 | AD-088 | Работа через HTTP-прокси: единый egress-слой, `no_proxy`/исключения, доверенные CA, аутентификация Basic/NTLM/Negotiate (Kerberos) | ⏳ Не реализовано | [ad-088](./docs/arch_decisions/ad-088-http-proxy.md) |
-| AD-089 | Synth как платформа внешних событий и автоматизации: сущности Event/Binding/Router, приём внешних событий на hook-шине, `session.requested` — тоже событие | ⚠️ Частично (ядро Event/Binding/Router, единый funnel, API, UI; источники AD-051/052/086 — нет) | [ad-089](./docs/arch_decisions/ad-089-external-events-automation.md) |
+| AD-089 | Synth как платформа внешних событий и автоматизации: сущности Event/Binding/Router, приём внешних событий на hook-шине, `session.requested` — тоже событие | ⚠️ Частично (ядро Event/Binding/Router, единый funnel, API, UI, источник AD-051 (cron); AD-052/086 — нет) | [ad-089](./docs/arch_decisions/ad-089-external-events-automation.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
