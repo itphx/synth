@@ -2031,4 +2031,4 @@
 - **Проверки:** typecheck 6/6; lint 0 errors; тесты shared 197 · core **2555** · ui 1019 · backend 347 (одиночный флейк `task-resume` при первом параллельном прогоне — повторно зелёный). Dev-smoke (без LLM): сообщение в очереди — `author="Scheduler"`, контент `[SCHEDULER]\n\nСообщение от системного пользователя «Scheduler» … «Smoke Nightly» …\n\nсобери отчёт по инцидентам`, metadata `source=cron/scheduler=true/schedule_id/schedule_name`.
 - **Замечания:** в чартах `backend.replicaCount: 1`, поэтому сейчас дублей нет — тех.долг проявится при масштабировании. В dev-инстансе остаётся пользовательское расписание «Тест» (`*/5`), не трогал.
 - **Ветка:** `docs/ad-normalization-089-external-events`
-- **Коммит:** нет (ожидает явной просьбы пользователя).
+- **Коммит:** `b2fd4e0` (AD/AGENTS) + `4d8272d` (код/тесты/журнал).
