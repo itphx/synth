@@ -1982,3 +1982,32 @@
   - Источники AD-051 (шедулер), AD-052 (публичный API), AD-086 (плагины) не реализованы.
 - **Проверки:** typecheck / lint / test — зелёные (по отчёту исполнителя); тесты по подсистеме — `events.test.ts`, `ingest.test.ts`, `request-session.test.ts`, `orchestrator-hooks.test.ts`.
 - **Коммит:** `ed1351b` (фактический хеш; запись была с `TBD`).
+
+## 2026-10-08 — AD-051 (минимальный срез): cron-источник событий поверх ядра AD-089
+- **Задача:** «Продолжим работу над AD-089 и пререквизитами» — первый реальный источник внешних событий: cron/interval-планировщик (выбран пользователем из предложенных срезов).
+- **Тип:** feature
+- **Исполнитель:** @orchestrator → @fixer ×3 (A: shared+core+API; B: backend-сшивка+docs; C: UI) → верификация @orchestrator (тесты, typecheck/lint, dev-smoke, Playwright)
+- **Результат:** PASS
+- **Что сделано:**
+  - **Идея среза:** планировщик не создаёт сессии сам — срабатывание публикует `{source:'cron', type:'schedule_fired'}` через существующий `EventIngress`, а маршрутизацию в сессию выполняет `EventRouter` через новый `RouteRuleProvider` (использован заложенный seam). Без новых npm-зависимостей — свой мини-cron.
+  - **shared:** типы `Schedule`/`ScheduleTarget` (`bound`/`ephemeral`/`queue`) + Zod (`scheduleTargetSchema`/`scheduleInputSchema`/`scheduleSchema`); конфиг-секция `scheduler: { enabled, tickSec }`.
+  - **core / парсеры:** `engine/scheduler/{cron,duration,schedule-time}.ts` — `nextCronDate` (5 полей, UTC, `*`/`n`/`a-b`/`a,b`/`*/n`), `parseDurationMs` (`30s|15m|1h|24h`), `nextRunAt`.
+  - **core / store:** `storage/schedule-store.ts` (`{dataDir}/schedules.json`, AsyncLock, atomicWrite, path-traversal guard; `create/update/remove/markRun/setNextRun`).
+  - **core / сервис:** `SchedulerRuleProvider` (cron-event + `payload.scheduleId` → `bound`/`queue`/`ephemeral`, иначе `drop schedule_not_found/schedule_disabled`); `SchedulerService` (один `setInterval`-тикер, `unref`, guard от наложения, без catch-up, идемпотентный `dedupKey = cron:<id>:<минута>`, `runNow`, `refreshNextRun`, ошибки в `lastStatus/lastError`).
+  - **core / API:** `createSchedulerRoutes` — `GET/POST /api/v2/schedules`, `PUT/DELETE /:id`, `POST /:id/run`; сшивка в standalone `core/src/server/app.ts` (store, регистрация провайдера, старт по `scheduler.enabled`, `stopScheduler` на shutdown) + `main.ts`.
+  - **backend:** сшивка в `packages/backend/src/app.ts` (store+провайдер+сервис+монтирование), `writeGuard = requireAdmin`, `stopScheduler` в `src/main.ts`; backend-тесты (`routes/schedules.test.ts`, 6 кейсов).
+  - **UI:** рабочая вкладка «Шедулер» (`components/panels/SchedulerTab.tsx`) вместо заглушки: список (имя/триггер/цель/`nextRunAt`/`lastRunAt`/статус), форма создания/правки, toggle, «Запустить сейчас», удаление; `synthApi`-методы, i18n ru/en.
+  - **docs:** `API_V2.md` (§5.27), `CONFIGURATION.md` (`scheduler.*`), статус `ad-051`, `packages/backend/AGENTS.md` (таблица монтирования/импортов).
+- **Проверки (оркестратор):**
+  - `pnpm --filter @itphx/synth-shared build`, `pnpm --filter @itphx/synth-core build` — OK.
+  - `pnpm typecheck` — 6/6, 0 ошибок; `pnpm lint` — 0 errors (175 предсуществующих warning).
+  - `pnpm test` — shared 197, core 2543, ui 1019, backend 347 — все зелёные. Новые: core +59 (cron/duration/store/scheduler/route-provider/schedules-routes), backend +6, ui +12.
+  - **dev-smoke (без LLM):** `POST /schedules` (target `queue`, `every:'1h'`) → `nextRunAt` посчитан; `POST /:id/run` → журнал `/events/journal` содержит событие `cron/schedule_fired` с решением `{kind:'queue', owner, reason:'schedule'}`, в сессии `pending_count=1`. Тестовое расписание удалено.
+  - **UI (Playwright, :5002, admin):** вкладка «Шедулер» — список + форма (Имя/Включено/Cron|Интервал/Цель/Сессия/Промпт); консоль 0 errors / 0 warnings (скриншот `tmp/scheduler-tab.png`). Dev остановлен, порты освобождены.
+- **Отклонения/замечания:**
+  - `runNow` выключенного расписания публикует событие, но провайдер дропает (`schedule_disabled`) — семантика «принудительно и выключенное» не реализована.
+  - Rate limit на `POST /:id/run` в backend не навешен (у core-фабрики общий `writeGuard`); вынесено в остаток AD-051.
+  - Остаток AD-051: Job-история, catch-up, пайплайны, размещение планировщика в гибриде; остаток AD-089: источники AD-052/086, Plugin SDK (AD-030).
+  - **Не сделано (ожидает согласования):** правка корневого `AGENTS.md` (AD-051/089, runtime-таблица `/api/v2/schedules`, раздел «Внешние события и хуки»), статус AD-051 в `docs/arch_decisions/README.md`; правка item 4 прошлой записи (TBD → `ed1351b`) внесена.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** нет (ожидает явной просьбы пользователя).

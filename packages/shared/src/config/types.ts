@@ -259,6 +259,18 @@ export const eventsConfigSchema = z.object({
   allowedSources: z.array(z.string()).default([]),
 });
 
+// --- Планировщик расписаний (AD-051 срез / AD-089) ---
+
+/**
+ * AD-051 (минимальный срез) / AD-089: конфигурация cron/interval-планировщика.
+ * - `enabled` — мастер-выключатель сервиса (в standalone гейтит `start()`);
+ * - `tickSec` — период тика, секунды (1..3600).
+ */
+export const schedulerConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  tickSec: z.number().int().min(1).max(3600).default(60),
+});
+
 // --- Проектные инструкции (AD-069) ---
 
 /**
@@ -495,6 +507,7 @@ export const synthConfigSchema = z.object({
   skills: skillsConfigSchema.default({}),
   commands: commandsConfigSchema.default({}),
   events: eventsConfigSchema.default({}),
+  scheduler: schedulerConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
@@ -524,6 +537,7 @@ export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
 export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
 export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
 export type EventsConfig = z.infer<typeof eventsConfigSchema>;
+export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
 export type InstructionSourceConfig = z.infer<typeof instructionSourceConfigSchema>;
 export type InstructionsLazyConfig = z.infer<typeof instructionsLazyConfigSchema>;
 export type InstructionsFetchConfig = z.infer<typeof instructionsFetchConfigSchema>;

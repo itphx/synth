@@ -1,0 +1,135 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ScheduleInput } from '@itphx/synth-shared';
+import { ScheduleStore } from './schedule-store.js';
+
+const input = (overrides: Partial<ScheduleInput> = {}): ScheduleInput => ({
+  name: 'Ночная проверка',
+  enabled: true,
+  every: '1h',
+  target: { mode: 'bound', sessionId: 's1' },
+  ...overrides,
+});
+
+describe('ScheduleStore (AD-051 / AD-089)', () => {
+  let store: ScheduleStore;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-schedules-'));
+    store = new ScheduleStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('create генерирует sch_<uuid> и таймстемпы', async () => {
+    const created = await store.create(input());
+    expect(created.id).toMatch(/^sch_/);
+    expect(created.name).toBe('Ночная проверка');
+    expect(created.createdAt).toBeTruthy();
+    expect(created.updatedAt).toBe(created.createdAt);
+    expect(created.target).toEqual({ mode: 'bound', sessionId: 's1' });
+  });
+
+  it('get/list/remove — базовый CRUD', async () => {
+    const created = await store.create(input());
+    expect((await store.get(created.id))?.id).toBe(created.id);
+    expect(await store.list()).toHaveLength(1);
+    expect(await store.get('missing')).toBeNull();
+
+    expect(await store.remove(created.id)).toBe(true);
+    expect(await store.get(created.id)).toBeNull();
+    expect(await store.remove(created.id)).toBe(false);
+  });
+
+  it('store пуст без файла (list → []), get → null', async () => {
+    expect(await store.list()).toEqual([]);
+    expect(await store.get('sch_x')).toBeNull();
+  });
+
+  it('update сливает патч и обновляет updatedAt', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const created = await store.create(input());
+    expect(created.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+
+    vi.setSystemTime(new Date('2026-01-01T00:05:00Z'));
+    const updated = await store.update(created.id, { enabled: false, name: 'Другое' });
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.name).toBe('Другое');
+    expect(updated?.createdAt).toBe(created.createdAt);
+    expect(updated?.updatedAt).toBe('2026-01-01T00:05:00.000Z');
+
+    expect(await store.update('sch_missing', { enabled: false })).toBeNull();
+  });
+
+  it('markRun фиксирует lastRunAt/status/error/nextRunAt', async () => {
+    const created = await store.create(input());
+    const marked = await store.markRun(created.id, {
+      at: '2026-01-01T01:00:00.000Z',
+      status: 'error',
+      error: 'boom',
+      nextRunAt: '2026-01-01T02:00:00.000Z',
+    });
+    expect(marked?.lastRunAt).toBe('2026-01-01T01:00:00.000Z');
+    expect(marked?.lastStatus).toBe('error');
+    expect(marked?.lastError).toBe('boom');
+    expect(marked?.nextRunAt).toBe('2026-01-01T02:00:00.000Z');
+
+    expect(await store.markRun('sch_missing', { at: 'x', status: 'ok' })).toBeNull();
+  });
+
+  it('markRun без error сбрасывает прежний lastError', async () => {
+    const created = await store.create(input());
+    await store.markRun(created.id, { at: 't1', status: 'error', error: 'boom' });
+    const ok = await store.markRun(created.id, { at: 't2', status: 'ok' });
+    expect(ok?.lastError).toBeUndefined();
+    expect(ok?.lastStatus).toBe('ok');
+  });
+
+  it('setNextRun устанавливает и очищает nextRunAt', async () => {
+    const created = await store.create(input());
+    const set = await store.setNextRun(created.id, '2026-01-01T03:00:00.000Z');
+    expect(set?.nextRunAt).toBe('2026-01-01T03:00:00.000Z');
+
+    const cleared = await store.setNextRun(created.id, undefined);
+    expect(cleared?.nextRunAt).toBeUndefined();
+
+    expect(await store.setNextRun('sch_missing', 'x')).toBeNull();
+  });
+
+  it('персистит данные между инстансами', async () => {
+    const created = await store.create(input());
+    const reloaded = new ScheduleStore({ dataDir: tmpDir });
+    expect((await reloaded.get(created.id))?.name).toBe('Ночная проверка');
+  });
+
+  it('отклоняет id с path traversal', async () => {
+    await expect(store.update('../evil', { enabled: false })).rejects.toThrow('Недопустимый id');
+    await expect(store.remove('a/b')).rejects.toThrow('Недопустимый id');
+    await expect(store.markRun('a\\b', { at: 'x', status: 'ok' })).rejects.toThrow('Недопустимый id');
+  });
+
+  it('пишет файл атомарно: нет .tmp-файлов, JSON валиден', async () => {
+    await store.create(input());
+    const files = await readdir(tmpDir);
+    expect(files.filter((f) => f.includes('.tmp'))).toHaveLength(0);
+    expect(files).toContain('schedules.json');
+    const raw = JSON.parse(await readFile(join(tmpDir, 'schedules.json'), 'utf-8'));
+    expect(raw.schemaVersion).toBe(1);
+    expect(raw.schedules).toHaveLength(1);
+  });
+
+  it('параллельные create не теряют записи (per-file lock)', async () => {
+    await Promise.all(Array.from({ length: 10 }, (_, i) => store.create(input({ name: `s${i}` }))));
+    const all = await store.list();
+    expect(all).toHaveLength(10);
+    expect(new Set(all.map((s) => s.id)).size).toBe(10);
+  });
+});

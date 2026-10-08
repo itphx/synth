@@ -614,6 +614,30 @@ source/type/ключу/payload). RBAC managed: приём — `requireAuth` + ra
 > (`engine/events/request-session.ts`, AD-089): эмит `session_requested` + создание
 > сессии. Внешний контракт эндпоинта не изменился.
 
+### 5.27 Schedules — `/api/v2/schedules` (оба, AD-051 срез / AD-089)
+
+CRUD расписаний планировщика (единая фабрика `createSchedulerRoutes` для core и
+backend). Срабатывание не создаёт сессию
+само: сервис публикует нормализованное событие `source: 'cron'`,
+`type: 'schedule_fired'` через `EventIngress`, а маршрутизацию выполняет
+`SchedulerRuleProvider` (`RouteRuleProvider`). RBAC managed (backend): чтение
+(`GET`) — `requireAuth`; мутации (`POST`/`PUT`/`DELETE`) и принудительный запуск
+(`POST /:id/run`) — только ADMIN (`writeGuard = requireAdmin`). В core
+(standalone) — единый `requireAuth` на все методы.
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/schedules` | оба | requireAuth | Список расписаний `{schedules}` |
+| POST | `/api/v2/schedules` | оба | ADMIN | Создание (`scheduleInputSchema`): `{name, enabled?, cron?, every?, target, prompt?, payload?, ownerId?}`; ровно одно из `cron`/`every`; невалидно → 400 `VALIDATION_ERROR`; → 201 `{schedule}` |
+| PUT | `/api/v2/schedules/:id` | оба | ADMIN | Обновление (полное тело как POST) → 200 `{schedule}`; нет записи → 404 `NOT_FOUND` |
+| DELETE | `/api/v2/schedules/:id` | оба | ADMIN | Удаление → 204; нет записи → 404 |
+| POST | `/api/v2/schedules/:id/run` | оба | ADMIN | Принудительный запуск (ingest события с уникальным dedup-ключом) → 200 `{schedule}`; нет записи → 404 |
+
+`target` — дискриминированный союз: `{mode:'bound', sessionId}` |
+`{mode:'ephemeral', agentTemplate?, project?, ttl?}` | `{mode:'queue', sessionId}`.
+`cron` — 5 полей (UTC), `every` — `30s | 15m | 1h | 24h`. `nextRunAt` вычисляется
+сервисом; catch-up отсутствует (пропущенные срабатывания пропускаются).
+
 ---
 
 ## 6. Источники

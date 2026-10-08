@@ -16,6 +16,9 @@ import {
   eventIdentitySchema,
   eventBindingSchema,
   sessionRequestSchema,
+  scheduleTargetSchema,
+  scheduleInputSchema,
+  scheduleSchema,
 } from './index.js';
 import { PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS } from '../types/index.js';
 
@@ -314,5 +317,53 @@ describe('sessionRequestSchema (AD-089)', () => {
     expect(
       sessionRequestSchema.safeParse({ initiator: 'external', intent: 'event', color: 'blue' }).success,
     ).toBe(false);
+  });
+});
+
+describe('schedule schemas (AD-051 / AD-089)', () => {
+  it('scheduleTargetSchema: три варианта', () => {
+    expect(scheduleTargetSchema.safeParse({ mode: 'bound', sessionId: 's1' }).success).toBe(true);
+    expect(scheduleTargetSchema.safeParse({ mode: 'queue', sessionId: 's1' }).success).toBe(true);
+    expect(scheduleTargetSchema.safeParse({ mode: 'ephemeral', ttl: '30m' }).success).toBe(true);
+    expect(scheduleTargetSchema.safeParse({ mode: 'bound' }).success).toBe(false);
+    expect(scheduleTargetSchema.safeParse({ mode: 'other' }).success).toBe(false);
+  });
+
+  it('scheduleInputSchema: enabled по умолчанию true, ровно один триггер', () => {
+    const parsed = scheduleInputSchema.safeParse({
+      name: 'job',
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.enabled).toBe(true);
+
+    expect(scheduleInputSchema.safeParse({ name: 'x', target: { mode: 'bound', sessionId: 's1' } }).success).toBe(false);
+    expect(
+      scheduleInputSchema.safeParse({
+        name: 'x',
+        cron: '* * * * *',
+        every: '1h',
+        target: { mode: 'bound', sessionId: 's1' },
+      }).success,
+    ).toBe(false);
+    expect(scheduleInputSchema.safeParse({ name: '', every: '1h', target: { mode: 'bound', sessionId: 's1' } }).success).toBe(false);
+  });
+
+  it('scheduleSchema: принимает служебные поля', () => {
+    const parsed = scheduleSchema.safeParse({
+      id: 'sch_1',
+      name: 'job',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'ephemeral', agentTemplate: 'triage' },
+      payload: { foo: 'bar' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      lastRunAt: '2026-01-01T01:00:00.000Z',
+      nextRunAt: '2026-01-01T02:00:00.000Z',
+      lastStatus: 'ok',
+    });
+    expect(parsed.success).toBe(true);
   });
 });

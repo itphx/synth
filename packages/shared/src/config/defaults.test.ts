@@ -18,6 +18,7 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('context');
     expect(defaultConfig).toHaveProperty('summarization');
     expect(defaultConfig).toHaveProperty('events');
+    expect(defaultConfig).toHaveProperty('scheduler');
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {
@@ -125,5 +126,9 @@ describe('defaultConfig', () => {
       journalRetentionDays: 30,
       allowedSources: [],
     });
+  });
+
+  it('scheduler по умолчанию: enabled, тик 60 c (AD-051 срез / AD-089)', () => {
+    expect(defaultConfig.scheduler).toEqual({ enabled: true, tickSec: 60 });
   });
 });

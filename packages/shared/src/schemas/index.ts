@@ -623,3 +623,72 @@ export const eventBindingInputSchema = z.object({
 });
 
 export type EventBindingInputRequest = z.infer<typeof eventBindingInputSchema>;
+
+/** AD-051/AD-089: цель расписания (дискриминированный союз по `mode`). */
+export const scheduleTargetSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('bound'), sessionId: z.string().min(1) }),
+  z.object({
+    mode: z.literal('ephemeral'),
+    agentTemplate: z.string().optional(),
+    project: z.string().optional(),
+    ttl: z.string().optional(),
+  }),
+  z.object({ mode: z.literal('queue'), sessionId: z.string().min(1) }),
+]);
+
+/**
+ * AD-051/AD-089: ровно одно из `cron` / `every` задано. Пустые строки
+ * трактуются как отсутствие поля.
+ */
+function refineScheduleTrigger(
+  val: { cron?: string; every?: string },
+  ctx: z.RefinementCtx,
+): void {
+  const hasCron = typeof val.cron === 'string' && val.cron.trim().length > 0;
+  const hasEvery = typeof val.every === 'string' && val.every.trim().length > 0;
+  if (hasCron === hasEvery) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Ровно одно из полей cron/every должно быть задано',
+      path: ['cron'],
+    });
+  }
+}
+
+/** AD-051/AD-089: вход создания/обновления расписания (`ScheduleInput`). */
+export const scheduleInputSchema = z
+  .object({
+    name: z.string().min(1),
+    enabled: z.boolean().default(true),
+    cron: z.string().optional(),
+    every: z.string().optional(),
+    target: scheduleTargetSchema,
+    prompt: z.string().optional(),
+    payload: z.record(z.unknown()).optional(),
+    ownerId: z.string().optional(),
+  })
+  .superRefine(refineScheduleTrigger);
+
+/** AD-051/AD-089: полная сущность расписания (ответы API). */
+export const scheduleSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    enabled: z.boolean(),
+    cron: z.string().optional(),
+    every: z.string().optional(),
+    target: scheduleTargetSchema,
+    prompt: z.string().optional(),
+    payload: z.record(z.unknown()).optional(),
+    ownerId: z.string().optional(),
+    createdAt: z.string().min(1),
+    updatedAt: z.string().min(1),
+    lastRunAt: z.string().optional(),
+    nextRunAt: z.string().optional(),
+    lastStatus: z.enum(['ok', 'error', 'skipped']).optional(),
+    lastError: z.string().optional(),
+  })
+  .superRefine(refineScheduleTrigger);
+
+export type ScheduleInputRequest = z.infer<typeof scheduleInputSchema>;
+export type ScheduleRequest = z.infer<typeof scheduleSchema>;

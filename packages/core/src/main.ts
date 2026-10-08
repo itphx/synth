@@ -131,6 +131,8 @@ program
       instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
       // AD-089: конфигурация приёма внешних событий (allowedSources/ephemeralTtl).
       eventsConfig: synth.events,
+      // AD-051 (срез) / AD-089: конфигурация планировщика (enabled/tickSec).
+      schedulerConfig: synth.scheduler,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
@@ -163,6 +165,9 @@ program
 
       // AD-089: остановить авто-архивацию ephemeral-сессий.
       appHandle.stopEphemeralSweeper?.();
+
+      // AD-051 (срез): остановить планировщик расписаний.
+      appHandle.stopScheduler?.();
 
       server.close((err: Error | undefined) => {
         if (err) console.error('[Shutdown] Server close error:', err);

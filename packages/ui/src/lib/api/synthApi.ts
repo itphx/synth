@@ -1,6 +1,6 @@
 import type { MessageData } from '@/stores/chatStore'
 import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, SynthEvent, RouteDecision } from '@itphx/synth-shared'
-import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry } from '@itphx/synth-shared/types'
+import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry, Schedule, ScheduleInput } from '@itphx/synth-shared/types'
 
 // Реэкспорт общих контрактов (AD-071): без локальных дублей.
 export type { McpServerConfig, ToolsPolicy }
@@ -1821,6 +1821,44 @@ export const synthApi = {
   async getEventJournal(limit?: number): Promise<{ entries: EventJournalEntry[] }> {
     const qs = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : ''
     return fetchJSON<{ entries: EventJournalEntry[] }>(`${BASE_URL}/events/journal${qs}`)
+  },
+
+  // --- Шедулер расписаний (AD-051 / AD-089) ---
+  /** GET /schedules — список расписаний инстанса. */
+  async getSchedules(): Promise<{ schedules: Schedule[] }> {
+    return fetchJSON<{ schedules: Schedule[] }>(`${BASE_URL}/schedules`)
+  },
+
+  /** POST /schedules — создание расписания. */
+  async createSchedule(input: ScheduleInput): Promise<Schedule> {
+    const res = await fetchJSON<{ schedule: Schedule }>(`${BASE_URL}/schedules`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+    return res.schedule
+  },
+
+  /** PUT /schedules/:id — обновление расписания (полная замена полей). */
+  async updateSchedule(id: string, input: ScheduleInput): Promise<Schedule> {
+    const res = await fetchJSON<{ schedule: Schedule }>(
+      `${BASE_URL}/schedules/${encodeURIComponent(id)}`,
+      { method: 'PUT', body: JSON.stringify(input) },
+    )
+    return res.schedule
+  },
+
+  /** DELETE /schedules/:id — удаление расписания. */
+  async deleteSchedule(id: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/schedules/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** POST /schedules/:id/run — принудительный запуск (ingest события сейчас). */
+  async runSchedule(id: string): Promise<Schedule> {
+    const res = await fetchJSON<{ schedule: Schedule }>(
+      `${BASE_URL}/schedules/${encodeURIComponent(id)}/run`,
+      { method: 'POST' },
+    )
+    return res.schedule
   },
 }
 

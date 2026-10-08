@@ -9,7 +9,7 @@ import { createBackendApp } from './app.js';
 const host = process.env.SYNTH_HOST || '0.0.0.0';
 
 const handle = await createBackendApp();
-const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper } = handle;
+const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopScheduler } = handle;
 
 let shuttingDown = false;
 
@@ -35,6 +35,9 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   // AD-089: остановить авто-архивацию ephemeral-сессий.
   stopEphemeralSweeper();
+
+  // AD-051 (срез): остановить планировщик расписаний.
+  stopScheduler();
 
   const drainTimeout = 10_000;
   const activeSessions = await sessionManager.listActiveSessions();

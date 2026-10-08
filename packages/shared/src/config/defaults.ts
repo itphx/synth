@@ -119,6 +119,10 @@ export const defaultConfig: SynthConfig = {
     journalRetentionDays: 30,
     allowedSources: [],
   },
+  scheduler: {
+    enabled: true,
+    tickSec: 60,
+  },
   instructions: {
     enabled: true,
     claudeCompat: true,

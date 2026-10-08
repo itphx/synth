@@ -10,6 +10,7 @@ import { SessionSettingsTab } from './SessionSettingsTab'
 import { ProjectTab } from './ProjectTab'
 import { ReferencesTab } from './ReferencesTab'
 import { SecretsTab } from './SecretsTab'
+import { SchedulerTab } from './SchedulerTab'
 import { PanelTab } from './PanelTab'
 
 // AD-071: верхний ряд правой панели — «Сессия», «Проект», «Контекст», «Статистика».
@@ -103,13 +104,7 @@ export const RightPanel: React.FC = () => {
             </div>
           </PanelTab>
         )}
-        {rightPanelTab === 'scheduler' && (
-          <PanelTab>
-            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-              {t('rightPanel.scheduler.placeholder')}
-            </div>
-          </PanelTab>
-        )}
+        {rightPanelTab === 'scheduler' && <SchedulerTab />}
       </div>
     </div>
   )

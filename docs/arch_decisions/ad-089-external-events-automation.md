@@ -1,6 +1,6 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051); AD-052/086 — нет)
 > **Дата:** 2026-10-08
 > **Связано:** [AD-030](./ad-030-hooks-agent-events.md) «Hooks для событий агента» (фундамент),
 > [AD-034](./ad-034-model-routing.md) «Routing между моделями», [AD-035](./ad-035-micro-model-first.md) «Micro-model first»,
@@ -182,24 +182,36 @@ type RouteDecision =
 
 ## Статус реализации в коде
 
-**Не реализовано, кода нет.**
+**Реализовано частично — ядро AD-089.**
 
-Проверено grep по `packages/**` (исключая `dist/`, `node_modules/`):
+- **Сущности и Router:** `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest` (shared), `EventRouter`
+  (`engine/events/event-router.ts` — `allowedSources` → dedup → `EventBinding` → `RouteRuleProvider` → `drop no_route`,
+  журналирование решений), `RequestSessionService` (единый funnel: explicit → `direct`, внешнее → Router),
+  `EventIngress` (ingest/нормализация), `RouteRuleProvider`/`EventDelivery` (seam/доставка).
+- **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`)
+  (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.
+- **API:** `POST /api/v2/events` (ingest), `GET/POST/DELETE /api/v2/events/bindings`, `GET /api/v2/events/journal`;
+  SSE `GET /api/v2/events` сохранён. RBAC: ingest — `requireAuth` + rate limit, мутации биндингов — ADMIN.
+- **UI:** админ-раздел «События» (bindings + журнал).
+- **Единый funnel:** создание сессии — только через `RequestSessionService` (инвариант 16);
+  `forkSession`/backend `/import`/`remote/transfer.ts`/`chat.ts` — materialization.
+- **Источник событий — cron (AD-051, минимальный срез):** `SchedulerService` + `SchedulerRuleProvider`
+  публикуют `{source:'cron', type:'schedule_fired'}` через `EventIngress`; `ScheduleStore`/API `/api/v2/schedules`/UI-вкладка «Шедулер».
+- **Хуки (AD-030, min):** `HookBus` + эмиты жизненного цикла (`pre/post_tool_use`, `session_requested`, `external_event`, …).
 
-- Сущностей внешних событий нет: `webhook`, `scheduler`, `external_event`, `message_received`,
-  `binding`, `SynthPlugin` — 0 совпадений в пакетах Synth.
-- Хуков/Plugin SDK нет ([AD-030](./ad-030-hooks-agent-events.md) — только проект).
-- Шедулера ([AD-051](./ad-051-scheduler-pipelines.md)) и публичного API ([AD-052](./ad-052-public-api-platform.md)) нет.
+**Не реализовано (остаток):**
 
-**Переиспользуемые кирпичи уже есть:**
+- Источники AD-052 (публичный API/ключи/webhooks) и AD-086 (add-on + Telegram gateway → `message_received`);
+- Plugin SDK и загрузка плагинов ([AD-030](./ad-030-hooks-agent-events.md));
+- развилки v1: `queue` (defer без старта процессора), `agentTemplate` → `settings.agentRole` (резолвинг через AgentRegistry — задел);
+- Job-история/catch-up/пайплайны ([AD-051](./ad-051-scheduler-pipelines.md) → [AD-059](./ad-059-pipeline-automation.md)).
 
-- [AD-034](./ad-034-model-routing.md) и [AD-035](./ad-035-micro-model-first.md) реализованы;
-  микро-каскад — `packages/core/src/engine/router/micro/`.
-- Тул `classify_conversation` реализован — `packages/core/src/engine/tools/classify-conversation.ts`.
-- Ветвление/наследование сессий ([AD-033](./ad-033-session-branching-merge.md)) и очередь
-  (`QueueProcessorManager`, `packages/core/src/queue/processor.ts`) — есть.
-- MCP-клиент ([AD-071](./ad-071-mcp-servers-prompt.md)) и API v2 ([AD-017](./ad-017-api-v2-hono.md)) — есть.
-- Внешний демонстратор `synth-media` (Telegram-MCP + бот) существует как отдельный сервис.
+**Переиспользуемые кирпичи:**
+
+- [AD-034](./ad-034-model-routing.md) и [AD-035](./ad-035-micro-model-first.md) — микро-каскад (`engine/router/micro/`); тул `classify_conversation`.
+- Ветвление/наследование сессий ([AD-033](./ad-033-session-branching-merge.md)) и очередь (`QueueProcessorManager`, `queue/processor.ts`).
+- MCP-клиент ([AD-071](./ad-071-mcp-servers-prompt.md)) и API v2 ([AD-017](./ad-017-api-v2-hono.md)).
+- Внешний демонстратор `synth-media` (Telegram-MCP + бот).
 
 ## Открытые вопросы
 

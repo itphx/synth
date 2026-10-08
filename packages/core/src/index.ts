@@ -175,6 +175,9 @@ export { EventBindingStore, EVENT_BINDINGS_SCHEMA_VERSION } from './storage/even
 export type { EventBindingStoreConfig, UpsertEventBindingInput } from './storage/event-binding-store.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
+// AD-051 (срез) / AD-089: реестр расписаний планировщика.
+export { ScheduleStore, SCHEDULES_SCHEMA_VERSION } from './storage/schedule-store.js';
+export type { ScheduleStoreConfig, ScheduleRunUpdate } from './storage/schedule-store.js';
 // AD-089: ядро маршрутизации событий и единый funnel создания сессии.
 export { EventRouter } from './engine/events/event-router.js';
 export type { EventRouterDeps } from './engine/events/event-router.js';
@@ -196,6 +199,19 @@ export type {
   RouteRuleProvider,
   SessionResolution,
 } from './engine/events/types.js';
+// AD-051 (срез) / AD-089: планировщик расписаний (cron/interval).
+export {
+  nextCronDate,
+  isValidCron,
+  parseDurationMs,
+  isValidDuration,
+  nextRunAt,
+  SchedulerRuleProvider,
+  SchedulerService,
+  startScheduler,
+  DEFAULT_SCHEDULER_TICK_MS,
+} from './engine/scheduler/index.js';
+export type { ScheduleTrigger, SchedulerServiceDeps } from './engine/scheduler/index.js';
 // AD-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
 export { SkillService } from './engine/skills/service.js';
 export type { SkillServiceOptions, SkillListOptions } from './engine/skills/service.js';
@@ -301,6 +317,13 @@ export type {
   EventRoutesOptions,
   EventRouteMessages,
 } from './server/routes/events.js';
+export { createSchedulerRoutes } from './server/routes/schedules.js';
+export type {
+  SchedulerRoutesAuth,
+  SchedulerRoutesDeps,
+  SchedulerRoutesOptions,
+  SchedulerRouteMessages,
+} from './server/routes/schedules.js';
 export { createMessageRoutes } from './server/routes/messages.js';
 export type { MessageRoutesAuth, MessageRoutesOptions, MessageRouteMessages } from './server/routes/messages.js';
 export { createQueueRoutes } from './server/routes/queue.js';

@@ -362,6 +362,26 @@ events:
 API (`POST /api/v2/events`, bindings, journal) — `docs/API_V2.md` §5.26; устройство
 шины/роутера — `docs/ARCHITECTURE.md` («Внешние события и хуки»).
 
+### Планировщик расписаний (`scheduler.*`, AD-051 срез / AD-089)
+
+Cron/interval-планировщик публикует события `source: 'cron'` через
+`EventIngress`; маршрутизацию в сессии выполняет `EventRouter`
+(правило `SchedulerRuleProvider`). Управление — API `/api/v2/schedules`
+(`docs/API_V2.md` §5.27).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `scheduler.enabled` | Мастер-выключатель сервиса: `false` — тикер не стартует (CRUD расписаний и `run` остаются) | `true` |
+| `scheduler.tickSec` | Период тика, секунды (1..3600) | `60` |
+
+Пример:
+
+```yaml
+scheduler:
+  enabled: true
+  tickSec: 60
+```
+
 ### Гибридный режим (remote)
 
 Секция `remote` включает гибридный режим: локальный `synth serve` подключается

@@ -1371,3 +1371,5 @@ export * from './commands.js';
 export * from './events.js';
 // Hooks агента и интеграций (AD-030) — re-exported from hooks.ts
 export * from './hooks.js';
+// Планировщик расписаний (AD-051 срез / AD-089) — re-exported from schedules.ts
+export * from './schedules.js';

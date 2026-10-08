@@ -1,6 +1,6 @@
 # AD-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** ⚠️ Частично — реализован минимальный срез (cron/interval-источник событий через AD-089); Job-история, catch-up, UI и пайплайны — нет.
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D6, идея 6 + Roadmap Фаза 2; прототип
 > `~/dev/aic/t11/synth/app/scheduler.py`).
@@ -64,15 +64,47 @@
 
 ## Статус реализации в коде
 
-**Не реализовано.**
+**Реализован минимальный срез** (cron/interval-источник событий через AD-089),
+без внешних зависимостей — собственный mini-cron-парсер вместо `node-cron`.
 
-Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
+Что есть:
 
-- Вкладка «Шедулер» в `RightPanel.tsx` присутствует как **заглушка** (`rightPanel.tab.scheduler` +
-  `rightPanel.scheduler.placeholder`); функциональности нет.
-- Cron-библиотек (`node-cron`, `croner`, `croniter`) в `package.json` нет.
-- `SchedulerService`, сущностей `Schedule`/`Job`, API и персистентности расписаний нет.
-- `packages/core/src/queue/` — очередь сообщений, не планировщик.
+- **shared**: типы `Schedule`/`ScheduleInput`/`ScheduleTarget` (`types/schedules.ts`),
+  Zod-схемы `scheduleTargetSchema`/`scheduleInputSchema`/`scheduleSchema`,
+  конфиг-секция `scheduler` (`enabled`/`tickSec`).
+- **core, парсеры** (`engine/scheduler/`): `nextCronDate`/`isValidCron`
+  (5 полей, UTC, токены `*`/`n`/`a-b`/`a,b`/`*` со шагом/`a-b/шаг`),
+  `parseDurationMs`/`isValidDuration` (`30s|15m|1h|24h`), `nextRunAt`.
+- **core, хранилище**: `ScheduleStore` (`{dataDir}/schedules.json`, атомарная
+  запись, `schemaVersion`, CRUD + `markRun`).
+- **core, маршрутизация**: `SchedulerRuleProvider` (`RouteRuleProvider`) —
+  cron-событие → `bound`/`queue`/`ephemeral`/`drop` по расписанию.
+- **core, сервис**: `SchedulerService` (тикер с `unref`, guard от наложения, без
+  catch-up), публикует `{source:'cron', type:'schedule_fired'}` через
+  `EventIngress`; `startScheduler`.
+- **core, API**: `createSchedulerRoutes` (`/api/v2/schedules`, 5 эндпоинтов),
+  сшивка в `server/app.ts`/`main.ts` (standalone).
+- **backend, API/RBAC**: та же `createSchedulerRoutes` смонтирована в
+  `packages/backend/src/app.ts` — чтение `requireAuth`, мутации и `POST /:id/run`
+  — `requireAdmin`; `SchedulerRuleProvider` зарегистрирован на `eventRouter`,
+  `SchedulerService.start()` — по `scheduler.enabled`, `stopScheduler` на
+  graceful shutdown (`src/main.ts`); тесты — `packages/backend/src/routes/schedules.test.ts`.
+- **конфиг**: `scheduler.enabled`/`scheduler.tickSec` (`docs/CONFIGURATION.md`).
+
+Что осталось (следующие задачи):
+
+- Сущность **Job** и история запусков (снимок target, результат/ошибка,
+  старт/финиш), retention.
+- **Catch-up** после простоя процесса и лимит параллельных запусков.
+- UI-интерфейс правил и истории (замена placeholder в `RightPanel.tsx`).
+- Rate limit на принудительный запуск (`POST /:id/run`) — в core-фабрике нет
+  отдельного guard'а под `run` (только общий `writeGuard`).
+- **Пайплайны** (AD-059) — композиция шагов поверх расписаний.
+- Где живёт планировщик в гибриде (сервер vs локальный core, AD-042).
+
+Проверено: `pnpm typecheck` (6/6), `pnpm lint` (0 errors), `pnpm test` (все
+зелёные), новые тесты — cron/duration/store/scheduler/route-provider/routes
+(core) и RBAC/wiring роутов (backend).
 
 ## Открытые вопросы
 

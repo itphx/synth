@@ -15,7 +15,8 @@ import {
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  createEventRoutes,
+  ScheduleStore, SchedulerRuleProvider, SchedulerService,
+  createEventRoutes, createSchedulerRoutes,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
@@ -116,6 +117,8 @@ export interface StandaloneConfig {
   instructionsConfig?: InstructionsConfig;
   /** AD-089: конфигурация приёма внешних событий из config.yaml `events`. */
   eventsConfig?: SynthConfig['events'];
+  /** AD-051 (срез) / AD-089: конфигурация планировщика из config.yaml `scheduler`. */
+  schedulerConfig?: SynthConfig['scheduler'];
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -865,6 +868,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
     },
   });
+  // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию.
+  const scheduleStore = new ScheduleStore({ dataDir });
+  eventRouter.registerRuleProvider(
+    new SchedulerRuleProvider(scheduleStore, config.eventsConfig?.ephemeralTtl ?? '24h'),
+  );
   const requestSessionService = new RequestSessionService({
     sessionManager,
     eventRouter,
@@ -893,6 +901,20 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // AD-089: ingress-точка приёма внешних событий (Этап 6).
   const eventIngress = new EventIngress({ requestSessionService });
+
+  // AD-051 (срез) / AD-089: планировщик публикует cron-события через ingress.
+  // `start()` гейтится конфигом; остановка — на shutdown (`stopScheduler`).
+  const schedulerService = new SchedulerService({
+    scheduleStore,
+    ingress: eventIngress,
+    tickMs: (config.schedulerConfig?.tickSec ?? 60) * 1000,
+    defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
+  });
+  if (config.schedulerConfig?.enabled !== false) {
+    void schedulerService.start().catch((err) => {
+      console.warn(`[scheduler] не удалось запустить: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
 
   // API-заглушки для UI
   app.get('/api/config/themes', (c) => c.json({ themes: [] }));
@@ -1088,6 +1110,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/api/v2/events', createEventRoutes(
     auth,
     { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal },
+  ));
+
+  // AD-051 (срез) / AD-089: CRUD расписаний и принудительный запуск.
+  app.route('/api/v2/schedules', createSchedulerRoutes(
+    auth,
+    { scheduleStore, scheduler: schedulerService },
   ));
 
   // Скиллы (AD-046 §9.1): реестр + instance CRUD + supporting-файлы + reload.
@@ -1611,8 +1639,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     eventJournal,
     // AD-089: ingress-точка приёма внешних событий.
     ingress: eventIngress,
+    // AD-051 (срез) / AD-089: реестр расписаний и планировщик.
+    scheduleStore,
+    scheduler: schedulerService,
     // AD-089: остановка sweeper'а ephemeral-сессий (вызывается на graceful shutdown).
     stopEphemeralSweeper,
+    // AD-051 (срез): остановка планировщика (на graceful shutdown).
+    stopScheduler: () => schedulerService.stop(),
     // Текущий мост событий (создаётся/обновляется в applyConnected) — для stop() при shutdown.
     get remoteEventBridge(): RemoteEventBridge | undefined {
       return activeBridge;

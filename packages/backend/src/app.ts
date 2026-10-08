@@ -45,7 +45,8 @@ import {
   HookBus,
   startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  createEventRoutes,
+  ScheduleStore, SchedulerRuleProvider, SchedulerService,
+  createEventRoutes, createSchedulerRoutes,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -114,6 +115,11 @@ export interface BackendAppHandle {
   eventJournal: EventJournalStore;
   /** AD-089: ingress-точка приёма внешних событий. */
   ingress: EventIngress;
+  // AD-051 (срез) / AD-089: реестр расписаний и планировщик (cron/interval).
+  scheduleStore: ScheduleStore;
+  scheduler: SchedulerService;
+  /** AD-051 (срез): остановка планировщика (на graceful shutdown). */
+  stopScheduler: () => void;
   /** AD-089: остановка sweeper'а авто-архивации ephemeral-сессий. */
   stopEphemeralSweeper: () => void;
   /**
@@ -530,6 +536,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
       },
     });
+    // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию
+    // (паритет с core `server/app.ts`; store без дублей).
+    const scheduleStore = new ScheduleStore({ dataDir });
+    eventRouter.registerRuleProvider(
+      new SchedulerRuleProvider(scheduleStore, backendConfig.synth.events.ephemeralTtl),
+    );
     const requestSessionService = new RequestSessionService({
       sessionManager,
       eventRouter,
@@ -557,6 +569,21 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // AD-089: ingress-точка приёма внешних событий (Этап 6).
     const eventIngress = new EventIngress({ requestSessionService });
+
+    // AD-051 (срез) / AD-089: планировщик публикует cron-события через ingress.
+    // `start()` гейтится конфигом (`scheduler.enabled: false` — тикер не стартует),
+    // ошибки старта логируются и не роняют процесс; остановка — `stopScheduler`.
+    const schedulerService = new SchedulerService({
+      scheduleStore,
+      ingress: eventIngress,
+      tickMs: backendConfig.synth.scheduler.tickSec * 1000,
+      defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
+    });
+    if (backendConfig.synth.scheduler.enabled !== false) {
+      void schedulerService.start().catch((err) => {
+        console.warn(`[scheduler] не удалось запустить: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
 
     // AD-071 §2.4 / AD-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
     await migrateSessionScopeSnapshots({
@@ -667,6 +694,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           bindingNotFound: (c) => t('errors.notFound.binding', undefined, c),
         },
       },
+    ));
+
+    // AD-051 (срез) / AD-089: CRUD расписаний и принудительный запуск.
+    // Чтение — requireAuth (дефолт core-фабрики), мутации и `run` — ADMIN.
+    app.route('/api/v2/schedules', createSchedulerRoutes(
+      auth,
+      { scheduleStore, scheduler: schedulerService },
+      { writeGuard: auth.requireAdmin },
     ));
 
     // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
@@ -1212,6 +1247,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       eventBindingStore,
       eventJournal,
       ingress: eventIngress,
+      // AD-051 (срез) / AD-089: реестр расписаний и планировщик.
+      scheduleStore,
+      scheduler: schedulerService,
+      stopScheduler: () => schedulerService.stop(),
       stopEphemeralSweeper,
       listen,
     };

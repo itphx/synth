@@ -1,0 +1,151 @@
+import { Hono } from 'hono';
+import type { Context } from 'hono';
+import type { createMiddleware } from 'hono/factory';
+import { scheduleInputSchema } from '@itphx/synth-shared';
+import type { ScheduleInputRequest } from '@itphx/synth-shared';
+import type { ScheduleStore } from '../../storage/schedule-store.js';
+import type { SchedulerService } from '../../engine/scheduler/scheduler.js';
+import { isValidCron } from '../../engine/scheduler/cron.js';
+import { parseDurationMs } from '../../engine/scheduler/duration.js';
+
+/**
+ * AD-051 (минимальный срез) / AD-089: маршруты управления расписаниями
+ * планировщика. Единая реализация для core (standalone) и backend (managed):
+ * RBAC задаётся через `opts.writeGuard`, локализация — через `opts.messages`.
+ */
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
+type Middleware = ReturnType<typeof createMiddleware>;
+
+/** Минимальный auth-контракт фабрики: в core и backend общий (структурно). */
+export interface SchedulerRoutesAuth {
+  requireAuth: Middleware;
+}
+
+/** Локализуемые сообщения: backend передаёт t(), core — русские литералы. */
+export interface SchedulerRouteMessages {
+  invalidSchedule: (c: Context) => string;
+  scheduleNotFound: (c: Context) => string;
+}
+
+export interface SchedulerRoutesDeps {
+  scheduleStore: ScheduleStore;
+  scheduler: SchedulerService;
+}
+
+export interface SchedulerRoutesOptions {
+  messages?: Partial<SchedulerRouteMessages>;
+  /** Guard на мутации; по умолчанию — `requireAuth` (backend: requireAdmin). */
+  writeGuard?: Middleware;
+}
+
+const DEFAULT_MESSAGES: SchedulerRouteMessages = {
+  invalidSchedule: () => 'Некорректное тело расписания',
+  scheduleNotFound: () => 'Расписание не найдено',
+};
+
+/** Семантическая проверка триггера (cron/interval) вне Zod-схемы. */
+function validateTrigger(input: ScheduleInputRequest): string | null {
+  if (input.cron && input.cron.trim() && !isValidCron(input.cron)) {
+    return `Некорректное cron-выражение: "${input.cron}"`;
+  }
+  if (input.every && input.every.trim()) {
+    try {
+      parseDurationMs(input.every);
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+  return null;
+}
+
+/**
+ * AD-051 (минимальный срез): CRUD расписаний + принудительный запуск.
+ *
+ * `GET /` — список; `POST /` — создание; `PUT /:id` — обновление;
+ * `DELETE /:id` — удаление; `POST /:id/run` — принудительный ingest события
+ * через `SchedulerService.runNow`.
+ */
+export function createSchedulerRoutes(
+  auth: SchedulerRoutesAuth,
+  deps: SchedulerRoutesDeps,
+  opts: SchedulerRoutesOptions = {},
+): Hono {
+  const app = new Hono();
+  const messages: SchedulerRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
+  const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
+
+  const invalid = (c: Context, message?: string) =>
+    c.json(
+      { error: { code: 'VALIDATION_ERROR', message: message ?? messages.invalidSchedule(c) } },
+      400,
+    );
+
+  const notFound = (c: Context) =>
+    c.json({ error: { code: 'NOT_FOUND', message: messages.scheduleNotFound(c) } }, 404);
+
+  // GET /api/v2/schedules — список расписаний.
+  app.get('/', auth.requireAuth, async (c) => {
+    return c.json({ schedules: await deps.scheduler.list() });
+  });
+
+  // POST /api/v2/schedules — создание расписания.
+  app.post('/', writeGuard, async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return invalid(c);
+    }
+
+    const parsed = scheduleInputSchema.safeParse(body);
+    if (!parsed.success) return invalid(c);
+
+    const triggerError = validateTrigger(parsed.data);
+    if (triggerError) return invalid(c, triggerError);
+
+    const created = await deps.scheduleStore.create(parsed.data);
+    const schedule = await deps.scheduler.refreshNextRun(created.id);
+    return c.json({ schedule: schedule ?? created }, 201);
+  });
+
+  // PUT /api/v2/schedules/:id — обновление расписания.
+  app.put('/:id', writeGuard, async (c) => {
+    const id = c.req.param('id');
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return invalid(c);
+    }
+
+    const parsed = scheduleInputSchema.safeParse(body);
+    if (!parsed.success) return invalid(c);
+
+    const triggerError = validateTrigger(parsed.data);
+    if (triggerError) return invalid(c, triggerError);
+
+    const updated = await deps.scheduleStore.update(id, parsed.data);
+    if (!updated) return notFound(c);
+
+    const schedule = await deps.scheduler.refreshNextRun(id);
+    return c.json({ schedule: schedule ?? updated });
+  });
+
+  // DELETE /api/v2/schedules/:id — удаление расписания.
+  app.delete('/:id', writeGuard, async (c) => {
+    const removed = await deps.scheduleStore.remove(c.req.param('id'));
+    if (!removed) return notFound(c);
+    return c.body(null, 204);
+  });
+
+  // POST /api/v2/schedules/:id/run — принудительный запуск.
+  app.post('/:id/run', writeGuard, async (c) => {
+    const schedule = await deps.scheduler.runNow(c.req.param('id'));
+    if (!schedule) return notFound(c);
+    return c.json({ schedule });
+  });
+
+  return app;
+}
