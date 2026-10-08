@@ -25,7 +25,8 @@ export interface SessionScopeMigrationDeps {
 export async function migrateSessionScopeSnapshots(deps: SessionScopeMigrationDeps): Promise<number> {
   if (await deps.settingsStore.getMigrationMarker(SESSION_SCOPE_SNAPSHOT_MIGRATION)) return 0;
 
-  const sessions = await deps.sessionManager.listSessions();
+  // AD-089: миграция должна видеть и архивированные сессии (архив не влияет на скоуп).
+  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true });
   const projects = new Map<string, Project | null>();
   let systemDefaults: { mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined;
   const getSystemDefaults = async () => {

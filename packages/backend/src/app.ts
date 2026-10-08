@@ -18,6 +18,7 @@ import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { every } from 'hono/combine';
 import type { ProviderConfig, ModelConfig, AgentDefinition, ToolsDisabledConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
@@ -41,6 +42,10 @@ import {
   createFsRoutes, resolveProjectWorkspace,
   detectRuntimeDeps,
   syncProvidersFromEnv,
+  HookBus,
+  startEphemeralSweeper,
+  EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  createEventRoutes,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -102,6 +107,15 @@ export interface BackendAppHandle {
   orchestrator: ChatOrchestrator;
   queueManager: QueueProcessorManager;
   settingsStore: RuntimeSettingsStore;
+  // AD-089: ядро маршрутизации событий и единый funnel создания сессий.
+  eventRouter: EventRouter;
+  requestSessionService: RequestSessionService;
+  eventBindingStore: EventBindingStore;
+  eventJournal: EventJournalStore;
+  /** AD-089: ingress-точка приёма внешних событий. */
+  ingress: EventIngress;
+  /** AD-089: остановка sweeper'а авто-архивации ephemeral-сессий. */
+  stopEphemeralSweeper: () => void;
   /**
    * Поднять HTTP-сервер (+ WebSocket /ws/events) на указанном порту.
    * Порт 0 → эфемерный; возвращает фактический порт.
@@ -209,8 +223,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     await ensureDataDir(dataDir);
     const fileStore = new FileStore({ dataDir });
     const projectStore = new ProjectStore({ dataDir });
+    // AD-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
+    const hooks = new HookBus();
     const sessionManager = new SessionManager(fileStore, {
       projectStore,
+      hooks,
       // AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий без проекта.
       systemDefaultsProvider: async () => ({
         mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
@@ -220,6 +237,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         )).enabled,
       }),
     });
+    // AD-089: авто-архивация ephemeral-сессий по TTL (таймер `unref`).
+    // Остановка — через хэндл `stopEphemeralSweeper` на graceful shutdown.
+    const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
     // AD-076 §T4: SSH-ключи агентов — core-хранилище поверх общего dataDir.
     // Мастер-ключ: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > файл dataDir.
     const sshKeyStore = new SSHKeyStore({
@@ -443,6 +463,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const orchestrator = new ChatOrchestrator({
       sessionManager,
       eventBus,
+      hooks,
       contextBuilder,
       contextConfig,
       providerLoader,
@@ -488,9 +509,54 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       instructionsConfig: backendConfig.synth.instructions,
       // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
       instructionsTrustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
+      // AD-089: late-bound funnel создания сессий для тула `task` (саб-агент).
+      // Сервис создаётся ниже (после оркестратора) — геттер читает его в рантайме.
+      getRequestSessionService: () => requestSessionService,
     });
 
     const processMessage = orchestrator.createProcessMessage();
+
+    // AD-089: ядро маршрутизации внешних событий и единый funnel создания сессий.
+    // Funnel подключён к `POST /sessions` и тулу `task` (Этап 5); приём внешних
+    // событий — на следующих этапах.
+    const eventBindingStore = new EventBindingStore({ dataDir });
+    const eventJournal = new EventJournalStore({ dataDir });
+    const eventRouter = new EventRouter({
+      bindingStore: eventBindingStore,
+      journal: eventJournal,
+      hooks,
+      config: {
+        allowedSources: backendConfig.synth.events.allowedSources,
+        defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
+      },
+    });
+    const requestSessionService = new RequestSessionService({
+      sessionManager,
+      eventRouter,
+      hooks,
+      config: { defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl },
+      // AD-089: UI-событие после материализации внешнего события.
+      publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
+      deliver: async (sessionId, event, mode) => {
+        let message = eventToMessage(event);
+        if (mode === 'run') {
+          // AD-036: обфускация user-сообщения ДО сохранения в историю (паритет с
+          // prompt-путём — core routes/sessions.ts).
+          await enqueueUserMessage(
+            sessionManager, eventBus, sessionId, message, queueManager, processMessage,
+            (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+          );
+        } else {
+          // AD-036: `defer` тоже кладёт сообщение в историю — обфусцируем до
+          // постановки. Старт процессора не выполняем (только очередь владельца).
+          message = await orchestrator.obfuscateUserMessageForHistory(sessionId, message);
+          await sessionManager.addPendingMessage(sessionId, message);
+        }
+      },
+    });
+
+    // AD-089: ingress-точка приёма внешних событий (Этап 6).
+    const eventIngress = new EventIngress({ requestSessionService });
 
     // AD-071 §2.4 / AD-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
     await migrateSessionScopeSnapshots({
@@ -525,7 +591,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore));
 
     // Sessions routes
-    app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId));
+    app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId, requestSessionService));
 
     // Messages routes
     app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus));
@@ -584,6 +650,24 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/agents/:agentId/ssh-keys', createAgentSshKeyRoutes(auth, sshKeyStore, {
       writeGuard: auth.requireAdmin,
     }));
+
+    // AD-089: приём внешних событий (ingress), биндинги и журнал. Ingress —
+    // requireAuth + rate limit (внешние сервисы до AD-052 используют общий ключ);
+    // чтение биндингов/журнала — requireAuth; мутации биндингов — ADMIN.
+    // `GET /` не переопределяем — на этом пути SSE-хаб ниже.
+    app.route('/api/v2/events', createEventRoutes(
+      { requireAuth: auth.requireAuth },
+      { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal },
+      {
+        ingestGuard: every(auth.requireAuth, createRateLimiter(120, 60_000)),
+        writeGuard: auth.requireAdmin,
+        messages: {
+          invalidEvent: (c) => t('errors.validation.invalidEvent', undefined, c),
+          invalidBinding: (c) => t('errors.validation.invalidBinding', undefined, c),
+          bindingNotFound: (c) => t('errors.notFound.binding', undefined, c),
+        },
+      },
+    ));
 
     // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
     app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
@@ -1122,6 +1206,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       orchestrator,
       queueManager,
       settingsStore,
+      // AD-089: ядро событий (понадобится на этапах 5–6).
+      eventRouter,
+      requestSessionService,
+      eventBindingStore,
+      eventJournal,
+      ingress: eventIngress,
+      stopEphemeralSweeper,
       listen,
     };
   } finally {

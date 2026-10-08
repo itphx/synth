@@ -1958,3 +1958,27 @@
 - **Проверки:** 74 AD, дублей номеров нет, порядок возрастает (005…089), битых ссылок 0.
 - **Поправки по коду при развёртывании:** AD-054 (запись `project.plan` — в core), AD-061 (prompt-injection уже реализован), AD-050 (LLM-proxy на backend).
 - **Открыто:** план реализации срезов (AD-030 → роутер → gateway → синхрон synth-media), судьба `telegram-mcp` в synth-media. Продолжение — в другой сессии.
+
+## 2026-10-08 — AD-030 (min) + ядро AD-089: HookBus + Event/Binding/Router + единый funnel создания сессии
+- **Задача:** реализовать AD-030 (min) и ядро AD-089 — hook-шину событий агента, сущности Event/Binding/Router, приём внешних событий и единый funnel создания сессии.
+- **Тип:** feature
+- **Исполнитель:** @fixer
+- **Результат:** PASS
+- **Время:** оценочно (сессия агента, без точного замера).
+- **Что сделано:**
+  - **HookBus** (`engine/hooks/hook-bus.ts`) — шина хуков жизненного цикла (`session_requested`, `external_event`, …), async с таймаутом (`HOOK_ASYNC_TIMEOUT_MS`), `blocked`/`reason`; эмиты из оркестратора заведены (AD-030 min).
+  - **EventRouter** (`engine/events/event-router.ts`) — решение по событию + журнал: `allowedSources` → dedup → `EventBinding` (`threadKey`/`chatKey`) → `RouteRuleProvider` → `drop no_route`; все дропы аудируемые, dedup-кэш ленивый из журнала.
+  - **Хранилища** (`storage/event-binding-store.ts`, `storage/event-journal-store.ts`) — привязки и журнал решений (FileStore, AD-005).
+  - **RequestSessionService** (`engine/events/request-session.ts`) — единый funnel: `request` (явное создание + `session_requested`) и `handleEvent` (`external_event` → `decide` → материализация `deliver` → `record`); переведён `POST /api/v2/sessions` (внешний контракт не изменился).
+  - **EventIngress** (`engine/events/ingest.ts`) — нормализация входа в `SynthEvent` (id `evt_<uuid>`, дефолтный dedup-ключ).
+  - **API** — `createEventRoutes`: `POST /api/v2/events` (ingest), `GET/POST /api/v2/events/bindings`, `DELETE /api/v2/events/bindings/:id`, `GET /api/v2/events/journal?limit=` (default 50, cap 500); SSE `GET /api/v2/events` сохранён; RBAC managed — ingest `requireAuth` + rate limit, мутации привязок `requireAdmin`, чтение `requireAuth`.
+  - **Конфиг** — секция `events` (`enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`, `allowedSources`).
+  - **UI** — панель/представление внешних событий (bindings, журнал).
+  - **Документация** — `docs/API_V2.md` (§5.26), `docs/ARCHITECTURE.md` (слой «Внешние события и хуки»), `docs/CONFIGURATION.md` (`events.*`), `docs/arch_decisions/README.md` (AD-030/089 → «Частично реализованные»).
+- **Проблемы/отклонения:**
+  - Режим `queue` реализован как `addPendingMessage` (defer без старта процессора).
+  - `agentTemplate` → `settings.agentRole` (задел; семантика шаблона будет уточнена).
+  - `fork`/`import`/`transfer`/`chat` — materialization (создание сессий сведено к funnel постепенно).
+  - Источники AD-051 (шедулер), AD-052 (публичный API), AD-086 (плагины) не реализованы.
+- **Проверки:** typecheck / lint / test — зелёные (по отчёту исполнителя); тесты по подсистеме — `events.test.ts`, `ingest.test.ts`, `request-session.test.ts`, `orchestrator-hooks.test.ts`.
+- **Коммит:** TBD (будет заполнен позже).

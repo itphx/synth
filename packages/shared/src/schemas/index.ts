@@ -538,3 +538,88 @@ export const projectSkillUpdateSchema = z.object({
 
 export type SessionSkillUpdateRequest = z.infer<typeof sessionSkillUpdateSchema>;
 export type ProjectSkillUpdateRequest = z.infer<typeof projectSkillUpdateSchema>;
+
+// --- Внешние события (AD-089) ---
+
+/** AD-089: схема идентичности отправителя внешнего события. */
+export const eventIdentitySchema = z.object({
+  principalId: z.string().optional(),
+  chatKey: z.string().optional(),
+  threadKey: z.string().optional(),
+  roles: z.array(z.string()).optional(),
+});
+
+/** AD-089: схема нормализованного внешнего события (`payload` не типизируется). */
+export const synthEventSchema = z.object({
+  id: z.string().min(1),
+  source: z.string().min(1),
+  type: z.string().min(1),
+  payload: z.unknown(),
+  identity: eventIdentitySchema.default({}),
+  dedupKey: z.string().min(1),
+  ts: z.string().min(1),
+});
+
+/** AD-089: режимы доставки `EventBinding` (без `drop`). */
+const eventDeliveryModeSchema = z.enum(['bound', 'ephemeral', 'queue']);
+
+/** AD-089: схема устойчивой привязки внешнего адреса к сессии/шаблону. */
+export const eventBindingSchema = z.object({
+  id: z.string().min(1),
+  source: z.string().min(1),
+  chatKey: z.string().optional(),
+  threadKey: z.string().optional(),
+  sessionId: z.string().optional(),
+  mode: eventDeliveryModeSchema,
+  agentTemplate: z.string().optional(),
+  project: z.string().optional(),
+});
+
+/** AD-089: схема запроса создания/привязки сессии — единый funnel. */
+export const sessionRequestSchema = z.object({
+  initiator: z.enum(['user', 'agent', 'external', 'system']),
+  intent: z.enum(['explicit', 'event']),
+  projectId: z.string().optional(),
+  parentId: z.string().optional(),
+  agentTemplate: z.string().optional(),
+  mode: eventDeliveryModeSchema.optional(),
+  ttl: z.string().optional(),
+  title: z.string().optional(),
+  icon: projectIconKeySchema.optional(),
+  color: projectColorKeySchema.optional(),
+  engine: z.enum(['synth', 'opencode', 'cline']).optional(),
+  sessionOrigin: z.enum(['user', 'fork', 'subagent']).optional(),
+  // Настройки сессии валидируются собственной схемой при создании; здесь —
+  // толерантный контейнер, чтобы не дублировать SessionSettings.
+  settings: z.unknown().optional(),
+  sourceEventId: z.string().optional(),
+  dedupKey: z.string().optional(),
+});
+
+/**
+ * AD-089: вход приёма внешнего события (`POST /api/v2/events`). `id`/`dedupKey`/`ts`
+ * нормализуются `EventIngress`, поэтому здесь опциональны.
+ */
+export const eventIngestSchema = z.object({
+  source: z.string().min(1),
+  type: z.string().min(1),
+  payload: z.unknown().optional(),
+  identity: eventIdentitySchema.optional(),
+  dedupKey: z.string().optional(),
+  ts: z.string().optional(),
+});
+
+export type EventIngestRequest = z.infer<typeof eventIngestSchema>;
+
+/** AD-089: вход upsert биндинга (`POST /api/v2/events/bindings`) — без `id`. */
+export const eventBindingInputSchema = z.object({
+  source: z.string().min(1),
+  chatKey: z.string().optional(),
+  threadKey: z.string().optional(),
+  sessionId: z.string().optional(),
+  mode: eventDeliveryModeSchema,
+  agentTemplate: z.string().optional(),
+  project: z.string().optional(),
+});
+
+export type EventBindingInputRequest = z.infer<typeof eventBindingInputSchema>;

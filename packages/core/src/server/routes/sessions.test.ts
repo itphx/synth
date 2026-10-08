@@ -54,6 +54,7 @@ function createTestApp(
   tmpDir: string,
   profilesStore?: ProfileStore,
   opts?: { resolveDefaultAgent?: () => string | Promise<string> },
+  requestSessionService?: unknown,
 ) {
   const app = new Hono();
   const fileStore = new FileStore({ dataDir: tmpDir });
@@ -73,6 +74,7 @@ function createTestApp(
       orchestrator: orchestrator as any,
       projectStore,
       profilesStore,
+      ...(requestSessionService ? { requestSessionService: requestSessionService as any } : {}),
     },
     opts ?? {},
   );
@@ -552,5 +554,70 @@ describe('Session API Routes (icon/color)', () => {
     const body: any = await res.json();
     expect(body.icon).toBeNull();
     expect(body.color).toBeNull();
+  });
+});
+
+describe('POST /api/v2/sessions — AD-089 funnel', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-funnel-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('при заданном funnel вызывает request с ожидаемым SessionRequest', async () => {
+    const created = await new SessionManager(new FileStore({ dataDir: tmpDir }))
+      .createSession({ title: 'Funnel session', userId: 'local' });
+    const request = vi.fn().mockResolvedValue(created);
+    const { app } = createTestApp(tmpDir, undefined, undefined, { request });
+
+    const res = await app.request('/api/v2/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Funnel session',
+        project_id: 'proj-x',
+        engine: 'synth',
+        icon: 'rocket',
+        color: 'a1',
+        session_origin: 'subagent',
+        parent_id: 'parent-1',
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.id).toBe(created.id);
+    expect(request).toHaveBeenCalledOnce();
+    const [reqArg, optsArg] = request.mock.calls[0]!;
+    expect(reqArg).toMatchObject({
+      initiator: 'user',
+      intent: 'explicit',
+      title: 'Funnel session',
+      projectId: 'proj-x',
+      engine: 'synth',
+      icon: 'rocket',
+      color: 'a1',
+      sessionOrigin: 'subagent',
+      parentId: 'parent-1',
+    });
+    expect(optsArg).toEqual({ userId: 'local' });
+  });
+
+  it('без funnel создаёт сессию напрямую и сохраняет sessionOrigin (fallback)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const res = await app.request('/api/v2/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Fallback', session_origin: 'subagent' }),
+    });
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    const stored = await sessionManager.getSession(body.id);
+    expect(stored?.title).toBe('Fallback');
+    expect(stored?.sessionOrigin).toBe('subagent');
   });
 });

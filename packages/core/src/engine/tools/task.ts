@@ -8,6 +8,8 @@ import type { ToolRegistry } from './registry.js';
 import { buildDenyResult, executeToolDef } from './tool-execution.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { EventBus } from '../../events/bus.js';
+import type { HookBus } from '../hooks/hook-bus.js';
+import type { RequestSessionService } from '../events/request-session.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ContextConfig } from '../context/config.js';
 import type { ModelRouter } from '../router/router.js';
@@ -38,7 +40,16 @@ export interface TaskExtra {
   agentRegistry: AgentRegistry;
   toolRegistry?: ToolRegistry;
   sessionManager?: SessionManager;
+  /**
+   * AD-089: late-bound funnel создания дочерней сессии. Задан — «none»-режим
+   * создаёт сессию через `request` (единые правила/аудит, `initiator:'agent'`),
+   * иначе — прямой `createSession` (поведение прежнее). Fork-режимы контекста
+   * всегда идут через `forkSession` (материализация копии истории).
+   */
+  getRequestSessionService?: () => RequestSessionService | undefined;
   eventBus?: EventBus;
+  /** AD-030: ядровая шина хуков — agent_spawned/agent_completed/agent_failed саб-агента. */
+  hooks?: HookBus;
   contextOptimizer?: ContextOptimizer;
   parentSessionSettings?: SessionSettings;
   /** AD-071 §2.1: активные MCP-серверы родительской сессии — скоуп тулов саб-агента. */
@@ -442,14 +453,39 @@ export const taskTool: ToolDefinition = {
             }
           } else {
             // none mode (default)
-            const child = await extra.sessionManager.createSession({
-              title: sm('session.subtask_title', { description: params.description }),
-              projectId: parentSession.projectId,
-              engine: parentSession.engine,
-              parentId: extra.sessionId,
-              sessionOrigin: 'subagent',
-              settings: { ...parentSession.settings, agentRole: params.subagent_type, permission: derivedPermission, planMode: 'auto', ...childRoutingOverrides },
-            });
+            const childSettings: Partial<SessionSettings> = {
+              ...parentSession.settings,
+              agentRole: params.subagent_type,
+              permission: derivedPermission,
+              planMode: 'auto',
+              ...childRoutingOverrides,
+            };
+            // AD-089: создание дочерней сессии — через funnel (`initiator:'agent'`),
+            // если он передан; иначе прямой `createSession` (прежнее поведение).
+            const requestService = extra.getRequestSessionService?.();
+            const child = requestService
+              ? await requestService.request(
+                  {
+                    initiator: 'agent',
+                    intent: 'explicit',
+                    title: sm('session.subtask_title', { description: params.description }),
+                    projectId: parentSession.projectId,
+                    engine: parentSession.engine,
+                    parentId: extra.sessionId,
+                    sessionOrigin: 'subagent',
+                    settings: childSettings,
+                  },
+                  { userId: parentSession.userId, ownerId: parentSession.ownerId },
+                )
+              : await extra.sessionManager.createSession({
+                  title: sm('session.subtask_title', { description: params.description }),
+                  projectId: parentSession.projectId,
+                  engine: parentSession.engine,
+                  parentId: extra.sessionId,
+                  sessionOrigin: 'subagent',
+                  settings: childSettings,
+                });
+            if (!child) throw new Error('failed to create subagent child session');
             child.userId = parentSession.userId;
             child.ownerId = parentSession.ownerId;
             child.mode = parentSession.mode;
@@ -462,6 +498,16 @@ export const taskTool: ToolDefinition = {
             if (child) {
               extra.eventBus.publish(extra.sessionId, 'session.created', serializeSession(child));
             }
+          }
+
+          // AD-030: `agent_spawned` — неблокирующий эмит при создании дочерней
+          // сессии саб-агента (agentId — id дочерней сессии).
+          if (extra.hooks && childSessionId) {
+            extra.hooks.emitAsync('agent_spawned', {
+              agentId: childSessionId,
+              agentType: params.subagent_type,
+              ...(extra.sessionId ? { parentId: extra.sessionId } : {}),
+            });
           }
         }
       } catch {
@@ -1284,6 +1330,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         });
         await commitChildUsage();
         await finalizeChildSession();
+        // AD-030: `agent_failed` — неблокирующий эмит терминальной ошибки
+        // саб-агента после исчерпания ретраев.
+        if (extra.hooks && childSessionId) {
+          extra.hooks.emitAsync('agent_failed', {
+            agentId: childSessionId,
+            error: errText,
+            retries: attempts,
+          });
+        }
         return {
           content: [
             '<task_result>',
@@ -1812,6 +1867,15 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       ? `<child_session_id>${childSessionId}</child_session_id>\n`
       : '';
 
+    // AD-030: `agent_completed` — неблокирующий эмит успешного завершения
+    // саб-агента (result — итоговый ответ).
+    if (extra.hooks && childSessionId) {
+      extra.hooks.emitAsync('agent_completed', {
+        agentId: childSessionId,
+        result: qualityOutput,
+      });
+    }
+
     return {
       content: `<task_result>\n<summary>${description}</summary>\n${qualityBlock}${routedByBlock}${childSessionBlock}\n${qualityOutput}${qaWarningText}\n</task_result>`,
       metadata: {
@@ -1842,6 +1906,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       extra.eventBus.publish(childSessionId, 'stream.ended', {
         session_id: childSessionId,
         stream_id: extra.streamId,
+      });
+    }
+    // AD-030: `agent_failed` — неблокирующий эмит жёсткого сбоя саб-агента.
+    if (extra.hooks && childSessionId) {
+      extra.hooks.emitAsync('agent_failed', {
+        agentId: childSessionId,
+        error: String(err),
       });
     }
     return {

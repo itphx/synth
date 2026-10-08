@@ -336,6 +336,32 @@ skills:
     web: [web]
 ```
 
+### Внешние события (`events.*`, AD-089)
+
+Приём внешних событий и маршрутизация через `EventRouter` (AD-089). Поля секции:
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `events.enabled` | Мастер-выключатель приёма внешних событий | `true` |
+| `events.defaultMode` | Режим по умолчанию, если Router не выбрал иной: `bound` \| `ephemeral` | `bound` |
+| `events.ephemeralTtl` | TTL ephemeral-сессий (формат `24h`, `30m`, …) | `'24h'` |
+| `events.journalRetentionDays` | Срок хранения журнала событий (0 — без ограничения) | `30` |
+| `events.allowedSources` | Белый список источников (пусто — разрешены все) | `[]` |
+
+Пример:
+
+```yaml
+events:
+  enabled: true
+  defaultMode: bound
+  ephemeralTtl: "24h"
+  journalRetentionDays: 30
+  allowedSources: []
+```
+
+API (`POST /api/v2/events`, bindings, journal) — `docs/API_V2.md` §5.26; устройство
+шины/роутера — `docs/ARCHITECTURE.md` («Внешние события и хуки»).
+
 ### Гибридный режим (remote)
 
 Секция `remote` включает гибридный режим: локальный `synth serve` подключается

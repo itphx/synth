@@ -712,6 +712,13 @@ export interface Session {
   canSummarize: boolean;
   createdAt: string;
   updatedAt: string;
+  /**
+   * AD-089: ISO-8601 — время авто-архивации ephemeral-сессии (server-managed,
+   * клиент задать не может). Задан — сессия скрывается из списков по умолчанию.
+   */
+  expiresAt?: string;
+  /** AD-089: ISO-8601 — время архивации сессии (server-managed). */
+  archivedAt?: string;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
@@ -1288,6 +1295,9 @@ export type EventType =
   | 'skill.invoked'
   | 'command.invoked'
   | 'command.inline_shell'
+  | 'event.received'
+  | 'event.routed'
+  | 'binding.changed'
   | 'error';
 
 export interface BusEvent {
@@ -1357,3 +1367,7 @@ export * from './permission.js';
 export * from './skills.js';
 // Slash-команды и bundles (AD-046 §7) — re-exported from commands.ts
 export * from './commands.js';
+// Внешние события (AD-089) — re-exported from events.ts
+export * from './events.js';
+// Hooks агента и интеграций (AD-030) — re-exported from hooks.ts
+export * from './hooks.js';

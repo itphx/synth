@@ -201,7 +201,9 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     runtimeDeps: await detectRuntimeDeps(),
   });
 
-  // Создаём временную сессию
+  // AD-089: CLI-чат поднимает менеджер сам, вне `createStandaloneApp`, поэтому
+  // funnel `RequestSessionService` в области видимости недоступен. Это временная
+  // сессия одного сообщения (удаляется в finally) — materialization, не request.
   const session = await sessionManager.createSession({
     title: undefined,
     engine: 'synth',

@@ -7,13 +7,15 @@ import { join, extname, isAbsolute, normalize, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, SynthConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
-  detectRuntimeDeps,
+  detectRuntimeDeps, HookBus, startEphemeralSweeper,
+  EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  createEventRoutes,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
@@ -112,6 +114,8 @@ export interface StandaloneConfig {
   commandsConfig?: CommandsConfig;
   /** AD-069 Фаза 1: конфигурация проектных инструкций из config.yaml `instructions`. */
   instructionsConfig?: InstructionsConfig;
+  /** AD-089: конфигурация приёма внешних событий из config.yaml `events`. */
+  eventsConfig?: SynthConfig['events'];
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -626,9 +630,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   const fileStore = new FileStore({ dataDir });
   const projectStore = new ProjectStore({ dataDir });
+  // AD-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора
+  // (эмиты жизненного цикла агента). Пока обработчиков нет — поведение прежнее.
+  const hooks = new HookBus();
   const sessionManager = new SessionManager(fileStore, {
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
     projectStore,
+    hooks,
     // AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий без проекта.
     systemDefaultsProvider: async () => ({
       mcpDefaultOn: Object.entries(config.mcpServers ?? {})
@@ -640,6 +648,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       )).enabled,
     }),
   });
+  // AD-089: авто-архивация ephemeral-сессий по TTL. Таймер `unref`-ится
+  // (тесты/короткоживущие процессы не держатся); остановка — на shutdown
+  // через возвращаемый хэндл `stopEphemeralSweeper`.
+  const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
   // AD-076: SSH-ключи агентов (шифрование at-rest мастер-ключом из dataDir/env).
   const sshKeyStore = new SSHKeyStore({ dataDir, secretKey: config.secretKey, env: process.env });
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
@@ -788,6 +800,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
+    hooks,
     contextBuilder,
     contextConfig,
     providerLoader,
@@ -831,9 +844,55 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     instructionsConfig: config.instructionsConfig,
     // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
     instructionsTrustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+    // AD-089: late-bound funnel создания сессий для тула `task` (саб-агент).
+    // Сам сервис создаётся ниже (после оркестратора) — геттер читает его в рантайме.
+    getRequestSessionService: () => requestSessionService,
   });
 
   const processMessage = orchestrator.createProcessMessage();
+
+  // AD-089: ядро маршрутизации внешних событий и единый funnel создания сессий.
+  // Funnel подключён к `POST /sessions` и тулу `task` (Этап 5); приём внешних
+  // событий — на следующих этапах.
+  const eventBindingStore = new EventBindingStore({ dataDir });
+  const eventJournal = new EventJournalStore({ dataDir });
+  const eventRouter = new EventRouter({
+    bindingStore: eventBindingStore,
+    journal: eventJournal,
+    hooks,
+    config: {
+      allowedSources: config.eventsConfig?.allowedSources,
+      defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
+    },
+  });
+  const requestSessionService = new RequestSessionService({
+    sessionManager,
+    eventRouter,
+    hooks,
+    config: { defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h' },
+    // AD-089: UI-событие после материализации внешнего события.
+    publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
+    deliver: async (sessionId, event, mode) => {
+      let message = eventToMessage(event);
+      if (mode === 'run') {
+        // Запускает процессор (постановка + старт) — как обычный user-промпт.
+        // AD-036: обфускация user-сообщения ДО сохранения в историю (паритет с
+        // prompt-путём — routes/sessions.ts).
+        await enqueueUserMessage(
+          sessionManager, eventBus, sessionId, message, queueManager, processMessage,
+          (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
+        );
+      } else {
+        // AD-036: `defer` тоже кладёт сообщение в историю — обфусцируем до
+        // постановки. Старт процессора не выполняем (только очередь владельца).
+        message = await orchestrator.obfuscateUserMessageForHistory(sessionId, message);
+        await sessionManager.addPendingMessage(sessionId, message);
+      }
+    },
+  });
+
+  // AD-089: ingress-точка приёма внешних событий (Этап 6).
+  const eventIngress = new EventIngress({ requestSessionService });
 
   // API-заглушки для UI
   app.get('/api/config/themes', (c) => c.json({ themes: [] }));
@@ -851,6 +910,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       projectStore,
       profilesStore,
       getRemoteClient: () => connection.client,
+      requestSessionService,
     },
     { resolveDefaultAgent: getDefaultAgentId },
   ));
@@ -1022,6 +1082,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // MCP (probe подключения к серверу)
   app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));
+
+  // AD-089: приём внешних событий (ingress), биндинги и журнал. `GET /` не
+  // определяется — SSE-хаб на `/api/v2/events` регистрируется ниже.
+  app.route('/api/v2/events', createEventRoutes(
+    auth,
+    { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal },
+  ));
 
   // Скиллы (AD-046 §9.1): реестр + instance CRUD + supporting-файлы + reload.
   app.route('/api/v2/skills', createSkillRoutes(auth, {
@@ -1536,6 +1603,16 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopConnectionWatcher: () => connectionWatcher?.stop(),
     getHybridStatus: getHybridState,
     eventBus,
+    // AD-089: ядро событий — роутер, funnel создания сессий и хранилища
+    // (понадобятся на этапах 5–6 при подключении роутов приёма событий).
+    eventRouter,
+    requestSessionService,
+    eventBindingStore,
+    eventJournal,
+    // AD-089: ingress-точка приёма внешних событий.
+    ingress: eventIngress,
+    // AD-089: остановка sweeper'а ephemeral-сессий (вызывается на graceful shutdown).
+    stopEphemeralSweeper,
     // Текущий мост событий (создаётся/обновляется в applyConnected) — для stop() при shutdown.
     get remoteEventBridge(): RemoteEventBridge | undefined {
       return activeBridge;

@@ -20,6 +20,7 @@
 |---|---|
 | `FileStore`, `SessionManager` | сессии и история |
 | `EventBus` | шина событий сессии (backend надстраивает `EventHub`) |
+| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `eventToMessage` | единый funnel создания сессии и приём внешних событий (AD-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
 | `ChatOrchestrator` | оркестрация LLM, tools, permissions |
@@ -84,7 +85,7 @@
 | `/api/v2/fs` | core `createFsRoutes` (AD-075): managed opts — `requireProjectId`, `deny`, `getProjectWorkspace` (`resolveProjectWorkspace`, strict) |
 | `/api/v2/git` | core `createGitRoutes` (T4): `authorizeProject` = `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN), read (`scan/log/commit`) — `requireAuth` |
 | `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` | core `createSshKeyRoutes` / `createAgentSshKeyRoutes`: чтение — `requireAuth`, запись — `requireAdmin` (AD-076). В гибриде nested-путь проксируется core на backend (`REMOTE_PROXY_PATTERNS`) |
-| `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
+| `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` (создание — единый funnel `RequestSessionService`, AD-089) + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
 | `/api/v2/providers` | `routes/providers.ts` — обёртка над core `createProviderRoutes` + `fetch-icon` |
 | `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` (RBAC + rate limit на `fetch`) |
 | `/api/v2/settings` | core `createSettingsRoutes` |
@@ -92,7 +93,7 @@
 | `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
 | `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
-| `/api/v2/events` | inline SSE-хендлер |
+| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`requireAuth` + rate limit), `/bindings` — CRUD (чтение `requireAuth`, мутации `requireAdmin`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089) |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
 

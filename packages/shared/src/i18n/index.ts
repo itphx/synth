@@ -272,6 +272,16 @@ export const ENGINE_MESSAGE_KEYS = [
   'git.ssh_key_required',
   'git.repo_path_invalid',
   'git.repo_exists',
+  // --- Внешние события и хуки (AD-030 / AD-089) ---
+  'event.ingested',
+  'event.routed.bound',
+  'event.routed.ephemeral',
+  'event.routed.queue',
+  'event.routed.drop',
+  'event.binding.not_found',
+  'event.source_not_allowed',
+  'event.duplicate',
+  'hook.blocked',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -537,6 +547,16 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'git.ssh_key_required': ["path"],
   'git.repo_path_invalid': ["path"],
   'git.repo_exists': ["path"],
+  // --- Внешние события и хуки (AD-030 / AD-089) ---
+  'event.ingested': ["id","source"],
+  'event.routed.bound': ["sessionId"],
+  'event.routed.ephemeral': ["agentTemplate"],
+  'event.routed.queue': ["owner","reason"],
+  'event.routed.drop': ["reason"],
+  'event.binding.not_found': ["key"],
+  'event.source_not_allowed': ["source"],
+  'event.duplicate': ["dedupKey"],
+  'hook.blocked': ["hook","reason"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

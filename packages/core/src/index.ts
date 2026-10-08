@@ -4,9 +4,12 @@
 export { FileStore } from './storage/file-store.js';
 export type { StorageConfig } from './storage/file-store.js';
 export { SessionManager } from './sessions/manager.js';
+export { parseTtl, startEphemeralSweeper, DEFAULT_EPHEMERAL_SWEEP_INTERVAL_MS } from './sessions/ephemeral.js';
 export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
 export type { SessionStatsDeps } from './sessions/stats.js';
 export { EventBus, sseEventStream } from './events/bus.js';
+export { HookBus, HOOK_ASYNC_TIMEOUT_MS } from './engine/hooks/index.js';
+export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './engine/hooks/index.js';
 export { QueueProcessor, QueueProcessorManager, enqueueUserMessage } from './queue/processor.js';
 export type { ProcessMessageFn } from './queue/processor.js';
 
@@ -167,6 +170,32 @@ export type {
   AddMcpRegistryEntryInput,
   UpdateMcpRegistryEntryInput,
 } from './storage/mcp-registry-store.js';
+// AD-089: реестр биндингов внешних событий и журнал обработки/решений Router.
+export { EventBindingStore, EVENT_BINDINGS_SCHEMA_VERSION } from './storage/event-binding-store.js';
+export type { EventBindingStoreConfig, UpsertEventBindingInput } from './storage/event-binding-store.js';
+export { EventJournalStore } from './storage/event-journal-store.js';
+export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
+// AD-089: ядро маршрутизации событий и единый funnel создания сессии.
+export { EventRouter } from './engine/events/event-router.js';
+export type { EventRouterDeps } from './engine/events/event-router.js';
+export { EventIngress } from './engine/events/ingest.js';
+export type { EventIngestInput, EventIngressDeps } from './engine/events/ingest.js';
+export {
+  RequestSessionService,
+  eventToMessage,
+  eventToMessageText,
+} from './engine/events/request-session.js';
+export type {
+  RequestSessionOptions,
+  RequestSessionServiceDeps,
+} from './engine/events/request-session.js';
+export type {
+  EventDelivery,
+  EventRouterConfig,
+  RouteRuleInput,
+  RouteRuleProvider,
+  SessionResolution,
+} from './engine/events/types.js';
 // AD-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
 export { SkillService } from './engine/skills/service.js';
 export type { SkillServiceOptions, SkillListOptions } from './engine/skills/service.js';
@@ -265,6 +294,13 @@ export { createAgentRoutes } from './server/routes/agents.js';
 export type { AgentRoutesAuth, AgentRoutesOptions, AgentRouteMessages } from './server/routes/agents.js';
 export { createMcpRoutes } from './server/routes/mcp.js';
 export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
+export { createEventRoutes } from './server/routes/events.js';
+export type {
+  EventRoutesAuth,
+  EventRoutesDeps,
+  EventRoutesOptions,
+  EventRouteMessages,
+} from './server/routes/events.js';
 export { createMessageRoutes } from './server/routes/messages.js';
 export type { MessageRoutesAuth, MessageRoutesOptions, MessageRouteMessages } from './server/routes/messages.js';
 export { createQueueRoutes } from './server/routes/queue.js';

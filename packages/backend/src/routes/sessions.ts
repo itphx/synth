@@ -5,6 +5,7 @@ import type { EventBus } from '@itphx/synth-core';
 import type { QueueProcessorManager } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { ContextOptimizer } from '@itphx/synth-core';
+import type { RequestSessionService } from '@itphx/synth-core';
 import {
   MessageRole,
   generateStreamId,
@@ -50,6 +51,11 @@ export function createSessionRoutes(
   profilesStore?: ProfileStore,
   /** Агент по умолчанию для новых сессий без `settings.agentRole` (runtime-настройка). */
   resolveDefaultAgent?: () => string | Promise<string>,
+  /**
+   * AD-089: единый funnel создания сессий (прокидывается в core-фабрику).
+   * Не задан — core-фабрика использует прямой `SessionManager.createSession`.
+   */
+  requestSessionService?: RequestSessionService,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -163,6 +169,8 @@ export function createSessionRoutes(
   // POST /api/v2/sessions/import — создать сессию из экспорта другой сессии
   // (перенос истории между мирами). Тело: объект экспорта + import.project_id
   // (целевой проект; если не задан — берётся из экспорта). LLM не запускается.
+  // AD-089: это materialization-операция (создание-как-факт переноса истории),
+  // а не request — идёт прямым `createSession`, минуя funnel `session.requested`.
   app.post('/import', kit.requireAuth, async (c) => {
     const user = (await kit.getCurrentUser(c))!;
     const body = await c.req.json().catch(() => ({}));
@@ -183,6 +191,7 @@ export function createSessionRoutes(
       }
     }
 
+    // AD-089: materialization (перенос истории), не request — прямой createSession.
     const session = await sessionManager.createSession({
       title: typeof body.title === 'string' ? body.title : undefined,
       projectId: targetProjectId,
@@ -446,7 +455,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

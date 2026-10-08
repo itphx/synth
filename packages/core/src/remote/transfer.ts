@@ -473,6 +473,8 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
     for (const id of orderedIds) {
       const exportData = exports.get(id)!;
 
+      // AD-089: materialization (перенос истории publish/fork), не request —
+      // прямой `createSession`; funnel применяется только к явному созданию.
       const session = await localSessionManager.createSession({
         title: typeof exportData.title === 'string' ? exportData.title : undefined,
         icon: normalizeIconKey(exportData.icon),

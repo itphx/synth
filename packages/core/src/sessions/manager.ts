@@ -3,6 +3,7 @@ import { getForkedTitle, MessageRole } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { FileStore } from '../storage/file-store.js';
+import type { HookBus } from '../engine/hooks/hook-bus.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
 
 /** Структурный контракт загрузки проекта (для снапшотов скоупа). */
@@ -20,6 +21,11 @@ export interface SessionManagerOptions {
    * снапшоты `mcpDefaultOn`/`skillsDefaultOn` при создании.
    */
   systemDefaultsProvider?: () => Promise<{ mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined>;
+  /**
+   * AD-030: ядровая шина хуков — `session_start` (создание) и `session_end`
+   * (удаление). Не задана — эмиты не выполняются, поведение менеджера не меняется.
+   */
+  hooks?: HookBus;
 }
 
 export interface SessionTree {
@@ -63,7 +69,7 @@ export class SessionManager {
     return this.store.load(sessionId);
   }
 
-  async createSession(data: { title?: string; icon?: string; color?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string } = {}): Promise<Session> {
+  async createSession(data: { title?: string; icon?: string; color?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string; expiresAt?: string } = {}): Promise<Session> {
     const mcpToolSettings = await this._resolveMcpToolSettings(data.settings?.mcpToolSettings);
     const session: Session = {
       id: generateId(),
@@ -141,6 +147,8 @@ export class SessionManager {
       cacheHitRate: 0,
       createdAt: nowISO(),
       updatedAt: nowISO(),
+      // AD-089: ephemeral-сессия архивируется sweeper'ом по `expiresAt`.
+      expiresAt: data.expiresAt,
       inputTokens: 0,
       outputTokens: 0,
       totalTokens: 0,
@@ -151,6 +159,12 @@ export class SessionManager {
     // AD-071 §2.4 / AD-046 §4.5: снапшоты скоупа на момент создания сессии.
     await this._materializeScopeSnapshots(session, data.projectId, data.settings);
     await this.store.save(session);
+    // AD-030: `session_start` — неблокирующий эмит после сохранения сессии.
+    this._options.hooks?.emitAsync('session_start', {
+      sessionId: session.id,
+      ...(data.projectId ? { projectId: data.projectId } : {}),
+      ...(session.settings.agentRole ? { agent: session.settings.agentRole } : {}),
+    });
     return session;
   }
 
@@ -203,16 +217,56 @@ export class SessionManager {
   async deleteSession(sessionId: string): Promise<void> {
     await this.store.delete(sessionId);
     this._locks.delete(sessionId);
+    // AD-030: `session_end` — неблокирующий эмит после удаления сессии.
+    this._options.hooks?.emitAsync('session_end', { sessionId });
   }
 
-  async listSessions(filter?: { projectId?: string; userId?: string }): Promise<Session[]> {
-    if (filter?.userId) return this.store.listForUser(filter.userId);
-    return this.store.list(filter);
+  async listSessions(
+    filter?: { projectId?: string; userId?: string },
+    options?: { includeArchived?: boolean },
+  ): Promise<Session[]> {
+    const sessions = filter?.userId
+      ? await this.store.listForUser(filter.userId)
+      : await this.store.list(filter);
+    // AD-089: архивированные сессии скрыты из списков по умолчанию (доступ — getSession по id).
+    if (options?.includeArchived) return sessions;
+    return sessions.filter((s) => !s.archivedAt);
   }
 
-  async listActiveSessions(): Promise<Session[]> {
-    const sessions = await this.listSessions();
+  async listActiveSessions(options?: { includeArchived?: boolean }): Promise<Session[]> {
+    const sessions = await this.listSessions(undefined, options);
     return sessions.filter((s) => s.status.blocked || s.currentStream);
+  }
+
+  /**
+   * AD-089: архивирует сессию (идемпотентно). Уже архивированная или
+   * отсутствующая — `null`. Успешный архив эмитит `session_end` (AD-030).
+   */
+  async archiveSession(sessionId: string): Promise<Session | null> {
+    const session = await this.store.load(sessionId);
+    if (!session || session.archivedAt) return null;
+    session.archivedAt = nowISO();
+    session.updatedAt = nowISO();
+    await this.store.save(session);
+    this._options.hooks?.emitAsync('session_end', { sessionId });
+    return session;
+  }
+
+  /**
+   * AD-089: архивирует все ephemeral-сессии с истёкшим `expiresAt`
+   * (`expiresAt <= now`, `archivedAt` не задан). Возвращает id архивированных.
+   */
+  async archiveExpired(now: Date = new Date()): Promise<string[]> {
+    const sessions = await this.listSessions(undefined, { includeArchived: true });
+    const archived: string[] = [];
+    for (const session of sessions) {
+      if (!session.expiresAt || session.archivedAt) continue;
+      const expiresAt = Date.parse(session.expiresAt);
+      if (Number.isNaN(expiresAt) || expiresAt > now.getTime()) continue;
+      const result = await this.archiveSession(session.id);
+      if (result) archived.push(session.id);
+    }
+    return archived;
   }
 
   async updateSession(session: Session): Promise<void> {
@@ -254,7 +308,8 @@ export class SessionManager {
   }
 
   async cleanupStaleLocks(timeoutMinutes = 15): Promise<string[]> {
-    const sessions = await this.listSessions();
+    // AD-089: архивированные сессии тоже могут держать устаревший lock — проходим все.
+    const sessions = await this.listSessions(undefined, { includeArchived: true });
     const stale: string[] = [];
     const now = new Date();
 
@@ -564,6 +619,8 @@ export class SessionManager {
       const existingTitles = siblings.map((s) => s.title || '');
       const forkedTitle = options.title || getForkedTitle(source.title, existingTitles);
 
+      // AD-089: materialization (ветвление как факт копии истории), не request —
+      // прямой `createSession`; funnel `session.requested` сюда не применяется.
       const forked = await this.createSession({
         title: forkedTitle,
         icon: source.icon,

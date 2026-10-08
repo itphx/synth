@@ -30,6 +30,11 @@ const en: Dictionary = {
   'errors.validation.groupsRequired': 'groups is required',
   'errors.validation.expectedFilesArray': 'expected { files: string[] }',
 
+  // AD-089: приём внешних событий
+  'errors.validation.invalidEvent': 'Invalid event payload',
+  'errors.validation.invalidBinding': 'Invalid binding payload',
+  'errors.notFound.binding': 'Binding not found',
+
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
   'errors.conflict.emailExists': 'A user with this email already exists',
@@ -89,6 +94,11 @@ const ru: Dictionary = {
   'errors.validation.usernameRequired': 'username обязателен',
   'errors.validation.groupsRequired': 'groups обязательны',
   'errors.validation.expectedFilesArray': 'expected { files: string[] }',
+
+  // AD-089: приём внешних событий
+  'errors.validation.invalidEvent': 'Некорректное тело события',
+  'errors.validation.invalidBinding': 'Некорректное тело биндинга',
+  'errors.notFound.binding': 'Биндинг не найден',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',

@@ -23,6 +23,7 @@
 13. Коммит — только по явной просьбе пользователя. Новые зависимости/инструменты — только с разрешения.
 14. Секреты (токены, ключи, пароли) — не коммитить; секреты живут в `secrets/` вне git-репозитория `synth/`.
 15. AGENTS.md (корневой и пакетные) держать в актуальном состоянии: изменил поведение пакета/процесс/окружение — обнови соответствующий файл; правки инструкций согласовывать с пользователем; процедура — скилл `synth-agents-md`.
+16. Создание сессии — только через единый funnel `RequestSessionService` → `EventRouter` (явный запрос — `direct`, внешнее событие — через Router); `SessionManager.createSession` — materialization-примитив (fork/import/материализация события), для прямых запросов его не вызывать (AD-089).
 
 ## Прототип
 
@@ -153,6 +154,9 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 | `GET/PUT /api/v2/mcp/registry` | Реестр MCP-серверов (`enabled` — мастер-флаг, `enabledByDefault` — дефолт новых проектов; stdio — только ADMIN) |
 | `GET/PUT /api/v2/projects/:id/{mcp,skills}` и `GET/PUT /api/v2/sessions/:id/{mcp,skills}` | Уровни/скоуп MCP и скиллов (`enabled` — hard-gate, `defaultOn` — дефолт новых сессий; в сессии — снапшот) |
 | `POST /api/v2/mcp/probe` | Проверка MCP-сервера без регистрации инструментов |
+| `POST /api/v2/events` | Приём внешнего события (ingest; `requireAuth` + rate limit) |
+| `GET/POST/DELETE /api/v2/events/bindings` | Биндинги событий источник→сессия (чтение — `requireAuth`, мутации — ADMIN) |
+| `GET /api/v2/events/journal` | Журнал решений Router (последние записи, `limit`) |
 
 ## Процесс разработки
 
@@ -271,6 +275,15 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 Доступность групп — в `ToolCapability` (`@itphx/synth-shared`); MCP-тулы регистрируются как `{serverName}_{toolName}`, подчиняются режимам (AD-029) и выбираются **per-session** — в промпт идут только тулы активных серверов сессии. Слои разделены: `tools` — встроенные, `mcp.tools`/`mcp.servers`/`mcp.status` — MCP (всегда `volatile`) (AD-071).
 
+## Внешние события и хуки
+
+- **Хуки (AD-030).** `HookBus` (`engine/hooks/hook-bus.ts`) — ядровый in-process примитив, отдельный от session-`EventBus`: `on/off/emit/emitAsync`, priority, `sync` (pre, blockable/patch) и `async` (post, fire-and-forget + timeout 5s), флаг `builtin`. Эмиты жизненного цикла: `pre_tool_use` (sync, блокирует исполнение), `post_tool_use` (только для реально исполненных), `plan_approved`, `permission_denied`, `agent_spawned/completed/failed`, `session_start`/`session_end` (в т.ч. `session_end` при архивации).
+- **Внешние события (AD-089).** `engine/events/`: `EventRouter` (порядок `allowedSources` → dedup → явный `EventBinding` → `RouteRuleProvider` → `drop no_route`; решения журналируются), `RequestSessionService` (единый funnel создания сессии; explicit → `direct` + hook `session_requested`, внешнее → hook `external_event` → Router), `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam), `EventDelivery` (`run`/`defer`). Хранилища: `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`).
+- **Единый funnel.** Создание сессии — только через `RequestSessionService` (инвариант 16); внешние события входят только через Router; `forkSession`/backend `/import`/`remote/transfer.ts`/`chat.ts` — materialization, не request.
+- **Ephemeral TTL.** `Session.expiresAt`/`archivedAt`; `sessions/ephemeral.ts` (`parseTtl` `30s|15m|24h|7d`, `startEphemeralSweeper`, sweep 60 c, unref); `listSessions`/`listActiveSessions` по умолчанию исключают архив.
+- **Конфиг.** Секция `events` (`enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`, `allowedSources`). **i18n:** `event.*`, `hook.blocked`.
+- **API.** `POST /api/v2/events` (ingest), `GET/POST/DELETE /api/v2/events/bindings`, `GET /api/v2/events/journal`; SSE `GET /api/v2/events` сохранён. UI — админ-раздел «События» (bindings + журнал).
+
 ## UI-конвенции
 
 Панель «Сессия» в правой панели показывает план (`planContent`) и ToDo (`todos`); обновляется по WS-событиям `plan.approved`/`todos.updated` (полный refresh с сервера).
@@ -346,7 +359,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-026 | Режимы контекста саб-агента: none / inherit / summary / last_n | ✅ Реализовано | [ad-026](./docs/arch_decisions/ad-026-subagent-context-modes.md) |
 | AD-028 | Строгость цикла Plan→Build: auto / strict / off | ✅ Реализовано | [ad-028](./docs/arch_decisions/ad-028-plan-build-strictness.md) |
 | AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns | ✅ Реализовано | [ad-029](./docs/arch_decisions/ad-029-granular-permissions.md) |
-| AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn); закреплён фундаментом для внешних событий (AD-089) и интеграций (AD-051/052/086/087) | ⏳ Не реализовано (фундамент для AD-089) | [ad-030](./docs/arch_decisions/ad-030-hooks-agent-events.md) |
+| AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn); закреплён фундаментом для внешних событий (AD-089) и интеграций (AD-051/052/086/087) | ⚠️ Частично (hook-шина + эмиты жизненного цикла; Plugin SDK/загрузка плагинов — нет) | [ad-030](./docs/arch_decisions/ad-030-hooks-agent-events.md) |
 | AD-031 | Verification синт (аналог VerificationAgent из Claude Code) | ⏳ Не реализовано | [ad-031](./docs/arch_decisions/ad-031-verification-agent.md) |
 | AD-032 | Миграция хранения истории на PostgreSQL (логическая модель уже в JSON — AD-005/AD-033) | ⏳ Не реализовано | [ad-032](./docs/arch_decisions/ad-032-history-storage-postgresql.md) |
 | AD-033 | Ветвление сессий, наследование контекста и межсессионное слияние | ✅ Реализовано | [ad-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
@@ -405,7 +418,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-086 | Расширяемость Synth: плагины, editions, вклад в mainline и внешние сервисы-надстройки: Extension API, каталог editions, contribution flow, add-ons (первый случай — Telegram gateway) | ⏳ Не реализовано | [ad-086](./docs/arch_decisions/ad-086-extensibility-plugins-editions.md) |
 | AD-087 | Gateway для подключения к мессенджерам | ⛔ Поглощён AD-086 | [ad-087](./docs/arch_decisions/ad-087-messenger-gateway-merged.md) |
 | AD-088 | Работа через HTTP-прокси: единый egress-слой, `no_proxy`/исключения, доверенные CA, аутентификация Basic/NTLM/Negotiate (Kerberos) | ⏳ Не реализовано | [ad-088](./docs/arch_decisions/ad-088-http-proxy.md) |
-| AD-089 | Synth как платформа внешних событий и автоматизации: сущности Event/Binding/Router, приём внешних событий на hook-шине, `session.requested` — тоже событие | ⏳ Не реализовано | [ad-089](./docs/arch_decisions/ad-089-external-events-automation.md) |
+| AD-089 | Synth как платформа внешних событий и автоматизации: сущности Event/Binding/Router, приём внешних событий на hook-шине, `session.requested` — тоже событие | ⚠️ Частично (ядро Event/Binding/Router, единый funnel, API, UI; источники AD-051/052/086 — нет) | [ad-089](./docs/arch_decisions/ad-089-external-events-automation.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -450,7 +463,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | настройки / settings UI kit | [AD-072](./docs/arch_decisions/ad-072-settings-ui-kit.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 | кастомизация / брендинг / онбординг | [AD-083](./docs/arch_decisions/ad-083-instance-customization-branding.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 | блокировка настроек (locked settings) | [AD-083](./docs/arch_decisions/ad-083-instance-customization-branding.md), [AD-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md), [AD-080](./docs/arch_decisions/ad-080-managed-hybrid-modes.md), [AD-081](./docs/arch_decisions/ad-081-hybrid-policy-leak-protection.md) |
-| внешние события / роутинг / сессии | [AD-089](./docs/arch_decisions/ad-089-external-events-automation.md), [AD-030](./docs/arch_decisions/ad-030-hooks-agent-events.md), [AD-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
+| внешние события / хуки / роутинг / сессии | [AD-089](./docs/arch_decisions/ad-089-external-events-automation.md), [AD-030](./docs/arch_decisions/ad-030-hooks-agent-events.md), [AD-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
 | мессенджеры / шлюзы | [AD-086](./docs/arch_decisions/ad-086-extensibility-plugins-editions.md), [AD-087](./docs/arch_decisions/ad-087-messenger-gateway-merged.md) (⛔ поглощён AD-086) |
 | шедулер / пайплайны | [AD-051](./docs/arch_decisions/ad-051-scheduler-pipelines.md), [AD-059](./docs/arch_decisions/ad-059-pipeline-automation.md), [AD-057](./docs/arch_decisions/ad-057-loop-engine.md) |
 | публичный API / webhooks | [AD-052](./docs/arch_decisions/ad-052-public-api-platform.md), [AD-089](./docs/arch_decisions/ad-089-external-events-automation.md) |

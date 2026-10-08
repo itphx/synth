@@ -660,3 +660,116 @@ describe('AD-033: Session forking and branching', () => {
     expect(fork.stickyNotes).toEqual([]);
   });
 });
+
+describe('AD-089: ephemeral-сессии (TTL, архивация)', () => {
+  let store: FileStore;
+  let manager: SessionManager;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-ephemeral-test-'));
+    store = new FileStore({ dataDir: tmpDir });
+    manager = new SessionManager(store);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('createSession сохраняет expiresAt и переживает перезагрузку', async () => {
+    const expiresAt = nowISO();
+    const session = await manager.createSession({ title: 'ephemeral', expiresAt });
+    expect(session.expiresAt).toBe(expiresAt);
+
+    const reloaded = await manager.getSession(session.id);
+    expect(reloaded!.expiresAt).toBe(expiresAt);
+  });
+
+  it('createSession без expiresAt не задаёт поле (обычные сессии)', async () => {
+    const session = await manager.createSession({});
+    expect(session.expiresAt).toBeUndefined();
+    expect((await manager.getSession(session.id))!.expiresAt).toBeUndefined();
+  });
+
+  it('archiveSession выставляет archivedAt и возвращает сессию', async () => {
+    const session = await manager.createSession({});
+    const archived = await manager.archiveSession(session.id);
+    expect(archived).not.toBeNull();
+    expect(archived!.archivedAt).toBeDefined();
+    expect((await manager.getSession(session.id))!.archivedAt).toBe(archived!.archivedAt);
+  });
+
+  it('archiveSession идемпотентна и возвращает null для повторного/несуществующего', async () => {
+    const session = await manager.createSession({});
+    await manager.archiveSession(session.id);
+    expect(await manager.archiveSession(session.id)).toBeNull();
+    expect(await manager.archiveSession('non-existent')).toBeNull();
+  });
+
+  it('archiveExpired архивирует только просроченные и неархивированные', async () => {
+    const now = new Date('2026-01-01T12:00:00.000Z');
+    const expired = await manager.createSession({ expiresAt: '2026-01-01T11:59:00.000Z' });
+    const future = await manager.createSession({ expiresAt: '2026-01-01T12:30:00.000Z' });
+    const noTtl = await manager.createSession({});
+    const already = await manager.createSession({ expiresAt: '2026-01-01T10:00:00.000Z' });
+    await manager.archiveSession(already.id);
+
+    const archivedIds = await manager.archiveExpired(now);
+    expect(archivedIds).toEqual([expired.id]);
+
+    expect((await manager.getSession(expired.id))!.archivedAt).toBeDefined();
+    expect((await manager.getSession(future.id))!.archivedAt).toBeUndefined();
+    expect((await manager.getSession(noTtl.id))!.archivedAt).toBeUndefined();
+    // Уже архивированная не переархивируется (archivedAt не меняется).
+    const alreadyArchivedAt = (await manager.getSession(already.id))!.archivedAt;
+
+    const second = await manager.archiveExpired(now);
+    expect(second).toEqual([]);
+    expect((await manager.getSession(already.id))!.archivedAt).toBe(alreadyArchivedAt);
+  });
+
+  it('archiveExpired игнорирует невалидный expiresAt', async () => {
+    const bad = await manager.createSession({ expiresAt: 'not-a-date' });
+    const archivedIds = await manager.archiveExpired(new Date('2030-01-01T00:00:00.000Z'));
+    expect(archivedIds).toEqual([]);
+    expect((await manager.getSession(bad.id))!.archivedAt).toBeUndefined();
+  });
+
+  it('listSessions исключает архивированные, includeArchived возвращает', async () => {
+    const active = await manager.createSession({ title: 'active' });
+    const archived = await manager.createSession({ title: 'archived' });
+    await manager.archiveSession(archived.id);
+
+    const listed = await manager.listSessions();
+    expect(listed.map((s) => s.id)).toContain(active.id);
+    expect(listed.map((s) => s.id)).not.toContain(archived.id);
+
+    const all = await manager.listSessions(undefined, { includeArchived: true });
+    expect(all.map((s) => s.id)).toContain(archived.id);
+  });
+
+  it('listActiveSessions исключает архивированные', async () => {
+    const session = await manager.createSession({});
+    await manager.safeUpdate(session.id, (s) => {
+      s.currentStream = {
+        streamId: 'stream-1',
+        message: 'x',
+        startedAt: nowISO(),
+        cancelled: false,
+      };
+    });
+    expect((await manager.listActiveSessions()).map((s) => s.id)).toContain(session.id);
+
+    await manager.archiveSession(session.id);
+    expect((await manager.listActiveSessions()).map((s) => s.id)).not.toContain(session.id);
+    expect((await manager.listActiveSessions({ includeArchived: true })).map((s) => s.id)).toContain(session.id);
+  });
+
+  it('getSession по-прежнему находит архивированную сессию', async () => {
+    const session = await manager.createSession({});
+    await manager.archiveSession(session.id);
+    const loaded = await manager.getSession(session.id);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.archivedAt).toBeDefined();
+  });
+});

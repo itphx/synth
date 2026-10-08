@@ -112,6 +112,13 @@ export const defaultConfig: SynthConfig = {
     maxArgumentsLength: 10_000,
     maxRenderedBytes: 200_000,
   },
+  events: {
+    enabled: true,
+    defaultMode: 'bound',
+    ephemeralTtl: '24h',
+    journalRetentionDays: 30,
+    allowedSources: [],
+  },
   instructions: {
     enabled: true,
     claudeCompat: true,

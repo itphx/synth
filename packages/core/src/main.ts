@@ -129,6 +129,8 @@ program
       // AD-069 Фаза 1: конфигурация проектных инструкций (AGENTS.md).
       // AD-069 §9.2: ignore-rules/safe-mode → enabled=false (без мутации конфига).
       instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
+      // AD-089: конфигурация приёма внешних событий (allowedSources/ephemeralTtl).
+      eventsConfig: synth.events,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
@@ -158,6 +160,9 @@ program
       // Гибрид: закрыть SSE-стрим к удалённому backend, отменить реконнект.
       await appHandle.disconnectRemote?.().catch(() => {});
       appHandle.remoteEventBridge?.stop();
+
+      // AD-089: остановить авто-архивацию ephemeral-сессий.
+      appHandle.stopEphemeralSweeper?.();
 
       server.close((err: Error | undefined) => {
         if (err) console.error('[Shutdown] Server close error:', err);

@@ -12,6 +12,10 @@ import {
   normalizeColorKey,
   isProjectIconKey,
   isProjectColorKey,
+  synthEventSchema,
+  eventIdentitySchema,
+  eventBindingSchema,
+  sessionRequestSchema,
 } from './index.js';
 import { PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS } from '../types/index.js';
 
@@ -187,5 +191,128 @@ describe('иконки/цвета проектов и сессий', () => {
     expect(sessionUpdateSchema.safeParse({ color: 'a1' }).success).toBe(true);
     expect(sessionUpdateSchema.safeParse({ color: 'red' }).success).toBe(false);
     expect(sessionUpdateSchema.safeParse({ icon: null, color: null }).success).toBe(true);
+  });
+});
+
+describe('synthEventSchema (AD-089)', () => {
+  it('валидное событие, identity по умолчанию — пустой объект', () => {
+    const parsed = synthEventSchema.safeParse({
+      id: 'evt_1',
+      source: 'telegram',
+      type: 'message',
+      payload: { text: 'hi' },
+      dedupKey: 'dedup-1',
+      ts: '2026-10-08T00:00:00Z',
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.identity).toEqual({});
+      expect(parsed.data.payload).toEqual({ text: 'hi' });
+    }
+  });
+
+  it('сохраняет переданную identity', () => {
+    const parsed = synthEventSchema.safeParse({
+      id: 'evt_2',
+      source: 'telegram',
+      type: 'message',
+      payload: null,
+      identity: { chatKey: 'chat:telegram:1', roles: ['USER'] },
+      dedupKey: 'dedup-2',
+      ts: '2026-10-08T00:00:00Z',
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.identity.chatKey).toBe('chat:telegram:1');
+      expect(parsed.data.identity.roles).toEqual(['USER']);
+    }
+  });
+
+  it('отказ на отсутствующих/пустых обязательных полях', () => {
+    expect(synthEventSchema.safeParse({ id: 'evt_1' }).success).toBe(false);
+    expect(
+      synthEventSchema.safeParse({ id: '', source: 's', type: 't', dedupKey: 'k', ts: 'x' }).success,
+    ).toBe(false);
+  });
+
+  it('eventIdentitySchema: поля опциональны', () => {
+    expect(eventIdentitySchema.safeParse({}).success).toBe(true);
+    expect(eventIdentitySchema.safeParse({ principalId: 'u1', roles: ['ADMIN'] }).success).toBe(true);
+  });
+});
+
+describe('eventBindingSchema (AD-089)', () => {
+  it('валидные режимы bound/ephemeral/queue', () => {
+    for (const mode of ['bound', 'ephemeral', 'queue'] as const) {
+      expect(eventBindingSchema.safeParse({ id: 'b1', source: 'telegram', mode }).success).toBe(true);
+    }
+  });
+
+  it('отказ на некорректном/отсутствующем mode (drop недопустим в Binding)', () => {
+    expect(eventBindingSchema.safeParse({ id: 'b1', source: 'telegram', mode: 'drop' }).success).toBe(false);
+    expect(eventBindingSchema.safeParse({ id: 'b1', source: 'telegram' }).success).toBe(false);
+    expect(eventBindingSchema.safeParse({ mode: 'bound' }).success).toBe(false);
+  });
+
+  it('полная привязка чата/треда к сессии', () => {
+    const parsed = eventBindingSchema.safeParse({
+      id: 'b1',
+      source: 'telegram',
+      chatKey: 'chat:telegram:1',
+      threadKey: 'thread:telegram:1:2',
+      sessionId: 's1',
+      mode: 'bound',
+      agentTemplate: 'assistant',
+      project: 'p1',
+    });
+    expect(parsed.success).toBe(true);
+  });
+});
+
+describe('sessionRequestSchema (AD-089)', () => {
+  it('валидный минимальный запрос', () => {
+    const parsed = sessionRequestSchema.safeParse({ initiator: 'external', intent: 'event' });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('валидный запрос со всеми полями', () => {
+    const parsed = sessionRequestSchema.safeParse({
+      initiator: 'user',
+      intent: 'explicit',
+      projectId: 'p1',
+      parentId: 's0',
+      agentTemplate: 'assistant',
+      mode: 'ephemeral',
+      ttl: '2h',
+      title: 'From event',
+      icon: 'rocket',
+      color: 'a1',
+      engine: 'synth',
+      sessionOrigin: 'subagent',
+      settings: { temperature: 0.2 },
+      sourceEventId: 'evt_1',
+      dedupKey: 'dedup-1',
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('отказ на некорректном mode/initiator/intent', () => {
+    expect(
+      sessionRequestSchema.safeParse({ initiator: 'external', intent: 'event', mode: 'drop' }).success,
+    ).toBe(false);
+    expect(sessionRequestSchema.safeParse({ initiator: 'nobody', intent: 'event' }).success).toBe(false);
+    expect(sessionRequestSchema.safeParse({ initiator: 'external', intent: 'other' }).success).toBe(false);
+    expect(
+      sessionRequestSchema.safeParse({ initiator: 'external', intent: 'event', sessionOrigin: 'other' }).success,
+    ).toBe(false);
+  });
+
+  it('отказ на неканоническом icon/color', () => {
+    expect(
+      sessionRequestSchema.safeParse({ initiator: 'external', intent: 'event', icon: '🚀' }).success,
+    ).toBe(false);
+    expect(
+      sessionRequestSchema.safeParse({ initiator: 'external', intent: 'event', color: 'blue' }).success,
+    ).toBe(false);
   });
 });

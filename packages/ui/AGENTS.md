@@ -31,7 +31,7 @@
 | `components/layout/` | Каркас и хром: `Sidebar`, `Header`, `CenterPanel`, `CenterTabs`, `MobileDrawer`, баннеры, `BackendConnection`, `AuthGate`-обвязка |
 | `components/panels/` | Левые/правые панели и вкладки (`LeftPanel`, `RightPanel`, `*Tab`) |
 | `components/chat/` | Чат: сообщения, стриминг, файловые вкладки, tool-рендер, саб-агенты |
-| `components/settings/` + `components/admin/` | Настройки и админ-панели (провайдеры, модели, безопасность, routing) |
+| `components/settings/` + `components/admin/` | Настройки и админ-панели (провайдеры, модели, безопасность, routing, события) |
 | `components/auth/` | `AuthGate`, логин (в т.ч. гибридный) |
 | `components/ui/` | Примитивы: dialog, popover, select, tooltip, toggle, `SynthLogo`, `EntityIconPicker` (пикер иконки/цвета сущностей), `EntityEditDialog` (единое центральное окно редактирования проекта/сессии) |
 | `components/icon/` | `Icon` + реестр `icons.ts` — единственная точка иконок |
@@ -106,6 +106,7 @@
 ### Транспорт
 - Единственный `TransportClient` (`lib/api/transport.ts:23`) + `stores/transportStore.ts` (`:626`). События обрабатывать через стор; не открывать второй WebSocket/EventSource (AD-024).
 - `fs.changed` — мутирующий тул ядра изменил workspace: стор вызывает `filesStore.scheduleRefresh` (debounce) и debounce-refresh реестра Git (`scheduleGitRefresh`). `session.moved` — сессия перенесена между проектами (в т.ч. `project_create`/`project_attach` агентом): патч `project_id`, refresh сессии, `loadProjects` и `filesStore.refreshProject`.
+- `event.routed` (AD-089) — внешнее событие материализовано в сессию: полный refresh сессии (`refreshSessionFromApi`); изменения приходят отдельными событиями очереди/сообщений.
 
 ### Роли и доступ
 - Роль — из `useAuthStore(s => s.user)?.roles`; UI лишь прячет недоступное, защита — на сервере. Примеры: `secrets` (ADMIN/AUDITOR, `RightPanel.tsx:31`), админ-разделы настроек (`roles[]`, `SettingsModal.tsx:32`).
@@ -140,6 +141,10 @@
 
 - **Git-вкладка** (`components/panels/LeftPanel.tsx` → `GitTab`, `stores/gitStore.ts`): реестр `project.repos` с `destination`/`type`/`url`/`ssh-key`/`lastFetch`; `scan → register`, `clone`/`init` с полями `name`/`path` и селектором SSH-ключа, `fetch`, `remove` (через `ConfirmDialog`, опц. `deleteLocal`). Методы — `synthApi.*GitRepo*`.
 - **SSH-ключи** (`components/settings/SshKeysSettings.tsx`, встраивается в админ-категорию «Агенты» `admin/AgentsPanel.tsx`): CRUD per-agent ключей, привязка к агентам (`agentIds`), редактирование без обязательной замены ключа. Поля «Тип» нет (дублировало имя) — в shared `SSHKey.type?`/`sshKeyCreateSchema.type?` сохранены для обратной совместимости, UI их не задаёт и не показывает. API `synthApi.*SshKey*` отдаёт только `SSHKeyMeta` (без `privateKey`/`passphrase`); ошибки — ключи `sshkey.*` (в т.ч. `sshkey.env_failed`), i18n ru/en. Ключи с `passphrase` поддерживаются (git-операция — через askpass).
+
+## Внешние события (AD-089)
+
+- Админ-раздел «События» (`components/settings/EventsAdminSettings.tsx`; категория `eventsAdmin`, `labelKey: settings.category.events`, `roles: ["ADMIN"]`): CRUD биндингов источник→сессия + просмотр журнала решений Router. API — `synthApi` (bindings/journal).
 
 ## Мобильный / PWA
 

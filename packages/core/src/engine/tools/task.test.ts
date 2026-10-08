@@ -331,6 +331,55 @@ describe('taskTool — context modes', () => {
     expect(inherited).toHaveLength(0);
   });
 
+  it('AD-089: none mode создаёт дочернюю сессию через funnel (initiator=agent)', async () => {
+    const parent = await createParentWithMessages();
+    const request = vi.fn(async (req: any, opts: any) =>
+      sessionManager.createSession({
+        title: req.title,
+        projectId: req.projectId,
+        engine: req.engine,
+        parentId: req.parentId,
+        sessionOrigin: req.sessionOrigin,
+        settings: req.settings,
+        userId: opts?.userId,
+        ownerId: opts?.ownerId,
+      }),
+    );
+
+    const result = await taskTool.execute(
+      { description: 'funnel task', prompt: 'hello', subagent_type: 'explore', context_mode: 'none' },
+      {
+        ...baseCtx,
+        extra: {
+          provider: makeMockProvider(),
+          sessionManager,
+          eventBus,
+          sessionId: parent.id,
+          agentRegistry: makeMockAgentRegistry(),
+          getRequestSessionService: () => ({ request }),
+        },
+      },
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(request).toHaveBeenCalledOnce();
+    const [reqArg, optsArg] = request.mock.calls[0]!;
+    expect(reqArg).toMatchObject({
+      initiator: 'agent',
+      intent: 'explicit',
+      parentId: parent.id,
+      sessionOrigin: 'subagent',
+      projectId: parent.projectId,
+    });
+    expect(optsArg).toEqual({ userId: parent.userId, ownerId: parent.ownerId });
+
+    const childSessionId = result.metadata!.child_session_id as string;
+    const child = await sessionManager.getSession(childSessionId);
+    expect(child).toBeDefined();
+    expect(child!.parentId).toBe(parent.id);
+    expect(child!.sessionOrigin).toBe('subagent');
+  });
+
   // ─── SessionManager: mode 'summary' — fork + summarize ───────────
 
   it('summary mode: child session содержит forked сообщения + summary от contextOptimizer', async () => {

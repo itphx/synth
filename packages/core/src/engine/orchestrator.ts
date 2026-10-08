@@ -34,6 +34,7 @@ import {
   createStateMessage,
   findLastStateMessage,
   buildModeChangeContent,
+  buildPlanUpdatedContent,
   wrapStateContent,
   type UnavailableTool,
 } from './context/state-messages.js';
@@ -63,6 +64,8 @@ import { GitService } from '../git/git-service.js';
 import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
+import type { HookBus } from './hooks/hook-bus.js';
+import type { RequestSessionService } from './events/request-session.js';
 import { resolveFsChange } from './fs-change.js';
 import {
   ALL_RUNTIME_DEPS_AVAILABLE,
@@ -137,6 +140,12 @@ export interface ModelPricing {
 export interface OrchestratorOptions {
   sessionManager: SessionManager;
   eventBus: EventBus;
+  /**
+   * AD-030: ядровая шина хуков — эмиты жизненного цикла агента
+   * (`pre/post_tool_use`, `permission_denied`, `plan_approved`, ...). Не задана —
+   * хуки не выполняются, поведение оркестратора не меняется.
+   */
+  hooks?: HookBus;
   contextBuilder: ContextBuilder;
   providerLoader: (name: string) => SharedProviderConfig | null;
   contextOptimizer?: ContextOptimizer;
@@ -247,6 +256,13 @@ export interface OrchestratorOptions {
    * инструкций (недоверенный проект виден в диагностике, но не грузится).
    */
   instructionsTrustedProjectDirs?: readonly string[];
+  /**
+   * AD-089: late-bound доступ к funnel создания сессий (`RequestSessionService`).
+   * Прокидывается в `TaskExtra` — тул `task` создаёт дочернюю сессию через
+   * `request` (единые правила/аудит), с fallback на прямой `createSession`.
+   * Геттер нужен, т.к. сервис создаётся в приложении после оркестратора.
+   */
+  getRequestSessionService?: () => RequestSessionService | undefined;
 }
 
 export interface ProcessMessageResult {
@@ -310,6 +326,8 @@ function toCoreProviderConfig(shared: SharedProviderConfig, model: string, reaso
 export class ChatOrchestrator {
   private readonly _sessionManager: SessionManager;
   private readonly _eventBus: EventBus;
+  /** AD-030: шина хуков жизненного цикла (null — эмиты не выполняются). */
+  private readonly _hooks: HookBus | null;
   private readonly _contextBuilder: ContextBuilder;
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
   private readonly _optimizer: ContextOptimizer | null;
@@ -368,6 +386,8 @@ export class ChatOrchestrator {
   private readonly _skillRuntime: SkillRuntime | null;
   /** AD-046 §7: рантайм `/`-команд (резолвинг до LLM). */
   private readonly _commandRuntime: CommandRuntime | null;
+  /** AD-089: late-bound funnel создания сессий для тула `task` (null — не задан). */
+  private readonly _getRequestSessionService: (() => RequestSessionService | undefined) | null;
   /** AD-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
   private readonly _instructionsConfig: InstructionsConfig | null;
   /** AD-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
@@ -646,6 +666,7 @@ export class ChatOrchestrator {
   constructor(options: OrchestratorOptions) {
     this._sessionManager = options.sessionManager;
     this._eventBus = options.eventBus;
+    this._hooks = options.hooks ?? null;
     this._contextBuilder = options.contextBuilder;
     this._providerLoader = options.providerLoader;
     this._optimizer = options.contextOptimizer ?? null;
@@ -696,6 +717,7 @@ export class ChatOrchestrator {
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
     this._skillRuntime = options.skillRuntime ?? null;
     this._commandRuntime = options.commandRuntime ?? null;
+    this._getRequestSessionService = options.getRequestSessionService ?? null;
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -2956,6 +2978,19 @@ export class ChatOrchestrator {
             : resolvedToolDef;
           let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
 
+          // AD-030: `pre_tool_use` — синхронный хук ДО проверки permission и
+          // исполнения тула. Блокировка (`{block:true}`) отменяет исполнение,
+          // модель получает ошибку-результат `hook.blocked`. Без зарегистрированных
+          // обработчиков `emit` не блокирует — поведение не меняется.
+          const preHook = this._hooks
+            ? await this._hooks.emit('pre_tool_use', {
+              tool: toolName,
+              input: toolArgs,
+              ...(effectiveAgentRole ? { agent: effectiveAgentRole } : {}),
+            })
+            : null;
+          const hookBlocked = preHook?.blocked === true;
+
           // AD-029: гранулярные permissions — проверяем ДО doom loop, чтобы
           // deny-повторы не блокировались безликим «Цикл прерван», а получали
           // полноценный feedback (tool_call.result) с объяснением политики.
@@ -2981,7 +3016,7 @@ export class ChatOrchestrator {
           // политикой. Deny-вызовы исключены: каждая попытка должна получать
           // понятный feedback с объяснением причины запрета, а не «Цикл
           // прерван». Механика для повторяющихся легальных вызовов сохраняется.
-          if (permissionDecision.action !== 'deny') {
+          if (!hookBlocked && permissionDecision.action !== 'deny') {
             const doomKey = `${toolName}:${JSON.stringify(toolArgs)}`;
             const doomCount = (doomLoopTracker.get(doomKey) || 0) + 1;
             doomLoopTracker.set(doomKey, doomCount);
@@ -3003,6 +3038,8 @@ export class ChatOrchestrator {
           }
 
           const tcStartedAt = new Date().toISOString();
+          // AD-030: `Date.now()`-замер длительности тула для `post_tool_use`.
+          const tcStartedMs = Date.now();
 
           publishChunk('tool_call.started', {
             stream_id: streamId,
@@ -3029,14 +3066,14 @@ export class ChatOrchestrator {
             });
           }
 
-          let executeTool = permissionDecision.action === 'allow';
+          let executeTool = !hookBlocked && permissionDecision.action === 'allow';
           let deniedReason: string | undefined;
           let userDenied = false;
 
-          if (permissionDecision.action === 'deny') {
+          if (!hookBlocked && permissionDecision.action === 'deny') {
             deniedReason = this._securityMessage(permissionDecision, 'en')
               ?? `Permission denied: ${permissionDecision.reason}`;
-          } else if (permissionDecision.action === 'ask') {
+          } else if (!hookBlocked && permissionDecision.action === 'ask') {
             const approval = await this._approvalManager.waitForDecision(
               session.id,
               {
@@ -3070,7 +3107,19 @@ export class ChatOrchestrator {
             }
           }
 
-          if (!executeTool) {
+          if (hookBlocked) {
+            // AD-030: pre_tool_use заблокировал тул — исполнение не выполняется,
+            // модель получает ошибку-результат `hook.blocked` (как прочие ошибки
+            // тулов), цикл продолжается.
+            const hookReason = preHook?.reason ?? '';
+            toolResult = {
+              content: sm('hook.blocked', { hook: 'pre_tool_use', reason: hookReason }),
+              isError: true,
+              metadata: {
+                i18n: i18nMeta('hook.blocked', { hook: 'pre_tool_use', reason: hookReason }),
+              },
+            };
+          } else if (!executeTool) {
             this._eventBus.publish(session.id, 'permission.denied', {
               session_id: session.id,
               call_id: tcId,
@@ -3078,6 +3127,13 @@ export class ChatOrchestrator {
               arguments: toolArgs,
               reason: deniedReason,
               matched_rule: permissionDecision.matchedRule,
+            });
+            // AD-030: `permission_denied` — неблокирующий эмит рядом с событием
+            // сессии (аудит безопасности/уведомления ИБ).
+            this._hooks?.emitAsync('permission_denied', {
+              tool: toolName,
+              input: toolArgs,
+              ...(deniedReason ? { reason: deniedReason } : {}),
             });
             toolResult = buildDenyResult({
               reason: deniedReason ?? '',
@@ -3102,6 +3158,8 @@ export class ChatOrchestrator {
                   provider,
                   agentRegistry: this._agentRegistry,
                   sessionManager: this._sessionManager,
+                  // AD-089: funnel создания дочерней сессии (late-bound, если подключён).
+                  getRequestSessionService: this._getRequestSessionService ?? undefined,
                   projectStore: this._projectStore ?? undefined,
                   workspacesRoot: this._workspacesRoot,
                   // AD-075/AD-076: тулы управления проектом (workspace, репозитории).
@@ -3111,6 +3169,9 @@ export class ChatOrchestrator {
                   // AD-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
                   sshKeyStore: this._sshKeyStore ?? undefined,
                   eventBus: this._eventBus,
+                  // AD-030: шина хуков — `task`/`task-resume` эмитят
+                  // agent_spawned/agent_completed/agent_failed в саб-агенте.
+                  hooks: this._hooks ?? undefined,
                   contextOptimizer: this._optimizer ?? undefined,
                   // AD-046 §5: тул `skill` получает рантайм через ToolContext.extra
                   // (в ToolContext нет dataDir); саб-агенты — тот же объект.
@@ -3336,6 +3397,16 @@ export class ChatOrchestrator {
                 workspaceReady,
               ),
             );
+            // AD-030: `plan_approved` — неблокирующий эмит после утверждения
+            // плана. planContent читаем из свежего проекта только при наличии
+            // обработчиков (иначе лишний диск-IO и поведение не меняется).
+            if (this._hooks?.count('plan_approved')) {
+              const approvedProject = await this._loadProject(session);
+              this._hooks.emitAsync('plan_approved', {
+                sessionId: session.id,
+                planContent: buildPlanUpdatedContent(approvedProject?.plan ?? null),
+              });
+            }
           }
 
           // AD-075: смена рабочего каталога проекта в ходе (project_create/
@@ -3368,6 +3439,19 @@ export class ChatOrchestrator {
             const rebuiltSelection = rebuilt.select();
             tools = this._toolRegistry ? [...rebuiltSelection.builtin, ...rebuiltSelection.mcp] : undefined;
             finalSystemPrompt.stableToolCount = rebuiltSelection.builtin.length;
+          }
+
+          // AD-030: `post_tool_use` — событие «После выполнения тула». Эмитим
+          // только при реальном исполнении (deny и hook-блокировка не эмитят:
+          // для отказа есть `permission_denied`, блокировку фиксирует
+          // `pre_tool_use`), до `fs.changed`.
+          if (executeTool && toolDef) {
+            this._hooks?.emitAsync('post_tool_use', {
+              tool: toolName,
+              input: toolArgs,
+              output: toolResult,
+              duration: Date.now() - tcStartedMs,
+            });
           }
 
           // fs.changed: уведомляем UI об успешной мутации (после мид-ходового

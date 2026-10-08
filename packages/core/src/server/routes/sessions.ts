@@ -2,7 +2,7 @@ import { ReadableStream } from 'node:stream/web';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
-import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer } from '../../index.js';
+import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer, RequestSessionService } from '../../index.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey } from '@itphx/synth-shared';
 import type { Message, Session } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
@@ -38,6 +38,12 @@ export interface SessionRoutesDeps {
    * прежнее поведение core (502 REMOTE_UNAVAILABLE и т.п.).
    */
   getRemoteClient?: () => RemoteBackendClient | null;
+  /**
+   * AD-089: единый funnel создания сессий. Задан — `POST /` идёт через
+   * `requestSessionService.request` (эмит `session_requested`, единые правила);
+   * не задан — прежний прямой `SessionManager.createSession` (fallback).
+   */
+  requestSessionService?: RequestSessionService;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -246,7 +252,10 @@ export function createSessionRoutes(
       }, 400);
     }
 
-    const session = await sessionManager.createSession({
+    // AD-089: создание сессии — тоже событие. При заданном funnel идём через
+    // `RequestSessionService.request` (эмит `session_requested`, единые правила);
+    // иначе — прямой materialization-примитив `SessionManager.createSession`.
+    const sessionInput = {
       title: body.name || body.title || undefined,
       icon: body.icon ?? undefined,
       color: body.color ?? undefined,
@@ -255,8 +264,17 @@ export function createSessionRoutes(
       parentId: body.parent_id || body.parentId || undefined,
       sessionOrigin: body.session_origin || body.sessionOrigin || undefined,
       settings: { ...body.settings, agentRole: body.settings?.agentRole ?? await resolveDefaultAgent() },
-      userId: owner,
-    });
+    };
+    const created = deps.requestSessionService
+      ? await deps.requestSessionService.request(
+          { initiator: 'user', intent: 'explicit', ...sessionInput },
+          { userId: owner },
+        )
+      : await sessionManager.createSession({ ...sessionInput, userId: owner });
+    if (!created) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Не удалось создать сессию' } }, 500);
+    }
+    const session = created;
     // AD-075/D5: createSession сам проставляет ownerId из userId; выставляем
     // явно для совместимости и чтобы serializeSession отдавал owner_id.
     session.ownerId = owner;

@@ -44,6 +44,8 @@
 | AD | Решение | Статус | Файл |
 |----|---------|--------|------|
 | AD-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ | [ad-018-session-engine-selection.md](./ad-018-session-engine-selection.md) |
+| AD-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов (AD-086) — нет | ⚠️ | [ad-030-hooks-agent-events.md](./ad-030-hooks-agent-events.md) |
+| AD-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, journal)/UI; источники AD-051/052/086 — нет | ⚠️ | [ad-089-external-events-automation.md](./ad-089-external-events-automation.md) |
 
 ## Deprecated AD
 
@@ -58,7 +60,6 @@
 
 | AD | Решение |
 |----|---------|
-| AD-030 | Hooks для событий агента: [ad-030-hooks-agent-events.md](./ad-030-hooks-agent-events.md) |
 | AD-031 | [Verification синт](./ad-031-verification-agent.md) |
 | AD-032 | [Миграция хранения истории на PostgreSQL](./ad-032-history-storage-postgresql.md) (логическая модель уже в JSON — AD-005/AD-033) |
 | AD-037 | [Security step перед коммитом](./ad-037-commit-security-step.md) |
@@ -98,4 +99,3 @@
 | AD-085 | [Мультимодальный ввод (звук, изображения, видео)](./ad-085-multimodal-input.md): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер |
 | AD-086 | [Расширяемость Synth: плагины, editions, вклад в mainline и внешние сервисы-надстройки](./ad-086-extensibility-plugins-editions.md): Extension API, editions, contribution flow, add-ons (первый случай — Telegram gateway) |
 | AD-088 | [Работа через HTTP-прокси (единый egress-слой)](./ad-088-http-proxy.md): прокси/`no_proxy`/CA, аутентификация Basic/NTLM/Negotiate (Kerberos) |
-| AD-089 | [Synth как платформа внешних событий и автоматизации](./ad-089-external-events-automation.md): Event/Binding/Router, приём внешних событий на hook-шине |

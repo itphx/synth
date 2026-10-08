@@ -17,6 +17,7 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('tsm');
     expect(defaultConfig).toHaveProperty('context');
     expect(defaultConfig).toHaveProperty('summarization');
+    expect(defaultConfig).toHaveProperty('events');
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {
@@ -114,5 +115,15 @@ describe('defaultConfig', () => {
 
   it('security.secretKey по умолчанию пуст (AD-076: файл master.key)', () => {
     expect(defaultConfig.security.secretKey).toBe('');
+  });
+
+  it('events по умолчанию: enabled, bound, 24h, 30 дней, все источники (AD-089)', () => {
+    expect(defaultConfig.events).toEqual({
+      enabled: true,
+      defaultMode: 'bound',
+      ephemeralTtl: '24h',
+      journalRetentionDays: 30,
+      allowedSources: [],
+    });
   });
 });

@@ -18,6 +18,7 @@ import { ToolsDisabledSettings } from "./ToolsDisabledSettings"
 import { SkillsUserSettings } from "./SkillsUserSettings"
 import { SkillsAdminSettings } from "./SkillsAdminSettings"
 import { CommandsSettings } from "./CommandsSettings"
+import { EventsAdminSettings } from "./EventsAdminSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
 import { ProjectsPanel } from "../admin/ProjectsPanel"
@@ -50,6 +51,7 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "builtinTools", labelKey: "settings.category.builtinTools", icon: "terminal-box", roles: ["ADMIN"] },
   { id: "skillsAdmin", labelKey: "settings.category.skillsAdmin", icon: "book-open", roles: ["ADMIN"] },
   { id: "commands", labelKey: "settings.category.commands", icon: "terminal-box", roles: ["ADMIN"] },
+  { id: "eventsAdmin", labelKey: "settings.category.events", icon: "send-plane", roles: ["ADMIN"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
   { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
   { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
@@ -175,6 +177,7 @@ export const SettingsModal = () => {
             {settingsPage === "skills" && <SkillsUserSettings />}
             {settingsPage === "skillsAdmin" && <SkillsAdminSettings />}
             {settingsPage === "commands" && <CommandsSettings />}
+            {settingsPage === "eventsAdmin" && <EventsAdminSettings />}
             {settingsPage === "security" && <SecuritySettings />}
             {settingsPage === "dashboard" && <DashboardPanel />}
             {settingsPage === "sessions" && <SessionsPanel />}

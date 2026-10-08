@@ -334,6 +334,17 @@ export const SYSTEM_MESSAGES = {
   'git.ssh_key_required': 'SSH key is required for repository "{path}"',
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
+
+  // --- Внешние события и хуки (AD-030 / AD-089) ---
+  'event.ingested': 'Event {id} ingested from source "{source}"',
+  'event.routed.bound': 'Event routed to bound session {sessionId}',
+  'event.routed.ephemeral': 'Event routed to ephemeral session (agent "{agentTemplate}")',
+  'event.routed.queue': 'Event queued for {owner}: {reason}',
+  'event.routed.drop': 'Event dropped: {reason}',
+  'event.binding.not_found': 'Event binding not found for "{key}"',
+  'event.source_not_allowed': 'Event source "{source}" is not allowed',
+  'event.duplicate': 'Duplicate event ignored: {dedupKey}',
+  'hook.blocked': 'Hook "{hook}" blocked execution: {reason}',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

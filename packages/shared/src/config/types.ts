@@ -241,6 +241,24 @@ export const commandsConfigSchema = z.object({
   maxRenderedBytes: z.number().int().min(1).default(200_000),
 });
 
+// --- Внешние события (AD-089) ---
+
+/**
+ * AD-089: конфигурация приёма внешних событий.
+ * - `enabled` — мастер-выключатель приёма событий;
+ * - `defaultMode` — режим по умолчанию, если Router не выбрал иной;
+ * - `ephemeralTtl` — TTL ephemeral-сессий по умолчанию;
+ * - `journalRetentionDays` — срок хранения журнала событий (0 — без ограничения);
+ * - `allowedSources` — белый список источников (пусто — разрешены все).
+ */
+export const eventsConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  defaultMode: z.enum(['bound', 'ephemeral']).default('bound'),
+  ephemeralTtl: z.string().default('24h'),
+  journalRetentionDays: z.number().int().min(0).default(30),
+  allowedSources: z.array(z.string()).default([]),
+});
+
 // --- Проектные инструкции (AD-069) ---
 
 /**
@@ -476,6 +494,7 @@ export const synthConfigSchema = z.object({
   tools: toolsConfigSchema.default({}),
   skills: skillsConfigSchema.default({}),
   commands: commandsConfigSchema.default({}),
+  events: eventsConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
@@ -504,6 +523,7 @@ export type ToolsConfig = z.infer<typeof toolsConfigSchema>;
 export type ToolsDisabledConfig = z.infer<typeof toolsDisabledConfigSchema>;
 export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
 export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
+export type EventsConfig = z.infer<typeof eventsConfigSchema>;
 export type InstructionSourceConfig = z.infer<typeof instructionSourceConfigSchema>;
 export type InstructionsLazyConfig = z.infer<typeof instructionsLazyConfigSchema>;
 export type InstructionsFetchConfig = z.infer<typeof instructionsFetchConfigSchema>;

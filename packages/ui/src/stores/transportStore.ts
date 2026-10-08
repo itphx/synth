@@ -489,6 +489,14 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
+      // AD-089: внешнее событие материализовано в сессию (ingress). Данные
+      // сессии могли измениться — полный refresh; сами изменения приходят
+      // отдельными событиями очереди/сообщений.
+      case 'event.routed': {
+        refreshSessionFromApi(sid)
+        break
+      }
+
       // fs.changed: ядро опубликовало после успешного мутирующего тула.
       // Обновляем дерево Files (debounce) и реестр Git-вкладки. project_id
       // берём из payload, с fallback на проект сессии.

@@ -98,6 +98,10 @@ interface SerializedSession {
   cache_hit_rate?: number;
   created_at: string;
   updated_at: string;
+  /** AD-089: время авто-архивации ephemeral-сессии. */
+  expires_at?: string;
+  /** AD-089: время архивации сессии. */
+  archived_at?: string;
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
@@ -308,6 +312,8 @@ function serializeSession(session: Session): SerializedSession {
     cache_hit_rate: session.cacheHitRate,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
+    expires_at: session.expiresAt,
+    archived_at: session.archivedAt,
     input_tokens: session.inputTokens,
     output_tokens: session.outputTokens,
     total_tokens: session.totalTokens,
@@ -378,6 +384,8 @@ function deserializeSession(data: SerializedSession): Session {
     cacheHitRate: data.cache_hit_rate,
     createdAt: data.created_at,
     updatedAt: data.updated_at,
+    expiresAt: data.expires_at,
+    archivedAt: data.archived_at,
     inputTokens: data.input_tokens,
     outputTokens: data.output_tokens,
     totalTokens: data.total_tokens,

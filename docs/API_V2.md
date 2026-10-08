@@ -590,10 +590,29 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 
 ### 5.26 Events — `оба`
 
-| Метод | Путь | RBAC | Назначение |
-|---|---|---|---|
-| GET | `/api/v2/events` | auth | Глобальный SSE-поток `BusEvent` (фоллбек WS) |
-| WS | `/ws/events` | auth | Основной real-time-канал (см. §3) |
+Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приём внешних
+событий и управление привязками (AD-089; единая фабрика `createEventRoutes` для core
+и backend):
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/events` | оба | auth | Глобальный SSE-поток `BusEvent` (фоллбек WS) |
+| WS | `/ws/events` | оба | auth | Основной real-time-канал (см. §3) |
+| POST | `/api/v2/events` | оба | auth + rate limit | Приём нормализованного внешнего события; тело `{source, type, payload?, identity?, dedupKey?, ts?}` (`eventIngestSchema`) → `201 {event, decision, sessionId}` (`sessionId` — id сессии или `null` при `drop`); невалидное тело → 400 `VALIDATION_ERROR`, сбой материализации → 500 `INTERNAL_ERROR` (решение всё равно пишется в журнал) |
+| GET | `/api/v2/events/bindings` | оба | auth | Список привязок `{bindings}` |
+| POST | `/api/v2/events/bindings` | оба | ADMIN | Upsert привязки по `source`+`chatKey`/`threadKey` (`eventBindingInputSchema`): `{source, chatKey?, threadKey?, sessionId?, mode: bound\|ephemeral\|queue, agentTemplate?, project?}`; совпавшая по ключу запись заменяется (id сохраняется) → 200, иначе 201 |
+| DELETE | `/api/v2/events/bindings/:id` | оба | ADMIN | Удалить привязку → 204; нет записи → 404 `NOT_FOUND` |
+| GET | `/api/v2/events/journal` | оба | auth | Последние записи журнала решений `{entries}`; `?limit=` (default 50, cap 500) |
+
+`identity` — `{principalId?, chatKey?, threadKey?, roles?}`. `dedupKey`/`ts` опциональны:
+`EventIngress` нормализует событие (id `evt_<uuid>`, дефолтный dedup-ключ по
+source/type/ключу/payload). RBAC managed: приём — `requireAuth` + rate limit (120/мин),
+мутации привязок — `requireAdmin`, чтение — `requireAuth`; в core — единый `requireAuth`.
+Цепочка обработки и журнал — `docs/ARCHITECTURE.md` («Внешние события и хуки»), AD-089.
+
+> `POST /api/v2/sessions` теперь идёт через единый funnel `RequestSessionService`
+> (`engine/events/request-session.ts`, AD-089): эмит `session_requested` + создание
+> сессии. Внешний контракт эндпоинта не изменился.
 
 ---
 

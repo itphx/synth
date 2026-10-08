@@ -226,3 +226,43 @@ synth-backend ◄── WebSocket (control) ──► synth-runner ◄── HTT
 - Переключение движка без потери контекста
 - Перезапуск движка без потери истории
 - Очередь сообщений на бэкенде, доставка по одной
+
+## Внешние события и хуки
+
+Ядро AD-030 (min) + AD-089: события агента и внешние события идут через общую
+hook-шину, а создание сессий сведено в один funnel.
+
+- **`HookBus`** (`engine/hooks/hook-bus.ts`) — шина хуков жизненного цикла агента
+  (`session_requested`, `external_event`, …); async-хуки с таймаутом
+  (`HOOK_ASYNC_TIMEOUT_MS`), результат может заблокировать событие (`blocked`/`reason`).
+  Это фундамент; Plugin SDK и загрузка плагинов (AD-086) не реализованы.
+- **`EventRouter`** (`engine/events/event-router.ts`) — чистое решение по событию
+  плюс запись в журнал. Порядок `decide`: `allowedSources` (не в списке → `drop`) →
+  dedup по `dedupKey` (ленивый кэш из журнала) → явный `EventBinding` по
+  `threadKey`/`chatKey` → зарегистрированные `RouteRuleProvider` (первый непустой) →
+  фоллбек `drop no_route`. Все дропы «аудируемые» — событие не теряется молча.
+- **`EventBinding`** (`bound | ephemeral | queue`) связывает внешний адрес
+  (`source` + `chatKey`/`threadKey`) с сессией/шаблоном; хранится в
+  `EventBindingStore`, решения — в `EventJournalStore` (журнал, AD-005).
+- **`RequestSessionService`** (`engine/events/request-session.ts`) — единый funnel
+  создания сессии: `request` (явное создание из UI/CLI/агента, эмит
+  `session_requested`) и `handleEvent` (`external_event` → `decide` → материализация
+  `deliver` → `record`). Через него идёт и `POST /api/v2/sessions`; внешний контракт
+  эндпоинта не изменился.
+- **`EventIngress`** (`engine/events/ingest.ts`) — точка приёма: нормализует вход в
+  `SynthEvent` (id `evt_<uuid>`, дефолтный dedup-ключ) и передаёт в funnel.
+- **Ephemeral-сессии** для внешних событий получают `expiresAt` из `ttl`
+  (`config.events.ephemeralTtl`, default `24h`); очистка — `startEphemeralSweeper`.
+  Режим `queue` доставляется как `defer` (сообщение в очередь без старта процессора).
+
+Цепочка:
+
+```text
+внешнее событие → EventIngress (SynthEvent) → RequestSessionService
+  → HookBus (external_event) → EventRouter.decide → материализация
+  → сессия (bound/ephemeral/queue) → deliver → журнал/UI-событие
+```
+
+API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `docs/CONFIGURATION.md`
+(секция `events`). Источники/интеграции AD-051/052/086 (шедулер, публичный API,
+плагины) не реализованы.

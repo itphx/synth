@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, SynthEvent, RouteDecision } from '@itphx/synth-shared'
 import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry } from '@itphx/synth-shared/types'
 
 // Реэкспорт общих контрактов (AD-071): без локальных дублей.
@@ -1799,6 +1799,41 @@ export const synthApi = {
       { method: 'DELETE' },
     )
   },
+
+  // --- Внешние события (AD-089): биндинги и журнал ---
+  async listEventBindings(): Promise<{ bindings: EventBinding[] }> {
+    return fetchJSON<{ bindings: EventBinding[] }>(`${BASE_URL}/events/bindings`)
+  },
+
+  /** Upsert привязки по `source` + `chatKey`/`threadKey` (id сохраняется на сервере). */
+  async upsertEventBinding(input: EventBindingInputRequest): Promise<EventBinding> {
+    return fetchJSON<EventBinding>(`${BASE_URL}/events/bindings`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  async deleteEventBinding(id: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/events/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** Последние записи журнала обработки внешних событий (default 50, cap 500 на сервере). */
+  async getEventJournal(limit?: number): Promise<{ entries: EventJournalEntry[] }> {
+    const qs = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : ''
+    return fetchJSON<{ entries: EventJournalEntry[] }>(`${BASE_URL}/events/journal${qs}`)
+  },
+}
+
+/**
+ * AD-089: запись журнала внешних событий. `EventJournalEntry` живёт в core и в
+ * shared не экспортируется — локальный тип повторяет серверную форму.
+ */
+export interface EventJournalEntry {
+  /** ISO-8601. */
+  ts: string
+  event: SynthEvent
+  decision?: RouteDecision
+  error?: string
 }
 
 export interface LlmGatewaySettings {

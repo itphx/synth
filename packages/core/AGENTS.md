@@ -60,6 +60,10 @@
   (`engine/llm-error.ts`); строки движка — по ключам `shared/i18n` (AD-041).
 - События сессии — локальный `EventBus`; UI слушает через EventHub/TransportClient
   (`/ws/events`) с SSE-фоллбеком (AD-008/009/024).
+- Создание сессии — через единый funnel `RequestSessionService`
+  (`engine/events/request-session.ts`): явный запрос — `direct`, внешнее событие —
+  через `EventRouter`; `SessionManager.createSession` — materialization-примитив
+  (fork/import/материализация), не для прямых запросов (AD-089).
 
 ## Гибрид (core-специфика)
 
@@ -87,7 +91,7 @@
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
-  `skill-scope`, `git`, `ssh-keys`.
+  `skill-scope`, `git`, `ssh-keys`, `events`.
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
@@ -129,6 +133,15 @@
   бинарников (`git`/`rg`/`sh`, fail-open, кэш) и карта `TOOL_RUNTIME_DEP`; отсутствие
   программы даёт `unavailable(dependency)` (AD-078), тулы из реестра не удаляются.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
+- `engine/hooks/*` — `HookBus` (AD-030): ядровая in-process шина хуков
+  (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от
+  session-`EventBus`; эмиты `pre_tool_use`/`post_tool_use`/`plan_approved`/
+  `permission_denied`/`agent_spawned|completed|failed`/`session_start|end`.
+- `engine/events/*` — AD-089: `EventRouter` (`allowedSources` → dedup → `EventBinding`
+  → `RouteRuleProvider` → `drop no_route`), `RequestSessionService` (единый funnel:
+  explicit → `direct`, внешние → Router), `EventIngress` (ingest/нормализация),
+  `RouteRuleProvider` (seam), `EventDelivery` (`run`/`defer`), `types`. Хуки не
+  эмитят — это делает `RequestSessionService`/оркестратор.
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
@@ -136,9 +149,13 @@
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`,
   `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
-  (`secrets/ssh-keys`, шифрование at-rest, AD-076); `migrations.ts` — идемпотентная
-  разовая миграция снапшотов `mcpDefaultOn`/`skillsDefaultOn` (маркер
-  `session-scope-snapshots-v1`).
+  (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`
+  (`events/bindings.json`) и `EventJournalStore` (`events/journal.jsonl`, AD-089);
+  `migrations.ts` — идемпотентная разовая миграция снапшотов
+  `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).
+- `sessions/ephemeral.ts` — ephemeral TTL (AD-089): `parseTtl`
+  (`30s`/`15m`/`24h`/`7d`), `startEphemeralSweeper` (sweep 60 c, unref); поля
+  `Session.expiresAt`/`archivedAt`, списки сессий по умолчанию без архива.
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`.
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote.
