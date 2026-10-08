@@ -111,18 +111,29 @@
 (`ChatOrchestrator._sessionMessagesToLlm`, `withAttribution`) трактовал его как «чужое» и
 отдавал модели как `[anonymous]: <текст>` — агент не понимал, что это плановое задание и от кого оно.
 
-**Решение.** Сообщения источника `cron` авторизуются системным пользователем **`Scheduler`**
-(`Message.author = 'Scheduler'`), а контент несёт описание: это планировщик Synth, он запустил
-плановое задание «{name}», ниже — текст задания. Шаблон описания — **системный prompt-ассет**
-`packages/core/prompts/system/SCHEDULER.{ru,en}.md` (рядом с `PARTICIPANTS_NOTICE`/`ROLES_DESCRIPTION`),
-читается через `ContextConfig.getSchedulerNotice(language)`; подстановка `{name}` (fallback —
-`payload.scheduleId`) и выбор языка сессии (`session.settings.language ?? 'ru'`) — в
-`buildSchedulerNotice` (`engine/scheduler/notice.ts`). В `metadata` добавляются
-`scheduler:true`, `schedule_id`, `schedule_name`. В LLM-контексте сообщение получает
-атрибуцию `{Scheduler}: <описание>\n\n<текст задания>`.
+**Решение (вариант A).** Сообщения источника `cron`:
 
-**Статус:** ✅ реализовано (core + backend `deliver`, тесты; проверено dev-smoke — сообщение
-в очереди имеет `author='Scheduler'` и корректный контент/метаданные).
+- **Контент — чистый текст задания** (без служебных префиксов); `Message.author = 'Scheduler'`,
+  `metadata = { source:'cron', scheduler:true, schedule_id, schedule_name }`. В LLM-контексте
+  сообщение остаётся user-репликой и получает атрибуцию `{Scheduler}: <текст задания>`
+  (`_sessionMessagesToLlm`).
+- **Описание «кто такой Scheduler»** — статический **системный prompt-блок** `scheduler`
+  (tier `context`, order 16, `provenance: prompts/system/SCHEDULER`) из ассета
+  `packages/core/prompts/system/SCHEDULER.{ru,en}.md` (`ContextConfig.getSchedulerNotice`),
+  собирается `SystemPromptComposer`. Включается **в сессиях с включённым расписанием**: есть
+  scheduler-сообщение в истории **или** на сессию нацелено включённое расписание (bound/queue) —
+  резолвер `ScheduleStore.hasEnabledTargetFor(sessionId)` через `OrchestratorOptions.isSchedulerActive`.
+  При `session.settings.systemPrompt` override блок не добавляется.
+- **UI** — центрированный служебный блок `Notice variant="scheduler"` (как сводка/отладка):
+  иконка `calendar-schedule`, подпись **«Планировщик · <имя задания>»** (`schedule_name`),
+  время, тело = текст задания; действия — полный набор как у user-сообщения
+  (копировать/закрепить/удалить/повторить/ветка/отладка). Признак в UI — `metadata.scheduler === true`
+  (`ChatMessage`), `MessageHeader.resolveAuthor()` для обычных user-сообщений не менялся.
+
+**Статус:** ✅ реализовано (core + backend + UI, тесты; проверено dev-smoke: сообщение
+имеет `author='Scheduler'` и чистый контент, блок `scheduler` есть в манифесте промпта
+нацеленной сессии и отсутствует у сессии без расписания; в браузере рендерится
+`group "Планировщик · Тест"` с полным набором действий).
 
 ## Технический долг: мульти-инстанс, синхронизация и идемпотентность
 

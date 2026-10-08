@@ -2032,3 +2032,20 @@
 - **Замечания:** в чартах `backend.replicaCount: 1`, поэтому сейчас дублей нет — тех.долг проявится при масштабировании. В dev-инстансе остаётся пользовательское расписание «Тест» (`*/5`), не трогал.
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** `b2fd4e0` (AD/AGENTS) + `4d8272d` (код/тесты/журнал).
+
+## 2026-10-08 — AD-051: сообщения планировщика — Notice-рендер + системный блок (вариант A)
+- **Задача:** довести отображение сообщений планировщика: не от имени пользователя, а системного `Scheduler`; центрированное оформление как у суммаризатора; описание — статический системный блок; решения пользователя: подпись «Планировщик · <имя задания>», чистый текст, все кнопки как у user, блок в сессиях с включённым расписанием.
+- **Тип:** feature (core+backend+prompt+UI)
+- **Исполнитель:** @orchestrator (investigate/дизайн) → @fixer ×2 (core/промпт; UI) → верификация @orchestrator (тесты, dev-smoke, Playwright)
+- **Результат:** PASS
+- **Диагностика:** UI-ветка выбиралась по `role:'user'` и `MessageHeader.resolveAuthor()` всегда брал текущего залогиненного → «я»; `metadata.scheduler` не использовался.
+- **Что сделано:**
+  - **core/контент:** `eventToMessage` для cron — `author:'Scheduler'`, `content` = чистый текст задания, metadata `scheduler/schedule_id/schedule_name`; удалён per-message notice (`EventToMessageOptions`, `engine/scheduler/notice.ts`, вызовы в deliver core/backend).
+  - **prompt:** `prompts/system/SCHEDULER.{ru,en}.md` — статическое описание Scheduler (без `{name}`); `ContextConfig.getSchedulerNotice`.
+  - **Composer/оркестратор:** `ComposerContext.schedulerActive`; блок `scheduler` (context, order 16, provenance `prompts/system/SCHEDULER`) при `!override && schedulerActive`; `OrchestratorOptions.isSchedulerActive` + `_resolveSchedulerActive` (scheduler-сообщение в истории ИЛИ резолвер); `ScheduleStore.hasEnabledTargetFor(sessionId)`; сшивка в core/backend.
+  - **UI:** вариант `Notice 'scheduler'` (иконка `calendar-schedule`); в `ChatMessage` ветка `metadata.scheduler` → центрированный Notice с подписью «Планировщик · <имя задания>», временем, телом = текст задания и полным набором действий как у user; i18n `chat.notice.scheduler`/`schedulerNamed` ru/en.
+  - **docs:** AD-051 (раздел «Идентичность сообщений планировщика») приведён к финальному дизайну; строка в корневом AGENTS.md.
+- **Проверки:** typecheck 6/6; lint 0 errors; тесты shared 197 · core **2559** · ui **1024** · backend 347. Dev-smoke (dev перезапущен): новое срабатывание расписания «Тест» → сообщение `author="Scheduler"`, `content="Сколько время?"` (чисто); `GET /sessions/:id/prompt` → блок `scheduler` (context/order 16/provenance) присутствует у нацеленной сессии и отсутствует у сессии без расписания. Playwright: центрированный `group "Планировщик · Тест"` с временем и кнопками Копировать/Ветка/Включить/Закрепить/Удалить/Повторить.
+- **Замечания:** резолвер `isSchedulerActive` читает `ScheduleStore` на ход (файл `schedules.json`) — при масштабировании/оптимизации закэшировать; отклонение от исходного «включённым расписанием» учтено (история-сообщение ИЛИ enabled-target). Dev оставлен запущенным (пользовательское расписание «Тест» активно).
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** нет (ожидает явной просьбы пользователя).
