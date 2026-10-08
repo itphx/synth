@@ -1981,4 +1981,4 @@
   - `fork`/`import`/`transfer`/`chat` — materialization (создание сессий сведено к funnel постепенно).
   - Источники AD-051 (шедулер), AD-052 (публичный API), AD-086 (плагины) не реализованы.
 - **Проверки:** typecheck / lint / test — зелёные (по отчёту исполнителя); тесты по подсистеме — `events.test.ts`, `ingest.test.ts`, `request-session.test.ts`, `orchestrator-hooks.test.ts`.
-- **Коммит:** TBD (будет заполнен позже).
+- **Коммит:** `ed1351b` (фактический хеш; запись была с `TBD`).
