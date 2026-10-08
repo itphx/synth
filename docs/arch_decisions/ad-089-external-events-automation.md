@@ -197,6 +197,7 @@ type RouteDecision =
   `forkSession`/backend `/import`/`remote/transfer.ts`/`chat.ts` — materialization.
 - **Источник событий — cron (AD-051, минимальный срез):** `SchedulerService` + `SchedulerRuleProvider`
   публикуют `{source:'cron', type:'schedule_fired'}` через `EventIngress`; `ScheduleStore`/API `/api/v2/schedules`/UI-вкладка «Шедулер».
+  Сообщения авторизуются системным пользователем `Scheduler` (описание — `prompts/system/SCHEDULER.{lang}.md`, AD-051).
 - **Хуки (AD-030, min):** `HookBus` + эмиты жизненного цикла (`pre/post_tool_use`, `session_requested`, `external_event`, …).
 
 **Не реализовано (остаток):**
@@ -204,7 +205,8 @@ type RouteDecision =
 - Источники AD-052 (публичный API/ключи/webhooks) и AD-086 (add-on + Telegram gateway → `message_received`);
 - Plugin SDK и загрузка плагинов ([AD-030](./ad-030-hooks-agent-events.md));
 - развилки v1: `queue` (defer без старта процессора), `agentTemplate` → `settings.agentRole` (резолвинг через AgentRegistry — задел);
-- Job-история/catch-up/пайплайны ([AD-051](./ad-051-scheduler-pipelines.md) → [AD-059](./ad-059-pipeline-automation.md)).
+- Job-история/catch-up/пайплайны ([AD-051](./ad-051-scheduler-pipelines.md) → [AD-059](./ad-059-pipeline-automation.md));
+- **мульти-инстанс синхронизация планировщика** (leader election + атомарный dedup-claim) — тех.долг [AD-051](./ad-051-scheduler-pipelines.md#технический-долг-мульти-инстанс-синхронизация-и-идемпотентность).
 
 **Переиспользуемые кирпичи:**
 

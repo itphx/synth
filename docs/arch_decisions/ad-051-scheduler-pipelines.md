@@ -1,6 +1,6 @@
 # AD-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⚠️ Частично — реализован минимальный срез (cron/interval-источник событий через AD-089); Job-история, catch-up, UI и пайплайны — нет.
+> **Статус:** ⚠️ Частично — реализован минимальный срез (cron/interval-источник событий через AD-089, идентичность сообщений `Scheduler`); Job-история, catch-up, пайплайны — нет; мульти-инстанс/идемпотентность — тех.долг.
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D6, идея 6 + Roadmap Фаза 2; прототип
 > `~/dev/aic/t11/synth/app/scheduler.py`).
@@ -21,12 +21,9 @@
 
 ## Контекст
 
-### Что уже есть
+### Исходное состояние (до реализации среза)
 
-- UI-заглушка вкладки «Шедулер»: `packages/ui/src/components/panels/RightPanel.tsx`
-  (`{ id: 'scheduler', icon: 'calendar-schedule', labelKey: 'rightPanel.tab.scheduler' }` + placeholder),
-  i18n `rightPanel.scheduler.placeholder` («Шедулер — в разработке») в `packages/ui/src/lib/i18n/messages/`.
-- Кода/cron в Synth нет; зависимостей `node-cron`/`croner` в пакетах нет.
+- Вкладка «Шедулер» (`RightPanel.tsx`) была заглушкой; cron-кода и зависимостей `node-cron`/`croner` не было.
 - `packages/core/src/queue/` (`processor.ts`) — это **очередь сообщений**, не шедулер.
 - В прототипе t11 — полноценный `~/dev/aic/t11/synth/app/scheduler.py` (croniter, API, catch-up).
 
@@ -96,15 +93,63 @@
 - Сущность **Job** и история запусков (снимок target, результат/ошибка,
   старт/финиш), retention.
 - **Catch-up** после простоя процесса и лимит параллельных запусков.
-- UI-интерфейс правил и истории (замена placeholder в `RightPanel.tsx`).
+- UI-интерфейс правил и истории (замена placeholder в `RightPanel.tsx`) — сама вкладка уже рабочая, остаётся история Job'ов.
 - Rate limit на принудительный запуск (`POST /:id/run`) — в core-фабрике нет
   отдельного guard'а под `run` (только общий `writeGuard`).
 - **Пайплайны** (AD-059) — композиция шагов поверх расписаний.
 - Где живёт планировщик в гибриде (сервер vs локальный core, AD-042).
+- **Мульти-инстанс/идемпотентность** — см. раздел «Технический долг» ниже.
 
 Проверено: `pnpm typecheck` (6/6), `pnpm lint` (0 errors), `pnpm test` (все
 зелёные), новые тесты — cron/duration/store/scheduler/route-provider/routes
 (core) и RBAC/wiring роутов (backend).
+
+## Идентичность сообщений планировщика (системный пользователь Scheduler)
+
+**Проблема.** Сообщение, доставляемое планировщиком в сессию, создавалось как обычное
+`user`-сообщение **без `author`**. В сессии с заданным `userId` оркестратор
+(`ChatOrchestrator._sessionMessagesToLlm`, `withAttribution`) трактовал его как «чужое» и
+отдавал модели как `[anonymous]: <текст>` — агент не понимал, что это плановое задание и от кого оно.
+
+**Решение.** Сообщения источника `cron` авторизуются системным пользователем **`Scheduler`**
+(`Message.author = 'Scheduler'`), а контент несёт описание: это планировщик Synth, он запустил
+плановое задание «{name}», ниже — текст задания. Шаблон описания — **системный prompt-ассет**
+`packages/core/prompts/system/SCHEDULER.{ru,en}.md` (рядом с `PARTICIPANTS_NOTICE`/`ROLES_DESCRIPTION`),
+читается через `ContextConfig.getSchedulerNotice(language)`; подстановка `{name}` (fallback —
+`payload.scheduleId`) и выбор языка сессии (`session.settings.language ?? 'ru'`) — в
+`buildSchedulerNotice` (`engine/scheduler/notice.ts`). В `metadata` добавляются
+`scheduler:true`, `schedule_id`, `schedule_name`. В LLM-контексте сообщение получает
+атрибуцию `{Scheduler}: <описание>\n\n<текст задания>`.
+
+**Статус:** ✅ реализовано (core + backend `deliver`, тесты; проверено dev-smoke — сообщение
+в очереди имеет `author='Scheduler'` и корректный контент/метаданные).
+
+## Технический долг: мульти-инстанс, синхронизация и идемпотентность
+
+**Проблема.** Планировщик рассчитан на **один активный процесс-владелец**: тикер
+`SchedulerService` и хранилища `ScheduleStore`/`EventJournalStore` локальны, а их `AsyncLock`
+— внутрипроцессный. При нескольких репликах backend с общим `dataDir` каждая крутит свой тикер
+и в одну и ту же минуту генерирует событие с **одинаковым** `dedupKey`
+(`cron:<id>:<минута>`); дедуп в `EventRouter` — in-memory `Set`, инициализируемый **один раз**
+из `journal.jsonl` и не обновляемый по чужим записям, поэтому **все реплики проходят** →
+дубли сессий/сообщений, а по журналу — N записей. Дополнительно: конкурентные `markRun` теряют
+`nextRunAt` (last-write-wins), а при **разных** dataDir на реплику расписания и журналы
+расходятся. Сейчас в чартах `backend.replicaCount: 1` (и `charts/synth`, и `synth-deploy`),
+поэтому на текущем деплое проблемы нет.
+
+**Решение (план):**
+1. **Один владелец-лидер** — leader election: K8s `Lease` (`coordination.k8s.io`), либо
+   отдельный Deployment планировщика с `replicas: 1`, либо `scheduler.enabled:false` на
+   не-лидере; после AD-032 — Postgres advisory lock. `SchedulerService` стартует только у лидера.
+2. **Атомарный claim** — сделать дедуп авторитетным и общим: интерфейс
+   `DedupStore.tryClaim(dedupKey): Promise<boolean>` (Postgres unique-index / Redis `SET NX` /
+   `open(O_CREAT|O_EXCL)` на shared FS) вместо advisory-`Set` в `EventRouter`;
+   `SchedulerService` публикует событие только при выигранном claim.
+3. **Межпроцессная сериализация мутаций** `ScheduleStore` (advisory lock / CAS по версии),
+   чтобы не терять `nextRunAt`.
+
+**Статус:** ⏳ не реализовано (зафиксировано как тех.долг; вернуться при масштабировании
+backend / после AD-032). Связано с открытым вопросом «где живёт планировщик в гибриде» (AD-042).
 
 ## Открытые вопросы
 
