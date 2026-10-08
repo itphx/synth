@@ -363,7 +363,8 @@ export class ContextConfig {
   }
 
   /**
-   * AD-051: notice планировщика (системный пользователь «Scheduler»).
+   * AD-051: статическое описание системного пользователя «Scheduler»
+   * (prompt-блок `scheduler`, включается в сессиях с активным расписанием).
    * Файлы: prompts/system/SCHEDULER.{lang}.md — только локализованные
    * (базового SCHEDULER.md нет). Override через {userDataDir}/user/system/ —
    * стандартный механизм system-категории, проверяется первым.

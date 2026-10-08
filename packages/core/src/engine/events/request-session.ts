@@ -50,28 +50,18 @@ export function eventToMessageText(event: SynthEvent): string {
   return typeof serialized === 'string' ? serialized : '';
 }
 
-/** AD-051: опции сборки сообщения из события (notice планировщика). */
-export interface EventToMessageOptions {
-  /**
-   * Системный notice планировщика (системный пользователь «Scheduler»),
-   * подставляется перед текстом cron-события. Для остальных источников
-   * игнорируется.
-   */
-  schedulerNotice?: string;
-}
-
 /**
  * Собирает user-сообщение из события (единый формат для `deliver` core/backend).
  *
- * AD-051: для `source === 'cron'` сообщение помечается автором `Scheduler`, а
- * перед текстом ставится notice планировщика (если передан). В `metadata`
- * добавляются `scheduler`/`schedule_id`/`schedule_name`. Для прочих источников
+ * AD-051: для `source === 'cron'` сообщение помечается автором `Scheduler`, а в
+ * `metadata` добавляются `scheduler`/`schedule_id`/`schedule_name`; `content` —
+ * чистый текст задания без описания (описание «кто такой Scheduler» — в
+ * статическом system-блоке `scheduler` промпта). Для прочих источников
  * поведение прежнее (автор не задаётся).
  */
-export function eventToMessage(event: SynthEvent, opts?: EventToMessageOptions): Message {
-  const text = eventToMessageText(event);
+export function eventToMessage(event: SynthEvent): Message {
+  const content = eventToMessageText(event);
   const isCron = event.source === 'cron';
-  const content = isCron && opts?.schedulerNotice ? `${opts.schedulerNotice}\n\n${text}` : text;
 
   const metadata: Record<string, unknown> = {
     source: event.source,

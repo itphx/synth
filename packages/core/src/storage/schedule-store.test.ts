@@ -53,6 +53,24 @@ describe('ScheduleStore (AD-051 / AD-089)', () => {
     expect(await store.get('sch_x')).toBeNull();
   });
 
+  it('hasEnabledTargetFor: включённое bound/queue → true; disabled/ephemeral/чужая сессия → false', async () => {
+    await store.create(input({ target: { mode: 'bound', sessionId: 's1' } }));
+    await store.create(input({ name: 'q', target: { mode: 'queue', sessionId: 's2' } }));
+    await store.create(
+      input({ name: 'd', enabled: false, target: { mode: 'bound', sessionId: 's3' } }),
+    );
+    await store.create(input({ name: 'e', target: { mode: 'ephemeral', agentTemplate: 't' } }));
+
+    expect(await store.hasEnabledTargetFor('s1')).toBe(true);
+    expect(await store.hasEnabledTargetFor('s2')).toBe(true);
+    expect(await store.hasEnabledTargetFor('s3')).toBe(false);
+    expect(await store.hasEnabledTargetFor('s4')).toBe(false);
+  });
+
+  it('hasEnabledTargetFor: пустой store → false', async () => {
+    expect(await store.hasEnabledTargetFor('s1')).toBe(false);
+  });
+
   it('update сливает патч и обновляет updatedAt', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));

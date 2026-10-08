@@ -342,26 +342,29 @@ describe('ContextConfig.getSchedulerNotice (AD-051)', () => {
     await rm(userDataDir, { recursive: true, force: true });
   });
 
-  it('ru → русский контент с плейсхолдером {name}, en → английский, fr → пустая строка', async () => {
+  it('ru → русский контент (статический, без {name}), en → английский, fr → пустая строка', async () => {
     const config = new ContextConfig({ userDataDir });
 
     const ru = config.getSchedulerNotice('ru');
-    expect(ru).toContain('{name}');
+    expect(ru).toContain('Scheduler');
     expect(ru).toContain('планировщик');
+    expect(ru).not.toContain('{name}');
+    expect(ru).not.toContain('{');
 
     const en = config.getSchedulerNotice('en');
-    expect(en).toContain('{name}');
+    expect(en).toContain('Scheduler');
     expect(en.toLowerCase()).toContain('scheduler');
     expect(en).not.toContain('планировщик');
+    expect(en).not.toContain('{');
 
     expect(config.getSchedulerNotice('fr')).toBe('');
   });
 
   it('override из system-категории приоритетнее встроенного', async () => {
     await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
-    await writeFile(join(userDataDir, 'user', 'system', 'SCHEDULER.md'), 'ПОЛЬЗОВАТЕЛЬСКИЙ SCHEDULER {name}', 'utf-8');
+    await writeFile(join(userDataDir, 'user', 'system', 'SCHEDULER.md'), 'ПОЛЬЗОВАТЕЛЬСКИЙ SCHEDULER', 'utf-8');
 
     const config = new ContextConfig({ userDataDir });
-    expect(config.getSchedulerNotice('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ SCHEDULER {name}');
+    expect(config.getSchedulerNotice('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ SCHEDULER');
   });
 });

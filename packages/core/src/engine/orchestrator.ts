@@ -263,6 +263,14 @@ export interface OrchestratorOptions {
    * Геттер нужен, т.к. сервис создаётся в приложении после оркестратора.
    */
   getRequestSessionService?: () => RequestSessionService | undefined;
+  /**
+   * AD-051: late-bound резолвер «активно ли расписание для сессии» (в сессии есть
+   * включённое расписание с целью-сессией). Прокидывается в Composer-контекст:
+   * при `true` в системный промпт добавляется статическое описание `Scheduler`.
+   * Геттер late-bound, т.к. `ScheduleStore` создаётся в приложении после
+   * оркестратора.
+   */
+  isSchedulerActive?: (sessionId: string) => Promise<boolean>;
 }
 
 export interface ProcessMessageResult {
@@ -388,6 +396,8 @@ export class ChatOrchestrator {
   private readonly _commandRuntime: CommandRuntime | null;
   /** AD-089: late-bound funnel создания сессий для тула `task` (null — не задан). */
   private readonly _getRequestSessionService: (() => RequestSessionService | undefined) | null;
+  /** AD-051: late-bound резолвер активности расписания в сессии (null — не задан). */
+  private readonly _isSchedulerActive: ((sessionId: string) => Promise<boolean>) | null;
   /** AD-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
   private readonly _instructionsConfig: InstructionsConfig | null;
   /** AD-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
@@ -718,6 +728,7 @@ export class ChatOrchestrator {
     this._skillRuntime = options.skillRuntime ?? null;
     this._commandRuntime = options.commandRuntime ?? null;
     this._getRequestSessionService = options.getRequestSessionService ?? null;
+    this._isSchedulerActive = options.isSchedulerActive ?? null;
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -1094,11 +1105,13 @@ export class ChatOrchestrator {
     skillsCatalog?: ComposerSkillsCatalog;
     /** AD-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md). */
     instructions?: ComposerInstructions;
+    /** AD-051: в сессии активно расписание — добавляет статическое описание Scheduler. */
+    schedulerActive?: boolean;
   }): ComposerContext {
     const {
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
-      skillsCatalog, instructions,
+      skillsCatalog, instructions, schedulerActive,
     } = args;
     return {
       session,
@@ -1130,7 +1143,29 @@ export class ChatOrchestrator {
       debugCollector,
       skillsCatalog,
       instructions,
+      schedulerActive,
     };
+  }
+
+  /**
+   * AD-051: активность расписания в сессии — есть ли в истории сообщение
+   * планировщика (`metadata.scheduler === true`) или (если задан резолвер)
+   * включённое расписание с целью-сессией. Первое — дешёвая проверка по уже
+   * загруженной истории; второе — late-bound `ScheduleStore.hasEnabledTargetFor`.
+   * Ошибка резолвера не роняет ход — трактуется как «неактивно».
+   */
+  private async _resolveSchedulerActive(session: Session): Promise<boolean> {
+    if (session.messages.some((message) => message.metadata?.scheduler === true)) {
+      return true;
+    }
+    if (this._isSchedulerActive) {
+      try {
+        return await this._isSchedulerActive(session.id);
+      } catch {
+        return false;
+      }
+    }
+    return false;
   }
 
   /**
@@ -2090,6 +2125,7 @@ export class ChatOrchestrator {
       model: session.settings.model,
       language,
     });
+    const schedulerActive = await this._resolveSchedulerActive(session);
     const ctx: ComposerContext = this._buildComposerContext({
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio,
@@ -2099,6 +2135,7 @@ export class ChatOrchestrator {
       toolSelection,
       skillsCatalog,
       instructions: projectInstructions?.instructions,
+      schedulerActive,
     });
 
     const manifest = await this._composer.manifest(ctx);
@@ -2544,6 +2581,7 @@ export class ChatOrchestrator {
           projectInstructions.files.filter((file) => file.kind === 'chain').map((file) => file.path),
         );
       }
+      const schedulerActive = await this._resolveSchedulerActive(session);
       const composerCtx: ComposerContext = this._buildComposerContext({
         session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
         // AD-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
@@ -2557,6 +2595,7 @@ export class ChatOrchestrator {
         debugCollector,
         skillsCatalog,
         instructions: projectInstructions?.instructions,
+        schedulerActive,
       });
       const composed = await this._composer.compose(composerCtx);
       // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и

@@ -193,16 +193,19 @@ describe('RequestSessionService (AD-089)', () => {
     expect(eventToMessageText(event({ payload: undefined }))).toBe('');
   });
 
-  it('eventToMessage: cron → author Scheduler, notice+текст, metadata расписания', () => {
+  it('eventToMessage: cron → author Scheduler, content = чистый текст задания, metadata расписания', () => {
     const e = event({
       source: 'cron',
       type: 'schedule_fired',
       payload: { scheduleId: 'sch_1', name: 'Nightly', text: 'make coffee' },
     });
-    const msg = eventToMessage(e, { schedulerNotice: '[SCHEDULER] job «{name}»' });
+    const msg = eventToMessage(e);
 
     expect(msg.author).toBe('Scheduler');
-    expect(msg.content).toBe('[SCHEDULER] job «{name}»\n\nmake coffee');
+    expect(msg.content).toBe('make coffee');
+    // Описание Scheduler — не в контенте, а в статическом system-блоке.
+    expect(msg.content).not.toContain('[SCHEDULER]');
+    expect(msg.content).not.toContain('планировщик');
     expect(msg.parts[0]?.data).toBe(msg.content);
     expect(msg.metadata).toMatchObject({
       scheduler: true,
@@ -214,24 +217,19 @@ describe('RequestSessionService (AD-089)', () => {
     });
   });
 
-  it('eventToMessage: cron без notice → только текст, автор всё равно Scheduler', () => {
-    const e = event({ source: 'cron', payload: { scheduleId: 'sch_1', name: 'N', text: 't' } });
+  it('eventToMessage: cron без name → только текст, schedule_id из payload', () => {
+    const e = event({ source: 'cron', payload: { scheduleId: 'sch_9', text: 't' } });
     const msg = eventToMessage(e);
     expect(msg.author).toBe('Scheduler');
     expect(msg.content).toBe('t');
     expect(msg.metadata?.scheduler).toBe(true);
-  });
-
-  it('eventToMessage: cron без name → schedule_id из payload', () => {
-    const e = event({ source: 'cron', payload: { scheduleId: 'sch_9', text: 't' } });
-    const msg = eventToMessage(e, { schedulerNotice: 'JOB' });
     expect(msg.metadata?.schedule_id).toBe('sch_9');
     expect(msg.metadata?.schedule_name).toBeUndefined();
   });
 
-  it('eventToMessage: не-cron → author undefined и notice игнорируется', () => {
+  it('eventToMessage: не-cron → author undefined и контент не меняется', () => {
     const e = event({ source: 'webhook', payload: { text: 'hello' } });
-    const msg = eventToMessage(e, { schedulerNotice: 'IGNORED' });
+    const msg = eventToMessage(e);
 
     expect(msg.author).toBeUndefined();
     expect(msg.content).toBe('hello');

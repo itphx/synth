@@ -45,6 +45,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   profile: 'User profile',
   'project.info': 'Project info',
   instructions: 'Project instructions',
+  scheduler: 'Scheduler notice',
   'session.info': 'Session info',
   sticky: 'Sticky notes',
   participants: 'Participants notice',
@@ -194,6 +195,12 @@ export interface ComposerContext {
    * при `session.settings.systemPrompt` override (как `skills.catalog`).
    */
   instructions?: ComposerInstructions;
+  /**
+   * AD-051: в сессии активно расписание (`cron`-источник) — добавляет
+   * статическое описание системного пользователя `Scheduler` (блок `scheduler`,
+   * тир `context`). При `session.settings.systemPrompt` override не добавляется.
+   */
+  schedulerActive?: boolean;
   /**
    * AD-071 §2.6: instance-wide отключение инструментов администратором
    * (`tools.disabled`). Непустой список добавляет в `tools.guide` строку про
@@ -497,6 +504,23 @@ export class SystemPromptComposer {
         provenance: ctx.instructions.provenance ?? 'instructions',
         ...(ctx.instructions.status ? { status: ctx.instructions.status } : {}),
       });
+    }
+
+    // AD-051: в сессии активно расписание (`cron`) — статическое описание
+    // системного пользователя `Scheduler` (тир `context`, order 16, после
+    // instructions). При `systemPrompt` override не добавляется (как
+    // instructions/каталог скиллов). Пустой ассет — блок не добавляется.
+    if (!override && ctx.schedulerActive) {
+      const schedulerNotice = this._contextConfig?.getSchedulerNotice(lang) ?? '';
+      if (schedulerNotice) {
+        extraBlocks.push({
+          key: 'scheduler',
+          tier: 'context',
+          order: 16,
+          content: schedulerNotice,
+          provenance: 'prompts/system/SCHEDULER',
+        });
+      }
     }
 
     // AD-071 §2.2/§2.3: MCP-блоки всегда volatile — MCP не участвует в

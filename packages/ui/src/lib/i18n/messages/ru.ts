@@ -961,6 +961,8 @@ export const dict = {
   'chat.notice.debug': 'Отладка',
   'chat.notice.error': 'Ошибка',
   'chat.notice.info': 'Инфо',
+  'chat.notice.scheduler': 'Планировщик',
+  'chat.notice.schedulerNamed': 'Планировщик · {name}',
   'chat.notice.copy': 'Копировать',
 
   'chat.message.copied': 'Скопировано',

@@ -94,6 +94,23 @@ export class ScheduleStore {
     return [...file.schedules];
   }
 
+  /**
+   * AD-051/AD-089: есть ли включённое расписание, нацеленное на сессию
+   * (`target.mode !== 'ephemeral'` и совпадающий `target.sessionId`). Ephemeral-
+   * цели сессию не адресуют (создают разовую), поэтому не учитываются.
+   * Используется оркестратором: при `true` в системный промпт добавляется
+   * статическое описание системного пользователя `Scheduler`.
+   */
+  async hasEnabledTargetFor(sessionId: string): Promise<boolean> {
+    const file = await this._load();
+    return file.schedules.some(
+      (schedule) =>
+        schedule.enabled
+        && schedule.target.mode !== 'ephemeral'
+        && schedule.target.sessionId === sessionId,
+    );
+  }
+
   async get(id: string): Promise<Schedule | null> {
     const file = await this._load();
     return file.schedules.find((s) => s.id === id) ?? null;

@@ -189,7 +189,6 @@ export {
   eventToMessageText,
 } from './engine/events/request-session.js';
 export type {
-  EventToMessageOptions,
   RequestSessionOptions,
   RequestSessionServiceDeps,
 } from './engine/events/request-session.js';
@@ -210,7 +209,6 @@ export {
   SchedulerRuleProvider,
   SchedulerService,
   startScheduler,
-  buildSchedulerNotice,
   DEFAULT_SCHEDULER_TICK_MS,
 } from './engine/scheduler/index.js';
 export type { ScheduleTrigger, SchedulerServiceDeps } from './engine/scheduler/index.js';

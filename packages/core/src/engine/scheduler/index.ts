@@ -10,4 +10,3 @@ export type { ScheduleTrigger } from './schedule-time.js';
 export { SchedulerRuleProvider } from './route-provider.js';
 export { SchedulerService, startScheduler, DEFAULT_SCHEDULER_TICK_MS } from './scheduler.js';
 export type { SchedulerServiceDeps } from './scheduler.js';
-export { buildSchedulerNotice } from './notice.js';

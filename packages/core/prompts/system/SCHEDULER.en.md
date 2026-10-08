@@ -1,3 +1,3 @@
 [SCHEDULER]
 
-A message from the system user "Scheduler" is the Synth scheduler. It fired a scheduled job "{name}". Below is the job text.
+`Scheduler` is the Synth system user that runs the scheduler. Its messages are scheduled jobs fired by a schedule; the job text is given in the message itself.

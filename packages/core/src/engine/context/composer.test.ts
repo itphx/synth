@@ -43,6 +43,7 @@ function makeContextConfig(): ContextConfig {
     getPlanGuide: () => '[PLAN GUIDE]',
     getModePolicy: () => '[MODE POLICY]',
     getClassificationInstructions: () => '[CLASSIFICATION]',
+    getSchedulerNotice: () => '[SCHEDULER]',
   } as unknown as ContextConfig;
 }
 
@@ -850,6 +851,68 @@ describe('SystemPromptComposer', () => {
 
       expect(system).toContain('OVERRIDE');
       expect(system).not.toContain('CORE-RULES');
+    });
+  });
+
+  describe('scheduler (AD-051)', () => {
+    it('schedulerActive:true → блок scheduler (context, order 16, provenance), статический', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const { system, stablePrefix, blocks } = await composer.compose(
+        makeCtx(session, { schedulerActive: true }),
+      );
+
+      const block = blocks.find((b) => b.key === 'scheduler');
+      expect(block).toBeDefined();
+      expect(block!.tier).toBe('context');
+      expect(block!.order).toBe(16);
+      expect(block!.content).toBe('[SCHEDULER]');
+      expect(block!.provenance).toBe('prompts/system/SCHEDULER');
+      expect(system).toContain('[SCHEDULER]');
+      // Тир context не входит в кэшируемый stable-префикс.
+      expect(stablePrefix).not.toContain('[SCHEDULER]');
+    });
+
+    it('schedulerActive по умолчанию (false) → блока scheduler нет', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const { blocks } = await composer.compose(makeCtx(session));
+      expect(blocks.find((b) => b.key === 'scheduler')).toBeUndefined();
+
+      const manifest = await composer.manifest(makeCtx(session, { schedulerActive: true }));
+      const entry = manifest.entries.find((e) => e.key === 'scheduler');
+      expect(entry).toBeDefined();
+      expect(entry!.label).toBe('Scheduler notice');
+      expect(entry!.tier).toBe('context');
+      expect(entry!.provenance).toBe('prompts/system/SCHEDULER');
+      expect(entry!.status).toBe('loaded');
+    });
+
+    it('systemPrompt override → блок scheduler не добавляется', async () => {
+      const composer = makeComposer();
+      const session = makeSession({ settings: { systemPrompt: 'OVERRIDE' } });
+
+      const { blocks } = await composer.compose(
+        makeCtx(session, { schedulerActive: true }),
+      );
+      expect(blocks.find((b) => b.key === 'scheduler')).toBeUndefined();
+    });
+
+    it('пустой ассет → блок не добавляется даже при schedulerActive', async () => {
+      const composer = makeComposer({
+        contextConfig: {
+          ...makeContextConfig(),
+          getSchedulerNotice: () => '',
+        } as unknown as ContextConfig,
+      });
+      const session = makeSession();
+
+      const { blocks } = await composer.compose(
+        makeCtx(session, { schedulerActive: true }),
+      );
+      expect(blocks.find((b) => b.key === 'scheduler')).toBeUndefined();
     });
   });
 });

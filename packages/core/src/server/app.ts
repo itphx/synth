@@ -15,7 +15,7 @@ import {
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  ScheduleStore, SchedulerRuleProvider, SchedulerService, buildSchedulerNotice,
+  ScheduleStore, SchedulerRuleProvider, SchedulerService,
   createEventRoutes, createSchedulerRoutes,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -850,6 +850,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // AD-089: late-bound funnel создания сессий для тула `task` (саб-агент).
     // Сам сервис создаётся ниже (после оркестратора) — геттер читает его в рантайме.
     getRequestSessionService: () => requestSessionService,
+    // AD-051: late-bound резолвер активности расписания в сессии (ScheduleStore
+    // создаётся ниже) — включает статический блок `Scheduler` в промпт.
+    isSchedulerActive: (sid) => scheduleStore.hasEnabledTargetFor(sid),
   });
 
   const processMessage = orchestrator.createProcessMessage();
@@ -881,11 +884,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // AD-089: UI-событие после материализации внешнего события.
     publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
     deliver: async (sessionId, event, mode) => {
-      // AD-051: cron-сообщение — от системного пользователя `Scheduler` с notice.
-      const schedulerNotice = await buildSchedulerNotice(
-        sessionManager, contextConfig, sessionId, event,
-      );
-      let message = eventToMessage(event, { schedulerNotice });
+      // AD-051: cron-сообщение — от системного пользователя `Scheduler`, текст
+      // задания — чистый контент сообщения (описание Scheduler — в system-блоке).
+      let message = eventToMessage(event);
       if (mode === 'run') {
         // Запускает процессор (постановка + старт) — как обычный user-промпт.
         // AD-036: обфускация user-сообщения ДО сохранения в историю (паритет с

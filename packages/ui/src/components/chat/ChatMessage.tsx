@@ -112,6 +112,9 @@ function ChatMessageInner({
   const isInfo = message.role === 'info'
   const isSummary = message.role === 'summary'
   const isDebug = message.role === 'debug'
+  // AD-051: сообщения планировщика (source:'cron') приходят как role:'user' с
+  // metadata.scheduler === true — рисуем их служебным Notice, а не user-пузырём.
+  const isScheduler = isUser && message.metadata?.scheduler === true
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
 
@@ -398,6 +401,84 @@ function ChatMessageInner({
       <div className="flex items-start">
         {selectionCheckboxEl}
         <div className="min-w-0 flex-1">{noticeEl}</div>
+      </div>
+    )
+  }
+
+  // AD-051: служебное сообщение планировщика (source:'cron') — центрированный
+  // блок с иконкой расписания и подписью «Планировщик · <имя задания>» вместо
+  // правого user-пузыря с шапкой текущего пользователя. Контент — чистый текст
+  // задания; действия — полный набор как у user-сообщения.
+  if (isScheduler) {
+    const scheduleName = message.metadata?.schedule_name
+    const label =
+      typeof scheduleName === 'string' && scheduleName.length > 0
+        ? t('chat.notice.schedulerNamed', { name: scheduleName })
+        : t('chat.notice.scheduler')
+
+    const selectionCheckboxEl = selectionMode ? (
+      <div className="flex items-center self-stretch pr-1">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => {
+            const ev = e.nativeEvent as MouseEvent
+            handleToggleSelect(ev.shiftKey ?? false)
+          }}
+          className="size-4 rounded border-border cursor-pointer accent-primary"
+        />
+      </div>
+    ) : null
+
+    const schedulerEl = (
+      <Notice
+        variant="scheduler"
+        label={label}
+        ariaLabel={label}
+        meta={<MessageHeader message={message} metaOnly />}
+        actions={
+          showActions ? (
+            <MessageActions
+              embedded
+              showCopy={false}
+              messageIndex={message.index}
+              role={message.role}
+              disabled={message.disabled}
+              pinned={message.pinned}
+              canRetry={canRetry}
+              hasDebug={hasDebug}
+              debugActive={debugActive}
+              readOnly={readOnly}
+              hasStats={showStats}
+              statsContent={<MessageStats message={message} />}
+              onCopy={handleCopy}
+              onToggle={handleToggle}
+              onPin={handlePin}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              onDebug={handleDebug}
+              onFork={handleFork}
+            />
+          ) : undefined
+        }
+        onCopy={handleCopy}
+        disabled={message.disabled}
+      >
+        {displayContent && (
+          <SecretMarkdown
+            content={resolveI18nText(i18nMeta, displayContent)}
+            secrets={secrets}
+            sessionId={sessionId}
+          />
+        )}
+      </Notice>
+    )
+
+    if (!selectionMode) return schedulerEl
+    return (
+      <div className="flex items-start">
+        {selectionCheckboxEl}
+        <div className="min-w-0 flex-1">{schedulerEl}</div>
       </div>
     )
   }
