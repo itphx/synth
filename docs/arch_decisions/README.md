@@ -50,6 +50,7 @@
 | AD | Решение | Файл |
 |----|---------|------|
 | AD-027 | Двойная передача плана (⛔ переопределено AD-039) | [legacy/ad-027-double-plan-passing.md](./legacy/ad-027-double-plan-passing.md) |
+| AD-087 | Gateway для подключения к мессенджерам (⛔ поглощён AD-086, тема стала первым частным случаем внешних add-on сервисов) | [ad-087-messenger-gateway-merged.md](./ad-087-messenger-gateway-merged.md) |
 
 ## Нереализованные AD
 
@@ -62,6 +63,27 @@
 | AD-032 | [Миграция хранения истории на PostgreSQL](./ad-032-history-storage-postgresql.md) (логическая модель уже в JSON — AD-005/AD-033) |
 | AD-037 | [Security step перед коммитом](./ad-037-commit-security-step.md) |
 | AD-046 | [Скиллы и slash-команды](./ad-046-skills-and-slash-commands.md): формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles, capability-aware |
+| AD-047 | [Память Synth (Gbrain + композиция)](./ad-047-memory-gbrain.md): storage backbone, RAG по памяти и коду/докам, компрессия tool output, 4-layer retrieval, Obsidian bridge |
+| AD-048 | [Self-help скиллы и admin-MCP](./ad-048-self-help-skills-admin-mcp.md): dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN |
+| AD-049 | [Git worktrees](./ad-049-git-worktrees.md): тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI |
+| AD-050 | [Внешние движки (opencode/cline) — Runner](./ad-050-external-engines-runner.md): EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 |
+| AD-051 | [Шедулер и пайплайны (облегчённый n8n)](./ad-051-scheduler-pipelines.md): `SchedulerService`, Schedule/Job, cron-воркер, событийные триггеры |
+| AD-052 | [Публичная API-платформа](./ad-052-public-api-platform.md): per-service ключи со скоупами/тенантами, OpenAPI, SDK, webhooks |
+| AD-053 | [CLI и TUI](./ad-053-cli-tui.md): паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI |
+| AD-054 | [Kanban-доска, backlog](./ad-054-kanban-backlog.md): интерактивная доска поверх `project.plan`, глобальный backlog, assignee/WIP |
+| AD-055 | [Обмен между инстансами Synth](./ad-055-instance-exchange.md): идемпотентный upsert/дельта, peer-auth, обмен памятью, live-сессии |
+| AD-056 | [MCP-сервер Synth и скиллы для внешних агентов](./ad-056-synth-mcp-server.md): MCP над API v2, auth, права, форматы конфигов клиентов |
+| AD-057 | [Loop Engine и Loop Design Wizard](./ad-057-loop-engine.md): `/design-loop`, Verification Rubric, LoopRunner, termination guards |
+| AD-058 | [Служебные агенты и консилиум (Council)](./ad-058-service-agents-council.md): panel/consensus/debate/verifier/judge, Council Gate; включает AD-031 |
+| AD-059 | [Pipeline Automation](./ad-059-pipeline-automation.md): цепочки loops, артефакты между шагами, rollback, HITL, мониторинг |
+| AD-060 | [Мультиконтурная архитектура (Contour Bridge)](./ad-060-multi-contour-bridge.md): шлюз между контурами, обезличивание, аудит |
+| AD-061 | [Многослойная безопасность LLM](./ad-061-llm-security-layers.md): сканеры промптов/вывода, лимиты, HITL, аудит, неизменяемость аудита |
+| AD-062 | [Умная оптимизация контекста](./ad-062-context-optimization.md): `archive_context`, авто-суммаризация, приоритизация, стратегии |
+| AD-063 | [Обучение пользователя и метрики](./ad-063-user-learning-metrics.md): Pre-PR check, анализ сессий, дашборд без рейтингов |
+| AD-064 | [Встроенные в UI браузер и терминал](./ad-064-ui-browser-terminal.md): PTY/WS-терминал, webview/iframe-браузер, синхронизация с агентом |
+| AD-065 | [Просмотр документации, планов и ToDo в UI](./ad-065-ui-docs-plan-todo.md): docs-браузер, редактор плана/todo, связи, внешний vault |
+| AD-066 | [Скиллы и гайдлайны оформления документации](./ad-066-doc-style-skills.md): doc-стандарты, шаблоны, авто-проверка (docs-lint) |
+| AD-067 | [«Впитывание» организационных гайдлайнов → дефолты инстанса](./ad-067-org-guidelines-defaults.md): ingestion, scope, версионирование/аудит |
 | AD-068 | [Реестр и каталог скиллов и агентов](./ad-068-skills-agents-registry.md): свой репозиторий, индекс, trust/guard, install-policy, agent-packs |
 | AD-069 | [Проектные инструкции (AGENTS.md) и /init](./ad-069-project-instructions-agents-md.md): discovery, merged chain, lazy-догрузка, обрезка, threat-scan, install-tree guard |
 | AD-073 | [Целостность клиента в гибриде](./ad-073-client-integrity-hybrid.md): клиент недоверенный, enforcement на сервере; сигналы (подписи, DPoP/mTLS) опционально |
@@ -73,3 +95,7 @@
 | AD-082 | [Flavor-образы с toolchain](./ad-082-full-images-deployment.md): `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance |
 | AD-083 | [Кастомизация инстанса и брендинг](./ad-083-instance-customization-branding.md): приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings |
 | AD-084 | [Decision-модели (Clef/Clef-Flash)](./ad-084-decision-models-clef.md) в маршрутизации и быстрых ответах |
+| AD-085 | [Мультимодальный ввод (звук, изображения, видео)](./ad-085-multimodal-input.md): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер |
+| AD-086 | [Расширяемость Synth: плагины, editions, вклад в mainline и внешние сервисы-надстройки](./ad-086-extensibility-plugins-editions.md): Extension API, editions, contribution flow, add-ons (первый случай — Telegram gateway) |
+| AD-088 | [Работа через HTTP-прокси (единый egress-слой)](./ad-088-http-proxy.md): прокси/`no_proxy`/CA, аутентификация Basic/NTLM/Negotiate (Kerberos) |
+| AD-089 | [Synth как платформа внешних событий и автоматизации](./ad-089-external-events-automation.md): Event/Binding/Router, приём внешних событий на hook-шине |

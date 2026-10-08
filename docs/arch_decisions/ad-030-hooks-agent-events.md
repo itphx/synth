@@ -2,9 +2,18 @@
 
 > **Статус:** ⏳ Не реализовано (проект)
 > **Дата:** 2026-09-17
+> **Обновлено:** 2026-10-08 — закреплён как **фундамент** для внешних событий ([AD-089](./ad-089-external-events-automation.md)):
+> добавлены события уровня интеграций (`external_event` / `message_received` / `callback` / `session_requested`)
+> и связи с [AD-051](./ad-051-scheduler-pipelines.md), [AD-052](./ad-052-public-api-platform.md), [AD-086](./ad-086-extensibility-plugins-editions.md),
+> [AD-087](./ad-087-messenger-gateway-merged.md).
 > **Парные документы:**
 > - [AD-029](./ad-029-granular-permissions.md) «Гранулярные permissions» — `pre_tool_use` и `permission_denied` — точки расширения для allow/deny/ask и аудита безопасности;
-> - [AD-025](./ad-025-plan-act-toggle.md) «Plan/Act как глобальный permission toggle» — `plan_approved` / `plan_rejected` привязаны к переходам plan/act.
+> - [AD-025](./ad-025-plan-act-toggle.md) «Plan/Act как глобальный permission toggle» — `plan_approved` / `plan_rejected` привязаны к переходам plan/act;
+> - [AD-089](./ad-089-external-events-automation.md) «Платформа внешних событий и автоматизации» — Router и приём внешних событий строятся на hook-шине;
+> - [AD-051](./ad-051-scheduler-pipelines.md) «Шедулер и пайплайны» — cron/timer-события и событийные триггеры;
+> - [AD-052](./ad-052-public-api-platform.md) «Публичная API-платформа» — приём внешних webhook'ов и событий;
+> - [AD-086](./ad-086-extensibility-plugins-editions.md) «Расширяемость и внешние сервисы-надстройки» — add-on'ы и gateway-события;
+> - [AD-087](./ad-087-messenger-gateway-merged.md) «Gateway для мессенджеров» (⛔ поглощён AD-086).
 
 ## Решение
 
@@ -34,6 +43,25 @@
 | `agent_completed` | Саб-агент завершён | `{agent_id, result, usage}` | Сбор результатов, цепочка dependent tasks |
 | `agent_failed` | Ошибка саб-агента | `{agent_id, error, retries}` | Алертинг, автоматический ретрай |
 | `permission_denied` | Отказ в доступе | `{tool, input, reason}` | Аудит безопасности, оповещение ИБ |
+
+### События уровня интеграций (внешние события)
+
+Кроме событий жизненного цикла агента, hook-шина принимает **события интеграций** — они могут инициироваться
+**внешне** (webhook / публичный API / шедулер / add-on сервис) и **внутренне** (агент, сессия, другой hook).
+Имена согласованы с [AD-089](./ad-089-external-events-automation.md), где эти события нормализуются в сущность `Event`.
+
+| Событие | Момент | Контекст | Назначение |
+|---|---|---|---|
+| `external_event` | Нормализованное внешнее событие принято | `{event: SynthEvent}` | Точка входа Router ([AD-089](./ad-089-external-events-automation.md)); позволяет плагинам наблюдать/дополнять событие |
+| `message_received` | Получено сообщение из внешнего канала | `{source, chatKey?, threadKey?, from, text?}` | Частный случай `external_event` для мессенджер-шлюзов ([AD-086](./ad-086-extensibility-plugins-editions.md)/[AD-087](./ad-087-messenger-gateway-merged.md)) |
+| `callback` | Нажатие кнопки/инлайн-действие во внешнем сервисе | `{source, callbackId, data, from}` | Обработка интерактивных действий (inline-кнопки, approve) |
+| `session_requested` | Запрошено создание сессии | `{reason, agentTemplate?, project?, initiator}` | Создание сессии как событие ([AD-089](./ad-089-external-events-automation.md)); может инициировать владелец, агент или внешний сервис |
+| `schedule_fired` | Сработал таймер/расписание | `{scheduleId, cron?, payload?}` | Cron/timer-триггеры ([AD-051](./ad-051-scheduler-pipelines.md)) |
+
+> **Инициатор хука — внешний или внутренний.** Hook может быть вызван как изнутри агента (как в примере
+> ниже), так и извне — через webhook/публичный API ([AD-052](./ad-052-public-api-platform.md)), шедулер
+> ([AD-051](./ad-051-scheduler-pipelines.md)) или внешний add-on сервис ([AD-086](./ad-086-extensibility-plugins-editions.md)).
+> Для внешнего пути обязательны проверка подписи/аутентификация, дедуп (`dedupKey`, AD-089) и аудит.
 
 ### Регистрация через Plugin SDK
 
@@ -74,3 +102,17 @@ export default function myPlugin(synth: SynthPlugin) {
 - Смежное, но не AD-030:
   - `ContextOptimizerGatewayHooks` — `packages/core/src/engine/context/optimizer.ts:34`, `setGatewayHooks()` (`:84`) — внутренний интерфейс шлюза безопасности (AD-036), не система хуков;
   - `EventBus` (SessionEventBus) — `packages/core/src/events/bus.ts:10` (AD-009) — шина событий сессии; событий с именами из таблицы выше в ней нет.
+
+## Связи
+
+AD-030 — **фундамент** событийной модели Synth: hook-шина и Plugin SDK — база не только для жизненного цикла
+агента, но и для внешних событий.
+
+- [AD-089](./ad-089-external-events-automation.md) «Платформа внешних событий и автоматизации» — Router и приём
+  внешних событий (`external_event`/`message_received`/`callback`/`session_requested`).
+- [AD-051](./ad-051-scheduler-pipelines.md) «Шедулер и пайплайны» — событийные триггеры и cron (`schedule_fired`).
+- [AD-052](./ad-052-public-api-platform.md) «Публичная API-платформа» — приём внешних webhook'ов и событий.
+- [AD-086](./ad-086-extensibility-plugins-editions.md) «Расширяемость и внешние сервисы-надстройки» — add-on'ы
+  и gateway-события (External API/hooks как точки расширения).
+- [AD-087](./ad-087-messenger-gateway-merged.md) «Gateway для мессенджеров» — ⛔ поглощён AD-086; hook `message_received`.
+

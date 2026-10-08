@@ -346,7 +346,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-026 | Режимы контекста саб-агента: none / inherit / summary / last_n | ✅ Реализовано | [ad-026](./docs/arch_decisions/ad-026-subagent-context-modes.md) |
 | AD-028 | Строгость цикла Plan→Build: auto / strict / off | ✅ Реализовано | [ad-028](./docs/arch_decisions/ad-028-plan-build-strictness.md) |
 | AD-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns | ✅ Реализовано | [ad-029](./docs/arch_decisions/ad-029-granular-permissions.md) |
-| AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn) | ⏳ Не реализовано | [ad-030](./docs/arch_decisions/ad-030-hooks-agent-events.md) |
+| AD-030 | Hooks для событий агента (pre/post tool use, session, plan, spawn); закреплён фундаментом для внешних событий (AD-089) и интеграций (AD-051/052/086/087) | ⏳ Не реализовано (фундамент для AD-089) | [ad-030](./docs/arch_decisions/ad-030-hooks-agent-events.md) |
 | AD-031 | Verification синт (аналог VerificationAgent из Claude Code) | ⏳ Не реализовано | [ad-031](./docs/arch_decisions/ad-031-verification-agent.md) |
 | AD-032 | Миграция хранения истории на PostgreSQL (логическая модель уже в JSON — AD-005/AD-033) | ⏳ Не реализовано | [ad-032](./docs/arch_decisions/ad-032-history-storage-postgresql.md) |
 | AD-033 | Ветвление сессий, наследование контекста и межсессионное слияние | ✅ Реализовано | [ad-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
@@ -363,6 +363,27 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-044 | Адаптивный мобильный UI + PWA (три зоны, дроверы, touch-first, ручной app-shell) | ✅ Реализовано | [ad-044](./docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md) |
 | AD-045 | Профили серверов и лёгкий runtime-вход в гибриде (единый dataDir, profiles.json, logout = забыть токен + revoke, ConnectionWatcher) | ✅ Реализовано | [ad-045](./docs/arch_decisions/ad-045-hybrid-server-profiles.md) |
 | AD-046 | Скиллы и slash-команды: формат SKILL.md, discovery, progressive disclosure, core-тул skill, команды/bundles, scope-API, UI (настройки/панели/статистика/`/`-автокомплит) | ✅ Фаза 1; ✅ Фаза 2 (core+API+CLI, UI); ✅ Фаза 3 (trust-гейт команд, inline shell, `skills.urls` read-only, внешние каталоги, builtin `skill-creator`); ⏳ остаток — backend-админка каталога (AD-068) | [ad-046](./docs/arch_decisions/ad-046-skills-and-slash-commands.md) |
+| AD-047 | Память Synth (Gbrain + композиция): storage backbone, RAG по памяти и коду/докам, компрессия tool output, 4-layer retrieval, Obsidian bridge | ⏳ Не реализовано | [ad-047](./docs/arch_decisions/ad-047-memory-gbrain.md) |
+| AD-048 | Self-help скиллы и admin-MCP: dogfooding-развёртывание, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | ⏳ Не реализовано | [ad-048](./docs/arch_decisions/ad-048-self-help-skills-admin-mcp.md) |
+| AD-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI | ⏳ Не реализовано | [ad-049](./docs/arch_decisions/ad-049-git-worktrees.md) |
+| AD-050 | Внешние движки (opencode/cline) — Runner: EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090, маршрутизация по `Session.engine` | ⏳ Не реализовано | [ad-050](./docs/arch_decisions/ad-050-external-engines-runner.md) |
+| AD-051 | Шедулер и пайплайны (облегчённый n8n): `SchedulerService`, Schedule/Job, cron-воркер, UI правил, событийные триггеры (AD-030) | ⏳ Не реализовано | [ad-051](./docs/arch_decisions/ad-051-scheduler-pipelines.md) |
+| AD-052 | Публичная API-платформа: per-service ключи со скоупами/тенантами, OpenAPI-спека, SDK, webhooks | ⏳ Не реализовано | [ad-052](./docs/arch_decisions/ad-052-public-api-platform.md) |
+| AD-053 | CLI и TUI: паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI | ⏳ Не реализовано | [ad-053](./docs/arch_decisions/ad-053-cli-tui.md) |
+| AD-054 | Kanban-доска, backlog, управление проектами: интерактивная доска поверх `project.plan`, глобальный backlog, assignee/WIP-лимиты | ⏳ Не реализовано | [ad-054](./docs/arch_decisions/ad-054-kanban-backlog.md) |
+| AD-055 | Обмен между инстансами Synth: идемпотентный upsert/дельта-синхронизация, peer-auth, обмен памятью, live-сессии | ⏳ Не реализовано | [ad-055](./docs/arch_decisions/ad-055-instance-exchange.md) |
+| AD-056 | MCP-сервер Synth и скиллы для внешних агентов: MCP над API v2, auth, права, форматы конфигов клиентов | ⏳ Не реализовано | [ad-056](./docs/arch_decisions/ad-056-synth-mcp-server.md) |
+| AD-057 | Loop Engine и Loop Design Wizard: `/design-loop`, Verification Rubric, LoopRunner, 40 шаблонов, termination guards | ⏳ Не реализовано | [ad-057](./docs/arch_decisions/ad-057-loop-engine.md) |
+| AD-058 | Служебные агенты и консилиум (Council): panel/consensus/debate/verifier/judge, Council Gate; включает AD-031 | ⏳ Не реализовано | [ad-058](./docs/arch_decisions/ad-058-service-agents-council.md) |
+| AD-059 | Pipeline Automation: цепочки loops, передача артефактов между шагами, rollback/exit-стратегия, HITL, мониторинг-дашборд | ⏳ Не реализовано | [ad-059](./docs/arch_decisions/ad-059-pipeline-automation.md) |
+| AD-060 | Мультиконтурная архитектура (Contour Bridge): шлюз между контурами, транспорт Kafka/RabbitMQ, обезличивание, аудит | ⏳ Не реализовано | [ad-060](./docs/arch_decisions/ad-060-multi-contour-bridge.md) |
+| AD-061 | Многослойная безопасность LLM: сканеры промптов/вывода, лимиты (токены/итерации/время), HITL, аудит сессий, неизменяемость аудита | ⏳ Не реализовано | [ad-061](./docs/arch_decisions/ad-061-llm-security-layers.md) |
+| AD-062 | Умная оптимизация контекста: тул `archive_context`, авто-суммаризация по лимиту, приоритизация, стратегии aggressive/moderate/off | ⏳ Не реализовано | [ad-062](./docs/arch_decisions/ad-062-context-optimization.md) |
+| AD-063 | Обучение пользователя и метрики: Pre-PR Understanding Check, анализ сессий, рекомендации, дашборд метрик без рейтингов | ⏳ Не реализовано | [ad-063](./docs/arch_decisions/ad-063-user-learning-metrics.md) |
+| AD-064 | Встроенные в UI браузер и терминал: PTY/WS-терминал, webview/iframe-браузер, синхронизация с агентом | ⏳ Не реализовано | [ad-064](./docs/arch_decisions/ad-064-ui-browser-terminal.md) |
+| AD-065 | Просмотр документации, планов и ToDo в UI: docs-браузер, редактор плана/todo, связи, внешний vault (Obsidian Bridge) | ⏳ Не реализовано | [ad-065](./docs/arch_decisions/ad-065-ui-docs-plan-todo.md) |
+| AD-066 | Скиллы и гайдлайны оформления документации: doc-стандарты, шаблоны, авто-проверка соответствия (docs-lint) | ⏳ Не реализовано | [ad-066](./docs/arch_decisions/ad-066-doc-style-skills.md) |
+| AD-067 | «Впитывание» организационных гайдлайнов → дефолты инстанса: ingestion, scope (instance/org/team/project), версионирование/аудит | ⏳ Не реализовано | [ad-067](./docs/arch_decisions/ad-067-org-guidelines-defaults.md) |
 | AD-068 | Реестр и каталог скиллов и агентов: индекс, trust/guard, install-policy, agent-packs | ⏳ Не реализовано | [ad-068](./docs/arch_decisions/ad-068-skills-agents-registry.md) |
 | AD-069 | Проектные инструкции (AGENTS.md) и /init: discovery, merged chain git root→cwd, lazy-догрузка, threat-scan, install-tree guard | ✅ Реализовано (Ф1–Ф3: resolver/composer, sources/URL/trust/guard, lazy/саб-агенты/событие/API/UI, `/init` + скилл `synth-agents-md`) | [ad-069](./docs/arch_decisions/ad-069-project-instructions-agents-md.md) |
 | AD-070 | SystemPromptComposer: тиры stable/context/volatile, идемпотентная пересборка, CachePolicy, статистика usage, per-agent promptStates, манифест промпта | ✅ Реализовано | [ad-070](./docs/arch_decisions/ad-070-system-prompt-composer.md) |
@@ -380,6 +401,11 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-082 | Flavor-образы с toolchain (`slim`/`core`/`dev`/`devops`/`browser`/`full`; alpine + debian) для local containerized и managed single-instance (промежуточный шаг до AD-077) | ⏳ Не реализовано | [ad-082](./docs/arch_decisions/ad-082-full-images-deployment.md) |
 | AD-083 | Кастомизация инстанса и брендинг: приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings (блокировка настроек даже для ADMIN инстанса) | ⏳ Не реализовано | [ad-083](./docs/arch_decisions/ad-083-instance-customization-branding.md) |
 | AD-084 | Decision-модели (Clef/Clef-Flash) в маршрутизации и быстрых ответах: класс decision-моделей (Jev/SystemOne-совместимый API), Clef-Flash в micro/быстрых ответах, Clef на эскалацию/мультимодальность, через GatewayProvider, политики local/remote | ⏳ Не реализовано | [ad-084](./docs/arch_decisions/ad-084-decision-models-clef.md) |
+| AD-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, маппинг в форматы провайдеров, предобработка (ASR/OCR/кадры), UI-композер | ⏳ Не реализовано | [ad-085](./docs/arch_decisions/ad-085-multimodal-input.md) |
+| AD-086 | Расширяемость Synth: плагины, editions, вклад в mainline и внешние сервисы-надстройки: Extension API, каталог editions, contribution flow, add-ons (первый случай — Telegram gateway) | ⏳ Не реализовано | [ad-086](./docs/arch_decisions/ad-086-extensibility-plugins-editions.md) |
+| AD-087 | Gateway для подключения к мессенджерам | ⛔ Поглощён AD-086 | [ad-087](./docs/arch_decisions/ad-087-messenger-gateway-merged.md) |
+| AD-088 | Работа через HTTP-прокси: единый egress-слой, `no_proxy`/исключения, доверенные CA, аутентификация Basic/NTLM/Negotiate (Kerberos) | ⏳ Не реализовано | [ad-088](./docs/arch_decisions/ad-088-http-proxy.md) |
+| AD-089 | Synth как платформа внешних событий и автоматизации: сущности Event/Binding/Router, приём внешних событий на hook-шине, `session.requested` — тоже событие | ⏳ Не реализовано | [ad-089](./docs/arch_decisions/ad-089-external-events-automation.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -424,6 +450,17 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | настройки / settings UI kit | [AD-072](./docs/arch_decisions/ad-072-settings-ui-kit.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 | кастомизация / брендинг / онбординг | [AD-083](./docs/arch_decisions/ad-083-instance-customization-branding.md), [packages/ui/AGENTS.md](./packages/ui/AGENTS.md) |
 | блокировка настроек (locked settings) | [AD-083](./docs/arch_decisions/ad-083-instance-customization-branding.md), [AD-073](./docs/arch_decisions/ad-073-client-integrity-hybrid.md), [AD-080](./docs/arch_decisions/ad-080-managed-hybrid-modes.md), [AD-081](./docs/arch_decisions/ad-081-hybrid-policy-leak-protection.md) |
+| внешние события / роутинг / сессии | [AD-089](./docs/arch_decisions/ad-089-external-events-automation.md), [AD-030](./docs/arch_decisions/ad-030-hooks-agent-events.md), [AD-033](./docs/arch_decisions/ad-033-session-branching-merge.md) |
+| мессенджеры / шлюзы | [AD-086](./docs/arch_decisions/ad-086-extensibility-plugins-editions.md), [AD-087](./docs/arch_decisions/ad-087-messenger-gateway-merged.md) (⛔ поглощён AD-086) |
+| шедулер / пайплайны | [AD-051](./docs/arch_decisions/ad-051-scheduler-pipelines.md), [AD-059](./docs/arch_decisions/ad-059-pipeline-automation.md), [AD-057](./docs/arch_decisions/ad-057-loop-engine.md) |
+| публичный API / webhooks | [AD-052](./docs/arch_decisions/ad-052-public-api-platform.md), [AD-089](./docs/arch_decisions/ad-089-external-events-automation.md) |
+| MCP-сервер Synth | [AD-056](./docs/arch_decisions/ad-056-synth-mcp-server.md), [AD-048](./docs/arch_decisions/ad-048-self-help-skills-admin-mcp.md) |
+| внешние add-on сервисы / плагины / editions | [AD-086](./docs/arch_decisions/ad-086-extensibility-plugins-editions.md), [AD-030](./docs/arch_decisions/ad-030-hooks-agent-events.md) |
+| прокси / egress | [AD-088](./docs/arch_decisions/ad-088-http-proxy.md) |
+| мультимодальный ввод | [AD-085](./docs/arch_decisions/ad-085-multimodal-input.md) |
+| память | [AD-047](./docs/arch_decisions/ad-047-memory-gbrain.md), [AD-062](./docs/arch_decisions/ad-062-context-optimization.md) |
+| CLI / TUI | [AD-053](./docs/arch_decisions/ad-053-cli-tui.md) |
+| Kanban / backlog | [AD-054](./docs/arch_decisions/ad-054-kanban-backlog.md), [AD-065](./docs/arch_decisions/ad-065-ui-docs-plan-todo.md) |
 | иконки/цвета проекта и сессии | [packages/ui/AGENTS.md](./packages/ui/AGENTS.md), [packages/shared/AGENTS.md](./packages/shared/AGENTS.md) |
 
 ## Документация
