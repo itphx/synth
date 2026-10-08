@@ -50,9 +50,50 @@ export function eventToMessageText(event: SynthEvent): string {
   return typeof serialized === 'string' ? serialized : '';
 }
 
-/** Собирает user-сообщение из события (единый формат для `deliver` core/backend). */
-export function eventToMessage(event: SynthEvent): Message {
-  const content = eventToMessageText(event);
+/** AD-051: опции сборки сообщения из события (notice планировщика). */
+export interface EventToMessageOptions {
+  /**
+   * Системный notice планировщика (системный пользователь «Scheduler»),
+   * подставляется перед текстом cron-события. Для остальных источников
+   * игнорируется.
+   */
+  schedulerNotice?: string;
+}
+
+/**
+ * Собирает user-сообщение из события (единый формат для `deliver` core/backend).
+ *
+ * AD-051: для `source === 'cron'` сообщение помечается автором `Scheduler`, а
+ * перед текстом ставится notice планировщика (если передан). В `metadata`
+ * добавляются `scheduler`/`schedule_id`/`schedule_name`. Для прочих источников
+ * поведение прежнее (автор не задаётся).
+ */
+export function eventToMessage(event: SynthEvent, opts?: EventToMessageOptions): Message {
+  const text = eventToMessageText(event);
+  const isCron = event.source === 'cron';
+  const content = isCron && opts?.schedulerNotice ? `${opts.schedulerNotice}\n\n${text}` : text;
+
+  const metadata: Record<string, unknown> = {
+    source: event.source,
+    event_id: event.id,
+    dedup_key: event.dedupKey,
+    ...(event.identity?.chatKey ? { chat_key: event.identity.chatKey } : {}),
+  };
+
+  if (isCron) {
+    const payload =
+      event.payload && typeof event.payload === 'object'
+        ? (event.payload as { scheduleId?: unknown; name?: unknown })
+        : {};
+    metadata.scheduler = true;
+    if (typeof payload.scheduleId === 'string' && payload.scheduleId) {
+      metadata.schedule_id = payload.scheduleId;
+    }
+    if (typeof payload.name === 'string' && payload.name) {
+      metadata.schedule_name = payload.name;
+    }
+  }
+
   return {
     id: generateId(),
     role: MessageRole.USER,
@@ -60,16 +101,12 @@ export function eventToMessage(event: SynthEvent): Message {
     origin: 'local',
     parts: [{ id: generateId(), type: 'text', data: content }],
     content,
+    ...(isCron ? { author: 'Scheduler' } : {}),
     createdAt: nowISO(),
     disabled: false,
     pinned: false,
     hidden: false,
-    metadata: {
-      source: event.source,
-      event_id: event.id,
-      dedup_key: event.dedupKey,
-      ...(event.identity?.chatKey ? { chat_key: event.identity.chatKey } : {}),
-    },
+    metadata,
   };
 }
 

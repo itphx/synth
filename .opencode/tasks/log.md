@@ -2011,3 +2011,24 @@
   - **Не сделано (ожидает согласования):** правка корневого `AGENTS.md` (AD-051/089, runtime-таблица `/api/v2/schedules`, раздел «Внешние события и хуки»), статус AD-051 в `docs/arch_decisions/README.md`; правка item 4 прошлой записи (TBD → `ed1351b`) внесена.
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** `6c5ef7e` (код+docs+журнал; в записи было «нет»).
+
+## 2026-10-08 — AD-051: тех.долг мульти-инстанса + системный пользователь Scheduler
+- **Задача:** (1) зафиксировать в AD как тех.долг вопрос синхронизации нескольких инстансов backend (чтобы не было повторов срабатываний); (2) сообщения шедулера должны генерироваться не от имени пользователя, а от понятного агентам системного пользователя `Scheduler` с описанием (планировщик запустил плановое задание с текстом), описание — в системном контекстном файле рядом с остальными.
+- **Тип:** docs (AD) + feature
+- **Исполнитель:** @orchestrator (investigate, AD, AGENTS) → @fixer ×2 (реализация + косметика)
+- **Результат:** PASS
+- **Диагностика:** сообщение `source:'cron'` создавалось в `eventToMessage` без `author`; в сессии с `userId` оркестратор (`withAttribution`) отдавал модели `[anonymous]: <текст>`.
+- **Что сделано (код):**
+  - Ассеты `packages/core/prompts/system/SCHEDULER.{ru,en}.md` (шаблон `[SCHEDULER]`, плейсхолдер `{name}`) — рядом с `PARTICIPANTS_NOTICE`/`ROLES_DESCRIPTION`.
+  - `ContextConfig.getSchedulerNotice(language)` (override-aware); `buildSchedulerNotice` (`engine/scheduler/notice.ts`) — язык сессии, подстановка `{name}` (fallback `scheduleId`), `trimEnd`.
+  - `eventToMessage(event, { schedulerNotice })`: для `source:'cron'` → `author:'Scheduler'`, `content = notice + '\n\n' + текст`, metadata `scheduler/schedule_id/schedule_name`; прочие источники без изменений.
+  - Проброс notice в обоих `deliver` (core `server/app.ts`, backend `app.ts`).
+  - Тесты: +11 (config ×2, request-session ×4, notice ×5).
+- **Что сделано (доки):**
+  - `ad-051`: разделы «Идентичность сообщений планировщика (Scheduler)» (✅ реализовано) и «Технический долг: мульти-инстанс, синхронизация и идемпотентность» (⏳: leader election через K8s Lease/отдельный Deployment/PG advisory lock; атомарный `DedupStore.tryClaim`; межпроцессная сериализация `ScheduleStore`); актуализирован статус/«что осталось».
+  - `ad-089`: cross-ref (Scheduler-сообщения; мульти-инстанс — тех.долг).
+  - Корневой `AGENTS.md`: строка про планировщик дополнена автором `Scheduler`, ассетом и пометкой тех.долга.
+- **Проверки:** typecheck 6/6; lint 0 errors; тесты shared 197 · core **2555** · ui 1019 · backend 347 (одиночный флейк `task-resume` при первом параллельном прогоне — повторно зелёный). Dev-smoke (без LLM): сообщение в очереди — `author="Scheduler"`, контент `[SCHEDULER]\n\nСообщение от системного пользователя «Scheduler» … «Smoke Nightly» …\n\nсобери отчёт по инцидентам`, metadata `source=cron/scheduler=true/schedule_id/schedule_name`.
+- **Замечания:** в чартах `backend.replicaCount: 1`, поэтому сейчас дублей нет — тех.долг проявится при масштабировании. В dev-инстансе остаётся пользовательское расписание «Тест» (`*/5`), не трогал.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** нет (ожидает явной просьбы пользователя).

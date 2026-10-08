@@ -330,3 +330,38 @@ describe('ContextConfig.getModePolicy (AD-070 §3.1)', () => {
     expect(config.getModePolicy('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКАЯ ПОЛИТИКА');
   });
 });
+
+describe('ContextConfig.getSchedulerNotice (AD-051)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-scheduler-notice-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('ru → русский контент с плейсхолдером {name}, en → английский, fr → пустая строка', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const ru = config.getSchedulerNotice('ru');
+    expect(ru).toContain('{name}');
+    expect(ru).toContain('планировщик');
+
+    const en = config.getSchedulerNotice('en');
+    expect(en).toContain('{name}');
+    expect(en.toLowerCase()).toContain('scheduler');
+    expect(en).not.toContain('планировщик');
+
+    expect(config.getSchedulerNotice('fr')).toBe('');
+  });
+
+  it('override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(join(userDataDir, 'user', 'system', 'SCHEDULER.md'), 'ПОЛЬЗОВАТЕЛЬСКИЙ SCHEDULER {name}', 'utf-8');
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getSchedulerNotice('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ SCHEDULER {name}');
+  });
+});

@@ -45,7 +45,7 @@ import {
   HookBus,
   startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  ScheduleStore, SchedulerRuleProvider, SchedulerService,
+  ScheduleStore, SchedulerRuleProvider, SchedulerService, buildSchedulerNotice,
   createEventRoutes, createSchedulerRoutes,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
@@ -550,7 +550,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       // AD-089: UI-событие после материализации внешнего события.
       publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
       deliver: async (sessionId, event, mode) => {
-        let message = eventToMessage(event);
+        // AD-051: cron-сообщение — от системного пользователя `Scheduler` с notice.
+        const schedulerNotice = await buildSchedulerNotice(
+          sessionManager, contextConfig, sessionId, event,
+        );
+        let message = eventToMessage(event, { schedulerNotice });
         if (mode === 'run') {
           // AD-036: обфускация user-сообщения ДО сохранения в историю (паритет с
           // prompt-путём — core routes/sessions.ts).

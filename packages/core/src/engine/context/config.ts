@@ -362,6 +362,30 @@ export class ContextConfig {
     return this._readPrompt('PARTICIPANTS_NOTICE', 'system', language) ?? '';
   }
 
+  /**
+   * AD-051: notice планировщика (системный пользователь «Scheduler»).
+   * Файлы: prompts/system/SCHEDULER.{lang}.md — только локализованные
+   * (базового SCHEDULER.md нет). Override через {userDataDir}/user/system/ —
+   * стандартный механизм system-категории, проверяется первым.
+   * Возвращает пустую строку, если файл не найден.
+   */
+  getSchedulerNotice(language = 'ru'): string {
+    const stem = 'SCHEDULER';
+
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return content;
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
+
+    // 2. Встроенный prompts/system/SCHEDULER.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
   getSummarizerPrompt(language = 'ru'): string {
     return this._readPrompt('SUMMARIZER', 'system', language) ?? '';
   }
