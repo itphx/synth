@@ -1,6 +1,6 @@
 # AD-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⚠️ Частично — реализован минимальный срез (cron/interval-источник событий через AD-089, идентичность сообщений `Scheduler`); Job-история, catch-up, пайплайны — нет; мульти-инстанс/идемпотентность — тех.долг.
+> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник событий через AD-089, идентичность сообщений `Scheduler`), Job-история, catch-up и force-запуск (rate limit); пайплайны (AD-059) и размещение в гибриде — нет; мульти-инстанс/идемпотентность — тех.долг.
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D6, идея 6 + Roadmap Фаза 2; прототип
 > `~/dev/aic/t11/synth/app/scheduler.py`).
@@ -63,42 +63,67 @@
 
 **Реализован минимальный срез** (cron/interval-источник событий через AD-089),
 без внешних зависимостей — собственный mini-cron-парсер вместо `node-cron`.
+Job-история, catch-up и принудительный (force) запуск с rate limit добавлены.
 
 Что есть:
 
-- **shared**: типы `Schedule`/`ScheduleInput`/`ScheduleTarget` (`types/schedules.ts`),
+- **shared**: типы `Schedule`/`ScheduleInput`/`ScheduleTarget`/`ScheduleJob`/
+  `ScheduleJobTrigger`/`ScheduleRunStatus` (`types/schedules.ts`),
   Zod-схемы `scheduleTargetSchema`/`scheduleInputSchema`/`scheduleSchema`,
-  конфиг-секция `scheduler` (`enabled`/`tickSec`).
+  конфиг-секция `scheduler` (`enabled`/`tickSec`/`catchUp`/`jobRetentionDays`).
 - **core, парсеры** (`engine/scheduler/`): `nextCronDate`/`isValidCron`
   (5 полей, UTC, токены `*`/`n`/`a-b`/`a,b`/`*` со шагом/`a-b/шаг`),
   `parseDurationMs`/`isValidDuration` (`30s|15m|1h|24h`), `nextRunAt`.
 - **core, хранилище**: `ScheduleStore` (`{dataDir}/schedules.json`, атомарная
-  запись, `schemaVersion`, CRUD + `markRun`).
+  запись, `schemaVersion`, CRUD + `markRun`); `JobStore`
+  (`{dataDir}/scheduler/jobs.jsonl`, append-only JSONL под `AsyncLock`, `list`
+  по `scheduleId`/`limit`, `prune` по retention — по образцу `EventJournalStore`).
 - **core, маршрутизация**: `SchedulerRuleProvider` (`RouteRuleProvider`) —
   cron-событие → `bound`/`queue`/`ephemeral`/`drop` по расписанию.
-- **core, сервис**: `SchedulerService` (тикер с `unref`, guard от наложения, без
-  catch-up), публикует `{source:'cron', type:'schedule_fired'}` через
-  `EventIngress`; `startScheduler`.
-- **core, API**: `createSchedulerRoutes` (`/api/v2/schedules`, 5 эндпоинтов),
-  сшивка в `server/app.ts`/`main.ts` (standalone).
+- **core, сервис**: `SchedulerService` (тикер с `unref`, in-flight guard по
+  `scheduleId` + флаг `_busy` на тик, catch-up на старте, Job-история, force-run),
+  публикует `{source:'cron', type:'schedule_fired'}` через `EventIngress`;
+  `startScheduler`.
+- **core, API**: `createSchedulerRoutes` (`/api/v2/schedules`, CRUD + `POST /:id/run`
+  + `GET /:id/jobs`; опции `runGuard`/`runMiddleware`), сшивка в
+  `server/app.ts`/`main.ts` (standalone).
 - **backend, API/RBAC**: та же `createSchedulerRoutes` смонтирована в
   `packages/backend/src/app.ts` — чтение `requireAuth`, мутации и `POST /:id/run`
-  — `requireAdmin`; `SchedulerRuleProvider` зарегистрирован на `eventRouter`,
+  — `requireAdmin`, `run` дополнительно под rate limit (10/60 c, `runMiddleware`);
+  `SchedulerRuleProvider` зарегистрирован на `eventRouter`,
   `SchedulerService.start()` — по `scheduler.enabled`, `stopScheduler` на
   graceful shutdown (`src/main.ts`); тесты — `packages/backend/src/routes/schedules.test.ts`.
-- **конфиг**: `scheduler.enabled`/`scheduler.tickSec` (`docs/CONFIGURATION.md`).
+- **UI**: вкладка «Шедулер» — CRUD расписаний, быстрый toggle, force-запуск,
+  раскрываемый блок «История запусков» (ленивая загрузка `GET /:id/jobs` с кэшем,
+  статус/время/триггер/длительность/`decision`·`reason`/`sessionId`/ошибка) и
+  рекомендация включить оптимизацию контекста с переходом на вкладку «Контекст».
+- **конфиг**: `scheduler.enabled`/`scheduler.tickSec`/`scheduler.catchUp`/
+  `scheduler.jobRetentionDays` (`docs/CONFIGURATION.md`).
 
 Что осталось (следующие задачи):
 
-- Сущность **Job** и история запусков (снимок target, результат/ошибка,
-  старт/финиш), retention.
-- **Catch-up** после простоя процесса и лимит параллельных запусков.
-- UI-интерфейс правил и истории (замена placeholder в `RightPanel.tsx`) — сама вкладка уже рабочая, остаётся история Job'ов.
-- Rate limit на принудительный запуск (`POST /:id/run`) — в core-фабрике нет
-  отдельного guard'а под `run` (только общий `writeGuard`).
 - **Пайплайны** (AD-059) — композиция шагов поверх расписаний.
 - Где живёт планировщик в гибриде (сервер vs локальный core, AD-042).
 - **Мульти-инстанс/идемпотентность** — см. раздел «Технический долг» ниже.
+
+### Job-история, catch-up и force-запуск
+
+- **Job.** Каждое срабатывание (`cron` — тик, `manual` — `POST /:id/run`,
+  `catchup` — догоняющее) пишется в append-only JSONL `{dataDir}/scheduler/jobs.jsonl`
+  (`JobStore`): снимок `target`, `status` (`ok`/`error`/`skipped`), `startedAt`/
+  `finishedAt`/`durationMs`, `dedupKey`, `decision` и `reason` маршрутизации
+  (`drop no_route`, `busy`, `missed`), `sessionId` и `error`. Retention —
+  `scheduler.jobRetentionDays` (по умолчанию 30): `prune` на старте сервиса
+  (best-effort). Читается через `GET /api/v2/schedules/:id/jobs` (`?limit`, max 200).
+- **Catch-up.** На старте расписание с `nextRunAt` в прошлом обрабатывается по
+  `schedule.catchUp` (`skip` — Job `skipped`/`reason:'missed'` + пересчёт; `once` —
+  одно догоняющее срабатывание `trigger:'catchup'`); дефолт — `scheduler.catchUp`.
+  Ограничение наложения: in-flight guard по `scheduleId` (второй запуск → Job
+  `skipped`/`reason:'busy'` без публикации события).
+- **Force-run.** `POST /api/v2/schedules/:id/run` вызывает `SchedulerService.runNow`
+  (всегда `force`, в т.ч. для выключенного расписания): уникальный dedup-ключ
+  `cron:<id>:manual:<ISO>` → событие уходит в Router. В managed backend — ADMIN
+  + rate limit 10/60 c (`runMiddleware`).
 
 Проверено: `pnpm typecheck` (6/6), `pnpm lint` (0 errors), `pnpm test` (все
 зелёные), новые тесты — cron/duration/store/scheduler/route-provider/routes

@@ -1,6 +1,6 @@
 import type { MessageData } from '@/stores/chatStore'
 import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, SynthEvent, RouteDecision } from '@itphx/synth-shared'
-import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry, Schedule, ScheduleInput } from '@itphx/synth-shared/types'
+import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry, Schedule, ScheduleInput, ScheduleJob } from '@itphx/synth-shared/types'
 
 // Реэкспорт общих контрактов (AD-071): без локальных дублей.
 export type { McpServerConfig, ToolsPolicy }
@@ -1859,6 +1859,13 @@ export const synthApi = {
       { method: 'POST' },
     )
     return res.schedule
+  },
+
+  /** GET /schedules/:id/jobs — история срабатываний расписания (AD-051). */
+  async getScheduleJobs(scheduleId: string, limit = 20): Promise<{ jobs: ScheduleJob[] }> {
+    return fetchJSON<{ jobs: ScheduleJob[] }>(
+      `${BASE_URL}/schedules/${encodeURIComponent(scheduleId)}/jobs?limit=${encodeURIComponent(String(limit))}`,
+    )
   },
 }
 

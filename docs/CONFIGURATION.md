@@ -373,6 +373,8 @@ Cron/interval-планировщик публикует события `source: 
 |------|-----------|--------------|
 | `scheduler.enabled` | Мастер-выключатель сервиса: `false` — тикер не стартует (CRUD расписаний и `run` остаются) | `true` |
 | `scheduler.tickSec` | Период тика, секунды (1..3600) | `60` |
+| `scheduler.catchUp` | Поведение при пропущенном на старте срабатывании: `skip` — Job `skipped` с пересчётом `nextRunAt`, `once` — одно догоняющее (`trigger:'catchup'`); расписание может переопределить полем `catchUp` | `skip` |
+| `scheduler.jobRetentionDays` | Срок хранения Job-истории (`{dataDir}/scheduler/jobs.jsonl`), дни; `prune` на старте сервиса | `30` |
 
 Пример:
 
@@ -380,6 +382,8 @@ Cron/interval-планировщик публикует события `source: 
 scheduler:
   enabled: true
   tickSec: 60
+  catchUp: skip
+  jobRetentionDays: 30
 ```
 
 ### Гибридный режим (remote)

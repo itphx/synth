@@ -707,12 +707,18 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     ));
 
-    // AD-051 (срез) / AD-089: CRUD расписаний и принудительный запуск.
-    // Чтение — requireAuth (дефолт core-фабрики), мутации и `run` — ADMIN.
+    // AD-051 / AD-089: CRUD расписаний, принудительный запуск и Job-история.
+    // Чтение — requireAuth (дефолт core-фабрики), мутации — ADMIN. `run` —
+    // ADMIN + rate limit (образец — ingest внешних событий): 10 запусков / 60 c
+    // на ключ, т.к. каждый запуск ингестит событие в Router.
     app.route('/api/v2/schedules', createSchedulerRoutes(
       auth,
       { scheduleStore, scheduler: schedulerService, jobStore },
-      { writeGuard: auth.requireAdmin },
+      {
+        writeGuard: auth.requireAdmin,
+        runGuard: auth.requireAdmin,
+        runMiddleware: [createRateLimiter(10, 60_000)],
+      },
     ));
 
     // MCP routes (единый реестр; legacy /servers — адаптеры над ним)

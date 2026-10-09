@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import type {
   Schedule,
   ScheduleInput,
+  ScheduleJob,
+  ScheduleJobTrigger,
   ScheduleRunStatus,
   ScheduleTarget,
 } from '@itphx/synth-shared/types'
@@ -12,7 +14,9 @@ import { confirm } from '@/lib/confirm'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
+import { useUIStore } from '@/stores/useUIStore'
 import { formatDateTime } from '@/lib/formatDate'
+import { formatDuration } from '@/lib/formatStats'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/Toggle'
@@ -102,6 +106,7 @@ function editorToInput(editor: EditorState): ScheduleInput {
 export function SchedulerTab() {
   const { t, locale } = useI18n()
   const { notify } = useNotification()
+  const setRightPanelTab = useUIStore((s) => s.setRightPanelTab)
 
   const sessions = useSessionsStore((s) => s.sessions)
   const agents = useAgentsStore((s) => s.agents)
@@ -336,6 +341,31 @@ export function SchedulerTab() {
           <Icon name="add" className="size-3.5" />
           {t('rightPanel.scheduler.add')}
         </Button>
+      </div>
+
+      {/* AD-051: сессии, запускаемые планировщиком, чаще упираются в лимит
+          контекста — рекомендация включить оптимизацию (сама настройка живёт
+          на уровне сессии, вкладка «Контекст»). */}
+      <div
+        className="flex flex-col gap-2 rounded-lg border border-border bg-surface-inset p-3"
+        data-testid="scheduler-context-hint"
+      >
+        <div className="flex items-start gap-2 min-w-0">
+          <Icon name="lightbulb" className="mt-0.5 size-4 shrink-0 text-primary" />
+          <p className="min-w-0 break-words text-xs text-muted-foreground">
+            {t('rightPanel.scheduler.contextHint.text')}
+          </p>
+        </div>
+        <div className="flex justify-end">
+          <Button
+            variant="outline-muted"
+            onClick={() => setRightPanelTab('context')}
+            data-testid="scheduler-open-context"
+          >
+            <Icon name="file-text" className="size-3.5" />
+            {t('rightPanel.scheduler.contextHint.action')}
+          </Button>
+        </div>
       </div>
 
       {loadError && (
@@ -585,6 +615,8 @@ export function SchedulerTab() {
                 </div>
               )}
 
+              <JobHistory scheduleId={schedule.id} />
+
               <div className="flex items-center justify-end gap-1">
                 <Button
                   variant="ghost"
@@ -636,6 +668,148 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div className="flex items-start justify-between gap-2 min-w-0">
       <dt className="shrink-0 font-medium">{label}:</dt>
       <dd className="min-w-0 break-words text-right">{value}</dd>
+    </div>
+  )
+}
+
+/** Цвет бейджа статуса Job: ok — primary, error — destructive, skipped — muted. */
+const JOB_STATUS_CLASS: Record<ScheduleRunStatus, string> = {
+  ok: 'bg-primary/15 text-primary',
+  error: 'bg-destructive/10 text-destructive',
+  skipped: 'bg-muted text-muted-foreground',
+}
+
+/**
+ * AD-051: раскрываемый блок «История запусков» в карточке расписания.
+ * История лениво грузится при первом раскрытии и кэшируется; повторное
+ * раскрытие отдаёт кэш, кнопка «Обновить» перечитывает с сервера.
+ */
+function JobHistory({ scheduleId }: { scheduleId: string }) {
+  const { t, locale } = useI18n()
+  const [open, setOpen] = useState(false)
+  const [jobs, setJobs] = useState<ScheduleJob[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const { jobs: list } = await synthApi.getScheduleJobs(scheduleId)
+      setJobs(list)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('common.error'))
+    } finally {
+      setLoading(false)
+    }
+  }, [scheduleId, t])
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next && jobs === null && !loading) void load()
+  }
+
+  const triggerLabel = (trigger: ScheduleJobTrigger) =>
+    t(`rightPanel.scheduler.history.trigger.${trigger}`)
+
+  return (
+    <div className="min-w-0" data-testid={`scheduler-history-${scheduleId}`}>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        data-testid={`scheduler-history-toggle-${scheduleId}`}
+        className="flex w-full min-w-0 items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <Icon name={open ? 'arrow-down-s' : 'arrow-right-s'} className="size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-left">
+          {t('rightPanel.scheduler.history.title')}
+        </span>
+        {jobs && jobs.length > 0 && (
+          <span className="shrink-0 text-muted-foreground">{jobs.length}</span>
+        )}
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-1.5 min-w-0">
+          <div className="flex items-center justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-8 px-2"
+              onClick={() => void load()}
+              disabled={loading}
+              data-testid={`scheduler-history-refresh-${scheduleId}`}
+            >
+              <Icon name="refresh" className={`size-3.5 ${loading ? 'animate-spin' : ''}`} />
+              {t('common.refresh')}
+            </Button>
+          </div>
+
+          {error && (
+            <div role="alert" className="break-words text-xs text-destructive">
+              {t('rightPanel.scheduler.history.loadError', { error })}
+            </div>
+          )}
+
+          {!error && jobs && jobs.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              {t('rightPanel.scheduler.history.empty')}
+            </p>
+          )}
+
+          {!error && jobs && jobs.length > 0 && (
+            <ul className="space-y-1.5 min-w-0">
+              {[...jobs].reverse().map((job) => {
+                const detail = job.reason
+                  ? [job.decision ?? job.status, job.reason].join(' · ')
+                  : undefined
+                return (
+                  <li
+                    key={job.id}
+                    className="min-w-0 space-y-1 rounded-md border border-border/60 bg-background p-2"
+                    data-testid={`scheduler-job-${job.id}`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={`shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium ${JOB_STATUS_CLASS[job.status]}`}
+                      >
+                        {t(`rightPanel.scheduler.status.${job.status}`)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-muted-foreground">
+                        {formatDateTime(job.finishedAt, locale)}
+                      </span>
+                      <span className="shrink-0 text-[0.6875rem] text-muted-foreground">
+                        {triggerLabel(job.trigger)} · {formatDuration(job.durationMs)}
+                      </span>
+                    </div>
+                    {detail && (
+                      <div className="break-words text-[0.6875rem] text-muted-foreground">
+                        {detail}
+                      </div>
+                    )}
+                    {job.sessionId && (
+                      <div className="break-words text-[0.6875rem] text-muted-foreground">
+                        {job.sessionId}
+                      </div>
+                    )}
+                    {job.error && (
+                      <div className="break-words text-[0.6875rem] text-destructive">
+                        {job.error}
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+
+          {!error && jobs === null && loading && (
+            <p className="text-xs text-muted-foreground">{t('common.loading')}</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

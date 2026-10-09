@@ -861,6 +861,14 @@ export const dict = {
   'rightPanel.scheduler.status.ok': 'ok',
   'rightPanel.scheduler.status.error': 'error',
   'rightPanel.scheduler.status.skipped': 'skipped',
+  'rightPanel.scheduler.history.title': 'Run history',
+  'rightPanel.scheduler.history.empty': 'No runs yet',
+  'rightPanel.scheduler.history.loadError': 'Failed to load run history: {error}',
+  'rightPanel.scheduler.history.trigger.cron': 'Cron',
+  'rightPanel.scheduler.history.trigger.manual': 'Manual',
+  'rightPanel.scheduler.history.trigger.catchup': 'Catch-up',
+  'rightPanel.scheduler.contextHint.text': 'For sessions triggered by the scheduler, enabling context optimization is recommended — it reduces token usage.',
+  'rightPanel.scheduler.contextHint.action': 'Open "Context"',
 
   // Center panel (tabs)
   'center.tab.chat': 'Chat',

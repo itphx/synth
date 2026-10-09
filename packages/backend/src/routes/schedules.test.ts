@@ -17,6 +17,7 @@ import {
 import type { EventIngress } from '@itphx/synth-core';
 import type { ScheduleInput, User } from '@itphx/synth-shared';
 import { createBackendApp } from '../app.js';
+import { createRateLimiter } from '../middleware/rate-limiter.js';
 
 function makeUser(id: string, roles: User['roles']): User {
   return {
@@ -178,6 +179,27 @@ describe('Schedules API Routes (AD-051 срез / AD-089, backend RBAC)', () => 
     expect((await put(app, '/api/v2/schedules/nope', VALID_BODY)).status).toBe(404);
     expect((await post(app, '/api/v2/schedules/nope/run', {})).status).toBe(404);
     expect((await app.request('/api/v2/schedules/nope', { method: 'DELETE' })).status).toBe(404);
+  });
+
+  it('ADMIN: run под rate limit (`runMiddleware`) → 429 после лимита', async () => {
+    const { requireAuth, requireAdmin } = makeGuards(admin);
+    const rateLimited = new Hono();
+    rateLimited.route('/api/v2/schedules', createSchedulerRoutes(
+      { requireAuth },
+      { scheduleStore, scheduler },
+      {
+        writeGuard: requireAdmin,
+        runGuard: requireAdmin,
+        runMiddleware: [createRateLimiter(2, 60_000)],
+      },
+    ));
+    const created = await scheduleStore.create(VALID_BODY);
+
+    expect((await post(rateLimited, `/api/v2/schedules/${created.id}/run`, {})).status).toBe(200);
+    expect((await post(rateLimited, `/api/v2/schedules/${created.id}/run`, {})).status).toBe(200);
+    const limited = await post(rateLimited, `/api/v2/schedules/${created.id}/run`, {});
+    expect(limited.status).toBe(429);
+    expect((await limited.json() as { error: { code: string } }).error.code).toBe('RATE_LIMITED');
   });
 });
 

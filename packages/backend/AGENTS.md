@@ -94,7 +94,7 @@
 | `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
 | `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`requireAuth` + rate limit), `/bindings` — CRUD (чтение `requireAuth`, мутации `requireAdmin`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089) |
-| `/api/v2/schedules` | core `createSchedulerRoutes` (AD-051 срез / AD-089): чтение — `requireAuth`, мутации и `POST /:id/run` — `requireAdmin`; `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
+| `/api/v2/schedules` | core `createSchedulerRoutes` (AD-051 срез / AD-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (AD-051); `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
 

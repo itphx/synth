@@ -622,8 +622,9 @@ backend). Срабатывание не создаёт сессию
 `type: 'schedule_fired'` через `EventIngress`, а маршрутизацию выполняет
 `SchedulerRuleProvider` (`RouteRuleProvider`). RBAC managed (backend): чтение
 (`GET`) — `requireAuth`; мутации (`POST`/`PUT`/`DELETE`) и принудительный запуск
-(`POST /:id/run`) — только ADMIN (`writeGuard = requireAdmin`). В core
-(standalone) — единый `requireAuth` на все методы.
+(`POST /:id/run`) — только ADMIN (`writeGuard = requireAdmin`); `run` дополнительно
+под rate limit 10/60 c (`runMiddleware`). В core (standalone) — единый `requireAuth`
+на все методы.
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|---|
@@ -631,12 +632,19 @@ backend). Срабатывание не создаёт сессию
 | POST | `/api/v2/schedules` | оба | ADMIN | Создание (`scheduleInputSchema`): `{name, enabled?, cron?, every?, target, prompt?, payload?, ownerId?}`; ровно одно из `cron`/`every`; невалидно → 400 `VALIDATION_ERROR`; → 201 `{schedule}` |
 | PUT | `/api/v2/schedules/:id` | оба | ADMIN | Обновление (полное тело как POST) → 200 `{schedule}`; нет записи → 404 `NOT_FOUND` |
 | DELETE | `/api/v2/schedules/:id` | оба | ADMIN | Удаление → 204; нет записи → 404 |
-| POST | `/api/v2/schedules/:id/run` | оба | ADMIN | Принудительный запуск (ingest события с уникальным dedup-ключом) → 200 `{schedule}`; нет записи → 404 |
+| POST | `/api/v2/schedules/:id/run` | оба | ADMIN | Принудительный запуск (force, ingest события с уникальным dedup-ключом; managed — rate limit 10/60 c) → 200 `{schedule}`; нет записи → 404 |
+| GET | `/api/v2/schedules/:id/jobs` | оба | requireAuth | История срабатываний `{jobs}` (`ScheduleJob[]`, AD-051); `?limit=` (дефолт 20, max 200); нет расписания → 404; без `JobStore` → `{jobs:[]}` |
+
+`ScheduleJob` (`types/schedules.ts`): `trigger` (`cron`/`manual`/`catchup`),
+`status` (`ok`/`error`/`skipped`), `startedAt`/`finishedAt`/`durationMs`, `target`,
+`decision`/`reason` (маршрутизация: `drop no_route`, `busy`, `missed`),
+`sessionId`, `error`.
 
 `target` — дискриминированный союз: `{mode:'bound', sessionId}` |
 `{mode:'ephemeral', agentTemplate?, project?, ttl?}` | `{mode:'queue', sessionId}`.
 `cron` — 5 полей (UTC), `every` — `30s | 15m | 1h | 24h`. `nextRunAt` вычисляется
-сервисом; catch-up отсутствует (пропущенные срабатывания пропускаются).
+сервисом; `catchUp` (`skip`/`once`, дефолт `scheduler.catchUp`) управляет поведением
+при пропущенном на старте срабатывании, Job-история — `GET /:id/jobs`.
 
 ---
 

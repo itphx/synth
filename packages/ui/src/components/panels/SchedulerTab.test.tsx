@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   updateSchedule: vi.fn(),
   deleteSchedule: vi.fn(),
   runSchedule: vi.fn(),
+  getScheduleJobs: vi.fn(),
   getSessions: vi.fn(),
   getAgents: vi.fn(),
   getProjects: vi.fn(),
@@ -49,7 +50,8 @@ import { SchedulerTab } from './SchedulerTab'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
 import { useProjectsStore } from '@/stores/projectsStore'
-import type { Schedule } from '@itphx/synth-shared/types'
+import { useUIStore } from '@/stores/useUIStore'
+import type { Schedule, ScheduleJob } from '@itphx/synth-shared/types'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -123,6 +125,7 @@ beforeEach(() => {
   mocks.updateSchedule.mockResolvedValue(schedule())
   mocks.deleteSchedule.mockResolvedValue(undefined)
   mocks.runSchedule.mockResolvedValue(schedule())
+  mocks.getScheduleJobs.mockResolvedValue({ jobs: [] })
   mocks.getSessions.mockResolvedValue([SESSION])
   mocks.getAgents.mockResolvedValue({ agents: [AGENT], default_agent: 'assistant' })
   mocks.getProjects.mockResolvedValue([PROJECT])
@@ -300,5 +303,100 @@ describe('SchedulerTab — действия над расписанием', () =
     await click(container.querySelector('[data-testid="scheduler-delete-sch_1"]'))
     await act(async () => {})
     expect(mocks.deleteSchedule).not.toHaveBeenCalled()
+  })
+})
+
+function job(overrides: Partial<ScheduleJob> = {}): ScheduleJob {
+  return {
+    id: 'job_1',
+    scheduleId: 'sch_1',
+    scheduleName: 'Nightly build',
+    trigger: 'cron',
+    status: 'ok',
+    startedAt: '2026-10-08T03:00:00.000Z',
+    finishedAt: '2026-10-08T03:00:01.200Z',
+    durationMs: 1200,
+    target: { mode: 'bound', sessionId: 's1' },
+    ...overrides,
+  }
+}
+
+describe('SchedulerTab — рекомендация контекста (AD-051)', () => {
+  it('показывает рекомендацию и кнопка открывает вкладку «Контекст»', async () => {
+    useUIStore.setState({ rightPanelTab: 'scheduler' })
+    const container = await renderTab()
+
+    expect(container.querySelector('[data-testid="scheduler-context-hint"]')).not.toBeNull()
+    expect(container.textContent).toContain('context optimization')
+
+    await click(container.querySelector('[data-testid="scheduler-open-context"]'))
+    expect(useUIStore.getState().rightPanelTab).toBe('context')
+  })
+})
+
+describe('SchedulerTab — история запусков (AD-051)', () => {
+  it('история лениво грузится при первом раскрытии и рендерит поля Job', async () => {
+    mocks.getScheduleJobs.mockResolvedValue({
+      jobs: [
+        job({ id: 'job_1', trigger: 'manual', status: 'ok', decision: 'bound', sessionId: 's1' }),
+        job({
+          id: 'job_2',
+          trigger: 'cron',
+          status: 'skipped',
+          durationMs: 0,
+          reason: 'busy',
+        }),
+        job({
+          id: 'job_3',
+          trigger: 'catchup',
+          status: 'skipped',
+          reason: 'no_route',
+          decision: 'drop',
+        }),
+      ],
+    })
+    const container = await renderTab()
+    expect(mocks.getScheduleJobs).not.toHaveBeenCalled()
+
+    await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
+    await act(async () => {})
+
+    expect(mocks.getScheduleJobs).toHaveBeenCalledWith('sch_1')
+    const history = container.querySelector('[data-testid="scheduler-history-sch_1"]')!
+    expect(history.textContent).toContain('Manual')
+    expect(history.textContent).toContain('Catch-up')
+    expect(history.textContent).toContain('skipped · busy')
+    expect(history.textContent).toContain('drop · no_route')
+    expect(history.textContent).toContain('s1')
+  })
+
+  it('повторное раскрытие берёт историю из кэша (без нового запроса)', async () => {
+    mocks.getScheduleJobs.mockResolvedValue({ jobs: [job()] })
+    const container = await renderTab()
+
+    await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
+    await act(async () => {})
+    expect(mocks.getScheduleJobs).toHaveBeenCalledTimes(1)
+
+    await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
+    await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
+    await act(async () => {})
+    expect(mocks.getScheduleJobs).toHaveBeenCalledTimes(1)
+  })
+
+  it('пустая история → «No runs yet»', async () => {
+    mocks.getScheduleJobs.mockResolvedValue({ jobs: [] })
+    const container = await renderTab()
+    await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
+    await act(async () => {})
+    expect(container.textContent).toContain('No runs yet')
+  })
+
+  it('ошибка загрузки истории показывается пользователю', async () => {
+    mocks.getScheduleJobs.mockRejectedValue(new Error('history boom'))
+    const container = await renderTab()
+    await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
+    await act(async () => {})
+    expect(container.textContent).toContain('history boom')
   })
 })

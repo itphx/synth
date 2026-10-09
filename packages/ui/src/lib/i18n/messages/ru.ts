@@ -841,6 +841,14 @@ export const dict = {
   'rightPanel.scheduler.status.ok': 'успех',
   'rightPanel.scheduler.status.error': 'ошибка',
   'rightPanel.scheduler.status.skipped': 'пропуск',
+  'rightPanel.scheduler.history.title': 'История запусков',
+  'rightPanel.scheduler.history.empty': 'Нет записей',
+  'rightPanel.scheduler.history.loadError': 'Не удалось загрузить историю: {error}',
+  'rightPanel.scheduler.history.trigger.cron': 'Cron',
+  'rightPanel.scheduler.history.trigger.manual': 'Вручную',
+  'rightPanel.scheduler.history.trigger.catchup': 'Догоняющий',
+  'rightPanel.scheduler.contextHint.text': 'Для сессий, запускаемых планировщиком, рекомендуется включить оптимизацию контекста — это снижает расход токенов.',
+  'rightPanel.scheduler.contextHint.action': 'Открыть «Контекст»',
 
   // Center panel (tabs)
   'center.tab.chat': 'Чат',
