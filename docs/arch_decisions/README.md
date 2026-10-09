@@ -45,7 +45,7 @@
 |----|---------|--------|------|
 | AD-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ | [ad-018-session-engine-selection.md](./ad-018-session-engine-selection.md) |
 | AD-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов (AD-086) — нет | ⚠️ | [ad-030-hooks-agent-events.md](./ad-030-hooks-agent-events.md) |
-| AD-051 | Шедулер: минимальный срез — `SchedulerService` + cron/interval-источник `schedule_fired` через Router (AD-089), API/UI расписаний; Job-история, catch-up, пайплайны — нет | ⚠️ | [ad-051-scheduler-pipelines.md](./ad-051-scheduler-pipelines.md) |
+| AD-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (AD-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны (AD-059) и размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ | [ad-051-scheduler-pipelines.md](./ad-051-scheduler-pipelines.md) |
 | AD-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, journal)/UI, источник AD-051 (cron); AD-052/086 — нет | ⚠️ | [ad-089-external-events-automation.md](./ad-089-external-events-automation.md) |
 
 ## Deprecated AD
