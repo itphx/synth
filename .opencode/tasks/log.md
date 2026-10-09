@@ -2085,3 +2085,21 @@
 - **Замечания (остаток):** варианты **num_ctx / сокращение набора инструментов** пользователь отложил — upstream-баг Ollama остаётся (при переполнении контекста возможен повтор, но теперь ошибка локализована и понятна). `StreamErrorPanel` (событие `stream.error`) по-прежнему показывает сырой текст — вне объёма. Ollama на test/preprod обновить, когда вльют #17813/#17894.
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** `994961f`
+
+## 2026-10-09 — 15:05 — Онбординг: capability `user` для `profile_update` (только Ассистенту) + гейт интервью по доступности
+- **Задача:** «инструмент для обновления профиля не доступен агенту и не найден в списке встроенных» → затем идея улучшения: отдельная capability для тулов работы с пользователем; выдать только Агенту `assistant`; не инжектить `[INTERVIEW]`, если тул `profile_update` недоступен.
+- **Тип:** investigate (расхождение рантайма) + feature (shared+core+ui) + fix (ui)
+- **Исполнитель:** @orchestrator (investigate/дизайн/верификация) → @fixer → независимая верификация @tester → @fixer (панель)
+- **Результат:** PASS
+- **Диагностика «пропажи» тула:** `profile_update` присутствовал и в исходниках, и в `dist`, и в `ALL_BUILTIN_TOOLS` (52). В рантайме не было: backend (PID 539927, старт 8 окт 23:37) и standalone-core (PID 541010, 23:38) запущены ДО пересборки core (9 окт 02:02, коммит `c15f86f` 09:05) → в памяти старый реестр (51 тул, без `profile_update`). Причина — stale dev-процессы, правки кода не требовалось (рестарт `dev.sh`). Побочно: в админ-разделе «Встроенные инструменты» тулы с capability `runtime` вынесены в отдельную always-on подсекцию — `profile_update` был там.
+- **Решения пользователя:** имя capability `user`; отключаемая (не защищать как `runtime`); условие #3 — по реальной доступности `profile_update` (`computeToolAvailability` + admin-disabled), не по одной capability.
+- **Что сделано (feature, `43ba6d9`):**
+  - `shared`: `ToolCapability.USER='user'` + `TOOL_CAPABILITY_META`; Zod/конфиг подхватывают через `Object.values(ToolCapability)` (правок не потребовалось).
+  - `core`: `profile-update.ts` → `capabilities:[USER]`; `assistant.json` +`user` (только Ассистент); `permission/groups.ts` — группа `user:['profile_update']`; `orchestrator.ts` — `_profileUpdateAvailable` (registry.get + `_isAdminDisabled` + `_availabilityPredicate`, fail-closed) и расширенный `_interviewEligible(session, message, toolAccess)`; обновлены оба call-site (`getPromptInfo`, `_processMessage`).
+  - `ui`: `'user'` в `DISABLEABLE_GROUPS`, i18n `mcpAdmin.tools.group.user` (ru/en), иконка `profile_update`.
+  - Тесты: `profile-update` (`['user']`), `orchestrator-interview` (новая сигнатура + 5 кейсов: с/без capability, admin-disable по capability и по имени, fail-closed), `settings` (принимает `user`). Доки: root `AGENTS.md`, `packages/core/AGENTS.md`.
+- **Что сделано (fix ui, `0f82ef8`):** `AgentsPanel` — `CAP_KEYS` из `TOOL_CAPABILITY_META` вместо хардкода (было 9 из 11; не было `runtime`/`user`); добавлены i18n `admin.agents.cap.runtime`/`.user` (ru/en) — устранял сырой ключ на карточке агента.
+- **Проверки:** `pnpm build` 6/6; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; `pnpm test` ~4182 (shared 197 · core 2613 · ui 1025 · backend 347). Поведенчески (node по `dist` + юнит-тесты): `profile_update` доступен только `assistant` (у developer/qa/title — `role`); интервью только Ассистенту; admin-disable capability/тула убирает и тул, и интервью; без реестра — fail-closed.
+- **Замечания (долг, не блокирует):** (1) НЕ функционально, но мертвый артефакт: `packages/backend/src/agents/definitions/*.json` — вторая копия дефиниций, кодом не читается (backend грузит системные дефиниции из `core/dist`, а `{dataDir}/agents` — только user-overrides); Dockerfile.backend копирует её впустую и она расходится с core (все 10 файлов). (2) `runtime`-capability теперь тоже видна в админ-панели агентов (следствие derive-from-meta) — это осознанно.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** `43ba6d9` (feature), `0f82ef8` (ui-fix)
