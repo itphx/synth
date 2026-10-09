@@ -151,7 +151,7 @@ describe('OllamaProvider — system prompt payload (AD-070 §2.2)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('в body.system уходит resolveSystemPromptText(payload)', async () => {
+  it('chat: system prompt уходит первым сообщением role=system, а не body.system', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: { content: 'ok' } }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -163,7 +163,46 @@ describe('OllamaProvider — system prompt payload (AD-070 §2.2)', () => {
     await provider.chat([makeMessage()], payload);
 
     const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
-    expect(body.system).toBe('system text');
+    // /api/chat игнорирует top-level system — поле быть не должно.
+    expect(body.system).toBeUndefined();
+    const messages = body.messages as Array<Record<string, unknown>>;
+    expect(messages[0]).toEqual({ role: 'system', content: 'system text' });
+  });
+
+  it('chatAsync: system prompt уходит первым сообщением role=system, а не body.system', async () => {
+    const lines = [JSON.stringify({ message: { content: 'ok' }, done: true })].join('\n') + '\n';
+    const fetchMock = vi.fn().mockResolvedValue(new Response(lines, {
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OllamaProvider(baseParams);
+    const payload: SystemPromptPayload = { text: 'system text', cacheKey: 'sess-1' };
+    // Полностью вычитываем генератор, чтобы fetch гарантированно выполнился.
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()], payload)) chunks.push(c);
+    expect(chunks.length).toBeGreaterThan(0);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.system).toBeUndefined();
+    const messages = body.messages as Array<Record<string, unknown>>;
+    expect(messages[0]).toEqual({ role: 'system', content: 'system text' });
+  });
+
+  it('chat: без системного промпта сообщение role=system не добавляется', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ message: { content: 'ok' } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OllamaProvider(baseParams);
+    await provider.chat([makeMessage()]);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    const messages = body.messages as Array<Record<string, unknown>>;
+    expect(messages.some((m) => m.role === 'system')).toBe(false);
   });
 });
 

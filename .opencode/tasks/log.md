@@ -2066,3 +2066,22 @@
 - **Замечания:** standalone-core `GET/PUT /auth/profile` (`packages/core/src/server/routes/auth.ts`) остаётся минимальным — чекбокс там не персистится (долг; в dev/managed работает через backend). Резолвер `isSchedulerActive` читает `schedules.json` раз в ход — долг на будущее.
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** нет (ожидает явной просьбы пользователя).
+
+## 2026-10-09 — Bug: ollama терял system-промпт + понятное сообщение об ошибке Qwen3.8 tool-цепочки
+- **Задача:** «Серьёзный баг. С провайдерами ollama не работают инструменты. Следующий вызов после инструмента падает: `Bad request: {"detail":"no user query found in messages"}`. Что-то подобное уже было с другими провайдерами. Разберись, обсудим.»
+- **Тип:** bug fix (core + shared i18n + ui)
+- **Исполнитель:** @orchestrator (investigate) → @fixer → верификация @orchestrator
+- **Результат:** PASS
+- **Диагностика:**
+  - `no user query found in messages` — это guard рендерера **Qwen3.8** (Ollama 0.32.x, `model/renderers/qwen35.go`; тот же чек — в HF-шаблоне): поднимается, если после обрезки контекста в списке не остаётся «простого» `user`-сообщения (только `assistant(tool_calls)` + `tool`). Срабатывает на 2-м+ шаге tool-loop. Upstream: **ollama#17778**, фиксы **#17813/#17894** (ещё не влиты); затронуты 0.32.13–0.32.15; qwen3.5/3.6 не задеты.
+  - **Воспроизведение (живые запросы):** на `omn` (`qwen3.8:27b`, Ollama 0.32.14) наш shape запроса (`user + assistant(tool_calls) + tool`, **51 инструмент**, дефолтный `num_ctx`) → **HTTP 500** `no user query found in messages`; тот же запрос с `num_ctx:8192` → **200**. На `ai.itphx.ru` тела падавших сессий → **HTTP 400** `{"detail":...}`; минимальный tool-loop с **1** инструментом → 200, с **51** → 400. Триггер — размер набора инструментов/контекста, а не буквальное отсутствие user.
+  - **Попутно наш баг:** `OllamaProvider` слал системный промпт в top-level `body.system`, который `/api/chat` **игнорирует** (поле есть только у `/api/generate`) → у `type: ollama` промпт терялся целиком (роль, режим, правила tool-use). Проверено: top-level `system` → инструкция игнорируется; `messages[0]={role:'system'}` → исполняется.
+- **Что сделано:**
+  - `providers/ollama.ts` (`chat`/`chatAsync`): system-промпт идёт **первым** сообщением `{role:'system'}` (через `resolveSystemPromptText`); `body.system` убран.
+  - `engine/llm-error.ts`: `classifyLlmError` распознаёт `no user query found in messages` (регистронезависимо, в обёртках `Bad request:`/`Ollama bad request:`) → тип `no_user_query`, добавлен в `UNRECOVERABLE_TYPES`.
+  - i18n: ключ `router.no_user_query` (en — `engine/system-messages.ts`, ru — `ui/src/lib/i18n/messages/ru.ts`, контракт — `shared/src/i18n`); `orchestrator.ts` — `_errorTypeI18n` + `_resolveAssistantStatus`.
+  - Тесты: `ollama.test.ts` (chat/chatAsync — system первым сообщением, `body.system===undefined`, без промпта — нет), `llm-error.test.ts` (классификация + unrecoverable по тексту и по типу), `orchestrator-error.test.ts` (assistant `status:'error'` + `metadata.i18n.key='router.no_user_query'`, `canRetry=false`).
+- **Проверки (оркестратор):** `pnpm typecheck` 6/6; `pnpm lint` 0 errors; тесты shared **197** · core **2607** · ui **1025**; diff просмотрен вручную.
+- **Замечания (остаток):** варианты **num_ctx / сокращение набора инструментов** пользователь отложил — upstream-баг Ollama остаётся (при переполнении контекста возможен повтор, но теперь ошибка локализована и понятна). `StreamErrorPanel` (событие `stream.error`) по-прежнему показывает сырой текст — вне объёма. Ollama на test/preprod обновить, когда вльют #17813/#17894.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** TBD

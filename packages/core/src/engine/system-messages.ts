@@ -266,6 +266,8 @@ export const SYSTEM_MESSAGES = {
   'router.escalation': 'Escalated to {provider}/{model}: {reason}',
   'router.context_length_exceeded': 'Context window exceeded',
   'router.rate_limit_exceeded': 'Request rate limit exceeded',
+  'router.no_user_query':
+    'The model could not process the tool-call chain (the original user query was lost). Try again, reduce the number of tools, or increase the model context window.',
 
   // --- Quality check (AD-034) ---
   'qc.min_length_ok': 'Response length {length} >= {min}',

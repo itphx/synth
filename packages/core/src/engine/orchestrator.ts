@@ -4808,6 +4808,7 @@ export class ChatOrchestrator {
       case 'router.network_error':
       case 'router.rate_limit_exceeded':
       case 'router.context_length_exceeded':
+      case 'router.no_user_query':
         return 'error';
       default:
         return 'completed';
@@ -5005,6 +5006,7 @@ export class ChatOrchestrator {
       case 'network_error': return i18nMeta('router.network_error');
       case 'rate_limit': return i18nMeta('router.rate_limit_exceeded');
       case 'context_length': return i18nMeta('router.context_length_exceeded');
+      case 'no_user_query': return i18nMeta('router.no_user_query');
       default: return undefined;
     }
   }

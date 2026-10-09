@@ -5,7 +5,8 @@
  * retry-цикл саб-агента (task.ts / task-resume.ts) использовал ту же
  * таксономию, что и QueueProcessor основной сессии:
  *   recoverable   — network_error, timeout, rate_limit, server_error, unknown
- *   unrecoverable — auth_error, model_not_found, context_length, provider_not_found
+ *   unrecoverable — auth_error, model_not_found, context_length,
+ *                   provider_not_found, no_user_query
  */
 import { ContextLengthExceededError } from '../providers/exceptions.js';
 
@@ -15,6 +16,10 @@ import { ContextLengthExceededError } from '../providers/exceptions.js';
  */
 export function classifyLlmError(errMsg: string): string {
   const lower = errMsg.toLowerCase();
+  // Провайдер отверг цепочку сообщений без исходного user-запроса (например
+  // openai: `Bad request: {"detail":"no user query found in messages"}`,
+  // ollama: `Ollama bad request: ...`). Это тупик tool-цепочки, не ретраится.
+  if (lower.includes('no user query found in messages')) return 'no_user_query';
   if (lower.includes('rate') || lower.includes('limit') || lower.includes('429')) return 'rate_limit';
   if (lower.includes('abort') || lower.includes('operation was aborted')) return 'timeout';
   if (lower.includes('timeout') || lower.includes('timed out')) return 'timeout';
@@ -29,7 +34,7 @@ export function classifyLlmError(errMsg: string): string {
 /** Типы ошибок, при которых повтор не имеет смысла. */
 const UNRECOVERABLE_TYPES = [
   'auth_error', 'model_not_found', 'context_length', 'provider_not_found',
-  'validation',
+  'validation', 'no_user_query',
 ];
 
 /**

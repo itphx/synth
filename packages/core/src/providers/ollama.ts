@@ -34,6 +34,11 @@ export class OllamaProvider extends BaseProvider {
     debugCollector?: DebugCollector,
   ): Promise<LLMResponse> {
     const formattedMessages = this._formatMessages(messages);
+    // Ollama /api/chat игнорирует top-level `system` (это поле есть только у
+    // /api/generate) — системный промпт обязан идти первым сообщением с
+    // role:'system', иначе он молча теряется целиком (роль, инструкции, режим).
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) formattedMessages.unshift({ role: 'system', content: systemText });
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
@@ -42,8 +47,6 @@ export class OllamaProvider extends BaseProvider {
     };
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
-    const systemText = resolveSystemPromptText(systemPrompt);
-    if (systemText) body.system = systemText;
     if (tools?.length) body.tools = this._formatTools(tools);
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 
@@ -85,6 +88,10 @@ export class OllamaProvider extends BaseProvider {
     cancellationToken?: CancellationToken,
   ): AsyncGenerator<LLMChunk> {
     const formattedMessages = this._formatMessages(messages);
+    // Ollama /api/chat игнорирует top-level `system` (см. chat()) — промпт
+    // уходит первым сообщением role:'system', одним ведущим system-ходом.
+    const systemText = resolveSystemPromptText(systemPrompt);
+    if (systemText) formattedMessages.unshift({ role: 'system', content: systemText });
     const body: Record<string, unknown> = {
       model: this.model,
       messages: formattedMessages,
@@ -93,8 +100,6 @@ export class OllamaProvider extends BaseProvider {
     };
     if (this.reasoningLevel === 'low') body.think = true;
     else if (this.reasoningLevel === 'none') body.think = false;
-    const systemText = resolveSystemPromptText(systemPrompt);
-    if (systemText) body.system = systemText;
     if (tools?.length) body.tools = this._formatTools(tools);
     if (this.numCtx && this.numCtx > 0) body.options = { num_ctx: this.numCtx };
 

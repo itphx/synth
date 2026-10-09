@@ -2053,6 +2053,8 @@ export const dict = {
   'router.escalation': 'Эскалация на {provider}/{model}: {reason}',
   'router.context_length_exceeded': 'Превышено окно контекста',
   'router.rate_limit_exceeded': 'Превышен лимит частоты запросов',
+  'router.no_user_query':
+    'Модель не смогла обработать цепочку вызова инструментов (потерян исходный запрос пользователя). Попробуйте ещё раз, уменьшите число инструментов или увеличьте контекст модели.',
 
   // --- Quality check (AD-034) ---
   'qc.min_length_ok': 'Длина ответа {length} >= {min}',

@@ -18,6 +18,17 @@ describe('classifyLlmError — единая таксономия типов', ()
     expect(classifyLlmError('context length exceeded')).toBe('context_length');
     expect(classifyLlmError('неизвестное')).toBe('unknown');
   });
+
+  it('распознаёт потерю исходного запроса в tool-цепочке (no_user_query)', () => {
+    expect(
+      classifyLlmError('Bad request: {"detail":"no user query found in messages"}'),
+    ).toBe('no_user_query');
+    expect(
+      classifyLlmError('Ollama bad request: {"detail":"no user query found in messages"}'),
+    ).toBe('no_user_query');
+    // регистронезависимо
+    expect(classifyLlmError('NO USER QUERY FOUND IN MESSAGES')).toBe('no_user_query');
+  });
 });
 
 describe('isLlmErrorRecoverable — объединённый набор паттернов', () => {
@@ -54,6 +65,14 @@ describe('isLlmErrorRecoverable — объединённый набор патт
     expect(isLlmErrorRecoverable(undefined, msg)).toBe(false);
   });
 
+  // Потеря исходного запроса в tool-цепочке не ретраится ни по тексту, ни по типу.
+  it.each([
+    'Bad request: {"detail":"no user query found in messages"}',
+    'Ollama bad request: {"detail":"no user query found in messages"}',
+  ])('no_user_query по тексту: %s → unrecoverable (false)', (msg) => {
+    expect(isLlmErrorRecoverable(new Error(msg), msg, 'no_user_query')).toBe(false);
+  });
+
   // Recoverable-строки должны остаться восполняемыми.
   it.each([
     'fetch failed: ECONNREFUSED',
@@ -80,7 +99,7 @@ describe('isLlmErrorRecoverable — объединённый набор патт
 
 describe('isLlmErrorRecoverable — приоритет errorType', () => {
   // errorType из UNRECOVERABLE_TYPES -> false, даже если текст их не содержит.
-  it.each(['context_length', 'auth_error', 'model_not_found', 'provider_not_found', 'validation'])(
+  it.each(['context_length', 'auth_error', 'model_not_found', 'provider_not_found', 'validation', 'no_user_query'])(
     'errorType=%s → false даже без совпадения по тексту',
     (type) => {
       expect(isLlmErrorRecoverable(new Error('argle bargle'), 'argle bargle', type)).toBe(false);

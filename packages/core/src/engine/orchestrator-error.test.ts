@@ -86,6 +86,22 @@ class AuthFailingProvider extends BaseProvider {
   }
 }
 
+/** Провайдер с non-recoverable ошибкой «потерян исходный запрос» (обычно после tool-вызова). */
+class NoUserQueryProvider extends BaseProvider {
+  async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
+    throw new Error('Bad request: {"detail":"no user query found in messages"}');
+  }
+
+  async *chatAsync(): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    yield { content: '', isFinal: false, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } };
+    throw new Error('Bad request: {"detail":"no user query found in messages"}');
+  }
+
+  getProviderName(): string {
+    return 'mocknoquery';
+  }
+}
+
 function makeCtxBuilder(): ContextBuilder {
   return {
     buildSystemPrompt: async () => 'system prompt',
@@ -275,5 +291,22 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     expect(assistants).toHaveLength(1);
     expect(assistants[0]!.metadata?.status).toBe('error');
     expect((assistants[0]!.metadata?.i18n as { key?: string } | undefined)).toBeUndefined();
+  });
+
+  // Потеря исходного запроса в tool-цепочке: провайдер отвергает запрос,
+  // пользователю показывается понятный i18n-ключ, а не сырой JSON.
+  it('no_user_query: assistant-сообщение несёт i18n-ключ router.no_user_query', async () => {
+    ProviderFactory.register('mocknoquery', NoUserQueryProvider);
+    const { result, sessionId } = await run('mocknoquery', { attempt: 1 });
+    ProviderFactory['_providers'].delete('mocknoquery');
+
+    expect(result.errorType).toBe('no_user_query');
+    expect(result.canRetry).toBe(false);
+
+    const session = await sessionManager.getSession(sessionId);
+    const assistant = session!.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
+    expect(assistant).toBeDefined();
+    expect(assistant.metadata?.status).toBe('error');
+    expect((assistant.metadata?.i18n as { key?: string } | undefined)?.key).toBe('router.no_user_query');
   });
 });
