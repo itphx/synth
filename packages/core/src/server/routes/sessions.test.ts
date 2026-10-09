@@ -621,3 +621,61 @@ describe('POST /api/v2/sessions — AD-089 funnel', () => {
     expect(stored?.sessionOrigin).toBe('subagent');
   });
 });
+
+describe('GET /api/v2/sessions — фильтр project_id', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-project-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('?project_id=<local> возвращает только сессии этого проекта', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    await sessionManager.createSession({ title: 'A', userId: 'local', projectId: 'proj-1' });
+    await sessionManager.createSession({ title: 'B', userId: 'local', projectId: 'proj-2' });
+    await sessionManager.createSession({ title: 'C', userId: 'local' });
+
+    const res = await app.request('/api/v2/sessions?project_id=proj-1');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any[];
+    expect(body).toHaveLength(1);
+    expect(body[0].project_id).toBe('proj-1');
+  });
+
+  it('без project_id возвращает все сессии', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    await sessionManager.createSession({ title: 'A', userId: 'local', projectId: 'proj-1' });
+    await sessionManager.createSession({ title: 'B', userId: 'local', projectId: 'proj-2' });
+    await sessionManager.createSession({ title: 'C', userId: 'local' });
+
+    const res = await app.request('/api/v2/sessions');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any[];
+    expect(body).toHaveLength(3);
+  });
+
+  it('?project_id=<несуществующий> возвращает пустой список', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    await sessionManager.createSession({ title: 'A', userId: 'local', projectId: 'proj-1' });
+
+    const res = await app.request('/api/v2/sessions?project_id=missing');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any[];
+    expect(body).toHaveLength(0);
+  });
+
+  it('remote:-ref не фильтруется локально (без remote-клиента)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    await sessionManager.createSession({ title: 'A', userId: 'local', projectId: 'proj-1' });
+    await sessionManager.createSession({ title: 'B', userId: 'local' });
+
+    const res = await app.request('/api/v2/sessions?project_id=remote:abc');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any[];
+    expect(body).toHaveLength(2);
+  });
+});

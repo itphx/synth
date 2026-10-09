@@ -9,6 +9,7 @@ import { useDevice } from "@/hooks/useDevice"
 import { LogFilePanel } from "./LogFilePanel"
 import { AuditLogPanel } from "./AuditLogPanel"
 import { LlmPayloadPanel } from "./LlmPayloadPanel"
+import { EventJournalPanel } from "../settings/EventJournalPanel"
 
 interface CategoryItem {
   id: string
@@ -22,6 +23,7 @@ const CATEGORIES: CategoryItem[] = [
   { id: "backend", labelKey: "logs.category.backend", icon: "server" },
   { id: "llm", labelKey: "logs.category.llm", icon: "file-code" },
   { id: "audit", labelKey: "logs.category.audit", icon: "shield-keyhole" },
+  { id: "events", labelKey: "logs.category.events", icon: "send-plane" },
 ]
 
 /** Модальное окно «Логи и аудит»: логи сервисов core/ui/backend + журнал аудита LLM Gateway. */
@@ -114,6 +116,7 @@ export const LogsModal = () => {
             )}
             {logsPage === "llm" && <LlmPayloadPanel />}
             {logsPage === "audit" && <AuditLogPanel />}
+            {logsPage === "events" && <EventJournalPanel />}
           </div>
         </div>
       </DialogContent>

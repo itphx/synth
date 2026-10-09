@@ -624,6 +624,49 @@ export const eventBindingInputSchema = z.object({
 
 export type EventBindingInputRequest = z.infer<typeof eventBindingInputSchema>;
 
+/**
+ * AD-089/AD-052: метаданные API-ключа привязки для приёма событий.
+ * Секрет (`key`) и его хеш здесь отсутствуют — наружу не отдаются.
+ */
+export const eventBindingApiKeySchema = z.object({
+  id: z.string().min(1),
+  bindingId: z.string().min(1),
+  name: z.string().optional(),
+  description: z.string().min(1),
+  createdBy: z.string().min(1),
+  createdAt: z.string().min(1),
+  lastUsedAt: z.string().optional(),
+  prefix: z.string().min(1),
+  // AD-052 (задел): срок действия / отзыв ключа.
+  expiresAt: z.string().optional(),
+  revokedAt: z.string().optional(),
+});
+
+export type EventBindingApiKeyMeta = z.infer<typeof eventBindingApiKeySchema>;
+
+/** AD-089: тело создания API-ключа привязки — обязательное `description`. */
+export const eventBindingApiKeyCreateSchema = z.object({
+  name: z.string().optional(),
+  description: z.string().min(1),
+});
+
+export type EventBindingApiKeyCreateRequest = z.infer<typeof eventBindingApiKeyCreateSchema>;
+
+/** AD-089: ответ создания ключа — метаданные + plaintext-секрет (единожды). */
+export const eventBindingApiKeyCreatedSchema = eventBindingApiKeySchema.extend({
+  key: z.string().min(1),
+});
+
+export type EventBindingApiKeyCreatedRequest = z.infer<typeof eventBindingApiKeyCreatedSchema>;
+
+/**
+ * AD-089: вход `POST /events` при аутентификации API-ключом привязки. Как
+ * `eventIngestSchema`, но `source` опционален — источник берётся из привязки.
+ */
+export const eventKeyIngestSchema = eventIngestSchema.partial({ source: true });
+
+export type EventKeyIngestRequest = z.infer<typeof eventKeyIngestSchema>;
+
 /** AD-051/AD-089: цель расписания (дискриминированный союз по `mode`). */
 export const scheduleTargetSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('bound'), sessionId: z.string().min(1) }),

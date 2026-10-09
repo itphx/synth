@@ -3,16 +3,44 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import React from 'react'
 
+// persist (zustand) в useUIStore пишет в localStorage — в Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 const mocks = vi.hoisted(() => ({
   listEventBindings: vi.fn(),
   upsertEventBinding: vi.fn(),
   deleteEventBinding: vi.fn(),
+  getEventBindingKeys: vi.fn(),
+  createEventBindingKey: vi.fn(),
+  deleteEventBindingKey: vi.fn(),
   getEventJournal: vi.fn(),
   getEventRoutes: vi.fn(),
   createEventRoute: vi.fn(),
   deleteEventRoute: vi.fn(),
+  getProjects: vi.fn(),
+  getSessions: vi.fn(),
+  getAgents: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
+  canManage: vi.fn(() => true),
 }))
 
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
@@ -20,15 +48,26 @@ vi.mock('@/hooks/useNotification', () => ({
   useNotification: () => ({ notify: mocks.notify }),
 }))
 vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
+vi.mock('@/hooks/useCanManageEvents', () => ({
+  useCanManageEvents: () => mocks.canManage(),
+}))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { EventsAdminSettings } from './EventsAdminSettings'
+import { useProjectsStore } from '@/stores/projectsStore'
+import { useAgentsStore } from '@/stores/agentsStore'
+import { useSessionsStore } from '@/stores/sessionsStore'
 import type { EventBinding, EventRouteRule } from '@itphx/synth-shared'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
+
+const PROJECT = { id: 'p1', name: 'Project One', origin: 'local' }
+const SESSION = { id: 's1', name: 'Session One', engine: 'synth', settings: {}, project_id: 'p1' }
+const AGENT = { id: 'assistant', display_name: 'Assistant', enabled: true }
 
 function binding(id: string, overrides: Partial<EventBinding> = {}): EventBinding {
   return {
@@ -57,6 +96,27 @@ function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string
   el.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
+const clickTestId = async (container: HTMLElement, testId: string) => {
+  const el = container.querySelector(`[data-testid="${testId}"]`)
+  expect(el, `элемент ${testId}`).toBeTruthy()
+  await act(async () => {
+    ;(el as HTMLElement).click()
+  })
+}
+
+/** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
+async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+  await act(async () => {
+    trigger.click()
+  })
+  const allOptions = [...document.body.querySelectorAll('[role="option"]')]
+  const option = allOptions.find((o) => o.textContent?.trim().startsWith(label)) as HTMLElement | undefined
+  expect(option, `option "${label}"`).toBeTruthy()
+  await act(async () => {
+    option!.click()
+  })
+}
+
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
@@ -66,7 +126,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <EventsAdminSettings />
+        <TooltipProvider>
+          <EventsAdminSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })
@@ -76,12 +138,24 @@ async function renderSettings(): Promise<HTMLElement> {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.canManage.mockReturnValue(true)
   mocks.listEventBindings.mockResolvedValue({ bindings: [] })
   mocks.upsertEventBinding.mockImplementation(async (input: unknown) => ({
     id: 'new',
     ...(input as object),
   }))
   mocks.deleteEventBinding.mockResolvedValue(undefined)
+  mocks.getEventBindingKeys.mockResolvedValue({ keys: [] })
+  mocks.createEventBindingKey.mockResolvedValue({
+    id: 'k1',
+    bindingId: 'b1',
+    description: 'desc',
+    createdBy: 'admin',
+    createdAt: '2026-10-08T10:00:00.000Z',
+    prefix: 'eak_abc',
+    key: 'eak_secret_value',
+  })
+  mocks.deleteEventBindingKey.mockResolvedValue(undefined)
   mocks.getEventJournal.mockResolvedValue({ entries: [] })
   mocks.getEventRoutes.mockResolvedValue({ rules: [] })
   mocks.createEventRoute.mockImplementation(async (input: unknown) => ({
@@ -93,7 +167,14 @@ beforeEach(() => {
     ...(input as object),
   }))
   mocks.deleteEventRoute.mockResolvedValue(undefined)
+  mocks.getProjects.mockResolvedValue([PROJECT])
+  mocks.getSessions.mockResolvedValue([SESSION])
+  mocks.getAgents.mockResolvedValue({ agents: [AGENT], default_agent: 'assistant' })
   mocks.confirm.mockResolvedValue(true)
+
+  useProjectsStore.setState({ projects: [PROJECT] as never })
+  useAgentsStore.setState({ agents: [AGENT] as never })
+  useSessionsStore.setState({ sessions: [SESSION] as never })
 })
 
 afterEach(async () => {
@@ -131,9 +212,7 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
   it('создание шлёт source/mode и опускает пустые поля', async () => {
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-binding-add"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-binding-add')
 
     const source = container.querySelector('[data-testid="events-binding-source"]') as HTMLInputElement
     const chatKey = container.querySelector('[data-testid="events-binding-chat-key"]') as HTMLInputElement
@@ -142,9 +221,7 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
       setInputValue(chatKey, 'chat:webhook:1')
     })
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-binding-save"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-binding-save')
     await act(async () => {})
 
     expect(mocks.upsertEventBinding).toHaveBeenCalledTimes(1)
@@ -161,15 +238,55 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
 
   it('создание без source не вызывает API и показывает ошибку', async () => {
     const container = await renderSettings()
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-binding-add"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-binding-save"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-binding-add')
+    await clickTestId(container, 'events-binding-save')
 
     expect(mocks.upsertEventBinding).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Source is required')
+  })
+
+  it('выбор проекта и сессии через селекты уходит в upsert (id в подписи)', async () => {
+    const container = await renderSettings()
+    await clickTestId(container, 'events-binding-add')
+
+    const source = container.querySelector('[data-testid="events-binding-source"]') as HTMLInputElement
+    await act(async () => {
+      setInputValue(source, 'telegram')
+    })
+
+    const projectTrigger = container.querySelector('[data-testid="events-binding-project"]') as HTMLElement
+    await selectOption(projectTrigger, 'Project One')
+    expect(container.querySelector('[data-testid="events-binding-project-id"]')!.textContent).toBe('p1')
+
+    const sessionTrigger = container.querySelector('[data-testid="events-binding-session"]') as HTMLElement
+    await selectOption(sessionTrigger, 'Session One')
+    expect(container.querySelector('[data-testid="events-binding-session-id"]')!.textContent).toBe('s1')
+
+    await clickTestId(container, 'events-binding-save')
+    await act(async () => {})
+
+    expect(mocks.upsertEventBinding).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'telegram', project: 'p1', sessionId: 's1' }),
+    )
+    // Сессии грузятся по выбранному проекту.
+    expect(mocks.getSessions).toHaveBeenCalledWith('p1')
+  })
+
+  it('поля формы показывают иконку-подсказку (tooltip)', async () => {
+    const container = await renderSettings()
+    await clickTestId(container, 'events-binding-add')
+
+    const tooltips = container.querySelectorAll('[data-testid="settings-field-tooltip"]')
+    expect(tooltips.length).toBeGreaterThan(0)
+    expect(tooltips[0].getAttribute('aria-label')).toBeTruthy()
+  })
+
+  it('кнопка «+» у селекта сессии открывает диалог создания сессии', async () => {
+    const container = await renderSettings()
+    await clickTestId(container, 'events-binding-add')
+
+    await clickTestId(container, 'events-binding-session-create')
+    expect(document.querySelector('[data-testid="session-create-dialog"]')).not.toBeNull()
   })
 
   it('редактирование открывает форму с текущими значениями', async () => {
@@ -178,26 +295,20 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
     })
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-binding-edit-b1"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-binding-edit-b1')
 
     expect(container.querySelector('[data-testid="events-binding-editor"]')).not.toBeNull()
     expect((container.querySelector('[data-testid="events-binding-chat-key"]') as HTMLInputElement).value).toBe(
       'chat:telegram:9',
     )
-    expect((container.querySelector('[data-testid="events-binding-agent"]') as HTMLInputElement).value).toBe(
-      'assistant',
-    )
+    expect(container.querySelector('[data-testid="events-binding-agent-id"]')!.textContent).toBe('assistant')
   })
 
   it('удаление подтверждается через confirm и вызывает deleteEventBinding', async () => {
     mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1', { chatKey: 'chat:telegram:9' })] })
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-binding-delete-b1"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-binding-delete-b1')
     await act(async () => {})
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
@@ -209,14 +320,122 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
     mocks.confirm.mockResolvedValue(false)
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-binding-delete-b1"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-binding-delete-b1')
     await act(async () => {})
 
     expect(mocks.deleteEventBinding).not.toHaveBeenCalled()
   })
+})
 
+describe('EventsAdminSettings — API-ключи привязки (AD-089)', () => {
+  it('раскрывает секцию ключей и грузит список', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.getEventBindingKeys.mockResolvedValue({
+      keys: [
+        {
+          id: 'k1',
+          bindingId: 'b1',
+          description: 'Ingest from telegram',
+          createdBy: 'admin',
+          createdAt: '2026-10-08T10:00:00.000Z',
+          prefix: 'eak_abc',
+        },
+      ],
+    })
+    const container = await renderSettings()
+
+    expect(mocks.getEventBindingKeys).not.toHaveBeenCalled()
+    await clickTestId(container, 'events-binding-keys-toggle-b1')
+    await act(async () => {})
+
+    expect(mocks.getEventBindingKeys).toHaveBeenCalledWith('b1')
+    const keyRow = container.querySelector('[data-testid="events-binding-key-k1"]')!
+    expect(keyRow.textContent).toContain('eak_abc')
+    expect(keyRow.textContent).toContain('Ingest from telegram')
+  })
+
+  it('создаёт ключ, один раз показывает секрет и curl', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    const container = await renderSettings()
+
+    await clickTestId(container, 'events-binding-keys-toggle-b1')
+    await act(async () => {})
+    await clickTestId(container, 'events-binding-key-add-b1')
+
+    const description = container.querySelector(
+      '[data-testid="events-binding-key-description-b1"]',
+    ) as HTMLInputElement
+    await act(async () => {
+      setInputValue(description, 'Ingest key')
+    })
+
+    await clickTestId(container, 'events-binding-key-save-b1')
+    await act(async () => {})
+
+    expect(mocks.createEventBindingKey).toHaveBeenCalledWith('b1', {
+      name: undefined,
+      description: 'Ingest key',
+    })
+
+    const secret = container.querySelector('[data-testid="events-binding-key-secret-b1"]')!
+    expect(secret.textContent).toContain('eak_secret_value')
+
+    const curl = container.querySelector('[data-testid="events-binding-key-curl-b1"]')!
+    expect(curl.textContent).toContain('/api/v2/events')
+    expect(curl.textContent).toContain('Authorization: Bearer eak_secret_value')
+  })
+
+  it('до создания ключа curl содержит плейсхолдер', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    const container = await renderSettings()
+
+    await clickTestId(container, 'events-binding-keys-toggle-b1')
+    await act(async () => {})
+
+    const curl = container.querySelector('[data-testid="events-binding-key-curl-b1"]')!
+    expect(curl.textContent).toContain('Authorization: Bearer <key>')
+  })
+
+  it('создание ключа без описания не вызывает API', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    const container = await renderSettings()
+
+    await clickTestId(container, 'events-binding-keys-toggle-b1')
+    await act(async () => {})
+    await clickTestId(container, 'events-binding-key-add-b1')
+    await clickTestId(container, 'events-binding-key-save-b1')
+
+    expect(mocks.createEventBindingKey).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Description is required')
+  })
+
+  it('удаление ключа подтверждается через confirm', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.getEventBindingKeys.mockResolvedValue({
+      keys: [
+        {
+          id: 'k1',
+          bindingId: 'b1',
+          description: 'Ingest',
+          createdBy: 'admin',
+          createdAt: '2026-10-08T10:00:00.000Z',
+          prefix: 'eak_abc',
+        },
+      ],
+    })
+    const container = await renderSettings()
+
+    await clickTestId(container, 'events-binding-keys-toggle-b1')
+    await act(async () => {})
+    await clickTestId(container, 'events-binding-key-delete-k1')
+    await act(async () => {})
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.deleteEventBindingKey).toHaveBeenCalledWith('b1', 'k1')
+  })
+})
+
+describe('EventsAdminSettings — журнал (AD-089)', () => {
   it('загружает журнал и показывает решение, причину и ошибку', async () => {
     mocks.getEventJournal.mockResolvedValue({
       entries: [
@@ -248,6 +467,20 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
     expect(container.textContent).toContain('The event journal is empty')
   })
 
+  it('кнопка перехода открывает журнал в «Логи и аудит»', async () => {
+    const container = await renderSettings()
+    await clickTestId(container, 'events-journal-open-logs')
+
+    // useUIStore: открыт LogsModal на категории events.
+    const ui = (await import('@/stores/useUIStore')).useUIStore.getState()
+    expect(ui.isLogsDialogOpen).toBe(true)
+    expect(ui.logsPage).toBe('events')
+    ui.setLogsDialogOpen(false)
+    ui.setLogsPage('core')
+  })
+})
+
+describe('EventsAdminSettings — правила маршрутизации (AD-089)', () => {
   it('рендерит список правил маршрутизации из API', async () => {
     mocks.getEventRoutes.mockResolvedValue({
       rules: [
@@ -276,38 +509,28 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
   })
 
   it('создание правила шлёт match/target и опускает пустые поля', async () => {
+    mocks.getSessions.mockResolvedValue([{ id: 'sess-9', name: 'Session 9', engine: 'synth', settings: {} }])
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-add"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-route-add')
 
     const name = container.querySelector('[data-testid="events-route-name"]') as HTMLInputElement
-    const priority = container.querySelector(
-      '[data-testid="events-route-priority"]',
-    ) as HTMLInputElement
+    const priority = container.querySelector('[data-testid="events-route-priority"]') as HTMLInputElement
     const source = container.querySelector('[data-testid="events-route-source"]') as HTMLInputElement
-    const chatKey = container.querySelector(
-      '[data-testid="events-route-chat-key"]',
-    ) as HTMLInputElement
-    const keywords = container.querySelector(
-      '[data-testid="events-route-keywords"]',
-    ) as HTMLTextAreaElement
-    const session = container.querySelector(
-      '[data-testid="events-route-session"]',
-    ) as HTMLInputElement
+    const chatKey = container.querySelector('[data-testid="events-route-chat-key"]') as HTMLInputElement
+    const keywords = container.querySelector('[data-testid="events-route-keywords"]') as HTMLTextAreaElement
     await act(async () => {
       setInputValue(name, '  urgent  ')
       setInputValue(priority, '5')
       setInputValue(source, ' webhook ')
       setInputValue(chatKey, 'chat:webhook:1')
       setInputValue(keywords, 'urgent,\nasap\n')
-      setInputValue(session, ' sess-9 ')
     })
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-save"]') as HTMLButtonElement).click()
-    })
+    const sessionTrigger = container.querySelector('[data-testid="events-route-session"]') as HTMLElement
+    await selectOption(sessionTrigger, 'Session 9')
+
+    await clickTestId(container, 'events-route-save')
     await act(async () => {})
 
     expect(mocks.createEventRoute).toHaveBeenCalledTimes(1)
@@ -322,12 +545,8 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
 
   it('создание без sessionId для bound не вызывает API и показывает ошибку', async () => {
     const container = await renderSettings()
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-add"]') as HTMLButtonElement).click()
-    })
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-save"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-route-add')
+    await clickTestId(container, 'events-route-save')
 
     expect(mocks.createEventRoute).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Session ID is required for bound/queue mode')
@@ -345,17 +564,11 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
     })
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-edit-r1"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-route-edit-r1')
 
     expect(container.querySelector('[data-testid="events-route-editor"]')).not.toBeNull()
-    expect((container.querySelector('[data-testid="events-route-agent"]') as HTMLInputElement).value).toBe(
-      'assistant',
-    )
-    expect((container.querySelector('[data-testid="events-route-project"]') as HTMLInputElement).value).toBe(
-      'proj-1',
-    )
+    expect(container.querySelector('[data-testid="events-route-agent-id"]')!.textContent).toBe('assistant')
+    expect(container.querySelector('[data-testid="events-route-project-id"]')!.textContent).toBe('proj-1')
     expect((container.querySelector('[data-testid="events-route-ttl"]') as HTMLInputElement).value).toBe(
       '24h',
     )
@@ -368,16 +581,12 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
     })
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-edit-r1"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-route-edit-r1')
     const name = container.querySelector('[data-testid="events-route-name"]') as HTMLInputElement
     await act(async () => {
       setInputValue(name, 'renamed')
     })
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-save"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-route-save')
     await act(async () => {})
 
     expect(mocks.createEventRoute).toHaveBeenCalledWith({
@@ -394,9 +603,7 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
     mocks.getEventRoutes.mockResolvedValue({ rules: [rule('r1', { name: 'dupe' })] })
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-delete-r1"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-route-delete-r1')
     await act(async () => {})
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
@@ -408,9 +615,7 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
     mocks.confirm.mockResolvedValue(false)
     const container = await renderSettings()
 
-    await act(async () => {
-      ;(container.querySelector('[data-testid="events-route-delete-r1"]') as HTMLButtonElement).click()
-    })
+    await clickTestId(container, 'events-route-delete-r1')
     await act(async () => {})
 
     expect(mocks.deleteEventRoute).not.toHaveBeenCalled()
@@ -462,5 +667,44 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
         text: expect.stringContaining('boom'),
       }),
     )
+  })
+})
+
+describe('EventsAdminSettings — read-only для USER/AUDITOR (AD-089)', () => {
+  beforeEach(() => {
+    mocks.canManage.mockReturnValue(false)
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.getEventRoutes.mockResolvedValue({ rules: [rule('r1')] })
+    mocks.getEventJournal.mockResolvedValue({
+      entries: [
+        {
+          ts: '2026-10-08T10:00:00.000Z',
+          event: { id: 'evt_1', source: 'telegram', type: 'message', payload: {}, identity: {}, dedupKey: 'd1', ts: '2026-10-08T10:00:00.000Z' },
+          decision: { kind: 'bound', sessionId: 's1' },
+        },
+      ],
+    })
+  })
+
+  it('не показывает кнопки создания/изменения/удаления и ключей', async () => {
+    const container = await renderSettings()
+
+    expect(container.querySelector('[data-testid="events-binding-add"]')).toBeNull()
+    expect(container.querySelector('[data-testid="events-binding-edit-b1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="events-binding-delete-b1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="events-binding-keys-toggle-b1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="events-route-add"]')).toBeNull()
+    expect(container.querySelector('[data-testid="events-route-edit-r1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="events-route-delete-r1"]')).toBeNull()
+    expect(container.querySelector('[data-testid="events-route-toggle-r1"]')).toBeNull()
+    expect(mocks.getEventBindingKeys).not.toHaveBeenCalled()
+  })
+
+  it('просмотр списков и журнала остаётся доступен', async () => {
+    const container = await renderSettings()
+
+    expect(container.querySelector('[data-testid="events-bindings-list"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="events-routes-list"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="events-journal-list"]')).not.toBeNull()
   })
 })

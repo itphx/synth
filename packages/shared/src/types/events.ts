@@ -62,6 +62,40 @@ export interface EventBinding {
   project?: string;
 }
 
+/** AD-089/AD-052: API-ключ привязки для аутентификации приёма событий. */
+export interface EventBindingApiKey {
+  /** `eak_<uuid>`. */
+  id: string;
+  bindingId: string;
+  name?: string;
+  /** Обязательное описание назначения ключа. */
+  description: string;
+  /** id создателя (пользователя). */
+  createdBy: string;
+  /** ISO-8601. */
+  createdAt: string;
+  /** ISO-8601; best-effort, обновляется при использовании. */
+  lastUsedAt?: string;
+  /** Префикс ключа для идентификации в UI (секрет наружу не отдаётся). */
+  prefix: string;
+  /**
+   * AD-052 (задел): ISO-8601 срок действия ключа. Заполнен и уже прошёл —
+   * ключ недействителен (`resolveBySecret` → `null`). Не задан — бессрочно.
+   */
+  expiresAt?: string;
+  /**
+   * AD-052 (задел): ISO-8601 отзыв ключа (мягкое удаление). Заполнен —
+   * ключ недействителен независимо от срока (`EventApiKeyStore.revoke`).
+   */
+  revokedAt?: string;
+}
+
+/** AD-089: ответ создания ключа — метаданные + однократно показываемый секрет. */
+export interface EventBindingApiKeyCreated extends EventBindingApiKey {
+  /** Plaintext-секрет; возвращается единственный раз при создании. */
+  key: string;
+}
+
 /**
  * AD-089: цель правила маршрутизации (та же семантика, что у
  * `EventBinding`/`ScheduleTarget`).

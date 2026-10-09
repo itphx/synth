@@ -12,15 +12,14 @@ import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { useSessionsStore } from '@/stores/sessionsStore'
-import { useProjectsStore } from '@/stores/projectsStore'
-import { useAgentsStore } from '@/stores/agentsStore'
 import { useUIStore } from '@/stores/useUIStore'
 import { formatDateTime } from '@/lib/formatDate'
 import { formatDuration } from '@/lib/formatStats'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '@/components/ui/button'
 import { Toggle } from '@/components/ui/Toggle'
-import { TextArea, TextField } from '@/components/ui/settings'
+import { FieldTooltip, TextArea, TextField } from '@/components/ui/settings'
+import { AgentSelect, ProjectSelect, SessionSelect } from '@/components/settings/entity-selects'
 import { PanelTab } from './PanelTab'
 
 /** AD-051/AD-089: настройка триггера — ровно одно из `cron` / `every`. */
@@ -109,8 +108,6 @@ export function SchedulerTab() {
   const setRightPanelTab = useUIStore((s) => s.setRightPanelTab)
 
   const sessions = useSessionsStore((s) => s.sessions)
-  const agents = useAgentsStore((s) => s.agents)
-  const projects = useProjectsStore((s) => s.projects)
 
   const [schedules, setSchedules] = useState<Schedule[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -146,11 +143,9 @@ export function SchedulerTab() {
     void loadSchedules()
   }, [loadSchedules])
 
-  // Списки для селектов грузятся при открытии вкладки (сессии/агенты/проекты).
+  // Список сессий для отображения имён в карточках расписаний.
   useEffect(() => {
     void useSessionsStore.getState().loadSessions()
-    void useAgentsStore.getState().loadAgents()
-    void useProjectsStore.getState().loadProjects()
   }, [])
 
   /** Общий guard повторных кликов по конкретной сущности (`key`). */
@@ -391,6 +386,7 @@ export function SchedulerTab() {
 
           <TextField
             label={t('rightPanel.scheduler.field.name')}
+            tooltip={t('rightPanel.scheduler.field.nameTooltip')}
             value={editor.name}
             onChange={(e) => setEditor((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
             error={formError ?? undefined}
@@ -399,7 +395,10 @@ export function SchedulerTab() {
           />
 
           <div className="flex items-center justify-between gap-3">
-            <span className="text-sm text-foreground">{t('rightPanel.scheduler.field.enabled')}</span>
+            <span className="flex min-w-0 items-center gap-1.5 text-sm text-foreground">
+              {t('rightPanel.scheduler.field.enabled')}
+              <FieldTooltip text={t('rightPanel.scheduler.field.enabledTooltip')} />
+            </span>
             <Toggle
               enabled={editor.enabled}
               onToggle={() => setEditor((prev) => (prev ? { ...prev, enabled: !prev.enabled } : prev))}
@@ -409,6 +408,7 @@ export function SchedulerTab() {
 
           <NativeSelect
             label={t('rightPanel.scheduler.field.trigger')}
+            tooltip={t('rightPanel.scheduler.field.triggerTooltip')}
             value={editor.trigger}
             onChange={(value) =>
               setEditor((prev) => (prev ? { ...prev, trigger: value as TriggerKind } : prev))
@@ -422,6 +422,7 @@ export function SchedulerTab() {
           {editor.trigger === 'cron' ? (
             <TextField
               label={t('rightPanel.scheduler.field.cron')}
+              tooltip={t('rightPanel.scheduler.field.cronTooltip')}
               value={editor.cron}
               onChange={(e) => setEditor((prev) => (prev ? { ...prev, cron: e.target.value } : prev))}
               placeholder="*/5 * * * *"
@@ -432,6 +433,7 @@ export function SchedulerTab() {
           ) : (
             <NativeSelect
               label={t('rightPanel.scheduler.field.every')}
+              tooltip={t('rightPanel.scheduler.field.everyTooltip')}
               value={editor.every}
               onChange={(value) => setEditor((prev) => (prev ? { ...prev, every: value } : prev))}
               testId="scheduler-every"
@@ -446,6 +448,7 @@ export function SchedulerTab() {
 
           <NativeSelect
             label={t('rightPanel.scheduler.field.target')}
+            tooltip={t('rightPanel.scheduler.field.targetTooltip')}
             value={editor.mode}
             onChange={(value) =>
               setEditor((prev) => (prev ? { ...prev, mode: value as TargetMode } : prev))
@@ -458,53 +461,45 @@ export function SchedulerTab() {
           </NativeSelect>
 
           {editor.mode !== 'ephemeral' ? (
-            <NativeSelect
+            <SessionSelect
               label={t('rightPanel.scheduler.field.session')}
+              tooltip={t('rightPanel.scheduler.field.sessionTooltip')}
               value={editor.sessionId}
-              onChange={(value) => setEditor((prev) => (prev ? { ...prev, sessionId: value } : prev))}
+              onChange={(value) =>
+                setEditor((prev) => (prev ? { ...prev, sessionId: value } : prev))
+              }
+              includeEmpty
+              emptyLabel={t('rightPanel.scheduler.selectSession')}
               testId="scheduler-session"
-            >
-              <option value="">{t('rightPanel.scheduler.selectSession')}</option>
-              {sessions.map((session) => (
-                <option key={session.id} value={session.id}>
-                  {session.name || session.id}
-                </option>
-              ))}
-            </NativeSelect>
+              allowCreate
+            />
           ) : (
             <>
-              <NativeSelect
+              <AgentSelect
                 label={t('rightPanel.scheduler.field.agent')}
+                tooltip={t('rightPanel.scheduler.field.agentTooltip')}
                 value={editor.agentTemplate}
                 onChange={(value) =>
                   setEditor((prev) => (prev ? { ...prev, agentTemplate: value } : prev))
                 }
+                includeEmpty
+                emptyLabel={t('rightPanel.scheduler.selectAgent')}
                 testId="scheduler-agent"
-              >
-                <option value="">{t('rightPanel.scheduler.selectAgent')}</option>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.display_name || agent.id}
-                  </option>
-                ))}
-              </NativeSelect>
+              />
 
-              <NativeSelect
+              <ProjectSelect
                 label={t('rightPanel.scheduler.field.project')}
+                tooltip={t('rightPanel.scheduler.field.projectTooltip')}
                 value={editor.project}
                 onChange={(value) => setEditor((prev) => (prev ? { ...prev, project: value } : prev))}
+                includeEmpty
+                emptyLabel={t('rightPanel.scheduler.selectProject')}
                 testId="scheduler-project"
-              >
-                <option value="">{t('rightPanel.scheduler.selectProject')}</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </NativeSelect>
+              />
 
               <NativeSelect
                 label={t('rightPanel.scheduler.field.ttl')}
+                tooltip={t('rightPanel.scheduler.field.ttlTooltip')}
                 value={editor.ttl}
                 onChange={(value) => setEditor((prev) => (prev ? { ...prev, ttl: value } : prev))}
                 testId="scheduler-ttl"
@@ -520,6 +515,7 @@ export function SchedulerTab() {
 
           <TextArea
             label={t('rightPanel.scheduler.field.prompt')}
+            tooltip={t('rightPanel.scheduler.field.promptTooltip')}
             value={editor.prompt}
             onChange={(e) => setEditor((prev) => (prev ? { ...prev, prompt: e.target.value } : prev))}
             rows={3}
@@ -814,15 +810,17 @@ function JobHistory({ scheduleId }: { scheduleId: string }) {
   )
 }
 
-/** Компактный нативный select в стиле панелей (сессии/агенты/проекты/триггер). */
+/** Компактный нативный select в стиле панелей (триггер/TTL/интервал). */
 function NativeSelect({
   label,
+  tooltip,
   value,
   onChange,
   children,
   testId,
 }: {
   label: string
+  tooltip?: string
   value: string
   onChange: (value: string) => void
   children: ReactNode
@@ -830,7 +828,10 @@ function NativeSelect({
 }) {
   return (
     <div className="space-y-1">
-      <label className="block text-xs text-muted-foreground">{label}</label>
+      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        {label}
+        {tooltip && <FieldTooltip text={tooltip} />}
+      </label>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}

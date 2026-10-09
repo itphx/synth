@@ -14,7 +14,7 @@ import {
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
-  EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
   RouteRuleStore, ProjectRuleProvider,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
@@ -865,6 +865,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Funnel подключён к `POST /sessions` и тулу `task` (Этап 5); приём внешних
   // событий — на следующих этапах.
   const eventBindingStore = new EventBindingStore({ dataDir });
+  // AD-089/AD-052: API-ключи привязок для аутентификации приёма событий.
+  const eventApiKeyStore = new EventApiKeyStore({ dataDir });
   const eventJournal = new EventJournalStore({ dataDir });
   // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
   const routeRuleStore = new RouteRuleStore({ dataDir });
@@ -1159,10 +1161,20 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       bindingStore: eventBindingStore,
       journal: eventJournal,
       routeRuleStore,
+      apiKeyStore: eventApiKeyStore,
     },
     {
       resolveAgentTemplate,
       sessionExists: async (id) => (await sessionManager.getSession(id)) !== null,
+      // AD-089/AD-052: приём события по API-ключу привязки.
+      resolveApiKeySecret: async (raw) => {
+        const resolved = await eventApiKeyStore.resolveBySecret(raw);
+        if (!resolved) return null;
+        const binding = await eventBindingStore.get(resolved.credential.bindingId);
+        if (!binding) return null;
+        return { binding, credential: resolved.credential };
+      },
+      touchApiKey: (id) => eventApiKeyStore.touch(id),
     },
   ));
 

@@ -1,4 +1,5 @@
 import type {
+  EventBinding,
   EventType,
   Message,
   RouteDecision,
@@ -187,8 +188,17 @@ export class RequestSessionService {
    * Приём внешнего события: hook `external_event` → решение Router →
    * материализация → запись в журнал. Возвращает решение и созданную/найденную
    * сессию (либо `null`).
+   *
+   * AD-089: `opts.binding` (аутентификация по API-ключу привязки) форсирует
+   * привязку на шаге роутинга — поиск по source/ключам не выполняется.
+   * AD-089/AD-052: `opts.audit` (id ключа/идентичность отправителя) мержится в
+   * запись журнала во всех ветках — включая hook-blocked и ошибку материализации.
    */
-  async handleEvent(event: SynthEvent): Promise<{ decision: RouteDecision; session: Session | null }> {
+  async handleEvent(
+    event: SynthEvent,
+    opts?: { binding?: EventBinding; audit?: { keyId?: string; principalId?: string } },
+  ): Promise<{ decision: RouteDecision; session: Session | null }> {
+    const audit = opts?.audit;
     const hookRes = this._hooks ? await this._hooks.emit('external_event', { event }) : undefined;
     if (hookRes?.blocked) {
       const decision: RouteDecision = {
@@ -196,11 +206,11 @@ export class RequestSessionService {
         reason: hookRes.reason ?? 'blocked',
         audited: true,
       };
-      await this._eventRouter.record(event, decision);
+      await this._eventRouter.record(event, decision, undefined, audit);
       return { decision, session: null };
     }
 
-    const decision = await this._eventRouter.decide(event);
+    const decision = await this._eventRouter.decide(event, opts?.binding);
 
     let session: Session | null = null;
     let error: string | undefined;
@@ -211,7 +221,7 @@ export class RequestSessionService {
       console.warn(`[RequestSessionService] материализация события не удалась: ${error}`);
     }
 
-    await this._eventRouter.record(event, decision, error);
+    await this._eventRouter.record(event, decision, error, audit);
 
     // AD-089: UI-событие после успешной материализации (есть сессия). Дроп и
     // ошибки материализации не публикуем — данных сессии нет.

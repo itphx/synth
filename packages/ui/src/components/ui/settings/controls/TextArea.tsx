@@ -9,6 +9,8 @@ export interface TextAreaProps extends React.TextareaHTMLAttributes<HTMLTextArea
   description?: string
   error?: string
   mono?: boolean
+  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  tooltip?: string
   /** Дополнительные классы контейнера `SettingsField`. */
   containerClassName?: string
 }
@@ -19,6 +21,7 @@ export function TextArea({
   description,
   error,
   mono,
+  tooltip,
   containerClassName,
   className,
   rows = 3,
@@ -30,6 +33,7 @@ export function TextArea({
       description={description}
       error={error}
       htmlFor={props.id}
+      tooltip={tooltip}
       className={containerClassName}
     >
       <textarea

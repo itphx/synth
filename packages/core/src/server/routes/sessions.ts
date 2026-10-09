@@ -174,13 +174,20 @@ export function createSessionRoutes(
     return !owner || owner === LOCAL_USER_ID;
   };
 
+  /**
+   * Локальная фильтрация списка по project_id. remote-ref (`remote:<uuid>`)
+   * фильтровать локально нельзя — его обрабатывает remote-ветка/вызывающая сторона.
+   */
+  const filterByProject = (items: Session[], projectId?: string): Session[] =>
+    projectId && !isRemoteRef(projectId) ? items.filter((s) => s.projectId === projectId) : items;
+
   app.get('/', auth.requireAuth, async (c) => {
     const projectId = c.req.query('project_id') || undefined;
     const userId = await resolveUserId(c);
     const sessions = await sessionManager.listSessions({ userId });
 
     if (!hasRemoteGetter) {
-      return c.json(sessions.map((s) => serializeSession(s, { agentRegistry })));
+      return c.json(filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry })));
     }
 
     const remoteClient = resolveClient();
@@ -191,7 +198,7 @@ export function createSessionRoutes(
     }
 
     if (!remoteClient) {
-      return c.json(sessions.map((s) => serializeSession(s, { agentRegistry })));
+      return c.json(filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry })));
     }
 
     try {
@@ -201,7 +208,7 @@ export function createSessionRoutes(
       }
       // Локальные сериализуем в DTO ДО объединения — иначе в merged-список
       // попадут сырые Session (camelCase) рядом с remote-DTO (snake_case).
-      const localDto = sessions.map((s) => serializeSession(s, { agentRegistry }));
+      const localDto = filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry }));
       const remote = (await remoteClient.listSessions(projectId)) as Array<Record<string, unknown>>;
       return c.json(mergeItems(localDto, remote));
     } catch (err) {
@@ -209,7 +216,7 @@ export function createSessionRoutes(
       if (err instanceof RemoteError) {
         console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
         if (projectId && isRemoteRef(projectId)) return c.json([]);
-        return c.json(sessions.map((s) => serializeSession(s, { agentRegistry })));
+        return c.json(filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry })));
       }
       throw err;
     }

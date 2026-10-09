@@ -46,6 +46,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { SchedulerTab } from './SchedulerTab'
 import { useSessionsStore } from '@/stores/sessionsStore'
 import { useAgentsStore } from '@/stores/agentsStore'
@@ -87,11 +88,18 @@ function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string
   el.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-/** Установить значение нативного select. */
-function setSelectValue(el: HTMLSelectElement, value: string): void {
-  const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
-  setter.call(el, value)
-  el.dispatchEvent(new Event('change', { bubbles: true }))
+/** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
+async function selectOption(trigger: HTMLElement | null, label: string): Promise<void> {
+  expect(trigger, 'триггер селекта не найден').toBeTruthy()
+  await act(async () => {
+    ;(trigger as HTMLElement).click()
+  })
+  const allOptions = [...document.body.querySelectorAll('[role="option"]')]
+  const option = allOptions.find((o) => o.textContent?.trim().startsWith(label)) as HTMLElement | undefined
+  expect(option, `option "${label}"`).toBeTruthy()
+  await act(async () => {
+    option!.click()
+  })
 }
 
 async function renderTab(): Promise<HTMLElement> {
@@ -103,7 +111,9 @@ async function renderTab(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <SchedulerTab />
+        <TooltipProvider>
+          <SchedulerTab />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })
@@ -191,11 +201,13 @@ describe('SchedulerTab — создание и редактирование', ()
     await click(container.querySelector('[data-testid="scheduler-add"]'))
 
     const name = container.querySelector('[data-testid="scheduler-name"]') as HTMLInputElement
-    const session = container.querySelector('[data-testid="scheduler-session"]') as HTMLSelectElement
     await act(async () => {
       setInputValue(name, '  Morning digest ')
-      setSelectValue(session, 's1')
     })
+    await selectOption(
+      container.querySelector('[data-testid="scheduler-session"]'),
+      'Session One',
+    )
 
     await click(container.querySelector('[data-testid="scheduler-save"]'))
     await act(async () => {})
@@ -250,11 +262,13 @@ describe('SchedulerTab — создание и редактирование', ()
     const container = await renderTab()
     await click(container.querySelector('[data-testid="scheduler-add"]'))
     const name = container.querySelector('[data-testid="scheduler-name"]') as HTMLInputElement
-    const session = container.querySelector('[data-testid="scheduler-session"]') as HTMLSelectElement
     await act(async () => {
       setInputValue(name, 'X')
-      setSelectValue(session, 's1')
     })
+    await selectOption(
+      container.querySelector('[data-testid="scheduler-session"]'),
+      'Session One',
+    )
     await click(container.querySelector('[data-testid="scheduler-save"]'))
     await act(async () => {})
 

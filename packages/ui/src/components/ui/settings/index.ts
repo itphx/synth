@@ -10,6 +10,9 @@ export type { SettingsItemProps } from './SettingsItem'
 export { SettingsField } from './SettingsField'
 export type { SettingsFieldProps } from './SettingsField'
 
+export { FieldTooltip } from './FieldTooltip'
+export type { FieldTooltipProps } from './FieldTooltip'
+
 export { SettingsRow } from './SettingsRow'
 export type { SettingsRowProps } from './SettingsRow'
 

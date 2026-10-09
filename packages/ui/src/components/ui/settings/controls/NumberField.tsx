@@ -11,6 +11,8 @@ export interface NumberFieldProps extends Omit<React.InputHTMLAttributes<HTMLInp
   error?: string
   /** Единица измерения справа от поля (%, ms, …). */
   suffix?: string
+  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  tooltip?: string
   /** Дополнительные классы контейнера `SettingsField`. */
   containerClassName?: string
   /** AD-072: строка «подпись слева — поле справа» вместо вертикального лейбла. */
@@ -23,6 +25,7 @@ export function NumberField({
   description,
   error,
   suffix,
+  tooltip,
   containerClassName,
   inline = false,
   className,
@@ -53,6 +56,7 @@ export function NumberField({
           label={label ?? ''}
           description={description}
           htmlFor={props.id}
+          tooltip={tooltip}
           control={control}
         />
         {error && <p className="text-xs text-destructive min-w-0">{error}</p>}
@@ -66,6 +70,7 @@ export function NumberField({
       description={description}
       error={error}
       htmlFor={props.id}
+      tooltip={tooltip}
       className={containerClassName}
     >
       {control}

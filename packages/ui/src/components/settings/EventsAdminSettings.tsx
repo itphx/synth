@@ -1,20 +1,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { EventBinding, EventDeliveryMode } from '@itphx/synth-shared'
-import { synthApi, type EventJournalEntry } from '@/lib/api/synthApi'
+import { synthApi } from '@/lib/api/synthApi'
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
+import { useCanManageEvents } from '@/hooks/useCanManageEvents'
 import { confirm } from '@/lib/confirm'
+import { useUIStore } from '@/stores/useUIStore'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { SelectContent, SelectItem } from '../ui/select'
 import { SelectField, SettingsPanel, SettingsSection, TextField } from '../ui/settings'
+import { AgentSelect, ProjectSelect, SessionSelect } from './entity-selects'
+import { EventBindingKeys } from './EventBindingKeys'
+import { EventJournalPanel } from './EventJournalPanel'
 import { EventRoutesSection } from './EventRoutesSection'
 
 /** AD-089: режимы доставки биндинга (без `drop` — он осознанный отказ без привязки). */
 const EVENT_MODES: EventDeliveryMode[] = ['bound', 'ephemeral', 'queue']
-
-/** Ограничение журнала: сколько последних записей запрашивать. */
-const JOURNAL_LIMIT = 50
 
 interface EditorState {
   id?: string
@@ -38,23 +40,23 @@ const EMPTY_EDITOR: EditorState = {
 }
 
 /**
- * AD-089 / AD-072: админ-раздел «События» — реестр биндингов внешних событий
- * (привязка source/chat/thread → сессия/шаблон) и журнал решений Router.
+ * AD-089 / AD-072: раздел «События» — реестр биндингов внешних событий
+ * (привязка source/чат/тред → сессия/шаблон), правила маршрутизации и журнал
+ * решений Router.
  *
- * Мониторинг и CRUD биндингов идут через `synthApi`; мутации — только ADMIN
- * (серверный guard), UI лишь скрывает раздел от не-админов.
+ * Раздел виден всем ролям (просмотр), но мутации (создание/изменение/удаление,
+ * API-ключи) доступны только LEAD/ADMIN — UI лишь прячет управление, enforcement
+ * на сервере.
  */
 export function EventsAdminSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
+  const canManage = useCanManageEvents()
 
   const [bindings, setBindings] = useState<EventBinding[] | null>(null)
   const [bindingsLoading, setBindingsLoading] = useState(true)
   const [bindingsError, setBindingsError] = useState<string | null>(null)
-
-  const [journal, setJournal] = useState<EventJournalEntry[] | null>(null)
-  const [journalLoading, setJournalLoading] = useState(true)
-  const [journalError, setJournalError] = useState<string | null>(null)
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([])
 
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -74,34 +76,19 @@ export function EventsAdminSettings() {
     }
   }, [t])
 
-  const loadJournal = useCallback(async () => {
-    setJournalLoading(true)
-    setJournalError(null)
-    try {
-      const { entries } = await synthApi.getEventJournal(JOURNAL_LIMIT)
-      setJournal(entries)
-    } catch (err) {
-      setJournalError(err instanceof Error ? err.message : t('events.journal.loadError'))
-    } finally {
-      setJournalLoading(false)
-    }
-  }, [t])
-
   useEffect(() => {
     void loadBindings()
   }, [loadBindings])
 
-  useEffect(() => {
-    void loadJournal()
-  }, [loadJournal])
-
   const openCreate = () => {
+    if (!canManage) return
     setFormError(null)
     setSaveError(null)
     setEditor({ ...EMPTY_EDITOR })
   }
 
   const openEdit = (binding: EventBinding) => {
+    if (!canManage) return
     setFormError(null)
     setSaveError(null)
     setEditor({
@@ -182,6 +169,16 @@ export function EventsAdminSettings() {
     }
   }
 
+  const toggleKeys = (id: string) => {
+    setExpandedKeys((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
+  }
+
+  const openJournalInLogs = () => {
+    const ui = useUIStore.getState()
+    ui.setLogsPage('events')
+    ui.setLogsDialogOpen(true)
+  }
+
   const modeLabel = (mode: EventDeliveryMode) => t(`events.mode.${mode}`)
 
   return (
@@ -195,10 +192,12 @@ export function EventsAdminSettings() {
         title={t('events.bindings.title')}
         description={t('events.bindings.description')}
         actions={
-          <Button data-testid="events-binding-add" onClick={openCreate}>
-            <Icon name="add" className="size-3.5" />
-            {t('events.bindings.add')}
-          </Button>
+          canManage ? (
+            <Button data-testid="events-binding-add" onClick={openCreate}>
+              <Icon name="add" className="size-3.5" />
+              {t('events.bindings.add')}
+            </Button>
+          ) : undefined
         }
       >
         {bindingsError && (
@@ -224,6 +223,7 @@ export function EventsAdminSettings() {
 
             <TextField
               label={t('events.form.source')}
+              tooltip={t('events.form.sourceTooltip')}
               value={editor.source}
               onChange={(e) => setEditor((prev) => (prev ? { ...prev, source: e.target.value } : prev))}
               error={formError ?? undefined}
@@ -231,31 +231,15 @@ export function EventsAdminSettings() {
               data-testid="events-binding-source"
             />
 
-            <TextField
-              label={t('events.form.chatKey')}
-              value={editor.chatKey}
-              onChange={(e) => setEditor((prev) => (prev ? { ...prev, chatKey: e.target.value } : prev))}
-              mono
-              id="events-binding-chat-key"
-              data-testid="events-binding-chat-key"
-            />
-
-            <TextField
-              label={t('events.form.threadKey')}
-              value={editor.threadKey}
-              onChange={(e) => setEditor((prev) => (prev ? { ...prev, threadKey: e.target.value } : prev))}
-              mono
-              id="events-binding-thread-key"
-              data-testid="events-binding-thread-key"
-            />
-
             <SelectField
               label={t('events.form.mode')}
+              tooltip={t('events.form.modeTooltip')}
               value={editor.mode}
               onValueChange={(value) =>
                 setEditor((prev) => (prev ? { ...prev, mode: value as EventDeliveryMode } : prev))
               }
               ariaLabel={t('events.form.mode')}
+              items={EVENT_MODES.map((mode) => ({ value: mode, label: modeLabel(mode) }))}
             >
               <SelectContent>
                 {EVENT_MODES.map((mode) => (
@@ -266,32 +250,58 @@ export function EventsAdminSettings() {
               </SelectContent>
             </SelectField>
 
-            <TextField
-              label={t('events.form.sessionId')}
-              value={editor.sessionId}
-              onChange={(e) => setEditor((prev) => (prev ? { ...prev, sessionId: e.target.value } : prev))}
-              mono
-              id="events-binding-session"
-              data-testid="events-binding-session"
-            />
-
-            <TextField
-              label={t('events.form.agentTemplate')}
-              value={editor.agentTemplate}
-              onChange={(e) =>
-                setEditor((prev) => (prev ? { ...prev, agentTemplate: e.target.value } : prev))
-              }
-              id="events-binding-agent"
-              data-testid="events-binding-agent"
-            />
-
-            <TextField
+            <ProjectSelect
               label={t('events.form.project')}
+              tooltip={t('events.form.projectTooltip')}
               value={editor.project}
-              onChange={(e) => setEditor((prev) => (prev ? { ...prev, project: e.target.value } : prev))}
+              onChange={(value) => setEditor((prev) => (prev ? { ...prev, project: value } : prev))}
+              includeEmpty
+              emptyLabel={t('events.bindings.noValue')}
+              testId="events-binding-project"
+            />
+
+            <SessionSelect
+              label={t('events.form.sessionId')}
+              tooltip={t('events.form.sessionTooltip')}
+              value={editor.sessionId}
+              onChange={(value) => setEditor((prev) => (prev ? { ...prev, sessionId: value } : prev))}
+              projectId={editor.project || null}
+              includeEmpty
+              emptyLabel={t('events.bindings.noValue')}
+              testId="events-binding-session"
+              allowCreate
+            />
+
+            <AgentSelect
+              label={t('events.form.agentTemplate')}
+              tooltip={t('events.form.agentTooltip')}
+              value={editor.agentTemplate}
+              onChange={(value) =>
+                setEditor((prev) => (prev ? { ...prev, agentTemplate: value } : prev))
+              }
+              includeEmpty
+              emptyLabel={t('events.bindings.noValue')}
+              testId="events-binding-agent"
+            />
+
+            <TextField
+              label={t('events.form.chatKey')}
+              tooltip={t('events.form.chatKeyTooltip')}
+              value={editor.chatKey}
+              onChange={(e) => setEditor((prev) => (prev ? { ...prev, chatKey: e.target.value } : prev))}
               mono
-              id="events-binding-project"
-              data-testid="events-binding-project"
+              id="events-binding-chat-key"
+              data-testid="events-binding-chat-key"
+            />
+
+            <TextField
+              label={t('events.form.threadKey')}
+              tooltip={t('events.form.threadKeyTooltip')}
+              value={editor.threadKey}
+              onChange={(e) => setEditor((prev) => (prev ? { ...prev, threadKey: e.target.value } : prev))}
+              mono
+              id="events-binding-thread-key"
+              data-testid="events-binding-thread-key"
             />
 
             <div className="flex flex-wrap items-center gap-2 justify-end">
@@ -334,59 +344,80 @@ export function EventsAdminSettings() {
                 <div
                   key={binding.id}
                   data-testid={`events-binding-${binding.id}`}
-                  className="flex flex-wrap items-start gap-3 p-3 rounded-lg border border-border bg-surface-inset hover:border-primary/50 transition-colors min-w-0"
+                  className="rounded-lg border border-border bg-surface-inset hover:border-primary/50 transition-colors min-w-0"
                 >
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                      <Icon name="send-plane" className="size-4 shrink-0 text-muted-foreground" />
-                      <span className="text-sm font-medium break-words">{binding.source}</span>
-                      <span className="rounded px-1.5 py-0.5 text-[0.625rem] font-medium bg-primary/15 text-primary">
-                        {modeLabel(binding.mode)}
-                      </span>
+                  <div className="flex flex-wrap items-start gap-3 p-3 min-w-0">
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                        <Icon name="send-plane" className="size-4 shrink-0 text-muted-foreground" />
+                        <span className="text-sm font-medium break-words">{binding.source}</span>
+                        <span className="rounded px-1.5 py-0.5 text-[0.625rem] font-medium bg-primary/15 text-primary">
+                          {modeLabel(binding.mode)}
+                        </span>
+                      </div>
+                      <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground min-w-0">
+                        <div className="min-w-0 break-words">
+                          <dt className="inline font-medium">{t('events.column.key')}:</dt>{' '}
+                          <dd className="inline">{key ?? t('events.bindings.noKey')}</dd>
+                        </div>
+                        <div className="min-w-0 break-words">
+                          <dt className="inline font-medium">{t('events.column.session')}:</dt>{' '}
+                          <dd className="inline">{binding.sessionId ?? t('events.bindings.noValue')}</dd>
+                        </div>
+                        <div className="min-w-0 break-words">
+                          <dt className="inline font-medium">{t('events.column.agent')}:</dt>{' '}
+                          <dd className="inline">{binding.agentTemplate ?? t('events.bindings.noValue')}</dd>
+                        </div>
+                        <div className="min-w-0 break-words">
+                          <dt className="inline font-medium">{t('events.column.project')}:</dt>{' '}
+                          <dd className="inline">{binding.project ?? t('events.bindings.noValue')}</dd>
+                        </div>
+                      </dl>
                     </div>
-                    <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground min-w-0">
-                      <div className="min-w-0 break-words">
-                        <dt className="inline font-medium">{t('events.column.key')}:</dt>{' '}
-                        <dd className="inline">{key ?? t('events.bindings.noKey')}</dd>
+                    {canManage && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 min-h-10 min-w-10"
+                          onClick={() => toggleKeys(binding.id)}
+                          title={t('events.keys.title')}
+                          aria-label={t('events.keys.title')}
+                          aria-expanded={expandedKeys.includes(binding.id)}
+                          data-testid={`events-binding-keys-toggle-${binding.id}`}
+                        >
+                          <Icon name="key" className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 min-h-10 min-w-10"
+                          onClick={() => openEdit(binding)}
+                          title={t('common.edit')}
+                          aria-label={t('common.edit')}
+                          data-testid={`events-binding-edit-${binding.id}`}
+                        >
+                          <Icon name="edit-2" className="size-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 min-h-10 min-w-10 hover:text-destructive"
+                          onClick={() => void handleDelete(binding)}
+                          title={t('common.delete')}
+                          aria-label={t('common.delete')}
+                          data-testid={`events-binding-delete-${binding.id}`}
+                        >
+                          <Icon name="delete-bin" className="size-4" />
+                        </Button>
                       </div>
-                      <div className="min-w-0 break-words">
-                        <dt className="inline font-medium">{t('events.column.session')}:</dt>{' '}
-                        <dd className="inline">{binding.sessionId ?? t('events.bindings.noValue')}</dd>
-                      </div>
-                      <div className="min-w-0 break-words">
-                        <dt className="inline font-medium">{t('events.column.agent')}:</dt>{' '}
-                        <dd className="inline">{binding.agentTemplate ?? t('events.bindings.noValue')}</dd>
-                      </div>
-                      <div className="min-w-0 break-words">
-                        <dt className="inline font-medium">{t('events.column.project')}:</dt>{' '}
-                        <dd className="inline">{binding.project ?? t('events.bindings.noValue')}</dd>
-                      </div>
-                    </dl>
+                    )}
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 min-h-10 min-w-10"
-                      onClick={() => openEdit(binding)}
-                      title={t('common.edit')}
-                      aria-label={t('common.edit')}
-                      data-testid={`events-binding-edit-${binding.id}`}
-                    >
-                      <Icon name="edit-2" className="size-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 min-h-10 min-w-10 hover:text-destructive"
-                      onClick={() => void handleDelete(binding)}
-                      title={t('common.delete')}
-                      aria-label={t('common.delete')}
-                      data-testid={`events-binding-delete-${binding.id}`}
-                    >
-                      <Icon name="delete-bin" className="size-4" />
-                    </Button>
-                  </div>
+                  {canManage && expandedKeys.includes(binding.id) && (
+                    <div className="px-3 pb-3">
+                      <EventBindingKeys binding={binding} />
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -395,88 +426,21 @@ export function EventsAdminSettings() {
       </SettingsSection>
 
       {/* Правила маршрутизации (AD-089 §EventRouteRule) */}
-      <EventRoutesSection />
+      <EventRoutesSection canManage={canManage} />
 
-      {/* Журнал обработанных событий (AD-089) */}
-      <SettingsSection
-        title={t('events.journal.title')}
-        description={t('events.journal.description')}
-        actions={
+      {/* Журнал обработанных событий (AD-089) — доступен всем ролям */}
+      <EventJournalPanel
+        extraActions={
           <Button
             variant="outline"
-            data-testid="events-journal-refresh"
-            onClick={() => void loadJournal()}
-            disabled={journalLoading}
+            onClick={openJournalInLogs}
+            data-testid="events-journal-open-logs"
           >
-            <Icon name="refresh" className="size-3.5" />
-            {t('common.refresh')}
+            <Icon name="external-link" className="size-3.5" />
+            {t('events.journal.openInLogs')}
           </Button>
         }
-      >
-        {journalError && (
-          <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-            {journalError}
-          </div>
-        )}
-
-        {journalLoading && journal === null && (
-          <div className="text-center text-muted-foreground py-6 text-sm">{t('common.loading')}</div>
-        )}
-
-        {journal && journal.length === 0 && (
-          <div className="text-center text-muted-foreground py-6">
-            <Icon name="time" className="size-8 mx-auto mb-2 opacity-40" />
-            <p className="text-sm">{t('events.journal.empty')}</p>
-          </div>
-        )}
-
-        {journal && journal.length > 0 && (
-          <div className="space-y-2 min-w-0" data-testid="events-journal-list">
-            {journal.map((entry, index) => {
-              const reason =
-                entry.decision && (entry.decision.kind === 'queue' || entry.decision.kind === 'drop')
-                  ? entry.decision.reason
-                  : undefined
-              return (
-                <div
-                  key={`${entry.event.id}-${index}`}
-                  data-testid={`events-journal-${index}`}
-                  className="p-3 rounded-lg border border-border bg-surface-inset space-y-1 min-w-0"
-                >
-                  <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                    <span className="rounded px-1.5 py-0.5 text-[0.625rem] font-medium bg-muted text-muted-foreground">
-                      {entry.decision?.kind ?? t('events.journal.noDecision')}
-                    </span>
-                    <span className="text-xs text-muted-foreground break-words">
-                      {entry.event.source} · {entry.event.type}
-                    </span>
-                    <span className="text-[0.6875rem] text-muted-foreground ml-auto">
-                      {formatDateTime(entry.ts)}
-                    </span>
-                  </div>
-                  {reason && (
-                    <div className="text-xs text-muted-foreground break-words">
-                      <span className="font-medium">{t('events.journal.reason')}:</span> {reason}
-                    </div>
-                  )}
-                  {entry.error && (
-                    <div className="text-xs text-destructive break-words">
-                      <span className="font-medium">{t('events.journal.error')}:</span> {entry.error}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </SettingsSection>
+      />
     </SettingsPanel>
   )
-}
-
-/** Дата/время записи журнала; при некорректном значении возвращает исходное. */
-function formatDateTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString()
 }

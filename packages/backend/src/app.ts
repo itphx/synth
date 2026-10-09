@@ -18,7 +18,6 @@ import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import { every } from 'hono/combine';
 import type { ProviderConfig, ModelConfig, AgentDefinition, ToolsDisabledConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
@@ -44,7 +43,7 @@ import {
   syncProvidersFromEnv,
   HookBus,
   startEphemeralSweeper,
-  EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
   RouteRuleStore, ProjectRuleProvider,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
@@ -533,6 +532,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Funnel подключён к `POST /sessions` и тулу `task` (Этап 5); приём внешних
     // событий — на следующих этапах.
     const eventBindingStore = new EventBindingStore({ dataDir });
+    // AD-089/AD-052: API-ключи привязок для аутентификации приёма событий.
+    const eventApiKeyStore = new EventApiKeyStore({ dataDir });
     const eventJournal = new EventJournalStore({ dataDir });
     // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
     const routeRuleStore = new RouteRuleStore({ dataDir });
@@ -728,12 +729,26 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // `GET /` не переопределяем — на этом пути SSE-хаб ниже.
     app.route('/api/v2/events', createEventRoutes(
       { requireAuth: auth.requireAuth },
-      { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal, routeRuleStore },
+      { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal, routeRuleStore, apiKeyStore: eventApiKeyStore },
       {
-        ingestGuard: every(auth.requireAuth, createRateLimiter(120, 60_000)),
-        writeGuard: auth.requireAdmin,
+        // Rate limit — до решения о способе аутентификации; fallback-креды —
+        // requireAuth (приём по API-ключу привязки креды пользователя не требует).
+        ingestPreGuard: createRateLimiter(120, 60_000),
+        ingestGuard: auth.requireAuth,
+        // AD-089/AD-052: мутации bindings/routes/keys — LEAD и ADMIN; чтение
+        // ключей привязки — тоже LEAD и ADMIN (чувствительные метаданные).
+        writeGuard: auth.requirePermission('ADMIN', 'LEAD'),
+        keyReadGuard: auth.requirePermission('ADMIN', 'LEAD'),
         resolveAgentTemplate,
         sessionExists: async (id) => (await sessionManager.getSession(id)) !== null,
+        resolveApiKeySecret: async (raw) => {
+          const resolved = await eventApiKeyStore.resolveBySecret(raw);
+          if (!resolved) return null;
+          const binding = await eventBindingStore.get(resolved.credential.bindingId);
+          if (!binding) return null;
+          return { binding, credential: resolved.credential };
+        },
+        touchApiKey: (id) => eventApiKeyStore.touch(id),
         messages: {
           invalidEvent: (c) => t('errors.validation.invalidEvent', undefined, c),
           invalidBinding: (c) => t('errors.validation.invalidBinding', undefined, c),
@@ -741,6 +756,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           invalidRule: (c) => t('errors.validation.invalidRule', undefined, c),
           ruleNotFound: (c) => t('errors.notFound.rule', undefined, c),
           unknownAgent: (c) => t('errors.validation.unknownAgent', undefined, c),
+          invalidKey: (c) => t('errors.validation.invalidEventKey', undefined, c),
+          keyNotFound: (c) => t('errors.notFound.eventKey', undefined, c),
         },
       },
     ));

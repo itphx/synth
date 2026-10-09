@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, EventRouteRule, EventRouteRuleInputRequest, SynthEvent, RouteDecision } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, EventBindingApiKey, EventBindingApiKeyCreated, EventRouteRule, EventRouteRuleInputRequest, SynthEvent, RouteDecision } from '@itphx/synth-shared'
 import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry, Schedule, ScheduleInput, ScheduleJob } from '@itphx/synth-shared/types'
 
 // Реэкспорт общих контрактов (AD-071): без локальных дублей.
@@ -1817,6 +1817,33 @@ export const synthApi = {
     return fetchJSON<void>(`${BASE_URL}/events/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
+  // --- Внешние события (AD-089/AD-052): API-ключи привязки ---
+  /** GET /events/bindings/:id/keys — метаданные ключей привязки (без секретов). */
+  async getEventBindingKeys(bindingId: string): Promise<{ keys: EventBindingApiKey[] }> {
+    return fetchJSON<{ keys: EventBindingApiKey[] }>(
+      `${BASE_URL}/events/bindings/${encodeURIComponent(bindingId)}/keys`,
+    )
+  },
+
+  /** POST /events/bindings/:id/keys — создание ключа; секрет (`key`) возвращается один раз. */
+  async createEventBindingKey(
+    bindingId: string,
+    input: { name?: string; description: string },
+  ): Promise<EventBindingApiKeyCreated> {
+    return fetchJSON<EventBindingApiKeyCreated>(
+      `${BASE_URL}/events/bindings/${encodeURIComponent(bindingId)}/keys`,
+      { method: 'POST', body: JSON.stringify(input) },
+    )
+  },
+
+  /** DELETE /events/bindings/:id/keys/:keyId — удаление ключа привязки. */
+  async deleteEventBindingKey(bindingId: string, keyId: string): Promise<void> {
+    return fetchJSON<void>(
+      `${BASE_URL}/events/bindings/${encodeURIComponent(bindingId)}/keys/${encodeURIComponent(keyId)}`,
+      { method: 'DELETE' },
+    )
+  },
+
   /** Последние записи журнала обработки внешних событий (default 50, cap 500 на сервере). */
   async getEventJournal(limit?: number): Promise<{ entries: EventJournalEntry[] }> {
     const qs = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : ''
@@ -1901,6 +1928,10 @@ export interface EventJournalEntry {
   event: SynthEvent
   decision?: RouteDecision
   error?: string
+  /** AD-089/AD-052: id API-ключа, которым принято событие (если применимо). */
+  keyId?: string
+  /** AD-089: id принципала — внешней идентичности отправителя. */
+  principalId?: string
 }
 
 export interface LlmGatewaySettings {

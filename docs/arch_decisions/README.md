@@ -46,7 +46,8 @@
 | AD-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ | [ad-018-session-engine-selection.md](./ad-018-session-engine-selection.md) |
 | AD-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов (AD-086) — нет | ⚠️ | [ad-030-hooks-agent-events.md](./ad-030-hooks-agent-events.md) |
 | AD-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (AD-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны (AD-059) и размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ | [ad-051-scheduler-pipelines.md](./ad-051-scheduler-pipelines.md) |
-| AD-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, journal)/UI, источник AD-051 (cron); AD-052/086 — нет | ⚠️ | [ad-089-external-events-automation.md](./ad-089-external-events-automation.md) |
+| AD-052 | Публичная API-платформа: первый срез — API-ключи привязок событий (binding-key, хранилище/эндпоинты/приём по ключу, sha256 at-rest, RBAC LEAD/ADMIN); service-key/scopes/тенанты, OpenAPI, SDK, webhooks — нет | ⚠️ | [ad-052-public-api-platform.md](./ad-052-public-api-platform.md) |
+| AD-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник AD-051 (cron), API-ключи привязок — первый срез AD-052; AD-086 — нет | ⚠️ | [ad-089-external-events-automation.md](./ad-089-external-events-automation.md) |
 
 ## Deprecated AD
 
@@ -69,7 +70,6 @@
 | AD-048 | [Self-help скиллы и admin-MCP](./ad-048-self-help-skills-admin-mcp.md): dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN |
 | AD-049 | [Git worktrees](./ad-049-git-worktrees.md): тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI |
 | AD-050 | [Внешние движки (opencode/cline) — Runner](./ad-050-external-engines-runner.md): EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy :9090 |
-| AD-052 | [Публичная API-платформа](./ad-052-public-api-platform.md): per-service ключи со скоупами/тенантами, OpenAPI, SDK, webhooks |
 | AD-053 | [CLI и TUI](./ad-053-cli-tui.md): паритет публикуемого и dev-CLI, CLI как клиент API v2, TUI |
 | AD-054 | [Kanban-доска, backlog](./ad-054-kanban-backlog.md): интерактивная доска поверх `project.plan`, глобальный backlog, assignee/WIP |
 | AD-055 | [Обмен между инстансами Synth](./ad-055-instance-exchange.md): идемпотентный upsert/дельта, peer-auth, обмен памятью, live-сессии |

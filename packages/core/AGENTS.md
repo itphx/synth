@@ -92,6 +92,10 @@
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
   `skill-scope`, `git`, `ssh-keys`, `events`.
+- `server/routes/events.ts` — `createEventRoutes` (AD-089): приём `POST /` (API-ключ привязки —
+  `resolveApiKeySecret`/`touchApiKey`; иначе fallback `ingestGuard`; `ingestPreGuard` — rate limit
+  до выбора способа аутентификации) и CRUD bindings/routes/keys (`writeGuard`/`keyReadGuard`;
+  core-дефолты — `requireAuth`, backend передаёт RBAC).
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
@@ -152,7 +156,8 @@
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
   `target-decision.ts` (`decisionFromTarget` — единый маппинг цели),
-  `EventDelivery` (`run`/`defer`), `types`. Хуки не
+  `EventDelivery` (`run`/`defer`), `credential.ts` (`EventKeyCredential` — контекст машинной
+  аутентификации по API-ключу привязки, задел AD-052), `types`. Хуки не
   эмитят — это делает `RequestSessionService`/оркестратор. `dedup-store.ts`
   (AD-051/AD-089): `DedupStore` — `MemoryDedupStore` (in-process `Set`, default) и
   `FileDedupStore` (межпроцессный атомарный claim `{dataDir}/events/dedup/<sha256(key)>`).
@@ -175,7 +180,9 @@
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`
   (`events/bindings.json`), `EventJournalStore` (`events/journal.jsonl`, AD-089),
-  `RouteRuleStore` (`events/routes.json`, правила маршрутизации, AD-089)
+  `RouteRuleStore` (`events/routes.json`, правила маршрутизации, AD-089),
+  `EventApiKeyStore` (`events/api-keys.json`, API-ключи привязок: sha256-хеш секрета at-rest,
+  plaintext один раз при `create`, каскад `removeByBinding`; AD-089/AD-052)
   и `JobStore` (`scheduler/jobs.jsonl`, Job-история, AD-051);
   `migrations.ts` — идемпотентная разовая миграция снапшотов
   `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).

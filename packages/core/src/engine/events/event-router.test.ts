@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { RouteDecision, SynthEvent } from '@itphx/synth-shared';
+import type { EventBinding, RouteDecision, SynthEvent } from '@itphx/synth-shared';
 import { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { UpsertEventBindingInput } from '../../storage/event-binding-store.js';
 import { EventJournalStore } from '../../storage/event-journal-store.js';
@@ -138,6 +138,41 @@ describe('EventRouter (AD-089)', () => {
       event({ identity: { chatKey: 'chat:telegram:1', threadKey: 'thread:telegram:1:7' } }),
     );
     expect(decision).toEqual({ kind: 'bound', sessionId: 's-thread' });
+  });
+
+  it('forcedBinding: решение по режиму привязки независимо от identity и store', async () => {
+    const forced: EventBinding = {
+      id: 'bnd_forced',
+      source: 'telegram',
+      chatKey: 'chat:forced',
+      mode: 'bound',
+      sessionId: 's-forced',
+    };
+    // В store ничего нет, identity пуст — forced binding всё равно решает.
+    expect(await router().decide(event({ identity: {} }), forced)).toEqual({
+      kind: 'bound',
+      sessionId: 's-forced',
+    });
+  });
+
+  it('forcedBinding: allowedSources (шаг 1) продолжает действовать', async () => {
+    const forced: EventBinding = { id: 'bnd_f', source: 'telegram', mode: 'bound', sessionId: 's' };
+    expect(await router({ allowedSources: ['webhook'] }).decide(event({ source: 'telegram' }), forced)).toEqual({
+      kind: 'drop',
+      reason: 'source_not_allowed',
+      audited: true,
+    });
+  });
+
+  it('forcedBinding: dedup (шаг 2) продолжает действовать', async () => {
+    const forced: EventBinding = { id: 'bnd_f', source: 'telegram', mode: 'bound', sessionId: 's' };
+    const r = router();
+    expect(await r.decide(event({ dedupKey: 'k-forced' }), forced)).toEqual({ kind: 'bound', sessionId: 's' });
+    expect(await r.decide(event({ id: 'evt_2', dedupKey: 'k-forced' }), forced)).toEqual({
+      kind: 'drop',
+      reason: 'duplicate',
+      audited: true,
+    });
   });
 
   it('defaultMode=bound (по умолчанию): нет маршрута → drop no_route', async () => {

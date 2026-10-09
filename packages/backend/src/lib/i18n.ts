@@ -37,6 +37,8 @@ const en: Dictionary = {
   'errors.validation.invalidRule': 'Invalid routing rule payload',
   'errors.notFound.rule': 'Routing rule not found',
   'errors.validation.unknownAgent': 'Unknown agent in routing rule',
+  'errors.validation.invalidEventKey': 'Invalid event API key',
+  'errors.notFound.eventKey': 'Event API key not found',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
@@ -105,6 +107,8 @@ const ru: Dictionary = {
   'errors.validation.invalidRule': 'Некорректное тело правила маршрутизации',
   'errors.notFound.rule': 'Правило маршрутизации не найдено',
   'errors.validation.unknownAgent': 'Неизвестный агент в правиле маршрутизации',
+  'errors.validation.invalidEventKey': 'Неверный API-ключ события',
+  'errors.notFound.eventKey': 'API-ключ события не найден',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',

@@ -244,6 +244,11 @@ hook-шину, а создание сессий сведено в один funne
 - **`EventBinding`** (`bound | ephemeral | queue`) связывает внешний адрес
   (`source` + `chatKey`/`threadKey`) с сессией/шаблоном; хранится в
   `EventBindingStore`, решения — в `EventJournalStore` (журнал, AD-005).
+- **API-ключи привязок** (`EventApiKeyStore`, `{dataDir}/events/api-keys.json`, AD-089/AD-052) —
+  первый срез публичного API: секрет `synth_evt_<base64url>` хранится только как sha256-хеш,
+  наружу отдаётся один раз; приём `POST /api/v2/events` по `Authorization: Bearer <binding-key>`
+  аутентифицирует без пользовательских кред (source/чат из привязки), использование пишется
+  в журнал (`keyId`); ключи — инстанс-локальные (не переносятся publish/fork).
 - **`RequestSessionService`** (`engine/events/request-session.ts`) — единый funnel
   создания сессии: `request` (явное создание из UI/CLI/агента, эмит
   `session_requested`) и `handleEvent` (`external_event` → `decide` → материализация
@@ -264,5 +269,6 @@ hook-шину, а создание сессий сведено в один funne
 ```
 
 API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `docs/CONFIGURATION.md`
-(секция `events`). Источники/интеграции AD-051/052/086 (шедулер, публичный API,
-плагины) не реализованы.
+(секция `events`). Источники/интеграции: шедулер AD-051 (cron) и API-ключи привязок
+AD-052 (первый срез — binding-key) реализованы; публичная API-платформа (service-key,
+OpenAPI, SDK, webhooks) и плагины AD-086 — нет.

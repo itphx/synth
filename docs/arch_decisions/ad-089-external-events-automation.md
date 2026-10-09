@@ -1,6 +1,6 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051); AD-052/086 — нет)
+> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — первый срез AD-052; AD-086 — нет)
 > **Дата:** 2026-10-08
 > **Связано:** [AD-030](./ad-030-hooks-agent-events.md) «Hooks для событий агента» (фундамент),
 > [AD-034](./ad-034-model-routing.md) «Routing между моделями», [AD-035](./ad-035-micro-model-first.md) «Micro-model first»,
@@ -105,6 +105,18 @@ type RouteDecision =
   | { kind: 'drop'; reason: string; audited: true };
 ```
 
+**`EventBindingApiKey`** — API-ключ приёма событий, привязанный к `EventBinding`
+(AD-089/AD-052, первый срез). На привязку может быть несколько ключей; секрет
+`synth_evt_<base64url>` хранится только как `sha256`-хеш (`{dataDir}/events/api-keys.json`),
+наружу отдаётся единственный раз при создании, в списке — `prefix` (видимый префикс).
+Поля: `id` (`eak_<uuid>`), `bindingId`, `name?`, `description` (обязательное), `createdBy`,
+`createdAt`, `lastUsedAt?`, `prefix`; задел AD-052 — `expiresAt?`/`revokedAt?` (истёкший/
+отозванный ключ не резолвится). Приём по ключу — машинная аутентификация без
+пользовательских кред (`EventKeyCredential`: `keyId`/`bindingId`, задел `scopes`/`principalId`):
+событие форсированно маршрутизируется в привязку (source/чат берутся из неё), использование
+пишется в журнал (`keyId`/`principalId`). Ключи — **инстанс-локальные секреты**: в publish/fork
+и межмировой обмен не входят (AD-042/AD-081).
+
 ### Порядок маршрутизации
 
 1. **Явный `Binding`** (чат / тред / топик → сессия). Самый сильный сигнал: если для `chatKey`/`threadKey`
@@ -174,6 +186,10 @@ type RouteDecision =
 - **Дедуп** — по `dedupKey` (повторный webhook/пересланное сообщение не создаёт дубль).
 - **Секреты** ботов/токенов — at-rest по модели [AD-076](./ad-076-git-repo-registry-ssh.md) (мастер-ключ),
   не логируются.
+- **Ключи приёма** ([AD-052](./ad-052-public-api-platform.md), первый срез): секрет — только `sha256`-хеш
+  (`EventApiKeyStore`, `{dataDir}/events/api-keys.json`), plaintext отдаётся один раз; неверный/отозванный/
+  истёкший ключ → 401; использование пишется в журнал (`keyId`). Ключи — инстанс-локальные
+  (не переносятся publish/fork, [AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
 - **Guard** — весь контент события проходит обфускацию перед LLM ([AD-036](./ad-036-llm-gateway.md));
   вложения — по [AD-085](./ad-085-multimodal-input.md).
 - **Аудит** — все решения роутера (`bound`/`ephemeral`/`queue`/`drop`) фиксируются; дроп — с причиной.
@@ -198,11 +214,23 @@ type RouteDecision =
 - **Резолвинг `agentTemplate`:** `RequestSessionService.resolveAgentTemplate` через `AgentRegistry`
   (`agent.enabled ? agent.id : null`); неизвестный шаблон — `unknownAgentTemplate` (`drop`/`default-agent`).
 - **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),
-  `RouteRuleStore` (`{dataDir}/events/routes.json`) (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.
-- **API:** `POST /api/v2/events` (ingest), `GET/POST/DELETE /api/v2/events/bindings`, `GET/POST /api/v2/events/routes`,
-  `DELETE /api/v2/events/routes/:id`, `GET /api/v2/events/journal`;
-  SSE `GET /api/v2/events` сохранён. RBAC: ingest — `requireAuth` + rate limit, мутации биндингов/правил — ADMIN.
-- **UI:** админ-раздел «События» (bindings + журнал).
+  `RouteRuleStore` (`{dataDir}/events/routes.json`), `EventApiKeyStore` (`{dataDir}/events/api-keys.json`, AD-052-первый срез;
+  `schemaVersion`, sha256-хеш секрета) (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.
+- **API-ключи привязок (AD-089/AD-052, первый срез):** `EventApiKeyStore` — несколько ключей на `EventBinding`,
+  секрет `synth_evt_<base64url>` хранится только как sha256-хеш, plaintext возвращается лишь при создании
+  (`{...meta, key}`), в списке — `prefix`; каскадное удаление при удалении привязки (`removeByBinding`);
+  задел AD-052 — опциональные `expiresAt`/`revokedAt`, `revoke()` (HTTP-эндпоинта revoke нет),
+  `EventKeyCredential` (`keyId`/`bindingId`, задел `scopes`/`principalId`). Эндпоинты
+  `GET/POST /api/v2/events/bindings/:id/keys`, `DELETE /api/v2/events/bindings/:id/keys/:keyId`; приём
+  `POST /api/v2/events` по `Authorization: Bearer <binding-key>` аутентифицирует без пользовательских кред
+  (source/чат из привязки, тело `eventKeyIngestSchema` — `source` опционален), использование пишется в журнал (`keyId`/`principalId`).
+- **API:** `POST /api/v2/events` (ingest; fallback — `requireAuth`, иначе API-ключ привязки; rate limit на оба пути),
+  `GET/POST/DELETE /api/v2/events/bindings` (+ key-эндпоинты выше), `GET/POST /api/v2/events/routes`,
+  `DELETE /api/v2/events/routes/:id`, `GET /api/v2/events/journal`; SSE `GET /api/v2/events` сохранён.
+  RBAC (managed): мутации bindings/routes/keys — `requirePermission('ADMIN','LEAD')`, чтение ключей — LEAD/ADMIN,
+  остальное чтение — `requireAuth` (`writeGuard`/`keyReadGuard`/`ingestPreGuard` в `createEventRoutes`, AD-089).
+- **UI:** раздел «События» перенесён в **пользовательскую часть** (просмотр всем ролям, создание — LEAD/ADMIN);
+  журнал остаётся в разделе и **дублируется** в «Логи и аудит».
 - **Единый funnel:** создание сессии — только через `RequestSessionService` (инвариант 16);
   `forkSession`/backend `/import`/`remote/transfer.ts`/`chat.ts` — materialization.
 - **Источник событий — cron (AD-051, минимальный срез):** `SchedulerService` + `SchedulerRuleProvider`
@@ -212,7 +240,13 @@ type RouteDecision =
 
 **Не реализовано (остаток):**
 
-- Источники AD-052 (публичный API/ключи/webhooks) и AD-086 (add-on + Telegram gateway → `message_received`);
+- **Источник [AD-052](./ad-052-public-api-platform.md) — частично:** реализован первый срез —
+  **binding-key** (ключ жёстко привязан к source/чату привязки; webhook/CI/кастомные источники),
+  но нет **service-key** (общий ключ инстанса/тенанта со scope — будущий AD-052; для мессенджер-шлюзов
+  [AD-086](./ad-086-extensibility-plugins-editions.md)), `scopes`/`tenants`, OpenAPI-спеки, SDK, исходящих
+  webhooks, per-key rate limit и UI срока действия/отзыва; HTTP-эндпоинта `revoke` нет;
+  ключи — **инстанс-локальные секреты**: не переносятся publish/fork и межмировой обмен ([AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
+- Источник AD-086 (add-on + Telegram gateway → `message_received`) — нет;
 - Plugin SDK и загрузка плагинов ([AD-030](./ad-030-hooks-agent-events.md));
 - LLM-классификация правил маршрутизации (micro-слой [AD-034](./ad-034-model-routing.md)/[AD-035](./ad-035-micro-model-first.md),
   тул `classify_conversation`) — сейчас правила только декларативные (`match`);
@@ -251,7 +285,8 @@ type RouteDecision =
 - [AD-026](./ad-026-subagent-context-modes.md) — режимы контекста при запуске агента.
 - [AD-029](./ad-029-granular-permissions.md), [AD-036](./ad-036-llm-gateway.md) — права и безопасность.
 - [AD-051](./ad-051-scheduler-pipelines.md) — cron/timer-источники и событийные триггеры.
-- [AD-052](./ad-052-public-api-platform.md) — ingress webhook'ов и публичный API.
+- [AD-052](./ad-052-public-api-platform.md) — ingress webhook'ов и публичный API; частично:
+  API-ключи привязок (binding-key) как первый срез, service-key/OpenAPI/SDK/webhooks — остаток.
 - [AD-056](./ad-056-synth-mcp-server.md) — Synth как MCP-сервер (обратное направление).
 - [AD-071](./ad-071-mcp-servers-prompt.md) — вызов внешних MCP как действие.
 - [AD-086](./ad-086-extensibility-plugins-editions.md) — внешние сервисы-надстройки и общий шаблон gateway.

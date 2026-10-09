@@ -70,8 +70,14 @@ export class EventRouter {
     this._ruleProviders.push(provider);
   }
 
-  /** Решение по событию БЕЗ записи в журнал и без побочных эффектов. */
-  async decide(event: SynthEvent): Promise<RouteDecision> {
+  /**
+   * Решение по событию БЕЗ записи в журнал и без побочных эффектов.
+   *
+   * AD-089: `forcedBinding` (аутентификация по API-ключу привязки) заменяет
+   * поиск в `EventBindingStore` на шаге 3; шаги 1 (`allowedSources`) и 2 (dedup)
+   * сохраняются.
+   */
+  async decide(event: SynthEvent, forcedBinding?: EventBinding): Promise<RouteDecision> {
     // 1. Белый список источников.
     const allowed = this._config.allowedSources;
     if (allowed && allowed.length > 0 && !allowed.includes(event.source)) {
@@ -85,8 +91,9 @@ export class EventRouter {
       return { kind: 'drop', reason: 'duplicate', audited: true };
     }
 
-    // 3. Явный Binding (threadKey приоритетнее chatKey — в store).
-    const binding = await this._bindingStore.findByKey({
+    // 3. Явный Binding (threadKey приоритетнее chatKey — в store); при
+    // `forcedBinding` (ключ привязки) поиск по ключу пропускается.
+    const binding = forcedBinding ?? await this._bindingStore.findByKey({
       source: event.source,
       chatKey: event.identity?.chatKey,
       threadKey: event.identity?.threadKey,
@@ -128,14 +135,24 @@ export class EventRouter {
    * заблокировал до `decide`» вызывает только `record`, и ключ всё равно должен
    * быть занят (AD-089). В штатном пути ключ уже claim'нут в `decide`, поэтому
    * повторный claim — best-effort (результат игнорируется).
+   *
+   * AD-089/AD-052: `meta.keyId`/`meta.principalId` (аудит использования
+   * API-ключа привязки) мержатся в запись журнала.
    */
-  async record(event: SynthEvent, decision: RouteDecision, error?: string): Promise<void> {
+  async record(
+    event: SynthEvent,
+    decision: RouteDecision,
+    error?: string,
+    meta?: { keyId?: string; principalId?: string },
+  ): Promise<void> {
     await this._ensureDedup();
     await this._journal.record({
       ts: new Date().toISOString(),
       event,
       decision,
       ...(error ? { error } : {}),
+      ...(meta?.keyId ? { keyId: meta.keyId } : {}),
+      ...(meta?.principalId ? { principalId: meta.principalId } : {}),
     });
     if (event.dedupKey) {
       try {

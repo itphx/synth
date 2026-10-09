@@ -21,6 +21,7 @@ import {
   TextField,
   ToggleField,
 } from '../ui/settings'
+import { AgentSelect, ProjectSelect, SessionSelect } from './entity-selects'
 
 /** AD-089: режим цели правила маршрутизации (совпадает с `EventRouteTarget`). */
 type RouteMode = EventRouteTarget['mode']
@@ -122,13 +123,14 @@ function ruleToInput(rule: EventRouteRule): EventRouteRuleInputRequest {
 }
 
 /**
- * AD-089 / AD-072: секция «Правила маршрутизации» админ-раздела «События».
+ * AD-089 / AD-072: секция «Правила маршрутизации» раздела «События».
  *
  * Список правил (`EventRouteRule`) с инлайн-формой создания/редактирования и
  * удалением. Правила упорядочены по приоритету (больше — раньше); сама
- * маршрутизация исполняется core, здесь только управление. Мутации — ADMIN.
+ * маршрутизация исполняется core, здесь только управление. Мутации — LEAD/ADMIN
+ * (`canManage`); при просмотре только список.
  */
-export function EventRoutesSection() {
+export function EventRoutesSection({ canManage = true }: { canManage?: boolean }) {
   const { t } = useI18n()
   const { notify } = useNotification()
 
@@ -161,12 +163,14 @@ export function EventRoutesSection() {
   }, [loadRules])
 
   const openCreate = () => {
+    if (!canManage) return
     setFormError(null)
     setSaveError(null)
     setEditor({ ...EMPTY_EDITOR })
   }
 
   const openEdit = (rule: EventRouteRule) => {
+    if (!canManage) return
     setFormError(null)
     setSaveError(null)
     setEditor({
@@ -323,10 +327,12 @@ export function EventRoutesSection() {
       title={t('events.routes.title')}
       description={t('events.routes.description')}
       actions={
-        <Button data-testid="events-route-add" onClick={openCreate}>
-          <Icon name="add" className="size-3.5" />
-          {t('events.routes.add')}
-        </Button>
+        canManage ? (
+          <Button data-testid="events-route-add" onClick={openCreate}>
+            <Icon name="add" className="size-3.5" />
+            {t('events.routes.add')}
+          </Button>
+        ) : undefined
       }
     >
       {loadError && (
@@ -350,8 +356,19 @@ export function EventRoutesSection() {
             </div>
           )}
 
+          {formError && (
+            <div
+              role="alert"
+              className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm"
+              data-testid="events-route-form-error"
+            >
+              {formError}
+            </div>
+          )}
+
           <TextField
             label={t('events.routes.form.name')}
+            tooltip={t('events.routes.form.nameTooltip')}
             value={editor.name}
             onChange={(e) => setEditor((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
             id="events-route-name"
@@ -360,6 +377,7 @@ export function EventRoutesSection() {
 
           <NumberField
             label={t('events.routes.form.priority')}
+            tooltip={t('events.routes.form.priorityTooltip')}
             value={editor.priority}
             onChange={(e) =>
               setEditor((prev) => (prev ? { ...prev, priority: e.target.value } : prev))
@@ -370,6 +388,7 @@ export function EventRoutesSection() {
 
           <ToggleField
             label={t('events.routes.form.enabled')}
+            tooltip={t('events.routes.form.enabledTooltip')}
             enabled={editor.enabled}
             onToggle={() =>
               setEditor((prev) => (prev ? { ...prev, enabled: !prev.enabled } : prev))
@@ -383,6 +402,7 @@ export function EventRoutesSection() {
 
           <TextField
             label={t('events.routes.form.source')}
+            tooltip={t('events.routes.form.sourceTooltip')}
             value={editor.source}
             onChange={(e) => setEditor((prev) => (prev ? { ...prev, source: e.target.value } : prev))}
             id="events-route-source"
@@ -391,6 +411,7 @@ export function EventRoutesSection() {
 
           <TextField
             label={t('events.routes.form.type')}
+            tooltip={t('events.routes.form.typeTooltip')}
             value={editor.type}
             onChange={(e) => setEditor((prev) => (prev ? { ...prev, type: e.target.value } : prev))}
             id="events-route-type"
@@ -399,6 +420,7 @@ export function EventRoutesSection() {
 
           <TextField
             label={t('events.routes.form.chatKey')}
+            tooltip={t('events.routes.form.chatKeyTooltip')}
             value={editor.chatKey}
             onChange={(e) =>
               setEditor((prev) => (prev ? { ...prev, chatKey: e.target.value } : prev))
@@ -410,6 +432,7 @@ export function EventRoutesSection() {
 
           <TextField
             label={t('events.routes.form.threadKey')}
+            tooltip={t('events.routes.form.threadKeyTooltip')}
             value={editor.threadKey}
             onChange={(e) =>
               setEditor((prev) => (prev ? { ...prev, threadKey: e.target.value } : prev))
@@ -421,6 +444,7 @@ export function EventRoutesSection() {
 
           <TextField
             label={t('events.routes.form.principalId')}
+            tooltip={t('events.routes.form.principalIdTooltip')}
             value={editor.principalId}
             onChange={(e) =>
               setEditor((prev) => (prev ? { ...prev, principalId: e.target.value } : prev))
@@ -432,6 +456,7 @@ export function EventRoutesSection() {
 
           <TextField
             label={t('events.routes.form.label')}
+            tooltip={t('events.routes.form.labelTooltip')}
             value={editor.label}
             onChange={(e) => setEditor((prev) => (prev ? { ...prev, label: e.target.value } : prev))}
             id="events-route-label"
@@ -440,6 +465,7 @@ export function EventRoutesSection() {
 
           <TextArea
             label={t('events.routes.form.keywords')}
+            tooltip={t('events.routes.form.keywordsTooltip')}
             description={t('events.routes.form.keywordsHelp')}
             value={editor.keywords}
             onChange={(e) =>
@@ -456,6 +482,7 @@ export function EventRoutesSection() {
 
           <SelectField
             label={t('events.routes.form.mode')}
+            tooltip={t('events.routes.form.modeTooltip')}
             value={editor.mode}
             onValueChange={(value) =>
               setEditor((prev) => (prev ? { ...prev, mode: value as RouteMode } : prev))
@@ -474,29 +501,33 @@ export function EventRoutesSection() {
 
           {editor.mode === 'ephemeral' ? (
             <>
-              <TextField
+              <AgentSelect
                 label={t('events.routes.form.agentTemplate')}
+                tooltip={t('events.routes.form.agentTooltip')}
                 value={editor.agentTemplate}
-                onChange={(e) =>
-                  setEditor((prev) => (prev ? { ...prev, agentTemplate: e.target.value } : prev))
+                onChange={(value) =>
+                  setEditor((prev) => (prev ? { ...prev, agentTemplate: value } : prev))
                 }
-                id="events-route-agent"
-                data-testid="events-route-agent"
+                includeEmpty
+                emptyLabel={t('events.bindings.noValue')}
+                testId="events-route-agent"
               />
 
-              <TextField
+              <ProjectSelect
                 label={t('events.routes.form.project')}
+                tooltip={t('events.routes.form.projectTooltip')}
                 value={editor.project}
-                onChange={(e) =>
-                  setEditor((prev) => (prev ? { ...prev, project: e.target.value } : prev))
+                onChange={(value) =>
+                  setEditor((prev) => (prev ? { ...prev, project: value } : prev))
                 }
-                mono
-                id="events-route-project"
-                data-testid="events-route-project"
+                includeEmpty
+                emptyLabel={t('events.bindings.noValue')}
+                testId="events-route-project"
               />
 
               <TextField
                 label={t('events.routes.form.ttl')}
+                tooltip={t('events.routes.form.ttlTooltip')}
                 value={editor.ttl}
                 onChange={(e) => setEditor((prev) => (prev ? { ...prev, ttl: e.target.value } : prev))}
                 placeholder="24h"
@@ -506,16 +537,17 @@ export function EventRoutesSection() {
               />
             </>
           ) : (
-            <TextField
+            <SessionSelect
               label={t('events.routes.form.sessionId')}
+              tooltip={t('events.routes.form.sessionTooltip')}
               value={editor.sessionId}
-              onChange={(e) =>
-                setEditor((prev) => (prev ? { ...prev, sessionId: e.target.value } : prev))
+              onChange={(value) =>
+                setEditor((prev) => (prev ? { ...prev, sessionId: value } : prev))
               }
-              error={formError ?? undefined}
-              mono
-              id="events-route-session"
-              data-testid="events-route-session"
+              includeEmpty
+              emptyLabel={t('events.bindings.noValue')}
+              testId="events-route-session"
+              allowCreate
             />
           )}
 
@@ -579,16 +611,18 @@ export function EventRoutesSection() {
                       ? t('events.routes.status.enabled')
                       : t('events.routes.status.disabled')}
                   </span>
-                  <span className="shrink-0" data-testid={`events-route-toggle-${rule.id}`}>
-                    <Toggle
-                      enabled={rule.enabled}
-                      onToggle={() => handleToggle(rule)}
-                      pending={isPending(rule.id)}
-                      ariaLabel={`${rule.name?.trim() || t('events.routes.unnamed')}: ${t(
-                        'events.routes.form.enabled',
-                      )}`}
-                    />
-                  </span>
+                  {canManage && (
+                    <span className="shrink-0" data-testid={`events-route-toggle-${rule.id}`}>
+                      <Toggle
+                        enabled={rule.enabled}
+                        onToggle={() => handleToggle(rule)}
+                        pending={isPending(rule.id)}
+                        ariaLabel={`${rule.name?.trim() || t('events.routes.unnamed')}: ${t(
+                          'events.routes.form.enabled',
+                        )}`}
+                      />
+                    </span>
+                  )}
                 </div>
                 <dl className="grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-muted-foreground min-w-0">
                   <div className="min-w-0 break-words">
@@ -601,30 +635,32 @@ export function EventRoutesSection() {
                   </div>
                 </dl>
               </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 min-h-10 min-w-10"
-                  onClick={() => openEdit(rule)}
-                  title={t('common.edit')}
-                  aria-label={t('common.edit')}
-                  data-testid={`events-route-edit-${rule.id}`}
-                >
-                  <Icon name="edit-2" className="size-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="shrink-0 min-h-10 min-w-10 hover:text-destructive"
-                  onClick={() => void handleDelete(rule)}
-                  title={t('common.delete')}
-                  aria-label={t('common.delete')}
-                  data-testid={`events-route-delete-${rule.id}`}
-                >
-                  <Icon name="delete-bin" className="size-4" />
-                </Button>
-              </div>
+              {canManage && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 min-h-10 min-w-10"
+                    onClick={() => openEdit(rule)}
+                    title={t('common.edit')}
+                    aria-label={t('common.edit')}
+                    data-testid={`events-route-edit-${rule.id}`}
+                  >
+                    <Icon name="edit-2" className="size-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="shrink-0 min-h-10 min-w-10 hover:text-destructive"
+                    onClick={() => void handleDelete(rule)}
+                    title={t('common.delete')}
+                    aria-label={t('common.delete')}
+                    data-testid={`events-route-delete-${rule.id}`}
+                  >
+                    <Icon name="delete-bin" className="size-4" />
+                  </Button>
+                </div>
+              )}
             </div>
           ))}
         </div>

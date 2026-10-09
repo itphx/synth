@@ -1,10 +1,13 @@
 import { cn } from '@/lib/utils'
 
 import { Toggle } from '../../Toggle'
+import { FieldTooltip } from '../FieldTooltip'
 
 export interface ToggleFieldProps {
   label: string
   description?: string
+  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  tooltip?: string
   enabled: boolean
   onToggle: () => void
   disabled?: boolean
@@ -15,6 +18,7 @@ export interface ToggleFieldProps {
 export function ToggleField({
   label,
   description,
+  tooltip,
   enabled,
   onToggle,
   disabled = false,
@@ -23,7 +27,10 @@ export function ToggleField({
   return (
     <div className="flex items-start justify-between gap-3 min-w-0">
       <div className="min-w-0">
-        <div className="text-sm font-medium text-foreground min-w-0 break-words">{label}</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="text-sm font-medium text-foreground min-w-0 break-words">{label}</div>
+          {tooltip && <FieldTooltip text={tooltip} />}
+        </div>
         {description && (
           <p className="text-xs text-muted-foreground min-w-0 break-words">{description}</p>
         )}

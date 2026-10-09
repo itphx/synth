@@ -221,11 +221,12 @@ function App() {
         <TooltipProvider>
           <TitleTooltipBridge />
           {isMobile ? mobileLayout : desktopLayout}
+
+          <SettingsModal />
+          <LogsModal />
+          <EntityEditDialog />
         </TooltipProvider>
 
-        <SettingsModal />
-        <LogsModal />
-        <EntityEditDialog />
         <ConfirmDialog
           open={confirmOpen}
           onOpenChange={(open) => { if (!open) closeConfirm(false) }}

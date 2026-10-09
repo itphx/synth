@@ -3,7 +3,7 @@ import type { Mock } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SynthEvent } from '@itphx/synth-shared';
+import type { EventBinding, SynthEvent } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { EventBindingStore } from '../../storage/event-binding-store.js';
@@ -113,6 +113,24 @@ describe('RequestSessionService (AD-089)', () => {
     expect(decision).toEqual({ kind: 'bound', sessionId: target.id });
     expect(session?.id).toBe(target.id);
     expect(deliver).toHaveBeenCalledOnce();
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run');
+  });
+
+  it('handleEvent opts.binding форсирует привязку независимо от identity', async () => {
+    const target = await sessionManager.createSession({ title: 'Bound' });
+    const forced: EventBinding = {
+      id: 'bnd_forced',
+      source: 'telegram',
+      chatKey: 'chat:forced',
+      mode: 'bound',
+      sessionId: target.id,
+    };
+
+    const e = event({ identity: {} });
+    const { decision, session } = await service().handleEvent(e, { binding: forced });
+
+    expect(decision).toEqual({ kind: 'bound', sessionId: target.id });
+    expect(session?.id).toBe(target.id);
     expect(deliver).toHaveBeenCalledWith(target.id, e, 'run');
   });
 
@@ -240,6 +258,38 @@ describe('RequestSessionService (AD-089)', () => {
     expect(decision).toEqual({ kind: 'drop', reason: 'blocked by hook', audited: true });
     expect(session).toBeNull();
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it('handleEvent opts.audit пишет keyId/principalId в журнал (AD-089/AD-052)', async () => {
+    const target = await sessionManager.createSession({ title: 'Bound' });
+    await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: target.id });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:1' } });
+    await service().handleEvent(e, { audit: { keyId: 'eak_1', principalId: 'svc-1' } });
+
+    const entries = await journal.list();
+    expect(entries[0]?.keyId).toBe('eak_1');
+    expect(entries[0]?.principalId).toBe('svc-1');
+  });
+
+  it('handleEvent без audit — журнал без keyId/principalId (обратная совместимость)', async () => {
+    const e = event({ dedupKey: 'k-no-audit' });
+    await service().handleEvent(e);
+
+    const entries = await journal.list();
+    expect(entries[0]?.keyId).toBeUndefined();
+    expect(entries[0]?.principalId).toBeUndefined();
+  });
+
+  it('handleEvent: hook-blocked фиксирует audit в журнале (все ветки)', async () => {
+    hooks.on('external_event', () => ({ block: true, reason: 'blocked by hook' }));
+
+    const e = event({ dedupKey: 'k-blocked-audit' });
+    await service().handleEvent(e, { audit: { keyId: 'eak_blocked' } });
+
+    const entries = await journal.list();
+    expect(entries[0]?.decision).toEqual({ kind: 'drop', reason: 'blocked by hook', audited: true });
+    expect(entries[0]?.keyId).toBe('eak_blocked');
   });
 
   it('handleEvent пишет решение в журнал', async () => {

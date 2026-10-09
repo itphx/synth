@@ -173,6 +173,13 @@ export type {
 // AD-089: реестр биндингов внешних событий и журнал обработки/решений Router.
 export { EventBindingStore, EVENT_BINDINGS_SCHEMA_VERSION } from './storage/event-binding-store.js';
 export type { EventBindingStoreConfig, UpsertEventBindingInput } from './storage/event-binding-store.js';
+// AD-089/AD-052: реестр API-ключей привязок (приём событий по ключу).
+export { EventApiKeyStore, EVENT_API_KEYS_SCHEMA_VERSION } from './storage/event-api-key-store.js';
+export type {
+  EventApiKeyStoreConfig,
+  EventApiKeyRecord,
+  CreateEventApiKeyInput,
+} from './storage/event-api-key-store.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
 // AD-089: реестр правил маршрутизации внешних событий.
@@ -192,6 +199,8 @@ export { MemoryDedupStore, FileDedupStore } from './engine/events/dedup-store.js
 export type { DedupStore, FileDedupStoreConfig } from './engine/events/dedup-store.js';
 export { EventIngress } from './engine/events/ingest.js';
 export type { EventIngestInput, EventIngressDeps } from './engine/events/ingest.js';
+// AD-089/AD-052: контекст машинной аутентификации по API-ключу привязки.
+export type { EventKeyCredential } from './engine/events/credential.js';
 export {
   RequestSessionService,
   eventToMessage,

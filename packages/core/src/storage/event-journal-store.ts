@@ -12,6 +12,10 @@ export interface EventJournalEntry {
   decision?: RouteDecision;
   /** Ошибка обработки, если была. */
   error?: string;
+  /** AD-089/AD-052: id API-ключа привязки (аудит использования ключа). */
+  keyId?: string;
+  /** AD-089/AD-052: идентичность отправителя (аудит использования ключа). */
+  principalId?: string;
 }
 
 export interface EventJournalStoreConfig {

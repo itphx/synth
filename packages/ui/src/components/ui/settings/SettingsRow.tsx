@@ -2,11 +2,15 @@ import React from 'react'
 
 import { cn } from '@/lib/utils'
 
+import { FieldTooltip } from './FieldTooltip'
+
 export interface SettingsRowProps {
   label: string
   description?: string
   control: React.ReactNode
   htmlFor?: string
+  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  tooltip?: string
   className?: string
 }
 
@@ -19,6 +23,7 @@ export function SettingsRow({
   description,
   control,
   htmlFor,
+  tooltip,
   className,
 }: SettingsRowProps) {
   return (
@@ -29,9 +34,12 @@ export function SettingsRow({
       )}
     >
       <div className="min-w-0">
-        <label htmlFor={htmlFor} className="text-sm font-medium text-foreground min-w-0 break-words">
-          {label}
-        </label>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <label htmlFor={htmlFor} className="text-sm font-medium text-foreground min-w-0 break-words">
+            {label}
+          </label>
+          {tooltip && <FieldTooltip text={tooltip} />}
+        </div>
         {description && (
           <p className="text-xs text-muted-foreground min-w-0 break-words">{description}</p>
         )}

@@ -9,6 +9,8 @@ export interface TextFieldProps extends React.InputHTMLAttributes<HTMLInputEleme
   description?: string
   error?: string
   mono?: boolean
+  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  tooltip?: string
   /** Дополнительные классы контейнера `SettingsField`. */
   containerClassName?: string
 }
@@ -19,6 +21,7 @@ export function TextField({
   description,
   error,
   mono,
+  tooltip,
   containerClassName,
   className,
   ...props
@@ -29,6 +32,7 @@ export function TextField({
       description={description}
       error={error}
       htmlFor={props.id}
+      tooltip={tooltip}
       className={containerClassName}
     >
       <input

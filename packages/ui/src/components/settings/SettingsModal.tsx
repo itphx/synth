@@ -44,6 +44,7 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "chat", labelKey: "settings.category.chat", icon: "chat-new" },
   { id: "mcp", labelKey: "settings.category.mcp", icon: "tools" },
   { id: "skills", labelKey: "settings.category.skills", icon: "book-open" },
+  { id: "eventsAdmin", labelKey: "settings.category.events", icon: "send-plane" },
   // Admin sections below
   { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },
   { id: "security", labelKey: "settings.category.security", icon: "shield-keyhole", roles: ["ADMIN"] },
@@ -51,7 +52,6 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "builtinTools", labelKey: "settings.category.builtinTools", icon: "terminal-box", roles: ["ADMIN"] },
   { id: "skillsAdmin", labelKey: "settings.category.skillsAdmin", icon: "book-open", roles: ["ADMIN"] },
   { id: "commands", labelKey: "settings.category.commands", icon: "terminal-box", roles: ["ADMIN"] },
-  { id: "eventsAdmin", labelKey: "settings.category.events", icon: "send-plane", roles: ["ADMIN"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
   { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
   { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
