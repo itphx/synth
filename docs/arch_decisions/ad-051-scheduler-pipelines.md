@@ -129,6 +129,12 @@
   время, тело = текст задания; действия — полный набор как у user-сообщения
   (копировать/закрепить/удалить/повторить/ветка/отладка). Признак в UI — `metadata.scheduler === true`
   (`ChatMessage`), `MessageHeader.resolveAuthor()` для обычных user-сообщений не менялся.
+- **Пояснение на ходу планировщика** — отдельный **volatile**-блок `scheduler.turn`
+  (tier `volatile`, order 40, `provenance: prompts/system/SCHEDULER_TURN`) из ассета
+  `packages/core/prompts/system/SCHEDULER_TURN.{ru,en}.md` (`ContextConfig.getSchedulerTurnNotice`).
+  Добавляется **только когда текущий ход инициирован планировщиком** (`metadata.scheduler === true`;
+  флаг `schedulerCurrentTurn` оркестратора), при `systemPrompt`-override — нет. Текст: текущее
+  сообщение — автоматическое задание (`Scheduler`), человек в этом ходе не участвует.
 
 **Статус:** ✅ реализовано (core + backend + UI, тесты; проверено dev-smoke: сообщение
 имеет `author='Scheduler'` и чистый контент, блок `scheduler` есть в манифесте промпта

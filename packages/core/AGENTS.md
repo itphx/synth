@@ -103,7 +103,7 @@
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit.
 - `engine/router/*` — routing моделей и micro-model слой (AD-034/035).
 - `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, AD-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, AD-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
-- `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью.
+- `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле, гейт `interviewEligible`).
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
 - `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (AD-046 Фаза 1);
@@ -113,7 +113,7 @@
   `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
   до LLM, событие `command.invoked`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
-  plan, todo, project, task, skill); git-тулы принимают необязательный `repo_path`
+  plan, todo, project, task, skill, profile_update); git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
   (AD-076; ошибки — `sshkey.env_failed`). Тулы управления проектом:
   `project_update`/`project_workspace_set` (`project-manage.ts`) и
@@ -132,6 +132,9 @@
   HTTP-роутов и тулов (AD-075). `engine/tools/runtime-deps.ts` — детект внешних
   бинарников (`git`/`rg`/`sh`, fail-open, кэш) и карта `TOOL_RUNTIME_DEP`; отсутствие
   программы даёт `unavailable(dependency)` (AD-078), тулы из реестра не удаляются.
+  `profile_update` (`profile-update.ts`) — онбординг владельца сессии: сохраняет
+  `display_name`/`email`/`phone`/`notes` и завершает интервью (`ProfileData.interviewCompleted`);
+  стор приходит через `ToolContext.extra.profilesStore`, нет владельца — понятная ошибка.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `engine/hooks/*` — `HookBus` (AD-030): ядровая in-process шина хуков
   (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от
@@ -146,7 +149,8 @@
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
-- `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`,
+- `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`
+  (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`),
   `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`

@@ -2049,3 +2049,20 @@
 - **Замечания:** резолвер `isSchedulerActive` читает `ScheduleStore` на ход (файл `schedules.json`) — при масштабировании/оптимизации закэшировать; отклонение от исходного «включённым расписанием» учтено (история-сообщение ИЛИ enabled-target). Dev оставлен запущенным (пользовательское расписание «Тест» активно).
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** нет (ожидает явной просьбы пользователя).
+
+## 2026-10-09 — Онбординг-интервью: поле `interviewCompleted`, условия инжекта, тул `profile_update` + volatile-пояснение хода планировщика
+- **Задача:** починить логику онбординг-интервью (сейчас мёртвая, блок `[INTERVIEW]` лился в каждую сессию) и убрать противоречие «сообщение от планировщика, а в промпте профиль пользователя». Решения пользователя: отдельное поле статуса + чекбокс в настройках профиля; `[INTERVIEW]` только в первое сообщение сессии, от пользователя, при незаполненном профиле; пояснение для хода планировщика — volatile и только на его ходу; записи интервью — тулом `profile_update` (поля профиля + завершение); ephemeral-сессии планировщика остаются безликими.
+- **Тип:** feature (shared+core+backend+ui)
+- **Исполнитель:** @orchestrator (investigate/дизайн) → @fixer ×3 (B1: поле/условия/UI; B2: тул/шаблон; chat.ts) → верификация @orchestrator
+- **Результат:** PASS
+- **Диагностика:** статус интервью хранился текстовой меткой `[ИНТЕРВЬЮ]` в `ProfileData.notes`; `InterviewManager.processAnswer/completeInterview/getNextQuestion/parseQuestions` никто не вызывал, парсер ждал `## qN` при шаблоне `[Q1]` (0 вопросов); `interviewCompleted` уже был на auth-`User`, но не персистился и не читался композером; volatile-пояснения для хода планировщика не было.
+- **Что сделано:**
+  - **shared/storage:** `ProfileData.interviewCompleted`/`interviewCompletedAt` (+`CreateProfileParams`); `FileProfileStore` — сериализация `interview_completed`/`interview_completed_at`, legacy-backfill из `[ИНТЕРВЬЮ]`, инициализация `false`.
+  - **context/composer:** `[INTERVIEW]` — только при `showInterview && interviewEligible && userId && профиль && !interviewCompleted` (убран гейт по `notes`); `interviewEligible`/`schedulerCurrentTurn` в `ComposerContext`, хелперы `_interviewEligible`/`_schedulerCurrentTurn` в оркестраторе (оба call-site); новый volatile-блок `scheduler.turn` (`SCHEDULER_TURN.{ru,en}.md`, order 40) при ходе планировщика; удалён мёртвый `InterviewManager` (оставлен `isInterviewCompleted`).
+  - **тул `profile_update`:** сохранение `display_name`/`email`/`phone`/`notes` профиля владельца сессии + завершение интервью; `capabilities:[RUNTIME]`; стор через `ctx.extra.profilesStore`; резолв `loadProfile(userId) ?? getProfileByUsername ?? getOrCreateProfile`. Проброс `profilesStore` в `OrchestratorOptions` + `extra` (включая саб-агентов) и в core/backend `app.ts` + `chat.ts`.
+  - **backend/UI:** `/auth/profile` отдаёт `profile?.interviewCompleted ?? user.interviewCompleted` и персистит `interview_completed` (+`interviewCompletedAt`); `ProfileSettings` — `ToggleField` «Онбординг пройден» + i18n ru/en; шаблон `INTERVIEW.{ru,en}.md` инструктирует сохранять ответы тулом.
+  - **docs:** корневой AGENTS.md (строка тула, раздел про онбординг, volatile `scheduler.turn`), `packages/core/AGENTS.md` (context/tools/storage), AD-051 (volatile-блок).
+- **Проверки:** typecheck 6/6; lint 0 errors; тесты shared 197 · core **2600** · ui **1025** · backend 347 (новых ~27+14 кейсов). `synth chat` получил `profilesStore` (тул больше не падает).
+- **Замечания:** standalone-core `GET/PUT /auth/profile` (`packages/core/src/server/routes/auth.ts`) остаётся минимальным — чекбокс там не персистится (долг; в dev/managed работает через backend). Резолвер `isSchedulerActive` читает `schedules.json` раз в ход — долг на будущее.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** нет (ожидает явной просьбы пользователя).
