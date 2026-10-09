@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
+import { TOOL_CAPABILITY_META } from '@itphx/synth-shared/types'
 import { synthApi, type AgentInfo, type AgentMode, type ProviderInfo, type ModelGroup } from '@/lib/api/synthApi'
 import { Icon, isIconName } from '@/components/icon/Icon'
 import { IconPicker } from './IconPicker'
@@ -26,10 +27,9 @@ import {
   useSettingsDraft,
 } from '../ui/settings'
 
-const CAP_KEYS = [
-  'file_read', 'file_write', 'search', 'shell',
-  'git_read', 'git_write', 'web', 'task', 'mcp',
-]
+// Состав и порядок capability — из канонического реестра shared (единый источник),
+// чтобы UI не расходился при добавлении новых групп (например, runtime/user).
+const CAP_KEYS = Object.keys(TOOL_CAPABILITY_META)
 
 // Доступные уровни размышлений по типу провайдера (без 'default' — он не хранится в агенте)
 const REASONING_BY_PROVIDER_TYPE: Record<string, string[]> = {

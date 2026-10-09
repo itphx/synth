@@ -1519,6 +1519,8 @@ export const dict = {
   'admin.agents.cap.web': 'веб',
   'admin.agents.cap.task': 'сабагенты',
   'admin.agents.cap.mcp': 'MCP',
+  'admin.agents.cap.runtime': 'runtime',
+  'admin.agents.cap.user': 'пользователь',
 
   // Subagent fields
   'admin.agents.agentMode': 'Тип агента',
