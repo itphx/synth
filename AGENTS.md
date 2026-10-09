@@ -272,12 +272,12 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 | Лог/Инварианты | `project_log_write`, `project_log_read`, `project_invariants_read`, `project_invariants_write` |
 | Веб | `web_fetch`, `web_search` (DuckDuckGo, при anti-bot — fallback на Bing) |
 | Задачи | `task`, `classify_conversation`, `read_session_reference` |
-| Профиль | `profile_update` (онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
+| Профиль | `profile_update` (capability `user` — выдан только Агенту `assistant`; онбординг владельца сессии: `display_name`/`email`/`phone`/`notes`, завершение интервью — `ProfileData.interviewCompleted`) |
 | Скиллы | `skill` (AD-046: загрузка тела `SKILL.md` по имени + supporting-файлы; глобально отключается через `tools.disabled`) |
 
-Доступность групп — в `ToolCapability` (`@itphx/synth-shared`); MCP-тулы регистрируются как `{serverName}_{toolName}`, подчиняются режимам (AD-029) и выбираются **per-session** — в промпт идут только тулы активных серверов сессии. Слои разделены: `tools` — встроенные, `mcp.tools`/`mcp.servers`/`mcp.status` — MCP (всегда `volatile`) (AD-071).
+Доступность групп — в `ToolCapability` (`@itphx/synth-shared`); группа `user` (тул `profile_update`, только Агент `assistant`) отключаемая — админ может снять её через `tools.disabled`; MCP-тулы регистрируются как `{serverName}_{toolName}`, подчиняются режимам (AD-029) и выбираются **per-session** — в промпт идут только тулы активных серверов сессии. Слои разделены: `tools` — встроенные, `mcp.tools`/`mcp.servers`/`mcp.status` — MCP (всегда `volatile`) (AD-071).
 
-**Онбординг-интервью.** Блок `[INTERVIEW]` (`prompts/system/INTERVIEW.{lang}.md`) включается только в **первое сообщение сессии от пользователя** и при **незаполненном** профиле: флаг `interviewEligible` вычисляет оркестратор (`_interviewEligible` — первое «разговорное» сообщение, не `Scheduler`/системное), `ContextBuilder` дополнительно проверяет `ProfileData.interviewCompleted`; `session.settings.showInterview` — мастер-выключатель. Агент проводит интервью и сохраняет ответы тулом `profile_update`. Статус — отдельное поле `ProfileData.interviewCompleted` (legacy-метка `[ИНТЕРВЬЮ]` в `notes` бэкфиллится в `FileProfileStore` при чтении).
+**Онбординг-интервью.** Блок `[INTERVIEW]` (`prompts/system/INTERVIEW.{lang}.md`) включается только в **первое сообщение сессии от пользователя** и при **незаполненном** профиле: флаг `interviewEligible` вычисляет оркестратор (`_interviewEligible` — первое «разговорное» сообщение, не `Scheduler`/системное, **и** `profile_update` доступен текущему агенту — capability `user` и тул не отключён админом; иначе fail-closed), `ContextBuilder` дополнительно проверяет `ProfileData.interviewCompleted`; `session.settings.showInterview` — мастер-выключатель. Агент проводит интервью и сохраняет ответы тулом `profile_update`. Статус — отдельное поле `ProfileData.interviewCompleted` (legacy-метка `[ИНТЕРВЬЮ]` в `notes` бэкфиллится в `FileProfileStore` при чтении).
 
 ## Внешние события и хуки
 

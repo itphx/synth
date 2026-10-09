@@ -1749,6 +1749,7 @@ export const dict = {
   'mcpAdmin.tools.group.git_write': 'Git write',
   'mcpAdmin.tools.group.task': 'Sub-agents',
   'mcpAdmin.tools.group.mcp': 'MCP tools',
+  'mcpAdmin.tools.group.user': 'User interaction',
   'mcpAdmin.tools.group.runtime': 'Session runtime',
   'mcpAdmin.tools.runtimeHint': 'Session runtime tools (core) are always on and cannot be disabled',
   'mcpAdmin.tools.alwaysOn': 'always on',

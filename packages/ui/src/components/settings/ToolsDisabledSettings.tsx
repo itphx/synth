@@ -32,6 +32,7 @@ const DISABLEABLE_GROUPS = [
   'git_write',
   'task',
   'mcp',
+  'user',
 ] as const
 
 const RUNTIME_CAPABILITY = 'runtime'

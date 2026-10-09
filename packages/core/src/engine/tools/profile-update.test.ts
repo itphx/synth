@@ -147,8 +147,8 @@ describe('profile_update tool', () => {
     expect(result.content).toContain('at least one field');
   });
 
-  it('тул зарегистрирован с capability runtime', () => {
+  it('тул зарегистрирован с capability user', () => {
     expect(profileUpdateTool.name).toBe('profile_update');
-    expect(profileUpdateTool.capabilities).toEqual(['runtime']);
+    expect(profileUpdateTool.capabilities).toEqual(['user']);
   });
 });

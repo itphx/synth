@@ -20,6 +20,7 @@ const TOOL_ICON_MAP: Record<string, IconName> = {
   git_pull: 'git-branch',
   git_checkout: 'git-branch',
   task: 'brain',
+  profile_update: 'user-3',
 }
 
 export function getToolIcon(toolName: string): IconName {

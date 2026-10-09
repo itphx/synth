@@ -1729,6 +1729,7 @@ export const dict = {
   'mcpAdmin.tools.group.git_write': 'Запись Git',
   'mcpAdmin.tools.group.task': 'Саб-агенты',
   'mcpAdmin.tools.group.mcp': 'MCP-инструменты',
+  'mcpAdmin.tools.group.user': 'Работа с пользователем',
   'mcpAdmin.tools.group.runtime': 'Runtime сессии',
   'mcpAdmin.tools.runtimeHint': 'Runtime-инструменты сессии (ядро) всегда включены и не отключаются',
   'mcpAdmin.tools.alwaysOn': 'всегда включён',

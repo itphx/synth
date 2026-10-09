@@ -103,7 +103,7 @@
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit.
 - `engine/router/*` — routing моделей и micro-model слой (AD-034/035).
 - `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, AD-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, AD-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
-- `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле, гейт `interviewEligible`).
+- `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
 - `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (AD-046 Фаза 1);
@@ -134,7 +134,11 @@
   программы даёт `unavailable(dependency)` (AD-078), тулы из реестра не удаляются.
   `profile_update` (`profile-update.ts`) — онбординг владельца сессии: сохраняет
   `display_name`/`email`/`phone`/`notes` и завершает интервью (`ProfileData.interviewCompleted`);
-  стор приходит через `ToolContext.extra.profilesStore`, нет владельца — понятная ошибка.
+  capability `user` (отключаемая группа `user` в `permission/groups.ts`; выдана только агенту
+  `assistant`), поэтому тул доступен не всем агентам и блок `[INTERVIEW]` инжектится только
+  при доступном агенту `profile_update` (гейт `_interviewEligible` — `_availabilityPredicate` +
+  `_isAdminDisabled`, fail-closed без тула); стор приходит через `ToolContext.extra.profilesStore`,
+  нет владельца — понятная ошибка.
 - `engine/llm-error.ts`, `engine/system-messages.ts` — таксономия ошибок и i18n-ключи.
 - `engine/hooks/*` — `HookBus` (AD-030): ядровая in-process шина хуков
   (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от

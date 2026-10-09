@@ -782,6 +782,18 @@ describe('Settings API Routes (workspace)', () => {
       expect(body.error.message).toContain('runtime');
     });
 
+    it('PUT принимает capability user (отключаемая группа профиля)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/tools-disabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolsDisabled: { capabilities: ['user'], tools: [] } }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.toolsDisabled).toEqual({ capabilities: ['user'], tools: [] });
+    });
+
     it('PUT отклоняет инструмент с capability runtime (knownTools)', async () => {
       const app = new Hono();
       const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });

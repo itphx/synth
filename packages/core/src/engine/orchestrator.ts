@@ -1174,13 +1174,60 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Интервью уместно, только если это первое сообщение сессии И от пользователя
-   * (не Scheduler и не системное). При явном `message` (реальный ход) — оно
-   * само и есть проверяемое: среди «разговорных» (user|assistant) не должно
-   * быть других, кроме него. Без `message` (диагностика `getPromptInfo`) —
-   * «разговорных» ровно одно и это user-сообщение от пользователя.
+   * AD-083: доступность онбординг-тула `profile_update` текущему агенту — гейт
+   * инжекта блока `[INTERVIEW]`. Источник доступности единый: реестр (`get`) +
+   * admin-отключение (`_isAdminDisabled`) + `_availabilityPredicate`
+   * (`computeToolAvailability`: роль/mode/dependency/workspace), без дублирования
+   * логики. Нет реестра/тула — fail-closed (интервью не инжектим).
    */
-  private _interviewEligible(session: Session, message?: Message): boolean {
+  private _profileUpdateAvailable(
+    session: Session,
+    agentDef: AgentDefinition | undefined,
+    sessionMode: SessionMode,
+    planMode: PlanMode,
+    planApproved: boolean,
+    workspaceReady: boolean,
+  ): boolean {
+    const tool = this._toolRegistry?.get('profile_update');
+    if (!tool) return false;
+    if (this._isAdminDisabled(tool)) return false;
+    return this._availabilityPredicate(
+      session, sessionMode, planMode, planApproved, agentDef, workspaceReady,
+    )(tool);
+  }
+
+  /**
+   * Интервью уместно, только если это первое сообщение сессии И от пользователя
+   * (не Scheduler и не системное) И текущий агент реально может сохранить ответы
+   * (`profile_update` доступен — capability `user`, тул не admin-disabled).
+   * При явном `message` (реальный ход) — оно само и есть проверяемое: среди
+   * «разговорных» (user|assistant) не должно быть других, кроме него. Без
+   * `message` (диагностика `getPromptInfo`) — «разговорных» ровно одно и это
+   * user-сообщение от пользователя.
+   */
+  private _interviewEligible(
+    session: Session,
+    message: Message | undefined,
+    toolAccess: {
+      agentDef: AgentDefinition | undefined;
+      sessionMode: SessionMode;
+      planMode: PlanMode;
+      planApproved: boolean;
+      workspaceReady: boolean;
+    },
+  ): boolean {
+    if (
+      !this._profileUpdateAvailable(
+        session,
+        toolAccess.agentDef,
+        toolAccess.sessionMode,
+        toolAccess.planMode,
+        toolAccess.planApproved,
+        toolAccess.workspaceReady,
+      )
+    ) {
+      return false;
+    }
     const conversational = session.messages.filter(
       (m) => m.role === MessageRole.USER || m.role === MessageRole.ASSISTANT,
     );
@@ -2197,7 +2244,9 @@ export class ChatOrchestrator {
       instructions: projectInstructions?.instructions,
       schedulerActive,
       // Интервью-блок в диагностике — по истории сессии (нет явного хода).
-      interviewEligible: this._interviewEligible(session),
+      interviewEligible: this._interviewEligible(session, undefined, {
+        agentDef, sessionMode, planMode, planApproved, workspaceReady,
+      }),
       schedulerCurrentTurn: this._schedulerCurrentTurn(session),
     });
 
@@ -2659,8 +2708,11 @@ export class ChatOrchestrator {
         skillsCatalog,
         instructions: projectInstructions?.instructions,
         schedulerActive,
-        // Интервью уместно только в первом ходе сессии от пользователя.
-        interviewEligible: this._interviewEligible(session, message),
+        // Интервью уместно только в первом ходе сессии от пользователя и если
+        // текущий агент может сохранить ответы (`profile_update` доступен).
+        interviewEligible: this._interviewEligible(session, message, {
+          agentDef, sessionMode, planMode, planApproved, workspaceReady,
+        }),
         // Текущий ход инициирован планировщиком — volatile-пояснение модели.
         schedulerCurrentTurn: this._schedulerCurrentTurn(session, message),
       });

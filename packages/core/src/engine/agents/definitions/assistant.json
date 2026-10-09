@@ -17,7 +17,8 @@
     "git_write",
     "task",
     "mcp",
-    "runtime"
+    "runtime",
+    "user"
   ],
   "icon": "robot-3",
   "color": "--status-success",

@@ -11,6 +11,7 @@ export const ToolCapability = {
   TASK: 'task',
   MCP: 'mcp',
   RUNTIME: 'runtime',
+  USER: 'user',
 } as const;
 
 export type ToolCapability = (typeof ToolCapability)[keyof typeof ToolCapability];
@@ -26,6 +27,7 @@ export const TOOL_CAPABILITY_META: Record<string, { label: string; description: 
   [ToolCapability.TASK]: { label: 'Запуск сабагентов', description: 'task' },
   [ToolCapability.MCP]: { label: 'MCP-инструменты', description: 'внешние MCP-серверы' },
   [ToolCapability.RUNTIME]: { label: 'Управление сессией', description: 'classify_conversation' },
+  [ToolCapability.USER]: { label: 'Работа с пользователем', description: 'profile_update' },
 };
 
 export interface ToolContext {

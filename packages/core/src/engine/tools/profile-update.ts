@@ -51,7 +51,7 @@ export const profileUpdateTool: ToolDefinition = {
     + 'Use it during onboarding to save the answers to the interview questions, then set interview_completed to true. '
     + 'Only the provided fields are changed. Returns the list of updated fields.',
   parameters: profileUpdateSchema,
-  capabilities: [ToolCapability.RUNTIME],
+  capabilities: [ToolCapability.USER],
   async execute(args, ctx) {
     // «Стоп» пришёл до запуска — операция не выполняется (см. tools/abort.ts)
     if (isAborted(ctx)) return abortedResult(this.name);
