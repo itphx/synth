@@ -1,8 +1,10 @@
 # AD-030: Hooks для событий агента
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** ⚠️ Частично (реализованы hook-шина и эмиты жизненного цикла; Plugin SDK/загрузка плагинов — нет)
 > **Дата:** 2026-09-17
-> **Обновлено:** 2026-10-08 — закреплён как **фундамент** для внешних событий ([AD-089](./ad-089-external-events-automation.md)):
+> **Обновлено:** 2026-10-09 — статус уточнён до ⚠️ Частично и раздел «Статус реализации в коде» приведён
+> к фактическому состоянию (hook-шина и эмиты реализованы, Plugin SDK — нет).
+> Ранее (2026-10-08) закреплён как **фундамент** для внешних событий ([AD-089](./ad-089-external-events-automation.md)):
 > добавлены события уровня интеграций (`external_event` / `message_received` / `callback` / `session_requested`)
 > и связи с [AD-051](./ad-051-scheduler-pipelines.md), [AD-052](./ad-052-public-api-platform.md), [AD-086](./ad-086-extensibility-plugins-editions.md),
 > [AD-087](./ad-087-messenger-gateway-merged.md).
@@ -93,15 +95,29 @@ export default function myPlugin(synth: SynthPlugin) {
 
 ## Статус реализации в коде
 
-**Не реализовано, кода нет.**
+**Реализовано частично:** hook-шина (`HookBus`) и эмиты жизненного цикла. Plugin SDK и загрузка плагинов — не реализованы.
 
-Проверено по репозиторию (grep по `packages/**`, исключая `dist/` и `node_modules/`):
+### Реализовано
 
-- Идентификаторы системы хуков — `pre_tool_use`, `post_tool_use`, `agent_spawned`, `agent_completed`, `agent_failed`, `hooks.on`, `SynthPlugin` — не встречаются ни в одном пакете. Plugin SDK в коде отсутствует.
-- Типы/поля `hooks` в `packages/shared/src` отсутствуют.
-- Смежное, но не AD-030:
-  - `ContextOptimizerGatewayHooks` — `packages/core/src/engine/context/optimizer.ts:34`, `setGatewayHooks()` (`:84`) — внутренний интерфейс шлюза безопасности (AD-036), не система хуков;
-  - `EventBus` (SessionEventBus) — `packages/core/src/events/bus.ts:10` (AD-009) — шина событий сессии; событий с именами из таблицы выше в ней нет.
+- **HookBus** — `packages/core/src/engine/hooks/hook-bus.ts` (реэкспорт через `engine/hooks/index.ts` и публичную поверхность core — `packages/core/src/index.ts`, инстанцируется в `server/app.ts`): `on`/`off`/`emit`/`emitAsync`, `priority` (больше — раньше; тай-брейк — порядок регистрации), режимы
+  - `sync` (по умолчанию) — последовательный вызов в `emit`, блокировка через `{block, reason}` (немедленно прерывает цепочку) и `{patch}` (поверхностный мерж в контекст);
+  - `async` — fire-and-forget в `emitAsync` с таймаутом `HOOK_ASYNC_TIMEOUT_MS = 5000` (`unref` таймера).
+  Ошибки и таймауты обработчиков изолированы (логируются, наружу не пробрасываются). Шина не зависит от session-`EventBus` (`events/bus.ts`).
+- **Типы** — `packages/shared/src/types/hooks.ts`: `HookName`, `HookMode`, `HookResult`, `HookContextMap` (карта контекстов всех объявленных хуков, включая события интеграций из AD-089). Экспортируются через `@itphx/synth-shared`.
+- **Эмиты жизненного цикла:**
+  - `session_start` — `packages/core/src/sessions/manager.ts` (`createSession`, после сохранения); `session_end` — там же (`deleteSession`, `archiveSession`), контекст `{ sessionId }`;
+  - `pre_tool_use` (sync, блокирует исполнение → результат `hook.blocked`), `post_tool_use` (async, только для реально исполненных тулов), `permission_denied`, `plan_approved` — `packages/core/src/engine/orchestrator.ts`;
+  - `agent_spawned`, `agent_completed`, `agent_failed` — `packages/core/src/engine/tools/task.ts` (эмитятся при наличии дочерней сессии саб-агента);
+  - `session_requested` (async) и `external_event` (sync, блокируемый → решение `drop`) — `packages/core/src/engine/events/request-session.ts`.
+- **Тесты** — `engine/hooks/hook-bus.test.ts`, `engine/orchestrator-hooks.test.ts`, `sessions/manager-hooks.test.ts`, `engine/events/request-session.test.ts`.
+
+### Остаток (не реализовано)
+
+- **Plugin SDK и загрузка плагинов** — отсутствуют: нет `SynthPlugin`, `synth.hooks.on(...)`, конфига/загрузчика и публичной точки регистрации внешних обработчиков (см. AD-086).
+- **Неэмитируемые хуки** — `plan_rejected`, `message_received`, `callback`, `schedule_fired` объявлены в `HookName`, но нигде не эмитятся.
+- **Политика `builtin`** — флаг `builtin` хранится в регистрации, но политики снятия (защита обработчиков ядра от внешних плагинов) нет: `off` снимает любой обработчик.
+- **Неполные контексты** — `session_end` эмитится без `summary`/`usage`; в ветке жёсткого сбоя `agent_failed` не заполняет `retries`.
+- **Конфиг/API/UI/аудит хуков** — отсутствуют.
 
 ## Связи
 
