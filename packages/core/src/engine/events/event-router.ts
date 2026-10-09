@@ -2,6 +2,8 @@ import type { EventBinding, RouteDecision, SynthEvent } from '@itphx/synth-share
 import type { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { EventJournalStore } from '../../storage/event-journal-store.js';
 import type { HookBus } from '../hooks/hook-bus.js';
+import { MemoryDedupStore } from './dedup-store.js';
+import type { DedupStore } from './dedup-store.js';
 import type { EventRouterConfig, RouteRuleInput, RouteRuleProvider } from './types.js';
 
 /** AD-089: параметры `EventRouter`. */
@@ -16,6 +18,11 @@ export interface EventRouterDeps {
    * сохраняется в состоянии.
    */
   hooks?: HookBus;
+  /**
+   * AD-051/AD-089: источник дедупа. По умолчанию `MemoryDedupStore`
+   * (single-process); `file` — межпроцессный атомарный claim на общем `dataDir`.
+   */
+  dedupStore?: DedupStore;
 }
 
 const FALLBACK_EPHEMERAL_TTL = '24h';
@@ -24,25 +31,29 @@ const FALLBACK_EPHEMERAL_TTL = '24h';
  * AD-089: роутер внешних событий — чистое решение (без журналирования) плюс
  * запись результата в журнал. Порядок `decide` строго по AD-089:
  * 1. `allowedSources` — непустой список и источник не в нём → `drop`.
- * 2. `dedup` — `dedupKey` уже встречался → `drop duplicate`.
+ * 2. `dedup` — атомарный claim `dedupKey` в `DedupStore`; ключ занят → `drop duplicate`.
  * 3. Явный `Binding` по `threadKey` (приоритетнее) / `chatKey` → по `mode`.
  * 4. Rule providers — первый непустой результат.
  * 5. Фоллбек → `drop no_route`.
  *
  * Решение не пишется в журнал: `record` вызывается отдельно (после
- * материализации), поэтому ошибки материализации не теряются.
+ * материализации), поэтому ошибки материализации не теряются. Dedup-кэш
+ * предзаполняется из журнала лениво (один раз) — ключи чужих процессов ловятся
+ * и в `memory`-режиме.
  */
 export class EventRouter {
   private _bindingStore: EventBindingStore;
   private _journal: EventJournalStore;
   private _config: EventRouterConfig;
   private _ruleProviders: RouteRuleProvider[] = [];
-  /** Ленивый dedup-кэш: инициализируется из журнала при первом decide/record. */
-  private _dedup?: Set<string>;
+  private _dedupStore: DedupStore;
+  /** Однократное предзаполнение dedup-кэша из журнала (общий промис). */
+  private _seedPromise?: Promise<void>;
 
   constructor(deps: EventRouterDeps) {
     this._bindingStore = deps.bindingStore;
     this._journal = deps.journal;
+    this._dedupStore = deps.dedupStore ?? new MemoryDedupStore();
     this._config = {
       allowedSources: deps.config?.allowedSources,
       defaultEphemeralTtl: deps.config?.defaultEphemeralTtl ?? FALLBACK_EPHEMERAL_TTL,
@@ -63,9 +74,10 @@ export class EventRouter {
       return { kind: 'drop', reason: 'source_not_allowed', audited: true };
     }
 
-    // 2. Дедуп по стабильному ключу.
-    const seen = await this._ensureDedup();
-    if (event.dedupKey && seen.has(event.dedupKey)) {
+    // 2. Дедуп по стабильному ключу: атомарный claim (межпроцессный — при
+    // `file`-store). Ключ, занятый другим обработчиком, — дубликат.
+    await this._ensureDedup();
+    if (event.dedupKey && !(await this._dedupStore.tryClaim(event.dedupKey))) {
       return { kind: 'drop', reason: 'duplicate', audited: true };
     }
 
@@ -99,18 +111,26 @@ export class EventRouter {
   }
 
   /**
-   * Запись решения в журнал. `dedupKey` попадает в dedup-кэш — повторное
-   * событие с тем же ключом будет отброшено как `duplicate` (AD-089).
+   * Запись решения в журнал. `dedupKey` дополнительно claim'ится — путь «hook
+   * заблокировал до `decide`» вызывает только `record`, и ключ всё равно должен
+   * быть занят (AD-089). В штатном пути ключ уже claim'нут в `decide`, поэтому
+   * повторный claim — best-effort (результат игнорируется).
    */
   async record(event: SynthEvent, decision: RouteDecision, error?: string): Promise<void> {
-    const seen = await this._ensureDedup();
+    await this._ensureDedup();
     await this._journal.record({
       ts: new Date().toISOString(),
       event,
       decision,
       ...(error ? { error } : {}),
     });
-    if (event.dedupKey) seen.add(event.dedupKey);
+    if (event.dedupKey) {
+      try {
+        await this._dedupStore.tryClaim(event.dedupKey);
+      } catch (err) {
+        console.warn(`[EventRouter] не удалось claim'ить dedupKey при записи: ${String(err)}`);
+      }
+    }
   }
 
   private _decisionFromBinding(binding: EventBinding): RouteDecision | null {
@@ -132,19 +152,22 @@ export class EventRouter {
     return null;
   }
 
-  /** Ленивая инициализация dedup-кэша из журнала (только чтение). */
-  private async _ensureDedup(): Promise<Set<string>> {
-    if (this._dedup) return this._dedup;
-    const set = new Set<string>();
+  /** Ленивая (однократная) инициализация dedup-кэша из журнала (только чтение). */
+  private _ensureDedup(): Promise<void> {
+    if (!this._seedPromise) this._seedPromise = this._seedDedup();
+    return this._seedPromise;
+  }
+
+  private async _seedDedup(): Promise<void> {
+    const keys: string[] = [];
     try {
       const entries = await this._journal.list();
       for (const entry of entries) {
-        if (entry.event?.dedupKey) set.add(entry.event.dedupKey);
+        if (entry.event?.dedupKey) keys.push(entry.event.dedupKey);
       }
     } catch (err) {
       console.warn(`[EventRouter] не удалось прочитать журнал для dedup: ${String(err)}`);
     }
-    this._dedup = set;
-    return set;
+    this._dedupStore.seed(keys);
   }
 }

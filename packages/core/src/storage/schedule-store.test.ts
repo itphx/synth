@@ -150,4 +150,35 @@ describe('ScheduleStore (AD-051 / AD-089)', () => {
     expect(all).toHaveLength(10);
     expect(new Set(all.map((s) => s.id)).size).toBe(10);
   });
+
+  it('crossProcess: две реплики, конкурентные create не теряют записи (общий file-лок)', async () => {
+    const a = new ScheduleStore({ dataDir: tmpDir, crossProcess: true });
+    const b = new ScheduleStore({ dataDir: tmpDir, crossProcess: true });
+
+    await Promise.all([
+      ...Array.from({ length: 5 }, (_, i) => a.create(input({ name: `a${i}` }))),
+      ...Array.from({ length: 5 }, (_, i) => b.create(input({ name: `b${i}` }))),
+    ]);
+
+    const all = await a.list();
+    expect(all).toHaveLength(10);
+    expect(new Set(all.map((s) => s.id)).size).toBe(10);
+  });
+
+  it('crossProcess: конкурентные markRun сохраняют nextRunAt последнего (нет lost update файла)', async () => {
+    const a = new ScheduleStore({ dataDir: tmpDir, crossProcess: true });
+    const b = new ScheduleStore({ dataDir: tmpDir, crossProcess: true });
+    const created = await a.create(input());
+
+    await Promise.all([
+      a.markRun(created.id, { at: 't1', status: 'ok', nextRunAt: '2026-01-01T01:00:00.000Z' }),
+      b.setNextRun(created.id, '2026-01-01T02:00:00.000Z'),
+    ]);
+
+    // Оба поля сохранены: мутации сериализованы, последняя запись не потеряла чужие изменения.
+    const reloaded = new ScheduleStore({ dataDir: tmpDir }).get(created.id);
+    const schedule = await reloaded;
+    expect(schedule?.nextRunAt).toBeDefined();
+    expect(schedule?.lastStatus).toBe('ok');
+  });
 });

@@ -46,6 +46,7 @@ import {
   startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
+  MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
@@ -532,10 +533,16 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // событий — на следующих этапах.
     const eventBindingStore = new EventBindingStore({ dataDir });
     const eventJournal = new EventJournalStore({ dataDir });
+    // AD-051/AD-089: источник дедупа — in-process (default) или файловый
+    // межпроцессный (`events.dedupStore: file`).
+    const dedupStore = backendConfig.synth.events.dedupStore === 'file'
+      ? new FileDedupStore({ dataDir })
+      : new MemoryDedupStore();
     const eventRouter = new EventRouter({
       bindingStore: eventBindingStore,
       journal: eventJournal,
       hooks,
+      dedupStore,
       config: {
         allowedSources: backendConfig.synth.events.allowedSources,
         defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
@@ -543,7 +550,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     });
     // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию
     // (паритет с core `server/app.ts`; store без дублей).
-    const scheduleStore = new ScheduleStore({ dataDir });
+    const scheduleStore = new ScheduleStore({
+      dataDir,
+      crossProcess: backendConfig.synth.scheduler.crossProcessLocks,
+    });
     const jobStore = new JobStore({ dataDir });
     eventRouter.registerRuleProvider(
       new SchedulerRuleProvider(scheduleStore, backendConfig.synth.events.ephemeralTtl),
@@ -581,14 +591,19 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // AD-051 (срез) / AD-089: планировщик публикует cron-события через ingress.
     // `start()` гейтится конфигом (`scheduler.enabled: false` — тикер не стартует),
     // ошибки старта логируются и не роняют процесс; остановка — `stopScheduler`.
+    const schedulerTickMs = backendConfig.synth.scheduler.tickSec * 1000;
     const schedulerService = new SchedulerService({
       scheduleStore,
       ingress: eventIngress,
       jobStore,
-      tickMs: backendConfig.synth.scheduler.tickSec * 1000,
+      tickMs: schedulerTickMs,
       defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
       catchUp: backendConfig.synth.scheduler.catchUp,
       jobRetentionDays: backendConfig.synth.scheduler.jobRetentionDays,
+      // AD-051/AD-089: тикер стартует только у лидера (default — AlwaysLeader).
+      leader: backendConfig.synth.scheduler.leaderElection === 'file'
+        ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
+        : new AlwaysLeader(),
     });
     if (backendConfig.synth.scheduler.enabled !== false) {
       void schedulerService.start().catch((err) => {

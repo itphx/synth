@@ -16,6 +16,7 @@ import {
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
+  MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -864,17 +865,26 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // событий — на следующих этапах.
   const eventBindingStore = new EventBindingStore({ dataDir });
   const eventJournal = new EventJournalStore({ dataDir });
+  // AD-051/AD-089: источник дедупа — in-process (default) или файловый
+  // межпроцессный (config.events.dedupStore === 'file').
+  const dedupStore = config.eventsConfig?.dedupStore === 'file'
+    ? new FileDedupStore({ dataDir })
+    : new MemoryDedupStore();
   const eventRouter = new EventRouter({
     bindingStore: eventBindingStore,
     journal: eventJournal,
     hooks,
+    dedupStore,
     config: {
       allowedSources: config.eventsConfig?.allowedSources,
       defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
     },
   });
   // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию.
-  const scheduleStore = new ScheduleStore({ dataDir });
+  const scheduleStore = new ScheduleStore({
+    dataDir,
+    crossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
+  });
   const jobStore = new JobStore({ dataDir });
   eventRouter.registerRuleProvider(
     new SchedulerRuleProvider(scheduleStore, config.eventsConfig?.ephemeralTtl ?? '24h'),
@@ -912,14 +922,19 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // AD-051 (срез) / AD-089: планировщик публикует cron-события через ingress.
   // `start()` гейтится конфигом; остановка — на shutdown (`stopScheduler`).
+  const schedulerTickMs = (config.schedulerConfig?.tickSec ?? 60) * 1000;
   const schedulerService = new SchedulerService({
     scheduleStore,
     ingress: eventIngress,
     jobStore,
-    tickMs: (config.schedulerConfig?.tickSec ?? 60) * 1000,
+    tickMs: schedulerTickMs,
     defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
     catchUp: config.schedulerConfig?.catchUp ?? 'skip',
     jobRetentionDays: config.schedulerConfig?.jobRetentionDays ?? 30,
+    // AD-051/AD-089: тикер стартует только у лидера (default — AlwaysLeader).
+    leader: config.schedulerConfig?.leaderElection === 'file'
+      ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
+      : new AlwaysLeader(),
   });
   if (config.schedulerConfig?.enabled !== false) {
     void schedulerService.start().catch((err) => {

@@ -465,4 +465,57 @@ describe('SchedulerService (AD-051 / AD-089)', () => {
 
     expect(await jobStore.list()).toEqual([]);
   });
+
+  it('leader: не лидер — тикер не стартует, nextRunAt не планируется', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const schedule = await store.create({
+      name: 'e',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const { ingress, ingest } = makeIngress();
+    const leader = { acquire: vi.fn(async () => false), touch: vi.fn(async () => {}), release: vi.fn(async () => {}) };
+    const svc = new SchedulerService({ scheduleStore: store, ingress, leader });
+
+    await svc.start();
+    expect(leader.acquire).toHaveBeenCalledOnce();
+    // Не лидер: catch-up/планирование не выполнялись.
+    expect((await store.get(schedule.id))?.nextRunAt).toBeUndefined();
+
+    await svc.tick();
+    expect(ingest).not.toHaveBeenCalled();
+    // touch всё равно вызывается на тике (best-effort heartbeat).
+    expect(leader.touch).toHaveBeenCalled();
+
+    svc.stop();
+    // release не вызывается: лидером не были.
+    expect(leader.release).not.toHaveBeenCalled();
+  });
+
+  it('leader: лидер — start/tick вызывают touch, stop — release', async () => {
+    const schedule = await store.create({
+      name: 'e',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const { ingress } = makeIngress();
+    const leader = { acquire: vi.fn(async () => true), touch: vi.fn(async () => {}), release: vi.fn(async () => {}) };
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      leader,
+      now: () => new Date('2026-01-01T00:00:00Z'),
+    });
+
+    await svc.start();
+    expect((await store.get(schedule.id))?.nextRunAt).toBe('2026-01-01T01:00:00.000Z');
+
+    await svc.tick(new Date('2026-01-01T01:00:00Z'));
+    expect(leader.touch).toHaveBeenCalled();
+
+    svc.stop();
+    expect(leader.release).toHaveBeenCalledOnce();
+  });
 });

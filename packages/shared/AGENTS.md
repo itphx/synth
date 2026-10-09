@@ -49,7 +49,10 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   и новые `resolveProfilesPath`/`resolveCredentialsPath`; `loader.home` — при home
   конфиг читается строго из `<home>/config.yaml` (без отката к XDG).
 - AD-089: секция `events` (`enabled`/`defaultMode`/`ephemeralTtl`/
-  `journalRetentionDays`/`allowedSources`).
+  `journalRetentionDays`/`allowedSources`/`dedupStore`). AD-051/AD-089: секция
+  `scheduler` (`enabled`/`tickSec`/`catchUp`/`jobRetentionDays`/`leaderElection`/
+  `crossProcessLocks`); file-based флаги (`dedupStore: file`, `leaderElection: file`,
+  `crossProcessLocks`) — default OFF, поведение single-process не меняют.
 
 ## Схемы и типы
 

@@ -118,22 +118,25 @@ describe('defaultConfig', () => {
     expect(defaultConfig.security.secretKey).toBe('');
   });
 
-  it('events по умолчанию: enabled, bound, 24h, 30 дней, все источники (AD-089)', () => {
+  it('events по умолчанию: enabled, bound, 24h, 30 дней, все источники, dedup memory (AD-089)', () => {
     expect(defaultConfig.events).toEqual({
       enabled: true,
       defaultMode: 'bound',
       ephemeralTtl: '24h',
       journalRetentionDays: 30,
       allowedSources: [],
+      dedupStore: 'memory',
     });
   });
 
-  it('scheduler по умолчанию: enabled, тик 60 c, catch-up skip, retention 30 (AD-051)', () => {
+  it('scheduler по умолчанию: enabled, тик 60 c, catch-up skip, retention 30, OFF-флаги (AD-051)', () => {
     expect(defaultConfig.scheduler).toEqual({
       enabled: true,
       tickSec: 60,
       catchUp: 'skip',
       jobRetentionDays: 30,
+      leaderElection: 'none',
+      crossProcessLocks: false,
     });
   });
 });

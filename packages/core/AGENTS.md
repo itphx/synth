@@ -148,19 +148,25 @@
   → `RouteRuleProvider` → `drop no_route`), `RequestSessionService` (единый funnel:
   explicit → `direct`, внешние → Router), `EventIngress` (ingest/нормализация),
   `RouteRuleProvider` (seam), `EventDelivery` (`run`/`defer`), `types`. Хуки не
-  эмитят — это делает `RequestSessionService`/оркестратор.
+  эмитят — это делает `RequestSessionService`/оркестратор. `dedup-store.ts`
+  (AD-051/AD-089): `DedupStore` — `MemoryDedupStore` (in-process `Set`, default) и
+  `FileDedupStore` (межпроцессный атомарный claim `{dataDir}/events/dedup/<sha256(key)>`).
 - `engine/scheduler/*` — AD-051: `SchedulerService` (тикер `unref`, in-flight guard
   по `scheduleId`, catch-up на старте, Job-история, force-run `runNow`),
   `SchedulerRuleProvider` (cron-событие → `bound`/`queue`/`ephemeral`/`drop`),
-  `cron.ts` (5 полей UTC), `duration.ts` (`30s|15m|1h|24h`), `schedule-time.ts`;
-  публикует `{source:'cron', type:'schedule_fired'}` через `EventIngress`.
+  `cron.ts` (5 полей UTC), `duration.ts` (`30s|15m|1h|24h`), `schedule-time.ts`,
+  `leader.ts` (`SchedulerLeader`: `AlwaysLeader` default / `FileLeader` — file-лок
+  `{dataDir}/scheduler/leader.lock`); публикует `{source:'cron', type:'schedule_fired'}`
+  через `EventIngress`. Тикер стартует только у лидера (`scheduler.leaderElection`).
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`
   (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`),
-  `RuntimeSettingsStore`, `McpRegistryStore` (единый реестр MCP, AD-071),
+  `FileMutex` (`file-mutex.ts`, AD-051/AD-089: `mkdir`-лок + stale takeover для общего
+  `dataDir`; `ScheduleStore.crossProcess` сериализует мутации), `RuntimeSettingsStore`,
+  `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`
   (`events/bindings.json`), `EventJournalStore` (`events/journal.jsonl`, AD-089)

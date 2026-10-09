@@ -184,6 +184,9 @@ export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
 // AD-089: ядро маршрутизации событий и единый funnel создания сессии.
 export { EventRouter } from './engine/events/event-router.js';
 export type { EventRouterDeps } from './engine/events/event-router.js';
+// AD-051/AD-089: источник дедупа (in-process / файловый межпроцессный).
+export { MemoryDedupStore, FileDedupStore } from './engine/events/dedup-store.js';
+export type { DedupStore, FileDedupStoreConfig } from './engine/events/dedup-store.js';
 export { EventIngress } from './engine/events/ingest.js';
 export type { EventIngestInput, EventIngressDeps } from './engine/events/ingest.js';
 export {
@@ -213,8 +216,18 @@ export {
   SchedulerService,
   startScheduler,
   DEFAULT_SCHEDULER_TICK_MS,
+  AlwaysLeader,
+  FileLeader,
 } from './engine/scheduler/index.js';
-export type { ScheduleTrigger, SchedulerServiceDeps } from './engine/scheduler/index.js';
+export type {
+  ScheduleTrigger,
+  SchedulerServiceDeps,
+  SchedulerLeader,
+  FileLeaderOptions,
+} from './engine/scheduler/index.js';
+// AD-051/AD-089: файловый мьютекс (общий dataDir на одном хосте/FS).
+export { FileMutex } from './storage/file-mutex.js';
+export type { FileMutexOptions } from './storage/file-mutex.js';
 // AD-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
 export { SkillService } from './engine/skills/service.js';
 export type { SkillServiceOptions, SkillListOptions } from './engine/skills/service.js';

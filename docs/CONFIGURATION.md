@@ -347,6 +347,7 @@ skills:
 | `events.ephemeralTtl` | TTL ephemeral-сессий (формат `24h`, `30m`, …) | `'24h'` |
 | `events.journalRetentionDays` | Срок хранения журнала событий (0 — без ограничения) | `30` |
 | `events.allowedSources` | Белый список источников (пусто — разрешены все) | `[]` |
+| `events.dedupStore` | Источник дедупа событий: `memory` — in-process `Set` (single-process), `file` — межпроцессный атомарный claim на общем `dataDir` (`{dataDir}/events/dedup/<sha256(key)>`) | `memory` |
 
 Пример:
 
@@ -357,6 +358,7 @@ events:
   ephemeralTtl: "24h"
   journalRetentionDays: 30
   allowedSources: []
+  dedupStore: memory
 ```
 
 API (`POST /api/v2/events`, bindings, journal) — `docs/API_V2.md` §5.26; устройство
@@ -375,6 +377,13 @@ Cron/interval-планировщик публикует события `source: 
 | `scheduler.tickSec` | Период тика, секунды (1..3600) | `60` |
 | `scheduler.catchUp` | Поведение при пропущенном на старте срабатывании: `skip` — Job `skipped` с пересчётом `nextRunAt`, `once` — одно догоняющее (`trigger:'catchup'`); расписание может переопределить полем `catchUp` | `skip` |
 | `scheduler.jobRetentionDays` | Срок хранения Job-истории (`{dataDir}/scheduler/jobs.jsonl`), дни; `prune` на старте сервиса | `30` |
+| `scheduler.leaderElection` | Выбор лидера-владельца тикера: `none` — каждый процесс считает себя лидером (single-process), `file` — file-лок `{dataDir}/scheduler/leader.lock` (stale `3×tick`), тикер стартует только у лидера | `none` |
+| `scheduler.crossProcessLocks` | Межпроцессная сериализация мутаций `ScheduleStore` (file-мьютекс `{dataDir}/scheduler/schedules.lock` поверх in-process `AsyncLock`); защита от потери `nextRunAt` при нескольких репликах | `false` |
+
+File-based флаги (`events.dedupStore: file`, `scheduler.leaderElection: file`,
+`scheduler.crossProcessLocks: true`) рассчитаны на **общий `dataDir` на одном хосте/FS** и
+по умолчанию выключены (поведение single-process не меняется). Для разных dataDir на реплику
+или нескольких хостов нужен K8s `Lease`/PG advisory lock (будущий шаг, AD-051).
 
 Пример:
 
@@ -384,6 +393,8 @@ scheduler:
   tickSec: 60
   catchUp: skip
   jobRetentionDays: 30
+  leaderElection: none
+  crossProcessLocks: false
 ```
 
 ### Гибридный режим (remote)

@@ -8,5 +8,7 @@ export { parseDurationMs, isValidDuration } from './duration.js';
 export { nextRunAt } from './schedule-time.js';
 export type { ScheduleTrigger } from './schedule-time.js';
 export { SchedulerRuleProvider } from './route-provider.js';
+export { AlwaysLeader, FileLeader } from './leader.js';
+export type { SchedulerLeader, FileLeaderOptions } from './leader.js';
 export { SchedulerService, startScheduler, DEFAULT_SCHEDULER_TICK_MS } from './scheduler.js';
 export type { SchedulerServiceDeps } from './scheduler.js';

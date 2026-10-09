@@ -118,12 +118,17 @@ export const defaultConfig: SynthConfig = {
     ephemeralTtl: '24h',
     journalRetentionDays: 30,
     allowedSources: [],
+    // Default OFF: дедуп in-process, поведение single-process не меняется (AD-051/AD-089).
+    dedupStore: 'memory',
   },
   scheduler: {
     enabled: true,
     tickSec: 60,
     catchUp: 'skip',
     jobRetentionDays: 30,
+    // Default OFF: leader election и межпроцессные локи выключены (AD-051/AD-089).
+    leaderElection: 'none',
+    crossProcessLocks: false,
   },
   instructions: {
     enabled: true,

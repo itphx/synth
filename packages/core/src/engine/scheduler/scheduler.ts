@@ -3,6 +3,8 @@ import { generateId } from '@itphx/synth-shared';
 import type { EventIngress } from '../events/ingest.js';
 import type { ScheduleStore } from '../../storage/schedule-store.js';
 import type { JobStore } from '../../storage/job-store.js';
+import { AlwaysLeader } from './leader.js';
+import type { SchedulerLeader } from './leader.js';
 import { nextRunAt } from './schedule-time.js';
 
 export interface SchedulerServiceDeps {
@@ -18,6 +20,11 @@ export interface SchedulerServiceDeps {
   catchUp?: 'skip' | 'once';
   /** Срок хранения Job-истории, дни. По умолчанию 30. */
   jobRetentionDays?: number;
+  /**
+   * AD-051/AD-089: лидер-владелец тикера. По умолчанию `AlwaysLeader`
+   * (single-process). `FileLeader` — тикер стартует только у лидера.
+   */
+  leader?: SchedulerLeader;
   /** Источник времени (для тестов). */
   now?: () => Date;
 }
@@ -52,6 +59,8 @@ export class SchedulerService {
   private _defaultEphemeralTtl: string;
   private _catchUp: 'skip' | 'once';
   private _jobRetentionDays: number;
+  private _leader: SchedulerLeader;
+  private _isLeader = false;
   private _now: () => Date;
   private _timer?: ReturnType<typeof setInterval>;
   private _busy = false;
@@ -66,15 +75,22 @@ export class SchedulerService {
     this._defaultEphemeralTtl = deps.defaultEphemeralTtl ?? '24h';
     this._catchUp = deps.catchUp ?? 'skip';
     this._jobRetentionDays = deps.jobRetentionDays ?? DEFAULT_JOB_RETENTION_DAYS;
+    this._leader = deps.leader ?? new AlwaysLeader();
     this._now = deps.now ?? (() => new Date());
   }
 
   /**
    * Планирует `nextRunAt` для включённых расписаний, обрабатывает catch-up,
    * чистит Job-историю и запускает тикер (`unref`). Повторный вызов идемпотентен.
+   * Тикер стартует только у лидера (AD-051/AD-089, `scheduler.leaderElection`).
    */
   async start(): Promise<void> {
     if (this._timer) return;
+    if (!(await this._leader.acquire())) {
+      console.warn('[scheduler] не удалось стать лидером — тикер не запущен');
+      return;
+    }
+    this._isLeader = true;
     const now = this._now();
 
     // Retention Job-истории — best-effort, не роняет старт сервиса.
@@ -99,9 +115,16 @@ export class SchedulerService {
   }
 
   stop(): void {
-    if (!this._timer) return;
-    clearInterval(this._timer);
-    this._timer = undefined;
+    if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = undefined;
+    }
+    if (this._isLeader) {
+      this._isLeader = false;
+      void this._leader.release().catch((err) => {
+        console.warn(`[scheduler] не удалось освободить лидерство: ${errorMessage(err)}`);
+      });
+    }
   }
 
   /** Список расписаний (проксирует store; `nextRunAt` актуален). */
@@ -117,6 +140,8 @@ export class SchedulerService {
     if (this._busy) return;
     this._busy = true;
     try {
+      // Heartbeat лидерства (best-effort): лок не должен протухнуть между тиками.
+      await this._leader.touch();
       const now = at ?? this._now();
       const schedules = await this._store.list();
       for (const schedule of schedules) {

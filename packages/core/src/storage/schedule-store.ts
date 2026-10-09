@@ -2,12 +2,19 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { Schedule, ScheduleInput, ScheduleRunStatus } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itphx/synth-shared';
+import { FileMutex } from './file-mutex.js';
 
 /** AD-051: версия схемы файла расписаний — для будущей миграции (AD-032). */
 export const SCHEDULES_SCHEMA_VERSION = 1;
 
 export interface ScheduleStoreConfig {
   dataDir: string;
+  /**
+   * AD-051/AD-089: межпроцессная сериализация мутаций (file-мьютекс поверх
+   * in-process `AsyncLock`) для нескольких реплик с общим `dataDir`.
+   * Default `false` — поведение single-process не меняется.
+   */
+  crossProcess?: boolean;
 }
 
 /** AD-051/AD-089: результат очередного запуска расписания (`markRun`). */
@@ -43,11 +50,32 @@ function isSchedule(value: unknown): value is Schedule {
  */
 export class ScheduleStore {
   private _lock = new AsyncLock();
+  private _mutex?: FileMutex;
 
-  constructor(private _config: ScheduleStoreConfig) {}
+  constructor(private _config: ScheduleStoreConfig) {
+    if (_config.crossProcess) {
+      this._mutex = new FileMutex({
+        path: join(_config.dataDir, 'scheduler', 'schedules.lock'),
+      });
+    }
+  }
 
   private _filePath(): string {
     return join(this._config.dataDir, 'schedules.json');
+  }
+
+  /**
+   * Мутация под in-process `AsyncLock` (+ file-мьютекс при `crossProcess`):
+   * read-modify-write не теряет записи даже при нескольких репликах.
+   */
+  private async _lockedMutation<T>(fn: () => Promise<T>): Promise<T> {
+    await this._lock.acquire();
+    try {
+      if (this._mutex) return await this._mutex.withLock(fn);
+      return await fn();
+    } finally {
+      this._lock.release();
+    }
   }
 
   /** Защита от path traversal в `id` (как в `JsonStore._validateKey`). */
@@ -118,8 +146,7 @@ export class ScheduleStore {
 
   /** Создаёт расписание: id `sch_<uuid>`, `createdAt`/`updatedAt` = now. */
   async create(input: ScheduleInput): Promise<Schedule> {
-    await this._lock.acquire();
-    try {
+    return this._lockedMutation(async () => {
       const id = `sch_${generateId()}`;
       this._validateId(id);
 
@@ -129,16 +156,13 @@ export class ScheduleStore {
       file.schedules.push(schedule);
       await this._save(file);
       return schedule;
-    } finally {
-      this._lock.release();
-    }
+    });
   }
 
   /** Обновляет расписание (partial-патч); `updatedAt` выставляется в now. */
   async update(id: string, patch: Partial<ScheduleInput>): Promise<Schedule | null> {
     this._validateId(id);
-    await this._lock.acquire();
-    try {
+    return this._lockedMutation(async () => {
       const file = await this._load();
       const index = file.schedules.findIndex((s) => s.id === id);
       if (index === -1) return null;
@@ -148,24 +172,19 @@ export class ScheduleStore {
       file.schedules[index] = updated;
       await this._save(file);
       return updated;
-    } finally {
-      this._lock.release();
-    }
+    });
   }
 
   async remove(id: string): Promise<boolean> {
     this._validateId(id);
-    await this._lock.acquire();
-    try {
+    return this._lockedMutation(async () => {
       const file = await this._load();
       const next = file.schedules.filter((s) => s.id !== id);
       if (next.length === file.schedules.length) return false;
       file.schedules = next;
       await this._save(file);
       return true;
-    } finally {
-      this._lock.release();
-    }
+    });
   }
 
   /**
@@ -175,8 +194,7 @@ export class ScheduleStore {
    */
   async markRun(id: string, run: ScheduleRunUpdate): Promise<Schedule | null> {
     this._validateId(id);
-    await this._lock.acquire();
-    try {
+    return this._lockedMutation(async () => {
       const file = await this._load();
       const index = file.schedules.findIndex((s) => s.id === id);
       if (index === -1) return null;
@@ -192,9 +210,7 @@ export class ScheduleStore {
       file.schedules[index] = updated;
       await this._save(file);
       return updated;
-    } finally {
-      this._lock.release();
-    }
+    });
   }
 
   /**
@@ -203,8 +219,7 @@ export class ScheduleStore {
    */
   async setNextRun(id: string, nextRunAt: string | undefined): Promise<Schedule | null> {
     this._validateId(id);
-    await this._lock.acquire();
-    try {
+    return this._lockedMutation(async () => {
       const file = await this._load();
       const index = file.schedules.findIndex((s) => s.id === id);
       if (index === -1) return null;
@@ -219,8 +234,6 @@ export class ScheduleStore {
       file.schedules[index] = updated;
       await this._save(file);
       return updated;
-    } finally {
-      this._lock.release();
-    }
+    });
   }
 }

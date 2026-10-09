@@ -1,6 +1,6 @@
 # AD-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник событий через AD-089, идентичность сообщений `Scheduler`), Job-история, catch-up и force-запуск (rate limit); пайплайны (AD-059) и размещение в гибриде — нет; мульти-инстанс/идемпотентность — тех.долг.
+> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник событий через AD-089, идентичность сообщений `Scheduler`), Job-история, catch-up и force-запуск (rate limit); семы и file-based мульти-инстанс/идемпотентность (`events.dedupStore`, `scheduler.leaderElection`, `scheduler.crossProcessLocks`; default OFF); пайплайны (AD-059) и размещение в гибриде — нет; K8s Lease/PG advisory lock и разные dataDir на реплику — будущее.
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D6, идея 6 + Roadmap Фаза 2; прототип
 > `~/dev/aic/t11/synth/app/scheduler.py`).
@@ -179,19 +179,32 @@ Job-история, catch-up и принудительный (force) запус�
 расходятся. Сейчас в чартах `backend.replicaCount: 1` (и `charts/synth`, и `synth-deploy`),
 поэтому на текущем деплое проблемы нет.
 
-**Решение (план):**
-1. **Один владелец-лидер** — leader election: K8s `Lease` (`coordination.k8s.io`), либо
-   отдельный Deployment планировщика с `replicas: 1`, либо `scheduler.enabled:false` на
-   не-лидере; после AD-032 — Postgres advisory lock. `SchedulerService` стартует только у лидера.
-2. **Атомарный claim** — сделать дедуп авторитетным и общим: интерфейс
-   `DedupStore.tryClaim(dedupKey): Promise<boolean>` (Postgres unique-index / Redis `SET NX` /
-   `open(O_CREAT|O_EXCL)` на shared FS) вместо advisory-`Set` в `EventRouter`;
-   `SchedulerService` публикует событие только при выигранном claim.
-3. **Межпроцессная сериализация мутаций** `ScheduleStore` (advisory lock / CAS по версии),
-   чтобы не терять `nextRunAt`.
+**Решение (реализовано в виде сем + file-based, default OFF):**
+1. **Семы — `DedupStore`** (`engine/events/dedup-store.ts`): `EventRouter` больше не держит
+   `Set` сам, а спрашивает `tryClaim(dedupKey)` / `seed(keys)`. Реализации:
+   `MemoryDedupStore` (текущее поведение single-process) и `FileDedupStore`
+   (атомарный `open(path,'wx')` на `{dataDir}/events/dedup/<sha256(key)>`).
+   `decide` claim'ит ключ; `record` дублирует claim best-effort (путь «hook заблокировал
+   до decide»). Режим — `events.dedupStore: memory|file` (default `memory`).
+2. **Leader election — `SchedulerLeader`** (`engine/scheduler/leader.ts`): `AlwaysLeader`
+   (default, поведение single-process) и `FileLeader` (file-мьютекс
+   `{dataDir}/scheduler/leader.lock`, stale `3×tick`); `SchedulerService.start()` стартует
+   тикер только у лидера, `tick()` — heartbeat, `stop()` — release. Режим —
+   `scheduler.leaderElection: none|file` (default `none`).
+3. **Межпроцессная сериализация мутаций `ScheduleStore`** — `FileMutex`
+   (`storage/file-mutex.ts`, `mkdir`-лок + stale takeover) поверх in-process `AsyncLock`;
+   read-modify-write `create/update/remove/markRun/setNextRun` не теряет `nextRunAt`.
+   Режим — `scheduler.crossProcessLocks: boolean` (default `false`).
 
-**Статус:** ⏳ не реализовано (зафиксировано как тех.долг; вернуться при масштабировании
-backend / после AD-032). Связано с открытым вопросом «где живёт планировщик в гибриде» (AD-042).
+Все три флага по умолчанию **OFF** — поведение single-process (`replicaCount: 1`) не меняется.
+File-based реализация рассчитана на **общий `dataDir` на одном хосте/FS** и **не** решает
+задачу для разных dataDir/хостов.
+
+**Статус:** ✅ реализованы семы `DedupStore`/`SchedulerLeader` и file-based `FileDedupStore`/
+`FileLeader`/`FileMutex` (default OFF, тесты). ⏳ Остаётся будущим: K8s `Lease`
+(`coordination.k8s.io`), отдельный Deployment планировщика (`replicas: 1`), Postgres
+advisory lock / unique-index (после AD-032), а также решение для разных dataDir на реплику.
+Связано с открытым вопросом «где живёт планировщик в гибриде» (AD-042).
 
 ## Открытые вопросы
 

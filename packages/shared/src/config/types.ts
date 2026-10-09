@@ -249,7 +249,10 @@ export const commandsConfigSchema = z.object({
  * - `defaultMode` — режим по умолчанию, если Router не выбрал иной;
  * - `ephemeralTtl` — TTL ephemeral-сессий по умолчанию;
  * - `journalRetentionDays` — срок хранения журнала событий (0 — без ограничения);
- * - `allowedSources` — белый список источников (пусто — разрешены все).
+ * - `allowedSources` — белый список источников (пусто — разрешены все);
+ * - `dedupStore` — источник дедупа событий: `memory` (in-process `Set`, поведение
+ *   single-process) | `file` (межпроцессный атомарный claim файлами-маркерами на
+ *   общем `dataDir`). Default — `memory` (OFF): поведение single-process не меняется.
  */
 export const eventsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -257,6 +260,7 @@ export const eventsConfigSchema = z.object({
   ephemeralTtl: z.string().default('24h'),
   journalRetentionDays: z.number().int().min(0).default(30),
   allowedSources: z.array(z.string()).default([]),
+  dedupStore: z.enum(['memory', 'file']).default('memory'),
 });
 
 // --- Планировщик расписаний (AD-051 срез / AD-089) ---
@@ -266,13 +270,21 @@ export const eventsConfigSchema = z.object({
  * - `enabled` — мастер-выключатель сервиса (в standalone гейтит `start()`);
  * - `tickSec` — период тика, секунды (1..3600);
  * - `catchUp` — дефолт поведения при пропущенном срабатывании (`skip`/`once`);
- * - `jobRetentionDays` — срок хранения Job-истории (дни, `prune` на старте).
+ * - `jobRetentionDays` — срок хранения Job-истории (дни, `prune` на старте);
+ * - `leaderElection` — выбор лидера-владельца тикера: `none` (каждый процесс
+ *   считает себя лидером, поведение single-process) | `file` (file-based lock на
+ *   общем `dataDir`). Default — `none` (OFF);
+ * - `crossProcessLocks` — межпроцессная сериализация мутаций `ScheduleStore`
+ *   (file-мьютекс поверх in-process `AsyncLock`). Default — `false` (OFF):
+ *   поведение single-process не меняется.
  */
 export const schedulerConfigSchema = z.object({
   enabled: z.boolean().default(true),
   tickSec: z.number().int().min(1).max(3600).default(60),
   catchUp: z.enum(['skip', 'once']).default('skip'),
   jobRetentionDays: z.number().int().min(0).default(30),
+  leaderElection: z.enum(['none', 'file']).default('none'),
+  crossProcessLocks: z.boolean().default(false),
 });
 
 // --- Проектные инструкции (AD-069) ---

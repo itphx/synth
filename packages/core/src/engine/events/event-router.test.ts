@@ -7,6 +7,8 @@ import { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { UpsertEventBindingInput } from '../../storage/event-binding-store.js';
 import { EventJournalStore } from '../../storage/event-journal-store.js';
 import { EventRouter } from './event-router.js';
+import { FileDedupStore } from './dedup-store.js';
+import type { DedupStore } from './dedup-store.js';
 import type { RouteRuleProvider } from './types.js';
 
 const event = (overrides: Partial<SynthEvent> = {}): SynthEvent => ({
@@ -42,10 +44,11 @@ describe('EventRouter (AD-089)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  const router = (config: { allowedSources?: string[]; defaultEphemeralTtl?: string; ruleProviders?: RouteRuleProvider[] } = {}) =>
+  const router = (config: { allowedSources?: string[]; defaultEphemeralTtl?: string; ruleProviders?: RouteRuleProvider[]; dedupStore?: DedupStore } = {}) =>
     new EventRouter({
       bindingStore,
       journal,
+      dedupStore: config.dedupStore,
       config: { defaultEphemeralTtl: config.defaultEphemeralTtl ?? '24h', allowedSources: config.allowedSources },
       ruleProviders: config.ruleProviders,
     });
@@ -182,12 +185,43 @@ describe('EventRouter (AD-089)', () => {
     expect(await r.decide(event())).toEqual({ kind: 'bound', sessionId: 's-after-error' });
   });
 
-  it('dedup: до record собственное повторное решение не считается дубликатом', async () => {
+  it('dedup: decide атомарно claim\'ит ключ — повторный decide → duplicate', async () => {
     const r = router();
     const first = await r.decide(event());
-    const second = await r.decide(event());
     expect(first).toEqual({ kind: 'drop', reason: 'no_route', audited: true });
-    expect(second).toEqual(first);
+    // Ключ занят уже в decide: повторное событие с тем же dedupKey — дубликат.
+    expect(await r.decide(event())).toEqual({
+      kind: 'drop',
+      reason: 'duplicate',
+      audited: true,
+    });
+  });
+
+  it('dedup: record без decide тоже занимает ключ (путь hook-блокировки до decide)', async () => {
+    const r = router();
+    const e = event({ dedupKey: 'k-blocked' });
+    await r.record(e, { kind: 'drop', reason: 'blocked', audited: true });
+    expect(await r.decide(event({ id: 'evt_2', dedupKey: 'k-blocked' }))).toEqual({
+      kind: 'drop',
+      reason: 'duplicate',
+      audited: true,
+    });
+  });
+
+  it('dedup: FileDedupStore — повторный ключ drop duplicate между экземплярами', async () => {
+    const first = router({ dedupStore: new FileDedupStore({ dataDir: tmpDir }) });
+    expect(await first.decide(event({ dedupKey: 'k-file' }))).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
+    });
+
+    const second = router({ dedupStore: new FileDedupStore({ dataDir: tmpDir }) });
+    expect(await second.decide(event({ id: 'evt_3', dedupKey: 'k-file' }))).toEqual({
+      kind: 'drop',
+      reason: 'duplicate',
+      audited: true,
+    });
   });
 
   it('dedup: после record повторный dedupKey → drop duplicate', async () => {
