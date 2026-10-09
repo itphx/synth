@@ -83,6 +83,7 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
       isActive: body.is_active ?? true,
       preferences: {},
       notes: body.notes || '',
+      interviewCompleted: false,
       displayName: body.display_name || undefined,
       createdAt: now,
       updatedAt: now,

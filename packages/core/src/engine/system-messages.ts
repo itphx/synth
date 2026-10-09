@@ -345,6 +345,14 @@ export const SYSTEM_MESSAGES = {
   'event.source_not_allowed': 'Event source "{source}" is not allowed',
   'event.duplicate': 'Duplicate event ignored: {dedupKey}',
   'hook.blocked': 'Hook "{hook}" blocked execution: {reason}',
+
+  // --- Профиль пользователя и онбординг ---
+  'profile.deps_unavailable': 'Error: session manager or profiles store unavailable for {tool}',
+  'profile.session_read_error': 'Error: failed to read the session',
+  'profile.session_not_found': 'Error: session not found',
+  'profile.user_unavailable': 'Error: the session has no owner — profile update is unavailable',
+  'profile.save_error': 'Error saving the profile: {error}',
+  'profile.updated': 'Profile updated ({fields}).',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

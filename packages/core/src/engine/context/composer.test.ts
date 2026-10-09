@@ -44,6 +44,7 @@ function makeContextConfig(): ContextConfig {
     getModePolicy: () => '[MODE POLICY]',
     getClassificationInstructions: () => '[CLASSIFICATION]',
     getSchedulerNotice: () => '[SCHEDULER]',
+    getSchedulerTurnNotice: () => '[SCHEDULER TURN]',
   } as unknown as ContextConfig;
 }
 
@@ -913,6 +914,84 @@ describe('SystemPromptComposer', () => {
         makeCtx(session, { schedulerActive: true }),
       );
       expect(blocks.find((b) => b.key === 'scheduler')).toBeUndefined();
+    });
+  });
+
+  describe('scheduler.turn (AD-051)', () => {
+    it('schedulerCurrentTurn:true → volatile-блок order 40, provenance, не в stablePrefix', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const { system, stablePrefix, blocks } = await composer.compose(
+        makeCtx(session, { schedulerCurrentTurn: true }),
+      );
+
+      const block = blocks.find((b) => b.key === 'scheduler.turn');
+      expect(block).toBeDefined();
+      expect(block!.tier).toBe('volatile');
+      expect(block!.order).toBe(40);
+      expect(block!.content).toBe('[SCHEDULER TURN]');
+      expect(block!.provenance).toBe('prompts/system/SCHEDULER_TURN');
+      expect(system).toContain('[SCHEDULER TURN]');
+      expect(stablePrefix).not.toContain('[SCHEDULER TURN]');
+    });
+
+    it('по умолчанию (false) → блока scheduler.turn нет', async () => {
+      const composer = makeComposer();
+      const session = makeSession();
+
+      const { blocks } = await composer.compose(makeCtx(session));
+      expect(blocks.find((b) => b.key === 'scheduler.turn')).toBeUndefined();
+    });
+
+    it('systemPrompt override → блок scheduler.turn не добавляется', async () => {
+      const composer = makeComposer();
+      const session = makeSession({ settings: { systemPrompt: 'OVERRIDE' } });
+
+      const { blocks } = await composer.compose(
+        makeCtx(session, { schedulerCurrentTurn: true }),
+      );
+      expect(blocks.find((b) => b.key === 'scheduler.turn')).toBeUndefined();
+    });
+
+    it('пустой ассет → блок не добавляется даже при schedulerCurrentTurn', async () => {
+      const composer = makeComposer({
+        contextConfig: {
+          ...makeContextConfig(),
+          getSchedulerTurnNotice: () => '',
+        } as unknown as ContextConfig,
+      });
+      const session = makeSession();
+
+      const { blocks } = await composer.compose(
+        makeCtx(session, { schedulerCurrentTurn: true }),
+      );
+      expect(blocks.find((b) => b.key === 'scheduler.turn')).toBeUndefined();
+    });
+  });
+
+  describe('interviewEligible (AD-083/онбординг)', () => {
+    it('пробрасывается в ContextBuilder.buildBaseBlocks', async () => {
+      const captured: Array<Record<string, unknown>> = [];
+      const stubBuilder = {
+        buildBaseBlocks: async (params: Record<string, unknown>) => {
+          captured.push(params);
+          return [{ key: 'role', tier: 'stable', order: 10, content: 'ROLE' }];
+        },
+        getGatewayInstructions: () => '[GATEWAY]',
+      } as unknown as ContextBuilder;
+      const composer = new SystemPromptComposer({
+        contextBuilder: stubBuilder,
+        contextConfig: makeContextConfig(),
+        projectStore: makeProjectStore(),
+      });
+      const session = makeSession();
+
+      await composer.compose(makeCtx(session, { interviewEligible: true, userId: 'u1' }));
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]!.interviewEligible).toBe(true);
+      expect(captured[0]!.userId).toBe('u1');
     });
   });
 });

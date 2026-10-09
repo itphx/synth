@@ -25,6 +25,7 @@ import { readSessionReferenceTool } from './read-reference.js';
 import { getProjectInfoTool, listReposTool } from './project-context.js';
 import { planEnterTool, planExitTool, planReadTool, planListTool, planWriteTool } from './plan.js';
 import { todoWriteTool, todoListTool, todoAddTool, todoUpdateTool, todoDeleteTool } from './todo.js';
+import { profileUpdateTool } from './profile-update.js';
 import { projectCreateTool, projectAttachTool, projectUpdateTool, projectWorkspaceSetTool, projectLogWriteTool, projectLogReadTool, projectInvariantsReadTool, projectInvariantsWriteTool } from './project-manage.js';
 import { projectRepoCloneTool, projectRepoInitTool, projectRepoAddTool, projectRepoFetchTool, projectRepoRemoveTool } from './project-repos.js';
 
@@ -70,6 +71,7 @@ export const ALL_BUILTIN_TOOLS: ToolDefinition[] = [
   todoAddTool,
   todoUpdateTool,
   todoDeleteTool,
+  profileUpdateTool,
   projectCreateTool,
   projectAttachTool,
   projectUpdateTool,

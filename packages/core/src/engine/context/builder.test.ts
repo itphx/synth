@@ -227,18 +227,57 @@ describe('ContextBuilder.buildBaseBlocks', () => {
     const builder = new ContextBuilder(config, { profilesStore });
 
     // userId = username ('admin') → loadProfile(null) → фолбэк по username.
-    const blocks = await builder.buildBaseBlocks({ language: 'ru', userId: 'admin' });
+    // Интервью показывается только при `interviewEligible` (первый ход сессии).
+    const blocks = await builder.buildBaseBlocks({ language: 'ru', userId: 'admin', interviewEligible: true });
     const byKey = new Map(blocks.map((b) => [b.key, b]));
     expect(byKey.get('profile')!.content).toContain('Зови меня Босс');
     expect(byKey.get('profile')!.content).toContain('admin');
-    // Профиль, резолвнутый по username, также запускает интервью.
+    // Профиль, резолвнутый по username, при eligibility заполняет интервью.
     expect(byKey.get('interview')!.content.length).toBeGreaterThan(0);
 
     // Ни id, ни username не найдены → блоки пусты (поведение как раньше).
-    const missing = await builder.buildBaseBlocks({ language: 'ru', userId: 'ghost' });
+    const missing = await builder.buildBaseBlocks({ language: 'ru', userId: 'ghost', interviewEligible: true });
     const missingByKey = new Map(missing.map((b) => [b.key, b]));
     expect(missingByKey.get('profile')!.content).toBe('');
     expect(missingByKey.get('interview')!.content).toBe('');
+  });
+
+  it('interview: гейтится interviewEligible и interviewCompleted', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const baseProfile = {
+      id: 'uuid-2',
+      username: 'admin',
+      roles: ['ADMIN'],
+      teamRoles: [],
+      isActive: true,
+      preferences: {},
+      notes: '',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+
+    const interviewContentFor = async (profileOverrides: Record<string, unknown>, eligible: boolean) => {
+      const profile = { ...baseProfile, ...profileOverrides };
+      const profilesStore = {
+        loadProfile: async (id: string) => (id === 'uuid-2' ? profile : null),
+        getProfileByUsername: async () => null,
+      } as unknown as ProfileStore;
+      const builder = new ContextBuilder(config, { profilesStore });
+      const blocks = await builder.buildBaseBlocks({
+        language: 'ru',
+        userId: 'uuid-2',
+        showInterview: true,
+        interviewEligible: eligible,
+      });
+      return blocks.find((b) => b.key === 'interview')!.content;
+    };
+
+    // eligible + не пройдено → блок есть.
+    expect((await interviewContentFor({ interviewCompleted: false }, true)).length).toBeGreaterThan(0);
+    // eligible:false → блока нет.
+    expect(await interviewContentFor({ interviewCompleted: false }, false)).toBe('');
+    // пройдено → блока нет.
+    expect(await interviewContentFor({ interviewCompleted: true }, true)).toBe('');
   });
 
   it('заполняет sticky/participants/summary при наличии данных (agentRole задан)', async () => {

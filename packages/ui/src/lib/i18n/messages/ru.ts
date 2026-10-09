@@ -379,6 +379,8 @@ export const dict = {
   'auth.interfaceLanguage': 'Язык интерфейса',
   'auth.teamRole': 'Роль в команде',
   'auth.notes': 'Заметки',
+  'auth.interviewCompleted': 'Онбординг пройден',
+  'auth.interviewCompletedDescription': 'Интервью о вас завершено; повторно не предлагается.',
   'auth.phone': 'Телефон',
   'auth.roleDeveloper': 'Разработчик',
   'auth.roleAdmin': 'Администратор',
@@ -2129,6 +2131,14 @@ export const dict = {
   'event.source_not_allowed': 'Источник события «{source}» не разрешён',
   'event.duplicate': 'Дубликат события проигнорирован: {dedupKey}',
   'hook.blocked': 'Хук «{hook}» заблокировал выполнение: {reason}',
+
+  // --- Профиль пользователя и онбординг ---
+  'profile.deps_unavailable': 'Ошибка: менеджер сессий или хранилище профилей недоступны для {tool}',
+  'profile.session_read_error': 'Ошибка: не удалось прочитать сессию',
+  'profile.session_not_found': 'Ошибка: сессия не найдена',
+  'profile.user_unavailable': 'Ошибка: у сессии нет владельца — обновление профиля недоступно',
+  'profile.save_error': 'Ошибка сохранения профиля: {error}',
+  'profile.updated': 'Профиль обновлён ({fields}).',
 
   // --- SSH-ключи: UI раздела «Агенты» (AD-076, T8) ---
   'sshKeys.title': 'SSH-ключи',

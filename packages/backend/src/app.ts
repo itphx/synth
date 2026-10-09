@@ -480,6 +480,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       agentRegistry,
       mcpManager,
       projectStore,
+      // Онбординг: тул `profile_update` сохраняет ответы интервью в профиль.
+      profilesStore,
       // AD-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
       sshKeyStore,
       workspacesRoot: backendConfig.workspacesRoot,

@@ -13,6 +13,7 @@ import {
   SettingsSection,
   TextArea,
   TextField,
+  ToggleField,
 } from '../ui/settings'
 
 const MAX_AVATAR_SIZE = 500 * 1024
@@ -24,6 +25,7 @@ interface ProfileForm {
   phone: string
   team_roles: string[]
   notes: string
+  interview_completed: boolean
   avatar: string | null
 }
 
@@ -34,6 +36,7 @@ const EMPTY_FORM: ProfileForm = {
   phone: '',
   team_roles: [],
   notes: '',
+  interview_completed: false,
   avatar: null,
 }
 
@@ -46,6 +49,7 @@ const formSnapshot = (f: ProfileForm) =>
     phone: f.phone,
     team_roles: f.team_roles,
     notes: f.notes,
+    interview_completed: f.interview_completed,
     avatar: f.avatar,
   })
 
@@ -73,6 +77,7 @@ export const ProfileSettings = () => {
           phone: profile.phone || '',
           team_roles: profile.team_roles || [],
           notes: profile.notes || '',
+          interview_completed: profile.interview_completed ?? false,
           avatar: profile.preferences?.avatar || null,
         }
       } catch {
@@ -83,6 +88,7 @@ export const ProfileSettings = () => {
           phone: '',
           team_roles: [],
           notes: '',
+          interview_completed: false,
           avatar: null,
         }
       }
@@ -133,6 +139,7 @@ export const ProfileSettings = () => {
         phone: form.phone || undefined,
         notes: form.notes,
         team_roles: form.team_roles,
+        interview_completed: form.interview_completed,
         preferences: { avatar: form.avatar },
       })
       const currentProfile = useAuthStore.getState().profile
@@ -268,6 +275,15 @@ export const ProfileSettings = () => {
           onChange={(e) => setForm({ ...form, notes: e.target.value })}
           rows={3}
           className="resize-none"
+        />
+      </SettingsSection>
+
+      <SettingsSection>
+        <ToggleField
+          label={t('auth.interviewCompleted')}
+          description={t('auth.interviewCompletedDescription')}
+          enabled={form.interview_completed}
+          onToggle={() => setForm({ ...form, interview_completed: !form.interview_completed })}
         />
       </SettingsSection>
 

@@ -269,7 +269,7 @@ export function createAuthRoutes(
       preferred_language: user.preferredLanguage,
       team_role: profile?.teamRoles?.[0] ?? user.teamRole,
       notes: profile?.notes ?? user.notes,
-      interview_completed: user.interviewCompleted,
+      interview_completed: profile?.interviewCompleted ?? user.interviewCompleted,
       display_name: profile?.displayName ?? null,
       is_active: profile?.isActive ?? true,
       created_at: profile?.createdAt ?? user.createdAt,
@@ -300,6 +300,11 @@ export function createAuthRoutes(
       if (body.notes !== undefined) profile.notes = body.notes;
       if (body.team_role) profile.teamRoles = [body.team_role];
       if (body.display_name) profile.displayName = body.display_name;
+      if (body.interview_completed !== undefined) {
+        // Отдельное поле статуса интервью — персистим вместе с временем.
+        profile.interviewCompleted = body.interview_completed;
+        profile.interviewCompletedAt = body.interview_completed ? new Date().toISOString() : undefined;
+      }
       if (body.preferences !== undefined) {
         profile.preferences = { ...(profile.preferences || {}), ...body.preferences };
       }
@@ -318,6 +323,7 @@ export function createAuthRoutes(
           display_name: profile.displayName,
           notes: profile.notes,
           team_role: profile.teamRoles?.[0],
+          interview_completed: profile.interviewCompleted,
           preferences: profile.preferences,
         },
       });

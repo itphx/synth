@@ -368,3 +368,71 @@ describe('ContextConfig.getSchedulerNotice (AD-051)', () => {
     expect(config.getSchedulerNotice('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ SCHEDULER');
   });
 });
+
+describe('ContextConfig.getSchedulerTurnNotice (AD-051)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-scheduler-turn-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('ru → русское пояснение, en → английское, fr → пустая строка', async () => {
+    const config = new ContextConfig({ userDataDir });
+
+    const ru = config.getSchedulerTurnNotice('ru');
+    expect(ru).toContain('Scheduler');
+    expect(ru.length).toBeGreaterThan(0);
+
+    const en = config.getSchedulerTurnNotice('en');
+    expect(en).toContain('Scheduler');
+    expect(en).not.toContain('планировщик');
+
+    expect(config.getSchedulerTurnNotice('fr')).toBe('');
+  });
+
+  it('override из system-категории приоритетнее встроенного', async () => {
+    await mkdir(join(userDataDir, 'user', 'system'), { recursive: true });
+    await writeFile(join(userDataDir, 'user', 'system', 'SCHEDULER_TURN.md'), 'ПОЛЬЗОВАТЕЛЬСКИЙ TURN', 'utf-8');
+
+    const config = new ContextConfig({ userDataDir });
+    expect(config.getSchedulerTurnNotice('ru')).toBe('ПОЛЬЗОВАТЕЛЬСКИЙ TURN');
+  });
+});
+
+describe('ContextConfig.getInterviewTemplate (онбординг)', () => {
+  let userDataDir: string;
+
+  beforeEach(async () => {
+    userDataDir = await mkdtemp(join(tmpdir(), 'synth-interview-'));
+  });
+
+  afterEach(async () => {
+    await rm(userDataDir, { recursive: true, force: true });
+  });
+
+  it('ru: [INTERVIEW] + вопросы [Q1]..[Q5] + инструкция про profile_update', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const ru = config.getInterviewTemplate('ru');
+    expect(ru).toContain('[INTERVIEW]');
+    for (const q of ['[Q1]', '[Q2]', '[Q3]', '[Q4]', '[Q5]']) {
+      expect(ru, q).toContain(q);
+    }
+    expect(ru).toContain('profile_update');
+    expect(ru).toContain('interview_completed=true');
+  });
+
+  it('en: английский контент, fr → пустая строка', async () => {
+    const config = new ContextConfig({ userDataDir });
+    const en = config.getInterviewTemplate('en');
+    expect(en).toContain('[INTERVIEW]');
+    expect(en).toContain('[Q1]');
+    expect(en).toContain('profile_update');
+    expect(en).not.toContain('Как вас зовут');
+
+    expect(config.getInterviewTemplate('fr')).toBe('');
+  });
+});

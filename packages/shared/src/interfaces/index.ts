@@ -81,6 +81,7 @@ export interface CreateProfileParams {
   email?: string;
   roles?: string[];
   teamRoles?: string[];
+  interviewCompleted?: boolean;
 }
 
 export interface ProfileStore {

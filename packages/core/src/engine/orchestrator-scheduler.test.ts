@@ -49,6 +49,7 @@ const SCHEDULER_CONFIG = {
   getModePolicy: () => '[MODE POLICY]',
   getClassificationInstructions: () => '[CLASSIFICATION]',
   getSchedulerNotice: () => '[SCHEDULER]',
+  getSchedulerTurnNotice: () => '[SCHEDULER TURN]',
 } as unknown as ContextConfig;
 
 describe('ChatOrchestrator — schedulerActive (AD-051)', () => {

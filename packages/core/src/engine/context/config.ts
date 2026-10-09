@@ -387,6 +387,33 @@ export class ContextConfig {
     return this._readPrompt(stem, 'system', language) ?? '';
   }
 
+  /**
+   * AD-051: volatile-пояснение для хода, инициированного планировщиком, —
+   * «текущее сообщение автоматическое, человек не участвует». Блок
+   * `scheduler.turn` (volatile, order 40).
+   *
+   * Файлы: prompts/system/SCHEDULER_TURN.{lang}.md — только локализованные
+   * (базового SCHEDULER_TURN.md нет). Override через {userDataDir}/user/system/ —
+   * стандартный механизм system-категории, проверяется первым.
+   * Возвращает пустую строку, если файл не найден.
+   */
+  getSchedulerTurnNotice(language = 'ru'): string {
+    const stem = 'SCHEDULER_TURN';
+
+    // 1. Пользовательский override system-категории
+    const overridePath = this._resolveOverridePath('system', `${stem}.md`);
+    const overrideLocalized = this._getLocalizedPath(overridePath, stem, language);
+    if (overrideLocalized) {
+      const content = this._readFile(overrideLocalized);
+      if (content) return content;
+    }
+    const overrideContent = this._readFile(overridePath);
+    if (overrideContent) return overrideContent;
+
+    // 2. Встроенный prompts/system/SCHEDULER_TURN.{lang}.md
+    return this._readPrompt(stem, 'system', language) ?? '';
+  }
+
   getSummarizerPrompt(language = 'ru'): string {
     return this._readPrompt('SUMMARIZER', 'system', language) ?? '';
   }

@@ -813,6 +813,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     toolRegistry,
     agentRegistry,
     projectStore,
+    // Онбординг: тул `profile_update` сохраняет ответы интервью в профиль.
+    profilesStore,
     // AD-076 §T6: тот же store, что у git-роутов — без дублей инстансов.
     sshKeyStore,
     defaultWorkingDir,

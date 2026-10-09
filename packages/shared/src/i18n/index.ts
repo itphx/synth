@@ -282,6 +282,13 @@ export const ENGINE_MESSAGE_KEYS = [
   'event.source_not_allowed',
   'event.duplicate',
   'hook.blocked',
+  // --- Профиль пользователя и онбординг ---
+  'profile.deps_unavailable',
+  'profile.session_read_error',
+  'profile.session_not_found',
+  'profile.user_unavailable',
+  'profile.save_error',
+  'profile.updated',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -557,6 +564,13 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'event.source_not_allowed': ["source"],
   'event.duplicate': ["dedupKey"],
   'hook.blocked': ["hook","reason"],
+  // --- Профиль пользователя и онбординг ---
+  'profile.deps_unavailable': ["tool"],
+  'profile.session_read_error': [],
+  'profile.session_not_found': [],
+  'profile.user_unavailable': [],
+  'profile.save_error': ["error"],
+  'profile.updated': ["fields"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

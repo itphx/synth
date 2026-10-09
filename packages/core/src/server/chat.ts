@@ -118,8 +118,9 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
 
   const eventBus = new EventBus();
   const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
+  const profilesStore = new FileProfileStore({ dataDir });
   const contextBuilder = new ContextBuilder(contextConfig, {
-    profilesStore: new FileProfileStore({ dataDir }),
+    profilesStore,
     projectDataDir: `${dataDir}/projects`,
     defaultLanguage: 'ru',
   });
@@ -178,6 +179,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     eventBus,
     contextBuilder,
     contextConfig,
+    profilesStore,
     providerLoader,
     contextOptimizer,
     modelPriceLoader,

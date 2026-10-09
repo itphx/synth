@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type { Message, StickyNote } from '@itphx/synth-shared';
 import type { ProfileData, ProfileStore } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
-import { InterviewManager } from './interview.js';
+import { isInterviewCompleted } from './interview.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
 import type { DebugCollector } from '../../debug.js';
 
@@ -14,6 +14,12 @@ export interface BuildSystemPromptParams {
   projectName?: string;
   language?: string;
   showInterview?: boolean;
+  /**
+   * Интервью уместно в этом ходе: первое сообщение сессии И от пользователя
+   * (не Scheduler/системное). Вычисляет оркестратор, builder только гейтит —
+   * блок не должен литься в каждую сессию.
+   */
+  interviewEligible?: boolean;
   stickyNotes?: StickyNote[];
   summaryContent?: string;
 }
@@ -110,17 +116,19 @@ export class ContextBuilder {
     const projectContent = (await this._getProjectPrompt(params.projectName)) ?? '';
 
     // 8. Interview prompt (volatile)
+    // Блок показывается, только если: интервью включено настройкой сессии И
+    // ход признан подходящим (`interviewEligible`: первое сообщение сессии от
+    // пользователя, не Scheduler/системное) И профиль найден И интервью ещё
+    // не помечено пройденным (`interviewCompleted`). Раньше блок лился в каждую
+    // сессию и гейтился по числу ответов в `notes` — это неверно.
     let interviewContent = '';
-    if (showInterview && params.userId && this._profiles) {
+    if (showInterview && params.interviewEligible && params.userId && this._profiles) {
       const profile = await this._resolveProfile(params.userId);
-      const intManager = new InterviewManager(this._profiles, this._config);
-      if (intManager.shouldStartInterview(profile, showInterview)) {
+      if (profile && !isInterviewCompleted(profile)) {
         const interview = this._config.getInterviewTemplate(lang);
         if (interview) {
-          if (this._getAnsweredCount(profile?.notes ?? '') === 0) {
-            interviewContent = interview;
-            this._debugAdd('interview', { shown: true, language: lang });
-          }
+          interviewContent = interview;
+          this._debugAdd('interview', { shown: true, language: lang });
         }
       }
     }
@@ -220,6 +228,9 @@ export class ContextBuilder {
     if (!template) return null;
 
     let about = profile.notes || '';
+    // Legacy-guard: до введения поля `interviewCompleted` интервью писалось в
+    // свободный `notes` с меткой `[ИНТЕРВЬЮ]`; хвост от неё не является «о вас»
+    // и не должен попадать в профиль. Новые профили метку не используют.
     if (about.includes('[ИНТЕРВЬЮ]')) {
       about = about.split('[ИНТЕРВЬЮ]')[0]!.trim();
     }
@@ -287,11 +298,5 @@ export class ContextBuilder {
 
     this._debugAdd('sticky_notes', { count: activeNotes.length, language });
     return `\n\n${content}\n`;
-  }
-
-  private _getAnsweredCount(notes: string): number {
-    if (!notes) return 0;
-    const matches = notes.match(/\[ОТВЕТ\]/g);
-    return matches ? matches.length : 0;
   }
 }

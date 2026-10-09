@@ -46,6 +46,7 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   'project.info': 'Project info',
   instructions: 'Project instructions',
   scheduler: 'Scheduler notice',
+  'scheduler.turn': 'Scheduler current turn',
   'session.info': 'Session info',
   sticky: 'Sticky notes',
   participants: 'Participants notice',
@@ -143,6 +144,11 @@ export interface ComposerContext {
   historyMessages?: Message[];
   userId?: string;
   showInterview?: boolean;
+  /**
+   * Интервью уместно в этом ходе (первое сообщение сессии от пользователя).
+   * Вычисляет оркестратор; прокидывается в `buildBaseBlocks`.
+   */
+  interviewEligible?: boolean;
   stickyNotes?: StickyNote[];
   summaryContent?: string;
   /**
@@ -201,6 +207,12 @@ export interface ComposerContext {
    * тир `context`). При `session.settings.systemPrompt` override не добавляется.
    */
   schedulerActive?: boolean;
+  /**
+   * AD-051: текущий ход инициирован планировщиком (`metadata.scheduler === true`).
+   * Добавляет volatile-блок `scheduler.turn` — пояснение модели, что человек в
+   * этом ходе не участвует.
+   */
+  schedulerCurrentTurn?: boolean;
   /**
    * AD-071 §2.6: instance-wide отключение инструментов администратором
    * (`tools.disabled`). Непустой список добавляет в `tools.guide` строку про
@@ -411,6 +423,7 @@ export class SystemPromptComposer {
           projectName: session.projectId,
           language: lang,
           showInterview: ctx.showInterview,
+          interviewEligible: ctx.interviewEligible,
           stickyNotes: ctx.stickyNotes,
           summaryContent: ctx.summaryContent,
         });
@@ -519,6 +532,23 @@ export class SystemPromptComposer {
           order: 16,
           content: schedulerNotice,
           provenance: 'prompts/system/SCHEDULER',
+        });
+      }
+    }
+
+    // AD-051: текущий ход инициирован планировщиком — volatile-пояснение, что
+    // человек в этом ходе не участвует (в отличие от статического `scheduler`,
+    // описывающего самого системного пользователя). При `systemPrompt` override
+    // не добавляется (как прочие Composer-блоки).
+    if (!override && ctx.schedulerCurrentTurn) {
+      const turnNotice = this._contextConfig?.getSchedulerTurnNotice(lang) ?? '';
+      if (turnNotice) {
+        extraBlocks.push({
+          key: 'scheduler.turn',
+          tier: 'volatile',
+          order: 40,
+          content: turnNotice,
+          provenance: 'prompts/system/SCHEDULER_TURN',
         });
       }
     }

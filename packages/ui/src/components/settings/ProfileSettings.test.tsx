@@ -45,6 +45,7 @@ beforeEach(() => {
     phone: '',
     team_roles: ['developer'],
     notes: '',
+    interview_completed: false,
     preferences: { avatar: null },
   })
   mocks.updateProfile.mockResolvedValue({ preferences: { avatar: null } })
@@ -164,5 +165,37 @@ describe('ProfileSettings — миграция на Settings UI Kit (AD-072)', (
 
     const cancel = container.querySelector('[data-testid="profile-cancel"]') as HTMLButtonElement
     expect(cancel.disabled).toBe(true)
+  })
+
+  it('тумблер интервью грузится из interview_completed и уходит в updateProfile', async () => {
+    mocks.getProfile.mockResolvedValue({
+      username: 'dev',
+      display_name: 'Dev',
+      email: 'dev@example.com',
+      phone: '',
+      team_roles: ['developer'],
+      notes: '',
+      interview_completed: true,
+      preferences: { avatar: null },
+    })
+
+    const container = await renderSettings()
+
+    const toggle = container.querySelector('[role="switch"]') as HTMLButtonElement
+    expect(toggle).not.toBeNull()
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => {
+      toggle.click()
+    })
+
+    const save = container.querySelector('[data-testid="profile-save"]') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await act(async () => {
+      save.click()
+    })
+
+    expect(mocks.updateProfile).toHaveBeenCalledTimes(1)
+    expect(mocks.updateProfile.mock.calls[0]![0]).toMatchObject({ interview_completed: false })
   })
 })

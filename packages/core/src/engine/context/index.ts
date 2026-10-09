@@ -37,5 +37,5 @@ export {
   buildTodosUpdatedContent,
   syncStateMessages,
 } from './state-messages.js';
-export { InterviewManager } from './interview.js';
+export { isInterviewCompleted } from './interview.js';
 export { ContextOptimizer, type SummarizationResult, type SlidingWindowResult } from './optimizer.js';

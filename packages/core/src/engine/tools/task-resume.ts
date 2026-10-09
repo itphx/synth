@@ -19,7 +19,7 @@
  * (acquireLock + currentStream) выполняет оркестратор (startSubagentResume),
  * поэтому повторный resume и abort через POST /sessions/:id/abort работают.
  */
-import type { Message, Session, RouterConfig, PermissionConfig, SecurityConfig, EventType, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import type { Message, Session, RouterConfig, PermissionConfig, SecurityConfig, EventType, WorkspaceOutsideRootPolicy, ProfileStore } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import type { BaseProvider } from '../../providers/base.js';
 import type { SessionManager } from '../../sessions/manager.js';
@@ -116,6 +116,8 @@ export interface SubagentResumeDeps {
    * полный `ProjectStore`.
    */
   projectStore?: ProjectStoreLike;
+  /** Онбординг: хранилище профилей resumed-саб-агенту (тул `profile_update`). */
+  profilesStore?: ProfileStore;
   workspacesRoot?: string;
   sshKeyStore?: SSHKeyStore;
   gitService?: GitService;
@@ -341,6 +343,7 @@ export async function runSubagentResume(
       // доступны resumed-саб-агенту (иначе projectStore/workspacesRoot/sshKeyStore
       // отсутствуют и гейт `canEditProject`/SSH-окружение деградируют).
       projectStore: deps.projectStore,
+      profilesStore: deps.profilesStore,
       workspacesRoot: deps.workspacesRoot,
       sshKeyStore: deps.sshKeyStore,
       gitService: deps.gitService,

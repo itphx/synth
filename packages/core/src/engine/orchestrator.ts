@@ -1,4 +1,4 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
@@ -157,6 +157,12 @@ export interface OrchestratorOptions {
   mcpManager?: McpManager;
   routerConfig?: RouterConfig;
   projectStore?: ProjectStoreLike;
+  /**
+   * Онбординг: хранилище профилей для тула `profile_update` (сохранение ответов
+   * интервью, завершение онбординга). Не задано — тул вернёт
+   * `profile.deps_unavailable`.
+   */
+  profilesStore?: ProfileStore;
   /**
    * AD-076 §T6: хранилище SSH-ключей для сетевых git-тулов (`git_push`/`git_pull`).
    * Не задано — создаётся лениво из `dataDir` (+ env); без `dataDir` — git
@@ -349,6 +355,8 @@ export class ChatOrchestrator {
   private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
   private readonly _projectStore: ProjectStoreLike | null;
+  /** Онбординг: хранилище профилей (тул `profile_update`, сохранение интервью). */
+  private readonly _profilesStore: ProfileStore | null;
   /** AD-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
   private readonly _sshKeyStore: SSHKeyStore | null;
   private readonly _gitService: GitService;
@@ -687,6 +695,7 @@ export class ChatOrchestrator {
     this._routerConfig = options.routerConfig ?? null;
     this._contextConfig = options.contextConfig ?? null;
     this._projectStore = options.projectStore ?? null;
+    this._profilesStore = options.profilesStore ?? null;
     // AD-076 §T6: хранилище SSH-ключей для git-тулов. Явный store (app/backend)
     // приоритетнее; иначе — ленивое создание из dataDir (мастер-ключ — env
     // SYNTH_SECRET_KEY / файл {dataDir}/secrets/master.key, см. SSHKeyStore).
@@ -1107,11 +1116,15 @@ export class ChatOrchestrator {
     instructions?: ComposerInstructions;
     /** AD-051: в сессии активно расписание — добавляет статическое описание Scheduler. */
     schedulerActive?: boolean;
+    /** Интервью уместно в этом ходе (первое сообщение сессии от пользователя). */
+    interviewEligible?: boolean;
+    /** AD-051: текущий ход инициирован планировщиком. */
+    schedulerCurrentTurn?: boolean;
   }): ComposerContext {
     const {
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio, mcpServers, project, toolSelection, debugCollector,
-      skillsCatalog, instructions, schedulerActive,
+      skillsCatalog, instructions, schedulerActive, interviewEligible, schedulerCurrentTurn,
     } = args;
     return {
       session,
@@ -1125,6 +1138,7 @@ export class ChatOrchestrator {
       historyMessages: session.messages,
       userId: session.userId,
       showInterview: session.settings.showInterview,
+      interviewEligible,
       stickyNotes: session.stickyNotes,
       summaryContent: summaryContent || undefined,
       tools: toolSelection
@@ -1144,7 +1158,53 @@ export class ChatOrchestrator {
       skillsCatalog,
       instructions,
       schedulerActive,
+      schedulerCurrentTurn,
     };
+  }
+
+  /**
+   * AD-051: текущий ход инициирован планировщиком. При явном `message` — по его
+   * метаданным (`metadata.scheduler === true`); без него (диагностика
+   * `getPromptInfo`) — по последнему «разговорному» сообщению (user|assistant).
+   */
+  private _schedulerCurrentTurn(session: Session, message?: Message): boolean {
+    if (message) return message.metadata?.scheduler === true;
+    const last = this._lastConversationalMessage(session);
+    return last?.metadata?.scheduler === true;
+  }
+
+  /**
+   * Интервью уместно, только если это первое сообщение сессии И от пользователя
+   * (не Scheduler и не системное). При явном `message` (реальный ход) — оно
+   * само и есть проверяемое: среди «разговорных» (user|assistant) не должно
+   * быть других, кроме него. Без `message` (диагностика `getPromptInfo`) —
+   * «разговорных» ровно одно и это user-сообщение от пользователя.
+   */
+  private _interviewEligible(session: Session, message?: Message): boolean {
+    const conversational = session.messages.filter(
+      (m) => m.role === MessageRole.USER || m.role === MessageRole.ASSISTANT,
+    );
+    if (message) {
+      if (!this._isUserMessage(message)) return false;
+      return conversational.every((m) => m.id === message.id);
+    }
+    return conversational.length === 1 && this._isUserMessage(conversational[0]!);
+  }
+
+  /** Сообщение «от пользователя»: role user, не Scheduler и без метки планировщика. */
+  private _isUserMessage(message: Message): boolean {
+    return message.role === MessageRole.USER
+      && message.metadata?.scheduler !== true
+      && message.author !== 'Scheduler';
+  }
+
+  /** Последнее «разговорное» сообщение (user|assistant) в истории сессии. */
+  private _lastConversationalMessage(session: Session): Message | undefined {
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      const msg = session.messages[i]!;
+      if (msg.role === MessageRole.USER || msg.role === MessageRole.ASSISTANT) return msg;
+    }
+    return undefined;
   }
 
   /**
@@ -2136,6 +2196,9 @@ export class ChatOrchestrator {
       skillsCatalog,
       instructions: projectInstructions?.instructions,
       schedulerActive,
+      // Интервью-блок в диагностике — по истории сессии (нет явного хода).
+      interviewEligible: this._interviewEligible(session),
+      schedulerCurrentTurn: this._schedulerCurrentTurn(session),
     });
 
     const manifest = await this._composer.manifest(ctx);
@@ -2596,6 +2659,10 @@ export class ChatOrchestrator {
         skillsCatalog,
         instructions: projectInstructions?.instructions,
         schedulerActive,
+        // Интервью уместно только в первом ходе сессии от пользователя.
+        interviewEligible: this._interviewEligible(session, message),
+        // Текущий ход инициирован планировщиком — volatile-пояснение модели.
+        schedulerCurrentTurn: this._schedulerCurrentTurn(session, message),
       });
       const composed = await this._composer.compose(composerCtx);
       // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и
@@ -3200,6 +3267,8 @@ export class ChatOrchestrator {
                   // AD-089: funnel создания дочерней сессии (late-bound, если подключён).
                   getRequestSessionService: this._getRequestSessionService ?? undefined,
                   projectStore: this._projectStore ?? undefined,
+                  // Онбординг: тул `profile_update` сохраняет ответы интервью.
+                  profilesStore: this._profilesStore ?? undefined,
                   workspacesRoot: this._workspacesRoot,
                   // AD-075/AD-076: тулы управления проектом (workspace, репозитории).
                   gitService: this._gitService,
@@ -4022,6 +4091,8 @@ export class ChatOrchestrator {
       // AD-075/AD-076: проектные зависимости resumed-саб-агента — те же, что у
       // обычного пути `task` (проектные тулы, workspace-политика, SSH-окружение).
       projectStore: this._projectStore ?? undefined,
+      // Онбординг: resumed-саб-агент получает тот же profilesStore для `profile_update`.
+      profilesStore: this._profilesStore ?? undefined,
       workspacesRoot: this._workspacesRoot,
       sshKeyStore: this._sshKeyStore ?? undefined,
       gitService: this._gitService,

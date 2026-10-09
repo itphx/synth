@@ -45,7 +45,7 @@ export {
 
 export { DebugCollector } from './debug.js';
 
-export { ContextConfig, ContextBuilder, InterviewManager } from './engine/context/index.js';
+export { ContextConfig, ContextBuilder, isInterviewCompleted } from './engine/context/index.js';
 export { ContextOptimizer } from './engine/context/index.js';
 export type { BuildSystemPromptParams, ContextBuilderOptions, SummarizationResult, SlidingWindowResult } from './engine/context/index.js';
 

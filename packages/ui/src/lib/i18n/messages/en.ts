@@ -380,6 +380,8 @@ export const dict = {
   'auth.interfaceLanguage': 'Interface language',
   'auth.teamRole': 'Team role',
   'auth.notes': 'Notes',
+  'auth.interviewCompleted': 'Onboarding completed',
+  'auth.interviewCompletedDescription': 'The interview about you is finished; it will not be offered again.',
   'auth.phone': 'Phone',
   'auth.roleDeveloper': 'Developer',
   'auth.roleAdmin': 'Administrator',

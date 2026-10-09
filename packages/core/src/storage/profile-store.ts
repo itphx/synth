@@ -16,6 +16,8 @@ interface SerializedProfile {
   is_active: boolean;
   preferences: Record<string, unknown>;
   notes: string;
+  interview_completed: boolean;
+  interview_completed_at?: string;
   display_name?: string;
   created_at: string;
   updated_at: string;
@@ -44,6 +46,8 @@ export class FileProfileStore implements ProfileStore {
       is_active: profile.isActive,
       preferences: profile.preferences,
       notes: profile.notes,
+      interview_completed: profile.interviewCompleted,
+      interview_completed_at: profile.interviewCompletedAt,
       display_name: profile.displayName,
       created_at: profile.createdAt,
       updated_at: profile.updatedAt,
@@ -52,6 +56,15 @@ export class FileProfileStore implements ProfileStore {
   }
 
   private _deserialize(data: SerializedProfile): ProfileData {
+    // Backfill для legacy-профилей: до появления поля статус интервью хранился
+    // текстовой меткой `[ИНТЕРВЬЮ]` в свободном `notes`. Если новый флаг не
+    // сохранён, но метка есть — считаем интервью пройденным. Время завершения
+    // для legacy берём из `updated_at` (иного ориентира нет).
+    const legacyInterview = String(data.notes ?? '').includes('[ИНТЕРВЬЮ]');
+    const interviewCompleted = data.interview_completed ?? legacyInterview;
+    const interviewCompletedAt = data.interview_completed_at
+      ?? (legacyInterview ? data.updated_at : undefined);
+
     return {
       id: data.id,
       username: data.username,
@@ -62,6 +75,8 @@ export class FileProfileStore implements ProfileStore {
       isActive: data.is_active,
       preferences: data.preferences,
       notes: data.notes,
+      interviewCompleted,
+      interviewCompletedAt,
       displayName: data.display_name,
       createdAt: data.created_at,
       updatedAt: data.updated_at,
@@ -140,6 +155,7 @@ export class FileProfileStore implements ProfileStore {
       if (params.email) existing.email = params.email;
       if (params.roles) existing.roles = params.roles;
       if (params.teamRoles) existing.teamRoles = params.teamRoles;
+      if (params.interviewCompleted !== undefined) existing.interviewCompleted = params.interviewCompleted;
       await this.saveProfile(existing);
       return existing;
     }
@@ -154,6 +170,7 @@ export class FileProfileStore implements ProfileStore {
       isActive: true,
       preferences: {},
       notes: '',
+      interviewCompleted: params.interviewCompleted ?? false,
       displayName: params.username,
       createdAt: now,
       updatedAt: now,

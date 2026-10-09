@@ -1162,6 +1162,14 @@ export interface ProfileData {
   isActive: boolean;
   preferences: Record<string, unknown>;
   notes: string;
+  /**
+   * Онбординг-интервью пройдено. Отдельное поле вместо legacy-метки
+   * `[ИНТЕРВЬЮ]` в свободном `notes`. Не задано (legacy-профиль) — бэкфилл при
+   * чтении по наличию метки (`FileProfileStore._deserialize`).
+   */
+  interviewCompleted: boolean;
+  /** ISO-время завершения интервью (для аудита/аналитики). */
+  interviewCompletedAt?: string;
   displayName?: string;
   createdAt: string;
   updatedAt: string;

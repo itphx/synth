@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ToolCapability, MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext, TokenUsage, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import type { ToolDefinition, ToolResult, Message, Session, SessionSettings, RouterConfig, PermissionConfig, PlanMode, SessionMode, SecurityConfig, ToolForLLM, ToolContext, TokenUsage, WorkspaceOutsideRootPolicy, ProfileStore } from '@itphx/synth-shared';
 import type { AgentRegistry } from '../agents/registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
 import type { BaseProvider, LLMMessage, CancellationToken } from '../../providers/base.js';
@@ -112,6 +112,8 @@ export interface TaskExtra {
    * полный `ProjectStore`, а проектные тулы объявляют свой контракт сами.
    */
   projectStore?: ProjectStoreLike;
+  /** Онбординг: хранилище профилей — тул `profile_update` у саб-агента. */
+  profilesStore?: ProfileStore;
   workspacesRoot?: string;
   sshKeyStore?: SSHKeyStore;
   gitService?: GitService;
