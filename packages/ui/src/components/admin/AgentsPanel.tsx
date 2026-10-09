@@ -490,14 +490,25 @@ export const AgentsPanel = () => {
         {/* Capabilities */}
         <SettingsField label={t('admin.agents.capabilities')}>
           <div className="flex flex-wrap gap-1 min-w-0">
-            {CAP_KEYS.map((k) => (
-              <button key={k} type="button" onClick={() => toggleCap(k)} className={cn(
-                'px-2 py-0.5 rounded text-[0.6875rem] transition-colors',
-                form.capabilities.includes(k)
-                  ? 'bg-secondary text-secondary-foreground'
-                  : 'bg-muted text-muted-foreground hover:bg-interactive-hover'
-              )}>{t(`admin.agents.cap.${k}`)}</button>
-            ))}
+            {CAP_KEYS.map((k) => {
+              const active = form.capabilities.includes(k)
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => toggleCap(k)}
+                  className={cn(
+                    'px-2 py-0.5 rounded text-[0.6875rem] transition-colors border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    active
+                      ? 'bg-primary text-primary-foreground border-primary font-medium'
+                      : 'border-border bg-surface-inset text-muted-foreground hover:bg-interactive-hover hover:text-foreground'
+                  )}
+                >
+                  {t(`admin.agents.cap.${k}`)}
+                </button>
+              )
+            })}
           </div>
         </SettingsField>
 
