@@ -27,9 +27,8 @@ ENV SYNTH_PORT=5000
 
 COPY --from=build /out/app /app
 
-# Промпты/definitions core (fallback для Docker, где нет исходников рядом).
+# Скомпилированный код backend поверх pnpm deploy.
 COPY --from=build /repo/packages/backend/dist /app/dist
-COPY --from=build /repo/packages/backend/src/agents/definitions /app/src/agents/definitions
 
 WORKDIR /app
 # Файлы из pnpm deploy имеют mode 770 (root) — под runAsUser 1000 нет доступа.

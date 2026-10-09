@@ -41,7 +41,6 @@
 - `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware и OIDC; `src/events/hub.ts` — `EventHub`.
 - `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `i18n`.
 - `src/middleware/rate-limiter.ts` — единственный middleware пакета.
-- `src/agents/definitions/*.json` — определения агентов (ассеты, копируются в `dist`).
 
 Своей реализации сессий, очереди, проектов, провайдеров и контекста в backend нет — это core.
 
@@ -138,7 +137,7 @@
 - Юнит-тесты роутеров поднимают Hono с mock-`AuthKit`; сквозные — `createBackendApp()` in-process (см. `src/integration/hybrid.integration.test.ts`).
 - `createBackendApp` сам изолирует env (dataDir, debug auth, ключи, провайдеры) — в тестах не выставляй env вручную поверх.
 - Dev-запуск: `./scripts/dev.sh backend` (порт и env — в корневом `AGENTS.md`).
-- Сборка пакета: `tsc` + копирование `src/agents/definitions` в `dist/agents/definitions` (`package.json`).
+- Сборка пакета: `tsc -p tsconfig.build.json` (`package.json`); системные дефиниции агентов берутся из `@itphx/synth-core`, собственных ассетов у backend нет.
 
 ## Чего не делать
 

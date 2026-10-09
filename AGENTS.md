@@ -84,7 +84,7 @@ pnpm test                   # Vitest
 pnpm clean                  # очистка dist/
 ```
 
-Сборка core копирует `prompts/` и `definitions/*.json` в `dist/` (backend — `definitions/`) — это **fallback для Docker**; источник истины промптов — `packages/core/prompts` (публикуется в npm через `files`), дубликатов ассетов нет (AD-038). Логи dev-запуска: `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`.
+Сборка core копирует `prompts/` и `definitions/*.json` в `dist/` — это **fallback для Docker**; источник истины промптов — `packages/core/prompts` (публикуется в npm через `files`), дубликатов ассетов нет (AD-038). Логи dev-запуска: `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`.
 
 ## Порты
 
