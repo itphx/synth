@@ -45,7 +45,7 @@ import {
   HookBus,
   startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  ScheduleStore, SchedulerRuleProvider, SchedulerService,
+  ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   createEventRoutes, createSchedulerRoutes,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
@@ -544,6 +544,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию
     // (паритет с core `server/app.ts`; store без дублей).
     const scheduleStore = new ScheduleStore({ dataDir });
+    const jobStore = new JobStore({ dataDir });
     eventRouter.registerRuleProvider(
       new SchedulerRuleProvider(scheduleStore, backendConfig.synth.events.ephemeralTtl),
     );
@@ -583,8 +584,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const schedulerService = new SchedulerService({
       scheduleStore,
       ingress: eventIngress,
+      jobStore,
       tickMs: backendConfig.synth.scheduler.tickSec * 1000,
       defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
+      catchUp: backendConfig.synth.scheduler.catchUp,
+      jobRetentionDays: backendConfig.synth.scheduler.jobRetentionDays,
     });
     if (backendConfig.synth.scheduler.enabled !== false) {
       void schedulerService.start().catch((err) => {
@@ -707,7 +711,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Чтение — requireAuth (дефолт core-фабрики), мутации и `run` — ADMIN.
     app.route('/api/v2/schedules', createSchedulerRoutes(
       auth,
-      { scheduleStore, scheduler: schedulerService },
+      { scheduleStore, scheduler: schedulerService, jobStore },
       { writeGuard: auth.requireAdmin },
     ));
 

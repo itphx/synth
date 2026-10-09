@@ -22,6 +22,46 @@ export type ScheduleTarget =
 export type ScheduleRunStatus = 'ok' | 'error' | 'skipped';
 
 /**
+ * AD-051: триггер срабатывания расписания.
+ * - `cron` — обычный тик планировщика (или интервальное срабатывание);
+ * - `manual` — принудительный запуск (`POST /:id/run`, force);
+ * - `catchup` — догоняющее срабатывание после простоя.
+ */
+export type ScheduleJobTrigger = 'cron' | 'manual' | 'catchup';
+
+/**
+ * AD-051: запись Job-истории — результат одного срабатывания расписания.
+ *
+ * Append-only JSONL `{dataDir}/scheduler/jobs.jsonl`. `decision` — итог
+ * маршрутизации события (`RouteDecision['kind']`), `reason` — причина
+ * `drop`/`skip`, `sessionId` — материализованная Router'ом сессия (если была).
+ */
+export interface ScheduleJob {
+  /** `job_<uuid>`, уникален в пределах инстанса. */
+  id: string;
+  scheduleId: string;
+  scheduleName: string;
+  trigger: ScheduleJobTrigger;
+  status: ScheduleRunStatus;
+  /** Начало срабатывания, ISO-8601. */
+  startedAt: string;
+  /** Окончание срабатывания, ISO-8601. */
+  finishedAt: string;
+  durationMs: number;
+  target: ScheduleTarget;
+  /** Ключ идемпотентности события (`cron:<id>:<...>`). */
+  dedupKey?: string;
+  /** Решение Router: `'bound' | 'queue' | 'ephemeral' | 'drop'`. */
+  decision?: 'bound' | 'queue' | 'ephemeral' | 'drop';
+  /** Причина `drop`/`skip` (напр. `no_route`, `busy`, `missed`). */
+  reason?: string;
+  /** Идентификатор сессии, в которую доставлено событие. */
+  sessionId?: string;
+  /** Текст ошибки при `status === 'error'`. */
+  error?: string;
+}
+
+/**
  * AD-051/AD-089: расписание запуска промпта/события.
  *
  * Ровно одно из `cron` (5 полей) / `every` (интервал) задано; время cron
@@ -44,6 +84,12 @@ export interface Schedule {
   payload?: Record<string, unknown>;
   /** Владелец расписания (попадает в `identity.principalId`). */
   ownerId?: string;
+  /**
+   * AD-051: поведение при пропущенном срабатывании на старте процесса
+   * (`skip` — пропустить, `once` — одно догоняющее). Не задано — дефолт из
+   * конфига `scheduler.catchUp`.
+   */
+  catchUp?: 'skip' | 'once';
   createdAt: string;
   updatedAt: string;
   /** Время последнего запуска, ISO-8601. */

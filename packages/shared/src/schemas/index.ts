@@ -666,6 +666,7 @@ export const scheduleInputSchema = z
     prompt: z.string().optional(),
     payload: z.record(z.unknown()).optional(),
     ownerId: z.string().optional(),
+    catchUp: z.enum(['skip', 'once']).optional(),
   })
   .superRefine(refineScheduleTrigger);
 
@@ -681,6 +682,7 @@ export const scheduleSchema = z
     prompt: z.string().optional(),
     payload: z.record(z.unknown()).optional(),
     ownerId: z.string().optional(),
+    catchUp: z.enum(['skip', 'once']).optional(),
     createdAt: z.string().min(1),
     updatedAt: z.string().min(1),
     lastRunAt: z.string().optional(),
@@ -692,3 +694,26 @@ export const scheduleSchema = z
 
 export type ScheduleInputRequest = z.infer<typeof scheduleInputSchema>;
 export type ScheduleRequest = z.infer<typeof scheduleSchema>;
+
+/** AD-051: триггер срабатывания расписания в Job-истории. */
+export const scheduleJobTriggerSchema = z.enum(['cron', 'manual', 'catchup']);
+
+/** AD-051: запись Job-истории (ответы `GET /api/v2/schedules/:id/jobs`). */
+export const scheduleJobSchema = z.object({
+  id: z.string().min(1),
+  scheduleId: z.string().min(1),
+  scheduleName: z.string(),
+  trigger: scheduleJobTriggerSchema,
+  status: z.enum(['ok', 'error', 'skipped']),
+  startedAt: z.string().min(1),
+  finishedAt: z.string().min(1),
+  durationMs: z.number(),
+  target: scheduleTargetSchema,
+  dedupKey: z.string().optional(),
+  decision: z.enum(['bound', 'queue', 'ephemeral', 'drop']).optional(),
+  reason: z.string().optional(),
+  sessionId: z.string().optional(),
+  error: z.string().optional(),
+});
+
+export type ScheduleJobRequest = z.infer<typeof scheduleJobSchema>;

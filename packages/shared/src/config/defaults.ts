@@ -122,6 +122,8 @@ export const defaultConfig: SynthConfig = {
   scheduler: {
     enabled: true,
     tickSec: 60,
+    catchUp: 'skip',
+    jobRetentionDays: 30,
   },
   instructions: {
     enabled: true,

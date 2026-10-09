@@ -19,6 +19,7 @@ import {
   scheduleTargetSchema,
   scheduleInputSchema,
   scheduleSchema,
+  scheduleJobSchema,
 } from './index.js';
 import { PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS } from '../types/index.js';
 
@@ -358,6 +359,7 @@ describe('schedule schemas (AD-051 / AD-089)', () => {
       every: '1h',
       target: { mode: 'ephemeral', agentTemplate: 'triage' },
       payload: { foo: 'bar' },
+      catchUp: 'once',
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
       lastRunAt: '2026-01-01T01:00:00.000Z',
@@ -365,5 +367,44 @@ describe('schedule schemas (AD-051 / AD-089)', () => {
       lastStatus: 'ok',
     });
     expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.catchUp).toBe('once');
+  });
+
+  it('scheduleInputSchema: catchUp опционален (skip/once)', () => {
+    const base = { name: 'x', every: '1h', target: { mode: 'bound', sessionId: 's1' } };
+    expect(scheduleInputSchema.safeParse(base).success).toBe(true);
+    expect(scheduleInputSchema.safeParse({ ...base, catchUp: 'once' }).success).toBe(true);
+    expect(scheduleInputSchema.safeParse({ ...base, catchUp: 'skip' }).success).toBe(true);
+    expect(scheduleInputSchema.safeParse({ ...base, catchUp: 'never' }).success).toBe(false);
+  });
+
+  it('scheduleJobSchema: запись Job-истории', () => {
+    const parsed = scheduleJobSchema.safeParse({
+      id: 'job_1',
+      scheduleId: 'sch_1',
+      scheduleName: 'nightly',
+      trigger: 'catchup',
+      status: 'skipped',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      finishedAt: '2026-01-01T00:00:00.000Z',
+      durationMs: 0,
+      target: { mode: 'bound', sessionId: 's1' },
+      reason: 'missed',
+    });
+    expect(parsed.success).toBe(true);
+
+    expect(
+      scheduleJobSchema.safeParse({
+        id: 'job_2',
+        scheduleId: 'sch_1',
+        scheduleName: 'nightly',
+        trigger: 'other',
+        status: 'ok',
+        startedAt: 'x',
+        finishedAt: 'x',
+        durationMs: 0,
+        target: { mode: 'bound', sessionId: 's1' },
+      }).success,
+    ).toBe(false);
   });
 });

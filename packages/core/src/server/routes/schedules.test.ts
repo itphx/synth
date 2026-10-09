@@ -3,11 +3,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
-import type { Context, Next } from 'hono';
+import type { Context, MiddlewareHandler, Next } from 'hono';
 import type { RouteDecision, SynthEvent } from '@itphx/synth-shared';
 import { createSchedulerRoutes } from './schedules.js';
 import type { SchedulerRoutesAuth } from './schedules.js';
 import { ScheduleStore } from '../../storage/schedule-store.js';
+import { JobStore } from '../../storage/job-store.js';
 import { SchedulerService } from '../../engine/scheduler/scheduler.js';
 import type { EventIngestInput, EventIngress } from '../../engine/events/ingest.js';
 
@@ -20,7 +21,7 @@ const auth = {
 function makeIngress() {
   const ingest = vi.fn(async (input: EventIngestInput) => ({
     event: { source: input.source, type: input.type, dedupKey: input.dedupKey } as SynthEvent,
-    decision: { kind: 'drop', reason: 'no_route', audited: true } as RouteDecision,
+    decision: { kind: 'bound', sessionId: 's1' } as RouteDecision,
     session: null,
   }));
   return { ingress: { ingest } as unknown as EventIngress, ingest };
@@ -29,14 +30,22 @@ function makeIngress() {
 describe('Schedules API Routes (AD-051 / AD-089)', () => {
   let tmpDir: string;
   let store: ScheduleStore;
+  let jobStore: JobStore;
   let scheduler: SchedulerService;
   let ingest: ReturnType<typeof makeIngress>['ingest'];
 
-  const makeApp = (writeGuard = auth.requireAuth) => {
+  const makeApp = (
+    writeGuard: MiddlewareHandler = auth.requireAuth as unknown as MiddlewareHandler,
+    runGuard?: MiddlewareHandler,
+  ) => {
     const app = new Hono();
     app.route(
       '/api/v2/schedules',
-      createSchedulerRoutes(auth, { scheduleStore: store, scheduler }, { writeGuard }),
+      createSchedulerRoutes(
+        auth,
+        { scheduleStore: store, scheduler, jobStore },
+        { writeGuard, runGuard },
+      ),
     );
     return app;
   };
@@ -50,11 +59,13 @@ describe('Schedules API Routes (AD-051 / AD-089)', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-sched-routes-'));
     store = new ScheduleStore({ dataDir: tmpDir });
+    jobStore = new JobStore({ dataDir: tmpDir });
     const mock = makeIngress();
     ingest = mock.ingest;
     scheduler = new SchedulerService({
       scheduleStore: store,
       ingress: mock.ingress,
+      jobStore,
       now: () => new Date('2026-01-01T00:00:00Z'),
     });
   });
@@ -226,5 +237,67 @@ describe('Schedules API Routes (AD-051 / AD-089)', () => {
       json('POST', { name: 'x', every: '1h', target: { mode: 'bound', sessionId: 's1' } }),
     );
     expect(res.status).toBe(403);
+  });
+
+  it('GET /:id/jobs — история срабатываний; 404 для неизвестного', async () => {
+    const app = makeApp();
+    const created = await store.create({
+      name: 'j',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+
+    const empty = await app.request(`/api/v2/schedules/${created.id}/jobs`);
+    expect(empty.status).toBe(200);
+    expect(((await empty.json()) as { jobs: unknown[] }).jobs).toEqual([]);
+
+    await app.request(`/api/v2/schedules/${created.id}/run`, { method: 'POST' });
+    const jobsRes = await app.request(`/api/v2/schedules/${created.id}/jobs?limit=10`);
+    expect(jobsRes.status).toBe(200);
+    const jobs = ((await jobsRes.json()) as { jobs: { trigger: string; status: string }[] }).jobs;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ trigger: 'manual', status: 'ok' });
+
+    const missing = await app.request('/api/v2/schedules/sch_missing/jobs');
+    expect(missing.status).toBe(404);
+  });
+
+  it('GET /:id/jobs без jobStore → пустой список', async () => {
+    const created = await store.create({
+      name: 'j2',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const app = new Hono();
+    app.route(
+      '/api/v2/schedules',
+      createSchedulerRoutes(auth, { scheduleStore: store, scheduler }),
+    );
+    const res = await app.request(`/api/v2/schedules/${created.id}/jobs`);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { jobs: unknown[] }).jobs).toEqual([]);
+  });
+
+  it('runGuard применяется к POST /:id/run (независимо от writeGuard)', async () => {
+    const deny = async (c: Context) => c.json({ error: { code: 'FORBIDDEN' } }, 403);
+    const app = makeApp(auth.requireAuth as unknown as MiddlewareHandler, deny as never);
+    const created = await store.create({
+      name: 'g',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+
+    // writeGuard на создание проходит, runGuard на запуск — нет.
+    const createRes = await app.request(
+      '/api/v2/schedules',
+      json('POST', { name: 'y', every: '1h', target: { mode: 'bound', sessionId: 's1' } }),
+    );
+    expect(createRes.status).toBe(201);
+
+    const runRes = await app.request(`/api/v2/schedules/${created.id}/run`, { method: 'POST' });
+    expect(runRes.status).toBe(403);
   });
 });

@@ -128,7 +128,12 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('scheduler по умолчанию: enabled, тик 60 c (AD-051 срез / AD-089)', () => {
-    expect(defaultConfig.scheduler).toEqual({ enabled: true, tickSec: 60 });
+  it('scheduler по умолчанию: enabled, тик 60 c, catch-up skip, retention 30 (AD-051)', () => {
+    expect(defaultConfig.scheduler).toEqual({
+      enabled: true,
+      tickSec: 60,
+      catchUp: 'skip',
+      jobRetentionDays: 30,
+    });
   });
 });

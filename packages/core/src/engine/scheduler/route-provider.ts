@@ -10,7 +10,8 @@ const DEFAULT_EPHEMERAL_TTL = '24h';
  * Router вызывает провайдер после явного `Binding` и после dedup — это ок.
  * Поддерживаются только события `source === 'cron'` с `payload.scheduleId`:
  * по расписанию выбирается цель (`bound` / `queue` / `ephemeral`). Нет
- * расписания или оно выключено → `drop` с аудитом.
+ * расписания или оно выключено → `drop` с аудитом; `payload.force === true`
+ * (принудительный запуск) обходит проверку `enabled`.
  */
 export class SchedulerRuleProvider implements RouteRuleProvider {
   readonly name = 'scheduler';
@@ -32,7 +33,13 @@ export class SchedulerRuleProvider implements RouteRuleProvider {
 
     const schedule = await this._store.get(scheduleId);
     if (!schedule) return { kind: 'drop', reason: 'schedule_not_found', audited: true };
-    if (!schedule.enabled) return { kind: 'drop', reason: 'schedule_disabled', audited: true };
+
+    // AD-051: force-запуск (`POST /:id/run`) обходит проверку `enabled`.
+    const force =
+      !!payload && typeof payload === 'object' && (payload as { force?: unknown }).force === true;
+    if (!schedule.enabled && !force) {
+      return { kind: 'drop', reason: 'schedule_disabled', audited: true };
+    }
 
     const target = schedule.target;
     if (target.mode === 'bound') return { kind: 'bound', sessionId: target.sessionId };

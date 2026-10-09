@@ -2,13 +2,17 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { RouteDecision, SynthEvent } from '@itphx/synth-shared';
+import type { RouteDecision, Session, SynthEvent } from '@itphx/synth-shared';
 import type { EventIngestInput, EventIngress } from '../events/ingest.js';
 import { ScheduleStore } from '../../storage/schedule-store.js';
+import { JobStore } from '../../storage/job-store.js';
 import { SchedulerService } from './scheduler.js';
 
 /** Мок ingress: записывает входы, не ходит в Router. */
-function makeIngress() {
+function makeIngress(
+  decision: RouteDecision = { kind: 'bound', sessionId: 's1' },
+  session: Session | null = null,
+) {
   const ingest = vi.fn(async (input: EventIngestInput) => ({
     event: {
       id: 'evt_test',
@@ -19,8 +23,8 @@ function makeIngress() {
       dedupKey: input.dedupKey ?? '',
       ts: input.ts ?? new Date().toISOString(),
     } as SynthEvent,
-    decision: { kind: 'drop', reason: 'no_route', audited: true } as RouteDecision,
-    session: null,
+    decision,
+    session,
   }));
   return { ingress: { ingest } as unknown as EventIngress, ingest };
 }
@@ -143,7 +147,7 @@ describe('SchedulerService (AD-051 / AD-089)', () => {
       every: '1h',
       target: { mode: 'queue', sessionId: 'owner-1' },
     });
-    const { ingress, ingest } = makeIngress();
+    const { ingress, ingest } = makeIngress({ kind: 'queue', owner: 'owner-1', reason: 'schedule' });
     const svc = new SchedulerService({ scheduleStore: store, ingress, now: () => current });
     await svc.start();
     svc.stop();
@@ -152,7 +156,7 @@ describe('SchedulerService (AD-051 / AD-089)', () => {
     const updated = await svc.runNow(schedule.id);
 
     expect(ingest).toHaveBeenCalledTimes(1);
-    expect(ingest.mock.calls[0]![0].dedupKey).toBe(`cron:${schedule.id}:2026-01-01T00:30:00.000Z`);
+    expect(ingest.mock.calls[0]![0].dedupKey).toBe(`cron:${schedule.id}:manual:2026-01-01T00:30:00.000Z`);
     expect(updated?.lastRunAt).toBe('2026-01-01T00:30:00.000Z');
     expect(updated?.nextRunAt).toBe('2026-01-01T01:30:00.000Z');
     expect(updated?.lastStatus).toBe('ok');
@@ -223,5 +227,242 @@ describe('SchedulerService (AD-051 / AD-089)', () => {
 
     const after = await store.get(schedule.id);
     expect(after?.lastStatus).toBe('error');
+  });
+
+  it('Job пишется при обычном срабатывании: trigger cron, decision/sessionId', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'job',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress } = makeIngress({ kind: 'bound', sessionId: 's1' }, { id: 'sess_1' } as unknown as Session);
+    const svc = new SchedulerService({ scheduleStore: store, ingress, jobStore, now: () => current });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T01:00:00Z');
+    await svc.tick();
+
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      trigger: 'cron',
+      status: 'ok',
+      decision: 'bound',
+      sessionId: 'sess_1',
+    });
+    expect(jobs[0]!.durationMs).toBeGreaterThanOrEqual(0);
+    expect(jobs[0]!.startedAt <= jobs[0]!.finishedAt).toBe(true);
+  });
+
+  it('drop-решение Router → Job skipped с reason и lastStatus skipped', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'd',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress } = makeIngress({ kind: 'drop', reason: 'no_route', audited: true });
+    const svc = new SchedulerService({ scheduleStore: store, ingress, jobStore, now: () => current });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T01:00:00Z');
+    await svc.tick();
+
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs[0]).toMatchObject({ status: 'skipped', decision: 'drop', reason: 'no_route' });
+    expect((await store.get(schedule.id))?.lastStatus).toBe('skipped');
+  });
+
+  it('catch-up skip: Job skipped missed и nextRunAt сдвинут от текущего момента', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'cu',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress, ingest } = makeIngress();
+    const svc = new SchedulerService({ scheduleStore: store, ingress, jobStore, now: () => current });
+    await svc.start();
+    svc.stop(); // nextRunAt = 01:00
+
+    current = new Date('2026-01-01T03:00:00Z');
+    await svc.start();
+    svc.stop();
+
+    expect(ingest).not.toHaveBeenCalled();
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ trigger: 'catchup', status: 'skipped', reason: 'missed' });
+    expect((await store.get(schedule.id))?.nextRunAt).toBe('2026-01-01T04:00:00.000Z');
+  });
+
+  it('catch-up once (дефолт deps): одно догоняющее срабатывание trigger catchup', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'cu-once',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress, ingest } = makeIngress();
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      jobStore,
+      catchUp: 'once',
+      now: () => current,
+    });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T03:00:00Z');
+    await svc.start();
+    svc.stop();
+
+    expect(ingest).toHaveBeenCalledTimes(1);
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ trigger: 'catchup', status: 'ok' });
+    expect((await store.get(schedule.id))?.nextRunAt).toBe('2026-01-01T04:00:00.000Z');
+  });
+
+  it('catchUp расписания переопределяет дефолт deps', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'cu-skip',
+      enabled: true,
+      every: '1h',
+      catchUp: 'skip',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress, ingest } = makeIngress();
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      jobStore,
+      catchUp: 'once',
+      now: () => current,
+    });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T03:00:00Z');
+    await svc.start();
+    svc.stop();
+
+    expect(ingest).not.toHaveBeenCalled();
+    expect((await jobStore.list({ scheduleId: schedule.id }))[0]).toMatchObject({
+      status: 'skipped',
+      reason: 'missed',
+    });
+  });
+
+  it('in-flight guard: повторный запуск → Job skipped busy', async () => {
+    const current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'busy',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let calls = 0;
+    const ingest = vi.fn(async (input: EventIngestInput) => {
+      calls += 1;
+      if (calls === 1) await gate;
+      return {
+        event: {
+          id: 'evt',
+          source: input.source,
+          type: input.type,
+          payload: input.payload,
+          identity: input.identity ?? {},
+          dedupKey: input.dedupKey ?? '',
+          ts: current.toISOString(),
+        } as SynthEvent,
+        decision: { kind: 'drop', reason: 'no_route', audited: true } as RouteDecision,
+        session: null,
+      };
+    });
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress: { ingest } as unknown as EventIngress,
+      jobStore,
+      now: () => current,
+    });
+
+    const first = svc.runNow(schedule.id);
+    while (ingest.mock.calls.length === 0) await new Promise((r) => setTimeout(r, 0));
+    const second = await svc.runNow(schedule.id); // in-flight → busy
+    release();
+    await first;
+
+    expect(second?.id).toBe(schedule.id);
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs.some((j) => j.status === 'skipped' && j.reason === 'busy')).toBe(true);
+  });
+
+  it('runNow: trigger manual и force в payload (в т.ч. выключенное расписание)', async () => {
+    const current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'off',
+      enabled: false,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    const { ingress, ingest } = makeIngress();
+    const svc = new SchedulerService({ scheduleStore: store, ingress, jobStore, now: () => current });
+
+    const updated = await svc.runNow(schedule.id);
+    expect(updated).not.toBeNull();
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(ingest.mock.calls[0]![0].payload).toMatchObject({ force: true, scheduleId: schedule.id });
+    const jobs = await jobStore.list({ scheduleId: schedule.id });
+    expect(jobs[0]).toMatchObject({ trigger: 'manual' });
+  });
+
+  it('start вызывает prune Job-истории по retention', async () => {
+    const old = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const jobStore = new JobStore({ dataDir: tmpDir });
+    await jobStore.append({
+      id: 'job_old',
+      scheduleId: 'sch_x',
+      scheduleName: 'x',
+      trigger: 'cron',
+      status: 'ok',
+      startedAt: old,
+      finishedAt: old,
+      durationMs: 0,
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+
+    const { ingress } = makeIngress();
+    const svc = new SchedulerService({
+      scheduleStore: store,
+      ingress,
+      jobStore,
+      jobRetentionDays: 30,
+      now: () => new Date('2026-01-01T00:00:00Z'),
+    });
+    await svc.start();
+    svc.stop();
+
+    expect(await jobStore.list()).toEqual([]);
   });
 });

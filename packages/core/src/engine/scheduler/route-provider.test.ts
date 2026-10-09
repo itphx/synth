@@ -63,6 +63,29 @@ describe('SchedulerRuleProvider (AD-051 / AD-089)', () => {
     ).toEqual({ kind: 'drop', reason: 'schedule_disabled', audited: true });
   });
 
+  it('force в payload пропускает выключенное расписание (AD-051)', async () => {
+    const created = await store.create({
+      name: 'off-force',
+      enabled: false,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const provider = new SchedulerRuleProvider(store);
+    expect(
+      await provider.resolve({
+        event: event({ payload: { scheduleId: created.id, force: true } }),
+        bindings: [],
+      }),
+    ).toEqual({ kind: 'bound', sessionId: 's1' });
+
+    expect(
+      await provider.resolve({
+        event: event({ payload: { scheduleId: created.id, force: false } }),
+        bindings: [],
+      }),
+    ).toEqual({ kind: 'drop', reason: 'schedule_disabled', audited: true });
+  });
+
   it('target bound → bound', async () => {
     const created = await store.create({
       name: 'b',

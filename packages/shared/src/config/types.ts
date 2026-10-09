@@ -264,11 +264,15 @@ export const eventsConfigSchema = z.object({
 /**
  * AD-051 (минимальный срез) / AD-089: конфигурация cron/interval-планировщика.
  * - `enabled` — мастер-выключатель сервиса (в standalone гейтит `start()`);
- * - `tickSec` — период тика, секунды (1..3600).
+ * - `tickSec` — период тика, секунды (1..3600);
+ * - `catchUp` — дефолт поведения при пропущенном срабатывании (`skip`/`once`);
+ * - `jobRetentionDays` — срок хранения Job-истории (дни, `prune` на старте).
  */
 export const schedulerConfigSchema = z.object({
   enabled: z.boolean().default(true),
   tickSec: z.number().int().min(1).max(3600).default(60),
+  catchUp: z.enum(['skip', 'once']).default('skip'),
+  jobRetentionDays: z.number().int().min(0).default(30),
 });
 
 // --- Проектные инструкции (AD-069) ---

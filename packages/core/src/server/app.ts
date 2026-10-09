@@ -15,7 +15,7 @@ import {
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  ScheduleStore, SchedulerRuleProvider, SchedulerService,
+  ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   createEventRoutes, createSchedulerRoutes,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -875,6 +875,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   });
   // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию.
   const scheduleStore = new ScheduleStore({ dataDir });
+  const jobStore = new JobStore({ dataDir });
   eventRouter.registerRuleProvider(
     new SchedulerRuleProvider(scheduleStore, config.eventsConfig?.ephemeralTtl ?? '24h'),
   );
@@ -914,8 +915,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const schedulerService = new SchedulerService({
     scheduleStore,
     ingress: eventIngress,
+    jobStore,
     tickMs: (config.schedulerConfig?.tickSec ?? 60) * 1000,
     defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
+    catchUp: config.schedulerConfig?.catchUp ?? 'skip',
+    jobRetentionDays: config.schedulerConfig?.jobRetentionDays ?? 30,
   });
   if (config.schedulerConfig?.enabled !== false) {
     void schedulerService.start().catch((err) => {
@@ -1122,7 +1126,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // AD-051 (срез) / AD-089: CRUD расписаний и принудительный запуск.
   app.route('/api/v2/schedules', createSchedulerRoutes(
     auth,
-    { scheduleStore, scheduler: schedulerService },
+    { scheduleStore, scheduler: schedulerService, jobStore },
   ));
 
   // Скиллы (AD-046 §9.1): реестр + instance CRUD + supporting-файлы + reload.

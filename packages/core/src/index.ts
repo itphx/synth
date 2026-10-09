@@ -178,6 +178,9 @@ export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event
 // AD-051 (срез) / AD-089: реестр расписаний планировщика.
 export { ScheduleStore, SCHEDULES_SCHEMA_VERSION } from './storage/schedule-store.js';
 export type { ScheduleStoreConfig, ScheduleRunUpdate } from './storage/schedule-store.js';
+// AD-051: append-only история срабатываний расписаний.
+export { JobStore } from './storage/job-store.js';
+export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
 // AD-089: ядро маршрутизации событий и единый funnel создания сессии.
 export { EventRouter } from './engine/events/event-router.js';
 export type { EventRouterDeps } from './engine/events/event-router.js';

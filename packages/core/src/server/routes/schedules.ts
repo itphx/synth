@@ -4,6 +4,7 @@ import type { createMiddleware } from 'hono/factory';
 import { scheduleInputSchema } from '@itphx/synth-shared';
 import type { ScheduleInputRequest } from '@itphx/synth-shared';
 import type { ScheduleStore } from '../../storage/schedule-store.js';
+import type { JobStore } from '../../storage/job-store.js';
 import type { SchedulerService } from '../../engine/scheduler/scheduler.js';
 import { isValidCron } from '../../engine/scheduler/cron.js';
 import { parseDurationMs } from '../../engine/scheduler/duration.js';
@@ -31,12 +32,18 @@ export interface SchedulerRouteMessages {
 export interface SchedulerRoutesDeps {
   scheduleStore: ScheduleStore;
   scheduler: SchedulerService;
+  /** История срабатываний (AD-051); без неё `GET /:id/jobs` отдаёт `[]`. */
+  jobStore?: JobStore;
 }
 
 export interface SchedulerRoutesOptions {
   messages?: Partial<SchedulerRouteMessages>;
   /** Guard на мутации; по умолчанию — `requireAuth` (backend: requireAdmin). */
   writeGuard?: Middleware;
+  /** Guard на `POST /:id/run`; по умолчанию — `writeGuard`. */
+  runGuard?: Middleware;
+  /** Дополнительные middleware на `POST /:id/run` (rate limit и т.п.). */
+  runMiddleware?: Middleware[];
 }
 
 const DEFAULT_MESSAGES: SchedulerRouteMessages = {
@@ -60,11 +67,12 @@ function validateTrigger(input: ScheduleInputRequest): string | null {
 }
 
 /**
- * AD-051 (минимальный срез): CRUD расписаний + принудительный запуск.
+ * AD-051 / AD-089: CRUD расписаний + принудительный запуск + Job-история.
  *
  * `GET /` — список; `POST /` — создание; `PUT /:id` — обновление;
  * `DELETE /:id` — удаление; `POST /:id/run` — принудительный ingest события
- * через `SchedulerService.runNow`.
+ * через `SchedulerService.runNow` (всегда force, в т.ч. для выключенного
+ * расписания); `GET /:id/jobs` — история срабатываний (`jobStore`).
  */
 export function createSchedulerRoutes(
   auth: SchedulerRoutesAuth,
@@ -74,6 +82,7 @@ export function createSchedulerRoutes(
   const app = new Hono();
   const messages: SchedulerRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
+  const runGuard: Middleware = opts.runGuard ?? writeGuard;
 
   const invalid = (c: Context, message?: string) =>
     c.json(
@@ -140,8 +149,24 @@ export function createSchedulerRoutes(
     return c.body(null, 204);
   });
 
-  // POST /api/v2/schedules/:id/run — принудительный запуск.
-  app.post('/:id/run', writeGuard, async (c) => {
+  // GET /api/v2/schedules/:id/jobs — история срабатываний (AD-051).
+  app.get('/:id/jobs', auth.requireAuth, async (c) => {
+    const id = c.req.param('id');
+    const schedule = await deps.scheduleStore.get(id);
+    if (!schedule) return notFound(c);
+
+    if (!deps.jobStore) return c.json({ jobs: [] });
+
+    const rawLimit = c.req.query('limit');
+    const parsed = rawLimit !== undefined ? Number(rawLimit) : Number.NaN;
+    const limit = Number.isFinite(parsed) ? Math.min(Math.max(Math.trunc(parsed), 1), 200) : 20;
+    const jobs = await deps.jobStore.list({ scheduleId: id, limit });
+    return c.json({ jobs });
+  });
+
+  // POST /api/v2/schedules/:id/run — принудительный запуск (force, в т.ч.
+  // выключенного расписания). `runMiddleware` — дополнительный слой (rate limit).
+  app.post('/:id/run', runGuard, ...(opts.runMiddleware ?? []), async (c) => {
     const schedule = await deps.scheduler.runNow(c.req.param('id'));
     if (!schedule) return notFound(c);
     return c.json({ schedule });
