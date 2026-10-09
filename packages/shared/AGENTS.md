@@ -49,7 +49,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   и новые `resolveProfilesPath`/`resolveCredentialsPath`; `loader.home` — при home
   конфиг читается строго из `<home>/config.yaml` (без отката к XDG).
 - AD-089: секция `events` (`enabled`/`defaultMode`/`ephemeralTtl`/
-  `journalRetentionDays`/`allowedSources`/`dedupStore`). AD-051/AD-089: секция
+  `journalRetentionDays`/`allowedSources`/`dedupStore`/`unknownAgentTemplate`). AD-051/AD-089: секция
   `scheduler` (`enabled`/`tickSec`/`catchUp`/`jobRetentionDays`/`leaderElection`/
   `crossProcessLocks`); file-based флаги (`dedupStore: file`, `leaderElection: file`,
   `crossProcessLocks`) — default OFF, поведение single-process не меняют.
@@ -58,7 +58,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 
 `src/types/index.ts` + `src/schemas/index.ts` — единые контракты сущностей; схемы `projectCreate/Update`, `sessionCreate/Update`.
 - `EventType` включает `fs.changed` (мутирующий тул ядра изменил workspace) и `session.moved` (перенос сессии между проектами); потребители — `transportStore` UI (AD-024).
-- AD-030/AD-089: хуки — `HookName`/`HookMode`/`HookResult`/`HookContextMap` (`types/hooks.ts`); события — `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest`/`EventMode`/`EventDeliveryMode` (`types/events.ts`); Zod `synthEventSchema`, `eventBindingSchema`, `sessionRequestSchema`, `eventIngestSchema`, `eventBindingInputSchema`. Поля `Session.expiresAt`/`archivedAt` — ephemeral TTL/архив (AD-089).
+- AD-030/AD-089: хуки — `HookName`/`HookMode`/`HookResult`/`HookContextMap` (`types/hooks.ts`); события — `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest`/`EventMode`/`EventDeliveryMode` и правила `EventRouteRule`/`EventRouteTarget`/`EventRouteMatch` (`types/events.ts`); Zod `synthEventSchema`, `eventBindingSchema`, `sessionRequestSchema`, `eventIngestSchema`, `eventBindingInputSchema`, `eventRouteRuleSchema`/`eventRouteRuleInputSchema`/`eventRouteRuleUpsertSchema`/`eventRouteTargetSchema`/`eventRouteMatchSchema`. Поля `Session.expiresAt`/`archivedAt` — ephemeral TTL/архив (AD-089).
 - Канонические ключи иконок/цветов проекта и сессии: `PROJECT_ICON_KEYS` (37) / `PROJECT_COLOR_KEYS` (16, палитра темы `a1..a16`) + типы `ProjectIconKey`/`ProjectColorKey` (`types`) (включая дефолтные `folder`/`chat`/`cpu`); схемы `projectIconKeySchema`/`projectColorKeySchema` и хелперы `isProjectIconKey`/`isProjectColorKey` (strict) и `normalizeIconKey`/`normalizeColorKey` (только канонические ключи: невалидные значения, в т.ч. старые цветовые алиасы, → `undefined`) (`schemas`). `null`/`undefined` — сброс значения.
 
 ## i18n-контракт

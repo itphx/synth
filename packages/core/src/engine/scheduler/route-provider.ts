@@ -1,5 +1,6 @@
 import type { RouteDecision } from '@itphx/synth-shared';
 import type { ScheduleStore } from '../../storage/schedule-store.js';
+import { decisionFromTarget } from '../events/target-decision.js';
 import type { RouteRuleInput, RouteRuleProvider } from '../events/types.js';
 
 const DEFAULT_EPHEMERAL_TTL = '24h';
@@ -42,14 +43,6 @@ export class SchedulerRuleProvider implements RouteRuleProvider {
     }
 
     const target = schedule.target;
-    if (target.mode === 'bound') return { kind: 'bound', sessionId: target.sessionId };
-    if (target.mode === 'queue') {
-      return { kind: 'queue', owner: target.sessionId, reason: 'schedule' };
-    }
-    return {
-      kind: 'ephemeral',
-      agentTemplate: target.agentTemplate ?? '',
-      ttl: target.ttl ?? this._defaultEphemeralTtl,
-    };
+    return decisionFromTarget(target, this._defaultEphemeralTtl, { reason: 'schedule' });
   }
 }

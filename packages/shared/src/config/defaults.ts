@@ -120,6 +120,8 @@ export const defaultConfig: SynthConfig = {
     allowedSources: [],
     // Default OFF: дедуп in-process, поведение single-process не меняется (AD-051/AD-089).
     dedupStore: 'memory',
+    // Неизвестный agentTemplate → drop с аудитом (fail-safe, AD-089).
+    unknownAgentTemplate: 'drop',
   },
   scheduler: {
     enabled: true,

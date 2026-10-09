@@ -15,6 +15,7 @@ import {
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  RouteRuleStore, ProjectRuleProvider,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
@@ -865,6 +866,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // событий — на следующих этапах.
   const eventBindingStore = new EventBindingStore({ dataDir });
   const eventJournal = new EventJournalStore({ dataDir });
+  // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
+  const routeRuleStore = new RouteRuleStore({ dataDir });
   // AD-051/AD-089: источник дедупа — in-process (default) или файловый
   // межпроцессный (config.events.dedupStore === 'file').
   const dedupStore = config.eventsConfig?.dedupStore === 'file'
@@ -877,6 +880,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     dedupStore,
     config: {
       allowedSources: config.eventsConfig?.allowedSources,
+      defaultMode: config.eventsConfig?.defaultMode ?? 'bound',
       defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
     },
   });
@@ -889,11 +893,26 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   eventRouter.registerRuleProvider(
     new SchedulerRuleProvider(scheduleStore, config.eventsConfig?.ephemeralTtl ?? '24h'),
   );
+  // AD-089: правила маршрутизации по матчу события (после scheduler — приоритет
+  // cron-правила при совпадении).
+  eventRouter.registerRuleProvider(
+    new ProjectRuleProvider(routeRuleStore, config.eventsConfig?.ephemeralTtl ?? '24h'),
+  );
+  // AD-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
+  // неизвестный или отключённый агент → `null`.
+  const resolveAgentTemplate = (template: string): string | null => {
+    const agent = agentRegistry.get(template);
+    return agent && agent.enabled ? agent.id : null;
+  };
   const requestSessionService = new RequestSessionService({
     sessionManager,
     eventRouter,
     hooks,
-    config: { defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h' },
+    config: {
+      defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
+      unknownAgentTemplate: config.eventsConfig?.unknownAgentTemplate ?? 'drop',
+    },
+    resolveAgentTemplate,
     // AD-089: UI-событие после материализации внешнего события.
     publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
     deliver: async (sessionId, event, mode) => {
@@ -1135,7 +1154,16 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // определяется — SSE-хаб на `/api/v2/events` регистрируется ниже.
   app.route('/api/v2/events', createEventRoutes(
     auth,
-    { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal },
+    {
+      ingress: eventIngress,
+      bindingStore: eventBindingStore,
+      journal: eventJournal,
+      routeRuleStore,
+    },
+    {
+      resolveAgentTemplate,
+      sessionExists: async (id) => (await sessionManager.getSession(id)) !== null,
+    },
   ));
 
   // AD-051 (срез) / AD-089: CRUD расписаний и принудительный запуск.

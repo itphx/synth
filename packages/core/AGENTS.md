@@ -145,9 +145,14 @@
   session-`EventBus`; эмиты `pre_tool_use`/`post_tool_use`/`plan_approved`/
   `permission_denied`/`agent_spawned|completed|failed`/`session_start|end`.
 - `engine/events/*` — AD-089: `EventRouter` (`allowedSources` → dedup → `EventBinding`
-  → `RouteRuleProvider` → `drop no_route`), `RequestSessionService` (единый funnel:
-  explicit → `direct`, внешние → Router), `EventIngress` (ingest/нормализация),
-  `RouteRuleProvider` (seam), `EventDelivery` (`run`/`defer`), `types`. Хуки не
+  → `RouteRuleProvider` → фоллбек по `defaultMode`: `bound` → `drop no_route`,
+  `ephemeral` → временная сессия), `RequestSessionService` (единый funnel:
+  explicit → `direct`, внешние → Router; резолвинг `agentTemplate` через
+  `AgentRegistry` + политика `unknownAgentTemplate` `drop`/`default-agent`),
+  `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
+  `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
+  `target-decision.ts` (`decisionFromTarget` — единый маппинг цели),
+  `EventDelivery` (`run`/`defer`), `types`. Хуки не
   эмитят — это делает `RequestSessionService`/оркестратор. `dedup-store.ts`
   (AD-051/AD-089): `DedupStore` — `MemoryDedupStore` (in-process `Set`, default) и
   `FileDedupStore` (межпроцессный атомарный claim `{dataDir}/events/dedup/<sha256(key)>`).
@@ -169,7 +174,8 @@
   `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`
-  (`events/bindings.json`), `EventJournalStore` (`events/journal.jsonl`, AD-089)
+  (`events/bindings.json`), `EventJournalStore` (`events/journal.jsonl`, AD-089),
+  `RouteRuleStore` (`events/routes.json`, правила маршрутизации, AD-089)
   и `JobStore` (`scheduler/jobs.jsonl`, Job-история, AD-051);
   `migrations.ts` — идемпотентная разовая миграция снапшотов
   `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).

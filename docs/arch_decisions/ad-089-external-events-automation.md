@@ -185,13 +185,23 @@ type RouteDecision =
 **Реализовано частично — ядро AD-089.**
 
 - **Сущности и Router:** `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest` (shared), `EventRouter`
-  (`engine/events/event-router.ts` — `allowedSources` → dedup → `EventBinding` → `RouteRuleProvider` → `drop no_route`,
+  (`engine/events/event-router.ts` — `allowedSources` → dedup → `EventBinding` → `RouteRuleProvider` →
+  фоллбек по `events.defaultMode` (`bound` → `drop no_route`, `ephemeral` → временная сессия);
   журналирование решений), `RequestSessionService` (единый funnel: explicit → `direct`, внешнее → Router),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider`/`EventDelivery` (seam/доставка).
-- **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`)
-  (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.
-- **API:** `POST /api/v2/events` (ingest), `GET/POST/DELETE /api/v2/events/bindings`, `GET /api/v2/events/journal`;
-  SSE `GET /api/v2/events` сохранён. RBAC: ingest — `requireAuth` + rate limit, мутации биндингов — ADMIN.
+- **Правила маршрутизации:** `EventRouteRule`/`EventRouteMatch`/`EventRouteTarget` (shared, Zod
+  `eventRouteRuleInputSchema`/`eventRouteRuleUpsertSchema`), `RouteRuleStore` (`{dataDir}/events/routes.json`),
+  `ProjectRuleProvider` (`engine/events/project-rule-provider.ts`, `name='project-rules'`) — матч по
+  `source`/`type`/ключам идентичности/`label`/`keywords`, первый по `priority` выигрывает; `decisionFromTarget`
+  (`target-decision.ts`) — единый маппинг цели в решение. Валидация на записи: `bound`/`queue` — сессия
+  существует, `ephemeral` — `agentTemplate` резолвится в enabled-агента.
+- **Резолвинг `agentTemplate`:** `RequestSessionService.resolveAgentTemplate` через `AgentRegistry`
+  (`agent.enabled ? agent.id : null`); неизвестный шаблон — `unknownAgentTemplate` (`drop`/`default-agent`).
+- **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),
+  `RouteRuleStore` (`{dataDir}/events/routes.json`) (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.
+- **API:** `POST /api/v2/events` (ingest), `GET/POST/DELETE /api/v2/events/bindings`, `GET/POST /api/v2/events/routes`,
+  `DELETE /api/v2/events/routes/:id`, `GET /api/v2/events/journal`;
+  SSE `GET /api/v2/events` сохранён. RBAC: ingest — `requireAuth` + rate limit, мутации биндингов/правил — ADMIN.
 - **UI:** админ-раздел «События» (bindings + журнал).
 - **Единый funnel:** создание сессии — только через `RequestSessionService` (инвариант 16);
   `forkSession`/backend `/import`/`remote/transfer.ts`/`chat.ts` — materialization.
@@ -204,9 +214,10 @@ type RouteDecision =
 
 - Источники AD-052 (публичный API/ключи/webhooks) и AD-086 (add-on + Telegram gateway → `message_received`);
 - Plugin SDK и загрузка плагинов ([AD-030](./ad-030-hooks-agent-events.md));
-- развилки v1: `queue` (defer без старта процессора), `agentTemplate` → `settings.agentRole` (резолвинг через AgentRegistry — задел);
-- Job-история/catch-up/пайплайны ([AD-051](./ad-051-scheduler-pipelines.md) → [AD-059](./ad-059-pipeline-automation.md));
-- **мульти-инстанс синхронизация планировщика** (leader election + атомарный dedup-claim) — тех.долг [AD-051](./ad-051-scheduler-pipelines.md#технический-долг-мульти-инстанс-синхронизация-и-идемпотентность).
+- LLM-классификация правил маршрутизации (micro-слой [AD-034](./ad-034-model-routing.md)/[AD-035](./ad-035-micro-model-first.md),
+  тул `classify_conversation`) — сейчас правила только декларативные (`match`);
+- стриминг событий наружу (webhooks, [AD-052](./ad-052-public-api-platform.md));
+- retention журнала событий ([AD-074](./ad-074-soft-delete-retention.md)).
 
 **Переиспользуемые кирпичи:**
 

@@ -6,6 +6,9 @@ import { MemoryDedupStore } from './dedup-store.js';
 import type { DedupStore } from './dedup-store.js';
 import type { EventRouterConfig, RouteRuleInput, RouteRuleProvider } from './types.js';
 
+/** AD-089: фоллбек `defaultMode` по умолчанию — осознанный drop с аудитом. */
+const FALLBACK_DEFAULT_MODE = 'bound' as const;
+
 /** AD-089: параметры `EventRouter`. */
 export interface EventRouterDeps {
   bindingStore: EventBindingStore;
@@ -34,7 +37,7 @@ const FALLBACK_EPHEMERAL_TTL = '24h';
  * 2. `dedup` — атомарный claim `dedupKey` в `DedupStore`; ключ занят → `drop duplicate`.
  * 3. Явный `Binding` по `threadKey` (приоритетнее) / `chatKey` → по `mode`.
  * 4. Rule providers — первый непустой результат.
- * 5. Фоллбек → `drop no_route`.
+ * 5. Фоллбек → по `defaultMode`: `bound` (drop `no_route`) или `ephemeral`.
  *
  * Решение не пишется в журнал: `record` вызывается отдельно (после
  * материализации), поэтому ошибки материализации не теряются. Dedup-кэш
@@ -56,6 +59,7 @@ export class EventRouter {
     this._dedupStore = deps.dedupStore ?? new MemoryDedupStore();
     this._config = {
       allowedSources: deps.config?.allowedSources,
+      defaultMode: deps.config?.defaultMode ?? FALLBACK_DEFAULT_MODE,
       defaultEphemeralTtl: deps.config?.defaultEphemeralTtl ?? FALLBACK_EPHEMERAL_TTL,
     };
     if (deps.ruleProviders) this._ruleProviders.push(...deps.ruleProviders);
@@ -106,7 +110,16 @@ export class EventRouter {
       }
     }
 
-    // 5. Фоллбек — дроп с аудитом (событие не теряется молча).
+    // 5. Фоллбек — политика `defaultMode` (AD-089): `ephemeral` создаёт
+    // временную сессию (агент по умолчанию — резолвинг в `RequestSessionService`);
+    // `bound` — осознанный дроп с аудитом (событие не теряется молча).
+    if (this._config.defaultMode === 'ephemeral') {
+      return {
+        kind: 'ephemeral',
+        agentTemplate: '',
+        ttl: this._config.defaultEphemeralTtl,
+      };
+    }
     return { kind: 'drop', reason: 'no_route', audited: true };
   }
 

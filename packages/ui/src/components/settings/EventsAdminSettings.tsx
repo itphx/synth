@@ -8,6 +8,7 @@ import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { SelectContent, SelectItem } from '../ui/select'
 import { SelectField, SettingsPanel, SettingsSection, TextField } from '../ui/settings'
+import { EventRoutesSection } from './EventRoutesSection'
 
 /** AD-089: режимы доставки биндинга (без `drop` — он осознанный отказ без привязки). */
 const EVENT_MODES: EventDeliveryMode[] = ['bound', 'ephemeral', 'queue']
@@ -392,6 +393,9 @@ export function EventsAdminSettings() {
           </div>
         )}
       </SettingsSection>
+
+      {/* Правила маршрутизации (AD-089 §EventRouteRule) */}
+      <EventRoutesSection />
 
       {/* Журнал обработанных событий (AD-089) */}
       <SettingsSection

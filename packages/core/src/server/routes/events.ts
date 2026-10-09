@@ -1,10 +1,15 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
-import { eventBindingInputSchema, eventIngestSchema } from '@itphx/synth-shared';
+import {
+  eventBindingInputSchema,
+  eventIngestSchema,
+  eventRouteRuleUpsertSchema,
+} from '@itphx/synth-shared';
 import type { EventIngress } from '../../engine/events/ingest.js';
 import type { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { EventJournalStore } from '../../storage/event-journal-store.js';
+import type { RouteRuleStore } from '../../storage/route-rule-store.js';
 
 /**
  * AD-089: маршруты приёма внешних событий и управления биндингами.
@@ -28,27 +33,45 @@ export interface EventRouteMessages {
   invalidEvent: (c: Context) => string;
   invalidBinding: (c: Context) => string;
   bindingNotFound: (c: Context) => string;
+  invalidRule: (c: Context) => string;
+  ruleNotFound: (c: Context) => string;
+  unknownAgent: (c: Context) => string;
 }
 
 export interface EventRoutesDeps {
   ingress: EventIngress;
   bindingStore: EventBindingStore;
   journal: EventJournalStore;
+  /** AD-089: реестр правил маршрутизации (проектные/инстанс-правила). */
+  routeRuleStore: RouteRuleStore;
 }
 
 export interface EventRoutesOptions {
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<EventRouteMessages>;
-  /** Guard на мутации биндингов; по умолчанию — `requireAuth` (backend: requireAdmin). */
+  /** Guard на мутации биндингов/правил; по умолчанию — `requireAuth` (backend: requireAdmin). */
   writeGuard?: Middleware;
   /** Guard на приём события; по умолчанию — `requireAuth` (backend: auth + rate limit). */
   ingestGuard?: Middleware;
+  /**
+   * AD-089: проверка существования сессии при валидации цели правила
+   * (`bound`/`queue`). Не передан — проверка пропускается (core без проверки).
+   */
+  sessionExists?: (id: string) => Promise<boolean>;
+  /**
+   * AD-089: резолвер `agentTemplate` → id существующего enabled-агента.
+   * Не передан — шаблон принимается как есть (проверка пропускается).
+   */
+  resolveAgentTemplate?: (template: string) => string | null;
 }
 
 const DEFAULT_MESSAGES: EventRouteMessages = {
   invalidEvent: () => 'Некорректное тело события',
   invalidBinding: () => 'Некорректное тело биндинга',
   bindingNotFound: () => 'Биндинг не найден',
+  invalidRule: () => 'Некорректное тело правила маршрутизации',
+  ruleNotFound: () => 'Правило маршрутизации не найдено',
+  unknownAgent: () => 'Неизвестный агент в правиле маршрутизации',
 };
 
 const JOURNAL_LIMIT_DEFAULT = 50;
@@ -129,6 +152,60 @@ export function createEventRoutes(
     const removed = await deps.bindingStore.remove(c.req.param('id'));
     if (!removed) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.bindingNotFound(c) } }, 404);
+    }
+    return c.body(null, 204);
+  });
+
+  // GET /api/v2/events/routes — список правил маршрутизации.
+  app.get('/routes', auth.requireAuth, async (c) => {
+    const rules = await deps.routeRuleStore.list();
+    return c.json({ rules });
+  });
+
+  // POST /api/v2/events/routes — upsert правила (по `id` — обновление, иначе создание).
+  app.post('/routes', writeGuard, async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidRule(c) } }, 400);
+    }
+
+    const parsed = eventRouteRuleUpsertSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidRule(c) } }, 400);
+    }
+
+    const input = parsed.data;
+
+    // Цель `bound`/`queue` ссылается на сессию — при наличии проверки она должна существовать.
+    if (opts.sessionExists && (input.target.mode === 'bound' || input.target.mode === 'queue')) {
+      if (!(await opts.sessionExists(input.target.sessionId))) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidRule(c) } }, 400);
+      }
+    }
+
+    // Непустой `agentTemplate` ephemeral-цели должен резолвиться в enabled-агента.
+    if (
+      input.target.mode === 'ephemeral' &&
+      opts.resolveAgentTemplate &&
+      typeof input.target.agentTemplate === 'string' &&
+      input.target.agentTemplate.trim().length > 0 &&
+      opts.resolveAgentTemplate(input.target.agentTemplate.trim()) === null
+    ) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.unknownAgent(c) } }, 400);
+    }
+
+    const existing = input.id ? await deps.routeRuleStore.get(input.id) : null;
+    const rule = await deps.routeRuleStore.upsert(input);
+    return c.json(rule, existing ? 200 : 201);
+  });
+
+  // DELETE /api/v2/events/routes/:id — удаление правила.
+  app.delete('/routes/:id', writeGuard, async (c) => {
+    const removed = await deps.routeRuleStore.remove(c.req.param('id'));
+    if (!removed) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.ruleNotFound(c) } }, 404);
     }
     return c.body(null, 204);
   });

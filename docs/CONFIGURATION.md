@@ -343,11 +343,15 @@ skills:
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
 | `events.enabled` | Мастер-выключатель приёма внешних событий | `true` |
-| `events.defaultMode` | Режим по умолчанию, если Router не выбрал иной: `bound` \| `ephemeral` | `bound` |
+| `events.defaultMode` | Фоллбек Router, если ни `EventBinding`, ни правило не выбрали маршрут: `bound` — осознанный `drop no_route` с аудитом; `ephemeral` — создать временную сессию (агент по умолчанию) с TTL `events.ephemeralTtl` | `bound` |
 | `events.ephemeralTtl` | TTL ephemeral-сессий (формат `24h`, `30m`, …) | `'24h'` |
 | `events.journalRetentionDays` | Срок хранения журнала событий (0 — без ограничения) | `30` |
 | `events.allowedSources` | Белый список источников (пусто — разрешены все) | `[]` |
 | `events.dedupStore` | Источник дедупа событий: `memory` — in-process `Set` (single-process), `file` — межпроцессный атомарный claim на общем `dataDir` (`{dataDir}/events/dedup/<sha256(key)>`) | `memory` |
+| `events.unknownAgentTemplate` | Поведение, если `agentTemplate` события/правила не резолвится в enabled-агента: `drop` — не создавать сессию, зафиксировать `agent_not_found` в журнале (fail-safe); `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию) | `drop` |
+
+Правила маршрутизации `source/type/…` → сессия задаются через API (`/api/v2/events/routes`, §5.26)
+и хранятся в `{dataDir}/events/routes.json` (`RouteRuleStore`, `ProjectRuleProvider`).
 
 Пример:
 
@@ -359,6 +363,7 @@ events:
   journalRetentionDays: 30
   allowedSources: []
   dedupStore: memory
+  unknownAgentTemplate: drop
 ```
 
 API (`POST /api/v2/events`, bindings, journal) — `docs/API_V2.md` §5.26; устройство

@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
   upsertEventBinding: vi.fn(),
   deleteEventBinding: vi.fn(),
   getEventJournal: vi.fn(),
+  getEventRoutes: vi.fn(),
+  createEventRoute: vi.fn(),
+  deleteEventRoute: vi.fn(),
   notify: vi.fn(),
   confirm: vi.fn(),
 }))
@@ -21,7 +24,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: mocks.confirm }))
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { EventsAdminSettings } from './EventsAdminSettings'
-import type { EventBinding } from '@itphx/synth-shared'
+import type { EventBinding, EventRouteRule } from '@itphx/synth-shared'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -32,6 +35,17 @@ function binding(id: string, overrides: Partial<EventBinding> = {}): EventBindin
     id,
     source: 'telegram',
     mode: 'bound',
+    ...overrides,
+  }
+}
+
+function rule(id: string, overrides: Partial<EventRouteRule> = {}): EventRouteRule {
+  return {
+    id,
+    priority: 0,
+    enabled: true,
+    match: {},
+    target: { mode: 'bound', sessionId: 'sess-1' },
     ...overrides,
   }
 }
@@ -69,6 +83,16 @@ beforeEach(() => {
   }))
   mocks.deleteEventBinding.mockResolvedValue(undefined)
   mocks.getEventJournal.mockResolvedValue({ entries: [] })
+  mocks.getEventRoutes.mockResolvedValue({ rules: [] })
+  mocks.createEventRoute.mockImplementation(async (input: unknown) => ({
+    id: 'new',
+    priority: 0,
+    enabled: true,
+    match: {},
+    target: { mode: 'bound', sessionId: '' },
+    ...(input as object),
+  }))
+  mocks.deleteEventRoute.mockResolvedValue(undefined)
   mocks.confirm.mockResolvedValue(true)
 })
 
@@ -222,5 +246,221 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
   it('пустое состояние журнала', async () => {
     const container = await renderSettings()
     expect(container.textContent).toContain('The event journal is empty')
+  })
+
+  it('рендерит список правил маршрутизации из API', async () => {
+    mocks.getEventRoutes.mockResolvedValue({
+      rules: [
+        rule('r1', {
+          name: 'urgent telegram',
+          priority: 10,
+          match: { source: 'telegram', keywords: ['urgent', 'asap'] },
+          target: { mode: 'bound', sessionId: 'sess-42' },
+        }),
+      ],
+    })
+    const container = await renderSettings()
+
+    expect(container.querySelector('[data-testid="events-routes-list"]')).not.toBeNull()
+    const row = container.querySelector('[data-testid="events-route-r1"]')!
+    expect(row.textContent).toContain('urgent telegram')
+    expect(row.textContent).toContain('10')
+    expect(row.textContent).toContain('Source: telegram')
+    expect(row.textContent).toContain('urgent, asap')
+    expect(row.textContent).toContain('bound: sess-42')
+  })
+
+  it('пустое состояние, когда правил нет', async () => {
+    const container = await renderSettings()
+    expect(container.textContent).toContain('No routing rules configured')
+  })
+
+  it('создание правила шлёт match/target и опускает пустые поля', async () => {
+    const container = await renderSettings()
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-add"]') as HTMLButtonElement).click()
+    })
+
+    const name = container.querySelector('[data-testid="events-route-name"]') as HTMLInputElement
+    const priority = container.querySelector(
+      '[data-testid="events-route-priority"]',
+    ) as HTMLInputElement
+    const source = container.querySelector('[data-testid="events-route-source"]') as HTMLInputElement
+    const chatKey = container.querySelector(
+      '[data-testid="events-route-chat-key"]',
+    ) as HTMLInputElement
+    const keywords = container.querySelector(
+      '[data-testid="events-route-keywords"]',
+    ) as HTMLTextAreaElement
+    const session = container.querySelector(
+      '[data-testid="events-route-session"]',
+    ) as HTMLInputElement
+    await act(async () => {
+      setInputValue(name, '  urgent  ')
+      setInputValue(priority, '5')
+      setInputValue(source, ' webhook ')
+      setInputValue(chatKey, 'chat:webhook:1')
+      setInputValue(keywords, 'urgent,\nasap\n')
+      setInputValue(session, ' sess-9 ')
+    })
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-save"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(mocks.createEventRoute).toHaveBeenCalledTimes(1)
+    expect(mocks.createEventRoute).toHaveBeenCalledWith({
+      name: 'urgent',
+      priority: 5,
+      enabled: true,
+      match: { source: 'webhook', chatKey: 'chat:webhook:1', keywords: ['urgent', 'asap'] },
+      target: { mode: 'bound', sessionId: 'sess-9' },
+    })
+  })
+
+  it('создание без sessionId для bound не вызывает API и показывает ошибку', async () => {
+    const container = await renderSettings()
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-add"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-save"]') as HTMLButtonElement).click()
+    })
+
+    expect(mocks.createEventRoute).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('Session ID is required for bound/queue mode')
+  })
+
+  it('редактирование правила показывает текущие значения (ephemeral)', async () => {
+    mocks.getEventRoutes.mockResolvedValue({
+      rules: [
+        rule('r1', {
+          name: 'ephemeral rule',
+          match: { source: 'telegram' },
+          target: { mode: 'ephemeral', agentTemplate: 'assistant', project: 'proj-1', ttl: '24h' },
+        }),
+      ],
+    })
+    const container = await renderSettings()
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-edit-r1"]') as HTMLButtonElement).click()
+    })
+
+    expect(container.querySelector('[data-testid="events-route-editor"]')).not.toBeNull()
+    expect((container.querySelector('[data-testid="events-route-agent"]') as HTMLInputElement).value).toBe(
+      'assistant',
+    )
+    expect((container.querySelector('[data-testid="events-route-project"]') as HTMLInputElement).value).toBe(
+      'proj-1',
+    )
+    expect((container.querySelector('[data-testid="events-route-ttl"]') as HTMLInputElement).value).toBe(
+      '24h',
+    )
+    expect(container.querySelector('[data-testid="events-route-session"]')).toBeNull()
+  })
+
+  it('обновление правила передаёт id', async () => {
+    mocks.getEventRoutes.mockResolvedValue({
+      rules: [rule('r1', { name: 'old', target: { mode: 'bound', sessionId: 'sess-1' } })],
+    })
+    const container = await renderSettings()
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-edit-r1"]') as HTMLButtonElement).click()
+    })
+    const name = container.querySelector('[data-testid="events-route-name"]') as HTMLInputElement
+    await act(async () => {
+      setInputValue(name, 'renamed')
+    })
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-save"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(mocks.createEventRoute).toHaveBeenCalledWith({
+      id: 'r1',
+      name: 'renamed',
+      priority: 0,
+      enabled: true,
+      match: {},
+      target: { mode: 'bound', sessionId: 'sess-1' },
+    })
+  })
+
+  it('удаление правила подтверждается через confirm и вызывает deleteEventRoute', async () => {
+    mocks.getEventRoutes.mockResolvedValue({ rules: [rule('r1', { name: 'dupe' })] })
+    const container = await renderSettings()
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-delete-r1"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.deleteEventRoute).toHaveBeenCalledWith('r1')
+  })
+
+  it('отмена подтверждения не удаляет правило', async () => {
+    mocks.getEventRoutes.mockResolvedValue({ rules: [rule('r1')] })
+    mocks.confirm.mockResolvedValue(false)
+    const container = await renderSettings()
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid="events-route-delete-r1"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(mocks.deleteEventRoute).not.toHaveBeenCalled()
+  })
+
+  it('инлайн-тумблер шлёт upsert с id и инвертированным enabled', async () => {
+    mocks.getEventRoutes.mockResolvedValue({ rules: [rule('r1', { enabled: true })] })
+    const container = await renderSettings()
+
+    const toggle = container.querySelector('[data-testid="events-route-toggle-r1"] button')!
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => {
+      ;(toggle as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(mocks.createEventRoute).toHaveBeenCalledTimes(1)
+    expect(mocks.createEventRoute).toHaveBeenCalledWith({
+      id: 'r1',
+      priority: 0,
+      enabled: false,
+      match: {},
+      target: { mode: 'bound', sessionId: 'sess-1' },
+    })
+    // После успеха список перечитывается.
+    expect(mocks.getEventRoutes).toHaveBeenCalledTimes(2)
+  })
+
+  it('при ошибке переключения показывает тост и не меняет состояние правила', async () => {
+    mocks.getEventRoutes.mockResolvedValue({ rules: [rule('r1', { enabled: true })] })
+    mocks.createEventRoute.mockRejectedValueOnce(new Error('boom'))
+    const container = await renderSettings()
+
+    const toggle = container.querySelector('[data-testid="events-route-toggle-r1"] button')!
+    await act(async () => {
+      ;(toggle as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(mocks.createEventRoute).toHaveBeenCalledTimes(1)
+    // Список не перечитывался — состояние осталось прежним (enabled=true).
+    expect(mocks.getEventRoutes).toHaveBeenCalledTimes(1)
+    const toggleAfter = container.querySelector('[data-testid="events-route-toggle-r1"] button')!
+    expect(toggleAfter.getAttribute('aria-checked')).toBe('true')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'error',
+        text: expect.stringContaining('boom'),
+      }),
+    )
   })
 })

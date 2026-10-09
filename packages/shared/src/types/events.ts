@@ -62,10 +62,44 @@ export interface EventBinding {
   project?: string;
 }
 
+/**
+ * AD-089: цель правила маршрутизации (та же семантика, что у
+ * `EventBinding`/`ScheduleTarget`).
+ */
+export type EventRouteTarget =
+  | { mode: 'bound'; sessionId: string }
+  | { mode: 'ephemeral'; agentTemplate?: string; project?: string; ttl?: string }
+  | { mode: 'queue'; sessionId: string };
+
+/** AD-089: условие срабатывания правила (AND по заполненным полям). */
+export interface EventRouteMatch {
+  source?: string;
+  type?: string;
+  chatKey?: string;
+  threadKey?: string;
+  principalId?: string;
+  /** Метка в `payload.label`. */
+  label?: string;
+  /** Подстроки в тексте события (регистронезависимо; достаточно одного). */
+  keywords?: string[];
+}
+
+/** AD-089: правило маршрутизации событий «событие → сессия» (проектные/инстанс-правила). */
+export interface EventRouteRule {
+  /** `rule_<uuid>`, уникален в пределах инстанса. */
+  id: string;
+  name?: string;
+  /** Больше = раньше; при равенстве — порядок в файле. */
+  priority: number;
+  enabled: boolean;
+  match: EventRouteMatch;
+  target: EventRouteTarget;
+}
+
 /** AD-089: решение Router — куда направить событие (или отложить/отбросить). */
 export type RouteDecision =
   | { kind: 'bound'; sessionId: string }
-  | { kind: 'ephemeral'; agentTemplate: string; ttl: string }
+  | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string }
   | { kind: 'queue'; owner: string; reason: string }
   | { kind: 'drop'; reason: string; audited: true };
 

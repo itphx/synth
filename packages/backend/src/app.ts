@@ -45,6 +45,7 @@ import {
   HookBus,
   startEphemeralSweeper,
   EventBindingStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  RouteRuleStore, ProjectRuleProvider,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
@@ -533,6 +534,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // событий — на следующих этапах.
     const eventBindingStore = new EventBindingStore({ dataDir });
     const eventJournal = new EventJournalStore({ dataDir });
+    // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
+    const routeRuleStore = new RouteRuleStore({ dataDir });
     // AD-051/AD-089: источник дедупа — in-process (default) или файловый
     // межпроцессный (`events.dedupStore: file`).
     const dedupStore = backendConfig.synth.events.dedupStore === 'file'
@@ -545,6 +548,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       dedupStore,
       config: {
         allowedSources: backendConfig.synth.events.allowedSources,
+        defaultMode: backendConfig.synth.events.defaultMode,
         defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
       },
     });
@@ -558,11 +562,25 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     eventRouter.registerRuleProvider(
       new SchedulerRuleProvider(scheduleStore, backendConfig.synth.events.ephemeralTtl),
     );
+    // AD-089: правила маршрутизации по матчу события (после scheduler).
+    eventRouter.registerRuleProvider(
+      new ProjectRuleProvider(routeRuleStore, backendConfig.synth.events.ephemeralTtl),
+    );
+    // AD-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
+    // неизвестный или отключённый агент → `null`.
+    const resolveAgentTemplate = (template: string): string | null => {
+      const agent = agentRegistry.get(template);
+      return agent && agent.enabled ? agent.id : null;
+    };
     const requestSessionService = new RequestSessionService({
       sessionManager,
       eventRouter,
       hooks,
-      config: { defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl },
+      config: {
+        defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
+        unknownAgentTemplate: backendConfig.synth.events.unknownAgentTemplate,
+      },
+      resolveAgentTemplate,
       // AD-089: UI-событие после материализации внешнего события.
       publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
       deliver: async (sessionId, event, mode) => {
@@ -710,14 +728,19 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // `GET /` не переопределяем — на этом пути SSE-хаб ниже.
     app.route('/api/v2/events', createEventRoutes(
       { requireAuth: auth.requireAuth },
-      { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal },
+      { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal, routeRuleStore },
       {
         ingestGuard: every(auth.requireAuth, createRateLimiter(120, 60_000)),
         writeGuard: auth.requireAdmin,
+        resolveAgentTemplate,
+        sessionExists: async (id) => (await sessionManager.getSession(id)) !== null,
         messages: {
           invalidEvent: (c) => t('errors.validation.invalidEvent', undefined, c),
           invalidBinding: (c) => t('errors.validation.invalidBinding', undefined, c),
           bindingNotFound: (c) => t('errors.notFound.binding', undefined, c),
+          invalidRule: (c) => t('errors.validation.invalidRule', undefined, c),
+          ruleNotFound: (c) => t('errors.notFound.rule', undefined, c),
+          unknownAgent: (c) => t('errors.validation.unknownAgent', undefined, c),
         },
       },
     ));

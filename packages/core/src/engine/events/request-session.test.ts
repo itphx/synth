@@ -46,12 +46,22 @@ describe('RequestSessionService (AD-089)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  const service = (router?: EventRouter) => new RequestSessionService({
+  const service = (
+    router?: EventRouter,
+    overrides?: {
+      resolveAgentTemplate?: (template: string) => string | null;
+      unknownAgentTemplate?: 'drop' | 'default-agent';
+    },
+  ) => new RequestSessionService({
     sessionManager,
     eventRouter: router ?? new EventRouter({ bindingStore, journal, hooks, config: { defaultEphemeralTtl: '24h' } }),
     hooks,
-    config: { defaultEphemeralTtl: '24h' },
+    config: {
+      defaultEphemeralTtl: '24h',
+      ...(overrides?.unknownAgentTemplate ? { unknownAgentTemplate: overrides.unknownAgentTemplate } : {}),
+    },
     deliver,
+    ...(overrides?.resolveAgentTemplate ? { resolveAgentTemplate: overrides.resolveAgentTemplate } : {}),
   });
 
   it('request explicit создаёт сессию без expiresAt и доставки', async () => {
@@ -122,6 +132,79 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.expiresAt).toBeDefined();
     expect(session?.settings.agentRole).toBe('agent-x');
     expect(deliver).toHaveBeenCalledWith(session!.id, e, 'run');
+  });
+
+  it('handleEvent ephemeral с резолвером: валидный шаблон → settings.agentRole', async () => {
+    const badRouter = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
+    badRouter.registerRuleProvider({
+      name: 'ephemeral-valid',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: 'agent-x', ttl: '1h' }),
+    });
+
+    const e = event({ dedupKey: 'k-valid' });
+    const { session } = await service(badRouter, {
+      resolveAgentTemplate: (t) => (t === 'agent-x' ? 'agent-x' : null),
+    }).handleEvent(e);
+
+    expect(session).not.toBeNull();
+    expect(session?.settings.agentRole).toBe('agent-x');
+  });
+
+  it('handleEvent ephemeral: неизвестный шаблон при drop → нет сессии, error agent_not_found', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const badRouter = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
+    badRouter.registerRuleProvider({
+      name: 'ephemeral-ghost',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: 'ghost', ttl: '1h' }),
+    });
+
+    const e = event({ dedupKey: 'k-ghost' });
+    const { decision, session } = await service(badRouter, {
+      resolveAgentTemplate: () => null,
+      unknownAgentTemplate: 'drop',
+    }).handleEvent(e);
+
+    expect(decision.kind).toBe('ephemeral');
+    expect(session).toBeNull();
+    const entries = await journal.list();
+    expect(entries[0]?.error).toContain('agent_not_found');
+  });
+
+  it('handleEvent ephemeral: неизвестный шаблон при default-agent → сессия без agentRole', async () => {
+    const router = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
+    router.registerRuleProvider({
+      name: 'ephemeral-default',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: 'ghost', ttl: '1h' }),
+    });
+
+    const e = event({ dedupKey: 'k-default' });
+    const { session } = await service(router, {
+      resolveAgentTemplate: () => null,
+      unknownAgentTemplate: 'default-agent',
+    }).handleEvent(e);
+
+    expect(session).not.toBeNull();
+    expect(session?.settings.agentRole).toBeUndefined();
+  });
+
+  it('handleEvent ephemeral: project из RouteDecision доезжает до сессии', async () => {
+    const router = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
+    router.registerRuleProvider({
+      name: 'ephemeral-project',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: '', ttl: '1h', project: 'proj-42' }),
+    });
+
+    const { session } = await service(router).handleEvent(event({ dedupKey: 'k-project' }));
+    expect(session?.projectId).toBe('proj-42');
+  });
+
+  it('request explicit: неизвестный шаблон при drop → ошибка agent_not_found', async () => {
+    await expect(
+      service(undefined, {
+        resolveAgentTemplate: () => null,
+        unknownAgentTemplate: 'drop',
+      }).request({ initiator: 'user', intent: 'explicit', agentTemplate: 'ghost' }),
+    ).rejects.toThrow('agent_not_found');
   });
 
   it('handleEvent queue → deliver(defer) владельцу, процессор не стартует', async () => {

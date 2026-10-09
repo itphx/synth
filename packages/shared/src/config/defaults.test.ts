@@ -126,6 +126,7 @@ describe('defaultConfig', () => {
       journalRetentionDays: 30,
       allowedSources: [],
       dedupStore: 'memory',
+      unknownAgentTemplate: 'drop',
     });
   });
 

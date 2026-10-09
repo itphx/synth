@@ -4,6 +4,8 @@ export { EventIngress } from './ingest.js';
 export type { EventIngestInput, EventIngressDeps } from './ingest.js';
 export { RequestSessionService, eventToMessage, eventToMessageText } from './request-session.js';
 export type { RequestSessionOptions, RequestSessionServiceDeps } from './request-session.js';
+export { ProjectRuleProvider } from './project-rule-provider.js';
+export { decisionFromTarget } from './target-decision.js';
 export type {
   EventDelivery,
   EventRouterConfig,

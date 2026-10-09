@@ -44,12 +44,16 @@ describe('EventRouter (AD-089)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  const router = (config: { allowedSources?: string[]; defaultEphemeralTtl?: string; ruleProviders?: RouteRuleProvider[]; dedupStore?: DedupStore } = {}) =>
+  const router = (config: { allowedSources?: string[]; defaultMode?: 'bound' | 'ephemeral'; defaultEphemeralTtl?: string; ruleProviders?: RouteRuleProvider[]; dedupStore?: DedupStore } = {}) =>
     new EventRouter({
       bindingStore,
       journal,
       dedupStore: config.dedupStore,
-      config: { defaultEphemeralTtl: config.defaultEphemeralTtl ?? '24h', allowedSources: config.allowedSources },
+      config: {
+        defaultEphemeralTtl: config.defaultEphemeralTtl ?? '24h',
+        defaultMode: config.defaultMode,
+        allowedSources: config.allowedSources,
+      },
       ruleProviders: config.ruleProviders,
     });
 
@@ -134,6 +138,30 @@ describe('EventRouter (AD-089)', () => {
       event({ identity: { chatKey: 'chat:telegram:1', threadKey: 'thread:telegram:1:7' } }),
     );
     expect(decision).toEqual({ kind: 'bound', sessionId: 's-thread' });
+  });
+
+  it('defaultMode=bound (по умолчанию): нет маршрута → drop no_route', async () => {
+    expect(await router().decide(event())).toEqual({ kind: 'drop', reason: 'no_route', audited: true });
+    expect(await router({ defaultMode: 'bound' }).decide(event())).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
+    });
+  });
+
+  it('defaultMode=ephemeral: нет маршрута → ephemeral с TTL конфига и пустым agentTemplate', async () => {
+    expect(await router({ defaultMode: 'ephemeral', defaultEphemeralTtl: '6h' }).decide(event())).toEqual({
+      kind: 'ephemeral',
+      agentTemplate: '',
+      ttl: '6h',
+    });
+  });
+
+  it('defaultMode=ephemeral не перебивает явный binding (решение приоритетнее фоллбека)', async () => {
+    await bindingStore.upsert(binding({ chatKey: 'chat:telegram:1', sessionId: 's-bound' }));
+    expect(
+      await router({ defaultMode: 'ephemeral' }).decide(event({ identity: { chatKey: 'chat:telegram:1' } })),
+    ).toEqual({ kind: 'bound', sessionId: 's-bound' });
   });
 
   it('rule providers: порядок регистрации, первый непустой выигрывает', async () => {

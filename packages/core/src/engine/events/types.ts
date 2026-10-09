@@ -27,6 +27,13 @@ export interface RouteRuleProvider {
 export interface EventRouterConfig {
   /** Белый список источников; пусто или не задано — разрешены все. */
   allowedSources?: string[];
+  /**
+   * Политика фоллбека (`decide`, шаг 5), если ни `EventBinding`, ни правила не
+   * выбрали маршрут: `bound` — осознанный `drop no_route` с аудитом (default);
+   * `ephemeral` — создать временную сессию (`agentTemplate: ''`, TTL
+   * `defaultEphemeralTtl`) — агент по умолчанию решает `RequestSessionService`.
+   */
+  defaultMode?: 'bound' | 'ephemeral';
   /** TTL ephemeral-сессий по умолчанию (напр. `'24h'`). */
   defaultEphemeralTtl: string;
 }

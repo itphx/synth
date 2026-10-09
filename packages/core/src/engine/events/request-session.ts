@@ -24,8 +24,14 @@ export interface RequestSessionServiceDeps {
   sessionManager: SessionManager;
   eventRouter: EventRouter;
   hooks?: HookBus;
-  config: { defaultEphemeralTtl: string };
+  config: { defaultEphemeralTtl: string; unknownAgentTemplate?: 'drop' | 'default-agent' };
   deliver: EventDelivery;
+  /**
+   * AD-089: резолвер `agentTemplate` → id существующего enabled-агента
+   * (`AgentRegistry`). Возвращает `null`, если шаблон неизвестен. Отсутствие
+   * резолвера — шаблон принимается как есть (прежнее поведение).
+   */
+  resolveAgentTemplate?: (template: string) => string | null;
   /**
    * AD-089: публикация UI-события после успешной материализации внешнего
    * события. Вызывается только при наличии сессии; `app.ts` прокидывает
@@ -123,16 +129,21 @@ export class RequestSessionService {
   private _sessionManager: SessionManager;
   private _eventRouter: EventRouter;
   private _hooks?: HookBus;
-  private _config: { defaultEphemeralTtl: string };
+  private _config: { defaultEphemeralTtl: string; unknownAgentTemplate: 'drop' | 'default-agent' };
   private _deliver: EventDelivery;
+  private _resolveAgentTemplate?: (template: string) => string | null;
   private _publish?: (type: EventType, sessionId: string, data: Record<string, unknown>) => void;
 
   constructor(deps: RequestSessionServiceDeps) {
     this._sessionManager = deps.sessionManager;
     this._eventRouter = deps.eventRouter;
     this._hooks = deps.hooks;
-    this._config = deps.config;
+    this._config = {
+      defaultEphemeralTtl: deps.config.defaultEphemeralTtl,
+      unknownAgentTemplate: deps.config.unknownAgentTemplate ?? 'drop',
+    };
     this._deliver = deps.deliver;
+    this._resolveAgentTemplate = deps.resolveAgentTemplate;
     this._publish = deps.publish;
   }
 
@@ -141,9 +152,13 @@ export class RequestSessionService {
    * `userId`/`ownerId` приходят через `opts` (runtime-контекст, не часть события).
    */
   async request(req: SessionRequest, opts?: RequestSessionOptions): Promise<Session | null> {
+    // AD-089: резолвинг шаблона ДО хука/создания — неизвестный шаблон при `drop`
+    // не создаёт сессию и не эмитит `session_requested`.
+    const agentRole = this._resolveAgent(req.agentTemplate);
+
     this._hooks?.emitAsync('session_requested', {
       reason: 'explicit',
-      agentTemplate: req.agentTemplate,
+      agentTemplate: agentRole,
       project: req.projectId,
       initiator: req.initiator,
     });
@@ -161,7 +176,7 @@ export class RequestSessionService {
       engine: req.engine,
       parentId: req.parentId,
       sessionOrigin: req.sessionOrigin,
-      settings: this._agentSettings(req.agentTemplate, req.settings),
+      settings: this._agentSettings(agentRole, req.settings),
       userId: opts?.userId,
       ownerId: opts?.ownerId,
       expiresAt,
@@ -220,9 +235,11 @@ export class RequestSessionService {
     }
 
     if (decision.kind === 'ephemeral') {
+      const agentRole = this._resolveAgent(decision.agentTemplate);
       const session = await this._sessionManager.createSession({
         title: eventTitle(event),
-        settings: this._agentSettings(decision.agentTemplate, undefined),
+        projectId: decision.project,
+        settings: this._agentSettings(agentRole, undefined),
         expiresAt: parseTtl(decision.ttl),
       });
       await this._deliver(session.id, event, 'run');
@@ -241,18 +258,40 @@ export class RequestSessionService {
   }
 
   /**
+   * AD-089: резолвинг `agentTemplate` через `AgentRegistry` (резолвер deps).
+   *
+   * - шаблон пуст/`undefined` → `undefined`;
+   * - резолвер не сконфигурирован → шаблон как есть (прежнее поведение);
+   * - резолвер вернул id → id;
+   * - резолвер вернул `null`: `default-agent` → `undefined` (сессия возьмёт
+   *   агента по умолчанию); `drop` (default, fail-safe) → исключение
+   *   `agent_not_found`, материализация не создаёт сессию.
+   */
+  private _resolveAgent(agentTemplate: string | undefined): string | undefined {
+    const normalized = agentTemplate?.trim();
+    if (!normalized) return undefined;
+
+    if (!this._resolveAgentTemplate) return normalized;
+
+    const resolved = this._resolveAgentTemplate(normalized);
+    if (resolved) return resolved;
+    if (this._config.unknownAgentTemplate === 'default-agent') return undefined;
+    throw new Error(`agent_not_found: ${normalized}`);
+  }
+
+  /**
    * Минимальное разрешение `agentTemplate` в сессию: шаблон проставляется в
    * per-session `settings.agentRole` (задел — семантика шаблона агента/скилла
    * AD-046 будет уточнена на следующих этапах).
    */
   private _agentSettings(
-    agentTemplate: string | undefined,
+    agentRole: string | undefined,
     settings: Partial<SessionSettings> | undefined,
   ): Partial<SessionSettings> | undefined {
-    if (!agentTemplate && !settings) return settings;
+    if (!agentRole && !settings) return settings;
     return {
       ...settings,
-      ...(agentTemplate ? { agentRole: agentTemplate } : {}),
+      ...(agentRole ? { agentRole } : {}),
     };
   }
 }

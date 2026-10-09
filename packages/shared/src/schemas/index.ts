@@ -637,6 +637,63 @@ export const scheduleTargetSchema = z.discriminatedUnion('mode', [
 ]);
 
 /**
+ * AD-089: цель правила маршрутизации — дискриминированный союз по `mode`
+ * (семантика та же, что у `scheduleTargetSchema`).
+ */
+export const eventRouteTargetSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('bound'), sessionId: z.string().min(1) }),
+  z.object({
+    mode: z.literal('ephemeral'),
+    agentTemplate: z.string().optional(),
+    project: z.string().optional(),
+    ttl: z.string().optional(),
+  }),
+  z.object({ mode: z.literal('queue'), sessionId: z.string().min(1) }),
+]);
+
+/** AD-089: условие срабатывания правила (AND по заполненным полям). */
+export const eventRouteMatchSchema = z.object({
+  source: z.string().optional(),
+  type: z.string().optional(),
+  chatKey: z.string().optional(),
+  threadKey: z.string().optional(),
+  principalId: z.string().optional(),
+  label: z.string().optional(),
+  keywords: z.array(z.string()).optional(),
+});
+
+/** AD-089: полная сущность правила маршрутизации событий (ответы API). */
+export const eventRouteRuleSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().optional(),
+  priority: z.number().int().default(0),
+  enabled: z.boolean().default(true),
+  match: eventRouteMatchSchema,
+  target: eventRouteTargetSchema,
+});
+
+/** AD-089: вход создания/обновления правила (`upsert`) — без `id`. */
+export const eventRouteRuleInputSchema = z.object({
+  name: z.string().optional(),
+  priority: z.number().int().default(0),
+  enabled: z.boolean().default(true),
+  match: eventRouteMatchSchema,
+  target: eventRouteTargetSchema,
+});
+
+/**
+ * AD-089: тело upsert-запроса правила — вход + необязательный `id` (обновление
+ * существующего правила; отсутствие — создание нового `rule_<uuid>`).
+ */
+export const eventRouteRuleUpsertSchema = eventRouteRuleInputSchema.extend({
+  id: z.string().optional(),
+});
+
+export type EventRouteTargetRequest = z.infer<typeof eventRouteTargetSchema>;
+export type EventRouteRuleInputRequest = z.infer<typeof eventRouteRuleInputSchema>;
+export type EventRouteRuleUpsertRequest = z.infer<typeof eventRouteRuleUpsertSchema>;
+
+/**
  * AD-051/AD-089: ровно одно из `cron` / `every` задано. Пустые строки
  * трактуются как отсутствие поля.
  */

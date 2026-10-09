@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, SynthEvent, RouteDecision } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, EventRouteRule, EventRouteRuleInputRequest, SynthEvent, RouteDecision } from '@itphx/synth-shared'
 import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry, Schedule, ScheduleInput, ScheduleJob } from '@itphx/synth-shared/types'
 
 // Реэкспорт общих контрактов (AD-071): без локальных дублей.
@@ -1821,6 +1821,28 @@ export const synthApi = {
   async getEventJournal(limit?: number): Promise<{ entries: EventJournalEntry[] }> {
     const qs = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : ''
     return fetchJSON<{ entries: EventJournalEntry[] }>(`${BASE_URL}/events/journal${qs}`)
+  },
+
+  // --- Внешние события (AD-089): правила маршрутизации ---
+  /** GET /events/routes — список правил маршрутизации событий (ADMIN). */
+  async getEventRoutes(): Promise<{ rules: EventRouteRule[] }> {
+    return fetchJSON<{ rules: EventRouteRule[] }>(`${BASE_URL}/events/routes`)
+  },
+
+  /** POST /events/routes — upsert правила; `id` передаётся при обновлении. */
+  async createEventRoute(
+    input: EventRouteRuleInputRequest & { id?: string },
+  ): Promise<EventRouteRule> {
+    return fetchJSON<EventRouteRule>(`${BASE_URL}/events/routes`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  async deleteEventRoute(id: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/events/routes/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
   },
 
   // --- Шедулер расписаний (AD-051 / AD-089) ---

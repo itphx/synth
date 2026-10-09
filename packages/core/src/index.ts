@@ -175,6 +175,9 @@ export { EventBindingStore, EVENT_BINDINGS_SCHEMA_VERSION } from './storage/even
 export type { EventBindingStoreConfig, UpsertEventBindingInput } from './storage/event-binding-store.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
+// AD-089: реестр правил маршрутизации внешних событий.
+export { RouteRuleStore, ROUTE_RULES_SCHEMA_VERSION } from './storage/route-rule-store.js';
+export type { RouteRuleStoreConfig, UpsertRouteRuleInput } from './storage/route-rule-store.js';
 // AD-051 (срез) / AD-089: реестр расписаний планировщика.
 export { ScheduleStore, SCHEDULES_SCHEMA_VERSION } from './storage/schedule-store.js';
 export type { ScheduleStoreConfig, ScheduleRunUpdate } from './storage/schedule-store.js';
@@ -205,6 +208,9 @@ export type {
   RouteRuleProvider,
   SessionResolution,
 } from './engine/events/types.js';
+// AD-089: правило маршрутизации по матчу события и маппинг target→decision.
+export { ProjectRuleProvider } from './engine/events/project-rule-provider.js';
+export { decisionFromTarget } from './engine/events/target-decision.js';
 // AD-051 (срез) / AD-089: планировщик расписаний (cron/interval).
 export {
   nextCronDate,

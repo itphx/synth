@@ -252,7 +252,11 @@ export const commandsConfigSchema = z.object({
  * - `allowedSources` — белый список источников (пусто — разрешены все);
  * - `dedupStore` — источник дедупа событий: `memory` (in-process `Set`, поведение
  *   single-process) | `file` (межпроцессный атомарный claim файлами-маркерами на
- *   общем `dataDir`). Default — `memory` (OFF): поведение single-process не меняется.
+ *   общем `dataDir`). Default — `memory` (OFF): поведение single-process не меняется;
+ * - `unknownAgentTemplate` — поведение, если `agentTemplate` события/правила не
+ *   резолвится в существующего enabled-агента: `drop` — не создавать сессию и
+ *   зафиксировать ошибку `agent_not_found` в журнале (fail-safe, default) |
+ *   `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию).
  */
 export const eventsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -261,6 +265,7 @@ export const eventsConfigSchema = z.object({
   journalRetentionDays: z.number().int().min(0).default(30),
   allowedSources: z.array(z.string()).default([]),
   dedupStore: z.enum(['memory', 'file']).default('memory'),
+  unknownAgentTemplate: z.enum(['drop', 'default-agent']).default('drop'),
 });
 
 // --- Планировщик расписаний (AD-051 срез / AD-089) ---

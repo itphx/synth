@@ -20,7 +20,7 @@
 |---|---|
 | `FileStore`, `SessionManager` | сессии и история |
 | `EventBus` | шина событий сессии (backend надстраивает `EventHub`) |
-| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `eventToMessage` | единый funnel создания сессии и приём внешних событий (AD-089) |
+| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `ProjectRuleProvider`, `eventToMessage` | единый funnel создания сессии, приём внешних событий и правила маршрутизации (AD-089) |
 | `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (AD-051 срез / AD-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
@@ -93,7 +93,7 @@
 | `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
 | `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
-| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`requireAuth` + rate limit), `/bindings` — CRUD (чтение `requireAuth`, мутации `requireAdmin`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089) |
+| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`requireAuth` + rate limit), `/bindings` и `/routes` — CRUD правил/привязок (чтение `requireAuth`, мутации `requireAdmin`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089) |
 | `/api/v2/schedules` | core `createSchedulerRoutes` (AD-051 срез / AD-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (AD-051); `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |

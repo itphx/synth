@@ -591,8 +591,8 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 ### 5.26 Events — `оба`
 
 Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приём внешних
-событий и управление привязками (AD-089; единая фабрика `createEventRoutes` для core
-и backend):
+событий, управление привязками и правилами маршрутизации (AD-089; единая фабрика
+`createEventRoutes` для core и backend):
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|---|
@@ -602,12 +602,18 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 | GET | `/api/v2/events/bindings` | оба | auth | Список привязок `{bindings}` |
 | POST | `/api/v2/events/bindings` | оба | ADMIN | Upsert привязки по `source`+`chatKey`/`threadKey` (`eventBindingInputSchema`): `{source, chatKey?, threadKey?, sessionId?, mode: bound\|ephemeral\|queue, agentTemplate?, project?}`; совпавшая по ключу запись заменяется (id сохраняется) → 200, иначе 201 |
 | DELETE | `/api/v2/events/bindings/:id` | оба | ADMIN | Удалить привязку → 204; нет записи → 404 `NOT_FOUND` |
+| GET | `/api/v2/events/routes` | оба | auth | Список правил маршрутизации `{rules}` (`EventRouteRule[]`) |
+| POST | `/api/v2/events/routes` | оба | ADMIN | Upsert правила (`eventRouteRuleUpsertSchema`): `{id?, name?, priority?, enabled?, match, target}`; `match` — AND по заполненным `source`/`type`/`chatKey`/`threadKey`/`principalId`/`label`/`keywords` (пустой-невалидный не матчит); `target` — `bound`/`queue` (`sessionId`) или `ephemeral` (`agentTemplate?`/`project?`/`ttl?`). По `id` — обновление → 200, иначе создание → 201. Валидация: `bound`/`queue` с несуществующей сессией → 400, непустой `agentTemplate` без enabled-агента → 400 `VALIDATION_ERROR` |
+| DELETE | `/api/v2/events/routes/:id` | оба | ADMIN | Удалить правило → 204; нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/events/journal` | оба | auth | Последние записи журнала решений `{entries}`; `?limit=` (default 50, cap 500) |
 
 `identity` — `{principalId?, chatKey?, threadKey?, roles?}`. `dedupKey`/`ts` опциональны:
 `EventIngress` нормализует событие (id `evt_<uuid>`, дефолтный dedup-ключ по
 source/type/ключу/payload). RBAC managed: приём — `requireAuth` + rate limit (120/мин),
-мутации привязок — `requireAdmin`, чтение — `requireAuth`; в core — единый `requireAuth`.
+мутации привязок/правил — `requireAdmin`, чтение — `requireAuth`; в core — единый `requireAuth`.
+Правила маршрутизации (`EventRouteRule`, `{dataDir}/events/routes.json`) применяет `ProjectRuleProvider`
+после явного `EventBinding` и cron-правила; фоллбек Router без маршрута задаёт `events.defaultMode`
+(`bound` — `drop no_route`, `ephemeral` — временная сессия).
 Цепочка обработки и журнал — `docs/ARCHITECTURE.md` («Внешние события и хуки»), AD-089.
 
 > `POST /api/v2/sessions` теперь идёт через единый funnel `RequestSessionService`

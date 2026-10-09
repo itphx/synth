@@ -34,6 +34,9 @@ const en: Dictionary = {
   'errors.validation.invalidEvent': 'Invalid event payload',
   'errors.validation.invalidBinding': 'Invalid binding payload',
   'errors.notFound.binding': 'Binding not found',
+  'errors.validation.invalidRule': 'Invalid routing rule payload',
+  'errors.notFound.rule': 'Routing rule not found',
+  'errors.validation.unknownAgent': 'Unknown agent in routing rule',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
@@ -99,6 +102,9 @@ const ru: Dictionary = {
   'errors.validation.invalidEvent': 'Некорректное тело события',
   'errors.validation.invalidBinding': 'Некорректное тело биндинга',
   'errors.notFound.binding': 'Биндинг не найден',
+  'errors.validation.invalidRule': 'Некорректное тело правила маршрутизации',
+  'errors.notFound.rule': 'Правило маршрутизации не найдено',
+  'errors.validation.unknownAgent': 'Неизвестный агент в правиле маршрутизации',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',
