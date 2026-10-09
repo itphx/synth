@@ -2103,3 +2103,16 @@
 - **Замечания (долг, не блокирует):** (1) НЕ функционально, но мертвый артефакт: `packages/backend/src/agents/definitions/*.json` — вторая копия дефиниций, кодом не читается (backend грузит системные дефиниции из `core/dist`, а `{dataDir}/agents` — только user-overrides); Dockerfile.backend копирует её впустую и она расходится с core (все 10 файлов). (2) `runtime`-capability теперь тоже видна в админ-панели агентов (следствие derive-from-meta) — это осознанно.
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** `43ba6d9` (feature), `0f82ef8` (ui-fix)
+
+## 2026-10-09 — 15:30 — Cleanup: мёртвая копия дефиниций backend + различимые capability-чипы
+- **Задача:** удалить мёртвую копию дефиниций агентов в backend и починить визуальное различие включённых/отключённых capability в админ-панели агентов («не отличаются друг от друга»).
+- **Тип:** chore (backend) + fix (ui)
+- **Исполнитель:** @orchestrator (investigate) → @fixer → верификация @orchestrator
+- **Результат:** PASS
+- **Диагностика:** backend-копия `src/agents/definitions/*.json` кодом не читалась (backend вызывает `createAgentRegistry(toolRegistry, {dataDir}/agents)` — системные дефиниции из core, второй аргумент — user-overrides), но попадала в `dist/agents/definitions` (build-script) и в Docker-образ (COPY). Чипы capability различались только `--secondary` (L≈0.29) vs `--muted` (L≈0.33) — в тёмной теме визуально сливались.
+- **Что сделано:**
+  - backend: удалён `packages/backend/src/agents/` (10 json); `package.json` build → `tsc -p tsconfig.build.json`; `docker/Dockerfile.backend` — убран COPY definitions и устаревший комментарий; `AGENTS.md` (корневой, backend) приведены в соответствие.
+  - ui: `AgentsPanel` capability-чипы — вкл `bg-primary text-primary-foreground border-primary font-medium`, выкл `border-border bg-surface-inset text-muted-foreground`; добавлен `aria-pressed` и `focus-visible:ring-2 ring-ring` (паттерн `SkillsUserSettings`/`PlanActModeToggle`).
+- **Проверки:** `pnpm build` 6/6; backend typecheck/test (347) зелёные, `dist/agents` не создаётся; ui typecheck/lint(0 errors)/test(1025)/build зелёные; ссылок на backend-дефиниции в коде не осталось.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** `b3e697c` (cleanup), `0340686` (ui-fix)
