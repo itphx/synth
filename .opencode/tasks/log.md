@@ -2255,3 +2255,16 @@
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммиты:** `a4d6cb2`, `d11f3d0`, этот (журнал).
 
+## 2026-10-10 (продолжение 6) — проверка decision на реальных моделях + фикс приёма событий
+- **Задача:** протестировать с реальными моделями: локальный `systemone` (`clef-flash`/`tev1:4b` на `owu`) и RouterAI `decision`; настроить провайдер RouterAI.
+- **Тип:** verification (real models) + bug fix (events auth) + infra-наблюдение
+- **Исполнитель:** @orchestrator (разведка/вызовы/верификация) → @fixer ×2 (e2e-настройка; фикс 401)
+- **Результат:** PASS (remote e2e и локальный e2e; найден и исправлен дефект 401)
+- **RouterAI (type `decision`):** провайдер `routerai-decision` (`https://routerai.ru/api/v1`) + модель `cloudflare/clef-flash`; e2e через `POST /events` → `ephemeral` `decision-rules`, агент `admin`, latency ~0.7 с.
+- **Локальный `systemone`:** на `owu` (Ollama 0.40.2) `clef-flash` падал 500 (`insufficient memory ~12.6 ГБ` / pooling) — зафиксирован fail-safe (событие принимается, роутер уходит в `defaultMode`). Затем загружена `tev1:4b` (4.2B) → e2e через приложение сработал: `ephemeral`, агент `bankassist`, latency ~0.7 с (первый прогрев ~12 с). Порог/фаил-сейф проверены.
+- **Фикс `fix(events)` (`87e6c05`):** `POST /api/v2/events` с обычным `Bearer <user-key>` (не `synth_evt_…`) теперь падает на fallback `ingestGuard` (requireAuth), а не 401; невалидный binding-key по-прежнему 401. `event-api-key-store.ts` — `EVENT_API_KEY_SECRET_PREFIX`/`isEventApiKeySecret`. Проверено e2e: Bearer `admin-key-123` → 201, bogus `synth_evt_` → 401, без auth → 401. Тесты core 36, backend 8.
+- **Финальное состояние (dev, оставлено):** провайдеры `routerai-decision`, `owu-systemone`; модели `cloudflare/clef-flash`, `clef-flash`, `tev1:4b`; `decision = {enabled:true, provider:"owu-systemone", model:"tev1:4b", confidenceThreshold:0.3}` (локально); `events.decisionRouting=false`.
+- **Наблюдения (задел):** на успешном event-пути `DecisionRuleProvider` не логирует latency/agent/confidence (только warning при промахе) — событийная observability тоньше микро; confidence решения не попадает ни в HTTP-ответ, ни в журнал (append-only). Хост `owu` не тянет `clef-flash` (память) — при необходимости `@admin`/env `OLLAMA_CONTEXT_LENGTH`.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** `87e6c05`, этот (журнал).
+
