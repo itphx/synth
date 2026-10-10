@@ -2293,3 +2293,21 @@
 - **Ветка:** `docs/ad-normalization-089-external-events` (не запушена)
 - **Коммит:** `6dc98f2`, этот (журнал).
 
+## 2026-10-10 (продолжение 9) — AD-084 добит полностью (Ф6–Ф8), статус ✅
+- **Задача:** «Давай добьём AD-084 полностью» — закрыть остаток (эскалация, мультимодальность, агрегатные метрики) и перевести AD в ✅.
+- **Тип:** feature (shared/core/ui) + docs
+- **Исполнитель:** @orchestrator (исследование/план/верификация) → @fixer (core/shared; UI/docs; рестарт+e2e)
+- **Результат:** PASS
+- **Объём (выбор пользователя):** эскалация + агрегатные метрики + мультимодальный контракт (источник медиа — AD-085); политика local/remote оставлена зависимостью AD-080/081.
+- **Сделано (`6b154f3` core/shared, `0d86f69` UI/docs):**
+  - **Эскалация:** вторая пара `escalationProvider`/`escalationModel` в конфиге `decision` (uniform provider/model), runtime/`mergeDecisionConfig`/`/settings/decision`; единый каскад `primary → escalation` — `engine/router/decision-cascade.ts` (`decideChoiceCascade`, fail-safe, `DecisionTier`, статусы `ok|low_confidence|invalid|no_answer|no_provider|error`), переиспользуется в `DecisionModel` (micro), `DecisionContentClassifier` (router) и `DecisionRuleProvider` (events); сигналы `decision_escalated`.
+  - **Метрики:** `engine/router/decision-metrics.ts` (`calls/handled/fallback/escalated`, `attempts`, `rejected`, `by_model` с latency avg/max), process-wide синглтон; экспозиция `GET /api/v2/settings/decision/metrics` (`requireAuth`) и `DELETE …/metrics` (reset, `decisionWriteGuard`).
+  - **Мультимодальный контракт:** `images`/`videos` в `DecisionRequest`/`decisionRequestSchema`/`DecisionProvider.decide`/`MicroInput` (plumbing; источник — AD-085).
+  - **UI:** вторая пара `ModelPairSelect` (эскалация) + read-only секция «Статистика» (refresh/reset) в админ-разделе «Decision-модели»; `synthApi.getDecisionMetrics/resetDecisionMetrics`; i18n ru/en; тесты `DecisionSettings.test.tsx` 21/21.
+  - **Docs:** AD-084 → **✅ Реализовано** (Ф6–Ф8, §Метрики/§Этапы/§Статус кода/§Риски), README AD (перенос в «Реализованные»), корневой AGENTS (индекс, `/settings/decision`+metrics, decision-конфиг), API_V2, CONFIGURATION, ROUTING, packages/{shared,core,ui}/AGENTS.
+- **E2E (реальные модели, `clef-flash`@routerai vs `tev1:4b`@owu, порог 0.4):** `POST /events` → `decision = {kind:"ephemeral", agentTemplate:"bankassist", confidence:0.63, signals:[decision-rules, agent:bankassist, model:owu-systemone/tev1:4b, latency:1422ms, decision_escalated]}`; логи `низкая уверенность 0.26–0.30 < 0.4 (primary clef-flash)` → `переход на эскалацию tev1:4b` → `OK tier=escalation confidence=0.63–0.77`; `GET /settings/decision/metrics` → `calls:2, handled:2, escalated:2, attempts:{primary:2,escalation:2}, rejected.low_confidence:2, by_model:{clef-flash:…, tev1:4b:…}`. Тестовые сессии удалены; `decisionRouting=false`; decision возвращён в `owu-systemone/tev1:4b`, порог 0.3; метрики сброшены.
+- **Верификация (оркестратор):** build shared/core; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; целевые core-тесты (cascade/metrics/classifier/model/rule-provider/settings) 152/152; UI 21/21; ссылки AD целы; AD-084/README/AGENTS согласованы. Пре-существующий флейк `core/src/server/app.remote.test.ts` (WS) не трогали.
+- **Отклонения e2e:** исходный текст события отсечён dedup (`memory`) как повторный — использован уникализированный; в метриках `calls=2` из-за параллельного события (оба — эскалация). На вывод не влияет.
+- **Ветка:** `docs/ad-normalization-089-external-events` (не запушена)
+- **Коммит:** `6b154f3`, `0d86f69`, этот (журнал).
+
