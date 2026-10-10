@@ -129,6 +129,7 @@ describe('defaultConfig', () => {
       dedupStore: 'memory',
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
+      decisionRouting: false,
     });
   });
 

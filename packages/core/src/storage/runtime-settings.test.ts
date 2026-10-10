@@ -236,6 +236,7 @@ describe('mergeEventsConfig (AD-089)', () => {
     dedupStore: 'file' as const,
     unknownAgentTemplate: 'default-agent' as const,
     keyRateLimitPerMinute: 3,
+    decisionRouting: false,
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
@@ -247,6 +248,7 @@ describe('mergeEventsConfig (AD-089)', () => {
       allowedSources: [],
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
+      decisionRouting: true,
     });
     expect(merged).toEqual({
       enabled: true,
@@ -256,6 +258,7 @@ describe('mergeEventsConfig (AD-089)', () => {
       allowedSources: [],
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
+      decisionRouting: true,
     });
   });
 
@@ -268,6 +271,7 @@ describe('mergeEventsConfig (AD-089)', () => {
       allowedSources: ['telegram'],
       unknownAgentTemplate: 'default-agent',
       keyRateLimitPerMinute: 3,
+      decisionRouting: false,
     });
   });
 
@@ -280,6 +284,7 @@ describe('mergeEventsConfig (AD-089)', () => {
       allowedSources: [],
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
+      decisionRouting: false,
     });
   });
 });

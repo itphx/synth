@@ -44,13 +44,14 @@ import {
   HookBus,
   startEphemeralSweeper,
   EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  RouteRuleStore, ProjectRuleProvider,
+  RouteRuleStore, ProjectRuleProvider, DecisionRuleProvider,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
   startEventJournalPruner,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
+import type { DecisionAgentCandidate } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveDefaultWorkspace, resolveSecretKey } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
@@ -579,6 +580,26 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // AD-089: правила маршрутизации по матчу события (после scheduler).
     eventRouter.registerRuleProvider(
       new ProjectRuleProvider(routeRuleStore, effectiveEvents.ephemeralTtl),
+    );
+    // AD-084 × AD-089: decision-маршрутизация при промахе декларативных правил
+    // (opt-in `events.decisionRouting`). Паритет с core `server/app.ts`.
+    eventRouter.registerRuleProvider(
+      new DecisionRuleProvider({
+        resolver: {
+          getDecisionProvider: (name, model) => orchestrator.getDecisionProvider(name, model),
+        },
+        getEventsConfig: () => ({
+          decisionRouting: effectiveEventsSettings.decisionRouting,
+          defaultEphemeralTtl: effectiveEventsSettings.ephemeralTtl,
+        }),
+        getDecisionConfig: () => backendConfig.synth.decision,
+        getAgentCandidates: (): DecisionAgentCandidate[] =>
+          agentRegistry.list().map((agent) => ({
+            id: agent.id,
+            displayName: agent.displayName,
+            description: agent.description,
+          })),
+      }),
     );
     // AD-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
     // неизвестный или отключённый агент → `null`.

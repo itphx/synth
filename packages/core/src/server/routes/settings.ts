@@ -64,6 +64,7 @@ function resolveEventsDefaults(fallback?: Partial<EventsRuntimeSettings>): Event
     allowedSources: fallback?.allowedSources ?? base.allowedSources,
     unknownAgentTemplate: fallback?.unknownAgentTemplate ?? base.unknownAgentTemplate,
     keyRateLimitPerMinute: fallback?.keyRateLimitPerMinute ?? base.keyRateLimitPerMinute,
+    decisionRouting: fallback?.decisionRouting ?? base.decisionRouting,
   };
 }
 
@@ -117,6 +118,12 @@ function validateEventsSettings(
     }
     result.keyRateLimitPerMinute = s.keyRateLimitPerMinute as number;
   }
+  if (s.decisionRouting !== undefined) {
+    if (typeof s.decisionRouting !== 'boolean') {
+      return { ok: false, message: 'events.decisionRouting: ожидается boolean' };
+    }
+    result.decisionRouting = s.decisionRouting;
+  }
   return { ok: true, value: result };
 }
 
@@ -133,6 +140,7 @@ function effectiveEvents(
     allowedSources: runtime.allowedSources ?? defaults.allowedSources,
     unknownAgentTemplate: runtime.unknownAgentTemplate ?? defaults.unknownAgentTemplate,
     keyRateLimitPerMinute: runtime.keyRateLimitPerMinute ?? defaults.keyRateLimitPerMinute,
+    decisionRouting: runtime.decisionRouting ?? defaults.decisionRouting,
   };
 }
 

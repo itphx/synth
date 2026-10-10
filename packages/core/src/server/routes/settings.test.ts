@@ -1367,6 +1367,7 @@ describe('Settings API Routes (events, AD-089)', () => {
       allowedSources: [],
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
+      decisionRouting: false,
     });
     expect(body.events).toEqual(body.defaults);
   });
@@ -1411,6 +1412,7 @@ describe('Settings API Routes (events, AD-089)', () => {
       { events: { allowedSources: 'telegram' } },
       { events: { unknownAgentTemplate: 'ghost' } },
       { events: { ephemeralTtl: '' } },
+      { events: { decisionRouting: 'yes' } },
     ];
     for (const body of cases) {
       const res = await app.request('/api/v2/settings/events', {

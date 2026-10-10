@@ -1043,6 +1043,15 @@ export class ChatOrchestrator {
   }
 
   /**
+   * AD-084: decision-провайдер по имени из пула (`ProviderPool.getDecisionProvider`
+   * — всегда обёрнут в `GatewayProvider`). Нужен decision-маршрутизации внешних
+   * событий (AD-089): провайдеры не дёргаются напрямую, инвариант №3 сохранён.
+   */
+  getDecisionProvider(providerName: string, modelName: string): BaseProvider | null {
+    return this._providerPool?.getDecisionProvider(providerName, modelName) ?? null;
+  }
+
+  /**
    * AD-071 §2.6: тул жёстко отключён администратором (`tools.disabled`) — по
    * capability или по имени. `runtime` неотключаем (защита на API + здесь).
    */

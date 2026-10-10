@@ -1,0 +1,263 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type {
+  DecisionQuestion,
+  DecisionResponse,
+  RouteDecision,
+  SynthEvent,
+} from '@itphx/synth-shared';
+import { EventBindingStore } from '../../storage/event-binding-store.js';
+import { EventJournalStore } from '../../storage/event-journal-store.js';
+import { EventRouter } from './event-router.js';
+import { DecisionRuleProvider, DECISION_ROUTING_QUESTION_ID } from './decision-rule-provider.js';
+import type { DecisionAgentCandidate } from './decision-rule-provider.js';
+import type {
+  DecisionConfigLike,
+  DecisionProviderLike,
+} from '../router/micro/models/decision-model.js';
+import type { RouteRuleInput, RouteRuleProvider } from './types.js';
+
+const event = (overrides: Partial<SynthEvent> = {}): SynthEvent => ({
+  id: 'evt_1',
+  source: 'telegram',
+  type: 'message',
+  payload: { text: 'Prod is down, deploy failed!' },
+  identity: {},
+  dedupKey: 'd1',
+  ts: '2026-01-01T00:00:00.000Z',
+  ...overrides,
+});
+
+const AGENTS: DecisionAgentCandidate[] = [
+  { id: 'triage', displayName: 'Triage', description: 'Разбор инцидентов' },
+  { id: 'assistant', displayName: 'Assistant', description: 'Общие задачи' },
+];
+
+const BASE_CONFIG: DecisionConfigLike = {
+  enabled: true,
+  provider: 'clef',
+  model: 'clef-flash',
+  confidenceThreshold: 0.6,
+};
+
+/** Строит выбор decision-модели (`choice`) с заданными шаблоном и уверенностью. */
+function choiceResponse(choice: string, confidence: number): DecisionResponse {
+  return {
+    answers: {
+      [DECISION_ROUTING_QUESTION_ID]: {
+        type: 'choice',
+        choice,
+        confidence,
+        probabilities: { [choice]: confidence },
+      },
+    },
+  };
+}
+
+interface Fixture {
+  provider: DecisionRuleProvider;
+  decide: ReturnType<typeof vi.fn>;
+  getDecisionProvider: ReturnType<typeof vi.fn>;
+}
+
+function makeFixture(options: {
+  decisionRouting?: boolean;
+  config?: DecisionConfigLike | null;
+  agents?: DecisionAgentCandidate[];
+  decideImpl?: (
+    state: unknown,
+    questions: Record<string, DecisionQuestion>,
+  ) => Promise<DecisionResponse>;
+  providerMissing?: boolean;
+} = {}): Fixture {
+  const {
+    decisionRouting = true,
+    config = BASE_CONFIG,
+    agents = AGENTS,
+    decideImpl = async () => choiceResponse('triage', 0.9),
+    providerMissing = false,
+  } = options;
+
+  const decide = vi.fn(decideImpl);
+  const decisionProvider: DecisionProviderLike = { decide };
+  const getDecisionProvider = vi.fn(() => (providerMissing ? null : decisionProvider));
+
+  const provider = new DecisionRuleProvider({
+    resolver: { getDecisionProvider },
+    getEventsConfig: () => ({ decisionRouting, defaultEphemeralTtl: '24h' }),
+    getDecisionConfig: () => config ?? undefined,
+    getAgentCandidates: () => agents,
+  });
+
+  return { provider, decide, getDecisionProvider };
+}
+
+describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
+  it('decisionRouting=false → null, decision-провайдер не вызывается', async () => {
+    const { provider, decide, getDecisionProvider } = makeFixture({ decisionRouting: false });
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+    expect(getDecisionProvider).not.toHaveBeenCalled();
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('decisionRouting=true, но decision-слой выключен → null', async () => {
+    const { provider, decide } = makeFixture({ config: { ...BASE_CONFIG, enabled: false } });
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('нет provider/model → null', async () => {
+    const { provider, decide } = makeFixture({ config: { ...BASE_CONFIG, provider: '', model: '' } });
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('нет enabled-агентов (< 2) → null', async () => {
+    const { provider, decide } = makeFixture({ agents: [] });
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+    expect(decide).not.toHaveBeenCalled();
+
+    const single = makeFixture({ agents: [AGENTS[0]!] });
+    expect(await single.provider.resolve({ event: event(), bindings: [] })).toBeNull();
+    expect(single.decide).not.toHaveBeenCalled();
+  });
+
+  it('decision-провайдер не найден → null (fail-safe)', async () => {
+    const { provider, decide } = makeFixture({ providerMissing: true });
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('уверенный choice шаблона → ephemeral с выбранным agentTemplate', async () => {
+    const { provider } = makeFixture();
+    expect(await provider.resolve({ event: event(), bindings: [] })).toEqual({
+      kind: 'ephemeral',
+      agentTemplate: 'triage',
+      ttl: '24h',
+    });
+  });
+
+  it('вопрос — choice по enabled-агентам, state содержит текст события', async () => {
+    const calls: Array<{ state: unknown; questions: Record<string, DecisionQuestion> }> = [];
+    const { provider } = makeFixture({
+      decideImpl: async (state, questions) => {
+        calls.push({ state, questions });
+        return choiceResponse('assistant', 0.8);
+      },
+    });
+
+    await provider.resolve({ event: event(), bindings: [] });
+
+    expect(calls).toHaveLength(1);
+    const question = calls[0]!.questions[DECISION_ROUTING_QUESTION_ID];
+    expect(question?.type).toBe('choice');
+    if (question?.type === 'choice') {
+      expect(Object.keys(question.criteria).sort()).toEqual(['assistant', 'triage']);
+    }
+    expect(String(calls[0]!.state)).toContain('deploy failed');
+    expect(String(calls[0]!.state)).toContain('source: telegram');
+  });
+
+  it('низкая уверенность (< порога) → null', async () => {
+    const { provider } = makeFixture({ decideImpl: async () => choiceResponse('triage', 0.4) });
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+  });
+
+  it('невалидный шаблон (не из списка) → null', async () => {
+    const { provider } = makeFixture({ decideImpl: async () => choiceResponse('ghost', 0.99) });
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+  });
+
+  it('ответ не choice → null', async () => {
+    const { provider } = makeFixture({
+      decideImpl: async () => ({
+        answers: { [DECISION_ROUTING_QUESTION_ID]: { type: 'noul', noul: 0.9 } },
+      }),
+    });
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+  });
+
+  it('ошибка decision-провайдера → null (исключение не пробрасывается)', async () => {
+    const { provider } = makeFixture({
+      decideImpl: async () => {
+        throw new Error('boom');
+      },
+    });
+    await expect(provider.resolve({ event: event(), bindings: [] })).resolves.toBeNull();
+  });
+});
+
+describe('DecisionRuleProvider в EventRouter (AD-089, порядок и fail-safe)', () => {
+  let tmpDir: string;
+  let bindingStore: EventBindingStore;
+  let journal: EventJournalStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-decision-rules-'));
+    bindingStore = new EventBindingStore({ dataDir: tmpDir });
+    journal = new EventJournalStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('промах декларативных правил → срабатывает decision-провайдер', async () => {
+    const miss: RouteRuleProvider = { name: 'miss', resolve: () => null };
+    const { provider } = makeFixture();
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultMode: 'bound', defaultEphemeralTtl: '24h' },
+      ruleProviders: [miss, provider],
+    });
+    expect(await router.decide(event({ dedupKey: 'k1' }))).toEqual({
+      kind: 'ephemeral',
+      agentTemplate: 'triage',
+      ttl: '24h',
+    });
+  });
+
+  it('декларативное правило выигрывает — decision не вызывается', async () => {
+    const winner: RouteDecision = { kind: 'bound', sessionId: 's-bound' };
+    const rule: RouteRuleProvider = { name: 'winner', resolve: () => winner };
+    const { provider, decide } = makeFixture();
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultMode: 'bound', defaultEphemeralTtl: '24h' },
+      ruleProviders: [rule, provider],
+    });
+    expect(await router.decide(event({ dedupKey: 'k2' }))).toEqual(winner);
+    expect(decide).not.toHaveBeenCalled();
+  });
+
+  it('ошибка decision → фоллбек defaultMode (drop no_route)', async () => {
+    const miss: RouteRuleProvider = { name: 'miss', resolve: () => null };
+    const { provider } = makeFixture({
+      decideImpl: async () => {
+        throw new Error('decision down');
+      },
+    });
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultMode: 'bound', defaultEphemeralTtl: '24h' },
+      ruleProviders: [miss, provider],
+    });
+    expect(await router.decide(event({ dedupKey: 'k3' }))).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
+    });
+  });
+
+  it('пустой input не мешает: провайдер реализует RouteRuleProvider', async () => {
+    const { provider } = makeFixture();
+    const input: RouteRuleInput = { event: event(), bindings: [] };
+    expect(await provider.resolve(input)).not.toBeNull();
+  });
+});

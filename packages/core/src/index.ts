@@ -230,6 +230,15 @@ export type {
 } from './engine/events/types.js';
 // AD-089: правило маршрутизации по матчу события и маппинг target→decision.
 export { ProjectRuleProvider } from './engine/events/project-rule-provider.js';
+// AD-084 × AD-089: decision-маршрутизация внешних событий (шаблон агента).
+export {
+  DecisionRuleProvider,
+  DECISION_ROUTING_QUESTION_ID,
+} from './engine/events/decision-rule-provider.js';
+export type {
+  DecisionAgentCandidate,
+  DecisionRuleProviderDeps,
+} from './engine/events/decision-rule-provider.js';
 export { decisionFromTarget } from './engine/events/target-decision.js';
 // AD-051 (срез) / AD-089: планировщик расписаний (cron/interval).
 export {

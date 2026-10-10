@@ -15,7 +15,8 @@ import {
   SecretPatternStore, ProtectedPathsStore, DictionaryStore, DEFAULT_AGENT_ID,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  RouteRuleStore, ProjectRuleProvider,
+  RouteRuleStore, ProjectRuleProvider, DecisionRuleProvider,
+  type DecisionAgentCandidate,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
@@ -915,6 +916,28 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // cron-правила при совпадении).
   eventRouter.registerRuleProvider(
     new ProjectRuleProvider(routeRuleStore, effectiveEvents.ephemeralTtl),
+  );
+  // AD-084 × AD-089: decision-маршрутизация при промахе декларативных правил
+  // (opt-in `events.decisionRouting`). Провайдер fail-safe: ошибка/низкая
+  // уверенность → `null`, Router идёт к фоллбеку. Конфиги и агенты читаются
+  // геттерами — `/settings/events` подхватывается live без рестарта.
+  eventRouter.registerRuleProvider(
+    new DecisionRuleProvider({
+      resolver: {
+        getDecisionProvider: (name, model) => orchestrator.getDecisionProvider(name, model),
+      },
+      getEventsConfig: () => ({
+        decisionRouting: effectiveEventsSettings.decisionRouting,
+        defaultEphemeralTtl: effectiveEventsSettings.ephemeralTtl,
+      }),
+      getDecisionConfig: () => config.decisionConfig,
+      getAgentCandidates: (): DecisionAgentCandidate[] =>
+        agentRegistry.list().map((agent) => ({
+          id: agent.id,
+          displayName: agent.displayName,
+          description: agent.description,
+        })),
+    }),
   );
   // AD-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
   // неизвестный или отключённый агент → `null`.

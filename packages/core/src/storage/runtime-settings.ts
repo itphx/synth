@@ -40,6 +40,12 @@ export interface EventsRuntimeSettings {
   unknownAgentTemplate: 'drop' | 'default-agent';
   /** Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита). */
   keyRateLimitPerMinute: number;
+  /**
+   * AD-084 × AD-089: decision-маршрутизация внешних событий (opt-in).
+   * `false` — только декларативные правила; `true` — при промахе правил
+   * decision-модель выбирает шаблон агента (fail-safe → `defaultMode`).
+   */
+  decisionRouting: boolean;
 }
 
 export interface RuntimeSettings {
@@ -172,6 +178,7 @@ export function mergeEventsConfig(
     allowedSources: r.allowedSources ?? base?.allowedSources ?? [],
     unknownAgentTemplate: r.unknownAgentTemplate ?? base?.unknownAgentTemplate ?? 'drop',
     keyRateLimitPerMinute: r.keyRateLimitPerMinute ?? base?.keyRateLimitPerMinute ?? 0,
+    decisionRouting: r.decisionRouting ?? base?.decisionRouting ?? false,
   };
 }
 

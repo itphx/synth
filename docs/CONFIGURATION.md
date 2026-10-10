@@ -364,9 +364,14 @@ skills:
 | `events.dedupStore` | Источник дедупа событий: `memory` — in-process `Set` (single-process), `file` — межпроцессный атомарный claim на общем `dataDir` (`{dataDir}/events/dedup/<sha256(key)>`) | `memory` |
 | `events.unknownAgentTemplate` | Поведение, если `agentTemplate` события/правила не резолвится в enabled-агента: `drop` — не создавать сессию, зафиксировать `agent_not_found` в журнале (fail-safe); `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию) | `drop` |
 | `events.keyRateLimitPerMinute` | Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита); конкретный ключ переопределяет `rateLimitPerMinute`; превышение → 429 `RATE_LIMITED` | `0` |
+| `events.decisionRouting` | AD-084 × AD-089: умная классификация внешних событий decision-моделью. `false` — только декларативные правила; `true` — при промахе правил decision-модель выбирает шаблон агента (ephemeral-сессия). Требует настроенного `decision.*`; fail-safe: ошибка/низкая уверенность/нет агентов → фоллбек `defaultMode` | `false` |
 
 Правила маршрутизации `source/type/…` → сессия задаются через API (`/api/v2/events/routes`, §5.26)
 и хранятся в `{dataDir}/events/routes.json` (`RouteRuleStore`, `ProjectRuleProvider`).
+При `events.decisionRouting: true` после промаха декларативных правил срабатывает
+decision-модель (`DecisionRuleProvider`, AD-084): она выбирает шаблон агента из
+enabled-агентов и создаёт ephemeral-сессию; при ошибке/низкой уверенности Router идёт
+к фоллбеку `events.defaultMode` (fail-safe).
 
 Пример:
 
@@ -380,10 +385,11 @@ events:
   dedupStore: memory
   unknownAgentTemplate: drop
   keyRateLimitPerMinute: 0
+  decisionRouting: false
 ```
 
 Часть полей (`enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`, `allowedSources`,
-`unknownAgentTemplate`, `keyRateLimitPerMinute`) переопределяется в runtime через
+`unknownAgentTemplate`, `keyRateLimitPerMinute`, `decisionRouting`) переопределяется в runtime через
 `GET/PUT/DELETE /api/v2/settings/events` (live, без рестарта); `dedupStore` — deployment-настройка.
 
 API (`POST /api/v2/events`, bindings, ключи привязок, journal) — `docs/API_V2.md` §5.26; устройство

@@ -124,6 +124,8 @@ export const defaultConfig: SynthConfig = {
     unknownAgentTemplate: 'drop',
     // Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита).
     keyRateLimitPerMinute: 0,
+    // AD-084 × AD-089: decision-маршрутизация событий выключена по умолчанию (opt-in).
+    decisionRouting: false,
   },
   scheduler: {
     enabled: true,

@@ -258,7 +258,12 @@ export const commandsConfigSchema = z.object({
  *   зафиксировать ошибку `agent_not_found` в журнале (fail-safe, default) |
  *   `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию);
  * - `keyRateLimitPerMinute` — глобальный дефолт лимита запросов/мин на API-ключ
- *   привязки (0 — без лимита; конкретный ключ может переопределить).
+ *   привязки (0 — без лимита; конкретный ключ может переопределить);
+ * - `decisionRouting` — AD-084 × AD-089: умная классификация внешних событий
+ *   decision-моделью. `false` (default, opt-in) — только декларативные правила
+ *   (`ProjectRuleProvider`); `true` — при промахе правил decision-модель выбирает
+ *   шаблон агента для ephemeral-сессии. Fail-safe: ошибка/неуверенность/пустой
+ *   список агентов → фоллбек Router (`defaultMode`).
  */
 export const eventsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -274,6 +279,12 @@ export const eventsConfigSchema = z.object({
    * `rateLimitPerMinute`.
    */
   keyRateLimitPerMinute: z.number().int().min(0).default(0),
+  /**
+   * AD-084 × AD-089: decision-маршрутизация внешних событий. По умолчанию
+   * выключена (поведение не меняется) — включение требует настроенного
+   * decision-провайдера (`decision.enabled`).
+   */
+  decisionRouting: z.boolean().default(false),
 });
 
 // --- Планировщик расписаний (AD-051 срез / AD-089) ---
