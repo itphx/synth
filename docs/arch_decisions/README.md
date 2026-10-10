@@ -32,12 +32,14 @@
 | AD-043 | Единая идентичность гибрида: вход в UI без Keycloak | ✅ | [ad-043-unified-identity-login.md](./ad-043-unified-identity-login.md) |
 | AD-044 | Адаптивный мобильный UI + PWA | ✅ | [ad-044-mobile-adaptive-ui-pwa.md](./ad-044-mobile-adaptive-ui-pwa.md) |
 | AD-045 | Профили серверов и лёгкий runtime-вход в гибриде: единый dataDir, мета-реестр profiles.json, logout = забыть токен + revoke | ✅ | [ad-045-hybrid-server-profiles.md](./ad-045-hybrid-server-profiles.md) |
+| AD-069 | Проектные инструкции (AGENTS.md) и `/init`: discovery, merged chain git root→cwd, lazy-догрузка, threat-scan, install-tree guard | ✅ | [ad-069-project-instructions-agents-md.md](./ad-069-project-instructions-agents-md.md) |
 | AD-070 | SystemPromptComposer: консистентность промпта, prompt-cache, статистика и прозрачность | ✅ | [ad-070-system-prompt-composer.md](./ad-070-system-prompt-composer.md) |
 | AD-071 | MCP-серверы: уровни system/project/session, единый реестр, разделение `tools`/`mcp.tools`, блоки `mcp.servers`/`mcp.status`, политики `tools.policy`/`mcp.policy`, admin-отключение встроенных инструментов | ✅ | [ad-071-mcp-servers-prompt.md](./ad-071-mcp-servers-prompt.md) |
 | AD-072 | Settings UI Kit: единая панель настроек (один скролл, центрирование `max-w-3xl`, контракт черновика, контролы); все разделы и админ-категории мигрированы | ✅ | [ad-072-settings-ui-kit.md](./ad-072-settings-ui-kit.md) |
 | AD-075 | Окружение проекта: рабочий каталог (автосоздание managed, выбор и политика путей для standalone; FS-паритет, RBAC) | ✅ | [ad-075-project-workspace-provisioning.md](./ad-075-project-workspace-provisioning.md) |
 | AD-076 | Реестр git-репозиториев (несколько на проект) и SSH-ключи per-agent (шифрование at-rest, `repo_path`, паритет core↔backend) | ✅ | [ad-076-git-repo-registry-ssh.md](./ad-076-git-repo-registry-ssh.md) |
 | AD-078 | Авто-отключение инструментов при отсутствии внешней зависимости (детект `git`/`rg`/`sh`, `unavailable(dependency)`, пояснение модели и UI) | ✅ | [ad-078-runtime-dependency-availability.md](./ad-078-runtime-dependency-availability.md) |
+| AD-079 | Локальный home-каталог (`--home`/`SYNTH_HOME`): плоская раскладка config/data/profiles/credentials, приоритеты путей, независимые инстансы standalone и hybrid | ✅ | [ad-079-local-home-independent-instances.md](./ad-079-local-home-independent-instances.md) |
 
 ## Частично реализованные AD
 
@@ -45,6 +47,7 @@
 |----|---------|--------|------|
 | AD-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ | [ad-018-session-engine-selection.md](./ad-018-session-engine-selection.md) |
 | AD-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов (AD-086) — нет | ⚠️ | [ad-030-hooks-agent-events.md](./ad-030-hooks-agent-events.md) |
+| AD-046 | Скиллы и slash-команды: формат `SKILL.md`, discovery, progressive disclosure, core-тул `skill`, команды/bundles, scope-API, UI; Фаза 3 — trust-гейт проектных команд, inline shell, `skills.urls` read-only, внешние каталоги, builtin `skill-creator`; остаток — install/trust/подписи/`lock.json` и backend-админка каталога (AD-068) | ⚠️ | [ad-046-skills-and-slash-commands.md](./ad-046-skills-and-slash-commands.md) |
 | AD-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (AD-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны (AD-059) и размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ | [ad-051-scheduler-pipelines.md](./ad-051-scheduler-pipelines.md) |
 | AD-052 | Публичная API-платформа: первый срез — API-ключи привязок событий (binding-key: label/описание/срок/лимит, update/revoke, приём по ключу, sha256 at-rest, per-key rate limit, RBAC LEAD/ADMIN); service-key/scopes/тенанты, OpenAPI, SDK, webhooks — нет | ⚠️ | [ad-052-public-api-platform.md](./ad-052-public-api-platform.md) |
 | AD-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник AD-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События» — первый срез AD-052; service-key/OpenAPI/SDK/webhooks и AD-086 — нет | ⚠️ | [ad-089-external-events-automation.md](./ad-089-external-events-automation.md) |
@@ -65,7 +68,6 @@
 | AD-031 | [Verification синт](./ad-031-verification-agent.md) |
 | AD-032 | [Миграция хранения истории на PostgreSQL](./ad-032-history-storage-postgresql.md) (логическая модель уже в JSON — AD-005/AD-033) |
 | AD-037 | [Security step перед коммитом](./ad-037-commit-security-step.md) |
-| AD-046 | [Скиллы и slash-команды](./ad-046-skills-and-slash-commands.md): формат SKILL.md, discovery, progressive disclosure, core-тул skill, bundles, capability-aware |
 | AD-047 | [Память Synth (Gbrain + композиция)](./ad-047-memory-gbrain.md): storage backbone, RAG по памяти и коду/докам, компрессия tool output, 4-layer retrieval, Obsidian bridge |
 | AD-048 | [Self-help скиллы и admin-MCP](./ad-048-self-help-skills-admin-mcp.md): dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN |
 | AD-049 | [Git worktrees](./ad-049-git-worktrees.md): тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI |
@@ -86,11 +88,9 @@
 | AD-066 | [Скиллы и гайдлайны оформления документации](./ad-066-doc-style-skills.md): doc-стандарты, шаблоны, авто-проверка (docs-lint) |
 | AD-067 | [«Впитывание» организационных гайдлайнов → дефолты инстанса](./ad-067-org-guidelines-defaults.md): ingestion, scope, версионирование/аудит |
 | AD-068 | [Реестр и каталог скиллов и агентов](./ad-068-skills-agents-registry.md): свой репозиторий, индекс, trust/guard, install-policy, agent-packs |
-| AD-069 | [Проектные инструкции (AGENTS.md) и /init](./ad-069-project-instructions-agents-md.md): discovery, merged chain, lazy-догрузка, обрезка, threat-scan, install-tree guard |
 | AD-073 | [Целостность клиента в гибриде](./ad-073-client-integrity-hybrid.md): клиент недоверенный, enforcement на сервере; сигналы (подписи, DPoP/mTLS) опционально |
 | AD-074 | [Скрытие вместо удаления](./ad-074-soft-delete-retention.md): soft-delete проектов/сессий/сообщений, исключение из LLM-контекста, read-only режим ADMIN/AUDITOR, restore/purge — ADMIN |
 | AD-077 | [Инструментальное окружение исполнения (toolchain и executor)](./ad-077-runtime-toolchain.md): thin backend + сервис-executor, общий volume для workspace, S3; реализуется после AD-032 (PostgreSQL) |
-| AD-079 | [Локальный home-каталог (`--home`) и независимые локальные инстансы](./ad-079-local-home-independent-instances.md): `--home`/`SYNTH_HOME`, плоская раскладка (config/data/profiles/credentials), приоритеты путей, независимый запуск standalone и hybrid |
 | AD-080 | [Управляемый гибрид: режимы-полюса, идентичность и установка локально](./ad-080-managed-hybrid-modes.md): режим — параметр запуска, без runtime-переключения, standalone=ADMIN / hybrid=роли сервера, «Установить локально» |
 | AD-081 | [Политики гибрида и защита от утечек](./ad-081-hybrid-policy-leak-protection.md): серверные политики (forbidden/remote-only/full, publish/fork allow|deny|approval), явные эндпоинты переноса, discovery, аудит, панель «Гибрид» |
 | AD-082 | [Flavor-образы с toolchain](./ad-082-full-images-deployment.md): `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance |

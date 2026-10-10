@@ -2,6 +2,9 @@
 
 > **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События» — первый срез AD-052; service-key/OpenAPI/SDK/webhooks и AD-086 — нет)
 > **Дата:** 2026-10-08
+> **Обновлено:** 2026-10-10 — статус и разделы приведены к реализованному коду (ядро Event/Binding/Router,
+> правила маршрутизации, API-ключи привязок, retention журнала, runtime-настройки «События»); «Чего нет»
+> переосмыслен как исторический снимок на момент решения.
 > **Связано:** [AD-030](./ad-030-hooks-agent-events.md) «Hooks для событий агента» (фундамент),
 > [AD-034](./ad-034-model-routing.md) «Routing между моделями», [AD-035](./ad-035-micro-model-first.md) «Micro-model first»,
 > [AD-036](./ad-036-llm-gateway.md) «LLM Gateway», [AD-051](./ad-051-scheduler-pipelines.md) «Шедулер и пайплайны»,
@@ -46,7 +49,9 @@
 - **Демонстратор** — `synth-media`: внешний сервис с Telegram-MCP и ботом уже работает как потребитель
   прикладного API и провайдер MCP-инструментов.
 
-### Чего нет
+### Чего не было на момент решения
+
+_(на 2026-10-08; актуальное состояние — в разделе «Статус реализации в коде»)_
 
 - Хуков и Plugin SDK ([AD-030](./ad-030-hooks-agent-events.md)) — не реализованы;
 - роутера внешних событий, сущностей `Event`/`Binding`/`Router`;
@@ -93,14 +98,14 @@ interface EventBinding {
 }
 ```
 
-**`Router`** — слой разрешения события в сессию (или в отложенную обработку/дроп). Реализуется поверх
-hook-шины [AD-030](./ad-030-hooks-agent-events.md), решения — на [AD-034](./ad-034-model-routing.md)/
-[AD-035](./ad-035-micro-model-first.md) и туле `classify_conversation`.
+**`Router`** — слой разрешения события в сессию (или в отложенную обработку/дроп). Роутер — ядровый слой;
+hook-шина ([AD-030](./ad-030-hooks-agent-events.md)) — точка расширения для внешних событий; решения — на
+[AD-034](./ad-034-model-routing.md)/[AD-035](./ad-035-micro-model-first.md) и туле `classify_conversation`.
 
 ```typescript
 type RouteDecision =
   | { kind: 'bound'; sessionId: string }
-  | { kind: 'ephemeral'; agentTemplate: string; ttl: string }
+  | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string }
   | { kind: 'queue'; owner: string; reason: string }
   | { kind: 'drop'; reason: string; audited: true };
 ```
@@ -123,21 +128,23 @@ type RouteDecision =
 
 ### Порядок маршрутизации
 
-1. **Явный `Binding`** (чат / тред / топик → сессия). Самый сильный сигнал: если для `chatKey`/`threadKey`
+0. **Фильтр `allowedSources`** — источник не в списке `events.allowedSources` → `drop` (в журнал).
+1. **Дедуп** по `dedupKey` — повторный event не проходит дальше.
+2. **Явный `Binding`** (чат / тред / топик → сессия). Самый сильный сигнал: если для `chatKey`/`threadKey`
    есть запись — событие уходит в привязанную сессию без классификации.
-2. **Правила проекта** (источник / канал / отправитель / метка / ключевые слова) → **шаблон агента + режим**.
+3. **Правила проекта** (источник / канал / отправитель / метка / ключевые слова) → **шаблон агента + режим**.
    Правила конфигурируемы (проект/инстанс), комбинируются; лёгкая проверка — micro-слой
    ([AD-035](./ad-035-micro-model-first.md)) и `classify_conversation`.
-3. **Политика режима** решает, как материализовать сессию:
+4. **Политика режима** решает, как материализовать сессию:
    - `bound` — постоянная сессия на диалог (переписка: контекст копится, история не теряется);
    - `ephemeral` — сессия на событие с TTL и авто-архивом (разовые триггеры: webhook, CI, кнопка);
    - `queue` — не запускать сразу, отложить владельцу (уведомление + элемент в очереди,
      переиспользование `QueueProcessorManager`, `packages/core/src/queue/processor.ts`).
-4. **Фоллбек** — дефолтный агент / очередь / **дроп с аудитом** (`drop` всегда фиксируется, чтобы не терять
+5. **Фоллбек** — дефолтный агент / очередь / **дроп с аудитом** (`drop` всегда фиксируется, чтобы не терять
    события молча).
 
-**Значение по умолчанию (гибрид):** переписка — `bound`, разовые триггеры — `ephemeral`. `queue` и `drop` —
-осознанные политики, а не дефолт.
+**Значение по умолчанию:** конфиг-дефолт `defaultMode: 'bound'` — переписка — `bound`, разовые
+триггеры — `ephemeral`. `queue` и `drop` — осознанные политики, а не дефолт.
 
 ### Создание сессии — тоже событие
 
@@ -190,11 +197,8 @@ type RouteDecision =
 - **Дедуп** — по `dedupKey` (повторный webhook/пересланное сообщение не создаёт дубль).
 - **Секреты** ботов/токенов — at-rest по модели [AD-076](./ad-076-git-repo-registry-ssh.md) (мастер-ключ),
   не логируются.
-- **Ключи приёма** ([AD-052](./ad-052-public-api-platform.md), первый срез): секрет — только `sha256`-хеш
-  (`EventApiKeyStore`, `{dataDir}/events/api-keys.json`), plaintext отдаётся один раз при создании;
-  неверный/отозванный/истёкший ключ → 401; использование пишется в журнал (`keyId`).
-  Метка `label` обязательна и уникальна глобально по инстансу; per-key лимит запросов/мин
-  (`rateLimitPerMinute`, иначе дефолт `events.keyRateLimitPerMinute`) — превышение → 429.
+- **Ключи приёма** ([AD-052](./ad-052-public-api-platform.md), первый срез): модель целиком — в `EventBindingApiKey`
+  выше. Неверный/отозванный/истёкший ключ → 401; использование пишется в журнал (`keyId`).
   Ключи — инстанс-локальные (не переносятся publish/fork, [AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
 - **Guard** — весь контент события проходит обфускацию перед LLM ([AD-036](./ad-036-llm-gateway.md));
   вложения — по [AD-085](./ad-085-multimodal-input.md).
@@ -222,17 +226,14 @@ type RouteDecision =
 - **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),
   `RouteRuleStore` (`{dataDir}/events/routes.json`), `EventApiKeyStore` (`{dataDir}/events/api-keys.json`, AD-052-первый срез;
   `schemaVersion`, sha256-хеш секрета) (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.
-- **API-ключи привязок (AD-089/AD-052, первый срез):** `EventApiKeyStore` — несколько ключей на `EventBinding`,
-  секрет `synth_evt_<base64url>` хранится только как sha256-хеш, plaintext возвращается лишь при создании
-  (`{...meta, key}`), в списке — `prefix`; обязательная `label` (уникальна глобально по инстансу,
-  регистронезависимо; дубль → 409 `CONFLICT`), `description?`, `expiresAt?` (срок), `rateLimitPerMinute?`
-  (лимит/мин), `revokedAt?` (мягкий отзыв); legacy-backfill `name`→`label` при чтении; каскадное удаление
-  при удалении привязки (`removeByBinding`). Эндпоинты `GET/POST /api/v2/events/bindings/:id/keys`,
-  `PATCH .../keys/:keyId` (метка/описание/срок/лимит; `null` — сброс), `POST .../keys/:keyId/revoke`
-  (идемпотентно), `DELETE .../keys/:keyId`; приём `POST /api/v2/events` по `Authorization: Bearer <binding-key>`
-  аутентифицирует без пользовательских кред (source/чат из привязки, тело `eventKeyIngestSchema` — `source`
-  опционален), использование пишется в журнал (`keyId`/`principalId`); `EventKeyCredential`
-  (`keyId`/`bindingId`/`rateLimitPerMinute`, задел `scopes`/`principalId`).
+- **API-ключи привязок (AD-089/AD-052, первый срез):** полное описание модели — `EventBindingApiKey` выше.
+  Эндпоинты `GET/POST /api/v2/events/bindings/:id/keys`, `PATCH .../keys/:keyId` (метка/описание/срок/лимит;
+  `null` — сброс), `POST .../keys/:keyId/revoke` (идемпотентно), `DELETE .../keys/:keyId`; `EventApiKeyStore`
+  (`{dataDir}/events/api-keys.json`, `schemaVersion`, sha256-хеш секрета), legacy-backfill `name`→`label` при
+  чтении, дубль `label` → 409 `CONFLICT`, каскад `removeByBinding` при удалении привязки. Приём
+  `POST /api/v2/events` по `Authorization: Bearer <binding-key>` аутентифицирует без пользовательских кред
+  (source/чат из привязки, тело `eventKeyIngestSchema` — `source` опционален), использование пишется в журнал
+  (`keyId`/`principalId`); `EventKeyCredential` (`keyId`/`bindingId`/`rateLimitPerMinute`, задел `scopes`/`principalId`).
 - **Per-key rate limit (AD-089/AD-052):** `KeyRateLimiter` (`engine/events/key-rate-limiter.ts`) —
   in-memory fixed-window 60 c по `keyId`; лимит ключа `rateLimitPerMinute`, иначе глобальный дефолт
   `events.keyRateLimitPerMinute` (0 — без лимита); превышение → `429 RATE_LIMITED`.
@@ -265,10 +266,8 @@ type RouteDecision =
 **Не реализовано (остаток):**
 
 - **Источник [AD-052](./ad-052-public-api-platform.md) — частично:** реализован первый срез —
-  **binding-key** (ключ жёстко привязан к source/чату привязки; webhook/CI/кастомные источники):
-  `label` (глобально уникальна)/`description`/`expiresAt`/`rateLimitPerMinute`, update/revoke/удаление,
-  per-key rate limit (+ глобальный дефолт `events.keyRateLimitPerMinute`), UI срока/отзыва. Но нет
-  **service-key** (общий ключ инстанса/тенанта со scope — будущий AD-052; для мессенджер-шлюзов
+  **binding-key** (см. `EventBindingApiKey` выше). Нет **service-key** (общий ключ инстанса/тенанта
+  со scope — остаток AD-052; для мессенджер-шлюзов
   [AD-086](./ad-086-extensibility-plugins-editions.md)), `scopes`/`tenants`, OpenAPI-спеки, SDK, исходящих
   webhooks; ключи — **инстанс-локальные секреты**: не переносятся publish/fork и межмировой обмен
   ([AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
@@ -279,33 +278,24 @@ type RouteDecision =
 - стриминг событий наружу (webhooks, [AD-052](./ad-052-public-api-platform.md));
 - пайплайны (цепочки, AD-059).
 
-**Переиспользуемые кирпичи:**
-
-- [AD-034](./ad-034-model-routing.md) и [AD-035](./ad-035-micro-model-first.md) — микро-каскад (`engine/router/micro/`); тул `classify_conversation`.
-- Ветвление/наследование сессий ([AD-033](./ad-033-session-branching-merge.md)) и очередь (`QueueProcessorManager`, `queue/processor.ts`).
-- MCP-клиент ([AD-071](./ad-071-mcp-servers-prompt.md)) и API v2 ([AD-017](./ad-017-api-v2-hono.md)).
-- Внешний демонстратор `synth-media` (Telegram-MCP + бот).
+**Переиспользуемые кирпичи:** сводная таблица — в разделе «Детали» («Переиспользование существующих кирпичей» выше).
 
 ## Открытые вопросы
 
 - **Транспорт приёма:** webhook vs long-polling vs исходящий pull — что дефолт для каждого источника?
 - **Модель идентичности:** собственная таблица маппинга внешних id ↔ профили или внешний IdP
   ([AD-043](./ad-043-unified-identity-login.md))?
-- **Хранение `Binding`/`Event`:** где (FileStore [AD-005](./ad-005-json-storage.md) / PostgreSQL [AD-032](./ad-032-history-storage-postgresql.md))
-  и как долго хранить журнал событий (retention, [AD-074](./ad-074-soft-delete-retention.md))?
-- **`ephemeral` TTL:** кто закрывает/архивирует сессию, как считается простой, что с недописанными ответами?
 - **Мультитенантность:** один Router на инстанс vs на проект/организацию; изоляция событий.
 - **Гранулярность `bound`:** чат / тред / топик / ветка диалога — и как мигрирует при переносе сессии
   между проектами ([AD-040](./ad-040-sessions-without-project.md))?
 - **Стриминг ответа наружу:** edit-in-place / typing-indicator — на стороне источника или Synth?
-- **Отношение к [AD-030](./ad-030-hooks-agent-events.md):** Router — плагин на hook-шине или ядровый слой?
-- **Отношение к [AD-051](./ad-051-scheduler-pipelines.md):** cron — частный источник `Event` или
-  отдельный пайплайн-движок со своей моделью?
+
+Ряд вопросов закрыт реализацией — см. «Статус реализации в коде».
 
 ## Связи
 
-- [AD-030](./ad-030-hooks-agent-events.md) — **фундамент**: hook-шина и Plugin SDK, на которых строится Router;
-  события уровня интеграций `external_event`/`message_received`/`callback`.
+- [AD-030](./ad-030-hooks-agent-events.md) — hook-шина и точки расширения (Plugin SDK — не реализован);
+  Router — ядровый слой, эмитит `external_event`/`session_requested`.
 - [AD-034](./ad-034-model-routing.md), [AD-035](./ad-035-micro-model-first.md) — слой решения (классификация события/интента).
 - [AD-033](./ad-033-session-branching-merge.md) — создание/ветвление сессий под событие.
 - [AD-026](./ad-026-subagent-context-modes.md) — режимы контекста при запуске агента.

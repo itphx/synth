@@ -106,8 +106,9 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 
 ### Что уже есть
 
-- **Точек расширения нет.** [AD-030](./ad-030-hooks-agent-events.md) (hooks + `SynthPlugin` SDK) — только проект,
-  кода нет; grep `plugin`/`SynthPlugin` — пусто (кроме Vite/tailwind и `blockUnsafeOperationsPlugin` внутри git-обёртки).
+- **Точек расширения нет.** Хуки/hook-шина [AD-030](./ad-030-hooks-agent-events.md) реализованы, но Plugin SDK
+  (`SynthPlugin`) и загрузка плагинов — нет; grep `SynthPlugin` по `packages/` — пусто (кроме Vite/tailwind
+  и `blockUnsafeOperationsPlugin` внутри git-обёртки).
 - **Публикуемые пакеты** [AD-038](./ad-038-npm-packages.md) — ключевой enabler editions: 6 независимых npm-пакетов,
   тонкая `@itphx/synth`, `scripts/{build,publish,version-bump}.sh`.
 - **Flavor-образы** [AD-082](./ad-082-full-images-deployment.md) — уже предтеча «editions» для образов
@@ -150,8 +151,8 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 
 Проверено по репозиторию (grep по `packages/**`, исключая `dist/` и `node_modules/`):
 
-- Plugin SDK / точек расширения нет: `SynthPlugin`, hooks-идентификаторы — 0 совпадений
-  ([AD-030](./ad-030-hooks-agent-events.md) — только проект).
+- Хуки/hook-шина [AD-030](./ad-030-hooks-agent-events.md) реализованы; Plugin SDK / загрузка плагинов
+  (`SynthPlugin`) — нет.
 - Реестра/каталога editions и add-on'ов нет; install-policy для них не существует.
 - [AD-082](./ad-082-full-images-deployment.md) (flavor-образы) — не реализовано.
 - [AD-068](./ad-068-skills-agents-registry.md) (реестр/каталог контента) — не реализовано; [AD-046](./ad-046-skills-and-slash-commands.md)
