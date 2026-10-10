@@ -12,6 +12,7 @@
 
 import type {
   DecisionAnswer,
+  DecisionMediaInput,
   DecisionQuestion,
   DecisionResponse,
   LLMChunk,
@@ -66,18 +67,21 @@ export class DecisionProvider extends BaseProvider {
   /**
    * AD-084: основной метод — единый decision-запрос. `state` — текст/JSON,
    * `questions` — типизированные вопросы (`noul`/`choice`/`score`).
+   * `images`/`videos` (AD-085 задел) добавляются в тело только если непусты.
    */
   async decide(
     state: unknown,
     questions: Record<string, DecisionQuestion>,
-    opts?: { model?: string },
+    opts?: { model?: string } & DecisionMediaInput,
   ): Promise<DecisionResponse> {
     const url = this._endpoint();
-    const body = {
+    const body: Record<string, unknown> = {
       model: opts?.model || this.model,
       state,
       questions,
     };
+    if (opts?.images && opts.images.length > 0) body.images = opts.images;
+    if (opts?.videos && opts.videos.length > 0) body.videos = opts.videos;
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;

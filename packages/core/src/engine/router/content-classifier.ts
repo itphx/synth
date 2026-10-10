@@ -12,6 +12,10 @@ export interface ClassifyRequest {
   systemPrompt?: string;
   toolCalls?: string[];
   language?: string;
+  /** AD-085 задел: изображения текущего запроса (для decision-классификатора). */
+  images?: string[];
+  /** AD-085 задел: видео текущего запроса (для decision-классификатора). */
+  videos?: string[];
 }
 
 export interface ClassifyResult {

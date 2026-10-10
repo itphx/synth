@@ -205,6 +205,8 @@ export function mergeDecisionConfig(
     provider: r.provider ?? base?.provider ?? '',
     model: r.model ?? base?.model ?? '',
     confidenceThreshold: r.confidenceThreshold ?? base?.confidenceThreshold ?? 0.6,
+    escalationProvider: r.escalationProvider ?? base?.escalationProvider ?? '',
+    escalationModel: r.escalationModel ?? base?.escalationModel ?? '',
   };
 }
 

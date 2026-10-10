@@ -142,6 +142,9 @@ export const defaultConfig: SynthConfig = {
     provider: '',
     model: '',
     confidenceThreshold: 0.6,
+    // AD-084: тир эскалации не задан (пусто — эскалации нет).
+    escalationProvider: '',
+    escalationModel: '',
   },
   instructions: {
     enabled: true,

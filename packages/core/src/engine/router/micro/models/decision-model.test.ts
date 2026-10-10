@@ -210,6 +210,45 @@ describe('DecisionModel', () => {
       );
     }
   });
+
+  it('primary low → эскалация принята: OK с decision_escalated', async () => {
+    const primaryDecide = vi.fn(async () => choiceResponse('question', 0.4));
+    const escDecide = vi.fn(async () => choiceResponse('command', 0.9));
+    const getDecisionProvider = vi.fn((providerName: string) =>
+      providerName === 'esc-p' ? { decide: escDecide } : { decide: primaryDecide });
+    const model = new DecisionModel(
+      { getDecisionProvider },
+      () => ({ ...BASE_CONFIG, escalationProvider: 'esc-p', escalationModel: 'esc-m' }),
+    );
+
+    const result = await model.handle(makeInput('сделай'), 'classify');
+
+    expect(result.status).toBe('OK');
+    expect(result.label).toBe('command');
+    expect(result.signals).toContain('decision:command');
+    expect(result.signals).toContain('decision_escalated');
+    expect(primaryDecide).toHaveBeenCalledOnce();
+    expect(escDecide).toHaveBeenCalledOnce();
+    expect((escDecide.mock.calls[0] as unknown[])[2]).toEqual({ model: 'esc-m' });
+  });
+
+  it('images/videos из MicroInput прокидываются в провайдер', async () => {
+    const decide = vi.fn(async () => choiceResponse('command', 0.9));
+    const model = new DecisionModel(
+      { getDecisionProvider: vi.fn(() => ({ decide })) },
+      () => BASE_CONFIG,
+    );
+    const input: MicroInput = { ...makeInput('сделай'), images: ['i1'], videos: ['v1'] };
+
+    const result = await model.handle(input, 'classify');
+
+    expect(result.status).toBe('OK');
+    expect((decide.mock.calls[0] as unknown[])[2]).toEqual({
+      model: 'clef-flash',
+      images: ['i1'],
+      videos: ['v1'],
+    });
+  });
 });
 
 describe('MicroPipeline: порядок decision перед micro_llm', () => {

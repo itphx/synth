@@ -19,7 +19,7 @@ import type {
   DecisionConfigLike,
   DecisionProviderResolver,
 } from './micro/models/decision-model.js';
-import { warning } from '../../logger.js';
+import { decideChoiceCascade } from './decision-cascade.js';
 
 /** Идентификатор decision-вопроса (ответ — категория `coding|research|chat`). */
 export const DECISION_CATEGORY_QUESTION_ID = 'category';
@@ -70,50 +70,30 @@ export class DecisionContentClassifier {
     const modelName = config.model;
     if (!providerName || !modelName) return null;
 
-    const provider = this._resolver.getDecisionProvider(providerName, modelName);
-    if (!provider) {
-      warning('DECISION', `decision-провайдер не найден: ${providerName}/${modelName}`);
-      return null;
-    }
+    const question = this._buildQuestion(request.language);
+    // Единый каскад primary → escalation (AD-084); fail-safe внутри.
+    const outcome = await decideChoiceCascade({
+      resolver: this._resolver,
+      config,
+      state: request.userMessage,
+      questions: { [DECISION_CATEGORY_QUESTION_ID]: question },
+      questionId: DECISION_CATEGORY_QUESTION_ID,
+      validate: isContentCategory,
+      ...(request.images ? { images: request.images } : {}),
+      ...(request.videos ? { videos: request.videos } : {}),
+      logLabel: 'классификатор',
+    });
 
-    try {
-      const question = this._buildQuestion(request.language);
-      const response = await provider.decide(
-        request.userMessage,
-        { [DECISION_CATEGORY_QUESTION_ID]: question },
-        { model: modelName },
-      );
+    if (!outcome.accepted || !outcome.label) return null;
 
-      const answer = response.answers[DECISION_CATEGORY_QUESTION_ID];
-      if (!answer || answer.type !== 'choice') {
-        warning('DECISION', 'decision-классификатор: нет choice-ответа');
-        return null;
-      }
-
-      const category = answer.choice;
-      if (!isContentCategory(category)) {
-        warning('DECISION', `decision-классификатор: невалидная метка "${category}"`);
-        return null;
-      }
-
-      const confidence = answer.confidence;
-      if (!(confidence >= config.confidenceThreshold)) {
-        warning(
-          'DECISION',
-          `decision-классификатор: низкая уверенность ${confidence.toFixed(2)} < ${config.confidenceThreshold}`,
-        );
-        return null;
-      }
-
-      return {
-        category,
-        confidence,
-        signals: [`decision:${category}`],
-      };
-    } catch (err) {
-      warning('DECISION', `Ошибка decision-классификатора: ${String(err).slice(0, 200)}`);
-      return null;
-    }
+    const category = outcome.label as ContentCategory;
+    const signals = [`decision:${category}`];
+    if (outcome.tier === 'escalation') signals.push('decision_escalated');
+    return {
+      category,
+      confidence: outcome.confidence ?? 0,
+      signals,
+    };
   }
 
   /** Строит `choice`-вопрос по языку запроса (ru/en, дефолт ru). */

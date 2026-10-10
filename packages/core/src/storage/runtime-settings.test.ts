@@ -335,6 +335,8 @@ describe('mergeDecisionConfig (AD-084)', () => {
     provider: '',
     model: '',
     confidenceThreshold: 0.6,
+    escalationProvider: '',
+    escalationModel: '',
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
@@ -343,12 +345,16 @@ describe('mergeDecisionConfig (AD-084)', () => {
       provider: 'routerai-decision',
       model: 'clef-flash',
       confidenceThreshold: 0.9,
+      escalationProvider: 'routerai-decision',
+      escalationModel: 'clef',
     });
     expect(merged).toEqual({
       enabled: true,
       provider: 'routerai-decision',
       model: 'clef-flash',
       confidenceThreshold: 0.9,
+      escalationProvider: 'routerai-decision',
+      escalationModel: 'clef',
     });
   });
 
@@ -362,6 +368,8 @@ describe('mergeDecisionConfig (AD-084)', () => {
       provider: '',
       model: '',
       confidenceThreshold: 0.6,
+      escalationProvider: '',
+      escalationModel: '',
     });
   });
 });

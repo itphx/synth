@@ -12,11 +12,12 @@
  * позволяет обновлять runtime-настройки без пересоздания модели (Ф5).
  */
 import type { DecisionQuestion, DecisionResponse } from '@itphx/synth-shared';
+import { decideChoiceCascade, type DecisionCascadeOutcome } from '../../decision-cascade.js';
 import type { MicroInput, MicroResult, MicroTaskClass } from '../types.js';
 import type { MicroModel } from './base.js';
 import { INTENT_DESCRIPTIONS, CLASSIFY_ANSWERS } from '../tasks/classify-intent.js';
 import { VALID_LABELS, ENUM_ANSWERS } from '../tasks/enum-decision.js';
-import { info, warning } from '../../../../logger.js';
+import { info } from '../../../../logger.js';
 
 /** Идентификатор decision-вопроса (ответ — метка задачи). */
 export const DECISION_QUESTION_ID = 'label';
@@ -35,6 +36,10 @@ export interface DecisionConfigLike {
   model: string;
   /** Порог уверенности: ниже — `UNSURE` (fail-safe). */
   confidenceThreshold: number;
+  /** AD-084: провайдер тира эскалации (необязательный точный тир). */
+  escalationProvider?: string;
+  /** AD-084: модель тира эскалации (необязательный точный тир). */
+  escalationModel?: string;
 }
 
 /** Провайдер, умеющий decision-запрос (совместим с `BaseProvider.decide`). */
@@ -42,7 +47,7 @@ export interface DecisionProviderLike {
   decide(
     state: unknown,
     questions: Record<string, DecisionQuestion>,
-    opts?: { model?: string },
+    opts?: { model?: string; images?: string[]; videos?: string[] },
   ): Promise<DecisionResponse>;
 }
 
@@ -88,54 +93,59 @@ export class DecisionModel implements MicroModel {
       return this._unsure(taskClass, startTime, ['decision_no_provider']);
     }
 
-    const provider = this._resolver.getDecisionProvider(providerName, modelName);
-    if (!provider) {
-      return this._unsure(taskClass, startTime, [`decision_provider_not_found:${providerName}/${modelName}`]);
-    }
+    const questions = this._buildQuestions(taskClass);
+    info('DECISION', `Запрос decision-модели ${providerName}/${modelName} (${taskClass})`);
 
-    try {
-      const questions = this._buildQuestions(taskClass);
-      info('DECISION', `Запрос decision-модели ${providerName}/${modelName} (${taskClass})`);
+    // Единый каскад primary → escalation (AD-084); fail-safe внутри.
+    const outcome = await decideChoiceCascade({
+      resolver: this._resolver,
+      config,
+      state: input.userMessage,
+      questions,
+      questionId: DECISION_QUESTION_ID,
+      validate: (label) => this._isValidLabel(taskClass, label),
+      ...(input.images ? { images: input.images } : {}),
+      ...(input.videos ? { videos: input.videos } : {}),
+      logLabel: 'микро',
+    });
 
-      const response = await provider.decide(input.userMessage, questions, { model: modelName });
-
-      const answer = response.answers[DECISION_QUESTION_ID];
-      if (!answer || answer.type !== 'choice') {
-        return this._unsure(taskClass, startTime, ['decision_no_answer']);
-      }
-
-      const label = answer.choice;
-      if (!this._isValidLabel(taskClass, label)) {
-        return this._unsure(taskClass, startTime, [`decision_invalid_label:${label}`]);
-      }
-
-      const confidence = answer.confidence;
-      const ok = confidence >= config.confidenceThreshold;
-      const latencyMs = Math.round(performance.now() - startTime);
-
-      info(
-        'DECISION',
-        `${ok ? 'OK' : 'UNSURE'}: label=${label}, confidence=${confidence.toFixed(2)}, latency=${latencyMs}ms`,
-      );
-
+    if (outcome.accepted) {
+      const signals = [`decision:${outcome.label}`];
+      if (outcome.tier === 'escalation') signals.push('decision_escalated');
       return {
-        status: ok ? 'OK' : 'UNSURE',
+        status: 'OK',
         taskClass,
-        label: ok ? label : undefined,
-        confidence,
-        usage: response.usage
-          ? { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens }
-          : undefined,
-        latencyMs,
-        signals: ok ? [`decision:${label}`] : ['decision_low_confidence'],
+        label: outcome.label,
+        confidence: outcome.confidence ?? 0,
+        latencyMs: outcome.latencyMs,
+        signals,
       };
-    } catch (err) {
-      warning('DECISION', `Ошибка decision-модели: ${String(err).slice(0, 200)}`);
-      return this._unsure(taskClass, startTime, [`decision_error:${String(err).slice(0, 100)}`]);
     }
+
+    return this._unsure(taskClass, startTime, [this._failSignal(outcome)], outcome.latencyMs);
   }
 
   // ── private ──
+
+  /** Сигнал отказа каскада по статусу последней попытки (AD-084). */
+  private _failSignal(outcome: DecisionCascadeOutcome): string {
+    const last = outcome.attempts[outcome.attempts.length - 1];
+    switch (outcome.lastStatus) {
+      case 'no_provider':
+        return last
+          ? `decision_provider_not_found:${last.providerName}/${last.modelName}`
+          : 'decision_provider_not_found';
+      case 'invalid':
+        return `decision_invalid_label:${outcome.lastLabel ?? ''}`;
+      case 'error':
+        return `decision_error:${outcome.lastError ?? ''}`;
+      case 'low_confidence':
+        return 'decision_low_confidence';
+      case 'no_answer':
+      default:
+        return 'decision_no_answer';
+    }
+  }
 
   /** Строит decision-вопрос (`choice`) по классу задачи. */
   private _buildQuestions(taskClass: MicroTaskClass): Record<string, DecisionQuestion> {
@@ -178,12 +188,17 @@ export class DecisionModel implements MicroModel {
     return false;
   }
 
-  private _unsure(taskClass: MicroTaskClass, startTime: number, signals: string[]): MicroResult {
+  private _unsure(
+    taskClass: MicroTaskClass,
+    startTime: number,
+    signals: string[],
+    latencyMs?: number,
+  ): MicroResult {
     return {
       status: 'UNSURE',
       taskClass,
       confidence: 0.3,
-      latencyMs: Math.round(performance.now() - startTime),
+      latencyMs: latencyMs ?? Math.round(performance.now() - startTime),
       signals,
     };
   }

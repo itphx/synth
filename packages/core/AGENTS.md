@@ -109,7 +109,7 @@
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use).
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit; `decide()` — не-chat
   decision-вызов (AD-084: guard/обфускация `state`, тот же `_prepare`/аудит, что у chat-путей).
-- `engine/router/*` — routing моделей и micro-model слой (AD-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, AD-084) и `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`).
+- `engine/router/*` — routing моделей и micro-model слой (AD-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, AD-084), `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`), единый каскад `decision-cascade.ts` (`decideChoiceCascade`: `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`, fail-safe) и агрегатные метрики `decision-metrics.ts` (синглтон `decisionMetrics`: `calls`/`handled`/`fallback`/`escalated`/`attempts`/`rejected`/`by_model`). Мультимодальный контракт (задел AD-085): `MicroInput.images`/`videos`, `ClassifyRequest.images`/`videos`, `DecisionProvider.decide(opts.images/videos)` — добавляются в тело запроса только если непусты.
 - `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, AD-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, AD-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
@@ -189,7 +189,7 @@
   `FileMutex` (`file-mutex.ts`, AD-051/AD-089: `mkdir`-лок + stale takeover для общего
   `dataDir`; `ScheduleStore.crossProcess` сериализует мутации), `RuntimeSettingsStore`
   (`events` + `mergeEventsConfig` — runtime-настройки раздела «События», AD-089; `decision` +
-  `mergeDecisionConfig` — runtime-настройки decision-слоя, AD-084),
+  `mergeDecisionConfig` — runtime-настройки decision-слоя, AD-084, включая `escalationProvider`/`escalationModel`),
   `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`
@@ -238,7 +238,9 @@
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и
   `GET/PUT/DELETE /settings/decision` — runtime-настройки decision-слоя (AD-084: `fallbackDecision`,
-  `onDecisionChange`, мутации под `decisionWriteGuard`).
+  `onDecisionChange`, мутации под `decisionWriteGuard`), а также `GET /settings/decision/metrics`
+  (снимок `decisionMetrics`, `requireAuth`) и `DELETE /settings/decision/metrics` (сброс,
+  `decisionWriteGuard`).
 
 ## MCP
 

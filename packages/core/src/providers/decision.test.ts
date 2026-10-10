@@ -116,6 +116,27 @@ describe('DecisionProvider (AD-084)', () => {
     expect(JSON.parse(String(init.body)).state).toEqual({ a: 1 });
   });
 
+  it('images/videos добавляются в тело только если непусты', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ answers: {} }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await makeProvider().decide('s', {}, { images: ['a'], videos: [] });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.images).toEqual(['a']);
+    expect(body.videos).toBeUndefined();
+
+    await makeProvider().decide('s', {}, {});
+    const [, init2] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    const body2 = JSON.parse(String(init2.body)) as Record<string, unknown>;
+    expect(body2.images).toBeUndefined();
+    expect(body2.videos).toBeUndefined();
+  });
+
   it('429 → RateLimitError', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: false,

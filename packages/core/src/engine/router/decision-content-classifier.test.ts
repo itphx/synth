@@ -140,4 +140,41 @@ describe('DecisionContentClassifier', () => {
     });
     await expect(classifier.classify(makeRequest())).resolves.toBeNull();
   });
+
+  it('primary low → эскалация принята: decision_escalated в signals', async () => {
+    const primaryDecide = vi.fn(async () => choiceResponse('chat', 0.3));
+    const escDecide = vi.fn(async () => choiceResponse('coding', 0.9));
+    const getDecisionProvider = vi.fn((providerName: string) =>
+      providerName === 'esc-p' ? { decide: escDecide } : { decide: primaryDecide });
+    const classifier = new DecisionContentClassifier(
+      { getDecisionProvider },
+      () => ({ ...BASE_CONFIG, escalationProvider: 'esc-p', escalationModel: 'esc-m' }),
+    );
+
+    const result = await classifier.classify(makeRequest({ userMessage: 'напиши функцию' }));
+
+    expect(result).toEqual({
+      category: 'coding',
+      confidence: 0.9,
+      signals: ['decision:coding', 'decision_escalated'],
+    });
+    expect(primaryDecide).toHaveBeenCalledOnce();
+    expect(escDecide).toHaveBeenCalledOnce();
+  });
+
+  it('images/videos из запроса прокидываются в провайдер', async () => {
+    const decide = vi.fn(async () => choiceResponse('coding', 0.9));
+    const classifier = new DecisionContentClassifier(
+      { getDecisionProvider: vi.fn(() => ({ decide })) },
+      () => BASE_CONFIG,
+    );
+
+    await classifier.classify(makeRequest({ images: ['i1'], videos: ['v1'] }));
+
+    expect((decide.mock.calls[0] as unknown[])[2]).toEqual({
+      model: 'clef-flash',
+      images: ['i1'],
+      videos: ['v1'],
+    });
+  });
 });

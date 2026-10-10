@@ -25,6 +25,10 @@ export interface MicroInput {
   embedProvider?: string;
   /** Модель для embedding (из session.settings). */
   embedModel?: string;
+  /** AD-085 задел: изображения текущего хода (для decision-модели). */
+  images?: string[];
+  /** AD-085 задел: видео текущего хода (для decision-модели). */
+  videos?: string[];
 }
 
 /** Результат работы микро-слоя. */

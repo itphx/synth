@@ -318,7 +318,10 @@ export const schedulerConfigSchema = z.object({
  * - `enabled` — мастер-выключатель decision-слоя (по умолчанию выключен);
  * - `provider` — имя провайдера decision-типа (`decision`/`systemone`);
  * - `model` — модель decision-слоя (напр. `clef-flash`);
- * - `confidenceThreshold` — порог уверенности, ниже — fallback (fail-safe).
+ * - `confidenceThreshold` — порог уверенности, ниже — fallback (fail-safe);
+ * - `escalationProvider`/`escalationModel` — необязательный точный тир на
+ *   эскалацию (вторая пара provider/model, напр. Clef): при промахе primary
+ *   decision-каскад пробует эскалацию. Пусто — эскалации нет.
  *
  * Транспорт задаётся типом провайдера (`decision` → `POST {base}/decisions`,
  * `systemone` → `POST {base}/v1/systemone`), а таймаут — свойством провайдера.
@@ -328,6 +331,10 @@ export const decisionConfigSchema = z.object({
   provider: z.string().default(''),
   model: z.string().default(''),
   confidenceThreshold: z.number().min(0).max(1).default(0.6),
+  /** AD-084: провайдер тира эскалации; пусто — эскалации нет. */
+  escalationProvider: z.string().default(''),
+  /** AD-084: модель тира эскалации; пусто — эскалации нет. */
+  escalationModel: z.string().default(''),
 });
 
 // --- Проектные инструкции (AD-069) ---

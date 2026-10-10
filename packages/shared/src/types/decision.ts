@@ -78,8 +78,18 @@ export type DecisionAnswer =
   | DecisionChoiceAnswer
   | DecisionScoreAnswer;
 
+/**
+ * AD-084: медиа-вложения decision-запроса (AD-085 задел). Источник изображений/
+ * видео — мультимодальный ввод (пока не реализован), здесь только контракт-
+ * plumbing: значения прокидываются в тело decision-запроса, если непусты.
+ */
+export interface DecisionMediaInput {
+  images?: string[];
+  videos?: string[];
+}
+
 /** AD-084: запрос `state + questions → answers`. */
-export interface DecisionRequest {
+export interface DecisionRequest extends DecisionMediaInput {
   model: string;
   /** Текст или JSON-совместимая структура (System One понимает оба). */
   state: unknown;
@@ -185,6 +195,9 @@ export const decisionRequestSchema = z.object({
   model: z.string(),
   state: z.unknown(),
   questions: z.record(z.string(), decisionQuestionSchema),
+  /** AD-084/AD-085: медиа-вложения (изображения/видео) — опциональны. */
+  images: z.array(z.string()).optional(),
+  videos: z.array(z.string()).optional(),
 });
 
 export const decisionResponseSchema = z.object({

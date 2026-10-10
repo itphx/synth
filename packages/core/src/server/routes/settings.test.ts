@@ -1502,6 +1502,8 @@ describe('Settings API Routes (decision, AD-084)', () => {
       provider: '',
       model: '',
       confidenceThreshold: 0.6,
+      escalationProvider: '',
+      escalationModel: '',
     });
     expect(body.decision).toEqual(body.defaults);
   });
@@ -1513,6 +1515,27 @@ describe('Settings API Routes (decision, AD-084)', () => {
     expect(body.defaults.provider).toBe('routerai-decision');
     // Незаданные поля — дефолты схемы.
     expect(body.defaults.confidenceThreshold).toBe(0.6);
+    expect(body.defaults.escalationProvider).toBe('');
+    expect(body.defaults.escalationModel).toBe('');
+  });
+
+  it('PUT /decision — сохраняет escalation-тир и применяет поверх дефолтов', async () => {
+    const { app, settingsStore } = makeDecisionApp();
+    const res = await app.request('/api/v2/settings/decision', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        decision: { escalationProvider: 'routerai-decision', escalationModel: 'clef' },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.decision.escalationProvider).toBe('routerai-decision');
+    expect(body.decision.escalationModel).toBe('clef');
+    expect(await settingsStore.getDecision()).toEqual({
+      escalationProvider: 'routerai-decision',
+      escalationModel: 'clef',
+    });
   });
 
   it('PUT /decision — сохраняет патч, применяет поверх дефолтов, вызывает onDecisionChange', async () => {
@@ -1545,6 +1568,8 @@ describe('Settings API Routes (decision, AD-084)', () => {
       { decision: { confidenceThreshold: 'high' } },
       { decision: { provider: 42 } },
       { decision: { model: false } },
+      { decision: { escalationProvider: 42 } },
+      { decision: { escalationModel: false } },
     ];
     for (const body of invalidBodies) {
       const res = await app.request('/api/v2/settings/decision', {
@@ -1591,6 +1616,61 @@ describe('Settings API Routes (decision, AD-084)', () => {
     expect(await settingsStore.getDecision()).toEqual({});
 
     const del = await app.request('/api/v2/settings/decision', { method: 'DELETE' });
+    expect(del.status).toBe(403);
+  });
+
+  it('GET /decision/metrics — снимок метрик decision-слоя (requireAuth)', async () => {
+    const { app } = makeDecisionApp();
+    const res = await app.request('/api/v2/settings/decision/metrics');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.metrics).toMatchObject({
+      calls: expect.any(Number),
+      handled: expect.any(Number),
+      fallback: expect.any(Number),
+      escalated: expect.any(Number),
+      attempts: { primary: expect.any(Number), escalation: expect.any(Number) },
+      rejected: {
+        ok: expect.any(Number),
+        low_confidence: expect.any(Number),
+        invalid: expect.any(Number),
+        no_answer: expect.any(Number),
+        no_provider: expect.any(Number),
+        error: expect.any(Number),
+      },
+      by_model: expect.any(Object),
+    });
+    expect(typeof body.ts).toBe('string');
+  });
+
+  it('DELETE /decision/metrics — сбрасывает накопители (decisionWriteGuard)', async () => {
+    const { app } = makeDecisionApp();
+    const res = await app.request('/api/v2/settings/decision/metrics', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.metrics.calls).toBe(0);
+    expect(body.metrics.handled).toBe(0);
+    expect(body.metrics.fallback).toBe(0);
+    expect(body.metrics.escalated).toBe(0);
+    expect(body.metrics.attempts).toEqual({ primary: 0, escalation: 0 });
+    expect(body.metrics.rejected).toEqual({
+      ok: 0,
+      low_confidence: 0,
+      invalid: 0,
+      no_answer: 0,
+      no_provider: 0,
+      error: 0,
+    });
+    expect(body.metrics.by_model).toEqual({});
+  });
+
+  it('decisionWriteGuard отклоняет DELETE /decision/metrics, GET доступен', async () => {
+    const deny: import('hono').MiddlewareHandler = async (c) =>
+      c.json({ error: { code: 'FORBIDDEN', message: 'no' } }, 403);
+    const { app } = makeDecisionApp(undefined, { decisionWriteGuard: deny });
+
+    expect((await app.request('/api/v2/settings/decision/metrics')).status).toBe(200);
+    const del = await app.request('/api/v2/settings/decision/metrics', { method: 'DELETE' });
     expect(del.status).toBe(403);
   });
 });

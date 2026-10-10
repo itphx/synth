@@ -144,12 +144,14 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('decision по умолчанию: выключен, провайдер/модель пусты, порог 0.6 (AD-084)', () => {
+  it('decision по умолчанию: выключен, провайдер/модель пусты, порог 0.6, эскалация пуста (AD-084)', () => {
     expect(defaultConfig.decision).toEqual({
       enabled: false,
       provider: '',
       model: '',
       confidenceThreshold: 0.6,
+      escalationProvider: '',
+      escalationModel: '',
     });
   });
 });

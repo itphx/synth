@@ -21,7 +21,8 @@ import type {
   DecisionConfigLike,
   DecisionProviderResolver,
 } from '../router/micro/models/decision-model.js';
-import { info, warning } from '../../logger.js';
+import { decideChoiceCascade } from '../router/decision-cascade.js';
+import { info } from '../../logger.js';
 import { eventToMessageText } from './request-session.js';
 import { decisionFromTarget } from './target-decision.js';
 import type { RouteRuleInput, RouteRuleProvider } from './types.js';
@@ -86,74 +87,50 @@ export class DecisionRuleProvider implements RouteRuleProvider {
     const candidates = this._getAgentCandidates();
     if (candidates.length < MIN_ROUTING_CANDIDATES) return null;
 
-    const provider = this._resolver.getDecisionProvider(providerName, modelName);
-    if (!provider) {
-      warning('DECISION', `decision-провайдер не найден: ${providerName}/${modelName}`);
-      return null;
-    }
+    // 3. Единый каскад primary → escalation (AD-084); fail-safe внутри:
+    //    отказ (в т.ч. нет провайдера/низкая уверенность/невалидный шаблон) → null.
+    const state = buildEventState(event);
+    const question = buildAgentQuestion(candidates);
+    const outcome = await decideChoiceCascade({
+      resolver: this._resolver,
+      config,
+      state,
+      questions: { [DECISION_ROUTING_QUESTION_ID]: question },
+      questionId: DECISION_ROUTING_QUESTION_ID,
+      validate: (id) => candidates.some((c) => c.id === id),
+      logLabel: 'маршрутизация события',
+    });
 
-    try {
-      const state = buildEventState(event);
-      const question = buildAgentQuestion(candidates);
-      const startedAt = performance.now();
-      const response = await provider.decide(
-        state,
-        { [DECISION_ROUTING_QUESTION_ID]: question },
-        { model: modelName },
-      );
-      const latencyMs = Math.round(performance.now() - startedAt);
+    if (!outcome.accepted || !outcome.label) return null;
 
-      const answer = response.answers[DECISION_ROUTING_QUESTION_ID];
-      if (!answer || answer.type !== 'choice') {
-        warning('DECISION', `decision-маршрутизация: нет choice-ответа (latency=${latencyMs}ms)`);
-        return null;
-      }
+    const template = outcome.label;
+    const confidence = outcome.confidence ?? 0;
 
-      const template = answer.choice;
-      if (!candidates.some((c) => c.id === template)) {
-        warning(
-          'DECISION',
-          `decision-маршрутизация: невалидный шаблон "${template}" (latency=${latencyMs}ms)`,
-        );
-        return null;
-      }
+    // Наблюдаемость успешного пути (AD-084 × AD-089): агент, уверенность,
+    // порог, модель, тир и latency. Мета (confidence/signals) уезжает в
+    // решение — далее в ответ `POST /events` и в журнал.
+    info(
+      'DECISION',
+      `decision-маршрутизация: агент=${template} confidence=${confidence.toFixed(2)} (порог ${config.confidenceThreshold}) model=${outcome.providerName}/${outcome.modelName} tier=${outcome.tier} latency=${outcome.latencyMs}ms source=${event.source} type=${event.type}`,
+    );
 
-      const confidence = answer.confidence;
-      if (!(confidence >= config.confidenceThreshold)) {
-        warning(
-          'DECISION',
-          `decision-маршрутизация: низкая уверенность ${confidence.toFixed(2)} < ${config.confidenceThreshold} (latency=${latencyMs}ms)`,
-        );
-        return null;
-      }
+    const signals = [
+      'decision-rules',
+      `agent:${template}`,
+      `model:${outcome.providerName}/${outcome.modelName}`,
+      `latency:${outcome.latencyMs}ms`,
+    ];
+    if (outcome.tier === 'escalation') signals.push('decision_escalated');
 
-      // Наблюдаемость успешного пути (AD-084 × AD-089): агент, уверенность,
-      // порог, модель и latency. Мета (confidence/signals) уезжает в решение —
-      // далее в ответ `POST /events` и в журнал.
-      info(
-        'DECISION',
-        `decision-маршрутизация: агент=${template} confidence=${confidence.toFixed(2)} (порог ${config.confidenceThreshold}) model=${providerName}/${modelName} latency=${latencyMs}ms source=${event.source} type=${event.type}`,
-      );
-
-      return decisionFromTarget(
-        { mode: 'ephemeral', agentTemplate: template },
-        this._getEventsConfig().defaultEphemeralTtl,
-        {
-          reason: 'decision-rules',
-          confidence,
-          signals: [
-            'decision-rules',
-            `agent:${template}`,
-            `model:${providerName}/${modelName}`,
-            `latency:${latencyMs}ms`,
-          ],
-        },
-      );
-    } catch (err) {
-      // Fail-safe: ошибка decision-слоя не должна ломать маршрутизацию события.
-      warning('DECISION', `Ошибка decision-маршрутизации события: ${String(err).slice(0, 200)}`);
-      return null;
-    }
+    return decisionFromTarget(
+      { mode: 'ephemeral', agentTemplate: template },
+      this._getEventsConfig().defaultEphemeralTtl,
+      {
+        reason: 'decision-rules',
+        confidence,
+        signals,
+      },
+    );
   }
 }
 

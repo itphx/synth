@@ -146,6 +146,36 @@ describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
     expect(decision?.signals?.some((s) => /^latency:\d+ms$/.test(s))).toBe(true);
   });
 
+  it('эскалация: primary low → escalation ok, decision_escalated в signals/мете', async () => {
+    const primaryDecide = vi.fn(async () => choiceResponse('assistant', 0.3));
+    const escDecide = vi.fn(async () => choiceResponse('triage', 0.9));
+    const getDecisionProvider = vi.fn((providerName: string) =>
+      providerName === 'clef-esc' ? { decide: escDecide } : { decide: primaryDecide });
+    const provider = new DecisionRuleProvider({
+      resolver: { getDecisionProvider },
+      getEventsConfig: () => ({ decisionRouting: true, defaultEphemeralTtl: '24h' }),
+      getDecisionConfig: () => ({
+        ...BASE_CONFIG,
+        escalationProvider: 'clef-esc',
+        escalationModel: 'clef',
+      }),
+      getAgentCandidates: () => AGENTS,
+    });
+
+    const decision = await provider.resolve({ event: event(), bindings: [] });
+
+    expect(decision).toMatchObject({
+      kind: 'ephemeral',
+      agentTemplate: 'triage',
+      ttl: '24h',
+      confidence: 0.9,
+    });
+    expect(decision?.signals).toContain('decision_escalated');
+    expect(decision?.signals).toContain('model:clef-esc/clef');
+    expect(primaryDecide).toHaveBeenCalledOnce();
+    expect(escDecide).toHaveBeenCalledOnce();
+  });
+
   it('вопрос — choice по enabled-агентам, state содержит текст события', async () => {
     const calls: Array<{ state: unknown; questions: Record<string, DecisionQuestion> }> = [];
     const { provider } = makeFixture({

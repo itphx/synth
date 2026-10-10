@@ -8,6 +8,7 @@ import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetwor
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
+import { decisionMetrics } from '../../engine/router/decision-metrics.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -152,6 +153,8 @@ function resolveDecisionDefaults(fallback?: Partial<DecisionRuntimeSettings>): D
     provider: fallback?.provider ?? base.provider,
     model: fallback?.model ?? base.model,
     confidenceThreshold: fallback?.confidenceThreshold ?? base.confidenceThreshold,
+    escalationProvider: fallback?.escalationProvider ?? base.escalationProvider,
+    escalationModel: fallback?.escalationModel ?? base.escalationModel,
   };
 }
 
@@ -184,6 +187,18 @@ function validateDecisionSettings(
     }
     result.confidenceThreshold = threshold;
   }
+  if (s.escalationProvider !== undefined) {
+    if (typeof s.escalationProvider !== 'string') {
+      return { ok: false, message: 'decision.escalationProvider: ожидается строка' };
+    }
+    result.escalationProvider = s.escalationProvider;
+  }
+  if (s.escalationModel !== undefined) {
+    if (typeof s.escalationModel !== 'string') {
+      return { ok: false, message: 'decision.escalationModel: ожидается строка' };
+    }
+    result.escalationModel = s.escalationModel;
+  }
   return { ok: true, value: result };
 }
 
@@ -197,6 +212,8 @@ function effectiveDecision(
     provider: runtime.provider ?? defaults.provider,
     model: runtime.model ?? defaults.model,
     confidenceThreshold: runtime.confidenceThreshold ?? defaults.confidenceThreshold,
+    escalationProvider: runtime.escalationProvider ?? defaults.escalationProvider,
+    escalationModel: runtime.escalationModel ?? defaults.escalationModel,
   };
 }
 
@@ -990,6 +1007,20 @@ export function createSettingsRoutes(
     // Пустой runtime → эффективные значения = config.yaml/defaults.
     await deps.onDecisionChange?.(defaults);
     return c.json({ status: 'restored', decision: defaults, isOverridden: false, defaults });
+  });
+
+  /**
+   * AD-084: агрегатные метрики decision-слоя (in-memory).
+   * GET — чтение снимка; DELETE — сброс накопителей (под `decisionWriteGuard`).
+   * Пути не конфликтуют с `/decision` (разные полные маршруты).
+   */
+  app.get('/decision/metrics', auth.requireAuth, (c) => {
+    return c.json({ metrics: decisionMetrics.snapshot(), ts: new Date().toISOString() });
+  });
+
+  app.delete('/decision/metrics', decisionWriteGuard, (c) => {
+    decisionMetrics.reset();
+    return c.json({ metrics: decisionMetrics.snapshot() });
   });
 
   return app;
