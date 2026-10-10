@@ -2244,3 +2244,14 @@
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммиты:** `1bcf7b3`, `15dbd96`, `a4945ab`, `dab9e24`, `86c11cb`, этот (журнал).
 
+## 2026-10-10 (продолжение 5) — рефакторинг decision: единый путь провайдеров/моделей
+- **Задача (фидбек):** «Модели и провайдеры decision настраиваются своим путём; сделать единообразно с остальными провайдерами/моделями — просто отдельный тип API». Решения: два типа-протокола `decision`/`systemone`; выбор модели — пара provider/model через селекты; `/settings/decision` — тонкий.
+- **Тип:** refactor (shared/core/ui) + docs
+- **Исполнитель:** @orchestrator (анализ паттернов/решения/верификация) → @fixer ×2
+- **Результат:** PASS
+- **Часть 1 (core/shared, `a4d6cb2`):** удалён спец-атрибут `decisionApi`; введены типы провайдера-протокола `decision` (`POST {base}/decisions`) и `systemone` (`POST {base}/v1/systemone`), оба → `DecisionProvider` (endpoint по `this.type`, `_normalizeUrl` не достраивает путь); env-sync без `..._DECISION_API`; секция `decision` сокращена до `enabled`/`provider`/`model`/`confidenceThreshold` (удалены `mode`/`escalationModel`/`timeoutMs`/`remoteEndpoint`, env `SYNTH_DECISION_MODE`); обновлены runtime-merge/валидация/роуты; docs LLM_PROVIDERS/CONFIGURATION/API_V2.
+- **Часть 2 (ui/docs/AD, `d11f3d0`):** `DecisionSettings` → `ModelPairSelect` (фильтр провайдеров по типу `decision`/`systemone`, модели по провайдеру) + `enabled`/`confidenceThreshold`; `ModelPairSelect` получил опц. testId/tooltip; тип `DecisionSettings` и i18n синхронизированы (ключи mode/escalation/endpoint удалены); ROUTING, AD-084, AGENTS (root/core/shared/ui) приведены к единому пути.
+- **Верификация (оркестратор):** build shared/core OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; ui `1092` PASS, ui build OK; целевые core-тесты 125/125, shared config 21/21; grep — ссылок на удалённые поля нет (кроме легитимных `SYNTH_DECISION_MODEL`/`decision.model`).
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммиты:** `a4d6cb2`, `d11f3d0`, этот (журнал).
+
