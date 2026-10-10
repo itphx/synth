@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { LLMGatewayConfig, LLMChunk, LLMResponse } from '@itphx/synth-shared';
 
 import { BaseProvider, resolveSystemPromptText, type LLMMessage, type CancellationToken } from '../../providers/base.js';
+import { ProviderError, RateLimitError } from '../../providers/exceptions.js';
 import { AuditLogger, GatewayProvider, RateLimiter } from './index.js';
 
 const SK_KEY = 'sk-abcdefghijklmnopqrst';
@@ -23,6 +24,9 @@ class MockCaptureProvider extends BaseProvider {
   static capturedSystemPrompt: string | null = null;
   static capturedTools: Record<string, unknown>[] | null = null;
   static responseContent = 'ok';
+  /** AD-084: decision-путь. */
+  static decideCalls = 0;
+  static capturedState: unknown = null;
 
   async chat(
     messages: LLMMessage[],
@@ -64,6 +68,17 @@ class MockCaptureProvider extends BaseProvider {
   getProviderName(): string {
     return 'mockgw2';
   }
+
+  /** AD-084: decision-путь — фиксируем state, отдаём типизированный ответ. */
+  async decide(state: unknown): Promise<import('@itphx/synth-shared').DecisionResponse> {
+    MockCaptureProvider.decideCalls++;
+    MockCaptureProvider.capturedState = state;
+    return {
+      model: this.model,
+      answers: { q1: { type: 'noul', noul: 1 } },
+      usage: { input_tokens: 3, output_tokens: 1 },
+    };
+  }
 }
 
 function makeConfig(overrides: Partial<LLMGatewayConfig> = {}): LLMGatewayConfig {
@@ -100,6 +115,8 @@ describe('GatewayProvider (AD-036)', () => {
     MockCaptureProvider.capturedSystemPrompt = null;
     MockCaptureProvider.capturedTools = null;
     MockCaptureProvider.responseContent = 'ok';
+    MockCaptureProvider.decideCalls = 0;
+    MockCaptureProvider.capturedState = null;
   });
 
   afterEach(async () => {
@@ -327,5 +344,52 @@ describe('GatewayProvider (AD-036)', () => {
     const entry = JSON.parse(raw.trim()) as { response: { content: string } };
     expect(entry.response.content).toBe('тест');
     void originalChatAsync;
+  });
+
+  it('decide: guard обфусцирует секрет в state, аудит записан', async () => {
+    const { gw, auditSpy, getMap } = makeGateway();
+
+    const res = await gw.decide(`ключ ${SK_KEY}`, { q1: { type: 'noul' } });
+
+    expect(MockCaptureProvider.decideCalls).toBe(1);
+    expect(String(MockCaptureProvider.capturedState)).toContain('⟦SYNTH_SECRET_1⟧');
+    expect(String(MockCaptureProvider.capturedState)).not.toContain('sk-');
+    expect(getMap()['⟦SYNTH_SECRET_1⟧']).toBe(SK_KEY);
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'obfuscated' }));
+    expect(res.answers.q1).toEqual({ type: 'noul', noul: 1 });
+  });
+
+  it('decide: state-объект обфусцируется и восстанавливается как объект', async () => {
+    const { gw } = makeGateway();
+
+    await gw.decide({ token: SK_KEY }, { q1: { type: 'noul' } });
+
+    expect(MockCaptureProvider.capturedState).toEqual({ token: '⟦SYNTH_SECRET_1⟧' });
+  });
+
+  it('decide: block-режим → ProviderError, inner НЕ вызван', async () => {
+    const { gw } = makeGateway({ config: { inputMode: 'block' } });
+
+    await expect(gw.decide(`мой ключ ${SK_KEY}`, {})).rejects.toBeInstanceOf(ProviderError);
+    expect(MockCaptureProvider.decideCalls).toBe(0);
+  });
+
+  it('decide: rate limit → RateLimitError, inner НЕ вызван', async () => {
+    const rateLimiter = new RateLimiter(1, 100);
+    const { gw } = makeGateway({ rateLimiter });
+
+    await gw.chat([makeMessage('first')]);
+    expect(MockCaptureProvider.calls).toBe(1);
+
+    await expect(gw.decide('state', {})).rejects.toBeInstanceOf(RateLimitError);
+    expect(MockCaptureProvider.decideCalls).toBe(0);
+  });
+
+  it('decide: enabled=false → guard no-op, state без обфускации', async () => {
+    const { gw } = makeGateway({ config: { enabled: false } });
+
+    await gw.decide(`ключ ${SK_KEY}`, {});
+
+    expect(MockCaptureProvider.capturedState).toBe(`ключ ${SK_KEY}`);
   });
 });

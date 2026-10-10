@@ -630,7 +630,7 @@ export const taskTool: ToolDefinition = {
     const parentSettings = extra.parentSessionSettings;
     if (extra.modelRouter && (parentSettings?.routingEnabled !== false) && extra.routerConfig) {
       try {
-        const decision = extra.modelRouter.route({
+        const decision = await extra.modelRouter.route({
           sessionSettings: parentSettings!,
           userMessage: params.prompt,
           systemPrompt: llmSystemPrompt,

@@ -14,18 +14,24 @@ import { toCoreProviderConfig } from './utils.js';
 
 export class ProviderPool {
   private readonly _cache = new Map<string, BaseProvider>();
+  /** AD-084: кеш decision-провайдеров (всегда обёрнутых в GatewayProvider). */
+  private readonly _decisionCache = new Map<string, BaseProvider>();
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
   private _gatewayConfig: LLMGatewayConfig | null;
   private _gatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
+  /** AD-084: фабрика обвязки decision-провайдеров (применяется всегда). */
+  private _decisionGatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
 
   constructor(
     providerLoader: (name: string) => SharedProviderConfig | null,
     gatewayConfig?: LLMGatewayConfig,
     gatewayFactory?: (inner: BaseProvider) => BaseProvider,
+    decisionGatewayFactory?: (inner: BaseProvider) => BaseProvider,
   ) {
     this._providerLoader = providerLoader;
     this._gatewayConfig = gatewayConfig ?? null;
     this._gatewayFactory = gatewayFactory ?? null;
+    this._decisionGatewayFactory = decisionGatewayFactory ?? null;
   }
 
   getProvider(
@@ -66,6 +72,42 @@ export class ProviderPool {
 
   clear(): void {
     this._cache.clear();
+    this._decisionCache.clear();
+  }
+
+  /**
+   * AD-084: decision-провайдер (`type: 'decision'`), обёрнутый в GatewayProvider
+   * **всегда** (при заданной фабрике обвязки). В отличие от `getProvider`, gateway
+   * не опционален: decision-путь обязан проходить через guard/обфускацию/аудит.
+   */
+  getDecisionProvider(providerName: string, modelName: string): BaseProvider | null {
+    const model = modelName || '';
+    const cacheKey = `decision:${providerName}:${model}`;
+    const cached = this._decisionCache.get(cacheKey);
+    if (cached) return cached;
+
+    const sharedConfig = this._providerLoader(providerName);
+    if (!sharedConfig) return null;
+
+    try {
+      const coreConfig = toCoreProviderConfig(sharedConfig, model || sharedConfig.defaultModel || '');
+      const provider = ProviderFactory.create(providerName, coreConfig);
+      const wrapped = this._decisionGatewayFactory
+        ? this._decisionGatewayFactory(provider)
+        : provider;
+      this._decisionCache.set(cacheKey, wrapped);
+      return wrapped;
+    } catch {
+      return null;
+    }
+  }
+
+  /** AD-084: обновление обвязки decision-провайдеров (сбрасывает их кеш). */
+  setDecisionGatewayFactory(
+    factory: ((inner: BaseProvider) => BaseProvider) | null,
+  ): void {
+    this._decisionGatewayFactory = factory;
+    this._decisionCache.clear();
   }
 
   /** AD-036: live-переключение gateway. Сбрасывает кеш — провайдеры пересоздаются с новой обёрткой. */

@@ -68,13 +68,48 @@ function makeLoader(): (name: string) => import('@itphx/synth-shared').ProviderC
   };
 }
 
+/** AD-084: decision-провайдер-мок для проверки безусловной обвязки. */
+class MockDecisionProvider extends BaseProvider {
+  async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
+    throw new Error('not chat');
+  }
+
+  chatAsync(): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    throw new Error('not chat');
+  }
+
+  getProviderName(): string {
+    return 'decision-mock';
+  }
+
+  async decide(): Promise<import('@itphx/synth-shared').DecisionResponse> {
+    return { answers: {} };
+  }
+}
+
+function makeDecisionLoader(): (name: string) => import('@itphx/synth-shared').ProviderConfig | null {
+  return (name: string) => {
+    if (name !== 'decision-mock') return null;
+    return {
+      name,
+      type: 'decision-mock',
+      baseUrl: 'http://localhost:9999/api/v1',
+      defaultModel: 'clef-flash',
+      timeout: 10,
+      decisionApi: 'decisions',
+    };
+  };
+}
+
 describe('ProviderPool × LLM Gateway (AD-036)', () => {
   beforeEach(() => {
     ProviderFactory.register('mockpool', MockPoolProvider);
+    ProviderFactory.register('decision-mock', MockDecisionProvider);
   });
 
   afterEach(() => {
     ProviderFactory['_providers'].delete('mockpool');
+    ProviderFactory['_providers'].delete('decision-mock');
   });
 
   it('оборачивает провайдер в GatewayProvider когда gateway enabled и задана фабрика', () => {
@@ -188,5 +223,44 @@ describe('ProviderPool × LLM Gateway (AD-036)', () => {
     provider = pool.getProvider('mockpool', 'mock-model');
     expect(provider).not.toBeInstanceOf(GatewayProvider);
     expect(provider).toBeInstanceOf(MockPoolProvider);
+  });
+
+  it('AD-084: getDecisionProvider оборачивает в GatewayProvider даже при gateway disabled', () => {
+    const pool = new ProviderPool(makeDecisionLoader(), makeGatewayConfig({ enabled: false }));
+    pool.setDecisionGatewayFactory((inner) => new GatewayProvider(inner, makeGatewayConfig({ enabled: false }), {
+      getMap: async () => ({}),
+      saveMap: async () => {},
+      getAudit: noopAudit,
+      getRateLimiter: noopRateLimiter,
+      sessionId: '',
+      userId: '',
+    }));
+
+    const provider = pool.getDecisionProvider('decision-mock', 'clef-flash');
+    expect(provider).not.toBeNull();
+    expect(provider).toBeInstanceOf(GatewayProvider);
+  });
+
+  it('AD-084: decision-кеш отделён от chat-кеша и переиспользует обёрнутый экземпляр', () => {
+    const pool = new ProviderPool(makeDecisionLoader(), makeGatewayConfig({ enabled: false }));
+    pool.setDecisionGatewayFactory((inner) => new GatewayProvider(inner, makeGatewayConfig({ enabled: false }), {
+      getMap: async () => ({}),
+      saveMap: async () => {},
+      getAudit: noopAudit,
+      getRateLimiter: noopRateLimiter,
+      sessionId: '',
+      userId: '',
+    }));
+
+    const first = pool.getDecisionProvider('decision-mock', 'clef-flash');
+    const second = pool.getDecisionProvider('decision-mock', 'clef-flash');
+    expect(first).toBe(second);
+    expect(first).toBeInstanceOf(GatewayProvider);
+  });
+
+  it('AD-084: без decision-фабрики провайдер создаётся без обвязки', () => {
+    const pool = new ProviderPool(makeDecisionLoader());
+    const provider = pool.getDecisionProvider('decision-mock', 'clef-flash');
+    expect(provider).toBeInstanceOf(MockDecisionProvider);
   });
 });

@@ -300,6 +300,33 @@ export const schedulerConfigSchema = z.object({
   crossProcessLocks: z.boolean().default(false),
 });
 
+// --- Decision-модели (AD-084) ---
+
+/**
+ * AD-084: конфигурация класса decision-моделей (System One: Clef/Jev/…).
+ * - `enabled` — мастер-выключатель decision-слоя (по умолчанию выключен);
+ * - `mode` — выбор транспорта: `auto` (по политике) | `local` (Ollama) |
+ *   `remote` (RouterAI/managed). `auto` = `remote` при заданном decision-провайдере,
+ *   иначе `local` (задел под AD-080/AD-081);
+ * - `provider` — имя провайдера типа `decision` (пусто — провайдер не задан);
+ * - `model` — модель decision-слоя (напр. `clef-flash`);
+ * - `escalationModel` — модель для эскалации (опционально);
+ * - `timeoutMs` — таймаут decision-запроса, мс;
+ * - `confidenceThreshold` — порог уверенности, ниже — fallback (fail-safe);
+ * - `remoteEndpoint` — явный endpoint remote-транспорта (перебивает base URL
+ *   провайдера; пусто — используется URL провайдера).
+ */
+export const decisionConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  mode: z.enum(['auto', 'local', 'remote']).default('auto'),
+  provider: z.string().default(''),
+  model: z.string().default(''),
+  escalationModel: z.string().default(''),
+  timeoutMs: z.number().int().min(1).default(10_000),
+  confidenceThreshold: z.number().min(0).max(1).default(0.6),
+  remoteEndpoint: z.string().default(''),
+});
+
 // --- Проектные инструкции (AD-069) ---
 
 /**
@@ -537,6 +564,7 @@ export const synthConfigSchema = z.object({
   commands: commandsConfigSchema.default({}),
   events: eventsConfigSchema.default({}),
   scheduler: schedulerConfigSchema.default({}),
+  decision: decisionConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
@@ -567,6 +595,7 @@ export type SkillsConfig = z.infer<typeof skillsConfigSchema>;
 export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
 export type EventsConfig = z.infer<typeof eventsConfigSchema>;
 export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
+export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
 export type InstructionSourceConfig = z.infer<typeof instructionSourceConfigSchema>;
 export type InstructionsLazyConfig = z.infer<typeof instructionsLazyConfigSchema>;
 export type InstructionsFetchConfig = z.infer<typeof instructionsFetchConfigSchema>;

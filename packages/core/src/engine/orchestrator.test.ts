@@ -1617,8 +1617,8 @@ describe('ChatOrchestrator._routeProvider — AD-036 единая обёртка
       getProvider: () => wrapped,
     };
 
-    const res = (orch as unknown as {
-      _routeProvider(s: Session, m: Message): { provider: BaseProvider } | null;
+    const res = await (orch as unknown as {
+      _routeProvider(s: Session, m: Message): Promise<{ provider: BaseProvider } | null>;
     })._routeProvider(session, makeUserMsg());
 
     expect(res).not.toBeNull();

@@ -7,7 +7,7 @@ import type { MicroResult } from '../types.js';
 import { t as sm, type SystemMessageKey } from '../../../system-messages.js';
 
 /** Человекочитаемые описания интентов (данные для роутера/debug). */
-const INTENT_DESCRIPTIONS: Record<string, string> = {
+export const INTENT_DESCRIPTIONS: Record<string, string> = {
   question: 'Question: the user wants to learn or understand something.',
   command: 'Command: the user wants to perform an action (write, create, fix).',
   review: 'Review: the user wants to check or analyze something.',
@@ -21,7 +21,7 @@ const INTENT_DESCRIPTIONS: Record<string, string> = {
  * Готовые ответы для валидных интентов (аналог enum-decision).
  * Канонический текст — из словаря SystemMessages (en); локализация — через i18nKey.
  */
-const CLASSIFY_ANSWERS: Record<string, { key: SystemMessageKey; variants: string[] }> = {
+export const CLASSIFY_ANSWERS: Record<string, { key: SystemMessageKey; variants: string[] }> = {
   question: { key: 'micro.intent.question', variants: [sm('micro.intent.question')] },
   command: { key: 'micro.intent.command', variants: [sm('micro.intent.command')] },
   review: { key: 'micro.intent.review', variants: [sm('micro.intent.review')] },

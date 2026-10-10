@@ -20,6 +20,7 @@ export {
   AnthropicProvider,
   OllamaProvider,
   RemoteProvider,
+  DecisionProvider,
   setRemoteTokenProvider,
   clearRemoteTokenProviders,
   ProviderError,

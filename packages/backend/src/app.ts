@@ -495,6 +495,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       // {dataDir}/workspaces/default мимо runtime-override settings/workspace.
       defaultWorkingDir,
       routerConfig: backendConfig.synth.router,
+      // AD-084: decision-слой микро-каскада (config.decision).
+      decisionConfig: backendConfig.synth.decision,
       permissionConfig: backendConfig.synth.permission,
       defaultPlanMode: backendConfig.synth.session.planMode,
       securityConfig,

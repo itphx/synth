@@ -122,6 +122,8 @@ export interface StandaloneConfig {
   eventsConfig?: SynthConfig['events'];
   /** AD-051 (срез) / AD-089: конфигурация планировщика из config.yaml `scheduler`. */
   schedulerConfig?: SynthConfig['scheduler'];
+  /** AD-084: конфигурация decision-слоя из config.yaml `decision`. */
+  decisionConfig?: SynthConfig['decision'];
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -852,6 +854,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     instructionsConfig: config.instructionsConfig,
     // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
     instructionsTrustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
+    // AD-084: decision-слой микро-каскада (config.decision). Runtime-обновление —
+    // через `setDecisionConfig` (Ф5).
+    decisionConfig: config.decisionConfig,
     // AD-089: late-bound funnel создания сессий для тула `task` (саб-агент).
     // Сам сервис создаётся ниже (после оркестратора) — геттер читает его в рантайме.
     getRequestSessionService: () => requestSessionService,

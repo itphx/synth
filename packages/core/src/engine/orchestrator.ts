@@ -1,6 +1,6 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
-import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
@@ -46,12 +46,13 @@ import { info, warning } from '../logger.js';
 import { autoTitleSession } from '../sessions/auto-title.js';
 import { ModelRouter } from './router/router.js';
 import { ContentClassifier } from './router/content-classifier.js';
+import { DecisionContentClassifier } from './router/decision-content-classifier.js';
 import { ProviderPool } from './router/provider-pool.js';
 import { QualityChecker } from './router/quality-checker.js';
 import { DictionaryStore } from './router/dictionary-store.js';
 import { MicroPipeline } from './router/micro/index.js';
 import { TaskClassifier } from './router/micro/task-classifier.js';
-import { RulesModel, EmbeddingModel, MicroLlmModel } from './router/micro/models/index.js';
+import { RulesModel, EmbeddingModel, MicroLlmModel, DecisionModel } from './router/micro/models/index.js';
 import type { MicroModel } from './router/micro/models/base.js';
 import type { RoutingDecision } from './router/router.js';
 import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
@@ -156,6 +157,12 @@ export interface OrchestratorOptions {
   agentRegistry?: AgentRegistry;
   mcpManager?: McpManager;
   routerConfig?: RouterConfig;
+  /**
+   * AD-084: конфигурация decision-слоя (config.yaml `decision`). Не задана/
+   * `enabled:false` — decision-уровень микро-каскада выключен.
+   * Runtime-обновление — `setDecisionConfig` (Ф5).
+   */
+  decisionConfig?: DecisionConfig;
   projectStore?: ProjectStoreLike;
   /**
    * Онбординг: хранилище профилей для тула `profile_update` (сохранение ответов
@@ -309,6 +316,19 @@ interface InstructionsTurnMemoEntry {
 /** Верхняя граница числа сессий в мемо инструкций (простая FIFO-эвикция). */
 const MAX_INSTRUCTIONS_TURN_MEMO = 256;
 
+/**
+ * AD-084: безопасный дефолт gateway-конфига для decision-провайдеров, когда
+ * LLM Gateway выключен (`enabled: false` — guard no-op, без падения).
+ */
+const DEFAULT_DECISION_GATEWAY_CONFIG: LLMGatewayConfig = {
+  enabled: false,
+  inputMode: 'obfuscate',
+  logPayloads: false,
+  payloadLogPath: '',
+  rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
+  audit: { enabled: true, logPath: '' },
+};
+
 /** AD-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
 export interface PromptDiagnostics {  manifest: PromptManifest;
   /** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
@@ -352,6 +372,8 @@ export class ChatOrchestrator {
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
   private readonly _router: ModelRouter | null;
   private readonly _routerConfig: RouterConfig | null;
+  /** AD-084: конфиг decision-слоя (runtime-изменяемая, гейт микро-каскада). */
+  private _decisionConfig: DecisionConfig | null;
   private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
   private readonly _projectStore: ProjectStoreLike | null;
@@ -693,6 +715,7 @@ export class ChatOrchestrator {
     this._agentRegistry = options.agentRegistry ?? null;
     this._mcpManager = options.mcpManager ?? null;
     this._routerConfig = options.routerConfig ?? null;
+    this._decisionConfig = options.decisionConfig ?? null;
     this._contextConfig = options.contextConfig ?? null;
     this._projectStore = options.projectStore ?? null;
     this._profilesStore = options.profilesStore ?? null;
@@ -812,6 +835,7 @@ export class ChatOrchestrator {
       options.providerLoader,
       gatewayConfig ?? undefined,
       gatewayConfig ? this._poolGatewayFactory(gatewayConfig) : undefined,
+      this._decisionGatewayFactory(),
     );
     this._providerPool = pool;
 
@@ -820,6 +844,10 @@ export class ChatOrchestrator {
     const microModels: MicroModel[] = [
       new RulesModel(microClassifier),
       new EmbeddingModel(pool),
+      // AD-084: decision-модель пытается перед локальной LLM; `micro_llm`
+      // остаётся фоллбеком. Конфиг читается геттером — runtime-обновление
+      // возможно без пересоздания модели (setDecisionConfig).
+      new DecisionModel(pool, () => this._decisionConfig ?? undefined),
       new MicroLlmModel(pool),
     ];
     this._microPipeline = new MicroPipeline(microClassifier, microModels);
@@ -828,7 +856,14 @@ export class ChatOrchestrator {
     if (options.routerConfig && options.routerConfig.enabled) {
       const classifier = new ContentClassifier(dictionaryStore);
       const qualityChecker = new QualityChecker();
-      this._router = new ModelRouter(classifier, pool, qualityChecker, options.routerConfig);
+      // AD-084 × AD-034: decision-классификатор категории — срабатывает только
+      // когда keyword-классификатор неуверен и нет `routingCategory`. Конфиг
+      // читается геттером — gated по `enabled` самим классификатором.
+      const decisionClassifier = new DecisionContentClassifier(
+        pool,
+        () => this._decisionConfig ?? undefined,
+      );
+      this._router = new ModelRouter(classifier, pool, qualityChecker, options.routerConfig, decisionClassifier);
     } else {
       this._router = null;
     }
@@ -845,6 +880,31 @@ export class ChatOrchestrator {
       saveMap: async () => {},
       getAudit: () => this._gatewayAudit!,
       getRateLimiter: () => this._gatewayRateLimiter!,
+      payloadLogPath: this._gatewayPayloadLogPath,
+      sessionId: '',
+      userId: '',
+    });
+  }
+
+  /**
+   * AD-084: фабрика обвязки decision-провайдеров — оборачиваем **всегда**
+   * (инвариант №3), в отличие от chat. Если LLM Gateway выключен, берём
+   * безопасный дефолт: guard no-op, безлимитный rate limiter и audit-логгер
+   * по стандартному пути (обёртка не падает и не требует `gateway.enabled`).
+   */
+  private _decisionGatewayFactory(): (inner: BaseProvider) => BaseProvider {
+    const config = this._gatewayConfig ?? DEFAULT_DECISION_GATEWAY_CONFIG;
+    const audit = this._gatewayAudit
+      ?? new AuditLogger(join(this._dataDir, 'audit', 'llm-gateway.jsonl'));
+    const rateLimiter = this._gatewayRateLimiter
+      ?? new RateLimiter(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+    const patternStore = this._gatewayPatternStore;
+    return (inner) => new GatewayProvider(inner, config, {
+      getMap: async () => ({}),
+      saveMap: async () => {},
+      getAudit: () => audit,
+      getRateLimiter: () => rateLimiter,
+      getPatterns: patternStore ? () => patternStore.getPatterns() : undefined,
       payloadLogPath: this._gatewayPayloadLogPath,
       sessionId: '',
       userId: '',
@@ -896,6 +956,8 @@ export class ChatOrchestrator {
       gatewayConfig,
       gatewayConfig ? this._poolGatewayFactory(gatewayConfig) : null,
     );
+    // AD-084: decision-обвязка обновляется всегда (guard активен и при выключенном gateway).
+    this._providerPool?.setDecisionGatewayFactory(this._decisionGatewayFactory());
   }
 
   /** AD-036: включён ли LLM Gateway (runtime-тумблер / конфиг). */
@@ -970,6 +1032,14 @@ export class ChatOrchestrator {
    */
   setRuntimeDeps(deps: RuntimeDeps): void {
     this._runtimeDeps = { ...deps };
+  }
+
+  /**
+   * AD-084: live-применение конфига decision-слоя (микро-каскад). Модель читает
+   * конфиг геттером, поэтому достаточно обновить поле — пересоздание не нужно.
+   */
+  setDecisionConfig(config: DecisionConfig | null): void {
+    this._decisionConfig = config;
   }
 
   /**
@@ -2556,7 +2626,7 @@ export class ChatOrchestrator {
 
     try {
       // 1. Get provider (через роутер если доступен, иначе напрямую)
-      const routeResult = this._routeProvider(session, message, effectiveReasoningLevel);
+      const routeResult = await this._routeProvider(session, message, effectiveReasoningLevel);
       if (!routeResult) {
         const providerName = (message.provider as string) || session.settings.provider || '';
         return {
@@ -4547,18 +4617,18 @@ export class ChatOrchestrator {
    * Выбор провайдера и модели через роутер (AD-034).
    * Если роутер недоступен — fallback на _getProvider().
    */
-  private _routeProvider(
+  private async _routeProvider(
     session: Session,
     message: Message,
     reasoningLevel?: ReasoningLevel,
-  ): { provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null {
+  ): Promise<{ provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null> {
     if (this._router && session.settings.routingEnabled !== false) {
       const toolCallNames = message.toolCalls?.map((tc) => {
         const func = tc.function as { name: string } | undefined;
         return func?.name || '';
       }).filter(Boolean);
 
-      const decision = this._router.route({
+      const decision = await this._router.route({
         sessionSettings: session.settings,
         userMessage: message.content,
         toolCalls: toolCallNames,

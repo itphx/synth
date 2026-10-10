@@ -4,9 +4,10 @@
  * Если gateway выключен или что-то в обвязке падает — вызывает inner без изменений.
  */
 
-import { nowISO, type LLMGatewayConfig, type LLMChunk, type LLMResponse, type TokenUsage } from '@itphx/synth-shared';
+import { nowISO, type LLMGatewayConfig, type LLMChunk, type LLMResponse, type TokenUsage, type DecisionQuestion, type DecisionResponse } from '@itphx/synth-shared';
 
 import { BaseProvider, type DetailedModelInfo, type LLMMessage, type SystemPromptInput, type CancellationToken } from '../../providers/base.js';
+import { ProviderError, RateLimitError } from '../../providers/exceptions.js';
 import type { DebugCollector } from '../../debug.js';
 import { warning } from '../../logger.js';
 import { t as sm } from '../system-messages.js';
@@ -172,6 +173,87 @@ export class GatewayProvider extends BaseProvider {
 
   async embed(text: string): Promise<number[]> {
     return this._inner.embed(text);
+  }
+
+  /**
+   * AD-084: decision-запрос через gateway-обвязку. В отличие от `chat`/`chatAsync`
+   * guard прогоняется всегда (обфускация `state` обязательна): `runInputGuard`
+   * сам безопасно no-op'ит при `config.enabled=false`. При rate limit/блокировке
+   * бросаем `RateLimitError`/`ProviderError` — вызывающий слой делает fail-safe
+   * откат к текущему поведению.
+   */
+  async decide(
+    state: unknown,
+    questions: Record<string, DecisionQuestion>,
+    opts?: { model?: string },
+  ): Promise<DecisionResponse> {
+    const stateText = this._serializeState(state);
+    const synthetic: LLMMessage = {
+      id: 'decision-state',
+      role: 'user',
+      content: stateText,
+      usage: this._zeroUsage(),
+      disabled: false,
+      pinned: false,
+      branchId: 'decision',
+    };
+
+    let prepared: PreparedCall | null = null;
+    try {
+      prepared = await this._prepare([synthetic], undefined, undefined);
+    } catch (e) {
+      warning('GATEWAY', `Ошибка обфускации decision-state, вызов inner напрямую: ${this._errorMessage(e)}`);
+    }
+
+    if (prepared?.rateLimited) throw new RateLimitError();
+    if (prepared?.blocked) {
+      throw new ProviderError(prepared.blocked.message, this.getProviderName());
+    }
+
+    const guardedText = prepared?.messages[0]?.content ?? stateText;
+    const effectiveState = this._restoreState(state, guardedText);
+
+    const response = await this._inner.decide(effectiveState, questions, opts);
+
+    const inputTokens = response.usage?.input_tokens ?? 0;
+    const outputTokens = response.usage?.output_tokens ?? 0;
+    const usage: TokenUsage = {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+    };
+    const answersJson = JSON.stringify(response.answers);
+
+    await this._auditCompletion(
+      answersJson,
+      usage,
+      prepared?.secretsFound ?? [],
+      prepared?.placeholders ?? [],
+      prepared?.patterns,
+    );
+    await this._logPayload(
+      prepared?.messages ?? [synthetic],
+      undefined,
+      answersJson,
+      usage,
+    );
+
+    return response;
+  }
+
+  /** Сериализация `state` в текст для guard'а (строка — как есть, иначе JSON). */
+  private _serializeState(state: unknown): string {
+    return typeof state === 'string' ? state : JSON.stringify(state ?? null);
+  }
+
+  /** Возврат `state` к исходному виду после обфускации (объект → JSON.parse). */
+  private _restoreState(original: unknown, guardedText: string): unknown {
+    if (typeof original === 'string') return guardedText;
+    try {
+      return JSON.parse(guardedText);
+    } catch {
+      return guardedText;
+    }
   }
 
   async listModels(): Promise<string[]> {

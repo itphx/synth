@@ -6,6 +6,7 @@
 import type { SessionSettings, ReasoningLevel } from '@itphx/synth-shared';
 import type { RouterConfig } from '@itphx/synth-shared';
 import type { ContentClassifier } from './content-classifier.js';
+import type { DecisionContentClassifier } from './decision-content-classifier.js';
 import type { ProviderPool } from './provider-pool.js';
 import type { QualityChecker, QualityCheckResult } from './quality-checker.js';
 import type { BaseProvider } from '../../providers/base.js';
@@ -30,20 +31,24 @@ export class ModelRouter {
   private readonly _pool: ProviderPool;
   private readonly _qualityChecker: QualityChecker;
   private readonly _routerConfig: RouterConfig;
+  /** AD-084: decision-классификатор категории (опционально). */
+  private readonly _decisionClassifier: DecisionContentClassifier | null;
 
   constructor(
     classifier: ContentClassifier,
     pool: ProviderPool,
     qualityChecker: QualityChecker,
     routerConfig: RouterConfig,
+    decisionClassifier?: DecisionContentClassifier,
   ) {
     this._classifier = classifier;
     this._pool = pool;
     this._qualityChecker = qualityChecker;
     this._routerConfig = routerConfig;
+    this._decisionClassifier = decisionClassifier ?? null;
   }
 
-  route(request: RoutingRequest): RoutingDecision {
+  async route(request: RoutingRequest): Promise<RoutingDecision> {
     const { sessionSettings, userMessage, toolCalls } = request;
     const defaultProvider = sessionSettings.provider || '';
     const defaultModel = sessionSettings.model || '';
@@ -113,13 +118,13 @@ export class ModelRouter {
 
   // --- Private route methods ---
 
-  private _routeByContent(
+  private async _routeByContent(
     settings: SessionSettings,
     userMessage: string,
     toolCalls: string[] | undefined,
     defaultProvider: string,
     defaultModel: string,
-  ): RoutingDecision {
+  ): Promise<RoutingDecision> {
     const classifyResult = this._classifier.classify({
       userMessage,
       toolCalls,
@@ -134,6 +139,16 @@ export class ModelRouter {
     const modelCategory = settings.routingCategory;
     if (modelCategory) {
       return this._routeByCategory(modelCategory, settings, defaultProvider, defaultModel, 'model', [`fallback_from_model:${classifyResult.category}`]);
+    }
+
+    // AD-084: decision-классификатор включается только когда keyword неуверен
+    // (confidence < 0.5) и явная `routingCategory` отсутствует — приоритеты
+    // keyword и classify_conversation не меняются. Fail-safe: `null` → keyword.
+    if (this._decisionClassifier) {
+      const decided = await this._decisionClassifier.classify({ userMessage, toolCalls });
+      if (decided) {
+        return this._routeByCategory(decided.category, settings, defaultProvider, defaultModel, 'decision', decided.signals);
+      }
     }
 
     // Fallback: keyword-категория даже с низкой уверенностью
@@ -222,13 +237,13 @@ export class ModelRouter {
     };
   }
 
-  private _routeByContentAndCost(
+  private async _routeByContentAndCost(
     settings: SessionSettings,
     userMessage: string,
     toolCalls: string[] | undefined,
     defaultProvider: string,
     defaultModel: string,
-  ): RoutingDecision {
+  ): Promise<RoutingDecision> {
     // Сначала content-based
     const classifyResult = this._classifier.classify({ userMessage, toolCalls });
     const cost = settings.routingCost;

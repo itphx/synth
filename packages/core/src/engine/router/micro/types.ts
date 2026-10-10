@@ -4,8 +4,11 @@
  */
 import type { SessionSettings } from '@itphx/synth-shared';
 
-/** Вид микро-модели: правила, embedding, локальная LLM. */
-export type MicroModelKind = 'rules' | 'embedding' | 'micro_llm';
+/**
+ * Вид микро-модели: правила, embedding, decision-модель (AD-084),
+ * локальная LLM.
+ */
+export type MicroModelKind = 'rules' | 'embedding' | 'decision' | 'micro_llm';
 
 /** Класс задачи после классификации. */
 export type MicroTaskClass = 'small_talk' | 'classify' | 'enum_decision' | 'llm_task';

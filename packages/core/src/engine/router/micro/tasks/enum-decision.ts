@@ -6,7 +6,7 @@ import type { MicroResult } from '../types.js';
 import { t as sm, type SystemMessageKey } from '../../../system-messages.js';
 
 /** Допустимые лейблы для enum-решений. */
-const VALID_LABELS = new Set([
+export const VALID_LABELS = new Set([
   'yes', 'no', 'approve', 'reject',
   'mode_plan', 'mode_act',
 ]);
@@ -15,7 +15,7 @@ const VALID_LABELS = new Set([
  * Готовые ответы для каждого валидного лейбла (аналог small-talk).
  * Канонический текст — из словаря SystemMessages (en); локализация — через i18nKey.
  */
-const ENUM_ANSWERS: Record<string, { key: SystemMessageKey; variants: string[] }> = {
+export const ENUM_ANSWERS: Record<string, { key: SystemMessageKey; variants: string[] }> = {
   yes: { key: 'micro.enum.yes', variants: [sm('micro.enum.yes'), 'Confirmed.', 'Accepted.'] },
   no: { key: 'micro.enum.no', variants: [sm('micro.enum.no'), 'Rejected.'] },
   approve: { key: 'micro.enum.approve', variants: [sm('micro.enum.approve'), 'Proceeding.'] },

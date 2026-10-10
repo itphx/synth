@@ -3,10 +3,11 @@ import type { JsonStoreLike } from '../storage/json-store.js';
 
 /**
  * Синхронизация провайдеров/моделей из переменных окружения `SYNTH_PROVIDER_*`
- * (AD-038). Формат: `SYNTH_PROVIDER_<NAME>_(API_KEY|URL|MODEL|TYPE)`; имя
- * приводится к lowercase с `_` → `-`. Провайдеры сохраняются в `providerStore`
+ * (AD-038). Формат: `SYNTH_PROVIDER_<NAME>_(API_KEY|URL|MODEL|TYPE|DECISION_API)`;
+ * имя приводится к lowercase с `_` → `-`. Провайдеры сохраняются в `providerStore`
  * (дефолтный `type: 'openai'`), указанная `MODEL` дополнительно создаёт модель
- * `<name>/<model>` с `isDefault: true`, если её ещё нет.
+ * `<name>/<model>` с `isDefault: true`, если её ещё нет. `DECISION_API` (AD-084) —
+ * транспорт decision-провайдера (`decisions`|`systemone`).
  *
  * Общая точка для core и backend: вызывается после создания stores и до
  * заполнения in-memory кэшей провайдеров/моделей.
@@ -15,7 +16,7 @@ export async function syncProvidersFromEnv(
   providerStore: JsonStoreLike<ProviderConfig>,
   modelStore: JsonStoreLike<ModelConfig>,
 ): Promise<void> {
-  const providerPattern = /^SYNTH_PROVIDER_([A-Z][A-Z0-9_]*?)_(API_KEY|URL|MODEL|TYPE)$/;
+  const providerPattern = /^SYNTH_PROVIDER_([A-Z][A-Z0-9_]*?)_(API_KEY|URL|MODEL|TYPE|DECISION_API)$/;
   const providers: Map<string, Partial<ProviderConfig> & { model?: string }> = new Map();
 
   for (const [key, value] of Object.entries(process.env)) {
@@ -36,6 +37,9 @@ export async function syncProvidersFromEnv(
       case 'URL': p.baseUrl = value; break;
       case 'MODEL': p.model = value; break;
       case 'TYPE': p.type = value; break;
+      case 'DECISION_API':
+        if (value === 'decisions' || value === 'systemone') p.decisionApi = value;
+        break;
     }
   }
 
@@ -50,6 +54,7 @@ export async function syncProvidersFromEnv(
       timeout: existing?.timeout ?? 120,
       enabled: true,
       icon: existing?.icon ?? '',
+      decisionApi: envConfig.decisionApi || existing?.decisionApi,
     };
     await providerStore.save(name, provider);
 

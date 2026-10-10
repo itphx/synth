@@ -97,6 +97,10 @@ export function createProviderRoutes(
       }, 400);
     }
     const currency = resolvedCurrency.currency;
+    const rawDecisionApi = body.decision_api ?? body.decisionApi;
+    const decisionApi = rawDecisionApi === 'decisions' || rawDecisionApi === 'systemone'
+      ? rawDecisionApi
+      : existing?.decisionApi;
     const provider: ProviderConfig = {
       name,
       type: body.type || existing?.type || 'openai',
@@ -107,6 +111,7 @@ export function createProviderRoutes(
       enabled: body.enabled ?? existing?.enabled ?? true,
       icon: body.icon !== undefined ? body.icon : (existing?.icon ?? ''),
       currency,
+      ...(decisionApi ? { decisionApi } : {}),
     };
     await store.save(name, provider);
     providerCache.set(name, provider);
@@ -163,6 +168,7 @@ export function createProviderRoutes(
           apiKey: provider.apiKey || '',
           model: provider.defaultModel || '',
           timeout: 30,
+          decisionApi: provider.decisionApi,
         });
         const models = await instance.listModels();
         return c.json({

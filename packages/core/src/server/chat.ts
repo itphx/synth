@@ -193,6 +193,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     securityConfig: effectiveSecurityConfig,
     gatewayConfig: options.config.llmGateway,
     gatewayPatternStore: patternStore,
+    // AD-084: decision-слой микро-каскада (config.decision).
+    decisionConfig: options.config.decision,
     skillRuntime: skillService,
     commandRuntime: commandService,
     // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).

@@ -1,5 +1,6 @@
-import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency } from '@itphx/synth-shared';
+import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency, DecisionQuestion, DecisionResponse } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
+import { ProviderError } from './exceptions.js';
 
 /** Таймаут best-effort загрузки каталога моделей, мс. */
 const MODELS_CATALOG_TIMEOUT_MS = 10_000;
@@ -184,6 +185,11 @@ export interface ProviderConfig {
   maxTokens?: number;
   /** Размер контекста модели (num_ctx у Ollama). */
   numCtx?: number;
+  /**
+   * AD-084: транспорт decision-провайдера — `decisions` (RouterAI) или
+   * `systemone` (Ollama). Используется только провайдерами типа `decision`.
+   */
+  decisionApi?: 'decisions' | 'systemone';
 }
 
 /**
@@ -240,6 +246,8 @@ export abstract class BaseProvider {
   reasoningLevel: ReasoningLevel;
   maxTokens?: number;
   numCtx?: number;
+  /** AD-084: транспорт decision-провайдера (`decisions` | `systemone`). */
+  decisionApi?: 'decisions' | 'systemone';
 
   constructor(params: {
     url: string;
@@ -254,6 +262,7 @@ export abstract class BaseProvider {
     reasoningLevel?: ReasoningLevel;
     maxTokens?: number;
     numCtx?: number;
+    decisionApi?: 'decisions' | 'systemone';
   }) {
     this.url = params.url;
     this.apiKey = params.apiKey;
@@ -267,6 +276,7 @@ export abstract class BaseProvider {
     this.reasoningLevel = params.reasoningLevel ?? 'default';
     this.maxTokens = params.maxTokens;
     this.numCtx = params.numCtx;
+    this.decisionApi = params.decisionApi;
   }
 
   abstract chat(
@@ -302,6 +312,19 @@ export abstract class BaseProvider {
   async listModelsDetailed(): Promise<DetailedModelInfo[]> {
     const ids = await this.listModels();
     return ids.map((id) => ({ id }));
+  }
+
+  /**
+   * AD-084: decision-запрос (`state + questions → answers`). Реализуют только
+   * провайдеры типа `decision`; прочие типы бросают `ProviderError` (единый
+   * fail-safe контракт для `GatewayProvider.decide`).
+   */
+  async decide(
+    _state: unknown,
+    _questions: Record<string, DecisionQuestion>,
+    _opts?: { model?: string },
+  ): Promise<DecisionResponse> {
+    throw new ProviderError('Провайдер не поддерживает decision-запросы', this.name);
   }
 }
 
@@ -351,6 +374,7 @@ export class ProviderFactory {
       reasoningLevel: config.reasoningLevel,
       maxTokens: config.maxTokens,
       numCtx: config.numCtx,
+      decisionApi: config.decisionApi,
     });
   }
 

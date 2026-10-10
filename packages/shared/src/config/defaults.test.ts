@@ -19,6 +19,7 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('summarization');
     expect(defaultConfig).toHaveProperty('events');
     expect(defaultConfig).toHaveProperty('scheduler');
+    expect(defaultConfig).toHaveProperty('decision');
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {
@@ -139,6 +140,19 @@ describe('defaultConfig', () => {
       jobRetentionDays: 30,
       leaderElection: 'none',
       crossProcessLocks: false,
+    });
+  });
+
+  it('decision по умолчанию: выключен, mode auto, порог 0.6 (AD-084)', () => {
+    expect(defaultConfig.decision).toEqual({
+      enabled: false,
+      mode: 'auto',
+      provider: '',
+      model: '',
+      escalationModel: '',
+      timeoutMs: 10_000,
+      confidenceThreshold: 0.6,
+      remoteEndpoint: '',
     });
   });
 });

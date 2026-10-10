@@ -595,6 +595,12 @@ export interface SessionSettings {
   embedProvider?: string;
   /** Модель для embedding. */
   embedModel?: string;
+  /**
+   * AD-084: включить decision-уровень в микро-каскаде (перед локальной LLM).
+   * Не задано — берётся `config.decision.enabled`; `false` — принудительное
+   * отключение уровня в сессии.
+   */
+  decisionFirst?: boolean;
   // === Permissions (AD-029) ===
   /** Гранулярные permissions сессии. Приоритетнее глобальной секции permission в config.yaml. */
   permission?: PermissionConfig;
@@ -1122,6 +1128,11 @@ export interface ProviderConfig {
   icon?: string;
   /** Валюта по умолчанию для моделей провайдера. Отсутствует → USD. */
   currency?: Currency;
+  /**
+   * AD-084: транспорт decision-провайдера (`type: 'decision'`) —
+   * `decisions` (RouterAI, по умолчанию) | `systemone` (Ollama).
+   */
+  decisionApi?: 'decisions' | 'systemone';
 }
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';
@@ -1381,3 +1392,5 @@ export * from './events.js';
 export * from './hooks.js';
 // Планировщик расписаний (AD-051 срез / AD-089) — re-exported from schedules.ts
 export * from './schedules.js';
+// Decision-модели (AD-084): контракт state+questions → answers — re-exported from decision.ts
+export * from './decision.js';

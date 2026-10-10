@@ -1,6 +1,6 @@
 /**
  * MicroPipeline — каскад микро-моделей (AD-035).
- * rules → embedding → micro_llm → LLM fallback (через AD-034).
+ * rules → embedding → decision (AD-084) → micro_llm → LLM fallback (через AD-034).
  *
  * Обрабатывает запрос ПЕРЕД вызовом LLM.
  * Если микро-слой уверен — возвращает готовый ответ без LLM.
@@ -44,7 +44,7 @@ export class MicroPipeline {
       };
     }
 
-    // 3. Каскад: проходим по моделям (rules → embedding → micro_llm)
+    // 3. Каскад: проходим по моделям (rules → embedding → decision → micro_llm)
     const threshold = input.sessionSettings.microConfidenceThreshold || 0.8;
 
     for (const model of this._models) {

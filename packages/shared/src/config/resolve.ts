@@ -271,6 +271,41 @@ export function resolveIgnoreRules(explicit?: boolean, env?: NodeJS.ProcessEnv):
   return envVal === '1' || envVal?.toLowerCase() === 'true';
 }
 
+/**
+ * AD-084: режим decision-слоя. Приоритет: env `SYNTH_DECISION_MODE`
+ * (`auto`/`local`/`remote`) > `config.decision.mode`.
+ */
+export function resolveDecisionMode(
+  config: SynthConfig,
+  env?: NodeJS.ProcessEnv,
+): 'auto' | 'local' | 'remote' {
+  const envVal = (env ?? process.env).SYNTH_DECISION_MODE;
+  if (envVal === 'auto' || envVal === 'local' || envVal === 'remote') return envVal;
+  return config.decision.mode;
+}
+
+/**
+ * AD-084: имя decision-провайдера. Приоритет: env `SYNTH_DECISION_PROVIDER` >
+ * `config.decision.provider`.
+ */
+export function resolveDecisionProvider(
+  config: SynthConfig,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return (env ?? process.env).SYNTH_DECISION_PROVIDER || config.decision.provider;
+}
+
+/**
+ * AD-084: модель decision-слоя. Приоритет: env `SYNTH_DECISION_MODEL` >
+ * `config.decision.model`.
+ */
+export function resolveDecisionModel(
+  config: SynthConfig,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return (env ?? process.env).SYNTH_DECISION_MODEL || config.decision.model;
+}
+
 export async function ensureDataDir(dataDir: string): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   for (const subdir of DATA_SUBDIRS) {

@@ -133,6 +133,8 @@ program
       eventsConfig: synth.events,
       // AD-051 (срез) / AD-089: конфигурация планировщика (enabled/tickSec).
       schedulerConfig: synth.scheduler,
+      // AD-084: конфигурация decision-слоя микро-каскада.
+      decisionConfig: synth.decision,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
@@ -496,7 +498,7 @@ program
         new Command('add')
           .description('Добавить провайдера')
           .requiredOption('--name <name>', 'имя провайдера')
-          .requiredOption('--type <type>', 'тип (openai, anthropic, ollama)')
+          .requiredOption('--type <type>', 'тип (openai, anthropic, ollama, decision)')
           .option('--api-key <key>', 'API-ключ')
           .option('--url <url>', 'базовый URL')
           .option('--model <model>', 'модель по умолчанию')

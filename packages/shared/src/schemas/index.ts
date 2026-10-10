@@ -82,6 +82,9 @@ export const sessionSettingsSchema = z.object({
   // === Скиллы (AD-046 §4.5) ===
   skills: z.array(z.string()).optional(),
   skillsDisabled: z.array(z.string()).optional(),
+  // === Микро-слой (AD-035/AD-084) ===
+  /** AD-084: per-session гейт decision-уровня микро-каскада (undefined → config.decision.enabled). */
+  decisionFirst: z.boolean().optional(),
 });
 
 export const sessionCreateSchema = z.object({
