@@ -1,13 +1,13 @@
 /**
  * AD-084: DecisionProvider — адаптер decision-моделей (System One: Clef/Jev/…).
  * Не чат: `state + типизированные вопросы → вероятности` за один forward-pass.
- * Два транспорта под один контракт (SystemOne-совместимые):
- * - `decisions` (RouterAI): `POST {base}/decisions`;
+ * Два протокола под один контракт (SystemOne-совместимые), выбираются типом
+ * провайдера:
+ * - `decision` (RouterAI): `POST {base}/decisions`;
  * - `systemone` (Ollama): `POST {base}/v1/systemone`.
  *
- * Транспорт выбирается полем конфига провайдера `decisionApi`
- * (`decisions` по умолчанию). Запросы идут через `fetch` с таймаутом;
- * ошибки маппятся на `ProviderError`/`RateLimitError`/`ContextLengthExceededError`.
+ * Запросы идут через `fetch` с таймаутом провайдера (`timeout`); ошибки
+ * маппятся на `ProviderError`/`RateLimitError`/`ContextLengthExceededError`.
  */
 
 import type {
@@ -123,10 +123,10 @@ export class DecisionProvider extends BaseProvider {
     return this._parseResponse(data, questions);
   }
 
-  /** URL транспорта: `systemone` → `/v1/systemone`, иначе `/decisions`. */
+  /** URL протокола: тип `systemone` → `/v1/systemone`, иначе `/decisions`. */
   private _endpoint(): string {
     const base = this.url.replace(/\/+$/, '');
-    return this.decisionApi === 'systemone'
+    return this.type === 'systemone'
       ? `${base}/v1/systemone`
       : `${base}/decisions`;
   }

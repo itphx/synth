@@ -144,16 +144,12 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('decision по умолчанию: выключен, mode auto, порог 0.6 (AD-084)', () => {
+  it('decision по умолчанию: выключен, провайдер/модель пусты, порог 0.6 (AD-084)', () => {
     expect(defaultConfig.decision).toEqual({
       enabled: false,
-      mode: 'auto',
       provider: '',
       model: '',
-      escalationModel: '',
-      timeoutMs: 10_000,
       confidenceThreshold: 0.6,
-      remoteEndpoint: '',
     });
   });
 });

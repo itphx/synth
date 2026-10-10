@@ -272,19 +272,6 @@ export function resolveIgnoreRules(explicit?: boolean, env?: NodeJS.ProcessEnv):
 }
 
 /**
- * AD-084: режим decision-слоя. Приоритет: env `SYNTH_DECISION_MODE`
- * (`auto`/`local`/`remote`) > `config.decision.mode`.
- */
-export function resolveDecisionMode(
-  config: SynthConfig,
-  env?: NodeJS.ProcessEnv,
-): 'auto' | 'local' | 'remote' {
-  const envVal = (env ?? process.env).SYNTH_DECISION_MODE;
-  if (envVal === 'auto' || envVal === 'local' || envVal === 'remote') return envVal;
-  return config.decision.mode;
-}
-
-/**
  * AD-084: имя decision-провайдера. Приоритет: env `SYNTH_DECISION_PROVIDER` >
  * `config.decision.provider`.
  */

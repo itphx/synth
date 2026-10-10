@@ -96,7 +96,6 @@ function makeDecisionLoader(): (name: string) => import('@itphx/synth-shared').P
       baseUrl: 'http://localhost:9999/api/v1',
       defaultModel: 'clef-flash',
       timeout: 10,
-      decisionApi: 'decisions',
     };
   };
 }

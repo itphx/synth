@@ -202,13 +202,9 @@ export function mergeDecisionConfig(
   const r = runtime ?? {};
   return {
     enabled: r.enabled ?? base?.enabled ?? false,
-    mode: r.mode ?? base?.mode ?? 'auto',
     provider: r.provider ?? base?.provider ?? '',
     model: r.model ?? base?.model ?? '',
-    escalationModel: r.escalationModel ?? base?.escalationModel ?? '',
-    timeoutMs: r.timeoutMs ?? base?.timeoutMs ?? 10_000,
     confidenceThreshold: r.confidenceThreshold ?? base?.confidenceThreshold ?? 0.6,
-    remoteEndpoint: r.remoteEndpoint ?? base?.remoteEndpoint ?? '',
   };
 }
 

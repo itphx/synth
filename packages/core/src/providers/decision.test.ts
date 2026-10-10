@@ -14,15 +14,14 @@ import {
   RateLimitError,
 } from './exceptions.js';
 
-function makeProvider(overrides: Partial<{ decisionApi: 'decisions' | 'systemone'; timeout: number }> = {}): DecisionProvider {
+function makeProvider(overrides: Partial<{ type: string; timeout: number }> = {}): DecisionProvider {
   return new DecisionProvider({
     url: 'https://routerai.ru/api/v1',
     apiKey: 'sk-test',
     model: 'clef-flash',
     timeout: overrides.timeout ?? 30,
     name: 'routerai-decision',
-    type: 'decision',
-    decisionApi: overrides.decisionApi ?? 'decisions',
+    type: overrides.type ?? 'decision',
   });
 }
 
@@ -51,7 +50,7 @@ describe('DecisionProvider (AD-084)', () => {
     vi.restoreAllMocks();
   });
 
-  it('decisions-транспорт: POST {base}/decisions, Bearer, парсинг answers', async () => {
+  it('decision-протокол: POST {base}/decisions, Bearer, парсинг answers', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -89,7 +88,7 @@ describe('DecisionProvider (AD-084)', () => {
     expect(res.usage).toEqual({ input_tokens: 10, output_tokens: 5 });
   });
 
-  it('systemone-транспорт: POST {base}/v1/systemone', async () => {
+  it('systemone-протокол: POST {base}/v1/systemone', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -97,7 +96,7 @@ describe('DecisionProvider (AD-084)', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const provider = makeProvider({ decisionApi: 'systemone' });
+    const provider = makeProvider({ type: 'systemone' });
     await provider.decide({ text: 'state' }, { q1: { type: 'noul' } });
 
     const [url] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];

@@ -316,26 +316,18 @@ export const schedulerConfigSchema = z.object({
 /**
  * AD-084: конфигурация класса decision-моделей (System One: Clef/Jev/…).
  * - `enabled` — мастер-выключатель decision-слоя (по умолчанию выключен);
- * - `mode` — выбор транспорта: `auto` (по политике) | `local` (Ollama) |
- *   `remote` (RouterAI/managed). `auto` = `remote` при заданном decision-провайдере,
- *   иначе `local` (задел под AD-080/AD-081);
- * - `provider` — имя провайдера типа `decision` (пусто — провайдер не задан);
+ * - `provider` — имя провайдера decision-типа (`decision`/`systemone`);
  * - `model` — модель decision-слоя (напр. `clef-flash`);
- * - `escalationModel` — модель для эскалации (опционально);
- * - `timeoutMs` — таймаут decision-запроса, мс;
- * - `confidenceThreshold` — порог уверенности, ниже — fallback (fail-safe);
- * - `remoteEndpoint` — явный endpoint remote-транспорта (перебивает base URL
- *   провайдера; пусто — используется URL провайдера).
+ * - `confidenceThreshold` — порог уверенности, ниже — fallback (fail-safe).
+ *
+ * Транспорт задаётся типом провайдера (`decision` → `POST {base}/decisions`,
+ * `systemone` → `POST {base}/v1/systemone`), а таймаут — свойством провайдера.
  */
 export const decisionConfigSchema = z.object({
   enabled: z.boolean().default(false),
-  mode: z.enum(['auto', 'local', 'remote']).default('auto'),
   provider: z.string().default(''),
   model: z.string().default(''),
-  escalationModel: z.string().default(''),
-  timeoutMs: z.number().int().min(1).default(10_000),
   confidenceThreshold: z.number().min(0).max(1).default(0.6),
-  remoteEndpoint: z.string().default(''),
 });
 
 // --- Проектные инструкции (AD-069) ---

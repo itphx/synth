@@ -561,7 +561,7 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/settings/events` | auth | Runtime-настройки раздела «События» (AD-089): `{events:{enabled, defaultMode, ephemeralTtl, journalRetentionDays, allowedSources, unknownAgentTemplate, keyRateLimitPerMinute}, defaults, isOverridden}` (runtime из `settings.json` поверх config.yaml `events`) |
 | PUT | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Патч `{events:{…}}` (live-применение: Router/funnel/pruner переконфигурируются); невалидное значение → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Сброс runtime-настроек к config-дефолту; `{status:"restored", events, isOverridden:false, defaults}` |
-| GET | `/api/v2/settings/decision` | auth | Runtime-настройки decision-слоя (AD-084): `{decision:{enabled, mode, provider, model, escalationModel, timeoutMs, confidenceThreshold, remoteEndpoint}, defaults, isOverridden}` (runtime из `settings.json` поверх config.yaml `decision`) |
+| GET | `/api/v2/settings/decision` | auth | Runtime-настройки decision-слоя (AD-084): `{decision:{enabled, provider, model, confidenceThreshold}, defaults, isOverridden}` (runtime из `settings.json` поверх config.yaml `decision`) |
 | PUT | `/api/v2/settings/decision` | ADMIN (managed) / auth (core) | Патч `{decision:{…}}` (live-применение: микро-каскад/роутер/маршрутизация событий переконфигурируются); невалидное значение → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/decision` | ADMIN (managed) / auth (core) | Сброс runtime-настроек к config-дефолту; `{status:"restored", decision, isOverridden:false, defaults}` |
 

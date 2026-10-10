@@ -37,8 +37,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_LOG_DIR` | Каталог логов сервисов (эндпоинт `/api/v2/logs`) | ищется существующий каталог логов |
 | `SYNTH_BACKEND_URL` | URL бэкенда (для раннера) | `http://localhost:5000` |
 | `SYNTH_CORS_ORIGIN` | CORS origin (приоритет выше конфига) | — |
-| `SYNTH_DECISION_MODE` | AD-084: режим decision-слоя (`auto`/`local`/`remote`) | `auto` |
-| `SYNTH_DECISION_PROVIDER` | AD-084: имя провайдера типа `decision` | `decision.provider` |
+| `SYNTH_DECISION_PROVIDER` | AD-084: имя провайдера decision-типа (`decision`/`systemone`) | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | AD-084: модель decision-слоя (напр. `clef-flash`) | `decision.model` |
 
 **UI (Vite):**
@@ -56,8 +55,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_PROVIDER_<NAME>_URL` | URL провайдера |
 | `SYNTH_PROVIDER_<NAME>_API_KEY` | API-ключ |
 | `SYNTH_PROVIDER_<NAME>_MODEL` | Модель по умолчанию |
-| `SYNTH_PROVIDER_<NAME>_TYPE` | Тип: `openai`, `anthropic`, `ollama`, `decision` |
-| `SYNTH_PROVIDER_<NAME>_DECISION_API` | AD-084: транспорт decision-провайдера: `decisions` (RouterAI) или `systemone` (Ollama) |
+| `SYNTH_PROVIDER_<NAME>_TYPE` | Тип: `openai`, `anthropic`, `ollama`, `decision`, `systemone` |
 
 ## config.yaml
 
@@ -184,13 +182,11 @@ llmGateway:
 
 decision:                         # AD-084: decision-модели (System One: Clef/Jev/…)
   enabled: false                  # мастер-выключатель decision-слоя
-  mode: "auto"                    # auto | local | remote (auto → remote при заданном provider, иначе local)
-  provider: ""                    # имя провайдера типа decision
+  provider: ""                    # имя провайдера decision-типа (decision | systemone)
   model: ""                       # модель (напр. clef-flash)
-  escalationModel: ""             # модель эскалации (опционально)
-  timeoutMs: 10000                # таймаут decision-запроса, мс
   confidenceThreshold: 0.6        # порог уверенности (ниже — fail-safe fallback)
-  remoteEndpoint: ""              # явный remote endpoint (пусто → base URL провайдера)
+  # Транспорт задаётся типом провайдера (decision → POST {base}/decisions,
+  # systemone → POST {base}/v1/systemone); таймаут — свойством провайдера (timeout).
 
 > Секция `decision` переопределяется в runtime через `GET/PUT/DELETE /api/v2/settings/decision`
 > (live, без рестарта): значения сохраняются в `{dataDir}/settings.json` и применяются ко всем

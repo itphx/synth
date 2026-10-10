@@ -139,13 +139,9 @@ export const defaultConfig: SynthConfig = {
   decision: {
     // AD-084: decision-слой выключен по умолчанию (провайдер задаёт админ).
     enabled: false,
-    mode: 'auto',
     provider: '',
     model: '',
-    escalationModel: '',
-    timeoutMs: 10_000,
     confidenceThreshold: 0.6,
-    remoteEndpoint: '',
   },
   instructions: {
     enabled: true,

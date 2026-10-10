@@ -218,7 +218,8 @@ export const ProvidersPanel = () => {
                 <SelectItem value="openai">OpenAI</SelectItem>
                 <SelectItem value="anthropic">Anthropic</SelectItem>
                 <SelectItem value="ollama">Ollama</SelectItem>
-                <SelectItem value="decision">Decision</SelectItem>
+                <SelectItem value="decision">Decision (RouterAI)</SelectItem>
+                <SelectItem value="systemone">System One (Ollama)</SelectItem>
               </SelectContent>
             </SelectField>
             <div className="sm:col-span-2">

@@ -1499,25 +1499,20 @@ describe('Settings API Routes (decision, AD-084)', () => {
     expect(body.isOverridden).toBe(false);
     expect(body.defaults).toEqual({
       enabled: false,
-      mode: 'auto',
       provider: '',
       model: '',
-      escalationModel: '',
-      timeoutMs: 10_000,
       confidenceThreshold: 0.6,
-      remoteEndpoint: '',
     });
     expect(body.decision).toEqual(body.defaults);
   });
 
   it('GET /decision — fallbackDecision из config перекрывает дефолты', async () => {
-    const { app } = makeDecisionApp({ enabled: true, mode: 'remote', provider: 'routerai-decision' });
+    const { app } = makeDecisionApp({ enabled: true, provider: 'routerai-decision' });
     const body: any = await (await app.request('/api/v2/settings/decision')).json();
     expect(body.defaults.enabled).toBe(true);
-    expect(body.defaults.mode).toBe('remote');
     expect(body.defaults.provider).toBe('routerai-decision');
     // Незаданные поля — дефолты схемы.
-    expect(body.defaults.timeoutMs).toBe(10_000);
+    expect(body.defaults.confidenceThreshold).toBe(0.6);
   });
 
   it('PUT /decision — сохраняет патч, применяет поверх дефолтов, вызывает onDecisionChange', async () => {
@@ -1531,7 +1526,7 @@ describe('Settings API Routes (decision, AD-084)', () => {
     const body: any = await res.json();
     expect(body.decision).toMatchObject({ enabled: true, model: 'clef-flash', confidenceThreshold: 0.75 });
     // Незаданные поля добраны дефолтами.
-    expect(body.decision.mode).toBe('auto');
+    expect(body.decision.provider).toBe('');
     expect(await settingsStore.getDecision()).toEqual({ enabled: true, model: 'clef-flash', confidenceThreshold: 0.75 });
     expect(onDecisionChange).toHaveBeenCalledOnce();
 
@@ -1544,17 +1539,12 @@ describe('Settings API Routes (decision, AD-084)', () => {
     const { app, onDecisionChange } = makeDecisionApp();
     const invalidBodies = [
       { decision: 'nope' },
-      { decision: { mode: 'bogus' } },
       { decision: { enabled: 'yes' } },
-      { decision: { timeoutMs: 0 } },
-      { decision: { timeoutMs: 1.5 } },
       { decision: { confidenceThreshold: -0.1 } },
       { decision: { confidenceThreshold: 1.5 } },
       { decision: { confidenceThreshold: 'high' } },
       { decision: { provider: 42 } },
       { decision: { model: false } },
-      { decision: { escalationModel: 1 } },
-      { decision: { remoteEndpoint: 1 } },
     ];
     for (const body of invalidBodies) {
       const res = await app.request('/api/v2/settings/decision', {

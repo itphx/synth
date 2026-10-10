@@ -307,10 +307,9 @@ describe('RuntimeSettingsStore.decision (AD-084)', () => {
 
   it('set/getDecision сохраняет патч, переживает рестарт', async () => {
     const store = new RuntimeSettingsStore({ dataDir: tmpDir });
-    await store.setDecision({ enabled: true, mode: 'remote', provider: 'routerai-decision', confidenceThreshold: 0.8 });
+    await store.setDecision({ enabled: true, provider: 'routerai-decision', confidenceThreshold: 0.8 });
     const decision = await store.getDecision();
     expect(decision.enabled).toBe(true);
-    expect(decision.mode).toBe('remote');
     expect(decision.provider).toBe('routerai-decision');
     expect(decision.confidenceThreshold).toBe(0.8);
 
@@ -333,35 +332,23 @@ describe('RuntimeSettingsStore.decision (AD-084)', () => {
 describe('mergeDecisionConfig (AD-084)', () => {
   const base = {
     enabled: false,
-    mode: 'auto' as const,
     provider: '',
     model: '',
-    escalationModel: '',
-    timeoutMs: 10_000,
     confidenceThreshold: 0.6,
-    remoteEndpoint: '',
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
     const merged = mergeDecisionConfig(base, {
       enabled: true,
-      mode: 'remote',
       provider: 'routerai-decision',
       model: 'clef-flash',
-      escalationModel: 'clef',
-      timeoutMs: 5_000,
       confidenceThreshold: 0.9,
-      remoteEndpoint: 'https://routerai.ru/api/v1/decisions',
     });
     expect(merged).toEqual({
       enabled: true,
-      mode: 'remote',
       provider: 'routerai-decision',
       model: 'clef-flash',
-      escalationModel: 'clef',
-      timeoutMs: 5_000,
       confidenceThreshold: 0.9,
-      remoteEndpoint: 'https://routerai.ru/api/v1/decisions',
     });
   });
 
@@ -372,13 +359,9 @@ describe('mergeDecisionConfig (AD-084)', () => {
   it('при отсутствии обоих — дефолты схемы', () => {
     expect(mergeDecisionConfig(undefined, {})).toEqual({
       enabled: false,
-      mode: 'auto',
       provider: '',
       model: '',
-      escalationModel: '',
-      timeoutMs: 10_000,
       confidenceThreshold: 0.6,
-      remoteEndpoint: '',
     });
   });
 });

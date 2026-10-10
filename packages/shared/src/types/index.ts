@@ -1128,11 +1128,6 @@ export interface ProviderConfig {
   icon?: string;
   /** Валюта по умолчанию для моделей провайдера. Отсутствует → USD. */
   currency?: Currency;
-  /**
-   * AD-084: транспорт decision-провайдера (`type: 'decision'`) —
-   * `decisions` (RouterAI, по умолчанию) | `systemone` (Ollama).
-   */
-  decisionApi?: 'decisions' | 'systemone';
 }
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';

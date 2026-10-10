@@ -1,6 +1,6 @@
 # LLM-провайдеры
 
-Synth поддерживает провайдеров типов `openai`, `anthropic`, `ollama` и `decision` (проверяется в `synth config provider add --type`).
+Synth поддерживает провайдеров типов `openai`, `anthropic`, `ollama`, `decision` и `systemone` (проверяется в `synth config provider add --type`).
 
 ## Провайдеры для разработки
 
@@ -43,30 +43,29 @@ export SYNTH_PROVIDER_ANTHROPIC_TYPE=anthropic
 ### Decision-модели (System One, AD-084)
 
 Отдельный класс моделей: не чат, а `state` (текст/JSON) + типизированные вопросы →
-вероятности за один forward-pass. Тип провайдера — `decision`; транспорт задаётся
-полем `decisionApi` (`decisions` по умолчанию, `systemone` — Ollama ≥0.35.1):
+вероятности за один forward-pass. Протокол задаётся **типом провайдера**:
 
-| `decisionApi` | Endpoint | Назначение |
-|---------------|----------|------------|
-| `decisions` | `POST {baseUrl}/decisions` | RouterAI и прочие SystemOne-совместимые API (Bearer) |
-| `systemone` | `POST {baseUrl}/v1/systemone` | Локальный Ollama |
+| Тип | Endpoint | Назначение |
+|-----|----------|------------|
+| `decision` | `POST {baseUrl}/decisions` | RouterAI и прочие SystemOne-совместимые API (Bearer) |
+| `systemone` | `POST {baseUrl}/v1/systemone` | Локальный Ollama (≥0.35.1) |
+
+`baseUrl` — базовый URL сервиса; путь протокола добавляет сам провайдер.
 
 ```bash
-# RouterAI (remote)
+# RouterAI (remote) — тип decision
 export SYNTH_PROVIDER_ROUTERAI_DECISION_TYPE=decision
 export SYNTH_PROVIDER_ROUTERAI_DECISION_URL=https://routerai.ru/api/v1
 export SYNTH_PROVIDER_ROUTERAI_DECISION_API_KEY=sk-xxx
 export SYNTH_PROVIDER_ROUTERAI_DECISION_MODEL=clef-flash
-export SYNTH_PROVIDER_ROUTERAI_DECISION_DECISION_API=decisions
 
-# Ollama (local)
-export SYNTH_PROVIDER_OLLAMA_DECISION_TYPE=decision
+# Ollama (local) — тип systemone
+export SYNTH_PROVIDER_OLLAMA_DECISION_TYPE=systemone
 export SYNTH_PROVIDER_OLLAMA_DECISION_URL=http://localhost:11434
 export SYNTH_PROVIDER_OLLAMA_DECISION_MODEL=clef-flash
-export SYNTH_PROVIDER_OLLAMA_DECISION_DECISION_API=systemone
 ```
 
-Слой включается секцией `decision` (`enabled`, `mode`, `provider`, `model`, …) —
+Слой включается секцией `decision` (`enabled`, `provider`, `model`, `confidenceThreshold`) —
 см. [CONFIGURATION.md](CONFIGURATION.md). Любой decision-запрос идёт через
 `GatewayProvider` (guard/обфускация/rate limit/аудит), при ошибке или низкой
 уверенности — fail-safe откат к текущему поведению.
@@ -89,7 +88,7 @@ synth config provider list
 synth config provider delete ollama
 ```
 
-Обязательные флаги: `--name`, `--type` (openai | anthropic | ollama | decision). Опциональные: `--url`, `--model`, `--api-key`, `--data-dir`.
+Обязательные флаги: `--name`, `--type` (openai | anthropic | ollama | decision | systemone). Опциональные: `--url`, `--model`, `--api-key`, `--data-dir`.
 
 ## Через веб-интерфейс
 

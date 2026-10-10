@@ -185,11 +185,6 @@ export interface ProviderConfig {
   maxTokens?: number;
   /** Размер контекста модели (num_ctx у Ollama). */
   numCtx?: number;
-  /**
-   * AD-084: транспорт decision-провайдера — `decisions` (RouterAI) или
-   * `systemone` (Ollama). Используется только провайдерами типа `decision`.
-   */
-  decisionApi?: 'decisions' | 'systemone';
 }
 
 /**
@@ -246,8 +241,6 @@ export abstract class BaseProvider {
   reasoningLevel: ReasoningLevel;
   maxTokens?: number;
   numCtx?: number;
-  /** AD-084: транспорт decision-провайдера (`decisions` | `systemone`). */
-  decisionApi?: 'decisions' | 'systemone';
 
   constructor(params: {
     url: string;
@@ -262,7 +255,6 @@ export abstract class BaseProvider {
     reasoningLevel?: ReasoningLevel;
     maxTokens?: number;
     numCtx?: number;
-    decisionApi?: 'decisions' | 'systemone';
   }) {
     this.url = params.url;
     this.apiKey = params.apiKey;
@@ -276,7 +268,6 @@ export abstract class BaseProvider {
     this.reasoningLevel = params.reasoningLevel ?? 'default';
     this.maxTokens = params.maxTokens;
     this.numCtx = params.numCtx;
-    this.decisionApi = params.decisionApi;
   }
 
   abstract chat(
@@ -374,7 +365,6 @@ export class ProviderFactory {
       reasoningLevel: config.reasoningLevel,
       maxTokens: config.maxTokens,
       numCtx: config.numCtx,
-      decisionApi: config.decisionApi,
     });
   }
 
@@ -398,6 +388,11 @@ export class ProviderFactory {
   static _normalizeUrl(url: string, providerType: string): string {
     const trimmed = url.replace(/\/+$/, '');
 
+    // AD-084: decision-провайдеры (`decision` → /decisions, `systemone` →
+    // /v1/systemone) строят endpoint сами — url остаётся базовым.
+    if (providerType === 'decision' || providerType === 'systemone') {
+      return trimmed;
+    }
     if (providerType === 'ollama' && !trimmed.endsWith('/api/chat')) {
       return `${trimmed}/api/chat`;
     }

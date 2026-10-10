@@ -149,13 +149,9 @@ function resolveDecisionDefaults(fallback?: Partial<DecisionRuntimeSettings>): D
   const base = defaultConfig.decision;
   return {
     enabled: fallback?.enabled ?? base.enabled,
-    mode: fallback?.mode ?? base.mode,
     provider: fallback?.provider ?? base.provider,
     model: fallback?.model ?? base.model,
-    escalationModel: fallback?.escalationModel ?? base.escalationModel,
-    timeoutMs: fallback?.timeoutMs ?? base.timeoutMs,
     confidenceThreshold: fallback?.confidenceThreshold ?? base.confidenceThreshold,
-    remoteEndpoint: fallback?.remoteEndpoint ?? base.remoteEndpoint,
   };
 }
 
@@ -173,12 +169,6 @@ function validateDecisionSettings(
     if (typeof s.enabled !== 'boolean') return { ok: false, message: 'decision.enabled: ожидается boolean' };
     result.enabled = s.enabled;
   }
-  if (s.mode !== undefined) {
-    if (s.mode !== 'auto' && s.mode !== 'local' && s.mode !== 'remote') {
-      return { ok: false, message: 'decision.mode: ожидается "auto" | "local" | "remote"' };
-    }
-    result.mode = s.mode;
-  }
   if (s.provider !== undefined) {
     if (typeof s.provider !== 'string') return { ok: false, message: 'decision.provider: ожидается строка' };
     result.provider = s.provider;
@@ -187,30 +177,12 @@ function validateDecisionSettings(
     if (typeof s.model !== 'string') return { ok: false, message: 'decision.model: ожидается строка' };
     result.model = s.model;
   }
-  if (s.escalationModel !== undefined) {
-    if (typeof s.escalationModel !== 'string') {
-      return { ok: false, message: 'decision.escalationModel: ожидается строка' };
-    }
-    result.escalationModel = s.escalationModel;
-  }
-  if (s.timeoutMs !== undefined) {
-    if (!Number.isInteger(s.timeoutMs) || (s.timeoutMs as number) < 1 || (s.timeoutMs as number) > 600_000) {
-      return { ok: false, message: 'decision.timeoutMs: ожидается целое 1..600000' };
-    }
-    result.timeoutMs = s.timeoutMs as number;
-  }
   if (s.confidenceThreshold !== undefined) {
     const threshold = s.confidenceThreshold;
     if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
       return { ok: false, message: 'decision.confidenceThreshold: ожидается число 0..1' };
     }
     result.confidenceThreshold = threshold;
-  }
-  if (s.remoteEndpoint !== undefined) {
-    if (typeof s.remoteEndpoint !== 'string') {
-      return { ok: false, message: 'decision.remoteEndpoint: ожидается строка' };
-    }
-    result.remoteEndpoint = s.remoteEndpoint;
   }
   return { ok: true, value: result };
 }
@@ -222,13 +194,9 @@ function effectiveDecision(
 ): DecisionConfig {
   return {
     enabled: runtime.enabled ?? defaults.enabled,
-    mode: runtime.mode ?? defaults.mode,
     provider: runtime.provider ?? defaults.provider,
     model: runtime.model ?? defaults.model,
-    escalationModel: runtime.escalationModel ?? defaults.escalationModel,
-    timeoutMs: runtime.timeoutMs ?? defaults.timeoutMs,
     confidenceThreshold: runtime.confidenceThreshold ?? defaults.confidenceThreshold,
-    remoteEndpoint: runtime.remoteEndpoint ?? defaults.remoteEndpoint,
   };
 }
 
@@ -986,10 +954,10 @@ export function createSettingsRoutes(
 
   /**
    * AD-084: GET/PUT/DELETE /api/v2/settings/decision — runtime-настройки
-   * decision-слоя (мастер-выключатель, транспорт, провайдер/модель, таймаут,
-   * порог уверенности, remote-endpoint). Runtime-значение ({dataDir}/settings.json)
-   * приоритетнее config.yaml `decision`; live-применение — через `onDecisionChange`
-   * (микро-каскад, роутер, события AD-089).
+   * decision-слоя (мастер-выключатель, провайдер/модель, порог уверенности).
+   * Runtime-значение ({dataDir}/settings.json) приоритетнее config.yaml
+   * `decision`; live-применение — через `onDecisionChange` (микро-каскад,
+   * роутер, события AD-089). Транспорт задаётся типом провайдера.
    */
   app.get('/decision', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getDecision();
