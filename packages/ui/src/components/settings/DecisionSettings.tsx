@@ -2,30 +2,32 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { useNotification } from '@/hooks/useNotification'
+import { useProvidersStore } from '@/stores/providersStore'
 import { synthApi, type DecisionSettings as DecisionSettingsData } from '@/lib/api/synthApi'
-import { SelectContent, SelectItem } from '../ui/select'
 import {
+  ModelPairSelect,
   NumberField,
-  SelectField,
   SettingsActions,
   SettingsPanel,
   SettingsSection,
-  TextField,
   ToggleField,
   useSettingsDraft,
 } from '../ui/settings'
 
-const MODES: Array<DecisionSettingsData['mode']> = ['auto', 'local', 'remote']
+/** Типы провайдеров decision-протокола (AD-084): `decision` (RouterAI) / `systemone` (Ollama). */
+const DECISION_PROVIDER_TYPES: readonly string[] = ['decision', 'systemone']
 
 /**
  * AD-084 / AD-072: админ-секция «Decision-модели» — runtime-настройки
- * decision-слоя (`/settings/decision`): мастер-выключатель, транспорт
- * (auto/local/remote), провайдер/модель, модель эскалации, таймаут, порог
- * уверенности и явный remote-endpoint. Мутации — ADMIN (guard сервера).
+ * decision-слоя (`/settings/decision`): мастер-выключатель, провайдер
+ * decision-протокола и модель (селект), порог уверенности. Мутации — ADMIN
+ * (guard сервера).
  */
 export function DecisionSettings() {
   const { t } = useI18n()
   const { notify } = useNotification()
+  const providers = useProvidersStore((s) => s.providers)
+  const models = useProvidersStore((s) => s.models)
 
   const [remote, setRemote] = useState<DecisionSettingsData | null>(null)
   const [defaults, setDefaults] = useState<DecisionSettingsData | null>(null)
@@ -98,7 +100,14 @@ export function DecisionSettings() {
     }
   }
 
-  const draftMode = draft.draft ?? remote
+  // Только провайдеры decision-протокола (AD-084); модели — по выбранному провайдеру.
+  const decisionProviders = providers.filter(
+    (p) => p.enabled && DECISION_PROVIDER_TYPES.includes(p.type),
+  )
+  const filteredModels = (provider: string) =>
+    models.filter((m) => m.enabled && (!provider || m.provider === provider))
+
+  const current = draft.draft ?? remote
 
   return (
     <SettingsPanel title={t('decisionConfig.title')} description={t('decisionConfig.description')}>
@@ -109,89 +118,34 @@ export function DecisionSettings() {
           </div>
         )}
 
-        {loading && !draftMode && (
+        {loading && !current && (
           <div className="py-4 text-center text-sm text-muted-foreground">{t('common.loading')}</div>
         )}
 
-        {draftMode && (
+        {current && (
           <>
             <ToggleField
               label={t('decisionConfig.enabled')}
               tooltip={t('decisionConfig.enabledTooltip')}
-              enabled={draftMode.enabled}
-              onToggle={() => draft.update({ enabled: !draftMode.enabled })}
+              enabled={current.enabled}
+              onToggle={() => draft.update({ enabled: !current.enabled })}
               ariaLabel={t('decisionConfig.enabled')}
             />
 
-            <SelectField
-              label={t('decisionConfig.mode')}
-              tooltip={t('decisionConfig.modeTooltip')}
-              value={draftMode.mode}
-              onValueChange={(value) =>
-                draft.update({ mode: value as DecisionSettingsData['mode'] })
-              }
-              ariaLabel={t('decisionConfig.mode')}
-              triggerTestId="decision-config-mode"
-              items={MODES.map((mode) => ({
-                value: mode,
-                label: t(`decisionConfig.mode.${mode}`),
-              }))}
-            >
-              <SelectContent>
-                {MODES.map((mode) => (
-                  <SelectItem key={mode} value={mode}>
-                    {t(`decisionConfig.mode.${mode}`)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </SelectField>
-
-            <TextField
-              label={t('decisionConfig.provider')}
-              tooltip={t('decisionConfig.providerTooltip')}
-              value={draftMode.provider}
-              onChange={(e) => draft.update({ provider: e.target.value })}
-              placeholder="routerai-decision"
-              mono
-              id="decision-config-provider"
-              data-testid="decision-config-provider"
-            />
-
-            <TextField
-              label={t('decisionConfig.model')}
-              tooltip={t('decisionConfig.modelTooltip')}
-              value={draftMode.model}
-              onChange={(e) => draft.update({ model: e.target.value })}
-              placeholder="clef-flash"
-              mono
-              id="decision-config-model"
-              data-testid="decision-config-model"
-            />
-
-            <TextField
-              label={t('decisionConfig.escalationModel')}
-              tooltip={t('decisionConfig.escalationModelTooltip')}
-              value={draftMode.escalationModel}
-              onChange={(e) => draft.update({ escalationModel: e.target.value })}
-              placeholder={t('common.optional')}
-              mono
-              id="decision-config-escalation-model"
-              data-testid="decision-config-escalation-model"
-            />
-
-            <NumberField
-              label={t('decisionConfig.timeoutMs')}
-              tooltip={t('decisionConfig.timeoutMsTooltip')}
-              min={1}
-              max={600000}
-              step={500}
-              suffix="ms"
-              value={String(draftMode.timeoutMs)}
-              onChange={(e) =>
-                draft.update({ timeoutMs: Number.parseInt(e.target.value, 10) || 0 })
-              }
-              id="decision-config-timeout"
-              data-testid="decision-config-timeout"
+            <ModelPairSelect
+              label={t('decisionConfig.providerModel')}
+              provider={current.provider}
+              model={current.model}
+              providers={decisionProviders}
+              models={filteredModels(current.provider)}
+              providerLabel={t('common.provider')}
+              modelLabel={t('common.model')}
+              providerTooltip={t('decisionConfig.providerTooltip')}
+              modelTooltip={t('decisionConfig.modelTooltip')}
+              providerTestId="decision-config-provider"
+              modelTestId="decision-config-model"
+              onProviderChange={(value) => draft.update({ provider: value, model: '' })}
+              onModelChange={(value) => draft.update({ model: value })}
             />
 
             <NumberField
@@ -200,24 +154,13 @@ export function DecisionSettings() {
               min={0}
               max={1}
               step={0.05}
-              value={String(draftMode.confidenceThreshold)}
+              value={String(current.confidenceThreshold)}
               onChange={(e) => {
                 const parsed = Number.parseFloat(e.target.value)
                 draft.update({ confidenceThreshold: Number.isFinite(parsed) ? parsed : 0 })
               }}
               id="decision-config-confidence"
               data-testid="decision-config-confidence"
-            />
-
-            <TextField
-              label={t('decisionConfig.remoteEndpoint')}
-              tooltip={t('decisionConfig.remoteEndpointTooltip')}
-              value={draftMode.remoteEndpoint}
-              onChange={(e) => draft.update({ remoteEndpoint: e.target.value })}
-              placeholder="https://routerai.ru/api/v1"
-              mono
-              id="decision-config-remote-endpoint"
-              data-testid="decision-config-remote-endpoint"
             />
 
             <SettingsActions

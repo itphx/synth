@@ -54,9 +54,10 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `scheduler` (`enabled`/`tickSec`/`catchUp`/`jobRetentionDays`/`leaderElection`/
   `crossProcessLocks`); file-based флаги (`dedupStore: file`, `leaderElection: file`,
   `crossProcessLocks`) — default OFF, поведение single-process не меняют.
-- AD-084: секция `decision` (`enabled`/`mode`/`provider`/`model`/`escalationModel`/
-  `timeoutMs`/`confidenceThreshold`/`remoteEndpoint`; `decisionConfigSchema` + `DecisionConfig`),
-  env-резолверы `SYNTH_DECISION_MODE`/`SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`;
+- AD-084: секция `decision` (`enabled`/`provider`/`model`/`confidenceThreshold`;
+  `decisionConfigSchema` + `DecisionConfig`); `provider` — имя провайдера
+  decision-протокола (тип `decision`/`systemone`), env-резолверы
+  `SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`;
   поле `events.decisionRouting` (decision-маршрутизация внешних событий, default `false`, AD-084 × AD-089).
 
 ## Схемы и типы

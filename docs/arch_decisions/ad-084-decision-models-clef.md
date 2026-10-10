@@ -166,15 +166,15 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 
 ## Этапы реализации
 
-1. ✅ **Адаптер + конфиг + провайдеры.** `DecisionProvider` (транспорты `/decisions` RouterAI и
-   `/v1/systemone` Ollama), секция `decision` в `shared`, режим `auto|local|remote`, подключение
-   через `GatewayProvider.decide`.
+1. ✅ **Адаптер + конфиг + провайдеры.** `DecisionProvider` (типы провайдеров `decision` →
+   `POST {base}/decisions` RouterAI и `systemone` → `POST {base}/v1/systemone` Ollama), секция
+   `decision` в `shared`, подключение через `GatewayProvider.decide`.
 2. ✅ **Clef-Flash в micro за флагом.** Новый `DecisionModel` (`MicroModelKind: 'decision'`) для задач
    `classify` / `enum_decision`; включается per-session флагом `decisionFirst` (AD-035), старый
    `micro_llm`-путь сохранён — сравнение качества/латентности на своих данных.
 3. ⏳ **Clef на эскалацию** (точная модель на `UNSURE`/сложные решения) и **мультимодальность** —
-   **задел**: контракт типов (`score`, `images`/`videos`) и поле `escalationModel` в конфиге есть,
-   рантайм-веток эскалации и мультимодальных `state` нет.
+   **задел**: контракт типов (`score`, `images`/`videos`) есть; рантайм-веток эскалации
+   (отдельного поля модели эскалации в конфиге нет) и мультимодальных `state` нет.
 4. ✅ **Decision-классификатор маршрутизации.** `DecisionContentClassifier` (AD-034) — опциональный
    decision-вопрос `choice` `{coding|research|chat}` при низкой уверенности словарного
    `content`-классификатора; приоритет `routingCategory` не меняется.
@@ -190,9 +190,10 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 
 ⚠️ **Частично реализовано (Ф1–Ф5).**
 
-- **Адаптер и транспорт:** `packages/core/src/providers/decision.ts` (`DecisionProvider`, тип `decision`,
-  транспорт — поле конфига провайдера `decisionApi`: `decisions` → `POST {base}/decisions` (RouterAI),
-  `systemone` → `POST {base}/v1/systemone` (Ollama)); регистрация `ProviderFactory.register('decision', …)`
+- **Адаптер и транспорт:** `packages/core/src/providers/decision.ts` (`DecisionProvider`, типы
+  провайдеров `decision` → `POST {base}/decisions` (RouterAI) и `systemone` → `POST {base}/v1/systemone`
+  (Ollama) — endpoint выбирается по типу провайдера); регистрация
+  `ProviderFactory.register('decision', …)`/`ProviderFactory.register('systemone', …)`
   (`providers/index.ts`), таймаут/`AbortController`, ошибки → `ProviderError`/`RateLimitError`/
   `ContextLengthExceededError`.
 - **Gateway:** `GatewayProvider.decide(state, questions, opts?)`
@@ -206,9 +207,9 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 - **События (AD-089):** `packages/core/src/engine/events/decision-rule-provider.ts`
   (`DecisionRuleProvider`, `name='decision-rules'`); регистрация в `server/app.ts` (core) и
   `backend/src/app.ts` после `ProjectRuleProvider`, fail-safe (`null` → Router идёт дальше).
-- **Конфиг:** `@itphx/synth-shared/config` — секция `decision` (`enabled`/`mode`/`provider`/`model`/
-  `escalationModel`/`timeoutMs`/`confidenceThreshold`/`remoteEndpoint`) + поле `events.decisionRouting`;
-  env-резолверы `SYNTH_DECISION_MODE`/`SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`; типы
+- **Конфиг:** `@itphx/synth-shared/config` — секция `decision` (`enabled`/`provider`/`model`/
+  `confidenceThreshold`; `provider` — имя провайдера decision-протокола типа `decision`/`systemone`) +
+  поле `events.decisionRouting`; env-резолверы `SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`; типы
   `DecisionQuestion`/`DecisionAnswer`/`DecisionRequest`/`DecisionResponse` (`types/decision.ts`).
 - **Runtime-API:** `GET/PUT/DELETE /api/v2/settings/decision` (`server/routes/settings.ts`, `decisionWriteGuard`),
   live-применение — `onDecisionChange`; runtime-стор — `DecisionRuntimeSettings` + `mergeDecisionConfig`
@@ -222,8 +223,8 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 - **Локальный инференс:** транспорт `systemone` (Ollama, `POST /v1/systemone`) реализован, но требует
   Ollama **≥ 0.35.1** (в dev — 0.32.14) и `ollama pull clef-flash` (~11 ГБ). Обновление рантайма —
   отдельная задача `@admin` с бэкпом/тестом/откатом (риск: перезапуск Ollama).
-- **Политика `mode: auto`** требует сигнала «managed»; сейчас `auto` = `remote` при заданном
-  decision-провайдере, иначе `local`; явные `local`/`remote` — override. Полноценная типизация политики
+- **Политика local/remote** — задел: транспорт задаётся типом провайдера (`decision` — RouterAI,
+  `systemone` — Ollama), явного поля `mode` в конфиге нет. Полноценная типизация политики
   (локально/remote, запрет утечек) — **задел** под [AD-080](./ad-080-managed-hybrid-modes.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md).
 - **Трафик в Cloudflare (remote)** при managed/чувствительных данных — политики локально/remote (см. выше).
 - **Калибровка вероятностей и порогов** — заявленные вероятности требуют проверки; порог `OK`/`UNSURE` (сейчас

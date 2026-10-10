@@ -2036,20 +2036,12 @@ export interface EventsSettingsResponse {
 export interface DecisionSettings {
   /** Мастер-выключатель decision-слоя. */
   enabled: boolean
-  /** Транспорт: `auto` (по политике) | `local` (Ollama) | `remote` (RouterAI/managed). */
-  mode: 'auto' | 'local' | 'remote'
-  /** Имя провайдера типа `decision` (пусто — провайдер не задан). */
+  /** Имя провайдера decision-протокола (тип `decision`/`systemone`; пусто — не задан). */
   provider: string
   /** Модель decision-слоя (напр. `clef-flash`). */
   model: string
-  /** Модель для эскалации (опционально, пусто — не задана). */
-  escalationModel: string
-  /** Таймаут decision-запроса, мс. */
-  timeoutMs: number
   /** Порог уверенности 0..1: ниже — fallback (fail-safe). */
   confidenceThreshold: number
-  /** Явный endpoint remote-транспорта (пусто — URL провайдера). */
-  remoteEndpoint: string
 }
 
 /** AD-084: ответ `GET/DELETE /settings/decision` — эффективные значения, дефолты и флаг override. */

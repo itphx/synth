@@ -31,6 +31,14 @@ export interface ModelPairSelectProps {
   filterOptions?: boolean
   /** Если задан, aria-label = `${ariaLabelPrefix} — <label>`; иначе — только `<label>`. */
   ariaLabelPrefix?: string
+  /** `data-testid` триггера провайдера (для тестов и e2e). */
+  providerTestId?: string
+  /** `data-testid` триггера модели (для тестов и e2e). */
+  modelTestId?: string
+  /** AD-089: подсказка-иконка (ⓘ) у селектора провайдера. */
+  providerTooltip?: string
+  /** AD-089: подсказка-иконка (ⓘ) у селектора модели. */
+  modelTooltip?: string
 }
 
 /** Пара селекторов «провайдер — модель»; используется в роутинге сессии и настроек. */
@@ -47,6 +55,10 @@ export function ModelPairSelect({
   variant = 'settings',
   filterOptions = false,
   ariaLabelPrefix,
+  providerTestId,
+  modelTestId,
+  providerTooltip,
+  modelTooltip,
 }: ModelPairSelectProps) {
   const compact = variant === 'compact'
   const availableProviders = filterOptions ? providers.filter((p) => p.enabled) : providers
@@ -64,7 +76,13 @@ export function ModelPairSelect({
   }
 
   const providerSelect = (
-    <SelectField value={provider} onValueChange={handleProviderChange} ariaLabel={providerAria}>
+    <SelectField
+      value={provider}
+      onValueChange={handleProviderChange}
+      ariaLabel={providerAria}
+      tooltip={providerTooltip}
+      triggerTestId={providerTestId}
+    >
       <SelectContent>
         <SelectItem value="">{providerLabel}</SelectItem>
         {availableProviders.map((p) => (
@@ -75,7 +93,13 @@ export function ModelPairSelect({
   )
 
   const modelSelect = (
-    <SelectField value={model} onValueChange={onModelChange} ariaLabel={modelAria}>
+    <SelectField
+      value={model}
+      onValueChange={onModelChange}
+      ariaLabel={modelAria}
+      tooltip={modelTooltip}
+      triggerTestId={modelTestId}
+    >
       <SelectContent>
         <SelectItem value="">{modelLabel}</SelectItem>
         {availableModels.map((m) => (

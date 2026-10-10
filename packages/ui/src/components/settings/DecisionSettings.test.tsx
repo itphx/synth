@@ -31,9 +31,27 @@ const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
 }))
 
+// Провайдеры/модели: только `decision`/`systemone` — decision-протокол (AD-084).
+const providersStore = vi.hoisted(() => ({
+  providers: [
+    { name: 'routerai-decision', type: 'decision', enabled: true },
+    { name: 'ollama-systemone', type: 'systemone', enabled: true },
+    { name: 'openai', type: 'openai', enabled: true },
+    { name: 'disabled-decision', type: 'decision', enabled: false },
+  ],
+  models: [
+    { name: 'clef-flash', provider: 'routerai-decision', enabled: true },
+    { name: 'clef', provider: 'routerai-decision', enabled: true },
+    { name: 'gpt-4o', provider: 'openai', enabled: true },
+  ],
+}))
+
 vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 vi.mock('@/hooks/useNotification', () => ({
   useNotification: () => ({ notify: mocks.notify }),
+}))
+vi.mock('@/stores/providersStore', () => ({
+  useProvidersStore: (selector: (s: typeof providersStore) => unknown) => selector(providersStore),
 }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
@@ -50,24 +68,16 @@ const roots: Array<{ root: Root; container: HTMLElement }> = []
 
 const DEFAULTS: DecisionSettingsData = {
   enabled: false,
-  mode: 'auto',
   provider: '',
   model: '',
-  escalationModel: '',
-  timeoutMs: 10000,
   confidenceThreshold: 0.6,
-  remoteEndpoint: '',
 }
 
 const OVERRIDDEN: DecisionSettingsData = {
   enabled: true,
-  mode: 'remote',
   provider: 'routerai-decision',
   model: 'clef-flash',
-  escalationModel: 'clef',
-  timeoutMs: 5000,
   confidenceThreshold: 0.75,
-  remoteEndpoint: 'https://routerai.ru/api/v1',
 }
 
 function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
@@ -85,14 +95,19 @@ const clickTestId = async (container: HTMLElement, testId: string) => {
   })
 }
 
-/** Открывает Base UI select и кликает опцию по подписи (опции рендерятся в portal). */
-async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+/** Открывает Base UI select и возвращает список опций (опции рендерятся в portal). */
+async function openOptions(trigger: HTMLElement): Promise<HTMLElement[]> {
   await act(async () => {
     trigger.click()
   })
   const listId = trigger.getAttribute('aria-controls')
   const scope = listId ? document.getElementById(listId) ?? document.body : document.body
-  const allOptions = [...scope.querySelectorAll('[role="option"]')]
+  return [...scope.querySelectorAll('[role="option"]')] as HTMLElement[]
+}
+
+/** Открывает Base UI select и кликает опцию по подписи. */
+async function selectOption(trigger: HTMLElement, label: string): Promise<void> {
+  const allOptions = await openOptions(trigger)
   const option = allOptions.find((o) => o.textContent?.trim().startsWith(label)) as HTMLElement | undefined
   expect(option, `option "${label}"`).toBeTruthy()
   await act(async () => {
@@ -118,6 +133,11 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {})
   return container
 }
+
+const providerTrigger = (container: HTMLElement) =>
+  container.querySelector('[data-testid="decision-config-provider"]') as HTMLElement
+const modelTrigger = (container: HTMLElement) =>
+  container.querySelector('[data-testid="decision-config-model"]') as HTMLElement
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -156,28 +176,37 @@ describe('DecisionSettings — админ-раздел «Decision-модели»
     expect(container.textContent).toContain('Runtime settings for the decision layer')
   })
 
-  it('показывает значения из API (provider/model/timeout/threshold)', async () => {
+  it('показывает значения из API (provider/model/threshold)', async () => {
     const container = await renderSettings()
 
-    expect((container.querySelector('[data-testid="decision-config-provider"]') as HTMLInputElement).value).toBe(
-      'routerai-decision',
-    )
-    expect((container.querySelector('[data-testid="decision-config-model"]') as HTMLInputElement).value).toBe(
-      'clef-flash',
-    )
-    expect((container.querySelector('[data-testid="decision-config-timeout"]') as HTMLInputElement).value).toBe(
-      '5000',
-    )
-    expect((container.querySelector('[data-testid="decision-config-confidence"]') as HTMLInputElement).value).toBe(
-      '0.75',
-    )
+    expect(providerTrigger(container).textContent).toContain('routerai-decision')
+    expect(modelTrigger(container).textContent).toContain('clef-flash')
     expect(
-      (container.querySelector('[data-testid="decision-config-remote-endpoint"]') as HTMLInputElement).value,
-    ).toBe('https://routerai.ru/api/v1')
+      (container.querySelector('[data-testid="decision-config-confidence"]') as HTMLInputElement).value,
+    ).toBe('0.75')
 
     // Мастер-выключатель отражает enabled из API.
     const toggle = container.querySelector('[role="switch"]') as HTMLButtonElement
     expect(toggle.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('провайдер-селект показывает только decision-провайдеры', async () => {
+    const container = await renderSettings()
+
+    const options = (await openOptions(providerTrigger(container))).map((o) => o.textContent?.trim())
+    expect(options).toContain('routerai-decision')
+    expect(options).toContain('ollama-systemone')
+    expect(options).not.toContain('openai')
+    expect(options).not.toContain('disabled-decision')
+  })
+
+  it('модели фильтруются по выбранному провайдеру', async () => {
+    const container = await renderSettings()
+
+    const options = (await openOptions(modelTrigger(container))).map((o) => o.textContent?.trim())
+    expect(options).toContain('clef-flash')
+    expect(options).toContain('clef')
+    expect(options).not.toContain('gpt-4o')
   })
 
   it('у полей есть иконка-подсказка (tooltip) с текстом', async () => {
@@ -194,9 +223,9 @@ describe('DecisionSettings — админ-раздел «Decision-модели»
     // До правок Save/Cancel заблокированы.
     expect((container.querySelector('[data-testid="decision-config-save"]') as HTMLButtonElement).disabled).toBe(true)
 
-    const timeout = container.querySelector('[data-testid="decision-config-timeout"]') as HTMLInputElement
+    const confidence = container.querySelector('[data-testid="decision-config-confidence"]') as HTMLInputElement
     await act(async () => {
-      setInputValue(timeout, '8000')
+      setInputValue(confidence, '0.8')
     })
 
     const save = container.querySelector('[data-testid="decision-config-save"]') as HTMLButtonElement
@@ -208,7 +237,12 @@ describe('DecisionSettings — админ-раздел «Decision-модели»
 
     expect(mocks.updateDecisionSettings).toHaveBeenCalledTimes(1)
     expect(mocks.updateDecisionSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 8000, enabled: true, mode: 'remote', provider: 'routerai-decision' }),
+      expect.objectContaining({
+        confidenceThreshold: 0.8,
+        enabled: true,
+        provider: 'routerai-decision',
+        model: 'clef-flash',
+      }),
     )
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', category: 'system' }),
@@ -230,31 +264,33 @@ describe('DecisionSettings — админ-раздел «Decision-модели»
     expect(mocks.updateDecisionSettings).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }))
   })
 
-  it('переключение транспорта (mode) попадает в сохранение', async () => {
+  it('смена провайдера сбрасывает модель и попадает в сохранение', async () => {
     const container = await renderSettings()
 
-    const trigger = container.querySelector('[data-testid="decision-config-mode"]') as HTMLElement
-    await selectOption(trigger, 'Local (Ollama)')
+    await selectOption(providerTrigger(container), 'ollama-systemone')
+    expect(providerTrigger(container).textContent).toContain('ollama-systemone')
 
     await clickTestId(container, 'decision-config-save')
     await act(async () => {})
 
     expect(mocks.updateDecisionSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: 'local' }),
+      expect.objectContaining({ provider: 'ollama-systemone', model: '' }),
     )
   })
 
   it('Cancel откатывает черновик к сохранённым значениям', async () => {
     const container = await renderSettings()
 
-    const timeout = container.querySelector('[data-testid="decision-config-timeout"]') as HTMLInputElement
+    const confidence = container.querySelector('[data-testid="decision-config-confidence"]') as HTMLInputElement
     await act(async () => {
-      setInputValue(timeout, '9999')
+      setInputValue(confidence, '0.99')
     })
-    expect(timeout.value).toBe('9999')
+    expect(confidence.value).toBe('0.99')
 
     await clickTestId(container, 'decision-config-cancel')
-    expect((container.querySelector('[data-testid="decision-config-timeout"]') as HTMLInputElement).value).toBe('5000')
+    expect(
+      (container.querySelector('[data-testid="decision-config-confidence"]') as HTMLInputElement).value,
+    ).toBe('0.75')
   })
 
   it('Reset вызывает resetDecisionSettings и подставляет дефолты', async () => {
@@ -271,10 +307,10 @@ describe('DecisionSettings — админ-раздел «Decision-модели»
     await act(async () => {})
 
     expect(mocks.resetDecisionSettings).toHaveBeenCalledTimes(1)
-    expect((container.querySelector('[data-testid="decision-config-timeout"]') as HTMLInputElement).value).toBe(
-      '10000',
-    )
-    expect((container.querySelector('[data-testid="decision-config-provider"]') as HTMLInputElement).value).toBe('')
+    expect(
+      (container.querySelector('[data-testid="decision-config-confidence"]') as HTMLInputElement).value,
+    ).toBe('0.6')
+    expect(providerTrigger(container).textContent ?? '').not.toContain('routerai-decision')
   })
 
   it('Reset серый/неактивен, когда значения равны серверному дефолту', async () => {
@@ -319,6 +355,8 @@ describe('DecisionSettings — права доступа (ADMIN) и i18n (AD-084
     expect(ruDict['settings.category.decision']).toBeTruthy()
     expect(enDict['decisionConfig.title']).toBeTruthy()
     expect(ruDict['decisionConfig.title']).toBeTruthy()
+    expect(enDict['decisionConfig.providerModel']).toBeTruthy()
+    expect(ruDict['decisionConfig.providerModel']).toBeTruthy()
     expect(enDict['decisionConfig.confidenceThreshold']).toBeTruthy()
     expect(ruDict['decisionConfig.confidenceThreshold']).toBeTruthy()
   })
