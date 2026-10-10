@@ -94,8 +94,11 @@
   `skill-scope`, `git`, `ssh-keys`, `events`.
 - `server/routes/events.ts` — `createEventRoutes` (AD-089): приём `POST /` (API-ключ привязки —
   `resolveApiKeySecret`/`touchApiKey`; иначе fallback `ingestGuard`; `ingestPreGuard` — rate limit
-  до выбора способа аутентификации) и CRUD bindings/routes/keys (`writeGuard`/`keyReadGuard`;
-  core-дефолты — `requireAuth`, backend передаёт RBAC).
+  до выбора способа аутентификации; per-key rate limit `KeyRateLimiter` — `rateLimitPerMinute` либо
+  `getKeyRateLimitPerMinute()`; `isEnabled()` — мастер-выключатель → 503) и CRUD bindings/routes/keys
+  (`writeGuard`/`keyReadGuard`; core-дефолты — `requireAuth`, backend передаёт RBAC). Ключи: `GET/POST`
+  списка/создания, `PATCH` метаданных, `POST .../revoke` (мягкий отзыв), `DELETE`; `label` обязательна
+  и уникальна глобально (дубль → 409 `CONFLICT`).
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
@@ -150,14 +153,19 @@
   `permission_denied`/`agent_spawned|completed|failed`/`session_start|end`.
 - `engine/events/*` — AD-089: `EventRouter` (`allowedSources` → dedup → `EventBinding`
   → `RouteRuleProvider` → фоллбек по `defaultMode`: `bound` → `drop no_route`,
-  `ephemeral` → временная сессия), `RequestSessionService` (единый funnel:
+  `ephemeral` → временная сессия; `updateConfig` — live-обновление из runtime-настроек),
+  `RequestSessionService` (единый funnel:
   explicit → `direct`, внешние → Router; резолвинг `agentTemplate` через
-  `AgentRegistry` + политика `unknownAgentTemplate` `drop`/`default-agent`),
+  `AgentRegistry` + политика `unknownAgentTemplate` `drop`/`default-agent`;
+  `updateConfig` — live TTL/политика),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
   `target-decision.ts` (`decisionFromTarget` — единый маппинг цели),
   `EventDelivery` (`run`/`defer`), `credential.ts` (`EventKeyCredential` — контекст машинной
-  аутентификации по API-ключу привязки, задел AD-052), `types`. Хуки не
+  аутентификации по API-ключу привязки: `keyId`/`bindingId`/`rateLimitPerMinute`, задел `scopes`/`principalId`),
+  `key-rate-limiter.ts` (`KeyRateLimiter` — in-memory fixed-window 60 c per-key, AD-089/AD-052),
+  `journal-prune.ts` (`startEventJournalPruner` — retention-очистка журнала: prune на старте и
+  каждые 6 ч, `journalRetentionDays <= 0` — без ограничения), `types`. Хуки не
   эмитят — это делает `RequestSessionService`/оркестратор. `dedup-store.ts`
   (AD-051/AD-089): `DedupStore` — `MemoryDedupStore` (in-process `Set`, default) и
   `FileDedupStore` (межпроцессный атомарный claim `{dataDir}/events/dedup/<sha256(key)>`).
@@ -175,14 +183,17 @@
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`
   (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`),
   `FileMutex` (`file-mutex.ts`, AD-051/AD-089: `mkdir`-лок + stale takeover для общего
-  `dataDir`; `ScheduleStore.crossProcess` сериализует мутации), `RuntimeSettingsStore`,
+  `dataDir`; `ScheduleStore.crossProcess` сериализует мутации), `RuntimeSettingsStore`
+  (`events` + `mergeEventsConfig` — runtime-настройки раздела «События», AD-089),
   `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`
   (`events/bindings.json`), `EventJournalStore` (`events/journal.jsonl`, AD-089),
   `RouteRuleStore` (`events/routes.json`, правила маршрутизации, AD-089),
   `EventApiKeyStore` (`events/api-keys.json`, API-ключи привязок: sha256-хеш секрета at-rest,
-  plaintext один раз при `create`, каскад `removeByBinding`; AD-089/AD-052)
+  plaintext один раз при `create`, обязательная уникальная `label` (глобально по инстансу) +
+  `description`/`expiresAt`/`rateLimitPerMinute`, `update`/`revoke` (мягкий отзыв), legacy-backfill
+  `name`→`label`, каскад `removeByBinding`; AD-089/AD-052)
   и `JobStore` (`scheduler/jobs.jsonl`, Job-история, AD-051);
   `migrations.ts` — идемпотентная разовая миграция снапшотов
   `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).
@@ -218,6 +229,9 @@
   `createModelRoutes`, `createSessionRoutes`, `createGitRoutes`,
   `createSshKeyRoutes`, `createAgentSshKeyRoutes`, `createFsRoutes` (project-aware
   FS: плоский root / workspace проекта через `getProjectWorkspace`, AD-075).
+  `createSettingsRoutes` (AD-089): `GET/PUT/DELETE /settings/events` — runtime-настройки
+  раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
+  мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN).
 
 ## MCP
 

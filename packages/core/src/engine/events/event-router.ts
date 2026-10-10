@@ -71,6 +71,18 @@ export class EventRouter {
   }
 
   /**
+   * AD-089: live-обновление конфигурации Router (runtime-настройки из админки).
+   * Незаданные поля мержатся поверх текущих значений (`_config`).
+   */
+  updateConfig(partial: Partial<EventRouterConfig>): void {
+    if (partial.allowedSources !== undefined) this._config.allowedSources = partial.allowedSources;
+    if (partial.defaultMode !== undefined) this._config.defaultMode = partial.defaultMode;
+    if (partial.defaultEphemeralTtl !== undefined) {
+      this._config.defaultEphemeralTtl = partial.defaultEphemeralTtl;
+    }
+  }
+
+  /**
    * Решение по событию БЕЗ записи в журнал и без побочных эффектов.
    *
    * AD-089: `forcedBinding` (аутентификация по API-ключу привязки) заменяет

@@ -122,6 +122,8 @@ export const defaultConfig: SynthConfig = {
     dedupStore: 'memory',
     // Неизвестный agentTemplate → drop с аудитом (fail-safe, AD-089).
     unknownAgentTemplate: 'drop',
+    // Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита).
+    keyRateLimitPerMinute: 0,
   },
   scheduler: {
     enabled: true,

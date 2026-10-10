@@ -2164,3 +2164,20 @@
 - **Замечания:** HTTP-эндпоинта `revoke` нет (только стор-метод — задел AD-052); binding-key не масштабируется на мессенджеры (планируется service-key AD-052, задокументировано); клиент дополнительно фильтрует сессии по проекту (защита поверх серверного фильтра).
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** нет (ожидает явной просьбы пользователя).
+
+## 2026-10-10 — AD-089: retention журнала, per-key/глобальный rate limit, UX ключей, админ «Параметры событий»
+- **Задача:** (1) retention журнала событий; (2) UI для `expiresAt`/revoke и per-key rate limit; (3) переработка интерфейса привязок по скиллу `better-ui` (ключи — секция внутри карточки; Метка обязательна/уникальна и выше Описания; Описание опционально; правка описания). Дополнительно по ответам пользователя: per-key **req/мин + глобальный дефолт** (админ-секция «Параметры событий»), метка уникальна **глобально по инстансу**, редактируются метка/описание/срок/лимит.
+- **Тип:** feature (shared + core + backend + ui) + docs
+- **Исполнитель:** @orchestrator → @fixer ×5 (backend ядро; backend тесты/верификация; UI код; UI тесты/Playwright/AGENTS; docs)
+- **Результат:** PASS
+- **Что сделано:**
+  - **shared:** `EventBindingApiKey` — `label` (обязательна), `description?`, `rateLimitPerMinute?`, `expiresAt?`/`revokedAt?` (убран `name`); `eventBindingApiKeyCreate/UpdateSchema`; `events.keyRateLimitPerMinute` (default 0).
+  - **core:** `EventApiKeyStore` — глобальная уникальность `label` (`EventApiKeyConflictError`), `create/update/get/revoke`, legacy-backfill `name`→`label`, `rateLimitPerMinute`; `KeyRateLimiter` (окно 60 c); `engine/events/journal-prune.ts` (`startEventJournalPruner`, startup + 6 ч, `unref`); runtime-настройки `RuntimeSettings.events` + `mergeEventsConfig`; `GET/PUT/DELETE /settings/events` (+`eventsWriteGuard`), `EventRouter.updateConfig`/`RequestSessionService.updateConfig` (live); роуты ключей `PATCH`/`revoke`, per-key 429, рубильник 503.
+  - **backend:** `eventsWriteGuard=requirePermission('ADMIN')`, pruner в шине + graceful shutdown, i18n (`invalidEventKeyUpdate`/`eventKeyLabel`/`eventKey`/`eventsDisabled`).
+  - **ui:** секция API-ключей — первоклассная и всегда видна внутри карточки привязки (без тумблера), создание нескольких, Метка (обязательна, уникальна, 409 под полем) выше Описания (опц.), поля срока/лимита, бейджи «Активен/Истёк/Отозван», инлайн-редактор, отзыв/удаление, однократный секрет + curl; новая админ-секция «Параметры событий» (`eventsConfig`, ADMIN); тултипы; i18n ru/en; **фикс** `resolveActiveSettingsPage` (смена роли без перезагрузки показывала содержимое недоступного admin-раздела).
+  - **docs:** AD-089/AD-052, `API_V2`, `CONFIGURATION`, `ARCHITECTURE`, README AD, AGENTS (root/core/backend/shared/ui).
+- **Верификация (оркестратор):** `pnpm build` shared/core OK; `pnpm typecheck` **6/6**; `pnpm lint` **0 errors**. Тесты: shared **199**, core **2754** (2 падения — предсуществующая флейка `app.remote.test.ts` WS-таймаут, изолированно 20/20), ui **1073**, backend **356**. Dev перезапущен; **dev-smoke**: `GET /settings/events` (дефолты), дубль метки **409**, `PATCH` (сброс лимита `null`), `revoke` (статус), каскад **204**. **UI (Playwright)**: секция ключей видна сразу, создание 2+ ключей, обязательная/уникальная метка, описание ниже и опц., редактор, отзыв + бейдж, однократный секрет + curl (201), админ «Параметры событий» save/Reset, `developer` — read-only и админ-раздел скрыт, регрессия смены ролей без перезагрузки. Live: per-key (ключ 2/мин → 3-й 429), глобальный дефолт → 429, `enabled=false` → 503. Тестовые данные прибраны; `settings/events` → `isOverridden:false`.
+- **Замечания:** старые persisted-ключи с `name` бэкфиллятся в `label` при чтении; флейка `app.remote.test.ts` — предсуществующая; `dedupStore` в runtime-настройки не вынесен (инфра, рестарт); неожиданно найден и исправлен баг утечки содержимого admin-раздела при смене роли без перезагрузки.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** нет (ожидает явной просьбы пользователя).
+

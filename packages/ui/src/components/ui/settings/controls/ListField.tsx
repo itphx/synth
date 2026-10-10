@@ -12,6 +12,8 @@ export type ListFieldVariant = 'list' | 'chips'
 export interface ListFieldProps {
   label: string
   description?: string
+  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  tooltip?: string
   values: string[]
   onChange: (next: string[]) => void
   placeholder?: string
@@ -34,6 +36,7 @@ const INPUT_CLASSES =
 export function ListField({
   label,
   description,
+  tooltip,
   values,
   onChange,
   placeholder,
@@ -70,7 +73,7 @@ export function ListField({
   }
 
   return (
-    <SettingsField label={label} description={description}>
+    <SettingsField label={label} description={description} tooltip={tooltip}>
       <div className="flex flex-col gap-2 min-w-0">
         {values.length === 0 && (
           <p className="text-xs text-muted-foreground min-w-0">{resolvedEmpty}</p>

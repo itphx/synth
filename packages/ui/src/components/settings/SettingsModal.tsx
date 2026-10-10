@@ -19,6 +19,7 @@ import { SkillsUserSettings } from "./SkillsUserSettings"
 import { SkillsAdminSettings } from "./SkillsAdminSettings"
 import { CommandsSettings } from "./CommandsSettings"
 import { EventsAdminSettings } from "./EventsAdminSettings"
+import { EventsSettings } from "./EventsSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
 import { ProjectsPanel } from "../admin/ProjectsPanel"
@@ -52,6 +53,7 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "builtinTools", labelKey: "settings.category.builtinTools", icon: "terminal-box", roles: ["ADMIN"] },
   { id: "skillsAdmin", labelKey: "settings.category.skillsAdmin", icon: "book-open", roles: ["ADMIN"] },
   { id: "commands", labelKey: "settings.category.commands", icon: "terminal-box", roles: ["ADMIN"] },
+  { id: "eventsConfig", labelKey: "settings.category.eventsConfig", icon: "settings-3", roles: ["ADMIN"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
   { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
   { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
@@ -63,6 +65,20 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "defaults", labelKey: "settings.category.defaults", icon: "settings-3", roles: ["ADMIN"] },
   { id: "debug", labelKey: "settings.category.debug", icon: "bug", roles: ["ADMIN"] },
 ]
+
+/**
+ * Видимая активная категория. Если сохранённый `settingsPage` больше не доступен
+ * роли (например, смена пользователя в одной SPA-сессии без перезагрузки),
+ * показываем первую доступную категорию — содержимое скрытого ADMIN-раздела
+ * рендериться не должно.
+ */
+export function resolveActiveSettingsPage(
+  visibleCategories: CategoryItem[],
+  settingsPage: string,
+): string {
+  if (visibleCategories.some((cat) => cat.id === settingsPage)) return settingsPage
+  return visibleCategories[0]?.id ?? settingsPage
+}
 
 export const SettingsModal = () => {
   const { t } = useI18n()
@@ -81,6 +97,10 @@ export const SettingsModal = () => {
   )
 
   const adminBoundaryIndex = visibleCategories.findIndex((c) => c.roles !== undefined)
+
+  // Содержимое и подсветка навигации идут по доступной роли категории, а не по
+  // «залипшему» `settingsPage` (см. `resolveActiveSettingsPage`).
+  const activePage = resolveActiveSettingsPage(visibleCategories, settingsPage)
 
   const navRef = useRef<HTMLElement>(null)
   const activeRef = useRef<HTMLButtonElement>(null)
@@ -109,7 +129,7 @@ export const SettingsModal = () => {
       cancelAnimationFrame(raf)
       window.clearTimeout(timeout)
     }
-  }, [settingsPage, isPhone, isSettingsDialogOpen])
+  }, [activePage, isPhone, isSettingsDialogOpen])
 
   return (
     <Dialog open={isSettingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
@@ -146,12 +166,12 @@ export const SettingsModal = () => {
                     <hr className="my-2 border-border hidden md:block" />
                   )}
                   <button
-                    ref={settingsPage === cat.id ? activeRef : undefined}
+                    ref={activePage === cat.id ? activeRef : undefined}
                     onClick={() => setSettingsPage(cat.id)}
-                    aria-current={settingsPage === cat.id ? 'page' : undefined}
+                    aria-current={activePage === cat.id ? 'page' : undefined}
                     className={cn(
                       "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96] shrink-0",
-                      settingsPage === cat.id
+                      activePage === cat.id
                         ? "bg-interactive-selection text-interactive-selection-foreground"
                         : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
                     )}
@@ -166,29 +186,30 @@ export const SettingsModal = () => {
 
           {/* Right content */}
           <div className="flex-1 overflow-y-auto p-6 overscroll-contain">
-            {settingsPage === "profile" && <ProfileSettings />}
-            {settingsPage === "appearance" && <AppearanceSettings />}
-            {settingsPage === "notifications" && <NotificationSettings />}
-            {settingsPage === "chat" && <ChatSettings />}
-            {settingsPage === "routing" && <RoutingSettings />}
-            {settingsPage === "mcp" && <McpUserSettings />}
-            {settingsPage === "mcpAdmin" && <McpAdminSettings />}
-            {settingsPage === "builtinTools" && <ToolsDisabledSettings />}
-            {settingsPage === "skills" && <SkillsUserSettings />}
-            {settingsPage === "skillsAdmin" && <SkillsAdminSettings />}
-            {settingsPage === "commands" && <CommandsSettings />}
-            {settingsPage === "eventsAdmin" && <EventsAdminSettings />}
-            {settingsPage === "security" && <SecuritySettings />}
-            {settingsPage === "dashboard" && <DashboardPanel />}
-            {settingsPage === "sessions" && <SessionsPanel />}
-            {settingsPage === "projects" && <ProjectsPanel />}
-            {settingsPage === "providers" && <ProvidersPanel />}
-            {settingsPage === "models" && <ModelsPanel />}
-            {settingsPage === "agents" && <AgentsPanel />}
-            {settingsPage === "context" && <ContextPanel />}
-            {settingsPage === "users" && <UsersPanel />}
-            {settingsPage === "defaults" && <DefaultsPanel />}
-            {settingsPage === "debug" && <DebugPanel />}
+            {activePage === "profile" && <ProfileSettings />}
+            {activePage === "appearance" && <AppearanceSettings />}
+            {activePage === "notifications" && <NotificationSettings />}
+            {activePage === "chat" && <ChatSettings />}
+            {activePage === "routing" && <RoutingSettings />}
+            {activePage === "mcp" && <McpUserSettings />}
+            {activePage === "mcpAdmin" && <McpAdminSettings />}
+            {activePage === "builtinTools" && <ToolsDisabledSettings />}
+            {activePage === "skills" && <SkillsUserSettings />}
+            {activePage === "skillsAdmin" && <SkillsAdminSettings />}
+            {activePage === "commands" && <CommandsSettings />}
+            {activePage === "eventsAdmin" && <EventsAdminSettings />}
+            {activePage === "eventsConfig" && <EventsSettings />}
+            {activePage === "security" && <SecuritySettings />}
+            {activePage === "dashboard" && <DashboardPanel />}
+            {activePage === "sessions" && <SessionsPanel />}
+            {activePage === "projects" && <ProjectsPanel />}
+            {activePage === "providers" && <ProvidersPanel />}
+            {activePage === "models" && <ModelsPanel />}
+            {activePage === "agents" && <AgentsPanel />}
+            {activePage === "context" && <ContextPanel />}
+            {activePage === "users" && <UsersPanel />}
+            {activePage === "defaults" && <DefaultsPanel />}
+            {activePage === "debug" && <DebugPanel />}
           </div>
         </div>
       </DialogContent>

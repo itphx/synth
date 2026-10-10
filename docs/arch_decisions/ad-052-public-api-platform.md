@@ -26,11 +26,14 @@
   debug-ключи, OIDC ([AD-043](./ad-043-unified-identity-login.md)).
 - **Первый срез (реализовано, AD-089):** API-ключи **привязок событий** (binding-key) —
   `EventApiKeyStore` (`{dataDir}/events/api-keys.json`), эндпоинты
-  `GET/POST /api/v2/events/bindings/:id/keys`, `DELETE /api/v2/events/bindings/:id/keys/:keyId`;
+  `GET/POST /api/v2/events/bindings/:id/keys`, `PATCH .../keys/:keyId`,
+  `POST .../keys/:keyId/revoke`, `DELETE .../keys/:keyId`; ключ с обязательной уникальной
+  `label`, `description?`, `expiresAt?`, `rateLimitPerMinute?`, мягким отзывом (`revokedAt`);
   приём `POST /api/v2/events` по `Authorization: Bearer synth_evt_…` (машинная аутентификация
   без пользовательских кред, source/чат из привязки); секрет — только sha256-хеш, наружу
-  один раз при создании. Задел: `expiresAt`/`revokedAt`, `revoke()`, `EventKeyCredential`
-  (`keyId`/`bindingId`, `scopes`/`principalId`). См. [AD-089](./ad-089-external-events-automation.md).
+  один раз при создании. per-key rate limit: лимит ключа, иначе глобальный дефолт
+  `events.keyRateLimitPerMinute` (`KeyRateLimiter`, 429). Задел: `EventKeyCredential`
+  (`keyId`/`bindingId`/`rateLimitPerMinute`, `scopes`/`principalId`). См. [AD-089](./ad-089-external-events-automation.md).
 
 ### Проблема
 
@@ -71,21 +74,25 @@ OpenAPI-спеки, SDK и механизма исходящих уведомл�
 
 - `EventApiKeyStore` (`packages/core/src/storage/event-api-key-store.ts`, `{dataDir}/events/api-keys.json`):
   несколько ключей на `EventBinding`, секрет `synth_evt_<base64url>` → sha256-хеш at-rest,
-  plaintext наружу один раз (`create`), в списке `prefix`; каскад `removeByBinding`;
-  задел — `expiresAt`/`revokedAt`, `revoke()`, `EventKeyCredential`
+  plaintext наружу один раз (`create`), в списке `prefix`; обязательная уникальная (глобально
+  по инстансу) `label`, `description?`, `expiresAt?`, `rateLimitPerMinute?`, `revokedAt?`;
+  legacy-backfill `name`→`label`; каскад `removeByBinding`; задел — `EventKeyCredential`
   (`packages/core/src/engine/events/credential.ts`).
-- Эндпоинты `GET/POST /api/v2/events/bindings/:id/keys`, `DELETE .../keys/:keyId`
-  (core-фабрика `createEventRoutes`); приём `POST /api/v2/events` по
-  `Authorization: Bearer <binding-key>` — без пользовательских кред, source/чат из привязки;
-  использование пишется в журнал (`keyId`/`principalId`).
+- Эндпоинты `GET/POST /api/v2/events/bindings/:id/keys`, `PATCH .../keys/:keyId`,
+  `POST .../keys/:keyId/revoke`, `DELETE .../keys/:keyId` (core-фабрика `createEventRoutes`);
+  приём `POST /api/v2/events` по `Authorization: Bearer <binding-key>` — без пользовательских
+  кред, source/чат из привязки; использование пишется в журнал (`keyId`/`principalId`).
+- **Per-key rate limit** — `KeyRateLimiter` (`packages/core/src/engine/events/key-rate-limiter.ts`,
+  in-memory fixed-window 60 c по `keyId`): лимит ключа `rateLimitPerMinute`, иначе глобальный
+  дефолт `events.keyRateLimitPerMinute` (0 — без лимита); превышение → 429 `RATE_LIMITED`.
+  Мастер-рубильник `events.enabled` → 503 `UNAVAILABLE`.
 - RBAC: мутации bindings/routes/keys — LEAD/ADMIN, чтение ключей — LEAD/ADMIN.
 
 Осталось:
 
 - **service-key** — общий ключ инстанса/тенанта со scope (для мессенджер-шлюзов, AD-086);
 - `scopes`/`tenants`, изоляция данных;
-- публичная **OpenAPI**-спека, **SDK**, исходящие **webhooks**;
-- per-key rate limit, UI срока действия/отзыва и HTTP-эндпоинт `revoke`.
+- публичная **OpenAPI**-спека, **SDK**, исходящие **webhooks**.
 
 Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
 

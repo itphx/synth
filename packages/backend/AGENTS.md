@@ -20,7 +20,7 @@
 |---|---|
 | `FileStore`, `SessionManager` | сессии и история |
 | `EventBus` | шина событий сессии (backend надстраивает `EventHub`) |
-| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `ProjectRuleProvider`, `eventToMessage` | единый funnel создания сессии, приём внешних событий, API-ключи привязок и правила маршрутизации (AD-089/AD-052) |
+| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `ProjectRuleProvider`, `eventToMessage`, `startEventJournalPruner` | единый funnel создания сессии, приём внешних событий, API-ключи привязок, правила маршрутизации и retention-очистка журнала (AD-089/AD-052) |
 | `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (AD-051 срез / AD-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
@@ -88,12 +88,12 @@
 | `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` (создание — единый funnel `RequestSessionService`, AD-089) + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
 | `/api/v2/providers` | `routes/providers.ts` — обёртка над core `createProviderRoutes` + `fetch-icon` |
 | `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` (RBAC + rate limit на `fetch`) |
-| `/api/v2/settings` | core `createSettingsRoutes` |
+| `/api/v2/settings` | core `createSettingsRoutes` (`llm-gateway`/`security`/`tools-policy`/`mcp-policy`/`tools-disabled`/`default-agent`/`workspace-policy`; `GET/PUT/DELETE /settings/events` — runtime-настройки «События» (AD-089), мутации под `eventsWriteGuard` = `requirePermission('ADMIN')`) |
 | `/api/v2/dictionaries` | core `createDictionaryRoutes` (writeGuard = `requireAdmin`) |
 | `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
 | `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
-| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`ingestPreGuard` = rate limit 120/мин до выбора способа аутентификации; API-ключ привязки через `resolveApiKeySecret`/`touchApiKey`, иначе `ingestGuard = requireAuth`), `/bindings` и `/routes` — CRUD (чтение `requireAuth`; мутации и чтение ключей — `writeGuard`/`keyReadGuard` = `requirePermission('ADMIN','LEAD')`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`), `/bindings/:id/keys` — CRUD API-ключей, `GET /journal`; `GET /` — inline SSE-хендлер (AD-089). i18n-ключи: `errors.validation.invalidEventKey`, `errors.notFound.eventKey` |
+| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`ingestPreGuard` = rate limit 120/мин до выбора способа аутентификации; API-ключ привязки через `resolveApiKeySecret`/`touchApiKey`, иначе `ingestGuard = requireAuth`; per-key rate limit — свой `rateLimitPerMinute` либо `getKeyRateLimitPerMinute()` → 429; `isEnabled()` — мастер-выключатель → 503), `/bindings` и `/routes` — CRUD (чтение `requireAuth`; мутации и чтение ключей — `writeGuard`/`keyReadGuard` = `requirePermission('ADMIN','LEAD')`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`), `/bindings/:id/keys` — CRUD API-ключей (`POST` создание + `PATCH` метаданных + `POST .../revoke` + `DELETE`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089). i18n-ключи: `errors.validation.invalidEventKey`, `errors.validation.invalidEventKeyUpdate`, `errors.notFound.eventKey`, `errors.conflict.eventKeyLabel`, `errors.rateLimited.eventKey`, `errors.unavailable.eventsDisabled` |
 | `/api/v2/schedules` | core `createSchedulerRoutes` (AD-051 срез / AD-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (AD-051); `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |

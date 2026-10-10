@@ -256,7 +256,9 @@ export const commandsConfigSchema = z.object({
  * - `unknownAgentTemplate` — поведение, если `agentTemplate` события/правила не
  *   резолвится в существующего enabled-агента: `drop` — не создавать сессию и
  *   зафиксировать ошибку `agent_not_found` в журнале (fail-safe, default) |
- *   `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию).
+ *   `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию);
+ * - `keyRateLimitPerMinute` — глобальный дефолт лимита запросов/мин на API-ключ
+ *   привязки (0 — без лимита; конкретный ключ может переопределить).
  */
 export const eventsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -266,6 +268,12 @@ export const eventsConfigSchema = z.object({
   allowedSources: z.array(z.string()).default([]),
   dedupStore: z.enum(['memory', 'file']).default('memory'),
   unknownAgentTemplate: z.enum(['drop', 'default-agent']).default('drop'),
+  /**
+   * Глобальный дефолт лимита запросов/мин на API-ключ привязки (AD-089/AD-052).
+   * `0` — без лимита; конкретный ключ может переопределить своим
+   * `rateLimitPerMinute`.
+   */
+  keyRateLimitPerMinute: z.number().int().min(0).default(0),
 });
 
 // --- Планировщик расписаний (AD-051 срез / AD-089) ---

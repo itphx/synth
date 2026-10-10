@@ -174,14 +174,22 @@ export type {
 export { EventBindingStore, EVENT_BINDINGS_SCHEMA_VERSION } from './storage/event-binding-store.js';
 export type { EventBindingStoreConfig, UpsertEventBindingInput } from './storage/event-binding-store.js';
 // AD-089/AD-052: реестр API-ключей привязок (приём событий по ключу).
-export { EventApiKeyStore, EVENT_API_KEYS_SCHEMA_VERSION } from './storage/event-api-key-store.js';
+export {
+  EventApiKeyStore,
+  EventApiKeyConflictError,
+  EVENT_API_KEYS_SCHEMA_VERSION,
+} from './storage/event-api-key-store.js';
 export type {
   EventApiKeyStoreConfig,
   EventApiKeyRecord,
   CreateEventApiKeyInput,
+  UpdateEventApiKeyPatch,
 } from './storage/event-api-key-store.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
+// AD-089: retention-очистка журнала событий (периодический pruner).
+export { startEventJournalPruner } from './engine/events/journal-prune.js';
+export type { EventJournalPrunerOptions } from './engine/events/journal-prune.js';
 // AD-089: реестр правил маршрутизации внешних событий.
 export { RouteRuleStore, ROUTE_RULES_SCHEMA_VERSION } from './storage/route-rule-store.js';
 export type { RouteRuleStoreConfig, UpsertRouteRuleInput } from './storage/route-rule-store.js';
@@ -201,6 +209,8 @@ export { EventIngress } from './engine/events/ingest.js';
 export type { EventIngestInput, EventIngressDeps } from './engine/events/ingest.js';
 // AD-089/AD-052: контекст машинной аутентификации по API-ключу привязки.
 export type { EventKeyCredential } from './engine/events/credential.js';
+// AD-089/AD-052: in-memory per-key rate limiter приёма событий.
+export { KeyRateLimiter } from './engine/events/key-rate-limiter.js';
 export {
   RequestSessionService,
   eventToMessage,
@@ -322,8 +332,8 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from './storage/runtime-settings.js';
-export type { RuntimeSettings, LlmGatewayRuntimeSettings } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEventsConfig } from './storage/runtime-settings.js';
+export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';

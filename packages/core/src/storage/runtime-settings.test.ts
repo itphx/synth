@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig } from './runtime-settings.js';
 
 describe('RuntimeSettingsStore.clear* (AD-072 Ф2)', () => {
   let tmpDir: string;
@@ -183,5 +183,103 @@ describe('mergeMcpNetworkPolicy (AD-071 §2.3.1)', () => {
 
   it('при отсутствии обоих — undefined (дефолт подставляет вызывающий)', () => {
     expect(mergeMcpNetworkPolicy(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe('RuntimeSettingsStore.events (AD-089)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('getEvents возвращает {} без runtime-настроек', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getEvents()).toEqual({});
+  });
+
+  it('set/getEvents сохраняет патч, переживает рестарт', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setEvents({ enabled: false, journalRetentionDays: 7, keyRateLimitPerMinute: 5 });
+    const events = await store.getEvents();
+    expect(events.enabled).toBe(false);
+    expect(events.journalRetentionDays).toBe(7);
+    expect(events.keyRateLimitPerMinute).toBe(5);
+
+    const restarted = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect((await restarted.getEvents()).enabled).toBe(false);
+  });
+
+  it('clearEvents удаляет только events', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setEvents({ enabled: false });
+    await store.setToolsPolicy('available');
+    await store.clearEvents();
+
+    const settings = await store.load();
+    expect(settings.events).toBeUndefined();
+    expect(settings.toolsPolicy).toBe('available');
+  });
+});
+
+describe('mergeEventsConfig (AD-089)', () => {
+  const base = {
+    enabled: false,
+    defaultMode: 'ephemeral' as const,
+    ephemeralTtl: '1h',
+    journalRetentionDays: 5,
+    allowedSources: ['telegram'],
+    dedupStore: 'file' as const,
+    unknownAgentTemplate: 'default-agent' as const,
+    keyRateLimitPerMinute: 3,
+  };
+
+  it('runtime поверх base: каждое заданное поле перекрывает base', () => {
+    const merged = mergeEventsConfig(base, {
+      enabled: true,
+      defaultMode: 'bound',
+      ephemeralTtl: '24h',
+      journalRetentionDays: 30,
+      allowedSources: [],
+      unknownAgentTemplate: 'drop',
+      keyRateLimitPerMinute: 0,
+    });
+    expect(merged).toEqual({
+      enabled: true,
+      defaultMode: 'bound',
+      ephemeralTtl: '24h',
+      journalRetentionDays: 30,
+      allowedSources: [],
+      unknownAgentTemplate: 'drop',
+      keyRateLimitPerMinute: 0,
+    });
+  });
+
+  it('при отсутствии runtime берётся base (dedupStore и прочие поля не теряются)', () => {
+    expect(mergeEventsConfig(base, {})).toEqual({
+      enabled: false,
+      defaultMode: 'ephemeral',
+      ephemeralTtl: '1h',
+      journalRetentionDays: 5,
+      allowedSources: ['telegram'],
+      unknownAgentTemplate: 'default-agent',
+      keyRateLimitPerMinute: 3,
+    });
+  });
+
+  it('при отсутствии обоих — дефолты', () => {
+    expect(mergeEventsConfig(undefined, {})).toEqual({
+      enabled: true,
+      defaultMode: 'bound',
+      ephemeralTtl: '24h',
+      journalRetentionDays: 30,
+      allowedSources: [],
+      unknownAgentTemplate: 'drop',
+      keyRateLimitPerMinute: 0,
+    });
   });
 });

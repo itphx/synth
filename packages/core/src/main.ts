@@ -166,6 +166,9 @@ program
       // AD-089: остановить авто-архивацию ephemeral-сессий.
       appHandle.stopEphemeralSweeper?.();
 
+      // AD-089: остановить retention-очистку журнала событий.
+      appHandle.stopEventJournalPruner?.();
+
       // AD-051 (срез): остановить планировщик расписаний.
       appHandle.stopScheduler?.();
 

@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
@@ -24,6 +24,22 @@ export interface SecurityRuntimeSettings {
   };
   /** Глобальный дефолт таймаута подтверждения ask (мс). Переживает рестарт. */
   askTimeoutMs?: number;
+}
+
+/**
+ * AD-089: runtime-настройки раздела «События» (админка), сохраняемые через UI.
+ * Эффективные значения = `mergeEventsConfig(config.eventsConfig, runtime)`.
+ * `dedupStore` намеренно не входит — это deployment-настройка, не runtime.
+ */
+export interface EventsRuntimeSettings {
+  enabled: boolean;
+  defaultMode: 'bound' | 'ephemeral';
+  ephemeralTtl: string;
+  journalRetentionDays: number;
+  allowedSources: string[];
+  unknownAgentTemplate: 'drop' | 'default-agent';
+  /** Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита). */
+  keyRateLimitPerMinute: number;
 }
 
 export interface RuntimeSettings {
@@ -66,6 +82,8 @@ export interface RuntimeSettings {
    * (`confirm` | `deny`); отсутствие — значение из config.yaml/env.
    */
   workspacePolicy?: WorkspaceOutsideRootPolicy;
+  /** AD-089: runtime-настройки раздела «События» (админка). */
+  events?: Partial<EventsRuntimeSettings>;
 }
 
 /**
@@ -134,6 +152,26 @@ export function mergeMcpNetworkPolicy(
   return {
     mode: runtime?.mode ?? base?.mode ?? 'deny',
     list: runtime?.list ?? base?.list ?? [],
+  };
+}
+
+/**
+ * AD-089: мёржит runtime-настройки раздела «События» (админка) поверх config.yaml.
+ * Runtime приоритетнее; отсутствие полей — значения из config, затем дефолты.
+ */
+export function mergeEventsConfig(
+  base: SynthConfig['events'] | undefined,
+  runtime: Partial<EventsRuntimeSettings>,
+): EventsRuntimeSettings {
+  const r = runtime ?? {};
+  return {
+    enabled: r.enabled ?? base?.enabled ?? true,
+    defaultMode: r.defaultMode ?? base?.defaultMode ?? 'bound',
+    ephemeralTtl: r.ephemeralTtl ?? base?.ephemeralTtl ?? '24h',
+    journalRetentionDays: r.journalRetentionDays ?? base?.journalRetentionDays ?? 30,
+    allowedSources: r.allowedSources ?? base?.allowedSources ?? [],
+    unknownAgentTemplate: r.unknownAgentTemplate ?? base?.unknownAgentTemplate ?? 'drop',
+    keyRateLimitPerMinute: r.keyRateLimitPerMinute ?? base?.keyRateLimitPerMinute ?? 0,
   };
 }
 
@@ -428,6 +466,24 @@ export class RuntimeSettingsStore {
     await this._update((current) => {
       const next = { ...current };
       delete next.workspacePolicy;
+      return next;
+    });
+  }
+
+  /** AD-089: runtime-настройки «События» (админка), undefined — не заданы. */
+  async getEvents(): Promise<Partial<EventsRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.events ?? {};
+  }
+
+  async setEvents(config: Partial<EventsRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, events: config }));
+  }
+
+  async clearEvents(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.events;
       return next;
     });
   }

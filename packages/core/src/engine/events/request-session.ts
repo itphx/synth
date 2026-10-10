@@ -149,6 +149,21 @@ export class RequestSessionService {
   }
 
   /**
+   * AD-089: live-обновление конфигурации funnel (runtime-настройки из админки):
+   * TTL ephemeral по умолчанию и политика неизвестного `agentTemplate`.
+   */
+  updateConfig(
+    partial: Partial<{ defaultEphemeralTtl: string; unknownAgentTemplate: 'drop' | 'default-agent' }>,
+  ): void {
+    if (partial.defaultEphemeralTtl !== undefined) {
+      this._config.defaultEphemeralTtl = partial.defaultEphemeralTtl;
+    }
+    if (partial.unknownAgentTemplate !== undefined) {
+      this._config.unknownAgentTemplate = partial.unknownAgentTemplate;
+    }
+  }
+
+  /**
    * Funnel явного создания сессии. `mode='ephemeral'` → сессия с `expiresAt`.
    * `userId`/`ownerId` приходят через `opts` (runtime-контекст, не часть события).
    */

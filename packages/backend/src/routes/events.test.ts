@@ -136,7 +136,7 @@ describe('Events API Routes (AD-089 срез B, backend RBAC)', () => {
     expect(bindingRes.status).toBe(201);
     const binding = await bindingRes.json() as { id: string };
 
-    const keyRes = await post(leadApp, `/api/v2/events/bindings/${binding.id}/keys`, { description: 'bot' });
+    const keyRes = await post(leadApp, `/api/v2/events/bindings/${binding.id}/keys`, { label: 'bot' });
     expect(keyRes.status).toBe(201);
     const createdKey = await keyRes.json() as { id: string; key: string };
     expect(createdKey.key.startsWith('synth_evt_')).toBe(true);
@@ -145,7 +145,7 @@ describe('Events API Routes (AD-089 срез B, backend RBAC)', () => {
 
     // USER не может создавать ключи.
     const userApp = makeApp(user);
-    expect((await post(userApp, `/api/v2/events/bindings/${binding.id}/keys`, { description: 'nope' })).status).toBe(403);
+    expect((await post(userApp, `/api/v2/events/bindings/${binding.id}/keys`, { label: 'nope' })).status).toBe(403);
   });
 
   it('GET /keys: LEAD → 200, USER → 403 (keyReadGuard)', async () => {
@@ -154,7 +154,7 @@ describe('Events API Routes (AD-089 срез B, backend RBAC)', () => {
       source: 'telegram', chatKey: 'chat:telegram:k', mode: 'bound', sessionId: 's-1',
     });
     const binding = await bindingRes.json() as { id: string };
-    expect((await post(leadApp, `/api/v2/events/bindings/${binding.id}/keys`, { description: 'bot' })).status).toBe(201);
+    expect((await post(leadApp, `/api/v2/events/bindings/${binding.id}/keys`, { label: 'bot' })).status).toBe(201);
 
     expect((await leadApp.request(`/api/v2/events/bindings/${binding.id}/keys`)).status).toBe(200);
 
@@ -218,7 +218,7 @@ describe('Events API Routes (AD-089 срез B, backend RBAC)', () => {
       source: 'telegram', chatKey: 'chat:telegram:7', mode: 'bound', sessionId: 's-1',
     });
     const binding = await bindingRes.json() as { id: string };
-    const keyRes = await post(app, `/api/v2/events/bindings/${binding.id}/keys`, { description: 'bot' });
+    const keyRes = await post(app, `/api/v2/events/bindings/${binding.id}/keys`, { label: 'bot' });
     const createdKey = await keyRes.json() as { key: string };
 
     // Ключ действителен даже без пользовательского auth (эмулируем неаутентифицированный запрос).
@@ -249,7 +249,7 @@ describe('Events API Routes (AD-089 срез B, backend RBAC)', () => {
       source: 'telegram', chatKey: 'chat:telegram:8', mode: 'bound', sessionId: 's-1',
     });
     const binding = await bindingRes.json() as { id: string };
-    const keyRes = await post(app, `/api/v2/events/bindings/${binding.id}/keys`, { description: 'bot' });
+    const keyRes = await post(app, `/api/v2/events/bindings/${binding.id}/keys`, { label: 'bot' });
     const createdKey = await keyRes.json() as { key: string };
 
     expect((await app.request(`/api/v2/events/bindings/${binding.id}`, { method: 'DELETE' })).status).toBe(204);

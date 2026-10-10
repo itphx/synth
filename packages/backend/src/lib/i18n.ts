@@ -38,6 +38,7 @@ const en: Dictionary = {
   'errors.notFound.rule': 'Routing rule not found',
   'errors.validation.unknownAgent': 'Unknown agent in routing rule',
   'errors.validation.invalidEventKey': 'Invalid event API key',
+  'errors.validation.invalidEventKeyUpdate': 'Invalid event API key update',
   'errors.notFound.eventKey': 'Event API key not found',
 
   // Conflict errors
@@ -45,12 +46,15 @@ const en: Dictionary = {
   'errors.conflict.emailExists': 'A user with this email already exists',
   'errors.conflict.usernameTaken': 'Username is taken',
   'errors.conflict.emailTaken': 'Email is taken',
+  'errors.conflict.eventKeyLabel': 'Event API key label is already used',
 
   // Other errors
   'errors.providerDisabled': 'Provider is disabled',
   'errors.connectionError': 'Connection error',
   'errors.faviconFetchError': 'Error fetching favicon',
   'errors.generic': 'Error',
+  'errors.rateLimited.eventKey': 'Event API key rate limit exceeded',
+  'errors.unavailable.eventsDisabled': 'External event ingestion is disabled',
 
   // Auth
   'auth.unauthorized': 'Authentication required',
@@ -108,6 +112,7 @@ const ru: Dictionary = {
   'errors.notFound.rule': 'Правило маршрутизации не найдено',
   'errors.validation.unknownAgent': 'Неизвестный агент в правиле маршрутизации',
   'errors.validation.invalidEventKey': 'Неверный API-ключ события',
+  'errors.validation.invalidEventKeyUpdate': 'Некорректное тело обновления API-ключа события',
   'errors.notFound.eventKey': 'API-ключ события не найден',
 
   // Conflict errors
@@ -115,12 +120,15 @@ const ru: Dictionary = {
   'errors.conflict.emailExists': 'Пользователь с таким email уже существует',
   'errors.conflict.usernameTaken': 'Имя занято',
   'errors.conflict.emailTaken': 'Email занят',
+  'errors.conflict.eventKeyLabel': 'Метка API-ключа события уже используется',
 
   // Other errors
   'errors.providerDisabled': 'Провайдер отключён',
   'errors.connectionError': 'Ошибка подключения',
   'errors.faviconFetchError': 'Ошибка получения favicon',
   'errors.generic': 'Ошибка',
+  'errors.rateLimited.eventKey': 'Превышен лимит запросов по API-ключу события',
+  'errors.unavailable.eventsDisabled': 'Приём внешних событий отключён',
 
   // Auth
   'auth.unauthorized': 'Требуется аутентификация',

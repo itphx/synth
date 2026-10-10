@@ -67,9 +67,15 @@ export interface EventBindingApiKey {
   /** `eak_<uuid>`. */
   id: string;
   bindingId: string;
-  name?: string;
-  /** Обязательное описание назначения ключа. */
-  description: string;
+  /** Обязательная уникальная (глобально по инстансу) метка ключа. */
+  label: string;
+  /** Опциональное описание назначения ключа. */
+  description?: string;
+  /**
+   * Опциональный лимит запросов в минуту для этого ключа (AD-089/AD-052).
+   * Не задан — глобальный дефолт `events.keyRateLimitPerMinute`; `0` — без лимита.
+   */
+  rateLimitPerMinute?: number;
   /** id создателя (пользователя). */
   createdBy: string;
   /** ISO-8601. */

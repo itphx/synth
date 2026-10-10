@@ -363,15 +363,16 @@ describe('Events API Routes (AD-089)', () => {
 
   it('POST /bindings/:id/keys — 404 без привязки, 201 с ключом (секрет единожды, без hash)', async () => {
     const app = keyApp({});
-    const missing = await postJson(app, '/api/v2/events/bindings/bnd_missing/keys', { description: 'd' });
+    const missing = await postJson(app, '/api/v2/events/bindings/bnd_missing/keys', { label: 'd' });
     expect(missing.status).toBe(404);
 
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
-    const res = await postJson(app, `/api/v2/events/bindings/${binding.id}/keys`, { name: 'bot', description: 'telegram bot' });
+    const res = await postJson(app, `/api/v2/events/bindings/${binding.id}/keys`, { label: 'bot', description: 'telegram bot' });
     expect(res.status).toBe(201);
     const created: any = await res.json();
     expect(created.id).toMatch(/^eak_/);
     expect(created.bindingId).toBe(binding.id);
+    expect(created.label).toBe('bot');
     expect(created.description).toBe('telegram bot');
     expect(created.createdBy).toBe('unknown');
     expect(created.key.startsWith('synth_evt_')).toBe(true);
@@ -379,17 +380,149 @@ describe('Events API Routes (AD-089)', () => {
     expect(created.hash).toBeUndefined();
   });
 
-  it('POST /bindings/:id/keys — обязательное description → 400', async () => {
+  it('POST /bindings/:id/keys — обязательный label → 400', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
     const app = keyApp({});
-    const res = await postJson(app, `/api/v2/events/bindings/${binding.id}/keys`, { name: 'no-desc' });
+    const res = await postJson(app, `/api/v2/events/bindings/${binding.id}/keys`, { description: 'no-label' });
     expect(res.status).toBe(400);
     expect((await res.json() as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
   });
 
+  it('POST /bindings/:id/keys — дубликат label (глобально) → 409 CONFLICT', async () => {
+    const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
+    const app = keyApp({});
+    const first = await postJson(app, `/api/v2/events/bindings/${binding.id}/keys`, { label: 'shared' });
+    expect(first.status).toBe(201);
+    const dup = await postJson(app, `/api/v2/events/bindings/${binding.id}/keys`, { label: ' SHARED ' });
+    expect(dup.status).toBe(409);
+    expect((await dup.json() as { error: { code: string } }).error.code).toBe('CONFLICT');
+  });
+
+  it('PATCH /bindings/:id/keys/:keyId — обновление, 404, конфликт метки', async () => {
+    const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
+    const a = await apiKeyStore.create({ bindingId: binding.id, label: 'alpha', createdBy: 'u-1' });
+    await apiKeyStore.create({ bindingId: binding.id, label: 'beta', createdBy: 'u-1' });
+    const app = keyApp({});
+
+    const patch = (keyId: string, body: unknown) => app.request(
+      `/api/v2/events/bindings/${binding.id}/keys/${keyId}`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+    );
+
+    const ok = await patch(a.id, { description: 'new', rateLimitPerMinute: 5 });
+    expect(ok.status).toBe(200);
+    const updated = await ok.json() as { label: string; description?: string; rateLimitPerMinute?: number };
+    expect(updated.label).toBe('alpha');
+    expect(updated.description).toBe('new');
+    expect(updated.rateLimitPerMinute).toBe(5);
+
+    expect((await patch('eak_missing', { label: 'x' })).status).toBe(404);
+
+    const conflict = await patch(a.id, { label: 'BETA' });
+    expect(conflict.status).toBe(409);
+    expect((await conflict.json() as { error: { code: string } }).error.code).toBe('CONFLICT');
+
+    const invalid = await patch(a.id, { rateLimitPerMinute: -1 });
+    expect(invalid.status).toBe(400);
+  });
+
+  it('POST /bindings/:id/keys/:keyId/revoke — 200 и 404', async () => {
+    const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
+    const created = await apiKeyStore.create({ bindingId: binding.id, label: 'bot', createdBy: 'u-1' });
+    const app = keyApp({});
+
+    const revoke = await app.request(
+      `/api/v2/events/bindings/${binding.id}/keys/${created.id}/revoke`,
+      { method: 'POST' },
+    );
+    expect(revoke.status).toBe(200);
+    const body: any = await revoke.json();
+    expect(body.id).toBe(created.id);
+    expect(typeof body.revokedAt).toBe('string');
+    expect(await apiKeyStore.resolveBySecret(created.key)).toBeNull();
+
+    const missing = await app.request(
+      `/api/v2/events/bindings/${binding.id}/keys/eak_missing/revoke`,
+      { method: 'POST' },
+    );
+    expect(missing.status).toBe(404);
+  });
+
+  it('POST / — per-key rate limit (у ключа) → 429 после превышения', async () => {
+    const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
+    const created = await apiKeyStore.create({ bindingId: binding.id, label: 'limited', rateLimitPerMinute: 2, createdBy: 'u-1' });
+
+    const { ingress } = capturingIngress({ kind: 'drop', reason: 'no_route', audited: true }, null);
+    const app = keyApp({
+      resolveApiKeySecret: async (raw) => {
+        const r = await apiKeyStore.resolveBySecret(raw);
+        if (!r) return null;
+        const b = await bindingStore.get(r.credential.bindingId);
+        return b ? { binding: b, credential: r.credential } : null;
+      },
+    }, ingress);
+
+    const post = () => postJson(app, '/api/v2/events', { type: 'message' }, { Authorization: `Bearer ${created.key}` });
+    expect((await post()).status).toBe(201);
+    expect((await post()).status).toBe(201);
+    const limited = await post();
+    expect(limited.status).toBe(429);
+    expect((await limited.json() as { error: { code: string } }).error.code).toBe('RATE_LIMITED');
+  });
+
+  it('POST / — per-key rate limit из глобального дефолта (getKeyRateLimitPerMinute)', async () => {
+    const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
+    const created = await apiKeyStore.create({ bindingId: binding.id, label: 'default-limited', createdBy: 'u-1' });
+
+    const { ingress } = capturingIngress({ kind: 'drop', reason: 'no_route', audited: true }, null);
+    const app = keyApp({
+      getKeyRateLimitPerMinute: () => 1,
+      resolveApiKeySecret: async (raw) => {
+        const r = await apiKeyStore.resolveBySecret(raw);
+        if (!r) return null;
+        const b = await bindingStore.get(r.credential.bindingId);
+        return b ? { binding: b, credential: r.credential } : null;
+      },
+    }, ingress);
+
+    const post = () => postJson(app, '/api/v2/events', { type: 'message' }, { Authorization: `Bearer ${created.key}` });
+    expect((await post()).status).toBe(201);
+    expect((await post()).status).toBe(429);
+  });
+
+  it('POST / — без лимита (0 / не задан) запросы не ограничиваются', async () => {
+    const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
+    const created = await apiKeyStore.create({ bindingId: binding.id, label: 'unlimited', rateLimitPerMinute: 0, createdBy: 'u-1' });
+
+    const { ingress } = capturingIngress({ kind: 'drop', reason: 'no_route', audited: true }, null);
+    const app = keyApp({
+      getKeyRateLimitPerMinute: () => 0,
+      resolveApiKeySecret: async (raw) => {
+        const r = await apiKeyStore.resolveBySecret(raw);
+        if (!r) return null;
+        const b = await bindingStore.get(r.credential.bindingId);
+        return b ? { binding: b, credential: r.credential } : null;
+      },
+    }, ingress);
+
+    for (let i = 0; i < 5; i += 1) {
+      expect((await postJson(app, '/api/v2/events', { type: 'message' }, { Authorization: `Bearer ${created.key}` })).status).toBe(201);
+    }
+  });
+
+  it('POST / — isEnabled:false → 503 UNAVAILABLE (до аутентификации)', async () => {
+    const app = keyApp({ isEnabled: () => false });
+    const res = await postJson(app, '/api/v2/events', { source: 'telegram', type: 'message' });
+    expect(res.status).toBe(503);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe('UNAVAILABLE');
+
+    const enabled = keyApp({ isEnabled: () => true });
+    expect((await postJson(enabled, '/api/v2/events', { source: 'telegram', type: 'message' })).status).toBe(201);
+  });
+
   it('GET /keys — метаданные без секрета и hash; DELETE 204/404', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
-    await apiKeyStore.create({ bindingId: binding.id, description: 'd', createdBy: 'u-1' });
+    await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'u-1' });
     const app = keyApp({});
 
     const list = await app.request(`/api/v2/events/bindings/${binding.id}/keys`);
@@ -407,7 +540,7 @@ describe('Events API Routes (AD-089)', () => {
 
   it('POST / по ключу привязки: source из привязки, forced binding, 201', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:9', mode: 'bound', sessionId: 's-bound' });
-    const created = await apiKeyStore.create({ bindingId: binding.id, description: 'd', createdBy: 'u-1' });
+    const created = await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'u-1' });
 
     const { ingress, handleEvent } = capturingIngress({ kind: 'bound', sessionId: 's-bound' }, { id: 's-bound' } as Session);
     const app = keyApp({
@@ -439,7 +572,7 @@ describe('Events API Routes (AD-089)', () => {
 
   it('POST / по ключу: source противоречит привязке → 400; неверный ключ → 401', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:9', mode: 'bound', sessionId: 's-bound' });
-    const created = await apiKeyStore.create({ bindingId: binding.id, description: 'd', createdBy: 'u-1' });
+    const created = await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'u-1' });
 
     const { ingress } = capturingIngress({ kind: 'bound', sessionId: 's-bound' }, { id: 's-bound' } as Session);
     const app = keyApp({
@@ -460,7 +593,7 @@ describe('Events API Routes (AD-089)', () => {
 
   it('POST / по ключу: в funnel прокидывается audit { keyId }', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:11', mode: 'bound', sessionId: 's-bound' });
-    const created = await apiKeyStore.create({ bindingId: binding.id, description: 'd', createdBy: 'u-1' });
+    const created = await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'u-1' });
 
     const { ingress, handleEvent } = capturingIngress({ kind: 'bound', sessionId: 's-bound' }, { id: 's-bound' } as Session);
     const app = keyApp({
@@ -489,7 +622,7 @@ describe('Events API Routes (AD-089)', () => {
 
   it('GET /keys: keyReadGuard ограничивает чтение (default — requireAuth)', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:12', mode: 'bound', sessionId: 's1' });
-    await apiKeyStore.create({ bindingId: binding.id, description: 'd', createdBy: 'u-1' });
+    await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'u-1' });
 
     const deny: MiddlewareHandler = async (c) => c.json({ error: { code: 'FORBIDDEN', message: 'no' } }, 403);
     const guarded = makeApp(createIngress({ kind: 'bound', sessionId: 's1' }, { id: 's1' } as Session), { keyReadGuard: deny });
@@ -502,7 +635,7 @@ describe('Events API Routes (AD-089)', () => {
 
   it('DELETE /bindings/:id каскадно удаляет ключи', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: 's1' });
-    await apiKeyStore.create({ bindingId: binding.id, description: 'd', createdBy: 'u-1' });
+    await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'u-1' });
     expect(await apiKeyStore.listByBinding(binding.id)).toHaveLength(1);
 
     const app = makeApp(createIngress({ kind: 'bound', sessionId: 's1' }, { id: 's1' } as Session));

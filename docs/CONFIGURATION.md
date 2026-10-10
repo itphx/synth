@@ -342,13 +342,14 @@ skills:
 
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
-| `events.enabled` | Мастер-выключатель приёма внешних событий | `true` |
+| `events.enabled` | Мастер-выключатель приёма внешних событий; `false` → `POST /api/v2/events` отвечает 503 `UNAVAILABLE` (CRUD привязок/правил/журнала остаётся) | `true` |
 | `events.defaultMode` | Фоллбек Router, если ни `EventBinding`, ни правило не выбрали маршрут: `bound` — осознанный `drop no_route` с аудитом; `ephemeral` — создать временную сессию (агент по умолчанию) с TTL `events.ephemeralTtl` | `bound` |
 | `events.ephemeralTtl` | TTL ephemeral-сессий (формат `24h`, `30m`, …) | `'24h'` |
-| `events.journalRetentionDays` | Срок хранения журнала событий (0 — без ограничения) | `30` |
+| `events.journalRetentionDays` | Срок хранения журнала событий, дни (0 — без ограничения); очистка — pruner на старте и каждые 6 ч (`EventJournalStore.prune`) | `30` |
 | `events.allowedSources` | Белый список источников (пусто — разрешены все) | `[]` |
 | `events.dedupStore` | Источник дедупа событий: `memory` — in-process `Set` (single-process), `file` — межпроцессный атомарный claim на общем `dataDir` (`{dataDir}/events/dedup/<sha256(key)>`) | `memory` |
 | `events.unknownAgentTemplate` | Поведение, если `agentTemplate` события/правила не резолвится в enabled-агента: `drop` — не создавать сессию, зафиксировать `agent_not_found` в журнале (fail-safe); `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию) | `drop` |
+| `events.keyRateLimitPerMinute` | Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита); конкретный ключ переопределяет `rateLimitPerMinute`; превышение → 429 `RATE_LIMITED` | `0` |
 
 Правила маршрутизации `source/type/…` → сессия задаются через API (`/api/v2/events/routes`, §5.26)
 и хранятся в `{dataDir}/events/routes.json` (`RouteRuleStore`, `ProjectRuleProvider`).
@@ -364,9 +365,14 @@ events:
   allowedSources: []
   dedupStore: memory
   unknownAgentTemplate: drop
+  keyRateLimitPerMinute: 0
 ```
 
-API (`POST /api/v2/events`, bindings, journal) — `docs/API_V2.md` §5.26; устройство
+Часть полей (`enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`, `allowedSources`,
+`unknownAgentTemplate`, `keyRateLimitPerMinute`) переопределяется в runtime через
+`GET/PUT/DELETE /api/v2/settings/events` (live, без рестарта); `dedupStore` — deployment-настройка.
+
+API (`POST /api/v2/events`, bindings, ключи привязок, journal) — `docs/API_V2.md` §5.26; устройство
 шины/роутера — `docs/ARCHITECTURE.md` («Внешние события и хуки»).
 
 ### Планировщик расписаний (`scheduler.*`, AD-051 срез / AD-089)

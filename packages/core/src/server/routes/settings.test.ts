@@ -1324,3 +1324,139 @@ describe('Settings API Routes (workspace-policy, AD-075)', () => {
     expect(((await del.json()) as any).error.code).toBe('WORKSPACE_POLICY_READ_ONLY');
   });
 });
+
+describe('Settings API Routes (events, AD-089)', () => {
+  let tmpDir: string;
+  const FALLBACK = '/default/env-or-config-workspace';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-settings-events-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeEventsApp(
+    fallbackEvents?: Partial<import('../../storage/runtime-settings.js').EventsRuntimeSettings>,
+    opts?: { eventsWriteGuard?: import('hono').MiddlewareHandler },
+  ) {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const onEventsChange = vi.fn(async (_e: unknown) => {});
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      ...(fallbackEvents ? { fallbackEvents } : {}),
+      onEventsChange,
+    }, opts ?? {}));
+    return { app, settingsStore, onEventsChange };
+  }
+
+  it('GET /events — эффективные дефолты без runtime, isOverridden false', async () => {
+    const { app } = makeEventsApp();
+    const res = await app.request('/api/v2/settings/events');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.isOverridden).toBe(false);
+    expect(body.defaults).toEqual({
+      enabled: true,
+      defaultMode: 'bound',
+      ephemeralTtl: '24h',
+      journalRetentionDays: 30,
+      allowedSources: [],
+      unknownAgentTemplate: 'drop',
+      keyRateLimitPerMinute: 0,
+    });
+    expect(body.events).toEqual(body.defaults);
+  });
+
+  it('GET /events — fallbackEvents из config перекрывает дефолты', async () => {
+    const { app } = makeEventsApp({ enabled: false, ephemeralTtl: '1h', journalRetentionDays: 7 });
+    const body: any = await (await app.request('/api/v2/settings/events')).json();
+    expect(body.defaults.enabled).toBe(false);
+    expect(body.defaults.ephemeralTtl).toBe('1h');
+    expect(body.defaults.journalRetentionDays).toBe(7);
+    expect(body.events).toEqual(body.defaults);
+  });
+
+  it('PUT /events — сохраняет патч, применяет поверх дефолтов, вызывает onEventsChange', async () => {
+    const { app, settingsStore, onEventsChange } = makeEventsApp();
+    const res = await app.request('/api/v2/settings/events', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: { enabled: false, keyRateLimitPerMinute: 10, allowedSources: ['telegram'] } }),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.events).toMatchObject({ enabled: false, keyRateLimitPerMinute: 10, allowedSources: ['telegram'] });
+    // Незаданные поля — дефолты.
+    expect(body.events.defaultMode).toBe('bound');
+    expect(await settingsStore.getEvents()).toEqual({ enabled: false, keyRateLimitPerMinute: 10, allowedSources: ['telegram'] });
+    expect(onEventsChange).toHaveBeenCalledOnce();
+
+    // GET отражает override.
+    const get: any = await (await app.request('/api/v2/settings/events')).json();
+    expect(get.isOverridden).toBe(true);
+    expect(get.events.enabled).toBe(false);
+  });
+
+  it('PUT /events — невалидные поля → 400 VALIDATION_ERROR', async () => {
+    const { app, onEventsChange } = makeEventsApp();
+    const cases: unknown[] = [
+      { events: 'nope' },
+      { events: { defaultMode: 'bogus' } },
+      { events: { journalRetentionDays: -1 } },
+      { events: { keyRateLimitPerMinute: -1 } },
+      { events: { allowedSources: 'telegram' } },
+      { events: { unknownAgentTemplate: 'ghost' } },
+      { events: { ephemeralTtl: '' } },
+    ];
+    for (const body of cases) {
+      const res = await app.request('/api/v2/settings/events', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error.code).toBe('VALIDATION_ERROR');
+    }
+    expect(onEventsChange).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /events — сбрасывает к дефолтам и вызывает onEventsChange', async () => {
+    const { app, settingsStore, onEventsChange } = makeEventsApp();
+    await app.request('/api/v2/settings/events', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: { enabled: false } }),
+    });
+    const res = await app.request('/api/v2/settings/events', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.status).toBe('restored');
+    expect(body.isOverridden).toBe(false);
+    expect(body.events.enabled).toBe(true);
+    expect(await settingsStore.getEvents()).toEqual({});
+    expect(onEventsChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('eventsWriteGuard отклоняет PUT/DELETE, GET остаётся доступен', async () => {
+    const deny: import('hono').MiddlewareHandler = async (c) =>
+      c.json({ error: { code: 'FORBIDDEN', message: 'no' } }, 403);
+    const { app, settingsStore } = makeEventsApp(undefined, { eventsWriteGuard: deny });
+
+    expect((await app.request('/api/v2/settings/events')).status).toBe(200);
+
+    const put = await app.request('/api/v2/settings/events', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: { enabled: false } }),
+    });
+    expect(put.status).toBe(403);
+    expect(await settingsStore.getEvents()).toEqual({});
+
+    const del = await app.request('/api/v2/settings/events', { method: 'DELETE' });
+    expect(del.status).toBe(403);
+  });
+});

@@ -25,7 +25,7 @@ import {
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   McpRegistryStore,
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
-  mergeSecurityConfig, mergeMcpNetworkPolicy, ProtectedPathsStore,
+  mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEventsConfig, ProtectedPathsStore,
   SecretPatternStore,
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
@@ -48,6 +48,7 @@ import {
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
+  startEventJournalPruner,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -123,6 +124,8 @@ export interface BackendAppHandle {
   stopScheduler: () => void;
   /** AD-089: остановка sweeper'а авто-архивации ephemeral-сессий. */
   stopEphemeralSweeper: () => void;
+  /** AD-089: остановка периодической retention-очистки журнала событий. */
+  stopEventJournalPruner: () => void;
   /**
    * Поднять HTTP-сервер (+ WebSocket /ws/events) на указанном порту.
    * Порт 0 → эфемерный; возвращает фактический порт.
@@ -537,6 +540,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const eventJournal = new EventJournalStore({ dataDir });
     // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
     const routeRuleStore = new RouteRuleStore({ dataDir });
+    // AD-089 (Блок 3): runtime-настройки «События» (админка) поверх config.yaml.
+    const runtimeEvents = await settingsStore.getEvents();
+    const effectiveEvents = mergeEventsConfig(backendConfig.synth.events, runtimeEvents);
+    let effectiveEventsSettings = effectiveEvents;
     // AD-051/AD-089: источник дедупа — in-process (default) или файловый
     // межпроцессный (`events.dedupStore: file`).
     const dedupStore = backendConfig.synth.events.dedupStore === 'file'
@@ -548,10 +555,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       hooks,
       dedupStore,
       config: {
-        allowedSources: backendConfig.synth.events.allowedSources,
-        defaultMode: backendConfig.synth.events.defaultMode,
-        defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
+        allowedSources: effectiveEvents.allowedSources,
+        defaultMode: effectiveEvents.defaultMode,
+        defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
       },
+    });
+    // AD-089 (Блок 2): retention-очистка журнала событий (сразу + каждые 6 ч).
+    const stopEventJournalPruner = startEventJournalPruner(eventJournal, {
+      getRetentionDays: () => effectiveEventsSettings.journalRetentionDays,
     });
     // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию
     // (паритет с core `server/app.ts`; store без дублей).
@@ -561,11 +572,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     });
     const jobStore = new JobStore({ dataDir });
     eventRouter.registerRuleProvider(
-      new SchedulerRuleProvider(scheduleStore, backendConfig.synth.events.ephemeralTtl),
+      new SchedulerRuleProvider(scheduleStore, effectiveEvents.ephemeralTtl),
     );
     // AD-089: правила маршрутизации по матчу события (после scheduler).
     eventRouter.registerRuleProvider(
-      new ProjectRuleProvider(routeRuleStore, backendConfig.synth.events.ephemeralTtl),
+      new ProjectRuleProvider(routeRuleStore, effectiveEvents.ephemeralTtl),
     );
     // AD-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
     // неизвестный или отключённый агент → `null`.
@@ -578,8 +589,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       eventRouter,
       hooks,
       config: {
-        defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
-        unknownAgentTemplate: backendConfig.synth.events.unknownAgentTemplate,
+        defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
+        unknownAgentTemplate: effectiveEvents.unknownAgentTemplate,
       },
       resolveAgentTemplate,
       // AD-089: UI-событие после материализации внешнего события.
@@ -616,7 +627,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       ingress: eventIngress,
       jobStore,
       tickMs: schedulerTickMs,
-      defaultEphemeralTtl: backendConfig.synth.events.ephemeralTtl,
+      defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
       catchUp: backendConfig.synth.scheduler.catchUp,
       jobRetentionDays: backendConfig.synth.scheduler.jobRetentionDays,
       // AD-051/AD-089: тикер стартует только у лидера (default — AlwaysLeader).
@@ -739,6 +750,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         // ключей привязки — тоже LEAD и ADMIN (чувствительные метаданные).
         writeGuard: auth.requirePermission('ADMIN', 'LEAD'),
         keyReadGuard: auth.requirePermission('ADMIN', 'LEAD'),
+        // AD-089/AD-052: per-key rate limit и мастер-выключатель приёма (live).
+        getKeyRateLimitPerMinute: () => effectiveEventsSettings.keyRateLimitPerMinute,
+        isEnabled: () => effectiveEventsSettings.enabled,
         resolveAgentTemplate,
         sessionExists: async (id) => (await sessionManager.getSession(id)) !== null,
         resolveApiKeySecret: async (raw) => {
@@ -758,6 +772,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           unknownAgent: (c) => t('errors.validation.unknownAgent', undefined, c),
           invalidKey: (c) => t('errors.validation.invalidEventKey', undefined, c),
           keyNotFound: (c) => t('errors.notFound.eventKey', undefined, c),
+          invalidKeyUpdate: (c) => t('errors.validation.invalidEventKeyUpdate', undefined, c),
+          keyLabelConflict: (c) => t('errors.conflict.eventKeyLabel', undefined, c),
+          rateLimitedKey: (c) => t('errors.rateLimited.eventKey', undefined, c),
+          eventsDisabled: (c) => t('errors.unavailable.eventsDisabled', undefined, c),
         },
       },
     ));
@@ -957,7 +975,25 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         effectiveNetworkPolicy = policy;
         mcpManager.setNetworkPolicy(policy);
       },
+      // AD-089: дефолт config.yaml для GET/DELETE-сброса раздела «События».
+      fallbackEvents: backendConfig.synth.events,
+      // AD-089: live-применение runtime-настроек «События» — Router/funnel/pruner.
+      onEventsChange: (effective) => {
+        effectiveEventsSettings = effective;
+        eventRouter.updateConfig({
+          allowedSources: effective.allowedSources,
+          defaultMode: effective.defaultMode,
+          defaultEphemeralTtl: effective.ephemeralTtl,
+        });
+        requestSessionService.updateConfig({
+          defaultEphemeralTtl: effective.ephemeralTtl,
+          unknownAgentTemplate: effective.unknownAgentTemplate,
+        });
+      },
       protectedPathsStore,
+    }, {
+      // AD-089: мутации раздела «События» — только ADMIN (managed RBAC).
+      eventsWriteGuard: auth.requirePermission('ADMIN'),
     }));
 
     // Словари классификации: чтение — все авторизованные, запись/сброс — ADMIN
@@ -1324,6 +1360,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       scheduler: schedulerService,
       stopScheduler: () => schedulerService.stop(),
       stopEphemeralSweeper,
+      stopEventJournalPruner,
       listen,
     };
   } finally {

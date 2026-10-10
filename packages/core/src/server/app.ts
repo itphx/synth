@@ -19,6 +19,7 @@ import {
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
+  startEventJournalPruner,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
@@ -38,7 +39,7 @@ import { syncProvidersFromEnv } from '../providers/sync-from-env.js';
 import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
-import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy } from '../storage/runtime-settings.js';
+import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEventsConfig } from '../storage/runtime-settings.js';
 import { migrateSessionScopeSnapshots } from '../storage/migrations.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createHybridRoutes } from './routes/hybrid.js';
@@ -870,6 +871,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const eventJournal = new EventJournalStore({ dataDir });
   // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
   const routeRuleStore = new RouteRuleStore({ dataDir });
+  // AD-089 (Блок 3): runtime-настройки «События» (админка) поверх config.yaml.
+  // Эффективные значения — единый источник для Router/funnel/pruner/роутов;
+  // live-изменяются через `onEventsChange` без рестарта.
+  const runtimeEvents = await settingsStore.getEvents();
+  const effectiveEvents = mergeEventsConfig(config.eventsConfig, runtimeEvents);
+  let effectiveEventsSettings = effectiveEvents;
   // AD-051/AD-089: источник дедупа — in-process (default) или файловый
   // межпроцессный (config.events.dedupStore === 'file').
   const dedupStore = config.eventsConfig?.dedupStore === 'file'
@@ -881,10 +888,14 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     hooks,
     dedupStore,
     config: {
-      allowedSources: config.eventsConfig?.allowedSources,
-      defaultMode: config.eventsConfig?.defaultMode ?? 'bound',
-      defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
+      allowedSources: effectiveEvents.allowedSources,
+      defaultMode: effectiveEvents.defaultMode,
+      defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
     },
+  });
+  // AD-089 (Блок 2): retention-очистка журнала событий (сразу + каждые 6 ч).
+  const stopEventJournalPruner = startEventJournalPruner(eventJournal, {
+    getRetentionDays: () => effectiveEventsSettings.journalRetentionDays,
   });
   // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию.
   const scheduleStore = new ScheduleStore({
@@ -893,12 +904,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   });
   const jobStore = new JobStore({ dataDir });
   eventRouter.registerRuleProvider(
-    new SchedulerRuleProvider(scheduleStore, config.eventsConfig?.ephemeralTtl ?? '24h'),
+    new SchedulerRuleProvider(scheduleStore, effectiveEvents.ephemeralTtl),
   );
   // AD-089: правила маршрутизации по матчу события (после scheduler — приоритет
   // cron-правила при совпадении).
   eventRouter.registerRuleProvider(
-    new ProjectRuleProvider(routeRuleStore, config.eventsConfig?.ephemeralTtl ?? '24h'),
+    new ProjectRuleProvider(routeRuleStore, effectiveEvents.ephemeralTtl),
   );
   // AD-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
   // неизвестный или отключённый агент → `null`.
@@ -911,8 +922,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     eventRouter,
     hooks,
     config: {
-      defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
-      unknownAgentTemplate: config.eventsConfig?.unknownAgentTemplate ?? 'drop',
+      defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
+      unknownAgentTemplate: effectiveEvents.unknownAgentTemplate,
     },
     resolveAgentTemplate,
     // AD-089: UI-событие после материализации внешнего события.
@@ -949,7 +960,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     ingress: eventIngress,
     jobStore,
     tickMs: schedulerTickMs,
-    defaultEphemeralTtl: config.eventsConfig?.ephemeralTtl ?? '24h',
+    defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
     catchUp: config.schedulerConfig?.catchUp ?? 'skip',
     jobRetentionDays: config.schedulerConfig?.jobRetentionDays ?? 30,
     // AD-051/AD-089: тикер стартует только у лидера (default — AlwaysLeader).
@@ -1140,6 +1151,22 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     onMcpNetworkPolicyChange: async (policy) => {
       mcpManager.setNetworkPolicy(policy);
     },
+    // AD-089: дефолт config.yaml для GET/DELETE-сброса раздела «События».
+    fallbackEvents: config.eventsConfig,
+    // AD-089: live-применение runtime-настроек «События» — Router/funnel/pruner
+    // переконфигурируются без рестарта.
+    onEventsChange: (effective) => {
+      effectiveEventsSettings = effective;
+      eventRouter.updateConfig({
+        allowedSources: effective.allowedSources,
+        defaultMode: effective.defaultMode,
+        defaultEphemeralTtl: effective.ephemeralTtl,
+      });
+      requestSessionService.updateConfig({
+        defaultEphemeralTtl: effective.ephemeralTtl,
+        unknownAgentTemplate: effective.unknownAgentTemplate,
+      });
+    },
     protectedPathsStore,
   }));
 
@@ -1166,6 +1193,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     {
       resolveAgentTemplate,
       sessionExists: async (id) => (await sessionManager.getSession(id)) !== null,
+      // AD-089/AD-052: per-key rate limit и мастер-выключатель приёма (live).
+      getKeyRateLimitPerMinute: () => effectiveEventsSettings.keyRateLimitPerMinute,
+      isEnabled: () => effectiveEventsSettings.enabled,
       // AD-089/AD-052: приём события по API-ключу привязки.
       resolveApiKeySecret: async (raw) => {
         const resolved = await eventApiKeyStore.resolveBySecret(raw);
@@ -1710,6 +1740,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     scheduler: schedulerService,
     // AD-089: остановка sweeper'а ephemeral-сессий (вызывается на graceful shutdown).
     stopEphemeralSweeper,
+    // AD-089: остановка периодической retention-очистки журнала событий.
+    stopEventJournalPruner,
     // AD-051 (срез): остановка планировщика (на graceful shutdown).
     stopScheduler: () => schedulerService.stop(),
     // Текущий мост событий (создаётся/обновляется в applyConnected) — для stop() при shutdown.

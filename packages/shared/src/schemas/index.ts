@@ -631,8 +631,9 @@ export type EventBindingInputRequest = z.infer<typeof eventBindingInputSchema>;
 export const eventBindingApiKeySchema = z.object({
   id: z.string().min(1),
   bindingId: z.string().min(1),
-  name: z.string().optional(),
-  description: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+  rateLimitPerMinute: z.number().int().min(0).optional(),
   createdBy: z.string().min(1),
   createdAt: z.string().min(1),
   lastUsedAt: z.string().optional(),
@@ -644,13 +645,28 @@ export const eventBindingApiKeySchema = z.object({
 
 export type EventBindingApiKeyMeta = z.infer<typeof eventBindingApiKeySchema>;
 
-/** AD-089: тело создания API-ключа привязки — обязательное `description`. */
+/** AD-089/AD-052: тело создания API-ключа привязки — обязательная уникальная `label`. */
 export const eventBindingApiKeyCreateSchema = z.object({
-  name: z.string().optional(),
-  description: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+  expiresAt: z.string().optional(),
+  rateLimitPerMinute: z.number().int().min(0).optional(),
 });
 
 export type EventBindingApiKeyCreateRequest = z.infer<typeof eventBindingApiKeyCreateSchema>;
+
+/**
+ * AD-089/AD-052: тело обновления API-ключа привязки. Все поля опциональны;
+ * `null` для `description`/`expiresAt`/`rateLimitPerMinute` — сброс значения.
+ */
+export const eventBindingApiKeyUpdateSchema = z.object({
+  label: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  expiresAt: z.string().nullable().optional(),
+  rateLimitPerMinute: z.number().int().min(0).nullable().optional(),
+});
+
+export type EventBindingApiKeyUpdateRequest = z.infer<typeof eventBindingApiKeyUpdateSchema>;
 
 /** AD-089: ответ создания ключа — метаданные + plaintext-секрет (единожды). */
 export const eventBindingApiKeyCreatedSchema = eventBindingApiKeySchema.extend({

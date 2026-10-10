@@ -225,6 +225,30 @@ describe('RequestSessionService (AD-089)', () => {
     ).rejects.toThrow('agent_not_found');
   });
 
+  it('updateConfig: unknownAgentTemplate переключается drop → default-agent на лету', async () => {
+    const svc = service(undefined, { resolveAgentTemplate: () => null, unknownAgentTemplate: 'drop' });
+    await expect(
+      svc.request({ initiator: 'user', intent: 'explicit', agentTemplate: 'ghost' }),
+    ).rejects.toThrow('agent_not_found');
+
+    svc.updateConfig({ unknownAgentTemplate: 'default-agent' });
+    const created = await svc.request({ initiator: 'user', intent: 'explicit', agentTemplate: 'ghost' });
+    expect(created).not.toBeNull();
+    // Агент по умолчанию: agentRole не проставляется.
+    expect(created?.settings?.agentRole).toBeUndefined();
+  });
+
+  it('updateConfig: defaultEphemeralTtl меняет TTL ephemeral-сессии на лету', async () => {
+    const svc = service();
+    svc.updateConfig({ defaultEphemeralTtl: '30s' });
+    const created = await svc.request({ initiator: 'user', intent: 'explicit', mode: 'ephemeral' });
+    expect(created).not.toBeNull();
+    // parseTtl('30s') → ~30 c от текущего момента.
+    const expiresAt = Date.parse(created!.expiresAt!);
+    expect(expiresAt).toBeGreaterThan(Date.now());
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 60_000);
+  });
+
   it('handleEvent queue → deliver(defer) владельцу, процессор не стартует', async () => {
     const owner = await sessionManager.createSession({ title: 'Owner' });
     await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'queue', sessionId: owner.id });

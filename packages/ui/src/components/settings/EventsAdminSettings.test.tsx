@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   deleteEventBinding: vi.fn(),
   getEventBindingKeys: vi.fn(),
   createEventBindingKey: vi.fn(),
+  updateEventBindingKey: vi.fn(),
+  revokeEventBindingKey: vi.fn(),
   deleteEventBindingKey: vi.fn(),
   getEventJournal: vi.fn(),
   getEventRoutes: vi.fn(),
@@ -149,11 +151,29 @@ beforeEach(() => {
   mocks.createEventBindingKey.mockResolvedValue({
     id: 'k1',
     bindingId: 'b1',
+    label: 'desc',
     description: 'desc',
     createdBy: 'admin',
     createdAt: '2026-10-08T10:00:00.000Z',
     prefix: 'eak_abc',
     key: 'eak_secret_value',
+  })
+  mocks.updateEventBindingKey.mockResolvedValue({
+    id: 'k1',
+    bindingId: 'b1',
+    label: 'desc',
+    createdBy: 'admin',
+    createdAt: '2026-10-08T10:00:00.000Z',
+    prefix: 'eak_abc',
+  })
+  mocks.revokeEventBindingKey.mockResolvedValue({
+    id: 'k1',
+    bindingId: 'b1',
+    label: 'desc',
+    createdBy: 'admin',
+    createdAt: '2026-10-08T10:00:00.000Z',
+    prefix: 'eak_abc',
+    revokedAt: '2026-10-08T11:00:00.000Z',
   })
   mocks.deleteEventBindingKey.mockResolvedValue(undefined)
   mocks.getEventJournal.mockResolvedValue({ entries: [] })
@@ -328,53 +348,183 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
 })
 
 describe('EventsAdminSettings — API-ключи привязки (AD-089)', () => {
-  it('раскрывает секцию ключей и грузит список', async () => {
-    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
-    mocks.getEventBindingKeys.mockResolvedValue({
-      keys: [
-        {
-          id: 'k1',
-          bindingId: 'b1',
-          description: 'Ingest from telegram',
-          createdBy: 'admin',
-          createdAt: '2026-10-08T10:00:00.000Z',
-          prefix: 'eak_abc',
-        },
-      ],
-    })
-    const container = await renderSettings()
+  const keyMeta = (overrides: Record<string, unknown> = {}) => ({
+    id: 'k1',
+    bindingId: 'b1',
+    label: 'Ingest key',
+    description: 'Ingest from telegram',
+    createdBy: 'admin',
+    createdAt: '2026-10-08T10:00:00.000Z',
+    prefix: 'eak_abc',
+    ...overrides,
+  })
 
-    expect(mocks.getEventBindingKeys).not.toHaveBeenCalled()
-    await clickTestId(container, 'events-binding-keys-toggle-b1')
-    await act(async () => {})
+  it('секция ключей видна сразу и грузит список', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.getEventBindingKeys.mockResolvedValue({ keys: [keyMeta()] })
+    const container = await renderSettings()
 
     expect(mocks.getEventBindingKeys).toHaveBeenCalledWith('b1')
     const keyRow = container.querySelector('[data-testid="events-binding-key-k1"]')!
+    expect(keyRow.textContent).toContain('Ingest key')
     expect(keyRow.textContent).toContain('eak_abc')
     expect(keyRow.textContent).toContain('Ingest from telegram')
+    expect(keyRow.textContent).toContain('Active')
+    // Тумблера-иконки больше нет — секция первоклассная.
+    expect(container.querySelector('[data-testid="events-binding-keys-toggle-b1"]')).toBeNull()
   })
 
-  it('создаёт ключ, один раз показывает секрет и curl', async () => {
+  it('создаёт несколько ключей, оба остаются в списке', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.getEventBindingKeys
+      .mockResolvedValueOnce({ keys: [] })
+      .mockResolvedValueOnce({ keys: [keyMeta({ id: 'k1', label: 'Key one', prefix: 'eak_one' })] })
+      .mockResolvedValueOnce({
+        keys: [
+          keyMeta({ id: 'k1', label: 'Key one', prefix: 'eak_one' }),
+          keyMeta({ id: 'k2', label: 'Key two', prefix: 'eak_two' }),
+        ],
+      })
+    mocks.createEventBindingKey
+      .mockResolvedValueOnce({
+        id: 'k1',
+        bindingId: 'b1',
+        label: 'Key one',
+        createdBy: 'admin',
+        createdAt: '2026-10-08T10:00:00.000Z',
+        prefix: 'eak_one',
+        key: 'eak_secret_one',
+      })
+      .mockResolvedValueOnce({
+        id: 'k2',
+        bindingId: 'b1',
+        label: 'Key two',
+        createdBy: 'admin',
+        createdAt: '2026-10-08T10:05:00.000Z',
+        prefix: 'eak_two',
+        key: 'eak_secret_two',
+      })
+    const container = await renderSettings()
+
+    // Первый ключ.
+    await clickTestId(container, 'events-binding-key-add-b1')
+    await act(async () => {
+      setInputValue(
+        container.querySelector('[data-testid="events-binding-key-label-b1"]') as HTMLInputElement,
+        'Key one',
+      )
+    })
+    await clickTestId(container, 'events-binding-key-save-b1')
+    await act(async () => {})
+
+    // Второй ключ.
+    await clickTestId(container, 'events-binding-key-add-b1')
+    await act(async () => {
+      setInputValue(
+        container.querySelector('[data-testid="events-binding-key-label-b1"]') as HTMLInputElement,
+        'Key two',
+      )
+    })
+    await clickTestId(container, 'events-binding-key-save-b1')
+    await act(async () => {})
+
+    expect(mocks.createEventBindingKey).toHaveBeenCalledTimes(2)
+    const list = container.querySelector('[data-testid="events-binding-keys-list-b1"]')!
+    expect(list.textContent).toContain('Key one')
+    expect(list.textContent).toContain('Key two')
+  })
+
+  it('метка обязательна, описание необязательно и идёт после метки', async () => {
     mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
     const container = await renderSettings()
 
-    await clickTestId(container, 'events-binding-keys-toggle-b1')
-    await act(async () => {})
     await clickTestId(container, 'events-binding-key-add-b1')
 
+    const label = container.querySelector('[data-testid="events-binding-key-label-b1"]') as HTMLInputElement
+    const description = container.querySelector(
+      '[data-testid="events-binding-key-description-b1"]',
+    ) as HTMLInputElement
+    // Описание ниже метки.
+    expect(label.compareDocumentPosition(description) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Метка помечена как обязательная (native `required`), описание — нет.
+    expect(label.required).toBe(true)
+    expect(description.required).toBe(false)
+  })
+
+  it('поля формы ключа показывают иконку-подсказку (tooltip)', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    const container = await renderSettings()
+
+    await clickTestId(container, 'events-binding-key-add-b1')
+
+    const form = container.querySelector('[data-testid="events-binding-key-form-b1"]')!
+    const tooltips = form.querySelectorAll('[data-testid="settings-field-tooltip"]')
+    expect(tooltips.length).toBeGreaterThan(0)
+    expect(tooltips[0].getAttribute('aria-label')).toBeTruthy()
+  })
+
+  it('редактирует метку/описание/срок/лимит ключа через PATCH', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.getEventBindingKeys.mockResolvedValue({
+      keys: [keyMeta({ id: 'k1', label: 'Ingest key', description: 'old description' })],
+    })
+    const container = await renderSettings()
+    await act(async () => {})
+
+    await clickTestId(container, 'events-binding-key-edit-k1')
+
+    await act(async () => {
+      setInputValue(
+        container.querySelector('[data-testid="events-binding-key-edit-label-k1"]') as HTMLInputElement,
+        'Renamed key',
+      )
+      setInputValue(
+        container.querySelector('[data-testid="events-binding-key-edit-description-k1"]') as HTMLInputElement,
+        'new description',
+      )
+      setInputValue(
+        container.querySelector('[data-testid="events-binding-key-edit-rate-k1"]') as HTMLInputElement,
+        '5',
+      )
+    })
+
+    await clickTestId(container, 'events-binding-key-edit-save-k1')
+    await act(async () => {})
+
+    expect(mocks.updateEventBindingKey).toHaveBeenCalledTimes(1)
+    expect(mocks.updateEventBindingKey).toHaveBeenCalledWith('b1', 'k1', {
+      label: 'Renamed key',
+      description: 'new description',
+      expiresAt: null,
+      rateLimitPerMinute: 5,
+    })
+  })
+
+  it('создаёт ключ по метке, один раз показывает секрет и curl', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    const container = await renderSettings()
+
+    await clickTestId(container, 'events-binding-key-add-b1')
+
+    const label = container.querySelector(
+      '[data-testid="events-binding-key-label-b1"]',
+    ) as HTMLInputElement
     const description = container.querySelector(
       '[data-testid="events-binding-key-description-b1"]',
     ) as HTMLInputElement
     await act(async () => {
-      setInputValue(description, 'Ingest key')
+      setInputValue(label, 'Ingest key')
+      setInputValue(description, 'Ingest key description')
     })
 
     await clickTestId(container, 'events-binding-key-save-b1')
     await act(async () => {})
 
     expect(mocks.createEventBindingKey).toHaveBeenCalledWith('b1', {
-      name: undefined,
-      description: 'Ingest key',
+      label: 'Ingest key',
+      description: 'Ingest key description',
+      expiresAt: undefined,
+      rateLimitPerMinute: undefined,
     })
 
     const secret = container.querySelector('[data-testid="events-binding-key-secret-b1"]')!
@@ -389,49 +539,79 @@ describe('EventsAdminSettings — API-ключи привязки (AD-089)', () 
     mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
     const container = await renderSettings()
 
-    await clickTestId(container, 'events-binding-keys-toggle-b1')
-    await act(async () => {})
-
     const curl = container.querySelector('[data-testid="events-binding-key-curl-b1"]')!
     expect(curl.textContent).toContain('Authorization: Bearer <key>')
   })
 
-  it('создание ключа без описания не вызывает API', async () => {
+  it('создание ключа без метки не вызывает API', async () => {
     mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
     const container = await renderSettings()
 
-    await clickTestId(container, 'events-binding-keys-toggle-b1')
-    await act(async () => {})
     await clickTestId(container, 'events-binding-key-add-b1')
     await clickTestId(container, 'events-binding-key-save-b1')
 
     expect(mocks.createEventBindingKey).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('Description is required')
+    expect(container.textContent).toContain('Label is required')
+  })
+
+  it('409 по метке показывается под полем метки, не общим текстом', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.createEventBindingKey.mockRejectedValueOnce(
+      Object.assign(new Error('conflict'), { code: 'CONFLICT' }),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'events-binding-key-add-b1')
+    const label = container.querySelector(
+      '[data-testid="events-binding-key-label-b1"]',
+    ) as HTMLInputElement
+    await act(async () => {
+      setInputValue(label, 'dup')
+    })
+    await clickTestId(container, 'events-binding-key-save-b1')
+    await act(async () => {})
+
+    expect(container.textContent).toContain('already used')
+    expect(container.textContent).not.toContain('conflict')
   })
 
   it('удаление ключа подтверждается через confirm', async () => {
     mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
-    mocks.getEventBindingKeys.mockResolvedValue({
-      keys: [
-        {
-          id: 'k1',
-          bindingId: 'b1',
-          description: 'Ingest',
-          createdBy: 'admin',
-          createdAt: '2026-10-08T10:00:00.000Z',
-          prefix: 'eak_abc',
-        },
-      ],
-    })
+    mocks.getEventBindingKeys.mockResolvedValue({ keys: [keyMeta()] })
     const container = await renderSettings()
-
-    await clickTestId(container, 'events-binding-keys-toggle-b1')
     await act(async () => {})
+
     await clickTestId(container, 'events-binding-key-delete-k1')
     await act(async () => {})
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
     expect(mocks.deleteEventBindingKey).toHaveBeenCalledWith('b1', 'k1')
+  })
+
+  it('отзыв ключа подтверждается и вызывает revokeEventBindingKey', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.getEventBindingKeys.mockResolvedValue({ keys: [keyMeta()] })
+    const container = await renderSettings()
+    await act(async () => {})
+
+    await clickTestId(container, 'events-binding-key-revoke-k1')
+    await act(async () => {})
+
+    expect(mocks.confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.revokeEventBindingKey).toHaveBeenCalledWith('b1', 'k1')
+  })
+
+  it('отозванный ключ показывает бейдж и не предлагает отзыв', async () => {
+    mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
+    mocks.getEventBindingKeys.mockResolvedValue({
+      keys: [keyMeta({ revokedAt: '2026-10-08T11:00:00.000Z' })],
+    })
+    const container = await renderSettings()
+    await act(async () => {})
+
+    const keyRow = container.querySelector('[data-testid="events-binding-key-k1"]')!
+    expect(keyRow.textContent).toContain('Revoked')
+    expect(container.querySelector('[data-testid="events-binding-key-revoke-k1"]')).toBeNull()
   })
 })
 

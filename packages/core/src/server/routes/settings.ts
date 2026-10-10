@@ -1,12 +1,16 @@
 import { Hono } from 'hono';
+import type { createMiddleware } from 'hono/factory';
 import type { AuthKit } from '../../auth/local.js';
-import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../storage/runtime-settings.js';
+import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
 import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
-import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
+
+/** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
+type Middleware = ReturnType<typeof createMiddleware>;
 
 /** AD-072 Ф2: эффективные дефолты LLM Gateway (config.yaml без runtime). */
 const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
@@ -47,6 +51,89 @@ function hasOverride(value: unknown): boolean {
     return Object.keys(value as Record<string, unknown>).length > 0;
   }
   return true;
+}
+
+/** AD-089: эффективные дефолты раздела «События» (config без runtime). */
+function resolveEventsDefaults(fallback?: Partial<EventsRuntimeSettings>): EventsRuntimeSettings {
+  const base = defaultConfig.events;
+  return {
+    enabled: fallback?.enabled ?? base.enabled,
+    defaultMode: fallback?.defaultMode ?? base.defaultMode,
+    ephemeralTtl: fallback?.ephemeralTtl ?? base.ephemeralTtl,
+    journalRetentionDays: fallback?.journalRetentionDays ?? base.journalRetentionDays,
+    allowedSources: fallback?.allowedSources ?? base.allowedSources,
+    unknownAgentTemplate: fallback?.unknownAgentTemplate ?? base.unknownAgentTemplate,
+    keyRateLimitPerMinute: fallback?.keyRateLimitPerMinute ?? base.keyRateLimitPerMinute,
+  };
+}
+
+/** AD-089: валидация runtime-настроек раздела «События» (частичный патч). */
+function validateEventsSettings(
+  value: unknown,
+): { ok: true; value: Partial<EventsRuntimeSettings> } | { ok: false; message: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, message: 'events: ожидается объект runtime-настроек раздела «События»' };
+  }
+  const s = value as Record<string, unknown>;
+  const result: Partial<EventsRuntimeSettings> = {};
+
+  if (s.enabled !== undefined) {
+    if (typeof s.enabled !== 'boolean') return { ok: false, message: 'events.enabled: ожидается boolean' };
+    result.enabled = s.enabled;
+  }
+  if (s.defaultMode !== undefined) {
+    if (s.defaultMode !== 'bound' && s.defaultMode !== 'ephemeral') {
+      return { ok: false, message: 'events.defaultMode: ожидается "bound" | "ephemeral"' };
+    }
+    result.defaultMode = s.defaultMode;
+  }
+  if (s.ephemeralTtl !== undefined) {
+    if (typeof s.ephemeralTtl !== 'string' || s.ephemeralTtl.trim().length === 0) {
+      return { ok: false, message: 'events.ephemeralTtl: ожидается непустая строка' };
+    }
+    result.ephemeralTtl = s.ephemeralTtl;
+  }
+  if (s.journalRetentionDays !== undefined) {
+    if (!Number.isInteger(s.journalRetentionDays) || (s.journalRetentionDays as number) < 0) {
+      return { ok: false, message: 'events.journalRetentionDays: ожидается целое >= 0' };
+    }
+    result.journalRetentionDays = s.journalRetentionDays as number;
+  }
+  if (s.allowedSources !== undefined) {
+    if (!Array.isArray(s.allowedSources) || !s.allowedSources.every((x) => typeof x === 'string')) {
+      return { ok: false, message: 'events.allowedSources: ожидается string[]' };
+    }
+    result.allowedSources = s.allowedSources as string[];
+  }
+  if (s.unknownAgentTemplate !== undefined) {
+    if (s.unknownAgentTemplate !== 'drop' && s.unknownAgentTemplate !== 'default-agent') {
+      return { ok: false, message: 'events.unknownAgentTemplate: ожидается "drop" | "default-agent"' };
+    }
+    result.unknownAgentTemplate = s.unknownAgentTemplate;
+  }
+  if (s.keyRateLimitPerMinute !== undefined) {
+    if (!Number.isInteger(s.keyRateLimitPerMinute) || (s.keyRateLimitPerMinute as number) < 0) {
+      return { ok: false, message: 'events.keyRateLimitPerMinute: ожидается целое >= 0' };
+    }
+    result.keyRateLimitPerMinute = s.keyRateLimitPerMinute as number;
+  }
+  return { ok: true, value: result };
+}
+
+/** AD-089: эффективные события = дефолты (config) поверх runtime-патча. */
+function effectiveEvents(
+  defaults: EventsRuntimeSettings,
+  runtime: Partial<EventsRuntimeSettings>,
+): EventsRuntimeSettings {
+  return {
+    enabled: runtime.enabled ?? defaults.enabled,
+    defaultMode: runtime.defaultMode ?? defaults.defaultMode,
+    ephemeralTtl: runtime.ephemeralTtl ?? defaults.ephemeralTtl,
+    journalRetentionDays: runtime.journalRetentionDays ?? defaults.journalRetentionDays,
+    allowedSources: runtime.allowedSources ?? defaults.allowedSources,
+    unknownAgentTemplate: runtime.unknownAgentTemplate ?? defaults.unknownAgentTemplate,
+    keyRateLimitPerMinute: runtime.keyRateLimitPerMinute ?? defaults.keyRateLimitPerMinute,
+  };
 }
 
 export interface SettingsRoutesDeps {
@@ -104,6 +191,19 @@ export interface SettingsRoutesDeps {
    * `WORKSPACE_POLICY_READ_ONLY`. Standalone (по умолчанию `false`) не меняется.
    */
   workspacePolicyReadOnly?: boolean;
+  /** AD-089: дефолт раздела «События» из config.yaml для GET/DELETE-сброса. */
+  fallbackEvents?: Partial<EventsRuntimeSettings>;
+  /** AD-089: вызывается после успешного PUT/DELETE /events — live-применение. */
+  onEventsChange?: (effective: EventsRuntimeSettings) => void | Promise<void>;
+}
+
+/** Опции фабрики настроек (guard'ы). */
+export interface SettingsRoutesOptions {
+  /**
+   * Guard на мутации раздела «События» (PUT/DELETE /events); по умолчанию —
+   * `auth.requireAuth`. Backend передаёт `requirePermission('ADMIN')`.
+   */
+  eventsWriteGuard?: Middleware;
 }
 
 /** AD-071 §2.3: валидна ли политика включения инструментов. */
@@ -263,8 +363,10 @@ function isValidProtectedPathsOverride(value: unknown): value is { version?: num
 export function createSettingsRoutes(
   auth: AuthKit,
   deps: SettingsRoutesDeps,
+  opts: SettingsRoutesOptions = {},
 ): Hono {
   const app = new Hono();
+  const eventsWriteGuard: Middleware = opts.eventsWriteGuard ?? auth.requireAuth;
 
   app.get('/workspace', auth.requireAuth, async (c) => {
     const runtimeWorkspace = await deps.settingsStore.getWorkspace();
@@ -734,6 +836,46 @@ export function createSettingsRoutes(
     }
     await deps.protectedPathsStore.reset();
     return c.json({ status: 'restored' });
+  });
+
+  /**
+   * AD-089: GET/PUT/DELETE /api/v2/settings/events — runtime-настройки раздела
+   * «События» (мастер-выключатель, режим маршрутизации, TTL ephemeral, retention
+   * журнала, белый список источников, политика неизвестного агента, per-key
+   * rate limit). Runtime-значение ({dataDir}/settings.json) приоритетнее
+   * config.yaml `events`; live-применение — через `onEventsChange`.
+   */
+  app.get('/events', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getEvents();
+    const defaults = resolveEventsDefaults(deps.fallbackEvents);
+    return c.json({
+      events: effectiveEvents(defaults, runtime),
+      defaults,
+      isOverridden: hasOverride(runtime),
+    });
+  });
+
+  app.put('/events', eventsWriteGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const result = validateEventsSettings((body as { events?: unknown }).events);
+    if (!result.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: result.message } }, 400);
+    }
+
+    await deps.settingsStore.setEvents(result.value);
+    const defaults = resolveEventsDefaults(deps.fallbackEvents);
+    const effective = effectiveEvents(defaults, result.value);
+    // Live-применение — Router/funnel/pruner переконфигурируются без рестарта.
+    await deps.onEventsChange?.(effective);
+    return c.json({ events: effective });
+  });
+
+  app.delete('/events', eventsWriteGuard, async (c) => {
+    await deps.settingsStore.clearEvents();
+    const defaults = resolveEventsDefaults(deps.fallbackEvents);
+    // Пустой runtime → эффективные значения = config.yaml/defaults.
+    await deps.onEventsChange?.(defaults);
+    return c.json({ status: 'restored', events: defaults, isOverridden: false, defaults });
   });
 
   return app;

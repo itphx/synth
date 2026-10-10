@@ -199,6 +199,45 @@ describe('EventRouter (AD-089)', () => {
     ).toEqual({ kind: 'bound', sessionId: 's-bound' });
   });
 
+  it('updateConfig: defaultMode/allowedSources/defaultEphemeralTtl меняются на лету', async () => {
+    const r = router({ defaultMode: 'bound' });
+    // Исходно: source не ограничен, фоллбек bound → drop.
+    expect(await r.decide(event({ source: 'telegram', dedupKey: 'k1' }))).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
+    });
+
+    r.updateConfig({ allowedSources: ['ci'] });
+    expect(await r.decide(event({ source: 'telegram', dedupKey: 'k2' }))).toEqual({
+      kind: 'drop',
+      reason: 'source_not_allowed',
+      audited: true,
+    });
+    // Разрешённый источник доходит до фоллбека.
+    expect(await r.decide(event({ source: 'ci', dedupKey: 'k3' }))).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
+    });
+
+    // Фоллбек → ephemeral с новым TTL.
+    r.updateConfig({ defaultMode: 'ephemeral', defaultEphemeralTtl: '15m' });
+    expect(await r.decide(event({ source: 'ci', dedupKey: 'k4' }))).toEqual({
+      kind: 'ephemeral',
+      agentTemplate: '',
+      ttl: '15m',
+    });
+
+    // Сброс allowedSources (пусто = все разрешены).
+    r.updateConfig({ allowedSources: [] });
+    expect(await r.decide(event({ source: 'telegram', dedupKey: 'k5' }))).toEqual({
+      kind: 'ephemeral',
+      agentTemplate: '',
+      ttl: '15m',
+    });
+  });
+
   it('rule providers: порядок регистрации, первый непустой выигрывает', async () => {
     const calls: string[] = [];
     const nullProvider: RouteRuleProvider = {

@@ -56,7 +56,6 @@ export function EventsAdminSettings() {
   const [bindings, setBindings] = useState<EventBinding[] | null>(null)
   const [bindingsLoading, setBindingsLoading] = useState(true)
   const [bindingsError, setBindingsError] = useState<string | null>(null)
-  const [expandedKeys, setExpandedKeys] = useState<string[]>([])
 
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
@@ -169,10 +168,6 @@ export function EventsAdminSettings() {
     }
   }
 
-  const toggleKeys = (id: string) => {
-    setExpandedKeys((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
-  }
-
   const openJournalInLogs = () => {
     const ui = useUIStore.getState()
     ui.setLogsPage('events')
@@ -214,6 +209,13 @@ export function EventsAdminSettings() {
             <h4 className="text-sm font-medium text-foreground break-words">
               {editor.id ? t('events.form.edit') : t('events.form.new')}
             </h4>
+
+            {!editor.id && (
+              <p className="flex items-start gap-1.5 text-xs text-muted-foreground min-w-0">
+                <Icon name="information" className="mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0 break-words">{t('events.keys.afterSaveHint')}</span>
+              </p>
+            )}
 
             {saveError && (
               <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
@@ -330,23 +332,23 @@ export function EventsAdminSettings() {
         )}
 
         {bindings && bindings.length === 0 && !editor && (
-          <div className="text-center text-muted-foreground py-6">
-            <Icon name="send-plane" className="size-8 mx-auto mb-2 opacity-40" />
+          <div className="flex flex-col items-center gap-2 py-6 text-center text-muted-foreground">
+            <Icon name="send-plane" className="size-8 opacity-40" />
             <p className="text-sm">{t('events.bindings.empty')}</p>
           </div>
         )}
 
         {bindings && bindings.length > 0 && (
-          <div className="space-y-2 min-w-0" data-testid="events-bindings-list">
+          <div className="space-y-3 min-w-0" data-testid="events-bindings-list">
             {bindings.map((binding) => {
               const key = binding.threadKey ?? binding.chatKey
               return (
                 <div
                   key={binding.id}
                   data-testid={`events-binding-${binding.id}`}
-                  className="rounded-lg border border-border bg-surface-inset hover:border-primary/50 transition-colors min-w-0"
+                  className="space-y-3 rounded-xl border border-border bg-surface-inset p-3 min-w-0 transition-[border-color,background-color] hover:border-primary/50"
                 >
-                  <div className="flex flex-wrap items-start gap-3 p-3 min-w-0">
+                  <div className="flex flex-wrap items-start gap-3 min-w-0">
                     <div className="flex-1 min-w-0 space-y-1">
                       <div className="flex items-center gap-1.5 flex-wrap min-w-0">
                         <Icon name="send-plane" className="size-4 shrink-0 text-muted-foreground" />
@@ -380,18 +382,6 @@ export function EventsAdminSettings() {
                           variant="ghost"
                           size="sm"
                           className="shrink-0 min-h-10 min-w-10"
-                          onClick={() => toggleKeys(binding.id)}
-                          title={t('events.keys.title')}
-                          aria-label={t('events.keys.title')}
-                          aria-expanded={expandedKeys.includes(binding.id)}
-                          data-testid={`events-binding-keys-toggle-${binding.id}`}
-                        >
-                          <Icon name="key" className="size-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="shrink-0 min-h-10 min-w-10"
                           onClick={() => openEdit(binding)}
                           title={t('common.edit')}
                           aria-label={t('common.edit')}
@@ -413,11 +403,7 @@ export function EventsAdminSettings() {
                       </div>
                     )}
                   </div>
-                  {canManage && expandedKeys.includes(binding.id) && (
-                    <div className="px-3 pb-3">
-                      <EventBindingKeys binding={binding} />
-                    </div>
-                  )}
+                  {canManage && <EventBindingKeys binding={binding} />}
                 </div>
               )
             })}

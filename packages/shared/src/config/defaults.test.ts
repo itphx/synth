@@ -127,6 +127,7 @@ describe('defaultConfig', () => {
       allowedSources: [],
       dedupStore: 'memory',
       unknownAgentTemplate: 'drop',
+      keyRateLimitPerMinute: 0,
     });
   });
 

@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import {
   eventBindingApiKeyCreateSchema,
+  eventBindingApiKeyUpdateSchema,
   eventBindingInputSchema,
   eventIngestSchema,
   eventKeyIngestSchema,
@@ -12,6 +13,8 @@ import type { EventBinding } from '@itphx/synth-shared';
 import type { EventIngress } from '../../engine/events/ingest.js';
 import type { EventIngestInput } from '../../engine/events/ingest.js';
 import type { EventKeyCredential } from '../../engine/events/credential.js';
+import { KeyRateLimiter } from '../../engine/events/key-rate-limiter.js';
+import { EventApiKeyConflictError } from '../../storage/event-api-key-store.js';
 import type { EventApiKeyStore } from '../../storage/event-api-key-store.js';
 import type { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { EventJournalStore } from '../../storage/event-journal-store.js';
@@ -50,6 +53,14 @@ export interface EventRouteMessages {
   invalidKey: (c: Context) => string;
   /** AD-089: API-ключ привязки не найден. */
   keyNotFound: (c: Context) => string;
+  /** AD-089/AD-052: неверное тело обновления API-ключа. */
+  invalidKeyUpdate: (c: Context) => string;
+  /** AD-089/AD-052: метка API-ключа уже занята (глобально по инстансу). */
+  keyLabelConflict: (c: Context) => string;
+  /** AD-089/AD-052: превышен лимит запросов по API-ключу привязки. */
+  rateLimitedKey: (c: Context) => string;
+  /** AD-089: приём внешних событий отключён мастер-выключателем. */
+  eventsDisabled: (c: Context) => string;
 }
 
 export interface EventRoutesDeps {
@@ -100,6 +111,17 @@ export interface EventRoutesOptions {
    * Не передан — шаблон принимается как есть (проверка пропускается).
    */
   resolveAgentTemplate?: (template: string) => string | null;
+  /**
+   * AD-089/AD-052: глобальный дефолт лимита запросов/мин на API-ключ привязки
+   * (`events.keyRateLimitPerMinute`). Применяется, если у ключа нет своего
+   * `rateLimitPerMinute`. Не передан/0 — без лимита.
+   */
+  getKeyRateLimitPerMinute?: () => number;
+  /**
+   * AD-089: мастер-выключатель приёма внешних событий (`events.enabled`).
+   * При `false` `POST /` отвечает 503. Не передан — приём разрешён.
+   */
+  isEnabled?: () => boolean;
 }
 
 const DEFAULT_MESSAGES: EventRouteMessages = {
@@ -111,6 +133,13 @@ const DEFAULT_MESSAGES: EventRouteMessages = {
   unknownAgent: () => 'Неизвестный агент в правиле маршрутизации',
   invalidKey: () => 'Неверный API-ключ',
   keyNotFound: () => 'API-ключ не найден',
+  invalidKeyUpdate: () => 'Некорректное тело обновления API-ключа',
+  keyLabelConflict: (c) => {
+    const label = (c.get('eventKeyConflictLabel' as never) as string | undefined) ?? '';
+    return label ? `Метка API-ключа уже используется: ${label}` : 'Метка API-ключа уже используется';
+  },
+  rateLimitedKey: () => 'Превышен лимит запросов по API-ключу',
+  eventsDisabled: () => 'Приём внешних событий отключён',
 };
 
 const JOURNAL_LIMIT_DEFAULT = 50;
@@ -141,10 +170,17 @@ export function createEventRoutes(
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
   const keyReadGuard: Middleware = opts.keyReadGuard ?? auth.requireAuth;
   const ingestGuard: Middleware = opts.ingestGuard ?? auth.requireAuth;
+  // AD-089/AD-052: per-key rate limit (fixed window 60 c), один на приложение.
+  const keyRateLimiter = new KeyRateLimiter(60_000);
 
   // POST /api/v2/events — приём внешнего события (ingress). Аутентификация: API-ключ
   // привязки (если задан резолвер и пришёл Bearer) либо fallback `ingestGuard`.
   app.post('/', async (c) => {
+    // MASTER: приём внешних событий может быть отключён (`events.enabled: false`).
+    if (opts.isEnabled && !opts.isEnabled()) {
+      return c.json({ error: { code: 'UNAVAILABLE', message: messages.eventsDisabled(c) } }, 503);
+    }
+
     // 0. Pre-guard (rate limit) — до решения о способе аутентификации.
     if (opts.ingestPreGuard) {
       let prePassed = false;
@@ -165,6 +201,11 @@ export function createEventRoutes(
       }
       binding = resolved.binding;
       credential = resolved.credential;
+      // AD-089/AD-052: per-key rate limit (свой у ключа либо глобальный дефолт).
+      const limit = credential.rateLimitPerMinute ?? opts.getKeyRateLimitPerMinute?.() ?? 0;
+      if (limit > 0 && !keyRateLimiter.check(credential.keyId, limit)) {
+        return c.json({ error: { code: 'RATE_LIMITED', message: messages.rateLimitedKey(c) } }, 429);
+      }
       // Пробрасываем привязку в контекст (для хуков/логов); поля не читаются роутом.
       c.set('eventBinding' as never, binding as never);
       if (opts.touchApiKey) {
@@ -312,13 +353,69 @@ export function createEventRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidKey(c) } }, 400);
     }
 
-    const created = await deps.apiKeyStore.create({
-      bindingId,
-      name: parsed.data.name,
-      description: parsed.data.description,
-      createdBy: currentUserId(c),
-    });
-    return c.json(created, 201);
+    try {
+      const created = await deps.apiKeyStore.create({
+        bindingId,
+        label: parsed.data.label,
+        ...(parsed.data.description !== undefined ? { description: parsed.data.description } : {}),
+        ...(parsed.data.expiresAt !== undefined ? { expiresAt: parsed.data.expiresAt } : {}),
+        ...(parsed.data.rateLimitPerMinute !== undefined
+          ? { rateLimitPerMinute: parsed.data.rateLimitPerMinute }
+          : {}),
+        createdBy: currentUserId(c),
+      });
+      return c.json(created, 201);
+    } catch (err) {
+      if (err instanceof EventApiKeyConflictError) {
+        c.set('eventKeyConflictLabel' as never, err.label as never);
+        return c.json({ error: { code: 'CONFLICT', message: messages.keyLabelConflict(c) } }, 409);
+      }
+      throw err;
+    }
+  });
+
+  // PATCH /api/v2/events/bindings/:id/keys/:keyId — обновление метаданных ключа.
+  app.patch('/bindings/:id/keys/:keyId', writeGuard, async (c) => {
+    const bindingId = c.req.param('id');
+    const keyId = c.req.param('keyId');
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidKeyUpdate(c) } }, 400);
+    }
+
+    const parsed = eventBindingApiKeyUpdateSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidKeyUpdate(c) } }, 400);
+    }
+
+    try {
+      const updated = await deps.apiKeyStore.update(bindingId, keyId, parsed.data);
+      if (!updated) {
+        return c.json({ error: { code: 'NOT_FOUND', message: messages.keyNotFound(c) } }, 404);
+      }
+      return c.json(updated);
+    } catch (err) {
+      if (err instanceof EventApiKeyConflictError) {
+        c.set('eventKeyConflictLabel' as never, err.label as never);
+        return c.json({ error: { code: 'CONFLICT', message: messages.keyLabelConflict(c) } }, 409);
+      }
+      throw err;
+    }
+  });
+
+  // POST /api/v2/events/bindings/:id/keys/:keyId/revoke — мягкий отзыв ключа.
+  app.post('/bindings/:id/keys/:keyId/revoke', writeGuard, async (c) => {
+    const bindingId = c.req.param('id');
+    const keyId = c.req.param('keyId');
+    const revoked = await deps.apiKeyStore.revoke(bindingId, keyId);
+    if (!revoked) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.keyNotFound(c) } }, 404);
+    }
+    const key = await deps.apiKeyStore.get(bindingId, keyId);
+    return c.json(key);
   });
 
   // DELETE /api/v2/events/bindings/:id/keys/:keyId — удаление ключа.

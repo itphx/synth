@@ -12,12 +12,36 @@ export interface EventApiKeyStoreConfig {
   dataDir: string;
 }
 
-/** Вход создания ключа: `description` обязателен, `name` — опционален. */
+/** Вход создания ключа: обязательная уникальная `label`, опциональные поля. */
 export interface CreateEventApiKeyInput {
   bindingId: string;
-  name?: string;
-  description: string;
+  /** Обязательная уникальная (глобально по инстансу) метка ключа. */
+  label: string;
+  description?: string;
+  /** ISO-8601 срок действия. */
+  expiresAt?: string;
+  /** Лимит запросов/мин (0 — без лимита); не задан — глобальный дефолт. */
+  rateLimitPerMinute?: number;
   createdBy: string;
+}
+
+/** Патч обновления ключа: `undefined` — не трогать, `null` — сбросить. */
+export interface UpdateEventApiKeyPatch {
+  label?: string;
+  description?: string | null;
+  expiresAt?: string | null;
+  rateLimitPerMinute?: number | null;
+}
+
+/**
+ * AD-089/AD-052: конфликт метки API-ключа привязки — метка неуникальна
+ * (регистронезависимо) в пределах инстанса. Роуты маппят в 409 CONFLICT.
+ */
+export class EventApiKeyConflictError extends Error {
+  constructor(readonly label: string) {
+    super(`Метка API-ключа уже используется: ${label}`);
+    this.name = 'EventApiKeyConflictError';
+  }
 }
 
 /**
@@ -26,6 +50,8 @@ export interface CreateEventApiKeyInput {
  */
 export interface EventApiKeyRecord extends EventBindingApiKey {
   hash: string;
+  /** Legacy-поле (до введения `label`); нормализуется при загрузке. */
+  name?: string;
 }
 
 interface ApiKeysFile {
@@ -75,10 +101,21 @@ export class EventApiKeyStore {
       }
       return {
         schemaVersion: parsed.schemaVersion ?? EVENT_API_KEYS_SCHEMA_VERSION,
-        keys: parsed.keys.filter(
-          (k): k is EventApiKeyRecord =>
-            !!k && typeof k.id === 'string' && typeof k.hash === 'string' && typeof k.bindingId === 'string',
-        ),
+        keys: parsed.keys
+          .filter(
+            (k): k is EventApiKeyRecord =>
+              !!k && typeof k.id === 'string' && typeof k.hash === 'string' && typeof k.bindingId === 'string',
+          )
+          // Legacy-backfill: до введения обязательного `label` ключи хранили
+          // `name` (опционально) / только `prefix`. Нормализуем к `label`.
+          .map((k) => {
+            const record = k as EventApiKeyRecord;
+            if (!record.label) {
+              record.label = record.name ?? record.prefix ?? record.id;
+            }
+            delete record.name;
+            return record;
+          }),
       };
     } catch {
       return { schemaVersion: EVENT_API_KEYS_SCHEMA_VERSION, keys: [] };
@@ -101,12 +138,34 @@ export class EventApiKeyStore {
     );
   }
 
-  /** Убирает `hash` из внутренней записи — публичное представление. */
+  /** Убирает `hash` (и legacy `name`) из внутренней записи — публичное представление. */
   private _toPublic(record: EventApiKeyRecord): EventBindingApiKey {
-    // `hash` намеренно не попадает наружу; деструктуризация отбрасывает его.
-    const { hash, ...pub } = record;
+    // `hash`/`name` намеренно не попадают наружу; деструктуризация отбрасывает их.
+    const { hash, name, ...pub } = record;
     void hash;
+    void name;
     return pub;
+  }
+
+  /** Нормализованный ключ метки: trim + lower-case (регистронезависимая уникальность). */
+  private _labelKey(label: string): string {
+    return label.trim().toLowerCase();
+  }
+
+  /** Бросает `EventApiKeyConflictError`, если `label` уже занята другим ключом. */
+  private _assertLabelUnique(file: ApiKeysFile, label: string, excludeKeyId?: string): void {
+    const target = this._labelKey(label);
+    const conflict = file.keys.some(
+      (k) => k.id !== excludeKeyId && this._labelKey(k.label ?? '') === target,
+    );
+    if (conflict) throw new EventApiKeyConflictError(label);
+  }
+
+  /** Нормализует и проверяет метку: непустая строка после trim. */
+  private _normalizeLabel(label: string | undefined): string {
+    const normalized = label?.trim() ?? '';
+    if (!normalized) throw new Error('label обязателен');
+    return normalized;
   }
 
   async listByBinding(bindingId: string): Promise<EventBindingApiKey[]> {
@@ -114,21 +173,32 @@ export class EventApiKeyStore {
     return file.keys.filter((k) => k.bindingId === bindingId).map((k) => this._toPublic(k));
   }
 
+  /** Публичные метаданные ключа привязки либо `null`, если ключа нет. */
+  async get(bindingId: string, keyId: string): Promise<EventBindingApiKey | null> {
+    const file = await this._load();
+    const record = file.keys.find((k) => k.id === keyId && k.bindingId === bindingId);
+    return record ? this._toPublic(record) : null;
+  }
+
   /**
    * Создаёт ключ: генерирует секрет `synth_evt_<base64url>`, сохраняет только
    * его sha256-хеш и возвращает публичные метаданные + plaintext-секрет
-   * (единственный раз).
+   * (единственный раз). Метка `label` обязательна и уникальна глобально по
+   * инстансу (регистронезависимо) — иначе `EventApiKeyConflictError`.
    */
   async create(input: CreateEventApiKeyInput): Promise<EventBindingApiKeyCreated> {
     this._validateId(input.bindingId);
+    const label = this._normalizeLabel(input.label);
     await this._lock.acquire();
     try {
       const secret = `${SECRET_PREFIX}${randomBytes(24).toString('base64url')}`;
       const record: EventApiKeyRecord = {
         id: `eak_${generateId()}`,
         bindingId: input.bindingId,
-        ...(input.name !== undefined ? { name: input.name } : {}),
-        description: input.description,
+        label,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+        ...(input.rateLimitPerMinute !== undefined ? { rateLimitPerMinute: input.rateLimitPerMinute } : {}),
         createdBy: input.createdBy,
         createdAt: new Date().toISOString(),
         prefix: `${secret.slice(0, SECRET_PREFIX_VISIBLE)}…`,
@@ -136,10 +206,53 @@ export class EventApiKeyStore {
       };
 
       const file = await this._load();
+      this._assertLabelUnique(file, label);
       file.keys.push(record);
       await this._save(file);
 
       return { ...this._toPublic(record), key: secret };
+    } finally {
+      this._lock.release();
+    }
+  }
+
+  /**
+   * Обновляет поля ключа. `null` для `description`/`expiresAt`/
+   * `rateLimitPerMinute` — сброс поля; `undefined` — не трогать. Смена `label`
+   * проверяется на глобальную уникальность (исключая саму запись). Возвращает
+   * обновлённые метаданные либо `null`, если ключа нет.
+   */
+  async update(
+    bindingId: string,
+    keyId: string,
+    patch: UpdateEventApiKeyPatch,
+  ): Promise<EventBindingApiKey | null> {
+    await this._lock.acquire();
+    try {
+      const file = await this._load();
+      const record = file.keys.find((k) => k.id === keyId && k.bindingId === bindingId);
+      if (!record) return null;
+
+      if (patch.label !== undefined) {
+        const label = this._normalizeLabel(patch.label);
+        this._assertLabelUnique(file, label, keyId);
+        record.label = label;
+      }
+      if (patch.description !== undefined) {
+        if (patch.description === null) delete record.description;
+        else record.description = patch.description;
+      }
+      if (patch.expiresAt !== undefined) {
+        if (patch.expiresAt === null) delete record.expiresAt;
+        else record.expiresAt = patch.expiresAt;
+      }
+      if (patch.rateLimitPerMinute !== undefined) {
+        if (patch.rateLimitPerMinute === null) delete record.rateLimitPerMinute;
+        else record.rateLimitPerMinute = patch.rateLimitPerMinute;
+      }
+
+      await this._save(file);
+      return this._toPublic(record);
     } finally {
       this._lock.release();
     }
@@ -177,9 +290,9 @@ export class EventApiKeyStore {
 
   /**
    * Мягкий отзыв ключа (AD-052 — задел): проставляет `revokedAt` = now, после
-   * чего `resolveBySecret` больше не резолвит ключ. Возвращает `false`, если
-   * ключа в этой привязке нет. HTTP-эндпоинта revoke пока нет — метод уровня
-   * реестра для будущей публичной API-платформы.
+   * чего `resolveBySecret` больше не резолвит ключ. Идемпотентно: повторный
+   * вызов для уже отозванного ключа — `true` без смены даты. Возвращает `false`,
+   * если ключа в этой привязке нет.
    */
   async revoke(bindingId: string, keyId: string): Promise<boolean> {
     await this._lock.acquire();
@@ -187,8 +300,10 @@ export class EventApiKeyStore {
       const file = await this._load();
       const record = file.keys.find((k) => k.id === keyId && k.bindingId === bindingId);
       if (!record) return false;
-      record.revokedAt = new Date().toISOString();
-      await this._save(file);
+      if (!record.revokedAt) {
+        record.revokedAt = new Date().toISOString();
+        await this._save(file);
+      }
       return true;
     } finally {
       this._lock.release();
@@ -217,7 +332,13 @@ export class EventApiKeyStore {
     const key = this._toPublic(record);
     return {
       key,
-      credential: { keyId: key.id, bindingId: key.bindingId },
+      credential: {
+        keyId: key.id,
+        bindingId: key.bindingId,
+        ...(key.rateLimitPerMinute !== undefined
+          ? { rateLimitPerMinute: key.rateLimitPerMinute }
+          : {}),
+      },
     };
   }
 

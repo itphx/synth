@@ -558,6 +558,9 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/settings/protected-paths` | auth | `{policy, base, is_overridden}` |
 | PUT | `/api/v2/settings/protected-paths` | auth | `{policy}` или `{version, add, remove}` |
 | DELETE | `/api/v2/settings/protected-paths` | auth | Сброс к системной политике |
+| GET | `/api/v2/settings/events` | auth | Runtime-настройки раздела «События» (AD-089): `{events:{enabled, defaultMode, ephemeralTtl, journalRetentionDays, allowedSources, unknownAgentTemplate, keyRateLimitPerMinute}, defaults, isOverridden}` (runtime из `settings.json` поверх config.yaml `events`) |
+| PUT | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Патч `{events:{…}}` (live-применение: Router/funnel/pruner переконфигурируются); невалидное значение → 400 `VALIDATION_ERROR` |
+| DELETE | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Сброс runtime-настроек к config-дефолту; `{status:"restored", events, isOverridden:false, defaults}` |
 
 ### 5.22 Dictionaries — `/api/v2/dictionaries` (оба)
 
@@ -598,12 +601,14 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 |---|---|---|---|---|
 | GET | `/api/v2/events` | оба | auth | Глобальный SSE-поток `BusEvent` (фоллбек WS) |
 | WS | `/ws/events` | оба | auth | Основной real-time-канал (см. §3) |
-| POST | `/api/v2/events` | оба | auth/ключ + rate limit | Приём нормализованного внешнего события. Обычный путь: `Authorization: Bearer <пользовательский ключ>` → тело `{source, type, payload?, identity?, dedupKey?, ts?}` (`eventIngestSchema`). Путь по API-ключу привязки: `Authorization: Bearer synth_evt_…` — **без пользовательских кред**, `source` опционален (`eventKeyIngestSchema`; source/чат/тред берутся из привязки; конфликт `source` → 400), событие форсированно маршрутизируется в привязку. Ответ в обоих случаях → `201 {event, decision, sessionId}` (`sessionId` — id сессии или `null` при `drop`); неверный/отозванный/истёкший ключ → 401 `UNAUTHORIZED`; невалидное тело → 400 `VALIDATION_ERROR`, сбой материализации → 500 `INTERNAL_ERROR` (решение всё равно пишется в журнал). Rate limit (managed — 120/мин) применяется к обоим путям до выбора способа аутентификации; использование ключа пишется в журнал (`keyId`/`principalId`) |
+| POST | `/api/v2/events` | оба | auth/ключ + rate limit | Приём нормализованного внешнего события. Обычный путь: `Authorization: Bearer <пользовательский ключ>` → тело `{source, type, payload?, identity?, dedupKey?, ts?}` (`eventIngestSchema`). Путь по API-ключу привязки: `Authorization: Bearer synth_evt_…` — **без пользовательских кред**, `source` опционален (`eventKeyIngestSchema`; source/чат/тред берутся из привязки; конфликт `source` → 400), событие форсированно маршрутизируется в привязку. Ответ в обоих случаях → `201 {event, decision, sessionId}` (`sessionId` — id сессии или `null` при `drop`); неверный/отозванный/истёкший ключ → 401 `UNAUTHORIZED`; невалидное тело → 400 `VALIDATION_ERROR`, сбой материализации → 500 `INTERNAL_ERROR` (решение всё равно пишется в журнал). Rate limit (managed — 120/мин) применяется к обоим путям до выбора способа аутентификации; per-key лимит (лимит ключа либо глобальный `events.keyRateLimitPerMinute`) → 429 `RATE_LIMITED`; мастер-выключатель `events.enabled: false` → 503 `UNAVAILABLE`. Использование ключа пишется в журнал (`keyId`/`principalId`) |
 | GET | `/api/v2/events/bindings` | оба | auth | Список привязок `{bindings}` |
 | POST | `/api/v2/events/bindings` | оба | LEAD/ADMIN | Upsert привязки по `source`+`chatKey`/`threadKey` (`eventBindingInputSchema`): `{source, chatKey?, threadKey?, sessionId?, mode: bound\|ephemeral\|queue, agentTemplate?, project?}`; совпавшая по ключу запись заменяется (id сохраняется) → 200, иначе 201 |
 | DELETE | `/api/v2/events/bindings/:id` | оба | LEAD/ADMIN | Удалить привязку → 204 (каскадно удаляются её API-ключи); нет записи → 404 `NOT_FOUND` |
-| GET | `/api/v2/events/bindings/:id/keys` | оба | LEAD/ADMIN | Список API-ключей привязки `{keys}` — только метаданные (`EventBindingApiKey[]`, без секрета и хеша; `prefix` для идентификации, `lastUsedAt`) |
-| POST | `/api/v2/events/bindings/:id/keys` | оба | LEAD/ADMIN | Создать API-ключ (`eventBindingApiKeyCreateSchema`): `{name?, description}` (`description` обязательно) → 201 `EventBindingApiKeyCreated` = метаданные + `key` (plaintext `synth_evt_<base64url>`, показывается **единственный раз**); нет привязки → 404 `NOT_FOUND`; невалидное тело → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/events/bindings/:id/keys` | оба | LEAD/ADMIN | Список API-ключей привязки `{keys}` — только метаданные (`EventBindingApiKey[]`, без секрета и хеша; `label`, `description?`, `expiresAt?`, `rateLimitPerMinute?`, `revokedAt?`, `prefix`, `lastUsedAt`) |
+| POST | `/api/v2/events/bindings/:id/keys` | оба | LEAD/ADMIN | Создать API-ключ (`eventBindingApiKeyCreateSchema`): `{label, description?, expiresAt?, rateLimitPerMinute?}` (`label` обязательна, уникальна глобально по инстансу регистронезависимо) → 201 `EventBindingApiKeyCreated` = метаданные + `key` (plaintext `synth_evt_<base64url>`, показывается **единственный раз**); нет привязки → 404 `NOT_FOUND`; дубль метки → 409 `CONFLICT`; невалидное тело → 400 `VALIDATION_ERROR` |
+| PATCH | `/api/v2/events/bindings/:id/keys/:keyId` | оба | LEAD/ADMIN | Обновить метаданные ключа (`eventBindingApiKeyUpdateSchema`): `{label?, description?, expiresAt?, rateLimitPerMinute?}`; `null` — сброс поля, `undefined` — не трогать; смена метки проверяется на уникальность → 200 `EventBindingApiKey`; нет ключа → 404 `NOT_FOUND`; дубль метки → 409 `CONFLICT` |
+| POST | `/api/v2/events/bindings/:id/keys/:keyId/revoke` | оба | LEAD/ADMIN | Мягкий отзыв ключа (проставляет `revokedAt`; идемпотентно) → 200 `EventBindingApiKey`; нет ключа → 404 `NOT_FOUND`. Отозванный ключ перестаёт резолвиться (`resolveBySecret` → `null`) |
 | DELETE | `/api/v2/events/bindings/:id/keys/:keyId` | оба | LEAD/ADMIN | Удалить API-ключ → 204; нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/events/routes` | оба | auth | Список правил маршрутизации `{rules}` (`EventRouteRule[]`) |
 | POST | `/api/v2/events/routes` | оба | LEAD/ADMIN | Upsert правила (`eventRouteRuleUpsertSchema`): `{id?, name?, priority?, enabled?, match, target}`; `match` — AND по заполненным `source`/`type`/`chatKey`/`threadKey`/`principalId`/`label`/`keywords` (пустой-невалидный не матчит); `target` — `bound`/`queue` (`sessionId`) или `ephemeral` (`agentTemplate?`/`project?`/`ttl?`). По `id` — обновление → 200, иначе создание → 201. Валидация: `bound`/`queue` с несуществующей сессией → 400, непустой `agentTemplate` без enabled-агента → 400 `VALIDATION_ERROR` |
@@ -615,9 +620,15 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 source/type/ключу/payload). RBAC managed: приём — API-ключ привязки либо `requireAuth` +
 rate limit (120/мин); мутации привязок/правил/ключей — `requirePermission('ADMIN','LEAD')`,
 чтение ключей привязки — LEAD/ADMIN, остальное чтение — `requireAuth`; в core — единый `requireAuth`.
+Per-key rate limit (`KeyRateLimiter`, окно 60 c) — лимит ключа `rateLimitPerMinute`, иначе
+глобальный `events.keyRateLimitPerMinute` (0 — без лимита) → 429 `RATE_LIMITED`; мастер-выключатель
+`events.enabled: false` → 503 `UNAVAILABLE`. Runtime-настройки — `GET/PUT/DELETE /api/v2/settings/events` (§5.21).
 API-ключи привязок (`EventBindingApiKey`, `{dataDir}/events/api-keys.json`, AD-089/AD-052):
-несколько ключей на привязку, секрет хранится только как sha256-хеш, задел — `expiresAt`/`revokedAt`
-и `revoke` (без HTTP-эндпоинта). Ключи — инстанс-локальные секреты, не переносятся publish/fork (AD-042/AD-081).
+несколько ключей на привязку, секрет хранится только как sha256-хеш, наружу отдаётся один раз
+при создании; обязательная уникальная (глобально по инстансу) `label`, `description?`,
+`expiresAt?`/`revokedAt?` (срок/мягкий отзыв), `rateLimitPerMinute?` (лимит/мин, иначе глобальный
+дефолт `events.keyRateLimitPerMinute`, `0` — без лимита). Ключи — инстанс-локальные секреты,
+не переносятся publish/fork (AD-042/AD-081).
 Правила маршрутизации (`EventRouteRule`, `{dataDir}/events/routes.json`) применяет `ProjectRuleProvider`
 после явного `EventBinding` и cron-правила; фоллбек Router без маршрута задаёт `events.defaultMode`
 (`bound` — `drop no_route`, `ephemeral` — временная сессия).

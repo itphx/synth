@@ -9,6 +9,11 @@
 export interface EventKeyCredential {
   keyId: string;
   bindingId: string;
+  /**
+   * Лимит запросов/мин конкретного ключа (AD-089/AD-052), если задан. Не задан —
+   * применяется глобальный дефолт `events.keyRateLimitPerMinute`.
+   */
+  rateLimitPerMinute?: number;
   /** Источник из привязки (резолвится вызывающим). */
   source?: string;
   /** Задел AD-052: скоупы ключа. */
