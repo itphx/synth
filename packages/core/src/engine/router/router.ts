@@ -24,6 +24,12 @@ export interface RoutingDecision {
   modelName: string;
   reason: string;
   strategy: string;
+  /** AD-084: категория decision-классификации (только при `strategy='decision'`). */
+  category?: string;
+  /** AD-084: уверенность decision-классификации (только при `strategy='decision'`). */
+  confidence?: number;
+  /** AD-084: сигналы decision-классификации, напр. `decision:coding`. */
+  signals?: string[];
 }
 
 export class ModelRouter {
@@ -147,7 +153,14 @@ export class ModelRouter {
     if (this._decisionClassifier) {
       const decided = await this._decisionClassifier.classify({ userMessage, toolCalls });
       if (decided) {
-        return this._routeByCategory(decided.category, settings, defaultProvider, defaultModel, 'decision', decided.signals);
+        const decision = this._routeByCategory(decided.category, settings, defaultProvider, defaultModel, 'decision', decided.signals);
+        // AD-084: публикуем метаданные decision-классификации для метрик (debug).
+        return {
+          ...decision,
+          category: decided.category,
+          confidence: decided.confidence,
+          signals: decided.signals,
+        };
       }
     }
 

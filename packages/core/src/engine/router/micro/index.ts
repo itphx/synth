@@ -46,11 +46,16 @@ export class MicroPipeline {
 
     // 3. Каскад: проходим по моделям (rules → embedding → decision → micro_llm)
     const threshold = input.sessionSettings.microConfidenceThreshold || 0.8;
+    // AD-084 (метрики): сигналы опрошенных моделей — чтобы на фоллбеке было видно,
+    // что decision-уровень участвовал (напр. `decision:<label>` при отсечении по
+    // порогу микро-слоя или `decision_low_confidence`). На обработку не влияет.
+    const attemptedSignals: string[] = [];
 
     for (const model of this._models) {
       if (!model.canHandle(taskClass)) continue;
 
       const result = await model.handle(input, taskClass);
+      attemptedSignals.push(...result.signals);
 
       info('MICRO', `Модель ${model.name} (${taskClass}): status=${result.status}, confidence=${result.confidence.toFixed(2)}, latency=${result.latencyMs}ms`);
 
@@ -76,7 +81,7 @@ export class MicroPipeline {
     return {
       handled: false,
       microResult: null,
-      fallbackSignals: classifyResult.signals,
+      fallbackSignals: [...new Set([...classifyResult.signals, ...attemptedSignals])],
     };
   }
 

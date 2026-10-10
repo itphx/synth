@@ -2555,6 +2555,26 @@ export class ChatOrchestrator {
         // Микрослой уверен — возвращаем ответ без вызова LLM
         const finalContent = microResult.microResult.answer;
         const finalModel = `micro:${microResult.microResult.taskClass}`;
+
+        // AD-084: метрики decision-уровня. Если победил decision-сигнал
+        // (`decision:<label>`) — фиксируем его в debug-контексте (`extra_context`)
+        // и дополняем `metadata.micro_first` (не дублируя сам `micro_first`).
+        const decisionSignal = microResult.microResult.signals.find((s) => s.startsWith('decision:'));
+        const microDecision = decisionSignal
+          ? {
+              label: decisionSignal.slice('decision:'.length),
+              confidence: microResult.microResult.confidence,
+              ...(this._decisionConfig?.model ? { model: this._decisionConfig.model } : {}),
+            }
+          : null;
+        if (microDecision) {
+          debugCollector.addContext('decision', {
+            where: 'micro',
+            ...microDecision,
+            latencyMs: microResult.microResult.latencyMs,
+            taskClass: microResult.microResult.taskClass,
+          });
+        }
         const finalUsage = {
           inputTokens: microResult.microResult.usage?.inputTokens ?? 0,
           outputTokens: microResult.microResult.usage?.outputTokens ?? 0,
@@ -2581,6 +2601,7 @@ export class ChatOrchestrator {
             latencyMs: microResult.microResult.latencyMs,
             signals: microResult.microResult.signals,
             taskClass: microResult.microResult.taskClass,
+            ...(microDecision ? { decision: microDecision } : {}),
           },
         };
 
@@ -2600,6 +2621,10 @@ export class ChatOrchestrator {
           usage: finalUsage,
           agentRole: effectiveAgentRole,
           metadata: microMetadata,
+          // AD-084: debug-контекст (в т.ч. `extra_context.decision`) виден в
+          // `GET /messages/:id/:index/debug`; микро-путь сохраняет сообщение
+          // напрямую, минуя `_saveAssistantMessage`, поэтому ставим здесь.
+          debugData: debugCollector.getDebugInfo() ?? undefined,
         };
 
         await this._sessionManager.addMessage(session.id, assistantMsg);
@@ -2630,12 +2655,28 @@ export class ChatOrchestrator {
           signals: microResult.fallbackSignals,
           taskClass: microResult.microResult?.taskClass ?? 'llm_task',
         });
+
+        // AD-084: метрики decision-уровня на фоллбеке. `decision_disabled`
+        // исключаем, чтобы выключенный (или незаданный) decision-слой не
+        // засорял метрики. Остальные сигналы (`decision:<label>` при отсечении
+        // по порогу микро-слоя, `decision_low_confidence`, `decision_error:*`, …)
+        // показывают реальное участие decision-модели.
+        const decisionFallbackSignals = microResult.fallbackSignals.filter(
+          (s) => /^decision[:_]/.test(s) && s !== 'decision_disabled',
+        );
+        if (decisionFallbackSignals.length) {
+          debugCollector.addContext('decision', {
+            where: 'micro',
+            status: 'fallback',
+            signals: decisionFallbackSignals,
+          });
+        }
       }
     }
 
     try {
       // 1. Get provider (через роутер если доступен, иначе напрямую)
-      const routeResult = await this._routeProvider(session, message, effectiveReasoningLevel);
+      const routeResult = await this._routeProvider(session, message, effectiveReasoningLevel, debugCollector);
       if (!routeResult) {
         const providerName = (message.provider as string) || session.settings.provider || '';
         return {
@@ -4630,6 +4671,7 @@ export class ChatOrchestrator {
     session: Session,
     message: Message,
     reasoningLevel?: ReasoningLevel,
+    debugCollector?: DebugCollector,
   ): Promise<{ provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null> {
     if (this._router && session.settings.routingEnabled !== false) {
       const toolCallNames = message.toolCalls?.map((tc) => {
@@ -4642,6 +4684,17 @@ export class ChatOrchestrator {
         userMessage: message.content,
         toolCalls: toolCallNames,
       });
+
+      // AD-084: метрики decision-классификации категории (AD-034). Сигнал
+      // публикуется только когда категорию определила decision-модель
+      // (`strategy='decision'`), а не словарный классификатор.
+      if (debugCollector && decision.strategy === 'decision') {
+        debugCollector.addContext('decision_routing', {
+          category: decision.category,
+          confidence: decision.confidence,
+          signals: decision.signals,
+        });
+      }
 
       const routedWindow = this._resolveModelContextWindow(decision.modelName);
       let provider = this._router.getProvider(
