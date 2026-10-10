@@ -21,7 +21,7 @@ import type {
   DecisionConfigLike,
   DecisionProviderResolver,
 } from '../router/micro/models/decision-model.js';
-import { warning } from '../../logger.js';
+import { info, warning } from '../../logger.js';
 import { eventToMessageText } from './request-session.js';
 import { decisionFromTarget } from './target-decision.js';
 import type { RouteRuleInput, RouteRuleProvider } from './types.js';
@@ -95,21 +95,26 @@ export class DecisionRuleProvider implements RouteRuleProvider {
     try {
       const state = buildEventState(event);
       const question = buildAgentQuestion(candidates);
+      const startedAt = performance.now();
       const response = await provider.decide(
         state,
         { [DECISION_ROUTING_QUESTION_ID]: question },
         { model: modelName },
       );
+      const latencyMs = Math.round(performance.now() - startedAt);
 
       const answer = response.answers[DECISION_ROUTING_QUESTION_ID];
       if (!answer || answer.type !== 'choice') {
-        warning('DECISION', 'decision-маршрутизация: нет choice-ответа');
+        warning('DECISION', `decision-маршрутизация: нет choice-ответа (latency=${latencyMs}ms)`);
         return null;
       }
 
       const template = answer.choice;
       if (!candidates.some((c) => c.id === template)) {
-        warning('DECISION', `decision-маршрутизация: невалидный шаблон "${template}"`);
+        warning(
+          'DECISION',
+          `decision-маршрутизация: невалидный шаблон "${template}" (latency=${latencyMs}ms)`,
+        );
         return null;
       }
 
@@ -117,15 +122,32 @@ export class DecisionRuleProvider implements RouteRuleProvider {
       if (!(confidence >= config.confidenceThreshold)) {
         warning(
           'DECISION',
-          `decision-маршрутизация: низкая уверенность ${confidence.toFixed(2)} < ${config.confidenceThreshold}`,
+          `decision-маршрутизация: низкая уверенность ${confidence.toFixed(2)} < ${config.confidenceThreshold} (latency=${latencyMs}ms)`,
         );
         return null;
       }
 
+      // Наблюдаемость успешного пути (AD-084 × AD-089): агент, уверенность,
+      // порог, модель и latency. Мета (confidence/signals) уезжает в решение —
+      // далее в ответ `POST /events` и в журнал.
+      info(
+        'DECISION',
+        `decision-маршрутизация: агент=${template} confidence=${confidence.toFixed(2)} (порог ${config.confidenceThreshold}) model=${providerName}/${modelName} latency=${latencyMs}ms source=${event.source} type=${event.type}`,
+      );
+
       return decisionFromTarget(
         { mode: 'ephemeral', agentTemplate: template },
         this._getEventsConfig().defaultEphemeralTtl,
-        { reason: 'decision-rules' },
+        {
+          reason: 'decision-rules',
+          confidence,
+          signals: [
+            'decision-rules',
+            `agent:${template}`,
+            `model:${providerName}/${modelName}`,
+            `latency:${latencyMs}ms`,
+          ],
+        },
       );
     } catch (err) {
       // Fail-safe: ошибка decision-слоя не должна ломать маршрутизацию события.

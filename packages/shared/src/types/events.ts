@@ -136,12 +136,30 @@ export interface EventRouteRule {
   target: EventRouteTarget;
 }
 
-/** AD-089: решение Router — куда направить событие (или отложить/отбросить). */
-export type RouteDecision =
+/**
+ * AD-089/AD-084: диагностическая мета решения Router. Необязательные поля,
+ * не ломают дискриминант `kind`; заполняются decision-слоем (`confidence`)
+ * и маршрутизацией (`signals`) — попадают в ответ `POST /events` и в журнал.
+ */
+export interface RouteDecisionMeta {
+  /** Уверенность decision-модели (0..1), если решение принято decision-слоем. */
+  confidence?: number;
+  /**
+   * Диагностические сигналы решения (напр. `decision-rules`, `agent:<id>`,
+   * `model:<p/m>`, `latency:<ms>ms`).
+   */
+  signals?: string[];
+}
+
+/** AD-089: вариант решения Router без меты (дискриминант `kind`). */
+type RouteDecisionKind =
   | { kind: 'bound'; sessionId: string }
   | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string }
   | { kind: 'queue'; owner: string; reason: string }
   | { kind: 'drop'; reason: string; audited: true };
+
+/** AD-089: решение Router — куда направить событие (или отложить/отбросить). */
+export type RouteDecision = RouteDecisionKind & RouteDecisionMeta;
 
 /** AD-089: инициатор запроса на сессию. */
 export type EventInitiator = 'user' | 'agent' | 'external' | 'system';

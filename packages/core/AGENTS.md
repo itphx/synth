@@ -162,8 +162,9 @@
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
   `DecisionRuleProvider` (`decision-rule-provider.ts`, AD-084: decision-шаг после project-правил при
-  `events.decisionRouting`, fail-safe → `null`),
-  `target-decision.ts` (`decisionFromTarget` — единый маппинг цели),
+  `events.decisionRouting`, fail-safe → `null`; на успехе — лог `info('DECISION', …)` с агентом/уверенностью/
+  порогом/моделью/latency, промахи — `warning` с latency; мета `confidence`/`signals` уезжает в решение),
+  `target-decision.ts` (`decisionFromTarget` — единый маппинг цели, приклеивает `confidence`/`signals`),
   `EventDelivery` (`run`/`defer`), `credential.ts` (`EventKeyCredential` — контекст машинной
   аутентификации по API-ключу привязки: `keyId`/`bindingId`/`rateLimitPerMinute`, задел `scopes`/`principalId`),
   `key-rate-limiter.ts` (`KeyRateLimiter` — in-memory fixed-window 60 c per-key, AD-089/AD-052),

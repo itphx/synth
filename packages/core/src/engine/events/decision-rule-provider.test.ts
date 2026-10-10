@@ -130,13 +130,20 @@ describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
     expect(decide).not.toHaveBeenCalled();
   });
 
-  it('уверенный choice шаблона → ephemeral с выбранным agentTemplate', async () => {
+  it('уверенный choice шаблона → ephemeral с выбранным agentTemplate и метой', async () => {
     const { provider } = makeFixture();
-    expect(await provider.resolve({ event: event(), bindings: [] })).toEqual({
+    const decision = await provider.resolve({ event: event(), bindings: [] });
+    expect(decision).toMatchObject({
       kind: 'ephemeral',
       agentTemplate: 'triage',
       ttl: '24h',
+      confidence: 0.9,
     });
+    // Мета решения (AD-084 × AD-089): сигналы агента/модели + latency.
+    expect(decision?.signals).toEqual(
+      expect.arrayContaining(['decision-rules', 'agent:triage', 'model:clef/clef-flash']),
+    );
+    expect(decision?.signals?.some((s) => /^latency:\d+ms$/.test(s))).toBe(true);
   });
 
   it('вопрос — choice по enabled-агентам, state содержит текст события', async () => {
@@ -204,11 +211,14 @@ describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
 
     // Runtime-обновление (onDecisionChange): геттер отдаёт новое значение.
     config = { ...BASE_CONFIG };
-    expect(await provider.resolve({ event: event(), bindings: [] })).toEqual({
+    const decision = await provider.resolve({ event: event(), bindings: [] });
+    expect(decision).toMatchObject({
       kind: 'ephemeral',
       agentTemplate: 'triage',
       ttl: '24h',
+      confidence: 0.9,
     });
+    expect(decision?.signals).toContain('agent:triage');
   });
 });
 
@@ -237,10 +247,52 @@ describe('DecisionRuleProvider в EventRouter (AD-089, порядок и fail-sa
       config: { defaultMode: 'bound', defaultEphemeralTtl: '24h' },
       ruleProviders: [miss, provider],
     });
-    expect(await router.decide(event({ dedupKey: 'k1' }))).toEqual({
+    const decision = await router.decide(event({ dedupKey: 'k1' }));
+    expect(decision).toMatchObject({
       kind: 'ephemeral',
       agentTemplate: 'triage',
       ttl: '24h',
+      confidence: 0.9,
+    });
+    expect(decision.signals).toContain('agent:triage');
+  });
+
+  it('decision-провайдер + record → confidence сохраняется в журнале', async () => {
+    const miss: RouteRuleProvider = { name: 'miss', resolve: () => null };
+    const { provider } = makeFixture();
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultMode: 'bound', defaultEphemeralTtl: '24h' },
+      ruleProviders: [miss, provider],
+    });
+    const evt = event({ dedupKey: 'k-journal' });
+    const decision = await router.decide(evt);
+    await router.record(evt, decision);
+
+    const entries = await journal.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.decision).toMatchObject({
+      kind: 'ephemeral',
+      agentTemplate: 'triage',
+      confidence: 0.9,
+    });
+    expect(entries[0]?.decision?.signals).toContain('agent:triage');
+  });
+
+  it('низкая уверенность decision → null, фоллбек defaultMode', async () => {
+    const miss: RouteRuleProvider = { name: 'miss', resolve: () => null };
+    const { provider } = makeFixture({ decideImpl: async () => choiceResponse('triage', 0.2) });
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultMode: 'bound', defaultEphemeralTtl: '24h' },
+      ruleProviders: [miss, provider],
+    });
+    expect(await router.decide(event({ dedupKey: 'k-low' }))).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
     });
   });
 
