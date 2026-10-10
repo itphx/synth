@@ -1,12 +1,13 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События» — первый срез AD-052; service-key/OpenAPI/SDK/webhooks и AD-086 — нет)
+> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in) — первый срез AD-052; service-key/OpenAPI/SDK/webhooks и AD-086 — нет)
 > **Дата:** 2026-10-08
 > **Обновлено:** 2026-10-10 — статус и разделы приведены к реализованному коду (ядро Event/Binding/Router,
-> правила маршрутизации, API-ключи привязок, retention журнала, runtime-настройки «События»); «Чего нет»
-> переосмыслен как исторический снимок на момент решения.
+> правила маршрутизации, decision-маршрутизация (AD-084), API-ключи привязок, retention журнала,
+> runtime-настройки «События»); «Чего нет» переосмыслен как исторический снимок на момент решения.
 > **Связано:** [AD-030](./ad-030-hooks-agent-events.md) «Hooks для событий агента» (фундамент),
 > [AD-034](./ad-034-model-routing.md) «Routing между моделями», [AD-035](./ad-035-micro-model-first.md) «Micro-model first»,
+> [AD-084](./ad-084-decision-models-clef.md) «Decision-модели» (decision-маршрутизация событий),
 > [AD-036](./ad-036-llm-gateway.md) «LLM Gateway», [AD-051](./ad-051-scheduler-pipelines.md) «Шедулер и пайплайны»,
 > [AD-052](./ad-052-public-api-platform.md) «Публичная API-платформа», [AD-056](./ad-056-synth-mcp-server.md) «MCP-сервер Synth»,
 > [AD-086](./ad-086-extensibility-plugins-editions.md) «Расширяемость и внешние сервисы-надстройки»,
@@ -134,7 +135,9 @@ type RouteDecision =
    есть запись — событие уходит в привязанную сессию без классификации.
 3. **Правила проекта** (источник / канал / отправитель / метка / ключевые слова) → **шаблон агента + режим**.
    Правила конфигурируемы (проект/инстанс), комбинируются; лёгкая проверка — micro-слой
-   ([AD-035](./ad-035-micro-model-first.md)) и `classify_conversation`.
+   ([AD-035](./ad-035-micro-model-first.md)) и `classify_conversation`. При промахе правил и флаге
+   `events.decisionRouting` — decision-шаг `DecisionRuleProvider` ([AD-084](./ad-084-decision-models-clef.md)),
+   fail-safe.
 4. **Политика режима** решает, как материализовать сессию:
    - `bound` — постоянная сессия на диалог (переписка: контекст копится, история не теряется);
    - `ephemeral` — сессия на событие с TTL и авто-архивом (разовые триггеры: webhook, CI, кнопка);
@@ -221,6 +224,11 @@ type RouteDecision =
   `source`/`type`/ключам идентичности/`label`/`keywords`, первый по `priority` выигрывает; `decisionFromTarget`
   (`target-decision.ts`) — единый маппинг цели в решение. Валидация на записи: `bound`/`queue` — сессия
   существует, `ephemeral` — `agentTemplate` резолвится в enabled-агента.
+- **Decision-маршрутизация ([AD-084](./ad-084-decision-models-clef.md)):** `DecisionRuleProvider`
+  (`engine/events/decision-rule-provider.ts`, `name='decision-rules'`) — decision-шаг после
+  `ProjectRuleProvider` при флаге `events.decisionRouting` (default off, opt-in); при ошибке/низкой
+  уверенности/пустом списке агентов возвращает `null` (fail-safe → Router идёт дальше по `defaultMode`).
+  Регистрация — `server/app.ts` (core) и `backend/src/app.ts` (паритет).
 - **Резолвинг `agentTemplate`:** `RequestSessionService.resolveAgentTemplate` через `AgentRegistry`
   (`agent.enabled ? agent.id : null`); неизвестный шаблон — `unknownAgentTemplate` (`drop`/`default-agent`).
 - **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),
@@ -273,8 +281,10 @@ type RouteDecision =
   ([AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
 - Источник AD-086 (add-on + Telegram gateway → `message_received`) — нет;
 - Plugin SDK и загрузка плагинов ([AD-030](./ad-030-hooks-agent-events.md));
-- LLM-классификация правил маршрутизации (micro-слой [AD-034](./ad-034-model-routing.md)/[AD-035](./ad-035-micro-model-first.md),
-  тул `classify_conversation`) — сейчас правила только декларативные (`match`);
+- **LLM-классификация правил маршрутизации — закрыта** decision-шагом `DecisionRuleProvider`
+  ([AD-084](./ad-084-decision-models-clef.md)): включается `events.decisionRouting` (default off),
+  fail-safe; отдельный резерв через micro-слой [AD-034](./ad-034-model-routing.md)/[AD-035](./ad-035-micro-model-first.md)
+  не требуется;
 - стриминг событий наружу (webhooks, [AD-052](./ad-052-public-api-platform.md));
 - пайплайны (цепочки, AD-059).
 

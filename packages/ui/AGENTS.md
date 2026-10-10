@@ -154,6 +154,12 @@
 - **Журнал дублируется в «Логи и аудит».** `EventJournalPanel` используется и в разделе «События» (кнопка «Открыть в „Логи и аудит"» → `useUIStore.setLogsPage('events')` + `setLogsDialogOpen(true)`), и как категория `events` в `components/logviewer/LogsModal.tsx` (гейт модала ADMIN/AUDITOR сохраняется). В записях отображаются опциональные `keyId`/`principalId`.
 
 
+## Decision-модели (AD-084)
+
+- **Админ-раздел «Decision-модели»** (`components/settings/DecisionSettings.tsx`; категория `decisionConfig`, `labelKey: settings.category.decision`, `roles: ['ADMIN']` — за границей админ-блока): runtime-настройки decision-слоя через `synthApi.getDecisionSettings/updateDecisionSettings/resetDecisionSettings` (`GET/PUT/DELETE /api/v2/settings/decision`, мутации — ADMIN). Поля — `SettingsPanel`/`SettingsSection` + `ToggleField`/`SelectField`/`TextField`/`NumberField`: мастер `enabled`, `mode` (`auto`/`local`/`remote`), `provider`, `model`, `escalationModel`, `timeoutMs`, `confidenceThreshold`, `remoteEndpoint`. Черновик — `useSettingsDraft`, действия — `SettingsActions` (Save/Cancel активны только при `dirty`; Reset серый/неактивен при `isDefault`). Типы `DecisionSettings`/`DecisionSettingsResponse` — локально в `synthApi.ts`.
+- **Per-session `decisionFirst`** (`components/panels/SessionSettingsTab.tsx`) — тумблер уровня decision-модели в микро-каскаде, рядом с микро/роутингом; пишется только при явном opt-out (`decisionFirst: false`), отсутствие ключа = включено (наследует глобальную настройку).
+- **События.** Тумблер `decisionRouting` — в админ-разделе «Параметры событий» (`components/settings/EventsSettings.tsx`, AD-089 × AD-084; default off, opt-in: decision-классификация внешних событий при промахе правил, требует включённого decision-слоя).
+
 ## Мобильный / PWA
 
 - Полные конвенции (зоны ≤768 / 769–1199 / ≥1200, дроверы, touch-first, PWA-шелл) — в корневом `AGENTS.md` и [AD-044](../../docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md); здесь не дублируются.

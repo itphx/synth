@@ -107,8 +107,9 @@
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, AD-075) и детект бинарных файлов (`isTextFile`).
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use).
-- `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit.
-- `engine/router/*` — routing моделей и micro-model слой (AD-034/035).
+- `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit; `decide()` — не-chat
+  decision-вызов (AD-084: guard/обфускация `state`, тот же `_prepare`/аудит, что у chat-путей).
+- `engine/router/*` — routing моделей и micro-model слой (AD-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, AD-084) и `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`).
 - `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, AD-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, AD-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (AD-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
@@ -160,6 +161,8 @@
   `updateConfig` — live TTL/политика),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
+  `DecisionRuleProvider` (`decision-rule-provider.ts`, AD-084: decision-шаг после project-правил при
+  `events.decisionRouting`, fail-safe → `null`),
   `target-decision.ts` (`decisionFromTarget` — единый маппинг цели),
   `EventDelivery` (`run`/`defer`), `credential.ts` (`EventKeyCredential` — контекст машинной
   аутентификации по API-ключу привязки: `keyId`/`bindingId`/`rateLimitPerMinute`, задел `scopes`/`principalId`),
@@ -184,7 +187,8 @@
   (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`),
   `FileMutex` (`file-mutex.ts`, AD-051/AD-089: `mkdir`-лок + stale takeover для общего
   `dataDir`; `ScheduleStore.crossProcess` сериализует мутации), `RuntimeSettingsStore`
-  (`events` + `mergeEventsConfig` — runtime-настройки раздела «События», AD-089),
+  (`events` + `mergeEventsConfig` — runtime-настройки раздела «События», AD-089; `decision` +
+  `mergeDecisionConfig` — runtime-настройки decision-слоя, AD-084),
   `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`
@@ -202,7 +206,7 @@
   `Session.expiresAt`/`archivedAt`, списки сессий по умолчанию без архива.
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`.
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
-- `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote.
+- `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote, `DecisionProvider` (AD-084: тип `decision`, транспорт по полю `decisionApi` — `/decisions` RouterAI или `/v1/systemone` Ollama).
 - `profiles.ts` — реестр серверных профилей гибрида.
 - `prompts/` (system, roles, subagents, security), `definitions/`
   (`protected-paths.json`, `shell-policy.json`), `dictionaries/` — ассеты движка.
@@ -229,9 +233,11 @@
   `createModelRoutes`, `createSessionRoutes`, `createGitRoutes`,
   `createSshKeyRoutes`, `createAgentSshKeyRoutes`, `createFsRoutes` (project-aware
   FS: плоский root / workspace проекта через `getProjectWorkspace`, AD-075).
-  `createSettingsRoutes` (AD-089): `GET/PUT/DELETE /settings/events` — runtime-настройки
+  `createSettingsRoutes` (AD-089/AD-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
-  мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN).
+  мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и
+  `GET/PUT/DELETE /settings/decision` — runtime-настройки decision-слоя (AD-084: `fallbackDecision`,
+  `onDecisionChange`, мутации под `decisionWriteGuard`).
 
 ## MCP
 

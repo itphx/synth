@@ -1,7 +1,13 @@
 # AD-084: Decision-модели (Clef/Clef-Flash) в маршрутизации и быстрых ответах
 
-> **Статус:** ⏳ Не реализовано (предложение)
+> **Статус:** ⚠️ Частично реализовано — адаптер/конфиг, Clef-Flash в micro, decision-классификатор
+> маршрутизации, decision-роутинг событий (AD-089) и UI-настройки; «Clef на эскалации» и
+> мультимодальность — задел.
 > **Дата:** 2026-10-04
+> **Обновлено:** 2026-10-10 — приведено к реализованному коду (Ф1–Ф5): `DecisionProvider`,
+> `GatewayProvider.decide`, `DecisionModel` (micro), `DecisionContentClassifier` (router),
+> `DecisionRuleProvider` (events), конфиг `decision` + `events.decisionRouting`, runtime-API
+> `/settings/decision`, UI «Decision-модели».
 > **Источник:** исследование 2026-10-04 — Cloudflare выпустил decision-модели Clef/Clef-Flash (2026-10-01);
 > рассмотрены в контексте [AD-034](./ad-034-model-routing.md) и [AD-035](./ad-035-micro-model-first.md).
 > **Связано:** [AD-034](./ad-034-model-routing.md), [AD-035](./ad-035-micro-model-first.md),
@@ -160,22 +166,65 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 
 ## Этапы реализации
 
-1. **Адаптер + конфиг + провайдеры.** `DecisionProvider`, секция конфига в `shared`, режим локальный/remote,
-   подключение через `GatewayProvider`.
-2. **Clef-Flash в micro за флагом.** Новый `MicroModel` для задач `classify` / `enum_decision`, включается
-   отдельным флагом; сравнение качества/латентности с текущим `micro_llm` (без снятия старого пути).
-3. **Clef на эскалацию.** Подключение точной модели на `UNSURE`/сложные решения и на мультимодальные запросы.
-4. **Decision-классификатор маршрутизации.** Замена/дополнение словарного `content`-классификатора AD-034.
-5. **UI-настройки и метрики.** Панель настроек (по [AD-072](./ad-072-settings-ui-kit.md)), метрики в статистике.
-6. **Документация.** Обновить `docs/ROUTING.md` — **позже, при реализации** (сейчас не трогать).
+1. ✅ **Адаптер + конфиг + провайдеры.** `DecisionProvider` (транспорты `/decisions` RouterAI и
+   `/v1/systemone` Ollama), секция `decision` в `shared`, режим `auto|local|remote`, подключение
+   через `GatewayProvider.decide`.
+2. ✅ **Clef-Flash в micro за флагом.** Новый `DecisionModel` (`MicroModelKind: 'decision'`) для задач
+   `classify` / `enum_decision`; включается per-session флагом `decisionFirst` (AD-035), старый
+   `micro_llm`-путь сохранён — сравнение качества/латентности на своих данных.
+3. ⏳ **Clef на эскалацию** (точная модель на `UNSURE`/сложные решения) и **мультимодальность** —
+   **задел**: контракт типов (`score`, `images`/`videos`) и поле `escalationModel` в конфиге есть,
+   рантайм-веток эскалации и мультимодальных `state` нет.
+4. ✅ **Decision-классификатор маршрутизации.** `DecisionContentClassifier` (AD-034) — опциональный
+   decision-вопрос `choice` `{coding|research|chat}` при низкой уверенности словарного
+   `content`-классификатора; приоритет `routingCategory` не меняется.
+5. ✅ **Интеграция в события (AD-089).** `DecisionRuleProvider` (`name='decision-rules'`) —
+   decision-шаг после `ProjectRuleProvider` при флаге `events.decisionRouting` (default off),
+   fail-safe (ошибка/низкая уверенность → Router идёт дальше).
+6. ✅ **UI-настройки и метрики.** Админ-секция «Decision-модели» (Settings UI Kit, AD-072),
+   per-session флаг `decisionFirst`, events-тумблер `decisionRouting`; метрики — через
+   `DebugCollector.addContext('decision', …)`/`metadata` (агрегатный store — при необходимости отдельно).
+7. **Документация.** Обновить `docs/ROUTING.md` — **позже, при реализации** (сейчас не трогать).
+
+## Статус реализации в коде
+
+⚠️ **Частично реализовано (Ф1–Ф5).**
+
+- **Адаптер и транспорт:** `packages/core/src/providers/decision.ts` (`DecisionProvider`, тип `decision`,
+  транспорт — поле конфига провайдера `decisionApi`: `decisions` → `POST {base}/decisions` (RouterAI),
+  `systemone` → `POST {base}/v1/systemone` (Ollama)); регистрация `ProviderFactory.register('decision', …)`
+  (`providers/index.ts`), таймаут/`AbortController`, ошибки → `ProviderError`/`RateLimitError`/
+  `ContextLengthExceededError`.
+- **Gateway:** `GatewayProvider.decide(state, questions, opts?)`
+  (`packages/core/src/engine/gateway/gateway-provider.ts`) — guard/обфускация `state`, rate limit, аудит;
+  при блокировке/лимите бросает `ProviderError`/`RateLimitError`, вызывающий слой делает fail-safe откат.
+- **Микро-слой (AD-035):** `packages/core/src/engine/router/micro/models/decision-model.ts`
+  (`DecisionModel`, `kind='decision'`) — в каскаде после embedding, за per-session флагом
+  `decisionFirst`; старый `micro_llm`-путь сохранён.
+- **Router (AD-034):** `packages/core/src/engine/router/decision-content-classifier.ts`
+  (`DecisionContentClassifier`) — опциональный decision-вопрос категории при низкой уверенности.
+- **События (AD-089):** `packages/core/src/engine/events/decision-rule-provider.ts`
+  (`DecisionRuleProvider`, `name='decision-rules'`); регистрация в `server/app.ts` (core) и
+  `backend/src/app.ts` после `ProjectRuleProvider`, fail-safe (`null` → Router идёт дальше).
+- **Конфиг:** `@itphx/synth-shared/config` — секция `decision` (`enabled`/`mode`/`provider`/`model`/
+  `escalationModel`/`timeoutMs`/`confidenceThreshold`/`remoteEndpoint`) + поле `events.decisionRouting`;
+  env-резолверы `SYNTH_DECISION_MODE`/`SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`; типы
+  `DecisionQuestion`/`DecisionAnswer`/`DecisionRequest`/`DecisionResponse` (`types/decision.ts`).
+- **Runtime-API:** `GET/PUT/DELETE /api/v2/settings/decision` (`server/routes/settings.ts`, `decisionWriteGuard`),
+  live-применение — `onDecisionChange`; runtime-стор — `DecisionRuntimeSettings` + `mergeDecisionConfig`
+  (`storage/runtime-settings.ts`).
+- **UI:** `packages/ui/src/components/settings/DecisionSettings.tsx` — админ-секция «Decision-модели»
+  (Settings UI Kit, AD-072); per-session `decisionFirst` (`SessionSettingsTab`), тумблер
+  `decisionRouting` в настройках событий (`EventsSettings`).
 
 ## Риски и открытые вопросы
 
-- **Локальный инференс требует кастомного рантайма:** веса рассчитаны на `joint_schema_model.py` (joint schema
-  head), стандартный `transformers`-инференс «из коробки» не подходит; доступны community-кванты (GGUF/MLX/FP8/NVFP4),
-  но их пригодность для типизированного скоринга нужно проверить.
-- **Нужен SystemOne-API-совместимый локальный сервер** — уточнить, каким рантаймом он поднимается и насколько
-  полно воспроизводит семантику API Clef.
+- **Локальный инференс:** транспорт `systemone` (Ollama, `POST /v1/systemone`) реализован, но требует
+  Ollama **≥ 0.35.1** (в dev — 0.32.14) и `ollama pull clef-flash` (~11 ГБ). Обновление рантайма —
+  отдельная задача `@admin` с бэкпом/тестом/откатом (риск: перезапуск Ollama).
+- **Политика `mode: auto`** требует сигнала «managed»; сейчас `auto` = `remote` при заданном
+  decision-провайдере, иначе `local`; явные `local`/`remote` — override. Полноценная типизация политики
+  (локально/remote, запрет утечек) — **задел** под [AD-080](./ad-080-managed-hybrid-modes.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md).
 - **Трафик в Cloudflare (remote)** при managed/чувствительных данных — политики локально/remote (см. выше).
 - **Калибровка вероятностей и порогов** — заявленные вероятности требуют проверки; порог `OK`/`UNSURE` (сейчас
   фиксированный, AD-035) может потребовать настройки.
