@@ -56,6 +56,7 @@ const DEFAULTS: EventsSettingsData = {
   allowedSources: ['telegram'],
   unknownAgentTemplate: 'drop',
   keyRateLimitPerMinute: 0,
+  decisionRouting: false,
 }
 
 const OVERRIDDEN: EventsSettingsData = {
@@ -66,6 +67,7 @@ const OVERRIDDEN: EventsSettingsData = {
   allowedSources: ['telegram', 'ci'],
   unknownAgentTemplate: 'default-agent',
   keyRateLimitPerMinute: 60,
+  decisionRouting: false,
 }
 
 function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
@@ -207,6 +209,28 @@ describe('EventsSettings — админ-раздел «Параметры соб
     expect(mocks.updateEventsSettings).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }))
   })
 
+  it('тумблер decisionRouting (AD-084) становится частью черновика и сохраняется', async () => {
+    const container = await renderSettings()
+
+    const decisionToggle = container.querySelector(
+      `[role="switch"][aria-label="${enDict['eventsConfig.decisionRouting']}"]`,
+    ) as HTMLButtonElement
+    expect(decisionToggle).not.toBeNull()
+    expect(decisionToggle.getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      decisionToggle.click()
+    })
+    expect(decisionToggle.getAttribute('aria-checked')).toBe('true')
+
+    await clickTestId(container, 'events-config-save')
+    await act(async () => {})
+
+    expect(mocks.updateEventsSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ decisionRouting: true }),
+    )
+  })
+
   it('Cancel откатывает черновик к сохранённым значениям', async () => {
     const container = await renderSettings()
 
@@ -289,5 +313,7 @@ describe('EventsSettings — права доступа (ADMIN) и i18n (AD-089)'
     expect(ruDict['eventsConfig.title']).toBeTruthy()
     expect(enDict['eventsConfig.keyRateLimitPerMinute']).toBeTruthy()
     expect(ruDict['eventsConfig.keyRateLimitPerMinute']).toBeTruthy()
+    expect(enDict['eventsConfig.decisionRouting']).toBeTruthy()
+    expect(ruDict['eventsConfig.decisionRouting']).toBeTruthy()
   })
 })

@@ -1883,6 +1883,25 @@ export const synthApi = {
     return fetchJSON<EventsSettingsResponse>(`${BASE_URL}/settings/events`, { method: 'DELETE' })
   },
 
+  // --- Decision-модели (AD-084): runtime-настройки decision-слоя ---
+  /** GET /settings/decision — эффективные настройки decision-слоя + дефолты + флаг override. */
+  async getDecisionSettings(): Promise<DecisionSettingsResponse> {
+    return fetchJSON<DecisionSettingsResponse>(`${BASE_URL}/settings/decision`)
+  },
+
+  /** PUT /settings/decision — сохранить runtime-настройки decision-слоя (live-применение). */
+  async updateDecisionSettings(decision: DecisionSettings): Promise<{ decision: DecisionSettings }> {
+    return fetchJSON<{ decision: DecisionSettings }>(`${BASE_URL}/settings/decision`, {
+      method: 'PUT',
+      body: JSON.stringify({ decision }),
+    })
+  },
+
+  /** DELETE /settings/decision — сброс runtime-настроек к config.yaml-дефолту. */
+  async resetDecisionSettings(): Promise<DecisionSettingsResponse> {
+    return fetchJSON<DecisionSettingsResponse>(`${BASE_URL}/settings/decision`, { method: 'DELETE' })
+  },
+
   /** Последние записи журнала обработки внешних событий (default 50, cap 500 на сервере). */
   async getEventJournal(limit?: number): Promise<{ entries: EventJournalEntry[] }> {
     const qs = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : ''
@@ -1998,12 +2017,45 @@ export interface EventsSettings {
   unknownAgentTemplate: 'drop' | 'default-agent'
   /** Глобальный дефолт лимита запросов/мин на API-ключ; `0` — без лимита. */
   keyRateLimitPerMinute: number
+  /** AD-084: decision-маршрутизация внешних событий (default `false`, opt-in). */
+  decisionRouting: boolean
 }
 
 /** AD-089: ответ `GET/DELETE /settings/events` — эффективные значения, дефолты и флаг override. */
 export interface EventsSettingsResponse {
   events: EventsSettings
   defaults: EventsSettings
+  isOverridden: boolean
+}
+
+/**
+ * AD-084: runtime-настройки decision-слоя (`GET/PUT/DELETE /settings/decision`).
+ * Тип объявлен локально: бизнес-тип в shared есть, но тянуть core/shared-конфиг
+ * в браузерный бандл нельзя (см. `packages/ui/AGENTS.md`).
+ */
+export interface DecisionSettings {
+  /** Мастер-выключатель decision-слоя. */
+  enabled: boolean
+  /** Транспорт: `auto` (по политике) | `local` (Ollama) | `remote` (RouterAI/managed). */
+  mode: 'auto' | 'local' | 'remote'
+  /** Имя провайдера типа `decision` (пусто — провайдер не задан). */
+  provider: string
+  /** Модель decision-слоя (напр. `clef-flash`). */
+  model: string
+  /** Модель для эскалации (опционально, пусто — не задана). */
+  escalationModel: string
+  /** Таймаут decision-запроса, мс. */
+  timeoutMs: number
+  /** Порог уверенности 0..1: ниже — fallback (fail-safe). */
+  confidenceThreshold: number
+  /** Явный endpoint remote-транспорта (пусто — URL провайдера). */
+  remoteEndpoint: string
+}
+
+/** AD-084: ответ `GET/DELETE /settings/decision` — эффективные значения, дефолты и флаг override. */
+export interface DecisionSettingsResponse {
+  decision: DecisionSettings
+  defaults: DecisionSettings
   isOverridden: boolean
 }
 

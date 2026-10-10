@@ -20,6 +20,7 @@ import { SkillsAdminSettings } from "./SkillsAdminSettings"
 import { CommandsSettings } from "./CommandsSettings"
 import { EventsAdminSettings } from "./EventsAdminSettings"
 import { EventsSettings } from "./EventsSettings"
+import { DecisionSettings } from "./DecisionSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
 import { ProjectsPanel } from "../admin/ProjectsPanel"
@@ -54,6 +55,7 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "skillsAdmin", labelKey: "settings.category.skillsAdmin", icon: "book-open", roles: ["ADMIN"] },
   { id: "commands", labelKey: "settings.category.commands", icon: "terminal-box", roles: ["ADMIN"] },
   { id: "eventsConfig", labelKey: "settings.category.eventsConfig", icon: "settings-3", roles: ["ADMIN"] },
+  { id: "decisionConfig", labelKey: "settings.category.decision", icon: "brain", roles: ["ADMIN"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
   { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
   { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
@@ -199,6 +201,7 @@ export const SettingsModal = () => {
             {activePage === "commands" && <CommandsSettings />}
             {activePage === "eventsAdmin" && <EventsAdminSettings />}
             {activePage === "eventsConfig" && <EventsSettings />}
+            {activePage === "decisionConfig" && <DecisionSettings />}
             {activePage === "security" && <SecuritySettings />}
             {activePage === "dashboard" && <DashboardPanel />}
             {activePage === "sessions" && <SessionsPanel />}

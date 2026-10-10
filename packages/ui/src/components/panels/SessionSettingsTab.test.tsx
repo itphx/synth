@@ -736,6 +736,68 @@ describe('SessionSettingsTab — автосохранение настроек',
   })
 })
 
+describe('SessionSettingsTab — decision-уровень сессии (AD-084)', () => {
+  beforeEach(() => {
+    useSessionsStore.setState({
+      sessions: [
+        {
+          id: 's1',
+          name: 'S',
+          project_id: null,
+          engine: 'synth',
+          settings: { model: 'm', microFirst: true, decisionFirst: true },
+        },
+      ],
+    } as never)
+  })
+
+  it('показывает тумблер decision-уровня в секции «Quick answers»', async () => {
+    const container = await renderTab()
+
+    const toggle = container.querySelector(
+      '[data-testid="session-decision-first"] button[role="switch"]',
+    ) as HTMLButtonElement
+    expect(toggle).not.toBeNull()
+    // decisionFirst=true из сессии → тумблер включён.
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('выключение decisionFirst сохраняется как opt-out (false)', async () => {
+    const container = await renderTab()
+
+    const toggle = container.querySelector(
+      '[data-testid="session-decision-first"] button[role="switch"]',
+    ) as HTMLButtonElement
+    await act(async () => {
+      toggle.click()
+    })
+    await act(async () => {})
+
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(mocks.updateSession).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        settings: expect.objectContaining({ decisionFirst: false, microFirst: true }),
+      }),
+    )
+  })
+
+  it('активный decisionFirst не пишется в settings (наследование глобального)', async () => {
+    const container = await renderTab()
+
+    // Меняем другой тумблер (не decisionFirst) — decisionFirst остаётся активным.
+    const microToggle = findSection(container, 'Quick answers')!
+      .querySelector('button[role="switch"]') as HTMLButtonElement
+    await act(async () => {
+      microToggle.click()
+    })
+    await act(async () => {})
+
+    const call = mocks.updateSession.mock.calls[0] as [string, { settings: Record<string, unknown> }]
+    expect(call[1].settings).not.toHaveProperty('decisionFirst')
+  })
+})
+
 describe('SessionSettingsTab — клик по имени/иконке открывает центральный диалог', () => {
   it('триггер встроен в строку «Имя» секции «Сессия», отдельной секции пикера нет', async () => {
     const container = await renderTab()

@@ -52,6 +52,7 @@ interface SessionFormValues {
   embeddingEnabled: boolean
   embedProvider: string
   embedModel: string
+  decisionFirst: boolean
   askTimeoutEnabled: boolean
   askTimeoutSec: string
 }
@@ -82,6 +83,7 @@ const IMMEDIATE_FORM_KEYS: ReadonlySet<keyof SessionFormValues> = new Set([
   'embeddingEnabled',
   'embedProvider',
   'embedModel',
+  'decisionFirst',
   'askTimeoutEnabled',
 ])
 
@@ -145,6 +147,9 @@ function formValuesFromSettings(
     embeddingEnabled: (s.embeddingEnabled as boolean | undefined) ?? false,
     embedProvider: (s.embedProvider as string | undefined) ?? '',
     embedModel: (s.embedModel as string | undefined) ?? '',
+    // AD-084: opt-out — `false` принудительно отключает decision-уровень сессии;
+    // отсутствие значения наследует глобальный `decision.enabled`.
+    decisionFirst: (s.decisionFirst as boolean | undefined) ?? true,
     askTimeoutEnabled: permCfg?.askTimeoutMs !== 0,
     askTimeoutSec: String(Math.round(effMs / 1000)),
   }
@@ -192,6 +197,10 @@ function buildSettingsBody(
   // чтобы пустой объект не «просачивался» через `...session.settings`.
   const restSettings = { ...session.settings }
   delete restSettings.permission
+  // AD-084: `decisionFirst` пишем только при явном opt-out; отсутствие ключа
+  // наследует глобальный `decision.enabled` (иначе любой автосейв отключал бы
+  // decision-уровень для всех сессий).
+  delete restSettings.decisionFirst
 
   return {
     ...restSettings,
@@ -228,6 +237,8 @@ function buildSettingsBody(
     embeddingEnabled: values.embeddingEnabled,
     embedProvider: values.embedProvider,
     embedModel: values.embedModel,
+    // AD-084: opt-out decision-уровня — `false` только при явном выключении.
+    ...(values.decisionFirst ? {} : { decisionFirst: false }),
     // AD-071 §2.3: '' → undefined (сессия следует глобальной политике).
     toolsPolicy: values.toolsPolicy || undefined,
     mcpPolicy: values.mcpPolicy || undefined,
@@ -300,6 +311,8 @@ export function SessionSettingsTab() {
   const [embeddingEnabled, setEmbeddingEnabled] = useState(false)
   const [embedProvider, setEmbedProvider] = useState('')
   const [embedModel, setEmbedModel] = useState('')
+  // AD-084: decision-уровень в микро-каскаде (opt-out; true по умолчанию — по глобальной настройке)
+  const [decisionFirst, setDecisionFirst] = useState(true)
   // Таймаут подтверждения (сек)
   const [askTimeoutSec, setAskTimeoutSec] = useState<string>('')
   // Вкл/Выкл таймаута подтверждения (0 = выключен → запросы ждут ответа бесконечно)
@@ -447,6 +460,7 @@ export function SessionSettingsTab() {
     embeddingEnabled,
     embedProvider,
     embedModel,
+    decisionFirst,
     askTimeoutEnabled,
     askTimeoutSec,
   }), [
@@ -457,7 +471,7 @@ export function SessionSettingsTab() {
     routingEscalationEnabled, routingEscalationFallbackProvider, routingEscalationFallbackModel,
     routingEscalationMinLength, routingCostEnabled, routingCostCheapProvider, routingCostCheapModel,
     routingCostMaxTokens, routingSubagentEnabled, routingSubagentModel, routingSubagentProvider,
-    microFirst, microConfidenceThreshold, embeddingEnabled, embedProvider, embedModel,
+    microFirst, microConfidenceThreshold, embeddingEnabled, embedProvider, embedModel, decisionFirst,
     askTimeoutEnabled, askTimeoutSec,
   ])
 
@@ -512,6 +526,7 @@ export function SessionSettingsTab() {
     setEmbeddingEnabled(values.embeddingEnabled)
     setEmbedProvider(values.embedProvider)
     setEmbedModel(values.embedModel)
+    setDecisionFirst(values.decisionFirst)
     setAskTimeoutEnabled(values.askTimeoutEnabled)
     setAskTimeoutSec(values.askTimeoutSec)
   }, [])
@@ -895,6 +910,28 @@ export function SessionSettingsTab() {
                 />
               </div>
             )}
+          </Section>
+        )}
+
+        {/* Decision-уровень (AD-084) */}
+        {microFirst && (
+          <Section title={t('sessionSettings.micro.decision')}>
+            <div className="text-[0.625rem] text-muted-foreground/60">
+              {t('sessionSettings.micro.decisionHint')}
+            </div>
+            <label
+              data-testid="session-decision-first"
+              className="flex items-center gap-3 cursor-pointer"
+            >
+              <Toggle
+                enabled={decisionFirst}
+                onToggle={() => setDecisionFirst(!decisionFirst)}
+                pending={isFieldPending('decisionFirst')}
+              />
+              <span className="text-xs text-foreground">
+                {decisionFirst ? t('common.enabled') : t('common.disabled')}
+              </span>
+            </label>
           </Section>
         )}
 

@@ -220,6 +220,14 @@ export function EventsSettings() {
               data-testid="events-config-key-rate"
             />
 
+            <ToggleField
+              label={t('eventsConfig.decisionRouting')}
+              tooltip={t('eventsConfig.decisionRoutingTooltip')}
+              enabled={draftMode.decisionRouting}
+              onToggle={() => draft.update({ decisionRouting: !draftMode.decisionRouting })}
+              ariaLabel={t('eventsConfig.decisionRouting')}
+            />
+
             <SettingsActions
               onSave={() => void handleSave()}
               onCancel={() => draft.revert()}
