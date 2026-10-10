@@ -2181,3 +2181,51 @@
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** нет (ожидает явной просьбы пользователя).
 
+## 2026-10-10 (продолжение) — Аудит и чистка AD вокруг AD-089 (контент + индексы)
+- **Задача:** «Проанализируй AD — консистентно ли, нет ли противоречий/мусора; прибрать/почистить/актуализировать; затем решить куда дальше». Согласованный объём: пункты 1–9 (безопасная актуализация под код) + сжатие AD-089. Решения по «куда дальше» — вынести таблицей, ответ отложен.
+- **Тип:** docs (аудит + чистка AD/индексов)
+- **Исполнитель:** @orchestrator (аудит, план, верификация) → @researcher ×2 (аудит контента AD-089-семейства; аудит индексных поверхностей) → @fixer ×1 (правки)
+- **Результат:** PASS
+- **Что выяснено (аудит):** индекс AD полон и без битых ссылок (74 файла, 1402 ссылки, 0 битых; 0 фантомов/дублей/конфликтов номеров); реализация AD-089 подтверждена кодом (фантомов нет); AD-089/AD-052 согласованно описывают binding-key (первый срез) vs service-key (остаток). Проблемы — застарелые нарративные разделы и категоризация README.
+- **Что сделано (5 файлов, +48/−58):**
+  - **AD-089:** «Чего нет» → «Чего не было на момент решения» (исторический снимок, пометка на 2026-10-08); «Router реализуется поверх hook-шины» → «ядровый слой; hook-шина — точка расширения» (и в «Связях»); 4 закрытых «Открытых вопроса» убраны (хранение, ephemeral TTL, Router-плагин, cron-источник) + строка-отсылка к статусу; `RouteDecision.ephemeral` получил `project?`; «Порядок маршрутизации» дополнен шагами `allowedSources`/`dedup`; снято «(гибрид)» у дефолта; добавлено «Обновлено»; binding-key сведён к одному каноническому описанию (дубль убран из «Безопасность»/«Статус»/«Остаток»); удалена дублирующая секция «Переиспользуемые кирпичи»; service-key унифицирован как «остаток AD-052».
+  - **AD-086:** исправлены утверждения «hook-кода нет» → «хуки/hook-шина реализованы (AD-030); Plugin SDK/загрузка (`SynthPlugin`) — нет» (2 места).
+  - **AD-051:** снята пометка «открытый вопрос» у персистентности; убраны 3 закрытых вопроса (библиотека, catch-up, персистентность), оставлен гибрид-размещение.
+  - **README AD:** AD-046 → «Частично реализованные» (описание синхронизировано с Фазой 3), AD-069 и AD-079 → «Актуальные»; секции упорядочены по номеру.
+  - **Корневой AGENTS.md:** добавлен отсутствовавший `PUT /api/v2/schedules/:id` (таблица Runtime-настроек и API-бюллетень).
+- **Проверки (оркестратор):** битые относительные ссылки — 0 (во всех 5 изменённых файлах); дубли строк AD в README — 0; соответствие файлов↔каталога — полное (AD-027 корректно в deprecated/`legacy`); AD-046 в «Частично», AD-069/079 в «Актуальные»; `PUT /api/v2/schedules/:id` — 2 вхождения. Код не менялся → typecheck/lint/test не требуются.
+- **Осознанно отложено:** `docs/arch_decisions/README.md` ↔ корневой `AGENTS.md` — полное дублирование 74-строчной таблицы AD (структурный техдолг; требует решения пользователя); в AD-052 буквальная формулировка «остаток AD-052» не проставлялась (семантика уже совпадает — раздел «Осталось»).
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** нет (ожидает явной просьбы пользователя).
+
+## 2026-10-10 (продолжение) — AD-084/AD-089: decision-модели — исследование, план и Фаза 1 (DecisionProvider)
+- **Задача:** «Проработать срез A». После исследования новой волны decision-моделей (System One: Jev/Decision-1/Clef·Clef-Flash/CLM) решения пользователя: объём — **полный AD-084 (Ф1–Ф5)**; транспорт — **оба, дефолт по политике** (managed → локально, standalone → RouterAI); decision-вызовы — **всегда через `GatewayProvider`**. Старт — с Ф1.
+- **Тип:** research + design + feature (shared/core/gateway/ui/docs)
+- **Исполнитель:** @orchestrator (исследование/план/верификация) → @explore ×2 (карта кода) → @fixer (Ф1)
+- **Результат:** PASS (Ф1)
+- **Артефакты плана (вне git, корень `/mnt/data/Agent/dev/Synth/`):** `AD-089-NEXT-STEPS.md` (таблица срезов + исследование decision-моделей), `AD-084-DECISION-MODELS-PLAN.md` (план Ф1–Ф5).
+- **Исследование (кратко):** RouterAI — категория «Решения» (16 моделей) + эндпоинт `POST /api/v1/decisions` (SystemOne-совместим, TypeSafe SDK, выход бесплатный; `clef-flash` 4,19₽/1M, `microsoft-decision-1` 4,64₽, `jev-1.13` 4,64₽ и др.). Ollama — capability Decision (`clef-flash`/`clef`/`tev1`/`nimble`/`laya`), эндпоинт `POST /v1/systemone`; локально требуется Ollama **≥0.35.1** (сейчас 0.32.14) + pull ~11 ГБ. Связано с AD-084.
+- **Фаза 1 (сделано):**
+  - **shared:** `types/decision.ts` (типы+Zod: `DecisionQuestion`/`DecisionAnswer`/`DecisionRequest`/`DecisionResponse`); `config/types.ts` — секция `decision` (`enabled`/`mode` auto|local|remote/`provider`/`model`/`escalationModel`/`timeoutMs`/`confidenceThreshold`/`remoteEndpoint`); `defaults.ts`; env-резолверы `SYNTH_DECISION_*` (`resolve.ts`); `ProviderConfig.decisionApi?: 'decisions'|'systemone'`; тесты.
+  - **core:** `providers/decision.ts` — `DecisionProvider extends BaseProvider` с `decide(state,questions,opts)`; транспорт `systemone`→`/v1/systemone`, иначе `/decisions`; маппинг ошибок (`RateLimitError`/`ContextLengthExceededError`/`ProviderError`); `chat/chatAsync` → отказ; регистрация `ProviderFactory.register('decision', …)`; `decisionApi` в core-конфиге/env-sync/роутах; help CLI.
+  - **gateway:** `GatewayProvider.decide()` (rate limit + guard/обфускация `state` + аудит/payload-лог); `ProviderPool.getDecisionProvider()` — **всегда** оборачивает в gateway (fallback-конфиг при `gateway.enabled=false`); оркестратор прокидывает фабрику.
+  - **ui/docs:** опция типа `decision` в `ProvidersPanel`; `docs/LLM_PROVIDERS.md`, `docs/CONFIGURATION.md`.
+- **Верификация (оркестратор):** build shared/core OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; целевые тесты (decision/gateway decide/provider-pool) **37/37**; shared `decision`+`defaults` **205** PASS. Флейк `app.remote.test.ts` (WS-таймаут 5 c) — изолированно **PASS×2**, файл не менялся → pre-existing, не связан. JSON-провайдеры вручную не создавались (через API/UI).
+- **Открытые моменты:** для decision-пути `sessionId`/`userId` в обвязке пула пустые (аудит без привязки к сессии — придёт в Ф2/Ф3); `_retryAfterSeconds` не реализован; политика `mode:auto` (сигнал «managed») — задел под AD-080/081.
+- **Осталось:** Ф2 (`DecisionModel` в микро-каскаде), Ф3 (decision-классификатор роутера), Ф4 (decision-шаг в событиях AD-089 — срез A), Ф5 (runtime/UI/метрики/docs). Локальный Ollama — апгрейд ≥0.35.1 (отдельная задача @admin).
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** `16e4324` (чистка AD), `5e37351` (decision-слой Ф1).
+
+## 2026-10-10 (продолжение 3) — AD-084 Ф2–Ф3: DecisionModel в микро-каскаде и классификатор роутинга
+- **Задача:** продолжить полный AD-084 (Ф2→Ф5) по плану `AD-084-DECISION-MODELS-PLAN.md`. Разрешение коммитить — по мере готовности.
+- **Тип:** feature (core/shared/backend)
+- **Исполнитель:** @orchestrator (верификация/коммиты) → @fixer ×2 (Ф2, Ф3)
+- **Результат:** PASS
+- **Ф2 (`DecisionModel` в микро-каскаде AD-035):** `micro/models/decision-model.ts` (implements `MicroModel`, `kind='decision'`, `canHandle` classify/enum_decision); маппинг задач в `choice`-вопросы (`CLASSIFY_ANSWERS`/`VALID_LABELS`); встроен в каскад **после embedding, до `micro_llm`** (фоллбек сохранён); fail-safe (выключено/нет провайдера/низкая уверенность/ошибка → `UNSURE` с сигналами `decision_*`); гейты `config.decision.enabled` (мастер) и per-session `decisionFirst` (opt-out); runtime-геттер конфига + `ChatOrchestrator.setDecisionConfig`; `SessionSettings.decisionFirst`; проброс `decisionConfig` в standalone/backend/chat.
+- **Ф3 (decision-классификатор маршрутизации AD-034):** `router/decision-content-classifier.ts` (`choice` coding|research|chat, ru/en-критерии, fail-safe `null`); встроен в `ModelRouter` между `settings.routingCategory` и keyword-фоллбеком (приоритеты не изменены); `route`/`_routeByContent`/`_routeByContentAndCost` → **async**; обновлены вызовы (`orchestrator._routeProvider`, `tools/task.ts`, тесты).
+- **Верификация (оркестратор):** build shared/core OK; `pnpm typecheck` 6/6; `pnpm lint` 0 errors; целевые тесты — decision-model 13, микро-каталог 70/70, decision-content-classifier+router 16/16. Флейк `app.remote.test.ts` — изолированно PASS (pre-existing).
+- **Коммит:** `5e37351` (Ф1–Ф3 в одном feature-коммите; файлы фаз пересекаются в `orchestrator.ts`/`main.ts`).
+- **Осталось:** Ф4 (decision-шаг в событиях AD-089 — **срез A**) и Ф5 (runtime-настройки `/settings/decision`, UI-секции, метрики, docs/AD/AGENTS). Локальный Ollama — апгрейд ≥0.35.1 (@admin).
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** этот (журнал).
+
