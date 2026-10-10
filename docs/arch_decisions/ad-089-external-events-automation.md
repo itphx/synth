@@ -228,7 +228,9 @@ type RouteDecision =
   (`engine/events/decision-rule-provider.ts`, `name='decision-rules'`) — decision-шаг после
   `ProjectRuleProvider` при флаге `events.decisionRouting` (default off, opt-in); при ошибке/низкой
   уверенности/пустом списке агентов возвращает `null` (fail-safe → Router идёт дальше по `defaultMode`).
-  Регистрация — `server/app.ts` (core) и `backend/src/app.ts` (паритет).
+  Регистрация — `server/app.ts` (core) и `backend/src/app.ts` (паритет). Решение несёт `confidence`/`signals`
+  (`RouteDecision`) — попадают в ответ `POST /api/v2/events` и в журнал; успешный выбор логируется
+  (`[DECISION] … agent/confidence/latency/model`), промахи — с latency.
 - **Резолвинг `agentTemplate`:** `RequestSessionService.resolveAgentTemplate` через `AgentRegistry`
   (`agent.enabled ? agent.id : null`); неизвестный шаблон — `unknownAgentTemplate` (`drop`/`default-agent`).
 - **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),

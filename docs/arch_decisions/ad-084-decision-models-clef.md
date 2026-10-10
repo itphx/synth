@@ -157,12 +157,18 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 
 ## Метрики
 
-Расширить `DebugCollector` в духе существующих `micro.*`:
+⚠️ **Реализовано частично (Ф5).**
 
+Реализовано:
+- микро/роутер — `DebugCollector.addContext('decision' | 'decision_routing', …)` (+ `metadata.micro_first.decision`);
+- события (AD-089) — мета `confidence`/`signals` в `RouteDecision` (попадает в ответ `POST /events` и журнал) и лог
+  успеха `[DECISION] … agent/confidence/latency/model`; latency добавлена и в warning-ветки промаха.
+
+Задел (агрегаты — при необходимости отдельным store/роутом):
 - `decision.calls` / `decision.handled` / `decision.fallback` — сколько решений обработано decision-слоем;
-- `decision.latency_by_model` — латентность по `clef` / `clef-flash` / `jev`;
+- `decision.latency_by_model` — латентность по моделям (`clef`/`clef-flash`/`jev`/локальные);
 - `decision.calibration` — сопоставление заявленной вероятности и фактической корректности (мониторинг порогов);
-- разрез по локальный/remote, чтобы видеть долю трафика, уходящего в Workers AI.
+- разрез локальный/remote (доля трафика в remote-провайдер).
 
 ## Этапы реализации
 
@@ -184,7 +190,8 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 6. ✅ **UI-настройки и метрики.** Админ-секция «Decision-модели» (Settings UI Kit, AD-072),
    per-session флаг `decisionFirst`, events-тумблер `decisionRouting`; метрики — через
    `DebugCollector.addContext('decision', …)`/`metadata` (агрегатный store — при необходимости отдельно).
-7. **Документация.** Обновить `docs/ROUTING.md` — **позже, при реализации** (сейчас не трогать).
+7. ✅ **Документация.** `docs/ROUTING.md` обновлён (decision-уровень в «Быстрых ответах»/«Маршрутизации»);
+   AD/AGENTS/API_V2/CONFIGURATION синхронизированы.
 
 ## Статус реализации в коде
 
@@ -246,5 +253,5 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 - [AD-073](./ad-073-client-integrity-hybrid.md), [AD-080](./ad-080-managed-hybrid-modes.md),
   [AD-081](./ad-081-hybrid-policy-leak-protection.md) — целостность/режимы/политики гибрида и защита от утечек.
 - [AD-072](./ad-072-settings-ui-kit.md) — UI-настройки decision-слоя.
-- [docs/ROUTING.md](../ROUTING.md) — пользовательские слои «Быстрые ответы» и «Маршрутизация» (обновить при реализации).
+- [docs/ROUTING.md](../ROUTING.md) — пользовательские слои «Быстрые ответы» и «Маршрутизация» (обновлено).
 - [packages/core/AGENTS.md](../../packages/core/AGENTS.md) — код микро-слоя (`engine/router/micro/`).
