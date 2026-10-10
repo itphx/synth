@@ -2229,3 +2229,18 @@
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** этот (журнал).
 
+## 2026-10-10 (продолжение 4) — AD-084 Ф4–Ф5: срез A (события), runtime/API, UI, метрики, доки — ЗАВЕРШЕНО
+- **Задача:** довести полный AD-084 (Ф4 срез A + Ф5 runtime/UI/метрики/docs). Разрешение коммитить — по мере готовности.
+- **Тип:** feature (core/backend/ui/shared) + docs
+- **Исполнитель:** @orchestrator (верификация/коммиты) → @fixer ×4 (Ф4, Ф5a, Ф5b, Ф5c+Ф5d)
+- **Результат:** PASS
+- **Ф4 — срез A (AD-089, decision-классификация событий, `1bcf7b3`):** `engine/events/decision-rule-provider.ts` (`DecisionRuleProvider`, `name='decision-rules'`) — при промахе `ProjectRuleProvider` decision-модель выбирает enabled-агента (`choice`), уверенный выбор → `decisionFromTarget({mode:'ephemeral', agentTemplate})`; порядок `Scheduler → ProjectRules → DecisionRules → фоллбек`; гейт `events.decisionRouting` (default false, live); fail-safe `null`; `ChatOrchestrator.getDecisionProvider`.
+- **Ф5a — runtime/API (`15dbd96`):** `DecisionRuntimeSettings`+`mergeDecisionConfig`+get/set/clear; `GET/PUT/DELETE /api/v2/settings/decision` (валидация/дефолты/effective, `decisionWriteGuard` ADMIN); live-применение в трёх потребителях (микро/роутер через `setDecisionConfig`, события через мутабельный `effectiveDecisionSettings`). Docs: API_V2 §5.21, CONFIGURATION.
+- **Ф5b — UI (`a4945ab`):** админ-секция `DecisionSettings.tsx` (Settings UI Kit; enabled/mode/provider/model/escalationModel/timeoutMs/confidenceThreshold/remoteEndpoint; Save/Cancel/Reset), per-session тумблер `decisionFirst` (opt-out, не затирает глобальный конфиг), events-тумблер `decisionRouting`; `synthApi`-методы/типы; i18n ru/en; тесты.
+- **Ф5c — метрики + docs (`dab9e24`):** `RoutingDecision.category/confidence/signals`; микро-каскад сохраняет сигналы моделей в `fallbackSignals`; `DebugCollector` → `extra_context.decision`/`decision_routing` + `metadata.micro_first.decision` (через существующий `/messages/:id/:index/debug`); `docs/ROUTING.md` обновлён; AD-084 → «Частично».
+- **Ф5d — AD/инструкции (`86c11cb`):** AD-084 ⚠️ Частично + «Статус реализации в коде» + этапы/риски; AD-089 — LLM-классификация правил закрыта decision-шагом; AGENTS (корень/core/shared/ui) — DecisionProvider/gateway.decide/DecisionModel/DecisionContentClassifier/DecisionRuleProvider/секция decision/`/settings/decision`/`decisionFirst`/`decisionRouting`/UI-секция.
+- **Верификация (оркестратор):** по фазам — build shared/core OK, `pnpm typecheck` 6/6, `pnpm lint` 0 errors; целевые тесты зелёные (Ф4 15, Ф5a 131, Ф5b ui 1090, Ф5c 135); битых `.md`-ссылок нет. Единственный падающий в общих прогонах — pre-existing флейк `core/src/server/app.remote.test.ts` (WS-таймаут; изолированно PASS).
+- **Остаток AD-084 (осознанно):** шаг 3 «Clef на эскалацию», мультимодальность (`images`/`videos`), `scopes`/политики гибрида для decision-трафика, `mode:auto`-сигнал managed (AD-080/081), агрегатные метрики `decision.calibration`. Локальный Ollama — апгрейд **≥0.35.1** (сейчас 0.32.14) + `ollama pull clef-flash` (@admin).
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммиты:** `1bcf7b3`, `15dbd96`, `a4945ab`, `dab9e24`, `86c11cb`, этот (журнал).
+
