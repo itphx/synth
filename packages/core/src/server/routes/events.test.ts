@@ -620,6 +620,56 @@ describe('Events API Routes (AD-089)', () => {
     expect(call[1].audit).toBeUndefined();
   });
 
+  // --- AD-089/AD-052: обычный пользовательский Bearer vs binding-key ---
+
+  it('POST / — обычный Bearer (без префикса synth_evt_) идёт на fallback ingestGuard', async () => {
+    const resolveApiKeySecret = vi.fn(async () => null);
+    const { ingress, handleEvent } = capturingIngress({ kind: 'drop', reason: 'no_route', audited: true }, null);
+    const app = keyApp({ resolveApiKeySecret }, ingress);
+
+    // `createMockAuth().requireAuth` пропускает — fallback проходит → 201.
+    const res = await postJson(app, '/api/v2/events', { source: 'telegram', type: 'message' }, { Authorization: 'Bearer admin-key-123' });
+    expect(res.status).toBe(201);
+    // Обычный ключ не пытались резолвить как binding-key.
+    expect(resolveApiKeySecret).not.toHaveBeenCalled();
+    expect(handleEvent).toHaveBeenCalledOnce();
+  });
+
+  it('POST / — обычный Bearer, ingestGuard не пропустил → 401 (fallback, не binding-ветка)', async () => {
+    const resolveApiKeySecret = vi.fn(async () => null);
+    const deny: MiddlewareHandler = async (c) => c.json({ error: { code: 'UNAUTHORIZED', message: 'no' } }, 401);
+    const { ingress } = capturingIngress({ kind: 'drop', reason: 'no_route', audited: true }, null);
+    const app = keyApp({ resolveApiKeySecret, ingestGuard: deny }, ingress);
+
+    const res = await postJson(app, '/api/v2/events', { source: 'telegram', type: 'message' }, { Authorization: 'Bearer user-key-456' });
+    expect(res.status).toBe(401);
+    expect(resolveApiKeySecret).not.toHaveBeenCalled();
+  });
+
+  it('POST / — Bearer synth_evt_ не резолвится → 401 (fallback не задействован)', async () => {
+    const resolveApiKeySecret = vi.fn(async () => null);
+    const ingestGuard: MiddlewareHandler = vi.fn(async (_c: Context, next: Next) => { await next(); });
+    const { ingress } = capturingIngress({ kind: 'drop', reason: 'no_route', audited: true }, null);
+    const app = keyApp({ resolveApiKeySecret, ingestGuard }, ingress);
+
+    const res = await postJson(app, '/api/v2/events', { type: 'message' }, { Authorization: 'Bearer synth_evt_unknown' });
+    expect(res.status).toBe(401);
+    expect(resolveApiKeySecret).toHaveBeenCalledOnce();
+    // При валидном префиксе fallback не должен вызываться.
+    expect(ingestGuard).not.toHaveBeenCalled();
+  });
+
+  it('POST / — без Bearer идёт на fallback ingestGuard, резолвер не вызывается', async () => {
+    const resolveApiKeySecret = vi.fn(async () => null);
+    const { ingress, handleEvent } = capturingIngress({ kind: 'drop', reason: 'no_route', audited: true }, null);
+    const app = keyApp({ resolveApiKeySecret }, ingress);
+
+    const res = await postJson(app, '/api/v2/events', { source: 'telegram', type: 'message' });
+    expect(res.status).toBe(201);
+    expect(resolveApiKeySecret).not.toHaveBeenCalled();
+    expect(handleEvent).toHaveBeenCalledOnce();
+  });
+
   it('GET /keys: keyReadGuard ограничивает чтение (default — requireAuth)', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:12', mode: 'bound', sessionId: 's1' });
     await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'u-1' });

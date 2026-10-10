@@ -14,7 +14,7 @@ import type { EventIngress } from '../../engine/events/ingest.js';
 import type { EventIngestInput } from '../../engine/events/ingest.js';
 import type { EventKeyCredential } from '../../engine/events/credential.js';
 import { KeyRateLimiter } from '../../engine/events/key-rate-limiter.js';
-import { EventApiKeyConflictError } from '../../storage/event-api-key-store.js';
+import { EventApiKeyConflictError, isEventApiKeySecret } from '../../storage/event-api-key-store.js';
 import type { EventApiKeyStore } from '../../storage/event-api-key-store.js';
 import type { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { EventJournalStore } from '../../storage/event-journal-store.js';
@@ -173,8 +173,9 @@ export function createEventRoutes(
   // AD-089/AD-052: per-key rate limit (fixed window 60 c), один на приложение.
   const keyRateLimiter = new KeyRateLimiter(60_000);
 
-  // POST /api/v2/events — приём внешнего события (ingress). Аутентификация: API-ключ
-  // привязки (если задан резолвер и пришёл Bearer) либо fallback `ingestGuard`.
+  // POST /api/v2/events — приём внешнего события (ingress). Аутентификация:
+  // API-ключ привязки (если задан резолвер и пришёл Bearer `synth_evt_…`) либо
+  // fallback `ingestGuard` (обычный пользовательский Bearer / без Bearer).
   app.post('/', async (c) => {
     // MASTER: приём внешних событий может быть отключён (`events.enabled: false`).
     if (opts.isEnabled && !opts.isEnabled()) {
@@ -191,10 +192,13 @@ export function createEventRoutes(
     }
 
     // 1. Способ аутентификации.
+    // AD-089/AD-052: как binding-key резолвим только Bearer с префиксом
+    // `synth_evt_`. Иначе (обычный пользовательский ключ — debug/`SYNTH_API_KEY`
+    // и т.п.) идём на fallback `ingestGuard` (`requireAuth`), а не отдаём 401.
     const token = bearerToken(c.req.header('Authorization'));
     let binding: EventBinding | undefined;
     let credential: EventKeyCredential | undefined;
-    if (token && opts.resolveApiKeySecret) {
+    if (token && opts.resolveApiKeySecret && isEventApiKeySecret(token)) {
       const resolved = await opts.resolveApiKeySecret(token);
       if (!resolved) {
         return c.json({ error: { code: 'UNAUTHORIZED', message: messages.invalidKey(c) } }, 401);

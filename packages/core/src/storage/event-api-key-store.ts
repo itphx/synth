@@ -59,9 +59,18 @@ interface ApiKeysFile {
   keys: EventApiKeyRecord[];
 }
 
-/** Префикс секрета: видимая часть ключа для идентификации в UI. */
-const SECRET_PREFIX = 'synth_evt_';
+/**
+ * Префикс секрета API-ключа привязки: видимая часть ключа для идентификации в
+ * UI и канонический признак способа аутентификации (binding-key vs обычный
+ * пользовательский Bearer). Единый источник истины для генерации и распознавания.
+ */
+export const EVENT_API_KEY_SECRET_PREFIX = 'synth_evt_';
 const SECRET_PREFIX_VISIBLE = 12;
+
+/** `true`, если строка — секрет API-ключа привязки (`synth_evt_…`). */
+export function isEventApiKeySecret(raw: string): boolean {
+  return raw.startsWith(EVENT_API_KEY_SECRET_PREFIX);
+}
 
 /** sha256 hex секрета — то, что хранится at-rest вместо plaintext. */
 function hashSecret(secret: string): string {
@@ -191,7 +200,7 @@ export class EventApiKeyStore {
     const label = this._normalizeLabel(input.label);
     await this._lock.acquire();
     try {
-      const secret = `${SECRET_PREFIX}${randomBytes(24).toString('base64url')}`;
+      const secret = `${EVENT_API_KEY_SECRET_PREFIX}${randomBytes(24).toString('base64url')}`;
       const record: EventApiKeyRecord = {
         id: `eak_${generateId()}`,
         bindingId: input.bindingId,
