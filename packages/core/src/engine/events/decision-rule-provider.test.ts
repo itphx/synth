@@ -187,6 +187,29 @@ describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
     });
     await expect(provider.resolve({ event: event(), bindings: [] })).resolves.toBeNull();
   });
+
+  it('getDecisionConfig читается на каждый resolve (live runtime-обновление, AD-084 Ф5)', async () => {
+    let config: DecisionConfigLike | null = { ...BASE_CONFIG, enabled: false };
+    const decide = vi.fn(async () => choiceResponse('triage', 0.9));
+    const provider = new DecisionRuleProvider({
+      resolver: { getDecisionProvider: () => ({ decide }) },
+      getEventsConfig: () => ({ decisionRouting: true, defaultEphemeralTtl: '24h' }),
+      getDecisionConfig: () => config ?? undefined,
+      getAgentCandidates: () => AGENTS,
+    });
+
+    // Выключенный конфиг → null, decision-провайдер не вызывается.
+    expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
+    expect(decide).not.toHaveBeenCalled();
+
+    // Runtime-обновление (onDecisionChange): геттер отдаёт новое значение.
+    config = { ...BASE_CONFIG };
+    expect(await provider.resolve({ event: event(), bindings: [] })).toEqual({
+      kind: 'ephemeral',
+      agentTemplate: 'triage',
+      ttl: '24h',
+    });
+  });
 });
 
 describe('DecisionRuleProvider в EventRouter (AD-089, порядок и fail-safe)', () => {

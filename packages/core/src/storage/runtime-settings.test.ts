@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig } from './runtime-settings.js';
+import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig } from './runtime-settings.js';
 
 describe('RuntimeSettingsStore.clear* (AD-072 Ф2)', () => {
   let tmpDir: string;
@@ -285,6 +285,100 @@ describe('mergeEventsConfig (AD-089)', () => {
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
       decisionRouting: false,
+    });
+  });
+});
+
+describe('RuntimeSettingsStore.decision (AD-084)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('getDecision возвращает {} без runtime-настроек', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getDecision()).toEqual({});
+  });
+
+  it('set/getDecision сохраняет патч, переживает рестарт', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setDecision({ enabled: true, mode: 'remote', provider: 'routerai-decision', confidenceThreshold: 0.8 });
+    const decision = await store.getDecision();
+    expect(decision.enabled).toBe(true);
+    expect(decision.mode).toBe('remote');
+    expect(decision.provider).toBe('routerai-decision');
+    expect(decision.confidenceThreshold).toBe(0.8);
+
+    const restarted = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect((await restarted.getDecision()).enabled).toBe(true);
+  });
+
+  it('clearDecision удаляет только decision', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setDecision({ enabled: true });
+    await store.setEvents({ enabled: false });
+    await store.clearDecision();
+
+    const settings = await store.load();
+    expect(settings.decision).toBeUndefined();
+    expect(settings.events).toEqual({ enabled: false });
+  });
+});
+
+describe('mergeDecisionConfig (AD-084)', () => {
+  const base = {
+    enabled: false,
+    mode: 'auto' as const,
+    provider: '',
+    model: '',
+    escalationModel: '',
+    timeoutMs: 10_000,
+    confidenceThreshold: 0.6,
+    remoteEndpoint: '',
+  };
+
+  it('runtime поверх base: каждое заданное поле перекрывает base', () => {
+    const merged = mergeDecisionConfig(base, {
+      enabled: true,
+      mode: 'remote',
+      provider: 'routerai-decision',
+      model: 'clef-flash',
+      escalationModel: 'clef',
+      timeoutMs: 5_000,
+      confidenceThreshold: 0.9,
+      remoteEndpoint: 'https://routerai.ru/api/v1/decisions',
+    });
+    expect(merged).toEqual({
+      enabled: true,
+      mode: 'remote',
+      provider: 'routerai-decision',
+      model: 'clef-flash',
+      escalationModel: 'clef',
+      timeoutMs: 5_000,
+      confidenceThreshold: 0.9,
+      remoteEndpoint: 'https://routerai.ru/api/v1/decisions',
+    });
+  });
+
+  it('при отсутствии runtime берётся base', () => {
+    expect(mergeDecisionConfig(base, {})).toEqual(base);
+  });
+
+  it('при отсутствии обоих — дефолты схемы', () => {
+    expect(mergeDecisionConfig(undefined, {})).toEqual({
+      enabled: false,
+      mode: 'auto',
+      provider: '',
+      model: '',
+      escalationModel: '',
+      timeoutMs: 10_000,
+      confidenceThreshold: 0.6,
+      remoteEndpoint: '',
     });
   });
 });

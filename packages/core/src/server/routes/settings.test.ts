@@ -1462,3 +1462,145 @@ describe('Settings API Routes (events, AD-089)', () => {
     expect(del.status).toBe(403);
   });
 });
+
+describe('Settings API Routes (decision, AD-084)', () => {
+  let tmpDir: string;
+  const FALLBACK = '/default/env-or-config-workspace';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-settings-decision-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeDecisionApp(
+    fallbackDecision?: Partial<import('../../storage/runtime-settings.js').DecisionRuntimeSettings>,
+    opts?: { decisionWriteGuard?: import('hono').MiddlewareHandler },
+  ) {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const onDecisionChange = vi.fn(async (_d: unknown) => {});
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      ...(fallbackDecision ? { fallbackDecision } : {}),
+      onDecisionChange,
+    }, opts ?? {}));
+    return { app, settingsStore, onDecisionChange };
+  }
+
+  it('GET /decision — эффективные дефолты без runtime, isOverridden false', async () => {
+    const { app } = makeDecisionApp();
+    const res = await app.request('/api/v2/settings/decision');
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.isOverridden).toBe(false);
+    expect(body.defaults).toEqual({
+      enabled: false,
+      mode: 'auto',
+      provider: '',
+      model: '',
+      escalationModel: '',
+      timeoutMs: 10_000,
+      confidenceThreshold: 0.6,
+      remoteEndpoint: '',
+    });
+    expect(body.decision).toEqual(body.defaults);
+  });
+
+  it('GET /decision — fallbackDecision из config перекрывает дефолты', async () => {
+    const { app } = makeDecisionApp({ enabled: true, mode: 'remote', provider: 'routerai-decision' });
+    const body: any = await (await app.request('/api/v2/settings/decision')).json();
+    expect(body.defaults.enabled).toBe(true);
+    expect(body.defaults.mode).toBe('remote');
+    expect(body.defaults.provider).toBe('routerai-decision');
+    // Незаданные поля — дефолты схемы.
+    expect(body.defaults.timeoutMs).toBe(10_000);
+  });
+
+  it('PUT /decision — сохраняет патч, применяет поверх дефолтов, вызывает onDecisionChange', async () => {
+    const { app, settingsStore, onDecisionChange } = makeDecisionApp();
+    const res = await app.request('/api/v2/settings/decision', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: { enabled: true, model: 'clef-flash', confidenceThreshold: 0.75 } }),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.decision).toMatchObject({ enabled: true, model: 'clef-flash', confidenceThreshold: 0.75 });
+    // Незаданные поля добраны дефолтами.
+    expect(body.decision.mode).toBe('auto');
+    expect(await settingsStore.getDecision()).toEqual({ enabled: true, model: 'clef-flash', confidenceThreshold: 0.75 });
+    expect(onDecisionChange).toHaveBeenCalledOnce();
+
+    const get: any = await (await app.request('/api/v2/settings/decision')).json();
+    expect(get.isOverridden).toBe(true);
+    expect(get.decision.enabled).toBe(true);
+  });
+
+  it('PUT /decision — невалидные поля → 400 VALIDATION_ERROR', async () => {
+    const { app, onDecisionChange } = makeDecisionApp();
+    const invalidBodies = [
+      { decision: 'nope' },
+      { decision: { mode: 'bogus' } },
+      { decision: { enabled: 'yes' } },
+      { decision: { timeoutMs: 0 } },
+      { decision: { timeoutMs: 1.5 } },
+      { decision: { confidenceThreshold: -0.1 } },
+      { decision: { confidenceThreshold: 1.5 } },
+      { decision: { confidenceThreshold: 'high' } },
+      { decision: { provider: 42 } },
+      { decision: { model: false } },
+      { decision: { escalationModel: 1 } },
+      { decision: { remoteEndpoint: 1 } },
+    ];
+    for (const body of invalidBodies) {
+      const res = await app.request('/api/v2/settings/decision', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error.code).toBe('VALIDATION_ERROR');
+    }
+    expect(onDecisionChange).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /decision — сбрасывает к дефолтам и вызывает onDecisionChange', async () => {
+    const { app, settingsStore, onDecisionChange } = makeDecisionApp();
+    await app.request('/api/v2/settings/decision', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: { enabled: true } }),
+    });
+    const res = await app.request('/api/v2/settings/decision', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.status).toBe('restored');
+    expect(body.isOverridden).toBe(false);
+    expect(body.decision.enabled).toBe(false);
+    expect(await settingsStore.getDecision()).toEqual({});
+    expect(onDecisionChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('decisionWriteGuard отклоняет PUT/DELETE, GET остаётся доступен', async () => {
+    const deny: import('hono').MiddlewareHandler = async (c) =>
+      c.json({ error: { code: 'FORBIDDEN', message: 'no' } }, 403);
+    const { app, settingsStore } = makeDecisionApp(undefined, { decisionWriteGuard: deny });
+
+    expect((await app.request('/api/v2/settings/decision')).status).toBe(200);
+
+    const put = await app.request('/api/v2/settings/decision', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: { enabled: true } }),
+    });
+    expect(put.status).toBe(403);
+    expect(await settingsStore.getDecision()).toEqual({});
+
+    const del = await app.request('/api/v2/settings/decision', { method: 'DELETE' });
+    expect(del.status).toBe(403);
+  });
+});

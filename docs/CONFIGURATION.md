@@ -192,6 +192,11 @@ decision:                         # AD-084: decision-модели (System One: C
   confidenceThreshold: 0.6        # порог уверенности (ниже — fail-safe fallback)
   remoteEndpoint: ""              # явный remote endpoint (пусто → base URL провайдера)
 
+> Секция `decision` переопределяется в runtime через `GET/PUT/DELETE /api/v2/settings/decision`
+> (live, без рестарта): значения сохраняются в `{dataDir}/settings.json` и применяются ко всем
+> трём потребителям — микро-каскаду (`DecisionModel`), роутеру (`DecisionContentClassifier`) и
+> маршрутизации внешних событий (`DecisionRuleProvider`, AD-089). Мутации в managed — ADMIN.
+
 permission:
   rules: {}                       # гранулярные permissions: allow/deny/ask per tool
   askTimeoutMs: 30000

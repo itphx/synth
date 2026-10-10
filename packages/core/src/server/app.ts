@@ -40,7 +40,7 @@ import { syncProvidersFromEnv } from '../providers/sync-from-env.js';
 import { FileProfileStore } from '../storage/profile-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
-import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEventsConfig } from '../storage/runtime-settings.js';
+import { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig } from '../storage/runtime-settings.js';
 import { migrateSessionScopeSnapshots } from '../storage/migrations.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createHybridRoutes } from './routes/hybrid.js';
@@ -631,6 +631,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   let effectiveWorkspaceOutsideRootPolicy: WorkspaceOutsideRootPolicy =
     (await settingsStore.getWorkspacePolicy()) ?? config.workspaceOutsideRootPolicy ?? 'confirm';
 
+  // AD-084: runtime/эффективный конфиг decision-слоя (админка) приоритетнее
+  // config.yaml `decision`. Live-применяется ко всем трём потребителям
+  // (микро-каскад, роутер, события AD-089) через `onDecisionChange`.
+  const runtimeDecision = await settingsStore.getDecision();
+  let effectiveDecisionSettings = mergeDecisionConfig(config.decisionConfig, runtimeDecision);
+
   // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
   const patternStore = new SecretPatternStore({ dataDir });
 
@@ -857,7 +863,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     instructionsTrustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
     // AD-084: decision-слой микро-каскада (config.decision). Runtime-обновление —
     // через `setDecisionConfig` (Ф5).
-    decisionConfig: config.decisionConfig,
+    decisionConfig: effectiveDecisionSettings,
     // AD-089: late-bound funnel создания сессий для тула `task` (саб-агент).
     // Сам сервис создаётся ниже (после оркестратора) — геттер читает его в рантайме.
     getRequestSessionService: () => requestSessionService,
@@ -930,7 +936,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         decisionRouting: effectiveEventsSettings.decisionRouting,
         defaultEphemeralTtl: effectiveEventsSettings.ephemeralTtl,
       }),
-      getDecisionConfig: () => config.decisionConfig,
+      getDecisionConfig: () => effectiveDecisionSettings,
       getAgentCandidates: (): DecisionAgentCandidate[] =>
         agentRegistry.list().map((agent) => ({
           id: agent.id,
@@ -1194,6 +1200,14 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         defaultEphemeralTtl: effective.ephemeralTtl,
         unknownAgentTemplate: effective.unknownAgentTemplate,
       });
+    },
+    // AD-084: дефолт config.yaml для GET/DELETE-сброса decision-слоя.
+    fallbackDecision: config.decisionConfig,
+    // AD-084: live-применение runtime-настроек decision-слоя — микро-каскад и
+    // роутер читают конфиг геттером оркестратора; события — геттером выше.
+    onDecisionChange: (effective) => {
+      effectiveDecisionSettings = effective;
+      orchestrator.setDecisionConfig(effective);
     },
     protectedPathsStore,
   }));

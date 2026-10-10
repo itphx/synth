@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 
@@ -48,6 +48,12 @@ export interface EventsRuntimeSettings {
   decisionRouting: boolean;
 }
 
+/**
+ * AD-084: runtime-настройки decision-слоя (админка), сохраняемые через UI.
+ * Эффективные значения = `mergeDecisionConfig(config.decisionConfig, runtime)`.
+ */
+export type DecisionRuntimeSettings = Partial<DecisionConfig>;
+
 export interface RuntimeSettings {
   /** Рабочий каталог по умолчанию, заданный через UI (раздел «Проекты»). */
   workspace?: string;
@@ -90,6 +96,8 @@ export interface RuntimeSettings {
   workspacePolicy?: WorkspaceOutsideRootPolicy;
   /** AD-089: runtime-настройки раздела «События» (админка). */
   events?: Partial<EventsRuntimeSettings>;
+  /** AD-084: runtime-настройки decision-слоя (админка). */
+  decision?: DecisionRuntimeSettings;
 }
 
 /**
@@ -179,6 +187,28 @@ export function mergeEventsConfig(
     unknownAgentTemplate: r.unknownAgentTemplate ?? base?.unknownAgentTemplate ?? 'drop',
     keyRateLimitPerMinute: r.keyRateLimitPerMinute ?? base?.keyRateLimitPerMinute ?? 0,
     decisionRouting: r.decisionRouting ?? base?.decisionRouting ?? false,
+  };
+}
+
+/**
+ * AD-084: мёржит runtime-настройки decision-слоя (админка) поверх config.yaml
+ * `decision`. Runtime приоритетнее; отсутствие полей — значения из config,
+ * затем дефолты схемы. Возвращает полный `DecisionConfig` (все поля заданы).
+ */
+export function mergeDecisionConfig(
+  base: DecisionConfig | undefined,
+  runtime: Partial<DecisionRuntimeSettings>,
+): DecisionConfig {
+  const r = runtime ?? {};
+  return {
+    enabled: r.enabled ?? base?.enabled ?? false,
+    mode: r.mode ?? base?.mode ?? 'auto',
+    provider: r.provider ?? base?.provider ?? '',
+    model: r.model ?? base?.model ?? '',
+    escalationModel: r.escalationModel ?? base?.escalationModel ?? '',
+    timeoutMs: r.timeoutMs ?? base?.timeoutMs ?? 10_000,
+    confidenceThreshold: r.confidenceThreshold ?? base?.confidenceThreshold ?? 0.6,
+    remoteEndpoint: r.remoteEndpoint ?? base?.remoteEndpoint ?? '',
   };
 }
 
@@ -491,6 +521,24 @@ export class RuntimeSettingsStore {
     await this._update((current) => {
       const next = { ...current };
       delete next.events;
+      return next;
+    });
+  }
+
+  /** AD-084: runtime-настройки decision-слоя (админка), {} — не заданы. */
+  async getDecision(): Promise<Partial<DecisionRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.decision ?? {};
+  }
+
+  async setDecision(config: Partial<DecisionRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, decision: config }));
+  }
+
+  async clearDecision(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.decision;
       return next;
     });
   }

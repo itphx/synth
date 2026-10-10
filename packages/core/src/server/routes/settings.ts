@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { AuthKit } from '../../auth/local.js';
-import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeSettings } from '../../storage/runtime-settings.js';
+import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings } from '../../storage/runtime-settings.js';
 import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
@@ -144,6 +144,94 @@ function effectiveEvents(
   };
 }
 
+/** AD-084: эффективные дефолты decision-слоя (config без runtime). */
+function resolveDecisionDefaults(fallback?: Partial<DecisionRuntimeSettings>): DecisionConfig {
+  const base = defaultConfig.decision;
+  return {
+    enabled: fallback?.enabled ?? base.enabled,
+    mode: fallback?.mode ?? base.mode,
+    provider: fallback?.provider ?? base.provider,
+    model: fallback?.model ?? base.model,
+    escalationModel: fallback?.escalationModel ?? base.escalationModel,
+    timeoutMs: fallback?.timeoutMs ?? base.timeoutMs,
+    confidenceThreshold: fallback?.confidenceThreshold ?? base.confidenceThreshold,
+    remoteEndpoint: fallback?.remoteEndpoint ?? base.remoteEndpoint,
+  };
+}
+
+/** AD-084: валидация runtime-настроек decision-слоя (частичный патч). */
+function validateDecisionSettings(
+  value: unknown,
+): { ok: true; value: Partial<DecisionRuntimeSettings> } | { ok: false; message: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, message: 'decision: ожидается объект runtime-настроек decision-слоя' };
+  }
+  const s = value as Record<string, unknown>;
+  const result: Partial<DecisionRuntimeSettings> = {};
+
+  if (s.enabled !== undefined) {
+    if (typeof s.enabled !== 'boolean') return { ok: false, message: 'decision.enabled: ожидается boolean' };
+    result.enabled = s.enabled;
+  }
+  if (s.mode !== undefined) {
+    if (s.mode !== 'auto' && s.mode !== 'local' && s.mode !== 'remote') {
+      return { ok: false, message: 'decision.mode: ожидается "auto" | "local" | "remote"' };
+    }
+    result.mode = s.mode;
+  }
+  if (s.provider !== undefined) {
+    if (typeof s.provider !== 'string') return { ok: false, message: 'decision.provider: ожидается строка' };
+    result.provider = s.provider;
+  }
+  if (s.model !== undefined) {
+    if (typeof s.model !== 'string') return { ok: false, message: 'decision.model: ожидается строка' };
+    result.model = s.model;
+  }
+  if (s.escalationModel !== undefined) {
+    if (typeof s.escalationModel !== 'string') {
+      return { ok: false, message: 'decision.escalationModel: ожидается строка' };
+    }
+    result.escalationModel = s.escalationModel;
+  }
+  if (s.timeoutMs !== undefined) {
+    if (!Number.isInteger(s.timeoutMs) || (s.timeoutMs as number) < 1 || (s.timeoutMs as number) > 600_000) {
+      return { ok: false, message: 'decision.timeoutMs: ожидается целое 1..600000' };
+    }
+    result.timeoutMs = s.timeoutMs as number;
+  }
+  if (s.confidenceThreshold !== undefined) {
+    const threshold = s.confidenceThreshold;
+    if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      return { ok: false, message: 'decision.confidenceThreshold: ожидается число 0..1' };
+    }
+    result.confidenceThreshold = threshold;
+  }
+  if (s.remoteEndpoint !== undefined) {
+    if (typeof s.remoteEndpoint !== 'string') {
+      return { ok: false, message: 'decision.remoteEndpoint: ожидается строка' };
+    }
+    result.remoteEndpoint = s.remoteEndpoint;
+  }
+  return { ok: true, value: result };
+}
+
+/** AD-084: эффективный decision-конфиг = дефолты (config) поверх runtime-патча. */
+function effectiveDecision(
+  defaults: DecisionConfig,
+  runtime: Partial<DecisionRuntimeSettings>,
+): DecisionConfig {
+  return {
+    enabled: runtime.enabled ?? defaults.enabled,
+    mode: runtime.mode ?? defaults.mode,
+    provider: runtime.provider ?? defaults.provider,
+    model: runtime.model ?? defaults.model,
+    escalationModel: runtime.escalationModel ?? defaults.escalationModel,
+    timeoutMs: runtime.timeoutMs ?? defaults.timeoutMs,
+    confidenceThreshold: runtime.confidenceThreshold ?? defaults.confidenceThreshold,
+    remoteEndpoint: runtime.remoteEndpoint ?? defaults.remoteEndpoint,
+  };
+}
+
 export interface SettingsRoutesDeps {
   /** Store runtime-настроек ({dataDir}/settings.json). */
   settingsStore: RuntimeSettingsStore;
@@ -203,6 +291,10 @@ export interface SettingsRoutesDeps {
   fallbackEvents?: Partial<EventsRuntimeSettings>;
   /** AD-089: вызывается после успешного PUT/DELETE /events — live-применение. */
   onEventsChange?: (effective: EventsRuntimeSettings) => void | Promise<void>;
+  /** AD-084: дефолт decision-слоя из config.yaml для GET/DELETE-сброса. */
+  fallbackDecision?: Partial<DecisionRuntimeSettings>;
+  /** AD-084: вызывается после успешного PUT/DELETE /decision — live-применение. */
+  onDecisionChange?: (effective: DecisionConfig) => void | Promise<void>;
 }
 
 /** Опции фабрики настроек (guard'ы). */
@@ -212,6 +304,11 @@ export interface SettingsRoutesOptions {
    * `auth.requireAuth`. Backend передаёт `requirePermission('ADMIN')`.
    */
   eventsWriteGuard?: Middleware;
+  /**
+   * Guard на мутации decision-слоя (PUT/DELETE /decision); по умолчанию —
+   * `auth.requireAuth`. Backend передаёт `requirePermission('ADMIN')`.
+   */
+  decisionWriteGuard?: Middleware;
 }
 
 /** AD-071 §2.3: валидна ли политика включения инструментов. */
@@ -375,6 +472,7 @@ export function createSettingsRoutes(
 ): Hono {
   const app = new Hono();
   const eventsWriteGuard: Middleware = opts.eventsWriteGuard ?? auth.requireAuth;
+  const decisionWriteGuard: Middleware = opts.decisionWriteGuard ?? auth.requireAuth;
 
   app.get('/workspace', auth.requireAuth, async (c) => {
     const runtimeWorkspace = await deps.settingsStore.getWorkspace();
@@ -884,6 +982,46 @@ export function createSettingsRoutes(
     // Пустой runtime → эффективные значения = config.yaml/defaults.
     await deps.onEventsChange?.(defaults);
     return c.json({ status: 'restored', events: defaults, isOverridden: false, defaults });
+  });
+
+  /**
+   * AD-084: GET/PUT/DELETE /api/v2/settings/decision — runtime-настройки
+   * decision-слоя (мастер-выключатель, транспорт, провайдер/модель, таймаут,
+   * порог уверенности, remote-endpoint). Runtime-значение ({dataDir}/settings.json)
+   * приоритетнее config.yaml `decision`; live-применение — через `onDecisionChange`
+   * (микро-каскад, роутер, события AD-089).
+   */
+  app.get('/decision', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getDecision();
+    const defaults = resolveDecisionDefaults(deps.fallbackDecision);
+    return c.json({
+      decision: effectiveDecision(defaults, runtime),
+      defaults,
+      isOverridden: hasOverride(runtime),
+    });
+  });
+
+  app.put('/decision', decisionWriteGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const result = validateDecisionSettings((body as { decision?: unknown }).decision);
+    if (!result.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: result.message } }, 400);
+    }
+
+    await deps.settingsStore.setDecision(result.value);
+    const defaults = resolveDecisionDefaults(deps.fallbackDecision);
+    const effective = effectiveDecision(defaults, result.value);
+    // Live-применение — микро-каскад/роутер/события переконфигурируются без рестарта.
+    await deps.onDecisionChange?.(effective);
+    return c.json({ decision: effective });
+  });
+
+  app.delete('/decision', decisionWriteGuard, async (c) => {
+    await deps.settingsStore.clearDecision();
+    const defaults = resolveDecisionDefaults(deps.fallbackDecision);
+    // Пустой runtime → эффективные значения = config.yaml/defaults.
+    await deps.onDecisionChange?.(defaults);
+    return c.json({ status: 'restored', decision: defaults, isOverridden: false, defaults });
   });
 
   return app;

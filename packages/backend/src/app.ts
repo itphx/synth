@@ -25,7 +25,7 @@ import {
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
   McpRegistryStore,
   RuntimeSettingsStore, createSettingsRoutes, AuditLogger, mergeLlmGatewayConfig,
-  mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEventsConfig, ProtectedPathsStore,
+  mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, ProtectedPathsStore,
   SecretPatternStore,
   RateLimiter,
   DictionaryStore, createDictionaryRoutes,
@@ -434,6 +434,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // AD-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
     const skillsDisabled = (await settingsStore.getSkillsDisabled())
       ?? { categories: [], groups: [], skills: [] };
+    // AD-084: runtime/эффективный конфиг decision-слоя (админка) приоритетнее
+    // config.yaml `decision`. Live-применяется ко всем трём потребителям
+    // (микро-каскад, роутер, события AD-089) через `onDecisionChange`.
+    const runtimeDecision = await settingsStore.getDecision();
+    let effectiveDecisionSettings = mergeDecisionConfig(backendConfig.synth.decision, runtimeDecision);
     const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
     // Orchestrator
@@ -497,7 +502,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       defaultWorkingDir,
       routerConfig: backendConfig.synth.router,
       // AD-084: decision-слой микро-каскада (config.decision).
-      decisionConfig: backendConfig.synth.decision,
+      decisionConfig: effectiveDecisionSettings,
       permissionConfig: backendConfig.synth.permission,
       defaultPlanMode: backendConfig.synth.session.planMode,
       securityConfig,
@@ -592,7 +597,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           decisionRouting: effectiveEventsSettings.decisionRouting,
           defaultEphemeralTtl: effectiveEventsSettings.ephemeralTtl,
         }),
-        getDecisionConfig: () => backendConfig.synth.decision,
+        getDecisionConfig: () => effectiveDecisionSettings,
         getAgentCandidates: (): DecisionAgentCandidate[] =>
           agentRegistry.list().map((agent) => ({
             id: agent.id,
@@ -1013,10 +1018,20 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           unknownAgentTemplate: effective.unknownAgentTemplate,
         });
       },
+      // AD-084: дефолт config.yaml для GET/DELETE-сброса decision-слоя.
+      fallbackDecision: backendConfig.synth.decision,
+      // AD-084: live-применение runtime-настроек decision-слоя — микро-каскад и
+      // роутер читают конфиг геттером оркестратора; события — геттером выше.
+      onDecisionChange: (effective) => {
+        effectiveDecisionSettings = effective;
+        orchestrator.setDecisionConfig(effective);
+      },
       protectedPathsStore,
     }, {
       // AD-089: мутации раздела «События» — только ADMIN (managed RBAC).
       eventsWriteGuard: auth.requirePermission('ADMIN'),
+      // AD-084: мутации decision-слоя — только ADMIN (managed RBAC).
+      decisionWriteGuard: auth.requirePermission('ADMIN'),
     }));
 
     // Словари классификации: чтение — все авторизованные, запись/сброс — ADMIN
