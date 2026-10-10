@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   getDecisionSettings: vi.fn(),
   updateDecisionSettings: vi.fn(),
   resetDecisionSettings: vi.fn(),
+  getDecisionMetrics: vi.fn(),
+  resetDecisionMetrics: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -53,8 +55,10 @@ vi.mock('@/hooks/useNotification', () => ({
 vi.mock('@/stores/providersStore', () => ({
   useProvidersStore: (selector: (s: typeof providersStore) => unknown) => selector(providersStore),
 }))
+vi.mock('@/lib/confirm', () => ({ confirm: vi.fn(async () => true) }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { confirm } from '@/lib/confirm'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -71,6 +75,8 @@ const DEFAULTS: DecisionSettingsData = {
   provider: '',
   model: '',
   confidenceThreshold: 0.6,
+  escalationProvider: '',
+  escalationModel: '',
 }
 
 const OVERRIDDEN: DecisionSettingsData = {
@@ -78,6 +84,36 @@ const OVERRIDDEN: DecisionSettingsData = {
   provider: 'routerai-decision',
   model: 'clef-flash',
   confidenceThreshold: 0.75,
+  escalationProvider: 'routerai-decision',
+  escalationModel: 'clef',
+}
+
+const METRICS = {
+  calls: 12,
+  handled: 7,
+  fallback: 5,
+  escalated: 3,
+  attempts: { primary: 12, escalation: 4 },
+  rejected: { ok: 7, low_confidence: 3, invalid: 1, no_answer: 1, no_provider: 0, error: 0 },
+  by_model: {
+    'routerai-decision/clef-flash': {
+      calls: 12,
+      handled: 5,
+      latency_ms_avg: 40,
+      latency_ms_max: 120,
+    },
+    'routerai-decision/clef': { calls: 4, handled: 2, latency_ms_avg: 210, latency_ms_max: 300 },
+  },
+}
+
+const EMPTY_METRICS = {
+  calls: 0,
+  handled: 0,
+  fallback: 0,
+  escalated: 0,
+  attempts: { primary: 0, escalation: 0 },
+  rejected: { ok: 0, low_confidence: 0, invalid: 0, no_answer: 0, no_provider: 0, error: 0 },
+  by_model: {},
 }
 
 function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
@@ -152,6 +188,9 @@ beforeEach(() => {
     defaults: DEFAULTS,
     isOverridden: false,
   })
+  mocks.getDecisionMetrics.mockResolvedValue({ metrics: METRICS, ts: '2026-10-10T00:00:00.000Z' })
+  mocks.resetDecisionMetrics.mockResolvedValue({ metrics: EMPTY_METRICS })
+  vi.mocked(confirm).mockResolvedValue(true)
 })
 
 afterEach(async () => {
@@ -332,6 +371,84 @@ describe('DecisionSettings — админ-раздел «Decision-модели»
 
     expect(container.querySelector('[role="alert"]')!.textContent).toContain('boom')
   })
+
+  it('рендерит вторую пару provider/model (эскалация) из API', async () => {
+    const container = await renderSettings()
+
+    const escProvider = container.querySelector(
+      '[data-testid="decision-config-escalation-provider"]',
+    ) as HTMLElement
+    const escModel = container.querySelector(
+      '[data-testid="decision-config-escalation-model"]',
+    ) as HTMLElement
+    expect(escProvider.textContent).toContain('routerai-decision')
+    expect(escModel.textContent).toContain('clef')
+  })
+
+  it('модели эскалации фильтруются по выбранному провайдеру эскалации', async () => {
+    const container = await renderSettings()
+
+    const escModel = container.querySelector(
+      '[data-testid="decision-config-escalation-model"]',
+    ) as HTMLElement
+    const options = (await openOptions(escModel)).map((o) => o.textContent?.trim())
+    expect(options).toContain('clef-flash')
+    expect(options).toContain('clef')
+    expect(options).not.toContain('gpt-4o')
+  })
+
+  it('смена провайдера эскалации сбрасывает модель эскалации в черновике', async () => {
+    const container = await renderSettings()
+
+    const escProvider = container.querySelector(
+      '[data-testid="decision-config-escalation-provider"]',
+    ) as HTMLElement
+    await selectOption(escProvider, 'ollama-systemone')
+    expect(escProvider.textContent).toContain('ollama-systemone')
+
+    await clickTestId(container, 'decision-config-save')
+    await act(async () => {})
+
+    expect(mocks.updateDecisionSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ escalationProvider: 'ollama-systemone', escalationModel: '' }),
+    )
+  })
+
+  it('загружает и показывает метрики decision-слоя', async () => {
+    const container = await renderSettings()
+
+    expect(mocks.getDecisionMetrics).toHaveBeenCalledTimes(1)
+    const summary = container.querySelector('[data-testid="decision-metrics-summary"]')!
+    expect(summary.textContent).toContain('12') // calls
+    expect(summary.textContent).toContain('7') // handled
+
+    const byModel = container.querySelector('[data-testid="decision-metrics-by-model"]')!
+    expect(byModel.textContent).toContain('routerai-decision/clef-flash')
+    expect(byModel.textContent).toContain('120') // latency max
+  })
+
+  it('кнопка «Обновить» перезапрашивает метрики', async () => {
+    const container = await renderSettings()
+    expect(mocks.getDecisionMetrics).toHaveBeenCalledTimes(1)
+
+    await clickTestId(container, 'decision-metrics-refresh')
+    await act(async () => {})
+
+    expect(mocks.getDecisionMetrics).toHaveBeenCalledTimes(2)
+  })
+
+  it('кнопка «Сбросить» подтверждает и вызывает resetDecisionMetrics', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'decision-metrics-reset')
+    await act(async () => {})
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.resetDecisionMetrics).toHaveBeenCalledTimes(1)
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', category: 'system' }),
+    )
+  })
 })
 
 describe('DecisionSettings — права доступа (ADMIN) и i18n (AD-084)', () => {
@@ -359,5 +476,13 @@ describe('DecisionSettings — права доступа (ADMIN) и i18n (AD-084
     expect(ruDict['decisionConfig.providerModel']).toBeTruthy()
     expect(enDict['decisionConfig.confidenceThreshold']).toBeTruthy()
     expect(ruDict['decisionConfig.confidenceThreshold']).toBeTruthy()
+    expect(enDict['decisionConfig.escalationLabel']).toBeTruthy()
+    expect(ruDict['decisionConfig.escalationLabel']).toBeTruthy()
+    expect(enDict['decisionConfig.metrics']).toBeTruthy()
+    expect(ruDict['decisionConfig.metrics']).toBeTruthy()
+    expect(enDict['decisionConfig.metricsRefresh']).toBeTruthy()
+    expect(ruDict['decisionConfig.metricsReset']).toBeTruthy()
+    expect(enDict['decisionConfig.metricCalls']).toBeTruthy()
+    expect(ruDict['decisionConfig.metricCalls']).toBeTruthy()
   })
 })

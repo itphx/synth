@@ -1902,6 +1902,18 @@ export const synthApi = {
     return fetchJSON<DecisionSettingsResponse>(`${BASE_URL}/settings/decision`, { method: 'DELETE' })
   },
 
+  /** GET /settings/decision/metrics — снимок in-memory метрик decision-слоя + время снятия. */
+  async getDecisionMetrics(): Promise<{ metrics: DecisionMetrics; ts: string }> {
+    return fetchJSON<{ metrics: DecisionMetrics; ts: string }>(`${BASE_URL}/settings/decision/metrics`)
+  },
+
+  /** DELETE /settings/decision/metrics — сброс накопителей метрик (под write-guard). */
+  async resetDecisionMetrics(): Promise<{ metrics: DecisionMetrics }> {
+    return fetchJSON<{ metrics: DecisionMetrics }>(`${BASE_URL}/settings/decision/metrics`, {
+      method: 'DELETE',
+    })
+  },
+
   /** Последние записи журнала обработки внешних событий (default 50, cap 500 на сервере). */
   async getEventJournal(limit?: number): Promise<{ entries: EventJournalEntry[] }> {
     const qs = limit !== undefined ? `?limit=${encodeURIComponent(String(limit))}` : ''
@@ -2042,6 +2054,14 @@ export interface DecisionSettings {
   model: string
   /** Порог уверенности 0..1: ниже — fallback (fail-safe). */
   confidenceThreshold: number
+  /**
+   * AD-084 Ф6: необязательный точный тир на эскалацию — провайдер (пусто —
+   * без эскалации). Вторая пара provider/model: используется, когда основная
+   * модель не дала уверенного валидного ответа (низкая уверенность/ошибка).
+   */
+  escalationProvider: string
+  /** AD-084 Ф6: необязательная модель эскалации (пусто — без эскалации). */
+  escalationModel: string
 }
 
 /** AD-084: ответ `GET/DELETE /settings/decision` — эффективные значения, дефолты и флаг override. */
@@ -2049,6 +2069,45 @@ export interface DecisionSettingsResponse {
   decision: DecisionSettings
   defaults: DecisionSettings
   isOverridden: boolean
+}
+
+/** AD-084: статус попытки тира decision-каскада (см. `decision-cascade.ts` в core). */
+export type DecisionAttemptStatus =
+  | 'ok'
+  | 'low_confidence'
+  | 'invalid'
+  | 'no_answer'
+  | 'no_provider'
+  | 'error'
+
+/** AD-084: разбивка метрик по модели `'<provider>/<model>'` (latency — по попыткам модели). */
+export interface DecisionModelMetrics {
+  calls: number
+  handled: number
+  latency_ms_avg: number
+  latency_ms_max: number
+}
+
+/**
+ * AD-084: сериализуемый снимок агрегатных in-memory метрик decision-слоя
+ * (`GET /settings/decision/metrics`). Форма повторяет
+ * `DecisionMetricsSnapshot` из core (`engine/router/decision-metrics.ts`).
+ */
+export interface DecisionMetrics {
+  /** Обращений к каскаду. */
+  calls: number
+  /** Принятых решений. */
+  handled: number
+  /** Отказов каскада. */
+  fallback: number
+  /** Принятых на тире `escalation`. */
+  escalated: number
+  /** Счётчики попыток по тирам. */
+  attempts: { primary: number; escalation: number }
+  /** Распределение статусов попыток. */
+  rejected: Record<DecisionAttemptStatus, number>
+  /** Разбивка по моделям `'<provider>/<model>'`. */
+  by_model: Record<string, DecisionModelMetrics>
 }
 
 /**

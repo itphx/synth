@@ -185,13 +185,18 @@ decision:                         # AD-084: decision-модели (System One: C
   provider: ""                    # имя провайдера decision-типа (decision | systemone)
   model: ""                       # модель (напр. clef-flash)
   confidenceThreshold: 0.6        # порог уверенности (ниже — fail-safe fallback)
+  escalationProvider: ""          # Ф6: провайдер тира эскалации (пусто — без эскалации)
+  escalationModel: ""             # Ф6: модель тира эскалации (пусто — без эскалации)
+  # Тир эскалации — вторая пара provider/model: единый каскад `primary → escalation`
+  # (decision-cascade.ts) идёт дальше при низкой уверенности/ошибке основной модели.
   # Транспорт задаётся типом провайдера (decision → POST {base}/decisions,
   # systemone → POST {base}/v1/systemone); таймаут — свойством провайдера (timeout).
 
 > Секция `decision` переопределяется в runtime через `GET/PUT/DELETE /api/v2/settings/decision`
 > (live, без рестарта): значения сохраняются в `{dataDir}/settings.json` и применяются ко всем
 > трём потребителям — микро-каскаду (`DecisionModel`), роутеру (`DecisionContentClassifier`) и
-> маршрутизации внешних событий (`DecisionRuleProvider`, AD-089). Мутации в managed — ADMIN.
+> маршрутизации внешних событий (`DecisionRuleProvider`, AD-089); агрегатные метрики decision-слоя
+> доступны через `GET/DELETE /api/v2/settings/decision/metrics`. Мутации в managed — ADMIN.
 
 permission:
   rules: {}                       # гранулярные permissions: allow/deny/ask per tool

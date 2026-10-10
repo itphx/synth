@@ -1,19 +1,24 @@
 # AD-084: Decision-модели (Clef/Clef-Flash) в маршрутизации и быстрых ответах
 
-> **Статус:** ⚠️ Частично реализовано — адаптер/конфиг, Clef-Flash в micro, decision-классификатор
-> маршрутизации, decision-роутинг событий (AD-089) и UI-настройки; «Clef на эскалации» и
-> мультимодальность — задел.
+> **Статус:** ✅ Реализовано — адаптер/конфиг, Clef-Flash в micro, decision-классификатор
+> маршрутизации, decision-роутинг событий (AD-089), UI-настройки, эскалационный тир
+> `primary → escalation`, агрегатные метрики и мультимодальный контракт (источник изображений —
+> [AD-085](./ad-085-multimodal-input.md)).
 > **Дата:** 2026-10-04
-> **Обновлено:** 2026-10-10 — приведено к реализованному коду (Ф1–Ф5): `DecisionProvider`,
-> `GatewayProvider.decide`, `DecisionModel` (micro), `DecisionContentClassifier` (router),
-> `DecisionRuleProvider` (events), конфиг `decision` + `events.decisionRouting`, runtime-API
-> `/settings/decision`, UI «Decision-модели».
+> **Обновлено:** 2026-10-10 — Ф6–Ф8: **эскалация** (вторая пара `escalationProvider`/`escalationModel`,
+> единый каскад `decision-cascade.ts` `primary → escalation`), **агрегатные метрики**
+> (`decision-metrics.ts`; `GET/DELETE /settings/decision/metrics`), **мультимодальный контракт**
+> (`images`/`videos` в `DecisionRequest`/`decide`/`MicroInput`; источник медиа —
+> [AD-085](./ad-085-multimodal-input.md)). Ранее (Ф1–Ф5): `DecisionProvider`, `GatewayProvider.decide`,
+> `DecisionModel` (micro), `DecisionContentClassifier` (router), `DecisionRuleProvider` (events),
+> конфиг `decision` + `events.decisionRouting`, runtime-API `/settings/decision`, UI «Decision-модели».
 > **Источник:** исследование 2026-10-04 — Cloudflare выпустил decision-модели Clef/Clef-Flash (2026-10-01);
 > рассмотрены в контексте [AD-034](./ad-034-model-routing.md) и [AD-035](./ad-035-micro-model-first.md).
 > **Связано:** [AD-034](./ad-034-model-routing.md), [AD-035](./ad-035-micro-model-first.md),
 > [AD-036](./ad-036-llm-gateway.md), [AD-023](./ad-023-configuration.md), [AD-029](./ad-029-granular-permissions.md),
 > [AD-070](./ad-070-system-prompt-composer.md), [AD-073](./ad-073-client-integrity-hybrid.md),
-> [AD-080](./ad-080-managed-hybrid-modes.md), [AD-081](./ad-081-hybrid-policy-leak-protection.md).
+> [AD-080](./ad-080-managed-hybrid-modes.md), [AD-081](./ad-081-hybrid-policy-leak-protection.md),
+> [AD-085](./ad-085-multimodal-input.md).
 
 **Решение:** добавить в Synth класс **decision-моделей** — моделей, которые за один forward-pass возвращают
 вероятность для каждого допустимого варианта каждого вопроса, без генерации свободного текста и без парсинга
@@ -130,6 +135,10 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 - **Clef-Flash** встаёт на место (или сразу после) этапа `micro_llm` — параллельный скоринг схемы вместо
   генерации + парсинга.
 - **Clef** подключается на эскалацию, когда нужна точность или задействована мультимодальность.
+- **Эскалационный тир** (`escalationProvider`/`escalationModel`, необязательный) прогоняется единым
+  каскадом `decideChoiceCascade` (`decision-cascade.ts`): `primary → escalation`. Переход — при низкой
+  уверенности, невалидной метке, отсутствии ответа или ошибке основной модели; тир переиспользуется
+  микро-моделью, `DecisionContentClassifier` и `DecisionRuleProvider`.
 
 ### 5. Классификатор «Маршрутизации»
 
@@ -151,24 +160,33 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 
 ## Мультимодальность
 
-`images`/`videos` на входе — **задел на будущее**, не первый этап. Возможные применения: классификация
-скриншотов, вложений, фрагментов UI (например, «тип вложения», «нужна ли визуальная проверка»). Начать стоит
-с текстового `state`; мультимодальность включать отдельным этапом после стабилизации базового слоя.
+`images`/`videos` на входе — **контракт готов** (Ф8): типы `DecisionRequest`/`DecisionMediaInput`
+(`packages/shared/src/types/decision.ts`), `DecisionProvider.decide(state, questions, { images, videos })`
+и `MicroInput`/`ClassifyRequest` принимают медиа-массивы; значения добавляются в тело запроса только
+если непусты. Сквозной источник изображений/видео — мультимодальный ввод, который ещё не реализован:
+это [AD-085](./ad-085-multimodal-input.md); здесь же — только контракт-плумбинг. Применения —
+классификация скриншотов, вложений, фрагментов UI («тип вложения», «нужна ли визуальная проверка»).
 
 ## Метрики
 
-⚠️ **Реализовано частично (Ф5).**
+✅ **Реализовано (Ф5, Ф7).**
 
-Реализовано:
-- микро/роутер — `DebugCollector.addContext('decision' | 'decision_routing', …)` (+ `metadata.micro_first.decision`);
-- события (AD-089) — мета `confidence`/`signals` в `RouteDecision` (попадает в ответ `POST /events` и журнал) и лог
-  успеха `[DECISION] … agent/confidence/latency/model`; latency добавлена и в warning-ветки промаха.
+- **Агрегатные метрики** — `decision-metrics.ts` (`DecisionMetrics`, process-wide синглтон
+  `decisionMetrics`): `calls` / `handled` / `fallback` / `escalated`, `attempts`
+  (`primary`/`escalation`), `rejected` (статусы `ok`/`low_confidence`/`invalid`/`no_answer`/
+  `no_provider`/`error`), `by_model` (`'<provider>/<model>'` → `calls`/`handled`/`latency_ms_avg`/
+  `latency_ms_max`). Каждый итог `decideChoiceCascade` фиксируется в `recordOutcome` (в т.ч. при отказе).
+- **Экспозиция** — `GET /api/v2/settings/decision/metrics` (`requireAuth`) → `{ metrics, ts }`;
+  `DELETE /api/v2/settings/decision/metrics` (`decisionWriteGuard`) → сброс и `{ metrics }`.
+  In-memory, сбрасываются при рестарте.
+- **Микро/роутер** — `DebugCollector.addContext('decision' | 'decision_routing', …)`
+  (+ `metadata.micro_first.decision`); сигнал перехода на эскалацию.
+- **События (AD-089)** — мета `confidence`/`signals` в `RouteDecision` (попадает в ответ
+  `POST /events` и журнал) и лог успеха `[DECISION] … agent/confidence/latency/model`; latency
+  добавлена и в warning-ветки промаха.
 
-Задел (агрегаты — при необходимости отдельным store/роутом):
-- `decision.calls` / `decision.handled` / `decision.fallback` — сколько решений обработано decision-слоем;
-- `decision.latency_by_model` — латентность по моделям (`clef`/`clef-flash`/`jev`/локальные);
-- `decision.calibration` — сопоставление заявленной вероятности и фактической корректности (мониторинг порогов);
-- разрез локальный/remote (доля трафика в remote-провайдер).
+Возможный задел (сейчас не требуется): `decision.calibration` — сопоставление заявленной вероятности
+и фактической корректности для мониторинга порогов.
 
 ## Этапы реализации
 
@@ -178,24 +196,29 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 2. ✅ **Clef-Flash в micro за флагом.** Новый `DecisionModel` (`MicroModelKind: 'decision'`) для задач
    `classify` / `enum_decision`; включается per-session флагом `decisionFirst` (AD-035), старый
    `micro_llm`-путь сохранён — сравнение качества/латентности на своих данных.
-3. ⏳ **Clef на эскалацию** (точная модель на `UNSURE`/сложные решения) и **мультимодальность** —
-   **задел**: контракт типов (`score`, `images`/`videos`) есть; рантайм-веток эскалации
-   (отдельного поля модели эскалации в конфиге нет) и мультимодальных `state` нет.
-4. ✅ **Decision-классификатор маршрутизации.** `DecisionContentClassifier` (AD-034) — опциональный
+3. ✅ **Clef на эскалацию.** Вторая пара `escalationProvider`/`escalationModel` (пусто — без
+   эскалации): единый каскад `decideChoiceCascade` (`decision-cascade.ts`) идёт `primary → escalation`
+   при низкой уверенности/невалидной метке/отсутствии ответа/ошибке основной модели; переиспользуется
+   микро-моделью, `DecisionContentClassifier` и `DecisionRuleProvider`; переход observable (лог
+   `[DECISION] … переход на эскалацию …`).
+4. ✅ **Мультимодальный контракт (задел AD-085).** `images`/`videos` в `DecisionRequest`/
+   `DecisionMediaInput`, `DecisionProvider.decide(opts.images/videos)` и `MicroInput`/`ClassifyRequest`;
+   прокидываются в тело запроса, только если непусты. Сквозной источник медиа — [AD-085](./ad-085-multimodal-input.md).
+5. ✅ **Decision-классификатор маршрутизации.** `DecisionContentClassifier` (AD-034) — опциональный
    decision-вопрос `choice` `{coding|research|chat}` при низкой уверенности словарного
    `content`-классификатора; приоритет `routingCategory` не меняется.
-5. ✅ **Интеграция в события (AD-089).** `DecisionRuleProvider` (`name='decision-rules'`) —
+6. ✅ **Интеграция в события (AD-089).** `DecisionRuleProvider` (`name='decision-rules'`) —
    decision-шаг после `ProjectRuleProvider` при флаге `events.decisionRouting` (default off),
    fail-safe (ошибка/низкая уверенность → Router идёт дальше).
-6. ✅ **UI-настройки и метрики.** Админ-секция «Decision-модели» (Settings UI Kit, AD-072),
-   per-session флаг `decisionFirst`, events-тумблер `decisionRouting`; метрики — через
-   `DebugCollector.addContext('decision', …)`/`metadata` (агрегатный store — при необходимости отдельно).
-7. ✅ **Документация.** `docs/ROUTING.md` обновлён (decision-уровень в «Быстрых ответах»/«Маршрутизации»);
-   AD/AGENTS/API_V2/CONFIGURATION синхронизированы.
+7. ✅ **UI-настройки и метрики.** Админ-секция «Decision-модели» (Settings UI Kit, AD-072): пара
+   провайдер/модель, пара эскалации, порог уверенности и read-only статистика (`GET/DELETE
+   /settings/decision/metrics`); per-session флаг `decisionFirst`, events-тумблер `decisionRouting`.
+8. ✅ **Документация.** `docs/ROUTING.md` обновлён (decision-уровень в «Быстрых ответах»/
+   «Маршрутизации», эскалация и метрики); AD/AGENTS/API_V2/CONFIGURATION синхронизированы.
 
 ## Статус реализации в коде
 
-⚠️ **Частично реализовано (Ф1–Ф5).**
+✅ **Реализовано (Ф1–Ф8).**
 
 - **Адаптер и транспорт:** `packages/core/src/providers/decision.ts` (`DecisionProvider`, типы
   провайдеров `decision` → `POST {base}/decisions` (RouterAI) и `systemone` → `POST {base}/v1/systemone`
@@ -206,6 +229,13 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 - **Gateway:** `GatewayProvider.decide(state, questions, opts?)`
   (`packages/core/src/engine/gateway/gateway-provider.ts`) — guard/обфускация `state`, rate limit, аудит;
   при блокировке/лимите бросает `ProviderError`/`RateLimitError`, вызывающий слой делает fail-safe откат.
+- **Каскад:** `packages/core/src/engine/router/decision-cascade.ts` (`decideChoiceCascade`) — единый
+  проход `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`
+  (тир добавляется, только если задан и отличается от основной пары); фиксирует попытки и пишет
+  метрики; fail-safe — исключения наружу не пробрасываются. Переиспользуется микро-моделью,
+  `DecisionContentClassifier` и `DecisionRuleProvider`.
+- **Метрики:** `packages/core/src/engine/router/decision-metrics.ts` (`DecisionMetrics`, синглтон
+  `decisionMetrics`) — `calls`/`handled`/`fallback`/`escalated`, `attempts`/`rejected`/`by_model`.
 - **Микро-слой (AD-035):** `packages/core/src/engine/router/micro/models/decision-model.ts`
   (`DecisionModel`, `kind='decision'`) — в каскаде после embedding, за per-session флагом
   `decisionFirst`; старый `micro_llm`-путь сохранён.
@@ -213,29 +243,43 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
   (`DecisionContentClassifier`) — опциональный decision-вопрос категории при низкой уверенности.
 - **События (AD-089):** `packages/core/src/engine/events/decision-rule-provider.ts`
   (`DecisionRuleProvider`, `name='decision-rules'`); регистрация в `server/app.ts` (core) и
-  `backend/src/app.ts` после `ProjectRuleProvider`, fail-safe (`null` → Router идёт дальше).
+  `backend/src/app.ts` после `ProjectRuleProvider`, fail-safe (`null` → Router идёт дальше);
+  decision-вызов — через общий каскад.
+- **Мультимодальный контракт (AD-085 задел):** `images`/`videos` в `DecisionRequest`/
+  `DecisionMediaInput` (`packages/shared/src/types/decision.ts`), `DecisionProvider.decide(opts.images/
+  videos)` (`providers/decision.ts`) и `MicroInput`/`ClassifyRequest` (`engine/router/micro/types.ts`);
+  добавляются в тело запроса, только если непусты.
 - **Конфиг:** `@itphx/synth-shared/config` — секция `decision` (`enabled`/`provider`/`model`/
-  `confidenceThreshold`; `provider` — имя провайдера decision-протокола типа `decision`/`systemone`) +
+  `confidenceThreshold` + `escalationProvider`/`escalationModel`; `provider`/`escalationProvider` —
+  имена провайдеров decision-протокола типа `decision`/`systemone`) +
   поле `events.decisionRouting`; env-резолверы `SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`; типы
   `DecisionQuestion`/`DecisionAnswer`/`DecisionRequest`/`DecisionResponse` (`types/decision.ts`).
-- **Runtime-API:** `GET/PUT/DELETE /api/v2/settings/decision` (`server/routes/settings.ts`, `decisionWriteGuard`),
-  live-применение — `onDecisionChange`; runtime-стор — `DecisionRuntimeSettings` + `mergeDecisionConfig`
-  (`storage/runtime-settings.ts`).
+- **Runtime-API:** `GET/PUT/DELETE /api/v2/settings/decision` (`server/routes/settings.ts`,
+  `decisionWriteGuard`), live-применение — `onDecisionChange`; снимок/сброс метрик —
+  `GET /settings/decision/metrics` (`requireAuth`) и `DELETE /settings/decision/metrics`
+  (`decisionWriteGuard`); runtime-стор — `DecisionRuntimeSettings` + `mergeDecisionConfig`
+  (`storage/runtime-settings.ts`, включая escalation-поля).
 - **UI:** `packages/ui/src/components/settings/DecisionSettings.tsx` — админ-секция «Decision-модели»
-  (Settings UI Kit, AD-072); per-session `decisionFirst` (`SessionSettingsTab`), тумблер
-  `decisionRouting` в настройках событий (`EventsSettings`).
+  (Settings UI Kit, AD-072): основная пара провайдер/модель, пара эскалации, порог уверенности и
+  read-only статистика; per-session `decisionFirst` (`SessionSettingsTab`), тумблер `decisionRouting`
+  в настройках событий (`EventsSettings`).
 
 ## Риски и открытые вопросы
 
 - **Локальный инференс:** транспорт `systemone` (Ollama, `POST /v1/systemone`) реализован, но требует
   Ollama **≥ 0.35.1** (в dev — 0.32.14) и `ollama pull clef-flash` (~11 ГБ). Обновление рантайма —
   отдельная задача `@admin` с бэкпом/тестом/откатом (риск: перезапуск Ollama).
-- **Политика local/remote** — задел: транспорт задаётся типом провайдера (`decision` — RouterAI,
-  `systemone` — Ollama), явного поля `mode` в конфиге нет. Полноценная типизация политики
-  (локально/remote, запрет утечек) — **задел** под [AD-080](./ad-080-managed-hybrid-modes.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md).
-- **Трафик в Cloudflare (remote)** при managed/чувствительных данных — политики локально/remote (см. выше).
+- **Политика local/remote — зависимость, а не остаток AD-084.** Транспорт задаётся типом провайдера
+  (`decision` — RouterAI, `systemone` — Ollama); явного поля `mode` в конфиге нет по решению.
+  Полноценная типизация политики (локально/remote, запрет утечек) появится вместе с
+  [AD-080](./ad-080-managed-hybrid-modes.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md) —
+  до тех пор управление идёт выбором провайдера.
+- **Трафик в Cloudflare (remote)** при managed/чувствительных данных — снимается будущими политиками
+  [AD-080](./ad-080-managed-hybrid-modes.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md).
 - **Калибровка вероятностей и порогов** — заявленные вероятности требуют проверки; порог `OK`/`UNSURE` (сейчас
-  фиксированный, AD-035) может потребовать настройки.
+  фиксированный, AD-035) может потребовать настройки. Агрегатные метрики (`by_model`, `rejected`) дают
+  основу для наблюдения, но сопоставление вероятности и фактической корректности (`calibration`) сейчас
+  не требуется.
 - **Не путать с chat-LLM:** decision-модель не умеет генерировать и рассуждать; её нельзя ставить туда, где
   нужен свободный ответ.
 - **Устаревание/доступность моделей:** Clef/Clef-Flash — новые (2026-10-01), API и хостинг могут меняться;
@@ -253,5 +297,7 @@ rules → embedding → Clef-Flash → [Clef] → LLM fallback
 - [AD-073](./ad-073-client-integrity-hybrid.md), [AD-080](./ad-080-managed-hybrid-modes.md),
   [AD-081](./ad-081-hybrid-policy-leak-protection.md) — целостность/режимы/политики гибрида и защита от утечек.
 - [AD-072](./ad-072-settings-ui-kit.md) — UI-настройки decision-слоя.
+- [AD-085](./ad-085-multimodal-input.md) «Мультимодальный ввод» — сквозной источник `images`/`videos`
+  для мультимодального контракта decision-слоя.
 - [docs/ROUTING.md](../ROUTING.md) — пользовательские слои «Быстрые ответы» и «Маршрутизация» (обновлено).
 - [packages/core/AGENTS.md](../../packages/core/AGENTS.md) — код микро-слоя (`engine/router/micro/`).
