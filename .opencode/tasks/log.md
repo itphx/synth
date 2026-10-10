@@ -2268,3 +2268,18 @@
 - **Ветка:** `docs/ad-normalization-089-external-events`
 - **Коммит:** `87e6c05`, этот (журнал).
 
+## 2026-10-10 (продолжение 7) — observability decision-маршрутизации событий
+- **Задача:** «улучши observability event-decision (лог успеха + confidence в ответ/журнал)».
+- **Тип:** feature (shared/core) + docs
+- **Исполнитель:** @orchestrator (дизайн/верификация) → @fixer (правки + рестарт/e2e)
+- **Результат:** PASS
+- **Сделано (`cf76291`):**
+  - shared: `RouteDecisionMeta {confidence?, signals?}` + `RouteDecision = RouteDecisionKind & Meta` (дискриминант `kind` сохранён) → confidence/signals попадают в ответ `POST /events` и в журнал автоматически (журнал хранит `decision` целиком).
+  - `target-decision.ts`: `extra` расширен `confidence`/`signals`.
+  - `DecisionRuleProvider`: замер latency; `info('DECISION', …)` на успехе (агент/confidence/порог/модель/latency/source/type); мета `{reason, confidence, signals:['decision-rules','agent:<id>','model:<p/m>','latency:<ms>ms']}`; latency добавлена в warning-ветки промаха. Fail-safe не изменён.
+  - docs: API_V2 (POST /events — `decision.confidence/signals`), core AGENTS.
+- **E2E (реальная модель `tev1:4b`@owu, рестарт dev):** `POST /events` → `decision = {kind:"ephemeral", agentTemplate:"bankassist", ttl:"24h", confidence:0.81, signals:[decision-rules, agent:bankassist, model:owu-systemone/tev1:4b, latency:681ms]}`; в журнале `decision.confidence/signals` есть; лог `[DECISION] decision-маршрутизация: агент=bankassist confidence=0.81 (порог 0.3) model=owu-systemone/tev1:4b latency=681ms source=test type=message`. Тестовая сессия удалена; `decisionRouting` → false.
+- **Верификация (оркестратор):** build shared/core OK; typecheck 6/6; lint 0 errors; events-тесты 127/127.
+- **Ветка:** `docs/ad-normalization-089-external-events`
+- **Коммит:** `cf76291`, этот (журнал).
+
