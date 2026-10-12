@@ -3,7 +3,7 @@ import type { Mock } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { EventBinding, SynthEvent } from '@itphx/synth-shared';
+import type { EventBinding, Session, SynthEvent } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { EventBindingStore } from '../../storage/event-binding-store.js';
@@ -53,6 +53,8 @@ describe('RequestSessionService (AD-089)', () => {
       unknownAgentTemplate?: 'drop' | 'default-agent';
       resolveOwnerId?: () => string | Promise<string | undefined>;
       resolveLlmDefaults?: () => { provider?: string; model?: string } | Promise<{ provider?: string; model?: string }>;
+      identityMap?: Record<string, string>;
+      onSessionMaterialized?: (session: Session) => void | Promise<void>;
     },
   ) => new RequestSessionService({
     sessionManager,
@@ -67,6 +69,8 @@ describe('RequestSessionService (AD-089)', () => {
     ...(overrides?.resolveAgentTemplate ? { resolveAgentTemplate: overrides.resolveAgentTemplate } : {}),
     ...(overrides?.resolveOwnerId ? { resolveOwnerId: overrides.resolveOwnerId } : {}),
     ...(overrides?.resolveLlmDefaults ? { resolveLlmDefaults: overrides.resolveLlmDefaults } : {}),
+    ...(overrides?.identityMap ? { identityMap: overrides.identityMap } : {}),
+    ...(overrides?.onSessionMaterialized ? { onSessionMaterialized: overrides.onSessionMaterialized } : {}),
   });
 
   it('request explicit создаёт сессию без expiresAt и доставки', async () => {
@@ -343,6 +347,112 @@ describe('RequestSessionService (AD-089)', () => {
     const { session } = await service().handleEvent(e);
 
     expect(session?.ownerId).toBe('owner-cron');
+  });
+
+  it('handleEvent: identityMap по chatKey задаёт владельца сессии (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:42',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:42' } });
+    const { session } = await service(undefined, {
+      identityMap: { 'chat:telegram:42': 'u-human' },
+    }).handleEvent(e, { ownerId: 'machine-account' });
+
+    // identityMap приоритетнее per-event владельца (машинного аккаунта).
+    expect(session?.userId).toBe('u-human');
+    expect(session?.ownerId).toBe('u-human');
+  });
+
+  it('handleEvent: identityMap по principalId задаёт владельца (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:pi',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:pi', principalId: 'tg:777' } });
+    const { session } = await service(undefined, {
+      identityMap: { 'tg:777': 'u-tg' },
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('u-tg');
+  });
+
+  it('handleEvent: chatKey из identityMap приоритетнее principalId (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:both',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:both', principalId: 'tg:1' } });
+    const { session } = await service(undefined, {
+      identityMap: { 'chat:telegram:both': 'u-chat', 'tg:1': 'u-principal' },
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('u-chat');
+  });
+
+  it('handleEvent: без совпадения в identityMap — прежняя логика (opts.ownerId) (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:nomatch',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:nomatch' } });
+    const { session } = await service(undefined, {
+      identityMap: { 'chat:telegram:other': 'u-other' },
+    }).handleEvent(e, { ownerId: 'u-agent' });
+
+    expect(session?.ownerId).toBe('u-agent');
+  });
+
+  it('onSessionMaterialized: вызывается для explicit-сессии с её владельцем (AD-089)', async () => {
+    const onMaterialized = vi.fn();
+    const created = await service(undefined, { onSessionMaterialized: onMaterialized }).request(
+      { initiator: 'user', intent: 'explicit' },
+      { userId: 'u-explicit' },
+    );
+
+    expect(onMaterialized).toHaveBeenCalledOnce();
+    expect(onMaterialized).toHaveBeenCalledWith(expect.objectContaining({ id: created!.id, userId: 'u-explicit' }));
+  });
+
+  it('onSessionMaterialized: вызывается для materialized auto-bind до deliver (AD-089)', async () => {
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultEphemeralTtl: '24h', autoBind: true },
+    });
+    const calls: string[] = [];
+    const onMaterialized = vi.fn((session: Session) => { calls.push(`materialized:${session.id}`); });
+    const deliverOrdered = vi.fn<EventDelivery>(async (sid) => { calls.push(`deliver:${sid}`); });
+
+    const svc = new RequestSessionService({
+      sessionManager,
+      eventRouter: router,
+      bindingStore,
+      hooks,
+      config: { defaultEphemeralTtl: '24h' },
+      deliver: deliverOrdered,
+      onSessionMaterialized: onMaterialized,
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:on-mat' }, dedupKey: 'k-on-mat' });
+    const { session } = await svc.handleEvent(e);
+
+    expect(onMaterialized).toHaveBeenCalledOnce();
+    expect(onMaterialized).toHaveBeenCalledWith(expect.objectContaining({ id: session!.id }));
+    // Подписка (callback) — строго до доставки, иначе события сессии теряются.
+    expect(calls).toEqual([`materialized:${session!.id}`, `deliver:${session!.id}`]);
   });
 
   it('handleEvent без владельца → сессия без ownerId (обратная совместимость)', async () => {

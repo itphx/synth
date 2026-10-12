@@ -50,7 +50,7 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   конфиг читается строго из `<home>/config.yaml` (без отката к XDG).
 - AD-089: секция `events` (`enabled`/`defaultMode`/`ephemeralTtl`/
   `journalRetentionDays`/`allowedSources`/`dedupStore`/`unknownAgentTemplate`/
-  `keyRateLimitPerMinute`/`decisionRouting`/`autoBind`/`autoBindAgentTemplate`). AD-051/AD-089: секция
+  `keyRateLimitPerMinute`/`decisionRouting`/`autoBind`/`autoBindAgentTemplate`/`identityMap`). AD-051/AD-089: секция
   `scheduler` (`enabled`/`tickSec`/`catchUp`/`jobRetentionDays`/`leaderElection`/
   `crossProcessLocks`); file-based флаги (`dedupStore: file`, `leaderElection: file`,
   `crossProcessLocks`) — default OFF, поведение single-process не меняют.

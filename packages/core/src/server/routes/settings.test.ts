@@ -1370,6 +1370,7 @@ describe('Settings API Routes (events, AD-089)', () => {
       decisionRouting: false,
       autoBind: false,
       autoBindAgentTemplate: '',
+      identityMap: {},
     });
     expect(body.events).toEqual(body.defaults);
   });
@@ -1420,6 +1421,26 @@ describe('Settings API Routes (events, AD-089)', () => {
     );
   });
 
+  it('PUT /events — identityMap сохраняется и применяется (AD-089)', async () => {
+    const { app, settingsStore, onEventsChange } = makeEventsApp();
+    const res = await app.request('/api/v2/settings/events', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: { identityMap: { 'chat:telegram:1': 'u-1', 'tg:2': 'u-2' } } }),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.events).toMatchObject({
+      identityMap: { 'chat:telegram:1': 'u-1', 'tg:2': 'u-2' },
+    });
+    expect(await settingsStore.getEvents()).toEqual({
+      identityMap: { 'chat:telegram:1': 'u-1', 'tg:2': 'u-2' },
+    });
+    expect(onEventsChange).toHaveBeenCalledWith(
+      expect.objectContaining({ identityMap: { 'chat:telegram:1': 'u-1', 'tg:2': 'u-2' } }),
+    );
+  });
+
   it('PUT /events — невалидные поля → 400 VALIDATION_ERROR', async () => {
     const { app, onEventsChange } = makeEventsApp();
     const cases: unknown[] = [
@@ -1433,6 +1454,8 @@ describe('Settings API Routes (events, AD-089)', () => {
       { events: { decisionRouting: 'yes' } },
       { events: { autoBind: 'yes' } },
       { events: { autoBindAgentTemplate: 123 } },
+      { events: { identityMap: 'nope' } },
+      { events: { identityMap: { k: 123 } } },
     ];
     for (const body of cases) {
       const res = await app.request('/api/v2/settings/events', {

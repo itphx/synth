@@ -65,14 +65,18 @@
   через `EventRouter`; `SessionManager.createSession` — materialization-примитив
   (fork/import/материализация), не для прямых запросов (AD-089). Материализация
   `ephemeral`/`bind` проставляет владельца, чтобы сессия не выпадала из
-  `listSessions({ userId })`: standalone — `deps.resolveOwnerId` (`local`), иначе
-  per-event `ownerId` (пользователь/создатель ключа привязки) → `identity.principalId`.
-  Там же проставляются дефолтные `provider`/`model` инстанса (`deps.resolveLlmDefaults`:
+  `listSessions({ userId })`, по приоритету: `deps.identityMap` (`identity.chatKey`,
+  затем `identity.principalId` → id пользователя инстанса) → per-event `ownerId`
+  (пользователь/создатель ключа привязки) → `identity.principalId` → `deps.resolveOwnerId`
+  (standalone — `local`). Дефолтные `provider`/`model` инстанса (`deps.resolveLlmDefaults`:
   standalone — `llm.defaultProvider`/`llm.defaultModel` через `StandaloneConfig.llmDefaults`;
   managed — `synth.llm`), иначе сессия из внешнего события не могла ответить без ручной
   простановки модели — явные значения `settings` приоритетнее, поля добираются по отдельности.
   Глобальный SSE-хаб `GET /api/v2/events` подписан на все события шины
   (`eventBus.subscribeAll`) — доставляет и позже созданные (funnel) сессии (AD-089).
+  Для per-session подписок (managed backend `EventHub`) funnel вызывает необязательный
+  `deps.onSessionMaterialized(session)` сразу после создания сессии и **до** доставки
+  события — потребитель подписывает клиентов владельца (`subscribeToSession`).
 
 ## Гибрид (core-специфика)
 
@@ -172,7 +176,9 @@
   `EventBinding{mode:'bound'}`, повтор/гонка → переиспользование привязки;
   `deps.resolveLlmDefaults` — добор дефолтных `provider`/`model` инстанса
   (`llm.defaultProvider`/`llm.defaultModel`) для `ephemeral`/`bind`/explicit;
-  `updateConfig` — live TTL/политика),
+  `deps.identityMap` — маппинг `identity.chatKey`/`principalId` на владельца сессии;
+  `deps.onSessionMaterialized` — колбэк после создания сессии до доставки (подписка хаба);
+  `updateConfig` — live TTL/политика/identityMap),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
   `DecisionRuleProvider` (`decision-rule-provider.ts`, AD-084: decision-шаг после project-правил при
@@ -202,7 +208,7 @@
   (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`),
   `FileMutex` (`file-mutex.ts`, AD-051/AD-089: `mkdir`-лок + stale takeover для общего
   `dataDir`; `ScheduleStore.crossProcess` сериализует мутации), `RuntimeSettingsStore`
-  (`events` + `mergeEventsConfig` — runtime-настройки раздела «События», AD-089; `decision` +
+  (`events` + `mergeEventsConfig` — runtime-настройки раздела «События» (включая `identityMap`), AD-089; `decision` +
   `mergeDecisionConfig` — runtime-настройки decision-слоя, AD-084, включая `escalationProvider`/`escalationModel`),
   `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`

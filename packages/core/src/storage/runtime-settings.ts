@@ -54,6 +54,12 @@ export interface EventsRuntimeSettings {
   autoBind: boolean;
   /** AD-089 (auto-bind): шаблон агента auto-bind-сессий (пусто — по умолчанию). */
   autoBindAgentTemplate: string;
+  /**
+   * AD-089: маппинг идентичности внешнего отправителя (`identity.chatKey` или
+   * `identity.principalId`) на владельца синт-сессии. Применяется при
+   * материализации `ephemeral`/`bind`; пусто — владелец не переопределяется.
+   */
+  identityMap: Record<string, string>;
 }
 
 /**
@@ -197,6 +203,7 @@ export function mergeEventsConfig(
     decisionRouting: r.decisionRouting ?? base?.decisionRouting ?? false,
     autoBind: r.autoBind ?? base?.autoBind ?? false,
     autoBindAgentTemplate: r.autoBindAgentTemplate ?? base?.autoBindAgentTemplate ?? '',
+    identityMap: r.identityMap ?? base?.identityMap ?? {},
   };
 }
 

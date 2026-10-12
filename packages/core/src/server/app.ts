@@ -969,6 +969,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       unknownAgentTemplate: effectiveEvents.unknownAgentTemplate,
     },
     resolveAgentTemplate,
+    // AD-089: маппинг идентичности внешнего отправителя на владельца сессии
+    // (`events.identityMap`) — напр. Telegram-чат → человек.
+    identityMap: effectiveEvents.identityMap,
     // AD-089: владелец сессий, материализуемых внешним событием (ephemeral/bind) —
     // `local` (паритет с `POST /api/v2/sessions`, `resolveUserId` core). Без этого
     // такие сессии не имели владельца и выпадали из `listSessions({ userId })`.
@@ -1221,6 +1224,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       requestSessionService.updateConfig({
         defaultEphemeralTtl: effective.ephemeralTtl,
         unknownAgentTemplate: effective.unknownAgentTemplate,
+        identityMap: effective.identityMap,
       });
     },
     // AD-084: дефолт config.yaml для GET/DELETE-сброса decision-слоя.

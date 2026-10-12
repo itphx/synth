@@ -132,6 +132,7 @@ describe('defaultConfig', () => {
       decisionRouting: false,
       autoBind: false,
       autoBindAgentTemplate: '',
+      identityMap: {},
     });
   });
 

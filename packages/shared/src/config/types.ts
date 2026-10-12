@@ -269,7 +269,14 @@ export const commandsConfigSchema = z.object({
  *   `defaultMode`. `false` (default) — поведение не меняется; влияет только на
  *   фоллбек;
  * - `autoBindAgentTemplate` — шаблон агента для auto-bind-сессий (пусто — агент
- *   по умолчанию).
+ *   по умолчанию);
+ * - `identityMap` — AD-089: маппинг идентичности внешнего отправителя на
+ *   владельца синт-сессии. Ключ — `identity.chatKey` (`chat:telegram:<id>`) или
+ *   `identity.principalId` (`tg:<id>`), значение — id пользователя
+ *   синт-инстанса. Применяется при материализации сессий `ephemeral`/`bind`:
+ *   совпадение (сначала `chatKey`, затем `principalId`) задаёт владельца сессии.
+ *   Пусто (default) — сессия принадлежит аутентифицированному пользователю
+ *   запроса (или `identity.principalId`/`resolveOwnerId`), прежнее поведение.
  */
 export const eventsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -304,6 +311,14 @@ export const eventsConfigSchema = z.object({
    * умолчанию; резолвится через `AgentRegistry` с политикой `unknownAgentTemplate`).
    */
   autoBindAgentTemplate: z.string().default(''),
+  /**
+   * AD-089: маппинг идентичности внешнего отправителя (`identity.chatKey` или
+   * `identity.principalId`) на владельца синт-сессии (id пользователя
+   * инстанса). Применяется при материализации `ephemeral`/`bind`; пусто —
+   * владелец не переопределяется (аутентифицированный пользователь запроса,
+   * `identity.principalId` или `resolveOwnerId`).
+   */
+  identityMap: z.record(z.string(), z.string()).default({}),
 });
 
 // --- Планировщик расписаний (AD-051 срез / AD-089) ---

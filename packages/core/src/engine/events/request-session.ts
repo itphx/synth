@@ -75,6 +75,21 @@ export interface RequestSessionServiceDeps {
    * `llm.defaultProvider`/`llm.defaultModel`; managed backend — свой источник.
    */
   resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
+  /**
+   * AD-089: маппинг идентичности внешнего отправителя (`identity.chatKey` или
+   * `identity.principalId`) на владельца синт-сессии (id пользователя
+   * инстанса). Применяется при материализации сессий `ephemeral`/`bind`;
+   * приоритет выше per-event владельца. Не задан/пусто — прежняя логика.
+   */
+  identityMap?: Record<string, string>;
+  /**
+   * AD-089: колбэк после создания/материализации сессии (explicit/`ephemeral`/
+   * `bind`), но **до** доставки события в неё. Backend связывает его с
+   * `EventHub.subscribeToSession(ownerId, sessionId)`, чтобы клиенты владельца,
+   * подключённые до создания сессии, получали её события (иначе сессии,
+   * созданные funnel'ом, терялись — `0 subscribers`).
+   */
+  onSessionMaterialized?: (session: Session) => void | Promise<void>;
 }
 
 /**
@@ -173,6 +188,8 @@ export class RequestSessionService {
   private _publish?: (type: EventType, sessionId: string, data: Record<string, unknown>) => void;
   private _resolveOwnerId?: () => string | Promise<string | undefined>;
   private _resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
+  private _identityMap?: Record<string, string>;
+  private _onSessionMaterialized?: (session: Session) => void | Promise<void>;
 
   constructor(deps: RequestSessionServiceDeps) {
     this._sessionManager = deps.sessionManager;
@@ -188,20 +205,30 @@ export class RequestSessionService {
     this._publish = deps.publish;
     this._resolveOwnerId = deps.resolveOwnerId;
     this._resolveLlmDefaults = deps.resolveLlmDefaults;
+    this._identityMap = deps.identityMap;
+    this._onSessionMaterialized = deps.onSessionMaterialized;
   }
 
   /**
    * AD-089: live-обновление конфигурации funnel (runtime-настройки из админки):
-   * TTL ephemeral по умолчанию и политика неизвестного `agentTemplate`.
+   * TTL ephemeral по умолчанию, политика неизвестного `agentTemplate` и
+   * маппинг идентичности (`identityMap`).
    */
   updateConfig(
-    partial: Partial<{ defaultEphemeralTtl: string; unknownAgentTemplate: 'drop' | 'default-agent' }>,
+    partial: Partial<{
+      defaultEphemeralTtl: string;
+      unknownAgentTemplate: 'drop' | 'default-agent';
+      identityMap: Record<string, string>;
+    }>,
   ): void {
     if (partial.defaultEphemeralTtl !== undefined) {
       this._config.defaultEphemeralTtl = partial.defaultEphemeralTtl;
     }
     if (partial.unknownAgentTemplate !== undefined) {
       this._config.unknownAgentTemplate = partial.unknownAgentTemplate;
+    }
+    if (partial.identityMap !== undefined) {
+      this._identityMap = partial.identityMap;
     }
   }
 
@@ -226,7 +253,7 @@ export class RequestSessionService {
         ? parseTtl(req.ttl ?? this._config.defaultEphemeralTtl)
         : undefined;
 
-    return this._sessionManager.createSession({
+    const session = await this._sessionManager.createSession({
       title: req.title,
       icon: req.icon,
       color: req.color,
@@ -239,6 +266,10 @@ export class RequestSessionService {
       ownerId: opts?.ownerId,
       expiresAt,
     });
+    // AD-089: уведомляем подписчика (EventHub) о новой сессии владельца —
+    // до того, как в неё начнут поступать события.
+    await this._onSessionMaterialized?.(session);
+    return session;
   }
 
   /**
@@ -322,6 +353,8 @@ export class RequestSessionService {
         expiresAt: parseTtl(decision.ttl),
         ...(owner ? { userId: owner, ownerId: owner } : {}),
       });
+      // AD-089: подписываем клиентов владельца на новую сессию до доставки.
+      await this._onSessionMaterialized?.(session);
       await this._deliver(session.id, event, 'run');
       return session;
     }
@@ -361,6 +394,8 @@ export class RequestSessionService {
         ...(decision.agentTemplate ? { agentTemplate: decision.agentTemplate } : {}),
         ...(decision.project ? { project: decision.project } : {}),
       });
+      // AD-089: подписываем клиентов владельца на новую сессию до доставки.
+      await this._onSessionMaterialized?.(session);
       await this._deliver(session.id, event, 'run');
       return session;
     }
@@ -400,21 +435,41 @@ export class RequestSessionService {
 
   /**
    * AD-089: владелец материализуемой внешним событием сессии. Приоритет:
-   * 1) per-event `ownerId` (запрос: пользователь либо владелец ключа привязки);
-   * 2) `deps.resolveOwnerId` (standalone core — `local`, паритет с
-   *    `POST /api/v2/sessions`; покрывает и сессии планировщика без запроса);
+   * 1) `deps.identityMap` — совпадение `identity.chatKey`, затем
+   *    `identity.principalId` (маппинг внешнего отправителя на владельца
+   *    инстанса, напр. Telegram-чат → человек);
+   * 2) per-event `ownerId` (запрос: пользователь либо владелец ключа привязки);
    * 3) `event.identity.principalId` (атрибуция источника, напр. владелец
-   *    расписания `cron`).
+   *    расписания `cron`);
+   * 4) `deps.resolveOwnerId` (standalone core — `local`, паритет с
+   *    `POST /api/v2/sessions`; покрывает и сессии планировщика без запроса).
    * Пустое значение → `undefined` (прежнее поведение — сессия без владельца).
    */
   private async _resolveSessionOwner(
     explicitOwnerId: string | undefined,
     event: SynthEvent,
   ): Promise<string | undefined> {
+    const mapped = this._mapIdentityOwner(event);
+    if (mapped) return mapped;
+
     const resolved = explicitOwnerId
-      || (this._resolveOwnerId ? await this._resolveOwnerId() : undefined)
-      || event.identity?.principalId;
+      || event.identity?.principalId
+      || (this._resolveOwnerId ? await this._resolveOwnerId() : undefined);
     return resolved || undefined;
+  }
+
+  /**
+   * AD-089: владелец из `deps.identityMap` — сначала по `identity.chatKey`,
+   * затем по `identity.principalId`. Пустая карта/нет совпадения → `undefined`.
+   */
+  private _mapIdentityOwner(event: SynthEvent): string | undefined {
+    const map = this._identityMap;
+    if (!map) return undefined;
+    const chatKey = event.identity?.chatKey;
+    if (chatKey && map[chatKey]) return map[chatKey];
+    const principalId = event.identity?.principalId;
+    if (principalId && map[principalId]) return map[principalId];
+    return undefined;
   }
 
   /**

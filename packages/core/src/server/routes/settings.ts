@@ -68,6 +68,7 @@ function resolveEventsDefaults(fallback?: Partial<EventsRuntimeSettings>): Event
     decisionRouting: fallback?.decisionRouting ?? base.decisionRouting,
     autoBind: fallback?.autoBind ?? base.autoBind,
     autoBindAgentTemplate: fallback?.autoBindAgentTemplate ?? base.autoBindAgentTemplate,
+    identityMap: fallback?.identityMap ?? base.identityMap,
   };
 }
 
@@ -139,6 +140,18 @@ function validateEventsSettings(
     }
     result.autoBindAgentTemplate = s.autoBindAgentTemplate;
   }
+  if (s.identityMap !== undefined) {
+    if (
+      !s.identityMap
+      || typeof s.identityMap !== 'object'
+      || Array.isArray(s.identityMap)
+      || !Object.values(s.identityMap as Record<string, unknown>).every((v) => typeof v === 'string')
+      || !Object.keys(s.identityMap as Record<string, unknown>).every((k) => k.length > 0)
+    ) {
+      return { ok: false, message: 'events.identityMap: ожидается объект { string: string }' };
+    }
+    result.identityMap = s.identityMap as Record<string, string>;
+  }
   return { ok: true, value: result };
 }
 
@@ -158,6 +171,7 @@ function effectiveEvents(
     decisionRouting: runtime.decisionRouting ?? defaults.decisionRouting,
     autoBind: runtime.autoBind ?? defaults.autoBind,
     autoBindAgentTemplate: runtime.autoBindAgentTemplate ?? defaults.autoBindAgentTemplate,
+    identityMap: runtime.identityMap ?? defaults.identityMap,
   };
 }
 

@@ -207,13 +207,23 @@ decision-маршрутизация (шаг 4) сохраняют своё по�
   `unknownAgentTemplate: 'drop'` не создаёт сессию (fail-safe, `agent_not_found` в журнале).
 
 **Владелец и доставка.** Сессии, материализуемые внешним событием (`ephemeral`/`bind`),
-получают владельца: standalone — `local` (паритет с `POST /api/v2/sessions`); managed —
-аутентифицированный пользователь запроса либо создатель API-ключа привязки
-(`credential.ownerId`), иначе `identity.principalId` (напр. владелец расписания). Так они не
-выпадают из `listSessions({ userId })` и UI-списка. Глобальный SSE-хаб `GET /api/v2/events`
-подписывается на **все** события шины (`subscribeAll`), поэтому доставляет и события сессий,
-созданных **после** подключения подписчика — критично для add-on'ов (Telegram-шлюз получает
-`stream.done`; иначе `[EventBus] publish … 0 subscribers — EVENT LOST`).
+получают владельца по приоритету: **`events.identityMap`** (совпадение `identity.chatKey`,
+затем `identity.principalId` — явный маппинг внешнего отправителя на пользователя инстанса,
+напр. Telegram-чат → человек) → per-event владелец (аутентифицированный пользователь запроса
+либо создатель API-ключа привязки `credential.ownerId`) → `identity.principalId` (напр.
+владелец расписания) → `resolveOwnerId` (standalone — `local`, паритет с `POST /api/v2/sessions`).
+Так сессии не выпадают из `listSessions({ userId })` и UI-списка — человек видит свои
+Telegram-сессии, а не машинный аккаунт шлюза. Карта `events.identityMap` задаётся в config
+и переопределяется runtime (`GET/PUT/DELETE /api/v2/settings/events`).
+
+**Доставка событий подписчикам.** Funnel уведомляет хаб о материализованной сессии
+(`RequestSessionService` → `deps.onSessionMaterialized`) **до** доставки в неё события;
+backend связывает колбэк с `EventHub.subscribeToSession(ownerId, sessionId)`, поэтому
+WS/SSE-клиенты владельца, подключённые **до** создания сессии (в т.ч. events-funnel,
+auto-bind/ephemeral), получают её события — иначе `[EventBus] publish … 0 subscribers — EVENT LOST`.
+В standalone глобальный SSE-хаб `GET /api/v2/events` подписывается на **все** события шины
+(`subscribeAll`) и покрывает сессии, созданные после подключения; в managed backend подписка —
+per-session (RBAC-скоуп), поэтому владелец материализуемой сессии подписывается явно.
 
 **LLM-дефолты (provider/model).** Сессии, материализуемые funnel'ом (`ephemeral`/`bind`, а также
 явный `request`), при отсутствии **явных** `settings.provider`/`settings.model` заполняются

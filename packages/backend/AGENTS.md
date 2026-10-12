@@ -114,6 +114,7 @@
 - SSE-фоллбек — `GET /api/v2/events` (`auth.requireAuth`, keepalive раз в 30 c).
 - `EventHub` (`src/events/hub.ts`) — диспетчер подписок поверх core-`EventBus`; новых транспортных каналов не плодить (AD-008/009/024).
 - Новую сессию подписывай через `eventHub.subscribeToSession(...)`, а не сырым `eventBus.subscribe`.
+- Сессии, создаваемые events-funnel'ом (`RequestSessionService`: external `ephemeral`/`bind`, explicit из тула `task`), `app.ts` подписывает автоматически через `deps.onSessionMaterialized` → `eventHub.subscribeToSession(owner, sessionId)` — клиент, подключённый до создания сессии, получает её события. Владелец сессии — по `events.identityMap` (`identity.chatKey`/`principalId`), затем per-event (пользователь/владелец ключа привязки), `identity.principalId`, `resolveOwnerId`; `onEventsChange` прокидывает `identityMap` в funnel live.
 
 ## LLM Proxy
 

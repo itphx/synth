@@ -239,6 +239,7 @@ describe('mergeEventsConfig (AD-089)', () => {
     decisionRouting: false,
     autoBind: true,
     autoBindAgentTemplate: 'agent-a',
+    identityMap: { 'chat:telegram:1': 'u-base' },
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
@@ -253,6 +254,7 @@ describe('mergeEventsConfig (AD-089)', () => {
       decisionRouting: true,
       autoBind: false,
       autoBindAgentTemplate: 'agent-b',
+      identityMap: { 'tg:2': 'u-runtime' },
     });
     expect(merged).toEqual({
       enabled: true,
@@ -265,6 +267,7 @@ describe('mergeEventsConfig (AD-089)', () => {
       decisionRouting: true,
       autoBind: false,
       autoBindAgentTemplate: 'agent-b',
+      identityMap: { 'tg:2': 'u-runtime' },
     });
   });
 
@@ -280,6 +283,7 @@ describe('mergeEventsConfig (AD-089)', () => {
       decisionRouting: false,
       autoBind: true,
       autoBindAgentTemplate: 'agent-a',
+      identityMap: { 'chat:telegram:1': 'u-base' },
     });
   });
 
@@ -295,6 +299,7 @@ describe('mergeEventsConfig (AD-089)', () => {
       decisionRouting: false,
       autoBind: false,
       autoBindAgentTemplate: '',
+      identityMap: {},
     });
   });
 });

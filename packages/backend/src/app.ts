@@ -614,6 +614,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       const agent = agentRegistry.get(template);
       return agent && agent.enabled ? agent.id : null;
     };
+    // EventHub — центральный диспетчер подписок. Создаётся до funnel: колбэк
+    // `onSessionMaterialized` подписывает клиентов владельца на сессии,
+    // созданные после их подключения (`subscribeToSession`, AD-089).
+    const eventHub = new EventHub(eventBus, sessionManager);
     const requestSessionService = new RequestSessionService({
       sessionManager,
       eventRouter,
@@ -624,6 +628,20 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         unknownAgentTemplate: effectiveEvents.unknownAgentTemplate,
       },
       resolveAgentTemplate,
+      // AD-089: маппинг идентичности внешнего отправителя на владельца сессии
+      // (`events.identityMap`) — напр. Telegram-чат → человек.
+      identityMap: effectiveEvents.identityMap,
+      // AD-089: подписка хаба на сессию владельца сразу после материализации —
+      // чтобы клиент, подключённый до создания сессии (events-funnel), получал
+      // её события. `subscribeToSession` синхронно ставит подписки, поэтому
+      // последующая доставка события не теряется.
+      onSessionMaterialized: (session) => {
+        const owner = session.ownerId || session.userId;
+        if (!owner) return;
+        void eventHub.subscribeToSession(owner, session.id).catch((e: unknown) =>
+          console.warn('subscribeToSession failed:', e),
+        );
+      },
       // AD-089: дефолтные provider/model инстанса (llm.defaultProvider/defaultModel)
       // — для сессий из внешних событий (materialize ephemeral/bind), чтобы агент
       // мог ответить без ручной простановки модели.
@@ -692,9 +710,6 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         )).enabled,
       }),
     }).catch(() => 0);
-
-    // EventHub — центральный диспетчер подписок
-    const eventHub = new EventHub(eventBus, sessionManager);
 
     // API-заглушки для UI
     app.get('/api/config/themes', (c) => c.json({ themes: [] }));
@@ -1028,6 +1043,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         requestSessionService.updateConfig({
           defaultEphemeralTtl: effective.ephemeralTtl,
           unknownAgentTemplate: effective.unknownAgentTemplate,
+          identityMap: effective.identityMap,
         });
       },
       // AD-084: дефолт config.yaml для GET/DELETE-сброса decision-слоя.

@@ -129,6 +129,8 @@ export const defaultConfig: SynthConfig = {
     // AD-089 (auto-bind): фоллбек-закрепление события с chatKey/threadKey за сессией — по умолчанию выключено.
     autoBind: false,
     autoBindAgentTemplate: '',
+    // AD-089: маппинг идентичности отправителя события на владельца сессии (пусто — не переопределяется).
+    identityMap: {},
   },
   scheduler: {
     enabled: true,

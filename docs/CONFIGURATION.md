@@ -373,6 +373,7 @@ skills:
 | `events.decisionRouting` | AD-084 × AD-089: умная классификация внешних событий decision-моделью. `false` — только декларативные правила; `true` — при промахе правил decision-модель выбирает шаблон агента (ephemeral-сессия). Требует настроенного `decision.*`; fail-safe: ошибка/низкая уверенность/нет агентов → фоллбек `defaultMode` | `false` |
 | `events.autoBind` | AD-089: фоллбек Router — если у события есть `identity.chatKey` или `identity.threadKey`, закрепить его за новой сессией (`EventBinding mode='bound'`) вместо `defaultMode`. Влияет **только** на фоллбек (явная привязка/правила/decision-маршрутизация приоритетнее). Защита от мусорных сессий: флаг выключен по умолчанию + `allowedSources` + per-key rate limit | `false` |
 | `events.autoBindAgentTemplate` | AD-089: шаблон агента auto-bind-сессий (id агента; пусто — агент по умолчанию). Неизвестный шаблон обрабатывается политикой `events.unknownAgentTemplate` | `''` |
+| `events.identityMap` | AD-089: маппинг идентичности внешнего отправителя на владельца синт-сессии. Ключ — `identity.chatKey` (`chat:telegram:<id>`) или `identity.principalId` (`tg:<id>`), значение — id пользователя инстанса. Применяется при материализации сессий `ephemeral`/`bind`; приоритет выше per-event владельца (аутентифицированный пользователь / создатель ключа привязки). Так Telegram-сессии человека попадают в его `listSessions({ userId })` и UI-список | `{}` |
 
 Правила маршрутизации `source/type/…` → сессия задаются через API (`/api/v2/events/routes`, §5.26)
 и хранятся в `{dataDir}/events/routes.json` (`RouteRuleStore`, `ProjectRuleProvider`).
@@ -396,10 +397,14 @@ events:
   decisionRouting: false
   autoBind: false
   autoBindAgentTemplate: ""
+  identityMap:
+    "chat:telegram:123456": "user-uuid-or-login"
+    "tg:123456": "user-uuid-or-login"
 ```
 
 Часть полей (`enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`, `allowedSources`,
-`unknownAgentTemplate`, `keyRateLimitPerMinute`, `decisionRouting`, `autoBind`, `autoBindAgentTemplate`)
+`unknownAgentTemplate`, `keyRateLimitPerMinute`, `decisionRouting`, `autoBind`, `autoBindAgentTemplate`,
+`identityMap`)
 переопределяется в runtime через
 `GET/PUT/DELETE /api/v2/settings/events` (live, без рестарта); `dedupStore` — deployment-настройка.
 
