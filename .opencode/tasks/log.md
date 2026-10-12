@@ -2311,3 +2311,16 @@
 - **Ветка:** `docs/ad-normalization-089-external-events` (не запушена)
 - **Коммит:** `6b154f3`, `0d86f69`, этот (журнал).
 
+
+## 2026-10-12 — AD-090 «Extension API v1»: вынос из AD-086, Plugin ≠ Add-on, плагины в managed/hybrid
+- **Задача:** «Проработать AD-086: изучить `deepseek-harness` (как получается, что всё — плагин); чётко зафиксировать Plugin ≠ Add-on; снять запрет плагинов в managed/hybrid (managed — установка админом), продумать install/activate и hybrid allow-list».
+- **Тип:** docs (AD) + исследование архитектуры
+- **Исполнитель:** @orchestrator (исследование/дизайн/верификация) → @fixer (создание AD-090; правки AD-086 и реестров)
+- **Результат:** PASS
+- **Исследование (`deepseek-harness`, read-only):** Cordis «all-plugin» — композиция profile+bundle+patch поверх пустого корня, seam-тройка Service Definition/Provider/Consumer, «registrations are effects» (disposer), peer-gate версии, merge-extensible event maps. **Ключевой вывод:** in-process код у них **сознательно не изолирован** («treat a dynamic package like bash access»; sandbox покрывает только spawn-argv) → для Synth основной безопасный путь — **add-on** (внешний сервис), а in-process плагины — только через trust/скан/политику. Взяты идиомы, не фреймворк.
+- **Создано:** `docs/arch_decisions/ad-090-extension-api.md` (497 строк) — Extension API v1: терминология Plugin/Add-on/Declarative; 11 точек расширения (все уже имеют seam в коде); манифест `synth.plugin`; SDK `@itphx/synth-plugin` + disposer-модель; **bundle-only ESM** (ноль runtime-резолва npm); install/activate (`<home>/plugin/`, `plugins.lock.json`, `plugins.json`, пайплайн `PluginHost`, semver-гейт + exact-исключения); матрица режимов; **managed** (deploy-time — дефолт; runtime-install — опция `deny`; ADMIN; `pluginsWriteGuard`; запрет снятия builtin/management); **hybrid allow-list** (3 уровня силы; Уровень 2 — **server-scoped токены на `plugin_id`**, проектируется сразу; честная таблица силы энфорса по образцу AD-081); политики/конфиг (`plugins.*`, `GET/PUT/DELETE /api/v2/settings/plugins`, `/api/v2/plugins*`); связь с AD-068 (trust/scan/policy/quarantine/lock/audit); фазы Ф0–Ф5.
+- **Обновлено:** AD-086 (зонтик: столп 1 → указатель на AD-090; новый раздел «Плагины, add-on'ы и режимы»; снятие ограничения «только standalone»; 4 открытых вопроса закрыты), AD-030 (ссылки на AD-090), `docs/arch_decisions/README.md` (строка AD-090; AD-086/AD-030), корневой `AGENTS.md` (индекс AD-086/AD-090, триггеры, AD-030, service-key).
+- **Решения пользователя:** 1) Extension API — отдельный **AD-090**; 2) managed runtime-install — **включаем как опцию** (default `deny`); 3) hybrid allow-list — **сразу Уровень 2** (scoped-токены); 4) **bundle-only**; 5) каталог **AD-068 закладываем сразу**.
+- **Верификация (оркестратор):** все 27 относительных ссылок AD-090 разрешаются; структура/стиль соответствуют AD-068/AD-081/AD-086; ESM-консистентность (репо `"type":"module"` → бандл `.js`, упоминания CJS убраны); **код не тронут** (`git status -- packages/` пусто); реестры AD (README/AGENTS) согласованы.
+- **Ветка:** `docs/ad-normalization-089-external-events` (не запушена)
+- **Коммит:** этот коммит — «docs: AD-090 Extension API v1 — вынос из AD-086, Plugin ≠ Add-on, плагины в managed/hybrid» (запись журнала включена в него)

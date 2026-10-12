@@ -2,10 +2,12 @@
 
 > **Статус:** ⏳ Не реализовано (концепт/проект)
 > **Дата:** 2026-10-02
-> **Обновлено:** 2026-10-08 — добавлен четвёртый столп «внешние сервисы-надстройки (add-ons / bridge services)»
-> и первый частный случай (Telegram gateway); сюда же **поглощён** [AD-087](./ad-087-messenger-gateway-merged.md)
+> **Обновлено:** 2026-10-12 — Extension API вынесен в отдельный [AD-090](./ad-090-extension-api.md); ограничение
+> «плагины только standalone» снято (плагины разрешены во всех режимах: managed — установка ADMIN, hybrid — allow-list
+> сервера с server-scoped токенами). Ранее (2026-10-08) добавлен четвёртый столп «внешние сервисы-надстройки
+> (add-ons / bridge services)» и первый частный случай (Telegram gateway); сюда же **поглощён** [AD-087](./ad-087-messenger-gateway-merged.md)
 > «Gateway для подключения к мессенджерам».
-> **Связано:** [AD-030](./ad-030-hooks-agent-events.md) «Hooks/Plugin SDK», [AD-038](./ad-038-npm-packages.md) «npm-пакеты»,
+> **Связано:** [AD-090](./ad-090-extension-api.md) «Extension API v1», [AD-030](./ad-030-hooks-agent-events.md) «Hooks/Plugin SDK», [AD-038](./ad-038-npm-packages.md) «npm-пакеты»,
 > [AD-046](./ad-046-skills-and-slash-commands.md) «Скиллы», [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог»,
 > [AD-082](./ad-082-full-images-deployment.md) «Flavor-образы», [AD-089](./ad-089-external-events-automation.md) «Платформа внешних событий»,
 > [AD-023](./ad-023-configuration.md), [AD-029](./ad-029-granular-permissions.md), [AD-036](./ad-036-llm-gateway.md),
@@ -14,8 +16,10 @@
 **Решение:** дать сообществу и пользователям **лёгкий путь** доработать Synth без приватного форка ядра. Четыре
 взаимодополняющих столпа:
 
-1. **Extension API** — расширять без форка: версионированный контракт плагинов, точки расширения, загрузка
-   из npm/каталога/реестра, trust/scan/install-policy (по образцу [AD-068](./ad-068-skills-agents-registry.md)).
+1. **Extension API** (спецификация — [AD-090](./ad-090-extension-api.md)) — расширять без форка: версионированный
+   контракт плагинов, точки расширения, загрузка из npm/каталога/реестра, trust/scan/install-policy (по образцу
+   [AD-068](./ad-068-skills-agents-registry.md)). Терминология жёсткая: **Plugin ≠ Add-on ≠ Declarative** — plugin
+   (код в процессе core) и add-on (внешний сервис) суть разные классы, не синонимы.
 2. **Editions** — собрать и поддерживать свою редакцию (по образцу Ubuntu): пресет-метапакет из плагинов,
    скиллов, агентов, flavor-образов, темы и тулчейна.
 3. **Contribution flow** — предложить функционал в mainline и реализовать его своим Synth'ом за свой счёт:
@@ -45,13 +49,26 @@ Synth открыт (лицензия MIT), но расширить его сег
 
 ### 1. Extension API (расширять без форка)
 
-- **Контракт плагина:** манифест (`name`, `version`, `apiVersion`, `host` range, `engines`).
-- **Точки расширения:** встроенные тулы, провайдеры, HTTP-роуты, event-hooks ([AD-030](./ad-030-hooks-agent-events.md)),
-  UI-слоты/панели, скиллы/agent-packs.
-- **Загрузка:** npm-пакет / локальный каталог / реестр.
-- **Доверие и безопасность:** trust + сканер + install-policy по образцу [AD-068](./ad-068-skills-agents-registry.md);
-  sandbox/лимиты и явные permissions ([AD-029](./ad-029-granular-permissions.md)); аудит; глобальный выключатель.
-- **Стабильность:** semver-политика, окно deprecation для `apiVersion`.
+**Полная спецификация — [AD-090](./ad-090-extension-api.md)**: терминология Plugin/Add-on/Declarative, манифест
+(`synth.plugin`), точки расширения (встроенные тулы, провайдеры, HTTP-роуты, event-hooks [AD-030](./ad-030-hooks-agent-events.md),
+UI-слоты/панели, скиллы/agent-packs), фасад `@itphx/synth-plugin` + disposer-модель, bundle-only дистрибуция,
+install/activate (`plugins.lock.json`/`plugins.json`), trust/scan по [AD-068](./ad-068-skills-agents-registry.md),
+permissions ([AD-029](./ad-029-granular-permissions.md)), semver-политика и окно deprecation, а также режимы
+(managed/hybrid). Ниже — только указатель; детали не дублируются.
+
+### Плагины, add-on'ы и режимы (обновлено 2026-10-12)
+
+Три класса расширений Synth (терминология жёсткая, [AD-090](./ad-090-extension-api.md)):
+
+| Класс | Что запускается | Режимы |
+|---|---|---|
+| **Plugin** | Код **в процессе core** (загружается через Extension API, фасад `@itphx/synth-plugin`) | standalone — владелец/ADMIN; **managed** — установка ADMIN (deploy-time — дефолт, runtime-install — опция, по умолчанию `deny`); **hybrid** — allow-list сервера + server-scoped токены |
+| **Add-on** | **Внешний сервис** со своим репозиторием/образами/деплоем (эталон — `synth-media`) | Любой режим; общается по API v2/MCP/событиям |
+| **Declarative** | **Контент без кода** (скиллы, agent-packs, плагин-конфиги) | Любой режим |
+
+**Ограничение «плагин только standalone» снято:** плагины разрешены во всех режимах. В **managed**
+установку выполняет ADMIN (deploy-time по умолчанию; runtime-install — опция, по умолчанию `deny`). В **hybrid** —
+allow-list сервера, усиленный **server-scoped токенами** (Уровень 2, проектируется сразу). Детали — [AD-090](./ad-090-extension-api.md).
 
 ### 2. Editions (специализированные сборки)
 
@@ -151,6 +168,9 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 
 Проверено по репозиторию (grep по `packages/**`, исключая `dist/` и `node_modules/`):
 
+- **Extension API v1** (манифест `synth.plugin`, фасад `@itphx/synth-plugin` + disposer-модель, загрузчик,
+  trust/scan, install/activate, `plugins.lock.json`/`plugins.json`) — **специфицирован в [AD-090](./ad-090-extension-api.md)
+  и не реализован**.
 - Хуки/hook-шина [AD-030](./ad-030-hooks-agent-events.md) реализованы; Plugin SDK / загрузка плагинов
   (`SynthPlugin`) — нет.
 - Реестра/каталога editions и add-on'ов нет; install-policy для них не существует.
@@ -167,25 +187,28 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 
 ## Открытые вопросы
 
-- **Декомпозиция:** один AD или несколько (расширения / editions / contribution+скилл / add-on'ы)?
-- **Реестр:** переиспользовать каталог [AD-068](./ad-068-skills-agents-registry.md) (единая trust/guard-инфраструктура)
-  или отдельный для плагинов/editions/add-on'ов?
-- **Исполнение стороннего кода:** JS-плагины в процессе ядра — какой sandbox (worker/child-process/VM), какие
-  capabilities; нужны ли декларативные (не исполняемые) плагины на первом этапе?
+- ~~**Декомпозиция:** один AD или несколько~~ — **закрыто:** Extension API v1 выделен в отдельный [AD-090](./ad-090-extension-api.md)
+  (AD-086 остаётся зонтиком: плагины/editions/contribution/add-on'ы).
+- ~~**Реестр:** переиспользовать каталог [AD-068](./ad-068-skills-agents-registry.md) или отдельный~~ — **закрыто:**
+  переиспользуется единая trust/guard-инфраструктура каталога [AD-068](./ad-068-skills-agents-registry.md) ([AD-090](./ad-090-extension-api.md)).
+- ~~**Исполнение стороннего кода:** JS-плагины в процессе ядра — какой sandbox~~ — **закрыто:** bundle-only +
+  trust/скан ([AD-068](./ad-068-skills-agents-registry.md)) + server-scoped токены ([AD-090](./ad-090-extension-api.md)).
 - **Стабильность Extension API:** что считается public, semver-политика, окно deprecation.
 - **Editions:** пресет-метапакет (меньше дрейфа, рекомендуемо) vs полноценный long-lived форк ядра; как
   синхронизировать форк (гайд, скрипт, rebase, subtree)?
 - **Брендинг и юр.:** trademark policy (логотип/имя в форках), совместимость лицензий плагинов/editions/add-on'ов.
 - **Contribution:** DCO vs CLA, кто ревьюит и SLA, что делаем с «предложил, но не реализовал/забросил».
 - **Экономика «за свой счёт»:** только PR vs спонсорство/баунти; как не превратить в обязательство core-команды.
-- **Управляемый гибрид:** разрешать ли сторонние плагины/editions/add-on'ы на managed-бэкенде
-  (политики [AD-081](./ad-081-hybrid-policy-leak-protection.md)) или только standalone.
+- ~~**Управляемый гибрид:** разрешать ли сторонние плагины/editions/add-on'ы на managed-бэкенде~~ — **закрыто:**
+  разрешены; managed — установка ADMIN (deploy-time + runtime-опция), hybrid — allow-list сервера с server-scoped
+  токенами ([AD-090](./ad-090-extension-api.md); политики — [AD-081](./ad-081-hybrid-policy-leak-protection.md)).
 - **Скилл доработки:** builtin (в поставке) vs official-реестр; нужны ли спец-тулы (git/fork/PR/CI-статус).
 - **Шаблон add-on'а:** что именно в общем скелете (язык, CI, формат контракта интеграции), как проверять
   совместимость версий с Synth.
 
 ## Связи
 
+- [AD-090](./ad-090-extension-api.md) — Extension API v1: манифест, загрузка, install/activate, trust/scan, режимы (спецификация плагинов; вынесена из AD-086).
 - [AD-030](./ad-030-hooks-agent-events.md) — hooks/Plugin SDK: фундамент Extension API и событийных add-on'ов.
 - [AD-038](./ad-038-npm-packages.md) — npm-пакеты: enabler editions и распространения плагинов.
 - [AD-068](./ad-068-skills-agents-registry.md) — переиспользуемая инфраструктура trust/guard/каталога/провенанса.

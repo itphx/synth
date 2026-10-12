@@ -113,7 +113,7 @@ export default function myPlugin(synth: SynthPlugin) {
 
 ### Остаток (не реализовано)
 
-- **Plugin SDK и загрузка плагинов** — отсутствуют: нет `SynthPlugin`, `synth.hooks.on(...)`, конфига/загрузчика и публичной точки регистрации внешних обработчиков (см. AD-086).
+- **Plugin SDK и загрузка плагинов** — отсутствуют: нет `SynthPlugin`, `synth.hooks.on(...)`, конфига/загрузчика и публичной точки регистрации внешних обработчиков (спецификация — [AD-090](./ad-090-extension-api.md), зонтик — [AD-086](./ad-086-extensibility-plugins-editions.md)).
 - **Неэмитируемые хуки** — `plan_rejected`, `message_received`, `callback`, `schedule_fired` объявлены в `HookName`, но нигде не эмитятся.
 - **Политика `builtin`** — флаг `builtin` хранится в регистрации, но политики снятия (защита обработчиков ядра от внешних плагинов) нет: `off` снимает любой обработчик.
 - **Неполные контексты** — `session_end` эмитится без `summary`/`usage`; в ветке жёсткого сбоя `agent_failed` не заполняет `retries`.
@@ -130,5 +130,7 @@ AD-030 — **фундамент** событийной модели Synth: hook-
 - [AD-052](./ad-052-public-api-platform.md) «Публичная API-платформа» — приём внешних webhook'ов и событий.
 - [AD-086](./ad-086-extensibility-plugins-editions.md) «Расширяемость и внешние сервисы-надстройки» — add-on'ы
   и gateway-события (External API/hooks как точки расширения).
+- [AD-090](./ad-090-extension-api.md) «Extension API v1» — загрузчик/манифест (`synth.plugin`) и регистрация
+  внешних обработчиков над hook-шиной (spec Extension API; вынесен из AD-086).
 - [AD-087](./ad-087-messenger-gateway-merged.md) «Gateway для мессенджеров» — ⛔ поглощён AD-086; hook `message_received`.
 
