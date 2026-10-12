@@ -153,11 +153,14 @@
   session-`EventBus`; эмиты `pre_tool_use`/`post_tool_use`/`plan_approved`/
   `permission_denied`/`agent_spawned|completed|failed`/`session_start|end`.
 - `engine/events/*` — AD-089: `EventRouter` (`allowedSources` → dedup → `EventBinding`
-  → `RouteRuleProvider` → фоллбек по `defaultMode`: `bound` → `drop no_route`,
+  → `RouteRuleProvider` → фоллбек: при `autoBind` и `identity.chatKey|threadKey` — `{kind:'bind'}`
+  (auto-bind, `signals:['auto-bind']`), иначе по `defaultMode`: `bound` → `drop no_route`,
   `ephemeral` → временная сессия; `updateConfig` — live-обновление из runtime-настроек),
   `RequestSessionService` (единый funnel:
   explicit → `direct`, внешние → Router; резолвинг `agentTemplate` через
   `AgentRegistry` + политика `unknownAgentTemplate` `drop`/`default-agent`;
+  `deps.bindingStore` — материализация `kind:'bind'`: постоянная сессия без `expiresAt` +
+  `EventBinding{mode:'bound'}`, повтор/гонка → переиспользование привязки;
   `updateConfig` — live TTL/политика),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),

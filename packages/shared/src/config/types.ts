@@ -263,7 +263,13 @@ export const commandsConfigSchema = z.object({
  *   decision-моделью. `false` (default, opt-in) — только декларативные правила
  *   (`ProjectRuleProvider`); `true` — при промахе правил decision-модель выбирает
  *   шаблон агента для ephemeral-сессии. Fail-safe: ошибка/неуверенность/пустой
- *   список агентов → фоллбек Router (`defaultMode`).
+ *   список агентов → фоллбек Router (`defaultMode`);
+ * - `autoBind` — AD-089: фоллбек Router закрепляет событие с `identity.chatKey`/
+ *   `threadKey` за новой сессией (`EventBinding` `mode='bound'`) вместо
+ *   `defaultMode`. `false` (default) — поведение не меняется; влияет только на
+ *   фоллбек;
+ * - `autoBindAgentTemplate` — шаблон агента для auto-bind-сессий (пусто — агент
+ *   по умолчанию).
  */
 export const eventsConfigSchema = z.object({
   enabled: z.boolean().default(true),
@@ -285,6 +291,19 @@ export const eventsConfigSchema = z.object({
    * decision-провайдера (`decision.enabled`).
    */
   decisionRouting: z.boolean().default(false),
+  /**
+   * AD-089 (auto-bind): фоллбек Router — если у события есть `identity.chatKey`
+   * или `identity.threadKey`, закрепить его за новой сессией (создать
+   * `EventBinding` `mode='bound'`) вместо `defaultMode`. По умолчанию выключено
+   * (поведение не меняется). Влияет **только** на фоллбек — явный binding,
+   * правила и decision-маршрутизация сохраняют своё поведение.
+   */
+  autoBind: z.boolean().default(false),
+  /**
+   * AD-089 (auto-bind): шаблон агента для auto-bind-сессий (пусто — агент по
+   * умолчанию; резолвится через `AgentRegistry` с политикой `unknownAgentTemplate`).
+   */
+  autoBindAgentTemplate: z.string().default(''),
 });
 
 // --- Планировщик расписаний (AD-051 срез / AD-089) ---

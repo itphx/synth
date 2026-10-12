@@ -22,6 +22,15 @@ export function decisionFromTarget(
   if (target.mode === 'queue') {
     return { kind: 'queue', owner: target.sessionId, reason: extra?.reason ?? 'target', ...meta };
   }
+  // AD-089 (auto-bind): цель закрепляет внешний адрес за новой сессией.
+  if (target.mode === 'bind') {
+    return {
+      kind: 'bind',
+      agentTemplate: target.agentTemplate ?? '',
+      ...(target.project ? { project: target.project } : {}),
+      ...meta,
+    };
+  }
   return {
     kind: 'ephemeral',
     agentTemplate: target.agentTemplate ?? '',

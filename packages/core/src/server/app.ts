@@ -903,6 +903,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       allowedSources: effectiveEvents.allowedSources,
       defaultMode: effectiveEvents.defaultMode,
       defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
+      autoBind: effectiveEvents.autoBind,
+      autoBindAgentTemplate: effectiveEvents.autoBindAgentTemplate,
     },
   });
   // AD-089 (Блок 2): retention-очистка журнала событий (сразу + каждые 6 ч).
@@ -954,6 +956,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const requestSessionService = new RequestSessionService({
     sessionManager,
     eventRouter,
+    bindingStore: eventBindingStore,
     hooks,
     config: {
       defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
@@ -1195,6 +1198,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         allowedSources: effective.allowedSources,
         defaultMode: effective.defaultMode,
         defaultEphemeralTtl: effective.ephemeralTtl,
+        autoBind: effective.autoBind,
+        autoBindAgentTemplate: effective.autoBindAgentTemplate,
       });
       requestSessionService.updateConfig({
         defaultEphemeralTtl: effective.ephemeralTtl,

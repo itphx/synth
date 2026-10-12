@@ -66,6 +66,8 @@ function resolveEventsDefaults(fallback?: Partial<EventsRuntimeSettings>): Event
     unknownAgentTemplate: fallback?.unknownAgentTemplate ?? base.unknownAgentTemplate,
     keyRateLimitPerMinute: fallback?.keyRateLimitPerMinute ?? base.keyRateLimitPerMinute,
     decisionRouting: fallback?.decisionRouting ?? base.decisionRouting,
+    autoBind: fallback?.autoBind ?? base.autoBind,
+    autoBindAgentTemplate: fallback?.autoBindAgentTemplate ?? base.autoBindAgentTemplate,
   };
 }
 
@@ -125,6 +127,18 @@ function validateEventsSettings(
     }
     result.decisionRouting = s.decisionRouting;
   }
+  if (s.autoBind !== undefined) {
+    if (typeof s.autoBind !== 'boolean') {
+      return { ok: false, message: 'events.autoBind: ожидается boolean' };
+    }
+    result.autoBind = s.autoBind;
+  }
+  if (s.autoBindAgentTemplate !== undefined) {
+    if (typeof s.autoBindAgentTemplate !== 'string') {
+      return { ok: false, message: 'events.autoBindAgentTemplate: ожидается строка' };
+    }
+    result.autoBindAgentTemplate = s.autoBindAgentTemplate;
+  }
   return { ok: true, value: result };
 }
 
@@ -142,6 +156,8 @@ function effectiveEvents(
     unknownAgentTemplate: runtime.unknownAgentTemplate ?? defaults.unknownAgentTemplate,
     keyRateLimitPerMinute: runtime.keyRateLimitPerMinute ?? defaults.keyRateLimitPerMinute,
     decisionRouting: runtime.decisionRouting ?? defaults.decisionRouting,
+    autoBind: runtime.autoBind ?? defaults.autoBind,
+    autoBindAgentTemplate: runtime.autoBindAgentTemplate ?? defaults.autoBindAgentTemplate,
   };
 }
 

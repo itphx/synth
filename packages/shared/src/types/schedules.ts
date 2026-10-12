@@ -51,8 +51,8 @@ export interface ScheduleJob {
   target: ScheduleTarget;
   /** Ключ идемпотентности события (`cron:<id>:<...>`). */
   dedupKey?: string;
-  /** Решение Router: `'bound' | 'queue' | 'ephemeral' | 'drop'`. */
-  decision?: 'bound' | 'queue' | 'ephemeral' | 'drop';
+  /** Решение Router: `'bound' | 'queue' | 'ephemeral' | 'bind' | 'drop'`. */
+  decision?: 'bound' | 'queue' | 'ephemeral' | 'bind' | 'drop';
   /** Причина `drop`/`skip` (напр. `no_route`, `busy`, `missed`). */
   reason?: string;
   /** Идентификатор сессии, в которую доставлено событие. */

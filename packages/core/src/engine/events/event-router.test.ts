@@ -44,7 +44,7 @@ describe('EventRouter (AD-089)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  const router = (config: { allowedSources?: string[]; defaultMode?: 'bound' | 'ephemeral'; defaultEphemeralTtl?: string; ruleProviders?: RouteRuleProvider[]; dedupStore?: DedupStore } = {}) =>
+  const router = (config: { allowedSources?: string[]; defaultMode?: 'bound' | 'ephemeral'; defaultEphemeralTtl?: string; ruleProviders?: RouteRuleProvider[]; dedupStore?: DedupStore; autoBind?: boolean; autoBindAgentTemplate?: string } = {}) =>
     new EventRouter({
       bindingStore,
       journal,
@@ -53,6 +53,8 @@ describe('EventRouter (AD-089)', () => {
         defaultEphemeralTtl: config.defaultEphemeralTtl ?? '24h',
         defaultMode: config.defaultMode,
         allowedSources: config.allowedSources,
+        autoBind: config.autoBind,
+        autoBindAgentTemplate: config.autoBindAgentTemplate,
       },
       ruleProviders: config.ruleProviders,
     });
@@ -197,6 +199,71 @@ describe('EventRouter (AD-089)', () => {
     expect(
       await router({ defaultMode: 'ephemeral' }).decide(event({ identity: { chatKey: 'chat:telegram:1' } })),
     ).toEqual({ kind: 'bound', sessionId: 's-bound' });
+  });
+
+  it('autoBind=true: событие с chatKey без маршрута → bind с signals[auto-bind]', async () => {
+    expect(
+      await router({ autoBind: true, autoBindAgentTemplate: 'agent-x' }).decide(
+        event({ identity: { chatKey: 'chat:telegram:1' } }),
+      ),
+    ).toEqual({ kind: 'bind', agentTemplate: 'agent-x', signals: ['auto-bind'] });
+  });
+
+  it('autoBind=true: событие с threadKey (без chatKey) → bind', async () => {
+    expect(
+      await router({ autoBind: true }).decide(event({ identity: { threadKey: 'thread:telegram:1:7' } })),
+    ).toEqual({ kind: 'bind', agentTemplate: '', signals: ['auto-bind'] });
+  });
+
+  it('autoBind=true без chatKey/threadKey → прежний фоллбек defaultMode', async () => {
+    expect(await router({ autoBind: true }).decide(event({ identity: {} }))).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
+    });
+    expect(
+      await router({ autoBind: true, defaultMode: 'ephemeral' }).decide(event({ identity: {} })),
+    ).toEqual({ kind: 'ephemeral', agentTemplate: '', ttl: '24h' });
+  });
+
+  it('autoBind=false (по умолчанию): событие с chatKey → прежний фоллбек no_route', async () => {
+    expect(await router().decide(event({ identity: { chatKey: 'chat:telegram:1' } }))).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
+    });
+  });
+
+  it('autoBind влияет только на фоллбек: явный binding приоритетнее', async () => {
+    await bindingStore.upsert(binding({ chatKey: 'chat:telegram:1', sessionId: 's-bound' }));
+    expect(
+      await router({ autoBind: true }).decide(event({ identity: { chatKey: 'chat:telegram:1' } })),
+    ).toEqual({ kind: 'bound', sessionId: 's-bound' });
+  });
+
+  it('у autoBind=true правило приоритетнее фоллбека', async () => {
+    const ruleProvider: RouteRuleProvider = {
+      name: 'rule-bind',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: 'agent-rule', ttl: '1h' }),
+    };
+    expect(
+      await router({ autoBind: true, ruleProviders: [ruleProvider] }).decide(
+        event({ identity: { chatKey: 'chat:telegram:1' } }),
+      ),
+    ).toEqual({ kind: 'ephemeral', agentTemplate: 'agent-rule', ttl: '1h' });
+  });
+
+  it('updateConfig: autoBind переключается на лету', async () => {
+    const r = router();
+    expect(await r.decide(event({ identity: { chatKey: 'chat:telegram:1' }, dedupKey: 'ab-1' }))).toEqual({
+      kind: 'drop',
+      reason: 'no_route',
+      audited: true,
+    });
+    r.updateConfig({ autoBind: true, autoBindAgentTemplate: 'agent-y' });
+    expect(
+      await r.decide(event({ id: 'evt_2', identity: { chatKey: 'chat:telegram:1' }, dedupKey: 'ab-2' })),
+    ).toEqual({ kind: 'bind', agentTemplate: 'agent-y', signals: ['auto-bind'] });
   });
 
   it('updateConfig: defaultMode/allowedSources/defaultEphemeralTtl меняются на лету', async () => {

@@ -55,6 +55,7 @@ describe('RequestSessionService (AD-089)', () => {
   ) => new RequestSessionService({
     sessionManager,
     eventRouter: router ?? new EventRouter({ bindingStore, journal, hooks, config: { defaultEphemeralTtl: '24h' } }),
+    bindingStore,
     hooks,
     config: {
       defaultEphemeralTtl: '24h',
@@ -214,6 +215,74 @@ describe('RequestSessionService (AD-089)', () => {
 
     const { session } = await service(router).handleEvent(event({ dedupKey: 'k-project' }));
     expect(session?.projectId).toBe('proj-42');
+  });
+
+  it('handleEvent auto-bind: создаёт постоянную сессию и EventBinding mode=bound', async () => {
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultEphemeralTtl: '24h', autoBind: true, autoBindAgentTemplate: 'agent-x' },
+    });
+    const e = event({ identity: { chatKey: 'chat:telegram:1' }, dedupKey: 'k-bind-1' });
+    const { decision, session } = await service(router, { resolveAgentTemplate: (t) => t }).handleEvent(e);
+
+    expect(decision).toMatchObject({ kind: 'bind', signals: ['auto-bind'] });
+    expect(session).not.toBeNull();
+    // Постоянная сессия — без expiresAt (в отличие от ephemeral).
+    expect(session?.expiresAt).toBeUndefined();
+    expect(session?.settings.agentRole).toBe('agent-x');
+    expect(deliver).toHaveBeenCalledWith(session!.id, e, 'run');
+
+    const binding = await bindingStore.findByKey({ source: 'telegram', chatKey: 'chat:telegram:1' });
+    expect(binding).toMatchObject({
+      source: 'telegram',
+      chatKey: 'chat:telegram:1',
+      mode: 'bound',
+      sessionId: session!.id,
+      agentTemplate: 'agent-x',
+    });
+  });
+
+  it('handleEvent auto-bind: повторное событие того же чата → та же сессия', async () => {
+    const router = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h', autoBind: true } });
+    const first = await service(router).handleEvent(
+      event({ identity: { chatKey: 'chat:telegram:9' }, dedupKey: 'k-bind-a' }),
+    );
+    const second = await service(router).handleEvent(
+      event({ id: 'evt_2', identity: { chatKey: 'chat:telegram:9' }, dedupKey: 'k-bind-b' }),
+    );
+
+    // Второй раз привязка уже есть → явный binding ведёт в ту же сессию.
+    expect(second.decision).toEqual({ kind: 'bound', sessionId: first.session!.id });
+    expect(second.session?.id).toBe(first.session!.id);
+    expect(await bindingStore.list()).toHaveLength(1);
+  });
+
+  it('handleEvent auto-bind: существующая привязка (гонка) → переиспользует сессию', async () => {
+    const existingSession = await sessionManager.createSession({ title: 'Existing' });
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:7',
+      mode: 'bound',
+      sessionId: existingSession.id,
+    });
+    const router = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h', autoBind: true } });
+    // Форсированная привязка без sessionId: явный поиск в store пропускается, решение
+    // падает в auto-bind-фоллбек → материализация находит уже существующую привязку.
+    const forced: EventBinding = {
+      id: 'bnd_race',
+      source: 'telegram',
+      chatKey: 'chat:telegram:7',
+      mode: 'bound',
+    };
+    const e = event({ identity: { chatKey: 'chat:telegram:7' }, dedupKey: 'k-race' });
+    const { decision, session } = await service(router).handleEvent(e, { binding: forced });
+
+    expect(decision.kind).toBe('bind');
+    expect(session?.id).toBe(existingSession.id);
+    expect(deliver).toHaveBeenCalledWith(existingSession.id, e, 'run');
+    // Новая привязка не создана.
+    expect(await bindingStore.list()).toHaveLength(1);
   });
 
   it('request explicit: неизвестный шаблон при drop → ошибка agent_not_found', async () => {

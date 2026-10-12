@@ -237,6 +237,8 @@ describe('mergeEventsConfig (AD-089)', () => {
     unknownAgentTemplate: 'default-agent' as const,
     keyRateLimitPerMinute: 3,
     decisionRouting: false,
+    autoBind: true,
+    autoBindAgentTemplate: 'agent-a',
   };
 
   it('runtime поверх base: каждое заданное поле перекрывает base', () => {
@@ -249,6 +251,8 @@ describe('mergeEventsConfig (AD-089)', () => {
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
       decisionRouting: true,
+      autoBind: false,
+      autoBindAgentTemplate: 'agent-b',
     });
     expect(merged).toEqual({
       enabled: true,
@@ -259,6 +263,8 @@ describe('mergeEventsConfig (AD-089)', () => {
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
       decisionRouting: true,
+      autoBind: false,
+      autoBindAgentTemplate: 'agent-b',
     });
   });
 
@@ -272,6 +278,8 @@ describe('mergeEventsConfig (AD-089)', () => {
       unknownAgentTemplate: 'default-agent',
       keyRateLimitPerMinute: 3,
       decisionRouting: false,
+      autoBind: true,
+      autoBindAgentTemplate: 'agent-a',
     });
   });
 
@@ -285,6 +293,8 @@ describe('mergeEventsConfig (AD-089)', () => {
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
       decisionRouting: false,
+      autoBind: false,
+      autoBindAgentTemplate: '',
     });
   });
 });

@@ -126,6 +126,9 @@ export const defaultConfig: SynthConfig = {
     keyRateLimitPerMinute: 0,
     // AD-084 × AD-089: decision-маршрутизация событий выключена по умолчанию (opt-in).
     decisionRouting: false,
+    // AD-089 (auto-bind): фоллбек-закрепление события с chatKey/threadKey за сессией — по умолчанию выключено.
+    autoBind: false,
+    autoBindAgentTemplate: '',
   },
   scheduler: {
     enabled: true,

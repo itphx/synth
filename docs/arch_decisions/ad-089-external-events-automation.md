@@ -1,10 +1,11 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in) — первый срез AD-052; service-key/OpenAPI/SDK/webhooks и AD-086 — нет)
+> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind — первый срез AD-052; service-key/OpenAPI/SDK/webhooks и AD-086 — нет)
 > **Дата:** 2026-10-08
-> **Обновлено:** 2026-10-10 — статус и разделы приведены к реализованному коду (ядро Event/Binding/Router,
-> правила маршрутизации, decision-маршрутизация (AD-084), API-ключи привязок, retention журнала,
-> runtime-настройки «События»); «Чего нет» переосмыслен как исторический снимок на момент решения.
+> **Обновлено:** 2026-10-12 — добавлен раздел «Auto-bind» (`events.autoBind`/`events.autoBindAgentTemplate`,
+> новое решение Router `{ kind: 'bind' }` и цель правила `{ mode: 'bind' }`); статус и разделы
+> приведены к реализованному коду (ядро Event/Binding/Router, правила маршрутизации,
+> decision-маршрутизация (AD-084), API-ключи привязок, retention журнала, runtime-настройки «События»).
 > **Связано:** [AD-030](./ad-030-hooks-agent-events.md) «Hooks для событий агента» (фундамент),
 > [AD-034](./ad-034-model-routing.md) «Routing между моделями», [AD-035](./ad-035-micro-model-first.md) «Micro-model first»,
 > [AD-084](./ad-084-decision-models-clef.md) «Decision-модели» (decision-маршрутизация событий),
@@ -108,7 +109,8 @@ type RouteDecision =
   | { kind: 'bound'; sessionId: string }
   | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string }
   | { kind: 'queue'; owner: string; reason: string }
-  | { kind: 'drop'; reason: string; audited: true };
+  | { kind: 'drop'; reason: string; audited: true }
+  | { kind: 'bind'; agentTemplate: string; project?: string }; // auto-bind (см. ниже)
 ```
 
 **`EventBindingApiKey`** — API-ключ приёма событий, привязанный к `EventBinding`
@@ -148,6 +150,58 @@ type RouteDecision =
 
 **Значение по умолчанию:** конфиг-дефолт `defaultMode: 'bound'` — переписка — `bound`, разовые
 триггеры — `ephemeral`. `queue` и `drop` — осознанные политики, а не дефолт.
+
+### Auto-bind (закрепление чата/треда за сессией)
+
+**Суть.** Третий способ появления `EventBinding` — **по решению Router**. Первый —
+вручную через API/UI; второй — внешним сервисом через API (binding-key форсирует
+привязку). Auto-bind нужен для переписок, у которых ещё нет привязки: первое
+сообщение чата (Telegram/мессенджер) закрепляется за новой постоянной сессией —
+дальнейшие сообщения этого чата попадают в неё как явный `binding`.
+
+**Конфиг** (`events.*`, runtime через `GET/PUT/DELETE /api/v2/settings/events`):
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `events.autoBind` | Фоллбек Router: если у события есть `identity.chatKey` **или** `identity.threadKey`, закрепить его за новой сессией (`EventBinding mode='bound'`) вместо `defaultMode` | `false` |
+| `events.autoBindAgentTemplate` | Шаблон агента auto-bind-сессий (резолвится через `AgentRegistry`; пусто — агент по умолчанию; неизвестный → политика `unknownAgentTemplate`) | `''` |
+
+**Новый вид решения.** Дискриминант `RouteDecision` расширен вариантом
+`{ kind: 'bind'; agentTemplate: string; project?: string }` (мета — `confidence`/`signals`).
+Auto-bind-решение несёт диагностический сигнал `signals: ['auto-bind']` — он попадает
+в ответ `POST /api/v2/events` и в запись журнала (как `confidence`/`signals`
+decision-маршрутизации).
+
+**Новая цель правила.** `EventRouteTarget` расширен вариантом
+`{ mode: 'bind'; agentTemplate?: string; project?: string }` — декларативное правило
+может явно закрепить внешний адрес за сессией (это ортогонально флагу `autoBind`).
+
+**Поведение (материализация).** Для `kind: 'bind'` `RequestSessionService`:
+- если для `{source, chatKey|threadKey}` уже существует `EventBinding` (повтор или
+  гонка одновременных событий одного чата) — **переиспользует** его сессию и доставляет
+  событие, ничего не создавая;
+- иначе создаёт **постоянную** сессию (как `ephemeral`, но **без `expiresAt`**;
+  `agentTemplate` резолвится тем же `_resolveAgent`), затем создаёт
+  `EventBinding { source, chatKey?, threadKey?, sessionId, mode: 'bound', agentTemplate?, project? }`
+  через `EventBindingStore` (`{dataDir}/events/bindings.json`);
+- доставляет событие режимом `run` и возвращает сессию.
+
+**Требование идентичности.** Auto-bind-фоллбек срабатывает только при наличии
+`identity.chatKey` **или** `identity.threadKey`. Без ключа поведение прежнее —
+`defaultMode` (`ephemeral` / `drop no_route`).
+
+**«Влияет только на фоллбек».** `autoBind` проверяется **исключительно** в
+шаге 5 `EventRouter.decide`. Явный `EventBinding` (шаг 3), декларативные правила и
+decision-маршрутизация (шаг 4) сохраняют своё поведение и приоритет.
+
+**Риски.**
+- **Мусорные сессии.** При `autoBind: true` любой чат с ключом создаёт постоянную
+  сессию. Контур защиты: флаг по умолчанию **выключен**; `events.allowedSources`
+  ограничивает источники; API-ключ привязки и per-key rate limit
+  (`events.keyRateLimitPerMinute`) ограничивают поток; цели правил позволяют
+  заранее направить известные чаты иначе (правило приоритетнее фоллбека).
+- **Ошибка шаблона.** Неизвестный `autoBindAgentTemplate` при политике
+  `unknownAgentTemplate: 'drop'` не создаёт сессию (fail-safe, `agent_not_found` в журнале).
 
 ### Создание сессии — тоже событие
 
@@ -205,7 +259,7 @@ type RouteDecision =
   Ключи — инстанс-локальные (не переносятся publish/fork, [AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
 - **Guard** — весь контент события проходит обфускацию перед LLM ([AD-036](./ad-036-llm-gateway.md));
   вложения — по [AD-085](./ad-085-multimodal-input.md).
-- **Аудит** — все решения роутера (`bound`/`ephemeral`/`queue`/`drop`) фиксируются; дроп — с причиной.
+- **Аудит** — все решения роутера (`bound`/`ephemeral`/`queue`/`bind`/`drop`) фиксируются; дроп — с причиной.
 - **Политики гибрида** — какие источники и действия разрешены на managed-бэкенде, регулируют
   [AD-080](./ad-080-managed-hybrid-modes.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md).
 
@@ -231,6 +285,11 @@ type RouteDecision =
   Регистрация — `server/app.ts` (core) и `backend/src/app.ts` (паритет). Решение несёт `confidence`/`signals`
   (`RouteDecision`) — попадают в ответ `POST /api/v2/events` и в журнал; успешный выбор логируется
   (`[DECISION] … agent/confidence/latency/model`), промахи — с latency.
+- **Auto-bind:** флаг `events.autoBind` + `events.autoBindAgentTemplate` (`EventRouterConfig.autoBind`/
+  `autoBindAgentTemplate`); фоллбек `EventRouter.decide` возвращает `{ kind: 'bind', signals: ['auto-bind'] }`
+  при наличии `identity.chatKey|threadKey`; материализацию `kind: 'bind'` (постоянная сессия без `expiresAt`
+  + `EventBinding mode='bound'`, переиспользование существующей привязки) выполняет `RequestSessionService`
+  (`deps.bindingStore`); цель правила — `EventRouteTarget { mode: 'bind' }` (`decisionFromTarget`).
 - **Резолвинг `agentTemplate`:** `RequestSessionService.resolveAgentTemplate` через `AgentRegistry`
   (`agent.enabled ? agent.id : null`); неизвестный шаблон — `unknownAgentTemplate` (`drop`/`default-agent`).
 - **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),
@@ -254,7 +313,8 @@ type RouteDecision =
   — без ограничения; останавливается на graceful shutdown (`stopEventJournalPruner`).
 - **Runtime-настройки «События»:** `RuntimeSettings.events` + `mergeEventsConfig` (`storage/runtime-settings.ts`);
   API `GET/PUT/DELETE /api/v2/settings/events` (`enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`,
-  `allowedSources`, `unknownAgentTemplate`, `keyRateLimitPerMinute`); live-применение — `EventRouter.updateConfig`/
+  `allowedSources`, `unknownAgentTemplate`, `keyRateLimitPerMinute`, `decisionRouting`, `autoBind`,
+  `autoBindAgentTemplate`); live-применение — `EventRouter.updateConfig`/
   `RequestSessionService.updateConfig` (мутации — `eventsWriteGuard`: ADMIN в managed, в core — `requireAuth`).
 - **API:** `POST /api/v2/events` (ingest; fallback — `requireAuth`, иначе API-ключ привязки; rate limit на оба пути),
   `GET/POST/DELETE /api/v2/events/bindings` (+ key-эндпоинты выше), `GET/POST /api/v2/events/routes`,

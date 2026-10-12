@@ -26,7 +26,7 @@ import { AgentSelect, ProjectSelect, SessionSelect } from './entity-selects'
 /** AD-089: режим цели правила маршрутизации (совпадает с `EventRouteTarget`). */
 type RouteMode = EventRouteTarget['mode']
 
-const ROUTE_MODES: RouteMode[] = ['bound', 'ephemeral', 'queue']
+const ROUTE_MODES: RouteMode[] = ['bound', 'ephemeral', 'queue', 'bind']
 
 interface EditorState {
   id?: string
@@ -95,7 +95,13 @@ function editorToInput(editor: EditorState): EventRouteRuleInputRequest {
           project: editor.project.trim() || undefined,
           ttl: editor.ttl.trim() || undefined,
         }
-      : { mode: editor.mode, sessionId: editor.sessionId.trim() }
+      : editor.mode === 'bind'
+        ? {
+            mode: 'bind',
+            agentTemplate: editor.agentTemplate.trim() || undefined,
+            project: editor.project.trim() || undefined,
+          }
+        : { mode: editor.mode, sessionId: editor.sessionId.trim() }
 
   const priority = Number.parseInt(editor.priority, 10)
 
@@ -188,8 +194,14 @@ export function EventRoutesSection({ canManage = true }: { canManage?: boolean }
       mode: rule.target.mode,
       sessionId:
         rule.target.mode === 'bound' || rule.target.mode === 'queue' ? rule.target.sessionId : '',
-      agentTemplate: rule.target.mode === 'ephemeral' ? rule.target.agentTemplate ?? '' : '',
-      project: rule.target.mode === 'ephemeral' ? rule.target.project ?? '' : '',
+      agentTemplate:
+        rule.target.mode === 'ephemeral' || rule.target.mode === 'bind'
+          ? rule.target.agentTemplate ?? ''
+          : '',
+      project:
+        rule.target.mode === 'ephemeral' || rule.target.mode === 'bind'
+          ? rule.target.project ?? ''
+          : '',
       ttl: rule.target.mode === 'ephemeral' ? rule.target.ttl ?? '' : '',
     })
   }
@@ -202,7 +214,7 @@ export function EventRoutesSection({ canManage = true }: { canManage?: boolean }
 
   const handleSave = async () => {
     if (!editor) return
-    if (editor.mode !== 'ephemeral' && !editor.sessionId.trim()) {
+    if (editor.mode !== 'ephemeral' && editor.mode !== 'bind' && !editor.sessionId.trim()) {
       setFormError(t('events.routes.form.sessionRequired'))
       return
     }
@@ -317,6 +329,15 @@ export function EventRoutesSection({ canManage = true }: { canManage?: boolean }
       }
       if (target.project) parts.push(`${t('events.routes.form.project')}: ${target.project}`)
       if (target.ttl) parts.push(`${t('events.routes.form.ttl')}: ${target.ttl}`)
+      return parts.join(' · ')
+    }
+    // AD-089 (auto-bind): цель закрепляет чат/тред за новой сессией.
+    if (target.mode === 'bind') {
+      const parts = [modeLabel('bind')]
+      if (target.agentTemplate) {
+        parts.push(`${t('events.routes.form.agentTemplate')}: ${target.agentTemplate}`)
+      }
+      if (target.project) parts.push(`${t('events.routes.form.project')}: ${target.project}`)
       return parts.join(' · ')
     }
     return `${modeLabel(target.mode)}: ${target.sessionId}`

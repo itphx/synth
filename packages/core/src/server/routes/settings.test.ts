@@ -1368,6 +1368,8 @@ describe('Settings API Routes (events, AD-089)', () => {
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
       decisionRouting: false,
+      autoBind: false,
+      autoBindAgentTemplate: '',
     });
     expect(body.events).toEqual(body.defaults);
   });
@@ -1402,6 +1404,22 @@ describe('Settings API Routes (events, AD-089)', () => {
     expect(get.events.enabled).toBe(false);
   });
 
+  it('PUT /events — autoBind/autoBindAgentTemplate сохраняются и применяются (AD-089)', async () => {
+    const { app, settingsStore, onEventsChange } = makeEventsApp();
+    const res = await app.request('/api/v2/settings/events', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ events: { autoBind: true, autoBindAgentTemplate: 'assistant' } }),
+    });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.events).toMatchObject({ autoBind: true, autoBindAgentTemplate: 'assistant' });
+    expect(await settingsStore.getEvents()).toEqual({ autoBind: true, autoBindAgentTemplate: 'assistant' });
+    expect(onEventsChange).toHaveBeenCalledWith(
+      expect.objectContaining({ autoBind: true, autoBindAgentTemplate: 'assistant' }),
+    );
+  });
+
   it('PUT /events — невалидные поля → 400 VALIDATION_ERROR', async () => {
     const { app, onEventsChange } = makeEventsApp();
     const cases: unknown[] = [
@@ -1413,6 +1431,8 @@ describe('Settings API Routes (events, AD-089)', () => {
       { events: { unknownAgentTemplate: 'ghost' } },
       { events: { ephemeralTtl: '' } },
       { events: { decisionRouting: 'yes' } },
+      { events: { autoBind: 'yes' } },
+      { events: { autoBindAgentTemplate: 123 } },
     ];
     for (const body of cases) {
       const res = await app.request('/api/v2/settings/events', {

@@ -109,7 +109,13 @@ export interface EventBindingApiKeyCreated extends EventBindingApiKey {
 export type EventRouteTarget =
   | { mode: 'bound'; sessionId: string }
   | { mode: 'ephemeral'; agentTemplate?: string; project?: string; ttl?: string }
-  | { mode: 'queue'; sessionId: string };
+  | { mode: 'queue'; sessionId: string }
+  /**
+   * AD-089 (auto-bind): правило закрепляет внешний адрес события
+   * (`chatKey`/`threadKey`) за сессией — Router создаёт `EventBinding`
+   * (`mode='bound'`) при первой доставке.
+   */
+  | { mode: 'bind'; agentTemplate?: string; project?: string };
 
 /** AD-089: условие срабатывания правила (AND по заполненным полям). */
 export interface EventRouteMatch {
@@ -156,7 +162,15 @@ type RouteDecisionKind =
   | { kind: 'bound'; sessionId: string }
   | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string }
   | { kind: 'queue'; owner: string; reason: string }
-  | { kind: 'drop'; reason: string; audited: true };
+  | { kind: 'drop'; reason: string; audited: true }
+  /**
+   * AD-089 (auto-bind): Router решает закрепить событие за новой сессией —
+   * `RequestSessionService` создаёт сессию без `expiresAt` и `EventBinding`
+   * (`mode='bound'`), после чего доставляет событие. Источник решения — фоллбек
+   * при `events.autoBind` и наличии `identity.chatKey|threadKey`, либо правило
+   * с целью `mode: 'bind'`.
+   */
+  | { kind: 'bind'; agentTemplate: string; project?: string };
 
 /** AD-089: решение Router — куда направить событие (или отложить/отбросить). */
 export type RouteDecision = RouteDecisionKind & RouteDecisionMeta;

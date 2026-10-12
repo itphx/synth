@@ -711,6 +711,12 @@ export const eventRouteTargetSchema = z.discriminatedUnion('mode', [
     ttl: z.string().optional(),
   }),
   z.object({ mode: z.literal('queue'), sessionId: z.string().min(1) }),
+  // AD-089 (auto-bind): цель закрепляет внешний адрес за сессией (binding создаёт Router).
+  z.object({
+    mode: z.literal('bind'),
+    agentTemplate: z.string().optional(),
+    project: z.string().optional(),
+  }),
 ]);
 
 /** AD-089: условие срабатывания правила (AND по заполненным полям). */
@@ -829,7 +835,7 @@ export const scheduleJobSchema = z.object({
   durationMs: z.number(),
   target: scheduleTargetSchema,
   dedupKey: z.string().optional(),
-  decision: z.enum(['bound', 'queue', 'ephemeral', 'drop']).optional(),
+  decision: z.enum(['bound', 'queue', 'ephemeral', 'bind', 'drop']).optional(),
   reason: z.string().optional(),
   sessionId: z.string().optional(),
   error: z.string().optional(),

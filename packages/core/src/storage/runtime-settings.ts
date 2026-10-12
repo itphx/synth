@@ -46,6 +46,14 @@ export interface EventsRuntimeSettings {
    * decision-модель выбирает шаблон агента (fail-safe → `defaultMode`).
    */
   decisionRouting: boolean;
+  /**
+   * AD-089 (auto-bind): фоллбек Router закрепляет событие с `identity.chatKey`/
+   * `threadKey` за новой сессией (`EventBinding mode='bound'`). Влияет только на
+   * фоллбек.
+   */
+  autoBind: boolean;
+  /** AD-089 (auto-bind): шаблон агента auto-bind-сессий (пусто — по умолчанию). */
+  autoBindAgentTemplate: string;
 }
 
 /**
@@ -187,6 +195,8 @@ export function mergeEventsConfig(
     unknownAgentTemplate: r.unknownAgentTemplate ?? base?.unknownAgentTemplate ?? 'drop',
     keyRateLimitPerMinute: r.keyRateLimitPerMinute ?? base?.keyRateLimitPerMinute ?? 0,
     decisionRouting: r.decisionRouting ?? base?.decisionRouting ?? false,
+    autoBind: r.autoBind ?? base?.autoBind ?? false,
+    autoBindAgentTemplate: r.autoBindAgentTemplate ?? base?.autoBindAgentTemplate ?? '',
   };
 }
 

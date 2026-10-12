@@ -2031,6 +2031,10 @@ export interface EventsSettings {
   keyRateLimitPerMinute: number
   /** AD-084: decision-маршрутизация внешних событий (default `false`, opt-in). */
   decisionRouting: boolean
+  /** AD-089: auto-bind — фоллбек-закрепление события с chatKey/threadKey за сессией (default `false`). */
+  autoBind: boolean
+  /** AD-089: шаблон агента auto-bind-сессий (пусто — агент по умолчанию). */
+  autoBindAgentTemplate: string
 }
 
 /** AD-089: ответ `GET/DELETE /settings/events` — эффективные значения, дефолты и флаг override. */

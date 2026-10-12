@@ -20,6 +20,7 @@ import {
   scheduleInputSchema,
   scheduleSchema,
   scheduleJobSchema,
+  eventRouteTargetSchema,
 } from './index.js';
 import { PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS } from '../types/index.js';
 
@@ -328,6 +329,18 @@ describe('schedule schemas (AD-051 / AD-089)', () => {
     expect(scheduleTargetSchema.safeParse({ mode: 'ephemeral', ttl: '30m' }).success).toBe(true);
     expect(scheduleTargetSchema.safeParse({ mode: 'bound' }).success).toBe(false);
     expect(scheduleTargetSchema.safeParse({ mode: 'other' }).success).toBe(false);
+  });
+
+  it('eventRouteTargetSchema: четыре варианта, включая bind (AD-089 auto-bind)', () => {
+    expect(eventRouteTargetSchema.safeParse({ mode: 'bound', sessionId: 's1' }).success).toBe(true);
+    expect(eventRouteTargetSchema.safeParse({ mode: 'queue', sessionId: 's1' }).success).toBe(true);
+    expect(eventRouteTargetSchema.safeParse({ mode: 'ephemeral', ttl: '30m' }).success).toBe(true);
+    expect(eventRouteTargetSchema.safeParse({ mode: 'bind' }).success).toBe(true);
+    expect(
+      eventRouteTargetSchema.safeParse({ mode: 'bind', agentTemplate: 'agent-x', project: 'p1' }).success,
+    ).toBe(true);
+    expect(eventRouteTargetSchema.safeParse({ mode: 'bind', agentTemplate: 42 }).success).toBe(false);
+    expect(eventRouteTargetSchema.safeParse({ mode: 'other' }).success).toBe(false);
   });
 
   it('scheduleInputSchema: enabled по умолчанию true, ровно один триггер', () => {

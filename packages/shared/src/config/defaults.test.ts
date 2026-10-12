@@ -130,6 +130,8 @@ describe('defaultConfig', () => {
       unknownAgentTemplate: 'drop',
       keyRateLimitPerMinute: 0,
       decisionRouting: false,
+      autoBind: false,
+      autoBindAgentTemplate: '',
     });
   });
 

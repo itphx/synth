@@ -36,6 +36,15 @@ export interface EventRouterConfig {
   defaultMode?: 'bound' | 'ephemeral';
   /** TTL ephemeral-сессий по умолчанию (напр. `'24h'`). */
   defaultEphemeralTtl: string;
+  /**
+   * AD-089 (auto-bind): фоллбек Router — если у события есть `identity.chatKey`
+   * или `identity.threadKey`, вернуть `{ kind: 'bind' }` (сессия + `EventBinding
+   * mode='bound'` создаются `RequestSessionService`) вместо `defaultMode`.
+   * По умолчанию выключено. Влияет **только** на фоллбек.
+   */
+  autoBind?: boolean;
+  /** AD-089 (auto-bind): шаблон агента auto-bind-сессий (пусто — по умолчанию). */
+  autoBindAgentTemplate?: string;
 }
 
 /**

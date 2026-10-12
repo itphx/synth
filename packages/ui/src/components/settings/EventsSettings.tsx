@@ -228,6 +228,25 @@ export function EventsSettings() {
               ariaLabel={t('eventsConfig.decisionRouting')}
             />
 
+            <ToggleField
+              label={t('eventsConfig.autoBind')}
+              tooltip={t('eventsConfig.autoBindTooltip')}
+              enabled={draftMode.autoBind}
+              onToggle={() => draft.update({ autoBind: !draftMode.autoBind })}
+              ariaLabel={t('eventsConfig.autoBind')}
+            />
+
+            <TextField
+              label={t('eventsConfig.autoBindAgentTemplate')}
+              tooltip={t('eventsConfig.autoBindAgentTemplateTooltip')}
+              value={draftMode.autoBindAgentTemplate}
+              onChange={(e) => draft.update({ autoBindAgentTemplate: e.target.value })}
+              placeholder={t('eventsConfig.autoBindAgentTemplatePlaceholder')}
+              mono
+              id="events-config-auto-bind-agent"
+              data-testid="events-config-auto-bind-agent"
+            />
+
             <SettingsActions
               onSave={() => void handleSave()}
               onCancel={() => draft.revert()}

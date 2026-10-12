@@ -61,6 +61,8 @@ export class EventRouter {
       allowedSources: deps.config?.allowedSources,
       defaultMode: deps.config?.defaultMode ?? FALLBACK_DEFAULT_MODE,
       defaultEphemeralTtl: deps.config?.defaultEphemeralTtl ?? FALLBACK_EPHEMERAL_TTL,
+      autoBind: deps.config?.autoBind ?? false,
+      autoBindAgentTemplate: deps.config?.autoBindAgentTemplate ?? '',
     };
     if (deps.ruleProviders) this._ruleProviders.push(...deps.ruleProviders);
   }
@@ -79,6 +81,10 @@ export class EventRouter {
     if (partial.defaultMode !== undefined) this._config.defaultMode = partial.defaultMode;
     if (partial.defaultEphemeralTtl !== undefined) {
       this._config.defaultEphemeralTtl = partial.defaultEphemeralTtl;
+    }
+    if (partial.autoBind !== undefined) this._config.autoBind = partial.autoBind;
+    if (partial.autoBindAgentTemplate !== undefined) {
+      this._config.autoBindAgentTemplate = partial.autoBindAgentTemplate;
     }
   }
 
@@ -129,9 +135,19 @@ export class EventRouter {
       }
     }
 
-    // 5. Фоллбек — политика `defaultMode` (AD-089): `ephemeral` создаёт
-    // временную сессию (агент по умолчанию — резолвинг в `RequestSessionService`);
-    // `bound` — осознанный дроп с аудитом (событие не теряется молча).
+    // 5. Фоллбек — AD-089. Приоритет: `autoBind` (закрепить событие с
+    // chatKey/threadKey за новой сессией) → политика `defaultMode`
+    // (`ephemeral` — временная сессия; `bound` — осознанный дроп с аудитом).
+    // `autoBind` влияет только на фоллбек: явный binding, правила и
+    // decision-маршрутизация сохраняют своё поведение (шаги 3–4 выше).
+    if (this._config.autoBind && (event.identity?.chatKey || event.identity?.threadKey)) {
+      return {
+        kind: 'bind',
+        agentTemplate: this._config.autoBindAgentTemplate ?? '',
+        project: undefined,
+        signals: ['auto-bind'],
+      };
+    }
     if (this._config.defaultMode === 'ephemeral') {
       return {
         kind: 'ephemeral',

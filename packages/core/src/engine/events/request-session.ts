@@ -11,6 +11,7 @@ import type {
 import { MessageRole, generateId, nowISO } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import { parseTtl } from '../../sessions/ephemeral.js';
+import type { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { HookBus } from '../hooks/hook-bus.js';
 import type { EventRouter } from './event-router.js';
 import type { EventDelivery } from './types.js';
@@ -24,6 +25,11 @@ export interface RequestSessionOptions {
 export interface RequestSessionServiceDeps {
   sessionManager: SessionManager;
   eventRouter: EventRouter;
+  /**
+   * AD-089 (auto-bind): реестр привязок — материализация решения `kind: 'bind'`
+   * создаёт/переиспользует `EventBinding` (`mode='bound'`).
+   */
+  bindingStore: EventBindingStore;
   hooks?: HookBus;
   config: { defaultEphemeralTtl: string; unknownAgentTemplate?: 'drop' | 'default-agent' };
   deliver: EventDelivery;
@@ -129,6 +135,7 @@ function eventTitle(event: SynthEvent): string | undefined {
 export class RequestSessionService {
   private _sessionManager: SessionManager;
   private _eventRouter: EventRouter;
+  private _bindingStore: EventBindingStore;
   private _hooks?: HookBus;
   private _config: { defaultEphemeralTtl: string; unknownAgentTemplate: 'drop' | 'default-agent' };
   private _deliver: EventDelivery;
@@ -138,6 +145,7 @@ export class RequestSessionService {
   constructor(deps: RequestSessionServiceDeps) {
     this._sessionManager = deps.sessionManager;
     this._eventRouter = deps.eventRouter;
+    this._bindingStore = deps.bindingStore;
     this._hooks = deps.hooks;
     this._config = {
       defaultEphemeralTtl: deps.config.defaultEphemeralTtl,
@@ -266,6 +274,43 @@ export class RequestSessionService {
         projectId: decision.project,
         settings: this._agentSettings(agentRole, undefined),
         expiresAt: parseTtl(decision.ttl),
+      });
+      await this._deliver(session.id, event, 'run');
+      return session;
+    }
+
+    // AD-089 (auto-bind / цель `bind`): закрепить внешний адрес за сессией.
+    // Сессия — постоянная (без `expiresAt`); создаётся `EventBinding mode='bound'`.
+    if (decision.kind === 'bind') {
+      // Гонка/повтор: привязка уже могла быть создана предыдущим событием —
+      // переиспользуем её сессию, ничего не создавая.
+      const existing = await this._bindingStore.findByKey({
+        source: event.source,
+        chatKey: event.identity?.chatKey,
+        threadKey: event.identity?.threadKey,
+      });
+      if (existing?.sessionId) {
+        const existingSession = await this._sessionManager.getSession(existing.sessionId);
+        if (existingSession) {
+          await this._deliver(existingSession.id, event, 'run');
+          return existingSession;
+        }
+      }
+
+      const agentRole = this._resolveAgent(decision.agentTemplate);
+      const session = await this._sessionManager.createSession({
+        title: eventTitle(event),
+        projectId: decision.project,
+        settings: this._agentSettings(agentRole, undefined),
+      });
+      await this._bindingStore.upsert({
+        source: event.source,
+        ...(event.identity?.chatKey ? { chatKey: event.identity.chatKey } : {}),
+        ...(event.identity?.threadKey ? { threadKey: event.identity.threadKey } : {}),
+        sessionId: session.id,
+        mode: 'bound',
+        ...(decision.agentTemplate ? { agentTemplate: decision.agentTemplate } : {}),
+        ...(decision.project ? { project: decision.project } : {}),
       });
       await this._deliver(session.id, event, 'run');
       return session;

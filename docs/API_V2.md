@@ -558,7 +558,7 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/settings/protected-paths` | auth | `{policy, base, is_overridden}` |
 | PUT | `/api/v2/settings/protected-paths` | auth | `{policy}` или `{version, add, remove}` |
 | DELETE | `/api/v2/settings/protected-paths` | auth | Сброс к системной политике |
-| GET | `/api/v2/settings/events` | auth | Runtime-настройки раздела «События» (AD-089): `{events:{enabled, defaultMode, ephemeralTtl, journalRetentionDays, allowedSources, unknownAgentTemplate, keyRateLimitPerMinute}, defaults, isOverridden}` (runtime из `settings.json` поверх config.yaml `events`) |
+| GET | `/api/v2/settings/events` | auth | Runtime-настройки раздела «События» (AD-089): `{events:{enabled, defaultMode, ephemeralTtl, journalRetentionDays, allowedSources, unknownAgentTemplate, keyRateLimitPerMinute, decisionRouting, autoBind, autoBindAgentTemplate}, defaults, isOverridden}` (runtime из `settings.json` поверх config.yaml `events`) |
 | PUT | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Патч `{events:{…}}` (live-применение: Router/funnel/pruner переконфигурируются); невалидное значение → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Сброс runtime-настроек к config-дефолту; `{status:"restored", events, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/decision` | auth | Runtime-настройки decision-слоя (AD-084): `{decision:{enabled, provider, model, confidenceThreshold, escalationProvider, escalationModel}, defaults, isOverridden}` (runtime из `settings.json` поверх config.yaml `decision`); `escalationProvider`/`escalationModel` — необязательный точный тир `primary → escalation` (пусто — без эскалации) |
@@ -616,7 +616,7 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 | POST | `/api/v2/events/bindings/:id/keys/:keyId/revoke` | оба | LEAD/ADMIN | Мягкий отзыв ключа (проставляет `revokedAt`; идемпотентно) → 200 `EventBindingApiKey`; нет ключа → 404 `NOT_FOUND`. Отозванный ключ перестаёт резолвиться (`resolveBySecret` → `null`) |
 | DELETE | `/api/v2/events/bindings/:id/keys/:keyId` | оба | LEAD/ADMIN | Удалить API-ключ → 204; нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/events/routes` | оба | auth | Список правил маршрутизации `{rules}` (`EventRouteRule[]`) |
-| POST | `/api/v2/events/routes` | оба | LEAD/ADMIN | Upsert правила (`eventRouteRuleUpsertSchema`): `{id?, name?, priority?, enabled?, match, target}`; `match` — AND по заполненным `source`/`type`/`chatKey`/`threadKey`/`principalId`/`label`/`keywords` (пустой-невалидный не матчит); `target` — `bound`/`queue` (`sessionId`) или `ephemeral` (`agentTemplate?`/`project?`/`ttl?`). По `id` — обновление → 200, иначе создание → 201. Валидация: `bound`/`queue` с несуществующей сессией → 400, непустой `agentTemplate` без enabled-агента → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/events/routes` | оба | LEAD/ADMIN | Upsert правила (`eventRouteRuleUpsertSchema`): `{id?, name?, priority?, enabled?, match, target}`; `match` — AND по заполненным `source`/`type`/`chatKey`/`threadKey`/`principalId`/`label`/`keywords` (пустой-невалидный не матчит); `target` — `bound`/`queue` (`sessionId`), `ephemeral` (`agentTemplate?`/`project?`/`ttl?`) или `bind` (AD-089 auto-bind: `agentTemplate?`/`project?` — закрепить чат/тред за новой сессией). По `id` — обновление → 200, иначе создание → 201. Валидация: `bound`/`queue` с несуществующей сессией → 400, непустой `agentTemplate` без enabled-агента → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/events/routes/:id` | оба | LEAD/ADMIN | Удалить правило → 204; нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/events/journal` | оба | auth | Последние записи журнала решений `{entries}`; `?limit=` (default 50, cap 500) |
 
@@ -635,7 +635,9 @@ API-ключи привязок (`EventBindingApiKey`, `{dataDir}/events/api-key
 дефолт `events.keyRateLimitPerMinute`, `0` — без лимита). Ключи — инстанс-локальные секреты,
 не переносятся publish/fork (AD-042/AD-081).
 Правила маршрутизации (`EventRouteRule`, `{dataDir}/events/routes.json`) применяет `ProjectRuleProvider`
-после явного `EventBinding` и cron-правила; фоллбек Router без маршрута задаёт `events.defaultMode`
+после явного `EventBinding` и cron-правила; фоллбек Router без маршрута задаёт `events.autoBind`
+(при `true` и наличии `identity.chatKey|threadKey` — закрепить событие за новой сессией,
+решение `{kind:'bind'}`, сигнал `auto-bind`), иначе `events.defaultMode`
 (`bound` — `drop no_route`, `ephemeral` — временная сессия). При `events.decisionRouting` после
 декларативных правил срабатывает `DecisionRuleProvider` (AD-084): успешное решение несёт
 `confidence` и `signals` (`decision-rules`, `agent:<id>`, `model:<p/m>`, `latency:<ms>ms`) — они

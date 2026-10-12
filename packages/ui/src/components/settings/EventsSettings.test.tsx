@@ -57,6 +57,8 @@ const DEFAULTS: EventsSettingsData = {
   unknownAgentTemplate: 'drop',
   keyRateLimitPerMinute: 0,
   decisionRouting: false,
+  autoBind: false,
+  autoBindAgentTemplate: '',
 }
 
 const OVERRIDDEN: EventsSettingsData = {
@@ -68,6 +70,8 @@ const OVERRIDDEN: EventsSettingsData = {
   unknownAgentTemplate: 'default-agent',
   keyRateLimitPerMinute: 60,
   decisionRouting: false,
+  autoBind: false,
+  autoBindAgentTemplate: 'assistant',
 }
 
 function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
@@ -231,6 +235,36 @@ describe('EventsSettings — админ-раздел «Параметры соб
     )
   })
 
+  it('тумблер autoBind (AD-089) и шаблон агента становятся частью черновика', async () => {
+    const container = await renderSettings()
+
+    const autoBindToggle = container.querySelector(
+      `[role="switch"][aria-label="${enDict['eventsConfig.autoBind']}"]`,
+    ) as HTMLButtonElement
+    expect(autoBindToggle).not.toBeNull()
+    expect(autoBindToggle.getAttribute('aria-checked')).toBe('false')
+
+    await act(async () => {
+      autoBindToggle.click()
+    })
+    expect(autoBindToggle.getAttribute('aria-checked')).toBe('true')
+
+    const template = container.querySelector(
+      '[data-testid="events-config-auto-bind-agent"]',
+    ) as HTMLInputElement
+    expect(template.value).toBe('assistant')
+    await act(async () => {
+      setInputValue(template, 'agent-z')
+    })
+
+    await clickTestId(container, 'events-config-save')
+    await act(async () => {})
+
+    expect(mocks.updateEventsSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ autoBind: true, autoBindAgentTemplate: 'agent-z' }),
+    )
+  })
+
   it('Cancel откатывает черновик к сохранённым значениям', async () => {
     const container = await renderSettings()
 
@@ -315,5 +349,9 @@ describe('EventsSettings — права доступа (ADMIN) и i18n (AD-089)'
     expect(ruDict['eventsConfig.keyRateLimitPerMinute']).toBeTruthy()
     expect(enDict['eventsConfig.decisionRouting']).toBeTruthy()
     expect(ruDict['eventsConfig.decisionRouting']).toBeTruthy()
+    expect(enDict['eventsConfig.autoBind']).toBeTruthy()
+    expect(ruDict['eventsConfig.autoBind']).toBeTruthy()
+    expect(enDict['eventsConfig.autoBindAgentTemplate']).toBeTruthy()
+    expect(ruDict['eventsConfig.autoBindAgentTemplate']).toBeTruthy()
   })
 })
