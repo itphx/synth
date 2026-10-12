@@ -257,16 +257,15 @@ routing** (привязки/правила/auto-bind), **человек (`princi
 - Funnel (`RequestSessionService.handleEvent`) считает эффективные роли **от самого отправителя**
   (`principalId`, не от владельца) и передаёт их в `deliver` расширенным контекстом
   `EventDeliveryContext {roles, linked}`; `deliver` (core/backend) кладёт их в `metadata` хода
-  (`effective_roles`/`identity_linked`) — для аудита и будущего enforcement.
-- **Точка enforcement (остаток):** permission-слой (`PermissionEvaluator`, AD-029) **не имеет
-  роль-оси** — его правила оперируют тулом/путём/режимом/capabilities, а глобальные роли
-  (`ADMIN`/`LEAD`/…) проверяются на HTTP-уровне (`requirePermission`) per-ключом. Вводить
-  роль-правила в permission-слой — крупный рефакторинг (новые семантики правил, config, UI),
-  поэтому на этом этапе эффективные роли **вычисляются и доставляются в ход**, а enforcement
-  ограничен тем, что права машинного аккаунта шлюза перестали «раздаваться» внешним отправителям:
-  сопознанный с `USER` видит только пользовательские права, сужение работает, несопознанный —
-  без прав. Полный role-aware enforcement — отдельный срез (или AD-052 service-key
-  со scoped-токенами — см. «Не реализовано»).
+  (`effective_roles`/`identity_linked`) — для аудита/attribution и роутинга.
+- **Роли = доступность эндпоинтов (by design):** глобальные роли (`ADMIN`/`LEAD`/…) применяются на
+  HTTP-уровне (`requirePermission`); внутри сессии набор тулов/разрешений одинаков для всех и
+  определяется режимом, capabilities агента, MCP/скиллами. Роль-оси в permission-слое
+  (`PermissionEvaluator`, AD-029) **нет и не планируется** — эффективные роли доставляются в ход
+  для аудита/attribution, а машинный доступ интеграций сужается scoped **service-key** (AD-052,
+  `scopes` + `allowedProjects`), не ролями отправителя. Права машинного аккаунта шлюза перестали
+  «раздаваться» внешним отправителям (сопознанный с `USER` видит только пользовательские права,
+  сужение работает, несопознанный — без прав).
 - Правило для шлюзов: роль в `GATEWAY_ALLOWLIST` — **потолок** (сужает права профиля), а не
   дарование; не задавать роль / задавать максимальную — не ограничивать. Локальные команды
   шлюза (`/bind`/`/unbind`/`/new`) по-прежнему гейтятся allowlist-ролью (`BINDING_COMMANDS`) —
@@ -423,8 +422,9 @@ managed backend — `synth.llm` того же конфига. Явно зада�
   (fail-closed). `RequestSessionService.handleEvent` (`_resolveDeliveryContext`) считает роли **от самого
   отправителя** и передаёт `EventDeliveryContext {roles, linked}` в `deliver`; core/backend `deliver` пишет
   `metadata.effective_roles`/`identity_linked` в ход. **Роль-оси в permission-слое (`PermissionEvaluator`, AD-029)
-  нет** — role-aware enforcement не введён (роли доставляются в ход для аудита/задела; альтернатива — AD-052
-  service-key). Практический эффект: права машинного аккаунта шлюза не раздаются внешним отправителям.
+  нет — by design:** роли = доступность **эндпоинтов** (HTTP), внутри сессии тулы/разрешения одинаковы для всех.
+  Роли доставляются в ход для аудита/attribution; машинный доступ сужается scoped **service-key** (AD-052).
+  Практический эффект: права машинного аккаунта шлюза не раздаются внешним отправителям.
 - **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),
   `RouteRuleStore` (`{dataDir}/events/routes.json`), `EventApiKeyStore` (`{dataDir}/events/api-keys.json`, AD-052-первый срез;
   `schemaVersion`, sha256-хеш секрета) (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.
@@ -469,9 +469,9 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 **Не реализовано (остаток):**
 
 - **Источник [AD-052](./ad-052-public-api-platform.md) — частично:** реализован первый срез —
-  **binding-key** (см. `EventBindingApiKey` выше). Нет **service-key** (общий ключ инстанса/тенанта
-  со scope — остаток AD-052; для мессенджер-шлюзов
-  [AD-086](./ad-086-extensibility-plugins-editions.md)), `scopes`/`tenants`, OpenAPI-спеки, SDK, исходящих
+  **binding-key** (см. `EventBindingApiKey` выше). Нет **service-key** (общий ключ инстанса
+  со `scopes` + проектной проекцией `allowedProjects` — остаток AD-052; для мессенджер-шлюзов
+  [AD-086](./ad-086-extensibility-plugins-editions.md)), public-OpenAPI-спеки, SDK, исходящих
   webhooks; ключи — **инстанс-локальные секреты**: не переносятся publish/fork и межмировой обмен
   ([AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
 - Источник AD-086 (add-on + Telegram gateway → `message_received`) — нет;

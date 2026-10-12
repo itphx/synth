@@ -94,8 +94,10 @@
   `resolveEffectiveRoles` (`engine/events/identity-roles.ts`); funnel считает контекст и
   передаёт `EventDeliveryContext {roles, linked}` в `deliver`, который пишет
   `metadata.effective_roles`/`identity_linked`. **Роль-оси в permission-слое
-  (`PermissionEvaluator`, AD-029) нет** — role-aware enforcement не введён (крупный
-  рефакторинг; см. AD-089 и альтернативу AD-052 service-key).
+  (`PermissionEvaluator`, AD-029) нет — by design:** роли = доступность **эндпоинтов** (HTTP,
+  `requirePermission`); внутри сессии набор тулов/разрешений одинаков для всех (режим, capabilities
+  агента, MCP/скиллы). Эффективные роли доставляются в ход для аудита/attribution; машинный доступ
+  интеграций сужается scoped **service-key** (AD-052), а не ролями отправителя.
 
 ## Гибрид (core-специфика)
 
@@ -223,9 +225,10 @@
   считает роли **от самого отправителя** (`_resolveDeliveryContext`, резолвер внешней идентичности;
   ошибка резолвера → fail-closed `[]`) и передаёт их в `deliver` контекстом
   `EventDeliveryContext {roles, linked}` — `deliver` (core/backend) пишет `metadata.effective_roles`/
-  `identity_linked`. **Роль-оси в permission-слое (`PermissionEvaluator`, AD-029) НЕТ** — роли
-  вычисляются и доставляются в ход (аудит/задел), но role-aware enforcement не введён (крупный
-  рефакторинг правил/config/UI; альтернатива — AD-052 service-key). Практический эффект:
+  `identity_linked`. **Роль-оси в permission-слое (`PermissionEvaluator`, AD-029) нет — by design:**
+  роли = доступность **эндпоинтов** (HTTP), внутри сессии тулы/разрешения одинаковы для всех (режим,
+  capabilities агента, MCP/скиллы). Роли доставляются в ход для аудита/attribution; машинный доступ
+  интеграций сужается scoped **service-key** (AD-052). Практический эффект:
   права машинного аккаунта шлюза не раздаются внешним отправителям),
   `external-identity.ts` (`createExternalIdentityResolver({profiles, getIdentityMap})` — резолвер
   внешнего отправителя → `{userId, displayName?, roles?} | null`: override `identityMap` (по `principalId`,
