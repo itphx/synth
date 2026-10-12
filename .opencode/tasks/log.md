@@ -592,3 +592,41 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 3. **Шлюз-hardening**: прокси-агент создаётся на каждый запрос (CONNECT-туннели рвутся) — кэш агента/keep-alive + контекст в ошибках `aborted`.
 4. `events.identityMap` в dev выставлен на `chat:telegram:450316139 → admin` (избыточно для debug — убрать по желанию).
 5. Ключ `2deb88f` не входит в эту серию (коммит до неё); ROADMAP: UI-редактор identityMap есть, роль-ось enforcement — нет.
+
+## 2026-10-13 — AD-052: план публичной API-платформы; AD-029 — чистка
+
+- **Задача:** «Давай добьём AD-029 и 5 этап» → уточнение семантики ролей → «Сосредоточимся на AD-052 — нужны сервисные ключи» → «Всё AD-052 целиком» → «Зафиксируй решения и план в AD-052».
+- **Тип:** design (AD) + docs
+- **Исполнитель:** @orchestrator → @fixer (AD-029), @researcher (инвентаризация AD-052), @fixer (AD-052 + индексы)
+- **Результат:** PASS
+
+### Принятые решения
+- **Роли = доступность эндпоинтов** (HTTP). Внутри сессии набор тулов/разрешений **одинаков для всех** (режим + capabilities агента + MCP/скиллы). Роль-ось в permission-слое (`PermissionEvaluator`, AD-029) **не нужна by design** (мой прежний «Э5 остаток» снят как некорректная постановка).
+- **Tenants исключены из AD-052**: артефакт SaaS-шаблона; модель Synth — self-host (изоляция = инстанс), группировка = проект (AD-014). Заменено на `scopes` + проекцию `allowedProjects`. В AD-086 «тенант» = другой инстанс (не путать).
+- **AD-052 = 4 блока:** ① service-key + scopes ② webhooks ③ public-OpenAPI (`@hono/zod-openapi`) + SDK ④ перевод шлюза на service-key.
+- **OpenAPI — только public-спека** (интеграционное ядро: events/bindings/sessions/schedules/llm; ~42 хендлера). Полную internal-спеку не публикуем (заморозка контракта, fs/audit/admin в публичке = приглашение, scopes схлопнулись бы в ADMIN).
+- **Scopes — именованные** (`events:ingest`, `sessions:create`, `llm:chat`, …), enforcement `requireScope` рядом с `requirePermission`; service-key — отдельный `ServiceApiKeyStore` (`synth_svc_`, `service-keys.json`), binding-key (AD-089) не трогаем.
+
+### Что сделано
+- **AD-029** — удалены вложенные устаревшие копии AD-030/031/032 (145 строк; 197 → 52). Покрытие 13/13 пунктов отдельными файлами — ничего не потеряно.
+- **AD-052** — переработан: разделы «Почему без tenants», «Service-key», «Scopes», «Проектная проекция ключа», «OpenAPI — только public», «SDK», «Webhooks», «План реализации (этапы I–IV)»; обновлены статус, решение, открытые вопросы.
+- **Индексы/AGENTS:** строка AD-052 в индексе + «Куда смотреть» (корень), `docs/arch_decisions/README.md`; в AD-089 убрано «тенанта», добавлены `scopes`/`allowedProjects`.
+- **Согласование дизайна:** правки «остаток/role-aware enforcement» → «by design» в `AGENTS.md` (корень), `packages/core/AGENTS.md`, `packages/backend/AGENTS.md`, AD-089 (убрано чтение как недоделка).
+
+### Коммит
+- `synth` (ветка `docs/ad-normalization-089-external-events`): `4a4202c` — `docs(ad): AD-052 план публичной API-платформы; AD-029 — чистка вложенных AD` (только документация, код не менялся). Push не делался.
+
+### Проверки
+- Только `.md`; ссылки AD-052 валидны (10/10); `grep` — «тенант» только в разделе «Почему без tenants»; «role-aware enforcement не введён» нигде не осталось; ad-029 — единственный заголовок AD-029.
+
+### Следующие шаги (этапы AD-052, с остановкой после каждого)
+1. **Этап I** — service-key + scopes + spike `@hono/zod-openapi` (2–3 эндпоинта `events` + единый формат ошибок). Критерий: scoped service-key работает, spike подтвердил/опроверг подход.
+2. **Этап II** — webhooks (модель подписки, store, доставка над `EventBus.subscribeAll`, HMAC-подпись, retry/backoff, дедуп, SSRF-политика, API/UI).
+3. **Этап III** — public-OpenAPI (обёртка ~42 хендлеров) + пакет `@itphx/synth-sdk`.
+4. **Этап IV** — перевод `synth-gateway-telegram` на scoped service-key.
+
+### Тех.долг (актуальное)
+- **Role-aware enforcement — снят** (не требуется by design; см. выше).
+- **K3s test** — нужен новый образ backend (в кластере 0.9.0 без events-роутов → 404) + образ шлюза, SealedSecret, `gateway.enabled=true`, `events.autoBind=true`. Push `synth-deploy` — за пользователем.
+- **Шлюз-hardening** — прокси-агент создаётся на каждый запрос (CONNECT-труннели рвутся) → кэш агента/keep-alive + контекст в ошибках `aborted`.
+- `events.identityMap` в dev = `chat:telegram:450316139 → admin` (избыточно для debug).
