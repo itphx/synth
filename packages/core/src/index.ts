@@ -220,6 +220,7 @@ export {
 export type {
   RequestSessionOptions,
   RequestSessionServiceDeps,
+  LlmDefaults,
 } from './engine/events/request-session.js';
 export type {
   EventDelivery,

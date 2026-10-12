@@ -51,6 +51,8 @@ describe('RequestSessionService (AD-089)', () => {
     overrides?: {
       resolveAgentTemplate?: (template: string) => string | null;
       unknownAgentTemplate?: 'drop' | 'default-agent';
+      resolveOwnerId?: () => string | Promise<string | undefined>;
+      resolveLlmDefaults?: () => { provider?: string; model?: string } | Promise<{ provider?: string; model?: string }>;
     },
   ) => new RequestSessionService({
     sessionManager,
@@ -63,6 +65,8 @@ describe('RequestSessionService (AD-089)', () => {
     },
     deliver,
     ...(overrides?.resolveAgentTemplate ? { resolveAgentTemplate: overrides.resolveAgentTemplate } : {}),
+    ...(overrides?.resolveOwnerId ? { resolveOwnerId: overrides.resolveOwnerId } : {}),
+    ...(overrides?.resolveLlmDefaults ? { resolveLlmDefaults: overrides.resolveLlmDefaults } : {}),
   });
 
   it('request explicit создаёт сессию без expiresAt и доставки', async () => {
@@ -283,6 +287,168 @@ describe('RequestSessionService (AD-089)', () => {
     expect(deliver).toHaveBeenCalledWith(existingSession.id, e, 'run');
     // Новая привязка не создана.
     expect(await bindingStore.list()).toHaveLength(1);
+  });
+
+  it('handleEvent ephemeral: владелец из deps.resolveOwnerId (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:own',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:own' } });
+    const { session } = await service(undefined, { resolveOwnerId: () => 'local' }).handleEvent(e);
+
+    expect(session?.userId).toBe('local');
+    expect(session?.ownerId).toBe('local');
+  });
+
+  it('handleEvent auto-bind: владелец из deps.resolveOwnerId (AD-089)', async () => {
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultEphemeralTtl: '24h', autoBind: true },
+    });
+    const e = event({ identity: { chatKey: 'chat:telegram:owner-bind' }, dedupKey: 'k-owner-bind' });
+    const { session } = await service(router, { resolveOwnerId: () => 'local' }).handleEvent(e);
+
+    expect(session?.userId).toBe('local');
+    expect(session?.ownerId).toBe('local');
+  });
+
+  it('handleEvent opts.ownerId переопределяет deps.resolveOwnerId (AD-089)', async () => {
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultEphemeralTtl: '24h', autoBind: true },
+    });
+    const e = event({ identity: { chatKey: 'chat:telegram:owner-explicit' }, dedupKey: 'k-owner-explicit' });
+    const { session } = await service(router, { resolveOwnerId: () => 'local' })
+      .handleEvent(e, { ownerId: 'u-42' });
+
+    expect(session?.userId).toBe('u-42');
+    expect(session?.ownerId).toBe('u-42');
+  });
+
+  it('handleEvent без резолвера/opts → владелец из identity.principalId (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:cron',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:cron', principalId: 'owner-cron' } });
+    const { session } = await service().handleEvent(e);
+
+    expect(session?.ownerId).toBe('owner-cron');
+  });
+
+  it('handleEvent без владельца → сессия без ownerId (обратная совместимость)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:none',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:none' } });
+    const { session } = await service().handleEvent(e);
+
+    expect(session?.userId).toBe('');
+    expect(session?.ownerId).toBe('');
+  });
+
+  it('handleEvent ephemeral: дефолтные provider/model из deps.resolveLlmDefaults (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:def',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:def' } });
+    const { session } = await service(undefined, {
+      resolveLlmDefaults: () => ({ provider: 'p-def', model: 'm-def' }),
+    }).handleEvent(e);
+
+    expect(session?.settings.provider).toBe('p-def');
+    expect(session?.settings.model).toBe('m-def');
+  });
+
+  it('handleEvent auto-bind: дефолтные provider/model из deps.resolveLlmDefaults (AD-089)', async () => {
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultEphemeralTtl: '24h', autoBind: true },
+    });
+    const e = event({ identity: { chatKey: 'chat:telegram:def-bind' }, dedupKey: 'k-def-bind' });
+    const { session } = await service(router, {
+      resolveLlmDefaults: () => ({ provider: 'p-def', model: 'm-def' }),
+    }).handleEvent(e);
+
+    expect(session?.settings.provider).toBe('p-def');
+    expect(session?.settings.model).toBe('m-def');
+  });
+
+  it('handleEvent ephemeral: без резолвера дефолтов provider/model не заданы (обратная совместимость)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:nodef',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:nodef' } });
+    const { session } = await service().handleEvent(e);
+
+    expect(session?.settings.provider).toBeUndefined();
+    expect(session?.settings.model).toBeUndefined();
+  });
+
+  it('request explicit: дефолтные provider/model из deps.resolveLlmDefaults (AD-089)', async () => {
+    const created = await service(undefined, {
+      resolveLlmDefaults: () => ({ provider: 'p-def', model: 'm-def' }),
+    }).request({ initiator: 'user', intent: 'explicit' });
+
+    expect(created?.settings.provider).toBe('p-def');
+    expect(created?.settings.model).toBe('m-def');
+  });
+
+  it('request explicit: явные provider/model приоритетнее дефолтов (AD-089)', async () => {
+    const created = await service(undefined, {
+      resolveLlmDefaults: () => ({ provider: 'p-def', model: 'm-def' }),
+    }).request({
+      initiator: 'user',
+      intent: 'explicit',
+      settings: { provider: 'p-explicit', model: 'm-explicit' },
+    });
+
+    expect(created?.settings.provider).toBe('p-explicit');
+    expect(created?.settings.model).toBe('m-explicit');
+  });
+
+  it('request explicit: частичное переопределение — задан provider, model добирается из дефолта (AD-089)', async () => {
+    const created = await service(undefined, {
+      resolveLlmDefaults: () => ({ provider: 'p-def', model: 'm-def' }),
+    }).request({
+      initiator: 'user',
+      intent: 'explicit',
+      settings: { provider: 'p-explicit' },
+    });
+
+    expect(created?.settings.provider).toBe('p-explicit');
+    expect(created?.settings.model).toBe('m-def');
+  });
+
+  it('request explicit: пустые дефолты не заполняют provider/model (AD-089)', async () => {
+    const created = await service(undefined, {
+      resolveLlmDefaults: () => ({ provider: '', model: '' }),
+    }).request({ initiator: 'user', intent: 'explicit' });
+
+    expect(created?.settings.provider).toBeUndefined();
+    expect(created?.settings.model).toBeUndefined();
   });
 
   it('request explicit: неизвестный шаблон при drop → ошибка agent_not_found', async () => {

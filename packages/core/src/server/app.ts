@@ -98,6 +98,12 @@ export interface StandaloneConfig {
   gatewayConfig?: LLMGatewayConfig;
   /** AD-070 §2.2: политика prompt-cache из config.yaml llm.cache (auto | none). */
   llmCachePolicy?: 'auto' | 'none';
+  /**
+   * AD-089: дефолтные `provider`/`model` инстанса (`llm.defaultProvider`/
+   * `llm.defaultModel`) — применяются к сессиям, материализуемым funnel'ом
+   * (`RequestSessionService`: `ephemeral`/`bind`), когда явная модель не задана.
+   */
+  llmDefaults?: { provider?: string; model?: string };
   /** AD-071 §2.3: глобальная политика включения встроенных инструментов из config.yaml tools.policy. */
   toolsPolicy?: ToolsPolicy;
   /** AD-071 §2.3: глобальная политика включения MCP-инструментов из config.yaml mcp.policy. */
@@ -963,6 +969,17 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       unknownAgentTemplate: effectiveEvents.unknownAgentTemplate,
     },
     resolveAgentTemplate,
+    // AD-089: владелец сессий, материализуемых внешним событием (ephemeral/bind) —
+    // `local` (паритет с `POST /api/v2/sessions`, `resolveUserId` core). Без этого
+    // такие сессии не имели владельца и выпадали из `listSessions({ userId })`.
+    resolveOwnerId: () => 'local',
+    // AD-089: дефолтные provider/model инстанса — чтобы сессия из внешнего события
+    // (напр. Telegram-шлюз) могла ответить без ручной проставки модели
+    // (паритет с сессией без явной модели; источник — llm.defaultProvider/defaultModel).
+    resolveLlmDefaults: () => ({
+      provider: config.llmDefaults?.provider,
+      model: config.llmDefaults?.model,
+    }),
     // AD-089: UI-событие после материализации внешнего события.
     publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
     deliver: async (sessionId, event, mode) => {
@@ -1363,16 +1380,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
             }
           };
 
-          if (connection.connected) {
-            // Гибрид: события удалённых сессий (remote:<id>) публикует мост,
-            // локальных — оркестратор. Только subscribeAll — без дублей.
-            unsubs.push(eventBus.subscribeAll(handler));
-          } else {
-            const allSessions = await sessionManager.listSessions({ userId: 'local' });
-            for (const s of allSessions) {
-              unsubs.push(eventBus.subscribe(s.id, handler));
-            }
-          }
+          // AD-089: подписка на ВСЕ события шины (`subscribeAll`) — и в гибриде,
+          // и в standalone. Per-session `subscribe` покрывал лишь сессии,
+          // существовавшие на момент подключения, поэтому события сессий,
+          // созданных позже (events-funnel: auto-bind/ephemeral, add-on'ы),
+          // терялись («0 subscribers — EVENT LOST»). В гибриде `remote:<id>`
+          // публикует мост; локальные сессии обрабатывает оркестратор.
+          unsubs.push(eventBus.subscribeAll(handler));
 
           const keepalive = setInterval(() => {
             try { controller.enqueue(encoder.encode(':keepalive\n\n')); } catch { clearInterval(keepalive); }

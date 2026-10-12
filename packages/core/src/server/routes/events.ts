@@ -274,8 +274,19 @@ export function createEventRoutes(
             ...(credential.principalId ? { principalId: credential.principalId } : {}),
           }
         : undefined;
+      // AD-089: владелец материализуемой сессии (ephemeral/bind): при machine-auth
+      // — создатель ключа привязки, иначе — аутентифицированный пользователь
+      // (core — `local`, backend — реальный id). Без атрибуции сессия выпадала бы
+      // из `listSessions({ userId })` и UI-списка.
+      const requestUserId = currentUserId(c);
+      const ownerId = binding
+        ? credential?.ownerId
+        : requestUserId !== 'unknown'
+          ? requestUserId
+          : undefined;
       const { event, decision, session } = await deps.ingress.ingest(input, {
         binding: forcedBinding,
+        ...(ownerId ? { ownerId } : {}),
         ...(audit ? { audit } : {}),
       });
       // Наружу — без внутренних полей сессии, только id.

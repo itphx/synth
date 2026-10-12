@@ -344,6 +344,8 @@ export class EventApiKeyStore {
       credential: {
         keyId: key.id,
         bindingId: key.bindingId,
+        // AD-089: владелец ключа (создатель) — атрибуция создаваемых сессий.
+        ...(key.createdBy ? { ownerId: key.createdBy } : {}),
         ...(key.rateLimitPerMinute !== undefined
           ? { rateLimitPerMinute: key.rateLimitPerMinute }
           : {}),

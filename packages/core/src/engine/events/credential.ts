@@ -16,6 +16,12 @@ export interface EventKeyCredential {
   rateLimitPerMinute?: number;
   /** Источник из привязки (резолвится вызывающим). */
   source?: string;
+  /**
+   * AD-089: владелец ключа привязки (его создатель) — атрибуция сессий,
+   * материализуемых событием по machine-auth (`ephemeral`/`bind`). Иначе такие
+   * сессии не имеют владельца и выпадают из `listSessions({ userId })`.
+   */
+  ownerId?: string;
   /** Задел AD-052: скоупы ключа. */
   scopes?: string[];
   /** Задел AD-052/AD-089: идентичность отправителя. */

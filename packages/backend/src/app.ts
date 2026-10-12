@@ -624,6 +624,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         unknownAgentTemplate: effectiveEvents.unknownAgentTemplate,
       },
       resolveAgentTemplate,
+      // AD-089: дефолтные provider/model инстанса (llm.defaultProvider/defaultModel)
+      // — для сессий из внешних событий (materialize ephemeral/bind), чтобы агент
+      // мог ответить без ручной простановки модели.
+      resolveLlmDefaults: () => ({
+        provider: backendConfig.synth.llm.defaultProvider,
+        model: backendConfig.synth.llm.defaultModel,
+      }),
       // AD-089: UI-событие после материализации внешнего события.
       publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
       deliver: async (sessionId, event, mode) => {

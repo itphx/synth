@@ -808,3 +808,35 @@ describe('createStandaloneApp: гибрид-статус и oidc_enabled (адр
     }
   });
 });
+
+describe('createStandaloneApp: SSE /api/v2/events (standalone, subscribeAll)', () => {
+  it('доставляет событие сессии, созданной ПОСЛЕ подключения подписчика (AD-089)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-app-sse-standalone-'));
+    const abort = new AbortController();
+    try {
+      const handle = await createStandaloneApp({ port: 0, dataDir: dir, apiKey: 'test-key' });
+
+      // Подписчик (внешний add-on) подключается до появления сессии.
+      const res = await handle.app.request('/api/v2/events', {
+        headers: { Authorization: 'Bearer test-key' },
+        signal: abort.signal,
+      });
+      expect(res.status).toBe(200);
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+
+      // Сессия создана позже (аналог events-funnel: auto-bind/ephemeral во время
+      // работы add-on'а). Per-session subscribe терял такие события — subscribeAll
+      // обязан доставить.
+      handle.eventBus.publish('ses-after-connect', 'stream.done', { ok: true });
+
+      const chunk = await reader.read();
+      const payload = decoder.decode(chunk.value);
+      expect(payload).toContain('"sessionId":"ses-after-connect"');
+      expect(payload).toContain('"stream.done"');
+    } finally {
+      abort.abort();
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});

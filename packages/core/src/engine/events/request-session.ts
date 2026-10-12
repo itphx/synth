@@ -22,6 +22,17 @@ export interface RequestSessionOptions {
   ownerId?: string;
 }
 
+/**
+ * AD-089: дефолтные `provider`/`model` инстанса для сессий, материализуемых
+ * funnel'ом. Источник задаёт потребитель (`deps.resolveLlmDefaults`): standalone
+ * core — `llm.defaultProvider`/`llm.defaultModel`; managed backend — свой.
+ * Пустые поля трактуются как «не задано».
+ */
+export interface LlmDefaults {
+  provider?: string;
+  model?: string;
+}
+
 export interface RequestSessionServiceDeps {
   sessionManager: SessionManager;
   eventRouter: EventRouter;
@@ -45,6 +56,25 @@ export interface RequestSessionServiceDeps {
    * `eventBus.publish`.
    */
   publish?: (type: EventType, sessionId: string, data: Record<string, unknown>) => void;
+  /**
+   * AD-089: резолвер владельца сессий, материализуемых внешним событием
+   * (`ephemeral`/`bind`). Нужен, чтобы такие сессии не выпадали из
+   * `listSessions({ userId })` и UI-списка. Standalone core передаёт `local`
+   * (паритет с `POST /api/v2/sessions`); managed backend — не задаёт, владелец
+   * приходит per-event (`opts.ownerId`) либо из `identity.principalId`. Не задан —
+   * прежнее поведение (сессия без владельца).
+   */
+  resolveOwnerId?: () => string | Promise<string | undefined>;
+  /**
+   * AD-089: резолвер дефолтных `provider`/`model` инстанса для сессий,
+   * материализуемых funnel'ом (explicit/`ephemeral`/`bind`). Нужен, чтобы
+   * сессия из внешнего события (напр. Telegram-шлюз) получала те же дефолты,
+   * что и сессия без явной модели, и агент мог ответить. Явно заданные в
+   * `settings` значения приоритетнее; не задан резолвер либо пустые значения —
+   * прежнее поведение (поля остаются незаданными). Standalone core передаёт
+   * `llm.defaultProvider`/`llm.defaultModel`; managed backend — свой источник.
+   */
+  resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
 }
 
 /**
@@ -141,6 +171,8 @@ export class RequestSessionService {
   private _deliver: EventDelivery;
   private _resolveAgentTemplate?: (template: string) => string | null;
   private _publish?: (type: EventType, sessionId: string, data: Record<string, unknown>) => void;
+  private _resolveOwnerId?: () => string | Promise<string | undefined>;
+  private _resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
 
   constructor(deps: RequestSessionServiceDeps) {
     this._sessionManager = deps.sessionManager;
@@ -154,6 +186,8 @@ export class RequestSessionService {
     this._deliver = deps.deliver;
     this._resolveAgentTemplate = deps.resolveAgentTemplate;
     this._publish = deps.publish;
+    this._resolveOwnerId = deps.resolveOwnerId;
+    this._resolveLlmDefaults = deps.resolveLlmDefaults;
   }
 
   /**
@@ -200,7 +234,7 @@ export class RequestSessionService {
       engine: req.engine,
       parentId: req.parentId,
       sessionOrigin: req.sessionOrigin,
-      settings: this._agentSettings(agentRole, req.settings),
+      settings: await this._sessionSettings(agentRole, req.settings),
       userId: opts?.userId,
       ownerId: opts?.ownerId,
       expiresAt,
@@ -216,10 +250,17 @@ export class RequestSessionService {
    * привязку на шаге роутинга — поиск по source/ключам не выполняется.
    * AD-089/AD-052: `opts.audit` (id ключа/идентичность отправителя) мержится в
    * запись журнала во всех ветках — включая hook-blocked и ошибку материализации.
+   * AD-089: `opts.ownerId` задаёт владельца материализуемой сессии (runtime-
+   * контекст запроса: пользователь/владелец ключа привязки); при отсутствии —
+   * используется `deps.resolveOwnerId`, затем `event.identity.principalId`.
    */
   async handleEvent(
     event: SynthEvent,
-    opts?: { binding?: EventBinding; audit?: { keyId?: string; principalId?: string } },
+    opts?: {
+      binding?: EventBinding;
+      audit?: { keyId?: string; principalId?: string };
+      ownerId?: string;
+    },
   ): Promise<{ decision: RouteDecision; session: Session | null }> {
     const audit = opts?.audit;
     const hookRes = this._hooks ? await this._hooks.emit('external_event', { event }) : undefined;
@@ -238,7 +279,7 @@ export class RequestSessionService {
     let session: Session | null = null;
     let error: string | undefined;
     try {
-      session = await this._materialize(decision, event);
+      session = await this._materialize(decision, event, opts?.ownerId);
     } catch (err) {
       error = String(err);
       console.warn(`[RequestSessionService] материализация события не удалась: ${error}`);
@@ -259,7 +300,11 @@ export class RequestSessionService {
     return { decision, session };
   }
 
-  private async _materialize(decision: RouteDecision, event: SynthEvent): Promise<Session | null> {
+  private async _materialize(
+    decision: RouteDecision,
+    event: SynthEvent,
+    ownerId?: string,
+  ): Promise<Session | null> {
     if (decision.kind === 'bound') {
       const session = await this._sessionManager.getSession(decision.sessionId);
       if (!session) return null;
@@ -269,11 +314,13 @@ export class RequestSessionService {
 
     if (decision.kind === 'ephemeral') {
       const agentRole = this._resolveAgent(decision.agentTemplate);
+      const owner = await this._resolveSessionOwner(ownerId, event);
       const session = await this._sessionManager.createSession({
         title: eventTitle(event),
         projectId: decision.project,
-        settings: this._agentSettings(agentRole, undefined),
+        settings: await this._sessionSettings(agentRole, undefined),
         expiresAt: parseTtl(decision.ttl),
+        ...(owner ? { userId: owner, ownerId: owner } : {}),
       });
       await this._deliver(session.id, event, 'run');
       return session;
@@ -298,10 +345,12 @@ export class RequestSessionService {
       }
 
       const agentRole = this._resolveAgent(decision.agentTemplate);
+      const owner = await this._resolveSessionOwner(ownerId, event);
       const session = await this._sessionManager.createSession({
         title: eventTitle(event),
         projectId: decision.project,
-        settings: this._agentSettings(agentRole, undefined),
+        settings: await this._sessionSettings(agentRole, undefined),
+        ...(owner ? { userId: owner, ownerId: owner } : {}),
       });
       await this._bindingStore.upsert({
         source: event.source,
@@ -350,6 +399,25 @@ export class RequestSessionService {
   }
 
   /**
+   * AD-089: владелец материализуемой внешним событием сессии. Приоритет:
+   * 1) per-event `ownerId` (запрос: пользователь либо владелец ключа привязки);
+   * 2) `deps.resolveOwnerId` (standalone core — `local`, паритет с
+   *    `POST /api/v2/sessions`; покрывает и сессии планировщика без запроса);
+   * 3) `event.identity.principalId` (атрибуция источника, напр. владелец
+   *    расписания `cron`).
+   * Пустое значение → `undefined` (прежнее поведение — сессия без владельца).
+   */
+  private async _resolveSessionOwner(
+    explicitOwnerId: string | undefined,
+    event: SynthEvent,
+  ): Promise<string | undefined> {
+    const resolved = explicitOwnerId
+      || (this._resolveOwnerId ? await this._resolveOwnerId() : undefined)
+      || event.identity?.principalId;
+    return resolved || undefined;
+  }
+
+  /**
    * Минимальное разрешение `agentTemplate` в сессию: шаблон проставляется в
    * per-session `settings.agentRole` (задел — семантика шаблона агента/скилла
    * AD-046 будет уточнена на следующих этапах).
@@ -362,6 +430,32 @@ export class RequestSessionService {
     return {
       ...settings,
       ...(agentRole ? { agentRole } : {}),
+    };
+  }
+
+  /**
+   * AD-089: `settings` материализуемой сессии с добором дефолтных `provider`/
+   * `model` инстанса (`deps.resolveLlmDefaults`). Явно заданные (непустые)
+   * значения `settings` приоритетнее; поля добираются по отдельности (задан
+   * только `provider` — `model` берётся из дефолта и наоборот). Дефолты не
+   * заданы/пусты — прежнее поведение (поля остаются как есть).
+   */
+  private async _sessionSettings(
+    agentRole: string | undefined,
+    settings: Partial<SessionSettings> | undefined,
+  ): Promise<Partial<SessionSettings> | undefined> {
+    const base = this._agentSettings(agentRole, settings);
+    const defaults = this._resolveLlmDefaults ? await this._resolveLlmDefaults() : undefined;
+    if (!defaults) return base;
+
+    const provider = base?.provider || defaults.provider;
+    const model = base?.model || defaults.model;
+    if (!provider && !model) return base;
+
+    return {
+      ...base,
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
     };
   }
 }

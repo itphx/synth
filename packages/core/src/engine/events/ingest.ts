@@ -73,10 +73,15 @@ export class EventIngress {
    * AD-089: `opts.binding` (аутентификация по API-ключу привязки) прокидывается
    * в funnel — событие маршрутизируется в эту привязку.
    * AD-089/AD-052: `opts.audit` (id ключа/идентичность) прокидывается в журнал.
+   * AD-089: `opts.ownerId` (владелец создаваемой сессии) прокидывается в funnel.
    */
   async ingest(
     input: EventIngestInput,
-    opts?: { binding?: EventBinding; audit?: { keyId?: string; principalId?: string } },
+    opts?: {
+      binding?: EventBinding;
+      audit?: { keyId?: string; principalId?: string };
+      ownerId?: string;
+    },
   ): Promise<{ event: SynthEvent; decision: RouteDecision; session: Session | null }> {
     const event = this.normalize(input);
     const { decision, session } = await this._requestSessionService.handleEvent(event, opts);

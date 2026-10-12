@@ -116,6 +116,9 @@ program
       secretKey: resolveSecretKey(synth, process.env),
       gatewayConfig: synth.llmGateway,
       llmCachePolicy: synth.llm.cache,
+      // AD-089: дефолтные provider/model инстанса — для сессий из внешних событий
+      // (materialize ephemeral/bind), когда явная модель не задана.
+      llmDefaults: { provider: synth.llm.defaultProvider, model: synth.llm.defaultModel },
       toolsPolicy: synth.tools.policy,
       mcpPolicy: synth.mcp?.policy,
       toolsDisabled: synth.tools.disabled,

@@ -63,7 +63,16 @@
 - Создание сессии — через единый funnel `RequestSessionService`
   (`engine/events/request-session.ts`): явный запрос — `direct`, внешнее событие —
   через `EventRouter`; `SessionManager.createSession` — materialization-примитив
-  (fork/import/материализация), не для прямых запросов (AD-089).
+  (fork/import/материализация), не для прямых запросов (AD-089). Материализация
+  `ephemeral`/`bind` проставляет владельца, чтобы сессия не выпадала из
+  `listSessions({ userId })`: standalone — `deps.resolveOwnerId` (`local`), иначе
+  per-event `ownerId` (пользователь/создатель ключа привязки) → `identity.principalId`.
+  Там же проставляются дефолтные `provider`/`model` инстанса (`deps.resolveLlmDefaults`:
+  standalone — `llm.defaultProvider`/`llm.defaultModel` через `StandaloneConfig.llmDefaults`;
+  managed — `synth.llm`), иначе сессия из внешнего события не могла ответить без ручной
+  простановки модели — явные значения `settings` приоритетнее, поля добираются по отдельности.
+  Глобальный SSE-хаб `GET /api/v2/events` подписан на все события шины
+  (`eventBus.subscribeAll`) — доставляет и позже созданные (funnel) сессии (AD-089).
 
 ## Гибрид (core-специфика)
 
@@ -161,6 +170,8 @@
   `AgentRegistry` + политика `unknownAgentTemplate` `drop`/`default-agent`;
   `deps.bindingStore` — материализация `kind:'bind'`: постоянная сессия без `expiresAt` +
   `EventBinding{mode:'bound'}`, повтор/гонка → переиспользование привязки;
+  `deps.resolveLlmDefaults` — добор дефолтных `provider`/`model` инстанса
+  (`llm.defaultProvider`/`llm.defaultModel`) для `ephemeral`/`bind`/explicit;
   `updateConfig` — live TTL/политика),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),

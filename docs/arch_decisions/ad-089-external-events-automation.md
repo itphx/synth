@@ -6,6 +6,9 @@
 > новое решение Router `{ kind: 'bind' }` и цель правила `{ mode: 'bind' }`); статус и разделы
 > приведены к реализованному коду (ядро Event/Binding/Router, правила маршрутизации,
 > decision-маршрутизация (AD-084), API-ключи привязок, retention журнала, runtime-настройки «События»).
+> Тем же днём: funnel проставляет дефолтные `provider`/`model` инстанса
+> (`deps.resolveLlmDefaults`, `llm.defaultProvider`/`llm.defaultModel`) сессиям `ephemeral`/`bind` —
+> см. «LLM-дефолты (provider/model)».
 > **Связано:** [AD-030](./ad-030-hooks-agent-events.md) «Hooks для событий агента» (фундамент),
 > [AD-034](./ad-034-model-routing.md) «Routing между моделями», [AD-035](./ad-035-micro-model-first.md) «Micro-model first»,
 > [AD-084](./ad-084-decision-models-clef.md) «Decision-модели» (decision-маршрутизация событий),
@@ -202,6 +205,26 @@ decision-маршрутизация (шаг 4) сохраняют своё по�
   заранее направить известные чаты иначе (правило приоритетнее фоллбека).
 - **Ошибка шаблона.** Неизвестный `autoBindAgentTemplate` при политике
   `unknownAgentTemplate: 'drop'` не создаёт сессию (fail-safe, `agent_not_found` в журнале).
+
+**Владелец и доставка.** Сессии, материализуемые внешним событием (`ephemeral`/`bind`),
+получают владельца: standalone — `local` (паритет с `POST /api/v2/sessions`); managed —
+аутентифицированный пользователь запроса либо создатель API-ключа привязки
+(`credential.ownerId`), иначе `identity.principalId` (напр. владелец расписания). Так они не
+выпадают из `listSessions({ userId })` и UI-списка. Глобальный SSE-хаб `GET /api/v2/events`
+подписывается на **все** события шины (`subscribeAll`), поэтому доставляет и события сессий,
+созданных **после** подключения подписчика — критично для add-on'ов (Telegram-шлюз получает
+`stream.done`; иначе `[EventBus] publish … 0 subscribers — EVENT LOST`).
+
+**LLM-дефолты (provider/model).** Сессии, материализуемые funnel'ом (`ephemeral`/`bind`, а также
+явный `request`), при отсутствии **явных** `settings.provider`/`settings.model` заполняются
+дефолтами инстанса через инъектируемый `deps.resolveLlmDefaults` — паритет с сессией без явной
+модели: standalone core передаёт `llm.defaultProvider`/`llm.defaultModel` (`StandaloneConfig.llmDefaults`),
+managed backend — `synth.llm` того же конфига. Явно заданные значения приоритетнее; поля
+добираются **по отдельности** (задан только `provider` — `model` берётся из дефолта); резолвер не
+задан или дефолты пусты — прежнее поведение (поля остаются незаданными). Без этого сессия
+внешнего события (напр. Telegram-шлюз) не могла ответить, пока модель не проставят вручную
+(`PATCH /api/v2/sessions/:id`), — оркестратор не резолвил провайдера при пустом
+`session.settings.provider`.
 
 ### Создание сессии — тоже событие
 

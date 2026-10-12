@@ -692,4 +692,48 @@ describe('Events API Routes (AD-089)', () => {
     expect((await app.request(`/api/v2/events/bindings/${binding.id}`, { method: 'DELETE' })).status).toBe(204);
     expect(await apiKeyStore.listByBinding(binding.id)).toHaveLength(0);
   });
+
+  // --- AD-089: атрибуция владельца создаваемых funnel'ом сессий ---
+
+  it('POST / по ключу: владелец сессии = создатель ключа привязки (AD-089)', async () => {
+    const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:21', mode: 'bound', sessionId: 's-bound' });
+    const created = await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'creator-7' });
+
+    const { ingress, handleEvent } = capturingIngress({ kind: 'bind', agentTemplate: '' }, { id: 's-bound' } as Session);
+    const app = keyApp({
+      resolveApiKeySecret: async (raw) => {
+        const r = await apiKeyStore.resolveBySecret(raw);
+        if (!r) return null;
+        const b = await bindingStore.get(r.credential.bindingId);
+        return b ? { binding: b, credential: r.credential } : null;
+      },
+    }, ingress);
+
+    await postJson(app, '/api/v2/events', { type: 'message' }, { Authorization: `Bearer ${created.key}` });
+
+    const call = handleEvent.mock.calls[0]! as unknown as [any, { ownerId?: string }];
+    expect(call[1].ownerId).toBe('creator-7');
+  });
+
+  it('POST / без ключа: владелец сессии = аутентифицированный пользователь (AD-089)', async () => {
+    const authWithUser = {
+      getCurrentUser: () => ({ id: 'u-9' }),
+      requireAuth: async (c: Context, next: Next) => {
+        c.set('user', { id: 'u-9' });
+        await next();
+      },
+    } as unknown as AuthKit;
+    const { ingress, handleEvent } = capturingIngress({ kind: 'ephemeral', agentTemplate: '', ttl: '1h' }, null);
+    const app = new Hono();
+    app.route(
+      '/api/v2/events',
+      createEventRoutes(authWithUser, { ingress, bindingStore, apiKeyStore, journal, routeRuleStore }, {}),
+    );
+
+    const res = await postJson(app, '/api/v2/events', { source: 'telegram', type: 'message' });
+    expect(res.status).toBe(201);
+
+    const call = handleEvent.mock.calls[0]! as unknown as [any, { ownerId?: string }];
+    expect(call[1].ownerId).toBe('u-9');
+  });
 });
