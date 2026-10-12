@@ -74,7 +74,7 @@ export interface ToolRegistry {
   filterByCapabilities(capabilities: ToolCapability[]): Array<{ type: 'function'; function: { name: string; description: string; parameters: Record<string, unknown> } }>;
 }
 
-import type { ProfileData } from '../types/index.js';
+import type { ProfileData, ExternalIdentity } from '../types/index.js';
 
 export interface CreateProfileParams {
   username: string;
@@ -93,6 +93,12 @@ export interface ProfileStore {
   getProfileByEmail(email: string): Promise<ProfileData | null>;
   getOrCreateProfile(params: CreateProfileParams): Promise<ProfileData>;
   updateLastLogin(id: string): Promise<void>;
+  /** AD-089: профиль по внешней идентичности (provider+externalId); null — нет. */
+  findProfileByExternalId(provider: string, externalId: string): Promise<ProfileData | null>;
+  /** AD-089: привязать идентичность (идемпотентно). Занята другим профилем → null (конфликт). */
+  linkIdentity(userId: string, identity: ExternalIdentity): Promise<ProfileData | null>;
+  /** AD-089: отвязать идентичность; null — профиля/идентичности нет. */
+  unlinkIdentity(userId: string, provider: string, externalId: string): Promise<ProfileData | null>;
 }
 
 // Re-export BusEvent for convenience

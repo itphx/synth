@@ -3,7 +3,7 @@ import type { Mock } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { EventBinding, Session, SynthEvent } from '@itphx/synth-shared';
+import type { EventBinding, EventIdentity, Session, SynthEvent } from '@itphx/synth-shared';
 import { FileStore } from '../../storage/file-store.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { EventBindingStore } from '../../storage/event-binding-store.js';
@@ -53,8 +53,10 @@ describe('RequestSessionService (AD-089)', () => {
       unknownAgentTemplate?: 'drop' | 'default-agent';
       resolveOwnerId?: () => string | Promise<string | undefined>;
       resolveLlmDefaults?: () => { provider?: string; model?: string } | Promise<{ provider?: string; model?: string }>;
+      resolveExternalIdentity?: (identity: EventIdentity) => { userId: string; displayName?: string } | null;
       identityMap?: Record<string, string>;
       onSessionMaterialized?: (session: Session) => void | Promise<void>;
+      issueIdentityClaim?: (event: SynthEvent) => Promise<{ code: string; expiresAt: string } | null>;
     },
   ) => new RequestSessionService({
     sessionManager,
@@ -69,8 +71,10 @@ describe('RequestSessionService (AD-089)', () => {
     ...(overrides?.resolveAgentTemplate ? { resolveAgentTemplate: overrides.resolveAgentTemplate } : {}),
     ...(overrides?.resolveOwnerId ? { resolveOwnerId: overrides.resolveOwnerId } : {}),
     ...(overrides?.resolveLlmDefaults ? { resolveLlmDefaults: overrides.resolveLlmDefaults } : {}),
+    ...(overrides?.resolveExternalIdentity ? { resolveExternalIdentity: overrides.resolveExternalIdentity } : {}),
     ...(overrides?.identityMap ? { identityMap: overrides.identityMap } : {}),
     ...(overrides?.onSessionMaterialized ? { onSessionMaterialized: overrides.onSessionMaterialized } : {}),
+    ...(overrides?.issueIdentityClaim ? { issueIdentityClaim: overrides.issueIdentityClaim } : {}),
   });
 
   it('request explicit создаёт сессию без expiresAt и доставки', async () => {
@@ -335,7 +339,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('u-42');
   });
 
-  it('handleEvent без резолвера/opts → владелец из identity.principalId (AD-089)', async () => {
+  it('handleEvent без резолвера/opts → владелец не задан (principalId — не id инстанса) (AD-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:cron',
@@ -343,10 +347,12 @@ describe('RequestSessionService (AD-089)', () => {
       agentTemplate: '',
     });
 
-    const e = event({ identity: { chatKey: 'chat:telegram:cron', principalId: 'owner-cron' } });
+    const e = event({ identity: { chatKey: 'chat:telegram:cron', principalId: 'tg:999' } });
     const { session } = await service().handleEvent(e);
 
-    expect(session?.ownerId).toBe('owner-cron');
+    // Внешний идентификатор (`tg:999`) не подставляется как id пользователя
+    // инстанса: без резолвера/маппинга владелец не проставляется.
+    expect(session?.ownerId).toBe('');
   });
 
   it('handleEvent: identityMap по chatKey задаёт владельца сессии (AD-089)', async () => {
@@ -383,7 +389,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('u-tg');
   });
 
-  it('handleEvent: chatKey из identityMap приоритетнее principalId (AD-089)', async () => {
+  it('handleEvent: principalId из identityMap приоритетнее chatKey (AD-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:both',
@@ -396,7 +402,89 @@ describe('RequestSessionService (AD-089)', () => {
       identityMap: { 'chat:telegram:both': 'u-chat', 'tg:1': 'u-principal' },
     }).handleEvent(e);
 
-    expect(session?.ownerId).toBe('u-chat');
+    // Владельца определяет человек (principalId), а не чат.
+    expect(session?.ownerId).toBe('u-principal');
+  });
+
+  it('handleEvent: резолвер внешней идентичности переопределяет identityMap (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:resolver',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:resolver', principalId: 'tg:55' } });
+    const { session } = await service(undefined, {
+      resolveExternalIdentity: (identity) =>
+        identity.principalId === 'tg:55' ? { userId: 'u-resolved', displayName: 'Пётр' } : null,
+      identityMap: { 'tg:55': 'u-map' },
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('u-resolved');
+  });
+
+  it('handleEvent: резолвер внешней идентичности > identityMap(principalId) > identityMap(chatKey) > per-event > resolveOwnerId (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:prio',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    // Резолвер внешней идентичности — высший приоритет.
+    const withResolver = event({ dedupKey: 'k-prio-resolver', identity: { chatKey: 'chat:telegram:prio', principalId: 'tg:66' } });
+    const r1 = await service(undefined, {
+      resolveExternalIdentity: (identity) => ({ userId: `u-ext:${identity.principalId}` }),
+      identityMap: { 'tg:66': 'u-map-principal', 'chat:telegram:prio': 'u-map-chat' },
+      resolveOwnerId: () => 'local',
+    }).handleEvent(withResolver, { ownerId: 'u-event' });
+    expect(r1.session?.ownerId).toBe('u-ext:tg:66');
+
+    // Нет резолвера → identityMap по principalId.
+    const mapPrincipalEvent = event({ dedupKey: 'k-prio-map-principal', identity: { chatKey: 'chat:telegram:prio', principalId: 'tg:66' } });
+    const r2 = await service(undefined, {
+      identityMap: { 'tg:66': 'u-map-principal', 'chat:telegram:prio': 'u-map-chat' },
+      resolveOwnerId: () => 'local',
+    }).handleEvent(mapPrincipalEvent, { ownerId: 'u-event' });
+    expect(r2.session?.ownerId).toBe('u-map-principal');
+
+    // Нет резолвера и principalId в карте → chatKey.
+    const mapChatEvent = event({ dedupKey: 'k-prio-map-chat', identity: { chatKey: 'chat:telegram:prio', principalId: 'tg:66' } });
+    const r3 = await service(undefined, {
+      identityMap: { 'chat:telegram:prio': 'u-map-chat' },
+      resolveOwnerId: () => 'local',
+    }).handleEvent(mapChatEvent, { ownerId: 'u-event' });
+    expect(r3.session?.ownerId).toBe('u-map-chat');
+
+    // Нет резолвера/карты → per-event владелец.
+    const perEventEvent = event({ dedupKey: 'k-prio-per-event', identity: { chatKey: 'chat:telegram:prio', principalId: 'tg:66' } });
+    const r4 = await service(undefined, { resolveOwnerId: () => 'local' })
+      .handleEvent(perEventEvent, { ownerId: 'u-event' });
+    expect(r4.session?.ownerId).toBe('u-event');
+
+    // Нет резолвера/карты/per-event → resolveOwnerId.
+    const fallbackEvent = event({ dedupKey: 'k-prio-fallback', identity: { chatKey: 'chat:telegram:prio', principalId: 'tg:66' } });
+    const r5 = await service(undefined, { resolveOwnerId: () => 'local' }).handleEvent(fallbackEvent);
+    expect(r5.session?.ownerId).toBe('local');
+  });
+
+  it('handleEvent: чат не определяет владельца при наличии principalId (резолвер) (AD-089)', async () => {
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:group',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+
+    // Группа: chatKey = группа, principalId = автор. Владелец — автор.
+    const e = event({ identity: { chatKey: 'chat:telegram:group', principalId: 'tg:author' } });
+    const { session } = await service(undefined, {
+      resolveExternalIdentity: (identity) => ({ userId: `user:${identity.principalId}` }),
+      resolveOwnerId: () => 'local',
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('user:tg:author');
   });
 
   it('handleEvent: без совпадения в identityMap — прежняя логика (opts.ownerId) (AD-089)', async () => {
@@ -671,6 +759,82 @@ describe('RequestSessionService (AD-089)', () => {
     expect(entries[0]?.decision).toEqual({ kind: 'drop', reason: 'no_route', audited: true });
   });
 
+  // --- AD-089 (claim-flow): выпуск claim-кода неизвестному отправителю ---
+
+  it('handleEvent: неизвестный отправитель (резолвер null) → identityHint от issueIdentityClaim', async () => {
+    const e = event({ identity: { principalId: 'tg:777', chatKey: 'chat:telegram:777' } });
+    const issueIdentityClaim = vi.fn(async (_event: SynthEvent) => ({ code: 'ABC-DEF', expiresAt: '2030-01-01T00:00:00.000Z' }));
+
+    const res = await service(undefined, {
+      resolveExternalIdentity: () => null,
+      issueIdentityClaim,
+    }).handleEvent(e);
+
+    expect(res.identityHint).toEqual({ code: 'ABC-DEF', expiresAt: '2030-01-01T00:00:00.000Z' });
+    expect(issueIdentityClaim).toHaveBeenCalledOnce();
+    expect(issueIdentityClaim.mock.calls[0]![0].identity?.principalId).toBe('tg:777');
+  });
+
+  it('handleEvent: сопознанный отправитель (резолвер вернул userId) → без identityHint', async () => {
+    const e = event({ identity: { principalId: 'tg:777', chatKey: 'chat:telegram:777' } });
+    const issueIdentityClaim = vi.fn(async () => ({ code: 'ABC-DEF', expiresAt: '2030-01-01T00:00:00.000Z' }));
+
+    const res = await service(undefined, {
+      resolveExternalIdentity: () => ({ userId: 'u-1' }),
+      issueIdentityClaim,
+    }).handleEvent(e);
+
+    expect(res.identityHint).toBeUndefined();
+    expect(issueIdentityClaim).not.toHaveBeenCalled();
+  });
+
+  it('handleEvent: нет principalId → без identityHint', async () => {
+    const e = event({ identity: { chatKey: 'chat:telegram:777' } });
+    const issueIdentityClaim = vi.fn(async () => ({ code: 'ABC-DEF', expiresAt: '2030-01-01T00:00:00.000Z' }));
+
+    const res = await service(undefined, { issueIdentityClaim }).handleEvent(e);
+    expect(res.identityHint).toBeUndefined();
+    expect(issueIdentityClaim).not.toHaveBeenCalled();
+  });
+
+  it('handleEvent: без issueIdentityClaim (не сконфигурирован) → без identityHint', async () => {
+    const e = event({ identity: { principalId: 'tg:777', chatKey: 'chat:telegram:777' } });
+    const res = await service(undefined, { resolveExternalIdentity: () => null }).handleEvent(e);
+    expect(res.identityHint).toBeUndefined();
+  });
+
+  it('handleEvent: код выпускается и когда владелец определён чатом (per-event), но отправитель не сопознан', async () => {
+    // ephemeral-маршрут по чату даёт владельца, но сам principalId не сопознан —
+    // код всё равно нужен.
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:group',
+      mode: 'ephemeral',
+      agentTemplate: '',
+    });
+    const e = event({ identity: { principalId: 'tg:888', chatKey: 'chat:telegram:group' } });
+    const issueIdentityClaim = vi.fn(async () => ({ code: 'GHJ-KLM', expiresAt: '2030-01-01T00:00:00.000Z' }));
+
+    const res = await service(undefined, {
+      resolveExternalIdentity: () => null,
+      resolveOwnerId: () => 'local',
+      issueIdentityClaim,
+    }).handleEvent(e, { ownerId: 'chat-owner' });
+
+    expect(res.session?.ownerId).toBe('chat-owner');
+    expect(res.identityHint).toEqual({ code: 'GHJ-KLM', expiresAt: '2030-01-01T00:00:00.000Z' });
+  });
+
+  it('handleEvent: hook-blocked не выпускает код (событие не обработано)', async () => {
+    hooks.on('external_event', () => ({ block: true, reason: 'nope' }));
+    const e = event({ identity: { principalId: 'tg:777', chatKey: 'chat:telegram:777' } });
+    const issueIdentityClaim = vi.fn(async () => ({ code: 'ABC-DEF', expiresAt: '2030-01-01T00:00:00.000Z' }));
+
+    const res = await service(undefined, { resolveExternalIdentity: () => null, issueIdentityClaim }).handleEvent(e);
+    expect(res.identityHint).toBeUndefined();
+    expect(issueIdentityClaim).not.toHaveBeenCalled();
+  });
+
   it('ошибка материализации не пробрасывается: record с error, session null', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const badRouter = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
@@ -740,5 +904,52 @@ describe('RequestSessionService (AD-089)', () => {
       event_id: 'evt_1',
       dedup_key: 'dedup-1',
     });
+  });
+
+  it('eventToMessage: внешний отправитель `from.username` → author @username (AD-089)', () => {
+    const e = event({
+      identity: { chatKey: 'chat:telegram:-100', principalId: 'tg:123', threadKey: 'thread:telegram:-100:7' },
+      payload: { text: 'hi', from: { username: 'durov', firstName: 'Pavel' } },
+    });
+    const msg = eventToMessage(e);
+
+    expect(msg.author).toBe('@durov');
+    expect(msg.metadata).toMatchObject({
+      principal_id: 'tg:123',
+      chat_key: 'chat:telegram:-100',
+      thread_key: 'thread:telegram:-100:7',
+    });
+  });
+
+  it('eventToMessage: `from` без username → author firstName lastName (AD-089)', () => {
+    const e = event({ payload: { text: 'hi', from: { firstName: 'Pavel', lastName: 'Durov' } } });
+    const msg = eventToMessage(e);
+    expect(msg.author).toBe('Pavel Durov');
+  });
+
+  it('eventToMessage: `from` без имени → author = principalId (AD-089)', () => {
+    const e = event({ identity: { principalId: 'tg:123' }, payload: { text: 'hi', from: {} } });
+    const msg = eventToMessage(e);
+    expect(msg.author).toBe('tg:123');
+  });
+
+  it('eventToMessage: внешний источник без from/principalId → author undefined (AD-089)', () => {
+    const e = event({ identity: { chatKey: 'chat:telegram:1' }, payload: { text: 'hi' } });
+    const msg = eventToMessage(e);
+    expect(msg.author).toBeUndefined();
+    expect(msg.metadata).toMatchObject({ chat_key: 'chat:telegram:1' });
+    expect(msg.metadata?.principal_id).toBeUndefined();
+    expect(msg.metadata?.thread_key).toBeUndefined();
+  });
+
+  it('eventToMessage: cron не ломается атрибуцией внешнего отправителя (AD-051/AD-089)', () => {
+    const e = event({
+      source: 'cron',
+      payload: { scheduleId: 'sch_1', text: 'tick', from: { username: 'ignored' } },
+    });
+    const msg = eventToMessage(e);
+    expect(msg.author).toBe('Scheduler');
+    expect(msg.metadata?.scheduler).toBe(true);
+    expect(msg.metadata?.principal_id).toBeUndefined();
   });
 });

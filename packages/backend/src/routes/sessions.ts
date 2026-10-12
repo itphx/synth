@@ -461,6 +461,26 @@ export function createSessionRoutes(
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,
       forkWithOwner: true,
       canAccess: (session, c, userId) => isSessionOwner(session, userId) || kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]),
+      // AD-089: сквозной обзор сессий для ADMIN/LEAD. Вызовы `kit.isAdmin`/`hasRole`
+      // защищены `typeof` — у мок-AuthKit в тестах они могут отсутствовать.
+      resolveElevated: (c) => {
+        const isAdmin = typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]);
+        const isLead = typeof kit.hasRole === 'function' && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD');
+        return isAdmin || isLead;
+      },
+      // AD-089: проекты-участия пользователя — проектные сессии видны участникам.
+      resolveMemberProjectIds: async (_c, userId) => {
+        if (!projectStore) return [];
+        const projects = await projectStore.list(userId);
+        return projects.map((p) => p.id);
+      },
+      // AD-089: доступ по id — участник проекта сессии (owner/член), не только владелец.
+      resolveCanAccessExtra: async (session, _c, userId) => {
+        if (!projectStore || !session.projectId) return false;
+        const project = await projectStore.load(session.projectId);
+        if (!project) return false;
+        return project.ownerId === userId || userId in (project.members ?? {});
+      },
       resolveAuthor: async (c) => (await kit.getCurrentUser(c))!.username,
       promptMessageId: 'stream',
       publishRenamed: false,

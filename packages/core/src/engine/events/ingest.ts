@@ -7,7 +7,7 @@ import type {
   SynthEvent,
 } from '@itphx/synth-shared';
 import { nowISO } from '@itphx/synth-shared';
-import type { RequestSessionService } from './request-session.js';
+import type { RequestSessionService, IdentityClaimHint } from './request-session.js';
 
 /**
  * AD-089: вход приёма внешнего события. `id`/`dedupKey`/`ts` необязательны —
@@ -82,9 +82,14 @@ export class EventIngress {
       audit?: { keyId?: string; principalId?: string };
       ownerId?: string;
     },
-  ): Promise<{ event: SynthEvent; decision: RouteDecision; session: Session | null }> {
+  ): Promise<{
+    event: SynthEvent;
+    decision: RouteDecision;
+    session: Session | null;
+    identityHint?: IdentityClaimHint;
+  }> {
     const event = this.normalize(input);
-    const { decision, session } = await this._requestSessionService.handleEvent(event, opts);
-    return { event, decision, session };
+    const { decision, session, identityHint } = await this._requestSessionService.handleEvent(event, opts);
+    return { event, decision, session, ...(identityHint ? { identityHint } : {}) };
   }
 }

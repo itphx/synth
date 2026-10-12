@@ -20,7 +20,7 @@
 |---|---|
 | `FileStore`, `SessionManager` | сессии и история |
 | `EventBus` | шина событий сессии (backend надстраивает `EventHub`) |
-| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `ProjectRuleProvider`, `eventToMessage`, `startEventJournalPruner` | единый funnel создания сессии, приём внешних событий, API-ключи привязок, правила маршрутизации и retention-очистка журнала (AD-089/AD-052) |
+| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `IdentityClaimStore`, `ProjectRuleProvider`, `eventToMessage`, `startEventJournalPruner` | единый funnel создания сессии, приём внешних событий, API-ключи привязок, одноразовые claim-коды идентичностей, правила маршрутизации и retention-очистка журнала (AD-089/AD-052) |
 | `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (AD-051 срез / AD-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
@@ -77,7 +77,7 @@
 | Префикс | Источник |
 |---|---|
 | `/auth` | local `routes/auth.ts` (логин, сессии, профиль, avatar) |
-| `/api/v2/projects` | `routes/projects.ts` — обёртка над core `createProjectRoutes` (RBAC-хуки owner/EDITOR/LEAD/ADMIN, managed-provisioning, `/stats`, `/:id/mcp`) + `createProjectAccess` для git-роутов |
+| `/api/v2/projects` | `routes/projects.ts` — обёртка над core `createProjectRoutes` (RBAC-хуки owner/EDITOR/LEAD/ADMIN + read `canRead` owner/член/LEAD/ADMIN, `resolveElevated` — LEAD/ADMIN видят все, managed-provisioning, `/stats`, `/:id/mcp`) + `createProjectAccess` для git-роутов |
 | `/api/v2/messages`, `/queue` | `routes/{messages,queue}.ts` — обёртки над core `createMessageRoutes`/`createQueueRoutes` (i18n, `onMessagesChanged` = `recalc-can-summarize`) |
 | `/api/v2/agents` | `routes/agents.ts` — обёртка над core `createAgentRoutes` (guards: `GET /` = `requireAuth`, `/all`+мутации = `requireAdmin`) |
 | `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, AD-071) |
@@ -85,15 +85,16 @@
 | `/api/v2/fs` | core `createFsRoutes` (AD-075): managed opts — `requireProjectId`, `deny`, `getProjectWorkspace` (`resolveProjectWorkspace`, strict) |
 | `/api/v2/git` | core `createGitRoutes` (T4): `authorizeProject` = `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN), read (`scan/log/commit`) — `requireAuth` |
 | `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` | core `createSshKeyRoutes` / `createAgentSshKeyRoutes`: чтение — `requireAuth`, запись — `requireAdmin` (AD-076). В гибриде nested-путь проксируется core на backend (`REMOTE_PROXY_PATTERNS`) |
-| `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` (создание — единый funnel `RequestSessionService`, AD-089) + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
+| `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` (создание — единый funnel `RequestSessionService`, AD-089; видимость — `resolveElevated` LEAD/ADMIN, `resolveMemberProjectIds` — проектные сессии участникам, `resolveCanAccessExtra` — доступ по id участнику проекта) + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
 | `/api/v2/providers` | `routes/providers.ts` — обёртка над core `createProviderRoutes` + `fetch-icon` |
 | `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` (RBAC + rate limit на `fetch`) |
 | `/api/v2/settings` | core `createSettingsRoutes` (`llm-gateway`/`security`/`tools-policy`/`mcp-policy`/`tools-disabled`/`default-agent`/`workspace-policy`; `GET/PUT/DELETE /settings/events` — runtime-настройки «События» (AD-089), мутации под `eventsWriteGuard` = `requirePermission('ADMIN')`) |
+| `/api/v2/me` | core `createIdentityRoutes` (AD-089): `GET /identities` — внешние идентичности текущего пользователя, `DELETE /identities/:provider/:externalId` — отвязка только своих (404 если нет), `POST /identities/claim` `{code}` — подтверждение владения идентичностью по одноразовому коду (201 `{identity}`; 400 `VALIDATION_ERROR` / 404 `NOT_FOUND` / 409 `CONFLICT`); `resolveUserId` из AuthKit, `claimStore` (`IdentityClaimStore`), `messages` — i18n. Прямой линковки нет — только claim-flow |
 | `/api/v2/dictionaries` | core `createDictionaryRoutes` (writeGuard = `requireAdmin`) |
 | `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
 | `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
-| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`ingestPreGuard` = rate limit 120/мин до выбора способа аутентификации; API-ключ привязки через `resolveApiKeySecret`/`touchApiKey`, иначе `ingestGuard = requireAuth`; per-key rate limit — свой `rateLimitPerMinute` либо `getKeyRateLimitPerMinute()` → 429; `isEnabled()` — мастер-выключатель → 503), `/bindings` и `/routes` — CRUD (чтение `requireAuth`; мутации и чтение ключей — `writeGuard`/`keyReadGuard` = `requirePermission('ADMIN','LEAD')`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`), `/bindings/:id/keys` — CRUD API-ключей (`POST` создание + `PATCH` метаданных + `POST .../revoke` + `DELETE`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089). i18n-ключи: `errors.validation.invalidEventKey`, `errors.validation.invalidEventKeyUpdate`, `errors.notFound.eventKey`, `errors.conflict.eventKeyLabel`, `errors.rateLimited.eventKey`, `errors.unavailable.eventsDisabled` |
+| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`ingestPreGuard` = rate limit 120/мин до выбора способа аутентификации; API-ключ привязки через `resolveApiKeySecret`/`touchApiKey`, иначе `ingestGuard = requireAuth`; per-key rate limit — свой `rateLimitPerMinute` либо `getKeyRateLimitPerMinute()` → 429; `isEnabled()` — мастер-выключатель → 503; ответ `201 {event, decision, sessionId}` + опциональное `identityHint {code, expiresAt}` — неизвестный отправитель, AD-089 claim-flow), `/bindings` и `/routes` — CRUD (чтение `requireAuth`; мутации и чтение ключей — `writeGuard`/`keyReadGuard` = `requirePermission('ADMIN','LEAD')`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`), `/bindings/:id/keys` — CRUD API-ключей (`POST` создание + `PATCH` метаданных + `POST .../revoke` + `DELETE`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089). i18n-ключи: `errors.validation.invalidEventKey`, `errors.validation.invalidEventKeyUpdate`, `errors.notFound.eventKey`, `errors.conflict.eventKeyLabel`, `errors.rateLimited.eventKey`, `errors.unavailable.eventsDisabled` |
 | `/api/v2/schedules` | core `createSchedulerRoutes` (AD-051 срез / AD-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (AD-051); `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
@@ -114,7 +115,7 @@
 - SSE-фоллбек — `GET /api/v2/events` (`auth.requireAuth`, keepalive раз в 30 c).
 - `EventHub` (`src/events/hub.ts`) — диспетчер подписок поверх core-`EventBus`; новых транспортных каналов не плодить (AD-008/009/024).
 - Новую сессию подписывай через `eventHub.subscribeToSession(...)`, а не сырым `eventBus.subscribe`.
-- Сессии, создаваемые events-funnel'ом (`RequestSessionService`: external `ephemeral`/`bind`, explicit из тула `task`), `app.ts` подписывает автоматически через `deps.onSessionMaterialized` → `eventHub.subscribeToSession(owner, sessionId)` — клиент, подключённый до создания сессии, получает её события. Владелец сессии — по `events.identityMap` (`identity.chatKey`/`principalId`), затем per-event (пользователь/владелец ключа привязки), `identity.principalId`, `resolveOwnerId`; `onEventsChange` прокидывает `identityMap` в funnel live.
+- Сессии, создаваемые events-funnel'ом (`RequestSessionService`: external `ephemeral`/`bind`, explicit из тула `task`), `app.ts` подписывает автоматически через `deps.onSessionMaterialized` → `eventHub.subscribeToSession(owner, sessionId)` — клиент, подключённый до создания сессии, получает её события. Владелец сессии — по `deps.resolveExternalIdentity` (`createExternalIdentityResolver`: override `identityMap` по `identity.principalId`/`chatKey` → профиль `identities` по `principalId`), затем `events.identityMap` (фоллбек-совместимость), затем per-event (пользователь/владелец ключа привязки), `resolveOwnerId`. Резолвер читает `identityMap` геттером (`() => effectiveEventsSettings.identityMap`), поэтому `onEventsChange` применяет runtime-настройку live, без рестарта.
 
 ## LLM Proxy
 

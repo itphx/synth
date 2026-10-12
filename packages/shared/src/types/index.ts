@@ -1158,6 +1158,48 @@ export interface ContextFileContent {
   category: ContextCategory;
 }
 
+/**
+ * AD-089: внешняя идентичность, привязанная к профилю пользователя.
+ * Ключ — `provider` + `externalId` (числовой id источника). `username`/
+ * `displayName` — display-кэш (может устареть), НЕ ключ.
+ */
+export interface ExternalIdentity {
+  /** Префикс principalId (AD-089), напр. 'tg' (Telegram). */
+  provider: string;
+  /** Числовой id в источнике, строкой (напр. '450316139'). */
+  externalId: string;
+  /** Display-кэш: username источника (может устареть). */
+  username?: string;
+  /** Display-кэш: отображаемое имя источника. */
+  displayName?: string;
+  /** ISO: когда привязано. */
+  linkedAt: string;
+  /** Кто подтвердил (id пользователя инстанса). */
+  linkedBy?: string;
+}
+
+/**
+ * AD-089: principalId внешнего отправителя из пары провайдер+id.
+ * Формат — `<provider>:<externalId>` (напр. `tg:450316139`).
+ */
+export function buildPrincipalId(provider: string, externalId: string): string {
+  return `${provider}:${externalId}`;
+}
+
+/**
+ * AD-089: разбор principalId на `provider`/`externalId` — деление по **первому**
+ * `:`. Невалидное (нет `:`, пустые части) → `null`.
+ */
+export function parsePrincipalId(principalId: string): { provider: string; externalId: string } | null {
+  if (typeof principalId !== 'string') return null;
+  const idx = principalId.indexOf(':');
+  if (idx <= 0 || idx === principalId.length - 1) return null;
+  const provider = principalId.slice(0, idx);
+  const externalId = principalId.slice(idx + 1);
+  if (!provider || !externalId) return null;
+  return { provider, externalId };
+}
+
 export interface ProfileData {
   id: string;
   username: string;
@@ -1177,6 +1219,12 @@ export interface ProfileData {
   /** ISO-время завершения интервью (для аудита/аналитики). */
   interviewCompletedAt?: string;
   displayName?: string;
+  /**
+   * AD-089: внешние идентичности (Telegram и др.), привязанные к профилю.
+   * Опционально — legacy-профили без поля трактуются как `[]`. Ключ — пара
+   * `provider`+`externalId`; `username`/`displayName` — display-кэш.
+   */
+  identities?: ExternalIdentity[];
   createdAt: string;
   updatedAt: string;
   lastLogin?: string;

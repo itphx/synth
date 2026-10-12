@@ -373,7 +373,7 @@ skills:
 | `events.decisionRouting` | AD-084 × AD-089: умная классификация внешних событий decision-моделью. `false` — только декларативные правила; `true` — при промахе правил decision-модель выбирает шаблон агента (ephemeral-сессия). Требует настроенного `decision.*`; fail-safe: ошибка/низкая уверенность/нет агентов → фоллбек `defaultMode` | `false` |
 | `events.autoBind` | AD-089: фоллбек Router — если у события есть `identity.chatKey` или `identity.threadKey`, закрепить его за новой сессией (`EventBinding mode='bound'`) вместо `defaultMode`. Влияет **только** на фоллбек (явная привязка/правила/decision-маршрутизация приоритетнее). Защита от мусорных сессий: флаг выключен по умолчанию + `allowedSources` + per-key rate limit | `false` |
 | `events.autoBindAgentTemplate` | AD-089: шаблон агента auto-bind-сессий (id агента; пусто — агент по умолчанию). Неизвестный шаблон обрабатывается политикой `events.unknownAgentTemplate` | `''` |
-| `events.identityMap` | AD-089: маппинг идентичности внешнего отправителя на владельца синт-сессии. Ключ — `identity.chatKey` (`chat:telegram:<id>`) или `identity.principalId` (`tg:<id>`), значение — id пользователя инстанса. Применяется при материализации сессий `ephemeral`/`bind`; приоритет выше per-event владельца (аутентифицированный пользователь / создатель ключа привязки). Так Telegram-сессии человека попадают в его `listSessions({ userId })` и UI-список | `{}` |
+| `events.identityMap` | AD-089: **override**-карта идентичности внешнего отправителя на владельца синт-сессии. Основной источник владельца — привязки в **профиле** (`ProfileData.identities[]`, ключ `provider:externalId`; наполняются claim-flow — подтверждение владения id по одноразовому коду, API `POST /api/v2/me/identities/claim`). Карта задаёт **ручное** переопределение и приоритетнее профиля. Ключ — `identity.principalId` (`tg:<id>`; **предпочтителен** для владельца — человек, а не чат) либо `identity.chatKey` (`chat:telegram:<id>`; фоллбек — ЛС/чатовый уровень), значение — id пользователя инстанса. Применяется при материализации сессий `ephemeral`/`bind`; приоритет выше per-event владельца (аутентифицированный пользователь / создатель ключа привязки). Так Telegram-сессии человека попадают в его `listSessions({ userId })` и UI-список | `{}` |
 
 Правила маршрутизации `source/type/…` → сессия задаются через API (`/api/v2/events/routes`, §5.26)
 и хранятся в `{dataDir}/events/routes.json` (`RouteRuleStore`, `ProjectRuleProvider`).
@@ -381,6 +381,15 @@ skills:
 decision-модель (`DecisionRuleProvider`, AD-084): она выбирает шаблон агента из
 enabled-агентов и создаёт ephemeral-сессию; при ошибке/низкой уверенности Router идёт
 к фоллбеку `events.defaultMode` (fail-safe).
+
+**Идентичности отправителей (claim-flow, AD-089).** Записей в конфиге не требует:
+при приёме события от неизвестного отправителя ядро автоматически выпускает одноразовый
+код подтверждения (TTL 10 мин, хранится в `{dataDir}/events/identity-claims.json`) и
+возвращает его в ответе `POST /api/v2/events` (поле `identityHint`). Пользователь вводит код
+в профиле UI (`POST /api/v2/me/identities/claim`), после чего идентичность привязывается к
+его профилю. Код доставляется отправителю **шлюзом**, и только в приватный чат (в группе не
+показывается); активация на стороне шлюза — `GATEWAY_UNKNOWN_ACTION=hint` (дефолт `register`
+кодов не показывает). Ручной override владельца — `events.identityMap` (приоритетнее профиля).
 
 Пример:
 

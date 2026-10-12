@@ -510,6 +510,22 @@ export class FileStore {
     return all.filter((s) => s.userId === userId || s.ownerId === userId);
   }
 
+  /**
+   * AD-089: сессии владельца ИЛИ любого из его проектов (командная видимость).
+   * `projectIds` — проекты, участником которых является пользователь; пустой
+   * список эквивалентен `listForUser` (только свои сессии).
+   */
+  async listForUserScope(userId: string, projectIds: string[]): Promise<Session[]> {
+    if (projectIds.length === 0) return this.listForUser(userId);
+    const all = await this.list();
+    return all.filter(
+      (s) =>
+        s.userId === userId
+        || s.ownerId === userId
+        || (s.projectId !== undefined && projectIds.includes(s.projectId)),
+    );
+  }
+
   async addReference(sessionId: string, ref: SessionReference): Promise<void> {
     const lock = this._getLock(sessionId);
     await lock.acquire();

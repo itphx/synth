@@ -1,5 +1,6 @@
 import type {
   EventBinding,
+  EventIdentity,
   EventType,
   Message,
   RouteDecision,
@@ -33,6 +34,18 @@ export interface LlmDefaults {
   model?: string;
 }
 
+/**
+ * AD-089 (claim-flow): короткий одноразовый код подтверждения владения внешней
+ * идентичностью. Возвращается ingest'ом наверх (`POST /api/v2/events` →
+ * `identityHint`) и доставляется отправителю чата.
+ */
+export interface IdentityClaimHint {
+  /** Человековводимый код `XXX-XXX`. */
+  code: string;
+  /** ISO-8601 — срок действия кода. */
+  expiresAt: string;
+}
+
 export interface RequestSessionServiceDeps {
   sessionManager: SessionManager;
   eventRouter: EventRouter;
@@ -61,8 +74,8 @@ export interface RequestSessionServiceDeps {
    * (`ephemeral`/`bind`). Нужен, чтобы такие сессии не выпадали из
    * `listSessions({ userId })` и UI-списка. Standalone core передаёт `local`
    * (паритет с `POST /api/v2/sessions`); managed backend — не задаёт, владелец
-   * приходит per-event (`opts.ownerId`) либо из `identity.principalId`. Не задан —
-   * прежнее поведение (сессия без владельца).
+   * приходит per-event (`opts.ownerId`) либо через внешний резолвер/`identityMap`.
+   * Не задан — прежнее поведение (сессия без владельца).
    */
   resolveOwnerId?: () => string | Promise<string | undefined>;
   /**
@@ -76,8 +89,20 @@ export interface RequestSessionServiceDeps {
    */
   resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
   /**
-   * AD-089: маппинг идентичности внешнего отправителя (`identity.chatKey` или
-   * `identity.principalId`) на владельца синт-сессии (id пользователя
+   * AD-089: резолвинг внешнего отправителя (`identity.principalId`) в пользователя
+   * инстанса (id + отображаемое имя). Источник: профиль (`identities`) →
+   * override `identityMap`. Применяется при материализации сессий
+   * `ephemeral`/`bind`; приоритет выше `identityMap` и per-event владельца —
+   * **человек, а не чат** определяет владельца. Чат-fallback — внутри резолвера.
+   * `null`/не задан — прежняя логика. Может быть асинхронным (профиль читается с
+   * диска) — funnel дожидается результата.
+   */
+  resolveExternalIdentity?: (
+    identity: EventIdentity,
+  ) => { userId: string; displayName?: string } | null | Promise<{ userId: string; displayName?: string } | null>;
+  /**
+   * AD-089: маппинг идентичности внешнего отправителя (`identity.principalId` или
+   * `identity.chatKey`) на владельца синт-сессии (id пользователя
    * инстанса). Применяется при материализации сессий `ephemeral`/`bind`;
    * приоритет выше per-event владельца. Не задан/пусто — прежняя логика.
    */
@@ -90,6 +115,16 @@ export interface RequestSessionServiceDeps {
    * созданные funnel'ом, терялись — `0 subscribers`).
    */
   onSessionMaterialized?: (session: Session) => void | Promise<void>;
+  /**
+   * AD-089 (claim-flow): выпуск одноразового claim-кода, когда отправитель
+   * события не сопознан с пользователем инстанса (`resolveExternalIdentity`
+   * вернул `null`) и у него задан `identity.principalId`. Инъекция: стор
+   * (`IdentityClaimStore`) передаётся потребителем (app.ts), funnel жёстко его не
+   * держит. `null` — код не выпускается (резолвер дал результат, нет
+   * `principalId`, `principalId` не парсится в `provider:externalId`).
+   * Вызывается в `handleEvent`; результат уходит в ответ ingest'а.
+   */
+  issueIdentityClaim?: (event: SynthEvent) => Promise<IdentityClaimHint | null>;
 }
 
 /**
@@ -109,13 +144,43 @@ export function eventToMessageText(event: SynthEvent): string {
 }
 
 /**
+ * AD-089: человекочитаемое имя отправителя внешнего события из `payload.from`
+ * (без обращения к профилю): `username` → `@username`; иначе `firstName lastName`;
+ * иначе `undefined`. Используется для атрибуции автора (owner — отдельно,
+ * `resolveExternalIdentity`/`identityMap`).
+ */
+function eventAuthorFromPayload(event: SynthEvent): string | undefined {
+  const payload = event.payload;
+  if (!payload || typeof payload !== 'object') return undefined;
+  const from = (payload as { from?: unknown }).from;
+  if (!from || typeof from !== 'object') return undefined;
+  const { username, firstName, lastName } = from as {
+    username?: unknown;
+    firstName?: unknown;
+    lastName?: unknown;
+  };
+  if (typeof username === 'string' && username.trim()) return `@${username.trim()}`;
+  const name = [firstName, lastName]
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => v.trim())
+    .join(' ');
+  return name || undefined;
+}
+
+/**
  * Собирает user-сообщение из события (единый формат для `deliver` core/backend).
  *
  * AD-051: для `source === 'cron'` сообщение помечается автором `Scheduler`, а в
  * `metadata` добавляются `scheduler`/`schedule_id`/`schedule_name`; `content` —
  * чистый текст задания без описания (описание «кто такой Scheduler» — в
- * статическом system-блоке `scheduler` промпта). Для прочих источников
- * поведение прежнее (автор не задаётся).
+ * статическом system-блоке `scheduler` промпта).
+ *
+ * AD-089 (attribution): для **всех** внешних источников в `metadata` попадают
+ * `principal_id`/`chat_key`/`thread_key` (если заданы), а `author` выводится из
+ * `payload.from` (username → `@username`; иначе `firstName lastName`; иначе
+ * `principalId` — напр. `tg:123`); cron-ветка не меняется (`Scheduler`). Для
+ * прочих источников (без `from`/`principalId`) `author` не задаётся — прежнее
+ * поведение.
  */
 export function eventToMessage(event: SynthEvent): Message {
   const content = eventToMessageText(event);
@@ -125,7 +190,9 @@ export function eventToMessage(event: SynthEvent): Message {
     source: event.source,
     event_id: event.id,
     dedup_key: event.dedupKey,
+    ...(event.identity?.principalId ? { principal_id: event.identity.principalId } : {}),
     ...(event.identity?.chatKey ? { chat_key: event.identity.chatKey } : {}),
+    ...(event.identity?.threadKey ? { thread_key: event.identity.threadKey } : {}),
   };
 
   if (isCron) {
@@ -142,6 +209,12 @@ export function eventToMessage(event: SynthEvent): Message {
     }
   }
 
+  // AD-089: cron — системный автор; внешние события — из `payload.from` /
+  // `principalId`; прочие — без автора (прежнее поведение).
+  const author = isCron
+    ? 'Scheduler'
+    : eventAuthorFromPayload(event) ?? event.identity?.principalId;
+
   return {
     id: generateId(),
     role: MessageRole.USER,
@@ -149,7 +222,7 @@ export function eventToMessage(event: SynthEvent): Message {
     origin: 'local',
     parts: [{ id: generateId(), type: 'text', data: content }],
     content,
-    ...(isCron ? { author: 'Scheduler' } : {}),
+    ...(author ? { author } : {}),
     createdAt: nowISO(),
     disabled: false,
     pinned: false,
@@ -188,8 +261,12 @@ export class RequestSessionService {
   private _publish?: (type: EventType, sessionId: string, data: Record<string, unknown>) => void;
   private _resolveOwnerId?: () => string | Promise<string | undefined>;
   private _resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
+  private _resolveExternalIdentity?: (
+    identity: EventIdentity,
+  ) => { userId: string; displayName?: string } | null | Promise<{ userId: string; displayName?: string } | null>;
   private _identityMap?: Record<string, string>;
   private _onSessionMaterialized?: (session: Session) => void | Promise<void>;
+  private _issueIdentityClaim?: (event: SynthEvent) => Promise<IdentityClaimHint | null>;
 
   constructor(deps: RequestSessionServiceDeps) {
     this._sessionManager = deps.sessionManager;
@@ -205,8 +282,10 @@ export class RequestSessionService {
     this._publish = deps.publish;
     this._resolveOwnerId = deps.resolveOwnerId;
     this._resolveLlmDefaults = deps.resolveLlmDefaults;
+    this._resolveExternalIdentity = deps.resolveExternalIdentity;
     this._identityMap = deps.identityMap;
     this._onSessionMaterialized = deps.onSessionMaterialized;
+    this._issueIdentityClaim = deps.issueIdentityClaim;
   }
 
   /**
@@ -283,7 +362,10 @@ export class RequestSessionService {
    * запись журнала во всех ветках — включая hook-blocked и ошибку материализации.
    * AD-089: `opts.ownerId` задаёт владельца материализуемой сессии (runtime-
    * контекст запроса: пользователь/владелец ключа привязки); при отсутствии —
-   * используется `deps.resolveOwnerId`, затем `event.identity.principalId`.
+   * `deps.resolveExternalIdentity`/`deps.identityMap`, затем `deps.resolveOwnerId`.
+   * AD-089 (claim-flow): `identityHint` — одноразовый код подтверждения владения
+   * внешней идентичностью; заполняется только когда отправитель **не сопознан**
+   * (резолвер вернул `null`) и у события задан `identity.principalId`.
    */
   async handleEvent(
     event: SynthEvent,
@@ -292,7 +374,7 @@ export class RequestSessionService {
       audit?: { keyId?: string; principalId?: string };
       ownerId?: string;
     },
-  ): Promise<{ decision: RouteDecision; session: Session | null }> {
+  ): Promise<{ decision: RouteDecision; session: Session | null; identityHint?: IdentityClaimHint }> {
     const audit = opts?.audit;
     const hookRes = this._hooks ? await this._hooks.emit('external_event', { event }) : undefined;
     if (hookRes?.blocked) {
@@ -328,7 +410,28 @@ export class RequestSessionService {
       });
     }
 
-    return { decision, session };
+    // AD-089 (claim-flow): неизвестному отправителю выдаём код подтверждения.
+    const identityHint = await this._issueClaimForUnknown(event);
+
+    return { decision, session, ...(identityHint ? { identityHint } : {}) };
+  }
+
+  /**
+   * AD-089 (claim-flow): выпуск claim-кода, если отправитель не сопознан.
+   * Критерий: инъектирован `deps.issueIdentityClaim`, задан `identity.principalId`
+   * и резолвер `resolveExternalIdentity` вернул `null` (человек не найден ни в
+   * профиле, ни через `identityMap`). Владелец сессии при этом мог определиться
+   * чатом/per-event — код всё равно нужен, т.к. **сам отправитель** не сопознан.
+   * Разбор `principalId` и сам стор — на стороне инъекции.
+   */
+  private async _issueClaimForUnknown(event: SynthEvent): Promise<IdentityClaimHint | null> {
+    if (!this._issueIdentityClaim) return null;
+    if (!event.identity?.principalId) return null;
+    if (this._resolveExternalIdentity) {
+      const known = await this._resolveExternalIdentity(event.identity);
+      if (known) return null;
+    }
+    return this._issueIdentityClaim(event);
   }
 
   private async _materialize(
@@ -435,40 +538,45 @@ export class RequestSessionService {
 
   /**
    * AD-089: владелец материализуемой внешним событием сессии. Приоритет:
-   * 1) `deps.identityMap` — совпадение `identity.chatKey`, затем
-   *    `identity.principalId` (маппинг внешнего отправителя на владельца
-   *    инстанса, напр. Telegram-чат → человек);
-   * 2) per-event `ownerId` (запрос: пользователь либо владелец ключа привязки);
-   * 3) `event.identity.principalId` (атрибуция источника, напр. владелец
-   *    расписания `cron`);
+   * 1) `deps.resolveExternalIdentity(event.identity)` — внешний резолвер по
+   *    `identity.principalId` (человек-отправитель → пользователь инстанса;
+   *    чат-fallback — внутри резолвера; источник — профиль `identities`);
+   * 2) `deps.identityMap` — совпадение `identity.principalId`, затем
+   *    `identity.chatKey` (override-совместимость, чат — фоллбек);
+   * 3) per-event `ownerId` (запрос: пользователь либо владелец ключа привязки);
    * 4) `deps.resolveOwnerId` (standalone core — `local`, паритет с
    *    `POST /api/v2/sessions`; покрывает и сессии планировщика без запроса).
+   * `identity.principalId` **не** подставляется как id пользователя инстанса —
+   * это внешний идентификатор (`tg:<id>`), владелец задаётся резолвером/картой.
    * Пустое значение → `undefined` (прежнее поведение — сессия без владельца).
    */
   private async _resolveSessionOwner(
     explicitOwnerId: string | undefined,
     event: SynthEvent,
   ): Promise<string | undefined> {
+    const external = await this._resolveExternalIdentity?.(event.identity ?? {});
+    if (external?.userId) return external.userId;
+
     const mapped = this._mapIdentityOwner(event);
     if (mapped) return mapped;
 
     const resolved = explicitOwnerId
-      || event.identity?.principalId
       || (this._resolveOwnerId ? await this._resolveOwnerId() : undefined);
     return resolved || undefined;
   }
 
   /**
-   * AD-089: владелец из `deps.identityMap` — сначала по `identity.chatKey`,
-   * затем по `identity.principalId`. Пустая карта/нет совпадения → `undefined`.
+   * AD-089: владелец из `deps.identityMap` — сначала по `identity.principalId`
+   * (человек предпочтительнее чата), затем по `identity.chatKey` (фоллбек для
+   * ЛС/чатового уровня). Пустая карта/нет совпадения → `undefined`.
    */
   private _mapIdentityOwner(event: SynthEvent): string | undefined {
     const map = this._identityMap;
     if (!map) return undefined;
-    const chatKey = event.identity?.chatKey;
-    if (chatKey && map[chatKey]) return map[chatKey];
     const principalId = event.identity?.principalId;
     if (principalId && map[principalId]) return map[principalId];
+    const chatKey = event.identity?.chatKey;
+    if (chatKey && map[chatKey]) return map[chatKey];
     return undefined;
   }
 

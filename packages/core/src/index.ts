@@ -155,6 +155,9 @@ export type {
   ProjectRouteMessages,
   ProjectStatsSource,
 } from './server/routes/projects.js';
+// AD-089: единый хелпер видимости сессии (списки/доступ по id).
+export { isSessionVisible } from './server/session-visibility.js';
+export type { SessionOwnerCtx } from './server/session-visibility.js';
 // AD-075: единая project-aware фабрика FS-роутов (standalone + managed через opts).
 export { createFsRoutes } from './server/routes/fs.js';
 export type { FsRoutesOptions, FsRoutesAuth } from './server/routes/fs.js';
@@ -203,6 +206,9 @@ export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
 // AD-089: ядро маршрутизации событий и единый funnel создания сессии.
 export { EventRouter } from './engine/events/event-router.js';
 export type { EventRouterDeps } from './engine/events/event-router.js';
+// AD-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
+export { IdentityClaimStore, IDENTITY_CLAIMS_SCHEMA_VERSION, IDENTITY_CLAIM_TTL_SEC } from './storage/identity-claim-store.js';
+export type { IdentityClaimRecord, IdentityClaimStoreConfig } from './storage/identity-claim-store.js';
 // AD-051/AD-089: источник дедупа (in-process / файловый межпроцессный).
 export { MemoryDedupStore, FileDedupStore } from './engine/events/dedup-store.js';
 export type { DedupStore, FileDedupStoreConfig } from './engine/events/dedup-store.js';
@@ -376,6 +382,13 @@ export type {
   SchedulerRoutesOptions,
   SchedulerRouteMessages,
 } from './server/routes/schedules.js';
+export { createIdentityRoutes } from './server/routes/identities.js';
+export type {
+  IdentityRoutesAuth,
+  IdentityRoutesOptions,
+  IdentityRouteMessages,
+} from './server/routes/identities.js';
+export { createExternalIdentityResolver } from './engine/events/external-identity.js';
 export { createMessageRoutes } from './server/routes/messages.js';
 export type { MessageRoutesAuth, MessageRoutesOptions, MessageRouteMessages } from './server/routes/messages.js';
 export { createQueueRoutes } from './server/routes/queue.js';

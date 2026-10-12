@@ -677,3 +677,130 @@ describe('Session API Routes', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// AD-089: видимость сессий/проектов по ролям и проектам (backend RBAC)
+// ---------------------------------------------------------------------------
+
+interface VisUser extends User {
+  roles: string[];
+}
+
+const VIS_USERS: Record<string, VisUser> = {
+  admin: { id: 'admin', username: 'admin', roles: ['ADMIN'] } as VisUser,
+  lead: { id: 'lead', username: 'lead', roles: ['LEAD'] } as VisUser,
+  member: { id: 'member', username: 'member', roles: ['USER'] } as VisUser,
+  outsider: { id: 'outsider', username: 'outsider', roles: ['USER'] } as VisUser,
+};
+
+function visUserFromHeader(header: string | undefined): VisUser | null {
+  const m = /^Bearer (.+)$/.exec(header ?? '');
+  return m ? VIS_USERS[m[1]!] ?? null : null;
+}
+
+function createVisibilityApp(
+  tmpDir: string,
+  opts: { projectStore: ProjectStore },
+) {
+  const app = new Hono();
+  const kit = {
+    requireAuth: async (c: Context, next: Next) => {
+      const user = visUserFromHeader(c.req.header('Authorization'));
+      if (!user) return c.json({ error: { code: 'UNAUTHORIZED', message: 'no' } }, 401);
+      c.set('user', user);
+      await next();
+    },
+    requirePermission: () => async (_c: Context, next: Next) => { await next(); },
+    getCurrentUser: async (c: Context) => visUserFromHeader(c.req.header('Authorization')),
+    isAdmin: (c: { get(key: 'user'): unknown }) => {
+      const u = c.get('user') as VisUser | undefined;
+      return !!u && u.roles.includes('ADMIN');
+    },
+    hasRole: (c: { get(key: 'user'): unknown }, ...roles: string[]) => {
+      const u = c.get('user') as VisUser | undefined;
+      return !!u && roles.some((r) => u.roles.includes(r));
+    },
+  };
+  const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+  const orchestrator = createMockOrchestrator();
+
+  const routes = createSessionRoutes(
+    kit as any,
+    sessionManager,
+    new EventBus(),
+    createMockQueueManager() as any,
+    orchestrator.createProcessMessage(),
+    orchestrator as any,
+    createMockEventHub() as any,
+    undefined,
+    opts.projectStore,
+    undefined,
+  );
+  app.route('/api/v2/sessions', routes);
+  return { app, sessionManager };
+}
+
+describe('Session visibility (AD-089, backend RBAC)', () => {
+  let tmpDir: string;
+  let projectStore: ProjectStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-vis-'));
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function auth(user: string) {
+    return { Authorization: `Bearer ${user}` };
+  }
+
+  it('LEAD/ADMIN видят все сессии', async () => {
+    const { app, sessionManager } = createVisibilityApp(tmpDir, { projectStore });
+    await sessionManager.createSession({ title: 'a', userId: 'outsider' });
+    await sessionManager.createSession({ title: 'b', userId: 'member' });
+
+    for (const role of ['lead', 'admin']) {
+      const res = await app.request('/api/v2/sessions', { headers: auth(role) });
+      expect(res.status, role).toBe(200);
+      expect((await res.json() as unknown[]).length, role).toBe(2);
+    }
+  });
+
+  it('USER видит свои и сессии своих проектов, но не чужие личные', async () => {
+    const { app, sessionManager } = createVisibilityApp(tmpDir, { projectStore });
+    const project = projectStore.create('P', 'member');
+    await projectStore.save(project);
+
+    await sessionManager.createSession({ title: 'mine', userId: 'member' });
+    await sessionManager.createSession({ title: 'project', userId: 'lead', projectId: project.id });
+    await sessionManager.createSession({ title: 'foreign', userId: 'outsider' });
+
+    const res = await app.request('/api/v2/sessions', { headers: auth('member') });
+    const body = (await res.json()) as any[];
+    expect(body.map((s) => s.name).sort()).toEqual(['mine', 'project']);
+  });
+
+  it('участник проекта открывает сессию проекта по id (не 403)', async () => {
+    const { app, sessionManager } = createVisibilityApp(tmpDir, { projectStore });
+    const project = projectStore.create('P', 'lead');
+    project.members['member'] = 'viewer' as any;
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ title: 'shared', userId: 'lead', projectId: project.id });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/status`, { headers: auth('member') });
+    expect(res.status).toBe(200);
+  });
+
+  it('посторонний не открывает сессию чужого проекта по id → 403', async () => {
+    const { app, sessionManager } = createVisibilityApp(tmpDir, { projectStore });
+    const project = projectStore.create('P', 'lead');
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ title: 'shared', userId: 'lead', projectId: project.id });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/status`, { headers: auth('outsider') });
+    expect(res.status).toBe(403);
+  });
+});

@@ -33,6 +33,7 @@ import {
   resolveProjectSkillSeed, migrateSessionScopeSnapshots,
   CommandService, createCommandRoutes, createSkillBundleRoutes, SkillBundleStore,
   createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
+  createIdentityRoutes,
   ProjectInstructionsResolver, createInstructionsInfoResolver,
   createContextRoutes as createCoreContextRoutes,
   DEFAULT_AGENT_ID,
@@ -45,15 +46,17 @@ import {
   startEphemeralSweeper,
   EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
   RouteRuleStore, ProjectRuleProvider, DecisionRuleProvider,
+  IdentityClaimStore,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
+  createExternalIdentityResolver,
   startEventJournalPruner,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { DecisionAgentCandidate } from '@itphx/synth-core';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveDefaultWorkspace, resolveSecretKey } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveDefaultWorkspace, resolveSecretKey, parsePrincipalId } from '@itphx/synth-shared';
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
@@ -548,6 +551,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const eventJournal = new EventJournalStore({ dataDir });
     // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
     const routeRuleStore = new RouteRuleStore({ dataDir });
+    // AD-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
+    const identityClaimStore = new IdentityClaimStore({ dataDir });
     // AD-089 (Блок 3): runtime-настройки «События» (админка) поверх config.yaml.
     const runtimeEvents = await settingsStore.getEvents();
     const effectiveEvents = mergeEventsConfig(backendConfig.synth.events, runtimeEvents);
@@ -618,6 +623,15 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // `onSessionMaterialized` подписывает клиентов владельца на сессии,
     // созданные после их подключения (`subscribeToSession`, AD-089).
     const eventHub = new EventHub(eventBus, sessionManager);
+    // AD-089: резолвер внешнего отправителя (профиль `identities`, principalId) в
+    // пользователя инстанса; override `identityMap` — приоритетнее профиля.
+    // `getIdentityMap` читает актуальное значение — `onEventsChange` обновляет
+    // runtime-настройку live. Вынесен в локальную константу: переиспользуется
+    // в `deps` и в `deliver` (attribution: `displayName` приоритетнее `payload.from`).
+    const resolveExternalIdentity = createExternalIdentityResolver({
+      profiles: profilesStore,
+      getIdentityMap: () => effectiveEventsSettings.identityMap,
+    });
     const requestSessionService = new RequestSessionService({
       sessionManager,
       eventRouter,
@@ -631,6 +645,24 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       // AD-089: маппинг идентичности внешнего отправителя на владельца сессии
       // (`events.identityMap`) — напр. Telegram-чат → человек.
       identityMap: effectiveEvents.identityMap,
+      // AD-089: резолвинг внешнего отправителя → владелец сессии.
+      resolveExternalIdentity,
+      // AD-089 (claim-flow): неизвестному отправителю выдаём одноразовый код
+      // подтверждения владения идентичностью (`provider`/`externalId` — из
+      // серверного разбора `identity.principalId`).
+      issueIdentityClaim: async (event) => {
+        const principalId = event.identity?.principalId;
+        if (!principalId) return null;
+        const parsed = parsePrincipalId(principalId);
+        if (!parsed) return null;
+        const claim = await identityClaimStore.create({
+          provider: parsed.provider,
+          externalId: parsed.externalId,
+          ...(event.identity?.chatKey ? { chatKey: event.identity.chatKey } : {}),
+          principalId,
+        });
+        return { code: claim.code, expiresAt: claim.expiresAt };
+      },
       // AD-089: подписка хаба на сессию владельца сразу после материализации —
       // чтобы клиент, подключённый до создания сессии (events-funnel), получал
       // её события. `subscribeToSession` синхронно ставит подписки, поэтому
@@ -655,6 +687,16 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         // AD-051: cron-сообщение — от системного пользователя `Scheduler`, текст
         // задания — чистый контент сообщения (описание Scheduler — в system-блоке).
         let message = eventToMessage(event);
+        // AD-089: для слинкованного человека `displayName` из резолвера приоритетнее
+        // имени из `payload.from` (tg-имя). Cron (`Scheduler`) не переопределяем.
+        if (event.source !== 'cron' && event.identity?.principalId) {
+          try {
+            const linked = await resolveExternalIdentity(event.identity);
+            if (linked?.displayName) message.author = linked.displayName;
+          } catch {
+            // attribution не критична — оставляем автора из `eventToMessage`
+          }
+        }
         if (mode === 'run') {
           // AD-036: обфускация user-сообщения ДО сохранения в историю (паритет с
           // prompt-путём — core routes/sessions.ts).
@@ -927,6 +969,20 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/settings', createSkillSettingsRoutes(auth as unknown as CoreAuthKit, { settingsStore }, {
       writeGuard: auth.requireAdmin,
       onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
+    }));
+
+    // AD-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).
+    // RBAC: аутентифицированный пользователь (только свои); линковка — claim-flow
+    // (`POST /api/v2/me/identities/claim`).
+    app.route('/api/v2/me', createIdentityRoutes(auth as unknown as CoreAuthKit, profilesStore, {
+      resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+      claimStore: identityClaimStore,
+      messages: {
+        identityNotFound: (c) => t('errors.notFound.identity', undefined, c),
+        claimNotFound: (c) => t('errors.notFound.identityClaim', undefined, c),
+        claimConflict: (c) => t('errors.conflict.identityClaim', undefined, c),
+        claimCodeRequired: (c) => t('errors.validation.claimCodeRequired', undefined, c),
+      },
     }));
 
     // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные

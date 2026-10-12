@@ -26,7 +26,15 @@ export function createProjectAccess(kit: AuthKit) {
     canManageProject(c, project, userId)
     || project.members?.[userId] === ProjectRole.EDITOR;
 
-  return { canManageProject, canEditProjectContent };
+  /**
+   * AD-089: чтение проекта по id — owner / любой участник (любая роль, в т.ч.
+   * VIEWER) / глобальные LEAD/ADMIN. Не расширяет права на редактирование.
+   */
+  const canReadProject = (c: Ctx, project: Project, userId: string): boolean =>
+    canManageProject(c, project, userId)
+    || userId in (project.members ?? {});
+
+  return { canManageProject, canEditProjectContent, canReadProject };
 }
 
 /**
@@ -47,7 +55,7 @@ export function createProjectRoutes(
   settingsStore?: RuntimeSettingsStore,
   mcpRegistryStore?: McpRegistryStore,
 ): Hono {
-  const { canManageProject, canEditProjectContent } = createProjectAccess(kit);
+  const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 
   return createCoreProjectRoutes(
     { requireAuth: kit.requireAuth },
@@ -56,6 +64,11 @@ export function createProjectRoutes(
     {
       canManage: canManageProject,
       canEditContent: canEditProjectContent,
+      canRead: canReadProject,
+      // AD-089: ADMIN/LEAD — сквозная видимость всех проектов (защита от мок-AuthKit).
+      resolveElevated: (c) =>
+        (typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]))
+        || (typeof kit.hasRole === 'function' && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD')),
       getCurrentUserId: async (c) => (await kit.getCurrentUser(c))?.id ?? '',
       messages: {
         nameRequired: (c) => t('errors.validation.nameRequired', undefined, c),

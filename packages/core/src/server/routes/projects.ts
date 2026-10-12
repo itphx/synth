@@ -72,6 +72,17 @@ export interface ProjectRoutesOptions {
    * Не задан — разрешено (standalone: единый пользователь).
    */
   canEditContent?: (c: Context, project: Project, userId: string) => boolean;
+  /**
+   * AD-089: доступ на чтение проекта по id (owner / любой `members` / LEAD / ADMIN).
+   * Не задан — разрешено (standalone). Мутации (`canManage`/`canEditContent`) не
+   * расширяются этим предикатом — VIEWER не получает прав на редактирование.
+   */
+  canRead?: (c: Context, project: Project, userId: string) => boolean;
+  /**
+   * AD-089: сквозной обзор (ADMIN/LEAD) — `GET /` возвращает все проекты.
+   * `undefined`/`false` — прежнее поведение (проекты пользователя).
+   */
+  resolveElevated?: (c: Context) => boolean | Promise<boolean>;
   /** Сообщения (backend — i18n). */
   messages?: Partial<ProjectRouteMessages>;
   /**
@@ -139,6 +150,8 @@ export function createProjectRoutes(
     opts.canManage ? opts.canManage(c, project, userId) : true;
   const canEditContent = (c: Context, project: Project, userId: string): boolean =>
     opts.canEditContent ? opts.canEditContent(c, project, userId) : true;
+  const canRead = (c: Context, project: Project, userId: string): boolean =>
+    opts.canRead ? opts.canRead(c, project, userId) : true;
 
   const messages: ProjectRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
 
@@ -149,7 +162,10 @@ export function createProjectRoutes(
 
   app.get('/', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
-    const projects = await store.list(await currentUserId(c));
+    // AD-089: elevated (ADMIN/LEAD) — все проекты; иначе — проекты пользователя.
+    const elevated = (await opts.resolveElevated?.(c)) ?? false;
+    const userId = await currentUserId(c);
+    const projects = elevated ? await store.list() : await store.list(userId);
     if (!remoteClient) {
       return c.json(projects.map(serializeProject));
     }
@@ -256,6 +272,11 @@ export function createProjectRoutes(
     const project = await store.load(id);
     if (!project) {
       return jsonNotFound(c);
+    }
+    // AD-089: чтение проекта — owner / любой участник / LEAD / ADMIN. Права на
+    // редактирование (canManage/canEditContent) этим не расширяются.
+    if (!canRead(c, project, await currentUserId(c))) {
+      return jsonForbidden(c);
     }
     return c.json(serializeProject(project));
   });

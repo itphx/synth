@@ -65,10 +65,21 @@
   через `EventRouter`; `SessionManager.createSession` — materialization-примитив
   (fork/import/материализация), не для прямых запросов (AD-089). Материализация
   `ephemeral`/`bind` проставляет владельца, чтобы сессия не выпадала из
-  `listSessions({ userId })`, по приоритету: `deps.identityMap` (`identity.chatKey`,
-  затем `identity.principalId` → id пользователя инстанса) → per-event `ownerId`
-  (пользователь/создатель ключа привязки) → `identity.principalId` → `deps.resolveOwnerId`
-  (standalone — `local`). Дефолтные `provider`/`model` инстанса (`deps.resolveLlmDefaults`:
+  `listSessions({ userId })`, по приоритету: `deps.resolveExternalIdentity`
+  (`createExternalIdentityResolver`: override `identityMap` по `identity.principalId`, затем
+  `identity.chatKey` → иначе профиль по `principalId`; чат-fallback внутри резолвера) →
+  `deps.identityMap` (фоллбек-совместимость: при подключённом резолвере карта уже проверена
+  им первой, поэтому шаг фактически недостижим) → per-event
+  `ownerId` (пользователь/создатель ключа привязки) → `deps.resolveOwnerId`
+  (standalone — `local`). Владелец — **человек (`principalId`)**, а не чат: в группе
+  `chatKey` = группа, поэтому чат определяет только routing, а не ownership;
+  `identity.principalId` — внешний идентификатор (`tg:<id>`), не id пользователя
+  инстанса (как владелец не подставляется). Attribution сообщения (функция
+  `eventToMessage`): для всех внешних источников в `metadata` — `principal_id`/
+  `chat_key`/`thread_key`, `author` выводится из `payload.from` (username →
+  `@username`; иначе `firstName lastName`; иначе `principalId`); cron — по-прежнему
+  `Scheduler`; для источников без `from`/`principalId` `author` не задаётся.
+  Дефолтные `provider`/`model` инстанса (`deps.resolveLlmDefaults`:
   standalone — `llm.defaultProvider`/`llm.defaultModel` через `StandaloneConfig.llmDefaults`;
   managed — `synth.llm`), иначе сессия из внешнего события не могла ответить без ручной
   простановки модели — явные значения `settings` приоритетнее, поля добираются по отдельности.
@@ -104,7 +115,19 @@
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
-  `skill-scope`, `git`, `ssh-keys`, `events`.
+  `skill-scope`, `git`, `ssh-keys`, `events`, `identities`.
+- `server/session-visibility.ts` — AD-089: `isSessionVisible` (+ `SessionOwnerCtx`) —
+  единое правило видимости сессии в списке (elevated/владелец/ownerless/проект-участие).
+- `server/routes/identities.ts` — `createIdentityRoutes` (AD-089): идентичности текущего
+  пользователя (`GET /api/v2/me/identities` → `{identities: ExternalIdentity[]}`;
+  `DELETE /api/v2/me/identities/:provider/:externalId` — отвязка только своих, 404 если нет;
+  `POST /api/v2/me/identities/claim` `{code}` → 201 `{identity}` — подтверждение владения
+  идентичностью по **одноразовому** коду, привязка с `linkedBy` = id пользователя).
+  `resolveUserId` (core — `local`, backend — AuthKit), `messages` для i18n, `claimStore`
+  (`IdentityClaimStore`; без него роут claim не монтируется). Прямой линковки произвольного
+  чужого id нет — только claim-flow. Ошибки: 400 `VALIDATION_ERROR` (пустой код),
+  404 `NOT_FOUND` (неизвестен/истёк/использован), 409 `CONFLICT` (занят другим профилем);
+  `provider`/`externalId` берутся из серверной записи claim, не из тела.
 - `server/routes/events.ts` — `createEventRoutes` (AD-089): приём `POST /` (API-ключ привязки —
   `resolveApiKeySecret`/`touchApiKey`; иначе fallback `ingestGuard`; `ingestPreGuard` — rate limit
   до выбора способа аутентификации; per-key rate limit `KeyRateLimiter` — `rateLimitPerMinute` либо
@@ -176,9 +199,18 @@
   `EventBinding{mode:'bound'}`, повтор/гонка → переиспользование привязки;
   `deps.resolveLlmDefaults` — добор дефолтных `provider`/`model` инстанса
   (`llm.defaultProvider`/`llm.defaultModel`) для `ephemeral`/`bind`/explicit;
-  `deps.identityMap` — маппинг `identity.chatKey`/`principalId` на владельца сессии;
+  `deps.resolveExternalIdentity` — резолвинг внешнего отправителя (`identity.principalId`)
+  в пользователя инстанса (человек-владелец, приоритетнее чата);
+  `deps.identityMap` — маппинг `identity.principalId`/`chatKey` на владельца сессии;
+  `deps.issueIdentityClaim` — выпуск одноразового claim-кода неизвестному отправителю
+  (вызывается в `handleEvent`, когда резолвер вернул `null` и задан `identity.principalId`;
+  результат — `identityHint` в ответе ingest, AD-089 claim-flow);
   `deps.onSessionMaterialized` — колбэк после создания сессии до доставки (подписка хаба);
   `updateConfig` — live TTL/политика/identityMap),
+  `external-identity.ts` (`createExternalIdentityResolver({profiles, getIdentityMap})` — резолвер
+  внешнего отправителя → `{userId, displayName?} | null`: override `identityMap` (по `principalId`,
+  затем `chatKey`) → профиль по `parsePrincipalId` (`identities`); `getIdentityMap` — геттер для
+  live-обновления runtime-настройки; без кэша),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
   `DecisionRuleProvider` (`decision-rule-provider.ts`, AD-084: decision-шаг после project-правил при
@@ -205,10 +237,15 @@
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`
-  (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`),
+  (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`; AD-089 —
+  `identities: ExternalIdentity[]` в snake_case (`external_id`/`display_name`/`linked_at`/`linked_by`),
+  legacy без поля → `[]`, методы `findProfileByExternalId`/`linkIdentity`/`unlinkIdentity`),
+  `FileStore.listForUserScope(userId, projectIds)` — «свои + сессии моих проектов» (AD-089;
+  `listForUser` — только свои),
   `FileMutex` (`file-mutex.ts`, AD-051/AD-089: `mkdir`-лок + stale takeover для общего
   `dataDir`; `ScheduleStore.crossProcess` сериализует мутации), `RuntimeSettingsStore`
-  (`events` + `mergeEventsConfig` — runtime-настройки раздела «События» (включая `identityMap`), AD-089; `decision` +
+  (`events` + `mergeEventsConfig` — runtime-настройки раздела «События» (включая `identityMap` — **override**
+  поверх основного источника — привязок в `ProfileData.identities[]`), AD-089; `decision` +
   `mergeDecisionConfig` — runtime-настройки decision-слоя, AD-084, включая `escalationProvider`/`escalationModel`),
   `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
@@ -218,7 +255,12 @@
   `EventApiKeyStore` (`events/api-keys.json`, API-ключи привязок: sha256-хеш секрета at-rest,
   plaintext один раз при `create`, обязательная уникальная `label` (глобально по инстансу) +
   `description`/`expiresAt`/`rateLimitPerMinute`, `update`/`revoke` (мягкий отзыв), legacy-backfill
-  `name`→`label`, каскад `removeByBinding`; AD-089/AD-052)
+  `name`→`label`, каскад `removeByBinding`; AD-089/AD-052),
+  `IdentityClaimStore` (`identity-claim-store.ts`, `events/identity-claims.json`, AD-089 claim-flow:
+  одноразовые коды подтверждения владения идентичностью; `create`/`consume`/`cleanup`/`list`;
+  код `XXX-XXX`, алфавит base32 без `0/O/1/I`, TTL 10 мин по умолчанию, нормализация ввода —
+  upper + удаление дефисов/пробелов, одноразовость через `consumedAt`, гонка consume
+  сериализуется `AsyncLock`; `provider`/`externalId` — из серверной записи)
   и `JobStore` (`scheduler/jobs.jsonl`, Job-история, AD-051);
   `migrations.ts` — идемпотентная разовая миграция снапшотов
   `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).
@@ -261,6 +303,19 @@
   `onDecisionChange`, мутации под `decisionWriteGuard`), а также `GET /settings/decision/metrics`
   (снимок `decisionMetrics`, `requireAuth`) и `DELETE /settings/decision/metrics` (сброс,
   `decisionWriteGuard`).
+- **Видимость сессий/проектов (AD-089).** Единый хелпер — `server/session-visibility.ts`
+  (`isSessionVisible(session, projectStore, { userId, elevated }, projectCache?)`): `elevated`
+  (ADMIN/LEAD) → всё; владелец (`ownerId ?? userId`) → да; нет владельца → да; иначе сессия
+  проекта видна его `ownerId`/любому `members` (любая роль), иначе — нет. Кэш проектов —
+  `Map`, передаётся вызывающим на один скан (не модульный). Скан «свои + проектные» —
+  `FileStore.listForUserScope(userId, projectIds)` (используется `SessionManager.listSessions`
+  при `filter.projectIds`). Фабрики:
+  - `createSessionRoutes` — опции `resolveElevated` (ADMIN/LEAD — все), `resolveMemberProjectIds`
+    (проекты-участия), `resolveCanAccessExtra` (доступ по id, напр. участник проекта); `GET /`
+    при elevated отдаёт `listSessions({})`, иначе `{ userId, projectIds }`.
+  - `createProjectRoutes` — опции `canRead` (чтение по id: owner/любой участник/LEAD/ADMIN; **не**
+    расширяет `canManage`/`canEditContent`) и `resolveElevated` (`GET /` — все проекты).
+  Правила по ролям — `docs/API_V2.md` §5.5/§5.8, контекст — AD-089.
 
 ## MCP
 

@@ -22,9 +22,9 @@ function createMockAuth(): AuthKit {
   } as unknown as AuthKit;
 }
 
-function createIngress(decision: RouteDecision, session: Session | null): EventIngress {
+function createIngress(decision: RouteDecision, session: Session | null, identityHint?: { code: string; expiresAt: string }): EventIngress {
   const service = {
-    handleEvent: vi.fn(async () => ({ decision, session })),
+    handleEvent: vi.fn(async () => ({ decision, session, ...(identityHint ? { identityHint } : {}) })),
   } as unknown as RequestSessionService;
   return new EventIngress({ requestSessionService: service });
 }
@@ -103,6 +103,43 @@ describe('Events API Routes (AD-089)', () => {
     expect(res.status).toBe(400);
     const body: any = await res.json();
     expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
+  // --- AD-089 (claim-flow): identityHint в ответе POST /events ---
+
+  it('POST / — неизвестный отправитель → ответ содержит identityHint', async () => {
+    const hint = { code: 'ABC-DEF', expiresAt: '2030-01-01T00:00:00.000Z' };
+    const app = makeApp(createIngress({ kind: 'drop', reason: 'no_route', audited: true }, null, hint));
+
+    const res = await app.request('/api/v2/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'telegram', type: 'message', identity: { principalId: 'tg:1' } }),
+    });
+
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.identityHint).toEqual(hint);
+    // Контракт не сломан.
+    expect(body.event).toBeDefined();
+    expect(body.decision).toBeDefined();
+    expect(body.sessionId).toBeNull();
+    expect(body.session).toBeUndefined();
+  });
+
+  it('POST / — известный отправитель → ответ БЕЗ identityHint', async () => {
+    const app = makeApp(createIngress({ kind: 'bound', sessionId: 's1' }, { id: 's1' } as Session));
+
+    const res = await app.request('/api/v2/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'telegram', type: 'message' }),
+    });
+
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.identityHint).toBeUndefined();
+    expect(body.sessionId).toBe('s1');
   });
 
   it('POST / — не-JSON тело → 400 VALIDATION_ERROR', async () => {

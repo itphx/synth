@@ -2,7 +2,11 @@
 
 > **Статус:** ⏳ Не реализовано (концепт/проект)
 > **Дата:** 2026-10-02
-> **Обновлено:** 2026-10-12 — Extension API вынесен в отдельный [AD-090](./ad-090-extension-api.md); ограничение
+> **Обновлено:** 2026-10-12 — зафиксирован фактический эталон add-on'а (Telegram-шлюз в отдельном репозитории
+> `addons/synth-gateway-telegram`): топология «один бот — один инстанс шлюза» (факты), HA через leader election
+> (K8s Lease; не реализовано), мультитенантность (маршруты → `{synthUrl, creds, tenant}`; не реализовано),
+> текущая гарантия singleton (`replicaCount: 1` + `strategy: Recreate`) и **пробел** — в addon-чарте `strategy`
+> не задан; адаптеры каналов — отложенный путь. Ранее тем же днём: Extension API вынесен в отдельный [AD-090](./ad-090-extension-api.md); ограничение
 > «плагины только standalone» снято (плагины разрешены во всех режимах: managed — установка ADMIN, hybrid — allow-list
 > сервера с server-scoped токенами). Ранее (2026-10-08) добавлен четвёртый столп «внешние сервисы-надстройки
 > (add-ons / bridge services)» и первый частный случай (Telegram gateway); сюда же **поглощён** [AD-087](./ad-087-messenger-gateway-merged.md)
@@ -11,7 +15,8 @@
 > [AD-046](./ad-046-skills-and-slash-commands.md) «Скиллы», [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог»,
 > [AD-082](./ad-082-full-images-deployment.md) «Flavor-образы», [AD-089](./ad-089-external-events-automation.md) «Платформа внешних событий»,
 > [AD-023](./ad-023-configuration.md), [AD-029](./ad-029-granular-permissions.md), [AD-036](./ad-036-llm-gateway.md),
-> [AD-042](./ad-042-hybrid-mode.md), [AD-080](./ad-080-managed-hybrid-modes.md), [AD-081](./ad-081-hybrid-policy-leak-protection.md).
+> [AD-042](./ad-042-hybrid-mode.md), [AD-080](./ad-080-managed-hybrid-modes.md), [AD-081](./ad-081-hybrid-policy-leak-protection.md),
+> [AD-055](./ad-055-instance-exchange.md) «Обмен между инстансами», [AD-032](./ad-032-history-storage-postgresql.md) «PostgreSQL».
 
 **Решение:** дать сообществу и пользователям **лёгкий путь** доработать Synth без приватного форка ядра. Четыре
 взаимодополняющих столпа:
@@ -105,14 +110,85 @@ allow-list сервера, усиленный **server-scoped токенами**
 
 #### Первый частный случай — Telegram gateway
 
-Gateway к мессенджерам (поглощённый [AD-087](./ad-087-messenger-gateway-merged.md)) — эталонный add-on:
+Gateway к мессенджерам (поглощённый [AD-087](./ad-087-messenger-gateway-merged.md)) — эталонный add-on;
+реализация живёт в **отдельном репозитории** `addons/synth-gateway-telegram` (вне `synth/`) и собрана по
+общему шаблону `addons/synth-addon-template`:
 
 - **MCP-сервер (Synth → шлюз):** отправка/редактирование сообщений, уведомления, inline-кнопки, вложения.
-- **Webhook (шлюз → Synth):** входящие сообщения/нажатия кнопок приходят как внешние события
-  ([AD-089](./ad-089-external-events-automation.md): `Event`/`Binding`/`Router`); альтернатива — long-polling.
+- **Вход (шлюз → Synth):** входящие сообщения/нажатия кнопок приходят как внешние события
+  ([AD-089](./ad-089-external-events-automation.md): `Event`/`Binding`/`Router`); транспорт — Telegram
+  `getUpdates` (**long-polling**), нормализация → `POST /api/v2/events`.
+- **Выход (Synth → шлюз → чат):** SSE `GET /api/v2/events` (watcher) → `sendMessage` по `stream.done`
+  (фоллбек `message.added`/`stream.error`).
 - **Маппинг identity** (пользователь мессенджера → профиль/RBAC), **секреты ботов** (at-rest по модели
   [AD-076](./ad-076-git-repo-registry-ssh.md)), **дедуп/идемпотентность**, **вложения** (→ [AD-085](./ad-085-multimodal-input.md)).
 - **Привязки `Binding`** (чат/тред/топик ↔ сессия/проект) и права — по [AD-089](./ad-089-external-events-automation.md).
+
+##### Топология: один бот — один инстанс шлюза
+
+Текущая (реализованная) топология — **один процесс на одного бота**:
+
+- **Секреты/креды одного бота:** `TELEGRAM_BOT_TOKEN` (env или `secrets/telegram_bot_token`), **один владелец**
+  (`secrets/telegram_owner_chat_id` — для MCP-уведомлений), **один** `SYNTH_URL` + одни креды Synth
+  (OIDC client-credentials в managed приоритетнее статического `SYNTH_API_KEY` в standalone/dev).
+- **Список доступа** `GATEWAY_ALLOWLIST` (`chatId:ROLE` либо `userId:ROLE`) — **мультичатовый**: один бот уже
+  обслуживает несколько чатов/пользователей с разными ролями.
+- **Состояние — JSON на PVC** (`FileStore`, AD-005): `state/offset.json` (смещение long-polling),
+  `state/seen-updates.json` (дедуп апдейтов), `state/chat-sessions.json` (chatKey→сессия),
+  `state/session-routes.json` (обратный индекс sessionId) и `state/sent.json` (дедуп отправки ответов).
+- **Прокси обязателен** для Bot API (`TELEGRAM_PROXY_URL`, HTTP CONNECT / SOCKS5); OIDC-запросы идут напрямую
+  и прокси не используют.
+- **Деплой:** Helm-чарт `charts/synth-gateway-telegram` и `docker-compose.yml`; в K3s — дельта в репозитории
+  `synth-deploy`.
+
+##### Мультитенантность (направление развития, не реализовано)
+
+Выбранное направление — **«один бот → несколько инстансов/тенантов Synth»**: внутри шлюза появляется
+**таблица маршрутов** (напр. `chatKey`/`userId`/источник → `{ synthUrl, creds, tenant }`), и один бот
+обслуживает разные контуры/тенанты, направляя события в соответствующий инстанс. Родственные темы:
+[AD-055](./ad-055-instance-exchange.md) (обмен между инстансами, не реализован) и
+[AD-081](./ad-081-hybrid-policy-leak-protection.md) (политики гибрида и защита от утечек).
+
+**Пока не реализуем — фиксируем проект.** Принципиальное ограничение сохраняется: **один бот = один поллер**
+(см. ниже), поэтому мультитенантность решается маршрутизацией внутри одного шлюза, а не запуском N шлюзов на
+тот же токен.
+
+##### Отказоустойчивость: HA через leader election (решение, не реализовано)
+
+**Почему нельзя N поллеров.** Telegram `getUpdates` (long-polling) допускает **одного** потребителя на бота:
+второй поллер получает **`409 Conflict`**. Значит, горизонтально масштабировать приём нельзя «в лоб».
+
+**Решение** — 2+ реплики, из которых **поллит только лидер** (выборы через Kubernetes **Lease**); остальные —
+**hot standby** с быстрым failover. Требования к реализации:
+
+- **общий стейт** реплик (Redis/Postgres либо PVC `ReadWriteMany` вместо текущего `ReadWriteOnce`);
+- **атомарный дедуп отправки** — сейчас `hasSent → markSent` в `sent.json` не атомарен между процессами;
+- **лидер-гейт** для поллинга (lease + graceful stop/start).
+
+**MCP-часть шлюза stateless** — масштабируется свободно, лидера не требует.
+
+Альтернатива — **webhook-режим Telegram** (stateless HTTP за ingress): рассмотрена и **отложена**.
+
+_Ориентир для реализации:_ в шедулере ядра ([AD-051](./ad-051-scheduler-pipelines.md)) уже есть семы
+leader election и file-based реализации (default OFF, K8s Lease — будущее) — шлюз может повторить тот же подход.
+
+##### Текущая гарантия — singleton
+
+Сейчас корректность держится на **`replicaCount: 1`** (один поллер) и **`strategy: Recreate`**. В деплое
+`synth-deploy` (K3s-дельта) `strategy: Recreate` задан.
+
+**Известный пробел/риск:** в самом addon-чарте `charts/synth-gateway-telegram` **`strategy` не задан**
+(в `templates/deployment.yaml` есть только `replicas: {{ .Values.replicaCount }}`, `revisionHistoryLimit: 2`
+без блока `strategy`). При ручном увеличении `replicaCount > 1` без lease это даёт **`409 Conflict`** на
+`getUpdates` и **двойную отправку** (неатомарный дедуп `sent.json`). До реализации HA чарт должен оставаться
+`replicaCount: 1`.
+
+##### Адаптеры каналов (отложенный путь универсальности)
+
+Универсальность «платформа каналов» (общий интерфейс коннектора `send`/`receive`/`edit`/`attach` + ядро
+платформы store/health/watcher/auth/allowlist/claim) с адаптерами каналов (Telegram первый → Max/VK/Slack/Matrix)
+унаследована из [AD-087](./ad-087-messenger-gateway-merged.md). **Не выбранный сейчас путь** — фиксируется как
+задел, не реализуется.
 
 ### Поглощение AD-087
 
@@ -205,6 +281,16 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 - **Скилл доработки:** builtin (в поставке) vs official-реестр; нужны ли спец-тулы (git/fork/PR/CI-статус).
 - **Шаблон add-on'а:** что именно в общем скелете (язык, CI, формат контракта интеграции), как проверять
   совместимость версий с Synth.
+- ~~**Транспорт приёма и топология шлюза:** webhook vs long-polling; сколько инстансов на бота~~ —
+  **закрыто (первый случай, Telegram):** транспорт — long-polling (`getUpdates`), топология — «один бот — один
+  инстанс шлюза». Принципиальное ограничение: `getUpdates` допускает **одного** потребителя на бота
+  (второй → `409 Conflict`), поэтому HA — только через leader election, а мультитенантность — маршрутизацией
+  внутри одного шлюза (разделы выше).
+- **Совместное использование стейта HA-шлюза:** Redis vs RWX-PVC vs Postgres — чем синхронизировать
+  `offset`/`sent`/дедуп между репликами (зависит от [AD-032](./ad-032-history-storage-postgresql.md)); как
+  сделать дедуп отправки атомарным между процессами.
+- **Реализация HA:** K8s Lease для шлюза (лидер-гейт поллинга, hot standby, failover) и судьба `strategy`
+  в addon-чарте (сейчас не задан — риск при случайном `replicaCount > 1`).
 
 ## Связи
 
@@ -217,5 +303,7 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 - [AD-089](./ad-089-external-events-automation.md) — Event/Binding/Router: как add-on'ы (gateway) приносят события в Synth.
 - [AD-087](./ad-087-messenger-gateway-merged.md) — поглощённый каталог «Gateway для мессенджеров» (указатель).
 - [AD-042](./ad-042-hybrid-mode.md), [AD-080](./ad-080-managed-hybrid-modes.md), [AD-081](./ad-081-hybrid-policy-leak-protection.md) — гибрид и политики для сторонних расширений.
+- [AD-055](./ad-055-instance-exchange.md) — обмен между инстансами: родственная тема мультитенантности шлюза (один бот → несколько инстансов/тенантов).
+- [AD-032](./ad-032-history-storage-postgresql.md) — PostgreSQL: возможная опора общего стейта HA-шлюза (мультирепличный `offset`/дедуп).
 - [AD-088](./ad-088-http-proxy.md) — egress внешних add-on сервисов.
 - `synth-media` — существующий внешний сервис-демонстратор (прототип add-on'а).

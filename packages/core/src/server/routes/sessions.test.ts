@@ -8,7 +8,7 @@ import { createSessionRoutes } from './sessions.js';
 import { SessionManager, EventBus, FileStore, FileProfileStore, DEFAULT_AGENT_ID } from '../../index.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
-import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
+import { MessageRole, generateId, makeTextPart, nowISO, ProjectRole } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 
 function createMockAuth(): AuthKit {
@@ -677,5 +677,124 @@ describe('GET /api/v2/sessions — фильтр project_id', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as any[];
     expect(body).toHaveLength(2);
+  });
+});
+
+describe('GET /api/v2/sessions — видимость по ролям/проектам (AD-089)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-visibility-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Приложение с RBAC-хуками: роль из заголовка, проекты-участия — из store. */
+  function makeApp(opts: {
+    userId: string;
+    elevated?: boolean;
+  }) {
+    const app = new Hono();
+    const fileStore = new FileStore({ dataDir: tmpDir });
+    const sessionManager = new SessionManager(fileStore);
+    const projectStore = new ProjectStore({ dataDir: tmpDir });
+    const orchestrator = createMockOrchestrator();
+    const routes = createSessionRoutes(
+      createMockAuth(),
+      {
+        sessionManager,
+        eventBus: new EventBus(),
+        queueManager: createMockQueueManager() as any,
+        processMessage: orchestrator.createProcessMessage(),
+        orchestrator: orchestrator as any,
+        projectStore,
+      },
+      {
+        resolveUserId: () => opts.userId,
+        resolveElevated: () => opts.elevated ?? false,
+        resolveMemberProjectIds: async () => (await projectStore.list(opts.userId)).map((p) => p.id),
+        resolveCanAccessExtra: async (session) => {
+          if (!session.projectId) return false;
+          const project = await projectStore.load(session.projectId);
+          if (!project) return false;
+          return project.ownerId === opts.userId || opts.userId in (project.members ?? {});
+        },
+      },
+    );
+    app.route('/api/v2/sessions', routes);
+    return { app, sessionManager, projectStore };
+  }
+
+  it('член проекта видит проектные сессии, но не чужие личные', async () => {
+    const { app, sessionManager, projectStore } = makeApp({ userId: 'member' });
+    const project = projectStore.create('P1', 'owner');
+    project.members['member'] = ProjectRole.VIEWER;
+    await projectStore.save(project);
+
+    await sessionManager.createSession({ title: 'mine', userId: 'member' });
+    await sessionManager.createSession({ title: 'project', userId: 'owner', projectId: project.id });
+    await sessionManager.createSession({ title: 'foreign', userId: 'stranger' });
+
+    const res = await app.request('/api/v2/sessions');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any[];
+    expect(body.map((s) => s.name).sort()).toEqual(['mine', 'project']);
+  });
+
+  it('elevated (ADMIN/LEAD) видит все сессии', async () => {
+    const { app, sessionManager } = makeApp({ userId: 'lead', elevated: true });
+    await sessionManager.createSession({ title: 'a', userId: 'u1' });
+    await sessionManager.createSession({ title: 'b', userId: 'u2' });
+
+    const res = await app.request('/api/v2/sessions');
+    const body = (await res.json()) as any[];
+    expect(body).toHaveLength(2);
+  });
+
+  it('elevated повышает приоритет над projectIds (все сессии)', async () => {
+    const { app, sessionManager, projectStore } = makeApp({ userId: 'lead', elevated: true });
+    const project = projectStore.create('P', 'lead');
+    await projectStore.save(project);
+    await sessionManager.createSession({ title: 'foreign', userId: 'u2' });
+    const res = await app.request('/api/v2/sessions');
+    expect((await res.json() as any[])).toHaveLength(1);
+  });
+
+  it('?project_id= фильтрует поверх проектной видимости', async () => {
+    const { app, sessionManager, projectStore } = makeApp({ userId: 'member' });
+    const p1 = projectStore.create('P1', 'member');
+    const p2 = projectStore.create('P2', 'member');
+    await projectStore.save(p1);
+    await projectStore.save(p2);
+    await sessionManager.createSession({ title: 's1', userId: 'member', projectId: p1.id });
+    await sessionManager.createSession({ title: 's2', userId: 'member', projectId: p2.id });
+
+    const res = await app.request(`/api/v2/sessions?project_id=${p1.id}`);
+    const body = (await res.json()) as any[];
+    expect(body).toHaveLength(1);
+    expect(body[0].name).toBe('s1');
+  });
+
+  it('участник проекта получает доступ к её сессии по id (resolveCanAccessExtra)', async () => {
+    const { app, sessionManager, projectStore } = makeApp({ userId: 'member' });
+    const project = projectStore.create('P1', 'owner');
+    project.members['member'] = 'viewer' as any;
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ title: 'shared', userId: 'owner', projectId: project.id });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/status`);
+    expect(res.status).toBe(200);
+  });
+
+  it('посторонний не получает доступ к сессии чужого проекта по id → 403', async () => {
+    const { app, sessionManager, projectStore } = makeApp({ userId: 'outsider' });
+    const project = projectStore.create('P1', 'owner');
+    await projectStore.save(project);
+    const session = await sessionManager.createSession({ title: 'shared', userId: 'owner', projectId: project.id });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/status`);
+    expect(res.status).toBe(403);
   });
 });

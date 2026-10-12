@@ -627,3 +627,63 @@ describe('Project RBAC (D5): контент и удаление', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// AD-089: видимость проектов (LEAD/ADMIN — все) и read-уровень GET /:id
+// ---------------------------------------------------------------------------
+
+describe('Project visibility (AD-089, backend RBAC)', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-proj-vis-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET /: LEAD/ADMIN видят все проекты, USER — только свои', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const own = store.create('Own', 'owner');
+    const other = store.create('Other', 'outsider');
+    await store.save(own);
+    await store.save(other);
+
+    const mine = await app.request('/api/v2/projects', { headers: wsAuth('owner') });
+    expect((await mine.json() as any[]).map((p) => p.name)).toEqual(['Own']);
+
+    for (const role of ['lead', 'admin']) {
+      const res = await app.request('/api/v2/projects', { headers: wsAuth(role) });
+      expect((await res.json() as unknown[]).length, role).toBe(2);
+    }
+  });
+
+  it('GET /:id — VIEWER читает проект, посторонний → 403, VIEWER не редактирует', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = store.create('P', 'owner');
+    project.members['viewer'] = ProjectRole.VIEWER;
+    await store.save(project);
+
+    const asViewer = await app.request(`/api/v2/projects/${project.id}`, { headers: wsAuth('viewer') });
+    expect(asViewer.status).toBe(200);
+
+    const asOutsider = await app.request(`/api/v2/projects/${project.id}`, { headers: wsAuth('outsider') });
+    expect(asOutsider.status).toBe(403);
+
+    // read-уровень не расширяет редактирование
+    const edit = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT', headers: wsAuth('viewer'), body: JSON.stringify({ name: 'X' }),
+    });
+    expect(edit.status).toBe(403);
+  });
+
+  it('GET /:id — LEAD/ADMIN читают чужой проект', async () => {
+    const { app, store } = makeWorkspaceApp();
+    const project = store.create('P', 'owner');
+    await store.save(project);
+
+    for (const role of ['lead', 'admin']) {
+      const res = await app.request(`/api/v2/projects/${project.id}`, { headers: wsAuth(role) });
+      expect(res.status, role).toBe(200);
+    }
+  });
+});

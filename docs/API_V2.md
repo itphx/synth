@@ -223,9 +223,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 | Метод | Путь | Сборка | RBAC | Назначение / req-resp |
 |---|---|---|---|---|
-| GET | `/api/v2/sessions` | оба | auth | Список сессий; `?project_id=` |
-| POST | `/api/v2/sessions` | оба | auth | Создать; `{name|title, project_id, engine, settings}` → 201 |
-| GET | `/api/v2/sessions/:id` | оба | auth | Сессия (сериализованная) |
+| GET | `/api/v2/sessions` | оба | auth (свои+проектные; LEAD/ADMIN — все) | Список сессий; `?project_id=` (см. правила видимости ниже) |
+| POST | `/api/v2/sessions` | оба | auth | Создать; `{name|title, project_id, engine, settings}` → 201 || GET | `/api/v2/sessions/:id` | оба | auth | Сессия (сериализованная) |
 | GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Эффективный MCP-скоуп (AD-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust, chars?, estTokens?, estimated?}], enabled, disabled, mcpServers, mcpDisabledServers}`. `reason` ∈ `system_disabled\|project_disabled\|session_optout\|not_default`; проектный гейт `enabled` применяется и к системным серверам. Серверы/тулы несут `chars`/`estTokens` (AD-071 §2.8) |
 | PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Переключить MCP (один тумблер): `{name, enabled}` → `mcpServers`/`mcpDisabledServers` (opt-out системных — через `enabled:false`), либо `{mcpServers?, mcpDisabledServers?}` |
 | PATCH | `/api/v2/sessions/:id` | оба | auth | `{name, title, engine, mode: plan\|act\|yolo, settings, project_id}` |
@@ -260,6 +259,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Удалить заметку |
 
 > `SessionSettings` MCP/скиллов (AD-071 §2.4 / AD-046 §4.5): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
+> **Видимость `GET /api/v2/sessions` (AD-089).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии проектов, участником которых является пользователь (`owner` проекта или любой `members`, любая роль). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости. Доступ **по id** (`GET /:id/status|prompt|stats`, `POST /:id/prompt`, `GET /:id/messages` и т.п.) — владелец сессии **или** участник проекта сессии, а также `ADMIN`/`LEAD`; иначе `403 FORBIDDEN`. Хелпер — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
 
 ### 5.6 Messages — `/api/v2/messages`
 
@@ -286,9 +286,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 | Метод | Путь | Сборка | RBAC | Назначение |
 |---|---|---|---|---|
-| GET | `/api/v2/projects` | оба | auth | Список проектов пользователя |
+| GET | `/api/v2/projects` | оба | auth (owner/член; LEAD/ADMIN — все) | Список проектов: свои/участие, `ADMIN`/`LEAD` — все |
 | POST | `/api/v2/projects` | оба | auth | Создать `{name, workspace?, repos?, plan?}` → 201 |
-| GET | `/api/v2/projects/:id` | оба | auth | Проект |
+| GET | `/api/v2/projects/:id` | оба | auth / owner·член·LEAD·ADMIN | Проект (read; VIEWER читает, не редактирует) |
 | PUT | `/api/v2/projects/:id` | оба | auth / owner·EDITOR·LEAD·ADMIN | Обновить поля (name, description, current_task, invariants, icon, color, repos, plan); смена `workspace` — owner/LEAD/ADMIN |
 | DELETE | `/api/v2/projects/:id` | оба | auth / owner·LEAD·ADMIN | Удалить → 204 |
 | GET | `/api/v2/projects/:id/stats` | backend | auth | Агрегаты токенов/сообщений |
@@ -301,6 +301,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > `slugify(name)` + суффикс под `workspacesRoot`; абсолютный внутри root нормализуется в относительный; вне root →
 > `403 WORKSPACE_OUTSIDE_ROOT_DENIED`; смена `workspace` — владелец/LEAD/ADMIN, иначе `403 FORBIDDEN`.
 > RBAC (backend, D5): `PUT` контент (`name`, `description`, `current_task`, `invariants`, `icon`, `color`, `repos`, `plan`) — owner/EDITOR/LEAD/ADMIN; `workspace` — owner/LEAD/ADMIN; `DELETE` — owner/LEAD/ADMIN; иначе `403 FORBIDDEN`.
+> **Видимость `GET /api/v2/projects` и `GET /api/v2/projects/:id` (AD-089).** В списке `ADMIN`/`LEAD` видят **все** проекты, остальные — только свои (`owner` или `members`). Чтение проекта по id — `owner`, **любой участник** (`members`, любая роль, включая `VIEWER`), а также `ADMIN`/`LEAD`; иначе `403 FORBIDDEN`. Это **read-уровень**: он **не расширяет** права на изменение — `manage` (`workspace`/`DELETE`/MCP-скоуп) и `edit` контента остаются owner/EDITOR/LEAD/ADMIN, `VIEWER` читает, но не редактирует (см. `canRead` vs `canManage`/`canEditContent`).
 > Tool-level RBAC (core-тулы чата, AD-075/D5): `project_log_write`/`project_invariants_write` пишут только при owner/EDITOR (иначе `project.write_forbidden`); `plan_write` пока без гейта (TODO) — `project.plan` защищён HTTP-RBAC.
 > В core ролевых проверок нет (любой аутентифицированный). Core/standalone:
 > абсолютный вне root — `deny` → `403`, `confirm` без `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
@@ -394,6 +395,43 @@ AD-069 Ф2a (`engine/context/instructions.ts`); `status` — `loaded`/`truncated
 | POST | `/api/v2/users` | Создать |
 | PUT | `/api/v2/users/:id` | Обновить |
 | DELETE | `/api/v2/users/:id` | Удалить |
+
+### 5.14.1 Идентичности текущего пользователя — `/api/v2/me/identities` (оба, AD-089)
+
+Внешние идентичности (напр. Telegram), привязанные к профилю (`ProfileData.identities[]`).
+RBAC: аутентифицированный пользователь — только **свои** (core — пользователь `local`,
+backend — id из AuthKit). Прямая линковка (`POST /identities` без кода) отсутствует —
+привязка идёт только через **claim-flow** (`POST /identities/claim`): подтверждение
+владения id одноразовым кодом, выданным ядром при приёме внешнего события от
+неизвестного отправителя.
+
+| Метод | Путь | RBAC (backend / core) | Назначение |
+|---|---|---|---|
+| GET | `/api/v2/me/identities` | auth / auth | `{identities: ExternalIdentity[]}` текущего пользователя (`provider`/`externalId`/`username?`/`displayName?`/`linkedAt`/`linkedBy?`) |
+| DELETE | `/api/v2/me/identities/:provider/:externalId` | auth / auth | Отвязать идентичность (только свою); `{identities}` или 404 `NOT_FOUND` |
+| POST | `/api/v2/me/identities/claim` | auth / auth | Подтвердить владение идентичностью по одноразовому коду `{code}` → 201 `{identity}` |
+
+**`POST /api/v2/me/identities/claim`** (claim-flow). Тело — `{code: string}`
+(человековводимый код `XXX-XXX`, регистр/дефисы/пробелы нормализуются ядром).
+`provider`/`externalId` **берутся из серверной записи claim**, а не из тела запроса —
+подставить чужой id нельзя. При успехе создаётся `ExternalIdentity` с `linkedAt` = now
+и `linkedBy` = id подтвердившего пользователя; код **одноразовый** (повторное
+использование → 404) и истекает по TTL (по умолчанию 10 минут). Код создаётся ядром
+автоматически при приёме события от неизвестного отправителя и доставляется шлюзом
+**только в приватный чат** (в группе/канале не показывается — иначе код увидят все
+участники; см. AD-089). Ошибки:
+
+| Код | Статус | Когда |
+|---|---|---|
+| `VALIDATION_ERROR` | 400 | пустой/отсутствующий код (или не-JSON тело) |
+| `NOT_FOUND` | 404 | код неизвестен, истёк или уже использован (одноразовость) |
+| `CONFLICT` | 409 | пара `provider`+`externalId` уже привязана к **другому** профилю |
+
+Приём события (`POST /api/v2/events`, §5.26) возвращает в ответе **опциональное** поле
+`identityHint?: { code: string, expiresAt: string }` — заполняется только когда отправитель
+не сопознан с пользователем инстанса (`resolveExternalIdentity` → `null`) и у события задан
+`identity.principalId`. Контракт `{event, decision, sessionId}` не изменяется.
+
 
 ### 5.15 Git — `/api/v2/git` (оба, AD-076)
 
@@ -606,7 +644,7 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 |---|---|---|---|---|
 | GET | `/api/v2/events` | оба | auth | Глобальный SSE-поток `BusEvent` (фоллбек WS) |
 | WS | `/ws/events` | оба | auth | Основной real-time-канал (см. §3) |
-| POST | `/api/v2/events` | оба | auth/ключ + rate limit | Приём нормализованного внешнего события. Обычный путь: `Authorization: Bearer <пользовательский ключ>` → тело `{source, type, payload?, identity?, dedupKey?, ts?}` (`eventIngestSchema`). Путь по API-ключу привязки: `Authorization: Bearer synth_evt_…` — **без пользовательских кред**, `source` опционален (`eventKeyIngestSchema`; source/чат/тред берутся из привязки; конфликт `source` → 400), событие форсированно маршрутизируется в привязку. Ответ в обоих случаях → `201 {event, decision, sessionId}` (`sessionId` — id сессии или `null` при `drop`; при decision-маршрутизации (`events.decisionRouting`) `decision` несёт `confidence` и диагностические `signals`, напр. `agent:<id>`/`model:<p/m>`/`latency:<ms>ms`); неверный/отозванный/истёкший ключ → 401 `UNAUTHORIZED`; невалидное тело → 400 `VALIDATION_ERROR`, сбой материализации → 500 `INTERNAL_ERROR` (решение всё равно пишется в журнал). Rate limit (managed — 120/мин) применяется к обоим путям до выбора способа аутентификации; per-key лимит (лимит ключа либо глобальный `events.keyRateLimitPerMinute`) → 429 `RATE_LIMITED`; мастер-выключатель `events.enabled: false` → 503 `UNAVAILABLE`. Использование ключа пишется в журнал (`keyId`/`principalId`) |
+| POST | `/api/v2/events` | оба | auth/ключ + rate limit | Приём нормализованного внешнего события. Обычный путь: `Authorization: Bearer <пользовательский ключ>` → тело `{source, type, payload?, identity?, dedupKey?, ts?}` (`eventIngestSchema`). Путь по API-ключу привязки: `Authorization: Bearer synth_evt_…` — **без пользовательских кред**, `source` опционален (`eventKeyIngestSchema`; source/чат/тред берутся из привязки; конфликт `source` → 400), событие форсированно маршрутизируется в привязку. Ответ в обоих случаях → `201 {event, decision, sessionId}` + **опциональное** `identityHint?: {code, expiresAt}` (AD-089 claim-flow: одноразовый код подтверждения владения идентичностью; заполняется только когда отправитель не сопознан — `resolveExternalIdentity` → `null` — и задан `identity.principalId`); `sessionId` — id сессии или `null` при `drop`; при decision-маршрутизации (`events.decisionRouting`) `decision` несёт `confidence` и диагностические `signals`, напр. `agent:<id>`/`model:<p/m>`/`latency:<ms>ms`); неверный/отозванный/истёкший ключ → 401 `UNAUTHORIZED`; невалидное тело → 400 `VALIDATION_ERROR`, сбой материализации → 500 `INTERNAL_ERROR` (решение всё равно пишется в журнал). Rate limit (managed — 120/мин) применяется к обоим путям до выбора способа аутентификации; per-key лимит (лимит ключа либо глобальный `events.keyRateLimitPerMinute`) → 429 `RATE_LIMITED`; мастер-выключатель `events.enabled: false` → 503 `UNAVAILABLE`. Использование ключа пишется в журнал (`keyId`/`principalId`) |
 | GET | `/api/v2/events/bindings` | оба | auth | Список привязок `{bindings}` |
 | POST | `/api/v2/events/bindings` | оба | LEAD/ADMIN | Upsert привязки по `source`+`chatKey`/`threadKey` (`eventBindingInputSchema`): `{source, chatKey?, threadKey?, sessionId?, mode: bound\|ephemeral\|queue, agentTemplate?, project?}`; совпавшая по ключу запись заменяется (id сохраняется) → 200, иначе 201 |
 | DELETE | `/api/v2/events/bindings/:id` | оба | LEAD/ADMIN | Удалить привязку → 204 (каскадно удаляются её API-ключи); нет записи → 404 `NOT_FOUND` |

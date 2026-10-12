@@ -16,14 +16,16 @@ import {
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
   RouteRuleStore, ProjectRuleProvider, DecisionRuleProvider,
+  IdentityClaimStore,
   type DecisionAgentCandidate,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes,
+  createExternalIdentityResolver,
   startEventJournalPruner,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
-import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
+import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT, parsePrincipalId } from '@itphx/synth-shared';
 import { createLocalAuth } from '../auth/local.js';
 import { ensureProfile, listProfiles, getLastProfile } from '../profiles.js';
 import { RemoteConnection } from '../remote/connection.js';
@@ -69,6 +71,7 @@ import { resolveProjectSkillSeed } from '../engine/skills/seed.js';
 import { createCommandRoutes } from './routes/commands.js';
 import { createSkillBundleRoutes } from './routes/skill-bundles.js';
 import { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './routes/skill-scope.js';
+import { createIdentityRoutes } from './routes/identities.js';
 import { CommandService } from '../engine/commands/service.js';
 import { SkillBundleStore } from '../storage/skill-bundle-store.js';
 import { createRemoteProxyMiddleware } from './proxy.js';
@@ -889,6 +892,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const eventJournal = new EventJournalStore({ dataDir });
   // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
   const routeRuleStore = new RouteRuleStore({ dataDir });
+  // AD-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
+  const identityClaimStore = new IdentityClaimStore({ dataDir });
   // AD-089 (Блок 3): runtime-настройки «События» (админка) поверх config.yaml.
   // Эффективные значения — единый источник для Router/funnel/pruner/роутов;
   // live-изменяются через `onEventsChange` без рестарта.
@@ -959,6 +964,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     const agent = agentRegistry.get(template);
     return agent && agent.enabled ? agent.id : null;
   };
+  // AD-089: резолвер внешнего отправителя (профиль `identities`, principalId) в
+  // пользователя инстанса; override `identityMap` — приоритетнее профиля.
+  // `getIdentityMap` читает актуальное значение (live-обновление runtime-настройки).
+  // Вынесен в локальную константу: переиспользуется в `deps` и в `deliver`
+  // (attribution: `displayName` человека приоритетнее имени из `payload.from`).
+  const resolveExternalIdentity = createExternalIdentityResolver({
+    profiles: profilesStore,
+    getIdentityMap: () => effectiveEventsSettings.identityMap,
+  });
   const requestSessionService = new RequestSessionService({
     sessionManager,
     eventRouter,
@@ -972,6 +986,24 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // AD-089: маппинг идентичности внешнего отправителя на владельца сессии
     // (`events.identityMap`) — напр. Telegram-чат → человек.
     identityMap: effectiveEvents.identityMap,
+    // AD-089: резолвинг внешнего отправителя → владелец сессии.
+    resolveExternalIdentity,
+    // AD-089 (claim-flow): неизвестному отправителю выдаём одноразовый код
+    // подтверждения владения идентичностью. `provider`/`externalId` берутся из
+    // `identity.principalId` (серверный разбор), стор — `IdentityClaimStore`.
+    issueIdentityClaim: async (event) => {
+      const principalId = event.identity?.principalId;
+      if (!principalId) return null;
+      const parsed = parsePrincipalId(principalId);
+      if (!parsed) return null;
+      const claim = await identityClaimStore.create({
+        provider: parsed.provider,
+        externalId: parsed.externalId,
+        ...(event.identity?.chatKey ? { chatKey: event.identity.chatKey } : {}),
+        principalId,
+      });
+      return { code: claim.code, expiresAt: claim.expiresAt };
+    },
     // AD-089: владелец сессий, материализуемых внешним событием (ephemeral/bind) —
     // `local` (паритет с `POST /api/v2/sessions`, `resolveUserId` core). Без этого
     // такие сессии не имели владельца и выпадали из `listSessions({ userId })`.
@@ -989,6 +1021,16 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       // AD-051: cron-сообщение — от системного пользователя `Scheduler`, текст
       // задания — чистый контент сообщения (описание Scheduler — в system-блоке).
       let message = eventToMessage(event);
+      // AD-089: для слинкованного человека `displayName` из резолвера приоритетнее
+      // имени из `payload.from` (tg-имя). Cron (`Scheduler`) не переопределяем.
+      if (event.source !== 'cron' && event.identity?.principalId) {
+        try {
+          const linked = await resolveExternalIdentity(event.identity);
+          if (linked?.displayName) message.author = linked.displayName;
+        } catch {
+          // attribution не критична — оставляем автора из `eventToMessage`
+        }
+      }
       if (mode === 'run') {
         // Запускает процессор (постановка + старт) — как обычный user-промпт.
         // AD-036: обфускация user-сообщения ДО сохранения в историю (паритет с
@@ -1335,6 +1377,13 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   }));
   app.route('/api/v2/settings', createSkillSettingsRoutes(auth, { settingsStore }, {
     onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
+  }));
+
+  // AD-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).
+  // Standalone — пользователь `local`; линковка только через claim-flow
+  // (`POST /api/v2/me/identities/claim`).
+  app.route('/api/v2/me', createIdentityRoutes(auth, profilesStore, {
+    claimStore: identityClaimStore,
   }));
 
   // AD-069 §9.3: read-only прозрачность проектных инструкций (session/project scope).

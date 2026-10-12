@@ -161,6 +161,10 @@
 - **Per-session `decisionFirst`** (`components/panels/SessionSettingsTab.tsx`) — тумблер уровня decision-модели в микро-каскаде, рядом с микро/роутингом; пишется только при явном opt-out (`decisionFirst: false`), отсутствие ключа = включено (наследует глобальную настройку).
 - **События.** Тумблер `decisionRouting` — в админ-разделе «Параметры событий» (`components/settings/EventsSettings.tsx`, AD-089 × AD-084; default off, opt-in: decision-классификация внешних событий при промахе правил, требует включённого decision-слоя).
 
+## Идентичности профиля (AD-089)
+
+- **Секция «Идентичности»** в `components/settings/ProfileSettings.tsx` (Settings UI Kit, `SettingsSection`): список внешних аккаунтов профиля (`provider:externalId`, `displayName`/`username`, дата `linkedAt`), пустое состояние, ошибки; отвязка — кнопка с `confirm()` (`lib/confirm.ts`), после успеха строка удаляется локально. **Привязка (claim-flow, AD-089):** поле одноразового кода + кнопка «Связать» → `synthApi.claimIdentity(code)` (`POST /me/identities/claim`), успех обновляет список, ошибки маппятся по статусу/коду (`404` → «код недействителен», `409` → «уже привязана», `400` → «укажите код»; повторный ввод сбрасывает сообщение), кнопка недоступна при пустом коде. Методы — `synthApi.getMyIdentities()` / `deleteMyIdentity(provider, externalId)` / `claimIdentity(code)` (`GET/DELETE/POST /api/v2/me/identities*`; RBAC — текущий пользователь). i18n-ключи `auth.identities*`/`auth.identityUnlink*`/`auth.identityLinkedAt`/`auth.identitiesLoadError`/`auth.identityUnlinkError`/`auth.identityClaim*` (ru/en).
+
 ## Мобильный / PWA
 
 - Полные конвенции (зоны ≤768 / 769–1199 / ≥1200, дроверы, touch-first, PWA-шелл) — в корневом `AGENTS.md` и [AD-044](../../docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md); здесь не дублируются.

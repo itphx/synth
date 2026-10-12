@@ -2,7 +2,11 @@
 
 > **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind — первый срез AD-052; service-key/OpenAPI/SDK/webhooks и AD-086 — нет)
 > **Дата:** 2026-10-08
-> **Обновлено:** 2026-10-12 — добавлен раздел «Auto-bind» (`events.autoBind`/`events.autoBindAgentTemplate`,
+> **Обновлено:** 2026-10-12 — зафиксирована граница с add-on-слоем: шлюз (Telegram) — тонкий транспорт
+> (normalize→events, events→send), состояние инстанс-локальное; топология/HA/мультитенантность — свойство
+> слоя add-on ([AD-086](./ad-086-extensibility-plugins-editions.md), раздел «Первый частный случай — Telegram gateway»);
+> для Telegram транспорт приёма — long-polling (webhook отложен), ограничение «один потребитель на бота» (`409 Conflict`).
+> Ранее тем же днём: добавлен раздел «Auto-bind» (`events.autoBind`/`events.autoBindAgentTemplate`,
 > новое решение Router `{ kind: 'bind' }` и цель правила `{ mode: 'bind' }`); статус и разделы
 > приведены к реализованному коду (ядро Event/Binding/Router, правила маршрутизации,
 > decision-маршрутизация (AD-084), API-ключи привязок, retention журнала, runtime-настройки «События»).
@@ -207,14 +211,31 @@ decision-маршрутизация (шаг 4) сохраняют своё по�
   `unknownAgentTemplate: 'drop'` не создаёт сессию (fail-safe, `agent_not_found` в журнале).
 
 **Владелец и доставка.** Сессии, материализуемые внешним событием (`ephemeral`/`bind`),
-получают владельца по приоритету: **`events.identityMap`** (совпадение `identity.chatKey`,
-затем `identity.principalId` — явный маппинг внешнего отправителя на пользователя инстанса,
-напр. Telegram-чат → человек) → per-event владелец (аутентифицированный пользователь запроса
-либо создатель API-ключа привязки `credential.ownerId`) → `identity.principalId` (напр.
-владелец расписания) → `resolveOwnerId` (standalone — `local`, паритет с `POST /api/v2/sessions`).
-Так сессии не выпадают из `listSessions({ userId })` и UI-списка — человек видит свои
-Telegram-сессии, а не машинный аккаунт шлюза. Карта `events.identityMap` задаётся в config
-и переопределяется runtime (`GET/PUT/DELETE /api/v2/settings/events`).
+получают владельца по приоритету: **`deps.resolveExternalIdentity`**
+(`createExternalIdentityResolver`: резолвинг внешнего отправителя `identity.principalId` →
+пользователь инстанса; сначала override `events.identityMap` по `identity.principalId`, затем
+`identity.chatKey`, иначе — привязка в профиле `ProfileData.identities[]` по паре
+`provider:externalId`; чат-fallback внутри резолвера) → **`events.identityMap`**
+(фоллбек-совместимость: при подключённом резолвере карта уже проверена им первой) → per-event
+владелец (аутентифицированный пользователь запроса либо создатель API-ключа привязки
+`credential.ownerId`) → `resolveOwnerId`
+(standalone — `local`, паритет с `POST /api/v2/sessions`). Разделение ролей: **чат (`chatKey`) —
+routing** (привязки/правила/auto-bind), **человек (`principalId`) — ownership и attribution**;
+`identity.principalId` — внешний идентификатор (`tg:<id>`), **не** id пользователя инстанса
+(как владелец не подставляется). В группе `chatKey` = группа, поэтому владельцем становится
+автор, а не чат. Так сессии не выпадают из `listSessions({ userId })` и UI-списка — человек видит
+свои Telegram-сессии, а не машинный аккаунт шлюза. Карта `events.identityMap` задаётся в config
+и переопределяется runtime (`GET/PUT/DELETE /api/v2/settings/events`); это **ручной override**
+поверх основного источника — привязок в профиле.
+
+**Attribution (автор сообщения).** `eventToMessage` для **всех** внешних источников кладёт в
+`metadata` `principal_id`/`chat_key`/`thread_key` (если заданы), а `author` выводит из
+`payload.from` без обращения к профилю: `from.username` → `@username`; иначе `firstName lastName`;
+иначе `identity.principalId` (напр. `tg:123`). Cron-ветка не меняется (`author='Scheduler'`).
+Для источников без `from`/`principalId` `author` не задаётся (прежнее поведение). Автор доходит
+до LLM тем же путём, что и `Scheduler`: `ChatOrchestrator._sessionMessagesToLlm` рендерит
+«чужое» user-сообщение как `{author}: <content>` (`withAttribution`, `orchestrator.ts`), поэтому
+разные люди в одной сессии различимы и для модели, и в UI (сообщение видно в сессии).
 
 **Доставка событий подписчикам.** Funnel уведомляет хаб о материализованной сессии
 (`RequestSessionService` → `deps.onSessionMaterialized`) **до** доставки в неё события;
@@ -235,6 +256,26 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 внешнего события (напр. Telegram-шлюз) не могла ответить, пока модель не проставят вручную
 (`PATCH /api/v2/sessions/:id`), — оркестратор не резолвил провайдера при пустом
 `session.settings.provider`.
+
+### Командные сессии и видимость (список/доступ)
+
+**Одна сессия на чат/тред.** Привязка (`EventBinding`) и auto-bind закрепляют внешний
+адрес (`chatKey`/`threadKey`) за **одной** постоянной сессией — все сообщения чата/треда
+попадают в неё (`routing`), поэтому групповая переписка ведётся в общей сессии.
+**Владелец сессии — автор привязки** (человек, `principalId`), а не чат (см. «Владелец и
+доставка» выше); владелец определяет ownership/UI-список, чат — только маршрутизацию.
+
+**Видимость — участникам проекта.** Сессия, привязанная к проекту (`session.projectId`),
+видна **владельцу проекта и любому участнику** (`project.members`, любая роль) — командная
+работа поверх одной сессии. Личные сессии (без проекта) видны только владельцу; сессии без
+владельца (legacy) видно всем (паритет с `canAccessSession`). `ADMIN`/`LEAD` — сквозной
+обзор в списках (`GET /api/v2/sessions`, `GET /api/v2/projects`). Доступ по id
+(`GET /sessions/:id/status|prompt|stats`, `POST /sessions/:id/prompt` и т.п.) — владелец
+**или** участник проекта сессии, а также `ADMIN`/`LEAD`; `VIEWER` проекта читает сессию, но
+не получает прав редактирования (`manage`/`edit` проекта не расширяются). Единый хелпер —
+`server/session-visibility.ts` (`isSessionVisible`), сканы — `FileStore.listForUserScope`;
+полные правила по ролям/типам сессий и проектов — в [docs/API_V2.md](../../docs/API_V2.md)
+(§5.5 Sessions, §5.8 Projects).
 
 ### Создание сессии — тоже событие
 
@@ -264,8 +305,15 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 | MCP-клиент | [AD-071](./ad-071-mcp-servers-prompt.md) | Synth дёргает внешние MCP-инструменты (действие) | приём входящих событий |
 | Hooks / Plugin SDK | [AD-030](./ad-030-hooks-agent-events.md) | hook-шина и точки расширения | Router как потребитель шины |
 | Scheduler / пайплайны | [AD-051](./ad-051-scheduler-pipelines.md) | cron/timer-события — источник `Event` | отдельный путь запуска сессий |
-| Gateway / add-on шаблон | [AD-086](./ad-086-extensibility-plugins-editions.md) | как оформляется внешний сервис (репозиторий, образы, webhook) | конкретные источники событий |
+| Gateway / add-on шаблон | [AD-086](./ad-086-extensibility-plugins-editions.md) | как оформляется внешний сервис (репозиторий, образы, транспорт приёма) | конкретные источники событий |
 | HTTP-прокси / egress | [AD-088](./ad-088-http-proxy.md) | исходящие соединения внешних коннекторов | маршрутизацию |
+
+**Шлюз остаётся тонким транспортом.** Add-on (напр. Telegram-шлюз) только нормализует вход
+(`normalize` → `POST /api/v2/events`) и доставляет выход (`GET /api/v2/events` → `sendMessage`);
+он ничего не решает про маршрутизацию/сессии — это ядро ([AD-089](./ad-089-external-events-automation.md)).
+Состояние шлюза — **инстанс-локальное** (`offset`/дедуп/привязки чатов на PVC), а **HA (leader election) и
+мультитенантность — свойство слоя add-on** ([AD-086](./ad-086-extensibility-plugins-editions.md)), а не
+контракта событий: ядру не важно, один бот или несколько тенантов за шлюзом.
 
 ### Роль `synth-media`
 
@@ -325,6 +373,14 @@ managed backend — `synth.llm` того же конфига. Явно зада�
   (`deps.bindingStore`); цель правила — `EventRouteTarget { mode: 'bind' }` (`decisionFromTarget`).
 - **Резолвинг `agentTemplate`:** `RequestSessionService.resolveAgentTemplate` через `AgentRegistry`
   (`agent.enabled ? agent.id : null`); неизвестный шаблон — `unknownAgentTemplate` (`drop`/`default-agent`).
+- **Идентичности профиля (AD-089, этап 3):** `ExternalIdentity` (`provider`/`externalId`/`username?`/
+  `displayName?`/`linkedAt`/`linkedBy?`) в `ProfileData.identities[]` (хранилище — `FileProfileStore`,
+  snake_case: `external_id`/`display_name`/`linked_at`/`linked_by`; legacy без поля → `[]`); методы
+  `findProfileByExternalId`/`linkIdentity`/`unlinkIdentity` (инвариант уникальности пары
+  `provider:externalId`, конфликт → `null`); хелперы `buildPrincipalId`/`parsePrincipalId` (shared).
+  Резолвер `createExternalIdentityResolver` (`engine/events/external-identity.ts`) в `RequestSessionService`
+  (`deps.resolveExternalIdentity`): override `identityMap` → профиль. API `/api/v2/me/identities` (`GET`/`DELETE`),
+  UI — секция «Идентичности» в `ProfileSettings`. Claim-flow — следующий этап.
 - **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),
   `RouteRuleStore` (`{dataDir}/events/routes.json`), `EventApiKeyStore` (`{dataDir}/events/api-keys.json`, AD-052-первый срез;
   `schemaVersion`, sha256-хеш секрета) (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.
@@ -388,8 +444,37 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 ## Открытые вопросы
 
 - **Транспорт приёма:** webhook vs long-polling vs исходящий pull — что дефолт для каждого источника?
-- **Модель идентичности:** собственная таблица маппинга внешних id ↔ профили или внешний IdP
-  ([AD-043](./ad-043-unified-identity-login.md))?
+  **Для Telegram — закрыто на уровне реализованного шлюза:** дефолт — **long-polling** (`getUpdates`);
+  **webhook** — отложенная альтернатива (stateless HTTP за ingress). Принципиальное ограничение Telegram:
+  `getUpdates` допускает **одного** потребителя на бота — второй поллер получает **`409 Conflict`**, поэтому
+  шлюз сейчас singleton (`replicaCount: 1` + `strategy: Recreate`), а HA — только через leader election
+  (K8s Lease, hot standby). Топология, HA и мультитенантность шлюза — [AD-086](./ad-086-extensibility-plugins-editions.md),
+  раздел «Первый частный случай — Telegram gateway». **Для остальных источников вопрос открыт.**
+- **Модель идентичности (закрыта — этап 4):** внешние идентичности хранятся в
+  **профиле** (`ProfileData.identities[]`; ключ — `provider` + `externalId` — числовой id
+  источника, `username`/`displayName` — display-кэш, не ключ; `linkedAt`/`linkedBy` — аудит
+  привязки). Резолвинг внешнего отправителя (`identity.principalId` → пользователь инстанса) —
+  через `createExternalIdentityResolver` (профиль по паре `provider:externalId`); override — карта
+  `events.identityMap` (`principalId` предпочтительно, `chat:…` — фоллбек). API:
+  `GET/DELETE /api/v2/me/identities` (свои) + **`POST /api/v2/me/identities/claim`** — привязка
+  только через **claim-flow** (подтверждение владения id); прямой привязки произвольного чужого
+  id нет. **Claim-flow:** при приёме события от неизвестного отправителя (`resolveExternalIdentity`
+  → `null`, задан `identity.principalId`) ядро выпускает **одноразовый** код
+  (`IdentityClaimStore`, `{dataDir}/events/identity-claims.json`) со сроком жизни по умолчанию
+  **10 минут**, алфавит base32 **без неоднозначных символов** (`0/O/1/I` исключены; 32 символа,
+  6 знаков ≈ 2^30 — перебор нецелесообразен), формат `XXX-XXX` (регистронезависимый ввод).
+  `provider`/`externalId` кода берутся из **серверной** записи (тело `POST /claim` их не задаёт —
+  подстановка чужого id исключена); `consume` помечает `consumedAt` (повтор → 404) и валидирует
+  пару. Код возвращается ingest'ом в опциональном поле `identityHint` ответа `POST /events`
+  и доставляется отправителю шлюзом **только в приватном чате** (решение: в приватном чате
+  `chatKey` соответствует самому человеку, код скрыт от третьих лиц; в группе/канале код
+  увидят все участники и могли бы «угнать» привязку — поэтому в публичном чате код не
+  показывается и истекает по TTL). На инстансе линковка включается на стороне шлюза:
+  `GATEWAY_UNKNOWN_ACTION=hint` (дефолт `register` коды не показывает). Остаточный
+  теоретический вектор — перехват кода в приватном чате (компрометация аккаунта/чата
+  отправителя); снижается коротким TTL и одноразовостью. `IdentityClaimStore` —
+  **инстанс-локальный** (как API-ключи привязок): не переносится publish/fork
+  (AD-042/AD-081).
 - **Мультитенантность:** один Router на инстанс vs на проект/организацию; изоляция событий.
 - **Гранулярность `bound`:** чат / тред / топик / ветка диалога — и как мигрирует при переносе сессии
   между проектами ([AD-040](./ad-040-sessions-without-project.md))?

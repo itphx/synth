@@ -85,6 +85,21 @@ export interface SessionRoutesOptions {
    * «Агенты»). По умолчанию — `DEFAULT_AGENT_ID` ('assistant' при первом развёртывании).
    */
   resolveDefaultAgent?: () => string | Promise<string>;
+  /**
+   * AD-089: сквозной обзор (ADMIN/LEAD) — `GET /` возвращает все сессии.
+   * `undefined`/`false` — прежнее поведение (только свои).
+   */
+  resolveElevated?: (c: Context) => boolean | Promise<boolean>;
+  /**
+   * AD-089: проекты, участником которых является пользователь (owner или
+   * `members`) — для видимости проектных сессий в списке. Не задан — только свои.
+   */
+  resolveMemberProjectIds?: (c: Context, userId: string) => Promise<string[]> | string[];
+  /**
+   * AD-089: доп. проверка доступа к сессии по id (например, участник проекта).
+   * Вызывается, когда `opts.canAccess` не дал положительный ответ.
+   */
+  resolveCanAccessExtra?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
 }
 
 const DEFAULT_MESSAGES: SessionRouteMessages = {
@@ -167,11 +182,18 @@ export function createSessionRoutes(
    * AD-071/безопасность: доступ к локальной сессии. Standalone — однопользовательский
    * режим (владелец `local`); легаси-сессии без владельца считаются доступными,
    * чтобы не ломать существующие данные. Backend переопределяет через opts.canAccess.
+   * AD-089: `opts.resolveCanAccessExtra` (напр. участник проекта / LEAD) даёт доступ
+   * по id, если базовый `canAccess` отказал.
    */
   const canAccessSession = async (session: Session, c: Context, userId: string): Promise<boolean> => {
-    if (opts.canAccess) return opts.canAccess(session, c, userId);
-    const owner = session.ownerId ?? session.userId;
-    return !owner || owner === LOCAL_USER_ID;
+    if (opts.canAccess) {
+      if (await opts.canAccess(session, c, userId)) return true;
+    } else {
+      const owner = session.ownerId ?? session.userId;
+      if (!owner || owner === LOCAL_USER_ID) return true;
+    }
+    if (opts.resolveCanAccessExtra) return opts.resolveCanAccessExtra(session, c, userId);
+    return false;
   };
 
   /**
@@ -184,7 +206,17 @@ export function createSessionRoutes(
   app.get('/', auth.requireAuth, async (c) => {
     const projectId = c.req.query('project_id') || undefined;
     const userId = await resolveUserId(c);
-    const sessions = await sessionManager.listSessions({ userId });
+    // AD-089: видимость списка. elevated (ADMIN/LEAD) — все сессии; иначе свои
+    // личные + сессии проектов-участий (командная видимость).
+    const elevated = (await opts.resolveElevated?.(c)) ?? false;
+    const memberProjectIds = elevated
+      ? []
+      : (await opts.resolveMemberProjectIds?.(c, userId)) ?? [];
+    const sessions = elevated
+      ? await sessionManager.listSessions({})
+      : memberProjectIds.length > 0
+        ? await sessionManager.listSessions({ userId, projectIds: memberProjectIds })
+        : await sessionManager.listSessions({ userId });
 
     if (!hasRemoteGetter) {
       return c.json(filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry })));

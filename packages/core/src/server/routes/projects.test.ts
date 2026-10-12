@@ -9,6 +9,7 @@ import type { ProjectRoutesOptions } from './projects.js';
 import { ProjectStore } from '../../storage/project-store.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
+import { ProjectRole } from '@itphx/synth-shared';
 
 function createMockAuth(): AuthKit {
   return {
@@ -566,5 +567,88 @@ describe('Project API Routes (icon/color)', () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
     expect((await store.load(project.id))!.color).toBe('a11');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AD-089: видимость проектов (elevated) и read-уровень доступа по id
+// ---------------------------------------------------------------------------
+
+describe('Project API Routes (visibility, AD-089)', () => {
+  let tmpDir: string;
+  let store: ProjectStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-projects-vis-'));
+    store = new ProjectStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function header(user: string): Record<string, string> {
+    return { Authorization: `Bearer ${user}`, 'Content-Type': 'application/json' };
+  }
+
+  function makeApp(opts: ProjectRoutesOptions): Hono {
+    const app = new Hono();
+    app.route('/api/v2/projects', createProjectRoutes(createMockAuth(), store, undefined, opts));
+    return app;
+  }
+
+  it('GET / elevated → все проекты, иначе только проекты пользователя', async () => {
+    const ownerProject = store.create('OwnerP', 'alice');
+    const otherProject = store.create('OtherP', 'bob');
+    await store.save(ownerProject);
+    await store.save(otherProject);
+
+    const userId = (c: Context) => /^Bearer (.+)$/.exec(c.req.header('Authorization') ?? '')?.[1] ?? '';
+    const plain = makeApp({
+      getCurrentUserId: userId,
+      resolveElevated: (c) => c.req.header('X-Elevated') === '1',
+    });
+
+    const asAlice = await plain.request('/api/v2/projects', { headers: header('alice') });
+    expect(((await asAlice.json()) as unknown[]).map((p: any) => p.name)).toEqual(['OwnerP']);
+
+    const asLead = await plain.request('/api/v2/projects', {
+      headers: { ...header('lead'), 'X-Elevated': '1' },
+    });
+    expect((await asLead.json() as unknown[]).length).toBe(2);
+  });
+
+  it('GET /:id — участник (VIEWER) читает проект, посторонний → 403', async () => {
+    const project = store.create('P', 'owner');
+    project.members['member'] = ProjectRole.VIEWER;
+    await store.save(project);
+
+    // canRead — как в backend: owner / любой участник. Мутации не расширяем.
+    const app = makeApp({
+      getCurrentUserId: (c) => /^Bearer (.+)$/.exec(c.req.header('Authorization') ?? '')?.[1] ?? '',
+      canRead: (_c, p, userId) => p.ownerId === userId || userId in (p.members ?? {}),
+      canManage: (_c, p, userId) => p.ownerId === userId,
+      canEditContent: (_c, p, userId) => p.ownerId === userId,
+    });
+
+    const asMember = await app.request(`/api/v2/projects/${project.id}`, { headers: header('member') });
+    expect(asMember.status).toBe(200);
+
+    const asOutsider = await app.request(`/api/v2/projects/${project.id}`, { headers: header('outsider') });
+    expect(asOutsider.status).toBe(403);
+
+    // VIEWER читает, но не редактирует (read-предикат не расширяет manage/edit).
+    const editByViewer = await app.request(`/api/v2/projects/${project.id}`, {
+      method: 'PUT', headers: header('member'), body: JSON.stringify({ name: 'X' }),
+    });
+    expect(editByViewer.status).toBe(403);
+  });
+
+  it('GET /:id без canRead (standalone) — доступ разрешён', async () => {
+    const project = store.create('P', 'owner');
+    await store.save(project);
+    const app = makeApp({});
+    const res = await app.request(`/api/v2/projects/${project.id}`);
+    expect(res.status).toBe(200);
   });
 });

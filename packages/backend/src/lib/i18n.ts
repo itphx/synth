@@ -17,6 +17,8 @@ const en: Dictionary = {
   'errors.notFound.favicon': 'Favicon not found',
   'errors.notFound.route': 'Not found: {method} {path}',
   'errors.notFound.agentOverride': 'Override not found',
+  'errors.notFound.identity': 'Linked identity not found',
+  'errors.notFound.identityClaim': 'Confirmation code is invalid (unknown, expired, or already used)',
 
   // Validation errors
   'errors.validation.contentRequired': 'content is required',
@@ -29,6 +31,7 @@ const en: Dictionary = {
   'errors.validation.usernameRequired': 'username is required',
   'errors.validation.groupsRequired': 'groups is required',
   'errors.validation.expectedFilesArray': 'expected { files: string[] }',
+  'errors.validation.claimCodeRequired': 'Confirmation code is required',
 
   // AD-089: приём внешних событий
   'errors.validation.invalidEvent': 'Invalid event payload',
@@ -47,6 +50,7 @@ const en: Dictionary = {
   'errors.conflict.usernameTaken': 'Username is taken',
   'errors.conflict.emailTaken': 'Email is taken',
   'errors.conflict.eventKeyLabel': 'Event API key label is already used',
+  'errors.conflict.identityClaim': 'This identity is already linked to another profile',
 
   // Other errors
   'errors.providerDisabled': 'Provider is disabled',
@@ -91,6 +95,8 @@ const ru: Dictionary = {
   'errors.notFound.favicon': 'Favicon не найден',
   'errors.notFound.route': 'Не найдено: {method} {path}',
   'errors.notFound.agentOverride': 'Override не найден',
+  'errors.notFound.identity': 'Привязанная идентичность не найдена',
+  'errors.notFound.identityClaim': 'Код подтверждения недействителен (неизвестен, истёк или использован)',
 
   // Validation errors
   'errors.validation.contentRequired': 'content обязателен',
@@ -103,6 +109,7 @@ const ru: Dictionary = {
   'errors.validation.usernameRequired': 'username обязателен',
   'errors.validation.groupsRequired': 'groups обязательны',
   'errors.validation.expectedFilesArray': 'expected { files: string[] }',
+  'errors.validation.claimCodeRequired': 'Укажите код подтверждения',
 
   // AD-089: приём внешних событий
   'errors.validation.invalidEvent': 'Некорректное тело события',
@@ -121,6 +128,7 @@ const ru: Dictionary = {
   'errors.conflict.usernameTaken': 'Имя занято',
   'errors.conflict.emailTaken': 'Email занят',
   'errors.conflict.eventKeyLabel': 'Метка API-ключа события уже используется',
+  'errors.conflict.identityClaim': 'Эта идентичность уже привязана к другому профилю',
 
   // Other errors
   'errors.providerDisabled': 'Провайдер отключён',

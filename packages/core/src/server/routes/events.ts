@@ -284,13 +284,17 @@ export function createEventRoutes(
         : requestUserId !== 'unknown'
           ? requestUserId
           : undefined;
-      const { event, decision, session } = await deps.ingress.ingest(input, {
+      const { event, decision, session, identityHint } = await deps.ingress.ingest(input, {
         binding: forcedBinding,
         ...(ownerId ? { ownerId } : {}),
         ...(audit ? { audit } : {}),
       });
-      // Наружу — без внутренних полей сессии, только id.
-      return c.json({ event, decision, sessionId: session?.id ?? null }, 201);
+      // Наружу — без внутренних полей сессии, только id. AD-089 (claim-flow):
+      // `identityHint` (одноразовый код) — только когда отправитель не сопознан.
+      return c.json(
+        { event, decision, sessionId: session?.id ?? null, ...(identityHint ? { identityHint } : {}) },
+        201,
+      );
     } catch (err) {
       return c.json({
         error: { code: 'INTERNAL_ERROR', message: err instanceof Error ? err.message : String(err) },

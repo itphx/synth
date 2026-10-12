@@ -72,6 +72,15 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (`images?`/`videos?`, задел AD-085) (`types/decision.ts`); Zod
   `decisionQuestionSchema`/`decisionAnswerSchema`/`decisionRequestSchema`/`decisionResponseSchema`;
   per-session флаг `SessionSettings.decisionFirst` (AD-035).
+- AD-089: внешняя идентичность профиля — тип `ExternalIdentity` (`provider` (префикс principalId,
+  напр. `tg`) / `externalId` (числовой id источника строкой) / `username?`/`displayName?` —
+  display-кэш, НЕ ключ / `linkedAt` ISO / `linkedBy?`); `ProfileData.identities?: ExternalIdentity[]`
+  (опционально — legacy-профили без поля трактуются как `[]`). Хелперы там же:
+  `buildPrincipalId(provider, externalId)` → `` `${provider}:${externalId}` `` и
+  `parsePrincipalId(principalId)` → `{provider, externalId} | null` (деление по **первому** `:`;
+  без `:`/пустые части → `null`). Интерфейс `ProfileStore` (`interfaces`) расширен
+  `findProfileByExternalId(provider, externalId)`, `linkIdentity(userId, identity)` (идемпотентно;
+  конфликт с другим профилем → `null`) и `unlinkIdentity(userId, provider, externalId)`.
 - Канонические ключи иконок/цветов проекта и сессии: `PROJECT_ICON_KEYS` (37) / `PROJECT_COLOR_KEYS` (16, палитра темы `a1..a16`) + типы `ProjectIconKey`/`ProjectColorKey` (`types`) (включая дефолтные `folder`/`chat`/`cpu`); схемы `projectIconKeySchema`/`projectColorKeySchema` и хелперы `isProjectIconKey`/`isProjectColorKey` (strict) и `normalizeIconKey`/`normalizeColorKey` (только канонические ключи: невалидные значения, в т.ч. старые цветовые алиасы, → `undefined`) (`schemas`). `null`/`undefined` — сброс значения.
 
 ## i18n-контракт
