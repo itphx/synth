@@ -15,7 +15,8 @@ import { parseTtl } from '../../sessions/ephemeral.js';
 import type { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { HookBus } from '../hooks/hook-bus.js';
 import type { EventRouter } from './event-router.js';
-import type { EventDelivery } from './types.js';
+import type { EventDelivery, EventDeliveryContext } from './types.js';
+import { resolveEffectiveRoles } from './identity-roles.js';
 
 /** AD-089: runtime-контекст явного создания сессии (не поля события). */
 export interface RequestSessionOptions {
@@ -99,7 +100,7 @@ export interface RequestSessionServiceDeps {
    */
   resolveExternalIdentity?: (
     identity: EventIdentity,
-  ) => { userId: string; displayName?: string } | null | Promise<{ userId: string; displayName?: string } | null>;
+  ) => { userId: string; displayName?: string; roles?: string[] } | null | Promise<{ userId: string; displayName?: string; roles?: string[] } | null>;
   /**
    * AD-089: маппинг идентичности внешнего отправителя (`identity.principalId` или
    * `identity.chatKey`) на владельца синт-сессии (id пользователя
@@ -263,7 +264,7 @@ export class RequestSessionService {
   private _resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
   private _resolveExternalIdentity?: (
     identity: EventIdentity,
-  ) => { userId: string; displayName?: string } | null | Promise<{ userId: string; displayName?: string } | null>;
+  ) => { userId: string; displayName?: string; roles?: string[] } | null | Promise<{ userId: string; displayName?: string; roles?: string[] } | null>;
   private _identityMap?: Record<string, string>;
   private _onSessionMaterialized?: (session: Session) => void | Promise<void>;
   private _issueIdentityClaim?: (event: SynthEvent) => Promise<IdentityClaimHint | null>;
@@ -389,10 +390,16 @@ export class RequestSessionService {
 
     const decision = await this._eventRouter.decide(event, opts?.binding);
 
+    // AD-089 (этап 5): эффективные роли отправителя события — база из профиля
+    // (резолвер внешней идентичности), сужение `identity.roles`. Владелец
+    // (`ownerId`) при этом может определиться чатом/per-event — роли считаем
+    // всегда от **самого отправителя** (`principalId`), а не от владельца.
+    const deliveryContext = await this._resolveDeliveryContext(event);
+
     let session: Session | null = null;
     let error: string | undefined;
     try {
-      session = await this._materialize(decision, event, opts?.ownerId);
+      session = await this._materialize(decision, event, opts?.ownerId, deliveryContext);
     } catch (err) {
       error = String(err);
       console.warn(`[RequestSessionService] материализация события не удалась: ${error}`);
@@ -438,11 +445,12 @@ export class RequestSessionService {
     decision: RouteDecision,
     event: SynthEvent,
     ownerId?: string,
+    context?: EventDeliveryContext,
   ): Promise<Session | null> {
     if (decision.kind === 'bound') {
       const session = await this._sessionManager.getSession(decision.sessionId);
       if (!session) return null;
-      await this._deliver(session.id, event, 'run');
+      await this._deliver(session.id, event, 'run', context);
       return session;
     }
 
@@ -458,7 +466,7 @@ export class RequestSessionService {
       });
       // AD-089: подписываем клиентов владельца на новую сессию до доставки.
       await this._onSessionMaterialized?.(session);
-      await this._deliver(session.id, event, 'run');
+      await this._deliver(session.id, event, 'run', context);
       return session;
     }
 
@@ -475,7 +483,7 @@ export class RequestSessionService {
       if (existing?.sessionId) {
         const existingSession = await this._sessionManager.getSession(existing.sessionId);
         if (existingSession) {
-          await this._deliver(existingSession.id, event, 'run');
+          await this._deliver(existingSession.id, event, 'run', context);
           return existingSession;
         }
       }
@@ -499,19 +507,46 @@ export class RequestSessionService {
       });
       // AD-089: подписываем клиентов владельца на новую сессию до доставки.
       await this._onSessionMaterialized?.(session);
-      await this._deliver(session.id, event, 'run');
+      await this._deliver(session.id, event, 'run', context);
       return session;
     }
 
     if (decision.kind === 'queue') {
       const session = await this._sessionManager.getSession(decision.owner);
       if (!session) return null;
-      await this._deliver(session.id, event, 'defer');
+      await this._deliver(session.id, event, 'defer', context);
       return session;
     }
 
     // drop
     return null;
+  }
+
+  /**
+   * AD-089 (этап 5): эффективные роли внешнего отправителя события.
+   *
+   * База — роли профиля из `deps.resolveExternalIdentity` (при отсутствии
+   * резолвера профиль неизвестен → `resolveEffectiveRoles(null, …)` =
+   * fail-closed `[]`/`linked:false`). `identity.roles` — **потолок**: только
+   * сужают базу, не повышают (см. `identity-roles.ts`). Возвращает контекст для
+   * `deliver`; ошибка резолвера не роняет маршрутизацию — деградируем до
+   * «нет ролей» (транспортное участие сохраняется).
+   */
+  private async _resolveDeliveryContext(event: SynthEvent): Promise<EventDeliveryContext> {
+    // `profileRoles === null` — отправитель не сопознан (резолвера нет либо он
+    // вернул `null`); `[]` — сопознан, но роли профиля неизвестны/пусты
+    // (напр. override `identityMap`) — fail-closed по правам, `linked: true`.
+    let profileRoles: string[] | null = null;
+    if (this._resolveExternalIdentity) {
+      try {
+        const resolved = await this._resolveExternalIdentity(event.identity ?? {});
+        if (resolved) profileRoles = resolved.roles ?? [];
+      } catch {
+        // Роли не критичны для маршрутизации: fail-closed — прав нет.
+        profileRoles = null;
+      }
+    }
+    return resolveEffectiveRoles(profileRoles, event.identity?.roles);
   }
 
   /**

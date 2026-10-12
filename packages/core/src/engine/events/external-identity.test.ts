@@ -68,7 +68,25 @@ describe('createExternalIdentityResolver (AD-089)', () => {
     });
 
     const res = await resolver()({ principalId: 'tg:450316139' });
-    expect(res).toEqual({ userId: 'u1', displayName: 'John Doe' });
+    expect(res).toEqual({ userId: 'u1', displayName: 'John Doe', roles: ['USER'] });
+  });
+
+  it('override identityMap не возвращает роли (карта хранит только id)', async () => {
+    const res = await resolver({ 'tg:111': 'u-override' })({ principalId: 'tg:111' });
+    expect(res).toEqual({ userId: 'u-override' });
+    expect(res?.roles).toBeUndefined();
+  });
+
+  it('профильные роли прокидываются для эффективных ролей (AD-089 этап 5)', async () => {
+    await profiles.saveProfile(makeProfile({ id: 'u-admin', roles: ['ADMIN', 'USER'] }));
+    await profiles.linkIdentity('u-admin', {
+      provider: 'tg',
+      externalId: '77',
+      linkedAt: '2026-03-01T10:00:00.000Z',
+    });
+
+    const res = await resolver()({ principalId: 'tg:77' });
+    expect(res?.roles).toEqual(['ADMIN', 'USER']);
   });
 
   it('displayName падает на username, если displayName не задан', async () => {
@@ -80,7 +98,7 @@ describe('createExternalIdentityResolver (AD-089)', () => {
     });
 
     const res = await resolver()({ principalId: 'tg:7' });
-    expect(res).toEqual({ userId: 'u1', displayName: 'john' });
+    expect(res).toEqual({ userId: 'u1', displayName: 'john', roles: ['USER'] });
   });
 
   it('неизвестный principalId → null', async () => {

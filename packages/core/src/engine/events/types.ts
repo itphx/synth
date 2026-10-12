@@ -48,11 +48,28 @@ export interface EventRouterConfig {
 }
 
 /**
+ * AD-089 (этап 5): контекст внешнего отправителя, сопровождающий доставку
+ * события. `roles` — эффективные роли (профиль ∩ `identity.roles`), `linked` —
+ * сопознан ли отправитель с пользователем инстанса. Используется `deliver` для
+ * переноса прав отправителя на ход (metadata сообщения); сам permission-слой
+ * роль-осей пока не имеет (см. `identity-roles.ts`).
+ */
+export interface EventDeliveryContext {
+  roles: string[];
+  linked: boolean;
+}
+
+/**
  * AD-089: доставка сообщения события в сессию. `run` — запустить процессор
  * сейчас; `defer` — только положить в очередь владельца (без старта).
+ *
+ * AD-089 (этап 5): необязательный `context` несёт эффективные роли отправителя
+ * (`resolveEffectiveRoles`). Не задан — прежнее поведение (обратная
+ * совместимость; `deliver` сам решает, писать ли роли в metadata).
  */
 export type EventDelivery = (
   sessionId: string,
   event: SynthEvent,
   mode: 'run' | 'defer',
+  context?: EventDeliveryContext,
 ) => Promise<void>;

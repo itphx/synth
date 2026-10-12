@@ -9,12 +9,19 @@ import { parsePrincipalId } from '@itphx/synth-shared';
  * `identityMap` — ручной override, приоритетнее профиля (**человек** должен
  * побеждать профиль, но явная карта администратора — сильнее всего). Профилей
  * десятки — **не кэшируем** (простота; при необходимости кэш добавится позже).
+ *
+ * AD-089 (этап 5): профильная ветка дополнительно возвращает `roles` профиля —
+ * базу для эффективных ролей отправителя (`resolveEffectiveRoles`). Ветка
+ * override `identityMap` роли **не** знает (карта хранит только id) → `roles`
+ * не задаётся (трактуется как «нет ролей», fail-closed).
  */
 export function createExternalIdentityResolver(deps: {
   profiles: ProfileStore;
   /** Читается на каждом вызове (live-обновление runtime-настройки). */
   getIdentityMap: () => Record<string, string>;
-}): (identity: EventIdentity) => Promise<{ userId: string; displayName?: string } | null> {
+}): (
+  identity: EventIdentity,
+) => Promise<{ userId: string; displayName?: string; roles?: string[] } | null> {
   return async (identity) => {
     // 1) override `identityMap`: principalId (человек) → chatKey (чат-фоллбек).
     const map = deps.getIdentityMap();
@@ -38,6 +45,7 @@ export function createExternalIdentityResolver(deps: {
     return {
       userId: profile.id,
       ...(displayName ? { displayName } : {}),
+      ...(profile.roles ? { roles: profile.roles } : {}),
     };
   };
 }

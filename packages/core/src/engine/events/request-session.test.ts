@@ -53,7 +53,7 @@ describe('RequestSessionService (AD-089)', () => {
       unknownAgentTemplate?: 'drop' | 'default-agent';
       resolveOwnerId?: () => string | Promise<string | undefined>;
       resolveLlmDefaults?: () => { provider?: string; model?: string } | Promise<{ provider?: string; model?: string }>;
-      resolveExternalIdentity?: (identity: EventIdentity) => { userId: string; displayName?: string } | null;
+      resolveExternalIdentity?: (identity: EventIdentity) => { userId: string; displayName?: string; roles?: string[] } | null;
       identityMap?: Record<string, string>;
       onSessionMaterialized?: (session: Session) => void | Promise<void>;
       issueIdentityClaim?: (event: SynthEvent) => Promise<{ code: string; expiresAt: string } | null>;
@@ -126,7 +126,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(decision).toEqual({ kind: 'bound', sessionId: target.id });
     expect(session?.id).toBe(target.id);
     expect(deliver).toHaveBeenCalledOnce();
-    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run');
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: [], linked: false });
   });
 
   it('handleEvent opts.binding форсирует привязку независимо от identity', async () => {
@@ -144,7 +144,7 @@ describe('RequestSessionService (AD-089)', () => {
 
     expect(decision).toEqual({ kind: 'bound', sessionId: target.id });
     expect(session?.id).toBe(target.id);
-    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run');
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: [], linked: false });
   });
 
   it('handleEvent ephemeral → создаёт сессию с TTL/agentRole и deliver(run)', async () => {
@@ -162,7 +162,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session).not.toBeNull();
     expect(session?.expiresAt).toBeDefined();
     expect(session?.settings.agentRole).toBe('agent-x');
-    expect(deliver).toHaveBeenCalledWith(session!.id, e, 'run');
+    expect(deliver).toHaveBeenCalledWith(session!.id, e, 'run', { roles: [], linked: false });
   });
 
   it('handleEvent ephemeral с резолвером: валидный шаблон → settings.agentRole', async () => {
@@ -243,7 +243,7 @@ describe('RequestSessionService (AD-089)', () => {
     // Постоянная сессия — без expiresAt (в отличие от ephemeral).
     expect(session?.expiresAt).toBeUndefined();
     expect(session?.settings.agentRole).toBe('agent-x');
-    expect(deliver).toHaveBeenCalledWith(session!.id, e, 'run');
+    expect(deliver).toHaveBeenCalledWith(session!.id, e, 'run', { roles: [], linked: false });
 
     const binding = await bindingStore.findByKey({ source: 'telegram', chatKey: 'chat:telegram:1' });
     expect(binding).toMatchObject({
@@ -292,7 +292,7 @@ describe('RequestSessionService (AD-089)', () => {
 
     expect(decision.kind).toBe('bind');
     expect(session?.id).toBe(existingSession.id);
-    expect(deliver).toHaveBeenCalledWith(existingSession.id, e, 'run');
+    expect(deliver).toHaveBeenCalledWith(existingSession.id, e, 'run', { roles: [], linked: false });
     // Новая привязка не создана.
     expect(await bindingStore.list()).toHaveLength(1);
   });
@@ -691,7 +691,7 @@ describe('RequestSessionService (AD-089)', () => {
 
     expect(decision).toEqual({ kind: 'queue', owner: owner.id, reason: 'binding' });
     expect(session?.id).toBe(owner.id);
-    expect(deliver).toHaveBeenCalledWith(owner.id, e, 'defer');
+    expect(deliver).toHaveBeenCalledWith(owner.id, e, 'defer', { roles: [], linked: false });
   });
 
   it('handleEvent drop → сессия null, доставки нет', async () => {
@@ -757,6 +757,100 @@ describe('RequestSessionService (AD-089)', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.event.id).toBe(e.id);
     expect(entries[0]?.decision).toEqual({ kind: 'drop', reason: 'no_route', audited: true });
+  });
+
+  // --- AD-089 (этап 5): эффективные роли отправителя в deliver ---
+
+  const boundTo = async (chatKey: string): Promise<Session> => {
+    const target = await sessionManager.createSession({ title: 'Bound' });
+    await bindingStore.upsert({ source: 'telegram', chatKey, mode: 'bound', sessionId: target.id });
+    return target;
+  };
+
+  it('deliver получает эффективные роли: профиль ADMIN, identity.roles не заданы → [ADMIN]', async () => {
+    const target = await boundTo('chat:telegram:roles-a');
+    const e = event({ identity: { chatKey: 'chat:telegram:roles-a', principalId: 'tg:1' } });
+
+    await service(undefined, {
+      resolveExternalIdentity: () => ({ userId: 'u-admin', roles: ['ADMIN'] }),
+    }).handleEvent(e);
+
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: ['ADMIN'], linked: true });
+  });
+
+  it('deliver: identity.roles сужают роли профиля (ADMIN+USER ∩ USER → [USER])', async () => {
+    const target = await boundTo('chat:telegram:roles-b');
+    const e = event({
+      identity: { chatKey: 'chat:telegram:roles-b', principalId: 'tg:2', roles: ['USER'] },
+    });
+
+    await service(undefined, {
+      resolveExternalIdentity: () => ({ userId: 'u-1', roles: ['ADMIN', 'USER'] }),
+    }).handleEvent(e);
+
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: ['USER'], linked: true });
+  });
+
+  it('deliver: identity.roles ADMIN не повышают профиль USER → пусто, linked', async () => {
+    const target = await boundTo('chat:telegram:roles-c');
+    const e = event({
+      identity: { chatKey: 'chat:telegram:roles-c', principalId: 'tg:3', roles: ['ADMIN'] },
+    });
+
+    await service(undefined, {
+      resolveExternalIdentity: () => ({ userId: 'u-user', roles: ['USER'] }),
+    }).handleEvent(e);
+
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: [], linked: true });
+  });
+
+  it('deliver: несопознанный отправитель → ролей нет, linked=false (fail-closed)', async () => {
+    const target = await boundTo('chat:telegram:roles-d');
+    const e = event({
+      identity: { chatKey: 'chat:telegram:roles-d', principalId: 'tg:4', roles: ['ADMIN'] },
+    });
+
+    await service(undefined, {
+      resolveExternalIdentity: () => null,
+    }).handleEvent(e);
+
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: [], linked: false });
+  });
+
+  it('deliver: без резолвера (профиль неизвестен) → ролей нет, linked=false', async () => {
+    const target = await boundTo('chat:telegram:roles-e');
+    const e = event({
+      identity: { chatKey: 'chat:telegram:roles-e', principalId: 'tg:5', roles: ['ADMIN'] },
+    });
+
+    const { decision, session } = await service().handleEvent(e);
+
+    expect(decision).toEqual({ kind: 'bound', sessionId: target.id });
+    expect(session?.id).toBe(target.id);
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: [], linked: false });
+  });
+
+  it('deliver: резолвер без roles (override identityMap) → пустые роли, linked=true', async () => {
+    const target = await boundTo('chat:telegram:roles-f');
+    const e = event({ identity: { chatKey: 'chat:telegram:roles-f', principalId: 'tg:6' } });
+
+    await service(undefined, {
+      resolveExternalIdentity: () => ({ userId: 'u-map' }),
+    }).handleEvent(e);
+
+    expect(deliver).toHaveBeenCalledWith(target.id, e, 'run', { roles: [], linked: true });
+  });
+
+  it('deliver: queue-режим тоже несёт контекст ролей', async () => {
+    const owner = await sessionManager.createSession({ title: 'Queue owner' });
+    await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:roles-q', mode: 'queue', sessionId: owner.id });
+    const e = event({ identity: { chatKey: 'chat:telegram:roles-q', principalId: 'tg:7' } });
+
+    await service(undefined, {
+      resolveExternalIdentity: () => ({ userId: 'u-lead', roles: ['LEAD'] }),
+    }).handleEvent(e);
+
+    expect(deliver).toHaveBeenCalledWith(owner.id, e, 'defer', { roles: ['LEAD'], linked: true });
   });
 
   // --- AD-089 (claim-flow): выпуск claim-кода неизвестному отправителю ---

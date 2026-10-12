@@ -10,6 +10,7 @@ export type { DecisionAgentCandidate, DecisionRuleProviderDeps } from './decisio
 export { decisionFromTarget } from './target-decision.js';
 export type {
   EventDelivery,
+  EventDeliveryContext,
   EventRouterConfig,
   RouteRuleInput,
   RouteRuleProvider,

@@ -230,6 +230,7 @@ export type {
 } from './engine/events/request-session.js';
 export type {
   EventDelivery,
+  EventDeliveryContext,
   EventRouterConfig,
   RouteRuleInput,
   RouteRuleProvider,
@@ -389,6 +390,9 @@ export type {
   IdentityRouteMessages,
 } from './server/routes/identities.js';
 export { createExternalIdentityResolver } from './engine/events/external-identity.js';
+// AD-089 (этап 5): эффективные роли внешнего отправителя (профиль ∩ identity.roles).
+export { resolveEffectiveRoles, normalizeRole } from './engine/events/identity-roles.js';
+export type { EffectiveRoles } from './engine/events/identity-roles.js';
 export { createMessageRoutes } from './server/routes/messages.js';
 export type { MessageRoutesAuth, MessageRoutesOptions, MessageRouteMessages } from './server/routes/messages.js';
 export { createQueueRoutes } from './server/routes/queue.js';

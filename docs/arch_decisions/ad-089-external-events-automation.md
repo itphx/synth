@@ -85,7 +85,7 @@ interface SynthEvent {
     principalId?: string;  // внешний идентификатор пользователя
     chatKey?: string;      // 'chat:<source>:<chatId>'
     threadKey?: string;    // 'thread:<source>:<chatId>:<threadId>'
-    roles?: string[];      // маппинг на RBAC (AD-029), identity — AD-043
+    roles?: string[];      // потолок прав отправителя: СУЖАЮТ роли профиля (не повышают); AD-029
   };
   dedupKey: string;        // стабильный ключ идемпотентности
   ts: string;              // ISO-8601
@@ -237,6 +237,41 @@ routing** (привязки/правила/auto-bind), **человек (`princi
 «чужое» user-сообщение как `{author}: <content>` (`withAttribution`, `orchestrator.ts`), поэтому
 разные люди в одной сессии различимы и для модели, и в UI (сообщение видно в сессии).
 
+**Права внешнего отправителя (этап 5).** Проблема: `identity.roles` (роль из allowlist шлюза,
+напр. `['ADMIN']`) ядром ранее не читалась, поэтому права определяла **аутентификация запроса** —
+в dev шлюз ходит admin-ключом, в managed — service-account с `USER`+`LEAD`. То есть любой, кого
+пустил allowlist **шлюза**, действовал с правами **машинного аккаунта шлюза**.
+
+Решение (fail-closed): **база прав — роли профиля Synth** отправителя, а `identity.roles` могут
+только **сузить** их (пересечение), но **не повысить**. Отправитель, не сопознанный с профилем,
+прав Synth не имеет (действует только «транспортное» участие: сессия/чат создаются, но
+привилегированные операции недоступны).
+
+- Резолвер `resolveEffectiveRoles(profileRoles, identityRoles)` (`engine/events/identity-roles.ts`):
+  `profileRoles === null` (нет профиля/идентичности) → `{roles: [], linked: false}`;
+  иначе база — роли профиля (нормализация к верхнему регистру, дедуп), при заданных
+  непустых `identity.roles` — пересечение (`{roles, linked: true}`); пустое пересечение →
+  `{roles: [], linked: true}` (сужение до нуля, но человек сопознан).
+- Профильные роли приходят из `createExternalIdentityResolver` (`roles` профиля; ветка override
+  `identityMap` ролей не знает → `[]` при `linked: true`).
+- Funnel (`RequestSessionService.handleEvent`) считает эффективные роли **от самого отправителя**
+  (`principalId`, не от владельца) и передаёт их в `deliver` расширенным контекстом
+  `EventDeliveryContext {roles, linked}`; `deliver` (core/backend) кладёт их в `metadata` хода
+  (`effective_roles`/`identity_linked`) — для аудита и будущего enforcement.
+- **Точка enforcement (остаток):** permission-слой (`PermissionEvaluator`, AD-029) **не имеет
+  роль-оси** — его правила оперируют тулом/путём/режимом/capabilities, а глобальные роли
+  (`ADMIN`/`LEAD`/…) проверяются на HTTP-уровне (`requirePermission`) per-ключом. Вводить
+  роль-правила в permission-слой — крупный рефакторинг (новые семантики правил, config, UI),
+  поэтому на этом этапе эффективные роли **вычисляются и доставляются в ход**, а enforcement
+  ограничен тем, что права машинного аккаунта шлюза перестали «раздаваться» внешним отправителям:
+  сопознанный с `USER` видит только пользовательские права, сужение работает, несопознанный —
+  без прав. Полный role-aware enforcement — отдельный срез (или AD-052 service-key
+  со scoped-токенами — см. «Не реализовано»).
+- Правило для шлюзов: роль в `GATEWAY_ALLOWLIST` — **потолок** (сужает права профиля), а не
+  дарование; не задавать роль / задавать максимальную — не ограничивать. Локальные команды
+  шлюза (`/bind`/`/unbind`/`/new`) по-прежнему гейтятся allowlist-ролью (`BINDING_COMMANDS`) —
+  это авторизация **шлюза**, не прав Synth.
+
 **Доставка событий подписчикам.** Funnel уведомляет хаб о материализованной сессии
 (`RequestSessionService` → `deps.onSessionMaterialized`) **до** доставки в неё события;
 backend связывает колбэк с `EventHub.subscribeToSession(ownerId, sessionId)`, поэтому
@@ -379,8 +414,17 @@ managed backend — `synth.llm` того же конфига. Явно зада�
   `findProfileByExternalId`/`linkIdentity`/`unlinkIdentity` (инвариант уникальности пары
   `provider:externalId`, конфликт → `null`); хелперы `buildPrincipalId`/`parsePrincipalId` (shared).
   Резолвер `createExternalIdentityResolver` (`engine/events/external-identity.ts`) в `RequestSessionService`
-  (`deps.resolveExternalIdentity`): override `identityMap` → профиль. API `/api/v2/me/identities` (`GET`/`DELETE`),
+  (`deps.resolveExternalIdentity`): override `identityMap` → профиль; профильная ветка возвращает `roles`
+  профиля. API `/api/v2/me/identities` (`GET`/`DELETE`),
   UI — секция «Идентичности» в `ProfileSettings`. Claim-flow — следующий этап.
+- **Права внешнего отправителя (AD-089, этап 5):** `resolveEffectiveRoles` (`engine/events/identity-roles.ts`) —
+  база — роли профиля (`createExternalIdentityResolver` → `roles`), `identity.roles` только **сужают**
+  (пересечение; нормализация к верхнему регистру), несопознанный (`profileRoles === null`) → `[]`/`linked:false`
+  (fail-closed). `RequestSessionService.handleEvent` (`_resolveDeliveryContext`) считает роли **от самого
+  отправителя** и передаёт `EventDeliveryContext {roles, linked}` в `deliver`; core/backend `deliver` пишет
+  `metadata.effective_roles`/`identity_linked` в ход. **Роль-оси в permission-слое (`PermissionEvaluator`, AD-029)
+  нет** — role-aware enforcement не введён (роли доставляются в ход для аудита/задела; альтернатива — AD-052
+  service-key). Практический эффект: права машинного аккаунта шлюза не раздаются внешним отправителям.
 - **Хранилища:** `EventBindingStore` (`{dataDir}/events/bindings.json`), `EventJournalStore` (`{dataDir}/events/journal.jsonl`),
   `RouteRuleStore` (`{dataDir}/events/routes.json`), `EventApiKeyStore` (`{dataDir}/events/api-keys.json`, AD-052-первый срез;
   `schemaVersion`, sha256-хеш секрета) (AD-005); ephemeral TTL — `Session.expiresAt`/`archivedAt` + `startEphemeralSweeper`.

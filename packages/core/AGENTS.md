@@ -88,6 +88,14 @@
   Для per-session подписок (managed backend `EventHub`) funnel вызывает необязательный
   `deps.onSessionMaterialized(session)` сразу после создания сессии и **до** доставки
   события — потребитель подписывает клиентов владельца (`subscribeToSession`).
+- **Права внешнего отправителя (AD-089 этап 5).** База — роли **профиля** Synth
+  отправителя; `identity.roles` (роль из allowlist шлюза) только **сужают** (пересечение),
+  не повышают; несопознанный (нет профиля) → прав нет (fail-closed). Резолвер —
+  `resolveEffectiveRoles` (`engine/events/identity-roles.ts`); funnel считает контекст и
+  передаёт `EventDeliveryContext {roles, linked}` в `deliver`, который пишет
+  `metadata.effective_roles`/`identity_linked`. **Роль-оси в permission-слое
+  (`PermissionEvaluator`, AD-029) нет** — role-aware enforcement не введён (крупный
+  рефакторинг; см. AD-089 и альтернативу AD-052 service-key).
 
 ## Гибрид (core-специфика)
 
@@ -200,24 +208,36 @@
   `deps.resolveLlmDefaults` — добор дефолтных `provider`/`model` инстанса
   (`llm.defaultProvider`/`llm.defaultModel`) для `ephemeral`/`bind`/explicit;
   `deps.resolveExternalIdentity` — резолвинг внешнего отправителя (`identity.principalId`)
-  в пользователя инстанса (человек-владелец, приоритетнее чата);
+  в пользователя инстанса (человек-владелец, приоритетнее чата; профильная ветка возвращает
+  и `roles` профиля — базу эффективных прав, AD-089 этап 5);
   `deps.identityMap` — маппинг `identity.principalId`/`chatKey` на владельца сессии;
   `deps.issueIdentityClaim` — выпуск одноразового claim-кода неизвестному отправителю
   (вызывается в `handleEvent`, когда резолвер вернул `null` и задан `identity.principalId`;
   результат — `identityHint` в ответе ingest, AD-089 claim-flow);
   `deps.onSessionMaterialized` — колбэк после создания сессии до доставки (подписка хаба);
   `updateConfig` — live TTL/политика/identityMap),
+  `identity-roles.ts` (AD-089 этап 5: `resolveEffectiveRoles(profileRoles, identityRoles)` →
+  `{roles, linked}` — эффективные роли внешнего отправителя: база — роли профиля, `identity.roles`
+  только **сужают** (пересечение, не повышают), несопознанный (`profileRoles === null`) → `[]`/
+  `linked:false` (fail-closed); `normalizeRole` — trim+upper. `RequestSessionService.handleEvent`
+  считает роли **от самого отправителя** (`_resolveDeliveryContext`, резолвер внешней идентичности;
+  ошибка резолвера → fail-closed `[]`) и передаёт их в `deliver` контекстом
+  `EventDeliveryContext {roles, linked}` — `deliver` (core/backend) пишет `metadata.effective_roles`/
+  `identity_linked`. **Роль-оси в permission-слое (`PermissionEvaluator`, AD-029) НЕТ** — роли
+  вычисляются и доставляются в ход (аудит/задел), но role-aware enforcement не введён (крупный
+  рефакторинг правил/config/UI; альтернатива — AD-052 service-key). Практический эффект:
+  права машинного аккаунта шлюза не раздаются внешним отправителям),
   `external-identity.ts` (`createExternalIdentityResolver({profiles, getIdentityMap})` — резолвер
-  внешнего отправителя → `{userId, displayName?} | null`: override `identityMap` (по `principalId`,
-  затем `chatKey`) → профиль по `parsePrincipalId` (`identities`); `getIdentityMap` — геттер для
-  live-обновления runtime-настройки; без кэша),
+  внешнего отправителя → `{userId, displayName?, roles?} | null`: override `identityMap` (по `principalId`,
+  затем `chatKey`; роли не несёт) → профиль по `parsePrincipalId` (`identities`, + роли профиля);
+  `getIdentityMap` — геттер для live-обновления runtime-настройки; без кэша),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
   `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
   `DecisionRuleProvider` (`decision-rule-provider.ts`, AD-084: decision-шаг после project-правил при
   `events.decisionRouting`, fail-safe → `null`; на успехе — лог `info('DECISION', …)` с агентом/уверенностью/
   порогом/моделью/latency, промахи — `warning` с latency; мета `confidence`/`signals` уезжает в решение),
   `target-decision.ts` (`decisionFromTarget` — единый маппинг цели, приклеивает `confidence`/`signals`),
-  `EventDelivery` (`run`/`defer`), `credential.ts` (`EventKeyCredential` — контекст машинной
+  `EventDelivery` (`run`/`defer` + необязательный `EventDeliveryContext {roles, linked}`), `credential.ts` (`EventKeyCredential` — контекст машинной
   аутентификации по API-ключу привязки: `keyId`/`bindingId`/`rateLimitPerMinute`, задел `scopes`/`principalId`),
   `key-rate-limiter.ts` (`KeyRateLimiter` — in-memory fixed-window 60 c per-key, AD-089/AD-052),
   `journal-prune.ts` (`startEventJournalPruner` — retention-очистка журнала: prune на старте и

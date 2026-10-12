@@ -683,7 +683,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       }),
       // AD-089: UI-событие после материализации внешнего события.
       publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
-      deliver: async (sessionId, event, mode) => {
+      deliver: async (sessionId, event, mode, context) => {
         // AD-051: cron-сообщение — от системного пользователя `Scheduler`, текст
         // задания — чистый контент сообщения (описание Scheduler — в system-блоке).
         let message = eventToMessage(event);
@@ -696,6 +696,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           } catch {
             // attribution не критична — оставляем автора из `eventToMessage`
           }
+        }
+        // AD-089 (этап 5): эффективные роли отправителя — в metadata хода.
+        if (context) {
+          message.metadata = {
+            ...(message.metadata ?? {}),
+            effective_roles: context.roles,
+            identity_linked: context.linked,
+          };
         }
         if (mode === 'run') {
           // AD-036: обфускация user-сообщения ДО сохранения в историю (паритет с

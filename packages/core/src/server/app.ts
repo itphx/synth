@@ -1017,7 +1017,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     }),
     // AD-089: UI-событие после материализации внешнего события.
     publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
-    deliver: async (sessionId, event, mode) => {
+    deliver: async (sessionId, event, mode, context) => {
       // AD-051: cron-сообщение — от системного пользователя `Scheduler`, текст
       // задания — чистый контент сообщения (описание Scheduler — в system-блоке).
       let message = eventToMessage(event);
@@ -1030,6 +1030,16 @@ export async function createStandaloneApp(config: StandaloneConfig) {
         } catch {
           // attribution не критична — оставляем автора из `eventToMessage`
         }
+      }
+      // AD-089 (этап 5): эффективные роли отправителя — в metadata хода
+      // (permission-слой роль-оси пока не имеет; роли доступны для аудита/UI и
+      // будущего enforcement, см. `engine/events/identity-roles.ts`).
+      if (context) {
+        message.metadata = {
+          ...(message.metadata ?? {}),
+          effective_roles: context.roles,
+          identity_linked: context.linked,
+        };
       }
       if (mode === 'run') {
         // Запускает процессор (постановка + старт) — как обычный user-промпт.
