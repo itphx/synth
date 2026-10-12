@@ -59,6 +59,7 @@ const DEFAULTS: EventsSettingsData = {
   decisionRouting: false,
   autoBind: false,
   autoBindAgentTemplate: '',
+  identityMap: {},
 }
 
 const OVERRIDDEN: EventsSettingsData = {
@@ -72,6 +73,7 @@ const OVERRIDDEN: EventsSettingsData = {
   decisionRouting: false,
   autoBind: false,
   autoBindAgentTemplate: 'assistant',
+  identityMap: {},
 }
 
 function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string): void {
@@ -265,6 +267,72 @@ describe('EventsSettings — админ-раздел «Параметры соб
     )
   })
 
+  it('редактирует identityMap и отправляет пару на сервер (AD-089)', async () => {
+    const container = await renderSettings()
+
+    const map = container.querySelector('[data-testid="events-config-identity-map"]')!
+    // Пустое состояние: только кнопка «Добавить».
+    expect(map.querySelectorAll('input')).toHaveLength(0)
+
+    const addButton = Array.from(map.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === enDict['common.add'],
+    ) as HTMLButtonElement
+    await act(async () => {
+      addButton.click()
+    })
+
+    const inputs = map.querySelectorAll('input') as NodeListOf<HTMLInputElement>
+    expect(inputs).toHaveLength(2)
+    await act(async () => {
+      setInputValue(inputs[0], 'chat:telegram:1')
+    })
+    await act(async () => {
+      setInputValue(inputs[1], 'u1')
+    })
+
+    await clickTestId(container, 'events-config-save')
+    await act(async () => {})
+
+    expect(mocks.updateEventsSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ identityMap: { 'chat:telegram:1': 'u1' } }),
+    )
+  })
+
+  it('санитайзит identityMap: пара с пустым ключом не уходит на сервер', async () => {
+    const container = await renderSettings()
+
+    const map = container.querySelector('[data-testid="events-config-identity-map"]')!
+    const addButton = Array.from(map.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === enDict['common.add'],
+    ) as HTMLButtonElement
+    await act(async () => {
+      addButton.click()
+    })
+    await act(async () => {
+      addButton.click()
+    })
+
+    const inputs = map.querySelectorAll('input') as NodeListOf<HTMLInputElement>
+    expect(inputs).toHaveLength(4)
+    // Первая пара — валидная, вторая — с пустым ключом.
+    await act(async () => {
+      setInputValue(inputs[0], 'tg:1')
+    })
+    await act(async () => {
+      setInputValue(inputs[1], 'u1')
+    })
+    await act(async () => {
+      setInputValue(inputs[3], 'orphan')
+    })
+
+    await clickTestId(container, 'events-config-save')
+    await act(async () => {})
+
+    expect(mocks.updateEventsSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ identityMap: { 'tg:1': 'u1' } }),
+    )
+  })
+
   it('Cancel откатывает черновик к сохранённым значениям', async () => {
     const container = await renderSettings()
 
@@ -353,5 +421,11 @@ describe('EventsSettings — права доступа (ADMIN) и i18n (AD-089)'
     expect(ruDict['eventsConfig.autoBind']).toBeTruthy()
     expect(enDict['eventsConfig.autoBindAgentTemplate']).toBeTruthy()
     expect(ruDict['eventsConfig.autoBindAgentTemplate']).toBeTruthy()
+    expect(enDict['eventsConfig.identityMap']).toBeTruthy()
+    expect(ruDict['eventsConfig.identityMap']).toBeTruthy()
+    expect(enDict['eventsConfig.identityMapTooltip']).toBeTruthy()
+    expect(ruDict['eventsConfig.identityMapTooltip']).toBeTruthy()
+    expect(enDict['eventsConfig.identityMapUserPlaceholder']).toBeTruthy()
+    expect(ruDict['eventsConfig.identityMapUserPlaceholder']).toBeTruthy()
   })
 })

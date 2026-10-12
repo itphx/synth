@@ -52,6 +52,9 @@ export type { ToggleFieldProps } from './controls/ToggleField'
 export { ListField } from './controls/ListField'
 export type { ListFieldProps, ListFieldVariant } from './controls/ListField'
 
+export { KeyValueField } from './controls/KeyValueField'
+export type { KeyValueFieldProps } from './controls/KeyValueField'
+
 export { SegmentedControl } from './controls/SegmentedControl'
 export type { SegmentedControlOption } from './controls/SegmentedControl'
 

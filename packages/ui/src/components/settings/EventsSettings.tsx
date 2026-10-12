@@ -5,6 +5,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { synthApi, type EventsSettings as EventsSettingsData } from '@/lib/api/synthApi'
 import { SelectContent, SelectItem } from '../ui/select'
 import {
+  KeyValueField,
   ListField,
   NumberField,
   SelectField,
@@ -65,7 +66,15 @@ export function EventsSettings() {
     if (!draft.draft) return
     setSaving(true)
     try {
-      const res = await synthApi.updateEventsSettings(draft.draft)
+      // AD-089: сервер отклоняет пустые ключи identityMap (400) — фильтруем пары
+      // с пустым/пробельным ключом перед отправкой.
+      const payload: EventsSettingsData = {
+        ...draft.draft,
+        identityMap: Object.fromEntries(
+          Object.entries(draft.draft.identityMap).filter(([key]) => key.trim().length > 0),
+        ),
+      }
+      const res = await synthApi.updateEventsSettings(payload)
       setRemote(res.events)
       draft.setDraft(res.events)
       notify({ text: t('eventsConfig.saved'), type: 'success', category: 'system' })
@@ -245,6 +254,16 @@ export function EventsSettings() {
               mono
               id="events-config-auto-bind-agent"
               data-testid="events-config-auto-bind-agent"
+            />
+
+            <KeyValueField
+              label={t('eventsConfig.identityMap')}
+              tooltip={t('eventsConfig.identityMapTooltip')}
+              value={draftMode.identityMap}
+              onChange={(next) => draft.update({ identityMap: next })}
+              keyPlaceholder="chat:telegram:123456"
+              valuePlaceholder={t('eventsConfig.identityMapUserPlaceholder')}
+              testId="events-config-identity-map"
             />
 
             <SettingsActions

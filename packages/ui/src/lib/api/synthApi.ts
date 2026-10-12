@@ -2035,6 +2035,11 @@ export interface EventsSettings {
   autoBind: boolean
   /** AD-089: шаблон агента auto-bind-сессий (пусто — агент по умолчанию). */
   autoBindAgentTemplate: string
+  /**
+   * AD-089: маппинг идентичности внешнего отправителя (`identity.chatKey` /
+   * `identity.principalId`) → id пользователя инстанса.
+   */
+  identityMap: Record<string, string>
 }
 
 /** AD-089: ответ `GET/DELETE /settings/events` — эффективные значения, дефолты и флаг override. */
