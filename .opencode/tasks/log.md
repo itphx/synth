@@ -554,3 +554,41 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - Test-деплой отложен пользователем. Для него нужен новый образ backend (в кластере `0.9.0` без events-роутов → 404) + образ шлюза, SealedSecret, `gateway.enabled=true`.
 - `identityMap` в test задаётся через админку (после деплоя) — `chat:telegram:450316139` → `sub` пользователя Keycloak.
 - Тех.долг: broad-ADMIN ключ шлюза в dev; UI-редактор `identityMap` есть (кроме парсинга «сложных» значений); `Schedule.ownerId` не проставляется.
+
+## 2026-10-12/13 — AD-089: идентичность внешних событий (Э1–Э6) + AD про шлюзы
+- **Задача:** «Погоди, давай это обсудим… Как настроен маппинг? Группа с несколькими пользователями? Как выглядят их сообщения в одной сессии? Имена/профиль вместо id? Неизвестные? Просить сопоставить id и учётку?» Плюс: «Закоммить наработки, добавь редактор identityMap»; «Коммить как посчитаешь нужным»; «Шлюз не универсальный? Отказоустойчивость? Мультитенантность. Пока ничего не делай, дополни AD про шлюзы».
+- **Тип:** feature + design (AD) + chore (коммиты)
+- **Исполнитель:** @orchestrator → @fixer ×8 (Э1, Э2×2, Э3×2, Э4×2, Э5×2, Э6×2, AD, NOTES)
+- **Результат:** PASS
+
+### Принятые решения (пользователь)
+- Маппинг: **профиль `ProfileData.identities[]`** (self-service) + `events.identityMap` как override.
+- Групповая сессия: **командная (проектная)**.
+- Claim-flow: **сделать целиком**; код только в приватном чате (наше решение, гейт по `chatType`).
+- Видимость: **сессии проекта — участникам; ADMIN и LEAD — сквозной обзор**.
+- Шлюз: направление — **мультитенантность** (не реализуем пока), HA — **leader election** (решение, не реализовано).
+
+### Ключевое (по факту кода)
+- **Ключ владельца — человек** (`identity.principalId`), чат — только routing (`chatKey`). Приоритет: `resolveExternalIdentity` → `identityMap` (principalId→chatKey) → per-event → `resolveOwnerId`. `identity.principalId` больше **не** id сессии (был баг: `tg:<id>` в `userId`).
+- **Attribution:** `eventToMessage` ставит `author` (`@username` → имя → `tg:<id>`) + `metadata.principal_id/chat_key/thread_key`; доходит до LLM тем же путём, что `Scheduler`. `displayName` профиля приоритетнее tg-имени для слинкованных.
+- **Claim:** `IdentityClaimStore` (код `XXX-XXX`, алфавит без `0/O/1/I`, TTL 10 мин, одноразовый, атомарный consume) → `POST /me/identities/claim` (400/404/409; provider/externalId — из серверной записи) → код в `identityHint` ответа `POST /events` → шлюз показывает **только в ЛС**.
+- **Права:** база — роли профиля; `identity.roles` (allowlist шлюза) только **сужают**; несопознанный → без прав (fail-closed). **Enforcement (role-aware) — остаток**: `PermissionEvaluator` роль-оси не имеет; роли доставляются в `metadata.effective_roles` (аудит/задел). Альтернатива — AD-052 service-key.
+- **Видимость:** `isSessionVisible` (elevated → всё; владелец/без владельца → видно; проектные — owner+members); `listForUserScope`; `canRead` для проектов (manage/edit **не** расширены).
+
+### Коммиты
+- `synth` (ветка `docs/ad-normalization-089-external-events`): `793a804` (UI-редактор identityMap), `681e3b1` (идентичность+видимость, Э1/Э3/Э4/Э6 + AD-086/089 + редактор AD), `12ab4af` (Э5 права), `2583131` + этот (журнал).
+- `addons/synth-gateway-telegram`: `e977071` (Э2+Э4 шлюза), `0dad06d` (доки allowlist).
+- `synth-deploy`: `841ea15` (дельта gateway; **push не делался**).
+- Push нигде не выполнялся (только локальные коммиты).
+
+### Верификация
+- core 2999, backend 365, UI 1122; аддон 31+160+26 = 217; typecheck 6/6; lint 0 errors.
+- Подтверждённый **флейк** `app.remote.test.ts` (WS cookie v2, 5 с) — 2/3 в точечных прогонах, в полном наборе зелёный; к правкам не относится.
+- **Dev e2e (шлюз, docker-compose):** 4 события → решения `bind`/`bound` → сессия `mv5g1k35-…` → ответы доставлены (`sent.json` message:…:2/4/12/21). Транзиентные сбои прокси (`socket hang up`, `invalid_json 503`, `aborted`) ретраятся с backoff, прокси жив (CONNECT 200, 763 мс), бэклога нет (`offset` продвигается).
+
+### Осталось / тех.долг
+1. **Role-aware enforcement** (Э5 остаток) или AD-052 service-key (убирает broad-ADMIN ключ шлюза).
+2. **K3s test**: нужен новый образ backend (в кластере 0.9.0 без events-роутов → 404) + образ шлюза, SealedSecret, `gateway.enabled=true`, `events.autoBind=true`, `identityMap`/claim. Push `synth-deploy` — за пользователем.
+3. **Шлюз-hardening**: прокси-агент создаётся на каждый запрос (CONNECT-туннели рвутся) — кэш агента/keep-alive + контекст в ошибках `aborted`.
+4. `events.identityMap` в dev выставлен на `chat:telegram:450316139 → admin` (избыточно для debug — убрать по желанию).
+5. Ключ `2deb88f` не входит в эту серию (коммит до неё); ROADMAP: UI-редактор identityMap есть, роль-ось enforcement — нет.
