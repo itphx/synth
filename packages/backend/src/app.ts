@@ -18,6 +18,7 @@ import { Readable } from 'node:stream';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { createMiddleware } from 'hono/factory';
 import type { ProviderConfig, ModelConfig, AgentDefinition, ToolsDisabledConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
@@ -52,6 +53,7 @@ import {
   createEventRoutes, createSchedulerRoutes,
   createExternalIdentityResolver,
   startEventJournalPruner,
+  ServiceApiKeyStore, createServiceKeyRoutes, KeyRateLimiter, getServiceCredential,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { DecisionAgentCandidate } from '@itphx/synth-core';
@@ -62,6 +64,7 @@ import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import type { AuthKit } from './auth/middleware.js';
+import { scopeGuard, projectGuard } from './auth/service-scope.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createProjectRoutes, createProjectAccess } from './routes/projects.js';
 import { createSessionRoutes } from './routes/sessions.js';
@@ -227,10 +230,51 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       credentials: true,
     }));
 
-    const auth = createAuthMiddleware(backendConfig.auth);
+    // AD-052 (этап I): реестр service-key создаётся до auth — резолвер
+    // `synth_svc_…` нужен аутентификации (паритет с core `server/app.ts`).
+    const serviceApiKeyStore = new ServiceApiKeyStore({ dataDir: backendConfig.dataDir });
+    const auth = createAuthMiddleware({
+      ...backendConfig.auth,
+      resolveServiceKey: async (raw) => {
+        const resolved = await serviceApiKeyStore.resolveBySecret(raw);
+        if (!resolved) return null;
+        const key = resolved.key;
+        // Best-effort отметка использования — не блокирует и не роняет запрос.
+        void serviceApiKeyStore.touch(key.id).catch(() => {});
+        return {
+          user: {
+            id: `service:${key.id}`,
+            username: key.label,
+            roles: [...key.roles],
+            preferredLanguage: 'ru',
+            createdAt: key.createdAt,
+            teamRole: key.roles[0] ?? 'USER',
+            notes: '',
+            interviewCompleted: false,
+            isLocal: false,
+          },
+          credential: resolved.credential,
+        };
+      },
+    });
 
     // Прикрепляем пользователя ко всем запросам
     app.use('*', auth.attachUser);
+
+    // AD-052: per-key rate limit service-key (`rateLimitPerMinute` ключа;
+    // 0/не задан — без лимита). После attachUser: `serviceKey` уже в контексте.
+    const serviceKeyRateLimiter = new KeyRateLimiter(60_000);
+    app.use('*', createMiddleware(async (c, next) => {
+      const credential = getServiceCredential(c);
+      const limit = credential?.rateLimitPerMinute ?? 0;
+      if (credential && limit > 0 && !serviceKeyRateLimiter.check(credential.keyId, limit)) {
+        return c.json(
+          { error: { code: 'RATE_LIMITED', message: t('errors.rateLimited.serviceKey', undefined, c) } },
+          429,
+        );
+      }
+      await next();
+    }));
 
     // Хранилища
     const dataDir = backendConfig.dataDir;
@@ -853,6 +897,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         // ключей привязки — тоже LEAD и ADMIN (чувствительные метаданные).
         writeGuard: auth.requirePermission('ADMIN', 'LEAD'),
         keyReadGuard: auth.requirePermission('ADMIN', 'LEAD'),
+        // AD-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
+        scopeGuard,
+        projectGuard,
         // AD-089/AD-052: per-key rate limit и мастер-выключатель приёма (live).
         getKeyRateLimitPerMinute: () => effectiveEventsSettings.keyRateLimitPerMinute,
         isEnabled: () => effectiveEventsSettings.enabled,
@@ -894,6 +941,32 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         writeGuard: auth.requireAdmin,
         runGuard: auth.requireAdmin,
         runMiddleware: [createRateLimiter(10, 60_000)],
+        // AD-052 (этап I): scope-гейт, проектная проекция и резолвинг
+        // projectId `bound`/`queue`-целей расписания.
+        scopeGuard,
+        projectGuard,
+        resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
+      },
+    ));
+
+    // AD-052 (этап I): CRUD service-key инстанса (`synth_svc_…`). Managed RBAC:
+    // только ADMIN (ключи дают машинный доступ — управление админское), i18n.
+    app.route('/api/v2/service-keys', createServiceKeyRoutes(
+      { requireAuth: auth.requireAuth },
+      { store: serviceApiKeyStore },
+      {
+        writeGuard: auth.requirePermission('ADMIN'),
+        readGuard: auth.requirePermission('ADMIN'),
+        // createdBy: `attachUser` уже положил пользователя в контекст — берём его id.
+        resolveUserId: (c) => {
+          const user = c.get('user') as { id?: string } | undefined;
+          return user?.id ?? '';
+        },
+        messages: {
+          invalidKey: (c) => t('errors.validation.invalidServiceKey', undefined, c),
+          keyNotFound: (c) => t('errors.notFound.serviceKey', undefined, c),
+          keyLabelConflict: (c) => t('errors.conflict.serviceKeyLabel', undefined, c),
+        },
       },
     ));
 
@@ -1169,8 +1242,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         || project.members?.[userId] === ProjectRole.OWNER,
     }));
 
-    // Глобальный SSE-хаб для всех сессий пользователя
-    app.get('/api/v2/events', auth.requireAuth, async (c) => {
+    // Глобальный SSE-хаб для всех сессий пользователя.
+    // AD-052: `events:watch` — scope service-key для подписки на поток событий.
+    app.get('/api/v2/events', auth.requireAuth, scopeGuard('events:watch'), async (c) => {
       const user = (await auth.getCurrentUser(c))!;
       const signal = c.req.raw.signal;
 

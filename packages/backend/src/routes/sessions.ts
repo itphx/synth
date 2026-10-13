@@ -17,6 +17,7 @@ import {
 import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
+import { scopeGuard, projectGuard } from '../auth/service-scope.js';
 import {
   enqueueUserMessage,
   serializeSession,
@@ -491,6 +492,9 @@ export function createSessionRoutes(
       promptMiddleware: [createRateLimiter(30, 60_000)],
       enableSessionEvents: false,
       resolveDefaultAgent,
+      // AD-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
+      scopeGuard,
+      projectGuard,
       messages: {
         sessionNotFound: (c) => t('errors.notFound.session', undefined, c),
         forbidden: (c) => t('auth.forbidden', undefined, c),

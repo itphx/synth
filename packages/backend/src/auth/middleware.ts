@@ -1,10 +1,26 @@
 import type { AuthConfig, User } from '@itphx/synth-shared';
+import { isServiceKeySecret } from '@itphx/synth-core';
+import type { ServiceKeyCredential } from '@itphx/synth-core';
 import { createMiddleware } from 'hono/factory';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';
 import { createLazyOidcClient } from './oidc.js';
 
 const SESSION_COOKIE = 'user_session';
+
+/**
+ * AD-052 (этап I): резолвер service-key (`synth_svc_…`) → синтетический
+ * пользователь (RBAC) + контекст (`scopes`/`allowedProjects`/лимит).
+ * `null` — секрет неизвестен/отозван/истёк либо резолвер не настроен.
+ */
+export type ServiceKeyResolver = (
+  rawSecret: string,
+) => Promise<{ user: User; credential: ServiceKeyCredential } | null>;
+
+/** Конфиг backend-auth: `AuthConfig` + service-key (AD-052). */
+export interface AuthMiddlewareConfig extends AuthConfig {
+  resolveServiceKey?: ServiceKeyResolver;
+}
 
 // In-memory хранилище сессий (для debug mode)
 const sessions = new Map<string, { user: User; expiresAt: number }>();
@@ -25,12 +41,30 @@ function extractBearerToken(h: string | undefined): string | null {
   return null;
 }
 
-export function createAuthMiddleware(config: AuthConfig) {
+export function createAuthMiddleware(config: AuthMiddlewareConfig) {
   // Ленивый OIDC-клиент (мемоизация, безопасно при отсутствии oidc — null)
   const getOidcClient = createLazyOidcClient(config.oidc);
 
+  /**
+   * AD-052: машинная аутентификация по service-key. Распознаётся по префиксу
+   * секрета `synth_svc_`; резолвер асинхронный (стор + touch `lastUsedAt`),
+   * поэтому ветка живёт в middleware, а не в синхронном `getCurrentUser`.
+   */
+  const resolveServiceKey = async (
+    c: { req: { header(name: string): string | undefined } },
+  ): Promise<{ user: User; credential: ServiceKeyCredential } | null> => {
+    if (!config.resolveServiceKey) return null;
+    const token = extractBearerToken(c.req.header('Authorization'));
+    if (!token || !isServiceKeySecret(token)) return null;
+    return config.resolveServiceKey(token);
+  };
+
   // Определить пользователя из запроса
   const getCurrentUser = async (c: { req: { header(name: string): string | undefined } }): Promise<User | null> => {
+    // 0. AD-052: service-key — синтетический пользователь ключа.
+    const serviceAuth = await resolveServiceKey(c);
+    if (serviceAuth) return serviceAuth.user;
+
     // 1. Cookie-сессия
     const sessionId = typeof getCookie === 'function'
       ? getCookie(c as Parameters<typeof getCookie>[0], SESSION_COOKIE)
@@ -110,6 +144,14 @@ export function createAuthMiddleware(config: AuthConfig) {
 
   // Middleware: прикрепить пользователя к контексту (без ошибки)
   const attachUser = createMiddleware(async (c, next) => {
+    // AD-052: service-key несёт и пользователя, и контекст (scopes/проекция).
+    const serviceAuth = await resolveServiceKey(c);
+    if (serviceAuth) {
+      c.set('user', serviceAuth.user);
+      c.set('serviceKey', serviceAuth.credential);
+      await next();
+      return;
+    }
     const user = await getCurrentUser(c);
     if (user) c.set('user', user);
     await next();
@@ -117,6 +159,18 @@ export function createAuthMiddleware(config: AuthConfig) {
 
   // Middleware: требовать аутентификации
   const requireAuth = createMiddleware(async (c, next) => {
+    // attachUser уже мог установить пользователя (в т.ч. service-key).
+    if (c.get('user')) {
+      await next();
+      return;
+    }
+    const serviceAuth = await resolveServiceKey(c);
+    if (serviceAuth) {
+      c.set('user', serviceAuth.user);
+      c.set('serviceKey', serviceAuth.credential);
+      await next();
+      return;
+    }
     const user = await getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: t('auth.unauthorized', undefined, c) } }, 401);

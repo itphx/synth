@@ -58,6 +58,9 @@ export type { KeyValueFieldProps } from './controls/KeyValueField'
 export { SegmentedControl } from './controls/SegmentedControl'
 export type { SegmentedControlOption } from './controls/SegmentedControl'
 
+export { MultiSelectField } from './controls/MultiSelectField'
+export type { MultiSelectFieldProps, MultiSelectOption } from './controls/MultiSelectField'
+
 export { Tabs } from './controls/Tabs'
 export type { TabsProps, TabsItem } from './controls/Tabs'
 

@@ -44,6 +44,14 @@ const en: Dictionary = {
   'errors.validation.invalidEventKeyUpdate': 'Invalid event API key update',
   'errors.notFound.eventKey': 'Event API key not found',
 
+  // AD-052 (этап I): service-key
+  'errors.validation.invalidServiceKey': 'Invalid service key payload',
+  'errors.notFound.serviceKey': 'Service key not found',
+  'errors.conflict.serviceKeyLabel': 'Service key label is already used',
+  'errors.forbidden.scopeRequired': 'Insufficient permissions: required scope is missing',
+  'errors.forbidden.projectForbidden': 'Project is not available for this service key',
+  'errors.rateLimited.serviceKey': 'Service key rate limit exceeded',
+
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
   'errors.conflict.emailExists': 'A user with this email already exists',
@@ -121,6 +129,14 @@ const ru: Dictionary = {
   'errors.validation.invalidEventKey': 'Неверный API-ключ события',
   'errors.validation.invalidEventKeyUpdate': 'Некорректное тело обновления API-ключа события',
   'errors.notFound.eventKey': 'API-ключ события не найден',
+
+  // AD-052 (этап I): service-key
+  'errors.validation.invalidServiceKey': 'Некорректное тело service-key',
+  'errors.notFound.serviceKey': 'Service-key не найден',
+  'errors.conflict.serviceKeyLabel': 'Метка service-key уже используется',
+  'errors.forbidden.scopeRequired': 'Недостаточно прав: отсутствует требуемый scope',
+  'errors.forbidden.projectForbidden': 'Проект недоступен для этого service-key',
+  'errors.rateLimited.serviceKey': 'Превышен лимит запросов по service-key',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',

@@ -5,6 +5,7 @@ import type {
   AuthKit,
 } from '../auth/middleware.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
+import { scopeGuard } from '../auth/service-scope.js';
 import type {
   LLMGatewayConfig,
   ModelConfig,
@@ -157,7 +158,8 @@ function toLlmMessages(raw: ChatMessageInput[]): LLMMessage[] {
 export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
   const app = new Hono();
 
-  const middlewares = deps.rateLimiter ? [deps.rateLimiter] : [];
+  // AD-052: `llm:chat` — scope service-key; обычные креды scope не ограничивают.
+  const middlewares = [scopeGuard('llm:chat'), ...(deps.rateLimiter ? [deps.rateLimiter] : [])];
 
   // POST /api/v2/llm/chat/completions — OpenAI-совместимый LLM Proxy
   app.post('/chat/completions', kit.requireAuth, ...middlewares, async (c) => {
