@@ -709,3 +709,47 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 ### Замечания
 - Правки AGENTS.md (backend — watch-all; корневой — индекс AD) — по инварианту 15, на согласование.
 - Остаётся: test/preprod деплой (образы + SealedSecret `synth-service-key`, `gateway.enabled=true`); `events:watch`-семантика watch-all осознанно широка для инстанс-локальных service-key — задокументировано.
+
+## 2026-10-13 (продолжение 2) — AD-089: актуализация NEXT-STEPS + срез M «доводка + синхронизация» (M1–M5)
+
+- **Задача:** «Продолжим путь к реализации AD-089. Что у нас дальше? Проанализируй, актуализируй `AD-089-NEXT-STEPS.md`, обсудим».
+- **Тип:** анализ/дизайн (roadmap) + docs-sync + fix (core) + fix (add-on) + infra-prep (K3s test).
+- **Исполнитель:** @orchestrator (анализ/план/верификация) → @fixer ×3 (M3 — core; M1 — docs; M2 — add-on), @devops (M5), верификация — оркестратор.
+- **Результат:** PASS (M1–M3, M5); M4 отменён по факту (см. ниже).
+
+### Анализ NEXT-STEPS
+- Старая таблица A–G (ревизия 2026-10-10) почти исчерпана: **A** (decision/LLM-классификация) — ✅ AD-084; **C** (service-key) / **D** (webhooks) / **E** (идентичность отправителя→профиль/RBAC) — ✅; **B** (Telegram-шлюз) — рабочий MVP (`addons/synth-gateway-telegram`), AD-086 как AD не закрыт; остались **F** (Plugin SDK, AD-090) и **G** (пайплайны, AD-059). Сверх плана закрыт **AD-052 целиком** (этапы I–IV).
+- `AD-089-NEXT-STEPS.md` переписан под состояние 2026-10-13: таблица закрытых срезов с коммитами, реальный остаток AD-089, открытые вопросы, тех.долг, новый список кандидатов (H — AD-090; I — AD-059; J — AD-086 остаток/второй канал; K — стриминг наружу; L — гранулярность bound/мультитенантность; M — доводка+синхронизация). Приложение A (исследование decision-моделей) помечено как реализованное (AD-084).
+- **Решение пользователя:** срез **M целиком** (M1–M5); большой трек (H/I/J+K) — пока не выбираем.
+
+### M3 — core: per-key rate limit service-key (паритет core ↔ backend)
+- Было: лимит энфорсился только в managed backend (`packages/backend/src/app.ts`), в core `rateLimitPerMinute` хранился, но игнорировался.
+- Стало (`packages/core/src/server/app.ts`): глобальный middleware после `requireAuth` — один `KeyRateLimiter(60_000)` на приложение; `credential?.rateLimitPerMinute ?? 0`, `0`/не задан → без лимита; превышение → 429 `RATE_LIMITED`; интерактивные креды — no-op. Тест `packages/core/src/server/service-key-rate-limit.test.ts` (5: N+1→429, `0`/отсутствие→без лимита, независимость окон по `keyId`, api-key no-op) + строка в `packages/core/AGENTS.md`.
+
+### M2 — add-on `synth-gateway-telegram`: `strategy` + hardening транспорта
+- **Helm:** `charts/.../values.yaml` + `templates/deployment.yaml` — добавлен `strategy.type: Recreate` (singleton-поллер, `getUpdates` → `409 Conflict` при rolling). Закрыт пробел AD-086.
+- **Транспорт:** `packages/telegram/src/transport.ts` создавал `createProxyAgent(proxyUrl)` на каждый запрос и уничтожал на таймауте/abort → агент переиспользуется (ленивое создание на клиент, `close()` — teardown, шов `createProxyAgentImpl`); ошибки (вкл. `aborted`/обрыв CONNECT) обогащены контекстом `[<method> <url без токена> proxy=…]`. `packages/telegram/src/{client,types}.ts`, `apps/{gateway,mcp}/src/index.ts` (закрытие клиента). Тесты +5.
+- Замечено (не менялось): в `addons/synth-addon-template` чарт тоже без `strategy` — кандидат на отдельную правку.
+
+### M1 — docs-sync статусов (AD-089/AD-086)
+- Синхронизированы: `docs/arch_decisions/ad-089-external-events-automation.md` (шапка «Статус»/«Обновлено», §«Не реализовано» → остаток + блок «Закрыто реализацией», §«Связи»), `docs/arch_decisions/README.md` (AD-089/AD-086), корневой `AGENTS.md` (индексы AD-089 ⚠️ и AD-086 → ⚠️ «первый add-on реализован»), `docs/ARCHITECTURE.md` (остаток AD-052 снят, ссылка Plugin SDK AD-086→AD-090). Пакетные AGENTS/`API_V2.md`/`CONFIGURATION.md` — уже корректны. Ссылки 0 битых; grep устаревших формулировок чист.
+- Правки `AGENTS.md` — по инварианту 15, **на согласование пользователя**.
+
+### M4 — удаление dev `events.identityMap` — ОТМЕНЕНО (неверная посылка)
+- Проверка: у admin `ProfileData.identities: []` (профильной привязки нет), а `_resolveSessionOwner` (`engine/events/request-session.ts`) ставит `deps.identityMap` (по `chatKey`) **раньше** per-event-владельца; для service-key per-event владелец = `service:<keyId>` (не admin).
+- Вывод: `chat:telegram:450316139 → admin` — **единственная** привязка Telegram-чата к админу; удаление увело бы сессии шлюза из `listSessions({userId: admin})`/UI. Оставлено как есть; «правильная» замена — claim-flow (`POST /me/identities/claim`), за пользователем.
+
+### M5 — K3s test: подготовка выката (без применения/пуша)
+- Репо `synth-deploy` (Fleet GitOps; add-on-чарт шлюза в test **не подключён** — деплой через чарт-в-корне `synth-deploy`): `values.yaml` (backend `0.9.0→0.10.0`, `backend.config.events.autoBind=true`, gateway pullPolicy/comments), `templates/backend-config.yaml` (new, ConfigMap `synth-config` → `/etc/synth/config.yaml`), `templates/backend-deployment.yaml` (mount), `templates/gateway-sealedsecret.yaml` (per-`encryptedData`), `scripts/seal-gateway-secrets.sh` (new, kubeseal `--scope strict`), `README.md` (runbook + откат).
+- Dry-run: `helm lint`/`template` OK; `kubectl apply --dry-run=server` (обе фазы) — валидно; скрипт пломбирования прогнан на копии. Проверено: живой 0.9.0 → `/api/v2/events` 404 (роутов нет).
+- Открытые вопросы: тега `synth-backend:0.10.0` в реестре ещё нет (собрать/запушить); UI в test остаётся 0.9.0; service-key создать можно только после фазы 1; `addons/.../fleet.yaml` не подключён (риск двойного деплоя при подключении); `events.autoBind` через config.yaml перекрывается runtime `settings.json`.
+
+### Верификация (оркестратор)
+- `pnpm typecheck` — 7/7 Done; `pnpm lint` — 0 errors (184 pre-existing warnings в backend); core-тест M3 — 5/5 (изолированно); add-on M2 — build/typecheck/lint/test + `helm lint/template` (36/171/26, +5); M5 — dry-run server-side без apply.
+
+### Коммиты
+- **Не делались** (инвариант 13): изменения в `synth/` (M1/M3), `addons/synth-gateway-telegram` (M2), `synth-deploy` (M5) — незакоммичены; пуш/apply — за пользователем.
+
+### Следующие шаги
+- За пользователем: коммиты/пуш (synth, add-on, synth-deploy), выкат K3s test (runbook M5), решение по M4 (оставить/claim-flow), выбор большого трека (H AD-090 / I AD-059 / J+K шлюз).
+- Отложено: миграция zod v3→v4 (OpenAPI 1.x); `strategy` в `synth-addon-template`.

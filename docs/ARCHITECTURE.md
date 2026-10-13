@@ -256,7 +256,7 @@ hook-шину, а создание сессий сведено в один funne
 - **`HookBus`** (`engine/hooks/hook-bus.ts`) — шина хуков жизненного цикла агента
   (`session_requested`, `external_event`, …); async-хуки с таймаутом
   (`HOOK_ASYNC_TIMEOUT_MS`), результат может заблокировать событие (`blocked`/`reason`).
-  Это фундамент; Plugin SDK и загрузка плагинов (AD-086) не реализованы.
+  Это фундамент; Plugin SDK и загрузка плагинов (AD-090) не реализованы.
 - **`EventRouter`** (`engine/events/event-router.ts`) — чистое решение по событию
   плюс запись в журнал. Порядок `decide`: `allowedSources` (не в списке → `drop`) →
   dedup по `dedupKey` (ленивый кэш из журнала) → явный `EventBinding` по
@@ -307,6 +307,7 @@ hook-шину, а создание сессий сведено в один funne
 
 API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `docs/CONFIGURATION.md`
 (секция `events`). Источники/интеграции: шедулер AD-051 (cron), API-ключи привязок, service-key
-со scopes/проектной проекцией (AD-052 этап I), webhooks (этап II), public-OpenAPI (28 операций,
-`GET /api/v2/openapi.json`) и SDK `@itphx/synth-sdk` (этап III) реализованы; остаток публичной
-API-платформы — перевод шлюза на service-key (этап IV), и плагины AD-086 — нет.
+со scopes/проектной проекцией, webhooks, public-OpenAPI (28 операций, `GET /api/v2/openapi.json`)
+и SDK `@itphx/synth-sdk` — **AD-052 закрыт целиком (этапы I–IV: включая перевод Telegram-шлюза
+на scoped service-key)**; первый add-on — Telegram-шлюз (`addons/synth-gateway-telegram`) —
+реализован; не реализованы плагины (Plugin SDK, AD-090) и пайплайны (AD-059).

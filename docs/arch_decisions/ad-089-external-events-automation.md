@@ -1,7 +1,11 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind — первый срез AD-052; остаток AD-052 (public-OpenAPI/SDK/webhooks) и AD-086 — нет)
+> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind; [AD-052](./ad-052-public-api-platform.md) — ✅ этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK `@itphx/synth-sdk`, перевод шлюза; первый add-on — Telegram-шлюз ([AD-086](./ad-086-extensibility-plugins-editions.md)) — реализован; остаток — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)), остаток AD-086 (HA/мультитенантность/второй канал) и стриминг ответа наружу)
 > **Дата:** 2026-10-08
+> **Обновлено:** 2026-10-13 — синхронизация статусов: [AD-052](./ad-052-public-api-platform.md)
+> закрыт целиком (этапы I–IV), первый add-on (`addons/synth-gateway-telegram`) реализован; остаток
+> пересобран — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)),
+> остаток AD-086 (HA/мультитенантность/второй канал) и стриминг ответа наружу.
 > **Обновлено:** 2026-10-12 — зафиксирована граница с add-on-слоем: шлюз (Telegram) — тонкий транспорт
 > (normalize→events, events→send), состояние инстанс-локальное; топология/HA/мультитенантность — свойство
 > слоя add-on ([AD-086](./ad-086-extensibility-plugins-editions.md), раздел «Первый частный случай — Telegram gateway»);
@@ -52,7 +56,7 @@
 - **Шина событий сессии** ([AD-009](./ad-009-session-event-bus.md)) и **транспорт** ([AD-008](./ad-008-websocket-events.md),
   [AD-024](./ad-024-eventhub-transport.md)) — доставка событий до UI, но инициатива всегда внутри;
 - **MCP-клиент** ([AD-071](./ad-071-mcp-servers-prompt.md)) — Synth умеет **дёргать** внешние MCP-инструменты;
-- **API v2** ([AD-017](./ad-017-api-v2-hono.md)) — HTTP-вход, база будущего публичного API ([AD-052](./ad-052-public-api-platform.md));
+- **API v2** ([AD-017](./ad-017-api-v2-hono.md)) — HTTP-вход и база публичного API ([AD-052](./ad-052-public-api-platform.md) — ✅ реализован);
 - **Гибрид** ([AD-042](./ad-042-hybrid-mode.md)/[AD-045](./ad-045-hybrid-server-profiles.md)) — событие может прийти
   как в локальный standalone, так и на managed-бэкенд;
 - **Демонстратор** — `synth-media`: внешний сервис с Telegram-MCP и ботом уже работает как потребитель
@@ -468,20 +472,24 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 
 **Не реализовано (остаток):**
 
-- **Источник [AD-052](./ad-052-public-api-platform.md) — частично:** реализован первый срез —
-  **binding-key** (см. `EventBindingApiKey` выше). Нет **service-key** (общий ключ инстанса
-  со `scopes` + проектной проекцией `allowedProjects` — остаток AD-052; для мессенджер-шлюзов
-  [AD-086](./ad-086-extensibility-plugins-editions.md)), public-OpenAPI-спеки, SDK, исходящих
-  webhooks; ключи — **инстанс-локальные секреты**: не переносятся publish/fork и межмировой обмен
-  ([AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
-- Источник AD-086 (add-on + Telegram gateway → `message_received`) — нет;
-- Plugin SDK и загрузка плагинов ([AD-030](./ad-030-hooks-agent-events.md));
-- **LLM-классификация правил маршрутизации — закрыта** decision-шагом `DecisionRuleProvider`
-  ([AD-084](./ad-084-decision-models-clef.md)): включается `events.decisionRouting` (default off),
-  fail-safe; отдельный резерв через micro-слой [AD-034](./ad-034-model-routing.md)/[AD-035](./ad-035-micro-model-first.md)
-  не требуется;
-- стриминг событий наружу (webhooks, [AD-052](./ad-052-public-api-platform.md));
-- пайплайны (цепочки, AD-059).
+- **Plugin SDK и загрузка плагинов** ([AD-030](./ad-030-hooks-agent-events.md); спецификация —
+  [AD-090](./ad-090-extension-api.md)) — нет (hook-шина и эмиты жизненного цикла реализованы);
+- **пайплайны** (цепочки шагов, [AD-059](./ad-059-pipeline-automation.md)) — нет;
+- **стриминг ответа наружу** (edit-in-place / typing-indicator) — нет;
+- **остаток [AD-086](./ad-086-extensibility-plugins-editions.md) как AD** — HA через leader election,
+  мультитенантность, webhook-транспорт и второй канал — нет (первый add-on — Telegram-шлюз — реализован).
+
+**Закрыто реализацией:** источник [AD-052](./ad-052-public-api-platform.md) — ✅ **этапы I–IV**:
+binding-key (первый срез); service-key (общий ключ инстанса со `scopes` + проектной проекцией
+`allowedProjects`); исходящие webhooks; public-OpenAPI + SDK `@itphx/synth-sdk`; перевод
+мессенджер-шлюза на scoped service-key. Ключи — **инстанс-локальные секреты**: не переносятся
+publish/fork и межмировой обмен ([AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
+Источник [AD-086](./ad-086-extensibility-plugins-editions.md) — первый add-on (**Telegram-шлюз**,
+`addons/synth-gateway-telegram`): long-polling → `POST /api/v2/events` + обратный watcher событий.
+**LLM-классификация правил маршрутизации — закрыта** decision-шагом `DecisionRuleProvider`
+([AD-084](./ad-084-decision-models-clef.md)): включается `events.decisionRouting` (default off),
+fail-safe; отдельный резерв через micro-слой [AD-034](./ad-034-model-routing.md)/[AD-035](./ad-035-micro-model-first.md)
+не требуется.
 
 **Переиспользуемые кирпичи:** сводная таблица — в разделе «Детали» («Переиспользование существующих кирпичей» выше).
 
@@ -535,9 +543,10 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 - [AD-026](./ad-026-subagent-context-modes.md) — режимы контекста при запуске агента.
 - [AD-029](./ad-029-granular-permissions.md), [AD-036](./ad-036-llm-gateway.md) — права и безопасность.
 - [AD-051](./ad-051-scheduler-pipelines.md) — cron/timer-источники и событийные триггеры.
-- [AD-052](./ad-052-public-api-platform.md) — ingress webhook'ов и публичный API; частично:
-  API-ключи привязок (binding-key) — первый срез, service-key + scopes + проектная проекция — этап I
-  (реализовано); webhooks / public-OpenAPI / SDK — остаток.
+- [AD-052](./ad-052-public-api-platform.md) — ingress webhook'ов и публичный API; ✅ реализован
+  (этапы I–IV): API-ключи привязок (binding-key) — первый срез; service-key + scopes + проектная
+  проекция `allowedProjects`; webhooks; public-OpenAPI + SDK `@itphx/synth-sdk`; перевод
+  мессенджер-шлюза на scoped service-key.
 - [AD-056](./ad-056-synth-mcp-server.md) — Synth как MCP-сервер (обратное направление).
 - [AD-071](./ad-071-mcp-servers-prompt.md) — вызов внешних MCP как действие.
 - [AD-086](./ad-086-extensibility-plugins-editions.md) — внешние сервисы-надстройки и общий шаблон gateway.
