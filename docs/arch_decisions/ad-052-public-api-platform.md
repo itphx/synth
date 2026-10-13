@@ -1,7 +1,9 @@
 # AD-052: Публичная API-платформа Synth
 
-> **Статус:** ⚠️ Частично реализовано (первый срез — API-ключи привязок событий, AD-089); **план реализации зафиксирован 2026-10-13** (этапы I–IV)
-> **Дата:** 2026-09-16 (план зафиксирован 2026-10-13)
+> **Статус:** ⚠️ Частично реализовано — **этап I закрыт** (service-key + scopes + проектная проекция
+> `allowedProjects` + API/UI); остаток — этапы II–IV (webhooks, public-OpenAPI/SDK, перевод шлюза).
+> Ранее был реализован первый срез — API-ключи привязок событий (binding-key, AD-089).
+> **Дата:** 2026-09-16 (план зафиксирован 2026-10-13; этап I закрыт 2026-10-13)
 > **Источник:** перенесено из `AD-DRAFTS.md` (D7, идея 7).
 > **Связано:** [AD-017](./ad-017-api-v2-hono.md), [AD-036](./ad-036-llm-gateway.md),
 > [AD-023](./ad-023-configuration.md), [AD-089](./ad-089-external-events-automation.md),
@@ -40,6 +42,10 @@
   один раз при создании. per-key rate limit: лимит ключа, иначе глобальный дефолт
   `events.keyRateLimitPerMinute` (`KeyRateLimiter`, 429). Задел: `EventKeyCredential`
   (`keyId`/`bindingId`/`rateLimitPerMinute`, `scopes`/`principalId`). См. [AD-089](./ad-089-external-events-automation.md).
+- **Этап I (реализовано, 2026-10-13):** **service-key** — независимый ключ инстанса со `scopes` и
+  проектной проекцией `allowedProjects` (`ServiceApiKeyStore`, `{dataDir}/service-keys.json`,
+  секрет `synth_svc_…`), CRUD `GET/POST/PATCH/DELETE /api/v2/service-keys` (+ `/:id/revoke`),
+  middleware `requireScope`/`checkProjectAccess`, UI-раздел «Сервисные ключи». См. §«Статус реализации в коде».
 
 ### Проблема
 
@@ -79,21 +85,29 @@ OpenAPI-спеки, SDK и механизма исходящих уведомл�
   `POST /events`; service-key — независимый store;
 - ключ аутентифицирует машину в синтетического пользователя (совместимость с `requireAuth`),
   но конкретные роуты дополнительно требуют **scope** (см. §«Scopes»);
-- поля ключа: `id`, `label` (уникальная глобально), `description?`, `scopes: string[]`,
-  `allowedProjects?: string[]` (проектная проекция; пусто — политика инстанса),
+- поля ключа: `id` (`svk_<uuid>`), `label` (уникальная глобально, регистронезависимо),
+  `description?`, `roles: GlobalRole[]` (роли синтетического пользователя; дефолт — `USER`),
+  `scopes: string[]`, `allowedProjects?: string[]` (проектная проекция; пусто — политика инстанса),
   `rateLimitPerMinute?`, `expiresAt?`, `revokedAt?`, `createdBy`, `createdAt`, `lastUsedAt?`, `prefix`.
 
 ### Scopes
 
-Enforcement — новый middleware `requireScope(...)` **рядом** с `requirePermission` (не перегрузка
+Enforcement — middleware `requireScope(...)` **рядом** с `requirePermission` (не перегрузка
 permission-слоя тулов: тот роль-оси не имеет by design — роли = доступность эндпоинтов, внутри сессии
-набор тулов одинаков для всех).
+набор тулов одинаков для всех). Для интерактивных кред (OIDC/debug/API-key/локальный ключ) scope-гейт —
+no-op: ограничиваются только service-key.
 
-Предварительный список (уточняется на этапе I):
+**Итоговый каталог** (`SERVICE_SCOPES`; ✅ зафиксирован на этапе I):
 
-`events:ingest`, `events:watch`, `bindings:read`, `bindings:write`, `keys:read`, `keys:write`,
-`routes:read`, `routes:write`, `sessions:create`, `sessions:read`, `sessions:prompt`,
+точечные — `events:ingest`, `events:watch`, `bindings:read`, `bindings:write`, `keys:read`,
+`keys:write`, `routes:read`, `routes:write`, `sessions:create`, `sessions:read`, `sessions:prompt`,
 `schedules:read`, `schedules:write`, `llm:chat`.
+
+**Wildcard-семейства** (`SERVICE_SCOPE_FAMILIES`, матчер `hasServiceScope`): `events:*`,
+`bindings:*`, `keys:*`, `routes:*`, `sessions:*`, `schedules:*`. Wildcard покрывает любые
+`<family>:<x>` этого семейства, но не соседние семейства и не запрос `<family>:*` точным скоупом.
+**Глобального `*` нет** — намеренно (не «ADMIN через один скоуп»). `llm:chat` — единственный скоуп
+вне семейств (роуты без проектного измерения).
 
 ### Проектная проекция ключа
 
@@ -142,18 +156,16 @@ permission-слоя тулов: тот роль-оси не имеет by design
 
 Переход между этапами — только с остановкой и явным подтверждением.
 
-### Этап I — service-key + scopes + spike OpenAPI
+### Этап I — service-key + scopes + spike OpenAPI — ✅ закрыт (service-key/scopes/проекция; spike — нет)
 
-- `ServiceApiKeyStore` + типы/схемы (`ServiceApiKey`, create/update, `scopes`/`allowedProjects`)
+- ✅ `ServiceApiKeyStore` + типы/схемы (`ServiceApiKey`, create/update, `scopes`/`allowedProjects`)
   в `@itphx/synth-shared`.
-- CRUD-роуты service-ключей (managed: ADMIN; core: `requireAuth`), аутентификация по `synth_svc_*`,
+- ✅ CRUD-роуты service-ключей (managed: ADMIN; core: `requireAuth`), аутентификация по `synth_svc_*`,
   middleware `requireScope`.
-- Проектная проекция `allowedProjects` в применяемых роутах.
-- **Spike `@hono/zod-openapi`:** 2–3 эндпоинта из `events` обернуть, сгенерировать спеку —
-  подтвердить связку Hono 4 + zod до массовой обёртки; заодно закрепить единый формат ошибок
-  для публичных роутов.
-- Критерий: service-key со scopes работает, шлюз может быть переведён; spike подтвердил/опроверг
-  подход к OpenAPI.
+- ✅ Проектная проекция `allowedProjects` в применяемых роутах (sessions / events-bindings / schedules).
+- ❌ **Spike `@hono/zod-openapi`** (2–3 эндпоинта из `events` + генерация спеки, единый формат ошибок
+  публичных роутов) — **не выполнялся**; отложен к этапу III (в репозитории нет зависимости `@hono/zod-openapi`).
+- Критерий: service-key со scopes работает (✅); spike подтвердил/опроверг подход к OpenAPI (не выполнялся).
 
 ### Этап II — webhooks
 
@@ -172,10 +184,44 @@ permission-слоя тулов: тот роль-оси не имеет by design
 
 ## Статус реализации в коде
 
-**Частично реализовано — первый срез: API-ключи привязок (binding-key) в AD-089.**
-**План (этапы I–IV) зафиксирован 2026-10-13; код этапов I–IV ещё не начат.**
+**⚠️ Частично реализовано.** Закрыты: **этап I — service-key + scopes + проектная проекция + API/UI**
+(2026-10-13) и первый срез **AD-089** — API-ключи привязок событий (binding-key).
+Не реализованы: этапы **II–IV** — webhooks, public-OpenAPI (`@hono/zod-openapi`) + `@itphx/synth-sdk`,
+перевод шлюза. Spike `@hono/zod-openapi` в рамках этапа I не выполнялся.
 
-Реализовано (AD-089):
+### Этап I — service-key (реализовано)
+
+- **Тип `ServiceApiKey`** (`packages/shared/src/types/service-keys.ts`, re-export из `types/index.ts`):
+  `id`=`svk_<uuid>`, `label` (обязательна, уникальна глобально по инстансу, регистронезависимо),
+  `description?`, `roles: GlobalRole[]`, `scopes: string[]`, `allowedProjects?: string[]`,
+  `rateLimitPerMinute?`, `expiresAt?`, `revokedAt?`, `createdBy`, `createdAt`, `lastUsedAt?`, `prefix`;
+  `ServiceApiKeyCreated` (+ `key` — plaintext единожды). Zod — `serviceApiKeySchema`/
+  `serviceApiKeyCreateSchema`/`serviceApiKeyUpdateSchema` (`shared/schemas`).
+- **Секрет** `synth_svc_<base64url>` — plaintext один раз при создании, at-rest только sha256-хеш
+  (`ServiceApiKeyStore`, `packages/core/src/storage/service-api-key-store.ts`, `{dataDir}/service-keys.json`,
+  атомарная запись AD-005, `schemaVersion` — модель PG-ready AD-032).
+- **Scopes** — каталог `SERVICE_SCOPES` + `SERVICE_SCOPE_FAMILIES`, матчер `hasServiceScope`
+  (wildcard-семейства, глобального `*` нет). Enforcement — `requireScope`
+  (`packages/core/src/server/service-scope.ts`); backend-обёртки `scopeGuard`/`projectGuard`
+  (`packages/backend/src/auth/service-scope.ts`) с локализованными 403 `SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`.
+  Для интерактивных кред (нет service-key в контексте) гейты — no-op.
+- **Проектная проекция** `allowedProjects` (`isProjectAllowed`/`checkProjectAccess`): sessions /
+  events-bindings / schedules; пусто/отсутствует — политика инстанса.
+- **Аутентификация:** `Authorization: Bearer synth_svc_…` → синтетический пользователь
+  `{ id: 'service:<keyId>', roles: key.roles }` + `ServiceKeyCredential` (scopes/`allowedProjects`/лимит)
+  в контексте; revoked/expired/unknown → 401 (`packages/backend/src/auth/middleware.ts`,
+  `packages/core/src/auth/local.ts`). Роли ключа совместимы с `requirePermission`, scopes — точечный гейт.
+- **API** (единая фабрика `createServiceKeyRoutes`, `packages/core/src/server/routes/service-keys.ts`):
+  `GET/POST /api/v2/service-keys`, `GET/PATCH/DELETE /api/v2/service-keys/:id`,
+  `POST /api/v2/service-keys/:id/revoke`; RBAC: managed — ADMIN, core — `requireAuth`; store
+  `{dataDir}/service-keys.json`. В managed — per-key rate limit `rateLimitPerMinute` (глобальный
+  middleware `KeyRateLimiter` → 429 `RATE_LIMITED`). Scope-гейты — на `POST /api/v2/llm/chat/completions`
+  (`llm:chat`) и роутах events/sessions/schedules.
+- **UI** — админ-раздел «Сервисные ключи» (`packages/ui/src/components/settings/ServiceKeysSettings.tsx`):
+  однократный показ секрета + curl, мульти-селекты ролей/scopes/проектов, revoke/delete,
+  read-only для не-ADMIN.
+
+### Первый срез AD-089 — binding-key (реализовано ранее)
 
 - `EventApiKeyStore` (`packages/core/src/storage/event-api-key-store.ts`, `{dataDir}/events/api-keys.json`):
   несколько ключей на `EventBinding`, секрет `synth_evt_<base64url>` → sha256-хеш at-rest,
@@ -193,24 +239,23 @@ permission-слоя тулов: тот роль-оси не имеет by design
   Мастер-рубильник `events.enabled` → 503 `UNAVAILABLE`.
 - RBAC: мутации bindings/routes/keys — LEAD/ADMIN, чтение ключей — LEAD/ADMIN.
 
-Осталось (этапы I–IV, см. §«План реализации»):
+Осталось (этапы II–IV, см. §«План реализации»):
 
-- **service-key** — независимый ключ инстанса со `scopes` (для мессенджер-шлюзов, AD-086);
-- `scopes` + проектная проекция `allowedProjects`;
-- публичная **OpenAPI**-спека (только public), **SDK** (`@itphx/synth-sdk`), исходящие **webhooks**.
+- **webhooks** — исходящие события (этап II);
+- публичная **OpenAPI**-спека (только public) и **SDK** (`@itphx/synth-sdk`) — этап III;
+- перевод мессенджер-шлюза на scoped service-key — этап IV.
 
 Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
 
 - API v2, RBAC, rate-limit, Gateway — реализованы; OpenAI-совместимый прокси присутствует
   (`packages/backend/src/routes/llm.ts`).
 - Единый `SYNTH_API_KEY` → роль ADMIN подтверждён (`packages/backend/src/app.ts`).
+- service-key: `ServiceApiKeyStore`/`ServiceApiKey`/`createServiceKeyRoutes`/`requireScope` присутствуют;
+  зависимости `@hono/zod-openapi` нет (spike не выполнялся).
 
 ## Открытые вопросы
 
 - Квоты/биллинг — отдельный слой поверх rate-limit; пока не решено (позже).
-- **Состав scope-таксономии:** предварительный список (`events:*`, `bindings:*`, `keys:*`,
-  `routes:*`, `sessions:*`, `schedules:*`, `llm:chat`) уточняется на этапе I; нужен ли
-  wildcard-скоуп (`events:*`)?
 - **Формат заголовков подписи webhooks:** имена/состав заголовков (`X-Synth-Signature` и т.п.),
   схема HMAC-SHA256, окно timestamp, версия подписи.
 - OpenAPI: как именно выделять public-подмножество (~42 хендлера) при сохранении паритета

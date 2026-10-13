@@ -1,6 +1,6 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind — первый срез AD-052; service-key/OpenAPI/SDK/webhooks и AD-086 — нет)
+> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind — первый срез AD-052; остаток AD-052 (public-OpenAPI/SDK/webhooks) и AD-086 — нет)
 > **Дата:** 2026-10-08
 > **Обновлено:** 2026-10-12 — зафиксирована граница с add-on-слоем: шлюз (Telegram) — тонкий транспорт
 > (normalize→events, events→send), состояние инстанс-локальное; топология/HA/мультитенантность — свойство
@@ -536,7 +536,8 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 - [AD-029](./ad-029-granular-permissions.md), [AD-036](./ad-036-llm-gateway.md) — права и безопасность.
 - [AD-051](./ad-051-scheduler-pipelines.md) — cron/timer-источники и событийные триггеры.
 - [AD-052](./ad-052-public-api-platform.md) — ingress webhook'ов и публичный API; частично:
-  API-ключи привязок (binding-key) как первый срез, service-key/OpenAPI/SDK/webhooks — остаток.
+  API-ключи привязок (binding-key) — первый срез, service-key + scopes + проектная проекция — этап I
+  (реализовано); webhooks / public-OpenAPI / SDK — остаток.
 - [AD-056](./ad-056-synth-mcp-server.md) — Synth как MCP-сервер (обратное направление).
 - [AD-071](./ad-071-mcp-servers-prompt.md) — вызов внешних MCP как действие.
 - [AD-086](./ad-086-extensibility-plugins-editions.md) — внешние сервисы-надстройки и общий шаблон gateway.

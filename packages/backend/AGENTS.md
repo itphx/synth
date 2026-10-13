@@ -21,6 +21,7 @@
 | `FileStore`, `SessionManager` | сессии и история |
 | `EventBus` | шина событий сессии (backend надстраивает `EventHub`) |
 | `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `IdentityClaimStore`, `ProjectRuleProvider`, `eventToMessage`, `startEventJournalPruner` | единый funnel создания сессии, приём внешних событий, API-ключи привязок, одноразовые claim-коды идентичностей, правила маршрутизации и retention-очистка журнала (AD-089/AD-052) |
+| `ServiceApiKeyStore`, `createServiceKeyRoutes`, `requireScope`, `checkProjectAccess`, `getServiceCredential` | scoped service-key (AD-052 этап I): реестр ключей, CRUD-роуты, scope-гейт и проектная проекция |
 | `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (AD-051 срез / AD-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
@@ -38,7 +39,8 @@
 Локально только:
 
 - `src/app.ts` — фабрика `createBackendApp()`; `src/main.ts` — listen и graceful shutdown.
-- `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware и OIDC; `src/events/hub.ts` — `EventHub`.
+- `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware, OIDC и scope-гейты service-key
+  (`service-scope.ts`: `scopeGuard`/`projectGuard`); `src/events/hub.ts` — `EventHub`.
 - `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `i18n`.
 - `src/middleware/rate-limiter.ts` — единственный middleware пакета.
 
@@ -94,8 +96,9 @@
 | `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
 | `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
-| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`ingestPreGuard` = rate limit 120/мин до выбора способа аутентификации; API-ключ привязки через `resolveApiKeySecret`/`touchApiKey`, иначе `ingestGuard = requireAuth`; per-key rate limit — свой `rateLimitPerMinute` либо `getKeyRateLimitPerMinute()` → 429; `isEnabled()` — мастер-выключатель → 503; ответ `201 {event, decision, sessionId}` + опциональное `identityHint {code, expiresAt}` — неизвестный отправитель, AD-089 claim-flow), `/bindings` и `/routes` — CRUD (чтение `requireAuth`; мутации и чтение ключей — `writeGuard`/`keyReadGuard` = `requirePermission('ADMIN','LEAD')`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`), `/bindings/:id/keys` — CRUD API-ключей (`POST` создание + `PATCH` метаданных + `POST .../revoke` + `DELETE`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089). i18n-ключи: `errors.validation.invalidEventKey`, `errors.validation.invalidEventKeyUpdate`, `errors.notFound.eventKey`, `errors.conflict.eventKeyLabel`, `errors.rateLimited.eventKey`, `errors.unavailable.eventsDisabled` |
-| `/api/v2/schedules` | core `createSchedulerRoutes` (AD-051 срез / AD-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (AD-051); `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
+| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`ingestPreGuard` = rate limit 120/мин до выбора способа аутентификации; API-ключ привязки через `resolveApiKeySecret`/`touchApiKey`, иначе `ingestGuard = requireAuth`; per-key rate limit — свой `rateLimitPerMinute` либо `getKeyRateLimitPerMinute()` → 429; `isEnabled()` — мастер-выключатель → 503; ответ `201 {event, decision, sessionId}` + опциональное `identityHint {code, expiresAt}` — неизвестный отправитель, AD-089 claim-flow), `/bindings` и `/routes` — CRUD (чтение `requireAuth`; мутации и чтение ключей — `writeGuard`/`keyReadGuard` = `requirePermission('ADMIN','LEAD')`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`; AD-052 — `scopeGuard`/`projectGuard`), `/bindings/:id/keys` — CRUD API-ключей (`POST` создание + `PATCH` метаданных + `POST .../revoke` + `DELETE`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089). i18n-ключи: `errors.validation.invalidEventKey`, `errors.validation.invalidEventKeyUpdate`, `errors.notFound.eventKey`, `errors.conflict.eventKeyLabel`, `errors.rateLimited.eventKey`, `errors.unavailable.eventsDisabled` |
+| `/api/v2/schedules` | core `createSchedulerRoutes` (AD-051 срез / AD-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (AD-051); AD-052 — `scopeGuard`/`projectGuard`; `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
+| `/api/v2/service-keys` | core `createServiceKeyRoutes` (AD-052 этап I): CRUD scoped-ключей инстанса, `writeGuard`/`readGuard` = `requirePermission('ADMIN')`, `messages` — i18n, `resolveUserId` — id из `attachUser`; store `ServiceApiKeyStore` (`{dataDir}/service-keys.json`) |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
 
@@ -103,7 +106,8 @@
 
 ## Аутентификация
 
-- Порядок в `getCurrentUser`: cookie `user_session` → debug test-users (по `Authorization`) → OIDC JWT (если `oidc.enabled`) → единый API-key (`SYNTH_API_KEY`, роль ADMIN, вне debug/OIDC).
+- Порядок в `getCurrentUser`: service-key (`synth_svc_…`, AD-052 — синтетический пользователь `{id:'service:<keyId>', roles}` + `scopes`/`allowedProjects`) → cookie `user_session` → debug test-users (по `Authorization`) → OIDC JWT (если `oidc.enabled`) → единый API-key (`SYNTH_API_KEY`, роль ADMIN, вне debug/OIDC). Резолвер ключа — `config.resolveServiceKey` (`ServiceApiKeyStore.resolveBySecret` + `touch`), неизвестный/отозванный/истёкший → 401.
+- Scope-гейты service-key (`scopeGuard`/`projectGuard`, `src/auth/service-scope.ts`) работают поверх `requireAuth`/`requirePermission`: ограничивают только service-key (`403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`), для интерактивных кред — no-op.
 - Cookie-сессии — in-memory (`Map`), переживают только процесс; срок — `sessionMaxAgeMinutes`.
 - Логин/логаут/сессия и **профиль** — под `/auth/*`: `/auth/profile`, `/auth/profile/preferences`, `/auth/profile/avatar`.
 - Debug-ключи и `SYNTH_AUTH_DEBUG` описаны в корневом `AGENTS.md` — не дублировать; сами ключи задаёт `buildAuthConfig` в `src/lib/app-config.ts`.
@@ -121,6 +125,7 @@
 ## LLM Proxy
 
 - Единственный LLM-эндпоинт backend — `POST /api/v2/llm/chat/completions` (OpenAI-совместимый), роутер `src/routes/llm.ts`.
+- AD-052: на прокси навешан `scopeGuard('llm:chat')` — service-key без `llm:chat` → `403 SCOPE_REQUIRED` (проектной проекции у прокси нет).
 - Реализован на ядре: `GatewayProvider` + `ProviderFactory` + `AuditLogger`/`RateLimiter`/`SecretPatternStore`. Любой LLM-вызов — только через Gateway (AD-036); провайдера напрямую не инстанцировать.
 - Один `AuditLogger` и один payload-лог шарятся между оркестратором и чтением (`/api/v2/audit`, `/api/v2/logs/llm`) — не создавай вторые.
 - Runtime-тумблеры Gateway/security из UI применяются на живой оркестратор через колбэки `onLlmGatewayChange`/`onSecurityChange` в `app.ts`.

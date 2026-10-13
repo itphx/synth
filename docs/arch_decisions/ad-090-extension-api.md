@@ -464,7 +464,8 @@ install/enable/disable/update/remove/policy — ADMIN (managed) / владеле
    репозиторий; ключ подписи и ротация.
 5. **UI-объём Ф5** — что показываем в карточке/секции, где ставим тумблеры.
 6. **Scoped-токены Уровня 2** — точная механика выдачи/валидации `plugin_id`-scope (взаимосвязь с
-   [AD-052](./ad-052-public-api-platform.md), service-key/scopes ещё не реализованы).
+   [AD-052](./ad-052-public-api-platform.md): service-key/scopes реализованы — этап I; остаётся
+   `plugin_id`-scope поверх).
 7. **Эмиты остатка [AD-030](./ad-030-hooks-agent-events.md)** — порядок и приоритет доделки недостающих хуков.
 
 ## Последствия
@@ -475,7 +476,7 @@ install/enable/disable/update/remove/policy — ADMIN (managed) / владеле
 
 **Минусы/риски:** in-process код — доверенный после trust/скана (компромисса «полная изоляция» не даём);
 hot-reload в managed рискован (отсюда restart-модель); серверный allow-list для чисто локальных плагинов —
-кооперативен; зависимость от нереализованных [AD-068](./ad-068-skills-agents-registry.md)/[AD-052](./ad-052-public-api-platform.md);
+кооперативен; зависимость от [AD-068](./ad-068-skills-agents-registry.md) и остатка [AD-052](./ad-052-public-api-platform.md);
 UI-slot отложен — часть расширений (панели) пока недоступна.
 
 **Связи:**

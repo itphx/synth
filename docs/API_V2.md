@@ -26,19 +26,38 @@
 
 ### Способы (backend, приоритет проверки)
 
-1. **Cookie `user_session`** — серверная сессия в памяти процесса
+1. **Service-key (AD-052, этап I)** — `Authorization: Bearer synth_svc_…`
+   (машинный доступ). Распознаётся по префиксу секрета; резолвится в
+   синтетического пользователя `{ id: 'service:<keyId>', roles: key.roles }`
+   плюс контекст `{ scopes, allowedProjects?, rateLimitPerMinute? }`. Ключ,
+   отозванный (`revokedAt`) или истёкший (`expiresAt`), и неизвестный секрет →
+   `401 UNAUTHORIZED`. Управление — §5.28.
+2. **Cookie `user_session`** — серверная сессия в памяти процесса
    (`Map<sessionId, {user, expiresAt}>`, TTL `auth.sessionMaxAgeMinutes`).
    Устанавливается `POST /auth/spa-login` / OIDC callback. Cookie `httpOnly`,
    `sameSite=Lax`.
-2. **Debug-ключи** — при `SYNTH_AUTH_DEBUG=true` (`config.auth.debugMode`):
+3. **Debug-ключи** — при `SYNTH_AUTH_DEBUG=true` (`config.auth.debugMode`):
    `Authorization: Bearer <apiKey>` из `config.auth.testUsers`. Пользователь
    получает роли и `isTestUser=true`.
-3. **OIDC JWT** — при `config.oidc.enabled`: `Authorization: Bearer <jwt>`,
+4. **OIDC JWT** — при `config.oidc.enabled`: `Authorization: Bearer <jwt>`,
    верификация через lazy OIDC-клиент.
-4. **API key** — при `!debugMode && !oidc.enabled && config.apiKey`:
+5. **API key** — при `!debugMode && !oidc.enabled && config.apiKey`:
    `Authorization: Bearer <SYNTH_API_KEY>` → пользователь `api` с ролью `ADMIN`.
 
 Роли: `ADMIN`, `USER`, `LEAD`, `AUDITOR`.
+
+**Service-key: scopes и проектная проекция (AD-052).** Роли ключа дают совместимость
+с `requirePermission` (RBAC-эндпоинты), а `scopes` — точечный гейт поверх: если в
+контексте есть service-key, роут требует хотя бы один из своих scope (иначе
+`403 SCOPE_REQUIRED`). Для интерактивных кред (cookie/debug/OIDC/API-key/локальный
+ключ) scope-гейт — no-op (запрос пропускается). Каталог scope: `events:ingest`,
+`events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`,
+`sessions:create|read|prompt`, `schedules:read|write`, `llm:chat` + wildcard-семейства
+`events:*`, `bindings:*`, `keys:*`, `routes:*`, `sessions:*`, `schedules:*`
+(глобального `*` нет). Проектная проекция `allowedProjects`: если у ключа задан
+непустой список, доступны только входящие в него проекты — применяется в sessions,
+events/bindings и schedules (иначе `403 PROJECT_FORBIDDEN`); пусто/отсутствует —
+политика инстанса. Точки применения scope по роутам — в §5.5, §5.26, §5.27, §5.23.
 
 Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 
@@ -57,15 +76,20 @@ Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 | `attachUser` | Глобальный middleware `app.use('*', ...)`: кладёт пользователя в `c.set('user', ...)`, если он есть, и всегда вызывает `next()`. |
 | `requireAuth` | Нет пользователя → `401 {error:{code:'UNAUTHORIZED'}}`; иначе кладёт в контекст и `next()`. |
 | `requireAdmin` | Нет роли `ADMIN` → `403 {error:{code:'FORBIDDEN'}}`. |
-| `requirePermission(...roles)` | Нет ни одной из перечисленных ролей → `403 FORBIDDEN`. Используют `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`). |
+| `requirePermission(...roles)` | Нет ни одной из перечисленных ролей → `403 FORBIDDEN`. Используют `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
+
+Отдельно от `middleware.ts` — **scope-гейты service-key** (`packages/backend/src/auth/service-scope.ts`:
+`scopeGuard`/`projectGuard`, делегируют core-`requireScope`/`checkProjectAccess` и отдают
+локализованные `403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`; вне service-key — no-op).
 
 ### Standalone-core (`packages/core/src/auth/local.ts`)
 
 | Механизм | Описание |
 |---|---|
 | `Authorization: Bearer <apiKey>` | Совпал с `config.apiKey` → пользователь `local` (роль `ADMIN`). |
+| `Authorization: Bearer synth_svc_…` | Service-key (AD-052): синтетический пользователь ключа + `scopes`/`allowedProjects` в контексте; отозванный/истёкший/неизвестный → `401`. |
 | Cookie `synth_session` | HMAC-подписанный API-ключ (v1) либо JSON `{v:2, kind:'local'\|'server', user}` (v2, гибридная личность). |
-| `requireAuth` | Единственный guard; `403`/`ADMIN`-проверок в standalone нет. |
+| `requireAuth` | Единственный guard; `403`/`ADMIN`-проверок в standalone нет (scope-гейты `requireScope`/`checkProjectAccess` работают только для service-key). |
 
 В standalone `requireAuth` навешан глобально на `/api/*`, поэтому все `/api/v2/*`
 эндпоинты (кроме health и `hybrid/status`) требуют ключ. Гибридный вход
@@ -105,8 +129,10 @@ backend и standalone монтируют одну и ту же фабрику.
 | Код | Где |
 |---|---|
 | `VALIDATION_ERROR`, `BAD_REQUEST`, `INVALID_REQUEST` | валидация тел/параметров |
-| `UNAUTHORIZED` | `requireAuth`, auth-роуты |
+| `UNAUTHORIZED` | `requireAuth`, auth-роуты, неверный/отозванный/истёкший service-key (AD-052) |
 | `FORBIDDEN` | `requireAdmin`/`requirePermission`, filesystem |
+| `SCOPE_REQUIRED` | service-key без нужного scope (AD-052; только для service-key) |
+| `PROJECT_FORBIDDEN` | service-key с `allowedProjects` без доступа к проекту (AD-052) |
 | `NOT_FOUND` | отсутствие сессии/проекта/провайдера/модели/агента/файла/лога |
 | `CONFLICT` | дубли MCP-сервера, retry-состояние |
 | `ALREADY_EXISTS`, `IS_DIRECTORY`, `DIR_NOT_EMPTY`, `PATH_TRAVERSAL`, `PERMISSION_DENIED` | ФС |
@@ -156,6 +182,9 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 точка проксирования LLM в managed-хабе (OpenAI-совместимый формат). Любой
 LLM-вызов идёт через `GatewayProvider` (guard, обфускация, rate limit, аудит,
 AD-036); напрямую провайдера не дёргать.
+
+Для service-key (AD-052) требуется scope `llm:chat` (проектная проекция роут не
+ограничивает — у прокси нет проектного измерения); проектных гейтов нет.
 
 Тело (подмножество OpenAI): `model`, `messages[]`, `temperature`, `max_tokens`,
 `top_p`, `stream`, `tools[]`, `session_id`, `provider`. Ответ — `chat.completion`
@@ -260,6 +289,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 > `SessionSettings` MCP/скиллов (AD-071 §2.4 / AD-046 §4.5): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
 > **Видимость `GET /api/v2/sessions` (AD-089).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии проектов, участником которых является пользователь (`owner` проекта или любой `members`, любая роль). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости. Доступ **по id** (`GET /:id/status|prompt|stats`, `POST /:id/prompt`, `GET /:id/messages` и т.п.) — владелец сессии **или** участник проекта сессии, а также `ADMIN`/`LEAD`; иначе `403 FORBIDDEN`. Хелпер — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
+> **Scope service-key (AD-052):** `GET /` и `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages` — `sessions:read`. При непустом `allowedProjects` проектная проекция проверяется по `project_id` сессии, иначе `403 PROJECT_FORBIDDEN`.
 
 ### 5.6 Messages — `/api/v2/messages`
 
@@ -663,6 +693,12 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 source/type/ключу/payload). RBAC managed: приём — API-ключ привязки либо `requireAuth` +
 rate limit (120/мин); мутации привязок/правил/ключей — `requirePermission('ADMIN','LEAD')`,
 чтение ключей привязки — LEAD/ADMIN, остальное чтение — `requireAuth`; в core — единый `requireAuth`.
+**Scope service-key (AD-052):** `POST /` — `events:ingest`; `GET /` (SSE) и `GET /journal` —
+`events:watch`; список/мутации привязок — `bindings:read`/`bindings:write`; ключи привязок —
+`keys:read`/`keys:write`; правила — `routes:read`/`routes:write`. Если у ключа задан
+`allowedProjects`, проектная проекция применяется к правилам/привязкам с проектным измерением
+(иначе `403 PROJECT_FORBIDDEN`). Привязки/ключи приёма по binding-key (`synth_evt_…`) — отдельная
+модель (не service-key).
 Per-key rate limit (`KeyRateLimiter`, окно 60 c) — лимит ключа `rateLimitPerMinute`, иначе
 глобальный `events.keyRateLimitPerMinute` (0 — без лимита) → 429 `RATE_LIMITED`; мастер-выключатель
 `events.enabled: false` → 503 `UNAVAILABLE`. Runtime-настройки — `GET/PUT/DELETE /api/v2/settings/events` (§5.21).
@@ -696,7 +732,9 @@ backend). Срабатывание не создаёт сессию
 (`GET`) — `requireAuth`; мутации (`POST`/`PUT`/`DELETE`) и принудительный запуск
 (`POST /:id/run`) — только ADMIN (`writeGuard = requireAdmin`); `run` дополнительно
 под rate limit 10/60 c (`runMiddleware`). В core (standalone) — единый `requireAuth`
-на все методы.
+на все методы. **Scope service-key (AD-052):** `schedules:read` (чтение и `GET /:id/jobs`),
+`schedules:write` (`POST`/`PUT`/`DELETE`/`POST /:id/run`); проектная проекция — по цели
+расписания (`bound`/`queue` → проект сессии, `ephemeral` → `project`).
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
 |---|---|---|---|---|
@@ -718,6 +756,55 @@ backend). Срабатывание не создаёт сессию
 сервисом; `catchUp` (`skip`/`once`, дефолт `scheduler.catchUp`) управляет поведением
 при пропущенном на старте срабатывании, Job-история — `GET /:id/jobs`.
 
+### 5.28 Service keys — `/api/v2/service-keys` (оба, AD-052 этап I)
+
+Реестр **service-key** — независимых от binding-key (AD-089) scoped-ключей инстанса
+для внешних сервисов (мессенджер-шлюзы и т.п.). Единая фабрика `createServiceKeyRoutes`
+для core и backend; store — `{dataDir}/service-keys.json` (AD-005, атомарная запись).
+Секрет `synth_svc_<base64url>` отдаётся **единственный раз** при создании; at-rest — только
+sha256-хеш, в списке — `prefix`. RBAC: managed (backend) — только `ADMIN`; core (standalone) —
+единый `requireAuth`.
+
+| Метод | Путь | Сборка | RBAC (backend / core) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/service-keys` | оба | ADMIN / auth | Список `{keys}` — метаданные без секрета и хеша |
+| POST | `/api/v2/service-keys` | оба | ADMIN / auth | Создать (`serviceApiKeyCreateSchema`): `{label, description?, roles?, scopes, allowedProjects?, rateLimitPerMinute?, expiresAt?}` → 201 `ServiceApiKeyCreated` = метаданные + `key` (plaintext `synth_svc_<base64url>`, показывается **один раз**); дубль метки → 409 `CONFLICT`; невалидное тело/скоуп/роль → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/service-keys/:id` | оба | ADMIN / auth | Метаданные ключа (`ServiceApiKey`); нет ключа → 404 `NOT_FOUND` |
+| PATCH | `/api/v2/service-keys/:id` | оба | ADMIN / auth | Обновить (`serviceApiKeyUpdateSchema`): `{label?, description?, roles?, scopes?, allowedProjects?, rateLimitPerMinute?, expiresAt?}`; `null` — сброс поля, `undefined` — не трогать; смена метки проверяется на уникальность → 200; дубль → 409 `CONFLICT` |
+| DELETE | `/api/v2/service-keys/:id` | оба | ADMIN / auth | Удалить ключ → 204; нет записи → 404 `NOT_FOUND` |
+| POST | `/api/v2/service-keys/:id/revoke` | оба | ADMIN / auth | Мягкий отзыв (проставляет `revokedAt`, идемпотентно) → 200 метаданные; после — ключ не аутентифицирует; нет ключа → 404 `NOT_FOUND` |
+
+**Поля ключа** (`ServiceApiKey`, `@itphx/synth-shared`): `id` (`svk_<uuid>`),
+`label` (обязательна; уникальна глобально по инстансу, регистронезависимо),
+`description?`, `roles: GlobalRole[]` (роли синтетического пользователя; пусто — дефолт `USER`),
+`scopes: string[]` (каталог + wildcard-семейства, см. §1), `allowedProjects?: string[]`
+(проектная проекция), `rateLimitPerMinute?` (лимит запросов/мин ключа; 0/не задано — без лимита;
+в managed enforced глобальным middleware `KeyRateLimiter` → 429 `RATE_LIMITED`),
+`expiresAt?`/`revokedAt?` (срок/мягкий отзыв), `createdBy`/`createdAt`/`lastUsedAt?`, `prefix`.
+Ключи — **инстанс-локальные** секреты (не переносятся publish/fork, AD-042/AD-081).
+
+**Аутентификация.** `Authorization: Bearer synth_svc_…` → синтетический пользователь
+`{ id: 'service:<keyId>', roles: key.roles }`; контекст `{ scopes, allowedProjects?, rateLimitPerMinute? }`
+кладётся в `serviceKey`. Неверный/неизвестный/отозванный/истёкший секрет → `401 UNAUTHORIZED`.
+Роли ключа совместимы с `requirePermission`, `scopes` — точечный гейт поверх (`403 SCOPE_REQUIRED`);
+при непустом `allowedProjects` проектная проекция проверяется в sessions/events-bindings/schedules
+(`403 PROJECT_FORBIDDEN`). Управление ключами (CRUD) — только `ADMIN` в managed (целевой
+пользовательский путь — раздел UI «Сервисные ключи»).
+
+**Пример.**
+
+```bash
+# Создать ключ (ADMIN). Секрет придёт один раз в поле "key" (synth_svc_…).
+curl -X POST http://localhost:5000/api/v2/service-keys \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"label":"telegram-gw","roles":["USER"],"scopes":["events:ingest","sessions:create"],"allowedProjects":["proj_1"]}'
+
+# Использовать ключ как машинный доступ (scope events:ingest).
+curl -X POST http://localhost:5000/api/v2/events \
+  -H 'Authorization: Bearer synth_svc_<...>' -H 'Content-Type: application/json' \
+  -d '{"source":"telegram","type":"message","payload":{"text":"ping"}}'
+```
+
 ---
 
 ## 6. Источники
@@ -727,6 +814,8 @@ backend). Срабатывание не создаёт сессию
 | Backend app + middleware + SSE/WS | `packages/backend/src/app.ts` |
 | Backend роуты | `packages/backend/src/routes/*.ts` |
 | Backend auth/RBAC | `packages/backend/src/auth/middleware.ts`, `auth/oidc.ts` |
+| Service-key scopes (AD-052) | `packages/core/src/server/service-scope.ts`, `packages/backend/src/auth/service-scope.ts` |
+| Service-key store/роуты (AD-052) | `packages/core/src/storage/service-api-key-store.ts`, `packages/core/src/server/routes/service-keys.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

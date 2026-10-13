@@ -252,6 +252,12 @@ hook-шину, а создание сессий сведено в один funne
   аутентифицирует без пользовательских кред (source/чат из привязки), использование пишется
   в журнал (`keyId`); per-key rate limit — лимит ключа либо глобальный `events.keyRateLimitPerMinute`
   (`KeyRateLimiter`, 429); ключи — инстанс-локальные (не переносятся publish/fork).
+- **Service-key** (`ServiceApiKeyStore`, `{dataDir}/service-keys.json`, AD-052 этап I) — независимый
+  от binding-key scoped-ключ инстанса для внешних сервисов: секрет `synth_svc_<base64url>` (at-rest
+  sha256), обязательная уникальная `label`, `roles`/`scopes`/`allowedProjects` (проектная проекция)/
+  срок/лимит; аутентифицирует машину в синтетического пользователя, `scopes` ограничивают эндпоинты
+  (`requireScope`, `packages/core/src/server/service-scope.ts`), проекция — sessions/events/schedules.
+  Эндпоинты CRUD и scopes — `docs/API_V2.md` §5.28/§1.
 - **`RequestSessionService`** (`engine/events/request-session.ts`) — единый funnel
   создания сессии: `request` (явное создание из UI/CLI/агента, эмит
   `session_requested`) и `handleEvent` (`external_event` → `decide` → материализация
@@ -272,6 +278,6 @@ hook-шину, а создание сессий сведено в один funne
 ```
 
 API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `docs/CONFIGURATION.md`
-(секция `events`). Источники/интеграции: шедулер AD-051 (cron) и API-ключи привязок
-AD-052 (первый срез — binding-key) реализованы; публичная API-платформа (service-key,
-OpenAPI, SDK, webhooks) и плагины AD-086 — нет.
+(секция `events`). Источники/интеграции: шедулер AD-051 (cron), API-ключи привязок и
+service-key со scopes/проектной проекцией (AD-052 этап I) реализованы; остаток публичной
+API-платформы (webhooks, public-OpenAPI, SDK) и плагины AD-086 — нет.

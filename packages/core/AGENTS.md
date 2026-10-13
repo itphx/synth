@@ -24,7 +24,7 @@
 - Публичные точки входа: `createStandaloneApp()` (`server/app.ts`),
   `createToolRegistry()` (`engine/tools/index.ts`), `createAgentRegistry()`
   (`engine/agents/index.ts`), `FileStore`/`JsonStore`/`ProjectStore`/
-  `FileProfileStore`/`RuntimeSettingsStore`/`SSHKeyStore` (`storage/*`), `ChatOrchestrator`
+  `FileProfileStore`/`RuntimeSettingsStore`/`SSHKeyStore`/`ServiceApiKeyStore` (`storage/*`), `ChatOrchestrator`
   (`engine/orchestrator.ts`), `SessionManager` (`sessions/manager.ts`),
   `QueueProcessorManager` (`queue/processor.ts`), `EventBus` (`events/bus.ts`).
 - Движок stateless: история и состояние — на бэкенде; движок получает историю +
@@ -60,6 +60,10 @@
   (`engine/llm-error.ts`); строки движка — по ключам `shared/i18n` (AD-041).
 - События сессии — локальный `EventBus`; UI слушает через EventHub/TransportClient
   (`/ws/events`) с SSE-фоллбеком (AD-008/009/024).
+- Машинный доступ внешних сервисов — через **service-key** (AD-052 этап I): `ServiceApiKeyStore`
+  + синтетический пользователь + `scopes`/`allowedProjects`; enforcement — `requireScope`/
+  `checkProjectAccess` (`server/service-scope.ts`), **не** через permission-слой тулов (тот
+  роль-оси не имеет, AD-029).
 - Создание сессии — через единый funnel `RequestSessionService`
   (`engine/events/request-session.ts`): явный запрос — `direct`, внешнее событие —
   через `EventRouter`; `SessionManager.createSession` — materialization-примитив
@@ -125,7 +129,11 @@
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
-  `skill-scope`, `git`, `ssh-keys`, `events`, `identities`.
+  `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`.
+- `server/service-scope.ts` — AD-052 (этап I): enforcement service-key — `requireScope(...)`
+  (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkProjectAccess`/
+  `isProjectAllowed` (проектная проекция `allowedProjects`), `getServiceCredential`
+  (`serviceKey` из контекста), типы `ScopeGuardFactory`/`ProjectGuard`.
 - `server/session-visibility.ts` — AD-089: `isSessionVisible` (+ `SessionOwnerCtx`) —
   единое правило видимости сессии в списке (elevated/владелец/ownerless/проект-участие).
 - `server/routes/identities.ts` — `createIdentityRoutes` (AD-089): идентичности текущего
@@ -144,7 +152,16 @@
   `getKeyRateLimitPerMinute()`; `isEnabled()` — мастер-выключатель → 503) и CRUD bindings/routes/keys
   (`writeGuard`/`keyReadGuard`; core-дефолты — `requireAuth`, backend передаёт RBAC). Ключи: `GET/POST`
   списка/создания, `PATCH` метаданных, `POST .../revoke` (мягкий отзыв), `DELETE`; `label` обязательна
-  и уникальна глобально (дубль → 409 `CONFLICT`).
+  и уникальна глобально (дубль → 409 `CONFLICT`). AD-052: scope-гейты на роутах
+  (`events:ingest`, `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`)
+  и проектная проекция через `scopeGuard`/`projectGuard` (core-дефолты — `requireScope`/`checkProjectAccess`).
+- `server/routes/service-keys.ts` — `createServiceKeyRoutes` (AD-052 этап I): CRUD service-key
+  инстанса (`GET/POST /api/v2/service-keys`, `GET/PATCH/DELETE /:id`, `POST /:id/revoke`),
+  store `ServiceApiKeyStore`; `opts.writeGuard`/`readGuard` (core — `requireAuth`, managed — ADMIN),
+  `messages` (i18n), `resolveUserId` (creator). Секрет — единожды в ответе `POST`.
+  `storage/service-api-key-store.ts` — `ServiceApiKeyStore` (`{dataDir}/service-keys.json`):
+  sha256 at-rest, `resolveBySecret` (revoked/expired → `null`), `revoke`/`touch`,
+  `ServiceApiKeyConflictError`; `ServiceKeyCredential` — контекст enforcement.
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
@@ -272,7 +289,11 @@
   `mergeDecisionConfig` — runtime-настройки decision-слоя, AD-084, включая `escalationProvider`/`escalationModel`),
   `McpRegistryStore` (единый реестр MCP, AD-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (AD-046), `SSHKeyStore`
-  (`secrets/ssh-keys`, шифрование at-rest, AD-076), `EventBindingStore`
+  (`secrets/ssh-keys`, шифрование at-rest, AD-076),
+  `ServiceApiKeyStore` (`service-keys.json`, AD-052 этап I: scoped-ключи инстанса — sha256-хеш
+  секрета `synth_svc_…` at-rest, plaintext один раз при `create`, `resolveBySecret` с проверкой
+  `revokedAt`/`expiresAt`, `revoke`/`touch`/`update`, `ServiceApiKeyConflictError`),
+  `EventBindingStore`
   (`events/bindings.json`), `EventJournalStore` (`events/journal.jsonl`, AD-089),
   `RouteRuleStore` (`events/routes.json`, правила маршрутизации, AD-089),
   `EventApiKeyStore` (`events/api-keys.json`, API-ключи привязок: sha256-хеш секрета at-rest,
@@ -318,7 +339,10 @@
   `createSettingsRoutes`, `createDictionaryRoutes`, `createProviderRoutes`,
   `createModelRoutes`, `createSessionRoutes`, `createGitRoutes`,
   `createSshKeyRoutes`, `createAgentSshKeyRoutes`, `createFsRoutes` (project-aware
-  FS: плоский root / workspace проекта через `getProjectWorkspace`, AD-075).
+  FS: плоский root / workspace проекта через `getProjectWorkspace`, AD-075),
+  `createServiceKeyRoutes` (AD-052 этап I: CRUD service-key, `writeGuard`/`readGuard`/`messages`).
+  `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
+  `scopeGuard`/`projectGuard` (AD-052; core-дефолты — `requireScope`/`checkProjectAccess`).
   `createSettingsRoutes` (AD-089/AD-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и
