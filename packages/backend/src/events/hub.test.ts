@@ -24,11 +24,12 @@ function makeHub(existingSessions: string[] = []) {
   return { eventBus, hub };
 }
 
-function makeClient() {
+function makeClient(allSessions = false) {
   const received: BusEvent[] = [];
   const client: EventClient = {
     userId: 'u1',
     username: 'u1',
+    allSessions,
     send: (event: BusEvent) => received.push(event),
   };
   return { client, received };
@@ -183,5 +184,52 @@ describe('EventHub — доставка сессий, созданных пос�
     eventBus.publish(session!.id, 'stream.usage', { session_id: session!.id });
 
     expect(received.some((e) => e.sessionId === session!.id)).toBe(false);
+  });
+});
+
+// AD-052 (этап IV) / AD-089: машинные watcher'ы (service-key) и роли сквозного
+// обзора подписываются на глобальный поток `eventBus.subscribeAll`, а не по
+// владельцу сессий. Раньше синтетический пользователь `service:<keyId>` не владел
+// сессиями → подписок 0 → ответы агента не доходили до шлюза.
+describe('EventHub — watch-all клиенты (AD-052/AD-089)', () => {
+  it('all-клиент получает события чужой сессии без явной подписки', async () => {
+    const { eventBus, hub } = makeHub([]);
+    const { client, received } = makeClient(true);
+    await hub.registerClient(client);
+
+    eventBus.publish('foreign', 'stream.usage', { session_id: 'foreign', outputTokens: 1 });
+
+    expect(received.some((e) => e.type === 'stream.usage' && e.sessionId === 'foreign')).toBe(true);
+  });
+
+  it('обычный клиент чужую сессию не получает (контроль)', async () => {
+    const { eventBus, hub } = makeHub([]);
+    const { client, received } = makeClient();
+    await hub.registerClient(client);
+
+    eventBus.publish('foreign', 'stream.usage', { session_id: 'foreign' });
+
+    expect(received.some((e) => e.sessionId === 'foreign')).toBe(false);
+  });
+
+  it('all-клиент не дублирует события своей сессии', async () => {
+    const { eventBus, hub } = makeHub(['mine']);
+    const { client, received } = makeClient(true);
+    await hub.registerClient(client);
+
+    eventBus.publish('mine', 'stream.done', { session_id: 'mine' });
+
+    expect(received.filter((e) => e.sessionId === 'mine').length).toBe(1);
+  });
+
+  it('unregisterClient снимает глобальную подписку (повторные события не текут)', async () => {
+    const { eventBus, hub } = makeHub([]);
+    const { client, received } = makeClient(true);
+    await hub.registerClient(client);
+    hub.unregisterClient(client);
+
+    eventBus.publish('foreign', 'stream.usage', { session_id: 'foreign' });
+
+    expect(received.length).toBe(0);
   });
 });

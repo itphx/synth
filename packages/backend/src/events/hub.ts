@@ -5,8 +5,18 @@ import type { SessionManager } from '@itphx/synth-core';
 export interface EventClient {
   userId: string
   username: string
+  /**
+   * Watch-all: клиент получает события ВСЕХ сессий через глобальный поток
+   * `eventBus.subscribeAll`, а не только сессии владельца `userId`.
+   * Используется машинными watcher'ами (service-key, AD-052 этап IV) и ролями
+   * сквозного обзора ADMIN/LEAD (AD-089) — паритет со standalone-core SSE.
+   */
+  allSessions?: boolean
   send(event: BusEvent): void
 }
+
+/** Служебный ключ глобальной подписки all-клиента в `clientSubs`. */
+const ALL_SESSIONS_KEY = '*';
 
 /** Типизированные payload'ы дочерних событий (ключи — из эмиттеров тула `task`). */
 interface SessionCreatedPayload {
@@ -81,6 +91,15 @@ export class EventHub {
     this.clients.set(client.userId, arr);
     this.clientSubs.set(client, new Map());
 
+    // Watch-all (service-key watcher / ADMIN/LEAD): глобальная подписка на все
+    // события шины. Per-session подписок нет — владельца сессий у машинного
+    // аккаунта нет, а обзорные роли видят чужие сессии; дубли не нужны.
+    if (client.allSessions) {
+      this._subscribeClientToAll(client);
+      console.log(`[EventHub] Register client (all sessions): user=${client.username} clients=${arr.length}`);
+      return;
+    }
+
     const sessions = await this.sessionManager.listSessions({ userId: client.userId });
     console.log(`[EventHub] Register client: user=${client.username} clients=${arr.length} sessions=${sessions.length}`);
 
@@ -141,7 +160,26 @@ export class EventHub {
     console.debug(`[EventHub] Unsubscribe session: session=${sessionId}`);
   }
 
+  /** Глобальная подписка all-клиента: события всех сессий без привязки к владельцу. */
+  private _subscribeClientToAll(client: EventClient): void {
+    const subs = this.clientSubs.get(client);
+    if (!subs || subs.has(ALL_SESSIONS_KEY)) return;
+
+    const unsub = this.eventBus.subscribeAll((event: BusEvent) => {
+      try {
+        client.send(event);
+      } catch {
+        // ignore send errors
+      }
+    });
+    subs.set(ALL_SESSIONS_KEY, unsub);
+  }
+
   private _subscribeClientToSession(client: EventClient, sessionId: string): void {
+    // all-клиент покрыт глобальной подпиской — per-session подписки не нужны
+    // (иначе дубли доставки).
+    if (client.allSessions) return;
+
     const subs = this.clientSubs.get(client);
     if (!subs) return;
     if (subs.has(sessionId)) return;

@@ -1311,6 +1311,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.get('/api/v2/events', auth.requireAuth, scopeGuard('events:watch'), async (c) => {
       const user = (await auth.getCurrentUser(c))!;
       const signal = c.req.raw.signal;
+      // AD-052 (этап IV) / AD-089: машинный watcher (service-key со scope
+      // `events:watch`) и роли сквозного обзора ADMIN/LEAD получают события ВСЕХ
+      // сессий (паритет со standalone-core `subscribeAll`), обычный пользователь —
+      // только своих. Без этого синтетический `service:<keyId>` шлюза не владеет
+      // сессиями → подписок 0 → ответы агента не доходят до Telegram.
+      const allSessions = Boolean(getServiceCredential(c)) || auth.hasRole(c as never, 'ADMIN', 'LEAD');
 
       return new Response(
         new ReadableStream({
@@ -1319,6 +1325,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
             const sseClient: EventClient = {
               userId: user.id,
               username: user.username,
+              allSessions,
               send(event: BusEvent) {
                 try {
                   const line = `data: ${JSON.stringify(event)}\n\n`;
@@ -1330,7 +1337,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
             };
 
             try {
-              console.log(`[SSE /api/v2/events] Connected: user=${user.username}`);
+              console.log(`[SSE /api/v2/events] Connected: user=${user.username} allSessions=${allSessions}`);
               await eventHub.registerClient(sseClient);
 
               // Keepalive: раз в 30 секунд отправляем комментарий для предотвращения разрыва
@@ -1441,12 +1448,20 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
             return;
           }
 
+          // AD-052 (этап IV) / AD-089: тот же watch-all, что у SSE. В WS-апгрейде
+          // Hono-контекста нет, поэтому service-key распознаётся по синтетическому
+          // id `service:<keyId>` (его ставит резолвер `getCurrentUser`); ADMIN/LEAD —
+          // сквозной обзор. Обычный USER получает только свои сессии.
+          const allSessions =
+            user.id.startsWith('service:') || auth.hasRole({ get: () => user }, 'ADMIN', 'LEAD');
+
           wss.handleUpgrade(request, socket, head, (ws) => {
             const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
             const client: EventClient = {
               userId: user.id,
               username: user.username,
+              allSessions,
               send(event) {
                 try {
                   if (ws.readyState === ws.OPEN) {
