@@ -19,6 +19,8 @@ import type { EventApiKeyStore } from '../../storage/event-api-key-store.js';
 import type { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { EventJournalStore } from '../../storage/event-journal-store.js';
 import type { RouteRuleStore } from '../../storage/route-rule-store.js';
+import { requireScope, checkProjectAccess } from '../service-scope.js';
+import type { ScopeGuardFactory, ProjectGuard } from '../service-scope.js';
 
 /**
  * AD-089: маршруты приёма внешних событий и управления биндингами.
@@ -122,6 +124,16 @@ export interface EventRoutesOptions {
    * При `false` `POST /` отвечает 503. Не передан — приём разрешён.
    */
   isEnabled?: () => boolean;
+  /**
+   * AD-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
+   * `requireScope` из core (нет service-key в контексте → пропускает).
+   */
+  scopeGuard?: ScopeGuardFactory;
+  /**
+   * AD-052 (этап I): гейт проектной проекции. По умолчанию — `checkProjectAccess`
+   * из core (нет service-key/`allowedProjects` → пропускает).
+   */
+  projectGuard?: ProjectGuard;
 }
 
 const DEFAULT_MESSAGES: EventRouteMessages = {
@@ -170,13 +182,16 @@ export function createEventRoutes(
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
   const keyReadGuard: Middleware = opts.keyReadGuard ?? auth.requireAuth;
   const ingestGuard: Middleware = opts.ingestGuard ?? auth.requireAuth;
+  // AD-052 (этап I): scope-гейты service-key и проектная проекция.
+  const scoped = opts.scopeGuard ?? requireScope;
+  const projectGuard = opts.projectGuard ?? checkProjectAccess;
   // AD-089/AD-052: per-key rate limit (fixed window 60 c), один на приложение.
   const keyRateLimiter = new KeyRateLimiter(60_000);
 
   // POST /api/v2/events — приём внешнего события (ingress). Аутентификация:
   // API-ключ привязки (если задан резолвер и пришёл Bearer `synth_evt_…`) либо
   // fallback `ingestGuard` (обычный пользовательский Bearer / без Bearer).
-  app.post('/', async (c) => {
+  app.post('/', scoped('events:ingest'), async (c) => {
     // MASTER: приём внешних событий может быть отключён (`events.enabled: false`).
     if (opts.isEnabled && !opts.isEnabled()) {
       return c.json({ error: { code: 'UNAVAILABLE', message: messages.eventsDisabled(c) } }, 503);
@@ -303,13 +318,13 @@ export function createEventRoutes(
   });
 
   // GET /api/v2/events/bindings — список биндингов.
-  app.get('/bindings', auth.requireAuth, async (c) => {
+  app.get('/bindings', auth.requireAuth, scoped('bindings:read'), async (c) => {
     const bindings = await deps.bindingStore.list();
     return c.json({ bindings });
   });
 
   // POST /api/v2/events/bindings — upsert биндинга (по source+chatKey/threadKey).
-  app.post('/bindings', writeGuard, async (c) => {
+  app.post('/bindings', writeGuard, scoped('bindings:write'), async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();
@@ -323,6 +338,9 @@ export function createEventRoutes(
     }
 
     const input = parsed.data;
+    // AD-052: проектная проекция — биндинг адресует проект (`input.project`).
+    const denied = projectGuard(c, input.project);
+    if (denied) return denied;
     // Существующую привязку по ключу заменяем (id сохраняется) — это upsert.
     const existing = input.threadKey || input.chatKey
       ? await deps.bindingStore.findByKey({
@@ -336,7 +354,7 @@ export function createEventRoutes(
   });
 
   // DELETE /api/v2/events/bindings/:id — удаление биндинга (+ каскад ключей).
-  app.delete('/bindings/:id', writeGuard, async (c) => {
+  app.delete('/bindings/:id', writeGuard, scoped('bindings:write'), async (c) => {
     const id = c.req.param('id');
     const removed = await deps.bindingStore.remove(id);
     if (!removed) {
@@ -348,13 +366,13 @@ export function createEventRoutes(
   });
 
   // GET /api/v2/events/bindings/:id/keys — ключи привязки (без секретов).
-  app.get('/bindings/:id/keys', keyReadGuard, async (c) => {
+  app.get('/bindings/:id/keys', keyReadGuard, scoped('keys:read'), async (c) => {
     const keys = await deps.apiKeyStore.listByBinding(c.req.param('id'));
     return c.json({ keys });
   });
 
   // POST /api/v2/events/bindings/:id/keys — создание ключа (секрет — единожды).
-  app.post('/bindings/:id/keys', writeGuard, async (c) => {
+  app.post('/bindings/:id/keys', writeGuard, scoped('keys:write'), async (c) => {
     const bindingId = c.req.param('id');
     if (!(await deps.bindingStore.get(bindingId))) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.bindingNotFound(c) } }, 404);
@@ -394,7 +412,7 @@ export function createEventRoutes(
   });
 
   // PATCH /api/v2/events/bindings/:id/keys/:keyId — обновление метаданных ключа.
-  app.patch('/bindings/:id/keys/:keyId', writeGuard, async (c) => {
+  app.patch('/bindings/:id/keys/:keyId', writeGuard, scoped('keys:write'), async (c) => {
     const bindingId = c.req.param('id');
     const keyId = c.req.param('keyId');
 
@@ -426,7 +444,7 @@ export function createEventRoutes(
   });
 
   // POST /api/v2/events/bindings/:id/keys/:keyId/revoke — мягкий отзыв ключа.
-  app.post('/bindings/:id/keys/:keyId/revoke', writeGuard, async (c) => {
+  app.post('/bindings/:id/keys/:keyId/revoke', writeGuard, scoped('keys:write'), async (c) => {
     const bindingId = c.req.param('id');
     const keyId = c.req.param('keyId');
     const revoked = await deps.apiKeyStore.revoke(bindingId, keyId);
@@ -438,7 +456,7 @@ export function createEventRoutes(
   });
 
   // DELETE /api/v2/events/bindings/:id/keys/:keyId — удаление ключа.
-  app.delete('/bindings/:id/keys/:keyId', writeGuard, async (c) => {
+  app.delete('/bindings/:id/keys/:keyId', writeGuard, scoped('keys:write'), async (c) => {
     const removed = await deps.apiKeyStore.remove(c.req.param('id'), c.req.param('keyId'));
     if (!removed) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.keyNotFound(c) } }, 404);
@@ -447,13 +465,13 @@ export function createEventRoutes(
   });
 
   // GET /api/v2/events/routes — список правил маршрутизации.
-  app.get('/routes', auth.requireAuth, async (c) => {
+  app.get('/routes', auth.requireAuth, scoped('routes:read'), async (c) => {
     const rules = await deps.routeRuleStore.list();
     return c.json({ rules });
   });
 
   // POST /api/v2/events/routes — upsert правила (по `id` — обновление, иначе создание).
-  app.post('/routes', writeGuard, async (c) => {
+  app.post('/routes', writeGuard, scoped('routes:write'), async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();
@@ -492,7 +510,7 @@ export function createEventRoutes(
   });
 
   // DELETE /api/v2/events/routes/:id — удаление правила.
-  app.delete('/routes/:id', writeGuard, async (c) => {
+  app.delete('/routes/:id', writeGuard, scoped('routes:write'), async (c) => {
     const removed = await deps.routeRuleStore.remove(c.req.param('id'));
     if (!removed) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.ruleNotFound(c) } }, 404);
@@ -501,7 +519,7 @@ export function createEventRoutes(
   });
 
   // GET /api/v2/events/journal?limit= — последние записи журнала (default 50, cap 500).
-  app.get('/journal', auth.requireAuth, async (c) => {
+  app.get('/journal', auth.requireAuth, scoped('events:watch'), async (c) => {
     const raw = c.req.query('limit');
     const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
     const limit = Number.isFinite(parsed) && parsed > 0

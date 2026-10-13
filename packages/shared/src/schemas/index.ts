@@ -6,6 +6,7 @@ import {
   StatusMessageType,
   PROJECT_ICON_KEYS,
   PROJECT_COLOR_KEYS,
+  isKnownScope,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
@@ -685,6 +686,77 @@ export type EventBindingApiKeyCreatedRequest = z.infer<typeof eventBindingApiKey
 export const eventKeyIngestSchema = eventIngestSchema.partial({ source: true });
 
 export type EventKeyIngestRequest = z.infer<typeof eventKeyIngestSchema>;
+
+// --- Service-key (AD-052, этап I) ---
+
+/**
+ * AD-052: каталог скоупов service-key + wildcard-семейства. Глобальный `*` не
+ * принимается (`isKnownScope`).
+ */
+export const serviceScopeSchema = z
+  .string()
+  .min(1)
+  .refine((value) => isKnownScope(value), { message: 'Неизвестный scope' });
+
+const serviceScopesSchema = z.array(serviceScopeSchema).min(1);
+
+/**
+ * AD-052: метаданные service-key (ответы API). Секрет (`key`) и его хеш здесь
+ * отсутствуют — наружу не отдаются (в списке — `prefix`).
+ */
+export const serviceApiKeySchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+  roles: z.array(globalRoleSchema),
+  scopes: z.array(z.string().min(1)),
+  allowedProjects: z.array(z.string().min(1)).optional(),
+  rateLimitPerMinute: z.number().int().min(0).optional(),
+  expiresAt: z.string().optional(),
+  revokedAt: z.string().optional(),
+  createdBy: z.string().min(1),
+  createdAt: z.string().min(1),
+  lastUsedAt: z.string().optional(),
+  prefix: z.string().min(1),
+});
+
+export type ServiceApiKeyMeta = z.infer<typeof serviceApiKeySchema>;
+
+/** AD-052: тело создания service-key. `roles` не заданы — дефолт хранилища. */
+export const serviceApiKeyCreateSchema = z.object({
+  label: z.string().min(1),
+  description: z.string().optional(),
+  roles: z.array(globalRoleSchema).optional(),
+  scopes: serviceScopesSchema,
+  allowedProjects: z.array(z.string().min(1)).optional(),
+  rateLimitPerMinute: z.number().int().min(0).optional(),
+  expiresAt: z.string().optional(),
+});
+
+export type ServiceApiKeyCreateRequest = z.infer<typeof serviceApiKeyCreateSchema>;
+
+/**
+ * AD-052: тело обновления service-key. Все поля опциональны; `null` для
+ * `description`/`allowedProjects`/`rateLimitPerMinute`/`expiresAt` — сброс.
+ */
+export const serviceApiKeyUpdateSchema = z.object({
+  label: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  roles: z.array(globalRoleSchema).optional(),
+  scopes: serviceScopesSchema.optional(),
+  allowedProjects: z.array(z.string().min(1)).nullable().optional(),
+  rateLimitPerMinute: z.number().int().min(0).nullable().optional(),
+  expiresAt: z.string().nullable().optional(),
+});
+
+export type ServiceApiKeyUpdateRequest = z.infer<typeof serviceApiKeyUpdateSchema>;
+
+/** AD-052: ответ создания service-key — метаданные + plaintext-секрет (единожды). */
+export const serviceApiKeyCreatedSchema = serviceApiKeySchema.extend({
+  key: z.string().min(1),
+});
+
+export type ServiceApiKeyCreatedRequest = z.infer<typeof serviceApiKeyCreatedSchema>;
 
 /** AD-051/AD-089: цель расписания (дискриминированный союз по `mode`). */
 export const scheduleTargetSchema = z.discriminatedUnion('mode', [

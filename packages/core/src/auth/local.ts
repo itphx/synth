@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { User } from '@itphx/synth-shared';
 import { createMiddleware } from 'hono/factory';
+import { isServiceKeySecret } from '../storage/service-api-key-store.js';
+import type { ServiceKeyCredential } from '../storage/service-api-key-store.js';
 
 // Cookie-сессия standalone: подписанный API-ключ (HMAC-SHA256)
 const SESSION_COOKIE = 'synth_session';
@@ -64,6 +66,15 @@ function buildCookie(value: string, maxAge: number): string {
 
 export interface LocalAuthConfig {
   apiKey: string;
+  /**
+   * AD-052 (этап I): резолвер service-key (`synth_svc_…`) → синтетический
+   * пользователь + контекст (roles/scopes/allowedProjects). Не задан — приём
+   * по service-key недоступен. Интерактивные креды (api-key/cookie) не
+   * затрагиваются.
+   */
+  resolveServiceKey?: (
+    rawSecret: string,
+  ) => Promise<{ user: User; credential: ServiceKeyCredential } | null>;
 }
 
 /**
@@ -193,6 +204,21 @@ export function createLocalAuth(config: LocalAuthConfig): LocalAuthKit {
   };
 
   const requireAuth = createMiddleware(async (c, next) => {
+    // AD-052 (этап I): service-key — машинный доступ со scopes/проектной
+    // проекцией. Распознаётся по префиксу секрета `synth_svc_`; резолвер
+    // асинхронный, поэтому ветка живёт в middleware, а не в sync `getCurrentUser`.
+    const token = extractBearerToken(c.req.header('Authorization'));
+    if (token && isServiceKeySecret(token)) {
+      const resolved = config.resolveServiceKey ? await config.resolveServiceKey(token) : null;
+      if (!resolved) {
+        return c.json({ error: { code: 'UNAUTHORIZED', message: 'Неверный service-key' } }, 401);
+      }
+      c.set('user', resolved.user);
+      c.set('serviceKey', resolved.credential);
+      await next();
+      return;
+    }
+
     const user = getCurrentUser(c);
     if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Требуется аутентификация' } }, 401);

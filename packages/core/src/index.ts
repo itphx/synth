@@ -189,6 +189,33 @@ export type {
   CreateEventApiKeyInput,
   UpdateEventApiKeyPatch,
 } from './storage/event-api-key-store.js';
+// AD-052 (этап I): service-key — реестр, scopes, проектная проекция, роуты.
+export {
+  ServiceApiKeyStore,
+  ServiceApiKeyConflictError,
+  SERVICE_API_KEYS_SCHEMA_VERSION,
+  SERVICE_KEY_SECRET_PREFIX,
+  isServiceKeySecret,
+} from './storage/service-api-key-store.js';
+export type {
+  ServiceApiKeyStoreConfig,
+  ServiceApiKeyRecord,
+  ServiceKeyCredential,
+} from './storage/service-api-key-store.js';
+export {
+  requireScope,
+  checkProjectAccess,
+  getServiceCredential,
+  isProjectAllowed,
+} from './server/service-scope.js';
+export type { ScopeGuardFactory, ProjectGuard } from './server/service-scope.js';
+export { createServiceKeyRoutes } from './server/routes/service-keys.js';
+export type {
+  ServiceKeyRoutesAuth,
+  ServiceKeyRoutesDeps,
+  ServiceKeyRoutesOptions,
+  ServiceKeyRouteMessages,
+} from './server/routes/service-keys.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
 // AD-089: retention-очистка журнала событий (периодический pruner).

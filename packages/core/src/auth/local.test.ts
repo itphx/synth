@@ -1,7 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createLocalAuth } from './local.js';
 import type { ContextLike } from './local.js';
+import { GlobalRole } from '@itphx/synth-shared';
+import { ServiceApiKeyStore } from '../storage/service-api-key-store.js';
 
 const API_KEY = 'test-key';
 const COOKIE_NAME = 'synth_session';
@@ -217,5 +222,108 @@ describe('createLocalAuth (cookie-сессия)', () => {
       headers: { Cookie: `${COOKIE_NAME}=${cookieValue}` },
     });
     expect(projects.status).toBe(200);
+  });
+});
+
+describe('createLocalAuth (service-key, AD-052)', () => {
+  let dataDir: string;
+
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'synth-svc-auth-'));
+  });
+
+  afterEach(async () => {
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  function makeAuthedApp(auth: ReturnType<typeof createLocalAuth>) {
+    const app = new Hono();
+    app.use('/api/*', auth.requireAuth);
+    app.get('/api/v2/whoami', (c) => c.json({
+      user: c.get('user' as never),
+      serviceKey: c.get('serviceKey' as never) ?? null,
+    }));
+    return app;
+  }
+
+  it('валидный service-key → 200, синтетический пользователь и credential в контексте', async () => {
+    const store = new ServiceApiKeyStore({ dataDir });
+    const created = await store.create(
+      { label: 'gateway', scopes: ['events:ingest'], roles: [GlobalRole.LEAD], allowedProjects: ['p1'] },
+      'owner-1',
+    );
+    const auth = createLocalAuth({
+      apiKey: API_KEY,
+      resolveServiceKey: async (raw) => {
+        const resolved = await store.resolveBySecret(raw);
+        if (!resolved) return null;
+        const key = resolved.key;
+        return {
+          user: {
+            id: `service:${key.id}`,
+            username: key.label,
+            roles: [...key.roles],
+            preferredLanguage: 'ru',
+            createdAt: key.createdAt,
+            teamRole: key.roles[0] ?? 'USER',
+            notes: '',
+            interviewCompleted: false,
+            isLocal: false,
+          },
+          credential: resolved.credential,
+        };
+      },
+    });
+
+    const app = makeAuthedApp(auth);
+    const res = await app.request('http://localhost/api/v2/whoami', {
+      headers: { Authorization: `Bearer ${created.key}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as { user: { id: string; roles: string[] }; serviceKey: { keyId: string; scopes: string[]; allowedProjects?: string[] } };
+    expect(body.user.id).toBe(`service:${created.id}`);
+    expect(body.user.roles).toEqual(['LEAD']);
+    expect(body.serviceKey.keyId).toBe(created.id);
+    expect(body.serviceKey.scopes).toEqual(['events:ingest']);
+    expect(body.serviceKey.allowedProjects).toEqual(['p1']);
+  });
+
+  it('неизвестный service-key → 401; резолвер не задан → 401', async () => {
+    const store = new ServiceApiKeyStore({ dataDir });
+    const auth = createLocalAuth({
+      apiKey: API_KEY,
+      resolveServiceKey: async (raw) => {
+        const resolved = await store.resolveBySecret(raw);
+        if (!resolved) return null;
+        return {
+          user: {
+            id: `service:${resolved.key.id}`,
+            username: resolved.key.label,
+            roles: [...resolved.key.roles],
+            preferredLanguage: 'ru',
+            createdAt: resolved.key.createdAt,
+            teamRole: 'USER',
+            notes: '',
+            interviewCompleted: false,
+            isLocal: false,
+          },
+          credential: resolved.credential,
+        };
+      },
+    });
+    const app = makeAuthedApp(auth);
+    expect((await app.request('http://localhost/api/v2/whoami', {
+      headers: { Authorization: 'Bearer synth_svc_unknown' },
+    })).status).toBe(401);
+
+    // Без резолвера service-key не проходит, обычный ключ — работает.
+    const plain = createLocalAuth({ apiKey: API_KEY });
+    const plainApp = makeAuthedApp(plain);
+    expect((await plainApp.request('http://localhost/api/v2/whoami', {
+      headers: { Authorization: 'Bearer synth_svc_unknown' },
+    })).status).toBe(401);
+    expect((await plainApp.request('http://localhost/api/v2/whoami', {
+      headers: { Authorization: `Bearer ${API_KEY}` },
+    })).status).toBe(200);
   });
 });

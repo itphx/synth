@@ -12,6 +12,8 @@ import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+import { requireScope, checkProjectAccess } from '../service-scope.js';
+import type { ScopeGuardFactory, ProjectGuard } from '../service-scope.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -100,6 +102,16 @@ export interface SessionRoutesOptions {
    * Вызывается, когда `opts.canAccess` не дал положительный ответ.
    */
   resolveCanAccessExtra?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
+  /**
+   * AD-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
+   * `requireScope` из core (нет service-key в контексте → пропускает).
+   */
+  scopeGuard?: ScopeGuardFactory;
+  /**
+   * AD-052 (этап I): гейт проектной проекции (`allowedProjects`). По умолчанию —
+   * `checkProjectAccess` из core (нет service-key/`allowedProjects` → пропускает).
+   */
+  projectGuard?: ProjectGuard;
 }
 
 const DEFAULT_MESSAGES: SessionRouteMessages = {
@@ -177,6 +189,9 @@ export function createSessionRoutes(
   const promptMiddleware = opts.promptMiddleware ?? [];
   const messages: SessionRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
   const resolveAuthorName = createResolveAuthorName(deps.profilesStore);
+  // AD-052 (этап I): scope-гейты service-key и проектная проекция сессии.
+  const scoped = opts.scopeGuard ?? requireScope;
+  const projectGuard = opts.projectGuard ?? checkProjectAccess;
 
   /**
    * AD-071/безопасность: доступ к локальной сессии. Standalone — однопользовательский
@@ -203,7 +218,7 @@ export function createSessionRoutes(
   const filterByProject = (items: Session[], projectId?: string): Session[] =>
     projectId && !isRemoteRef(projectId) ? items.filter((s) => s.projectId === projectId) : items;
 
-  app.get('/', auth.requireAuth, async (c) => {
+  app.get('/', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const projectId = c.req.query('project_id') || undefined;
     const userId = await resolveUserId(c);
     // AD-089: видимость списка. elevated (ADMIN/LEAD) — все сессии; иначе свои
@@ -254,7 +269,7 @@ export function createSessionRoutes(
     }
   });
 
-  app.post('/', auth.requireAuth, async (c) => {
+  app.post('/', auth.requireAuth, scoped('sessions:create'), async (c) => {
     const body = await c.req.json().catch(() => ({}));
 
     // Гибрид: создание удалённой сессии на backend (только при настроенном геттере).
@@ -278,6 +293,11 @@ export function createSessionRoutes(
     }
 
     const owner = await resolveOwner(c);
+
+    // AD-052 (этап I): проектная проекция — сессия адресует проект
+    // (`project_id`/`projectId`); при заданном `allowedProjects` чужой проект → 403.
+    const createDenied = projectGuard(c, body.project_id || body.projectId || undefined);
+    if (createDenied) return createDenied;
 
     // Метаданные (icon/color): только канонические ключи; null/undefined — сброс.
     if (body.icon !== undefined && body.icon !== null && !isProjectIconKey(body.icon)) {
@@ -325,7 +345,7 @@ export function createSessionRoutes(
     return c.json(serializeSession(session, { agentRegistry }), 201);
   });
 
-  app.get('/:id', auth.requireAuth, async (c) => {
+  app.get('/:id', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const id = c.req.param('id');
     if (hasRemoteGetter && isRemoteRef(id)) {
       const remoteClient = resolveClient();
@@ -345,10 +365,12 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
+    const readonlyDenied = projectGuard(c, session.projectId);
+    if (readonlyDenied) return readonlyDenied;
     return c.json(serializeSession(session, { agentRegistry }));
   });
 
-  app.patch('/:id', auth.requireAuth, async (c) => {
+  app.patch('/:id', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
     const id = c.req.param('id');
     if (hasRemoteGetter && isRemoteRef(id)) {
       const remoteClient = resolveClient();
@@ -369,6 +391,8 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
+    const patchDenied = projectGuard(c, session.projectId);
+    if (patchDenied) return patchDenied;
     const body = await c.req.json().catch(() => ({}));
 
     // Валидация тела PATCH (sessionUpdateSchema): невалидные settings/engine/name → 400.
@@ -403,6 +427,9 @@ export function createSessionRoutes(
         }
       }
       const resolved = newProjectId || undefined;
+      // AD-052 (этап I): проектная проекция — и старая, и новая цель сессии.
+      const moveDenied = projectGuard(c, resolved);
+      if (moveDenied) return moveDenied;
       if (prevProjectId !== resolved) {
         session.projectId = resolved;
         session.planApproved = false;
@@ -443,7 +470,7 @@ export function createSessionRoutes(
     return c.json(serializeSession(session, { agentRegistry }));
   });
 
-  app.delete('/:id', auth.requireAuth, async (c) => {
+  app.delete('/:id', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
     const id = c.req.param('id');
     if (hasRemoteGetter && isRemoteRef(id)) {
       const remoteClient = resolveClient();
@@ -463,6 +490,8 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
+    const deleteDenied = projectGuard(c, session.projectId);
+    if (deleteDenied) return deleteDenied;
     const userId = await resolveUserId(c);
     if (publishDeletedBefore) {
       eventBus.publish(session.id, 'session.deleted', { session_id: session.id });
@@ -476,11 +505,13 @@ export function createSessionRoutes(
     return c.body(null, 204);
   });
 
-  app.get('/:id/status', auth.requireAuth, async (c) => {
+  app.get('/:id/status', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
+    const statusDenied = projectGuard(c, session.projectId);
+    if (statusDenied) return statusDenied;
     const userId = await resolveUserId(c);
     if (!(await canAccessSession(session, c, userId))) {
       return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
@@ -494,11 +525,13 @@ export function createSessionRoutes(
 
   // GET /api/v2/sessions/:id/prompt — состав системного промпта (AD-070 §2.5):
   // манифест источников + состояние промпта активного агента + последний promptMeta.
-  app.get('/:id/prompt', auth.requireAuth, async (c) => {
+  app.get('/:id/prompt', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
+    const accessDenied = projectGuard(c, session.projectId);
+    if (accessDenied) return accessDenied;
     const userId = await resolveUserId(c);
     if (!(await canAccessSession(session, c, userId))) {
       return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
@@ -509,11 +542,13 @@ export function createSessionRoutes(
 
   // GET /api/v2/sessions/:id/stats — статистика по агентам/пользователям
   // (AD-070 §2.6): usage сообщений + рекурсивный usage саб-агентов (tool `task`).
-  app.get('/:id/stats', auth.requireAuth, async (c) => {
+  app.get('/:id/stats', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
+    const accessDenied = projectGuard(c, session.projectId);
+    if (accessDenied) return accessDenied;
     const userId = await resolveUserId(c);
     if (!(await canAccessSession(session, c, userId))) {
       return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
@@ -526,7 +561,7 @@ export function createSessionRoutes(
     return c.json(stats);
   });
 
-  app.post('/:id/prompt', chainMiddleware([auth.requireAuth, ...promptMiddleware]), async (c) => {
+  app.post('/:id/prompt', chainMiddleware([auth.requireAuth, scoped('sessions:prompt'), ...promptMiddleware]), async (c) => {
     const sessionId = c.req.param('id');
 
     // Гибрид: удалённая сессия исполняется backend — пробрасываем upstream Response
@@ -557,6 +592,8 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
+    const promptDenied = projectGuard(c, session.projectId);
+    if (promptDenied) return promptDenied;
     const userId = await resolveUserId(c);
     if (!(await canAccessSession(session, c, userId))) {
       return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
@@ -631,7 +668,7 @@ export function createSessionRoutes(
     );
   });
 
-  app.get('/:id/messages', auth.requireAuth, async (c) => {
+  app.get('/:id/messages', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const id = c.req.param('id');
     if (hasRemoteGetter && isRemoteRef(id)) {
       const remoteClient = resolveClient();
@@ -654,6 +691,8 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
+    const messagesDenied = projectGuard(c, session.projectId);
+    if (messagesDenied) return messagesDenied;
     return c.json({
       messages: session.messages.map((m, i) => serializeMessage(m, i)),
       session_id: session.id,

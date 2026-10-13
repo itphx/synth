@@ -20,7 +20,8 @@ import {
   type DecisionAgentCandidate,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
-  createEventRoutes, createSchedulerRoutes,
+  createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, requireScope,
+  ServiceApiKeyStore,
   createExternalIdentityResolver,
   startEventJournalPruner,
 } from '../index.js';
@@ -269,7 +270,36 @@ export function injectRemoteProvider(
 
 export async function createStandaloneApp(config: StandaloneConfig) {
   const app = new Hono();
-  const auth = createLocalAuth({ apiKey: config.apiKey });
+  // AD-052 (этап I): реестр service-key создаётся до auth — резолвер ключа
+  // (`synth_svc_…`) нужен локальной аутентификации (`requireAuth`).
+  const serviceApiKeyStore = new ServiceApiKeyStore({ dataDir: config.dataDir });
+  const auth = createLocalAuth({
+    apiKey: config.apiKey,
+    // AD-052: service-key аутентифицирует машину в синтетического пользователя
+    // (roles — для RBAC/доступности эндпоинтов); scopes/проектная проекция
+    // проверяются отдельно (`requireScope`/`checkProjectAccess`).
+    resolveServiceKey: async (raw) => {
+      const resolved = await serviceApiKeyStore.resolveBySecret(raw);
+      if (!resolved) return null;
+      const key = resolved.key;
+      // Best-effort отметка использования — не блокирует и не роняет запрос.
+      void serviceApiKeyStore.touch(key.id).catch(() => {});
+      return {
+        user: {
+          id: `service:${key.id}`,
+          username: key.label,
+          roles: [...key.roles],
+          preferredLanguage: 'ru',
+          createdAt: key.createdAt,
+          teamRole: key.roles[0] ?? 'USER',
+          notes: '',
+          interviewCompleted: false,
+          isLocal: false,
+        },
+        credential: resolved.credential,
+      };
+    },
+  });
 
   app.use(logger());
   app.use(cors({
@@ -1329,10 +1359,18 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   ));
 
   // AD-051 (срез) / AD-089: CRUD расписаний и принудительный запуск.
+  // AD-052: `resolveSessionProject` — проектная проекция `bound`/`queue`-целей.
   app.route('/api/v2/schedules', createSchedulerRoutes(
     auth,
     { scheduleStore, scheduler: schedulerService, jobStore },
+    {
+      resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
+    },
   ));
+
+  // AD-052 (этап I): CRUD service-key (`synth_svc_…`) — scoped-ключи инстанса.
+  // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
+  app.route('/api/v2/service-keys', createServiceKeyRoutes(auth, { store: serviceApiKeyStore }));
 
   // Скиллы (AD-046 §9.1): реестр + instance CRUD + supporting-файлы + reload.
   app.route('/api/v2/skills', createSkillRoutes(auth, {
@@ -1424,7 +1462,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   }
 
   // Глобальный SSE-хаб
-  app.get('/api/v2/events', async (c) => {
+  // AD-052: `events:watch` — scope service-key для подписки на поток событий.
+  app.get('/api/v2/events', requireScope('events:watch'), async (c) => {
     const signal = c.req.raw.signal;
 
     return new Response(

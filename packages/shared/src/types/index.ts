@@ -1437,3 +1437,5 @@ export * from './hooks.js';
 export * from './schedules.js';
 // Decision-модели (AD-084): контракт state+questions → answers — re-exported from decision.ts
 export * from './decision.js';
+// AD-052 (этап I): service-key — scopes + проектная проекция — re-exported from service-keys.ts
+export * from './service-keys.js';
