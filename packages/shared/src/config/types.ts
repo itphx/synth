@@ -371,6 +371,25 @@ export const decisionConfigSchema = z.object({
   escalationModel: z.string().default(''),
 });
 
+// --- Webhooks (AD-052, этап II) ---
+
+/**
+ * AD-052 (этап II): конфигурация исходящих webhooks.
+ * - `enabled` — мастер-выключатель доставки (по умолчанию выключен);
+ * - `maxAttempts` — число HTTP-попыток на доставку (экспоненциальный backoff с джиттером);
+ * - `timeoutMs` — таймаут одного HTTP-запроса;
+ * - `allowPrivateTargets` — разрешить http и приватные/loopback адреса (для dev;
+ *   по умолчанию `false` — только https и публичные адреса, защита от SSRF);
+ * - `deliveryRetentionDays` — срок хранения журнала доставок (0 — без ограничения).
+ */
+export const webhooksConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  maxAttempts: z.number().int().min(1).max(10).default(5),
+  timeoutMs: z.number().int().min(1).default(10_000),
+  allowPrivateTargets: z.boolean().default(false),
+  deliveryRetentionDays: z.number().int().min(0).default(30),
+});
+
 // --- Проектные инструкции (AD-069) ---
 
 /**
@@ -609,6 +628,7 @@ export const synthConfigSchema = z.object({
   events: eventsConfigSchema.default({}),
   scheduler: schedulerConfigSchema.default({}),
   decision: decisionConfigSchema.default({}),
+  webhooks: webhooksConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
@@ -640,6 +660,7 @@ export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
 export type EventsConfig = z.infer<typeof eventsConfigSchema>;
 export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
 export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
+export type WebhooksConfig = z.infer<typeof webhooksConfigSchema>;
 export type InstructionSourceConfig = z.infer<typeof instructionSourceConfigSchema>;
 export type InstructionsLazyConfig = z.infer<typeof instructionsLazyConfigSchema>;
 export type InstructionsFetchConfig = z.infer<typeof instructionsFetchConfigSchema>;

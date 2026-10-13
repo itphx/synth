@@ -7,7 +7,7 @@ import { join, extname, isAbsolute, normalize, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, SynthConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -20,10 +20,12 @@ import {
   type DecisionAgentCandidate,
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
-  createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, requireScope,
+  createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes, requireScope,
   ServiceApiKeyStore,
+  WebhookStore, WebhookDeliveryStore, WebhookService,
   createExternalIdentityResolver,
   startEventJournalPruner,
+  startWebhookDeliveryPruner,
   getPublicOpenApiDocument,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
@@ -136,6 +138,8 @@ export interface StandaloneConfig {
   schedulerConfig?: SynthConfig['scheduler'];
   /** AD-084: конфигурация decision-слоя из config.yaml `decision`. */
   decisionConfig?: SynthConfig['decision'];
+  /** AD-052 (этап II): конфигурация исходящих webhooks из config.yaml `webhooks`. */
+  webhooksConfig?: WebhooksConfig;
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -739,6 +743,28 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
+
+  // AD-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
+  // шифруется at-rest мастер-ключом), журнал доставок и движок над EventBus.
+  const webhooksConfig: WebhooksConfig = {
+    enabled: config.webhooksConfig?.enabled ?? false,
+    maxAttempts: config.webhooksConfig?.maxAttempts ?? 5,
+    timeoutMs: config.webhooksConfig?.timeoutMs ?? 10_000,
+    allowPrivateTargets: config.webhooksConfig?.allowPrivateTargets ?? false,
+    deliveryRetentionDays: config.webhooksConfig?.deliveryRetentionDays ?? 30,
+  };
+  const webhookStore = new WebhookStore({ dataDir, secretKey: config.secretKey });
+  const webhookDeliveryStore = new WebhookDeliveryStore({ dataDir });
+  const webhookService = new WebhookService({
+    store: webhookStore,
+    deliveryStore: webhookDeliveryStore,
+    eventBus,
+    config: webhooksConfig,
+  });
+  webhookService.start();
+  const stopWebhookDeliveryPruner = startWebhookDeliveryPruner(webhookDeliveryStore, {
+    getRetentionDays: () => webhooksConfig.deliveryRetentionDays,
+  });
 
   const profilesStore = new FileProfileStore({ dataDir });
   const contextBuilder = new ContextBuilder(contextConfig, {
@@ -1378,6 +1404,17 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
   app.route('/api/v2/service-keys', createServiceKeyRoutes(auth, { store: serviceApiKeyStore }));
 
+  // AD-052 (этап II): подписки на исходящие webhooks (CRUD + журнал + тест).
+  // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
+  app.route('/api/v2/webhooks', createWebhookRoutes(
+    auth,
+    { store: webhookStore, deliveryStore: webhookDeliveryStore, service: webhookService },
+    {
+      isEnabled: () => webhooksConfig.enabled,
+      allowPrivateTargets: webhooksConfig.allowPrivateTargets,
+    },
+  ));
+
   // Скиллы (AD-046 §9.1): реестр + instance CRUD + supporting-файлы + reload.
   app.route('/api/v2/skills', createSkillRoutes(auth, {
     skillService,
@@ -1911,6 +1948,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopEphemeralSweeper,
     // AD-089: остановка периодической retention-очистки журнала событий.
     stopEventJournalPruner,
+    // AD-052 (этап II): остановка движка webhooks и retention-очистки доставок.
+    stopWebhookService: () => webhookService.stop(),
+    stopWebhookDeliveryPruner: () => stopWebhookDeliveryPruner(),
+    // AD-052 (этап II): реестр подписок webhooks (для тестов/диагностики).
+    webhookStore,
+    webhookService,
     // AD-051 (срез): остановка планировщика (на graceful shutdown).
     stopScheduler: () => schedulerService.stop(),
     // Текущий мост событий (создаётся/обновляется в applyConnected) — для stop() при shutdown.

@@ -129,7 +129,7 @@
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
-  `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`.
+  `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`, `webhooks`.
 - `server/service-scope.ts` — AD-052 (этап I): enforcement service-key — `requireScope(...)`
   (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkProjectAccess`/
   `isProjectAllowed` (проектная проекция `allowedProjects`), `getServiceCredential`
@@ -162,6 +162,21 @@
   `storage/service-api-key-store.ts` — `ServiceApiKeyStore` (`{dataDir}/service-keys.json`):
   sha256 at-rest, `resolveBySecret` (revoked/expired → `null`), `revoke`/`touch`,
   `ServiceApiKeyConflictError`; `ServiceKeyCredential` — контекст enforcement.
+- `server/routes/webhooks.ts` — `createWebhookRoutes` (AD-052 этап II): CRUD подписок
+  исходящих webhooks (`GET/POST /api/v2/webhooks`, `GET/PATCH/DELETE /:id`,
+  `POST /:id/regenerate|revoke|test`, `GET /:id/deliveries`), store `WebhookStore`
+  + журнал `WebhookDeliveryStore` + движок `WebhookService` (тест-доставка);
+  `opts.writeGuard`/`readGuard` (core — `requireAuth`, managed — ADMIN), `messages`,
+  `isEnabled` (мастер `webhooks.enabled`: `false` → 503 на мутации/тест),
+  `allowPrivateTargets`; URL валидируется SSRF-политикой (`evaluateWebhookTarget`),
+  секрет — единожды в `POST /`/`regenerate`.
+- `engine/webhooks/*` — AD-052 этап II: `WebhookService`
+  (подписка на `eventBus.subscribeAll`, фильтр `matchWebhookEvent`, HMAC-подпись,
+  retry/backoff с джиттером и таймаутом, дедуп по (подписка+событие), журнал доставок;
+  `computeBackoffMs`), `signature.ts` (`buildSignatureHeader`/`verifyWebhookSignature`,
+  `X-Synth-Signature: t=…,v1=…`, окно 300 c), `network.ts` (`evaluateWebhookTarget` —
+  SSRF-политика над `engine/mcp/network-policy.ts`, https + запрет private/loopback),
+  `prune.ts` (`startWebhookDeliveryPruner` — retention журнала доставок, раз в 6 ч).
 - `server/chat.ts`, `server/proxy.ts`, `server/serialize.ts`,
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
@@ -300,6 +315,13 @@
   plaintext один раз при `create`, обязательная уникальная `label` (глобально по инстансу) +
   `description`/`expiresAt`/`rateLimitPerMinute`, `update`/`revoke` (мягкий отзыв), legacy-backfill
   `name`→`label`, каскад `removeByBinding`; AD-089/AD-052),
+  `WebhookStore` (`webhooks/subscriptions.json`, AD-052 этап II: подписки исходящих
+  webhooks — signing-секрет `whsec_…` **шифруется at-rest** AES-256-GCM мастер-ключом
+  (HMAC требует исходный секрет, в отличие от sha256-хеша API-ключей), plaintext один раз
+  при `create`/`regenerateSecret`, обязательная уникальная `label` (глобально) + `url`/`events`/
+  `enabled`/`setEnabled` (мягкое отключение `disabledAt`)/`getSecret`/`touchDelivery`),
+  `WebhookDeliveryStore` (`webhooks/deliveries.jsonl`, append-only журнал доставок:
+  `record`/`list`/`listBySubscription`/`prune`),
   `IdentityClaimStore` (`identity-claim-store.ts`, `events/identity-claims.json`, AD-089 claim-flow:
   одноразовые коды подтверждения владения идентичностью; `create`/`consume`/`cleanup`/`list`;
   код `XXX-XXX`, алфавит base32 без `0/O/1/I`, TTL 10 мин по умолчанию, нормализация ввода —

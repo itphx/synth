@@ -57,6 +57,8 @@ export {
   type RouterSubagentConfig,
   type DecisionConfig,
   decisionConfigSchema,
+  type WebhooksConfig,
+  webhooksConfigSchema,
   type RemoteConfig,
   type MicroFirstConfig,
   type SecurityConfig,

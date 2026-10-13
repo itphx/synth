@@ -1439,3 +1439,5 @@ export * from './schedules.js';
 export * from './decision.js';
 // AD-052 (этап I): service-key — scopes + проектная проекция — re-exported from service-keys.ts
 export * from './service-keys.js';
+// AD-052 (этап II): исходящие webhooks — типы и матчер событий — re-exported from webhooks.ts
+export * from './webhooks.js';

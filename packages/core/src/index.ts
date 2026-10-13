@@ -216,6 +216,42 @@ export type {
   ServiceKeyRoutesOptions,
   ServiceKeyRouteMessages,
 } from './server/routes/service-keys.js';
+// AD-052 (этап II): исходящие webhooks — реестр подписок и журнал доставок.
+export {
+  WebhookStore,
+  WebhookConflictError,
+  WEBHOOKS_SCHEMA_VERSION,
+} from './storage/webhook-store.js';
+export type { WebhookStoreConfig, WebhookRecord } from './storage/webhook-store.js';
+export { WebhookDeliveryStore } from './storage/webhook-delivery-store.js';
+export type { WebhookDeliveryStoreConfig } from './storage/webhook-delivery-store.js';
+export {
+  WEBHOOK_SIGNATURE_VERSION,
+  WEBHOOK_SIGNATURE_TOLERANCE_SEC,
+  computeWebhookSignature,
+  buildSignatureHeader,
+  parseSignatureHeader,
+  verifyWebhookSignature,
+  evaluateWebhookTarget,
+  WebhookService,
+  computeBackoffMs,
+  startWebhookDeliveryPruner,
+} from './engine/webhooks/index.js';
+export type {
+  ParsedSignature,
+  WebhookTargetCheckResult,
+  WebhookTargetCheckOptions,
+  WebhookServiceConfig,
+  WebhookServiceDeps,
+  WebhookDeliveryPrunerOptions,
+} from './engine/webhooks/index.js';
+export { createWebhookRoutes } from './server/routes/webhooks.js';
+export type {
+  WebhookRoutesAuth,
+  WebhookRoutesDeps,
+  WebhookRoutesOptions,
+  WebhookRouteMessages,
+} from './server/routes/webhooks.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
 // AD-089: retention-очистка журнала событий (периодический pruner).

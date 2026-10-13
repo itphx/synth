@@ -151,6 +151,15 @@ export const defaultConfig: SynthConfig = {
     escalationProvider: '',
     escalationModel: '',
   },
+  webhooks: {
+    // AD-052 (этап II): доставка webhooks выключена по умолчанию (opt-in).
+    enabled: false,
+    maxAttempts: 5,
+    timeoutMs: 10_000,
+    // Только https и публичные адреса; приватные/loopback — запрещены (SSRF).
+    allowPrivateTargets: false,
+    deliveryRetentionDays: 30,
+  },
   instructions: {
     enabled: true,
     claudeCompat: true,

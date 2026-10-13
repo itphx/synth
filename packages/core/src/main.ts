@@ -138,6 +138,8 @@ program
       schedulerConfig: synth.scheduler,
       // AD-084: конфигурация decision-слоя микро-каскада.
       decisionConfig: synth.decision,
+      // AD-052 (этап II): конфигурация исходящих webhooks (enabled/retry/SSRF).
+      webhooksConfig: synth.webhooks,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)
@@ -173,6 +175,10 @@ program
 
       // AD-089: остановить retention-очистку журнала событий.
       appHandle.stopEventJournalPruner?.();
+
+      // AD-052 (этап II): остановить движок webhooks и retention-очистку доставок.
+      appHandle.stopWebhookService?.();
+      appHandle.stopWebhookDeliveryPruner?.();
 
       // AD-051 (срез): остановить планировщик расписаний.
       appHandle.stopScheduler?.();

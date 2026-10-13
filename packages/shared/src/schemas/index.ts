@@ -7,6 +7,7 @@ import {
   PROJECT_ICON_KEYS,
   PROJECT_COLOR_KEYS,
   isKnownScope,
+  isWebhookEventPattern,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
@@ -757,6 +758,88 @@ export const serviceApiKeyCreatedSchema = serviceApiKeySchema.extend({
 });
 
 export type ServiceApiKeyCreatedRequest = z.infer<typeof serviceApiKeyCreatedSchema>;
+
+// --- Webhooks (AD-052, этап II) ---
+
+/** AD-052 (этап II): паттерн события подписки — exact либо `prefix.*`. */
+export const webhookEventPatternSchema = z
+  .string()
+  .min(1)
+  .refine((value) => isWebhookEventPattern(value), { message: 'Некорректный паттерн события' });
+
+/** AD-052 (этап II): целевой URL — только http/https (SSRF-политика — в core). */
+export const webhookUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), { message: 'URL должен быть http(s)' });
+
+/**
+ * AD-052 (этап II): метаданные подписки (ответы API). Секрет (`secret`) и его
+ * хеш здесь отсутствуют — наружу не отдаются (в списке — `secretPrefix`).
+ */
+export const webhookSubscriptionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().optional(),
+  url: webhookUrlSchema,
+  events: z.array(webhookEventPatternSchema),
+  enabled: z.boolean(),
+  secretPrefix: z.string().min(1),
+  createdBy: z.string().min(1),
+  createdAt: z.string().min(1),
+  lastDeliveryAt: z.string().optional(),
+  lastStatus: z.enum(['ok', 'failed']).optional(),
+  disabledAt: z.string().optional(),
+});
+
+export type WebhookSubscriptionMeta = z.infer<typeof webhookSubscriptionSchema>;
+
+/** AD-052 (этап II): тело создания подписки. `enabled` не задан — активна. */
+export const webhookSubscriptionCreateSchema = z.object({
+  label: z.string().min(1),
+  description: z.string().optional(),
+  url: webhookUrlSchema,
+  events: z.array(webhookEventPatternSchema).optional(),
+  enabled: z.boolean().optional(),
+});
+
+export type WebhookSubscriptionCreateRequest = z.infer<typeof webhookSubscriptionCreateSchema>;
+
+/**
+ * AD-052 (этап II): тело обновления подписки. Все поля опциональны; `null` для
+ * `description` — сброс.
+ */
+export const webhookSubscriptionUpdateSchema = z.object({
+  label: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  url: webhookUrlSchema.optional(),
+  events: z.array(webhookEventPatternSchema).optional(),
+  enabled: z.boolean().optional(),
+});
+
+export type WebhookSubscriptionUpdateRequest = z.infer<typeof webhookSubscriptionUpdateSchema>;
+
+/** AD-052 (этап II): ответ создания/ротации подписки — метаданные + секрет (единожды). */
+export const webhookSubscriptionCreatedSchema = webhookSubscriptionSchema.extend({
+  secret: z.string().min(1),
+});
+
+export type WebhookSubscriptionCreatedRequest = z.infer<typeof webhookSubscriptionCreatedSchema>;
+
+/** AD-052 (этап II): запись журнала доставки. */
+export const webhookDeliverySchema = z.object({
+  id: z.string().min(1),
+  subscriptionId: z.string().min(1),
+  eventType: z.string().min(1),
+  status: z.enum(['ok', 'failed', 'pending']),
+  attempts: z.number().int().min(0),
+  responseStatus: z.number().int().optional(),
+  error: z.string().optional(),
+  createdAt: z.string().min(1),
+  completedAt: z.string().optional(),
+});
+
+export type WebhookDeliveryMeta = z.infer<typeof webhookDeliverySchema>;
 
 /** AD-051/AD-089: цель расписания (дискриминированный союз по `mode`). */
 export const scheduleTargetSchema = z.discriminatedUnion('mode', [
