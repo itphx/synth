@@ -630,3 +630,57 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - **K3s test** — нужен новый образ backend (в кластере 0.9.0 без events-роутов → 404) + образ шлюза, SealedSecret, `gateway.enabled=true`, `events.autoBind=true`. Push `synth-deploy` — за пользователем.
 - **Шлюз-hardening** — прокси-агент создаётся на каждый запрос (CONNECT-труннели рвутся) → кэш агента/keep-alive + контекст в ошибках `aborted`.
 - `events.identityMap` в dev = `chat:telegram:450316139 → admin` (избыточно для debug).
+
+## 2026-10-13 — AD-052 «Публичная API-платформа»: этапы I–IV реализованы (полностью)
+
+- **Задача:** «Добиваем AD-052. Изучи, если нужно что-то уточнить, давай обсудим» → «Все этапы подряд, коммить как посчитаешь нужным, уточнять по ходу». Плюс отдельная просьба: параллельно починить флейк `app.remote.test.ts`.
+- **Тип:** feature (shared/core/backend/ui) + spike (OpenAPI) + feature (webhooks) + новый пакет (SDK) + feature (addon-шлюз) + docs + test-fix.
+- **Исполнитель:** @orchestrator → @explore ×1 (инвентаризация), @fixer ×10 (ядро service-key; backend; UI; docs; флейк; spike; webhooks-ядро; webhooks backend; webhooks UI; docs; public-OpenAPI; SDK; шлюз), верификация — оркестратор.
+- **Результат:** PASS (все 4 этапа закрыты; e2e публичного контура подтверждён).
+
+### Решения пользователя (развилки)
+- Все этапы подряд, коммит по усмотрению оркестратора.
+- Разрешена новая зависимость `@hono/zod-openapi`.
+- Scopes: **именованные + wildcard семейства** (`events:*`, `sessions:*`, …), глобального `*` нет.
+- Service-key несёт **`roles[]` + `scopes[]` + `allowedProjects[]`** (роли → совместимость с `requirePermission`; scopes → точечный гейт).
+- UI управления service-ключами — сразу в этапе I.
+
+### Этап I — service-key + scopes + spike OpenAPI (+UI)
+- **shared:** `types/service-keys.ts` (`ServiceApiKey`/`…Created`/`Create…`/`Update…`; `SERVICE_SCOPES` 14 + `SERVICE_SCOPE_FAMILIES` 6, `hasServiceScope` exact/`family:*`, `isKnownScope`), Zod-схемы, `GlobalRole` (не `Role`).
+- **core:** `storage/service-api-key-store.ts` (`{dataDir}/service-keys.json`, `synth_svc_<base64url>` → sha256 at-rest, глобальная уникальность `label`, `resolveBySecret`/`touch`/`revoke`, `ServiceApiKeyConflictError`); `server/service-scope.ts` (`requireScope` — no-op для не-service кред, иначе 403 `SCOPE_REQUIRED`; `isProjectAllowed`/`checkProjectAccess` → 403 `PROJECT_FORBIDDEN`; `getServiceCredential`); `server/routes/service-keys.ts` (`createServiceKeyRoutes`); auth-ветка `synth_svc_` в `auth/local.ts` (+`LocalAuthConfig.resolveServiceKey`); scope/project-гейты в `events`/`sessions`/`schedules`; монтирование в `server/app.ts`; экспорты.
+- **backend:** ветка service-key в `auth/middleware.ts` (`AuthMiddlewareConfig.resolveServiceKey`), синтетический пользователь `service:<keyId>` с `roles`; `routes/service-keys` (RBAC ADMIN); `scopeGuard`/`projectGuard` для events/schedules/sessions; `llm:chat` на LLM Proxy; глобальный per-key rate limit (`KeyRateLimiter`); i18n.
+- **UI:** админ-раздел «Сервисные ключи» (`ServiceKeysSettings.tsx`, Settings UI Kit; `MultiSelectField` для ролей/scopes/проектов; однократный секрет + curl; revoke/delete; ADMIN-гейт).
+- **Spike OpenAPI:** зависимость `@hono/zod-openapi@^0.19.10` (1.x требует zod v4 → только 0.19.x совместимо с нашим zod 3.25); `server/openapi/public-openapi.ts`: `OpenAPIHono` + `createRoute`, `publicErrorSchema` (`{error:{code,message}}`), `GET /api/v2/openapi.json` (core+backend, за `requireAuth`).
+
+### Этап II — исходящие webhooks
+- **shared:** `types/webhooks.ts` (`WebhookSubscription`/`…Created`/`WebhookDelivery`, `whsec_`-секрет, `DEFAULT_WEBHOOK_EVENT_PATTERNS`, `matchWebhookEvent`), Zod-схемы, конфиг `webhooks` (`enabled` default **false**, `maxAttempts` 5, `timeoutMs` 10000, `allowPrivateTargets` false, `deliveryRetentionDays` 30).
+- **core:** `storage/webhook-store.ts` (**signing-секрет шифруется AES-256-GCM** мастер-ключом — HMAC требует исходный секрет) + `webhook-delivery-store.ts` (JSONL); `engine/webhooks/{signature,network,service,prune}.ts` — доставка над `eventBus.subscribeAll`, HMAC-SHA256 (`X-Synth-Signature: t=…,v1=…`), retry/backoff, дедуп, SSRF-политика (переиспользует `engine/mcp/network-policy.ts`); API `createWebhookRoutes`; монтирование в core.
+- **backend/UI:** монтирование (RBAC ADMIN; сервис подписан на общий `eventBus`), админ-раздел «Webhooks» (`WebhooksSettings.tsx`; однократный секрет + пример проверки подписи; тумблер/regenerate/test/журнал доставок; ADMIN-гейт).
+
+### Этап III — public-OpenAPI (полная) + SDK
+- **core:** `public-openapi.ts` расширен до **28 операций** интеграционного ядра (events 13, sessions 8, schedules 6, llm 1), **именованные** `components.schemas` (через `.openapi('Name')` — shared-схемы не мутируются), единый формат ошибок на всех операциях, `servers:[/api/v2]`, `security: bearerAuth`.
+- **Новый пакет `packages/sdk` (`@itphx/synth-sdk`, 7-й):** `createSynthClient({baseUrl, serviceKey|apiKey|token, fetch?})`, namespaces `events`/`sessions`/`schedules`/`llm`, `SynthApiError`, типы из browser-safe subpath'ов shared, ESM, зависимость только от shared.
+- **Инфра:** `scripts/{publish-packages,publish,version-bump,wait-npm-version,build}.sh`, `docs/PUBLISHING.md`, `.gitverse/workflows/{ci,release}.yaml`, корневой `AGENTS.md` (6→7 пакетов), скилл `synth-build-publish`.
+
+### Этап IV — перевод Telegram-шлюза на service-key (репо `addons/synth-gateway-telegram`)
+- Новый режим `AuthMode = 'service-key' | 'oidc' | 'api-key' | 'none'`; приоритет **service-key → oidc → api-key → none**; `SYNTH_SERVICE_KEY`/`--service-key`/`secrets/synth_service_key`; health отражает режим; деплой-манифесты (compose/Helm/Secret/NOTES/.env.example) и доки обновлены; зафиксированы требуемые scopes (`events:ingest`, `events:watch`, `bindings:read|write`, `sessions:create|read`) и роль `LEAD` (мутации bindings). Пробелов в `synth/` не найдено.
+
+### Флейк `app.remote.test.ts` (отдельная просьба)
+- Причина — **гонка в тесте**: подписка на WS-`message` после события `open`; кадр `connected` приходит в том же TCP-чанке и теряется. Фикс: хелпер `connectCollecting` (подписка до `open`); 10/10 изолированно, core 5/5 серий, полный монорепо зелёный.
+
+### Верификация (оркестратор)
+- `pnpm build` (7 пакетов) — OK; `pnpm typecheck` **7/7**; `pnpm lint` **0 errors**; `pnpm test` — shared 222 · **sdk 24** · core 3067 · ui 1160 · backend 380, 0 failed.
+- Шлюз (репо addon): `build`/`typecheck`/`lint`/`test` **228 passed**, `helm lint`/`template` OK.
+- **E2E публичного контура** (изолированный standalone-core `:5099`/`:5098`, отдельный dataDir): создание service-key (секрет один раз), `sessions`(scope)→200/403 `SCOPE_REQUIRED`, без auth→401, обычный ключ→200, `events` ingest→201, `bindings` write→201, `events/journal`→200, `openapi.json`→200, `webhooks` при `enabled:false`→503, пустые scopes→400, битый ключ→401. Тестовые данные удалены.
+
+### Коммиты
+- **`synth`:** `383c6b8` (ядро service-key), `e384b67` (backend+UI), `ea84dec` (docs I), `c39794d` (флейк), `8d99086` (spike OpenAPI), `1211108` (webhooks ядро), `a88fb86` (webhooks backend+UI+docs), `1751d94` (public-OpenAPI 28 операций), `a5c848c` (пакет SDK), `80a5851` (docs III), этот (журнал).
+- **`addons/synth-gateway-telegram`:** `f8f2113` (service-key в шлюзе).
+- Push не выполнялся.
+
+### Замечания / остаток
+- **Per-key rate limit** service-key реально энфорсится **только в managed** (глобальный middleware backend); в core поле хранится, но не применяется — задокументировано.
+- **zod остаётся v3** → OpenAPI только `@hono/zod-openapi@0.19.x`; апгрейд до 1.x = отдельная миграция на zod v4 по монорепо (вне AD-052).
+- Правки **AGENTS.md** (корневой + core/backend/shared/ui + новый sdk) внесены по инварианту 15 — **на согласование пользователя**; при несогласии легко откатить.
+- **Осталось (вне кода AD-052):** K3s test (новый образ backend + шлюза, SealedSecret, `gateway.enabled=true`, `autoBind=true`; push `synth-deploy`); реальный e2e шлюза с ботом под service-key в test; версионирование public-спеки (открытый вопрос AD-052); обновление `openapi-typescript`-генерации типов для SDK (сейчас SDK берёт типы из shared).
+- `events.identityMap` в dev = `chat:telegram:450316139 → admin` (избыточно для debug).
