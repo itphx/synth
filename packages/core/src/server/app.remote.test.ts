@@ -611,6 +611,25 @@ describe('createStandaloneApp: WS /ws/events аутентификация чер
     return received;
   }
 
+  /**
+   * Открыть WS и начать собирать сообщения ДО установки соединения: сервер
+   * шлёт 'connected' сразу после upgrade (после `await listSessions`), поэтому
+   * listener вешаем заранее — иначе кадр может прийти между 'open' и подпиской
+   * и потеряться (ws не буферизует пропущенные message).
+   */
+  function connectCollecting(
+    port: number,
+    headers: Record<string, string>,
+  ): { ws: Promise<WebSocket>; received: Array<Record<string, unknown>> } {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/events`, { headers });
+    const received = collect(ws);
+    const opened = new Promise<WebSocket>((resolve, reject) => {
+      ws.on('open', () => resolve(ws));
+      ws.on('error', reject);
+    });
+    return { ws: opened, received };
+  }
+
   async function startServer() {
     const dir = await mkdtemp(join(tmpdir(), 'synth-app-ws-cookie-'));
     const handle = await createStandaloneApp({
@@ -651,14 +670,8 @@ describe('createStandaloneApp: WS /ws/events аутентификация чер
     const app = await startServer();
     const cookie = makeServerCookie('test-key', { id: 'u-1', username: 'lucky', roles: ['USER'] });
 
-    const ws = await new Promise<WebSocket>((resolve, reject) => {
-      const s = new WebSocket(`ws://127.0.0.1:${app.port}/ws/events`, {
-        headers: { Cookie: cookie },
-      });
-      s.on('open', () => resolve(s));
-      s.on('error', reject);
-    });
-    const received = collect(ws);
+    const { ws: wsP, received } = connectCollecting(app.port, { Cookie: cookie });
+    const ws = await wsP;
 
     try {
       await vi.waitFor(() => {
@@ -672,14 +685,8 @@ describe('createStandaloneApp: WS /ws/events аутентификация чер
 
   it('Bearer API-ключ по-прежнему работает (CLI/API)', async () => {
     const app = await startServer();
-    const ws = await new Promise<WebSocket>((resolve, reject) => {
-      const s = new WebSocket(`ws://127.0.0.1:${app.port}/ws/events`, {
-        headers: { Authorization: 'Bearer test-key' },
-      });
-      s.on('open', () => resolve(s));
-      s.on('error', reject);
-    });
-    const received = collect(ws);
+    const { ws: wsP, received } = connectCollecting(app.port, { Authorization: 'Bearer test-key' });
+    const ws = await wsP;
 
     try {
       await vi.waitFor(() => {
