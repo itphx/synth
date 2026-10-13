@@ -247,7 +247,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/i18n/current` | backend | — | Текущий язык по `Accept-Language` |
 | GET | `/api/v2/i18n/translations/ru` | backend | — | Русский словарь |
 | GET | `/api/v2/i18n/translations/en` | backend | — | Английский словарь |
-| GET | `/api/v2/openapi.json` | оба | auth | Публичная OpenAPI 3.1-спека интеграционного ядра (AD-052, spike этапа I; `server/openapi/public-openapi.ts`). Единый формат ошибок — `publicErrorSchema` (`{error:{code,message}}`) |
+| GET | `/api/v2/openapi.json` | оба | auth | Публичная OpenAPI 3.1-спека интеграционного ядра (AD-052, этап III; `server/openapi/public-openapi.ts`): 28 операций (events/sessions/schedules/llm), именованные `components.schemas`, единый формат ошибок `publicErrorSchema` (`{error:{code,message}}`) |
 
 ### 5.5 Sessions — `/api/v2/sessions`
 
@@ -876,6 +876,50 @@ function verify(rawBody, header, secret, nowSec = Math.floor(Date.now() / 1000))
 }
 ```
 
+### 5.30 Публичный OpenAPI и SDK — `@itphx/synth-sdk` (AD-052, этап III)
+
+Публичный HTTP-контракт (интеграционное ядро: `events`/`sessions`/`schedules`/`llm`, 28 операций)
+описан декларативной **public-OpenAPI 3.1**-спекой и отдаётся ручкой `GET /api/v2/openapi.json`
+(§5.4). Потреблять его удобнее через публикуемый пакет **`@itphx/synth-sdk`** — типизированный
+клиент над этой спекой (тонкий пакет, зависимость только от `@itphx/synth-shared`; ESM,
+браузер-совместимый).
+
+```bash
+npm install @itphx/synth-sdk
+```
+
+```ts
+import { createSynthClient, SynthApiError } from '@itphx/synth-sdk';
+
+const synth = createSynthClient({
+  baseUrl: 'http://localhost:5000', // без /api/v2
+  serviceKey: 'synth_svc_…',        // либо apiKey / token
+});
+
+try {
+  // events / sessions / schedules / llm
+  const { sessionId } = await synth.events.ingest({ source: 'tg', type: 'message' });
+  const session = await synth.sessions.get(sessionId!);
+  const jobs = await synth.schedules.jobs('<schedule-id>');
+  const completion = await synth.llm.chatCompletions({
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: 'привет' }],
+  });
+} catch (err) {
+  if (err instanceof SynthApiError) console.error(err.status, err.code, err.message);
+  throw err;
+}
+```
+
+- **Auth:** заголовок `Authorization: Bearer <cred>` с приоритетом **serviceKey → apiKey → token**;
+  базовый путь по умолчанию `/api/v2` (переопределяется `apiPath`).
+- **Namespaces:** `events` (ingest/journal/bindings/keys/routes), `sessions` (CRUD + prompt/messages/status),
+  `schedules` (CRUD + run/jobs), `llm` (`chatCompletions`).
+- **Ошибки:** `SynthApiError` (`{status, code, message, body?}`); единый формат `{error:{code,message}}`,
+  сетевые сбои → `status: 0` / `NETWORK_ERROR`. Инъекция `fetch` — для тестов/нестандартных рантаймов.
+
+> Спека — источник контракта, SDK её не дублирует логикой; детали и статус — AD-052.
+
 ---
 
 ## 6. Источники
@@ -887,7 +931,8 @@ function verify(rawBody, header, secret, nowSec = Math.floor(Date.now() / 1000))
 | Backend auth/RBAC | `packages/backend/src/auth/middleware.ts`, `auth/oidc.ts` |
 | Service-key scopes (AD-052) | `packages/core/src/server/service-scope.ts`, `packages/backend/src/auth/service-scope.ts` |
 | Service-key store/роуты (AD-052) | `packages/core/src/storage/service-api-key-store.ts`, `packages/core/src/server/routes/service-keys.ts` |
-| Публичный OpenAPI (AD-052, spike) | `packages/core/src/server/openapi/public-openapi.ts` |
+| Публичный OpenAPI (AD-052, этап III) | `packages/core/src/server/openapi/public-openapi.ts` |
+| SDK публичного API (AD-052, этап III) | `packages/sdk/*` (`@itphx/synth-sdk`) |
 | Webhooks store/журнал/роуты/движок (AD-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |

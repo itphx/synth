@@ -6,7 +6,7 @@
 
 ## Компоненты
 
-Synth состоит из шести пакетов в монорепозитории:
+Synth состоит из семи пакетов в монорепозитории:
 
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
@@ -15,7 +15,12 @@ Synth состоит из шести пакетов в монорепозито�
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
 | **@itphx/synth-runner** | Gateway между бэкендом и движками (opencode, cline, synth-core) | TypeScript, Node.js |
+| **@itphx/synth-sdk** | Типизированный клиент публичного API (AD-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
 | **@itphx/synth** | Публикуемая тонкая CLI-обёртка (`bin: synth`) над core/ui/shared (AD-038). Не бандлит core, не копирует ассеты | TypeScript, commander |
+
+Публичный HTTP-контракт описан **public-OpenAPI**-спекой (28 операций интеграционного ядра,
+`packages/core/src/server/openapi/public-openapi.ts`, отдаётся `GET /api/v2/openapi.json`); SDK её
+потребляет — единый клиентский слой поверх публичного API.
 
 ## Архитектурная схема
 
@@ -47,6 +52,10 @@ flowchart TB
         providers["Любой OpenAI-совместимый"]
     end
 
+    subgraph PublicClients["Публичные клиенты (AD-052)"]
+        synth_sdk["@itphx/synth-sdk — клиент публичного API"]
+    end
+
     subgraph Integrations["Интеграции"]
         event_sources["Внешние источники событий"]
         webhook_targets["HTTP-подписчики (webhooks)"]
@@ -71,6 +80,9 @@ flowchart TB
 
     event_sources -->|POST /api/v2/events| synth_core
     synth_core -->|webhooks: HTTP + HMAC-SHA256| webhook_targets
+
+    synth_sdk -->|service-key / HTTP API v2| synth_core
+    synth_sdk -->|HTTP API v2| synth_backend
 ```
 
 ## Сценарии развёртывания
@@ -199,6 +211,7 @@ synth/
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
     ├── runner/   → @itphx/synth-runner
+    ├── sdk/      → @itphx/synth-sdk (клиент публичного API, AD-052)
     └── synth/    → @itphx/synth (тонкая CLI-обёртка, bin: synth)
 ```
 
@@ -294,6 +307,6 @@ hook-шину, а создание сессий сведено в один funne
 
 API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `docs/CONFIGURATION.md`
 (секция `events`). Источники/интеграции: шедулер AD-051 (cron), API-ключи привязок, service-key
-со scopes/проектной проекцией (AD-052 этап I), webhooks (этап II) и spike public-OpenAPI
-(`GET /api/v2/openapi.json`) реализованы; остаток публичной API-платформы (полный public-OpenAPI
-и SDK, этап III) и плагины AD-086 — нет.
+со scopes/проектной проекцией (AD-052 этап I), webhooks (этап II), public-OpenAPI (28 операций,
+`GET /api/v2/openapi.json`) и SDK `@itphx/synth-sdk` (этап III) реализованы; остаток публичной
+API-платформы — перевод шлюза на service-key (этап IV), и плагины AD-086 — нет.

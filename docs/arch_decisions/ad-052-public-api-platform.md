@@ -1,10 +1,11 @@
 # AD-052: Публичная API-платформа Synth
 
-> **Статус:** ⚠️ Частично реализовано — **этапы I–II закрыты**: этап I (service-key + scopes +
-> проектная проекция `allowedProjects` + API/UI + spike public-OpenAPI), этап II (webhooks);
-> остаток — этапы III–IV (public-OpenAPI + SDK, перевод шлюза).
+> **Статус:** ⚠️ Частично реализовано — **этапы I–III закрыты**: этап I (service-key + scopes +
+> проектная проекция `allowedProjects` + API/UI + spike public-OpenAPI), этап II (webhooks),
+> этап III (public-OpenAPI 28 операций + SDK `@itphx/synth-sdk`);
+> остаток — этап IV (перевод мессенджер-шлюза на scoped service-key).
 > Ранее был реализован первый срез — API-ключи привязок событий (binding-key, AD-089).
-> **Дата:** 2026-09-16 (план зафиксирован 2026-10-13; этап I закрыт 2026-10-13; этап II закрыт 2026-10-13)
+> **Дата:** 2026-09-16 (план зафиксирован 2026-10-13; этап I закрыт 2026-10-13; этап II закрыт 2026-10-13; этап III закрыт 2026-10-13)
 > **Источник:** перенесено из `AD-DRAFTS.md` (D7, идея 7).
 > **Связано:** [AD-017](./ad-017-api-v2-hono.md), [AD-036](./ad-036-llm-gateway.md),
 > [AD-023](./ad-023-configuration.md), [AD-089](./ad-089-external-events-automation.md),
@@ -54,6 +55,12 @@
   доставка над `EventBus.subscribeAll`, HMAC-SHA256-подпись, retry/backoff, дедуп, SSRF-политика,
   API `GET/POST /api/v2/webhooks` (+ `/:id`, `/:id/regenerate|revoke|test`, `/:id/deliveries`), UI-раздел.
   См. §«Статус реализации в коде».
+- **Этап III (реализовано, 2026-10-13):** **public-OpenAPI** интеграционного ядра —
+  **28 операций** (events 13, sessions 8, schedules 6, llm 1) через `@hono/zod-openapi@0.19.x`
+  (`createPublicOpenApiApp`/`getPublicOpenApiDocument`,
+  `packages/core/src/server/openapi/public-openapi.ts`), именованные модели `components.schemas`,
+  единый формат ошибок `publicErrorSchema`; выдача `GET /api/v2/openapi.json` (за `requireAuth`) —
+  **и** публикуемый **SDK** `@itphx/synth-sdk` (`packages/sdk`). См. §«Статус реализации в коде».
 
 ### Проблема
 
@@ -137,15 +144,18 @@ no-op: ограничиваются только service-key.
 - Автогенерация из **`@hono/zod-openapi`**.
 - **Public-контракт = интеграционное ядро:** `events` (ingest/watch), `bindings`,
   `sessions` (create/read/prompt), `schedules`, LLM proxy (`POST /api/v2/llm/chat/completions`).
-  Точечно ~42 хендлера (events 13, sessions 22, schedules 6, llm 1).
-- Риск: формат ошибок неоднороден (`{error:{code,message}}` vs `FsError {error:{error,code}}`).
-  В этапе I (spike) для публичных роутов закреплён единый `publicErrorSchema`
-  (`{error:{code,message}}`); остальные публичные роуты оборачиваются в этапе III.
+  Публичная спека покрывает **28 операций** (events 13, sessions 8, schedules 6, llm 1) —
+  курируемое подмножество (internal sessions-роуты шире публичного среза).
+- Формат ошибок неоднороден внутри (`{error:{code,message}}` vs `FsError {error:{error,code}}`).
+  Для публичных роутов закреплён единый `publicErrorSchema` (`{error:{code,message}}`) —
+  этап III обернул всё публичное ядро.
 
 ### SDK
 
 Отдельный публикуемый пакет **`@itphx/synth-sdk`** (по образцу `runner`/`synth`), поверх public-спеки.
 Источник типов — `@itphx/synth-shared` (browser-safe subpath'ы; `shared/config` тянуть нельзя — Node-only).
+Реализован (этап III, часть 2): `createSynthClient` + namespaces `events`/`sessions`/`schedules`/`llm`,
+`SynthApiError`; ESM-only, runtime-agnostic (глобальный `fetch`), см. §«Статус реализации в коде».
 
 ### Webhooks
 
@@ -201,10 +211,11 @@ no-op: ограничиваются только service-key.
 (независим от I и III): модель подписки, store, доставка над `EventBus`, подпись, retry/backoff,
 дедуп, SSRF-политика, API/UI — реализованы.
 
-### Этап III — OpenAPI public + SDK
+### Этап III — OpenAPI public + SDK — ✅ закрыт (28 операций + SDK, 2026-10-13)
 
-Обёртка ~42 хендлеров ядра в `@hono/zod-openapi`, генерация public-спеки, публикация
-`/openapi.json` (+ docs), пакет `@itphx/synth-sdk` поверх спеки.
+Обёртка интеграционного ядра в `@hono/zod-openapi` (**28 операций**: events 13, sessions 8,
+schedules 6, llm 1), генерация public-спеки, выдача `/openapi.json` (+ docs) и публикуемый
+пакет `@itphx/synth-sdk` поверх спеки — реализованы. См. §«Статус реализации в коде».
 
 ### Этап IV — перевод шлюза на service-key
 
@@ -214,10 +225,10 @@ no-op: ограничиваются только service-key.
 ## Статус реализации в коде
 
 **⚠️ Частично реализовано.** Закрыты: **этап I** — service-key + scopes + проектная проекция +
-API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — webhooks (оба 2026-10-13);
-а также первый срез **AD-089** — API-ключи привязок событий (binding-key).
-Не реализованы: этап **III** — public-OpenAPI (полная обёртка ядра, только public) + `@itphx/synth-sdk`;
-этап **IV** — перевод мессенджер-шлюза на scoped service-key.
+API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — webhooks; **этап III** —
+public-OpenAPI (28 операций) + SDK `@itphx/synth-sdk` (все 2026-10-13); а также первый срез
+**AD-089** — API-ключи привязок событий (binding-key).
+Не реализован: этап **IV** — перевод мессенджер-шлюза на scoped service-key.
 
 ### Этап I — service-key (реализовано)
 
@@ -260,7 +271,7 @@ API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — 
   боевых events-эндпоинтах** (`POST /events`, `GET /events/bindings`, `POST /events/bindings`) по
   реальным Zod-схемам `@itphx/synth-shared`; генерация OpenAPI 3.1 (`servers: [{url:'/api/v2'}]`).
   Хендлеры spike — заглушки с валидными примерами: цель — подтвердить совместимость `createRoute`
-  с нашими Zod-схемами и вывести документ (массовая обёртка ~42 хендлеров — этап III).
+  с нашими Zod-схемами и вывести документ (массовая обёртка ядра — этап III, закрыт: 28 операций, см. ниже).
 - **Единый формат ошибок** `publicErrorSchema` — `{error:{code,message}}` (коды `VALIDATION_ERROR`,
   `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `UNAVAILABLE`, `INTERNAL_ERROR`).
 - **Выдача** — `GET /api/v2/openapi.json` (core и backend; за `requireAuth`).
@@ -302,6 +313,29 @@ API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — 
   (`packages/ui/src/components/settings/WebhooksSettings.tsx`): однократный показ signing-секрета,
   журнал доставок, тестовая доставка.
 
+### Этап III — public-OpenAPI + SDK (реализовано)
+
+- **Публичная OpenAPI 3.1-спека** — `createPublicOpenApiApp`/`getPublicOpenApiDocument`
+  (`packages/core/src/server/openapi/public-openapi.ts`): **28 операций** через `createRoute` —
+  events 13 (`POST /events`, журнал, bindings + keys, routes), sessions 8 (list/create/get/patch/
+  delete/status/prompt/messages), schedules 6 (CRUD + run/jobs), llm 1 (`POST /llm/chat/completions`).
+- **Именованные модели `components.schemas`** (`.openapi('Name')` поверх Zod-схем `@itphx/synth-shared`):
+  `SynthEvent`, `EventBinding`/`EventBindingInput`, `EventBindingApiKey*`, `EventRouteRule*`,
+  `Session`/`SessionCreate`/`SessionPatch`, `Schedule*`, `ChatCompletionsRequest/Response` и др.
+  (обёртка `.openapi()` возвращает новую инстанцию, shared-схемы не мутируются).
+- **Единый формат ошибок** — `publicErrorSchema` (`{error:{code,message}}`) на всех публичных ответах
+  400/401/403/404/409/429/500/503; security-схема `bearerAuth` (service-key `synth_svc_…`),
+  `servers: [{url:'/api/v2'}]`.
+- **Выдача** — `GET /api/v2/openapi.json` (core и backend; за `requireAuth`).
+- **SDK `@itphx/synth-sdk`** — публикуемый пакет `packages/sdk` (AD-052 этап III, часть 2):
+  `createSynthClient(options)` / `SynthClient`; auth-заголовок с приоритетом **serviceKey → apiKey → token**,
+  базовый путь `/api/v2`; namespaces `events` (ingest/journal/bindings/keys/routes), `sessions`
+  (CRUD + prompt/messages/status), `schedules` (CRUD + run/jobs), `llm` (`chatCompletions`); ошибки —
+  `SynthApiError` (`{status,code,message,body?}`), сетевые сбои → `status:0`/`NETWORK_ERROR`.
+  Runtime-agnostic (глобальный `fetch`, инъекция для тестов), ESM-only, зависимость только от
+  `@itphx/synth-shared` (browser-safe subpath'ы). Публичные типы DTO, отсутствующие в shared
+  (`SerializedSession`, контракт LLM-прокси), — локально в `src/types.ts`.
+
 ### Первый срез AD-089 — binding-key (реализовано ранее)
 
 - `EventApiKeyStore` (`packages/core/src/storage/event-api-key-store.ts`, `{dataDir}/events/api-keys.json`):
@@ -320,10 +354,8 @@ API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — 
   Мастер-рубильник `events.enabled` → 503 `UNAVAILABLE`.
 - RBAC: мутации bindings/routes/keys — LEAD/ADMIN, чтение ключей — LEAD/ADMIN.
 
-Осталось (этапы III–IV, см. §«План реализации»):
+Осталось (этап IV, см. §«План реализации»):
 
-- публичная **OpenAPI**-спека (полная обёртка интеграционного ядра, только public) и **SDK**
-  (`@itphx/synth-sdk`) — этап III;
 - перевод мессенджер-шлюза на scoped service-key — этап IV.
 
 Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
@@ -332,17 +364,20 @@ API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — 
   (`packages/backend/src/routes/llm.ts`).
 - Единый `SYNTH_API_KEY` → роль ADMIN подтверждён (`packages/backend/src/app.ts`).
 - service-key: `ServiceApiKeyStore`/`ServiceApiKey`/`createServiceKeyRoutes`/`requireScope` присутствуют.
-- spike OpenAPI: зависимость `@hono/zod-openapi@^0.19.10` присутствует; `createPublicOpenApiApp`/
-  `getPublicOpenApiDocument`/`publicErrorSchema` — `packages/core/src/server/openapi/public-openapi.ts`;
-  `GET /api/v2/openapi.json` смонтирован в core и backend (за `requireAuth`).
+- public-OpenAPI: зависимость `@hono/zod-openapi@^0.19.10` присутствует; `createPublicOpenApiApp`/
+  `getPublicOpenApiDocument`/`publicErrorSchema` — `packages/core/src/server/openapi/public-openapi.ts`
+  (28 операций, именованные `components.schemas`); `GET /api/v2/openapi.json` смонтирован в core и
+  backend (за `requireAuth`).
+- SDK: пакет `packages/sdk` (`@itphx/synth-sdk`) — `createSynthClient`/`SynthClient`/`SynthApiError`,
+  namespaces events/sessions/schedules/llm; зависимость `@itphx/synth-shared`.
 - webhooks: `WebhookStore`/`WebhookDeliveryStore`/`WebhookService`/`createWebhookRoutes`/
   `evaluateWebhookTarget` присутствуют; store/journal — `{dataDir}/webhooks/*`.
 
 ## Открытые вопросы
 
 - Квоты/биллинг — отдельный слой поверх rate-limit; пока не решено (позже).
-- OpenAPI (этап III): как именно выделять public-подмножество (~42 хендлера) при сохранении паритета
-  core↔backend; версионирование спеки.
+- Версионирование публичной спеки (этап III): как менять контракт без слома потребителей
+  (deprecation-политика); выделение public-подмножества зафиксировано — 28 операций интеграционного ядра.
 
 Формат подписи webhooks закреплён — §«Формат подписи webhooks»; размещение store, дедуп и SSRF-политика
 реализованы в этапе II — §«Webhooks».
@@ -354,6 +389,7 @@ API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — 
 - [AD-023](./ad-023-configuration.md) «Конфигурация» — настройки платформы и ключей.
 - [AD-089](./ad-089-external-events-automation.md) «Внешние события и автоматизация» — родственный
   контур: входящие события и Router; webhooks (этап II) — исходящая доставка над `EventBus.subscribeAll`;
+  public-OpenAPI (28 операций) и SDK (этап III) публикуют этот же контур (events/bindings/routes);
   первый (реализованный) срез AD-052 — API-ключи привязок (binding-key).
 - [AD-086](./ad-086-extensibility-plugins-editions.md) «Расширяемость: плагины, editions» — точки расширения;
   scoped service-key — целевой способ аутентификации add-on'ов (первый кейс — Telegram gateway).
