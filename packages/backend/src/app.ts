@@ -19,7 +19,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { createMiddleware } from 'hono/factory';
-import type { ProviderConfig, ModelConfig, AgentDefinition, ToolsDisabledConfig } from '@itphx/synth-shared';
+import type { ProviderConfig, ModelConfig, AgentDefinition, ToolsDisabledConfig, WebhooksConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
   ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
@@ -54,6 +54,8 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   ServiceApiKeyStore, createServiceKeyRoutes, KeyRateLimiter, getServiceCredential,
+  WebhookStore, WebhookDeliveryStore, WebhookService, startWebhookDeliveryPruner,
+  createWebhookRoutes,
   getPublicOpenApiDocument,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
@@ -134,6 +136,14 @@ export interface BackendAppHandle {
   stopEphemeralSweeper: () => void;
   /** AD-089: остановка периодической retention-очистки журнала событий. */
   stopEventJournalPruner: () => void;
+  /** AD-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
+  webhookStore: WebhookStore;
+  /** AD-052 (этап II): движок исходящих webhooks. */
+  webhookService: WebhookService;
+  /** AD-052 (этап II): остановка движка webhooks (на graceful shutdown). */
+  stopWebhookService: () => void;
+  /** AD-052 (этап II): остановка retention-очистки журнала доставок. */
+  stopWebhookDeliveryPruner: () => void;
   /**
    * Поднять HTTP-сервер (+ WebSocket /ws/events) на указанном порту.
    * Порт 0 → эфемерный; возвращает фактический порт.
@@ -372,6 +382,30 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     const eventBus = new EventBus();
     const queueManager = new QueueProcessorManager();
+
+    // AD-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
+    // `whsec_…` шифруется at-rest мастер-ключом), append-only журнал доставок и
+    // движок над той же шиной `EventBus`, что обслуживает сессии/SSE. Движок
+    // подписывается на ВСЕ события шины (`subscribeAll`) — паритет с core
+    // `server/app.ts`; `webhooks.enabled: false` (дефолт) глушит диспетчеризацию.
+    const webhooksConfig: WebhooksConfig = backendConfig.synth.webhooks;
+    const webhookStore = new WebhookStore({
+      dataDir: backendConfig.dataDir,
+      secretKey: resolveSecretKey(backendConfig.synth),
+      env: process.env,
+    });
+    const webhookDeliveryStore = new WebhookDeliveryStore({ dataDir: backendConfig.dataDir });
+    const webhookService = new WebhookService({
+      store: webhookStore,
+      deliveryStore: webhookDeliveryStore,
+      eventBus,
+      config: webhooksConfig,
+    });
+    webhookService.start();
+    // Retention-очистка журнала доставок: сразу при старте + каждые 6 ч (unref).
+    const stopWebhookDeliveryPruner = startWebhookDeliveryPruner(webhookDeliveryStore, {
+      getRetentionDays: () => webhooksConfig.deliveryRetentionDays,
+    });
 
     // Context builder
     const contextBuilder = new ContextBuilder(contextConfig, {
@@ -975,6 +1009,31 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     ));
 
+    // AD-052 (этап II): подписки на исходящие webhooks (CRUD + журнал + тест).
+    // Managed RBAC: только ADMIN (webhook может утекать данные на произвольный
+    // URL), i18n. Мастер-выключатель `webhooks.enabled` → 503 на мутации/тест.
+    app.route('/api/v2/webhooks', createWebhookRoutes(
+      { requireAuth: auth.requireAuth },
+      { store: webhookStore, deliveryStore: webhookDeliveryStore, service: webhookService },
+      {
+        writeGuard: auth.requirePermission('ADMIN'),
+        readGuard: auth.requirePermission('ADMIN'),
+        resolveUserId: (c) => {
+          const user = c.get('user') as { id?: string } | undefined;
+          return user?.id ?? 'unknown';
+        },
+        isEnabled: () => webhooksConfig.enabled,
+        allowPrivateTargets: webhooksConfig.allowPrivateTargets,
+        messages: {
+          invalid: (c) => t('errors.validation.invalidWebhook', undefined, c),
+          notFound: (c) => t('errors.notFound.webhook', undefined, c),
+          labelConflict: (c) => t('errors.conflict.webhookLabel', undefined, c),
+          targetForbidden: (c) => t('errors.validation.webhookTargetForbidden', undefined, c),
+          disabled: (c) => t('errors.unavailable.webhooksDisabled', undefined, c),
+        },
+      },
+    ));
+
     // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
     app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
       registry: mcpRegistryStore,
@@ -1570,6 +1629,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       stopScheduler: () => schedulerService.stop(),
       stopEphemeralSweeper,
       stopEventJournalPruner,
+      // AD-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
+      webhookStore,
+      webhookService,
+      stopWebhookService: () => webhookService.stop(),
+      stopWebhookDeliveryPruner: () => stopWebhookDeliveryPruner(),
       listen,
     };
   } finally {

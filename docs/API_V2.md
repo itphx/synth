@@ -247,6 +247,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/i18n/current` | backend | — | Текущий язык по `Accept-Language` |
 | GET | `/api/v2/i18n/translations/ru` | backend | — | Русский словарь |
 | GET | `/api/v2/i18n/translations/en` | backend | — | Английский словарь |
+| GET | `/api/v2/openapi.json` | оба | auth | Публичная OpenAPI 3.1-спека интеграционного ядра (AD-052, spike этапа I; `server/openapi/public-openapi.ts`). Единый формат ошибок — `publicErrorSchema` (`{error:{code,message}}`) |
 
 ### 5.5 Sessions — `/api/v2/sessions`
 
@@ -805,6 +806,76 @@ curl -X POST http://localhost:5000/api/v2/events \
   -d '{"source":"telegram","type":"message","payload":{"text":"ping"}}'
 ```
 
+### 5.29 Webhooks — `/api/v2/webhooks` (оба, AD-052 этап II)
+
+Подписки на **исходящие** события (обратный контур к приёму событий AD-089):
+`WebhookService` подписывается на все события шины (`EventBus.subscribeAll`), фильтрует их
+паттернами подписки и шлёт HTTP-POST на `url`. Единая фабрика `createWebhookRoutes` для core и
+backend; store — `{dataDir}/webhooks/subscriptions.json`, журнал доставок —
+`{dataDir}/webhooks/deliveries.jsonl` (AD-005). Signing-секрет `whsec_<base64url>` **шифруется
+at-rest** (AES-256-GCM мастер-ключом; HMAC требует исходный секрет) и отдаётся **единственный
+раз** при создании/ротации; в списке — `secretPrefix`. Мастер-выключатель `webhooks.enabled`
+(по умолчанию `false`) → мутации и `test` отвечают 503 `UNAVAILABLE` (чтение доступно). RBAC:
+managed (backend) — только `ADMIN`, core (standalone) — единый `requireAuth`.
+
+| Метод | Путь | Сборка | RBAC (backend / core) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/webhooks` | оба | ADMIN / auth | Список подписок `{subscriptions}` (метаданные без секрета) |
+| POST | `/api/v2/webhooks` | оба | ADMIN / auth | Создать (`webhookSubscriptionCreateSchema`): `{label, description?, url, events?, enabled?}` → 201 `WebhookSubscriptionCreated` = метаданные + `secret` (plaintext `whsec_<base64url>`, показывается **один раз**); невалидное тело/URL → 400 `VALIDATION_ERROR`; URL вне SSRF-политики → 400; дубль метки → 409 `CONFLICT`; мастер выключен → 503 `UNAVAILABLE` |
+| GET | `/api/v2/webhooks/:id` | оба | ADMIN / auth | Метаданные подписки; нет подписки → 404 `NOT_FOUND` |
+| PATCH | `/api/v2/webhooks/:id` | оба | ADMIN / auth | Обновить (`webhookSubscriptionUpdateSchema`): `{label?, description?, url?, events?, enabled?}`; `null` для `description` — сброс, `undefined` — не трогать; смена метки проверяется на уникальность → 200; нет подписки → 404; дубль → 409; URL вне политики → 400 |
+| DELETE | `/api/v2/webhooks/:id` | оба | ADMIN / auth | Удалить подписку → 204; нет записи → 404 |
+| POST | `/api/v2/webhooks/:id/regenerate` | оба | ADMIN / auth | Ротация signing-секрета → 200 `WebhookSubscriptionCreated` (+ `secret` единожды); нет подписки → 404 |
+| POST | `/api/v2/webhooks/:id/revoke` | оба | ADMIN / auth | Мягкое отключение (`enabled=false`, `disabledAt`; идемпотентно) → 200 метаданные; нет записи → 404 |
+| POST | `/api/v2/webhooks/:id/test` | оба | ADMIN / auth | Тестовая доставка синтетического события `webhook.test` (в обход фильтра и дедупа) → 200 `WebhookDelivery`; нет подписки/движка → 404; мастер выключен → 503 |
+| GET | `/api/v2/webhooks/:id/deliveries` | оба | ADMIN / auth | Журнал доставок подписки `{deliveries}` (`WebhookDelivery[]`); `?limit=` (default 50, cap 500); нет подписки → 404 |
+
+**Поля подписки** (`WebhookSubscription`): `id` (`whk_<uuid>`), `label` (обязательна; уникальна
+глобально по инстансу, регистронезависимо), `description?`, `url` (только http(s); по умолчанию —
+`https` + запрет private/loopback через `evaluateWebhookTarget` поверх `engine/mcp/network-policy.ts`,
+`webhooks.allowPrivateTargets` снимает оба ограничения), `events: string[]` (паттерны: точный тип
+`stream.done` либо префикс `session.*`; пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), `enabled`,
+`secretPrefix`, `createdBy`/`createdAt`, `lastDeliveryAt?`/`lastStatus?`, `disabledAt?`.
+**Доставка:** POST `{id, type, createdAt, data}` с заголовками `X-Synth-Event`/`X-Synth-Delivery`/
+`X-Synth-Signature`; HMAC-SHA256 (`t=<unix>,v1=<hex>`, окно timestamp 300 c); retry/backoff
+(экспоненциальный с джиттером, `webhooks.maxAttempts`), таймаут запроса (`webhooks.timeoutMs`),
+дедуп по (подписка + событие), журнал + retention (`webhooks.deliveryRetentionDays`). Неуспех —
+запись `status:'failed'` в журнале. Конфиг — `docs/CONFIGURATION.md` (секция `webhooks`); устройство —
+`docs/ARCHITECTURE.md` («Внешние события и хуки»).
+
+**Пример.**
+
+```bash
+# Создать подписку (ADMIN). Секрет придёт один раз в поле "secret" (whsec_…).
+curl -X POST http://localhost:5000/api/v2/webhooks \
+  -H 'Authorization: Bearer admin-key-123' -H 'Content-Type: application/json' \
+  -d '{"label":"ci-listener","url":"https://ci.example.com/synth","events":["session.*","stream.done"]}'
+
+# Провести тестовую доставку и посмотреть журнал.
+curl -X POST http://localhost:5000/api/v2/webhooks/whk_<...>/test \
+  -H 'Authorization: Bearer admin-key-123'
+curl http://localhost:5000/api/v2/webhooks/whk_<...>/deliveries \
+  -H 'Authorization: Bearer admin-key-123'
+```
+
+**Проверка подписи (получатель).** Тело берётся **сырым** (до парсинга JSON); из заголовка
+`X-Synth-Signature` извлекаются `t` и `v1`, проверяется окно `|now - t| <= 300` и
+`HMAC-SHA256(secret, "<t>.<rawBody>")` (constant-time). Пример на Node.js:
+
+```js
+const { createHmac, timingSafeEqual } = require('node:crypto');
+
+function verify(rawBody, header, secret, nowSec = Math.floor(Date.now() / 1000)) {
+  const parts = Object.fromEntries(header.split(',').map((p) => p.split('=').map((s) => s.trim())));
+  const t = Number.parseInt(parts.t, 10);
+  if (!Number.isFinite(t) || Math.abs(nowSec - t) > 300) return false;
+  const expected = createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex');
+  const a = Buffer.from(expected);
+  const b = Buffer.from(parts.v1);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+```
+
 ---
 
 ## 6. Источники
@@ -816,6 +887,8 @@ curl -X POST http://localhost:5000/api/v2/events \
 | Backend auth/RBAC | `packages/backend/src/auth/middleware.ts`, `auth/oidc.ts` |
 | Service-key scopes (AD-052) | `packages/core/src/server/service-scope.ts`, `packages/backend/src/auth/service-scope.ts` |
 | Service-key store/роуты (AD-052) | `packages/core/src/storage/service-api-key-store.ts`, `packages/core/src/server/routes/service-keys.ts` |
+| Публичный OpenAPI (AD-052, spike) | `packages/core/src/server/openapi/public-openapi.ts` |
+| Webhooks store/журнал/роуты/движок (AD-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

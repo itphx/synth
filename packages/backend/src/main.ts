@@ -9,7 +9,7 @@ import { createBackendApp } from './app.js';
 const host = process.env.SYNTH_HOST || '0.0.0.0';
 
 const handle = await createBackendApp();
-const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopScheduler } = handle;
+const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopScheduler, stopWebhookService, stopWebhookDeliveryPruner } = handle;
 
 let shuttingDown = false;
 
@@ -41,6 +41,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   // AD-051 (срез): остановить планировщик расписаний.
   stopScheduler();
+
+  // AD-052 (этап II): остановить движок исходящих webhooks и retention-очистку.
+  stopWebhookService();
+  stopWebhookDeliveryPruner();
 
   const drainTimeout = 10_000;
   const activeSessions = await sessionManager.listActiveSessions();

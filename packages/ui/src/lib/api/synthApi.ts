@@ -1,5 +1,5 @@
 import type { MessageData } from '@/stores/chatStore'
-import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, EventBindingApiKey, EventBindingApiKeyCreated, EventRouteRule, EventRouteRuleInputRequest, SynthEvent, RouteDecision, ExternalIdentity, ServiceApiKey, ServiceApiKeyCreated, CreateServiceApiKeyInput, UpdateServiceApiKeyPatch } from '@itphx/synth-shared'
+import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, EventBindingApiKey, EventBindingApiKeyCreated, EventRouteRule, EventRouteRuleInputRequest, SynthEvent, RouteDecision, ExternalIdentity, ServiceApiKey, ServiceApiKeyCreated, CreateServiceApiKeyInput, UpdateServiceApiKeyPatch, WebhookSubscription, WebhookSubscriptionCreated, WebhookDelivery, CreateWebhookSubscriptionInput, UpdateWebhookSubscriptionPatch } from '@itphx/synth-shared'
 import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry, Schedule, ScheduleInput, ScheduleJob } from '@itphx/synth-shared/types'
 
 // Реэкспорт общих контрактов (AD-071): без локальных дублей.
@@ -2052,6 +2052,67 @@ export const synthApi = {
     return fetchJSON<ServiceApiKey>(`${BASE_URL}/service-keys/${encodeURIComponent(id)}/revoke`, {
       method: 'POST',
     })
+  },
+
+  // --- Webhooks (AD-052, этап II): исходящие подписки на события ---
+  /** GET /webhooks — список подписок (без signing-секретов). */
+  async getWebhookSubscriptions(): Promise<{ subscriptions: WebhookSubscription[] }> {
+    return fetchJSON<{ subscriptions: WebhookSubscription[] }>(`${BASE_URL}/webhooks`)
+  },
+
+  /** GET /webhooks/:id — метаданные одной подписки. */
+  async getWebhookSubscription(id: string): Promise<WebhookSubscription> {
+    return fetchJSON<WebhookSubscription>(`${BASE_URL}/webhooks/${encodeURIComponent(id)}`)
+  },
+
+  /** POST /webhooks — создание подписки; signing-секрет (`secret`) возвращается один раз. */
+  async createWebhookSubscription(
+    input: CreateWebhookSubscriptionInput,
+  ): Promise<WebhookSubscriptionCreated> {
+    return fetchJSON<WebhookSubscriptionCreated>(`${BASE_URL}/webhooks`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  },
+
+  /** PATCH /webhooks/:id — частичное обновление (`null` у `description` сбрасывает поле). */
+  async updateWebhookSubscription(
+    id: string,
+    patch: UpdateWebhookSubscriptionPatch,
+  ): Promise<WebhookSubscription> {
+    return fetchJSON<WebhookSubscription>(`${BASE_URL}/webhooks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+  },
+
+  /** DELETE /webhooks/:id — удаление подписки. */
+  async deleteWebhookSubscription(id: string): Promise<void> {
+    return fetchJSON<void>(`${BASE_URL}/webhooks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  /** POST /webhooks/:id/regenerate — ротация signing-секрета (новый отдаётся один раз). */
+  async regenerateWebhookSecret(id: string): Promise<WebhookSubscriptionCreated> {
+    return fetchJSON<WebhookSubscriptionCreated>(
+      `${BASE_URL}/webhooks/${encodeURIComponent(id)}/regenerate`,
+      { method: 'POST' },
+    )
+  },
+
+  /** POST /webhooks/:id/test — тестовая доставка; возвращает запись журнала. */
+  async testWebhookSubscription(id: string): Promise<WebhookDelivery> {
+    return fetchJSON<WebhookDelivery>(`${BASE_URL}/webhooks/${encodeURIComponent(id)}/test`, {
+      method: 'POST',
+    })
+  },
+
+  /** GET /webhooks/:id/deliveries?limit= — журнал доставок подписки. */
+  async getWebhookDeliveries(id: string, limit = 50): Promise<{ deliveries: WebhookDelivery[] }> {
+    return fetchJSON<{ deliveries: WebhookDelivery[] }>(
+      `${BASE_URL}/webhooks/${encodeURIComponent(id)}/deliveries?limit=${encodeURIComponent(String(limit))}`,
+    )
   },
 }
 

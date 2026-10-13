@@ -52,6 +52,13 @@ const en: Dictionary = {
   'errors.forbidden.projectForbidden': 'Project is not available for this service key',
   'errors.rateLimited.serviceKey': 'Service key rate limit exceeded',
 
+  // AD-052 (этап II): исходящие webhooks
+  'errors.validation.invalidWebhook': 'Invalid webhook subscription payload',
+  'errors.notFound.webhook': 'Webhook subscription not found',
+  'errors.conflict.webhookLabel': 'Webhook label is already used',
+  'errors.validation.webhookTargetForbidden': 'Webhook target URL is not allowed by security policy',
+  'errors.unavailable.webhooksDisabled': 'Webhook delivery is disabled',
+
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
   'errors.conflict.emailExists': 'A user with this email already exists',
@@ -137,6 +144,13 @@ const ru: Dictionary = {
   'errors.forbidden.scopeRequired': 'Недостаточно прав: отсутствует требуемый scope',
   'errors.forbidden.projectForbidden': 'Проект недоступен для этого service-key',
   'errors.rateLimited.serviceKey': 'Превышен лимит запросов по service-key',
+
+  // AD-052 (этап II): исходящие webhooks
+  'errors.validation.invalidWebhook': 'Некорректное тело webhook-подписки',
+  'errors.notFound.webhook': 'Webhook-подписка не найдена',
+  'errors.conflict.webhookLabel': 'Метка webhook уже используется',
+  'errors.validation.webhookTargetForbidden': 'Целевой URL webhook запрещён политикой безопасности',
+  'errors.unavailable.webhooksDisabled': 'Доставка webhooks отключена',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',

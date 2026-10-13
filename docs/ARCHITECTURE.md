@@ -47,6 +47,11 @@ flowchart TB
         providers["Любой OpenAI-совместимый"]
     end
 
+    subgraph Integrations["Интеграции"]
+        event_sources["Внешние источники событий"]
+        webhook_targets["HTTP-подписчики (webhooks)"]
+    end
+
     synth_ui -->|HTTP + WebSocket| synth_backend
     synth_ui -->|HTTP API v2| synth_core
 
@@ -63,6 +68,9 @@ flowchart TB
     synth_core --> openai
     synth_core --> anthropic
     synth_core --> providers
+
+    event_sources -->|POST /api/v2/events| synth_core
+    synth_core -->|webhooks: HTTP + HMAC-SHA256| webhook_targets
 ```
 
 ## Сценарии развёртывания
@@ -265,6 +273,13 @@ hook-шину, а создание сессий сведено в один funne
   эндпоинта не изменился.
 - **`EventIngress`** (`engine/events/ingest.ts`) — точка приёма: нормализует вход в
   `SynthEvent` (id `evt_<uuid>`, дефолтный dedup-ключ) и передаёт в funnel.
+- **Webhooks** (`WebhookStore` + `WebhookService`, AD-052 этап II) — **исходящий** мост,
+  обратный контур к входящим событиям: `WebhookService` подписывается на все события шины
+  (`eventBus.subscribeAll`), фильтрует их паттернами подписки (`matchWebhookEvent`) и шлёт
+  подписчикам HTTP-POST с HMAC-SHA256-подписью; retry/backoff с джиттером, дедуп по
+  (подписка + событие), таймаут, журнал доставок (`{dataDir}/webhooks/deliveries.jsonl`) и
+  SSRF-политика (`engine/webhooks/network.ts` поверх `engine/mcp/network-policy.ts`). Эндпоинты и
+  формат подписи — `docs/API_V2.md` §5.29; конфиг — `docs/CONFIGURATION.md` (секция `webhooks`).
 - **Ephemeral-сессии** для внешних событий получают `expiresAt` из `ttl`
   (`config.events.ephemeralTtl`, default `24h`); очистка — `startEphemeralSweeper`.
   Режим `queue` доставляется как `defer` (сообщение в очередь без старта процессора).
@@ -278,6 +293,7 @@ hook-шину, а создание сессий сведено в один funne
 ```
 
 API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `docs/CONFIGURATION.md`
-(секция `events`). Источники/интеграции: шедулер AD-051 (cron), API-ключи привязок и
-service-key со scopes/проектной проекцией (AD-052 этап I) реализованы; остаток публичной
-API-платформы (webhooks, public-OpenAPI, SDK) и плагины AD-086 — нет.
+(секция `events`). Источники/интеграции: шедулер AD-051 (cron), API-ключи привязок, service-key
+со scopes/проектной проекцией (AD-052 этап I), webhooks (этап II) и spike public-OpenAPI
+(`GET /api/v2/openapi.json`) реализованы; остаток публичной API-платформы (полный public-OpenAPI
+и SDK, этап III) и плагины AD-086 — нет.

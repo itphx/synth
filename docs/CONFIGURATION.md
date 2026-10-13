@@ -438,6 +438,34 @@ events:
 API (`POST /api/v2/events`, bindings, ключи привязок, journal) — `docs/API_V2.md` §5.26; устройство
 шины/роутера — `docs/ARCHITECTURE.md` («Внешние события и хуки»).
 
+### Исходящие webhooks (`webhooks.*`, AD-052 этап II)
+
+Подписки на события и HTTP-доставка подписчикам (`WebhookService` над `EventBus.subscribeAll`).
+Секция — deployment-настройка; мастер-выключатель `enabled` и политики доставки.
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `webhooks.enabled` | Мастер-выключатель доставки (opt-in); `false` — движок не доставляет, а мутации `/api/v2/webhooks` и тест отвечают 503 `UNAVAILABLE` (чтение доступно) | `false` |
+| `webhooks.maxAttempts` | Число HTTP-попыток на доставку (1..10); между попытками — экспоненциальный backoff с джиттером | `5` |
+| `webhooks.timeoutMs` | Таймаут одного HTTP-запроса, мс | `10000` |
+| `webhooks.allowPrivateTargets` | Разрешить `http` и приватные/loopback адреса (dev). `false` — только `https` и публичные адреса (SSRF-политика поверх `engine/mcp/network-policy.ts`) | `false` |
+| `webhooks.deliveryRetentionDays` | Срок хранения журнала доставок (`{dataDir}/webhooks/deliveries.jsonl`), дни; `0` — без ограничения; prune на старте и каждые 6 ч | `30` |
+
+Пример:
+
+```yaml
+webhooks:
+  enabled: false
+  maxAttempts: 5
+  timeoutMs: 10000
+  allowPrivateTargets: false
+  deliveryRetentionDays: 30
+```
+
+API (`/api/v2/webhooks`, подписки/ротация секрета/журнал/тест) — `docs/API_V2.md` §5.29;
+формат подписи, устройство движка и SSRF — `docs/ARCHITECTURE.md` («Внешние события и хуки»)
+и [AD-052](./arch_decisions/ad-052-public-api-platform.md).
+
 ### Планировщик расписаний (`scheduler.*`, AD-051 срез / AD-089)
 
 Cron/interval-планировщик публикует события `source: 'cron'` через

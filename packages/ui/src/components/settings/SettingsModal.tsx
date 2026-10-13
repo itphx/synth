@@ -22,6 +22,7 @@ import { EventsAdminSettings } from "./EventsAdminSettings"
 import { EventsSettings } from "./EventsSettings"
 import { DecisionSettings } from "./DecisionSettings"
 import { ServiceKeysSettings } from "./ServiceKeysSettings"
+import { WebhooksSettings } from "./WebhooksSettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
 import { SessionsPanel } from "../admin/SessionsPanel"
 import { ProjectsPanel } from "../admin/ProjectsPanel"
@@ -58,6 +59,7 @@ export const CATEGORIES: CategoryItem[] = [
   { id: "eventsConfig", labelKey: "settings.category.eventsConfig", icon: "settings-3", roles: ["ADMIN"] },
   { id: "decisionConfig", labelKey: "settings.category.decision", icon: "brain", roles: ["ADMIN"] },
   { id: "serviceKeys", labelKey: "settings.category.serviceKeys", icon: "key", roles: ["ADMIN"] },
+  { id: "webhooks", labelKey: "settings.category.webhooks", icon: "send-plane", roles: ["ADMIN"] },
   { id: "sessions", labelKey: "settings.category.sessions", icon: "chat-new", roles: ["ADMIN", "LEAD"] },
   { id: "projects", labelKey: "settings.category.projects", icon: "briefcase", roles: ["ADMIN", "LEAD"] },
   { id: "providers", labelKey: "settings.category.providers", icon: "server", roles: ["ADMIN"] },
@@ -205,6 +207,7 @@ export const SettingsModal = () => {
             {activePage === "eventsConfig" && <EventsSettings />}
             {activePage === "decisionConfig" && <DecisionSettings />}
             {activePage === "serviceKeys" && <ServiceKeysSettings />}
+            {activePage === "webhooks" && <WebhooksSettings />}
             {activePage === "security" && <SecuritySettings />}
             {activePage === "dashboard" && <DashboardPanel />}
             {activePage === "sessions" && <SessionsPanel />}

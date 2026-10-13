@@ -1,9 +1,10 @@
 # AD-052: Публичная API-платформа Synth
 
-> **Статус:** ⚠️ Частично реализовано — **этап I закрыт** (service-key + scopes + проектная проекция
-> `allowedProjects` + API/UI); остаток — этапы II–IV (webhooks, public-OpenAPI/SDK, перевод шлюза).
+> **Статус:** ⚠️ Частично реализовано — **этапы I–II закрыты**: этап I (service-key + scopes +
+> проектная проекция `allowedProjects` + API/UI + spike public-OpenAPI), этап II (webhooks);
+> остаток — этапы III–IV (public-OpenAPI + SDK, перевод шлюза).
 > Ранее был реализован первый срез — API-ключи привязок событий (binding-key, AD-089).
-> **Дата:** 2026-09-16 (план зафиксирован 2026-10-13; этап I закрыт 2026-10-13)
+> **Дата:** 2026-09-16 (план зафиксирован 2026-10-13; этап I закрыт 2026-10-13; этап II закрыт 2026-10-13)
 > **Источник:** перенесено из `AD-DRAFTS.md` (D7, идея 7).
 > **Связано:** [AD-017](./ad-017-api-v2-hono.md), [AD-036](./ad-036-llm-gateway.md),
 > [AD-023](./ad-023-configuration.md), [AD-089](./ad-089-external-events-automation.md),
@@ -45,7 +46,14 @@
 - **Этап I (реализовано, 2026-10-13):** **service-key** — независимый ключ инстанса со `scopes` и
   проектной проекцией `allowedProjects` (`ServiceApiKeyStore`, `{dataDir}/service-keys.json`,
   секрет `synth_svc_…`), CRUD `GET/POST/PATCH/DELETE /api/v2/service-keys` (+ `/:id/revoke`),
-  middleware `requireScope`/`checkProjectAccess`, UI-раздел «Сервисные ключи». См. §«Статус реализации в коде».
+  middleware `requireScope`/`checkProjectAccess`, UI-раздел «Сервисные ключи»; **spike public-OpenAPI**
+  (`@hono/zod-openapi@0.19.x`, совместим с zod v3) на 3 events-эндпоинтах + `GET /api/v2/openapi.json`
+  + единый `publicErrorSchema`. См. §«Статус реализации в коде».
+- **Этап II (реализовано, 2026-10-13):** **webhooks** — подписки на исходящие события
+  (`WebhookStore`, `{dataDir}/webhooks/subscriptions.json`; журнал `{dataDir}/webhooks/deliveries.jsonl`),
+  доставка над `EventBus.subscribeAll`, HMAC-SHA256-подпись, retry/backoff, дедуп, SSRF-политика,
+  API `GET/POST /api/v2/webhooks` (+ `/:id`, `/:id/regenerate|revoke|test`, `/:id/deliveries`), UI-раздел.
+  См. §«Статус реализации в коде».
 
 ### Проблема
 
@@ -130,8 +138,9 @@ no-op: ограничиваются только service-key.
 - **Public-контракт = интеграционное ядро:** `events` (ingest/watch), `bindings`,
   `sessions` (create/read/prompt), `schedules`, LLM proxy (`POST /api/v2/llm/chat/completions`).
   Точечно ~42 хендлера (events 13, sessions 22, schedules 6, llm 1).
-- Риск: формат ошибок неоднороден (`{error:{code,message}}` vs `FsError {error:{error,code}}`) —
-  в этапе I закрепить единый формат для публичных роутов.
+- Риск: формат ошибок неоднороден (`{error:{code,message}}` vs `FsError {error:{error,code}}`).
+  В этапе I (spike) для публичных роутов закреплён единый `publicErrorSchema`
+  (`{error:{code,message}}`); остальные публичные роуты оборачиваются в этапе III.
 
 ### SDK
 
@@ -140,13 +149,32 @@ no-op: ограничиваются только service-key.
 
 ### Webhooks
 
-- Механизма сейчас нет (`EventDelivery` доставляет только внутрь сессии; `EventBus.subscribeAll` — in-process).
-- Встраивать над `EventBus.subscribeAll`/журналом (`EventJournalStore`); retry/backoff по образцу
-  `queue/processor.ts` / `remote/event-bridge.ts`.
-- Подпись — HMAC-SHA256 (per-subscription secret, образец хеширования — `EventApiKeyStore`),
-  секреты подписи at-rest; защита от SSRF по образцу `engine/mcp/network-policy.ts`.
-- `HookBus.emitAsync` (fire-and-forget, timeout 5s) как транспорт **не** использовать — только как
-  возможный триггер.
+Реализовано (этап II):
+
+- Доставка встраивается над `EventBus.subscribeAll` (как глобальный SSE-хаб): каждый `BusEvent`
+  фильтруется паттернами подписок, подписывается и отправляется подписчикам.
+- Retry/backoff — экспоненциальный с джиттером (`computeBackoffMs`; ориентир — `queue/processor.ts` /
+  `remote/event-bridge.ts`), таймаут одного запроса, дедуп по (подписка + событие).
+- Подпись — HMAC-SHA256 (per-subscription secret `whsec_<base64url>`); секрет **шифруется at-rest**
+  (AES-256-GCM, мастер-ключ, `security/crypto.ts`) и выдаётся один раз — sha256-хеш, как у API-ключей,
+  не годится (HMAC требует исходный секрет). Формат заголовков — §«Формат подписи webhooks».
+- Защита от SSRF — `engine/webhooks/network.ts` (`evaluateWebhookTarget`) поверх
+  `engine/mcp/network-policy.ts`: обязательный `https` + запрет private/loopback (кроме
+  `webhooks.allowPrivateTargets` для dev).
+- `HookBus.emitAsync` (fire-and-forget, timeout 5s) как транспорт **не** используется.
+
+### Формат подписи webhooks (закреплено, этап II)
+
+- Заголовки доставки: `X-Synth-Event` (тип события), `X-Synth-Delivery` (id доставки),
+  `X-Synth-Signature` (подпись).
+- Значение подписи: `t=<unix>,v1=<hex hmac_sha256(secret, "<t>.<rawBody>")>` — HMAC-SHA256 от строки
+  `"<timestamp>.<rawBody>"` (`signature.ts`: `buildSignatureHeader`/`computeWebhookSignature`).
+- Анти-replay: получатель сверяет `t` с текущим временем в окне **300 c**
+  (`WEBHOOK_SIGNATURE_TOLERANCE_SEC`) и проверяет подпись по **сырому телу** (до парсинга JSON);
+  сравнение — constant-time (`timingSafeEqual`, `parseSignatureHeader`/`verifyWebhookSignature`).
+- Версия схемы подписи — `v1` (`WEBHOOK_SIGNATURE_VERSION`).
+- Signing-секрет подписки — `whsec_<base64url>` (`WEBHOOK_SECRET_PREFIX`); **шифруется at-rest**
+  (AES-256-GCM, мастер-ключ), наружу отдаётся один раз при создании/ротации (в списке — `secretPrefix`).
 
 ### Квоты и биллинг (позже)
 
@@ -156,21 +184,22 @@ no-op: ограничиваются только service-key.
 
 Переход между этапами — только с остановкой и явным подтверждением.
 
-### Этап I — service-key + scopes + spike OpenAPI — ✅ закрыт (service-key/scopes/проекция; spike — нет)
+### Этап I — service-key + scopes + spike OpenAPI — ✅ закрыт (service-key/scopes/проекция + spike OpenAPI)
 
 - ✅ `ServiceApiKeyStore` + типы/схемы (`ServiceApiKey`, create/update, `scopes`/`allowedProjects`)
   в `@itphx/synth-shared`.
 - ✅ CRUD-роуты service-ключей (managed: ADMIN; core: `requireAuth`), аутентификация по `synth_svc_*`,
   middleware `requireScope`.
 - ✅ Проектная проекция `allowedProjects` в применяемых роутах (sessions / events-bindings / schedules).
-- ❌ **Spike `@hono/zod-openapi`** (2–3 эндпоинта из `events` + генерация спеки, единый формат ошибок
-  публичных роутов) — **не выполнялся**; отложен к этапу III (в репозитории нет зависимости `@hono/zod-openapi`).
-- Критерий: service-key со scopes работает (✅); spike подтвердил/опроверг подход к OpenAPI (не выполнялся).
+- ✅ **Spike `@hono/zod-openapi`** — выполнен: выбран `@hono/zod-openapi@0.19.x` (совместим с zod v3;
+  1.x требует zod v4 — отдельная миграция), сгенерирована public-спека на 3 events-эндпоинтах,
+  добавлены `GET /api/v2/openapi.json` и `publicErrorSchema` (единый формат ошибок публичных роутов).
+- Критерий: service-key со scopes работает (✅); spike подтвердил подход к OpenAPI (✅).
 
-### Этап II — webhooks
+### Этап II — webhooks — ✅ закрыт (2026-10-13)
 
 (независим от I и III): модель подписки, store, доставка над `EventBus`, подпись, retry/backoff,
-дедуп, SSRF-политика, API/UI.
+дедуп, SSRF-политика, API/UI — реализованы.
 
 ### Этап III — OpenAPI public + SDK
 
@@ -184,10 +213,11 @@ no-op: ограничиваются только service-key.
 
 ## Статус реализации в коде
 
-**⚠️ Частично реализовано.** Закрыты: **этап I — service-key + scopes + проектная проекция + API/UI**
-(2026-10-13) и первый срез **AD-089** — API-ключи привязок событий (binding-key).
-Не реализованы: этапы **II–IV** — webhooks, public-OpenAPI (`@hono/zod-openapi`) + `@itphx/synth-sdk`,
-перевод шлюза. Spike `@hono/zod-openapi` в рамках этапа I не выполнялся.
+**⚠️ Частично реализовано.** Закрыты: **этап I** — service-key + scopes + проектная проекция +
+API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — webhooks (оба 2026-10-13);
+а также первый срез **AD-089** — API-ключи привязок событий (binding-key).
+Не реализованы: этап **III** — public-OpenAPI (полная обёртка ядра, только public) + `@itphx/synth-sdk`;
+этап **IV** — перевод мессенджер-шлюза на scoped service-key.
 
 ### Этап I — service-key (реализовано)
 
@@ -221,6 +251,57 @@ no-op: ограничиваются только service-key.
   однократный показ секрета + curl, мульти-селекты ролей/scopes/проектов, revoke/delete,
   read-only для не-ADMIN.
 
+### Этап I — spike public-OpenAPI (реализовано)
+
+- **Зависимость** `@hono/zod-openapi@^0.19.10` (`packages/core/package.json`): совместима с zod v3
+  (1.x требует zod v4 — отдельная миграция, вне этапа I).
+- **Публичный контракт** — `createPublicOpenApiApp`/`getPublicOpenApiDocument`
+  (`packages/core/src/server/openapi/public-openapi.ts`): `OpenAPIHono` + `createRoute` на **трёх
+  боевых events-эндпоинтах** (`POST /events`, `GET /events/bindings`, `POST /events/bindings`) по
+  реальным Zod-схемам `@itphx/synth-shared`; генерация OpenAPI 3.1 (`servers: [{url:'/api/v2'}]`).
+  Хендлеры spike — заглушки с валидными примерами: цель — подтвердить совместимость `createRoute`
+  с нашими Zod-схемами и вывести документ (массовая обёртка ~42 хендлеров — этап III).
+- **Единый формат ошибок** `publicErrorSchema` — `{error:{code,message}}` (коды `VALIDATION_ERROR`,
+  `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `UNAVAILABLE`, `INTERNAL_ERROR`).
+- **Выдача** — `GET /api/v2/openapi.json` (core и backend; за `requireAuth`).
+
+### Этап II — webhooks (реализовано)
+
+- **Модель подписки** `WebhookSubscription` (`packages/shared/src/types/webhooks.ts`, re-export из `types`):
+  `id`=`whk_<uuid>`, обязательная уникальная глобально `label`, `description?`, `url`, `events: string[]`
+  (паттерны exact/`prefix.*`; пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), `enabled`, `secretPrefix`,
+  `createdBy`/`createdAt`, `lastDeliveryAt?`/`lastStatus?`, `disabledAt?`; `WebhookSubscriptionCreated`
+  (+ `secret` — plaintext единожды). Журнал — `WebhookDelivery` (`whd_<uuid>`/`subscriptionId`/`eventType`/
+  `status`/`attempts`/`responseStatus?`/`error?`/`createdAt`/`completedAt?`). Zod — `webhookSubscriptionSchema`/
+  `webhookSubscriptionCreateSchema`/`webhookSubscriptionUpdateSchema`/`webhookSubscriptionCreatedSchema`/
+  `webhookDeliverySchema`/`webhookEventPatternSchema`/`webhookUrlSchema`; матчер `matchWebhookEvent`,
+  валидатор `isWebhookEventPattern`, префикс `WEBHOOK_SECRET_PREFIX` (`whsec_`).
+- **Store** — `WebhookStore` (`packages/core/src/storage/webhook-store.ts`,
+  `{dataDir}/webhooks/subscriptions.json`, атомарная запись AD-005, `schemaVersion`): signing-секрет
+  `whsec_<base64url>` **шифруется at-rest** AES-256-GCM мастер-ключом (HMAC требует исходный секрет —
+  sha256-хеш, как у API-ключей, не годится), `create`/`regenerateSecret` отдают plaintext один раз;
+  мягкое отключение (`setEnabled`/`disabledAt`), `touchDelivery`; `WebhookConflictError` → 409.
+- **Журнал доставок** — `WebhookDeliveryStore` (`packages/core/src/storage/webhook-delivery-store.ts`,
+  `{dataDir}/webhooks/deliveries.jsonl`, append-only); retention — `startWebhookDeliveryPruner`
+  (`engine/webhooks/prune.ts`, prune на старте и каждые 6 ч, `deliveryRetentionDays <= 0` — без ограничения).
+- **Движок доставки** — `WebhookService` (`packages/core/src/engine/webhooks/service.ts`): подписка на
+  `EventBus.subscribeAll` (`start`/`stop`), фильтр `matchWebhookEvent`, HMAC-подпись, retry/backoff
+  (экспоненциальный с джиттером, `computeBackoffMs`), таймаут запроса, дедуп по (подписка + событие),
+  запись в журнал, `deliverTest` (синтетическое `webhook.test`). Мастер-выключатель — `webhooks.enabled`.
+- **Подпись** — `signature.ts` (`buildSignatureHeader`/`computeWebhookSignature`/`verifyWebhookSignature`,
+  окно 300 c); формат — §«Формат подписи webhooks».
+- **SSRF** — `network.ts` (`evaluateWebhookTarget`) поверх `engine/mcp/network-policy.ts`: `https` +
+  запрет private/loopback (кроме `webhooks.allowPrivateTargets`); проверка и на создании/обновлении
+  (роуты), и defense-in-depth перед каждой доставкой.
+- **API** — единая фабрика `createWebhookRoutes` (`packages/core/src/server/routes/webhooks.ts`):
+  `GET/POST /api/v2/webhooks`, `GET/PATCH/DELETE /api/v2/webhooks/:id`,
+  `POST /api/v2/webhooks/:id/regenerate|revoke|test`, `GET /api/v2/webhooks/:id/deliveries`; RBAC
+  managed — ADMIN, core — `requireAuth`; мастер-выключатель `webhooks.enabled: false` → 503 на
+  мутации/тест; конфликт метки → 409, невалидный/запрещённый URL → 400.
+- **UI** — раздел управления webhooks-подписками
+  (`packages/ui/src/components/settings/WebhooksSettings.tsx`): однократный показ signing-секрета,
+  журнал доставок, тестовая доставка.
+
 ### Первый срез AD-089 — binding-key (реализовано ранее)
 
 - `EventApiKeyStore` (`packages/core/src/storage/event-api-key-store.ts`, `{dataDir}/events/api-keys.json`):
@@ -239,10 +320,10 @@ no-op: ограничиваются только service-key.
   Мастер-рубильник `events.enabled` → 503 `UNAVAILABLE`.
 - RBAC: мутации bindings/routes/keys — LEAD/ADMIN, чтение ключей — LEAD/ADMIN.
 
-Осталось (этапы II–IV, см. §«План реализации»):
+Осталось (этапы III–IV, см. §«План реализации»):
 
-- **webhooks** — исходящие события (этап II);
-- публичная **OpenAPI**-спека (только public) и **SDK** (`@itphx/synth-sdk`) — этап III;
+- публичная **OpenAPI**-спека (полная обёртка интеграционного ядра, только public) и **SDK**
+  (`@itphx/synth-sdk`) — этап III;
 - перевод мессенджер-шлюза на scoped service-key — этап IV.
 
 Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
@@ -250,25 +331,29 @@ no-op: ограничиваются только service-key.
 - API v2, RBAC, rate-limit, Gateway — реализованы; OpenAI-совместимый прокси присутствует
   (`packages/backend/src/routes/llm.ts`).
 - Единый `SYNTH_API_KEY` → роль ADMIN подтверждён (`packages/backend/src/app.ts`).
-- service-key: `ServiceApiKeyStore`/`ServiceApiKey`/`createServiceKeyRoutes`/`requireScope` присутствуют;
-  зависимости `@hono/zod-openapi` нет (spike не выполнялся).
+- service-key: `ServiceApiKeyStore`/`ServiceApiKey`/`createServiceKeyRoutes`/`requireScope` присутствуют.
+- spike OpenAPI: зависимость `@hono/zod-openapi@^0.19.10` присутствует; `createPublicOpenApiApp`/
+  `getPublicOpenApiDocument`/`publicErrorSchema` — `packages/core/src/server/openapi/public-openapi.ts`;
+  `GET /api/v2/openapi.json` смонтирован в core и backend (за `requireAuth`).
+- webhooks: `WebhookStore`/`WebhookDeliveryStore`/`WebhookService`/`createWebhookRoutes`/
+  `evaluateWebhookTarget` присутствуют; store/journal — `{dataDir}/webhooks/*`.
 
 ## Открытые вопросы
 
 - Квоты/биллинг — отдельный слой поверх rate-limit; пока не решено (позже).
-- **Формат заголовков подписи webhooks:** имена/состав заголовков (`X-Synth-Signature` и т.п.),
-  схема HMAC-SHA256, окно timestamp, версия подписи.
-- OpenAPI: как именно выделять public-подмножество (~42 хендлера) при сохранении паритета
-  core↔backend; версионирование спеки; единый формат ошибок публичных роутов.
-- Webhooks — исходящие события над `EventBus.subscribeAll`/журналом ([AD-089](./ad-089-external-events-automation.md)):
-  размещение store, дедуп, SSRF-политика.
+- OpenAPI (этап III): как именно выделять public-подмножество (~42 хендлера) при сохранении паритета
+  core↔backend; версионирование спеки.
+
+Формат подписи webhooks закреплён — §«Формат подписи webhooks»; размещение store, дедуп и SSRF-политика
+реализованы в этапе II — §«Webhooks».
 
 ## Связи
 
 - [AD-017](./ad-017-api-v2-hono.md) «API v2 на Hono» — база платформы.
 - [AD-036](./ad-036-llm-gateway.md) «LLM Gateway» — guard/аудит/rate limit для внешнего трафика.
 - [AD-023](./ad-023-configuration.md) «Конфигурация» — настройки платформы и ключей.
-- [AD-089](./ad-089-external-events-automation.md) «Внешние события и автоматизация» — транспорт webhooks;
+- [AD-089](./ad-089-external-events-automation.md) «Внешние события и автоматизация» — родственный
+  контур: входящие события и Router; webhooks (этап II) — исходящая доставка над `EventBus.subscribeAll`;
   первый (реализованный) срез AD-052 — API-ключи привязок (binding-key).
 - [AD-086](./ad-086-extensibility-plugins-editions.md) «Расширяемость: плагины, editions» — точки расширения;
   scoped service-key — целевой способ аутентификации add-on'ов (первый кейс — Telegram gateway).
