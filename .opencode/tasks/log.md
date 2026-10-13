@@ -684,3 +684,28 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - Правки **AGENTS.md** (корневой + core/backend/shared/ui + новый sdk) внесены по инварианту 15 — **на согласование пользователя**; при несогласии легко откатить.
 - **Осталось (вне кода AD-052):** K3s test (новый образ backend + шлюза, SealedSecret, `gateway.enabled=true`, `autoBind=true`; push `synth-deploy`); реальный e2e шлюза с ботом под service-key в test; версионирование public-спеки (открытый вопрос AD-052); обновление `openapi-typescript`-генерации типов для SDK (сейчас SDK берёт типы из shared).
 - `events.identityMap` в dev = `chat:telegram:450316139 → admin` (избыточно для debug).
+
+## 2026-10-13 (продолжение) — AD-052 этап IV применён: шлюз на service-key + фикс доставки; docs-UI отклонён
+
+- **Задача:** «перенастроить шлюз в телеграм на сервисный ключ dev — создай ключ, поправь настройки, задеплой, протестируем»; затем «покажи как посмотреть openapi»; затем «Swagger добавь, можно ли только админам?» → «откуда оно грузит? закрытый контур — не подходит» → «не будем делать UI, оставь пометку в AD».
+- **Тип:** infra/deploy + bug fix + design-decision + docs
+- **Исполнитель:** @orchestrator → @devops (деплой шлюза), @fixer (фикс доставки); AD/индексы — @orchestrator.
+- **Результат:** PASS.
+
+### Этап IV применён (dev)
+- Создан service-key `telegram-gateway-dev` (роль `LEAD`; scopes `events:ingest|watch`, `bindings:read|write`, `sessions:create|read`), секрет — `addons/synth-gateway-telegram/secrets/synth_service_key` (0600, gitignored). Шлюз пересобран и перезапущен: health `auth: "service-key"`.
+- Проверено тем же ключом: `GET /events/bindings` → 200, `GET /sessions` → 200; `GET /schedules`/`GET /events/routes` (нет scope) → 403 `SCOPE_REQUIRED`.
+
+### Баг, вскрытый живым тестом (и фикс)
+- Симптом: сообщение в Telegram → сессия и ответ агента в Synth создаются, но **ответ не уходит** в Telegram.
+- Причина (лог dev-backend `[EventHub] Register client: user=telegram-gateway-dev … sessions=0`): `EventHub.registerClient` подписывал SSE-клиента только на **свои** сессии (`listSessions({userId})`); у service-key синтетический пользователь `service:<keyId>` сессиями не владеет → подписок 0 → `stream.done` не доходил. С broad-`admin`-ключом это скрывалось (сессия принадлежала `admin`).
+- Фикс (`synth`): `EventHub` — режим `allSessions` (глобальная подписка `eventBus.subscribeAll`, паритет со standalone-core); SSE/WS включают его для service-key и elevated (ADMIN/LEAD). Тесты backend 387 (интеграционный: SSE с service-key получает `stream.done` **чужой** сессии; без scope → 403). **Коммит `0ffe404`**; dev перезапущен (backend без hot-reload) — в логе `Register client (all sessions)`; повторный тест пользователя: **работает**.
+
+### Swagger/docs-UI — решено НЕ делать
+- Реализация UI-просмотра спеки отменена по требованию пользователя (не из-за сложности, а из-за egress).
+- **Причина:** `@scalar/hono-api-reference` (MIT) отдаёт HTML, подгружающий JS-бандл Scalar с CDN (`jsdelivr`/`unpkg`) + возможные внешние шрифты → неконтролируемый egress и неработоспособность в закрытом контуре/air-gap (проверено по исходникам пакета).
+- **Зафиксировано в AD-052** (§«Заделы и возможные улучшения»): требование к возможному docs-UI — полностью self-hosted без внешних запросов; кандидаты на будущее — `swagger-ui-dist` (Apache-2.0, ассеты локально) или `redoc` standalone (глушение шрифтов). AD-052 переведён в **✅ Реализовано (этапы I–IV закрыты)**; обновлены AD-052-тело, README AD (строка перенесена в «Актуальные»), корневой `AGENTS.md` (AD-052/AD-089).
+
+### Замечания
+- Правки AGENTS.md (backend — watch-all; корневой — индекс AD) — по инварианту 15, на согласование.
+- Остаётся: test/preprod деплой (образы + SealedSecret `synth-service-key`, `gateway.enabled=true`); `events:watch`-семантика watch-all осознанно широка для инстанс-локальных service-key — задокументировано.

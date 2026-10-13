@@ -1,11 +1,11 @@
 # AD-052: Публичная API-платформа Synth
 
-> **Статус:** ⚠️ Частично реализовано — **этапы I–III закрыты**: этап I (service-key + scopes +
+> **Статус:** ✅ Реализовано — **этапы I–IV закрыты (2026-10-13)**: этап I (service-key + scopes +
 > проектная проекция `allowedProjects` + API/UI + spike public-OpenAPI), этап II (webhooks),
-> этап III (public-OpenAPI 28 операций + SDK `@itphx/synth-sdk`);
-> остаток — этап IV (перевод мессенджер-шлюза на scoped service-key).
+> этап III (public-OpenAPI 28 операций + SDK `@itphx/synth-sdk`), этап IV (перевод
+> мессенджер-шлюза на scoped service-key; по итогам живого прогона — фикс доставки событий).
 > Ранее был реализован первый срез — API-ключи привязок событий (binding-key, AD-089).
-> **Дата:** 2026-09-16 (план зафиксирован 2026-10-13; этап I закрыт 2026-10-13; этап II закрыт 2026-10-13; этап III закрыт 2026-10-13)
+> **Дата:** 2026-09-16 (план зафиксирован 2026-10-13; этапы I–IV закрыты 2026-10-13)
 > **Источник:** перенесено из `AD-DRAFTS.md` (D7, идея 7).
 > **Связано:** [AD-017](./ad-017-api-v2-hono.md), [AD-036](./ad-036-llm-gateway.md),
 > [AD-023](./ad-023-configuration.md), [AD-089](./ad-089-external-events-automation.md),
@@ -217,18 +217,27 @@ no-op: ограничиваются только service-key.
 schedules 6, llm 1), генерация public-спеки, выдача `/openapi.json` (+ docs) и публикуемый
 пакет `@itphx/synth-sdk` поверх спеки — реализованы. См. §«Статус реализации в коде».
 
-### Этап IV — перевод шлюза на service-key
+### Этап IV — перевод шлюза на service-key — ✅ закрыт (2026-10-13)
 
-`synth-gateway-telegram` переводится с broad-`SYNTH_API_KEY`/OIDC-аккаунта на **scoped service-key**
-(реальный кейс) + (при необходимости) расширение public-поверхности.
+`synth-gateway-telegram` переведён с broad-`SYNTH_API_KEY`/OIDC-аккаунта на **scoped service-key**:
+новый режим аутентификации `service-key` с приоритетом `service-key → oidc → api-key → none`
+(`SYNTH_SERVICE_KEY`/`--service-key`/`secrets/synth_service_key`); требуемые scopes —
+`events:ingest`, `events:watch`, `bindings:read`, `bindings:write`, `sessions:create`,
+`sessions:read` (+ роль `LEAD` для мутаций bindings). Живой прогон (dev) выявил и закрыл
+сопутствующий дефект доставки: глобальный SSE-хаб backend подписывал клиента только на свои
+сессии (`listSessions({userId})`), из-за чего service-key (синтетический пользователь
+`service:<keyId>`, сессиями не владеет) не получал `stream.done` и ответы не уходили в мессенджер —
+добавлен режим watch-all (глобальная подписка `eventBus.subscribeAll`, паритет со standalone-core)
+для service-key и elevated (ADMIN/LEAD).
 
 ## Статус реализации в коде
 
-**⚠️ Частично реализовано.** Закрыты: **этап I** — service-key + scopes + проектная проекция +
-API/UI + spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — webhooks; **этап III** —
-public-OpenAPI (28 операций) + SDK `@itphx/synth-sdk` (все 2026-10-13); а также первый срез
-**AD-089** — API-ключи привязок событий (binding-key).
-Не реализован: этап **IV** — перевод мессенджер-шлюза на scoped service-key.
+**✅ Реализовано.** Закрыты **этап I** — service-key + scopes + проектная проекция + API/UI +
+spike public-OpenAPI (`@hono/zod-openapi@0.19.x`); **этап II** — webhooks; **этап III** —
+public-OpenAPI (28 операций) + SDK `@itphx/synth-sdk`; **этап IV** — перевод мессенджер-шлюза
+`synth-gateway-telegram` на scoped service-key (+ фикс доставки событий: watch-all для
+service-key/elevated); а также первый срез **AD-089** — API-ключи привязок событий (binding-key).
+Все этапы закрыты 2026-10-13.
 
 ### Этап I — service-key (реализовано)
 
@@ -354,9 +363,7 @@ public-OpenAPI (28 операций) + SDK `@itphx/synth-sdk` (все 2026-10-13
   Мастер-рубильник `events.enabled` → 503 `UNAVAILABLE`.
 - RBAC: мутации bindings/routes/keys — LEAD/ADMIN, чтение ключей — LEAD/ADMIN.
 
-Осталось (этап IV, см. §«План реализации»):
-
-- перевод мессенджер-шлюза на scoped service-key — этап IV.
+Остаток по плану отсутствует — **этапы I–IV закрыты**. Возможные улучшения (вне объёма) — ниже.
 
 Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
 
@@ -373,14 +380,21 @@ public-OpenAPI (28 операций) + SDK `@itphx/synth-sdk` (все 2026-10-13
 - webhooks: `WebhookStore`/`WebhookDeliveryStore`/`WebhookService`/`createWebhookRoutes`/
   `evaluateWebhookTarget` присутствуют; store/journal — `{dataDir}/webhooks/*`.
 
-## Открытые вопросы
+## Заделы и возможные улучшения (вне объёма)
 
-- Квоты/биллинг — отдельный слой поверх rate-limit; пока не решено (позже).
-- Версионирование публичной спеки (этап III): как менять контракт без слома потребителей
+- **Интерактивный docs-UI для публичной спеки — не реализован (сознательно).** Требование к возможной
+  реализации: полностью **self-hosted** — HTML, все UI-ассеты и сама спека отдаются с origin инстанса,
+  **без внешних сетевых запросов** (закрытый контур / air-gap). Рассматривался
+  `@scalar/hono-api-reference` (MIT) — **отвергнут**: его мидлварь отдаёт HTML, который подгружает
+  JS-бандл Scalar с CDN (`jsdelivr`/`unpkg`) и потенциально внешние шрифты → неконтролируемый egress
+  и неработоспособность в закрытом контуре. Кандидат на будущее — `swagger-ui-dist` (Apache-2.0;
+  ассеты вендорятся локально — эталон для air-gap) либо `redoc` standalone (с явным глушением
+  внешних шрифтов). Спека (`GET /api/v2/openapi.json`) уже доступна для внешнего тулинга/SDK-генерации.
+- **Квоты/биллинг** — отдельный слой поверх rate-limit; пока не решено (позже).
+- **Версионирование публичной спеки** (этап III): как менять контракт без слома потребителей
   (deprecation-политика); выделение public-подмножества зафиксировано — 28 операций интеграционного ядра.
-
-Формат подписи webhooks закреплён — §«Формат подписи webhooks»; размещение store, дедуп и SSRF-политика
-реализованы в этапе II — §«Webhooks».
+- Формат подписи webhooks — закреплён (§«Формат подписи webhooks»); размещение store, дедуп и
+  SSRF-политика реализованы в этапе II.
 
 ## Связи
 
