@@ -21,6 +21,7 @@ import {
   ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
   MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
   createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes, requireScope,
+  getServiceCredential, KeyRateLimiter,
   ServiceApiKeyStore,
   WebhookStore, WebhookDeliveryStore, WebhookService,
   createExternalIdentityResolver,
@@ -624,6 +625,24 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Всё остальное требует аутентификации
   app.use('/api/*', auth.requireAuth);
   app.use('/ws/*', auth.requireAuth);
+
+  // AD-052 (этап I): per-key rate limit service-key (`rateLimitPerMinute` ключа;
+  // 0/не задан — без лимита) — паритет с managed backend (`app.ts`). После
+  // `requireAuth`: `serviceKey` уже в контексте; для интерактивных кред
+  // (api-key/cookie) middleware — no-op. Лимитер (fixed window 60 c) — один на
+  // приложение, а не на запрос.
+  const serviceKeyRateLimiter = new KeyRateLimiter(60_000);
+  app.use('*', async (c, next) => {
+    const credential = getServiceCredential(c);
+    const limit = credential?.rateLimitPerMinute ?? 0;
+    if (credential && limit > 0 && !serviceKeyRateLimiter.check(credential.keyId, limit)) {
+      return c.json(
+        { error: { code: 'RATE_LIMITED', message: 'Превышен лимит запросов по service-key' } },
+        429,
+      );
+    }
+    await next();
+  });
 
   // AD-052 (этап I): публичный OpenAPI-документ (spike). Отдаётся за
   // `requireAuth`; публичную выдачу без auth согласуем отдельно. Регистрируется

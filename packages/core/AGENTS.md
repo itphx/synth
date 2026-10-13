@@ -126,6 +126,9 @@
 
 - `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, …).
 - `server/app.ts` — `createStandaloneApp`: Hono, WS, статика UI, provisioning.
+  AD-052 (этап I): глобальный per-key rate limit service-key (`KeyRateLimiter`, fixed
+  window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
+  ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
