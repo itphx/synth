@@ -72,7 +72,7 @@ if $DRY_RUN; then
     echo ""
     echo "  Будет изменено:"
     echo "    $VERSION_FILE"
-    for pkg in shared core backend ui runner synth; do
+    for pkg in shared core backend ui runner sdk synth; do
         echo "    packages/$pkg/package.json"
     done
     echo "    charts/synth/Chart.yaml (version + appVersion)"
@@ -92,7 +92,7 @@ echo "  готово"
 echo "[2/4] Обновление package.json..."
 cd "$SYNTH" || die "Не удалось перейти в $SYNTH"
 
-for pkg_dir in packages/shared packages/core packages/backend packages/ui packages/runner packages/synth; do
+for pkg_dir in packages/shared packages/core packages/backend packages/ui packages/runner packages/sdk packages/synth; do
     if [ -f "$pkg_dir/package.json" ]; then
         node -e "
             const fs = require('fs');

@@ -68,7 +68,7 @@ jobs:
       - name: Обновить package.json
         run: |
           NEW="${{ steps.bump.outputs.new_version }}"
-          for pkg_dir in packages/shared packages/core packages/backend packages/ui packages/runner packages/synth; do
+          for pkg_dir in packages/shared packages/core packages/backend packages/ui packages/runner packages/sdk packages/synth; do
             node -e "
               const fs = require('fs');
               const p = require('./$pkg_dir/package.json');
@@ -150,6 +150,7 @@ jobs:
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-runner build
+          pnpm --filter @itphx/synth-sdk build
           pnpm --filter @itphx/synth build
 
       - name: Загрузить бандл как артефакт
@@ -198,6 +199,7 @@ jobs:
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-runner build
+          pnpm --filter @itphx/synth-sdk build
           pnpm --filter @itphx/synth build
 
       - name: Публикация в npmjs.org
@@ -223,6 +225,7 @@ jobs:
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-runner build
+          pnpm --filter @itphx/synth-sdk build
           pnpm --filter @itphx/synth build
 
       - name: Публикация в GitVerse Package Registry

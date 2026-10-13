@@ -19,7 +19,7 @@ VERSION="${1:-}"
 ATTEMPTS="${2:-40}"
 DELAY="${3:-10}"
 REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org}"
-PACKAGES="${NPM_PACKAGES:-@itphx/synth @itphx/synth-core @itphx/synth-shared @itphx/synth-ui @itphx/synth-backend @itphx/synth-runner}"
+PACKAGES="${NPM_PACKAGES:-@itphx/synth @itphx/synth-core @itphx/synth-shared @itphx/synth-ui @itphx/synth-backend @itphx/synth-runner @itphx/synth-sdk}"
 
 if [ -z "$VERSION" ]; then
   echo "Использование: $0 <version> [attempts] [delay_sec]" >&2

@@ -6,8 +6,9 @@
 #   1. @itphx/synth-shared   — типы, схемы, утилиты (фундамент)
 #   2. @itphx/synth-core     — движок, провайдеры, HTTP API, CLI
 #   3. @itphx/synth-ui       — React SPA (Vite production build)
-#   4. @itphx/synth    — npm-пакет: бандл CLI + UI + промпты
-#   5. Docker-образ    — (опционально) сборка контейнера
+#   4. @itphx/synth-sdk      — типизированный клиент публичного API (AD-052)
+#   5. @itphx/synth    — npm-пакет: бандл CLI + UI + промпты
+#   6. Docker-образ    — (опционально) сборка контейнера
 #
 # Результат: packages/synth/dist/cli.js (исполняемый бандл)
 #            packages/synth/ui/            (статическая сборка UI)
@@ -54,7 +55,7 @@ echo "━━━ Synth: сборка ━━━"
 echo ""
 
 # Проверка окружения
-echo "[1/6] Проверка окружения..."
+echo "[1/7] Проверка окружения..."
 
 if ! command -v node &>/dev/null; then
     die "Node.js не установлен. Требуется версия >= 22."
@@ -83,13 +84,13 @@ echo ""
 
 # Очистка (опционально)
 if $CLEAN; then
-    echo "[2/6] Очистка предыдущей сборки..."
+    echo "[2/7] Очистка предыдущей сборки..."
     cd "$SYNTH" || die "Не удалось перейти в $SYNTH"
     pnpm clean 2>/dev/null || true
     echo "  готово"
     echo ""
 else
-    echo "[2/6] Установка зависимостей..."
+    echo "[2/7] Установка зависимостей..."
     cd "$SYNTH" || die "Не удалось перейти в $SYNTH"
     pnpm install --frozen-lockfile 2>&1 | tail -1
     echo "  готово"
@@ -97,25 +98,31 @@ else
 fi
 
 # Сборка @itphx/synth-shared
-echo "[3/6] Сборка @itphx/synth-shared..."
+echo "[3/7] Сборка @itphx/synth-shared..."
 pnpm --filter @itphx/synth-shared build || die "Сборка @itphx/synth-shared не удалась"
 echo "  готово"
 echo ""
 
 # Сборка @itphx/synth-core
-echo "[4/6] Сборка @itphx/synth-core..."
+echo "[4/7] Сборка @itphx/synth-core..."
 pnpm --filter @itphx/synth-core build || die "Сборка @itphx/synth-core не удалась"
 echo "  готово"
 echo ""
 
 # Сборка @itphx/synth-ui
-echo "[5/6] Сборка @itphx/synth-ui..."
+echo "[5/7] Сборка @itphx/synth-ui..."
 pnpm --filter @itphx/synth-ui build || die "Сборка @itphx/synth-ui не удалась"
 echo "  готово"
 echo ""
 
+# Сборка @itphx/synth-sdk
+echo "[6/7] Сборка @itphx/synth-sdk..."
+pnpm --filter @itphx/synth-sdk build || die "Сборка @itphx/synth-sdk не удалась"
+echo "  готово"
+echo ""
+
 # Сборка @itphx/synth
-echo "[6/6] Сборка @itphx/synth..."
+echo "[7/7] Сборка @itphx/synth..."
 pnpm --filter @itphx/synth build || die "Сборка @itphx/synth не удалась"
 
 SYNTH_DIST="$SYNTH/packages/synth/dist/cli.js"

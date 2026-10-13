@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# publish-packages.sh — идемпотентная публикация всех 6 пакетов в npm-реестр.
+# publish-packages.sh — идемпотентная публикация всех 7 пакетов в npm-реестр.
 #
 # Пропускает версии, которые уже опубликованы (повторные прогоны release
 # не падают на "already exists"). Порядок публикации строгий:
-#   shared → core → ui → backend → runner → synth
+#   shared → core → ui → backend → runner → sdk → synth
 #
-# В конце проверяет, что все 6 версий реально видны в реестре. Если хотя бы
+# В конце проверяет, что все 7 версий реально видны в реестре. Если хотя бы
 # одной нет — выходит с кодом 1: pnpm печатает "Published" и для staged-
 # публикации, которую npm увёл в automated review («Validating»), в реестре
 # такой версии ещё нет.
@@ -104,7 +104,7 @@ echo ""
 PUBLISHED=0
 SKIPPED=0
 
-for pkg in shared core ui backend runner synth; do
+for pkg in shared core ui backend runner sdk synth; do
     if [ "$pkg" = "synth" ]; then
         NAME="@itphx/synth"
     else
@@ -155,7 +155,7 @@ version_available() {
         | PKG_VERSION="$VERSION" node -e 'let b="";process.stdin.on("data",c=>b+=c);process.stdin.on("end",()=>{try{const j=JSON.parse(b);if(j&&j.versions&&j.versions[process.env.PKG_VERSION]){process.exit(0)}}catch{}process.exit(1)})'
 }
 
-VERIFY_PACKAGES=(shared core ui backend runner synth)
+VERIFY_PACKAGES=(shared core ui backend runner sdk synth)
 VERIFY_TIMEOUT=120   # общий бюджет ожидания, с
 VERIFY_DELAY=5       # шаг опроса, с
 

@@ -107,6 +107,20 @@ jobs:
       - name: Тесты
         run: pnpm --filter @itphx/synth-runner test
 
+  test-sdk:
+    name: Тесты @itphx/synth-sdk
+    runs-on: ubuntu-latest
+    needs: test-shared
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установка
+        run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
+      - name: Сборка @itphx/synth-shared
+        run: pnpm --filter @itphx/synth-shared build
+      - name: Тесты
+        run: pnpm --filter @itphx/synth-sdk test
+
   # Helm-чарт не зависит от сборки npm-пакетов: только lint и рендер шаблонов.
   helm-lint:
     name: Helm-чарт (lint + template)

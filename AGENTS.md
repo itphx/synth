@@ -31,7 +31,7 @@
 
 ## Карта репозитория
 
-Монорепозиторий `synth/` (pnpm workspaces), единый стек TypeScript. Подробности по пакету — в `packages/<pkg>/AGENTS.md` (есть у `core`, `backend`, `ui`, `shared`; у тонких `runner` и `synth` — нет).
+Монорепозиторий `synth/` (pnpm workspaces), единый стек TypeScript. Подробности по пакету — в `packages/<pkg>/AGENTS.md` (есть у `core`, `backend`, `ui`, `shared`; короткий — у `sdk`; у тонких `runner` и `synth` — нет).
 
 ```text
 synth/
@@ -41,6 +41,7 @@ synth/
 │   ├── backend/   @itphx/synth-backend  # Hono API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
 │   ├── ui/        @itphx/synth-ui       # React 19 SPA + админка (Vite)
 │   ├── runner/    @itphx/synth-runner   # Gateway: адаптеры opencode/cline, LLM Proxy (in-process из core)
+│   ├── sdk/       @itphx/synth-sdk      # Типизированный клиент публичного API (AD-052)
 │   └── synth/     @itphx/synth          # Публикуемая CLI-обёртка (bin: synth)
 ├── pnpm-workspace.yaml   tsconfig.base.json   eslint.config.js   .prettierrc
 docs/                  # Документация (см. «Документация»)
@@ -49,7 +50,7 @@ docs/arch_decisions/   # AD (см. индекс)
 tmp/                   # Временные файлы. Использовать его, а не /tmp в корне ФС. Не коммитится
 ```
 
-Все 6 пакетов публикуются в npm; `@itphx/synth` — тонкая CLI-обёртка над core/ui/shared: не бандлит core в `cli.js` (external) и не копирует ассеты — всё резолвится из npm-зависимостей (AD-038).
+Все 7 пакетов публикуются в npm; `@itphx/synth` — тонкая CLI-обёртка над core/ui/shared: не бандлит core в `cli.js` (external) и не копирует ассеты — всё резолвится из npm-зависимостей (AD-038). `@itphx/synth-sdk` — самостоятельный клиент публичного API (зависит только от shared).
 
 ### Слои зависимостей
 
@@ -62,6 +63,7 @@ tmp/                   # Временные файлы. Использовать
 @itphx/synth-backend │ @itphx/synth-ui     ←  импортируют core
 @itphx/synth-runner (in-process)     ←  опционально импортируется в core
        ↑
+@itphx/synth-sdk   ←  клиент публичного API: shared (AD-052)
 @itphx/synth   ←  тонкая CLI-обёртка: core + ui + shared (npm-потребители)
 ```
 
@@ -361,7 +363,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 
 Порядок сборки в CI: `pnpm install --frozen-lockfile` → `pnpm --filter @itphx/synth-shared build` (обязательно перед typecheck) → `pnpm --filter @itphx/synth-core build` (нужно backend и runner) → `pnpm typecheck` → `pnpm lint` → `pnpm test`. Без сборки shared/core typecheck не найдёт типы.
 
-Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM_TOKEN` (npmjs.org) и `GV_TOKEN` (единый GitVerse: API, Docker/npm registry, git push). Локальная проверка перед пушем: `pnpm typecheck && pnpm lint && pnpm test`. Публикация (npm в 6 пакетов, Docker/Helm, релиз, токены npm 2026, `scripts/build.sh`/`publish.sh`/`version-bump.sh`) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) и скиллы `synth-build-publish`, `synth-release`.
+Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM_TOKEN` (npmjs.org) и `GV_TOKEN` (единый GitVerse: API, Docker/npm registry, git push). Локальная проверка перед пушем: `pnpm typecheck && pnpm lint && pnpm test`. Публикация (npm в 7 пакетов, Docker/Helm, релиз, токены npm 2026, `scripts/build.sh`/`publish.sh`/`version-bump.sh`) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) и скиллы `synth-build-publish`, `synth-release`.
 
 ## Индекс архитектурных решений
 
@@ -389,7 +391,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) | ✅ Реализовано | [ad-035](./docs/arch_decisions/ad-035-micro-model-first.md) |
 | AD-036 | LLM Gateway: независимый слой безопасности (guard + обфускация + rate limit + аудит) | ✅ Реализовано | [ad-036](./docs/arch_decisions/ad-036-llm-gateway.md) |
 | AD-037 | Security step перед коммитом: git pre-commit hook + маркер-хеш | ⏳ Не реализовано | [ad-037](./docs/arch_decisions/ad-037-commit-security-step.md) |
-| AD-038 | Монорепо как набор публикуемых npm-пакетов (6 пакетов, pnpm publish, тонкая CLI-обёртка) | ✅ Реализовано | [ad-038](./docs/arch_decisions/ad-038-npm-packages.md) |
+| AD-038 | Монорепо как набор публикуемых npm-пакетов (7 пакетов, pnpm publish, тонкая CLI-обёртка) | ✅ Реализовано | [ad-038](./docs/arch_decisions/ad-038-npm-packages.md) |
 | AD-039 | План — в проекте, todo — в сессии; состояние — через инструменты (Tool Use, без JSON-блока), замена TSM | ✅ Реализовано | [ad-039](./docs/arch_decisions/ad-039-plan-in-project.md) |
 | AD-040 | Сессии без проекта: контекст, подсказка, перенос между проектами | ✅ Реализовано | [ad-040](./docs/arch_decisions/ad-040-sessions-without-project.md) |
 | AD-041 | Таксономия ошибок LLM + контракт локализации строк движка (`shared/i18n`) | ✅ Реализовано | [ad-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
