@@ -24,6 +24,7 @@ import {
   ServiceApiKeyStore,
   createExternalIdentityResolver,
   startEventJournalPruner,
+  getPublicOpenApiDocument,
 } from '../index.js';
 import type { SummarizationConfig } from '@itphx/synth-shared';
 import { nowISO, ensureDataDir, MessageRole, generateStreamId, makeTextPart, DEFAULT_LLM_GATEWAY_RATE_LIMIT, parsePrincipalId } from '@itphx/synth-shared';
@@ -619,6 +620,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Всё остальное требует аутентификации
   app.use('/api/*', auth.requireAuth);
   app.use('/ws/*', auth.requireAuth);
+
+  // AD-052 (этап I): публичный OpenAPI-документ (spike). Отдаётся за
+  // `requireAuth`; публичную выдачу без auth согласуем отдельно. Регистрируется
+  // до прокси-middleware, чтобы в гибриде локальный документ не уходил на backend.
+  app.get('/api/v2/openapi.json', (c) => c.json(getPublicOpenApiDocument()));
 
   // Гибрид (Batch 2, T5): серверные/админ-эндпоинты (которых нет у standalone
   // или источник истины — сервер) проксируются на удалённый backend.

@@ -403,6 +403,12 @@ export type {
   EventRoutesOptions,
   EventRouteMessages,
 } from './server/routes/events.js';
+export {
+  createPublicOpenApiApp,
+  getPublicOpenApiDocument,
+  publicErrorSchema,
+} from './server/openapi/public-openapi.js';
+export type { PublicError } from './server/openapi/public-openapi.js';
 export { createSchedulerRoutes } from './server/routes/schedules.js';
 export type {
   SchedulerRoutesAuth,

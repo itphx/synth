@@ -54,6 +54,7 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   ServiceApiKeyStore, createServiceKeyRoutes, KeyRateLimiter, getServiceCredential,
+  getPublicOpenApiDocument,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { DecisionAgentCandidate } from '@itphx/synth-core';
@@ -816,6 +817,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     });
     app.get('/api/v2/i18n/translations/ru', (c) => c.json(getTranslations('ru')));
     app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
+
+    // AD-052 (этап I): публичный OpenAPI-документ (spike) за requireAuth;
+    // публичную выдачу без auth согласуем отдельно.
+    app.get('/api/v2/openapi.json', auth.requireAuth, (c) => c.json(getPublicOpenApiDocument()));
 
     // Projects routes
     app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, backendConfig.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore));
