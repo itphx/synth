@@ -1490,9 +1490,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   }));
 
   // AD-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).
-  // Standalone — пользователь `local`; линковка только через claim-flow
-  // (`POST /api/v2/me/identities/claim`).
+  // Standalone — профиль `local` (id генерируется стором, не литерал `local`);
+  // линковка только через claim-flow (`POST /api/v2/me/identities/claim`).
   app.route('/api/v2/me', createIdentityRoutes(auth, profilesStore, {
+    resolveProfileId: async () => (await profilesStore.getOrCreateProfile({ username: 'local' })).id,
     claimStore: identityClaimStore,
   }));
 

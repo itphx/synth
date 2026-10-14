@@ -48,11 +48,21 @@ describe('Identity routes (AD-089)', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  /** Приложение с фиксированным текущим пользователем (изоляция по resolveUserId). */
-  const makeApp = (userId = 'u1') => {
+  /** Приложение с фиксированным id профиля (изоляция по resolveProfileId). */
+  const makeApp = (profileId = 'u1') => {
     const app = new Hono();
     app.route('/api/v2/me', createIdentityRoutes(auth, store, {
-      resolveUserId: () => userId,
+      resolveProfileId: () => profileId,
+      claimStore,
+    }));
+    return app;
+  };
+
+  /** Приложение с кастомным резолвером id профиля (напр. поиск по username). */
+  const makeAppWithResolver = (resolve: () => string | Promise<string>) => {
+    const app = new Hono();
+    app.route('/api/v2/me', createIdentityRoutes(auth, store, {
+      resolveProfileId: resolve,
       claimStore,
     }));
     return app;
@@ -159,6 +169,82 @@ describe('Identity routes (AD-089)', () => {
     });
   });
 
+  it('POST /claim — регресс: профиль резолвится по username, а user.id ≠ profile.id', async () => {
+    // Профиль хранится под сгенерированным id; пользователь аутентификации имеет
+    // другой id. Резолвер повторяет backend: ищет профиль по username.
+    await store.saveProfile(makeProfile({ id: 'profile-uuid-1', username: 'developer' }));
+    const created = await claimStore.create({
+      provider: 'tg',
+      externalId: '777',
+      principalId: 'tg:777',
+    });
+
+    const app = makeAppWithResolver(async () => {
+      const p = await store.getProfileByUsername('developer');
+      return p?.id ?? '';
+    });
+
+    const res = await postClaim(app, { code: created.code });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { identity: { linkedBy?: string } };
+    expect(body.identity.linkedBy).toBe('profile-uuid-1');
+
+    const profile = await store.loadProfile('profile-uuid-1');
+    expect(profile?.identities?.[0]).toMatchObject({
+      provider: 'tg',
+      externalId: '777',
+      linkedBy: 'profile-uuid-1',
+    });
+  });
+
+  it('POST /claim — core (standalone): дефолтный resolveProfileId резолвит профиль local', async () => {
+    // Резолвер не передан — фабрика использует профиль `local` (id генерируется).
+    const app = new Hono();
+    app.route('/api/v2/me', createIdentityRoutes(auth, store, { claimStore }));
+    const created = await claimStore.create({
+      provider: 'tg',
+      externalId: '999',
+      principalId: 'tg:999',
+    });
+
+    const res = await postClaim(app, { code: created.code });
+    expect(res.status).toBe(201);
+
+    const local = await store.getProfileByUsername('local');
+    expect(local).not.toBeNull();
+    expect(local?.id).not.toBe('local');
+    expect(local?.identities?.[0]).toMatchObject({ provider: 'tg', externalId: '999' });
+  });
+
+  it('GET /me/identities — пустой resolveProfileId → 401 UNAUTHORIZED', async () => {
+    const res = await makeAppWithResolver(() => '').request('/api/v2/me/identities');
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('UNAUTHORIZED');
+  });
+
+  it('DELETE /me/identities/:provider/:externalId — пустой resolveProfileId → 401', async () => {
+    const res = await makeAppWithResolver(() => '   ').request('/api/v2/me/identities/tg/1', {
+      method: 'DELETE',
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it('POST /claim — пустой resolveProfileId → 401, код остаётся живым (не потреблён)', async () => {
+    const created = await claimStore.create({
+      provider: 'tg',
+      externalId: '1',
+      principalId: 'tg:1',
+    });
+
+    const res = await postClaim(makeAppWithResolver(() => ''), { code: created.code });
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('UNAUTHORIZED');
+
+    // 401 отдаётся до consume — код не сожжён и может быть использован после входа.
+    const active = await claimStore.list(true);
+    expect(active.some((c) => c.code === created.code)).toBe(true);
+  });
+
   it('POST /claim — одноразовость: повторное использование кода → 404', async () => {
     await store.saveProfile(makeProfile({ id: 'u1' }));
     const created = await claimStore.create({
@@ -260,7 +346,7 @@ describe('Identity routes (AD-089)', () => {
 
   it('POST /claim — без claimStore роут не смонтирован (404)', async () => {
     const app = new Hono();
-    app.route('/api/v2/me', createIdentityRoutes(auth, store, { resolveUserId: () => 'u1' }));
+    app.route('/api/v2/me', createIdentityRoutes(auth, store, { resolveProfileId: () => 'u1' }));
     const created = await claimStore.create({ provider: 'tg', externalId: '1', principalId: 'tg:1' });
     const res = await postClaim(app, { code: created.code });
     expect(res.status).toBe(404);

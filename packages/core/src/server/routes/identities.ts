@@ -7,8 +7,15 @@ import type { IdentityClaimStore } from '../../storage/identity-claim-store.js';
 
 /**
  * AD-089: маршруты идентичностей текущего пользователя (`/api/v2/me/identities`).
- * Единая реализация для core (standalone) и backend (managed); резолв
- * пользователя — через `opts.resolveUserId` (core — `local`, backend — AuthKit).
+ * Единая реализация для core (standalone) и backend (managed).
+ *
+ * ВАЖНО: резолвер `opts.resolveProfileId` возвращает **id профиля**
+ * (`ProfileData.id`) текущего пользователя, а не OIDC `sub`/username/иной
+ * идентификатор аутентификации. Профили хранятся под сгенерированным `id`
+ * (`FileProfileStore.getOrCreateProfile` → `generateId()`) и ищутся по
+ * `username`; подстановка `sub`/username в `loadProfile`/`linkIdentity` даёт
+ * «профиль не найден» и ложный конфликт. Core-дефолт резолвит профиль
+ * `local`, backend — профиль по `username` аутентифицированного пользователя.
  *
  * Линковка (`POST /identities`) намеренно отсутствует: привязка внешней
  * идентичности идёт только через claim-flow (подтверждение владения id в
@@ -33,6 +40,8 @@ export interface IdentityRouteMessages {
   claimConflict: (c: Context) => string;
   /** AD-089 (claim-flow): пустой код подтверждения. */
   claimCodeRequired: (c: Context) => string;
+  /** Не удалось определить профиль текущего пользователя (пустой id). */
+  unauthorized: (c: Context) => string;
 }
 
 const DEFAULT_MESSAGES: IdentityRouteMessages = {
@@ -40,13 +49,19 @@ const DEFAULT_MESSAGES: IdentityRouteMessages = {
   claimNotFound: () => 'Код подтверждения недействителен (неизвестен, истёк или использован)',
   claimConflict: () => 'Эта идентичность уже привязана к другому профилю',
   claimCodeRequired: () => 'Укажите код подтверждения',
+  unauthorized: () => 'Требуется аутентификация',
 };
 
-const LOCAL_USER_ID = 'local';
+/** Username профиля standalone-пользователя (core); сам id генерируется стором. */
+const LOCAL_PROFILE_USERNAME = 'local';
 
 export interface IdentityRoutesOptions {
-  /** Резолв id текущего пользователя (standalone — `local`). */
-  resolveUserId?: (c: Context) => string | Promise<string>;
+  /**
+   * Резолв **id профиля** текущего пользователя (`ProfileData.id`), НЕ OIDC
+   * `sub`/username. Пустая строка → роут ответит 401 `UNAUTHORIZED`. Core-дефолт
+   * создаёт/резолвит профиль `local`.
+   */
+  resolveProfileId?: (c: Context) => string | Promise<string>;
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<IdentityRouteMessages>;
   /**
@@ -74,21 +89,29 @@ export function createIdentityRoutes(
 ): Hono {
   const app = new Hono();
   const messages: IdentityRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
-  const resolveUserId = opts.resolveUserId ?? (() => LOCAL_USER_ID);
+  // Дефолт — standalone: резолвим/создаём профиль `local` и работаем с его id.
+  const resolveProfileId = opts.resolveProfileId
+    ?? (async () => (await profileStore.getOrCreateProfile({ username: LOCAL_PROFILE_USERNAME })).id);
+
+  /** Пустой id профиля (не аутентифицирован) → 401, чтобы не искать профиль с пустым id. */
+  const unauthorized = (c: Context) =>
+    c.json({ error: { code: 'UNAUTHORIZED', message: messages.unauthorized(c) } }, 401);
 
   // GET /api/v2/me/identities — идентичности текущего пользователя.
   app.get('/identities', auth.requireAuth, async (c) => {
-    const userId = await resolveUserId(c);
-    const profile = await profileStore.loadProfile(userId);
+    const profileId = await resolveProfileId(c);
+    if (!profileId.trim()) return unauthorized(c);
+    const profile = await profileStore.loadProfile(profileId);
     return c.json({ identities: profile?.identities ?? [] });
   });
 
   // DELETE /api/v2/me/identities/:provider/:externalId — отвязка (только свои).
   app.delete('/identities/:provider/:externalId', auth.requireAuth, async (c) => {
-    const userId = await resolveUserId(c);
+    const profileId = await resolveProfileId(c);
+    if (!profileId.trim()) return unauthorized(c);
     const provider = decodeURIComponent(c.req.param('provider') ?? '');
     const externalId = decodeURIComponent(c.req.param('externalId') ?? '');
-    const updated = await profileStore.unlinkIdentity(userId, provider, externalId);
+    const updated = await profileStore.unlinkIdentity(profileId, provider, externalId);
     if (!updated) {
       return c.json(
         { error: { code: 'NOT_FOUND', message: messages.identityNotFound(c) } },
@@ -124,8 +147,10 @@ export function createIdentityRoutes(
         );
       }
 
-      const userId = await resolveUserId(c);
-      const claim = await claimStore.consume(code, { userId });
+      const profileId = await resolveProfileId(c);
+      // 401 — до consume: незалогиненный запрос не должен сжигать claim-код.
+      if (!profileId.trim()) return unauthorized(c);
+      const claim = await claimStore.consume(code, { userId: profileId });
       if (!claim) {
         return c.json(
           { error: { code: 'NOT_FOUND', message: messages.claimNotFound(c) } },
@@ -140,9 +165,9 @@ export function createIdentityRoutes(
         provider: claim.provider,
         externalId: claim.externalId,
         linkedAt: nowISO(),
-        linkedBy: userId,
+        linkedBy: profileId,
       };
-      const updated = await profileStore.linkIdentity(userId, identity);
+      const updated = await profileStore.linkIdentity(profileId, identity);
       if (!updated) {
         return c.json(
           { error: { code: 'CONFLICT', message: messages.claimConflict(c) } },

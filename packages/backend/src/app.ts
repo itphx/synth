@@ -1119,14 +1119,24 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // AD-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).
     // RBAC: аутентифицированный пользователь (только свои); линковка — claim-flow
     // (`POST /api/v2/me/identities/claim`).
+    // Резолвим **id профиля** по `username` аутентифицированного пользователя
+    // (OIDC `sub` — не id профиля: профили хранятся под сгенерированным id).
+    // Не передаём `roles` — чтобы не перезаписывать роли существующего профиля.
     app.route('/api/v2/me', createIdentityRoutes(auth as unknown as CoreAuthKit, profilesStore, {
-      resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+      resolveProfileId: async (c) => {
+        const u = await auth.getCurrentUser(c as never);
+        if (!u) return '';
+        const profile = (await profilesStore.getProfileByUsername(u.username))
+          ?? (await profilesStore.getOrCreateProfile({ username: u.username, email: u.email }));
+        return profile.id;
+      },
       claimStore: identityClaimStore,
       messages: {
         identityNotFound: (c) => t('errors.notFound.identity', undefined, c),
         claimNotFound: (c) => t('errors.notFound.identityClaim', undefined, c),
         claimConflict: (c) => t('errors.conflict.identityClaim', undefined, c),
         claimCodeRequired: (c) => t('errors.validation.claimCodeRequired', undefined, c),
+        unauthorized: (c) => t('auth.unauthorized', undefined, c),
       },
     }));
 

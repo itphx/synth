@@ -143,10 +143,13 @@
   пользователя (`GET /api/v2/me/identities` → `{identities: ExternalIdentity[]}`;
   `DELETE /api/v2/me/identities/:provider/:externalId` — отвязка только своих, 404 если нет;
   `POST /api/v2/me/identities/claim` `{code}` → 201 `{identity}` — подтверждение владения
-  идентичностью по **одноразовому** коду, привязка с `linkedBy` = id пользователя).
-  `resolveUserId` (core — `local`, backend — AuthKit), `messages` для i18n, `claimStore`
+  идентичностью по **одноразовому** коду, привязка с `linkedBy` = id профиля).
+  `resolveProfileId` возвращает **id профиля** (`ProfileData.id`), НЕ OIDC `sub`/
+  username (core-дефолт — профиль `local`, backend — профиль по `username`),
+  `messages` для i18n, `claimStore`
   (`IdentityClaimStore`; без него роут claim не монтируется). Прямой линковки произвольного
   чужого id нет — только claim-flow. Ошибки: 400 `VALIDATION_ERROR` (пустой код),
+  401 `UNAUTHORIZED` (профиль не определён — пустой id),
   404 `NOT_FOUND` (неизвестен/истёк/использован), 409 `CONFLICT` (занят другим профилем);
   `provider`/`externalId` берутся из серверной записи claim, не из тела.
 - `server/routes/events.ts` — `createEventRoutes` (AD-089): приём `POST /` (API-ключ привязки —
