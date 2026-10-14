@@ -187,10 +187,13 @@
   `server/connection-watcher.ts` — одиночный чат, проксирование remote, сериализация,
   watcher подключения. Проксирование — `REMOTE_PROXY_PREFIXES` (простые префиксы) +
   `REMOTE_PROXY_PATTERNS` (regex: nested `/api/v2/agents/:id/ssh-keys`; прочие
-  подпути `/agents` — локальны).
+  подпути `/agents` — локальны). `server/serialize.ts` отдаёт в `status` сессии
+  `cancel_requested`/`cancel_requested_at` (AD-005); `server/routes/sessions.ts` —
+  `POST /:id/abort` (надёжный «Стоп»: персистентный флаг + graceful `orchestrator.cancel`
+  + `QueueProcessorManager.requestStop`; без процессора флаг снимается).
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, AD-075) и детект бинарных файлов (`isTextFile`).
-- `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use).
+- `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен.
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit; `decide()` — не-chat
   decision-вызов (AD-084: guard/обфускация `state`, тот же `_prepare`/аудит, что у chat-путей).
 - `engine/router/*` — routing моделей и micro-model слой (AD-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, AD-084), `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`), единый каскад `decision-cascade.ts` (`decideChoiceCascade`: `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`, fail-safe) и агрегатные метрики `decision-metrics.ts` (синглтон `decisionMetrics`: `calls`/`handled`/`fallback`/`escalated`/`attempts`/`rejected`/`by_model`). Мультимодальный контракт (задел AD-085): `MicroInput.images`/`videos`, `ClassifyRequest.images`/`videos`, `DecisionProvider.decide(opts.images/videos)` — добавляются в тело запроса только если непусты.
@@ -247,6 +250,13 @@
   `EventBinding{mode:'bound'}`, повтор/гонка → переиспользование привязки;
   `deps.resolveLlmDefaults` — добор дефолтных `provider`/`model` инстанса
   (`llm.defaultProvider`/`llm.defaultModel`) для `ephemeral`/`bind`/explicit;
+  `deps.resolveDefaultAgent` — агент по умолчанию инстанса для событийной сессии без
+  явного шаблона (`_resolveSessionAgent`: приоритет явного шаблона; `unknownAgentTemplate: 'drop'`
+  → `agent_not_found`; без резолвера — `agentRole` не проставляется);
+  `_maybeReassignOwner` — при доставке в **существующую** сессию (`kind:'bound'`, `kind:'bind'`
+  с найденной привязкой) владелец-человек из `deps.resolveExternalIdentity` переустанавливается,
+  если текущий пуст/машинный (`service:<keyId>`), сессия сохраняется и уведомляется хаб
+  (`onSessionMaterialized`); «чужой человеческий» владелец не трогается, несопознанный/ошибка — fail-safe;
   `deps.resolveExternalIdentity` — резолвинг внешнего отправителя (`identity.principalId`)
   в пользователя инстанса (человек-владелец, приоритетнее чата; профильная ветка возвращает
   и `roles` профиля — базу эффективных прав, AD-089 этап 5);
@@ -339,7 +349,7 @@
 - `sessions/ephemeral.ts` — ephemeral TTL (AD-089): `parseTtl`
   (`30s`/`15m`/`24h`/`7d`), `startEphemeralSweeper` (sweep 60 c, unref); поля
   `Session.expiresAt`/`archivedAt`, списки сессий по умолчанию без архива.
-- `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`.
+- `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла, очистка `pendingMessages`, снятие `blocked`/флага и `stream.cancelled` ровно один раз).
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
 - `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote, `DecisionProvider` (AD-084: типы `decision` (RouterAI, `POST {base}/decisions`) и `systemone` (Ollama, `POST {base}/v1/systemone`) — endpoint выбирается по типу провайдера).
 - `profiles.ts` — реестр серверных профилей гибрида.

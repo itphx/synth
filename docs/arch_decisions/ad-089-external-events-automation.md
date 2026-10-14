@@ -295,6 +295,29 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 (`PATCH /api/v2/sessions/:id`), — оркестратор не резолвил провайдера при пустом
 `session.settings.provider`.
 
+**Дефолтный агент событийных сессий.** Сессии, материализуемые funnel'ом (`ephemeral`/auto-bind
+`bind`), при пустом `decision.agentTemplate` создавались без `settings.agentRole` — оркестратор
+берёт `effectiveAgentRole` из `session.settings.agentRole`, поэтому assistant-сообщение не получало
+`agent`/`agentRole` и UI не рисовал бейдж агента. Порядок резолвинга (`_resolveSessionAgent`):
+`_resolveAgent(agentTemplate)` → **`deps.resolveDefaultAgent`** (агент по умолчанию инстанса).
+Явный шаблон приоритетнее; неизвестный шаблон при `unknownAgentTemplate: 'drop'` по-прежнему даёт
+исключение `agent_not_found` (дефолт его **не** маскирует); резолвер не задан — прежнее поведение
+(`agentRole` не проставляется). Проводка: core `createStandaloneApp` и backend `createBackendApp`
+передают `getDefaultAgentId` (значение раздела «Агенты», поверх `DEFAULT_AGENT_ID`).
+
+**Переустановка владельца при доставке (re-owner).** Владелец сессии из внешнего события
+фиксировался только при **материализации**, поэтому Telegram-сессия, созданная до линковки
+идентичности (claim-flow), оставалась за машинным аккаунтом шлюза (`service:<keyId>`, AD-052) или
+без владельца — и не была видна человеку в UI. `RequestSessionService._maybeReassignOwner`
+вызывается в ветках доставки в **существующую** сессию (`decision kind='bound'` и `kind='bind'`
+с найденной привязкой) **до** `_deliver`: человек-отправитель резолвится тем же резолвером, что и
+при создании (`deps.resolveExternalIdentity`); если текущий владелец пуст **или** машинный
+(`service:*`), он переустанавливается на человека, сессия сохраняется и вызывается
+`deps.onSessionMaterialized` (подписка хаба на сессию — чтобы ответы дошли до клиента нового
+владельца). «Чужая человеческая» сессия **не** переустанавливается (в общем чате автором мог быть
+другой человек — защита от угона); `null`/ошибка резолвера — fail-safe (владельца не трогаем,
+событие всё равно доставляется).
+
 ### Командные сессии и видимость (список/доступ)
 
 **Одна сессия на чат/тред.** Привязка (`EventBinding`) и auto-bind закрепляют внешний
@@ -411,6 +434,24 @@ managed backend — `synth.llm` того же конфига. Явно зада�
   (`deps.bindingStore`); цель правила — `EventRouteTarget { mode: 'bind' }` (`decisionFromTarget`).
 - **Резолвинг `agentTemplate`:** `RequestSessionService.resolveAgentTemplate` через `AgentRegistry`
   (`agent.enabled ? agent.id : null`); неизвестный шаблон — `unknownAgentTemplate` (`drop`/`default-agent`).
+- **Агент по умолчанию для событийных сессий:** `_resolveSessionAgent` (`request-session.ts`) при
+  пустом/нерезолвленном шаблоне берёт агент по умолчанию инстанса через `deps.resolveDefaultAgent`
+  (проводка — core `createStandaloneApp`/backend `createBackendApp`: `getDefaultAgentId`); явный
+  шаблон приоритетнее, `unknownAgentTemplate: 'drop'` → по-прежнему `agent_not_found`, без резолвера —
+  прежнее поведение (`settings.agentRole` не проставляется).
+- **Переустановка владельца при доставке (`_maybeReassignOwner`):** при доставке в существующую сессию
+  (`kind: 'bound'`, `kind: 'bind'` с найденной привязкой) человек-отправитель резолвится
+  `deps.resolveExternalIdentity`; если владелец пуст или машинный (`service:<keyId>`), он
+  переустанавливается на человека, сессия сохраняется и вызывается `deps.onSessionMaterialized`
+  (подписка хаба); «чужая человеческая» сессия не трогается (защита от угона), несопознанный
+  отправитель/ошибка резолвера — fail-safe.
+- **Надёжный «Стоп» (общий механизм сессий, не специфичен AD-089):** `POST /api/v2/sessions/:id/abort`
+  ставит персистентный `SessionStatus.cancelRequested` (+`cancelRequestedAt`, AD-005) под локом —
+  работает, когда `currentStream`/cancel-token отсутствуют (очередь/backoff/между итерациями); при живом
+  стриме — graceful `orchestrator.cancel`, затем `QueueProcessorManager.requestStop` (сброс
+  `pendingMessages`/`blocked`/флага, `stream.cancelled` один раз); процессора нет — флаг снимается
+  (нет ложной отмены следующего запуска). Оркестратор проверяет флаг (`isCancelRequested`) на верхней
+  границе `while (toolIteration < maxIterations)`. Детали — [docs/API_V2.md §5.5](../../docs/API_V2.md).
 - **Идентичности профиля (AD-089, этап 3):** `ExternalIdentity` (`provider`/`externalId`/`username?`/
   `displayName?`/`linkedAt`/`linkedBy?`) в `ProfileData.identities[]` (хранилище — `FileProfileStore`,
   snake_case: `external_id`/`display_name`/`linked_at`/`linked_by`; legacy без поля → `[]`); методы
