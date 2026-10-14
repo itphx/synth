@@ -5,7 +5,7 @@
 > **Источник:** перенесено из `AD-DRAFTS.md` (D27).
 > **Связано:** [AD-005](./ad-005-json-storage.md), [AD-032](./ad-032-history-storage-postgresql.md),
 > [AD-077](./ad-077-runtime-toolchain.md), [AD-070](./ad-070-system-prompt-composer.md), [AD-044](./ad-044-mobile-adaptive-ui-pwa.md),
-> [AD-087](./ad-087-messenger-gateway-merged.md), [AD-089](./ad-089-external-events-automation.md),
+> [AD-087](./ad-087-gateways.md), [AD-089](./ad-089-external-events-automation.md),
 > [AD-086](./ad-086-extensibility-plugins-editions.md), [AD-047](./ad-047-memory-gbrain.md),
 > [AD-036](./ad-036-llm-gateway.md), [AD-023](./ad-023-configuration.md).
 
@@ -20,7 +20,7 @@
 Сегодня модель контента сообщения — текстовая: `Part` умеет только `text`/`tool_use`/`tool_result`/`reasoning`/
 `session_reference`. Провайдеры получают текстовый `content`, а вложения (картинки, голос, видео) передать
 нельзя. Между тем ввод с телефона (камера/микрофон, [AD-044](./ad-044-mobile-adaptive-ui-pwa.md)) и вложения из
-мессенджеров ([AD-087](./ad-087-messenger-gateway-merged.md), [AD-089](./ad-089-external-events-automation.md))
+мессенджеров ([AD-087](./ad-087-gateways.md), [AD-089](./ad-089-external-events-automation.md))
 — востребованные сценарии, а vision/audio/video-модели у провайдеров уже есть.
 
 ## Детали
@@ -94,7 +94,7 @@ PII-риски медиа ([AD-036](./ad-036-llm-gateway.md)), права и р�
 - [AD-005](./ad-005-json-storage.md) «JSON-хранилище» — базовое хранение вложений; [AD-032](./ad-032-history-storage-postgresql.md)/[AD-077](./ad-077-runtime-toolchain.md) — целевое blob/S3-хранилище.
 - [AD-070](./ad-070-system-prompt-composer.md) «SystemPromptComposer» — промпт, статистика и prompt-cache медиа.
 - [AD-044](./ad-044-mobile-adaptive-ui-pwa.md) «Мобильный UI/PWA» — камера и микрофон как источники ввода.
-- [AD-087](./ad-087-messenger-gateway-merged.md) «Gateway мессенджеров» — вложения из чатов; [AD-089](./ad-089-external-events-automation.md) «Внешние события/автоматизация» — вложения из событий.
+- [AD-087](./ad-087-gateways.md) «Gateway мессенджеров» — вложения из чатов; [AD-089](./ad-089-external-events-automation.md) «Внешние события/автоматизация» — вложения из событий.
 - [AD-086](./ad-086-extensibility-plugins-editions.md) «Расширяемость/плагины» — точка расширения обработчиков и провайдеров медиа.
 - [AD-047](./ad-047-memory-gbrain.md) «Память (Gbrain)» — RAG по документам/изображениям.
 - [AD-036](./ad-036-llm-gateway.md) «LLM Gateway» — guard/обфускация/PII в медиа; [AD-023](./ad-023-configuration.md) «Конфигурация» — лимиты и флаги.

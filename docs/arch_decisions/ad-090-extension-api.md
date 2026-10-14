@@ -5,7 +5,8 @@
 > **Источник:** вынесено из зонтика [AD-086](./ad-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный AD и детализирован.
-> **Связано:** [AD-086](./ad-086-extensibility-plugins-editions.md) (зонтик), [AD-030](./ad-030-hooks-agent-events.md)
+> **Связано:** [AD-086](./ad-086-extensibility-plugins-editions.md) (зонтик «Классы расширений»),
+> [AD-087](./ad-087-gateways.md) (класс Gateway), [AD-030](./ad-030-hooks-agent-events.md)
 > (hooks/Plugin SDK), [AD-038](./ad-038-npm-packages.md) (npm-пакеты), [AD-046](./ad-046-skills-and-slash-commands.md)
 > (скиллы/команды), [AD-068](./ad-068-skills-agents-registry.md) (реестр/каталог/trust), [AD-071](./ad-071-mcp-servers-prompt.md)
 > (MCP), [AD-089](./ad-089-external-events-automation.md) (внешние события), [AD-023](./ad-023-configuration.md)
@@ -15,28 +16,30 @@
 > (flavor-образы), [AD-077](./ad-077-runtime-toolchain.md) (executor).
 
 **Решение:** ввести **Extension API v1** — версионированный контракт для расширения Synth кодом **без форка
-ядра**. Extension API — это четыре части: **манифест** плагина (`synth`-поле в `package.json`), **загрузчик**
+ядра**. Extension API — это четыре части: **манифест** плагина (единый файл `synth.pack`), **загрузчик**
 (`PluginHost`: resolve → integrity → semver-гейт → trust/scan → политика режима → `import` → facade → сбор
 disposers → аудит), **модель доверия** (переиспользуется из [AD-068](./ad-068-skills-agents-registry.md):
 trust-уровни, install-policy, статический сканер, quarantine) и **install/activate** (раскладка в
 `<home>/plugin/`, `plugins.lock.json`, `plugins.json`, CLI/API).
 
-**Три класса расширений жёстко разведены:** **Plugin** — код, монтируемый **в процесс core** через точки
-расширения; **Add-on** — **внешний сервис** в своём процессе/контейнере, общающийся по API v2 / MCP /
-внешним событиям (эталон — `synth-media`); **Declarative** — контент без кода (скиллы, команды, агенты,
-MCP-сервера, маршруты, расписания). Каждый класс имеет свой «носитель» и свой контракт, и они не смешиваются:
-add-on — **не** плагин.
+**Четыре класса расширений жёстко разведены:** **Plugin** — код, исполняемый **в процессе core**, встроенный
+в его поток обработки; **Gateway** — **внешний сервис-транспорт** внешнего мира (мессенджеры/чаты/боты),
+двусторонний обмен ([AD-087](./ad-087-gateways.md)); **Add-on** — **внешний сервис** иного назначения в своём
+процессе/контейнере, общающийся по API v2 / MCP / внешним событиям (эталон — `synth-media`); **контент-пак**
+(Declarative) — контент без кода (скиллы, команды, агенты, MCP-сервера, маршруты, расписания, темы, i18n,
+провайдеры, промпты, policies, memory, ui). Каждый класс имеет свой «носитель» и свой контракт, и они не
+смешиваются: add-on — **не** плагин, **gateway — не подвид add-on'а**.
 
 **Плагины разрешены во всех режимах** (standalone, hybrid, managed). Ограничение «плагин только standalone»
 снято: вопрос не «где запрещено», а «**кто ставит + какая политика + сила энфорса**». В managed установку
 выполняет **ADMIN** (deploy-time по умолчанию, runtime-install — опция `deny` по умолчанию); в hybrid
 действует **allow-list сервера**, усиливаемый в Уровне 2 **server-scoped токенами**.
 
-**Основной безопасный путь расширения — add-on**, а не in-process плагин: вынесенный сервис общается по уже
+**Основной безопасный путь расширения — Gateway/Add-on**, а не in-process плагин: вынесенный сервис общается по уже
 отлаженным границам (API v2/MCP/события) и не требует компромисса «сторонний код в процессе ядра». Плагин —
-для тех, кому действительно нужны in-process точки расширения; он идёт через trust/scan/install-policy и
-подчиняется тем же инвариантам (permissions через `PermissionEvaluator`, LLM через `GatewayProvider`,
-хранилище через `FileStore`).
+для тех, кому действительно нужны in-process точки расширения (см. правило выбора, §1); он идёт через
+trust/scan/install-policy и подчиняется тем же инвариантам (permissions через `PermissionEvaluator`, LLM через
+`GatewayProvider`, хранилище через `FileStore`).
 
 ## Контекст
 
@@ -63,19 +66,51 @@ ClawHavoc). Поэтому: (а) код — только через версио
 (б) доверие/скан/install-policy — обязательны; (в) основной безопасный путь — **add-on** (внешний сервис),
 а не in-process плагин; (г) в гибриде/managed — allow-list/ADMIN и честная сила энфорса.
 
-## 1. Терминология: Plugin ≠ Add-on ≠ Declarative
+## 1. Терминология: Plugin / Gateway / Add-on / контент-пак
 
 | Класс | Что запускается | Носитель | Контракт с Synth |
 |---|---|---|---|
-| **Plugin** | код **в процессе core** | self-contained bundle (JS), грузится `import()` | Extension API v1: манифест `synth`, интерфейс `SynthPlugin`, точки расширения; подчиняется permission-слою/Gateway/FileStore |
-| **Add-on** | **внешний сервис** — свой процесс/контейнер/репозиторий | образ + `docker-compose`/Helm | API v2 / MCP / внешние события ([AD-089](./ad-089-external-events-automation.md)); эталон — `synth-media` |
-| **Declarative** | ничего (данные, без кода) | файлы контента | скиллы/команды ([AD-046](./ad-046-skills-and-slash-commands.md)), агенты, MCP-сервера ([AD-071](./ad-071-mcp-servers-prompt.md)), маршруты/расписания ([AD-089](./ad-089-external-events-automation.md)/[AD-051](./ad-051-scheduler-pipelines.md)) |
+| **Plugin** | код **в процессе core**, встроенный в его поток обработки | self-contained bundle (JS), грузится `import()` | Extension API v1: манифест `synth.pack`, интерфейс `SynthPlugin`, точки расширения; подчиняется permission-слою/Gateway/FileStore |
+| **Gateway** | **внешний сервис-транспорт** внешний мир ↔ Synth (двусторонний) | образ + `docker-compose`/Helm | API v2 / MCP / внешние события ([AD-089](./ad-089-external-events-automation.md)); контракт — [AD-087](./ad-087-gateways.md) |
+| **Add-on** | **внешний сервис** иного назначения — свой процесс/контейнер/репозиторий | образ + `docker-compose`/Helm | API v2 / MCP / внешние события ([AD-089](./ad-089-external-events-automation.md)); эталон — `synth-media` |
+| **Контент-пак** (Declarative) | ничего (данные, без кода) | файлы контента + `synth.pack` | скиллы/команды ([AD-046](./ad-046-skills-and-slash-commands.md)), агенты, MCP-сервера ([AD-071](./ad-071-mcp-servers-prompt.md)), темы/i18n/провайдеры/промпты/automation/policies/memory/ui ([AD-068](./ad-068-skills-agents-registry.md)) |
+
+**Определение Plugin (уточнено).** Plugin — код, исполняемый **в процессе ядра**, встроенный в его поток
+обработки; меняет поведение **синхронно, изнутри**, подчиняясь инвариантам (permissions через
+`PermissionEvaluator`, LLM через `GatewayProvider`, хранилище через `FileStore`). Это — ядро критерия выбора:
+Plugin берётся только когда изменение **обязано** быть in-process.
+
+> **Gateway — не подвид Add-on'а.** Gateway — **отдельный класс** (не add-on): двусторонний транспорт внешнего
+> мира со своим контрактом адресации (`Binding`), идентичности (claim-flow, роли только сужаются), топологии
+> (один поллер на бота → `409 Conflict`; HA только через leader election) и жизненным циклом — см.
+> [AD-087](./ad-087-gateways.md).
 
 > **Add-on — не плагин.** Внешний сервис **не** монтируется в процесс ядра и **не** получает точек расширения
 > через Extension API: он потребляет публичные контракты (API v2/MCP/события) и не имеет доступа к internals
 > по определению. Плагин, наоборот, исполняется в процессе core и потому обязан проходить trust/scan/policy.
-> Смешение этих понятий («плагин-сервис», «add-on как npm-плагин») запрещено — от него расходятся модель угроз,
-> способ установки и энфорс.
+> Смешение понятий («плагин-сервис», «add-on как npm-плагин», «gateway как add-on») запрещено — от него
+> расходятся модель угроз, способ установки и энфорс.
+
+**Таксономия влияния плагинов** (что именно делает in-process код):
+
+1. **Contribution** — новые возможности: протокол провайдера, тул, роут, агент, команда.
+2. **Interception/transform** — вклинивание в поток: pre/post tool use, фильтр промпта/вывода, политика,
+   мультипровайдерная балансировка.
+3. **Observation/egress** — наблюдение и вывод наружу: метрики, логи, аудит.
+
+**Примеры выбора класса:**
+
+| Сценарий | Класс | Почему |
+|---|---|---|
+| Новый тип провайдера (несовместимый протокол) | **Plugin** | нужен in-process транспорт/парсинг протокола в потоке ядра |
+| OpenAI-совместимый провайдер | **декларативная запись** (не плагин) | достаточно конфигурации провайдера/модели |
+| Внешний фильтр/антивирус | **Plugin** | синхронная трансформация потока (interception) |
+| Мультипровайдерный балансировщик | **Plugin** | вклинивание в выбор провайдера внутри ядра (для чисто сетевого egress-прокси — [AD-088](./ad-088-http-proxy.md), не плагин) |
+| Экспорт логов и метрик | **Plugin** | always-on egress из процесса ядра, настроен админом (не опциональный внешний процесс); приёмник/коллектор — внешний **Add-on**-сервис |
+| Кастомный context-optimizer / guard / policy-provider / executor | **Plugin** | внутренние реестры и синхронная логика ядра |
+
+**Правило выбора:** **по умолчанию — Gateway/Add-on** (внешний сервис); **Plugin — только если нужен in-process**
+(синхронная трансформация потока, внутренние реестры, производительность).
 
 ## 2. Точки расширения
 
@@ -101,49 +136,50 @@ trust/install/activate**, а не новый рантайм: плагин — э
 существующими реестрами. UI-slot осознанно отложен (в SPA нет стабильной точки монтирования сторонних
 React-компонентов; до неё — только декларативные вклады и админ-секции).
 
-## 3. Манифест плагина
+## 3. Манифест плагина — единый `synth.pack`
 
-Манифест — поле `synth` в `package.json` плагина (совместимо с npm-экосистемой и [AD-038](./ad-038-npm-packages.md)):
+Манифест — файл **`synth.pack`** (JSON) в корне репозитория расширения (единый формат для всех классов;
+для плагина `kind: "plugin"`). npm-плагин кладёт `synth.pack` в `files` пакета, чтобы он попал в публикуемый
+артефакт; `package.json` остаётся обычным npm-манифестом и **не** является каноническим манифестом расширения
+(поле `synth` в `package.json` больше не используется).
 
 ```json
 {
   "name": "@acme/synth-plugin-slack",
   "version": "1.2.0",
-  "license": "MIT",
-  "main": "dist/index.js",
-  "peerDependencies": { "@itphx/synth-plugin": "^1" },
-  "synth": {
-    "apiVersion": "1",
-    "host": "^0.9.0",
-    "kind": "plugin",
-    "entry": "dist/index.js",
-    "contributes": {
-      "hooks": ["pre_tool_use", "post_tool_use", "session_end"],
-      "tools": ["slack_notify"],
-      "commands": ["slack-post"],
-      "routes": false,
-      "providers": false,
-      "settings": ["slack"]
-    },
-    "permissions": {
-      "tools": ["slack_notify"],
-      "hooks": ["pre_tool_use"],
-      "settings": ["slack"],
-      "network": ["hooks.slack.com"]
-    }
+  "kind": "plugin",
+  "host": "^0.9.0",
+  "contracts": "1",
+  "description": "Slack-интеграция: тул, команда, хуки, settings-секция",
+  "provides": {
+    "hooks": ["pre_tool_use", "post_tool_use", "session_end"],
+    "tools": ["slack_notify"],
+    "commands": ["slack-post"],
+    "routes": false,
+    "providers": false,
+    "settings": ["slack"]
+  },
+  "permissions": {
+    "tools": ["slack_notify"],
+    "hooks": ["pre_tool_use"],
+    "settings": ["slack"],
+    "network": ["hooks.slack.com"]
   }
 }
 ```
 
 | Поле | Смысл |
 |---|---|
-| `apiVersion` | Версия Extension API (semver-major-совместимость; сейчас `"1"`) |
+| `name` | Имя расширения (npm-имя для плагина; идентификатор для остальных классов) |
+| `version` | SemVer расширения |
+| `kind` | Класс: `plugin` \| `gateway` \| `addon` \| `pack` (для `pack` дополнительно `packType`) |
 | `host` | Диапазон версий Synth (host-приложения), semver-range — как `engines` |
-| `kind` | Класс расширения: `plugin` (add-on/declarative манифестом `synth` не описываются) |
-| `entry` | Точка входа бандла (относительный путь внутри пакета) |
-| `contributes` | Декларация вкладов (что плагин регистрирует) — для инспекции/аудита и permission-резолвинга |
+| `contracts` | Версия контракта Extension API (semver-major-совместимость; сейчас `"1"`) |
+| `description` | Краткое описание (инспекция/каталог) |
+| `provides` | Декларация вкладов (что регистрирует) — для инспекции/аудита и permission-резолвинга |
 | `permissions` | Явные запросы (тулы, хуки, настройки, сеть); **без** совпадения с фактическими регистрациями плагин отвергается |
-| `peerDependencies` | `@itphx/synth-plugin` — external/peer: типы SDK из хоста |
+
+`peerDependencies` с `@itphx/synth-plugin` остаётся в `package.json`: типы SDK и рантайм-фасад берутся из хоста.
 
 **Bundle-only (обязательно).** Плагин распространяется как **self-contained бандл** (сборка `esbuild`/`tsup`):
 все зависимости, кроме `@itphx/*`, вшиты в бандл. `@itphx/*` — **external (peer)**: типы и рантайм-фасад
@@ -210,7 +246,7 @@ export interface PluginModule { apply: (synth: SynthPlugin) => void | Promise<vo
 <home>/plugin/
 ├── installed/
 │   └── <name>@<version>/          # распакованный self-contained бандл + манифест
-│       ├── package.json           # с полем synth
+│       ├── synth.pack             # манифест расширения (kind: plugin)
 │       ├── dist/index.js          # бандл (все зависимости внутри, @itphx/* — external)
 │       └── PLUGIN_INTEGRITY.json   # {sha256, source, fetched_at}
 ├── plugins.lock.json               # провенанс (источник истины для update/uninstall)
@@ -253,7 +289,7 @@ config/Helm). Эффективный набор = merge (runtime > config > де
 
 1. **resolve** — найти установленный бандл + манифест (по `plugins.lock.json`).
 2. **integrity** — сверить sha256 с lock/`PLUGIN_INTEGRITY.json`.
-3. **semver-гейт** — `synth.apiVersion` совместим и `synth.host` покрывает текущую версию Synth; иначе —
+3. **semver-гейт** — `synth.pack`-поле `contracts` совместимо и `host` покрывает текущую версию Synth; иначе —
    отказ с причиной `plugin.host_incompatible`. Файл **exact-исключений** (аналог peer-gate) позволяет
    точечно разрешить конкретную пару `plugin@version ↔ host@version` (формат — открытый вопрос, §16).
 4. **trust/scan** — trust-резолвинг и статический сканер ([AD-068](./ad-068-skills-agents-registry.md));
@@ -275,11 +311,11 @@ config/Helm). Эффективный набор = merge (runtime > config > де
 
 ## 7. Матрица режимов
 
-| Режим | Declarative | Plugin | Add-on | Кто ставит плагин | Сила энфорса |
-|---|---|---|---|---|---|
-| **standalone** | ✅ | ✅ | ✅ | владелец инстанса | плагин — локальный процесс владельца; full trust-контроль локально |
-| **hybrid** | ✅ | ✅ (allow-list сервера для серверного контура; локальный — по политике) | ✅ | владелец локально + allow-list сервера | серверный трафик — 🟢; локальный плагин — 🔴 кооперативно (§9) |
-| **managed** | ✅ | ✅ (deploy-time default; runtime-install — опция `deny` default) | ✅ | **ADMIN** | deploy-time — 🟢 (бандл в образе/PVC); runtime-install — только ADMIN + allow-политика |
+| Режим | Контент-пак | Plugin | Gateway | Add-on | Кто ставит плагин | Сила энфорса |
+|---|---|---|---|---|---|---|
+| **standalone** | ✅ | ✅ | ✅ | ✅ | владелец инстанса | плагин — локальный процесс владельца; full trust-контроль локально |
+| **hybrid** | ✅ | ✅ (allow-list сервера для серверного контура; локальный — по политике) | ✅ | ✅ | владелец локально + allow-list сервера | серверный трафик — 🟢; локальный плагин — 🔴 кооперативно (§9) |
+| **managed** | ✅ | ✅ (deploy-time default; runtime-install — опция `deny` default) | ✅ | ✅ | **ADMIN** | deploy-time — 🟢 (бандл в образе/PVC); runtime-install — только ADMIN + allow-политика |
 
 ## 8. Managed: deploy-time и runtime-install
 
@@ -423,7 +459,7 @@ RBAC — **ADMIN**; запись под guarded `pluginsWriteGuard` (по обр
 | policy | `GET/PUT/DELETE /api/v2/settings/plugins` | `synth config` | Секция настроек (ADMIN) | Политика/дефолты (§9–§10) |
 
 Карточка плагина в UI обязана показывать: **trust-уровень**, **источник**, **content hash**, версию,
-`apiVersion`/`host`, вердикт сканера, перечень `contributes`. RBAC: list/inspect — `requireAuth`;
+`contracts`/`host`, вердикт сканера, перечень `provides`. RBAC: list/inspect — `requireAuth`;
 install/enable/disable/update/remove/policy — ADMIN (managed) / владелец (standalone). UI-объём —
 открытый вопрос (§16).
 
@@ -453,7 +489,7 @@ install/enable/disable/update/remove/policy — ADMIN (managed) / владеле
 - **Авто-установка без явного действия** — установка только явной операцией владельца/ADMIN.
 - **«Всегда latest»** — pin обязателен (`ref`/`content_hash`), update — явно.
 - **Доверие по звёздам** — звёзды не критерий (как [AD-068](./ad-068-skills-agents-registry.md)).
-- **Add-on как «плагин»** — смешение классов запрещено (§1).
+- **Gateway как Add-on / Add-on как «плагин»** — смешение классов запрещено (§1).
 
 ## 16. Открытые вопросы
 
@@ -481,7 +517,8 @@ UI-slot отложен — часть расширений (панели) пок
 
 **Связи:**
 
-- [AD-086](./ad-086-extensibility-plugins-editions.md) — зонтик расширяемости; AD-090 — вынесенный детальный Extension API.
+- [AD-086](./ad-086-extensibility-plugins-editions.md) — зонтик «Классы расширений»; AD-090 — вынесенный детальный Extension API.
+- [AD-087](./ad-087-gateways.md) — класс Gateway (внешний сервис-транспорт): отдельный от Plugin/Add-on класс, единый манифест `synth.pack`.
 - [AD-030](./ad-030-hooks-agent-events.md) — hook-шина: фундамент точки `hooks`; остаток (политика `builtin`, эмиты) — предпосылка Ф0.
 - [AD-038](./ad-038-npm-packages.md) — npm-пакеты: `@itphx/synth-plugin` и распространение плагинов.
 - [AD-046](./ad-046-skills-and-slash-commands.md) — скиллы/команды: точки `skills`/`commands`.

@@ -1,14 +1,14 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind; [AD-052](./ad-052-public-api-platform.md) — ✅ этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK `@itphx/synth-sdk`, перевод шлюза; первый add-on — Telegram-шлюз ([AD-086](./ad-086-extensibility-plugins-editions.md)) — реализован; остаток — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)), остаток AD-086 (HA/второй канал) и стриминг ответа наружу)
+> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind; [AD-052](./ad-052-public-api-platform.md) — ✅ этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK `@itphx/synth-sdk`, перевод шлюза; первый add-on/gateway — Telegram-шлюз ([AD-087](./ad-087-gateways.md)) — реализован; остаток — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)), остаток AD-087 (HA/второй канал) и стриминг ответа наружу)
 > **Дата:** 2026-10-08
 > **Обновлено:** 2026-10-13 — синхронизация статусов: [AD-052](./ad-052-public-api-platform.md)
 > закрыт целиком (этапы I–IV), первый add-on (`addons/synth-gateway-telegram`) реализован; остаток
 > пересобран — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)),
-> остаток AD-086 (HA/второй канал) и стриминг ответа наружу.
-> **Обновлено:** 2026-10-12 — зафиксирована граница с add-on-слоем: шлюз (Telegram) — тонкий транспорт
+> остаток AD-087 (HA/второй канал) и стриминг ответа наружу.
+> **Обновлено:** 2026-10-12 — зафиксирована граница с gateway-слоем: шлюз (Telegram) — тонкий транспорт
 > (normalize→events, events→send), состояние инстанс-локальное; топология/HA/мультитенантность — свойство
-> слоя add-on ([AD-086](./ad-086-extensibility-plugins-editions.md), раздел «Первый частный случай — Telegram gateway»);
+> слоя Gateway ([AD-087](./ad-087-gateways.md), §4 «Первый подтип — мессенджеры (Telegram)»);
 > для Telegram транспорт приёма — long-polling (webhook отложен), ограничение «один потребитель на бота» (`409 Conflict`).
 > Ранее тем же днём: добавлен раздел «Auto-bind» (`events.autoBind`/`events.autoBindAgentTemplate`,
 > новое решение Router `{ kind: 'bind' }` и цель правила `{ mode: 'bind' }`); статус и разделы
@@ -22,8 +22,8 @@
 > [AD-084](./ad-084-decision-models-clef.md) «Decision-модели» (decision-маршрутизация событий),
 > [AD-036](./ad-036-llm-gateway.md) «LLM Gateway», [AD-051](./ad-051-scheduler-pipelines.md) «Шедулер и пайплайны»,
 > [AD-052](./ad-052-public-api-platform.md) «Публичная API-платформа», [AD-056](./ad-056-synth-mcp-server.md) «MCP-сервер Synth»,
-> [AD-086](./ad-086-extensibility-plugins-editions.md) «Расширяемость и внешние сервисы-надстройки»,
-> [AD-087](./ad-087-messenger-gateway-merged.md) «Gateway для мессенджеров» (поглощён AD-086),
+> [AD-086](./ad-086-extensibility-plugins-editions.md) «Классы расширений»,
+> [AD-087](./ad-087-gateways.md) «Шлюзы (gateways)» (класс Gateway),
 > [AD-026](./ad-026-subagent-context-modes.md) «Контекст саб-агента», [AD-033](./ad-033-session-branching-merge.md) «Ветвление сессий»,
 > [AD-029](./ad-029-granular-permissions.md) «Гранулярные permissions», [AD-042](./ad-042-hybrid-mode.md) «Гибридный режим»,
 > [AD-045](./ad-045-hybrid-server-profiles.md) «Профили серверов гибрида».
@@ -366,14 +366,15 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 | MCP-клиент | [AD-071](./ad-071-mcp-servers-prompt.md) | Synth дёргает внешние MCP-инструменты (действие) | приём входящих событий |
 | Hooks / Plugin SDK | [AD-030](./ad-030-hooks-agent-events.md) | hook-шина и точки расширения | Router как потребитель шины |
 | Scheduler / пайплайны | [AD-051](./ad-051-scheduler-pipelines.md) | cron/timer-события — источник `Event` | отдельный путь запуска сессий |
-| Gateway / add-on шаблон | [AD-086](./ad-086-extensibility-plugins-editions.md) | как оформляется внешний сервис (репозиторий, образы, транспорт приёма) | конкретные источники событий |
+| Gateway-шаблон (класс Gateway) | [AD-087](./ad-087-gateways.md) | как оформляется внешний сервис-транспорт (репозиторий, образы, транспорт приёма) | конкретные источники событий |
+| Add-on шаблон | [AD-086](./ad-086-extensibility-plugins-editions.md) | как оформляется внешний сервис иного назначения | конкретные источники событий |
 | HTTP-прокси / egress | [AD-088](./ad-088-http-proxy.md) | исходящие соединения внешних коннекторов | маршрутизацию |
 
 **Шлюз остаётся тонким транспортом.** Add-on (напр. Telegram-шлюз) только нормализует вход
 (`normalize` → `POST /api/v2/events`) и доставляет выход (`GET /api/v2/events` → `sendMessage`);
 он ничего не решает про маршрутизацию/сессии — это ядро ([AD-089](./ad-089-external-events-automation.md)).
 Состояние шлюза — **инстанс-локальное** (`offset`/дедуп/привязки чатов на PVC), а **HA (leader election) и
-мультитенантность — свойство слоя add-on** ([AD-086](./ad-086-extensibility-plugins-editions.md)), а не
+мультитенантность — свойство слоя Gateway** ([AD-087](./ad-087-gateways.md)), а не
 контракта событий: ядру не важно, один бот или несколько тенантов за шлюзом.
 
 ### Роль `synth-media`
@@ -517,16 +518,16 @@ managed backend — `synth.llm` того же конфига. Явно зада�
   [AD-090](./ad-090-extension-api.md)) — нет (hook-шина и эмиты жизненного цикла реализованы);
 - **пайплайны** (цепочки шагов, [AD-059](./ad-059-pipeline-automation.md)) — нет;
 - **стриминг ответа наружу** (edit-in-place / typing-indicator) — нет;
-- **остаток [AD-086](./ad-086-extensibility-plugins-editions.md) как AD** — HA через leader election,
+- **остаток [AD-087](./ad-087-gateways.md) как AD** — HA через leader election,
   webhook-транспорт и второй канал — нет; **мультитенантность реализована** («несколько ботов → несколько
-  сред», `tenants.json`; первый add-on — Telegram-шлюз).
+  сред», `tenants.json`; первый add-on/gateway — Telegram-шлюз).
 
 **Закрыто реализацией:** источник [AD-052](./ad-052-public-api-platform.md) — ✅ **этапы I–IV**:
 binding-key (первый срез); service-key (общий ключ инстанса со `scopes` + проектной проекцией
 `allowedProjects`); исходящие webhooks; public-OpenAPI + SDK `@itphx/synth-sdk`; перевод
 мессенджер-шлюза на scoped service-key. Ключи — **инстанс-локальные секреты**: не переносятся
 publish/fork и межмировой обмен ([AD-042](./ad-042-hybrid-mode.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md)).
-Источник [AD-086](./ad-086-extensibility-plugins-editions.md) — первый add-on (**Telegram-шлюз**,
+Источник [AD-087](./ad-087-gateways.md) — первый add-on/gateway (**Telegram-шлюз**,
 `addons/synth-gateway-telegram`): long-polling → `POST /api/v2/events` + обратный watcher событий.
 **LLM-классификация правил маршрутизации — закрыта** decision-шагом `DecisionRuleProvider`
 ([AD-084](./ad-084-decision-models-clef.md)): включается `events.decisionRouting` (default off),
@@ -542,8 +543,8 @@ fail-safe; отдельный резерв через micro-слой [AD-034](./
   **webhook** — отложенная альтернатива (stateless HTTP за ingress). Принципиальное ограничение Telegram:
   `getUpdates` допускает **одного** потребителя на бота — второй поллер получает **`409 Conflict`**, поэтому
   шлюз сейчас singleton (`replicaCount: 1` + `strategy: Recreate`), а HA — только через leader election
-  (K8s Lease, hot standby). Топология, HA и мультитенантность шлюза — [AD-086](./ad-086-extensibility-plugins-editions.md),
-  раздел «Первый частный случай — Telegram gateway». **Для остальных источников вопрос открыт.**
+  (K8s Lease, hot standby). Топология, HA и мультитенантность шлюза — [AD-087](./ad-087-gateways.md),
+  §4 «Первый подтип — мессенджеры (Telegram)». **Для остальных источников вопрос открыт.**
 - **Модель идентичности (закрыта — этап 4):** внешние идентичности хранятся в
   **профиле** (`ProfileData.identities[]`; ключ — `provider` + `externalId` — числовой id
   источника, `username`/`displayName` — display-кэш, не ключ; `linkedAt`/`linkedBy` — аудит
@@ -592,7 +593,7 @@ fail-safe; отдельный резерв через micro-слой [AD-034](./
 - [AD-056](./ad-056-synth-mcp-server.md) — Synth как MCP-сервер (обратное направление).
 - [AD-071](./ad-071-mcp-servers-prompt.md) — вызов внешних MCP как действие.
 - [AD-086](./ad-086-extensibility-plugins-editions.md) — внешние сервисы-надстройки и общий шаблон gateway.
-- [AD-087](./ad-087-messenger-gateway-merged.md) — мессенджер-шлюз (поглощён AD-086) как частный источник событий.
+- [AD-087](./ad-087-gateways.md) — класс Gateway: мессенджер-шлюз как частный источник событий.
 - [AD-042](./ad-042-hybrid-mode.md), [AD-045](./ad-045-hybrid-server-profiles.md) — локальный/удалённый приём событий.
 - [AD-080](./ad-080-managed-hybrid-modes.md), [AD-081](./ad-081-hybrid-policy-leak-protection.md) — политики и защита от утечек.
 - [AD-085](./ad-085-multimodal-input.md) — вложения из событий.

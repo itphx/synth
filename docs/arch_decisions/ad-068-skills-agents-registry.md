@@ -146,6 +146,38 @@ synth-skills/
 
 ---
 
+## 2.1. Единый манифест `synth.pack` и типы контент-паков
+
+Манифест **всех** классов расширений и контент-паков — единый файл **`synth.pack`** (JSON) в корне репозитория
+расширения ([AD-086](./ad-086-extensibility-plugins-editions.md), [AD-090](./ad-090-extension-api.md)). Для
+контент-паков — `kind: "pack"` + `packType`.
+
+Поля манифеста: `name`, `version`, `kind` (`plugin|gateway|addon|pack`), `host`, `contracts`, `description`,
+`provides` (для `pack` дополнительно `packType`).
+
+**Типы контент-паков (`kind: "pack"` + `packType`):**
+
+| `packType` | Что содержит | Текущее состояние в коде |
+|---|---|---|
+| `skills` | скиллы/команды (`SKILL.md`) | механизм есть ([AD-046](./ad-046-skills-and-slash-commands.md)); паков нет |
+| `agents` | agent-packs (наборы агентов, `AGENT.md`) | определения — `packages/core/src/engine/agents/definitions/*.json` (11 шт.); паков нет |
+| `mcp` | MCP-серверы | реестр есть ([AD-071](./ad-071-mcp-servers-prompt.md)); паков нет |
+| `themes` | темы оформления | только встроенные — `packages/ui/src/lib/theme/*`; паков нет |
+| `i18n` | локали/переводы | en-шаблоны в core, ru — в ui ([AD-041](./ad-041-llm-error-taxonomy.md)); механизма пакетов локалей нет |
+| `providers` | провайдеры/модели | JSON в `$DATA/providers\|models` + API; паков нет |
+| `prompts` | персоны/промпт-блоки | блоки `prompts/` ядра ([AD-070](./ad-070-system-prompt-composer.md)); паков нет |
+| `automation` | маршруты/расписания/loops/pipelines | маршруты/расписания ([AD-089](./ad-089-external-events-automation.md)/[AD-051](./ad-051-scheduler-pipelines.md)) есть; паков нет |
+| `policies` | пресеты permissions/tools-policy/mcp-policy | политики есть ([AD-029](./ad-029-granular-permissions.md)/[AD-071](./ad-071-mcp-servers-prompt.md)); пресетов-паков нет |
+| `memory` | индексы/паки памяти | нет ([AD-047](./ad-047-memory-gbrain.md)) |
+| `ui` | UI-слоты/виджеты | нет (UI-slot отложен, [AD-090](./ad-090-extension-api.md)) |
+
+**Реестр/индекс/trust/install-policy/провенанс — единые** для всех классов (`kind`) и типов контент-паков
+(`packType`): та же trust-иерархия (`builtin → verified → trusted → community`), матрица install-policy,
+статический сканер, quarantine, `lock.json` и audit log, что и для скиллов/агентов (§3–§5). Отдельных реестров
+на каждый `packType` не вводится.
+
+---
+
 ## 3. Формат индекса
 
 Централизованный JSON-индекс (формат hermes-подобный, с добавлением версионирования

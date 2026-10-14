@@ -1,24 +1,22 @@
-# AD-086: Расширяемость Synth: плагины, editions, вклад в mainline и внешние сервисы-надстройки
+# AD-086: Расширяемость Synth: классы расширений, editions и contribution flow
 
-> **Статус:** ⚠️ Частично — первый add-on (Telegram-шлюз) реализован и расширен **мультитенантностью**
-> («несколько ботов → несколько сред»); Plugin SDK ([AD-090](./ad-090-extension-api.md)), editions, contribution
-> flow и HA шлюза (leader election) — нет
+> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`;
+> класс **Gateway** выделен в [AD-087](./ad-087-gateways.md) (HA/leader election — нет); Plugin SDK
+> ([AD-090](./ad-090-extension-api.md)), editions и contribution flow — нет
 > **Дата:** 2026-10-02
-> **Обновлено:** 2026-10-13 — Telegram-шлюз стал **мультитенантным**: один процесс обслуживает N ботов, каждый
-> привязан к своей среде Synth (`tenants.json`: `id`/`botToken`/`synthUrl`/creds/allowlist/proxy), состояние
-> изолировано по тенанту, `GET /health` — агрегат + разбивка. Модель — **«несколько ботов → несколько сред»**
-> (по боту на среду), а не «один бот → несколько инстансов через таблицу маршрутов» (последнее остаётся
-> альтернативой). Добавлен `strategy: Recreate` в чарт (был пробел). Подробности — `addons/synth-gateway-telegram`.
-> **Обновлено:** 2026-10-12 — зафиксирован фактический эталон add-on'а (Telegram-шлюз в отдельном репозитории
-> `addons/synth-gateway-telegram`): топология «один бот — один инстанс шлюза» (факты), HA через leader election
-> (K8s Lease; не реализовано), мультитенантность (маршруты → `{synthUrl, creds, tenant}`; не реализовано),
-> текущая гарантия singleton (`replicaCount: 1` + `strategy: Recreate`) и **пробел** — в addon-чарте `strategy`
-> не задан; адаптеры каналов — отложенный путь. Ранее тем же днём: Extension API вынесен в отдельный [AD-090](./ad-090-extension-api.md); ограничение
-> «плагины только standalone» снято (плагины разрешены во всех режимах: managed — установка ADMIN, hybrid — allow-list
-> сервера с server-scoped токенами). Ранее (2026-10-08) добавлен четвёртый столп «внешние сервисы-надстройки
-> (add-ons / bridge services)» и первый частный случай (Telegram gateway); сюда же **поглощён** [AD-087](./ad-087-messenger-gateway-merged.md)
-> «Gateway для подключения к мессенджерам».
-> **Связано:** [AD-090](./ad-090-extension-api.md) «Extension API v1», [AD-030](./ad-030-hooks-agent-events.md) «Hooks/Plugin SDK», [AD-038](./ad-038-npm-packages.md) «npm-пакеты»,
+> **Обновлено:** 2026-10-14 — **реструктуризация классов расширений**: класс **Gateway** выделен в действующий
+> [AD-087](./ad-087-gateways.md) (туда перенесён весь материал Telegram-шлюза, в AD-086 дубликатов нет), а AD-086
+> стал **зонтиком «Классы расширений»** (Plugin / Gateway / Add-on / контент-пак + Editions + Contribution flow);
+> введён **единый манифест** `synth.pack` для всех классов и контент-паков; терминология 4 классов закреплена в
+> [AD-090](./ad-090-extension-api.md).
+> **Обновлено:** 2026-10-12 — Extension API v1 вынесен в отдельный [AD-090](./ad-090-extension-api.md);
+> ограничение «плагины только standalone» снято (плагины разрешены во всех режимах: managed — установка ADMIN,
+> hybrid — allow-list сервера с server-scoped токенами). Ранее (2026-10-08) добавлен четвёртый столп «внешние
+> сервисы-надстройки (add-ons)».
+> **Классы расширений:** Plugin → [AD-090](./ad-090-extension-api.md); **Gateway → [AD-087](./ad-087-gateways.md)**;
+> Add-on → этот AD; контент-паки → [AD-068](./ad-068-skills-agents-registry.md); Edition → этот AD.
+> **Связано:** [AD-090](./ad-090-extension-api.md) «Extension API v1», [AD-087](./ad-087-gateways.md) «Шлюзы (gateways)»,
+> [AD-030](./ad-030-hooks-agent-events.md) «Hooks/Plugin SDK», [AD-038](./ad-038-npm-packages.md) «npm-пакеты»,
 > [AD-046](./ad-046-skills-and-slash-commands.md) «Скиллы», [AD-068](./ad-068-skills-agents-registry.md) «Реестр и каталог»,
 > [AD-082](./ad-082-full-images-deployment.md) «Flavor-образы», [AD-089](./ad-089-external-events-automation.md) «Платформа внешних событий»,
 > [AD-023](./ad-023-configuration.md), [AD-029](./ad-029-granular-permissions.md), [AD-036](./ad-036-llm-gateway.md),
@@ -26,23 +24,40 @@
 > [AD-055](./ad-055-instance-exchange.md) «Обмен между инстансами», [AD-032](./ad-032-history-storage-postgresql.md) «PostgreSQL».
 
 **Решение:** дать сообществу и пользователям **лёгкий путь** доработать Synth без приватного форка ядра. Четыре
-взаимодополняющих столпа:
+взаимодополняющих столпа и набор **классов расширений**:
 
 1. **Extension API** (спецификация — [AD-090](./ad-090-extension-api.md)) — расширять без форка: версионированный
    контракт плагинов, точки расширения, загрузка из npm/каталога/реестра, trust/scan/install-policy (по образцу
-   [AD-068](./ad-068-skills-agents-registry.md)). Терминология жёсткая: **Plugin ≠ Add-on ≠ Declarative** — plugin
-   (код в процессе core) и add-on (внешний сервис) суть разные классы, не синонимы.
+   [AD-068](./ad-068-skills-agents-registry.md)). Терминология жёсткая — четыре класса: **Plugin** (код в процессе
+   ядра) / **Gateway** ([AD-087](./ad-087-gateways.md), внешний сервис-транспорт) / **Add-on** (внешний сервис
+   иного назначения) / **контент-пак** (данные без кода) — см. §«Классы расширений».
 2. **Editions** — собрать и поддерживать свою редакцию (по образцу Ubuntu): пресет-метапакет из плагинов,
-   скиллов, агентов, flavor-образов, темы и тулчейна.
+   скиллов, агентов (agent-packs), тем, локалей (i18n), провайдер/модель-паков, flavor-образов и тулчейна.
 3. **Contribution flow** — предложить функционал в mainline и реализовать его своим Synth'ом за свой счёт:
    отдельный скилл ведёт агента и разработчика по циклу issue/design → план → реализация → тесты → PR.
-4. **Внешние сервисы-надстройки (add-ons / bridge services)** — вынести целые интеграционные подсистемы
+4. **Внешние сервисы-надстройки (add-ons)** — вынести целые интеграционные подсистемы
    в отдельные сервисы со **своим** репозиторием, образами, `docker-compose`/Helm и **общим шаблоном**;
    реестр/каталог и trust/install-policy — по образцу [AD-068](./ad-068-skills-agents-registry.md).
-   **Первый частный случай — Telegram gateway.**
+   **Шлюзы — отдельный класс (Gateway)** со своим контрактом, см. [AD-087](./ad-087-gateways.md).
+
+Все классы и контент-паки описываются **единым манифестом** `synth.pack` (§«Единый манифест расширения `synth.pack`»).
 
 Выигрыш: пользователь получает нужное, проект — функционал и экосистему, авторы плагинов/editions/add-on'ов —
 аудиторию. Кастомизация не требует держать приватный форк ядра.
+
+## Классы расширений
+
+| Класс | Что запускается | Где спецификация/детали |
+|---|---|---|
+| **Plugin** | код **в процессе ядра** (Extension API, фасад `@itphx/synth-plugin`) | [AD-090](./ad-090-extension-api.md) |
+| **Gateway** | **внешний сервис-транспорт** внешний мир ↔ Synth (двусторонний обмен) | **[AD-087](./ad-087-gateways.md)** |
+| **Add-on** | **внешний сервис** иного назначения (свой репозиторий/образы/деплой) | этот AD, §4 |
+| **Контент-пак** | **данные без кода** (скиллы, agents, mcp, темы, i18n, провайдеры, промпты, automation, policies, memory, ui) | [AD-068](./ad-068-skills-agents-registry.md) |
+| **Edition** | пресет-метапакет (плагины + контент-паки + образ + тулчейн) | этот AD, §2 |
+
+**Критерий выбора класса:** по умолчанию — **Gateway/Add-on** (внешний сервис); **Plugin — только когда
+изменение обязано быть in-process** (синхронная трансформация потока, внутренние реестры, производительность).
+Детали терминологии и таксономии влияния плагинов — [AD-090](./ad-090-extension-api.md) §1.
 
 ## Контекст
 
@@ -55,28 +70,30 @@ Synth открыт (лицензия MIT), но расширить его сег
 
 Отдельно выделяется класс интеграционных подсистем, которым тесно в ядре: они требуют сети, секретов,
 деплоя, своего жизненного цикла и часто своего языка/стека. Их правильнее оформлять как **внешние
-сервисы-надстройки**. Первый конкретный запрос сообщества — gateway к мессенджерам (черновик AD-087).
+сервисы-надстройки**; их частный случай — **шлюзы** (Gateway, [AD-087](./ad-087-gateways.md)). Первый конкретный
+запрос сообщества — gateway к мессенджерам.
 
 ## Детали
 
 ### 1. Extension API (расширять без форка)
 
-**Полная спецификация — [AD-090](./ad-090-extension-api.md)**: терминология Plugin/Add-on/Declarative, манифест
-(`synth.plugin`), точки расширения (встроенные тулы, провайдеры, HTTP-роуты, event-hooks [AD-030](./ad-030-hooks-agent-events.md),
-UI-слоты/панели, скиллы/agent-packs), фасад `@itphx/synth-plugin` + disposer-модель, bundle-only дистрибуция,
-install/activate (`plugins.lock.json`/`plugins.json`), trust/scan по [AD-068](./ad-068-skills-agents-registry.md),
-permissions ([AD-029](./ad-029-granular-permissions.md)), semver-политика и окно deprecation, а также режимы
-(managed/hybrid). Ниже — только указатель; детали не дублируются.
+**Полная спецификация — [AD-090](./ad-090-extension-api.md)**: терминология 4 классов (Plugin/Gateway/Add-on/
+контент-пак), манифест (`synth.pack`), точки расширения (встроенные тулы, провайдеры, HTTP-роуты, event-hooks
+[AD-030](./ad-030-hooks-agent-events.md), UI-слоты/панели, скиллы/agent-packs), фасад `@itphx/synth-plugin` +
+disposer-модель, bundle-only дистрибуция, install/activate (`plugins.lock.json`/`plugins.json`), trust/scan по
+[AD-068](./ad-068-skills-agents-registry.md), permissions ([AD-029](./ad-029-granular-permissions.md)), semver-политика
+и окно deprecation, а также режимы (managed/hybrid). Ниже — только указатель; детали не дублируются.
 
-### Плагины, add-on'ы и режимы (обновлено 2026-10-12)
+### Плагины, add-on'ы, шлюзы и режимы (обновлено 2026-10-14)
 
-Три класса расширений Synth (терминология жёсткая, [AD-090](./ad-090-extension-api.md)):
+Четыре класса расширений Synth (терминология жёсткая, [AD-090](./ad-090-extension-api.md)):
 
 | Класс | Что запускается | Режимы |
 |---|---|---|
 | **Plugin** | Код **в процессе core** (загружается через Extension API, фасад `@itphx/synth-plugin`) | standalone — владелец/ADMIN; **managed** — установка ADMIN (deploy-time — дефолт, runtime-install — опция, по умолчанию `deny`); **hybrid** — allow-list сервера + server-scoped токены |
-| **Add-on** | **Внешний сервис** со своим репозиторием/образами/деплоем (эталон — `synth-media`) | Любой режим; общается по API v2/MCP/событиям |
-| **Declarative** | **Контент без кода** (скиллы, agent-packs, плагин-конфиги) | Любой режим |
+| **Gateway** | **Внешний сервис-транспорт** внешний мир ↔ Synth (двусторонний); свой репозиторий/образы | Любой режим; общается по API v2/событиям/MCP; детали — [AD-087](./ad-087-gateways.md) |
+| **Add-on** | **Внешний сервис** иного назначения со своим репозиторием/образами/деплоем (эталон — `synth-media`) | Любой режим; общается по API v2/MCP/событиям |
+| **Контент-пак** | **Контент без кода** (скиллы, agent-packs, темы, i18n, провайдеры, промпты, automation, policies, memory, ui) | Любой режим; устанавливается из каталога ([AD-068](./ad-068-skills-agents-registry.md)) |
 
 **Ограничение «плагин только standalone» снято:** плагины разрешены во всех режимах. В **managed**
 установку выполняет ADMIN (deploy-time по умолчанию; runtime-install — опция, по умолчанию `deny`). В **hybrid** —
@@ -84,7 +101,8 @@ allow-list сервера, усиленный **server-scoped токенами**
 
 ### 2. Editions (специализированные сборки)
 
-- **Пресет-метапакет:** `edition.json` с зависимостями — плагины, скиллы, agents, flavor-образ, тема, toolchain.
+- **Пресет-метапакет:** `edition.json` с зависимостями — плагины, скиллы, **agent-packs**, **темы**,
+  **локали (i18n)**, **провайдер/модель-паки**, flavor-образ, toolchain.
 - **Официальные vs community-редакции** с trust-уровнями (иерархия [AD-068](./ad-068-skills-agents-registry.md)).
 - **Каталог editions**; CLI/API `edition list|install|info|update`.
 - **Сборка из пресета** смыкается с [AD-082](./ad-082-full-images-deployment.md) (flavor-образы).
@@ -100,7 +118,7 @@ allow-list сервера, усиленный **server-scoped токенами**
 - **Decision tree** «форк vs upstream»; шаблоны issue/PR; DCO/CLA; CI для внешних контрибьюторов.
 - **Честная модель:** «предложил и реализовал за свой счёт — без гарантии принятия».
 
-### 4. Внешние сервисы-надстройки (add-ons / bridge services)
+### 4. Внешние сервисы-надстройки (add-ons)
 
 Класс внешних сервисов экосистемы Synth, которые **не входят в ядро и npm-пакеты** и общаются с Synth по
 контрактам API v2 ([AD-017](./ad-017-api-v2-hono.md))/[AD-052](./ad-052-public-api-platform.md), MCP
@@ -109,103 +127,33 @@ allow-list сервера, усиленный **server-scoped токенами**
 - **Свой репозиторий и свой жизненный цикл** — независимые релизы, версии и деплой.
 - **Свои образы**, `docker-compose` и Helm-чарт.
 - **Общий шаблон add-on'а** — единый скелет (репозиторий, CI, образ, compose/Helm, README/AGENTS.md, контракт
-  интеграции), чтобы новый сервис поднимался быстро и единообразно.
+  интеграции), чтобы новый сервис поднимался быстро и единообразно (эталон — `addons/synth-addon-template`).
 - **Реестр/каталог add-on'ов** — аналог каталога контента [AD-068](./ad-068-skills-agents-registry.md):
   индекс, trust-уровни, **install-policy** (по образцу матрицы AD-068), провенанс, подписи/checksums.
 - **Версионирование** — семвер-совместимость с Synth (`apiVersion`/`host` range), окно deprecation.
 - **Доверие:** те же уровни `builtin → verified → trusted → community`; сканер и install-policy переиспользуются.
 
-#### Первый частный случай — Telegram gateway
+**Шлюзы — отдельный класс (Gateway, [AD-087](./ad-087-gateways.md)):** внешний сервис-транспорт с двусторонним
+обменом (мессенджеры/чаты/боты), своим контрактом адресации/идентичности/топологии. Эталон — Telegram-шлюз
+`addons/synth-gateway-telegram`; все детали (топология «один бот — один инстанс», мультитенантность, HA через
+leader election, singleton-гарантия) — в [AD-087](./ad-087-gateways.md), здесь не дублируются.
 
-Gateway к мессенджерам (поглощённый [AD-087](./ad-087-messenger-gateway-merged.md)) — эталонный add-on;
-реализация живёт в **отдельном репозитории** `addons/synth-gateway-telegram` (вне `synth/`) и собрана по
-общему шаблону `addons/synth-addon-template`:
+### 5. Единый манифест расширения `synth.pack`
 
-- **MCP-сервер (Synth → шлюз):** отправка/редактирование сообщений, уведомления, inline-кнопки, вложения.
-- **Вход (шлюз → Synth):** входящие сообщения/нажатия кнопок приходят как внешние события
-  ([AD-089](./ad-089-external-events-automation.md): `Event`/`Binding`/`Router`); транспорт — Telegram
-  `getUpdates` (**long-polling**), нормализация → `POST /api/v2/events`.
-- **Выход (Synth → шлюз → чат):** SSE `GET /api/v2/events` (watcher) → `sendMessage` по `stream.done`
-  (фоллбек `message.added`/`stream.error`).
-- **Маппинг identity** (пользователь мессенджера → профиль/RBAC), **секреты ботов** (at-rest по модели
-  [AD-076](./ad-076-git-repo-registry-ssh.md)), **дедуп/идемпотентность**, **вложения** (→ [AD-085](./ad-085-multimodal-input.md)).
-- **Привязки `Binding`** (чат/тред/топик ↔ сессия/проект) и права — по [AD-089](./ad-089-external-events-automation.md).
+Манифест **всех** классов расширений и контент-паков — единый файл **`synth.pack`** (JSON) в корне репозитория
+расширения. Схема/загрузка для классов с кодом — [AD-090](./ad-090-extension-api.md); для контент-паков
+(индекс/trust/install-policy/провенанс) — [AD-068](./ad-068-skills-agents-registry.md).
 
-##### Топология: один бот — один инстанс шлюза
+Поля: `name`, `version`, `kind` (`plugin|gateway|addon|pack`), `host`, `contracts`, `description`,
+`provides` (для `pack` дополнительно `packType`).
 
-Текущая (реализованная) топология — **один процесс на одного бота**:
+- `kind: "plugin" | "gateway" | "addon"` — класс кода/сервиса (Plugin/Gateway/Add-on);
+- `kind: "pack"` + `packType` — тип контент-пака: `skills`, `agents`, `mcp`, `themes`, `i18n`, `providers`,
+  `prompts`, `automation`, `policies`, `memory`, `ui` ([AD-068](./ad-068-skills-agents-registry.md)).
 
-- **Секреты/креды одного бота:** `TELEGRAM_BOT_TOKEN` (env или `secrets/telegram_bot_token`), **один владелец**
-  (`secrets/telegram_owner_chat_id` — для MCP-уведомлений), **один** `SYNTH_URL` + одни креды Synth
-  (OIDC client-credentials в managed приоритетнее статического `SYNTH_API_KEY` в standalone/dev).
-- **Список доступа** `GATEWAY_ALLOWLIST` (`chatId:ROLE` либо `userId:ROLE`) — **мультичатовый**: один бот уже
-  обслуживает несколько чатов/пользователей с разными ролями.
-- **Состояние — JSON на PVC** (`FileStore`, AD-005): `state/offset.json` (смещение long-polling),
-  `state/seen-updates.json` (дедуп апдейтов), `state/chat-sessions.json` (chatKey→сессия),
-  `state/session-routes.json` (обратный индекс sessionId) и `state/sent.json` (дедуп отправки ответов).
-- **Прокси обязателен** для Bot API (`TELEGRAM_PROXY_URL`, HTTP CONNECT / SOCKS5); OIDC-запросы идут напрямую
-  и прокси не используют.
-- **Деплой:** Helm-чарт `charts/synth-gateway-telegram` и `docker-compose.yml`; в K3s — дельта в репозитории
-  `synth-deploy`.
-
-##### Мультитенантность (реализовано: «несколько ботов → несколько сред»)
-
-**Реализовано (2026-10-13).** Один процесс шлюза обслуживает **N ботов**, каждый бот привязан к своей среде
-Synth. Конфигурация — файл `tenants.json` (`--tenants-file` > env `GATEWAY_TENANTS_FILE` > `secrets/tenants.json`):
-на тенанта `{ id, botToken, synthUrl, serviceKey|apiKey|oidc, allowlist?, proxyUrl?, parseMode?, … }`. Рантайм
-фан-аутится: на тенанта — свой `TelegramClient`/`AuthTokenProvider`/`SynthEventsClient`/`GatewayStore`/`Poller`/
-`AgentWatcher`; состояние изолировано каталогом (`data/tenants/<id>/…`; legacy `default` — корень, без миграции);
-`GET /health` отдаёт агрегат + разбивку по тенантам. Топология «**один бот = один поллер**» сохраняется (у каждого
-тенанта свой токен), поэтому `getUpdates`-конфликта (`409`) нет. Обратная совместимость: без файла — один тенант
-`default` из env/CLI. MCP-часть остаётся однотенантной.
-
-**Альтернатива (не выбрана):** **«один бот → несколько инстансов/тенантов»** через таблицу маршрутов
-(`chatKey`/`userId`/источник → `{ synthUrl, creds, tenant }`) — один бот обслуживает разные контуры. Родственные
-темы: [AD-055](./ad-055-instance-exchange.md) (обмен между инстансами) и [AD-081](./ad-081-hybrid-policy-leak-protection.md).
-
-##### Отказоустойчивость: HA через leader election (решение, не реализовано)
-
-**Почему нельзя N поллеров.** Telegram `getUpdates` (long-polling) допускает **одного** потребителя на бота:
-второй поллер получает **`409 Conflict`**. Значит, горизонтально масштабировать приём нельзя «в лоб».
-
-**Решение** — 2+ реплики, из которых **поллит только лидер** (выборы через Kubernetes **Lease**); остальные —
-**hot standby** с быстрым failover. Требования к реализации:
-
-- **общий стейт** реплик (Redis/Postgres либо PVC `ReadWriteMany` вместо текущего `ReadWriteOnce`);
-- **атомарный дедуп отправки** — сейчас `hasSent → markSent` в `sent.json` не атомарен между процессами;
-- **лидер-гейт** для поллинга (lease + graceful stop/start).
-
-**MCP-часть шлюза stateless** — масштабируется свободно, лидера не требует.
-
-Альтернатива — **webhook-режим Telegram** (stateless HTTP за ingress): рассмотрена и **отложена**.
-
-_Ориентир для реализации:_ в шедулере ядра ([AD-051](./ad-051-scheduler-pipelines.md)) уже есть семы
-leader election и file-based реализации (default OFF, K8s Lease — будущее) — шлюз может повторить тот же подход.
-
-##### Текущая гарантия — singleton
-
-Сейчас корректность держится на **`replicaCount: 1`** (один поллер) и **`strategy: Recreate`**. В деплое
-`synth-deploy` (K3s-дельта) `strategy: Recreate` задан.
-
-**Известный пробел/риск:** в самом addon-чарте `charts/synth-gateway-telegram` **`strategy` не задан**
-(в `templates/deployment.yaml` есть только `replicas: {{ .Values.replicaCount }}`, `revisionHistoryLimit: 2`
-без блока `strategy`). При ручном увеличении `replicaCount > 1` без lease это даёт **`409 Conflict`** на
-`getUpdates` и **двойную отправку** (неатомарный дедуп `sent.json`). До реализации HA чарт должен оставаться
-`replicaCount: 1`.
-
-##### Адаптеры каналов (отложенный путь универсальности)
-
-Универсальность «платформа каналов» (общий интерфейс коннектора `send`/`receive`/`edit`/`attach` + ядро
-платформы store/health/watcher/auth/allowlist/claim) с адаптерами каналов (Telegram первый → Max/VK/Slack/Matrix)
-унаследована из [AD-087](./ad-087-messenger-gateway-merged.md). **Не выбранный сейчас путь** — фиксируется как
-задел, не реализуется.
-
-### Поглощение AD-087
-
-**AD-087 «Gateway для подключения к мессенджерам» признан поглощённым этим AD.** Общий шаблон внешних
-add-on'ов шире, чем один gateway, поэтому тема перенесена сюда (раздел 4 + «Первый частный случай»).
-Файл [AD-087](./ad-087-messenger-gateway-merged.md) оставлен как **указатель** (tombstone): адаптеры/коннекторы,
-binding чат↔сессия, webhook/long-polling, identity, дедуп и вложения унаследованы и развиваются здесь.
+npm-плагин кладёт `synth.pack` в `files` пакета (канонический манифест — файл `synth.pack`, а не поле в
+`package.json`; см. [AD-090](./ad-090-extension-api.md) §3). Реестр/индекс/trust/install-policy/провенанс —
+**единые** для всех классов и типов ([AD-068](./ad-068-skills-agents-registry.md)).
 
 ### Что уже есть
 
@@ -217,13 +165,14 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 - **Flavor-образы** [AD-082](./ad-082-full-images-deployment.md) — уже предтеча «editions» для образов
   (`slim/core/dev/devops/browser/full`, alpine+debian); не реализовано.
 - **Контент-платформа** [AD-046](./ad-046-skills-and-slash-commands.md)/[AD-068](./ad-068-skills-agents-registry.md) —
-  скиллы/agent-packs, реестр, trust/install-policy/провенанс, `skill-creator`; плагины/editions/add-on'ы
+  скиллы/agent-packs, реестр, trust/install-policy/провенанс, `skill-creator`; плагины/editions/add-on'ы/шлюзы
   логично наследуют trust/guard-модель (внешние каталоги по умолчанию выключены).
 - **Dogfooding-скиллы** — локальные `.opencode/skills/` (`synth-dev`, `synth-build-publish`, `synth-release`,
   `synth-agents-md`, `synth-dev-cycle`); скилл доработки делается в этом же формате, в перспективе — builtin
   семейства `skill-creator`.
-- **Первый внешний сервис уже есть** — `synth-media` (отдельный репозиторий; Telegram-MCP + бот + приём
-  пересылок), де-факто прототип add-on'а; общего шаблона пока нет.
+- **Первые внешние сервисы уже есть** — `synth-media` (отдельный репозиторий; Telegram-MCP + бот + приём
+  пересылок) и эталонный **Telegram-шлюз** `addons/synth-gateway-telegram` ([AD-087](./ad-087-gateways.md));
+  общий шаблон add-on'а пока не оформлен как поставка.
 - **Инфраструктура-опора:** config [AD-023](./ad-023-configuration.md), permissions [AD-029](./ad-029-granular-permissions.md),
   API v2 [AD-017](./ad-017-api-v2-hono.md), события [AD-024](./ad-024-eventhub-transport.md),
   guard [AD-036](./ad-036-llm-gateway.md), home/хранение [AD-005](./ad-005-json-storage.md)/[AD-045](./ad-045-hybrid-server-profiles.md)/[AD-079](./ad-079-local-home-independent-instances.md),
@@ -237,24 +186,26 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 ### Зависимости
 
 [AD-030](./ad-030-hooks-agent-events.md) (hooks/Plugin SDK — фундамент), [AD-038](./ad-038-npm-packages.md) (npm),
-[AD-068](./ad-068-skills-agents-registry.md) (trust/guard/каталог/провенанс), [AD-046](./ad-046-skills-and-slash-commands.md)
-(скиллы/команды/`skill-creator`), [AD-082](./ad-082-full-images-deployment.md) (flavor-образы),
-[AD-089](./ad-089-external-events-automation.md) (Event/Binding/Router для событийных add-on'ов),
-[AD-087](./ad-087-messenger-gateway-merged.md) (tombstone, поглощён),
+[AD-068](./ad-068-skills-agents-registry.md) (trust/guard/каталог/провенанс + контент-паки/`synth.pack`),
+[AD-046](./ad-046-skills-and-slash-commands.md) (скиллы/команды/`skill-creator`),
+[AD-082](./ad-082-full-images-deployment.md) (flavor-образы),
+[AD-089](./ad-089-external-events-automation.md) (Event/Binding/Router для событийных add-on'ов и шлюзов),
+[AD-087](./ad-087-gateways.md) (класс Gateway — шлюзы/Telegram, HA),
+[AD-090](./ad-090-extension-api.md) (Extension API v1, манифест `synth.pack`, классы),
 [AD-023](./ad-023-configuration.md) (конфиг), [AD-029](./ad-029-granular-permissions.md) (permissions),
 [AD-036](./ad-036-llm-gateway.md)/[AD-037](./ad-037-commit-security-step.md) (безопасность),
 [AD-005](./ad-005-json-storage.md)/[AD-045](./ad-045-hybrid-server-profiles.md)/[AD-079](./ad-079-local-home-independent-instances.md) (хранение/home),
 [AD-017](./ad-017-api-v2-hono.md)/[AD-024](./ad-024-eventhub-transport.md) (API/события),
 [AD-042](./ad-042-hybrid-mode.md)/[AD-080](./ad-080-managed-hybrid-modes.md)/[AD-081](./ad-081-hybrid-policy-leak-protection.md) (гибрид/политики),
-[AD-088](./ad-088-http-proxy.md) (egress add-on'ов), D3 (self-help/dogfooding), D21/D22 (гайдлайны и стандарты).
+[AD-088](./ad-088-http-proxy.md) (egress add-on'ов и шлюзов), D3 (self-help/dogfooding), D21/D22 (гайдлайны и стандарты).
 
 ## Статус реализации в коде
 
-**Не реализовано, кода нет (концепт/проект).**
+**Extension API / editions / contribution flow — не реализованы (концепт/проект); Telegram-шлюз (класс Gateway) — реализован ([AD-087](./ad-087-gateways.md)).**
 
 Проверено по репозиторию (grep по `packages/**`, исключая `dist/` и `node_modules/`):
 
-- **Extension API v1** (манифест `synth.plugin`, фасад `@itphx/synth-plugin` + disposer-модель, загрузчик,
+- **Extension API v1** (манифест `synth.pack`, фасад `@itphx/synth-plugin` + disposer-модель, загрузчик,
   trust/scan, install/activate, `plugins.lock.json`/`plugins.json`) — **специфицирован в [AD-090](./ad-090-extension-api.md)
   и не реализован**.
 - Хуки/hook-шина [AD-030](./ad-030-hooks-agent-events.md) реализованы; Plugin SDK / загрузка плагинов
@@ -263,18 +214,20 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 - [AD-082](./ad-082-full-images-deployment.md) (flavor-образы) — не реализовано.
 - [AD-068](./ad-068-skills-agents-registry.md) (реестр/каталог контента) — не реализовано; [AD-046](./ad-046-skills-and-slash-commands.md)
   реализован частично (скиллы/команды есть, backend-админка каталога — нет).
+- **Telegram-шлюз** (`addons/synth-gateway-telegram`) — реализован и мультитенантен (см. [AD-087](./ad-087-gateways.md)).
 
 **Что уже можно переиспользовать:**
 
 - npm-пакеты и `scripts/{build,publish,version-bump}.sh` ([AD-038](./ad-038-npm-packages.md)) — реализованы.
 - Механизм скиллов и slash-команд ([AD-046](./ad-046-skills-and-slash-commands.md)) — реализован (формат `SKILL.md`,
   discovery, тул `skill`, scope-API).
-- Внешний `synth-media` (отдельный репозиторий, Telegram-MCP + бот) — де-факто существующий add-on.
+- Внешние сервисы: `synth-media` (Telegram-MCP + бот) и Telegram-шлюз ([AD-087](./ad-087-gateways.md)) — де-факто
+  существующие add-on/gateway.
 
 ## Открытые вопросы
 
 - ~~**Декомпозиция:** один AD или несколько~~ — **закрыто:** Extension API v1 выделен в отдельный [AD-090](./ad-090-extension-api.md)
-  (AD-086 остаётся зонтиком: плагины/editions/contribution/add-on'ы).
+  (AD-086 остаётся зонтиком: плагины/gateway/editions/contribution/add-on'ы/контент-паки).
 - ~~**Реестр:** переиспользовать каталог [AD-068](./ad-068-skills-agents-registry.md) или отдельный~~ — **закрыто:**
   переиспользуется единая trust/guard-инфраструктура каталога [AD-068](./ad-068-skills-agents-registry.md) ([AD-090](./ad-090-extension-api.md)).
 - ~~**Исполнение стороннего кода:** JS-плагины в процессе ядра — какой sandbox~~ — **закрыто:** bundle-only +
@@ -291,29 +244,22 @@ binding чат↔сессия, webhook/long-polling, identity, дедуп и в�
 - **Скилл доработки:** builtin (в поставке) vs official-реестр; нужны ли спец-тулы (git/fork/PR/CI-статус).
 - **Шаблон add-on'а:** что именно в общем скелете (язык, CI, формат контракта интеграции), как проверять
   совместимость версий с Synth.
-- ~~**Транспорт приёма и топология шлюза:** webhook vs long-polling; сколько инстансов на бота~~ —
-  **закрыто (первый случай, Telegram):** транспорт — long-polling (`getUpdates`), топология — «один бот — один
-  инстанс шлюза». Принципиальное ограничение: `getUpdates` допускает **одного** потребителя на бота
-  (второй → `409 Conflict`), поэтому HA — только через leader election, а мультитенантность — маршрутизацией
-  внутри одного шлюза (разделы выше).
-- **Совместное использование стейта HA-шлюза:** Redis vs RWX-PVC vs Postgres — чем синхронизировать
-  `offset`/`sent`/дедуп между репликами (зависит от [AD-032](./ad-032-history-storage-postgresql.md)); как
-  сделать дедуп отправки атомарным между процессами.
-- **Реализация HA:** K8s Lease для шлюза (лидер-гейт поллинга, hot standby, failover) и судьба `strategy`
-  в addon-чарте (сейчас не задан — риск при случайном `replicaCount > 1`).
+
+_Вопросы шлюза (топология приёма, HA-стейт, реализация leader election, судьба `strategy`, webhook-транспорт) —
+[AD-087](./ad-087-gateways.md) §6._
 
 ## Связи
 
-- [AD-090](./ad-090-extension-api.md) — Extension API v1: манифест, загрузка, install/activate, trust/scan, режимы (спецификация плагинов; вынесена из AD-086).
+- [AD-090](./ad-090-extension-api.md) — Extension API v1: терминология 4 классов, манифест `synth.pack`, загрузка, install/activate, trust/scan, режимы (спецификация плагинов; вынесена из AD-086).
+- [AD-087](./ad-087-gateways.md) — класс «Шлюзы (gateways)»: контракт, Telegram-шлюз, мультитенантность, HA.
 - [AD-030](./ad-030-hooks-agent-events.md) — hooks/Plugin SDK: фундамент Extension API и событийных add-on'ов.
 - [AD-038](./ad-038-npm-packages.md) — npm-пакеты: enabler editions и распространения плагинов.
-- [AD-068](./ad-068-skills-agents-registry.md) — переиспользуемая инфраструктура trust/guard/каталога/провенанса.
+- [AD-068](./ad-068-skills-agents-registry.md) — переиспользуемая инфраструктура trust/guard/каталога/провенанса и единый манифест контент-паков `synth.pack`.
 - [AD-046](./ad-046-skills-and-slash-commands.md) — механизм скиллов; агент-паки и `skill-creator`.
 - [AD-082](./ad-082-full-images-deployment.md) — flavor-образы как предтеча editions и образов add-on'ов.
-- [AD-089](./ad-089-external-events-automation.md) — Event/Binding/Router: как add-on'ы (gateway) приносят события в Synth.
-- [AD-087](./ad-087-messenger-gateway-merged.md) — поглощённый каталог «Gateway для мессенджеров» (указатель).
+- [AD-089](./ad-089-external-events-automation.md) — Event/Binding/Router: как шлюзы и add-on'ы приносят события в Synth.
 - [AD-042](./ad-042-hybrid-mode.md), [AD-080](./ad-080-managed-hybrid-modes.md), [AD-081](./ad-081-hybrid-policy-leak-protection.md) — гибрид и политики для сторонних расширений.
 - [AD-055](./ad-055-instance-exchange.md) — обмен между инстансами: родственная тема мультитенантности шлюза (один бот → несколько инстансов/тенантов).
 - [AD-032](./ad-032-history-storage-postgresql.md) — PostgreSQL: возможная опора общего стейта HA-шлюза (мультирепличный `offset`/дедуп).
-- [AD-088](./ad-088-http-proxy.md) — egress внешних add-on сервисов.
+- [AD-088](./ad-088-http-proxy.md) — egress внешних add-on/gateway сервисов.
 - `synth-media` — существующий внешний сервис-демонстратор (прототип add-on'а).
