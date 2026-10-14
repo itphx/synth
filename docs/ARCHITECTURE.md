@@ -6,7 +6,7 @@
 
 ## Компоненты
 
-Synth состоит из семи пакетов в монорепозитории:
+Synth состоит из шести пакетов в монорепозитории:
 
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
@@ -14,7 +14,6 @@ Synth состоит из семи пакетов в монорепозитор�
 | **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, CLI, HTTP API v2 | TypeScript, Hono |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
-| **@itphx/synth-runner** | Gateway между бэкендом и движками (opencode, cline, synth-core) | TypeScript, Node.js |
 | **@itphx/synth-sdk** | Типизированный клиент публичного API (AD-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
 | **@itphx/synth** | Публикуемая тонкая CLI-обёртка (`bin: synth`) над core/ui/shared (AD-038). Не бандлит core, не копирует ассеты | TypeScript, commander |
 
@@ -33,12 +32,6 @@ flowchart TB
     subgraph Server["Серверная часть"]
         synth_backend["@itphx/synth-backend — Hono API Hub"]
         synth_core["@itphx/synth-core — автономный движок"]
-    end
-
-    subgraph Runner["Оркестрация движков"]
-        synth_runner["@itphx/synth-runner — Gateway"]
-        opencode["opencode CLI"]
-        cline["cline CLI"]
     end
 
     subgraph CLI["Публикуемый CLI"]
@@ -66,13 +59,6 @@ flowchart TB
 
     synth_cli -->|serve/chat/config| synth_core
 
-    synth_backend -->|WebSocket control| synth_runner
-    synth_core -->|in-process| synth_runner
-
-    synth_runner --> opencode
-    synth_runner --> cline
-    synth_runner -->|LLM Proxy| synth_backend
-
     synth_core --> ollama
     synth_core --> openai
     synth_core --> anthropic
@@ -91,8 +77,6 @@ flowchart TB
 
 ```
 synth-ui (браузеры сотрудников) ←→ synth-backend (:5000)
-                                          ↕
-                               synth-runner (K8s поды) ←→ opencode / cline
 ```
 
 - Единый источник правды для сессий и истории
@@ -111,20 +95,12 @@ synth-ui (localhost) ←→ synth-core (:4300)
 - Прямой доступ к файловой системе
 - Не требует бэкенда, Keycloak, Kubernetes
 
-### Локальный + внешние движки
+### Локальный + внешние движки (планируется)
 
-```
-synth-core ←→ synth-runner (in-process) ←→ opencode / cline
-```
-
-- In-process импорт @itphx/synth-runner при запуске core с флагом `--runner`
-- LLM-запросы opencode/cline проксируются через core
-
-Запуск — через CLI ядра (у публичной обёртки `synth` флага `--runner` нет):
-
-```bash
-node packages/core/dist/main.js serve --api-key <key> --runner
-```
+Внешние движки (opencode/cline) через встроенный Runner-мост — **не реализовано**
+(план: AD-018, AD-050). В ядре остаётся плумбинг: флаг `serve --runner` и секция
+конфига `runner`, но адаптеров движков и маршрутизации нет; фактическое исполнение
+идёт собственным движком `synth`.
 
 ### Гибридный (локально + корпоративный сервер)
 
@@ -210,28 +186,15 @@ synth/
     ├── core/     → @itphx/synth-core
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
-    ├── runner/   → @itphx/synth-runner
     ├── sdk/      → @itphx/synth-sdk (клиент публичного API, AD-052)
     └── synth/    → @itphx/synth (тонкая CLI-обёртка, bin: synth)
 ```
 
-## Модель «Runner»
+## Модель «Runner» (планируется)
 
-Раннер — мост между бэкендом и движками:
-
-```
-synth-backend ◄── WebSocket (control) ──► synth-runner ◄── HTTP API ──► движок
-                                           │
-                                           ├── opencode (serve, :4100)
-                                           ├── cline (headless, :4200)
-                                           └── synth-core (serve, :4300)
-```
-
-**Два режима:**
-- **Локальный:** пользователь запускает на своей машине. Прямой доступ к ФС.
-- **Облачный:** K8s под, создаётся бэкендом при необходимости. Per-user модель.
-
-**LLM Proxy:** раннер поднимает локальный OpenAI-совместимый эндпоинт (`localhost:9090/v1`). Движки думают, что общаются с OpenAI. Раннер пробрасывает запросы на бэкенд. Бэкенд аудирует и маршрутизирует на реального провайдера.
+Мост между бэкендом и внешними движками (opencode/cline) — **не реализован**
+(план: AD-018, AD-050). Задуманный раннер поднимает LLM Proxy и маршрутизирует
+запросы в выбранный движок; движки stateless (история — на бэкенде).
 
 ## Stateless модель движка
 

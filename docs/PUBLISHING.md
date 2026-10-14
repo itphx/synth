@@ -4,13 +4,13 @@
 
 ## Порядок публикации пакетов
 
-Публикуются **все 7 пакетов** в строгом порядке зависимостей:
+Публикуются **все 6 пакетов** в строгом порядке зависимостей:
 
 ```
-shared → core → ui → backend → runner → sdk → synth
+shared → core → ui → backend → sdk → synth
 ```
 
-Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-backend`/`@itphx/synth-ui`/`@itphx/synth-runner` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (AD-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (AD-038).
+Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (AD-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (AD-038).
 
 ## `pnpm publish` вместо `npm publish`
 
@@ -102,7 +102,7 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 
 Обновляет:
 1. `packages/shared/src/version.ts` — константу `SYNTH_VERSION`
-2. `packages/*/package.json` — поле `version` во всех 7 пакетах
+2. `packages/*/package.json` — поле `version` во всех 6 пакетах
 
 Единый источник версии — `SYNTH_VERSION` в `packages/shared/src/version.ts` (импортируется из `@itphx/synth-shared`).
 
@@ -166,7 +166,7 @@ Workflow-файлы: `.gitverse/workflows/ci.yaml` (push/PR: typecheck, lint, т
 
 ## Важно: поле `repository` в package.json
 
-Для публикации в GitVerse Package Registry поле `repository` в `package.json` **должно отсутствовать**: GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 «no permission». Во всех 7 пакетах поле `repository` удалено — не добавляйте его обратно.
+Для публикации в GitVerse Package Registry поле `repository` в `package.json` **должно отсутствовать**: GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 «no permission». Во всех 6 пакетах поле `repository` удалено — не добавляйте его обратно.
 
 ## Локальная проверка перед пушем
 

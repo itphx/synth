@@ -93,8 +93,7 @@ CLI > env > yaml > defaults, [AD-023](./ad-023-configuration.md)).
   UI-индикатора контура нет; секции `contour` в конфиге нет.
 - Единственное совпадение на «Kafka» — строка-пример в тесте micro-классификатора
   (`packages/core/src/engine/router/micro/index.test.ts`), к Contour Bridge отношения не имеет.
-- База Runner — заглушка (`packages/runner/src/main.ts`, 37 строк, `TODO: реализация раннера`,
-  [AD-050](./ad-050-external-engines-runner.md)).
+- Базы Runner нет — компонент не реализован (план: [AD-050](./ad-050-external-engines-runner.md)).
 
 ## Открытые вопросы
 

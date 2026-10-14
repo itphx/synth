@@ -180,7 +180,7 @@ npm-плагин кладёт `synth.pack` в `files` пакета (канони
   промпт [AD-070](./ad-070-system-prompt-composer.md), egress [AD-088](./ad-088-http-proxy.md).
 - **Лицензия MIT:** корневой `synth/LICENSE` (англ.) + `synth/LICENSE.ru.md` (рус.; приоритет — у англ.),
   правообладатель `Дмитрий Рамазанов <ramazanov_dv@mail.ru>`; `license: MIT` во всех `package.json`
-  (root + 7 пакетов). В npm-пакеты оба файла материализуются при публикации (`scripts/publish.sh`,
+  (root + 6 пакетов). В npm-пакеты оба файла материализуются при публикации (`scripts/publish.sh`,
   copy-on-publish + `.gitignore`).
 
 ### Зависимости

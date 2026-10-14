@@ -21,16 +21,16 @@ description: Сборка и публикация Synth: build.sh, publish.sh, v
 
 При bump-е версии обновляются:
 1. `packages/shared/src/version.ts` — константа `SYNTH_VERSION`
-2. `packages/*/package.json` — поле `version` во всех 7 пакетах
+2. `packages/*/package.json` — поле `version` во всех 6 пакетах
 
 Все hardcoded строки версии в коде заменены на импорт `SYNTH_VERSION` из `@itphx/synth-shared`.
 
 ## Публикация npm
 
-Публикуются **все 7 пакетов** монорепозитория в строгом порядке зависимостей:
+Публикуются **все 6 пакетов** монорепозитория в строгом порядке зависимостей:
 
 ```
-shared → core → ui → backend → runner → sdk → synth
+shared → core → ui → backend → sdk → synth
 ```
 
 Порядок задан иерархией зависимостей: `sdk` (`@itphx/synth-sdk`, клиент публичного API, AD-052) —

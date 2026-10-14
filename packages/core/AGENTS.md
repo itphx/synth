@@ -9,11 +9,11 @@
 очередь, контекст, LLM, MCP, permissions, безопасность, хранилище, HTTP API v2
 (Hono), гибридный режим, CLI.
 
-- **backend импортирует core; core не импортирует backend/ui/runner** — зависимости
+- **backend импортирует core; core не импортирует backend/ui** — зависимости
   идут только «вниз»: `shared → core → backend/ui`.
 - Режимы: **standalone** (`synth serve`/`synth chat`, свой HTTP API + локальный
   `FileStore`, один API-ключ); **managed** (core как библиотека внутри backend:
-  OIDC/RBAC/runner — на стороне backend; `createStandaloneApp` поднимает
+  OIDC/RBAC — на стороне backend; `createStandaloneApp` поднимает
   `@itphx/synth`); **hybrid** (локальный core + удалённый backend).
 - `src/main.ts` — точка входа CLI (внутренний инструмент: `serve`, `chat`,
   `connect`, `project publish|fork`, `config`, `session`, `audit`, `update`).
@@ -442,7 +442,7 @@
 
 ## Чего не делать
 
-- Не импортировать `backend`/`ui`/`runner` из core (обратное направление).
+- Не импортировать `backend`/`ui` из core (обратное направление).
 - Не вызывать LLM мимо `GatewayProvider` (AD-036).
 - Не писать в `$SYNTH_DATA_DIR` в обход `FileStore`/`JsonStore` (AD-005).
 - Не хардкодить permission-проверки в тулах (AD-025/028/029).

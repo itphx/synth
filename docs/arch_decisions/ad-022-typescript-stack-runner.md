@@ -5,5 +5,8 @@
 
 - **@itphx/synth-core** — автономное ядро: сессии, очередь, LLM-провайдеры, MCP, HTTP API v2, CLI
 - **@itphx/synth-backend** — облачный API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
-- **@itphx/synth-runner** — мост между бэкендом и движками (opencode, cline, synth-core)
 - **@itphx/synth-ui** — React 19 SPA + админка
+
+> **Runner-мост** (внешние движки opencode/cline через отдельный компонент) — **не реализован**
+> (план: [AD-018](./ad-018-session-engine-selection.md), [AD-050](./ad-050-external-engines-runner.md));
+> отдельного npm-пакета раннера в репозитории нет.

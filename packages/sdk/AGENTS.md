@@ -7,9 +7,9 @@
 ## Роль и границы
 
 `@itphx/synth-sdk` — **публикуемый** типизированный клиент **публичного** API
-Synth (AD-052, этап III, часть 2). Тонкий пакет по образцу `runner`/`synth`.
+Synth (AD-052, этап III, часть 2). Тонкий пакет по образцу `synth`.
 
-- Зависит только от `@itphx/synth-shared` — **не** тянет core/backend/ui/runner;
+- Зависит только от `@itphx/synth-shared` — **не** тянет core/backend/ui;
   HTTP-контракт описан в `packages/core/src/server/openapi/public-openapi.ts`
   (источник спеки), SDK его не дублирует логикой.
 - **Runtime-agnostic**: глобальный `fetch` (инъекция — `options.fetch`),
@@ -39,5 +39,5 @@ bindings/keys/routes), `sessions` (CRUD + prompt/messages/status), `schedules`
 - Сборка: `pnpm --filter @itphx/synth-sdk build` (`tsc -p tsconfig.build.json`);
   перед этим нужен собранный `@itphx/synth-shared` (типы из `dist`).
 - Публикация — вместе с остальными пакетами (`scripts/publish-packages.sh`,
-  порядок `… runner → sdk → synth`); поле `repository` в `package.json` не
+  порядок `… core → sdk → synth`); поле `repository` в `package.json` не
   добавлять (GitVerse → 403, AD-038).

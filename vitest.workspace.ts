@@ -4,6 +4,5 @@ export default defineWorkspace([
   'packages/shared',
   'packages/core',
   'packages/backend',
-  'packages/runner',
   'packages/ui',
 ]);

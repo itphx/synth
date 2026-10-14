@@ -100,8 +100,8 @@
 - **Не путать:** `MicroPipeline` (`packages/core/src/engine/router/micro/`) и `tool_call.loop` /
   `tool.doom_loop` — это внутренние механизмы (micro-слой [AD-035](./ad-035-micro-model-first.md) и
   защита от повторных вызовов), не outer-loop.
-- `packages/runner/src/main.ts` — заглушка (37 строк, `TODO: реализация раннера`), если шаг будет
-  исполняться через Runner ([AD-050](./ad-050-external-engines-runner.md)).
+- Отдельного раннера (Runner, [AD-050](./ad-050-external-engines-runner.md)) нет; если шаг будет
+  исполняться через внешний движок, его предстоит реализовать.
 
 ## Открытые вопросы
 

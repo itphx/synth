@@ -44,8 +44,6 @@ description: Запуск и настройка dev-окружения Synth: de
 | synth-backend | 5000 | `SYNTH_PORT` |
 | synth-ui | 5002 | `VITE_PORT` |
 | synth-core | 4300 | `SYNTH_CORE_PORT` |
-| synth-runner | 5200 | `SYNTH_RUNNER_PORT` |
-| LLM Proxy (runner) | 9090 | — |
 | opencode (движок) | 4100 | — |
 | cline (движок) | 4200 | — |
 

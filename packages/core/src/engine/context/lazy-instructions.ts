@@ -3,7 +3,7 @@
  *
  * Инструкции ближайшего каталога подклеиваются **в результат file/shell-тула**
  * (не в system prompt — сохраняем prompt-cache), с пометкой
- * `[Subdirectory context discovered: ./packages/runner/AGENTS.md]`.
+ * `[Subdirectory context discovered: ./packages/core/AGENTS.md]`.
  *
  * Правила:
  * - триггер — успешные `read_file`/`grep_files`/`glob`/`list_directory`/

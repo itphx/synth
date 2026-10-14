@@ -43,7 +43,7 @@ pnpm lint
 - `SYNTH_AUTH_DEBUG=true` — режим отладки с тестовыми пользователями
 - `SYNTH_DATA_DIR=${SYNTH_DATA_DIR:-<repo>/../data}` — каталог данных вне репозитория; значение по умолчанию — соседний с монорепо каталог `data/`, переопределяется переменной окружения
 - `SYNTH_LOG_DIR=$ROOT/tmp` — каталог логов (эндпоинт `/api/v2/logs`)
-- `SYNTH_PORT=5000`, `SYNTH_CORE_PORT=4300`, `SYNTH_RUNNER_PORT=5200`, `VITE_PORT=5002`
+- `SYNTH_PORT=5000`, `SYNTH_CORE_PORT=4300`, `VITE_PORT=5002`
 - `SYNTH_HOST=0.0.0.0` — хост для всех сервисов
 
 ### Режим отладки auth
@@ -169,7 +169,6 @@ synth/
 │   ├── core/     → @itphx/synth-core      # Движок, CLI, HTTP API v2, MCP, FileStore
 │   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + админка (Vite)
-│   ├── runner/   → @itphx/synth-runner    # Gateway движков (opencode, cline); in-process из core
 │   ├── sdk/      → @itphx/synth-sdk       # Типизированный клиент публичного API (AD-052)
 │   └── synth/    → @itphx/synth           # Тонкая CLI-обёртка (bin: synth), не бандлит core
 ├── scripts/
@@ -178,7 +177,7 @@ synth/
 │   ├── standalone.sh           # Standalone из собранных npm-пакетов
 │   ├── hybrid.sh               # Локальный core + удалённый backend (гибрид)
 │   ├── publish.sh              # Публикация в npm
-│   ├── publish-packages.sh     # Идемпотентная публикация 7 пакетов (release)
+│   ├── publish-packages.sh     # Идемпотентная публикация 6 пакетов (release)
 │   ├── version-bump.sh         # Bump версии
 │   ├── changelog.sh            # Генерация CHANGELOG (для CI release)
 │   ├── wait-npm-version.sh     # Ожидание доступности версии в npm (release)

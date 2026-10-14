@@ -26,7 +26,6 @@
        ↑
 ┌──────┴──────┐
 @itphx/synth-backend │ @itphx/synth-ui   ←  core и ui владеют своими ассетами
-@itphx/synth-runner (in-process)
        ↑
 @itphx/synth   ←  тонкая обёртка: dependencies = core + ui + shared
                   bin: synth → dist/cli.js (external: core/ui/shared)
@@ -50,7 +49,7 @@
 **Порядок публикации** (строгая иерархия зависимостей):
 
 ```
-shared → core → ui → backend → runner → synth
+shared → core → ui → backend → sdk → synth
 ```
 
 **`pnpm publish` вместо `npm publish`:** `npm publish` не переписывает

@@ -34,13 +34,13 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
 ```
 pnpm install --frozen-lockfile
 pnpm --filter @itphx/synth-shared build    # обязательно перед typecheck!
-pnpm --filter @itphx/synth-core build      # нужно для backend и runner
+pnpm --filter @itphx/synth-core build      # нужно для backend
 pnpm typecheck                       # рекурсивно по всем пакетам
 pnpm lint
 pnpm test
 ```
 
-Без сборки `shared` и `core` перед `typecheck` — `@itphx/synth-runner` и `@itphx/synth-backend` не найдут типы.
+Без сборки `shared` и `core` перед `typecheck` — `@itphx/synth-backend` и остальные пакеты не найдут типы.
 
 ## Запуск релиза
 

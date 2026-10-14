@@ -200,7 +200,7 @@ repo/
 
 ### 4.1. Зачем
 
-Агент, читающий `packages/runner/src/main.ts`, должен знать локальные правила `packages/runner/AGENTS.md` — но не тащить их в системный промпт заранее (иначе разрастание + потеря prompt-cache).
+Агент, читающий `packages/core/src/main.ts`, должен знать локальные правила `packages/core/AGENTS.md` — но не тащить их в системный промпт заранее (иначе разрастание + потеря prompt-cache).
 
 ### 4.2. Триггеры
 
@@ -219,7 +219,7 @@ repo/
 6. Найденный контент подклеивается **в результат тула** (не в system prompt), с пометкой:
 
 ```
-[Subdirectory context discovered: ./packages/runner/AGENTS.md]
+[Subdirectory context discovered: ./packages/core/AGENTS.md]
 <содержимое>
 ```
 

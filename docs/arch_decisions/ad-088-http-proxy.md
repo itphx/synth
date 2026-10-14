@@ -97,7 +97,7 @@ runtime-настройкой — в открытых вопросах.
 - Env `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`NODE_EXTRA_CA_CERTS` не читается.
 - В `packages/shared/src/config/types.ts` секции `network`/`proxy` нет. Есть только:
   - `runner.proxyPort` (дефолт 9090, `types.ts:87`, `defaults.ts:40`) — **внутренний LLM Proxy раннера**
-    (`packages/runner/src/main.ts`), не HTTP-прокси;
+    (план: [AD-050](./ad-050-external-engines-runner.md)), не HTTP-прокси;
   - `mcp.networkPolicy` (AD-071 §2.3.1, `types.ts:158`) — политика сетевого доступа MCP-серверов
     (SSRF/приватные CIDR), тоже **не egress-прокси**.
 - Частный случай уже реализован **вне** `synth/` — в репозитории `synth-media` (см. «Практическое подтверждение»).
