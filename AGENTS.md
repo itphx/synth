@@ -31,7 +31,7 @@
 
 ## Карта репозитория
 
-Монорепозиторий `synth/` (pnpm workspaces), единый стек TypeScript. Подробности по пакету — в `packages/<pkg>/AGENTS.md` (есть у `core`, `backend`, `ui`, `shared`; короткий — у `sdk`; у тонких `runner` и `synth` — нет).
+Монорепозиторий `synth/` (pnpm workspaces), единый стек TypeScript. Подробности по пакету — в `packages/<pkg>/AGENTS.md` (есть у `core`, `backend`, `ui`, `shared`; короткий — у `sdk`; у тонкой `synth` — нет).
 
 ```text
 synth/
@@ -40,7 +40,6 @@ synth/
 │   ├── core/      @itphx/synth-core     # Ядро: сессии, очередь, LLM, MCP, FileStore, API v2 (Hono), CLI
 │   ├── backend/   @itphx/synth-backend  # Hono API Hub: OIDC, RBAC, Runner Registry, LLM Proxy
 │   ├── ui/        @itphx/synth-ui       # React 19 SPA + админка (Vite)
-│   ├── runner/    @itphx/synth-runner   # Gateway: адаптеры opencode/cline, LLM Proxy (in-process из core)
 │   ├── sdk/       @itphx/synth-sdk      # Типизированный клиент публичного API (AD-052)
 │   └── synth/     @itphx/synth          # Публикуемая CLI-обёртка (bin: synth)
 ├── pnpm-workspace.yaml   tsconfig.base.json   eslint.config.js   .prettierrc
@@ -50,7 +49,7 @@ docs/arch_decisions/   # AD (см. индекс)
 tmp/                   # Временные файлы. Использовать его, а не /tmp в корне ФС. Не коммитится
 ```
 
-Все 7 пакетов публикуются в npm; `@itphx/synth` — тонкая CLI-обёртка над core/ui/shared: не бандлит core в `cli.js` (external) и не копирует ассеты — всё резолвится из npm-зависимостей (AD-038). `@itphx/synth-sdk` — самостоятельный клиент публичного API (зависит только от shared).
+Все 6 пакетов публикуются в npm; `@itphx/synth` — тонкая CLI-обёртка над core/ui/shared: не бандлит core в `cli.js` (external) и не копирует ассеты — всё резолвится из npm-зависимостей (AD-038). `@itphx/synth-sdk` — самостоятельный клиент публичного API (зависит только от shared).
 
 ### Слои зависимостей
 
@@ -61,7 +60,6 @@ tmp/                   # Временные файлы. Использовать
        ↑
 ┌──────┴──────┐
 @itphx/synth-backend │ @itphx/synth-ui     ←  импортируют core
-@itphx/synth-runner (in-process)     ←  опционально импортируется в core
        ↑
 @itphx/synth-sdk   ←  клиент публичного API: shared (AD-052)
 @itphx/synth   ←  тонкая CLI-обёртка: core + ui + shared (npm-потребители)
@@ -95,8 +93,6 @@ pnpm clean                  # очистка dist/
 | synth-backend | 5000 | `SYNTH_PORT` |
 | synth-ui | 5002 | `VITE_PORT` |
 | synth-core | 4300 | `SYNTH_CORE_PORT` |
-| synth-runner | 5200 | `SYNTH_RUNNER_PORT` |
-| LLM Proxy (runner) | 9090 | — |
 | opencode (движок) | 4100 | — |
 | cline (движок) | 4200 | — |
 
@@ -364,9 +360,9 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 5. Версия Node.js в раннере — 22 (предустановлена).
 6. **Префикс `GITVERSE_` запрещён** в именах секретов; использовать `GV_`.
 
-Порядок сборки в CI: `pnpm install --frozen-lockfile` → `pnpm --filter @itphx/synth-shared build` (обязательно перед typecheck) → `pnpm --filter @itphx/synth-core build` (нужно backend и runner) → `pnpm typecheck` → `pnpm lint` → `pnpm test`. Без сборки shared/core typecheck не найдёт типы.
+Порядок сборки в CI: `pnpm install --frozen-lockfile` → `pnpm --filter @itphx/synth-shared build` (обязательно перед typecheck) → `pnpm --filter @itphx/synth-core build` (нужно для backend) → `pnpm typecheck` → `pnpm lint` → `pnpm test`. Без сборки shared/core typecheck не найдёт типы.
 
-Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM_TOKEN` (npmjs.org) и `GV_TOKEN` (единый GitVerse: API, Docker/npm registry, git push). Локальная проверка перед пушем: `pnpm typecheck && pnpm lint && pnpm test`. Публикация (npm в 7 пакетов, Docker/Helm, релиз, токены npm 2026, `scripts/build.sh`/`publish.sh`/`version-bump.sh`) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) и скиллы `synth-build-publish`, `synth-release`.
+Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM_TOKEN` (npmjs.org) и `GV_TOKEN` (единый GitVerse: API, Docker/npm registry, git push). Локальная проверка перед пушем: `pnpm typecheck && pnpm lint && pnpm test`. Публикация (npm в 6 пакетов, Docker/Helm, релиз, токены npm 2026, `scripts/build.sh`/`publish.sh`/`version-bump.sh`) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) и скиллы `synth-build-publish`, `synth-release`.
 
 ## Индекс архитектурных решений
 
@@ -379,7 +375,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-017 | Собственный API-контракт (API v2 на Hono) | ✅ Реализовано | [ad-017](./docs/arch_decisions/ad-017-api-v2-hono.md) |
 | AD-018 | Выбор AI-движка на уровне сессии | ⚠️ Частично (поле/плумбинг; адаптеры движков не реализованы) | [ad-018](./docs/arch_decisions/ad-018-session-engine-selection.md) |
 | AD-019 | React 19 SPA с нуля | ✅ Реализовано | [ad-019](./docs/arch_decisions/ad-019-react-spa.md) |
-| AD-022 | Единый TypeScript стек + Runner-архитектура (мост к движкам: локальный/облачный K8s pod; движки stateless) | ✅ Реализовано | [ad-022](./docs/arch_decisions/ad-022-typescript-stack-runner.md) |
+| AD-022 | Единый TypeScript стек; Runner-архитектура (мост к движкам) — план (AD-018/AD-050), движки stateless | ✅ Реализовано (TS-стек) | [ad-022](./docs/arch_decisions/ad-022-typescript-stack-runner.md) |
 | AD-023 | Единая система конфигурации (`@itphx/synth-shared/config`) | ✅ Реализовано | [ad-023](./docs/arch_decisions/ad-023-configuration.md) |
 | AD-024 | Единый транспорт: EventHub (backend) + TransportClient (UI) | ✅ Реализовано | [ad-024](./docs/arch_decisions/ad-024-eventhub-transport.md) |
 | AD-025 | Plan/Act как глобальный permission toggle (не отдельные агенты) | ✅ Реализовано | [ad-025](./docs/arch_decisions/ad-025-plan-act-toggle.md) |
@@ -394,7 +390,7 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) | ✅ Реализовано | [ad-035](./docs/arch_decisions/ad-035-micro-model-first.md) |
 | AD-036 | LLM Gateway: независимый слой безопасности (guard + обфускация + rate limit + аудит) | ✅ Реализовано | [ad-036](./docs/arch_decisions/ad-036-llm-gateway.md) |
 | AD-037 | Security step перед коммитом: git pre-commit hook + маркер-хеш | ⏳ Не реализовано | [ad-037](./docs/arch_decisions/ad-037-commit-security-step.md) |
-| AD-038 | Монорепо как набор публикуемых npm-пакетов (7 пакетов, pnpm publish, тонкая CLI-обёртка) | ✅ Реализовано | [ad-038](./docs/arch_decisions/ad-038-npm-packages.md) |
+| AD-038 | Монорепо как набор публикуемых npm-пакетов (6 пакетов, pnpm publish, тонкая CLI-обёртка) | ✅ Реализовано | [ad-038](./docs/arch_decisions/ad-038-npm-packages.md) |
 | AD-039 | План — в проекте, todo — в сессии; состояние — через инструменты (Tool Use, без JSON-блока), замена TSM | ✅ Реализовано | [ad-039](./docs/arch_decisions/ad-039-plan-in-project.md) |
 | AD-040 | Сессии без проекта: контекст, подсказка, перенос между проектами | ✅ Реализовано | [ad-040](./docs/arch_decisions/ad-040-sessions-without-project.md) |
 | AD-041 | Таксономия ошибок LLM + контракт локализации строк движка (`shared/i18n`) | ✅ Реализовано | [ad-041](./docs/arch_decisions/ad-041-llm-error-taxonomy.md) |
@@ -447,6 +443,10 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | AD-088 | Работа через HTTP-прокси: единый egress-слой, `no_proxy`/исключения, доверенные CA, аутентификация Basic/NTLM/Negotiate (Kerberos) | ⏳ Не реализовано | [ad-088](./docs/arch_decisions/ad-088-http-proxy.md) |
 | AD-089 | Synth как платформа внешних событий и автоматизации: сущности Event/Binding/Router, приём внешних событий на hook-шине, `session.requested` — тоже событие | ⚠️ Частично (ядро Event/Binding/Router, единый funnel, API, UI, источник AD-051 (cron), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`/`autoBindAgentTemplate`), идентичности в профиле (`ProfileData.identities[]`) + резолвер `/me/identities` + claim-flow (`POST /me/identities/claim`, одноразовый код TTL 10 мин, `identityHint` в ingest, код только в приватном чате), права внешних отправителей (`resolveEffectiveRoles`: база — роли профиля, `identity.roles` только сужают, несопознанный — без прав/fail-closed; роли в `metadata.effective_roles` — аудит/attribution; роли = доступность эндпоинтов, роль-оси в permission-слое нет by design), надёжный Stop (`POST /api/v2/sessions/:id/abort` + персистентный `SessionStatus.cancelRequested`, `requestStop` очереди, `isCancelRequested` оркестратора), агент по умолчанию для событийных сессий (`deps.resolveDefaultAgent`), переустановка владельца при доставке (`_maybeReassignOwner`); AD-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый **Gateway** (Telegram-шлюз) реализован; остаток — Plugin SDK (AD-090), пайплайны (AD-059), остаток AD-087 (HA/второй канал)) | [ad-089](./docs/arch_decisions/ad-089-external-events-automation.md) |
 | AD-090 | Extension API v1: 4 класса (Plugin / Gateway / Add-on / контент-пак), определение Plugin (код в процессе ядра), таксономия влияния (contribution / interception / observation), единый манифест `synth.pack` (`kind`/`contracts`/`provides`), фасад `@itphx/synth-plugin` + disposer-модель, bundle-only дистрибуция, install/activate (`plugins.lock.json`/`plugins.json`), trust/scan по AD-068, плагины в managed (ADMIN, deploy-time + runtime-опция) и hybrid (allow-list + server-scoped токены) | ⏳ Не реализовано | [ad-090](./docs/arch_decisions/ad-090-extension-api.md) |
+| AD-091 | Бэкап, восстановление и перенос данных: `synth backup`/`restore` (архив каталога данных + манифест, `--with-secrets`, `--dry-run`/`--yes`, шифрование), портативный экспорт/импорт проекта (без секретов), admin API для managed; онлайн-консистентность — после AD-032 | ⏳ Не реализовано | [ad-091](./docs/arch_decisions/ad-091-backup-restore-transfer.md) |
+| AD-092 | Обслуживание инстанса: обновление, миграции схемы данных (`meta.json`/`schemaVersion` + `synth migrate`), откат (`synth update --to <version>`, `helm rollback`), удаление (`synth uninstall [--purge]`), runbook эксплуатации | ⏳ Не реализовано | [ad-092](./docs/arch_decisions/ad-092-instance-lifecycle-maintenance.md) |
+| AD-093 | Версионирование документации портала: версионные подкаталоги + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | ⏳ Не реализовано | [ad-093](./docs/arch_decisions/ad-093-docs-versioning.md) |
+| AD-094 | Наблюдаемость и эксплуатационные метрики: `/metrics` (Prometheus), `/ready` + раздельные probes, структурные логи (`request_id`/`session_id`, редакция секретов), SLO/алерты, sizing | ⏳ Не реализовано | [ad-094](./docs/arch_decisions/ad-094-observability-metrics.md) |
 
 Правило: реализованные AD переносятся в `./docs/arch_decisions/` (в AGENTS.md остаётся строка таблицы + ссылка).
 
@@ -498,6 +498,10 @@ Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM
 | MCP-сервер Synth | [AD-056](./docs/arch_decisions/ad-056-synth-mcp-server.md), [AD-048](./docs/arch_decisions/ad-048-self-help-skills-admin-mcp.md) |
 | внешние add-on сервисы / шлюзы / плагины / editions | [AD-086](./docs/arch_decisions/ad-086-extensibility-plugins-editions.md), [AD-087](./docs/arch_decisions/ad-087-gateways.md), [AD-090](./docs/arch_decisions/ad-090-extension-api.md), [AD-068](./docs/arch_decisions/ad-068-skills-agents-registry.md), [AD-030](./docs/arch_decisions/ad-030-hooks-agent-events.md) |
 | прокси / egress | [AD-088](./docs/arch_decisions/ad-088-http-proxy.md) |
+| бэкап / восстановление / экспорт / импорт данных | [AD-091](./docs/arch_decisions/ad-091-backup-restore-transfer.md), [AD-005](./docs/arch_decisions/ad-005-json-storage.md), [AD-055](./docs/arch_decisions/ad-055-instance-exchange.md) |
+| обновление / миграции схемы / откат / удаление инстанса | [AD-092](./docs/arch_decisions/ad-092-instance-lifecycle-maintenance.md), [AD-038](./docs/arch_decisions/ad-038-npm-packages.md) |
+| версионирование документации | [AD-093](./docs/arch_decisions/ad-093-docs-versioning.md), скилл `synth-docs` |
+| наблюдаемость / метрики / health / ready / SLO | [AD-094](./docs/arch_decisions/ad-094-observability-metrics.md), [AD-036](./docs/arch_decisions/ad-036-llm-gateway.md) |
 | мультимодальный ввод | [AD-085](./docs/arch_decisions/ad-085-multimodal-input.md) |
 | память | [AD-047](./docs/arch_decisions/ad-047-memory-gbrain.md), [AD-062](./docs/arch_decisions/ad-062-context-optimization.md) |
 | CLI / TUI | [AD-053](./docs/arch_decisions/ad-053-cli-tui.md) |
