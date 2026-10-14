@@ -49,6 +49,15 @@ export interface FsRoutesOptions {
   getProjectWorkspace?: (projectId: string) => Promise<string | null>;
   /** Managed: `project_id` обязателен — без него 400 (паритет с backend). */
   requireProjectId?: boolean;
+  /**
+   * AD-089 (P0): проверка доступа к проекту для project-aware эндпоинтов
+   * (managed RBAC; образец — `createGitRoutes.authorizeProject`). Вызывается,
+   * когда задан `getProjectWorkspace` и передан `project_id`; `false` → 403
+   * `FORBIDDEN` (существование проекта не раскрывается отдельно от доступа).
+   * Паритет чтение/запись определяет сама проверка (обычно по `c.req.method`).
+   * Не задана (standalone) — поведение прежнее.
+   */
+  authorizeProject?: (c: Context, projectId: string) => Promise<boolean>;
 }
 
 type FsHttpStatus = 400 | 403 | 404 | 409 | 422 | 500;
@@ -283,15 +292,26 @@ export function createFsRoutes(
     opts.getProtectedPathsPolicy ? opts.getProtectedPathsPolicy() : loadProtectedPaths();
   const getProjectWorkspace = opts.getProjectWorkspace;
   const requireProjectId = opts.requireProjectId === true;
+  const authorizeProject = opts.authorizeProject;
+
+  /** AD-089 (P0): нет доступа к проекту → 403 `FORBIDDEN` (fail-closed). */
+  const ensureProjectAccess = async (c: Context, projectId: string): Promise<void> => {
+    if (!authorizeProject) return;
+    const allowed = await authorizeProject(c, projectId).catch(() => false);
+    if (!allowed) throw fsError('FORBIDDEN', 'Доступ к проекту запрещён');
+  };
 
   /**
    * База для path-эндпоинтов: workspace проекта (project-aware) либо плоский root.
    * Managed (`requireProjectId`) без `project_id` → 400; standalone без проекта → root.
+   * AD-089 (P0): project-aware ветка сначала проверяет доступ к проекту (403).
    */
   const resolveBase = async (
+    c: Context,
     projectId: string | undefined,
   ): Promise<{ base: string; projectAware: boolean }> => {
     if (getProjectWorkspace && projectId) {
+      await ensureProjectAccess(c, projectId);
       const dir = await getProjectWorkspace(projectId);
       if (dir) return { base: dir, projectAware: true };
       if (requireProjectId) throw fsError(FsErrorCode.WORKSPACE_NOT_SET, 'Workspace не задан для проекта');
@@ -329,7 +349,7 @@ export function createFsRoutes(
     }
 
     try {
-      const { base, projectAware } = await resolveBase(projectId);
+      const { base, projectAware } = await resolveBase(c, projectId);
       const path = c.req.query('path') || '';
       const includeHidden = c.req.query('includeHidden') === 'true';
       const maxDepth = parseMaxDepth(c.req.query('maxDepth'));
@@ -367,7 +387,7 @@ export function createFsRoutes(
     }
 
     try {
-      const { base, projectAware } = await resolveBase(projectId);
+      const { base, projectAware } = await resolveBase(c, projectId);
       const path = c.req.query('path') || '';
       if (projectAware && !path) {
         return c.json(validationError('Ожидается поле path'), 400);
@@ -421,7 +441,7 @@ export function createFsRoutes(
         return c.json(validationError('Ожидаются поля path и content'), 400);
       }
 
-      const { base, projectAware } = await resolveBase(projectId);
+      const { base, projectAware } = await resolveBase(c, projectId);
       const fullPath = resolveRequestedPath(base, path, projectAware);
 
       await mkdir(join(fullPath, '..'), { recursive: true }).catch(() => {});
@@ -466,7 +486,7 @@ export function createFsRoutes(
         return c.json(validationError('Файл не передан'), 400);
       }
 
-      const { base, projectAware } = await resolveBase(projectId);
+      const { base, projectAware } = await resolveBase(c, projectId);
       const targetDir = resolveRequestedPath(base, dirPath, projectAware);
 
       const rawName = (uploaded as { name?: string }).name;
@@ -508,7 +528,7 @@ export function createFsRoutes(
     }
 
     try {
-      const { base, projectAware } = await resolveBase(projectId);
+      const { base, projectAware } = await resolveBase(c, projectId);
       const path = c.req.query('path') || '';
       if (projectAware && !path) {
         return c.json(validationError('Ожидается поле path'), 400);
@@ -557,7 +577,7 @@ export function createFsRoutes(
     }
 
     try {
-      const { base, projectAware } = await resolveBase(projectId);
+      const { base, projectAware } = await resolveBase(c, projectId);
       const path = c.req.query('path') || '';
       if (projectAware && !path) {
         return c.json(validationError('Ожидается поле path'), 400);
@@ -609,7 +629,7 @@ export function createFsRoutes(
         return c.json(validationError('Ожидается поле path'), 400);
       }
 
-      const { base, projectAware } = await resolveBase(projectId);
+      const { base, projectAware } = await resolveBase(c, projectId);
       const fullPath = resolveRequestedPath(base, path, projectAware);
 
       const existing = await stat(fullPath).catch(() => null);
@@ -672,8 +692,8 @@ export function createFsRoutes(
       }
 
       // База источника; при `targetProjectId` — база назначения (иначе та же).
-      const source = await resolveBase(projectId);
-      const target = targetProjectId ? await resolveBase(targetProjectId) : source;
+      const source = await resolveBase(c, projectId);
+      const target = targetProjectId ? await resolveBase(c, targetProjectId) : source;
       const fullSource = resolveRequestedPath(source.base, sourcePath, source.projectAware);
       const fullTarget = resolveRequestedPath(target.base, targetPath, target.projectAware);
 

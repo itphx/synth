@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager } from '@itphx/synth-core';
 import type { EventBus } from '@itphx/synth-core';
@@ -14,13 +15,14 @@ import {
   normalizeIconKey,
   normalizeColorKey,
 } from '@itphx/synth-shared';
-import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
+import type { Message, Session, SessionSettings, User } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { scopeGuard, projectGuard } from '../auth/service-scope.js';
 import {
   enqueueUserMessage,
   serializeSession,
+  isSessionVisible,
   createSessionRoutes as createCoreSessionRoutes,
 } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
@@ -64,6 +66,34 @@ export function createSessionRoutes(
   // AD-071 §2.4: владелец сессии — обычный пользователь, управляющий её MCP-скоупом.
   const isSessionOwner = (session: Session, userId: string): boolean =>
     (session.ownerId ?? session.userId) === userId;
+
+  /**
+   * AD-089 / безопасность: доступ к сессии по id для backend-only роутов
+   * (export/notes/optimization/debug-system-message). Единое правило —
+   * `isSessionVisible` из core: elevated (ADMIN/LEAD) → всё; владелец → да;
+   * сессия без владельца → да; иначе сессия проекта видна её owner/участникам
+   * (`projectStore`). Нет доступа → 404 NOT_FOUND: не раскрываем существование
+   * чужой сессии (защита от перебора id; ранее здесь была IDOR-уязвимость).
+   */
+  const sessionAccessDenied = async (
+    c: Context,
+    session: Session,
+    currentUser?: User,
+  ): Promise<Response | null> => {
+    const user = currentUser ?? (await kit.getCurrentUser(c))!;
+    // Вызовы `kit.isAdmin`/`hasRole` защищены `typeof` — у мок-AuthKit в тестах
+    // они могут отсутствовать (паритет с resolveElevated ниже).
+    const elevated =
+      (typeof kit.isAdmin === 'function'
+        && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]))
+      || (typeof kit.hasRole === 'function'
+        && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD'));
+    if (await isSessionVisible(session, projectStore, { userId: user.id, elevated })) return null;
+    return c.json(
+      { error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } },
+      404,
+    );
+  };
 
   /** AD-071 §2.4: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
   const buildSessionMcpPayload = async (session: Session) => {
@@ -159,11 +189,14 @@ export function createSessionRoutes(
   // мирами (publish/fork). Внутренний формат: объект Session (camelCase) из
   // SessionManager — история сообщений, todos, настройки, заметки, ссылки,
   // чекпоинты, план-флаг и карта обфускации. Не публичный DTO.
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.get('/:id/export', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
     return c.json(session);
   });
 
@@ -259,6 +292,7 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/debug-system-message — отправить отладочное системное сообщение
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.post('/:id/debug-system-message', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -266,6 +300,9 @@ export function createSessionRoutes(
     }
 
     const user = (await kit.getCurrentUser(c))!;
+    const denied = await sessionAccessDenied(c, session, user);
+    if (denied) return denied;
+
     const streamId = generateStreamId();
 
     const sysMsg: import('@itphx/synth-shared').Message = {
@@ -292,11 +329,14 @@ export function createSessionRoutes(
   });
 
   // GET /api/v2/sessions/:id/optimization — настройки оптимизации
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.get('/:id/optimization', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
 
     return c.json({
       context_optimization: session.settings.contextOptimization,
@@ -313,7 +353,15 @@ export function createSessionRoutes(
   });
 
   // PATCH /api/v2/sessions/:id/optimization — обновить настройки
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.patch('/:id/optimization', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
+
     const body = await c.req.json().catch(() => ({}));
 
     await sessionManager.withLock(c.req.param('id'), async (s) => {
@@ -335,11 +383,14 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/optimization/check — проверить триггеры
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.post('/:id/optimization/check', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
 
     if (!contextOptimizer) {
       return c.json({ sliding_window: { triggered: false }, summarization: { triggered: false } });
@@ -356,11 +407,14 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/optimization/cancel-summarization — отменить ожидающую суммаризацию
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.post('/:id/optimization/cancel-summarization', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
 
     await sessionManager.withLock(session.id, async (s) => {
       s.summarizationPending = false;
@@ -383,17 +437,28 @@ export function createSessionRoutes(
   // ===== Sticky Notes =====
 
   // GET /api/v2/sessions/:id/notes — список заметок
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.get('/:id/notes', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
 
     return c.json({ notes: session.stickyNotes });
   });
 
   // POST /api/v2/sessions/:id/notes — создать заметку
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.post('/:id/notes', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
+
     const body = await c.req.json().catch(() => ({}));
     if (!body.content?.trim()) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Content is required' } }, 400);
@@ -419,7 +484,15 @@ export function createSessionRoutes(
   });
 
   // PATCH /api/v2/sessions/:id/notes/:noteId — обновить заметку
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.patch('/:id/notes/:noteId', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
+
     const body = await c.req.json().catch(() => ({}));
     const noteId = c.req.param('noteId');
 
@@ -439,7 +512,15 @@ export function createSessionRoutes(
   });
 
   // DELETE /api/v2/sessions/:id/notes/:noteId — удалить заметку
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
   app.delete('/:id/notes/:noteId', kit.requireAuth, async (c) => {
+    const session = await sessionManager.getSession(c.req.param('id'));
+    if (!session) {
+      return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
+    }
+    const denied = await sessionAccessDenied(c, session);
+    if (denied) return denied;
+
     const noteId = c.req.param('noteId');
 
     await sessionManager.withLock(c.req.param('id'), async (s) => {

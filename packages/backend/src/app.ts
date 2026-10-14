@@ -58,6 +58,7 @@ import {
   WebhookStore, WebhookDeliveryStore, WebhookService, startWebhookDeliveryPruner,
   createWebhookRoutes,
   getPublicOpenApiDocument,
+  isSessionVisible,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import type { DecisionAgentCandidate } from '@itphx/synth-core';
@@ -886,10 +887,22 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
 
     // FS routes (AD-075): core-фабрика, managed поверх workspace проекта.
+    // AD-089 (P0): доступ к проекту обязателен — иначе любой USER читал/писал бы
+    // файлы чужого проекта по id (IDOR). Чтение — canRead, мутации — canEditContent.
+    const projectAccess = createProjectAccess(auth);
     app.route('/api/v2/fs', createFsRoutes(auth, backendConfig.workspacesRoot, undefined, {
       requireProjectId: true,
       getOutsideRootPolicy: () => 'deny',
       getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
+      authorizeProject: async (c, projectId) => {
+        const user = await auth.getCurrentUser(c);
+        if (!user) return false;
+        const project = await projectStore.load(projectId);
+        if (!project) return false;
+        return c.req.method === 'GET'
+          ? projectAccess.canReadProject(c, project, user.id)
+          : projectAccess.canEditProjectContent(c, project, user.id);
+      },
       getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
         workspacesRoot: backendConfig.workspacesRoot,
         getProject: (id) => projectStore.load(id),
@@ -916,7 +929,6 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Git routes (AD-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
     // (init/clone/register/remove/fetch) требуют прав на изменение контента
     // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — requireAuth.
-    const projectAccess = createProjectAccess(auth);
     app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot, {
       sshKeyStore,
       authorizeProject: async (c, projectId) => {
@@ -1515,6 +1527,22 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
               }));
             });
 
+            /**
+             * AD-089 (P0): сессия, доступная текущему клиенту, либо `null`.
+             * Единое правило видимости (`isSessionVisible`) — владелец/участник
+             * проекта; ADMIN/LEAD и service-key (allSessions) видят всё.
+             * Недоступная чужая сессия неотличима от несуществующей.
+             */
+            const loadVisibleSession = async (sid: string) => {
+              const session = await sessionManager.getSession(sid);
+              if (!session) return null;
+              const visible = await isSessionVisible(session, projectStore, {
+                userId: user.id,
+                elevated: allSessions,
+              });
+              return visible ? session : null;
+            };
+
             ws.on('message', (raw) => {
               try {
                 const msg = JSON.parse(raw.toString());
@@ -1526,15 +1554,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
                   const streamId = msg.stream_id || generateStreamId();
 
-                  ws.send(JSON.stringify({
-                    type: 'queued',
-                    session_id: sid,
-                    stream_id: streamId,
-                    timestamp: nowISO(),
-                  }));
-
                   (async () => {
-                    const session = await sessionManager.getSession(sid);
+                    const session = await loadVisibleSession(sid);
                     if (!session) {
                       ws.send(JSON.stringify({
                         type: 'error',
@@ -1544,6 +1565,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
                       }));
                       return;
                     }
+
+                    ws.send(JSON.stringify({
+                      type: 'queued',
+                      session_id: sid,
+                      stream_id: streamId,
+                      timestamp: nowISO(),
+                    }));
 
                     const message: import('@itphx/synth-shared').Message = {
                       id: streamId,
@@ -1582,7 +1610,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
                   if (!sid) return;
 
                   (async () => {
-                    const session = await sessionManager.getSession(sid);
+                    const session = await loadVisibleSession(sid);
                     if (session?.currentStream) {
                       orchestrator.cancel(session.currentStream.streamId);
                     }
@@ -1595,24 +1623,37 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
                   // Новый формат: { action: 'allow'|'deny', once?: boolean }.
                   // Старый формат { approved: boolean } остаётся совместимым.
                   const action = msg.action === 'allow' || msg.action === 'deny' ? msg.action : undefined;
-                  eventBus.publish(sid, 'permission.replied', {
-                    approval_id: approvalId,
-                    session_id: sid,
-                    approved: action !== undefined ? action === 'allow' : msg.approved === true,
-                    ...(action ? { action } : {}),
-                    ...(typeof msg.once === 'boolean' ? { once: msg.once } : {}),
-                  });
+                  const approved = action !== undefined ? action === 'allow' : msg.approved === true;
+                  const once = typeof msg.once === 'boolean' ? msg.once : undefined;
+
+                  (async () => {
+                    // AD-089 (P0): подтверждать права можно только в своей сессии.
+                    const session = await loadVisibleSession(sid);
+                    if (!session) return;
+                    eventBus.publish(sid, 'permission.replied', {
+                      approval_id: approvalId,
+                      session_id: sid,
+                      approved,
+                      ...(action ? { action } : {}),
+                      ...(once !== undefined ? { once } : {}),
+                    });
+                  })().catch(() => {});
                 } else if (msg.type === 'permission_hold') {
                   const sid = msg.session_id;
                   const approvalId = msg.approval_id;
                   if (!sid || !approvalId) return;
 
-                  // «Остановить таймер»: publish permission.hold — оркестратор снимает
-                  // авто-отклонение по таймауту, запрос ждёт ответа пользователя.
-                  eventBus.publish(sid, 'permission.hold', {
-                    approval_id: approvalId,
-                    session_id: sid,
-                  });
+                  (async () => {
+                    // «Остановить таймер»: publish permission.hold — оркестратор снимает
+                    // авто-отклонение по таймауту, запрос ждёт ответа пользователя.
+                    // AD-089 (P0): только для своей сессии.
+                    const session = await loadVisibleSession(sid);
+                    if (!session) return;
+                    eventBus.publish(sid, 'permission.hold', {
+                      approval_id: approvalId,
+                      session_id: sid,
+                    });
+                  })().catch(() => {});
                 }
               } catch {
                 // ignore parse errors
