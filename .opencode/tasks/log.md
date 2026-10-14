@@ -1038,3 +1038,54 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - **Верификация (@tester):** PASS по всем пунктам — landing (i18n-баланс, ссылки, отсутствие утечек, синтаксис), портал (strict-сборка, nav, факты эндпоинтов/scopes/OpenAPI/SDK сверены с кодом, хост `127.0.0.1` для `synth serve`), dev-доки (`pnpm build`/`typecheck`/`lint` — 0 ошибок; 1381 относительная ссылка, 0 битых).
 - **Важная поправка:** правка хоста `synth serve` на `0.0.0.0` (по `packages/core/src/main.ts`) была ошибочной — публикуемый CLI `packages/synth/src/cli.ts:36` дефолтит `127.0.0.1`; откатано.
 - **Открытое (за владельцем):** (1) код-несоответствие — `packages/core/src/main.ts:20,200` (dev-core) дефолтит host `0.0.0.0`, тогда как корневой `AGENTS.md` для Local заявляет `127.0.0.1` (потенциальная проблема безопасности); (2) 0.10.0 — на незамёрженной ветке (97 коммитов ahead master) — merge/push не трогали; (3) коммиты/пуш трёх репозиториев не делались (только рабочее дерево).
+
+## 2026-10-14 — Установка скилла и MCP-сервера Telegram-шлюза в dev-инстанс (omn)
+
+- **Задача:** зарегистрировать в dev-инстансе (хост `omn`, backend `:5000`) скилл `gateway-telegram` и MCP-сервер `synth-gateway-telegram` шлюза, развёрнутого в k3s.
+- **Тип:** infra / addon-install. **Исполнители:** @orchestrator → @devops (Ingress как код), установка — вручную.
+- **Проблема доступа:** MCP шлюза — ClusterIP `synth-gateway-telegram:7101`; извне кластера недоступен, а dev-инстанс на `omn` — вне кластера. Авто-установка (`autoInstall`) покрывала только in-cluster тенант `test`.
+- **Ingress (`synth-deploy` main, коммит `963dcef`):** в `gateway-telegram/values.yaml` (`extraObjects`) добавлен Ingress `synth-gateway-telegram-mcp` (host `synth-gateway.k3s.itphx.loc`, Traefik, HTTP/web без TLS, paths `/mcp` + `/health` → svc:7101). Fleet синхронизировал за ~1 мин; `GET /health` → 200, tenants `dev`/`test`.
+- **SSRF-политика MCP:** регистрация упала — адрес `10.0.0.210` ∈ `10.0.0.0/8` запрещён сетевой политикой. Дефолт переопределён runtime: `PUT /api/v2/settings/mcp-network-policy` (mode `deny`, список без `10.0.0.0/8`; `isOverridden: true` в `settings.json`). Откат — `DELETE /settings/mcp-network-policy`.
+- **Установка:** `scripts/install-into-synth.mjs --synth-url http://localhost:5000/api/v2 --token admin-key-123 --tenant dev --mcp-url http://synth-gateway.k3s.itphx.loc` (MCP-token — из Secret `synth-gateway-telegram-mcp-token`). Созданы: реестр-MCP `synth-gateway-telegram` (`type:http`, url `…/mcp/dev`, `headers.Authorization`, `enabledByDefault:true`) и скилл `gateway-telegram` (`available:true`).
+- **Верификация:** `POST /api/v2/mcp/probe {name:"synth-gateway-telegram"}` → 8 тулов (`tg_send_message`, `tg_edit_message`, `tg_delete_message`, `tg_notify`, `tg_send_buttons`, `tg_get_me`, `tg_send_to_user`, `tg_status`).
+- **Побочно:** правки аддона из предыдущей задачи (watcher: промежуточные сообщения между тулами; normalize: читаемый текст нажатия кнопки) в рабочем дереве, **не закоммичены** и в k3s-образ `0.3.0` **не входят** — для проверки в Telegram нужна пересборка/деплой.
+
+## 2026-10-14 — Session-aware chatId для tg-тулов (+ tenant fallback)
+
+- **Проблема:** MCP-тулы `tg_*` в HTTP-режиме (k3s) падали с `telegram.chat_id_missing`: `chatId` помечен опциональным, но дефолта нет (в мультитенантном развёртывании `GATEWAY_DEFAULT_CHAT_ID`/`secrets/telegram_owner_chat_id` пусты).
+- **Ограничение:** ядро вызывало MCP как `callTool(name, args)` — без контекста сессии (MCP-клиент общий на инстанс).
+- **Контракт `_meta`:** ядро кладёт в `tools/call` → `_meta: { "synth/session_id": "<id>" }` (НЕ transport session id Streamable HTTP, который лежит в `extra.sessionId`).
+- **Ядро (`synth/packages/core`, правки, без коммита):** `McpClient.callTool(name, args, meta?)` пробрасывает `_meta` в SDK; `McpManager.registerTools` формирует `meta` из `ctx.sessionId` (обе ветки, включая деобфускацию). Админский `McpManager.callTool` не тронут. Тесты: client/manager (+5).
+- **Аддон (`addons/synth-gateway-telegram`, правки, без коммита):** тулы читают `extra._meta['synth/session_id']`; новый `src/mcp/session-chat.ts` (`createSessionChatResolver` через `GatewayStore.getSessionRoute`); приоритет `chatId`: явный → привязка сессии → tenant-дефолт (`ctx.defaultChatId`, в HTTP — чат `ADMIN` из `allowlist`) → понятная ошибка; `messageThreadId` из `route.threadId` (плюс новый параметр `threadId` у send-тулов); `replyToMessageId` из `route.lastInboundMessageId` (при совпадении чата); `tg_status` показывает `sessionId`/`chatId`/`resolvedFrom`; улучшены тексты ошибок `telegram.chat_id_missing`/`telegram.target_required`. Обновлены описания тулов и `SKILL.md`. Тесты: tools/server/http (+15).
+- **Верификация:** аддон `pnpm build/typecheck/lint/test` — 465 тестов зелёные; ядро `pnpm typecheck` + 3111 тестов зелёные.
+- **Не задеплоено:** нужен ребилд/деплой ядра (dev-инстанс omn и test) и образа шлюза (заодно уедут правки watcher/normalize из предыдущей задачи). `AGENTS.md` (ядро/аддон) и docs — правки инструкций согласуются отдельно.
+
+## 2026-10-14 — Передеплой Telegram-шлюза 0.3.1 (gateway-only, k3s test)
+
+- **Задача:** передеплой только шлюза `synth-gateway-telegram` (версия 0.3.1) без пересборки backend/ui и чарта `synth` (в `synth` есть незакоммиченные правки ядра — не должны уехать).
+- **Тип:** infra/deploy. **Исполнители:** @orchestrator → @devops.
+- **Код:** в `synth-deploy/scripts/build-and-publish.sh` добавлен флаг `--gateway-only` (`--only-gateway`): только образ шлюза + только чарт шлюза + только пины `gateway-telegram/*` (дефолтное поведение не изменено, `--help`/сводка обновлены).
+- **Бамп:** аддон 0.3.0 → **0.3.1** (`scripts/version-bump.sh`; `package.json`/`synth.pack`/`Chart.yaml`), тег не создавался.
+- **Публикация:** образ `git.itphx.ru/itphx/synth-gateway-telegram:0.3.1` (digest `sha256:1d06fefd…`); чарт `synth-gateway-telegram 0.3.1-1`; пины `image-tag=0.3.1`, `chart-version=0.3.1-1`. Backend/ui и чарт `synth` не трогались.
+- **Git:** аддон master `ebb9347` (фичи: промежуточные сообщения, session-aware chatId, читаемый текст callback); `synth-deploy` main `6fe1e09` (флаг) + `7bca508` (пины). Оба запушены; рабочие деревья чистые.
+- **Верификация:** rollout ok; образ `:0.3.1` в обоих контейнерах; `GET /health` → 200 (`version 0.3.1`, tenants dev/test); `/mcp/dev` без токена → 401; helm rev 24 chart 0.3.1-1. Через MCP-клиент: `tools/list` показывает новые параметры (`tg_send_message`/`tg_send_buttons` → `threadId`); `tg_status` без `chatId` → `chatId=450316139`, `resolvedFrom=default` (tenant-fallback из allowlist) + привязка сессии `mv7s41uk-…` — т.е. `telegram.chat_id_missing` больше не возникает.
+- **Важно (не связано с деплоем):** в логах шлюза повторяется `getUpdates ошибка … aborted [POST api.telegram.org … proxy=true]` для тенантов dev и test — long-polling через прокси падает. Входящие сообщения/нажатия кнопок при этом не приходят → интерактивная проверка tg-тулов под вопросом. Нужен отдельный разбор (egress-прокси/таймаут long-poll).
+- **Session-aware (`_meta['synth/session_id']`)** пока не активен в бою: требует деплоя/рестарта ядра (test — образ backend 0.10.0; dev-инстанс `omn` — локальный core). Правки ядра — 4 файла в `synth`, **не закоммичены**.
+
+## 2026-10-14 — Фикс «MCP-сессия не найдена для тенанта» (шлюз 0.3.2, stateless HTTP-MCP)
+
+- **Симптом:** после передеплоя шлюза тулы `tg_*` возвращали `MCP-сессия не найдена для тенанта «dev»`.
+- **Причина:** HTTP-MCP шлюза работал в stateful-режиме (`sessionIdGenerator`, `Map` сессий в памяти). Рестарт пода (Fleet/rollout) терял сессии, а подключённый клиент Synth продолжал слать старый `mcp-session-id` → 404.
+- **Фикс:** `src/mcp/http.ts` переведён в **stateless** (`sessionIdGenerator: undefined`): на каждый запрос — свежие `McpServer` + транспорт, заголовок сессии игнорируется, ресурсы закрываются по завершении; per-tenant контексты (`contexts`) сохранены. Обновлён `docs/gateway.md`. Тесты: −3 stateful, +6 stateless (всего 468).
+- **Деплой:** аддон 0.3.1 → **0.3.2**; `build-and-publish.sh --gateway-only` → образ `synth-gateway-telegram:0.3.2` (digest `sha256:6d0c47b5…`) + чарт `0.3.2-1`; коммиты: аддон master `37c3027`, `synth-deploy` main `c611500`. backend/ui/чарт `synth` не тронуты.
+- **Верификация:** rollout ok, оба контейнера `:0.3.2`, health `version 0.3.2`, `/mcp/dev` без токена → 401; регресс-чек с `mcp-session-id: stale-after-restart-123` → `tools/list` 200, 8 тулов, текста «MCP-сессия не найдена» нет.
+
+## 2026-10-14 — Выкат ядра (`_meta['synth/session_id']`) на test (backend 0.10.0, без бампа)
+
+- **Задача:** доставить правку ядра (проброс контекста Synth-сессии в MCP `_meta`) на test-инстанс, не меняя версию.
+- **Тип:** infra/deploy. **Исполнитель:** @devops. Образ — только `synth-backend`; `synth-deploy`/UI/шлюз/чарты не тронуты; `synth` не коммитился.
+- **Сборка:** `docker build -f synct/docker/Dockerfile.backend … -t git.itphx.ru/itphx/synth-backend:0.10.0` из рабочего дерева `synth` + push тем же тегом. Digest до `sha256:d231f971…` → после `sha256:f476a5b4fd87…` (pullPolicy `Always`).
+- **Rollout:** `kubectl -n synth rollout restart deploy/synth-backend` → успешно; под `synth-backend-574b8cfb7b` Running, 0 рестартов.
+- **Верификация:** digest нового пода = запушенный; `GET /api/v2/health` → `healthy`, версия **0.10.0** (не менялась); в образе найдена строка `synth/session_id` (`.../synth-core/dist/engine/mcp/manager.js`); логи без ошибок.
+- **Замечание:** session-aware теперь активен для тенанта **test** (ядро + шлюз 0.3.2 обновлены). Dev-инстанс (`omn`, локальный core) не обновлялся — там продолжит работать tenant-fallback. Правки ядра в `synth` (4 файла + log.md) — **не закоммичены**.
+- **Telegram polling:** после переката `getUpdates`-ошибок нет (long-polling восстановился); прежние `aborted` были транзиентными.
