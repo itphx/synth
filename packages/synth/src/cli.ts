@@ -26,7 +26,7 @@ const program = new Command();
 
 program
   .name('synth')
-  .description('AI-агентная платформа для командной разработки')
+  .description('AI-платформа для командной работы')
   .version(SYNTH_VERSION);
 
 program
