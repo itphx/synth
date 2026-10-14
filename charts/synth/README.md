@@ -118,13 +118,21 @@ ingress:
 | `ingress.hosts` | `[]` | Список хостов |
 | `ingress.tls` | `[]` | TLS-секция Ingress |
 | `secrets.existingSecret` | `synth-secrets` | Имя Secret с секретами |
+| `installerKey.enabled` | `false` | Создать installer service-key (Secret + env `SYNTH_BOOTSTRAP_SERVICE_KEYS`) |
+| `installerKey.label` | `addon-installer` | Метка installer-ключа |
+| `installerKey.scopes` | `["addons:install"]` | Scope installer-ключа |
+| `installerKey.roles` | `[]` | Роли синтетического пользователя (пусто → дефолт хранилища) |
+| `installerKey.secretName` | `synth-installer-key` | Secret, создаваемый чартом (при пустом `existingSecret`) |
+| `installerKey.existingSecret` | `""` | Готовый Secret с JSON для `SYNTH_BOOTSTRAP_SERVICE_KEYS` (тогда чарт Secret не создаёт) |
+| `installerKey.bootstrapKey` | `bootstrap.json` | Ключ внутри Secret с JSON-массивом |
 | `caCert` | `""` | PEM внутреннего CA (опционально) |
 | `extraObjects` | `[]` | Произвольные дополнительные манифесты (рендерятся как есть) |
 
 ## Secret с секретами
 
-Чарт **не создаёт** Secret — он должен существовать в namespace релиза.
-Имя задаётся `secrets.existingSecret` (по умолчанию `synth-secrets`).
+Чарт **не создаёт** Secret с секретами OIDC/провайдеров — он должен существовать в
+namespace релиза. Имя задаётся `secrets.existingSecret` (по умолчанию `synth-secrets`).
+Единственное исключение, когда чарт сам создаёт Secret — опция `installerKey` (см. ниже).
 
 Ожидаемые ключи:
 
@@ -144,6 +152,70 @@ kubectl create secret generic synth-secrets \
 
 Секреты можно создавать любым способом: вручную, External Secrets Operator,
 sealed-secrets и т.п. Зашифрованных секретов в чарте нет.
+
+## Installer service-key (опция `installerKey`)
+
+Создаёт при развёртывании Synth **service-key установщика** (AD-052) со scope
+`addons:install`: аддоны (внешние сервисы/интеграции) используют его для
+самоустановки своих ресурсов (MCP-серверы, скиллы) без ручного создания ключа
+через API. Ключ провижинится идемпотентно при старте backend (по `label`,
+секрет существующего ключа не перезаписывается).
+
+```yaml
+installerKey:
+  enabled: true
+  label: addon-installer
+  scopes: ["addons:install"]
+  roles: []                          # доступ дают scopes; роль повышать не нужно
+  secretName: synth-installer-key    # Secret, создаёт чарт (enabled + пустой existingSecret)
+  existingSecret: ""                 # готовый Secret (тогда чарт Secret не создаёт)
+  bootstrapKey: bootstrap.json
+```
+
+Поведение:
+
+- `enabled: false` (по умолчанию) — ничего не создаётся, env не задаётся.
+- `enabled: true`, `existingSecret: ""` — чарт создаёт Secret `<secretName>`; по ключу
+  `bootstrapKey` лежит JSON-массив `[{label,secret,scopes,roles}]`, токен —
+  `synth_svc_` + 43 символа base64url. В backend Deployment добавляется env
+  `SYNTH_BOOTSTRAP_SERVICE_KEYS` (`valueFrom.secretKeyRef` на этот Secret).
+- `enabled: true`, `existingSecret: <name>` — Secret не создаётся; чарт только
+  ссылается на существующий Secret, где по ключу `bootstrapKey` лежит готовый JSON
+  (оператор кладёт его сам: вручную, External Secrets, sealed-secrets и т.п.).
+
+Токен **стабилен между `helm upgrade`**: если Secret уже есть в кластере, его текущее
+значение переиспользуется (`lookup`). Вне кластера (`helm template`, `--dry-run`) `lookup`
+пуст, поэтому при каждом рендере генерируется новый токен — это ожидаемо: реальный токен
+фиксируется при `helm install`/`upgrade` в кластере. Токен не логируется и в ConfigMap
+не попадает.
+
+> Конфликт с `backend.config`: если в `backend.config` уже задан
+> `security.bootstrapServiceKeys`, env `SYNTH_BOOTSTRAP_SERVICE_KEYS` из этой опции
+> **приоритетнее** `config.yaml` (AD-023: CLI > env > config.yaml), т.е. список из Secret
+> полностью заменяет список из `config.yaml`. Не задавайте installer-ключи в обоих местах.
+
+### Как выдать токен аддону
+
+```bash
+kubectl get secret synth-installer-key -n <namespace> \
+  -o jsonpath='{.data.bootstrap\.json}' | base64 -d | jq -r '.[0].secret'
+```
+
+Полученное значение — секрет service-key; аддон аутентифицируется заголовком
+`Authorization: Bearer synth_svc_…` (scope `addons:install`).
+
+### Ротация
+
+1. Удалите запись ключа: `DELETE /api/v2/service-keys/<id>`. (Мягкий `revoke` не
+   подойдёт: запись остаётся, и `ensure` не пересоздаст секрет.)
+2. Удалите Secret чарта: `kubectl delete secret synth-installer-key -n <namespace>`.
+3. `helm upgrade …` — чарт сгенерирует новый токен, backend при старте создаст ключ
+   с новым секретом.
+4. Обновите токен у аддонов.
+
+Смена `label` создаёт новый ключ (прежний остаётся и его нужно удалить отдельно);
+смена `scopes`/`roles` синхронизируется на существующем ключе без смены секрета.
+Надёжнее управлять секретом вне чарта — через `installerKey.existingSecret`.
 
 ## Провайдеры LLM
 

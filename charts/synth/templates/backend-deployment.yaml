@@ -5,7 +5,7 @@
 {{- $providerKeys = append $providerKeys .name -}}
 {{- end -}}
 {{- end -}}
-{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert -}}
+{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert .Values.installerKey.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -65,6 +65,13 @@ spec:
             {{- if .Values.caCert }}
             - name: NODE_EXTRA_CA_CERTS
               value: /etc/ssl/certs/itphx-ca.crt
+            {{- end }}
+            {{- if .Values.installerKey.enabled }}
+            - name: SYNTH_BOOTSTRAP_SERVICE_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.installerKey.existingSecret | default .Values.installerKey.secretName }}
+                  key: {{ .Values.installerKey.bootstrapKey }}
             {{- end }}
           {{- end }}
           volumeMounts:

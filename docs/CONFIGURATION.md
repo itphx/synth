@@ -328,6 +328,10 @@ remote:                           # гибридный режим: локаль�
 k8s Secret) > `config.security.bootstrapServiceKeys` в `config.yaml`. Рекомендуется
 держать секрет в env/Secret, а не в файле конфигурации.
 
+В Helm-чарте `charts/synth` installer-ключ провижинится опцией `installerKey`
+(создаёт Secret и прокидывает `SYNTH_BOOTSTRAP_SERVICE_KEYS`; `existingSecret` —
+взять готовый Secret); подробности — `charts/synth/README.md`.
+
 Пример (installer-ключ для установки аддонов):
 
 ```yaml

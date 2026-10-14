@@ -181,6 +181,22 @@ ingress:
 secrets:
   existingSecret: synth-secrets
 
+# Installer service-key (AD-052): создаётся при развёртывании Synth и используется
+# аддонами для самоустановки своих ресурсов (MCP-серверы, скиллы) по scope addons:install.
+# Провижининг идемпотентен при старте backend (security.bootstrapServiceKeys) — ключ
+# создаётся/синхронизируется по `label`, повторный `helm upgrade` секрет не меняет.
+installerKey:
+  enabled: false
+  label: addon-installer
+  scopes: ["addons:install"]
+  roles: []                 # доступ дают scopes; роль повышать не нужно
+  # Secret: если existingSecret пуст — чарт создаёт Secret со сгенерированным токеном
+  # (стабильным между `helm upgrade`); иначе используется существующий Secret,
+  # в котором по ключу `bootstrapKey` лежит готовый JSON для SYNTH_BOOTSTRAP_SERVICE_KEYS.
+  secretName: synth-installer-key
+  existingSecret: ""
+  bootstrapKey: bootstrap.json
+
 # CA внутренней инфраструктуры (PEM, опционально).
 # Пусто по умолчанию. Если задан непустым:
 #   - создаётся ConfigMap <release>-itphx-ca;
