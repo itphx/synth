@@ -21,7 +21,7 @@ import {
   TextField,
 } from '../ui/settings'
 
-/** AD-052: полный каталог scope'ов — 14 точечных + wildcard-семейства (`events:*`). */
+/** AD-052: полный каталог scope'ов формируется из `SERVICE_SCOPES` + `SERVICE_SCOPE_FAMILIES` (`<family>:*`). */
 const SCOPE_OPTIONS: string[] = [
   ...SERVICE_SCOPES,
   ...SERVICE_SCOPE_FAMILIES.map((family) => `${family}:*`),
