@@ -21,19 +21,18 @@ import {
   TextField,
 } from '../ui/settings'
 
-/** AD-052: полный каталог scope'ов формируется из `SERVICE_SCOPES` + `SERVICE_SCOPE_FAMILIES` (`<family>:*`). */
-const SCOPE_OPTIONS: string[] = [
+/**
+ * AD-052: фоллбек-каталог scope'ов/ролей. Основной источник — серверный
+ * `GET /service-keys/scopes` (каталог не компилируется в бандл); константы
+ * используются, только если эндпоинт недоступен (гибрид/старый сервер).
+ */
+const FALLBACK_SCOPE_OPTIONS: string[] = [
   ...SERVICE_SCOPES,
   ...SERVICE_SCOPE_FAMILIES.map((family) => `${family}:*`),
 ]
 
-/** AD-052: выбираемые роли синтетического пользователя service-ключа. */
-const ROLE_OPTIONS: GlobalRole[] = [
-  GlobalRole.ADMIN,
-  GlobalRole.USER,
-  GlobalRole.LEAD,
-  GlobalRole.AUDITOR,
-]
+/** AD-052: фоллбек-набор ролей синтетического пользователя service-ключа. */
+const FALLBACK_ROLE_OPTIONS = Object.values(GlobalRole) as GlobalRole[]
 
 /**
  * AD-052: тестовый curl обращения по service-key (read-only подсказка).
@@ -104,6 +103,9 @@ export function ServiceKeysSettings() {
   const [keys, setKeys] = useState<ServiceApiKey[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // AD-052: каталог scope'ов/ролей с сервера (`null` — ещё не загружен/ошибка → фоллбек).
+  const [scopeCatalog, setScopeCatalog] = useState<string[] | null>(null)
+  const [roleCatalog, setRoleCatalog] = useState<GlobalRole[] | null>(null)
 
   const [formOpen, setFormOpen] = useState(false)
   const [label, setLabel] = useState('')
@@ -155,12 +157,35 @@ export function ServiceKeysSettings() {
     void loadProjects()
   }, [loadProjects])
 
+  // AD-052: каталог scope'ов/ролей берём с сервера (не компилируем в бандл).
+  // Best-effort: при ошибке (гибрид/старый сервер) остаются shared-константы.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const catalog = await synthApi.getServiceKeyScopes()
+        if (cancelled) return
+        setScopeCatalog([
+          ...catalog.scopes,
+          ...catalog.families.map((family) => `${family}:*`),
+        ])
+        const known = Object.values(GlobalRole) as string[]
+        setRoleCatalog(catalog.roles.filter((role): role is GlobalRole => known.includes(role)))
+      } catch {
+        // Фоллбек на FALLBACK_SCOPE_OPTIONS/FALLBACK_ROLE_OPTIONS — форма работает.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const projectOptions = projects.map((project) => ({ value: project.id, label: project.name }))
-  const roleOptions = ROLE_OPTIONS.map((role) => ({
+  const roleOptions = (roleCatalog ?? FALLBACK_ROLE_OPTIONS).map((role) => ({
     value: role as string,
     label: t(`serviceKeys.role.${role}`),
   }))
-  const scopeOptions = SCOPE_OPTIONS.map((scope) => ({ value: scope, label: scope }))
+  const scopeOptions = (scopeCatalog ?? FALLBACK_SCOPE_OPTIONS).map((scope) => ({ value: scope, label: scope }))
 
   const projectName = (id: string) => projects.find((project) => project.id === id)?.name ?? id
 

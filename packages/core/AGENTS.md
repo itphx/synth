@@ -165,7 +165,8 @@
   (`events:ingest`, `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`)
   и проектная проекция через `scopeGuard`/`projectGuard` (core-дефолты — `requireScope`/`checkProjectAccess`).
 - `server/routes/service-keys.ts` — `createServiceKeyRoutes` (AD-052 этап I): CRUD service-key
-  инстанса (`GET/POST /api/v2/service-keys`, `GET/PATCH/DELETE /:id`, `POST /:id/revoke`),
+  инстанса (`GET/POST /api/v2/service-keys`, `GET /scopes` — каталог scope'ов/семейств/ролей из shared,
+  `GET/PATCH/DELETE /:id`, `POST /:id/revoke`),
   store `ServiceApiKeyStore`; `opts.writeGuard`/`readGuard` (core — `requireAuth`, managed — ADMIN),
   `messages` (i18n), `resolveUserId` (creator). Секрет — единожды в ответе `POST`.
   `storage/service-api-key-store.ts` — `ServiceApiKeyStore` (`{dataDir}/service-keys.json`):

@@ -2,6 +2,9 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import {
+  GlobalRole,
+  SERVICE_SCOPES,
+  SERVICE_SCOPE_FAMILIES,
   serviceApiKeyCreateSchema,
   serviceApiKeyUpdateSchema,
 } from '@itphx/synth-shared';
@@ -63,8 +66,9 @@ function currentUserId(c: Context, resolveUserId?: (c: Context) => string): stri
 }
 
 /**
- * AD-052: `GET /` — список; `POST /` — создание (секрет единожды); `GET /:id`;
- * `PATCH /:id`; `DELETE /:id`; `POST /:id/revoke` — мягкий отзыв (идемпотентно).
+ * AD-052: `GET /` — список; `GET /scopes` — каталог scope'ов/ролей; `POST /` —
+ * создание (секрет единожды); `GET /:id`; `PATCH /:id`; `DELETE /:id`;
+ * `POST /:id/revoke` — мягкий отзыв (идемпотентно).
  * Конфликт метки → 409 `CONFLICT`; невалидные scope/role → 400 `VALIDATION_ERROR`.
  */
 export function createServiceKeyRoutes(
@@ -114,6 +118,20 @@ export function createServiceKeyRoutes(
       throw err;
     }
   });
+
+  // GET /api/v2/service-keys/scopes — каталог для форм/клиентов.
+  // ВАЖНО: объявлен ДО параметрического `/:id`, иначе `/:id` перехватит
+  // литерал `scopes` как id. Источник — shared (`SERVICE_SCOPES`/
+  // `SERVICE_SCOPE_FAMILIES`/`GlobalRole`), списки здесь НЕ дублируются:
+  // каталог — серверная сущность, UI не должен компилировать его в бандл.
+  // Гвард — тот же `readGuard`, что у `GET /` (паритет доступа).
+  app.get('/scopes', readGuard, (c) =>
+    c.json({
+      scopes: [...SERVICE_SCOPES],
+      families: [...SERVICE_SCOPE_FAMILIES],
+      roles: Object.values(GlobalRole),
+    }),
+  );
 
   // GET /api/v2/service-keys/:id — метаданные ключа.
   app.get('/:id', readGuard, async (c) => {

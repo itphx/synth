@@ -26,6 +26,7 @@ vi.hoisted(() => {
 
 const mocks = vi.hoisted(() => ({
   getServiceKeys: vi.fn(),
+  getServiceKeyScopes: vi.fn(),
   getServiceKey: vi.fn(),
   createServiceKey: vi.fn(),
   updateServiceKey: vi.fn(),
@@ -161,6 +162,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   authStore.user = { id: 'u1', roles: ['ADMIN'] }
   mocks.getServiceKeys.mockResolvedValue({ keys: [KEY_ACTIVE, KEY_EXPIRED, KEY_REVOKED] })
+  // AD-052: каталог scope'ов/ролей с сервера (по умолчанию — с новыми scopes).
+  mocks.getServiceKeyScopes.mockResolvedValue({
+    scopes: ['events:ingest', 'events:watch', 'addons:install', 'users:read'],
+    families: ['events', 'sessions'],
+    roles: ['ADMIN', 'USER', 'LEAD', 'AUDITOR'],
+  })
   mocks.createServiceKey.mockResolvedValue(CREATED)
   mocks.updateServiceKey.mockImplementation(async (id: string, patch: unknown) => ({
     ...KEY_ACTIVE,
@@ -386,6 +393,47 @@ describe('ServiceKeysSettings — админ-секция «Сервисные �
     const container = await renderSettings()
 
     expect(container.querySelector('[role="alert"]')!.textContent).toContain('boom')
+  })
+
+  // AD-052: каталог scope'ов/ролей — серверная сущность (не в бандле) + фоллбек.
+  it('каталог scope/ролей берётся с сервера; неизвестные роли отбрасываются', async () => {
+    mocks.getServiceKeyScopes.mockResolvedValue({
+      scopes: ['addons:install', 'users:read'],
+      families: ['events'],
+      roles: ['ADMIN', 'ROOT'],
+    })
+    const container = await renderSettings()
+    await clickTestId(container, 'service-keys-add')
+
+    expect(mocks.getServiceKeyScopes).toHaveBeenCalledTimes(1)
+    // Новые scopes видны в чипах (из ответа сервера, а не из shared-констант).
+    expect(container.querySelector('[data-testid="service-keys-scope-addons-install"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="service-keys-scope-users-read"]')).not.toBeNull()
+    // Wildcard-семейство → чип `<family>:*` (testid `events-all`).
+    expect(container.querySelector('[data-testid="service-keys-scope-events-all"]')).not.toBeNull()
+    // Роли — из ответа сервера; неизвестная ROOT отброшена.
+    expect(container.querySelector('[data-testid="service-keys-role-ADMIN"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="service-keys-role-ROOT"]')).toBeNull()
+  })
+
+  it('серверный каталог — источник истины (нет scope в ответе → нет чипа)', async () => {
+    mocks.getServiceKeyScopes.mockResolvedValue({ scopes: ['events:ingest'], families: [], roles: ['ADMIN'] })
+    const container = await renderSettings()
+    await clickTestId(container, 'service-keys-add')
+
+    expect(container.querySelector('[data-testid="service-keys-scope-events-ingest"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="service-keys-scope-addons-install"]')).toBeNull()
+  })
+
+  it('при ошибке каталога — фоллбек на shared-константы (чипы не пусты, форма работает)', async () => {
+    mocks.getServiceKeyScopes.mockRejectedValueOnce(new Error('no endpoint'))
+    const container = await renderSettings()
+    await clickTestId(container, 'service-keys-add')
+
+    expect(container.querySelector('[data-testid="service-keys-scope-addons-install"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="service-keys-scope-events-ingest"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="service-keys-scope-events-all"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="service-keys-role-ADMIN"]')).not.toBeNull()
   })
 })
 

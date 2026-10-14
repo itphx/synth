@@ -2019,6 +2019,13 @@ export const synthApi = {
     return fetchJSON<{ keys: ServiceApiKey[] }>(`${BASE_URL}/service-keys`)
   },
 
+  /** GET /service-keys/scopes — каталог scope'ов/семейств/ролей для форм (AD-052). */
+  async getServiceKeyScopes(): Promise<{ scopes: string[]; families: string[]; roles: string[] }> {
+    return fetchJSON<{ scopes: string[]; families: string[]; roles: string[] }>(
+      `${BASE_URL}/service-keys/scopes`,
+    )
+  },
+
   /** GET /service-keys/:id — метаданные одного service-ключа. */
   async getServiceKey(id: string): Promise<ServiceApiKey> {
     return fetchJSON<ServiceApiKey>(`${BASE_URL}/service-keys/${encodeURIComponent(id)}`)

@@ -89,6 +89,26 @@ describe('Service Keys API Routes (AD-052, этап I)', () => {
     expect((await app.request('/api/v2/service-keys/svk_missing')).status).toBe(404);
   });
 
+  it('GET /scopes — каталог из shared; литерал не перехватывается /:id (порядок роутов)', async () => {
+    const res = await makeApp().request('/api/v2/service-keys/scopes');
+    // 200 (а не 404 от `/:id`) подтверждает порядок объявления роутов.
+    expect(res.status).toBe(200);
+    const body = await res.json() as { scopes: string[]; families: string[]; roles: string[] };
+    expect(body.scopes).toContain('events:ingest');
+    expect(body.scopes).toContain('addons:install');
+    expect(body.scopes).toContain('users:read');
+    expect(body.families).toContain('events');
+    expect(body.families).toContain('sessions');
+    expect(body.roles).toEqual(['ADMIN', 'USER', 'LEAD', 'AUDITOR']);
+  });
+
+  it('GET /scopes — тот же readGuard, что у GET /', async () => {
+    const deny = (async (c: Context) => c.json({ error: { code: 'FORBIDDEN' } }, 403)) as MiddlewareHandler;
+    const app = makeApp({ readGuard: deny });
+    expect((await app.request('/api/v2/service-keys/scopes')).status).toBe(403);
+    expect((await app.request('/api/v2/service-keys')).status).toBe(403);
+  });
+
   it('PATCH /:id — обновление и сброс; 404; конфликт 409', async () => {
     const app = makeApp();
     const a = await (await postJson(app, '/api/v2/service-keys', { label: 'alpha', scopes: ['events:ingest'], rateLimitPerMinute: 5 })).json() as { id: string };

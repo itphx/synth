@@ -780,6 +780,7 @@ sha256-хеш, в списке — `prefix`. RBAC: managed (backend) — тол�
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение / req-resp |
 |---|---|---|---|---|
 | GET | `/api/v2/service-keys` | оба | ADMIN / auth | Список `{keys}` — метаданные без секрета и хеша |
+| GET | `/api/v2/service-keys/scopes` | оба | ADMIN / auth | Каталог для форм: `{scopes, families, roles}` — точечные scopes (`SERVICE_SCOPES`), wildcard-семейства (`SERVICE_SCOPE_FAMILIES`) и роли (`GlobalRole`); тот же guard, что у `GET /`. Клиенты строят опции из ответа (не компилируют каталог в бандл); тот же guard, порядок объявления — до `/:id` |
 | POST | `/api/v2/service-keys` | оба | ADMIN / auth | Создать (`serviceApiKeyCreateSchema`): `{label, description?, roles?, scopes, allowedProjects?, rateLimitPerMinute?, expiresAt?}` → 201 `ServiceApiKeyCreated` = метаданные + `key` (plaintext `synth_svc_<base64url>`, показывается **один раз**); дубль метки → 409 `CONFLICT`; невалидное тело/скоуп/роль → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/service-keys/:id` | оба | ADMIN / auth | Метаданные ключа (`ServiceApiKey`); нет ключа → 404 `NOT_FOUND` |
 | PATCH | `/api/v2/service-keys/:id` | оба | ADMIN / auth | Обновить (`serviceApiKeyUpdateSchema`): `{label?, description?, roles?, scopes?, allowedProjects?, rateLimitPerMinute?, expiresAt?}`; `null` — сброс поля, `undefined` — не трогать; смена метки проверяется на уникальность → 200; дубль → 409 `CONFLICT` |
