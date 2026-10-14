@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { McpManager } from './manager.js';
-import type { McpServerConfig, ToolDefinition } from '@itphx/synth-shared';
+import type { McpServerConfig, ToolContext, ToolDefinition } from '@itphx/synth-shared';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
+import type { SessionManager } from '../../sessions/manager.js';
 
 const mockClientConnect = vi.fn<() => Promise<void>>();
 const mockClientDisconnect = vi.fn<() => Promise<void>>();
 const mockClientCallTool = vi.fn<() => Promise<{ content: string; isError: boolean }>>();
+/** Аргументы фактических вызовов McpClient.callTool (name, args, _meta). */
+let mockClientCallToolArgs: Array<{ name: string; args: Record<string, unknown>; meta?: Record<string, unknown> }> = [];
 let mockClientTools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> = [];
 let mockClientConnected = false;
 let mockClientInstructions: string | undefined;
@@ -28,7 +31,10 @@ vi.mock('./client.js', () => ({
     }
     connect = mockClientConnect;
     disconnect = mockClientDisconnect;
-    callTool = vi.fn((_name: string, _args: Record<string, unknown>) => mockClientCallTool());
+    callTool = vi.fn((name: string, args: Record<string, unknown>, meta?: Record<string, unknown>) => {
+      mockClientCallToolArgs.push({ name, args, meta });
+      return mockClientCallTool();
+    });
   },
 }));
 
@@ -92,6 +98,7 @@ describe('McpManager', () => {
     ];
     mockClientConnected = false;
     mockClientInstructions = 'Инструкции сервера';
+    mockClientCallToolArgs = [];
 
     manager = new McpManager();
     registry = makeMockToolRegistry();
@@ -207,6 +214,50 @@ describe('McpManager', () => {
     const names = await manager.registerTools('test-server', registry);
     expect(mockClientConnect).toHaveBeenCalled();
     expect(names).toEqual(['test-server_tool1', 'test-server_tool2']);
+  });
+
+  describe('registerTools: контекст сессии в _meta (synth/session_id)', () => {
+    function makeCtx(sessionId: string, extra?: Record<string, unknown>): ToolContext {
+      return { sessionId, messageId: 'msg-1', workingDir: '/tmp', extra };
+    }
+
+    it('execute MCP-тула передаёт _meta.synth/session_id при ctx.sessionId', async () => {
+      mockClientConnected = true;
+      await manager.registerTools('test-server', registry);
+      const tool = registry.get('test-server_tool1')!;
+
+      await tool.execute({ arg: 'value' }, makeCtx('sess-1'));
+
+      expect(mockClientCallToolArgs).toHaveLength(1);
+      expect(mockClientCallToolArgs[0]!.name).toBe('tool1');
+      expect(mockClientCallToolArgs[0]!.args).toEqual({ arg: 'value' });
+      expect(mockClientCallToolArgs[0]!.meta).toEqual({ 'synth/session_id': 'sess-1' });
+    });
+
+    it('execute MCP-тула без sessionId не передаёт _meta', async () => {
+      mockClientConnected = true;
+      await manager.registerTools('test-server', registry);
+      const tool = registry.get('test-server_tool1')!;
+
+      await tool.execute({ arg: 'value' }, makeCtx(''));
+
+      expect(mockClientCallToolArgs).toHaveLength(1);
+      expect(mockClientCallToolArgs[0]!.meta).toBeUndefined();
+    });
+
+    it('execute MCP-тула с sessionManager (деобфускация) тоже передаёт _meta', async () => {
+      mockClientConnected = true;
+      await manager.registerTools('test-server', registry);
+      const tool = registry.get('test-server_tool1')!;
+      const sessionManager = {
+        getSession: async () => ({ obfuscationMap: {} }),
+      } as unknown as SessionManager;
+
+      await tool.execute({ arg: 'value' }, makeCtx('sess-2', { sessionManager }));
+
+      expect(mockClientCallToolArgs).toHaveLength(1);
+      expect(mockClientCallToolArgs[0]!.meta).toEqual({ 'synth/session_id': 'sess-2' });
+    });
   });
 
   it('registerTools для сервера с ошибкой подключения возвращает []', async () => {

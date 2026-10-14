@@ -4,7 +4,7 @@ import type { McpServerConfig } from '@itphx/synth-shared';
 
 const mockConnect = vi.fn<() => Promise<void>>();
 const mockListTools = vi.fn<() => Promise<{ tools: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }> }>>();
-const mockCallTool = vi.fn<() => Promise<{ content: Array<{ type: string; text?: string }>; isError: boolean }>>();
+const mockCallTool = vi.fn<(params: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError: boolean }>>();
 const mockClose = vi.fn<() => Promise<void>>();
 let mockInstructions: string | undefined;
 
@@ -134,6 +134,35 @@ describe('McpClient (stdio)', () => {
     const result = await client.callTool('search', { q: 'test' });
     expect(result.isError).toBe(false);
     expect(result.content).toBe('Hello from tool');
+  });
+
+  it('callTool передаёт _meta в tools/call, если meta задан', async () => {
+    await client.connect();
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    });
+
+    await client.callTool('search', { q: 'test' }, { 'synth/session_id': 'sess-42' });
+
+    expect(mockCallTool).toHaveBeenCalledWith({
+      name: 'search',
+      arguments: { q: 'test' },
+      _meta: { 'synth/session_id': 'sess-42' },
+    });
+  });
+
+  it('callTool без meta не передаёт _meta (поведение без сессии не меняется)', async () => {
+    await client.connect();
+    mockCallTool.mockResolvedValueOnce({
+      content: [{ type: 'text', text: 'ok' }],
+      isError: false,
+    });
+
+    await client.callTool('search', { q: 'test' });
+
+    expect(mockCallTool).toHaveBeenCalledWith({ name: 'search', arguments: { q: 'test' } });
+    expect(mockCallTool.mock.calls[0]![0]).not.toHaveProperty('_meta');
   });
 
   it('callTool без подключения возвращает ошибку', async () => {

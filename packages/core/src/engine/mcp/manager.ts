@@ -283,14 +283,17 @@ export class McpManager {
         mcpServer: serverName,
         execute: async (params: unknown, ctx: ToolContext): Promise<ToolResult> => {
           const args = params as Record<string, unknown>;
+          // Контекст Synth-сессии для внешнего MCP-сервера: `_meta['synth/session_id']`
+          // (не путать с transport session id Streamable HTTP). Без сессии — без `_meta`.
+          const meta = ctx.sessionId ? { 'synth/session_id': ctx.sessionId } : undefined;
           // AD-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧
           const sessionManager = ctx.extra?.sessionManager as SessionManager | undefined;
           if (sessionManager) {
             const store = new ObfuscationMapStore(sessionManager);
             const restored = await store.restoreForArgs(ctx.sessionId, args);
-            return client.callTool(tool.name, restored as Record<string, unknown>);
+            return client.callTool(tool.name, restored as Record<string, unknown>, meta);
           }
-          return client.callTool(tool.name, args);
+          return client.callTool(tool.name, args, meta);
         },
         jsonSchema: tool.inputSchema,
       };

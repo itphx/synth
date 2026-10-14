@@ -90,7 +90,11 @@ export class McpClient {
     info(`MCP`, `Отключён сервер "${this._name}"`);
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    meta?: Record<string, unknown>,
+  ): Promise<McpToolResult> {
     if (!this._client || !this._connected) {
       return { content: `MCP-сервер "${this._name}" не подключён`, isError: true };
     }
@@ -101,7 +105,13 @@ export class McpClient {
       );
 
       const callPromise = (async (): Promise<McpToolResult> => {
-        const result = await this._client!.callTool({ name, arguments: args });
+        // `_meta` запроса `tools/call` (не путать с transport session id
+        // Streamable HTTP): контекст Synth-сессии для внешних MCP-серверов.
+        const result = await this._client!.callTool({
+          name,
+          arguments: args,
+          ...(meta ? { _meta: meta } : {}),
+        });
 
         if (result.isError) {
           const errorText = (result.content as Array<{ type: string; text?: string }>)
