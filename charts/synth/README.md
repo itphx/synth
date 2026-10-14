@@ -124,7 +124,8 @@ ingress:
 | `installerKey.roles` | `[]` | Роли синтетического пользователя (пусто → дефолт хранилища) |
 | `installerKey.secretName` | `synth-installer-key` | Secret, создаваемый чартом (при пустом `existingSecret`) |
 | `installerKey.existingSecret` | `""` | Готовый Secret с JSON для `SYNTH_BOOTSTRAP_SERVICE_KEYS` (тогда чарт Secret не создаёт) |
-| `installerKey.bootstrapKey` | `bootstrap.json` | Ключ внутри Secret с JSON-массивом |
+| `installerKey.bootstrapKey` | `bootstrap.json` | Ключ внутри Secret с JSON-массивом (для бутстрапа backend) |
+| `installerKey.tokenKey` | `token` | Ключ внутри Secret с plaintext-токеном (для аддонов) |
 | `caCert` | `""` | PEM внутреннего CA (опционально) |
 | `extraObjects` | `[]` | Произвольные дополнительные манифесты (рендерятся как есть) |
 
@@ -169,19 +170,23 @@ installerKey:
   roles: []                          # доступ дают scopes; роль повышать не нужно
   secretName: synth-installer-key    # Secret, создаёт чарт (enabled + пустой existingSecret)
   existingSecret: ""                 # готовый Secret (тогда чарт Secret не создаёт)
-  bootstrapKey: bootstrap.json
+  bootstrapKey: bootstrap.json       # ключ с JSON для бутстрапа backend
+  tokenKey: "token"                  # ключ с plaintext-токеном для аддонов
 ```
 
 Поведение:
 
 - `enabled: false` (по умолчанию) — ничего не создаётся, env не задаётся.
-- `enabled: true`, `existingSecret: ""` — чарт создаёт Secret `<secretName>`; по ключу
-  `bootstrapKey` лежит JSON-массив `[{label,secret,scopes,roles}]`, токен —
-  `synth_svc_` + 43 символа base64url. В backend Deployment добавляется env
-  `SYNTH_BOOTSTRAP_SERVICE_KEYS` (`valueFrom.secretKeyRef` на этот Secret).
+- `enabled: true`, `existingSecret: ""` — чарт создаёт Secret `<secretName>` с **двумя**
+  ключами, содержащими **один и тот же** секрет:
+  - `bootstrapKey` (`bootstrap.json`) — JSON-массив `[{label,secret,scopes,roles}]`
+    для env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (backend Deployment ссылается через `secretKeyRef`);
+  - `tokenKey` (`token`) — «сырой» plaintext-токен (`synth_svc_` + 43 символа base64url)
+    для аддонов/скриптов: `secretKeyRef {name: <secret>, key: token}`.
 - `enabled: true`, `existingSecret: <name>` — Secret не создаётся; чарт только
-  ссылается на существующий Secret, где по ключу `bootstrapKey` лежит готовый JSON
-  (оператор кладёт его сам: вручную, External Secrets, sealed-secrets и т.п.).
+  ссылается на существующий Secret, в котором оператор сам кладёт оба ключа:
+  `bootstrapKey` (готовый JSON) и `tokenKey` (plaintext-токен)
+  (вручную, External Secrets, sealed-secrets и т.п.).
 
 Токен **стабилен между `helm upgrade`**: если Secret уже есть в кластере, его текущее
 значение переиспользуется (`lookup`). Вне кластера (`helm template`, `--dry-run`) `lookup`
@@ -194,15 +199,42 @@ installerKey:
 > **приоритетнее** `config.yaml` (AD-023: CLI > env > config.yaml), т.е. список из Secret
 > полностью заменяет список из `config.yaml`. Не задавайте installer-ключи в обоих местах.
 
-### Как выдать токен аддону
+### Ключи Secret и как выдать токен
+
+В Secret два ключа с одинаковым секретом:
+
+| Ключ | Содержимое | Кому |
+|---|---|---|
+| `bootstrap.json` (`bootstrapKey`) | JSON-массив с секретом | backend (авто-бутстрап `security.bootstrapServiceKeys`) |
+| `token` (`tokenKey`) | «сырой» токен `synth_svc_…` | аддоны/скрипты (hook-Job авто-установки) |
+
+Получить токен для аддона (или сверить со скриптом):
 
 ```bash
+# plaintext-токен (для аддонов/скриптов)
+kubectl get secret synth-installer-key -n <namespace> -o jsonpath='{.data.token}' | base64 -d
+
+# то же значение из JSON-бутстрапа (для сверки)
 kubectl get secret synth-installer-key -n <namespace> \
   -o jsonpath='{.data.bootstrap\.json}' | base64 -d | jq -r '.[0].secret'
 ```
 
-Полученное значение — секрет service-key; аддон аутентифицируется заголовком
-`Authorization: Bearer synth_svc_…` (scope `addons:install`).
+Аддон аутентифицируется заголовком `Authorization: Bearer synth_svc_…`
+(scope `addons:install`). Чтобы не доставать токен вручную, hook-Job аддона ссылается
+на тот же Secret через `secretKeyRef`:
+
+```yaml
+# фрагмент Job/Deployment аддона
+env:
+  - name: SYNTH_INSTALLER_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: synth-installer-key     # installerKey.existingSecret | default installerKey.secretName
+        key: token                    # installerKey.tokenKey
+```
+
+> В `autoInstall.installerSecretKey` чарт аддона указывает имя **Secret** (например
+> `synth-installer-key`), а ключ внутри — `token` (`installerKey.tokenKey`).
 
 ### Ротация
 

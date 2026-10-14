@@ -192,10 +192,14 @@ installerKey:
   roles: []                 # доступ дают scopes; роль повышать не нужно
   # Secret: если existingSecret пуст — чарт создаёт Secret со сгенерированным токеном
   # (стабильным между `helm upgrade`); иначе используется существующий Secret,
-  # в котором по ключу `bootstrapKey` лежит готовый JSON для SYNTH_BOOTSTRAP_SERVICE_KEYS.
+  # в котором по ключу `bootstrapKey` лежит готовый JSON для SYNTH_BOOTSTRAP_SERVICE_KEYS,
+  # а по ключу `tokenKey` — тот же токен в plaintext (для аддонов).
   secretName: synth-installer-key
   existingSecret: ""
   bootstrapKey: bootstrap.json
+  # Ключ с «сырым» plaintext-токеном (`synth_svc_…`) в том же Secret — для аддонов
+  # (hook-Job авто-установки): secretKeyRef {name: <secret>, key: token}.
+  tokenKey: "token"
 
 # CA внутренней инфраструктуры (PEM, опционально).
 # Пусто по умолчанию. Если задан непустым:
