@@ -895,3 +895,126 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - **Проверено (@orchestrator):** `Stalled=False` + `gitJobStatus=Current` у обоих; `bundles` `1/1`; Failed-джоб нет; в ns сайтов не появилось rogue `GitRepo`; UID'ы Deployment/Service/Ingress и подов не менялись; landing `index.html` sha256 совпал, docs HTTP 200.
 - **Зафиксировано в git:** `gitrepo.yaml` (референс applied-состояния) в обоих репо — `kubectl diff -f gitrepo.yaml` даёт 0 расхождений; README дополнены. Коммиты `274d5d5` (docs), `205149e` (landing) — запушены.
 - **Остаточный риск:** `paths` обязан остаться в GitRepo — при удалении корень снова станет бандлом и при наличии любого `.yml` в корне поломка повторится (предупреждение записано в шапке `gitrepo.yaml` и README).
+
+## 2026-10-14 — Stop-надёжность (ядро) + Telegram: «Пишет…», стриминг, /stop (аддон)
+
+- **Задача:** «Стоп» в UI не останавливал генерацию (no-op, если `currentStream` не зарегистрирован); добавить статус «Пишет…» и стриминг ответа в Telegram, команду `/stop`.
+- **Тип:** feature / bug fix (core + addon).
+- **Исполнитель:** @orchestrator → @fixer ×3 (core; addon; аддон-фикс по верификации), @tester (верификация).
+- **Результат:** PASS (верификация PARTIAL → дефекты D1/D2 закрыты).
+
+**Ядро (`synth`, ветка `docs/ad-normalization-089-external-events`, коммит `b9cc08d`):**
+- `SessionStatus.cancelRequested/cancelRequestedAt` — персистентный флаг отмены.
+- `POST /sessions/:id/abort`: ставит флаг, graceful `orchestrator.cancel` при живом стриме, `queueManager.requestStop`; если процессора нет — снимает флаг (ложной отмены следующего запуска нет).
+- `QueueProcessor.requestStop()` + проверки на границах `_run` (верх итерации/после backoff/финал); при срабатывании чистит `pendingMessages`, снимает `blocked/currentStream`, публикует `stream.cancelled` **без дубля** (graceful-путь уже опубликовал), сбрасывает флаг.
+- Оркестратор: `isCancelRequested` на границе Tool Use (проводка core/backend).
+- `serializeSession.status.cancel_requested/_at`.
+- Тесты: +4 `processor.test.ts`, +3 `sessions.test.ts`; core 3096, backend 389 — зелёные.
+
+**Аддон (`synth-gateway-telegram`, коммиты `732dd76`, `e6111a6`):**
+- `sendChatAction(typing)` — индикатор «Печатает…» (каждые 4 с, watchdog простоя 60 с, гасится на финале/reconnect/`stop`).
+- Live-стриминг: накопление `stream.chunk`, троттлинг правок 1.5 с, обрезка 4096, `parse_mode` (html — экранирование **до** нарезки, D1 фикс), дедуп `stream:<id>`/`message:<idx>`, обработка `cancelled`/`error`/`retry`, устойчивость к 429/400.
+- `/stop`: сессия чата из стора → `POST /sessions/:id/abort`; `stop` в `LOCAL_COMMANDS`; строка в `/help`.
+- Тесты: 281 → 288 зелёных.
+
+**Верификация (@tester, read-only):** core 3096/backend 389/addon 288, typecheck/lint чисто; дублей `stream.cancelled` нет, гибридная ветка и паритет core↔backend не сломаны. Найдены D1 (потеря хвоста в html), D2 (зависание «Печатает…» при обрыве SSE) — оба исправлены (`e6111a6`).
+
+**Деплой (test):** пересобраны/запушены `synth-backend:0.10.0`, `synth-gateway-telegram:0.2.0` (pullPolicy Always); `rollout restart` обоих — Running, оба тенанта шлюза поднялись, watcher подключён к SSE.
+
+**Наблюдения (не блокеры):** при `/stop` очищается вся очередь pending (сообщения не «висят»); `abort` без проверки владельца (предсуществующее); `/stop` без роль-гейта (чат-уровень); stale-флаг при SIGKILL в окне мс.
+**Осталось:** e2e-проверка пользователем (Telegram: «печатает…» + стрим; `/stop`; Stop в UI), перезапуск dev (`dev.sh` сам пересобирает core), пуш веток/тегов (по просьбе), при согласии — правки AGENTS.md/AD-089.
+
+### 2026-10-14 — Telegram: дубль ответа и форматирование (аддон + deploy)
+
+- **Симптомы (test):** на одно сообщение пришло два ответа (полный + обрезанный ~500 симв.), форматирование отсутствовало (`**жирный**` как есть).
+- **Причина дубля:** ядро публикует и `stream.done` (полный текст), и `message.added` (assistant, `content` обрезан ядром до 500 — `orchestrator.ts:5171`). `message.added` приходил первым, помечал `message:<idx>` и доставлял огрызок; затем `stream.done` пропускал финализацию.
+- **Причина форматирования:** у тенантов `parseMode: plain`.
+- **Фикс (аддон, коммит `5d33852`):**
+  - `message.added` (assistant) — отложенный фоллбек (grace 3 с), отменяется на `stream.done`/`stream.cancelled`; проверка `message:<idx>` и `metadata.stream_id` → `stream:<id>`. Тесты сценариев (a)–(e).
+  - Новый `src/gateway/markdown.ts`: Markdown → Telegram-HTML (bold/italic/strike/code/pre/ссылки/заголовки/цитаты/список), толерантность к незакрытым маркерам при стриминге, экранирование; безопасная нарезка ≤4096 с сохранением баланса тегов (закрытие/переоткрытие на границе).
+  - Adдон: 313 тестов (было 288), typecheck/lint/build — чисто.
+- **Деплой:** образ `synth-gateway-telegram:0.2.0` пересобран/запушен; `synth-deploy` `b2e192e` (`GATEWAY_PARSE_MODE: "html"` в `gateway-telegram/values.yaml`) → Fleet применил, под пересоздан, `GATEWAY_PARSE_MODE=html`, health `watcher: up` у dev и test.
+- **Проводка решения:** глобальный env дефолт (тенанты без `parseMode` наследуют) — секреты/`tenants.json` не трогались.
+- **Осталось:** e2e пользователем (один ответ, форматирование, стрим, `/stop`); пуш код-репозиториев (`synth`, addon) — по команде; правки AGENTS.md/AD-089 — по согласию.
+
+### 2026-10-14 — Telegram: ответы как Rich Message (markdown) вместо html
+
+- **Запрос пользователя:** таблицы не рендерятся; перейти на Markdown.
+- **Факт:** `parse_mode: Markdown`/`MarkdownV2` таблицы не поддерживают. С **Bot API 10.1** (Rich Messages) есть `sendRichMessage` с контентом `markdown` — нативные таблицы/заголовки/списки/цитаты/сноски/формулы; лимиты до 32768 симв., 500 блоков, 20 колонок; `sendRichMessageDraft` — стриминг черновика (эфемерный, приватные чаты). Типы уже в `@grammyjs/types@5.0.0`.
+- **Реализация (аддон, коммит `8054e42`):** `parseMode: 'plain' | 'html' | 'markdown'`.
+  - Rich: финал — `sendRichMessage({rich_message:{markdown}})`, стриминг — `sendRichMessageDraft` (троттлинг ~1 c, `draft_id` из хэша `stream_id`, `can_stop`), только приватные чаты; в группах — только индикатор + финал.
+  - Фоллбек на html-путь при 400/лимитах/>32768; `plain`/`html` без изменений; дедуп/«Печатает…»/`/stop` сохранены.
+  - Тесты: 329 (было 313), typecheck/lint/build — чисто.
+- **Деплой:** образ `synth-gateway-telegram:0.2.0` пересобран/запушен; `synth-deploy` `5b95ee7` (`GATEWAY_PARSE_MODE: "markdown"`) → Fleet применил, под пересоздан, лог «отправка ответов: markdown» у dev/test, health `watcher: up`.
+- **Осталось:** e2e пользователем (таблицы/заголовки/списки в ответе; приватный чат — виден стриминг черновика); пуш код-репозиториев — по команде; AGENTS.md/AD — по согласию.
+
+### 2026-10-14 — Telegram: rich-таблица не рисовалась из-за фоллбека по пустому черновику
+
+- **Симптом:** в rich-режиме (`parseMode=markdown`) таблица пришла текстом; в логе шлюза `sendRichMessageDraft: Bad Request: RICH_MESSAGE_EMPTY`.
+- **Причина:** первые чанки пробельные → черновик с пустым (после trim) Markdown → Telegram `RICH_MESSAGE_EMPTY` → `flushLive` ставил стриму `richFallback=true` **навсегда** → финал уходил HTML-путём (таблица остаётся текстом). Смешение «черновики недоступны» и «rich-финал сломан».
+- **Фикс (аддон, коммит `feb4dac`):** пустой/пробельный черновик не отправляется; сбой/недоступность/лимит черновика лишь отключают черновики (`richDraftsDisabled`), а `richFallback` выставляется **только** при сбое финального `sendRichMessage`; убран нерабочий `canStop` у черновика. Тесты: 330.
+- **Проверка markdown напрямую (Bot API, `sendRichMessage`, затем `deleteMessage`):** блоки `heading|heading|heading|paragraph|table|divider|pre|divider` — таблица распознаётся (`type:"table"`, `is_header:true`). Значит контент корректен, дело было в фоллбеке.
+- **Деплой:** образ `synth-gateway-telegram:0.2.0` пересобран/запушен, под перезапущен; `отправка ответов: markdown` у dev/test, watcher `up`.
+- **Замечание:** для проверки в чат ушло и сразу удалено служебное rich-сообщение (id 62) — короткая вспышка.
+
+### 2026-10-14 — Telegram: стриминг в rich-режиме (живучесть черновиков)
+
+- **Симптом:** в `parseMode=markdown` ответ появляется только целиком (стриминга не видно).
+- **Причина:** первый же сбой `sendRichMessageDraft` (`aborted` — egress-прокси; `RICH_MESSAGE_EMPTY` — накопленный текст после разбора даёт пусто) навсегда ставил `richDraftsDisabled` → черновики больше не шлются.
+- **Фикс (аддон, коммит `5a7f088`):** `RICH_MESSAGE_EMPTY` — не сбой (пропуск, следующий чанк пробует снова); транзиентные сбои считаются последовательно и отключают черновики только после 3 подряд (успех сбрасывает счётчик); `429` — окно `retry_after`; финал всегда `sendRichMessage` (постоянный html-фоллбек — только при сбое финала/oversize). Тесты: 334.
+- **Деплой:** образ пересобран/запушен (digest `6c8d50b3…`), под перезапущен.
+- **Ограничения:** `sendRichMessageDraft` — только приватные чаты (в группах ответ приходит целиком в финале); черновик эфемерный (~30 c) и заменяется финальным сообщением.
+- **Осталось (если стриминг всё ещё не виден):** edit-based rich-стриминг (`sendRichMessage` + `editMessageText` с `rich_message`) — работает и в группах.
+
+### 2026-10-14 — Telegram: reply-шапка ответа привязана к сообщению-источнику
+
+- **Симптом:** при отправке нескольких сообщений во время стриминга ответ получал reply на **последнее** входящее, а не на то, на которое отвечает.
+- **Причина:** reply строился из `route.lastInboundMessageId`, который поллер перезаписывает на каждое входящее; к финалу он указывал на более новое сообщение.
+- **Фикс (аддон, коммит `dea4e07`, ядро НЕ менялось):** новый `InboundRegistry` — связка `dedupKey → messageId` (при публикации события: `event.dedupKey` + `payload.messageId`) и `streamId → messageId` (по SSE `message.added(user)` с `metadata.dedup_key`/`metadata.stream_id`); адресат reply = `replyForStream(streamId) ?? route.lastInboundMessageId` (fallback сохранён). Проведено в rich-финал/`sendText`/`finalize`/`deliver`/`sendChunks`; черновики reply не поддерживают. Реестр — на тенант, лимит 200 (вытеснение).
+- **Тесты:** 353 (было 334), включая сценарий «3 сообщения во время ответа на 1-е» → reply `[11,22,33]`.
+- **Деплой:** образ пересобран/запушен (digest `beb68a1d…`), под перезапущен, `отправка ответов: markdown`, watcher `up`.
+
+### 2026-10-14 — Актуализация документации (ядро + аддон)
+
+- **Ядро (`synth`, коммит `d21216d`, ветка `docs/ad-normalization-089-external-events`):** корневой `AGENTS.md` (abort в таблице runtime-API, re-owner, дефолтный агент, строка AD-089), `packages/core/AGENTS.md` (карта модулей), `docs/API_V2.md` §5.5 (семантика `/abort` + `status.cancel_requested`), `docs/arch_decisions/ad-089-*.md` (дефолтный агент, re-owner, надёжный Stop). Проверки: typecheck/lint(0 err)/test зелёные.
+- **Аддон (`synth-gateway-telegram`, коммит `ae7e269`):** `docs/configuration.md` (parseMode rich + живучесть черновиков, «Печатает…», дедуп/reply), `README.md` (возможности доставки, структура), `AGENTS.md` (инвариант идемпотентности + reply, структура). Тесты: 353.
+- **Примечание:** `.opencode/tasks/log.md` — tracked в репо `synth` (workspace `.opencode` → symlink на `synth/.opencode`), остаётся модифицированным (журнал сессии), не коммичен.
+
+### MCP шлюза: план переработки stdio → HTTP (обсуждение)
+
+- **Проблема:** MCP-сервер аддона — stdio (`node dist/mcp/index.js`), в K3s Synth-бэкенд в другом поде → stdio не подходит.
+- **Предложение:** Streamable HTTP MCP в том же образе (`--http --port 7101`), отдельный контейнер/порт в поде шлюза + Service; тенант в пути (`/mcp/<tenantId>`); параметры бота — из `tenants.json` (без дублирования); регистрация в Synth — реестр MCP `{type:'http', url}` (managed) / `mcp.servers` (standalone).
+- **Найденный пробел:** конфиг MCP допускает `headers`, но core-клиент их НЕ передаёт (`new StreamableHTTPClientTransport(new URL(url))`, `engine/mcp/client.ts:168`) → нужен небольшой фикс core либо опора на сетевую изоляцию.
+- **«Отправка пользователю по идентификатору профиля»:** `/me/identities` — только свои; админский `GET /api/v2/users/:id` (backend) `identities` не возвращает → нужен либо вариант (a) добавить `identities` в user-API + тул `tg_send_to_user`, либо (b) тул по `chatId`/`principalId`. Ждём решения.
+- **Инструкция + установщик** (`docs/install-into-synth.md` + скрипт) — после выбора схемы.
+
+### 2026-10-14 — Deploy test: MCP-сервер аддона по HTTP + авто-установка MCP/скилла
+
+- **Цель:** выкатить на test MCP-сервер шлюза (Streamable HTTP) и авто-установку MCP+скилла чартом; installer-ключ Synth.
+- **Состав:** ядро — scope `addons:install`/`users:read`, guard «ADMIN или scope», бутстрап `security.bootstrapServiceKeys` (+env `SYNTH_BOOTSTRAP_SERVICE_KEYS`), проброс `headers` в MCP-клиенте, `identities` в админском user-API, instance-origin для installer-ключа (`4393cec`); чарт Synth — опция `installerKey` (Secret: `bootstrap.json` + `token`), уборка `values.example.yaml`; аддон — HTTP-MCP (`/mcp/<tenant>`, токен, 401), тул `tg_send_to_user`, инсталлятор, чарт (`mcp` + `autoInstall` + hook-Job + генерация MCP-токена), фикс прав файлов в образе (`1c9ec58`, `ad3a221`, `09f8302`).
+- **Секреты/креды:** installer-ключ создан чартом (`synth-installer-key`: `bootstrap.json` + `token`); MCP-токен —`synth-gateway-telegram-mcp-token`.
+- **Инциденты и фиксы по ходу:** (1) `EACCES` на `/app/scripts/...` — файлы в образе `-rw-rw----` (чек-аут), добавлен `chmod -R a+rX` в Dockerfile + режимы в репо; (2) `origin: addon:…` → 400 — инсталлятор больше не шлёт `origin`; (3) instance-origin для scoped-ключа — правка ядра; (4) бэкенд не перезапустился при смене чарта (манифест идентичен, тег тот же) → потребовался `rollout restart` (на будущее: бампить тег/версию).
+- **Результат (test):** бандлы `synth-test` и `synth-gateway-telegram` — **1/1**; запись реестра MCP `synth-gateway-telegram` (`type:http`, `url: http://synth-gateway-telegram.synth.svc.cluster.local:7101/mcp/test`, `headers.Authorization`, `origin:instance`, `enabledByDefault:true`); тест подключения — `success:true, toolCount:8` (вкл. `tg_send_to_user`); скилл `gateway-telegram` установлен (instance); MCP `/health` — ok (tenants dev/test), без токена — 401.
+- **Чарты/пины:** `synth 0.10.0-9`, `synth-gateway-telegram 0.2.0-9`; synth-deploy `a599d6f`, `0a23714`, `9841a43`, `080b8d3`.
+- **Осталось:** granted `users:read` runtime service-key тенанта test (для `tg_send_to_user`) — нужен ADMIN-доступ (UI/API); dev-инстанс MCP не регистрировали (локальный, `autoInstall.tenant=test`).
+
+### 2026-10-14 — Каталог scopes service-key: с сервера, а не в бандле UI
+
+- **Проблема:** UI показывал старый список scopes (`addons:install`/`users:read` отсутствовали), т.к. `SCOPE_OPTIONS` собирался в бандл из shared → требовал пересборки UI-образа при каждом новом scope.
+- **Фикс (ядро+UI, коммит `4cb0302`):** новый `GET /api/v2/service-keys/scopes` (единая фабрика core/backend; объявлен до `/:id`; гвард — как у `GET /`, т.е. backend ADMIN) отдаёт `{scopes, families, roles}` из shared (сервер — источник истины). UI (`ServiceKeysSettings`) грузит каталог через `synthApi.getServiceKeyScopes()` и строит чипы из ответа; при ошибке — **фоллбек** на shared-константы (гибрид/старый сервер).
+- **Заодно (коммит `77beb27`):** убраны устаревшие счётчики scopes из `packages/ui/AGENTS.md`, `packages/shared/AGENTS.md`, комментария UI (формулировки без чисел).
+- **Деплой (test):** пересобраны/запушены `synth-backend:0.10.0` и `synth-ui:0.10.0`, поды перезапущены (digest’ы совпадают с локальными). Проверка: `/service-keys/scopes` для не-ADMIN/anon → 403 (как и `GET /service-keys` — паритет), у ADMIN → 200; в бандле UI присутствует вызов `service-keys/scopes`.
+- **Следствие:** добавление нового scope теперь требует только сборки backend (серверный источник); UI подхватывает динамически.
+- **Осталось за пользователем:** выдать scope `users:read` runtime-ключу тенанта test (для `tg_send_to_user`) — теперь `users:read` есть в чипах формы.
+
+## 2026-10-14 — Разбор AD: класс Gateway, единый манифест `synth.pack`, типы контент-паков
+
+- **Задача:** навести порядок в AD: (1) вернуть мессенджер-шлюзы отдельным AD и сделать «Gateway» отдельным классом расширений (не подвид add-on'а); (2) добавить типы контент-паков (темы, i18n, agent-packs, …); (3) уточнить определение Plugin; затем закоммитить и задеплоить на test.
+- **Тип:** refactor (документация AD) + refactor манифестов расширений + infra (deploy test).
+- **Исполнитель:** @orchestrator → @fixer ×3 (AD; манифесты; дочистка терминологии), @devops (deploy test).
+- **Решение по таксономии:** четыре класса расширений — **Plugin** (код в процессе ядра; берётся только когда изменение *обязано* быть in-process), **Gateway** (внешний сервис-транспорт внешний мир ↔ Synth, двусторонний), **Add-on** (внешний сервис иного назначения), **контент-пак** (данные без кода) + мета **Edition**. Правило выбора: по умолчанию — Gateway/Add-on; Plugin — только in-process.
+- **AD-доки (`synth`, docs-only):** `ad-087-messenger-gateway-merged.md` (tombstone) → удалён, создан действующий **`ad-087-gateways.md`** (класс Gateway, контракт, Telegram перенесён из AD-086 целиком); AD-086 стал зонтиком «Классы расширений» (убраны Telegram-подразделы и «Поглощение AD-087»); AD-090 — терминология 4 классов, уточнённое определение Plugin, таксономия влияния (contribution / interception / observation-egress) и таблица примеров (провайдер-протокол, фильтр/антивирус, балансировщик, экспорт логов/метрик = Plugin; приёмник — внешний add-on); AD-068 — единый манифест и типы контент-паков; AD-041 — паки локалей; обновлены индексы (`README.md` AD, `AGENTS.md`, `AD-DRAFTS.md`). **AD-060 и AD-056 по решению пользователя не тронуты** (не рассматриваются как add-on/gateway).
+- **Типы контент-паков:** skills, agents, mcp, themes, i18n, providers, prompts, automation, policies, memory, ui.
+- **Манифест:** `addon.json` → единый **`synth.pack`** (JSON в корне репо), `kind: plugin|gateway|addon|pack` (+ `packType` для паков). Обновлены `addons/synth-addon-template` (шаблон, не релизился) и `addons/synth-gateway-telegram` (`kind: gateway`, версия **0.2.0 → 0.3.0**: package.json + Chart.yaml + synth.pack; `docs/addon.md` → `docs/gateway.md`); в `synth-media` манифест добавлен (его не было). Код-идентификаторы (`AddonManifest` и т.п.) не переименовывались.
+- **Верификация:** `synth-gateway-telegram` — typecheck/lint/test (**439**) + build + `helm lint/template` зелёные; `synth-addon-template` — build/typecheck/lint/test зелёные; мёртвых ссылок на `ad-087-messenger-gateway-merged` нет; AD-060/AD-056 не изменены.
+- **Деплой (test):** см. отдельную запись ниже.
