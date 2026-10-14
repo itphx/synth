@@ -15,11 +15,17 @@
 #            packages/synth/prompts/       (системные промпты)
 #
 # Использование:
-#   ./build.sh              — полная сборка
-#   ./build.sh --check      — сборка + проверка типов и тестов
-#   ./build.sh --clean      — очистить dist перед сборкой
-#   ./build.sh --docker     — сборка + Docker-образ
-#   ./build.sh --docker-tag <tag> — Docker-образ с указанным тегом
+#   ./build.sh                  — полная сборка
+#   ./build.sh --check          — сборка + проверка типов и тестов
+#   ./build.sh --clean          — очистить dist перед сборкой
+#   ./build.sh --docker         — сборка + Docker-образ (тег по умолчанию: dev)
+#   ./build.sh --docker-tag=<tag> — Docker-образ с указанным тегом
+#   ./build.sh --help           — показать справку и выйти
+#
+# Docker-тег `latest` не используется: квота GitVerse считает размер каждой
+# версии без дедупликации, а `latest` — дубликат версионного тега. Релиз
+# передаёт явный версионный тег (см. publish.sh), локальная сборка получает
+# нейтральный тег `dev`.
 #
 # Требования: Node.js >= 22, pnpm >= 11, docker (для --docker)
 
@@ -27,11 +33,38 @@ set -o pipefail
 
 die() { echo "ОШИБКА: $*" >&2; exit 1; }
 
+usage() {
+    cat <<'EOF'
+build.sh — сборка релизной версии Synth
+
+Использование:
+  ./build.sh                              — полная сборка
+  ./build.sh --check                      — сборка + проверка типов и тестов
+  ./build.sh --clean                      — очистить dist перед сборкой
+  ./build.sh --docker                     — сборка + Docker-образ (тег по умолчанию: dev)
+  ./build.sh --docker-tag=<tag>           — Docker-образ с указанным тегом
+                                            (релиз передаёт версию: --docker-tag=0.6.0)
+  ./build.sh --docker-registry=<registry> — реестр Docker-образа (по умолчанию: gitverse.ru)
+  ./build.sh --help                       — показать эту справку и выйти
+
+Переменные окружения:
+  DOCKER_TAG       — тег Docker-образа (по умолчанию: dev)
+  DOCKER_REGISTRY  — реестр Docker-образа (по умолчанию: gitverse.ru)
+
+Тег `latest` не используется: квота GitVerse считает размер каждой версии без
+дедупликации, поэтому релиз публикует только версионный тег (см. publish.sh).
+
+Требования: Node.js >= 22, pnpm >= 11, docker (для --docker)
+EOF
+}
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SYNTH="$ROOT"
 
 BUILD_DOCKER=false
-DOCKER_TAG="${DOCKER_TAG:-latest}"
+# Тег `latest` не используем: релиз передаёт явный версионный тег (--docker-tag=<version>),
+# локальная сборка идёт под нейтральным `dev`.
+DOCKER_TAG="${DOCKER_TAG:-dev}"
 DOCKER_REGISTRY="${DOCKER_REGISTRY:-gitverse.ru}"
 CLEAN=false
 DO_CHECK=false
@@ -47,6 +80,13 @@ for arg in "$@"; do
             ;;
         --docker-registry=*)
             DOCKER_REGISTRY="${arg#*=}"
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "Неизвестная опция: $arg. Используйте --help для справки."
             ;;
     esac
 done
@@ -148,10 +188,6 @@ if $BUILD_DOCKER; then
     echo "  Образ: $DOCKER_IMAGE"
 
     docker build -t "$DOCKER_IMAGE" -f "$SYNTH/docker/Dockerfile" "$SYNTH" || die "Сборка Docker-образа не удалась"
-
-    if [ "$DOCKER_TAG" != "latest" ]; then
-        docker tag "$DOCKER_IMAGE" "$DOCKER_REGISTRY/itphx/synth:latest" 2>/dev/null || true
-    fi
 
     echo "  готово"
     echo ""

@@ -23,9 +23,11 @@ npm i -g @itphx/synth
 ### Способ 2: Docker
 
 ```bash
-docker pull gitverse.ru/itphx/synth
-docker run -p 4300:4300 -e SYNTH_API_KEY=my-secret-key gitverse.ru/itphx/synth
+docker pull gitverse.ru/itphx/synth:<version>
+docker run -p 4300:4300 -e SYNTH_API_KEY=my-secret-key gitverse.ru/itphx/synth:<version>
 ```
+
+Указывайте версию: тег `latest` не публикуется (образы в реестре только версионные).
 
 Либо docker-compose из корня репозитория (`docker-compose.yml`):
 

@@ -46,8 +46,9 @@ shared → core → ui → backend → runner → sdk → synth
 
 ```
 gitverse.ru/itphx/synth:<version>
-gitverse.ru/itphx/synth:latest
 ```
+
+Тег `latest` **не публикуется** — в реестре остаются только версионные теги. Причина: квота «Пакеты» в GitVerse считает размер каждой версии без дедупликации — `latest` и версия указывают на один digest, но оплачиваются дважды (лимит 500 МБ на репозиторий). Поэтому `docker pull gitverse.ru/itphx/synth` без тега не работает — указывайте версию.
 
 ## Helm-чарт
 
@@ -82,7 +83,7 @@ helm repo update
 helm install synth synth/synth --version <version> -f my-values.yaml
 ```
 
-Образы `gitverse.ru/itphx/synth{,-ui,-backend}` (включая `:latest`) тянутся **анонимно** — imagePullSecret не нужен.
+Образы `gitverse.ru/itphx/synth{,-ui,-backend}:<version>` тянутся **анонимно** — imagePullSecret не нужен.
 
 ### Кастомные values
 
@@ -111,9 +112,10 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 ./scripts/build.sh                # полная сборка
 ./scripts/build.sh --check        # сборка + проверка типов и тестов
 ./scripts/build.sh --clean        # очистить dist перед сборкой
-./scripts/build.sh --docker       # сборка + Docker-образ
-./scripts/build.sh --docker-tag <tag>
-./scripts/build.sh --docker-registry <registry>
+./scripts/build.sh --docker       # сборка + Docker-образ (тег по умолчанию: dev)
+./scripts/build.sh --docker-tag=<tag>
+./scripts/build.sh --docker-registry=<registry>
+./scripts/build.sh --help         # справка
 ```
 
 Результат: `packages/synth/dist/cli.js` (исполняемый CLI).
@@ -125,8 +127,8 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 ./scripts/publish.sh --dry-run                # проверка без реальной публикации
 ./scripts/publish.sh --no-build               # без пересборки
 ./scripts/publish.sh --registry=npmjs | gitverse | both
-./scripts/publish.sh --docker                 # также Docker-образ
-./scripts/publish.sh --docker-tag <tag>
+./scripts/publish.sh --docker                 # также Docker-образ (только версионный тег)
+./scripts/publish.sh --docker-tag=<tag>
 ```
 
 Переменные окружения: `NPM_TOKEN`, `GV_TOKEN`, `NPM_REGISTRY`, `GITVERSE_NPM_REGISTRY`, `GITVERSE_DOCKER_REGISTRY`.

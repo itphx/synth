@@ -14,8 +14,8 @@
 #   ./publish.sh --registry=npmjs         — только npmjs.org
 #   ./publish.sh --registry=gitverse      — только GitVerse Package Registry
 #   ./publish.sh --registry=both          — оба реестра (по умолчанию)
-#   ./publish.sh --docker                 — также опубликовать Docker-образ
-#   ./publish.sh --docker-tag <tag>       — тег Docker-образа
+#   ./publish.sh --docker                 — также опубликовать Docker-образ (только версионный тег, без latest)
+#   ./publish.sh --docker-tag=<tag>       — тег Docker-образа (по умолчанию — версия пакета)
 #
 # Переменные окружения:
 #   NPM_TOKEN                       — токен для npmjs.org
@@ -219,6 +219,8 @@ done
 echo ""
 
 # Шаг 4: Docker
+# Публикуется только версионный тег; тег `latest` не публикуется (квота GitVerse
+# считает размер каждой версии без дедупликации).
 publish_docker() {
     echo "[4/4] Docker ($GITVERSE_DOCKER_REGISTRY)..."
 
@@ -257,12 +259,6 @@ publish_docker() {
         docker build -t "$name" -f "$df" "$SYNTH" || die "Сборка Docker-образа не удалась: $name"
         echo "  Публикация $name..."
         docker push "$name" || die "Публикация Docker-образа не удалась: $name"
-        if [ "$TAG" != "latest" ]; then
-            latest="${name%:*}:latest"
-            echo "  Публикация latest ($latest)..."
-            docker tag "$name" "$latest"
-            docker push "$latest" || true
-        fi
         echo "  Опубликовано: $name"
     done
 
