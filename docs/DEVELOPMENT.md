@@ -170,13 +170,19 @@ synth/
 │   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + админка (Vite)
 │   ├── runner/   → @itphx/synth-runner    # Gateway движков (opencode, cline); in-process из core
+│   ├── sdk/      → @itphx/synth-sdk       # Типизированный клиент публичного API (AD-052)
 │   └── synth/    → @itphx/synth           # Тонкая CLI-обёртка (bin: synth), не бандлит core
 ├── scripts/
 │   ├── dev.sh                  # Скрипт разработки
 │   ├── build.sh                # Полная сборка
+│   ├── standalone.sh           # Standalone из собранных npm-пакетов
+│   ├── hybrid.sh               # Локальный core + удалённый backend (гибрид)
 │   ├── publish.sh              # Публикация в npm
+│   ├── publish-packages.sh     # Идемпотентная публикация 7 пакетов (release)
 │   ├── version-bump.sh         # Bump версии
 │   ├── changelog.sh            # Генерация CHANGELOG (для CI release)
+│   ├── wait-npm-version.sh     # Ожидание доступности версии в npm (release)
+│   ├── docker-cleanup.mjs      # Очистка Docker-тегов перед публикацией
 │   └── micro-benchmark.mjs     # Бенчмарк микро-слоя (AD-035)
 └── tmp/                        # Логи (не коммитить)
 ```

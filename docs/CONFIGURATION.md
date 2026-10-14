@@ -152,13 +152,14 @@ storage:
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
   sessionMaxAgeMinutes: 1440
-  # oidc: { enabled: false, issuer: "", clientId: "", clientSecret: "", redirectUri: "http://localhost:5002/auth/callback" }
+  # oidc: { enabled: false, issuer: "", clientId: "", clientSecret: "", redirectUri: "http://localhost:5002/auth/callback", cliClientId: "synth-cli" }
 
 llm:
   defaultProvider: ""             # пусто — админ настраивает сам
   defaultModel: ""
   maxRetries: 3
   timeout: 60
+  cache: "auto"                   # AD-070: политика prompt-cache — auto (ставить маркеры) | none
 
 core:
   port: 4300
@@ -173,7 +174,7 @@ runner:
 ui:
   port: 5002
   backendUrl: "http://localhost:5000"
-  theme: "flexoki"
+  theme: "synthesis"
   themeMode: "system"
   locale: "ru"
 
@@ -223,6 +224,10 @@ router:
     expensiveProvider: ""
     expensiveModel: ""
     maxCheapTokens: 500
+  subagent:                       # маршрутизация саб-агентов: provider/model пусты — наследуют основную пару
+    enabled: true
+    provider: ""
+    model: ""
 
 microFirst:
   enabled: false
@@ -231,12 +236,15 @@ microFirst:
   embeddingEnabled: false
   embedProvider: "ollama"
   embedModel: "local.nomic-embed-text:latest"
+  microLlmProvider: ""            # провайдер micro-LLM-слоя (пусто — основной)
+  microLlmModel: ""               # модель micro-LLM-слоя (пусто — основная)
   microLlmEnabled: false
 
 llmGateway:
   enabled: false                  # выключен по умолчанию
   inputMode: "obfuscate"          # obfuscate | block
   logPayloads: false
+  payloadLogPath: ""              # путь JSONL полного лога; пусто → {dataDir}/audit/llm-payloads.jsonl
   rateLimit: { userPerMinute: 60, providerPerMinute: 120 }
   audit: { enabled: true, logPath: "" }   # logPath пуст → {dataDir}/audit/llm-gateway.jsonl
 

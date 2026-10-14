@@ -204,7 +204,7 @@ synth/
 ├── tsconfig.base.json        # общий конфиг TypeScript
 ├── eslint.config.js          # линтер
 ├── .prettierrc               # форматтер
-├── scripts/                  # build.sh, dev.sh, publish.sh, version-bump.sh, changelog.sh
+├── scripts/                  # dev.sh, build.sh, standalone.sh, hybrid.sh, publish*.sh, version-bump.sh, changelog.sh, …
 └── packages/
     ├── shared/   → @itphx/synth-shared
     ├── core/     → @itphx/synth-core

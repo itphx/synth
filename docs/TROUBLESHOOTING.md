@@ -9,7 +9,7 @@
 
 ## 1. GitVerse npm: 403 «no permission» при публикации `@itphx/synth`
 
-**Симптом:** публикация `@itphx/synth` в `https://gitverse.ru/api/packages/itphx/npm/` завершается ошибкой 403 «no permission», при этом остальные 5 пакетов публикуются нормально.
+**Симптом:** публикация `@itphx/synth` в `https://gitverse.ru/api/packages/itphx/npm/` завершается ошибкой 403 «no permission», при этом остальные шесть пакетов публикуются нормально.
 
 **Причина:** поле `repository` в `packages/synth/package.json` (`{"type": "git", "url": "https://gitverse.ru/itphx/synth"}`). GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403.
 
@@ -48,19 +48,17 @@ setsid pnpm --filter @itphx/synth-backend dev > tmp/backend.log 2>&1 &
 setsid pnpm --filter @itphx/synth-ui dev > tmp/ui.log 2>&1 &
 ```
 
-## 5. WS `/ws/events` не получает события после cookie-входа (standalone) — известное ограничение
+## 5. WS `/ws/events` и cookie-вход (standalone) — исправлено
 
-**Симптом:** в standalone-режиме (`synth serve`) WebSocket `/ws/events` не подключается или не отдаёт события после входа через UI (cookie `synth_session`).
+**Было (устаревшее ограничение):** в standalone-режиме (`synth serve`) WebSocket `/ws/events` не подключался после входа через UI: обработчик upgrade принимал только `Authorization: Bearer <api-key>` и не читал cookie-сессию.
 
-**Причина:** обработчик upgrade в `packages/core/src/server/app.ts` (метод `server.on('upgrade')`, проверка `Authorization`-заголовка перед подключением `/ws/events`) принимает только `Authorization: Bearer <api-key>` и не читает cookie `synth_session` (в отличие от HTTP-маршрутов, где cookie читается). Это **известное ограничение** текущей реализации, а не поломка.
-
-**Решение:** использовать API-ключ в заголовке для WS-подключения, либо дождаться фикса в новой версии.
+**Сейчас:** обработчик upgrade в `packages/core/src/server/app.ts` (метод `server.on('upgrade')` для `/ws/events`) принимает и валидный Bearer API-ключ (CLI/API-клиенты), и cookie-сессию через `auth.getCurrentUser` — браузерный UI подключается по cookie без отдельного заголовка. Вопрос закрыт.
 
 ## 6. 403 «Permission denied» для защищённых путей
 
 **Симптом:** агент не может прочитать/изменить файл, доступ к которому должен быть разрешён; в ответе `Permission denied` с текстом из системного контекстного файла.
 
-**Причина:** работает защита защищённых путей (security, AD-037): системный список `definitions/protected-paths.json` + override-политика. По умолчанию защита включена (`security.protectedPaths.enabled: true`). Проверка идёт для всех файловых тулов и shell-команд; жёсткий deny выше `permission.rules`.
+**Причина:** работает защита защищённых путей (`packages/core/src/engine/security/protected-paths.ts`): системный список `definitions/protected-paths.json` + override-политика (роут `GET/PUT/DELETE /api/v2/settings/protected-paths`, `packages/core/src/server/routes/settings.ts`). По умолчанию защита включена (`security.protectedPaths.enabled: true`). Проверка идёт для всех файловых тулов и shell-команд; жёсткий deny выше `permission.rules`.
 
 **Решение:** настроить политику защищённых путей:
 

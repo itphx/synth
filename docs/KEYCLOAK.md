@@ -103,7 +103,10 @@ auth:
     clientId: "synth"
     clientSecret: "<client-secret>"
     redirectUri: "https://synth.example.com/auth/callback"
+    cliClientId: "synth-cli"      # public client для локального CLI/core (ROPC/device flow), не секрет
 ```
+
+`cliClientId` (default `synth-cli`) — public client_id, который backend отдаёт локальным клиентам через `GET /auth/oidc-meta` (`cliClientId || 'synth-cli'`, `packages/backend/src/routes/auth.ts`). Локальный core использует его для ROPC/device flow при гибридном подключении (см. [HYBRID.md](HYBRID.md)); в Keycloak это отдельный public-клиент с включённым Direct Access Grants (секрета нет).
 
 ### 3.2 Переменные окружения
 
@@ -114,6 +117,7 @@ auth:
 | `SYNTH_OIDC_CLIENT_ID` | Client ID (например `synth`) |
 | `SYNTH_OIDC_CLIENT_SECRET` | Секрет клиента (хранить в секретах, не в конфиге) |
 | `SYNTH_OIDC_REDIRECT_URI` | Redirect URI: `https://<synth-host>/auth/callback` |
+| `SYNTH_OIDC_CLI_CLIENT_ID` | Public client_id для локального CLI/core (ROPC/device flow), default `synth-cli` (`packages/backend/src/lib/app-config.ts`) |
 
 Приоритет: env vars > config.yaml (см. [CONFIGURATION.md](CONFIGURATION.md)).
 

@@ -57,7 +57,7 @@
 >   при протухшем токене можно сменить адрес (см. «Обновление (2026-09-07)»).
 > - **Дискавери OIDC.** Локальный core узнаёт issuer/client_id с сервера
 >   (`GET {server}/auth/oidc-meta`) с fallback на `--oidc-issuer`/`--oidc-client-id`.
->   Эндпоинт выкачен на боевой K3s в образе **0.8.8** (`synth-backend`), работает
+>   Эндпоинт выкачен на боевой K3s (`synth-backend`), работает
 >   дискавери без fallback.
 > - **Без device flow в пользовательском пути.** Кнопка «Вход через браузер» и
 >   модалка удалены из UI; эндпоинты `/auth/device-start`, `/auth/device-check` и
@@ -151,7 +151,7 @@ synth serve --connect https://synth.k3s.itphx.loc
 
 - Удалённые сессии: LLM вызывает серверный движок (уже так).
 - Локальные сессии: `ProviderPool` локального core получает провайдера типа
-  `remote`, который направляет запрос в `POST /api/v2/llm` на сервере;
+  `remote`, который направляет запрос в `POST /api/v2/llm/chat/completions` на сервере;
   сервер прогоняет через gateway (AD-036: аудит, обфускация, rate limit) и
   реального провайдера.
 - Политика: **в гибриде локальные провайдеры запрещены полностью** — все
@@ -209,7 +209,7 @@ synth project fork <remote-id> --local
    подтверждение удалённых мутаций.
 
 ### P2 — централизация LLM
-7. **LLM Proxy endpoint** на backend (`/api/v2/llm`, OpenAI-совместимый):
+7. **LLM Proxy endpoint** на backend (`/api/v2/llm/chat/completions`, OpenAI-совместимый):
    принимает запросы, прогоняет через gateway (AD-036), вызывает провайдера.
 8. **Провайдер `remote`** в `ProviderPool`/`ProviderFactory` core — локальный
    движок использует сервер как источник LLM.

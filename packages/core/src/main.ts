@@ -507,7 +507,7 @@ program
         new Command('add')
           .description('Добавить провайдера')
           .requiredOption('--name <name>', 'имя провайдера')
-          .requiredOption('--type <type>', 'тип (openai, anthropic, ollama, decision)')
+          .requiredOption('--type <type>', 'тип (openai, anthropic, ollama, decision, systemone)')
           .option('--api-key <key>', 'API-ключ')
           .option('--url <url>', 'базовый URL')
           .option('--model <model>', 'модель по умолчанию')
