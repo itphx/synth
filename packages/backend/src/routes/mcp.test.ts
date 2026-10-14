@@ -97,7 +97,7 @@ function createTestApp(
   // Харнес считает запросы админскими (`isAdmin: () => true`); в реальном
   // backend контекст ставит глобальный `attachUser`, поэтому воспроизводим
   // ADMIN-пользователя — комбинированные guard'ы читают `c.get('user')`.
-  app.use('*', async (c, next) => {
+  app.use('*', async (c: Context, next: Next) => {
     c.set('user', { id: 'admin', username: 'admin', roles: ['ADMIN'] });
     await next();
   });

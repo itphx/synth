@@ -104,7 +104,7 @@ describe('MCP registry API (AD-071 §2.5)', () => {
     // В реальном backend контекст ставит глобальный `attachUser`; в тест-харнесе
     // (роуты монтируются напрямую) воспроизводим его, иначе роутные guard'ы,
     // читающие `user`/`serviceKey`, не увидят аутентификацию.
-    app.use('*', async (c, next) => {
+    app.use('*', async (c: Context, next: Next) => {
       const svc = serviceKeyFromHeader(c.req.header('Authorization'));
       if (svc) {
         c.set('user', svc.user);
@@ -329,16 +329,66 @@ describe('MCP registry API (AD-071 §2.5)', () => {
     expect(res.status).toBe(404);
   });
 
-  // AD-052/O1: guard «ADMIN или scope `addons:install`».
-  it('service-key со scope addons:install: POST /registry (http) → 201', async () => {
+  // AD-052/O1: guard «ADMIN или scope `addons:install`» + installer видит instance-origin.
+  it('service-key со scope addons:install: POST /registry (http) → 201 instance/builtin', async () => {
     const res = await makeApp().request('/api/v2/mcp/registry', {
       method: 'POST',
       headers: { Authorization: 'Bearer svc-scope', 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'installer-http', config: httpConfig() }),
     });
     expect(res.status).toBe(201);
-    const entry = await res.json() as { origin: string };
-    expect(entry.origin).toBe('user');
+    const entry = await res.json() as { id: string; origin: string; trust: string; author: { userId: string } };
+    expect(entry.origin).toBe('instance');
+    expect(entry.trust).toBe('builtin');
+    // Автор — синтетический пользователь installer-ключа.
+    expect(entry.author.userId).toBe('service:svc1');
+  });
+
+  it('service-key со scope: явный origin:"instance" → instance', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer svc-scope', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'installer-explicit', config: httpConfig(), origin: 'instance' }),
+    });
+    expect(res.status).toBe(201);
+    const entry = await res.json() as { origin: string; trust: string };
+    expect(entry.origin).toBe('instance');
+    expect(entry.trust).toBe('builtin');
+  });
+
+  it('installer-ключ обновляет созданную им запись → 200', async () => {
+    const created = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer svc-scope', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'installer-owned', config: httpConfig() }),
+    });
+    expect(created.status).toBe(201);
+    const entry = await created.json() as { id: string };
+
+    const put = await makeApp().request(`/api/v2/mcp/registry/${entry.id}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer svc-scope', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabledByDefault: true }),
+    });
+    expect(put.status).toBe(200);
+    const updated = await put.json() as { enabledByDefault: boolean };
+    expect(updated.enabledByDefault).toBe(true);
+  });
+
+  it('installer-ключ обновляет instance-запись, созданную не им (scope-ветка)', async () => {
+    const entry = await registry.add({
+      name: 'admin-created',
+      config: httpConfig(),
+      origin: 'instance',
+      trust: 'builtin',
+      author: { userId: 'admin', username: 'admin' },
+    });
+    const put = await makeApp().request(`/api/v2/mcp/registry/${entry.id}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer svc-scope', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabledByDefault: true }),
+    });
+    expect(put.status).toBe(200);
   });
 
   it('service-key со scope: stdio в реестр → 403 (stdio только ADMIN)', async () => {
@@ -350,6 +400,18 @@ describe('MCP registry API (AD-071 §2.5)', () => {
     expect(res.status).toBe(403);
     const body = await res.json() as { error: { code: string } };
     expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('интерактив не-ADMIN с origin:"instance" → остаётся user (прежнее поведение)', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer dev', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'dev-wants-instance', config: httpConfig(), origin: 'instance' }),
+    });
+    expect(res.status).toBe(201);
+    const entry = await res.json() as { origin: string; trust: string };
+    expect(entry.origin).toBe('user');
+    expect(entry.trust).toBe('community');
   });
 
   it('service-key без scope: POST /registry → 403 SCOPE_REQUIRED', async () => {

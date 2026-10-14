@@ -1,10 +1,11 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager, McpManager, McpRegistryStore } from '@itphx/synth-core';
-import { evaluateMcpNetworkAccess } from '@itphx/synth-core';
+import { evaluateMcpNetworkAccess, getServiceCredential } from '@itphx/synth-core';
 import type { McpServerConfig, McpNetworkPolicy, User } from '@itphx/synth-shared';
-import { sessionMcpScopeSchema } from '@itphx/synth-shared';
+import { sessionMcpScopeSchema, hasServiceScope } from '@itphx/synth-shared';
 import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
 import { requireAdminOrScope, requireScopeForServiceKey } from '../auth/guards.js';
 
@@ -78,6 +79,16 @@ export function createMcpRegistryRoutes(
 
   const currentUser = (c: { get(key: 'user'): unknown }): User | null =>
     (c.get('user') as User | undefined) ?? null;
+
+  /**
+   * AD-052/O1: запрос от installer-service-key (scope `addons:install`).
+   * Даёт scoped-ключу без роли ADMIN создавать **instance**-записи реестра
+   * (общие для инстанса, а не персональные) и обновлять созданные им записи.
+   */
+  const isInstallerKey = (c: Context): boolean => {
+    const cred = getServiceCredential(c);
+    return !!cred && hasServiceScope(cred.scopes, 'addons:install');
+  };
 
   const checkNetwork = async (
     config: McpServerConfig,
@@ -325,7 +336,8 @@ export function createMcpRegistryRoutes(
 
   // Добавить запись (auth): HTTP — любой пользователь, stdio — только ADMIN.
   // AD-052/O1: service-key должен нести scope `addons:install` (интерактив без
-  // изменений — HTTP добавляет любой, stdio-проверка ниже).
+  // изменений — HTTP добавляет любой, stdio-проверка ниже). Installer-ключ со
+  // scope создаёт instance-записи (общие для инстанса) без роли ADMIN.
   app.post('/registry', kit.requireAuth, requireScopeForServiceKey('addons:install'), async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = registryAddSchema.safeParse(body);
@@ -335,10 +347,14 @@ export function createMcpRegistryRoutes(
 
     const { name, config, enabled, enabledByDefault, origin } = parsed.data;
     const admin = kit.isAdmin(c);
+    // AD-052/O1: installer-ключ (scope `addons:install`) создаёт instance-записи
+    // даже без роли ADMIN — это общие записи инстанса (а не персональные).
+    const isInstaller = isInstallerKey(c);
 
     let entryOrigin: 'instance' | 'user';
     let trust: 'builtin' | 'community';
     if (config.type === 'stdio') {
+      // stdio — только ADMIN (scope НЕ ослабляет проверку).
       if (!admin) {
         return c.json({
           error: { code: 'FORBIDDEN', message: 'stdio-серверы может добавлять только ADMIN' },
@@ -347,7 +363,8 @@ export function createMcpRegistryRoutes(
       entryOrigin = 'instance';
       trust = 'builtin';
     } else {
-      entryOrigin = admin && origin === 'instance' ? 'instance' : 'user';
+      const wantsInstance = origin === 'instance' || isInstaller;
+      entryOrigin = (admin || isInstaller) && wantsInstance ? 'instance' : 'user';
       trust = entryOrigin === 'instance' ? 'builtin' : 'community';
     }
 
@@ -376,7 +393,7 @@ export function createMcpRegistryRoutes(
     return c.json(entry, 201);
   });
 
-  // Обновить запись (автор или ADMIN).
+  // Обновить запись (автор, ADMIN или installer-ключ со scope `addons:install`).
   app.put('/registry/:id', kit.requireAuth, async (c) => {
     const id = c.req.param('id');
     const existing = await registry.get(id);
@@ -386,7 +403,12 @@ export function createMcpRegistryRoutes(
 
     const admin = kit.isAdmin(c);
     const user = currentUser(c);
-    if (!admin && existing.author?.userId !== user?.id) {
+    // Автор записи (для service-key автор — `service:<keyId>`), ADMIN **или**
+    // installer-ключ со scope `addons:install`: аддон может обновлять созданные
+    // им instance-записи; scope-ветка переживает ротацию/пересоздание ключа
+    // (id меняется, author-check бы не сработал).
+    const isAuthor = existing.author?.userId === user?.id;
+    if (!admin && !isAuthor && !isInstallerKey(c)) {
       return c.json({ error: { code: 'FORBIDDEN', message: 'Обновлять запись может автор или ADMIN' } }, 403);
     }
 
