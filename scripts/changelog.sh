@@ -1,5 +1,13 @@
 #!/bin/bash
-# Генерация CHANGELOG.md из коммитов между тегами
+# Генерация тела релиза (changelog-partial.md) для GitVerse Release.
+#
+# Два режима:
+#   1. Подготовленное описание — если существует docs/releases/<VERSION>.md,
+#      файл копируется в changelog-partial.md как есть (структурированный текст,
+#      написанный заранее).
+#   2. Иначе (по умолчанию) — авто-сборка из коммитов между предыдущим тегом и
+#      HEAD: feat → «Новые возможности», fix → «Исправления»,
+#      chore/refactor/docs → «Прочее».
 set -e
 
 cd "$(dirname "$0")/.."
@@ -7,6 +15,14 @@ cd "$(dirname "$0")/.."
 VERSION=$(node -e "console.log(require('./packages/synth/package.json').version)")
 echo "Версия: $VERSION"
 
+# Режим 1: подготовленное описание релиза — docs/releases/<VERSION>.md
+if [ -f "docs/releases/$VERSION.md" ]; then
+  cp "docs/releases/$VERSION.md" changelog-partial.md
+  echo "Использовано подготовленное описание: docs/releases/$VERSION.md"
+  exit 0
+fi
+
+# Режим 2: авто-сборка из коммитов между предыдущим тегом и HEAD
 PREV_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n '2p')
 
 if [ -z "$PREV_TAG" ]; then

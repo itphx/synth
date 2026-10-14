@@ -234,6 +234,10 @@ jobs:
           bash scripts/publish-packages.sh https://gitverse.ru/api/packages/itphx/npm/
 
   # --- Публикация Docker ---
+  # Тег latest намеренно НЕ публикуется: квота «Пакеты» в GitVerse считает размер
+  # каждой версии без дедупликации, а latest и версия указывают на один digest —
+  # публикуются только версионные теги (иначе перелимит 500 МБ на репозиторий;
+  # на 0.9.0 вышло 607,4 МБ из 500). Старые теги удаляет шаг «Очистка…».
   # Docker-образ ставит @itphx/synth@<version> из npmjs (npm install -g),
   # поэтому ждём публикации npmjs — иначе гонка: kaniko не находит пакет (ETARGET)
   build-docker:
@@ -285,7 +289,6 @@ jobs:
             --dockerfile=docker/Dockerfile
             --build-arg=SYNTH_VERSION=${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth:${{ steps.docker_tags.outputs.version }}
-            --destination=gitverse.ru/itphx/synth:latest
             --snapshot-mode=redo
             --push-retry=3
             --verbosity=info
@@ -300,7 +303,6 @@ jobs:
             --dockerfile=docker/Dockerfile.backend
             --build-arg=SYNTH_BACKEND_VERSION=${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth-backend:${{ steps.docker_tags.outputs.version }}
-            --destination=gitverse.ru/itphx/synth-backend:latest
             --snapshot-mode=redo
             --push-retry=3
             --verbosity=info
@@ -315,56 +317,9 @@ jobs:
             --dockerfile=docker/Dockerfile.ui
             --build-arg=SYNTH_UI_VERSION=${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth-ui:${{ steps.docker_tags.outputs.version }}
-            --destination=gitverse.ru/itphx/synth-ui:latest
             --snapshot-mode=redo
             --push-retry=3
             --verbosity=info
-
-  # --- Публикация Helm-чарта ---
-  # Чарт лежит в charts/synth, версия чарта = версии релиза.
-  # Публикуется в нативный Helm-реестр GitVerse (не OCI).
-  publish-helm:
-    name: Helm-чарт
-    needs: [build]
-    if: ${{ !inputs.dry_run }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Определить версию
-        id: helm_version
-        run: |
-          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ needs.version-bump.outputs.version }}"
-          else
-            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
-          fi
-          echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
-
-      - name: Установка Helm
-        run: |
-          curl -fsSL -o helm.tgz https://get.helm.sh/helm-v3.20.1-linux-amd64.tar.gz
-          tar -xzf helm.tgz
-
-      - name: Lint чарта
-        run: ./linux-amd64/helm lint charts/synth
-
-      - name: Упаковка чарта
-        run: |
-          mkdir -p dist/helm
-          ./linux-amd64/helm package charts/synth \
-            --version "${{ steps.helm_version.outputs.version }}" \
-            --app-version "${{ steps.helm_version.outputs.version }}" \
-            --destination dist/helm
-
-      - name: Публикация в Helm-реестр GitVerse
-        run: |
-          curl -fsS --user "itphx:${{ secrets.GV_TOKEN }}" \
-            -X POST \
-            --upload-file "dist/helm/synth-${{ steps.helm_version.outputs.version }}.tgz" \
-            -w "HTTP %{http_code}\n" \
-            https://gitverse.ru/api/packages/itphx/helm/api/charts
 
   # --- GitVerse Release ---
   create-release:
@@ -418,3 +373,46 @@ jobs:
           files: |
             packages/synth/dist/cli.js
           pre_release: ${{ inputs.pre_release || false }}
+
+  # --- Публикация Helm-чарта ---
+  # Чарт лежит в charts/synth, версия чарта = версии релиза.
+  # Публикуется в нативный Helm-реестр GitVerse (не OCI).
+  #
+  # Джоба намеренно идёт ПОСЛЕ create-release и с CI_HELM_SOFT=1: публикация
+  # чарта — не блокер релиза. GitVerse при падении джобы пропускает следующие
+  # (на v0.8.8 падение helm ⇒ skipped у GitVerse Release), поэтому все шаги
+  # идут через scripts/ci-helm.sh: если helm недоступен (get.helm.sh с раннера
+  # не открывается) или публикация не удалась, печатается предупреждение,
+  # джоба завершается успешно и релиз не страдает.
+  publish-helm:
+    name: Helm-чарт (публикация)
+    needs: [build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Определить версию
+        id: helm_version
+        run: |
+          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ needs.version-bump.outputs.version }}"
+          else
+            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
+          fi
+          echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
+
+      - name: Диагностика источников Helm
+        run: bash scripts/ci-helm.sh sources
+
+      - name: Установка Helm
+        env:
+          CI_HELM_SOFT: '1'
+        run: bash scripts/ci-helm.sh install
+
+      - name: Публикация чарта в Helm-реестр GitVerse
+        env:
+          CI_HELM_SOFT: '1'
+          GV_TOKEN: ${{ secrets.GV_TOKEN }}
+        run: bash scripts/ci-helm.sh publish charts/synth "${{ steps.helm_version.outputs.version }}"

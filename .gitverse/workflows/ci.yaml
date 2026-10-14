@@ -122,20 +122,25 @@ jobs:
         run: pnpm --filter @itphx/synth-sdk test
 
   # Helm-чарт не зависит от сборки npm-пакетов: только lint и рендер шаблонов.
+  # Helm ставит scripts/ci-helm.sh: на раннерах GitVerse get.helm.sh недоступен
+  # (curl (28) connect timeout), поэтому используется цепочка источников
+  # (get.helm.sh → зеркала → docker-образ) с проверкой sha256; в лог всегда
+  # пишется, какой источник сработал, а при полном отказе печатается диагностика.
   helm-lint:
     name: Helm-чарт (lint + template)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
+      - name: Диагностика источников Helm
+        run: bash scripts/ci-helm.sh sources
+
       - name: Установка Helm
-        run: |
-          curl -fsSL -o helm.tgz https://get.helm.sh/helm-v3.20.1-linux-amd64.tar.gz
-          tar -xzf helm.tgz
+        run: bash scripts/ci-helm.sh install
 
       - name: Lint чарта
-        run: ./linux-amd64/helm lint charts/synth
+        run: bash scripts/ci-helm.sh lint charts/synth
 
       - name: Рендер шаблонов
-        run: ./linux-amd64/helm template synth charts/synth
+        run: bash scripts/ci-helm.sh template synth charts/synth
