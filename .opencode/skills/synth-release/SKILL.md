@@ -121,3 +121,19 @@ curl -s  -u "itphx:$TOKEN" -X DELETE \
 
 Порядок для релиза: сначала закоммитить `docs/releases/<version>.md` в `master`, потом ставить тег —
 иначе CI возьмёт авто-список. Блок «## Установка» CI добавляет сам (в файл его не писать).
+
+## Создание GitVerse Release (почему не `actions/create-release`)
+
+GitVerse **сам создаёт релиз** для тега в момент push тега — с пустым/чужим телом, а `POST /releases`
+для уже существующего git-тега отвечает `409 TAG_EXISTS`. Поэтому `actions/create-release@v1` падает
+(«Release with tag … not found. Creating a new one…» → `404`, затем `context canceled … 404`) —
+на релизах 0.8.8/0.9.0/0.10.0 тело проставляли вручную.
+
+Сейчас в джобе `create-release` используется `scripts/publish-release.mjs`: находит релиз по `tag_name`
+(с пагинацией) и делает идемпотентный `PATCH` тела; если релиза нет — `POST /releases`, при `409` —
+повторный поиск и `PATCH`. Ассет `cli.js` грузится **best-effort**: API GitVerse сейчас отвечает
+`500 INTERNAL_ERROR` (и на multipart, и на raw), скрипт пишет предупреждение и не роняет джобу —
+когда API починят, ассет начнёт прикладываться без изменений.
+
+API для ручных операций: `Authorization: Bearer $GV_TOKEN` + `Accept: application/vnd.gitverse.object+json;version=1`,
+база `https://api.gitverse.ru/repos/itphx/synth` (`GET /releases`, `PATCH /releases/{id}`).
