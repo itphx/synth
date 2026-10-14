@@ -232,6 +232,16 @@ export function eventToMessage(event: SynthEvent): Message {
   };
 }
 
+/**
+ * AD-089 (claim-flow): «машинный» владелец сессии — синтетический пользователь
+ * service-key/шлюза (`service:<keyId>`, AD-052). Такие владельцы переустанавливаются
+ * человеку-отправителю, когда тот сопознан (`_maybeReassignOwner`); «человеческие»
+ * владельцы не трогаются.
+ */
+function isMachineOwnerId(ownerId: string | undefined): boolean {
+  return typeof ownerId === 'string' && ownerId.startsWith('service:');
+}
+
 /** Заголовок ephemeral-сессии из события: первая строка текста либо `type`. */
 function eventTitle(event: SynthEvent): string | undefined {
   const text = eventToMessageText(event).trim();
@@ -450,6 +460,10 @@ export class RequestSessionService {
     if (decision.kind === 'bound') {
       const session = await this._sessionManager.getSession(decision.sessionId);
       if (!session) return null;
+      // AD-089 (claim-flow): сессия живёт в привязке со своим владельцем; после
+      // линковки идентичности отправителя владельца переустанавливаем (машинный
+      // `service:<keyId>` или пустой → человек). «Чужую человеческую» не трогаем.
+      await this._maybeReassignOwner(session, event);
       await this._deliver(session.id, event, 'run', context);
       return session;
     }
@@ -483,6 +497,9 @@ export class RequestSessionService {
       if (existing?.sessionId) {
         const existingSession = await this._sessionManager.getSession(existing.sessionId);
         if (existingSession) {
+          // AD-089 (claim-flow): привязка уже создана предыдущим событием —
+          // владельца переустанавливаем так же, как в `bound` (до доставки).
+          await this._maybeReassignOwner(existingSession, event);
           await this._deliver(existingSession.id, event, 'run', context);
           return existingSession;
         }
@@ -569,6 +586,54 @@ export class RequestSessionService {
     if (resolved) return resolved;
     if (this._config.unknownAgentTemplate === 'default-agent') return undefined;
     throw new Error(`agent_not_found: ${normalized}`);
+  }
+
+  /**
+   * AD-089 (claim-flow): переустановка владельца **существующей** сессии при
+   * доставке в неё внешнего события.
+   *
+   * Владелец фиксируется один раз — при материализации (`_materialize`), поэтому
+   * сессия Telegram-чата, созданная до линковки идентичности (claim-flow),
+   * оставалась за машинным аккаунтом шлюза (`service:<keyId>`, AD-052) или без
+   * владельца — и не была видна человеку в UI. Здесь владелец «подтягивается»
+   * при каждом событии:
+   *
+   * - человек-отправитель резолвится тем же резолвером, что и при создании
+   *   (`deps.resolveExternalIdentity`: профильные `identities` + override
+   *   `identityMap`); `null`/без `userId`/ошибка резолвера → ничего не делаем
+   *   (fail-safe, событие всё равно доставляется);
+   * - владелец уже этот человек (`ownerId`/`userId`) → ничего не делаем;
+   * - владелец задан и **не** машинный → «чужая человеческая» сессия (общий чат:
+   *   автором мог быть другой человек) — не переустанавливаем (защита от угона);
+   * - владелец пуст ИЛИ машинный (`service:*`) → переустанавливаем на человека,
+   *   сохраняем сессию и уведомляем хаб (`deps.onSessionMaterialized`) — чтобы
+   *   клиенты нового владельца подписались на сессию (иначе ответы не дойдут).
+   */
+  private async _maybeReassignOwner(session: Session, event: SynthEvent): Promise<void> {
+    const resolver = this._resolveExternalIdentity;
+    if (!resolver) return;
+
+    let externalUserId: string | undefined;
+    try {
+      const resolved = await resolver(event.identity ?? {});
+      externalUserId = resolved?.userId?.trim();
+    } catch {
+      // Резолвер не критичен для доставки: не нашли человека — владельца не трогаем.
+      return;
+    }
+    if (!externalUserId) return;
+
+    const currentOwner = session.ownerId || session.userId || '';
+    // Уже владелец-человек-отправитель — ничего не меняем.
+    if (currentOwner === externalUserId) return;
+    // Чужая человеческая сессия — не угоняем (общий чат: пишет другой человек).
+    if (currentOwner && !isMachineOwnerId(currentOwner)) return;
+
+    session.ownerId = externalUserId;
+    session.userId = externalUserId;
+    await this._sessionManager.updateSession(session);
+    // AD-089: подписываем хаб на сессию уже от лица нового владельца — до доставки.
+    await this._onSessionMaterialized?.(session);
   }
 
   /**

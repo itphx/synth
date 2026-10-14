@@ -853,6 +853,191 @@ describe('RequestSessionService (AD-089)', () => {
     expect(deliver).toHaveBeenCalledWith(owner.id, e, 'defer', { roles: ['LEAD'], linked: true });
   });
 
+  // --- AD-089 (claim-flow): переустановка владельца существующей сессии ---
+
+  it('bound: машинный владелец (service:key) → сопознанный человек «забирает» сессию', async () => {
+    const machine = await sessionManager.createSession({
+      title: 'Bound machine',
+      userId: 'service:svk_1',
+      ownerId: 'service:svk_1',
+    });
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:reassign',
+      mode: 'bound',
+      sessionId: machine.id,
+    });
+
+    const onMaterialized = vi.fn();
+    const e = event({ identity: { chatKey: 'chat:telegram:reassign', principalId: 'tg:555' } });
+    const { session } = await service(undefined, {
+      resolveExternalIdentity: (identity) =>
+        identity.principalId === 'tg:555' ? { userId: 'u-human' } : null,
+      onSessionMaterialized: onMaterialized,
+    }).handleEvent(e);
+
+    expect(session?.id).toBe(machine.id);
+    expect(session?.ownerId).toBe('u-human');
+    expect(session?.userId).toBe('u-human');
+    // Изменение сохранено в хранилище (переживает перезагрузку сессии).
+    const reloaded = await sessionManager.getSession(machine.id);
+    expect(reloaded?.ownerId).toBe('u-human');
+    expect(reloaded?.userId).toBe('u-human');
+    // Хаб уведомлён — клиенты нового владельца подписываются на сессию.
+    expect(onMaterialized).toHaveBeenCalledOnce();
+    expect(onMaterialized).toHaveBeenCalledWith(
+      expect.objectContaining({ id: machine.id, ownerId: 'u-human' }),
+    );
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it('bound: сессия без владельца → сопознанный человек проставляет владельца', async () => {
+    const ownerless = await sessionManager.createSession({ title: 'Ownerless' });
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:ownerless',
+      mode: 'bound',
+      sessionId: ownerless.id,
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:ownerless', principalId: 'tg:556' } });
+    const { session } = await service(undefined, {
+      resolveExternalIdentity: () => ({ userId: 'u-first' }),
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('u-first');
+    expect(session?.userId).toBe('u-first');
+    expect((await sessionManager.getSession(ownerless.id))?.ownerId).toBe('u-first');
+  });
+
+  it('bound: «чужая человеческая» сессия (владелец A, пишет B) → владелец не меняется (нет угона)', async () => {
+    const human = await sessionManager.createSession({
+      title: 'Human A',
+      userId: 'u-a',
+      ownerId: 'u-a',
+    });
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:group-owners',
+      mode: 'bound',
+      sessionId: human.id,
+    });
+
+    const onMaterialized = vi.fn();
+    const e = event({
+      identity: { chatKey: 'chat:telegram:group-owners', principalId: 'tg:b' },
+    });
+    const { session } = await service(undefined, {
+      resolveExternalIdentity: () => ({ userId: 'u-b' }),
+      onSessionMaterialized: onMaterialized,
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('u-a');
+    expect(session?.userId).toBe('u-a');
+    expect((await sessionManager.getSession(human.id))?.ownerId).toBe('u-a');
+    // Переподписка не требуется — владелец не менялся.
+    expect(onMaterialized).not.toHaveBeenCalled();
+    // Доставка состоялась несмотря на то, что владелец остался прежним.
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it('bound: несопознанный отправитель → владелец (машинный) не трогается', async () => {
+    const machine = await sessionManager.createSession({
+      title: 'Machine',
+      userId: 'service:svk_2',
+      ownerId: 'service:svk_2',
+    });
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:unknown',
+      mode: 'bound',
+      sessionId: machine.id,
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:unknown', principalId: 'tg:999' } });
+    const { session } = await service(undefined, {
+      resolveExternalIdentity: () => null,
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('service:svk_2');
+    expect(session?.userId).toBe('service:svk_2');
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it('bound: ошибка резолвера → владелец не трогается, доставка выполняется (fail-safe)', async () => {
+    const machine = await sessionManager.createSession({ ownerId: 'service:svk_3', userId: 'service:svk_3' });
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:resolver-throws',
+      mode: 'bound',
+      sessionId: machine.id,
+    });
+
+    const e = event({ identity: { chatKey: 'chat:telegram:resolver-throws', principalId: 'tg:1' } });
+    const { session } = await service(undefined, {
+      resolveExternalIdentity: () => {
+        throw new Error('profile store failed');
+      },
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('service:svk_3');
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it('bind (существующая привязка, повтор/гонка): машинный владелец → переустанавливается человеку', async () => {
+    const existing = await sessionManager.createSession({
+      title: 'Race machine',
+      userId: 'service:svk_4',
+      ownerId: 'service:svk_4',
+    });
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:race-owner',
+      mode: 'bound',
+      sessionId: existing.id,
+    });
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultEphemeralTtl: '24h', autoBind: true },
+    });
+    const onMaterialized = vi.fn();
+    // Форсированная привязка без sessionId → материализация находит существующую.
+    const forced: EventBinding = {
+      id: 'bnd_race_owner',
+      source: 'telegram',
+      chatKey: 'chat:telegram:race-owner',
+      mode: 'bound',
+    };
+    const e = event({ identity: { chatKey: 'chat:telegram:race-owner', principalId: 'tg:777' }, dedupKey: 'k-race-owner' });
+    const { decision, session } = await service(router, {
+      resolveExternalIdentity: () => ({ userId: 'u-linked' }),
+      onSessionMaterialized: onMaterialized,
+    }).handleEvent(e, { binding: forced });
+
+    expect(decision.kind).toBe('bind');
+    expect(session?.id).toBe(existing.id);
+    expect(session?.ownerId).toBe('u-linked');
+    expect((await sessionManager.getSession(existing.id))?.userId).toBe('u-linked');
+    expect(onMaterialized).toHaveBeenCalledWith(expect.objectContaining({ id: existing.id }));
+    expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it('регресс: bind-сессия при создании получает владельца-человека от резолвера', async () => {
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultEphemeralTtl: '24h', autoBind: true },
+    });
+    const e = event({ identity: { chatKey: 'chat:telegram:create-human', principalId: 'tg:888' }, dedupKey: 'k-create-human' });
+    const { session } = await service(router, {
+      resolveExternalIdentity: () => ({ userId: 'u-creator' }),
+    }).handleEvent(e);
+
+    expect(session?.ownerId).toBe('u-creator');
+    expect(session?.userId).toBe('u-creator');
+  });
+
   // --- AD-089 (claim-flow): выпуск claim-кода неизвестному отправителю ---
 
   it('handleEvent: неизвестный отправитель (резолвер null) → identityHint от issueIdentityClaim', async () => {
