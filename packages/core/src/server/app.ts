@@ -1096,6 +1096,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       provider: config.llmDefaults?.provider,
       model: config.llmDefaults?.model,
     }),
+    // AD-089: агент по умолчанию инстанса — чтобы сессия из внешнего события
+    // (auto-bind/bind/ephemeral) фиксировала `settings.agentRole` и UI рисовал
+    // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
+    // «Агенты» (`getDefaultAgentId`) поверх `DEFAULT_AGENT_ID`.
+    resolveDefaultAgent: getDefaultAgentId,
     // AD-089: UI-событие после материализации внешнего события.
     publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
     deliver: async (sessionId, event, mode, context) => {

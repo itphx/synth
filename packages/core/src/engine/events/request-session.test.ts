@@ -53,6 +53,7 @@ describe('RequestSessionService (AD-089)', () => {
       unknownAgentTemplate?: 'drop' | 'default-agent';
       resolveOwnerId?: () => string | Promise<string | undefined>;
       resolveLlmDefaults?: () => { provider?: string; model?: string } | Promise<{ provider?: string; model?: string }>;
+      resolveDefaultAgent?: () => string | Promise<string>;
       resolveExternalIdentity?: (identity: EventIdentity) => { userId: string; displayName?: string; roles?: string[] } | null;
       identityMap?: Record<string, string>;
       onSessionMaterialized?: (session: Session) => void | Promise<void>;
@@ -71,6 +72,7 @@ describe('RequestSessionService (AD-089)', () => {
     ...(overrides?.resolveAgentTemplate ? { resolveAgentTemplate: overrides.resolveAgentTemplate } : {}),
     ...(overrides?.resolveOwnerId ? { resolveOwnerId: overrides.resolveOwnerId } : {}),
     ...(overrides?.resolveLlmDefaults ? { resolveLlmDefaults: overrides.resolveLlmDefaults } : {}),
+    ...(overrides?.resolveDefaultAgent ? { resolveDefaultAgent: overrides.resolveDefaultAgent } : {}),
     ...(overrides?.resolveExternalIdentity ? { resolveExternalIdentity: overrides.resolveExternalIdentity } : {}),
     ...(overrides?.identityMap ? { identityMap: overrides.identityMap } : {}),
     ...(overrides?.onSessionMaterialized ? { onSessionMaterialized: overrides.onSessionMaterialized } : {}),
@@ -216,6 +218,97 @@ describe('RequestSessionService (AD-089)', () => {
 
     expect(session).not.toBeNull();
     expect(session?.settings.agentRole).toBeUndefined();
+  });
+
+  // --- AD-089: агент по умолчанию инстанса для событийных сессий ---
+  // Баг: сессии, материализуемые funnel'ом (auto-bind/bind/ephemeral), создавались
+  // без `settings.agentRole`, поэтому оркестратор не писал `agent` в assistant-сообщение
+  // и UI не рисовал бейдж агента. Фикс: при пустом шаблоне применяем `resolveDefaultAgent`.
+
+  it('handleEvent ephemeral: без agentTemplate + resolveDefaultAgent → settings.agentRole = default', async () => {
+    const router = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
+    router.registerRuleProvider({
+      name: 'ephemeral-no-agent',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: '', ttl: '1h' }),
+    });
+
+    const e = event({ dedupKey: 'k-default-agent-ephemeral' });
+    const { session } = await service(router, {
+      resolveDefaultAgent: () => 'assistant',
+    }).handleEvent(e);
+
+    expect(session).not.toBeNull();
+    expect(session?.settings.agentRole).toBe('assistant');
+  });
+
+  it('handleEvent auto-bind: без agentTemplate + resolveDefaultAgent → settings.agentRole = default', async () => {
+    const router = new EventRouter({
+      bindingStore,
+      journal,
+      config: { defaultEphemeralTtl: '24h', autoBind: true },
+    });
+    const e = event({ identity: { chatKey: 'chat:telegram:default-agent' }, dedupKey: 'k-default-agent-bind' });
+    const { session } = await service(router, {
+      resolveDefaultAgent: () => 'assistant',
+    }).handleEvent(e);
+
+    expect(session).not.toBeNull();
+    expect(session?.settings.agentRole).toBe('assistant');
+  });
+
+  it('handleEvent: явный agentTemplate приоритетнее resolveDefaultAgent (дефолт не применяется)', async () => {
+    const router = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
+    router.registerRuleProvider({
+      name: 'ephemeral-explicit-agent',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: 'agent-x', ttl: '1h' }),
+    });
+    const resolveDefaultAgent = vi.fn(() => 'assistant');
+
+    const e = event({ dedupKey: 'k-explicit-agent-over-default' });
+    const { session } = await service(router, {
+      resolveAgentTemplate: (t) => (t === 'agent-x' ? 'agent-x' : null),
+      resolveDefaultAgent,
+    }).handleEvent(e);
+
+    expect(session?.settings.agentRole).toBe('agent-x');
+    expect(resolveDefaultAgent).not.toHaveBeenCalled();
+  });
+
+  it('handleEvent ephemeral: резолвер не задан, шаблон пуст → agentRole отсутствует (прежнее поведение)', async () => {
+    const router = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
+    router.registerRuleProvider({
+      name: 'ephemeral-no-resolver',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: '', ttl: '1h' }),
+    });
+
+    const e = event({ dedupKey: 'k-no-default-agent' });
+    const { session } = await service(router).handleEvent(e);
+
+    expect(session).not.toBeNull();
+    expect(session?.settings.agentRole).toBeUndefined();
+  });
+
+  it('регресс: неизвестный шаблон при drop не подменяется дефолтом (нет сессии)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const router = new EventRouter({ bindingStore, journal, config: { defaultEphemeralTtl: '24h' } });
+    router.registerRuleProvider({
+      name: 'ephemeral-ghost-default',
+      resolve: () => ({ kind: 'ephemeral', agentTemplate: 'ghost', ttl: '1h' }),
+    });
+    const resolveDefaultAgent = vi.fn(() => 'assistant');
+
+    const e = event({ dedupKey: 'k-ghost-default' });
+    const { session } = await service(router, {
+      resolveAgentTemplate: () => null,
+      unknownAgentTemplate: 'drop',
+      resolveDefaultAgent,
+    }).handleEvent(e);
+
+    // Политика `drop` — исключение при материализации; дефолт агента не спасает.
+    expect(session).toBeNull();
+    const entries = await journal.list();
+    expect(entries[0]?.error).toContain('agent_not_found');
+    expect(resolveDefaultAgent).not.toHaveBeenCalled();
   });
 
   it('handleEvent ephemeral: project из RouteDecision доезжает до сессии', async () => {

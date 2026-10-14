@@ -90,6 +90,18 @@ export interface RequestSessionServiceDeps {
    */
   resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
   /**
+   * AD-089: резолвер агента по умолчанию инстанса (`DEFAULT_AGENT_ID` либо
+   * runtime-настройка «Агенты»). Применяется при материализации сессий
+   * `ephemeral`/`bind`, когда шаблон события (`decision.agentTemplate`) пуст или
+   * не резолвится. Без этого сессия из внешнего события создавалась без
+   * `settings.agentRole` — оркестратор не писал `agent` в assistant-сообщение и
+   * UI не рисовал бейдж агента (фактически отвечает дефолтный агент, но нигде не
+   * зафиксирован). Явно заданный/резолвленный шаблон приоритетнее; неизвестный
+   * шаблон при `unknownAgentTemplate: drop` по-прежнему исключение (дефолт его не
+   * маскирует). Не задан — прежнее поведение (`agentRole` не проставляется).
+   */
+  resolveDefaultAgent?: () => string | Promise<string>;
+  /**
    * AD-089: резолвинг внешнего отправителя (`identity.principalId`) в пользователя
    * инстанса (id + отображаемое имя). Источник: профиль (`identities`) →
    * override `identityMap`. Применяется при материализации сессий
@@ -272,6 +284,7 @@ export class RequestSessionService {
   private _publish?: (type: EventType, sessionId: string, data: Record<string, unknown>) => void;
   private _resolveOwnerId?: () => string | Promise<string | undefined>;
   private _resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
+  private _resolveDefaultAgent?: () => string | Promise<string>;
   private _resolveExternalIdentity?: (
     identity: EventIdentity,
   ) => { userId: string; displayName?: string; roles?: string[] } | null | Promise<{ userId: string; displayName?: string; roles?: string[] } | null>;
@@ -293,6 +306,7 @@ export class RequestSessionService {
     this._publish = deps.publish;
     this._resolveOwnerId = deps.resolveOwnerId;
     this._resolveLlmDefaults = deps.resolveLlmDefaults;
+    this._resolveDefaultAgent = deps.resolveDefaultAgent;
     this._resolveExternalIdentity = deps.resolveExternalIdentity;
     this._identityMap = deps.identityMap;
     this._onSessionMaterialized = deps.onSessionMaterialized;
@@ -469,7 +483,7 @@ export class RequestSessionService {
     }
 
     if (decision.kind === 'ephemeral') {
-      const agentRole = this._resolveAgent(decision.agentTemplate);
+      const agentRole = await this._resolveSessionAgent(decision.agentTemplate);
       const owner = await this._resolveSessionOwner(ownerId, event);
       const session = await this._sessionManager.createSession({
         title: eventTitle(event),
@@ -505,7 +519,7 @@ export class RequestSessionService {
         }
       }
 
-      const agentRole = this._resolveAgent(decision.agentTemplate);
+      const agentRole = await this._resolveSessionAgent(decision.agentTemplate);
       const owner = await this._resolveSessionOwner(ownerId, event);
       const session = await this._sessionManager.createSession({
         title: eventTitle(event),
@@ -586,6 +600,23 @@ export class RequestSessionService {
     if (resolved) return resolved;
     if (this._config.unknownAgentTemplate === 'default-agent') return undefined;
     throw new Error(`agent_not_found: ${normalized}`);
+  }
+
+  /**
+   * AD-089: агент материализуемой сессии — резолвленный шаблон события либо,
+   * если шаблон пуст/не резолвится (`default-agent`), агент по умолчанию
+   * инстанса (`deps.resolveDefaultAgent`).
+   *
+   * Порядок: `_resolveAgent` (неизвестный шаблон при `drop` → исключение —
+   * дефолт его не маскирует) → `resolveDefaultAgent`. Без резолвера дефолта —
+   * прежнее поведение (`undefined`: `settings.agentRole` не проставляется).
+   */
+  private async _resolveSessionAgent(agentTemplate: string | undefined): Promise<string | undefined> {
+    const resolved = this._resolveAgent(agentTemplate);
+    if (resolved) return resolved;
+    if (!this._resolveDefaultAgent) return resolved;
+    const fallback = (await this._resolveDefaultAgent())?.trim();
+    return fallback || undefined;
   }
 
   /**
