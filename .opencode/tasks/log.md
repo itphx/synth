@@ -748,8 +748,150 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - `pnpm typecheck` — 7/7 Done; `pnpm lint` — 0 errors (184 pre-existing warnings в backend); core-тест M3 — 5/5 (изолированно); add-on M2 — build/typecheck/lint/test + `helm lint/template` (36/171/26, +5); M5 — dry-run server-side без apply.
 
 ### Коммиты
-- **Не делались** (инвариант 13): изменения в `synth/` (M1/M3), `addons/synth-gateway-telegram` (M2), `synth-deploy` (M5) — незакоммичены; пуш/apply — за пользователем.
+- Закоммичены по явной просьбе пользователя: `synth` — `995079a` (M3 core), `25d0a81` (M1 docs + журнал); `addons/synth-gateway-telegram` — `92257aa` (M2); `synth-deploy` — `8f56590` (M5). Пуш не делался.
 
 ### Следующие шаги
-- За пользователем: коммиты/пуш (synth, add-on, synth-deploy), выкат K3s test (runbook M5), решение по M4 (оставить/claim-flow), выбор большого трека (H AD-090 / I AD-059 / J+K шлюз).
+- За пользователем: пуш (synth, add-on, synth-deploy), выкат K3s test (runbook M5), решение по M4 (оставить/claim-flow), выбор большого трека (H AD-090 / I AD-059 / J+K шлюз).
 - Отложено: миграция zod v3→v4 (OpenAPI 1.x); `strategy` в `synth-addon-template`.
+
+## 2026-10-13 (продолжение 3) — Мультитенантный Telegram-шлюз («несколько ботов → несколько сред»)
+
+- **Задача:** «Закоммить наработки. И давай переключимся на мультитенантный telegram-шлюз, чтобы можно было держать один шлюз для разных сред. А я пока создам второго бота».
+- **Тип:** feature (add-on: config + runtime-фан-аут + health) + docs + infra-prep (деплой).
+- **Исполнитель:** @orchestrator (дизайн/план/верификация) → @fixer (T1–T4), @devops (T5).
+- **Результат:** PASS (код + деплой подготовлены; apply/push — за пользователем).
+
+### Решения пользователя (развилки)
+- Модель — **multi-bot** («несколько ботов → несколько сред»), а не «один бот → таблица маршрутов» AD-086.
+- Конфиг — `tenants.json` в `secrets/` (вне git).
+- Объём — код + деплой.
+
+### T1–T4 (код шлюза, `addons/synth-gateway-telegram`)
+- **T1 конфиг:** `TenantConfig` + `GatewayConfig.tenants[]`; источник `--tenants-file` > env `GATEWAY_TENANTS_FILE` > `secrets/tenants.json`; flat- и `synth.url`-формы, `allowlist` строкой/объектом; строгая fail-fast валидация (дубль/невалид `id`, неизвестные поля, битый JSON); backward-compat — нет файла → тенант `default` из env/CLI.
+- **T2 store:** изоляция каталогом — `tenantStoreDir` (`data/tenants/<id>`, legacy `default` — корень, без миграции).
+- **T3 health:** `aggregateHealth` + `GatewayHealthRegistry`; `GET /health` — агрегат (плоские поля, back-compat) + `tenants:{…}`.
+- **T4 runtime:** новый `runtime.ts` (`createTenantRuntime` на тенанта); `index.ts` — фан-аут, логи `[gateway][<id>]`, один health-сервер, shutdown всех, `--once`/`--dry-run` по всем тенантам.
+- Файлы: `apps/gateway/src/{config,health,server,index}.ts` (+ новый `runtime.ts`, новый `tenants.test.ts`), README/AGENTS/.env.example/secrets/NOTES.
+
+### T5 (деплой)
+- **Чарт шлюза:** `tenantsFile {enabled, secretName, secretKey, mountPath}` — Secret `TENANTS_JSON` → файл `/etc/gateway/tenants.json` + env `GATEWAY_TENANTS_FILE`; fallback single-tenant сохранён; `strategy: Recreate`. `docker-compose`, `.env.example`, NOTES — обновлены.
+- **`synth-deploy`:** `gateway.tenantsFile` в values + монтаж в `gateway-deployment.yaml`; `seal-gateway-secrets.sh` получил `--tenants-file`/`TENANTS_JSON`; README — «Фаза 3 — мультитенантность» + откат.
+- **Dry-run:** `helm lint`/`template` обеих фаз OK; `kubectl apply --dry-run=server` — валидно; скрипт пломбирования прогнан на фейках. Ничего не применялось.
+
+### Верификация (оркестратор)
+- add-on: `pnpm build/typecheck/lint/test` — telegram 36, mcp 26, **gateway 195** (+24 в `tenants.test.ts`); `--help` содержит `--tenants-file`; `--dry-run` с двумя тенантами — старт/выход без краша; `GET /health` — агрегат + разбивка. `helm lint` обоих чартов — 0 failed.
+
+### Документация
+- AD-086 — статус ⚠️ Частично, «Обновлено 2026-10-13», раздел «Мультитенантность» → **реализовано** (multi-bot), альтернатива (single-bot routing) помечена как невыбранная. `README.md` AD, корневой `AGENTS.md` (AD-086/AD-089), тело AD-089 — синхронизированы (остаток AD-086 → HA/второй канал).
+
+### Коммиты
+- **Не делались** (инвариант 13): `addons/synth-gateway-telegram` (T1–T4 + деплой-файлы), `synth-deploy` (T5), доки в `synth/` — незакоммичены.
+
+### Открытые вопросы
+- **TLS для внешнего `synthUrl`:** если тенант ходит на `https://…` с внутренним CA, поду шлюза нужен `NODE_EXTRA_CA_CERTS`/монтирование CA (в чарте нет); иначе — in-cluster `http://synth-backend:5000/api/v2`.
+- **`envFrom`** тянет ключ `TENANTS_JSON` и в env пода (безвредно — шлюз читает файл); при нежелательности — отдельный Secret только для монтирования.
+- **MCP** остаётся однотенантным (вне среза). **HA/leader election** — нет (AD-086).
+
+## 2026-10-13 (продолжение 4) — Шлюз: доверие внутреннему CA (ITPHX) + зелёный логотип dev-бота
+
+- **Задача:** «Корневой и промежуточный сертификаты в корне проекта. Сделай логотип Synth для dev-бота в зеленом цвете».
+- **Тип:** infra (deploy/CA) + design-asset.
+- **Исполнитель:** @orchestrator (логотип, `synth-design`) → @devops (CA: `synth-deploy` + add-on).
+- **Результат:** PASS.
+
+### CA (TLS) — закрыт открытый вопрос T5
+- Источники в корне воркспейса: `ITPHX+CA.crt` (корневой, self-signed) + `ITPHX SRV CA.crt` (промежуточный, issuer ITPHX CA); bundle root→intermediate; leaf `synth.k3s.itphx.loc` подписан `ITPHX SRV CA` (`openssl verify` сходится).
+- **Проверено (@devops):** Node/undici `fetch` уважает `NODE_EXTRA_CA_CERTS` — живой test с bundle → `200 healthy`, без → `SELF_SIGNED_CERT_IN_CHAIN`; кастомный dispatcher не нужен.
+- **`synth-deploy`:** gateway-под монтирует ConfigMap `synth-itphx-ca` (`/etc/ssl/certs/itphx-ca.crt`, subPath) + env `NODE_EXTRA_CA_CERTS`; `gateway.ca.enabled` (дефолт true); README обновлён (backed + шлюз).
+- **add-on:** чарт получил блок `ca` (`enabled/caCert/existingConfigMap/configMapKey/mountPath`) + новый `ca-configmap.yaml`; `certs/itphx-ca.crt` (bundle, публичный) + dev-инструкция (`NODE_EXTRA_CA_CERTS=certs/itphx-ca.crt`), `.env.example`/compose/`.dockerignore`/NOTES/README/AGENTS.
+- **Dry-run:** `helm lint/template` (off/on, оба чарта) + `kubectl apply --dry-run=server` — ок; add-on тесты 36/26/**195**.
+
+### Логотип dev-бота (`synth-design`)
+- `icons/gen-kit.py` — добавлена палитра **`green-bot`** (`#86efac → #22c55e → #15803d`; favicon `#bbf7d0 → #22c55e → #4ade80`).
+- `icons/kits/green-bot/` — комплект (avatar 512/1024/400(.jpg)/256/128, круглая маска, прозрачный PNG, favicon/ico, logo); форма — канонический favicon монорепо (sha256 сверен); `icons/README.md` обновлён.
+- Для @BotFather (`/setuserpic`) dev-бота: `icons/kits/green-bot/avatar/synth-avatar-512.png`.
+
+### Коммиты
+- **Не делались** (инвариант 13): `synth-deploy` (CA), `addons/synth-gateway-telegram` (мультитенантность + CA), `synth-design` (green-bot + README + gen-kit) — незакоммичены. Пуш/apply — за пользователем.
+
+## 2026-10-14 — Порядок в `.opencode`: удалены MCP synth-* и мёртвые npm-артефакты
+
+- **Задача:** «Зачем в `.opencode` нужны `node_modules`/`package-lock.json`/`package.json`/`.gitignore`? Из `.opencode/opencode.json` удалить MCP-серверы synth-*».
+- **Тип:** infra / config
+- **Исполнитель:** @orchestrator
+- **Результат:** PASS
+- **Что сделано:**
+  - `Synth/.opencode/opencode.json`: удалены MCP-серверы `synth-media-receiver` и `synth-gateway-telegram`; остался `$schema` + пояснение про `mcp.servers` (бэкап — `/tmp/opencode/opencode.json.bak-*`). Файл вне git-репозитория (`Synth/` — не репо) → коммита нет.
+  - Удалены `.opencode/node_modules` (62 МБ), `.opencode/package.json`, `.opencode/package-lock.json` — служебные артефакты установки зависимостей плагинов OpenCode (`@opencode-ai/plugin`); плагинов в проекте нет (`.opencode/plugins/`, ключ `plugins` в конфигах отсутствуют), opencode пересоздаст их сам при появлении. `.gitignore` оставлен (автогенерируемый спутник той же механики).
+- **Найдено (побочный эффект чистки):** проектный конфиг был в **V1-формате** (`"mcp": {"имя": {...}}`), а OpenCode **V2** ждёт `"mcp": {"servers": {...}}`. В V1-форме проектная секция `mcp` перекрывала глобальную `mcp.servers` — из-за этого в воркспейсе `Synth/` не загружались глобальные MCP (gitverse, gitea, github, freecad, playwright, playwright-grabcad). После чистки все 6 видны в `opencode mcp list` (проверено также на изолированном каталоге в `/tmp/opencode`).
+- **Не сделано:** коммиты (инвариант 13 — только по просьбе пользователя); `synth-gateway-telegram` не пересобирался (`addons/synth-gateway-telegram/apps/mcp/dist/index.js` отсутствует — сервер и раньше был нерабочим).
+
+## 2026-10-14 — synth-landing/synth-docs: причина падения Fleet-бандла + вынос чарта в `deploy/`
+
+- **Задача:** «Bundle synth-landing висит с ошибкой в Fleet» → диагностика → согласована реструктуризация репозиториев.
+- **Тип:** infra (Fleet/Helm, K3s test).
+- **Исполнитель:** @orchestrator (диагностика, проверка) → @devops (правки как код).
+- **Результат:** PASS — правки готовы в рабочем дереве, НЕ закоммичены, НЕ применены.
+
+### Причина (диагноз, замеры)
+- Fleet пакует **весь сканируемый каталог** чарта в `resources` бандла. Чарт лежал в корне → в бандл уехала вся статика (~1 MiB): в Bundle `synth-landing` = 35 записей resources (все файлы репо), сам Bundle-объект 1.15 MiB (лимит etcd 1.5 MiB).
+- Helm-release Secret уперся в лимит Secret 1 MiB: `Secret.data['release']` = **924.7 KiB** на v19 (коммит `4a6a0c0`, проходил) → **1207.1 KiB** на HEAD `ec67187` (**+183 KiB перебор**) → `data: Too long: may not be more than 1048576 bytes` → `ErrApplied`, бандл `0/1` с 2026-10-07T05:21:58Z.
+- Пробит лимит уже на `5156d04` (1132 KiB): статика росла 532→685→742 KiB скриншотов, запас v19 был лишь ~99 KiB.
+- `synth-docs` — та же конструкция, держалась только на костыле `.fleetignore` (в доковском релизе `chart files: []`).
+- Найдено попутно: сайт был актуален **не благодаря Fleet** — контент в образе `:latest`, pod-шаблон не меняется, поэтому контент обновляли руками (`kubectl rollout restart`, аннотации 07.10 10:32/11:10). Образ `:latest` в реестре запушен 07.10 10:58 +0500, тегов-коммитов нет.
+
+### Что сделано (@devops, только рабочее дерево)
+- `synth-landing`, `synth-docs`: чарт+`fleet.yaml` → `deploy/` (`git mv`); в корне остались контент/Dockerfile/README.
+- `deploy/fleet.yaml`: пины `name: <repo>` (иначе бандл → `…-deploy` и старый удаляется с ресурсами) + `helm.releaseName: <repo>` (selector Deployment содержит `app.kubernetes.io/instance: {{ .Release.Name }}` — неизменяемое поле) → apply in-place без простоя.
+- `synth-docs`: удалены костыли `.fleetignore`/`.helmignore`. Оба репо: `.dockerignore` + `deploy`,`scripts`; README (структура, `helm install <repo> deploy`, порядок обновления контента).
+- Новое: неизменяемый `image.tag` (short SHA) + `pullPolicy: IfNotPresent` + `scripts/build-push.sh` (build/push/бамп тега; флаги `--tag/--no-bump/--dry-run`; git не трогает) — убирает ручной `rollout restart`.
+
+### Проверено (@orchestrator)
+- `helm lint deploy` — 0 failed (оба); `helm template` old-HEAD vs new `deploy/` — diff **только** `image`+`pullPolicy` (имена/лейблы/selector идентичны → immutable-ошибки не будет).
+- Оценка `Secret.data['release']`: 1207.1 KiB → **~8 KiB** (файлов в сканируемом каталоге: 32 → 7).
+- `build-push.sh --dry-run` — ок, `values.yaml` не меняется (sha256 сверен); `bash -n` ок; скрипты в репо идентичны.
+- В корне не осталось `Chart.yaml`/`fleet.yaml`/`templates/`; висячих ссылок нет.
+
+### Не сделано / за пользователем
+- Коммиты и push (инвариант 13); образ не собирался; кластер не тронут.
+- **Порядок обязателен:** сначала `scripts/build-push.sh` (теги `ec67187`/`a5296c5` в реестре отсутствуют → иначе ImagePullBackOff и застрявший rollout), затем commit+push → Fleet раскатает.
+- Наблюдать после apply: имена бандлов должны остаться `synth-landing`/`synth-docs` (а не `…-deploy`) и стать Ready.
+
+## 2026-10-14 — Перевод test-деплоя на бандлы из Helm-реестра Gitea + правки чартов
+
+- **Задача:** «Перевести деплой test-среды на Fleet-бандлы, собираемые из приватного Helm-реестра Gitea; починить/дополнить чарты Synth и Telegram-шлюза».
+- **Тип:** infra / deploy / docs (код приложения не менялся).
+- **Исполнитель:** @orchestrator → @devops / @fixer.
+- **Результат:** PASS.
+- **Что сделано (по репозиториям):**
+  - **synth** — `charts/synth`: `backend.config` (ConfigMap `synth-config` → `/etc/synth/config.yaml`, штатный путь поиска), `extraObjects` (SealedSecret'ы), `persistence.keepOnUninstall`; `shared/config`: `ENV_OVERRIDES` (env-оверрайды скалярных ключей секций `events`/`scheduler`/`webhooks`/`decision`, имя `SYNTH_<SECTION>_<KEY>`, применяются в `loadConfig`) + тесты.
+  - **addons/synth-gateway-telegram** — чарт: `existingClaim`/`extraObjects`/`keepOnUninstall` + чистка внутренних упоминаний; **synth-addon-template** — чистка.
+  - **synth-deploy** — удалён форк-чарт в репозитории; два бандла `test/` → `synth-test` и `gateway-telegram/` → `synth-gateway-telegram`; скрипт `scripts/build-and-publish.sh` (образы + публикация чартов в Gitea + пиннинг по маркерам `# sync:`); `scripts/seal-manifest.sh`; README; AGENTS.md.
+- **Коммиты:**
+  - synth: `729bfbc`, `64d7f54`, `75a9e3d`
+  - synth-gateway-telegram: `a27c411`, `ae94c3d`, `8a6acba`
+  - synth-addon-template: `c063d63`
+  - synth-deploy: `902711c`, `d3040e2`, `76ab5cb`
+- **Опубликованные чарты (Gitea Helm-реестр):** synth `0.10.0-1`/`0.10.0-2`, synth-gateway-telegram `0.2.0-1`/`0.2.0-2`.
+- **Инцидент:** при снятии старого бандла PVC удалились — keep-аннотация на живом объекте не учитывается Helm (нужна в манифесте релиза). Данные восстановлены из бэкапа `tmp/backup/2026-10-14/` (14 сессий / 6 проектов, проверено); добавлен `persistence.keepOnUninstall: true`.
+- **Осталось:** пуш ветки `synth` (ветка локальная, без push); визуальная проверка UI.
+
+### Итог 2026-10-14 ~09:25 — собрано и задеплоено (пользователь поручил «собери и задеплой»)
+
+- **Образы:** `git.itphx.ru/itphx/synth-landing:ec67187` (sha256:a3827bbd…), `git.itphx.ru/itphx/synth-docs:a5296c5` (sha256:2c82b9bc…) — собраны и запушены ДО git-push (тегов-коммитов в реестре не было).
+- **Коммиты/пуш:** landing `2716d2b`, docs `1e905bc` (origin/main синхронизирован, дерево чистое).
+- **Fleet:** `synth-landing` **0/1 ErrApplied → 1/1**; `synth-docs` `1/1`. Пины `name`+`releaseName` сработали: бандлы остались `synth-landing`/`synth-docs`, лишних `-deploy` нет, Deployment/Service/Ingress сохранили UID'ы (пересоздания и простоя не было).
+- **Замеры:** release-secret `v20` = **6.6 KiB** (было 1226.2 KiB); Bundle-объект **14.9 KiB** (было 1.15 MiB), `resources` = 6 файлов чарта (статика больше не пакуется). Pod'ы: `:ec67187` / `:a5296c5`, Running 1/1, 0 рестартов.
+- **Функционально:** landing HTTP 200, живой sha256 `index.html` = `ffb245dd…` = HEAD (совпало); docs HTTP 200, 43212 B.
+- **Побочно:** образ docs получил более свежий контент (следствие деплоя). Аннотация `kubectl.kubernetes.io/restartedAt` от 07.10 осталась, но теперь инертна — ручной `rollout restart` не нужен (rollout идёт от смены `image.tag`).
+- **Осталось (опционально, вне scope):** удалить устаревший oversized secret `…v19` (1226 KiB), старый тег `:latest` в реестре; при желании — убрать `restartedAt` через чарт.
+
+### Регрессия и фикс 2026-10-14 ~09:35 — `synth-docs`: корень репо стал вторым бандлом
+
+- **Симптом:** GitRepo `synth-docs` — `Ready=True`, но `[Stalled] msg="Request entity too large: limit is 3145728"`, `display.state=GitUpdating`; gitjob `synth-docs-e2617` в `Failed` (`BackoffLimitExceeded`), в логе: `updated (bundle): fleet-local/synth-docs` + `{"fleetErrorMessage":"Request entity too large: limit is 3145728","level":"fatal"}`.
+- **Причина (внесена нашей же реструктуризацией):** после выноса чарта в `deploy/` корень перестал быть чартом, а правило Fleet «нет `Chart.yaml`/`kustomization.yaml` → любой `.yaml`/`.yml` — это манифесты» сработало на корневом `mkdocs.yml`. Fleet начал собирать ВТОРОЙ бандл из корня, а в `resources` кладёт **все файлы** каталога: корень docs = 3.9 MiB (`docs/assets/screens/*.png`) → в base64 ≈5 MiB → объект не проходит лимит API 3 MiB → gitjob фейлится. У `synth-landing` в корне `.yml` нет — повезло, сломалось бы при первом же добавленном yaml.
+- **Важно:** сайты всё это время работали — падал только скан исходников, бандл `deploy/` был `1/1`, поды не трогались.
+- **Фикс (паттерн из `synth-deploy/gitrepo.yaml`):** в оба GitRepo добавлено `spec.paths: [deploy]` → Fleet сканирует только `deploy/`, корень репо для него нейтрален. Merge-patch (targets/branch/clientSecretName не тронуты), бэкапы CR — `tmp/backup/2026-10-14/`.
+- **Проверено (@orchestrator):** `Stalled=False` + `gitJobStatus=Current` у обоих; `bundles` `1/1`; Failed-джоб нет; в ns сайтов не появилось rogue `GitRepo`; UID'ы Deployment/Service/Ingress и подов не менялись; landing `index.html` sha256 совпал, docs HTTP 200.
+- **Зафиксировано в git:** `gitrepo.yaml` (референс applied-состояния) в обоих репо — `kubectl diff -f gitrepo.yaml` даёт 0 расхождений; README дополнены. Коммиты `274d5d5` (docs), `205149e` (landing) — запушены.
+- **Остаточный риск:** `paths` обязан остаться в GitRepo — при удалении корень снова станет бандлом и при наличии любого `.yml` в корне поломка повторится (предупреждение записано в шапке `gitrepo.yaml` и README).

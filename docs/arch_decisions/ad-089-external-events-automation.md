@@ -1,11 +1,11 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind; [AD-052](./ad-052-public-api-platform.md) — ✅ этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK `@itphx/synth-sdk`, перевод шлюза; первый add-on — Telegram-шлюз ([AD-086](./ad-086-extensibility-plugins-editions.md)) — реализован; остаток — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)), остаток AD-086 (HA/мультитенантность/второй канал) и стриминг ответа наружу)
+> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind; [AD-052](./ad-052-public-api-platform.md) — ✅ этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK `@itphx/synth-sdk`, перевод шлюза; первый add-on — Telegram-шлюз ([AD-086](./ad-086-extensibility-plugins-editions.md)) — реализован; остаток — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)), остаток AD-086 (HA/второй канал) и стриминг ответа наружу)
 > **Дата:** 2026-10-08
 > **Обновлено:** 2026-10-13 — синхронизация статусов: [AD-052](./ad-052-public-api-platform.md)
 > закрыт целиком (этапы I–IV), первый add-on (`addons/synth-gateway-telegram`) реализован; остаток
 > пересобран — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)),
-> остаток AD-086 (HA/мультитенантность/второй канал) и стриминг ответа наружу.
+> остаток AD-086 (HA/второй канал) и стриминг ответа наружу.
 > **Обновлено:** 2026-10-12 — зафиксирована граница с add-on-слоем: шлюз (Telegram) — тонкий транспорт
 > (normalize→events, events→send), состояние инстанс-локальное; топология/HA/мультитенантность — свойство
 > слоя add-on ([AD-086](./ad-086-extensibility-plugins-editions.md), раздел «Первый частный случай — Telegram gateway»);
@@ -477,7 +477,8 @@ managed backend — `synth.llm` того же конфига. Явно зада�
 - **пайплайны** (цепочки шагов, [AD-059](./ad-059-pipeline-automation.md)) — нет;
 - **стриминг ответа наружу** (edit-in-place / typing-indicator) — нет;
 - **остаток [AD-086](./ad-086-extensibility-plugins-editions.md) как AD** — HA через leader election,
-  мультитенантность, webhook-транспорт и второй канал — нет (первый add-on — Telegram-шлюз — реализован).
+  webhook-транспорт и второй канал — нет; **мультитенантность реализована** («несколько ботов → несколько
+  сред», `tenants.json`; первый add-on — Telegram-шлюз).
 
 **Закрыто реализацией:** источник [AD-052](./ad-052-public-api-platform.md) — ✅ **этапы I–IV**:
 binding-key (первый срез); service-key (общий ключ инстанса со `scopes` + проектной проекцией
