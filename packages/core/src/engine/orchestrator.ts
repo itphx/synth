@@ -284,6 +284,13 @@ export interface OrchestratorOptions {
    * оркестратора.
    */
   isSchedulerActive?: (sessionId: string) => Promise<boolean>;
+  /**
+   * «Стоп»: late-bound проверка персистентного флага отмены сессии
+   * (`session.status.cancelRequested`). Не задана — проверка не выполняется
+   * (поведение прежнее). На границе итерации Tool Use позволяет остановить
+   * длинный прогон, когда живой cancelToken недоступен (backoff/гонка).
+   */
+  isCancelRequested?: (sessionId: string) => Promise<boolean>;
 }
 
 export interface ProcessMessageResult {
@@ -428,6 +435,12 @@ export class ChatOrchestrator {
   private readonly _getRequestSessionService: (() => RequestSessionService | undefined) | null;
   /** AD-051: late-bound резолвер активности расписания в сессии (null — не задан). */
   private readonly _isSchedulerActive: ((sessionId: string) => Promise<boolean>) | null;
+  /**
+   * «Стоп»: late-bound проверка персистентного флага `status.cancelRequested`
+   * (null — не задан). Позволяет прервать длинный многоитерационный прогон на
+   * границе цикла Tool Use даже без живого cancelToken (backoff/гонка).
+   */
+  private readonly _isCancelRequested: ((sessionId: string) => Promise<boolean>) | null;
   /** AD-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
   private readonly _instructionsConfig: InstructionsConfig | null;
   /** AD-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
@@ -761,6 +774,7 @@ export class ChatOrchestrator {
     this._commandRuntime = options.commandRuntime ?? null;
     this._getRequestSessionService = options.getRequestSessionService ?? null;
     this._isSchedulerActive = options.isSchedulerActive ?? null;
+    this._isCancelRequested = options.isCancelRequested ?? null;
 
     // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -2994,7 +3008,13 @@ export class ChatOrchestrator {
         // Отмена до входа в итерацию (уже абортированный signal, «Стоп» на
         // стартовом stream.usage) — обрабатываем общей веткой отмены ниже.
         // Иначе пустой ход превращался бы в «ответ модели пуст» (error).
-        if (cancelToken.cancelled) {
+        // Дополнительно — персистентный флаг сессии (`isCancelRequested`):
+        // останавливает многоитерационный Tool Use, когда живой cancelToken
+        // недоступен (backoff/гонка); сбрасывает флаг процессор очереди.
+        if (
+          cancelToken.cancelled
+          || (this._isCancelRequested ? await this._isCancelRequested(session.id) : false)
+        ) {
           cancelledBeforeFinal = true;
           break;
         }

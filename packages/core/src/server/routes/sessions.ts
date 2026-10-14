@@ -738,13 +738,33 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    // Отмена стрима: прерываем fetch через cancelToken (orchestrator.cancel).
-    // Очистку pendingMessages/blocked/currentStream выполняет сам QueueProcessor —
-    // при cancelled processStream публикует stream.cancelled и возвращает {},
-    // после чего процессор снимает blocked и очищает currentStream в успешной ветке.
-    // НЕ вызываем queueManager.stop() — иначе сессия остаётся «зависшей» (stalled).
+    // Персистентный флаг отмены (AD-005): работает и когда `currentStream`/
+    // cancel-token отсутствуют (сессия в очереди / backoff / между итерациями),
+    // когда `orchestrator.cancel` — no-op. Пишем под локом, чтобы не потерять
+    // конкурентную запись процессора; сбрасывает флаг сам процессор.
+    await sessionManager.withLock(id, async (s) => {
+      s.status.cancelRequested = true;
+      s.status.cancelRequestedAt = nowISO();
+      await sessionManager.saveSession(s);
+    });
+
+    // Graceful-отмена активного стрима: оркестратор публикует stream.cancelled
+    // и сохраняет частичный ответ (если токен ещё жив).
     if (session.currentStream) {
       orchestrator.cancel(session.currentStream.streamId);
+    }
+
+    // Прерываем backoff/активный LLM-вызов и цикл процессора немедленно.
+    // Очистку pendingMessages/blocked/currentStream/флага выполняет сам
+    // QueueProcessor. НЕ вызываем queueManager.stop() — иначе сессия остаётся
+    // «зависшей» (stalled). Если процессора нет — снимаем флаг, иначе следующий
+    // запуск ложно отменится.
+    if (!queueManager.requestStop(id)) {
+      await sessionManager.withLock(id, async (s) => {
+        s.status.cancelRequested = undefined;
+        s.status.cancelRequestedAt = undefined;
+        await sessionManager.saveSession(s);
+      });
     }
     return c.json({ status: 'aborted' });
   });

@@ -254,3 +254,154 @@ describe('QueueProcessor — дедупликация в Phase 1', () => {
     expect(s!.currentStream).toBeUndefined();
   });
 });
+
+describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () => {
+  let sessionManager: SessionManager;
+  let eventBus: EventBus;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-qstop-'));
+    sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+    eventBus = new EventBus();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function enqueue(): Promise<{ sessionId: string; streamId: string }> {
+    const session = await sessionManager.createSession({ title: 'Stop' });
+    const msg = makeMessage();
+    await sessionManager.addPendingMessage(session.id, msg);
+    return { sessionId: session.id, streamId: msg.metadata!.stream_id as string };
+  }
+
+  async function waitUntil(predicate: () => Promise<boolean>, timeoutMs = 2000): Promise<void> {
+    const started = Date.now();
+    while (Date.now() - started <= timeoutMs) {
+      if (await predicate()) return;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error('waitUntil: timeout');
+  }
+
+  it('graceful-отмена (processMessage сам публикует stream.cancelled) — без дубля', async () => {
+    const { sessionId } = await enqueue();
+    const events = collectEvents(eventBus, sessionId);
+
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async (_s, _m, signal, publish) => {
+      return new Promise((resolve) => {
+        signal.addEventListener('abort', () => {
+          // Имитация graceful-отмены оркестратором: он публикует stream.cancelled
+          // и возвращает {} (успешная ветка снимет currentStream).
+          publish('stream.cancelled', { stream_id: 'orchestrator', content: 'partial', status: 'cancelled' });
+          resolve({});
+        }, { once: true });
+      });
+    });
+
+    const startPromise = processor.start();
+    await waitUntil(async () => (await sessionManager.getSession(sessionId))!.currentStream !== undefined);
+
+    // «Стоп» на активном стриме
+    processor.requestStop();
+    await startPromise;
+
+    // Ровно один stream.cancelled (от оркестратора) — очередь НЕ дублирует.
+    expect(events.filter((e) => e.type === 'stream.cancelled')).toHaveLength(1);
+
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.status.blocked).toBeUndefined();
+    expect(s!.currentStream).toBeUndefined();
+    expect(s!.status.cancelRequested).toBeUndefined();
+    expect(events.some((e) => e.type === 'queue.stalled')).toBe(false);
+  });
+
+  it('backoff: requestStop будит паузу, очередь чистится, stream.cancelled один раз', async () => {
+    const { sessionId } = await enqueue();
+    const events = collectEvents(eventBus, sessionId);
+
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => ({
+      error: 'timeout',
+      errorType: 'timeout',
+      canRetry: true,
+    }));
+
+    const startPromise = processor.start();
+    await waitForEvent(events, 'stream.retry');
+
+    const startedAt = Date.now();
+    processor.requestStop();
+    await startPromise;
+    // backoff (5 c) прерван немедленно, а не по таймеру
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+
+    const cancelled = events.filter((e) => e.type === 'stream.cancelled');
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]!.data).toMatchObject({ status: 'cancelled' });
+    // Повтора нет
+    expect(events.filter((e) => e.type === 'stream.retry')).toHaveLength(1);
+
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.status.blocked).toBeUndefined();
+    expect(s!.currentStream).toBeUndefined();
+    expect(s!.status.cancelRequested).toBeUndefined();
+    expect(s!.status.cancelRequestedAt).toBeUndefined();
+  });
+
+  it('персистентный флаг cancelRequested (abort без стрима) останавливает процессор', async () => {
+    const { sessionId } = await enqueue();
+    const events = collectEvents(eventBus, sessionId);
+
+    // Имитация abort-роута: флаг выставлен до запуска, стрима/токена ещё нет.
+    await sessionManager.safeUpdate(sessionId, (s) => {
+      s.status.cancelRequested = true;
+      s.status.cancelRequestedAt = nowISO();
+    });
+
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => {
+      throw new Error('processMessage не должен вызываться при активном Стопе');
+    });
+    await processor.start();
+
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.currentStream).toBeUndefined();
+    expect(s!.status.cancelRequested).toBeUndefined();
+    expect(s!.status.cancelRequestedAt).toBeUndefined();
+    expect(events.some((e) => e.type === 'stream.error')).toBe(false);
+    expect(events.some((e) => e.type === 'stream.start')).toBe(false);
+    expect(events.some((e) => e.type === 'queue.stalled')).toBe(false);
+  });
+
+  it('персистентный флаг перечитывается на границе цикла (backoff без requestStop)', async () => {
+    const { sessionId } = await enqueue();
+    const events = collectEvents(eventBus, sessionId);
+
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => ({
+      error: 'timeout',
+      errorType: 'timeout',
+      canRetry: true,
+    }));
+
+    const startPromise = processor.start();
+    await waitForEvent(events, 'stream.retry');
+
+    // Флаг выставлен «снаружи» (другой инстанс/шлюз), requestStop не вызывался —
+    // будим backoff и проверяем, что граница цикла видит флаг.
+    await sessionManager.safeUpdate(sessionId, (s) => {
+      s.status.cancelRequested = true;
+    });
+    processor.retryNow();
+    await startPromise;
+
+    expect(events.filter((e) => e.type === 'stream.cancelled')).toHaveLength(1);
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.status.cancelRequested).toBeUndefined();
+    expect(s!.currentStream).toBeUndefined();
+  });
+});

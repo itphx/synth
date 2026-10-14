@@ -960,6 +960,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // AD-051: late-bound резолвер активности расписания в сессии (ScheduleStore
     // создаётся ниже) — включает статический блок `Scheduler` в промпт.
     isSchedulerActive: (sid) => scheduleStore.hasEnabledTargetFor(sid),
+    // «Стоп»: персистентный флаг отмены сессии — прерывает длинный
+    // многоитерационный Tool Use на границе итерации (backoff/гонка).
+    isCancelRequested: async (sid) =>
+      (await sessionManager.getSession(sid))?.status.cancelRequested === true,
   });
 
   const processMessage = orchestrator.createProcessMessage();

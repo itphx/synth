@@ -44,6 +44,8 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
       : null,
     status: {
       blocked: session.status.blocked || null,
+      cancel_requested: session.status.cancelRequested || false,
+      cancel_requested_at: session.status.cancelRequestedAt || null,
     },
     settings: session.settings,
     /** AD-070 §2.4: состояние промпта per-agent (generation/hash/prefix). */

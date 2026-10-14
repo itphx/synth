@@ -348,6 +348,15 @@ export interface Message {
 export interface SessionStatus {
   blocked?: string;
   blockedAt?: string;
+  /**
+   * Персистентный флаг запроса отмены генерации (кнопка «Стоп», `/stop`).
+   * Живёт в JSON-хранилище (AD-005): позволяет остановить сессию, когда
+   * `currentStream`/cancel-token ещё не установлены (очередь, backoff).
+   * Сбрасывается процессором очереди после обработки.
+   */
+  cancelRequested?: boolean;
+  /** Время запроса отмены (ISO) — для диагностики/аудита. */
+  cancelRequestedAt?: string;
 }
 
 export const PLAN_MODES = ['auto', 'strict', 'off'] as const;

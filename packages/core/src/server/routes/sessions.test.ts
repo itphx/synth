@@ -26,6 +26,7 @@ function createMockQueueManager() {
     stopAll: vi.fn(),
     getRingBuffer: vi.fn(),
     setContextOptimizer: vi.fn(),
+    requestStop: vi.fn().mockReturnValue(false),
   };
 }
 
@@ -796,5 +797,82 @@ describe('GET /api/v2/sessions — видимость по ролям/проек
 
     const res = await app.request(`/api/v2/sessions/${session.id}/status`);
     expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /api/v2/sessions/:id/abort — персистентный флаг отмены', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-session-abort-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeApp() {
+    const app = new Hono();
+    const fileStore = new FileStore({ dataDir: tmpDir });
+    const sessionManager = new SessionManager(fileStore);
+    const orchestrator = createMockOrchestrator();
+    const queueManager = createMockQueueManager();
+    const routes = createSessionRoutes(
+      createMockAuth(),
+      {
+        sessionManager,
+        eventBus: new EventBus(),
+        queueManager: queueManager as any,
+        processMessage: orchestrator.createProcessMessage(),
+        orchestrator: orchestrator as any,
+      },
+    );
+    app.route('/api/v2/sessions', routes);
+    return { app, sessionManager, orchestrator, queueManager };
+  }
+
+  it('несуществующая сессия → 404', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/sessions/missing/abort', { method: 'POST' });
+    expect(res.status).toBe(404);
+  });
+
+  it('ставит флаг, отменяет активный стрим и просит остановку процессора', async () => {
+    const { app, sessionManager, orchestrator, queueManager } = makeApp();
+    queueManager.requestStop.mockReturnValue(true);
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+    session.currentStream = {
+      streamId: 'st1',
+      message: '',
+      startedAt: nowISO(),
+      cancelled: false,
+    };
+    session.status.blocked = session.id;
+    session.status.blockedAt = nowISO();
+    await sessionManager.updateSession(session);
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'aborted' });
+
+    const s = await sessionManager.getSession(session.id);
+    expect(s!.status.cancelRequested).toBe(true);
+    expect(typeof s!.status.cancelRequestedAt).toBe('string');
+    expect(orchestrator.cancel).toHaveBeenCalledWith('st1');
+    expect(queueManager.requestStop).toHaveBeenCalledWith(session.id);
+  });
+
+  it('нет запущенного процессора — флаг не оставляем (следующий запуск не отменится)', async () => {
+    const { app, sessionManager, queueManager } = makeApp();
+    queueManager.requestStop.mockReturnValue(false);
+    const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+
+    const res = await app.request(`/api/v2/sessions/${session.id}/abort`, { method: 'POST' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'aborted' });
+
+    const s = await sessionManager.getSession(session.id);
+    expect(s!.status.cancelRequested).toBeUndefined();
+    expect(s!.status.cancelRequestedAt).toBeUndefined();
   });
 });

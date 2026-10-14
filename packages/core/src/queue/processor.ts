@@ -28,6 +28,8 @@ export type ProcessMessageFn = (
 export class QueueProcessor {
   private _running = false;
   private _cancelled = false;
+  /** Запрос «Стоп» от абонента (abort-роут/`requestStop`): останавливаем цикл. */
+  private _stopRequested = false;
   private _retryDelays: RetryDelays = {};
   private _ringBuffer: Map<string, Record<string, unknown>[]> = new Map();
   private _activeController: AbortController | null = null;
@@ -51,6 +53,7 @@ export class QueueProcessor {
 
     this._running = true;
     this._cancelled = false;
+    this._stopRequested = false;
 
     try {
       await this._run();
@@ -69,6 +72,64 @@ export class QueueProcessor {
    * Если процессор не спит в backoff — no-op.
    */
   retryNow(): void {
+    this.wakeBackoff();
+  }
+
+  /**
+   * «Стоп» (abort-роут, `/stop`): останавливаем процессор целиком — цикл
+   * прерывается на ближайшей границе, backoff будится, активный LLM-вызов
+   * абортится. Очистку pending/blocked/currentStream/флага выполняет `_run`
+   * (`_handleStopRequest`) — так гарантируется, что состояние сессии снимается
+   * под локом и только один раз.
+   */
+  requestStop(): void {
+    this._stopRequested = true;
+    this.wakeBackoff();
+    this._activeController?.abort();
+  }
+
+  /**
+   * Нужно ли остановиться: in-memory запрос (`requestStop`) или персистентный
+   * флаг `status.cancelRequested` в сессии (переживает рестарт процесса,
+   * работает для событий из другого инстанса/шлюза).
+   */
+  private _shouldStop(session: Session | null | undefined): boolean {
+    return this._stopRequested || session?.status?.cancelRequested === true;
+  }
+
+  /**
+   * Обработка остановки: под локом чистим очередь (Стоп = очередь не
+   * продолжаем), снимаем blocked/cancelRequested и — если стрим ещё «висит»
+   * (graceful-отмена оркестратора его не сняла, напр. backoff/очередь) —
+   * публикуем `stream.cancelled` ровно один раз.
+   */
+  private async _handleStopRequest(): Promise<void> {
+    this._cancelled = true;
+
+    const streamId = await this.sessionManager.withLock(this.sessionId, async (s) => {
+      const id = s.currentStream?.streamId;
+      s.pendingMessages = [];
+      s.status.blocked = undefined;
+      s.status.blockedAt = undefined;
+      s.status.cancelRequested = undefined;
+      s.status.cancelRequestedAt = undefined;
+      s.currentStream = undefined;
+      s.updatedAt = nowISO();
+      await this.sessionManager.saveSession(s);
+      return id;
+    });
+
+    // Дублирующей публикации нет: если отмену уже отработал оркестратор
+    // (graceful → `stream.cancelled` + успешная ветка сняла currentStream),
+    // здесь streamId === undefined.
+    if (streamId) {
+      this.eventBus.publish(this.sessionId, 'stream.cancelled', {
+        stream_id: streamId,
+        content: '',
+        status: 'cancelled',
+      });
+    }
+
     this.wakeBackoff();
   }
 
@@ -143,7 +204,17 @@ export class QueueProcessor {
         break;
       }
 
-      if (!session || session.pendingMessages.length === 0) break;
+      if (!session) break;
+
+      // «Стоп» на любой границе цикла (в т.ч. после processMessage/_sleepBackoff —
+      // все ветки возвращаются сюда): персистентный флаг сессии либо in-memory
+      // запрос. Останавливаемся общей веткой — очередь не продолжаем.
+      if (this._shouldStop(session)) {
+        await this._handleStopRequest();
+        break;
+      }
+
+      if (session.pendingMessages.length === 0) break;
 
       // Проверка: ожидается ли суммаризация перед следующим сообщением?
       if (this.contextOptimizer && session.summarizationPending) {
@@ -393,6 +464,12 @@ export class QueueProcessor {
     // Проверка: остались ли pending сообщения
     try {
       const session = await this.sessionManager.getSession(this.sessionId);
+      // Финальная проверка останова: запрос «Стоп» мог прийти на последней
+      // итерации перед выходом из цикла — не оставляем персистентный флаг.
+      if (this._shouldStop(session)) {
+        await this._handleStopRequest();
+        return;
+      }
       if (session && session.pendingMessages.length > 0) {
         this.eventBus.publish(this.sessionId, 'queue.stalled', {
           pending_count: session.pendingMessages.length,
@@ -486,6 +563,17 @@ export class QueueProcessorManager {
     const processor = this._processors.get(sessionId);
     if (!processor) return false;
     processor.retryNow();
+    return true;
+  }
+
+  /**
+   * «Стоп»: остановить активный процессор сессии. Возвращает `false`, если
+   * процессора нет или он уже не выполняется (нечего останавливать).
+   */
+  requestStop(sessionId: string): boolean {
+    const processor = this._processors.get(sessionId);
+    if (!processor || !processor.isRunning) return false;
+    processor.requestStop();
     return true;
   }
 
