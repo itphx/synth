@@ -227,6 +227,8 @@ export const SYSTEM_MESSAGES = {
     'Tool is unavailable: the required program "{binary}" is not installed in the environment',
   'permission.workspace_unavailable':
     'Tool is unavailable: the project working directory is not set. Create or attach a project and set its working directory first.',
+  'permission.external_directory_default':
+    'Path "{path}" is outside the project working directory → {action} (permission.rules.external_directory)',
   'permission.no_rules': 'no permission rules for "{tool}" — allowed by default',
   'permission.rule_matched': 'rule "{key}" → {action}',
   'permission.rule_pattern_matched': 'rule "{key}.{pattern}" → {action} (path: {path})',

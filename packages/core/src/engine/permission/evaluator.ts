@@ -111,7 +111,9 @@ export function getMcpToolAvailability(
  *
  * Приоритет правил:
  *   1. Правило по конкретному имени тула (специфичный файловый паттерн > '*')
- *   2. external_directory (только для путей вне workingDir)
+ *   2. external_directory (только для путей вне workingDir; при отсутствии правила
+ *      или непокрытом паттерном внешнем пути — fail-closed дефолт: `ask`, в plan —
+ *      `deny`; пути внутри workingDir не затрагиваются)
  *   3. Групповые правила (read/edit/shell/...): специфичный паттерн > '*'
  *   4. Глобальный '*'
  *   5. Дефолт: allow
@@ -316,15 +318,30 @@ export class PermissionEvaluator {
       const d = this._resolveRule(toolName, toolRule, paths, workingDir);
       if (d) return d;
     }
-    // 2. external_directory — только пути вне workingDir
+    // 2. external_directory — только пути вне workingDir.
+    //
+    // AD-075/AD-029 (fail-closed): путь вне рабочего каталога проекта БЕЗ явного
+    // правила `permission.rules.external_directory` не разрешается молча.
+    // Абсолютные пути и разворачивание `~`/`$HOME`/`$PWD` (`resolvePath`) больше
+    // не обходят workspace-гейт: по умолчанию `ask` (нужно явное подтверждение),
+    // а в plan / strict-без-утверждённого-плана — `deny`. Явное правило внешнего
+    // каталога (в т.ч. `allow`/`deny`) сохраняет приоритет и переопределяет дефолт.
+    // Пути внутри workingDir не затрагиваются.
     if (isFile) {
       const extRule = this._rules['external_directory'];
-      if (extRule !== undefined) {
-        for (const p of paths) {
-          if (isInsideWorkingDir(p, workingDir)) continue;
-          const d = this._resolveRule('external_directory', extRule, [p], workingDir);
-          if (d) return d;
-        }
+      for (const p of paths) {
+        if (isInsideWorkingDir(p, workingDir)) continue;
+        const d = extRule !== undefined
+          ? this._resolveRule('external_directory', extRule, [p], workingDir)
+          : undefined;
+        if (d) return d;
+        const restricted = isPlanRestricted(sessionMode, planMode, planApproved);
+        const action: PermissionAction = restricted ? 'deny' : 'ask';
+        return {
+          action,
+          reason: sm('permission.external_directory_default', { path: p, action }),
+          matchedRule: 'external_directory.default',
+        };
       }
     }
 

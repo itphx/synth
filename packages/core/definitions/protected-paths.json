@@ -1,4 +1,5 @@
 {
+  "_comment": "Системная политика защищённых путей (AD: ProtectedPaths). Динамические записи инстанса — {dataDir}/secrets (master.key, api-key, ssh-keys/) и {dataDir}/security (override-файл этой политики) — добавляются в рантайме (loadProtectedPaths с dataDir) и не перечисляются здесь: путь зависит от инстанса; override их не удаляет.",
   "deniedPaths": [
     "~/.ssh/authorized_keys",
     "~/.ssh/id_rsa",

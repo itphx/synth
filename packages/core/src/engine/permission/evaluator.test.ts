@@ -603,12 +603,20 @@ describe('PermissionEvaluator — защищённые пути (ProtectedPaths)
     deniedCommandPrefixes: ['rm -rf /'],
   };
 
+  // Изоляция проверок ProtectedPaths от workspace-гейта (AD-075): тесты
+  // намеренно берут пути вне workspace (`~/.ssh/...`, `/etc/passwd`), чтобы
+  // проверить сам protected-paths-слой, а не external_directory-дефолт.
+  const PROTECTED_CFG: PermissionConfig = {
+    rules: { external_directory: { '*': 'allow' } },
+    askTimeoutMs: 30_000,
+  };
+
   function fileCheck(
     toolName: string,
     params: Record<string, unknown>,
     opts: { protectedPaths?: ProtectedPathsPolicy; protectedPathsEnabled?: boolean; config?: PermissionConfig } = {},
   ) {
-    return new PermissionEvaluator(opts.config ?? { rules: {}, askTimeoutMs: 30_000 }).check({
+    return new PermissionEvaluator(opts.config ?? PROTECTED_CFG).check({
       toolName,
       params,
       workingDir: CWD,
@@ -617,7 +625,7 @@ describe('PermissionEvaluator — защищённые пути (ProtectedPaths)
     });
   }
 
-  it('read_file ~/.ssh/id_rsa → deny даже при пустых permission.rules', () => {
+  it('read_file ~/.ssh/id_rsa → deny независимо от permission.rules', () => {
     const d = fileCheck('read_file', { file_path: '~/.ssh/id_rsa' }, { protectedPaths: PROTECTED });
     expect(d.action).toBe('deny');
     expect(d.matchedRule).toBe('protected-paths.deny');
@@ -647,7 +655,7 @@ describe('PermissionEvaluator — защищённые пути (ProtectedPaths)
     expect(d.action).toBe('allow');
   });
 
-  it('без protectedPaths — обратная совместимость: путь не блокируется', () => {
+  it('без protectedPaths — protected-слой не блокирует путь', () => {
     const d = fileCheck('read_file', { file_path: '~/.ssh/id_rsa' });
     expect(d.action).toBe('allow');
   });
@@ -664,13 +672,11 @@ describe('PermissionEvaluator — защищённые пути (ProtectedPaths)
     expect(d.action).toBe('deny');
   });
 
-  it('write_file /etc/passwd при protectedPathsEnabled=false и пустых правилах → allow', () => {
-    const d = fileCheck('write_file', { file_path: '/etc/passwd' }, { protectedPaths: PROTECTED, protectedPathsEnabled: false, config: EMPTY_CFG });
+  it('write_file /etc/passwd при protectedPathsEnabled=false → allow (слой отключён)', () => {
+    const d = fileCheck('write_file', { file_path: '/etc/passwd' }, { protectedPaths: PROTECTED, protectedPathsEnabled: false });
     expect(d.action).toBe('allow');
   });
 });
-
-const EMPTY_CFG: PermissionConfig = { rules: {}, askTimeoutMs: 30_000 };
 
 describe('PermissionEvaluator — unavailable (AD-070 §2.9.1)', () => {
   const evalWith = (input: Partial<Parameters<PermissionEvaluator['check']>[0]>) =>

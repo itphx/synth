@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -148,11 +148,17 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
         return { name, type: 'mockipi', baseUrl: '', apiKey: '', defaultModel: 'm' } as unknown as import('@itphx/synth-shared').ProviderConfig;
       },
       toolRegistry,
-      permissionConfig: { rules: {}, askTimeoutMs: 1000 },
+      // IPI/trust-тесты читают контент (в т.ч. внешний `/etc/hostname`), чтобы
+      // проверить обёртку [CONTENT | trust: ...]; workspace-гейт (AD-075) здесь
+      // не предмет проверки — external_directory явно разрешён.
+      permissionConfig: { rules: { external_directory: { '*': 'allow' } }, askTimeoutMs: 1000 },
       // AD-076: secretKey в тестах не важен — добавляем пустой.
       securityConfig: { ...securityConfig, secretKey: '' },
       projectStore,
       defaultWorkingDir: tmpDir,
+      // H5: dataDir определяет динамические защищённые префиксы
+      // ({dataDir}/secrets, {dataDir}/security) и резолв $SYNTH_DATA_DIR.
+      dataDir: tmpDir,
     });
 
     const session = await sessionManager.createSession({
@@ -333,5 +339,119 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     expect(tool).not.toContain('[CONTENT |');
     expect(tool).toContain('[WARN: prompt injection signs detected');
     expect(MockIPIProvider.capturedSystemPrompt ?? '').not.toContain('[RULES]');
+  });
+});
+
+/**
+ * H5: обход защиты секретов инстанса (protected paths) через динамику.
+ * До фикса `sh -c 'cat $SYNTH_DATA_DIR/secrets/master.key'` и `read_file`
+ * по пути `{dataDir}/secrets/master.key` проходили (данные читались тем же uid).
+ */
+describe('ChatOrchestrator × защита {dataDir}/secrets (H5)', () => {
+  let store: FileStore;
+  let sessionManager: SessionManager;
+  let projectStore: ProjectStore;
+  let projectId: string;
+  let eventBus: EventBus;
+  let tmpDir: string;
+  let prevSynthDataDir: string | undefined;
+  const SECRET = 'SUPER-SECRET-MASTER-KEY';
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-secrets-'));
+    // В реальном инстансе `SYNTH_DATA_DIR` присутствует в env процесса (dev.sh/Helm),
+    // а execute_shell наследует process.env — поэтому `$SYNTH_DATA_DIR` в команде
+    // раскрывается в дата-каталог. Симулируем это, чтобы тест ловил регресс.
+    prevSynthDataDir = process.env.SYNTH_DATA_DIR;
+    process.env.SYNTH_DATA_DIR = tmpDir;
+    store = new FileStore({ dataDir: tmpDir });
+    sessionManager = new SessionManager(store);
+    projectStore = new ProjectStore({ dataDir: tmpDir });
+    const project = projectStore.create('Secrets', 'u1', { workspace: tmpDir });
+    await projectStore.save(project);
+    projectId = project.id;
+    eventBus = new EventBus();
+    ProviderFactory.register('mockipi', MockIPIProvider);
+    MockIPIProvider.calls = 0;
+    MockIPIProvider.toolCalls = null;
+    MockIPIProvider.capturedSystemPrompt = null;
+    MockIPIProvider.capturedMessages = null;
+    // Секреты инстанса: мастер-ключ и SSH-ключ агента.
+    await mkdir(join(tmpDir, 'secrets', 'ssh-keys'), { recursive: true });
+    await writeFile(join(tmpDir, 'secrets', 'master.key'), SECRET);
+    await writeFile(join(tmpDir, 'secrets', 'ssh-keys', 'agent.json'), SECRET);
+  });
+
+  afterEach(async () => {
+    ProviderFactory['_providers'].delete('mockipi');
+    // Восстанавливаем env: тест подменял SYNTH_DATA_DIR (см. beforeEach).
+    if (prevSynthDataDir === undefined) delete process.env.SYNTH_DATA_DIR;
+    else process.env.SYNTH_DATA_DIR = prevSynthDataDir;
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function run(toolName: string, args: Record<string, unknown>): Promise<string> {
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      contextConfig: new ContextConfig({ userDataDir: join(tmpDir, 'context') }),
+      providerLoader: (name: string) => ({ name, type: 'mockipi', baseUrl: '', apiKey: '', defaultModel: 'm' }) as unknown as import('@itphx/synth-shared').ProviderConfig,
+      toolRegistry: createToolRegistry(),
+      permissionConfig: { rules: { external_directory: { '*': 'allow' } }, askTimeoutMs: 1000 },
+      securityConfig: { promptInjection: { enabled: true, wrapContent: true, mode: 'flag' }, protectedPaths: { enabled: true }, secretKey: '' },
+      projectStore,
+      defaultWorkingDir: tmpDir,
+      dataDir: tmpDir,
+    });
+
+    const session = await sessionManager.createSession({
+      title: 'Secrets smoke',
+      projectId,
+      settings: { provider: 'mockipi', model: 'm', systemPrompt: 'test', agentRole: 'developer', language: 'ru' },
+    });
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    MockIPIProvider.toolCalls = [{ id: 'call_secret', function: { name: toolName, arguments: JSON.stringify(args) } }];
+    const result = await orchestrator.createProcessMessage()(fresh, msg, new AbortController().signal, () => {});
+    expect(result.error).toBeUndefined();
+    const tool = (MockIPIProvider.capturedMessages ?? []).filter((m) => m.role === 'tool').map((m) => m.content).join('\n');
+    return tool;
+  }
+
+  it('execute_shell: sh -c cat $SYNTH_DATA_DIR/secrets/master.key → deny, секрет не читается', async () => {
+    const tool = await run('execute_shell', { command: "sh -c 'cat $SYNTH_DATA_DIR/secrets/master.key'" });
+    expect(tool).toContain('Permission denied');
+    // Сообщение security-промпта (deny-protected-path), а не вывод shell-утилиты.
+    expect(tool).toContain('protected');
+    expect(tool).not.toContain(SECRET);
+  });
+
+  it('execute_shell: cat ${SYNTH_DATA_DIR}/secrets/ssh-keys/agent.json → deny', async () => {
+    const tool = await run('execute_shell', { command: 'cat ${SYNTH_DATA_DIR}/secrets/ssh-keys/agent.json' });
+    expect(tool).toContain('Permission denied');
+    expect(tool).toContain('protected');
+    expect(tool).not.toContain(SECRET);
+  });
+
+  it('read_file: {dataDir}/secrets/master.key → deny, секрет не читается', async () => {
+    const tool = await run('read_file', { file_path: join(tmpDir, 'secrets', 'master.key') });
+    expect(tool).toContain('Permission denied');
+    expect(tool).toContain('protected');
+    expect(tool).not.toContain(SECRET);
+  });
+
+  it('write_file: {dataDir}/secrets/ssh-keys/new.json → deny (запись в секреты)', async () => {
+    const tool = await run('write_file', { file_path: join(tmpDir, 'secrets', 'ssh-keys', 'new.json'), content: 'x' });
+    expect(tool).toContain('Permission denied');
+    expect(tool).toContain('protected');
+  });
+
+  it('контроль: обычный файл workspace читается', async () => {
+    await writeFile(join(tmpDir, 'notes.txt'), 'обычный текст проекта\n');
+    const tool = await run('read_file', { file_path: 'notes.txt' });
+    expect(tool).toContain('обычный текст проекта');
   });
 });

@@ -2067,6 +2067,7 @@ export const dict = {
   'permission.mcp_unavailable': 'MCP-инструмент недоступен в режиме {mode}',
   'permission.dep_unavailable': 'Инструмент недоступен: в окружении не установлена программа «{binary}»',
   'permission.workspace_unavailable': 'Инструмент недоступен: не задан рабочий каталог проекта. Сначала создайте/привяжите проект и задайте его рабочий каталог.',
+  'permission.external_directory_default': 'Путь «{path}» вне рабочего каталога проекта → {action} (permission.rules.external_directory)',
   'permission.no_rules': 'нет правил доступа для «{tool}» — разрешено по умолчанию',
   'permission.rule_matched': 'правило «{key}» → {action}',
   'permission.rule_pattern_matched': 'правило «{key}.{pattern}» → {action} (путь: {path})',

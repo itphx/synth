@@ -255,14 +255,108 @@ describe('checkShellCommand', () => {
     expect(check('npm test').action).toBe('allow');
   });
 
-  it('динамический путь не матчит денлист (не удалось проверить)', () => {
-    // $USER не резолвится → unknown → не блокируем (но и не пропускаем как literal).
-    expect(check('cat $USER/x').action).toBe('allow');
+  it('динамический путь-путь без защищённых маркеров → ask (fail-closed, не пропускаем молча)', () => {
+    // $USER не резолвится → unknown; путь-подобный токен → ask (раньше молча allow).
+    expect(check('cat $USER/x').action).toBe('ask');
+    expect(check('cat $USER/x').messageId).toBe('ask-protected-path');
+  });
+
+  it('рутинные динамические аргументы без защищённых путей не блокируются', () => {
+    // glob без разделителей, URL, аргумент-подстановка без `/` — не пути.
+    expect(check("find . -name '*.ts'").action).toBe('allow');
+    expect(check('curl -s https://example.com/$VER/api').action).toBe('allow');
+    expect(check('echo $(ls)').action).toBe('allow');
+  });
+
+  it('динамика с защищённым маркером → deny (fail-closed)', () => {
+    // неизвестная переменная + литеральный фрагмент защищённого пути
+    const r = check('cat $SOMEDIR/etc/shadow');
+    expect(r.action).toBe('deny');
+    expect(r.matchedRule).toBe('shell-policy.deny');
+    // неизвестная переменная + фрагмент .ssh/id_rsa
+    expect(check('cat $USER/.ssh/id_rsa').action).toBe('deny');
+    // glob внутри защищённого каталога (фрагмент ~/.aws)
+    expect(check('cat ~/.aws/*').action).toBe('deny');
+    // glob по префиксу из политики
+    expect(check('cat /etc/sudoers.d/*').action).toBe('deny');
+    // подстановка $(...) с защищённым путём в литеральном фрагменте
+    expect(check('cat $(echo /etc/passwd)').action).toBe('deny');
+    // backtick
+    expect(check('cat `pwd`/.ssh/id_rsa').action).toBe('deny');
+  });
+
+  it('динамика в присваивании: значение-путь проверяется (обход `X=... cat $X`)', () => {
+    expect(check('X=/etc/passwd cat $X').action).toBe('deny');
+    expect(check('X=$USER/.ssh/id_rsa cat $X').action).toBe('deny');
+    expect(check('X=~/.ssh cat $X').action).toBe('deny');
+    // рутинные присваивания не блокируются
+    expect(check('NODE_ENV=production npm test').action).toBe('allow');
+    expect(check('PATH=$PATH:/opt/bin ls').action).toBe('allow');
   });
 
   it('пустая политика — всё allow', () => {
     const empty: ShellPolicy = { deniedPaths: [], deniedPrefixes: [], approvalPaths: [], deniedCommandPrefixes: [] };
     expect(check('cat ~/.ssh/id_rsa', CWD, empty).action).toBe('allow');
+  });
+});
+
+describe('checkShellCommand — fail-closed динамика + {dataDir}/secrets (H5)', () => {
+  const DATA_DIR = '/srv/synth/data';
+  /** Политика как у оркестратора: protected-paths + динамические префиксы + dataDir. */
+  const POLICY: ShellPolicy = {
+    ...TEST_POLICY,
+    deniedPrefixes: [...TEST_POLICY.deniedPrefixes, join(DATA_DIR, 'secrets'), join(DATA_DIR, 'security')],
+    dataDir: DATA_DIR,
+  };
+  const check = (cmd: string) => checkShellCommand(cmd, CWD, POLICY);
+
+  it('sh -c cat $SYNTH_DATA_DIR/secrets/master.key → deny (обход через обёртку)', () => {
+    const r = check("sh -c 'cat $SYNTH_DATA_DIR/secrets/master.key'");
+    expect(r.action).toBe('deny');
+    expect(r.matchedRule).toBe('shell-policy.deny');
+  });
+
+  it('неизвестная переменная + фрагмент secrets/... → deny по маркеру {dataDir}/secrets', () => {
+    // дата-каталог не известен (другой инстанс) — резолва нет, но литеральный
+    // фрагмент `secrets/master.key` упирается в защищённый префикс → deny
+    expect(check('cat $OTHER_DATA_DIR/secrets/master.key').action).toBe('deny');
+    expect(check("sh -c 'cat $OTHER_DATA_DIR/secrets/ssh-keys/k.json'").action).toBe('deny');
+  });
+
+  it('cat ${SYNTH_DATA_DIR}/secrets/master.key → deny ($SYNTH_DATA_DIR резолвится по dataDir)', () => {
+    expect(check('cat ${SYNTH_DATA_DIR}/secrets/master.key').action).toBe('deny');
+    expect(check('cat $SYNTH_DATA_DIR/secrets/ssh-keys/k.json').action).toBe('deny');
+    expect(check('cat $SYNTH_DATA_DIR/security/protected-paths.json').action).toBe('deny');
+  });
+
+  it('каталожные пути: мастер-ключ/ssh-ключи/override-файл → deny', () => {
+    expect(check(`cat ${DATA_DIR}/secrets/master.key`).action).toBe('deny');
+    expect(check(`rm -rf ${DATA_DIR}/secrets`).action).toBe('deny');
+    expect(check(`cat ${DATA_DIR}/secrets/api-key`).action).toBe('deny');
+  });
+
+  it('$HOME/.ssh/id_rsa (не-literal резолв) → deny', () => {
+    expect(check('cat $HOME/.ssh/id_rsa').action).toBe('deny');
+    expect(check('cat ${HOME}/.ssh/id_ed25519').action).toBe('deny');
+  });
+
+  it('регресс: литеральные запрещённые пути блокируются как раньше', () => {
+    expect(check('cat ~/.ssh/id_rsa').action).toBe('deny');
+    expect(check('cat /etc/passwd').action).toBe('deny');
+    expect(check('cat ~/.ssh/config').action).toBe('ask');
+    expect(check('cat ~/.aws/credentials').action).toBe('deny');
+    expect(check('rm -rf /').action).toBe('deny');
+  });
+
+  it('рутинные команды не дают ложных deny', () => {
+    expect(check('git status').action).toBe('allow');
+    expect(check('npm test').action).toBe('allow');
+    expect(check('node --version').action).toBe('allow');
+    expect(check('cat README.md').action).toBe('allow');
+    expect(check('ls -la').action).toBe('allow');
+    expect(check('git commit -m "fix: typo"').action).toBe('allow');
+    expect(check(`cat ${DATA_DIR}/settings.json`).action).toBe('allow');
+    expect(check(`ls ${DATA_DIR}/sessions`).action).toBe('allow');
   });
 });
 

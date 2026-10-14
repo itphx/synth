@@ -48,7 +48,10 @@ export interface ProtectedPathsRaw {
   defaultBase: ProtectedPathsPolicy;
 }
 
-const POLICY_KEYS: Array<keyof ProtectedPathsPolicy> = [
+/** Списковые ключи политики (без скалярного `dataDir`). */
+type PolicyListKey = 'deniedPaths' | 'deniedPrefixes' | 'approvalPaths' | 'deniedCommandPrefixes';
+
+const POLICY_KEYS: PolicyListKey[] = [
   'deniedPaths',
   'deniedPrefixes',
   'approvalPaths',
@@ -63,8 +66,10 @@ export class ProtectedPathsStore {
   readonly overridePath: string;
   private readonly _systemDir: string;
   private readonly _legacyPath: string;
+  private readonly _dataDir: string;
 
   constructor(options: ProtectedPathsStoreOptions) {
+    this._dataDir = options.dataDir;
     this.overridePath = options.overrideFile ?? join(options.dataDir, 'security', 'protected-paths.json');
     this._systemDir = options.systemDir ?? packageDirectoryForDefinitions();
     this._legacyPath = join(options.dataDir, 'context', 'shell-policy.json');
@@ -92,9 +97,16 @@ export class ProtectedPathsStore {
     }
   }
 
-  /** Эффективная политика: base + add − remove (или base без override). */
+  /**
+   * Эффективная политика: base + add − remove + динамические префиксы
+   * `{dataDir}/secrets` и `{dataDir}/security` (см. loadProtectedPaths).
+   */
   getPolicy(): ProtectedPathsPolicy {
-    return loadProtectedPaths({ systemDir: this._systemDir, overridePath: this.overridePath });
+    return loadProtectedPaths({
+      systemDir: this._systemDir,
+      overridePath: this.overridePath,
+      dataDir: this._dataDir,
+    });
   }
 
   /** Алиас getPolicy для единообразия. */
@@ -102,13 +114,19 @@ export class ProtectedPathsStore {
     return this.getPolicy();
   }
 
-  /** Полное состояние: признак override + эффективная и системная политики. */
+  /**
+   * Полное состояние: признак override + эффективная и системная политики.
+   * Служебное поле `dataDir` клиенту (API/UI) не отдаётся — динамические
+   * префиксы `{dataDir}/secrets` и `{dataDir}/security` при этом видны в списках.
+   */
   getRaw(): ProtectedPathsRaw {
     const base = this.getBase();
     const isOverridden = this.hasOverride();
+    const policy: ProtectedPathsPolicy = { ...this.getPolicy() };
+    delete policy.dataDir;
     return {
       isOverridden,
-      policy: this.getPolicy(),
+      policy,
       base,
       defaultBase: base,
     };

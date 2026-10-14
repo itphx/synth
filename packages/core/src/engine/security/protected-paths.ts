@@ -11,15 +11,19 @@
  * системный полностью, а применяет каскад:
  *   итог = системный base + `add` − `remove`.
  *
- * Резолв путей: `~`, `$HOME`, `$PWD`, относительные пути — переиспользует
- * `tryResolvePath` из shell-guard (общая логика без дублирования).
- * Пути с динамикой (`$()`, `${}`, glob) считаются не достоверными —
- * не блокируются, но и не разрешаются с уверенностью.
+ * Резолв путей: `~`, `$HOME`, `$PWD`, `$SYNTH_DATA_DIR` (dataDir инстанса),
+ * относительные пути — переиспользует `tryResolvePath` из shell-guard (общая
+ * логика без дублирования).
+ * Динамические защищённые префиксы: при известном `dataDir` политика закрывает
+ * `{dataDir}/secrets` и `{dataDir}/security` (в статическом JSON их нет).
+ * Пути с динамикой (`$()`, `${}`, glob), литеральная часть которых указывает на
+ * защищённый путь, — deny (fail-closed, общий с shell-guard механизм «маркеров»);
+ * прочая динамика не блокируется (значение не раскрывается файловыми тулами).
  */
 import { readFileSync, existsSync } from 'node:fs';
-import { join, normalize, sep } from 'node:path';
+import { basename, dirname, join, normalize, resolve, sep } from 'node:path';
 
-import { tryResolvePath, resolveSystemDefinitionsDir } from './shell-guard.js';
+import { tokenTouchesProtectedMarker, tryResolvePath, resolveSystemDefinitionsDir } from './shell-guard.js';
 import { t as sm } from '../system-messages.js';
 
 /** Политика защищённых путей (структурно совпадает с ShellPolicy). */
@@ -32,6 +36,13 @@ export interface ProtectedPathsPolicy {
   approvalPaths: string[];
   /** Префиксы команд, запрещённые целиком — только для shell-команд. */
   deniedCommandPrefixes: string[];
+  /**
+   * dataDir инстанса (AD-005), если известен: политика дополняется динамическими
+   * защищёнными префиксами `{dataDir}/secrets` и `{dataDir}/security` (их нет в
+   * статическом JSON — путь зависит от инстанса). Передаётся и в shell-guard
+   * (резолв `$SYNTH_DATA_DIR`, маркеры защищённых путей).
+   */
+  dataDir?: string;
 }
 
 /** Результат checkPath. */
@@ -66,9 +77,24 @@ export interface ProtectedPathsOptions {
   systemDir?: string;
   /** Пользовательский override: {dataDir}/security/protected-paths.json. */
   overridePath?: string;
+  /**
+   * dataDir инстанса (AD-005). Задан — политика дополняется динамическими
+   * защищёнными префиксами `{dataDir}/secrets` (мастер-ключ, api-key,
+   * ssh-keys) и `{dataDir}/security` (override-файл политики). Не задан —
+   * путь выводится из конвенции `overridePath` = `{dataDir}/security/
+   * protected-paths.json`; если и это невозможно — динамических префиксов нет
+   * (статическая политика).
+   */
+  dataDir?: string;
 }
 
-const POLICY_KEYS: Array<keyof ProtectedPathsPolicy> = [
+/** Подкаталоги dataDir, закрытые для тулов (динамические защищённые префиксы). */
+const DATA_DIR_PROTECTED_SUBDIRS = ['secrets', 'security'] as const;
+
+/** Списковые ключи политики (без скалярного `dataDir`). */
+type PolicyListKey = 'deniedPaths' | 'deniedPrefixes' | 'approvalPaths' | 'deniedCommandPrefixes';
+
+const POLICY_KEYS: PolicyListKey[] = [
   'deniedPaths',
   'deniedPrefixes',
   'approvalPaths',
@@ -145,16 +171,41 @@ function applyOverride(base: ProtectedPathsPolicy, override: ProtectedPathsOverr
   return result;
 }
 
+/** dataDir из опций или из конвенции `{dataDir}/security/protected-paths.json`. */
+function resolveDataDirOption(options: ProtectedPathsOptions): string | undefined {
+  if (options.dataDir && options.dataDir.trim() !== '') return resolve(options.dataDir);
+  const overridePath = options.overridePath;
+  if (overridePath && basename(overridePath) === 'protected-paths.json' && basename(dirname(overridePath)) === 'security') {
+    return resolve(dirname(dirname(overridePath)));
+  }
+  return undefined;
+}
+
+/**
+ * Динамические запрещённые префиксы `{dataDir}/secrets` и `{dataDir}/security`.
+ * Добавляются ПОСЛЕ каскада base + add − remove: override не может их снять
+ * (fail-safe — пользователь не знает путь инстанса, а снятие = обход защиты).
+ */
+function dynamicDeniedPrefixes(dataDir: string | undefined): string[] {
+  if (!dataDir) return [];
+  return DATA_DIR_PROTECTED_SUBDIRS.map((sub) => join(dataDir, sub));
+}
+
 /**
  * Загружает политику: системный дефолт definitions/protected-paths.json +
  * override {dataDir}/security/protected-paths.json. Если override существует —
  * применяется каскад add/remove. Некорректные файлы игнорируются; результат
- * кэшируется по ключу «systemDir|overridePath».
+ * кэшируется по ключу «systemDir|overridePath|dataDir».
+ *
+ * При известном `dataDir` политика всегда дополняется динамическим запретом
+ * `{dataDir}/secrets` (мастер-ключ секретов at-rest, api-key, ssh-keys) и
+ * `{dataDir}/security` (override-файл политики) — они не перечисляются в JSON.
  */
 export function loadProtectedPaths(options: ProtectedPathsOptions = {}): ProtectedPathsPolicy {
   const systemDir = options.systemDir ?? resolveSystemDefinitionsDir();
   const overridePath = options.overridePath ?? '';
-  const key = `${systemDir}|${overridePath}`;
+  const dataDir = resolveDataDirOption(options);
+  const key = `${systemDir}|${overridePath}|${dataDir ?? ''}`;
 
   const cached = policyCache.get(key);
   if (cached) return cached;
@@ -169,8 +220,23 @@ export function loadProtectedPaths(options: ProtectedPathsOptions = {}): Protect
     if (override) result = applyOverride(base, override);
   }
 
-  policyCache.set(key, result);
-  return result;
+  // Динамические префиксы инстанса: append после каскада (не удаляются override).
+  const dynamic = dynamicDeniedPrefixes(dataDir);
+  if (dynamic.length > 0) {
+    const seen = new Set(result.deniedPrefixes.map((p) => normalize(p)));
+    const merged = [...result.deniedPrefixes];
+    for (const entry of dynamic) {
+      if (!seen.has(normalize(entry))) {
+        seen.add(normalize(entry));
+        merged.push(entry);
+      }
+    }
+    result = { ...result, deniedPrefixes: merged };
+  }
+
+  const policy: ProtectedPathsPolicy = dataDir ? { ...result, dataDir } : result;
+  policyCache.set(key, policy);
+  return policy;
 }
 
 /** Резолвит запись политики (deniedPath/approvalPath/deniedPrefix) в абсолютный путь. */
@@ -182,16 +248,32 @@ function resolvePolicyEntry(entry: string, cwd: string): string {
 }
 
 /**
- * Проверяет один путь по политике. Резолвит `~`, `$HOME`, `$PWD`, относительные
- * пути через общий `tryResolvePath`. Приоритет: deniedPaths (точное совпадение)
- * → approvalPaths (ask) → deniedPrefixes (префикс директории).
+ * Проверяет один путь по политике. Резолвит `~`, `$HOME`, `$PWD`,
+ * `$SYNTH_DATA_DIR` (при известном `policy.dataDir`), относительные пути через
+ * общий `tryResolvePath`. Приоритет: deniedPaths (точное совпадение) →
+ * approvalPaths (ask) → deniedPrefixes (префикс директории).
+ *
+ * Неразрешимая динамика (`$()`, `${}`, glob, неизвестная переменная):
+ * fail-closed по «маркерам» защищённых путей — если литеральная часть пути
+ * указывает на защищённый путь/префикс (`$X/secrets/master.key`, `~/.ssh/*`) →
+ * deny; иначе путь не блокируется (файловые тулы не раскрывают переменные —
+ * значение используется как литеральный путь внутри workspace).
  */
 export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolicy): ProtectedPathCheckResult {
-  const resolved = tryResolvePath(path, cwd);
+  const env = policy.dataDir ? { vars: { SYNTH_DATA_DIR: policy.dataDir } } : undefined;
+  const resolved = tryResolvePath(path, cwd, env);
   if (!resolved) {
     return { action: 'allow', reason: sm('protectedpaths.unresolvable') };
   }
   if (resolved.source !== 'literal') {
+    if (tokenTouchesProtectedMarker(path, policy)) {
+      return {
+        action: 'deny',
+        messageId: 'deny-protected-path',
+        params: { path },
+        matchedRule: 'protected-paths.deny',
+      };
+    }
     return { action: 'allow', reason: sm('protectedpaths.dynamic') };
   }
 

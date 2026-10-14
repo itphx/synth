@@ -687,14 +687,18 @@ export class ChatOrchestrator {
 
   /**
    * Политика защищённых путей: системный дефолт definitions/protected-paths.json
-   * + override {dataDir}/security/protected-paths.json (каскад add/remove).
+   * + override {dataDir}/security/protected-paths.json (каскад add/remove)
+   * + динамические префиксы инстанса `{dataDir}/secrets` и `{dataDir}/security`.
    * Ленивая загрузка с кэшем; при недоступности dataDir/файлов — системный дефолт.
    */
   private _getProtectedPaths(): ProtectedPathsPolicy | null {
     if (this._protectedPathsLoaded) return this._protectedPaths;
     this._protectedPathsLoaded = true;
     try {
-      this._protectedPaths = loadProtectedPaths({ overridePath: join(this._dataDir, 'security', 'protected-paths.json') });
+      this._protectedPaths = loadProtectedPaths({
+        overridePath: join(this._dataDir, 'security', 'protected-paths.json'),
+        dataDir: this._dataDir,
+      });
     } catch {
       this._protectedPaths = null;
     }

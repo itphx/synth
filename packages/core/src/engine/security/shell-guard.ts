@@ -3,10 +3,17 @@
  * (file_safety.py) и opencode (tool/shell.ts), без tree-sitter.
  *
  * Ограничения дизайна:
- * - Токенизация shlex-подобная (кавычки, экранирование) — БЕЗ резолва
+ * - Токенизация shlex-подобная (кавычки, экранирование) — БЕЗ полного резолва
  *   динамики: `$()`, `${...}`, другие переменные, glob считаются
- *   «не удалось проверить» (source: 'unknown') и денлистом не матчатся.
- * - Ручной резолв только известных паттернов: `~`, `$HOME`, `$PWD`.
+ *   «не удалось проверить» (source: 'unknown') и точным денлистом не матчатся.
+ * - Ручной резолв известных паттернов: `~`, `$HOME`, `$PWD`, `$SYNTH_DATA_DIR`
+ *   (при известном `policy.dataDir`).
+ * - FAIL-CLOSED для неразрешимой динамики (иначе `cat $SYNTH_DATA_DIR/secrets/
+ *   master.key` обходил денлист молча):
+ *     1. литеральные фрагменты токена проверяются по «маркерам» политики
+ *        (basename'ы deniedPaths/deniedPrefixes): попадание → deny;
+ *     2. значения присваиваний `NAME=value` проверяются как пути → deny;
+ *     3. остальная неоднозначная динамика-путь → ask (не пропускаем молча).
  *
  * Политика: системный дефолт `definitions/shell-policy.json` (публикуется
  * в npm, копируется в `dist/definitions/` при сборке) + пользовательский
@@ -30,12 +37,24 @@ export interface ShellPolicy {
   approvalPaths: string[];
   /** Префиксы команд, запрещённые целиком (например "rm -rf /"). */
   deniedCommandPrefixes: string[];
+  /**
+   * dataDir инстанса (AD-005), если известен. Используется для резолва
+   * `$SYNTH_DATA_DIR`/`${SYNTH_DATA_DIR}` в токенах. Политику защищённых путей
+   * (`ProtectedPathsPolicy`) оркестратор передаёт как shell-policy, поэтому поле
+   * приходит и сюда (для `{dataDir}/secrets` in `deniedPrefixes`).
+   */
+  dataDir?: string;
 }
 
 /** Путь, извлечённый из аргументов команды. */
 export interface ExtractedPath {
   path: string;
   source: 'literal' | 'unknown';
+}
+
+/** Значения известных переменных окружения для резолва токенов (`$VAR`/`${VAR}`). */
+export interface PathResolveEnv {
+  vars?: Record<string, string | undefined>;
 }
 
 /** Результат checkShellCommand. */
@@ -221,29 +240,45 @@ export function extractWrappedCommand(segment: string, tokens: string[]): string
 
 /** Есть ли в токене динамика, которую мы не умеем резолвить. */
 function hasUnresolvedDynamic(text: string): boolean {
-  return /[$*?[(`]/.test(text);
+  // `)` — часть `$(...)`: токенизатор не режет подстановку, и закрывающая
+  // скобка остаётся в пути (`$(echo /etc/passwd)` → токен `/etc/passwd)`).
+  return /[$*?[`()]/.test(text);
+}
+
+/** Символы динамики — разделители при выделении литеральных фрагментов токена. */
+const DYNAMIC_CHARS_RE = /[$*?[\](){}`]+/;
+
+/** Известное значение переменной для резолва пути: HOME/PWD + `env.vars`. */
+function knownVarValue(name: string, cwd: string, env?: PathResolveEnv): string | null {
+  if (name === 'HOME') return HOME;
+  if (name === 'PWD') return cwd;
+  const value = env?.vars?.[name];
+  return typeof value === 'string' && value !== '' ? value : null;
 }
 
 /** Пытается зарезолвить токен в абсолютный путь. */
-export function tryResolvePath(token: string, cwd: string): ExtractedPath | null {
+export function tryResolvePath(token: string, cwd: string, env?: PathResolveEnv): ExtractedPath | null {
   if (token === '') return null;
 
   let base = '';
   let rest = token;
 
-  // Ручной резолв известных паттернов в начале токена: ~, $HOME, $PWD.
+  // Ручной резолв известных паттернов в начале токена: ~, $HOME, $PWD,
+  // $SYNTH_DATA_DIR (и любая переменная из env.vars).
   const homeMatch = /^~(?:\/|$)/.exec(token);
   if (homeMatch) {
     base = HOME;
     rest = token.slice(1);
     if (rest.startsWith('/')) rest = rest.slice(1);
   } else {
-    const dollar = /^(\$(?:HOME|PWD)|\$\{(?:HOME|PWD)\})(?:\/|$)/.exec(token);
+    const dollar = /^(\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*))(?:\/|$)/.exec(token);
     if (dollar) {
-      const varName = dollar[1]!.includes('PWD') ? 'PWD' : 'HOME';
-      base = varName === 'HOME' ? HOME : cwd;
-      rest = token.slice(dollar[1]!.length);
-      if (rest.startsWith('/')) rest = rest.slice(1);
+      const value = knownVarValue(dollar[2] ?? dollar[3]!, cwd, env);
+      if (value !== null) {
+        base = value;
+        rest = token.slice(dollar[1]!.length);
+        if (rest.startsWith('/')) rest = rest.slice(1);
+      }
     }
   }
 
@@ -269,10 +304,23 @@ export function tryResolvePath(token: string, cwd: string): ExtractedPath | null
  * Флаги (`-` префикс) пропускаются; после `--` всё считается аргументами.
  * Токены с динамикой ($, *, ?, [, (, `) помечаются source: 'unknown'.
  */
-export function extractCommandPaths(tokens: string[], cwd: string): ExtractedPath[] {
+export function extractCommandPaths(tokens: string[], cwd: string, env?: PathResolveEnv): ExtractedPath[] {
+  return extractCommandPathTokens(tokens, cwd, env).map((entry) => entry.resolved);
+}
+
+/**
+ * То же, что `extractCommandPaths`, но сохраняет и сырой токен: нужен для
+ * fail-closed проверок динамики (маркеры защищённых путей, `ask`), где
+ * разрешённый `path` для `source: 'unknown'` недостоверен.
+ */
+export function extractCommandPathTokens(
+  tokens: string[],
+  cwd: string,
+  env?: PathResolveEnv,
+): Array<{ token: string; resolved: ExtractedPath }> {
   if (tokens.length === 0) return [];
   const args = tokens.slice(1);
-  const result: ExtractedPath[] = [];
+  const result: Array<{ token: string; resolved: ExtractedPath }> = [];
   let afterDoubleDash = false;
 
   for (const token of args) {
@@ -283,10 +331,83 @@ export function extractCommandPaths(tokens: string[], cwd: string): ExtractedPat
     // Флаги пропускаем; "-" (stdin) и "--" уже обработаны.
     if (!afterDoubleDash && token.startsWith('-') && token.length > 1) continue;
 
-    const extracted = tryResolvePath(token, cwd);
-    if (extracted) result.push(extracted);
+    const extracted = tryResolvePath(token, cwd, env);
+    if (extracted) result.push({ token, resolved: extracted });
   }
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Fail-closed проверки неразрешимой динамики ($VAR, ${VAR}, glob, $())
+// ---------------------------------------------------------------------------
+
+/** Минимальный источник денлиста: ShellPolicy и ProtectedPathsPolicy подходят. */
+export interface DeniedPathsSource {
+  deniedPaths: readonly string[];
+  deniedPrefixes: readonly string[];
+}
+
+/** Базовое имя записи политики (`~/.ssh` → `.ssh`, `/etc/shadow` → `shadow`). */
+function policyBasename(entry: string): string {
+  const trimmed = entry.replace(/[\\/]+$/, '');
+  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+}
+
+/** Есть ли в токене хоть один фрагмент, похожий на элемент пути. */
+function hasPathLikeFragment(token: string): boolean {
+  for (const fragment of token.split(DYNAMIC_CHARS_RE)) {
+    if (fragment.includes('/') || fragment.includes('\\') || fragment.startsWith('~')) return true;
+  }
+  return false;
+}
+
+/**
+ * «Маркеры» защищённых путей политики — basename'ы deniedPaths/deniedPrefixes
+ * (`~/.ssh` → `.ssh`, `{dataDir}/secrets` → `secrets`, `/etc/shadow` → `shadow`).
+ * Позволяют отклонить токен с неразрешимой динамикой, литеральная часть
+ * которого упирается в защищённый путь (сам путь проверить нельзя).
+ */
+export function sensitivePathMarkers(policy: DeniedPathsSource): string[] {
+  const markers = new Set<string>();
+  for (const entry of [...(policy.deniedPaths ?? []), ...(policy.deniedPrefixes ?? [])]) {
+    if (entry.includes('$') || entry.includes('{')) continue; // динамика в самой записи
+    const base = policyBasename(expandHome(entry)).toLowerCase();
+    if (base === '' || base === '.' || base === '..' || base === '/') continue;
+    markers.add(base);
+  }
+  return [...markers];
+}
+
+/**
+ * Содержит ли токен с неразрешимой динамикой литеральный фрагмент-путь,
+ * попадающий в защищённый путь/префикс политики (по маркерам). `true` → deny.
+ * Примеры: `$SYNTH_DATA_DIR/secrets/master.key`, `$USER/.ssh/id_rsa`,
+ * `/data/secrets/*.key`, `$(pwd)/.ssh/...`.
+ */
+export function tokenTouchesProtectedMarker(token: string, policy: DeniedPathsSource): boolean {
+  const markers = sensitivePathMarkers(policy);
+  if (markers.length === 0) return false;
+  for (const fragment of token.toLowerCase().split(DYNAMIC_CHARS_RE)) {
+    if (!fragment.includes('/') && !fragment.includes('\\') && !fragment.startsWith('~')) continue;
+    for (const segment of fragment.split(/[\\/]+/)) {
+      if (segment !== '' && markers.includes(segment)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Похож ли токен на файловый путь (для fail-closed `ask`, когда динамику
+ * разрешить не удалось). Glob без разделителей (`*.ts`) и URL — не считаем,
+ * чтобы не спрашивать подтверждение на рутинные команды.
+ */
+export function looksLikePathToken(token: string): boolean {
+  if (token === '' || token === '-') return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token)) return false; // URL
+  if (/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(token)) return true; // $VAR / ${VAR}
+  if (token.startsWith('~')) return true;
+  return token.includes('/') || token.includes('\\') || hasPathLikeFragment(token);
 }
 
 /** Простые мутирующие команды (изменяют состояние файловой системы/системы). */
@@ -510,13 +631,73 @@ export function checkShellCommand(command: string, cwd: string, policy: ShellPol
   const deniedPaths = policy.deniedPaths.map(expandHome);
   const approvalPaths = policy.approvalPaths.map(expandHome);
   const deniedPrefixes = policy.deniedPrefixes.map(expandHome);
+  const env = resolveEnv(policy);
 
   for (const segment of segments) {
-    const result = checkShellSegment(segment, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes);
+    const result = checkShellSegment(segment, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env);
     if (result) return result;
   }
 
   return { action: 'allow', reason: sm('shellguard.allow_default') };
+}
+
+/** Значения переменных для резолва токенов: `$SYNTH_DATA_DIR` → dataDir инстанса. */
+function resolveEnv(policy: ShellPolicy): PathResolveEnv | undefined {
+  return policy.dataDir ? { vars: { SYNTH_DATA_DIR: policy.dataDir } } : undefined;
+}
+
+/** deny: токен с динамикой упирается в защищённый путь политики (fail-closed). */
+function deniedByDynamicToken(token: string): ShellCheckResult {
+  return {
+    action: 'deny',
+    reason: sm('shellguard.deny_path', { path: token }),
+    matchedRule: 'shell-policy.deny',
+    deniedPath: token,
+    messageId: 'deny-protected-path',
+    params: { path: token },
+  };
+}
+
+/** deny: точный запрещённый путь. */
+function deniedByPath(hit: string): ShellCheckResult {
+  return {
+    action: 'deny',
+    reason: sm('shellguard.deny_path', { path: hit }),
+    matchedRule: 'shell-policy.deny',
+    deniedPath: hit,
+    messageId: 'deny-protected-path',
+    params: { path: normalize(hit) },
+  };
+}
+
+/** ask: путь из approvalPaths требует подтверждения. */
+function askByPath(hit: string): ShellCheckResult {
+  return {
+    action: 'ask',
+    reason: sm('shellguard.ask_path', { path: hit }),
+    matchedRule: 'shell-policy.approve',
+    deniedPath: hit,
+    messageId: 'ask-protected-path',
+    params: { path: normalize(hit) },
+  };
+}
+
+/** deny: путь внутри запрещённого префикса директории. */
+function deniedByDir(path: string, hit: string): ShellCheckResult {
+  return {
+    action: 'deny',
+    reason: sm('shellguard.deny_dir', { path, dir: hit }),
+    matchedRule: 'shell-policy.deny',
+    deniedPath: hit,
+    messageId: 'deny-protected-dir',
+    params: { path, dir: normalize(hit) },
+  };
+}
+
+/** Находится ли нормализованный путь внутри запрещённого префикса. */
+function isUnderDeniedPrefix(norm: string, prefixEntry: string): boolean {
+  const prefix = normalize(prefixEntry);
+  return norm === prefix || norm.startsWith(prefix.endsWith(sep) ? prefix : prefix + sep);
 }
 
 /** Формирует deny-результат для записи deniedCommandPrefixes. */
@@ -539,6 +720,7 @@ function checkShellSegment(
   deniedPaths: string[],
   approvalPaths: string[],
   deniedPrefixes: string[],
+  env?: PathResolveEnv,
 ): ShellCheckResult | null {
   const tokens = tokenizeCommand(segment);
   if (tokens.length === 0) return null;
@@ -561,65 +743,79 @@ function checkShellSegment(
   if (inner !== null) {
     const innerSegments = splitShellSegments(inner);
     for (const s of innerSegments) {
-      const r = checkShellSegment(s, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes);
+      const r = checkShellSegment(s, cwd, policy, deniedPaths, approvalPaths, deniedPrefixes, env);
       if (r) return r;
     }
   }
 
-  const extracted = extractCommandPaths(tokens, cwd);
+  // 2. Неразрешимая динамика ($VAR, ${VAR}, glob, $()) — fail-closed:
+  // литеральные фрагменты токена проверяем по маркерам защищённых путей.
+  // `cat $SYNTH_DATA_DIR/secrets/master.key`, `$USER/.ssh/id_rsa`,
+  // `/data/secrets/*.key`, `$(pwd)/.ssh/x` → deny (раньше проходили молча).
+  for (const token of tokens) {
+    if (!hasUnresolvedDynamic(token)) continue;
+    if (tokenTouchesProtectedMarker(token, policy)) return deniedByDynamicToken(token);
+  }
 
-  // 2. Точные запрещённые пути.
-  for (const { path, source } of extracted) {
-    if (source !== 'literal') continue;
-    const norm = normalize(path);
+  // 2b. Присваивания `NAME=value`: значение тоже путь и может обойти проверку
+  // аргументов (`X=<dataDir>/secrets/master.key cat $X`). Deny-only: `ask` на
+  // `PATH=$PATH:/opt/bin` не нужен — такие значения в deny не попадут.
+  for (const token of tokens) {
+    const assign = /^[A-Za-z_][A-Za-z0-9_]*=(.+)$/.exec(token);
+    if (!assign) continue;
+    const value = assign[1]!;
+    const resolvedValue = tryResolvePath(value, cwd, env);
+    if (resolvedValue && resolvedValue.source === 'literal') {
+      const norm = normalize(resolvedValue.path);
+      const pathHit = deniedPaths.find((p) => normalize(p) === norm);
+      if (pathHit) return deniedByPath(pathHit);
+      const dirHit = deniedPrefixes.find((p) => isUnderDeniedPrefix(norm, p));
+      if (dirHit) return deniedByDir(norm, dirHit);
+    } else if (hasUnresolvedDynamic(value) && tokenTouchesProtectedMarker(value, policy)) {
+      return deniedByDynamicToken(value);
+    }
+  }
+
+  const extracted = extractCommandPathTokens(tokens, cwd, env);
+
+  // 3. Точные запрещённые пути (только литералы — динамика обработана выше).
+  for (const { resolved } of extracted) {
+    if (resolved.source !== 'literal') continue;
+    const norm = normalize(resolved.path);
     const hit = deniedPaths.find((p) => normalize(p) === norm);
-    if (hit) {
-      return {
-        action: 'deny',
-        reason: sm('shellguard.deny_path', { path: hit }),
-        matchedRule: 'shell-policy.deny',
-        deniedPath: hit,
-        messageId: 'deny-protected-path',
-        params: { path: normalize(hit) },
-      };
-    }
+    if (hit) return deniedByPath(hit);
   }
 
-  // 3. Пути под подтверждение (ask).
-  for (const { path, source } of extracted) {
-    if (source !== 'literal') continue;
-    const norm = normalize(path);
+  // 4. Пути под подтверждение (ask).
+  for (const { resolved } of extracted) {
+    if (resolved.source !== 'literal') continue;
+    const norm = normalize(resolved.path);
     const hit = approvalPaths.find((p) => normalize(p) === norm);
-    if (hit) {
-      return {
-        action: 'ask',
-        reason: sm('shellguard.ask_path', { path: hit }),
-        matchedRule: 'shell-policy.approve',
-        deniedPath: hit,
-        messageId: 'ask-protected-path',
-        params: { path: normalize(hit) },
-      };
-    }
+    if (hit) return askByPath(hit);
   }
 
-  // 4. Запрещённые префиксы директорий.
-  for (const { path, source } of extracted) {
-    if (source !== 'literal') continue;
-    const norm = normalize(path);
-    const hit = deniedPrefixes.find((p) => {
-      const prefix = normalize(p);
-      return norm === prefix || norm.startsWith(prefix.endsWith(sep) ? prefix : prefix + sep);
-    });
-    if (hit) {
-      return {
-        action: 'deny',
-        reason: sm('shellguard.deny_dir', { path: norm, dir: hit }),
-        matchedRule: 'shell-policy.deny',
-        deniedPath: hit,
-        messageId: 'deny-protected-dir',
-        params: { path: norm, dir: normalize(hit) },
-      };
-    }
+  // 5. Запрещённые префиксы директорий.
+  for (const { resolved } of extracted) {
+    if (resolved.source !== 'literal') continue;
+    const norm = normalize(resolved.path);
+    const hit = deniedPrefixes.find((p) => isUnderDeniedPrefix(norm, p));
+    if (hit) return deniedByDir(norm, hit);
+  }
+
+  // 6. Неразрешимая динамика-путь без защищённых маркеров: подтверждение
+  // пользователя (не пропускаем молча). Glob без разделителей (`*.ts`) и URL —
+  // рутина, не спрашиваем.
+  for (const { token, resolved } of extracted) {
+    if (resolved.source === 'literal') continue;
+    if (!looksLikePathToken(token)) continue;
+    return {
+      action: 'ask',
+      reason: sm('shellguard.ask_path', { path: token }),
+      matchedRule: 'shell-policy.approve',
+      deniedPath: token,
+      messageId: 'ask-protected-path',
+      params: { path: token },
+    };
   }
 
   return null;
