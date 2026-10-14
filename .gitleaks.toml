@@ -1,0 +1,23 @@
+# Конфигурация gitleaks для репозитория synth (AD-052/AD-089 и окружение CI).
+#
+# Allowlist подтверждённых false positives:
+#   * `curl-auth-header` — примеры curl в документации с плейсхолдерами
+#     (`Bearer admin-key-123`, `synth_svc_<...>`, `whk_<...>`);
+#   * `private-key` / `generic-api-key` — тестовые фикстуры ключей и текстовые
+#     строки в unit-тестах (не реальные секреты).
+#
+# Проверено: gitleaks 8.30.1 + trufflehog 3.99.2 — реальных секретов нет,
+# перечисленные срабатывания подтверждены как ложные.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "подтверждённые false positives (примеры curl с плейсхолдерами, тестовые фикстуры ключей) — проверено gitleaks 8.30.1 + trufflehog 3.99.2"
+paths = [
+  '''docs/API_V2\.md$''',
+  '''packages/backend/src/routes/service-keys\.test\.ts$''',
+  '''packages/core/src/server/routes/ssh-keys\.test\.ts$''',
+  '''\.gitverse/workflows/release\.yaml$''',
+  '''addons/synth-addon-template/README\.md$''',
+]
