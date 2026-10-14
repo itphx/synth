@@ -86,7 +86,7 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 
 ### Кастомные values
 
-Кастомные values (адреса, секреты, ресурсы) хранятся в каталоге `secrets/` **вне git-репозитория** `synth/`. В репозитории лежит только пример — `charts/synth/values.example.yaml`.
+Кастомные values (адреса, секреты, ресурсы) хранятся в каталоге `secrets/` **вне git-репозитория** `synth/`. В репозитории лежит канонический набор значений с комментариями — `charts/synth/values.yaml` (переопределяется своим values-файлом/`--set`).
 
 ## Скрипты
 

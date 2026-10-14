@@ -1,6 +1,7 @@
-# --- Дефолтные значения чарта synth (backend + ui) ---
-# Универсальные дефолты без привязки к конкретному окружению.
-# Переопределяются при установке (values-файл, --set) — см. values.example.yaml.
+# --- Канонические значения чарта synth (backend + ui) ---
+# Универсальные дефолты без привязки к конкретному окружению (self-host у заказчиков).
+# Переопределяются при установке своим values-файлом или --set/--set-file.
+# Инструкция, примеры окружения и плейсхолдеры (<...>) — в README.md чарта.
 
 nameOverride: ""
 fullnameOverride: ""
@@ -33,7 +34,9 @@ backend:
   persistence:
     enabled: true
     size: 10Gi
-    storageClass: ""            # "" = storageClass по умолчанию кластера
+    # "" = storageClass по умолчанию кластера; иначе имя класса,
+    # например "local-path", "longhorn", "gp3".
+    storageClass: ""
     accessMode: ReadWriteOnce
     existingClaim: ""
     # true → PVC не удаляется при `helm uninstall`: чарт добавляет в манифест
@@ -41,9 +44,14 @@ backend:
     # (Ручной kubectl annotate живого PVC не работает — Helm смотрит манифест релиза.)
     keepOnUninstall: false
 
-  # OIDC (Keycloak/иной IdP). issuer/client_id/redirect_uri — ConfigMap.
+  # OIDC (Keycloak/иной IdP). issuer/client_id/redirect_uri → ConfigMap.
   # client_secret берётся из Secret secrets.existingSecret по ключу SYNTH_OIDC_CLIENT_SECRET.
-  # Пример заполнения — values.example.yaml.
+  # Пример включения (плейсхолдеры <...> заменить):
+  #   oidc:
+  #     enabled: true
+  #     issuer: "https://keycloak.example.com/realms/<realm>"
+  #     clientId: "synth"
+  #     redirectUri: "https://synth.example.com/auth/callback"
   oidc:
     enabled: false
     issuer: ""
@@ -56,6 +64,7 @@ backend:
   # Формат (пример): [{name, type, url, model, apiKey}]
   providers: []
 
+  # Ресурсы backend: значения ниже — рабочий дефолт; подберите под нагрузку окружения.
   resources:
     limits:
       cpu: 1000m
@@ -115,6 +124,7 @@ ui:
     port: 8080
     targetPort: 8080
 
+  # Ресурсы UI (nginx): дефолт для типовой нагрузки; переопределяется по окружению.
   resources:
     limits:
       cpu: 200m
@@ -145,9 +155,12 @@ ingress:
   #   none    — чарт не добавляет ни аннотаций контроллера, ни CRD
   #             (контроллер и редирект настраиваются вне чарта).
   controller: nginx
-  className: ""            # например, nginx, traefik, "" = класс по умолчанию
-  # Произвольные аннотации Ingress (например cert-manager.io/cluster-issuer).
-  # Мержатся с авто-аннотациями контроллера; заданные здесь значения имеют приоритет.
+  # IngressClass: "" = класс по умолчанию кластера; обычно "nginx" или "traefik".
+  className: ""
+  # Произвольные аннотации Ingress (мержатся с авто-аннотациями контроллера,
+  # заданные здесь значения приоритетнее). Пример для cert-manager:
+  #   annotations:
+  #     cert-manager.io/cluster-issuer: letsencrypt-prod
   annotations: {}
   # Только для controller: traefik. Аннотация
   # traefik.ingress.kubernetes.io/router.entrypoints добавляется, если значение не пустое.
@@ -173,7 +186,8 @@ secrets:
 #   - создаётся ConfigMap <release>-itphx-ca;
 #   - в backend-под монтируется /etc/ssl/certs/itphx-ca.crt;
 #   - автоматически добавляется env NODE_EXTRA_CA_CERTS.
-# Пример заполнения — values.example.yaml.
+# Удобно передавать файлом, не встраивая PEM в values:
+#   helm install synth ./charts/synth --set-file caCert=./my-ca.crt -f my-values.yaml
 caCert: ""
 
 # ─────────────────────────────────────────────────────────────────────────────

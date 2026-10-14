@@ -2,3 +2,7 @@
 *.tgz
 *.tmp
 .DS_Store
+
+# Локальные переопределения values — не коммитить (эталон — values.yaml)
+my-values.yaml
+values.local.yaml

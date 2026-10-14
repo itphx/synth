@@ -4,9 +4,10 @@ Helm-чарт для развёртывания агентной платфор�
 **backend** (API Hub: OIDC/RBAC + встроенный движок, JSON-хранилище) и
 **ui** (React SPA под nginx, проксирует `/api /ws /auth /admin /health` на backend).
 
-Чарт универсален: подходит для self-host у заказчиков и для preprod-инстансов.
-Все значения по умолчанию нейтральны — окружение задаётся через `values`-файл
-(см. [`values.example.yaml`](./values.example.yaml)).
+Чарт универсален: подходит для self-host у заказчиков. Все значения по умолчанию
+нейтральны — окружение задаётся своим `values`-файлом или `--set`/`--set-file`.
+Канонический набор значений с комментариями — [`values.yaml`](./values.yaml);
+примеры переопределений и плейсхолдеров (`<...>`) — ниже в этом README.
 
 ## Архитектура
 
@@ -45,7 +46,48 @@ helm install synth ./charts/synth -f my-values.yaml --namespace synth --create-n
 
 ```bash
 helm lint charts/synth
-helm template synth charts/synth -f charts/synth/values.example.yaml
+helm template synth charts/synth
+```
+
+## Пример values-файла окружения
+
+Компактный пример переопределений под конкретную инсталляцию (замените
+плейсхолдеры `<...>`). Полный список ключей с комментариями — в `values.yaml`.
+
+```yaml
+# my-values.yaml
+backend:
+  image:
+    tag: ""                     # пусто → .Chart.AppVersion
+  persistence:
+    size: 10Gi
+    storageClass: "<class>"     # "" = storageClass по умолчанию кластера
+  oidc:
+    enabled: true
+    issuer: "https://keycloak.example.com/realms/<realm>"
+    clientId: "synth"
+    redirectUri: "https://synth.example.com/auth/callback"
+  resources:                    # подберите под нагрузку
+    limits:   { cpu: 1000m, memory: 1Gi }
+    requests: { cpu: 200m, memory: 256Mi }
+
+ingress:
+  enabled: true
+  controller: nginx
+  className: "nginx"            # "" = IngressClass по умолчанию
+  redirectHttpToHttps: true     # нужен настроенный TLS (см. ingress.tls)
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: synth.example.com
+      paths:
+        - { path: /, pathType: Prefix }
+  tls:
+    - secretName: synth-tls     # существующий TLS-secret
+      hosts: [synth.example.com]
+
+# CA внутренней инфраструктуры удобно передавать файлом, а не встраивать PEM:
+#   helm install synth ./charts/synth --set-file caCert=./my-ca.crt -f my-values.yaml
 ```
 
 ## Ключевые values
@@ -228,7 +270,22 @@ ingress:
 Для Traefik-редиректа укажите `ingress.controller: traefik` и (обычно)
 `entrypoints: websecure`: приложение слушает `websecure`, а HTTP-трафик на `web`
 перехватывает `IngressRoute` из `templates/traefik-redirect.yaml` и отвечает 301.
-Пример — в `values.example.yaml` (закомментированный блок).
+
+```yaml
+ingress:
+  enabled: true
+  controller: traefik
+  className: traefik
+  entrypoints: websecure
+  redirectHttpToHttps: true
+  hosts:
+    - host: synth.example.com
+      paths:
+        - { path: /, pathType: Prefix }
+  tls:
+    - secretName: synth-tls
+      hosts: [synth.example.com]
+```
 
 > Traefik CRD (`Middleware`/`IngressRoute`) рендерятся **только** при
 > `ingress.controller: traefik`; при других значениях чарт не создаёт

@@ -1,6 +1,6 @@
 apiVersion: v2
 name: synth
-description: Helm-чарт для развёртывания агентной платформы Synth (backend API Hub + UI SPA) в Kubernetes. Подходит для self-host у заказчиков и для preprod-инстансов.
+description: Helm-чарт для развёртывания агентной платформы Synth (backend API Hub + UI SPA) в Kubernetes. Подходит для self-host у заказчиков.
 type: application
 # Версию чарта синхронизировать с версией релиза приложения (см. scripts/version-bump.sh).
 version: 0.10.0
