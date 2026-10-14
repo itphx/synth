@@ -322,6 +322,17 @@ jobs:
             --verbosity=info
 
   # --- GitVerse Release ---
+  #
+  # Почему не actions/create-release@v1: GitVerse САМ создаёт релиз для тега в
+  # момент его push (с пустым/чужим телом), а POST /releases для уже
+  # существующего git-тега отвечает 409 TAG_EXISTS — из-за чего action падает
+  # («Release with tag '...' not found. Creating a new one…» → 404, затем
+  # «context canceled ... failed to get release ... 404»). Поэтому тело релиза
+  # проставляет собственный scripts/publish-release.mjs: находит релиз по
+  # tag_name (с пагинацией) и делает идемпотентный PATCH; при отсутствии —
+  # POST /releases, а при 409 повторяет поиск и PATCH. Загрузка ассетов в
+  # GitVerse сейчас отдаёт 500 INTERNAL_ERROR — скрипт грузит cli.js best-effort
+  # и при неудаче лишь предупреждает, не роняя джобу.
   create-release:
     name: GitVerse Release
     needs: [build, changelog, publish-npmjs]
@@ -353,26 +364,24 @@ jobs:
           path: packages/synth/dist
 
       - name: Собрать тело релиза
-        id: release_body
         run: |
-          printf 'body<<GVEOF\n' >> "$GITVERSE_OUTPUT"
-          cat changelog-partial.md >> "$GITVERSE_OUTPUT"
-          printf '\n## Установка\n\n' >> "$GITVERSE_OUTPUT"
-          printf '\`\`\`bash\n' >> "$GITVERSE_OUTPUT"
-          printf 'npm install -g @itphx/synth@%s\n' "${{ steps.version.outputs.version }}" >> "$GITVERSE_OUTPUT"
-          printf 'docker run -p 4300:4300 gitverse.ru/itphx/synth:%s\n' "${{ steps.version.outputs.version }}" >> "$GITVERSE_OUTPUT"
-          printf '\`\`\`\n' >> "$GITVERSE_OUTPUT"
-          printf 'GVEOF\n' >> "$GITVERSE_OUTPUT"
+          mkdir -p tmp
+          cp changelog-partial.md tmp/release-body.md
+          printf '\n## Установка\n\n' >> tmp/release-body.md
+          printf '\`\`\`bash\n' >> tmp/release-body.md
+          printf 'npm install -g @itphx/synth@%s\n' "${{ steps.version.outputs.version }}" >> tmp/release-body.md
+          printf 'docker run -p 4300:4300 gitverse.ru/itphx/synth:%s\n' "${{ steps.version.outputs.version }}" >> tmp/release-body.md
+          printf '\`\`\`\n' >> tmp/release-body.md
 
-      - name: Создать релиз
-        uses: actions/create-release@v1
-        with:
-          api_key: ${{ secrets.GV_TOKEN }}
-          title: Release v${{ steps.version.outputs.version }}
-          body: ${{ steps.release_body.outputs.body }}
-          files: |
-            packages/synth/dist/cli.js
-          pre_release: ${{ inputs.pre_release || false }}
+      - name: Опубликовать релиз (тело + ассет)
+        env:
+          GV_TOKEN: ${{ secrets.GV_TOKEN }}
+          GV_REPO: itphx/synth
+          RELEASE_TAG: v${{ steps.version.outputs.version }}
+          RELEASE_BODY_FILE: tmp/release-body.md
+          RELEASE_ASSET: packages/synth/dist/cli.js
+          RELEASE_PRERELEASE: ${{ inputs.pre_release || false }}
+        run: node scripts/publish-release.mjs
 
   # --- Публикация Helm-чарта ---
   # Чарт лежит в charts/synth, версия чарта = версии релиза.
