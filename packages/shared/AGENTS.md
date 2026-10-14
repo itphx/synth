@@ -63,6 +63,11 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `escalationProvider`/`escalationModel` — необязательный точный тир на эскалацию
   (пусто — эскалации нет), env-резолверы `SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`;
   поле `events.decisionRouting` (decision-маршрутизация внешних событий, default `false`, AD-084 × AD-089).
+- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision` —
+  реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
+  имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
+  приоритет `CLI > env > config.yaml > defaults` (AD-023). Объектные/нескалярные ключи
+  (`events.identityMap`, `events.dedupStore`, `mcp.servers`, …) остаются в config.yaml.
 
 ## Схемы и типы
 
