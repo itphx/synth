@@ -61,6 +61,7 @@ helm template synth charts/synth -f charts/synth/values.example.yaml
 | `backend.oidc.redirectUri` | `""` | Redirect URI (callback) |
 | `backend.providers` | `[]` | Список LLM-провайдеров (`name/type/url/model/apiKey`) |
 | `backend.persistence.*` | `enabled: true`, `10Gi` | PVC для JSON-данных |
+| `backend.persistence.keepOnUninstall` | `false` | Не удалять PVC при `helm uninstall` (аннотация `helm.sh/resource-policy: keep` в манифесте релиза); для окружений, где данные нельзя терять |
 | `backend.extraEnv` | `{}` | Доп. env для backend |
 | `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`) |
 | `ui.image.repository` | `gitverse.ru/itphx/synth-ui` | Образ UI |

@@ -6,6 +6,12 @@ metadata:
   labels:
     {{- include "synth.labels" . | nindent 4 }}
     app.kubernetes.io/component: backend
+  {{- if .Values.backend.persistence.keepOnUninstall }}
+  # Аннотация обязана быть в манифесте релиза: Helm при uninstall фильтрует
+  # ресурсы по манифесту и не видит аннотацию, проставленную вручную на живом PVC.
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
 spec:
   accessModes:
     - {{ .Values.backend.persistence.accessMode }}

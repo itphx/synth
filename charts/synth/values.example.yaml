@@ -30,6 +30,10 @@ backend:
     storageClass: ""            # "" = storageClass по умолчанию кластера
     accessMode: ReadWriteOnce
     existingClaim: ""
+    # true → PVC не удаляется при `helm uninstall` (аннотация
+    # helm.sh/resource-policy: keep в манифесте релиза). Для окружений, где
+    # данные нельзя терять.
+    keepOnUninstall: false
 
   # ── OIDC-провайдер (Keycloak, Authentik, Okta и т.п.) ──────────────────────
   oidc:

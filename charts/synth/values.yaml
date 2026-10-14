@@ -36,6 +36,10 @@ backend:
     storageClass: ""            # "" = storageClass по умолчанию кластера
     accessMode: ReadWriteOnce
     existingClaim: ""
+    # true → PVC не удаляется при `helm uninstall`: чарт добавляет в манифест
+    # аннотацию helm.sh/resource-policy: keep. Удобно, когда данные нельзя терять.
+    # (Ручной kubectl annotate живого PVC не работает — Helm смотрит манифест релиза.)
+    keepOnUninstall: false
 
   # OIDC (Keycloak/иной IdP). issuer/client_id/redirect_uri — ConfigMap.
   # client_secret берётся из Secret secrets.existingSecret по ключу SYNTH_OIDC_CLIENT_SECRET.
