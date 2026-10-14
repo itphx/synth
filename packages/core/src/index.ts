@@ -196,11 +196,16 @@ export {
   SERVICE_API_KEYS_SCHEMA_VERSION,
   SERVICE_KEY_SECRET_PREFIX,
   isServiceKeySecret,
+  applyBootstrapServiceKeys,
+  BOOTSTRAP_CREATED_BY,
 } from './storage/service-api-key-store.js';
 export type {
   ServiceApiKeyStoreConfig,
   ServiceApiKeyRecord,
   ServiceKeyCredential,
+  EnsureServiceKeyInput,
+  ServiceKeyEnsureStatus,
+  BootstrapServiceKeyEntry,
 } from './storage/service-api-key-store.js';
 export {
   requireScope,

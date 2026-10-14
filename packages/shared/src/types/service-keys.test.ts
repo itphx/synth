@@ -15,11 +15,14 @@ import {
 describe('service-key scopes (AD-052)', () => {
   it('каталог скоупов и семейства непусты и согласованы', () => {
     expect(SERVICE_SCOPES.length).toBeGreaterThan(0);
-    // Каждый скоуп либо из семейства, либо llm:chat.
+    // Каждый скоуп либо из wildcard-семейства, либо из «одиночного» пространства
+    // (без wildcard-семейства): llm:chat, addons:install, users:read.
+    const standaloneNamespaces = ['llm', 'addons', 'users'];
     for (const scope of SERVICE_SCOPES) {
       const family = scope.split(':')[0] ?? '';
       expect(
-        (SERVICE_SCOPE_FAMILIES as readonly string[]).includes(family) || family === 'llm',
+        (SERVICE_SCOPE_FAMILIES as readonly string[]).includes(family) ||
+          standaloneNamespaces.includes(family),
       ).toBe(true);
     }
   });
@@ -27,12 +30,22 @@ describe('service-key scopes (AD-052)', () => {
   it('isKnownScope: каталог, wildcard-семейства и отказ глобальному *', () => {
     expect(isKnownScope('events:ingest')).toBe(true);
     expect(isKnownScope('llm:chat')).toBe(true);
+    expect(isKnownScope('addons:install')).toBe(true);
+    expect(isKnownScope('users:read')).toBe(true);
     expect(isKnownScope('events:*')).toBe(true);
     expect(isKnownScope('schedules:*')).toBe(true);
     expect(isKnownScope('bogus:read')).toBe(false);
     expect(isKnownScope('events:')).toBe(false);
     expect(isKnownScope('*')).toBe(false);
     expect(isKnownScope('')).toBe(false);
+  });
+
+  it('hasServiceScope: одиночные скоупы вне семейств (addons/users)', () => {
+    expect(hasServiceScope(['addons:install'], 'addons:install')).toBe(true);
+    expect(hasServiceScope(['users:read'], 'users:read')).toBe(true);
+    // Нет wildcard-семейств addons/users — точечные скоупы не покрываются ничем иным.
+    expect(hasServiceScope(['events:*'], 'addons:install')).toBe(false);
+    expect(hasServiceScope(['addons:install'], 'users:read')).toBe(false);
   });
 
   it('hasServiceScope: точное совпадение', () => {

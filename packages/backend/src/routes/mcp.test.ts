@@ -94,6 +94,13 @@ function createTestApp(
 ) {
   const app = new Hono();
   const kit = createMockKit();
+  // Харнес считает запросы админскими (`isAdmin: () => true`); в реальном
+  // backend контекст ставит глобальный `attachUser`, поэтому воспроизводим
+  // ADMIN-пользователя — комбинированные guard'ы читают `c.get('user')`.
+  app.use('*', async (c, next) => {
+    c.set('user', { id: 'admin', username: 'admin', roles: ['ADMIN'] });
+    await next();
+  });
   const mcpRoutes = createMcpRoutes(kit as never, mcpManager as never, sessionManager as never, { registry });
   app.route('/api/v2/mcp', mcpRoutes);
   return app;

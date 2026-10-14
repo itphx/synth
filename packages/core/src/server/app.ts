@@ -23,6 +23,7 @@ import {
   createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes, requireScope,
   getServiceCredential, KeyRateLimiter,
   ServiceApiKeyStore,
+  applyBootstrapServiceKeys,
   WebhookStore, WebhookDeliveryStore, WebhookService,
   createExternalIdentityResolver,
   startEventJournalPruner,
@@ -279,6 +280,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // AD-052 (этап I): реестр service-key создаётся до auth — резолвер ключа
   // (`synth_svc_…`) нужен локальной аутентификации (`requireAuth`).
   const serviceApiKeyStore = new ServiceApiKeyStore({ dataDir: config.dataDir });
+  // AD-052/O1: идемпотентный bootstrap installer-ключей из env/Secret
+  // (best-effort — ошибка конфигурации не роняет старт, пишется в лог).
+  await applyBootstrapServiceKeys(
+    serviceApiKeyStore,
+    config.securityConfig?.bootstrapServiceKeys ?? [],
+  );
   const auth = createLocalAuth({
     apiKey: config.apiKey,
     // AD-052: service-key аутентифицирует машину в синтетического пользователя

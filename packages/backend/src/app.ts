@@ -54,6 +54,7 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   ServiceApiKeyStore, createServiceKeyRoutes, KeyRateLimiter, getServiceCredential,
+  applyBootstrapServiceKeys,
   WebhookStore, WebhookDeliveryStore, WebhookService, startWebhookDeliveryPruner,
   createWebhookRoutes,
   getPublicOpenApiDocument,
@@ -68,6 +69,7 @@ import type { BackendConfig } from './lib/app-config.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import type { AuthKit } from './auth/middleware.js';
 import { scopeGuard, projectGuard } from './auth/service-scope.js';
+import { requireAdminOrScope } from './auth/guards.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createProjectRoutes, createProjectAccess } from './routes/projects.js';
 import { createSessionRoutes } from './routes/sessions.js';
@@ -244,6 +246,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // AD-052 (этап I): реестр service-key создаётся до auth — резолвер
     // `synth_svc_…` нужен аутентификации (паритет с core `server/app.ts`).
     const serviceApiKeyStore = new ServiceApiKeyStore({ dataDir: backendConfig.dataDir });
+    // AD-052/O1: идемпотентный bootstrap installer-ключей из env/Secret
+    // (best-effort — ошибка конфигурации не роняет старт, пишется в лог).
+    await applyBootstrapServiceKeys(
+      serviceApiKeyStore,
+      backendConfig.synth.security.bootstrapServiceKeys ?? [],
+    );
     const auth = createAuthMiddleware({
       ...backendConfig.auth,
       resolveServiceKey: async (raw) => {
@@ -1060,7 +1068,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           ? normalize(project.workspace)
           : resolve(backendConfig.workspacesRoot, project.workspace);
       },
-    }, { writeGuard: auth.requireAdmin }));
+    }, { writeGuard: requireAdminOrScope('addons:install') }));
 
     // AD-046 §7/§9.1: команды и bundles (mirror core, мутации — ADMIN).
     app.route('/api/v2/commands', createCommandRoutes(auth as unknown as CoreAuthKit, {

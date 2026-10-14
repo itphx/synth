@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { permissionConfigSchema } from '../types/permission.js';
-import { createToolsDisabledSchema } from '../schemas/index.js';
+import { createToolsDisabledSchema, globalRoleSchema, serviceScopeSchema } from '../schemas/index.js';
 import {
   TOOLS_POLICIES,
   MCP_NETWORK_POLICY_MODES,
@@ -477,6 +477,22 @@ export const protectedPathsConfigSchema = z.object({
   enabled: z.boolean().default(true),
 });
 
+/**
+ * AD-052/O1: installer service-key, провижининг которого делается при старте из
+ * конфига/Secret (идемпотентно). `secret` — plaintext-секрет `synth_svc_…`
+ * (приходит из env/Secret; in config.yaml держать не рекомендуется). `scopes` —
+ * только известные (`serviceScopeSchema`); `roles` не заданы — дефолт хранилища.
+ */
+export const bootstrapServiceKeySchema = z.object({
+  label: z.string().trim().min(1),
+  secret: z.string().min(1),
+  scopes: z.array(serviceScopeSchema).min(1),
+  roles: z.array(globalRoleSchema).optional(),
+  description: z.string().optional(),
+});
+
+export const bootstrapServiceKeysSchema = z.array(bootstrapServiceKeySchema);
+
 export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.default({}),
   protectedPaths: protectedPathsConfigSchema.default({}),
@@ -486,6 +502,14 @@ export const securityConfigSchema = z.object({
    * Пусто — core использует файл `{dataDir}/secrets/master.key`.
    */
   secretKey: z.string().default(''),
+  /**
+   * AD-052/O1: installer service-key'и, провижининг которых выполняется
+   * идемпотентно при старте (core standalone и backend). Может задаваться
+   * JSON-строкой через env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (приоритетнее
+   * config.yaml) — так секрет не попадает в файл конфигурации.
+   * Опционально (legacy/литеральные SecurityConfig без поля — валидны).
+   */
+  bootstrapServiceKeys: bootstrapServiceKeysSchema.optional(),
 });
 
 // --- LLM Gateway (AD-036) ---
@@ -677,6 +701,7 @@ export type PermissionConfig = z.infer<typeof permissionConfigSchema>;
 export type PromptInjectionConfig = z.infer<typeof promptInjectionConfigSchema>;
 export type ProtectedPathsConfig = z.infer<typeof protectedPathsConfigSchema>;
 export type SecurityConfig = z.infer<typeof securityConfigSchema>;
+export type BootstrapServiceKeyConfig = z.infer<typeof bootstrapServiceKeySchema>;
 export type LLMGatewayRateLimitConfig = z.infer<typeof llmGatewayRateLimitConfigSchema>;
 export type LLMGatewayAuditConfig = z.infer<typeof llmGatewayAuditConfigSchema>;
 export type LLMGatewayConfig = z.infer<typeof llmGatewayConfigSchema>;

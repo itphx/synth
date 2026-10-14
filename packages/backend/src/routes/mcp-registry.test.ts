@@ -21,9 +21,37 @@ function userFromHeader(header: string | undefined): MockUser | null {
   return null;
 }
 
+/**
+ * AD-052/O1: mock service-key — `svc-scope` несёт scope `addons:install`,
+ * `svc-noscope` — пустые scopes. Возвращает synthetic-user + credential.
+ */
+function serviceKeyFromHeader(
+  header: string | undefined,
+): { user: MockUser; scopes: string[] } | null {
+  if (header === 'Bearer svc-scope') {
+    return { user: { id: 'service:svc1', username: 'installer', roles: ['USER'] }, scopes: ['addons:install'] };
+  }
+  if (header === 'Bearer svc-noscope') {
+    return { user: { id: 'service:svc2', username: 'installer', roles: ['USER'] }, scopes: [] };
+  }
+  return null;
+}
+
 function createMockKit() {
   return {
     requireAuth: async (c: Context, next: Next) => {
+      const svc = serviceKeyFromHeader(c.req.header('Authorization'));
+      if (svc) {
+        c.set('user', svc.user);
+        c.set('serviceKey', {
+          keyId: svc.user.id,
+          label: svc.user.username,
+          roles: svc.user.roles,
+          scopes: svc.scopes,
+        });
+        await next();
+        return;
+      }
       const user = userFromHeader(c.req.header('Authorization'));
       if (!user) {
         return c.json({ error: { code: 'UNAUTHORIZED', message: 'no' } }, 401);
@@ -55,6 +83,8 @@ function createMockMcpManager() {
     setServerSystemEnabled: vi.fn(),
     disconnectServer: vi.fn(async () => {}),
     getConfiguredServers: vi.fn(() => []),
+    getConfig: vi.fn(() => ({})),
+    probeServer: vi.fn(async () => []),
   };
 }
 
@@ -71,6 +101,25 @@ describe('MCP registry API (AD-071 §2.5)', () => {
   function makeApp(policyOverride?: McpNetworkPolicy) {
     const app = new Hono();
     const kit = createMockKit();
+    // В реальном backend контекст ставит глобальный `attachUser`; в тест-харнесе
+    // (роуты монтируются напрямую) воспроизводим его, иначе роутные guard'ы,
+    // читающие `user`/`serviceKey`, не увидят аутентификацию.
+    app.use('*', async (c, next) => {
+      const svc = serviceKeyFromHeader(c.req.header('Authorization'));
+      if (svc) {
+        c.set('user', svc.user);
+        c.set('serviceKey', {
+          keyId: svc.user.id,
+          label: svc.user.username,
+          roles: svc.user.roles,
+          scopes: svc.scopes,
+        });
+      } else {
+        const user = userFromHeader(c.req.header('Authorization'));
+        if (user) c.set('user', user);
+      }
+      await next();
+    });
     const routes = createMcpRoutes(
       kit as never,
       mcpManager as never,
@@ -278,5 +327,100 @@ describe('MCP registry API (AD-071 §2.5)', () => {
       headers: { Authorization: 'Bearer admin' },
     });
     expect(res.status).toBe(404);
+  });
+
+  // AD-052/O1: guard «ADMIN или scope `addons:install`».
+  it('service-key со scope addons:install: POST /registry (http) → 201', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer svc-scope', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'installer-http', config: httpConfig() }),
+    });
+    expect(res.status).toBe(201);
+    const entry = await res.json() as { origin: string };
+    expect(entry.origin).toBe('user');
+  });
+
+  it('service-key со scope: stdio в реестр → 403 (stdio только ADMIN)', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer svc-scope', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'installer-stdio', config: stdioConfig() }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('service-key без scope: POST /registry → 403 SCOPE_REQUIRED', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer svc-noscope', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'no-scope', config: httpConfig() }),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('SCOPE_REQUIRED');
+  });
+
+  it('service-key со scope: PUT/DELETE /servers/:name и test доступны', async () => {
+    await registry.add({ name: 'srv-ops', config: httpConfig(), origin: 'instance', trust: 'builtin' });
+
+    const put = await makeApp().request('/api/v2/mcp/servers/srv-ops', {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer svc-scope', 'Content-Type': 'application/json' },
+      body: JSON.stringify(httpConfig('http://93.184.216.34/other')),
+    });
+    expect(put.status).toBe(200);
+
+    const test = await makeApp().request('/api/v2/mcp/servers/srv-ops/test', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer svc-scope' },
+    });
+    expect(test.status).toBe(200);
+    expect(mcpManager.probeServer).toHaveBeenCalled();
+
+    const del = await makeApp().request('/api/v2/mcp/servers/srv-ops', {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer svc-scope' },
+    });
+    expect(del.status).toBe(200);
+  });
+
+  it('service-key без scope: PUT /servers/:name → 403 SCOPE_REQUIRED', async () => {
+    await registry.add({ name: 'srv-x', config: httpConfig(), origin: 'instance', trust: 'builtin' });
+    const res = await makeApp().request('/api/v2/mcp/servers/srv-x', {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer svc-noscope', 'Content-Type': 'application/json' },
+      body: JSON.stringify(httpConfig()),
+    });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('SCOPE_REQUIRED');
+  });
+
+  it('интерактивный не-ADMIN на PUT/DELETE /servers/:name → 403 FORBIDDEN', async () => {
+    await registry.add({ name: 'srv-y', config: httpConfig(), origin: 'instance', trust: 'builtin' });
+    const put = await makeApp().request('/api/v2/mcp/servers/srv-y', {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer dev', 'Content-Type': 'application/json' },
+      body: JSON.stringify(httpConfig()),
+    });
+    expect(put.status).toBe(403);
+
+    const del = await makeApp().request('/api/v2/mcp/servers/srv-y', {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer dev' },
+    });
+    expect(del.status).toBe(403);
+  });
+
+  it('интерактивный пользователь по-прежнему добавляет свой HTTP-сервер (не ADMIN)', async () => {
+    const res = await makeApp().request('/api/v2/mcp/registry', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer dev', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'user-still-ok', config: httpConfig() }),
+    });
+    expect(res.status).toBe(201);
   });
 });

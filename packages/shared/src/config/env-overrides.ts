@@ -10,6 +10,7 @@
  *
  * Приоритет (AD-023): CLI-флаги (`overrides`) > env (`SYNTH_*`) > config.yaml > defaults.
  */
+import { bootstrapServiceKeysSchema } from './types.js';
 
 export type EnvOverrideType = 'boolean' | 'number' | 'string';
 
@@ -141,5 +142,56 @@ export function applyEnvOverrides<T extends Record<string, unknown>>(
     (config as Record<string, unknown>)[def.section] = section;
   }
 
+  return config;
+}
+
+/**
+ * AD-052/O1: env-имя JSON-списка installer service-key'ев
+ * (`security.bootstrapServiceKeys`). Значение — JSON-массив объектов
+ * `{ label, secret, scopes, roles?, description? }`. Приоритет — как у
+ * скалярных env-оверрайдов: env > config.yaml (AD-023), но выше CLI-overrides.
+ * Нужен, чтобы секрет installer-ключа не попадал в файл конфигурации
+ * (передаётся из env/Secret).
+ */
+export const BOOTSTRAP_SERVICE_KEYS_ENV = 'SYNTH_BOOTSTRAP_SERVICE_KEYS';
+
+/**
+ * Применяет объектные env-оверрайды, у которых нет плоского строкового
+ * представления (сейчас — `security.bootstrapServiceKeys`). Значение парсится
+ * как JSON и валидируется схемой; при ошибке парсинга/валидации — warn в console
+ * и игнор (fail-soft: кривой installer-ключ не должен ронять старт инстанса —
+ * ensure-логика приложения просто ничего не бутстрапит, оператор видит warn).
+ *
+ * Мутирует переданный объект (в `loadConfig` — свежий результат `deepMerge`) и
+ * возвращает его; секция `security` клонируется, чтобы не мутировать `defaultConfig`.
+ */
+export function applyObjectEnvOverrides<T extends Record<string, unknown>>(
+  config: T,
+  env: NodeJS.ProcessEnv = process.env,
+): T {
+  const raw = env[BOOTSTRAP_SERVICE_KEYS_ENV];
+  if (raw === undefined || raw === '') return config;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.warn(`[config] невалидный JSON ${BOOTSTRAP_SERVICE_KEYS_ENV} — игнорируется`);
+    return config;
+  }
+
+  const validated = bootstrapServiceKeysSchema.safeParse(parsed);
+  if (!validated.success) {
+    console.warn(`[config] ${BOOTSTRAP_SERVICE_KEYS_ENV} не прошёл валидацию — игнорируется`);
+    return config;
+  }
+
+  const current = config.security;
+  const security =
+    current !== null && typeof current === 'object' && !Array.isArray(current)
+      ? { ...(current as Record<string, unknown>) }
+      : {};
+  security.bootstrapServiceKeys = validated.data;
+  (config as Record<string, unknown>).security = security;
   return config;
 }

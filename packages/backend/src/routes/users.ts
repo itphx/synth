@@ -4,12 +4,14 @@ import type { ProfileStore, ProfileData } from '@itphx/synth-shared';
 import { nowISO } from '@itphx/synth-shared';
 import { randomUUID } from 'node:crypto';
 import { t } from '../lib/i18n.js';
+import { requireAdminOrScope } from '../auth/guards.js';
 
 export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
   const app = new Hono();
 
-  // GET /api/v2/users — список всех пользователей (admin)
-  app.get('/', kit.requireAdmin, async (c) => {
+  // GET /api/v2/users — список всех пользователей (ADMIN или scope `users:read`).
+  // Идентичности сознательно не включаются: список не раздувается (детали — в /:id).
+  app.get('/', requireAdminOrScope('users:read'), async (c) => {
     const all = await profiles.listProfiles();
     return c.json({
       users: all.map((p) => ({
@@ -30,8 +32,10 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
     });
   });
 
-  // GET /api/v2/users/:id — детали пользователя (admin)
-  app.get('/:id', kit.requireAdmin, async (c) => {
+  // GET /api/v2/users/:id — детали пользователя (ADMIN или scope `users:read`).
+  // AD-089/O1: отдаёт `identities` профиля (snake_case) — нужно аддонам для
+  // адресации внешних идентичностей машинной кредой.
+  app.get('/:id', requireAdminOrScope('users:read'), async (c) => {
     const id = c.req.param('id');
     const p = await profiles.loadProfile(id);
     if (!p) {
@@ -47,6 +51,14 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
       display_name: p.displayName || null,
       is_active: p.isActive,
       notes: p.notes,
+      identities: (p.identities ?? []).map((identity) => ({
+        provider: identity.provider,
+        external_id: identity.externalId,
+        ...(identity.username !== undefined ? { username: identity.username } : {}),
+        ...(identity.displayName !== undefined ? { display_name: identity.displayName } : {}),
+        linked_at: identity.linkedAt,
+        ...(identity.linkedBy !== undefined ? { linked_by: identity.linkedBy } : {}),
+      })),
       created_at: p.createdAt,
       updated_at: p.updatedAt,
       last_login: p.lastLogin || null,

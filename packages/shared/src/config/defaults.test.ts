@@ -119,6 +119,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.security.secretKey).toBe('');
   });
 
+  it('security.bootstrapServiceKeys по умолчанию пуст (AD-052/O1)', () => {
+    expect(defaultConfig.security.bootstrapServiceKeys).toEqual([]);
+  });
+
   it('events по умолчанию: enabled, bound, 24h, 30 дней, все источники, dedup memory (AD-089)', () => {
     expect(defaultConfig.events).toEqual({
       enabled: true,

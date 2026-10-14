@@ -63,7 +63,9 @@
 - Машинный доступ внешних сервисов — через **service-key** (AD-052 этап I): `ServiceApiKeyStore`
   + синтетический пользователь + `scopes`/`allowedProjects`; enforcement — `requireScope`/
   `checkProjectAccess` (`server/service-scope.ts`), **не** через permission-слой тулов (тот
-  роль-оси не имеет, AD-029).
+  роль-оси не имеет, AD-029). Каталог scope включает зонтичный `addons:install` (установка
+  аддонов: MCP-реестр/скиллы) и `users:read`. Провижининг installer-ключа — `security.bootstrapServiceKeys`
+  (config) / env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (JSON) → `applyBootstrapServiceKeys` при старте.
 - Создание сессии — через единый funnel `RequestSessionService`
   (`engine/events/request-session.ts`): явный запрос — `direct`, внешнее событие —
   через `EventRouter`; `SessionManager.createSession` — materialization-примитив
@@ -129,6 +131,7 @@
   AD-052 (этап I): глобальный per-key rate limit service-key (`KeyRateLimiter`, fixed
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
+  При старте — `applyBootstrapServiceKeys` (AD-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
@@ -323,7 +326,10 @@
   (`secrets/ssh-keys`, шифрование at-rest, AD-076),
   `ServiceApiKeyStore` (`service-keys.json`, AD-052 этап I: scoped-ключи инстанса — sha256-хеш
   секрета `synth_svc_…` at-rest, plaintext один раз при `create`, `resolveBySecret` с проверкой
-  `revokedAt`/`expiresAt`, `revoke`/`touch`/`update`, `ServiceApiKeyConflictError`),
+  `revokedAt`/`expiresAt`, `revoke`/`touch`/`update`, `ServiceApiKeyConflictError`; AD-052/O1 —
+  `ensure({label, secret, scopes, roles?})` (идемпотентный провижининг installer-ключа с внешним
+  секретом из env/Secret: `created`/`updated`/`unchanged`, секрет не перезаписывается) и
+  `applyBootstrapServiceKeys` (best-effort на старте, лог без секретов)),
   `EventBindingStore`
   (`events/bindings.json`), `EventJournalStore` (`events/journal.jsonl`, AD-089),
   `RouteRuleStore` (`events/routes.json`, правила маршрутизации, AD-089),
@@ -405,7 +411,8 @@
 ## MCP
 
 - Транспорты: stdio (`StdioClientTransport`) и Streamable HTTP
-  (`StreamableHTTPClientTransport`) — `engine/mcp/client.ts`.
+  (`StreamableHTTPClientTransport`) — `engine/mcp/client.ts`. AD-090: `config.headers`
+  пробрасываются в HTTP-транспорт (`requestInit: { headers }`) — auth/tenant-заголовки.
 - Лимиты: connect 60 c; tool timeout 120 c (`config.timeout`, мс); результат
   усечён до 30 000 символов (`MAX_TOOL_RESULT`).
 - Circuit breaker: 5 ошибок → блокировка на 60 c (`engine/mcp/manager.ts`).

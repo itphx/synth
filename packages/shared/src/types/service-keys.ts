@@ -23,7 +23,12 @@ export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
 
 /**
  * Каталог скоупов service-key (AD-052 §«Scopes», уточняется на этапе I).
- * `llm:chat` — единственный скоуп вне семейств (роуты без проектного измерения).
+ * Точечные скоупы вне wildcard-семейств:
+ * - `llm:chat` — LLM-прокси (роут без проектного измерения);
+ * - `addons:install` — зонтичный скоуп installer-ключа: установка/обновление
+ *   MCP-реестра и скиллов (AD-090 installer);
+ * - `users:read` — чтение пользователей/идентичностей машинной кредой
+ *   (консент-сервисы аддонов).
  */
 export const SERVICE_SCOPES = [
   'events:ingest',
@@ -40,6 +45,8 @@ export const SERVICE_SCOPES = [
   'schedules:read',
   'schedules:write',
   'llm:chat',
+  'addons:install',
+  'users:read',
 ] as const;
 
 export type ServiceScope = (typeof SERVICE_SCOPES)[number];

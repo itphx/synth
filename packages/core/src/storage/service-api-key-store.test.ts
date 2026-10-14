@@ -8,6 +8,7 @@ import {
   ServiceApiKeyConflictError,
   SERVICE_KEY_SECRET_PREFIX,
   isServiceKeySecret,
+  applyBootstrapServiceKeys,
 } from './service-api-key-store.js';
 
 describe('ServiceApiKeyStore (AD-052, этап I)', () => {
@@ -189,5 +190,89 @@ describe('ServiceApiKeyStore (AD-052, этап I)', () => {
   it('path-traversal в id (remove/revoke) → исключение', async () => {
     await expect(store.remove('../evil')).rejects.toThrow();
     await expect(store.revoke('../evil')).rejects.toThrow();
+  });
+
+  describe('ensure (AD-052/O1, installer)', () => {
+    it('создаёт ключ с внешним секретом; at-rest — только hash; секрет резолвится', async () => {
+      const secret = 'synth_svc_external-secret-123';
+      const { status, key } = await store.ensure({
+        label: 'addon-installer',
+        secret,
+        scopes: ['addons:install'],
+      });
+      expect(status).toBe('created');
+      expect(key.label).toBe('addon-installer');
+      expect(key.scopes).toEqual(['addons:install']);
+      expect(key.roles).toEqual([GlobalRole.USER]);
+      expect(key.createdBy).toBe('bootstrap');
+      expect(key.prefix).toBe(`${secret.slice(0, 12)}…`);
+      expect((key as unknown as Record<string, unknown>).hash).toBeUndefined();
+
+      // Секрет хранится только хешем (plaintext отсутствует в файле).
+      const raw = await readFile(join(tmpDir, 'service-keys.json'), 'utf8');
+      expect(raw).not.toContain(secret);
+      expect((await store.resolveBySecret(secret))?.key.id).toBe(key.id);
+    });
+
+    it('секрет без префикса synth_svc_ нормируется (иначе auth его не распознает)', async () => {
+      const { key } = await store.ensure({
+        label: 'raw',
+        secret: 'plain-token-xyz',
+        scopes: ['users:read'],
+      });
+      expect(await store.resolveBySecret('plain-token-xyz')).toBeNull();
+      expect((await store.resolveBySecret('synth_svc_plain-token-xyz'))?.key.id).toBe(key.id);
+      expect(key.prefix.startsWith('synth_svc_')).toBe(true);
+    });
+
+    it('идемпотентен: повтор без изменений → unchanged; смена scopes/roles → updated; секрет не меняется', async () => {
+      const secret = 'synth_svc_stable-key';
+      const first = await store.ensure({ label: 'installer', secret, scopes: ['addons:install'] });
+      expect(first.status).toBe('created');
+
+      const again = await store.ensure({ label: 'installer', secret, scopes: ['addons:install'] });
+      expect(again.status).toBe('unchanged');
+      expect(again.key.id).toBe(first.key.id);
+
+      const updated = await store.ensure({
+        label: 'installer',
+        secret: 'synth_svc_other',
+        scopes: ['addons:install', 'users:read'],
+        roles: [GlobalRole.LEAD],
+      });
+      expect(updated.status).toBe('updated');
+      expect(updated.key.scopes).toEqual(['addons:install', 'users:read']);
+      expect(updated.key.roles).toEqual([GlobalRole.LEAD]);
+      // Секрет не перезаписывается — работает исходный.
+      expect((await store.resolveBySecret(secret))?.key.id).toBe(first.key.id);
+      expect(await store.resolveBySecret('synth_svc_other')).toBeNull();
+    });
+
+    it('label регистронезависим (как create) — ensure не создаёт дубль', async () => {
+      await store.ensure({ label: 'Installer', secret: 'synth_svc_a', scopes: ['addons:install'] });
+      const { status } = await store.ensure({ label: ' installer ', secret: 'synth_svc_b', scopes: ['addons:install'] });
+      expect(status).toBe('unchanged');
+      expect(await store.list()).toHaveLength(1);
+    });
+
+    it('пустой secret/label → исключение', async () => {
+      await expect(store.ensure({ label: 'x', secret: '   ', scopes: ['addons:install'] })).rejects.toThrow();
+      await expect(store.ensure({ label: '  ', secret: 'synth_svc_x', scopes: ['addons:install'] })).rejects.toThrow();
+    });
+  });
+
+  describe('applyBootstrapServiceKeys (AD-052/O1)', () => {
+    it('best-effort: невалидный entry не роняет провижининг остальных', async () => {
+      await expect(
+        applyBootstrapServiceKeys(store, [
+          { label: 'bad', secret: '', scopes: ['addons:install'] },
+          { label: 'good', secret: 'synth_svc_good', scopes: ['addons:install'] },
+        ]),
+      ).resolves.toBeUndefined();
+
+      const keys = await store.list();
+      expect(keys.map((k) => k.label)).toEqual(['good']);
+      expect((await store.resolveBySecret('synth_svc_good'))?.key.label).toBe('good');
+    });
   });
 });

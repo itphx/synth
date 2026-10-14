@@ -52,9 +52,12 @@
 `403 SCOPE_REQUIRED`). Для интерактивных кред (cookie/debug/OIDC/API-key/локальный
 ключ) scope-гейт — no-op (запрос пропускается). Каталог scope: `events:ingest`,
 `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`,
-`sessions:create|read|prompt`, `schedules:read|write`, `llm:chat` + wildcard-семейства
+`sessions:create|read|prompt`, `schedules:read|write`, `llm:chat`, `addons:install`,
+`users:read` + wildcard-семейства
 `events:*`, `bindings:*`, `keys:*`, `routes:*`, `sessions:*`, `schedules:*`
-(глобального `*` нет). Проектная проекция `allowedProjects`: если у ключа задан
+(глобального `*` нет). Отдельно: на части роутов (запись реестра MCP, запись
+скиллов, чтение админского user-API) scope работает как альтернатива роли ADMIN
+(«ADMIN **или** scope», см. §5.14/§5.16/§5.17). Проектная проекция `allowedProjects`: если у ключа задан
 непустой список, доступны только входящие в него проекты — применяется в sessions,
 events/bindings и schedules (иначе `403 PROJECT_FORBIDDEN`); пусто/отсутствует —
 политика инстанса. Точки применения scope по роутам — в §5.5, §5.26, §5.27, §5.23.
@@ -418,15 +421,22 @@ Read-only прозрачность загруженных проектных и�
 Ответ: `{ session_id?\|project_id?, enabled, cap: { chars, source: 'dynamic'\|'override', contextWindow }, files: [{ path, kind, label?, url?, chars, truncated, status, scan? }], diagnostics: [{ level, code, message, path?, kind? }] }` — структура из резолвера
 AD-069 Ф2a (`engine/context/instructions.ts`); `status` — `loaded`/`truncated`/`blocked`/`dedup`/`skipped`/`untrusted`/`skipped-install-tree`/`excluded`/`fetch-error`. Без `session_id`/`project_id` → 400; неизвестный id → 404; чужой доступ → 403. Запись в хранилище не выполняется.
 
-### 5.14 Users — `/api/v2/users` (backend, ADMIN)
+### 5.14 Users — `/api/v2/users` (backend, ADMIN или scope `users:read`)
+
+Чтение списка/деталей доступно роли `ADMIN` **или** service-key со scope
+`users:read` (машинное чтение профилей/идентичностей аддонами); мутации —
+только `ADMIN`. `GET /:id` возвращает `identities` профиля (AD-089,
+snake_case: `provider`, `external_id`, `username?`, `display_name?`,
+`linked_at`, `linked_by?`); список (`GET /`) идентичности **не** включает
+(не раздувать выдачу — детали идут в `/:id`).
 
 | Метод | Путь | Назначение |
 |---|---|---|
-| GET | `/api/v2/users` | Список профилей |
-| GET | `/api/v2/users/:id` | Профиль |
-| POST | `/api/v2/users` | Создать |
-| PUT | `/api/v2/users/:id` | Обновить |
-| DELETE | `/api/v2/users/:id` | Удалить |
+| GET | `/api/v2/users` | Список профилей (без `identities`) |
+| GET | `/api/v2/users/:id` | Профиль (+ `identities`) |
+| POST | `/api/v2/users` | Создать (ADMIN) |
+| PUT | `/api/v2/users/:id` | Обновить (ADMIN) |
+| DELETE | `/api/v2/users/:id` | Удалить (ADMIN) |
 
 ### 5.14.1 Идентичности текущего пользователя — `/api/v2/me/identities` (оба, AD-089)
 
@@ -510,15 +520,15 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/mcp/servers` | backend | auth | Настроенные серверы + `connected` |
 | POST | `/api/v2/mcp/servers` | backend | ADMIN | `{name, config}` → 201 |
 | GET | `/api/v2/mcp/servers/:name` | backend | auth | Конфиг сервера |
-| PUT | `/api/v2/mcp/servers/:name` | backend | ADMIN | Обновить конфиг |
-| DELETE | `/api/v2/mcp/servers/:name` | backend | ADMIN | Удалить |
-| POST | `/api/v2/mcp/servers/:name/test` | backend | ADMIN | Проверить подключение (+опц. `config`) |
+| PUT | `/api/v2/mcp/servers/:name` | backend | ADMIN или scope `addons:install` | Обновить конфиг |
+| DELETE | `/api/v2/mcp/servers/:name` | backend | ADMIN или scope `addons:install` | Удалить |
+| POST | `/api/v2/mcp/servers/:name/test` | backend | ADMIN или scope `addons:install` | Проверить подключение (+опц. `config`) |
 | GET | `/api/v2/mcp/servers/:name/tools` | backend | auth | Инструменты сервера (probe при необходимости) |
 | GET | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers, mcpDisabledServers, allServers}` (канонический — `/sessions/:id/mcp`) |
 | PUT | `/api/v2/mcp/session/:sessionId` | backend | auth | Legacy: `{mcpServers?, mcpDisabledServers?}` (совместим с `/sessions/:id/mcp`) |
 | POST | `/api/v2/mcp/probe` | оба | auth | `{name}` → `{name, tools}`, `MCP_CONNECT_ERROR` |
 | GET | `/api/v2/mcp/registry` | backend | auth | Единый реестр MCP-серверов (AD-071 §2.5): `{entries}`; запись несёт `enabled` (мастер hard-gate, дефолт `true`) и `enabledByDefault` (дефолт для НОВЫХ проектов) |
-| POST | `/api/v2/mcp/registry` | backend | auth (stdio — ADMIN) | Добавить запись: `{name, config, enabled?, enabledByDefault?, origin?}` → 201; stdio — только ADMIN, HTTP — любой |
+| POST | `/api/v2/mcp/registry` | backend | auth (stdio — только ADMIN; service-key — scope `addons:install`) | Добавить запись: `{name, config, enabled?, enabledByDefault?, origin?}` → 201; stdio — только ADMIN, HTTP — любой; service-key без scope `addons:install` → 403 `SCOPE_REQUIRED` (stdio со scope всё равно 403 — только ADMIN) |
 | PUT | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Обновить запись (`enabled` — мастер-флаг реестра) |
 | DELETE | `/api/v2/mcp/registry/:id` | backend | автор/ADMIN | Удалить запись |
 
@@ -529,15 +539,15 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
 |---|---|---|---|---|
 | GET | `/api/v2/skills` | оба | auth | Реестр скиллов: `{skills, workspace?, diagnostics?}`; `?project_id=` — project-скоуп, `?diagnostics=1` — диагностика discovery/валидации |
-| POST | `/api/v2/skills` | оба | backend ADMIN / core auth | Создать instance-скилл: `{name, description, body?, files?}` → 201 (409 при дубле) |
+| POST | `/api/v2/skills` | оба | backend ADMIN или scope `addons:install` / core auth | Создать instance-скилл: `{name, description, body?, files?}` → 201 (409 при дубле) |
 | GET | `/api/v2/skills/:name` | оба | auth | Деталь: мета, тело (недоверенного — пустое), supporting-файлы |
-| PATCH | `/api/v2/skills/:name` | оба | backend ADMIN / core auth | Обновить instance-скилл: `{description?, body?, metadata?}` |
-| DELETE | `/api/v2/skills/:name` | оба | backend ADMIN / core auth | Удалить instance-скилл |
+| PATCH | `/api/v2/skills/:name` | оба | backend ADMIN или scope `addons:install` / core auth | Обновить instance-скилл: `{description?, body?, metadata?}` |
+| DELETE | `/api/v2/skills/:name` | оба | backend ADMIN или scope `addons:install` / core auth | Удалить instance-скилл |
 | GET | `/api/v2/skills/:name/files` | оба | auth | Список supporting-файлов `{files}` |
 | GET | `/api/v2/skills/:name/files/*` | оба | auth | Чтение supporting-файла `{path, content}` |
-| PUT | `/api/v2/skills/:name/files/*` | оба | backend ADMIN / core auth | Запись supporting-файла `{content}` |
-| DELETE | `/api/v2/skills/:name/files/*` | оба | backend ADMIN / core auth | Удаление supporting-файла |
-| POST | `/api/v2/skills/reload` | оба | backend ADMIN / core auth | Принудительный ре-скан реестра (ленивая инвалидация по mtime) |
+| PUT | `/api/v2/skills/:name/files/*` | оба | backend ADMIN или scope `addons:install` / core auth | Запись supporting-файла `{content}` |
+| DELETE | `/api/v2/skills/:name/files/*` | оба | backend ADMIN или scope `addons:install` / core auth | Удаление supporting-файла |
+| POST | `/api/v2/skills/reload` | оба | backend ADMIN или scope `addons:install` / core auth | Принудительный ре-скан реестра (ленивая инвалидация по mtime) |
 
 Источники discovery (Фаза 1): `{dataDir}/skills` (instance), `{project.workspace}/.synth/skills` (project, project-trust гейт), `config.skills.paths`. Внешние каталоги (`.opencode`, `.claude`, `.agents`) и `skills.urls` не подключаются.
 

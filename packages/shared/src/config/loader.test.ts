@@ -167,3 +167,73 @@ describe('loadConfig — env-оверрайды вложенных секций 
     expect(cfg.webhooks.allowPrivateTargets).toBe(true);
   });
 });
+
+/**
+ * AD-052/O1: installer service-key'и — JSON-список из env применяется поверх
+ * config.yaml (секрет не в файле); при невалидном JSON — warn + игнор.
+ */
+describe('loadConfig — SYNTH_BOOTSTRAP_SERVICE_KEYS (AD-052/O1)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  async function writeConfig(yaml: string): Promise<string> {
+    dir = await mkdtemp(join(tmpdir(), 'synth-config-bootstrap-'));
+    const path = join(dir, 'config.yaml');
+    await writeFile(path, yaml, 'utf-8');
+    return path;
+  }
+
+  const entries = [
+    { label: 'addon-installer', secret: 'synth_svc_abc', scopes: ['addons:install'] },
+    { label: 'consent', secret: 'synth_svc_def', scopes: ['users:read'], roles: ['USER'] },
+  ];
+
+  it('применяет JSON из env; config.yaml не требуется', async () => {
+    const path = await writeConfig('{}\n');
+    const cfg = await loadConfig({
+      configPath: path,
+      env: { SYNTH_BOOTSTRAP_SERVICE_KEYS: JSON.stringify(entries) },
+    });
+    expect(cfg.security.bootstrapServiceKeys).toEqual(entries);
+  });
+
+  it('env приоритетнее config.yaml', async () => {
+    const path = await writeConfig(
+      'security:\n  bootstrapServiceKeys:\n    - label: from-file\n      secret: synth_svc_file\n      scopes: [addons:install]\n',
+    );
+    const cfg = await loadConfig({
+      configPath: path,
+      env: { SYNTH_BOOTSTRAP_SERVICE_KEYS: JSON.stringify(entries) },
+    });
+    expect(cfg.security.bootstrapServiceKeys).toEqual(entries);
+  });
+
+  it('без env список берётся из config.yaml', async () => {
+    const path = await writeConfig(
+      'security:\n  bootstrapServiceKeys:\n    - label: from-file\n      secret: synth_svc_file\n      scopes: [addons:install]\n',
+    );
+    const cfg = await loadConfig({ configPath: path, env: {} });
+    expect(cfg.security.bootstrapServiceKeys).toEqual([
+      { label: 'from-file', secret: 'synth_svc_file', scopes: ['addons:install'] },
+    ]);
+  });
+
+  it('невалидный JSON → warn + пустой список (fail-soft)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const path = await writeConfig('{}\n');
+    const cfg = await loadConfig({
+      configPath: path,
+      env: { SYNTH_BOOTSTRAP_SERVICE_KEYS: '{broken' },
+    });
+    expect(cfg.security.bootstrapServiceKeys ?? []).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+});

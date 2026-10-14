@@ -263,5 +263,7 @@ export const defaultConfig: SynthConfig = {
     },
     // Пусто — core использует файл {dataDir}/secrets/master.key (AD-076).
     secretKey: '',
+    // AD-052/O1: installer service-key'и из env/Secret (по умолчанию нет).
+    bootstrapServiceKeys: [],
   },
 };

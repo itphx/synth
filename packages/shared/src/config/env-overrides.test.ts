@@ -2,6 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   ENV_OVERRIDES,
   applyEnvOverrides,
+  applyObjectEnvOverrides,
+  BOOTSTRAP_SERVICE_KEYS_ENV,
   envOverrideName,
   parseEnvValue,
   toSnakeCase,
@@ -159,5 +161,82 @@ describe('applyEnvOverrides (AD-023)', () => {
     // Исходная ссылка на секцию не тронута — клон записан вместо мутации.
     expect(originalEvents.autoBind).toBe(false);
     expect(cfg.events).not.toBe(originalEvents);
+  });
+});
+
+/**
+ * AD-052/O1: installer service-key'и из env (`SYNTH_BOOTSTRAP_SERVICE_KEYS`,
+ * JSON). Секрет передаётся из env/Secret, а не из config.yaml.
+ */
+describe('applyObjectEnvOverrides (AD-052/O1)', () => {
+  function makeConfig(): Record<string, unknown> {
+    return { security: { secretKey: '', bootstrapServiceKeys: [] } };
+  }
+
+  it('валидный JSON применяется в security.bootstrapServiceKeys', () => {
+    const entries = [
+      { label: 'addon-installer', secret: 'synth_svc_abc', scopes: ['addons:install'] },
+      { label: 'telegram-consent', secret: 'synth_svc_def', scopes: ['users:read'], roles: ['USER'] },
+    ];
+    const cfg = applyObjectEnvOverrides(makeConfig(), {
+      [BOOTSTRAP_SERVICE_KEYS_ENV]: JSON.stringify(entries),
+    });
+    expect((cfg.security as Record<string, unknown>).bootstrapServiceKeys).toEqual(entries);
+  });
+
+  it('пустая строка → тихий игнор (без warn)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyObjectEnvOverrides(makeConfig(), { [BOOTSTRAP_SERVICE_KEYS_ENV]: '' });
+    expect((cfg.security as Record<string, unknown>).bootstrapServiceKeys).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('невалидный JSON → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyObjectEnvOverrides(makeConfig(), {
+      [BOOTSTRAP_SERVICE_KEYS_ENV]: '{not json',
+    });
+    expect((cfg.security as Record<string, unknown>).bootstrapServiceKeys).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('неизвестный scope → warn + игнор (fail-soft)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyObjectEnvOverrides(makeConfig(), {
+      [BOOTSTRAP_SERVICE_KEYS_ENV]: JSON.stringify([
+        { label: 'bad', secret: 'synth_svc_x', scopes: ['nope:nope'] },
+      ]),
+    });
+    expect((cfg.security as Record<string, unknown>).bootstrapServiceKeys).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('пустой label → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const cfg = applyObjectEnvOverrides(makeConfig(), {
+      [BOOTSTRAP_SERVICE_KEYS_ENV]: JSON.stringify([
+        { label: '  ', secret: 'synth_svc_x', scopes: ['addons:install'] },
+      ]),
+    });
+    expect((cfg.security as Record<string, unknown>).bootstrapServiceKeys).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('env не задан → конфиг не меняется', () => {
+    const cfg = makeConfig();
+    const out = applyObjectEnvOverrides(cfg, {});
+    expect(out).toBe(cfg);
+  });
+
+  it('не мутирует исходную секцию security (клонирование)', () => {
+    const cfg = makeConfig();
+    const original = cfg.security as Record<string, unknown>;
+    applyObjectEnvOverrides(cfg, {
+      [BOOTSTRAP_SERVICE_KEYS_ENV]: JSON.stringify([
+        { label: 'k', secret: 'synth_svc_x', scopes: ['addons:install'] },
+      ]),
+    });
+    expect(original.bootstrapServiceKeys).toEqual([]);
+    expect(cfg.security).not.toBe(original);
   });
 });

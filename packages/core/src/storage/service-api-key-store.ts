@@ -5,6 +5,7 @@ import { GlobalRole } from '@itphx/synth-shared';
 import type { ServiceApiKey, ServiceApiKeyCreated } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
 import type { CreateServiceApiKeyInput, UpdateServiceApiKeyPatch } from '@itphx/synth-shared';
+import { info, warning } from '../logger.js';
 
 /** AD-052 (этап I): версия схемы файла service-key (для будущей миграции AD-032). */
 export const SERVICE_API_KEYS_SCHEMA_VERSION = 1;
@@ -75,6 +76,24 @@ interface ServiceKeysFile {
 
 /** Дефолтные роли service-key, если `roles` не заданы (least privilege). */
 const DEFAULT_SERVICE_KEY_ROLES: GlobalRole[] = [GlobalRole.USER];
+
+/** Автор (createdBy) ключа, провижининг которого выполнен bootstrap-логикой. */
+export const BOOTSTRAP_CREATED_BY = 'bootstrap';
+
+/** Вход `ServiceApiKeyStore.ensure` — installer-ключ с внешним секретом (O1). */
+export interface EnsureServiceKeyInput {
+  label: string;
+  /** Plaintext-секрет (`synth_svc_…`; префикс дописывается, если отсутствует). */
+  secret: string;
+  scopes: string[];
+  /** Не заданы/пусты — дефолт хранилища (`USER`); заданы — синхронизируются. */
+  roles?: GlobalRole[];
+  description?: string;
+  createdBy?: string;
+}
+
+/** Результат идемпотентного `ensure`: создан / обновлён / без изменений. */
+export type ServiceKeyEnsureStatus = 'created' | 'updated' | 'unchanged';
 
 /**
  * AD-052 (этап I): реестр service-key — независимый от `EventApiKeyStore`
@@ -215,6 +234,75 @@ export class ServiceApiKeyStore {
   }
 
   /**
+   * AD-052/O1 (installer): идемпотентный провижининг ключа с **внешним**
+   * секретом (из env/Secret). Ключа с такой меткой нет — создаёт его с заданным
+   * секретом (at-rest хранится только sha256-хеш; `prefix` считается); есть —
+   * синхронизирует `scopes` и (если переданы) `roles`, секрет не меняет.
+   *
+   * Секрет используется как есть; если он не начинается с `synth_svc_`,
+   * префикс дописывается (иначе аутентификация по ключу не распознает секрет).
+   * `revokedAt`/`expiresAt` не трогаются. Возвращает статус `created` / `updated`
+   * / `unchanged` и публичные метаданные (без секрета/хеша).
+   */
+  async ensure(input: EnsureServiceKeyInput): Promise<{
+    status: ServiceKeyEnsureStatus;
+    key: ServiceApiKey;
+  }> {
+    const label = this._normalizeLabel(input.label);
+    const rawSecret = input.secret?.trim() ?? '';
+    if (!rawSecret) throw new Error('secret обязателен');
+    const secret = isServiceKeySecret(rawSecret)
+      ? rawSecret
+      : `${SERVICE_KEY_SECRET_PREFIX}${rawSecret}`;
+    const roles =
+      input.roles && input.roles.length > 0 ? [...input.roles] : [...DEFAULT_SERVICE_KEY_ROLES];
+
+    await this._lock.acquire();
+    try {
+      const file = await this._load();
+      const existing = file.keys.find(
+        (k) => this._labelKey(k.label ?? '') === this._labelKey(label),
+      );
+
+      if (!existing) {
+        const record: ServiceApiKeyRecord = {
+          id: `svk_${generateId()}`,
+          label,
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          roles,
+          scopes: [...input.scopes],
+          createdBy: input.createdBy ?? BOOTSTRAP_CREATED_BY,
+          createdAt: new Date().toISOString(),
+          prefix: `${secret.slice(0, SECRET_PREFIX_VISIBLE)}…`,
+          hash: hashSecret(secret),
+        };
+        file.keys.push(record);
+        await this._save(file);
+        return { status: 'created', key: this._toPublic(record) };
+      }
+
+      const sameScopes =
+        existing.scopes.length === input.scopes.length &&
+        existing.scopes.every((s, i) => s === input.scopes[i]);
+      const sameRoles =
+        !input.roles ||
+        input.roles.length === 0 ||
+        (existing.roles.length === roles.length && existing.roles.every((r, i) => r === roles[i]));
+
+      if (sameScopes && sameRoles) {
+        return { status: 'unchanged', key: this._toPublic(existing) };
+      }
+
+      if (!sameScopes) existing.scopes = [...input.scopes];
+      if (!sameRoles) existing.roles = roles;
+      await this._save(file);
+      return { status: 'updated', key: this._toPublic(existing) };
+    } finally {
+      this._lock.release();
+    }
+  }
+
+  /**
    * Обновляет поля ключа. `null` для `description`/`allowedProjects`/
    * `rateLimitPerMinute`/`expiresAt` — сброс; `undefined` — не трогать. Смена
    * `label` проверяется на глобальную уникальность (исключая саму запись).
@@ -347,6 +435,44 @@ export class ServiceApiKeyStore {
       await this._save(file);
     } finally {
       this._lock.release();
+    }
+  }
+}
+
+/** Запись installer-ключа для bootstrap (структурно совместима с config-схемой). */
+export interface BootstrapServiceKeyEntry {
+  label: string;
+  secret: string;
+  scopes: string[];
+  roles?: GlobalRole[];
+  description?: string;
+}
+
+/**
+ * AD-052/O1: best-effort провижининг списка installer service-key'ев при старте
+ * (core standalone и backend). Каждый ключ обрабатывается независимо:
+ * `ensure` идемпотентно создаёт/синхронизирует ключ; ошибка одного entry
+ * логируется (без секрета) и **не** роняет старт инстанса — installer просто не
+ * получит доступ, оператор увидит warning (`ensure`-ошибки не критичны для
+ * работы остальных API).
+ */
+export async function applyBootstrapServiceKeys(
+  store: ServiceApiKeyStore,
+  entries: readonly BootstrapServiceKeyEntry[],
+): Promise<void> {
+  for (const entry of entries) {
+    try {
+      const result = await store.ensure({
+        label: entry.label,
+        secret: entry.secret,
+        scopes: entry.scopes,
+        ...(entry.roles ? { roles: entry.roles } : {}),
+        ...(entry.description !== undefined ? { description: entry.description } : {}),
+      });
+      info('bootstrap', `service-key "${result.key.label}": ${result.status}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      warning('bootstrap', `service-key "${entry.label}" не применён: ${message}`);
     }
   }
 }

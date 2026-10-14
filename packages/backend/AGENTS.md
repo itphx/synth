@@ -83,8 +83,8 @@
 | `/api/v2/projects` | `routes/projects.ts` — обёртка над core `createProjectRoutes` (RBAC-хуки owner/EDITOR/LEAD/ADMIN + read `canRead` owner/член/LEAD/ADMIN, `resolveElevated` — LEAD/ADMIN видят все, managed-provisioning, `/stats`, `/:id/mcp`) + `createProjectAccess` для git-роутов |
 | `/api/v2/messages`, `/queue` | `routes/{messages,queue}.ts` — обёртки над core `createMessageRoutes`/`createQueueRoutes` (i18n, `onMessagesChanged` = `recalc-can-summarize`) |
 | `/api/v2/agents` | `routes/agents.ts` — обёртка над core `createAgentRoutes` (guards: `GET /` = `requireAuth`, `/all`+мутации = `requireAdmin`) |
-| `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, AD-071) |
-| `/api/v2/context`, `/users` | local `routes/*` |
+| `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, AD-071; запись — ADMIN или service-key со scope `addons:install`) |
+| `/api/v2/context`, `/users` | local `routes/*`; `/users` — чтение (список/детали) под `requireAdminOrScope('users:read')`, `GET /:id` отдаёт `identities` профиля (snake_case, AD-089), мутации — `requireAdmin` |
 | `/api/v2/fs` | core `createFsRoutes` (AD-075): managed opts — `requireProjectId`, `deny`, `getProjectWorkspace` (`resolveProjectWorkspace`, strict) |
 | `/api/v2/git` | core `createGitRoutes` (T4): `authorizeProject` = `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN), read (`scan/log/commit`) — `requireAuth` |
 | `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` | core `createSshKeyRoutes` / `createAgentSshKeyRoutes`: чтение — `requireAuth`, запись — `requireAdmin` (AD-076). В гибриде nested-путь проксируется core на backend (`REMOTE_PROXY_PATTERNS`) |
@@ -110,6 +110,7 @@
 
 - Порядок в `getCurrentUser`: service-key (`synth_svc_…`, AD-052 — синтетический пользователь `{id:'service:<keyId>', roles}` + `scopes`/`allowedProjects`) → cookie `user_session` → debug test-users (по `Authorization`) → OIDC JWT (если `oidc.enabled`) → единый API-key (`SYNTH_API_KEY`, роль ADMIN, вне debug/OIDC). Резолвер ключа — `config.resolveServiceKey` (`ServiceApiKeyStore.resolveBySecret` + `touch`), неизвестный/отозванный/истёкший → 401.
 - Scope-гейты service-key (`scopeGuard`/`projectGuard`, `src/auth/service-scope.ts`) работают поверх `requireAuth`/`requirePermission`: ограничивают только service-key (`403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`), для интерактивных кред — no-op.
+- Комбинированные guard'ы `src/auth/guards.ts` (AD-052/O1): `requireAdminOrScope(...scopes)` — service-key требует scope, интерактив — роль ADMIN (роуты `/mcp/servers*` PUT/DELETE/test, запись скиллов, чтение user-API); `requireScopeForServiceKey(...scopes)` — service-key требует scope, интерактив без изменений (`POST /mcp/registry`).
 - Cookie-сессии — in-memory (`Map`), переживают только процесс; срок — `sessionMaxAgeMinutes`.
 - Логин/логаут/сессия и **профиль** — под `/auth/*`: `/auth/profile`, `/auth/profile/preferences`, `/auth/profile/avatar`.
 - Debug-ключи и `SYNTH_AUTH_DEBUG` описаны в корневом `AGENTS.md` — не дублировать; сами ключи задаёт `buildAuthConfig` в `src/lib/app-config.ts`.

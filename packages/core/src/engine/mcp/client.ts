@@ -165,7 +165,15 @@ export class McpClient {
       throw new Error(`MCP-сервер "${this._name}": не указан URL`);
     }
 
-    const transport = new StreamableHTTPClientTransport(new URL(url));
+    // AD-090: конфиг допускает `headers` (auth/tenant-заголовки) — прокидываем
+    // их в транспорт. `requestInit` применяется SDK ко всем HTTP-запросам
+    // (initialize/tools/list/tools/call).
+    const headers = this._config.headers;
+    const hasHeaders = !!headers && Object.keys(headers).length > 0;
+    const transport = new StreamableHTTPClientTransport(
+      new URL(url),
+      hasHeaders ? { requestInit: { headers: { ...headers } } } : undefined,
+    );
 
     const client = new Client(
       { name: 'synth-core', version: SYNTH_VERSION },

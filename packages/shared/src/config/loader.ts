@@ -4,7 +4,7 @@ import { load as parseYaml } from 'js-yaml';
 import { synthConfigSchema, type SynthConfig } from './types.js';
 import { defaultConfig } from './defaults.js';
 import { deepMerge } from './merge.js';
-import { applyEnvOverrides } from './env-overrides.js';
+import { applyEnvOverrides, applyObjectEnvOverrides } from './env-overrides.js';
 
 export interface LoadConfigOptions {
   configPath?: string;
@@ -77,6 +77,9 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Synth
   // местом — поверх defaults + config.yaml и ниже CLI-overrides
   // (приоритет: CLI > env > config.yaml > defaults).
   const withEnv = applyEnvOverrides(merged, options.env ?? process.env);
+  // AD-052/O1: объектный env-оверрайд installer service-key'ев
+  // (`SYNTH_BOOTSTRAP_SERVICE_KEYS`, JSON) — там же, до CLI-overrides.
+  applyObjectEnvOverrides(withEnv, options.env ?? process.env);
   const finalConfig = options.overrides
     ? deepMerge(withEnv, options.overrides as unknown as Record<string, unknown>)
     : withEnv;

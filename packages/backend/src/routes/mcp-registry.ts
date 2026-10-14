@@ -6,6 +6,7 @@ import { evaluateMcpNetworkAccess } from '@itphx/synth-core';
 import type { McpServerConfig, McpNetworkPolicy, User } from '@itphx/synth-shared';
 import { sessionMcpScopeSchema } from '@itphx/synth-shared';
 import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
+import { requireAdminOrScope, requireScopeForServiceKey } from '../auth/guards.js';
 
 // Backend-only MCP-роуты (AD-071 §2.5): legacy `/servers*`, `/session/:id` и
 // единый реестр `/registry*`. Probe (`POST /probe`) — общая логика core,
@@ -142,8 +143,8 @@ export function createMcpRegistryRoutes(
     return c.json({ name: entry.name, config: entry.config, connected: isConnected(entry.name) });
   });
 
-  // --- Обновить сервер (ADMIN) ---
-  app.put('/servers/:name', kit.requireAdmin, async (c) => {
+  // --- Обновить сервер (ADMIN или scope `addons:install`) ---
+  app.put('/servers/:name', requireAdminOrScope('addons:install'), async (c) => {
     const name = c.req.param('name');
     const entry = await registry.getByName(name);
     if (!entry) {
@@ -167,8 +168,8 @@ export function createMcpRegistryRoutes(
     return c.json({ name, config: parsed.data, connected: isConnected(name) });
   });
 
-  // --- Удалить сервер (ADMIN) ---
-  app.delete('/servers/:name', kit.requireAdmin, async (c) => {
+  // --- Удалить сервер (ADMIN или scope `addons:install`) ---
+  app.delete('/servers/:name', requireAdminOrScope('addons:install'), async (c) => {
     const name = c.req.param('name');
     const entry = await registry.getByName(name);
     if (!entry) {
@@ -184,8 +185,8 @@ export function createMcpRegistryRoutes(
     return c.json({ success: true });
   });
 
-  // --- Проверить подключение (ADMIN) ---
-  app.post('/servers/:name/test', kit.requireAdmin, async (c) => {
+  // --- Проверить подключение (ADMIN или scope `addons:install`) ---
+  app.post('/servers/:name/test', requireAdminOrScope('addons:install'), async (c) => {
     const name = c.req.param('name');
 
     // Принимаем опциональный конфиг в теле — для теста до сохранения.
@@ -323,7 +324,9 @@ export function createMcpRegistryRoutes(
   });
 
   // Добавить запись (auth): HTTP — любой пользователь, stdio — только ADMIN.
-  app.post('/registry', kit.requireAuth, async (c) => {
+  // AD-052/O1: service-key должен нести scope `addons:install` (интерактив без
+  // изменений — HTTP добавляет любой, stdio-проверка ниже).
+  app.post('/registry', kit.requireAuth, requireScopeForServiceKey('addons:install'), async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = registryAddSchema.safeParse(body);
     if (!parsed.success) {

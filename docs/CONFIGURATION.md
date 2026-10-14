@@ -101,6 +101,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_CONFIDENCE_THRESHOLD` | number | `decision.confidenceThreshold` |
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
+| `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, AD-052/O1; см. ниже) |
 
 Пример:
 
@@ -269,6 +270,7 @@ security:
   protectedPaths:
     enabled: true
   secretKey: ""                   # AD-076: мастер-ключ секретов at-rest (пусто → файл dataDir/secrets/master.key)
+  bootstrapServiceKeys: []        # AD-052/O1: installer service-key'и (label/secret/scopes/roles?) — см. ниже; обычно через env SYNTH_BOOTSTRAP_SERVICE_KEYS
 
 remote:                           # гибридный режим: локальный core + удалённый backend
   enabled: false
@@ -300,6 +302,48 @@ remote:                           # гибридный режим: локаль�
 - **Форматы** ключа: base64 (ровно 32 байта) либо 64 hex-символа; иначе — ошибка `encryption_unavailable` (без молчаливого обрезания).
 - **Fallback-файл**: если ключ не задан ни env, ни конфигом, core создаёт `{dataDir}/secrets/master.key` при первом запуске (`randomBytes(32)`, каталог `0700`, файл `0600`, атомарная запись). Секреты шифруются at-rest.
 - **Ротация**: `synth secrets rotate` (`--data-dir`, `--config`, `--old-key`/`--old-key-file`, `--new-key`/`--new-key-file`, `--dry-run`, `--yes`) перешифровывает существующие SSH-ключи старым→новым ключом (preflight: нерасшифровываемое поле → abort, ничего не пишется), обновляет `master.key` и сбрасывает кэш; `--dry-run` показывает сводку без записи. Без `--yes` (и без `--dry-run`) — отказ. Если эффективный ключ задан через env/`config.security.secretKey`, файл перезаписывается, но при старте игнорируется — обновите ключ в env/config. Перед ротацией рекомендуются бэкап `$SYNTH_DATA_DIR` и остановка сервера.
+
+### Installer service-key (`security.bootstrapServiceKeys`, AD-052/O1)
+
+Секция задаёт **installer service-key'и**, которые провижинятся идемпотентно при
+старте (core standalone и backend) — для машинной установки аддонов (MCP-серверы,
+скиллы) и консент-чтения пользователей без ручного создания ключа через API.
+
+Формат элемента:
+
+| Поле | Обязательно | Назначение |
+|------|-------------|------------|
+| `label` | да | Уникальная метка ключа (`create`/`ensure` идемпотентность по ней, регистронезависимо) |
+| `secret` | да | Plaintext-секрет (`synth_svc_…`; если префикс отсутствует — дописывается). At-rest хранится только sha256-хеш |
+| `scopes` | да | Список известных scope (напр. `addons:install`, `users:read`) |
+| `roles` | нет | Роли синтетического пользователя (не заданы — `USER`) |
+| `description` | нет | Описание ключа |
+
+Поведение: если ключа с такой `label` нет — создаётся с заданным секретом; если
+есть — синхронизируются `scopes`/`roles` (**секрет не меняется**). Статус
+(`created`/`updated`/`unchanged`) пишется в лог. Ошибка конфигурации одного ключа
+**не роняет старт** (best-effort, лог без секретов).
+
+**Приоритет**: env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (JSON-массив, обычно из
+k8s Secret) > `config.security.bootstrapServiceKeys` в `config.yaml`. Рекомендуется
+держать секрет в env/Secret, а не в файле конфигурации.
+
+Пример (installer-ключ для установки аддонов):
+
+```yaml
+security:
+  bootstrapServiceKeys:
+    - label: addon-installer
+      secret: "synth_svc_…"          # лучше передавать через env, не в git
+      scopes: [addons:install]
+      roles: [USER]
+      description: "Установка аддонов (MCP/скиллы)"
+```
+
+```bash
+# k8s: значение из Secret → env пода (приоритетнее config.yaml)
+SYNTH_BOOTSTRAP_SERVICE_KEYS='[{"label":"addon-installer","secret":"synth_svc_…","scopes":["addons:install"]}]'
+```
 
 ### Политики инструментов (`tools.policy` / `mcp.policy`)
 

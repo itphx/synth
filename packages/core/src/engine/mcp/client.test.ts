@@ -24,8 +24,13 @@ vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
   StdioClientTransport: class {},
 }));
 
+const mockStreamableCtor = vi.fn();
 vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
-  StreamableHTTPClientTransport: class {},
+  StreamableHTTPClientTransport: class {
+    constructor(...args: unknown[]) {
+      mockStreamableCtor(...args);
+    }
+  },
 }));
 
 function makeStdioConfig(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
@@ -202,6 +207,27 @@ describe('McpClient (sse)', () => {
     await client.disconnect();
     expect(client.isConnected).toBe(false);
     expect(client.tools).toEqual([]);
+  });
+
+  it('AD-090: headers конфига прокидываются в транспорт (requestInit.headers)', async () => {
+    const headers = { Authorization: 'Bearer tok', 'X-Tenant': 'tg-dev' };
+    const withHeaders = new McpClient('hdr', makeSseConfig({ headers }));
+    await withHeaders.connect();
+    await withHeaders.disconnect();
+
+    expect(mockStreamableCtor).toHaveBeenCalledTimes(1);
+    const [url, options] = mockStreamableCtor.mock.calls[0]!;
+    expect(url).toBeInstanceOf(URL);
+    expect(options).toEqual({ requestInit: { headers } });
+  });
+
+  it('без headers опции транспорта не передаются', async () => {
+    const noHeaders = new McpClient('nohdr', makeSseConfig());
+    await noHeaders.connect();
+    await noHeaders.disconnect();
+
+    expect(mockStreamableCtor).toHaveBeenCalledTimes(1);
+    expect(mockStreamableCtor.mock.calls[0]![1]).toBeUndefined();
   });
 });
 
