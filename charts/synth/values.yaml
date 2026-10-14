@@ -82,6 +82,14 @@ backend:
   # Если задан caCert, чарт сам добавляет NODE_EXTRA_CA_CERTS — вручную дублировать не нужно.
   extraEnv: {}
 
+  # Декларативный config.yaml backend (AD-023). Непустой объект →
+  # ConfigMap <release>-config, монтируется в backend как /etc/synth/config.yaml
+  # (штатный путь поиска config backend, SYSTEM_CONFIG_PATH).
+  # Приоритет: CLI-флаги > SYNTH_* env > config.yaml > defaults; runtime-настройки
+  # из UI/API (settings.json) применяются поверх файла.
+  # Пример: { events: { autoBind: true } }.
+  config: {}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # UI — @itphx/synth-ui (React SPA) под nginx, проксирует /api /ws /auth /admin на backend.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,3 +171,11 @@ secrets:
 #   - автоматически добавляется env NODE_EXTRA_CA_CERTS.
 # Пример заполнения — values.example.yaml.
 caCert: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Произвольные дополнительные манифесты (опционально).
+# Список Kubernetes-манифестов, рендерятся как есть (любой kind: ConfigMap,
+# Secret, CR кластера). Namespace указывать не обязательно — подставится
+# namespace релиза.
+# Пример: [{ apiVersion: v1, kind: ConfigMap, metadata: { name: extra }, data: {} }]
+extraObjects: []

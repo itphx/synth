@@ -1,0 +1,13 @@
+{{- /* Декларативный config.yaml backend (AD-023). Рендерится только при непустом backend.config. */ -}}
+{{- if .Values.backend.config }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "synth.name" . }}-config
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+data:
+  config.yaml: |
+    {{- toYaml .Values.backend.config | nindent 4 }}
+{{- end }}

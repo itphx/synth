@@ -70,6 +70,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/synth/data
+            {{- if .Values.backend.config }}
+            - name: config
+              mountPath: /etc/synth
+              readOnly: true
+            {{- end }}
             {{- if .Values.caCert }}
             - name: itphx-ca
               mountPath: /etc/ssl/certs/itphx-ca.crt
@@ -108,6 +113,11 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "synth.backend.fullname" . }}-data
           {{- end }}
+        {{- if .Values.backend.config }}
+        - name: config
+          configMap:
+            name: {{ include "synth.name" . }}-config
+        {{- end }}
         {{- if .Values.caCert }}
         - name: itphx-ca
           configMap:

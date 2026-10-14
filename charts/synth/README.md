@@ -62,6 +62,7 @@ helm template synth charts/synth -f charts/synth/values.example.yaml
 | `backend.providers` | `[]` | Список LLM-провайдеров (`name/type/url/model/apiKey`) |
 | `backend.persistence.*` | `enabled: true`, `10Gi` | PVC для JSON-данных |
 | `backend.extraEnv` | `{}` | Доп. env для backend |
+| `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`) |
 | `ui.image.repository` | `gitverse.ru/itphx/synth-ui` | Образ UI |
 | `ui.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `ui.imagePullSecrets` | `[]` | Секреты для приватного реестра |
@@ -75,6 +76,7 @@ helm template synth charts/synth -f charts/synth/values.example.yaml
 | `ingress.tls` | `[]` | TLS-секция Ingress |
 | `secrets.existingSecret` | `synth-secrets` | Имя Secret с секретами |
 | `caCert` | `""` | PEM внутреннего CA (опционально) |
+| `extraObjects` | `[]` | Произвольные дополнительные манифесты (рендерятся как есть) |
 
 ## Secret с секретами
 
@@ -138,6 +140,48 @@ backend:
 
 ```bash
 helm install synth ./charts/synth --set-file caCert=./my-ca.crt -f my-values.yaml
+```
+
+## Декларативный config.yaml
+
+Непустой `backend.config` рендерит ConfigMap `<release>-config` и монтирует его в
+backend как `/etc/synth/config.yaml` — это штатный путь поиска конфига backend
+(`SYSTEM_CONFIG_PATH`). При пустом `backend.config` (по умолчанию) ConfigMap и
+volume не создаются.
+
+Приоритет источников конфига: CLI-флаги > `SYNTH_*` env > `config.yaml` >
+defaults. Runtime-настройки, изменённые через UI/API (`settings.json`),
+применяются поверх файла — файл задаёт базовые значения, а не жёстко
+фиксирует их. Это отдельный объект от `backend.extraEnv`/ConfigMap
+`<release>-env` и не конфликтует с ними.
+
+Когда использовать: декларативно поставлять базовый конфиг инстанса, например
+включить авто-привязку внешних событий или шедулер.
+
+```yaml
+backend:
+  config:
+    events:
+      autoBind: true
+    scheduler:
+      enabled: true
+```
+
+## Дополнительные манифесты
+
+`extraObjects` — список произвольных Kubernetes-манифестов, которые чарт
+рендерит как есть (любой `kind`: ConfigMap, Secret, CR кластера и т.п.).
+Namespace указывать не обязательно — подставится namespace релиза. При пустом
+списке (по умолчанию) ничего не рендерится.
+
+```yaml
+extraObjects:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: synth-extra
+    data:
+      key: value
 ```
 
 ## Ingress, TLS и HTTP→HTTPS

@@ -59,6 +59,17 @@ backend:
   # extraEnv:
   #   SYNTH_LOG_LEVEL: debug
 
+  # ── Декларативный config.yaml (опционально) ────────────────────────────────
+  # Непустой объект → ConfigMap <release>-config, монтируется в backend как
+  # /etc/synth/config.yaml. Это низкоприоритетный источник: его перекрывают
+  # CLI-флаги и SYNTH_* env, а runtime-настройки из UI/API применяются поверх.
+  # Пример — авто-привязка внешних событий и включённый шедулер:
+  # config:
+  #   events:
+  #     autoBind: true
+  #   scheduler:
+  #     enabled: true
+
 # ── UI ───────────────────────────────────────────────────────────────────────
 ui:
   image:
@@ -138,3 +149,15 @@ ingress:
 #   <PEM вашего CA>
 #   -----END CERTIFICATE-----
 caCert: ""
+
+# ── Произвольные дополнительные манифесты (опционально) ──────────────────────
+# Список Kubernetes-манифестов: рендерятся как есть (любой kind). Namespace
+# указывать не обязательно — подставится namespace релиза.
+# Пример:
+# extraObjects:
+#   - apiVersion: v1
+#     kind: ConfigMap
+#     metadata:
+#       name: synth-extra
+#     data:
+#       key: value
