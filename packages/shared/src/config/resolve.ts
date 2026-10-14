@@ -274,6 +274,10 @@ export function resolveIgnoreRules(explicit?: boolean, env?: NodeJS.ProcessEnv):
 /**
  * AD-084: имя decision-провайдера. Приоритет: env `SYNTH_DECISION_PROVIDER` >
  * `config.decision.provider`.
+ *
+ * Примечание: тот же env применяется и общим реестром `ENV_OVERRIDES` в
+ * `loadConfig` (AD-023, ключ `decision.provider`); резолвер сохранён для
+ * потребителей, читающих конфиг не через `loadConfig`.
  */
 export function resolveDecisionProvider(
   config: SynthConfig,
@@ -285,6 +289,9 @@ export function resolveDecisionProvider(
 /**
  * AD-084: модель decision-слоя. Приоритет: env `SYNTH_DECISION_MODEL` >
  * `config.decision.model`.
+ *
+ * См. примечание к `resolveDecisionProvider` — env дублируется реестром
+ * `ENV_OVERRIDES` (AD-023).
  */
 export function resolveDecisionModel(
   config: SynthConfig,

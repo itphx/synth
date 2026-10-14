@@ -11,7 +11,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 ```
 
 - **CLI-флаги** передаются в `loadConfig({ overrides })` — самый высокий приоритет (например `--port`, `--api-key`, `--data-dir` у `synth serve`).
-- **Env vars** читаются поверх конфига в точках использования (см. таблицу ниже).
+- **Env vars**: скалярные ключи вложенных секций применяются в `loadConfig` поверх `config.yaml` (единый реестр `ENV_OVERRIDES`, см. «Env-оверрайды вложенных секций»); точечные переменные (пути, порты, ключи) читаются резолверами в точках использования (см. таблицу ниже).
 - **AD-079 (home)**: `--home <dir>` (`SYNTH_HOME`) — базовый каталог локального инстанса. Пути: config `<home>/config.yaml`, dataDir `<home>/data`, profiles `<home>/profiles.json`, credentials `<home>/credentials.json`. Приоритет путей: явные флаги (`--data-dir`/`--config`/`--profiles`/`--credentials`) > `--home` > `SYNTH_HOME` > XDG-дефолты. Без home поведение не меняется.
 - **config.yaml** — файл, найденный каскадным поиском; сливается с дефолтами (`deepMerge`).
 - **Defaults** — схема `synthConfigSchema` в `packages/shared/src/config/types.ts`.
@@ -57,6 +57,65 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_PROVIDER_<NAME>_MODEL` | Модель по умолчанию |
 | `SYNTH_PROVIDER_<NAME>_TYPE` | Тип: `openai`, `anthropic`, `ollama`, `decision`, `systemone` |
 
+### Env-оверрайды вложенных секций (AD-023)
+
+Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision` можно задавать
+переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
+собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
+SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
+`SYNTH_EVENTS_EPHEMERAL_TTL`, `keyRateLimitPerMinute` →
+`SYNTH_EVENTS_KEY_RATE_LIMIT_PER_MINUTE`.
+
+Применяются в одном месте — `loadConfig` (`packages/shared/src/config/env-overrides.ts`),
+поверх `defaults` + `config.yaml` и **ниже** CLI-overrides: `CLI > env > config.yaml > defaults`.
+
+- **boolean** — `true`/`1`/`false`/`0` (регистронезависимо);
+- **number** — `Number()` с проверкой конечности;
+- **string** — как есть (для строк из перечислений значение проверяет схема);
+- пустая переменная → «не задано» (значение из `config.yaml`/defaults);
+- нераспознанное значение → предупреждение в лог и игнор (без падения);
+- неизвестные `SYNTH_*` игнорируются молча.
+
+| Переменная | Тип | Ключ |
+|-----------|-----|------|
+| `SYNTH_EVENTS_ENABLED` | boolean | `events.enabled` |
+| `SYNTH_EVENTS_DEFAULT_MODE` | string (`bound`/`ephemeral`) | `events.defaultMode` |
+| `SYNTH_EVENTS_EPHEMERAL_TTL` | string | `events.ephemeralTtl` |
+| `SYNTH_EVENTS_JOURNAL_RETENTION_DAYS` | number | `events.journalRetentionDays` |
+| `SYNTH_EVENTS_KEY_RATE_LIMIT_PER_MINUTE` | number | `events.keyRateLimitPerMinute` |
+| `SYNTH_EVENTS_DECISION_ROUTING` | boolean | `events.decisionRouting` |
+| `SYNTH_EVENTS_AUTO_BIND` | boolean | `events.autoBind` |
+| `SYNTH_EVENTS_AUTO_BIND_AGENT_TEMPLATE` | string | `events.autoBindAgentTemplate` |
+| `SYNTH_SCHEDULER_ENABLED` | boolean | `scheduler.enabled` |
+| `SYNTH_SCHEDULER_TICK_SEC` | number | `scheduler.tickSec` |
+| `SYNTH_SCHEDULER_CATCH_UP` | string (`skip`/`once`) | `scheduler.catchUp` |
+| `SYNTH_SCHEDULER_JOB_RETENTION_DAYS` | number | `scheduler.jobRetentionDays` |
+| `SYNTH_WEBHOOKS_ENABLED` | boolean | `webhooks.enabled` |
+| `SYNTH_WEBHOOKS_MAX_ATTEMPTS` | number | `webhooks.maxAttempts` |
+| `SYNTH_WEBHOOKS_TIMEOUT_MS` | number | `webhooks.timeoutMs` |
+| `SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS` | boolean | `webhooks.allowPrivateTargets` |
+| `SYNTH_WEBHOOKS_DELIVERY_RETENTION_DAYS` | number | `webhooks.deliveryRetentionDays` |
+| `SYNTH_DECISION_ENABLED` | boolean | `decision.enabled` |
+| `SYNTH_DECISION_PROVIDER` | string | `decision.provider` |
+| `SYNTH_DECISION_MODEL` | string | `decision.model` |
+| `SYNTH_DECISION_CONFIDENCE_THRESHOLD` | number | `decision.confidenceThreshold` |
+| `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
+| `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
+
+Пример:
+
+```bash
+SYNTH_WEBHOOKS_ENABLED=true \
+SYNTH_EVENTS_AUTO_BIND=true \
+SYNTH_EVENTS_EPHEMERAL_TTL=15m \
+SYNTH_SCHEDULER_TICK_SEC=30 \
+synth serve
+```
+
+Ключи-объекты и массивы (`events.allowedSources`, `events.identityMap`,
+`events.dedupStore`, `scheduler.leaderElection`, `mcp.servers`, …) env-оверрайдов не
+имеют — задаются в `config.yaml` (или через runtime-API, где он есть).
+
 ## config.yaml
 
 Каскадный поиск (от высшего приоритета к низшему):
@@ -68,7 +127,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 5. `~/.config/synth/config.yaml` (пользовательский)
 6. `/etc/synth/config.yaml` (системный)
 
-Найденный файл сливается с дефолтами (`deepMerge`), затем применяются CLI-overrides. Реализация: `loadConfig` в `packages/shared/src/config/loader.ts`, `findConfigPath` в `resolve.ts`.
+Найденный файл сливается с дефолтами (`deepMerge`), затем применяются env-оверрайды (AD-023) и CLI-overrides. Реализация: `loadConfig` в `packages/shared/src/config/loader.ts`, `findConfigPath` в `resolve.ts`.
 
 ### Пример (реальная схема)
 

@@ -3,6 +3,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from './loader.js';
+import { defaultConfig } from './defaults.js';
 
 /**
  * AD-023/AD-071: `SYNTH_CONFIG` задаёт явный путь к config.yaml. dev.sh
@@ -53,5 +54,116 @@ describe('loadConfig — SYNTH_CONFIG', () => {
     const cfg = await loadConfig({ configPath: explicitPath });
     expect(cfg.mcp.servers.fromExplicit).toBeDefined();
     expect(cfg.mcp.servers.fromEnv).toBeUndefined();
+  });
+});
+
+/**
+ * AD-023: env-оверрайды скалярных ключей вложенных секций применяются в
+ * `loadConfig` одним местом — поверх config.yaml и ниже CLI-overrides.
+ */
+describe('loadConfig — env-оверрайды вложенных секций (AD-023)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  async function writeConfig(yaml: string): Promise<string> {
+    dir = await mkdtemp(join(tmpdir(), 'synth-config-env-'));
+    const path = join(dir, 'config.yaml');
+    await writeFile(path, yaml, 'utf-8');
+    return path;
+  }
+
+  const YAML = [
+    'events:',
+    '  autoBind: false',
+    '  ephemeralTtl: "24h"',
+    'webhooks:',
+    '  timeoutMs: 5000',
+    'scheduler:',
+    '  tickSec: 90',
+    'decision:',
+    '  provider: "from-file"',
+    '',
+  ].join('\n');
+
+  it('env приоритетнее config.yaml; непереопределённые ключи — из файла', async () => {
+    const path = await writeConfig(YAML);
+    const cfg = await loadConfig({ configPath: path, env: { SYNTH_EVENTS_AUTO_BIND: 'true' } });
+
+    expect(cfg.events.autoBind).toBe(true);
+    expect(cfg.events.ephemeralTtl).toBe('24h');
+    expect(cfg.webhooks.timeoutMs).toBe(5000);
+    expect(cfg.scheduler.tickSec).toBe(90);
+    expect(cfg.decision.provider).toBe('from-file');
+  });
+
+  it('без env значение берётся из config.yaml, отсутствующее — из defaults', async () => {
+    const path = await writeConfig(YAML);
+    const cfg = await loadConfig({ configPath: path, env: {} });
+
+    expect(cfg.events.autoBind).toBe(false);
+    expect(cfg.scheduler.tickSec).toBe(90);
+    // нет ни в файле, ни в env → default
+    expect(cfg.webhooks.maxAttempts).toBe(5);
+    expect(cfg.events.keyRateLimitPerMinute).toBe(0);
+  });
+
+  it('невалидное env-значение → warn + значение из файла', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const path = await writeConfig(YAML);
+    const cfg = await loadConfig({
+      configPath: path,
+      env: { SYNTH_EVENTS_AUTO_BIND: 'maybe', SYNTH_WEBHOOKS_TIMEOUT_MS: 'soon' },
+    });
+
+    expect(cfg.events.autoBind).toBe(false);
+    expect(cfg.webhooks.timeoutMs).toBe(5000);
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('все типы: boolean / number / string', async () => {
+    const path = await writeConfig(YAML);
+    const cfg = await loadConfig({
+      configPath: path,
+      env: {
+        SYNTH_EVENTS_DECISION_ROUTING: '1',
+        SYNTH_EVENTS_JOURNAL_RETENTION_DAYS: '3',
+        SYNTH_EVENTS_DEFAULT_MODE: 'ephemeral',
+        SYNTH_SCHEDULER_ENABLED: 'FALSE',
+        SYNTH_DECISION_ESCALATION_PROVIDER: 'systemone',
+      },
+    });
+
+    expect(cfg.events.decisionRouting).toBe(true);
+    expect(cfg.events.journalRetentionDays).toBe(3);
+    expect(cfg.events.defaultMode).toBe('ephemeral');
+    expect(cfg.scheduler.enabled).toBe(false);
+    expect(cfg.decision.escalationProvider).toBe('systemone');
+  });
+
+  it('CLI-overrides приоритетнее env', async () => {
+    const path = await writeConfig(YAML);
+    const cfg = await loadConfig({
+      configPath: path,
+      env: { SYNTH_EVENTS_AUTO_BIND: 'true' },
+      overrides: { events: { ...defaultConfig.events, autoBind: false } },
+    });
+
+    expect(cfg.events.autoBind).toBe(false);
+  });
+
+  it('читает process.env, если env не передан (реальный вызов loadConfig)', async () => {
+    const path = await writeConfig(YAML);
+    vi.stubEnv('SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS', 'true');
+
+    const cfg = await loadConfig({ configPath: path });
+    expect(cfg.webhooks.allowPrivateTargets).toBe(true);
   });
 });

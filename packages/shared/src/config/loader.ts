@@ -4,12 +4,15 @@ import { load as parseYaml } from 'js-yaml';
 import { synthConfigSchema, type SynthConfig } from './types.js';
 import { defaultConfig } from './defaults.js';
 import { deepMerge } from './merge.js';
+import { applyEnvOverrides } from './env-overrides.js';
 
 export interface LoadConfigOptions {
   configPath?: string;
   /** AD-079: home-каталог — конфиг резолвится как `<home>/config.yaml`, если path не задан. */
   home?: string;
   overrides?: Partial<SynthConfig>;
+  /** AD-023: источник env для оверрайдов; по умолчанию `process.env` (в тестах — свой env). */
+  env?: NodeJS.ProcessEnv;
 }
 
 const CONFIG_SEARCH_PATHS = [
@@ -70,9 +73,13 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Synth
   }
 
   const merged = deepMerge(defaultConfig as unknown as Record<string, unknown>, fileConfig);
+  // AD-023: env-оверрайды скалярных ключей вложенных секций применяются одним
+  // местом — поверх defaults + config.yaml и ниже CLI-overrides
+  // (приоритет: CLI > env > config.yaml > defaults).
+  const withEnv = applyEnvOverrides(merged, options.env ?? process.env);
   const finalConfig = options.overrides
-    ? deepMerge(merged, options.overrides as unknown as Record<string, unknown>)
-    : merged;
+    ? deepMerge(withEnv, options.overrides as unknown as Record<string, unknown>)
+    : withEnv;
 
   const parsed = synthConfigSchema.safeParse(finalConfig);
   if (!parsed.success) {
