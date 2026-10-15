@@ -106,6 +106,9 @@ export function mountStandaloneRoutes(
     },
     {
       resolveDefaultAgent: getDefaultAgentId,
+      // ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
+      // при чтении — список сессий и доступ по id.
+      localOwnerResolver: deps.localOwnerResolver,
       // ADR-089: подписка WS-клиентов владельца на созданную/форкнутую сессию
       // (паритет с managed `EventHub.subscribeToSession`). Покрывает fork/import
       // (materialization мимо funnel'а) и fallback-создание без funnel'а.
@@ -176,6 +179,8 @@ export function mountStandaloneRoutes(
     {
       getOutsideRootPolicy: () => effectiveWorkspaceOutsideRootPolicy,
       getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
+      // Лимит загрузки: config/env (resolveMaxUploadBytes), иначе дефолт фабрики.
+      maxUploadBytes: config.maxUploadBytes,
       getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
         workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
         getProject: (id) => projectStore.load(id),
@@ -200,13 +205,19 @@ export function mountStandaloneRoutes(
   app.route('/api/v2/agents/:agentId/ssh-keys', createAgentSshKeyRoutes(auth, sshKeyStore));
 
   // Queue
-  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, () => getClient()));
+  app.route('/api/v2/queue', createQueueRoutes(
+    auth, sessionManager, queueManager, eventBus, processMessage, () => getClient(),
+    { localOwnerResolver: deps.localOwnerResolver },
+  ));
 
   // Updates
   app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir));
 
   // Messages (batch operations)
-  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, () => getClient()));
+  app.route('/api/v2/messages', createMessageRoutes(
+    auth, sessionManager, () => getClient(),
+    { localOwnerResolver: deps.localOwnerResolver },
+  ));
 
   // Settings (runtime-настройки для UI, раздел «Проекты»)
   app.route('/api/v2/settings', createSettingsRoutes(auth, {
@@ -409,6 +420,8 @@ export function mountStandaloneRoutes(
     sessionManager, skillService, settingsStore, projectStore,
     permissionConfig: config.permissionConfig,
     resolveProjectWorkspace: resolveSkillWorkspace,
+  }, {
+    localOwnerResolver: deps.localOwnerResolver,
   }));
   app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth, {
     sessionManager, skillService, settingsStore, projectStore,
@@ -460,6 +473,7 @@ export function mountStandaloneRoutes(
       sessionManager,
       projectStore,
       resolveProjectWorkspace: resolveSkillWorkspace,
+      localOwnerResolver: deps.localOwnerResolver,
       resolveContextWindow: (session) => {
         const model = session?.settings.model;
         return model ? modelWindowLoader(model) || undefined : undefined;

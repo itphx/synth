@@ -12,6 +12,8 @@ import type { RemoteConnection } from '../../remote/connection.js';
 import type { LocalAuthKit } from '../../auth/local.js';
 import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import { extractChildSessionId, extractCreatedSession } from '../../events/child-session.js';
+import { LOCAL_USER_ID } from '../local-owner.js';
+import type { LocalOwnerResolver } from '../local-owner.js';
 
 export interface EventWebSocketDeps {
   /** HTTP-сервер, на `upgrade` которого вешается обработчик. */
@@ -33,6 +35,13 @@ export interface EventWebSocketDeps {
    * (паритет с managed `EventHub.subscribeToSession` + автоподписка на child).
    */
   subscriptions: EventWebSocketSubscriptions;
+  /**
+   * ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`,
+   * созданный до фикса резолвера внешней идентичности): при снимке подписок
+   * `connect` legacy-сессии попадают в `listSessions` владельца `local`, а
+   * авто-подписки нормализуют владельца из payload. Managed не задаёт.
+   */
+  localOwnerResolver?: LocalOwnerResolver;
 }
 
 /** Активный WS-клиент standalone в реестре подписок (ADR-089). */
@@ -65,6 +74,16 @@ export interface EventWsClient {
  */
 export class EventWebSocketSubscriptions {
   private _clients = new Set<EventWsClient>();
+  /**
+   * ADR-089 (standalone): нормализация id владельца (legacy-UUID профиля `local`
+   * → `local`). По умолчанию — тождество; задаётся `setOwnerNormalizer`.
+   */
+  private _normalizeOwner: (owner: string) => string = (owner) => owner;
+
+  /** Задать нормализацию владельца (standalone: legacy-UUID профиля `local`). */
+  setOwnerNormalizer(fn: (owner: string) => string): void {
+    this._normalizeOwner = fn;
+  }
 
   /** Зарегистрировать подписку клиента пользователя; возвращает снятие регистрации. */
   register(client: EventWsClient): () => void {
@@ -74,8 +93,9 @@ export class EventWebSocketSubscriptions {
 
   /** Подписать всех активных клиентов пользователя на сессию (идемпотентно у клиента). */
   subscribeToSession(userId: string, sessionId: string): void {
+    const owner = this._normalizeOwner(userId);
     for (const client of this._clients) {
-      if (client.userId === userId) client.subscribe(sessionId);
+      if (client.userId === owner) client.subscribe(sessionId);
     }
   }
 
@@ -92,8 +112,9 @@ export class EventWebSocketSubscriptions {
    * с владельцем из payload (`owner_id`/`user_id`).
    */
   subscribeToNewSession(userId: string, sessionId: string, event: BusEvent): void {
+    const owner = this._normalizeOwner(userId);
     for (const client of this._clients) {
-      if (client.userId !== userId) continue;
+      if (client.userId !== owner) continue;
       if (client.subscribe(sessionId)) client.send(event);
     }
   }
@@ -109,7 +130,16 @@ export class EventWebSocketSubscriptions {
  * Возвращает `WebSocketServer` (поле `wss` хэндла приложения).
  */
 export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer {
-  const { server, auth, connection, eventBus, sessionManager, queueManager, processMessage, orchestrator, subscriptions } = deps;
+  const { server, auth, connection, eventBus, sessionManager, queueManager, processMessage, orchestrator, subscriptions, localOwnerResolver } = deps;
+  // ADR-089 (standalone): нормализация владельца для авто-подписок (legacy-UUID
+  // профиля `local` → `local`). Использует уже разрешённый набор id (sync-кэш,
+  // наполняется снимком `connect`/`onSessionMaterialized`); до первого разрешения
+  // — тождество (fail-safe, видимость не расширяется).
+  if (localOwnerResolver) {
+    subscriptions.setOwnerNormalizer((owner) =>
+      localOwnerResolver.isLocalOwnerCached(owner) ? LOCAL_USER_ID : owner,
+    );
+  }
   // WebSocket /ws/events
   const wss = new WebSocketServer({ noServer: true });
 
@@ -197,7 +227,12 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
           // подписываемся на все события (без дублей для локальных).
           unsubs.push(eventBus.subscribeAll(handler));
         } else {
-          const allSessions = await sessionManager.listSessions({ userId: 'local' });
+          // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) входит в
+          // снимок подписок — иначе такие сессии остаются без подписчиков.
+          const ownerIds = localOwnerResolver
+            ? [...(await localOwnerResolver.resolveLocalOwnerIds())]
+            : undefined;
+          const allSessions = await sessionManager.listSessions({ userId: 'local', ownerIds });
           for (const s of allSessions) {
             subscribe(s.id);
           }

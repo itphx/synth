@@ -4,6 +4,7 @@ import type { Project, Session } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { InstructionsInfo, InstructionsInfoResolver } from '../../engine/context/instructions.js';
+import type { LocalOwnerResolver } from '../local-owner.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -48,6 +49,11 @@ export interface ContextRoutesOptions {
   canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
   /** Доступ к проекту (owner/LEAD/ADMIN). Standalone — разрешено. */
   canAccessProject?: (project: Project, c: Context, userId: string) => boolean | Promise<boolean>;
+  /**
+   * ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
+   * при доступе к сессии. Managed не задаёт (id реальные).
+   */
+  localOwnerResolver?: LocalOwnerResolver;
   /** Локализованные сообщения (backend — `t()`). */
   messages?: (c: Context) => ContextRoutesMessages;
 }
@@ -73,7 +79,9 @@ export function createContextRoutes(auth: AuthKit, opts: ContextRoutesOptions): 
   const canAccess = async (session: Session, c: Context, userId: string): Promise<boolean> => {
     if (opts.canAccess) return opts.canAccess(session, c, userId);
     const owner = session.ownerId ?? session.userId;
-    return !owner || owner === LOCAL_USER_ID;
+    if (!owner || owner === LOCAL_USER_ID) return true;
+    // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) — доступен.
+    return opts.localOwnerResolver ? opts.localOwnerResolver.isLocalOwner(owner) : false;
   };
 
   // Standalone — однопользовательский режим; backend переопределяет

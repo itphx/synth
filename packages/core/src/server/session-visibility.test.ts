@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { isSessionVisible } from './session-visibility.js';
 import type { SessionOwnerCtx } from './session-visibility.js';
+import { createLocalOwnerResolver } from './local-owner.js';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 import { ProjectRole } from '@itphx/synth-shared';
 import type { Project, ProjectPlan, Session } from '@itphx/synth-shared';
@@ -104,6 +105,27 @@ describe('isSessionVisible (ADR-089)', () => {
   it('проект не найден → не видно (не роняем список)', async () => {
     const store = storeOf({});
     expect(await isSessionVisible(session({ ownerId: 'u9', projectId: 'missing' }), store, ctx())).toBe(false);
+  });
+
+  it('legacy-владелец (UUID профиля `local`) виден локальному при заданном резолвере (standalone)', async () => {
+    const localOwnerResolver = createLocalOwnerResolver({
+      resolveLocalProfileId: async () => 'profile-uuid',
+    });
+    expect(
+      await isSessionVisible(
+        session({ ownerId: 'profile-uuid' }),
+        undefined,
+        ctx({ localOwnerResolver }),
+      ),
+    ).toBe(true);
+    // Чужой UUID (не профиль `local`) — не виден (нормализация не расширяет доступ).
+    expect(
+      await isSessionVisible(
+        session({ ownerId: 'foreign-uuid' }),
+        undefined,
+        ctx({ localOwnerResolver }),
+      ),
+    ).toBe(false);
   });
 
   it('projectStore не задан и сессия проектная → не видно', async () => {

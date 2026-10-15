@@ -179,6 +179,13 @@ export type {
 // ADR-089: единый хелпер видимости сессии (списки/доступ по id).
 export { isSessionVisible } from './server/session-visibility.js';
 export type { SessionOwnerCtx } from './server/session-visibility.js';
+// ADR-089 (standalone): единая точка нормализации владельца локального пользователя
+// при чтении (legacy-UUID профиля `local` → `local`; списки/доступ/WS-подписка).
+export {
+  createLocalOwnerResolver,
+  LOCAL_USER_ID,
+} from './server/local-owner.js';
+export type { LocalOwnerResolver, CreateLocalOwnerResolverOptions } from './server/local-owner.js';
 // ADR-075: единая project-aware фабрика FS-роутов (standalone + managed через opts).
 export { createFsRoutes, DEFAULT_MAX_UPLOAD_BYTES } from './server/routes/fs.js';
 export type { FsRoutesOptions, FsRoutesAuth } from './server/routes/fs.js';

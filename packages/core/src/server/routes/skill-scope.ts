@@ -16,6 +16,7 @@ import { resolveSkillAvailability } from '../../engine/skills/scope.js';
 import type { SkillScopeOptions } from '../../engine/skills/types.js';
 import { accessKindOf, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
+import type { LocalOwnerResolver } from '../local-owner.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -60,6 +61,11 @@ export interface SkillScopeRoutesOptions {
   canAccessProject?: (project: Project, c: Context, userId: string) => boolean | Promise<boolean>;
   /** ADR-046 §4.5: live-обновление системного hard-gate скиллов (оркестратор). */
   onSkillsDisabledChange?: (disabled: SkillsDisabledRequest) => void;
+  /**
+   * ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
+   * при доступе к сессии. Managed не задаёт (id реальные).
+   */
+  localOwnerResolver?: LocalOwnerResolver;
 }
 
 interface EffectiveSkill {
@@ -147,6 +153,7 @@ export function createSessionSkillScopeRoutes(
     canAccess: opts?.canAccess,
     resolveCanAccessExtra: opts?.resolveCanAccessExtra,
     localUserId: LOCAL_USER_ID,
+    localOwnerResolver: opts?.localOwnerResolver,
   });
   const canAccess = async (session: Session, c: Context, userId: string): Promise<boolean> => {
     if ((await opts?.resolveElevated?.(c)) ?? false) return true;

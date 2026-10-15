@@ -221,15 +221,17 @@ export class SessionManager {
   }
 
   async listSessions(
-    filter?: { projectId?: string; userId?: string; projectIds?: string[] },
+    filter?: { projectId?: string; userId?: string; projectIds?: string[]; ownerIds?: string[] },
     options?: { includeArchived?: boolean },
   ): Promise<Session[]> {
     // ADR-089: `projectIds` — командная видимость (свои + сессии проектов-участий),
     // `userId` — только свои. Оба заданы — `projectIds` приоритетнее (он шире).
+    // `ownerIds` — доп. id владельца (standalone: legacy-UUID профиля `local`,
+    // нормализованный при чтении, ADR-089).
     const sessions = filter?.projectIds
-      ? await this.store.listForUserScope(filter.userId ?? '', filter.projectIds)
+      ? await this.store.listForUserScope(filter.userId ?? '', filter.projectIds, filter.ownerIds)
       : filter?.userId
-        ? await this.store.listForUser(filter.userId)
+        ? await this.store.listForUser(filter.userId, filter.ownerIds)
         : await this.store.list(filter);
     // ADR-089: архивированные сессии скрыты из списков по умолчанию (доступ — getSession по id).
     if (options?.includeArchived) return sessions;

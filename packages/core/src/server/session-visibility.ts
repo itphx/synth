@@ -1,5 +1,6 @@
 import type { Project, Session } from '@itphx/synth-shared';
 import type { ProjectStoreLike } from '../storage/project-store.js';
+import type { LocalOwnerResolver } from './local-owner.js';
 
 /**
  * ADR-089: контекст проверки видимости сессии. `elevated` — сквозной обзор
@@ -10,6 +11,12 @@ export interface SessionOwnerCtx {
   userId: string;
   /** Сквозной обзор (ADMIN/LEAD) — видно всё. */
   elevated: boolean;
+  /**
+   * ADR-089 (standalone): нормализация legacy-владельца локального профиля к
+   * `local` (UUID профиля до фикса резолвера внешней идентичности). Managed не
+   * задаёт — id пользователей реальные, поведение не меняется.
+   */
+  localOwnerResolver?: LocalOwnerResolver;
 }
 
 /**
@@ -34,6 +41,8 @@ async function loadProject(
  * Правила (в порядке проверки):
  * 1. `elevated` (ADMIN/LEAD) — видно всё;
  * 2. владелец (`ownerId ?? userId === ctx.userId`) — видно;
+ * 2a. `ctx.localOwnerResolver` (standalone) подтверждает, что владелец — локальный
+ *     профиль под legacy-UUID (`ProfileData.id`) — видно (нормализация при чтении);
  * 3. нет владельца — видно (паритет с `canAccessSession`, чтобы legacy-сессии
  *    без владельца не пропадали);
  * 4. иначе — если у сессии есть `projectId` и проект (`projectStore.load`)
@@ -52,6 +61,9 @@ export async function isSessionVisible(
   const owner = session.ownerId ?? session.userId;
   if (!owner) return true;
   if (owner === ctx.userId) return true;
+  // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) трактуется как
+  // локальный → видно локальному пользователю. Managed не задаёт резолвер.
+  if (ctx.localOwnerResolver && (await ctx.localOwnerResolver.isLocalOwner(owner))) return true;
 
   if (!session.projectId || !projectStore) return false;
   const project = await loadProject(projectStore, session.projectId, projectCache);

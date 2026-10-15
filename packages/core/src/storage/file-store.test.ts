@@ -166,6 +166,24 @@ describe('FileStore', () => {
     expect(ids).not.toContain('c');
   });
 
+  it('listForUser с ownerIds (ADR-089): legacy-UUID владельца трактуется как свой', async () => {
+    await store.save(makeSession({ id: 'legacy', userId: 'profile-uuid', ownerId: 'profile-uuid' }));
+    await store.save(makeSession({ id: 'foreign', userId: 'other-uuid', ownerId: 'other-uuid' }));
+
+    // Без алиасов — legacy не наш.
+    expect((await store.listForUser('local')).map((s) => s.id)).not.toContain('legacy');
+
+    // С алиасом (UUID профиля `local`) — виден локальному `local`.
+    const ids = (await store.listForUser('local', ['local', 'profile-uuid'])).map((s) => s.id);
+    expect(ids).toContain('legacy');
+    expect(ids).not.toContain('foreign');
+
+    // listForUserScope с projectIds — алиасы тоже учитываются.
+    const scoped = (await store.listForUserScope('local', ['p-x'], ['profile-uuid'])).map((s) => s.id);
+    expect(scoped).toContain('legacy');
+    expect(scoped).not.toContain('foreign');
+  });
+
   it('delete удаляет файл сессии и НЕ оставляет lock', async () => {
     await store.save(makeSession({ id: 'to-delete' }));
     expect(await store.exists('to-delete')).toBe(true);

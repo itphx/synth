@@ -6,6 +6,7 @@
 import { createMiddleware } from 'hono/factory';
 import type { Context } from 'hono';
 import type { Session } from '@itphx/synth-shared';
+import type { LocalOwnerResolver } from './local-owner.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -52,6 +53,12 @@ export interface SessionAccessPredicateOptions {
   resolveCanAccessExtra?: SessionAccessPredicate;
   /** Standalone-идентификатор локального пользователя (`local`). */
   localUserId?: string;
+  /**
+   * ADR-089 (standalone): нормализация legacy-владельца локального профиля
+   * (UUID `ProfileData.id` до фикса резолвера внешней идентичности) к `local`.
+   * Managed не задаёт — id пользователей реальные.
+   */
+  localOwnerResolver?: LocalOwnerResolver;
 }
 
 /**
@@ -69,6 +76,8 @@ export function createSessionAccessPredicate(
     } else {
       const owner = session.ownerId ?? session.userId;
       if (!owner || owner === localUserId) return true;
+      // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) — доступен.
+      if (opts.localOwnerResolver && (await opts.localOwnerResolver.isLocalOwner(owner))) return true;
     }
     if (opts.resolveCanAccessExtra) return opts.resolveCanAccessExtra(session, c, userId, access);
     return false;

@@ -502,23 +502,31 @@ export class FileStore {
     }
   }
 
-  async listForUser(userId: string): Promise<Session[]> {
+  async listForUser(userId: string, ownerIds: string[] = []): Promise<Session[]> {
     const all = await this.list();
-    return all.filter((s) => s.userId === userId || s.ownerId === userId);
+    if (ownerIds.length === 0) return all.filter((s) => s.userId === userId || s.ownerId === userId);
+    // ADR-089 (standalone): `ownerIds` — дополнительные id, трактуемые как владелец
+    // (legacy-UUID профиля `local`, нормализованный при чтении). Без записи данных.
+    const ids = new Set<string>([userId, ...ownerIds]);
+    const match = (id: string | undefined): boolean => id !== undefined && ids.has(id);
+    return all.filter((s) => match(s.userId) || match(s.ownerId));
   }
 
   /**
    * ADR-089: сессии владельца ИЛИ любого из его проектов (командная видимость).
    * `projectIds` — проекты, участником которых является пользователь; пустой
-   * список эквивалентен `listForUser` (только свои сессии).
+   * список эквивалентен `listForUser` (только свои сессии). `ownerIds` —
+   * дополнительные id владельца (legacy-нормализация, см. `listForUser`).
    */
-  async listForUserScope(userId: string, projectIds: string[]): Promise<Session[]> {
-    if (projectIds.length === 0) return this.listForUser(userId);
+  async listForUserScope(userId: string, projectIds: string[], ownerIds: string[] = []): Promise<Session[]> {
+    if (projectIds.length === 0) return this.listForUser(userId, ownerIds);
     const all = await this.list();
+    const ids = new Set<string>([userId, ...ownerIds]);
+    const match = (id: string | undefined): boolean => id !== undefined && ids.has(id);
     return all.filter(
       (s) =>
-        s.userId === userId
-        || s.ownerId === userId
+        match(s.userId)
+        || match(s.ownerId)
         || (s.projectId !== undefined && projectIds.includes(s.projectId)),
     );
   }

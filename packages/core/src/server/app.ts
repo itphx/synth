@@ -31,6 +31,12 @@ export interface StandaloneConfig {
   workspacesRoot?: string;
   /** Рабочий каталог по умолчанию для сессий без проекта. Дефолт: {dataDir}/workspaces/default. */
   defaultWorkingDir?: string;
+  /**
+   * Максимальный размер загружаемого файла (`POST /api/v2/fs/upload`), в байтах.
+   * Предзаполняется `resolveMaxUploadBytes` (env `SYNTH_MAX_UPLOAD_BYTES` >
+   * config.yaml `storage.maxUploadBytes` > 100 МиБ). Не задан — дефолт 100 МиБ.
+   */
+  maxUploadBytes?: number;
   uiDistPath?: string;
   systemPromptsDir?: string;
   /** Глобальная секция permission из config.yaml (ADR-029). */
@@ -279,10 +285,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const deps = await createStandaloneDeps(config, {
     getActiveRemoteProviderNames: () => hybrid.getActiveRemoteProviderNames(),
     isBlockLocalProviders: () => hybrid.isBlockLocalProviders(),
-    onSessionMaterialized: (session) => {
-      const owner = session.ownerId || session.userId;
-      if (!owner) return;
-      wsSubscriptions.subscribeToSession(owner, session.id);
+    onSessionMaterialized: (owner, sessionId) => {
+      wsSubscriptions.subscribeToSession(owner, sessionId);
     },
   });
 
@@ -330,6 +334,9 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     processMessage: deps.processMessage,
     orchestrator: deps.orchestrator,
     subscriptions: wsSubscriptions,
+    // ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
+    // при снимке подписок `connect` — иначе такие сессии не получают подписчиков.
+    localOwnerResolver: deps.localOwnerResolver,
   });
 
   const port = config.port;

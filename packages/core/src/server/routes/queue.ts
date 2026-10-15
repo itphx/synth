@@ -8,6 +8,7 @@ import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregat
 import type { RemoteBackendClient } from '../../remote/client.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
+import type { LocalOwnerResolver } from '../local-owner.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -40,6 +41,11 @@ export interface QueueRoutesOptions {
   ) => boolean | Promise<boolean>;
   /** Сквозной обзор (ADMIN/LEAD) — доступ ко всем сессиям. */
   resolveElevated?: (c: Context) => boolean | Promise<boolean>;
+  /**
+   * ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
+   * при доступе к сессии. Managed не задаёт (id реальные).
+   */
+  localOwnerResolver?: LocalOwnerResolver;
 }
 
 const LOCAL_USER_ID = 'local';
@@ -88,6 +94,7 @@ export function createQueueRoutes(
     canAccess: opts?.canAccess,
     resolveCanAccessExtra: opts?.resolveCanAccessExtra,
     localUserId: LOCAL_USER_ID,
+    localOwnerResolver: opts?.localOwnerResolver,
   });
 
   // Авторизация очереди — инвариант на префиксе `/:sessionId`: guard до маршрутов

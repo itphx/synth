@@ -16,6 +16,7 @@ import { requireScope, checkServiceProjectProjection } from '../service-scope.js
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
+import type { LocalOwnerResolver } from '../local-owner.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -132,6 +133,12 @@ export interface SessionRoutesOptions {
    * service-key/`allowedProjects` → пропускает). Это не RBAC.
    */
   serviceProjectProjection?: ServiceProjectProjectionGuard;
+  /**
+   * ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`,
+   * созданный до фикса резолвера внешней идентичности) при чтении — список
+   * сессий (`GET /`) и доступ по id. Managed не задаёт (id реальные).
+   */
+  localOwnerResolver?: LocalOwnerResolver;
 }
 
 const DEFAULT_MESSAGES: SessionRouteMessages = {
@@ -233,6 +240,7 @@ export function createSessionRoutes(
     canAccess: opts.canAccess,
     resolveCanAccessExtra: opts.resolveCanAccessExtra,
     localUserId: LOCAL_USER_ID,
+    localOwnerResolver: opts.localOwnerResolver,
   });
 
   /**
@@ -276,11 +284,19 @@ export function createSessionRoutes(
     const memberProjectIds = elevated
       ? []
       : (await opts.resolveMemberProjectIds?.(c, userId)) ?? [];
-    const sessions = elevated
-      ? await sessionManager.listSessions({})
-      : memberProjectIds.length > 0
-        ? await sessionManager.listSessions({ userId, projectIds: memberProjectIds })
-        : await sessionManager.listSessions({ userId });
+    let sessions: Session[];
+    if (elevated) {
+      sessions = await sessionManager.listSessions({});
+    } else {
+      // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) трактуется
+      // как локальный — иначе такие сессии выпадают из списка `local`.
+      const ownerIds = opts.localOwnerResolver
+        ? [...(await opts.localOwnerResolver.resolveLocalOwnerIds())]
+        : undefined;
+      sessions = memberProjectIds.length > 0
+        ? await sessionManager.listSessions({ userId, projectIds: memberProjectIds, ownerIds })
+        : await sessionManager.listSessions({ userId, ownerIds });
+    }
 
     if (!hasRemoteGetter) {
       return c.json(filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry })));

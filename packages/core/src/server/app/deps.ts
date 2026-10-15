@@ -40,6 +40,7 @@ import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { SkillBundleStore } from '../../storage/skill-bundle-store.js';
 import { CommandService } from '../../engine/commands/service.js';
+import { createLocalOwnerResolver, LOCAL_USER_ID } from '../local-owner.js';
 import type { StandaloneConfig } from '../app.js';
 
 /**
@@ -61,11 +62,13 @@ export interface StandaloneDepsAccessors extends HybridMirrorAccessors {
   /**
    * ADR-089: колбэк после материализации сессии funnel'ом
    * (`RequestSessionService.onSessionMaterialized`) и **до** доставки события в неё.
-   * Standalone подписывает на сессию уже подключённых клиентов WS-хаба
-   * (`/ws/events`) — паритет с managed `EventHub.subscribeToSession`. Не задан —
-   * поведение прежнее (только снимок сессий при `connect`).
+   * Получает **нормализованного** владельца (legacy-UUID профиля `local` → `local`,
+   * см. `LocalOwnerResolver`) и id сессии; standalone подписывает на сессию уже
+   * подключённых клиентов WS-хаба (`/ws/events`) — паритет с managed
+   * `EventHub.subscribeToSession`. Не задан — поведение прежнее (только снимок
+   * сессий при `connect`).
    */
-  onSessionMaterialized?: (session: Session) => void | Promise<void>;
+  onSessionMaterialized?: (owner: string, sessionId: string) => void | Promise<void>;
 }
 
 export async function createStandaloneDeps(
@@ -199,6 +202,15 @@ export async function createStandaloneDeps(
   });
 
   const profilesStore = new FileProfileStore({ dataDir });
+  // ADR-089 (standalone): единая нормализация legacy-владельца при чтении — id
+  // профиля `local` (UUID, созданный до фикса резолвера внешней идентичности)
+  // трактуется как `local` (списки/доступ по id/WS-подписка). Read-only:
+  // профиль не создаётся (`getProfileByUsername`), файлы сессий не перезаписываются.
+  const localOwnerResolver = createLocalOwnerResolver({
+    localUserId: LOCAL_USER_ID,
+    resolveLocalProfileId: async () =>
+      (await profilesStore.getProfileByUsername('local'))?.id ?? null,
+  });
   const contextBuilder = new ContextBuilder(contextConfig, {
     profilesStore,
     projectDataDir: `${dataDir}/projects`,
@@ -527,8 +539,16 @@ export async function createStandaloneDeps(
     // ADR-089: standalone-паритет с managed — уведомляем WS-хаб (`/ws/events`) о
     // материализованной сессии **до** доставки события, чтобы клиенты владельца,
     // подключённые раньше, получали её события (иначе подписка-снимок при
-    // `connect` новые сессии не покрывала).
-    onSessionMaterialized: accessors.onSessionMaterialized,
+    // `connect` новые сессии не покрывала). Владелец нормализуется (legacy-UUID
+    // профиля `local` → `local`) — тот же резолвер, что у списков/доступа.
+    onSessionMaterialized: accessors.onSessionMaterialized
+      ? async (session: Session) => {
+          const owner = await localOwnerResolver.normalizeOwner(
+            session.ownerId ?? session.userId,
+          );
+          if (owner) await accessors.onSessionMaterialized!(owner, session.id);
+        }
+      : undefined,
     // ADR-089: UI-событие после материализации внешнего события.
     publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
     deliver: async (sessionId, event, mode, context) => {
@@ -622,6 +642,9 @@ export async function createStandaloneDeps(
     webhookService,
     stopWebhookDeliveryPruner,
     profilesStore,
+    // ADR-089 (standalone): резолвер локального владельца — нормализация
+    // legacy-UUID профиля `local` (списки/доступ/WS-подписка).
+    localOwnerResolver,
     providerCache,
     modelCache,
     modelWindowLoader,
