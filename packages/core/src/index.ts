@@ -418,6 +418,15 @@ export {
 export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } from './storage/instance-meta.js';
 export { runMigrateCommand } from './maintenance/migrate.js';
 export type { MigrateCommandOptions } from './maintenance/migrate.js';
+// PROP-091: `synth doctor` — health инстанса, целостность данных, ключи/мастер, провайдеры, dataDir, миграции.
+export { runDoctor, renderDoctorResult, runDoctorCommand } from './maintenance/doctor.js';
+export type {
+  DoctorStatus,
+  DoctorCheck,
+  DoctorResult,
+  DoctorOptions,
+  DoctorCommandOptions,
+} from './maintenance/doctor.js';
 export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
 export { createSkillRoutes } from './server/routes/skills.js';

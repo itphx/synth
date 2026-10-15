@@ -1067,4 +1067,27 @@ program
     if (code !== 0) process.exit(code);
   });
 
+program
+  .command('doctor')
+  .description('Проверить состояние инстанса (health, данные, ключи, провайдеры) — PROP-091')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--json', 'вывод в JSON')
+  .action(async (options) => {
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
+
+    const { runDoctorCommand } = await import('./maintenance/doctor.js');
+    const code = await runDoctorCommand({
+      dataDir,
+      secretKey: resolveSecretKey(synth, process.env),
+      configSecretKey: synth.security.secretKey,
+      env: process.env,
+      json: !!options.json,
+    });
+    if (code !== 0) process.exit(code);
+  });
+
 program.parse();
