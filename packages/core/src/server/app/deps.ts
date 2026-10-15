@@ -468,9 +468,14 @@ export async function createStandaloneDeps(
   // `getIdentityMap` читает актуальное значение (live-обновление runtime-настройки).
   // Вынесен в локальную константу: переиспользуется в `deps` и в `deliver`
   // (attribution: `displayName` человека приоритетнее имени из `payload.from`).
+  // ADR-089 (standalone): `localUserId: 'local'` — единственный человек-владелец
+  // инстанса (паритет с `resolveUserId`/WS-подпиской `local`). Без этого
+  // сопознанный отправитель становился владельцем-профильным UUID, и сессия
+  // выпадала из `listSessions({ userId: 'local' })` (список/`GET /:id`/WS).
   const resolveExternalIdentity = createExternalIdentityResolver({
     profiles: profilesStore,
     getIdentityMap: () => effectiveEventsSettings.identityMap,
+    localUserId: 'local',
   });
   const requestSessionService = new RequestSessionService({
     sessionManager,

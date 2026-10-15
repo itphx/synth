@@ -132,14 +132,17 @@ describe('createStandaloneApp: WS /ws/events — сессии, созданны�
     }
   });
 
-  it('события сессии чужого владельца клиенту не приходят (подписка по владельцу)', async () => {
+  it('внешний отправитель в standalone нормализуется к владельцу `local` — события доставляются (ADR-089)', async () => {
     const { app, port, close } = await startApp();
     const client = connect(port);
     try {
       await client.ready;
       await waitForMessage(client.received, (m) => m.type === 'connected');
 
-      // Отправитель `tg:42` сопоставлен (identityMap) другому человеку инстанса.
+      // Отправитель `tg:42` сопоставлен через `identityMap` (напр. Telegram-чат).
+      // В single-user инстансе человек-владелец один — `local`: источник-маппинг
+      // нормализуется к нему, поэтому сессия не «висит» на неизвестном UUID и
+      // клиент `local` на неё подписан (регресс: было `0 subscribers`).
       const settings = await req(app, '/api/v2/settings/events', {
         method: 'PUT',
         body: {
@@ -155,10 +158,15 @@ describe('createStandaloneApp: WS /ws/events — сессии, созданны�
         identity: { principalId: 'tg:42' },
       });
 
-      // Сессия принадлежит `other-user` — клиент `local` на неё не подписан.
-      await sleep(300);
-      expect(client.received.some((m) => m.sessionId === sessionId)).toBe(false);
-      expect(app.eventBus.subscriberCount(sessionId)).toBe(0);
+      // Сессия принадлежит `local` — события приходят подключённому клиенту `local`.
+      await waitForMessage(client.received, (m) => m.type === 'event.routed' && m.sessionId === sessionId);
+      expect(app.eventBus.subscriberCount(sessionId)).toBeGreaterThan(0);
+
+      const sessions = await req(app, '/api/v2/sessions');
+      expect(sessions.status).toBe(200);
+      const list = (await sessions.json()) as Array<{ id: string; owner_id: string | null }>;
+      const found = list.find((s) => s.id === sessionId);
+      expect(found?.owner_id).toBe('local');
     } finally {
       client.ws.terminate();
       await close();

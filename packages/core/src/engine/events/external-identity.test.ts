@@ -123,4 +123,36 @@ describe('createExternalIdentityResolver (ADR-089)', () => {
     map = { 'tg:1': 'u-live' };
     expect(await res({ principalId: 'tg:1' })).toEqual({ userId: 'u-live' });
   });
+
+  it('localUserId (standalone): сопознанный отправитель нормализуется к локальному пользователю', async () => {
+    await profiles.saveProfile(makeProfile({ id: 'u-profile-UUID', displayName: 'John Doe' }));
+    await profiles.linkIdentity('u-profile-UUID', {
+      provider: 'tg',
+      externalId: '555',
+      linkedAt: '2026-03-01T10:00:00.000Z',
+    });
+
+    // Профильная ветка: id-UUID → 'local', displayName/roles сохранены.
+    const local = createExternalIdentityResolver({
+      profiles,
+      getIdentityMap: () => ({}),
+      localUserId: 'local',
+    });
+    expect(await local({ principalId: 'tg:555' })).toEqual({
+      userId: 'local',
+      displayName: 'John Doe',
+      roles: ['USER'],
+    });
+
+    // override identityMap — тоже нормализуется (single-user инстанс).
+    const localMapped = createExternalIdentityResolver({
+      profiles,
+      getIdentityMap: () => ({ 'tg:1': 'u-x' }),
+      localUserId: 'local',
+    });
+    expect(await localMapped({ principalId: 'tg:1' })).toEqual({ userId: 'local' });
+
+    // Несопознанный отправитель — по-прежнему null (claim-flow сохраняется).
+    expect(await local({ principalId: 'tg:000' })).toBeNull();
+  });
 });
