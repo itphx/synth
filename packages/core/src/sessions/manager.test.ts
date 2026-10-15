@@ -41,7 +41,6 @@ describe('SessionManager', () => {
     const session = await manager.createSession({ title: 'Test' });
     expect(session.id).toBeDefined();
     expect(session.title).toBe('Test');
-    expect(session.engine).toBe('synth');
     expect(session.status).toEqual({});
     expect(session.settings.temperature).toBe(0.7);
   });
@@ -538,7 +537,6 @@ describe('ADR-033: Session forking and branching', () => {
     const sub = await manager.createSession({
       title: 'Подзадача: анализ',
       projectId: parent.projectId,
-      engine: parent.engine,
       parentId: parent.id,
       sessionOrigin: 'subagent',
       settings: { ...parent.settings, agentRole: 'explore' },

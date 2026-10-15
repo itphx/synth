@@ -239,7 +239,6 @@ export interface Session {
   userId?: string;
   ownerId?: string;
   projectId?: string;
-  engine: 'synth' | 'opencode' | 'cline';
   messages: Message[];
   pendingMessages: Message[];
   status: SessionStatus;

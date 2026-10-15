@@ -166,7 +166,6 @@ beforeEach(() => {
     id: 's1',
     name: 'S',
     project_id: null,
-    engine: 'synth',
     settings: data.settings,
   }))
   mocks.getProviders.mockResolvedValue({ providers: [], default_provider: null })
@@ -184,7 +183,6 @@ beforeEach(() => {
         id: 's1',
         name: 'S',
         project_id: null,
-        engine: 'synth',
         settings: { model: 'm', mcpServers: ['sys', 'proj'], mcpDisabledServers: [] },
       },
     ],
@@ -237,7 +235,7 @@ describe('SessionSettingsTab — имя сессии в блоке «Сесси�
   it('показывает прочерк, если имени нет', async () => {
     useSessionsStore.setState({
       sessions: [
-        { id: 's1', name: null, project_id: null, engine: 'synth', settings: { model: 'm' } },
+        { id: 's1', name: null, project_id: null, settings: { model: 'm' } },
       ],
     } as never)
     const container = await renderTab()
@@ -459,7 +457,6 @@ describe('SessionSettingsTab — per-session политики инструмен
           id: 's1',
           name: 'S',
           project_id: null,
-          engine: 'synth',
           settings: { model: 'm', toolsPolicy: 'consistency', mcpPolicy: 'available' },
         },
       ],
@@ -527,7 +524,6 @@ describe('SessionSettingsTab — автосохранение настроек',
           id: 's1',
           name: 'S',
           project_id: null,
-          engine: 'synth',
           settings: { model: 'm', permission: {} },
         },
       ],
@@ -555,7 +551,6 @@ describe('SessionSettingsTab — автосохранение настроек',
           id: 's1',
           name: 'S',
           project_id: null,
-          engine: 'synth',
           settings: { model: 'm', permission: {} },
         },
       ],
@@ -593,7 +588,7 @@ describe('SessionSettingsTab — автосохранение настроек',
       useSessionsStore.setState((state) => ({
         sessions: [
           ...state.sessions,
-          { id: 's2', name: 'S2', project_id: null, engine: 'synth', settings: { model: 'm2' } },
+          { id: 's2', name: 'S2', project_id: null, settings: { model: 'm2' } },
         ],
       }) as never)
       useUIStore.setState({
@@ -637,7 +632,6 @@ describe('SessionSettingsTab — автосохранение настроек',
           id: 's1',
           name: 'S',
           project_id: null,
-          engine: 'synth',
           settings: { model: 'm', permission: { askTimeoutMs: 0 } },
         },
       ],
@@ -685,7 +679,7 @@ describe('SessionSettingsTab — автосохранение настроек',
     expect(otherToggle.getAttribute('aria-busy')).toBeNull()
 
     await act(async () => {
-      resolveUpdate({ id: 's1', name: 'S', project_id: null, engine: 'synth', settings: { model: 'm', debugEnabled: true } })
+      resolveUpdate({ id: 's1', name: 'S', project_id: null, settings: { model: 'm', debugEnabled: true } })
     })
     expect(
       findSection(container, 'Debug')!.querySelector('button[role="switch"]')!.getAttribute('aria-busy'),
@@ -744,7 +738,6 @@ describe('SessionSettingsTab — decision-уровень сессии (ADR-084)'
           id: 's1',
           name: 'S',
           project_id: null,
-          engine: 'synth',
           settings: { model: 'm', microFirst: true, decisionFirst: true },
         },
       ],
@@ -838,7 +831,6 @@ describe('SessionSettingsTab — клик по имени/иконке откр�
           id: 's1',
           name: 'S',
           project_id: null,
-          engine: 'synth',
           color: 'a7',
           settings: { model: 'm' },
         },
@@ -860,7 +852,6 @@ describe('SessionSettingsTab — StrictMode: монтирование не за�
           id: 's1',
           name: 'S',
           project_id: null,
-          engine: 'synth',
           settings: { model: 'm', debugEnabled: true, toolsPolicy: 'auto', microFirst: true },
         },
       ],

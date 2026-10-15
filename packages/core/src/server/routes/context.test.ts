@@ -144,7 +144,7 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
   it('session scope: резолвит инструкции проекта сессии', async () => {
     const ws = projectWs();
     await saveProject('p1', ws);
-    const session = await sessionManager.createSession({ engine: 'synth', projectId: 'p1' });
+    const session = await sessionManager.createSession({ projectId: 'p1' });
     const app = makeApp({
       workspace: ws,
       routes: { resolveProjectWorkspace: async (id) => (id === 'p1' ? ws : undefined) },
@@ -166,7 +166,7 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
   it('session scope: cap.source=override при instructions.maxChars', async () => {
     const ws = projectWs();
     await saveProject('p1', ws);
-    const session = await sessionManager.createSession({ engine: 'synth', projectId: 'p1' });
+    const session = await sessionManager.createSession({ projectId: 'p1' });
     const app = makeApp({
       workspace: ws,
       config: makeConfig({ maxChars: 1_000 }),
@@ -177,7 +177,7 @@ describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
   });
 
   it('session без проекта → пустой результат с причиной no-project', async () => {
-    const session = await sessionManager.createSession({ engine: 'synth' });
+    const session = await sessionManager.createSession({});
     const app = makeApp({ workspace: projectWs() });
     const res = await app.request(`/api/v2/context/instructions?session_id=${session.id}`);
     expect(res.status).toBe(200);
@@ -314,7 +314,7 @@ describe('GET /api/v2/context/instructions — контроль доступа (
       },
     });
     const session = await sessionManager.createSession({
-      engine: 'synth', projectId: 'p1', ownerId: 'alice', userId: 'alice',
+      projectId: 'p1', ownerId: 'alice', userId: 'alice',
     });
 
     expect((await app.request(`/api/v2/context/instructions?session_id=${session.id}`)).status).toBe(403);

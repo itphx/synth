@@ -443,7 +443,7 @@ export function createSessionRoutes(
     if (patchDenied) return patchDenied;
     const body = await c.req.json().catch(() => ({}));
 
-    // Валидация тела PATCH (sessionUpdateSchema): невалидные settings/engine/name → 400.
+    // Валидация тела PATCH (sessionUpdateSchema): невалидные settings/name → 400.
     // title/mode/project_id не входят в схему и обрабатываются отдельно ниже из body.
     const parsed = sessionUpdateSchema.safeParse(body);
     if (!parsed.success) {

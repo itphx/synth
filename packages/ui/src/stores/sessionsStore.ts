@@ -18,7 +18,6 @@ interface SessionsStore {
   createSession: (data: {
     name?: string
     project_id?: string | null
-    engine?: string
     settings?: Record<string, unknown>
     origin?: EntityOrigin
   }) => Promise<SessionData | null>

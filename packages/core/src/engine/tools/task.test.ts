@@ -337,7 +337,6 @@ describe('taskTool — context modes', () => {
       sessionManager.createSession({
         title: req.title,
         projectId: req.projectId,
-        engine: req.engine,
         parentId: req.parentId,
         sessionOrigin: req.sessionOrigin,
         settings: req.settings,

@@ -769,7 +769,6 @@ export function SessionSettingsTab() {
           <Field label={t('rightPanel.params.project')} value={projectName || session.project_id || t('rightPanel.params.none')} />
           <Field label={t('rightPanel.params.creator')} value={session.user_id || session.owner_id || t('rightPanel.params.none')} />
           <Field label={t('rightPanel.params.created')} value={formatDateTime(session.created_at, locale)} />
-          <Field label={t('rightPanel.params.engine')} value={session.engine} />
         </Section>
 
         <Section title={t('sessionTab.todos.title')}>

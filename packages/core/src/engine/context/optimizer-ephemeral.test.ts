@@ -25,7 +25,7 @@ function msg(role: Message['role'], content: string, ephemeral = false): Message
 }
 
 async function sessionWith(messages: Message[]): Promise<Session> {
-  const session = await sessionManager.createSession({ engine: 'synth', settings: { contextOptimization: 'none' } });
+  const session = await sessionManager.createSession({ settings: { contextOptimization: 'none' } });
   session.messages = messages;
   return session;
 }

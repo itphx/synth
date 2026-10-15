@@ -196,7 +196,6 @@ export interface SessionRequest {
   icon?: string;
   /** Канонический ключ цвета (PROJECT_COLOR_KEYS). */
   color?: string;
-  engine?: string;
   /** Происхождение сессии (`user`/`fork`/`subagent`) — паритет с createSession. */
   sessionOrigin?: SessionOrigin;
   settings?: Partial<SessionSettings>;

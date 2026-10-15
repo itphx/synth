@@ -115,14 +115,13 @@ beforeEach(() => {
     id: 's1',
     name: 'S',
     project_id: null,
-    engine: 'synth',
     settings: { model: 'm' },
     ...data,
   }))
   useEntityEditStore.setState({ target: null })
   useProjectsStore.setState({ projects: [{ ...PROJECT }] as never })
   useSessionsStore.setState({
-    sessions: [{ id: 's1', name: 'S', project_id: null, engine: 'synth', settings: { model: 'm' } }],
+    sessions: [{ id: 's1', name: 'S', project_id: null, settings: { model: 'm' } }],
   } as never)
   useUIStore.setState({
     activeCenterTabId: null,

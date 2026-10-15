@@ -122,7 +122,6 @@ export const SessionsPanel = () => {
                   {isExpanded && (
                     <div className="border-t border-border px-4 py-3 bg-surface-subtle space-y-2 text-xs min-w-0 break-words">
                       <div><span className="text-muted-foreground">{t('admin.sessions.id')}</span> <code>{s.id}</code></div>
-                      <div><span className="text-muted-foreground">{t('admin.sessions.engine')}</span> {s.engine}</div>
                       <div><span className="text-muted-foreground">{t('admin.sessions.project')}</span> {s.project_id || '—'}</div>
                       <div><span className="text-muted-foreground">{t('admin.sessions.created')}</span> {new Date(s.created_at).toLocaleString(locale)}</div>
                       <div><span className="text-muted-foreground">{t('admin.sessions.updated')}</span> {new Date(s.updated_at).toLocaleString(locale)}</div>

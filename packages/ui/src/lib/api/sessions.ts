@@ -36,7 +36,6 @@ export interface SessionData {
   icon?: string | null
   /** Канонический ключ цвета сессии (PROJECT_COLOR_KEYS) или null. */
   color?: string | null
-  engine: string
   messages: Array<{
     index: number
     id?: string
@@ -130,7 +129,6 @@ export const sessionsApi = {
     icon?: string | null
     color?: string | null
     project_id?: string | null
-    engine?: string
     settings?: Record<string, unknown>
     origin?: EntityOrigin
   }): Promise<SessionData> {
@@ -146,7 +144,6 @@ export const sessionsApi = {
     icon?: string | null
     color?: string | null
     project_id?: string | null
-    engine?: string
     settings?: Record<string, unknown>
   }): Promise<SessionData> {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {

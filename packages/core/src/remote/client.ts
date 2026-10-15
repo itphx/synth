@@ -246,7 +246,7 @@ export class RemoteBackendClient {
     return this.request<unknown>('GET', `/api/v2/sessions/${encodeURIComponent(id)}`);
   }
 
-  /** Создать сессию. Body: { name|title, project_id, engine, settings } (SessionCreateRequest). */
+  /** Создать сессию. Body: { name|title, project_id, settings } (SessionCreateRequest). */
   createSession(body: Record<string, unknown>): Promise<unknown> {
     return this.request<unknown>('POST', '/api/v2/sessions', body);
   }

@@ -77,7 +77,7 @@ beforeEach(() => {
     ],
   })
   useSessionsStore.setState({
-    sessions: [{ id: 's1', name: 'S', project_id: null, engine: 'synth' }],
+    sessions: [{ id: 's1', name: 'S', project_id: null }],
   } as never)
 })
 
@@ -101,7 +101,7 @@ describe('CenterTabs — цвет иконки сессионного таба',
 
   it('заданный session.color определяет цвет иконки таба', async () => {
     useSessionsStore.setState({
-      sessions: [{ id: 's1', name: 'S', project_id: null, engine: 'synth', color: 'a7' }],
+      sessions: [{ id: 's1', name: 'S', project_id: null, color: 'a7' }],
     } as never)
     const container = await renderTabs()
     expect(tabIconColor(container, 'tab-1')).toBe('var(--palette-7)')

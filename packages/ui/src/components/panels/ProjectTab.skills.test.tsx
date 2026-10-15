@@ -113,7 +113,7 @@ beforeEach(() => {
     centerTabs: [{ id: 'tab-1', type: 'chat', title: 'Chat', data: { sessionId: 's1' } }],
   })
   useSessionsStore.setState({
-    sessions: [{ id: 's1', name: 'S', project_id: 'p1', engine: 'synth', settings: { model: 'm' } }],
+    sessions: [{ id: 's1', name: 'S', project_id: 'p1', settings: { model: 'm' } }],
   } as never)
   useProjectsStore.setState({ projects: [PROJECT] as never })
   useAuthStore.setState({ user: { id: 'u1', username: 'owner', roles: [] } as never })

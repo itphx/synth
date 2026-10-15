@@ -6,7 +6,6 @@ import { BASE_URL, fetchJSON } from './base'
 export interface MessageListResponse {
   messages: MessageData[]
   session_id: string
-  engine: string
 }
 
 export const messagesApi = {

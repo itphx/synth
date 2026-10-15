@@ -31,7 +31,7 @@ dictionary (`synth-landing/js/main.js`).
 | провайдер | provider | LLM endpoint configuration (URL, type, key) | `GatewayProvider` |
 | модель | model | A specific model offered by a provider | — |
 | маршрутизация | routing (model routing) | Selecting a model by content, cost and confidence | `router.*` |
-| движок | engine | LLM runtime; stateless, history lives on the backend | `Session.engine`; `opencode`, `cline` |
+| движок | engine | LLM runtime; stateless, history lives on the backend | `opencode`, `cline` (planned, PROP-050) |
 | очередь | queue | Per-session message queue processed by the orchestrator | `pendingMessages` |
 | оркестратор | orchestrator | Component that drives a session turn (LLM calls + tool calls) | `ChatOrchestrator` |
 | режим | mode | Session permission mode: `plan` / `act` / `yolo` | `plan`, `act`, `yolo` |

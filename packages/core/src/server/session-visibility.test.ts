@@ -9,7 +9,6 @@ function session(overrides: Partial<Session> = {}): Session {
   return {
     id: 's1',
     sessionOrigin: 'user',
-    engine: 'synth',
     messages: [],
     pendingMessages: [],
     status: {},

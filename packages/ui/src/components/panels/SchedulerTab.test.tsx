@@ -85,7 +85,7 @@ async function waitFor(assertion: () => void, timeout = 5000): Promise<void> {
   })
 }
 
-const SESSION = { id: 's1', name: 'Session One', engine: 'synth', settings: {} }
+const SESSION = { id: 's1', name: 'Session One', settings: {} }
 const AGENT = { id: 'assistant', display_name: 'Assistant', enabled: true }
 const PROJECT = { id: 'p1', name: 'Project One' }
 

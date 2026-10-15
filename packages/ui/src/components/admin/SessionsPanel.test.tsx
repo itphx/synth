@@ -25,7 +25,6 @@ function makeSession(overrides: Record<string, unknown>) {
     messages: [],
     input_tokens: 0,
     output_tokens: 0,
-    engine: 'test-engine',
     project_id: null,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-02T00:00:00.000Z',
@@ -105,8 +104,8 @@ describe('SessionsPanel — миграция на Settings UI Kit (ADR-072)', ()
       details!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
 
-    expect(container.textContent).toContain('Engine:')
-    expect(container.textContent).toContain('test-engine')
+    expect(container.textContent).toContain('ID:')
+    expect(container.textContent).toContain('regular-1234567890')
     expect(buttonByText(container, 'Hide')).toBeTruthy()
   })
 

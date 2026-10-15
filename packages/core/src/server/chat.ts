@@ -210,7 +210,6 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   // сессия одного сообщения (удаляется в finally) — materialization, не request.
   const session = await sessionManager.createSession({
     title: undefined,
-    engine: 'synth',
     settings: {
       provider: providerName,
       model: modelName,

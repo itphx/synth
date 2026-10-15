@@ -168,7 +168,7 @@ interface BusEvent { type: EventType; sessionId: string; data: Record<string, un
 ```
 
 - Backend: WS authentication via Bearer JWT/API key or the `user_session` cookie;
-  on connect it sends `{type:'connected', client_id, engine:'synth'}`.
+  on connect it sends `{type:'connected', client_id}`.
   It supports the client messages `ping`→`pong`, `send_message`, `cancel`,
   `permission_reply`, `permission_hold`. EventHub automatically subscribes
   the client to all of the user's sessions.
@@ -259,10 +259,10 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 | Method | Path | Build | RBAC | Purpose / req-resp |
 |---|---|---|---|---|
 | GET | `/api/v2/sessions` | both | auth (own+project; LEAD/ADMIN — all) | Session list; `?project_id=` (see the visibility rules below) |
-| POST | `/api/v2/sessions` | both | auth | Create; `{name|title, project_id, engine, settings}` → 201 || GET | `/api/v2/sessions/:id` | both | auth | Session (serialized) |
+| POST | `/api/v2/sessions` | both | auth | Create; `{name|title, project_id, settings}` → 201 || GET | `/api/v2/sessions/:id` | both | auth | Session (serialized) |
 | GET | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Effective MCP scope (ADR-071 §2.4): `{servers:[{name, level, enabled, reason?, connected?, origin, trust, chars?, estTokens?, estimated?}], enabled, disabled, mcpServers, mcpDisabledServers}`. `reason` ∈ `system_disabled\|project_disabled\|session_optout\|not_default`; the project `enabled` gate also applies to system servers. Servers/tools carry `chars`/`estTokens` (ADR-071 §2.8) |
 | PUT | `/api/v2/sessions/:id/mcp` | backend | owner/ADMIN | Toggle MCP (a single switch): `{name, enabled}` → `mcpServers`/`mcpDisabledServers` (opt-out of system ones — via `enabled:false`), or `{mcpServers?, mcpDisabledServers?}` |
-| PATCH | `/api/v2/sessions/:id` | both | auth | `{name, title, engine, mode: plan\|act\|yolo, settings, project_id}` |
+| PATCH | `/api/v2/sessions/:id` | both | auth | `{name, title, mode: plan\|act\|yolo, settings, project_id}` |
 | DELETE | `/api/v2/sessions/:id` | both | auth | Delete → 204 |
 | GET | `/api/v2/sessions/:id/secrets` | backend | ADMIN/AUDITOR | Gateway obfuscation map `{sessionId, secrets}` |
 | POST | `/api/v2/sessions/:id/fork` | both | auth | Fork; `{message_id?, message_index?, title?}` → 201 |
@@ -274,7 +274,7 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 | POST | `/api/v2/sessions/:id/prompt` | both | auth | Enqueue a message, return an **SSE stream** |
 | GET | `/api/v2/sessions/:id/prompt` | both | auth | System prompt composition (ADR-070): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (tools with `chars`/`estTokens` and the estimation flag, ADR-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — the applied built-in/MCP policies (ADR-071 §2.3); entries: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, not in `staticPrefixChars`) |
 | GET | `/api/v2/sessions/:id/stats` | both | auth | Usage statistics (ADR-070): messages + recursive subagent usage (the `task` tool), aggregates per agent/user (`computeSessionStats`) |
-| GET | `/api/v2/sessions/:id/messages` | both | auth | `{messages, session_id, engine}` |
+| GET | `/api/v2/sessions/:id/messages` | both | auth | `{messages, session_id}` |
 | POST | `/api/v2/sessions/:id/clear` | both | auth | Clear the history (except pinned) |
 | POST | `/api/v2/sessions/:id/abort` | both | auth | Reliable Stop (ADR-005): sets the persistent `status.cancel_requested` flag; with a live stream — a graceful cancel, then stops the queue processor; `{status:'aborted'}`; 404 if there is no session (see below) |
 | POST | `/api/v2/sessions/:id/resume-subagent` | both | auth | Resume a subagent → 202 |

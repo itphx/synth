@@ -60,7 +60,7 @@ async function run(content: string, opts?: { commandRuntime?: CommandRuntime; pe
     permissionConfig: opts?.permissionConfig,
   });
 
-  const session = await sessionManager.createSession({ engine: 'synth' });
+  const session = await sessionManager.createSession({});
   const msg = makeUserMessage(content);
   await sessionManager.addMessage(session.id, msg);
   const fresh = (await sessionManager.getSession(session.id))!;

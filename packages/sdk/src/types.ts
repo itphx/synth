@@ -56,10 +56,8 @@ export type {
 // `default` помечены обязательными. Для тела запроса SDK принимает форму ВХОДА:
 // такие поля необязательны (сервер подставит default).
 
-/** Тело `POST /sessions` — `engine` имеет серверный default, необязателен. */
-export type SessionCreateInput = Omit<SessionCreateRequest, 'engine'> & {
-  engine?: SessionCreateRequest['engine'];
-};
+/** Тело `POST /sessions` — публичный контракт `SessionCreateRequest` из shared. */
+export type SessionCreateInput = SessionCreateRequest;
 
 /**
  * Тело `PATCH /sessions/:id` — публичный контракт `SessionPatch` из
@@ -124,7 +122,6 @@ export interface SerializedSession {
   user_id?: string | null;
   owner_id?: string | null;
   project_id?: string | null;
-  engine: 'synth' | 'opencode' | 'cline' | string;
   messages?: unknown[];
   pending_messages?: unknown[];
   pending_count?: number;
@@ -145,7 +142,6 @@ export interface SerializedSession {
 export interface SessionMessagesResponse {
   messages: unknown[];
   session_id: string;
-  engine: string;
 }
 
 /** Ответ `GET /sessions/:id/status`. */

@@ -362,7 +362,6 @@ export class RequestSessionService {
       icon: req.icon,
       color: req.color,
       projectId: req.projectId,
-      engine: req.engine,
       parentId: req.parentId,
       sessionOrigin: req.sessionOrigin,
       settings: await this._sessionSettings(agentRole, req.settings),

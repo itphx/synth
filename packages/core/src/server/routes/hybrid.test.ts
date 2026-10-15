@@ -80,7 +80,6 @@ function createFakeRemoteClient(overrides: Record<string, unknown> = {}) {
     getSessionMessages: vi.fn().mockResolvedValue({
       messages: [{ index: 0, content: 'hi' }],
       session_id: 'rs-1',
-      engine: 'synth',
     }),
     messagesBatch: vi.fn().mockResolvedValue({ ok: true }),
     messageToggle: vi.fn().mockResolvedValue({ disabled: true, success: true }),

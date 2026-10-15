@@ -214,7 +214,6 @@ const Session = z
     color: z.string().nullable().optional(),
     parent_id: z.string().nullable().optional(),
     mode: z.enum(['plan', 'act', 'yolo']),
-    engine: z.enum(['synth', 'opencode', 'cline']),
     project_id: z.string().nullable().optional(),
     owner_id: z.string().nullable().optional(),
     messages: z.array(z.unknown()),
@@ -229,7 +228,6 @@ const SessionMessagesResponse = z
   .object({
     messages: z.array(z.unknown()),
     session_id: z.string(),
-    engine: z.string(),
   })
   .openapi('SessionMessagesResponse');
 
@@ -556,7 +554,7 @@ const patchSessionRoute = createRoute({
   path: '/sessions/{id}',
   tags: ['sessions'],
   summary: 'Обновить сессию',
-  description: 'Частичное обновление: `name`/`title`/`engine`/`mode`/`settings`/`project_id`.',
+  description: 'Частичное обновление: `name`/`title`/`mode`/`settings`/`project_id`.',
   security: BEARER_SECURITY,
   request: {
     params: SessionParams,
@@ -778,7 +776,6 @@ const SAMPLE_SESSION = {
   id: 'ses_00000000-0000-0000-0000-000000000000',
   name: null,
   mode: 'act' as const,
-  engine: 'synth' as const,
   messages: [],
   created_at: '1970-01-01T00:00:00.000Z',
   updated_at: '1970-01-01T00:00:00.000Z',
@@ -845,7 +842,7 @@ export function createPublicOpenApiApp(): OpenAPIHono {
     new Response('', { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
   );
   app.openapi(getSessionMessagesRoute, (c) =>
-    c.json({ messages: [], session_id: SAMPLE_SESSION.id, engine: 'synth' }, 200),
+    c.json({ messages: [], session_id: SAMPLE_SESSION.id }, 200),
   );
 
   // --- schedules ---

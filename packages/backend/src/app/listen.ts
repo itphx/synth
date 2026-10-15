@@ -158,7 +158,6 @@ export function createBackendListen(deps: BackendListenDeps) {
             ws.send(JSON.stringify({
               type: 'connected',
               client_id: clientId,
-              engine: 'synth',
             }));
           }).catch(() => {
             ws.send(JSON.stringify({

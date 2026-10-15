@@ -79,7 +79,6 @@ interface SerializedSession {
   user_id?: string;
   owner_id?: string;
   project_id?: string;
-  engine: string;
   messages: SerializedMessage[];
   pending_messages: SerializedMessage[];
   status: Record<string, unknown>;
@@ -268,7 +267,6 @@ function serializeSession(session: Session): SerializedSession {
     user_id: session.userId,
     owner_id: session.ownerId,
     project_id: session.projectId,
-    engine: session.engine,
     messages: session.messages.map(serializeMessage),
     pending_messages: session.pendingMessages.map(serializeMessage),
     status: session.status as unknown as Record<string, unknown>,
@@ -340,7 +338,6 @@ function deserializeSession(data: SerializedSession): Session {
     userId: data.user_id,
     ownerId: data.owner_id,
     projectId: data.project_id,
-    engine: data.engine as Session['engine'],
     messages: data.messages.map(deserializeMessage),
     pendingMessages: data.pending_messages.map(deserializeMessage),
     status: data.status as unknown as SessionStatus,

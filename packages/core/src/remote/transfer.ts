@@ -480,9 +480,6 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
         icon: normalizeIconKey(exportData.icon),
         color: normalizeColorKey(exportData.color),
         projectId: localProject.id,
-        engine: typeof exportData.engine === 'string'
-          ? (exportData.engine as Session['engine'])
-          : undefined,
         sessionOrigin: (exportData.session_origin ?? exportData.sessionOrigin) as Session['sessionOrigin'] | undefined,
         settings: (exportData.settings ?? {}) as Partial<SessionSettings>,
       });

@@ -95,7 +95,7 @@ async function waitFor(assertion: () => void, timeout = 5000): Promise<void> {
 }
 
 const PROJECT = { id: 'p1', name: 'Project One', origin: 'local' }
-const SESSION = { id: 's1', name: 'Session One', engine: 'synth', settings: {}, project_id: 'p1' }
+const SESSION = { id: 's1', name: 'Session One', settings: {}, project_id: 'p1' }
 const AGENT = { id: 'assistant', display_name: 'Assistant', enabled: true }
 
 function binding(id: string, overrides: Partial<EventBinding> = {}): EventBinding {
@@ -723,7 +723,7 @@ describe('EventsAdminSettings — правила маршрутизации (ADR
   })
 
   it('создание правила шлёт match/target и опускает пустые поля', async () => {
-    mocks.getSessions.mockResolvedValue([{ id: 'sess-9', name: 'Session 9', engine: 'synth', settings: {} }])
+    mocks.getSessions.mockResolvedValue([{ id: 'sess-9', name: 'Session 9', settings: {} }])
     const container = await renderSettings()
 
     await clickTestId(container, 'events-route-add')

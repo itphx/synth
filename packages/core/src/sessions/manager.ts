@@ -69,7 +69,7 @@ export class SessionManager {
     return this.store.load(sessionId);
   }
 
-  async createSession(data: { title?: string; icon?: string; color?: string; projectId?: string; engine?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string; expiresAt?: string } = {}): Promise<Session> {
+  async createSession(data: { title?: string; icon?: string; color?: string; projectId?: string; parentId?: string; sessionOrigin?: SessionOrigin; settings?: Partial<SessionSettings>; userId?: string; ownerId?: string; expiresAt?: string } = {}): Promise<Session> {
     const mcpToolSettings = await this._resolveMcpToolSettings(data.settings?.mcpToolSettings);
     const session: Session = {
       id: generateId(),
@@ -83,7 +83,6 @@ export class SessionManager {
       // (plan_write). Раньше поле объявлялось, но не проставлялось.
       ownerId: data.ownerId || data.userId || '',
       projectId: data.projectId,
-      engine: (data.engine || 'synth') as Session['engine'],
       messages: [],
       pendingMessages: [],
       status: {},
@@ -630,7 +629,6 @@ export class SessionManager {
         icon: source.icon,
         color: source.color,
         projectId: source.projectId,
-        engine: source.engine,
         sessionOrigin: 'fork' as SessionOrigin,
         parentId: sourceSessionId,
         settings: { ...source.settings },

@@ -113,7 +113,6 @@ beforeEach(() => {
         id: 's1',
         name: 'S',
         project_id: null,
-        engine: 'synth',
         settings: { model: 'm' },
       },
     ],

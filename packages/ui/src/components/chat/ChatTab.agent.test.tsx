@@ -72,7 +72,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   resetChatStore()
   useAgentsStore.setState({ agents: AGENTS, activeAgentId: 'developer', defaultAgentId: 'developer', loading: false })
-  vi.mocked(synthApi.getSessionMessages).mockResolvedValue({ messages: [], session_id: 's1', engine: 'synth' })
+  vi.mocked(synthApi.getSessionMessages).mockResolvedValue({ messages: [], session_id: 's1' })
   vi.mocked(synthApi.getAgents).mockResolvedValue({ agents: AGENTS, default_agent: 'developer' })
   vi.mocked(synthApi.getSession).mockResolvedValue({
     id: 's1',

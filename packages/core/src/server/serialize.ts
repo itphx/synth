@@ -30,7 +30,6 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,
-    engine: session.engine,
     messages: session.messages.map((m, i) => serializeMessage(m, i)),
     pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i)),
     pending_count: session.pendingMessages.length,

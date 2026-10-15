@@ -14,7 +14,6 @@ export interface WSServerMessage {
   type: string;
   sessionId?: string;
   clientId?: string;
-  engine?: string;
   data?: Record<string, unknown>;
   content?: string;
   isFinal?: boolean;

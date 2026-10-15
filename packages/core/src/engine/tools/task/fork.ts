@@ -145,7 +145,6 @@ export async function prepareChildSession(
                   intent: 'explicit',
                   title: sm('session.subtask_title', { description }),
                   projectId: parentSession.projectId,
-                  engine: parentSession.engine,
                   parentId: extra.sessionId,
                   sessionOrigin: 'subagent',
                   settings: childSettings,
@@ -155,7 +154,6 @@ export async function prepareChildSession(
             : await extra.sessionManager.createSession({
                 title: sm('session.subtask_title', { description }),
                 projectId: parentSession.projectId,
-                engine: parentSession.engine,
                 parentId: extra.sessionId,
                 sessionOrigin: 'subagent',
                 settings: childSettings,

@@ -95,7 +95,6 @@ export const sessionCreateSchema = z.object({
   icon: projectIconKeySchema.optional().nullable(),
   color: projectColorKeySchema.optional().nullable(),
   projectId: z.string().optional(),
-  engine: z.enum(['synth', 'opencode', 'cline']).default('synth'),
   settings: sessionSettingsSchema.optional(),
 });
 
@@ -104,7 +103,6 @@ export const sessionUpdateSchema = z.object({
   icon: projectIconKeySchema.optional().nullable(),
   color: projectColorKeySchema.optional().nullable(),
   projectId: z.string().optional(),
-  engine: z.enum(['synth', 'opencode', 'cline']).optional(),
   // passthrough: настройки сессии содержат поля вне sessionSettingsSchema
   // (mcpServers, routing*, microFirst, embedding*, permission, mcpToolSettings, llmGateway),
   // их нельзя терять при PATCH — известные поля валидируются, неизвестные пропускаются.
@@ -592,7 +590,6 @@ export const sessionRequestSchema = z.object({
   title: z.string().optional(),
   icon: projectIconKeySchema.optional(),
   color: projectColorKeySchema.optional(),
-  engine: z.enum(['synth', 'opencode', 'cline']).optional(),
   sessionOrigin: z.enum(['user', 'fork', 'subagent']).optional(),
   // Настройки сессии валидируются собственной схемой при создании; здесь —
   // толерантный контейнер, чтобы не дублировать SessionSettings.

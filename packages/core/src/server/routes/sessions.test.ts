@@ -581,7 +581,6 @@ describe('POST /api/v2/sessions — ADR-089 funnel', () => {
       body: JSON.stringify({
         title: 'Funnel session',
         project_id: 'proj-x',
-        engine: 'synth',
         icon: 'rocket',
         color: 'a1',
         session_origin: 'subagent',
@@ -599,7 +598,6 @@ describe('POST /api/v2/sessions — ADR-089 funnel', () => {
       intent: 'explicit',
       title: 'Funnel session',
       projectId: 'proj-x',
-      engine: 'synth',
       icon: 'rocket',
       color: 'a1',
       sessionOrigin: 'subagent',

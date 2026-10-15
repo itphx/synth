@@ -292,7 +292,6 @@ describe('sessionRequestSchema (ADR-089)', () => {
       title: 'From event',
       icon: 'rocket',
       color: 'a1',
-      engine: 'synth',
       sessionOrigin: 'subagent',
       settings: { temperature: 0.2 },
       sourceEventId: 'evt_1',

@@ -26,7 +26,6 @@ describe('FileStore', () => {
       sessionOrigin: 'user',
       userId: 'user-1',
       projectId: 'proj-1',
-      engine: 'synth' as Session['engine'],
       messages: [],
       pendingMessages: [],
       status: {},

@@ -27,7 +27,6 @@ function makeFakeRemoteClient(overrides: Record<string, unknown> = {}) {
     listSessions: vi.fn(async () => [{ id: 'rs-1', project_id: 'remote-1' }]),
     exportSession: vi.fn(async () => ({
       title: 'RS1',
-      engine: 'synth',
       sessionOrigin: 'user',
       settings: { temperature: 0.3 },
       messages: [
@@ -400,7 +399,6 @@ describe('transfer helpers', () => {
       const exportsBySession: Record<string, Record<string, unknown>> = {
         'rs-parent': {
           title: 'Parent',
-          engine: 'synth',
           sessionOrigin: 'user',
           settings: { temperature: 0.3 },
           messages: [
@@ -413,7 +411,6 @@ describe('transfer helpers', () => {
         },
         'rs-child': {
           title: 'Child',
-          engine: 'synth',
           sessionOrigin: 'user',
           parentId: 'rs-parent',
           settings: { temperature: 0.3 },
