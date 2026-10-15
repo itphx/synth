@@ -72,8 +72,8 @@
 
 | Шаг | Объект | Статус | Заметка |
 |---|---|---|---|
-| 1 | `ui/lib/api/synthApi.ts` (2 596) → `lib/api/<домен>.ts` + barrel | ⏳ | клиент, низкий риск |
-| 2 | `shared/types/index.ts` (1 452) → `types/<домен>.ts` + barrel | ⏳ | импорты через barrel сохраняются |
+| 1 | `ui/lib/api/synthApi.ts` (2 596) → `lib/api/<домен>.ts` + barrel | ✅ | 2 596→161; 32 домена; контрактный тест; ui 132/1176 зелёные |
+| 2 | `shared/types/index.ts` (1 452) → `types/<домен>.ts` + barrel | ✅ | 1 452→51; 12 модулей; экспорты `shared` идентичны (531/531) |
 | 3 | `ui/components/panels/LeftPanel.tsx` (2 230) → подкомпоненты + хуки | ⏳ | тонкие тесты — добавить регресс |
 | 4 | `core/server/app.ts` (2 014) + `backend/app.ts` (1 738) → вынести монтирование/провижининг | ⏳ | — |
 | 5 | `core/engine/tools/task.ts` (1 926) → подмодули тула | ⏳ | защита: task.test/task-resume.test |
