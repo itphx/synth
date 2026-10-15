@@ -21,7 +21,7 @@ import { createStandaloneDeps } from './app/deps.js';
 import { createHybridRemoteState } from './app/hybrid-remote.js';
 import { mountStandaloneRoutes } from './app/mount-routes.js';
 import { registerEventsSse } from './app/sse-events.js';
-import { attachEventWebSocket } from './app/ws-events.js';
+import { attachEventWebSocket, EventWebSocketSubscriptions } from './app/ws-events.js';
 import { createStandaloneHttpServer } from './app/http-server.js';
 
 export interface StandaloneConfig {
@@ -157,7 +157,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     apiKey: config.apiKey,
     // ADR-052: service-key аутентифицирует машину в синтетического пользователя
     // (roles — для RBAC/доступности эндпоинтов); scopes/проектная проекция
-    // проверяются отдельно (`requireScope`/`checkProjectAccess`).
+    // проверяются отдельно (`requireScope`/`checkServiceProjectProjection`).
     resolveServiceKey: async (raw) => {
       const resolved = await serviceApiKeyStore.resolveBySecret(raw);
       if (!resolved) return null;
@@ -268,10 +268,22 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     () => connection.getToken?.() ?? Promise.resolve(null),
   ));
 
+  // ADR-089: реестр подписок WS-хаба создаётся ДО сборки зависимостей — funnel
+  // (`RequestSessionService.onSessionMaterialized`) должен подписать уже
+  // подключённых клиентов на сессию, материализованную позже (паритет с managed
+  // `EventHub.subscribeToSession`; иначе подписка-снимок при `connect` теряет
+  // события новых сессий).
+  const wsSubscriptions = new EventWebSocketSubscriptions();
+
   // Зависимости (stores/managers/оркестратор/событийное ядро/шедулер/webhooks).
   const deps = await createStandaloneDeps(config, {
     getActiveRemoteProviderNames: () => hybrid.getActiveRemoteProviderNames(),
     isBlockLocalProviders: () => hybrid.isBlockLocalProviders(),
+    onSessionMaterialized: (session) => {
+      const owner = session.ownerId || session.userId;
+      if (!owner) return;
+      wsSubscriptions.subscribeToSession(owner, session.id);
+    },
   });
 
   // Роуты API v2 (порядок монтирования — как раньше, см. mount-routes.ts).
@@ -285,6 +297,10 @@ export async function createStandaloneApp(config: StandaloneConfig) {
       getActiveRemoteProviderNames: () => hybrid.getActiveRemoteProviderNames(),
       isBlockLocalProviders: () => hybrid.isBlockLocalProviders(),
     },
+    // ADR-089: роуты сессий уведомляют WS-хаб о созданной/форкнутой сессии
+    // (паритет с managed `EventHub.subscribeToSession`) — тем же реестром, что
+    // и `onSessionMaterialized`; fork/import идут мимо funnel'а.
+    subscribeWsSession: (userId, sessionId) => { wsSubscriptions.subscribeToSession(userId, sessionId); },
   });
 
   // Глобальный SSE-хаб (GET /api/v2/events) — после роутов событий.
@@ -306,7 +322,6 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // WebSocket /ws/events
   const wss = attachEventWebSocket({
     server,
-    apiKey: config.apiKey,
     auth,
     connection,
     eventBus: deps.eventBus,
@@ -314,6 +329,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     queueManager: deps.queueManager,
     processMessage: deps.processMessage,
     orchestrator: deps.orchestrator,
+    subscriptions: wsSubscriptions,
   });
 
   const port = config.port;

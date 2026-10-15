@@ -48,6 +48,14 @@ export interface StandaloneRoutesContext {
   /** ADR-052 (этап I): реестр service-key (создаётся до `auth` в `app.ts`). */
   serviceApiKeyStore: ServiceApiKeyStore;
   remote: StandaloneRoutesRemote;
+  /**
+   * ADR-089: паритет с managed `EventHub.subscribeToSession` — подписка
+   * WS-клиентов владельца на сессию. Нужен для materialization-путей `fork`
+   * (и `import`), которые идут мимо funnel'а (`onSessionMaterialized` их не
+   * покрывает), — иначе `session.fork.created` теряется для клиента,
+   * подключённого до форка. Роуты вызывают колбэк до `eventBus.publish`.
+   */
+  subscribeWsSession?: (userId: string, sessionId: string) => void;
 }
 
 /**
@@ -96,7 +104,14 @@ export function mountStandaloneRoutes(
       getRemoteClient: () => getClient(),
       requestSessionService,
     },
-    { resolveDefaultAgent: getDefaultAgentId },
+    {
+      resolveDefaultAgent: getDefaultAgentId,
+      // ADR-089: подписка WS-клиентов владельца на созданную/форкнутую сессию
+      // (паритет с managed `EventHub.subscribeToSession`). Покрывает fork/import
+      // (materialization мимо funnel'а) и fallback-создание без funnel'а.
+      onSessionCreated: (userId, sessionId) => { ctx.subscribeWsSession?.(userId, sessionId); },
+      onSessionForked: (userId, sessionId) => { ctx.subscribeWsSession?.(userId, sessionId); },
+    },
   ));
 
   // Projects

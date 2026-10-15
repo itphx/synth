@@ -15,8 +15,6 @@ import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 export interface EventWebSocketDeps {
   /** HTTP-сервер, на `upgrade` которого вешается обработчик. */
   server: Server;
-  /** Локальный API-ключ (`serve --api-key`/`SYNTH_API_KEY`/`core.apiKey`). */
-  apiKey: string;
   /** Локальная аутентификация: cookie-сессия v2 для браузера (WS не ставит Authorization). */
   auth: LocalAuthKit;
   /** Runtime-подключение к удалённому backend (гибрид). */
@@ -26,6 +24,46 @@ export interface EventWebSocketDeps {
   queueManager: QueueProcessorManager;
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>;
   orchestrator: ChatOrchestrator;
+  /**
+   * ADR-089: реестр подписок активных клиентов. Funnel (`RequestSessionService`)
+   * через `onSessionMaterialized` подписывает клиентов владельца на сессии,
+   * созданные ПОСЛЕ их подключения (паритет с managed `EventHub.subscribeToSession`).
+   */
+  subscriptions: EventWebSocketSubscriptions;
+}
+
+/**
+ * Реестр подписок WS-клиентов standalone (`/ws/events`), ADR-089.
+ *
+ * Паритет с managed `EventHub`: подписка на сессию ставится персонально клиенту
+ * владельца (`subscribeToSession`), когда funnel материализует сессию после
+ * подключения. Раньше подписка бралась **снимком** `listSessions` на момент
+ * `connect`, поэтому сессии, созданные позже (events-funnel `ephemeral`/`bind`,
+ * явный `POST /api/v2/sessions`, тул `task`), оставались без подписчиков —
+ * `event.routed`/`session.created`/стрим ответа терялись («0 subscribers —
+ * EVENT LOST»), и дерево сессий в UI обновлялось только после перезагрузки.
+ */
+export class EventWebSocketSubscriptions {
+  private _clients = new Set<{ userId: string; subscribe: (sessionId: string) => void }>();
+
+  /** Зарегистрировать подписку клиента пользователя; возвращает снятие регистрации. */
+  register(userId: string, subscribe: (sessionId: string) => void): () => void {
+    const client = { userId, subscribe };
+    this._clients.add(client);
+    return () => { this._clients.delete(client); };
+  }
+
+  /** Подписать всех активных клиентов пользователя на сессию (идемпотентно у клиента). */
+  subscribeToSession(userId: string, sessionId: string): void {
+    for (const client of this._clients) {
+      if (client.userId === userId) client.subscribe(sessionId);
+    }
+  }
+
+  /** Число активных клиентов (диагностика/тесты). */
+  get clientCount(): number {
+    return this._clients.size;
+  }
 }
 
 /**
@@ -33,7 +71,7 @@ export interface EventWebSocketDeps {
  * Возвращает `WebSocketServer` (поле `wss` хэндла приложения).
  */
 export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer {
-  const { server, apiKey, auth, connection, eventBus, sessionManager, queueManager, processMessage, orchestrator } = deps;
+  const { server, auth, connection, eventBus, sessionManager, queueManager, processMessage, orchestrator, subscriptions } = deps;
   // WebSocket /ws/events
   const wss = new WebSocketServer({ noServer: true });
 
@@ -41,28 +79,20 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
     const url = new URL(request.url || '', `http://${request.headers.host}`);
 
     if (url.pathname === '/ws/events') {
-      const authHeader = request.headers['authorization'] || request.headers['Authorization'];
-      const token = typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
-        ? authHeader.slice(7)
-        : null;
-
       // Аутентификация: либо валидный Bearer API-ключ (CLI/API-клиенты), либо
       // cookie-сессия v2 (server-identity/local) — браузер не может ставить
       // Authorization-заголовок на WebSocket, поэтому UI полагается на cookie.
-      let authorized = token === apiKey;
-      if (!authorized) {
-        const cookieContext = {
-          req: {
-            header: (name: string): string | undefined => {
-              const v = request.headers[name.toLowerCase()];
-              return Array.isArray(v) ? v[0] : v;
-            },
+      const cookieContext = {
+        req: {
+          header: (name: string): string | undefined => {
+            const v = request.headers[name.toLowerCase()];
+            return Array.isArray(v) ? v[0] : v;
           },
-        };
-        authorized = auth.getCurrentUser(cookieContext) !== null;
-      }
+        },
+      };
+      const user = auth.getCurrentUser(cookieContext);
 
-      if (!authorized) {
+      if (!user) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
         return;
@@ -72,6 +102,8 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
         const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
         const unsubs: Array<() => void> = [];
+        /** Уже подписанные сессии клиента (идемпотентность точечной подписки). */
+        const subscribed = new Set<string>();
 
         const handler = (event: { type: string; data: Record<string, unknown> }) => {
           try {
@@ -81,6 +113,16 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
           } catch { /* ignore */ }
         };
 
+        /** Точечная подписка клиента на сессию (idempotent). */
+        const subscribe = (sessionId: string): void => {
+          if (subscribed.has(sessionId)) return;
+          subscribed.add(sessionId);
+          unsubs.push(eventBus.subscribe(sessionId, handler));
+        };
+
+        // Снятие регистрации в реестре подписок (ADR-089) — на close/error.
+        let unregister: (() => void) | null = null;
+
         if (connection.connected) {
           // Гибрид: события удалённых сессий (remote:<id>) публикует мост —
           // подписываемся на все события (без дублей для локальных).
@@ -88,14 +130,17 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
         } else {
           const allSessions = await sessionManager.listSessions({ userId: 'local' });
           for (const s of allSessions) {
-            unsubs.push(eventBus.subscribe(s.id, handler));
+            subscribe(s.id);
           }
+          // ADR-089: сессии, материализованные funnel'ом (`RequestSessionService`)
+          // ПОСЛЕ этого снимка, доставляются точечной подпиской владельца —
+          // `onSessionMaterialized` → `subscribeToSession`.
+          unregister = subscriptions.register(user.id, subscribe);
         }
 
         ws.send(JSON.stringify({
           type: 'connected',
           client_id: clientId,
-          engine: 'synth',
         }));
 
         ws.on('message', (raw: Buffer) => {
@@ -225,13 +270,16 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
           } catch { /* ignore parse errors */ }
         });
 
-        ws.on('close', () => {
+        const cleanup = (): void => {
+          unregister?.();
+          unregister = null;
           for (const unsub of unsubs) unsub();
-        });
+          unsubs.length = 0;
+        };
 
-        ws.on('error', () => {
-          for (const unsub of unsubs) unsub();
-        });
+        ws.on('close', cleanup);
+
+        ws.on('error', cleanup);
       });
       return;
     }

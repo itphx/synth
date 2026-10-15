@@ -6,7 +6,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   ProviderConfig, ModelConfig, AgentDefinition, ToolsPolicy, ToolsDisabledConfig,
-  WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig,
+  WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session,
 } from '@itphx/synth-shared';
 import { ensureDataDir, parsePrincipalId } from '@itphx/synth-shared';
 import {
@@ -54,9 +54,23 @@ export interface HybridMirrorAccessors {
   isBlockLocalProviders: () => boolean;
 }
 
+/**
+ * Швы сборки standalone-зависимостей: зеркала гибрида + ADR-089-подписка хаба.
+ */
+export interface StandaloneDepsAccessors extends HybridMirrorAccessors {
+  /**
+   * ADR-089: колбэк после материализации сессии funnel'ом
+   * (`RequestSessionService.onSessionMaterialized`) и **до** доставки события в неё.
+   * Standalone подписывает на сессию уже подключённых клиентов WS-хаба
+   * (`/ws/events`) — паритет с managed `EventHub.subscribeToSession`. Не задан —
+   * поведение прежнее (только снимок сессий при `connect`).
+   */
+  onSessionMaterialized?: (session: Session) => void | Promise<void>;
+}
+
 export async function createStandaloneDeps(
   config: StandaloneConfig,
-  hybridMirrors: HybridMirrorAccessors,
+  accessors: StandaloneDepsAccessors,
 ) {
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
@@ -208,8 +222,8 @@ export async function createStandaloneDeps(
   // ТОЛЬКО зеркала серверных провайдеров (blockLocalProviders ставится в
   // applyConnected); при remote.llm=local локальные провайдеры остаются доступны.
   const providerLoader = (name: string): ProviderConfig | null => {
-    if (hybridMirrors.isBlockLocalProviders() && hybridMirrors.getActiveRemoteProviderNames().size > 0
-      && !hybridMirrors.getActiveRemoteProviderNames().has(name)) return null;
+    if (accessors.isBlockLocalProviders() && accessors.getActiveRemoteProviderNames().size > 0
+      && !accessors.getActiveRemoteProviderNames().has(name)) return null;
     return providerCache.get(name) ?? null;
   };
 
@@ -505,6 +519,11 @@ export async function createStandaloneDeps(
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
     // «Агенты» (`getDefaultAgentId`) поверх `DEFAULT_AGENT_ID`.
     resolveDefaultAgent: getDefaultAgentId,
+    // ADR-089: standalone-паритет с managed — уведомляем WS-хаб (`/ws/events`) о
+    // материализованной сессии **до** доставки события, чтобы клиенты владельца,
+    // подключённые раньше, получали её события (иначе подписка-снимок при
+    // `connect` новые сессии не покрывала).
+    onSessionMaterialized: accessors.onSessionMaterialized,
     // ADR-089: UI-событие после материализации внешнего события.
     publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
     deliver: async (sessionId, event, mode, context) => {
