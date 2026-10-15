@@ -66,18 +66,30 @@ export function formatBackupStamp(date: Date): string {
   );
 }
 
+/** Вид страховочной копии (PROP-092): перед миграцией или перед восстановлением. */
+export type SafetyCopyKind = 'pre-migrate' | 'pre-restore';
+
+/**
+ * Путь страховочной копии в едином каталоге `{dataDir}/backups/` (PROP-092):
+ * `synth-<kind>-<YYYYMMDD-HHmmss>.tar.gz`. Каталог `backups/` исключён из
+ * архивов бэкапа по умолчанию, поэтому копии не попадают в бэкап рекурсивно.
+ */
+export function safetyCopyPath(dataDir: string, kind: SafetyCopyKind, now: Date = new Date()): string {
+  return join(resolve(dataDir), 'backups', `synth-${kind}-${formatBackupStamp(now)}.tar.gz`);
+}
+
 /** Строит набор исключений (паттерны + предикат) по флагам. */
 function _buildExclusions(opts: { withSecrets: boolean; withWorkspace: boolean }): {
   patterns: string[];
   predicate: (relPath: string, isDir: boolean) => boolean;
 } {
-  const patterns = ['tmp/', 'logs/', '.doctor-probe', '*.lock'];
+  const patterns = ['backups/', 'tmp/', 'logs/', '.doctor-probe', '*.lock'];
   if (!opts.withWorkspace) patterns.push('workspaces/');
   if (!opts.withSecrets) patterns.push('secrets/');
 
   const predicate = (relPath: string, _isDir: boolean): boolean => {
     const top = relPath.split('/')[0];
-    if (top === 'tmp' || top === 'logs') return true;
+    if (top === 'backups' || top === 'tmp' || top === 'logs') return true;
     if (relPath === '.doctor-probe') return true;
     if (relPath.endsWith('.lock')) return true;
     if (!opts.withWorkspace && top === 'workspaces') return true;
@@ -122,8 +134,9 @@ async function _resolveOutPath(out: string | undefined, defaultName: string): Pr
 /**
  * Создаёт архив каталога данных (PROP-091).
  *
- * Исключения по умолчанию: `workspaces/` (без `--with-workspace`), `tmp/`,
- * `logs/`, `.doctor-probe`, `*.lock`; `secrets/` — без `--with-secrets`.
+ * Исключения по умолчанию: `backups/` (страховочные копии — не бэкапятся
+ * рекурсивно), `workspaces/` (без `--with-workspace`), `tmp/`, `logs/`,
+ * `.doctor-probe`, `*.lock`; `secrets/` — без `--with-secrets`.
  * Файл архива — `0600`.
  */
 export async function createBackup(opts: CreateBackupOptions): Promise<{

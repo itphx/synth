@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { listTarGz, readFileFromTarGz } from './archive.js';
-import { createBackup, type BackupManifest } from './backup.js';
+import { createBackup, safetyCopyPath, type BackupManifest } from './backup.js';
 
 describe('createBackup', () => {
   let tmpDir: string;
@@ -20,6 +20,7 @@ describe('createBackup', () => {
     await mkdir(join(dataDir, 'workspaces', 'w1'), { recursive: true });
     await mkdir(join(dataDir, 'tmp'), { recursive: true });
     await mkdir(join(dataDir, 'logs'), { recursive: true });
+    await mkdir(join(dataDir, 'backups'), { recursive: true });
 
     await writeFile(join(dataDir, 'sessions', 's1.json'), '{"id":"s1"}', 'utf-8');
     await writeFile(join(dataDir, 'projects', 'p1.json'), '{"id":"p1"}', 'utf-8');
@@ -27,6 +28,7 @@ describe('createBackup', () => {
     await writeFile(join(dataDir, 'workspaces', 'w1', 'f.txt'), 'ws', 'utf-8');
     await writeFile(join(dataDir, 'tmp', 'scratch'), 'tmp', 'utf-8');
     await writeFile(join(dataDir, 'logs', 'app.log'), 'log', 'utf-8');
+    await writeFile(join(dataDir, 'backups', 'synth-pre-migrate-20260101-000000.tar.gz'), 'copy', 'utf-8');
     await writeFile(join(dataDir, '.doctor-probe'), 'probe', 'utf-8');
     await writeFile(join(dataDir, 'scheduler.lock'), 'lock', 'utf-8');
     await writeFile(
@@ -56,6 +58,7 @@ describe('createBackup', () => {
     expect(manifest.instanceVersion).toBeTruthy();
     expect(manifest.excluded).toContain('secrets/');
     expect(manifest.excluded).toContain('workspaces/');
+    expect(manifest.excluded).toContain('backups/');
 
     const paths = manifest.entries.map((entry) => entry.path);
     expect(paths).toContain('sessions/s1.json');
@@ -64,6 +67,7 @@ describe('createBackup', () => {
     expect(paths.some((p) => p === 'secrets' || p.startsWith('secrets/'))).toBe(false);
     expect(paths.some((p) => p === 'workspaces' || p.startsWith('workspaces/'))).toBe(false);
     expect(paths.some((p) => p === 'tmp' || p.startsWith('tmp/'))).toBe(false);
+    expect(paths.some((p) => p === 'backups' || p.startsWith('backups/'))).toBe(false);
     expect(paths).not.toContain('.doctor-probe');
     expect(paths).not.toContain('scheduler.lock');
     expect(paths).not.toContain('manifest.json');
@@ -141,5 +145,15 @@ describe('createBackup', () => {
     // meta.json включён и читаем.
     const meta = result.manifest.entries.find((entry) => entry.path === 'meta.json');
     expect(meta?.type).toBe('file');
+  });
+
+  it('safetyCopyPath: единый каталог backups/ с меткой вида (PROP-092)', () => {
+    const now = new Date('2026-07-08T09:10:11');
+    expect(safetyCopyPath(dataDir, 'pre-migrate', now)).toBe(
+      join(dataDir, 'backups', 'synth-pre-migrate-20260708-091011.tar.gz'),
+    );
+    expect(safetyCopyPath(dataDir, 'pre-restore', now)).toMatch(
+      /\/backups\/synth-pre-restore-\d{8}-\d{6}\.tar\.gz$/,
+    );
   });
 });

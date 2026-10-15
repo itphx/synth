@@ -1142,4 +1142,29 @@ program
     if (code !== 0) process.exit(code);
   });
 
+program
+  .command('uninstall')
+  .description('Удалить инстанс: по умолчанию данные сохраняются, --purge удаляет (PROP-092)')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--purge', 'удалить каталог данных (необратимо; требует --yes)')
+  .option('--dry-run', 'показать, что будет удалено, без удаления')
+  .option('--yes', 'подтвердить необратимое удаление (обязательно без --dry-run)')
+  .action(async (options) => {
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
+
+    const { runUninstallCommand } = await import('./maintenance/uninstall.js');
+    const code = await runUninstallCommand({
+      dataDir,
+      home: home ?? undefined,
+      purge: !!options.purge,
+      dryRun: !!options.dryRun,
+      yes: !!options.yes,
+    });
+    if (code !== 0) process.exit(code);
+  });
+
 program.parse();

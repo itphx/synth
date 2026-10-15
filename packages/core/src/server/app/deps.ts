@@ -35,11 +35,8 @@ import {
   RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig,
 } from '../../storage/runtime-settings.js';
-import { migrateSessionScopeSnapshots } from '../../storage/migrations.js';
-import {
-  assertInstanceDataNotTooNew,
-  checkInstanceCompatibility,
-} from '../../storage/instance-meta.js';
+import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
+import { applyStartupMigrations } from '../../maintenance/startup.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { SkillBundleStore } from '../../storage/skill-bundle-store.js';
@@ -82,15 +79,10 @@ export async function createStandaloneDeps(
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
 
-  // PROP-092: guard совместимости схемы данных — данные новее Synth → отказ старта,
-  // устаревшая схема → предупреждение (миграция — `synth migrate`), без записи.
+  // PROP-092: guard совместимости схемы данных — данные новее Synth → отказ старта
+  // (дешёвая fail-fast проверка). Устаревшая схема → авто-миграции с обязательной
+  // страховочной копией ниже (`applyStartupMigrations`), после сборки стораджей.
   await assertInstanceDataNotTooNew(dataDir);
-  const schemaCompatibility = await checkInstanceCompatibility(dataDir);
-  if (schemaCompatibility.status === 'pending') {
-    console.warn(
-      `⚠️ Схема данных устарела (${schemaCompatibility.currentVersion} → ${schemaCompatibility.expectedVersion}). Запустите: synth migrate`,
-    );
-  }
 
   // Runtime-настройки (ADR-005): workspace из {dataDir}/settings.json приоритетнее config/env
   const settingsStore = new RuntimeSettingsStore({ dataDir });
@@ -304,11 +296,16 @@ export async function createStandaloneDeps(
   // ADR-046 §4.2/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
   void skillService.refreshRemote().catch(() => {});
 
-  // ADR-071 §2.4 / ADR-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
-  await migrateSessionScopeSnapshots({
+  // PROP-092: авто-миграции схемы данных при старте — с обязательной страховочной
+  // копией и под межпроцессным локом. Миграция снапшотов скоупа — зарегистрированная
+  // миграция реестра (`session-scope-snapshots-v1`, маркер внутри сохранён → no-op
+  // при повторном запуске), отдельный прямой вызов больше не нужен.
+  // Fail-closed: ошибка копии/миграции не глушится — старт прерывается.
+  await applyStartupMigrations({
+    dataDir,
+    settingsStore,
     sessionManager,
     projectStore,
-    settingsStore,
     resolveSystemDefaults: async () => ({
       mcpDefaultOn: Object.entries(config.mcpServers ?? {})
         .filter(([, cfg]) => cfg.enabledByDefault === true)
@@ -318,7 +315,7 @@ export async function createStandaloneDeps(
         await settingsStore.getSkillsDisabledForNewProjects(),
       )).enabled,
     }),
-  }).catch(() => 0);
+  });
 
   // ADR-046 §7: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
   const bundleStore = new SkillBundleStore({

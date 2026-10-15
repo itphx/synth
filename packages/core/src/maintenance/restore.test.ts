@@ -92,7 +92,8 @@ describe('restore', () => {
     expect(result.safetyCopyPath).toBeTruthy();
     const copyPath = result.safetyCopyPath as string;
     expect(basename(copyPath)).toMatch(/^synth-pre-restore-\d{8}-\d{6}\.tar\.gz$/);
-    expect(dirname(copyPath)).toBe(tmpDir);
+    // PROP-092: страховочная копия — в едином каталоге {dataDir}/backups/.
+    expect(dirname(copyPath)).toBe(join(target, 'backups'));
     await expect(stat(copyPath)).resolves.toBeTruthy();
 
     const previous = await readFileFromTarGz(copyPath, 'existing.txt');

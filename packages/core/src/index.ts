@@ -418,6 +418,12 @@ export {
 export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } from './storage/instance-meta.js';
 export { runMigrateCommand } from './maintenance/migrate.js';
 export type { MigrateCommandOptions } from './maintenance/migrate.js';
+// PROP-092: авто-миграции при старте (обязательная страховочная копия, лок).
+export { applyStartupMigrations } from './maintenance/startup.js';
+export type { ApplyStartupMigrationsOptions } from './maintenance/startup.js';
+// PROP-092: `synth uninstall` — сохранение/удаление данных инстанса.
+export { runUninstallCommand, collectUninstallSummary } from './maintenance/uninstall.js';
+export type { UninstallCommandOptions, UninstallSummary } from './maintenance/uninstall.js';
 // PROP-091: `synth doctor` — health инстанса, целостность данных, ключи/мастер, провайдеры, dataDir, миграции.
 export { runDoctor, renderDoctorResult, runDoctorCommand } from './maintenance/doctor.js';
 export type {
@@ -438,8 +444,8 @@ export {
   ArchivePathError,
 } from './maintenance/archive.js';
 export type { ArchiveEntryMeta, ArchiveSource, ReadTarGzEntry } from './maintenance/archive.js';
-export { createBackup, runBackupCommand, computeContentChecksum } from './maintenance/backup.js';
-export type { BackupManifest, CreateBackupOptions, BackupCommandOptions } from './maintenance/backup.js';
+export { createBackup, runBackupCommand, computeContentChecksum, safetyCopyPath } from './maintenance/backup.js';
+export type { BackupManifest, CreateBackupOptions, BackupCommandOptions, SafetyCopyKind } from './maintenance/backup.js';
 export { restoreBackup, runRestoreCommand, BackupChecksumError } from './maintenance/restore.js';
 export type { RestoreOptions, RestoreCommandOptions } from './maintenance/restore.js';
 export { SkillStore } from './storage/skill-store.js';

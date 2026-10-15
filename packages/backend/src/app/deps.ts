@@ -20,13 +20,13 @@ import {
   RuntimeSettingsStore, AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, ProtectedPathsStore,
   SecretPatternStore,
-  SkillService, resolveProjectSkillSeed, migrateSessionScopeSnapshots,
+  SkillService, resolveProjectSkillSeed,
   CommandService, SkillBundleStore,
   SSHKeyStore, detectRuntimeDeps, syncProvidersFromEnv,
   HookBus,
   startEphemeralSweeper,
   assertInstanceDataNotTooNew,
-  checkInstanceCompatibility,
+  applyStartupMigrations,
   EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
   RouteRuleStore, ProjectRuleProvider, DecisionRuleProvider,
   IdentityClaimStore,
@@ -54,14 +54,9 @@ export async function createBackendDeps(config: BackendConfig) {
   await ensureDataDir(dataDir);
 
   // PROP-092: guard совместимости схемы данных (паритет со standalone-core):
-  // данные новее Synth → отказ старта, устаревшая схема → предупреждение.
+  // данные новее Synth → отказ старта (fail-fast); устаревшая схема → авто-миграции
+  // с обязательной страховочной копией ниже (`applyStartupMigrations`).
   await assertInstanceDataNotTooNew(dataDir);
-  const schemaCompatibility = await checkInstanceCompatibility(dataDir);
-  if (schemaCompatibility.status === 'pending') {
-    console.warn(
-      `⚠️ Схема данных устарела (${schemaCompatibility.currentVersion} → ${schemaCompatibility.expectedVersion}). Запустите: synth migrate`,
-    );
-  }
 
   const fileStore = new FileStore({ dataDir });
   const projectStore = new ProjectStore({ dataDir });
@@ -599,11 +594,15 @@ export async function createBackendDeps(config: BackendConfig) {
     });
   }
 
-  // ADR-071 §2.4 / ADR-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
-  await migrateSessionScopeSnapshots({
+  // PROP-092: авто-миграции схемы данных при старте (паритет со standalone-core) —
+  // обязательная страховочная копия + межпроцессный лок. Миграция снапшотов скоупа —
+  // зарегистрированная миграция реестра (`session-scope-snapshots-v1`), отдельный
+  // прямой вызов больше не нужен. Fail-closed: ошибка не глушится.
+  await applyStartupMigrations({
+    dataDir,
+    settingsStore,
     sessionManager,
     projectStore,
-    settingsStore,
     resolveSystemDefaults: async () => ({
       mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
       skillsDefaultOn: (await resolveProjectSkillSeed(
@@ -611,7 +610,7 @@ export async function createBackendDeps(config: BackendConfig) {
         await settingsStore.getSkillsDisabledForNewProjects(),
       )).enabled,
     }),
-  }).catch(() => 0);
+  });
 
   return {
     dataDir,

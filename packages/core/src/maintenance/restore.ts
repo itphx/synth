@@ -3,13 +3,13 @@
 // dry-run → подтверждение (`--yes`) → страховочная копия → извлечение.
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, readdir, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { SCHEMA_VERSION } from '../storage/instance-meta.js';
 import { ArchivePathError, readFileFromTarGz, readTarGz } from './archive.js';
 import {
   computeContentChecksum,
   createBackup,
-  formatBackupStamp,
+  safetyCopyPath,
   type BackupManifest,
 } from './backup.js';
 
@@ -172,13 +172,13 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
     return { restored: fileCount, manifest };
   }
 
-  // 7. Страховочная копия текущих данных (до перезаписи).
-  let safetyCopyPath: string | undefined;
+  // 7. Страховочная копия текущих данных (до перезаписи) — в единый каталог
+  // `{dataDir}/backups/` (PROP-092), исключённый из архивов бэкапа.
+  let safetyPath: string | undefined;
   if (safetyCopy && (await _dirNotEmpty(dataDir))) {
-    const parent = dirname(dataDir);
-    const out = join(parent, `synth-pre-restore-${formatBackupStamp(new Date())}.tar.gz`);
+    const out = safetyCopyPath(dataDir, 'pre-restore');
     const copy = await createBackup({ dataDir, out, withSecrets: true });
-    safetyCopyPath = copy.path;
+    safetyPath = copy.path;
     log(`Страховочная копия: ${copy.path}`);
   }
 
@@ -205,11 +205,11 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
 
   // 9. Итог.
   log(`Восстановлено файлов: ${restored}`);
-  if (safetyCopyPath) log(`  страховочная копия: ${safetyCopyPath}`);
+  if (safetyPath) log(`  страховочная копия: ${safetyPath}`);
   log('Напоминание: выполните `synth doctor` (проверка после восстановления).');
   if (schemaOlder) log('Напоминание: схема старше — выполните `synth migrate`.');
 
-  return { restored, safetyCopyPath, manifest };
+  return { restored, safetyCopyPath: safetyPath, manifest };
 }
 
 /**
