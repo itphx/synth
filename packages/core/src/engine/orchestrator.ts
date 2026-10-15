@@ -32,7 +32,6 @@ import { ContentClassifier } from './router/content-classifier.js';
 import { DecisionContentClassifier } from './router/decision-content-classifier.js';
 import { ProviderPool } from './router/provider-pool.js';
 import { QualityChecker } from './router/quality-checker.js';
-import { DictionaryStore } from './router/dictionary-store.js';
 import type { DictionaryRepository } from '../storage/ports/dictionary-repository.js';
 import { MicroPipeline } from './router/micro/index.js';
 import { TaskClassifier } from './router/micro/task-classifier.js';
@@ -43,7 +42,7 @@ import { PermissionEvaluator, extractPaths } from './permission/evaluator.js';
 import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
-import { SSHKeyStore } from '../storage/ssh-key-store.js';
+import { createFileStorage } from '../storage/storage-context.js';
 import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 import { GitService } from '../git/git-service.js';
@@ -141,6 +140,13 @@ export interface OrchestratorOptions {
    * использует ambient ssh (реестр/ключи недоступны).
    */
   sshKeyStore?: SSHKeyRepository;
+  /**
+   * ADR-034/ADR-035: порт словарей классификации (микро-слой, threat-scan,
+   * проектные инструкции). Продакшн передаёт `StorageContext.dictionaries`;
+   * не задан — собирается из `dataDir` для прямого конструирования (тесты),
+   * TODO(PROP-032): убрать фоллбэк, брать обязательным портом.
+   */
+  dictionaryStore?: DictionaryRepository;
   defaultWorkingDir?: string;
   /**
    * Корень каталога workspaces: `join(dataDir, 'workspaces')` по умолчанию
@@ -565,11 +571,14 @@ export class ChatOrchestrator {
     this._contextConfig = options.contextConfig ?? null;
     this._projectStore = options.projectStore ?? null;
     this._profilesStore = options.profilesStore ?? null;
-    // ADR-076 §T6: хранилище SSH-ключей для git-тулов. Явный store (app/backend)
-    // приоритетнее; иначе — ленивое создание из dataDir (мастер-ключ — env
-    // SYNTH_SECRET_KEY / файл {dataDir}/secrets/master.key, см. SSHKeyStore).
+    // ADR-076 §T6: хранилище SSH-ключей для git-тулов. Явный порт (продакшн)
+    // приоритетнее; иначе — из файлового контекста хранения по `dataDir`
+    // (прямое конструирование/тесты).
+    // TODO(PROP-032): убрать фоллбэк, сделать порт обязательным.
     this._sshKeyStore = options.sshKeyStore
-      ?? (options.dataDir ? new SSHKeyStore({ dataDir: options.dataDir, env: process.env }) : null);
+      ?? (options.dataDir
+        ? createFileStorage({ dataDir: options.dataDir, env: process.env }).sshKeys
+        : null);
     // ADR-070 §2.1: единая точка сборки системного промпта (идемпотентно).
     this._composer = new SystemPromptComposer({
       contextBuilder: this._contextBuilder,
@@ -643,8 +652,11 @@ export class ChatOrchestrator {
         : null,
     );
 
-    // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру)
-    const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
+    // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру).
+    // Продакшн передаёт порт; фоллбэк — файловый контекст по `dataDir`.
+    // TODO(PROP-032): убрать фоллбэк, сделать порт обязательным.
+    const dictionaryStore = options.dictionaryStore
+      ?? createFileStorage({ dataDir: options.dataDir || '/var/synth/data' }).dictionaries;
     this._dictionaryStore = dictionaryStore;
     // ADR-069 Фаза 1: резолвер проектных инструкций (merged chain AGENTS.md).
     // Threat-scan использует тот же DictionaryStore, что и tool-контент (ADR-036).

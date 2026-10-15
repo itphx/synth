@@ -1,6 +1,7 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
+import type { DocumentRepository } from './ports/document-repository.js';
 
 export interface JsonStoreConfig {
   dataDir: string;
@@ -8,19 +9,15 @@ export interface JsonStoreConfig {
 }
 
 /**
- * Структурный контракт JSON-хранилища. Нужен, чтобы core-фабрики роутов можно
- * было переиспользовать в backend с его собственным `JsonStore` (у классов есть
- * приватные поля, поэтому напрямую типы не совместимы, а публичный API — общий).
+ * Структурный контракт JSON-хранилища (алиас порта `DocumentRepository`).
+ * Нужен, чтобы core-фабрики роутов можно было переиспользовать в backend с его
+ * собственным `JsonStore` (у классов есть приватные поля, поэтому напрямую типы
+ * не совместимы, а публичный API — общий). PROP-032 (W2.4): сам порт —
+ * `DocumentRepository<T>`, `JsonStore` его реализует.
  */
-export interface JsonStoreLike<T> {
-  load(key: string): Promise<T | null>;
-  save(key: string, value: T): Promise<void>;
-  delete(key: string): Promise<void>;
-  exists(key: string): Promise<boolean>;
-  list(): Promise<T[]>;
-}
+export type JsonStoreLike<T> = DocumentRepository<T>;
 
-export class JsonStore<T> {
+export class JsonStore<T> implements DocumentRepository<T> {
   private _locks = new Map<string, AsyncLock>();
 
   constructor(private config: JsonStoreConfig) {}

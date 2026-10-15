@@ -348,13 +348,13 @@ projectCmd
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
-    const { ProjectStore } = await import('./storage/project-store.js');
-    const { FileStore } = await import('./storage/file-store.js');
+    const { createStorageContext } = await import('./storage/storage-context.js');
     const { SessionManager } = await import('./sessions/manager.js');
     const { syncProjectToRemote, resolveLocalWorkspace } = await import('./remote/transfer.js');
 
-    const projectStore = new ProjectStore({ dataDir });
-    const project = await projectStore.load(projectId);
+    // PROP-032 (W2.4): хранилища — из единого контекста (дефолт `file`).
+    const storage = createStorageContext('file', { dataDir });
+    const project = await storage.projects.load(projectId);
     if (!project) {
       console.error(`Ошибка: локальный проект ${projectId} не найден`);
       process.exit(1);
@@ -376,7 +376,7 @@ projectCmd
     const remoteClient = session.getClient();
 
     const localSessions = includeSessions
-      ? await new SessionManager(new FileStore({ dataDir })).listSessions({ projectId: project.id })
+      ? await new SessionManager(storage.sessions).listSessions({ projectId: project.id })
       : [];
 
     console.log(`Publish проекта «${project.name}» → ${session.backendUrl}`);
@@ -418,11 +418,12 @@ projectCmd
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
-    const { ProjectStore } = await import('./storage/project-store.js');
-    const { FileStore } = await import('./storage/file-store.js');
+    const { createStorageContext } = await import('./storage/storage-context.js');
     const { SessionManager } = await import('./sessions/manager.js');
     const { forkProjectToLocal } = await import('./remote/transfer.js');
 
+    // PROP-032 (W2.4): хранилища — из единого контекста (дефолт `file`).
+    const storage = createStorageContext('file', { dataDir });
     const session = await ensureRemoteSession(options, synth, home);
     const remoteClient = session.getClient();
 
@@ -430,8 +431,8 @@ projectCmd
     const stats = await forkProjectToLocal({
       remoteProjectId,
       remoteClient,
-      localProjectStore: new ProjectStore({ dataDir }),
-      localSessionManager: new SessionManager(new FileStore({ dataDir })),
+      localProjectStore: storage.projects,
+      localSessionManager: new SessionManager(storage.sessions),
       includeFiles: !options.noFiles,
       includeSessions: !options.noSessions,
       localWorkspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
@@ -710,10 +711,10 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { FileStore } = await import('./storage/file-store.js');
+        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
-        const store = new FileStore({ dataDir });
+        const store = createStorageContext('file', { dataDir }).sessions;
         const manager = new SessionManager(store);
         const sessions = await manager.listSessions();
 
@@ -745,10 +746,10 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { FileStore } = await import('./storage/file-store.js');
+        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
-        const store = new FileStore({ dataDir });
+        const store = createStorageContext('file', { dataDir }).sessions;
         const manager = new SessionManager(store);
         await manager.renameSession(sessionId, title);
         console.log(`Сессия ${sessionId} переименована в "${title}"`);
@@ -768,10 +769,10 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { FileStore } = await import('./storage/file-store.js');
+        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
-        const store = new FileStore({ dataDir });
+        const store = createStorageContext('file', { dataDir }).sessions;
         const manager = new SessionManager(store);
         const fork = await manager.forkSession(sessionId, {
           messageId: options.message,
@@ -792,10 +793,10 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { FileStore } = await import('./storage/file-store.js');
+        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
-        const store = new FileStore({ dataDir });
+        const store = createStorageContext('file', { dataDir }).sessions;
         const manager = new SessionManager(store);
         const children = await manager.getChildren(sessionId);
 
@@ -828,7 +829,7 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { FileStore } = await import('./storage/file-store.js');
+        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
         let sourceSessionId = arg;
@@ -857,7 +858,7 @@ program
           process.exit(1);
         }
 
-        const store = new FileStore({ dataDir });
+        const store = createStorageContext('file', { dataDir }).sessions;
         const manager = new SessionManager(store);
         const ref = await manager.addReference(targetId, sourceSessionId, {
           label: options.label,
@@ -883,7 +884,7 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { FileStore } = await import('./storage/file-store.js');
+        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
         let sourceSessionId = arg;
@@ -912,7 +913,7 @@ program
           process.exit(1);
         }
 
-        const store = new FileStore({ dataDir });
+        const store = createStorageContext('file', { dataDir }).sessions;
         const manager = new SessionManager(store);
 
         const sourceSession = await manager.getSession(sourceSessionId);

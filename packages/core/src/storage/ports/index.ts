@@ -14,7 +14,10 @@
  *   - предметные методы (`listForUser`, `findByKey`, `resolveBySecret`, …);
  *   - явные методы под эффективные выборки SQL-бэкенда (помечены `@future-backend`;
  *     файловая реализация вправе сканировать);
- *   - `BlobStore` — для подсистем, которые не ложатся в таблицы (деревья файлов).
+ *   - `BlobStore` — для подсистем, которые не ложатся в таблицы (деревья файлов);
+ *   - `DocumentRepository<T>` — для конфигурационных словарей (провайдеры/модели/
+ *     агенты): здесь домен и есть «ключ → JSON-документ», generic-порт оправдан
+ *     (см. `document-repository.ts`).
  *
  * Реализации первого контура (`FileStore`, `ProjectStore`, …) объявляют
  * `implements` соответствующих портов; поведение при этом не меняется — это
@@ -51,6 +54,7 @@ export type { ProtectedPathsRepository } from './protected-paths-repository.js';
 export type { SkillRepository } from './skill-repository.js';
 export type { SkillBundleRepository } from './skill-bundle-repository.js';
 export type { DictionaryRepository } from './dictionary-repository.js';
+export type { DocumentRepository } from './document-repository.js';
 export type { ContextFileRepository } from './context-file-repository.js';
 export type { SSHKeyRepository } from './ssh-key-repository.js';
 export type { BlobStore } from './blob-store.js';

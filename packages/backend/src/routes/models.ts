@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import { JsonStore } from '@itphx/synth-core';
+import type { JsonStoreLike } from '@itphx/synth-core';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 import { createModelRoutes as createCoreModelRoutes } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
@@ -13,8 +13,8 @@ import { createRateLimiter } from '../middleware/rate-limiter.js';
  */
 export function createModelRoutes(
   kit: AuthKit,
-  modelStore: JsonStore<ModelConfig>,
-  providerStore: JsonStore<ProviderConfig>,
+  modelStore: JsonStoreLike<ModelConfig>,
+  providerStore: JsonStoreLike<ProviderConfig>,
   modelCache: Map<string, ModelConfig>,
   providerCache: Map<string, ProviderConfig>,
 ): Hono {

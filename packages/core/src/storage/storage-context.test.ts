@@ -16,7 +16,8 @@ import type { StorageContext } from './storage-context.js';
 /** Поля контекста (кроме `kind`) — доменные порты слоя хранения. */
 const PORT_KEYS = [
   'sessions', 'projects', 'profiles', 'settings', 'defaults', 'secretPatterns',
-  'protectedPaths', 'dictionaries', 'mcpRegistry', 'serviceKeys', 'eventApiKeys',
+  'protectedPaths', 'dictionaries', 'providers', 'models', 'agents', 'mcpRegistry',
+  'serviceKeys', 'eventApiKeys',
   'eventBindings', 'eventRoutes', 'eventJournal', 'identityClaims', 'webhooks',
   'webhookDeliveries', 'schedules', 'jobs', 'dedup', 'skills', 'skillBundles',
   'contextFiles', 'sshKeys', 'blobs',
@@ -117,7 +118,7 @@ describe('StorageContext (PROP-032, W2.3)', () => {
     expect(await a.settings.getWorkspace()).toBe('/ws/a');
   });
 
-  it('createMemoryStorage: kind=memory, файловая система не создаётся', () => {
+  it('createMemoryStorage: kind=memory, файловая система не создаётся', async () => {
     const dir = join(tmpDir, 'memory-data');
     const ctx = createMemoryStorage({ dataDir: dir });
     expect(ctx.kind).toBe('memory');
@@ -125,6 +126,17 @@ describe('StorageContext (PROP-032, W2.3)', () => {
     for (const key of PORT_KEYS) {
       expect(ctx[key], `поле ${key} не определено`).toBeDefined();
     }
+
+    // PROP-032 (W2.4): конфигурационные словари (providers/models/agents) — в памяти,
+    // на диск ничего не пишется (иначе `storage.backend=memory` протекал бы на ФС).
+    await ctx.providers.save('ollama', { name: 'ollama', type: 'ollama' } as never);
+    await ctx.models.save('ollama/llama3', { id: 'ollama/llama3', provider: 'ollama' } as never);
+    await ctx.agents.save('assistant', { id: 'assistant' } as never);
+    expect((await ctx.providers.list()).length).toBe(1);
+    expect(existsSync(join(dir, 'providers'))).toBe(false);
+    expect(existsSync(join(dir, 'models'))).toBe(false);
+    expect(existsSync(join(dir, 'agents'))).toBe(false);
+    expect(existsSync(dir)).toBe(false);
   });
 
   it('createStorageContext: диспетчер по backend', () => {

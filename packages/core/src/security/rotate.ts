@@ -101,6 +101,9 @@ export async function rotateSecretsMasterKey(
     warnings.push('Новый ключ совпадает со старым — ротация не требуется.');
   }
 
+  // PROP-032 (W2.4): конструирование намеренно — one-shot утилита ротации
+  // работает по явному `--data-dir` вне жизненного цикла инстанса (нет
+  // собранного `StorageContext`, ротация запускается из CLI/скрипта).
   const store = new SSHKeyStore({ dataDir: opts.dataDir });
   const summary = await store.rotateMasterKey(oldKey, newKey, { dryRun });
 

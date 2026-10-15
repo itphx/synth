@@ -7,7 +7,7 @@ import { isAbsolute, normalize, resolve } from 'node:path';
 import type { Hono } from 'hono';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole } from '@itphx/synth-shared';
 import {
-  DEFAULT_AGENT_ID, DictionaryStore, RateLimiter,
+  DEFAULT_AGENT_ID, RateLimiter,
   getPublicOpenApiDocument,
   createFsRoutes, createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes,
@@ -20,7 +20,7 @@ import {
   createContextRoutes as createCoreContextRoutes,
   resolveProjectWorkspace,
 } from '@itphx/synth-core';
-import type { AuthKit as CoreAuthKit, ServiceApiKeyStore } from '@itphx/synth-core';
+import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
 import { createSessionRoutes } from '../routes/sessions.js';
 import { createMessageRoutes } from '../routes/messages.js';
@@ -50,8 +50,6 @@ export interface BackendRoutesContext {
   config: BackendConfig;
   /** Зависимости backend (`createBackendDeps`). */
   deps: BackendDeps;
-  /** ADR-052 (этап I): реестр service-key (создаётся до `auth` в `app.ts`). */
-  serviceApiKeyStore: ServiceApiKeyStore;
 }
 
 /**
@@ -59,12 +57,12 @@ export interface BackendRoutesContext {
  * i18n-эндпоинты) в порядке, идентичном прежнему `createBackendApp`.
  */
 export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesContext): void {
-  const { config, deps, serviceApiKeyStore } = ctx;
+  const { config, deps } = ctx;
   const {
     dataDir, projectStore, sessionManager, eventBus, queueManager, processMessage, orchestrator,
     profilesStore, getDefaultAgentId, requestSessionService, contextOptimizer, protectedPathsStore,
     providerStore, providerCache, modelStore, modelCache, agentStore, agentRegistry, contextConfig,
-    sshKeyStore, commandService, bundleStore,
+    sshKeyStore, commandService, bundleStore, dictionaries, serviceApiKeyStore,
     eventIngress, eventBindingStore, eventJournal, routeRuleStore, eventApiKeyStore,
     schedulerService, scheduleStore, jobStore, webhookStore, webhookDeliveryStore, webhookService,
     webhooksConfig, eventHub, mcpManager, mcpRegistryStore, skillService, settingsStore,
@@ -533,11 +531,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }));
 
   // Словари классификации: чтение — все авторизованные, запись/сброс — ADMIN
-  // (тот же guard, что у users.ts). Реализация общая с core.
-  const dictionaryStore = new DictionaryStore(dataDir);
+  // (тот же guard, что у users.ts). Реализация общая с core; порт — из контекста хранения.
   app.route('/api/v2/dictionaries', createDictionaryRoutes(
     auth,
-    dictionaryStore,
+    dictionaries,
     { writeGuard: auth.requireAdmin },
   ));
 
@@ -547,7 +544,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   const instructionsInfoResolver = createInstructionsInfoResolver(
     new ProjectInstructionsResolver({
       config: config.synth.instructions,
-      dictionaryStore,
+      dictionaryStore: dictionaries,
       dataDir,
       trustedProjectDirs: config.synth.skills.trustedProjectDirs,
       // ADR-069 R3: авто-trust workspace внутри workspacesRoot (managed-каталоги).

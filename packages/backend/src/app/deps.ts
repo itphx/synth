@@ -5,7 +5,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
-  ProviderConfig, ModelConfig, AgentDefinition, ToolsDisabledConfig, WebhooksConfig,
+  ProviderConfig, ModelConfig, ToolsDisabledConfig, WebhooksConfig,
   SummarizationConfig, McpNetworkPolicy, DecisionConfig,
 } from '@itphx/synth-shared';
 import {
@@ -32,20 +32,42 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   WebhookService, startWebhookDeliveryPruner,
-  JsonStore,
   createStorageContext,
 } from '@itphx/synth-core';
-import type { DecisionAgentCandidate, EventsRuntimeSettings } from '@itphx/synth-core';
+import type { DecisionAgentCandidate, EventsRuntimeSettings, StorageContext } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
 import { EventHub } from '../events/hub.js';
 import { seedDebugTestUsers } from './bootstrap.js';
+
+/**
+ * PROP-032 (W2.4): единая точка сборки слоя хранения backend — `app.ts` строит
+ * её до `auth` (реестр `serviceKeys` нужен резолверу ключа, `mcpRegistry` —
+ * сидированию instance-серверов), а `createBackendDeps` переиспользует инстанс.
+ */
+export function createBackendStorage(config: BackendConfig): StorageContext {
+  const kind = resolveStorageBackend(config.synth, process.env);
+  if (kind === 'memory') {
+    console.warn('storage.backend=memory: данные не сохраняются на диск');
+  }
+  return createStorageContext(kind, {
+    dataDir: config.dataDir,
+    secretKey: resolveSecretKey(config.synth),
+    env: process.env,
+    dedupStore: config.synth.events.dedupStore,
+    scheduleCrossProcess: config.synth.scheduler.crossProcessLocks,
+    bundlesPath: config.synth.commands.bundlesPath,
+  });
+}
 
 /**
  * Собрать зависимости backend-приложения (хранилища/менеджеры/оркестратор/
  * событийное ядро/планировщик/webhooks). Роуты монтирует вызывающий
  * (`mountBackendRoutes`), поэтому здесь нет ни одного `app.*`-вызова.
  */
-export async function createBackendDeps(config: BackendConfig) {
+export async function createBackendDeps(
+  config: BackendConfig,
+  storage: StorageContext = createBackendStorage(config),
+) {
   // Хранилища
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
@@ -55,21 +77,9 @@ export async function createBackendDeps(config: BackendConfig) {
   // с обязательной страховочной копией ниже (`applyStartupMigrations`).
   await assertInstanceDataNotTooNew(dataDir);
 
-  // PROP-032 (W2.3): единый контекст хранения — домен получает порты из одного
-  // места. `file` (дефолт) собирает те же реализации/аргументы, что были здесь
-  // раньше (побайтовое поведение); `memory` — энергонезависимо (тесты).
-  const storageKind = resolveStorageBackend(config.synth, process.env);
-  if (storageKind === 'memory') {
-    console.warn('⚠️ storage.backend=memory: данные не сохраняются на диск');
-  }
-  const storage = createStorageContext(storageKind, {
-    dataDir,
-    secretKey: resolveSecretKey(config.synth),
-    env: process.env,
-    dedupStore: config.synth.events.dedupStore,
-    scheduleCrossProcess: config.synth.scheduler.crossProcessLocks,
-    bundlesPath: config.synth.commands.bundlesPath,
-  });
+  // PROP-032 (W2.3/W2.4): единый контекст хранения — домен получает порты из
+  // одного места. По умолчанию собирается `createBackendStorage`, готовый можно
+  // передать (паритет с `app.ts`, где `serviceKeys`/`mcpRegistry` нужны до `auth`).
   const {
     settings: settingsStore,
     defaults: defaultsStore,
@@ -80,6 +90,11 @@ export async function createBackendDeps(config: BackendConfig) {
     profiles: profilesStore,
     sshKeys: sshKeyStore,
     contextFiles: contextConfig,
+    providers: providerStore,
+    models: modelStore,
+    agents: agentStore,
+    dictionaries: dictionaryStore,
+    serviceKeys: serviceApiKeyStore,
     webhooks: webhookStore,
     webhookDeliveries: webhookDeliveryStore,
     eventBindings: eventBindingStore,
@@ -111,9 +126,6 @@ export async function createBackendDeps(config: BackendConfig) {
   // ADR-089: авто-архивация ephemeral-сессий по TTL (таймер `unref`).
   // Остановка — через хэндл `stopEphemeralSweeper` на graceful shutdown.
   const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
-  const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
-  const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
-  const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
 
   // ADR-036/ADR-005: паттерны секретов и runtime-настройки («workspace/mcp»,
   // умолчания оформления) — из контекста хранения (собраны выше).
@@ -342,6 +354,8 @@ export async function createBackendDeps(config: BackendConfig) {
     profilesStore,
     // ADR-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
     sshKeyStore,
+    // PROP-032 (W2.4): словари классификации — порт из контекста хранения.
+    dictionaryStore,
     workspacesRoot: config.workspacesRoot,
     // ADR-075: backend — managed-режим, workspace вне workspacesRoot запрещён.
     workspaceManaged: true,
@@ -612,6 +626,9 @@ export async function createBackendDeps(config: BackendConfig) {
     providerStore,
     modelStore,
     agentStore,
+    // PROP-032 (W2.4): конфигурационные словари и реестр service-key — из контекста.
+    dictionaries: dictionaryStore,
+    serviceApiKeyStore,
     contextConfig,
     profilesStore,
     patternStore,

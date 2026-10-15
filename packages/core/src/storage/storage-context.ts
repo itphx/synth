@@ -12,12 +12,14 @@
  */
 
 import { join } from 'node:path';
+import type { AgentDefinition, ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 import type {
   BlobStore,
   ContextFileRepository,
   DedupRepository,
   DefaultsRepository,
   DictionaryRepository,
+  DocumentRepository,
   EventApiKeyRepository,
   EventBindingRepository,
   EventJournalRepository,
@@ -42,6 +44,7 @@ import type {
 
 // ── Файловые реализации ────────────────────────────────────────────────
 import { FileStore } from './file-store.js';
+import { JsonStore } from './json-store.js';
 import { ProjectStore } from './project-store.js';
 import { FileProfileStore } from './profile-store.js';
 import { RuntimeSettingsStore } from './runtime-settings.js';
@@ -73,6 +76,7 @@ import {
   MemoryContextFileRepository,
   MemoryDefaultsRepository,
   MemoryDictionaryRepository,
+  MemoryDocumentRepository,
   MemoryEventApiKeyRepository,
   MemoryEventBindingRepository,
   MemoryEventJournalRepository,
@@ -113,6 +117,10 @@ export interface StorageContext {
   secretPatterns: SecretPatternRepository;
   protectedPaths: ProtectedPathsRepository;
   dictionaries: DictionaryRepository;
+  /** Конфигурационные словари (PROP-032, W2.4): `providers`/`models`/`agents`. */
+  providers: DocumentRepository<ProviderConfig>;
+  models: DocumentRepository<ModelConfig>;
+  agents: DocumentRepository<AgentDefinition>;
   mcpRegistry: McpRegistryRepository;
   serviceKeys: ServiceKeyRepository;
   eventApiKeys: EventApiKeyRepository;
@@ -171,6 +179,10 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     // Словари: системные — из пакета core (или заданного каталога), пользовательские —
     // `{dataDir}/dictionaries` (позиционный ctor `(userDataDir, systemDir?)`).
     dictionaries: new DictionaryStore(dataDir, config.systemDictionariesDir),
+    // PROP-032 (W2.4): провайдеры/модели/агенты — «ключ → JSON-документ».
+    providers: new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' }),
+    models: new JsonStore<ModelConfig>({ dataDir, subdir: 'models' }),
+    agents: new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' }),
     mcpRegistry: new McpRegistryStore({ dataDir }),
     serviceKeys: new ServiceApiKeyStore({ dataDir }),
     eventApiKeys: new EventApiKeyStore({ dataDir }),
@@ -222,6 +234,9 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     secretPatterns: new MemorySecretPatternRepository(),
     protectedPaths: new MemoryProtectedPathsRepository(),
     dictionaries: new MemoryDictionaryRepository(),
+    providers: new MemoryDocumentRepository<ProviderConfig>(),
+    models: new MemoryDocumentRepository<ModelConfig>(),
+    agents: new MemoryDocumentRepository<AgentDefinition>(),
     mcpRegistry: new MemoryMcpRegistryRepository(),
     serviceKeys: new MemoryServiceKeyRepository(),
     eventApiKeys: new MemoryEventApiKeyRepository(),

@@ -8,7 +8,7 @@ import { createMiddleware } from 'hono/factory';
 import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import {
-  KeyRateLimiter, DictionaryStore, DEFAULT_AGENT_ID,
+  KeyRateLimiter, DEFAULT_AGENT_ID,
   createSessionRoutes, createProjectRoutes,
   createProviderRoutes, createModelRoutes, createAgentRoutes, createFsRoutes,
   createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
@@ -27,7 +27,6 @@ import { resolveProjectWorkspace } from '../fs-workspace.js';
 import type { StandaloneConfig } from '../app.js';
 import type { StandaloneDeps } from './deps.js';
 import type { LocalAuthKit } from '../../auth/local.js';
-import type { ServiceApiKeyStore } from '../../storage/service-api-key-store.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 
 /** Ленивый доступ к состоянию гибрида (`createHybridRemoteState`). */
@@ -45,8 +44,6 @@ export interface StandaloneRoutesRemote {
 export interface StandaloneRoutesContext {
   config: StandaloneConfig;
   deps: StandaloneDeps;
-  /** ADR-052 (этап I): реестр service-key (создаётся до `auth` в `app.ts`). */
-  serviceApiKeyStore: ServiceApiKeyStore;
   remote: StandaloneRoutesRemote;
   /**
    * ADR-089: паритет с managed `EventHub.subscribeToSession` — подписка
@@ -76,9 +73,9 @@ export function mountStandaloneRoutes(
     webhookService, webhooksConfig, eventIngress, eventBindingStore, eventJournal, routeRuleStore,
     eventApiKeyStore, resolveAgentTemplate, schedulerService, scheduleStore, jobStore,
     identityClaimStore, modelWindowLoader, eventRouter, dataDir, defaultWorkingDir,
-    commandService, bundleStore,
+    commandService, bundleStore, dictionaries,
   } = deps;
-  const serviceApiKeyStore = ctx.serviceApiKeyStore;
+  const serviceApiKeyStore = deps.serviceApiKeyStore;
   const {
     getClient, getActiveRemoteModels, getActiveRemoteProviderNames, isBlockLocalProviders,
   } = ctx.remote;
@@ -314,9 +311,8 @@ export function mountStandaloneRoutes(
 
   // Словари классификации: чтение — все аутентифицированные, запись/сброс —
   // аутентификация (в standalone достаточно --api-key, локальный режим).
-  // Модуль общий с backend, отличается только writeGuard.
-  const dictionaryStore = new DictionaryStore(dataDir);
-  app.route('/api/v2/dictionaries', createDictionaryRoutes(auth, dictionaryStore));
+  // Модуль общий с backend, отличается только writeGuard. Порт — из контекста хранения.
+  app.route('/api/v2/dictionaries', createDictionaryRoutes(auth, dictionaries));
 
   // MCP (probe подключения к серверу)
   app.route('/api/v2/mcp', createMcpRoutes(auth, { mcpManager }));
@@ -460,7 +456,7 @@ export function mountStandaloneRoutes(
     const instructionsInfoResolver = createInstructionsInfoResolver(
       new ProjectInstructionsResolver({
         config: config.instructionsConfig,
-        dictionaryStore,
+        dictionaryStore: dictionaries,
         dataDir,
         trustedProjectDirs: config.skillsConfig?.trustedProjectDirs,
         // ADR-069 R3: авто-trust workspace внутри workspacesRoot (как в оркестраторе).

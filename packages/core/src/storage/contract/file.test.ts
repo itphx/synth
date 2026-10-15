@@ -7,6 +7,7 @@ import {
   describeContextFileRepository,
   describeDedupRepository,
   describeDictionaryRepository,
+  describeDocumentRepository,
   describeEventApiKeyRepository,
   describeEventBindingRepository,
   describeEventJournalRepository,
@@ -49,6 +50,7 @@ import { McpRegistryStore } from '../mcp-registry-store.js';
 import { SkillStore } from '../skill-store.js';
 import { SkillBundleStore } from '../skill-bundle-store.js';
 import { DictionaryStore } from '../../engine/router/dictionary-store.js';
+import { JsonStore } from '../json-store.js';
 import { ContextConfig } from '../../engine/context/config.js';
 import { SecretPatternStore } from '../../engine/gateway/secret-pattern-store.js';
 import { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
@@ -149,6 +151,18 @@ describe('контрактные тесты файловых реализаци�
   describeDictionaryRepository('DictionaryStore → DictionaryRepository', async () => ({
     repo: new DictionaryStore(await tmp()),
   }));
+
+  // PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты).
+  describeDocumentRepository<{ name: string; enabled: boolean }>(
+    'JsonStore → DocumentRepository',
+    async () => ({
+      repo: new JsonStore<{ name: string; enabled: boolean }>({
+        dataDir: await tmp(),
+        subdir: 'providers',
+      }),
+    }),
+    (key) => ({ name: key, enabled: true }),
+  );
 
   describeContextFileRepository('ContextConfig → ContextFileRepository', async () => ({
     repo: new ContextConfig({ userDataDir: await tmp() }),

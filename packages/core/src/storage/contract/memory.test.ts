@@ -6,6 +6,7 @@ import {
   describeDefaultsRepository,
   describeDedupRepository,
   describeDictionaryRepository,
+  describeDocumentRepository,
   describeEventApiKeyRepository,
   describeEventBindingRepository,
   describeEventJournalRepository,
@@ -33,6 +34,7 @@ import {
   MemoryDefaultsRepository,
   MemoryDedupRepository,
   MemoryDictionaryRepository,
+  MemoryDocumentRepository,
   MemoryEventApiKeyRepository,
   MemoryEventBindingRepository,
   MemoryEventJournalRepository,
@@ -141,6 +143,13 @@ describe('контрактные тесты in-memory реализаций по�
   describeDictionaryRepository('MemoryDictionaryRepository → DictionaryRepository', async () => ({
     repo: new MemoryDictionaryRepository(),
   }));
+
+  // PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты).
+  describeDocumentRepository<{ name: string; enabled: boolean }>(
+    'MemoryDocumentRepository → DocumentRepository',
+    async () => ({ repo: new MemoryDocumentRepository<{ name: string; enabled: boolean }>() }),
+    (key) => ({ name: key, enabled: true }),
+  );
 
   describeContextFileRepository('MemoryContextFileRepository → ContextFileRepository', async () => ({
     repo: new MemoryContextFileRepository(),

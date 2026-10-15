@@ -4,7 +4,6 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig } from '@itphx/synth-shared';
 import {
-  ServiceApiKeyStore,
   applyBootstrapServiceKeys,
   KeyRateLimiter,
   getServiceCredential,
@@ -18,7 +17,7 @@ import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createRemoteProxyMiddleware } from './proxy.js';
 import type { RemoteEventBridge } from '../remote/event-bridge.js';
-import { createStandaloneDeps } from './app/deps.js';
+import { createStandaloneDeps, createStandaloneStorage } from './app/deps.js';
 import { createHybridRemoteState } from './app/hybrid-remote.js';
 import { mountStandaloneRoutes } from './app/mount-routes.js';
 import { registerEventsSse } from './app/sse-events.js';
@@ -157,9 +156,13 @@ export type { RemoteProviderSpec } from './app/hybrid-remote.js';
  */
 export async function createStandaloneApp(config: StandaloneConfig) {
   const app = new Hono();
-  // ADR-052 (этап I): реестр service-key создаётся до auth — резолвер ключа
-  // (`synth_svc_…`) нужен локальной аутентификации (`requireAuth`).
-  const serviceApiKeyStore = new ServiceApiKeyStore({ dataDir: config.dataDir });
+  // PROP-032 (W2.4): единый контекст хранения собирается здесь — реестр
+  // service-key (`storage.serviceKeys`) нужен аутентификации до сборки
+  // зависимостей; тот же инстанс переиспользует `createStandaloneDeps`.
+  const storage = createStandaloneStorage(config);
+  // ADR-052 (этап I): реестр service-key — резолвер ключа (`synth_svc_…`)
+  // нужен локальной аутентификации (`requireAuth`).
+  const serviceApiKeyStore = storage.serviceKeys;
   // ADR-052/O1: идемпотентный bootstrap installer-ключей из env/Secret
   // (best-effort — ошибка конфигурации не роняет старт, пишется в лог).
   await applyBootstrapServiceKeys(
@@ -295,13 +298,12 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     onSessionMaterialized: (owner, sessionId) => {
       wsSubscriptions.subscribeToSession(owner, sessionId);
     },
-  });
+  }, storage);
 
   // Роуты API v2 (порядок монтирования — как раньше, см. mount-routes.ts).
   mountStandaloneRoutes(app, auth, {
     config,
     deps,
-    serviceApiKeyStore,
     remote: {
       getClient: () => connection.client,
       getActiveRemoteModels: () => hybrid.getActiveRemoteModels(),

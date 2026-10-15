@@ -458,7 +458,7 @@ export interface BootstrapServiceKeyEntry {
  * работы остальных API).
  */
 export async function applyBootstrapServiceKeys(
-  store: ServiceApiKeyStore,
+  store: ServiceKeyRepository,
   entries: readonly BootstrapServiceKeyEntry[],
 ): Promise<void> {
   for (const entry of entries) {

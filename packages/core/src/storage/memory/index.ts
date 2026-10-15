@@ -38,3 +38,6 @@ export {
   MemoryBlobStore,
   MemorySSHKeyRepository,
 } from './content.js';
+
+// PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — общий generic-порт.
+export { MemoryDocumentRepository } from './document-repository.js';

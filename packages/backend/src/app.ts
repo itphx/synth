@@ -22,7 +22,6 @@ import { logger } from 'hono/logger';
 import { createMiddleware } from 'hono/factory';
 import { nowISO, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
-  ServiceApiKeyStore,
   applyBootstrapServiceKeys,
   KeyRateLimiter,
   getServiceCredential,
@@ -41,7 +40,7 @@ import type { AuthKit } from './auth/middleware.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { t } from './lib/i18n.js';
 import type { EventHub } from './events/hub.js';
-import { createBackendDeps } from './app/deps.js';
+import { createBackendDeps, createBackendStorage } from './app/deps.js';
 import { mountBackendRoutes } from './app/mount-routes.js';
 import { createBackendListen } from './app/listen.js';
 
@@ -159,9 +158,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       credentials: true,
     }));
 
-    // ADR-052 (этап I): реестр service-key создаётся до auth — резолвер
-    // `synth_svc_…` нужен аутентификации (паритет с core `server/app.ts`).
-    const serviceApiKeyStore = new ServiceApiKeyStore({ dataDir: backendConfig.dataDir });
+    // PROP-032 (W2.4): единый контекст хранения — собирается до `auth`, реестр
+    // service-key (`storage.serviceKeys`) нужен резолверу `synth_svc_…`; тот же
+    // инстанс переиспользует `createBackendDeps` (в т.ч. `mcpRegistry`, который
+    // деп сидирует instance-серверами).
+    const storage = createBackendStorage(backendConfig);
+    // ADR-052 (этап I): реестр service-key — резолвер ключа `synth_svc_…`
+    // нужен аутентификации (паритет с core `server/app.ts`).
+    const serviceApiKeyStore = storage.serviceKeys;
     // ADR-052/O1: идемпотентный bootstrap installer-ключей из env/Secret
     // (best-effort — ошибка конфигурации не роняет старт, пишется в лог).
     await applyBootstrapServiceKeys(
@@ -212,13 +216,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     }));
 
     // Зависимости (stores/managers/оркестратор/событийное ядро/шедулер/webhooks).
-    const deps = await createBackendDeps(backendConfig);
+    // Тот же контекст хранения, что собран до `auth`.
+    const deps = await createBackendDeps(backendConfig, storage);
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, deps.profilesStore, deps.dataDir, deps.defaultsStore));
 
     // Роуты API v2 (порядок монтирования — как раньше, см. mount-routes.ts).
-    mountBackendRoutes(app, auth, { config: backendConfig, deps, serviceApiKeyStore });
+    mountBackendRoutes(app, auth, { config: backendConfig, deps });
 
     // 404
     app.notFound((c) => {

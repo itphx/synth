@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import { JsonStore } from '@itphx/synth-core';
+import type { JsonStoreLike } from '@itphx/synth-core';
 import type { ProviderConfig } from '@itphx/synth-shared';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
 import {
@@ -28,7 +28,7 @@ const PROVIDER_URL_NETWORK_POLICY = {
  */
 export function createProviderRoutes(
   kit: AuthKit,
-  store: JsonStore<ProviderConfig>,
+  store: JsonStoreLike<ProviderConfig>,
   providerCache: Map<string, ProviderConfig>,
 ): Hono {
   const app = new Hono();

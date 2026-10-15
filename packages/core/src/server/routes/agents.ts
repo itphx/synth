@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { AgentDefinition } from '@itphx/synth-shared';
-import type { JsonStore } from '../../storage/json-store.js';
+import type { JsonStoreLike } from '../../storage/json-store.js';
 import {
   loadSystemAgentDefinitions,
   normalizeAgentModes,
@@ -69,7 +69,7 @@ const AGENT_FIELDS = (a: AgentDefinition, isBuiltin: boolean) => ({
 
 export function createAgentRoutes(
   auth: AgentRoutesAuth,
-  agentStore: JsonStore<AgentDefinition>,
+  agentStore: JsonStoreLike<AgentDefinition>,
   agentRegistry?: AgentRegistry,
   getDefaultAgentId?: () => string | Promise<string>,
   opts?: AgentRoutesOptions,

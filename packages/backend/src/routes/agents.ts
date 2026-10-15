@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import { JsonStore } from '@itphx/synth-core';
+import type { JsonStoreLike } from '@itphx/synth-core';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import { createAgentRoutes as createCoreAgentRoutes } from '@itphx/synth-core';
 import type { AgentRegistry } from '@itphx/synth-core';
@@ -13,7 +13,7 @@ import { t } from '../lib/i18n.js';
  */
 export function createAgentRoutes(
   kit: AuthKit,
-  agentStore: JsonStore<AgentDefinition>,
+  agentStore: JsonStoreLike<AgentDefinition>,
   agentRegistry?: AgentRegistry,
   getDefaultAgentId?: () => string | Promise<string>,
 ): Hono {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type {
   ContextFileRepository,
   DictionaryRepository,
+  DocumentRepository,
   McpRegistryRepository,
   ProtectedPathsRepository,
   SecretPatternRepository,
@@ -137,9 +138,65 @@ export function describeDictionaryRepository(
   });
 }
 
-/** Паспорт порта `ContextFileRepository`. */
-export function describeContextFileRepository(
+/**
+ * Паспорт порта `DocumentRepository<T>` (PROP-032, W2.4): round-trip по ключу,
+ * `list`/`delete`, вложенные ключи (`provider/model`), независимость значений.
+ */
+export function describeDocumentRepository<T>(
   name: string,
+  make: () => Promise<{ repo: DocumentRepository<T>; dispose?: () => Promise<void> }>,
+  makeValue: (key: string) => T,
+): void {
+  describe(name, () => {
+    it('load отсутствующего — null, exists — false; save/load round-trip', async () => {
+      const { repo } = await make();
+      expect(await repo.load('missing')).toBeNull();
+      expect(await repo.exists('missing')).toBe(false);
+
+      await repo.save('alpha', makeValue('alpha'));
+      expect(await repo.exists('alpha')).toBe(true);
+      expect(await repo.load('alpha')).toEqual(makeValue('alpha'));
+    });
+
+    it('list пустого — []; delete идемпотентен', async () => {
+      const { repo } = await make();
+      expect(await repo.list()).toEqual([]);
+
+      await repo.save('a', makeValue('a'));
+      await repo.save('b', makeValue('b'));
+      expect((await repo.list()).length).toBe(2);
+
+      await repo.delete('a');
+      expect(await repo.load('a')).toBeNull();
+      expect(await repo.exists('a')).toBe(false);
+      await expect(repo.delete('a')).resolves.toBeUndefined();
+      expect((await repo.list()).length).toBe(1);
+    });
+
+    it('вложенные ключи (`provider/model`) поддерживаются', async () => {
+      const { repo } = await make();
+      await repo.save('ollama/llama3', makeValue('ollama/llama3'));
+      expect(await repo.load('ollama/llama3')).toEqual(makeValue('ollama/llama3'));
+      expect((await repo.list()).length).toBe(1);
+    });
+
+    it('значение независимо от стора: load возвращает новую копию', async () => {
+      const { repo } = await make();
+      const value = makeValue('c');
+      await repo.save('c', value);
+      const first = await repo.load('c');
+      const second = await repo.load('c');
+      expect(first).toEqual(value);
+      if (first !== null && typeof first === 'object') {
+        expect(first).not.toBe(second);
+        expect(first).not.toBe(value);
+      }
+    });
+  });
+}
+
+/** Паспорт порта `ContextFileRepository`. */
+export function describeContextFileRepository(  name: string,
   make: () => Promise<{ repo: ContextFileRepository; dispose?: () => Promise<void> }>,
 ): void {
   describe(name, () => {

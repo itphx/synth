@@ -5,7 +5,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
-  ProviderConfig, ModelConfig, AgentDefinition, ToolsPolicy, ToolsDisabledConfig,
+  ProviderConfig, ModelConfig, ToolsPolicy, ToolsDisabledConfig,
   WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session,
 } from '@itphx/synth-shared';
 import { ensureDataDir, parsePrincipalId } from '@itphx/synth-shared';
@@ -24,8 +24,8 @@ import {
   startEventJournalPruner,
   startWebhookDeliveryPruner,
   createStorageContext,
+  type StorageContext,
 } from '../../index.js';
-import { JsonStore } from '../../storage/json-store.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
@@ -67,9 +67,32 @@ export interface StandaloneDepsAccessors extends HybridMirrorAccessors {
   onSessionMaterialized?: (owner: string, sessionId: string) => void | Promise<void>;
 }
 
+/**
+ * PROP-032 (W2.4): единая точка сборки слоя хранения standalone — `app.ts`
+ * строит её до `auth` (реестр `serviceKeys` нужен резолверу ключа), а
+ * `createStandaloneDeps` переиспользует тот же инстанс (один контекст, а не
+ * россыпь конкретных классов по `main.ts`/`chat.ts`/`app.ts`).
+ */
+export function createStandaloneStorage(config: StandaloneConfig): StorageContext {
+  const kind = config.storageBackend ?? 'file';
+  if (kind === 'memory') {
+    console.warn('storage.backend=memory: данные не сохраняются на диск');
+  }
+  return createStorageContext(kind, {
+    dataDir: config.dataDir,
+    secretKey: config.secretKey,
+    env: process.env,
+    dedupStore: config.eventsConfig?.dedupStore,
+    scheduleCrossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
+    systemPromptsDir: config.systemPromptsDir,
+    bundlesPath: config.commandsConfig?.bundlesPath,
+  });
+}
+
 export async function createStandaloneDeps(
   config: StandaloneConfig,
   accessors: StandaloneDepsAccessors,
+  storage: StorageContext = createStandaloneStorage(config),
 ) {
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
@@ -79,23 +102,11 @@ export async function createStandaloneDeps(
   // страховочной копией ниже (`applyStartupMigrations`), после сборки стораджей.
   await assertInstanceDataNotTooNew(dataDir);
 
-  // PROP-032 (W2.3): единый контекст хранения — домен получает порты из одного
-  // места, а не собирает конкретные классы. `file` (дефолт) собирает те же
-  // реализации/аргументы, что были здесь раньше (побайтовое поведение);
-  // `memory` — энергонезависимо (герметичные тесты).
-  const storageKind = config.storageBackend ?? 'file';
-  if (storageKind === 'memory') {
-    console.warn('⚠️ storage.backend=memory: данные не сохраняются на диск');
-  }
-  const storage = createStorageContext(storageKind, {
-    dataDir,
-    secretKey: config.secretKey,
-    env: process.env,
-    dedupStore: config.eventsConfig?.dedupStore,
-    scheduleCrossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
-    systemPromptsDir: config.systemPromptsDir,
-    bundlesPath: config.commandsConfig?.bundlesPath,
-  });
+  // PROP-032 (W2.3/W2.4): единый контекст хранения — домен получает порты из
+  // одного места (по умолчанию собирается `createStandaloneStorage`, можно
+  // передать готовый — паритет с `app.ts`, где `serviceKeys` нужен до `auth`).
+  // `file` (дефолт) собирает те же реализации/аргументы, что были здесь раньше
+  // (побайтовое поведение); `memory` — энергонезависимо (герметичные тесты).
   const {
     settings: settingsStore,
     defaults: defaultsStore,
@@ -106,6 +117,11 @@ export async function createStandaloneDeps(
     profiles: profilesStore,
     sshKeys: sshKeyStore,
     contextFiles: contextConfig,
+    providers: providerStore,
+    models: modelStore,
+    agents: agentStore,
+    dictionaries: dictionaryStore,
+    serviceKeys: serviceApiKeyStore,
     webhooks: webhookStore,
     webhookDeliveries: webhookDeliveryStore,
     eventBindings: eventBindingStore,
@@ -184,10 +200,6 @@ export async function createStandaloneDeps(
   // (тесты/короткоживущие процессы не держатся); остановка — на shutdown
   // через возвращаемый хэндл `stopEphemeralSweeper`.
   const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
-  const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
-  const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
-  const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
-
   const mcpManager = new McpManager();
   mcpManager.setConfig(config.mcpServers ?? {});
 
@@ -370,6 +382,8 @@ export async function createStandaloneDeps(
     profilesStore,
     // ADR-076 §T6: тот же store, что у git-роутов — без дублей инстансов.
     sshKeyStore,
+    // PROP-032 (W2.4): словари классификации — порт из контекста хранения.
+    dictionaryStore,
     defaultWorkingDir,
     workspacesRoot: config.workspacesRoot ?? join(dataDir, 'workspaces'),
     // ADR-075: тулы проекта (workspace) читают live-политику вне root.
@@ -640,6 +654,9 @@ export async function createStandaloneDeps(
     stopEphemeralSweeper,
     // ADR-076: тот же store, что у git-роутов и оркестратора — без дублей инстансов.
     sshKeyStore,
+    // PROP-032 (W2.4): конфигурационные словари и реестр service-key — из контекста.
+    dictionaries: dictionaryStore,
+    serviceApiKeyStore,
     providerStore,
     modelStore,
     agentStore,

@@ -5,9 +5,7 @@ import {
   checkInstanceCompatibility,
   runMigrations,
 } from '../storage/instance-meta.js';
-import { FileStore } from '../storage/file-store.js';
-import { ProjectStore } from '../storage/project-store.js';
-import { RuntimeSettingsStore } from '../storage/runtime-settings.js';
+import { createStorageContext } from '../storage/storage-context.js';
 import { SessionManager } from '../sessions/manager.js';
 
 /** Опции команды `synth migrate`. */
@@ -68,10 +66,12 @@ export async function runMigrateCommand(opts: MigrateCommandOptions): Promise<nu
   }
 
   // Дефолтные зависимости данных инстанса: сессии/проекты/маркеры миграций.
+  // PROP-032 (W2.4): собираются из единого контекста хранения (`file`).
+  const storage = createStorageContext('file', { dataDir });
   const deps = {
-    settingsStore: new RuntimeSettingsStore({ dataDir }),
-    sessionManager: new SessionManager(new FileStore({ dataDir })),
-    projectStore: new ProjectStore({ dataDir }),
+    settingsStore: storage.settings,
+    sessionManager: new SessionManager(storage.sessions),
+    projectStore: storage.projects,
   };
 
   try {

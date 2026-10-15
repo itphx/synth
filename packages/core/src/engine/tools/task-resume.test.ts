@@ -15,7 +15,7 @@ import { BaseProvider, ProviderFactory } from '../../providers/base.js';
 import type { CancellationToken, LLMMessage } from '../../providers/base.js';
 import type { ContextBuilder } from '../context/builder.js';
 import type { AgentRegistry } from '../agents/registry.js';
-import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import { stubSshKeys } from '../../test-helpers/storage-stubs.js';
 import type { GitService } from '../../git/git-service.js';
 import { z } from 'zod';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
@@ -741,7 +741,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     toolRegistry.register(probeTool);
 
     const projectStoreMock = { load: async () => null };
-    const sshKeyStoreMock = {} as unknown as SSHKeyStore;
+    const sshKeyStoreMock = stubSshKeys();
     const gitServiceMock = {} as unknown as GitService;
 
     let calls = 0;

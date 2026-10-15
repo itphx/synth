@@ -166,6 +166,7 @@ export type {
   BlobStore,
   DefaultsRepository,
   AppearanceDefaults,
+  DocumentRepository,
 } from './storage/ports/index.js';
 // PROP-032 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
 export {
@@ -195,6 +196,8 @@ export {
   MemoryBlobStore,
   MemorySSHKeyRepository,
 } from './storage/memory/index.js';
+// PROP-032 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
+export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
 // PROP-032 (W2.3): умолчания оформления (перенесено из backend) — файловая реализация.
 export { DefaultsStore, UI_SCALE_MIN, UI_SCALE_MAX } from './storage/defaults-store.js';
 // PROP-032 (W2.3): единый контекст слоя хранения + фабрики `file`/`memory`.

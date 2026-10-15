@@ -34,6 +34,7 @@ export { describeMcpRegistryRepository } from './content.js';
 export { describeSkillRepository } from './content.js';
 export { describeSkillBundleRepository } from './content.js';
 export { describeDictionaryRepository } from './content.js';
+export { describeDocumentRepository } from './content.js';
 export { describeContextFileRepository } from './content.js';
 export { describeSecretPatternRepository } from './content.js';
 export { describeProtectedPathsRepository } from './content.js';

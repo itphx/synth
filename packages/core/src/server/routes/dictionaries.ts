@@ -5,7 +5,8 @@ import {
   DICTIONARY_MAX_KEYWORDS,
   DICTIONARY_MAX_TOOLS,
 } from '../../engine/router/dictionary-store.js';
-import type { DictionaryStore, StoredDictionary } from '../../engine/router/dictionary-store.js';
+import type { StoredDictionary } from '../../engine/router/dictionary-store.js';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -26,7 +27,7 @@ export interface DictionaryRoutesOptions {
 const CATEGORY_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 /** Словарь + действующее содержимое (YAML) и его размер в байтах. */
-function withContent(store: DictionaryStore, dictionary: StoredDictionary) {
+function withContent(store: DictionaryRepository, dictionary: StoredDictionary) {
   const content = store.getContent(dictionary.category, dictionary.language);
   return {
     ...dictionary,
@@ -51,7 +52,7 @@ function normalizeList(value: unknown): string[] | null {
 }
 
 /** Валидация :category/:lang. Возвращает текст ошибки либо null. */
-function validateTarget(store: DictionaryStore, category: string, language: string): string | null {
+function validateTarget(store: DictionaryRepository, category: string, language: string): string | null {
   if (!CATEGORY_PATTERN.test(category) || category.includes('..')) {
     return 'Некорректная категория словаря';
   }
@@ -79,7 +80,7 @@ function validateTarget(store: DictionaryStore, category: string, language: stri
  */
 export function createDictionaryRoutes(
   auth: DictionaryRoutesAuth,
-  store: DictionaryStore,
+  store: DictionaryRepository,
   opts: DictionaryRoutesOptions = {},
 ): Hono {
   const app = new Hono();

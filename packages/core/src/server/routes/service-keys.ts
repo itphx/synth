@@ -9,7 +9,7 @@ import {
   serviceApiKeyUpdateSchema,
 } from '@itphx/synth-shared';
 import { ServiceApiKeyConflictError } from '../../storage/service-api-key-store.js';
-import type { ServiceApiKeyStore } from '../../storage/service-api-key-store.js';
+import type { ServiceKeyRepository } from '../../storage/ports/service-key-repository.js';
 
 /**
  * ADR-052 (этап I): CRUD service-key инстанса. Единая реализация для core
@@ -36,7 +36,7 @@ export interface ServiceKeyRouteMessages {
 }
 
 export interface ServiceKeyRoutesDeps {
-  store: ServiceApiKeyStore;
+  store: ServiceKeyRepository;
 }
 
 export interface ServiceKeyRoutesOptions {

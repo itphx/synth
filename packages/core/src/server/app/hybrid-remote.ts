@@ -12,7 +12,7 @@ import { loadCredentials, clearCredentials } from '../../remote/credentials.js';
 import { revokeRefreshToken } from '../../remote/device-flow.js';
 import { ensureProfile, listProfiles, getLastProfile } from '../../profiles.js';
 import { ConnectionWatcher } from '../connection-watcher.js';
-import type { JsonStore } from '../../storage/json-store.js';
+import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { EventBus } from '../../index.js';
 import type { StandaloneConfig } from '../app.js';
 
@@ -56,7 +56,7 @@ export interface HybridRemoteDeps {
   /** Шина событий процесса (мост backend → локальный EventBus). */
   getEventBus: () => EventBus;
   /** Реестр провайдеров (имена локальных провайдеров при `remote.llm=local`). */
-  getProviderStore: () => JsonStore<ProviderConfig>;
+  getProviderStore: () => JsonStoreLike<ProviderConfig>;
   /** In-memory кэш провайдеров (зеркала перекрывают записи). */
   getProviderCache: () => Map<string, ProviderConfig>;
   /** In-memory кэш моделей (зеркала перекрывают записи). */

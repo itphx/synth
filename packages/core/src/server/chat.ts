@@ -1,23 +1,21 @@
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SynthConfig, InstructionsConfig } from '@itphx/synth-shared';
-import { resolveDefaultWorkspace, resolveWorkspacesRoot } from '@itphx/synth-shared';
+import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend } from '@itphx/synth-shared';
 import {
-  FileStore, SessionManager, EventBus,
-  ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
-  createToolRegistry, createAgentRegistry, SecretPatternStore,
+  SessionManager, EventBus,
+  ContextBuilder, ContextOptimizer, ChatOrchestrator,
+  createToolRegistry, createAgentRegistry,
   detectRuntimeDeps,
+  createStorageContext,
 } from '../index.js';
-import { JsonStore } from '../storage/json-store.js';
-import { FileProfileStore } from '../storage/profile-store.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
-import { mergeSecurityConfig, RuntimeSettingsStore } from '../storage/runtime-settings.js';
+import { mergeSecurityConfig } from '../storage/runtime-settings.js';
 import { DEFAULT_AGENT_ID } from '../engine/agents/index.js';
 import { SkillService } from '../engine/skills/service.js';
 import { CommandService, isLocalCommandStatus } from '../engine/commands/service.js';
-import { SkillBundleStore } from '../storage/skill-bundle-store.js';
 
 export interface SingleChatOptions {
   message: string;
@@ -44,11 +42,15 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     SYNTH_DATA_DIR: options.dataDir,
   });
 
-  const fileStore = new FileStore({ dataDir });
-  const sessionManager = new SessionManager(fileStore);
-  const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
-  const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
-
+  // PROP-032 (W2.4): единый контекст хранения (дефолт `file`, поведение прежнее).
+  const storage = createStorageContext(resolveStorageBackend(options.config, process.env), {
+    dataDir,
+    env: process.env,
+    bundlesPath: options.config.commands?.bundlesPath,
+  });
+  const sessionManager = new SessionManager(storage.sessions);
+  const providerStore = storage.providers;
+  const modelStore = storage.models;
   const providerCache = new Map<string, ProviderConfig>();
   (await providerStore.list()).forEach((p) => providerCache.set(p.name, p));
   const modelCache = new Map<string, ModelConfig>();
@@ -62,10 +64,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     trustedProjectDirs: options.config.skills?.trustedProjectDirs,
     toolsets: options.config.skills?.toolsets,
   });
-  const bundleStore = new SkillBundleStore({
-    dataDir,
-    bundlesPath: options.config.commands?.bundlesPath,
-  });
+  const bundleStore = storage.skillBundles;
   const commandService = new CommandService({
     config: {
       dataDir,
@@ -117,8 +116,8 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   }
 
   const eventBus = new EventBus();
-  const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
-  const profilesStore = new FileProfileStore({ dataDir });
+  const contextConfig = storage.contextFiles;
+  const profilesStore = storage.profiles;
   const contextBuilder = new ContextBuilder(contextConfig, {
     profilesStore,
     projectDataDir: `${dataDir}/projects`,
@@ -165,11 +164,11 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
   // ADR-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
-  const patternStore = new SecretPatternStore({ dataDir });
+  const patternStore = storage.secretPatterns;
 
   // Защищённые пути: runtime-настройка protectedPaths.enabled приоритетнее config.yaml.
   // RuntimeSettingsStore читает {dataDir}/settings.json — если файла нет, возвращает {}.
-  const settingsStore = new RuntimeSettingsStore({ dataDir });
+  const settingsStore = storage.settings;
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(options.config.security, runtimeSecurity);
 
@@ -186,6 +185,9 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     dataDir,
     toolRegistry,
     agentRegistry,
+    // PROP-032 (W2.4): порты хранилищ (SSH-ключи, словари) — из контекста, без фоллбэков.
+    sshKeyStore: storage.sshKeys,
+    dictionaryStore: storage.dictionaries,
     defaultWorkingDir,
     workspacesRoot,
     permissionConfig: options.config.permission,
