@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ScheduleInput } from '@itphx/synth-shared';
@@ -155,14 +155,31 @@ describe('ScheduleStore (ADR-051 / ADR-089)', () => {
     const a = new ScheduleStore({ dataDir: tmpDir, crossProcess: true });
     const b = new ScheduleStore({ dataDir: tmpDir, crossProcess: true });
 
+    // Барьер конкуренции: обе реплики стартуют в одном тике, 10 create идут
+    // одновременно; общий file-лок (`mkdir`-каталог) обязан сериализовать
+    // read-modify-write каждой реплики.
     await Promise.all([
       ...Array.from({ length: 5 }, (_, i) => a.create(input({ name: `a${i}` }))),
       ...Array.from({ length: 5 }, (_, i) => b.create(input({ name: `b${i}` }))),
     ]);
 
+    // Наблюдаемое состояние — сам файл на диске (не только чтение через инстанс):
+    // ровно 10 записей с уникальными id. `create` резолвится только после
+    // durable-записи (write tmp → rename), поэтому «ждать видимости» не нужно.
+    const raw = JSON.parse(await readFile(join(tmpDir, 'schedules.json'), 'utf-8')) as {
+      schedules: Array<{ id: string }>;
+    };
+    expect(raw.schedules).toHaveLength(10);
+    expect(new Set(raw.schedules.map((s) => s.id)).size).toBe(10);
+
     const all = await a.list();
     expect(all).toHaveLength(10);
     expect(new Set(all.map((s) => s.id)).size).toBe(10);
+
+    // Лок освобождён: каталог-лок не «залип» после всех мутаций.
+    await expect(stat(join(tmpDir, 'scheduler', 'schedules.lock'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('crossProcess: конкурентные markRun сохраняют nextRunAt последнего (нет lost update файла)', async () => {

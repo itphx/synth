@@ -1,3 +1,4 @@
+import type { Stats } from 'node:fs';
 import { mkdir, rm, stat, utimes } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -47,9 +48,26 @@ export class FileMutex {
     this._timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
+  /** Проверка лока: статистика, `'gone'` — лок исчез, `'error'` — сбой (fail-open). */
+  private async _statLock(): Promise<Stats | 'gone' | 'error'> {
+    try {
+      return await stat(this._path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return 'gone';
+      console.warn(`[FileMutex] не удалось проверить лок ${this._path} (fail-open): ${String(err)}`);
+      return 'error';
+    }
+  }
+
   /**
    * Одна попытка захвата. `true` — лок наш. `false` — лок занят живым
    * владельцем. Ошибки создания (кроме `EEXIST`) — fail-open `true`.
+   *
+   * Захват всегда подтверждается успешным `mkdir`: если лок исчез между `mkdir`
+   * (`EEXIST`) и `stat` — владелец его только что освободил, — проверка
+   * повторяется. Иначе `tryAcquire` вернул бы «acquired», не владея локом, и две
+   * секции пошли бы параллельно (потерянные обновления: файл-«флейк»
+   * `schedule-store.test.ts` «crossProcess: конкурентные create»).
    */
   async tryAcquire(): Promise<boolean> {
     try {
@@ -58,30 +76,40 @@ export class FileMutex {
       console.warn(`[FileMutex] не удалось создать родительский каталог лока: ${String(err)}`);
     }
 
-    try {
-      await mkdir(this._path);
-      return true;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') {
-        console.warn(`[FileMutex] не удалось создать лок ${this._path} (fail-open): ${String(err)}`);
-        return true;
-      }
-    }
-
-    // Лок существует — проверяем устаревание.
-    try {
-      const info = await stat(this._path);
-      if (this._staleMs > 0 && Date.now() - info.mtimeMs > this._staleMs) {
-        console.warn(`[FileMutex] лок ${this._path} устарел — перехватываем`);
-        await rm(this._path, { recursive: true, force: true });
+    // До двух попыток: повторяем, если лок исчез между `mkdir` и `stat`.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
         await mkdir(this._path);
         return true;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code !== 'EEXIST') {
+          console.warn(`[FileMutex] не удалось создать лок ${this._path} (fail-open): ${String(err)}`);
+          return true;
+        }
       }
-    } catch (err) {
-      console.warn(`[FileMutex] не удалось проверить лок ${this._path} (fail-open): ${String(err)}`);
-      return true;
+
+      // Лок существует — проверяем устаревание.
+      const info = await this._statLock();
+      if (info === 'gone') continue; // лок освобождён владельцем — повторяем захват
+      if (info === 'error') return true; // fail-open
+
+      if (this._staleMs > 0 && Date.now() - info.mtimeMs > this._staleMs) {
+        console.warn(`[FileMutex] лок ${this._path} устарел — перехватываем`);
+        try {
+          await rm(this._path, { recursive: true, force: true });
+        } catch (err) {
+          console.warn(
+            `[FileMutex] не удалось удалить устаревший лок ${this._path} (fail-open): ${String(err)}`,
+          );
+          return true;
+        }
+        continue; // повторяем захват, не присваивая лок без `mkdir`
+      }
+
+      return false; // лок занят живым владельцем
     }
 
+    // Лок исчезал при каждой проверке — захватить не удалось; вызывающий повторит.
     return false;
   }
 
