@@ -12,7 +12,10 @@
     "test": "pnpm --recursive run test",
     "adr:check": "node scripts/adr-check.mjs",
     "adr:write": "node scripts/adr-check.mjs --write",
-    "clean": "pnpm --recursive run clean"
+    "clean": "pnpm --recursive run clean",
+    "security:gate": "node scripts/security-gate.mjs",
+    "security:scan": "node scripts/secret-scan.mjs",
+    "security:records": "node scripts/security-gate.mjs --lint-records"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

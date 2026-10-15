@@ -1,0 +1,59 @@
+{
+  "schema": "synth.security.audit/v1",
+  "version": "<X.Y.Z — релизуемая версия, совпадает с тегом v<X.Y.Z>>",
+  "commit": "<sha коммита, на котором проводился аудит (git rev-parse HEAD); гейт проверяет, что он предок релизуемого коммита>",
+  "date": "<YYYY-MM-DD>",
+  "auditor": {
+    "name": "<имя/аккаунт аудитора>",
+    "role": "AUDITOR",
+    "mode": "read-only"
+  },
+  "status": "approved",
+  "summary": "<2–5 строк: что проверено, что не проверено и почему, на что смотреть в этом релизе>",
+  "checks": {
+    "secret-scan": {
+      "status": "pass",
+      "command": "node scripts/secret-scan.mjs --mode worktree,commits,blobs",
+      "result": "<сколько находок/подавлено, что просканировано>",
+      "date": "<YYYY-MM-DD>"
+    },
+    "auth-matrix": {
+      "status": "pass",
+      "command": "pnpm --filter @itphx/synth-backend exec vitest run <файлы матрицы из policy.authMatrix.files>",
+      "result": "<N проверок passed, что именно проверялось>",
+      "date": "<YYYY-MM-DD>"
+    },
+    "ci-baseline": {
+      "status": "pass",
+      "command": "CI GitVerse: ci.yaml на коммите релиза",
+      "result": "<run id / ссылка, статус джоб>",
+      "date": "<YYYY-MM-DD>"
+    },
+    "dependencies": {
+      "status": "pass_with_exceptions",
+      "command": "pnpm audit --json",
+      "result": "<профиль ратчета, critical/high/moderate/low, что из этого новое, прямые уязвимые модули>",
+      "date": "<YYYY-MM-DD>"
+    },
+    "security-review": {
+      "status": "pass",
+      "command": "docs/security/AUDIT-CHECKLIST.md §3 (обзор изменений релиза)",
+      "result": "<по 7 вопросам чек-листа: новые внешние входы, дельты auth/RBAC/permission-слоя, секреты и ключи, исходящие соединения/SSRF, опасные операции агента, артефакты релиза, доки vs факт>",
+      "date": "<YYYY-MM-DD>"
+    }
+  },
+  "exceptions": [
+    {
+      "id": "<id проверки или GHSA-…/CVE-…>",
+      "scope": "<что именно принято: компонент, путь зависимости, поверхность>",
+      "justification": "<почему это допустимо в этом релизе>",
+      "followUp": "<что и когда будет сделано>",
+      "owner": "<кто отвечает>",
+      "dueRelease": "<в каком релизе закрывается>"
+    }
+  ],
+  "artifacts": {
+    "evidence": "tmp/security/evidence.json",
+    "ci_run": "<номер/URL run GitVerse для тега>"
+  }
+}

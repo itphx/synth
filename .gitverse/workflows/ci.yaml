@@ -130,9 +130,31 @@ jobs:
       - name: Тесты
         run: pnpm --filter @itphx/synth-ui test
 
-  # Аудит зависимостей — отчёт без блокировки: первый этап, база уязвимостей
-  # может ломать сборку на транзитивных зависимостях. Джоба не должна ронять CI
-  # (continue-on-error), но результат виден в логе.
+  # Secret-scan — блокирующая проверка без внешних зависимостей (только node + git),
+  # поэтому pnpm здесь не ставится: рабочее дерево + вся история (режимы commits/blobs).
+  # Это и есть обещанный в SECURITY.md/CONTRIBUTING.md скан секретов в CI
+  # (правила и allowlist — scripts/secret-scan.mjs + .gitleaks.toml).
+  secret-scan:
+    name: Secret-scan (дерево + история)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Вся история: проверяются и удалённые из дерева строки, и старые блобы.
+          fetch-depth: 0
+
+      - name: Secret-scan
+        run: node scripts/secret-scan.mjs --mode worktree,commits,blobs
+
+  # Аудит зависимостей — этапы ужесточения (см. docs/security/README.md):
+  #   этап 0 (сейчас): отчёт без блокировки — база уязвимостей ломала бы сборку
+  #     на транзитивных зависимостях; результат виден в логе;
+  #   этап 1: блокирующее — только «нет уязвимостей в ПРЯМЫХ зависимостях» и ратчет
+  #     (их считает релизный гейт scripts/security-gate.mjs, джоба `security-gate`);
+  #   этап 2: ратчет здесь становится блокирующим (снять continue-on-error у шага);
+  #   этап 3: `pnpm audit --audit-level=high` блокирующий, baseline → 0/0;
+  #   этап 4: `--audit-level=moderate`.
   audit:
     name: Аудит зависимостей (report-only)
     runs-on: ubuntu-latest
@@ -142,8 +164,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Установка
         run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
-      - name: pnpm audit (high+)
+      - name: pnpm audit (high+) — отчёт
         run: pnpm audit --audit-level=high
+
+      # Ратчет против пола из docs/security/policy.json: шаг виден в логе (дельта к
+      # baseline, прямые уязвимые зависимости). До этапа 2 — report-only; перевод в
+      # блокирующий = убрать continue-on-error (и, при необходимости, поправить baseline).
+      - name: Ратчет уязвимостей (дельта к baseline)
+        continue-on-error: true
+        run: node scripts/security-gate.mjs --only dependencies --skip-tests
 
   # Helm-чарт не зависит от сборки npm-пакетов: только lint и рендер шаблонов.
   # Helm ставит scripts/ci-helm.sh: на раннерах GitVerse get.helm.sh недоступен

@@ -1,0 +1,42 @@
+{
+  "schema": "synth.security.policy/v1",
+  "updated": "2026-10-16",
+  "recordDir": "docs/security/releases",
+  "requiredCheckIds": ["secret-scan", "auth-matrix", "ci-baseline", "dependencies", "security-review"],
+  "authMatrix": {
+    "files": [
+      "packages/backend/src/routes/sessions-access.test.ts",
+      "packages/backend/src/routes/session-idor-matrix.test.ts"
+    ],
+    "minFiles": 1,
+    "marker": "IDOR",
+    "minTests": 8,
+    "note": "Матрица может переезжать/разделяться при рефакторинге: проверяются ВСЕ существующие файлы из списка (в каждом — маркер IDOR), требуется минимум minFiles. Команда прогона собирается из существующих файлов. Обновлять список — здесь."
+  },
+  "secretScan": {
+    "modes": ["worktree", "commits", "blobs"],
+    "note": "worktree — рабочее дерево (включая новые файлы, но не игнорируемые .gitignore, в т.ч. tmp/); commits — все добавленные строки истории; blobs — строгий режим по уникальным blob-ам истории. История сканируется потому, что репозиторий зеркалируется на GitHub."
+  },
+  "dependencies": {
+    "mode": "ratchet",
+    "command": "pnpm audit --json",
+    "profile": "pre-upgrade",
+    "profileSwitch": {
+      "owner": "владелец задачи апгрейда зависимостей (@devops/@orchestrator)",
+      "moveWhen": "после мержа апгрейдов @modelcontextprotocol/sdk >= 1.31.0 и simple-git 4.x (и проверки фактического pnpm audit) поменять profile на \"post-upgrade\"; заодно уточнить baseline по факту",
+      "why": "переключатель виден в диффе: ослабление/усиление ратчета — явное изменение политики, а не тихая правка проверки"
+    },
+    "profiles": {
+      "pre-upgrade": {
+        "baseline": { "critical": 3, "high": 42 },
+        "failOnDirect": true,
+        "note": "Текущее состояние (2026-10-16, pnpm audit --json): 3 critical + 42 high (moderate ~48, low ~12–13 — база advisory дрейфует, для ратчета не важны); все 45 critical+high — транзитивные, у всех 15 затронутых модулей есть patched_versions. Действует до апгрейда sdk/simple-git."
+      },
+      "post-upgrade": {
+        "baseline": { "critical": 0, "high": 39 },
+        "failOnDirect": true,
+        "note": "Целевое состояние после @modelcontextprotocol/sdk >= 1.31.0 (снимает critical proxy-addr GHSA-jqcg-44mw-7w3h и high самого sdk) и simple-git 4.x (снимает critical GHSA-x6jw-m9v5-85vh, GHSA-v5rq-49vh-5v5c и high GHSA-g4wm-2vf7-vfgr, GHSA-858h-whjf-mvg5): critical 0, high ≈ 42 − 3 = 39. Значение 39 — ОЦЕНКА: уточнить фактическим `pnpm audit --json` сразу после апгрейдов и записать точное число."
+      }
+    }
+  }
+}

@@ -57,9 +57,11 @@ reasonable window to release a fix before public disclosure.
 
 Secrets (tokens, keys, passwords) must **never** be committed. They live in
 `secrets/`, outside the git repository. The repository ships a
-[`.gitleaks.toml`](./.gitleaks.toml) config and runs gitleaks in CI to catch
-accidental leaks. If you believe a secret has been exposed, contact us privately at
-the addresses above so we can rotate it.
+[`.gitleaks.toml`](./.gitleaks.toml) config and runs `scripts/secret-scan.mjs`
+(dependency-free, same allowlist) in CI — on every push/PR and as a mandatory step of
+the release gate — to catch accidental leaks in the working tree and in the history.
+If you believe a secret has been exposed, contact us privately at the addresses above
+so we can rotate it.
 
 ## License and credit
 

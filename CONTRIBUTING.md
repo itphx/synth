@@ -103,9 +103,10 @@ A change that touches an existing decision should reference it in the PR descrip
 ## Secrets
 
 Never commit secrets (tokens, keys, passwords). Secrets live in `secrets/`, which is
-outside git. The repository ships a [`.gitleaks.toml`](./.gitleaks.toml) config, and
-gitleaks runs in CI. Do not paste real credentials into commits, issues, or docs — use
-placeholders.
+outside git. The repository ships a [`.gitleaks.toml`](./.gitleaks.toml) config and a
+dependency-free scanner (`scripts/secret-scan.mjs`, same allowlist) that runs in CI on
+every push/PR (working tree + full history) and as a mandatory step of the release gate.
+Do not paste real credentials into commits, issues, or docs — use placeholders.
 
 ## License
 

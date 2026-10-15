@@ -1,23 +1,64 @@
-# Конфигурация gitleaks для репозитория synth (ADR-052/ADR-089 и окружение CI).
+# Конфигурация secret-scan для репозитория synth (ADR-052/ADR-089 и окружение CI).
 #
-# Allowlist подтверждённых false positives:
-#   * `curl-auth-header` — примеры curl в документации с плейсхолдерами
-#     (`Bearer admin-key-123`, `synth_svc_<...>`, `whk_<...>`);
-#   * `private-key` / `generic-api-key` — тестовые фикстуры ключей и текстовые
-#     строки в unit-тестах (не реальные секреты).
+# Потребители конфига:
+#   * `scripts/secret-scan.mjs` — обязательный шаг гейта релиза (`scripts/security-gate.mjs`)
+#     и локального pre-flight; зависимостей нет (node + git), поэтому работает на раннере
+#     GitVerse без внешней сети;
+#   * gitleaks (8.19+), если он запускается вручную/локально — семантика allowlist совместима.
 #
-# Проверено: gitleaks 8.30.1 + trufflehog 3.99.2 — реальных секретов нет,
-# перечисленные срабатывания подтверждены как ложные.
+# Семантика allowlist: условия *внутри* одного блока объединяются через И (AND), между
+# блоками — через ИЛИ (OR). Поэтому фикстуры тестов подавляются парой «путь + известный
+# dummy-маркер»: реальный секрет, случайно попавший в тот же файл, будет найден (в отличие
+# от подавления целого файла по пути).
+#
+# `${...}`-строки окружения (`${{ secrets.GV_TOKEN }}` и т.п.) секретами не являются —
+# это подстановки CI, а не литеральные креды.
+#
+# Проверено: gitleaks 8.30.1 + trufflehog 3.99.2 (аудит 0.10.1) и scripts/secret-scan.mjs.
 
 [extend]
 useDefault = true
 
+# 1. Примеры curl с плейсхолдерами в API-справочнике (`Bearer admin-key-123`,
+#    `synth_svc_<...>`, `whk_<...>`): не креды, а документация. RU уже был в allowlist,
+#    EN-версия приведена в соответствие (те же строки, тот же FP).
 [[allowlists]]
-description = "подтверждённые false positives (примеры curl с плейсхолдерами, тестовые фикстуры ключей) — проверено gitleaks 8.30.1 + trufflehog 3.99.2"
+description = "примеры curl с плейсхолдерами в API-справочнике (RU и EN)"
 paths = [
   '''docs/API_V2\.md$''',
+  '''docs/en/API_V2\.md$''',
+]
+
+# 2. Workflow релиза: base64-обёртка подстановок CI-секретов (`b64('itphx:' +
+#    '${{ secrets.GV_TOKEN }}')`) — секреты приходят из окружения GitVerse, в коде их нет.
+[[allowlists]]
+description = "base64-обёртка подстановок CI-секретов в release-workflow"
+paths = [
+  '''\.gitverse/workflows/release\.yaml$''',
+]
+
+# 3. Тестовые фикстуры ключей/сервис-ключей: подавляются только перечисленные dummy-значения
+#    (AND с путём), поэтому реальный ключ в тех же файлах остаётся находкой.
+#    `regexTarget = "line"` — проверка по строке (как в scripts/secret-scan.mjs).
+#    Маркер `synth_svc_external[-]secret-123` записан с `[-]`, чтобы сам конфиг не выглядел
+#    секретом для правил сканера (иначе файл находил бы «секрет» в собственных regexes).
+[[allowlists]]
+description = "тестовые фикстуры ключей (dummy-маркеры в unit-тестах, не реальные креды)"
+paths = [
+  '''packages/backend/src/routes/ssh-keys\.test\.ts$''',
   '''packages/backend/src/routes/service-keys\.test\.ts$''',
   '''packages/core/src/server/routes/ssh-keys\.test\.ts$''',
-  '''\.gitverse/workflows/release\.yaml$''',
-  '''addons/synth-addon-template/README\.md$''',
+  '''packages/core/src/storage/ssh-key-store\.test\.ts$''',
+  '''packages/core/src/storage/service-api-key-store\.test\.ts$''',
+  '''packages/core/src/security/rotate\.test\.ts$''',
+  '''packages/core/src/engine/tools/git-ssh\.test\.ts$''',
 ]
+regexes = [
+  '''backend-secret''',
+  '''test-key-material''',
+  '''SECRET_MARKER''',
+  '''SUPERSECRETPRIVATEKEYMATERIAL''',
+  '''NEWSECRETMATERIAL''',
+  '''synth_svc_external[-]secret-123''',
+]
+regexTarget = "line"

@@ -130,10 +130,68 @@ jobs:
       - name: Тесты
         run: pnpm test
 
+  # --- Обязательный внутренний аудит безопасности (гейт релиза) ---
+  #
+  # Джоба идёт ДО сборки артефактов: `build.needs` включает её, поэтому changelog,
+  # publish-npmjs, publish-gitverse-npm, build-docker, create-release, publish-helm и
+  # publish-github без неё не запускаются (GitVerse пропускает зависимые джобы).
+  #
+  # Проверка — scripts/security-gate.mjs (без внешних зависимостей):
+  #   * запись аудита docs/security/releases/<version>.json для РЕЛИЗУЕМОЙ версии —
+  #     обязательна и содержательна (статусы проверок с command/result; waiver-статусов нет);
+  #   * негативная матрица авторизации сессий присутствует и проходит (vitest);
+  #   * secret-scan по рабочему дереву (включая новые файлы) и по всей истории;
+  #   * ратчет уязвимостей зависимостей по активному профилю из policy.json.
+  #
+  # Версия — fail-closed: `--version` из вывода version-bump (workflow_dispatch) либо
+  # `--ref` = тег (push тега); если ни то, ни другое не дало SemVer — гейт падает (exit 2),
+  # релиз с неопределённой версией не собирается. Эти же два источника используются
+  # в build-docker/create-release/publish-helm/publish-github.
+  #
+  # dry_run -> --soft: замечания печатаются, но не блокируют (прогон пайплайна без публикации).
+  security-gate:
+    name: Внутренний аудит безопасности
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # История и теги нужны secret-scan (режимы commits/blobs) и проверке,
+          # что коммит записи аудита — предок релизуемого.
+          fetch-depth: 0
+
+      - name: Установка pnpm
+        run: npm install -g pnpm@latest
+
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: Сборка @itphx/synth-shared и @itphx/synth-core
+        run: |
+          pnpm --filter @itphx/synth-shared build
+          pnpm --filter @itphx/synth-core build
+
+      - name: Аудит безопасности (запись релиза + матрица авторизации + secret-scan + зависимости)
+        run: |
+          SOFT=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then SOFT="--soft"; fi
+          node scripts/security-gate.mjs --version "${{ needs.version-bump.outputs.version }}" --ref "${{ gitverse.ref }}" --report tmp/security/evidence.json $SOFT
+
+      # Evidence (отпечатки записи/политики/HEAD и результаты каждой проверки) — доказательство
+      # аудита в артефактах рана; отсутствие файла не должно маскировать ошибку гейта.
+      - name: Загрузить evidence аудита как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-evidence
+          path: tmp/security/evidence*.json
+          if-no-files-found: warn
+
   # --- Сборка ---
   build:
     name: Сборка релизных артефактов
-    needs: lint-and-test
+    # security-gate обязателен: без успешного внутреннего аудита (запись релизуемой версии
+    # + secret-scan + матрица авторизации + ратчет зависимостей) артефакты не собираются.
+    needs: [lint-and-test, security-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

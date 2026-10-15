@@ -1,0 +1,91 @@
+{
+  "schema": "synth.security.audit/v1",
+  "version": "0.10.2",
+  "commit": "66edb6f2b12c870085d065f7be4bf8b4216c0920",
+  "date": "2026-10-16",
+  "auditor": {
+    "name": "<имя/аккаунт аудитора>",
+    "role": "AUDITOR",
+    "mode": "read-only"
+  },
+  "status": "approved_with_exceptions",
+  "summary": "ЗАПОЛНЯЕМЫЙ ОБРАЗЕЦ записи аудита 0.10.2 (не готовая запись): машинно-проверяемые результаты уже вписаны (secret-scan, негативная матрица авторизации сессий, ратчет зависимостей, baseline CI). Порядок: cp docs/security/releases/0.10.2.json.example docs/security/releases/0.10.2.json → заполнить checks.security-review (обзор изменений релиза по docs/security/AUDIT-CHECKLIST.md §3: новые внешние входы, дельты auth/RBAC/permission-слоя, секреты и ключи, исходящие соединения/SSRF, опасные операции агента, артефакты релиза, доки vs факт) → заменить плейсхолдеры (<имя/аккаунт аудитора>, owner'ов, ci_run) → прогнать node scripts/security-gate.mjs --version 0.10.2 --report tmp/security/evidence.json → закоммитить → поставить тег. Расширение .example выбрано намеренно: незаполненная запись лежит в releases/ не как «почти готовая», а как образец, и не красит docs-CI до момента оформления.",
+  "checks": {
+    "secret-scan": {
+      "status": "pass",
+      "command": "node scripts/secret-scan.mjs --mode worktree,commits,blobs",
+      "result": "0 находок; подавлено allowlist: 7 (точечно path+маркер: dummy-фикстуры ключей в unit-тестах); просканировано: рабочее дерево + 408 703 добавленные строки истории + 8 985 уникальных blob-ов",
+      "date": "2026-10-16"
+    },
+    "auth-matrix": {
+      "status": "pass",
+      "command": "pnpm --filter @itphx/synth-backend exec vitest run src/routes/sessions-access.test.ts [src/routes/session-idor-matrix.test.ts]",
+      "result": "Tests 12 passed (файл sessions-access.test.ts); после мержа IDOR-матрицы добавляется второй файл — гейт прогоняет все существующие файлы из policy.authMatrix.files и требует ≥ 8 проверок. Инвариант: чужой USER не читает и не меняет чужую сессию (отказ), владелец/ADMIN/LEAD — доступ, посторонний — отказ",
+      "date": "2026-10-16"
+    },
+    "ci-baseline": {
+      "status": "pass",
+      "command": "CI GitVerse: push master → ci.yaml (lint-and-typecheck + тесты shared/core/backend/ui/sdk + helm lint/template); по тегу — release.yaml",
+      "result": "проверить на коммите релиза перед тегом: все джобы success, кроме «Аудит зависимостей (report-only)» — она не блокирующая, её предмет разбирает проверка dependencies",
+      "date": "2026-10-16"
+    },
+    "dependencies": {
+      "status": "pass_with_exceptions",
+      "command": "pnpm audit --json",
+      "result": "профиль ратчета pre-upgrade: critical 3/3, high 42/42, прямых уязвимых модулей 0; у всех 15 затронутых модулей есть patched_versions (moderate/low — информационно, база advisory дрейфует). Разбор — в exceptions[] (апгрейды @modelcontextprotocol/sdk >= 1.31.0 и simple-git 4.x — отдельной задачей)",
+      "date": "2026-10-16"
+    },
+    "security-review": {
+      "status": "",
+      "command": "docs/security/AUDIT-CHECKLIST.md §3 (обзор изменений релиза)",
+      "result": "",
+      "date": "2026-10-16"
+    }
+  },
+  "exceptions": [
+    {
+      "id": "GHSA-x6jw-m9v5-85vh",
+      "scope": "simple-git (core, транзитивно @simple-git/argv-parser): unsafe-operation guard не блокирует trailer-команды",
+      "justification": "simple-git используется git-тулами агента в project.workspace, вход ограничен permission-слоем (ADR-076); patch требует мажорного апгрейда simple-git",
+      "followUp": "апгрейд simple-git до 4.x (и @simple-git/argv-parser ≥ 2.0.1) вместе с тестами git-тулов; после мержа переключить policy.dependencies.profile на post-upgrade",
+      "owner": "<владелец задачи апгрейда зависимостей>",
+      "dueRelease": "0.11.0"
+    },
+    {
+      "id": "GHSA-v5rq-49vh-5v5c",
+      "scope": "@simple-git/argv-parser (транзитивно через simple-git): обход unsafe-editor detection",
+      "justification": "закрывается тем же апгрейдом simple-git до 4.x",
+      "followUp": "апгрейд simple-git до 4.x",
+      "owner": "<владелец задачи апгрейда зависимостей>",
+      "dueRelease": "0.11.0"
+    },
+    {
+      "id": "GHSA-jqcg-44mw-7w3h",
+      "scope": "proxy-addr (транзитивно через @modelcontextprotocol/sdk → express): IP spoofing при доверии IPv4-mapped IPv6",
+      "justification": "patch ≥ 2.0.8 доступен; Synth не принимает решений авторизации на основе proxy-addr (trust proxy у MCP-эндпоинта не включён), эксплуатируемость низкая",
+      "followUp": "апгрейд @modelcontextprotocol/sdk до ≥ 1.31.0 (подтянет patched proxy-addr)",
+      "owner": "<владелец задачи апгрейда зависимостей>",
+      "dueRelease": "0.11.0"
+    },
+    {
+      "id": "GHSA-6qxp-vccf-f47h",
+      "scope": "@modelcontextprotocol/sdk (high, транзитивная группа)",
+      "justification": "patch ≥ 1.31.0 доступен; MCP-серверы подключаются осознанно, поверхность ограничена реестром MCP",
+      "followUp": "апгрейд @modelcontextprotocol/sdk до ≥ 1.31.0",
+      "owner": "<владелец задачи апгрейда зависимостей>",
+      "dueRelease": "0.11.0"
+    },
+    {
+      "id": "audit-high-transitive-sweep",
+      "scope": "high-группа транзитивных зависимостей: undici (7), brace-expansion (12), hono (1), fast-uri (7), ip-address (1), js-yaml (3), nanoid (2), postcss (1), source-map-js (1), vite (1), ws (1), @modelcontextprotocol/sdk (1)",
+      "justification": "все — транзитивные, у всех есть patched_versions; апгрейд идёт волнами вместе с прямыми зависимостями (hono/vite/ws/sdk), часть требует поднятия минимальных версий в devDependencies — вне объёма релиза 0.10.2",
+      "followUp": "волна апгрейдов: (1) патч-версии в текущих мажорах, (2) мажоры (vite/hono/undici/simple-git) отдельными задачами; после — переключить profile на post-upgrade и включить блокирующий `pnpm audit --audit-level=high`",
+      "owner": "<владелец задачи апгрейда зависимостей>",
+      "dueRelease": "0.11.0"
+    }
+  ],
+  "artifacts": {
+    "evidence": "tmp/security/evidence.json (артефакт security-evidence джобы «Внутренний аудит безопасности» в GitVerse run)",
+    "ci_run": "<номер/URL run GitVerse для тега v0.10.2 — заполняется после прогона>"
+  }
+}

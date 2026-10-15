@@ -18,6 +18,8 @@ on:
       - 'packages/*/AGENTS.md'
       - 'scripts/adr-check.mjs'
       - 'scripts/docs-link-check.mjs'
+      - 'scripts/security-gate.mjs'
+      - 'docs/security/**'
   pull_request:
     types: [opened, edited, synchronize, reopened]
     branches:
@@ -30,6 +32,8 @@ on:
       - 'packages/*/AGENTS.md'
       - 'scripts/adr-check.mjs'
       - 'scripts/docs-link-check.mjs'
+      - 'scripts/security-gate.mjs'
+      - 'docs/security/**'
 
 jobs:
   docs-check:
@@ -44,3 +48,8 @@ jobs:
 
       - name: Проверка относительных ссылок в документации
         run: node scripts/docs-link-check.mjs
+
+      # Записи внутреннего аудита (docs/security/releases/<version>.json) — часть
+      # релизного контракта: битая запись должна ловиться в PR, а не на теге.
+      - name: Проверка записей внутреннего аудита
+        run: node scripts/security-gate.mjs --lint-records
