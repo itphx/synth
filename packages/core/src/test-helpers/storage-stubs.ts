@@ -10,6 +10,7 @@ import type {
   ContextFileInfo,
   ProfileData,
   CreateProfileParams,
+  Project,
   SSHKey,
   SSHKeyCreateRequest,
   SSHKeyMeta,
@@ -18,6 +19,7 @@ import type {
 import type { ContextFileRepository } from '../storage/ports/context-file-repository.js';
 import type { DictionaryRepository } from '../storage/ports/dictionary-repository.js';
 import type { ProfileRepository } from '../storage/ports/profile-repository.js';
+import type { ProjectRepository } from '../storage/ports/project-repository.js';
 import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
 
 /**
@@ -106,6 +108,22 @@ export function stubProfiles(
     findProfileByExternalId: async (): Promise<ProfileData | null> => null,
     linkIdentity: async (): Promise<ProfileData | null> => null,
     unlinkIdentity: async (): Promise<ProfileData | null> => null,
+    ...overrides,
+  };
+}
+
+/** Заглушка `ProjectRepository` (реализация — `ProjectStore`). */
+export function stubProjectStore(
+  overrides: Partial<ProjectRepository> = {},
+): ProjectRepository {
+  return {
+    load: async (): Promise<Project | null> => null,
+    save: async (_project: Project): Promise<void> => {},
+    delete: async (): Promise<void> => {},
+    list: async (): Promise<Project[]> => [],
+    create: (_name: string, _ownerId: string): Project => {
+      throw new Error('stubProjectStore.create не реализован');
+    },
     ...overrides,
   };
 }

@@ -3,6 +3,7 @@ import { isSessionVisible } from './session-visibility.js';
 import type { SessionOwnerCtx } from './session-visibility.js';
 import { createLocalOwnerResolver } from './local-owner.js';
 import type { ProjectStoreLike } from '../storage/project-store.js';
+import { stubProjectStore } from '../test-helpers/storage-stubs.js';
 import { ProjectRole } from '@itphx/synth-shared';
 import type { Project, ProjectPlan, Session } from '@itphx/synth-shared';
 
@@ -49,7 +50,7 @@ function project(id: string, ownerId: string, members: Record<string, ProjectRol
 
 function storeOf(projects: Record<string, Project | null>): ProjectStoreLike & { load: ReturnType<typeof vi.fn> } {
   const load = vi.fn(async (id: string) => projects[id] ?? null);
-  return { load } as unknown as ProjectStoreLike & { load: ReturnType<typeof vi.fn> };
+  return Object.assign(stubProjectStore({ load }), { load });
 }
 
 const ctx = (overrides: Partial<SessionOwnerCtx> = {}): SessionOwnerCtx => ({

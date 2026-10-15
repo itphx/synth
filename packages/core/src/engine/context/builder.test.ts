@@ -3,10 +3,10 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Message, StickyNote } from '@itphx/synth-shared';
-import type { ProfileStore } from '@itphx/synth-shared';
 import { ContextConfig } from './config.js';
 import { ContextBuilder } from './builder.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
+import { stubProfiles } from '../../test-helpers/storage-stubs.js';
 
 /** ADR-070: обёртка удалена из класса — тесты собирают промпт через buildBaseBlocks. */
 async function buildSystemPrompt(
@@ -217,13 +217,14 @@ describe('ContextBuilder.buildBaseBlocks', () => {
       isActive: true,
       preferences: {},
       notes: 'Зови меня Босс',
+      interviewCompleted: false,
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
-    const profilesStore = {
+    const profilesStore = stubProfiles({
       loadProfile: async (id: string) => (id === 'uuid-1' ? profile : null),
       getProfileByUsername: async (username: string) => (username === 'admin' ? profile : null),
-    } as unknown as ProfileStore;
+    });
     const builder = new ContextBuilder(config, { profilesStore });
 
     // userId = username ('admin') → loadProfile(null) → фолбэк по username.
@@ -252,16 +253,17 @@ describe('ContextBuilder.buildBaseBlocks', () => {
       isActive: true,
       preferences: {},
       notes: '',
+      interviewCompleted: false,
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
 
     const interviewContentFor = async (profileOverrides: Record<string, unknown>, eligible: boolean) => {
       const profile = { ...baseProfile, ...profileOverrides };
-      const profilesStore = {
+      const profilesStore = stubProfiles({
         loadProfile: async (id: string) => (id === 'uuid-2' ? profile : null),
         getProfileByUsername: async () => null,
-      } as unknown as ProfileStore;
+      });
       const builder = new ContextBuilder(config, { profilesStore });
       const blocks = await builder.buildBaseBlocks({
         language: 'ru',

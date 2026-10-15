@@ -17,9 +17,9 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import type { ContextBuilder } from './context/builder.js';
-import type { ContextConfig } from './context/config.js';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
 import type { AgentDefinition, Message, PlanMode, Session, SessionMode } from '@itphx/synth-shared';
+import { stubContextFiles } from '../test-helpers/storage-stubs.js';
 
 /** Контекст доступности тулов, который call-site передаёт в `_interviewEligible`. */
 interface InterviewToolAccess {
@@ -92,7 +92,7 @@ describe('ChatOrchestrator — интервью и ход планировщик
       eventBus: new EventBus(),
       contextBuilder: makeCtxBuilder(),
       providerLoader: () => null,
-      contextConfig: {} as unknown as ContextConfig,
+      contextConfig: stubContextFiles(),
       defaultWorkingDir: tmpDir,
       toolRegistry: createToolRegistry(),
     });
@@ -179,7 +179,7 @@ describe('ChatOrchestrator — интервью и ход планировщик
         eventBus: new EventBus(),
         contextBuilder: makeCtxBuilder(),
         providerLoader: () => null,
-        contextConfig: {} as unknown as ContextConfig,
+        contextConfig: stubContextFiles(),
         defaultWorkingDir: tmpDir,
       }) as unknown as OrchestratorPrivate;
       const msg = makeMessage(MessageRole.USER, { author: 'user' });

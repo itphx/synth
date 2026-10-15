@@ -8,6 +8,8 @@ import { ContextBuilder } from './builder.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerMcpServer } from './composer.js';
 import { sortPromptBlocks } from './prompt-blocks.js';
 import { DebugCollector } from '../../debug.js';
+import { stubContextFiles } from '../../test-helpers/storage-stubs.js';
+import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 
 interface SessionOverrides {
   projectId?: string;
@@ -36,16 +38,17 @@ function makeSession(overrides: SessionOverrides = {}): Session {
   } as unknown as Session;
 }
 
-/** Стаб ContextConfig: возвращает маркеры вместо чтения prompt-файлов. */
-function makeContextConfig(): ContextConfig {
-  return {
+/** Стаб `ContextFileRepository` (реализация — ContextConfig): маркеры вместо prompt-файлов. */
+function makeContextConfig(overrides: Partial<ContextFileRepository> = {}): ContextFileRepository {
+  return stubContextFiles({
     getGatewayInstructions: () => '[GATEWAY]',
     getPlanGuide: () => '[PLAN GUIDE]',
     getModePolicy: () => '[MODE POLICY]',
     getClassificationInstructions: () => '[CLASSIFICATION]',
     getSchedulerNotice: () => '[SCHEDULER]',
     getSchedulerTurnNotice: () => '[SCHEDULER TURN]',
-  } as unknown as ContextConfig;
+    ...overrides,
+  });
 }
 
 function makeProjectStore(): { load(id: string): Promise<Project | null> } {
@@ -104,7 +107,7 @@ describe('SystemPromptComposer', () => {
   });
 
   function makeComposer(opts: {
-    contextConfig?: ContextConfig | null;
+    contextConfig?: ContextFileRepository | null;
     projectStore?: { load(id: string): Promise<Project | null> } | null;
   } = {}): SystemPromptComposer {
     return new SystemPromptComposer({
@@ -903,10 +906,7 @@ describe('SystemPromptComposer', () => {
 
     it('пустой ассет → блок не добавляется даже при schedulerActive', async () => {
       const composer = makeComposer({
-        contextConfig: {
-          ...makeContextConfig(),
-          getSchedulerNotice: () => '',
-        } as unknown as ContextConfig,
+        contextConfig: makeContextConfig({ getSchedulerNotice: () => '' }),
       });
       const session = makeSession();
 
@@ -956,10 +956,7 @@ describe('SystemPromptComposer', () => {
 
     it('пустой ассет → блок не добавляется даже при schedulerCurrentTurn', async () => {
       const composer = makeComposer({
-        contextConfig: {
-          ...makeContextConfig(),
-          getSchedulerTurnNotice: () => '',
-        } as unknown as ContextConfig,
+        contextConfig: makeContextConfig({ getSchedulerTurnNotice: () => '' }),
       });
       const session = makeSession();
 

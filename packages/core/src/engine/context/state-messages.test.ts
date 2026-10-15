@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { ProjectPlan, Session, SessionSettings, TodoItem } from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
-import { ContextConfig } from './config.js';
+import { stubContextFiles } from '../../test-helpers/storage-stubs.js';
+import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import {
   syncStateMessages,
   createStateMessage,
@@ -37,13 +38,13 @@ function makeSession(overrides: SessionOverrides = {}): Session {
   } as unknown as Session;
 }
 
-/** Стаб ContextConfig: маркеры режима/план-режима вместо чтения prompt-файлов. */
-function makeContextConfig(): ContextConfig {
-  return {
+/** Стаб `ContextFileRepository` (реализация — ContextConfig): маркеры вместо prompt-файлов. */
+function makeContextConfig(): ContextFileRepository {
+  return stubContextFiles({
     getModePrompt: (mode: string) => `[MODE: ${mode.toUpperCase()}]`,
     getPlanModePrompt: (planMode: string, approved: boolean) =>
       `[PLAN MODE: ${planMode.toUpperCase()}${approved ? ' APPROVED' : ''}]`,
-  } as unknown as ContextConfig;
+  });
 }
 
 function makeTodos(): TodoItem[] {

@@ -12,8 +12,8 @@ import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import type { BusEvent, CommandRuntime, CommandResolveResult, PermissionConfig } from '@itphx/synth-shared';
 import type { ContextBuilder } from './context/builder.js';
-import type { ContextConfig } from './context/config.js';
 import { generateId, MessageRole, nowISO, makeTextPart, type Message } from '@itphx/synth-shared';
+import { stubContextFiles } from '../test-helpers/storage-stubs.js';
 
 function makeCtxBuilder(): ContextBuilder {
   return {
@@ -53,7 +53,7 @@ async function run(content: string, opts?: { commandRuntime?: CommandRuntime; pe
     sessionManager,
     eventBus,
     contextBuilder: makeCtxBuilder(),
-    contextConfig: {} as ContextConfig,
+    contextConfig: stubContextFiles(),
     providerLoader: () => null,
     defaultWorkingDir: tmpDir,
     commandRuntime,

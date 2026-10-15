@@ -17,10 +17,11 @@ import { EventBus } from '../events/bus.js';
 import { ProviderFactory, BaseProvider } from '../providers/base.js';
 import type { LLMMessage } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
-import type { ContextConfig } from './context/config.js';
+import type { ContextFileRepository } from '../storage/ports/context-file-repository.js';
 import type { McpManager } from './mcp/index.js';
 import { createToolRegistry } from './tools/index.js';
 import { createAgentRegistry } from './agents/index.js';
+import { stubContextFiles } from '../test-helpers/storage-stubs.js';
 import {
   generateId,
   MessageRole,
@@ -46,14 +47,14 @@ function makeCtxBuilder(): ContextBuilder {
   } as unknown as ContextBuilder;
 }
 
-/** Стаб ContextConfig: включает mode_change state-сообщения с unavailable-секцией. */
-function makeContextConfig(): ContextConfig {
-  return {
+/** Стаб `ContextFileRepository` (реализация — ContextConfig): mode_change с unavailable-секцией. */
+function makeContextConfig(): ContextFileRepository {
+  return stubContextFiles({
     getModePrompt: () => '[MODE]',
     getPlanModePrompt: () => '[PLAN MODE]',
     getModePolicy: () => '[MODE POLICY]',
     getPlanGuide: () => '[PLAN GUIDE]',
-  } as unknown as ContextConfig;
+  });
 }
 
 function makeUserMessage(content = 'Привет'): Message {

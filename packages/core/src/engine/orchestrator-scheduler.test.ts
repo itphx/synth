@@ -14,9 +14,10 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { EventBus } from '../events/bus.js';
 import type { ContextBuilder } from './context/builder.js';
-import type { ContextConfig } from './context/config.js';
+import type { ContextFileRepository } from '../storage/ports/context-file-repository.js';
 import { generateId, MessageRole, nowISO, makeTextPart } from '@itphx/synth-shared';
 import type { Message, Session } from '@itphx/synth-shared';
+import { stubContextFiles } from '../test-helpers/storage-stubs.js';
 
 function makeCtxBuilder(): ContextBuilder {
   return {
@@ -44,13 +45,13 @@ function makeUserMessage(content: string, metadata?: Record<string, unknown>): M
   };
 }
 
-const SCHEDULER_CONFIG = {
+const SCHEDULER_CONFIG: ContextFileRepository = stubContextFiles({
   getPlanGuide: () => '[PLAN GUIDE]',
   getModePolicy: () => '[MODE POLICY]',
   getClassificationInstructions: () => '[CLASSIFICATION]',
   getSchedulerNotice: () => '[SCHEDULER]',
   getSchedulerTurnNotice: () => '[SCHEDULER TURN]',
-} as unknown as ContextConfig;
+});
 
 describe('ChatOrchestrator — schedulerActive (ADR-051)', () => {
   let tmpDir: string;

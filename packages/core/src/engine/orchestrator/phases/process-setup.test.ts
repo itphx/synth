@@ -20,13 +20,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { LLMChunk, LLMResponse, Message, ToolForLLM } from '@itphx/synth-shared';
+import { stubContextFiles } from '../../../test-helpers/storage-stubs.js';
 import { FileStore } from '../../../storage/file-store.js';
 import { SessionManager } from '../../../sessions/manager.js';
 import { EventBus } from '../../../events/bus.js';
 import { DebugCollector } from '../../../debug.js';
 import { BaseProvider } from '../../../providers/base.js';
 import type { CancellationToken } from '../../../providers/base.js';
-import type { ContextConfig } from '../../context/config.js';
 import type { ComposedPrompt, ComposerContext, SystemPromptComposer } from '../../context/composer.js';
 import type { PromptBlock } from '../../context/prompt-blocks.js';
 import type { ToolRegistry } from '../../tools/registry.js';
@@ -144,10 +144,10 @@ describe('runProcessSetup', () => {
         modelName: 'set-model',
       })) as never,
       handleLlmFailure: vi.fn(async () => ({ error: 'provider not found', errorType: 'provider_not_found', canRetry: false })) as never,
-      contextConfig: {
+      contextConfig: stubContextFiles({
         getModePrompt: () => 'MODE_PROMPT',
         getPlanModePrompt: () => 'PLAN_PROMPT',
-      } as unknown as ContextConfig,
+      }),
       permissionConfig: { rules: {}, askTimeoutMs: 1000 } as never,
       cachePolicy: 'auto',
       resolveMcpDecisions: vi.fn(() => [
