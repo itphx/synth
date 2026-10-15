@@ -62,6 +62,20 @@
 | [PROP-063](./arch_decisions/prop-063-user-learning-metrics.md) | Обучение пользователя и метрики | 🧩 Предложение (vision) | анализ сессий, дашборд без рейтингов |
 | [PROP-067](./arch_decisions/prop-067-org-guidelines-defaults.md) | Организационные гайдлайны → дефолты инстанса | 🧩 Предложение (vision) | ingestion, scope, версионирование/аудит |
 
+## Декомпозиция god-объектов ([ADR-095](./arch_decisions/adr-095-god-object-decomposition.md))
+
+Принятый подход «вынос по швам» (фасад + модули, один шов — один коммит, под зелёными тестами).
+Порядок — от низкого риска к высокому; `orchestrator` — последним.
+
+| Шаг | Объект | Статус | Заметка |
+|---|---|---|---|
+| 1 | `ui/lib/api/synthApi.ts` (2 596) → `lib/api/<домен>.ts` + barrel | ⏳ | клиент, низкий риск |
+| 2 | `shared/types/index.ts` (1 452) → `types/<домен>.ts` + barrel | ⏳ | импорты через barrel сохраняются |
+| 3 | `ui/components/panels/LeftPanel.tsx` (2 230) → подкомпоненты + хуки | ⏳ | тонкие тесты — добавить регресс |
+| 4 | `core/server/app.ts` (2 014) + `backend/app.ts` (1 738) → вынести монтирование/провижининг | ⏳ | — |
+| 5 | `core/engine/tools/task.ts` (1 926) → подмодули тула | ⏳ | защита: task.test/task-resume.test |
+| 6 | `core/engine/orchestrator.ts` (5 393; `_processMessage` 1 668) → `engine/orchestrator/phases/*` | ⏳ | максимальный риск; 19 тест-файлов |
+
 ## Частично реализовано (остаток как предложение)
 
 Принятое ядро уже в коде; ниже — то, что осталось (остаток живёт в теле AD, отдельного срока у него пока нет).

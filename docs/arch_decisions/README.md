@@ -59,6 +59,7 @@
 | ADR-086 | Расширяемость Synth (зонтик «Классы расширений»): Plugin (PROP-090), **Gateway** (ADR-087), Add-on, контент-паки (PROP-068), Editions, Contribution flow; единый манифест `synth.pack`; первый add-on/gateway — Telegram-шлюз — реализован и мультитенантен; Plugin SDK/editions/contribution — нет | ⚠️ Частично | [adr-086-extensibility-plugins-editions.md](./adr-086-extensibility-plugins-editions.md) |
 | ADR-087 | **Шлюзы (gateways)** — отдельный класс расширений (внешний сервис-транспорт внешний мир ↔ Synth, двусторонний обмен): контракт (приём через `POST /api/v2/events`, доставка наружу через SSE-watcher, MCP-часть, Binding, identity/claim-flow, allowlist, вложения, дедуп, прокси/egress, секреты at-rest); Telegram-шлюз (`addons/synth-gateway-telegram`) реализован и **мультитенантен** («несколько ботов → несколько сред», `tenants.json`); HA через leader election, webhook-транспорт, второй канал — нет | ⚠️ Частично | [adr-087-gateways.md](./adr-087-gateways.md) |
 | ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; остаток — Plugin SDK (PROP-090), пайплайны (PROP-059), остаток ADR-087 (HA/второй канал) | ⚠️ Частично | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
+| ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ⚠️ Частично | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
 
 ## Предложения
 
@@ -115,4 +116,4 @@
 
 ---
 
-Всего документов: 80 (Решения: 35, Частично: 7, Предложения: 28, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 81 (Решения: 35, Частично: 8, Предложения: 28, Vision: 9, Icebox: 0, Legacy: 1).
