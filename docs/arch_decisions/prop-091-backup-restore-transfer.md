@@ -114,6 +114,31 @@ MVP — **пункты 1, 2, 4, 5, 6** (CLI + документация): backup/
 - Сквозной сценарий проверяется целиком: **setup → verify → backup → restore → verify → migrate** (после
   `restore` — обязательный `doctor`).
 
+## Реализация (MVP)
+
+MVP реализован по решению владельца; формальное принятие (перевод в ADR) — за владельцем.
+
+Сделано в коде (`packages/core/src/maintenance/*`):
+
+- **`synth backup`** (`backup.ts`) — `--out` (файл или каталог), `--with-secrets`, `--with-workspace`,
+  `--live` (предупреждение о нетранзакционном срезе); архив `0600`, имя
+  `synth-backup-<instanceVersion>-<YYYYMMDD-HHmmss>.tar.gz`.
+- **Манифест + контрольная сумма** (`archive.ts` + `BackupManifest`): `manifest.json` внутри архива
+  (tool/formatVersion/`schemaVersion` из `meta.json`/`instanceVersion`/`createdAt`/флаги/исключения/
+  записи с sha256/`contentChecksum`); **свой потоковый tar.gz** (ustar) без внешних зависимостей; при
+  разборе отвергаются абсолютные пути и `..` (`ArchivePathError`).
+- **`synth restore <archive>`** (`restore.ts`) — строгий порядок: манифест → формат → версия схемы
+  (`>` `SCHEMA_VERSION` → отказ) → контрольные суммы → `--dry-run` → `--yes` (без него отказ) →
+  страховочная копия → извлечение; `--no-safety-copy` отключает копию.
+- **`synth doctor`** (`doctor.ts`) — `--json`; проверки `data-dir` (write-доступ пробным файлом
+  `.doctor-probe`), `schema`, `master-key`, `secrets-permissions`, `data-integrity`, `providers`,
+  `locks`, `version`; exit 1 при любом `fail`. После `restore` — обязателен.
+- **Страховочные копии** — в единый каталог `{dataDir}/backups/` (`safetyCopyPath`, `pre-restore`/
+  `pre-migrate`), исключённый из архивов бэкапа (не бэкапится рекурсивно).
+
+Остаток: портативный экспорт/импорт проекта (`synth project export|import`), admin-API для managed,
+шифрование `--encrypt`, онлайн-консистентный/инкрементальный бэкап (после [PROP-032](./prop-032-history-storage-postgresql.md)).
+
 ## Открытые вопросы
 
 1. Формат манифеста: свой или совместимость с чем-то внешним (velero/Restic)?

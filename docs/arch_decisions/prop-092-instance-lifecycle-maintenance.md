@@ -81,6 +81,34 @@
 2. `synth update --to <version>` (обновление и откат) + документация `helm rollback`. ~1–2 дня.
 3. Runbook в портале: обновление/миграции/откат/удаление + чек-лист очистки. ~1 день.
 
+## Реализация (MVP)
+
+MVP реализован по решению владельца; формальное принятие (перевод в ADR) — за владельцем.
+
+Сделано в коде (`packages/core/src/maintenance/*`, `storage/instance-meta.ts`):
+
+- **`{dataDir}/meta.json`** (`instance-meta.ts`) — `schemaVersion`/`instanceVersion`/`migrations`/
+  `updatedAt`; отсутствие файла = `schemaVersion = 0` (существующие инсталляции); запись атомарная
+  (tmp→rename).
+- **Реестр миграций** — `MIGRATIONS` (`id`/`toVersion`/`description`/`run`), `SCHEMA_VERSION` = max
+  `toVersion`; существующая разовая миграция снапшотов скоупа (`session-scope-snapshots-v1`)
+  переведена на общий реестр; идемпотентность сохраняется (маркер внутри миграции).
+- **Авто-миграции на старте** (`startup.ts`, `applyStartupMigrations`) — паритет standalone-core и
+  managed-backend: guard совместимости → **обязательная страховочная копия** (fail-closed: без копии не
+  мигрируем) → применение pending-миграций под межпроцессным локом `{dataDir}/migrate` (`FileMutex`,
+  heartbeat) → единое предупреждение на старт.
+- **`synth migrate --dry-run|--yes`** (`migrate.ts`) — без `--dry-run` и без `--yes` отказ; печатает
+  текущую/ожидаемую версию и план; **отказ при данных новее версии** (`InstanceDataTooNewError`,
+  в т.ч. fail-closed на старте: `assertInstanceDataNotTooNew`).
+- **`synth uninstall [--purge|--dry-run|--yes]`** (`uninstall.ts`) — по умолчанию данные **сохраняются**
+  (сводка: размер, сессии/проекты, `secrets/`/`master.key`, версия схемы, число страховочных копий);
+  `--purge` требует `--yes`, предупреждает об утрате мастер-ключа и копий; для локального home
+  ([ADR-079](./adr-079-local-home-independent-instances.md)) перечисляет остающиеся
+  `config.yaml`/`profiles.json`/`credentials.json`.
+
+Остаток: `synth update --to <version>` (обновление/откат — **не реализовано**, см. таблицу выше),
+аудит-события `maintenance.*`/`uninstall.purge`, публикация runbook на портале (dev-вариант — [`docs/MAINTENANCE.md`](../MAINTENANCE.md)).
+
 ## Открытые вопросы
 
 1. Где хранить «ожидаемую» схему — в `meta.json` или в самом пакете (константа), а `meta.json` только фиксирует фактическую?

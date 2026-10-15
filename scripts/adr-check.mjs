@@ -184,19 +184,20 @@ function readAllDocs() {
 
 // ── Разбор существующих индексов (сохраняем описания) ───────────────────────
 
-/** `| ADR-005 | описание | … |` → Map<num, описание>. */
+/** `| ADR-005 | описание | … |` → Map<`ADR-005`, описание> (ключ — полный id: ADR- и PROP- номера могут совпадать). */
 function parseDescriptions(text, { stripLinks = false } = {}) {
   const map = new Map();
   for (const line of text.split('\n')) {
-    const m = line.match(/^\|\s*(?:ADR|PROP)-(\d+)\s*\|(.*)\|\s*$/);
+    const m = line.match(/^\|\s*(ADR|PROP)-(\d+)\s*\|(.*)\|\s*$/);
     if (!m) continue;
-    const cells = m[2].split('|').map((c) => c.trim());
+    const key = `${m[1]}-${m[2]}`;
+    const cells = m[3].split('|').map((c) => c.trim());
     let desc = cells[0] || '';
     const link = desc.match(/^\[([^\]]+)\]\([^)]*\)$/);
     if (link) desc = link[1];
     if (stripLinks) desc = desc.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
     desc = desc.replace(/\s*\|\s*$/, '').trim();
-    if (!map.has(m[1]) || !map.get(m[1])) map.set(m[1], desc);
+    if (!map.has(key) || !map.get(key)) map.set(key, desc);
   }
   return map;
 }
@@ -223,7 +224,7 @@ function renderReadme(docs, descriptions) {
     lines.push(`## ${section.title}`, '');
     lines.push('| ID | Тема | Статус | Файл |', '|----|------|--------|------|');
     for (const doc of rows) {
-      const desc = descriptions.get(doc.num) || doc.title;
+      const desc = descriptions.get(doc.id) || doc.title;
       lines.push(`| ${doc.id} | ${desc} | ${doc.token} | [${doc.fileName}](./${doc.fileName}) |`);
     }
     lines.push('');
@@ -259,7 +260,7 @@ function renderAgentsIndex(docs, descriptions) {
     '|----|------|--------|------|',
   ];
   for (const doc of docs.filter((d) => !d.legacy)) {
-    const desc = descriptions.get(doc.num) || doc.title;
+    const desc = descriptions.get(doc.id) || doc.title;
     lines.push(`| ${doc.id} | ${desc} | ${doc.token || '—'} | [${doc.id.toLowerCase()}](./${doc.rel}) |`);
   }
   lines.push(INDEX_END);
@@ -353,7 +354,7 @@ function checkIndexCompleteness(docs) {
   const agents = existsSync(AGENTS_PATH) ? readText(AGENTS_PATH) : '';
   const indexed = new Set(parseDescriptions(readme).keys());
   for (const doc of docs) {
-    if (!indexed.has(doc.num)) error(`docs/arch_decisions/README.md: ${doc.id} отсутствует в индексе`);
+    if (!indexed.has(doc.id)) error(`docs/arch_decisions/README.md: ${doc.id} отсутствует в индексе`);
   }
   if (!agents.includes(INDEX_START) || !agents.includes(INDEX_END)) {
     error(`AGENTS.md: не найдены маркеры ${INDEX_START} / ${INDEX_END}`);

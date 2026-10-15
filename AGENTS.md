@@ -13,7 +13,7 @@
 ## Инварианты (не нарушать)
 
 1. План — в `project.plan`, todo — в `session.todos`; состояние менять только инструментами `plan_*`/`todo_*`, не файлами (ADR-039).
-2. Хранилище — только через `FileStore` (JSON + атомарная запись tmp→rename); писать в `$SYNTH_DATA_DIR` в обход API/FileStore нельзя (ADR-005). Исключение: фикс бага самого хранилища / миграция схемы.
+2. Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая реализация — `FileStore`/`JsonStore` (JSON + атомарная запись tmp→rename, ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя. Исключение: фикс самого хранилища / миграция схемы.
 3. Любой LLM-вызов — через `GatewayProvider` (guard, обфускация, rate limit, аудит); провайдера напрямую не дёргать (ADR-036).
 4. Движки stateless: история и состояние — на бэкенде; движок получает историю + новое сообщение + контекст (ADR-022).
 5. Permissions и режимы — только через permission-слой (`plan`/`act`/`yolo`, `allow`/`deny`/`ask`); не хардкодить проверки в тулах (ADR-025/ADR-028/ADR-029).
@@ -56,6 +56,8 @@ tmp/                   # Временные файлы. Использовать
 
 Все 6 пакетов публикуются в npm; `@itphx/synth` — тонкая CLI-обёртка над core/ui/shared: не бандлит core в `cli.js` (external) и не копирует ассеты — всё резолвится из npm-зависимостей (ADR-038). `@itphx/synth-sdk` — самостоятельный клиент публичного API (зависит только от shared).
 
+**Слой хранения (ADR-096).** Домен работает через доменные порты (`packages/core/src/storage/ports/*`), а физический backend взаимозаменяем: `storage/memory/*` (in-memory, герметичные тесты), `FileStore`/`JsonStore` и прочие файловые реализации (default), БД — следующий шаг (PROP-032). Точка сборки — `packages/core/src/storage/storage-context.ts` (`createFileStorage`/`createMemoryStorage`/`createStorageContext`); выбор через `storage.backend` (`file`|`memory`; env `SYNTH_STORAGE_BACKEND`). Контракт любой реализации («паспорт порта») — suite `packages/core/src/storage/contract/*`. Конфиг-словари (провайдеры/модели/агенты) — порт `DocumentRepository<T>`.
+
 ### Слои зависимостей
 
 ```text
@@ -87,6 +89,16 @@ pnpm typecheck              # проверка типов
 pnpm lint                   # ESLint
 pnpm test                   # Vitest
 pnpm clean                  # очистка dist/
+```
+
+**Обслуживание инстанса** (runbook — [docs/MAINTENANCE.md](./docs/MAINTENANCE.md)):
+
+```bash
+synth doctor                 # health инстанса (--json) — PROP-091
+synth backup --out <dir>     # архив каталога данных (--with-secrets|--with-workspace|--live) — PROP-091
+synth restore <archive>      # восстановление (--dry-run|--yes|--no-safety-copy) — PROP-091
+synth migrate                # миграции схемы данных (--dry-run|--yes) — PROP-092
+synth uninstall              # удаление инстанса (--purge|--dry-run|--yes; по умолчанию данные сохраняются) — PROP-092
 ```
 
 Сборка core копирует `prompts/` и `definitions/*.json` в `dist/` — это **fallback для Docker**; источник истины промптов — `packages/core/prompts` (публикуется в npm через `files`), дубликатов ассетов нет (ADR-038). Логи dev-запуска: `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`.
@@ -396,7 +408,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-029 | Гранулярные permissions: allow/deny/ask per tool + file patterns | ✅ Реализовано | [adr-029](./docs/arch_decisions/adr-029-granular-permissions.md) |
 | ADR-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (pre/post tool use, session, plan, spawn); фундамент внешних событий (ADR-089) и интеграций (ADR-051/052/086/087); Plugin SDK — PROP-090 | ⚠️ Частично | [adr-030](./docs/arch_decisions/adr-030-hooks-agent-events.md) |
 | PROP-031 | Verification синт (аналог VerificationAgent из Claude Code) | 🧩 Предложение | [prop-031](./docs/arch_decisions/prop-031-verification-agent.md) |
-| PROP-032 | Миграция хранения истории на PostgreSQL (логическая модель уже в JSON — ADR-005/ADR-033) | 🧩 Предложение | [prop-032](./docs/arch_decisions/prop-032-history-storage-postgresql.md) |
+| PROP-032 | Второй вариант хранения — БД (PostgreSQL) за единым слоем (порты/контрактный suite — ADR-096) | 🧩 Предложение | [prop-032](./docs/arch_decisions/prop-032-history-storage-postgresql.md) |
 | ADR-033 | Ветвление сессий, наследование контекста и межсессионное слияние | ✅ Реализовано | [adr-033](./docs/arch_decisions/adr-033-session-branching-merge.md) |
 | ADR-034 | Routing между моделями (content + confidence + cost) | ✅ Реализовано | [adr-034](./docs/arch_decisions/adr-034-model-routing.md) |
 | ADR-035 | Micro-model first: дешёвый слой перед LLM (правила/embedding) | ✅ Реализовано | [adr-035](./docs/arch_decisions/adr-035-micro-model-first.md) |
@@ -460,6 +472,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-093 | Версионирование документации портала: версионные подкаталоги + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093](./docs/arch_decisions/prop-093-docs-versioning.md) |
 | PROP-094 | Наблюдаемость и эксплуатационные метрики: `/metrics` (Prometheus), `/ready` + раздельные probes, структурные логи (`request_id`/`session_id`, редакция секретов), SLO/алерты, sizing | 🧩 Предложение | [prop-094](./docs/arch_decisions/prop-094-observability-metrics.md) |
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095](./docs/arch_decisions/adr-095-god-object-decomposition.md) |
+| ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096](./docs/arch_decisions/adr-096-storage-layer.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096](./docs/arch_decisions/prop-096-background-subagent-sessions.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
@@ -476,6 +489,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | пользовательская документация / портал | https://docs.synth.itphx.ru/ |
 | документация (портал и dev-доки) | скилл `synth-docs` |
 | storage / JSON / FileStore | [ADR-005](./docs/arch_decisions/adr-005-json-storage.md) |
+| хранилище / backend / порты | [ADR-096](./docs/arch_decisions/adr-096-storage-layer.md), [PROP-032](./docs/arch_decisions/prop-032-history-storage-postgresql.md) |
 | события / WS / SSE | [ADR-008](./docs/arch_decisions/adr-008-websocket-events.md), [ADR-009](./docs/arch_decisions/adr-009-session-event-bus.md), [ADR-024](./docs/arch_decisions/adr-024-eventhub-transport.md) |
 | проект / сессии / ветвление / merge | [ADR-014](./docs/arch_decisions/adr-014-project-container.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md), [ADR-040](./docs/arch_decisions/adr-040-sessions-without-project.md) |
 | API v2 / Hono | [ADR-017](./docs/arch_decisions/adr-017-api-v2-hono.md), [docs/API_V2.md](./docs/API_V2.md) |
@@ -519,7 +533,8 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | внешние add-on сервисы / шлюзы / плагины / editions | [ADR-086](./docs/arch_decisions/adr-086-extensibility-plugins-editions.md), [ADR-087](./docs/arch_decisions/adr-087-gateways.md), [PROP-090](./docs/arch_decisions/prop-090-extension-api.md), [PROP-068](./docs/arch_decisions/prop-068-skills-agents-registry.md), [ADR-030](./docs/arch_decisions/adr-030-hooks-agent-events.md) |
 | прокси / egress | [PROP-088](./docs/arch_decisions/prop-088-http-proxy.md) |
 | бэкап / восстановление / экспорт / импорт данных | [PROP-091](./docs/arch_decisions/prop-091-backup-restore-transfer.md), [ADR-005](./docs/arch_decisions/adr-005-json-storage.md), [PROP-055](./docs/arch_decisions/prop-055-instance-exchange.md) |
-| обновление / миграции схемы / откат / удаление инстанса | [PROP-092](./docs/arch_decisions/prop-092-instance-lifecycle-maintenance.md), [ADR-038](./docs/arch_decisions/adr-038-npm-packages.md) |
+| обслуживание инстанса / бэкап / миграции | [PROP-091](./docs/arch_decisions/prop-091-backup-restore-transfer.md), [PROP-092](./docs/arch_decisions/prop-092-instance-lifecycle-maintenance.md), [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) |
+| обновление / миграции схемы / откат / удаление инстанса | [PROP-092](./docs/arch_decisions/prop-092-instance-lifecycle-maintenance.md), [ADR-038](./docs/arch_decisions/adr-038-npm-packages.md), [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) |
 | версионирование документации | [PROP-093](./docs/arch_decisions/prop-093-docs-versioning.md), скилл `synth-docs` |
 | наблюдаемость / метрики / health / ready / SLO | [PROP-094](./docs/arch_decisions/prop-094-observability-metrics.md), [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) |
 | мультимодальный ввод | [PROP-085](./docs/arch_decisions/prop-085-multimodal-input.md) |
@@ -551,4 +566,5 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | [docs/QUICKSTART.md](./docs/QUICKSTART.md) | Быстрый старт |
 | [docs/ROUTING.md](./docs/ROUTING.md) | Routing и микро-слой |
 | [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Диагностика проблем |
+| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | Runbook эксплуатации: настройка, диагностика, бэкап/восстановление, миграции, удаление, обновление/откат |
 | [docs/arch_decisions/README.md](./docs/arch_decisions/README.md) | Каталог ADR/PROP |

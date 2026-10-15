@@ -48,6 +48,7 @@
 | ADR-079 | Локальный home-каталог (`--home`/`SYNTH_HOME`): плоская раскладка config/data/profiles/credentials, приоритеты путей, независимые инстансы standalone и hybrid | ✅ Реализовано | [adr-079-local-home-independent-instances.md](./adr-079-local-home-independent-instances.md) |
 | ADR-084 | Decision-модели (Clef/Clef-Flash): `DecisionProvider` (контракт `state + questions → answers`: `noul`/`choice`/`score`; транспорты RouterAI и Ollama; вызов через `GatewayProvider`) + decision-слой в «Быстрых ответах» (уровень микро-каскада ADR-035, per-session `decisionFirst`), «Маршрутизации» (классификатор категории ADR-034) и внешних событиях (ADR-089, `events.decisionRouting`); эскалация `primary → escalation`, агрегатные метрики (`GET/DELETE /settings/decision/metrics`), мультимодальный контракт (`images`/`videos`; источник — PROP-085); runtime-настройки `GET/PUT/DELETE /settings/decision` + UI-раздел «Decision-модели» | ✅ Реализовано | [adr-084-decision-models-clef.md](./adr-084-decision-models-clef.md) |
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
+| ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096-storage-layer.md](./adr-096-storage-layer.md) |
 
 ## Частично
 
@@ -66,7 +67,7 @@
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
 | PROP-031 | Verification синт | 🧩 Предложение | [prop-031-verification-agent.md](./prop-031-verification-agent.md) |
-| PROP-032 | Миграция хранения истории на PostgreSQL (логическая модель уже в JSON — ADR-005/ADR-033) | 🧩 Предложение | [prop-032-history-storage-postgresql.md](./prop-032-history-storage-postgresql.md) |
+| PROP-032 | Второй вариант хранения — БД (PostgreSQL) за единым слоем (порты/контрактный suite — ADR-096) | 🧩 Предложение | [prop-032-history-storage-postgresql.md](./prop-032-history-storage-postgresql.md) |
 | PROP-037 | Security step перед коммитом | 🧩 Предложение | [prop-037-commit-security-step.md](./prop-037-commit-security-step.md) |
 | PROP-048 | Self-help скиллы и admin-MCP: dogfooding, runbook-скиллы, read-only status-MCP, deploy-тулы, гейтинг ADMIN | 🧩 Предложение | [prop-048-self-help-skills-admin-mcp.md](./prop-048-self-help-skills-admin-mcp.md) |
 | PROP-049 | Git worktrees: тулы `git_worktree_*`, per-session cwd, детект secondary worktree, UI | 🧩 Предложение | [prop-049-git-worktrees.md](./prop-049-git-worktrees.md) |
@@ -117,8 +118,8 @@
 
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
-| ADR-027 | Двойная передача плана (⛔ переопределено ADR-039) | ⛔ Заменено | [legacy/adr-027-double-plan-passing.md](./legacy/adr-027-double-plan-passing.md) |
+| ADR-027 | Двойная передача плана (диск + system prompt) | ⛔ Заменено | [legacy/adr-027-double-plan-passing.md](./legacy/adr-027-double-plan-passing.md) |
 
 ---
 
-Всего документов: 86 (Решения: 36, Частично: 7, Предложения: 33, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 87 (Решения: 37, Частично: 7, Предложения: 33, Vision: 9, Icebox: 0, Legacy: 1).

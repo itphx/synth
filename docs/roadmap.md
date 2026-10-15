@@ -20,8 +20,8 @@
 
 | # | Цель | Документы | Критерий готовности |
 |---|---|---|---|
-| 1 | **Хранилище: PostgreSQL (+ оценка YDB)** | [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Миграция JSON→БД идемпотентна, есть откат, паритет функциональности, замеры на N сессий |
-| 2 | **Эксплуатация: утилиты, руководства и ops-скиллы** | [PROP-091](./arch_decisions/prop-091-backup-restore-transfer.md), [PROP-092](./arch_decisions/prop-092-instance-lifecycle-maintenance.md), [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | «Поднять → проверить → забэкапить → восстановить → мигрировать» проходит по руководствам, автоматизация — скиллами |
+| 1 | **Хранилище: два варианта (файлы и БД) за единым слоем** | [ADR-096](./arch_decisions/adr-096-storage-layer.md), [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Единый слой (доменные порты + контрактный suite + `StorageContext`) ✅ сделан; остаток — БД-реализация (PROP-032): идемпотентная миграция JSON→БД, откат, паритет функциональности, замеры на N сессий |
+| 2 | **Эксплуатация: утилиты, руководства и ops-скиллы** | [PROP-091](./arch_decisions/prop-091-backup-restore-transfer.md), [PROP-092](./arch_decisions/prop-092-instance-lifecycle-maintenance.md), [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Ops-MVP (`backup`/`restore`/`doctor`/`migrate`/`uninstall`) ✅ реализован; остаток — руководства на портале, `synth update --to`, ops-скиллы (PROP-048) |
 | 3 | **Оптимизация потребления памяти** | [PROP-099](./arch_decisions/prop-099-memory-footprint-optimization.md) | RSS-бюджет на N активных сессий и отсутствие неограниченного роста кэшей |
 
 Пометка: это приоритет **0.11**; состав целей и их порядок могут уточняться.
@@ -31,7 +31,7 @@
 | ID | Тема | Статус | Решение до | Заметка |
 |---|---|---|---|---|
 | [PROP-031](./arch_decisions/prop-031-verification-agent.md) | Verification синт (`verifier`) после реализации | 🧩 Предложение | 2026-11-14 | зависит от хуков ADR-030 и цикла ADR-028 |
-| [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Хранение истории сессий в PostgreSQL | 🧩 Предложение | 2026-11-14 | блокирует PROP-077; логическая модель уже в JSON (ADR-005/ADR-033) |
+| [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Второй вариант хранения — БД (PostgreSQL) за единым слоем | 🧩 Предложение | 2026-11-14 | предпосылка выполнена (ADR-096: порты + контрактный suite); БД-реализация не начата; блокирует PROP-077; логическая модель уже в JSON (ADR-005/ADR-033) |
 | [PROP-037](./arch_decisions/prop-037-commit-security-step.md) | Security step перед коммитом (hook + маркер-хеш) | 🧩 Предложение | 2026-11-14 | опирается на ADR-029/ADR-036 |
 | [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Self-help скиллы и admin-MCP (dogfooding) | 🧩 Предложение | 2026-11-14 | read-only status-MCP + deploy-тулы, гейтинг ADMIN |
 | [PROP-049](./arch_decisions/prop-049-git-worktrees.md) | Git worktrees: тулы, per-session cwd, UI | 🧩 Предложение | 2026-11-14 | усиливает ADR-075/ADR-076 |
@@ -111,7 +111,7 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-087](./arch_decisions/adr-087-gateways.md) | Шлюзы (gateways) | ⚠️ Частично | HA/leader election, webhook-транспорт, второй канал |
 | [ADR-089](./arch_decisions/adr-089-external-events-automation.md) | Платформа внешних событий | ⚠️ Частично | Plugin SDK → PROP-090, пайплайны → PROP-059, остаток ADR-087, стриминг ответа наружу |
 
-Итого: ADR — 43 (из них 36 со статусом `✅ Реализовано` и 7 со статусом `⚠️ Частично`, в т.ч. 5 —
+Итого: ADR — 44 (из них 37 со статусом `✅ Реализовано` и 7 со статусом `⚠️ Частично`, в т.ч. 5 —
 «принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089), предложений — 42 (33 actionable + 9 vision),
 legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 7 файлов — ADR-018, ADR-030, ADR-046,
 ADR-051, ADR-086, ADR-087, ADR-089 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).

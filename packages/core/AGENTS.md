@@ -24,7 +24,11 @@
 - Публичные точки входа: `createStandaloneApp()` (`server/app.ts`),
   `createToolRegistry()` (`engine/tools/index.ts`), `createAgentRegistry()`
   (`engine/agents/index.ts`), `FileStore`/`JsonStore`/`ProjectStore`/
-  `FileProfileStore`/`RuntimeSettingsStore`/`SSHKeyStore`/`ServiceApiKeyStore` (`storage/*`), `ChatOrchestrator`
+  `FileProfileStore`/`RuntimeSettingsStore`/`SSHKeyStore`/`ServiceApiKeyStore` (`storage/*`),
+  слой хранения — `StorageContext`/`createFileStorage`/`createMemoryStorage`/
+  `createStorageContext` (`storage/storage-context.ts`), `FileBlobStore`
+  (`storage/file-blob-store.ts`, порт `BlobStore`), `DefaultsStore` (`storage/defaults-store.ts`),
+  `ChatOrchestrator`
   (`engine/orchestrator.ts`), `SessionManager` (`sessions/manager.ts`),
   `QueueProcessorManager` (`queue/processor.ts`), `EventBus` (`events/bus.ts`).
 - Движок stateless: история и состояние — на бэкенде; движок получает историю +
@@ -43,8 +47,9 @@
 - Permissions и режимы — только через `PermissionEvaluator`
   (`engine/permission/evaluator.ts`): `plan`/`act`/`yolo`,
   `allow`/`deny`/`ask`; не хардкодить проверки в тулах (ADR-025/028/029).
-- Хранилище — только через `FileStore`/`JsonStore` (JSON + атомарная запись
-  tmp→rename, ADR-005); писать в `$SYNTH_DATA_DIR` в обход API/FileStore нельзя.
+- Хранилище — только через порты слоя хранения (`StorageContext`, ADR-096); файловая
+  реализация — `FileStore`/`JsonStore`/… (JSON + атомарная запись tmp→rename,
+  ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
 - Конфиг — через `@itphx/synth-shared/config` (ADR-023); приоритет
   CLI-флаги > `SYNTH_*` env > config.yaml > defaults.
 - Секреты at-rest (SSH-ключи, ADR-076) — AES-256-GCM (`security/crypto.ts`);
@@ -396,6 +401,16 @@
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (26; `DocumentRepository<T>` —
+  конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
+  файловые реализации (объявляют `implements` портов — поведение не менялось), in-memory
+  `storage/memory/*`, контрактный suite `storage/contract/*` («паспорт» порта, обязателен для любой
+  реализации), `storage/storage-context.ts` — `StorageContext` + `createFileStorage`/`createMemoryStorage`/
+  `createStorageContext` (backend по `storage.backend`, env `SYNTH_STORAGE_BACKEND`),
+  `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore`), `storage/defaults-store.ts`
+  (`DefaultsStore` — перенесён из backend, там реэкспорт). Точка сборки standalone —
+  `createStandaloneStorage` (`server/app/deps.ts`, строится до `auth`: реестр `serviceKeys` нужен
+  резолверу ключа).
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`
   (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`; ADR-089 —
   `identities: ExternalIdentity[]` в snake_case (`external_id`/`display_name`/`linked_at`/`linked_by`),
@@ -463,6 +478,9 @@
   (`engine/system-messages.ts`, ключи `shared/i18n`), не литералами (ADR-041).
 - Публичный роут: фабрика в `server/routes/*`, монтирование в `server/app.ts`
   (`app.route('/api/v2/...', ...)`); типы/схемы — из `@itphx/synth-shared`.
+- **Стор — только через порт (ADR-096):** домену передаётся доменный порт из
+  `StorageContext` (а не конкретный класс); новая реализация стора обязана пройти
+  контрактный suite `storage/contract/*` (и иметь memory-эквивалент для тестов).
 - Переиспользуемые фабрики — `createXxxRoutes(auth, deps, opts)` (общие для core и
   backend): `auth` — структурный `{ requireAuth: Middleware }`, совместим с backend
   `AuthKit` без каста (исключение — `createSettingsRoutes` принимает core-`AuthKit`);
@@ -533,7 +551,7 @@
 
 - Не импортировать `backend`/`ui` из core (обратное направление).
 - Не вызывать LLM мимо `GatewayProvider` (ADR-036).
-- Не писать в `$SYNTH_DATA_DIR` в обход `FileStore`/`JsonStore` (ADR-005).
+- Не писать в `$SYNTH_DATA_DIR` в обход порта слоя хранения (`FileStore`/`JsonStore`/… — ADR-096/ADR-005).
 - Не хардкодить permission-проверки в тулах (ADR-025/028/029).
 - Не возвращать строки движка без i18n-ключа (ADR-041).
 - Не вводить TSM/JSON-блок состояния — только Tool Use (ADR-039).

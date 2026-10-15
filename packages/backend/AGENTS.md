@@ -54,12 +54,14 @@
 - возвращает handle: `app`, `config`, `auth`, `eventBus`, `eventHub`, `sessionManager`, `projectStore`, `orchestrator`, `queueManager`, `settingsStore`, `webhookStore`, `webhookService`, `listen` (+ stop-функции `stopScheduler`/`stopEphemeralSweeper`/`stopEventJournalPruner`/`stopWebhookService`/`stopWebhookDeliveryPruner`);
 - `listen(port = 0)` поднимает HTTP-сервер и `/ws/events`, возвращает фактический порт (0 — эфемерный для тестов).
 
-**Хранилище (core-классы, ADR-005):**
+**Хранилище (единый слой хранения, ADR-096):**
 
-- `JsonStore<T>` (из `@itphx/synth-core`) — `<dataDir>/<subdir>/<key>.json`; атомарная запись через shared `atomicWrite` (tmp → rename) + per-key `AsyncLock`; ключ проверяется от `..` и `\`; `list()` собирает вложенные ключи (`provider/model`).
-- `ProjectStore` (из `@itphx/synth-core`) — `<dataDir>/projects/<id>.json`; один `AsyncLock` на все проекты; `create()` инициализирует план, лог и владельца.
-- Своих копий хранилищ в backend нет — используются core-классы (единый источник истины).
-- Прямой доступ роутеров к `$SYNTH_DATA_DIR` в обход stores запрещён.
+- `createBackendStorage(config)` (`src/app/deps.ts`) собирает **единственный `StorageContext`** (доменные порты) и делает это **до `auth`** — реестр `serviceKeys` нужен резолверу ключа, `mcpRegistry` — сидированию instance-серверов; `createBackendDeps` переиспользует тот же инстанс. backend **не конструирует стораджи напрямую** (ни новых классов, ни «россыпи» в роутах).
+- `JsonStore<T>` (из `@itphx/synth-core`, порт `DocumentRepository<T>`) — `<dataDir>/<subdir>/<key>.json`; атомарная запись через shared `atomicWrite` (tmp → rename) + per-key `AsyncLock`; ключ проверяется от `..` и `\`; `list()` собирает вложенные ключи (`provider/model`).
+- `ProjectStore` (из `@itphx/synth-core`, порт `ProjectRepository`) — `<dataDir>/projects/<id>.json`; один `AsyncLock` на все проекты; `create()` инициализирует план, лог и владельца.
+- `DefaultsStore` (порт `DefaultsRepository`) — теперь в core (`storage/defaults-store.ts`); в backend — реэкспорт (`src/lib/defaults-store.ts`) для прежних импортов.
+- Своих реализаций стораджей в backend нет — используются порты/файловые реализации из core (единый источник истины).
+- Прямой доступ роутеров к `$SYNTH_DATA_DIR` в обход порта запрещён.
 
 ## Правила эндпоинта
 
@@ -159,7 +161,7 @@
 - Не дёргать LLM/SDK мимо core-шного `GatewayProvider`.
 - Не плодить транспортные каналы — `EventHub` + `GET /api/v2/events`.
 - Не хардкодить проверки прав вне `requireAuth`/`requireAdmin`/`requirePermission`.
-- Не писать в `$SYNTH_DATA_DIR` в обход `FileStore`/`JsonStore`/`ProjectStore` (ADR-005).
+- Не писать в `$SYNTH_DATA_DIR` в обход порта слоя хранения (`FileStore`/`JsonStore`/`ProjectStore`; ADR-096/ADR-005).
 - Не держать состояние сессий в памяти backend — источник истины на диске через core.
 - Не редактировать `packages/backend/config.yaml` ради настроек, кроме MCP: остальной конфиг идёт через `loadBackendConfig`.
 - Не добавлять роут в обход `createXxxRoutes` + `app.route(...)` — иначе он потеряется при переиспользовании core-фабрик.
