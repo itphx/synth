@@ -77,7 +77,7 @@
 | 3 | `ui/components/panels/LeftPanel.tsx` (2 230) → подкомпоненты + хуки | ✅ | 2 230→59; `left-panel/*`; поведение/экспорт сохранены |
 | 4 | `core/server/app.ts` (2 014) + `backend/app.ts` (1 738) → вынести монтирование/провижининг | ✅ | 4a: `core/server/app.ts` 2 014→380 + 7 модулей; 4b: `backend/app.ts` 1 738→286 + 5 модулей |
 | 5 | `core/engine/tools/task.ts` (1 926) → подмодули тула | ✅ | 1 926→29; `engine/tools/task/*` (7 модулей); экспорты 1:1 |
-| 6 | `core/engine/orchestrator.ts` (5 393; `_processMessage` 1 668) → `engine/orchestrator/phases/*` | ⏳ | максимальный риск; 19 тест-файлов |
+| 6 | `core/engine/orchestrator.ts` (5 393; `_processMessage` 1 668) → `engine/orchestrator/phases/*` | 🔄 | 6a: 5 393→4 375 (9 модулей); 6b-1: 4 375→3 777, `_processMessage` 1 668→~980 (phases: early/setup/finalize); тело цикла Tool Use — остаток 6b-2 |
 
 ## Частично реализовано (остаток как предложение)
 

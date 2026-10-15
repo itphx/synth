@@ -20,14 +20,13 @@ import type { ComposerSkillsCatalog } from './skills/catalog.js';
 import type { SkillRuntime, SkillScopeOptions } from './skills/types.js';
 import type { CommandRuntime } from '@itphx/synth-shared';
 import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
-import { agentKeyOf, buildPromptState, computeExpected, isBlockChanged, isPrefixUnchanged, type PromptStateReason } from './context/prompt-state.js';
-import { syncStateMessages, createStateMessage, findLastStateMessage, buildModeChangeContent, buildPlanUpdatedContent, wrapStateContent, type UnavailableTool } from './context/state-messages.js';
+import { agentKeyOf } from './context/prompt-state.js';
+import { createStateMessage, findLastStateMessage, buildModeChangeContent, buildPlanUpdatedContent, wrapStateContent, type UnavailableTool } from './context/state-messages.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
 import { resolveMcpScope, type McpScopeDecision } from './mcp/scope.js';
-import { info, warning } from '../logger.js';
-import { autoTitleSession } from '../sessions/auto-title.js';
+import { warning } from '../logger.js';
 import { ModelRouter } from './router/router.js';
 import { ContentClassifier } from './router/content-classifier.js';
 import { DecisionContentClassifier } from './router/decision-content-classifier.js';
@@ -71,6 +70,9 @@ import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo 
 import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
 import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
 import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
+import { runProcessEarly, type ProcessEarlyDeps } from './orchestrator/phases/process-early.js';
+import { runProcessFinalize, type ProcessFinalizeDeps } from './orchestrator/phases/process-finalize.js';
+import { runProcessSetup, type ProcessSetupDeps } from './orchestrator/phases/process-setup.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
@@ -1505,6 +1507,97 @@ export class ChatOrchestrator {
     };
   }
 
+  /** ADR-095 (шаг 6b-1): зависимости вынесенного раннего пролога `_processMessage`. */
+  private _processEarlyDeps(): ProcessEarlyDeps {
+    return {
+      handleSummarization: (session, message, signal, publishChunk, debugCollector, streamId, attempt) =>
+        this._handleSummarization(session, message, signal, publishChunk, debugCollector, streamId, attempt),
+      handleDebugSystemMessage: (session, message, signal, publishChunk, debugCollector, streamId, reasoningLevel, attempt) =>
+        this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, reasoningLevel, attempt),
+      handleCommand: (args) => this._handleCommand(args),
+      microPipeline: this._microPipeline,
+      decisionConfig: this._decisionConfig,
+      publishLocalCompletion: (publishChunk, streamId, content, opts) =>
+        this._publishLocalCompletion(publishChunk, streamId, content, opts),
+      sessionManager: this._sessionManager,
+    };
+  }
+
+  /** ADR-095 (шаг 6b-1): зависимости вынесенной подготовки запроса `_processMessage`. */
+  private _processSetupDeps(): ProcessSetupDeps {
+    return {
+      routeProvider: (session, message, reasoningLevel, debugCollector) =>
+        this._routeProvider(session, message, reasoningLevel, debugCollector),
+      handleLlmFailure: (sessionId, streamId, error, attempt, ctx) =>
+        this._handleLlmFailure(sessionId, streamId, error, attempt, ctx),
+      contextConfig: this._contextConfig,
+      permissionConfig: this._permissionConfig,
+      cachePolicy: this._cachePolicy,
+      resolveMcpDecisions: (session, project) => this._resolveMcpDecisions(session, project),
+      buildToolSelection: (args) => this._buildToolSelection(args),
+      collectUnavailableTools: (
+        session, sessionMode, planMode, planApproved, agentDef, mcpServers, include, workspaceReady,
+      ) => this._collectUnavailableTools(
+        session, sessionMode, planMode, planApproved, agentDef, mcpServers, include, workspaceReady,
+      ),
+      collectSkillsCatalog: (args) => this._collectSkillsCatalog(args),
+      resolveProjectInstructions: (args) => this._resolveProjectInstructions(args),
+      resolveSchedulerActive: (session) => this._resolveSchedulerActive(session),
+      buildComposerContext: (args) => this._buildComposerContext(args),
+      collectComposerMcpServers: (decisions) => this._collectComposerMcpServers(decisions),
+      interviewEligible: (session, message, toolAccess) =>
+        this._interviewEligible(session, message, toolAccess),
+      schedulerCurrentTurn: (session, message) => this._schedulerCurrentTurn(session, message),
+      composer: this._composer,
+      optimizer: this._optimizer,
+      mcpManager: this._mcpManager,
+      toolRegistry: this._toolRegistry,
+      lazyInstructions: this._lazyInstructions,
+      eventBus: this._eventBus,
+      sessionManager: this._sessionManager,
+      loadTokenRatio: (model) => this._loadTokenRatio(model),
+      registerCancelToken: (streamId, token) => {
+        this._cancellationTokens.set(streamId, token);
+      },
+    };
+  }
+
+  /** ADR-095 (шаг 6b-1): зависимости вынесенного эпилога `_processMessage`. */
+  private _processFinalizeDeps(): ProcessFinalizeDeps {
+    return {
+      sessionManager: this._sessionManager,
+      eventBus: this._eventBus,
+      router: this._router,
+      agentRegistry: this._agentRegistry,
+      optimizer: this._optimizer,
+      resolveMessageModel: (chunkModel, finalModel, provider, session) =>
+        this._resolveMessageModel(chunkModel, finalModel, provider, session),
+      persistToolChain: (
+        sessionId, streamId, providerName, agentRole, finalModel,
+        allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+      ) => this._persistToolChain(
+        sessionId, streamId, providerName, agentRole, finalModel,
+        allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+      ),
+      joinAccumulatedTexts: (intermediateTexts, current) =>
+        this._joinAccumulatedTexts(intermediateTexts, current),
+      estimateUsage: (usage, promptChars, outputChars) =>
+        this._estimateUsage(usage, promptChars, outputChars),
+      computeMessageCost: (model, usage) => this._computeMessageCost(model, usage),
+      saveAssistantMessage: this._saveAssistantMessage.bind(this),
+      resolveAssistantStatus: (isCancelled, metadataExtra) =>
+        this._resolveAssistantStatus(isCancelled, metadataExtra),
+      getAssistantSecrets: (sessionId, content) => this._getAssistantSecrets(sessionId, content),
+      calibrateTokenRatio: (model, promptChars, usage, currentRatio) =>
+        this._calibrateTokenRatio(model, promptChars, usage, currentRatio),
+      getProvider: (providerName, session, reasoningLevel) =>
+        this._getProvider(providerName, session, reasoningLevel),
+      unregister: (streamId) => {
+        this._cancellationTokens.delete(streamId);
+      },
+    };
+  }
+
   /**
    * Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`.
    *
@@ -2199,423 +2292,34 @@ export class ChatOrchestrator {
 
     const debugCollector = new DebugCollector(session.settings.debugEnabled);
 
-    // --- Обработка системных сообщений (суммаризация, шедулер, etc.) ---
-    if (message.role === MessageRole.SYSTEM && message.metadata?.type === 'summarization_request') {
-      return this._handleSummarization(session, message, signal, publishChunk, debugCollector, streamId, attempt);
-    }
-    if (message.role === MessageRole.SYSTEM && message.metadata?.type === 'debug_system_message') {
-      return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, effectiveReasoningLevel, attempt);
-    }
-
-    // --- ADR-046 §7: резолвинг `/`-команд в core, до LLM ---
-    if (message.role === MessageRole.USER && (message.content ?? '').trimStart().startsWith('/')) {
-      const commandResult = await this._handleCommand({
-        session, message, signal, publishChunk, debugCollector, streamId,
-        effectiveAgentRole, workingDir, attempt,
-        permissionEvaluator, sessionMode, planMode, planApproved,
-      });
-      if (commandResult) return commandResult;
-      // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.
-    }
-
-    // --- ADR-035: Micro-first — пробуем ответить без LLM ---
-    if (this._microPipeline && session.settings.microFirst) {
-      const microResult = await this._microPipeline.handle({
-        userMessage: message.content,
-        language: session.settings.language,
-        sessionSettings: session.settings,
-        embedProvider: session.settings.embedProvider,
-        embedModel: session.settings.embedModel,
-      });
-      if (microResult.handled && microResult.microResult?.answer) {
-        // Микрослой уверен — возвращаем ответ без вызова LLM
-        const finalContent = microResult.microResult.answer;
-        const finalModel = `micro:${microResult.microResult.taskClass}`;
-
-        // ADR-084: метрики decision-уровня. Если победил decision-сигнал
-        // (`decision:<label>`) — фиксируем его в debug-контексте (`extra_context`)
-        // и дополняем `metadata.micro_first` (не дублируя сам `micro_first`).
-        const decisionSignal = microResult.microResult.signals.find((s) => s.startsWith('decision:'));
-        const microDecision = decisionSignal
-          ? {
-              label: decisionSignal.slice('decision:'.length),
-              confidence: microResult.microResult.confidence,
-              ...(this._decisionConfig?.model ? { model: this._decisionConfig.model } : {}),
-            }
-          : null;
-        if (microDecision) {
-          debugCollector.addContext('decision', {
-            where: 'micro',
-            ...microDecision,
-            latencyMs: microResult.microResult.latencyMs,
-            taskClass: microResult.microResult.taskClass,
-          });
-        }
-        const finalUsage = {
-          inputTokens: microResult.microResult.usage?.inputTokens ?? 0,
-          outputTokens: microResult.microResult.usage?.outputTokens ?? 0,
-          totalTokens: (microResult.microResult.usage?.inputTokens ?? 0) + (microResult.microResult.usage?.outputTokens ?? 0),
-        };
-
-        this._publishLocalCompletion(publishChunk, streamId, finalContent, {
-          model: finalModel,
-          provider: 'micro',
-          usage: finalUsage,
-          durationMs: Date.now() - streamStartedAt,
-        });
-
-        // Сохраняем сообщение ассистента
-        const microMetadata: Record<string, unknown> = {
-          stream_id: streamId,
-          duration_ms: Date.now() - streamStartedAt,
-          ...(microResult.microResult.i18nKey
-            ? { i18n: i18nMeta(microResult.microResult.i18nKey) }
-            : {}),
-          micro_first: {
-            label: microResult.microResult.label,
-            confidence: microResult.microResult.confidence,
-            latencyMs: microResult.microResult.latencyMs,
-            signals: microResult.microResult.signals,
-            taskClass: microResult.microResult.taskClass,
-            ...(microDecision ? { decision: microDecision } : {}),
-          },
-        };
-
-        const assistantMsg: Message = {
-          id: generateId(),
-          role: MessageRole.ASSISTANT,
-          seq: 0,
-          origin: 'local',
-          parts: [makeTextPart(finalContent)],
-          content: finalContent,
-          createdAt: nowISO(),
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          model: finalModel,
-          provider: 'micro',
-          usage: finalUsage,
-          agentRole: effectiveAgentRole,
-          metadata: microMetadata,
-          // ADR-084: debug-контекст (в т.ч. `extra_context.decision`) виден в
-          // `GET /messages/:id/:index/debug`; микро-путь сохраняет сообщение
-          // напрямую, минуя `_saveAssistantMessage`, поэтому ставим здесь.
-          debugData: debugCollector.getDebugInfo() ?? undefined,
-        };
-
-        await this._sessionManager.addMessage(session.id, assistantMsg);
-
-        // Обновляем токены сессии
-        session.inputTokens += finalUsage.inputTokens;
-        session.outputTokens += finalUsage.outputTokens;
-        session.totalTokens += finalUsage.totalTokens;
-
-        // Авто-тайтл если это первое сообщение
-        if (session.messages.filter((m) => m.role === MessageRole.USER && !m.ephemeral).length <= 1) {
-          try {
-            session.title = sm('session.dialog_title', { id: session.id.slice(0, 8) });
-            await this._sessionManager.saveSession(session);
-          } catch {
-            // ok
-          }
-        }
-
-        info('MICRO', `Ответ через микро-слой: ${microResult.microResult.taskClass} (${microResult.microResult.latencyMs}ms, confidence=${microResult.microResult.confidence.toFixed(2)})`);
-        return {};
-      }
-
-      // Если handled=false — продолжаем обычный путь (router → LLM)
-      if (microResult.fallbackSignals?.length) {
-        debugCollector.addContext('micro_first', {
-          status: 'fallback',
-          signals: microResult.fallbackSignals,
-          taskClass: microResult.microResult?.taskClass ?? 'llm_task',
-        });
-
-        // ADR-084: метрики decision-уровня на фоллбеке. `decision_disabled`
-        // исключаем, чтобы выключенный (или незаданный) decision-слой не
-        // засорял метрики. Остальные сигналы (`decision:<label>` при отсечении
-        // по порогу микро-слоя, `decision_low_confidence`, `decision_error:*`, …)
-        // показывают реальное участие decision-модели.
-        const decisionFallbackSignals = microResult.fallbackSignals.filter(
-          (s) => /^decision[:_]/.test(s) && s !== 'decision_disabled',
-        );
-        if (decisionFallbackSignals.length) {
-          debugCollector.addContext('decision', {
-            where: 'micro',
-            status: 'fallback',
-            signals: decisionFallbackSignals,
-          });
-        }
-      }
-    }
+    // --- ADR-095 (шаг 6b-1): ранние выходы (системные сообщения, `/`-команды,
+    // micro-first) вынесены в `orchestrator/phases/process-early.ts`; порядок
+    // проверок и side-effect'ов прежний. `null` — идём обычным путём (LLM).
+    const earlyResult = await runProcessEarly({
+      session, message, signal, publishChunk, debugCollector, streamId,
+      effectiveAgentRole, effectiveReasoningLevel, workingDir, attempt,
+      permissionEvaluator, sessionMode, planMode, planApproved, streamStartedAt,
+    }, this._processEarlyDeps());
+    if (earlyResult) return earlyResult;
 
     try {
-      // 1. Get provider (через роутер если доступен, иначе напрямую)
-      const routeResult = await this._routeProvider(session, message, effectiveReasoningLevel, debugCollector);
-      if (!routeResult) {
-        const providerName = (message.provider as string) || session.settings.provider || '';
-        // Терминальная ошибка конфигурации провайдера: раньше возвращалась без
-        // персистентности — после перезагрузки сессия выглядела как «агент
-        // думает». Теперь проходит общий путь `_handleLlmFailure` (assistant-
-        // сообщение с metadata.status='error'/i18n + last_error в user-сообщении).
-        return this._handleLlmFailure(
-          session.id,
-          streamId,
-          new Error(sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') })),
-          attempt,
-          {
-            debugCollector,
-            durationMs: Date.now() - streamStartedAt,
-            model: session.settings.model,
-            providerName,
-            agentRole: effectiveAgentRole,
-            errorType: 'provider_not_found',
-          },
-        );
-      }
-      const { provider, providerName, decision: routingDecision } = routeResult;
-
-      debugCollector.captureSessionInfo(session.id, provider.model, provider.name, {
-        provider_type: provider.type,
-        debug_enabled: session.settings.debugEnabled,
-        stream_enabled: session.settings.streamEnabled,
-        context_optimization: session.settings.contextOptimization,
-      });
-
-      // ADR-070 §2.8: синхронизируем режим/план/todo durable state-сообщениями
-      // истории (до сборки LLM-сообщений). Идемпотентно — при неизменном
-      // состоянии ничего не добавляется; system prompt при этом не меняется.
-      const language = session.settings.language || 'ru';
-      // ADR-071 §2.4: проект сессии уже загружен выше (projectForState) —
-      // повторно хранилище не читаем.
-      // ADR-071 §2.1/§2.4: эффективный набор MCP сессии — per-session скоуп:
-      // (instance defaultOn ∪ project defaultOn ∪ session enabled) − opt-out.
-      // Определяем до state-сообщений (unavailable-подсказки) и до сборки tools.
-      const mcpDecisions = this._resolveMcpDecisions(session, projectForState);
-      const activeMcpServers = mcpDecisions.filter((d) => d.enabled).map((d) => d.name);
-      const activeMcpSet = new Set(activeMcpServers);
-      // ADR-071 §2.3: эффективные политики инструментов для этого хода (per-session
-      // override → глобальная; `auto` → по типу провайдера). Встроенные и MCP —
-      // независимо; в `available` слой фильтруется по доступности, а подсказки
-      // `unavailable` для него не нужны. `select()` вызывается позже — после
-      // ленивой регистрации MCP-тулов сессии.
-      // ADR-075: гейт `workspace` — если агент в ходе задаст workspace проекта,
-      // выборку пересобираем тем же набором аргументов (см. ниже).
-      const selectionArgs = {
-        session, agentDef, effectiveAgentRole, activeMcpServers, providerType: provider.type,
-        sessionMode, planMode, planApproved, workspaceReady,
-      };
-      const { toolsPolicy, mcpPolicy, select } = this._buildToolSelection(selectionArgs);
-      const stateSync = syncStateMessages(session, {
-        contextConfig: this._contextConfig,
-        language,
-        plan: projectForState?.plan ?? null,
-        agentRole: effectiveAgentRole,
-        // ADR-071 §2.3: слой с политикой `available` уже сужен до доступных —
-        // подсказки `unavailable(mode|role)` для него не добавляем (слои
-        // независимы: built-in-подсказки сохраняются при mcp=available и наоборот).
-        unavailableTools: this._collectUnavailableTools(
-          session, sessionMode, planMode, planApproved, agentDef, activeMcpServers,
-          { builtin: toolsPolicy !== 'available', mcp: mcpPolicy !== 'available' },
-          workspaceReady,
-        ),
-      });
-      if (stateSync.changed) {
-        for (const stateMsg of stateSync.added) {
-          await this._sessionManager.addMessage(session.id, stateMsg);
-        }
-        // Локальная сессия должна увидеть новые state-сообщения при сборке
-        // messagesForLlm в этом же ходе.
-        session.messages.push(...stateSync.added);
-      }
-
-      // 2. Build context (сначала получить summary из сообщений)
-      const optimizedMessages = this._optimizer
-        ? this._optimizer.getMessagesForLlm(session)
-        : session.messages;
-
-      const summaryContent = optimizedMessages
-        .filter((m) => m.role === MessageRole.SUMMARY)
-        .map((m) => m.content)
-        .join('\n\n');
-
-      // ADR-071 §2.1: MCP-тулы активных серверов сессии. Регистрация ленивая и
-      // аддитивная (без deregister при смене набора): глобальный реестр держит
-      // MCP-тулы для executor'а, а per-session скоуп обеспечивает выборка ниже
-      // (`selectForSession`) — кросс-сессионной утечки нет. Загружаем до сборки
-      // промпта, чтобы блок `mcp.servers` видел тулы подключённых серверов.
-      if (this._mcpManager && this._toolRegistry && activeMcpServers.length > 0) {
-        await this._mcpManager.ensureToolsLoaded(activeMcpServers, this._toolRegistry);
-      }
-
-      // ADR-071 §2.6: chars-per-token модели хода (калибровка) для оценок токенов.
-      // `loadedTokenRatio` (без дефолта) переиспользуется при калибровке после
-      // ответа — повторного чтения runtime-настроек нет.
-      const loadedTokenRatio = await this._loadTokenRatio(provider.model || session.settings.model);
-      const tokenRatio = loadedTokenRatio ?? DEFAULT_CHARS_PER_TOKEN;
-
-      // ADR-070 §2.1/§2.8: единая идемпотентная сборка системного промпта
-      // Composer'ом. `session.settings.systemPrompt` override, classification/
-      // gateway/plan-guide/mode-policy/session-context — внутри compose.
-      // Режим/план/todo — уже в state-сообщениях истории (выше), не в system.
-      // ADR-046 §5: каталог скиллов — stable/volatile-блоки (deny скрывает).
-      const skillsCatalog = await this._collectSkillsCatalog({
-        session,
-        agentDef,
-        effectiveAgentRole,
-        workingDir,
-        permissionConfig: session.settings.permission ?? this._permissionConfig,
-        project: projectForState,
-      });
-      // ADR-069 Фаза 1: проектные инструкции (merged chain AGENTS.md) —
-      // только при project.workspace и без systemPrompt-override.
-      const projectInstructions = await this._resolveProjectInstructions({
-        session,
-        project: projectForState,
-        workingDir,
-        model: provider.model,
-        language,
-        signal,
-        // ADR-069 §3.5/R5: мемоизация в пределах хода (streamId).
-        turnId: streamId,
-      });
-      // ADR-069 §9.3: прозрачность — событие о загруженных проектных инструкциях.
-      // Публикуется только в реальном ходе (manifest/getPromptInfo — read-only).
-      if (projectInstructions && projectInstructions.files.length > 0) {
-        this._eventBus.publish(session.id, 'context.instructions_loaded', {
-          session_id: session.id,
-          source: 'initial',
-          agent: effectiveAgentRole,
-          files: projectInstructions.files.map((file) => ({
-            path: file.path,
-            chars: file.chars,
-            truncated: file.truncated,
-            scanned: file.scanned,
-            blocked: file.blocked,
-          })),
-        });
-        // ADR-069 §4.3.5: merged-chain уже в system prompt — seed lazy-реестра,
-        // чтобы lazy не дублировал эти файлы в tool result.
-        this._lazyInstructions?.seed(
-          session.id,
-          projectInstructions.files.filter((file) => file.kind === 'chain').map((file) => file.path),
-        );
-      }
-      const schedulerActive = await this._resolveSchedulerActive(session);
-      const composerCtx: ComposerContext = this._buildComposerContext({
-        session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
-        // ADR-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
-        // инструкцию `tools.guide`; MCP-блоки всегда volatile.
-        toolsPolicy, mcpPolicy, tokenRatio,
-        // ADR-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
-        mcpServers: this._collectComposerMcpServers(mcpDecisions),
-        // ADR-071 §2.4: уже загруженный проект — Composer не читает хранилище.
-        project: projectForState,
-        // ADR-070 §2.5: per-message collector доходит до Composer через контекст.
-        debugCollector,
-        skillsCatalog,
-        instructions: projectInstructions?.instructions,
-        schedulerActive,
-        // Интервью уместно только в первом ходе сессии от пользователя и если
-        // текущий агент может сохранить ответы (`profile_update` доступен).
-        interviewEligible: this._interviewEligible(session, message, {
-          agentDef, sessionMode, planMode, planApproved, workspaceReady,
-        }),
-        // Текущий ход инициирован планировщиком — volatile-пояснение модели.
-        schedulerCurrentTurn: this._schedulerCurrentTurn(session, message),
-      });
-      const composed = await this._composer.compose(composerCtx);
-      // ADR-070 §2.2: в провайдер уходит payload с границей stable-префикса и
-      // ключом кэша (стабильный id сессии). При override
-      // `session.settings.systemPrompt` stablePrefix не задаём (безопаснее).
-      const hasSystemPromptOverride = !!session.settings.systemPrompt?.trim();
-      const finalSystemPrompt: SystemPromptPayload = {
-        text: composed.system,
-        stablePrefix: hasSystemPromptOverride ? undefined : (composed.stablePrefix || undefined),
-        cacheKey: session.id,
-        cachePolicy: this._cachePolicy,
-      };
-
-      // ADR-070 §2.4/§2.7 (Ф2-часть 2): состояние промпта per-agent. При
-      // `systemPrompt`-override закреплённый префикс пустой (не кэшируем
-      // пользовательский оверрайд). Запись в сессию — только при смене
-      // generation (init / смена префикса / override); на обычном сообщении
-      // состояние только сравнивается.
-      const agentKey = agentKeyOf(effectiveAgentRole);
-      const prevPromptState = session.promptStates?.[agentKey] ?? null;
-      const promptStateInput = {
-        system: composed.system,
-        stablePrefix: hasSystemPromptOverride ? '' : composed.stablePrefix,
-        blocks: composed.blocks,
-      };
-      const expectedCache = computeExpected(prevPromptState, promptStateInput);
-      let activePromptState = prevPromptState;
-      // ADR-069 §11/ADR-070 §2.4: блок `instructions` лежит в тире `context`, а
-      // `isPrefixUnchanged` сравнивает только stable-префикс. Поэтому смену
-      // контента инструкций отслеживаем отдельно — иначе promptStates/generation
-      // не инвалидируются при изменении `AGENTS.md`.
-      const instructionsChanged = isBlockChanged(prevPromptState, composed.blocks, 'instructions');
-      if (!prevPromptState || !isPrefixUnchanged(prevPromptState, promptStateInput) || instructionsChanged) {
-        const reason: PromptStateReason = hasSystemPromptOverride
-          ? 'override'
-          : prevPromptState
-            ? 'generation-change'
-            : 'init';
-        activePromptState = buildPromptState(promptStateInput, prevPromptState, reason);
-        session.promptStates = {
-          ...(session.promptStates ?? {}),
-          [agentKey]: activePromptState,
-        };
-        await this._sessionManager.saveSession(session);
-      }
-      const promptMeta: PromptMeta = {
-        agentRole: effectiveAgentRole,
-        generation: activePromptState?.generation ?? 0,
-        expected: expectedCache,
-        cachedTokens: 0,
-        validated: false,
-      };
-
-      // 3. Convert messages for LLM (без summary — они уже в system prompt)
-      const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
-      const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
-
-      // 4. Get tools from registry. ADR-070 §2.9 + ADR-071 §2.1/§2.3: встроенные —
-      // постоянно, MCP — только активных серверов сессии; каждый слой в своём
-      // `available` — только доступные (mode/role/mcpToolSettings). Порядок:
-      // builtin → MCP. Если агент НЕ найден в реестре или role undefined —
-      // модель получает НИКАКИХ инструментов (safety-fallback).
-      // `select()` — после ensureToolsLoaded (реестр уже содержит MCP-тулы).
-      const toolSelection = select();
-      let tools = this._toolRegistry
-        ? [...toolSelection.builtin, ...toolSelection.mcp]
-        : undefined;
-      // ADR-071 §2.1: граница stable-слоя инструментов для кэш-брейкпоинта
-      // (Anthropic) — после встроенных, до MCP. MCP после границы не кэшируется.
-      finalSystemPrompt.stableToolCount = toolSelection.builtin.length;
-
-      // 5. Create cancellation token
-      // Внутренний AbortController: абортится и по cancelToken.cancel()
-      // (POST /sessions/:id/abort → orchestrator.cancel), и по внешнему signal
-      // (cancelRetry в QueueProcessor). Его signal передаётся в тулы
-      // (ctx.abortSignal) — долгие тулы (например task/сабагент) подписываются
-      // на него и прерываются сразу, не дожидаясь завершения.
-      const toolAbortController = new AbortController();
-      const cancelToken: CancellationToken = {
-        cancelled: false,
-        cancel: () => {
-          cancelToken.cancelled = true;
-          toolAbortController.abort();
-        },
-      };
-      this._cancellationTokens.set(streamId, cancelToken);
-
-      signal.addEventListener('abort', () => {
-        cancelToken.cancel();
-      }, { once: true });
-      // signal мог быть уже абортирован до входа (гонка с отменой из очереди)
-      if (signal.aborted) cancelToken.cancel();
+      // ADR-095 (шаг 6b-1): подготовка запроса (провайдер → MCP-скоуп →
+      // state-сообщения → промпт Composer'ом → инструменты → cancel-токен)
+      // вынесена в `orchestrator/phases/process-setup.ts`; порядок прежний.
+      const setup = await runProcessSetup({
+        session, message, signal, streamStartedAt, debugCollector, streamId,
+        projectForState, workingDir, workspaceReady, agentDef, effectiveAgentRole,
+        effectiveReasoningLevel, sessionMode, planMode, planApproved, author, attempt,
+      }, this._processSetupDeps());
+      if (setup.failed) return setup.result;
+      const {
+        provider, providerName, modelName, routingDecision, language,
+        activeMcpServers, activeMcpSet, toolsPolicy, mcpPolicy,
+        baseLlmMessages, finalSystemPrompt, promptMeta,
+        skillsCatalog, projectInstructions, loadedTokenRatio, messagesForLlm,
+        cancelToken, toolAbortController,
+      } = setup.state;
+      let tools = setup.state.tools;
 
       // 6. Tool loop — stream LLM, execute tools, continue until no tool calls
       let toolIteration = 0;
@@ -2677,7 +2381,7 @@ export class ChatOrchestrator {
       });
 
       // Предупреждение о заполненности контекстного окна (fire-and-forget, не блокирует вызов)
-      this._publishContextLimitWarning(session.id, routeResult.modelName, messagesForLlm);
+      this._publishContextLimitWarning(session.id, modelName, messagesForLlm);
 
       while (toolIteration < maxIterations) {
         // Отмена до входа в итерацию (уже абортированный signal, «Стоп» на
@@ -3484,323 +3188,21 @@ export class ChatOrchestrator {
         if (stopAfterDeny) break;
       }
 
-      // Отмена до финального сохранения (во время исполнения тула или до входа
-      // в итерацию): завершаем ровно как ветку отмены (persist tool-chain +
-      // stream.cancelled), а не как обычное завершение с подставленным
-      // «Не удалось выполнить запрос: ответ модели пуст».
-      if (cancelledBeforeFinal) {
-        // Bug 2: при отмене модель могла не прийти ни в одном финальном чанке —
-        // fallback на provider.model/session.settings.model для cost.
-        const cancelModel = this._resolveMessageModel(lastChunkModel, finalModel, provider, session);
-
-        await this._persistToolChain(
-          session.id, streamId, providerName, effectiveAgentRole,
-          cancelModel,
-          allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
-        );
-
-        const partialContent = this._joinAccumulatedTexts(allIntermediateTexts, '');
-
-        // Bug 3/4: usage/duration/cost в событии отмены + best-effort оценка
-        // usage (metadata.usage_estimated) при пустом usage.
-        const cancelDurationMs = Date.now() - streamStartedAt;
-        const cancelEstimated = this._estimateUsage(
-          finalUsage,
-          lastIterationPromptChars,
-          partialContent.length,
-        );
-        const cancelCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
-
-        // Промежуточные тексты уже вошли в partialContent — как в ветке отмены
-        // выше, НЕ дублируем их в metadata.intermediate_text_blocks.
-        // Сообщение сохраняем всегда (в т.ч. при пустом контенте) — статус и
-        // статистика отмены не должны теряться.
-        await this._saveAssistantMessage(
-          session.id, partialContent, streamId, effectiveAgentRole,
-          cancelEstimated.usage, cancelModel, allReasoning.map((r) => r.text).join('\n\n---\n\n'), debugCollector, true, providerName,
-          MessageRole.ASSISTANT, undefined, false, allToolCalls, undefined,
-          undefined, undefined,
-          {
-            duration_ms: cancelDurationMs,
-            ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
-          },
-          promptMeta,
-          cancelCost,
-        );
-
-        publishChunk('stream.cancelled', {
-          stream_id: streamId,
-          content: partialContent,
-          status: 'cancelled',
-          model: cancelModel,
-          provider: providerName,
-          usage: cancelEstimated.usage,
-          duration_ms: cancelDurationMs,
-          ...(cancelCost ? { cost_usd: cancelCost.costUsd, cost_currency: cancelCost.currency } : {}),
-          ...(cancelEstimated.estimated ? { usage_estimated: true } : {}),
-        });
-
-        this._cancellationTokens.delete(streamId);
-        return {};
-      }
-
-      // 7. Handle max iterations exceeded
-      if (toolIteration >= maxIterations && !finalContent) {
-        finalContent = sm('session.max_iterations');
-        fallbackI18n = i18nMeta('session.max_iterations');
-      }
-
-      // ADR-029: пользователь отклонил ask — обработка завершена. Фиксируем
-      // причину в финальном сообщении (история tool_result уже собрана).
-      if (stopAfterDeny && !finalContent) {
-        const reason = denyStopReason ?? sm('session.stopped_reason_denied');
-        finalContent = sm('session.stopped', { reason });
-        fallbackI18n = i18nMeta('session.stopped', { reason });
-      }
-
-      // Защита от пустого финального ответа: если цикл завершился (в т.ч.
-      // через doom loop / лимит итераций / модель вернула пустой контент)
-      // с пустым finalContent — подставляем осмысленное сообщение, чтобы
-      // в истории не оставалось пустого assistant-сообщения.
-      if (!finalContent) {
-        finalContent = hadDeny
-          ? sm('session.denied_blocked')
-          : sm('session.empty_response');
-        fallbackI18n = i18nMeta(hadDeny ? 'session.denied_blocked' : 'session.empty_response');
-      }
-
-      // 7.5. Quality check + escalation (ADR-034)
-      let qaPass: boolean | undefined;
-      let qaReason: string | undefined;
-      const escalation = this._router?.getEscalationConfig();
-      if (this._router && escalation?.enabled && routingDecision && finalContent) {
-        const qaResult = await this._router.checkQuality(finalContent, routingDecision, session.settings);
-        if (!qaResult.pass) {
-          qaPass = false;
-          qaReason = qaResult.reason;
-
-          // Эскалация на fallback-модель
-          const sessionEscalation = session.settings.routingEscalation;
-          const fallbackProvider = sessionEscalation?.fallbackProvider || escalation.fallbackProvider;
-          const fallbackModel = sessionEscalation?.fallbackModel || escalation.fallbackModel;
-          if (fallbackProvider && fallbackModel) {
-            const fbDecision: RoutingDecision = {
-              providerName: fallbackProvider,
-              modelName: fallbackModel,
-              reason: 'escalation_fallback',
-              strategy: 'default',
-            };
-            const fbProvider = this._router.getProvider(fbDecision, undefined, effectiveReasoningLevel);
-            if (fbProvider) {
-              // Перевызываем LLM с fallback-моделью (без стриминга в UI)
-              try {
-                const fbMessages = [
-                  ...currentMessages.filter(
-                    (m) => m.role !== 'assistant' || m.toolUse === undefined || m.toolUse.length === 0,
-                  ),
-                ];
-                const fbResponse = await fbProvider.chat(fbMessages, finalSystemPrompt, undefined, false);
-                if (fbResponse.content) {
-                  finalContent = fbResponse.content;
-                  qaPass = true;
-                  qaReason = sm('router.escalation', { provider: fallbackProvider, model: fallbackModel, reason: qaResult.reason });
-                  if (fbResponse.usage) finalUsage = fbResponse.usage;
-                  if (fbResponse.model) finalModel = fbResponse.model;
-                }
-              } catch (fbErr) {
-                warning('ORCHESTRATOR', `Fallback LLM call failed: ${fbErr}`);
-              }
-            } else {
-              warning('ORCHESTRATOR', `Fallback provider/model not found: ${fallbackProvider}/${fallbackModel}`);
-            }
-          }
-        } else {
-          qaPass = true;
-          qaReason = qaResult.reason;
-        }
-
-        // Публикуем событие quality check
-        if (qaPass !== undefined) {
-          const sessionAfterMsg = await this._sessionManager.getSession(session.id);
-          const msgIndex = sessionAfterMsg
-            ? sessionAfterMsg.messages.length
-            : session.messages.length;
-          this._eventBus.publish(session.id, 'message.quality_check', {
-            qa_pass: qaPass,
-            qa_reason: qaReason,
-            message_index: msgIndex,
-          });
-        }
-      }
-
-      // 7.8. Персистентность tool-chain (Вариант B): настоящие пары
-      // «assistant с toolCalls + tool-результаты» в session.messages, чтобы
-      // _sessionMessagesToLlm на следующем запросе выдавал OpenAI-совместимый
-      // диалог. Промежуточные сообщения помечаются metadata.tool_chain=true —
-      // UI их скрывает (визуализация уже есть в финальном сообщении).
-      await this._persistToolChain(
-        session.id, streamId, providerName, effectiveAgentRole, finalModel,
-        allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+      // ADR-095 (шаг 6b-1): эпилог (ветка отмены до финального сохранения,
+      // фоллбек-тексты, quality-check/escalation, персист tool-chain, финальное
+      // сообщение, `stream.done`, авто-тайтл, триггеры оптимизации контекста)
+      // вынесен в `orchestrator/phases/process-finalize.ts`.
+      return runProcessFinalize(
+        { session, streamId, publishChunk, debugCollector, streamStartedAt },
+        {
+          cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
+          hadDeny, stopAfterDeny, denyStopReason, toolIteration, maxIterations,
+          lastIterationPromptChars, allReasoning, allIntermediateTexts, allToolCalls,
+          allRawToolCalls, currentMessages, promptMeta, loadedTokenRatio, routingDecision,
+          provider, providerName, effectiveAgentRole, effectiveReasoningLevel, finalSystemPrompt,
+        },
+        this._processFinalizeDeps(),
       );
-
-      // 8. Save final assistant message
-      // ADR-070 §2.6: полная длительность прогона (включая tool-chain) и
-      // стоимость по цене модели — в metadata финального сообщения и stream.done.
-      const durationMs = Date.now() - streamStartedAt;
-      const messageCost = this._computeMessageCost(finalModel, finalUsage);
-      const reasoningJoined = allReasoning.map((r) => r.text).join('\n\n---\n\n');
-      const savedContent = await this._saveAssistantMessage(
-        session.id, finalContent, streamId, effectiveAgentRole,
-        finalUsage, finalModel, reasoningJoined, debugCollector, false, providerName,
-        MessageRole.ASSISTANT, undefined, false, allToolCalls, allIntermediateTexts,
-        qaPass, qaReason,
-        { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), duration_ms: durationMs },
-        promptMeta,
-        messageCost,
-      );
-
-      // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
-      // после успешного хода. promptChars — тот же расчёт, что уходил в провайдер
-      // (последняя итерация), ratio — уже загруженный в этом ходе.
-      await this._calibrateTokenRatio(
-        finalModel,
-        lastIterationPromptChars,
-        finalUsage,
-        loadedTokenRatio,
-      );
-
-      // Получаем актуальную сессию после сохранения
-      const updatedSession = await this._sessionManager.getSession(session.id);
-
-      const doneData: Record<string, unknown> = {
-        stream_id: streamId,
-        content: savedContent,
-        message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
-        pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
-        model: finalModel,
-        provider: providerName,
-        usage: finalUsage,
-        duration_ms: durationMs,
-        status: this._resolveAssistantStatus(false, fallbackI18n ? { i18n: fallbackI18n } : undefined),
-        ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
-        reasoning_blocks: allReasoning.length > 0 ? allReasoning : undefined,
-        intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
-      };
-
-      // ADR-036: проброс secrets в real-time событие — UI раскрывает плейсхолдеры
-      // без перезагрузки списка сообщений (см. transportStore/chatStore).
-      if (finalContent) {
-        const secrets = await this._getAssistantSecrets(session.id, savedContent);
-        if (Object.keys(secrets).length > 0) {
-          doneData.metadata = { secrets };
-        }
-      }
-
-      if (stopAfterDeny) {
-        doneData.stopped_by_deny = true;
-        doneData.deny_reason = denyStopReason;
-      }
-
-      const debugInfo = debugCollector.getDebugInfo();
-      if (debugInfo) {
-        doneData.debug_info = debugInfo;
-      }
-
-      publishChunk('stream.done', doneData);
-
-      // 8.5. Auto-rename session on first exchange
-      if (updatedSession) {
-        const userMsgCount = updatedSession.messages.filter(
-          (m) => m.role === MessageRole.USER && !m.metadata?.synthetic && !m.ephemeral,
-        ).length;
-        if (userMsgCount === 1) {
-          const titleAgentDef = this._agentRegistry?.get('title');
-          let titleProvider = provider;
-          if (titleAgentDef?.reasoningLevel && providerName) {
-            const tp = this._getProvider(providerName, updatedSession, titleAgentDef.reasoningLevel);
-            if (tp) titleProvider = tp;
-          }
-          autoTitleSession(updatedSession, this._sessionManager, titleProvider)
-            .then((title) => {
-              if (title) {
-                this._eventBus.publish(updatedSession.id, 'session.updated', {
-                  session_id: updatedSession.id,
-                  name: title,
-                });
-              }
-            })
-            .catch(() => {});
-        }
-      }
-
-      // 9. Check context optimization triggers
-      if (this._optimizer && updatedSession) {
-        const optSession = updatedSession;
-
-        // Проверить скользящее окно
-        if (optSession.settings.contextOptimization === 'sliding_window') {
-          const swResult = this._optimizer.shouldApplySlidingWindow(optSession);
-          if (swResult.triggered) {
-            let disabledIndices: number[] = [];
-            await this._sessionManager.withLock(optSession.id, async (s) => {
-              const applied = this._optimizer!.applySlidingWindow(s);
-              disabledIndices = applied.disabledIndices;
-              await this._sessionManager.saveSession(s);
-            });
-            this._eventBus.publish(optSession.id, 'context.sliding_window_applied', {
-              reason: swResult.reason,
-              trigger_type: swResult.reason,
-              disabled_indices: disabledIndices,
-            });
-          }
-        }
-
-        // Проверить суммаризацию
-        if (optSession.settings.contextOptimization === 'summarization') {
-          const sumResult = this._optimizer.shouldSummarize(optSession);
-          if (sumResult.triggered) {
-            await this._sessionManager.withLock(optSession.id, async (s) => {
-              s.summarizationPending = true;
-              await this._sessionManager.saveSession(s);
-            });
-            this._eventBus.publish(optSession.id, 'context.summarization_pending', {
-              reason: sumResult.reason,
-              current_tokens: sumResult.currentTokens,
-              threshold: sumResult.threshold,
-              user_count: sumResult.userCount,
-            });
-          }
-        }
-
-        // Обновить canSummarize после всех мутаций
-        await this._sessionManager.withLock(optSession.id, async (s) => {
-          s.canSummarize = this._optimizer!.canSummarize(s);
-          await this._sessionManager.saveSession(s);
-        });
-
-        // Уведомить UI об изменении сессии
-        const updatedSession2 = await this._sessionManager.getSession(optSession.id);
-        if (updatedSession2) {
-          this._eventBus.publish(optSession.id, 'session.updated', {
-            session_id: optSession.id,
-            can_summarize: updatedSession2.canSummarize,
-            input_tokens: updatedSession2.inputTokens,
-            output_tokens: updatedSession2.outputTokens,
-            total_tokens: updatedSession2.totalTokens,
-            cache_read_tokens: updatedSession2.cacheReadTokens,
-            cache_write_tokens: updatedSession2.cacheWriteTokens,
-            reasoning_tokens: updatedSession2.reasoningTokens,
-            cache_hit_rate: updatedSession2.cacheHitRate ?? 0,
-            input_cost: updatedSession2.inputCost,
-            output_cost: updatedSession2.outputCost,
-            cache_read_cost: updatedSession2.cacheReadCost,
-            cache_write_cost: updatedSession2.cacheWriteCost,
-          });
-        }
-      }
-
-      this._cancellationTokens.delete(streamId);
-      return {};
     } catch (e) {
       const errMsg = String(e);
       warning('ORCHESTRATOR', `Unexpected error: ${errMsg}`);
