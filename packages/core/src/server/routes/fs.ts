@@ -9,6 +9,7 @@ import type { FileEntry, FsError, WorkspaceOutsideRootPolicy } from '@itphx/synt
 import { FsErrorCode, fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema } from '@itphx/synth-shared';
 import { checkPath, loadProtectedPaths } from '../../engine/security/protected-paths.js';
 import type { ProtectedPathsPolicy } from '../../engine/security/protected-paths.js';
+import { isInsideReal } from '../../engine/tools/path-utils.js';
 import { isTextFile } from '../fs-workspace.js';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
@@ -58,9 +59,23 @@ export interface FsRoutesOptions {
    * Не задана (standalone) — поведение прежнее.
    */
   authorizeProject?: (c: Context, projectId: string) => Promise<boolean>;
+  /**
+   * Максимальный размер загружаемого файла (`POST /upload`), в байтах.
+   * По умолчанию — `DEFAULT_MAX_UPLOAD_BYTES` (100 МиБ). Проверяется до чтения
+   * тела (по `content-length` и размеру `File`) и повторно по фактическому
+   * размеру прочитанных байт — защита от обхода/лжи в `content-length`.
+   */
+  maxUploadBytes?: number;
 }
 
-type FsHttpStatus = 400 | 403 | 404 | 409 | 422 | 500;
+type FsHttpStatus = 400 | 403 | 404 | 409 | 413 | 422 | 500;
+
+/**
+ * Лимит загрузки файла по умолчанию (`POST /upload`), в байтах: щедро, но
+ * ограничивает DoS (тело буферизуется в память целиком). Переопределяется
+ * опцией `FsRoutesOptions.maxUploadBytes`.
+ */
+export const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 /** FsError-форма (`{ error: { error, code } }`) — единый формат ошибок FS. */
 function makeFsError(code: string, error: string): { error: FsError } {
@@ -94,6 +109,7 @@ const FS_STATUS: Record<string, FsHttpStatus> = {
   WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED: 409,
   PROTECTED_PATH_DENIED: 403,
   WORKSPACE_CREATE_FAILED: 422,
+  PAYLOAD_TOO_LARGE: 413,
 };
 
 /** Ответ на брошенную ошибку: FsError → по `FS_STATUS`, прочее → 500. */
@@ -171,11 +187,24 @@ function resolveSafeInRoot(root: string, requestedPath: string): string {
   return full;
 }
 
+/**
+ * Containment с учётом симлинков: после лексической проверки путь не должен
+ * вести за пределы базы через симлинк (иначе `link -> /etc` внутри workspace
+ * обходил бы каталог). Неразрешимый путь — fail-closed (как выход за пределы).
+ */
+function assertRealContained(base: string, fullPath: string, projectAware: boolean): void {
+  if (isInsideReal(base, fullPath)) return;
+  if (projectAware) throw fsError(FsErrorCode.PATH_TRAVERSAL, 'Попытка выхода за пределы workspace');
+  throw fsError('FORBIDDEN', 'Доступ запрещён');
+}
+
 /** Резолв пути от базы: project-aware (workspace проекта) либо плоский root. */
 function resolveRequestedPath(base: string, requestedPath: string, projectAware: boolean): string {
-  return projectAware
+  const full = projectAware
     ? resolveSafeInWorkspace(base, requestedPath)
     : resolveSafeInRoot(base, requestedPath);
+  assertRealContained(base, full, projectAware);
+  return full;
 }
 
 /** Глубина рекурсии листинга (0 — только текущий каталог; максимум 10). */
@@ -293,6 +322,34 @@ export function createFsRoutes(
   const getProjectWorkspace = opts.getProjectWorkspace;
   const requireProjectId = opts.requireProjectId === true;
   const authorizeProject = opts.authorizeProject;
+  const maxUploadBytes =
+    opts.maxUploadBytes && opts.maxUploadBytes > 0
+      ? Math.floor(opts.maxUploadBytes)
+      : DEFAULT_MAX_UPLOAD_BYTES;
+
+  /** 413 `PAYLOAD_TOO_LARGE` — единый ответ на превышение лимита загрузки. */
+  const payloadTooLarge = (c: Context): Response =>
+    c.json(
+      makeFsError('PAYLOAD_TOO_LARGE', `Файл превышает лимит загрузки (${maxUploadBytes} байт)`),
+      413,
+    );
+
+  /**
+   * Managed-режим (`requireProjectId`) не использует выбор workspace: каталог
+   * проекта авто-провижнится (ADR-075), UI-пикер скрыт. Роуты `/workspace-root*`
+   * там раскрывали бы перечень управляемых workspace всех проектов (имена/mtime/
+   * size) и позволяли создавать каталоги в чужих; и `project_id` у них по дизайну
+   * нет, поэтому `ensureProjectAccess` не срабатывает. Fail-closed → 403 `FORBIDDEN`
+   * (паритет с отказом по доступу к проекту). В standalone (`requireProjectId`
+   * не задан) поведение прежнее.
+   */
+  const managedWorkspaceRootDisabled = (c: Context): Response | null => {
+    if (!requireProjectId) return null;
+    return c.json(
+      makeFsError('FORBIDDEN', 'Выбор рабочего каталога недоступен в managed-режиме'),
+      403,
+    );
+  };
 
   /** ADR-089 (P0): нет доступа к проекту → 403 `FORBIDDEN` (fail-closed). */
   const ensureProjectAccess = async (c: Context, projectId: string): Promise<void> => {
@@ -456,9 +513,29 @@ export function createFsRoutes(
   // POST /upload — загрузка файла (multipart)
   app.post('/upload', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
+
+    // DoS-защита: отклоняем по заявленному `content-length` до чтения тела
+    // (`formData()` буферизует весь запрос в память). Отсутствие/некорректный
+    // заголовок не пропускает дальше без проверки — ниже есть проверки размера.
+    const declaredLength = Number.parseInt(c.req.header('content-length') ?? '', 10);
+    if (Number.isFinite(declaredLength) && declaredLength > maxUploadBytes) {
+      return payloadTooLarge(c);
+    }
+
     const formData = await c.req.formData();
     const projectIdField = formData.get('project_id');
     const projectId = typeof projectIdField === 'string' ? projectIdField : undefined;
+
+    // Ранняя проверка размера файла (`File.size`) — до `arrayBuffer()`.
+    const rawUploadField = formData.get('file');
+    const uploadField = Array.isArray(rawUploadField) ? rawUploadField[0] : rawUploadField;
+    const declaredFileSize =
+      uploadField && typeof uploadField !== 'string'
+        ? (uploadField as { size?: unknown }).size
+        : undefined;
+    if (typeof declaredFileSize === 'number' && declaredFileSize > maxUploadBytes) {
+      return payloadTooLarge(c);
+    }
 
     // Гибрид: файлы удалённого проекта загружаются на backend (multipart as есть).
     if (projectId && isRemoteRef(projectId)) {
@@ -492,6 +569,7 @@ export function createFsRoutes(
       const rawName = (uploaded as { name?: string }).name;
       const fileName = basename(rawName || 'uploaded-file');
       const targetPath = join(targetDir, fileName);
+      assertRealContained(base, targetPath, projectAware);
 
       await mkdir(join(targetPath, '..'), { recursive: true }).catch(() => {});
 
@@ -500,6 +578,12 @@ export function createFsRoutes(
         data = await (uploaded as File).arrayBuffer();
       } else {
         return c.json(validationError('Неподдерживаемый тип файла'), 400);
+      }
+
+      // Фактический размер прочитанных байт — защита от обхода через лживый/
+      // отсутствующий `content-length` (chunked-тело).
+      if (data.byteLength > maxUploadBytes) {
+        return payloadTooLarge(c);
       }
 
       await writeFile(targetPath, new Uint8Array(data));
@@ -750,6 +834,9 @@ export function createFsRoutes(
 
   // GET /workspace-root — список поддиректорий корня workspace (ADR-075)
   app.get('/workspace-root', auth.requireAuth, async (c) => {
+    const disabled = managedWorkspaceRootDisabled(c);
+    if (disabled) return disabled;
+
     const wsRoot = workspacesRootOrError(c);
     if (wsRoot instanceof Response) return wsRoot;
 
@@ -784,6 +871,9 @@ export function createFsRoutes(
    * `..` за root классифицируется как «вне root», а не обходится.
    */
   app.get('/workspace-root/browse', auth.requireAuth, async (c) => {
+    const disabled = managedWorkspaceRootDisabled(c);
+    if (disabled) return disabled;
+
     const wsRoot = workspacesRootOrError(c);
     if (wsRoot instanceof Response) return wsRoot;
 
@@ -801,7 +891,7 @@ export function createFsRoutes(
       return c.json(makeFsError('PROTECTED_PATH_DENIED', 'Путь защищён политикой безопасности'), 403);
     }
 
-    const inside = isInsideRoot(wsRoot, target);
+    const inside = isInsideRoot(wsRoot, target) && isInsideReal(wsRoot, target);
     if (!inside && outsideRootPolicy() === 'deny') {
       return c.json(
         makeFsError('WORKSPACE_OUTSIDE_ROOT_DENIED', 'Путь вне корня workspace запрещён политикой'),
@@ -839,6 +929,9 @@ export function createFsRoutes(
    * с флагом → создаётся. Запрещённые policy-пути — 403.
    */
   app.post('/workspace-root/mkdir', auth.requireAuth, async (c) => {
+    const disabled = managedWorkspaceRootDisabled(c);
+    if (disabled) return disabled;
+
     const wsRoot = workspacesRootOrError(c);
     if (wsRoot instanceof Response) return wsRoot;
 
@@ -854,7 +947,7 @@ export function createFsRoutes(
       return c.json(makeFsError('PROTECTED_PATH_DENIED', 'Путь защищён политикой безопасности'), 403);
     }
 
-    if (!isInsideRoot(wsRoot, target)) {
+    if (!isInsideRoot(wsRoot, target) || !isInsideReal(wsRoot, target)) {
       if (outsideRootPolicy() === 'deny') {
         return c.json(
           makeFsError('WORKSPACE_OUTSIDE_ROOT_DENIED', 'Путь вне корня workspace запрещён политикой'),

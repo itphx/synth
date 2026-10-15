@@ -92,6 +92,17 @@ describe('FS workspace-root routes (ADR-075)', () => {
     expect(body.entries[0]!.path).toBe('proj/sub');
   });
 
+  it('browse: абсолютный путь внутри root → 200 и относительный path', async () => {
+    await mkdir(join(workspacesRoot, 'proj', 'sub'), { recursive: true });
+    const res = await makeApp().request(
+      `/api/v2/fs/workspace-root/browse?path=${encodeURIComponent(join(workspacesRoot, 'proj'))}`,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { path: string; entries: Array<{ name: string }> };
+    expect(body.path).toBe('proj');
+    expect(body.entries.map((e) => e.name)).toContain('sub');
+  });
+
   it('browse: политика deny — выход за root через .. → 403', async () => {
     const res = await makeApp('deny').request('/api/v2/fs/workspace-root/browse?path=..');
     expect(res.status).toBe(403);
@@ -262,6 +273,23 @@ describe('FS workspace-root routes (ADR-075)', () => {
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe('PROTECTED_PATH_DENIED');
     await expect(stat(target)).rejects.toThrow();
+  });
+
+  it('standalone: getProjectWorkspace без requireProjectId → /workspace-root доступен', async () => {
+    // Реальный standalone (core) передаёт `getProjectWorkspace`, но не
+    // `requireProjectId` — выбор workspace остаётся легитимным.
+    await mkdir(join(workspacesRoot, 'my-ws'));
+    const app = new Hono();
+    app.route('/api/v2/fs', createFsRoutes(createMockAuth(), workspacesRoot, undefined, {
+      getOutsideRootPolicy: () => 'confirm',
+      getProtectedPathsPolicy: () => NO_PROTECTED,
+      getProjectWorkspace: async () => null,
+    }));
+
+    const res = await app.request('/api/v2/fs/workspace-root');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { entries: Array<{ name: string }> };
+    expect(body.entries.map((e) => e.name)).toEqual(['my-ws']);
   });
 
   it('без workspacesRoot новые маршруты → 500 WORKSPACE_ROOT_NOT_CONFIGURED', async () => {
@@ -518,15 +546,32 @@ describe('FS project-aware routes (ADR-075: managed/standalone)', () => {
     expect(names).toContain('out.txt');
   });
 
-  it('browse: абсолютный путь внутри root → 200 и относительный path (паритет с backend)', async () => {
+  it('managed (requireProjectId): перечень workspace недоступен → /workspace-root* отдают 403', async () => {
+    // Managed не использует выбор workspace (авто-провижнинг, ADR-075): роуты
+    // `/workspace-root*` выключены, чтобы не раскрывать каталоги чужих проектов
+    // и не позволять создавать каталоги в них.
     await mkdir(join(workspacesRoot, 'proj', 'sub'), { recursive: true });
-    const res = await makeProjectApp({}).request(
+    const app = makeProjectApp({});
+
+    const list = await app.request('/api/v2/fs/workspace-root');
+    expect(list.status).toBe(403);
+    expect(((await list.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+
+    const browse = await app.request(
       `/api/v2/fs/workspace-root/browse?path=${encodeURIComponent(join(workspacesRoot, 'proj'))}`,
     );
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { path: string; entries: Array<{ name: string }> };
-    expect(body.path).toBe('proj');
-    expect(body.entries.map((e) => e.name)).toContain('sub');
+    expect(browse.status).toBe(403);
+    expect(((await browse.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+
+    const target = join(workspacesRoot, 'evil');
+    const mkdirRes = await app.request('/api/v2/fs/workspace-root/mkdir', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ path: target }),
+    });
+    expect(mkdirRes.status).toBe(403);
+    expect(((await mkdirRes.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+    await expect(stat(target)).rejects.toThrow();
   });
 });
 
@@ -647,5 +692,63 @@ describe('FS межпроектный перенос (POST /move, targetProjectI
       body: JSON.stringify({ projectId: 'p1', sourcePath: 'dir', targetPath: 'dir/sub' }),
     });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('FS upload: лимит размера (DoS-защита)', () => {
+  let tmpDir: string;
+  let workspacesRoot: string;
+
+  function makeApp(maxUploadBytes: number): Hono {
+    const app = new Hono();
+    app.route('/api/v2/fs', createFsRoutes(createMockAuth(), workspacesRoot, undefined, {
+      getOutsideRootPolicy: () => 'confirm',
+      getProtectedPathsPolicy: () => NO_PROTECTED,
+      maxUploadBytes,
+    }));
+    return app;
+  }
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-fs-upload-'));
+    workspacesRoot = join(tmpDir, 'workspaces');
+    await mkdir(workspacesRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('файл в пределах лимита → 201, содержимое записано', async () => {
+    const fd = new FormData();
+    fd.set('file', new File(['hello'], 'ok.txt', { type: 'text/plain' }));
+
+    const res = await makeApp(1024).request('/api/v2/fs/upload', { method: 'POST', body: fd });
+    expect(res.status).toBe(201);
+    expect(await readFile(join(workspacesRoot, 'ok.txt'), 'utf-8')).toBe('hello');
+  });
+
+  it('файл больше лимита → 413 PAYLOAD_TOO_LARGE, файл не записан', async () => {
+    const fd = new FormData();
+    fd.set('file', new File(['x'.repeat(64)], 'big.bin', { type: 'application/octet-stream' }));
+
+    const res = await makeApp(16).request('/api/v2/fs/upload', { method: 'POST', body: fd });
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PAYLOAD_TOO_LARGE');
+    await expect(stat(join(workspacesRoot, 'big.bin'))).rejects.toThrow();
+  });
+
+  it('обход через отсутствие content-length: срабатывает проверка фактического размера', async () => {
+    // Собираем запрос и убираем `content-length` — быстрый pre-check пропускает,
+    // отсекает проверка размера `File`/прочитанных байт.
+    const fd = new FormData();
+    fd.set('file', new File(['y'.repeat(64)], 'sneaky.bin', { type: 'application/octet-stream' }));
+    const request = new Request('http://localhost/api/v2/fs/upload', { method: 'POST', body: fd });
+    request.headers.delete('content-length');
+
+    const res = await makeApp(16).request(request);
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PAYLOAD_TOO_LARGE');
+    await expect(stat(join(workspacesRoot, 'sneaky.bin'))).rejects.toThrow();
   });
 });

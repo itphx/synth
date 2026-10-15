@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath } from './path-utils.js';
+import { resolvePath, validateInputPath, isSymlinkEscape, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -36,6 +36,7 @@ export const executeShellTool: ToolDefinition = {
     const timeout = params.timeout ?? DEFAULT_TIMEOUT;
     if (params.cwd !== undefined) validateInputPath(params.cwd, 'cwd');
     const cwd = resolvePath(params.cwd, ctx.workingDir);
+    if (isSymlinkEscape(ctx.workingDir, cwd)) return pathEscapesWorkspaceResult(cwd);
 
     // ADR-036: деобфускация в точке потребления — команда может содержать ⟦SYNTH_SECRET_N⟧
     const command = await deobfuscateText(ctx, params.command);

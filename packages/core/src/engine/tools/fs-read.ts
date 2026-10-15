@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath } from './path-utils.js';
+import { resolvePath, validateInputPath, isSymlinkEscape, pathEscapesWorkspaceResult } from './path-utils.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
@@ -27,6 +27,7 @@ export const readFileTool: ToolDefinition = {
     const params = parsed.data as { file_path?: string; offset?: number; limit?: number };
     if (params.file_path !== undefined) validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
+    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     let content = await readFile(resolvedPath, 'utf-8');
     const lines = content.split('\n');
@@ -69,6 +70,7 @@ export const listDirectoryTool: ToolDefinition = {
     const params = parsed.data as { path?: string };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const resolvedPath = resolvePath(params.path, ctx.workingDir);
+    if (isSymlinkEscape(ctx.workingDir, resolvedPath)) return pathEscapesWorkspaceResult(resolvedPath);
 
     const entries = await readdir(resolvedPath, { withFileTypes: true });
     const lines: string[] = [];
@@ -114,6 +116,7 @@ export const globTool: ToolDefinition = {
     const params = parsed.data as { pattern: string; path?: string };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const searchDir = resolvePath(params.path, ctx.workingDir);
+    if (isSymlinkEscape(ctx.workingDir, searchDir)) return pathEscapesWorkspaceResult(searchDir);
 
     const { glob } = await import('node:fs/promises');
     const { relative: rel } = await import('node:path');

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
-import { resolvePath, validateInputPath } from './path-utils.js';
+import { resolvePath, validateInputPath, isSymlinkEscape, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
@@ -26,6 +26,7 @@ export const grepFilesTool: ToolDefinition = {
     const params = parsed.data as { pattern: string; path?: string; include?: string };
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const searchDir = resolvePath(params.path, ctx.workingDir);
+    if (isSymlinkEscape(ctx.workingDir, searchDir)) return pathEscapesWorkspaceResult(searchDir);
 
     // ADR-036: деобфускация в точке потребления — паттерн может содержать ⟦SYNTH_SECRET_N⟧
     const pattern = await deobfuscateText(ctx, params.pattern);

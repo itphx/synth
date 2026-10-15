@@ -24,6 +24,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { basename, dirname, join, normalize, resolve, sep } from 'node:path';
 
 import { tokenTouchesProtectedMarker, tryResolvePath, resolveSystemDefinitionsDir } from './shell-guard.js';
+import { resolveRealPath } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
 
 /** Политика защищённых путей (структурно совпадает с ShellPolicy). */
@@ -248,6 +249,18 @@ function resolvePolicyEntry(entry: string, cwd: string): string {
 }
 
 /**
+ * Варианты записи политики для сравнения: лексический путь и его realpath (если
+ * разыменование удалось). realpath нужен, чтобы префикс/путь, сам проходящий
+ * через симлинк (например `{dataDir}` — симлинк), совпал с разыменованным
+ * кандидатом.
+ */
+function policyEntryVariants(entry: string, cwd: string): string[] {
+  const lexical = normalize(resolvePolicyEntry(entry, cwd));
+  const real = resolveRealPath(lexical);
+  return real !== null && real !== lexical ? [lexical, real] : [lexical];
+}
+
+/**
  * Проверяет один путь по политике. Резолвит `~`, `$HOME`, `$PWD`,
  * `$SYNTH_DATA_DIR` (при известном `policy.dataDir`), относительные пути через
  * общий `tryResolvePath`. Приоритет: deniedPaths (точное совпадение) →
@@ -282,8 +295,16 @@ export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolic
   const approvalPaths = policy.approvalPaths.map((p) => resolvePolicyEntry(p, cwd));
   const deniedPrefixes = policy.deniedPrefixes.map((p) => resolvePolicyEntry(p, cwd));
 
+  // Симлинк-учёт: защищённый путь не должен обходиться симлинком внутри workspace
+  // (`link -> {dataDir}/secrets`). Проверяем и разыменованный путь. Битый симлинк
+  // (realpath → null) не разыменовывается: защищённый путь через него недостижим,
+  // лексическая проверка остаётся как прежде (fail-closed ловит файловый тул).
+  const realNorm = resolveRealPath(norm);
+  const candidates = realNorm !== null && realNorm !== norm ? [norm, realNorm] : [norm];
+
   for (const denied of deniedPaths) {
-    if (normalize(denied) === norm) {
+    const variants = policyEntryVariants(denied, cwd);
+    if (candidates.some((c) => variants.includes(c))) {
       return {
         action: 'deny',
         messageId: 'deny-protected-path',
@@ -294,7 +315,8 @@ export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolic
   }
 
   for (const approval of approvalPaths) {
-    if (normalize(approval) === norm) {
+    const variants = policyEntryVariants(approval, cwd);
+    if (candidates.some((c) => variants.includes(c))) {
       return {
         action: 'ask',
         messageId: 'ask-protected-path',
@@ -305,14 +327,17 @@ export function checkPath(path: string, cwd: string, policy: ProtectedPathsPolic
   }
 
   for (const prefix of deniedPrefixes) {
-    const normalizedPrefix = normalize(prefix);
-    if (norm === normalizedPrefix || norm.startsWith(normalizedPrefix.endsWith(sep) ? normalizedPrefix : normalizedPrefix + sep)) {
-      return {
-        action: 'deny',
-        messageId: 'deny-protected-dir',
-        params: { path: norm, dir: normalizedPrefix },
-        matchedRule: 'protected-paths.deny',
-      };
+    const variants = policyEntryVariants(prefix, cwd);
+    for (const candidate of candidates) {
+      const hit = variants.find((v) => candidate === v || candidate.startsWith(v.endsWith(sep) ? v : v + sep));
+      if (hit) {
+        return {
+          action: 'deny',
+          messageId: 'deny-protected-dir',
+          params: { path: norm, dir: normalize(prefix) },
+          matchedRule: 'protected-paths.deny',
+        };
+      }
     }
   }
 

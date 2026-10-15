@@ -25,6 +25,7 @@ import { join, dirname, resolve, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { globMatch } from '@itphx/synth-shared';
+import { resolveRealPath } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
 
 /** Политика безопасности execute_shell. */
@@ -700,6 +701,18 @@ function isUnderDeniedPrefix(norm: string, prefixEntry: string): boolean {
   return norm === prefix || norm.startsWith(prefix.endsWith(sep) ? prefix : prefix + sep);
 }
 
+/**
+ * Варианты пути для сравнения с политикой: лексический и разыменованный.
+ * Симлинк внутри workspace (`cat link/master.key`, `link -> {dataDir}/secrets`)
+ * не должен обходить денлист — сравниваем и realpath. Неразрешимый путь
+ * (битый симлинк/цикл) — только лексический вариант (fail-closed обеспечивает
+ * отдельный слой: файловый тул `isSymlinkEscape`).
+ */
+function pathVariants(norm: string): string[] {
+  const real = resolveRealPath(norm);
+  return real !== null && real !== norm ? [norm, real] : [norm];
+}
+
 /** Формирует deny-результат для записи deniedCommandPrefixes. */
 function deniedByPrefix(prefix: string): ShellCheckResult {
   return {
@@ -767,10 +780,12 @@ function checkShellSegment(
     const resolvedValue = tryResolvePath(value, cwd, env);
     if (resolvedValue && resolvedValue.source === 'literal') {
       const norm = normalize(resolvedValue.path);
-      const pathHit = deniedPaths.find((p) => normalize(p) === norm);
-      if (pathHit) return deniedByPath(pathHit);
-      const dirHit = deniedPrefixes.find((p) => isUnderDeniedPrefix(norm, p));
-      if (dirHit) return deniedByDir(norm, dirHit);
+      for (const variant of pathVariants(norm)) {
+        const pathHit = deniedPaths.find((p) => normalize(p) === variant);
+        if (pathHit) return deniedByPath(pathHit);
+        const dirHit = deniedPrefixes.find((p) => isUnderDeniedPrefix(variant, p));
+        if (dirHit) return deniedByDir(variant, dirHit);
+      }
     } else if (hasUnresolvedDynamic(value) && tokenTouchesProtectedMarker(value, policy)) {
       return deniedByDynamicToken(value);
     }
@@ -782,7 +797,8 @@ function checkShellSegment(
   for (const { resolved } of extracted) {
     if (resolved.source !== 'literal') continue;
     const norm = normalize(resolved.path);
-    const hit = deniedPaths.find((p) => normalize(p) === norm);
+    const variants = pathVariants(norm);
+    const hit = deniedPaths.find((p) => variants.includes(normalize(p)));
     if (hit) return deniedByPath(hit);
   }
 
@@ -790,7 +806,8 @@ function checkShellSegment(
   for (const { resolved } of extracted) {
     if (resolved.source !== 'literal') continue;
     const norm = normalize(resolved.path);
-    const hit = approvalPaths.find((p) => normalize(p) === norm);
+    const variants = pathVariants(norm);
+    const hit = approvalPaths.find((p) => variants.includes(normalize(p)));
     if (hit) return askByPath(hit);
   }
 
@@ -798,8 +815,10 @@ function checkShellSegment(
   for (const { resolved } of extracted) {
     if (resolved.source !== 'literal') continue;
     const norm = normalize(resolved.path);
-    const hit = deniedPrefixes.find((p) => isUnderDeniedPrefix(norm, p));
-    if (hit) return deniedByDir(norm, hit);
+    for (const variant of pathVariants(norm)) {
+      const hit = deniedPrefixes.find((p) => isUnderDeniedPrefix(variant, p));
+      if (hit) return deniedByDir(variant, hit);
+    }
   }
 
   // 6. Неразрешимая динамика-путь без защищённых маркеров: подтверждение

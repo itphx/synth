@@ -1,7 +1,7 @@
-import { relative, resolve, isAbsolute, normalize, sep } from 'node:path';
+import { relative } from 'node:path';
 import { globMatch, ToolCapability } from '@itphx/synth-shared';
 import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
-import { resolvePath } from '../tools/path-utils.js';
+import { resolvePath, isLexicallyInside, isInsideReal } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
 import { computeToolAvailability, isWorkspaceDependentTool } from './availability.js';
 import {
@@ -556,9 +556,16 @@ export function resolveCommandRule(
   return resolveNamedRule(config, 'command', commandName);
 }
 
+/**
+ * Путь внутри рабочего каталога — с учётом симлинков.
+ *
+ * Сначала лексическая проверка (как раньше), затем разыменование: путь,
+ * лексически лежащий внутри workspace, но ведущий через симлинк наружу,
+ * НЕ считается внутренним — он уходит в ветку `external_directory` (ask/deny по
+ * правилам). Не удалось разыменовать (битый симлинк/цикл) — fail-closed
+ * (`false`, т.е. трактуется как внешний относительный путь).
+ */
 export function isInsideWorkingDir(p: string, workingDir: string): boolean {
-  const abs = isAbsolute(p) ? normalize(p) : resolve(workingDir, p);
-  const dir = isAbsolute(workingDir) ? normalize(workingDir) : resolve(workingDir);
-  if (abs === dir) return true;
-  return abs.startsWith(dir.endsWith(sep) ? dir : dir + sep);
+  if (!isLexicallyInside(workingDir, p)) return false;
+  return isInsideReal(workingDir, p);
 }

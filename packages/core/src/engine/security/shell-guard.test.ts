@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -543,5 +543,62 @@ describe('loadShellPolicy', () => {
     expect(policy.deniedPrefixes).toContain('~/.aws');
     expect(policy.approvalPaths).toContain('~/.ssh/config');
     expect(policy.deniedCommandPrefixes).toContain('rm -rf /');
+  });
+});
+
+/** Обход shell-денлиста через симлинк внутри workspace (link -> защищённый путь). */
+describe('checkShellCommand — обход через симлинк', () => {
+  let tmpDir: string;
+  let ws: string;
+  let secrets: string;
+  let policy: ShellPolicy;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-shell-symlink-'));
+    ws = join(tmpDir, 'ws');
+    secrets = join(tmpDir, 'secrets');
+    await mkdir(ws, { recursive: true });
+    await mkdir(secrets, { recursive: true });
+    await writeFile(join(secrets, 'master.key'), 'KEY');
+    await symlink(secrets, join(ws, 'leakdir'));
+    await symlink(join(secrets, 'master.key'), join(ws, 'leak.key'));
+    await mkdir(join(ws, 'sub'));
+    await symlink(join(ws, 'sub'), join(ws, 'inlink'));
+    policy = {
+      deniedPaths: [join(secrets, 'master.key')],
+      deniedPrefixes: [secrets],
+      approvalPaths: [],
+      deniedCommandPrefixes: [],
+    };
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('cat через симлинк-каталог на защищённый путь → deny', () => {
+    const r = checkShellCommand('cat leakdir/master.key', ws, policy);
+    expect(r.action).toBe('deny');
+    expect(r.matchedRule).toBe('shell-policy.deny');
+  });
+
+  it('cat через симлинк-файл на защищённый путь → deny', () => {
+    const r = checkShellCommand('cat leak.key', ws, policy);
+    expect(r.action).toBe('deny');
+  });
+
+  it('присваивание с симлинком на защищённый путь → deny', () => {
+    const r = checkShellCommand('X=leakdir/master.key cat $X', ws, policy);
+    expect(r.action).toBe('deny');
+  });
+
+  it('симлинк внутрь на незащищённый путь → allow', () => {
+    const r = checkShellCommand('cat inlink/file.txt', ws, policy);
+    expect(r.action).toBe('allow');
+  });
+
+  it('регрессия: лексический защищённый путь → deny', () => {
+    const r = checkShellCommand(`cat ${join(secrets, 'master.key')}`, ws, policy);
+    expect(r.action).toBe('deny');
   });
 });

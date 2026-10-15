@@ -96,4 +96,32 @@ describe('ADR-089 (P0): авторизация /api/v2/fs (IDOR, backend)', () =
     const foreign = await write(USER_KEY, adminProject, 'nope.txt', 'nope');
     expect(foreign.status).toBe(403);
   });
+
+  // ADR-075: `/workspace-root*` в managed выключены — иначе любой USER видел бы
+  // перечень авто-workspace всех проектов и мог создавать каталоги в чужих.
+  it('USER: /workspace-root*/browse|mkdir → 403 (перечень чужих workspace закрыт)', async () => {
+    const list = await req('/api/v2/fs/workspace-root', {}, USER_KEY);
+    expect(list.status).toBe(403);
+    expect(((await list.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+
+    const browse = await req('/api/v2/fs/workspace-root/browse?path=', {}, USER_KEY);
+    expect(browse.status).toBe(403);
+    expect(((await browse.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+
+    const mk = await req('/api/v2/fs/workspace-root/mkdir', json({ path: 'evil-dir' }), USER_KEY);
+    expect(mk.status).toBe(403);
+    expect(((await mk.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+  });
+
+  it('чужой project_id в query не открывает /workspace-root → 403', async () => {
+    const list = await req(`/api/v2/fs/workspace-root?project_id=${adminProject}`, {}, USER_KEY);
+    expect(list.status).toBe(403);
+    expect(((await list.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+  });
+
+  it('ADMIN: /workspace-root* тоже выключены в managed → 403', async () => {
+    const list = await req('/api/v2/fs/workspace-root', {}, ADMIN_KEY);
+    expect(list.status).toBe(403);
+    expect(((await list.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+  });
 });
