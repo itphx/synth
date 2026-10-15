@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation portal
+    url: https://docs.synth.itphx.ru/
+    about: Guides, quick start, providers, hybrid mode, CLI and FAQ (RU + EN).
+  - name: Telegram community
+    url: https://t.me/synth_dev
+    about: Ask questions and follow announcements in the community channel.
+  - name: Report a security vulnerability
+    url: https://github.com/itphx/synth/blob/master/SECURITY.md
+    about: Please report security issues privately — do not open a public issue.

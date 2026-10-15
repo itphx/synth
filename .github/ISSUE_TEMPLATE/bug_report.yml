@@ -1,0 +1,93 @@
+name: Bug report
+description: Report a reproducible problem with Synth
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report!
+
+        ⚠️ **Do not report security vulnerabilities here.** Please follow
+        [SECURITY.md](https://github.com/itphx/synth/blob/master/SECURITY.md) and
+        contact the maintainers privately.
+
+        Before submitting, please search existing issues and check the
+        [documentation portal](https://docs.synth.itphx.ru/) /
+        [troubleshooting guide](https://github.com/itphx/synth/blob/master/docs/TROUBLESHOOTING.md).
+  - type: input
+    id: version
+    attributes:
+      label: Synth version
+      description: Output of `synth --version`, or the image / chart tag.
+      placeholder: "0.10.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      description: How is Synth installed?
+      options:
+        - npm (global CLI)
+        - Docker / docker compose
+        - Kubernetes (Helm)
+        - Hybrid mode (local core + server)
+        - From source
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Ubuntu 24.04 / macOS 15 / Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: Relevant for the CLI and backend (`node --version`).
+      placeholder: "22.x"
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, including configuration where relevant.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error message and stack trace if any.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and screenshots
+      description: Relevant logs, request/response samples, or screenshots. Redact secrets.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that might help (providers, models, MCP servers, etc.).
+    validations:
+      required: false

@@ -1,0 +1,43 @@
+# Нормализация переводов строк по умолчанию.
+* text=auto eol=lf
+
+# Исходники и текстовые файлы — LF.
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.cjs   text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.sh    text eol=lf
+
+# Windows-скрипты — CRLF.
+*.bat  text eol=crlf
+
+# Бинарные типы (не нормализуем, не diff'им).
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.svg   text eol=lf
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.eot   binary
+*.otf   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tgz   binary
+
+# Lock-файл — генерируется, не diff'ить.
+pnpm-lock.yaml  -diff linguist-generated
+
+# Собранные артефакты — генерируются.
+dist/**  linguist-generated

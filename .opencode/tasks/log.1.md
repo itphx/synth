@@ -803,7 +803,7 @@
 - **Верификация (в кластере):**
   - `deploy/synth-backend` 1/1, `deploy/synth-ui` 1/1; UI `/` 200.
   - `/auth/status` → `{"oidc_enabled":true,"debug_mode":false}`.
-  - `POST /auth/login` `lucky`/`1qaz2wsx#EDC` → 200, `roles:["USER"]`, cookie `user_session` (HttpOnly;Secure;SameSite=Lax); `/auth/session` с cookie → USER; неверный пароль → 401; `POST /auth/spa-login` с api-key → 403.
+  - `POST /auth/login` `lucky`/`<redacted>` → 200, `roles:["USER"]`, cookie `user_session` (HttpOnly;Secure;SameSite=Lax); `/auth/session` с cookie → USER; неверный пароль → 401; `POST /auth/spa-login` с api-key → 403.
   - env-провайдеры из `SYNTH_PROVIDER_*` → в логе `[env] провайдер: ollama → http://owu.itphx.loc:11434`.
   - typecheck/lint/test (backend 170, ui 87) PASS; helm lint/template PASS.
 - **Проблемы/уроки:**
