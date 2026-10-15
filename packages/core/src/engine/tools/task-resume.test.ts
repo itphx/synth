@@ -378,11 +378,13 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     const first = await orchestrator.startSubagentResume(slow.child);
     await expect(orchestrator.startSubagentResume(slow.child))
       .rejects.toMatchObject({ code: 'LOCKED', httpStatus: 409 });
-    // Останавливаем первый прогон
+    // Останавливаем первый прогон и ждём наблюдаемого завершения очистки:
+    // снятия и блокировки (blocked), и currentStream.
     orchestrator.cancel(first.stream_id);
     await vi.waitFor(async () => {
       const s = await sessionManager.getSession(slow.child);
       expect(s?.status.blocked).toBeFalsy();
+      expect(s?.currentStream).toBeUndefined();
     }, { timeout: 5000 });
   });
 
@@ -395,13 +397,19 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(started.child_session_id).toBe(child);
     expect(started.parent_session_id).toBe(parent);
 
-    // Ждём завершения фонового прогона: итоговое сообщение в родителе
+    // Ждём наблюдаемого завершения фонового прогона: блокировка (blocked) и
+    // currentStream снимаются в .finally() — уже ПОСЛЕ публикации
+    // subagent.resume.finished и fs.changed, поэтому именно этот признак
+    // гарантирует и завершение прогона, и выполненную очистку (без гонок и
+    // «магических» пауз). Ждём по факту, перечитывая сессию.
     await vi.waitFor(async () => {
-      const p = await sessionManager.getSession(parent);
-      expect(p!.messages.some((m) => m.metadata?.type === 'subagent_resumed_result')).toBe(true);
+      const s = await sessionManager.getSession(child);
+      expect(s!.status.blocked).toBeFalsy();
+      expect(s!.currentStream).toBeUndefined();
     }, { timeout: 5000 });
 
-    // Synthetic user-маркер в истории дочерней сессии
+    // Свежее состояние дочерней сессии (не снапшот, взятый до завершения resume):
+    // synthetic user-маркер + финальный ответ саб-агента.
     const c = (await sessionManager.getSession(child))!;
     const marker = c.messages.find((m) => m.metadata?.resume === true);
     expect(marker).toBeDefined();
@@ -410,7 +418,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     // Финальный ответ саб-агента сохранён в дочерней сессии
     expect(c.messages.some((m) => m.role === MessageRole.ASSISTANT && m.content === 'RESUMED OK')).toBe(true);
 
-    // Итог в родительской сессии: INFO + metadata
+    // Итог в родительской сессии: INFO + metadata (записывается до очистки).
     const p = (await sessionManager.getSession(parent))!;
     const resumeResultMsg = p.messages.find((m) => m.metadata?.type === 'subagent_resumed_result');
     expect(resumeResultMsg).toBeDefined();
@@ -419,7 +427,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(resumeResultMsg!.metadata!.resume_status).toBe('completed');
     expect(resumeResultMsg!.content).toContain('RESUMED OK');
 
-    // События: resume.started у ребёнка, message.added/session.updated у родителя
+    // События: resume.started/finished у ребёнка, message.added/session.updated у родителя
     const newEvents = events.slice(eventsBefore);
     expect(newEvents.some((e) => e.sessionId === child && e.type === 'subagent.resume.started')).toBe(true);
     expect(newEvents.some((e) => e.sessionId === parent && e.type === 'message.added')).toBe(true);
@@ -428,15 +436,15 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
 
     // fs.changed у родителя: resume-саб-агент мог писать файлы/git/shell —
     // UI должен обновить дерево/редакторы/Git (как после свежего task).
-    await vi.waitFor(() => {
-      const fsChange = events.find((e) => e.sessionId === parent && e.type === 'fs.changed');
-      expect(fsChange).toBeDefined();
-      expect(fsChange!.data.scope).toBe('all');
-      expect(fsChange!.data.tool).toBe('task_resume');
-      expect(fsChange!.data.session_id).toBe(parent);
-    }, { timeout: 5000 });
+    // Событие публикуется в .finally() ДО снятия блокировки, поэтому к моменту
+    // ожидания выше оно уже в потоке событий — проверяем без гонки.
+    const fsChange = events.find((e) => e.sessionId === parent && e.type === 'fs.changed');
+    expect(fsChange).toBeDefined();
+    expect(fsChange!.data.scope).toBe('all');
+    expect(fsChange!.data.tool).toBe('task_resume');
+    expect(fsChange!.data.session_id).toBe(parent);
 
-    // Блокировка и currentStream сняты
+    // Блокировка и currentStream сняты (проверка на свежем состоянии `c`).
     expect(c.status.blocked).toBeFalsy();
     expect(c.currentStream).toBeUndefined();
   });
@@ -461,13 +469,16 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     const resumeResultMsg = p.messages.find((m) => m.metadata?.type === 'subagent_resumed_result')!;
     expect(resumeResultMsg.metadata!.resume_status).toBe('aborted');
     // Очистка currentStream/блокировки выполняется в .finally() после записи
-    // итога в родителя — ждём её (не читаем синхронно: гонка под нагрузкой).
+    // итога в родителя — ждём её по наблюдаемому признаку (не читаем синхронно:
+    // гонка под нагрузкой).
     await vi.waitFor(async () => {
       const s = await sessionManager.getSession(child);
       expect(s!.currentStream).toBeUndefined();
+      expect(s!.status.blocked).toBeFalsy();
     }, { timeout: 5000 });
     const s = (await sessionManager.getSession(child))!;
     expect(s.status.blocked).toBeFalsy();
+    expect(s.currentStream).toBeUndefined();
   });
 
   it('runSubagentResume напрямую: провайдер недоступен → failed, ошибка записана в родителя', async () => {

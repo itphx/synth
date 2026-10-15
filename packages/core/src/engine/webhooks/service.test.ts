@@ -37,6 +37,31 @@ describe('WebhookService (ADR-052, этап II)', () => {
     return service;
   };
 
+  /**
+   * Fire-and-forget диспетчеризация `WebhookService._dispatch` (подписчик шины
+   * запускает её как `void this._dispatch(event)`) — перехватываем и дожидаемся
+   * фактического завершения. Детерминированная альтернатива «магической» паузе
+   * `setTimeout(20)`: ждём реальную обработку события, а не спим фиксированное
+   * время (которого под нагрузкой может не хватить — `_dispatch` читает стор).
+   */
+  function trackDispatches(): () => Promise<void> {
+    type DispatchEvent = { type: string; sessionId: string; data: Record<string, unknown>; timestamp: string };
+    const internals = service as unknown as { _dispatch: (event: DispatchEvent) => Promise<void> };
+    const original = internals._dispatch.bind(service);
+    const pending: Promise<void>[] = [];
+    vi.spyOn(internals, '_dispatch').mockImplementation((event) => {
+      const p = original(event);
+      pending.push(p);
+      return p;
+    });
+    return async () => {
+      // Во время ожидания могут запуститься новые диспетчеризации — ждём все.
+      while (pending.length > 0) {
+        await Promise.all(pending.splice(0, pending.length));
+      }
+    };
+  }
+
   const okResponse = () => new Response(null, { status: 200 });
 
   beforeEach(async () => {
@@ -82,9 +107,10 @@ describe('WebhookService (ADR-052, этап II)', () => {
     await store.create({ label: 's', url: 'https://example.com/hook', events: ['plan.approved'] }, 'u-1');
     const fetchImpl = vi.fn<FetchLike>(async () => okResponse());
     makeService(fetchImpl);
+    const drain = trackDispatches();
 
     bus.publish('s1', 'session.created', {});
-    await new Promise((r) => setTimeout(r, 20));
+    await drain();
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(await deliveryStore.list()).toHaveLength(0);
@@ -131,14 +157,12 @@ describe('WebhookService (ADR-052, этап II)', () => {
     await store.create({ label: 's', url: 'https://example.com/hook', events: ['session.created'] }, 'u-1');
     const fetchImpl = vi.fn<FetchLike>(async () => okResponse());
     makeService(fetchImpl);
+    const drain = trackDispatches();
 
     bus.publish('s1', 'session.created', { id: 'x' });
     bus.publish('s1', 'session.created', { id: 'x' });
+    await drain();
 
-    await vi.waitFor(async () => {
-      expect(await deliveryStore.list()).toHaveLength(1);
-    });
-    await new Promise((r) => setTimeout(r, 20));
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(await deliveryStore.list()).toHaveLength(1);
   });
@@ -148,9 +172,10 @@ describe('WebhookService (ADR-052, этап II)', () => {
     await store.setEnabled(sub.id, false);
     const fetchImpl = vi.fn<FetchLike>(async () => okResponse());
     makeService(fetchImpl);
+    const drain = trackDispatches();
 
     bus.publish('s1', 'session.created', {});
-    await new Promise((r) => setTimeout(r, 20));
+    await drain();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -169,8 +194,9 @@ describe('WebhookService (ADR-052, этап II)', () => {
     const fetchImpl = vi.fn<FetchLike>(async () => okResponse());
     makeService(fetchImpl, { enabled: false });
 
+    // Мастер-выключен: подписчик шины возвращает управление синхронно, не запуская
+    // `_dispatch` — ждать нечего, проверяем сразу (без «магической» паузы).
     bus.publish('s1', 'session.created', {});
-    await new Promise((r) => setTimeout(r, 20));
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

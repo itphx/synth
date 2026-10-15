@@ -67,6 +67,33 @@ import type { EventBinding, EventRouteRule } from '@itphx/synth-shared'
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
+// jsdom + React-рендер под высокой конкуренцией: начальные загрузки/эффекты могут
+// занимать больше дефолтных 5 c. Поднимаем таймаут теста (ассерты не смягчаем) —
+// сами ожидания сведены к наблюдаемым фактам (waitFor/flush ниже), без «магических» пауз.
+vi.setConfig({ testTimeout: 15_000 })
+
+/**
+ * Детерминированно доводит отложенные промисы (мок-API) и эффекты React до
+ * завершения. Макро-барьер `setTimeout(0)` гарантирует, что очередь микрозадач
+ * (в т.ч. вложенные загрузки «биндинги → ключи», «правила», «журнал») полностью
+ * опустела — в отличие от фиксированной паузы, не зависит от нагрузки. Внутри
+ * `act`, чтобы обновления React были синхронными.
+ */
+async function flush(times = 3): Promise<void> {
+  for (let i = 0; i < times; i++) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+}
+
+/** Ждёт наблюдаемого состояния (пере-проверка) вместо фиксированной задержки. */
+async function waitFor(assertion: () => void, timeout = 5000): Promise<void> {
+  await act(async () => {
+    await vi.waitFor(assertion, { timeout, interval: 10 })
+  })
+}
+
 const PROJECT = { id: 'p1', name: 'Project One', origin: 'local' }
 const SESSION = { id: 's1', name: 'Session One', engine: 'synth', settings: {}, project_id: 'p1' }
 const AGENT = { id: 'assistant', display_name: 'Assistant', enabled: true }
@@ -134,7 +161,14 @@ async function renderSettings(): Promise<HTMLElement> {
       </I18nProvider>,
     )
   })
-  await act(async () => {})
+  // Ждём факта запуска загрузок секций (биндинги/правила/журнал) и доводим их
+  // (мок-промисы + вложенные ключи) макро-барьером — без фиксированных пауз.
+  await waitFor(() => {
+    expect(mocks.listEventBindings).toHaveBeenCalled()
+    expect(mocks.getEventRoutes).toHaveBeenCalled()
+    expect(mocks.getEventJournal).toHaveBeenCalled()
+  })
+  await flush()
   return container
 }
 
@@ -242,7 +276,7 @@ describe('EventsAdminSettings — биндинги и журнал (ADR-089)', (
     })
 
     await clickTestId(container, 'events-binding-save')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.upsertEventBinding).toHaveBeenCalledTimes(1)
     expect(mocks.upsertEventBinding).toHaveBeenCalledWith({
@@ -283,7 +317,7 @@ describe('EventsAdminSettings — биндинги и журнал (ADR-089)', (
     expect(container.querySelector('[data-testid="events-binding-session-id"]')!.textContent).toBe('s1')
 
     await clickTestId(container, 'events-binding-save')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.upsertEventBinding).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'telegram', project: 'p1', sessionId: 's1' }),
@@ -329,7 +363,7 @@ describe('EventsAdminSettings — биндинги и журнал (ADR-089)', (
     const container = await renderSettings()
 
     await clickTestId(container, 'events-binding-delete-b1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
     expect(mocks.deleteEventBinding).toHaveBeenCalledWith('b1')
@@ -341,7 +375,7 @@ describe('EventsAdminSettings — биндинги и журнал (ADR-089)', (
     const container = await renderSettings()
 
     await clickTestId(container, 'events-binding-delete-b1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.deleteEventBinding).not.toHaveBeenCalled()
   })
@@ -415,7 +449,7 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
       )
     })
     await clickTestId(container, 'events-binding-key-save-b1')
-    await act(async () => {})
+    await flush()
 
     // Второй ключ.
     await clickTestId(container, 'events-binding-key-add-b1')
@@ -426,7 +460,7 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
       )
     })
     await clickTestId(container, 'events-binding-key-save-b1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.createEventBindingKey).toHaveBeenCalledTimes(2)
     const list = container.querySelector('[data-testid="events-binding-keys-list-b1"]')!
@@ -469,7 +503,7 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
       keys: [keyMeta({ id: 'k1', label: 'Ingest key', description: 'old description' })],
     })
     const container = await renderSettings()
-    await act(async () => {})
+    await flush()
 
     await clickTestId(container, 'events-binding-key-edit-k1')
 
@@ -489,7 +523,7 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
     })
 
     await clickTestId(container, 'events-binding-key-edit-save-k1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.updateEventBindingKey).toHaveBeenCalledTimes(1)
     expect(mocks.updateEventBindingKey).toHaveBeenCalledWith('b1', 'k1', {
@@ -518,7 +552,7 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
     })
 
     await clickTestId(container, 'events-binding-key-save-b1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.createEventBindingKey).toHaveBeenCalledWith('b1', {
       label: 'Ingest key',
@@ -569,7 +603,7 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
       setInputValue(label, 'dup')
     })
     await clickTestId(container, 'events-binding-key-save-b1')
-    await act(async () => {})
+    await flush()
 
     expect(container.textContent).toContain('already used')
     expect(container.textContent).not.toContain('conflict')
@@ -579,10 +613,10 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
     mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
     mocks.getEventBindingKeys.mockResolvedValue({ keys: [keyMeta()] })
     const container = await renderSettings()
-    await act(async () => {})
+    await flush()
 
     await clickTestId(container, 'events-binding-key-delete-k1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
     expect(mocks.deleteEventBindingKey).toHaveBeenCalledWith('b1', 'k1')
@@ -592,10 +626,10 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
     mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })
     mocks.getEventBindingKeys.mockResolvedValue({ keys: [keyMeta()] })
     const container = await renderSettings()
-    await act(async () => {})
+    await flush()
 
     await clickTestId(container, 'events-binding-key-revoke-k1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
     expect(mocks.revokeEventBindingKey).toHaveBeenCalledWith('b1', 'k1')
@@ -607,7 +641,7 @@ describe('EventsAdminSettings — API-ключи привязки (ADR-089)', ()
       keys: [keyMeta({ revokedAt: '2026-10-08T11:00:00.000Z' })],
     })
     const container = await renderSettings()
-    await act(async () => {})
+    await flush()
 
     const keyRow = container.querySelector('[data-testid="events-binding-key-k1"]')!
     expect(keyRow.textContent).toContain('Revoked')
@@ -711,7 +745,7 @@ describe('EventsAdminSettings — правила маршрутизации (ADR
     await selectOption(sessionTrigger, 'Session 9')
 
     await clickTestId(container, 'events-route-save')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.createEventRoute).toHaveBeenCalledTimes(1)
     expect(mocks.createEventRoute).toHaveBeenCalledWith({
@@ -767,7 +801,7 @@ describe('EventsAdminSettings — правила маршрутизации (ADR
       setInputValue(name, 'renamed')
     })
     await clickTestId(container, 'events-route-save')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.createEventRoute).toHaveBeenCalledWith({
       id: 'r1',
@@ -784,7 +818,7 @@ describe('EventsAdminSettings — правила маршрутизации (ADR
     const container = await renderSettings()
 
     await clickTestId(container, 'events-route-delete-r1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
     expect(mocks.deleteEventRoute).toHaveBeenCalledWith('r1')
@@ -796,7 +830,7 @@ describe('EventsAdminSettings — правила маршрутизации (ADR
     const container = await renderSettings()
 
     await clickTestId(container, 'events-route-delete-r1')
-    await act(async () => {})
+    await flush()
 
     expect(mocks.deleteEventRoute).not.toHaveBeenCalled()
   })
@@ -811,7 +845,7 @@ describe('EventsAdminSettings — правила маршрутизации (ADR
     await act(async () => {
       ;(toggle as HTMLButtonElement).click()
     })
-    await act(async () => {})
+    await flush()
 
     expect(mocks.createEventRoute).toHaveBeenCalledTimes(1)
     expect(mocks.createEventRoute).toHaveBeenCalledWith({
@@ -834,7 +868,7 @@ describe('EventsAdminSettings — правила маршрутизации (ADR
     await act(async () => {
       ;(toggle as HTMLButtonElement).click()
     })
-    await act(async () => {})
+    await flush()
 
     expect(mocks.createEventRoute).toHaveBeenCalledTimes(1)
     // Список не перечитывался — состояние осталось прежним (enabled=true).

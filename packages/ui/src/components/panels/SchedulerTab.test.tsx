@@ -58,6 +58,33 @@ import type { Schedule, ScheduleJob } from '@itphx/synth-shared/types'
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
+// jsdom + React-рендер под высокой конкуренцией: начальные загрузки/эффекты могут
+// занимать больше дефолтных 5 c. Поднимаем таймаут теста (ассерты не смягчаем) —
+// сами ожидания сведены к наблюдаемым фактам (waitFor/flush ниже), без «магических» пауз.
+vi.setConfig({ testTimeout: 15_000 })
+
+/**
+ * Детерминированно доводит отложенные промисы (мок-API) и эффекты React до
+ * завершения. Макро-барьер `setTimeout(0)` гарантирует, что очередь микрозадач
+ * (в т.ч. вложенные загрузки «список → секции») полностью опустела — в отличие
+ * от фиксированной паузы, не зависит от нагрузки. Внутри `act`, чтобы обновления
+ * React были синхронными.
+ */
+async function flush(times = 3): Promise<void> {
+  for (let i = 0; i < times; i++) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+}
+
+/** Ждёт наблюдаемого состояния (пере-проверка) вместо фиксированной задержки. */
+async function waitFor(assertion: () => void, timeout = 5000): Promise<void> {
+  await act(async () => {
+    await vi.waitFor(assertion, { timeout, interval: 10 })
+  })
+}
+
 const SESSION = { id: 's1', name: 'Session One', engine: 'synth', settings: {} }
 const AGENT = { id: 'assistant', display_name: 'Assistant', enabled: true }
 const PROJECT = { id: 'p1', name: 'Project One' }
@@ -117,8 +144,16 @@ async function renderTab(): Promise<HTMLElement> {
       </I18nProvider>,
     )
   })
-  await act(async () => {})
-  await act(async () => {})
+  // Наблюдаемо ждём завершения начальной загрузки (список / пусто / ошибка) и
+  // доводим вложенные эффекты (сессии) макро-барьером.
+  await waitFor(() => {
+    expect(
+      container.querySelector(
+        '[data-testid="scheduler-list"], [data-testid="scheduler-empty"], [role="alert"]',
+      ),
+    ).not.toBeNull()
+  })
+  await flush()
   return container
 }
 
@@ -210,7 +245,7 @@ describe('SchedulerTab — создание и редактирование', ()
     )
 
     await click(container.querySelector('[data-testid="scheduler-save"]'))
-    await act(async () => {})
+    await flush()
 
     expect(mocks.createSchedule).toHaveBeenCalledTimes(1)
     expect(mocks.createSchedule).toHaveBeenCalledWith({
@@ -245,7 +280,7 @@ describe('SchedulerTab — создание и редактирование', ()
       setInputValue(name, 'Renamed')
     })
     await click(container.querySelector('[data-testid="scheduler-save"]'))
-    await act(async () => {})
+    await flush()
 
     expect(mocks.updateSchedule).toHaveBeenCalledWith('sch_1', {
       name: 'Renamed',
@@ -270,7 +305,7 @@ describe('SchedulerTab — создание и редактирование', ()
       'Session One',
     )
     await click(container.querySelector('[data-testid="scheduler-save"]'))
-    await act(async () => {})
+    await flush()
 
     expect(container.textContent).toContain('invalid cron')
     expect(mocks.notify).toHaveBeenCalledWith(
@@ -283,7 +318,7 @@ describe('SchedulerTab — действия над расписанием', () =
   it('«Запустить сейчас» вызывает runSchedule', async () => {
     const container = await renderTab()
     await click(container.querySelector('[data-testid="scheduler-run-sch_1"]'))
-    await act(async () => {})
+    await flush()
     expect(mocks.runSchedule).toHaveBeenCalledWith('sch_1')
   })
 
@@ -294,7 +329,7 @@ describe('SchedulerTab — действия над расписанием', () =
     expect(toggle.getAttribute('aria-checked')).toBe('true')
 
     await click(toggle)
-    await act(async () => {})
+    await flush()
 
     expect(mocks.updateSchedule).toHaveBeenCalledWith(
       'sch_1',
@@ -305,7 +340,7 @@ describe('SchedulerTab — действия над расписанием', () =
   it('удаление подтверждается через confirm и вызывает deleteSchedule', async () => {
     const container = await renderTab()
     await click(container.querySelector('[data-testid="scheduler-delete-sch_1"]'))
-    await act(async () => {})
+    await flush()
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1)
     expect(mocks.deleteSchedule).toHaveBeenCalledWith('sch_1')
@@ -315,7 +350,7 @@ describe('SchedulerTab — действия над расписанием', () =
     mocks.confirm.mockResolvedValue(false)
     const container = await renderTab()
     await click(container.querySelector('[data-testid="scheduler-delete-sch_1"]'))
-    await act(async () => {})
+    await flush()
     expect(mocks.deleteSchedule).not.toHaveBeenCalled()
   })
 })
@@ -373,7 +408,7 @@ describe('SchedulerTab — история запусков (ADR-051)', () => {
     expect(mocks.getScheduleJobs).not.toHaveBeenCalled()
 
     await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
-    await act(async () => {})
+    await flush()
 
     expect(mocks.getScheduleJobs).toHaveBeenCalledWith('sch_1')
     const history = container.querySelector('[data-testid="scheduler-history-sch_1"]')!
@@ -389,12 +424,12 @@ describe('SchedulerTab — история запусков (ADR-051)', () => {
     const container = await renderTab()
 
     await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
-    await act(async () => {})
+    await flush()
     expect(mocks.getScheduleJobs).toHaveBeenCalledTimes(1)
 
     await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
     await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
-    await act(async () => {})
+    await flush()
     expect(mocks.getScheduleJobs).toHaveBeenCalledTimes(1)
   })
 
@@ -402,7 +437,7 @@ describe('SchedulerTab — история запусков (ADR-051)', () => {
     mocks.getScheduleJobs.mockResolvedValue({ jobs: [] })
     const container = await renderTab()
     await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
-    await act(async () => {})
+    await flush()
     expect(container.textContent).toContain('No runs yet')
   })
 
@@ -410,7 +445,7 @@ describe('SchedulerTab — история запусков (ADR-051)', () => {
     mocks.getScheduleJobs.mockRejectedValue(new Error('history boom'))
     const container = await renderTab()
     await click(container.querySelector('[data-testid="scheduler-history-toggle-sch_1"]'))
-    await act(async () => {})
+    await flush()
     expect(container.textContent).toContain('history boom')
   })
 })

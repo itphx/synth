@@ -2,7 +2,7 @@
  * ADR-030 Этап 2b: `session_start` / `session_end` из SessionManager.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,10 +32,12 @@ describe('SessionManager — ADR-030 session hooks', () => {
     const manager = new SessionManager(new FileStore({ dataDir: tmpDir }), { hooks: bus });
     const session = await manager.createSession({ projectId: 'p1', settings: { agentRole: 'developer' } });
     await manager.deleteSession(session.id);
-    // emitAsync — fire-and-forget: даём обработчикам выполниться.
-    await new Promise((r) => setTimeout(r, 20));
+    // emitAsync — fire-and-forget: ждём наблюдаемого факта (оба хука выполнились).
+    await vi.waitFor(() => {
+      expect(started).toHaveLength(1);
+      expect(ended).toHaveLength(1);
+    });
 
-    expect(started).toHaveLength(1);
     expect(started[0]!.sessionId).toBe(session.id);
     expect(started[0]!.projectId).toBe('p1');
     expect(started[0]!.agent).toBe('developer');
@@ -58,13 +60,16 @@ describe('SessionManager — ADR-030 session hooks', () => {
     const manager = new SessionManager(new FileStore({ dataDir: tmpDir }), { hooks: bus });
     const session = await manager.createSession({});
     await manager.archiveSession(session.id);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(ended).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(ended).toHaveLength(1);
+    });
     expect(ended[0]!.sessionId).toBe(session.id);
 
-    // Идемпотентная архивация не эмитит повторно.
+    // Идемпотентная архивация не эмитит повторно (обработчик хука — микрозадача,
+    // завершается до окончания await archiveSession).
     await manager.archiveSession(session.id);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(ended).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(ended).toHaveLength(1);
+    });
   });
 });

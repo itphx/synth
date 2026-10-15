@@ -9,7 +9,7 @@
  *   не содержит `hook.blocked`).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -182,7 +182,6 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
 
     const h = await makeHarness(hooks);
     const chunks = await run(h);
-    await new Promise((r) => setTimeout(r, 20));
 
     // Хук вызван один раз до исполнения, с именем тула.
     expect(calls).toHaveLength(1);
@@ -222,8 +221,11 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
 
     const h = await makeHarness(hooks);
     await run(h);
-    // emitAsync — fire-and-forget: даём обработчику выполниться.
-    await new Promise((r) => setTimeout(r, 20));
+    // emitAsync — fire-and-forget: ждём наблюдаемого факта (post-хук выполнен),
+    // а не фиксированную паузу.
+    await vi.waitFor(() => {
+      expect(post).toHaveLength(1);
+    });
 
     expect(executed).toBe(1);
     expect(post).toHaveLength(1);
@@ -246,14 +248,16 @@ describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
 
     const h = await makeHarness(hooks);
     const chunks = await run(h);
-    await new Promise((r) => setTimeout(r, 20));
+    // Ждём наблюдаемого факта: permission_denied эмитится (post_tool_use — нет).
+    await vi.waitFor(() => {
+      expect(denied).toHaveLength(1);
+    });
 
     const results = toolResults(chunks);
     expect(results).toHaveLength(1);
     expect(results[0]!.isError).toBe(true);
     // Тул не исполнялся — post_tool_use молчит; отказ фиксирует permission_denied.
     expect(post).toHaveLength(0);
-    expect(denied).toHaveLength(1);
     expect(denied[0]).toBe('execute_shell');
 
     await rm(h.tmpDir, { recursive: true, force: true });

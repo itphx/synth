@@ -407,7 +407,10 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
     });
 
     const first = svc.runNow(schedule.id);
-    while (ingest.mock.calls.length === 0) await new Promise((r) => setTimeout(r, 0));
+    // Ждём наблюдаемого факта: первый прогон уже ушёл в ingress (in-flight guard).
+    await vi.waitFor(() => {
+      expect(ingest).toHaveBeenCalled();
+    });
     const second = await svc.runNow(schedule.id); // in-flight → busy
     release();
     await first;
