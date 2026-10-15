@@ -137,7 +137,15 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 
 ## CI/CD (GitVerse)
 
-Workflow-файлы: `.gitverse/workflows/ci.yaml` (push/PR: typecheck, lint, тесты, `helm lint`) и `.gitverse/workflows/release.yaml` (релиз).
+**Принцип: сборка и публикация — только на тегах релизов; обычный push — тесты; мелкие (доковые) пуши — облегчённая проверка.**
+
+| Workflow | Триггер | Содержание |
+|---|---|---|
+| `.gitverse/workflows/release.yaml` | push тега `v*` + `workflow_dispatch` | **сборка и публикация** релиза |
+| `.gitverse/workflows/ci.yaml` | push в `main`/`master`/`feature/**`/`fix/**`/`refactor/**`/`chore/**`/`docs/**` и PR | тесты кода: typecheck, lint, тесты `shared`/`core`/`backend`/`ui`/`sdk`, `helm lint` + `template`, `pnpm audit --audit-level=high` (report-only) |
+| `.gitverse/workflows/ci-docs.yaml` | push в `main`/`master`/`feature/**` и PR, изменения по `paths` (доки/AGENTS.md/скрипты проверок) | `node scripts/adr-check.mjs` + `node scripts/docs-link-check.mjs` |
+
+Разделение сделано через `paths`/`paths-ignore`: у `ci.yaml` в `paths-ignore` есть `docs/**` и `**/*.md`, поэтому доковые пуши не гоняют тяжёлые джобы; у `ci-docs.yaml` наоборот — `paths` только по докам, и джоба не ставит pnpm (скрипты на голом node).
 
 ### Запуск релиза
 
@@ -145,7 +153,22 @@ Workflow-файлы: `.gitverse/workflows/ci.yaml` (push/PR: typecheck, lint, т
 2. **Реальная публикация:** `workflow_dispatch` с `dry_run: false` (входы: `bump` patch/minor/major, `pre_release`)
 3. **Автоматически:** создать тег `vX.Y.Z` и запушить — workflow запустится по push тега (пропускает bump-стадию, версия берётся из тега)
 
+Ручной `workflow_dispatch` сохранён в `release.yaml` (пункты 1–2) — это единственный способ запустить сборку/публикацию без тега.
+
 Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko, `gitverse.ru/itphx/synth`) → публикация Helm-чарта (`publish-helm`) → создание GitVerse Release.
+
+### Проверка документации
+
+`ci-docs.yaml` (job `docs-check`) запускается на доковые изменения и проверяет:
+
+- `node scripts/adr-check.mjs` — индекс AD, целостность ссылок и канонических статусов;
+- `node scripts/docs-link-check.mjs` — относительные ссылки `[..](path)` в `docs/**` (кроме `docs/arch_decisions/**`), `README.md`, `AGENTS.md`, `packages/*/AGENTS.md`; внешние ссылки, якоря `#…`, fenced code-блоки и inline code пропускаются, при битой ссылке — exit 1 с локацией `файл:строка → ссылка`.
+
+Локально то же самое:
+
+```bash
+node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
+```
 
 ### Особенности GitVerse CI
 

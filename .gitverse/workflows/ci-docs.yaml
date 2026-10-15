@@ -1,0 +1,46 @@
+name: Docs CI
+
+# Лёгкая проверка документации: индексы AD и относительные ссылки в доках.
+# Запускается только при изменениях доков (paths), поэтому обычные пуши в master
+# с кодом её не гоняют; тяжёлые шаги (pnpm/тесты/helm) живут в ci.yaml.
+#
+# Зависимостей нет (скрипты на голом node + node:*), поэтому шага «установка pnpm» нет.
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'feature/**'
+    paths:
+      - 'docs/**'
+      - '**/*.md'
+      - 'AGENTS.md'
+      - 'packages/*/AGENTS.md'
+      - 'scripts/adr-check.mjs'
+      - 'scripts/docs-link-check.mjs'
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches:
+      - main
+      - master
+    paths:
+      - 'docs/**'
+      - '**/*.md'
+      - 'AGENTS.md'
+      - 'packages/*/AGENTS.md'
+      - 'scripts/adr-check.mjs'
+      - 'scripts/docs-link-check.mjs'
+
+jobs:
+  docs-check:
+    name: Документация (AD-индекс + ссылки)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверка индекса и целостности AD
+        run: node scripts/adr-check.mjs
+
+      - name: Проверка относительных ссылок в документации
+        run: node scripts/docs-link-check.mjs

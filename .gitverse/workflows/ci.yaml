@@ -12,6 +12,7 @@ on:
       - 'docs/**'
     paths-ignore:
       - 'docs/**'
+      - '**/*.md'
       - 'README.md'
       - 'LICENSE'
       - '.gitignore'
@@ -22,20 +23,12 @@ on:
       - main
       - master
 
+# Триггеры: обычный push в master/feature-ветки и PR — код.
+# Доковые изменения (docs/**, *.md) исключены через paths-ignore — их проверяет
+# лёгкий workflow `ci-docs.yaml`; релизы (сборка и публикация) — `release.yaml` по тегам.
+# Поэтому тяжёлые джобы здесь не дублируют проверку доков.
+
 jobs:
-  # Индекс AD и целостность ссылок/статусов. Зависимостей нет (только node:*-модули),
-  # поэтому job не ждёт pnpm install. Внимание: push-триггер выше игнорирует `docs/**`,
-  # поэтому docs-only изменения проверяются в pull_request (там paths-ignore нет).
-  adr-check:
-    name: AD-индекс (ссылки и статусы)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Проверка индекса и целостности AD
-        run: node scripts/adr-check.mjs
-
   lint-and-typecheck:
     name: Линтинг + Typecheck
     runs-on: ubuntu-latest
@@ -119,6 +112,37 @@ jobs:
         run: pnpm --filter @itphx/synth-shared build
       - name: Тесты
         run: pnpm --filter @itphx/synth-sdk test
+
+  test-ui:
+    name: Тесты @itphx/synth-ui
+    runs-on: ubuntu-latest
+    needs: test-shared
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установка
+        run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
+      - name: Сборка @itphx/synth-shared
+        run: pnpm --filter @itphx/synth-shared build
+      - name: Сборка @itphx/synth-core
+        run: pnpm --filter @itphx/synth-core build
+      - name: Тесты
+        run: pnpm --filter @itphx/synth-ui test
+
+  # Аудит зависимостей — отчёт без блокировки: первый этап, база уязвимостей
+  # может ломать сборку на транзитивных зависимостях. Джоба не должна ронять CI
+  # (continue-on-error), но результат виден в логе.
+  audit:
+    name: Аудит зависимостей (report-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установка
+        run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
+      - name: pnpm audit (high+)
+        run: pnpm audit --audit-level=high
 
   # Helm-чарт не зависит от сборки npm-пакетов: только lint и рендер шаблонов.
   # Helm ставит scripts/ci-helm.sh: на раннерах GitVerse get.helm.sh недоступен

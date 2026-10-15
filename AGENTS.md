@@ -353,7 +353,15 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 
 Порядок сборки в CI: `pnpm install --frozen-lockfile` → `pnpm --filter @itphx/synth-shared build` (обязательно перед typecheck) → `pnpm --filter @itphx/synth-core build` (нужно для backend) → `pnpm typecheck` → `pnpm lint` → `pnpm test`. Без сборки shared/core typecheck не найдёт типы.
 
-Workflow-файлы `.gitverse/workflows/{ci,release}.yaml`; секреты `NPM_TOKEN` (npmjs.org) и `GV_TOKEN` (единый GitVerse: API, Docker/npm registry, git push). Локальная проверка перед пушем: `pnpm typecheck && pnpm lint && pnpm test`. Публикация (npm в 6 пакетов, Docker/Helm, релиз, токены npm 2026, `scripts/build.sh`/`publish.sh`/`version-bump.sh`) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) и скиллы `synth-build-publish`, `synth-release`.
+**Сборка и публикация — только по тегу релиза** (`release.yaml`), обычный push — тесты кода, доковые пуши — отдельный лёгкий workflow. Ручной запуск релиза сохранён: `workflow_dispatch` в `release.yaml`.
+
+| Workflow | Триггер | Что делает |
+|---|---|---|
+| `.gitverse/workflows/release.yaml` | push тега `v*` + `workflow_dispatch` | **сборка и публикация**: bump → CI-проверки → build → CHANGELOG → npmjs/GitVerse npm → Docker (kaniko) → Helm-чарт → GitVerse Release |
+| `.gitverse/workflows/ci.yaml` | push в `main`/`master`/`feature/**`/`fix/**`/`refactor/**`/`chore/**`/`docs/**` и PR; `paths-ignore`: `docs/**`, `**/*.md`, `README.md`, `LICENSE`, `.gitignore`, `.gitverse/**` | тесты кода: typecheck + lint, тесты `shared`/`core`/`backend`/`ui`/`sdk`, `helm lint` + template, `pnpm audit --audit-level=high` (report-only, `continue-on-error`) |
+| `.gitverse/workflows/ci-docs.yaml` | push в `main`/`master`/`feature/**` и PR, `paths`: `docs/**`, `**/*.md`, `AGENTS.md`, `packages/*/AGENTS.md`, `scripts/{adr-check,docs-link-check}.mjs` | лёгкая проверка доков: `node scripts/adr-check.mjs` (индекс/статусы AD) + `node scripts/docs-link-check.mjs` (относительные ссылки) — зависимостей нет, pnpm не ставится |
+
+Секреты: `NPM_TOKEN` (npmjs.org) и `GV_TOKEN` (единый GitVerse: API, Docker/npm registry, git push). Локальная проверка перед пушем: `pnpm typecheck && pnpm lint && pnpm test`; для правок доков — `node scripts/adr-check.mjs && node scripts/docs-link-check.mjs`. Публикация (npm в 6 пакетов, Docker/Helm, релиз, токены npm 2026, `scripts/build.sh`/`publish.sh`/`version-bump.sh`) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) и скиллы `synth-build-publish`, `synth-release`.
 
 ## Индекс архитектурных решений
 
