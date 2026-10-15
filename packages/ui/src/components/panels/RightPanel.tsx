@@ -1,17 +1,37 @@
-import React, { useEffect, useRef } from 'react'
+import React, { lazy, Suspense, useEffect, useRef } from 'react'
 import { useUIStore } from '@/stores/useUIStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
-import { StatsTab } from './StatsTab'
 import { ContextTab } from './ContextTab'
-import { SessionSettingsTab } from './SessionSettingsTab'
-import { ProjectTab } from './ProjectTab'
 import { ReferencesTab } from './ReferencesTab'
 import { SecretsTab } from './SecretsTab'
-import { SchedulerTab } from './SchedulerTab'
 import { PanelTab } from './PanelTab'
+
+/**
+ * Тяжёлые вкладки правой панели грузятся лениво (`import()`): их код не входит
+ * в entry-чанк и подтягивается при первом открытии вкладки (кэш отдаёт чанк
+ * мгновенно при повторных переключениях). Лёгкие вкладки (контекст по умолчанию,
+ * ссылки, секреты) остаются синхронными.
+ */
+const StatsTab = lazy(() => import('./StatsTab').then((m) => ({ default: m.StatsTab })))
+const SessionSettingsTab = lazy(() =>
+  import('./SessionSettingsTab').then((m) => ({ default: m.SessionSettingsTab })),
+)
+const ProjectTab = lazy(() => import('./ProjectTab').then((m) => ({ default: m.ProjectTab })))
+const SchedulerTab = lazy(() => import('./SchedulerTab').then((m) => ({ default: m.SchedulerTab })))
+
+/** Заглушка на время загрузки ленивой вкладки — спиннер в сетке панели. */
+function TabLoadingFallback() {
+  return (
+    <PanelTab>
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        <Icon name="refresh" className="size-4 animate-spin" />
+      </div>
+    </PanelTab>
+  )
+}
 
 // ADR-071: верхний ряд правой панели — «Сессия», «Проект», «Контекст», «Статистика».
 export const RIGHT_TABS = [
@@ -84,27 +104,29 @@ export const RightPanel: React.FC = () => {
         </div>
       </div>
       <div className="flex-1 min-h-0">
-        {rightPanelTab === 'stats' && <StatsTab />}
-        {rightPanelTab === 'params' && <SessionSettingsTab />}
-        {rightPanelTab === 'project' && <ProjectTab />}
-        {rightPanelTab === 'context' && <ContextTab />}
-        {rightPanelTab === 'references' && sessionId && <ReferencesTab sessionId={sessionId} />}
-        {rightPanelTab === 'references' && !sessionId && (
-          <PanelTab>
-            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-              {t('reference.empty')}
-            </div>
-          </PanelTab>
-        )}
-        {rightPanelTab === 'secrets' && canViewSecrets && sessionId && <SecretsTab sessionId={sessionId} />}
-        {rightPanelTab === 'secrets' && canViewSecrets && !sessionId && (
-          <PanelTab>
-            <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-              {t('reference.empty')}
-            </div>
-          </PanelTab>
-        )}
-        {rightPanelTab === 'scheduler' && <SchedulerTab />}
+        <Suspense fallback={<TabLoadingFallback />}>
+          {rightPanelTab === 'stats' && <StatsTab />}
+          {rightPanelTab === 'params' && <SessionSettingsTab />}
+          {rightPanelTab === 'project' && <ProjectTab />}
+          {rightPanelTab === 'context' && <ContextTab />}
+          {rightPanelTab === 'references' && sessionId && <ReferencesTab sessionId={sessionId} />}
+          {rightPanelTab === 'references' && !sessionId && (
+            <PanelTab>
+              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                {t('reference.empty')}
+              </div>
+            </PanelTab>
+          )}
+          {rightPanelTab === 'secrets' && canViewSecrets && sessionId && <SecretsTab sessionId={sessionId} />}
+          {rightPanelTab === 'secrets' && canViewSecrets && !sessionId && (
+            <PanelTab>
+              <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
+                {t('reference.empty')}
+              </div>
+            </PanelTab>
+          )}
+          {rightPanelTab === 'scheduler' && <SchedulerTab />}
+        </Suspense>
       </div>
     </div>
   )

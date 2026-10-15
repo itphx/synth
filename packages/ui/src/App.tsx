@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ToastContainer } from 'react-toastify'
 import { TooltipProvider } from './components/ui/tooltip'
 import { TitleTooltipBridge } from './components/ui/TitleTooltipBridge'
@@ -18,10 +18,8 @@ import { BackendConnection } from './components/layout/BackendConnection'
 import { ConnectionGuard } from './components/layout/ConnectionGuard'
 import { PwaUpdatePrompt } from './components/layout/PwaUpdatePrompt'
 import { HybridOfflineBanner } from './components/layout/HybridOfflineBanner'
-import { SettingsModal } from './components/settings/SettingsModal'
-import { LogsModal } from './components/logviewer/LogsModal'
-import { ConfirmDialog } from './components/ui/confirm-dialog'
 import { EntityEditDialog } from './components/ui/EntityEditDialog'
+import { ConfirmDialog } from './components/ui/confirm-dialog'
 import { AuthGate } from './components/auth/AuthGate'
 import { profileService } from '@/lib/api/profileService'
 import {
@@ -34,6 +32,50 @@ import { useAuthStore } from '@/stores/authStore'
 import { useConfirmStore } from '@/stores/confirmStore'
 import { useDevice } from '@/hooks/useDevice'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
+
+/**
+ * Тяжёлые модалки (настройки+админка ≈ 0.8 МБ, логи и аудит) грузятся лениво: в
+ * entry-граф их код не входит, чанк подтягивается при первом открытии (и прогревается
+ * в простое — см. эффект в `App`), см. `useMountedOnce`.
+ */
+const LazySettingsModal = lazy(() =>
+  import('./components/settings/SettingsModal').then((m) => ({ default: m.SettingsModal })),
+)
+const LazyLogsModal = lazy(() =>
+  import('./components/logviewer/LogsModal').then((m) => ({ default: m.LogsModal })),
+)
+
+function SettingsModal() {
+  return (
+    <Suspense fallback={null}>
+      <LazySettingsModal />
+    </Suspense>
+  )
+}
+
+function LogsModal() {
+  return (
+    <Suspense fallback={null}>
+      <LazyLogsModal />
+    </Suspense>
+  )
+}
+
+/**
+ * Монтирует узел при первом открытии и оставляет смонтированным. Так тяжёлый чанк
+ * не тянется при загрузке, но закрытие остаётся анимированным: Base UI держит popup
+ * в DOM до конца transition (`data-[ending-style]`), поэтому мгновенный unmount
+ * «съедал» бы анимацию и сбрасывал внутреннее состояние диалога.
+ */
+function useMountedOnce(open: boolean): boolean {
+  const [mounted, setMounted] = useState(open)
+
+  useEffect(() => {
+    if (open) setMounted(true)
+  }, [open])
+
+  return mounted
+}
 
 function DefaultsSync() {
   const isAuthenticated = useAuthStore(s => s.isAuthenticated)
@@ -86,6 +128,10 @@ function App() {
   const setRightPanelWidth = useUIStore(s => s.setRightPanelWidth)
   const setSettingsDialogOpen = useUIStore(s => s.setSettingsDialogOpen)
   const setSettingsPage = useUIStore(s => s.setSettingsPage)
+  const isSettingsDialogOpen = useUIStore(s => s.isSettingsDialogOpen)
+  const isLogsDialogOpen = useUIStore(s => s.isLogsDialogOpen)
+  const settingsModalMounted = useMountedOnce(isSettingsDialogOpen)
+  const logsModalMounted = useMountedOnce(isLogsDialogOpen)
   const leftPanelTab = useUIStore(s => s.leftPanelTab)
   const mobileLeftOpen = useUIStore(s => s.mobileLeftOpen)
   const mobileRightOpen = useUIStore(s => s.mobileRightOpen)
@@ -144,6 +190,22 @@ function App() {
       useUIStore.getState().setMobileRightOpen(false)
     }
   }, [isMobile])
+
+  // Прогрев ленивых чанков в простое: первый открытый диалог не ждёт сеть.
+  // Тот же `import()` переиспользует уже созданный чанк (и кэш SW).
+  useEffect(() => {
+    const warm = () => {
+      void import('./components/settings/SettingsModal')
+      void import('./components/logviewer/LogsModal')
+    }
+    const idle = window.requestIdleCallback?.bind(window)
+    if (!idle) {
+      const timer = window.setTimeout(warm, 3000)
+      return () => window.clearTimeout(timer)
+    }
+    const handle = idle(warm, { timeout: 8000 })
+    return () => window.cancelIdleCallback?.(handle)
+  }, [])
 
   const leftHeaderActions = leftPanelTab === 'projects' ? <ProjectsTabToolbar />
     : leftPanelTab === 'files' ? <FilesTabToolbar />
@@ -222,8 +284,10 @@ function App() {
           <TitleTooltipBridge />
           {isMobile ? mobileLayout : desktopLayout}
 
-          <SettingsModal />
-          <LogsModal />
+          {/* Ленивые модалки монтируются при первом открытии (дальше живут в DOM,
+              чтобы закрытие анимировалось; `open` управляется стором). */}
+          {settingsModalMounted && <SettingsModal />}
+          {logsModalMounted && <LogsModal />}
           <EntityEditDialog />
         </TooltipProvider>
 
