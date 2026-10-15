@@ -8,7 +8,7 @@ import type { GlobalRole } from './index.js';
 
 /**
  * Семейства скоупов с wildcard-поддержкой. Глобальный `*` намеренно не вводится
- * (ADR-052 §«Scopes»): `events:*` покрывает все `events:*`, но не `bindings:*`.
+ * (ADR-052; каталог — `docs/API_V2.md` §1): `events:*` покрывает все `events:*`, но не `bindings:*`.
  */
 export const SERVICE_SCOPE_FAMILIES = [
   'events',
@@ -22,7 +22,7 @@ export const SERVICE_SCOPE_FAMILIES = [
 export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
 
 /**
- * Каталог скоупов service-key (ADR-052 §«Scopes», уточняется на этапе I).
+ * Каталог скоупов service-key (ADR-052; `docs/API_V2.md` §1).
  * Точечные скоупы вне wildcard-семейств:
  * - `llm:chat` — LLM-прокси (роут без проектного измерения);
  * - `addons:install` — зонтичный скоуп installer-ключа: установка/обновление
@@ -99,7 +99,7 @@ export interface ServiceApiKey {
    * managed-режима / доступность эндпоинтов).
    */
   roles: GlobalRole[];
-  /** Выданные скоупы (каталог + wildcard-семейства, ADR-052 §«Scopes»). */
+  /** Выданные скоупы (каталог + wildcard-семейства; ADR-052, `docs/API_V2.md` §1). */
   scopes: string[];
   /**
    * Проектная проекция: ключ ограничен подмножеством проектов инстанса

@@ -51,7 +51,7 @@ export function requireScope(...required: string[]): Middleware {
 }
 
 /**
- * ADR-052 §«Проектная проекция»: пусто/отсутствует `allowedProjects` — ключ
+ * ADR-052 (проектная проекция, `docs/API_V2.md` §1): пусто/отсутствует `allowedProjects` — ключ
  * действует по политике инстанса (доступ разрешён). Задан непустой список —
  * доступен только проект из списка (fail-closed: без projectId — запрещено).
  */

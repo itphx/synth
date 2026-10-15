@@ -577,8 +577,8 @@ webhooks:
   deliveryRetentionDays: 30
 ```
 
-API (`/api/v2/webhooks`, подписки/ротация секрета/журнал/тест) — `docs/API_V2.md` §5.29;
-формат подписи, устройство движка и SSRF — `docs/ARCHITECTURE.md` («Внешние события и хуки»)
+API и формат подписи (`/api/v2/webhooks`, подписки/ротация секрета/журнал/тест) — `docs/API_V2.md` §5.29;
+устройство движка и SSRF — `docs/ARCHITECTURE.md` («Внешние события и хуки»)
 и [ADR-052](./arch_decisions/adr-052-public-api-platform.md).
 
 ### Планировщик расписаний (`scheduler.*`, ADR-051 срез / ADR-089)

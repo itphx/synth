@@ -12,7 +12,8 @@
  * описывает контракт, а не подменяет боевые обработчики.
  *
  * Публикуется только **интеграционное ядро** (`events`/`sessions`/`schedules`/`llm`)
- * — см. ADR-052 §«OpenAPI — только public»: fs/audit/admin/секреты наружу не выводим.
+ * — см. ADR-052 (OpenAPI — только public, детали — `docs/API_V2.md` §5.30): fs/audit/admin/секреты
+ * наружу не выводим.
  * Единый формат ошибок — `publicErrorSchema` (`{error:{code,message}}`).
  *
  * **Именование схем.** Модели `components.schemas` получают имена через

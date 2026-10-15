@@ -890,8 +890,8 @@ function verify(rawBody, header, secret, nowSec = Math.floor(Date.now() / 1000))
 
 ### 5.30 Публичный OpenAPI и SDK — `@itphx/synth-sdk` (ADR-052, этап III)
 
-Публичный HTTP-контракт (интеграционное ядро: `events`/`sessions`/`schedules`/`llm`, 28 операций)
-описан декларативной **public-OpenAPI 3.1**-спекой и отдаётся ручкой `GET /api/v2/openapi.json`
+Публичный HTTP-контракт (интеграционное ядро: `events`/`sessions`/`schedules`/`llm`; 28 операций —
+events 13, sessions 8, schedules 6, llm 1) описан декларативной **public-OpenAPI 3.1**-спекой и отдаётся ручкой `GET /api/v2/openapi.json`
 (§5.4). Потреблять его удобнее через публикуемый пакет **`@itphx/synth-sdk`** — типизированный
 клиент над этой спекой (тонкий пакет, зависимость только от `@itphx/synth-shared`; ESM,
 браузер-совместимый).
