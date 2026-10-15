@@ -85,7 +85,7 @@ afterEach(async () => {
   useUIStore.setState({ centerTabs: [], activeCenterTabId: null })
 })
 
-describe('ChatMessage: системные команды (AD-046 §7.1)', () => {
+describe('ChatMessage: системные команды (ADR-046 §7.1)', () => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
 
   it('ответ команды → нейтральный блок, без бейджа агента/статистики, только «Копировать»', async () => {

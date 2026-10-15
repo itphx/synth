@@ -363,7 +363,7 @@ export class ContextConfig {
   }
 
   /**
-   * AD-051: статическое описание системного пользователя «Scheduler»
+   * ADR-051: статическое описание системного пользователя «Scheduler»
    * (prompt-блок `scheduler`, включается в сессиях с активным расписанием).
    * Файлы: prompts/system/SCHEDULER.{lang}.md — только локализованные
    * (базового SCHEDULER.md нет). Override через {userDataDir}/user/system/ —
@@ -388,7 +388,7 @@ export class ContextConfig {
   }
 
   /**
-   * AD-051: volatile-пояснение для хода, инициированного планировщиком, —
+   * ADR-051: volatile-пояснение для хода, инициированного планировщиком, —
    * «текущее сообщение автоматическое, человек не участвует». Блок
    * `scheduler.turn` (volatile, order 40).
    *
@@ -444,7 +444,7 @@ export class ContextConfig {
   }
 
   /**
-   * AD-036: инструкция по работе с обфусцированными секретами (⟦SYNTH_SECRET_N⟧).
+   * ADR-036: инструкция по работе с обфусцированными секретами (⟦SYNTH_SECRET_N⟧).
    * Файлы: prompts/system/GATEWAY.{lang}.md → GATEWAY.md (fallback).
    */
   getGatewayInstructions(language = 'ru'): string {
@@ -498,7 +498,7 @@ export class ContextConfig {
   }
 
   /**
-   * AD-025: системный промпт режима сессии (plan/act/yolo).
+   * ADR-025: системный промпт режима сессии (plan/act/yolo).
    *
    * Файлы: prompts/system/MODE_{PLAN,ACT,YOLO}.{lang}.md — только локализованные
    * (базовых MODE_{X}.md больше нет). Override через {userDataDir}/user/system/
@@ -526,7 +526,7 @@ export class ContextConfig {
   }
 
   /**
-   * AD-028/AD-039: промпт строгости цикла Plan→Build (auto/strict).
+   * ADR-028/ADR-039: промпт строгости цикла Plan→Build (auto/strict).
    *
    * Файлы: prompts/system/PLAN_MODE_AUTO.{lang}.md,
    * prompts/system/PLAN_MODE_STRICT_APPROVED.{lang}.md,
@@ -565,7 +565,7 @@ export class ContextConfig {
   }
 
   /**
-   * AD-039: инструкция по обновлению плана и todo.
+   * ADR-039: инструкция по обновлению плана и todo.
    * Файлы: prompts/system/PLAN_GUIDE.{lang}.md — только локализованные
    * (базового PLAN_GUIDE.md нет). Override через {userDataDir}/user/system/.
    * Возвращает null, если файл не найден (неизвестный язык).
@@ -588,7 +588,7 @@ export class ContextConfig {
   }
 
   /**
-   * AD-070 §3.1: политика режимов сессии (plan/act/yolo) — константный
+   * ADR-070 §3.1: политика режимов сессии (plan/act/yolo) — константный
    * stable-блок `mode.policy`. Что такое режимы, что переключение делает только
    * пользователь, что часть тулов может быть недоступна в текущем режиме.
    *
@@ -614,7 +614,7 @@ export class ContextConfig {
   }
 
   /**
-   * AD-034: инструкция классификации задачи (вызов `classify_conversation`).
+   * ADR-034: инструкция классификации задачи (вызов `classify_conversation`).
    * Файлы: prompts/system/CLASSIFICATION.{lang}.md — только локализованные.
    * Override через {userDataDir}/user/system/ — стандартный механизм
    * system-категории, проверяется первым. Возвращает пустую строку, если файла нет.

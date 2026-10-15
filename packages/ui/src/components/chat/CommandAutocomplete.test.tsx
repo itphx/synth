@@ -84,7 +84,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('CommandAutocomplete — `/`-автокомплит (AD-046 §9.3)', () => {
+describe('CommandAutocomplete — `/`-автокомплит (ADR-046 §9.3)', () => {
   it('рендерит команды с видом и бейджем недоступности', async () => {
     const { container, onMatchesChange } = await renderPopup()
     expect(container.querySelector('[data-testid="command-autocomplete"]')).not.toBeNull()

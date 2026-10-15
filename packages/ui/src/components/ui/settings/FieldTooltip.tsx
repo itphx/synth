@@ -7,7 +7,7 @@ export interface FieldTooltipProps {
 }
 
 /**
- * AD-072/AD-089: иконка-подсказка (ⓘ) рядом с лейблом поля. Содержимое —
+ * ADR-072/ADR-089: иконка-подсказка (ⓘ) рядом с лейблом поля. Содержимое —
  * в Radix `Tooltip`; доступно и с клавиатуры (`tabIndex`).
  */
 export function FieldTooltip({ text }: FieldTooltipProps) {

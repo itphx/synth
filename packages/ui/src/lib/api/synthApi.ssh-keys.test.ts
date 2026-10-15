@@ -11,7 +11,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 let fetchMock: ReturnType<typeof vi.fn>
 
-describe('synthApi — SSH-ключи (AD-076)', () => {
+describe('synthApi — SSH-ключи (ADR-076)', () => {
   beforeEach(() => {
     fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

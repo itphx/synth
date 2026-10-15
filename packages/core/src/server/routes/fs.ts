@@ -22,7 +22,7 @@ export interface FsRoutesAuth {
 }
 
 /**
- * AD-075: опции FS-роутов core (standalone) для паритета с backend.
+ * ADR-075: опции FS-роутов core (standalone) для паритета с backend.
  * Позиционный `workspacesRoot` остаётся обратносовместимым; здесь — мягкая
  * политика путей вне root, защищённые пути и project-aware режим.
  */
@@ -39,7 +39,7 @@ export interface FsRoutesOptions {
    */
   getProtectedPathsPolicy?: () => ProtectedPathsPolicy;
   /**
-   * AD-075: project-aware режим. Возвращает абсолютный каталог workspace проекта
+   * ADR-075: project-aware режим. Возвращает абсолютный каталог workspace проекта
    * или `null` (standalone — fallback на плоский root). Может бросить `FsError`
    * (managed: проект/workspace не найдены, нарушение containment). Задано и
    * передан `project_id` → базой эндпоинтов (кроме `/workspace-root*`) становится
@@ -50,7 +50,7 @@ export interface FsRoutesOptions {
   /** Managed: `project_id` обязателен — без него 400 (паритет с backend). */
   requireProjectId?: boolean;
   /**
-   * AD-089 (P0): проверка доступа к проекту для project-aware эндпоинтов
+   * ADR-089 (P0): проверка доступа к проекту для project-aware эндпоинтов
    * (managed RBAC; образец — `createGitRoutes.authorizeProject`). Вызывается,
    * когда задан `getProjectWorkspace` и передан `project_id`; `false` → 403
    * `FORBIDDEN` (существование проекта не раскрывается отдельно от доступа).
@@ -150,7 +150,7 @@ function isPathDenied(abs: string, cwd: string, policy: ProtectedPathsPolicy): b
 }
 
 /**
- * AD-075 (managed): безопасный путь внутри workspace проекта (backend-семантика):
+ * ADR-075 (managed): безопасный путь внутри workspace проекта (backend-семантика):
  * ведущие `/` срезаются, traversal за пределы workspace → `PATH_TRAVERSAL`.
  */
 function resolveSafeInWorkspace(workspace: string, requestedPath: string): string {
@@ -237,7 +237,7 @@ async function listDirectoryRecursive(
 }
 
 /**
- * AD-075: подкаталоги директории (только `isDirectory`), отсортированные по имени.
+ * ADR-075: подкаталоги директории (только `isDirectory`), отсортированные по имени.
  * Запрещённые policy-пути пропускаются (не показываются). `relBase` — база
  * относительного пути для элементов (относительно root или абсолютная для
  * путей вне root).
@@ -280,10 +280,10 @@ export function createFsRoutes(
   const app = new Hono();
   // Legacy-корень: как раньше (fallback process.cwd()), чтобы не менять поведение
   // существующих эндпоинтов при вызове фабрики без root.
-  // AD-075: нормализуем к абсолютному — иначе containment не работает при
+  // ADR-075: нормализуем к абсолютному — иначе containment не работает при
   // относительном корне из конфига/env.
   const root = resolve(workspacesRoot || process.cwd());
-  // AD-075: новые `/workspace-root*` работают только с явно настроенным корнем —
+  // ADR-075: новые `/workspace-root*` работают только с явно настроенным корнем —
   // process.cwd() как fallback здесь запрещён (см. workspacesRootOrError).
   const configuredRoot = workspacesRoot && workspacesRoot.trim() ? resolve(workspacesRoot) : undefined;
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
@@ -294,7 +294,7 @@ export function createFsRoutes(
   const requireProjectId = opts.requireProjectId === true;
   const authorizeProject = opts.authorizeProject;
 
-  /** AD-089 (P0): нет доступа к проекту → 403 `FORBIDDEN` (fail-closed). */
+  /** ADR-089 (P0): нет доступа к проекту → 403 `FORBIDDEN` (fail-closed). */
   const ensureProjectAccess = async (c: Context, projectId: string): Promise<void> => {
     if (!authorizeProject) return;
     const allowed = await authorizeProject(c, projectId).catch(() => false);
@@ -304,7 +304,7 @@ export function createFsRoutes(
   /**
    * База для path-эндпоинтов: workspace проекта (project-aware) либо плоский root.
    * Managed (`requireProjectId`) без `project_id` → 400; standalone без проекта → root.
-   * AD-089 (P0): project-aware ветка сначала проверяет доступ к проекту (403).
+   * ADR-089 (P0): project-aware ветка сначала проверяет доступ к проекту (403).
    */
   const resolveBase = async (
     c: Context,
@@ -748,7 +748,7 @@ export function createFsRoutes(
     }
   });
 
-  // GET /workspace-root — список поддиректорий корня workspace (AD-075)
+  // GET /workspace-root — список поддиректорий корня workspace (ADR-075)
   app.get('/workspace-root', auth.requireAuth, async (c) => {
     const wsRoot = workspacesRootOrError(c);
     if (wsRoot instanceof Response) return wsRoot;

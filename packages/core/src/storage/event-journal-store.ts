@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import type { SynthEvent, RouteDecision } from '@itphx/synth-shared';
 import { AsyncLock, atomicWrite } from '@itphx/synth-shared';
 
-/** AD-089: запись журнала обработки внешнего события (локальный тип core). */
+/** ADR-089: запись журнала обработки внешнего события (локальный тип core). */
 export interface EventJournalEntry {
   /** ISO-8601. */
   ts: string;
@@ -12,9 +12,9 @@ export interface EventJournalEntry {
   decision?: RouteDecision;
   /** Ошибка обработки, если была. */
   error?: string;
-  /** AD-089/AD-052: id API-ключа привязки (аудит использования ключа). */
+  /** ADR-089/ADR-052: id API-ключа привязки (аудит использования ключа). */
   keyId?: string;
-  /** AD-089/AD-052: идентичность отправителя (аудит использования ключа). */
+  /** ADR-089/ADR-052: идентичность отправителя (аудит использования ключа). */
   principalId?: string;
 }
 
@@ -23,12 +23,12 @@ export interface EventJournalStoreConfig {
 }
 
 /**
- * AD-089: журнал обработанных внешних событий и решений Router.
+ * ADR-089: журнал обработанных внешних событий и решений Router.
  *
  * Append-only JSONL `{dataDir}/events/journal.jsonl` (одна строка = одна запись,
  * как в аудите LLM Gateway — `AuditLogger`/`payload-logger.ts`). Append защищён
  * общим `AsyncLock`, чтобы конкурирующие `record` не перемешивали строки.
- * Формат `prune` — атомарная перезапись (tmp→rename, AD-005).
+ * Формат `prune` — атомарная перезапись (tmp→rename, ADR-005).
  */
 export class EventJournalStore {
   private _lock = new AsyncLock();

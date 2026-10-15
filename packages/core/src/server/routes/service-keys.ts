@@ -12,7 +12,7 @@ import { ServiceApiKeyConflictError } from '../../storage/service-api-key-store.
 import type { ServiceApiKeyStore } from '../../storage/service-api-key-store.js';
 
 /**
- * AD-052 (этап I): CRUD service-key инстанса. Единая реализация для core
+ * ADR-052 (этап I): CRUD service-key инстанса. Единая реализация для core
  * (standalone) и backend (managed): RBAC задаётся через `opts.writeGuard`/
  * `opts.readGuard`, локализация — через `opts.messages`.
  *
@@ -66,7 +66,7 @@ function currentUserId(c: Context, resolveUserId?: (c: Context) => string): stri
 }
 
 /**
- * AD-052: `GET /` — список; `GET /scopes` — каталог scope'ов/ролей; `POST /` —
+ * ADR-052: `GET /` — список; `GET /scopes` — каталог scope'ов/ролей; `POST /` —
  * создание (секрет единожды); `GET /:id`; `PATCH /:id`; `DELETE /:id`;
  * `POST /:id/revoke` — мягкий отзыв (идемпотентно).
  * Конфликт метки → 409 `CONFLICT`; невалидные scope/role → 400 `VALIDATION_ERROR`.

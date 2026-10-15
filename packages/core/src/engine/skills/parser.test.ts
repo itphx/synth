@@ -5,7 +5,7 @@ function md(frontmatter: string, body = 'Body'): string {
   return `---\n${frontmatter}\n---\n\n${body}`;
 }
 
-describe('parseSkillFile (AD-046 §3.2)', () => {
+describe('parseSkillFile (ADR-046 §3.2)', () => {
   it('валидный минимальный SKILL.md', () => {
     const { skill, issues } = parseSkillFile(md('name: api-review\ndescription: Проверяет API'), 'api-review');
     expect(issues).toEqual([]);

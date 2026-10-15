@@ -1,5 +1,5 @@
 /**
- * Тесты TaskClassifier (AD-035).
+ * Тесты TaskClassifier (ADR-035).
  */
 import { describe, it, expect } from 'vitest';
 import { TaskClassifier } from './task-classifier.js';

@@ -10,7 +10,7 @@ export interface SettingsSectionProps {
   children: React.ReactNode
 }
 
-/** AD-072: карточка-секция внутри панели настроек. */
+/** ADR-072: карточка-секция внутри панели настроек. */
 export function SettingsSection({
   title,
   description,

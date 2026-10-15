@@ -42,7 +42,7 @@ beforeEach(() => {
   resetChatStore()
 })
 
-describe('transportStore dispatcher: stream.usage (AD-070 §2.6)', () => {
+describe('transportStore dispatcher: stream.usage (ADR-070 §2.6)', () => {
   it('маппит usage camelCase → snake_case и прокидывает cost/model/provider/estimated', () => {
     dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1', model: 'gpt', provider: 'openai' }))
     dispatch(makeEvent('stream.usage', 's1', {
@@ -196,7 +196,7 @@ describe('transportStore dispatcher: stream.usage (AD-070 §2.6)', () => {
   })
 })
 
-describe('transportStore dispatcher: stream.done с финальной статистикой (AD-070 §2.6, Bug 1)', () => {
+describe('transportStore dispatcher: stream.done с финальной статистикой (ADR-070 §2.6, Bug 1)', () => {
   it('маппит top-level cost_usd/duration_ms/usage_estimated/cost_breakdown/provider в metadata', () => {
     dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1' }))
     useChatStore.setState({
@@ -240,7 +240,7 @@ describe('transportStore dispatcher: stream.done с финальной стат�
   })
 })
 
-describe('transportStore dispatcher: stream.cancelled с usage/cost (AD-070 §2.6)', () => {
+describe('transportStore dispatcher: stream.cancelled с usage/cost (ADR-070 §2.6)', () => {
   it('передаёт usage/cost/usage_estimated в cancelStream (сохраняются в сообщении)', () => {
     dispatch(makeEvent('stream.start', 's1', { stream_id: 'st1' }))
     useChatStore.setState({ messagesBySession: { s1: [makeAssistantMessage('st1')] } })
@@ -268,7 +268,7 @@ describe('transportStore dispatcher: stream.cancelled с usage/cost (AD-070 §2.
   })
 })
 
-describe('transportStore dispatcher: subagent.progress → live-вклад (AD-070 §2.6)', () => {
+describe('transportStore dispatcher: subagent.progress → live-вклад (ADR-070 §2.6)', () => {
   it('накапливает usage/cost/model/estimated по parent_call_id', () => {
     dispatch(makeEvent('subagent.progress', 'parent', {
       stream_id: 'st-parent',

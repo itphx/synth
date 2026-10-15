@@ -1,5 +1,5 @@
 # Indirect Prompt Injection patterns (English) — IPI protection
-# Categorized format (AD-035): categories: { subcategory: { keywords: [...] } }
+# Categorized format (ADR-035): categories: { subcategory: { keywords: [...] } }
 
 categories:
   instruction_spoof:

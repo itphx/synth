@@ -61,7 +61,7 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('transportStore.connect: идемпотентность (AD-024, двойной старт)', () => {
+describe('transportStore.connect: идемпотентность (ADR-024, двойной старт)', () => {
   it('connect(auto) → connect(ws): эффективный транспорт один и тот же — клиент не пересоздаётся', () => {
     const store = useTransportStore.getState()
     store.connect('auto')

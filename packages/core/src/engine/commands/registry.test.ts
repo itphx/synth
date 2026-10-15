@@ -23,7 +23,7 @@ async function writeCommand(dir: string, name: string, description = 'desc') {
   );
 }
 
-describe('CommandRegistry — trust в кэше (AD-046 §4.4/§8.3)', () => {
+describe('CommandRegistry — trust в кэше (ADR-046 §4.4/§8.3)', () => {
   it('пере-сканирует при смене trust источника без изменения каталога', async () => {
     const dir = join(root, 'proj');
     await writeCommand(dir, 'p');

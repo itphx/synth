@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.4/§2.7 (Ф2-часть 2): юнит-тесты состояния промпта per-agent и
+ * ADR-070 §2.4/§2.7 (Ф2-часть 2): юнит-тесты состояния промпта per-agent и
  * предсказания/валидации prompt-cache.
  */
 
@@ -91,7 +91,7 @@ describe('isPrefixUnchanged', () => {
   });
 });
 
-describe('isBlockChanged (AD-069 §11)', () => {
+describe('isBlockChanged (ADR-069 §11)', () => {
   const withInstructions = (content: string) => ({
     system: 'SYS',
     stablePrefix: 'STABLE',

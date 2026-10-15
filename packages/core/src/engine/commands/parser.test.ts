@@ -4,7 +4,7 @@ import { parseCommandFile } from './parser.js';
 const DIR = '/tmp/commands';
 const FILE = '/tmp/commands/my-cmd.md';
 
-describe('parseCommandFile (AD-046 §7.2)', () => {
+describe('parseCommandFile (ADR-046 §7.2)', () => {
   it('парсит frontmatter и тело', () => {
     const raw = [
       '---',

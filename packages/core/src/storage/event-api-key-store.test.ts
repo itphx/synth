@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventApiKeyConflictError, EventApiKeyStore } from './event-api-key-store.js';
 
-describe('EventApiKeyStore (AD-089/AD-052)', () => {
+describe('EventApiKeyStore (ADR-089/ADR-052)', () => {
   let store: EventApiKeyStore;
   let tmpDir: string;
 

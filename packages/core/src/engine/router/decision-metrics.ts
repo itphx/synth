@@ -1,5 +1,5 @@
 /**
- * AD-084: агрегатные in-memory метрики decision-слоя.
+ * ADR-084: агрегатные in-memory метрики decision-слоя.
  *
  * Один `DecisionMetrics` накапливает статистику по каждому вызову
  * `decideChoiceCascade`: сколько обращений, сколько принято (`handled`), сколько

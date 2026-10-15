@@ -137,7 +137,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('EventsSettings — админ-раздел «Параметры событий» (AD-089)', () => {
+describe('EventsSettings — админ-раздел «Параметры событий» (ADR-089)', () => {
   it('загружает настройки и рендерит заголовок/описание', async () => {
     const container = await renderSettings()
 
@@ -215,7 +215,7 @@ describe('EventsSettings — админ-раздел «Параметры соб
     expect(mocks.updateEventsSettings).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }))
   })
 
-  it('тумблер decisionRouting (AD-084) становится частью черновика и сохраняется', async () => {
+  it('тумблер decisionRouting (ADR-084) становится частью черновика и сохраняется', async () => {
     const container = await renderSettings()
 
     const decisionToggle = container.querySelector(
@@ -237,7 +237,7 @@ describe('EventsSettings — админ-раздел «Параметры соб
     )
   })
 
-  it('тумблер autoBind (AD-089) и шаблон агента становятся частью черновика', async () => {
+  it('тумблер autoBind (ADR-089) и шаблон агента становятся частью черновика', async () => {
     const container = await renderSettings()
 
     const autoBindToggle = container.querySelector(
@@ -267,7 +267,7 @@ describe('EventsSettings — админ-раздел «Параметры соб
     )
   })
 
-  it('редактирует identityMap и отправляет пару на сервер (AD-089)', async () => {
+  it('редактирует identityMap и отправляет пару на сервер (ADR-089)', async () => {
     const container = await renderSettings()
 
     const map = container.querySelector('[data-testid="events-config-identity-map"]')!
@@ -387,7 +387,7 @@ describe('EventsSettings — админ-раздел «Параметры соб
   })
 })
 
-describe('EventsSettings — права доступа (ADMIN) и i18n (AD-089)', () => {
+describe('EventsSettings — права доступа (ADMIN) и i18n (ADR-089)', () => {
   it('категория «Параметры событий» — только ADMIN, user-раздел «События» — без ролей', () => {
     const config = CATEGORIES.find((cat) => cat.id === 'eventsConfig')!
     expect(config).toBeDefined()

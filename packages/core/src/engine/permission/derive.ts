@@ -7,13 +7,13 @@ export function emptyPermissionConfig(): PermissionConfig {
 }
 
 /**
- * AD-029: наследование permissions саб-агентами (аналог deriveSubagentSessionPermission
+ * ADR-029: наследование permissions саб-агентами (аналог deriveSubagentSessionPermission
  * из OpenCode). Саб-агент получает правила родительской сессии + блокировку
  * question/plan_enter/plan_exit/task. Правила по конкретным именам тулов имеют
  * приоритет над групповыми и '*', поэтому deny здесь переопределяет любые allow
  * из родительского конфига.
  *
- * AD-046 §8.1: правила `skill` (per-skill allow/deny/ask + glob) наследуются
+ * ADR-046 §8.1: правила `skill` (per-skill allow/deny/ask + glob) наследуются
  * саб-агентом автоматически вместе с остальными правилами родителя — собственный
  * `skill`-deny саб-агенту не добавляется (скиллы делегируются через `task`).
  */

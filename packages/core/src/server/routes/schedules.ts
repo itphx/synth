@@ -12,7 +12,7 @@ import { requireScope, checkProjectAccess } from '../service-scope.js';
 import type { ScopeGuardFactory, ProjectGuard } from '../service-scope.js';
 
 /**
- * AD-051 (минимальный срез) / AD-089: маршруты управления расписаниями
+ * ADR-051 (минимальный срез) / ADR-089: маршруты управления расписаниями
  * планировщика. Единая реализация для core (standalone) и backend (managed):
  * RBAC задаётся через `opts.writeGuard`, локализация — через `opts.messages`.
  */
@@ -34,7 +34,7 @@ export interface SchedulerRouteMessages {
 export interface SchedulerRoutesDeps {
   scheduleStore: ScheduleStore;
   scheduler: SchedulerService;
-  /** История срабатываний (AD-051); без неё `GET /:id/jobs` отдаёт `[]`. */
+  /** История срабатываний (ADR-051); без неё `GET /:id/jobs` отдаёт `[]`. */
   jobStore?: JobStore;
 }
 
@@ -47,16 +47,16 @@ export interface SchedulerRoutesOptions {
   /** Дополнительные middleware на `POST /:id/run` (rate limit и т.п.). */
   runMiddleware?: Middleware[];
   /**
-   * AD-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
+   * ADR-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
    * `requireScope` из core (нет service-key в контексте → пропускает).
    */
   scopeGuard?: ScopeGuardFactory;
   /**
-   * AD-052 (этап I): гейт проектной проекции. По умолчанию — `checkProjectAccess`.
+   * ADR-052 (этап I): гейт проектной проекции. По умолчанию — `checkProjectAccess`.
    */
   projectGuard?: ProjectGuard;
   /**
-   * AD-052: резолвер `sessionId` → `projectId` цели расписания (`bound`/`queue`).
+   * ADR-052: резолвер `sessionId` → `projectId` цели расписания (`bound`/`queue`).
    * Проект `ephemeral`-цели берётся из `target.project`. Не задан — проектный
    * гейт для session-целей пропускается.
    */
@@ -84,7 +84,7 @@ function validateTrigger(input: ScheduleInputRequest): string | null {
 }
 
 /**
- * AD-051 / AD-089: CRUD расписаний + принудительный запуск + Job-история.
+ * ADR-051 / ADR-089: CRUD расписаний + принудительный запуск + Job-история.
  *
  * `GET /` — список; `POST /` — создание; `PUT /:id` — обновление;
  * `DELETE /:id` — удаление; `POST /:id/run` — принудительный ingest события
@@ -100,7 +100,7 @@ export function createSchedulerRoutes(
   const messages: SchedulerRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
   const runGuard: Middleware = opts.runGuard ?? writeGuard;
-  // AD-052 (этап I): scope-гейты service-key и проектная проекция цели.
+  // ADR-052 (этап I): scope-гейты service-key и проектная проекция цели.
   const scoped = opts.scopeGuard ?? requireScope;
   const projectGuard = opts.projectGuard ?? checkProjectAccess;
 
@@ -143,7 +143,7 @@ export function createSchedulerRoutes(
     const triggerError = validateTrigger(parsed.data);
     if (triggerError) return invalid(c, triggerError);
 
-    // AD-052: проектная проекция — цель расписания адресует проект/сессию.
+    // ADR-052: проектная проекция — цель расписания адресует проект/сессию.
     const denied = projectGuard(c, await projectForTarget(parsed.data.target));
     if (denied) return denied;
 
@@ -169,7 +169,7 @@ export function createSchedulerRoutes(
     const triggerError = validateTrigger(parsed.data);
     if (triggerError) return invalid(c, triggerError);
 
-    // AD-052: проектная проекция — цель расписания адресует проект/сессию.
+    // ADR-052: проектная проекция — цель расписания адресует проект/сессию.
     const denied = projectGuard(c, await projectForTarget(parsed.data.target));
     if (denied) return denied;
 
@@ -187,7 +187,7 @@ export function createSchedulerRoutes(
     return c.body(null, 204);
   });
 
-  // GET /api/v2/schedules/:id/jobs — история срабатываний (AD-051).
+  // GET /api/v2/schedules/:id/jobs — история срабатываний (ADR-051).
   app.get('/:id/jobs', auth.requireAuth, scoped('schedules:read'), async (c) => {
     const id = c.req.param('id');
     const schedule = await deps.scheduleStore.get(id);
@@ -206,7 +206,7 @@ export function createSchedulerRoutes(
   // выключенного расписания). `runMiddleware` — дополнительный слой (rate limit).
   app.post('/:id/run', runGuard, scoped('schedules:write'), ...(opts.runMiddleware ?? []), async (c) => {
     const id = c.req.param('id');
-    // AD-052: проектная проекция — цель существующего расписания.
+    // ADR-052: проектная проекция — цель существующего расписания.
     const existing = await deps.scheduleStore.get(id);
     if (!existing) return notFound(c);
     const denied = projectGuard(c, await projectForTarget(existing.target));

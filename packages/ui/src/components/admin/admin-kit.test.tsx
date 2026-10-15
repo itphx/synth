@@ -38,7 +38,7 @@ function bareGridClasses(source: string): string[] {
   return bad
 }
 
-describe('AD-072: админ-панели используют Settings UI Kit', () => {
+describe('ADR-072: админ-панели используют Settings UI Kit', () => {
   for (const [name, source] of Object.entries(PANELS)) {
     it(`${name} собирается на SettingsPanel`, () => {
       expect(source).toContain('SettingsPanel')

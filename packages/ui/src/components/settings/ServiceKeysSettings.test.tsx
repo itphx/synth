@@ -35,7 +35,7 @@ const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
 }))
 
-// Проектная проекция: список проектов инстанса (AD-014) для мульти-селекта.
+// Проектная проекция: список проектов инстанса (ADR-014) для мульти-селекта.
 const projectsStore = vi.hoisted(() => ({
   projects: [
     { id: 'p1', name: 'Alpha' },
@@ -162,7 +162,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   authStore.user = { id: 'u1', roles: ['ADMIN'] }
   mocks.getServiceKeys.mockResolvedValue({ keys: [KEY_ACTIVE, KEY_EXPIRED, KEY_REVOKED] })
-  // AD-052: каталог scope'ов/ролей с сервера (по умолчанию — с новыми scopes).
+  // ADR-052: каталог scope'ов/ролей с сервера (по умолчанию — с новыми scopes).
   mocks.getServiceKeyScopes.mockResolvedValue({
     scopes: ['events:ingest', 'events:watch', 'addons:install', 'users:read'],
     families: ['events', 'sessions'],
@@ -191,7 +191,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('ServiceKeysSettings — админ-секция «Сервисные ключи» (AD-052)', () => {
+describe('ServiceKeysSettings — админ-секция «Сервисные ключи» (ADR-052)', () => {
   it('загружает ключи и рендерит заголовок/описание/счётчик', async () => {
     const container = await renderSettings()
 
@@ -395,7 +395,7 @@ describe('ServiceKeysSettings — админ-секция «Сервисные �
     expect(container.querySelector('[role="alert"]')!.textContent).toContain('boom')
   })
 
-  // AD-052: каталог scope'ов/ролей — серверная сущность (не в бандле) + фоллбек.
+  // ADR-052: каталог scope'ов/ролей — серверная сущность (не в бандле) + фоллбек.
   it('каталог scope/ролей берётся с сервера; неизвестные роли отбрасываются', async () => {
     mocks.getServiceKeyScopes.mockResolvedValue({
       scopes: ['addons:install', 'users:read'],
@@ -437,7 +437,7 @@ describe('ServiceKeysSettings — админ-секция «Сервисные �
   })
 })
 
-describe('ServiceKeysSettings — права доступа (ADMIN) и i18n (AD-052)', () => {
+describe('ServiceKeysSettings — права доступа (ADMIN) и i18n (ADR-052)', () => {
   it('категория «Сервисные ключи» — только ADMIN', () => {
     const config = CATEGORIES.find((cat) => cat.id === 'serviceKeys')!
     expect(config).toBeDefined()

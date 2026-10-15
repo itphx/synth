@@ -1,4 +1,4 @@
-// Хранилище credentials для гибридного режима (AD-005: атомарная запись tmp + rename).
+// Хранилище credentials для гибридного режима (ADR-005: атомарная запись tmp + rename).
 //
 // Файл credentials — JSON-объект Record<backendUrl, RemoteCredentials>:
 // {
@@ -11,7 +11,7 @@
 //   }
 // }
 // Один файл может хранить credentials для нескольких backend-серверов.
-// По умолчанию путь — ~/.config/synth/credentials.json; AD-079: при
+// По умолчанию путь — ~/.config/synth/credentials.json; ADR-079: при
 // `--home`/`SYNTH_HOME` — `<home>/credentials.json`.
 
 import { readFile, writeFile, rename, mkdir, unlink } from 'node:fs/promises';
@@ -25,7 +25,7 @@ const CREDENTIALS_FILE_MODE = 0o600;
 type CredentialsFile = Record<string, RemoteCredentials>;
 
 /**
- * Путь к файлу credentials. AD-079: при заданном home — `<home>/credentials.json`,
+ * Путь к файлу credentials. ADR-079: при заданном home — `<home>/credentials.json`,
  * иначе XDG-дефолт `~/.config/synth/credentials.json`.
  */
 export function defaultCredentialsPath(home?: string): string {

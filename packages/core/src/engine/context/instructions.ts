@@ -1,15 +1,15 @@
 /**
- * AD-069: резолвер проектных инструкций (`AGENTS.md` и совместимые).
+ * ADR-069: резолвер проектных инструкций (`AGENTS.md` и совместимые).
  *
  * Фаза 1: merged chain `git root → … → workspace` (глубже = позже =
  * приоритетнее), на каждый каталог ровно один кандидат
  * (`AGENTS.override.md` > `AGENTS.md` > `agents.md` > `CLAUDE.md` (opt-in) >
  * `CONTEXT.md` (deprecated, opt-in)), дедуп по sha256 контента, threat-scan
- * (AD-036), обрезку head/tail с маркером и общий кап на цепочку.
+ * (ADR-036), обрезку head/tail с маркером и общий кап на цепочку.
  *
  * Фаза 2a: дополнительные `config.instructions.sources` (`before` → chain →
  * `after`), URL-fetch с TTL-кэшем `{dataDir}/instructions-cache/<sha1(url)>`
- * (атомарная запись tmp→rename, AD-005), project-trust гейт (`skills.trustedProjectDirs`)
+ * (атомарная запись tmp→rename, ADR-005), project-trust гейт (`skills.trustedProjectDirs`)
  * с авто-trust для workspace внутри `workspacesRoot` (R1/R3), install-tree guard
  * и `excludeProjects`.
  *
@@ -32,7 +32,7 @@ import { expandHome, isProjectTrusted } from '../skills/trust.js';
 import { fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
 import type { DictionaryStore } from '../router/dictionary-store.js';
 
-/** Fallback-окно модели, если оно неизвестно (AD-069 §5.1: разумный дефолт). */
+/** Fallback-окно модели, если оно неизвестно (ADR-069 §5.1: разумный дефолт). */
 export const DEFAULT_INSTRUCTIONS_CONTEXT_WINDOW = 128_000;
 
 /** Обёртка блока проектных инструкций в system prompt. */
@@ -71,7 +71,7 @@ export interface InstructionsFileInfo {
   truncated: boolean;
   blocked: boolean;
   scanned: boolean;
-  /** AD-069 Фаза 2a: откуда пришёл файл. */
+  /** ADR-069 Фаза 2a: откуда пришёл файл. */
   kind: InstructionsSourceKind;
   label?: string;
   url?: string;
@@ -95,7 +95,7 @@ export interface ProjectInstructionsResult {
   diagnostics: InstructionsDiagnostic[];
 }
 
-/** AD-069 §9.3: уровень диагностики прозрачности (аналогично `SkillDiagnostic`). */
+/** ADR-069 §9.3: уровень диагностики прозрачности (аналогично `SkillDiagnostic`). */
 export type InstructionsReportLevel = 'info' | 'warning' | 'error';
 
 /** Файл инструкций в снимке прозрачности: резолвер-поля + сводный статус/scan. */
@@ -124,7 +124,7 @@ export interface InstructionsReportDiagnostic {
   kind?: InstructionsSourceKind;
 }
 
-/** Снимок проектных инструкций для `GET /api/v2/context/instructions` (AD-069 §9.3). */
+/** Снимок проектных инструкций для `GET /api/v2/context/instructions` (ADR-069 §9.3). */
 export interface InstructionsInfo {
   enabled: boolean;
   cap: { chars: number; source: 'dynamic' | 'override'; contextWindow: number };
@@ -134,7 +134,7 @@ export interface InstructionsInfo {
 
 /** Метаданные запроса снимка (окно модели и projectId для `excludeProjects`). */
 export interface InstructionsInfoQuery {
-  /** Абсолютный workspace; не задан — проектные инструкции недоступны (AD-040). */
+  /** Абсолютный workspace; не задан — проектные инструкции недоступны (ADR-040). */
   workspace?: string;
   contextWindow?: number;
   language?: string;
@@ -155,7 +155,7 @@ export interface ProjectInstructionsResolveArgs {
   /** projectId — для `excludeProjects`. */
   projectId?: string;
   signal?: AbortSignal;
-  /** Политика threat-scan (как у tool-контента, AD-036). */
+  /** Политика threat-scan (как у tool-контента, ADR-036). */
   injection?: { enabled: boolean; mode: InjectionPolicy };
 }
 
@@ -164,9 +164,9 @@ export interface ProjectInstructionsDeps {
   dictionaryStore?: DictionaryStore | null;
   /** Подменяемый git-раннер (тесты). */
   runGitFn?: (args: string[], cwd: string, signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
-  /** AD-069 §3.5: `config.skills.trustedProjectDirs` — project-trust гейт. */
+  /** ADR-069 §3.5: `config.skills.trustedProjectDirs` — project-trust гейт. */
   trustedProjectDirs?: readonly string[];
-  /** AD-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
+  /** ADR-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
   workspacesRoot?: string;
   /** Корень данных для URL-кэша `{dataDir}/instructions-cache`. */
   dataDir?: string;
@@ -214,7 +214,7 @@ async function fileExists(path: string): Promise<boolean> {
  * Выбирает ровно одного кандидата на каталог по приоритету
  * (`AGENTS.override.md` > `AGENTS.md` > `agents.md`; `CLAUDE.md` — opt-in
  * fallback; `CONTEXT.md` — deprecated opt-in). Общий для merged chain и
- * lazy-догрузки подкаталогов (AD-069 §3.1/§4.3).
+ * lazy-догрузки подкаталогов (ADR-069 §3.1/§4.3).
  */
 export async function selectInstructionFile(
   dir: string,
@@ -241,22 +241,22 @@ export function isInsideDir(parent: string, child: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 }
 
-/** Контекст trust-гейта проектных инструкций (AD-069 §3.5/R1/R3). */
+/** Контекст trust-гейта проектных инструкций (ADR-069 §3.5/R1/R3). */
 export interface InstructionsTrustOptions {
-  /** AD-046 project-trust: явный список доверенных проектных каталогов. */
+  /** ADR-046 project-trust: явный список доверенных проектных каталогов. */
   trustedProjectDirs?: readonly string[];
-  /** AD-069 R3: workspace внутри `workspacesRoot` доверяется автоматически. */
+  /** ADR-069 R3: workspace внутри `workspacesRoot` доверяется автоматически. */
   workspacesRoot?: string;
   /** Домашний каталог для раскрытия `~` в `trustedProjectDirs`. */
   home?: string;
 }
 
 /**
- * AD-069 §3.5/R1/R3: единый trust-гейт проектных инструкций — общий для
+ * ADR-069 §3.5/R1/R3: единый trust-гейт проектных инструкций — общий для
  * merged-chain (`ProjectInstructionsResolver`) и lazy-догрузки
  * (`LazyInstructionsLoader`).
  *
- * Доверено, если каталог явно в `trustedProjectDirs` (project-trust AD-046)
+ * Доверено, если каталог явно в `trustedProjectDirs` (project-trust ADR-046)
  * ИЛИ лежит внутри `workspacesRoot` (рабочие каталоги Synth получают
  * авто-trust — инструкции там не несут риска чужого клона).
  *
@@ -340,7 +340,7 @@ async function walkFiles(root: string, skipDirs: readonly string[]): Promise<str
 }
 
 /**
- * Динамический кап на merged-цепочку (AD-069 §5.1):
+ * Динамический кап на merged-цепочку (ADR-069 §5.1):
  * `maxChars` override либо `clamp(windowRatio * window, minChars, maxCharsCeiling)`.
  */
 export function resolveInstructionsCap(config: InstructionsConfig, contextWindow?: number): number {
@@ -402,7 +402,7 @@ function countLines(text: string): number {
   return text.split('\n').length;
 }
 
-/** Маркер обрезки с точным путём/offset/limit для `read_file` (AD-069 §5.1). */
+/** Маркер обрезки с точным путём/offset/limit для `read_file` (ADR-069 §5.1). */
 export function buildTruncationMarker(displayPath: string, offset: number, limit: number): string {
   return `\n\n[TRUNCATED: see ${displayPath} — read_file(path: "${displayPath}", offset: ${offset}, limit: ${limit})]\n\n`;
 }
@@ -450,7 +450,7 @@ export function truncateHeadTail(
 }
 
 /**
- * Provenance-заголовок блока (AD-069 §3.3/§3.4).
+ * Provenance-заголовок блока (ADR-069 §3.3/§3.4).
  * `label` добавляет читаемое имя: `--- from <label> (<path|url>) … ---`.
  */
 export function buildProvenanceHeader(
@@ -504,7 +504,7 @@ interface CacheEntry {
 
 /**
  * Резолвер проектных инструкций. Stateless; состояние prompt-cache/generation
- * живёт в оркестраторе (AD-070 §2.4).
+ * живёт в оркестраторе (ADR-070 §2.4).
  */
 export class ProjectInstructionsResolver {
   private readonly _config: InstructionsConfig;
@@ -517,7 +517,7 @@ export class ProjectInstructionsResolver {
   private readonly _home: string;
   private readonly _now: () => number;
   /**
-   * AD-069 §3.5/R5: результатный кэш по подписи кандидатов (mtime:size).
+   * ADR-069 §3.5/R5: результатный кэш по подписи кандидатов (mtime:size).
    * Ключ — все входы, влияющие на результат; значение — объект результата
    * (read-only на стороне вызовов).
    */
@@ -551,7 +551,7 @@ export class ProjectInstructionsResolver {
       return this._empty({ status: 'excluded', reason: 'excludeProjects', path: workspace });
     }
 
-    // AD-069 §3.5/R5: дешёвая подпись кандидатов (stat без readFile/scan) и
+    // ADR-069 §3.5/R5: дешёвая подпись кандидатов (stat без readFile/scan) и
     // результатный кэш — повторный resolve с той же подписью не перечитывает
     // диск. Кэшируются в т.ч. пустые/untrusted-результаты.
     const { signature, cacheable, chain } = await this._signature(workspace, args);
@@ -716,7 +716,7 @@ export class ProjectInstructionsResolver {
   }
 
   /**
-   * AD-069 §3.5/R5: подпись всех кандидатов (chain + `config.sources`) без
+   * ADR-069 §3.5/R5: подпись всех кандидатов (chain + `config.sources`) без
    * чтения контента — только `stat`/`access`. `cacheable=false`, если
    * URL-источник не представим стабильной подписью (нет `dataDir` или TTL=0):
    * тогда fetch идёт каждый resolve, как и раньше.
@@ -819,7 +819,7 @@ export class ProjectInstructionsResolver {
     this._resultCache.set(key, { signature, result });
   }
 
-  /** Сброс результатного кэша (принудительный reload, AD-069 §3.5/R5). */
+  /** Сброс результатного кэша (принудительный reload, ADR-069 §3.5/R5). */
   clear(): void {
     this._resultCache.clear();
   }
@@ -1080,7 +1080,7 @@ export class ProjectInstructionsResolver {
     return null;
   }
 
-  /** Атомарная запись кэша (tmp→rename, AD-005); ошибки записи не фатальны. */
+  /** Атомарная запись кэша (tmp→rename, ADR-005); ошибки записи не фатальны. */
   private async _writeCache(path: string, url: string, entry: CacheEntry): Promise<void> {
     try {
       await mkdir(dirname(path), { recursive: true });
@@ -1132,7 +1132,7 @@ export class ProjectInstructionsResolver {
     return { content: result.text };
   }
 
-  /** Threat-scan (AD-036): flag/sanitize/block на контенте инструкций. */
+  /** Threat-scan (ADR-036): flag/sanitize/block на контенте инструкций. */
   private _scan(
     entry: Candidate,
     args: ProjectInstructionsResolveArgs,
@@ -1173,7 +1173,7 @@ export class ProjectInstructionsResolver {
   }
 }
 
-/** Статус резолвера → уровень/сообщение диагностики прозрачности (AD-069 §9.3). */
+/** Статус резолвера → уровень/сообщение диагностики прозрачности (ADR-069 §9.3). */
 const DIAGNOSTIC_META: Record<InstructionsDiagnosticStatus, { level: InstructionsReportLevel; message: string }> = {
   loaded: { level: 'info', message: 'Инструкции загружены' },
   truncated: { level: 'warning', message: 'Инструкции обрезаны по капу' },
@@ -1206,7 +1206,7 @@ function isFileStatus(status: InstructionsDiagnosticStatus): boolean {
 }
 
 /**
- * Строит снимок прозрачности (AD-069 §9.3) из результата резолвера Ф2a.
+ * Строит снимок прозрачности (ADR-069 §9.3) из результата резолвера Ф2a.
  * Файлы и диагностики переиспользуются из резолвера без повторного discovery.
  */
 export function buildInstructionsInfo(
@@ -1269,7 +1269,7 @@ export function buildInstructionsInfo(
 /**
  * Оборачивает `ProjectInstructionsResolver` в резолвер снимка прозрачности.
  *
- * Сессия без проекта (`workspace` не задан, AD-040) → пустой снимок с причиной
+ * Сессия без проекта (`workspace` не задан, ADR-040) → пустой снимок с причиной
  * `no-project` в диагностике; иначе — резолвинг merged chain + `config.sources`.
  */
 export function createInstructionsInfoResolver(

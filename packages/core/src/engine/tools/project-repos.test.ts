@@ -44,7 +44,7 @@ async function createBareRepo(base: string): Promise<string> {
   return bare;
 }
 
-describe('project repos tools (AD-076)', () => {
+describe('project repos tools (ADR-076)', () => {
   let root: string;
   let workspacesRoot: string;
   let sessionManager: SessionManager;

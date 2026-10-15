@@ -1,5 +1,5 @@
 /**
- * AD-052/O1: запись скиллов — guard «ADMIN или scope `addons:install`»
+ * ADR-052/O1: запись скиллов — guard «ADMIN или scope `addons:install`»
  * (backend передаёт `writeGuard` в core-фабрику `createSkillRoutes`).
  * Проверяем на `POST /reload` (простейшая мутация): service-key со scope
  * проходит, без scope — 403 SCOPE_REQUIRED, интерактивный не-ADMIN — 403.
@@ -28,7 +28,7 @@ function serviceKeyFromHeader(
   return null;
 }
 
-describe('backend skills writeGuard — ADMIN или scope addons:install (AD-052/O1)', () => {
+describe('backend skills writeGuard — ADMIN или scope addons:install (ADR-052/O1)', () => {
   let app: Hono;
   const reload = vi.fn();
 

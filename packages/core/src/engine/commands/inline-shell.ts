@@ -4,10 +4,10 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 /**
- * AD-046 §7.4: исполнение inline shell (`` !`cmd` ``) шаблонной команды.
+ * ADR-046 §7.4: исполнение inline shell (`` !`cmd` ``) шаблонной команды.
  *
  * Это низкоуровневый исполнитель: permission-проверку (`PermissionEvaluator`,
- * AD-029) и аудит делает вызывающая сторона (оркестратор). Параметры процесса
+ * ADR-029) и аудит делает вызывающая сторона (оркестратор). Параметры процесса
  * зеркалят тул `execute_shell`: `sh -c`, timeout 30 c, maxBuffer 10 MB,
  * `signal` сессии для «Стоп».
  */

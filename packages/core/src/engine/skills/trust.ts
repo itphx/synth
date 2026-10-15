@@ -20,7 +20,7 @@ export function normalizeTrustedProjectDirs(
 }
 
 /**
- * AD-046 §4.4: бинарный project-trust. Недоверенный проектный каталог виден в
+ * ADR-046 §4.4: бинарный project-trust. Недоверенный проектный каталог виден в
  * реестре, но скиллы из него не грузятся; trust выдаётся явно через
  * `skills.trustedProjectDirs`.
  */

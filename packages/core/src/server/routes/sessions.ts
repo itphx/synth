@@ -41,7 +41,7 @@ export interface SessionRoutesDeps {
    */
   getRemoteClient?: () => RemoteBackendClient | null;
   /**
-   * AD-089: единый funnel создания сессий. Задан — `POST /` идёт через
+   * ADR-089: единый funnel создания сессий. Задан — `POST /` идёт через
    * `requestSessionService.request` (эмит `session_requested`, единые правила);
    * не задан — прежний прямой `SessionManager.createSession` (fallback).
    */
@@ -88,27 +88,27 @@ export interface SessionRoutesOptions {
    */
   resolveDefaultAgent?: () => string | Promise<string>;
   /**
-   * AD-089: сквозной обзор (ADMIN/LEAD) — `GET /` возвращает все сессии.
+   * ADR-089: сквозной обзор (ADMIN/LEAD) — `GET /` возвращает все сессии.
    * `undefined`/`false` — прежнее поведение (только свои).
    */
   resolveElevated?: (c: Context) => boolean | Promise<boolean>;
   /**
-   * AD-089: проекты, участником которых является пользователь (owner или
+   * ADR-089: проекты, участником которых является пользователь (owner или
    * `members`) — для видимости проектных сессий в списке. Не задан — только свои.
    */
   resolveMemberProjectIds?: (c: Context, userId: string) => Promise<string[]> | string[];
   /**
-   * AD-089: доп. проверка доступа к сессии по id (например, участник проекта).
+   * ADR-089: доп. проверка доступа к сессии по id (например, участник проекта).
    * Вызывается, когда `opts.canAccess` не дал положительный ответ.
    */
   resolveCanAccessExtra?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
   /**
-   * AD-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
+   * ADR-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
    * `requireScope` из core (нет service-key в контексте → пропускает).
    */
   scopeGuard?: ScopeGuardFactory;
   /**
-   * AD-052 (этап I): гейт проектной проекции (`allowedProjects`). По умолчанию —
+   * ADR-052 (этап I): гейт проектной проекции (`allowedProjects`). По умолчанию —
    * `checkProjectAccess` из core (нет service-key/`allowedProjects` → пропускает).
    */
   projectGuard?: ProjectGuard;
@@ -159,7 +159,7 @@ function mapRemoteError(c: Context, err: unknown): Response | undefined {
 }
 
 /**
- * API сессий (AD-017/AD-033/AD-040/AD-042). Общая реализация для core (standalone)
+ * API сессий (ADR-017/ADR-033/ADR-040/ADR-042). Общая реализация для core (standalone)
  * и backend (managed): core использует дефолты (один пользователь `local`, гибрид
  * через getRemoteClient), backend параметризует RBAC, owner/author, EventHub-хуки
  * и отключает remote-ветки (getRemoteClient не передаётся).
@@ -189,15 +189,15 @@ export function createSessionRoutes(
   const promptMiddleware = opts.promptMiddleware ?? [];
   const messages: SessionRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
   const resolveAuthorName = createResolveAuthorName(deps.profilesStore);
-  // AD-052 (этап I): scope-гейты service-key и проектная проекция сессии.
+  // ADR-052 (этап I): scope-гейты service-key и проектная проекция сессии.
   const scoped = opts.scopeGuard ?? requireScope;
   const projectGuard = opts.projectGuard ?? checkProjectAccess;
 
   /**
-   * AD-071/безопасность: доступ к локальной сессии. Standalone — однопользовательский
+   * ADR-071/безопасность: доступ к локальной сессии. Standalone — однопользовательский
    * режим (владелец `local`); легаси-сессии без владельца считаются доступными,
    * чтобы не ломать существующие данные. Backend переопределяет через opts.canAccess.
-   * AD-089: `opts.resolveCanAccessExtra` (напр. участник проекта / LEAD) даёт доступ
+   * ADR-089: `opts.resolveCanAccessExtra` (напр. участник проекта / LEAD) даёт доступ
    * по id, если базовый `canAccess` отказал.
    */
   const canAccessSession = async (session: Session, c: Context, userId: string): Promise<boolean> => {
@@ -221,7 +221,7 @@ export function createSessionRoutes(
   app.get('/', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const projectId = c.req.query('project_id') || undefined;
     const userId = await resolveUserId(c);
-    // AD-089: видимость списка. elevated (ADMIN/LEAD) — все сессии; иначе свои
+    // ADR-089: видимость списка. elevated (ADMIN/LEAD) — все сессии; иначе свои
     // личные + сессии проектов-участий (командная видимость).
     const elevated = (await opts.resolveElevated?.(c)) ?? false;
     const memberProjectIds = elevated
@@ -294,7 +294,7 @@ export function createSessionRoutes(
 
     const owner = await resolveOwner(c);
 
-    // AD-052 (этап I): проектная проекция — сессия адресует проект
+    // ADR-052 (этап I): проектная проекция — сессия адресует проект
     // (`project_id`/`projectId`); при заданном `allowedProjects` чужой проект → 403.
     const createDenied = projectGuard(c, body.project_id || body.projectId || undefined);
     if (createDenied) return createDenied;
@@ -311,7 +311,7 @@ export function createSessionRoutes(
       }, 400);
     }
 
-    // AD-089: создание сессии — тоже событие. При заданном funnel идём через
+    // ADR-089: создание сессии — тоже событие. При заданном funnel идём через
     // `RequestSessionService.request` (эмит `session_requested`, единые правила);
     // иначе — прямой materialization-примитив `SessionManager.createSession`.
     const sessionInput = {
@@ -334,7 +334,7 @@ export function createSessionRoutes(
       return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Не удалось создать сессию' } }, 500);
     }
     const session = created;
-    // AD-075/D5: createSession сам проставляет ownerId из userId; выставляем
+    // ADR-075/D5: createSession сам проставляет ownerId из userId; выставляем
     // явно для совместимости и чтобы serializeSession отдавал owner_id.
     session.ownerId = owner;
     await sessionManager.updateSession(session);
@@ -407,7 +407,7 @@ export function createSessionRoutes(
       }, 400);
     }
 
-    // AD-040: перенос сессии между проектами (project_id). Валидируем существование
+    // ADR-040: перенос сессии между проектами (project_id). Валидируем существование
     // нового проекта и публикуем session.moved при фактической смене проекта.
     const prevProjectId = session.projectId;
     let projectChanged = false;
@@ -427,7 +427,7 @@ export function createSessionRoutes(
         }
       }
       const resolved = newProjectId || undefined;
-      // AD-052 (этап I): проектная проекция — и старая, и новая цель сессии.
+      // ADR-052 (этап I): проектная проекция — и старая, и новая цель сессии.
       const moveDenied = projectGuard(c, resolved);
       if (moveDenied) return moveDenied;
       if (prevProjectId !== resolved) {
@@ -523,7 +523,7 @@ export function createSessionRoutes(
     });
   });
 
-  // GET /api/v2/sessions/:id/prompt — состав системного промпта (AD-070 §2.5):
+  // GET /api/v2/sessions/:id/prompt — состав системного промпта (ADR-070 §2.5):
   // манифест источников + состояние промпта активного агента + последний promptMeta.
   app.get('/:id/prompt', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
@@ -541,7 +541,7 @@ export function createSessionRoutes(
   });
 
   // GET /api/v2/sessions/:id/stats — статистика по агентам/пользователям
-  // (AD-070 §2.6): usage сообщений + рекурсивный usage саб-агентов (tool `task`).
+  // (ADR-070 §2.6): usage сообщений + рекурсивный usage саб-агентов (tool `task`).
   app.get('/:id/stats', auth.requireAuth, scoped('sessions:read'), async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -738,7 +738,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    // Персистентный флаг отмены (AD-005): работает и когда `currentStream`/
+    // Персистентный флаг отмены (ADR-005): работает и когда `currentStream`/
     // cancel-token отсутствуют (сессия в очереди / backoff / между итерациями),
     // когда `orchestrator.cancel` — no-op. Пишем под локом, чтобы не потерять
     // конкурентную запись процессора; сбрасывает флаг сам процессор.

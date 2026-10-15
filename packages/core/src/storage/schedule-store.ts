@@ -4,20 +4,20 @@ import type { Schedule, ScheduleInput, ScheduleRunStatus } from '@itphx/synth-sh
 import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itphx/synth-shared';
 import { FileMutex } from './file-mutex.js';
 
-/** AD-051: версия схемы файла расписаний — для будущей миграции (AD-032). */
+/** ADR-051: версия схемы файла расписаний — для будущей миграции (PROP-032). */
 export const SCHEDULES_SCHEMA_VERSION = 1;
 
 export interface ScheduleStoreConfig {
   dataDir: string;
   /**
-   * AD-051/AD-089: межпроцессная сериализация мутаций (file-мьютекс поверх
+   * ADR-051/ADR-089: межпроцессная сериализация мутаций (file-мьютекс поверх
    * in-process `AsyncLock`) для нескольких реплик с общим `dataDir`.
    * Default `false` — поведение single-process не меняется.
    */
   crossProcess?: boolean;
 }
 
-/** AD-051/AD-089: результат очередного запуска расписания (`markRun`). */
+/** ADR-051/ADR-089: результат очередного запуска расписания (`markRun`). */
 export interface ScheduleRunUpdate {
   /** Время запуска, ISO-8601. */
   at: string;
@@ -42,10 +42,10 @@ function isSchedule(value: unknown): value is Schedule {
 }
 
 /**
- * AD-051/AD-089: реестр расписаний планировщика.
+ * ADR-051/ADR-089: реестр расписаний планировщика.
  *
- * Хранится одним JSON-файлом `{dataDir}/schedules.json` (AD-005, атомарная
- * запись tmp→rename). Модель PG-ready (AD-032): плоские записи со стабильным
+ * Хранится одним JSON-файлом `{dataDir}/schedules.json` (ADR-005, атомарная
+ * запись tmp→rename). Модель PG-ready (PROP-032): плоские записи со стабильным
  * `id` и `schemaVersion`.
  */
 export class ScheduleStore {
@@ -123,7 +123,7 @@ export class ScheduleStore {
   }
 
   /**
-   * AD-051/AD-089: есть ли включённое расписание, нацеленное на сессию
+   * ADR-051/ADR-089: есть ли включённое расписание, нацеленное на сессию
    * (`target.mode !== 'ephemeral'` и совпадающий `target.sessionId`). Ephemeral-
    * цели сессию не адресуют (создают разовую), поэтому не учитываются.
    * Используется оркестратором: при `true` в системный промпт добавляется

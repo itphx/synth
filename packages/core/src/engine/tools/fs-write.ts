@@ -83,7 +83,7 @@ export const writeFileTool: ToolDefinition = {
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
 
-    // AD-036: деобфускация в точке потребления — контент может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — контент может содержать ⟦SYNTH_SECRET_N⟧
     const content = await deobfuscateText(ctx, params.content);
 
     const dir = dirname(resolvedPath);
@@ -125,7 +125,7 @@ export const editFileTool: ToolDefinition = {
     validateInputPath(params.file_path, 'file_path');
     const resolvedPath = resolvePath(params.file_path, ctx.workingDir);
 
-    // AD-036: деобфускация в точке потребления — текст патча может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — текст патча может содержать ⟦SYNTH_SECRET_N⟧
     const oldString = await deobfuscateText(ctx, params.old_string);
     const newString = await deobfuscateText(ctx, params.new_string);
 

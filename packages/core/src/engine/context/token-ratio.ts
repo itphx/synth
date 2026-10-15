@@ -1,8 +1,8 @@
 /**
- * AD-071 §2.6: оценка токенов по символам и калибровка chars-per-token.
+ * ADR-071 §2.6: оценка токенов по символам и калибровка chars-per-token.
  *
  * `estTokens` в манифесте/toolsDetail/MCP — оценка: `ceil(chars / ratio)`, где
- * `ratio` — chars-per-token. Дефолт `4` (эвристика AD-070). После успешного
+ * `ratio` — chars-per-token. Дефолт `4` (эвристика ADR-070). После успешного
  * ответа LLM фактический `usage.inputTokens` позволяет уточнить `ratio` для
  * модели: `ratio = promptChars / usage.inputTokens`.
  *

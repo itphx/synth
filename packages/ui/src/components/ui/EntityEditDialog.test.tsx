@@ -207,7 +207,7 @@ describe('EntityEditDialog', () => {
   })
 
   // Регресс: Cancel в EntityEditDialog должен быть активен всегда (в отличие от
-  // общего правила AD-072 «Save/Cancel активны только при dirty») и просто
+  // общего правила ADR-072 «Save/Cancel активны только при dirty») и просто
   // закрывать окно без сохранения.
   it('Cancel активен при отсутствии изменений и закрывает окно без запроса API', async () => {
     await renderDialog()

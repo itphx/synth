@@ -2,7 +2,7 @@ import { normalize, resolve, isAbsolute, sep } from 'node:path';
 import type { SkillInvocation, SkillMeta } from '@itphx/synth-shared';
 
 /**
- * AD-046 §6.1: `invocation` из двух совместимых флагов.
+ * ADR-046 §6.1: `invocation` из двух совместимых флагов.
  */
 export function computeInvocation(
   userInvocable: boolean,
@@ -20,7 +20,7 @@ export function isModelInvocable(invocation: SkillInvocation): boolean {
 }
 
 /**
- * AD-046 §6.2: binding — `agents`/`groups` пусты = все. Непустой binding
+ * ADR-046 §6.2: binding — `agents`/`groups` пусты = все. Непустой binding
  * матчится по id агента и его группам.
  */
 export function matchesBinding(
@@ -42,7 +42,7 @@ export function matchesBinding(
 }
 
 /**
- * AD-046 §3.2/§12: полный набор требуемых capabilities — `requires_capabilities`
+ * ADR-046 §3.2/§12: полный набор требуемых capabilities — `requires_capabilities`
  * ∪ expand(`requires_toolsets` через `config.skills.toolsets`).
  */
 export function expandRequiredCapabilities(
@@ -57,7 +57,7 @@ export function expandRequiredCapabilities(
 }
 
 /**
- * AD-046 §6.3: не хватает ли агенту требуемых capabilities. Возвращает список
+ * ADR-046 §6.3: не хватает ли агенту требуемых capabilities. Возвращает список
  * отсутствующих (пусто — доступен). `requires_toolsets` экспандится через
  * `config.skills.toolsets` в capabilities перед проверкой.
  */
@@ -73,7 +73,7 @@ export function missingCapabilities(
 }
 
 /**
- * AD-046 §4.5: opt-out по имени, категории или группе — общий помощник для
+ * ADR-046 §4.5: opt-out по имени, категории или группе — общий помощник для
  * сессионного и системного гейтов.
  */
 export function isDisabledInList(
@@ -89,7 +89,7 @@ export function isDisabledInList(
   return false;
 }
 
-/** AD-046 §4.5: per-session opt-out по имени, категории или группе. */
+/** ADR-046 §4.5: per-session opt-out по имени, категории или группе. */
 export function isDisabledBySession(
   meta: Pick<SkillMeta, 'name' | 'category' | 'groups'>,
   sessionDisabled: readonly string[] | undefined,
@@ -98,7 +98,7 @@ export function isDisabledBySession(
 }
 
 /**
- * AD-046 §4.5: системный hard-gate — скилл отключён, если совпал по имени,
+ * ADR-046 §4.5: системный hard-gate — скилл отключён, если совпал по имени,
  * категории или группе в любой из трёх осей конфигурации.
  */
 export function isDisabledBySystem(
@@ -117,7 +117,7 @@ export function isDisabledBySystem(
 export type SkillDisabledReason = 'system' | 'project' | 'session';
 
 /**
- * AD-046 §4.5: эффективная доступность скилла по scope (без I/O). Единая
+ * ADR-046 §4.5: эффективная доступность скилла по scope (без I/O). Единая
  * семантика для каталога, API скоупа и тула `skill`:
  * `systemOn && projectOn && !sessionOff && (seed || sessionOn)`.
  * Причина (приоритет): `system` → `project` → `session`.
@@ -138,7 +138,7 @@ export function resolveSkillAvailability(
   return { enabled: true };
 }
 
-/** AD-046 §4.4: каталог проекта доверен, если он явно перечислен. */
+/** ADR-046 §4.4: каталог проекта доверен, если он явно перечислен. */
 export function isProjectWorkspaceTrusted(
   projectWorkspace: string,
   trustedProjectDirs: readonly string[],

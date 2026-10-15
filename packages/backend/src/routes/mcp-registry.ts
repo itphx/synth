@@ -9,7 +9,7 @@ import { sessionMcpScopeSchema, hasServiceScope } from '@itphx/synth-shared';
 import { mcpServerConfigSchema } from '@itphx/synth-shared/config';
 import { requireAdminOrScope, requireScopeForServiceKey } from '../auth/guards.js';
 
-// Backend-only MCP-роуты (AD-071 §2.5): legacy `/servers*`, `/session/:id` и
+// Backend-only MCP-роуты (ADR-071 §2.5): legacy `/servers*`, `/session/:id` и
 // единый реестр `/registry*`. Probe (`POST /probe`) — общая логика core,
 // монтируется в `routes/mcp.ts` ПЕРЕД этим роутером.
 
@@ -20,7 +20,7 @@ const addServerSchema = z.object({
 
 const updateServerSchema = mcpServerConfigSchema;
 
-// AD-071 §2.5: единый реестр MCP-серверов.
+// ADR-071 §2.5: единый реестр MCP-серверов.
 const registryAddSchema = z.object({
   name: z.string().min(1).max(200),
   config: mcpServerConfigSchema,
@@ -40,12 +40,12 @@ const registryUpdateSchema = z.object({
 });
 
 export interface McpRoutesOptions {
-  /** AD-071 §2.5: единый реестр MCP-серверов (источник истины для `/servers` и `/registry`). */
+  /** ADR-071 §2.5: единый реестр MCP-серверов (источник истины для `/servers` и `/registry`). */
   registry: McpRegistryStore;
-  /** AD-071 §2.3.1: политика сетевого доступа HTTP-серверов. */
+  /** ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов. */
   networkPolicy?: McpNetworkPolicy;
   /**
-   * AD-071 §2.3.1: динамический источник политики (runtime-настройка из админки).
+   * ADR-071 §2.3.1: динамический источник политики (runtime-настройка из админки).
    * Приоритетнее статической `networkPolicy`; читается на каждый запрос.
    */
   getNetworkPolicy?: () => McpNetworkPolicy | undefined;
@@ -81,7 +81,7 @@ export function createMcpRegistryRoutes(
     (c.get('user') as User | undefined) ?? null;
 
   /**
-   * AD-052/O1: запрос от installer-service-key (scope `addons:install`).
+   * ADR-052/O1: запрос от installer-service-key (scope `addons:install`).
    * Даёт scoped-ключу без роли ADMIN создавать **instance**-записи реестра
    * (общие для инстанса, а не персональные) и обновлять созданные им записи.
    */
@@ -94,7 +94,7 @@ export function createMcpRegistryRoutes(
     config: McpServerConfig,
     origin: 'instance' | 'user',
   ): Promise<{ code: string; message: string } | null> => {
-    // AD-071 §2.3.1: политика — для пользовательских HTTP-серверов; instance
+    // ADR-071 §2.3.1: политика — для пользовательских HTTP-серверов; instance
     // (в т.ч. приватные сети инстанса) доверенные.
     if (origin !== 'user' || config.type === 'stdio' || !config.url) return null;
     const policy = resolveNetworkPolicy();
@@ -105,7 +105,7 @@ export function createMcpRegistryRoutes(
   };
 
   // ---------------------------------------------------------------------------
-  // Legacy `/servers*` — тонкие адаптеры над единым реестром (AD-071 §2.5).
+  // Legacy `/servers*` — тонкие адаптеры над единым реестром (ADR-071 §2.5).
   // Второго хранилища (config.yaml) больше нет: источник истины — McpRegistryStore.
   // ---------------------------------------------------------------------------
 
@@ -326,7 +326,7 @@ export function createMcpRegistryRoutes(
     });
   }
 
-  // --- Единый реестр MCP-серверов (AD-071 §2.5) ---
+  // --- Единый реестр MCP-серверов (ADR-071 §2.5) ---
 
   // Список записей реестра (auth).
   app.get('/registry', kit.requireAuth, async (c) => {
@@ -335,7 +335,7 @@ export function createMcpRegistryRoutes(
   });
 
   // Добавить запись (auth): HTTP — любой пользователь, stdio — только ADMIN.
-  // AD-052/O1: service-key должен нести scope `addons:install` (интерактив без
+  // ADR-052/O1: service-key должен нести scope `addons:install` (интерактив без
   // изменений — HTTP добавляет любой, stdio-проверка ниже). Installer-ключ со
   // scope создаёт instance-записи (общие для инстанса) без роли ADMIN.
   app.post('/registry', kit.requireAuth, requireScopeForServiceKey('addons:install'), async (c) => {
@@ -347,7 +347,7 @@ export function createMcpRegistryRoutes(
 
     const { name, config, enabled, enabledByDefault, origin } = parsed.data;
     const admin = kit.isAdmin(c);
-    // AD-052/O1: installer-ключ (scope `addons:install`) создаёт instance-записи
+    // ADR-052/O1: installer-ключ (scope `addons:install`) создаёт instance-записи
     // даже без роли ADMIN — это общие записи инстанса (а не персональные).
     const isInstaller = isInstallerKey(c);
 

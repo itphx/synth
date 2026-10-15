@@ -1,4 +1,4 @@
-// AD-089 (P0): авторизация project-aware FS-роутов `/api/v2/fs/*`. До фикса
+// ADR-089 (P0): авторизация project-aware FS-роутов `/api/v2/fs/*`. До фикса
 // `getProjectWorkspace` резолвил workspace по `project_id` без проверки прав —
 // любой USER мог читать и записывать файлы чужого проекта (IDOR). Теперь
 // `authorizeProject` (чтение — canRead, мутации — canEditContent) обязателен.
@@ -12,7 +12,7 @@ import type { BackendAppHandle } from '../app.js';
 const ADMIN_KEY = 'admin-key-123';
 const USER_KEY = 'user-key-456';
 
-describe('AD-089 (P0): авторизация /api/v2/fs (IDOR, backend)', () => {
+describe('ADR-089 (P0): авторизация /api/v2/fs (IDOR, backend)', () => {
   let dataDir: string;
   let backend: BackendAppHandle;
   let adminProject: string;

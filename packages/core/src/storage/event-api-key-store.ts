@@ -5,7 +5,7 @@ import type { EventBindingApiKey, EventBindingApiKeyCreated } from '@itphx/synth
 import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
 import type { EventKeyCredential } from '../engine/events/credential.js';
 
-/** AD-089/AD-052: версия схемы файла API-ключей привязок (для миграции AD-032). */
+/** ADR-089/ADR-052: версия схемы файла API-ключей привязок (для миграции PROP-032). */
 export const EVENT_API_KEYS_SCHEMA_VERSION = 1;
 
 export interface EventApiKeyStoreConfig {
@@ -34,7 +34,7 @@ export interface UpdateEventApiKeyPatch {
 }
 
 /**
- * AD-089/AD-052: конфликт метки API-ключа привязки — метка неуникальна
+ * ADR-089/ADR-052: конфликт метки API-ключа привязки — метка неуникальна
  * (регистронезависимо) в пределах инстанса. Роуты маппят в 409 CONFLICT.
  */
 export class EventApiKeyConflictError extends Error {
@@ -78,12 +78,12 @@ function hashSecret(secret: string): string {
 }
 
 /**
- * AD-089/AD-052: реестр API-ключей привязок для аутентификации приёма событий.
+ * ADR-089/ADR-052: реестр API-ключей привязок для аутентификации приёма событий.
  *
- * Хранится одним JSON-файлом `{dataDir}/events/api-keys.json` (AD-005,
+ * Хранится одним JSON-файлом `{dataDir}/events/api-keys.json` (ADR-005,
  * атомарная запись tmp→rename). Plaintext-секрет не сохраняется — только
  * `sha256`-хеш; секрет возвращается единственный раз в `create`. Модель PG-ready
- * (AD-032): плоские записи со стабильным `id` и `schemaVersion`.
+ * (PROP-032): плоские записи со стабильным `id` и `schemaVersion`.
  */
 export class EventApiKeyStore {
   private _lock = new AsyncLock();
@@ -298,7 +298,7 @@ export class EventApiKeyStore {
   }
 
   /**
-   * Мягкий отзыв ключа (AD-052 — задел): проставляет `revokedAt` = now, после
+   * Мягкий отзыв ключа (ADR-052 — задел): проставляет `revokedAt` = now, после
    * чего `resolveBySecret` больше не резолвит ключ. Идемпотентно: повторный
    * вызов для уже отозванного ключа — `true` без смены даты. Возвращает `false`,
    * если ключа в этой привязке нет.
@@ -323,7 +323,7 @@ export class EventApiKeyStore {
    * Резолвит секрет: sha256 + поиск записи. Неверный/неизвестный секрет,
    * отозванный (`revokedAt`) или истёкший (`expiresAt` в прошлом) — `null`.
    * Возвращает публичные метаданные ключа и контекст машинной аутентификации
-   * (`EventKeyCredential`, задел AD-052).
+   * (`EventKeyCredential`, задел ADR-052).
    */
   async resolveBySecret(
     rawSecret: string,
@@ -334,7 +334,7 @@ export class EventApiKeyStore {
     const record = file.keys.find((k) => k.hash === hash);
     if (!record) return null;
 
-    // AD-089/AD-052: отозванный/истёкший ключ недействителен.
+    // ADR-089/ADR-052: отозванный/истёкший ключ недействителен.
     if (record.revokedAt) return null;
     if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) return null;
 
@@ -344,7 +344,7 @@ export class EventApiKeyStore {
       credential: {
         keyId: key.id,
         bindingId: key.bindingId,
-        // AD-089: владелец ключа (создатель) — атрибуция создаваемых сессий.
+        // ADR-089: владелец ключа (создатель) — атрибуция создаваемых сессий.
         ...(key.createdBy ? { ownerId: key.createdBy } : {}),
         ...(key.rateLimitPerMinute !== undefined
           ? { rateLimitPerMinute: key.rateLimitPerMinute }

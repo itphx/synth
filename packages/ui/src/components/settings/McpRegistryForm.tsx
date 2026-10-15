@@ -19,7 +19,7 @@ export interface McpRegistryFormProps {
   onNameChange: (value: string) => void
   config: McpServerConfig
   onConfigChange: (patch: Partial<McpServerConfig>) => void
-  /** Разрешить тип stdio (только ADMIN, AD-071 §2.5). */
+  /** Разрешить тип stdio (только ADMIN, ADR-071 §2.5). */
   allowStdio: boolean
   saving: boolean
   onSave: () => void
@@ -60,7 +60,7 @@ export function parseArgs(value: string): string[] {
 }
 
 /**
- * AD-071 §2.5 / AD-072: общая форма записи реестра MCP (имя, описание, тип,
+ * ADR-071 §2.5 / ADR-072: общая форма записи реестра MCP (имя, описание, тип,
  * URL/команда/аргументы/env, действия). Используется админской и
  * пользовательской панелями; различия — через `allowStdio`/`extraFields`.
  */

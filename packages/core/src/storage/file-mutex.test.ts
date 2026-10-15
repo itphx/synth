@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileMutex } from './file-mutex.js';
 
-describe('FileMutex (AD-051/AD-089)', () => {
+describe('FileMutex (ADR-051/ADR-089)', () => {
   let tmpDir: string;
   let lockPath: string;
 

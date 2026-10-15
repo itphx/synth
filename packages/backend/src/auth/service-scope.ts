@@ -4,7 +4,7 @@ import type { ProjectGuard, ScopeGuardFactory } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 
 /**
- * AD-052 (этап I): backend-обёртки scope-гейтов service-key.
+ * ADR-052 (этап I): backend-обёртки scope-гейтов service-key.
  *
  * Enforcement (`hasServiceScope`/`isProjectAllowed`) остаётся в core —
  * здесь только локализация отказов (`SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`)

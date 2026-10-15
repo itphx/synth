@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.8: режим/план/todo — durable chronological-сообщения истории, а не
+ * ADR-070 §2.8: режим/план/todo — durable chronological-сообщения истории, а не
  * блоки system prompt. Сообщение в хранилище имеет `role: system`,
  * `metadata: { type, state: true }` и скрыто только в UI; в LLM-запрос оно
  * отдаётся как синтетическое user-сообщение с обёрткой
@@ -19,7 +19,7 @@ import { renderTodosMarkdown } from '../tools/todo.js';
 
 export type StateMessageType = 'mode_change' | 'plan_updated' | 'todos_updated' | 'agent_switch';
 
-/** AD-070 §2.9.1: недоступный тул и причина — режим, роль, зависимость окружения или отсутствие workspace. */
+/** ADR-070 §2.9.1: недоступный тул и причина — режим, роль, зависимость окружения или отсутствие workspace. */
 export interface UnavailableTool {
   name: string;
   reason: 'mode' | 'role' | 'dependency' | 'workspace';
@@ -50,7 +50,7 @@ export function createStateMessage(type: StateMessageType, content: string): Mes
 }
 
 /**
- * AD-070 §2.9.1: компактная секция недоступных сейчас тулов с причиной и
+ * ADR-070 §2.9.1: компактная секция недоступных сейчас тулов с причиной и
  * подсказкой. Одна строка на тул; пустой список → '' (секции нет).
  */
 export function renderUnavailableTools(tools: UnavailableTool[], language: string): string {
@@ -58,7 +58,7 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
   const en = language === 'en';
   const header = en ? '[UNAVAILABLE TOOLS]' : '[НЕДОСТУПНЫЕ ТУЛЫ]';
   const lines: string[] = [];
-  // AD-075: все file/shell/git-тулы без workspace схлопываются в одну строку —
+  // ADR-075: все file/shell/git-тулы без workspace схлопываются в одну строку —
   // их десятки, перечислять имена бессмысленно и шумно.
   if (tools.some((t) => t.reason === 'workspace')) {
     lines.push(en
@@ -90,11 +90,11 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
 }
 
 /**
- * AD-025/AD-028: текст смены режима — промпт текущего режима (plan/act/yolo) и
+ * ADR-025/ADR-028: текст смены режима — промпт текущего режима (plan/act/yolo) и
  * строгость цикла Plan→Build. Раньше это были блоки `mode.prompt`/
  * `plan.strictness` в system prompt.
  *
- * AD-070 §2.9.1: дополнительно перечисляет недоступные сейчас тулы с причиной
+ * ADR-070 §2.9.1: дополнительно перечисляет недоступные сейчас тулы с причиной
  * (`mode` → предложить переключение, `role` → делегировать через `@`).
  */
 export function buildModeChangeContent(
@@ -114,7 +114,7 @@ export function buildModeChangeContent(
 }
 
 /**
- * AD-070 §2.8/§2.9.1: текст переключения агента — активный агент и
+ * ADR-070 §2.8/§2.9.1: текст переключения агента — активный агент и
  * недоступные ему по роли тулы (причина `role`), которые можно делегировать
  * через `@`.
  */
@@ -132,13 +132,13 @@ export function buildAgentSwitchContent(
   return [header, activeLine, section].filter((part) => part !== '').join('\n');
 }
 
-/** AD-039: актуальное состояние плана проекта (`[APPROVED PLAN]` + markdown). */
+/** ADR-039: актуальное состояние плана проекта (`[APPROVED PLAN]` + markdown). */
 export function buildPlanUpdatedContent(plan: ProjectPlan | null | undefined): string {
   if (!plan || plan.items.length === 0) return '';
   return `[APPROVED PLAN]\n${renderPlanMarkdown(plan)}`;
 }
 
-/** AD-039: актуальный список todo сессии (`[TODO]` + markdown). Пустой → ''. */
+/** ADR-039: актуальный список todo сессии (`[TODO]` + markdown). Пустой → ''. */
 export function buildTodosUpdatedContent(todos: TodoItem[] | null | undefined): string {
   const markdown = renderTodosMarkdown(todos ?? []);
   return markdown ? `[TODO]\n${markdown}` : '';
@@ -149,9 +149,9 @@ export interface SyncStateMessagesDeps {
   language?: string;
   /** Актуальный план проекта (`project.plan`) — источник `plan_updated`. */
   plan?: ProjectPlan | null;
-  /** AD-070 §2.8: активный агент — источник `agent_switch` (если задан). */
+  /** ADR-070 §2.8: активный агент — источник `agent_switch` (если задан). */
   agentRole?: string;
-  /** AD-070 §2.9.1: недоступные сейчас тулы (причина `mode`/`role`). */
+  /** ADR-070 §2.9.1: недоступные сейчас тулы (причина `mode`/`role`). */
   unavailableTools?: UnavailableTool[];
 }
 

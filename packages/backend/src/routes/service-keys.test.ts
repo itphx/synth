@@ -1,4 +1,4 @@
-// AD-052 (этап I): service-key на backend — сквозной срез через createBackendApp.
+// ADR-052 (этап I): service-key на backend — сквозной срез через createBackendApp.
 // Проверяем: аутентификацию по `synth_svc_…` (success/revoked/expired/unknown → 401),
 // managed-RBAC CRUD (USER → 403, ADMIN → 200), scope-гейт (`requireScope` → 403
 // SCOPE_REQUIRED), проектную проекцию (`allowedProjects` на sessions/bindings/schedules
@@ -13,7 +13,7 @@ import type { BackendAppHandle } from '../app.js';
 const ADMIN_KEY = 'admin-key-123';
 const USER_KEY = 'user-key-456';
 
-describe('AD-052 (этап I): service-key на backend', () => {
+describe('ADR-052 (этап I): service-key на backend', () => {
   let dataDir: string;
   let backend: BackendAppHandle;
 

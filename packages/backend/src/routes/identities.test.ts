@@ -1,4 +1,4 @@
-// AD-089 (claim-flow): идентичности на backend — сквозной срез через createBackendApp.
+// ADR-089 (claim-flow): идентичности на backend — сквозной срез через createBackendApp.
 // Регресс: `user.id` (debug/OIDC) ≠ `profile.id` (профили хранятся под
 // сгенерированным id и ищутся по username). Раньше роут подставлял `user.id` в
 // `loadProfile`/`linkIdentity`, профиль не находился, и `POST /me/identities/claim`
@@ -22,7 +22,7 @@ const jsonInit = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
-describe('AD-089 (claim-flow): идентичности на backend (user.id ≠ profile.id)', () => {
+describe('ADR-089 (claim-flow): идентичности на backend (user.id ≠ profile.id)', () => {
   let rootDir: string;
   let backend: BackendAppHandle;
 

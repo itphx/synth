@@ -75,7 +75,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('ProfileSettings — миграция на Settings UI Kit (AD-072)', () => {
+describe('ProfileSettings — миграция на Settings UI Kit (ADR-072)', () => {
   it('каркас — SettingsPanel с единственным scroll-контейнером и без pr-2', async () => {
     const container = await renderSettings()
 
@@ -109,7 +109,7 @@ describe('ProfileSettings — миграция на Settings UI Kit (AD-072)', (
 
     const save = container.querySelector('[data-testid="profile-save"]') as HTMLButtonElement
     expect(save).not.toBeNull()
-    // AD-072: без несохранённых изменений Save неактивен.
+    // ADR-072: без несохранённых изменений Save неактивен.
     expect(save.disabled).toBe(true)
 
     const displayName = container.querySelector('#profile-display-name') as HTMLInputElement
@@ -212,7 +212,7 @@ describe('ProfileSettings — миграция на Settings UI Kit (AD-072)', (
   })
 })
 
-describe('ProfileSettings — идентичности (AD-089)', () => {
+describe('ProfileSettings — идентичности (ADR-089)', () => {
   it('пустое состояние при отсутствии идентичностей', async () => {
     const container = await renderSettings()
 
@@ -295,7 +295,7 @@ describe('ProfileSettings — идентичности (AD-089)', () => {
     expect(container.textContent).toContain('boom')
   })
 
-  // --- AD-089 (claim-flow): форма подтверждения по коду ---
+  // --- ADR-089 (claim-flow): форма подтверждения по коду ---
 
   /** Вводит код в claim-поле (нативный сеттер React). */
   const typeCode = async (container: HTMLElement, code: string) => {

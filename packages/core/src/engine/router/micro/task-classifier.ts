@@ -1,5 +1,5 @@
 /**
- * TaskClassifier — классифицирует запрос в один из четырёх классов (AD-035).
+ * TaskClassifier — классифицирует запрос в один из четырёх классов (ADR-035).
  * small_talk | classify | enum_decision | llm_task
  *
  * Реализация: правила + ключевые слова через DictionaryStore.

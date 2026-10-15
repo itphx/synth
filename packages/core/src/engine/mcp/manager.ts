@@ -22,22 +22,22 @@ interface ServerEntry {
 export class McpManager {
   private _servers = new Map<string, ServerEntry>();
   private _config: Record<string, McpServerConfig> = {};
-  /** AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (если задана). */
+  /** ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов (если задана). */
   private _networkPolicy: McpNetworkPolicy | undefined;
-  /** AD-071 §2.5: origin серверов; сетевая политика применяется только к `user`. */
+  /** ADR-071 §2.5: origin серверов; сетевая политика применяется только к `user`. */
   private _serverOrigins = new Map<string, McpRegistryOrigin>();
-  /** AD-071 §2.5: trust записей реестра (builtin|community) для отображения. */
+  /** ADR-071 §2.5: trust записей реестра (builtin|community) для отображения. */
   private _serverTrusts = new Map<string, McpRegistryTrust>();
-  /** AD-071 §2.5: авторы записей реестра (имя → автор) для отображения. */
+  /** ADR-071 §2.5: авторы записей реестра (имя → автор) для отображения. */
   private _serverAuthors = new Map<string, McpRegistryAuthor>();
   /**
-   * AD-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`).
+   * ADR-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`).
    * Переосмыслено: сид для НОВЫХ ПРОЕКТОВ. `null` — явный набор не задан, берётся
    * из `config.enabledByDefault`.
    */
   private _defaultServers: Set<string> | null = null;
   /**
-   * AD-071 §2.4: системный мастер-флаг серверов (реестр `enabled`). `null` — не
+   * ADR-071 §2.4: системный мастер-флаг серверов (реестр `enabled`). `null` — не
    * задан (реестр не подключён); `config.enabled` — лишь сид записи реестра, не гейт.
    */
   private _serverSystemEnabled: Map<string, boolean> | null = null;
@@ -50,22 +50,22 @@ export class McpManager {
     return this._config;
   }
 
-  /** AD-071 §2.3.1: задать политику сетевого доступа (undefined — не проверять). */
+  /** ADR-071 §2.3.1: задать политику сетевого доступа (undefined — не проверять). */
   setNetworkPolicy(policy: McpNetworkPolicy | undefined): void {
     this._networkPolicy = policy;
   }
 
-  /** AD-071 §2.5: origin серверов (instance — доверенные, user — community). */
+  /** ADR-071 §2.5: origin серверов (instance — доверенные, user — community). */
   setServerOrigins(origins: Record<string, McpRegistryOrigin>): void {
     this._serverOrigins = new Map(Object.entries(origins));
   }
 
-  /** AD-071 §2.5: origin одного сервера (по умолчанию `instance` — config). */
+  /** ADR-071 §2.5: origin одного сервера (по умолчанию `instance` — config). */
   getServerOrigin(name: string): McpRegistryOrigin {
     return this._serverOrigins.get(name) ?? 'instance';
   }
 
-  /** AD-071 §2.5: trust записей реестра (по умолчанию `builtin`). */
+  /** ADR-071 §2.5: trust записей реестра (по умолчанию `builtin`). */
   setServerTrusts(trusts: Record<string, McpRegistryTrust>): void {
     this._serverTrusts = new Map(Object.entries(trusts));
   }
@@ -74,18 +74,18 @@ export class McpManager {
     return this._serverTrusts.get(name) ?? 'builtin';
   }
 
-  /** AD-071 §2.5: авторы записей реестра (для таблицы «MCP» в статистике). */
+  /** ADR-071 §2.5: авторы записей реестра (для таблицы «MCP» в статистике). */
   setServerAuthors(authors: Record<string, McpRegistryAuthor>): void {
     this._serverAuthors = new Map(Object.entries(authors));
   }
 
-  /** AD-071 §2.5: автор сервера (null — instance/config без автора). */
+  /** ADR-071 §2.5: автор сервера (null — instance/config без автора). */
   getServerAuthor(name: string): McpRegistryAuthor | null {
     return this._serverAuthors.get(name) ?? null;
   }
 
   /**
-   * AD-071 §2.4: instance default-on набор (`enabledByDefault` из реестра).
+   * ADR-071 §2.4: instance default-on набор (`enabledByDefault` из реестра).
    * Если не задан явно — деривируется из `config.enabledByDefault`.
    */
   setDefaultServers(names: string[]): void {
@@ -98,7 +98,7 @@ export class McpManager {
   }
 
   /**
-   * AD-071 §2.4: системный мастер-флаг сервера — только реестровое `enabled`.
+   * ADR-071 §2.4: системный мастер-флаг сервера — только реестровое `enabled`.
    * Не задан (реестр не подключён) — считаем сервер включённым; `config.enabled`
    * — лишь сид записи реестра (`seedFromConfig`), не гейт.
    */
@@ -111,7 +111,7 @@ export class McpManager {
   }
 
   /**
-   * AD-071 §2.3.1: проверка пользовательского (`origin: 'user'`) HTTP-сервера по
+   * ADR-071 §2.3.1: проверка пользовательского (`origin: 'user'`) HTTP-сервера по
    * сетевой политике перед подключением. `stdio` и instance-серверы не
    * проверяются (RCE-риск и приватные сети инстанса регулируются иначе).
    */
@@ -149,18 +149,18 @@ export class McpManager {
     return entry.client.tools;
   }
 
-  /** AD-071 §2.2: `instructions` подключённого сервера (undefined, если нет). */
+  /** ADR-071 §2.2: `instructions` подключённого сервера (undefined, если нет). */
   getServerInstructions(name: string): string | undefined {
     return this._servers.get(name)?.client.instructions;
   }
 
-  /** AD-071 §2.2: описание сервера из конфига (заполняется человеком). */
+  /** ADR-071 §2.2: описание сервера из конфига (заполняется человеком). */
   getServerDescription(name: string): string | undefined {
     return this._config[name]?.description;
   }
 
   /**
-   * AD-071 §2.2: статус подключения сервера для volatile-блока `mcp.status`.
+   * ADR-071 §2.2: статус подключения сервера для volatile-блока `mcp.status`.
    * `disabled` (opt-out/конфиг) определяется вызывающей стороной — менеджер
    * знает только транспортное состояние. Возвращает:
    * - `circuit-open` — сервер заблокирован circuit breaker'ом;
@@ -263,7 +263,7 @@ export class McpManager {
 
       const existing = toolRegistry.get(fullName);
       if (existing) {
-        // AD-071 §2.1: инструмент этого же сервера уже зарегистрирован (ленивая
+        // ADR-071 §2.1: инструмент этого же сервера уже зарегистрирован (ленивая
         // регистрация при первой активации) — повторный вызов идемпотентен, не
         // теряем имя для deregister. Коллизия с чужим тулом — пропускаем.
         if ((existing.source ?? 'builtin') === 'mcp' && existing.mcpServer === serverName) {
@@ -286,7 +286,7 @@ export class McpManager {
           // Контекст Synth-сессии для внешнего MCP-сервера: `_meta['synth/session_id']`
           // (не путать с transport session id Streamable HTTP). Без сессии — без `_meta`.
           const meta = ctx.sessionId ? { 'synth/session_id': ctx.sessionId } : undefined;
-          // AD-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧
+          // ADR-036: деобфускация в точке потребления — аргументы могут содержать ⟦SYNTH_SECRET_N⟧
           const sessionManager = ctx.extra?.sessionManager as SessionManager | undefined;
           if (sessionManager) {
             const store = new ObfuscationMapStore(sessionManager);
@@ -416,7 +416,7 @@ export class McpManager {
       return { content: `MCP-сервер "${serverName}" не подключён`, isError: true };
     }
 
-    // TODO(AD-036): здесь нет sessionId — деобфускация аргументов невозможна.
+    // TODO(ADR-036): здесь нет sessionId — деобфускация аргументов невозможна.
     // В основном цикле MCP-тулы вызываются через registerTools() → mcpToolDef.execute(),
     // где деобфускация выполняется на основе ctx.extra.sessionManager.
     return entry.client.callTool(toolName, args);

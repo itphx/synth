@@ -12,7 +12,7 @@ export type ListFieldVariant = 'list' | 'chips'
 export interface ListFieldProps {
   label: string
   description?: string
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   values: string[]
   onChange: (next: string[]) => void
@@ -30,7 +30,7 @@ const INPUT_CLASSES =
   'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
 /**
- * AD-072: унификация редакторов списка строк (`StringListEditor`, чипы, паттерны).
+ * ADR-072: унификация редакторов списка строк (`StringListEditor`, чипы, паттерны).
  * Не переполняет контейнер: `min-w-0`/`flex-wrap`, кнопки `shrink-0`.
  */
 export function ListField({

@@ -25,7 +25,7 @@ const NO_PROTECTED: ProtectedPathsPolicy = {
   deniedCommandPrefixes: [],
 };
 
-describe('FS workspace-root routes (AD-075)', () => {
+describe('FS workspace-root routes (ADR-075)', () => {
   let tmpDir: string;
   let workspacesRoot: string;
   let outsideDir: string;
@@ -145,7 +145,7 @@ describe('FS workspace-root routes (AD-075)', () => {
     expect((await stat(join(workspacesRoot, 'new-proj'))).isDirectory()).toBe(true);
   });
 
-  it('регрессия (AD-075): mkdir внутри относительного root → 201, а не 409', async () => {
+  it('регрессия (ADR-075): mkdir внутри относительного root → 201, а не 409', async () => {
     // Относительный root, как при SYNTH_DATA_DIR=tmp/... — до фикса containment
     // сравнивал относительный root с абсолютным target и давал 409.
     const relRoot = relative(process.cwd(), workspacesRoot);
@@ -160,7 +160,7 @@ describe('FS workspace-root routes (AD-075)', () => {
     expect((await stat(join(workspacesRoot, 'rel-sub'))).isDirectory()).toBe(true);
   });
 
-  it('регрессия (AD-075): относительный root + traversal `..` при deny → 403', async () => {
+  it('регрессия (ADR-075): относительный root + traversal `..` при deny → 403', async () => {
     const relRoot = relative(process.cwd(), workspacesRoot);
     const res = await makeApp('deny', NO_PROTECTED, relRoot)
       .request('/api/v2/fs/workspace-root/browse?path=..');
@@ -169,7 +169,7 @@ describe('FS workspace-root routes (AD-075)', () => {
     expect(body.error.code).toBe('WORKSPACE_OUTSIDE_ROOT_DENIED');
   });
 
-  it('регрессия (AD-075): относительный root + абсолютный путь вне root при deny → 403', async () => {
+  it('регрессия (ADR-075): относительный root + абсолютный путь вне root при deny → 403', async () => {
     const relRoot = relative(process.cwd(), workspacesRoot);
     const res = await makeApp('deny', NO_PROTECTED, relRoot).request(
       `/api/v2/fs/workspace-root/browse?path=${encodeURIComponent(outsideDir)}`,
@@ -292,7 +292,7 @@ describe('FS workspace-root routes (AD-075)', () => {
   });
 });
 
-describe('FS project-aware routes (AD-075: managed/standalone)', () => {
+describe('FS project-aware routes (ADR-075: managed/standalone)', () => {
   let tmpDir: string;
   let workspacesRoot: string;
   let outsideDir: string;

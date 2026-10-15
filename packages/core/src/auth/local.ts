@@ -67,7 +67,7 @@ function buildCookie(value: string, maxAge: number): string {
 export interface LocalAuthConfig {
   apiKey: string;
   /**
-   * AD-052 (этап I): резолвер service-key (`synth_svc_…`) → синтетический
+   * ADR-052 (этап I): резолвер service-key (`synth_svc_…`) → синтетический
    * пользователь + контекст (roles/scopes/allowedProjects). Не задан — приём
    * по service-key недоступен. Интерактивные креды (api-key/cookie) не
    * затрагиваются.
@@ -204,7 +204,7 @@ export function createLocalAuth(config: LocalAuthConfig): LocalAuthKit {
   };
 
   const requireAuth = createMiddleware(async (c, next) => {
-    // AD-052 (этап I): service-key — машинный доступ со scopes/проектной
+    // ADR-052 (этап I): service-key — машинный доступ со scopes/проектной
     // проекцией. Распознаётся по префиксу секрета `synth_svc_`; резолвер
     // асинхронный, поэтому ветка живёт в middleware, а не в sync `getCurrentUser`.
     const token = extractBearerToken(c.req.header('Authorization'));

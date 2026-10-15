@@ -78,7 +78,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('SessionsPanel — миграция на Settings UI Kit (AD-072)', () => {
+describe('SessionsPanel — миграция на Settings UI Kit (ADR-072)', () => {
   it('каркас — SettingsPanel: один скролл, без pr-2, заголовок и actions-refresh', async () => {
     const container = await renderPanel()
 

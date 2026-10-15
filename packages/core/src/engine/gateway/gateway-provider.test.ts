@@ -1,5 +1,5 @@
 /**
- * Интеграционные юнит-тесты GatewayProvider (AD-036) — декоратор над BaseProvider.
+ * Интеграционные юнит-тесты GatewayProvider (ADR-036) — декоратор над BaseProvider.
  * Мок BaseProvider со статическими capture-перехватчиками (паттерн
  * security/integration.test.ts — MockIPIProvider).
  */
@@ -24,7 +24,7 @@ class MockCaptureProvider extends BaseProvider {
   static capturedSystemPrompt: string | null = null;
   static capturedTools: Record<string, unknown>[] | null = null;
   static responseContent = 'ok';
-  /** AD-084: decision-путь. */
+  /** ADR-084: decision-путь. */
   static decideCalls = 0;
   static capturedState: unknown = null;
 
@@ -69,7 +69,7 @@ class MockCaptureProvider extends BaseProvider {
     return 'mockgw2';
   }
 
-  /** AD-084: decision-путь — фиксируем state, отдаём типизированный ответ. */
+  /** ADR-084: decision-путь — фиксируем state, отдаём типизированный ответ. */
   async decide(state: unknown): Promise<import('@itphx/synth-shared').DecisionResponse> {
     MockCaptureProvider.decideCalls++;
     MockCaptureProvider.capturedState = state;
@@ -105,7 +105,7 @@ function makeMessage(content: string): LLMMessage {
   };
 }
 
-describe('GatewayProvider (AD-036)', () => {
+describe('GatewayProvider (ADR-036)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

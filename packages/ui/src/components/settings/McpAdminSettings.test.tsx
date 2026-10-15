@@ -112,7 +112,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('McpAdminSettings — только MCP (AD-071 §2.5/§2.6)', () => {
+describe('McpAdminSettings — только MCP (ADR-071 §2.5/§2.6)', () => {
   it('рендерит реестр MCP, но не секцию встроенных инструментов', async () => {
     const container = await renderSettings()
     expect(container.querySelector('[data-testid="mcp-registry-list"]')).not.toBeNull()

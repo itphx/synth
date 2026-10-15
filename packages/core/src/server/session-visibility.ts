@@ -2,7 +2,7 @@ import type { Project, Session } from '@itphx/synth-shared';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 
 /**
- * AD-089: контекст проверки видимости сессии. `elevated` — сквозной обзор
+ * ADR-089: контекст проверки видимости сессии. `elevated` — сквозной обзор
  * (managed: ADMIN/LEAD; standalone не задаётся).
  */
 export interface SessionOwnerCtx {
@@ -13,7 +13,7 @@ export interface SessionOwnerCtx {
 }
 
 /**
- * AD-089: загрузка проекта с опциональным кэшем на время одного вызова списка.
+ * ADR-089: загрузка проекта с опциональным кэшем на время одного вызова списка.
  * Кэш передаётся вызывающей стороной (`Map`) и НЕ живёт на уровне модуля —
  * проекты меняются. Для одиночных проверок кэш не нужен.
  */
@@ -29,7 +29,7 @@ async function loadProject(
 }
 
 /**
- * AD-089: видимость сессии в списке.
+ * ADR-089: видимость сессии в списке.
  *
  * Правила (в порядке проверки):
  * 1. `elevated` (ADMIN/LEAD) — видно всё;

@@ -23,7 +23,7 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     branch_point: session.branchPoint || null,
     plan_approved: session.planApproved ?? false,
     mode: session.mode || 'act',
-    /** AD-025: применим ли переключатель режимов к агенту сессии (по capabilities). */
+    /** ADR-025: применим ли переключатель режимов к агенту сессии (по capabilities). */
     mode_applicable: isModeApplicable(agent),
     todos: session.todos || null,
     session_origin: session.sessionOrigin,
@@ -48,7 +48,7 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
       cancel_requested_at: session.status.cancelRequestedAt || null,
     },
     settings: session.settings,
-    /** AD-070 §2.4: состояние промпта per-agent (generation/hash/prefix). */
+    /** ADR-070 §2.4: состояние промпта per-agent (generation/hash/prefix). */
     prompt_states: session.promptStates ?? null,
     sticky_notes: session.stickyNotes.map((n) => ({
       id: n.id,
@@ -101,7 +101,7 @@ export function serializeMessage(msg: Message, index: number) {
     disabled: msg.disabled,
     pinned: msg.pinned,
     hidden: msg.hidden,
-    /** AD-046 §7.1: локальный ответ `/`-команды — вне LLM-контекста. */
+    /** ADR-046 §7.1: локальный ответ `/`-команды — вне LLM-контекста. */
     ephemeral: msg.ephemeral ?? false,
     agent_role: msg.agentRole || null,
     model: msg.model || null,
@@ -109,7 +109,7 @@ export function serializeMessage(msg: Message, index: number) {
     provider_type: msg.providerType || null,
     reasoning: msg.reasoning || null,
     debug_data: msg.debugData || null,
-    /** AD-070 §2.4: предсказание/валидация prompt-cache для хода. */
+    /** ADR-070 §2.4: предсказание/валидация prompt-cache для хода. */
     prompt_meta: msg.promptMeta ?? null,
     summary_of: msg.summaryOf || null,
     usage: msg.usage
@@ -144,7 +144,7 @@ export function serializeProject(project: Project) {
     color: project.color || null,
     workspace: project.workspace || null,
     repos: project.repos || null,
-    /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+    /** ADR-071 §2.4: проектный скоуп MCP (owner/lead). */
     mcp: project.mcp ?? null,
     status_messages: (project.statusMessages || []).map((sm: StatusMessage) => ({
       id: sm.id,

@@ -24,7 +24,7 @@ function mk(name: string, meta: Partial<SkillMeta> = {}): DiscoveredSkill {
   };
 }
 
-describe('buildSkillCatalog — гейты системы/проекта/сессии (AD-046 §4.5)', () => {
+describe('buildSkillCatalog — гейты системы/проекта/сессии (ADR-046 §4.5)', () => {
   it('opt-in: без снапшота и включения скилл недоступен', () => {
     const cat = buildSkillCatalog([mk('a')], { defaultOn: [] });
     expect(cat.stable).toEqual([]);

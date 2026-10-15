@@ -55,7 +55,7 @@ export function createSessionRoutes(
   /** Агент по умолчанию для новых сессий без `settings.agentRole` (runtime-настройка). */
   resolveDefaultAgent?: () => string | Promise<string>,
   /**
-   * AD-089: единый funnel создания сессий (прокидывается в core-фабрику).
+   * ADR-089: единый funnel создания сессий (прокидывается в core-фабрику).
    * Не задан — core-фабрика использует прямой `SessionManager.createSession`.
    */
   requestSessionService?: RequestSessionService,
@@ -63,12 +63,12 @@ export function createSessionRoutes(
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
 
-  // AD-071 §2.4: владелец сессии — обычный пользователь, управляющий её MCP-скоупом.
+  // ADR-071 §2.4: владелец сессии — обычный пользователь, управляющий её MCP-скоупом.
   const isSessionOwner = (session: Session, userId: string): boolean =>
     (session.ownerId ?? session.userId) === userId;
 
   /**
-   * AD-089 / безопасность: доступ к сессии по id для backend-only роутов
+   * ADR-089 / безопасность: доступ к сессии по id для backend-only роутов
    * (export/notes/optimization/debug-system-message). Единое правило —
    * `isSessionVisible` из core: elevated (ADMIN/LEAD) → всё; владелец → да;
    * сессия без владельца → да; иначе сессия проекта видна её owner/участникам
@@ -95,7 +95,7 @@ export function createSessionRoutes(
     );
   };
 
-  /** AD-071 §2.4: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
+  /** ADR-071 §2.4: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
   const buildSessionMcpPayload = async (session: Session) => {
     const servers = await orchestrator.resolveMcpServers(session);
     return {
@@ -107,7 +107,7 @@ export function createSessionRoutes(
     };
   };
 
-  // GET /api/v2/sessions/:id/mcp — эффективный MCP-скоуп (AD-071 §2.4).
+  // GET /api/v2/sessions/:id/mcp — эффективный MCP-скоуп (ADR-071 §2.4).
   // Показывает все серверы, включая отключённые (reason). RBAC: владелец сессии/ADMIN.
   app.get('/:id/mcp', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
@@ -121,7 +121,7 @@ export function createSessionRoutes(
     return c.json(await buildSessionMcpPayload(session));
   });
 
-  // PUT /api/v2/sessions/:id/mcp — переключение MCP пользователем (AD-071 §2.4),
+  // PUT /api/v2/sessions/:id/mcp — переключение MCP пользователем (ADR-071 §2.4),
   // включая opt-out системных серверов. RBAC: владелец сессии/ADMIN.
   app.put('/:id/mcp', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
@@ -175,7 +175,7 @@ export function createSessionRoutes(
     return c.json(await buildSessionMcpPayload(session));
   });
 
-  // GET /api/v2/sessions/:id/secrets — карта обфускации LLM Gateway (AD-036).
+  // GET /api/v2/sessions/:id/secrets — карта обфускации LLM Gateway (ADR-036).
   // RBAC: только ADMIN/AUDITOR — сама карта является секретом.
   app.get('/:id/secrets', kit.requirePermission('ADMIN', 'AUDITOR'), async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
@@ -189,7 +189,7 @@ export function createSessionRoutes(
   // мирами (publish/fork). Внутренний формат: объект Session (camelCase) из
   // SessionManager — история сообщений, todos, настройки, заметки, ссылки,
   // чекпоинты, план-флаг и карта обфускации. Не публичный DTO.
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.get('/:id/export', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -203,7 +203,7 @@ export function createSessionRoutes(
   // POST /api/v2/sessions/import — создать сессию из экспорта другой сессии
   // (перенос истории между мирами). Тело: объект экспорта + import.project_id
   // (целевой проект; если не задан — берётся из экспорта). LLM не запускается.
-  // AD-089: это materialization-операция (создание-как-факт переноса истории),
+  // ADR-089: это materialization-операция (создание-как-факт переноса истории),
   // а не request — идёт прямым `createSession`, минуя funnel `session.requested`.
   app.post('/import', kit.requireAuth, async (c) => {
     const user = (await kit.getCurrentUser(c))!;
@@ -225,7 +225,7 @@ export function createSessionRoutes(
       }
     }
 
-    // AD-089: materialization (перенос истории), не request — прямой createSession.
+    // ADR-089: materialization (перенос истории), не request — прямой createSession.
     const session = await sessionManager.createSession({
       title: typeof body.title === 'string' ? body.title : undefined,
       projectId: targetProjectId,
@@ -292,7 +292,7 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/debug-system-message — отправить отладочное системное сообщение
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.post('/:id/debug-system-message', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -329,7 +329,7 @@ export function createSessionRoutes(
   });
 
   // GET /api/v2/sessions/:id/optimization — настройки оптимизации
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.get('/:id/optimization', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -353,7 +353,7 @@ export function createSessionRoutes(
   });
 
   // PATCH /api/v2/sessions/:id/optimization — обновить настройки
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.patch('/:id/optimization', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -383,7 +383,7 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/optimization/check — проверить триггеры
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.post('/:id/optimization/check', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -407,7 +407,7 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/optimization/cancel-summarization — отменить ожидающую суммаризацию
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.post('/:id/optimization/cancel-summarization', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -437,7 +437,7 @@ export function createSessionRoutes(
   // ===== Sticky Notes =====
 
   // GET /api/v2/sessions/:id/notes — список заметок
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.get('/:id/notes', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -450,7 +450,7 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/notes — создать заметку
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.post('/:id/notes', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -484,7 +484,7 @@ export function createSessionRoutes(
   });
 
   // PATCH /api/v2/sessions/:id/notes/:noteId — обновить заметку
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.patch('/:id/notes/:noteId', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -512,7 +512,7 @@ export function createSessionRoutes(
   });
 
   // DELETE /api/v2/sessions/:id/notes/:noteId — удалить заметку
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (AD-089).
+  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
   app.delete('/:id/notes/:noteId', kit.requireAuth, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
@@ -543,20 +543,20 @@ export function createSessionRoutes(
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,
       forkWithOwner: true,
       canAccess: (session, c, userId) => isSessionOwner(session, userId) || kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]),
-      // AD-089: сквозной обзор сессий для ADMIN/LEAD. Вызовы `kit.isAdmin`/`hasRole`
+      // ADR-089: сквозной обзор сессий для ADMIN/LEAD. Вызовы `kit.isAdmin`/`hasRole`
       // защищены `typeof` — у мок-AuthKit в тестах они могут отсутствовать.
       resolveElevated: (c) => {
         const isAdmin = typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]);
         const isLead = typeof kit.hasRole === 'function' && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD');
         return isAdmin || isLead;
       },
-      // AD-089: проекты-участия пользователя — проектные сессии видны участникам.
+      // ADR-089: проекты-участия пользователя — проектные сессии видны участникам.
       resolveMemberProjectIds: async (_c, userId) => {
         if (!projectStore) return [];
         const projects = await projectStore.list(userId);
         return projects.map((p) => p.id);
       },
-      // AD-089: доступ по id — участник проекта сессии (owner/член), не только владелец.
+      // ADR-089: доступ по id — участник проекта сессии (owner/член), не только владелец.
       resolveCanAccessExtra: async (session, _c, userId) => {
         if (!projectStore || !session.projectId) return false;
         const project = await projectStore.load(session.projectId);
@@ -573,7 +573,7 @@ export function createSessionRoutes(
       promptMiddleware: [createRateLimiter(30, 60_000)],
       enableSessionEvents: false,
       resolveDefaultAgent,
-      // AD-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
+      // ADR-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
       scopeGuard,
       projectGuard,
       messages: {

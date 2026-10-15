@@ -45,7 +45,7 @@ function scheduleGitRefresh(projectId: string) {
   }, GIT_REFRESH_DEBOUNCE_MS))
 }
 
-/** AD-070 §2.6: usage live-события (camelCase из ядра) → snake_case стора. */
+/** ADR-070 §2.6: usage live-события (camelCase из ядра) → snake_case стора. */
 function mapUsage(raw: unknown): {
   input_tokens: number
   output_tokens: number
@@ -66,7 +66,7 @@ function mapUsage(raw: unknown): {
   }
 }
 
-/** AD-070 §2.6: cost_breakdown live-события уже в camelCase — как в сторе. */
+/** ADR-070 §2.6: cost_breakdown live-события уже в camelCase — как в сторе. */
 function mapCostBreakdown(raw: unknown): CostBreakdown | undefined {
   if (!raw || typeof raw !== 'object') return undefined
   return raw as CostBreakdown
@@ -165,7 +165,7 @@ export function createDispatcher(): EventDispatcher {
           created_at: new Date().toISOString(),
         }
         addMessage(sid, msg)
-        // AD-070 §2.6: финальное сообщение дочернего саб-агента несёт usage —
+        // ADR-070 §2.6: финальное сообщение дочернего саб-агента несёт usage —
         // подстраховка к stream.ended: снимаем usage-only live-плейсхолдер, чтобы
         // после сохранения сообщения панель показывала его итоговую статистику.
         if (usage) clearUsageStream(sid)
@@ -245,7 +245,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // AD-070 §2.6: live-статистика стрима (кумулятивный usage, cost, model).
+      // ADR-070 §2.6: live-статистика стрима (кумулятивный usage, cost, model).
       // Публикуется в родительскую сессию основного стрима и в дочернюю сессию
       // саб-агента (sid = childSessionId) — общий механизм streamingBySession.
       case 'stream_usage':
@@ -280,7 +280,7 @@ export function createDispatcher(): EventDispatcher {
           metadata: payload.metadata as { type?: string; indices?: number[]; [key: string]: unknown } | undefined,
           reasoning_blocks: (payload.reasoning_blocks as Array<{ text: string; iteration: number }>) || undefined,
           intermediate_text_blocks: (payload.intermediate_text_blocks as Array<{ text: string; iteration: number }>) || undefined,
-          // AD-070 §2.6: top-level финальная статистика — в metadata оптимистичного
+          // ADR-070 §2.6: top-level финальная статистика — в metadata оптимистичного
           // сообщения, чтобы панель показала финал без перезагрузки.
           provider: payload.provider as string | undefined,
           duration_ms: payload.duration_ms as number | undefined,
@@ -302,7 +302,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // AD-070 §2.6: терминальное live-событие дочерней сессии саб-агента
+      // ADR-070 §2.6: терминальное live-событие дочерней сессии саб-агента
       // (task.ts). Сообщение ребёнка сохраняется отдельно, поэтому здесь только
       // снимаем usage-only StreamState — без создания/дубля сообщений.
       case 'stream_ended':
@@ -313,7 +313,7 @@ export function createDispatcher(): EventDispatcher {
 
       case 'stream_cancelled':
       case 'stream.cancelled': {
-        // AD-070 §2.6: событие отмены несёт usage/cost/usage_estimated —
+        // ADR-070 §2.6: событие отмены несёт usage/cost/usage_estimated —
         // сохраняем их в финализируемом сообщении, а не игнорируем.
         cancelStream(
           sid,
@@ -440,7 +440,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // AD-069 §9.3: проектные инструкции загружены (initial/lazy) — обновляем
+      // ADR-069 §9.3: проектные инструкции загружены (initial/lazy) — обновляем
       // снимок прозрачности для индикатора в правой панели.
       case 'context.instructions_loaded': {
         void useInstructionsStore.getState().load(sid)
@@ -463,7 +463,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // AD-040: сессия перенесена между проектами (PATCH /sessions/:id или
+      // ADR-040: сессия перенесена между проектами (PATCH /sessions/:id или
       // project_create/project_attach от агента). Локально патчим project_id,
       // догружаем сессию (план/workspace/plan_approved сброшены), перечитываем
       // список проектов (новый проект может отсутствовать в сторе) и дерево Files.
@@ -480,7 +480,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // План утверждён (AD-039): план живёт в проекте (project.plan), событие
+      // План утверждён (ADR-039): план живёт в проекте (project.plan), событие
       // plan.approved несёт только session_id/project_id — достаточно полного
       // refresh сессии (план проекта рендерится во вкладке «Проект» отдельно).
       case 'plan.approved':
@@ -489,7 +489,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // AD-089: внешнее событие материализовано в сессию (ingress). Данные
+      // ADR-089: внешнее событие материализовано в сессию (ingress). Данные
       // сессии могли измениться — полный refresh; сами изменения приходят
       // отдельными событиями очереди/сообщений.
       case 'event.routed': {
@@ -528,8 +528,8 @@ export function createDispatcher(): EventDispatcher {
       }
 
       // Проект изменён тулами (project_update/workspace_set/repo_*): перечитываем
-      // список проектов с сервера и синхронизируем Git-вкладку (AD-076) и дерево
-      // Files (AD-075: смена workspace меняет содержимое).
+      // список проектов с сервера и синхронизируем Git-вкладку (ADR-076) и дерево
+      // Files (ADR-075: смена workspace меняет содержимое).
       case 'project.updated': {
         const projectId = payload.project_id as string | undefined
         if (projectId) void useFilesStore.getState().refreshProject(projectId)
@@ -659,7 +659,7 @@ export function createDispatcher(): EventDispatcher {
             iteration: (payload.iteration as number) || 0,
           },
         )
-        // AD-070 §2.6: live-вклад саб-агента (для строки статистики в блоке
+        // ADR-070 §2.6: live-вклад саб-агента (для строки статистики в блоке
         // `task` и секции StatsTab). Событие несёт накопленный usage вызова.
         if (parentCallId) {
           updateLiveSubagentUsage(sid, parentCallId, {
@@ -784,7 +784,7 @@ export function createDispatcher(): EventDispatcher {
         break
       }
 
-      // AD-046 §8.2: вызовы скиллов/команд — счётчики и последний вызов (часть b).
+      // ADR-046 §8.2: вызовы скиллов/команд — счётчики и последний вызов (часть b).
       case 'skill.invoked': {
         useSkillsStore.getState().recordSkillInvoked({
           sessionId: sid,
@@ -846,7 +846,7 @@ export const useTransportStore = create<TransportState>()((set, get) => ({
 
     // Идемпотентность: к тому же эффективному транспорту уже подключаемся или
     // подключены. Раньше это пересоздавало клиент и закрывало CONNECTING-сокет
-    // (auto→ws + сохранённый prefs ws = один и тот же транспорт — см. AD-024).
+    // (auto→ws + сохранённый prefs ws = один и тот же транспорт — см. ADR-024).
     if (transport && transport.getTransport() === actualMode && activeKind === actualMode) {
       console.debug('[TransportStore] connect skipped (already', actualMode, ')')
       return

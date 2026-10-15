@@ -6,7 +6,7 @@ import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 /**
- * Онбординг-интервью (AD-083): агент сохраняет ответы пользователя в профиль
+ * Онбординг-интервью (PROP-083): агент сохраняет ответы пользователя в профиль
  * через этот тул. Резолв профиля повторяет `ContextBuilder._resolveProfile`
  * (id → username → создание), завершение помечается полем
  * `ProfileData.interviewCompleted` (см. `context/builder.ts`).

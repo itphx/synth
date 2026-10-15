@@ -24,7 +24,7 @@ import { resolveSshEnvById } from '../../engine/tools/git-ssh.js';
 import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
 
 /**
- * AD-076 §T3: git-роуты ядра (`/api/v2/git`). Единая реализация для core
+ * ADR-076 §T3: git-роуты ядра (`/api/v2/git`). Единая реализация для core
  * (standalone) и backend (managed, T4 — через `writeGuard`/`authorizeProject`).
  */
 
@@ -175,7 +175,7 @@ export function createGitRoutes(
   ): Promise<{ env?: Record<string, string>; cleanup?: () => Promise<void> }> {
     const res = await resolveSshEnvById(opts.sshKeyStore, sshKeyId);
     if (res.error === 'sshkey.env_failed') {
-      // AD-041: наружу — i18n-ключ, не сырой текст ошибки.
+      // ADR-041: наружу — i18n-ключ, не сырой текст ошибки.
       throw { error: 'sshkey.env_failed', code: 'VALIDATION_ERROR' } satisfies RouteError;
     }
     if (res.error) {

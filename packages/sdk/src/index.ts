@@ -1,5 +1,5 @@
 /**
- * @itphx/synth-sdk — типизированный клиент публичного API Synth (AD-052).
+ * @itphx/synth-sdk — типизированный клиент публичного API Synth (ADR-052).
  *
  * @example
  * ```ts

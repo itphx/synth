@@ -11,7 +11,7 @@ export interface EventJournalPrunerOptions {
 const DEFAULT_INTERVAL_MS = 6 * 3600_000;
 
 /**
- * AD-089: периодическая retention-очистка журнала событий.
+ * ADR-089: периодическая retention-очистка журнала событий.
  *
  * Сразу при старте выполняет `prune`, затем повторяет его каждые `intervalMs`
  * (по умолчанию 6 ч; таймер `unref`, не держит процесс). Если `retentionDays <= 0`

@@ -79,7 +79,7 @@ interface MessageCost {
 /**
  * Стоимость сообщения: по цене модели (в её валюте), иначе — из
  * `metadata.cost_usd` (`metadata.cost_currency`, по умолчанию USD —
- * обратная совместимость со старыми данными) (AD-070 §2.6).
+ * обратная совместимость со старыми данными) (ADR-070 §2.6).
  */
 function messageCost(msg: Message, getModelPricing?: SessionStatsDeps['getModelPricing']): MessageCost {
   if (getModelPricing && msg.usage && msg.model) {
@@ -300,7 +300,7 @@ function buildUserStats(
 }
 
 /**
- * AD-070 §2.6: статистика сессии для `GET /api/v2/sessions/:id/stats`.
+ * ADR-070 §2.6: статистика сессии для `GET /api/v2/sessions/:id/stats`.
  *
  * - `agents` — агрегация по `agent_role` сообщений сессии; usage суммируется,
  *   `cost_usd` — по цене модели каждого сообщения, `cache_hit_rate` —

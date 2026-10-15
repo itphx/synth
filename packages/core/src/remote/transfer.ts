@@ -18,7 +18,7 @@ export const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.synth']);
 
 /**
  * Преобразовать имя проекта в безопасное относительное имя workspace.
- * AD-075: единая реализация — `slugifyWorkspaceName` (shared); имя сохранено
+ * ADR-075: единая реализация — `slugifyWorkspaceName` (shared); имя сохранено
  * для обратной совместимости публичного экспорта `remote/index.ts`.
  */
 export const slugify = slugifyWorkspaceName;
@@ -418,7 +418,7 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
     workspace: workspaceRel,
     repos: Array.isArray(remote.repos) ? (remote.repos as Project['repos']) : undefined,
   });
-  // Переносим контентные поля проекта: план (AD-039), лог, инварианты, текущую задачу.
+  // Переносим контентные поля проекта: план (ADR-039), лог, инварианты, текущую задачу.
   if (remote.plan && typeof remote.plan === 'object') localProject.plan = remote.plan as Project['plan'];
   if (Array.isArray(remote.log)) localProject.log = remote.log as Project['log'];
   if (typeof remote.current_task === 'string') localProject.currentTask = remote.current_task;
@@ -473,7 +473,7 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
     for (const id of orderedIds) {
       const exportData = exports.get(id)!;
 
-      // AD-089: materialization (перенос истории publish/fork), не request —
+      // ADR-089: materialization (перенос истории publish/fork), не request —
       // прямой `createSession`; funnel применяется только к явному созданию.
       const session = await localSessionManager.createSession({
         title: typeof exportData.title === 'string' ? exportData.title : undefined,

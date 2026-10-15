@@ -37,10 +37,10 @@ interface RegistryFile {
 }
 
 /**
- * AD-071 §2.5: единый реестр MCP-серверов.
+ * ADR-071 §2.5: единый реестр MCP-серверов.
  *
- * Хранится одним JSON-файлом `{dataDir}/mcp/registry.json` (AD-005, атомарная
- * запись tmp→rename). Логическая модель PG-ready (AD-032): плоские записи со
+ * Хранится одним JSON-файлом `{dataDir}/mcp/registry.json` (ADR-005, атомарная
+ * запись tmp→rename). Логическая модель PG-ready (PROP-032): плоские записи со
  * стабильным `id`, `schemaVersion`, timestamps; instance/пользовательские
  * записи различаются полем `origin`.
  *
@@ -65,7 +65,7 @@ export class McpRegistryStore {
       }
       return {
         schemaVersion: parsed.schemaVersion ?? MCP_REGISTRY_SCHEMA_VERSION,
-        // AD-071 §2.4: нормализация legacy-записей (без `enabled` — мастер включён).
+        // ADR-071 §2.4: нормализация legacy-записей (без `enabled` — мастер включён).
         entries: parsed.entries.map((e) => ({
           ...e,
           enabled: e.enabled !== false,
@@ -242,7 +242,7 @@ export class McpRegistryStore {
     return map;
   }
 
-  /** AD-071 §2.5: карта авторов для `McpManager.setServerAuthors` (имя → автор). */
+  /** ADR-071 §2.5: карта авторов для `McpManager.setServerAuthors` (имя → автор). */
   async toAuthorMap(): Promise<Record<string, McpRegistryAuthor>> {
     const entries = await this.list();
     const map: Record<string, McpRegistryAuthor> = {};
@@ -253,7 +253,7 @@ export class McpRegistryStore {
   }
 
   /**
-   * AD-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`)
+   * ADR-071 §2.4: instance-серверы, включённые по умолчанию (`enabledByDefault`)
    * для `McpManager.setDefaultServers`. Пользовательские записи не входят.
    */
   async toDefaultServers(): Promise<string[]> {
@@ -264,7 +264,7 @@ export class McpRegistryStore {
   }
 
   /**
-   * AD-071 §2.5: все карты для `McpManager` за одно чтение реестра (вместо
+   * ADR-071 §2.5: все карты для `McpManager` за одно чтение реестра (вместо
    * пяти независимых `list()` — readFile+parse+sort на каждую мутацию).
    */
   async toManagerMaps(): Promise<{

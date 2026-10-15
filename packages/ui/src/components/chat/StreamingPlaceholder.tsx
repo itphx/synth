@@ -185,7 +185,7 @@ export function StreamingPlaceholder({ stream, onStop, retry, onRetryNow, onCanc
     stream.toolCalls || [],
   )
 
-  // AD-070 §2.6: live-статистика стрима (токены/стоимость/кэш) — содержимое
+  // ADR-070 §2.6: live-статистика стрима (токены/стоимость/кэш) — содержимое
   // поповера кнопки «Статистика»; тот же билдер сегментов, что у MessageStats.
   // Оценка помечается `~`.
   const liveSegments = buildUsageSegments(

@@ -28,7 +28,7 @@ const INFO: InstructionsInfo = {
 
 let fetchMock: ReturnType<typeof vi.fn>
 
-describe('synthApi — проектные инструкции (AD-069 §9.3)', () => {
+describe('synthApi — проектные инструкции (ADR-069 §9.3)', () => {
   beforeEach(() => {
     fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

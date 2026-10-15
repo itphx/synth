@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 /**
- * AD-051/AD-089: источник дедупа событий по стабильному `dedupKey`.
+ * ADR-051/ADR-089: источник дедупа событий по стабильному `dedupKey`.
  *
  * `EventRouter` не решает сам, что считать дубликатом, а спрашивает у store.
  * Атомарность `tryClaim` — контракт реализации: два конкурентных вызова с одним
@@ -17,7 +17,7 @@ export interface DedupStore {
 }
 
 /**
- * In-process реализация дедупа (текущее поведение AD-089): `Set` ключей.
+ * In-process реализация дедупа (текущее поведение ADR-089): `Set` ключей.
  * Дефолт: single-process, межпроцессной атомарности нет.
  */
 export class MemoryDedupStore implements DedupStore {

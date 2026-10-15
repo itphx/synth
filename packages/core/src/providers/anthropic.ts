@@ -17,11 +17,11 @@ import { ProviderError, ContextLengthExceededError, RateLimitError } from './exc
 
 const ANTHROPIC_API_VERSION = '2023-06-01';
 
-/** AD-070 §2.2: бюджет cache_control breakpoint'ов на запрос. */
+/** ADR-070 §2.2: бюджет cache_control breakpoint'ов на запрос. */
 const MAX_CACHE_BREAKPOINTS = 4;
 
 /**
- * AD-071 §2.1: индекс инструмента для tools-брейкпоинта.
+ * ADR-071 §2.1: индекс инструмента для tools-брейкпоинта.
  *  - `stableToolCount` не задан → последний инструмент (обратная совместимость);
  *  - `stableToolCount <= 0` → -1 (встроенных нет, MCP не кэшируем);
  *  - иначе → последний встроенный (`min(count, length) - 1`).
@@ -363,7 +363,7 @@ export class AnthropicProvider extends BaseProvider {
             } catch (e) {
               // Ошибка API, пришедшая data-чанком ({code,message} / type:error),
               // должна дойти до оркестратора, а не превратиться в пустой ответ
-              // (AD-041). Невалидный JSON по-прежнему пропускаем.
+              // (ADR-041). Невалидный JSON по-прежнему пропускаем.
               if (e instanceof ProviderError) throw e;
               continue;
             }
@@ -371,7 +371,7 @@ export class AnthropicProvider extends BaseProvider {
         }
       } catch (e) {
         // Ошибка API (ProviderError) должна дойти до оркестратора и не
-        // превратиться в пустой ответ (AD-041); прочие обрывы стрима логируем.
+        // превратиться в пустой ответ (ADR-041); прочие обрывы стрима логируем.
         if (e instanceof ProviderError) throw e;
         info('ANTHROPIC', `Стрим прерван: ${e}`);
       } finally {
@@ -490,7 +490,7 @@ export class AnthropicProvider extends BaseProvider {
    * отвечают HTTP 200 с телом-ошибкой вместо HTTP-статуса: в non-stream —
    * `{type:'error', error:{...}}`, в стриме — data-чанк `{code, message}`.
    * Без явной проверки такая ошибка проглатывается и превращается в пустой
-   * ответ модели (AD-041). Возвращает текст ошибки или null.
+   * ответ модели (ADR-041). Возвращает текст ошибки или null.
    */
   private _extractErrorPayload(data: Record<string, unknown>): string | null {
     if (data.type === 'error') {
@@ -529,7 +529,7 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   /**
-   * AD-070 §2.2: `body.system` — массив блоков. Если задан `stablePrefix` и он
+   * ADR-070 §2.2: `body.system` — массив блоков. Если задан `stablePrefix` и он
    * является префиксом текста, отдаём два блока: [stable, остаток] — граница
    * stable-префикса и конец system. Иначе — один блок.
    */
@@ -550,7 +550,7 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   /**
-   * AD-070 §2.2: расстановка `cache_control: {type:'ephemeral'}` после
+   * ADR-070 §2.2: расстановка `cache_control: {type:'ephemeral'}` после
    * нормализации. Приоритет tools → system → messages, бюджет ≤4 breakpoint'а;
    * лишние дропаются с предупреждением (запрос не падает 400).
    * `cachePolicy: 'none'` — ни одного маркера.
@@ -566,7 +566,7 @@ export class AnthropicProvider extends BaseProvider {
 
     const candidates: Array<{ label: string; apply: () => void }> = [];
 
-    // Приоритет 1: граница stable-слоя инструментов. AD-071 §2.1: встроенные
+    // Приоритет 1: граница stable-слоя инструментов. ADR-071 §2.1: встроенные
     // идут первыми, MCP — после границы (`stableToolCount`) и не кэшируются,
     // поэтому брейкпоинт ставим на последний встроенный. Если граница не задана
     // — прежнее поведение (последний tool). Если встроенных нет (0) — tools не
@@ -688,7 +688,7 @@ export class AnthropicProvider extends BaseProvider {
   }
 
   /**
-   * AD-070 §2.3: у Anthropic `input_tokens` — только некэшированная часть,
+   * ADR-070 §2.3: у Anthropic `input_tokens` — только некэшированная часть,
    * поэтому нормализованный `inputTokens = input_tokens + cacheRead + cacheWrite`.
    * `totalTokens` считается от нормализованного входа.
    */

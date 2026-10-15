@@ -8,7 +8,7 @@ import type { McpServerConfig } from '@itphx/synth-shared';
 const httpConfig = (url = 'https://mcp.example.com/mcp'): McpServerConfig => ({ type: 'sse', url });
 const stdioConfig = (): McpServerConfig => ({ type: 'stdio', command: 'node', args: ['server.js'] });
 
-describe('McpRegistryStore (AD-071 §2.5)', () => {
+describe('McpRegistryStore (ADR-071 §2.5)', () => {
   let store: McpRegistryStore;
   let tmpDir: string;
 

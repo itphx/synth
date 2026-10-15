@@ -124,7 +124,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('ToolsDisabledSettings — админский tools.disabled (AD-071 §2.6)', () => {
+describe('ToolsDisabledSettings — админский tools.disabled (ADR-071 §2.6)', () => {
   it('галочка = включён: по умолчанию все группы и тулы отмечены; runtime защищён', async () => {
     const container = await renderSettings()
 

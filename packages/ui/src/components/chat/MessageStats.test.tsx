@@ -276,7 +276,7 @@ describe('MessageStats', () => {
   })
 })
 
-describe('MessageStats — сабагенты (AD-070 §2.6)', () => {
+describe('MessageStats — сабагенты (ADR-070 §2.6)', () => {
   const subagents = {
     sessions: 2,
     input_tokens: 12_300,

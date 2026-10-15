@@ -22,11 +22,11 @@ export interface ProjectManageExtra {
   projectStore?: ProjectStoreContract;
   sessionId?: string;
   eventBus?: EventBus;
-  /** AD-075: корень managed-workspace для резолва относительного `workspace`. */
+  /** ADR-075: корень managed-workspace для резолва относительного `workspace`. */
   workspacesRoot?: string;
-  /** AD-075: managed-режим (backend) — строгая проверка пути workspace. */
+  /** ADR-075: managed-режим (backend) — строгая проверка пути workspace. */
   workspaceManaged?: boolean;
-  /** AD-075: политика абсолютного workspace вне `workspacesRoot`. */
+  /** ADR-075: политика абсолютного workspace вне `workspacesRoot`. */
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
 }
 
@@ -66,7 +66,7 @@ function workspaceErrorResult(code: string, message: string) {
 }
 
 /**
- * Привязывает сессию к проекту (AD-040): ставит projectId, сбрасывает
+ * Привязывает сессию к проекту (ADR-040): ставит projectId, сбрасывает
  * planApproved (план берётся от нового проекта) и публикует session.moved.
  */
 export async function attachSessionToProject(
@@ -171,7 +171,7 @@ export const projectCreateTool: ToolDefinition = {
 
     const ownerId = session.ownerId || session.userId || 'local';
 
-    // AD-075: нормализация + создание каталога workspace через общий provisioning
+    // ADR-075: нормализация + создание каталога workspace через общий provisioning
     // (та же политика/containment, что у HTTP-роута — обход политики закрыт).
     const resolved = await provisionWorkspace(
       extra.projectStore,
@@ -324,7 +324,7 @@ export const projectUpdateTool: ToolDefinition = {
     if (!project) {
       return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
     }
-    // AD-075/D5: менять проект вправе только владелец/редактор (до мутации).
+    // ADR-075/D5: менять проект вправе только владелец/редактор (до мутации).
     if (!canEditProject(session, project)) {
       return {
         content: sm('project.write_forbidden'),
@@ -389,7 +389,7 @@ export const projectWorkspaceSetTool: ToolDefinition = {
     if (!project) {
       return { content: sm('project.no_project'), isError: true, metadata: { i18n: i18nMeta('project.no_project') } };
     }
-    // AD-075/D5: смена workspace вправе только владелец/редактор (до мутации).
+    // ADR-075/D5: смена workspace вправе только владелец/редактор (до мутации).
     if (!canEditProject(session, project)) {
       return {
         content: sm('project.write_forbidden'),
@@ -473,7 +473,7 @@ export const projectLogWriteTool: ToolDefinition = {
     if (!project) {
       return { content: NO_PROJECT_LOG_ERROR, isError: true };
     }
-    // AD-075/D5: писать лог проекта вправе только владелец/редактор (до мутации).
+    // ADR-075/D5: писать лог проекта вправе только владелец/редактор (до мутации).
     if (!canEditProject(session, project)) {
       return {
         content: sm('project.write_forbidden'),
@@ -603,7 +603,7 @@ export const projectInvariantsWriteTool: ToolDefinition = {
     if (!project) {
       return { content: NO_PROJECT_INVARIANTS_ERROR, isError: true };
     }
-    // AD-075/D5: менять инварианты вправе только владелец/редактор (до мутации).
+    // ADR-075/D5: менять инварианты вправе только владелец/редактор (до мутации).
     if (!canEditProject(session, project)) {
       return {
         content: sm('project.write_forbidden'),

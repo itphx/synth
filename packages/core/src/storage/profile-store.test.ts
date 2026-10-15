@@ -158,7 +158,7 @@ describe('FileProfileStore interviewCompleted', () => {
   });
 });
 
-describe('FileProfileStore identities (AD-089)', () => {
+describe('FileProfileStore identities (ADR-089)', () => {
   let store: FileProfileStore;
   let tmpDir: string;
 

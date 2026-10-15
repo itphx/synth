@@ -1,5 +1,5 @@
 /**
- * Интерфейс микро-модели (AD-035).
+ * Интерфейс микро-модели (ADR-035).
  * Единый контракт для всех вариантов: rules, embedding, micro_llm.
  */
 import type { MicroInput, MicroModelKind, MicroResult, MicroTaskClass } from '../types.js';

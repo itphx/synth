@@ -9,7 +9,7 @@ import {
 import { i18nText } from '@/lib/i18n/text'
 
 interface McpStore {
-  /** AD-071 §2.5: единый реестр MCP-серверов (instance + пользовательские). */
+  /** ADR-071 §2.5: единый реестр MCP-серверов (instance + пользовательские). */
   registry: McpRegistryEntry[] | null
   loading: boolean
   error: string | null
@@ -19,14 +19,14 @@ interface McpStore {
   toolSettingsLoading: boolean
   toolSettingsError: string | null
 
-  // AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP
+  // ADR-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP
   networkPolicy: McpNetworkPolicy | null
   /** Серверный дефолт сетевой политики (для `isDefault`/Reset в UI). */
   networkPolicyDefaults: McpNetworkPolicy | null
   networkPolicyLoading: boolean
   networkPolicyError: string | null
 
-  // AD-071 §2.6: instance-wide жёсткое отключение инструментов администратором
+  // ADR-071 §2.6: instance-wide жёсткое отключение инструментов администратором
   toolsDisabled: ToolsDisabledConfig | null
   /** Серверный дефолт tools.disabled (для `isDefault`/Reset в UI). */
   toolsDisabledDefaults: ToolsDisabledConfig | null

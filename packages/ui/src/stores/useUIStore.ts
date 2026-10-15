@@ -140,7 +140,7 @@ interface UIStore {
   intermediateTextDisplay: 'inline' | 'bottom'
   setIntermediateTextDisplay: (mode: 'inline' | 'bottom') => void
 
-  /** AD-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
+  /** ADR-071 §2.6: сигнал изменения instance-wide `tools.disabled` — статистика
    *  и таблицы MCP перезапрашиваются без рестарта. Runtime, не персистится. */
   toolsDisabledTick: number
   bumpToolsDisabledTick: () => void
@@ -226,7 +226,7 @@ export const useUIStore = create<UIStore>()(
 
       leftPanelTab: 'projects',
       setLeftPanelTab: (tab) => set({ leftPanelTab: tab }),
-      // AD-071: дефолтная вкладка правой панели — «Контекст».
+      // ADR-071: дефолтная вкладка правой панели — «Контекст».
       rightPanelTab: 'context',
       setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
       collapsedProjects: new Set<string>(),

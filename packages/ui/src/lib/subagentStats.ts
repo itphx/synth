@@ -28,7 +28,7 @@ function numMap(value: unknown): Record<string, number> | undefined {
 }
 
 /**
- * AD-070 §2.6: per-message статистика сабагентов из `metadata.subagents`
+ * ADR-070 §2.6: per-message статистика сабагентов из `metadata.subagents`
  * финального assistant-сообщения (агрегат task-результатов этого хода).
  * Возвращает `undefined`, если сабагентов нет или структура невалидна.
  *

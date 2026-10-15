@@ -355,7 +355,7 @@ function applyPlanWrite(plan: ProjectPlan, params: PlanWriteInput): { error?: st
 /**
  * plan_write.
  *
- * AD-075/D5: запись плана — проектные данные, поэтому применяется тот же гейт
+ * ADR-075/D5: запись плана — проектные данные, поэтому применяется тот же гейт
  * `canEditProject` (владелец/редактор), что и к `project_log_write`/
  * `project_invariants_write`. `project.plan` в HTTP-RBAC отнесён к контентным
  * полям (`PUT /api/v2/projects/:id`); в core-standalone `plan_write` — основной
@@ -389,7 +389,7 @@ export const planWriteTool: ToolDefinition = {
     if (!project) {
       return { content: sm('plan.no_project'), isError: true, metadata: { i18n: i18nMeta('plan.no_project') } };
     }
-    // AD-075/D5: менять план вправе только владелец/редактор (до мутации).
+    // ADR-075/D5: менять план вправе только владелец/редактор (до мутации).
     if (!canEditProject(session, project)) {
       return {
         content: sm('project.write_forbidden'),

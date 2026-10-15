@@ -1,4 +1,4 @@
-// AD-052 (этап IV) / AD-089: сквозной срез SSE `GET /api/v2/events`.
+// ADR-052 (этап IV) / ADR-089: сквозной срез SSE `GET /api/v2/events`.
 // Машинный watcher (service-key со scope `events:watch`) должен получать события
 // сессий, созданных/владеемых ДРУГИМ пользователем (паритет со standalone-core
 // `subscribeAll`) — именно этого не хватало Telegram-шлюзу. Обычный USER видит
@@ -13,7 +13,7 @@ import type { BackendAppHandle } from '../app.js';
 const ADMIN_KEY = 'admin-key-123';
 const USER_KEY = 'user-key-456';
 
-describe('AD-052 (этап IV): SSE watch-all для service-key (backend)', () => {
+describe('ADR-052 (этап IV): SSE watch-all для service-key (backend)', () => {
   let dataDir: string;
   let backend: BackendAppHandle;
 

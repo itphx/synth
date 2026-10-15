@@ -1,5 +1,5 @@
 /**
- * Аудит LLM Gateway (AD-036): append-only JSONL, одна строка = одна запись.
+ * Аудит LLM Gateway (ADR-036): append-only JSONL, одна строка = одна запись.
  * Запись не должна ронять запрос: при ошибке — warning и продолжение.
  */
 
@@ -59,7 +59,7 @@ export class AuditLogger {
   }
 }
 
-/** Фильтры чтения JSONL-аудита (AD-036). */
+/** Фильтры чтения JSONL-аудита (ADR-036). */
 export interface AuditLogQuery {
   userId?: string;
   sessionId?: string;

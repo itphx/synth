@@ -106,7 +106,7 @@ function normalizeMeta(data: Record<string, unknown>): SkillMeta {
 }
 
 /**
- * AD-046 §3.2: парсинг и валидация `SKILL.md`.
+ * ADR-046 §3.2: парсинг и валидация `SKILL.md`.
  *
  * Обязательные поля — `name` (regex 1–64, совпадает с именем каталога) и
  * `description` (1–1024). Невалидный скилл не попадает в реестр, но проблема

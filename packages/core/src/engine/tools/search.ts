@@ -27,7 +27,7 @@ export const grepFilesTool: ToolDefinition = {
     if (params.path !== undefined) validateInputPath(params.path, 'path');
     const searchDir = resolvePath(params.path, ctx.workingDir);
 
-    // AD-036: деобфускация в точке потребления — паттерн может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — паттерн может содержать ⟦SYNTH_SECRET_N⟧
     const pattern = await deobfuscateText(ctx, params.pattern);
 
     try {

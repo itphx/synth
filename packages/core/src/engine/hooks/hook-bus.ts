@@ -1,18 +1,18 @@
 import type { HookContextMap, HookMode, HookName, HookResult } from '@itphx/synth-shared';
 
 /**
- * AD-030: таймаут fire-and-forget обработчиков хука (`emitAsync`). По истечении
+ * ADR-030: таймаут fire-and-forget обработчиков хука (`emitAsync`). По истечении
  * обработчик считается зависшим — логируется предупреждение, выполнение не
  * прерывается (обещание просто перестаёт ожидаться).
  */
 export const HOOK_ASYNC_TIMEOUT_MS = 5000;
 
-/** AD-030: обработчик хука — sync (последовательный) или async (fire-and-forget). */
+/** ADR-030: обработчик хука — sync (последовательный) или async (fire-and-forget). */
 export type HookHandler<N extends HookName> = (
   ctx: HookContextMap[N],
 ) => HookResult | void | Promise<HookResult | void>;
 
-/** AD-030: параметры регистрации обработчика в {@link HookBus}. */
+/** ADR-030: параметры регистрации обработчика в {@link HookBus}. */
 export interface HookRegistrationOptions {
   /**
    * Режим выполнения: `sync` (по умолчанию) — вызывается в `emit`,
@@ -29,7 +29,7 @@ export interface HookRegistrationOptions {
   builtin?: boolean;
 }
 
-/** AD-030: результат `emit`. */
+/** ADR-030: результат `emit`. */
 export interface HookEmitResult<N extends HookName> {
   blocked: boolean;
   reason?: string;
@@ -46,8 +46,8 @@ interface HookRegistration {
 }
 
 /**
- * HookBus — ядровый in-process примитив системы хуков (AD-030), фундамент для
- * внешних событий (AD-089). Семантика:
+ * HookBus — ядровый in-process примитив системы хуков (ADR-030), фундамент для
+ * внешних событий (ADR-089). Семантика:
  * - `emit` вызывает только sync-обработчики, последовательно по убыванию priority,
  *   и ожидает каждый; `{ block: true }` немедленно прерывает цепочку;
  * - `emitAsync` запускает только async-обработчики fire-and-forget с таймаутом;

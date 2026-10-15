@@ -15,7 +15,7 @@ export interface EventJournalPanelProps {
 }
 
 /**
- * AD-089: журнал решений Router. Переиспользуется в разделе «События» и в
+ * ADR-089: журнал решений Router. Переиспользуется в разделе «События» и в
  * категории «События» модала «Логи и аудит».
  */
 export function EventJournalPanel({ extraActions }: EventJournalPanelProps) {

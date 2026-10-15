@@ -87,7 +87,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('SecuritySettings — без политики инструментов (AD-071 §2.3 перенесена во «Встроенные инструменты»)', () => {
+describe('SecuritySettings — без политики инструментов (ADR-071 §2.3 перенесена во «Встроенные инструменты»)', () => {
   it('карточка «Политика инструментов» не рендерится и API политики не вызывается', async () => {
     const container = await renderSettings()
 
@@ -105,7 +105,7 @@ describe('SecuritySettings — без политики инструментов 
   })
 })
 
-describe('SecuritySettings — миграция на Settings UI Kit (AD-072)', () => {
+describe('SecuritySettings — миграция на Settings UI Kit (ADR-072)', () => {
   it('каркас — SettingsPanel с единственным scroll-контейнером и без pr-2', async () => {
     const container = await renderSettings()
 

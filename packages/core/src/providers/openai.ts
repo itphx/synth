@@ -87,7 +87,7 @@ export class OpenAIProvider extends BaseProvider {
       messages: formattedMessages,
       temperature: this.temperature,
       stream: true,
-      // AD-070 §2.3: просим провайдера прислать usage в стриме — иначе
+      // ADR-070 §2.3: просим провайдера прислать usage в стриме — иначе
       // cached_tokens/reasoning_tokens в статистику не попадают.
       stream_options: { include_usage: true },
     };
@@ -391,7 +391,7 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   /**
-   * AD-070 §2.2: OpenAI не поддерживает явный cache_control — используется
+   * ADR-070 §2.2: OpenAI не поддерживает явный cache_control — используется
    * implicit prefix caching через `prompt_cache_key` (стабильный id сессии).
    * При `cachePolicy: 'none'` ключ не отправляется.
    */
@@ -426,7 +426,7 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   /**
-   * AD-070 §2.3: нормализация OpenAI usage. `prompt_tokens` уже включает
+   * ADR-070 §2.3: нормализация OpenAI usage. `prompt_tokens` уже включает
    * кэшированные токены; `prompt_tokens_details.cached_tokens` → cacheRead,
    * `nonCached = prompt_tokens − cached_tokens` вычисляется потребителем.
    * Явных cache write у OpenAI нет — 0.

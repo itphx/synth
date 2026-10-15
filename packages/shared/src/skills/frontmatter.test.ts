@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseFrontmatter, stringifyFrontmatter } from './frontmatter.js';
 
-describe('parseFrontmatter (AD-046 §3.1)', () => {
+describe('parseFrontmatter (ADR-046 §3.1)', () => {
   it('разбирает frontmatter и тело', () => {
     const raw = '---\nname: api-review\ndescription: Проверяет API\n---\n\n# Тело\n';
     const parsed = parseFrontmatter(raw);

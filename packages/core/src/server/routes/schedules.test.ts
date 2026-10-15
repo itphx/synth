@@ -27,7 +27,7 @@ function makeIngress() {
   return { ingress: { ingest } as unknown as EventIngress, ingest };
 }
 
-describe('Schedules API Routes (AD-051 / AD-089)', () => {
+describe('Schedules API Routes (ADR-051 / ADR-089)', () => {
   let tmpDir: string;
   let store: ScheduleStore;
   let jobStore: JobStore;

@@ -33,7 +33,7 @@ description: Сборка и публикация Synth: build.sh, publish.sh, v
 shared → core → ui → backend → sdk → synth
 ```
 
-Порядок задан иерархией зависимостей: `sdk` (`@itphx/synth-sdk`, клиент публичного API, AD-052) —
+Порядок задан иерархией зависимостей: `sdk` (`@itphx/synth-sdk`, клиент публичного API, ADR-052) —
 тонкий пакет над `shared`; публикуется перед `synth`.
 
 Для публикации используется **`pnpm publish`** (а не `npm publish`), т.к. он автоматически переписывает `workspace:*` в зависимостях на фактические версии workspace-пакетов.

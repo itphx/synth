@@ -232,7 +232,7 @@ describe('RemoteProvider.chatAsync (SSE-стрим)', () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     const body = JSON.parse(init.body as string) as Record<string, unknown>;
     expect(body.stream).toBe(true);
-    // AD-070: remote-зеркало просит backend-proxy вернуть usage в стриме.
+    // ADR-070: remote-зеркало просит backend-proxy вернуть usage в стриме.
     expect(body.stream_options).toEqual({ include_usage: true });
     expect(String(url)).toBe('https://backend.test/api/v2/llm/chat/completions');
   });
@@ -345,7 +345,7 @@ describe('RemoteProvider: регистрация и токен-реестр', ()
   });
 });
 
-describe('RemoteProvider — prompt_cache_key (AD-070 §2.2)', () => {
+describe('RemoteProvider — prompt_cache_key (ADR-070 §2.2)', () => {
   function okResponse(): Response {
     return jsonResponse({
       choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
@@ -382,7 +382,7 @@ describe('RemoteProvider — prompt_cache_key (AD-070 §2.2)', () => {
   });
 });
 
-describe('RemoteProvider — usage (AD-070 §2.3)', () => {
+describe('RemoteProvider — usage (ADR-070 §2.3)', () => {
   function sseResponse(events: string[]): Response {
     return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
       status: 200,

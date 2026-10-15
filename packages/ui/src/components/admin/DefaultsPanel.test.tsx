@@ -65,7 +65,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('DefaultsPanel — AD-072: без фиксированного футера, действия в теле', () => {
+describe('DefaultsPanel — ADR-072: без фиксированного футера, действия в теле', () => {
   it('Save/Reset находятся внутри scroll-тела, Save изначально disabled', async () => {
     const container = await renderPanel()
 

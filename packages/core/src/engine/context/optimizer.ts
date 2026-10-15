@@ -27,7 +27,7 @@ export interface SlidingWindowResult {
 }
 
 /**
- * AD-036: gateway-обвязка для суммаризации. Регистрируется оркестратором через
+ * ADR-036: gateway-обвязка для суммаризации. Регистрируется оркестратором через
  * setGatewayHooks — общий AuditLogger/RateLimiter и ObfuscationMapStore сессий.
  * Если hooks не заданы или gateway выключен — суммаризация идёт напрямую.
  */
@@ -78,7 +78,7 @@ export class ContextOptimizer {
   }
 
   /**
-   * AD-036: регистрирует gateway-обвязку для суммаризации (общий аудит,
+   * ADR-036: регистрирует gateway-обвязку для суммаризации (общий аудит,
    * rate limit, карта обфускации сессий). Вызывается оркестратором.
    */
   setGatewayHooks(hooks: ContextOptimizerGatewayHooks | null): void {
@@ -623,7 +623,7 @@ export class ContextOptimizer {
   }
 
   /**
-   * AD-036: оборачивает провайдер суммаризации в GatewayProvider по тому же
+   * ADR-036: оборачивает провайдер суммаризации в GatewayProvider по тому же
    * паттерну, что оркестратор в _wrapWithGateway. sessionId/userId берутся из
    * текущей сессии — карта обфускации привязывается к сессии.
    */

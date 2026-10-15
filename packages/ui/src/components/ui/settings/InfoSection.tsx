@@ -7,7 +7,7 @@ export interface InfoSectionProps {
 
 /**
  * Компактная информационная секция для панелей: мелкий заголовок + содержимое.
- * Не путать с `SettingsSection` (AD-072) — это не карточка панели настроек.
+ * Не путать с `SettingsSection` (ADR-072) — это не карточка панели настроек.
  */
 export function InfoSection({ title, children }: InfoSectionProps) {
   return (

@@ -85,7 +85,7 @@ function findSection(container: HTMLElement, title: string): HTMLElement | null 
   return (h?.parentElement as HTMLElement) ?? null
 }
 
-/** AD-071 §2.6: таблицы инструментов/MCP свёрнуты — раскрываем через toggle. */
+/** ADR-071 §2.6: таблицы инструментов/MCP свёрнуты — раскрываем через toggle. */
 async function expandSection(container: HTMLElement, title: string): Promise<HTMLElement> {
   const section = findSection(container, title)
   expect(section).not.toBeNull()
@@ -145,7 +145,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('StatsTab — секция «История» (AD-070 §2.5)', () => {
+describe('StatsTab — секция «История» (ADR-070 §2.5)', () => {
   it('по умолчанию свёрнута: показана сводка, таблицы state-сообщений нет', async () => {
     const container = await renderStats()
     const text = container.textContent ?? ''
@@ -195,7 +195,7 @@ describe('StatsTab — секция «История» (AD-070 §2.5)', () => {
   })
 })
 
-describe('StatsTab — таблицы инструментов и MCP (AD-071 §2.6)', () => {
+describe('StatsTab — таблицы инструментов и MCP (ADR-071 §2.6)', () => {
   const toolsDetail = [
     { name: 'read_file', capabilities: ['file_read'], available: true, source: 'built-in' as const },
     { name: 'write_file', capabilities: ['file_write'], available: false, reason: 'mode' as const, source: 'built-in' as const },
@@ -225,7 +225,7 @@ describe('StatsTab — таблицы инструментов и MCP (AD-071 §
     expect(text).toContain('Source')
   })
 
-  it('reason=dependency → отдельная подпись «нет зависимости» (AD-078)', async () => {
+  it('reason=dependency → отдельная подпись «нет зависимости» (ADR-078)', async () => {
     mocks.getSessionPrompt.mockResolvedValue({
       ...promptInfo,
       manifest: { ...promptInfo.manifest, toolsPolicy: 'consistency' },
@@ -412,7 +412,7 @@ describe('StatsTab — таблицы инструментов и MCP (AD-071 §
   })
 })
 
-describe('StatsTab — блок «Сабагенты» в «Последнем ответе» (AD-070 §2.6)', () => {
+describe('StatsTab — блок «Сабагенты» в «Последнем ответе» (ADR-070 §2.6)', () => {
   const subagentBreakdown = {
     sessions: 1, input_tokens: 300, output_tokens: 30,
     cache_read_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0, cost_usd: 0.00036,
@@ -586,7 +586,7 @@ describe('StatsTab — блок «Сабагенты» в «Последнем �
   })
 })
 
-describe('StatsTab — live-обновление (AD-070 §2.6)', () => {
+describe('StatsTab — live-обновление (ADR-070 §2.6)', () => {
   function makeStream(overrides: Record<string, unknown> = {}) {
     return {
       streamId: 'st1',

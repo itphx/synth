@@ -14,7 +14,7 @@ const SECRET_MARKER = 'SUPERSECRETPRIVATEKEYMATERIAL';
 const SAMPLE_KEY = `-----BEGIN OPENSSH PRIVATE KEY-----\n${SECRET_MARKER}\n-----END OPENSSH PRIVATE KEY-----`;
 const NEW_KEY = `-----BEGIN OPENSSH PRIVATE KEY-----\nNEWSECRETMATERIAL\n-----END OPENSSH PRIVATE KEY-----`;
 
-describe('SSH Keys API Routes (AD-076 §T5)', () => {
+describe('SSH Keys API Routes (ADR-076 §T5)', () => {
   let dataDir: string;
   let store: SSHKeyStore;
   let app: Hono;

@@ -11,12 +11,12 @@ import type { SkillRuntime, SkillScopeOptions } from '../skills/types.js';
 interface SkillToolExtra {
   skillRuntime?: SkillRuntime;
   agentRegistry?: { get(id: string): { capabilities?: readonly string[] } | undefined };
-  /** AD-046 §4.5: scope-гейты скиллов (система/проект/сессия) текущего контекста. */
+  /** ADR-046 §4.5: scope-гейты скиллов (система/проект/сессия) текущего контекста. */
   skillScope?: SkillScopeOptions;
 }
 
 /**
- * AD-046 §5/§2.2: единственный core-тул скиллов. Возвращает тело `SKILL.md`
+ * ADR-046 §5/§2.2: единственный core-тул скиллов. Возвращает тело `SKILL.md`
  * (`<skill_content>` + base directory + ≤10 supporting-файлов) либо точечный
  * supporting-файл (`file_path`). Скиллы **не регистрируют** тулы.
  */
@@ -60,7 +60,7 @@ export const skillTool: ToolDefinition = {
         metadata: { i18n: i18nMeta('skill.not_found', { name: params.name }) },
       };
     }
-    // AD-046 §4.4: недоверенный проектный скилл виден, но не грузится.
+    // ADR-046 §4.4: недоверенный проектный скилл виден, но не грузится.
     if (!skill.trusted) {
       return {
         content: sm('skill.untrusted', { name: params.name }),
@@ -69,7 +69,7 @@ export const skillTool: ToolDefinition = {
       };
     }
 
-    // AD-046 §4.5: scope-гейты — системный/проектный hard-gate и сессионный
+    // ADR-046 §4.5: scope-гейты — системный/проектный hard-gate и сессионный
     // opt-out; отключённый скилл не грузится (причина — i18n-параметр).
     const availability = resolveSkillAvailability(skill.meta, extra.skillScope);
     if (!availability.enabled) {
@@ -84,7 +84,7 @@ export const skillTool: ToolDefinition = {
       };
     }
 
-    // AD-046 §6.3: capability-aware — делегирование через `task`.
+    // ADR-046 §6.3: capability-aware — делегирование через `task`.
     const agentCapabilities = ctx.agentRole
       ? extra.agentRegistry?.get(ctx.agentRole)?.capabilities
       : undefined;

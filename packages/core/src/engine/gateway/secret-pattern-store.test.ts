@@ -1,5 +1,5 @@
 /**
- * Юнит-тесты SecretPatternStore (AD-036): редактируемый список regex-паттернов.
+ * Юнит-тесты SecretPatternStore (ADR-036): редактируемый список regex-паттернов.
  * Схема: дефолт в коде (DEFAULT_PATTERNS) → override в {dataDir}/gateway/patterns.json,
  * сброс = удаление override-файла.
  */

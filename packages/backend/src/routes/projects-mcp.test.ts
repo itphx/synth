@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.4: проектный MCP-скоуп.
+ * ADR-071 §2.4: проектный MCP-скоуп.
  * RBAC: ProjectRole.OWNER проекта или глобальные LEAD/ADMIN (через AuthKit).
  */
 
@@ -81,7 +81,7 @@ function auth(user: string) {
   return { Authorization: `Bearer ${user}`, 'Content-Type': 'application/json' };
 }
 
-describe('Project MCP scope API (AD-071 §2.4)', () => {
+describe('Project MCP scope API (ADR-071 §2.4)', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-proj-mcp-'));
   });

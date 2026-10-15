@@ -154,7 +154,7 @@ afterEach(async () => {
   vi.useRealTimers()
 })
 
-describe('LeftPanel — иконка/цвет проектов и сессий (AD-075)', () => {
+describe('LeftPanel — иконка/цвет проектов и сессий (ADR-075)', () => {
   it('проект с ключом иконки в Files-дереве рендерит иконку (регрессия: сырой ключ → null)', async () => {
     const container = await render('files')
     const node = container.querySelector('[data-tree-node="file-project:p1"]')

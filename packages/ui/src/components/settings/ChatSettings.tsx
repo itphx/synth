@@ -17,7 +17,7 @@ export const ChatSettings = () => {
   const intermediateTextDisplay = useUIStore((s) => s.intermediateTextDisplay)
   const setIntermediateTextDisplay = useUIStore((s) => s.setIntermediateTextDisplay)
 
-  // AD-072 (фидбек): без автосохранения — выбор меняет черновик, стор
+  // ADR-072 (фидбек): без автосохранения — выбор меняет черновик, стор
   // обновляется и персистится только по кнопке Save.
   const draft = useSettingsDraft<IntermediateTextDisplay>({
     value: intermediateTextDisplay === 'bottom' ? 'bottom' : 'inline',

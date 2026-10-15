@@ -41,18 +41,18 @@ export interface TaskExtra {
   toolRegistry?: ToolRegistry;
   sessionManager?: SessionManager;
   /**
-   * AD-089: late-bound funnel создания дочерней сессии. Задан — «none»-режим
+   * ADR-089: late-bound funnel создания дочерней сессии. Задан — «none»-режим
    * создаёт сессию через `request` (единые правила/аудит, `initiator:'agent'`),
    * иначе — прямой `createSession` (поведение прежнее). Fork-режимы контекста
    * всегда идут через `forkSession` (материализация копии истории).
    */
   getRequestSessionService?: () => RequestSessionService | undefined;
   eventBus?: EventBus;
-  /** AD-030: ядровая шина хуков — agent_spawned/agent_completed/agent_failed саб-агента. */
+  /** ADR-030: ядровая шина хуков — agent_spawned/agent_completed/agent_failed саб-агента. */
   hooks?: HookBus;
   contextOptimizer?: ContextOptimizer;
   parentSessionSettings?: SessionSettings;
-  /** AD-071 §2.1: активные MCP-серверы родительской сессии — скоуп тулов саб-агента. */
+  /** ADR-071 §2.1: активные MCP-серверы родительской сессии — скоуп тулов саб-агента. */
   mcpServers?: string[];
   modelRouter?: ModelRouter;
   routerConfig?: RouterConfig;
@@ -63,16 +63,16 @@ export interface TaskExtra {
   /** ID собственного tool-вызова `task` — как parent_call_id для внутренних вызовов саб-агента. */
   callId?: string;
   callerAgentRole?: string;
-  /** Permissions родительской сессии (AD-029) — наследуются саб-агентом с deny-дополнениями. */
+  /** Permissions родительской сессии (ADR-029) — наследуются саб-агентом с deny-дополнениями. */
   permissionConfig?: PermissionConfig;
   /**
-   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) родителя.
+   * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) родителя.
    * Передаётся в permission-слой саб-агента (enforce `dependency`) и в секцию
    * `[НЕДОСТУПНЫЕ ТУЛЫ]` его системного промпта. Не задана — fail-open.
    */
   runtimeDeps?: RuntimeDeps;
   /**
-   * AD-075: задан ли рабочий каталог проекта у родителя. Передаётся в
+   * ADR-075: задан ли рабочий каталог проекта у родителя. Передаётся в
    * permission-слой саб-агента — file/shell/git-тулы заблокированы с причиной
    * `workspace`, если у проекта нет рабочего каталога. `undefined` — fail-open.
    */
@@ -89,23 +89,23 @@ export interface TaskExtra {
   protectedPathsEnabled?: boolean;
   /** Override retry-параметров саб-агента (по умолчанию 3 попытки, backoff 5/15/30с). */
   retry?: SubagentRetryConfig;
-  /** AD-070: цены моделей для live-стоимости саб-агента (как в оркестраторе). */
+  /** ADR-070: цены моделей для live-стоимости саб-агента (как в оркестраторе). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
   /**
-   * AD-069 §7: уже резолвленные оркестратором проектные инструкции
+   * ADR-069 §7: уже резолвленные оркестратором проектные инструкции
    * (`[PROJECT INSTRUCTIONS] …`) — добавляются в конец базового промпта
    * саб-агента. Не резолвятся повторно в ребёнке.
    */
   projectInstructions?: string;
   /**
-   * AD-046 §5/§6.2: рантайм скиллов — каталог саб-агенту (binding родителя) и
+   * ADR-046 §5/§6.2: рантайм скиллов — каталог саб-агенту (binding родителя) и
    * тул `skill` (тот же объект уходит в ToolContext.extra).
    */
   skillRuntime?: SkillRuntime;
-  /** AD-046 §4.5: scope-гейты скиллов родительского контекста. */
+  /** ADR-046 §4.5: scope-гейты скиллов родительского контекста. */
   skillScope?: SkillScopeOptions;
   /**
-   * AD-075/AD-076: проектные зависимости для тулов саб-агента (управление
+   * ADR-075/ADR-076: проектные зависимости для тулов саб-агента (управление
    * проектом, workspace, реестр репозиториев, SSH-окружение сетевых git-тулов).
    * Обычный путь передаёт их целиком; resume-путь — из `SubagentResumeDeps`.
    * Контейнер гарантирует только чтение (`load`); в рантайме оркестратор передаёт
@@ -165,7 +165,7 @@ export function resolveSubagentPrompt(
 }
 
 /**
- * AD-070 §2.9.1: секция `[НЕДОСТУПНЫЕ ТУЛЫ]` для системного промпта саб-агента.
+ * ADR-070 §2.9.1: секция `[НЕДОСТУПНЫЕ ТУЛЫ]` для системного промпта саб-агента.
  *
  * Набор тулов саб-агента постоянен (роль/режим enforce'ит permission-слой), а
  * недоступность по внешней зависимости (`git`/`rg`/`sh`) сообщается модели здесь —
@@ -198,7 +198,7 @@ export function buildSubagentUnavailableToolsSection(
       seen.add(name);
       continue;
     }
-    // AD-075: без рабочего каталога проекта file/shell/git-тулы недоступны.
+    // ADR-075: без рабочего каталога проекта file/shell/git-тулы недоступны.
     // Дедупликация по имени: тул не попадает одновременно и как dependency, и как workspace.
     if (workspaceReady === false && !seen.has(name) && isWorkspaceDependentTool(capabilitiesOf?.(name))) {
       unavailable.push({ name, reason: 'workspace' });
@@ -338,7 +338,7 @@ export const taskTool: ToolDefinition = {
     const tools: ToolForLLM[] | undefined = extra.agentRegistry.getToolsForAgent(agentDef.id, extra.mcpServers);
     const maxSteps = agentDef.maxSteps ?? DEFAULT_SUBAGENT_MAX_STEPS;
 
-    // ─── Настройки роутинга для дочерней сессии (AD-034 Фаза 4) ──
+    // ─── Настройки роутинга для дочерней сессии (ADR-034 Фаза 4) ──
     const childRoutingOverrides: Partial<SessionSettings> = {};
     if (params.model) childRoutingOverrides.model = params.model;
     if (params.provider) childRoutingOverrides.provider = params.provider;
@@ -367,7 +367,7 @@ export const taskTool: ToolDefinition = {
     let childMessages: Message[] = [];
     let parentNotesText = '';
 
-    // ─── Permissions дочерней сессии (AD-029): наследуем родителя + deny-дополнения ──
+    // ─── Permissions дочерней сессии (ADR-029): наследуем родителя + deny-дополнения ──
     const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
 
     // ─── Создание дочерней сессии с контекстом ───────────────────────
@@ -462,7 +462,7 @@ export const taskTool: ToolDefinition = {
               planMode: 'auto',
               ...childRoutingOverrides,
             };
-            // AD-089: создание дочерней сессии — через funnel (`initiator:'agent'`),
+            // ADR-089: создание дочерней сессии — через funnel (`initiator:'agent'`),
             // если он передан; иначе прямой `createSession` (прежнее поведение).
             const requestService = extra.getRequestSessionService?.();
             const child = requestService
@@ -502,7 +502,7 @@ export const taskTool: ToolDefinition = {
             }
           }
 
-          // AD-030: `agent_spawned` — неблокирующий эмит при создании дочерней
+          // ADR-030: `agent_spawned` — неблокирующий эмит при создании дочерней
           // сессии саб-агента (agentId — id дочерней сессии).
           if (extra.hooks && childSessionId) {
             extra.hooks.emitAsync('agent_spawned', {
@@ -534,7 +534,7 @@ export const taskTool: ToolDefinition = {
         }
       }
 
-      // ─── Информация о маршрутизации (AD-034 Фаза 4) ──────────────
+      // ─── Информация о маршрутизации (ADR-034 Фаза 4) ──────────────
       // Загружается из контекстных файлов prompts/system/ROUTING.{lang}.md
       const parentSettings = extra.parentSessionSettings;
       const routingEnabled = extra.routerConfig?.enabled && (parentSettings?.routingEnabled !== false);
@@ -575,7 +575,7 @@ export const taskTool: ToolDefinition = {
       return prompt;
     })();
 
-    // AD-069 §7/§9.2: уже резолвленные проектные инструкции — в конец базового
+    // ADR-069 §7/§9.2: уже резолвленные проектные инструкции — в конец базового
     // промпта. Не добавляются при `skip_context_files=true` и при
     // `session.settings.systemPrompt` override дочерней сессии (как основная).
     const skipContextFiles = params.skip_context_files === true
@@ -584,7 +584,7 @@ export const taskTool: ToolDefinition = {
       llmSystemPrompt += `\n\n${extra.projectInstructions}`;
     }
 
-    // AD-046 §5/§6.2: каталог скиллов саб-агенту. Binding — родителя
+    // ADR-046 §5/§6.2: каталог скиллов саб-агенту. Binding — родителя
     // (fixed decision Фазы 1), capabilities — самого саб-агента (executor).
     if (extra.skillRuntime) {
       try {
@@ -611,7 +611,7 @@ export const taskTool: ToolDefinition = {
       }
     }
 
-    // AD-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
+    // ADR-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
     // в системный промпт саб-агента, как state-сообщение у основного агента.
     const unavailableSection = buildSubagentUnavailableToolsSection(
       tools,
@@ -624,7 +624,7 @@ export const taskTool: ToolDefinition = {
     );
     if (unavailableSection) llmSystemPrompt += `\n\n${unavailableSection}`;
 
-    // ─── Выбор провайдера для саб-агента через роутер (AD-034 Фаза 4) ──
+    // ─── Выбор провайдера для саб-агента через роутер (ADR-034 Фаза 4) ──
     let effectiveProvider = extra.provider;
     let routingDecisionInfo: { providerName: string; modelName: string; strategy: string } | undefined;
     const parentSettings = extra.parentSessionSettings;
@@ -649,7 +649,7 @@ export const taskTool: ToolDefinition = {
       }
     }
 
-    // AD-070 §2.1/§1.5: system prompt передаётся ТОЛЬКО вторым аргументом
+    // ADR-070 §2.1/§1.5: system prompt передаётся ТОЛЬКО вторым аргументом
     // chatAsync (как в оркестраторе), в messages system-сообщения нет —
     // иначе у OpenAI/Remote получаются два system-сообщения подряд.
     const messages: LLMMessage[] = [];
@@ -727,10 +727,10 @@ export const taskTool: ToolDefinition = {
  * возобновления прерванной дочерней сессии (task-resume.ts).
  *
  * Включает: связку cancel-токена с родительским сигналом отмены, permissions
- * дочерней сессии (AD-029), режимную фильтрацию тулов, tool-loop со стримом
+ * дочерней сессии (ADR-029), режимную фильтрацию тулов, tool-loop со стримом
  * прогресса родителю, retry-цикл LLM-вызова (recoverable → backoff, аналог
  * QueueProcessor), обработку отмены (finishAborted), quality check/эскалацию
- * (AD-034) и формирование tool_result.
+ * (ADR-034) и формирование tool_result.
  */
 export interface SubagentRunConfig {
   /** Тип саб-агента (id в реестре агентов). */
@@ -741,7 +741,7 @@ export interface SubagentRunConfig {
   maxSteps?: number;
   /**
    * Системный промпт саб-агента (role + parent notes/summary + routing).
-   * AD-070 §1.5: единственный путь — второй аргумент `chatAsync`; в `messages`
+   * ADR-070 §1.5: единственный путь — второй аргумент `chatAsync`; в `messages`
    * system-сообщения нет.
    */
   llmSystemPrompt: string;
@@ -754,7 +754,7 @@ export interface SubagentRunConfig {
   childSessionId?: string;
   /** Сессия для child.*-событий (у task — родитель, у resume — родитель resumed-сессии). */
   parentSessionId: string;
-  /** Начальное routing-решение (AD-034) — для QA/эскалации. */
+  /** Начальное routing-решение (ADR-034) — для QA/эскалации. */
   routingDecisionInfo?: { providerName: string; modelName: string; strategy: string };
   extra: TaskExtra;
   ctx: ToolContext;
@@ -797,7 +797,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   const retryMaxAttempts = Math.max(1, retryCfg.maxRetries);
   const retryDelaysMs = retryCfg.delaysMs.length > 0 ? retryCfg.delaysMs : LLM_RETRY_DELAYS_MS;
 
-  // ─── Permissions дочерней сессии (AD-029): родитель + deny-дополнения ──
+  // ─── Permissions дочерней сессии (ADR-029): родитель + deny-дополнения ──
   const derivedPermission = deriveSubagentPermission(extra.permissionConfig);
 
   // ─── LLM-сообщения: только начальные (история/промпт); system — аргумент chatAsync ──
@@ -805,7 +805,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
   const cancelToken: CancellationToken = { cancelled: false, cancel: () => { cancelToken.cancelled = true; } };
 
-  // AD-070 §2.6: usage саб-агента для rollup в статистике родителя. Собирается
+  // ADR-070 §2.6: usage саб-агента для rollup в статистике родителя. Собирается
   // по всем итерациям LLM-стрима и пишется в финальное assistant-сообщение
   // дочерней сессии (промежуточные tool-chain — без usage, чтобы не удваивать).
   const subagentUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
@@ -823,7 +823,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     if (usage.reasoningTokens) subagentUsage.reasoningTokens = (subagentUsage.reasoningTokens || 0) + usage.reasoningTokens;
   };
 
-  // ─── AD-070: live-статистика саб-агента (`stream.usage` + `subagent.progress`) ──
+  // ─── ADR-070: live-статистика саб-агента (`stream.usage` + `subagent.progress`) ──
   // Троттлинг ~300 мс; публикуем при изменении контента/размышлений или usage.
   const SUBAGENT_USAGE_THROTTLE_MS = 300;
   let liveUsageLastPublishedAt = 0;
@@ -854,7 +854,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
    * + точный usage текущего чанка либо best-effort оценка текущей итерации.
    * Финальный чанк уже включён в `subagentUsage` (accumulateUsage вызван до).
    *
-   * Точным считаем usage с output>0/reasoning (AD-070 §2.6, как в оркестраторе).
+   * Точным считаем usage с output>0/reasoning (ADR-070 §2.6, как в оркестраторе).
    * Anthropic отдаёт input/cache в `message_start` (output ещё 0): сохраняем
    * точный input/cache, но output оцениваем из накопленного текста, пока не
    * придёт `message_delta` с output. Полностью нулевой usage — оценка обоих.
@@ -907,13 +907,13 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     ctx.abortSignal?.addEventListener('abort', () => cancelToken.cancel(), { once: true });
   }
 
-  // ─── Permissions саб-агента (AD-029): проверка перед каждым tool_call ──
+  // ─── Permissions саб-агента (ADR-029): проверка перед каждым tool_call ──
   // Дочерняя сессия наследует permissions родителя (deriveSubagentPermission).
   // ask-запросы публикуются в EventBus РОДИТЕЛЬСКОЙ сессии — подтверждение
   // видит пользователь основной сессии, approval_id связывает ответ.
   const childEvaluator = new PermissionEvaluator(derivedPermission);
   const childApprovalManager = new PermissionApprovalManager(extra.eventBus ?? new EventBus());
-  // AD-070 §2.9.1: ролевые ограничения саб-агента — через unavailable(role),
+  // ADR-070 §2.9.1: ролевые ограничения саб-агента — через unavailable(role),
   // а не скрытием тулов; capabilities нужны permission-слою.
   const subagentDef = extra.agentRegistry?.get(subagentType);
   let childSessionMode: SessionMode = 'act';
@@ -934,7 +934,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     }
   }
 
-  // AD-070 §2.9: список тулов саб-агента постоянен (без режимной фильтрации).
+  // ADR-070 §2.9: список тулов саб-агента постоянен (без режимной фильтрации).
   // Ограничения plan/act/yolo и роли обеспечивает permission-слой ниже —
   // `unavailable(mode|role)` с подсказкой, definition остаётся в запросе.
 
@@ -952,7 +952,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         await extra.sessionManager.updateSession(childSession);
 
         if (extra.eventBus) {
-          // AD-070 §2.6: терминальное live-событие дочерней сессии. Дочерний
+          // ADR-070 §2.6: терминальное live-событие дочерней сессии. Дочерний
           // саб-агент не публикует stream.start/stream.done, а его live-статистика
           // идёт только stream.usage. Это событие гарантирует, что открытая
           // дочерняя сессия сбросит live-плейсхолдер после завершения работы
@@ -989,7 +989,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
   };
 
   /**
-   * AD-070 §2.6: metadata финального assistant-сообщения дочерней сессии.
+   * ADR-070 §2.6: metadata финального assistant-сообщения дочерней сессии.
    * Единая точка простановки `status`/`cost_usd`/`cost_breakdown` — как
    * `_saveAssistantMessage` оркестратора: стоимость считается по ценам модели
    * (`extra.modelPriceLoader` + `subagentModel`), только если они заданы.
@@ -1012,7 +1012,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
     return metadata;
   };
 
-  // AD-070 §2.6 / project stats: session-счётчики дочерней сессии обновляются
+  // ADR-070 §2.6 / project stats: session-счётчики дочерней сессии обновляются
   // вручную (как `_saveAssistantMessage` оркестратора), потому что task.ts
   // пишет сообщения через `addMessage`, а тот не трогает агрегаты сессии.
   // Иначе `GET /projects/:id/stats` (суммирует `session.inputTokens`) не видит
@@ -1078,7 +1078,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           hidden: false,
           agentRole: subagentType,
           model: subagentModel,
-          // AD-070 §2.6: usage, накопленный до отмены, — чтобы rollup не терял токены.
+          // ADR-070 §2.6: usage, накопленный до отмены, — чтобы rollup не терял токены.
           usage: subagentUsage,
           ...(partialReasoning ? { reasoning: partialReasoning } : {}),
           metadata: buildChildAssistantMetadata('cancelled', {
@@ -1139,7 +1139,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           child_session_id: childSessionId,
           stopped_by: 'user',
           interrupted: true,
-          // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+          // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения).
           subagent_usage: subagentUsage,
           subagent_model: subagentModel,
           tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
@@ -1187,7 +1187,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (chunk.toolCalls && chunk.toolCalls.length > 0) {
               toolCalls = chunk.toolCalls;
             }
-            // AD-070 §2.6: usage и модель саб-агента для статистики родителя.
+            // ADR-070 §2.6: usage и модель саб-агента для статистики родителя.
             // Провайдеры отдают в каждом чанке НАКОПИТЕЛЬНЫЙ usage (running total),
             // поэтому суммируем только финальный чанк итерации — иначе usage
             // многократно раздувается. Каждый вызов chatAsync в финальном чанке
@@ -1195,7 +1195,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (chunk.isFinal) accumulateUsage(chunk.usage);
             if (chunk.model) subagentModel = chunk.model;
 
-            // AD-070: live-usage = накопленное + точный/оценка текущей итерации;
+            // ADR-070: live-usage = накопленное + точный/оценка текущей итерации;
             // стоимость — по ценам модели, если загрузчик передан в extra.
             const liveUsage = buildLiveSubagentUsage(chunk, accumulatedContent, reasoning);
             const liveModel = subagentModel || effectiveProvider.model || undefined;
@@ -1318,7 +1318,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           hidden: false,
           agentRole: subagentType,
           model: subagentModel,
-          // AD-070 §2.6: usage, потраченный до ошибки, — чтобы rollup его учёл.
+          // ADR-070 §2.6: usage, потраченный до ошибки, — чтобы rollup его учёл.
           usage: subagentUsage,
           metadata: buildChildAssistantMetadata('error', {
             stream_id: extra.streamId,
@@ -1332,7 +1332,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         });
         await commitChildUsage();
         await finalizeChildSession();
-        // AD-030: `agent_failed` — неблокирующий эмит терминальной ошибки
+        // ADR-030: `agent_failed` — неблокирующий эмит терминальной ошибки
         // саб-агента после исчерпания ретраев.
         if (extra.hooks && childSessionId) {
           extra.hooks.emitAsync('agent_failed', {
@@ -1362,7 +1362,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             attempts,
             max_retries: retryMaxAttempts,
             error_type: llmFailure.errorType,
-            // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+            // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения).
             subagent_usage: subagentUsage,
             subagent_model: subagentModel,
             tool_calls: allSubagentToolCalls.length > 0 ? allSubagentToolCalls : undefined,
@@ -1407,7 +1407,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
               hidden: false,
               agentRole: subagentType,
               model: subagentModel,
-              // AD-070 §2.6: суммарный usage саб-агента — основа rollup в
+              // ADR-070 §2.6: суммарный usage саб-агента — основа rollup в
               // статистике родителя (subagent_tokens) и сессионной статистики.
               usage: subagentUsage,
               // Все размышления сабагента (по итерациям), склеенные в поле
@@ -1572,7 +1572,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         let toolResult: ToolResult;
         let subagentUserDenied = false;
 
-        // AD-029: permission-check саб-агента — permissions дочерней сессии
+        // ADR-029: permission-check саб-агента — permissions дочерней сессии
         // (родитель + deny-дополнения) применяются к каждому tool_call.
         const permissionDecision = childEvaluator.check({
           toolName,
@@ -1587,9 +1587,9 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           shellPolicy: extra.shellPolicy ?? undefined,
           protectedPaths: extra.protectedPaths ?? undefined,
           protectedPathsEnabled: extra.protectedPathsEnabled,
-          // AD-070 §2.9.1: зависимость окружения (git/rg/sh) — как у родителя.
+          // ADR-070 §2.9.1: зависимость окружения (git/rg/sh) — как у родителя.
           runtimeDeps: extra.runtimeDeps,
-          // AD-075: гейт рабочего каталога проекта — как у родителя.
+          // ADR-075: гейт рабочего каталога проекта — как у родителя.
           workspaceReady: extra.workspaceReady,
         });
 
@@ -1735,7 +1735,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
           }
         }
 
-        // AD-029: пользователь отклонил ask саб-агента — прекращаем выполнение.
+        // ADR-029: пользователь отклонил ask саб-агента — прекращаем выполнение.
         if (subagentUserDenied) {
           subagentDenied = true;
           break;
@@ -1765,7 +1765,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
 
     const output = finalContent || sm('task.empty_response');
 
-    // ─── Quality check результата саб-агента (AD-034 Фаза 4) ─────
+    // ─── Quality check результата саб-агента (ADR-034 Фаза 4) ─────
     let qaPass: boolean | undefined;
     let qaReason: string | undefined;
     let qualityOutput = output;
@@ -1817,7 +1817,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
             if (fbEffectiveProvider) {
               try {
                 // Перевызываем с fallback-моделью (только последний user-запрос);
-                // system — вторым аргументом chat, в messages его нет (AD-070 §1.5).
+                // system — вторым аргументом chat, в messages его нет (ADR-070 §1.5).
                 const fbMessages: LLMMessage[] = [];
                 const userMsg = messages.find(m => m.role === 'user');
                 if (userMsg) fbMessages.push(userMsg);
@@ -1869,7 +1869,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
       ? `<child_session_id>${childSessionId}</child_session_id>\n`
       : '';
 
-    // AD-030: `agent_completed` — неблокирующий эмит успешного завершения
+    // ADR-030: `agent_completed` — неблокирующий эмит успешного завершения
     // саб-агента (result — итоговый ответ).
     if (extra.hooks && childSessionId) {
       extra.hooks.emitAsync('agent_completed', {
@@ -1896,7 +1896,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         routing_strategy: routingDecisionInfo?.strategy,
         routing_provider: routingDecisionInfo?.providerName,
         routing_model: routingDecisionInfo?.modelName,
-        // AD-070 §2.6: per-message статистика сабагентов (попап сообщения).
+        // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения).
         subagent_usage: subagentUsage,
         subagent_model: subagentModel,
       },
@@ -1910,7 +1910,7 @@ export async function runSubagent(config: SubagentRunConfig): Promise<ToolResult
         stream_id: extra.streamId,
       });
     }
-    // AD-030: `agent_failed` — неблокирующий эмит жёсткого сбоя саб-агента.
+    // ADR-030: `agent_failed` — неблокирующий эмит жёсткого сбоя саб-агента.
     if (extra.hooks && childSessionId) {
       extra.hooks.emitAsync('agent_failed', {
         agentId: childSessionId,

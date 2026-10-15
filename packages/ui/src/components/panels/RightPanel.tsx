@@ -13,7 +13,7 @@ import { SecretsTab } from './SecretsTab'
 import { SchedulerTab } from './SchedulerTab'
 import { PanelTab } from './PanelTab'
 
-// AD-071: верхний ряд правой панели — «Сессия», «Проект», «Контекст», «Статистика».
+// ADR-071: верхний ряд правой панели — «Сессия», «Проект», «Контекст», «Статистика».
 export const RIGHT_TABS = [
   { id: 'params', icon: 'settings-3' as const, labelKey: 'rightPanel.tab.session' },
   { id: 'project', icon: 'folder-3' as const, labelKey: 'rightPanel.tab.project' },
@@ -33,7 +33,7 @@ export const RightPanel: React.FC = () => {
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
   const sessionId = activeTab?.data?.sessionId
 
-  // Вкладка «Безопасность» (AD-036) — только для ADMIN/AUDITOR
+  // Вкладка «Безопасность» (ADR-036) — только для ADMIN/AUDITOR
   const canViewSecrets = !!user?.roles?.some((r) => r === 'ADMIN' || r === 'AUDITOR')
   const tabs = canViewSecrets
     ? [...RIGHT_TABS, { id: 'secrets', icon: 'shield-keyhole' as const, labelKey: 'rightPanel.tab.secrets' }]

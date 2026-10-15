@@ -1,5 +1,5 @@
 /**
- * AD-051: `_resolveSchedulerActive` — активность расписания для сессии: по
+ * ADR-051: `_resolveSchedulerActive` — активность расписания для сессии: по
  * истории сообщений планировщика (`metadata.scheduler === true`) и по
  * late-bound резолверу `isSchedulerActive`. Проверяется косвенно через
  * `getPromptInfo` (манифест): при `true` в system-блоки попадает `scheduler`.
@@ -52,7 +52,7 @@ const SCHEDULER_CONFIG = {
   getSchedulerTurnNotice: () => '[SCHEDULER TURN]',
 } as unknown as ContextConfig;
 
-describe('ChatOrchestrator — schedulerActive (AD-051)', () => {
+describe('ChatOrchestrator — schedulerActive (ADR-051)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 

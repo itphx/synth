@@ -112,11 +112,11 @@ export function getForkedTitle(title?: string, existingTitles?: string[]): strin
   return `${name} (fork #${maxN + 1})`;
 }
 
-// --- Glob (permission patterns, AD-029) ---
+// --- Glob (permission patterns, ADR-029) ---
 
 export { globMatch } from './glob.js';
 
-// --- Workspace (AD-075) ---
+// --- Workspace (ADR-075) ---
 
 export { slugifyWorkspaceName, uniqueWorkspaceName, MAX_WORKSPACE_SLUG_LENGTH } from './workspace.js';
 

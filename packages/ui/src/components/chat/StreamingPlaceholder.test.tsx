@@ -75,7 +75,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('StreamingPlaceholder — live-статистика (AD-070 §2.6)', () => {
+describe('StreamingPlaceholder — live-статистика (ADR-070 §2.6)', () => {
   it('инлайн-строки нет, кнопка статистики открывает поповер: токены, стоимость, % кэша', async () => {
     const container = await renderPlaceholder(makeStream({
       usage: {

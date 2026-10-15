@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.6: instance-wide отключение инструментов (`tools.disabled`) —
+ * ADR-071 §2.6: instance-wide отключение инструментов (`tools.disabled`) —
  * жёсткое исключение из запроса независимо от `tools.policy`, пометка в
  * `toolsDetail`, отсутствие unavailable-подсказок, защита `runtime`.
  */
@@ -87,7 +87,7 @@ class ToolCaptureProvider extends BaseProvider {
   }
 }
 
-describe('ChatOrchestrator — tools.disabled (AD-071 §2.6)', () => {
+describe('ChatOrchestrator — tools.disabled (ADR-071 §2.6)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;
@@ -98,7 +98,7 @@ describe('ChatOrchestrator — tools.disabled (AD-071 §2.6)', () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-disabled-'));
     sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
     projectStore = new ProjectStore({ dataDir: tmpDir });
-    // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+    // ADR-075: file/shell/git-тулы доступны только при заданном workspace проекта.
     const project = projectStore.create('Disabled', 'u1', { workspace: tmpDir });
     await projectStore.save(project);
     projectId = project.id;

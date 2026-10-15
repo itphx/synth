@@ -1,5 +1,5 @@
 /**
- * Микро-модели (AD-035).
+ * Микро-модели (ADR-035).
  */
 export type { MicroModel } from './base.js';
 export { RulesModel } from './rules-model.js';

@@ -33,7 +33,7 @@ function makeProfile(overrides: Partial<ProfileData> = {}): ProfileData {
   };
 }
 
-describe('Identity routes (AD-089)', () => {
+describe('Identity routes (ADR-089)', () => {
   let tmpDir: string;
   let store: FileProfileStore;
   let claimStore: IdentityClaimStore;
@@ -142,7 +142,7 @@ describe('Identity routes (AD-089)', () => {
     expect(await store.findProfileByExternalId('tg', '2')).not.toBeNull();
   });
 
-  // --- AD-089 (claim-flow): POST /me/identities/claim ---
+  // --- ADR-089 (claim-flow): POST /me/identities/claim ---
 
   it('POST /claim — успех: 201, identity привязана, linkedBy = текущий пользователь', async () => {
     await store.saveProfile(makeProfile({ id: 'u1' }));

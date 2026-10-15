@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
- * AD-052 (этап II): HMAC-SHA256-подпись тела webhook.
+ * ADR-052 (этап II): HMAC-SHA256-подпись тела webhook.
  *
  * Заголовки доставки:
  * - `X-Synth-Event`    — тип события;

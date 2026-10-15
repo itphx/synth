@@ -28,7 +28,7 @@ function instanceSource(dir: string): SkillSource {
   return { scope: 'instance', level: 'system', origin: 'instance', dir, trusted: true };
 }
 
-describe('SkillRegistry — builtin (AD-046 §9.5)', () => {
+describe('SkillRegistry — builtin (ADR-046 §9.5)', () => {
   it('builtin виден, доверенный, идёт первым', async () => {
     const dataDir = join(root, 'data');
     const instanceDir = join(dataDir, 'skills');

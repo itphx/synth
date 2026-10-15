@@ -1476,7 +1476,7 @@ function FilesTab() {
 
 type AddRepoMode = 'scan' | 'clone' | 'init' | null
 
-/** AD-076: нормализация пути репозитория (корень workspace — `''`/`.`). */
+/** ADR-076: нормализация пути репозитория (корень workspace — `''`/`.`). */
 function normRepoPath(path: string): string {
   return path === '' || path === '.' ? '' : path
 }
@@ -1492,7 +1492,7 @@ function basenameOf(path: string): string {
   return parts[parts.length - 1] || ''
 }
 
-/** AD-076: клиентская проверка ssh-URL (зеркалит серверный `isSshUrl`). */
+/** ADR-076: клиентская проверка ssh-URL (зеркалит серверный `isSshUrl`). */
 function isSshRepoUrl(url: string): boolean {
   const v = url.trim()
   return v.startsWith('git@') || v.startsWith('ssh://')

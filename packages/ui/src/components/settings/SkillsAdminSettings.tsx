@@ -26,7 +26,7 @@ interface EditorState {
 const EMPTY_EDITOR: EditorState = { mode: 'create', name: '', description: '', body: '', files: [] }
 
 /**
- * Две оси системных гейтов скиллов (AD-046 §4.5):
+ * Две оси системных гейтов скиллов (ADR-046 §4.5):
  * - `disabled` — мастер: выключенный скилл недоступен нигде;
  * - `disabledForNewProjects` — сид новых проектов: что не включать по умолчанию.
  */
@@ -41,7 +41,7 @@ const EMPTY_SKILLS_GATES: SkillsGates = {
 }
 
 /**
- * AD-046 §4.5/§9.2 / AD-072: админ-категория «Скиллы» — instance-реестр с CRUD
+ * ADR-046 §4.5/§9.2 / ADR-072: админ-категория «Скиллы» — instance-реестр с CRUD
  * (`SKILL.md` + supporting-файлы), system-level enable/disable группами
  * (categories/groups) и точечно (name), политика включения.
  */
@@ -528,9 +528,9 @@ function SkillAdminRow({
 }
 
 /**
- * AD-046 §4.5: одно измерение системных гейтов (мастер или сид проектов) —
+ * ADR-046 §4.5: одно измерение системных гейтов (мастер или сид проектов) —
  * три группы (категории/группы/отдельные скиллы). Заголовок оси даёт
- * родительская `SettingsSection` (AD-072: секции не вкладывать).
+ * родительская `SettingsSection` (ADR-072: секции не вкладывать).
  */
 function DisabledGroupDimension({
   testIdPrefix,

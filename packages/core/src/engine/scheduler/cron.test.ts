@@ -3,7 +3,7 @@ import { nextCronDate, isValidCron } from './cron.js';
 
 const at = (iso: string): Date => new Date(iso);
 
-describe('nextCronDate (AD-051)', () => {
+describe('nextCronDate (ADR-051)', () => {
   it('ежедневно в 00:00 UTC — строго после from', () => {
     expect(nextCronDate('0 0 * * *', at('2026-01-01T00:00:00Z')).toISOString()).toBe(
       '2026-01-02T00:00:00.000Z',
@@ -81,7 +81,7 @@ describe('nextCronDate (AD-051)', () => {
   });
 });
 
-describe('isValidCron (AD-051)', () => {
+describe('isValidCron (ADR-051)', () => {
   it('валидные', () => {
     for (const good of ['0 0 * * *', '*/15 9-17 * * 1-5', '0 0 1,15 * *', '0-30/10 * * * *']) {
       expect(isValidCron(good)).toBe(true);

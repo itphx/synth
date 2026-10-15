@@ -22,7 +22,7 @@ import {
   useSettingsDraft,
 } from '../ui/settings'
 
-/** Типы провайдеров decision-протокола (AD-084): `decision` (RouterAI) / `systemone` (Ollama). */
+/** Типы провайдеров decision-протокола (ADR-084): `decision` (RouterAI) / `systemone` (Ollama). */
 const DECISION_PROVIDER_TYPES: readonly string[] = ['decision', 'systemone']
 
 /** Порядок вывода статусов попыток в секции статистики. */
@@ -46,7 +46,7 @@ const REJECTED_LABEL_KEY: Record<DecisionAttemptStatus, string> = {
 }
 
 /**
- * AD-084 / AD-072: админ-секция «Decision-модели» — runtime-настройки
+ * ADR-084 / ADR-072: админ-секция «Decision-модели» — runtime-настройки
  * decision-слоя (`/settings/decision`): мастер-выключатель, основная пара
  * провайдер/модель decision-протокола, необязательная пара эскалации
  * (`escalationProvider`/`escalationModel`) и порог уверенности. Ниже —
@@ -183,7 +183,7 @@ export function DecisionSettings() {
     }
   }
 
-  // Только провайдеры decision-протокола (AD-084); модели — по выбранному провайдеру.
+  // Только провайдеры decision-протокола (ADR-084); модели — по выбранному провайдеру.
   const decisionProviders = providers.filter(
     (p) => p.enabled && DECISION_PROVIDER_TYPES.includes(p.type),
   )
@@ -281,7 +281,7 @@ export function DecisionSettings() {
         )}
       </SettingsSection>
 
-      {/* AD-084: read-only статистика decision-слоя — вне черновика Save/Reset. */}
+      {/* ADR-084: read-only статистика decision-слоя — вне черновика Save/Reset. */}
       <SettingsSection
         title={t('decisionConfig.metrics')}
         description={t('decisionConfig.metricsDescription')}

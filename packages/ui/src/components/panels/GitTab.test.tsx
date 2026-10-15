@@ -141,7 +141,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('GitTab — реестр репозиториев (AD-076)', () => {
+describe('GitTab — реестр репозиториев (ADR-076)', () => {
   it('показывает запись реестра: name, destination (path), type и SSH-ключ', async () => {
     const container = await renderGitTab()
     const text = container.textContent ?? ''

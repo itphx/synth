@@ -26,7 +26,7 @@
 #   --print-api-key     показать полный локальный API-ключ в сводке запуска
 #   --port <port>       порт локального core (default 4300; standalone — 4400)
 #   --data-dir <path>   каталог данных локального мира (default ~/.local/share/synth)
-#   --home <path>       локальный home-каталог (AD-079). Если задан — config/data/
+#   --home <path>       локальный home-каталог (ADR-079). Если задан — config/data/
 #                       profiles/credentials резолвятся от него (data-dir по
 #                       умолчанию не подставляется, чтобы home им управлял).
 #   --no-build          не пересобирать пакеты
@@ -67,7 +67,7 @@ TOKEN=""
 API_KEY=""
 PRINT_API_KEY=false   # показывать полный ключ в сводке запуска (--print-api-key)
 PORT="4300"
-HOME_DIR=""           # AD-079: --home (пусто — текущее XDG-поведение)
+HOME_DIR=""           # ADR-079: --home (пусто — текущее XDG-поведение)
 DATA_DIR_SET=false    # задан ли data-dir явно (флагом или env)
 if [ -n "${DATA_DIR:-}" ]; then
     DATA_DIR_SET=true
@@ -101,7 +101,7 @@ hybrid.sh — запуск Synth локально в гибридном режи
   --print-api-key     показать полный локальный API-ключ в сводке запуска
   --port <port>       порт локального core (default: 4300; standalone — 4400)
   --data-dir <path>   каталог данных локального мира (default: ~/.local/share/synth)
-  --home <path>       локальный home-каталог (AD-079: config/data/profiles/credentials).
+  --home <path>       локальный home-каталог (ADR-079: config/data/profiles/credentials).
                       Без флага сохраняется текущее поведение (XDG/~/.local/share/synth).
   --no-build          не пересобирать пакеты
   --build             принудительная полная пересборка (shared+core+ui+synth)
@@ -332,7 +332,7 @@ CLI_ARGS=(serve
     --port "$PORT"
     --api-key "$API_KEY"
 )
-# AD-079: при заданном --home дефолтный --data-dir не подставляем — home сам
+# ADR-079: при заданном --home дефолтный --data-dir не подставляем — home сам
 # задаёт <home>/data (явный --data-dir/env по-прежнему приоритетнее).
 if [ -n "$HOME_DIR" ]; then
     CLI_ARGS+=(--home "$HOME_DIR")

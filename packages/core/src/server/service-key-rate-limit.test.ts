@@ -1,4 +1,4 @@
-// AD-052 (этап I): per-key rate limit service-key в standalone-core.
+// ADR-052 (этап I): per-key rate limit service-key в standalone-core.
 // Паритет с managed backend: `rateLimitPerMinute` ключа энфорсится глобальным
 // middleware (fixed window 60 c, ключ — keyId); 0/не задан — без лимита;
 // превышение → 429 RATE_LIMITED; интерактивные креды (api-key/cookie) не
@@ -11,7 +11,7 @@ import { createStandaloneApp } from './app.js';
 
 const API_KEY = 'test-key';
 
-describe('AD-052 (этап I): per-key rate limit service-key в core', () => {
+describe('ADR-052 (этап I): per-key rate limit service-key в core', () => {
   let dataDir: string;
   let handle: Awaited<ReturnType<typeof createStandaloneApp>>;
 

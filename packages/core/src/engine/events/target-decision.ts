@@ -1,10 +1,10 @@
 import type { EventRouteTarget, RouteDecision, RouteDecisionMeta } from '@itphx/synth-shared';
 
 /**
- * AD-089: единый маппинг цели правила (`EventRouteTarget`, семантика как у
+ * ADR-089: единый маппинг цели правила (`EventRouteTarget`, семантика как у
  * `ScheduleTarget`) в решение Router. `reason` используется только для
  * `queue` (по умолчанию `'target'`); `confidence`/`signals` — диагностическая
- * мета (AD-084), приклеивается к решению во всех ветвях, если задана.
+ * мета (ADR-084), приклеивается к решению во всех ветвях, если задана.
  * Обратная совместимость: без меты поведение прежнее.
  */
 export function decisionFromTarget(
@@ -22,7 +22,7 @@ export function decisionFromTarget(
   if (target.mode === 'queue') {
     return { kind: 'queue', owner: target.sessionId, reason: extra?.reason ?? 'target', ...meta };
   }
-  // AD-089 (auto-bind): цель закрепляет внешний адрес за новой сессией.
+  // ADR-089 (auto-bind): цель закрепляет внешний адрес за новой сессией.
   if (target.mode === 'bind') {
     return {
       kind: 'bind',

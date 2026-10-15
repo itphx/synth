@@ -101,7 +101,7 @@ describe('git tools — прерывание по «Стоп» (abortSignal)', (
   });
 });
 
-describe('git tools — repo_path (AD-076 §T6)', () => {
+describe('git tools — repo_path (ADR-076 §T6)', () => {
   let tmpDir: string;
   let subRepo: string;
 

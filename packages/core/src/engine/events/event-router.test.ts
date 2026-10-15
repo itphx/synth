@@ -28,7 +28,7 @@ const binding = (overrides: Partial<UpsertEventBindingInput> = {}): UpsertEventB
   ...overrides,
 });
 
-describe('EventRouter (AD-089)', () => {
+describe('EventRouter (ADR-089)', () => {
   let tmpDir: string;
   let bindingStore: EventBindingStore;
   let journal: EventJournalStore;

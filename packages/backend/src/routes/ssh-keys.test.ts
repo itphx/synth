@@ -1,4 +1,4 @@
-// AD-076 §T5: backend монтирует core-фабрики SSH-ключей с managed-RBAC.
+// ADR-076 §T5: backend монтирует core-фабрики SSH-ключей с managed-RBAC.
 // Проверяем: запись (POST/PATCH/DELETE) — только ADMIN, чтение (GET) — USER;
 // flat и nested пути смонтированы как в `app.ts`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -45,7 +45,7 @@ function makeGuards(user: User | null) {
   return { requireAuth, requireAdmin };
 }
 
-describe('SSH Keys API Routes (AD-076 §T5, backend RBAC)', () => {
+describe('SSH Keys API Routes (ADR-076 §T5, backend RBAC)', () => {
   let dataDir: string;
   let store: SSHKeyStore;
 

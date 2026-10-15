@@ -1,5 +1,5 @@
 /**
- * AD-084: юнит-тесты DecisionProvider — mock fetch, оба транспорта
+ * ADR-084: юнит-тесты DecisionProvider — mock fetch, оба транспорта
  * (`decisions`/`systemone`), парсинг answers, маппинг ошибок.
  */
 
@@ -44,7 +44,7 @@ const OK_BODY = {
   usage: { input_tokens: 10, output_tokens: 5 },
 };
 
-describe('DecisionProvider (AD-084)', () => {
+describe('DecisionProvider (ADR-084)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

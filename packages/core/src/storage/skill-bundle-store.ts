@@ -11,8 +11,8 @@ export interface SkillBundleStoreConfig {
 }
 
 /**
- * AD-046 §7.3/§8.3: instance-хранилище bundles (`{dataDir}/{bundlesPath}/<name>.yaml`).
- * Запись — атомарная (tmp → rename, AD-005), образец — `SkillStore`.
+ * ADR-046 §7.3/§8.3: instance-хранилище bundles (`{dataDir}/{bundlesPath}/<name>.yaml`).
+ * Запись — атомарная (tmp → rename, ADR-005), образец — `SkillStore`.
  */
 export class SkillBundleStore {
   private readonly _lock = new AsyncLock();

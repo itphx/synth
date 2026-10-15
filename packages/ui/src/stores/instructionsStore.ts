@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { synthApi, type InstructionsInfo } from '../lib/api/synthApi'
 
 /**
- * AD-069 §9.3: снимки проектных инструкций по сессиям для UI-индикатора.
+ * ADR-069 §9.3: снимки проектных инструкций по сессиям для UI-индикатора.
  *
  * Загрузка — по запросу панели и по WS-событию `context.instructions_loaded`
  * (диспетчер `transportStore`), чтобы список файлов/статусов обновлялся реактивно.

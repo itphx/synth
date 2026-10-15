@@ -40,7 +40,7 @@ const KIND_BADGE: Record<string, string> = {
 }
 
 /**
- * AD-046 §7/§9.2 / AD-072: админ-категория «Команды» — список `/`-команд
+ * ADR-046 §7/§9.2 / ADR-072: админ-категория «Команды» — список `/`-команд
  * (kind/source/availability + диагностика shadowed/collision) и CRUD bundles.
  */
 export function CommandsSettings() {

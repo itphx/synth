@@ -123,7 +123,7 @@ export const AgentsPanel = () => {
   } | null>(null)
   const formRef = useRef<HTMLDivElement>(null)
 
-  // Агент по умолчанию (AD-072): контрол в начале панели, сохранение через API.
+  // Агент по умолчанию (ADR-072): контрол в начале панели, сохранение через API.
   const loadDefaultAgent = async () => {
     try {
       setDefaultAgentInfo(await synthApi.getDefaultAgentInfo())
@@ -711,7 +711,7 @@ export const AgentsPanel = () => {
         </SettingsSection>
       )}
 
-      {/* AD-076: реестр SSH-ключей per-agent (в разделе «Агенты») */}
+      {/* ADR-076: реестр SSH-ключей per-agent (в разделе «Агенты») */}
       <SshKeysSettings />
     </SettingsPanel>
   )

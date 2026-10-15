@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.1 (Фаза 1): per-session скоуп MCP-инструментов и разделение слоёв
+ * ADR-071 §2.1 (Фаза 1): per-session скоуп MCP-инструментов и разделение слоёв
  * `tools` (встроенные, stable) / `mcp.tools` (MCP, volatile) в манифесте.
  *
  * Проверяем, что две сессии с разными активными наборами MCP-серверов не
@@ -146,7 +146,7 @@ function makeMockMcpManager(opts: { defaultOn?: string[] } = {}): McpManager {
   return manager as unknown as McpManager;
 }
 
-describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
+describe('ChatOrchestrator — per-session MCP scope (ADR-071 §2.1)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let orchestrator: ChatOrchestrator;
@@ -280,7 +280,7 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     expect(status!.tier).toBe('volatile');
     expect(status!.chars).toBeGreaterThan(0);
 
-    // AD-071 §2.3: MCP-блоки не входят в кэшируемый stable-префикс.
+    // ADR-071 §2.3: MCP-блоки не входят в кэшируемый stable-префикс.
     const stableOnly = info.manifest.entries
       .filter((e) => e.tier === 'stable' && e.status !== 'empty')
       .reduce((sum, e) => sum + e.chars, 0);
@@ -295,7 +295,7 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     expect(toolNames()).not.toContain('srvB_fetch');
   });
 
-  it('AD-071 §2.4: snapshot defaultOn включается, session opt-out отключает', async () => {
+  it('ADR-071 §2.4: snapshot defaultOn включается, session opt-out отключает', async () => {
     orchestrator = makeOrchestrator(makeMockMcpManager());
     const session = await sessionManager.createSession({
       title: 'opt-out',
@@ -315,7 +315,7 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     expect(toolNames()).not.toContain('srvA_search');
   });
 
-  it('AD-071 §2.4: resolveMcpServers отдаёт уровень и причину', async () => {
+  it('ADR-071 §2.4: resolveMcpServers отдаёт уровень и причину', async () => {
     orchestrator = makeOrchestrator(makeMockMcpManager());
     const session = await sessionManager.createSession({
       title: 'scope',
@@ -335,12 +335,12 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
 
     expect(srvA).toMatchObject({ level: 'system', enabled: false, reason: 'session_optout', status: 'disabled' });
     expect(srvB).toMatchObject({ level: 'session', enabled: true, status: 'error' });
-    // AD-071 §2.6: поля для таблицы «MCP» в статистике (автор/тулы).
+    // ADR-071 §2.6: поля для таблицы «MCP» в статистике (автор/тулы).
     expect(srvA.author).toBeNull();
     expect(srvA.tools).toEqual([]);
   });
 
-  it('AD-071 §2.6: resolveMcpServers отдаёт chars/estTokens/toolDetails подключённого сервера', async () => {
+  it('ADR-071 §2.6: resolveMcpServers отдаёт chars/estTokens/toolDetails подключённого сервера', async () => {
     orchestrator = makeOrchestrator(makeMockMcpManager());
     const session = await createSession([], ['srvA']);
     await runTurn(session.id); // ensureToolsLoaded → srvA подключён
@@ -359,7 +359,7 @@ describe('ChatOrchestrator — per-session MCP scope (AD-071 §2.1)', () => {
     expect(td.adminDisabled).toBeUndefined();
   });
 
-  it('AD-071 §2.6: capability mcp отключает MCP-тулы из запроса и помечает toolDetails', async () => {
+  it('ADR-071 §2.6: capability mcp отключает MCP-тулы из запроса и помечает toolDetails', async () => {
     orchestrator = makeOrchestrator(makeMockMcpManager());
     orchestrator.setToolsDisabled({ capabilities: ['mcp'], tools: [] });
     const session = await createSession([], ['srvA']);

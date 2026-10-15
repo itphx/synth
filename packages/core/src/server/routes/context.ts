@@ -32,7 +32,7 @@ const DEFAULT_MESSAGES: ContextRoutesMessages = {
 
 export interface ContextRoutesOptions {
   /**
-   * Резолвер снимка проектных инструкций (AD-069 Фаза 2a) — общий core-модуль.
+   * Резолвер снимка проектных инструкций (ADR-069 Фаза 2a) — общий core-модуль.
    * Для сессии без проекта вызывается с `workspace: undefined`.
    */
   resolveInstructions: InstructionsInfoResolver;
@@ -53,7 +53,7 @@ export interface ContextRoutesOptions {
 }
 
 /**
- * AD-069 §9.3: read-only прозрачность проектных инструкций.
+ * ADR-069 §9.3: read-only прозрачность проектных инструкций.
  *
  * `GET /instructions?session_id=<id>` — снимок для workspace проекта сессии
  * (сессия без проекта → пустой результат с причиной `no-project`).

@@ -1,5 +1,5 @@
 /**
- * AD-089 Этап 4a: ephemeral-сессии — TTL и авто-архивация.
+ * ADR-089 Этап 4a: ephemeral-сессии — TTL и авто-архивация.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';

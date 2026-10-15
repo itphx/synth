@@ -17,7 +17,7 @@ export interface UiScaleSliderProps {
 }
 
 /**
- * AD-072: обёртка над Kit `SliderField` для масштаба UI.
+ * ADR-072: обёртка над Kit `SliderField` для масштаба UI.
  * Значение — доля (0.5…1.2), подпись — проценты.
  */
 export const UiScaleSlider: React.FC<UiScaleSliderProps> = ({

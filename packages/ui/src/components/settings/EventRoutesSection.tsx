@@ -23,7 +23,7 @@ import {
 } from '../ui/settings'
 import { AgentSelect, ProjectSelect, SessionSelect } from './entity-selects'
 
-/** AD-089: режим цели правила маршрутизации (совпадает с `EventRouteTarget`). */
+/** ADR-089: режим цели правила маршрутизации (совпадает с `EventRouteTarget`). */
 type RouteMode = EventRouteTarget['mode']
 
 const ROUTE_MODES: RouteMode[] = ['bound', 'ephemeral', 'queue', 'bind']
@@ -129,7 +129,7 @@ function ruleToInput(rule: EventRouteRule): EventRouteRuleInputRequest {
 }
 
 /**
- * AD-089 / AD-072: секция «Правила маршрутизации» раздела «События».
+ * ADR-089 / ADR-072: секция «Правила маршрутизации» раздела «События».
  *
  * Список правил (`EventRouteRule`) с инлайн-формой создания/редактирования и
  * удалением. Правила упорядочены по приоритету (больше — раньше); сама
@@ -331,7 +331,7 @@ export function EventRoutesSection({ canManage = true }: { canManage?: boolean }
       if (target.ttl) parts.push(`${t('events.routes.form.ttl')}: ${target.ttl}`)
       return parts.join(' · ')
     }
-    // AD-089 (auto-bind): цель закрепляет чат/тред за новой сессией.
+    // ADR-089 (auto-bind): цель закрепляет чат/тред за новой сессией.
     if (target.mode === 'bind') {
       const parts = [modeLabel('bind')]
       if (target.agentTemplate) {

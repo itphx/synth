@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.6: per-message duration_ms/cost_usd в metadata финального
+ * ADR-070 §2.6: per-message duration_ms/cost_usd в metadata финального
  * assistant-сообщения и в событии `stream.done`.
  */
 
@@ -72,7 +72,7 @@ class StatsProvider extends BaseProvider {
   }
 }
 
-describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
+describe('ChatOrchestrator — per-message stats (ADR-070 §2.6)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -151,7 +151,7 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
       cacheRead: (40 * 0.5) / div,
       cacheWrite: (20 * 1.5) / div,
     });
-    // AD-070 §2.6: нормальный ответ — status 'completed' (UI не рисует префикс).
+    // ADR-070 §2.6: нормальный ответ — status 'completed' (UI не рисует префикс).
     expect(assistant.metadata?.status).toBe('completed');
   });
 
@@ -168,7 +168,7 @@ describe('ChatOrchestrator — per-message stats (AD-070 §2.6)', () => {
     expect(done!.data.cost_currency).toBe('USD');
     // usage сохранён для обратной совместимости.
     expect(done!.data.usage).toBeTruthy();
-    // AD-070 §2.6: status доносится до UI в stream.done.
+    // ADR-070 §2.6: status доносится до UI в stream.done.
     expect(done!.data.status).toBe('completed');
   });
 

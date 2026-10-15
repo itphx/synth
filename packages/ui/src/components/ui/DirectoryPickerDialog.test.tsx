@@ -113,7 +113,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('DirectoryPickerDialog (AD-075)', () => {
+describe('DirectoryPickerDialog (ADR-075)', () => {
   it('отрисовывается и загружает корень workspace', async () => {
     await render()
 

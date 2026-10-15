@@ -16,7 +16,7 @@ const mockAuth = {
   }) as MiddlewareHandler,
 };
 
-describe('Service Keys API Routes (AD-052, этап I)', () => {
+describe('Service Keys API Routes (ADR-052, этап I)', () => {
   let tmpDir: string;
   let store: ServiceApiKeyStore;
 

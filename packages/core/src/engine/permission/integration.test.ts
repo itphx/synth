@@ -93,7 +93,7 @@ function makeMessage(): Message {
   };
 }
 
-describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
+describe('ChatOrchestrator × permissions (ADR-029) — smoke', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;
@@ -106,7 +106,7 @@ describe('ChatOrchestrator × permissions (AD-029) — smoke', () => {
     store = new FileStore({ dataDir: tmpDir });
     sessionManager = new SessionManager(store);
     projectStore = new ProjectStore({ dataDir: tmpDir });
-    // AD-075: файловые тулы доступны только при заданном workspace проекта.
+    // ADR-075: файловые тулы доступны только при заданном workspace проекта.
     const project = projectStore.create('Perm', 'u1', { workspace: tmpDir });
     await projectStore.save(project);
     projectId = project.id;
@@ -406,7 +406,7 @@ class MockReadProvider extends BaseProvider {
   }
 }
 
-describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () => {
+describe('ChatOrchestrator × permissions — once:false и deny (ADR-029)', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;
@@ -419,7 +419,7 @@ describe('ChatOrchestrator × permissions — once:false и deny (AD-029)', () =
     store = new FileStore({ dataDir: tmpDir });
     sessionManager = new SessionManager(store);
     projectStore = new ProjectStore({ dataDir: tmpDir });
-    // AD-075: файловые тулы доступны только при заданном workspace проекта.
+    // ADR-075: файловые тулы доступны только при заданном workspace проекта.
     const project = projectStore.create('Perm2', 'u1', { workspace: tmpDir });
     await projectStore.save(project);
     projectId = project.id;

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { slugifyWorkspaceName, uniqueWorkspaceName, MAX_WORKSPACE_SLUG_LENGTH } from './workspace.js';
 
-describe('slugifyWorkspaceName (AD-075)', () => {
+describe('slugifyWorkspaceName (ADR-075)', () => {
   it('приводит имя к безопасному слагу', () => {
     expect(slugifyWorkspaceName('My Cool Project!')).toBe('my-cool-project');
   });
@@ -28,7 +28,7 @@ describe('slugifyWorkspaceName (AD-075)', () => {
   });
 });
 
-describe('uniqueWorkspaceName (AD-075)', () => {
+describe('uniqueWorkspaceName (ADR-075)', () => {
   it('свободное имя возвращается как есть', () => {
     expect(uniqueWorkspaceName('proj', [])).toBe('proj');
     expect(uniqueWorkspaceName('proj', ['other'])).toBe('proj');

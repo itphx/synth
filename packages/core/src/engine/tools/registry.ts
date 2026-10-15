@@ -5,7 +5,7 @@ export class ToolRegistry {
   private readonly _tools = new Map<string, ToolDefinition>();
 
   register(tool: ToolDefinition): void {
-    // AD-071 §2.1: встроенные инструменты не тегируют источник явно — дефолт
+    // ADR-071 §2.1: встроенные инструменты не тегируют источник явно — дефолт
     // `builtin` проставляется централизованно здесь; MCP-регистрация передаёт
     // `source: 'mcp'` + `mcpServer` и сохраняется как есть.
     this._tools.set(tool.name, { source: 'builtin', ...tool });
@@ -46,13 +46,13 @@ export class ToolRegistry {
     return [...this._tools.values()];
   }
 
-  /** AD-071 §2.1: встроенные инструменты (слой `tools`, stable). */
+  /** ADR-071 §2.1: встроенные инструменты (слой `tools`, stable). */
   listBuiltin(): ToolDefinition[] {
     return [...this._tools.values()].filter((tool) => (tool.source ?? 'builtin') === 'builtin');
   }
 
   /**
-   * AD-071 §2.1: MCP-инструменты указанных серверов (per-session выборка).
+   * ADR-071 §2.1: MCP-инструменты указанных серверов (per-session выборка).
    * Пустой набор → пустой список (safety против утечки чужих MCP-тулов).
    */
   listMcp(serverNames: Iterable<string>): ToolDefinition[] {
@@ -64,11 +64,11 @@ export class ToolRegistry {
   }
 
   /**
-   * AD-071 §2.1: per-session выборка инструментов — встроенные + MCP только
+   * ADR-071 §2.1: per-session выборка инструментов — встроенные + MCP только
    * активных серверов сессии. Порядок: сначала встроенные, затем MCP
    * (кэш-брейкпоинт ставится после встроенных, см. `stableToolCount`).
    *
-   * AD-071 §2.3: фильтр отбирает только доступные тулы (режим `available`) —
+   * ADR-071 §2.3: фильтр отбирает только доступные тулы (режим `available`) —
    * на уровне `ToolDefinition`, до конвертации в LLM-формат (capabilities
    * теряются в `ToolForLLM`). Встроенные и MCP фильтруются **независимо**:
    * объектная форма задаёт предикат на слой (`builtin`/`mcp`).
@@ -98,7 +98,7 @@ export class ToolRegistry {
   }
 
   /**
-   * AD-071 §2.1: инструменты для сессии — встроенные + MCP активных серверов.
+   * ADR-071 §2.1: инструменты для сессии — встроенные + MCP активных серверов.
    * Без `mcpServers` MCP-слой пуст (safety: не отдавать чужие MCP-тулы).
    */
   toLLMFormatForSession(mcpServers?: Iterable<string>): ToolForLLM[] {
@@ -107,7 +107,7 @@ export class ToolRegistry {
   }
 
   /**
-   * AD-071 §2.6: LLM-представление одного тула — для расчёта `chars`/`estTokens`
+   * ADR-071 §2.6: LLM-представление одного тула — для расчёта `chars`/`estTokens`
    * (тот же формат, что уходит в слой `tools`/`mcp.tools` манифеста).
    */
   toLLM(tool: ToolDefinition): ToolForLLM {

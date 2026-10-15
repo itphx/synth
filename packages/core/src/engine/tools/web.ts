@@ -284,7 +284,7 @@ function normalizeUrl(raw: string): string {
   return 'https://' + trimmed;
 }
 
-// ─── SSRF-политика web_fetch (AD-071 §2.3.1, переиспользование MCP-политики) ─
+// ─── SSRF-политика web_fetch (ADR-071 §2.3.1, переиспользование MCP-политики) ─
 
 /** Политика: запрет private/loopback/link-local (в т.ч. `169.254.169.254`). */
 const PRIVATE_NETWORK_POLICY = {
@@ -313,7 +313,7 @@ class WebFetchBlockedError extends Error {
 
 /**
  * Проверяет URL по SSRF-политике: только `http(s)` и адрес не из приватных
- * диапазонов. DNS-резолв — через `evaluateMcpNetworkAccess` (AD-071).
+ * диапазонов. DNS-резолв — через `evaluateMcpNetworkAccess` (ADR-071).
  */
 async function ensureUrlAllowed(url: string): Promise<void> {
   let parsed: URL;
@@ -392,7 +392,7 @@ export const webFetchTool: ToolDefinition = {
     if (rawUrls.length === 0) {
       return { content: sm('tool.args_error', { tool: this.name, issues: sm('web.fetch_args_url_required') }), isError: true, metadata: { i18n: i18nMeta('web.fetch_args_url_required') } };
     }
-    // AD-036: деобфускация в точке потребления — URL может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — URL может содержать ⟦SYNTH_SECRET_N⟧
     const restoredUrls = await Promise.all(rawUrls.map((u) => deobfuscateText(ctx, u)));
     const urls = restoredUrls.slice(0, MAX_FETCH_URLS).map(normalizeUrl);
     const timeoutMs = (params.timeout ?? 30) * 1000;
@@ -496,7 +496,7 @@ export const webSearchTool: ToolDefinition = {
     const params = parsed.data as { query: string; max_results?: number };
     const limit = params.max_results ?? 10;
 
-    // AD-036: деобфускация в точке потребления — запрос может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — запрос может содержать ⟦SYNTH_SECRET_N⟧
     const query = await deobfuscateText(ctx, params.query);
 
     try {

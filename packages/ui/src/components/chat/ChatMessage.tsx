@@ -112,13 +112,13 @@ function ChatMessageInner({
   const isInfo = message.role === 'info'
   const isSummary = message.role === 'summary'
   const isDebug = message.role === 'debug'
-  // AD-051: сообщения планировщика (source:'cron') приходят как role:'user' с
+  // ADR-051: сообщения планировщика (source:'cron') приходят как role:'user' с
   // metadata.scheduler === true — рисуем их служебным Notice, а не user-пузырём.
   const isScheduler = isUser && message.metadata?.scheduler === true
   const canRetry = isUser
   const hasDebug = !!message.debug_data && Object.keys(message.debug_data).length > 0
 
-  // LLM Gateway (AD-036): реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧.
+  // LLM Gateway (ADR-036): реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧.
   const secrets = (message.metadata?.secrets as Record<string, string> | undefined) ?? undefined
   // i18n ядра: metadata.i18n → перевод по ключу (fallback — content).
   const resolveI18nText = useResolveI18n()
@@ -152,7 +152,7 @@ function ChatMessageInner({
 
   const showActions = isUser || isAssistant || isSummary || isDebug
 
-  // AD-070 §2.6: строка статистики — только для ответов ассистента с данными.
+  // ADR-070 §2.6: строка статистики — только для ответов ассистента с данными.
   // Скрытые/выключенные и служебные tool-chain сообщения исключаем.
   const showStats =
     isAssistant &&
@@ -194,7 +194,7 @@ function ChatMessageInner({
   const intermediateTextMode = useUIStore((s) => s.intermediateTextDisplay)
   const isInline = intermediateTextMode !== 'bottom'
 
-  // AD-046 §7.1: локальный ответ системной (builtin) команды — нейтральный
+  // ADR-046 §7.1: локальный ответ системной (builtin) команды — нейтральный
   // system-блок без шапки агента/статистики; команда и вывод объединены
   // (`metadata.command === true` на assistant-сообщении). Шаблонные/skill/bundle
   // команды сюда не попадают: у них `metadata.command` — объект, а не `true`.
@@ -236,7 +236,7 @@ function ChatMessageInner({
     : null
   const displayContent = bottomContent ?? message.content
 
-  // AD-046 §7.1: reasoning / intermediate / tool-call блоки. Для assistant
+  // ADR-046 §7.1: reasoning / intermediate / tool-call блоки. Для assistant
   // рендерятся в пузыре напрямую, для summary/debug — внутри Notice-тела.
   const partsContent = isAssistant || isSummary || isDebug
     ? (() => {
@@ -305,7 +305,7 @@ function ChatMessageInner({
       })()
     : null
 
-  // AD-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
+  // ADR-070 §2.6: пустой отменённый ответ (отмена до первого токена) всё равно
   // показываем — статус «Остановлено» и статистика идут через metadata.
   if (
     !displayContent &&
@@ -316,7 +316,7 @@ function ChatMessageInner({
     !showStats
   ) return null
 
-  // AD-046 §7.1: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.
+  // ADR-046 §7.1: служебные сообщения (сводка/отладка/ошибка/инфо) — единый Notice.
   const noticeVariant: NoticeVariant | null = isSummary
     ? 'summary'
     : isDebug
@@ -405,7 +405,7 @@ function ChatMessageInner({
     )
   }
 
-  // AD-051: служебное сообщение планировщика (source:'cron') — центрированный
+  // ADR-051: служебное сообщение планировщика (source:'cron') — центрированный
   // блок с иконкой расписания и подписью «Планировщик · <имя задания>» вместо
   // правого user-пузыря с шапкой текущего пользователя. Контент — чистый текст
   // задания; действия — полный набор как у user-сообщения.
@@ -551,7 +551,7 @@ function ChatMessageInner({
             debugActive={debugActive}
             readOnly={readOnly}
             hasStats={showStats}
-            // AD-070 §2.6: статистика ответа — в поповере по кнопке (единый путь).
+            // ADR-070 §2.6: статистика ответа — в поповере по кнопке (единый путь).
             statsContent={<MessageStats message={message} />}
             onCopy={handleCopy}
             onToggle={handleToggle}

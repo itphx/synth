@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { BusEvent } from '@itphx/synth-shared';
 import { EventBus } from './bus.js';
 
-describe('события скиллов (AD-046 §8.2)', () => {
+describe('события скиллов (ADR-046 §8.2)', () => {
   it('skill.invoked публикуется с данными', () => {
     const bus = new EventBus();
     const events: BusEvent[] = [];

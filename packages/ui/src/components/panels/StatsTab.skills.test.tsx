@@ -167,7 +167,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('StatsTab — секция «Скиллы» (AD-046 §9.3)', () => {
+describe('StatsTab — секция «Скиллы» (ADR-046 §9.3)', () => {
   it('рендерит таблицу скиллов: scope/уровень, доступность, включение, trust, вклад', async () => {
     const container = await renderStats()
     const section = await expandSection(container, 'Skills')
@@ -232,7 +232,7 @@ describe('StatsTab — секция «Скиллы» (AD-046 §9.3)', () => {
   })
 })
 
-describe('StatsTab — секция «Команды» (AD-046 §8.2)', () => {
+describe('StatsTab — секция «Команды» (ADR-046 §8.2)', () => {
   it('счётчики и последние вызовы из skillsStore', async () => {
     useSkillsStore.setState({
       commandInvocationCounts: { help: 3, summary: 1 },

@@ -31,7 +31,7 @@ const KIND_BADGE: Record<string, string> = {
 }
 
 /**
- * AD-046 §7/§9.3: автокомплит `/`-команд над композером. Источник — единый
+ * ADR-046 §7/§9.3: автокомплит `/`-команд над композером. Источник — единый
  * реестр команд core (`GET /api/v2/commands`): builtin/template/skill/bundle.
  * Визуальный референс — архив форка (`CommandAutocomplete`/`SkillAutocomplete`),
  * сторы форка не переиспользуются.

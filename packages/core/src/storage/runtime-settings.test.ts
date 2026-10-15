@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RuntimeSettingsStore, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig } from './runtime-settings.js';
 
-describe('RuntimeSettingsStore.clear* (AD-072 Ф2)', () => {
+describe('RuntimeSettingsStore.clear* (ADR-072 Ф2)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -169,7 +169,7 @@ describe('RuntimeSettingsStore.defaultAgent', () => {
   });
 });
 
-describe('mergeMcpNetworkPolicy (AD-071 §2.3.1)', () => {
+describe('mergeMcpNetworkPolicy (ADR-071 §2.3.1)', () => {
   const config = { mode: 'deny' as const, list: ['10.0.0.0/8'] };
   const runtime = { mode: 'allow' as const, list: ['192.168.0.0/16'] };
 
@@ -186,7 +186,7 @@ describe('mergeMcpNetworkPolicy (AD-071 §2.3.1)', () => {
   });
 });
 
-describe('RuntimeSettingsStore.events (AD-089)', () => {
+describe('RuntimeSettingsStore.events (ADR-089)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -226,7 +226,7 @@ describe('RuntimeSettingsStore.events (AD-089)', () => {
   });
 });
 
-describe('mergeEventsConfig (AD-089)', () => {
+describe('mergeEventsConfig (ADR-089)', () => {
   const base = {
     enabled: false,
     defaultMode: 'ephemeral' as const,
@@ -304,7 +304,7 @@ describe('mergeEventsConfig (AD-089)', () => {
   });
 });
 
-describe('RuntimeSettingsStore.decision (AD-084)', () => {
+describe('RuntimeSettingsStore.decision (ADR-084)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -344,7 +344,7 @@ describe('RuntimeSettingsStore.decision (AD-084)', () => {
   });
 });
 
-describe('mergeDecisionConfig (AD-084)', () => {
+describe('mergeDecisionConfig (ADR-084)', () => {
   const base = {
     enabled: false,
     provider: '',

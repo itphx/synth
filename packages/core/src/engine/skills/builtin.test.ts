@@ -11,7 +11,7 @@ import {
   buildSynthAgentsMdMeta,
 } from './builtin.js';
 
-describe('builtin skills (AD-046 §9.5)', () => {
+describe('builtin skills (ADR-046 §9.5)', () => {
   it('BUILTIN_SOURCE — instance/system/trusted', () => {
     expect(BUILTIN_SOURCE).toMatchObject({
       scope: 'instance',
@@ -61,7 +61,7 @@ describe('builtin skills (AD-046 §9.5)', () => {
   });
 });
 
-describe('builtin skill synth-agents-md (AD-069 §8.2)', () => {
+describe('builtin skill synth-agents-md (ADR-069 §8.2)', () => {
   it('присутствует, trusted, instance/agency-meta', () => {
     const skill = buildBuiltinSkills({ dataDir: '/data' }).find((s) => s.name === SYNTH_AGENTS_MD_NAME);
     expect(skill).toBeDefined();

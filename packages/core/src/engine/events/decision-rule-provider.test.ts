@@ -94,7 +94,7 @@ function makeFixture(options: {
   return { provider, decide, getDecisionProvider };
 }
 
-describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
+describe('DecisionRuleProvider (ADR-084 × ADR-089)', () => {
   it('decisionRouting=false → null, decision-провайдер не вызывается', async () => {
     const { provider, decide, getDecisionProvider } = makeFixture({ decisionRouting: false });
     expect(await provider.resolve({ event: event(), bindings: [] })).toBeNull();
@@ -139,7 +139,7 @@ describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
       ttl: '24h',
       confidence: 0.9,
     });
-    // Мета решения (AD-084 × AD-089): сигналы агента/модели + latency.
+    // Мета решения (ADR-084 × ADR-089): сигналы агента/модели + latency.
     expect(decision?.signals).toEqual(
       expect.arrayContaining(['decision-rules', 'agent:triage', 'model:clef/clef-flash']),
     );
@@ -225,7 +225,7 @@ describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
     await expect(provider.resolve({ event: event(), bindings: [] })).resolves.toBeNull();
   });
 
-  it('getDecisionConfig читается на каждый resolve (live runtime-обновление, AD-084 Ф5)', async () => {
+  it('getDecisionConfig читается на каждый resolve (live runtime-обновление, ADR-084 Ф5)', async () => {
     let config: DecisionConfigLike | null = { ...BASE_CONFIG, enabled: false };
     const decide = vi.fn(async () => choiceResponse('triage', 0.9));
     const provider = new DecisionRuleProvider({
@@ -252,7 +252,7 @@ describe('DecisionRuleProvider (AD-084 × AD-089)', () => {
   });
 });
 
-describe('DecisionRuleProvider в EventRouter (AD-089, порядок и fail-safe)', () => {
+describe('DecisionRuleProvider в EventRouter (ADR-089, порядок и fail-safe)', () => {
   let tmpDir: string;
   let bindingStore: EventBindingStore;
   let journal: EventJournalStore;

@@ -2,7 +2,7 @@ import { ProjectRole } from '@itphx/synth-shared';
 import type { Project, Session } from '@itphx/synth-shared';
 
 /**
- * AD-075/D5: id пользователя сессии для проверки прав на проектные данные.
+ * ADR-075/D5: id пользователя сессии для проверки прав на проектные данные.
  *
  * Глобальных ролей в core нет (LEAD/ADMIN — концерн backend), поэтому опираемся
  * только на атрибуцию сессии: `userId`, затем `ownerId` (standalone/hybrid
@@ -13,7 +13,7 @@ export function resolveSessionUserId(session: Session | null | undefined): strin
 }
 
 /**
- * AD-075/D5: может ли пользователь сессии писать проектные данные
+ * ADR-075/D5: может ли пользователь сессии писать проектные данные
  * (`invariants`, `log`, `plan`). Правило зеркалит HTTP-RBAC контентных полей
  * (`PUT /api/v2/projects/:id`, backend): owner проекта или участник
  * `{OWNER, EDITOR}`.

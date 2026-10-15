@@ -1,4 +1,4 @@
-// AD-052 (этап II): webhooks на backend — сквозной срез через createBackendApp.
+// ADR-052 (этап II): webhooks на backend — сквозной срез через createBackendApp.
 // Проверяем: managed-RBAC (USER → 403, ADMIN → 200), создание подписки с
 // однократной выдачей signing-секрета (`whsec_…`), 409 при дубле label,
 // SSRF-политику целевого URL (http/приватный адрес → 400), revoke/regenerate/
@@ -27,7 +27,7 @@ function jsonInit(method: string, body: unknown): RequestInit {
   };
 }
 
-describe('AD-052 (этап II): webhooks на backend (webhooks.enabled: true)', () => {
+describe('ADR-052 (этап II): webhooks на backend (webhooks.enabled: true)', () => {
   let rootDir: string;
   let backend: BackendAppHandle;
 
@@ -187,7 +187,7 @@ describe('AD-052 (этап II): webhooks на backend (webhooks.enabled: true)',
   });
 });
 
-describe('AD-052 (этап II): webhooks disabled (webhooks.enabled: false)', () => {
+describe('ADR-052 (этап II): webhooks disabled (webhooks.enabled: false)', () => {
   let rootDir: string;
   let backend: BackendAppHandle;
 

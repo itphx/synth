@@ -74,7 +74,7 @@ export function computeBackoffMs(retryIndex: number, random: () => number = Math
 }
 
 /**
- * AD-052 (этап II): движок исходящих webhooks над `EventBus.subscribeAll`.
+ * ADR-052 (этап II): движок исходящих webhooks над `EventBus.subscribeAll`.
  *
  * Подписка на все события шины (как глобальный SSE-хаб), фильтр по паттернам
  * подписки, HMAC-подпись, retry/backoff с таймаутом, дедуп по (подписка+событие)

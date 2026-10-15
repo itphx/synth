@@ -16,7 +16,7 @@ function isValidPattern(p: unknown): p is SecretPattern {
 }
 
 /**
- * LLM Gateway (AD-036) — управление regex-паттернами детекции секретов.
+ * LLM Gateway (ADR-036) — управление regex-паттернами детекции секретов.
  * Схема «системный + override»: пользовательский список полностью заменяет дефолтный,
  * DELETE сбрасывает к встроенным паттернам. Только ADMIN.
  */

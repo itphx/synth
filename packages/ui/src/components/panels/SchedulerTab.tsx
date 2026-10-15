@@ -22,7 +22,7 @@ import { FieldTooltip, TextArea, TextField } from '@/components/ui/settings'
 import { AgentSelect, ProjectSelect, SessionSelect } from '@/components/settings/entity-selects'
 import { PanelTab } from './PanelTab'
 
-/** AD-051/AD-089: настройка триггера — ровно одно из `cron` / `every`. */
+/** ADR-051/ADR-089: настройка триггера — ровно одно из `cron` / `every`. */
 type TriggerKind = 'cron' | 'every'
 type TargetMode = ScheduleTarget['mode']
 
@@ -96,7 +96,7 @@ function editorToInput(editor: EditorState): ScheduleInput {
 }
 
 /**
- * AD-051/AD-089: вкладка правой панели «Шедулер» — CRUD расписаний планировщика.
+ * ADR-051/ADR-089: вкладка правой панели «Шедулер» — CRUD расписаний планировщика.
  *
  * Расписания инстанса (не привязаны к сессии): список, инлайн-форма создания/
  * редактирования, быстрый toggle, принудительный запуск и удаление. Срабатывание
@@ -338,7 +338,7 @@ export function SchedulerTab() {
         </Button>
       </div>
 
-      {/* AD-051: сессии, запускаемые планировщиком, чаще упираются в лимит
+      {/* ADR-051: сессии, запускаемые планировщиком, чаще упираются в лимит
           контекста — рекомендация включить оптимизацию (сама настройка живёт
           на уровне сессии, вкладка «Контекст»). */}
       <div
@@ -676,7 +676,7 @@ const JOB_STATUS_CLASS: Record<ScheduleRunStatus, string> = {
 }
 
 /**
- * AD-051: раскрываемый блок «История запусков» в карточке расписания.
+ * ADR-051: раскрываемый блок «История запусков» в карточке расписания.
  * История лениво грузится при первом раскрытии и кэшируется; повторное
  * раскрытие отдаёт кэш, кнопка «Обновить» перечитывает с сервера.
  */

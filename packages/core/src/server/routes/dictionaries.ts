@@ -65,7 +65,7 @@ function validateTarget(store: DictionaryStore, category: string, language: stri
 }
 
 /**
- * API управления словарями классификации (AD-034/AD-035).
+ * API управления словарями классификации (ADR-034/ADR-035).
  *
  * GET    /api/v2/dictionaries               — список всех словарей.
  * GET    /api/v2/dictionaries/:category/:lang — словарь с признаком источника.

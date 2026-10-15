@@ -83,7 +83,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('ChatSettings — миграция на Settings UI Kit (AD-072)', () => {
+describe('ChatSettings — миграция на Settings UI Kit (ADR-072)', () => {
   it('каркас — SettingsPanel с единственным scroll-контейнером и без pr-2', async () => {
     const container = await renderSettings()
 

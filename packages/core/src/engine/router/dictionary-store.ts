@@ -1,5 +1,5 @@
 /**
- * DictionaryStore — загрузка словарей классификации (AD-034).
+ * DictionaryStore — загрузка словарей классификации (ADR-034).
  * Принцип как у ContextConfig: системные файлы + пользовательские переопределения.
  *
  * Системные: packages/core/dictionaries/{category}.{lang}.yaml
@@ -84,7 +84,7 @@ export class DictionaryStore {
   }
 
   /**
-   * Получить категоризированные ключевые слова (расширенный формат AD-035).
+   * Получить категоризированные ключевые слова (расширенный формат ADR-035).
    * Парсит категории верхнего уровня (greeting, farewell, ...) из YAML.
    * Возвращает Record с массивами keywords для каждой подкатегории.
    */
@@ -341,7 +341,7 @@ export class DictionaryStore {
     return { keywords: [], tools: [] };
   }
 
-  /** Загрузка категоризированного словаря (AD-035). */
+  /** Загрузка категоризированного словаря (ADR-035). */
   private _loadCategorizedDictionary(category: string, language: string): Record<string, string[]> {
     // 1. Пользовательский
     const userPath = join(this.userDir, `${category}.${language}.yaml`);
@@ -368,7 +368,7 @@ export class DictionaryStore {
     return {};
   }
 
-  /** Парсер для категоризированных словарей (AD-035). */
+  /** Парсер для категоризированных словарей (ADR-035). */
   private _parseCategorizedYaml(path: string): Record<string, string[]> | null {
     try {
       const raw = readFileSync(path, 'utf-8');

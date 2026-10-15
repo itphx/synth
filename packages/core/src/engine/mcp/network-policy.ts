@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import type { McpNetworkPolicy, McpServerConfig } from '@itphx/synth-shared';
 
 /**
- * AD-071 §2.3.1: проверка сетевого доступа MCP-серверов (защита от SSRF/egress).
+ * ADR-071 §2.3.1: проверка сетевого доступа MCP-серверов (защита от SSRF/egress).
  *
  * Политика применяется к HTTP-транспортам (`sse`/`http`) при добавлении записи в
  * реестр и при подключении. `stdio` не проверяется (это RCE-риск, регулируется

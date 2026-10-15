@@ -7,7 +7,7 @@ function config(rules: PermissionConfig['rules']): PermissionConfig {
   return { rules, askTimeoutMs: 30_000 };
 }
 
-describe('resolveSkillRule (AD-046 §8.1)', () => {
+describe('resolveSkillRule (ADR-046 §8.1)', () => {
   it('строка — действие для всех скиллов', () => {
     expect(resolveSkillRule(config({ skill: 'deny' }), 'any')?.action).toBe('deny');
     expect(resolveSkillRule(config({ skill: 'ask' }), 'any')?.action).toBe('ask');
@@ -77,7 +77,7 @@ describe('PermissionEvaluator для тула skill', () => {
   });
 });
 
-describe('deriveSubagentPermission — наследование skill-правил (AD-046 §8.1)', () => {
+describe('deriveSubagentPermission — наследование skill-правил (ADR-046 §8.1)', () => {
   it('skill-правила родителя сохраняются + собственные deny тулов', () => {
     const parent = config({ skill: { 'db-*': 'deny' } });
     const child = deriveSubagentPermission(parent);

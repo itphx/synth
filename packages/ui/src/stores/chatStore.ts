@@ -14,7 +14,7 @@ export interface IntermediateTextBlockData {
   iteration: number
 }
 
-/** AD-070 §2.6: статус ответа ассистента (metadata.status), определяет префикс статистики. */
+/** ADR-070 §2.6: статус ответа ассистента (metadata.status), определяет префикс статистики. */
 export type MessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit'
 
 export interface MessageData {
@@ -78,7 +78,7 @@ export interface LiveToolCall {
   subagentIntermediateTextBlocks?: IntermediateTextBlockData[]
 }
 
-/** AD-070 §2.6: usage в snake_case (как в MessageData/StreamState). */
+/** ADR-070 §2.6: usage в snake_case (как в MessageData/StreamState). */
 export interface UsageData {
   input_tokens: number
   output_tokens: number
@@ -88,7 +88,7 @@ export interface UsageData {
   reasoning_tokens?: number
 }
 
-/** AD-070 §2.6: разбивка стоимости live-события (camelCase из ядра). */
+/** ADR-070 §2.6: разбивка стоимости live-события (camelCase из ядра). */
 export interface CostBreakdown {
   input?: number
   output?: number
@@ -96,7 +96,7 @@ export interface CostBreakdown {
   cacheWrite?: number
 }
 
-/** AD-070 §2.6: вклад одного вызова саб-агента (по parent_call_id) в родителе. */
+/** ADR-070 §2.6: вклад одного вызова саб-агента (по parent_call_id) в родителе. */
 export interface LiveSubagentCallUsage {
   usage: UsageData
   costUsd?: number
@@ -107,7 +107,7 @@ export interface LiveSubagentCallUsage {
   provider?: string
 }
 
-/** AD-070 §2.6: live-вклад саб-агентов сессии (агрегат + разбивка по вызовам). */
+/** ADR-070 §2.6: live-вклад саб-агентов сессии (агрегат + разбивка по вызовам). */
 export interface LiveSubagentSessionUsage {
   usage: UsageData
   /** Номинальная сумма вкладов (обратная совместимость); валюты не смешиваются — см. `costByCurrency`. */
@@ -133,12 +133,12 @@ export interface StreamState {
   model?: string
   provider?: string
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
-  /** AD-070 §2.6: live-стоимость ответа (из stream.usage/subagent.progress). */
+  /** ADR-070 §2.6: live-стоимость ответа (из stream.usage/subagent.progress). */
   costUsd?: number
   /** C2a: валюта `costUsd` (из stream.usage/subagent.progress). */
   costCurrency?: string
   costBreakdown?: CostBreakdown
-  /** AD-070 §2.6: usage — best-effort оценка, а не точные токены провайдера. */
+  /** ADR-070 §2.6: usage — best-effort оценка, а не точные токены провайдера. */
   usageEstimated?: boolean
   toolCalls: LiveToolCall[]
   toolIteration: number
@@ -151,26 +151,26 @@ export interface StreamDoneMetadata {
   usage?: { input_tokens: number; output_tokens: number; total_tokens: number; cache_read_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number }
   debug_info?: Record<string, unknown> | null
   message_index?: number
-  /** AD-046 §7.1: id сохранённого assistant-сообщения (stream.done.message_id). */
+  /** ADR-046 §7.1: id сохранённого assistant-сообщения (stream.done.message_id). */
   message_id?: string
   cancelled?: boolean
   pending_count?: number
-  /** AD-070 §2.6: статус завершения стрима (stream.done.status). */
+  /** ADR-070 §2.6: статус завершения стрима (stream.done.status). */
   status?: MessageStatus
   metadata?: { type?: string; indices?: number[]; [key: string]: unknown }
   reasoning_blocks?: ReasoningBlockData[]
   intermediate_text_blocks?: IntermediateTextBlockData[]
-  /** AD-070 §2.6: длительность прогона (stream.done.duration_ms). */
+  /** ADR-070 §2.6: длительность прогона (stream.done.duration_ms). */
   duration_ms?: number
-  /** AD-070 §2.6: стоимость хода (stream.done.cost_usd). */
+  /** ADR-070 §2.6: стоимость хода (stream.done.cost_usd). */
   cost_usd?: number
   /** C2a: валюта `cost_usd` (stream.done.cost_currency). */
   cost_currency?: string
-  /** AD-070 §2.6: разбивка стоимости (stream.done.cost_breakdown). */
+  /** ADR-070 §2.6: разбивка стоимости (stream.done.cost_breakdown). */
   cost_breakdown?: CostBreakdown
-  /** AD-070 §2.6: usage — best-effort оценка (stream.done.usage_estimated). */
+  /** ADR-070 §2.6: usage — best-effort оценка (stream.done.usage_estimated). */
   usage_estimated?: boolean
-  /** AD-070 §2.6: провайдер финального ответа (stream.done.provider). */
+  /** ADR-070 §2.6: провайдер финального ответа (stream.done.provider). */
   provider?: string
 }
 
@@ -235,7 +235,7 @@ function bumpStreamFinishTick(
 }
 
 /**
- * AD-070 §2.6: StreamState, созданный только live-usage дочерней сессии саб-агента
+ * ADR-070 §2.6: StreamState, созданный только live-usage дочерней сессии саб-агента
  * (без stream.start/контента/тулов). Такой плейсхолдер удаляется терминальным
  * событием `stream.ended`, чтобы не задевать настоящий стрим родителя.
  */
@@ -244,7 +244,7 @@ function isUsageOnlyStream(st: StreamState | undefined): boolean {
 }
 
 /**
- * AD-070 §2.6: накопление reasoning-блоков по итерациям. Внутри одной итерации
+ * ADR-070 §2.6: накопление reasoning-блоков по итерациям. Внутри одной итерации
  * более длинный текст заменяет предыдущий; новая итерация — отдельный блок.
  */
 function appendReasoningBlock(
@@ -261,7 +261,7 @@ function appendReasoningBlock(
   return [...blocks, { text, iteration }]
 }
 
-/** AD-070 §2.6: накопление промежуточного текста; в итерации текст перезаписывается. */
+/** ADR-070 §2.6: накопление промежуточного текста; в итерации текст перезаписывается. */
 function appendIntermediateBlock(
   blocks: IntermediateTextBlockData[],
   text: string,
@@ -303,7 +303,7 @@ interface ChatStore {
   finalErrorBySession: Record<string, FinalStreamError | null>
   stickyNotesBySession: Record<string, StickyNoteData[]>
   summarizationPendingBySession: Record<string, boolean>
-  /** AD-070 §2.6: live-вклад саб-агентов родительской сессии (для StatsTab). */
+  /** ADR-070 §2.6: live-вклад саб-агентов родительской сессии (для StatsTab). */
   liveSubagentUsageBySession: Record<string, LiveSubagentSessionUsage>
   debugModalSessionId: string | null
   debugModalMessageIndex: number | null
@@ -322,10 +322,10 @@ interface ChatStore {
     usageEstimated?: boolean
     model?: string
     provider?: string
-    /** AD-070 §2.6: роль агента (stream.usage.agent_role) — для дочерней сессии. */
+    /** ADR-070 §2.6: роль агента (stream.usage.agent_role) — для дочерней сессии. */
     agentRole?: string
   }) => void
-  /** AD-070 §2.6: сброс live-плейсхолдера дочерней сессии (stream.ended). */
+  /** ADR-070 §2.6: сброс live-плейсхолдера дочерней сессии (stream.ended). */
   clearUsageStream: (sessionId: string, streamId?: string) => void
   updateLiveSubagentUsage: (sessionId: string, callId: string, data: {
     usage?: UsageData
@@ -455,7 +455,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
-  // AD-070 §2.6: live-статистика стрима (событие stream.usage). Обновляет
+  // ADR-070 §2.6: live-статистика стрима (событие stream.usage). Обновляет
   // соответствующий StreamState; точный usage не понижается оценкой.
   // Дочерняя сессия саб-агента не получает stream.start — при первом usage
   // создаём минимальный StreamState (без контента, `hasContent: false`), чтобы
@@ -499,7 +499,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
-  // AD-070 §2.6: терминальное событие дочерней сессии саб-агента. Удаляет
+  // ADR-070 §2.6: терминальное событие дочерней сессии саб-агента. Удаляет
   // usage-only StreamState (если streamId не задан — все такие в сессии), не
   // трогая настоящий стрим с контентом/тулами.
   clearUsageStream: (sessionId, streamId) =>
@@ -523,7 +523,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       return { streamingBySession: { ...s.streamingBySession, [sessionId]: sessionStreams } }
     }),
 
-  // AD-070 §2.6: live-вклад саб-агентов (событие subagent.progress в родителе).
+  // ADR-070 §2.6: live-вклад саб-агентов (событие subagent.progress в родителе).
   // Событие несёт НАКОПЛЕННЫЙ usage вызова, поэтому вклад вызова перезаписываем,
   // а агрегат сессии пересчитываем суммой по вызовам.
   updateLiveSubagentUsage: (sessionId, callId, data) =>
@@ -670,13 +670,13 @@ export const useChatStore = create<ChatStore>((set) => ({
   finishStream: (sessionId, streamId, metadata) =>
     set((s) => {
       const streamFinishTickBySession = bumpStreamFinishTick(s.streamFinishTickBySession, sessionId)
-      // AD-070 §2.6: стрим завершён — live-вклад саб-агентов сессии больше не
+      // ADR-070 §2.6: стрим завершён — live-вклад саб-агентов сессии больше не
       // актуален (итог приходит в metadata.subagents финального сообщения).
       const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
       delete liveSubagentUsageBySession[sessionId]
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       const streamState = sessionStreams[streamId]
-      // AD-070 §2.6: status и top-level финальная статистика stream.done
+      // ADR-070 §2.6: status и top-level финальная статистика stream.done
       // (duration_ms/cost_usd/cost_breakdown/usage_estimated) доносим до metadata
       // сообщения — «Последний ответ» показывает финал сразу, без refetch.
       const doneMetadata: Record<string, unknown> = { ...(metadata.metadata || {}) }
@@ -744,7 +744,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       if (!metadata.cancelled && (streamState.content || metadata.content)) {
         const msgs = [...(s.messagesBySession[sessionId] || [])]
         const fallbackIndex = msgs.length > 0 ? Math.max(...msgs.map((m) => m.index)) + 1 : 0
-        // AD-046 §7.1: index ответа берём из stream.done; при отсутствии —
+        // ADR-046 §7.1: index ответа берём из stream.done; при отсутствии —
         // следующий свободный. Раньше fallback был `+0` и совпадал с index
         // последнего (user-команды) сообщения, сталкивая ключи списка.
         let targetIndex = metadata.message_index ?? fallbackIndex
@@ -801,7 +801,7 @@ export const useChatStore = create<ChatStore>((set) => ({
             provider: metadata.provider || streamState.provider || msgs[existingIdx]!.provider,
             usage: metadata.usage || msgs[existingIdx]!.usage,
             summary_of: metadata.metadata?.indices || msgs[existingIdx]!.summary_of,
-            // AD-070 §2.6: не затираем metadata, пришедшую с message.added
+            // ADR-070 §2.6: не затираем metadata, пришедшую с message.added
             // (subagents/tool_results/secrets), — stream.done добавляет поверх
             // только status и финальную статистику.
             metadata: statusMetadata
@@ -844,7 +844,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((s) => {
       const sessionStreams = { ...(s.streamingBySession[sessionId] || {}) }
       delete sessionStreams[streamId]
-      // AD-070 §2.6: stream.cancelled несёт status + usage/cost/usage_estimated —
+      // ADR-070 §2.6: stream.cancelled несёт status + usage/cost/usage_estimated —
       // если message.added уже добавил assistant-сообщение, сохраняем статистику
       // в него (по stream_id), чтобы отменённый ответ показывал токены/стоимость.
       const hasExtra = !!extra
@@ -875,7 +875,7 @@ export const useChatStore = create<ChatStore>((set) => ({
           }
         }
       }
-      // AD-070 §2.6: отмена завершает стрим — live-вклад саб-агентов сбрасываем.
+      // ADR-070 §2.6: отмена завершает стрим — live-вклад саб-агентов сбрасываем.
       const liveSubagentUsageBySession = { ...s.liveSubagentUsageBySession }
       delete liveSubagentUsageBySession[sessionId]
       return {
@@ -1166,7 +1166,7 @@ export const useChatStore = create<ChatStore>((set) => ({
 }))
 
 /**
- * AD-070 §2.6: селектор live-вклада саб-агентов сессии (для StatsTab).
+ * ADR-070 §2.6: селектор live-вклада саб-агентов сессии (для StatsTab).
  * Использование: `useChatStore(selectLiveSubagentUsage(sessionId))`.
  */
 export function selectLiveSubagentUsage(sessionId: string) {

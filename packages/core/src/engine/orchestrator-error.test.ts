@@ -221,7 +221,7 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     expect(userMsg!.metadata?.last_error).toContain('LLM provider');
   });
 
-  // Баг 1 (AD-070 §2.6): при сбое провайдера сохраняется assistant-сообщение
+  // Баг 1 (ADR-070 §2.6): при сбое провайдера сохраняется assistant-сообщение
   // об ошибке — иначе нет записи в истории, агрегаты сессии 0, debug теряется.
   it('при сбое сохраняет assistant-сообщение об ошибке со status/usage/duration/cost/i18n', async () => {
     const { sessionId } = await run('mockpartial');

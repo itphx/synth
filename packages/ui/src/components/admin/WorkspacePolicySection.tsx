@@ -13,7 +13,7 @@ import {
 import type { WorkspaceOutsideRootPolicy } from '@itphx/synth-shared/types'
 
 /**
- * AD-075: политика для абсолютного `project.workspace` вне `workspacesRoot`
+ * ADR-075: политика для абсолютного `project.workspace` вне `workspacesRoot`
  * (`confirm` — подтверждение, `deny` — запрет). Runtime-override поверх config/env,
  * сброс — `DELETE /settings/workspace-policy`.
  *

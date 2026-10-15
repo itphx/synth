@@ -111,7 +111,7 @@ export function MessageList({
   // Служебные сообщения tool-chain (metadata.tool_chain === true) не рендерятся
   // отдельными пузырями — их визуальное представление уже в финальном сообщении
   // (tool_calls / reasoning_blocks / intermediate_text_blocks). Durable
-  // state-сообщения режима/плана/todo (AD-070 §2.8) тоже скрыты в UI.
+  // state-сообщения режима/плана/todo (ADR-070 §2.8) тоже скрыты в UI.
   const visibleMessages = messages.filter(isVisibleMessage)
 
   const virtualizer = useVirtualizer({

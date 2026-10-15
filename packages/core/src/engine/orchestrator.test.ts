@@ -116,7 +116,7 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
     await expect(resolveDir(orch, session)).resolves.toBe(absWs);
   });
 
-  it('создаёт каталог проектного workspace (AD-075)', async () => {
+  it('создаёт каталог проектного workspace (ADR-075)', async () => {
     const wsRoot = join(tmpDir, 'ws-root-create');
     const project = projectStore.create('P5', 'u1', { workspace: 'make-me' });
     await projectStore.save(project);
@@ -169,13 +169,13 @@ describe('ChatOrchestrator._resolveWorkingDir', () => {
     await expect(resolveDir(orch, session)).resolves.toBe(join(tmpDir, 'workspaces', 'WS1'));
   });
 
-  it('AD-076 §T6: sshKeyStore создаётся лениво из dataDir', () => {
+  it('ADR-076 §T6: sshKeyStore создаётся лениво из dataDir', () => {
     const orch = makeOrchestrator();
     const store = (orch as unknown as { _sshKeyStore: unknown })._sshKeyStore;
     expect(store).toBeTruthy();
   });
 
-  it('AD-076 §T6: явный sshKeyStore не пересоздаётся', () => {
+  it('ADR-076 §T6: явный sshKeyStore не пересоздаётся', () => {
     const store = new SSHKeyStore({ dataDir: tmpDir, env: process.env });
     const orch = new ChatOrchestrator({
       sessionManager,
@@ -350,7 +350,7 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
   it('сохраняет цепочку assistant(toolCalls) → tool(toolCallId) → final assistant', async () => {
     const { messages } = await runToolChain();
 
-    // AD-070 §2.8: state-сообщения (agent_switch) в цепочку tool-chain не входят.
+    // ADR-070 §2.8: state-сообщения (agent_switch) в цепочку tool-chain не входят.
     const chain = messages.filter((m) => m.metadata?.state !== true);
     const roles = chain.map((m) => m.role);
     expect(roles).toEqual([
@@ -377,7 +377,7 @@ describe('ChatOrchestrator — персистентность tool-chain (Вар
     expect(finalAssistant.toolCalls).toBeUndefined();
   });
 
-  it('AD-070 §2.6: metadata.subagents агрегируется из task-результатов хода', async () => {
+  it('ADR-070 §2.6: metadata.subagents агрегируется из task-результатов хода', async () => {
     ProviderFactory.register('subagentstats', SubagentStatsProvider);
     try {
       const toolRegistry = createToolRegistry();
@@ -759,7 +759,7 @@ describe('ChatOrchestrator — отмена сохраняет tool-вызовы
     await promise;
 
     const updated = (await sessionManager.getSession(session.id))!;
-    // AD-070 §2.8: state-сообщения (agent_switch) в цепочку tool-chain не входят.
+    // ADR-070 §2.8: state-сообщения (agent_switch) в цепочку tool-chain не входят.
     const chain = updated.messages.filter((m) => m.metadata?.state !== true);
     const roles = chain.map((m) => m.role);
     expect(roles).toEqual([
@@ -937,7 +937,7 @@ describe('ChatOrchestrator — tool_call.result публикуется посл�
 });
 
 /**
- * Мок-провайдер для тестов фильтрации тулов по режиму (AD-025):
+ * Мок-провайдер для тестов фильтрации тулов по режиму (ADR-025):
  * выполняет заданный сценарий шагов и захватывает список тулов и system prompt
  * каждого вызова chatAsync (статически — ProviderFactory создаёт новый инстанс).
  */
@@ -1029,7 +1029,7 @@ function toolNamesOf(
 const WRITE_TOOLS = ['write_file', 'edit_file', 'create_directory', 'delete_file'];
 const GIT_WRITE_TOOLS = ['git_commit', 'git_push', 'git_pull', 'git_checkout', 'git_stash'];
 
-describe('ChatOrchestrator — список тулов постоянен по режиму (AD-070 §2.9)', () => {
+describe('ChatOrchestrator — список тулов постоянен по режиму (ADR-070 §2.9)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -1197,10 +1197,10 @@ describe('ChatOrchestrator — список тулов постоянен по �
   });
 });
 
-// AD-070 §2.9: тулы постоянны и по роли — агент видит ВСЕ тулы; недоступные
+// ADR-070 §2.9: тулы постоянны и по роли — агент видит ВСЕ тулы; недоступные
 // помечаются permission-слоем как unavailable(role). Неизвестный агент / role
 // undefined — по-прежнему НОЛЬ тулов (safety-fallback).
-describe('ChatOrchestrator — список тулов постоянен по роли (AD-070 §2.9)', () => {
+describe('ChatOrchestrator — список тулов постоянен по роли (ADR-070 §2.9)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -1267,7 +1267,7 @@ describe('ChatOrchestrator — список тулов постоянен по �
   });
 });
 
-describe('ChatOrchestrator — режим/план/todo как state-сообщения истории (AD-070 §2.8)', () => {
+describe('ChatOrchestrator — режим/план/todo как state-сообщения истории (ADR-070 §2.8)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 
@@ -1561,7 +1561,7 @@ describe('ChatOrchestrator — режим/план/todo как state-сообщ�
   });
 });
 
-describe('ChatOrchestrator._routeProvider — AD-036 единая обёртка GatewayProvider', () => {
+describe('ChatOrchestrator._routeProvider — ADR-036 единая обёртка GatewayProvider', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 

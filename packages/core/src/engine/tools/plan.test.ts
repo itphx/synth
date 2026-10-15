@@ -146,7 +146,7 @@ describe('plan_read / plan_list / plan_write', () => {
     projectId = project.id;
     await projectStore.save(project);
 
-    // AD-075/D5: plan_write проверяет права — сессия должна быть атрибутирована
+    // ADR-075/D5: plan_write проверяет права — сессия должна быть атрибутирована
     // владельцем проекта.
     const session = await sessionManager.createSession({ title: 'Plan rw', userId: 'u1' });
     sessionId = session.id;
@@ -261,10 +261,10 @@ describe('plan_read / plan_list / plan_write', () => {
 });
 
 // ---------------------------------------------------------------------------
-// AD-075/D5: доступ к записи плана — owner/EDITOR разрешены, VIEWER/посторонний
+// ADR-075/D5: доступ к записи плана — owner/EDITOR разрешены, VIEWER/посторонний
 // нет, неатрибутированный синтетический контекст — back-compat; чтение не гейтится.
 // ---------------------------------------------------------------------------
-describe('plan_write: RBAC (AD-075/D5)', () => {
+describe('plan_write: RBAC (ADR-075/D5)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;

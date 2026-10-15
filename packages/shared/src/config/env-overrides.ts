@@ -1,5 +1,5 @@
 /**
- * AD-023: декларативные env-оверрайды скалярных ключей конфигурации.
+ * ADR-023: декларативные env-оверрайды скалярных ключей конфигурации.
  *
  * Имя переменной собирается по правилу `SYNTH_<SECTION>_<KEY>`, где camelCase
  * ключа переводится в SNAKE_CASE (`autoBind` → `SYNTH_EVENTS_AUTO_BIND`,
@@ -8,7 +8,7 @@
  * после слияния defaults + config.yaml и до CLI-overrides), поэтому все
  * потребители `@itphx/synth-shared/config` получают поддержку автоматически.
  *
- * Приоритет (AD-023): CLI-флаги (`overrides`) > env (`SYNTH_*`) > config.yaml > defaults.
+ * Приоритет (ADR-023): CLI-флаги (`overrides`) > env (`SYNTH_*`) > config.yaml > defaults.
  */
 import { bootstrapServiceKeysSchema } from './types.js';
 
@@ -24,7 +24,7 @@ export interface EnvOverrideDefinition {
 }
 
 /**
- * Реестр env-оверрайдов скалярных ключей вложенных секций (AD-023).
+ * Реестр env-оверрайдов скалярных ключей вложенных секций (ADR-023).
  *
  * Объектные/нескалярные ключи (`events.allowedSources`, `events.identityMap`,
  * `events.dedupStore`, `events.unknownAgentTemplate`, `scheduler.leaderElection`,
@@ -32,7 +32,7 @@ export interface EnvOverrideDefinition {
  * плоского строкового представления — они остаются в config.yaml.
  */
 export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
-  // events (AD-089)
+  // events (ADR-089)
   { section: 'events', key: 'enabled', type: 'boolean' },
   { section: 'events', key: 'defaultMode', type: 'string' },
   { section: 'events', key: 'ephemeralTtl', type: 'string' },
@@ -41,18 +41,18 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'events', key: 'decisionRouting', type: 'boolean' },
   { section: 'events', key: 'autoBind', type: 'boolean' },
   { section: 'events', key: 'autoBindAgentTemplate', type: 'string' },
-  // scheduler (AD-051 срез / AD-089)
+  // scheduler (ADR-051 срез / ADR-089)
   { section: 'scheduler', key: 'enabled', type: 'boolean' },
   { section: 'scheduler', key: 'tickSec', type: 'number' },
   { section: 'scheduler', key: 'catchUp', type: 'string' },
   { section: 'scheduler', key: 'jobRetentionDays', type: 'number' },
-  // webhooks (AD-052, этап II)
+  // webhooks (ADR-052, этап II)
   { section: 'webhooks', key: 'enabled', type: 'boolean' },
   { section: 'webhooks', key: 'maxAttempts', type: 'number' },
   { section: 'webhooks', key: 'timeoutMs', type: 'number' },
   { section: 'webhooks', key: 'allowPrivateTargets', type: 'boolean' },
   { section: 'webhooks', key: 'deliveryRetentionDays', type: 'number' },
-  // decision (AD-084)
+  // decision (ADR-084)
   { section: 'decision', key: 'enabled', type: 'boolean' },
   { section: 'decision', key: 'provider', type: 'string' },
   { section: 'decision', key: 'model', type: 'string' },
@@ -146,10 +146,10 @@ export function applyEnvOverrides<T extends Record<string, unknown>>(
 }
 
 /**
- * AD-052/O1: env-имя JSON-списка installer service-key'ев
+ * ADR-052/O1: env-имя JSON-списка installer service-key'ев
  * (`security.bootstrapServiceKeys`). Значение — JSON-массив объектов
  * `{ label, secret, scopes, roles?, description? }`. Приоритет — как у
- * скалярных env-оверрайдов: env > config.yaml (AD-023), но выше CLI-overrides.
+ * скалярных env-оверрайдов: env > config.yaml (ADR-023), но выше CLI-overrides.
  * Нужен, чтобы секрет installer-ключа не попадал в файл конфигурации
  * (передаётся из env/Secret).
  */

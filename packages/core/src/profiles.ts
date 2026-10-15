@@ -4,7 +4,7 @@
 // известных серверов, предзаполнение адреса, последний использованный сервер).
 // У сервера НЕТ отдельного каталога данных: локальные данные всех серверов лежат
 // в ЕДИНОМ dataDir процесса, credentials — в едином мульти-серверном файле
-// (~/.config/synth/profiles.json; AD-079: при `--home`/`SYNTH_HOME` —
+// (~/.config/synth/profiles.json; ADR-079: при `--home`/`SYNTH_HOME` —
 // `<home>/profiles.json`). Сам реестр — файл
 // profiles.json (права 0600, атомарная запись, как credentials):
 // {
@@ -56,7 +56,7 @@ function normalizeUrl(url: string): string {
 }
 
 /**
- * Путь к файлу реестра профилей. AD-079: при заданном home — `<home>/profiles.json`,
+ * Путь к файлу реестра профилей. ADR-079: при заданном home — `<home>/profiles.json`,
  * иначе XDG-дефолт `~/.config/synth/profiles.json`.
  */
 export function getProfilesPath(home?: string): string {

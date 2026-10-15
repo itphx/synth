@@ -14,7 +14,7 @@ import {
 } from '../lib/api/synthApi'
 import { i18nText } from '@/lib/i18n/text'
 
-/** AD-046 §8.2: данные события `skill.invoked`. */
+/** ADR-046 §8.2: данные события `skill.invoked`. */
 export interface SkillInvokedEvent {
   sessionId: string
   name: string
@@ -24,7 +24,7 @@ export interface SkillInvokedEvent {
   timestamp?: string
 }
 
-/** AD-046 §8.2: данные события `command.invoked`. */
+/** ADR-046 §8.2: данные события `command.invoked`. */
 export interface CommandInvokedEvent {
   sessionId: string
   command: string
@@ -70,7 +70,7 @@ export interface SkillsStore {
   settingsLoading: boolean
   settingsError: string | null
 
-  // Метрики из событий (AD-046 §8.2): пригодятся для статистики (часть b)
+  // Метрики из событий (ADR-046 §8.2): пригодятся для статистики (часть b)
   skillInvocationCounts: Record<string, number>
   commandInvocationCounts: Record<string, number>
   lastSkillInvocation: SkillInvokedEvent | null

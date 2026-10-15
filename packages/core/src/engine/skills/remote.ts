@@ -4,8 +4,8 @@ import { atomicWrite, type SkillDiagnostic } from '@itphx/synth-shared';
 import { TEMPLATE_FILE_MAX_BYTES } from '../commands/template.js';
 import { buildUrlSource } from './discovery.js';
 import type { SkillSource } from './types.js';
-// AD-046 §4.2: общий SSRF-guard/fetch — вынесен в `engine/net/fetch.ts`,
-// чтобы не дублироваться с проектными инструкциями (AD-069).
+// ADR-046 §4.2: общий SSRF-guard/fetch — вынесен в `engine/net/fetch.ts`,
+// чтобы не дублироваться с проектными инструкциями (ADR-069).
 import { describeError, fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
 
 // Обратная совместимость: исторические импорты из `./remote.js` продолжают работать.
@@ -17,13 +17,13 @@ export {
 } from '../net/fetch.js';
 
 /**
- * AD-046 §4.2/§4.3: read-only индексация удалённых каталогов (`skills.urls`).
+ * ADR-046 §4.2/§4.3: read-only индексация удалённых каталогов (`skills.urls`).
  *
  * Скачиваем opencode-совместимый `index.json` + `<base>/<path||name>/SKILL.md`
  * в детерминированный кэш `{cacheDir}/urls/<sha1(url)[:16]>`. Скиллы из кэша
  * имеют `trusted: false` (см. `buildUrlSource`) — они видны в реестре/диагностике,
  * но не попадают в каталог для модели и не грузятся. Установка/доверие/подписи/
- * `lock.json` — AD-068, здесь не реализуются.
+ * `lock.json` — PROP-068, здесь не реализуются.
  *
  * Сеть: только `http:`/`https:`; блокируются loopback/private/link-local/ULA,
  * `*.local`/`*.internal` и IPv4-mapped IPv6 (SSRF-guard, проверяются исходный URL

@@ -1,5 +1,5 @@
 /**
- * Обработчик enum-decision (AD-035).
+ * Обработчик enum-decision (ADR-035).
  * Проверяет, что лейбл валидный (в допустимом наборе).
  */
 import type { MicroResult } from '../types.js';

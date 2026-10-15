@@ -76,7 +76,7 @@ describe('SessionManager', () => {
     expect(session.settings.routingEscalation.minLength).toBe(5);
   });
 
-  it('AD-071: createSession сохраняет активные mcpServers из settings', async () => {
+  it('ADR-071: createSession сохраняет активные mcpServers из settings', async () => {
     const session = await manager.createSession({
       settings: { mcpServers: ['github', 'gitlab'] },
     });
@@ -251,7 +251,7 @@ describe('SessionManager', () => {
   });
 });
 
-describe('AD-033: Session forking and branching', () => {
+describe('ADR-033: Session forking and branching', () => {
   let store: FileStore;
   let manager: SessionManager;
   let tmpDir: string;
@@ -573,7 +573,7 @@ describe('AD-033: Session forking and branching', () => {
 
   // ─── Message origin enum coverage ────────────────────────────────
 
-  it('MessageOrigin поддерживает все 4 значения из AD-033', async () => {
+  it('MessageOrigin поддерживает все 4 значения из ADR-033', async () => {
     // Проверяем что тип MessageOrigin включает все нужные литералы
     const origins: Array<'local' | 'inherited' | 'merged' | 'crosspost'> = ['local', 'inherited', 'merged', 'crosspost'];
     expect(origins).toHaveLength(4);
@@ -594,7 +594,7 @@ describe('AD-033: Session forking and branching', () => {
 
   // ─── SessionOrigin enum coverage ─────────────────────────────────
 
-  it('SessionOrigin поддерживает user/fork/subagent из AD-033', () => {
+  it('SessionOrigin поддерживает user/fork/subagent из ADR-033', () => {
     const origins: Array<'user' | 'fork' | 'subagent'> = ['user', 'fork', 'subagent'];
     expect(origins).toHaveLength(3);
   });
@@ -661,7 +661,7 @@ describe('AD-033: Session forking and branching', () => {
   });
 });
 
-describe('AD-089: ephemeral-сессии (TTL, архивация)', () => {
+describe('ADR-089: ephemeral-сессии (TTL, архивация)', () => {
   let store: FileStore;
   let manager: SessionManager;
   let tmpDir: string;

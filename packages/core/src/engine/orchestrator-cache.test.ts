@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.2 (Ф2-часть 1): оркестратор передаёт в провайдер `SystemPromptPayload`
+ * ADR-070 §2.2 (Ф2-часть 1): оркестратор передаёт в провайдер `SystemPromptPayload`
  * с границей stable-префикса из Composer, ключом кэша (session.id) и политикой
  * из config `llm.cache`. Проверяется через мок-провайдер (статический capture).
  */
@@ -80,7 +80,7 @@ class CapturePromptProvider extends BaseProvider {
   }
 }
 
-describe('ChatOrchestrator — SystemPromptPayload (AD-070 §2.2)', () => {
+describe('ChatOrchestrator — SystemPromptPayload (ADR-070 §2.2)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 

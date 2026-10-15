@@ -66,7 +66,7 @@ pnpm lint
 собирает npm-пакеты монорепо (`shared → core → ui → synth`), упаковывает их
 (`pnpm pack`), устанавливает в изолированный prefix (`npm install` четырёх `.tgz`)
 и запускает `synth serve` из установленного `node_modules/.bin/synth`. По умолчанию
-`serve` стартует с изолированным локальным home (AD-079):
+`serve` стартует с изолированным локальным home (ADR-079):
 `--home ~/.local/share/synth-standalone`, родительское `SYNTH_*`-окружение очищается. Все
 локальные пути резолвятся от home: dataDir `<home>/data`, config `<home>/config.yaml`,
 profiles `<home>/profiles.json`, credentials `<home>/credentials.json` — поэтому
@@ -77,7 +77,7 @@ host `127.0.0.1`, порт 4400 (передаётся явно `--port`), API-к
 `hybrid.sh` по умолчанию использует `4300`, поэтому standalone (`4400`) и hybrid (`4300`)
 можно поднять одновременно (разные порты и home).
 Нужен для ручной и автоматической проверки
-standalone-UI (в т.ч. диалога выбора рабочего каталога, AD-075), где managed
+standalone-UI (в т.ч. диалога выбора рабочего каталога, ADR-075), где managed
 показывает read-only, а standalone — политику `confirm`.
 
 ```bash
@@ -93,7 +93,7 @@ standalone-UI (в т.ч. диалога выбора рабочего катал
 |---|---|
 | `--port <port>` | явное переопределение порта (default: `4400`; `hybrid.sh` — `4300`) |
 | `--host <host>` | явное переопределение адреса прослушивания (default: `127.0.0.1`) |
-| `--home <path>` | AD-079: локальный home-каталог (default: `~/.local/share/synth-standalone`); config/data/profiles/credentials резолвятся от него |
+| `--home <path>` | ADR-079: локальный home-каталог (default: `~/.local/share/synth-standalone`); config/data/profiles/credentials резолвятся от него |
 | `--data-dir <path>` | явное переопределение каталога данных (приоритетнее `--home`) |
 | `--api-key <key>` | явный API-ключ local auth (по умолчанию — авто-генерация в `{dataDir}/secrets/api-key`; печатается в сводке) |
 | `--prefix <path>` | каталог установки пакетов (default: `tmp/standalone/install`) |
@@ -117,7 +117,7 @@ debug-auth; `standalone.sh` ставит **собранные npm-пакеты**
 `synth serve` (один API-ключ, FileStore в dataDir) на дефолтах npm-пакета — ближе к конечному
 развёртыванию.
 `hybrid.sh` (`./scripts/hybrid.sh`) поднимает локальный core с подключением к удалённому backend
-(гибридный режим) — см. [HYBRID.md](./HYBRID.md). Опция `--home <path>` (AD-079) изолирует
+(гибридный режим) — см. [HYBRID.md](./HYBRID.md). Опция `--home <path>` (ADR-079) изолирует
 config/data/profiles/credentials; без неё сохраняется текущее поведение (`~/.local/share/synth`).
 
 > Tarball'ы собираются через `pnpm pack` (не `npm pack`): только pnpm резолвит `workspace:*`
@@ -169,7 +169,7 @@ synth/
 │   ├── core/     → @itphx/synth-core      # Движок, CLI, HTTP API v2, MCP, FileStore
 │   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + админка (Vite)
-│   ├── sdk/      → @itphx/synth-sdk       # Типизированный клиент публичного API (AD-052)
+│   ├── sdk/      → @itphx/synth-sdk       # Типизированный клиент публичного API (ADR-052)
 │   └── synth/    → @itphx/synth           # Тонкая CLI-обёртка (bin: synth), не бандлит core
 ├── scripts/
 │   ├── dev.sh                  # Скрипт разработки
@@ -182,7 +182,7 @@ synth/
 │   ├── changelog.sh            # Генерация CHANGELOG (для CI release)
 │   ├── wait-npm-version.sh     # Ожидание доступности версии в npm (release)
 │   ├── docker-cleanup.mjs      # Очистка Docker-тегов перед публикацией
-│   └── micro-benchmark.mjs     # Бенчмарк микро-слоя (AD-035)
+│   └── micro-benchmark.mjs     # Бенчмарк микро-слоя (ADR-035)
 └── tmp/                        # Логи (не коммитить)
 ```
 

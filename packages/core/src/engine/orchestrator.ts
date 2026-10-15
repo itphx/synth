@@ -84,13 +84,13 @@ import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
-/** AD-070: окно троттлинга live-события `stream.usage` (~300 мс). */
+/** ADR-070: окно троттлинга live-события `stream.usage` (~300 мс). */
 const STREAM_USAGE_THROTTLE_MS = 300;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
 const CONTEXT_LIMIT_WARNING_PERCENT = 90;
 
 /**
- * AD-070 §2.6: статус ответа ассистента для строки статистики в UI.
+ * ADR-070 §2.6: статус ответа ассистента для строки статистики в UI.
  * - `completed` — нормальный ответ (без префикса);
  * - `cancelled` — отменён пользователем;
  * - `stopped` — остановлен (отказ в туле / блокировка);
@@ -109,7 +109,7 @@ function isAssistantMessageStatus(value: unknown): value is AssistantMessageStat
 }
 
 /**
- * AD-070 §2.6: контекст для сохранения assistant-сообщения об ошибке LLM.
+ * ADR-070 §2.6: контекст для сохранения assistant-сообщения об ошибке LLM.
  * Заполняется на месте сбоя (там доступны накопленные usage/контент/debug).
  */
 interface LlmFailureContext {
@@ -128,7 +128,7 @@ interface LlmFailureContext {
   toolResults?: Array<Record<string, unknown>>;
   promptMeta?: PromptMeta;
   /**
-   * Явный тип ошибки (AD-041). Нужен там, где сообщение локализовано и
+   * Явный тип ошибки (ADR-041). Нужен там, где сообщение локализовано и
    * `classifyLlmError` не может определить тип по тексту (например
    * `provider_not_found`): при переданном значении приоритетнее классификации.
    */
@@ -148,7 +148,7 @@ export interface OrchestratorOptions {
   sessionManager: SessionManager;
   eventBus: EventBus;
   /**
-   * AD-030: ядровая шина хуков — эмиты жизненного цикла агента
+   * ADR-030: ядровая шина хуков — эмиты жизненного цикла агента
    * (`pre/post_tool_use`, `permission_denied`, `plan_approved`, ...). Не задана —
    * хуки не выполняются, поведение оркестратора не меняется.
    */
@@ -164,7 +164,7 @@ export interface OrchestratorOptions {
   mcpManager?: McpManager;
   routerConfig?: RouterConfig;
   /**
-   * AD-084: конфигурация decision-слоя (config.yaml `decision`). Не задана/
+   * ADR-084: конфигурация decision-слоя (config.yaml `decision`). Не задана/
    * `enabled:false` — decision-уровень микро-каскада выключен.
    * Runtime-обновление — `setDecisionConfig` (Ф5).
    */
@@ -177,7 +177,7 @@ export interface OrchestratorOptions {
    */
   profilesStore?: ProfileStore;
   /**
-   * AD-076 §T6: хранилище SSH-ключей для сетевых git-тулов (`git_push`/`git_pull`).
+   * ADR-076 §T6: хранилище SSH-ключей для сетевых git-тулов (`git_push`/`git_pull`).
    * Не задано — создаётся лениво из `dataDir` (+ env); без `dataDir` — git
    * использует ambient ssh (реестр/ключи недоступны).
    */
@@ -186,31 +186,31 @@ export interface OrchestratorOptions {
   /**
    * Корень каталога workspaces: `join(dataDir, 'workspaces')` по умолчанию
    * (аналог resolveWorkspacesRoot). Относительные `project.workspace` резолвятся
-   * относительно этого корня (AD-014).
+   * относительно этого корня (ADR-014).
    */
   workspacesRoot?: string;
   /**
-   * AD-075/AD-076: git-сервис для тулов управления репозиториями проекта.
+   * ADR-075/ADR-076: git-сервис для тулов управления репозиториями проекта.
    * Не задан — создаётся лениво из `workspacesRoot`.
    */
   gitService?: GitService;
   /**
-   * AD-075: managed-режим проекта (backend): включает строгую проверку явного
+   * ADR-075: managed-режим проекта (backend): включает строгую проверку явного
    * workspace (deny вне root) в тулах проекта.
    */
   workspaceManaged?: boolean;
   /**
-   * AD-075: политика абсолютного workspace вне `workspacesRoot` для тулов проекта.
+   * ADR-075: политика абсолютного workspace вне `workspacesRoot` для тулов проекта.
    * Не задана — `confirm`.
    */
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
-  /** Глобальная секция permission из config.yaml (AD-029). */
+  /** Глобальная секция permission из config.yaml (ADR-029). */
   permissionConfig?: PermissionConfig;
-  /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (AD-028). */
+  /** Строгость цикла Plan→Build по умолчанию из config.yaml session.planMode (ADR-028). */
   defaultPlanMode?: PlanMode;
   /** Секция безопасности (защита от Indirect Prompt Injection). */
   securityConfig?: SecurityConfig;
-  /** LLM Gateway (AD-036): глобальный тумблер и конфиг. Выключен по умолчанию. */
+  /** LLM Gateway (ADR-036): глобальный тумблер и конфиг. Выключен по умолчанию. */
   gatewayConfig?: LLMGatewayConfig;
   /** Путь к JSONL полного лога запросов/ответов LLM ({dataDir}/audit/llm-payloads.jsonl). */
   gatewayPayloadLogPath?: string;
@@ -218,72 +218,72 @@ export interface OrchestratorOptions {
   gatewayAuditLogger?: AuditLogger;
   /** Хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт). */
   gatewayPatternStore?: SecretPatternStore;
-  /** AD-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
+  /** ADR-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
-   * AD-071 §2.3: глобальная админская политика включения **встроенных**
+   * ADR-071 §2.3: глобальная админская политика включения **встроенных**
    * инструментов (config.yaml tools.policy). Дефолт — `auto`. Per-session
    * override — `session.settings.toolsPolicy`.
    */
   toolsPolicy?: ToolsPolicy;
   /**
-   * AD-071 §2.3: глобальная админская политика включения **MCP**-инструментов
+   * ADR-071 §2.3: глобальная админская политика включения **MCP**-инструментов
    * (config.yaml mcp.policy). Дефолт — `auto`. Независима от `toolsPolicy`;
    * per-session override — `session.settings.mcpPolicy`.
    */
   mcpPolicy?: ToolsPolicy;
   /**
-   * AD-071 §2.6: instance-wide жёсткое отключение инструментов (config.yaml
+   * ADR-071 §2.6: instance-wide жёсткое отключение инструментов (config.yaml
    * `tools.disabled`). Runtime-значение приходит через `setToolsDisabled`.
    */
   toolsDisabled?: ToolsDisabledConfig;
   /**
-   * AD-046 §4.5: системный hard-gate скиллов (категории/группы/имена) из
+   * ADR-046 §4.5: системный hard-gate скиллов (категории/группы/имена) из
    * runtime-настроек. Runtime-обновление — `setSkillsDisabled`.
    */
   skillsDisabled?: SkillsDisabledRequest;
   /**
-   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
+   * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
    * детекция `detectRuntimeDeps()`. Не задана — fail-open (все доступны).
    * Runtime-обновление — `setRuntimeDeps`.
    */
   runtimeDeps?: RuntimeDeps;
   /**
-   * AD-071 §2.6: chars-per-token модели из runtime-настроек (калибровка).
+   * ADR-071 §2.6: chars-per-token модели из runtime-настроек (калибровка).
    * Не задан/нет значения — дефолт `DEFAULT_CHARS_PER_TOKEN`.
    */
   tokenRatioLoader?: (model: string) => Promise<number | undefined>;
-  /** AD-071 §2.6: сохранение откалиброванного chars-per-token после ответа. */
+  /** ADR-071 §2.6: сохранение откалиброванного chars-per-token после ответа. */
   onTokenRatioCalibrated?: (model: string, ratio: number) => void | Promise<void>;
   /**
-   * AD-046 §5: рантайм скиллов (SkillService) — каталог в промпт и тул `skill`.
+   * ADR-046 §5: рантайм скиллов (SkillService) — каталог в промпт и тул `skill`.
    * Не задан — скиллы не участвуют в промпте/тулах.
    */
   skillRuntime?: SkillRuntime;
   /**
-   * AD-046 §7: рантайм `/`-команд (CommandService). Не задан — `/`-команды не
+   * ADR-046 §7: рантайм `/`-команд (CommandService). Не задан — `/`-команды не
    * резолвятся (сообщение уходит в LLM как есть).
    */
   commandRuntime?: CommandRuntime;
   /**
-   * AD-069 Фаза 1: конфигурация проектных инструкций (`AGENTS.md`). Не задана/
+   * ADR-069 Фаза 1: конфигурация проектных инструкций (`AGENTS.md`). Не задана/
    * `enabled:false` — проектные инструкции не грузятся.
    */
   instructionsConfig?: InstructionsConfig;
   /**
-   * AD-069 Фаза 2a: `config.skills.trustedProjectDirs` — project-trust гейт
+   * ADR-069 Фаза 2a: `config.skills.trustedProjectDirs` — project-trust гейт
    * инструкций (недоверенный проект виден в диагностике, но не грузится).
    */
   instructionsTrustedProjectDirs?: readonly string[];
   /**
-   * AD-089: late-bound доступ к funnel создания сессий (`RequestSessionService`).
+   * ADR-089: late-bound доступ к funnel создания сессий (`RequestSessionService`).
    * Прокидывается в `TaskExtra` — тул `task` создаёт дочернюю сессию через
    * `request` (единые правила/аудит), с fallback на прямой `createSession`.
    * Геттер нужен, т.к. сервис создаётся в приложении после оркестратора.
    */
   getRequestSessionService?: () => RequestSessionService | undefined;
   /**
-   * AD-051: late-bound резолвер «активно ли расписание для сессии» (в сессии есть
+   * ADR-051: late-bound резолвер «активно ли расписание для сессии» (в сессии есть
    * включённое расписание с целью-сессией). Прокидывается в Composer-контекст:
    * при `true` в системный промпт добавляется статическое описание `Scheduler`.
    * Геттер late-bound, т.к. `ScheduleStore` создаётся в приложении после
@@ -306,7 +306,7 @@ export interface ProcessMessageResult {
 }
 
 /**
- * AD-069 §2.1/§7: результат резолва проектных инструкций для текущего хода —
+ * ADR-069 §2.1/§7: результат резолва проектных инструкций для текущего хода —
  * composer-блок, «сырой» контент (для саб-агентов) и провенанс файлов (для
  * события `context.instructions_loaded` и seed lazy-реестра).
  */
@@ -317,7 +317,7 @@ interface ResolvedProjectInstructions {
 }
 
 /**
- * AD-069 §3.5/R5: запись мемоизации проектных инструкций на время хода —
+ * ADR-069 §3.5/R5: запись мемоизации проектных инструкций на время хода —
  * хранится только последний ход на сессию, `key` — входы, влияющие на результат.
  */
 interface InstructionsTurnMemoEntry {
@@ -330,7 +330,7 @@ interface InstructionsTurnMemoEntry {
 const MAX_INSTRUCTIONS_TURN_MEMO = 256;
 
 /**
- * AD-084: безопасный дефолт gateway-конфига для decision-провайдеров, когда
+ * ADR-084: безопасный дефолт gateway-конфига для decision-провайдеров, когда
  * LLM Gateway выключен (`enabled: false` — guard no-op, без падения).
  */
 const DEFAULT_DECISION_GATEWAY_CONFIG: LLMGatewayConfig = {
@@ -342,15 +342,15 @@ const DEFAULT_DECISION_GATEWAY_CONFIG: LLMGatewayConfig = {
   audit: { enabled: true, logPath: '' },
 };
 
-/** AD-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
+/** ADR-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
 export interface PromptDiagnostics {  manifest: PromptManifest;
-  /** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
+  /** ADR-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
   history: PromptHistoryInfo;
   /** Состояние промпта активного агента (null, если ещё не собирался). */
   promptState: PromptState | null;
   /** `promptMeta` последнего ответа активного агента (null, если нет). */
   lastPromptMeta: PromptMeta | null;
-  /** AD-071 §2.6: строки таблицы «Встроенные инструменты» (имя/capability/доступность). */
+  /** ADR-071 §2.6: строки таблицы «Встроенные инструменты» (имя/capability/доступность). */
   toolsDetail: PromptToolDetail[];
 }
 
@@ -373,7 +373,7 @@ function toCoreProviderConfig(shared: SharedProviderConfig, model: string, reaso
 export class ChatOrchestrator {
   private readonly _sessionManager: SessionManager;
   private readonly _eventBus: EventBus;
-  /** AD-030: шина хуков жизненного цикла (null — эмиты не выполняются). */
+  /** ADR-030: шина хуков жизненного цикла (null — эмиты не выполняются). */
   private readonly _hooks: HookBus | null;
   private readonly _contextBuilder: ContextBuilder;
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
@@ -385,14 +385,14 @@ export class ChatOrchestrator {
   private readonly _cancellationTokens = new Map<string, CancellationToken>();
   private readonly _router: ModelRouter | null;
   private readonly _routerConfig: RouterConfig | null;
-  /** AD-084: конфиг decision-слоя (runtime-изменяемая, гейт микро-каскада). */
+  /** ADR-084: конфиг decision-слоя (runtime-изменяемая, гейт микро-каскада). */
   private _decisionConfig: DecisionConfig | null;
   private readonly _microPipeline: MicroPipeline | null;
   private readonly _contextConfig: ContextConfig | null;
   private readonly _projectStore: ProjectStoreLike | null;
   /** Онбординг: хранилище профилей (тул `profile_update`, сохранение интервью). */
   private readonly _profilesStore: ProfileStore | null;
-  /** AD-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
+  /** ADR-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
   private readonly _sshKeyStore: SSHKeyStore | null;
   private readonly _gitService: GitService;
   private readonly _workspaceManaged: boolean;
@@ -417,29 +417,29 @@ export class ChatOrchestrator {
   private readonly _gatewayPayloadLogPath: string | undefined;
   /** Внешний audit-logger (backend/runner) — переиспользуется при live-включении gateway. */
   private readonly _gatewayAuditExternal: AuditLogger | null;
-  /** AD-070 §2.2: политика prompt-cache (auto | none) из config llm.cache. */
+  /** ADR-070 §2.2: политика prompt-cache (auto | none) из config llm.cache. */
   private readonly _cachePolicy: CachePolicy;
-  /** AD-071 §2.3: глобальная политика включения встроенных инструментов (runtime-изменяемая). */
+  /** ADR-071 §2.3: глобальная политика включения встроенных инструментов (runtime-изменяемая). */
   private _toolsPolicy: ToolsPolicy;
-  /** AD-071 §2.3: глобальная политика включения MCP-инструментов (runtime-изменяемая). */
+  /** ADR-071 §2.3: глобальная политика включения MCP-инструментов (runtime-изменяемая). */
   private _mcpPolicy: ToolsPolicy;
-  /** AD-071 §2.6: instance-wide отключение инструментов (runtime-изменяемая, admin). */
+  /** ADR-071 §2.6: instance-wide отключение инструментов (runtime-изменяемая, admin). */
   private _toolsDisabled: ToolsDisabledConfig;
-  /** AD-046 §4.5: системный hard-gate скиллов (runtime-изменяемая, admin). */
+  /** ADR-046 §4.5: системный hard-gate скиллов (runtime-изменяемая, admin). */
   private _skillsDisabled: SkillsDisabledRequest;
-  /** AD-070 §2.9.1: доступность внешних программ окружения (runtime-изменяемая). */
+  /** ADR-070 §2.9.1: доступность внешних программ окружения (runtime-изменяемая). */
   private _runtimeDeps: RuntimeDeps;
-  /** AD-071 §2.6: загрузчик chars-per-token модели (калибровка). */
+  /** ADR-071 §2.6: загрузчик chars-per-token модели (калибровка). */
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
-  /** AD-071 §2.6: сохранение калибровки chars-per-token после ответа. */
+  /** ADR-071 §2.6: сохранение калибровки chars-per-token после ответа. */
   private readonly _onTokenRatioCalibrated: ((model: string, ratio: number) => void | Promise<void>) | undefined;
-  /** AD-046 §5: рантайм скиллов (каталог промпта + тул `skill`). */
+  /** ADR-046 §5: рантайм скиллов (каталог промпта + тул `skill`). */
   private readonly _skillRuntime: SkillRuntime | null;
-  /** AD-046 §7: рантайм `/`-команд (резолвинг до LLM). */
+  /** ADR-046 §7: рантайм `/`-команд (резолвинг до LLM). */
   private readonly _commandRuntime: CommandRuntime | null;
-  /** AD-089: late-bound funnel создания сессий для тула `task` (null — не задан). */
+  /** ADR-089: late-bound funnel создания сессий для тула `task` (null — не задан). */
   private readonly _getRequestSessionService: (() => RequestSessionService | undefined) | null;
-  /** AD-051: late-bound резолвер активности расписания в сессии (null — не задан). */
+  /** ADR-051: late-bound резолвер активности расписания в сессии (null — не задан). */
   private readonly _isSchedulerActive: ((sessionId: string) => Promise<boolean>) | null;
   /**
    * «Стоп»: late-bound проверка персистентного флага `status.cancelRequested`
@@ -447,13 +447,13 @@ export class ChatOrchestrator {
    * границе цикла Tool Use даже без живого cancelToken (backoff/гонка).
    */
   private readonly _isCancelRequested: ((sessionId: string) => Promise<boolean>) | null;
-  /** AD-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
+  /** ADR-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
   private readonly _instructionsConfig: InstructionsConfig | null;
-  /** AD-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
+  /** ADR-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
   private readonly _instructionsResolver: ProjectInstructionsResolver | null;
-  /** AD-069 §3.5/R5: мемоизация инструкций на время хода (последний ход на сессию). */
+  /** ADR-069 §3.5/R5: мемоизация инструкций на время хода (последний ход на сессию). */
   private readonly _instructionsTurnMemo = new Map<string, InstructionsTurnMemoEntry>();
-  /** AD-069 Фаза 2b: lazy-догрузка вложенных инструкций в tool result. */
+  /** ADR-069 Фаза 2b: lazy-догрузка вложенных инструкций в tool result. */
   private readonly _lazyInstructions: LazyInstructionsLoader | null;
   private _providerPool: ProviderPool | null;
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
@@ -466,7 +466,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.6: цены модели для расчёта стоимости сообщений/статистики.
+   * ADR-070 §2.6: цены модели для расчёта стоимости сообщений/статистики.
    * Публичный доступ, чтобы роут `/sessions/:id/stats` переиспользовал тот же
    * загрузчик, что и оркестратор (backend не конструирует его повторно).
    */
@@ -487,7 +487,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.6: fallback-цепочка модели сообщения. Провайдеры выставляют
+   * ADR-070 §2.6: fallback-цепочка модели сообщения. Провайдеры выставляют
    * `model` только в финальном чанке (`isFinal`), поэтому при отмене/сбое
    * `chunkModel`/`finalModel` пусты — берём модель провайдера или настройку
    * сессии, иначе `_computeMessageCost` вернёт null и `cost_usd` потеряется.
@@ -502,7 +502,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.6 (Bug 4): best-effort оценка usage, когда провайдер не успел
+   * ADR-070 §2.6 (Bug 4): best-effort оценка usage, когда провайдер не успел
    * отдать финальный чанк (отмена/сбой). Эвристика `chars / 4` (как в
    * `estTokens`): input — из размера промпта, output — из накопленного
    * контента. Реальные значения не перетираются; при любой дозаполненной
@@ -557,8 +557,8 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.6: публикация live-статистики стрима (`stream.usage`) через
-   * существующий транспорт (publishChunk → EventBus, AD-024).
+   * ADR-070 §2.6: публикация live-статистики стрима (`stream.usage`) через
+   * существующий транспорт (publishChunk → EventBus, ADR-024).
    *
    * Троттлинг ~300 мс + дедуп по подписи usage (не спамим одинаковыми
    * значениями). Точный usage (`estimated: false`) приоритетнее оценки и
@@ -622,7 +622,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.6: агрегация per-message статистики сабагентов из tool-результатов
+   * ADR-070 §2.6: агрегация per-message статистики сабагентов из tool-результатов
    * `task` (`result.metadata.subagent_usage`/`subagent_model`). Возвращает
    * breakdown для `metadata.subagents` финального assistant-сообщения; `cost_usd`
    * — номинальная сумма, `cost_by_currency` — разбивка по валютам. `undefined`,
@@ -742,12 +742,12 @@ export class ChatOrchestrator {
     this._contextConfig = options.contextConfig ?? null;
     this._projectStore = options.projectStore ?? null;
     this._profilesStore = options.profilesStore ?? null;
-    // AD-076 §T6: хранилище SSH-ключей для git-тулов. Явный store (app/backend)
+    // ADR-076 §T6: хранилище SSH-ключей для git-тулов. Явный store (app/backend)
     // приоритетнее; иначе — ленивое создание из dataDir (мастер-ключ — env
     // SYNTH_SECRET_KEY / файл {dataDir}/secrets/master.key, см. SSHKeyStore).
     this._sshKeyStore = options.sshKeyStore
       ?? (options.dataDir ? new SSHKeyStore({ dataDir: options.dataDir, env: process.env }) : null);
-    // AD-070 §2.1: единая точка сборки системного промпта (идемпотентно).
+    // ADR-070 §2.1: единая точка сборки системного промпта (идемпотентно).
     this._composer = new SystemPromptComposer({
       contextBuilder: this._contextBuilder,
       contextConfig: this._contextConfig,
@@ -755,7 +755,7 @@ export class ChatOrchestrator {
     });
     this._defaultWorkingDir = options.defaultWorkingDir ?? join(options.dataDir || '/var/synth/data', 'workspaces', 'default');
     this._workspacesRoot = options.workspacesRoot ?? join(options.dataDir || '/var/synth/data', 'workspaces');
-    // AD-075/AD-076: git-сервис и режим/политика workspace для тулов управления
+    // ADR-075/ADR-076: git-сервис и режим/политика workspace для тулов управления
     // проектом. gitService по умолчанию — над тем же workspacesRoot.
     this._gitService = options.gitService ?? new GitService(this._workspacesRoot);
     this._workspaceManaged = options.workspaceManaged === true;
@@ -769,14 +769,14 @@ export class ChatOrchestrator {
     this._gatewayPayloadLogPath = options.gatewayPayloadLogPath
       ?? join(options.dataDir || '/var/synth/data', 'audit', 'llm-payloads.jsonl');
     this._cachePolicy = options.cachePolicy ?? 'auto';
-    // AD-071 §2.3: глобальные политики встроенных/MCP-инструментов (независимы);
+    // ADR-071 §2.3: глобальные политики встроенных/MCP-инструментов (независимы);
     // per-session override — в сессии.
     this._toolsPolicy = options.toolsPolicy ?? 'auto';
     this._mcpPolicy = options.mcpPolicy ?? 'auto';
-    // AD-071 §2.6: instance-wide отключение инструментов (admin) + калибровка ratio.
+    // ADR-071 §2.6: instance-wide отключение инструментов (admin) + калибровка ratio.
     this._toolsDisabled = options.toolsDisabled ?? { capabilities: [], tools: [] };
     this._skillsDisabled = options.skillsDisabled ?? { categories: [], groups: [], skills: [] };
-    // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — fail-open по умолчанию.
+    // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — fail-open по умолчанию.
     this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
@@ -786,7 +786,7 @@ export class ChatOrchestrator {
     this._isSchedulerActive = options.isSchedulerActive ?? null;
     this._isCancelRequested = options.isCancelRequested ?? null;
 
-    // AD-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
+    // ADR-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
     this._gatewayAuditExternal = options.gatewayAuditLogger ?? null;
     const gatewayConfig = options.gatewayConfig?.enabled ? options.gatewayConfig : null;
@@ -807,7 +807,7 @@ export class ChatOrchestrator {
     }
     this._gatewayPatternStore = options.gatewayPatternStore ?? null;
 
-    // AD-036: суммаризация (ContextOptimizer) создаёт провайдера напрямую —
+    // ADR-036: суммаризация (ContextOptimizer) создаёт провайдера напрямую —
     // передаём ему общую gateway-обвязку, чтобы эта точка тоже была защищена.
     this._optimizer?.setGatewayHooks(
       gatewayConfig && this._obfMapStore && this._gatewayAudit && this._gatewayRateLimiter
@@ -823,8 +823,8 @@ export class ChatOrchestrator {
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру)
     const dictionaryStore = new DictionaryStore(options.dataDir || '/var/synth/data');
     this._dictionaryStore = dictionaryStore;
-    // AD-069 Фаза 1: резолвер проектных инструкций (merged chain AGENTS.md).
-    // Threat-scan использует тот же DictionaryStore, что и tool-контент (AD-036).
+    // ADR-069 Фаза 1: резолвер проектных инструкций (merged chain AGENTS.md).
+    // Threat-scan использует тот же DictionaryStore, что и tool-контент (ADR-036).
     this._instructionsConfig = options.instructionsConfig ?? null;
     this._instructionsResolver =
       this._instructionsConfig?.enabled
@@ -833,11 +833,11 @@ export class ChatOrchestrator {
             dictionaryStore: this._dictionaryStore,
             dataDir: options.dataDir,
             trustedProjectDirs: options.instructionsTrustedProjectDirs,
-            // AD-069 R3: workspace внутри workspacesRoot доверяется автоматически.
+            // ADR-069 R3: workspace внутри workspacesRoot доверяется автоматически.
             workspacesRoot: this._workspacesRoot,
           })
         : null;
-    // AD-069 Фаза 2b: lazy-загрузчик подкаталогов (те же словарь/политики, что
+    // ADR-069 Фаза 2b: lazy-загрузчик подкаталогов (те же словарь/политики, что
     // у резолвера; состояние `loaded`/`claims` — per-session).
     this._lazyInstructions =
       this._instructionsConfig?.enabled
@@ -848,7 +848,7 @@ export class ChatOrchestrator {
             headRatio: this._instructionsConfig.headRatio,
             tailRatio: this._instructionsConfig.tailRatio,
             dictionaryStore: this._dictionaryStore,
-            // AD-069 R1: общий trust-гейт с system-chain (project-trust + workspacesRoot).
+            // ADR-069 R1: общий trust-гейт с system-chain (project-trust + workspacesRoot).
             trustedProjectDirs: options.instructionsTrustedProjectDirs,
             workspacesRoot: this._workspacesRoot,
           })
@@ -863,12 +863,12 @@ export class ChatOrchestrator {
     );
     this._providerPool = pool;
 
-    // AD-035: Micro-first pipeline — создаём всегда, не зависит от роутера
+    // ADR-035: Micro-first pipeline — создаём всегда, не зависит от роутера
     const microClassifier = new TaskClassifier(dictionaryStore);
     const microModels: MicroModel[] = [
       new RulesModel(microClassifier),
       new EmbeddingModel(pool),
-      // AD-084: decision-модель пытается перед локальной LLM; `micro_llm`
+      // ADR-084: decision-модель пытается перед локальной LLM; `micro_llm`
       // остаётся фоллбеком. Конфиг читается геттером — runtime-обновление
       // возможно без пересоздания модели (setDecisionConfig).
       new DecisionModel(pool, () => this._decisionConfig ?? undefined),
@@ -876,11 +876,11 @@ export class ChatOrchestrator {
     ];
     this._microPipeline = new MicroPipeline(microClassifier, microModels);
 
-    // AD-034: Router — только если включён в конфиге
+    // ADR-034: Router — только если включён в конфиге
     if (options.routerConfig && options.routerConfig.enabled) {
       const classifier = new ContentClassifier(dictionaryStore);
       const qualityChecker = new QualityChecker();
-      // AD-084 × AD-034: decision-классификатор категории — срабатывает только
+      // ADR-084 × ADR-034: decision-классификатор категории — срабатывает только
       // когда keyword-классификатор неуверен и нет `routingCategory`. Конфиг
       // читается геттером — gated по `enabled` самим классификатором.
       const decisionClassifier = new DecisionContentClassifier(
@@ -894,7 +894,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-036: фабрика gateway-обёртки для ProviderPool — единая точка (конструктор
+   * ADR-036: фабрика gateway-обёртки для ProviderPool — единая точка (конструктор
    * и live-переключение). У пула нет сессии, поэтому карта обфускации пустая:
    * защита от утечки секретов работает, карта не персистится.
    */
@@ -911,7 +911,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-084: фабрика обвязки decision-провайдеров — оборачиваем **всегда**
+   * ADR-084: фабрика обвязки decision-провайдеров — оборачиваем **всегда**
    * (инвариант №3), в отличие от chat. Если LLM Gateway выключен, берём
    * безопасный дефолт: guard no-op, безлимитный rate limiter и audit-логгер
    * по стандартному пути (обёртка не падает и не требует `gateway.enabled`).
@@ -936,7 +936,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-036: live-переключение LLM Gateway (runtime-настройка из UI).
+   * ADR-036: live-переключение LLM Gateway (runtime-настройка из UI).
    * config === null/undefined или enabled:false → выключить (убрать обвязку).
    * enabled:true → создать ObfuscationMapStore/AuditLogger/RateLimiter, обновить
    * фабрику ProviderPool, обновить hooks суммаризации.
@@ -962,7 +962,7 @@ export class ChatOrchestrator {
       this._gatewayRateLimiter = null;
     }
 
-    // AD-036: суммаризация (ContextOptimizer) — обновляем gateway-обвязку.
+    // ADR-036: суммаризация (ContextOptimizer) — обновляем gateway-обвязку.
     this._optimizer?.setGatewayHooks(
       gatewayConfig && this._obfMapStore && this._gatewayAudit && this._gatewayRateLimiter
         ? {
@@ -974,17 +974,17 @@ export class ChatOrchestrator {
         : null,
     );
 
-    // AD-036: пул кешировал провайдеров без новой обёртки — сбрасываем кеш
+    // ADR-036: пул кешировал провайдеров без новой обёртки — сбрасываем кеш
     // и обновляем фабрику (по образцу конструктора, с пустой картой обфускации).
     this._providerPool?.setGateway(
       gatewayConfig,
       gatewayConfig ? this._poolGatewayFactory(gatewayConfig) : null,
     );
-    // AD-084: decision-обвязка обновляется всегда (guard активен и при выключенном gateway).
+    // ADR-084: decision-обвязка обновляется всегда (guard активен и при выключенном gateway).
     this._providerPool?.setDecisionGatewayFactory(this._decisionGatewayFactory());
   }
 
-  /** AD-036: включён ли LLM Gateway (runtime-тумблер / конфиг). */
+  /** ADR-036: включён ли LLM Gateway (runtime-тумблер / конфиг). */
   isGatewayEnabled(): boolean {
     return !!this._gatewayConfig;
   }
@@ -999,7 +999,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-029: live-применение глобального таймаута подтверждения (runtime-настройка
+   * ADR-029: live-применение глобального таймаута подтверждения (runtime-настройка
    * из UI, раздел «Безопасность»). Обновляет дефолтный permission-конфиг, который
    * наследуют сессии без собственного пер-сессионного permission-конфига.
    */
@@ -1008,7 +1008,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3: live-применение глобальной политики включения **встроенных**
+   * ADR-071 §2.3: live-применение глобальной политики включения **встроенных**
    * инструментов (runtime-настройка из админки). Per-session override в сессии
    * приоритетнее.
    */
@@ -1017,7 +1017,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3: live-применение глобальной политики включения **MCP**-инструментов
+   * ADR-071 §2.3: live-применение глобальной политики включения **MCP**-инструментов
    * (runtime-настройка из админки). Независима от `setToolsPolicy`; per-session
    * override в сессии приоритетнее.
    */
@@ -1026,7 +1026,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.6: live-применение instance-wide отключения инструментов
+   * ADR-071 §2.6: live-применение instance-wide отключения инструментов
    * (runtime-настройка из админки). Жёсткое исключение из запроса независимо от
    * `tools.policy`; `runtime`-capability неотключаема (валидируется на API).
    */
@@ -1038,7 +1038,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-046 §4.5: live-применение системного hard-gate скиллов (runtime-настройка).
+   * ADR-046 §4.5: live-применение системного hard-gate скиллов (runtime-настройка).
    * Отключённые скиллы не попадают в каталог промпта и не грузятся тулом `skill`.
    */
   setSkillsDisabled(config: SkillsDisabledRequest): void {
@@ -1050,7 +1050,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.9.1: live-применение доступности внешних программ окружения
+   * ADR-070 §2.9.1: live-применение доступности внешних программ окружения
    * (git/rg/sh). Вызывается один раз при старте (детекция) или при обновлении;
    * не задано — fail-open (`ALL_RUNTIME_DEPS_AVAILABLE`).
    */
@@ -1059,7 +1059,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-084: live-применение конфига decision-слоя (микро-каскад). Модель читает
+   * ADR-084: live-применение конфига decision-слоя (микро-каскад). Модель читает
    * конфиг геттером, поэтому достаточно обновить поле — пересоздание не нужно.
    */
   setDecisionConfig(config: DecisionConfig | null): void {
@@ -1067,16 +1067,16 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-084: decision-провайдер по имени из пула (`ProviderPool.getDecisionProvider`
+   * ADR-084: decision-провайдер по имени из пула (`ProviderPool.getDecisionProvider`
    * — всегда обёрнут в `GatewayProvider`). Нужен decision-маршрутизации внешних
-   * событий (AD-089): провайдеры не дёргаются напрямую, инвариант №3 сохранён.
+   * событий (ADR-089): провайдеры не дёргаются напрямую, инвариант №3 сохранён.
    */
   getDecisionProvider(providerName: string, modelName: string): BaseProvider | null {
     return this._providerPool?.getDecisionProvider(providerName, modelName) ?? null;
   }
 
   /**
-   * AD-071 §2.6: тул жёстко отключён администратором (`tools.disabled`) — по
+   * ADR-071 §2.6: тул жёстко отключён администратором (`tools.disabled`) — по
    * capability или по имени. `runtime` неотключаем (защита на API + здесь).
    */
   private _isAdminDisabled(tool: { name: string; capabilities: readonly string[] }): boolean {
@@ -1089,7 +1089,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.6: сохранённый chars-per-token модели (без дефолта).
+   * ADR-071 §2.6: сохранённый chars-per-token модели (без дефолта).
    * `undefined` — калибровки нет (первый семпл EWMA берётся как есть).
    */
   private async _loadTokenRatio(model: string | undefined): Promise<number | undefined> {
@@ -1104,14 +1104,14 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.6: chars-per-token модели. Нет калибровки — дефолт 4.
+   * ADR-071 §2.6: chars-per-token модели. Нет калибровки — дефолт 4.
    */
   private async _resolveTokenRatio(model: string | undefined): Promise<number> {
     return (await this._loadTokenRatio(model)) ?? DEFAULT_CHARS_PER_TOKEN;
   }
 
   /**
-   * AD-071 §2.6: калибровка chars-per-token после успешного ответа
+   * ADR-071 §2.6: калибровка chars-per-token после успешного ответа
    * (`promptChars / usage.inputTokens`). EWMA + границы/порог — в
    * `calibrateCharsPerToken`. Ошибка сохранения не влияет на ход.
    *
@@ -1136,7 +1136,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3/§2.6: единый предикат тулов для `selectForSession`.
+   * ADR-071 §2.3/§2.6: единый предикат тулов для `selectForSession`.
    * Всегда исключает admin-disabled; в режиме `available` дополнительно
    * фильтрует по доступности (mode/role/mcpToolSettings).
    */
@@ -1151,7 +1151,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3/§2.6: единый резолвинг политик и выборки инструментов сессии.
+   * ADR-071 §2.3/§2.6: единый резолвинг политик и выборки инструментов сессии.
    * Используется и при сборке запроса (`_processMessage`), и в диагностике
    * (`getPromptInfo`) — состав tools/mcp.tools не должен расходиться.
    */
@@ -1164,7 +1164,7 @@ export class ChatOrchestrator {
     sessionMode: SessionMode;
     planMode: PlanMode;
     planApproved: boolean;
-    /** AD-075: задан ли рабочий каталог проекта (гейт `workspace` для file/shell/git). */
+    /** ADR-075: задан ли рабочий каталог проекта (гейт `workspace` для file/shell/git). */
     workspaceReady: boolean;
   }): {
     toolsPolicy: Exclude<ToolsPolicy, 'auto'>;
@@ -1178,11 +1178,11 @@ export class ChatOrchestrator {
     } = args;
     const toolsPolicy = this._resolveToolsPolicy(session, providerType);
     const mcpPolicy = this._resolveMcpPolicy(session, providerType);
-    // AD-071 §2.3: встроенные и MCP фильтруются независимо — своя политика на слой.
+    // ADR-071 §2.3: встроенные и MCP фильтруются независимо — своя политика на слой.
     const availabilityPredicate = (toolsPolicy === 'available' || mcpPolicy === 'available')
       ? this._availabilityPredicate(session, sessionMode, planMode, planApproved, agentDef, workspaceReady)
       : undefined;
-    // AD-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
+    // ADR-071 §2.6: admin-disabled исключаются всегда, независимо от политики.
     const toolPredicates = {
       builtin: this._toolPredicate(toolsPolicy === 'available' ? availabilityPredicate : undefined),
       mcp: this._toolPredicate(mcpPolicy === 'available' ? availabilityPredicate : undefined),
@@ -1195,9 +1195,9 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.1/§2.5: единая сборка `ComposerContext` для `compose`/`manifest`.
+   * ADR-070 §2.1/§2.5: единая сборка `ComposerContext` для `compose`/`manifest`.
    * `toolSelection` (для манифеста `tools`/`mcp.tools`) передаётся только
-   * диагностикой; `project` — уже загруженный проект (AD-071 §2.4).
+   * диагностикой; `project` — уже загруженный проект (ADR-071 §2.4).
    */
   private _buildComposerContext(args: {
     session: Session;
@@ -1213,15 +1213,15 @@ export class ChatOrchestrator {
     project?: Project | null;
     toolSelection?: ReturnType<ToolRegistry['selectForSession']>;
     debugCollector?: DebugCollector;
-    /** AD-046 §5: каталог скиллов (stable/volatile-блоки). */
+    /** ADR-046 §5: каталог скиллов (stable/volatile-блоки). */
     skillsCatalog?: ComposerSkillsCatalog;
-    /** AD-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md). */
+    /** ADR-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md). */
     instructions?: ComposerInstructions;
-    /** AD-051: в сессии активно расписание — добавляет статическое описание Scheduler. */
+    /** ADR-051: в сессии активно расписание — добавляет статическое описание Scheduler. */
     schedulerActive?: boolean;
     /** Интервью уместно в этом ходе (первое сообщение сессии от пользователя). */
     interviewEligible?: boolean;
-    /** AD-051: текущий ход инициирован планировщиком. */
+    /** ADR-051: текущий ход инициирован планировщиком. */
     schedulerCurrentTurn?: boolean;
   }): ComposerContext {
     const {
@@ -1266,7 +1266,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-051: текущий ход инициирован планировщиком. При явном `message` — по его
+   * ADR-051: текущий ход инициирован планировщиком. При явном `message` — по его
    * метаданным (`metadata.scheduler === true`); без него (диагностика
    * `getPromptInfo`) — по последнему «разговорному» сообщению (user|assistant).
    */
@@ -1277,7 +1277,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-083: доступность онбординг-тула `profile_update` текущему агенту — гейт
+   * PROP-083: доступность онбординг-тула `profile_update` текущему агенту — гейт
    * инжекта блока `[INTERVIEW]`. Источник доступности единый: реестр (`get`) +
    * admin-отключение (`_isAdminDisabled`) + `_availabilityPredicate`
    * (`computeToolAvailability`: роль/mode/dependency/workspace), без дублирования
@@ -1358,7 +1358,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-051: активность расписания в сессии — есть ли в истории сообщение
+   * ADR-051: активность расписания в сессии — есть ли в истории сообщение
    * планировщика (`metadata.scheduler === true`) или (если задан резолвер)
    * включённое расписание с целью-сессией. Первое — дешёвая проверка по уже
    * загруженной истории; второе — late-bound `ScheduleStore.hasEnabledTargetFor`.
@@ -1379,8 +1379,8 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-069 §5.2: политика threat-scan проектных инструкций — та же, что у
-   * tool-контента (AD-036), с учётом runtime-тумблера безопасности.
+   * ADR-069 §5.2: политика threat-scan проектных инструкций — та же, что у
+   * tool-контента (ADR-036), с учётом runtime-тумблера безопасности.
    */
   private _instructionsInjectionPolicy(): { enabled: boolean; mode: InjectionPolicy } {
     const injection = this._securityConfig.promptInjection;
@@ -1391,13 +1391,13 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-069 §2.1/§7: резолвит проектные инструкции для сессии.
+   * ADR-069 §2.1/§7: резолвит проектные инструкции для сессии.
    *
-   * - только при `project.workspace` (AD-040: сессия без проекта инструкции не грузит);
+   * - только при `project.workspace` (ADR-040: сессия без проекта инструкции не грузит);
    * - `session.settings.systemPrompt` override → инструкции не добавляются (как
-   *   каталог скиллов AD-046);
-   * - кап — от окна модели (AD-069 §5.1), окно резолвится как в провайдере;
-   * - AD-069 §3.5/R5: при заданном `turnId` результат мемоизируется на время
+   *   каталог скиллов ADR-046);
+   * - кап — от окна модели (ADR-069 §5.1), окно резолвится как в провайдере;
+   * - ADR-069 §3.5/R5: при заданном `turnId` результат мемоизируется на время
    *   хода (последний ход на сессию; ключ включает workspace/модель/язык/
    *   injection/projectId) — повторные вызовы внутри хода не дёргают резолвер.
    */
@@ -1408,14 +1408,14 @@ export class ChatOrchestrator {
     model?: string;
     language: string;
     signal?: AbortSignal;
-    /** AD-069 §3.5/R5: id хода для мемоизации внутри хода. */
+    /** ADR-069 §3.5/R5: id хода для мемоизации внутри хода. */
     turnId?: string;
   }): Promise<ResolvedProjectInstructions | undefined> {
     const resolver = this._instructionsResolver;
     if (!resolver) return undefined;
-    // AD-040: без project.workspace проектный контекст недоступен.
+    // ADR-040: без project.workspace проектный контекст недоступен.
     if (!args.project?.workspace) return undefined;
-    // AD-046 §5/AD-069 §9.2: override заменяет system prompt целиком.
+    // ADR-046 §5/ADR-069 §9.2: override заменяет system prompt целиком.
     if (args.session.settings.systemPrompt?.trim()) return undefined;
 
     const model = args.model || args.session.settings.model || '';
@@ -1505,7 +1505,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-046 §7: раннее разрешение `/`-команды до micro-first/LLM.
+   * ADR-046 §7: раннее разрешение `/`-команды до micro-first/LLM.
    *
    * - builtin/unknown/denied/unavailable — локальный ответ (user+assistant
    *   помечаются `ephemeral`, исключаются из LLM-контекста), ранний возврат;
@@ -1522,7 +1522,7 @@ export class ChatOrchestrator {
     streamId: string;
     effectiveAgentRole: string | undefined;
     workingDir: string;
-    /** AD-046 §7.4: evaluator для inline shell — тот же, что в tool-loop. */
+    /** ADR-046 §7.4: evaluator для inline shell — тот же, что в tool-loop. */
     permissionEvaluator: PermissionEvaluator;
     sessionMode: SessionMode;
     planMode: PlanMode;
@@ -1537,8 +1537,8 @@ export class ChatOrchestrator {
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
     const permissionConfig = session.settings.permission ?? this._permissionConfig;
 
-    // AD-046 §7.4: inline shell `` !`cmd` `` исполняется только через
-    // PermissionEvaluator (AD-029) — как обычный `execute_shell`. allow —
+    // ADR-046 §7.4: inline shell `` !`cmd` `` исполняется только через
+    // PermissionEvaluator (ADR-029) — как обычный `execute_shell`. allow —
     // исполняем; deny/ask — отказ БЕЗ интерактива: inline shell не поднимает
     // диалог одобрения, а молчаливый auto-approve `ask` был бы обходом прав.
     // Аудит — событие `command.inline_shell` (рядом с `command.invoked`).
@@ -1663,7 +1663,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-046 §7.1: завершение локального ответа (builtin/команда/micro-first) теми
+   * ADR-046 §7.1: завершение локального ответа (builtin/команда/micro-first) теми
    * же событиями, что обычный стрим — `stream.chunk` + `stream.done`, иначе
    * SSE-цикл `POST /sessions/:id/prompt` не закрывается (ждёт `stream.done`).
    */
@@ -1677,7 +1677,7 @@ export class ChatOrchestrator {
       usage?: TokenUsage;
       durationMs?: number;
       metadata?: Record<string, unknown>;
-      /** AD-046 §7.1: index/id сохранённого assistant-сообщения — UI не плодит копии. */
+      /** ADR-046 §7.1: index/id сохранённого assistant-сообщения — UI не плодит копии. */
       messageIndex?: number;
       messageId?: string;
     },
@@ -1706,7 +1706,7 @@ export class ChatOrchestrator {
   /**
    * Локальный ответ команды: user сообщение — `ephemeral`, ассистент — `ephemeral`.
    *
-   * `command` (AD-046 §7.1) — имя/аргументы системной (builtin) команды: уходят в
+   * `command` (ADR-046 §7.1) — имя/аргументы системной (builtin) команды: уходят в
    * `metadata` ассистента, чтобы UI отрисовал нейтральный system-блок, а не ответ
    * агента (бейдж/статистику). `model`/`provider` = `command` — тот же признак для
    * live-стрима. Для `/summary`-нотиса (недоступна суммаризация) передаётся
@@ -1727,7 +1727,7 @@ export class ChatOrchestrator {
     const commandMetadata: Record<string, unknown> = {
       command: true,
       ...(command ? { commandName: command.name, commandArgs: command.args ?? '' } : {}),
-      // AD-041: строки движка локализуются в UI по `metadata.i18n`.
+      // ADR-041: строки движка локализуются в UI по `metadata.i18n`.
       ...(command?.i18nKey ? { i18n: i18nMeta(command.i18nKey) } : {}),
     };
 
@@ -1799,7 +1799,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-046 §5: каталог скиллов для промпта (аналог `_collectComposerMcpServers`).
+   * ADR-046 §5: каталог скиллов для промпта (аналог `_collectComposerMcpServers`).
    * Учитывает project-trust, binding агента, capability-aware и permission-deny
    * (`deny` скрывает). Ошибка discovery не должна ломать ход — возвращаем
    * `undefined` (блоки не добавляются).
@@ -1828,7 +1828,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-046 §4.5: scope-гейты скиллов сессии (система/проект/сессия) — единый
+   * ADR-046 §4.5: scope-гейты скиллов сессии (система/проект/сессия) — единый
    * объект для каталога промпта и тула `skill` (в т.ч. у саб-агентов).
    */
   private _skillScopeFor(session: Session, project: Project | null): SkillScopeOptions {
@@ -1843,12 +1843,12 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3: резолвит эффективную политику **встроенных** инструментов для
+   * ADR-071 §2.3: резолвит эффективную политику **встроенных** инструментов для
    * сессии. Приоритет: `session.settings.toolsPolicy` → глобальная
    * (`tools.policy`). `auto` разрешается по провайдеру запроса: локальные
    * (`ollama`) → `available`, облачные → `consistency`. Флага локальности у
    * провайдера/модели нет, поэтому признак — тип провайдера `ollama`
-   * (см. AD-071 §2.3, решение зафиксировано).
+   * (см. ADR-071 §2.3, решение зафиксировано).
    */
   private _resolveToolsPolicy(
     session: Session,
@@ -1858,7 +1858,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3: резолвит эффективную политику **MCP**-инструментов для сессии.
+   * ADR-071 §2.3: резолвит эффективную политику **MCP**-инструментов для сессии.
    * Приоритет: `session.settings.mcpPolicy` → глобальная (`mcp.policy`).
    * Независима от `_resolveToolsPolicy`; `auto` разрешается так же — по
    * провайдеру запроса (`ollama` → `available`, иначе `consistency`).
@@ -1870,7 +1870,7 @@ export class ChatOrchestrator {
     return this._resolvePolicy(session.settings.mcpPolicy ?? this._mcpPolicy, providerType);
   }
 
-  /** AD-071 §2.3: общий резолв `auto` по типу провайдера для обеих политик. */
+  /** ADR-071 §2.3: общий резолв `auto` по типу провайдера для обеих политик. */
   private _resolvePolicy(
     requested: ToolsPolicy,
     providerType?: string,
@@ -1882,7 +1882,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3: тип провайдера сессии для резолва `auto` в read-only
+   * ADR-071 §2.3: тип провайдера сессии для резолва `auto` в read-only
    * диагностике (`getPromptInfo`), где нет объекта провайдера запроса.
    */
   private _sessionProviderType(session: Session): string | undefined {
@@ -1892,8 +1892,8 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.3: предикат доступности тула для режима `available` — тот же
-   * `computeToolAvailability`, что использует permission-слой (AD-070 §2.9.1).
+   * ADR-071 §2.3: предикат доступности тула для режима `available` — тот же
+   * `computeToolAvailability`, что использует permission-слой (ADR-070 §2.9.1).
    * В запрос попадают только тулы с `available: true`.
    */
   private _availabilityPredicate(
@@ -1917,7 +1917,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-036: обфусцирует user-сообщение при сохранении в историю (до отправки в LLM).
+   * ADR-036: обфусцирует user-сообщение при сохранении в историю (до отправки в LLM).
    * Карта обфускации сессии обновляется и сохраняется; в message.metadata.secrets
    * встраиваются реальные значения для раскрытия в UI. Если gateway выключен или
    * секретов не найдено — возвращает сообщение без изменений (обратная совместимость).
@@ -1929,7 +1929,7 @@ export class ChatOrchestrator {
       const { text, map: newMap, found } = obfuscateSecrets(message.content, map);
       if (found.length === 0) return message;
       await this._obfMapStore.set(sessionId, newMap);
-      // AD-036: аудит обфускации user-сообщения (секреты — только маской,
+      // ADR-036: аудит обфускации user-сообщения (секреты — только маской,
       // плейсхолдеры — без значений). Не должен ронять обфускацию.
       try {
         await this._gatewayAudit?.append({
@@ -1959,7 +1959,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Рабочий каталог проекта (AD-075): абсолютный путь `project.workspace`
+   * Рабочий каталог проекта (ADR-075): абсолютный путь `project.workspace`
    * (абсолютный — как есть; относительный — от `workspacesRoot`) с гарантированным
    * созданием каталога, либо `null`, если проекта/workspace нет. Отдельно от
    * `_resolveWorkingDir`, чтобы permission-слой мог отличить «workspace задан»
@@ -1981,11 +1981,11 @@ export class ChatOrchestrator {
     }
     if (!resolved?.workspace) return null;
     // Абсолютный workspace — как есть (normalize); относительный —
-    // резолвим относительно workspacesRoot (AD-014).
+    // резолвим относительно workspacesRoot (ADR-014).
     const dir = isAbsolute(resolved.workspace)
       ? normalize(resolved.workspace)
       : resolve(this._workspacesRoot, resolved.workspace);
-    // AD-075: каталог проектного workspace гарантированно создаётся к моменту
+    // ADR-075: каталог проектного workspace гарантированно создаётся к моменту
     // работы инструмента.
     await mkdir(dir, { recursive: true }).catch(() => {});
     return dir;
@@ -1993,7 +1993,7 @@ export class ChatOrchestrator {
 
   /**
    * Рабочий каталог сессии: `project.workspace` → `defaultWorkingDir`.
-   * `project` можно передать уже загруженным (AD-071 §2.4) — тогда повторного
+   * `project` можно передать уже загруженным (ADR-071 §2.4) — тогда повторного
    * чтения `projectStore` не происходит; `undefined` — загрузить, `null` — проекта нет.
    */
   private async _resolveWorkingDir(session: Session, project?: Project | null): Promise<string> {
@@ -2005,7 +2005,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.9.1: собирает недоступные сейчас тулы реестра с причиной
+   * ADR-070 §2.9.1: собирает недоступные сейчас тулы реестра с причиной
    * (`mode`/`role`) для chronological-сообщений `mode_change`/`agent_switch`.
    * Список tool-дефинишенов постоянен — фильтрация по режиму/роли здесь только
    * для информирования модели, а не для скрытия тулов.
@@ -2018,20 +2018,20 @@ export class ChatOrchestrator {
     agentDef: AgentDefinition | undefined,
     mcpServers: Iterable<string> = [],
     /**
-     * AD-071 §2.3: какие слои включать в подсказки. Слой с политикой
+     * ADR-071 §2.3: какие слои включать в подсказки. Слой с политикой
      * `available` в запросе уже сужен до доступных — подсказки о его
      * недоступных тулах не нужны.
      */
     include: { builtin: boolean; mcp: boolean } = { builtin: true, mcp: true },
     /**
-     * AD-075: задан ли рабочий каталог проекта. `false` — file/shell/git-тулы
+     * ADR-075: задан ли рабочий каталог проекта. `false` — file/shell/git-тулы
      * помечаются причиной `workspace` в подсказках модели.
      */
     workspaceReady = true,
   ): UnavailableTool[] {
     if (!this._toolRegistry) return [];
     const unavailable: UnavailableTool[] = [];
-    // AD-071 §2.1: MCP-тулы вне активных серверов сессии не подсказываем —
+    // ADR-071 §2.1: MCP-тулы вне активных серверов сессии не подсказываем —
     // глобальный реестр держит их постоянно, но скоуп сессии фильтруется.
     const activeMcp = new Set(mcpServers);
     for (const tool of this._toolRegistry.list()) {
@@ -2042,7 +2042,7 @@ export class ChatOrchestrator {
       } else if (!include.builtin) {
         continue;
       }
-      // AD-071 §2.6: admin-disabled — не подсказываем (ограничение администратора,
+      // ADR-071 §2.6: admin-disabled — не подсказываем (ограничение администратора,
       // а не режим/роль).
       if (this._isAdminDisabled(tool)) continue;
       const availability = computeToolAvailability(tool.name, tool.capabilities, {
@@ -2066,7 +2066,7 @@ export class ChatOrchestrator {
     return unavailable;
   }
 
-  /** AD-071 §2.4: загрузка проекта сессии (для проектного MCP-скоупа). */
+  /** ADR-071 §2.4: загрузка проекта сессии (для проектного MCP-скоупа). */
   private async _loadProject(session: Session): Promise<Project | null> {
     if (!session.projectId || !this._projectStore) return null;
     try {
@@ -2105,7 +2105,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.4: решения по эффективному набору MCP. Модель per-item:
+   * ADR-071 §2.4: решения по эффективному набору MCP. Модель per-item:
    * системный мастер (`systemEnabled`) → проектный hard-gate (`project.enabled`)
    * → сессионный opt-out → снапшот/явное включение. Системный мастер — только
    * реестровое `enabled` (`config.enabled` — сид, не гейт). Уровень по приоритету
@@ -2129,7 +2129,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.2: статус MCP-сервера для API/промпта. Отключённый сервер —
+   * ADR-071 §2.2: статус MCP-сервера для API/промпта. Отключённый сервер —
    * `disabled`; иначе — состояние менеджера (`circuit-open`/`connected`/`error`).
    */
   private _resolveMcpServerStatus(name: string, enabled: boolean): ComposerMcpServerStatus {
@@ -2139,7 +2139,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.1: имена активных MCP-серверов сессии (эффективный скоуп).
+   * ADR-071 §2.1: имена активных MCP-серверов сессии (эффективный скоуп).
    * Используется для наследования MCP-скоупа resumed-саб-агентом от родителя.
    */
   private async _resolveActiveMcpServers(session: Session): Promise<string[]> {
@@ -2149,7 +2149,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.4: эффективный список MCP-серверов сессии (включая отключённые с
+   * ADR-071 §2.4: эффективный список MCP-серверов сессии (включая отключённые с
    * причиной) — единый источник для API `GET /sessions/:id/mcp` и промпта.
    */
   async resolveMcpServers(session: Session): Promise<McpServerEffective[]> {
@@ -2157,12 +2157,12 @@ export class ChatOrchestrator {
     if (!manager) return [];
     const project = await this._loadProject(session);
     const decisions = this._resolveMcpDecisions(session, project);
-    // AD-071 §2.6: единый ratio для оценок токенов (калибровка модели сессии).
+    // ADR-071 §2.6: единый ratio для оценок токенов (калибровка модели сессии).
     const tokenRatio = await this._resolveTokenRatio(session.settings.model);
     return decisions.map((d) => {
       const status = this._resolveMcpServerStatus(d.name, d.enabled);
       const rawTools = manager.getServerTools(d.name) ?? [];
-      // AD-071 §2.6: пер-тульные chars/estTokens — по тому же JSON-определению,
+      // ADR-071 §2.6: пер-тульные chars/estTokens — по тому же JSON-определению,
       // что уходит в слой `mcp.tools` (имя с префиксом сервера + [MCP:...]).
       const toolDetails: McpToolDetail[] = rawTools.map((tool) => {
         const fullName = `${d.name}_${tool.name}`;
@@ -2204,7 +2204,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-071 §2.2: данные MCP-серверов для промпта (`mcp.servers` — stable,
+   * ADR-071 §2.2: данные MCP-серверов для промпта (`mcp.servers` — stable,
    * `mcp.status` — volatile). Возвращает **все** настроенные серверы, включая
    * отключённые (с уровнем и причиной), чтобы состав был наблюдаем.
    * `undefined`, если менеджера нет или список серверов пуст (тогда блоков нет).
@@ -2238,7 +2238,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.8: смена режима в середине хода — добавляет durable
+   * ADR-070 §2.8: смена режима в середине хода — добавляет durable
    * `mode_change` state-сообщение в историю и синтетическое user-сообщение с
    * обёрткой `<system-state>` в текущий LLM-диалог (для последующих итераций).
    * System prompt не пересобирается — смена режима его не меняет.
@@ -2275,7 +2275,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.5: read-only диагностика состава системного промпта для API/UI.
+   * ADR-070 §2.5: read-only диагностика состава системного промпта для API/UI.
    * Возвращает манифест (тот же обход, что и `compose`), состояние промпта
    * активного агента и `promptMeta` последнего ответа. Побочных эффектов нет:
    * `promptStates` не пишется, `captureSystemPromptParts` не вызывается.
@@ -2283,7 +2283,7 @@ export class ChatOrchestrator {
   async getPromptInfo(session: Session): Promise<PromptDiagnostics> {
     const effectiveAgentRole = session.settings.agentRole;
     const agentDef = effectiveAgentRole ? this._agentRegistry?.get(effectiveAgentRole) : undefined;
-    // AD-071 §2.4: проект загружаем один раз — для рабочего каталога и Composer.
+    // ADR-071 §2.4: проект загружаем один раз — для рабочего каталога и Composer.
     const project = await this._loadProject(session);
     const workingDir = await this._resolveWorkingDir(session, project);
     const workspaceReady = (await this._resolveProjectWorkspace(session, project)) !== null;
@@ -2297,7 +2297,7 @@ export class ChatOrchestrator {
       .map((m) => m.content)
       .join('\n\n');
 
-    // AD-071 §2.1/§2.3/§2.4: тот же per-session список инструментов, что уходит в
+    // ADR-071 §2.1/§2.3/§2.4: тот же per-session список инструментов, что уходит в
     // запрос (`_processMessage`) — встроенные + MCP эффективного набора сессии
     // (instance defaultOn ∪ project defaultOn ∪ session enabled − opt-out);
     // в режиме `available` — только доступные (mode/role/mcpToolSettings).
@@ -2312,13 +2312,13 @@ export class ChatOrchestrator {
       sessionMode, planMode, planApproved, workspaceReady,
     });
     const toolSelection = select();
-    // AD-071 §2.6: chars-per-token модели (калибровка) для оценок токенов.
+    // ADR-071 §2.6: chars-per-token модели (калибровка) для оценок токенов.
     const tokenRatio = await this._resolveTokenRatio(session.settings.model);
 
-    // AD-070 §2.5 + AD-071 §2.1/§2.3: манифест отражает реальные слои запроса —
+    // ADR-070 §2.5 + ADR-071 §2.1/§2.3: манифест отражает реальные слои запроса —
     // `tools` (встроенные) и `mcp.tools` (MCP сессии); тир `tools` зависит от
     // `tools.policy`, MCP-блоки всегда volatile.
-    // AD-046 §5: каталог скиллов — тем же путём, что и в запросе.
+    // ADR-046 §5: каталог скиллов — тем же путём, что и в запросе.
     const skillsCatalog = await this._collectSkillsCatalog({
       session,
       agentDef,
@@ -2327,7 +2327,7 @@ export class ChatOrchestrator {
       permissionConfig: session.settings.permission ?? this._permissionConfig,
       project,
     });
-    // AD-069 Фаза 1: те же проектные инструкции, что и в запросе (манифест).
+    // ADR-069 Фаза 1: те же проектные инструкции, что и в запросе (манифест).
     const projectInstructions = await this._resolveProjectInstructions({
       session,
       project,
@@ -2339,7 +2339,7 @@ export class ChatOrchestrator {
     const ctx: ComposerContext = this._buildComposerContext({
       session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
       toolsPolicy, mcpPolicy, tokenRatio,
-      // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
+      // ADR-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
       mcpServers: this._collectComposerMcpServers(mcpDecisions),
       project,
       toolSelection,
@@ -2357,7 +2357,7 @@ export class ChatOrchestrator {
     const promptState = session.promptStates?.[agentKeyOf(effectiveAgentRole)] ?? null;
     const lastPromptMeta = this._lastPromptMeta(session, effectiveAgentRole);
     const history = this._buildPromptHistoryInfo(session, effectiveAgentRole, tokenRatio);
-    // AD-071 §2.6: per-tool данные встроенных инструментов для таблицы статистики.
+    // ADR-071 §2.6: per-tool данные встроенных инструментов для таблицы статистики.
     // Доступность считается тем же `computeToolAvailability`, что и в запросе;
     // admin-disabled помечается отдельной причиной и имеет приоритет.
     const toolsDetail: PromptToolDetail[] = (this._toolRegistry?.listBuiltin() ?? []).map((tool) => {
@@ -2392,7 +2392,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.5: состав слоя истории (`messages`) — read-only. Зеркалит
+   * ADR-070 §2.5: состав слоя истории (`messages`) — read-only. Зеркалит
    * реальную отправку через тот же `_sessionMessagesToLlm`, что и
    * `_processMessage`, чтобы статистика не расходилась с запросом.
    */
@@ -2487,7 +2487,7 @@ export class ChatOrchestrator {
     message: Message,
     signal: AbortSignal,
     publishChunk: (event: string, data: Record<string, unknown>) => void,
-    /** Номер попытки (1-based) для решения о терминальности сбоя (AD-070 §2.6). */
+    /** Номер попытки (1-based) для решения о терминальности сбоя (ADR-070 §2.6). */
     attempt?: number,
   ) => Promise<ProcessMessageResult> {
     return async (session, message, signal, publishChunk, attempt) => {
@@ -2505,7 +2505,7 @@ export class ChatOrchestrator {
     const streamId = (message.metadata?.stream_id as string) || 'unknown';
     const effectiveAgentRole = message.agentRole || session.settings.agentRole;
     const author = message.author || 'unknown';
-    // AD-071 §2.4: проект сессии — носитель project-скоупа MCP; загружаем один
+    // ADR-071 §2.4: проект сессии — носитель project-скоупа MCP; загружаем один
     // раз: нужен рабочему каталогу, state-сообщениям, резолвингу MCP и Composer.
     let projectForState: Project | null = null;
     if (session.projectId && this._projectStore) {
@@ -2516,21 +2516,21 @@ export class ChatOrchestrator {
       }
     }
     let workingDir = await this._resolveWorkingDir(session, projectForState);
-    // AD-075: permission-гейт `workspace` — file/shell/git-тулы блокируются,
+    // ADR-075: permission-гейт `workspace` — file/shell/git-тулы блокируются,
     // пока у проекта не задан рабочий каталог. `workingDir` при этом всё равно
     // резолвится (fallback default) — он нужен промпту/контексту, но путь
     // инструментов остаётся невалидным до появления workspace.
     let workspaceReady = (await this._resolveProjectWorkspace(session, projectForState)) !== null;
-    // AD-070 §2.6: старт прогона — для per-message duration_ms (полная
+    // ADR-070 §2.6: старт прогона — для per-message duration_ms (полная
     // длительность у финального сообщения потока, включая tool-chain).
     const streamStartedAt = Date.now();
 
-    // AD-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
+    // ADR-025: режим Plan/Act — runtime-состояние сессии + строгость из настроек
     const planMode: PlanMode = session.settings.planMode ?? this._defaultPlanMode ?? 'auto';
     let sessionMode: SessionMode = session.mode ?? 'act';
     let planApproved = Boolean(session.planApproved);
 
-    // AD-029: permissions — сессионный override приоритетнее глобального конфига.
+    // ADR-029: permissions — сессионный override приоритетнее глобального конфига.
     // Конфиг может быть расширен «разрешить в сессии» (once:false) в процессе
     // обработки, поэтому ссылка и эвалуатор пересоздаются.
     let effectivePermissionConfig = session.settings.permission ?? this._permissionConfig;
@@ -2555,7 +2555,7 @@ export class ChatOrchestrator {
       return this._handleDebugSystemMessage(session, message, signal, publishChunk, debugCollector, streamId, effectiveReasoningLevel, attempt);
     }
 
-    // --- AD-046 §7: резолвинг `/`-команд в core, до LLM ---
+    // --- ADR-046 §7: резолвинг `/`-команд в core, до LLM ---
     if (message.role === MessageRole.USER && (message.content ?? '').trimStart().startsWith('/')) {
       const commandResult = await this._handleCommand({
         session, message, signal, publishChunk, debugCollector, streamId,
@@ -2566,7 +2566,7 @@ export class ChatOrchestrator {
       // prompt-команда (template/skill/bundle): сообщение заменено, идём в LLM.
     }
 
-    // --- AD-035: Micro-first — пробуем ответить без LLM ---
+    // --- ADR-035: Micro-first — пробуем ответить без LLM ---
     if (this._microPipeline && session.settings.microFirst) {
       const microResult = await this._microPipeline.handle({
         userMessage: message.content,
@@ -2580,7 +2580,7 @@ export class ChatOrchestrator {
         const finalContent = microResult.microResult.answer;
         const finalModel = `micro:${microResult.microResult.taskClass}`;
 
-        // AD-084: метрики decision-уровня. Если победил decision-сигнал
+        // ADR-084: метрики decision-уровня. Если победил decision-сигнал
         // (`decision:<label>`) — фиксируем его в debug-контексте (`extra_context`)
         // и дополняем `metadata.micro_first` (не дублируя сам `micro_first`).
         const decisionSignal = microResult.microResult.signals.find((s) => s.startsWith('decision:'));
@@ -2645,7 +2645,7 @@ export class ChatOrchestrator {
           usage: finalUsage,
           agentRole: effectiveAgentRole,
           metadata: microMetadata,
-          // AD-084: debug-контекст (в т.ч. `extra_context.decision`) виден в
+          // ADR-084: debug-контекст (в т.ч. `extra_context.decision`) виден в
           // `GET /messages/:id/:index/debug`; микро-путь сохраняет сообщение
           // напрямую, минуя `_saveAssistantMessage`, поэтому ставим здесь.
           debugData: debugCollector.getDebugInfo() ?? undefined,
@@ -2680,7 +2680,7 @@ export class ChatOrchestrator {
           taskClass: microResult.microResult?.taskClass ?? 'llm_task',
         });
 
-        // AD-084: метрики decision-уровня на фоллбеке. `decision_disabled`
+        // ADR-084: метрики decision-уровня на фоллбеке. `decision_disabled`
         // исключаем, чтобы выключенный (или незаданный) decision-слой не
         // засорял метрики. Остальные сигналы (`decision:<label>` при отсечении
         // по порогу микро-слоя, `decision_low_confidence`, `decision_error:*`, …)
@@ -2731,24 +2731,24 @@ export class ChatOrchestrator {
         context_optimization: session.settings.contextOptimization,
       });
 
-      // AD-070 §2.8: синхронизируем режим/план/todo durable state-сообщениями
+      // ADR-070 §2.8: синхронизируем режим/план/todo durable state-сообщениями
       // истории (до сборки LLM-сообщений). Идемпотентно — при неизменном
       // состоянии ничего не добавляется; system prompt при этом не меняется.
       const language = session.settings.language || 'ru';
-      // AD-071 §2.4: проект сессии уже загружен выше (projectForState) —
+      // ADR-071 §2.4: проект сессии уже загружен выше (projectForState) —
       // повторно хранилище не читаем.
-      // AD-071 §2.1/§2.4: эффективный набор MCP сессии — per-session скоуп:
+      // ADR-071 §2.1/§2.4: эффективный набор MCP сессии — per-session скоуп:
       // (instance defaultOn ∪ project defaultOn ∪ session enabled) − opt-out.
       // Определяем до state-сообщений (unavailable-подсказки) и до сборки tools.
       const mcpDecisions = this._resolveMcpDecisions(session, projectForState);
       const activeMcpServers = mcpDecisions.filter((d) => d.enabled).map((d) => d.name);
       const activeMcpSet = new Set(activeMcpServers);
-      // AD-071 §2.3: эффективные политики инструментов для этого хода (per-session
+      // ADR-071 §2.3: эффективные политики инструментов для этого хода (per-session
       // override → глобальная; `auto` → по типу провайдера). Встроенные и MCP —
       // независимо; в `available` слой фильтруется по доступности, а подсказки
       // `unavailable` для него не нужны. `select()` вызывается позже — после
       // ленивой регистрации MCP-тулов сессии.
-      // AD-075: гейт `workspace` — если агент в ходе задаст workspace проекта,
+      // ADR-075: гейт `workspace` — если агент в ходе задаст workspace проекта,
       // выборку пересобираем тем же набором аргументов (см. ниже).
       const selectionArgs = {
         session, agentDef, effectiveAgentRole, activeMcpServers, providerType: provider.type,
@@ -2760,7 +2760,7 @@ export class ChatOrchestrator {
         language,
         plan: projectForState?.plan ?? null,
         agentRole: effectiveAgentRole,
-        // AD-071 §2.3: слой с политикой `available` уже сужен до доступных —
+        // ADR-071 §2.3: слой с политикой `available` уже сужен до доступных —
         // подсказки `unavailable(mode|role)` для него не добавляем (слои
         // независимы: built-in-подсказки сохраняются при mcp=available и наоборот).
         unavailableTools: this._collectUnavailableTools(
@@ -2788,7 +2788,7 @@ export class ChatOrchestrator {
         .map((m) => m.content)
         .join('\n\n');
 
-      // AD-071 §2.1: MCP-тулы активных серверов сессии. Регистрация ленивая и
+      // ADR-071 §2.1: MCP-тулы активных серверов сессии. Регистрация ленивая и
       // аддитивная (без deregister при смене набора): глобальный реестр держит
       // MCP-тулы для executor'а, а per-session скоуп обеспечивает выборка ниже
       // (`selectForSession`) — кросс-сессионной утечки нет. Загружаем до сборки
@@ -2797,17 +2797,17 @@ export class ChatOrchestrator {
         await this._mcpManager.ensureToolsLoaded(activeMcpServers, this._toolRegistry);
       }
 
-      // AD-071 §2.6: chars-per-token модели хода (калибровка) для оценок токенов.
+      // ADR-071 §2.6: chars-per-token модели хода (калибровка) для оценок токенов.
       // `loadedTokenRatio` (без дефолта) переиспользуется при калибровке после
       // ответа — повторного чтения runtime-настроек нет.
       const loadedTokenRatio = await this._loadTokenRatio(provider.model || session.settings.model);
       const tokenRatio = loadedTokenRatio ?? DEFAULT_CHARS_PER_TOKEN;
 
-      // AD-070 §2.1/§2.8: единая идемпотентная сборка системного промпта
+      // ADR-070 §2.1/§2.8: единая идемпотентная сборка системного промпта
       // Composer'ом. `session.settings.systemPrompt` override, classification/
       // gateway/plan-guide/mode-policy/session-context — внутри compose.
       // Режим/план/todo — уже в state-сообщениях истории (выше), не в system.
-      // AD-046 §5: каталог скиллов — stable/volatile-блоки (deny скрывает).
+      // ADR-046 §5: каталог скиллов — stable/volatile-блоки (deny скрывает).
       const skillsCatalog = await this._collectSkillsCatalog({
         session,
         agentDef,
@@ -2816,7 +2816,7 @@ export class ChatOrchestrator {
         permissionConfig: session.settings.permission ?? this._permissionConfig,
         project: projectForState,
       });
-      // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md) —
+      // ADR-069 Фаза 1: проектные инструкции (merged chain AGENTS.md) —
       // только при project.workspace и без systemPrompt-override.
       const projectInstructions = await this._resolveProjectInstructions({
         session,
@@ -2825,10 +2825,10 @@ export class ChatOrchestrator {
         model: provider.model,
         language,
         signal,
-        // AD-069 §3.5/R5: мемоизация в пределах хода (streamId).
+        // ADR-069 §3.5/R5: мемоизация в пределах хода (streamId).
         turnId: streamId,
       });
-      // AD-069 §9.3: прозрачность — событие о загруженных проектных инструкциях.
+      // ADR-069 §9.3: прозрачность — событие о загруженных проектных инструкциях.
       // Публикуется только в реальном ходе (manifest/getPromptInfo — read-only).
       if (projectInstructions && projectInstructions.files.length > 0) {
         this._eventBus.publish(session.id, 'context.instructions_loaded', {
@@ -2843,7 +2843,7 @@ export class ChatOrchestrator {
             blocked: file.blocked,
           })),
         });
-        // AD-069 §4.3.5: merged-chain уже в system prompt — seed lazy-реестра,
+        // ADR-069 §4.3.5: merged-chain уже в system prompt — seed lazy-реестра,
         // чтобы lazy не дублировал эти файлы в tool result.
         this._lazyInstructions?.seed(
           session.id,
@@ -2853,14 +2853,14 @@ export class ChatOrchestrator {
       const schedulerActive = await this._resolveSchedulerActive(session);
       const composerCtx: ComposerContext = this._buildComposerContext({
         session, agentDef, effectiveAgentRole, workingDir, language, summaryContent,
-        // AD-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
+        // ADR-071 §2.3: `toolsPolicy` влияет на тир `tools`, `mcpPolicy` — на
         // инструкцию `tools.guide`; MCP-блоки всегда volatile.
         toolsPolicy, mcpPolicy, tokenRatio,
-        // AD-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
+        // ADR-071 §2.2: блоки `mcp.servers`/`mcp.status` — все серверы эффективного набора.
         mcpServers: this._collectComposerMcpServers(mcpDecisions),
-        // AD-071 §2.4: уже загруженный проект — Composer не читает хранилище.
+        // ADR-071 §2.4: уже загруженный проект — Composer не читает хранилище.
         project: projectForState,
-        // AD-070 §2.5: per-message collector доходит до Composer через контекст.
+        // ADR-070 §2.5: per-message collector доходит до Composer через контекст.
         debugCollector,
         skillsCatalog,
         instructions: projectInstructions?.instructions,
@@ -2874,7 +2874,7 @@ export class ChatOrchestrator {
         schedulerCurrentTurn: this._schedulerCurrentTurn(session, message),
       });
       const composed = await this._composer.compose(composerCtx);
-      // AD-070 §2.2: в провайдер уходит payload с границей stable-префикса и
+      // ADR-070 §2.2: в провайдер уходит payload с границей stable-префикса и
       // ключом кэша (стабильный id сессии). При override
       // `session.settings.systemPrompt` stablePrefix не задаём (безопаснее).
       const hasSystemPromptOverride = !!session.settings.systemPrompt?.trim();
@@ -2885,7 +2885,7 @@ export class ChatOrchestrator {
         cachePolicy: this._cachePolicy,
       };
 
-      // AD-070 §2.4/§2.7 (Ф2-часть 2): состояние промпта per-agent. При
+      // ADR-070 §2.4/§2.7 (Ф2-часть 2): состояние промпта per-agent. При
       // `systemPrompt`-override закреплённый префикс пустой (не кэшируем
       // пользовательский оверрайд). Запись в сессию — только при смене
       // generation (init / смена префикса / override); на обычном сообщении
@@ -2899,7 +2899,7 @@ export class ChatOrchestrator {
       };
       const expectedCache = computeExpected(prevPromptState, promptStateInput);
       let activePromptState = prevPromptState;
-      // AD-069 §11/AD-070 §2.4: блок `instructions` лежит в тире `context`, а
+      // ADR-069 §11/ADR-070 §2.4: блок `instructions` лежит в тире `context`, а
       // `isPrefixUnchanged` сравнивает только stable-префикс. Поэтому смену
       // контента инструкций отслеживаем отдельно — иначе promptStates/generation
       // не инвалидируются при изменении `AGENTS.md`.
@@ -2929,7 +2929,7 @@ export class ChatOrchestrator {
       const messagesForLlm = optimizedMessages.filter((m) => m.role !== MessageRole.SUMMARY);
       const baseLlmMessages = ChatOrchestrator._sessionMessagesToLlm(messagesForLlm, effectiveAgentRole, author);
 
-      // 4. Get tools from registry. AD-070 §2.9 + AD-071 §2.1/§2.3: встроенные —
+      // 4. Get tools from registry. ADR-070 §2.9 + ADR-071 §2.1/§2.3: встроенные —
       // постоянно, MCP — только активных серверов сессии; каждый слой в своём
       // `available` — только доступные (mode/role/mcpToolSettings). Порядок:
       // builtin → MCP. Если агент НЕ найден в реестре или role undefined —
@@ -2939,7 +2939,7 @@ export class ChatOrchestrator {
       let tools = this._toolRegistry
         ? [...toolSelection.builtin, ...toolSelection.mcp]
         : undefined;
-      // AD-071 §2.1: граница stable-слоя инструментов для кэш-брейкпоинта
+      // ADR-071 §2.1: граница stable-слоя инструментов для кэш-брейкпоинта
       // (Anthropic) — после встроенных, до MCP. MCP после границы не кэшируется.
       finalSystemPrompt.stableToolCount = toolSelection.builtin.length;
 
@@ -2976,7 +2976,7 @@ export class ChatOrchestrator {
       let finalModel: string | undefined;
       // Модель последнего завершённого стрима итерации: нужна ветке отмены
       // во время тула, где `chunkModel` уже вне области видимости, а
-      // `finalModel` ещё не обновлён (AD-070 §2.6, Bug 2).
+      // `finalModel` ещё не обновлён (ADR-070 §2.6, Bug 2).
       let lastChunkModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
       const allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }> = [];
@@ -2990,7 +2990,7 @@ export class ChatOrchestrator {
        *  завершать обработку как отмену, а не как пустой ответ. */
       let cancelledBeforeFinal = false;
 
-      // AD-070 §2.6: live-статистика стрима (`stream.usage`). Состояние
+      // ADR-070 §2.6: live-статистика стрима (`stream.usage`). Состояние
       // троттлинга — на поток; публикуется через publishChunk (EventBus).
       const liveUsageState = {
         lastPublishedAt: 0,
@@ -3001,7 +3001,7 @@ export class ChatOrchestrator {
 
       // Стартовая оценка input сразу после сборки сообщений — чтобы панель
       // статистики не пустовала до первого чанка провайдера.
-      // AD-071 §2.6: размер промпта считаем один раз при старте и на входе
+      // ADR-071 §2.6: размер промпта считаем один раз при старте и на входе
       // каждой итерации; переиспользуем в live-оценке и путях отмены.
       let lastIterationPromptChars = this._estimatePromptChars(
         currentMessages, finalSystemPrompt, tools as Record<string, unknown>[] | undefined,
@@ -3046,7 +3046,7 @@ export class ChatOrchestrator {
         let accumulatedReasoning = '';
         let toolCalls: Record<string, unknown>[] | undefined = [];
         let chunkModel: string | undefined;
-        // AD-070: usage текущей итерации (running total от провайдера) для live.
+        // ADR-070: usage текущей итерации (running total от провайдера) для live.
         let iterationUsage: TokenUsage | undefined;
 
         // Размер промпта этой итерации (символы) — считаем один раз и
@@ -3081,7 +3081,7 @@ export class ChatOrchestrator {
             }
             if (chunk.model) chunkModel = chunk.model;
 
-            // AD-070 §2.6: live-статистика. Anthropic отдаёт input/cache в
+            // ADR-070 §2.6: live-статистика. Anthropic отдаёт input/cache в
             // `message_start` (output ещё 0), а output — только в `message_delta`
             // в конце. Поэтому «точным» считаем usage с output>0/reasoning:
             // при output===0 и input>0 сохраняем точные input/cache, но output
@@ -3290,7 +3290,7 @@ export class ChatOrchestrator {
           }
 
           const resolvedToolDef = this._toolRegistry?.get(toolName);
-          // AD-071 §2.1: MCP-тул вне активных серверов сессии недоступен —
+          // ADR-071 §2.1: MCP-тул вне активных серверов сессии недоступен —
           // глобальный реестр держит тулы постоянно, но executor подчиняется
           // per-session скоупу (иначе модель могла бы вызвать чужой MCP-тул).
           const toolDef = resolvedToolDef?.source === 'mcp'
@@ -3299,7 +3299,7 @@ export class ChatOrchestrator {
             : resolvedToolDef;
           let toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> };
 
-          // AD-030: `pre_tool_use` — синхронный хук ДО проверки permission и
+          // ADR-030: `pre_tool_use` — синхронный хук ДО проверки permission и
           // исполнения тула. Блокировка (`{block:true}`) отменяет исполнение,
           // модель получает ошибку-результат `hook.blocked`. Без зарегистрированных
           // обработчиков `emit` не блокирует — поведение не меняется.
@@ -3312,10 +3312,10 @@ export class ChatOrchestrator {
             : null;
           const hookBlocked = preHook?.blocked === true;
 
-          // AD-029: гранулярные permissions — проверяем ДО doom loop, чтобы
+          // ADR-029: гранулярные permissions — проверяем ДО doom loop, чтобы
           // deny-повторы не блокировались безликим «Цикл прерван», а получали
           // полноценный feedback (tool_call.result) с объяснением политики.
-          // AD-025: учитываем текущий режим Plan/Act и строгость плана.
+          // ADR-025: учитываем текущий режим Plan/Act и строгость плана.
           const permissionDecision = permissionEvaluator.check({
             toolName,
             params: toolArgs,
@@ -3359,7 +3359,7 @@ export class ChatOrchestrator {
           }
 
           const tcStartedAt = new Date().toISOString();
-          // AD-030: `Date.now()`-замер длительности тула для `post_tool_use`.
+          // ADR-030: `Date.now()`-замер длительности тула для `post_tool_use`.
           const tcStartedMs = Date.now();
 
           publishChunk('tool_call.started', {
@@ -3371,7 +3371,7 @@ export class ChatOrchestrator {
             iteration: toolIteration,
           });
 
-          // AD-046 §8.2: `skill.invoked` — рядом с `tool_call.started`
+          // ADR-046 §8.2: `skill.invoked` — рядом с `tool_call.started`
           // (аудит/метрики/UI-подсветка).
           if (toolName === 'skill' && typeof toolArgs.name === 'string') {
             const skillName = toolArgs.name;
@@ -3429,7 +3429,7 @@ export class ChatOrchestrator {
           }
 
           if (hookBlocked) {
-            // AD-030: pre_tool_use заблокировал тул — исполнение не выполняется,
+            // ADR-030: pre_tool_use заблокировал тул — исполнение не выполняется,
             // модель получает ошибку-результат `hook.blocked` (как прочие ошибки
             // тулов), цикл продолжается.
             const hookReason = preHook?.reason ?? '';
@@ -3449,7 +3449,7 @@ export class ChatOrchestrator {
               reason: deniedReason,
               matched_rule: permissionDecision.matchedRule,
             });
-            // AD-030: `permission_denied` — неблокирующий эмит рядом с событием
+            // ADR-030: `permission_denied` — неблокирующий эмит рядом с событием
             // сессии (аудит безопасности/уведомления ИБ).
             this._hooks?.emitAsync('permission_denied', {
               tool: toolName,
@@ -3479,34 +3479,34 @@ export class ChatOrchestrator {
                   provider,
                   agentRegistry: this._agentRegistry,
                   sessionManager: this._sessionManager,
-                  // AD-089: funnel создания дочерней сессии (late-bound, если подключён).
+                  // ADR-089: funnel создания дочерней сессии (late-bound, если подключён).
                   getRequestSessionService: this._getRequestSessionService ?? undefined,
                   projectStore: this._projectStore ?? undefined,
                   // Онбординг: тул `profile_update` сохраняет ответы интервью.
                   profilesStore: this._profilesStore ?? undefined,
                   workspacesRoot: this._workspacesRoot,
-                  // AD-075/AD-076: тулы управления проектом (workspace, репозитории).
+                  // ADR-075/ADR-076: тулы управления проектом (workspace, репозитории).
                   gitService: this._gitService,
                   workspaceManaged: this._workspaceManaged,
                   getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
-                  // AD-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
+                  // ADR-076 §T6: сетевые git-тулы резолвят SSH-ключ по реестру проекта.
                   sshKeyStore: this._sshKeyStore ?? undefined,
                   eventBus: this._eventBus,
-                  // AD-030: шина хуков — `task`/`task-resume` эмитят
+                  // ADR-030: шина хуков — `task`/`task-resume` эмитят
                   // agent_spawned/agent_completed/agent_failed в саб-агенте.
                   hooks: this._hooks ?? undefined,
                   contextOptimizer: this._optimizer ?? undefined,
-                  // AD-046 §5: тул `skill` получает рантайм через ToolContext.extra
+                  // ADR-046 §5: тул `skill` получает рантайм через ToolContext.extra
                   // (в ToolContext нет dataDir); саб-агенты — тот же объект.
                   skillRuntime: this._skillRuntime ?? undefined,
-                  // AD-046 §4.5: scope-гейты скиллов (система/проект/сессия).
+                  // ADR-046 §4.5: scope-гейты скиллов (система/проект/сессия).
                   skillScope: this._skillScopeFor(session, projectForState),
-                  // AD-069 §7: уже резолвленные проектные инструкции — в extra,
+                  // ADR-069 §7: уже резолвленные проектные инструкции — в extra,
                   // чтобы `task`/`task-resume` не резолвили их повторно в ребёнке.
                   projectInstructions: projectInstructions?.content,
                   callerAgentRole: effectiveAgentRole,
                   parentSessionSettings: session.settings,
-                  // AD-071 §2.1: саб-агент наследует MCP-скоуп родителя.
+                  // ADR-071 §2.1: саб-агент наследует MCP-скоуп родителя.
                   mcpServers: activeMcpServers,
                   modelRouter: this._router ?? undefined,
                   routerConfig: this._routerConfig ?? undefined,
@@ -3522,17 +3522,17 @@ export class ChatOrchestrator {
                   callId: tcId,
                   toolRegistry: this._toolRegistry,
                   permissionConfig: effectivePermissionConfig,
-                  // AD-070 §2.9.1: доступность внешних программ (git/rg/sh) —
+                  // ADR-070 §2.9.1: доступность внешних программ (git/rg/sh) —
                   // в permission-слой саб-агента (enforce `dependency`) и его
                   // `[НЕДОСТУПНЫЕ ТУЛЫ]`.
                   runtimeDeps: this._runtimeDeps,
-                  // AD-075: гейт `workspace` наследуется саб-агентом —
+                  // ADR-075: гейт `workspace` наследуется саб-агентом —
                   // его permission-слой не даёт обойти отсутствие рабочего каталога.
                   workspaceReady,
                   shellPolicy: this._getProtectedPaths() ?? undefined,
                   protectedPaths: this._getProtectedPaths() ?? undefined,
                   protectedPathsEnabled: this._getProtectedPathsEnabled(),
-                  // AD-070: live-стоимость саб-агента тем же загрузчиком цен.
+                  // ADR-070: live-стоимость саб-агента тем же загрузчиком цен.
                   modelPriceLoader: this._modelPriceLoader ?? undefined,
                 },
               }, toolName);
@@ -3629,9 +3629,9 @@ export class ChatOrchestrator {
             }
           }
 
-          // AD-069 §4: lazy-догрузка вложенных проектных инструкций в результат
+          // ADR-069 §4: lazy-догрузка вложенных проектных инструкций в результат
           // file/shell-тула. Контент инструкций сканируется внутри загрузчика
-          // (AD-036) и вставляется ПОСЛЕ IPI-обёртки базового tool-контента —
+          // (ADR-036) и вставляется ПОСЛЕ IPI-обёртки базового tool-контента —
           // сам базовый контент под обёрткой, скан не обходится.
           if (!toolResult.isError && this._lazyInstructions) {
             try {
@@ -3680,7 +3680,7 @@ export class ChatOrchestrator {
             iteration: toolIteration,
           });
 
-          // classify_conversation: сохраняем категорию в настройках сессии (AD-034)
+          // classify_conversation: сохраняем категорию в настройках сессии (ADR-034)
           if (toolName === 'classify_conversation' && !toolResult.isError) {
             const cat = (toolResult.metadata?.routingCategory as string) || undefined;
             if (cat && (cat === 'coding' || cat === 'chat' || cat === 'research')) {
@@ -3695,7 +3695,7 @@ export class ChatOrchestrator {
             }
           }
 
-          // AD-025/AD-070 §2.8: после plan_enter/plan_exit обновляем локальный
+          // ADR-025/ADR-070 §2.8: после plan_enter/plan_exit обновляем локальный
           // режим и добавляем durable mode_change state-сообщение в историю +
           // синтетическое user-сообщение в текущий диалог. System prompt
           // mid-turn больше не пересобирается (смена режима его не меняет).
@@ -3720,7 +3720,7 @@ export class ChatOrchestrator {
                 workspaceReady,
               ),
             );
-            // AD-030: `plan_approved` — неблокирующий эмит после утверждения
+            // ADR-030: `plan_approved` — неблокирующий эмит после утверждения
             // плана. planContent читаем из свежего проекта только при наличии
             // обработчиков (иначе лишний диск-IO и поведение не меняется).
             if (this._hooks?.count('plan_approved')) {
@@ -3732,7 +3732,7 @@ export class ChatOrchestrator {
             }
           }
 
-          // AD-075: смена рабочего каталога проекта в ходе (project_create/
+          // ADR-075: смена рабочего каталога проекта в ходе (project_create/
           // project_attach/project_workspace_set) разблокирует file/shell/git-тулы
           // без прерывания хода: перечитываем проект, пересчитываем `workspaceReady`
           // и пересобираем выборку инструментов для следующих итераций. System
@@ -3764,7 +3764,7 @@ export class ChatOrchestrator {
             finalSystemPrompt.stableToolCount = rebuiltSelection.builtin.length;
           }
 
-          // AD-030: `post_tool_use` — событие «После выполнения тула». Эмитим
+          // ADR-030: `post_tool_use` — событие «После выполнения тула». Эмитим
           // только при реальном исполнении (deny и hook-блокировка не эмитят:
           // для отказа есть `permission_denied`, блокировку фиксирует
           // `pre_tool_use`), до `fs.changed`.
@@ -3804,7 +3804,7 @@ export class ChatOrchestrator {
             toolCallId: tcId,
           });
 
-          // AD-029: пользователь отклонил запрос (ask→deny) — прекращаем
+          // ADR-029: пользователь отклонил запрос (ask→deny) — прекращаем
           // обработку: не продолжаем цикл LLM, но уже выполненные tool_result
           // и промежуточные ответы остаются в истории (сохраняются ниже).
           if (userDenied) {
@@ -3898,7 +3898,7 @@ export class ChatOrchestrator {
         fallbackI18n = i18nMeta('session.max_iterations');
       }
 
-      // AD-029: пользователь отклонил ask — обработка завершена. Фиксируем
+      // ADR-029: пользователь отклонил ask — обработка завершена. Фиксируем
       // причину в финальном сообщении (история tool_result уже собрана).
       if (stopAfterDeny && !finalContent) {
         const reason = denyStopReason ?? sm('session.stopped_reason_denied');
@@ -3917,7 +3917,7 @@ export class ChatOrchestrator {
         fallbackI18n = i18nMeta(hadDeny ? 'session.denied_blocked' : 'session.empty_response');
       }
 
-      // 7.5. Quality check + escalation (AD-034)
+      // 7.5. Quality check + escalation (ADR-034)
       let qaPass: boolean | undefined;
       let qaReason: string | undefined;
       const escalation = this._router?.getEscalationConfig();
@@ -3992,7 +3992,7 @@ export class ChatOrchestrator {
       );
 
       // 8. Save final assistant message
-      // AD-070 §2.6: полная длительность прогона (включая tool-chain) и
+      // ADR-070 §2.6: полная длительность прогона (включая tool-chain) и
       // стоимость по цене модели — в metadata финального сообщения и stream.done.
       const durationMs = Date.now() - streamStartedAt;
       const messageCost = this._computeMessageCost(finalModel, finalUsage);
@@ -4007,7 +4007,7 @@ export class ChatOrchestrator {
         messageCost,
       );
 
-      // AD-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
+      // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)
       // после успешного хода. promptChars — тот же расчёт, что уходил в провайдер
       // (последняя итерация), ratio — уже загруженный в этом ходе.
       await this._calibrateTokenRatio(
@@ -4035,7 +4035,7 @@ export class ChatOrchestrator {
         intermediate_text_blocks: allIntermediateTexts.length > 0 ? allIntermediateTexts : undefined,
       };
 
-      // AD-036: проброс secrets в real-time событие — UI раскрывает плейсхолдеры
+      // ADR-036: проброс secrets в real-time событие — UI раскрывает плейсхолдеры
       // без перезагрузки списка сообщений (см. transportStore/chatStore).
       if (finalContent) {
         const secrets = await this._getAssistantSecrets(session.id, savedContent);
@@ -4198,7 +4198,7 @@ export class ChatOrchestrator {
   }> {
     const deps = this._subagentResumeDeps();
     const { child, parent } = await validateSubagentResume(deps, childSessionId);
-    // AD-071 §2.1: resumed-саб-агент наследует MCP-скоуп родительской сессии.
+    // ADR-071 §2.1: resumed-саб-агент наследует MCP-скоуп родительской сессии.
     deps.mcpServers = await this._resolveActiveMcpServers(parent);
 
     const streamId = generateStreamId();
@@ -4294,16 +4294,16 @@ export class ChatOrchestrator {
       routerConfig: this._routerConfig ?? undefined,
       securityConfig: this._securityConfig,
       permissionConfig: this._permissionConfig,
-      // AD-070 §2.9.1: dependency-гейт и `[НЕДОСТУПНЫЕ ТУЛЫ]` resumed-саб-агента.
+      // ADR-070 §2.9.1: dependency-гейт и `[НЕДОСТУПНЫЕ ТУЛЫ]` resumed-саб-агента.
       runtimeDeps: this._runtimeDeps,
       shellPolicy: this._getProtectedPaths() ?? undefined,
       protectedPaths: this._getProtectedPaths() ?? undefined,
       protectedPathsEnabled: this._getProtectedPathsEnabled(),
-      // AD-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
+      // ADR-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
       modelPriceLoader: this._modelPriceLoader ?? undefined,
-      // AD-046 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
+      // ADR-046 §5: каталог скиллов resumed-саб-агенту + тул `skill`.
       skillRuntime: this._skillRuntime ?? undefined,
-      // AD-075/AD-076: проектные зависимости resumed-саб-агента — те же, что у
+      // ADR-075/ADR-076: проектные зависимости resumed-саб-агента — те же, что у
       // обычного пути `task` (проектные тулы, workspace-политика, SSH-окружение).
       projectStore: this._projectStore ?? undefined,
       // Онбординг: resumed-саб-агент получает тот же profilesStore для `profile_update`.
@@ -4313,7 +4313,7 @@ export class ChatOrchestrator {
       gitService: this._gitService,
       workspaceManaged: this._workspaceManaged,
       getWorkspaceOutsideRootPolicy: this._getWorkspaceOutsideRootPolicy ?? undefined,
-      // AD-069 §7: резолвим проектные инструкции для ребёнка в оркестраторе
+      // ADR-069 §7: резолвим проектные инструкции для ребёнка в оркестраторе
       // (в самом resume повторного резолва нет).
       getProjectInstructions: async (child, parent, workingDir) => {
         if (!parent.projectId) return undefined;
@@ -4336,7 +4336,7 @@ export class ChatOrchestrator {
       },
       getProvider: (child) => this._getProvider(child.settings.provider || '', child, child.settings.reasoningLevel),
       getWorkingDir: (child) => this._resolveWorkingDir(child),
-      // AD-075: workspace-гейт resumed-саб-агента — по проекту дочерней сессии.
+      // ADR-075: workspace-гейт resumed-саб-агента — по проекту дочерней сессии.
       getWorkspaceReady: async (child) => (await this._resolveProjectWorkspace(child)) !== null,
     };
   }
@@ -4351,7 +4351,7 @@ export class ChatOrchestrator {
     reasoningLevel?: ReasoningLevel,
     attempt?: number,
   ): Promise<ProcessMessageResult> {
-    // AD-070 §2.6: длительность этого прогона.
+    // ADR-070 §2.6: длительность этого прогона.
     const startedAt = Date.now();
     const providerName = (message.provider as string) || session.settings.provider || '';
     const provider = this._getProvider(providerName, session, reasoningLevel);
@@ -4476,7 +4476,7 @@ export class ChatOrchestrator {
       return { error: 'ContextOptimizer not available', errorType: 'internal', canRetry: false };
     }
 
-    // AD-070 §2.6: длительность этого прогона суммаризации.
+    // ADR-070 §2.6: длительность этого прогона суммаризации.
     const startedAt = Date.now();
     const lang = session.settings.language || 'ru';
 
@@ -4684,7 +4684,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-036: оборачивает провайдер в GatewayProvider с привязкой к сессии.
+   * ADR-036: оборачивает провайдер в GatewayProvider с привязкой к сессии.
    * Если gateway выключен — возвращает провайдер как есть (обратная совместимость).
    */
   private _wrapWithGateway(provider: BaseProvider, session: Session): BaseProvider {
@@ -4707,7 +4707,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * Выбор провайдера и модели через роутер (AD-034).
+   * Выбор провайдера и модели через роутер (ADR-034).
    * Если роутер недоступен — fallback на _getProvider().
    */
   private async _routeProvider(
@@ -4728,7 +4728,7 @@ export class ChatOrchestrator {
         toolCalls: toolCallNames,
       });
 
-      // AD-084: метрики decision-классификации категории (AD-034). Сигнал
+      // ADR-084: метрики decision-классификации категории (ADR-034). Сигнал
       // публикуется только когда категорию определила decision-модель
       // (`strategy='decision'`), а не словарный классификатор.
       if (debugCollector && decision.strategy === 'decision') {
@@ -4748,7 +4748,7 @@ export class ChatOrchestrator {
         routedWindow > 0 ? routedWindow : undefined,
       );
       if (provider) {
-        // AD-036: ProviderPool уже оборачивает провайдера через gatewayFactory.
+        // ADR-036: ProviderPool уже оборачивает провайдера через gatewayFactory.
         // Повторная обёртка дублировала бы guard/аудит/rate-limit — пропускаем.
         if (!(provider instanceof GatewayProvider)) {
           provider = this._wrapWithGateway(provider, session);
@@ -4815,13 +4815,13 @@ export class ChatOrchestrator {
       const role = msg.role;
       if (role === MessageRole.INFO) continue;
 
-      // AD-070 §2.6 / AD-041: assistant-сообщение о терминальной ошибке LLM
+      // ADR-070 §2.6 / ADR-041: assistant-сообщение о терминальной ошибке LLM
       // (metadata.status='error') персистится для UI и аудита, но не является
       // частью диалога — не отдаём его модели как обычную реплику assistant,
       // иначе на следующем ходу модель видит собственный «сбой» в контексте.
       if (role === MessageRole.ASSISTANT && msg.metadata?.status === 'error') continue;
 
-      // AD-070 §2.8: durable state-сообщения хранятся с role system (скрыты в
+      // ADR-070 §2.8: durable state-сообщения хранятся с role system (скрыты в
       // UI), но в LLM-запрос уходят как синтетическое user-сообщение с
       // обёрткой `<system-state>` — Anthropic не принимает role system в
       // messages. Без префикса `[anonymous]`.
@@ -4900,7 +4900,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-036: возвращает реальные значения секретов для плейсхолдеров
+   * ADR-036: возвращает реальные значения секретов для плейсхолдеров
    * ⟦SYNTH_SECRET_N⟧ в тексте сообщения (из карты обфускации сессии).
    * Пустой объект если карты нет, плейсхолдеров нет или gateway выключен.
    */
@@ -5021,7 +5021,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-070 §2.6: статус ответа по данным сохранения. Централизованно, чтобы
+   * ADR-070 §2.6: статус ответа по данным сохранения. Централизованно, чтобы
    * ни один путь (`_saveAssistantMessage`) не пропустил поле `metadata.status`.
    */
   private _resolveAssistantStatus(
@@ -5068,10 +5068,10 @@ export class ChatOrchestrator {
     qaReason?: string,
     /** Дополнительные поля metadata (например metadata.i18n фоллбек-статусов). */
     metadataExtra?: Record<string, unknown>,
-    /** AD-070 §2.4: предсказание prompt-cache; cachedTokens/validated — из usage. */
+    /** ADR-070 §2.4: предсказание prompt-cache; cachedTokens/validated — из usage. */
     promptMeta?: PromptMeta,
     /**
-     * AD-070 §2.6: уже посчитанная стоимость сообщения (если вызывающая сторона
+     * ADR-070 §2.6: уже посчитанная стоимость сообщения (если вызывающая сторона
      * считала её для события) — избегаем повторного `_computeMessageCost`.
      */
     precomputedCost?: ReturnType<typeof computeUsageCost>,
@@ -5088,7 +5088,7 @@ export class ChatOrchestrator {
 
     const debugInfo = debugCollector.getDebugInfo();
 
-    // AD-070 §2.4: usage доступен в момент сохранения — заполняем фактические
+    // ADR-070 §2.4: usage доступен в момент сохранения — заполняем фактические
     // cachedTokens и подтверждаем/опровергаем предсказание.
     const resolvedPromptMeta: PromptMeta | undefined = promptMeta
       ? {
@@ -5099,7 +5099,7 @@ export class ChatOrchestrator {
       : undefined;
 
     const metadata: Record<string, unknown> = { stream_id: streamId, ...metadataExtra };
-    // AD-070 §2.6: единая точка простановки статуса ответа — ни один путь
+    // ADR-070 §2.6: единая точка простановки статуса ответа — ни один путь
     // сохранения (обычный, cancel, tool-chain, summary, debug, micro) не
     // пропускает его. UI показывает префикс по этому полю.
     // Явный status (например 'error' для assistant-сообщения о сбое LLM)
@@ -5110,7 +5110,7 @@ export class ChatOrchestrator {
       : this._resolveAssistantStatus(isCancelled, metadataExtra);
     if (toolResults && toolResults.length > 0) {
       metadata.tool_results = toolResults;
-      // AD-070 §2.6: per-message статистика сабагентов (попап сообщения и
+      // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения и
       // «Последний ответ») — агрегируется из task-результатов этого хода.
       const subagents = this._aggregateSubagentStats(toolResults);
       if (subagents) metadata.subagents = subagents;
@@ -5119,7 +5119,7 @@ export class ChatOrchestrator {
       metadata.intermediate_text_blocks = intermediateTextBlocks;
     }
 
-    // AD-070 §2.6: стоимость хода по цене модели (только если цены известны).
+    // ADR-070 §2.6: стоимость хода по цене модели (только если цены известны).
     const messageCost = precomputedCost !== undefined
       ? precomputedCost
       : this._computeMessageCost(model, usage);
@@ -5129,7 +5129,7 @@ export class ChatOrchestrator {
       metadata.cost_breakdown = messageCost.breakdown;
     }
 
-    // AD-036: раскрытие секретов в UI. Реальные значения плейсхолдеров из
+    // ADR-036: раскрытие секретов в UI. Реальные значения плейсхолдеров из
     // карты обфускации сессии встраиваются в metadata.secrets (клик раскрывает
     // локально). Только существующие плейсхолдеры; карта — секрет, в логи не пишется.
     if (role === MessageRole.ASSISTANT && finalContent && this._obfMapStore) {
@@ -5174,10 +5174,10 @@ export class ChatOrchestrator {
         s.cacheReadTokens += usage.cacheReadTokens || 0;
         s.cacheWriteTokens += usage.cacheWriteTokens || 0;
         s.reasoningTokens += usage.reasoningTokens || 0;
-        // AD-070 §2.3: hit rate по накопленным токенам сессии.
+        // ADR-070 §2.3: hit rate по накопленным токенам сессии.
         s.cacheHitRate = computeCacheHitRate(s.cacheReadTokens, s.inputTokens);
 
-        // AD-070 §2.6: единый helper стоимости — тот же, что для per-message.
+        // ADR-070 §2.6: единый helper стоимости — тот же, что для per-message.
         const effectiveModel = model || msg.model;
         const cost = effectiveModel
           ? computeUsageCost(usage, this._modelPriceLoader?.(effectiveModel) ?? null)
@@ -5217,7 +5217,7 @@ export class ChatOrchestrator {
 
   /**
    * Человекочитаемое описание ошибки LLM (таймаут/обрыв соединения, сетевая
-   * ошибка). Для остальных ошибок — исходный текст. `i18n` — ключ AD-041 для
+   * ошибка). Для остальных ошибок — исходный текст. `i18n` — ключ ADR-041 для
    * metadata (UI локализует сам).
    */
   private _formatLlmError(error: unknown): { text: string; i18n?: ReturnType<typeof i18nMeta> } {
@@ -5232,7 +5232,7 @@ export class ChatOrchestrator {
     return { text: raw };
   }
 
-  /** i18n-ключ по типу ошибки (AD-041) для metadata assistant-сообщения об ошибке. */
+  /** i18n-ключ по типу ошибки (ADR-041) для metadata assistant-сообщения об ошибке. */
   private _errorTypeI18n(errorType: string): ReturnType<typeof i18nMeta> | undefined {
     switch (errorType) {
       case 'timeout': return i18nMeta('router.timeout');
@@ -5274,7 +5274,7 @@ export class ChatOrchestrator {
         : classifyLlmError(rawError));
     const canRetry = isLlmErrorRecoverable(error, rawError, errorType);
 
-    // AD-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,
+    // ADR-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,
     // когда повтора уже не будет (unrecoverable / последняя попытка / прямой
     // вызов без QueueProcessor). Иначе на каждый recoverable-ретрай в истории
     // появлялся бы дубль, а `message.added` мигал бы в UI.
@@ -5349,7 +5349,7 @@ export class ChatOrchestrator {
   }
 
   /**
-   * AD-029: «Разрешить в сессии» (once:false). Если у вызова есть файловые
+   * ADR-029: «Разрешить в сессии» (once:false). Если у вызова есть файловые
    * параметры — одобряет КОНКРЕТНЫЕ абсолютные пути (правило-объект
    * `rules[tool] = { path: 'allow' }`), иначе (shell/task/mcp) — весь тул.
    * Если тул уже разрешён полностью ('allow') — не понижает до пути.
@@ -5372,7 +5372,7 @@ export class ChatOrchestrator {
       });
     });
 
-    // AD-029: «Разрешить в сессии» для сабагентской (дочерней) сессии
+    // ADR-029: «Разрешить в сессии» для сабагентской (дочерней) сессии
     // распространяется и на родителя (parentId): путь в правиле — абсолютный
     // канонический, поэтому грант совпадёт при чтении того же файла и родителем,
     // и ребёнком. Родительский грант обновляет и effectivePermissionConfig, и

@@ -146,7 +146,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('CreateProjectPopover — workspace (AD-075)', () => {
+describe('CreateProjectPopover — workspace (ADR-075)', () => {
   it('standalone/local: путь передаётся при создании', async () => {
     const { onCreated } = await renderPopover()
     await setInputValue(byTestId('create-project-workspace') as HTMLInputElement, '/home/user/ws')

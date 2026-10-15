@@ -165,7 +165,7 @@ describe('PermissionEvaluator — plan_enter/plan_exit (имена тулов)',
   });
 });
 
-describe('PermissionEvaluator — plan mode (AD-025)', () => {
+describe('PermissionEvaluator — plan mode (ADR-025)', () => {
   function planCheck(
     toolName: string,
     params: Record<string, unknown>,
@@ -188,7 +188,7 @@ describe('PermissionEvaluator — plan mode (AD-025)', () => {
     expect(planCheck('create_directory', { path: 'new' }, { sessionMode: 'plan' }).action).toBe('deny');
   });
 
-  it('mode=plan блокирует запись в .synth/plans/*.md (AD-039: план в проекте, .synth не пишется)', () => {
+  it('mode=plan блокирует запись в .synth/plans/*.md (ADR-039: план в проекте, .synth не пишется)', () => {
     const d = planCheck('write_file', { file_path: '.synth/plans/2026-01-01-100000-plan.md', content: 'x' }, { sessionMode: 'plan' });
     expect(d.action).toBe('deny');
     expect(d.matchedRule).toBe('plan.deny');
@@ -325,7 +325,7 @@ describe('PermissionEvaluator — MCP доступность по режимам
   });
 });
 
-describe('PermissionEvaluator — yolo mode (AD-025)', () => {
+describe('PermissionEvaluator — yolo mode (ADR-025)', () => {
   function yoloCheck(
     config: PermissionConfig,
     toolName: string,
@@ -603,7 +603,7 @@ describe('PermissionEvaluator — защищённые пути (ProtectedPaths)
     deniedCommandPrefixes: ['rm -rf /'],
   };
 
-  // Изоляция проверок ProtectedPaths от workspace-гейта (AD-075): тесты
+  // Изоляция проверок ProtectedPaths от workspace-гейта (ADR-075): тесты
   // намеренно берут пути вне workspace (`~/.ssh/...`, `/etc/passwd`), чтобы
   // проверить сам protected-paths-слой, а не external_directory-дефолт.
   const PROTECTED_CFG: PermissionConfig = {
@@ -678,7 +678,7 @@ describe('PermissionEvaluator — защищённые пути (ProtectedPaths)
   });
 });
 
-describe('PermissionEvaluator — unavailable (AD-070 §2.9.1)', () => {
+describe('PermissionEvaluator — unavailable (ADR-070 §2.9.1)', () => {
   const evalWith = (input: Partial<Parameters<PermissionEvaluator['check']>[0]>) =>
     new PermissionEvaluator({ rules: {}, askTimeoutMs: 30_000 }).check({
       toolName: 'read_file',
@@ -809,7 +809,7 @@ describe('PermissionEvaluator — устойчивость к permission: {} б�
   });
 });
 
-describe('PermissionEvaluator — workspace (AD-075)', () => {
+describe('PermissionEvaluator — workspace (ADR-075)', () => {
   function wsCheck(
     toolName: string,
     params: Record<string, unknown>,

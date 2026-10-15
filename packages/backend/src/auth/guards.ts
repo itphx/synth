@@ -5,7 +5,7 @@ import { hasServiceScope } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 
 /**
- * AD-052/O1: комбинированные guard'ы «ADMIN **или** scope» для эндпоинтов,
+ * ADR-052/O1: комбинированные guard'ы «ADMIN **или** scope» для эндпоинтов,
  * которые должны быть доступны и человеку-ADMIN, и installer-service-key'ю.
  *
  * `requireScope` (core) — no-op для интерактивных кред, поэтому одиночного

@@ -1,5 +1,5 @@
 /**
- * AD-069 Фаза 2c: тесты read-only эндпоинта прозрачности проектных инструкций
+ * ADR-069 Фаза 2c: тесты read-only эндпоинта прозрачности проектных инструкций
  * (`GET /api/v2/context/instructions`) — scope по сессии/проекту, `no-project`,
  * install-tree/trust/disabled, RBAC.
  */
@@ -140,7 +140,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('GET /api/v2/context/instructions (AD-069 §9.3)', () => {
+describe('GET /api/v2/context/instructions (ADR-069 §9.3)', () => {
   it('session scope: резолвит инструкции проекта сессии', async () => {
     const ws = projectWs();
     await saveProject('p1', ws);

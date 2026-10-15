@@ -92,7 +92,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('CommandsSettings — команды и bundles (AD-046 §9.2)', () => {
+describe('CommandsSettings — команды и bundles (ADR-046 §9.2)', () => {
   it('рендерит команды с видом и бейджем недоступности', async () => {
     const container = await renderSettings()
 

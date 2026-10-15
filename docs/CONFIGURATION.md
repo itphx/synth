@@ -12,7 +12,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 - **CLI-флаги** передаются в `loadConfig({ overrides })` — самый высокий приоритет (например `--port`, `--api-key`, `--data-dir` у `synth serve`).
 - **Env vars**: скалярные ключи вложенных секций применяются в `loadConfig` поверх `config.yaml` (единый реестр `ENV_OVERRIDES`, см. «Env-оверрайды вложенных секций»); точечные переменные (пути, порты, ключи) читаются резолверами в точках использования (см. таблицу ниже).
-- **AD-079 (home)**: `--home <dir>` (`SYNTH_HOME`) — базовый каталог локального инстанса. Пути: config `<home>/config.yaml`, dataDir `<home>/data`, profiles `<home>/profiles.json`, credentials `<home>/credentials.json`. Приоритет путей: явные флаги (`--data-dir`/`--config`/`--profiles`/`--credentials`) > `--home` > `SYNTH_HOME` > XDG-дефолты. Без home поведение не меняется.
+- **ADR-079 (home)**: `--home <dir>` (`SYNTH_HOME`) — базовый каталог локального инстанса. Пути: config `<home>/config.yaml`, dataDir `<home>/data`, profiles `<home>/profiles.json`, credentials `<home>/credentials.json`. Приоритет путей: явные флаги (`--data-dir`/`--config`/`--profiles`/`--credentials`) > `--home` > `SYNTH_HOME` > XDG-дефолты. Без home поведение не меняется.
 - **config.yaml** — файл, найденный каскадным поиском; сливается с дефолтами (`deepMerge`).
 - **Defaults** — схема `synthConfigSchema` в `packages/shared/src/config/types.ts`.
 
@@ -24,9 +24,9 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_DATA_DIR` | Каталог данных (сессии, проекты, провайдеры, модели) | по режиму: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
 | `SYNTH_WORKSPACES_ROOT` | Корень каталогов workspace проектов (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
-| `SYNTH_WORKSPACE_OUTSIDE_ROOT` | AD-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
+| `SYNTH_WORKSPACE_OUTSIDE_ROOT` | ADR-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
 | `SYNTH_CONFIG` | Путь к `config.yaml` (приоритетнее каскадного поиска) | каскадный поиск |
-| `SYNTH_HOME` | AD-079: базовый home-каталог локального инстанса (`--home`): config/data/profiles/credentials резолвятся от него | — |
+| `SYNTH_HOME` | ADR-079: базовый home-каталог локального инстанса (`--home`): config/data/profiles/credentials резолвятся от него | — |
 | `SYNTH_HOST` | Адрес прослушивания HTTP-серверов (backend — `0.0.0.0`; `synth serve` — `127.0.0.1`) | `0.0.0.0` / `127.0.0.1` (serve) |
 | `SYNTH_PORT` | Порт бэкенда | `5000` |
 | `SYNTH_CORE_PORT` | Порт core (и `synth serve`) | `4300` |
@@ -37,8 +37,8 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_LOG_DIR` | Каталог логов сервисов (эндпоинт `/api/v2/logs`) | ищется существующий каталог логов |
 | `SYNTH_BACKEND_URL` | URL бэкенда (для раннера) | `http://localhost:5000` |
 | `SYNTH_CORS_ORIGIN` | CORS origin (приоритет выше конфига) | — |
-| `SYNTH_DECISION_PROVIDER` | AD-084: имя провайдера decision-типа (`decision`/`systemone`) | `decision.provider` |
-| `SYNTH_DECISION_MODEL` | AD-084: модель decision-слоя (напр. `clef-flash`) | `decision.model` |
+| `SYNTH_DECISION_PROVIDER` | ADR-084: имя провайдера decision-типа (`decision`/`systemone`) | `decision.provider` |
+| `SYNTH_DECISION_MODEL` | ADR-084: модель decision-слоя (напр. `clef-flash`) | `decision.model` |
 
 **UI (Vite):**
 
@@ -57,7 +57,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_PROVIDER_<NAME>_MODEL` | Модель по умолчанию |
 | `SYNTH_PROVIDER_<NAME>_TYPE` | Тип: `openai`, `anthropic`, `ollama`, `decision`, `systemone` |
 
-### Env-оверрайды вложенных секций (AD-023)
+### Env-оверрайды вложенных секций (ADR-023)
 
 Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
@@ -101,7 +101,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_CONFIDENCE_THRESHOLD` | number | `decision.confidenceThreshold` |
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
-| `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, AD-052/O1; см. ниже) |
+| `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, ADR-052/O1; см. ниже) |
 
 Пример:
 
@@ -122,13 +122,13 @@ synth serve
 Каскадный поиск (от высшего приоритета к низшему):
 
 1. `--config` CLI-флаг или `SYNTH_CONFIG` env var
-2. `<home>/config.yaml`, если задан `--home`/`SYNTH_HOME` (AD-079; при отсутствии файла дефолты, без отката к XDG)
+2. `<home>/config.yaml`, если задан `--home`/`SYNTH_HOME` (ADR-079; при отсутствии файла дефолты, без отката к XDG)
 3. `./synth.config.yaml` (CWD)
 4. `./config.yaml` (CWD)
 5. `~/.config/synth/config.yaml` (пользовательский)
 6. `/etc/synth/config.yaml` (системный)
 
-Найденный файл сливается с дефолтами (`deepMerge`), затем применяются env-оверрайды (AD-023) и CLI-overrides. Реализация: `loadConfig` в `packages/shared/src/config/loader.ts`, `findConfigPath` в `resolve.ts`.
+Найденный файл сливается с дефолтами (`deepMerge`), затем применяются env-оверрайды (ADR-023) и CLI-overrides. Реализация: `loadConfig` в `packages/shared/src/config/loader.ts`, `findConfigPath` в `resolve.ts`.
 
 ### Пример (реальная схема)
 
@@ -145,7 +145,7 @@ storage:
   dataDir: "/var/synth/data"      # каталог данных вне репозитория
   workspacesRoot: ""              # если пусто — {dataDir}/workspaces; SYNTH_WORKSPACES_ROOT
   defaultWorkspace: ""            # если пусто — {dataDir}/workspaces/default; SYNTH_DEFAULT_WORKSPACE
-  workspaceOutsideRoot: ""        # AD-075: политика для абсолютного workspace вне workspacesRoot
+  workspaceOutsideRoot: ""        # ADR-075: политика для абсолютного workspace вне workspacesRoot
                                   # confirm | deny; пусто — дефолт по режиму (standalone — confirm,
                                   # managed — deny); SYNTH_WORKSPACE_OUTSIDE_ROOT
 
@@ -159,7 +159,7 @@ llm:
   defaultModel: ""
   maxRetries: 3
   timeout: 60
-  cache: "auto"                   # AD-070: политика prompt-cache — auto (ставить маркеры) | none
+  cache: "auto"                   # ADR-070: политика prompt-cache — auto (ставить маркеры) | none
 
 core:
   port: 4300
@@ -186,19 +186,19 @@ session:
   planMode: "auto"                # строгость цикла Plan→Build: auto | strict | off
 
 mcp:
-  policy: "auto"                  # AD-071 §2.3: политика включения MCP-инструментов
+  policy: "auto"                  # ADR-071 §2.3: политика включения MCP-инструментов
                                   # consistency | available | auto (дефолт auto)
                                   # независима от tools.policy; per-session override: session.settings.mcpPolicy
   # servers / networkPolicy — см. packages/shared/src/config/types.ts
 
 tools:
-  policy: "auto"                  # AD-071 §2.3: политика включения ВСТРОЕННЫХ инструментов
+  policy: "auto"                  # ADR-071 §2.3: политика включения ВСТРОЕННЫХ инструментов
                                   # consistency | available | auto (дефолт auto)
                                   # consistency — все определения + подсказки unavailable(mode|role);
                                   # available — только доступные тулы (экономия контекста);
                                   # auto — по провайдеру: локальные (ollama) → available, облачные → consistency.
                                   # Per-session override: session.settings.toolsPolicy.
-  disabled:                       # AD-071 §2.9: instance-wide отключение встроенных инструментов (ADMIN)
+  disabled:                       # ADR-071 §2.9: instance-wide отключение встроенных инструментов (ADMIN)
     capabilities: []              # группы ToolCapability (git, web, file_read, file_write, shell, mcp, ...)
     tools: []                     # отдельные тулы по имени (execute_shell, git_push, ...)
                                   # runtime (plan/todo/project/reference/classify) неотключаем
@@ -248,7 +248,7 @@ llmGateway:
   rateLimit: { userPerMinute: 60, providerPerMinute: 120 }
   audit: { enabled: true, logPath: "" }   # logPath пуст → {dataDir}/audit/llm-gateway.jsonl
 
-decision:                         # AD-084: decision-модели (System One: Clef/Jev/…)
+decision:                         # ADR-084: decision-модели (System One: Clef/Jev/…)
   enabled: false                  # мастер-выключатель decision-слоя
   provider: ""                    # имя провайдера decision-типа (decision | systemone)
   model: ""                       # модель (напр. clef-flash)
@@ -263,7 +263,7 @@ decision:                         # AD-084: decision-модели (System One: C
 > Секция `decision` переопределяется в runtime через `GET/PUT/DELETE /api/v2/settings/decision`
 > (live, без рестарта): значения сохраняются в `{dataDir}/settings.json` и применяются ко всем
 > трём потребителям — микро-каскаду (`DecisionModel`), роутеру (`DecisionContentClassifier`) и
-> маршрутизации внешних событий (`DecisionRuleProvider`, AD-089); агрегатные метрики decision-слоя
+> маршрутизации внешних событий (`DecisionRuleProvider`, ADR-089); агрегатные метрики decision-слоя
 > доступны через `GET/DELETE /api/v2/settings/decision/metrics`. Мутации в managed — ADMIN.
 
 permission:
@@ -277,8 +277,8 @@ security:
     mode: "flag"                  # flag | sanitize | block
   protectedPaths:
     enabled: true
-  secretKey: ""                   # AD-076: мастер-ключ секретов at-rest (пусто → файл dataDir/secrets/master.key)
-  bootstrapServiceKeys: []        # AD-052/O1: installer service-key'и (label/secret/scopes/roles?) — см. ниже; обычно через env SYNTH_BOOTSTRAP_SERVICE_KEYS
+  secretKey: ""                   # ADR-076: мастер-ключ секретов at-rest (пусто → файл dataDir/secrets/master.key)
+  bootstrapServiceKeys: []        # ADR-052/O1: installer service-key'и (label/secret/scopes/roles?) — см. ниже; обычно через env SYNTH_BOOTSTRAP_SERVICE_KEYS
 
 remote:                           # гибридный режим: локальный core + удалённый backend
   enabled: false
@@ -296,14 +296,14 @@ remote:                           # гибридный режим: локаль�
 
 Полный список полей (включая `logging`, `tsm`, `context`, `summarization`, `mcp`, `auth.oidc`) — в `packages/shared/src/config/types.ts`.
 
-### Хранилище и рабочий каталог (`storage.*`, AD-075)
+### Хранилище и рабочий каталог (`storage.*`, ADR-075)
 
-- `storage.dataDir` — корень данных (`SYNTH_DATA_DIR`; при `--home`/`SYNTH_HOME` — `<home>/data`, AD-079).
+- `storage.dataDir` — корень данных (`SYNTH_DATA_DIR`; при `--home`/`SYNTH_HOME` — `<home>/data`, ADR-079).
 - `storage.workspacesRoot` — корень каталогов workspace проектов; если не задан — `{dataDir}/workspaces` (`SYNTH_WORKSPACES_ROOT`). Managed-проекты создают workspace внутри него (авто-имя `slugify(name)` + суффикс `-2/-3…`); абсолютный путь внутри root нормализуется в относительный.
 - `storage.defaultWorkspace` — рабочий каталог сессий без проекта; если не задан — `{dataDir}/workspaces/default` (`SYNTH_DEFAULT_WORKSPACE`). Runtime-override — `PUT /api/v2/settings/workspace`.
 - `storage.workspaceOutsideRoot` — политика для абсолютного `project.workspace` вне `workspacesRoot` (`confirm` — подтверждение флагом `confirmOutsideRoot`, `deny` — запрет). Пусто (`''`) — не задано, эффективно `confirm` в standalone; managed-backend жёстко использует `deny`. Env `SYNTH_WORKSPACE_OUTSIDE_ROOT`, runtime — `GET/PUT/DELETE /api/v2/settings/workspace-policy` (managed — read-only).
 
-### Секреты at-rest (`security.secretKey`, AD-076)
+### Секреты at-rest (`security.secretKey`, ADR-076)
 
 - `security.secretKey` — мастер-ключ для шифрования секретов в хранилище (SSH-ключи агентов; AES-256-GCM). Env — `SYNTH_SECRET_KEY`.
 - **Приоритет**: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > файл `{dataDir}/secrets/master.key` (резолвер `resolveSecretKey`).
@@ -311,7 +311,7 @@ remote:                           # гибридный режим: локаль�
 - **Fallback-файл**: если ключ не задан ни env, ни конфигом, core создаёт `{dataDir}/secrets/master.key` при первом запуске (`randomBytes(32)`, каталог `0700`, файл `0600`, атомарная запись). Секреты шифруются at-rest.
 - **Ротация**: `synth secrets rotate` (`--data-dir`, `--config`, `--old-key`/`--old-key-file`, `--new-key`/`--new-key-file`, `--dry-run`, `--yes`) перешифровывает существующие SSH-ключи старым→новым ключом (preflight: нерасшифровываемое поле → abort, ничего не пишется), обновляет `master.key` и сбрасывает кэш; `--dry-run` показывает сводку без записи. Без `--yes` (и без `--dry-run`) — отказ. Если эффективный ключ задан через env/`config.security.secretKey`, файл перезаписывается, но при старте игнорируется — обновите ключ в env/config. Перед ротацией рекомендуются бэкап `$SYNTH_DATA_DIR` и остановка сервера.
 
-### Installer service-key (`security.bootstrapServiceKeys`, AD-052/O1)
+### Installer service-key (`security.bootstrapServiceKeys`, ADR-052/O1)
 
 Секция задаёт **installer service-key'и**, которые провижинятся идемпотентно при
 старте (core standalone и backend) — для машинной установки аддонов (MCP-серверы,
@@ -359,7 +359,7 @@ SYNTH_BOOTSTRAP_SERVICE_KEYS='[{"label":"addon-installer","secret":"synth_svc_�
 
 ### Политики инструментов (`tools.policy` / `mcp.policy`)
 
-Две **независимые** админские политики (AD-071 §2.3; UI-раздел — ADMIN-категория):
+Две **независимые** админские политики (ADR-071 §2.3; UI-раздел — ADMIN-категория):
 `tools.policy` управляет только **встроенными** инструментами, `mcp.policy` —
 только **MCP**-инструментами. Обе: `consistency` | `available` | `auto`
 (дефолт `auto`). Per-session override — `session.settings.toolsPolicy` и
@@ -371,7 +371,7 @@ SYNTH_BOOTSTRAP_SERVICE_KEYS='[{"label":"addon-installer","secret":"synth_svc_�
 
 ### Отключение встроенных инструментов (`tools.disabled`)
 
-Instance-wide настройка (AD-071 §2.6; UI-раздел — ADMIN-категория `mcpAdmin`):
+Instance-wide настройка (ADR-071 §2.6; UI-раздел — ADMIN-категория `mcpAdmin`):
 жёстко исключает встроенные инструменты из запроса **независимо** от
 `tools.policy` — и по группам (`capabilities`, значения `ToolCapability`:
 `file_read`, `file_write`, `shell`, `search`, `web`, `git_read`, `git_write`,
@@ -379,13 +379,13 @@ Instance-wide настройка (AD-071 §2.6; UI-раздел — ADMIN-кат
 набор = доступные агенту/режиму тулы − (union отключённых групп и имён).
 
 `runtime`-инструменты (управление планом/todo, проект, reference, classify)
-неотключаемы — иначе ломается инвариант AD-039. Отключённые тулы не уходят в
+неотключаемы — иначе ломается инвариант ADR-039. Отключённые тулы не уходят в
 запрос и не показываются в таблице состава промпта (в админ-UI их можно
 включить/отключить). Runtime-правка: `GET/PUT /api/v2/settings/tools-disabled`
 телом `{toolsDisabled:{capabilities,tools}}` (живое применение, persist в
 `settings.json`).
 
-### Скиллы (`skills.*`, AD-046)
+### Скиллы (`skills.*`, ADR-046)
 
 Секция `skills` управляет discovery скиллов, доверием проектным каталогам,
 inline shell в шаблонных командах и удалёнными каталогами:
@@ -409,7 +409,7 @@ inline shell в шаблонных командах и удалёнными ка
   `skill`. Команды дополнительно не могут перекрыть доверенный skill/bundle.
 - **`skills.urls`** кэшируются, индексируются и видны в реестре, но помечены
   **`trusted:false`** (в каталог для модели не попадают). Установка/обновление,
-  trust-уровни и подписи удалённых каталогов — задача [AD-068](./arch_decisions/ad-068-skills-agents-registry.md).
+  trust-уровни и подписи удалённых каталогов — задача [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md).
 - **`skills.inlineShell`** по умолчанию выключен; при включении исполнение идёт
   только при `allow` от `PermissionEvaluator` (как `execute_shell`), с timeout,
   лимитом вывода и аудит-событием `command.inline_shell`; `deny`/`ask` —
@@ -418,7 +418,7 @@ inline shell в шаблонных командах и удалёнными ка
   инструкция по созданию проектного скилла в `{project.workspace}/.synth/skills`;
   доступен как `/skill-creator` (требует `file_read`/`file_write`).
 
-### Проектные инструкции (`instructions.*`, AD-069)
+### Проектные инструкции (`instructions.*`, ADR-069)
 
 Автозагрузка репозиторных `AGENTS.md` в системный промпт (блок `[PROJECT INSTRUCTIONS]`, тир `context`):
 
@@ -437,15 +437,15 @@ inline shell в шаблонных командах и удалёнными ка
 | `instructions.allowInstallTreeFallback` | Грузить инструкции внутри дерева исходников Synth | `false` |
 
 - Discovery: цепочка `git root → … → workspace` (глубже = приоритетнее), на каталог `AGENTS.override.md` > `AGENTS.md` > `agents.md` > `CLAUDE.md` > `CONTEXT.md`; дедуп sha256.
-- Каждый блок проходит **threat-scan** (AD-036): `block` — не грузится, `flag` — с WARN-строкой.
-- **Project-trust:** инструкции недоверенного проекта (нет в `skills.trustedProjectDirs`) не грузятся (статус `untrusted`). Каталог внутри `storage.workspacesRoot` доверяется **автоматически** (R3) — гейт общий для system-chain и lazy-догрузки; на project-trust скиллов (AD-046) не влияет.
+- Каждый блок проходит **threat-scan** (ADR-036): `block` — не грузится, `flag` — с WARN-строкой.
+- **Project-trust:** инструкции недоверенного проекта (нет в `skills.trustedProjectDirs`) не грузятся (статус `untrusted`). Каталог внутри `storage.workspacesRoot` доверяется **автоматически** (R3) — гейт общий для system-chain и lazy-догрузки; на project-trust скиллов (ADR-046) не влияет.
 - **Install-tree guard:** внутри дерева исходников Synth инструкции не грузятся (статус `skipped-install-tree`), кроме `allowInstallTreeFallback: true`.
-- **Кэш/инвалидация (R5, новых настроек нет):** результат резолвера кэшируется по подписи кандидатов (`mtime:size`, helper `engine/file-signature.ts`, общий со скиллами AD-046); изменение/добавление/удаление файла инвалидирует, `ProjectInstructionsResolver.clear()` — принудительный сброс. В реальном ходе результат дополнительно мемоизируется на `turnId`.
+- **Кэш/инвалидация (R5, новых настроек нет):** результат резолвера кэшируется по подписи кандидатов (`mtime:size`, helper `engine/file-signature.ts`, общий со скиллами ADR-046); изменение/добавление/удаление файла инвалидирует, `ProjectInstructionsResolver.clear()` — принудительный сброс. В реальном ходе результат дополнительно мемоизируется на `turnId`.
 - Отключение: `instructions.enabled=false`, `excludeProjects`, CLI `--ignore-rules`/`--safe-mode` (или env `SYNTH_IGNORE_RULES=1|true`; флаги приоритетнее env, работают для `serve` и `chat`), а также `session.settings.systemPrompt` override.
 - Прозрачность: `GET /api/v2/context/instructions?session_id=…` и событие `context.instructions_loaded`; UI — секция «Проектные инструкции» в правой панели (вкладка «Сессия»).
 - `/init` — builtin-команда (статус `prompt`), генерирует/обновляет `AGENTS.md`; скилл `synth-agents-md` (`/agents-md`) — аудит/обновление инструкций.
 
-### Slash-команды (`commands.*`, AD-046 §7)
+### Slash-команды (`commands.*`, ADR-046 §7)
 
 Резолвинг `/`-команд выполняется в core. Секция `commands`:
 
@@ -458,7 +458,7 @@ inline shell в шаблонных командах и удалёнными ка
 | `commands.maxArgumentsLength` | Лимит `$ARGUMENTS` | `10000` |
 | `commands.maxRenderedBytes` | Лимит рендера шаблона/агрегата bundle | `200000` |
 
-Источники шаблонных команд (приоритет): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Встроенные команды — `/help`, `/skills`, `/commands`, `/summary`, `/init` (AD-069; `/compact`, `/review` отложены). Скилловые команды — `/skill-creator`, `/agents-md` (builtin-скиллы). `allowed-tools` во frontmatter — advisory (в права не транслируется).
+Источники шаблонных команд (приоритет): `{project.workspace}/.synth/commands` > `{dataDir}/commands` > `commands.paths`. Встроенные команды — `/help`, `/skills`, `/commands`, `/summary`, `/init` (ADR-069; `/compact`, `/review` отложены). Скилловые команды — `/skill-creator`, `/agents-md` (builtin-скиллы). `allowed-tools` во frontmatter — advisory (в права не транслируется).
 
 ### Группы тулов для скиллов (`skills.toolsets`)
 
@@ -471,9 +471,9 @@ skills:
     web: [web]
 ```
 
-### Внешние события (`events.*`, AD-089)
+### Внешние события (`events.*`, ADR-089)
 
-Приём внешних событий и маршрутизация через `EventRouter` (AD-089). Поля секции:
+Приём внешних событий и маршрутизация через `EventRouter` (ADR-089). Поля секции:
 
 | Поле | Назначение | По умолчанию |
 |------|-----------|--------------|
@@ -485,19 +485,19 @@ skills:
 | `events.dedupStore` | Источник дедупа событий: `memory` — in-process `Set` (single-process), `file` — межпроцессный атомарный claim на общем `dataDir` (`{dataDir}/events/dedup/<sha256(key)>`) | `memory` |
 | `events.unknownAgentTemplate` | Поведение, если `agentTemplate` события/правила не резолвится в enabled-агента: `drop` — не создавать сессию, зафиксировать `agent_not_found` в журнале (fail-safe); `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию) | `drop` |
 | `events.keyRateLimitPerMinute` | Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита); конкретный ключ переопределяет `rateLimitPerMinute`; превышение → 429 `RATE_LIMITED` | `0` |
-| `events.decisionRouting` | AD-084 × AD-089: умная классификация внешних событий decision-моделью. `false` — только декларативные правила; `true` — при промахе правил decision-модель выбирает шаблон агента (ephemeral-сессия). Требует настроенного `decision.*`; fail-safe: ошибка/низкая уверенность/нет агентов → фоллбек `defaultMode` | `false` |
-| `events.autoBind` | AD-089: фоллбек Router — если у события есть `identity.chatKey` или `identity.threadKey`, закрепить его за новой сессией (`EventBinding mode='bound'`) вместо `defaultMode`. Влияет **только** на фоллбек (явная привязка/правила/decision-маршрутизация приоритетнее). Защита от мусорных сессий: флаг выключен по умолчанию + `allowedSources` + per-key rate limit | `false` |
-| `events.autoBindAgentTemplate` | AD-089: шаблон агента auto-bind-сессий (id агента; пусто — агент по умолчанию). Неизвестный шаблон обрабатывается политикой `events.unknownAgentTemplate` | `''` |
-| `events.identityMap` | AD-089: **override**-карта идентичности внешнего отправителя на владельца синт-сессии. Основной источник владельца — привязки в **профиле** (`ProfileData.identities[]`, ключ `provider:externalId`; наполняются claim-flow — подтверждение владения id по одноразовому коду, API `POST /api/v2/me/identities/claim`). Карта задаёт **ручное** переопределение и приоритетнее профиля. Ключ — `identity.principalId` (`tg:<id>`; **предпочтителен** для владельца — человек, а не чат) либо `identity.chatKey` (`chat:telegram:<id>`; фоллбек — ЛС/чатовый уровень), значение — id пользователя инстанса. Применяется при материализации сессий `ephemeral`/`bind`; приоритет выше per-event владельца (аутентифицированный пользователь / создатель ключа привязки). Так Telegram-сессии человека попадают в его `listSessions({ userId })` и UI-список. Роли override-ветка **не** несёт — права считаются из профиля (см. ниже) | `{}` |
+| `events.decisionRouting` | ADR-084 × ADR-089: умная классификация внешних событий decision-моделью. `false` — только декларативные правила; `true` — при промахе правил decision-модель выбирает шаблон агента (ephemeral-сессия). Требует настроенного `decision.*`; fail-safe: ошибка/низкая уверенность/нет агентов → фоллбек `defaultMode` | `false` |
+| `events.autoBind` | ADR-089: фоллбек Router — если у события есть `identity.chatKey` или `identity.threadKey`, закрепить его за новой сессией (`EventBinding mode='bound'`) вместо `defaultMode`. Влияет **только** на фоллбек (явная привязка/правила/decision-маршрутизация приоритетнее). Защита от мусорных сессий: флаг выключен по умолчанию + `allowedSources` + per-key rate limit | `false` |
+| `events.autoBindAgentTemplate` | ADR-089: шаблон агента auto-bind-сессий (id агента; пусто — агент по умолчанию). Неизвестный шаблон обрабатывается политикой `events.unknownAgentTemplate` | `''` |
+| `events.identityMap` | ADR-089: **override**-карта идентичности внешнего отправителя на владельца синт-сессии. Основной источник владельца — привязки в **профиле** (`ProfileData.identities[]`, ключ `provider:externalId`; наполняются claim-flow — подтверждение владения id по одноразовому коду, API `POST /api/v2/me/identities/claim`). Карта задаёт **ручное** переопределение и приоритетнее профиля. Ключ — `identity.principalId` (`tg:<id>`; **предпочтителен** для владельца — человек, а не чат) либо `identity.chatKey` (`chat:telegram:<id>`; фоллбек — ЛС/чатовый уровень), значение — id пользователя инстанса. Применяется при материализации сессий `ephemeral`/`bind`; приоритет выше per-event владельца (аутентифицированный пользователь / создатель ключа привязки). Так Telegram-сессии человека попадают в его `listSessions({ userId })` и UI-список. Роли override-ветка **не** несёт — права считаются из профиля (см. ниже) | `{}` |
 
 Правила маршрутизации `source/type/…` → сессия задаются через API (`/api/v2/events/routes`, §5.26)
 и хранятся в `{dataDir}/events/routes.json` (`RouteRuleStore`, `ProjectRuleProvider`).
 При `events.decisionRouting: true` после промаха декларативных правил срабатывает
-decision-модель (`DecisionRuleProvider`, AD-084): она выбирает шаблон агента из
+decision-модель (`DecisionRuleProvider`, ADR-084): она выбирает шаблон агента из
 enabled-агентов и создаёт ephemeral-сессию; при ошибке/низкой уверенности Router идёт
 к фоллбеку `events.defaultMode` (fail-safe).
 
-**Идентичности отправителей (claim-flow, AD-089).** Записей в конфиге не требует:
+**Идентичности отправителей (claim-flow, ADR-089).** Записей в конфиге не требует:
 при приёме события от неизвестного отправителя ядро автоматически выпускает одноразовый
 код подтверждения (TTL 10 мин, хранится в `{dataDir}/events/identity-claims.json`) и
 возвращает его в ответе `POST /api/v2/events` (поле `identityHint`). Пользователь вводит код
@@ -506,7 +506,7 @@ enabled-агентов и создаёт ephemeral-сессию; при ошиб
 показывается); активация на стороне шлюза — `GATEWAY_UNKNOWN_ACTION=hint` (дефолт `register`
 кодов не показывает). Ручной override владельца — `events.identityMap` (приоритетнее профиля).
 
-**Права внешнего отправителя (AD-089, этап 5).** Прав в конфиге не требует — вычисляются на
+**Права внешнего отправителя (ADR-089, этап 5).** Прав в конфиге не требует — вычисляются на
 приёме события:
 
 - **База прав — роли профиля Synth** отправителя (`ProfileData.roles`; резолвинг внешнего
@@ -518,11 +518,11 @@ enabled-агентов и создаёт ephemeral-сессию; при ошиб
   транспортное участие (сессия/чат) работает, привилегированные операции недоступны.
 - Эффективные роли вычисляет `resolveEffectiveRoles` (`core`, `engine/events/identity-roles.ts`)
   и `deliver` кладёт их в `metadata` хода (`effective_roles`/`identity_linked`).
-- **Enforcement (остаток):** permission-слой (`PermissionEvaluator`, AD-029) роль-оси не имеет —
+- **Enforcement (остаток):** permission-слой (`PermissionEvaluator`, ADR-029) роль-оси не имеет —
   глобальные роли проверяются на HTTP-уровне (`requirePermission`). Права машинного аккаунта
   шлюза (`SYNTH_API_KEY`/service-account) больше не «раздаются» внешним отправителям: сопознанный
   с ролью `USER` действует с пользовательскими правами, сужение работает. Полный role-aware
-  enforcement — отдельный срез (альтернатива — AD-052 service-key со scoped-токенами).
+  enforcement — отдельный срез (альтернатива — ADR-052 service-key со scoped-токенами).
 
 Пример:
 
@@ -553,7 +553,7 @@ events:
 API (`POST /api/v2/events`, bindings, ключи привязок, journal) — `docs/API_V2.md` §5.26; устройство
 шины/роутера — `docs/ARCHITECTURE.md` («Внешние события и хуки»).
 
-### Исходящие webhooks (`webhooks.*`, AD-052 этап II)
+### Исходящие webhooks (`webhooks.*`, ADR-052 этап II)
 
 Подписки на события и HTTP-доставка подписчикам (`WebhookService` над `EventBus.subscribeAll`).
 Секция — deployment-настройка; мастер-выключатель `enabled` и политики доставки.
@@ -579,9 +579,9 @@ webhooks:
 
 API (`/api/v2/webhooks`, подписки/ротация секрета/журнал/тест) — `docs/API_V2.md` §5.29;
 формат подписи, устройство движка и SSRF — `docs/ARCHITECTURE.md` («Внешние события и хуки»)
-и [AD-052](./arch_decisions/ad-052-public-api-platform.md).
+и [ADR-052](./arch_decisions/adr-052-public-api-platform.md).
 
-### Планировщик расписаний (`scheduler.*`, AD-051 срез / AD-089)
+### Планировщик расписаний (`scheduler.*`, ADR-051 срез / ADR-089)
 
 Cron/interval-планировщик публикует события `source: 'cron'` через
 `EventIngress`; маршрутизацию в сессии выполняет `EventRouter`
@@ -600,7 +600,7 @@ Cron/interval-планировщик публикует события `source: 
 File-based флаги (`events.dedupStore: file`, `scheduler.leaderElection: file`,
 `scheduler.crossProcessLocks: true`) рассчитаны на **общий `dataDir` на одном хосте/FS** и
 по умолчанию выключены (поведение single-process не меняется). Для разных dataDir на реплику
-или нескольких хостов нужен K8s `Lease`/PG advisory lock (будущий шаг, AD-051).
+или нескольких хостов нужен K8s `Lease`/PG advisory lock (будущий шаг, ADR-051).
 
 Пример:
 

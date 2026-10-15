@@ -1,5 +1,5 @@
 /**
- * GatewayProvider (AD-036) — декоратор над BaseProvider.
+ * GatewayProvider (ADR-036) — декоратор над BaseProvider.
  * Обфускация/блокировка секретов на входе, rate limit, аудит, output guard.
  * Если gateway выключен или что-то в обвязке падает — вызывает inner без изменений.
  */
@@ -176,7 +176,7 @@ export class GatewayProvider extends BaseProvider {
   }
 
   /**
-   * AD-084: decision-запрос через gateway-обвязку. В отличие от `chat`/`chatAsync`
+   * ADR-084: decision-запрос через gateway-обвязку. В отличие от `chat`/`chatAsync`
    * guard прогоняется всегда (обфускация `state` обязательна): `runInputGuard`
    * сам безопасно no-op'ит при `config.enabled=false`. При rate limit/блокировке
    * бросаем `RateLimitError`/`ProviderError` — вызывающий слой делает fail-safe

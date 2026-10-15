@@ -12,7 +12,7 @@ import {
 import { SSHKeyStore, type RotateMasterKeyResult } from '../storage/ssh-key-store.js';
 
 /**
- * AD-076: one-shot ротация мастер-ключа шифрования SSH-ключей.
+ * ADR-076: one-shot ротация мастер-ключа шифрования SSH-ключей.
  *
  * Хелпер не читает `$SYNTH_DATA_DIR` в обход `SSHKeyStore`: перешифровка идёт
  * через `store.rotateMasterKey` (атомарные записи `JsonStore`), а файл

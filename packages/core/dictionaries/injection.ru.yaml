@@ -1,5 +1,5 @@
 # Паттерны Indirect Prompt Injection (русский) — защита IPI
-# Категоризированный формат (AD-035): categories: { подкатегория: { keywords: [...] } }
+# Категоризированный формат (ADR-035): categories: { подкатегория: { keywords: [...] } }
 
 categories:
   instruction_spoof:

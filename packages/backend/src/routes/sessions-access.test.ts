@@ -1,5 +1,5 @@
 /**
- * AD-089 / безопасность: backend-only роуты сессии (export/notes/optimization/
+ * ADR-089 / безопасность: backend-only роуты сессии (export/notes/optimization/
  * debug-system-message) обязаны проверять доступ пользователя к сессии, а не
  * только `requireAuth` + существование — иначе IDOR: USER читает и меняет чужую
  * сессию (история, план, настройки, карта обфускации, заметки).
@@ -94,7 +94,7 @@ function auth(user: string) {
   return { Authorization: `Bearer ${user}`, 'Content-Type': 'application/json' };
 }
 
-describe('Session access control для backend-only роутов (AD-089, IDOR)', () => {
+describe('Session access control для backend-only роутов (ADR-089, IDOR)', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-sess-access-'));
   });

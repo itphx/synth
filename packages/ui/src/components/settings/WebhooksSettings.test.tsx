@@ -195,7 +195,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('WebhooksSettings — админ-секция «Webhooks» (AD-052 этап II)', () => {
+describe('WebhooksSettings — админ-секция «Webhooks» (ADR-052 этап II)', () => {
   it('загружает подписки и рендерит заголовок/описание/счётчик', async () => {
     const container = await renderSettings()
 
@@ -446,7 +446,7 @@ describe('WebhooksSettings — админ-секция «Webhooks» (AD-052 эт
   })
 })
 
-describe('WebhooksSettings — утилиты, права (ADMIN) и i18n (AD-052)', () => {
+describe('WebhooksSettings — утилиты, права (ADMIN) и i18n (ADR-052)', () => {
   it('isHttpsUrl принимает только https-адреса', () => {
     expect(isHttpsUrl('https://example.com/hooks')).toBe(true)
     expect(isHttpsUrl('http://example.com')).toBe(false)

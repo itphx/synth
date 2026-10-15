@@ -13,7 +13,7 @@ interface ProjectContextExtra {
   sessionManager?: SessionManager;
   projectStore?: ProjectStoreLike;
   sessionId?: string;
-  /** Корень каталога workspaces для резолва относительного project.workspace (AD-014). */
+  /** Корень каталога workspaces для резолва относительного project.workspace (ADR-014). */
   workspacesRoot?: string;
 }
 
@@ -151,7 +151,7 @@ function formatRepo(repo: RepoInfo, label?: string): string {
 }
 
 /**
- * AD-076 §T6: строка записи реестра `project.repos` — относительный `path`,
+ * ADR-076 §T6: строка записи реестра `project.repos` — относительный `path`,
  * абсолютный `destination` и метаданные (`name`/`url`/`type`/`defaultBranch`/
  * `sshKeyId`/`lastFetch`) плюс git-детект (`currentBranch`/`lastCommit`).
  */
@@ -189,7 +189,7 @@ export const getProjectInfoTool: ToolDefinition = {
     const extra = ctx.extra as ProjectContextExtra | undefined;
     const projectDir = resolveWorkspaceDir(project, extra?.workspacesRoot, ctx.workingDir);
 
-    // AD-040: различаем «проекта нет» и «проект указан, но не найден».
+    // ADR-040: различаем «проекта нет» и «проект указан, но не найден».
     const sessionId = ctx.sessionId || extra?.sessionId;
     let sessionProjectId: string | undefined;
     if (sessionId && extra?.sessionManager) {
@@ -255,7 +255,7 @@ export const listReposTool: ToolDefinition = {
       for (const repoCfg of project.repos) {
         // Относительные пути репозиториев резолвим относительно рабочего
         // каталога проекта: `destination` — абсолютный путь внутри workspace,
-        // git-детект ищет в правильном месте (AD-076).
+        // git-детект ищет в правильном месте (ADR-076).
         const destination = resolveRepoPath(repoCfg.path, projectDir);
         const repo = await detectRepoInfo(destination, ctx.abortSignal);
         parts.push(formatRegistryRepo(repoCfg, destination, repo));

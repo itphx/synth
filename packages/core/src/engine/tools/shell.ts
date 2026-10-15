@@ -37,7 +37,7 @@ export const executeShellTool: ToolDefinition = {
     if (params.cwd !== undefined) validateInputPath(params.cwd, 'cwd');
     const cwd = resolvePath(params.cwd, ctx.workingDir);
 
-    // AD-036: деобфускация в точке потребления — команда может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — команда может содержать ⟦SYNTH_SECRET_N⟧
     const command = await deobfuscateText(ctx, params.command);
 
     try {

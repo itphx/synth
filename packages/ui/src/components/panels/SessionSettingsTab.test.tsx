@@ -247,7 +247,7 @@ describe('SessionSettingsTab — имя сессии в блоке «Сесси�
   })
 })
 
-describe('SessionSettingsTab — MCP-скоуп сессии (AD-071 §2.4)', () => {
+describe('SessionSettingsTab — MCP-скоуп сессии (ADR-071 §2.4)', () => {
   it('показывает уровень, статус и причину отключения', async () => {
     mocks.getSessionMcpEffective.mockResolvedValue(effective({
       servers: [
@@ -407,7 +407,7 @@ describe('SessionSettingsTab — тумблер MCP: pending vs disabled', () =>
   })
 })
 
-describe('SessionSettingsTab — per-session политики инструментов (AD-071 §2.3)', () => {
+describe('SessionSettingsTab — per-session политики инструментов (ADR-071 §2.3)', () => {
   it('переопределяет обе политики (встроенные + MCP) и сохраняет их', async () => {
     const container = await renderTab()
     const toolsTrigger = container.querySelector(
@@ -736,7 +736,7 @@ describe('SessionSettingsTab — автосохранение настроек',
   })
 })
 
-describe('SessionSettingsTab — decision-уровень сессии (AD-084)', () => {
+describe('SessionSettingsTab — decision-уровень сессии (ADR-084)', () => {
   beforeEach(() => {
     useSessionsStore.setState({
       sessions: [

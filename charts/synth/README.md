@@ -156,7 +156,7 @@ sealed-secrets и т.п. Зашифрованных секретов в чарт
 
 ## Installer service-key (опция `installerKey`)
 
-Создаёт при развёртывании Synth **service-key установщика** (AD-052) со scope
+Создаёт при развёртывании Synth **service-key установщика** (ADR-052) со scope
 `addons:install`: аддоны (внешние сервисы/интеграции) используют его для
 самоустановки своих ресурсов (MCP-серверы, скиллы) без ручного создания ключа
 через API. Ключ провижинится идемпотентно при старте backend (по `label`,
@@ -196,7 +196,7 @@ installerKey:
 
 > Конфликт с `backend.config`: если в `backend.config` уже задан
 > `security.bootstrapServiceKeys`, env `SYNTH_BOOTSTRAP_SERVICE_KEYS` из этой опции
-> **приоритетнее** `config.yaml` (AD-023: CLI > env > config.yaml), т.е. список из Secret
+> **приоритетнее** `config.yaml` (ADR-023: CLI > env > config.yaml), т.е. список из Secret
 > полностью заменяет список из `config.yaml`. Не задавайте installer-ключи в обоих местах.
 
 ### Ключи Secret и как выдать токен

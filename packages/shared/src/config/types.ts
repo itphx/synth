@@ -28,7 +28,7 @@ export const storageConfigSchema = z.object({
   /** Рабочий каталог по умолчанию для сессий без проекта. Резолвится от dataDir: {dataDir}/workspaces/default. */
   defaultWorkspace: z.string().default(''),
   /**
-   * AD-075: политика для абсолютного `project.workspace` вне `workspacesRoot`
+   * ADR-075: политика для абсолютного `project.workspace` вне `workspacesRoot`
    * (`confirm` — подтверждение, `deny` — запрет). `''` — не задано (эффективно
    * `confirm`), читать через `resolveWorkspaceOutsideRootPolicy`.
    */
@@ -67,7 +67,7 @@ export const llmConfigSchema = z.object({
   defaultModel: z.string().default(''),
   maxRetries: z.number().int().min(0).default(3),
   timeout: z.number().int().min(1).default(60),
-  /** AD-070 §2.2: политика prompt-cache — auto (ставить маркеры) | none (отключить). */
+  /** ADR-070 §2.2: политика prompt-cache — auto (ставить маркеры) | none (отключить). */
   cache: z.enum(['auto', 'none']).default('auto'),
 });
 
@@ -109,7 +109,7 @@ export const tsmConfigSchema = z.object({
   validationTimeout: z.number().int().min(1).default(30),
 });
 
-// --- Session (AD-025 / AD-028): настройки по умолчанию для сессий ---
+// --- Session (ADR-025 / ADR-028): настройки по умолчанию для сессий ---
 
 export const sessionConfigSchema = z.object({
   /** Строгость цикла Plan→Build по умолчанию для новых сессий: auto | strict | off. */
@@ -129,7 +129,7 @@ export const summarizationConfigSchema = z.object({
 
 export const mcpServerConfigSchema = z.object({
   type: z.enum(['stdio', 'sse', 'http']),
-  /** AD-071 §2.2: человекочитаемое описание сервера (попадает в блок `mcp.servers`). */
+  /** ADR-071 §2.2: человекочитаемое описание сервера (попадает в блок `mcp.servers`). */
   description: z.string().optional(),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
@@ -152,7 +152,7 @@ export const mcpServerConfigSchema = z.object({
 });
 
 /**
- * AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP-серверов.
+ * ADR-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP-серверов.
  * Дефолт — `deny` приватных/служебных диапазонов (SSRF/egress).
  */
 export const mcpNetworkPolicySchema = z.object({
@@ -164,37 +164,37 @@ export const mcpConfigSchema = z.object({
   servers: z.record(z.string(), mcpServerConfigSchema).default({}),
   networkPolicy: mcpNetworkPolicySchema.default({}),
   /**
-   * AD-071 §2.3: глобальная админская политика включения **MCP**-инструментов.
+   * ADR-071 §2.3: глобальная админская политика включения **MCP**-инструментов.
    * Независима от `tools.policy` (только встроенные). Per-session override —
    * `SessionSettings.mcpPolicy`.
    */
   policy: z.enum(TOOLS_POLICIES).default('auto'),
 });
 
-// --- Инструменты (AD-071 §2.3) ---
+// --- Инструменты (ADR-071 §2.3) ---
 
 /**
- * AD-071 §2.6: instance-wide жёсткое отключение инструментов администратором.
+ * ADR-071 §2.6: instance-wide жёсткое отключение инструментов администратором.
  * Отключённые тулы не попадают в запрос независимо от `tools.policy`.
  * `runtime`-capability неотключаема (ядро сессии).
  */
 export const toolsDisabledConfigSchema = createToolsDisabledSchema(false);
 
 /**
- * AD-071 §2.3: глобальная админская политика включения **встроенных**
+ * ADR-071 §2.3: глобальная админская политика включения **встроенных**
  * инструментов (MCP — отдельная `mcp.policy`). Per-session override —
  * `SessionSettings.toolsPolicy`.
  */
 export const toolsConfigSchema = z.object({
   policy: z.enum(TOOLS_POLICIES).default('auto'),
-  /** AD-071 §2.6: instance-wide отключение инструментов (admin). */
+  /** ADR-071 §2.6: instance-wide отключение инструментов (admin). */
   disabled: toolsDisabledConfigSchema.default({}),
 });
 
-// --- Скиллы (AD-046) ---
+// --- Скиллы (ADR-046) ---
 
 /**
- * AD-046 §4.2/§4.4/§7.4: конфигурация механизма скиллов.
+ * ADR-046 §4.2/§4.4/§7.4: конфигурация механизма скиллов.
  * `paths` — дополнительные пользовательские каталоги; `trustedProjectDirs` —
  * доверенные проектные каталоги (бинарный trust); `inlineShell` — выключатель
  * `!`cmd`` в шаблонных командах (по умолчанию выключено).
@@ -202,29 +202,29 @@ export const toolsConfigSchema = z.object({
  * `urls` — внешние удалённые каталоги (opencode-совместимый `index.json`):
  * **только read-only индексация** — скачиваются в `{dataDir}/skills-cache/urls`,
  * видны в реестре/диагностике, но `trusted: false` (в каталог для модели не
- * попадают, тело не грузится). Установка/доверие/подписи/`lock.json` — AD-068.
+ * попадают, тело не грузится). Установка/доверие/подписи/`lock.json` — PROP-068.
  *
  * Внешние локальные каталоги совместимости (`.opencode`, `.claude`, `.agents`,
- * `~/.config/opencode`) подключаются как read-only discovery в core (AD-046 §4.2).
+ * `~/.config/opencode`) подключаются как read-only discovery в core (ADR-046 §4.2).
  */
 export const skillsConfigSchema = z.object({
   paths: z.array(z.string()).default([]),
-  /** AD-046 §4.2/§4.3: удалённые каталоги — read-only индексация (`trusted: false`). */
+  /** ADR-046 §4.2/§4.3: удалённые каталоги — read-only индексация (`trusted: false`). */
   urls: z.array(z.string()).default([]),
   trustedProjectDirs: z.array(z.string()).default([]),
   inlineShell: z.boolean().default(false),
   /**
-   * AD-046 §3.2/§12: именованные группы тулов → capabilities. Используется
+   * ADR-046 §3.2/§12: именованные группы тулов → capabilities. Используется
    * для экспансии `metadata.synth.requires_toolsets` в проверку доступности
    * скилла (union с `requires_capabilities`).
    */
   toolsets: z.record(z.string(), z.array(z.enum(toolCapabilityValues))).default({}),
 });
 
-// --- Slash-команды (AD-046 §7) ---
+// --- Slash-команды (ADR-046 §7) ---
 
 /**
- * AD-046 §7/§9.4: конфигурация slash-команд. `paths` — дополнительные каталоги
+ * ADR-046 §7/§9.4: конфигурация slash-команд. `paths` — дополнительные каталоги
  * шаблонных `.md`-команд; `bundlesPath` — подкаталог `{dataDir}` для YAML-бандлов;
  * `conflict` — режим разрешения конфликтов имён (см. resolver).
  */
@@ -241,10 +241,10 @@ export const commandsConfigSchema = z.object({
   maxRenderedBytes: z.number().int().min(1).default(200_000),
 });
 
-// --- Внешние события (AD-089) ---
+// --- Внешние события (ADR-089) ---
 
 /**
- * AD-089: конфигурация приёма внешних событий.
+ * ADR-089: конфигурация приёма внешних событий.
  * - `enabled` — мастер-выключатель приёма событий;
  * - `defaultMode` — режим по умолчанию, если Router не выбрал иной;
  * - `ephemeralTtl` — TTL ephemeral-сессий по умолчанию;
@@ -259,18 +259,18 @@ export const commandsConfigSchema = z.object({
  *   `default-agent` — не задавать `agentRole` (сессия возьмёт агента по умолчанию);
  * - `keyRateLimitPerMinute` — глобальный дефолт лимита запросов/мин на API-ключ
  *   привязки (0 — без лимита; конкретный ключ может переопределить);
- * - `decisionRouting` — AD-084 × AD-089: умная классификация внешних событий
+ * - `decisionRouting` — ADR-084 × ADR-089: умная классификация внешних событий
  *   decision-моделью. `false` (default, opt-in) — только декларативные правила
  *   (`ProjectRuleProvider`); `true` — при промахе правил decision-модель выбирает
  *   шаблон агента для ephemeral-сессии. Fail-safe: ошибка/неуверенность/пустой
  *   список агентов → фоллбек Router (`defaultMode`);
- * - `autoBind` — AD-089: фоллбек Router закрепляет событие с `identity.chatKey`/
+ * - `autoBind` — ADR-089: фоллбек Router закрепляет событие с `identity.chatKey`/
  *   `threadKey` за новой сессией (`EventBinding` `mode='bound'`) вместо
  *   `defaultMode`. `false` (default) — поведение не меняется; влияет только на
  *   фоллбек;
  * - `autoBindAgentTemplate` — шаблон агента для auto-bind-сессий (пусто — агент
  *   по умолчанию);
- * - `identityMap` — AD-089: маппинг идентичности внешнего отправителя на
+ * - `identityMap` — ADR-089: маппинг идентичности внешнего отправителя на
  *   владельца синт-сессии. Ключ — `identity.chatKey` (`chat:telegram:<id>`) или
  *   `identity.principalId` (`tg:<id>`), значение — id пользователя
  *   синт-инстанса. Применяется при материализации сессий `ephemeral`/`bind`:
@@ -287,19 +287,19 @@ export const eventsConfigSchema = z.object({
   dedupStore: z.enum(['memory', 'file']).default('memory'),
   unknownAgentTemplate: z.enum(['drop', 'default-agent']).default('drop'),
   /**
-   * Глобальный дефолт лимита запросов/мин на API-ключ привязки (AD-089/AD-052).
+   * Глобальный дефолт лимита запросов/мин на API-ключ привязки (ADR-089/ADR-052).
    * `0` — без лимита; конкретный ключ может переопределить своим
    * `rateLimitPerMinute`.
    */
   keyRateLimitPerMinute: z.number().int().min(0).default(0),
   /**
-   * AD-084 × AD-089: decision-маршрутизация внешних событий. По умолчанию
+   * ADR-084 × ADR-089: decision-маршрутизация внешних событий. По умолчанию
    * выключена (поведение не меняется) — включение требует настроенного
    * decision-провайдера (`decision.enabled`).
    */
   decisionRouting: z.boolean().default(false),
   /**
-   * AD-089 (auto-bind): фоллбек Router — если у события есть `identity.chatKey`
+   * ADR-089 (auto-bind): фоллбек Router — если у события есть `identity.chatKey`
    * или `identity.threadKey`, закрепить его за новой сессией (создать
    * `EventBinding` `mode='bound'`) вместо `defaultMode`. По умолчанию выключено
    * (поведение не меняется). Влияет **только** на фоллбек — явный binding,
@@ -307,12 +307,12 @@ export const eventsConfigSchema = z.object({
    */
   autoBind: z.boolean().default(false),
   /**
-   * AD-089 (auto-bind): шаблон агента для auto-bind-сессий (пусто — агент по
+   * ADR-089 (auto-bind): шаблон агента для auto-bind-сессий (пусто — агент по
    * умолчанию; резолвится через `AgentRegistry` с политикой `unknownAgentTemplate`).
    */
   autoBindAgentTemplate: z.string().default(''),
   /**
-   * AD-089: маппинг идентичности внешнего отправителя (`identity.chatKey` или
+   * ADR-089: маппинг идентичности внешнего отправителя (`identity.chatKey` или
    * `identity.principalId`) на владельца синт-сессии (id пользователя
    * инстанса). Применяется при материализации `ephemeral`/`bind`; пусто —
    * владелец не переопределяется (аутентифицированный пользователь запроса,
@@ -321,10 +321,10 @@ export const eventsConfigSchema = z.object({
   identityMap: z.record(z.string(), z.string()).default({}),
 });
 
-// --- Планировщик расписаний (AD-051 срез / AD-089) ---
+// --- Планировщик расписаний (ADR-051 срез / ADR-089) ---
 
 /**
- * AD-051 (минимальный срез) / AD-089: конфигурация cron/interval-планировщика.
+ * ADR-051 (минимальный срез) / ADR-089: конфигурация cron/interval-планировщика.
  * - `enabled` — мастер-выключатель сервиса (в standalone гейтит `start()`);
  * - `tickSec` — период тика, секунды (1..3600);
  * - `catchUp` — дефолт поведения при пропущенном срабатывании (`skip`/`once`);
@@ -345,10 +345,10 @@ export const schedulerConfigSchema = z.object({
   crossProcessLocks: z.boolean().default(false),
 });
 
-// --- Decision-модели (AD-084) ---
+// --- Decision-модели (ADR-084) ---
 
 /**
- * AD-084: конфигурация класса decision-моделей (System One: Clef/Jev/…).
+ * ADR-084: конфигурация класса decision-моделей (System One: Clef/Jev/…).
  * - `enabled` — мастер-выключатель decision-слоя (по умолчанию выключен);
  * - `provider` — имя провайдера decision-типа (`decision`/`systemone`);
  * - `model` — модель decision-слоя (напр. `clef-flash`);
@@ -365,16 +365,16 @@ export const decisionConfigSchema = z.object({
   provider: z.string().default(''),
   model: z.string().default(''),
   confidenceThreshold: z.number().min(0).max(1).default(0.6),
-  /** AD-084: провайдер тира эскалации; пусто — эскалации нет. */
+  /** ADR-084: провайдер тира эскалации; пусто — эскалации нет. */
   escalationProvider: z.string().default(''),
-  /** AD-084: модель тира эскалации; пусто — эскалации нет. */
+  /** ADR-084: модель тира эскалации; пусто — эскалации нет. */
   escalationModel: z.string().default(''),
 });
 
-// --- Webhooks (AD-052, этап II) ---
+// --- Webhooks (ADR-052, этап II) ---
 
 /**
- * AD-052 (этап II): конфигурация исходящих webhooks.
+ * ADR-052 (этап II): конфигурация исходящих webhooks.
  * - `enabled` — мастер-выключатель доставки (по умолчанию выключен);
  * - `maxAttempts` — число HTTP-попыток на доставку (экспоненциальный backoff с джиттером);
  * - `timeoutMs` — таймаут одного HTTP-запроса;
@@ -390,10 +390,10 @@ export const webhooksConfigSchema = z.object({
   deliveryRetentionDays: z.number().int().min(0).default(30),
 });
 
-// --- Проектные инструкции (AD-069) ---
+// --- Проектные инструкции (ADR-069) ---
 
 /**
- * AD-069 §3.4/§11: дополнительный источник проектных инструкций.
+ * ADR-069 §3.4/§11: дополнительный источник проектных инструкций.
  * `position` задаёт место в порядке: `before` — перед merged chain, `after` —
  * после. `ttlSec` (только для URL) переопределяет `instructions.fetch.cacheTtlSec`.
  */
@@ -406,7 +406,7 @@ export const instructionSourceConfigSchema = z.object({
 });
 
 /**
- * AD-069 §4: параметры lazy-догрузки подкаталогов (реализация — Фаза 2;
+ * ADR-069 §4: параметры lazy-догрузки подкаталогов (реализация — Фаза 2;
  * схема заводится в Фазе 1).
  */
 export const instructionsLazyConfigSchema = z.object({
@@ -419,7 +419,7 @@ export const instructionsLazyConfigSchema = z.object({
 });
 
 /**
- * AD-069 §5.1/§9.1: параметры fetch URL-источников (без фонового таймера —
+ * ADR-069 §5.1/§9.1: параметры fetch URL-источников (без фонового таймера —
  * загрузка при старте + TTL-кэш). Реализация fetch — Фаза 2.
  */
 export const instructionsFetchConfigSchema = z.object({
@@ -429,7 +429,7 @@ export const instructionsFetchConfigSchema = z.object({
 });
 
 /**
- * AD-069 §5.1/§9.1: конфигурация проектных инструкций (`AGENTS.md` и совместимые).
+ * ADR-069 §5.1/§9.1: конфигурация проектных инструкций (`AGENTS.md` и совместимые).
  * Порядок: `sources` с `position: before` → merged chain (`git root → … → cwd`) →
  * `sources` с `position: after`. Кап — динамический от окна модели.
  */
@@ -478,7 +478,7 @@ export const protectedPathsConfigSchema = z.object({
 });
 
 /**
- * AD-052/O1: installer service-key, провижининг которого делается при старте из
+ * ADR-052/O1: installer service-key, провижининг которого делается при старте из
  * конфига/Secret (идемпотентно). `secret` — plaintext-секрет `synth_svc_…`
  * (приходит из env/Secret; in config.yaml держать не рекомендуется). `scopes` —
  * только известные (`serviceScopeSchema`); `roles` не заданы — дефолт хранилища.
@@ -497,13 +497,13 @@ export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.default({}),
   protectedPaths: protectedPathsConfigSchema.default({}),
   /**
-   * AD-076: мастер-ключ для шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
+   * ADR-076: мастер-ключ для шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
    * Приоритет — env `SYNTH_SECRET_KEY` (читать через `resolveSecretKey`).
    * Пусто — core использует файл `{dataDir}/secrets/master.key`.
    */
   secretKey: z.string().default(''),
   /**
-   * AD-052/O1: installer service-key'и, провижининг которых выполняется
+   * ADR-052/O1: installer service-key'и, провижининг которых выполняется
    * идемпотентно при старте (core standalone и backend). Может задаваться
    * JSON-строкой через env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (приоритетнее
    * config.yaml) — так секрет не попадает в файл конфигурации.
@@ -512,7 +512,7 @@ export const securityConfigSchema = z.object({
   bootstrapServiceKeys: bootstrapServiceKeysSchema.optional(),
 });
 
-// --- LLM Gateway (AD-036) ---
+// --- LLM Gateway (ADR-036) ---
 
 export const llmGatewayRateLimitConfigSchema = z.object({
   userPerMinute: z.number().int().min(1).default(DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute),
@@ -537,7 +537,7 @@ export const llmGatewayConfigSchema = z.object({
   audit: llmGatewayAuditConfigSchema.default({}),
 });
 
-// --- Router (AD-034) ---
+// --- Router (ADR-034) ---
 
 export const routerContentConfigSchema = z.object({
   coding: z.object({
@@ -578,7 +578,7 @@ export const routerSubagentConfigSchema = z.object({
   provider: z.string().default(''),
 });
 
-// --- Micro-first (AD-035) ---
+// --- Micro-first (ADR-035) ---
 
 export const microFirstConfigSchema = z.object({
   enabled: z.boolean().default(false),

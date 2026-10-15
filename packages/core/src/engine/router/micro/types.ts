@@ -1,11 +1,11 @@
 /**
- * Типы микро-слоя (AD-035).
+ * Типы микро-слоя (ADR-035).
  * Реэкспортирует базовые типы из @itphx/synth-shared, добавляет внутренние.
  */
 import type { SessionSettings } from '@itphx/synth-shared';
 
 /**
- * Вид микро-модели: правила, embedding, decision-модель (AD-084),
+ * Вид микро-модели: правила, embedding, decision-модель (ADR-084),
  * локальная LLM.
  */
 export type MicroModelKind = 'rules' | 'embedding' | 'decision' | 'micro_llm';
@@ -25,9 +25,9 @@ export interface MicroInput {
   embedProvider?: string;
   /** Модель для embedding (из session.settings). */
   embedModel?: string;
-  /** AD-085 задел: изображения текущего хода (для decision-модели). */
+  /** PROP-085 задел: изображения текущего хода (для decision-модели). */
   images?: string[];
-  /** AD-085 задел: видео текущего хода (для decision-модели). */
+  /** PROP-085 задел: видео текущего хода (для decision-модели). */
   videos?: string[];
 }
 

@@ -17,7 +17,7 @@ const MAX_GIT_OUTPUT = 20_000;
 
 /**
  * Обёртка git-команд: signal (если передан) убивает процесс SIGTERM по «Стоп».
- * `env` (AD-076 §T6) — дополнительные переменные окружения (например
+ * `env` (ADR-076 §T6) — дополнительные переменные окружения (например
  * `GIT_SSH_COMMAND`): объединяются с `process.env`, а не заменяют его.
  */
 export async function runGit(
@@ -30,7 +30,7 @@ export async function runGit(
   return execFileAsync('git', args, { cwd, timeout: 30_000, signal, maxBuffer: 10 * 1024 * 1024, env: mergedEnv });
 }
 
-/** AD-076 §T6: `repo_path` выходит за пределы workspace проекта. */
+/** ADR-076 §T6: `repo_path` выходит за пределы workspace проекта. */
 export class RepoPathError extends Error {
   readonly code = 'git.repo_path_invalid';
   constructor(readonly repoPath: string) {
@@ -249,7 +249,7 @@ export const gitCommitTool: ToolDefinition = {
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
 
-    // AD-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; message: string; allow_empty?: boolean };
 
     try {
@@ -295,7 +295,7 @@ export const gitPushTool: ToolDefinition = {
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
 
-    // AD-076 §T6: SSH-окружение по реестру проекта (сетевой тул).
+    // ADR-076 §T6: SSH-окружение по реестру проекта (сетевой тул).
     const ssh = await resolveRepoGitEnv(ctx, cwd);
     if (ssh.error) {
       return {
@@ -305,7 +305,7 @@ export const gitPushTool: ToolDefinition = {
       };
     }
 
-    // AD-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
 
     try {
@@ -353,7 +353,7 @@ export const gitPullTool: ToolDefinition = {
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
 
-    // AD-076 §T6: SSH-окружение по реестру проекта (сетевой тул).
+    // ADR-076 §T6: SSH-окружение по реестру проекта (сетевой тул).
     const ssh = await resolveRepoGitEnv(ctx, cwd);
     if (ssh.error) {
       return {
@@ -363,7 +363,7 @@ export const gitPullTool: ToolDefinition = {
       };
     }
 
-    // AD-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
 
     try {
@@ -411,7 +411,7 @@ export const gitCheckoutTool: ToolDefinition = {
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
 
-    // AD-036: деобфускация в точке потребления — target может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — target может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; target: string; create_branch?: boolean };
 
     try {
@@ -633,7 +633,7 @@ export const gitStashTool: ToolDefinition = {
     if (typeof cwd !== 'string') return cwd;
     const action = params.action ?? 'push';
 
-    // AD-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
+    // ADR-036: деобфускация в точке потребления — message может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as typeof params;
 
     try {

@@ -200,7 +200,7 @@ describe('SettingsPanel', () => {
     expect(desc).not.toBeNull()
     expect(meta).not.toBeNull()
 
-    // Порядок в DOM: description → meta, счётчики ниже описания (стандарт AD-072).
+    // Порядок в DOM: description → meta, счётчики ниже описания (стандарт ADR-072).
     expect(desc.compareDocumentPosition(meta) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     const children = Array.from(header.children)
     expect(children.indexOf(desc)).toBeLessThan(children.indexOf(meta))

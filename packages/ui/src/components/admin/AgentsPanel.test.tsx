@@ -93,7 +93,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('AgentsPanel — фильтр на Kit Tabs (AD-072)', () => {
+describe('AgentsPanel — фильтр на Kit Tabs (ADR-072)', () => {
   beforeEach(() => {
     apiMock.getAllAgents.mockResolvedValue({
       agents: [agent('main', ['primary']), agent('sub', ['subagent'])],
@@ -143,7 +143,7 @@ describe('AgentsPanel — фильтр на Kit Tabs (AD-072)', () => {
   })
 })
 
-describe('AgentsPanel — агент по умолчанию (AD-072)', () => {
+describe('AgentsPanel — агент по умолчанию (ADR-072)', () => {
   const AGENTS = [
     agent('main', ['primary']),
     agent('other', ['primary']),

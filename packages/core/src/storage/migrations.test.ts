@@ -8,7 +8,7 @@ import { ProjectStore } from './project-store.js';
 import { RuntimeSettingsStore } from './runtime-settings.js';
 import { migrateSessionScopeSnapshots, SESSION_SCOPE_SNAPSHOT_MIGRATION } from './migrations.js';
 
-describe('migrateSessionScopeSnapshots (AD-071 §2.4 / AD-046 §4.5)', () => {
+describe('migrateSessionScopeSnapshots (ADR-071 §2.4 / ADR-046 §4.5)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;

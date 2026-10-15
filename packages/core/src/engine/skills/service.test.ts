@@ -27,7 +27,7 @@ async function writeSkill(dir: string, name: string): Promise<void> {
   );
 }
 
-describe('SkillService — builtin skill-creator (AD-046 §9.5)', () => {
+describe('SkillService — builtin skill-creator (ADR-046 §9.5)', () => {
   it('виден в list/listSummaries как trusted instance/system', async () => {
     const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
     const { skills } = await service.list();
@@ -81,7 +81,7 @@ describe('SkillService — builtin skill-creator (AD-046 §9.5)', () => {
   });
 });
 
-describe('SkillService — builtin synth-agents-md (AD-069 §8.2)', () => {
+describe('SkillService — builtin synth-agents-md (ADR-069 §8.2)', () => {
   it('виден в реестре как trusted instance/system с requires_capabilities', async () => {
     const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
     const { skills } = await service.list();
@@ -120,7 +120,7 @@ describe('SkillService — builtin synth-agents-md (AD-069 §8.2)', () => {
   });
 });
 
-describe('SkillService — skills.urls (AD-046 §4.2/§4.3)', () => {
+describe('SkillService — skills.urls (ADR-046 §4.2/§4.3)', () => {
   it('urls прокинуты: url-скилл из кэша виден, trusted=false', async () => {
     const dataDir = join(root, 'data');
     const cacheDir = urlCacheDir(join(dataDir, 'skills-cache'), URL_BASE);
@@ -222,7 +222,7 @@ describe('SkillService — skills.urls (AD-046 §4.2/§4.3)', () => {
   });
 });
 
-describe('SkillService — instance CRUD инвалидирует кэш реестра (AD-046 §8.3)', () => {
+describe('SkillService — instance CRUD инвалидирует кэш реестра (ADR-046 §8.3)', () => {
   it('updateInstance отдаёт новое содержимое при совпадении floor(mtime) и размера SKILL.md', async () => {
     // Стор восстанавливает mtime после перезаписи — эмуляция create+update в одну
     // миллисекунду; сигнатура ленивой инвалидации (`floor(mtimeMs):size`) тогда не

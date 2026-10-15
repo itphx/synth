@@ -7,14 +7,14 @@ import { ProjectRole } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 
 /**
- * AD-076 §T4: RBAC-хелперы проекта (owner/EDITOR/LEAD/ADMIN). Вынесены фабрикой,
+ * ADR-076 §T4: RBAC-хелперы проекта (owner/EDITOR/LEAD/ADMIN). Вынесены фабрикой,
  * чтобы их переиспользовали git-роуты core-фабрики (`authorizeProject`), а логика
  * ролей не дублировалась.
  */
 export function createProjectAccess(kit: AuthKit) {
   type Ctx = Parameters<typeof kit.isAdmin>[0];
 
-  /** AD-071 §2.4: owner проекта или глобальные LEAD/ADMIN (через AuthKit). */
+  /** ADR-071 §2.4: owner проекта или глобальные LEAD/ADMIN (через AuthKit). */
   const canManageProject = (c: Ctx, project: Project, userId: string): boolean =>
     (typeof kit.isAdmin === 'function' && kit.isAdmin(c))
     || (typeof kit.hasRole === 'function' && kit.hasRole(c, 'LEAD'))
@@ -27,7 +27,7 @@ export function createProjectAccess(kit: AuthKit) {
     || project.members?.[userId] === ProjectRole.EDITOR;
 
   /**
-   * AD-089: чтение проекта по id — owner / любой участник (любая роль, в т.ч.
+   * ADR-089: чтение проекта по id — owner / любой участник (любая роль, в т.ч.
    * VIEWER) / глобальные LEAD/ADMIN. Не расширяет права на редактирование.
    */
   const canReadProject = (c: Ctx, project: Project, userId: string): boolean =>
@@ -40,7 +40,7 @@ export function createProjectAccess(kit: AuthKit) {
 /**
  * Backend-обёртка над core-фабрикой проектов: общая логика — в core, здесь только
  * managed-специфика — RBAC (`createProjectAccess`), i18n-сообщения, авто-имя
- * workspace (AD-075, политика `deny` вне root), проектный MCP-скоуп (AD-071 §2.4)
+ * workspace (ADR-075, политика `deny` вне root), проектный MCP-скоуп (ADR-071 §2.4)
  * и статистика сессий. Полная реализация — `@itphx/synth-core`.
  */
 export function createProjectRoutes(
@@ -48,9 +48,9 @@ export function createProjectRoutes(
   store: ProjectStore,
   sessionManager: SessionManager,
   workspacesRoot: string,
-  /** AD-071 §2.4: источник известных MCP-серверов для проектного скоупа. */
+  /** ADR-071 §2.4: источник известных MCP-серверов для проектного скоупа. */
   mcpManager?: McpManager,
-  /** AD-046 §4.5: сид скиллов нового проекта (системные дефолты). */
+  /** ADR-046 §4.5: сид скиллов нового проекта (системные дефолты). */
   skillService?: SkillService,
   settingsStore?: RuntimeSettingsStore,
   mcpRegistryStore?: McpRegistryStore,
@@ -65,7 +65,7 @@ export function createProjectRoutes(
       canManage: canManageProject,
       canEditContent: canEditProjectContent,
       canRead: canReadProject,
-      // AD-089: ADMIN/LEAD — сквозная видимость всех проектов (защита от мок-AuthKit).
+      // ADR-089: ADMIN/LEAD — сквозная видимость всех проектов (защита от мок-AuthKit).
       resolveElevated: (c) =>
         (typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]))
         || (typeof kit.hasRole === 'function' && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD')),

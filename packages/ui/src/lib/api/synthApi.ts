@@ -2,7 +2,7 @@ import type { MessageData } from '@/stores/chatStore'
 import type { TodoItem, ProjectPlan, PromptManifest, PromptHistoryInfo, PromptState, PromptMeta, PromptToolDetail, McpServerEffective, SessionStats, McpRegistryEntry, McpNetworkPolicy, ProjectMcpSettings, ToolsDisabledConfig, McpServerConfig, SkillSummary, SkillDetail, SkillDiagnostic, SkillLevel, SkillScope, CommandSummary, CommandDiagnostic, SkillBundle, SkillsDisabledRequest, EventBinding, EventBindingInputRequest, EventBindingApiKey, EventBindingApiKeyCreated, EventRouteRule, EventRouteRuleInputRequest, SynthEvent, RouteDecision, ExternalIdentity, ServiceApiKey, ServiceApiKeyCreated, CreateServiceApiKeyInput, UpdateServiceApiKeyPatch, WebhookSubscription, WebhookSubscriptionCreated, WebhookDelivery, CreateWebhookSubscriptionInput, UpdateWebhookSubscriptionPatch } from '@itphx/synth-shared'
 import type { ToolsPolicy, WorkspaceOutsideRootPolicy, FileEntry, Schedule, ScheduleInput, ScheduleJob } from '@itphx/synth-shared/types'
 
-// Реэкспорт общих контрактов (AD-071): без локальных дублей.
+// Реэкспорт общих контрактов (ADR-071): без локальных дублей.
 export type { McpServerConfig, ToolsPolicy }
 import { normalizeModelInfo } from './modelNormalize'
 
@@ -20,7 +20,7 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }))
     const msg = error.detail || error.error?.error || error.error?.message || `HTTP ${response.status}`
-    // `code` (AD-075) нужен вызывающему, чтобы отличать 409-подтверждение от прочих 409/403.
+    // `code` (ADR-075) нужен вызывающему, чтобы отличать 409-подтверждение от прочих 409/403.
     const code = error.error?.code
     throw Object.assign(new Error(msg), { status: response.status, code })
   }
@@ -35,7 +35,7 @@ function encodeFilePath(path: string): string {
 
 export type EntityOrigin = 'local' | 'remote'
 
-/** AD-075: тело создания проекта; `confirmOutsideRoot` — согласие на путь вне `workspacesRoot`. */
+/** ADR-075: тело создания проекта; `confirmOutsideRoot` — согласие на путь вне `workspacesRoot`. */
 export interface CreateProjectBody {
   name: string
   description?: string
@@ -47,7 +47,7 @@ export interface CreateProjectBody {
   confirmOutsideRoot?: boolean
 }
 
-/** AD-075: тело обновления проекта; `confirmOutsideRoot` — согласие на путь вне `workspacesRoot`. */
+/** ADR-075: тело обновления проекта; `confirmOutsideRoot` — согласие на путь вне `workspacesRoot`. */
 export interface UpdateProjectBody {
   name?: string
   description?: string
@@ -82,7 +82,7 @@ export interface ProjectData {
   }>
   log?: { id: string; text: string; created_at: string; session_id?: string | null; author?: string | null }[] | null
   plan: ProjectPlan | null
-  /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+  /** ADR-071 §2.4: проектный скоуп MCP (owner/lead). */
   mcp?: ProjectMcpSettings | null
   created_at: string
   updated_at: string
@@ -95,14 +95,14 @@ export interface SessionData {
   name: string | null
   parent_id?: string | null
   branch_point?: string | null
-  /** Флаг «план утверждён через plan_exit» (AD-039), сериализуется как plan_approved. */
+  /** Флаг «план утверждён через plan_exit» (ADR-039), сериализуется как plan_approved. */
   plan_approved?: boolean | null
   /** Todo-список сессии (тул todo_write), сериализуется как todos. */
   todos?: TodoItem[] | null
   session_origin?: string | null
-  /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ, 'yolo' — автоподтверждение. */
+  /** Текущий runtime-режим сессии (ADR-025): 'plan' — только чтение, 'act' — полный доступ, 'yolo' — автоподтверждение. */
   mode?: SessionMode
-  /** Применим ли переключатель режимов к агенту сессии (AD-025). false для read-only агентов. undefined → считается true. */
+  /** Применим ли переключатель режимов к агенту сессии (ADR-025). false для read-only агентов. undefined → считается true. */
   mode_applicable?: boolean
   user_id: string | null
   owner_id: string | null
@@ -170,7 +170,7 @@ export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synt
 import type { DirectoryListResult, FileReadResult, RepoStatus, CommitInfo, CommitDetail, SessionMode } from '@itphx/synth-shared'
 
 /**
- * AD-076: запись реестра git-репозиториев проекта. Полная форма
+ * ADR-076: запись реестра git-репозиториев проекта. Полная форма
  * (`GitRepoConfig` из shared); `path` — относительный путь внутри workspace.
  */
 export interface GitRepoConfigData {
@@ -185,7 +185,7 @@ export interface GitRepoConfigData {
   lastFetch?: string
 }
 
-/** AD-076: публичная форма SSH-ключа (секреты `privateKey`/`passphrase` API не отдаёт). */
+/** ADR-076: публичная форма SSH-ключа (секреты `privateKey`/`passphrase` API не отдаёт). */
 export interface SSHKeyMetaData {
   id: string
   name: string
@@ -196,7 +196,7 @@ export interface SSHKeyMetaData {
   updatedAt?: string
 }
 
-/** AD-076: тело создания SSH-ключа (`POST /ssh-keys`). */
+/** ADR-076: тело создания SSH-ключа (`POST /ssh-keys`). */
 export interface SSHKeyCreateBody {
   name: string
   type?: string
@@ -205,7 +205,7 @@ export interface SSHKeyCreateBody {
   agentIds?: string[]
 }
 
-/** AD-076: тело обновления SSH-ключа (partial; без `privateKey` секрет не меняется). */
+/** ADR-076: тело обновления SSH-ключа (partial; без `privateKey` секрет не меняется). */
 export type SSHKeyUpdateBody = Partial<SSHKeyCreateBody>
 
 export interface ProjectStats {
@@ -282,17 +282,17 @@ export interface MessageListResponse {
   engine: string
 }
 
-/** AD-070 §2.5: ответ GET /sessions/:id/prompt — состав системного промпта. */
+/** ADR-070 §2.5: ответ GET /sessions/:id/prompt — состав системного промпта. */
 export interface PromptInfoResponse {
   manifest: PromptManifest
   history: PromptHistoryInfo
   promptState: PromptState | null
   lastPromptMeta: PromptMeta | null
-  /** AD-071 §2.6: per-tool данные встроенных инструментов (аддитивно). */
+  /** ADR-071 §2.6: per-tool данные встроенных инструментов (аддитивно). */
   toolsDetail?: PromptToolDetail[]
 }
 
-/** AD-071 §2.4/§2.6: ответ GET /sessions/:id/mcp — эффективный MCP-скоуп сессии. */
+/** ADR-071 §2.4/§2.6: ответ GET /sessions/:id/mcp — эффективный MCP-скоуп сессии. */
 export interface SessionMcpEffectiveResponse {
   servers: McpServerEffective[]
   enabled: string[]
@@ -368,15 +368,15 @@ export interface ModelGroup {
   models: ModelInfo[]
 }
 
-// --- Workspace root: выбор/создание каталога (AD-075) ---
+// --- Workspace root: выбор/создание каталога (ADR-075) ---
 
-/** AD-075: ответ `GET /fs/workspace-root` — корень workspace (`workspacesRoot`) и его подкаталоги. */
+/** ADR-075: ответ `GET /fs/workspace-root` — корень workspace (`workspacesRoot`) и его подкаталоги. */
 export interface WorkspaceRootResponse {
   root: string
   entries: FileEntry[]
 }
 
-/** AD-075: ответ `GET /fs/workspace-root/browse` — навигация по каталогам. */
+/** ADR-075: ответ `GET /fs/workspace-root/browse` — навигация по каталогам. */
 export interface WorkspaceBrowseResponse {
   root: string
   /** Канонический путь сервера: относительный внутри root, абсолютный — вне. */
@@ -384,13 +384,13 @@ export interface WorkspaceBrowseResponse {
   entries: FileEntry[]
 }
 
-/** AD-075: результат `POST /fs/workspace-root/mkdir`. */
+/** ADR-075: результат `POST /fs/workspace-root/mkdir`. */
 export interface WorkspaceMkdirResult {
   created: boolean
   path: string
 }
 
-/** AD-075: политика абсолютных путей вне `workspacesRoot` (runtime override + defaults). */
+/** ADR-075: политика абсолютных путей вне `workspacesRoot` (runtime override + defaults). */
 export interface WorkspacePolicyInfo {
   outsideRoot: WorkspaceOutsideRootPolicy
   isOverridden: boolean
@@ -438,12 +438,12 @@ export const synthApi = {
     })
   },
 
-  /** AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin). */
+  /** ADR-071 §2.4: проектный MCP-скоуп (owner/lead/admin). */
   async getProjectMcp(projectId: string): Promise<ProjectMcpResponse> {
     return fetchJSON<ProjectMcpResponse>(`${BASE_URL}/projects/${encodeURIComponent(projectId)}/mcp`)
   },
 
-  /** AD-071 §2.4: задать проектный MCP-скоуп (owner/lead/admin). */
+  /** ADR-071 §2.4: задать проектный MCP-скоуп (owner/lead/admin). */
   async updateProjectMcp(
     projectId: string,
     body: { enabled?: string[]; defaultOn?: string[] },
@@ -488,13 +488,13 @@ export const synthApi = {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`)
   },
 
-  /** AD-070 §2.5: манифест промпта + состояние активного агента + последний promptMeta. */
+  /** ADR-070 §2.5: манифест промпта + состояние активного агента + последний promptMeta. */
   async getSessionPrompt(sessionId: string): Promise<PromptInfoResponse> {
     return fetchJSON<PromptInfoResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/prompt`)
   },
 
   /**
-   * AD-069 §9.3: снимок проектных инструкций сессии (read-only прозрачность).
+   * ADR-069 §9.3: снимок проектных инструкций сессии (read-only прозрачность).
    * Сессия без проекта → пустой снимок с диагностикой `no-project`.
    */
   async getSessionInstructions(sessionId: string): Promise<InstructionsInfo> {
@@ -503,13 +503,13 @@ export const synthApi = {
     )
   },
 
-  /** AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
+  /** ADR-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
   async getSessionMcpEffective(sessionId: string): Promise<SessionMcpEffectiveResponse> {
     return fetchJSON<SessionMcpEffectiveResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/mcp`)
   },
 
   /**
-   * AD-071 §2.4: переключение MCP-сервера в сессии. Точечный toggle `{ name, enabled }`
+   * ADR-071 §2.4: переключение MCP-сервера в сессии. Точечный toggle `{ name, enabled }`
    * (в т.ч. opt-out системного) либо полная замена `{ mcpServers, mcpDisabledServers }`.
    */
   async updateSessionMcp(
@@ -522,7 +522,7 @@ export const synthApi = {
     })
   },
 
-  /** AD-070 §2.6: статистика сессии по агентам и авторам сообщений. */
+  /** ADR-070 §2.6: статистика сессии по агентам и авторам сообщений. */
   async getSessionStats(sessionId: string): Promise<SessionStats> {
     return fetchJSON<SessionStats>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/stats`)
   },
@@ -557,7 +557,7 @@ export const synthApi = {
     })
   },
 
-  // Plan/Act режим сессии (AD-025)
+  // Plan/Act режим сессии (ADR-025)
   async patchSessionMode(sessionId: string, mode: SessionMode): Promise<SessionData> {
     return fetchJSON<SessionData>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'PATCH',
@@ -806,7 +806,7 @@ export const synthApi = {
     })
   },
 
-  // --- Корень workspace: выбор/создание каталога (AD-075) ---
+  // --- Корень workspace: выбор/создание каталога (ADR-075) ---
   /** GET /fs/workspace-root — корень `workspacesRoot` и его подкаталоги. */
   async getWorkspaceRoot(includeHidden = false): Promise<WorkspaceRootResponse> {
     const qs = includeHidden ? '?includeHidden=true' : ''
@@ -905,7 +905,7 @@ export const synthApi = {
     })
   },
 
-  /** AD-076: upsert записи реестра (идемпотентно по `path`). */
+  /** ADR-076: upsert записи реестра (идемпотентно по `path`). */
   async registerGitRepo(
     projectId: string,
     entry: { path: string; name?: string; url?: string; type?: 'https' | 'ssh'; defaultBranch?: string; sshKeyId?: string },
@@ -916,7 +916,7 @@ export const synthApi = {
     })
   },
 
-  /** AD-076: удаление записи реестра; `deleteLocal` — удалить и локальные файлы. */
+  /** ADR-076: удаление записи реестра; `deleteLocal` — удалить и локальные файлы. */
   async removeGitRepo(
     projectId: string,
     opts: { id?: string; path?: string; deleteLocal?: boolean },
@@ -927,7 +927,7 @@ export const synthApi = {
     })
   },
 
-  /** AD-076: fetch репозитория реестра (обновление `lastFetch`). */
+  /** ADR-076: fetch репозитория реестра (обновление `lastFetch`). */
   async fetchGitRepo(
     projectId: string,
     opts: { id?: string; path?: string },
@@ -949,13 +949,13 @@ export const synthApi = {
     return fetchJSON(`${BASE_URL}/git/commit?${params.toString()}`)
   },
 
-  // SSH-ключи (AD-076). Секреты API не возвращает — только SSHKeyMeta.
+  // SSH-ключи (ADR-076). Секреты API не возвращает — только SSHKeyMeta.
   async listSshKeys(agentId?: string): Promise<SSHKeyMetaData[]> {
     const params = agentId ? `?agentId=${encodeURIComponent(agentId)}` : ''
     return fetchJSON(`${BASE_URL}/ssh-keys${params}`)
   },
 
-  /** AD-076: создание ключа (write — ADMIN). */
+  /** ADR-076: создание ключа (write — ADMIN). */
   async createSshKey(body: SSHKeyCreateBody): Promise<SSHKeyMetaData> {
     return fetchJSON(`${BASE_URL}/ssh-keys`, {
       method: 'POST',
@@ -963,7 +963,7 @@ export const synthApi = {
     })
   },
 
-  /** AD-076: частичное обновление; без `privateKey` в теле секрет не меняется. */
+  /** ADR-076: частичное обновление; без `privateKey` в теле секрет не меняется. */
   async updateSshKey(id: string, body: SSHKeyUpdateBody): Promise<SSHKeyMetaData> {
     return fetchJSON(`${BASE_URL}/ssh-keys/${encodeURIComponent(id)}`, {
       method: 'PATCH',
@@ -971,17 +971,17 @@ export const synthApi = {
     })
   },
 
-  /** AD-076: удаление ключа целиком. */
+  /** ADR-076: удаление ключа целиком. */
   async deleteSshKey(id: string): Promise<void> {
     return fetchJSON(`${BASE_URL}/ssh-keys/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
-  /** AD-076 (nested): ключи агента. */
+  /** ADR-076 (nested): ключи агента. */
   async listAgentSshKeys(agentId: string): Promise<SSHKeyMetaData[]> {
     return fetchJSON(`${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys`)
   },
 
-  /** AD-076 (nested): создание ключа с привязкой к агенту. */
+  /** ADR-076 (nested): создание ключа с привязкой к агенту. */
   async createAgentSshKey(agentId: string, body: SSHKeyCreateBody): Promise<SSHKeyMetaData> {
     return fetchJSON(`${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys`, {
       method: 'POST',
@@ -989,7 +989,7 @@ export const synthApi = {
     })
   },
 
-  /** AD-076 (nested): отвязка ключа от агента (ключ НЕ удаляется). */
+  /** ADR-076 (nested): отвязка ключа от агента (ключ НЕ удаляется). */
   async unlinkAgentSshKey(agentId: string, keyId: string): Promise<SSHKeyMetaData> {
     return fetchJSON(
       `${BASE_URL}/agents/${encodeURIComponent(agentId)}/ssh-keys/${encodeURIComponent(keyId)}`,
@@ -1312,7 +1312,7 @@ export const synthApi = {
     })
   },
 
-  // --- MCP: единый реестр (AD-071 §2.5) ---
+  // --- MCP: единый реестр (ADR-071 §2.5) ---
   async getMcpRegistry(): Promise<{ entries: McpRegistryEntry[] }> {
     return fetchJSON(`${BASE_URL}/mcp/registry`)
   },
@@ -1337,7 +1337,7 @@ export const synthApi = {
     })
   },
 
-  // --- MCP: политика сетевого доступа (AD-071 §2.3.1) ---
+  // --- MCP: политика сетевого доступа (ADR-071 §2.3.1) ---
   async getMcpNetworkPolicyInfo(): Promise<{
     policy: McpNetworkPolicy
     isOverridden: boolean
@@ -1362,7 +1362,7 @@ export const synthApi = {
     }).then((r) => r.policy)
   },
 
-  // --- LLM Gateway (AD-036) ---
+  // --- LLM Gateway (ADR-036) ---
   async getLlmGatewaySettingsInfo(): Promise<{
     settings: LlmGatewaySettings
     isOverridden: boolean
@@ -1387,7 +1387,7 @@ export const synthApi = {
     }).then((r) => r.llmGateway)
   },
 
-  // --- LLM Gateway: паттерны обфускации (AD-036) ---
+  // --- LLM Gateway: паттерны обфускации (ADR-036) ---
   async getGatewayPatterns(): Promise<{ patterns: SecretPattern[]; isOverridden: boolean; defaultPatterns: SecretPattern[] }> {
     return fetchJSON<{ patterns: SecretPattern[]; is_overridden: boolean; default_patterns: SecretPattern[] }>(`${BASE_URL}/gateway/patterns`).then((r) => ({
       patterns: r.patterns,
@@ -1425,7 +1425,7 @@ export const synthApi = {
     }).then((r) => r.security)
   },
 
-  // --- Инструменты: политика включения (AD-071 §2.3) ---
+  // --- Инструменты: политика включения (ADR-071 §2.3) ---
   async getToolsPolicyInfo(): Promise<{ policy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }> {
     return fetchJSON<{ toolsPolicy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }>(
       `${BASE_URL}/settings/tools-policy`,
@@ -1446,7 +1446,7 @@ export const synthApi = {
     }).then((r) => r.toolsPolicy)
   },
 
-  // --- MCP: политика включения MCP-инструментов (AD-071 §2.3) ---
+  // --- MCP: политика включения MCP-инструментов (ADR-071 §2.3) ---
   async getMcpPolicyInfo(): Promise<{ policy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }> {
     return fetchJSON<{ mcpPolicy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }>(
       `${BASE_URL}/settings/mcp-policy`,
@@ -1467,7 +1467,7 @@ export const synthApi = {
     }).then((r) => r.mcpPolicy)
   },
 
-  // --- Скиллы (AD-046 §9.1) ---
+  // --- Скиллы (ADR-046 §9.1) ---
   /** GET /skills — реестр скиллов; `diagnostics` добавляет discovery-диагностику. */
   async getSkills(params?: { projectId?: string; diagnostics?: boolean }): Promise<SkillsListResponse> {
     const q = new URLSearchParams()
@@ -1540,12 +1540,12 @@ export const synthApi = {
     )
   },
 
-  /** POST /skills/reload — принудительный ре-скан реестра (AD-046 §8.3). */
+  /** POST /skills/reload — принудительный ре-скан реестра (ADR-046 §8.3). */
   async reloadSkills(): Promise<void> {
     await fetchJSON<{ status: string }>(`${BASE_URL}/skills/reload`, { method: 'POST' })
   },
 
-  // --- Slash-команды (AD-046 §7/§9.1) ---
+  // --- Slash-команды (ADR-046 §7/§9.1) ---
   /** GET /commands — встроенные + шаблонные + скиллы + bundles; `diagnostics` — shadowed/collision. */
   async getCommands(params?: { projectId?: string; diagnostics?: boolean }): Promise<CommandsListResponse> {
     const q = new URLSearchParams()
@@ -1555,7 +1555,7 @@ export const synthApi = {
     return fetchJSON<CommandsListResponse>(`${BASE_URL}/commands${qs ? `?${qs}` : ''}`)
   },
 
-  // --- Bundles (AD-046 §7.3) ---
+  // --- Bundles (ADR-046 §7.3) ---
   /** GET /skill-bundles — список YAML-групп скиллов. */
   async getSkillBundles(): Promise<SkillBundlesResponse> {
     return fetchJSON<SkillBundlesResponse>(`${BASE_URL}/skill-bundles`)
@@ -1589,7 +1589,7 @@ export const synthApi = {
     })
   },
 
-  // --- Scope-API скиллов (AD-046 §4.5, аналог MCP) ---
+  // --- Scope-API скиллов (ADR-046 §4.5, аналог MCP) ---
   /** GET /sessions/:id/skills — эффективный per-session набор (включая отключённые с причиной). */
   async getSessionSkills(sessionId: string): Promise<SessionSkillsResponse> {
     return fetchJSON<SessionSkillsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/skills`)
@@ -1627,7 +1627,7 @@ export const synthApi = {
     })
   },
 
-  // --- Скиллы: instance-wide настройки (AD-046 §4.5) ---
+  // --- Скиллы: instance-wide настройки (ADR-046 §4.5) ---
   /** GET /settings/skills — мастер-гейт, сид новых проектов и политика. */
   async getSkillsSettings(): Promise<SkillsSettingsResponse> {
     return fetchJSON<SkillsSettingsResponse>(`${BASE_URL}/settings/skills`)
@@ -1650,7 +1650,7 @@ export const synthApi = {
     await fetchJSON<{ status: string }>(`${BASE_URL}/settings/skills`, { method: 'DELETE' })
   },
 
-  // --- Инструменты: instance-wide отключение (AD-071 §2.6) ---
+  // --- Инструменты: instance-wide отключение (ADR-071 §2.6) ---
   /** GET /settings/tools-disabled — жёстко отключённые admin'ом capability и тулы. */
   async getToolsDisabledInfo(): Promise<{
     config: ToolsDisabledConfig
@@ -1719,12 +1719,12 @@ export const synthApi = {
     )
   },
 
-  /** Полная карта обфускации сессии (AD-036): плейсхолдер → реальное значение. Доступ ADMIN/AUDITOR. */
+  /** Полная карта обфускации сессии (ADR-036): плейсхолдер → реальное значение. Доступ ADMIN/AUDITOR. */
   async getSessionSecrets(sessionId: string): Promise<SessionSecretsResponse> {
     return fetchJSON<SessionSecretsResponse>(`${BASE_URL}/sessions/${encodeURIComponent(sessionId)}/secrets`)
   },
 
-  /** Логирование раскрытия секрета (AD-036, тип 'revealed'). Эндпоинт может отсутствовать — fire-and-forget. */
+  /** Логирование раскрытия секрета (ADR-036, тип 'revealed'). Эндпоинт может отсутствовать — fire-and-forget. */
   async auditRevealed(sessionId: string | undefined, placeholder: string): Promise<void> {
     await fetchJSON<void>(`${BASE_URL}/audit/revealed`, {
       method: 'POST',
@@ -1768,7 +1768,7 @@ export const synthApi = {
     return fetchJSON<LlmPayloadListResponse>(`${BASE_URL}/logs/llm${qs ? `?${qs}` : ''}`)
   },
 
-  // --- Словари классификации (AD-034/AD-035) ---
+  // --- Словари классификации (ADR-034/ADR-035) ---
   async getDictionaries(): Promise<{ dictionaries: DictionaryEntry[] }> {
     return fetchJSON<{ dictionaries: DictionaryEntry[] }>(`${BASE_URL}/dictionaries`)
   },
@@ -1800,7 +1800,7 @@ export const synthApi = {
     )
   },
 
-  // --- Внешние события (AD-089): биндинги и журнал ---
+  // --- Внешние события (ADR-089): биндинги и журнал ---
   async listEventBindings(): Promise<{ bindings: EventBinding[] }> {
     return fetchJSON<{ bindings: EventBinding[] }>(`${BASE_URL}/events/bindings`)
   },
@@ -1817,7 +1817,7 @@ export const synthApi = {
     return fetchJSON<void>(`${BASE_URL}/events/bindings/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
-  // --- Внешние события (AD-089/AD-052): API-ключи привязки ---
+  // --- Внешние события (ADR-089/ADR-052): API-ключи привязки ---
   /** GET /events/bindings/:id/keys — метаданные ключей привязки (без секретов). */
   async getEventBindingKeys(bindingId: string): Promise<{ keys: EventBindingApiKey[] }> {
     return fetchJSON<{ keys: EventBindingApiKey[] }>(
@@ -1864,7 +1864,7 @@ export const synthApi = {
     )
   },
 
-  // --- Внешние события (AD-089): runtime-настройки раздела «События» ---
+  // --- Внешние события (ADR-089): runtime-настройки раздела «События» ---
   /** GET /events/settings — эффективные настройки событий + дефолты + флаг override. */
   async getEventsSettings(): Promise<EventsSettingsResponse> {
     return fetchJSON<EventsSettingsResponse>(`${BASE_URL}/settings/events`)
@@ -1883,7 +1883,7 @@ export const synthApi = {
     return fetchJSON<EventsSettingsResponse>(`${BASE_URL}/settings/events`, { method: 'DELETE' })
   },
 
-  // --- Идентичности текущего пользователя (AD-089) ---
+  // --- Идентичности текущего пользователя (ADR-089) ---
   /** GET /me/identities — внешние идентичности, привязанные к профилю. */
   async getMyIdentities(): Promise<{ identities: ExternalIdentity[] }> {
     return fetchJSON<{ identities: ExternalIdentity[] }>(`${BASE_URL}/me/identities`)
@@ -1899,7 +1899,7 @@ export const synthApi = {
 
   /**
    * POST /me/identities/claim — подтвердить владение внешней идентичностью по
-   * одноразовому коду (AD-089 claim-flow). `provider`/`externalId` берутся ядром
+   * одноразовому коду (ADR-089 claim-flow). `provider`/`externalId` берутся ядром
    * из серверной записи claim, а не из тела — подставить чужой id нельзя.
    */
   async claimIdentity(code: string): Promise<{ identity: ExternalIdentity }> {
@@ -1909,7 +1909,7 @@ export const synthApi = {
     })
   },
 
-  // --- Decision-модели (AD-084): runtime-настройки decision-слоя ---
+  // --- Decision-модели (ADR-084): runtime-настройки decision-слоя ---
   /** GET /settings/decision — эффективные настройки decision-слоя + дефолты + флаг override. */
   async getDecisionSettings(): Promise<DecisionSettingsResponse> {
     return fetchJSON<DecisionSettingsResponse>(`${BASE_URL}/settings/decision`)
@@ -1946,7 +1946,7 @@ export const synthApi = {
     return fetchJSON<{ entries: EventJournalEntry[] }>(`${BASE_URL}/events/journal${qs}`)
   },
 
-  // --- Внешние события (AD-089): правила маршрутизации ---
+  // --- Внешние события (ADR-089): правила маршрутизации ---
   /** GET /events/routes — список правил маршрутизации событий (ADMIN). */
   async getEventRoutes(): Promise<{ rules: EventRouteRule[] }> {
     return fetchJSON<{ rules: EventRouteRule[] }>(`${BASE_URL}/events/routes`)
@@ -1968,7 +1968,7 @@ export const synthApi = {
     })
   },
 
-  // --- Шедулер расписаний (AD-051 / AD-089) ---
+  // --- Шедулер расписаний (ADR-051 / ADR-089) ---
   /** GET /schedules — список расписаний инстанса. */
   async getSchedules(): Promise<{ schedules: Schedule[] }> {
     return fetchJSON<{ schedules: Schedule[] }>(`${BASE_URL}/schedules`)
@@ -2006,20 +2006,20 @@ export const synthApi = {
     return res.schedule
   },
 
-  /** GET /schedules/:id/jobs — история срабатываний расписания (AD-051). */
+  /** GET /schedules/:id/jobs — история срабатываний расписания (ADR-051). */
   async getScheduleJobs(scheduleId: string, limit = 20): Promise<{ jobs: ScheduleJob[] }> {
     return fetchJSON<{ jobs: ScheduleJob[] }>(
       `${BASE_URL}/schedules/${encodeURIComponent(scheduleId)}/jobs?limit=${encodeURIComponent(String(limit))}`,
     )
   },
 
-  // --- Service-key (AD-052, этап I): scoped-ключи инстанса ---
+  // --- Service-key (ADR-052, этап I): scoped-ключи инстанса ---
   /** GET /service-keys — список service-ключей (без секретов). */
   async getServiceKeys(): Promise<{ keys: ServiceApiKey[] }> {
     return fetchJSON<{ keys: ServiceApiKey[] }>(`${BASE_URL}/service-keys`)
   },
 
-  /** GET /service-keys/scopes — каталог scope'ов/семейств/ролей для форм (AD-052). */
+  /** GET /service-keys/scopes — каталог scope'ов/семейств/ролей для форм (ADR-052). */
   async getServiceKeyScopes(): Promise<{ scopes: string[]; families: string[]; roles: string[] }> {
     return fetchJSON<{ scopes: string[]; families: string[]; roles: string[] }>(
       `${BASE_URL}/service-keys/scopes`,
@@ -2061,7 +2061,7 @@ export const synthApi = {
     })
   },
 
-  // --- Webhooks (AD-052, этап II): исходящие подписки на события ---
+  // --- Webhooks (ADR-052, этап II): исходящие подписки на события ---
   /** GET /webhooks — список подписок (без signing-секретов). */
   async getWebhookSubscriptions(): Promise<{ subscriptions: WebhookSubscription[] }> {
     return fetchJSON<{ subscriptions: WebhookSubscription[] }>(`${BASE_URL}/webhooks`)
@@ -2124,7 +2124,7 @@ export const synthApi = {
 }
 
 /**
- * AD-089/AD-052: тело создания API-ключа привязки — обязательная уникальная
+ * ADR-089/ADR-052: тело создания API-ключа привязки — обязательная уникальная
  * (в пределах инстанса) `label`; остальные поля опциональны.
  */
 export interface CreateEventBindingKeyInput {
@@ -2137,7 +2137,7 @@ export interface CreateEventBindingKeyInput {
 }
 
 /**
- * AD-089/AD-052: частичное обновление API-ключа. `null` у
+ * ADR-089/ADR-052: частичное обновление API-ключа. `null` у
  * `description`/`expiresAt`/`rateLimitPerMinute` сбрасывает поле.
  */
 export interface UpdateEventBindingKeyPatch {
@@ -2148,7 +2148,7 @@ export interface UpdateEventBindingKeyPatch {
 }
 
 /**
- * AD-089: runtime-настройки раздела «События» (`GET/PUT/DELETE /settings/events`).
+ * ADR-089: runtime-настройки раздела «События» (`GET/PUT/DELETE /settings/events`).
  * Тип объявлен локально: в shared его нет, а из core тянуть нельзя.
  */
 export interface EventsSettings {
@@ -2164,20 +2164,20 @@ export interface EventsSettings {
   unknownAgentTemplate: 'drop' | 'default-agent'
   /** Глобальный дефолт лимита запросов/мин на API-ключ; `0` — без лимита. */
   keyRateLimitPerMinute: number
-  /** AD-084: decision-маршрутизация внешних событий (default `false`, opt-in). */
+  /** ADR-084: decision-маршрутизация внешних событий (default `false`, opt-in). */
   decisionRouting: boolean
-  /** AD-089: auto-bind — фоллбек-закрепление события с chatKey/threadKey за сессией (default `false`). */
+  /** ADR-089: auto-bind — фоллбек-закрепление события с chatKey/threadKey за сессией (default `false`). */
   autoBind: boolean
-  /** AD-089: шаблон агента auto-bind-сессий (пусто — агент по умолчанию). */
+  /** ADR-089: шаблон агента auto-bind-сессий (пусто — агент по умолчанию). */
   autoBindAgentTemplate: string
   /**
-   * AD-089: маппинг идентичности внешнего отправителя (`identity.chatKey` /
+   * ADR-089: маппинг идентичности внешнего отправителя (`identity.chatKey` /
    * `identity.principalId`) → id пользователя инстанса.
    */
   identityMap: Record<string, string>
 }
 
-/** AD-089: ответ `GET/DELETE /settings/events` — эффективные значения, дефолты и флаг override. */
+/** ADR-089: ответ `GET/DELETE /settings/events` — эффективные значения, дефолты и флаг override. */
 export interface EventsSettingsResponse {
   events: EventsSettings
   defaults: EventsSettings
@@ -2185,7 +2185,7 @@ export interface EventsSettingsResponse {
 }
 
 /**
- * AD-084: runtime-настройки decision-слоя (`GET/PUT/DELETE /settings/decision`).
+ * ADR-084: runtime-настройки decision-слоя (`GET/PUT/DELETE /settings/decision`).
  * Тип объявлен локально: бизнес-тип в shared есть, но тянуть core/shared-конфиг
  * в браузерный бандл нельзя (см. `packages/ui/AGENTS.md`).
  */
@@ -2199,23 +2199,23 @@ export interface DecisionSettings {
   /** Порог уверенности 0..1: ниже — fallback (fail-safe). */
   confidenceThreshold: number
   /**
-   * AD-084 Ф6: необязательный точный тир на эскалацию — провайдер (пусто —
+   * ADR-084 Ф6: необязательный точный тир на эскалацию — провайдер (пусто —
    * без эскалации). Вторая пара provider/model: используется, когда основная
    * модель не дала уверенного валидного ответа (низкая уверенность/ошибка).
    */
   escalationProvider: string
-  /** AD-084 Ф6: необязательная модель эскалации (пусто — без эскалации). */
+  /** ADR-084 Ф6: необязательная модель эскалации (пусто — без эскалации). */
   escalationModel: string
 }
 
-/** AD-084: ответ `GET/DELETE /settings/decision` — эффективные значения, дефолты и флаг override. */
+/** ADR-084: ответ `GET/DELETE /settings/decision` — эффективные значения, дефолты и флаг override. */
 export interface DecisionSettingsResponse {
   decision: DecisionSettings
   defaults: DecisionSettings
   isOverridden: boolean
 }
 
-/** AD-084: статус попытки тира decision-каскада (см. `decision-cascade.ts` в core). */
+/** ADR-084: статус попытки тира decision-каскада (см. `decision-cascade.ts` в core). */
 export type DecisionAttemptStatus =
   | 'ok'
   | 'low_confidence'
@@ -2224,7 +2224,7 @@ export type DecisionAttemptStatus =
   | 'no_provider'
   | 'error'
 
-/** AD-084: разбивка метрик по модели `'<provider>/<model>'` (latency — по попыткам модели). */
+/** ADR-084: разбивка метрик по модели `'<provider>/<model>'` (latency — по попыткам модели). */
 export interface DecisionModelMetrics {
   calls: number
   handled: number
@@ -2233,7 +2233,7 @@ export interface DecisionModelMetrics {
 }
 
 /**
- * AD-084: сериализуемый снимок агрегатных in-memory метрик decision-слоя
+ * ADR-084: сериализуемый снимок агрегатных in-memory метрик decision-слоя
  * (`GET /settings/decision/metrics`). Форма повторяет
  * `DecisionMetricsSnapshot` из core (`engine/router/decision-metrics.ts`).
  */
@@ -2255,7 +2255,7 @@ export interface DecisionMetrics {
 }
 
 /**
- * AD-089: запись журнала внешних событий. `EventJournalEntry` живёт в core и в
+ * ADR-089: запись журнала внешних событий. `EventJournalEntry` живёт в core и в
  * shared не экспортируется — локальный тип повторяет серверную форму.
  */
 export interface EventJournalEntry {
@@ -2264,9 +2264,9 @@ export interface EventJournalEntry {
   event: SynthEvent
   decision?: RouteDecision
   error?: string
-  /** AD-089/AD-052: id API-ключа, которым принято событие (если применимо). */
+  /** ADR-089/ADR-052: id API-ключа, которым принято событие (если применимо). */
   keyId?: string
-  /** AD-089: id принципала — внешней идентичности отправителя. */
+  /** ADR-089: id принципала — внешней идентичности отправителя. */
   principalId?: string
 }
 
@@ -2280,7 +2280,7 @@ export interface LlmGatewaySettings {
   }
 }
 
-/** Паттерн детекции секретов (AD-036): type — название, regex — source без слешей и флагов (компилируется с 'g'). */
+/** Паттерн детекции секретов (ADR-036): type — название, regex — source без слешей и флагов (компилируется с 'g'). */
 export interface SecretPattern {
   type: string
   regex: string
@@ -2295,7 +2295,7 @@ export interface SecuritySettings {
   askTimeoutMs?: number
 }
 
-// AD-071 §2.3: `ToolsPolicy` — общий контракт `@itphx/synth-shared/types`
+// ADR-071 §2.3: `ToolsPolicy` — общий контракт `@itphx/synth-shared/types`
 // (импортирован и реэкспортирован выше).
 
 /** Эффективная политика защищённых путей (списки строк). */
@@ -2327,7 +2327,7 @@ export interface LogsResponse {
   lines: string[]
 }
 
-/** Запись журнала аудита LLM Gateway (AD-036). */
+/** Запись журнала аудита LLM Gateway (ADR-036). */
 export interface AuditEntry {
   ts: string
   type: string
@@ -2401,7 +2401,7 @@ export interface McpSettingsPayload {
   servers: Record<string, McpServerToolsSettings>
 }
 
-/** AD-071 §2.5: тело добавления записи реестра MCP. */
+/** ADR-071 §2.5: тело добавления записи реестра MCP. */
 export interface McpRegistryAddInput {
   name: string
   config: McpServerConfig
@@ -2411,7 +2411,7 @@ export interface McpRegistryAddInput {
   origin?: 'instance' | 'user'
 }
 
-/** AD-071 §2.5: тело обновления записи реестра MCP. */
+/** ADR-071 §2.5: тело обновления записи реестра MCP. */
 export interface McpRegistryUpdateInput {
   name?: string
   config?: McpServerConfig
@@ -2420,7 +2420,7 @@ export interface McpRegistryUpdateInput {
   enabledByDefault?: boolean
 }
 
-/** AD-071 §2.4: ответ GET/PUT /projects/:id/mcp — проектный MCP-скоуп. */
+/** ADR-071 §2.4: ответ GET/PUT /projects/:id/mcp — проектный MCP-скоуп. */
 export interface ProjectMcpResponse {
   enabled: string[]
   defaultOn: string[]
@@ -2447,7 +2447,7 @@ export interface HybridStatus {
   lastServer?: string | null
 }
 
-/** Словарь классификации (AD-034/AD-035): GET/PUT/DELETE /api/v2/dictionaries. */
+/** Словарь классификации (ADR-034/ADR-035): GET/PUT/DELETE /api/v2/dictionaries. */
 export interface DictionaryEntry {
   category: string
   language: string
@@ -2463,42 +2463,42 @@ export interface DictionaryDetail extends DictionaryEntry {
   content: string
 }
 
-// --- Скиллы и slash-команды (AD-046) ---
+// --- Скиллы и slash-команды (ADR-046) ---
 
-/** AD-046 §9.1: ответ GET /api/v2/skills. */
+/** ADR-046 §9.1: ответ GET /api/v2/skills. */
 export interface SkillsListResponse {
   skills: SkillSummary[]
   workspace?: string
   diagnostics?: SkillDiagnostic[]
 }
 
-/** AD-046 §9.1: список supporting-файлов скилла. */
+/** ADR-046 §9.1: список supporting-файлов скилла. */
 export interface SkillFilesResponse {
   name: string
   files: string[]
 }
 
-/** AD-046 §9.1: содержимое supporting-файла скилла. */
+/** ADR-046 §9.1: содержимое supporting-файла скилла. */
 export interface SkillFileResponse {
   name: string
   path: string
   content: string
 }
 
-/** AD-046 §7/§9.1: ответ GET /api/v2/commands. */
+/** ADR-046 §7/§9.1: ответ GET /api/v2/commands. */
 export interface CommandsListResponse {
   commands: CommandSummary[]
   workspace?: string
   diagnostics?: CommandDiagnostic[]
 }
 
-/** AD-046 §7.3: ответ GET /api/v2/skill-bundles. */
+/** ADR-046 §7.3: ответ GET /api/v2/skill-bundles. */
 export interface SkillBundlesResponse {
   bundles: SkillBundle[]
 }
 
 /**
- * AD-046 §4.5: эффективная запись скилла в сессии/проекте (уровень, trust,
+ * ADR-046 §4.5: эффективная запись скилла в сессии/проекте (уровень, trust,
  * доступность, включён/отключён с причиной).
  */
 export interface EffectiveSkillEntry {
@@ -2514,7 +2514,7 @@ export interface EffectiveSkillEntry {
   disabledReason?: 'session' | 'system' | 'project'
 }
 
-/** AD-046 §4.5: ответ GET/PUT /api/v2/sessions/:id/skills. */
+/** ADR-046 §4.5: ответ GET/PUT /api/v2/sessions/:id/skills. */
 export interface SessionSkillsResponse {
   session_id: string
   skills: EffectiveSkillEntry[]
@@ -2522,7 +2522,7 @@ export interface SessionSkillsResponse {
   disabled: string[]
 }
 
-/** AD-046 §4.5: ответ GET/PUT /api/v2/projects/:id/skills. */
+/** ADR-046 §4.5: ответ GET/PUT /api/v2/projects/:id/skills. */
 export interface ProjectSkillsResponse {
   project_id: string
   skills: EffectiveSkillEntry[]
@@ -2530,7 +2530,7 @@ export interface ProjectSkillsResponse {
   defaultOn: string[]
 }
 
-/** AD-046 §4.5: ответ GET/PUT /api/v2/settings/skills. */
+/** ADR-046 §4.5: ответ GET/PUT /api/v2/settings/skills. */
 export interface SkillsSettingsResponse {
   /** Мастер-гейт: скиллы, недоступные нигде. */
   disabled: SkillsDisabledRequest
@@ -2539,7 +2539,7 @@ export interface SkillsSettingsResponse {
   policy: ToolsPolicy
 }
 
-// --- Проектные инструкции (AD-069 §9.3) ---
+// --- Проектные инструкции (ADR-069 §9.3) ---
 
 /** Статус файла в снимке (совпадает с core `InstructionsDiagnosticStatus`). */
 export type InstructionFileStatus =
@@ -2556,7 +2556,7 @@ export type InstructionFileStatus =
 /** Источник кандидата: merged chain, `config.sources` path или URL. */
 export type InstructionSourceKind = 'chain' | 'path' | 'url'
 
-/** Результат threat-scan (AD-036) по файлу инструкций. */
+/** Результат threat-scan (ADR-036) по файлу инструкций. */
 export interface InstructionScanInfo {
   scanned: boolean
   blocked: boolean
@@ -2564,7 +2564,7 @@ export interface InstructionScanInfo {
   matches: string[]
 }
 
-/** Файл проектных инструкций в снимке прозрачности (AD-069 §9.3). */
+/** Файл проектных инструкций в снимке прозрачности (ADR-069 §9.3). */
 export interface InstructionFileInfo {
   /** Путь относительно workspace (`./AGENTS.md`, `../AGENTS.md`) или URL. */
   path: string
@@ -2586,7 +2586,7 @@ export interface InstructionDiagnostic {
   kind?: InstructionSourceKind
 }
 
-/** AD-069 §9.3: ответ GET /api/v2/context/instructions (снимок + id сессии). */
+/** ADR-069 §9.3: ответ GET /api/v2/context/instructions (снимок + id сессии). */
 export interface InstructionsInfo {
   session_id?: string
   enabled: boolean

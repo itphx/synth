@@ -293,7 +293,7 @@ async function makeHarness(providerName: string): Promise<Harness> {
   const store = new FileStore({ dataDir: tmpDir });
   const sessionManager = new SessionManager(store);
   const eventBus = new EventBus();
-  // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+  // ADR-075: file/shell/git-тулы доступны только при заданном workspace проекта.
   const projectStore = new ProjectStore({ dataDir: tmpDir });
   const project = projectStore.create('DenyAbort', 'u1', { workspace: tmpDir });
   await projectStore.save(project);
@@ -383,7 +383,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     // Пустой финальный ответ модели подставлен
     const done = chunks.find((c) => c.event === 'stream.done')!;
     expect(done.data.content).toBe('Could not proceed: the action was blocked by the security policy');
-    // AD-070 §2.6: отказ в туле → status 'stopped'.
+    // ADR-070 §2.6: отказ в туле → status 'stopped'.
     expect(done.data.status).toBe('stopped');
 
     // В истории нет пустого assistant-сообщения
@@ -419,7 +419,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     const cancelledContent = cancelled.data.content as string;
     expect(cancelledContent).toContain('Шаг 1: анализ команды');
     expect(cancelledContent).toContain('Полный');
-    // AD-070 §2.6: отмена → status 'cancelled'.
+    // ADR-070 §2.6: отмена → status 'cancelled'.
     expect(cancelled.data.status).toBe('cancelled');
 
     // Финальное assistant-сообщение содержит полный текст (не обрывок последней итерации)
@@ -495,7 +495,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
-  // AD-070 §2.6: отмена ДО первого токена не должна терять ход — assistant-
+  // ADR-070 §2.6: отмена ДО первого токена не должна терять ход — assistant-
   // сообщение сохраняется (status cancelled, usage/estimated/duration/cost),
   // публикуется message.added до stream.cancelled.
   it('отмена до первого токена: assistant-сообщение со status cancelled, usage/estimated/duration/cost', async () => {
@@ -633,7 +633,7 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
 
     const done = chunks.find((c) => c.event === 'stream.done')!;
     expect(done.data.content).toBe('Could not complete the request: the model response was empty');
-    // AD-070 §2.6: пустой ответ модели → status 'error'.
+    // ADR-070 §2.6: пустой ответ модели → status 'error'.
     expect(done.data.status).toBe('error');
 
     const session = (await h.sessionManager.getSession(h.sessionId))!;

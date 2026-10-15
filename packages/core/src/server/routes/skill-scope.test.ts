@@ -66,7 +66,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('scope-API скиллов (AD-046 §4.5)', () => {
+describe('scope-API скиллов (ADR-046 §4.5)', () => {
   it('sessions: GET effective + PUT toggle', async () => {
     const app = makeApp();
     const session = await sessionManager.createSession({ engine: 'synth' });
@@ -125,7 +125,7 @@ describe('scope-API скиллов (AD-046 §4.5)', () => {
     expect(after.defaultOn).toEqual(['b']);
   });
 
-  it('deny из permission-конфига скрывает скилл (AD-046 §8.1)', async () => {
+  it('deny из permission-конфига скрывает скилл (ADR-046 §8.1)', async () => {
     const summary = (name: string) => ({
       name, description: '', scope: 'instance', level: 'system', dir: `/skills/${name}`,
       invocation: 'both', userInvocable: true, modelInvocable: true, tags: [], agents: [],
@@ -214,7 +214,7 @@ describe('scope-API — контроль доступа (IDOR)', () => {
     expect((await app.request('/api/v2/projects/p-idor/skills')).status).toBe(200);
     expect((await json(app, '/api/v2/projects/p-idor/skills', { enabled: ['x'] }, 'PUT')).status).toBe(200);
 
-    // LEAD — PUT разрешён (AD-046 §4.5: owner/LEAD управляют проектным уровнем).
+    // LEAD — PUT разрешён (ADR-046 §4.5: owner/LEAD управляют проектным уровнем).
     user = 'lead';
     expect((await json(app, '/api/v2/projects/p-idor/skills', { enabled: ['y'] }, 'PUT')).status).toBe(200);
     const afterLead = await projectStore.load('p-idor');

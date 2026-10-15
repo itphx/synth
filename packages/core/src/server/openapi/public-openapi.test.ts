@@ -14,7 +14,7 @@ import {
 const API_BASE = '/api/v2';
 
 /**
- * Ожидаемая публичная поверхность (интеграционное ядро, AD-052 этап III, часть 1):
+ * Ожидаемая публичная поверхность (интеграционное ядро, ADR-052 этап III, часть 1):
  * path → HTTP-методы. 28 операций: events 13, sessions 8, schedules 6, llm 1.
  */
 const EXPECTED_PATHS: Record<string, string[]> = {
@@ -81,7 +81,7 @@ function methodsOf(doc: ReturnType<typeof getPublicOpenApiDocument>): Record<str
   return out;
 }
 
-describe('public OpenAPI (AD-052, этап III)', () => {
+describe('public OpenAPI (ADR-052, этап III)', () => {
   let dataDir: string | undefined;
   let cleanup: (() => void) | undefined;
 

@@ -8,7 +8,7 @@ import { SSHKeyStoreError } from '../../storage/ssh-key-store.js';
 import { createSshEnv, SshEnvError } from '../../git/ssh-env.js';
 
 /**
- * AD-076 §T6: SSH-окружение для сетевых git-тулов (`git_push`/`git_pull`).
+ * ADR-076 §T6: SSH-окружение для сетевых git-тулов (`git_push`/`git_pull`).
  *
  * По `cwd` находим запись реестра `project.repos` (по относительному пути к
  * корню workspace) и, если у неё задан `sshKeyId`, готовим `GIT_SSH_COMMAND`
@@ -38,7 +38,7 @@ export interface RepoGitEnvResult {
 
 const noopCleanup = async (): Promise<void> => {};
 
-/** Результат подготовки SSH-окружения по явному `sshKeyId` (AD-076). */
+/** Результат подготовки SSH-окружения по явному `sshKeyId` (ADR-076). */
 export interface SshEnvByIdResult {
   /** Дополнительные переменные окружения git (GIT_SSH_COMMAND); пусто — ambient ssh. */
   env?: Record<string, string>;
@@ -51,7 +51,7 @@ export interface SshEnvByIdResult {
 }
 
 /**
- * AD-076: SSH-окружение по явному `sshKeyId` (без привязки к реестру проекта).
+ * ADR-076: SSH-окружение по явному `sshKeyId` (без привязки к реестру проекта).
  * Общий хелпер HTTP-роутов (`/api/v2/git`) и тулов управления репозиториями:
  * нет ключа/не расшифрован → `sshkey.not_found`; сбой подготовки → `sshkey.env_failed`.
  */

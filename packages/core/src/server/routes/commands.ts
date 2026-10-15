@@ -29,7 +29,7 @@ export interface CommandRoutesOptions {
 }
 
 /**
- * AD-046 §9.1/§7: `GET /api/v2/commands` — встроенные + шаблонные команды +
+ * ADR-046 §9.1/§7: `GET /api/v2/commands` — встроенные + шаблонные команды +
  * скиллы (invocation user/both) + bundles. `?diagnostics=1` — shadowed/ошибки.
  */
 export function createCommandRoutes(

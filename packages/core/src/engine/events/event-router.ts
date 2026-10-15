@@ -6,23 +6,23 @@ import { MemoryDedupStore } from './dedup-store.js';
 import type { DedupStore } from './dedup-store.js';
 import type { EventRouterConfig, RouteRuleInput, RouteRuleProvider } from './types.js';
 
-/** AD-089: фоллбек `defaultMode` по умолчанию — осознанный drop с аудитом. */
+/** ADR-089: фоллбек `defaultMode` по умолчанию — осознанный drop с аудитом. */
 const FALLBACK_DEFAULT_MODE = 'bound' as const;
 
-/** AD-089: параметры `EventRouter`. */
+/** ADR-089: параметры `EventRouter`. */
 export interface EventRouterDeps {
   bindingStore: EventBindingStore;
   journal: EventJournalStore;
   config?: Partial<EventRouterConfig>;
   ruleProviders?: RouteRuleProvider[];
   /**
-   * AD-030/AD-089: шина хуков. Принята как точка расширения — сам `decide`
+   * ADR-030/ADR-089: шина хуков. Принята как точка расширения — сам `decide`
    * хуков не эмитит (это делает `RequestSessionService`), поэтому пока не
    * сохраняется в состоянии.
    */
   hooks?: HookBus;
   /**
-   * AD-051/AD-089: источник дедупа. По умолчанию `MemoryDedupStore`
+   * ADR-051/ADR-089: источник дедупа. По умолчанию `MemoryDedupStore`
    * (single-process); `file` — межпроцессный атомарный claim на общем `dataDir`.
    */
   dedupStore?: DedupStore;
@@ -31,8 +31,8 @@ export interface EventRouterDeps {
 const FALLBACK_EPHEMERAL_TTL = '24h';
 
 /**
- * AD-089: роутер внешних событий — чистое решение (без журналирования) плюс
- * запись результата в журнал. Порядок `decide` строго по AD-089:
+ * ADR-089: роутер внешних событий — чистое решение (без журналирования) плюс
+ * запись результата в журнал. Порядок `decide` строго по ADR-089:
  * 1. `allowedSources` — непустой список и источник не в нём → `drop`.
  * 2. `dedup` — атомарный claim `dedupKey` в `DedupStore`; ключ занят → `drop duplicate`.
  * 3. Явный `Binding` по `threadKey` (приоритетнее) / `chatKey` → по `mode`.
@@ -67,13 +67,13 @@ export class EventRouter {
     if (deps.ruleProviders) this._ruleProviders.push(...deps.ruleProviders);
   }
 
-  /** AD-089: регистрация правила маршрутизации (порядок = приоритет). */
+  /** ADR-089: регистрация правила маршрутизации (порядок = приоритет). */
   registerRuleProvider(provider: RouteRuleProvider): void {
     this._ruleProviders.push(provider);
   }
 
   /**
-   * AD-089: live-обновление конфигурации Router (runtime-настройки из админки).
+   * ADR-089: live-обновление конфигурации Router (runtime-настройки из админки).
    * Незаданные поля мержатся поверх текущих значений (`_config`).
    */
   updateConfig(partial: Partial<EventRouterConfig>): void {
@@ -91,7 +91,7 @@ export class EventRouter {
   /**
    * Решение по событию БЕЗ записи в журнал и без побочных эффектов.
    *
-   * AD-089: `forcedBinding` (аутентификация по API-ключу привязки) заменяет
+   * ADR-089: `forcedBinding` (аутентификация по API-ключу привязки) заменяет
    * поиск в `EventBindingStore` на шаге 3; шаги 1 (`allowedSources`) и 2 (dedup)
    * сохраняются.
    */
@@ -135,7 +135,7 @@ export class EventRouter {
       }
     }
 
-    // 5. Фоллбек — AD-089. Приоритет: `autoBind` (закрепить событие с
+    // 5. Фоллбек — ADR-089. Приоритет: `autoBind` (закрепить событие с
     // chatKey/threadKey за новой сессией) → политика `defaultMode`
     // (`ephemeral` — временная сессия; `bound` — осознанный дроп с аудитом).
     // `autoBind` влияет только на фоллбек: явный binding, правила и
@@ -161,10 +161,10 @@ export class EventRouter {
   /**
    * Запись решения в журнал. `dedupKey` дополнительно claim'ится — путь «hook
    * заблокировал до `decide`» вызывает только `record`, и ключ всё равно должен
-   * быть занят (AD-089). В штатном пути ключ уже claim'нут в `decide`, поэтому
+   * быть занят (ADR-089). В штатном пути ключ уже claim'нут в `decide`, поэтому
    * повторный claim — best-effort (результат игнорируется).
    *
-   * AD-089/AD-052: `meta.keyId`/`meta.principalId` (аудит использования
+   * ADR-089/ADR-052: `meta.keyId`/`meta.principalId` (аудит использования
    * API-ключа привязки) мержатся в запись журнала.
    */
   async record(

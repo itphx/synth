@@ -7,21 +7,21 @@ import type {
 } from '@itphx/synth-shared';
 
 /**
- * AD-046 §7: внутренние типы модуля slash-команд. Контракты (для оркестратора,
+ * ADR-046 §7: внутренние типы модуля slash-команд. Контракты (для оркестратора,
  * API, CLI) — в `@itphx/synth-shared` (`types/commands.ts`).
  */
 
 /** Происхождение источника шаблонных команд (приоритет как у скиллов). */
 export type CommandOrigin = 'instance' | 'project' | 'config';
 
-/** Шаблонная `.md`-команда (AD-046 §7.2). */
+/** Шаблонная `.md`-команда (ADR-046 §7.2). */
 export interface TemplateCommand {
   name: string;
   description: string;
   argumentHint?: string;
   agent?: string;
   model?: string;
-  /** Advisory-whitelist тулов (AD-046 §8.1) — в права не транслируется. */
+  /** Advisory-whitelist тулов (ADR-046 §8.1) — в права не транслируется. */
   allowedTools?: string[];
   body: string;
   file: string;
@@ -63,7 +63,7 @@ export interface CommandRuntimeConfig {
   /** `config.skills.toolsets` — экспансия `requires_toolsets` в capabilities. */
   toolsets: Record<string, readonly string[]>;
   trustedProjectDirs?: readonly string[];
-  /** AD-046 §7.4: `!`cmd`` в шаблонных командах (по умолчанию false). */
+  /** ADR-046 §7.4: `!`cmd`` в шаблонных командах (по умолчанию false). */
   inlineShell: boolean;
   home?: string;
 }
@@ -77,9 +77,9 @@ export interface CommandContext {
   sessionDisabled?: string[];
   permissionConfig?: PermissionConfig;
   /**
-   * AD-046 §7.4: раннер inline shell. Приходит готовым от оркестратора
+   * ADR-046 §7.4: раннер inline shell. Приходит готовым от оркестратора
    * (замыкание уже прошло `PermissionEvaluator`); сервис команд не строит
-   * permission-проверки сам (AD-029).
+   * permission-проверки сам (ADR-029).
    */
   runShell?: CommandShellRunner;
 }

@@ -209,7 +209,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('EventsAdminSettings — биндинги и журнал (AD-089)', () => {
+describe('EventsAdminSettings — биндинги и журнал (ADR-089)', () => {
   it('рендерит список биндингов из API', async () => {
     mocks.listEventBindings.mockResolvedValue({
       bindings: [binding('b1', { threadKey: 'thread:telegram:1:2', project: 'p1', agentTemplate: 'assistant' })],
@@ -347,7 +347,7 @@ describe('EventsAdminSettings — биндинги и журнал (AD-089)', ()
   })
 })
 
-describe('EventsAdminSettings — API-ключи привязки (AD-089)', () => {
+describe('EventsAdminSettings — API-ключи привязки (ADR-089)', () => {
   const keyMeta = (overrides: Record<string, unknown> = {}) => ({
     id: 'k1',
     bindingId: 'b1',
@@ -615,7 +615,7 @@ describe('EventsAdminSettings — API-ключи привязки (AD-089)', () 
   })
 })
 
-describe('EventsAdminSettings — журнал (AD-089)', () => {
+describe('EventsAdminSettings — журнал (ADR-089)', () => {
   it('загружает журнал и показывает решение, причину и ошибку', async () => {
     mocks.getEventJournal.mockResolvedValue({
       entries: [
@@ -660,7 +660,7 @@ describe('EventsAdminSettings — журнал (AD-089)', () => {
   })
 })
 
-describe('EventsAdminSettings — правила маршрутизации (AD-089)', () => {
+describe('EventsAdminSettings — правила маршрутизации (ADR-089)', () => {
   it('рендерит список правил маршрутизации из API', async () => {
     mocks.getEventRoutes.mockResolvedValue({
       rules: [
@@ -850,7 +850,7 @@ describe('EventsAdminSettings — правила маршрутизации (AD-
   })
 })
 
-describe('EventsAdminSettings — read-only для USER/AUDITOR (AD-089)', () => {
+describe('EventsAdminSettings — read-only для USER/AUDITOR (ADR-089)', () => {
   beforeEach(() => {
     mocks.canManage.mockReturnValue(false)
     mocks.listEventBindings.mockResolvedValue({ bindings: [binding('b1')] })

@@ -21,7 +21,7 @@ const entry = (id: string, ts = new Date().toISOString()): EventJournalEntry => 
   event: event(id, ts),
 });
 
-describe('EventJournalStore (AD-089)', () => {
+describe('EventJournalStore (ADR-089)', () => {
   let store: EventJournalStore;
   let tmpDir: string;
 

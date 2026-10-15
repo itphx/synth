@@ -15,12 +15,12 @@ export interface JobListOptions {
 }
 
 /**
- * AD-051: история срабатываний расписаний планировщика.
+ * ADR-051: история срабатываний расписаний планировщика.
  *
  * Append-only JSONL `{dataDir}/scheduler/jobs.jsonl` (одна строка = один Job,
  * образец — `EventJournalStore`). Append защищён `AsyncLock`, чтобы
  * конкурирующие записи не перемешивали строки. Retention — `prune`
- * (атомарная перезапись tmp→rename, AD-005); `id` формирует вызывающий
+ * (атомарная перезапись tmp→rename, ADR-005); `id` формирует вызывающий
  * (`job_<uuid>`).
  */
 export class JobStore {

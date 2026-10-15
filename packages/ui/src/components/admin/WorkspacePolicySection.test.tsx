@@ -92,7 +92,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('WorkspacePolicySection (AD-075)', () => {
+describe('WorkspacePolicySection (ADR-075)', () => {
   it('читает политику и показывает текущее значение', async () => {
     const container = await renderSection()
     expect(mocks.getWorkspacePolicy).toHaveBeenCalled()

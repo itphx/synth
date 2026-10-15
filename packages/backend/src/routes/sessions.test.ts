@@ -604,7 +604,7 @@ describe('Session API Routes', () => {
     });
   });
 
-  describe('GET /api/v2/sessions/:id/prompt (AD-070 §2.5)', () => {
+  describe('GET /api/v2/sessions/:id/prompt (ADR-070 §2.5)', () => {
     it('возвращает манифест для существующей сессии', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
       const session = await sessionManager.createSession({ title: 'S', userId: testUser.id });
@@ -632,7 +632,7 @@ describe('Session API Routes', () => {
     });
   });
 
-  describe('GET /api/v2/sessions/:id/stats (AD-070 §2.6)', () => {
+  describe('GET /api/v2/sessions/:id/stats (ADR-070 §2.6)', () => {
     it('возвращает агрегацию по агентам и пользователям', async () => {
       const profilesStore = new FileProfileStore({ dataDir: tmpDir });
       await profilesStore.getOrCreateProfile({ username: testUser.username });
@@ -679,7 +679,7 @@ describe('Session API Routes', () => {
 });
 
 // ---------------------------------------------------------------------------
-// AD-089: видимость сессий/проектов по ролям и проектам (backend RBAC)
+// ADR-089: видимость сессий/проектов по ролям и проектам (backend RBAC)
 // ---------------------------------------------------------------------------
 
 interface VisUser extends User {
@@ -740,7 +740,7 @@ function createVisibilityApp(
   return { app, sessionManager };
 }
 
-describe('Session visibility (AD-089, backend RBAC)', () => {
+describe('Session visibility (ADR-089, backend RBAC)', () => {
   let tmpDir: string;
   let projectStore: ProjectStore;
 

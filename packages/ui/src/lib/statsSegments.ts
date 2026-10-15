@@ -17,12 +17,12 @@ interface UsageStatsData {
   costUsd?: number
   /** Валюта `costUsd` (C2a); отсутствует/неизвестна → USD. */
   costCurrency?: string
-  /** `~`, если usage — best-effort оценка (AD-070 §2.6). */
+  /** `~`, если usage — best-effort оценка (ADR-070 §2.6). */
   tokenPrefix?: string
 }
 
 /**
- * AD-070 §2.6: общие сегменты usage/cost/cache — используются и финальной
+ * ADR-070 §2.6: общие сегменты usage/cost/cache — используются и финальной
  * статистикой ответа (`MessageStats`), и live-строкой стрима
  * (`StreamingPlaceholder`): `1.7M вх · 33.3k исх · ~ 0.03 $ · 93% кэш`.
  * Порядок сегментов: вход, выход, стоимость, кэш.

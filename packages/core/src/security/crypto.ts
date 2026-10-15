@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { atomicWrite } from '@itphx/synth-shared';
 
 /**
- * AD-076 §T2: шифрование секретов at-rest (SSH-ключи) через AES-256-GCM.
+ * ADR-076 §T2: шифрование секретов at-rest (SSH-ключи) через AES-256-GCM.
  *
  * Формат токена: `enc:v1:<base64 iv(12 Б)>:<base64 authTag(16 Б)>:<base64 ciphertext>`.
  * Значение без префикса `enc:v1:` считается plaintext и возвращается как есть
@@ -118,7 +118,7 @@ export function masterKeyFilePath(dataDir: string): string {
 /**
  * Читает мастер-ключ из файла БЕЗ генерации: `null`, если файла нет или он пуст.
  *
- * Для ротации мастер-ключа (AD-076) это важно: `resolveMasterKey` при отсутствии
+ * Для ротации мастер-ключа (ADR-076) это важно: `resolveMasterKey` при отсутствии
  * файла создаёт новый ключ, что недопустимо при попытке прочитать *старый* ключ.
  */
 export async function readMasterKeyFile(dataDir: string): Promise<Buffer | null> {

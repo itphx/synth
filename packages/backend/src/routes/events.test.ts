@@ -1,7 +1,7 @@
-// AD-089 (срез B): backend монтирует core-фабрику событий с managed-RBAC.
+// ADR-089 (срез B): backend монтирует core-фабрику событий с managed-RBAC.
 // Проверяем правила маршрутизации: чтение (GET /routes) — requireAuth; мутации
 // (POST/DELETE) — ADMIN/LEAD; валидация цели (сессия/агент) → 400; 404 при
-// удалении отсутствующей записи. AD-089/AD-052: API-ключи привязок и приём
+// удалении отсутствующей записи. ADR-089/ADR-052: API-ключи привязок и приём
 // события по ключу (без пользовательских кред).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
@@ -49,7 +49,7 @@ function makeGuards(user: User | null) {
 
 const EPHEMERAL_RULE = { match: { source: 'ci' }, target: { mode: 'ephemeral', agentTemplate: 'assistant' } };
 
-describe('Events API Routes (AD-089 срез B, backend RBAC)', () => {
+describe('Events API Routes (ADR-089 срез B, backend RBAC)', () => {
   let dataDir: string;
   let routeRuleStore: RouteRuleStore;
   let bindingStore: EventBindingStore;
@@ -209,7 +209,7 @@ describe('Events API Routes (AD-089 срез B, backend RBAC)', () => {
     expect(ok.status).toBe(201);
   });
 
-  // --- AD-089/AD-052: приём события по API-ключу привязки ---
+  // --- ADR-089/ADR-052: приём события по API-ключу привязки ---
 
   it('приём по ключу: 201, forced binding, source из привязки; неверный ключ → 401', async () => {
     const app = makeApp(admin);

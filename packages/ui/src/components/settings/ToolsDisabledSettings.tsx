@@ -17,7 +17,7 @@ import { PolicySettingsCard } from './PolicySettingsCard'
 import { cn } from '@/lib/utils'
 
 /**
- * AD-071 §2.6 / AD-072: instance-wide управление встроенными инструментами
+ * ADR-071 §2.6 / ADR-072: instance-wide управление встроенными инструментами
  * администратором. Галочка = инструмент включён; снятие добавляет группу/тул
  * в `tools.disabled`, установка — убирает. Группы capability + точечные тулы
  * (список из `toolsDetail` активной сессии). `runtime` неотключаем (ядро сессии).
@@ -62,7 +62,7 @@ export function ToolsDisabledSettings() {
     defaultValue: toolsDisabledDefaults ?? EMPTY_DISABLED,
   })
 
-  // Политика включения инструментов (AD-071 §2.3): глобальный режим отправки
+  // Политика включения инструментов (ADR-071 §2.3): глобальный режим отправки
   // определений в запрос к модели.
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy>('consistency')
   const [savedToolsPolicy, setSavedToolsPolicy] = useState<ToolsPolicy>('consistency')
@@ -356,7 +356,7 @@ export function ToolsDisabledSettings() {
         />
       </SettingsSection>
 
-      {/* Политика встроенных инструментов (AD-071 §2.3): режим отправки определений
+      {/* Политика встроенных инструментов (ADR-071 §2.3): режим отправки определений
           в запрос к модели. Идёт после отключений — они исключения из него.
           MCP управляется отдельной политикой. */}
       <PolicySettingsCard

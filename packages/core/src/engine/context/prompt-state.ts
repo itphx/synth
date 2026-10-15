@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.4/§2.7 (Ф2-часть 2): состояние системного промпта per-agent и
+ * ADR-070 §2.4/§2.7 (Ф2-часть 2): состояние системного промпта per-agent и
  * предсказание/валидация prompt-cache.
  *
  * Состояние (`PromptState`) хранится в сессии (`session.promptStates`) и
@@ -14,7 +14,7 @@ import type { PromptBlock } from './prompt-blocks.js';
 
 export type PromptStateReason = PromptState['reason'];
 
-/** Ключ сессии без выбранного агента (AD-070 §2.4). */
+/** Ключ сессии без выбранного агента (ADR-070 §2.4). */
 export const DEFAULT_AGENT_KEY = '__default__';
 
 /** `agentKey` = agentRole либо `__default__` для сессии без агента. */
@@ -76,7 +76,7 @@ export function isPrefixUnchanged(
 }
 
 /**
- * AD-069 §11 / AD-070 §2.4: изменился ли контент конкретного блока
+ * ADR-069 §11 / ADR-070 §2.4: изменился ли контент конкретного блока
  * (например, `instructions`) относительно сохранённого состояния. Нужно, чтобы
  * инвалидировать `promptStates` при смене проектных инструкций: блок лежит в
  * тире `context`, а `isPrefixUnchanged` смотрит только на `stablePrefix`.

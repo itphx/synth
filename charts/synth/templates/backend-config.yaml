@@ -1,4 +1,4 @@
-{{- /* Декларативный config.yaml backend (AD-023). Рендерится только при непустом backend.config. */ -}}
+{{- /* Декларативный config.yaml backend (ADR-023). Рендерится только при непустом backend.config. */ -}}
 {{- if .Values.backend.config }}
 apiVersion: v1
 kind: ConfigMap

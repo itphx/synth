@@ -64,7 +64,7 @@ describe('project_create / project_attach', () => {
     });
 
     // Абсолютный путь внутри workspacesRoot нормализуется в относительный
-    // (AD-075: provisioning общий с HTTP-роутом — политика/containment соблюдены).
+    // (ADR-075: provisioning общий с HTTP-роутом — политика/containment соблюдены).
     const absWs = join(tmpDir, 'workspaces', 'abs-ws');
     const result = await projectCreateTool.execute({ name: 'P', workspace: absWs }, makeCtx());
     expect(result.isError).toBeUndefined();
@@ -78,7 +78,7 @@ describe('project_create / project_attach', () => {
     expect(moved?.project_id).toBe(result.metadata?.id);
   });
 
-  it('project_create создаёт каталог workspace (AD-075)', async () => {
+  it('project_create создаёт каталог workspace (ADR-075)', async () => {
     const ctx = makeCtx();
     const result = await projectCreateTool.execute({ name: 'WS', workspace: 'rel-ws' }, ctx);
     expect(result.isError).toBeUndefined();
@@ -248,11 +248,11 @@ describe('project_log / project_invariants', () => {
 });
 
 // ---------------------------------------------------------------------------
-// AD-075/D5: доступ к записи проектных данных (invariants/log) — owner/EDITOR
+// ADR-075/D5: доступ к записи проектных данных (invariants/log) — owner/EDITOR
 // разрешены, VIEWER/посторонний — нет, неатрибутированный синтетический
 // контекст — back-compat.
 // ---------------------------------------------------------------------------
-describe('project_log / project_invariants: RBAC (AD-075/D5)', () => {
+describe('project_log / project_invariants: RBAC (ADR-075/D5)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;
@@ -381,7 +381,7 @@ describe('project_log / project_invariants: RBAC (AD-075/D5)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// project_update / project_workspace_set (AD-075/D5/D8)
+// project_update / project_workspace_set (ADR-075/D5/D8)
 // ---------------------------------------------------------------------------
 describe('project_update', () => {
   let tmpDir: string;

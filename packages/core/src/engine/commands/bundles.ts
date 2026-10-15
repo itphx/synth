@@ -12,7 +12,7 @@ function asString(v: unknown): string | undefined {
 }
 
 /**
- * AD-046 §7.3: парсинг YAML-файла bundle. Использует общий толерантный
+ * ADR-046 §7.3: парсинг YAML-файла bundle. Использует общий толерантный
  * frontmatter-парсер (`js-yaml` в shared) — новой зависимости в core нет.
  */
 export function parseBundleFile(raw: string, expectedName: string): ParsedBundle {
@@ -57,7 +57,7 @@ export interface LoadBundleOptions {
 }
 
 /**
- * AD-046 §7.3: `/bundle-name` грузит N тел скиллов одним сообщением.
+ * ADR-046 §7.3: `/bundle-name` грузит N тел скиллов одним сообщением.
  * Несуществующие/недоступные скиллы пропускаются с диагностикой (bundle не
  * ломается целиком). Агрегат ограничен `maxRenderedBytes`.
  */

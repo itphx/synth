@@ -128,7 +128,7 @@ describe('createAgentRegistry', () => {
   });
 });
 
-describe('AgentRegistry.getToolsForAgent (AD-070 §2.9)', () => {
+describe('AgentRegistry.getToolsForAgent (ADR-070 §2.9)', () => {
   it('найденный агент получает ВСЕ тулы, без фильтра по capabilities', () => {
     const toolRegistry = createToolRegistry();
     const registry = createAgentRegistry(toolRegistry);
@@ -153,7 +153,7 @@ describe('AgentRegistry.getToolsForAgent (AD-070 §2.9)', () => {
     expect(registry.getToolsForAgent('assistant')).toBeUndefined();
   });
 
-  it('AD-071 §2.1: MCP-тулы — только активных серверов (per-session)', () => {
+  it('ADR-071 §2.1: MCP-тулы — только активных серверов (per-session)', () => {
     const toolRegistry = createToolRegistry();
     const mcpTool = (server: string, name: string): ToolDefinition => ({
       name: `${server}_${name}`,

@@ -3,28 +3,28 @@ import { join, dirname } from 'node:path';
 import { randomInt } from 'node:crypto';
 import { AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
 
-/** AD-089 (claim-flow): версия схемы файла claim-кодов (для будущей миграции AD-032). */
+/** ADR-089 (claim-flow): версия схемы файла claim-кодов (для будущей миграции PROP-032). */
 export const IDENTITY_CLAIMS_SCHEMA_VERSION = 1;
 
 /**
- * AD-089 (claim-flow): TTL claim-кода по умолчанию — 10 минут. Короткий срок
+ * ADR-089 (claim-flow): TTL claim-кода по умолчанию — 10 минут. Короткий срок
  * жизни ограничивает окно подбора кода и «устаревание» привязки.
  */
 export const IDENTITY_CLAIM_TTL_SEC = 600;
 
 /**
- * AD-089 (claim-flow): алфавит кода — base32 **без похожих символов**
+ * ADR-089 (claim-flow): алфавит кода — base32 **без похожих символов**
  * (`0/O/1/I` исключены), чтобы код было удобно вводить в чат/UI. 32 символа.
  */
 export const IDENTITY_CLAIM_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
-/** AD-089: длина значимой части кода (без дефиса). `32^6 ≈ 2^30` — пространство подбора. */
+/** ADR-089: длина значимой части кода (без дефиса). `32^6 ≈ 2^30` — пространство подбора. */
 export const IDENTITY_CLAIM_LENGTH = 6;
 
-/** AD-089: дней до удаления потреблённых/истёкших claim'ов при `cleanup`. */
+/** ADR-089: дней до удаления потреблённых/истёкших claim'ов при `cleanup`. */
 const CONSUMED_RETENTION_SEC = IDENTITY_CLAIM_TTL_SEC;
 
-/** AD-089 (claim-flow): запись одноразового кода подтверждения владения id. */
+/** ADR-089 (claim-flow): запись одноразового кода подтверждения владения id. */
 export interface IdentityClaimRecord {
   /** Человековводимый код `XXX-XXX` (канонический вид, с дефисом). */
   code: string;
@@ -54,14 +54,14 @@ interface ClaimsFile {
 }
 
 /**
- * AD-089 (claim-flow): хранилище одноразовых claim-кодов — подтверждение
+ * ADR-089 (claim-flow): хранилище одноразовых claim-кодов — подтверждение
  * владения внешней идентичностью (`provider`+`externalId`).
  *
  * Поток: ingest неизвестного отправителя создаёт код (`create`) и возвращает его
  * шлюзу; пользователь вводит код в профиле; `POST /me/identities/claim` вызывает
  * `consume`, после чего ядро привязывает идентичность к профилю (`linkIdentity`).
  *
- * Хранится одним JSON-файлом `{dataDir}/events/identity-claims.json` (AD-005,
+ * Хранится одним JSON-файлом `{dataDir}/events/identity-claims.json` (ADR-005,
  * атомарная запись tmp→rename). `provider`/`externalId` берутся из **серверной**
  * записи, а не из тела запроса на подтверждение, — подставить чужой id нельзя.
  * Код одноразовый: `consume` помечает `consumedAt` и повторно не срабатывает.

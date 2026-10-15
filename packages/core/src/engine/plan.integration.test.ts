@@ -121,7 +121,7 @@ function makeMessage(): Message {
   };
 }
 
-describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
+describe('ChatOrchestrator × Plan/Act (ADR-025/ADR-027) — smoke', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
   let eventBus: EventBus;
@@ -146,7 +146,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
   ): Promise<{ deniedRules: string[]; session: Session | null }> {
     ScriptedProvider.configure(script);
 
-    // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+    // ADR-075: file/shell/git-тулы доступны только при заданном workspace проекта.
     const projectStore = new ProjectStore({ dataDir: tmpDir });
     const project = projectStore.create('PlanInt', 'u1', { workspace: tmpDir });
     await projectStore.save(project);
@@ -215,7 +215,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(await exists(join(tmpDir, 'a.txt'))).toBe(false);
   });
 
-  it('запись в .synth/plans/ заблокирована в режиме plan (AD-039: .synth не пишется)', async () => {
+  it('запись в .synth/plans/ заблокирована в режиме plan (ADR-039: .synth не пишется)', async () => {
     const { deniedRules } = await runScript(
       [
         {
@@ -296,7 +296,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     expect(final?.planApproved).toBe(true);
     await expect(readFile(join(tmpDir, 'b.txt'), 'utf-8')).resolves.toBe('data');
 
-    // AD-070 §2.8: план проекта — не system prompt, а plan_updated state-сообщение.
+    // ADR-070 §2.8: план проекта — не system prompt, а plan_updated state-сообщение.
     expect(ScriptedProvider.prompts()[0]).not.toContain('[APPROVED PLAN]');
     expect(final!.messages.some(
       (m) => m.metadata?.state === true
@@ -458,7 +458,7 @@ describe('ChatOrchestrator × Plan/Act (AD-025/AD-027) — smoke', () => {
     const result = await processMessage(fresh, msg, new AbortController().signal, () => {});
     expect(result.error).toBeUndefined();
 
-    // AD-070 §2.8: план и строгость — не system prompt, а state-сообщения.
+    // ADR-070 §2.8: план и строгость — не system prompt, а state-сообщения.
     expect(ScriptedProvider.prompts()[0]).not.toContain('[APPROVED PLAN]');
     expect(ScriptedProvider.prompts()[0]).not.toContain('[PLAN MODE:');
     const final = await sessionManager.getSession(session.id);

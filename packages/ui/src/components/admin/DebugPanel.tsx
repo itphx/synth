@@ -44,7 +44,7 @@ interface DebugCategorySectionProps {
 
 /**
  * Секция одной категории логов: собственный черновик уровней и свои
- * Save/Cancel/Reset (AD-072). Save отправляет только группы этой категории.
+ * Save/Cancel/Reset (ADR-072). Save отправляет только группы этой категории.
  */
 function DebugCategorySection({
   categoryKey,

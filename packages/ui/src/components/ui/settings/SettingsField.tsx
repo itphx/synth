@@ -10,13 +10,13 @@ export interface SettingsFieldProps {
   error?: string
   htmlFor?: string
   required?: boolean
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   className?: string
   children: React.ReactNode
 }
 
-/** AD-072: вертикальный лейбл + описание + контрол + ошибка. */
+/** ADR-072: вертикальный лейбл + описание + контрол + ошибка. */
 export function SettingsField({
   label,
   description,

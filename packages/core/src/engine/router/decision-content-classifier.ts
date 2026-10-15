@@ -1,6 +1,6 @@
 /**
  * DecisionContentClassifier — decision-классификатор категории запроса
- * (AD-084 × AD-034). Дополняет словарный `ContentClassifier`: вызывается только
+ * (ADR-084 × ADR-034). Дополняет словарный `ContentClassifier`: вызывается только
  * когда keyword-классификатор неуверен и в сессии нет явной `routingCategory`,
  * и возвращает drop-in-совместимый `ClassifyResult`.
  *
@@ -71,7 +71,7 @@ export class DecisionContentClassifier {
     if (!providerName || !modelName) return null;
 
     const question = this._buildQuestion(request.language);
-    // Единый каскад primary → escalation (AD-084); fail-safe внутри.
+    // Единый каскад primary → escalation (ADR-084); fail-safe внутри.
     const outcome = await decideChoiceCascade({
       resolver: this._resolver,
       config,

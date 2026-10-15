@@ -1,5 +1,5 @@
 /**
- * Интеграция ChatOrchestrator × LLM Gateway (AD-036), слой 3:
+ * Интеграция ChatOrchestrator × LLM Gateway (ADR-036), слой 3:
  * - _getProvider оборачивает провайдер в GatewayProvider когда gateway включён;
  * - при выключенном gateway возвращается исходный провайдер;
  * - _saveAssistantMessage добавляет metadata.secrets для существующих плейсхолдеров.
@@ -72,7 +72,7 @@ function makeGatewayConfig(): LLMGatewayConfig {
   };
 }
 
-describe('ChatOrchestrator × LLM Gateway (AD-036)', () => {
+describe('ChatOrchestrator × LLM Gateway (ADR-036)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 

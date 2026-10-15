@@ -8,7 +8,7 @@ import {
   IDENTITY_CLAIMS_SCHEMA_VERSION,
 } from './identity-claim-store.js';
 
-describe('IdentityClaimStore (AD-089 claim-flow)', () => {
+describe('IdentityClaimStore (ADR-089 claim-flow)', () => {
   let dir: string;
   let store: IdentityClaimStore;
 

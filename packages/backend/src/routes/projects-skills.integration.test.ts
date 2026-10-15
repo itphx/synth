@@ -1,4 +1,4 @@
-// AD-046 §4.5: project-scope скиллов — RBAC симметричен project-MCP:
+// ADR-046 §4.5: project-scope скиллов — RBAC симметричен project-MCP:
 // owner/LEAD/ADMIN (canManageProjectMcp) и на чтение, и на запись; посторонний USER — 403.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -19,7 +19,7 @@ function headers(user: keyof typeof KEYS): Record<string, string> {
   return { Authorization: `Bearer ${KEYS[user]}`, 'Content-Type': 'application/json' };
 }
 
-describe('project skills scope RBAC (AD-046 §4.5)', () => {
+describe('project skills scope RBAC (ADR-046 §4.5)', () => {
   let tmpDir: string;
   let backend: BackendAppHandle;
   let projectId: string;

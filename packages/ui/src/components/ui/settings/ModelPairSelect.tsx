@@ -35,9 +35,9 @@ export interface ModelPairSelectProps {
   providerTestId?: string
   /** `data-testid` триггера модели (для тестов и e2e). */
   modelTestId?: string
-  /** AD-089: подсказка-иконка (ⓘ) у селектора провайдера. */
+  /** ADR-089: подсказка-иконка (ⓘ) у селектора провайдера. */
   providerTooltip?: string
-  /** AD-089: подсказка-иконка (ⓘ) у селектора модели. */
+  /** ADR-089: подсказка-иконка (ⓘ) у селектора модели. */
   modelTooltip?: string
 }
 

@@ -1,4 +1,4 @@
-# Конфигурация gitleaks для репозитория synth (AD-052/AD-089 и окружение CI).
+# Конфигурация gitleaks для репозитория synth (ADR-052/ADR-089 и окружение CI).
 #
 # Allowlist подтверждённых false positives:
 #   * `curl-auth-header` — примеры curl в документации с плейсхолдерами

@@ -10,7 +10,7 @@
 shared → core → ui → backend → sdk → synth
 ```
 
-Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (AD-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (AD-038).
+Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (ADR-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (ADR-038).
 
 ## `pnpm publish` вместо `npm publish`
 

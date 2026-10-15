@@ -17,7 +17,7 @@ export type ProcessMessageFn = (
   message: Message,
   signal: AbortSignal,
   publishChunk: (event: string, data: Record<string, unknown>) => void,
-  /** Номер попытки (1-based) — для решения о терминальности сбоя (AD-070 §2.6). */
+  /** Номер попытки (1-based) — для решения о терминальности сбоя (ADR-070 §2.6). */
   attempt?: number,
 ) => Promise<{ error?: string; errorType?: string; canRetry?: boolean }>;
 
@@ -348,7 +348,7 @@ export class QueueProcessor {
               this._appendToRingBuffer(streamId, data);
             }
           },
-          // AD-070 §2.6: текущая попытка (1-based). _retryDelays хранит число
+          // ADR-070 §2.6: текущая попытка (1-based). _retryDelays хранит число
           // уже совершённых неудачных попыток.
           (this._retryDelays[streamId] ?? 0) + 1,
         );
@@ -621,7 +621,7 @@ export async function enqueueUserMessage(
   if (!message.metadata.stream_id) message.metadata.stream_id = generateStreamId();
   const enqueueStreamId = message.metadata.stream_id;
 
-  // AD-036: обфусцируем user-сообщение ДО сохранения в историю, чтобы в
+  // ADR-036: обфусцируем user-сообщение ДО сохранения в историю, чтобы в
   // session.messages и message.added попадал плейсхолдер, а не реальный секрет.
   // Если gateway выключен — колбэк возвращает сообщение без изменений
   // (обратная совместимость).

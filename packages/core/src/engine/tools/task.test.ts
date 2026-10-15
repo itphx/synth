@@ -331,7 +331,7 @@ describe('taskTool — context modes', () => {
     expect(inherited).toHaveLength(0);
   });
 
-  it('AD-089: none mode создаёт дочернюю сессию через funnel (initiator=agent)', async () => {
+  it('ADR-089: none mode создаёт дочернюю сессию через funnel (initiator=agent)', async () => {
     const parent = await createParentWithMessages();
     const request = vi.fn(async (req: any, opts: any) =>
       sessionManager.createSession({
@@ -673,7 +673,7 @@ describe('taskTool — context modes', () => {
     let capturedSystemMsg = '';
     const capturingProvider = {
       chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
-        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        // ADR-070 §1.5: system — только вторым аргументом, в messages его нет.
         capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
@@ -709,7 +709,7 @@ describe('taskTool — context modes', () => {
     let capturedSystemMsg = '';
     const capturingProvider = {
       chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
-        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        // ADR-070 §1.5: system — только вторым аргументом, в messages его нет.
         capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
@@ -745,7 +745,7 @@ describe('taskTool — context modes', () => {
     let capturedSystemMsg = '';
     const capturingProvider = {
       chatAsync: vi.fn().mockImplementation(async function* (_messages: any[], systemPrompt: string) {
-        // AD-070 §1.5: system — только вторым аргументом, в messages его нет.
+        // ADR-070 §1.5: system — только вторым аргументом, в messages его нет.
         capturedSystemMsg = systemPrompt || '';
         yield { isFinal: true, content: 'OK', toolCalls: [] };
       }),
@@ -771,7 +771,7 @@ describe('taskTool — context modes', () => {
     expect(capturedSystemMsg).not.toContain('Секретные заметки');
   });
 
-  // ─── AD-069 Фаза 2b: проектные инструкции в промпте саб-агента ──────
+  // ─── ADR-069 Фаза 2b: проектные инструкции в промпте саб-агента ──────
 
   async function captureSubagentSystem(
     params: Record<string, unknown>,
@@ -805,18 +805,18 @@ describe('taskTool — context modes', () => {
     return captured;
   }
 
-  it('AD-069: резолвнутые проектные инструкции попадают в system prompt саб-агента', async () => {
+  it('ADR-069: резолвнутые проектные инструкции попадают в system prompt саб-агента', async () => {
     const system = await captureSubagentSystem({});
     expect(system).toContain('[PROJECT INSTRUCTIONS]');
     expect(system).toContain('CHAIN-RULES');
   });
 
-  it('AD-069: skip_context_files=true — проектные инструкции не добавляются', async () => {
+  it('ADR-069: skip_context_files=true — проектные инструкции не добавляются', async () => {
     const system = await captureSubagentSystem({ skip_context_files: true });
     expect(system).not.toContain('CHAIN-RULES');
   });
 
-  it('AD-069: systemPrompt override родителя — проектные инструкции не добавляются', async () => {
+  it('ADR-069: systemPrompt override родителя — проектные инструкции не добавляются', async () => {
     const system = await captureSubagentSystem({}, {
       parentSessionSettings: { systemPrompt: 'MY-OVERRIDE' },
     });
@@ -848,7 +848,7 @@ class MockSubagentAskProvider {
   name = 'test-provider';
 }
 
-describe('taskTool × permissions саб-агента (AD-029)', () => {
+describe('taskTool × permissions саб-агента (ADR-029)', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
   let eventBus: EventBus;
@@ -1103,7 +1103,7 @@ describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
       },
     );
 
-    // AD-070 §2.9: definition остаётся в запросе; ограничения plan-режима
+    // ADR-070 §2.9: definition остаётся в запросе; ограничения plan-режима
     // обеспечивает permission-слой (unavailable(mode)), а не скрытие тулов.
     const names = (capturedTools as Array<{ function: { name: string } }>).map((t) => t.function.name);
     expect(names).toContain('write_file');
@@ -1156,7 +1156,7 @@ describe('taskTool × shellPolicy саб-агента (B3/B5)', () => {
   });
 });
 
-describe('taskTool × runtimeDeps саб-агента (AD-070 §2.9.1)', () => {
+describe('taskTool × runtimeDeps саб-агента (ADR-070 §2.9.1)', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
   let eventBus: EventBus;
@@ -1548,7 +1548,7 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
     expect(match![1]).toBe(result.metadata!.child_session_id);
   });
 
-  it('AD-070 §2.6: usage саб-агента сохраняется и подтягивается rollup-статистикой', async () => {
+  it('ADR-070 §2.6: usage саб-агента сохраняется и подтягивается rollup-статистикой', async () => {
     const parent = await sessionManager.createSession({ title: 'Parent' });
     const provider = {
       chatAsync: vi.fn().mockReturnValue(
@@ -1734,7 +1734,7 @@ describe('taskTool × отмена и ошибки (abort / provider error)', ()
   });
 });
 
-describe('taskTool — live-статистика саб-агента (AD-070)', () => {
+describe('taskTool — live-статистика саб-агента (ADR-070)', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
   let eventBus: EventBus;
@@ -1978,7 +1978,7 @@ describe('taskTool — live-статистика саб-агента (AD-070)', 
   });
 });
 
-describe('taskTool — metadata финального child-сообщения (AD-070)', () => {
+describe('taskTool — metadata финального child-сообщения (ADR-070)', () => {
   let store: FileStore;
   let sessionManager: SessionManager;
   let eventBus: EventBus;
@@ -2234,7 +2234,7 @@ describe('taskTool — metadata финального child-сообщения (A
   });
 });
 
-describe('buildSubagentUnavailableToolsSection — workspace-гейт (AD-075)', () => {
+describe('buildSubagentUnavailableToolsSection — workspace-гейт (ADR-075)', () => {
   function makeTool(name: string): ToolForLLM {
     return {
       type: 'function',

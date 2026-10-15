@@ -1,5 +1,5 @@
 /**
- * ModelRouter — главный класс, оркеструющий стратегии роутинга (AD-034).
+ * ModelRouter — главный класс, оркеструющий стратегии роутинга (ADR-034).
  * Поддерживает стратегии: content, cost, content+cost, auto.
  */
 
@@ -24,11 +24,11 @@ export interface RoutingDecision {
   modelName: string;
   reason: string;
   strategy: string;
-  /** AD-084: категория decision-классификации (только при `strategy='decision'`). */
+  /** ADR-084: категория decision-классификации (только при `strategy='decision'`). */
   category?: string;
-  /** AD-084: уверенность decision-классификации (только при `strategy='decision'`). */
+  /** ADR-084: уверенность decision-классификации (только при `strategy='decision'`). */
   confidence?: number;
-  /** AD-084: сигналы decision-классификации, напр. `decision:coding`. */
+  /** ADR-084: сигналы decision-классификации, напр. `decision:coding`. */
   signals?: string[];
 }
 
@@ -37,7 +37,7 @@ export class ModelRouter {
   private readonly _pool: ProviderPool;
   private readonly _qualityChecker: QualityChecker;
   private readonly _routerConfig: RouterConfig;
-  /** AD-084: decision-классификатор категории (опционально). */
+  /** ADR-084: decision-классификатор категории (опционально). */
   private readonly _decisionClassifier: DecisionContentClassifier | null;
 
   constructor(
@@ -100,7 +100,7 @@ export class ModelRouter {
   }
 
   async checkQuality(content: string, decision: RoutingDecision, sessionSettings?: SessionSettings): Promise<QualityCheckResult> {
-    // Приоритет: настройки сессии > глобальный конфиг роутера (AD-034)
+    // Приоритет: настройки сессии > глобальный конфиг роутера (ADR-034)
     const sessionEscalation = sessionSettings?.routingEscalation;
     const globalEscalation = this._routerConfig.escalation;
     const escalation = {
@@ -147,14 +147,14 @@ export class ModelRouter {
       return this._routeByCategory(modelCategory, settings, defaultProvider, defaultModel, 'model', [`fallback_from_model:${classifyResult.category}`]);
     }
 
-    // AD-084: decision-классификатор включается только когда keyword неуверен
+    // ADR-084: decision-классификатор включается только когда keyword неуверен
     // (confidence < 0.5) и явная `routingCategory` отсутствует — приоритеты
     // keyword и classify_conversation не меняются. Fail-safe: `null` → keyword.
     if (this._decisionClassifier) {
       const decided = await this._decisionClassifier.classify({ userMessage, toolCalls });
       if (decided) {
         const decision = this._routeByCategory(decided.category, settings, defaultProvider, defaultModel, 'decision', decided.signals);
-        // AD-084: публикуем метаданные decision-классификации для метрик (debug).
+        // ADR-084: публикуем метаданные decision-классификации для метрик (debug).
         return {
           ...decision,
           category: decided.category,

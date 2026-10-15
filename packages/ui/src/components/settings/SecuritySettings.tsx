@@ -73,7 +73,7 @@ function isValidRegex(regex: string): boolean {
 }
 
 /**
- * AD-072: секция «Безопасность» на коллекции `components/ui/settings/`.
+ * ADR-072: секция «Безопасность» на коллекции `components/ui/settings/`.
  *
  * Три независимых блока: шлюз безопасности (llmGateway), паттерны обфускации
  * (llmGateway/patterns) и защищённые пути (security + protected-paths).

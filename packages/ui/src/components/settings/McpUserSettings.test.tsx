@@ -83,7 +83,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('McpUserSettings — пользовательская часть MCP (AD-071 §2.5)', () => {
+describe('McpUserSettings — пользовательская часть MCP (ADR-071 §2.5)', () => {
   it('показывает только собственные серверы (system и чужие скрыты)', async () => {
     const container = await renderSettings()
     expect(container.querySelector('[data-testid="mcp-user-mine"]')).not.toBeNull()

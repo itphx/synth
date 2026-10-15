@@ -1,5 +1,5 @@
 /**
- * AD-052/O1 × AD-089: админский user-API — guard «ADMIN или scope `users:read`»
+ * ADR-052/O1 × ADR-089: админский user-API — guard «ADMIN или scope `users:read`»
  * и `identities` профиля в деталях пользователя (snake_case).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -93,7 +93,7 @@ function makeProfile(): ProfileData {
   };
 }
 
-describe('backend user-API — scope users:read и identities (AD-052/O1)', () => {
+describe('backend user-API — scope users:read и identities (ADR-052/O1)', () => {
   let tmpDir: string;
   let store: FileProfileStore;
   let app: Hono;

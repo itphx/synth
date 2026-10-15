@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.3: нормализация usage и статистика prompt-cache.
+ * ADR-070 §2.3: нормализация usage и статистика prompt-cache.
  */
 import type { Currency, TokenUsage } from '@itphx/synth-shared';
 
@@ -44,7 +44,7 @@ export interface UsageCost {
 }
 
 /**
- * AD-070 §2.6: стоимость usage по ценам модели (`price / 1_000_000`).
+ * ADR-070 §2.6: стоимость usage по ценам модели (`price / 1_000_000`).
  * Возвращает `null`, если usage или цены не заданы — вызывающий решает,
  * писать ли `metadata.cost_usd`. Единый расчёт для сессии, сообщения и
  * агрегированной статистики. Стоимость считается в валюте `pricing.currency`
@@ -56,7 +56,7 @@ export function computeUsageCost(
 ): UsageCost | null {
   if (!usage || !pricing) return null;
   const { inputPrice, outputPrice, cacheReadPrice, cacheWritePrice } = pricing;
-  // AD-070 §2.6 (LOW): если ни одна цена не задана — стоимость неизвестна,
+  // ADR-070 §2.6 (LOW): если ни одна цена не задана — стоимость неизвестна,
   // а не «бесплатно». Возвращаем null, чтобы `metadata.cost_usd`/
   // `cost_breakdown` не писались (как для модели без записи цен).
   if (

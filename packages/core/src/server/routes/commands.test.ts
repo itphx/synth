@@ -49,7 +49,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('/api/v2/commands (AD-046 §9.1)', () => {
+describe('/api/v2/commands (ADR-046 §9.1)', () => {
   it('GET / — builtin-команды', async () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/commands');

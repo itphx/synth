@@ -54,7 +54,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('DashboardPanel — миграция на Settings UI Kit (AD-072)', () => {
+describe('DashboardPanel — миграция на Settings UI Kit (ADR-072)', () => {
   it('каркас — SettingsPanel: один скролл, без pr-2, сетка карточек с grid-cols-1', async () => {
     const container = await renderPanel()
 

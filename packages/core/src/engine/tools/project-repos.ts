@@ -25,7 +25,7 @@ import { resolveSshEnvById } from './git-ssh.js';
 import { t as sm, i18n as i18nMeta, type SystemMessageKey } from '../system-messages.js';
 
 /**
- * AD-076: тулы управления git-репозиториями проекта (clone/init/add/fetch/remove).
+ * ADR-076: тулы управления git-репозиториями проекта (clone/init/add/fetch/remove).
  * Проект и его workspace берутся из сессии — path-параметры проекта от агента не
  * принимаются; регистрация записи идёт в `project.repos` (ProjectStore.save).
  */
@@ -35,11 +35,11 @@ interface ProjectReposExtra {
   projectStore?: ProjectStoreContract;
   sessionId?: string;
   eventBus?: EventBus;
-  /** AD-075: корень managed-workspace для резолва относительного `workspace`. */
+  /** ADR-075: корень managed-workspace для резолва относительного `workspace`. */
   workspacesRoot?: string;
-  /** AD-076: git-сервис (containment + операции). */
+  /** ADR-076: git-сервис (containment + операции). */
   gitService?: GitService;
-  /** AD-076: хранилище SSH-ключей для сетевых операций. */
+  /** ADR-076: хранилище SSH-ключей для сетевых операций. */
   sshKeyStore?: SSHKeyStore;
 }
 

@@ -34,7 +34,7 @@ program
   .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
   .option('--safe-mode', 'безопасный режим: проектные инструкции не грузятся')
   .action(async (options) => {
-    // AD-079: единый home-каталог локального инстанса (config/data/profiles/credentials).
+    // ADR-079: единый home-каталог локального инстанса (config/data/profiles/credentials).
     const home = resolveHome(options.home);
     const overrides: Partial<SynthConfig> = {
       core: {
@@ -92,11 +92,11 @@ program
 
     const uiPath = options.ui || undefined;
 
-    // AD-069 §9.2: `--ignore-rules`/`--safe-mode` (или env SYNTH_IGNORE_RULES) —
+    // ADR-069 §9.2: `--ignore-rules`/`--safe-mode` (или env SYNTH_IGNORE_RULES) —
     // нейтральная сессия без проектных инструкций. Конфиг не мутируем.
     const ignoreRules = resolveIgnoreRules(!!(options.ignoreRules || options.safeMode), process.env);
 
-    // AD-079: credentials — явный --credentials > config > home-относительный;
+    // ADR-079: credentials — явный --credentials > config > home-относительный;
     // profiles — явный --profiles > home-относительный (иначе XDG-дефолт).
     const credentialsPath =
       options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
@@ -112,33 +112,33 @@ program
       permissionConfig: synth.permission,
       defaultPlanMode: synth.session?.planMode,
       securityConfig: synth.security,
-      // AD-076: мастер-ключ шифрования SSH-ключей (env > config > file в dataDir).
+      // ADR-076: мастер-ключ шифрования SSH-ключей (env > config > file в dataDir).
       secretKey: resolveSecretKey(synth, process.env),
       gatewayConfig: synth.llmGateway,
       llmCachePolicy: synth.llm.cache,
-      // AD-089: дефолтные provider/model инстанса — для сессий из внешних событий
+      // ADR-089: дефолтные provider/model инстанса — для сессий из внешних событий
       // (materialize ephemeral/bind), когда явная модель не задана.
       llmDefaults: { provider: synth.llm.defaultProvider, model: synth.llm.defaultModel },
       toolsPolicy: synth.tools.policy,
       mcpPolicy: synth.mcp?.policy,
       toolsDisabled: synth.tools.disabled,
-      // AD-075: политика для абсолютного workspace вне root (env > config > 'confirm').
+      // ADR-075: политика для абсолютного workspace вне root (env > config > 'confirm').
       workspaceOutsideRootPolicy: resolveWorkspaceOutsideRootPolicy(synth) || 'confirm',
       mcpServers: synth.mcp?.servers ?? {},
-      // AD-046: конфигурация скиллов (paths/trustedProjectDirs/inlineShell).
+      // ADR-046: конфигурация скиллов (paths/trustedProjectDirs/inlineShell).
       skillsConfig: synth.skills,
-      // AD-046 §7: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
+      // ADR-046 §7: конфигурация slash-команд (paths/bundlesPath/conflict/лимиты).
       commandsConfig: synth.commands,
-      // AD-069 Фаза 1: конфигурация проектных инструкций (AGENTS.md).
-      // AD-069 §9.2: ignore-rules/safe-mode → enabled=false (без мутации конфига).
+      // ADR-069 Фаза 1: конфигурация проектных инструкций (AGENTS.md).
+      // ADR-069 §9.2: ignore-rules/safe-mode → enabled=false (без мутации конфига).
       instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
-      // AD-089: конфигурация приёма внешних событий (allowedSources/ephemeralTtl).
+      // ADR-089: конфигурация приёма внешних событий (allowedSources/ephemeralTtl).
       eventsConfig: synth.events,
-      // AD-051 (срез) / AD-089: конфигурация планировщика (enabled/tickSec).
+      // ADR-051 (срез) / ADR-089: конфигурация планировщика (enabled/tickSec).
       schedulerConfig: synth.scheduler,
-      // AD-084: конфигурация decision-слоя микро-каскада.
+      // ADR-084: конфигурация decision-слоя микро-каскада.
       decisionConfig: synth.decision,
-      // AD-052 (этап II): конфигурация исходящих webhooks (enabled/retry/SSRF).
+      // ADR-052 (этап II): конфигурация исходящих webhooks (enabled/retry/SSRF).
       webhooksConfig: synth.webhooks,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
@@ -170,17 +170,17 @@ program
       await appHandle.disconnectRemote?.().catch(() => {});
       appHandle.remoteEventBridge?.stop();
 
-      // AD-089: остановить авто-архивацию ephemeral-сессий.
+      // ADR-089: остановить авто-архивацию ephemeral-сессий.
       appHandle.stopEphemeralSweeper?.();
 
-      // AD-089: остановить retention-очистку журнала событий.
+      // ADR-089: остановить retention-очистку журнала событий.
       appHandle.stopEventJournalPruner?.();
 
-      // AD-052 (этап II): остановить движок webhooks и retention-очистку доставок.
+      // ADR-052 (этап II): остановить движок webhooks и retention-очистку доставок.
       appHandle.stopWebhookService?.();
       appHandle.stopWebhookDeliveryPruner?.();
 
-      // AD-051 (срез): остановить планировщик расписаний.
+      // ADR-051 (срез): остановить планировщик расписаний.
       appHandle.stopScheduler?.();
 
       server.close((err: Error | undefined) => {
@@ -481,7 +481,7 @@ program
       agent: options.agent,
       dataDir,
       config: synth,
-      // AD-069 §9.2: ignore-rules/safe-mode → instructions.enabled=false.
+      // ADR-069 §9.2: ignore-rules/safe-mode → instructions.enabled=false.
       instructionsConfig: resolveIgnoreRules(!!(options.ignoreRules || options.safeMode), process.env)
         ? { ...synth.instructions, enabled: false }
         : synth.instructions,
@@ -611,7 +611,7 @@ async function startRepl(options: Record<string, unknown>) {
       agent: options.agent as string,
       dataDir,
       config: synth,
-      // AD-069 §9.2: флаги chat пробрасываются и в интерактивный REPL.
+      // ADR-069 §9.2: флаги chat пробрасываются и в интерактивный REPL.
       instructionsConfig: resolveIgnoreRules(
         !!(options.ignoreRules ?? options['ignore-rules'] ?? options.safeMode ?? options['safe-mode']),
         process.env,
@@ -924,7 +924,7 @@ program
 
 program
   .command('audit')
-  .description('Просмотр аудита LLM Gateway (AD-036)')
+  .description('Просмотр аудита LLM Gateway (ADR-036)')
   .option('--tail <n>', 'количество последних записей (по умолчанию 20)')
   .option('--userId <id>', 'фильтр по пользователю')
   .option('--sessionId <id>', 'фильтр по сессии')
@@ -982,7 +982,7 @@ program
 
 program
   .command('secrets')
-  .description('Управление секретами шифрования (AD-076)')
+  .description('Управление секретами шифрования (ADR-076)')
   .addCommand(
     new Command('rotate')
       .description('Перешифровать SSH-ключи новым мастер-ключом (one-shot)')

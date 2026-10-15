@@ -126,7 +126,7 @@ const entry3 = {
   reason: 'Запрос заблокирован',
 };
 
-describe('Audit API Routes (AD-036)', () => {
+describe('Audit API Routes (ADR-036)', () => {
   let tmpDir: string;
   let auditLogPath: string;
 

@@ -13,7 +13,7 @@ import {
   removeProfile,
 } from './profiles.js';
 
-describe('getProfilesPath (AD-079)', () => {
+describe('getProfilesPath (ADR-079)', () => {
   it('с home → <home>/profiles.json', () => {
     expect(getProfilesPath('/tmp/synth-home')).toBe(join('/tmp/synth-home', 'profiles.json'));
   });

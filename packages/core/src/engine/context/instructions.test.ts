@@ -1,5 +1,5 @@
 /**
- * AD-069 Фаза 1: тесты резолвера проектных инструкций — discovery/приоритеты,
+ * ADR-069 Фаза 1: тесты резолвера проектных инструкций — discovery/приоритеты,
  * merged chain, дедуп, provenance, обрезка/кап, threat-scan, отключение,
  * excludeProjects и отсутствие git.
  */
@@ -74,7 +74,7 @@ function makeResponse(body: string, status = 200): Response {
   return new Response(body, { status });
 }
 
-describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
+describe('ProjectInstructionsResolver (ADR-069 Фаза 1)', () => {
   let base: string;
 
   beforeEach(async () => {
@@ -100,7 +100,7 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
       config,
       dictionaryStore: dict,
       runGitFn: gitAt(base),
-      // AD-069 §3.5: project-trust гейт — по умолчанию доверяем temp-каталогу.
+      // ADR-069 §3.5: project-trust гейт — по умолчанию доверяем temp-каталогу.
       trustedProjectDirs: [base],
       dataDir: base,
       // Домашний каталог изолирован от реального HOME/TMPDIR: иначе при TMPDIR
@@ -326,7 +326,7 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
     expect(result.content).not.toContain('PARENT');
   });
 
-  // --- AD-069 Фаза 2a: config.sources ---
+  // --- ADR-069 Фаза 2a: config.sources ---
 
   it('sources: порядок before → chain → after, provenance с label и путём', async () => {
     await write('AGENTS.md', 'CHAIN');
@@ -401,7 +401,7 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
     expect(result.diagnostics.some((d) => d.status === 'skipped' && d.reason === 'not-found' && d.kind === 'path')).toBe(true);
   });
 
-  // --- AD-069 Фаза 2a: URL + TTL-кэш ---
+  // --- ADR-069 Фаза 2a: URL + TTL-кэш ---
 
   it('sources: url — fetch, TTL-кэш, refetch после TTL, fallback на кэш при ошибке сети', async () => {
     const dataDir = join(base, 'url-cache');
@@ -511,7 +511,7 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
     expect(calls).toBe(2);
   });
 
-  // --- AD-069 Фаза 2a: trust / install-tree / exclude ---
+  // --- ADR-069 Фаза 2a: trust / install-tree / exclude ---
 
   it('trust: недоверенный проект не грузится, после добавления в trustedProjectDirs — грузится', async () => {
     await write('AGENTS.md', 'SECRET-RULES');
@@ -581,7 +581,7 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
     expect(result.diagnostics[0]).toMatchObject({ status: 'excluded', reason: 'excludeProjects' });
   });
 
-  // --- AD-069 §3.5/R5: результатный кэш по подписи ---
+  // --- ADR-069 §3.5/R5: результатный кэш по подписи ---
 
   it('результатный кэш: повторный resolve без изменений возвращает тот же объект', async () => {
     await write('AGENTS.md', 'CACHE-V1');
@@ -653,7 +653,7 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
   });
 });
 
-describe('resolveInstructionsTrusted (AD-069 R1/R3)', () => {
+describe('resolveInstructionsTrusted (ADR-069 R1/R3)', () => {
   it('explicit trustedProjectDirs ИЛИ containment в workspacesRoot; иначе false', () => {
     const root = join(tmpdir(), 'synth-ws-root');
     // Явный trustedProjectDirs.
@@ -684,7 +684,7 @@ describe('resolveInstructionsTrusted (AD-069 R1/R3)', () => {
   });
 });
 
-describe('resolveInstructionsCap (AD-069 §5.1)', () => {
+describe('resolveInstructionsCap (ADR-069 §5.1)', () => {
   it('maxChars override перебивает расчёт от окна', () => {
     expect(resolveInstructionsCap(makeConfig({ maxChars: 40_000 }), 1_000_000)).toBe(40_000);
   });
@@ -732,7 +732,7 @@ describe('waterFillAllocate / truncateHeadTail', () => {
     expect(truncated).toBe(false);
   });
 
-  it('buildProvenanceHeader: размер, признак обрезки и label (AD-069 §3.4)', () => {
+  it('buildProvenanceHeader: размер, признак обрезки и label (ADR-069 §3.4)', () => {
     expect(buildProvenanceHeader('./AGENTS.md', 1234, false)).toBe('--- from ./AGENTS.md (1234 chars) ---');
     expect(buildProvenanceHeader('./AGENTS.md', 50, true)).toBe('--- from ./AGENTS.md (50 chars, truncated) ---');
     expect(buildProvenanceHeader('./extra.md', 6, false, 'pre')).toBe('--- from pre (./extra.md) (6 chars) ---');

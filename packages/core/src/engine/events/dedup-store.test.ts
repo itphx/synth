@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { FileDedupStore, MemoryDedupStore } from './dedup-store.js';
 import type { DedupStore } from './dedup-store.js';
 
-describe('MemoryDedupStore (AD-051/AD-089)', () => {
+describe('MemoryDedupStore (ADR-051/ADR-089)', () => {
   it('первый claim true, повторный — false', async () => {
     const store = new MemoryDedupStore();
     expect(await store.tryClaim('k1')).toBe(true);
@@ -23,7 +23,7 @@ describe('MemoryDedupStore (AD-051/AD-089)', () => {
   });
 });
 
-describe('FileDedupStore (AD-051/AD-089)', () => {
+describe('FileDedupStore (ADR-051/ADR-089)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

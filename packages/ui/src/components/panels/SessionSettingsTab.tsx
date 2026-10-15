@@ -147,7 +147,7 @@ function formValuesFromSettings(
     embeddingEnabled: (s.embeddingEnabled as boolean | undefined) ?? false,
     embedProvider: (s.embedProvider as string | undefined) ?? '',
     embedModel: (s.embedModel as string | undefined) ?? '',
-    // AD-084: opt-out — `false` принудительно отключает decision-уровень сессии;
+    // ADR-084: opt-out — `false` принудительно отключает decision-уровень сессии;
     // отсутствие значения наследует глобальный `decision.enabled`.
     decisionFirst: (s.decisionFirst as boolean | undefined) ?? true,
     askTimeoutEnabled: permCfg?.askTimeoutMs !== 0,
@@ -197,7 +197,7 @@ function buildSettingsBody(
   // чтобы пустой объект не «просачивался» через `...session.settings`.
   const restSettings = { ...session.settings }
   delete restSettings.permission
-  // AD-084: `decisionFirst` пишем только при явном opt-out; отсутствие ключа
+  // ADR-084: `decisionFirst` пишем только при явном opt-out; отсутствие ключа
   // наследует глобальный `decision.enabled` (иначе любой автосейв отключал бы
   // decision-уровень для всех сессий).
   delete restSettings.decisionFirst
@@ -237,9 +237,9 @@ function buildSettingsBody(
     embeddingEnabled: values.embeddingEnabled,
     embedProvider: values.embedProvider,
     embedModel: values.embedModel,
-    // AD-084: opt-out decision-уровня — `false` только при явном выключении.
+    // ADR-084: opt-out decision-уровня — `false` только при явном выключении.
     ...(values.decisionFirst ? {} : { decisionFirst: false }),
-    // AD-071 §2.3: '' → undefined (сессия следует глобальной политике).
+    // ADR-071 §2.3: '' → undefined (сессия следует глобальной политике).
     toolsPolicy: values.toolsPolicy || undefined,
     mcpPolicy: values.mcpPolicy || undefined,
     ...(permissionSettings ? { permission: permissionSettings } : {}),
@@ -268,18 +268,18 @@ export function SessionSettingsTab() {
   const [mcpEffective, setMcpEffective] = useState<McpServerEffective[]>([])
   const [mcpLoading, setMcpLoading] = useState(false)
 
-  // AD-046 §4.5: per-session скиллы (вкл/выкл), аналог MCP-скоупа
+  // ADR-046 §4.5: per-session скиллы (вкл/выкл), аналог MCP-скоупа
   const [sessionSkills, setSessionSkills] = useState<EffectiveSkillEntry[]>([])
   const [skillsLoading, setSkillsLoading] = useState(false)
 
-  // AD-071 §2.3: per-session override политики инструментов ('' = следовать глобальной)
+  // ADR-071 §2.3: per-session override политики инструментов ('' = следовать глобальной)
   const [toolsPolicy, setToolsPolicy] = useState<ToolsPolicy | ''>('')
   const [mcpPolicy, setMcpPolicy] = useState<ToolsPolicy | ''>('')
   // Актуальные глобальные политики — для метки наследования «Глобальная (<политика>)».
   const [globalToolsPolicy, setGlobalToolsPolicy] = useState<ToolsPolicy | null>(null)
   const [globalMcpPolicy, setGlobalMcpPolicy] = useState<ToolsPolicy | null>(null)
 
-  // Роутинг (AD-034)
+  // Роутинг (ADR-034)
   const [routingEnabled, setRoutingEnabled] = useState(false)
   const [routingStrategy, setRoutingStrategy] = useState<'auto' | 'content' | 'cost' | 'content+cost'>('auto')
   // Контентная
@@ -311,7 +311,7 @@ export function SessionSettingsTab() {
   const [embeddingEnabled, setEmbeddingEnabled] = useState(false)
   const [embedProvider, setEmbedProvider] = useState('')
   const [embedModel, setEmbedModel] = useState('')
-  // AD-084: decision-уровень в микро-каскаде (opt-out; true по умолчанию — по глобальной настройке)
+  // ADR-084: decision-уровень в микро-каскаде (opt-out; true по умолчанию — по глобальной настройке)
   const [decisionFirst, setDecisionFirst] = useState(true)
   // Таймаут подтверждения (сек)
   const [askTimeoutSec, setAskTimeoutSec] = useState<string>('')
@@ -634,7 +634,7 @@ export function SessionSettingsTab() {
     setHydrated({ id: session.id, defaultMs: defaultAskTimeoutMs })
   }, [session, defaultAskTimeoutMs, setSelectedProvider, setSelectedModel, applyFormValues])
 
-  // Сессионные одобрения (AD-029): allow-правила, добавленные при «Разрешить в сессии».
+  // Сессионные одобрения (ADR-029): allow-правила, добавленные при «Разрешить в сессии».
   // Правило может быть строкой ('allow' — весь тул) или объектом { путь: 'allow' }
   // (конкретный путь). Панель показывает «тул: путь» для объектных правил.
   const sessionPermission = session?.settings.permission as { rules?: Record<string, string | Record<string, string>>; askTimeoutMs?: number } | undefined
@@ -650,7 +650,7 @@ export function SessionSettingsTab() {
       })
     : []
 
-  /** AD-071 §2.4: точечный toggle MCP-сервера в сессии (в т.ч. opt-out системного). */
+  /** ADR-071 §2.4: точечный toggle MCP-сервера в сессии (в т.ч. opt-out системного). */
   const handleToggleMcp = async (server: McpServerEffective) => {
     if (!sessionId) return
     const key = `mcp:${server.name}`
@@ -675,7 +675,7 @@ export function SessionSettingsTab() {
     })
   }
 
-  /** AD-046 §4.5: точечный toggle скилла в сессии (`{ name, enabled }`). */
+  /** ADR-046 §4.5: точечный toggle скилла в сессии (`{ name, enabled }`). */
   const handleToggleSkill = async (skill: EffectiveSkillEntry) => {
     if (!sessionId) return
     const key = `skill:${skill.name}`
@@ -721,7 +721,7 @@ export function SessionSettingsTab() {
     })
   }
 
-  /** AD-071 §2.3: метка наследования — «Глобальная (<короткое имя>)», фоллбек — «Глобальная». */
+  /** ADR-071 §2.3: метка наследования — «Глобальная (<короткое имя>)», фоллбек — «Глобальная». */
   const inheritLabel = (prefix: 'toolsPolicy' | 'mcpPolicy', value: ToolsPolicy | null) =>
     value
       ? t(`${prefix}.inherit`, { policy: t(`policy.short.${value}`) })
@@ -776,7 +776,7 @@ export function SessionSettingsTab() {
           <SessionTodosBlock todos={session.todos} />
         </Section>
 
-        {/* AD-069 §9.3: прозрачность проектных инструкций (AGENTS.md chain/sources) */}
+        {/* ADR-069 §9.3: прозрачность проектных инструкций (AGENTS.md chain/sources) */}
         <Section title={t('sessionTab.instructions.title')}>
           <ProjectInstructions sessionId={session.id} />
         </Section>
@@ -818,7 +818,7 @@ export function SessionSettingsTab() {
           )}
         </Section>
 
-        {/* Сессионные одобрения (AD-029) */}
+        {/* Сессионные одобрения (ADR-029) */}
         <Section title={t('sessionSettings.allow.title')}>
           {sessionAllowRules.length === 0 ? (
             <div className="rounded-lg border border-border bg-surface-inset px-3 py-2">
@@ -913,7 +913,7 @@ export function SessionSettingsTab() {
           </Section>
         )}
 
-        {/* Decision-уровень (AD-084) */}
+        {/* Decision-уровень (ADR-084) */}
         {microFirst && (
           <Section title={t('sessionSettings.micro.decision')}>
             <div className="text-[0.625rem] text-muted-foreground/60">
@@ -1234,7 +1234,7 @@ export function SessionSettingsTab() {
           </Section>
         )}
 
-        {/* AD-071 §2.3: политики включения инструментов (per-session override) */}
+        {/* ADR-071 §2.3: политики включения инструментов (per-session override) */}
         <Section title={t('toolsPolicy.title')}>
           <div className="flex flex-col gap-1">
             <SelectField

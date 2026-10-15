@@ -133,7 +133,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('ProjectTab — проектный MCP-скоуп (AD-071 §2.4)', () => {
+describe('ProjectTab — проектный MCP-скоуп (ADR-071 §2.4)', () => {
   it('owner видит управление; системный сервер тоже управляется проектом', async () => {
     const container = await renderTab()
     expect(container.querySelector('[data-testid="project-mcp-list"]')).not.toBeNull()
@@ -229,7 +229,7 @@ const clickEl = async (el: Element | null | undefined) => {
 const apiError = (status: number, code: string, message = 'error'): Error =>
   Object.assign(new Error(message), { status, code })
 
-describe('ProjectTab — рабочий каталог (AD-075)', () => {
+describe('ProjectTab — рабочий каталог (ADR-075)', () => {
   it('сохраняет введённый путь через PUT /projects/:id', async () => {
     const container = await renderTab()
     const input = container.querySelector('[data-testid="project-workspace-input"]') as HTMLInputElement

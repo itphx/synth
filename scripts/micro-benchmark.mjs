@@ -1,5 +1,5 @@
 /**
- * Micro-benchmark для микро-слоя AD-035 (RulesModel + TaskClassifier).
+ * Micro-benchmark для микро-слоя ADR-035 (RulesModel + TaskClassifier).
  *
  * Запуск: npx tsx scripts/micro-benchmark.mjs
  *

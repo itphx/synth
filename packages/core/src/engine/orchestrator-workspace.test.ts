@@ -1,5 +1,5 @@
 /**
- * AD-075: workspace-гейт file/shell/git-тулов и мид-ходовая разблокировка.
+ * ADR-075: workspace-гейт file/shell/git-тулов и мид-ходовая разблокировка.
  *
  * Сценарий: сессия без проекта (или проект без workspace) → file-тул deny
  * (`workspace.unavailable`); после успешного `project_create`/`project_workspace_set`
@@ -95,7 +95,7 @@ function makeUserMessage(content = 'выполни задачу'): Message {
   };
 }
 
-describe('ChatOrchestrator — workspace-гейт и мид-ходовая разблокировка (AD-075)', () => {
+describe('ChatOrchestrator — workspace-гейт и мид-ходовая разблокировка (ADR-075)', () => {
   let tmpDir: string;
   let workspacesRoot: string;
   let defaultWorkingDir: string;

@@ -1,5 +1,5 @@
 /**
- * Тесты интеграции ProviderPool × LLM Gateway (AD-036):
+ * Тесты интеграции ProviderPool × LLM Gateway (ADR-036):
  * провайдер оборачивается GatewayProvider когда gateway включён,
  * и не оборачивается когда выключен/не задана фабрика.
  */
@@ -68,7 +68,7 @@ function makeLoader(): (name: string) => import('@itphx/synth-shared').ProviderC
   };
 }
 
-/** AD-084: decision-провайдер-мок для проверки безусловной обвязки. */
+/** ADR-084: decision-провайдер-мок для проверки безусловной обвязки. */
 class MockDecisionProvider extends BaseProvider {
   async chat(): Promise<import('@itphx/synth-shared').LLMResponse> {
     throw new Error('not chat');
@@ -100,7 +100,7 @@ function makeDecisionLoader(): (name: string) => import('@itphx/synth-shared').P
   };
 }
 
-describe('ProviderPool × LLM Gateway (AD-036)', () => {
+describe('ProviderPool × LLM Gateway (ADR-036)', () => {
   beforeEach(() => {
     ProviderFactory.register('mockpool', MockPoolProvider);
     ProviderFactory.register('decision-mock', MockDecisionProvider);
@@ -224,7 +224,7 @@ describe('ProviderPool × LLM Gateway (AD-036)', () => {
     expect(provider).toBeInstanceOf(MockPoolProvider);
   });
 
-  it('AD-084: getDecisionProvider оборачивает в GatewayProvider даже при gateway disabled', () => {
+  it('ADR-084: getDecisionProvider оборачивает в GatewayProvider даже при gateway disabled', () => {
     const pool = new ProviderPool(makeDecisionLoader(), makeGatewayConfig({ enabled: false }));
     pool.setDecisionGatewayFactory((inner) => new GatewayProvider(inner, makeGatewayConfig({ enabled: false }), {
       getMap: async () => ({}),
@@ -240,7 +240,7 @@ describe('ProviderPool × LLM Gateway (AD-036)', () => {
     expect(provider).toBeInstanceOf(GatewayProvider);
   });
 
-  it('AD-084: decision-кеш отделён от chat-кеша и переиспользует обёрнутый экземпляр', () => {
+  it('ADR-084: decision-кеш отделён от chat-кеша и переиспользует обёрнутый экземпляр', () => {
     const pool = new ProviderPool(makeDecisionLoader(), makeGatewayConfig({ enabled: false }));
     pool.setDecisionGatewayFactory((inner) => new GatewayProvider(inner, makeGatewayConfig({ enabled: false }), {
       getMap: async () => ({}),
@@ -257,7 +257,7 @@ describe('ProviderPool × LLM Gateway (AD-036)', () => {
     expect(first).toBeInstanceOf(GatewayProvider);
   });
 
-  it('AD-084: без decision-фабрики провайдер создаётся без обвязки', () => {
+  it('ADR-084: без decision-фабрики провайдер создаётся без обвязки', () => {
     const pool = new ProviderPool(makeDecisionLoader());
     const provider = pool.getDecisionProvider('decision-mock', 'clef-flash');
     expect(provider).toBeInstanceOf(MockDecisionProvider);

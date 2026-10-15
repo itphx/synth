@@ -5,7 +5,7 @@ import { PermissionEvaluator } from './evaluator.js';
 import type { PermissionConfig, SessionMode, PlanMode } from '@itphx/synth-shared';
 
 /**
- * AD-075/AD-029 (fail-closed): путь ВНЕ рабочего каталога проекта не должен
+ * ADR-075/ADR-029 (fail-closed): путь ВНЕ рабочего каталога проекта не должен
  * молча разрешаться. Абсолютные пути и разворачивание `~`/`$HOME`/`$PWD`
  * (resolvePath) подпадают под `permission.rules.external_directory`; при
  * отсутствии явного правила дефолт — `ask` (требуется подтверждение), в

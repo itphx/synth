@@ -105,7 +105,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('SshKeysSettings — CRUD SSH-ключей (AD-076)', () => {
+describe('SshKeysSettings — CRUD SSH-ключей (ADR-076)', () => {
   it('создание шлёт name/privateKey/agentIds через createSshKey', async () => {
     const container = await renderSettings()
 

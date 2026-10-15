@@ -34,7 +34,7 @@ const ALIGN_CLASSES: Record<SettingsActionsAlign, string> = {
 }
 
 /**
- * AD-072: единый ряд действий формы настроек.
+ * ADR-072: единый ряд действий формы настроек.
  *
  * Порядок визуально: `Reset` (слева) — `Save` — `Cancel`.
  * `mr-auto` на Reset отделяет его от основных действий.

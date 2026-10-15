@@ -36,7 +36,7 @@ interface SerializedMessage {
   disabled: boolean;
   pinned: boolean;
   hidden: boolean;
-  /** AD-046 §7.1: локальные `/`-команды — вне LLM-контекста. */
+  /** ADR-046 §7.1: локальные `/`-команды — вне LLM-контекста. */
   ephemeral?: boolean;
   debug_data?: Record<string, unknown>;
   model?: string;
@@ -48,7 +48,7 @@ interface SerializedMessage {
   author?: string;
   agent_role?: string;
   metadata?: Record<string, unknown>;
-  /** AD-070 §2.4: предсказание/валидация prompt-cache (camelCase внутри). */
+  /** ADR-070 §2.4: предсказание/валидация prompt-cache (camelCase внутри). */
   prompt_meta?: PromptMeta;
   summary_of?: number[];
 }
@@ -71,9 +71,9 @@ interface SerializedSession {
   plan_approved?: boolean;
   mode?: string;
   todos?: unknown[];
-  /** AD-070 §2.4/§2.7: состояние промпта per-agent. */
+  /** ADR-070 §2.4/§2.7: состояние промпта per-agent. */
   prompt_states?: Record<string, PromptState>;
-  /** Карта обфускации LLM Gateway (AD-036). */
+  /** Карта обфускации LLM Gateway (ADR-036). */
   obfuscation_map?: Record<string, string>;
   session_origin?: string;
   user_id?: string;
@@ -98,9 +98,9 @@ interface SerializedSession {
   cache_hit_rate?: number;
   created_at: string;
   updated_at: string;
-  /** AD-089: время авто-архивации ephemeral-сессии. */
+  /** ADR-089: время авто-архивации ephemeral-сессии. */
   expires_at?: string;
-  /** AD-089: время архивации сессии. */
+  /** ADR-089: время архивации сессии. */
   archived_at?: string;
   input_tokens: number;
   output_tokens: number;
@@ -511,7 +511,7 @@ export class FileStore {
   }
 
   /**
-   * AD-089: сессии владельца ИЛИ любого из его проектов (командная видимость).
+   * ADR-089: сессии владельца ИЛИ любого из его проектов (командная видимость).
    * `projectIds` — проекты, участником которых является пользователь; пустой
    * список эквивалентен `listForUser` (только свои сессии).
    */

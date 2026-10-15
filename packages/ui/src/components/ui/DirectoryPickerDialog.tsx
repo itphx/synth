@@ -19,7 +19,7 @@ export interface DirectoryPickerDialogProps {
   includeHiddenDefault?: boolean
 }
 
-/** Ошибка от `fetchJSON` несёт HTTP-статус и (AD-075) серверный `code`. */
+/** Ошибка от `fetchJSON` несёт HTTP-статус и (ADR-075) серверный `code`. */
 type ApiError = { status?: number; code?: string }
 
 type NavErrorKey = 'workspace.error.denied' | 'workspace.loadError'
@@ -79,7 +79,7 @@ function isEntryDenied(entry: FileEntry): boolean {
 }
 
 /**
- * AD-075: модальный диалог выбора/создания каталога против корня workspace
+ * ADR-075: модальный диалог выбора/создания каталога против корня workspace
  * (`/fs/workspace-root*`). Источник данных — `synthApi` (работает и для managed
  * backend, и для standalone core). Подтверждение создания вне root — ConfirmDialog.
  */
@@ -104,7 +104,7 @@ export function DirectoryPickerDialog({
   const [pendingCreate, setPendingCreate] = useState<string | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [selectConfirmOpen, setSelectConfirmOpen] = useState(false)
-  // AD-075: выход за `workspacesRoot` разрешён только по политике `confirm` и не в read-only.
+  // ADR-075: выход за `workspacesRoot` разрешён только по политике `confirm` и не в read-only.
   const [outsideRoot, setOutsideRoot] = useState<WorkspaceOutsideRootPolicy>('deny')
   const [policyReadOnly, setPolicyReadOnly] = useState(false)
 

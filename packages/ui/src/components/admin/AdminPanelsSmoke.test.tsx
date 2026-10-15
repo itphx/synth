@@ -125,7 +125,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('AD-072: админ-панели рендерятся на SettingsPanel', () => {
+describe('ADR-072: админ-панели рендерятся на SettingsPanel', () => {
   for (const [name, Panel] of PANELS) {
     it(`${name} монтируется и содержит scroll-тело без pr-2`, async () => {
       const container = await renderPanel(Panel)

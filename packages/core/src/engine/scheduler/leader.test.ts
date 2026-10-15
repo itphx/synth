@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AlwaysLeader, FileLeader } from './leader.js';
 
-describe('AlwaysLeader (AD-051)', () => {
+describe('AlwaysLeader (ADR-051)', () => {
   it('всегда лидер, touch/release — no-op', async () => {
     const leader = new AlwaysLeader();
     expect(await leader.acquire()).toBe(true);
@@ -13,7 +13,7 @@ describe('AlwaysLeader (AD-051)', () => {
   });
 });
 
-describe('FileLeader (AD-051/AD-089)', () => {
+describe('FileLeader (ADR-051/ADR-089)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

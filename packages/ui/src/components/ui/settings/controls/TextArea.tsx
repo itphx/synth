@@ -9,13 +9,13 @@ export interface TextAreaProps extends React.TextareaHTMLAttributes<HTMLTextArea
   description?: string
   error?: string
   mono?: boolean
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   /** Дополнительные классы контейнера `SettingsField`. */
   containerClassName?: string
 }
 
-/** AD-072: управляемая многострочная область в стиле панели настроек. */
+/** ADR-072: управляемая многострочная область в стиле панели настроек. */
 export function TextArea({
   label,
   description,

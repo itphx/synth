@@ -18,14 +18,14 @@ import type { EventRouter } from './event-router.js';
 import type { EventDelivery, EventDeliveryContext } from './types.js';
 import { resolveEffectiveRoles } from './identity-roles.js';
 
-/** AD-089: runtime-контекст явного создания сессии (не поля события). */
+/** ADR-089: runtime-контекст явного создания сессии (не поля события). */
 export interface RequestSessionOptions {
   userId?: string;
   ownerId?: string;
 }
 
 /**
- * AD-089: дефолтные `provider`/`model` инстанса для сессий, материализуемых
+ * ADR-089: дефолтные `provider`/`model` инстанса для сессий, материализуемых
  * funnel'ом. Источник задаёт потребитель (`deps.resolveLlmDefaults`): standalone
  * core — `llm.defaultProvider`/`llm.defaultModel`; managed backend — свой.
  * Пустые поля трактуются как «не задано».
@@ -36,7 +36,7 @@ export interface LlmDefaults {
 }
 
 /**
- * AD-089 (claim-flow): короткий одноразовый код подтверждения владения внешней
+ * ADR-089 (claim-flow): короткий одноразовый код подтверждения владения внешней
  * идентичностью. Возвращается ingest'ом наверх (`POST /api/v2/events` →
  * `identityHint`) и доставляется отправителю чата.
  */
@@ -51,7 +51,7 @@ export interface RequestSessionServiceDeps {
   sessionManager: SessionManager;
   eventRouter: EventRouter;
   /**
-   * AD-089 (auto-bind): реестр привязок — материализация решения `kind: 'bind'`
+   * ADR-089 (auto-bind): реестр привязок — материализация решения `kind: 'bind'`
    * создаёт/переиспользует `EventBinding` (`mode='bound'`).
    */
   bindingStore: EventBindingStore;
@@ -59,19 +59,19 @@ export interface RequestSessionServiceDeps {
   config: { defaultEphemeralTtl: string; unknownAgentTemplate?: 'drop' | 'default-agent' };
   deliver: EventDelivery;
   /**
-   * AD-089: резолвер `agentTemplate` → id существующего enabled-агента
+   * ADR-089: резолвер `agentTemplate` → id существующего enabled-агента
    * (`AgentRegistry`). Возвращает `null`, если шаблон неизвестен. Отсутствие
    * резолвера — шаблон принимается как есть (прежнее поведение).
    */
   resolveAgentTemplate?: (template: string) => string | null;
   /**
-   * AD-089: публикация UI-события после успешной материализации внешнего
+   * ADR-089: публикация UI-события после успешной материализации внешнего
    * события. Вызывается только при наличии сессии; `app.ts` прокидывает
    * `eventBus.publish`.
    */
   publish?: (type: EventType, sessionId: string, data: Record<string, unknown>) => void;
   /**
-   * AD-089: резолвер владельца сессий, материализуемых внешним событием
+   * ADR-089: резолвер владельца сессий, материализуемых внешним событием
    * (`ephemeral`/`bind`). Нужен, чтобы такие сессии не выпадали из
    * `listSessions({ userId })` и UI-списка. Standalone core передаёт `local`
    * (паритет с `POST /api/v2/sessions`); managed backend — не задаёт, владелец
@@ -80,7 +80,7 @@ export interface RequestSessionServiceDeps {
    */
   resolveOwnerId?: () => string | Promise<string | undefined>;
   /**
-   * AD-089: резолвер дефолтных `provider`/`model` инстанса для сессий,
+   * ADR-089: резолвер дефолтных `provider`/`model` инстанса для сессий,
    * материализуемых funnel'ом (explicit/`ephemeral`/`bind`). Нужен, чтобы
    * сессия из внешнего события (напр. Telegram-шлюз) получала те же дефолты,
    * что и сессия без явной модели, и агент мог ответить. Явно заданные в
@@ -90,7 +90,7 @@ export interface RequestSessionServiceDeps {
    */
   resolveLlmDefaults?: () => LlmDefaults | Promise<LlmDefaults>;
   /**
-   * AD-089: резолвер агента по умолчанию инстанса (`DEFAULT_AGENT_ID` либо
+   * ADR-089: резолвер агента по умолчанию инстанса (`DEFAULT_AGENT_ID` либо
    * runtime-настройка «Агенты»). Применяется при материализации сессий
    * `ephemeral`/`bind`, когда шаблон события (`decision.agentTemplate`) пуст или
    * не резолвится. Без этого сессия из внешнего события создавалась без
@@ -102,7 +102,7 @@ export interface RequestSessionServiceDeps {
    */
   resolveDefaultAgent?: () => string | Promise<string>;
   /**
-   * AD-089: резолвинг внешнего отправителя (`identity.principalId`) в пользователя
+   * ADR-089: резолвинг внешнего отправителя (`identity.principalId`) в пользователя
    * инстанса (id + отображаемое имя). Источник: профиль (`identities`) →
    * override `identityMap`. Применяется при материализации сессий
    * `ephemeral`/`bind`; приоритет выше `identityMap` и per-event владельца —
@@ -114,14 +114,14 @@ export interface RequestSessionServiceDeps {
     identity: EventIdentity,
   ) => { userId: string; displayName?: string; roles?: string[] } | null | Promise<{ userId: string; displayName?: string; roles?: string[] } | null>;
   /**
-   * AD-089: маппинг идентичности внешнего отправителя (`identity.principalId` или
+   * ADR-089: маппинг идентичности внешнего отправителя (`identity.principalId` или
    * `identity.chatKey`) на владельца синт-сессии (id пользователя
    * инстанса). Применяется при материализации сессий `ephemeral`/`bind`;
    * приоритет выше per-event владельца. Не задан/пусто — прежняя логика.
    */
   identityMap?: Record<string, string>;
   /**
-   * AD-089: колбэк после создания/материализации сессии (explicit/`ephemeral`/
+   * ADR-089: колбэк после создания/материализации сессии (explicit/`ephemeral`/
    * `bind`), но **до** доставки события в неё. Backend связывает его с
    * `EventHub.subscribeToSession(ownerId, sessionId)`, чтобы клиенты владельца,
    * подключённые до создания сессии, получали её события (иначе сессии,
@@ -129,7 +129,7 @@ export interface RequestSessionServiceDeps {
    */
   onSessionMaterialized?: (session: Session) => void | Promise<void>;
   /**
-   * AD-089 (claim-flow): выпуск одноразового claim-кода, когда отправитель
+   * ADR-089 (claim-flow): выпуск одноразового claim-кода, когда отправитель
    * события не сопознан с пользователем инстанса (`resolveExternalIdentity`
    * вернул `null`) и у него задан `identity.principalId`. Инъекция: стор
    * (`IdentityClaimStore`) передаётся потребителем (app.ts), funnel жёстко его не
@@ -141,7 +141,7 @@ export interface RequestSessionServiceDeps {
 }
 
 /**
- * AD-089: извлекает текст сообщения из нормализованного события. Если `payload` —
+ * ADR-089: извлекает текст сообщения из нормализованного события. Если `payload` —
  * объект с непустым строковым `text`, возвращает его; иначе сериализует payload
  * (`JSON.stringify` с fallback на пустую строку). Экспортируется для тестов и
  * инъектируемого `deliver`.
@@ -157,7 +157,7 @@ export function eventToMessageText(event: SynthEvent): string {
 }
 
 /**
- * AD-089: человекочитаемое имя отправителя внешнего события из `payload.from`
+ * ADR-089: человекочитаемое имя отправителя внешнего события из `payload.from`
  * (без обращения к профилю): `username` → `@username`; иначе `firstName lastName`;
  * иначе `undefined`. Используется для атрибуции автора (owner — отдельно,
  * `resolveExternalIdentity`/`identityMap`).
@@ -183,12 +183,12 @@ function eventAuthorFromPayload(event: SynthEvent): string | undefined {
 /**
  * Собирает user-сообщение из события (единый формат для `deliver` core/backend).
  *
- * AD-051: для `source === 'cron'` сообщение помечается автором `Scheduler`, а в
+ * ADR-051: для `source === 'cron'` сообщение помечается автором `Scheduler`, а в
  * `metadata` добавляются `scheduler`/`schedule_id`/`schedule_name`; `content` —
  * чистый текст задания без описания (описание «кто такой Scheduler» — в
  * статическом system-блоке `scheduler` промпта).
  *
- * AD-089 (attribution): для **всех** внешних источников в `metadata` попадают
+ * ADR-089 (attribution): для **всех** внешних источников в `metadata` попадают
  * `principal_id`/`chat_key`/`thread_key` (если заданы), а `author` выводится из
  * `payload.from` (username → `@username`; иначе `firstName lastName`; иначе
  * `principalId` — напр. `tg:123`); cron-ветка не меняется (`Scheduler`). Для
@@ -222,7 +222,7 @@ export function eventToMessage(event: SynthEvent): Message {
     }
   }
 
-  // AD-089: cron — системный автор; внешние события — из `payload.from` /
+  // ADR-089: cron — системный автор; внешние события — из `payload.from` /
   // `principalId`; прочие — без автора (прежнее поведение).
   const author = isCron
     ? 'Scheduler'
@@ -245,8 +245,8 @@ export function eventToMessage(event: SynthEvent): Message {
 }
 
 /**
- * AD-089 (claim-flow): «машинный» владелец сессии — синтетический пользователь
- * service-key/шлюза (`service:<keyId>`, AD-052). Такие владельцы переустанавливаются
+ * ADR-089 (claim-flow): «машинный» владелец сессии — синтетический пользователь
+ * service-key/шлюза (`service:<keyId>`, ADR-052). Такие владельцы переустанавливаются
  * человеку-отправителю, когда тот сопознан (`_maybeReassignOwner`); «человеческие»
  * владельцы не трогаются.
  */
@@ -265,7 +265,7 @@ function eventTitle(event: SynthEvent): string | undefined {
 }
 
 /**
- * AD-089: единый funnel создания сессий.
+ * ADR-089: единый funnel создания сессий.
  *
  * - `request` — явное создание (UI/CLI/агент): эмит `session_requested`, создание
  *   сессии (при `mode='ephemeral'` — с `expiresAt`). Без приёма/доставки события.
@@ -314,7 +314,7 @@ export class RequestSessionService {
   }
 
   /**
-   * AD-089: live-обновление конфигурации funnel (runtime-настройки из админки):
+   * ADR-089: live-обновление конфигурации funnel (runtime-настройки из админки):
    * TTL ephemeral по умолчанию, политика неизвестного `agentTemplate` и
    * маппинг идентичности (`identityMap`).
    */
@@ -341,7 +341,7 @@ export class RequestSessionService {
    * `userId`/`ownerId` приходят через `opts` (runtime-контекст, не часть события).
    */
   async request(req: SessionRequest, opts?: RequestSessionOptions): Promise<Session | null> {
-    // AD-089: резолвинг шаблона ДО хука/создания — неизвестный шаблон при `drop`
+    // ADR-089: резолвинг шаблона ДО хука/создания — неизвестный шаблон при `drop`
     // не создаёт сессию и не эмитит `session_requested`.
     const agentRole = this._resolveAgent(req.agentTemplate);
 
@@ -370,7 +370,7 @@ export class RequestSessionService {
       ownerId: opts?.ownerId,
       expiresAt,
     });
-    // AD-089: уведомляем подписчика (EventHub) о новой сессии владельца —
+    // ADR-089: уведомляем подписчика (EventHub) о новой сессии владельца —
     // до того, как в неё начнут поступать события.
     await this._onSessionMaterialized?.(session);
     return session;
@@ -381,14 +381,14 @@ export class RequestSessionService {
    * материализация → запись в журнал. Возвращает решение и созданную/найденную
    * сессию (либо `null`).
    *
-   * AD-089: `opts.binding` (аутентификация по API-ключу привязки) форсирует
+   * ADR-089: `opts.binding` (аутентификация по API-ключу привязки) форсирует
    * привязку на шаге роутинга — поиск по source/ключам не выполняется.
-   * AD-089/AD-052: `opts.audit` (id ключа/идентичность отправителя) мержится в
+   * ADR-089/ADR-052: `opts.audit` (id ключа/идентичность отправителя) мержится в
    * запись журнала во всех ветках — включая hook-blocked и ошибку материализации.
-   * AD-089: `opts.ownerId` задаёт владельца материализуемой сессии (runtime-
+   * ADR-089: `opts.ownerId` задаёт владельца материализуемой сессии (runtime-
    * контекст запроса: пользователь/владелец ключа привязки); при отсутствии —
    * `deps.resolveExternalIdentity`/`deps.identityMap`, затем `deps.resolveOwnerId`.
-   * AD-089 (claim-flow): `identityHint` — одноразовый код подтверждения владения
+   * ADR-089 (claim-flow): `identityHint` — одноразовый код подтверждения владения
    * внешней идентичностью; заполняется только когда отправитель **не сопознан**
    * (резолвер вернул `null`) и у события задан `identity.principalId`.
    */
@@ -414,7 +414,7 @@ export class RequestSessionService {
 
     const decision = await this._eventRouter.decide(event, opts?.binding);
 
-    // AD-089 (этап 5): эффективные роли отправителя события — база из профиля
+    // ADR-089 (этап 5): эффективные роли отправителя события — база из профиля
     // (резолвер внешней идентичности), сужение `identity.roles`. Владелец
     // (`ownerId`) при этом может определиться чатом/per-event — роли считаем
     // всегда от **самого отправителя** (`principalId`), а не от владельца.
@@ -431,7 +431,7 @@ export class RequestSessionService {
 
     await this._eventRouter.record(event, decision, error, audit);
 
-    // AD-089: UI-событие после успешной материализации (есть сессия). Дроп и
+    // ADR-089: UI-событие после успешной материализации (есть сессия). Дроп и
     // ошибки материализации не публикуем — данных сессии нет.
     if (session) {
       this._publish?.('event.routed', session.id, {
@@ -441,14 +441,14 @@ export class RequestSessionService {
       });
     }
 
-    // AD-089 (claim-flow): неизвестному отправителю выдаём код подтверждения.
+    // ADR-089 (claim-flow): неизвестному отправителю выдаём код подтверждения.
     const identityHint = await this._issueClaimForUnknown(event);
 
     return { decision, session, ...(identityHint ? { identityHint } : {}) };
   }
 
   /**
-   * AD-089 (claim-flow): выпуск claim-кода, если отправитель не сопознан.
+   * ADR-089 (claim-flow): выпуск claim-кода, если отправитель не сопознан.
    * Критерий: инъектирован `deps.issueIdentityClaim`, задан `identity.principalId`
    * и резолвер `resolveExternalIdentity` вернул `null` (человек не найден ни в
    * профиле, ни через `identityMap`). Владелец сессии при этом мог определиться
@@ -474,7 +474,7 @@ export class RequestSessionService {
     if (decision.kind === 'bound') {
       const session = await this._sessionManager.getSession(decision.sessionId);
       if (!session) return null;
-      // AD-089 (claim-flow): сессия живёт в привязке со своим владельцем; после
+      // ADR-089 (claim-flow): сессия живёт в привязке со своим владельцем; после
       // линковки идентичности отправителя владельца переустанавливаем (машинный
       // `service:<keyId>` или пустой → человек). «Чужую человеческую» не трогаем.
       await this._maybeReassignOwner(session, event);
@@ -492,13 +492,13 @@ export class RequestSessionService {
         expiresAt: parseTtl(decision.ttl),
         ...(owner ? { userId: owner, ownerId: owner } : {}),
       });
-      // AD-089: подписываем клиентов владельца на новую сессию до доставки.
+      // ADR-089: подписываем клиентов владельца на новую сессию до доставки.
       await this._onSessionMaterialized?.(session);
       await this._deliver(session.id, event, 'run', context);
       return session;
     }
 
-    // AD-089 (auto-bind / цель `bind`): закрепить внешний адрес за сессией.
+    // ADR-089 (auto-bind / цель `bind`): закрепить внешний адрес за сессией.
     // Сессия — постоянная (без `expiresAt`); создаётся `EventBinding mode='bound'`.
     if (decision.kind === 'bind') {
       // Гонка/повтор: привязка уже могла быть создана предыдущим событием —
@@ -511,7 +511,7 @@ export class RequestSessionService {
       if (existing?.sessionId) {
         const existingSession = await this._sessionManager.getSession(existing.sessionId);
         if (existingSession) {
-          // AD-089 (claim-flow): привязка уже создана предыдущим событием —
+          // ADR-089 (claim-flow): привязка уже создана предыдущим событием —
           // владельца переустанавливаем так же, как в `bound` (до доставки).
           await this._maybeReassignOwner(existingSession, event);
           await this._deliver(existingSession.id, event, 'run', context);
@@ -536,7 +536,7 @@ export class RequestSessionService {
         ...(decision.agentTemplate ? { agentTemplate: decision.agentTemplate } : {}),
         ...(decision.project ? { project: decision.project } : {}),
       });
-      // AD-089: подписываем клиентов владельца на новую сессию до доставки.
+      // ADR-089: подписываем клиентов владельца на новую сессию до доставки.
       await this._onSessionMaterialized?.(session);
       await this._deliver(session.id, event, 'run', context);
       return session;
@@ -554,7 +554,7 @@ export class RequestSessionService {
   }
 
   /**
-   * AD-089 (этап 5): эффективные роли внешнего отправителя события.
+   * ADR-089 (этап 5): эффективные роли внешнего отправителя события.
    *
    * База — роли профиля из `deps.resolveExternalIdentity` (при отсутствии
    * резолвера профиль неизвестен → `resolveEffectiveRoles(null, …)` =
@@ -581,7 +581,7 @@ export class RequestSessionService {
   }
 
   /**
-   * AD-089: резолвинг `agentTemplate` через `AgentRegistry` (резолвер deps).
+   * ADR-089: резолвинг `agentTemplate` через `AgentRegistry` (резолвер deps).
    *
    * - шаблон пуст/`undefined` → `undefined`;
    * - резолвер не сконфигурирован → шаблон как есть (прежнее поведение);
@@ -603,7 +603,7 @@ export class RequestSessionService {
   }
 
   /**
-   * AD-089: агент материализуемой сессии — резолвленный шаблон события либо,
+   * ADR-089: агент материализуемой сессии — резолвленный шаблон события либо,
    * если шаблон пуст/не резолвится (`default-agent`), агент по умолчанию
    * инстанса (`deps.resolveDefaultAgent`).
    *
@@ -620,12 +620,12 @@ export class RequestSessionService {
   }
 
   /**
-   * AD-089 (claim-flow): переустановка владельца **существующей** сессии при
+   * ADR-089 (claim-flow): переустановка владельца **существующей** сессии при
    * доставке в неё внешнего события.
    *
    * Владелец фиксируется один раз — при материализации (`_materialize`), поэтому
    * сессия Telegram-чата, созданная до линковки идентичности (claim-flow),
-   * оставалась за машинным аккаунтом шлюза (`service:<keyId>`, AD-052) или без
+   * оставалась за машинным аккаунтом шлюза (`service:<keyId>`, ADR-052) или без
    * владельца — и не была видна человеку в UI. Здесь владелец «подтягивается»
    * при каждом событии:
    *
@@ -663,12 +663,12 @@ export class RequestSessionService {
     session.ownerId = externalUserId;
     session.userId = externalUserId;
     await this._sessionManager.updateSession(session);
-    // AD-089: подписываем хаб на сессию уже от лица нового владельца — до доставки.
+    // ADR-089: подписываем хаб на сессию уже от лица нового владельца — до доставки.
     await this._onSessionMaterialized?.(session);
   }
 
   /**
-   * AD-089: владелец материализуемой внешним событием сессии. Приоритет:
+   * ADR-089: владелец материализуемой внешним событием сессии. Приоритет:
    * 1) `deps.resolveExternalIdentity(event.identity)` — внешний резолвер по
    *    `identity.principalId` (человек-отправитель → пользователь инстанса;
    *    чат-fallback — внутри резолвера; источник — профиль `identities`);
@@ -697,7 +697,7 @@ export class RequestSessionService {
   }
 
   /**
-   * AD-089: владелец из `deps.identityMap` — сначала по `identity.principalId`
+   * ADR-089: владелец из `deps.identityMap` — сначала по `identity.principalId`
    * (человек предпочтительнее чата), затем по `identity.chatKey` (фоллбек для
    * ЛС/чатового уровня). Пустая карта/нет совпадения → `undefined`.
    */
@@ -714,7 +714,7 @@ export class RequestSessionService {
   /**
    * Минимальное разрешение `agentTemplate` в сессию: шаблон проставляется в
    * per-session `settings.agentRole` (задел — семантика шаблона агента/скилла
-   * AD-046 будет уточнена на следующих этапах).
+   * ADR-046 будет уточнена на следующих этапах).
    */
   private _agentSettings(
     agentRole: string | undefined,
@@ -728,7 +728,7 @@ export class RequestSessionService {
   }
 
   /**
-   * AD-089: `settings` материализуемой сессии с добором дефолтных `provider`/
+   * ADR-089: `settings` материализуемой сессии с добором дефолтных `provider`/
    * `model` инстанса (`deps.resolveLlmDefaults`). Явно заданные (непустые)
    * значения `settings` приоритетнее; поля добираются по отдельности (задан
    * только `provider` — `model` берётся из дефолта и наоборот). Дефолты не

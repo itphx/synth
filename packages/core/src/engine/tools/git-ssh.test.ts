@@ -11,7 +11,7 @@ import { SSHKeyStore } from '../../storage/ssh-key-store.js';
 
 const PRIVATE_KEY = '-----BEGIN OPENSSH PRIVATE KEY-----\ntest-key-material\n-----END OPENSSH PRIVATE KEY-----\n';
 
-describe('resolveRepoGitEnv (AD-076 §T6)', () => {
+describe('resolveRepoGitEnv (ADR-076 §T6)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;

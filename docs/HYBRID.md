@@ -93,7 +93,7 @@
 │  synth-core (serve :4300)    │  ──────────► │  ├─ ChatOrchestrator (движок)    │
 │  ├─ локальный мир            │  /api/v2/*   │  │   └─ удалённые сессии         │
 │  │   ├─ sessions/projects    │  (remote     │  ├─ LLM Proxy (/api/v2/llm)     │
-│  │   ├─ локальные файлы      │   клиент)    │  │   └─ gateway (AD-036)        │
+│  │   ├─ локальные файлы      │   клиент)    │  │   └─ gateway (ADR-036)        │
 │  │   └─ локальный ollama?    │              │  ├─ центральные провайдеры       │
 │  │                           │  ◄────────── │  │   (ключи на сервере)          │
 │  ├─ RemoteBackendClient      │  SSE         │  ├─ события /api/v2/events      │
@@ -109,7 +109,7 @@
 - **Удалённые сессии исполняются сервером**: локальный core для них — тонкий
   клиент (создание/чтение/промпт/события/файлы/гит — через `/api/v2/*` сервера).
 - **Локальные сессии исполняются локально**, но их LLM-запросы идут через
-  **LLM Proxy** на сервере → централизованный аудит (AD-036) и доступ к
+  **LLM Proxy** на сервере → централизованный аудит (ADR-036) и доступ к
   корпоративным моделям/ключам без их утечки на машину пользователя.
 - **Идентификация сущностей**: namespace `local:` / `remote:` (или поле
   `origin`), чтобы исключить коллизии UUID между мирами.
@@ -152,7 +152,7 @@ synth serve --connect https://synth.k3s.itphx.loc
 - Удалённые сессии: LLM вызывает серверный движок (уже так).
 - Локальные сессии: `ProviderPool` локального core получает провайдера типа
   `remote`, который направляет запрос в `POST /api/v2/llm/chat/completions` на сервере;
-  сервер прогоняет через gateway (AD-036: аудит, обфускация, rate limit) и
+  сервер прогоняет через gateway (ADR-036: аудит, обфускация, rate limit) и
   реального провайдера.
 - Политика: **в гибриде локальные провайдеры запрещены полностью** — все
   LLM-запросы идут только через сервер (централизованные ключи/модели).
@@ -210,7 +210,7 @@ synth project fork <remote-id> --local
 
 ### P2 — централизация LLM
 7. **LLM Proxy endpoint** на backend (`/api/v2/llm/chat/completions`, OpenAI-совместимый):
-   принимает запросы, прогоняет через gateway (AD-036), вызывает провайдера.
+   принимает запросы, прогоняет через gateway (ADR-036), вызывает провайдера.
 8. **Провайдер `remote`** в `ProviderPool`/`ProviderFactory` core — локальный
    движок использует сервер как источник LLM.
 9. **Политика провайдеров** в гибриде — запрет всех локальных провайдеров,
@@ -239,7 +239,7 @@ synth project fork <remote-id> --local
 | T2 — CLI | ✅ | `synth serve --connect`, `synth connect|disconnect`, `--oidc-issuer/--oidc-client-id/--token`, `RemoteSession.getToken()` (авто-refresh) |
 | T3 — агрегация миров | ✅ | `origin` в DTO, `remote:<id>` namespace, merge списков, маршрутизация по миру, форвардинг prompt/fs/messages/queue |
 | T4 — UI | ✅ | `OriginBadge`, `HybridStatusIndicator` (polling 30с), подтверждение удалённых мутаций, селектор «где создать», статус-эндпоинт `/api/v2/hybrid/status` |
-| T5 — LLM Proxy | ✅ | `POST /api/v2/llm/chat/completions` (OpenAI-совместимый, stream/non-stream), Gateway AD-036, аудит, rate limit |
+| T5 — LLM Proxy | ✅ | `POST /api/v2/llm/chat/completions` (OpenAI-совместимый, stream/non-stream), Gateway ADR-036, аудит, rate limit |
 | T6 — RemoteProvider | ✅ | `RemoteProvider` в core, инъекция `synth-remote` in-memory, политика запрета локальных провайдеров (`remote.llm=server`), слияние моделей |
 | T7 — RemoteEventBridge | ✅ | `EventBus.subscribeAll`, SSE-мост backend → локальный EventBus → UI, реконнект с backoff, переписывание id в `remote:<id>` |
 | T8 — publish/fork | ✅ | `synth project publish/fork`, backend export/import сессий, прямая синхронизация файлов (walk + fsWrite/fsUpload/fsDownload), e2e подтверждён |

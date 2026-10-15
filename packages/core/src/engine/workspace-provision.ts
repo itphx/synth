@@ -5,7 +5,7 @@ import { slugifyWorkspaceName, uniqueWorkspaceName } from '@itphx/synth-shared';
 import type { ProjectStoreContract } from '../storage/project-store.js';
 
 /**
- * AD-075: provisioning рабочего каталога проекта — общая логика HTTP-роутов и
+ * ADR-075: provisioning рабочего каталога проекта — общая логика HTTP-роутов и
  * тулов движка. Одинаковая семантика для core (standalone) и backend (managed):
  * нормализация строки, containment-проверка и создание каталога.
  */
@@ -37,7 +37,7 @@ export function isInsideRoot(root: string, abs: string): boolean {
 }
 
 /**
- * AD-075: нормализует и провижнит workspace локального проекта (standalone).
+ * ADR-075: нормализует и провижнит workspace локального проекта (standalone).
  * - относительный → сохраняется относительным, каталог создаётся от `workspacesRoot`;
  * - абсолютный внутри root → сохраняется относительным, каталог создаётся;
  * - абсолютный вне root → по политике: `deny` → 403,
@@ -100,7 +100,7 @@ export async function resolveWorkspaceForLocalProject(
 }
 
 /**
- * AD-075 (managed): строгая проверка явного пути `project.workspace` — тот же
+ * ADR-075 (managed): строгая проверка явного пути `project.workspace` — тот же
  * контракт, что у `resolveProjectWorkspace` (`server/fs-workspace.ts`).
  * - относительный внутри root → нормализуется;
  * - абсолютный внутри root → относительный;
@@ -170,7 +170,7 @@ export async function collectExistingRootDirs(root: string): Promise<string[]> {
 }
 
 /**
- * AD-075 (managed): нормализует и провижнит workspace managed-проекта.
+ * ADR-075 (managed): нормализует и провижнит workspace managed-проекта.
  * - явный путь: `validateManagedWorkspacePath` (deny вне root), затем `mkdir -p`;
  * - пустой: авто-имя (`slugifyWorkspaceName` + суффикс), каталог занимается
  *   атомарно `mkdir` без `recursive` (top-level), при `EEXIST` — следующий суффикс,
@@ -226,7 +226,7 @@ export async function provisionManagedWorkspace(
 }
 
 /**
- * AD-075: provisioning workspace — managed (строгая проверка + авто-имя) либо
+ * ADR-075: provisioning workspace — managed (строгая проверка + авто-имя) либо
  * standalone (нормализация + политика confirm/deny). `undefined` — workspace не задан.
  */
 export async function provisionWorkspace(

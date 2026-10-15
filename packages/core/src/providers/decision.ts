@@ -1,5 +1,5 @@
 /**
- * AD-084: DecisionProvider — адаптер decision-моделей (System One: Clef/Jev/…).
+ * ADR-084: DecisionProvider — адаптер decision-моделей (System One: Clef/Jev/…).
  * Не чат: `state + типизированные вопросы → вероятности` за один forward-pass.
  * Два протокола под один контракт (SystemOne-совместимые), выбираются типом
  * провайдера:
@@ -65,9 +65,9 @@ export class DecisionProvider extends BaseProvider {
   }
 
   /**
-   * AD-084: основной метод — единый decision-запрос. `state` — текст/JSON,
+   * ADR-084: основной метод — единый decision-запрос. `state` — текст/JSON,
    * `questions` — типизированные вопросы (`noul`/`choice`/`score`).
-   * `images`/`videos` (AD-085 задел) добавляются в тело только если непусты.
+   * `images`/`videos` (PROP-085 задел) добавляются в тело только если непусты.
    */
   async decide(
     state: unknown,

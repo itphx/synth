@@ -43,7 +43,7 @@ export interface SkillScopeRoutesOptions {
   canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
   /** Доступ к управлению проектом (owner/LEAD/ADMIN). Standalone — разрешено. */
   canAccessProject?: (project: Project, c: Context, userId: string) => boolean | Promise<boolean>;
-  /** AD-046 §4.5: live-обновление системного hard-gate скиллов (оркестратор). */
+  /** ADR-046 §4.5: live-обновление системного hard-gate скиллов (оркестратор). */
   onSkillsDisabledChange?: (disabled: SkillsDisabledRequest) => void;
 }
 
@@ -86,7 +86,7 @@ async function listEffectiveSkills(
   };
 
   return skills
-    // AD-046 §8.1: `deny` скрывает скилл из выдачи (в отличие от disabled).
+    // ADR-046 §8.1: `deny` скрывает скилл из выдачи (в отличие от disabled).
     .filter((s) => resolveSkillRule(opts.permissionConfig, s.name)?.action !== 'deny')
     .map((s) => {
       const availability = resolveSkillAvailability(
@@ -110,7 +110,7 @@ async function listEffectiveSkills(
 }
 
 /**
- * AD-046 §4.5: scope-API скиллов (аналог MCP).
+ * ADR-046 §4.5: scope-API скиллов (аналог MCP).
  * - `/sessions/:id/skills` — per-session enable/disable + effective;
  * - `/projects/:id/skills` — проектный скоуп (owner/lead);
  * - `/settings/skills` — instance-wide группы/имена + policy.

@@ -26,7 +26,7 @@ export interface SingleChatOptions {
   agent?: string;
   dataDir: string;
   config: SynthConfig;
-  /** AD-069 §9.2: override проектных инструкций (CLI `--ignore-rules`/`--safe-mode`). */
+  /** ADR-069 §9.2: override проектных инструкций (CLI `--ignore-rules`/`--safe-mode`). */
   instructionsConfig?: InstructionsConfig;
 }
 
@@ -54,7 +54,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const modelCache = new Map<string, ModelConfig>();
   (await modelStore.list()).forEach((m) => modelCache.set(m.id, m));
 
-  // AD-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
+  // ADR-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
   const skillService = new SkillService({
     dataDir,
     configPaths: options.config.skills?.paths,
@@ -83,7 +83,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     bundleStore,
   });
 
-  // AD-046 §9.4: локальные `/`-команды (help/skills/commands/summary) не
+  // ADR-046 §9.4: локальные `/`-команды (help/skills/commands/summary) не
   // поднимают LLM и не требуют настроенного провайдера. `/summary` НЕ
   // короткозамыкается здесь: оркестратор запускает реальную суммаризацию
   // (как в SSE-пути), поэтому управление уходит в обычный поток.
@@ -164,7 +164,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
-  // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
+  // ADR-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
   const patternStore = new SecretPatternStore({ dataDir });
 
   // Защищённые пути: runtime-настройка protectedPaths.enabled приоритетнее config.yaml.
@@ -173,7 +173,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   const runtimeSecurity = await settingsStore.getSecuritySettings();
   const effectiveSecurityConfig = mergeSecurityConfig(options.config.security, runtimeSecurity);
 
-  // AD-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
+  // ADR-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -193,19 +193,19 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     securityConfig: effectiveSecurityConfig,
     gatewayConfig: options.config.llmGateway,
     gatewayPatternStore: patternStore,
-    // AD-084: decision-слой микро-каскада (config.decision).
+    // ADR-084: decision-слой микро-каскада (config.decision).
     decisionConfig: options.config.decision,
     skillRuntime: skillService,
     commandRuntime: commandService,
-    // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
+    // ADR-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
     instructionsConfig: options.instructionsConfig ?? options.config.instructions,
-    // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
+    // ADR-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
     instructionsTrustedProjectDirs: options.config.skills?.trustedProjectDirs,
-    // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
+    // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
     runtimeDeps: await detectRuntimeDeps(),
   });
 
-  // AD-089: CLI-чат поднимает менеджер сам, вне `createStandaloneApp`, поэтому
+  // ADR-089: CLI-чат поднимает менеджер сам, вне `createStandaloneApp`, поэтому
   // funnel `RequestSessionService` в области видимости недоступен. Это временная
   // сессия одного сообщения (удаляется в finally) — materialization, не request.
   const session = await sessionManager.createSession({

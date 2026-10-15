@@ -2,8 +2,8 @@ import type { CommandSummary } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
 
 /**
- * AD-046 §7.2: встроенные продуктовые команды Фазы 2. `/compact` и `/review`
- * отложены (решение Фазы 2). `/init` (AD-069 §8.1) генерирует prompt для LLM
+ * ADR-046 §7.2: встроенные продуктовые команды Фазы 2. `/compact` и `/review`
+ * отложены (решение Фазы 2). `/init` (ADR-069 §8.1) генерирует prompt для LLM
  * (`status: 'prompt'`), а не локальный ответ.
  */
 export const BUILTIN_COMMAND_NAMES = ['help', 'skills', 'commands', 'summary', 'init'] as const;
@@ -47,15 +47,15 @@ export function renderCommandsList(commands: readonly CommandSummary[]): string 
 }
 
 /**
- * AD-069 §8.1: путь проектных инструкций, к которому апеллирует `/init`
+ * ADR-069 §8.1: путь проектных инструкций, к которому апеллирует `/init`
  * (относительно `project.workspace`). Не абсолютный — без утечки домашнего пути.
  */
 export const INIT_INSTRUCTION_PATH = 'AGENTS.md';
 
 /**
- * AD-069 §8.1: prompt встроенной команды `/init` (адаптация opencode
+ * ADR-069 §8.1: prompt встроенной команды `/init` (адаптация opencode
  * `initialize.txt`). Модель-facing текст на английском — единый язык с
- * встроенным скиллом `skill-creator` и LLM-каналом `system-messages` (AD-041).
+ * встроенным скиллом `skill-creator` и LLM-каналом `system-messages` (ADR-041).
  *
  * `$ARGUMENTS` (пользовательский фокус/ограничения) подставляется как есть;
  * пустые аргументы — явная пометка, чтобы модель не приняла отсутствие фокуса

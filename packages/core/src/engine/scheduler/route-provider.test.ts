@@ -17,7 +17,7 @@ const event = (overrides: Partial<SynthEvent> = {}): SynthEvent => ({
   ...overrides,
 });
 
-describe('SchedulerRuleProvider (AD-051 / AD-089)', () => {
+describe('SchedulerRuleProvider (ADR-051 / ADR-089)', () => {
   let tmpDir: string;
   let store: ScheduleStore;
 
@@ -63,7 +63,7 @@ describe('SchedulerRuleProvider (AD-051 / AD-089)', () => {
     ).toEqual({ kind: 'drop', reason: 'schedule_disabled', audited: true });
   });
 
-  it('force в payload пропускает выключенное расписание (AD-051)', async () => {
+  it('force в payload пропускает выключенное расписание (ADR-051)', async () => {
     const created = await store.create({
       name: 'off-force',
       enabled: false,

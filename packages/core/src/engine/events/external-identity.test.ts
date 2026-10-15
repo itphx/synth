@@ -23,7 +23,7 @@ function makeProfile(overrides: Partial<ProfileData> = {}): ProfileData {
   };
 }
 
-describe('createExternalIdentityResolver (AD-089)', () => {
+describe('createExternalIdentityResolver (ADR-089)', () => {
   let tmpDir: string;
   let profiles: FileProfileStore;
 
@@ -77,7 +77,7 @@ describe('createExternalIdentityResolver (AD-089)', () => {
     expect(res?.roles).toBeUndefined();
   });
 
-  it('профильные роли прокидываются для эффективных ролей (AD-089 этап 5)', async () => {
+  it('профильные роли прокидываются для эффективных ролей (ADR-089 этап 5)', async () => {
     await profiles.saveProfile(makeProfile({ id: 'u-admin', roles: ['ADMIN', 'USER'] }));
     await profiles.linkIdentity('u-admin', {
       provider: 'tg',

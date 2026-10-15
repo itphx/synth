@@ -4,11 +4,11 @@
 
 ## Роль и границы
 
-- Hono API Hub: единое дерево `/api/v2/*` поверх ядра `@itphx/synth-core` (AD-017, AD-022).
+- Hono API Hub: единое дерево `/api/v2/*` поверх ядра `@itphx/synth-core` (ADR-017, ADR-022).
 - LLM-вызовы сам не считает и провайдеров не реализует: хранит конфиги провайдеров/моделей и отдаёт их ядру.
 - Движки не поднимает и их процессами не управляет.
 - HTML не рендерит: UI и админка — в другом пакете (`synth-ui`).
-- Движки stateless: история и состояние живут на бэкенде (через core), не в движке (AD-022).
+- Движки stateless: история и состояние живут на бэкенде (через core), не в движке (ADR-022).
 
 ## Что из core, что локально
 
@@ -20,22 +20,22 @@
 |---|---|
 | `FileStore`, `SessionManager` | сессии и история |
 | `EventBus` | шина событий сессии (backend надстраивает `EventHub`) |
-| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `IdentityClaimStore`, `ProjectRuleProvider`, `eventToMessage`, `startEventJournalPruner` | единый funnel создания сессии, приём внешних событий, API-ключи привязок, одноразовые claim-коды идентичностей, правила маршрутизации и retention-очистка журнала (AD-089/AD-052) |
-| `ServiceApiKeyStore`, `createServiceKeyRoutes`, `requireScope`, `checkProjectAccess`, `getServiceCredential` | scoped service-key (AD-052 этап I): реестр ключей, CRUD-роуты, scope-гейт и проектная проекция |
-| `WebhookStore`, `WebhookDeliveryStore`, `WebhookService`, `startWebhookDeliveryPruner`, `createWebhookRoutes` | исходящие webhooks (AD-052 этап II): реестр подписок, журнал доставок, движок над `EventBus.subscribeAll`, retention-очистка и CRUD-роуты |
-| `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (AD-051 срез / AD-089) |
+| `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `IdentityClaimStore`, `ProjectRuleProvider`, `eventToMessage`, `startEventJournalPruner` | единый funnel создания сессии, приём внешних событий, API-ключи привязок, одноразовые claim-коды идентичностей, правила маршрутизации и retention-очистка журнала (ADR-089/ADR-052) |
+| `ServiceApiKeyStore`, `createServiceKeyRoutes`, `requireScope`, `checkProjectAccess`, `getServiceCredential` | scoped service-key (ADR-052 этап I): реестр ключей, CRUD-роуты, scope-гейт и проектная проекция |
+| `WebhookStore`, `WebhookDeliveryStore`, `WebhookService`, `startWebhookDeliveryPruner`, `createWebhookRoutes` | исходящие webhooks (ADR-052 этап II): реестр подписок, журнал доставок, движок над `EventBus.subscribeAll`, retention-очистка и CRUD-роуты |
+| `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (ADR-051 срез / ADR-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
 | `ChatOrchestrator` | оркестрация LLM, tools, permissions |
-| `McpManager`, `McpRegistryStore` | MCP-серверы: менеджер + единый реестр (AD-071) |
+| `McpManager`, `McpRegistryStore` | MCP-серверы: менеджер + единый реестр (ADR-071) |
 | `RuntimeSettingsStore`, `createSettingsRoutes` | эндпоинты `/api/v2/settings` (workspace/mcp) |
 | `DictionaryStore`, `createDictionaryRoutes` | эндпоинты `/api/v2/dictionaries` |
 | `FileProfileStore` | профили пользователей (seed test-users при debug) |
-| `AuditLogger`, `RateLimiter`, `GatewayProvider`, `SecretPatternStore`, `ProtectedPathsStore` | LLM Gateway (AD-036) |
-| `SSHKeyStore` | SSH-ключи агентов, шифрование at-rest (AD-076) |
-| `createGitRoutes`, `createSshKeyRoutes`, `createAgentSshKeyRoutes` | git-реестр и SSH-ключи (AD-076) |
-| `createFsRoutes`, `resolveProjectWorkspace` | FS-роуты, project-aware workspace (AD-075) |
-| `detectRuntimeDeps` | детект внешних бинарников (`git`/`rg`/`sh`) при старте → `runtimeDeps` оркестратора (AD-078) |
+| `AuditLogger`, `RateLimiter`, `GatewayProvider`, `SecretPatternStore`, `ProtectedPathsStore` | LLM Gateway (ADR-036) |
+| `SSHKeyStore` | SSH-ключи агентов, шифрование at-rest (ADR-076) |
+| `createGitRoutes`, `createSshKeyRoutes`, `createAgentSshKeyRoutes` | git-реестр и SSH-ключи (ADR-076) |
+| `createFsRoutes`, `resolveProjectWorkspace` | FS-роуты, project-aware workspace (ADR-075) |
+| `detectRuntimeDeps` | детект внешних бинарников (`git`/`rg`/`sh`) при старте → `runtimeDeps` оркестратора (ADR-078) |
 
 Локально только:
 
@@ -54,7 +54,7 @@
 - возвращает handle: `app`, `config`, `auth`, `eventBus`, `eventHub`, `sessionManager`, `projectStore`, `orchestrator`, `queueManager`, `settingsStore`, `webhookStore`, `webhookService`, `listen` (+ stop-функции `stopScheduler`/`stopEphemeralSweeper`/`stopEventJournalPruner`/`stopWebhookService`/`stopWebhookDeliveryPruner`);
 - `listen(port = 0)` поднимает HTTP-сервер и `/ws/events`, возвращает фактический порт (0 — эфемерный для тестов).
 
-**Хранилище (core-классы, AD-005):**
+**Хранилище (core-классы, ADR-005):**
 
 - `JsonStore<T>` (из `@itphx/synth-core`) — `<dataDir>/<subdir>/<key>.json`; атомарная запись через shared `atomicWrite` (tmp → rename) + per-key `AsyncLock`; ключ проверяется от `..` и `\`; `list()` собирает вложенные ключи (`provider/model`).
 - `ProjectStore` (из `@itphx/synth-core`) — `<dataDir>/projects/<id>.json`; один `AsyncLock` на все проекты; `create()` инициализирует план, лог и владельца.
@@ -83,24 +83,24 @@
 | `/api/v2/projects` | `routes/projects.ts` — обёртка над core `createProjectRoutes` (RBAC-хуки owner/EDITOR/LEAD/ADMIN + read `canRead` owner/член/LEAD/ADMIN, `resolveElevated` — LEAD/ADMIN видят все, managed-provisioning, `/stats`, `/:id/mcp`) + `createProjectAccess` для git-роутов |
 | `/api/v2/messages`, `/queue` | `routes/{messages,queue}.ts` — обёртки над core `createMessageRoutes`/`createQueueRoutes` (i18n, `onMessagesChanged` = `recalc-can-summarize`) |
 | `/api/v2/agents` | `routes/agents.ts` — обёртка над core `createAgentRoutes` (guards: `GET /` = `requireAuth`, `/all`+мутации = `requireAdmin`) |
-| `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, AD-071; запись — ADMIN или service-key со scope `addons:install`) |
-| `/api/v2/context`, `/users` | local `routes/*`; `/users` — чтение (список/детали) под `requireAdminOrScope('users:read')`, `GET /:id` отдаёт `identities` профиля (snake_case, AD-089), мутации — `requireAdmin` |
-| `/api/v2/fs` | core `createFsRoutes` (AD-075): managed opts — `requireProjectId`, `deny`, `getProjectWorkspace` (`resolveProjectWorkspace`, strict) |
+| `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, ADR-071; запись — ADMIN или service-key со scope `addons:install`) |
+| `/api/v2/context`, `/users` | local `routes/*`; `/users` — чтение (список/детали) под `requireAdminOrScope('users:read')`, `GET /:id` отдаёт `identities` профиля (snake_case, ADR-089), мутации — `requireAdmin` |
+| `/api/v2/fs` | core `createFsRoutes` (ADR-075): managed opts — `requireProjectId`, `deny`, `getProjectWorkspace` (`resolveProjectWorkspace`, strict) |
 | `/api/v2/git` | core `createGitRoutes` (T4): `authorizeProject` = `canEditProjectContent` (owner/EDITOR/LEAD/ADMIN), read (`scan/log/commit`) — `requireAuth` |
-| `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` | core `createSshKeyRoutes` / `createAgentSshKeyRoutes`: чтение — `requireAuth`, запись — `requireAdmin` (AD-076). В гибриде nested-путь проксируется core на backend (`REMOTE_PROXY_PATTERNS`) |
-| `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` (создание — единый funnel `RequestSessionService`, AD-089; видимость — `resolveElevated` LEAD/ADMIN, `resolveMemberProjectIds` — проектные сессии участникам, `resolveCanAccessExtra` — доступ по id участнику проекта) + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
+| `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` | core `createSshKeyRoutes` / `createAgentSshKeyRoutes`: чтение — `requireAuth`, запись — `requireAdmin` (ADR-076). В гибриде nested-путь проксируется core на backend (`REMOTE_PROXY_PATTERNS`) |
+| `/api/v2/sessions` | `routes/sessions.ts` — обёртка над core `createSessionRoutes` (создание — единый funnel `RequestSessionService`, ADR-089; видимость — `resolveElevated` LEAD/ADMIN, `resolveMemberProjectIds` — проектные сессии участникам, `resolveCanAccessExtra` — доступ по id участнику проекта) + backend-only (MCP-скоуп, secrets, export/import, debug, optimization, notes) |
 | `/api/v2/providers` | `routes/providers.ts` — обёртка над core `createProviderRoutes` + `fetch-icon` |
 | `/api/v2/models` | `routes/models.ts` — обёртка над core `createModelRoutes` (RBAC + rate limit на `fetch`) |
-| `/api/v2/settings` | core `createSettingsRoutes` (`llm-gateway`/`security`/`tools-policy`/`mcp-policy`/`tools-disabled`/`default-agent`/`workspace-policy`; `GET/PUT/DELETE /settings/events` — runtime-настройки «События» (AD-089), мутации под `eventsWriteGuard` = `requirePermission('ADMIN')`) |
-| `/api/v2/me` | core `createIdentityRoutes` (AD-089): `GET /identities` — внешние идентичности текущего пользователя, `DELETE /identities/:provider/:externalId` — отвязка только своих (404 если нет), `POST /identities/claim` `{code}` — подтверждение владения идентичностью по одноразовому коду (201 `{identity}`; 400 `VALIDATION_ERROR` / 401 `UNAUTHORIZED` (профиль не определён) / 404 `NOT_FOUND` / 409 `CONFLICT`); `resolveProfileId` — id профиля по `username` аутентифицированного пользователя из AuthKit (НЕ OIDC `sub`), `claimStore` (`IdentityClaimStore`), `messages` — i18n. Прямой линковки нет — только claim-flow |
+| `/api/v2/settings` | core `createSettingsRoutes` (`llm-gateway`/`security`/`tools-policy`/`mcp-policy`/`tools-disabled`/`default-agent`/`workspace-policy`; `GET/PUT/DELETE /settings/events` — runtime-настройки «События» (ADR-089), мутации под `eventsWriteGuard` = `requirePermission('ADMIN')`) |
+| `/api/v2/me` | core `createIdentityRoutes` (ADR-089): `GET /identities` — внешние идентичности текущего пользователя, `DELETE /identities/:provider/:externalId` — отвязка только своих (404 если нет), `POST /identities/claim` `{code}` — подтверждение владения идентичностью по одноразовому коду (201 `{identity}`; 400 `VALIDATION_ERROR` / 401 `UNAUTHORIZED` (профиль не определён) / 404 `NOT_FOUND` / 409 `CONFLICT`); `resolveProfileId` — id профиля по `username` аутентифицированного пользователя из AuthKit (НЕ OIDC `sub`), `claimStore` (`IdentityClaimStore`), `messages` — i18n. Прямой линковки нет — только claim-flow |
 | `/api/v2/dictionaries` | core `createDictionaryRoutes` (writeGuard = `requireAdmin`) |
 | `/api/v2/audit`, `/logs`, `/gateway` | local (LLM Gateway: аудит, логи, regex-паттерны) |
 | `/api/v2/llm` | local `routes/llm.ts` (LLM Proxy) |
 | `/api/v2/admin/debug` | local `routes/debug.ts` |
-| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`ingestPreGuard` = rate limit 120/мин до выбора способа аутентификации; API-ключ привязки через `resolveApiKeySecret`/`touchApiKey`, иначе `ingestGuard = requireAuth`; per-key rate limit — свой `rateLimitPerMinute` либо `getKeyRateLimitPerMinute()` → 429; `isEnabled()` — мастер-выключатель → 503; ответ `201 {event, decision, sessionId}` + опциональное `identityHint {code, expiresAt}` — неизвестный отправитель, AD-089 claim-flow), `/bindings` и `/routes` — CRUD (чтение `requireAuth`; мутации и чтение ключей — `writeGuard`/`keyReadGuard` = `requirePermission('ADMIN','LEAD')`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`; AD-052 — `scopeGuard`/`projectGuard`), `/bindings/:id/keys` — CRUD API-ключей (`POST` создание + `PATCH` метаданных + `POST .../revoke` + `DELETE`), `GET /journal`; `GET /` — inline SSE-хендлер (AD-089). i18n-ключи: `errors.validation.invalidEventKey`, `errors.validation.invalidEventKeyUpdate`, `errors.notFound.eventKey`, `errors.conflict.eventKeyLabel`, `errors.rateLimited.eventKey`, `errors.unavailable.eventsDisabled` |
-| `/api/v2/schedules` | core `createSchedulerRoutes` (AD-051 срез / AD-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (AD-051); AD-052 — `scopeGuard`/`projectGuard`; `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
-| `/api/v2/service-keys` | core `createServiceKeyRoutes` (AD-052 этап I): CRUD scoped-ключей инстанса, `writeGuard`/`readGuard` = `requirePermission('ADMIN')`, `messages` — i18n, `resolveUserId` — id из `attachUser`; store `ServiceApiKeyStore` (`{dataDir}/service-keys.json`) |
-| `/api/v2/webhooks` | core `createWebhookRoutes` (AD-052 этап II): CRUD подписок исходящих webhooks + журнал доставок + тест, `writeGuard`/`readGuard` = `requirePermission('ADMIN')` (webhook может утекать данные на произвольный URL), `messages` — i18n, `resolveUserId` — id из `attachUser`, `isEnabled` — мастер `webhooks.enabled` (→ 503 на мутации/тест), `allowPrivateTargets` — SSRF-политика; store `WebhookStore` (`{dataDir}/webhooks/subscriptions.json`), журнал `WebhookDeliveryStore` (`{dataDir}/webhooks/deliveries.jsonl`), движок `WebhookService` над `EventBus.subscribeAll` |
+| `/api/v2/events` | core `createEventRoutes`: `POST /` — ingest (`ingestPreGuard` = rate limit 120/мин до выбора способа аутентификации; API-ключ привязки через `resolveApiKeySecret`/`touchApiKey`, иначе `ingestGuard = requireAuth`; per-key rate limit — свой `rateLimitPerMinute` либо `getKeyRateLimitPerMinute()` → 429; `isEnabled()` — мастер-выключатель → 503; ответ `201 {event, decision, sessionId}` + опциональное `identityHint {code, expiresAt}` — неизвестный отправитель, ADR-089 claim-flow), `/bindings` и `/routes` — CRUD (чтение `requireAuth`; мутации и чтение ключей — `writeGuard`/`keyReadGuard` = `requirePermission('ADMIN','LEAD')`; правила валидируют сессию/`agentTemplate` через `sessionExists`/`resolveAgentTemplate`; ADR-052 — `scopeGuard`/`projectGuard`), `/bindings/:id/keys` — CRUD API-ключей (`POST` создание + `PATCH` метаданных + `POST .../revoke` + `DELETE`), `GET /journal`; `GET /` — inline SSE-хендлер (ADR-089). i18n-ключи: `errors.validation.invalidEventKey`, `errors.validation.invalidEventKeyUpdate`, `errors.notFound.eventKey`, `errors.conflict.eventKeyLabel`, `errors.rateLimited.eventKey`, `errors.unavailable.eventsDisabled` |
+| `/api/v2/schedules` | core `createSchedulerRoutes` (ADR-051 срез / ADR-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (ADR-051); ADR-052 — `scopeGuard`/`projectGuard`; `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
+| `/api/v2/service-keys` | core `createServiceKeyRoutes` (ADR-052 этап I): CRUD scoped-ключей инстанса, `writeGuard`/`readGuard` = `requirePermission('ADMIN')`, `messages` — i18n, `resolveUserId` — id из `attachUser`; store `ServiceApiKeyStore` (`{dataDir}/service-keys.json`) |
+| `/api/v2/webhooks` | core `createWebhookRoutes` (ADR-052 этап II): CRUD подписок исходящих webhooks + журнал доставок + тест, `writeGuard`/`readGuard` = `requirePermission('ADMIN')` (webhook может утекать данные на произвольный URL), `messages` — i18n, `resolveUserId` — id из `attachUser`, `isEnabled` — мастер `webhooks.enabled` (→ 503 на мутации/тест), `allowPrivateTargets` — SSRF-политика; store `WebhookStore` (`{dataDir}/webhooks/subscriptions.json`), журнал `WebhookDeliveryStore` (`{dataDir}/webhooks/deliveries.jsonl`), движок `WebhookService` над `EventBus.subscribeAll` |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
 
@@ -108,9 +108,9 @@
 
 ## Аутентификация
 
-- Порядок в `getCurrentUser`: service-key (`synth_svc_…`, AD-052 — синтетический пользователь `{id:'service:<keyId>', roles}` + `scopes`/`allowedProjects`) → cookie `user_session` → debug test-users (по `Authorization`) → OIDC JWT (если `oidc.enabled`) → единый API-key (`SYNTH_API_KEY`, роль ADMIN, вне debug/OIDC). Резолвер ключа — `config.resolveServiceKey` (`ServiceApiKeyStore.resolveBySecret` + `touch`), неизвестный/отозванный/истёкший → 401.
+- Порядок в `getCurrentUser`: service-key (`synth_svc_…`, ADR-052 — синтетический пользователь `{id:'service:<keyId>', roles}` + `scopes`/`allowedProjects`) → cookie `user_session` → debug test-users (по `Authorization`) → OIDC JWT (если `oidc.enabled`) → единый API-key (`SYNTH_API_KEY`, роль ADMIN, вне debug/OIDC). Резолвер ключа — `config.resolveServiceKey` (`ServiceApiKeyStore.resolveBySecret` + `touch`), неизвестный/отозванный/истёкший → 401.
 - Scope-гейты service-key (`scopeGuard`/`projectGuard`, `src/auth/service-scope.ts`) работают поверх `requireAuth`/`requirePermission`: ограничивают только service-key (`403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`), для интерактивных кред — no-op.
-- Комбинированные guard'ы `src/auth/guards.ts` (AD-052/O1): `requireAdminOrScope(...scopes)` — service-key требует scope, интерактив — роль ADMIN (роуты `/mcp/servers*` PUT/DELETE/test, запись скиллов, чтение user-API); `requireScopeForServiceKey(...scopes)` — service-key требует scope, интерактив без изменений (`POST /mcp/registry`).
+- Комбинированные guard'ы `src/auth/guards.ts` (ADR-052/O1): `requireAdminOrScope(...scopes)` — service-key требует scope, интерактив — роль ADMIN (роуты `/mcp/servers*` PUT/DELETE/test, запись скиллов, чтение user-API); `requireScopeForServiceKey(...scopes)` — service-key требует scope, интерактив без изменений (`POST /mcp/registry`).
 - Cookie-сессии — in-memory (`Map`), переживают только процесс; срок — `sessionMaxAgeMinutes`.
 - Логин/логаут/сессия и **профиль** — под `/auth/*`: `/auth/profile`, `/auth/profile/preferences`, `/auth/profile/avatar`.
 - Debug-ключи и `SYNTH_AUTH_DEBUG` описаны в корневом `AGENTS.md` — не дублировать; сами ключи задаёт `buildAuthConfig` в `src/lib/app-config.ts`.
@@ -120,18 +120,18 @@
 
 - Единственный WS-канал — `/ws/events` (upgrade в `src/app.ts`); один клиент на пользователя, автоподписка на все его сессии.
 - SSE-фоллбек — `GET /api/v2/events` (`auth.requireAuth`, keepalive раз в 30 c).
-- `EventHub` (`src/events/hub.ts`) — диспетчер подписок поверх core-`EventBus`; новых транспортных каналов не плодить (AD-008/009/024).
-- **Watch-all клиенты (AD-052).** `EventClient.allSessions` — клиент получает события **всех** сессий через глобальную подписку `eventBus.subscribeAll` (паритет со standalone-core), а не только своих по `listSessions({ userId })`. Так подключаются SSE/WS при аутентификации **service-key** (`service:<keyId>` владельцем сессий не является) и для «сквозного обзора» (`ADMIN`/`LEAD`, AD-089). Для обычного USER поведение прежнее (только свои сессии). Без этого SSE-подписчик на service-key получал `0` подписок и не видел `stream.done` (ответы не доставлялись).
-- **Webhooks (AD-052 этап II).** Движок `WebhookService` подписывается на **ту же** шину `eventBus` (`subscribeAll`), что обслуживает сессии и глобальный SSE `GET /api/v2/events`: `subscribeAll` — глобальная подписка core-`EventBus`, доступная на общем инстансе, поэтому отдельный мост не нужен. Движок фильтрует события по паттернам подписок, шлёт HMAC-подписанные POST и пишет журнал; `webhooks.enabled: false` (дефолт) глушит диспетчеризацию. Retention — `startWebhookDeliveryPruner`; остановка — `stopWebhookService`/`stopWebhookDeliveryPruner` на shutdown.
+- `EventHub` (`src/events/hub.ts`) — диспетчер подписок поверх core-`EventBus`; новых транспортных каналов не плодить (ADR-008/009/024).
+- **Watch-all клиенты (ADR-052).** `EventClient.allSessions` — клиент получает события **всех** сессий через глобальную подписку `eventBus.subscribeAll` (паритет со standalone-core), а не только своих по `listSessions({ userId })`. Так подключаются SSE/WS при аутентификации **service-key** (`service:<keyId>` владельцем сессий не является) и для «сквозного обзора» (`ADMIN`/`LEAD`, ADR-089). Для обычного USER поведение прежнее (только свои сессии). Без этого SSE-подписчик на service-key получал `0` подписок и не видел `stream.done` (ответы не доставлялись).
+- **Webhooks (ADR-052 этап II).** Движок `WebhookService` подписывается на **ту же** шину `eventBus` (`subscribeAll`), что обслуживает сессии и глобальный SSE `GET /api/v2/events`: `subscribeAll` — глобальная подписка core-`EventBus`, доступная на общем инстансе, поэтому отдельный мост не нужен. Движок фильтрует события по паттернам подписок, шлёт HMAC-подписанные POST и пишет журнал; `webhooks.enabled: false` (дефолт) глушит диспетчеризацию. Retention — `startWebhookDeliveryPruner`; остановка — `stopWebhookService`/`stopWebhookDeliveryPruner` на shutdown.
 - Новую сессию подписывай через `eventHub.subscribeToSession(...)`, а не сырым `eventBus.subscribe`.
 - Сессии, создаваемые events-funnel'ом (`RequestSessionService`: external `ephemeral`/`bind`, explicit из тула `task`), `app.ts` подписывает автоматически через `deps.onSessionMaterialized` → `eventHub.subscribeToSession(owner, sessionId)` — клиент, подключённый до создания сессии, получает её события. Владелец сессии — по `deps.resolveExternalIdentity` (`createExternalIdentityResolver`: override `identityMap` по `identity.principalId`/`chatKey` → профиль `identities` по `principalId`), затем `events.identityMap` (фоллбек-совместимость), затем per-event (пользователь/владелец ключа привязки), `resolveOwnerId`. Резолвер читает `identityMap` геттером (`() => effectiveEventsSettings.identityMap`), поэтому `onEventsChange` применяет runtime-настройку live, без рестарта.
-- **Права внешнего отправителя (AD-089 этап 5).** Funnel считает эффективные роли отправителя (`resolveEffectiveRoles`: база — роли профиля, `identity.roles` только сужают, несопознанный → без прав/fail-closed) и передаёт `EventDeliveryContext {roles, linked}` в `deliver`; backend-`deliver` кладёт их в `metadata` хода (`effective_roles`/`identity_linked`) — аудит/attribution. `match`/RBAC backend (`requirePermission`) определяется **аутентификацией запроса** (service-account шлюза); роль-оси в permission-слое **нет by design** (роли = доступность эндпоинтов). Практический эффект: права машинного аккаунта шлюза больше не «раздаются» произвольным внешним отправителям; машинный доступ сужается scoped **service-key** (AD-052).
+- **Права внешнего отправителя (ADR-089 этап 5).** Funnel считает эффективные роли отправителя (`resolveEffectiveRoles`: база — роли профиля, `identity.roles` только сужают, несопознанный → без прав/fail-closed) и передаёт `EventDeliveryContext {roles, linked}` в `deliver`; backend-`deliver` кладёт их в `metadata` хода (`effective_roles`/`identity_linked`) — аудит/attribution. `match`/RBAC backend (`requirePermission`) определяется **аутентификацией запроса** (service-account шлюза); роль-оси в permission-слое **нет by design** (роли = доступность эндпоинтов). Практический эффект: права машинного аккаунта шлюза больше не «раздаются» произвольным внешним отправителям; машинный доступ сужается scoped **service-key** (ADR-052).
 
 ## LLM Proxy
 
 - Единственный LLM-эндпоинт backend — `POST /api/v2/llm/chat/completions` (OpenAI-совместимый), роутер `src/routes/llm.ts`.
-- AD-052: на прокси навешан `scopeGuard('llm:chat')` — service-key без `llm:chat` → `403 SCOPE_REQUIRED` (проектной проекции у прокси нет).
-- Реализован на ядре: `GatewayProvider` + `ProviderFactory` + `AuditLogger`/`RateLimiter`/`SecretPatternStore`. Любой LLM-вызов — только через Gateway (AD-036); провайдера напрямую не инстанцировать.
+- ADR-052: на прокси навешан `scopeGuard('llm:chat')` — service-key без `llm:chat` → `403 SCOPE_REQUIRED` (проектной проекции у прокси нет).
+- Реализован на ядре: `GatewayProvider` + `ProviderFactory` + `AuditLogger`/`RateLimiter`/`SecretPatternStore`. Любой LLM-вызов — только через Gateway (ADR-036); провайдера напрямую не инстанцировать.
 - Один `AuditLogger` и один payload-лог шарятся между оркестратором и чтением (`/api/v2/audit`, `/api/v2/logs/llm`) — не создавай вторые.
 - Runtime-тумблеры Gateway/security из UI применяются на живой оркестратор через колбэки `onLlmGatewayChange`/`onSecurityChange` в `app.ts`.
 
@@ -140,8 +140,8 @@
 - Единственная точка входа конфига — `loadBackendConfig()` (`src/lib/app-config.ts`) → shared `loadConfig`; возвращает `{ synth, dataDir, workspacesRoot, port, auth }`.
 - `buildAuthConfig` читает `SYNTH_AUTH_DEBUG`, `SYNTH_API_KEY`, `SYNTH_OIDC_*`, `SYNTH_SESSION_MAX_AGE`, `SYNTH_TEST_*_KEY`; тестовые пользователи — только при debug.
 - `SYNTH_PROVIDER_*_API_KEY|URL|MODEL|TYPE` синхронизируются в `JsonStore` провайдеров/моделей при старте (`syncProvidersFromEnv`).
-- `packages/backend/config.yaml` содержит только `mcp.servers`; остальной конфиг ищется каскадно (`findConfigPath`). В dev `dev.sh` задаёт `SYNTH_CONFIG` на этот файл (если он существует), поэтому `mcp.servers` подхватываются; `loadConfig` учитывает `SYNTH_CONFIG` (AD-023).
-- При старте `mcp.servers` из config сидируются в `McpRegistryStore` — единственный источник истины MCP (AD-071). Legacy-роуты `/api/v2/mcp/servers*` и `/mcp/session/:id` — тонкие адаптеры над реестром; собственного хранилища MCP-конфига (`YamlMcpConfigStore`/`McpConfigStore`) в backend больше нет.
+- `packages/backend/config.yaml` содержит только `mcp.servers`; остальной конфиг ищется каскадно (`findConfigPath`). В dev `dev.sh` задаёт `SYNTH_CONFIG` на этот файл (если он существует), поэтому `mcp.servers` подхватываются; `loadConfig` учитывает `SYNTH_CONFIG` (ADR-023).
+- При старте `mcp.servers` из config сидируются в `McpRegistryStore` — единственный источник истины MCP (ADR-071). Legacy-роуты `/api/v2/mcp/servers*` и `/mcp/session/:id` — тонкие адаптеры над реестром; собственного хранилища MCP-конфига (`YamlMcpConfigStore`/`McpConfigStore`) в backend больше нет.
 - Сообщения ошибок — через `t()` из `src/lib/i18n.js`; язык `/api/v2/i18n/current` определяется по `Accept-Language` (inline в `app.ts`).
 
 ## Тесты и запуск
@@ -158,7 +158,7 @@
 - Не дёргать LLM/SDK мимо core-шного `GatewayProvider`.
 - Не плодить транспортные каналы — `EventHub` + `GET /api/v2/events`.
 - Не хардкодить проверки прав вне `requireAuth`/`requireAdmin`/`requirePermission`.
-- Не писать в `$SYNTH_DATA_DIR` в обход `FileStore`/`JsonStore`/`ProjectStore` (AD-005).
+- Не писать в `$SYNTH_DATA_DIR` в обход `FileStore`/`JsonStore`/`ProjectStore` (ADR-005).
 - Не держать состояние сессий в памяти backend — источник истины на диске через core.
 - Не редактировать `packages/backend/config.yaml` ради настроек, кроме MCP: остальной конфиг идёт через `loadBackendConfig`.
 - Не добавлять роут в обход `createXxxRoutes` + `app.route(...)` — иначе он потеряется при переиспользовании core-фабрик.
@@ -170,10 +170,10 @@
 |---|---|
 | Полная спека API по коду | `docs/API_V2.md` |
 | Архитектура | `docs/ARCHITECTURE.md` |
-| Конфигурация | `docs/CONFIGURATION.md`, AD-023 |
+| Конфигурация | `docs/CONFIGURATION.md`, ADR-023 |
 | OIDC / Keycloak | `docs/KEYCLOAK.md` |
-| API v2 / Hono | AD-017 |
-| Движки и runner-стек | AD-022 |
-| Транспорт EventHub + TransportClient | AD-024 |
-| LLM Gateway | AD-036 |
-| Гибрид | AD-042, `docs/HYBRID.md` |
+| API v2 / Hono | ADR-017 |
+| Движки и runner-стек | ADR-022 |
+| Транспорт EventHub + TransportClient | ADR-024 |
+| LLM Gateway | ADR-036 |
+| Гибрид | ADR-042, `docs/HYBRID.md` |

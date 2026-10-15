@@ -34,7 +34,7 @@ const TAB_ICONS: Record<CenterTab['type'], string> = {
 
 /**
  * Иконка/цвет таба. Для чата берём сессию из стора (иконка/цвет сессии,
- * AD-075); иначе — статическая иконка типа таба (fallback).
+ * ADR-075); иначе — статическая иконка типа таба (fallback).
  */
 function useTabIcon(tab: CenterTab): { icon: string; color?: string } {
   const session = useSessionsStore((s) =>

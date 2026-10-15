@@ -1,5 +1,5 @@
 /**
- * AD-030 Этап 2b: эмиты жизненного цикла агента из оркестратора.
+ * ADR-030 Этап 2b: эмиты жизненного цикла агента из оркестратора.
  *
  * Проверяем:
  * - `pre_tool_use` вызывается до исполнения тула, а `{block:true}` его отменяет
@@ -156,7 +156,7 @@ function toolResults(chunks: Array<{ event: string; data: Record<string, unknown
   return chunks.filter((c) => c.event === 'tool_call.result').map((c) => c.data.result as { content: string; isError?: boolean });
 }
 
-describe('ChatOrchestrator — AD-030 hooks (Этап 2b)', () => {
+describe('ChatOrchestrator — ADR-030 hooks (Этап 2b)', () => {
   beforeEach(() => {
     ProviderFactory.register('hookscript', HookScriptProvider);
     HookScriptProvider.calls = 0;

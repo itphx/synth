@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseDurationMs, isValidDuration } from './duration.js';
 
-describe('parseDurationMs (AD-051)', () => {
+describe('parseDurationMs (ADR-051)', () => {
   it('поддерживаемые единицы s/m/h/d', () => {
     expect(parseDurationMs('30s')).toBe(30_000);
     expect(parseDurationMs('15m')).toBe(900_000);
@@ -21,7 +21,7 @@ describe('parseDurationMs (AD-051)', () => {
   });
 });
 
-describe('isValidDuration (AD-051)', () => {
+describe('isValidDuration (ADR-051)', () => {
   it('валидные/невалидные', () => {
     expect(isValidDuration('10s')).toBe(true);
     expect(isValidDuration('3d')).toBe(true);

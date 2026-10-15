@@ -143,7 +143,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('McpSettings — реестр MCP (AD-071 §2.5)', () => {
+describe('McpSettings — реестр MCP (ADR-071 §2.5)', () => {
   it('показывает origin, trust и автора', async () => {
     const container = await renderSettings()
     const sysRow = container.querySelector('[data-testid="mcp-registry-sys"]')!
@@ -265,7 +265,7 @@ describe('McpSettings — реестр MCP (AD-071 §2.5)', () => {
   })
 })
 
-describe('McpSettings — политика MCP (AD-071 §2.3)', () => {
+describe('McpSettings — политика MCP (ADR-071 §2.3)', () => {
   it('ADMIN видит карточку «MCP policy» и сохраняет выбранное значение', async () => {
     const container = await renderSettings()
 
@@ -377,7 +377,7 @@ describe('McpSettings — политика MCP (AD-071 §2.3)', () => {
   })
 })
 
-describe('McpSettings — сетевая политика (AD-071 §2.3.1 / AD-072)', () => {
+describe('McpSettings — сетевая политика (ADR-071 §2.3.1 / ADR-072)', () => {
   it('ADMIN видит секцию и сохраняет allow-режим со списком', async () => {
     mocks.getMcpNetworkPolicyInfo.mockResolvedValue({
       policy: { mode: 'allow', list: ['10.0.0.0/8'] },
@@ -460,7 +460,7 @@ describe('McpSettings — сетевая политика (AD-071 §2.3.1 / AD-0
   })
 })
 
-describe('McpSettings — reset через API (AD-072)', () => {
+describe('McpSettings — reset через API (ADR-072)', () => {
   it('Reset доступности серый/неактивен на серверном дефолте и активен при изменениях', async () => {
     const container = await renderSettings()
     const resetButton = () =>
@@ -519,7 +519,7 @@ describe('McpSettings — reset через API (AD-072)', () => {
   })
 })
 
-describe('McpSettings — каркас SettingsPanel (AD-072)', () => {
+describe('McpSettings — каркас SettingsPanel (ADR-072)', () => {
   it('один вертикальный скролл, центрирование, без pr-2 и grid без grid-cols-1', async () => {
     const container = await renderSettings()
     expect(container.querySelector('.overflow-y-auto')).not.toBeNull()

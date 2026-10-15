@@ -514,7 +514,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
       { child: (await sessionManager.getSession(child))!, parent: (await sessionManager.getSession(parent))!, streamId: 'st-2', abortSignal: new AbortController().signal },
     );
 
-    // AD-070 §1.5: system — вторым аргументом chatAsync, в messages system-сообщения нет.
+    // ADR-070 §1.5: system — вторым аргументом chatAsync, в messages system-сообщения нет.
     expect(capturedSystem).toBe('You are a test subagent.');
     expect(captured.some((m) => m.role === 'system')).toBe(false);
     // user(промпт) + assistant(частичный) + user(маркер resume)
@@ -526,7 +526,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(captured.some((m) => m.role === 'assistant' && m.content === 'начал анализ...')).toBe(true);
   });
 
-  it('AD-069: getProjectInstructions добавляет проектные инструкции в system prompt resume', async () => {
+  it('ADR-069: getProjectInstructions добавляет проектные инструкции в system prompt resume', async () => {
     const { parent, child } = await createInterruptedChild();
     let capturedSystem = '';
     const provider = {
@@ -553,7 +553,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(capturedSystem).toContain('RESUME-RULES');
   });
 
-  it('AD-069: systemPrompt override ребёнка — getProjectInstructions не применяется', async () => {
+  it('ADR-069: systemPrompt override ребёнка — getProjectInstructions не применяется', async () => {
     const { parent, child } = await createInterruptedChild();
     await sessionManager.withLock(child, async (s) => {
       s.settings.systemPrompt = 'CHILD-OVERRIDE';
@@ -589,7 +589,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(capturedSystem).not.toContain('RESUME-RULES');
   });
 
-  it('AD-071 §2.1 + AD-070: resume наследует MCP-скоуп и modelPriceLoader', async () => {    const { parent, child } = await createInterruptedChild();
+  it('ADR-071 §2.1 + ADR-070: resume наследует MCP-скоуп и modelPriceLoader', async () => {    const { parent, child } = await createInterruptedChild();
     let capturedMcp: string[] | undefined;
     const registry = {
       get: (id: string) => (id === 'explore'
@@ -637,7 +637,7 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
     expect(loadedModels.length).toBeGreaterThan(0);
   });
 
-  it('AD-075/AD-076: проектные зависимости прокидываются в tool-extra resumed-саб-агента', async () => {
+  it('ADR-075/ADR-076: проектные зависимости прокидываются в tool-extra resumed-саб-агента', async () => {
     const { parent, child } = await createInterruptedChild();
 
     // Probe-тул: фиксирует проектную часть ctx.extra, которую видит саб-агент.

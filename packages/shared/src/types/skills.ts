@@ -1,35 +1,35 @@
 import type { ToolCapability } from './tools.js';
 
 /**
- * AD-046 §2/§4: скиллы — переиспользуемые инструкции (`SKILL.md` + supporting-файлы).
+ * ADR-046 §2/§4: скиллы — переиспользуемые инструкции (`SKILL.md` + supporting-файлы).
  * Здесь только контракты (типы), без бизнес-логики движка.
  */
 
-/** Фактический источник скилла (AD-046 §4.1). */
+/** Фактический источник скилла (ADR-046 §4.1). */
 export const SKILL_SCOPES = ['instance', 'project'] as const;
 export type SkillScope = (typeof SKILL_SCOPES)[number];
 
-/** Уровень включения скилла (модель AD-071 §2.4/AD-046 §4.5). */
+/** Уровень включения скилла (модель ADR-071 §2.4/ADR-046 §4.5). */
 export const SKILL_LEVELS = ['system', 'project', 'session'] as const;
 export type SkillLevel = (typeof SKILL_LEVELS)[number];
 
 /**
- * AD-046 §6.1: способ вызова скилла — комбинация `user-invocable` /
+ * ADR-046 §6.1: способ вызова скилла — комбинация `user-invocable` /
  * `disable-model-invocation`.
  */
 export const SKILL_INVOCATIONS = ['both', 'user', 'model', 'none'] as const;
 export type SkillInvocation = (typeof SKILL_INVOCATIONS)[number];
 
-/** AD-046 §3.2: подсказка авто-применения (не разрешение). */
+/** ADR-046 §3.2: подсказка авто-применения (не разрешение). */
 export const SKILL_TRIGGERS = ['manual', 'auto'] as const;
 export type SkillTrigger = (typeof SKILL_TRIGGERS)[number];
 
-/** AD-046 §3.2: применимость скилла по режиму сессии (AD-025). */
+/** ADR-046 §3.2: применимость скилла по режиму сессии (ADR-025). */
 export const SKILL_MODES = ['plan', 'act', 'any'] as const;
 export type SkillMode = (typeof SKILL_MODES)[number];
 
 /**
- * AD-046 §3.2: нормализованный frontmatter `SKILL.md` (после толерантного парсинга).
+ * ADR-046 §3.2: нормализованный frontmatter `SKILL.md` (после толерантного парсинга).
  * Неизвестные top-level ключи не теряются — попадают в `extra`.
  */
 export interface SkillMeta {
@@ -51,7 +51,7 @@ export interface SkillMeta {
   disableModelInvocation: boolean;
   /** Вычисляется из двух флагов (§6.1). */
   invocation: SkillInvocation;
-  // --- metadata.synth.* (AD-046 §3.2) ---
+  // --- metadata.synth.* (ADR-046 §3.2) ---
   tags?: string[];
   category?: string;
   relatedSkills?: string[];
@@ -88,7 +88,7 @@ export type SkillIssueCode =
   | 'shadowed'
   | 'untrusted'
   | 'read-error'
-  /** AD-046 §4.2: ошибка удалённого каталога (`skills.urls`): URL/индекс/парсинг. */
+  /** ADR-046 §4.2: ошибка удалённого каталога (`skills.urls`): URL/индекс/парсинг. */
   | 'remote';
 
 /** Проблема парсинга/валидации одного скилла. */
@@ -109,7 +109,7 @@ export interface SkillDiagnostic extends SkillIssue {
 }
 
 /**
- * Запись реестра скиллов (AD-046 §4.5). Доступна через API/диагностику; тело
+ * Запись реестра скиллов (ADR-046 §4.5). Доступна через API/диагностику; тело
  * скилла в каталог промпта не попадает (progressive disclosure, §5).
  */
 export interface SkillSummary {
@@ -117,7 +117,7 @@ export interface SkillSummary {
   description: string;
   /** Фактический scope из источника. */
   scope: SkillScope;
-  /** Уровень из источника (system/project; session — AD-046 §4.5, Фаза 1 без хранения). */
+  /** Уровень из источника (system/project; session — ADR-046 §4.5, Фаза 1 без хранения). */
   level: SkillLevel;
   /** Абсолютный путь каталога скилла. */
   dir: string;
@@ -152,7 +152,7 @@ export interface SkillCatalogFilter {
   agent?: { id?: string; groups?: string[] };
   /** Capabilities агента для проверки `requires_capabilities`. */
   capabilities?: readonly string[];
-  /** Per-session явное включение имён (volatile, AD-046 §4.5). */
+  /** Per-session явное включение имён (volatile, ADR-046 §4.5). */
   sessionEnabled?: string[];
   /** Per-session opt-out имён/групп/категорий (volatile). */
   sessionDisabled?: string[];

@@ -1,7 +1,7 @@
 /**
- * ProviderPool — кеширование экземпляров BaseProvider (AD-034).
+ * ProviderPool — кеширование экземпляров BaseProvider (ADR-034).
  * Ключ кеша: `${providerName}:${modelName}`.
- * При включённом LLM Gateway (AD-036) созданный провайдер оборачивается
+ * При включённом LLM Gateway (ADR-036) созданный провайдер оборачивается
  * в GatewayProvider через gatewayFactory. Фабрику передаёт оркестратор:
  * GatewayProvider нужны getMap/saveMap от сессии, которых в пуле нет,
  * поэтому пул сам GatewayProvider не создаёт.
@@ -14,12 +14,12 @@ import { toCoreProviderConfig } from './utils.js';
 
 export class ProviderPool {
   private readonly _cache = new Map<string, BaseProvider>();
-  /** AD-084: кеш decision-провайдеров (всегда обёрнутых в GatewayProvider). */
+  /** ADR-084: кеш decision-провайдеров (всегда обёрнутых в GatewayProvider). */
   private readonly _decisionCache = new Map<string, BaseProvider>();
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
   private _gatewayConfig: LLMGatewayConfig | null;
   private _gatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
-  /** AD-084: фабрика обвязки decision-провайдеров (применяется всегда). */
+  /** ADR-084: фабрика обвязки decision-провайдеров (применяется всегда). */
   private _decisionGatewayFactory: ((inner: BaseProvider) => BaseProvider) | null;
 
   constructor(
@@ -76,7 +76,7 @@ export class ProviderPool {
   }
 
   /**
-   * AD-084: decision-провайдер (`type: 'decision'`), обёрнутый в GatewayProvider
+   * ADR-084: decision-провайдер (`type: 'decision'`), обёрнутый в GatewayProvider
    * **всегда** (при заданной фабрике обвязки). В отличие от `getProvider`, gateway
    * не опционален: decision-путь обязан проходить через guard/обфускацию/аудит.
    */
@@ -102,7 +102,7 @@ export class ProviderPool {
     }
   }
 
-  /** AD-084: обновление обвязки decision-провайдеров (сбрасывает их кеш). */
+  /** ADR-084: обновление обвязки decision-провайдеров (сбрасывает их кеш). */
   setDecisionGatewayFactory(
     factory: ((inner: BaseProvider) => BaseProvider) | null,
   ): void {
@@ -110,7 +110,7 @@ export class ProviderPool {
     this._decisionCache.clear();
   }
 
-  /** AD-036: live-переключение gateway. Сбрасывает кеш — провайдеры пересоздаются с новой обёрткой. */
+  /** ADR-036: live-переключение gateway. Сбрасывает кеш — провайдеры пересоздаются с новой обёрткой. */
   setGateway(
     gatewayConfig: LLMGatewayConfig | null | undefined,
     gatewayFactory: ((inner: BaseProvider) => BaseProvider) | null,
@@ -120,7 +120,7 @@ export class ProviderPool {
     this._cache.clear();
   }
 
-  /** AD-036: если gateway включён и задана фабрика — оборачиваем провайдер. */
+  /** ADR-036: если gateway включён и задана фабрика — оборачиваем провайдер. */
   private _applyGateway(provider: BaseProvider): BaseProvider {
     if (this._gatewayConfig?.enabled && this._gatewayFactory) {
       return this._gatewayFactory(provider);

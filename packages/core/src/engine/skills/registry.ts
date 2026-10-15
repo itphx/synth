@@ -8,7 +8,7 @@ export interface SkillRegistryOptions {
   sources: (opts?: { projectWorkspace?: string }) => Promise<SkillSource[]> | SkillSource[];
   watcher?: SkillWatcher;
   /**
-   * AD-046 §9.5: встроенные скиллы (объявлены в коде). Подмешиваются **первыми**
+   * ADR-046 §9.5: встроенные скиллы (объявлены в коде). Подмешиваются **первыми**
    * в порядке discovery, поэтому project/instance их не перекрывают.
    */
   builtin?: readonly DiscoveredSkill[];
@@ -21,7 +21,7 @@ interface CacheEntry {
 }
 
 /**
- * AD-046 §4: реестр скиллов — discovery + кэш с ленивой инвалидацией по mtime
+ * ADR-046 §4: реестр скиллов — discovery + кэш с ленивой инвалидацией по mtime
  * (watcher). Кэш — по каталогу-источнику, поэтому смена проекта не сбрасывает
  * instance/config-кеш.
  */
@@ -41,7 +41,7 @@ export class SkillRegistry {
   async list(opts?: { projectWorkspace?: string }): Promise<SkillScanResult> {
     const sources = await this._sources(opts);
     const entries: Array<{ source: SkillSource; result: SkillScanResult }> = [];
-    // AD-046 §9.5: builtin — первыми (system-приоритет), без сканирования ФС.
+    // ADR-046 §9.5: builtin — первыми (system-приоритет), без сканирования ФС.
     if (this._builtin.length > 0) {
       entries.push({
         source: BUILTIN_SOURCE,

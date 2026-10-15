@@ -1,5 +1,5 @@
 /**
- * ObfuscationMapStore (AD-036) — доступ к карте обфускации сессии через SessionManager.
+ * ObfuscationMapStore (ADR-036) — доступ к карте обфускации сессии через SessionManager.
  * Карта живёт в Session.obfuscationMap; read-modify-write — атомарно через withLock.
  */
 

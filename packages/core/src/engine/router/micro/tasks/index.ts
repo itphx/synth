@@ -1,5 +1,5 @@
 /**
- * Обработчики задач микро-слоя (AD-035).
+ * Обработчики задач микро-слоя (ADR-035).
  */
 export { handleSmallTalk } from './small-talk.js';
 export { handleClassifyIntent } from './classify-intent.js';

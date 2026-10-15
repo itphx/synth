@@ -19,7 +19,7 @@ async function exists(path: string): Promise<boolean> {
 /** Спецсимволы, ломающие наивную конкатенацию: `$`, `"`, `'`, `\`, пробел, перевод строки. */
 const TRICKY_PASSPHRASE = 'p$a"s\'\\ w\nrd';
 
-describe('ssh-env (AD-076 §T3)', () => {
+describe('ssh-env (ADR-076 §T3)', () => {
   it('isSshUrl распознаёт git@ и ssh://', () => {
     expect(isSshUrl('git@github.com:org/repo.git')).toBe(true);
     expect(isSshUrl('ssh://git@host/org/repo.git')).toBe(true);

@@ -1,5 +1,5 @@
 /**
- * AD-046 §7/§8.2: ранний резолвинг `/`-команд в оркестраторе — локальный ответ
+ * ADR-046 §7/§8.2: ранний резолвинг `/`-команд в оркестраторе — локальный ответ
  * без LLM, событие `command.invoked`, эфемерные сообщения.
  */
 import { describe, it, expect, afterEach } from 'vitest';
@@ -77,7 +77,7 @@ afterEach(async () => {
   if (tmpDir) await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('ChatOrchestrator — slash-команды (AD-046 §7)', () => {
+describe('ChatOrchestrator — slash-команды (ADR-046 §7)', () => {
   it('/help → локальный ответ без LLM, command.invoked, ephemeral-сообщения', async () => {
     const { result, chunks, after, events, msg } = await run('/help');
     expect(result).toEqual({});
@@ -92,7 +92,7 @@ describe('ChatOrchestrator — slash-команды (AD-046 §7)', () => {
     expect(events.some((e) => e.type === 'command.invoked' && e.data.command === 'help')).toBe(true);
 
     const assistant = after.messages.find((m) => m.role === MessageRole.ASSISTANT);
-    // AD-046 §7.1: stream.done несёт index/id сохранённого ответа — UI не
+    // ADR-046 §7.1: stream.done несёт index/id сохранённого ответа — UI не
     // вычисляет index fallback'ом и не сталкивается с user-командой.
     const assistantIndex = after.messages.findIndex((m) => m.role === MessageRole.ASSISTANT);
     expect(done?.data.message_index).toBe(assistantIndex);
@@ -112,7 +112,7 @@ describe('ChatOrchestrator — slash-команды (AD-046 §7)', () => {
 
     expect(assistant?.content).toBe('HELP TEXT');
     expect(assistant?.ephemeral).toBe(true);
-    // AD-046 §7.1: нейтральный system-блок в UI — признак команды + имя/аргументы.
+    // ADR-046 §7.1: нейтральный system-блок в UI — признак команды + имя/аргументы.
     expect(assistant?.model).toBe('command');
     expect(assistant?.provider).toBe('command');
     expect(assistant?.metadata?.command).toBe(true);

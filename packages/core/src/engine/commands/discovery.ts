@@ -6,7 +6,7 @@ import { expandHome, isProjectTrusted } from '../skills/trust.js';
 import { parseCommandFile } from './parser.js';
 import type { CommandScanResult, CommandSource, TemplateCommand } from './types.js';
 
-/** Подкаталог проекта для шаблонных команд (AD-046 §7.1). */
+/** Подкаталог проекта для шаблонных команд (ADR-046 §7.1). */
 export const PROJECT_COMMANDS_DIR = join('.synth', 'commands');
 
 export interface BuildCommandSourcesOptions {
@@ -19,7 +19,7 @@ export interface BuildCommandSourcesOptions {
 }
 
 /**
- * AD-046 §7.1/§4.3: источники шаблонных команд в порядке приоритета
+ * ADR-046 §7.1/§4.3: источники шаблонных команд в порядке приоритета
  * `project > instance > config.paths`.
  */
 export function buildCommandSources(opts: BuildCommandSourcesOptions): CommandSource[] {
@@ -82,7 +82,7 @@ export async function scanCommandSource(source: CommandSource): Promise<CommandS
 }
 
 /**
- * AD-046 §4.3: дедупликация first-wins по имени. Проигравшие — `shadowed`.
+ * ADR-046 §4.3: дедупликация first-wins по имени. Проигравшие — `shadowed`.
  * Недоверенные — с диагностикой `untrusted` (видны в диагностике, не резолвятся).
  */
 export function mergeCommandScans(

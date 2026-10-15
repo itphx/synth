@@ -12,7 +12,7 @@ export interface MultiSelectOption {
 export interface MultiSelectFieldProps {
   label?: string
   description?: string
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   error?: string
   /** Текущее подмножество выбранных значений. */
@@ -34,7 +34,7 @@ function safeId(value: string): string {
 }
 
 /**
- * AD-052/AD-072: мульти-выбор из фиксированного набора — чипы-переключатели.
+ * ADR-052/ADR-072: мульти-выбор из фиксированного набора — чипы-переключатели.
  * Порядок выбранных значений нормализуется по порядку `options` (детерминированный
  * payload). Пригоден для ролей, scopes и проектной проекции service-ключа.
  */

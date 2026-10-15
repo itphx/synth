@@ -130,7 +130,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('ProjectTab — проектный скоуп скиллов (AD-046 §4.5)', () => {
+describe('ProjectTab — проектный скоуп скиллов (ADR-046 §4.5)', () => {
   it('owner видит два тумблера: «Доступен» и «Включён по умолчанию»', async () => {
     const container = await renderTab()
     const row = container.querySelector('[data-testid="project-skill-api-review"]')!

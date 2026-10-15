@@ -160,7 +160,7 @@ function EntityEditForm({ target, onClose }: { target: EntityEditTarget; onClose
  * (у проекта — ещё описание) и внешний вид (иконка + цвет). Один экземпляр
  * рендерится в `App.tsx`; открытие — через `useEntityEditStore`.
  *
- * Сохранение — по кнопке (черновик, AD-072), с тостами `panel.saved`/
+ * Сохранение — по кнопке (черновик, ADR-072), с тостами `panel.saved`/
  * `panel.saveError`. Широкий на десктопе (`sm:max-w-2xl`), на мобильном —
  * обычная центрированная модалка с внутренним скроллом.
  */

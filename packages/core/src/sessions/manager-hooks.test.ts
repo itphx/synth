@@ -1,5 +1,5 @@
 /**
- * AD-030 Этап 2b: `session_start` / `session_end` из SessionManager.
+ * ADR-030 Этап 2b: `session_start` / `session_end` из SessionManager.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -10,7 +10,7 @@ import { SessionManager } from './manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { HookBus } from '../engine/hooks/hook-bus.js';
 
-describe('SessionManager — AD-030 session hooks', () => {
+describe('SessionManager — ADR-030 session hooks', () => {
   let tmpDir: string;
   let bus: HookBus;
 
@@ -51,7 +51,7 @@ describe('SessionManager — AD-030 session hooks', () => {
     expect(await manager.getSession(session.id)).toBeNull();
   });
 
-  it('AD-089: archiveSession эмитит session_end (один раз)', async () => {
+  it('ADR-089: archiveSession эмитит session_end (один раз)', async () => {
     const ended: Array<{ sessionId: string }> = [];
     bus.on('session_end', (ctx) => { ended.push(ctx); }, { mode: 'async' });
 

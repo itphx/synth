@@ -42,7 +42,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('/api/v2/skill-bundles (AD-046 §9.1)', () => {
+describe('/api/v2/skill-bundles (ADR-046 §9.1)', () => {
   it('CRUD: create → list → get → patch → delete', async () => {
     const { app } = makeApp();
     const created = await json(app, '/api/v2/skill-bundles', {

@@ -142,7 +142,7 @@ export const dict = {
     'mcpPolicy.saved': 'Политика MCP сохранена',
   'mcpPolicy.saveError': 'Не удалось сохранить политику MCP: {error}',
 
-  // Скиллы и slash-команды (AD-046)
+  // Скиллы и slash-команды (ADR-046)
   'skillsPolicy.title': 'Политика скиллов',
   'skillsPolicy.description': 'Какие определения скиллов отправляются модели в запросах. Механизм каталога и резолвинга команд отключать нельзя.',
   'skillsPolicy.label': 'Глобальная политика скиллов',
@@ -579,7 +579,7 @@ export const dict = {
   'rightPanel.stats.cacheReadTokens': 'Кэш чтение',
   'rightPanel.stats.cacheWriteTokens': 'Кэш запись',
   'rightPanel.stats.cacheHitRate': 'Попадание в кэш',
-  // AD-070 §2.6: короткие заголовки столбцов в таблицах агентов/пользователей
+  // ADR-070 §2.6: короткие заголовки столбцов в таблицах агентов/пользователей
   'rightPanel.stats.colCache': 'Кэш',
   'rightPanel.stats.colCacheHit': '%',
   'rightPanel.stats.reasoningTokens': 'Размышления',
@@ -590,7 +590,7 @@ export const dict = {
   'rightPanel.stats.noProject': 'Нет проекта',
   'rightPanel.stats.contextWindow': 'Контекстное окно',
   'rightPanel.stats.contextNearLimit': 'Лимит контекста близко',
-  // AD-070 §2.6: статистика агентов и авторов
+  // ADR-070 §2.6: статистика агентов и авторов
   'rightPanel.stats.agentsStats': 'Статистика агентов',
   'rightPanel.stats.usersStats': 'Статистика пользователей',
   'rightPanel.stats.agent': 'Агент',
@@ -598,19 +598,19 @@ export const dict = {
   'rightPanel.stats.messages': 'Сообщений',
   'rightPanel.stats.subagents': 'Сабагентов',
   'rightPanel.stats.subagentTokens': 'Токенов сабагентов',
-  // AD-070 §2.6: отдельный блок сабагентов в «Последнем ответе»
+  // ADR-070 §2.6: отдельный блок сабагентов в «Последнем ответе»
   'rightPanel.stats.subagentsTitle': 'Сабагенты',
   'rightPanel.stats.subagentsSessions': 'Сессий',
   'rightPanel.stats.subagentsNote': 'Отдельно от ответа — не входит в контекстное окно',
   'rightPanel.stats.subagentsIncluded': 'в т.ч. сабагенты',
-  // AD-070 §2.6: live-строка статистики активного стрима
+  // ADR-070 §2.6: live-строка статистики активного стрима
   'rightPanel.stats.live': 'в процессе',
   'rightPanel.stats.speed': 'Скорость',
   'rightPanel.stats.duration': 'Длительность',
   'rightPanel.stats.cost': 'Стоимость',
   'rightPanel.stats.expand': 'Подробнее',
   'rightPanel.stats.collapse': 'Скрыть',
-  // AD-070 §2.5: состав промпта (манифест)
+  // ADR-070 §2.5: состав промпта (манифест)
   'rightPanel.stats.promptComposition': 'Состав промпта',
   'rightPanel.stats.promptTotal': 'Всего символов\n~токенов',
   'rightPanel.stats.promptStaticPrefix': 'Статический\nпрефикс, симв.',
@@ -648,7 +648,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.mcp.tools': 'MCP-инструменты',
   'rightPanel.stats.promptBlock.mcp.servers': 'MCP-серверы',
   'rightPanel.stats.promptBlock.mcp.status': 'Статус MCP',
-  // AD-071 §2.6: таблицы «Встроенные инструменты» и «MCP»
+  // ADR-071 §2.6: таблицы «Встроенные инструменты» и «MCP»
   'rightPanel.stats.builtinTools': 'Встроенные инструменты',
   'rightPanel.stats.mcpServers': 'MCP',
   'rightPanel.stats.colTool': 'Инструмент',
@@ -679,7 +679,7 @@ export const dict = {
   'rightPanel.stats.mcpReason.system_disabled': 'выключен администратором',
   'rightPanel.stats.mcpReason.not_default': 'не включён по умолчанию',
   'rightPanel.stats.tokenEstimate': 'Оценка токенов: ~{tokens} (символов {chars}, ratio {ratio})',
-  // AD-070 §2.5: слой истории (messages) — состав отправляемых сообщений
+  // ADR-070 §2.5: слой истории (messages) — состав отправляемых сообщений
   'rightPanel.stats.history': 'История',
   'rightPanel.stats.historyMessages': 'Сообщений',
   'rightPanel.stats.historyColType': 'Тип',
@@ -733,7 +733,7 @@ export const dict = {
   'projectTab.invariants.saving': 'Сохранение…',
   'projectTab.log.title': 'Лог',
   'projectTab.log.hint': 'Журнал работ по проекту (ведёт модель через project_log_write)',
-  // AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
+  // ADR-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
   'projectTab.mcp.title': 'MCP-серверы',
   'projectTab.mcp.empty': 'В реестре пока нет MCP-серверов.',
   'projectTab.mcp.available': 'Доступен',
@@ -756,7 +756,7 @@ export const dict = {
   'sessionTab.todo.priority.high': 'Высокий',
   'sessionTab.todo.priority.medium': 'Средний',
   'sessionTab.todo.priority.low': 'Низкий',
-  // AD-069 §9.3: проектные инструкции (AGENTS.md chain/sources)
+  // ADR-069 §9.3: проектные инструкции (AGENTS.md chain/sources)
   'sessionTab.instructions.title': 'Проектные инструкции',
   'sessionTab.instructions.summary': '{count, plural, one {# файл} few {# файла} many {# файлов}} · {chars} символов',
   'sessionTab.instructions.truncatedCount': '{count, plural, one {# файл обрезан} few {# файла обрезано} many {# файлов обрезано}}',
@@ -817,7 +817,7 @@ export const dict = {
   'rightPanel.context.notLoaded': 'Сессия не загружена',
   'rightPanel.context.noStickyNotes': 'Нет заметок',
   'rightPanel.context.hint.stickyNotes': 'Заметки добавляются в системный промпт и видны модели в каждом запросе.',
-  // Шедулер расписаний (AD-051/AD-089)
+  // Шедулер расписаний (ADR-051/ADR-089)
   'rightPanel.scheduler.add': 'Добавить расписание',
   'rightPanel.scheduler.count': '{count, plural, one {# расписание} few {# расписания} many {# расписаний}}',
   'rightPanel.scheduler.empty': 'Расписания не настроены',
@@ -1001,11 +1001,11 @@ export const dict = {
   'chat.actions.fork': 'Создать ветку',
   'chat.actions.debug': 'Отладка',
 
-  // AD-046 §7.1: нейтральный system-блок системной (builtin) команды
+  // ADR-046 §7.1: нейтральный system-блок системной (builtin) команды
   'chat.command.title': 'Команда',
   'chat.command.copy': 'Копировать',
 
-  // AD-046 §7.1: единый Notice служебных сообщений
+  // ADR-046 §7.1: единый Notice служебных сообщений
   'chat.notice.summary': 'Сводка',
   'chat.notice.debug': 'Отладка',
   'chat.notice.error': 'Ошибка',
@@ -1024,7 +1024,7 @@ export const dict = {
   'chat.message.forked': 'Создана ветка',
   'chat.message.empty': 'Пустое сообщение',
 
-  // AD-070 §2.6: статистика под ответом ассистента
+  // ADR-070 §2.6: статистика под ответом ассистента
   'chat.messageStats.stopped': 'Остановлено',
   'chat.messageStats.error': 'Ошибка',
   'chat.messageStats.limit': 'Лимит итераций',
@@ -1139,7 +1139,7 @@ export const dict = {
   'chat.footer.collapse': 'Свернуть',
   'chat.footer.mode': 'Режим',
 
-  // Plan/Act режим сессии (AD-025)
+  // Plan/Act режим сессии (ADR-025)
   'chat.mode.title': 'Режим сессии: План (только чтение) / Действия (полный доступ) / YOLO (автоподтверждение)',
   'chat.mode.plan': 'План',
   'chat.mode.act': 'Действия',
@@ -1222,7 +1222,7 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Таймаут подтверждения (сек)',
   'sessionSettings.askTimeoutEnabled': 'Включено',
   'sessionSettings.askTimeoutDisabled': 'Выключено',
-  // AD-029: сессионные одобрения
+  // ADR-029: сессионные одобрения
   'sessionSettings.allow.title': 'Сессионные одобрения',
   'sessionSettings.allow.empty': 'Нет одобренных инструментов',
   'sessionSettings.allow.hint': 'Allow-правила появляются после «Разрешить в сессии» в панели подтверждения',
@@ -1237,12 +1237,12 @@ export const dict = {
   'sessionSettings.micro.decision': 'Decision-уровень',
   'sessionSettings.micro.decisionHint': 'Decision-модель (Clef/System One) в микро-каскаде работает по глобальной настройке. Выключение принудительно отключает уровень в этой сессии.',
   'sessionSettings.routing.tooltip': 'Запросы, которые не обработали Быстрые ответы, распределяются между моделями автоматически: стратегия выбирает модель по типу задачи (кодинг/чат/анализ), по стоимости или сочетанием. Дополнительно работает контроль качества: если ответ неуверенный или слишком короткий — запрос пересылается на fallback-модель. Если маршрутизация выключена — используется модель, выбранная в сессии.',
-  // AD-071 §2.4: MCP-скоуп в сессии
+  // ADR-071 §2.4: MCP-скоуп в сессии
   'sessionSettings.mcp.title': 'MCP-серверы',
   'sessionSettings.mcp.hint': 'Включение/отключение на уровне сессии. Переопределяет настройки проекта.',
   'sessionSettings.mcp.toggleLabel': 'Включён',
 
-  // AD-046 §4.5/§8.2/§9.3: скиллы и команды (панели, статистика, автокомплит)
+  // ADR-046 §4.5/§8.2/§9.3: скиллы и команды (панели, статистика, автокомплит)
   'sessionSettings.skills.title': 'Скиллы',
   'sessionSettings.skills.hint': 'Включение/отключение на уровне сессии. Переопределяет настройки проекта.',
   'sessionSettings.skills.toggleLabel': 'Включён',
@@ -1701,7 +1701,7 @@ export const dict = {
   'mcp.type.http': 'HTTP (streamable)',
   'mcp.type.sse.legacy': 'SSE (устаревший)',
 
-  // MCP: реестр (AD-071 §2.5)
+  // MCP: реестр (ADR-071 §2.5)
   'mcp.registry.author': 'автор: {name}',
   'mcp.registry.stdioAdminOnly': 'stdio-серверы может добавлять только администратор',
   'mcp.registry.testAfterSave': 'Сначала сохраните сервер, затем проверьте подключение.',
@@ -1710,7 +1710,7 @@ export const dict = {
   'mcp.trust.builtin': 'доверенный',
   'mcp.trust.community': 'community',
 
-  // MCP: сетевой доступ (AD-071 §2.3.1)
+  // MCP: сетевой доступ (ADR-071 §2.3.1)
   'mcp.network.title': 'Сетевой доступ пользовательских MCP-серверов',
   'mcp.network.description': 'Ограничивает, к каким хостам могут подключаться добавленные пользователями HTTP MCP-серверы (защита от SSRF/egress).',
   'mcp.network.mode': 'Режим',
@@ -1746,7 +1746,7 @@ export const dict = {
   'mcp.permissions.perTool': 'Инструменты сервера',
   'mcp.permissions.toolDefaultHint': 'Без отдельной настройки — как «Все инструменты»',
 
-  // MCP: пользовательские настройки (AD-071 §2.5)
+  // MCP: пользовательские настройки (ADR-071 §2.5)
   'mcp.user.title': 'MCP-серверы',
   'mcp.user.description': 'Добавляйте свои HTTP MCP-серверы. Они становятся доступны сессиям согласно политике администратора.',
   'mcp.user.empty': 'У вас пока нет серверов. Добавьте HTTP-сервер, чтобы расширить возможности моделей.',
@@ -1765,7 +1765,7 @@ export const dict = {
   'mcp.error.loadToolsDisabled': 'Ошибка загрузки отключённых инструментов',
   'mcp.error.saveToolsDisabled': 'Ошибка сохранения отключённых инструментов',
 
-  // MCP: админское управление встроенными инструментами (AD-071 §2.6)
+  // MCP: админское управление встроенными инструментами (ADR-071 §2.6)
   'mcpAdmin.tools.title': 'Встроенные инструменты',
   'mcpAdmin.tools.description': 'Управление доступностью встроенных инструментов на уровне инстанса. Отмеченный инструмент включён; снимите галочку, чтобы отключить — отключённые инструменты не попадают в запрос к модели независимо от политики инструментов. Runtime-инструменты сессии всегда включены.',
   'mcpAdmin.tools.checkHint': 'Галочка — инструмент включён. Снимите, чтобы отключить.',
@@ -1811,7 +1811,7 @@ export const dict = {
   'merge.copy': 'Копировать',
   'merge.copied': 'Скопировано {count} сообщ.',
 
-  // Routing (AD-034)
+  // Routing (ADR-034)
   'routing.title': 'Маршрутизация',
   'routing.globalDescription': 'Глобальные настройки маршрутизации запросов по умолчанию для новых сессий.',
   'routing.strategy': 'Стратегия',
@@ -2111,7 +2111,7 @@ export const dict = {
   'router.no_user_query':
     'Модель не смогла обработать цепочку вызова инструментов (потерян исходный запрос пользователя). Попробуйте ещё раз, уменьшите число инструментов или увеличьте контекст модели.',
 
-  // --- Quality check (AD-034) ---
+  // --- Quality check (ADR-034) ---
   'qc.min_length_ok': 'Длина ответа {length} >= {min}',
   'qc.min_length_fail_detail': 'Ответ короче {min} символов ({length})',
   'qc.min_length_fail': 'Ответ короче {min} символов',
@@ -2126,7 +2126,7 @@ export const dict = {
   'qc.self_check_error': 'Ошибка самопроверки: {error} — считаем пройденной',
   'qc.all_passed': 'Все проверки пройдены',
 
-  // --- Микро-слой (AD-035) ---
+  // --- Микро-слой (ADR-035) ---
   'micro.greeting': 'Привет! Чем могу помочь?',
   'micro.farewell': 'До встречи! Обращайтесь, когда буду нужен.',
   'micro.thanks': 'Пожалуйста! Рад помочь.',
@@ -2144,14 +2144,14 @@ export const dict = {
   'micro.intent.fix': 'Понял, нужно исправить баг. Покажите проблемный код — найдём причину.',
   'micro.intent.test': 'Понял, нужны тесты. Укажите функцию или модуль — напишу тесты.',
 
-  // --- Скиллы (AD-046) ---
+  // --- Скиллы (ADR-046) ---
   'skill.args_error': 'Ошибка аргументов скилла: {issues}',
   'skill.not_found': 'Скилл «{name}» не найден',
   'skill.untrusted': 'Скилл «{name}» принадлежит недоверенному проекту и не может быть загружен',
   'skill.delegation': 'Для скилла «{name}» нужны capabilities: {capabilities}; у агента «{agent}» их нет. Вызови `task` с агентом, который их поддерживает.',
   'skill.file_not_found': 'Supporting-файл «{path}» не найден в каталоге скилла',
   'skill.scope_disabled': 'Скилл «{name}» отключён ({reason}) и не может быть загружен',
-  // --- Slash-команды (AD-046 §7) ---
+  // --- Slash-команды (ADR-046 §7) ---
   'command.unknown': 'Неизвестная команда: /{name}',
   'command.denied': 'Команда /{name} запрещена правилами прав',
   'command.unavailable': 'Команда /{name} недоступна: не хватает capabilities {capabilities}',
@@ -2161,14 +2161,14 @@ export const dict = {
   'command.summary_enqueued': 'Суммаризация запущена',
   'command.summary_unavailable': 'Недостаточно активных сообщений для суммаризации',
 
-  // --- Inline shell (AD-046 §7.4) ---
+  // --- Inline shell (ADR-046 §7.4) ---
   'command.inline_shell_disabled': 'Inline shell отключён в этом окружении',
   'command.inline_shell_denied': 'Inline shell-команда «!`{command}`» запрещена: {reason}',
   'command.inline_shell_failed': 'Ошибка inline shell-команды: {output}',
   'command.inline_shell_truncated': 'Вывод inline shell обрезан до {limit} байт',
   'command.inline_shell_unavailable': 'Inline shell недоступен',
 
-  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  // --- Git-репозитории и SSH-ключи (ADR-076) ---
   'sshkey.not_found': 'SSH-ключ {id} не найден',
   'sshkey.name_exists': 'SSH-ключ с именем «{name}» уже существует',
   'sshkey.encryption_unavailable': 'Шифрование SSH-ключей недоступно: не задан секретный ключ',
@@ -2178,7 +2178,7 @@ export const dict = {
   'git.repo_path_invalid': 'Недопустимый путь репозитория «{path}» (должен находиться внутри workspace проекта)',
   'git.repo_exists': 'Репозиторий уже существует по пути «{path}»',
 
-  // --- Внешние события и хуки (AD-030 / AD-089) ---
+  // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': 'Событие {id} получено из источника «{source}»',
   'event.routed.bound': 'Событие направлено в привязанную сессию {sessionId}',
   'event.routed.ephemeral': 'Событие направлено во временную сессию (агент «{agentTemplate}»)',
@@ -2197,7 +2197,7 @@ export const dict = {
   'profile.save_error': 'Ошибка сохранения профиля: {error}',
   'profile.updated': 'Профиль обновлён ({fields}).',
 
-  // --- SSH-ключи: UI раздела «Агенты» (AD-076, T8) ---
+  // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',
   'sshKeys.description': 'SSH-ключи per-agent для git-операций. Приватные ключи и парольные фразы шифруются at-rest и не отображаются после сохранения.',
   'sshKeys.add': 'Добавить ключ',
@@ -2226,7 +2226,7 @@ export const dict = {
   'sshKeys.error.nameRequired': 'Укажите имя',
   'sshKeys.error.keyRequired': 'Укажите приватный ключ',
 
-  // --- Внешние события (AD-089) ---
+  // --- Внешние события (ADR-089) ---
   'events.title': 'События',
   'events.description': 'Привязки внешних событий и журнал маршрутизации. События нормализуются и направляются в сессии по source/чат/тред; изменение требует роли LEAD или ADMIN.',
   'events.bindings.title': 'Привязки',
@@ -2309,7 +2309,7 @@ export const dict = {
   'events.routes.form.ttl': 'TTL',
   'events.routes.form.sessionRequired': 'Для режима bound/queue укажите ID сессии',
 
-  // --- Внешние события: подсказки полей, API-ключи (AD-089) ---
+  // --- Внешние события: подсказки полей, API-ключи (ADR-089) ---
   'events.form.sourceTooltip': 'Идентификатор источника события, напр. telegram, webhook или ci.',
   'events.form.modeTooltip': 'Как привязка доставляет события: в существующую сессию, разовую сессию или очередь.',
   'events.form.projectTooltip': 'Проект-контейнер для привязанной/разовой сессии.',
@@ -2379,7 +2379,7 @@ export const dict = {
   'events.journal.principal': 'Принципал',
   'events.journal.openInLogs': 'Открыть в «Логи и аудит»',
 
-  // --- Параметры событий (AD-089, админ) ---
+  // --- Параметры событий (ADR-089, админ) ---
   'eventsConfig.title': 'Параметры событий',
   'eventsConfig.description': 'Runtime-настройки обработки внешних событий: мастер-выключатель, режим по умолчанию, TTL ephemeral-сессий, хранение журнала, белый список источников и глобальный лимит запросов на API-ключ.',
   'eventsConfig.enabled': 'Внешние события включены',
@@ -2413,7 +2413,7 @@ export const dict = {
   'eventsConfig.saved': 'Параметры событий сохранены',
   'eventsConfig.saveError': 'Не удалось сохранить параметры событий: {error}',
 
-  // --- Decision-модели (AD-084, админ) ---
+  // --- Decision-модели (ADR-084, админ) ---
   'decisionConfig.title': 'Decision-модели',
   'decisionConfig.description': 'Runtime-настройки decision-слоя (System One: Clef/Jev/…): мастер-выключатель, провайдер decision-протокола и модель, порог уверенности.',
   'decisionConfig.enabled': 'Decision-слой включён',
@@ -2457,7 +2457,7 @@ export const dict = {
   'decisionConfig.metricLatencyAvg': 'Latency avg, мс',
   'decisionConfig.metricLatencyMax': 'Latency max, мс',
 
-  // --- Сервисные ключи (AD-052 этап I, админ) ---
+  // --- Сервисные ключи (ADR-052 этап I, админ) ---
   'serviceKeys.title': 'Сервисные ключи',
   'serviceKeys.description': 'API-ключи инстанса для внешних сервисов: скоупы ограничивают доступные эндпоинты, проектная проекция — подмножество проектов. Секрет показывается один раз — при создании.',
   'serviceKeys.listTitle': 'Ключи',
@@ -2519,7 +2519,7 @@ export const dict = {
   'serviceKeys.role.LEAD': 'LEAD',
   'serviceKeys.role.AUDITOR': 'AUDITOR',
 
-  // --- Webhooks (AD-052 этап II, админ) ---
+  // --- Webhooks (ADR-052 этап II, админ) ---
   'webhooks.title': 'Webhooks',
   'webhooks.description': 'Исходящие подписки на события: каждую доставку Synth подписывает секретом подписки (HMAC-SHA256). Signing-секрет показывается один раз.',
   'webhooks.listTitle': 'Подписки',

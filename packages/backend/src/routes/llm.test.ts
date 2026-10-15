@@ -499,7 +499,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
       expect(text.trimEnd().endsWith('data: [DONE]')).toBe(true);
     });
 
-    it('AD-070: stream_options.include_usage принимается и usage есть в финальном чанке', async () => {
+    it('ADR-070: stream_options.include_usage принимается и usage есть в финальном чанке', async () => {
       const { app } = createTestContext(userUser);
       const res = await app.request(BASE, postBody({
         model: 'fake-model',
@@ -683,7 +683,7 @@ describe('LLM Proxy routes (гибридный режим, Часть 5)', () =>
     });
   });
 
-  describe('LLM Gateway (AD-036)', () => {
+  describe('LLM Gateway (ADR-036)', () => {
     it('обфусцирует секрет в запросе и восстанавливает его в ответе (non-stream)', async () => {
       const fake = new FakeProvider();
       fake.echoUserContent = true;

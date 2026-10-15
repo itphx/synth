@@ -1,5 +1,5 @@
 /**
- * AD-084: decision-модели (System One: Clef/Jev/Decision-1/…) как единый
+ * ADR-084: decision-модели (System One: Clef/Jev/Decision-1/…) как единый
  * примитив — `state` (текст/JSON) + типизированные вопросы → вероятности за
  * один forward-pass. Здесь только контракты без бизнес-логики: сами адаптеры и
  * вызовы живут в core (`providers/decision.ts`, `GatewayProvider.decide`).
@@ -19,7 +19,7 @@ export const DECISION_CRITERIA_MIN = 2;
 export const DECISION_CRITERIA_MAX = 26;
 
 /**
- * AD-084: бинарный вопрос. `criteria` — подписи веток `true`/`false` (опц.),
+ * ADR-084: бинарный вопрос. `criteria` — подписи веток `true`/`false` (опц.),
  * `instructions` — пояснение для модели (опц.).
  */
 export interface DecisionNoulQuestion {
@@ -28,33 +28,33 @@ export interface DecisionNoulQuestion {
   criteria?: { true?: string; false?: string };
 }
 
-/** AD-084: вопрос-выбор. `criteria` — карта «вариант → пояснение|null» (2..26). */
+/** ADR-084: вопрос-выбор. `criteria` — карта «вариант → пояснение|null» (2..26). */
 export interface DecisionChoiceQuestion {
   type: 'choice';
   instructions: string;
   criteria: Record<string, string | null>;
 }
 
-/** AD-084: вопрос-шкала. `criteria` — упорядоченный список позиций (2..26). */
+/** ADR-084: вопрос-шкала. `criteria` — упорядоченный список позиций (2..26). */
 export interface DecisionScoreQuestion {
   type: 'score';
   instructions: string;
   criteria: string[];
 }
 
-/** AD-084: типизированный вопрос decision-модели. */
+/** ADR-084: типизированный вопрос decision-модели. */
 export type DecisionQuestion =
   | DecisionNoulQuestion
   | DecisionChoiceQuestion
   | DecisionScoreQuestion;
 
-/** AD-084: ответ на `noul` — вероятность «да» (`0..1`). */
+/** ADR-084: ответ на `noul` — вероятность «да» (`0..1`). */
 export interface DecisionNoulAnswer {
   type: 'noul';
   noul: number;
 }
 
-/** AD-084: ответ на `choice` — выбранный вариант + вероятности по всем. */
+/** ADR-084: ответ на `choice` — выбранный вариант + вероятности по всем. */
 export interface DecisionChoiceAnswer {
   type: 'choice';
   choice: string;
@@ -62,7 +62,7 @@ export interface DecisionChoiceAnswer {
   probabilities: Record<string, number>;
 }
 
-/** AD-084: ответ на `score` — позиция на шкале + вероятности по всем. */
+/** ADR-084: ответ на `score` — позиция на шкале + вероятности по всем. */
 export interface DecisionScoreAnswer {
   type: 'score';
   score: number;
@@ -72,14 +72,14 @@ export interface DecisionScoreAnswer {
   legend?: Record<string, string>;
 }
 
-/** AD-084: типизированный ответ decision-модели. */
+/** ADR-084: типизированный ответ decision-модели. */
 export type DecisionAnswer =
   | DecisionNoulAnswer
   | DecisionChoiceAnswer
   | DecisionScoreAnswer;
 
 /**
- * AD-084: медиа-вложения decision-запроса (AD-085 задел). Источник изображений/
+ * ADR-084: медиа-вложения decision-запроса (PROP-085 задел). Источник изображений/
  * видео — мультимодальный ввод (пока не реализован), здесь только контракт-
  * plumbing: значения прокидываются в тело decision-запроса, если непусты.
  */
@@ -88,7 +88,7 @@ export interface DecisionMediaInput {
   videos?: string[];
 }
 
-/** AD-084: запрос `state + questions → answers`. */
+/** ADR-084: запрос `state + questions → answers`. */
 export interface DecisionRequest extends DecisionMediaInput {
   model: string;
   /** Текст или JSON-совместимая структура (System One понимает оба). */
@@ -96,13 +96,13 @@ export interface DecisionRequest extends DecisionMediaInput {
   questions: Record<string, DecisionQuestion>;
 }
 
-/** AD-084: расход токенов decision-запроса (snake_case — как у провайдеров). */
+/** ADR-084: расход токенов decision-запроса (snake_case — как у провайдеров). */
 export interface DecisionUsage {
   input_tokens: number;
   output_tokens: number;
 }
 
-/** AD-084: ответ decision-модели. */
+/** ADR-084: ответ decision-модели. */
 export interface DecisionResponse {
   id?: string;
   model?: string;
@@ -133,7 +133,7 @@ const decisionScoreQuestionSchema = z.object({
 });
 
 /**
- * AD-084: универсальная схема вопроса. Границы `choice`/`score` (2..26)
+ * ADR-084: универсальная схема вопроса. Границы `choice`/`score` (2..26)
  * проверяются отдельно — иначе `discriminatedUnion` не принимает
  * `ZodEffects`-обёртки внутри вариантов.
  */
@@ -184,7 +184,7 @@ export const decisionScoreAnswerSchema = z.object({
   legend: z.record(z.string(), z.string()).optional(),
 });
 
-/** AD-084: схема ответа decision-модели. */
+/** ADR-084: схема ответа decision-модели. */
 export const decisionAnswerSchema = z.discriminatedUnion('type', [
   decisionNoulAnswerSchema,
   decisionChoiceAnswerSchema,
@@ -195,7 +195,7 @@ export const decisionRequestSchema = z.object({
   model: z.string(),
   state: z.unknown(),
   questions: z.record(z.string(), decisionQuestionSchema),
-  /** AD-084/AD-085: медиа-вложения (изображения/видео) — опциональны. */
+  /** ADR-084/PROP-085: медиа-вложения (изображения/видео) — опциональны. */
   images: z.array(z.string()).optional(),
   videos: z.array(z.string()).optional(),
 });

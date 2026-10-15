@@ -31,7 +31,7 @@ afterEach(async () => {
   await Promise.all(tmpDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe('crypto: encrypt/decrypt (AD-076)', () => {
+describe('crypto: encrypt/decrypt (ADR-076)', () => {
   it('roundtrip сохраняет значение, включая unicode и пустую строку', () => {
     const values = ['', 'hello', 'ключ🔑\nвторая строка', 'a'.repeat(5000)];
     for (const value of values) {
@@ -91,7 +91,7 @@ describe('crypto: encrypt/decrypt (AD-076)', () => {
   });
 });
 
-describe('crypto: resolveMasterKey (AD-076)', () => {
+describe('crypto: resolveMasterKey (ADR-076)', () => {
   it('env base64 (32 Б) используется и файл не создаётся', async () => {
     const dir = await makeTmpDir();
     const key = randomBytes(32);

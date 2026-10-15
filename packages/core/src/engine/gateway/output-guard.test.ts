@@ -1,5 +1,5 @@
 /**
- * Юнит-тесты Output Guard (AD-036): детекция секретов в ответе модели.
+ * Юнит-тесты Output Guard (ADR-036): детекция секретов в ответе модели.
  */
 
 import { describe, it, expect } from 'vitest';

@@ -132,7 +132,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('SessionSettingsTab — скиллы сессии (AD-046 §4.5)', () => {
+describe('SessionSettingsTab — скиллы сессии (ADR-046 §4.5)', () => {
   it('рендерит список с уровнем/scope, unavailable и причиной system-disable', async () => {
     const container = await renderTab()
     expect(container.querySelector('[data-testid="session-skills-list"]')).not.toBeNull()

@@ -52,7 +52,7 @@ export interface RotateMasterKeyOptions {
 /**
  * Типизированная ошибка store, которую роуты маппят в i18n-ключи:
  * `sshkey.not_found`, `sshkey.name_exists`, `sshkey.decrypt_failed`,
- * `sshkey.encryption_unavailable` (AD-076 §T2).
+ * `sshkey.encryption_unavailable` (ADR-076 §T2).
  */
 export class SSHKeyStoreError extends Error {
   constructor(
@@ -65,11 +65,11 @@ export class SSHKeyStoreError extends Error {
 }
 
 /**
- * AD-076 §T2: хранилище SSH-ключей агентов.
+ * ADR-076 §T2: хранилище SSH-ключей агентов.
  *
  * Внутренняя persisted-форма — `SSHKey`, где `privateKey`/`passphrase` лежат
  * зашифрованными (`enc:v1:…`, AES-256-GCM). Файлы — `<dataDir>/secrets/ssh-keys/<id>.json`
- * (AD-005, атомарная запись tmp→rename через `JsonStore`).
+ * (ADR-005, атомарная запись tmp→rename через `JsonStore`).
  *
  * Публичные методы НИКОГДА не возвращают секреты; расшифровка — только `reveal()`
  * для подстановки в git.
@@ -107,7 +107,7 @@ export class SSHKeyStore {
   }
 
   /**
-   * Ротация мастер-ключа (AD-076, one-shot).
+   * Ротация мастер-ключа (ADR-076, one-shot).
    *
    * Для каждой записи: preflight — каждое зашифрованное поле должно
    * расшифровываться НОВЫМ либо СТАРЫМ ключом; иначе операция прерывается

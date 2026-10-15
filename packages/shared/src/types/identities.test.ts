@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { buildPrincipalId, parsePrincipalId } from './index.js';
 
-describe('buildPrincipalId (AD-089)', () => {
+describe('buildPrincipalId (ADR-089)', () => {
   it('собирает principalId из провайдера и внешнего id', () => {
     expect(buildPrincipalId('tg', '450316139')).toBe('tg:450316139');
     expect(buildPrincipalId('synth-media', 'u-1')).toBe('synth-media:u-1');
   });
 });
 
-describe('parsePrincipalId (AD-089)', () => {
+describe('parsePrincipalId (ADR-089)', () => {
   it('делит по первому ":"', () => {
     expect(parsePrincipalId('tg:450316139')).toEqual({ provider: 'tg', externalId: '450316139' });
     // Внешний id может сам содержать ":" — всё после первого разделителя идёт в externalId.

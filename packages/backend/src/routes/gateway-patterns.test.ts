@@ -67,7 +67,7 @@ const customPatterns: SecretPattern[] = [
   { type: 'my_token', regex: '\\btok_[A-Za-z0-9]{32}\\b' },
 ];
 
-describe('Gateway Patterns API Routes (AD-036)', () => {
+describe('Gateway Patterns API Routes (ADR-036)', () => {
   let tmpDir: string;
   let store: SecretPatternStore;
 

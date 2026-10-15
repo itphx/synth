@@ -325,7 +325,7 @@ describe('Session API Routes (PATCH mode)', () => {
     });
   });
 
-  describe('GET /api/v2/sessions/:id/prompt (AD-070 §2.5)', () => {
+  describe('GET /api/v2/sessions/:id/prompt (ADR-070 §2.5)', () => {
     it('возвращает манифест и promptMeta для существующей сессии', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
       const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
@@ -394,7 +394,7 @@ describe('Session API Routes (PATCH mode)', () => {
     });
   });
 
-  describe('GET /api/v2/sessions/:id/stats (AD-070 §2.6)', () => {
+  describe('GET /api/v2/sessions/:id/stats (ADR-070 §2.6)', () => {
     it('возвращает агрегацию по агентам и пользователям', async () => {
       const profilesStore = new FileProfileStore({ dataDir: tmpDir });
       await profilesStore.getOrCreateProfile({ username: 'local' });
@@ -558,7 +558,7 @@ describe('Session API Routes (icon/color)', () => {
   });
 });
 
-describe('POST /api/v2/sessions — AD-089 funnel', () => {
+describe('POST /api/v2/sessions — ADR-089 funnel', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -681,7 +681,7 @@ describe('GET /api/v2/sessions — фильтр project_id', () => {
   });
 });
 
-describe('GET /api/v2/sessions — видимость по ролям/проектам (AD-089)', () => {
+describe('GET /api/v2/sessions — видимость по ролям/проектам (ADR-089)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

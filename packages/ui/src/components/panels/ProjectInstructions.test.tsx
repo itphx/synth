@@ -90,7 +90,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('ProjectInstructions (AD-069 §9.3)', () => {
+describe('ProjectInstructions (ADR-069 §9.3)', () => {
   it('показывает сводку и по клику — список файлов со статусом/размером/scan, свёрнут по умолчанию', async () => {
     mocks.getSessionInstructions.mockResolvedValue(info({
       files: [

@@ -23,11 +23,11 @@ import { requireScope, checkProjectAccess } from '../service-scope.js';
 import type { ScopeGuardFactory, ProjectGuard } from '../service-scope.js';
 
 /**
- * AD-089: маршруты приёма внешних событий и управления биндингами.
+ * ADR-089: маршруты приёма внешних событий и управления биндингами.
  * Единая реализация для core (standalone) и backend (managed): RBAC и rate limit
  * задаются через `opts.ingestGuard`/`opts.writeGuard`.
  *
- * AD-089/AD-052: приём события может аутентифицироваться API-ключом привязки
+ * ADR-089/ADR-052: приём события может аутентифицироваться API-ключом привязки
  * (`Authorization: Bearer synth_evt_…`) — тогда пользовательские креды не нужны,
  * а событие форсированно маршрутизируется в эту привязку (source/чат из неё).
  *
@@ -51,17 +51,17 @@ export interface EventRouteMessages {
   invalidRule: (c: Context) => string;
   ruleNotFound: (c: Context) => string;
   unknownAgent: (c: Context) => string;
-  /** AD-089: неверный/неизвестный API-ключ привязки. */
+  /** ADR-089: неверный/неизвестный API-ключ привязки. */
   invalidKey: (c: Context) => string;
-  /** AD-089: API-ключ привязки не найден. */
+  /** ADR-089: API-ключ привязки не найден. */
   keyNotFound: (c: Context) => string;
-  /** AD-089/AD-052: неверное тело обновления API-ключа. */
+  /** ADR-089/ADR-052: неверное тело обновления API-ключа. */
   invalidKeyUpdate: (c: Context) => string;
-  /** AD-089/AD-052: метка API-ключа уже занята (глобально по инстансу). */
+  /** ADR-089/ADR-052: метка API-ключа уже занята (глобально по инстансу). */
   keyLabelConflict: (c: Context) => string;
-  /** AD-089/AD-052: превышен лимит запросов по API-ключу привязки. */
+  /** ADR-089/ADR-052: превышен лимит запросов по API-ключу привязки. */
   rateLimitedKey: (c: Context) => string;
-  /** AD-089: приём внешних событий отключён мастер-выключателем. */
+  /** ADR-089: приём внешних событий отключён мастер-выключателем. */
   eventsDisabled: (c: Context) => string;
 }
 
@@ -69,9 +69,9 @@ export interface EventRoutesDeps {
   ingress: EventIngress;
   bindingStore: EventBindingStore;
   journal: EventJournalStore;
-  /** AD-089: реестр правил маршрутизации (проектные/инстанс-правила). */
+  /** ADR-089: реестр правил маршрутизации (проектные/инстанс-правила). */
   routeRuleStore: RouteRuleStore;
-  /** AD-089/AD-052: реестр API-ключей привязок для приёма событий. */
+  /** ADR-089/ADR-052: реестр API-ключей привязок для приёма событий. */
   apiKeyStore: EventApiKeyStore;
 }
 
@@ -83,54 +83,54 @@ export interface EventRoutesOptions {
   /**
    * Guard на чтение API-ключей привязки (`GET /bindings/:id/keys`); по умолчанию
    * — `requireAuth`. Backend передаёт `requirePermission('ADMIN','LEAD')`:
-   * список ключей — чувствительные метаданные (AD-089/AD-052).
+   * список ключей — чувствительные метаданные (ADR-089/ADR-052).
    */
   keyReadGuard?: Middleware;
   /** Guard на приём события (fallback, когда ключ привязки не использован). */
   ingestGuard?: Middleware;
   /**
-   * AD-089/AD-052: pre-guard на `POST /events` (обычно rate limit) — применяется
+   * ADR-089/ADR-052: pre-guard на `POST /events` (обычно rate limit) — применяется
    * до решения о способе аутентификации (ключ привязки либо `ingestGuard`).
    */
   ingestPreGuard?: Middleware;
   /**
-   * AD-089/AD-052: резолвер API-ключа привязки по plaintext-секрету. Возвращает
+   * ADR-089/ADR-052: резолвер API-ключа привязки по plaintext-секрету. Возвращает
    * привязку и контекст машинной аутентификации (`EventKeyCredential`) либо
    * `null`. Не передан — приём по ключу недоступен.
    */
   resolveApiKeySecret?: (
     raw: string,
   ) => Promise<{ binding: EventBinding; credential: EventKeyCredential } | null>;
-  /** AD-089: best-effort отметка использования ключа (`lastUsedAt`). */
+  /** ADR-089: best-effort отметка использования ключа (`lastUsedAt`). */
   touchApiKey?: (id: string) => Promise<void>;
   /**
-   * AD-089: проверка существования сессии при валидации цели правила
+   * ADR-089: проверка существования сессии при валидации цели правила
    * (`bound`/`queue`). Не передан — проверка пропускается (core без проверки).
    */
   sessionExists?: (id: string) => Promise<boolean>;
   /**
-   * AD-089: резолвер `agentTemplate` → id существующего enabled-агента.
+   * ADR-089: резолвер `agentTemplate` → id существующего enabled-агента.
    * Не передан — шаблон принимается как есть (проверка пропускается).
    */
   resolveAgentTemplate?: (template: string) => string | null;
   /**
-   * AD-089/AD-052: глобальный дефолт лимита запросов/мин на API-ключ привязки
+   * ADR-089/ADR-052: глобальный дефолт лимита запросов/мин на API-ключ привязки
    * (`events.keyRateLimitPerMinute`). Применяется, если у ключа нет своего
    * `rateLimitPerMinute`. Не передан/0 — без лимита.
    */
   getKeyRateLimitPerMinute?: () => number;
   /**
-   * AD-089: мастер-выключатель приёма внешних событий (`events.enabled`).
+   * ADR-089: мастер-выключатель приёма внешних событий (`events.enabled`).
    * При `false` `POST /` отвечает 503. Не передан — приём разрешён.
    */
   isEnabled?: () => boolean;
   /**
-   * AD-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
+   * ADR-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
    * `requireScope` из core (нет service-key в контексте → пропускает).
    */
   scopeGuard?: ScopeGuardFactory;
   /**
-   * AD-052 (этап I): гейт проектной проекции. По умолчанию — `checkProjectAccess`
+   * ADR-052 (этап I): гейт проектной проекции. По умолчанию — `checkProjectAccess`
    * из core (нет service-key/`allowedProjects` → пропускает).
    */
   projectGuard?: ProjectGuard;
@@ -182,10 +182,10 @@ export function createEventRoutes(
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
   const keyReadGuard: Middleware = opts.keyReadGuard ?? auth.requireAuth;
   const ingestGuard: Middleware = opts.ingestGuard ?? auth.requireAuth;
-  // AD-052 (этап I): scope-гейты service-key и проектная проекция.
+  // ADR-052 (этап I): scope-гейты service-key и проектная проекция.
   const scoped = opts.scopeGuard ?? requireScope;
   const projectGuard = opts.projectGuard ?? checkProjectAccess;
-  // AD-089/AD-052: per-key rate limit (fixed window 60 c), один на приложение.
+  // ADR-089/ADR-052: per-key rate limit (fixed window 60 c), один на приложение.
   const keyRateLimiter = new KeyRateLimiter(60_000);
 
   // POST /api/v2/events — приём внешнего события (ingress). Аутентификация:
@@ -207,7 +207,7 @@ export function createEventRoutes(
     }
 
     // 1. Способ аутентификации.
-    // AD-089/AD-052: как binding-key резолвим только Bearer с префиксом
+    // ADR-089/ADR-052: как binding-key резолвим только Bearer с префиксом
     // `synth_evt_`. Иначе (обычный пользовательский ключ — debug/`SYNTH_API_KEY`
     // и т.п.) идём на fallback `ingestGuard` (`requireAuth`), а не отдаём 401.
     const token = bearerToken(c.req.header('Authorization'));
@@ -220,7 +220,7 @@ export function createEventRoutes(
       }
       binding = resolved.binding;
       credential = resolved.credential;
-      // AD-089/AD-052: per-key rate limit (свой у ключа либо глобальный дефолт).
+      // ADR-089/ADR-052: per-key rate limit (свой у ключа либо глобальный дефолт).
       const limit = credential.rateLimitPerMinute ?? opts.getKeyRateLimitPerMinute?.() ?? 0;
       if (limit > 0 && !keyRateLimiter.check(credential.keyId, limit)) {
         return c.json({ error: { code: 'RATE_LIMITED', message: messages.rateLimitedKey(c) } }, 429);
@@ -282,14 +282,14 @@ export function createEventRoutes(
     }
 
     try {
-      // AD-089/AD-052: аудит использования ключа (id + идентичность отправителя).
+      // ADR-089/ADR-052: аудит использования ключа (id + идентичность отправителя).
       const audit = credential
         ? {
             keyId: credential.keyId,
             ...(credential.principalId ? { principalId: credential.principalId } : {}),
           }
         : undefined;
-      // AD-089: владелец материализуемой сессии (ephemeral/bind): при machine-auth
+      // ADR-089: владелец материализуемой сессии (ephemeral/bind): при machine-auth
       // — создатель ключа привязки, иначе — аутентифицированный пользователь
       // (core — `local`, backend — реальный id). Без атрибуции сессия выпадала бы
       // из `listSessions({ userId })` и UI-списка.
@@ -304,7 +304,7 @@ export function createEventRoutes(
         ...(ownerId ? { ownerId } : {}),
         ...(audit ? { audit } : {}),
       });
-      // Наружу — без внутренних полей сессии, только id. AD-089 (claim-flow):
+      // Наружу — без внутренних полей сессии, только id. ADR-089 (claim-flow):
       // `identityHint` (одноразовый код) — только когда отправитель не сопознан.
       return c.json(
         { event, decision, sessionId: session?.id ?? null, ...(identityHint ? { identityHint } : {}) },
@@ -338,7 +338,7 @@ export function createEventRoutes(
     }
 
     const input = parsed.data;
-    // AD-052: проектная проекция — биндинг адресует проект (`input.project`).
+    // ADR-052: проектная проекция — биндинг адресует проект (`input.project`).
     const denied = projectGuard(c, input.project);
     if (denied) return denied;
     // Существующую привязку по ключу заменяем (id сохраняется) — это upsert.
@@ -360,7 +360,7 @@ export function createEventRoutes(
     if (!removed) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.bindingNotFound(c) } }, 404);
     }
-    // AD-089/AD-052: ключи привязки без привязки недействительны — каскад.
+    // ADR-089/ADR-052: ключи привязки без привязки недействительны — каскад.
     await deps.apiKeyStore.removeByBinding(id);
     return c.body(null, 204);
   });

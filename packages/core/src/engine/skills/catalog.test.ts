@@ -49,7 +49,7 @@ describe('computeInvocation / matchesBinding / missingCapabilities', () => {
   });
 });
 
-describe('buildSkillCatalog (AD-046 §4.5/§5/§6)', () => {
+describe('buildSkillCatalog (ADR-046 §4.5/§5/§6)', () => {
   it('доступный model-invocable скилл → stable', () => {
     const cat = buildSkillCatalog([mk('a')], {});
     expect(cat.stable.map((e) => e.name)).toEqual(['a']);

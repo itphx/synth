@@ -7,7 +7,7 @@ function visibleFor(roles: string[]) {
   return CATEGORIES.filter((cat) => !cat.roles || cat.roles.some((r) => roles.includes(r)))
 }
 
-describe('SettingsModal — категории скиллов и команд (AD-046 §9.3)', () => {
+describe('SettingsModal — категории скиллов и команд (ADR-046 §9.3)', () => {
   it('`skills` — пользовательская категория без roles', () => {
     const skills = CATEGORIES.find((cat) => cat.id === 'skills')!
     expect(skills).toBeDefined()

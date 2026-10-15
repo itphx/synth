@@ -1,4 +1,4 @@
-// AD-089 (P0): авторизация WebSocket `/ws/events`. До фикса любой
+// ADR-089 (P0): авторизация WebSocket `/ws/events`. До фикса любой
 // аутентифицированный USER мог писать промпты в чужую сессию (`send_message`),
 // отменять её (`cancel`) и подтверждать запросы прав (`permission_reply`/
 // `permission_hold`) — без проверки видимости сессии. Тест проверяет, что
@@ -42,7 +42,7 @@ function makeClient(ws: WebSocket) {
   };
 }
 
-describe('AD-089 (P0): авторизация WebSocket /ws/events (backend)', () => {
+describe('ADR-089 (P0): авторизация WebSocket /ws/events (backend)', () => {
   let dataDir: string;
   let backend: BackendAppHandle;
   let server: Server;

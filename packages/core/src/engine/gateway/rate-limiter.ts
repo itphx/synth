@@ -1,5 +1,5 @@
 /**
- * In-memory sliding window rate limiter (AD-036).
+ * In-memory sliding window rate limiter (ADR-036).
  * Хранит timestamp-ы вызовов в Map<key, number[]>, чистит устаревшие (> 60s).
  */
 

@@ -1,7 +1,7 @@
 import { ToolCapability } from '@itphx/synth-shared';
 
 /**
- * AD-029: соответствие групп permissions → конкретные имена тулов.
+ * ADR-029: соответствие групп permissions → конкретные имена тулов.
  * Секция `read` применяется к read_file/list_directory/glob, `edit` — к
  * write_file/edit_file/create_directory/delete_file и т.п.
  * Группы можно указывать короткими именами (read/edit/shell/...) или

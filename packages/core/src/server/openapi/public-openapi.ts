@@ -1,5 +1,5 @@
 /**
- * AD-052 (этап III, часть 1): публичный OpenAPI-контракт интеграционного ядра.
+ * ADR-052 (этап III, часть 1): публичный OpenAPI-контракт интеграционного ядра.
  *
  * **Решение (зафиксировано).** Спецификация — **декларативная**: боевые роуты
  * (`server/routes/*`) не переписываем. `OpenAPIHono` + `createRoute` описывают
@@ -12,7 +12,7 @@
  * описывает контракт, а не подменяет боевые обработчики.
  *
  * Публикуется только **интеграционное ядро** (`events`/`sessions`/`schedules`/`llm`)
- * — см. AD-052 §«OpenAPI — только public»: fs/audit/admin/секреты наружу не выводим.
+ * — см. ADR-052 §«OpenAPI — только public»: fs/audit/admin/секреты наружу не выводим.
  * Единый формат ошибок — `publicErrorSchema` (`{error:{code,message}}`).
  *
  * **Именование схем.** Модели `components.schemas` получают имена через
@@ -88,13 +88,13 @@ const publicErrorResponses = {
   503: errorResponse('Функция отключена (мастер-выключатель)'),
 } as const;
 
-/** Security-требование: bearer (service-key, AD-052). */
+/** Security-требование: bearer (service-key, ADR-052). */
 const BEARER_SECURITY: Array<Record<string, string[]>> = [{ bearerAuth: [] }];
 
 // --- Именованные модели на базе shared-схем ---
 
 const SynthEvent = synthEventSchema.openapi('SynthEvent', {
-  description: 'Нормализованное внешнее событие (AD-089).',
+  description: 'Нормализованное внешнее событие (ADR-089).',
 });
 const EventBinding = eventBindingSchema.openapi('EventBinding', {
   description: 'Устойчивая привязка внешнего адреса (source/chat/thread) к сессии или шаблону.',
@@ -119,7 +119,7 @@ const EventIngest = eventIngestSchema.openapi('EventIngest', {
     'Тело приёма внешнего события. Для пути по API-ключу привязки `source` опционален и берётся из привязки.',
 });
 const EventRouteRule = eventRouteRuleSchema.openapi('EventRouteRule', {
-  description: 'Правило маршрутизации событий «событие → сессия» (AD-089).',
+  description: 'Правило маршрутизации событий «событие → сессия» (ADR-089).',
 });
 const EventRouteRuleUpsert = eventRouteRuleUpsertSchema.openapi('EventRouteRuleUpsert', {
   description: 'Вход upsert-правила маршрутизации (необязательный `id` — обновление).',
@@ -140,10 +140,10 @@ const ScheduleInput = scheduleInputSchema.openapi('ScheduleInput', {
   description: 'Тело создания/обновления расписания (ровно одно из `cron`/`every`).',
 });
 const Schedule = scheduleSchema.openapi('Schedule', {
-  description: 'Сущность расписания планировщика (AD-051).',
+  description: 'Сущность расписания планировщика (ADR-051).',
 });
 const ScheduleJob = scheduleJobSchema.openapi('ScheduleJob', {
-  description: 'Запись Job-истории срабатывания расписания (AD-051).',
+  description: 'Запись Job-истории срабатывания расписания (ADR-051).',
 });
 const SessionPrompt = promptRequestSchema.openapi('SessionPrompt', {
   description: 'Тело отправки сообщения в сессию (очередь + SSE-поток хода).',
@@ -151,7 +151,7 @@ const SessionPrompt = promptRequestSchema.openapi('SessionPrompt', {
 
 // --- Локальные схемы ответов публичного контракта ---
 
-/** Решение Router (AD-089): `kind` + диагностические метаданные. */
+/** Решение Router (ADR-089): `kind` + диагностические метаданные. */
 const RouteDecision = z
   .object({
     kind: z.string().min(1).openapi({ example: 'ephemeral' }),
@@ -163,7 +163,7 @@ const RouteDecision = z
   .passthrough()
   .openapi('RouteDecision');
 
-/** Ответ `POST /events` (AD-089): событие, решение, id сессии, claim-код. */
+/** Ответ `POST /events` (ADR-089): событие, решение, id сессии, claim-код. */
 const EventIngestResponse = z
   .object({
     event: SynthEvent,
@@ -319,7 +319,7 @@ const JobsQuery = z.object({
   limit: z.coerce.number().int().positive().optional().openapi({ description: 'default 20, max 200' }),
 });
 
-// --- Операции: events (AD-089) ---
+// --- Операции: events (ADR-089) ---
 
 const ingestEventRoute = createRoute({
   method: 'post',
@@ -633,7 +633,7 @@ const getSessionMessagesRoute = createRoute({
   },
 });
 
-// --- Операции: schedules (AD-051) ---
+// --- Операции: schedules (ADR-051) ---
 
 const listSchedulesRoute = createRoute({
   method: 'get',
@@ -809,7 +809,7 @@ export function createPublicOpenApiApp(): OpenAPIHono {
   app.openAPIRegistry.registerComponent('securitySchemes', 'bearerAuth', {
     type: 'http',
     scheme: 'bearer',
-    description: 'Service-key (AD-052): `Authorization: Bearer synth_svc_…`',
+    description: 'Service-key (ADR-052): `Authorization: Bearer synth_svc_…`',
   });
 
   // --- events ---
@@ -875,10 +875,10 @@ export function createPublicOpenApiApp(): OpenAPIHono {
 
 /** Теги публичного контракта. */
 const PUBLIC_TAGS = [
-  { name: 'events', description: 'Внешние события, привязки, правила маршрутизации (AD-089).' },
-  { name: 'sessions', description: 'Сессии: создание, чтение, подсказки (AD-017/AD-040).' },
-  { name: 'schedules', description: 'Расписания планировщика (AD-051).' },
-  { name: 'llm', description: 'OpenAI-совместимый LLM-прокси (AD-036/AD-052).' },
+  { name: 'events', description: 'Внешние события, привязки, правила маршрутизации (ADR-089).' },
+  { name: 'sessions', description: 'Сессии: создание, чтение, подсказки (ADR-017/ADR-040).' },
+  { name: 'schedules', description: 'Расписания планировщика (ADR-051).' },
+  { name: 'llm', description: 'OpenAI-совместимый LLM-прокси (ADR-036/ADR-052).' },
 ];
 
 /**
@@ -895,7 +895,7 @@ export function getPublicOpenApiDocument(): ReturnType<OpenAPIHono['getOpenAPI31
       title: 'Synth Public API',
       version: SYNTH_VERSION,
       description:
-        'Публичный интеграционный контракт Synth (AD-052): events/sessions/schedules/llm. Единый формат ошибок: { error: { code, message } }. Аутентификация — service-key (`Authorization: Bearer synth_svc_…`).',
+        'Публичный интеграционный контракт Synth (ADR-052): events/sessions/schedules/llm. Единый формат ошибок: { error: { code, message } }. Аутентификация — service-key (`Authorization: Bearer synth_svc_…`).',
     },
     servers: [{ url: '/api/v2' }],
     tags: PUBLIC_TAGS,

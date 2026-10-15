@@ -9,7 +9,7 @@ import {
   resetRuntimeDepsCache,
 } from './runtime-deps.js';
 
-describe('runtime-deps (AD-070 §2.9.1)', () => {
+describe('runtime-deps (ADR-070 §2.9.1)', () => {
   beforeEach(() => {
     resetRuntimeDepsCache();
   });

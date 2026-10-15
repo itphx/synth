@@ -10,7 +10,7 @@ import { useI18n } from '@/lib/i18n'
 import type { ProjectData, EntityOrigin } from '@/lib/api/synthApi'
 
 /**
- * Переиспользуемый поповер создания проекта: имя + (AD-075) рабочий каталог +
+ * Переиспользуемый поповер создания проекта: имя + (ADR-075) рабочий каталог +
  * (в гибриде) выбор «где создать». Используется и в левой панели
  * (ProjectsTabToolbar), и в правой (ProjectTab).
  */
@@ -39,7 +39,7 @@ export function CreateProjectPopover({
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
-  // AD-075: managed — ФС принадлежит backend, remote-проект живёт на сервере;
+  // ADR-075: managed — ФС принадлежит backend, remote-проект живёт на сервере;
   // в обоих случаях каталог создаётся автоматически, путь не передаём.
   const workspaceReadOnly = deployment === 'managed' || origin === 'remote'
 
@@ -56,7 +56,7 @@ export function CreateProjectPopover({
   }
 
   /**
-   * AD-075: создание проекта. При 409 `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`
+   * ADR-075: создание проекта. При 409 `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`
    * (путь вне `workspacesRoot`, политика confirm) показывает ConfirmDialog и
    * повторяет запрос с `confirmOutsideRoot: true`.
    */

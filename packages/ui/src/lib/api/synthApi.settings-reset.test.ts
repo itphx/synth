@@ -16,7 +16,7 @@ function expectDelete(url: string): void {
 
 let fetchMock: ReturnType<typeof vi.fn>
 
-describe('synthApi.reset* — сброс runtime-настроек (AD-072 Ф2)', () => {
+describe('synthApi.reset* — сброс runtime-настроек (ADR-072 Ф2)', () => {
   beforeEach(() => {
     fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

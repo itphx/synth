@@ -17,7 +17,7 @@ export function isSessionCookieSecure(env: NodeJS.ProcessEnv = process.env): boo
 }
 
 /**
- * AD-052 (этап I): резолвер service-key (`synth_svc_…`) → синтетический
+ * ADR-052 (этап I): резолвер service-key (`synth_svc_…`) → синтетический
  * пользователь (RBAC) + контекст (`scopes`/`allowedProjects`/лимит).
  * `null` — секрет неизвестен/отозван/истёк либо резолвер не настроен.
  */
@@ -25,7 +25,7 @@ export type ServiceKeyResolver = (
   rawSecret: string,
 ) => Promise<{ user: User; credential: ServiceKeyCredential } | null>;
 
-/** Конфиг backend-auth: `AuthConfig` + service-key (AD-052). */
+/** Конфиг backend-auth: `AuthConfig` + service-key (ADR-052). */
 export interface AuthMiddlewareConfig extends AuthConfig {
   resolveServiceKey?: ServiceKeyResolver;
 }
@@ -64,7 +64,7 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
   }
 
   /**
-   * AD-052: машинная аутентификация по service-key. Распознаётся по префиксу
+   * ADR-052: машинная аутентификация по service-key. Распознаётся по префиксу
    * секрета `synth_svc_`; резолвер асинхронный (стор + touch `lastUsedAt`),
    * поэтому ветка живёт в middleware, а не в синхронном `getCurrentUser`.
    */
@@ -79,7 +79,7 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
 
   // Определить пользователя из запроса
   const getCurrentUser = async (c: { req: { header(name: string): string | undefined } }): Promise<User | null> => {
-    // 0. AD-052: service-key — синтетический пользователь ключа.
+    // 0. ADR-052: service-key — синтетический пользователь ключа.
     const serviceAuth = await resolveServiceKey(c);
     if (serviceAuth) return serviceAuth.user;
 
@@ -162,7 +162,7 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
 
   // Middleware: прикрепить пользователя к контексту (без ошибки)
   const attachUser = createMiddleware(async (c, next) => {
-    // AD-052: service-key несёт и пользователя, и контекст (scopes/проекция).
+    // ADR-052: service-key несёт и пользователя, и контекст (scopes/проекция).
     const serviceAuth = await resolveServiceKey(c);
     if (serviceAuth) {
       c.set('user', serviceAuth.user);

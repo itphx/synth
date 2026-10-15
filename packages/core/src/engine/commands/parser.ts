@@ -21,7 +21,7 @@ function asStringArray(v: unknown): string[] | undefined {
 }
 
 /**
- * AD-046 §7.2: парсинг шаблонной `.md`-команды. Frontmatter:
+ * ADR-046 §7.2: парсинг шаблонной `.md`-команды. Frontmatter:
  * `description`, `argument-hint`, `agent`, `model`, `allowed-tools` (advisory).
  * Имя команды — `name` из frontmatter либо имя файла без `.md`.
  */

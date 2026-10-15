@@ -10,7 +10,7 @@ const USAGE: TokenUsage = {
   cacheWriteTokens: 20,
 };
 
-describe('computeCacheHitRate (AD-070 §2.3)', () => {
+describe('computeCacheHitRate (ADR-070 §2.3)', () => {
   it('считает долю кэшированных входных токенов', () => {
     expect(computeCacheHitRate(50, 100)).toBe(0.5);
     expect(computeCacheHitRate(100, 100)).toBe(1);
@@ -28,7 +28,7 @@ describe('computeCacheHitRate (AD-070 §2.3)', () => {
   });
 });
 
-describe('computeUsageCost (AD-070 §2.6)', () => {
+describe('computeUsageCost (ADR-070 §2.6)', () => {
   it('возвращает null без usage или без pricing', () => {
     expect(computeUsageCost(undefined, { inputPrice: 1 })).toBeNull();
     expect(computeUsageCost(USAGE, null)).toBeNull();

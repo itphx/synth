@@ -24,7 +24,7 @@ Fleet-деплой **test-среды** (namespace `synth`). Репозитори
 | Каталог | Бандл / релиз | Что разворачивает |
 |---|---|---|
 | `test/` | `synth-test` | backend (API Hub: OIDC/RBAC, встроенный движок) + ui (SPA под nginx) + Ingress + ConfigMap'ы (`synth-env`, `synth-config`, `synth-itphx-ca`) + SealedSecret `synth-secrets` (`extraObjects`) |
-| `gateway-telegram/` | `synth-gateway-telegram` | Telegram-шлюз (add-on, AD-086/AD-089): long-polling → `POST /api/v2/events`; Deployment/Service + SealedSecret `synth-gateway-telegram-secrets` (`extraObjects`); `dependsOn: [synth-test]` |
+| `gateway-telegram/` | `synth-gateway-telegram` | Telegram-шлюз (add-on, ADR-086/ADR-089): long-polling → `POST /api/v2/events`; Deployment/Service + SealedSecret `synth-gateway-telegram-secrets` (`extraObjects`); `dependsOn: [synth-test]` |
 
 Каждый каталог содержит `fleet.yaml` (namespace + `helm: repo/chart/version`) и `values.yaml` (значения чарта бандла).
 

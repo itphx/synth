@@ -17,7 +17,7 @@ const event = (overrides: Partial<SynthEvent> = {}): SynthEvent => ({
   ...overrides,
 });
 
-describe('ProjectRuleProvider (AD-089)', () => {
+describe('ProjectRuleProvider (ADR-089)', () => {
   let tmpDir: string;
   let store: RouteRuleStore;
 

@@ -5,7 +5,7 @@ import { useI18n } from '@/lib/i18n'
 import { MarkdownContent } from './MarkdownContent'
 
 /**
- * Плейсхолдер секрета LLM Gateway (AD-036): ⟦SYNTH_SECRET_N⟧.
+ * Плейсхолдер секрета LLM Gateway (ADR-036): ⟦SYNTH_SECRET_N⟧.
  * Реальные значения приходят в message.metadata.secrets как { placeholder: value }.
  */
 export const SECRET_PLACEHOLDER_REGEX = /⟦SYNTH_SECRET_(\d+)⟧/g
@@ -106,7 +106,7 @@ const SECRET_PH_UNAVAILABLE_CLASS = `${SECRET_PH_BASE_CLASS} cursor-default text
  * на inline-маркер `<span class="synth-secret-ph" ...>`. Вызывается ПОСЛЕ парсинга
  * markdown и ДО DOMPurify.sanitize: в обычном тексте, внутри <pre><code> и <code>
  * спан становится настоящим элементом (DOMPurify пропускает span), а не
- * экранированным текстом (AD-036).
+ * экранированным текстом (ADR-036).
  */
 export function replaceSecretsInHtml(
   html: string,
@@ -124,7 +124,7 @@ export function replaceSecretsInHtml(
 }
 
 /**
- * Markdown-контент с плейсхолдерами секретов (AD-036).
+ * Markdown-контент с плейсхолдерами секретов (ADR-036).
  * Рендерится ОДИН раз через MarkdownContent: плейсхолдеры заменяются на inline-маркеры
  * `<span class="synth-secret-ph" data-ph="…">` ПОСЛЕ marked.parser и ДО DOMPurify.sanitize,
  * поэтому текст остаётся слитным, без переносов, а маркер работает и в обычном тексте,

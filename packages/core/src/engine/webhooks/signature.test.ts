@@ -7,7 +7,7 @@ import {
   WEBHOOK_SIGNATURE_VERSION,
 } from './signature.js';
 
-describe('webhooks: HMAC-подпись (AD-052, этап II)', () => {
+describe('webhooks: HMAC-подпись (ADR-052, этап II)', () => {
   const secret = 'whsec_test';
   const body = JSON.stringify({ id: 'whd_1', type: 'session.created', data: { x: 1 } });
   const now = 1_700_000_000;

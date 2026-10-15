@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.3 (Фаза 3): политика включения инструментов — `consistency` /
+ * ADR-071 §2.3 (Фаза 3): политика включения инструментов — `consistency` /
  * `available` / `auto`, per-session override, фильтрация тулов и отсутствие
  * `unavailable`-подсказок в режиме `available`.
  */
@@ -162,7 +162,7 @@ function makeMockMcpManager(): McpManager {
   return manager as unknown as McpManager;
 }
 
-describe('ChatOrchestrator — tools.policy (AD-071 §2.3)', () => {
+describe('ChatOrchestrator — tools.policy (ADR-071 §2.3)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let projectStore: ProjectStore;
@@ -173,7 +173,7 @@ describe('ChatOrchestrator — tools.policy (AD-071 §2.3)', () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-orch-policy-'));
     sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
     projectStore = new ProjectStore({ dataDir: tmpDir });
-    // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+    // ADR-075: file/shell/git-тулы доступны только при заданном workspace проекта.
     const project = projectStore.create('Policy', 'u1', { workspace: tmpDir });
     await projectStore.save(project);
     projectId = project.id;

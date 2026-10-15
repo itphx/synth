@@ -1,4 +1,4 @@
-// Интеграционный тест AD-071 §2.3.1: runtime-политика сетевого доступа MCP,
+// Интеграционный тест ADR-071 §2.3.1: runtime-политика сетевого доступа MCP,
 // сохранённая в {dataDir}/settings.json, применяется к McpManager при старте
 // (а не только к GET-ответу settings). Без фикса на старте брался config.yaml
 // (deny приватных диапазонов), и пользовательский HTTP-сервер на 10.0.0.5
@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { createBackendApp } from '../app.js';
 import type { BackendAppHandle } from '../app.js';
 
-describe('runtime MCP network policy применяется на старте (AD-071 §2.3.1)', () => {
+describe('runtime MCP network policy применяется на старте (ADR-071 §2.3.1)', () => {
   let tmpDir: string;
   let backend: BackendAppHandle;
 

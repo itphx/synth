@@ -9,7 +9,7 @@ export interface SettingsPanelProps {
   /**
    * Счётчики/подпись. Рендерится под описанием (`description`), а не под
    * заголовком. В отличие от `description`, остаётся видимым при сворачивании
-   * шапки (стандарт AD-072).
+   * шапки (стандарт ADR-072).
    */
   meta?: React.ReactNode
   actions?: React.ReactNode
@@ -25,7 +25,7 @@ export interface SettingsPanelProps {
 const CONTENT_WIDTH = 'mx-auto w-full max-w-3xl min-w-0'
 
 /**
- * AD-072: стандартный каркас панели настроек.
+ * ADR-072: стандартный каркас панели настроек.
  *
  * Гарантирует один вертикальный скролл, фиксированную шапку и отсутствие
  * горизонтального скролла: весь контент ограничен `max-w-3xl` и центрирован,

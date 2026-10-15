@@ -49,7 +49,7 @@ export interface ToolResult {
 export type ToolExecutor = (params: unknown, ctx: ToolContext) => Promise<ToolResult>;
 
 /**
- * AD-071 §2.1: источник инструмента. `builtin` — встроенный (слой `tools`,
+ * ADR-071 §2.1: источник инструмента. `builtin` — встроенный (слой `tools`,
  * `stable`), `mcp` — инструмент MCP-сервера (слой `mcp.tools`, `volatile`).
  * Для встроенных проставляется по умолчанию в `ToolRegistry.register`.
  */
@@ -62,9 +62,9 @@ export interface ToolDefinition {
   capabilities: ToolCapability[];
   execute: ToolExecutor;
   jsonSchema?: Record<string, unknown>;
-  /** AD-071 §2.1: источник инструмента (builtin/mcp). */
+  /** ADR-071 §2.1: источник инструмента (builtin/mcp). */
   source?: ToolSource;
-  /** AD-071 §2.1: имя MCP-сервера для `source: 'mcp'`. */
+  /** ADR-071 §2.1: имя MCP-сервера для `source: 'mcp'`. */
   mcpServer?: string;
 }
 

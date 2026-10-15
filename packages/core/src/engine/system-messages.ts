@@ -273,7 +273,7 @@ export const SYSTEM_MESSAGES = {
   'router.no_user_query':
     'The model could not process the tool-call chain (the original user query was lost). Try again, reduce the number of tools, or increase the model context window.',
 
-  // --- Quality check (AD-034) ---
+  // --- Quality check (ADR-034) ---
   'qc.min_length_ok': 'Response length {length} >= {min}',
   'qc.min_length_fail_detail': 'Response is shorter than {min} characters ({length})',
   'qc.min_length_fail': 'Response is shorter than {min} characters',
@@ -288,7 +288,7 @@ export const SYSTEM_MESSAGES = {
   'qc.self_check_error': 'Self-check error: {error} — counting as passed',
   'qc.all_passed': 'All checks passed',
 
-  // --- Микро-слой (AD-035) ---
+  // --- Микро-слой (ADR-035) ---
   'micro.greeting': 'Hi! How can I help you?',
   'micro.farewell': 'Goodbye! Reach out anytime you need me.',
   'micro.thanks': "You're welcome! Glad to help.",
@@ -306,7 +306,7 @@ export const SYSTEM_MESSAGES = {
   'micro.intent.fix': "Got it, a bug fix is needed. Show me the problematic code — we'll find the cause.",
   'micro.intent.test': "Got it, tests are needed. Specify the function or module — I'll write the tests.",
 
-  // --- Скиллы (AD-046) ---
+  // --- Скиллы (ADR-046) ---
   'skill.args_error': 'Skill argument error: {issues}',
   'skill.not_found': 'Skill "{name}" not found',
   'skill.untrusted': 'Skill "{name}" belongs to an untrusted project and cannot be loaded',
@@ -314,7 +314,7 @@ export const SYSTEM_MESSAGES = {
   'skill.file_not_found': 'Supporting file "{path}" not found in the skill directory',
   'skill.scope_disabled': 'Skill "{name}" is disabled ({reason}) and cannot be loaded',
 
-  // --- Slash-команды (AD-046 §7) ---
+  // --- Slash-команды (ADR-046 §7) ---
   'command.unknown': 'Unknown command: /{name}',
   'command.denied': 'Command /{name} is denied by permission rules',
   'command.unavailable': 'Command /{name} is unavailable: missing capabilities {capabilities}',
@@ -324,14 +324,14 @@ export const SYSTEM_MESSAGES = {
   'command.summary_enqueued': 'Summarization started',
   'command.summary_unavailable': 'Not enough active messages to summarize',
 
-  // --- Inline shell (AD-046 §7.4) ---
+  // --- Inline shell (ADR-046 §7.4) ---
   'command.inline_shell_disabled': 'Inline shell is disabled',
   'command.inline_shell_denied': 'Inline shell command "!`{command}`" denied: {reason}',
   'command.inline_shell_failed': 'Inline shell command failed: {output}',
   'command.inline_shell_truncated': 'Inline shell output truncated to {limit} bytes',
   'command.inline_shell_unavailable': 'Inline shell is unavailable',
 
-  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  // --- Git-репозитории и SSH-ключи (ADR-076) ---
   'sshkey.not_found': 'SSH key {id} not found',
   'sshkey.name_exists': 'SSH key with name "{name}" already exists',
   'sshkey.encryption_unavailable': 'SSH key encryption is unavailable: secret key is not configured',
@@ -341,7 +341,7 @@ export const SYSTEM_MESSAGES = {
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
-  // --- Внешние события и хуки (AD-030 / AD-089) ---
+  // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': 'Event {id} ingested from source "{source}"',
   'event.routed.bound': 'Event routed to bound session {sessionId}',
   'event.routed.ephemeral': 'Event routed to ephemeral session (agent "{agentTemplate}")',

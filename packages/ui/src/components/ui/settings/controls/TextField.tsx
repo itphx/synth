@@ -9,13 +9,13 @@ export interface TextFieldProps extends React.InputHTMLAttributes<HTMLInputEleme
   description?: string
   error?: string
   mono?: boolean
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   /** Дополнительные классы контейнера `SettingsField`. */
   containerClassName?: string
 }
 
-/** AD-072: управляемое текстовое поле в стиле панели настроек. */
+/** ADR-072: управляемое текстовое поле в стиле панели настроек. */
 export function TextField({
   label,
   description,

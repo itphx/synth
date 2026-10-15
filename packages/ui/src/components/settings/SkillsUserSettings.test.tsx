@@ -92,7 +92,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('SkillsUserSettings — пользовательский просмотр скиллов (AD-046 §9.3)', () => {
+describe('SkillsUserSettings — пользовательский просмотр скиллов (ADR-046 §9.3)', () => {
   it('рендерит список скиллов и счётчик', async () => {
     mocks.getSkills.mockResolvedValue({ skills: [summary('api-review'), summary('db-migration')] })
 

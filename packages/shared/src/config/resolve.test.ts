@@ -36,14 +36,14 @@ describe('resolveDataDir', () => {
     expect(resolveDataDir(cfg)).toBe('/from/process');
   });
 
-  it('регрессия (AD-075): относительный env.SYNTH_DATA_DIR → абсолютный', () => {
+  it('регрессия (ADR-075): относительный env.SYNTH_DATA_DIR → абсолютный', () => {
     const env = { SYNTH_DATA_DIR: 'rel/data' };
     const result = resolveDataDir(cfg, env);
     expect(isAbsolute(result)).toBe(true);
     expect(result).toBe(resolvePath('rel/data'));
   });
 
-  it('регрессия (AD-075): относительный config.storage.dataDir → абсолютный', () => {
+  it('регрессия (ADR-075): относительный config.storage.dataDir → абсолютный', () => {
     const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, dataDir: 'rel/cfg-data' } };
     const result = resolveDataDir(c, {});
     expect(isAbsolute(result)).toBe(true);
@@ -112,27 +112,27 @@ describe('resolveDefaultWorkspace', () => {
     expect(resolveDefaultWorkspace(cfg, {})).toBe('/test/data/workspaces/default');
   });
 
-  it('регрессия (AD-075): относительный env.SYNTH_DEFAULT_WORKSPACE → абсолютный', () => {
+  it('регрессия (ADR-075): относительный env.SYNTH_DEFAULT_WORKSPACE → абсолютный', () => {
     const result = resolveDefaultWorkspace(cfg, { SYNTH_DEFAULT_WORKSPACE: 'rel/def' });
     expect(isAbsolute(result)).toBe(true);
     expect(result).toBe(resolvePath('rel/def'));
   });
 
-  it('регрессия (AD-075): относительный config.storage.defaultWorkspace → абсолютный', () => {
+  it('регрессия (ADR-075): относительный config.storage.defaultWorkspace → абсолютный', () => {
     const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, defaultWorkspace: 'rel/cfg-def' } };
     const result = resolveDefaultWorkspace(c, {});
     expect(isAbsolute(result)).toBe(true);
     expect(result).toBe(resolvePath('rel/cfg-def'));
   });
 
-  it('регрессия (AD-075): относительный env.SYNTH_DATA_DIR → абсолютный default', () => {
+  it('регрессия (ADR-075): относительный env.SYNTH_DATA_DIR → абсолютный default', () => {
     const result = resolveDefaultWorkspace(cfg, { SYNTH_DATA_DIR: 'rel/data' });
     expect(isAbsolute(result)).toBe(true);
     expect(result).toBe(resolvePath('rel/data/workspaces/default'));
   });
 });
 
-describe('resolveWorkspacesRoot (AD-075: регрессия относительных путей)', () => {
+describe('resolveWorkspacesRoot (ADR-075: регрессия относительных путей)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -168,7 +168,7 @@ describe('resolveWorkspacesRoot (AD-075: регрессия относитель
   });
 });
 
-describe('resolveWorkspaceOutsideRootPolicy (AD-075)', () => {
+describe('resolveWorkspaceOutsideRootPolicy (ADR-075)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -202,7 +202,7 @@ describe('resolveWorkspaceOutsideRootPolicy (AD-075)', () => {
 // require доступа к реальной ФС, поэтому используют настоящие mkdir/writeFile
 // или оставлены интеграционными (ручной запуск с tmp).
 
-describe('ensureFirstRun (AD-075: нормализация относительного --data-dir)', () => {
+describe('ensureFirstRun (ADR-075: нормализация относительного --data-dir)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {
@@ -235,7 +235,7 @@ describe('ensureFirstRun (AD-075: нормализация относитель�
   });
 });
 
-describe('resolveSecretKey (AD-076)', () => {
+describe('resolveSecretKey (ADR-076)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -260,7 +260,7 @@ describe('resolveSecretKey (AD-076)', () => {
   });
 });
 
-describe('resolveIgnoreRules (AD-069 §9.2)', () => {
+describe('resolveIgnoreRules (ADR-069 §9.2)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -288,7 +288,7 @@ describe('resolveIgnoreRules (AD-069 §9.2)', () => {
   });
 });
 
-describe('resolveHome (AD-079)', () => {
+describe('resolveHome (ADR-079)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -318,7 +318,7 @@ describe('resolveHome (AD-079)', () => {
   });
 });
 
-describe('resolveDataDir с home (AD-079)', () => {
+describe('resolveDataDir с home (ADR-079)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -342,7 +342,7 @@ describe('resolveDataDir с home (AD-079)', () => {
   });
 });
 
-describe('defaultConfigPath (AD-079)', () => {
+describe('defaultConfigPath (ADR-079)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -353,7 +353,7 @@ describe('defaultConfigPath (AD-079)', () => {
   });
 });
 
-describe('findConfigPath (AD-079)', () => {
+describe('findConfigPath (ADR-079)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {
@@ -379,7 +379,7 @@ describe('findConfigPath (AD-079)', () => {
   });
 });
 
-describe('resolveProfilesPath / resolveCredentialsPath (AD-079)', () => {
+describe('resolveProfilesPath / resolveCredentialsPath (ADR-079)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -397,7 +397,7 @@ describe('resolveProfilesPath / resolveCredentialsPath (AD-079)', () => {
   });
 });
 
-describe('ensureFirstRun с home (AD-079)', () => {
+describe('ensureFirstRun с home (ADR-079)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {

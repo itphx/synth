@@ -1,5 +1,5 @@
 /**
- * Тесты enum-decision handler (AD-035).
+ * Тесты enum-decision handler (ADR-035).
  */
 import { describe, it, expect } from 'vitest';
 import { handleEnumDecision } from './enum-decision.js';

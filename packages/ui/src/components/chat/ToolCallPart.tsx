@@ -26,7 +26,7 @@ interface ToolCallData {
 interface ToolCallPartProps {
   toolCall: ToolCallData
   nested?: boolean
-  /** Реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧ (AD-036). */
+  /** Реальные значения секретов для плейсхолдеров ⟦SYNTH_SECRET_N⟧ (ADR-036). */
   secrets?: Record<string, string>
   sessionId?: string
   /** Вложенный контент (например, активность саб-агента) — рендерится ВНУТРИ карточки, под заголовком. */

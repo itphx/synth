@@ -15,7 +15,7 @@ import { EventBindingKeys } from './EventBindingKeys'
 import { EventJournalPanel } from './EventJournalPanel'
 import { EventRoutesSection } from './EventRoutesSection'
 
-/** AD-089: режимы доставки биндинга (без `drop` — он осознанный отказ без привязки). */
+/** ADR-089: режимы доставки биндинга (без `drop` — он осознанный отказ без привязки). */
 const EVENT_MODES: EventDeliveryMode[] = ['bound', 'ephemeral', 'queue']
 
 interface EditorState {
@@ -40,7 +40,7 @@ const EMPTY_EDITOR: EditorState = {
 }
 
 /**
- * AD-089 / AD-072: раздел «События» — реестр биндингов внешних событий
+ * ADR-089 / ADR-072: раздел «События» — реестр биндингов внешних событий
  * (привязка source/чат/тред → сессия/шаблон), правила маршрутизации и журнал
  * решений Router.
  *
@@ -182,7 +182,7 @@ export function EventsAdminSettings() {
       description={t('events.description')}
       meta={bindings ? t('events.bindings.count', { count: bindings.length }) : undefined}
     >
-      {/* Биндинги (AD-089 §EventBinding) */}
+      {/* Биндинги (ADR-089 §EventBinding) */}
       <SettingsSection
         title={t('events.bindings.title')}
         description={t('events.bindings.description')}
@@ -411,10 +411,10 @@ export function EventsAdminSettings() {
         )}
       </SettingsSection>
 
-      {/* Правила маршрутизации (AD-089 §EventRouteRule) */}
+      {/* Правила маршрутизации (ADR-089 §EventRouteRule) */}
       <EventRoutesSection canManage={canManage} />
 
-      {/* Журнал обработанных событий (AD-089) — доступен всем ролям */}
+      {/* Журнал обработанных событий (ADR-089) — доступен всем ролям */}
       <EventJournalPanel
         extraActions={
           <Button

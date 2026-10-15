@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.9.1: единая ось доступности тулов (`ToolAccess`).
+ * ADR-070 §2.9.1: единая ось доступности тулов (`ToolAccess`).
  *
  * Список tool-дефинишенов постоянен (не фильтруется по режиму/роли/окружению), а
  * доступность конкретного тула вычисляется здесь и передаётся permission-слою
@@ -9,7 +9,7 @@
  *  - `dependency` — в окружении нет нужного бинарника (git/rg/sh);
  *  - `workspace` — у проекта сессии не задан рабочий каталог (file/shell/git).
  *
- * `allow`/`ask`/`deny` — прежние эффекты AD-029; `deny` — жёсткий запрет без
+ * `allow`/`ask`/`deny` — прежние эффекты ADR-029; `deny` — жёсткий запрет без
  * подсказок о переключении/делегировании.
  */
 
@@ -53,7 +53,7 @@ export interface ToolAvailabilityOptions {
   /** Доступность внешних программ окружения (git/rg/sh). Не задана — fail-open. */
   runtimeDeps?: RuntimeDeps;
   /**
-   * Задан ли рабочий каталог проекта (AD-075). `false` — file/shell/git-тулы
+   * Задан ли рабочий каталог проекта (ADR-075). `false` — file/shell/git-тулы
    * недоступны (`workspace`); `true`/`undefined` — fail-open (обратная совместимость).
    */
   workspaceReady?: boolean;
@@ -66,7 +66,7 @@ export interface ToolAvailabilityOptions {
  *  1. role — если `agentCapabilities` заданы и ни одна capability тула не
  *     пересекается с ними. Тул без capabilities считается доступным (нельзя
  *     определить принадлежность).
- *  2. mode — plan-рестрикция write/edit/git-write (AD-025) либо MCP-тул,
+ *  2. mode — plan-рестрикция write/edit/git-write (ADR-025) либо MCP-тул,
  *     выключенный в текущем режиме настройками сессии.
  *  3. dependency — в окружении нет внешней программы тула (`TOOL_RUNTIME_DEP`).
  *  4. workspace — не задан рабочий каталог проекта, а тул зависит от него.

@@ -13,7 +13,7 @@ const input = (overrides: Partial<ScheduleInput> = {}): ScheduleInput => ({
   ...overrides,
 });
 
-describe('ScheduleStore (AD-051 / AD-089)', () => {
+describe('ScheduleStore (ADR-051 / ADR-089)', () => {
   let store: ScheduleStore;
   let tmpDir: string;
 

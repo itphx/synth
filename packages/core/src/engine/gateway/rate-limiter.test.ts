@@ -1,5 +1,5 @@
 /**
- * Юнит-тесты RateLimiter (AD-036): in-memory sliding window 60s.
+ * Юнит-тесты RateLimiter (ADR-036): in-memory sliding window 60s.
  */
 
 import { describe, it, expect, afterEach, vi } from 'vitest';

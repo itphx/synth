@@ -225,7 +225,7 @@ describe('createLocalAuth (cookie-сессия)', () => {
   });
 });
 
-describe('createLocalAuth (service-key, AD-052)', () => {
+describe('createLocalAuth (service-key, ADR-052)', () => {
   let dataDir: string;
 
   beforeEach(async () => {

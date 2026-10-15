@@ -48,7 +48,7 @@ export function resolveDeployMode(): DeployMode {
 }
 
 /**
- * AD-079: базовый home-каталог локального инстанса. Приоритет: явный флаг
+ * ADR-079: базовый home-каталог локального инстанса. Приоритет: явный флаг
  * (`explicitHome`) > env `SYNTH_HOME` > null (XDG-дефолты). Возвращает
  * абсолютный путь либо null.
  */
@@ -66,7 +66,7 @@ export function resolveDataDir(
   env?: NodeJS.ProcessEnv,
   home?: string | null,
 ): string {
-  // AD-075: нормализуем к абсолютному пути — относительный dataDir ломает
+  // ADR-075: нормализуем к абсолютному пути — относительный dataDir ломает
   // containment-проверки FS (root остаётся относительным, target — абсолютным).
   const envVar = (env ?? process.env).SYNTH_DATA_DIR;
   if (envVar) return resolve(envVar);
@@ -75,7 +75,7 @@ export function resolveDataDir(
     return resolve(config.storage.dataDir);
   }
 
-  // AD-079: home-каталог задаёт плоскую раскладку (<home>/data) и приоритетнее
+  // ADR-079: home-каталог задаёт плоскую раскладку (<home>/data) и приоритетнее
   // mode-дефолтов, но ниже явных SYNTH_DATA_DIR/config.storage.dataDir.
   const h = resolveHome(home, env);
   if (h) return join(h, 'data');
@@ -92,7 +92,7 @@ export function findConfigPath(home?: string | null): string | null {
   const explicit = process.env.SYNTH_CONFIG;
   if (explicit) return explicit;
 
-  // AD-079: при заданном home конфиг — строго <home>/config.yaml (приоритетнее
+  // ADR-079: при заданном home конфиг — строго <home>/config.yaml (приоритетнее
   // cwd/XDG); отсутствие файла не откатывается к дефолтам.
   const h = resolveHome(home);
   if (h) {
@@ -126,7 +126,7 @@ export function findConfigPath(home?: string | null): string | null {
 }
 
 export function defaultConfigPath(mode?: DeployMode, home?: string | null): string {
-  // AD-079: home задаёт плоскую раскладку (<home>/config.yaml) независимо от mode.
+  // ADR-079: home задаёт плоскую раскладку (<home>/config.yaml) независимо от mode.
   const h = resolveHome(home);
   if (h) return join(h, 'config.yaml');
 
@@ -152,10 +152,10 @@ export async function ensureConfigFile(targetPath: string): Promise<void> {
 
 export async function ensureFirstRun(dataDirOverride?: string, configPathOverride?: string, home?: string | null): Promise<{ dataDir: string; configPath: string | null; mode: DeployMode }> {
   const mode = resolveDeployMode();
-  // AD-079: home задаёт плоскую раскладку (<home>/config.yaml, <home>/data).
+  // ADR-079: home задаёт плоскую раскладку (<home>/config.yaml, <home>/data).
   const h = resolveHome(home);
 
-  // AD-075: относительный --data-dir абсолютизируем на CLI-границе (иначе
+  // ADR-075: относительный --data-dir абсолютизируем на CLI-границе (иначе
   // containment-проверки FS получают относительный root и абсолютный target).
   const dataDir = resolve(dataDirOverride ?? resolveDataDir(defaultConfig, undefined, h));
   const configPath = configPathOverride ?? defaultConfigPath(mode, h);
@@ -212,7 +212,7 @@ export function resolveDefaultWorkspace(config: SynthConfig, env?: NodeJS.Proces
 }
 
 /**
- * AD-079: путь к реестру профилей серверов. При заданном home — плоская
+ * ADR-079: путь к реестру профилей серверов. При заданном home — плоская
  * раскладка `<home>/profiles.json`, иначе XDG-дефолт `~/.config/synth/profiles.json`.
  */
 export function resolveProfilesPath(home?: string | null): string {
@@ -222,7 +222,7 @@ export function resolveProfilesPath(home?: string | null): string {
 }
 
 /**
- * AD-079: путь к файлу credentials. При заданном home — плоская раскладка
+ * ADR-079: путь к файлу credentials. При заданном home — плоская раскладка
  * `<home>/credentials.json`, иначе XDG-дефолт `~/.config/synth/credentials.json`.
  */
 export function resolveCredentialsPath(home?: string | null): string {
@@ -232,7 +232,7 @@ export function resolveCredentialsPath(home?: string | null): string {
 }
 
 /**
- * AD-075: эффективная политика для абсолютного workspace вне `workspacesRoot`
+ * ADR-075: эффективная политика для абсолютного workspace вне `workspacesRoot`
  * (приоритет: env `SYNTH_WORKSPACE_OUTSIDE_ROOT` > `config.storage.workspaceOutsideRoot` > `''`).
  * `''` — политика не задана; потребитель подставляет `confirm`.
  */
@@ -248,7 +248,7 @@ export function resolveWorkspaceOutsideRootPolicy(
 }
 
 /**
- * AD-076: мастер-ключ шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
+ * ADR-076: мастер-ключ шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
  * Приоритет: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > `''`
  * (пусто — core использует файл `{dataDir}/secrets/master.key`).
  */
@@ -260,7 +260,7 @@ export function resolveSecretKey(config: SynthConfig, env?: NodeJS.ProcessEnv): 
 }
 
 /**
- * AD-069 §9.2: нейтральная сессия без проектных инструкций.
+ * ADR-069 §9.2: нейтральная сессия без проектных инструкций.
  * Приоритет: явный флаг CLI `--ignore-rules`/`--safe-mode` (`explicit`) >
  * env `SYNTH_IGNORE_RULES` (`1`/`true`). Значение — эффективный
  * `instructions.enabled=false`.
@@ -272,11 +272,11 @@ export function resolveIgnoreRules(explicit?: boolean, env?: NodeJS.ProcessEnv):
 }
 
 /**
- * AD-084: имя decision-провайдера. Приоритет: env `SYNTH_DECISION_PROVIDER` >
+ * ADR-084: имя decision-провайдера. Приоритет: env `SYNTH_DECISION_PROVIDER` >
  * `config.decision.provider`.
  *
  * Примечание: тот же env применяется и общим реестром `ENV_OVERRIDES` в
- * `loadConfig` (AD-023, ключ `decision.provider`); резолвер сохранён для
+ * `loadConfig` (ADR-023, ключ `decision.provider`); резолвер сохранён для
  * потребителей, читающих конфиг не через `loadConfig`.
  */
 export function resolveDecisionProvider(
@@ -287,11 +287,11 @@ export function resolveDecisionProvider(
 }
 
 /**
- * AD-084: модель decision-слоя. Приоритет: env `SYNTH_DECISION_MODEL` >
+ * ADR-084: модель decision-слоя. Приоритет: env `SYNTH_DECISION_MODEL` >
  * `config.decision.model`.
  *
  * См. примечание к `resolveDecisionProvider` — env дублируется реестром
- * `ENV_OVERRIDES` (AD-023).
+ * `ENV_OVERRIDES` (ADR-023).
  */
 export function resolveDecisionModel(
   config: SynthConfig,

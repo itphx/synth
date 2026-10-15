@@ -22,7 +22,7 @@ const event = (id: string, ts: string): SynthEvent => ({
 
 const entry = (id: string, ts: string): EventJournalEntry => ({ ts, event: event(id, ts) });
 
-describe('startEventJournalPruner (AD-089)', () => {
+describe('startEventJournalPruner (ADR-089)', () => {
   let store: EventJournalStore;
   let tmpDir: string;
 

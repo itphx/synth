@@ -5,7 +5,7 @@ import { evaluateWebhookTarget } from './network.js';
 const resolve = (map: Record<string, string[]>) =>
   async (host: string): Promise<string[]> => map[host] ?? [];
 
-describe('webhooks: SSRF-политика (AD-052, этап II)', () => {
+describe('webhooks: SSRF-политика (ADR-052, этап II)', () => {
   it('приватный/loopback адрес блокируется по умолчанию', async () => {
     const res = await evaluateWebhookTarget('https://internal.example/hook', {
       resolveHost: resolve({ 'internal.example': ['10.0.0.5'] }),

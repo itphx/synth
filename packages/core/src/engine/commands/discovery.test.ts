@@ -31,7 +31,7 @@ async function writeCommand(root: string, name: string, description: string, bod
   );
 }
 
-describe('discovery шаблонных команд (AD-046 §7.1)', () => {
+describe('discovery шаблонных команд (ADR-046 §7.1)', () => {
   it('buildCommandSources: приоритет project > instance > config', () => {
     const sources = buildCommandSources({
       dataDir, projectWorkspace: workspace, configPaths: ['/cfg/cmds'],
@@ -40,7 +40,7 @@ describe('discovery шаблонных команд (AD-046 §7.1)', () => {
     expect(sources[0]!.dir).toBe(join(workspace, PROJECT_COMMANDS_DIR));
   });
 
-  it('buildCommandSources (AD-046 §4.4/§7.1): project-trust из trustedProjectDirs, instance/config — доверены', () => {
+  it('buildCommandSources (ADR-046 §4.4/§7.1): project-trust из trustedProjectDirs, instance/config — доверены', () => {
     const trusted = buildCommandSources({
       dataDir, projectWorkspace: workspace, trustedProjectDirs: [workspace],
     });

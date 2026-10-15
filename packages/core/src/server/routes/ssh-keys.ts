@@ -7,7 +7,7 @@ import { sshKeyCreateSchema, sshKeyUpdateSchema } from '@itphx/synth-shared';
 import { SSHKeyStoreError, type SSHKeyStore } from '../../storage/ssh-key-store.js';
 
 /**
- * AD-076 §T5: SSH-ключи агентов (`/api/v2/ssh-keys` и
+ * ADR-076 §T5: SSH-ключи агентов (`/api/v2/ssh-keys` и
  * `/api/v2/agents/:agentId/ssh-keys`). Единая реализация для core (standalone)
  * и backend (managed, запись — `writeGuard: requireAdmin`).
  *
@@ -29,7 +29,7 @@ export interface SshKeyRoutesOptions {
   /** Guard на write-эндпоинты; core по умолчанию — нет (backend — `requireAdmin`). */
   writeGuard?: Middleware;
   /**
-   * Маскировать ответы (AD-036): `true` (дефолт) — гарантированно отдаёт
+   * Маскировать ответы (ADR-036): `true` (дефолт) — гарантированно отдаёт
    * `SSHKeyMeta`. `false` — только для внутреннего использования, в API не включать.
    */
   mask?: boolean;

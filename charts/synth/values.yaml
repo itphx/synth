@@ -95,7 +95,7 @@ backend:
   # Если задан caCert, чарт сам добавляет NODE_EXTRA_CA_CERTS — вручную дублировать не нужно.
   extraEnv: {}
 
-  # Декларативный config.yaml backend (AD-023). Непустой объект →
+  # Декларативный config.yaml backend (ADR-023). Непустой объект →
   # ConfigMap <release>-config, монтируется в backend как /etc/synth/config.yaml
   # (штатный путь поиска config backend, SYSTEM_CONFIG_PATH).
   # Приоритет: CLI-флаги > SYNTH_* env > config.yaml > defaults; runtime-настройки
@@ -181,7 +181,7 @@ ingress:
 secrets:
   existingSecret: synth-secrets
 
-# Installer service-key (AD-052): создаётся при развёртывании Synth и используется
+# Installer service-key (ADR-052): создаётся при развёртывании Synth и используется
 # аддонами для самоустановки своих ресурсов (MCP-серверы, скиллы) по scope addons:install.
 # Провижининг идемпотентен при старте backend (security.bootstrapServiceKeys) — ключ
 # создаётся/синхронизируется по `label`, повторный `helm upgrade` секрет не меняет.

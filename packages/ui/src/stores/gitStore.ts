@@ -5,7 +5,7 @@ import type { GitRepoConfigData } from '@/lib/api/synthApi'
 import type { RepoStatus, CommitInfo, CommitDetail } from '@itphx/synth-shared'
 
 /**
- * AD-076: запись реестра проекта + git-статус, собранные для дерева Git-вкладки.
+ * ADR-076: запись реестра проекта + git-статус, собранные для дерева Git-вкладки.
  * `path` — относительный путь внутри workspace; `''`/`.` — корень workspace.
  */
 export interface GitRepoView extends GitRepoConfigData {

@@ -1,6 +1,6 @@
 import type { ToolCapability } from './tools.js';
 import type { PermissionConfig, McpServerToolSettings } from './permission.js';
-// Type-only импорт: конфиг-тип MCP нужен для записи реестра (AD-071 §2.5).
+// Type-only импорт: конфиг-тип MCP нужен для записи реестра (ADR-071 §2.5).
 // Runtime-цикла нет — импорт стирается при компиляции.
 import type { McpServerConfig } from '../config/types.js';
 
@@ -61,7 +61,7 @@ export interface MessageI18n {
 // --- SessionOrigin ---
 export type SessionOrigin = 'user' | 'fork' | 'subagent';
 
-// --- Prompt state (AD-070 §2.4) ---
+// --- Prompt state (ADR-070 §2.4) ---
 /** Состояние одного блока системного промпта (хэш/размер для диагностики). */
 export interface PromptBlockState {
   key: string;
@@ -70,7 +70,7 @@ export interface PromptBlockState {
 }
 
 /**
- * AD-070 §2.4: состояние системного промпта per-agent. Хранится в сессии
+ * ADR-070 §2.4: состояние системного промпта per-agent. Хранится в сессии
  * (`Session.promptStates`) и пишется только при смене generation.
  */
 export interface PromptState {
@@ -86,7 +86,7 @@ export interface PromptState {
   updatedAt: string;
 }
 
-/** AD-070 §2.4: компактная мета промпта, кладётся в assistant-сообщение. */
+/** ADR-070 §2.4: компактная мета промпта, кладётся в assistant-сообщение. */
 export interface PromptMeta {
   /** agentKey, к которому относится ход (agentRole или `__default__`). */
   agentRole?: string;
@@ -99,19 +99,19 @@ export interface PromptMeta {
   validated: boolean;
 }
 
-// --- Prompt manifest (AD-070 §2.5) ---
-/** Тир консистентности блока системного промпта (AD-070 §2.1). */
+// --- Prompt manifest (ADR-070 §2.5) ---
+/** Тир консистентности блока системного промпта (ADR-070 §2.1). */
 export type PromptTier = 'stable' | 'context' | 'volatile';
 
 /** Статус блока в манифесте промпта. */
 export type PromptManifestStatus = 'loaded' | 'truncated' | 'empty' | 'blocked' | 'suppressed';
 
-/** AD-070 §2.5: запись манифеста — источник системного промпта. */
+/** ADR-070 §2.5: запись манифеста — источник системного промпта. */
 export interface PromptManifestEntry {
   key: string;
   label: string;
   tier: PromptTier;
-  /** Порядок блока внутри тира (реальный порядок отправки, AD-070 §2.5). */
+  /** Порядок блока внутри тира (реальный порядок отправки, ADR-070 §2.5). */
   order?: number;
   chars: number;
   /** Эвристика: Math.ceil(chars / 4). */
@@ -120,40 +120,40 @@ export interface PromptManifestEntry {
   provenance?: string;
   /**
    * Источник записи: `system` — блок системного промпта, `tools` — слой
-   * встроенных инструментов (stable, AD-070 §2.5), `mcp.tools` — слой
-   * MCP-инструментов (volatile, AD-071 §2.1). Слои инструментов не входят в
+   * встроенных инструментов (stable, ADR-070 §2.5), `mcp.tools` — слой
+   * MCP-инструментов (volatile, ADR-071 §2.1). Слои инструментов не входят в
    * system-текст, но отражаются в манифесте и размерах.
    */
   source?: 'system' | 'tools' | 'mcp.tools';
 }
 
-/** AD-070 §2.5: манифест состава системного промпта (для API/UI/тестов). */
+/** ADR-070 §2.5: манифест состава системного промпта (для API/UI/тестов). */
 export interface PromptManifest {
   generation?: number;
   totalChars: number;
   estTokens: number;
   staticPrefixChars: number;
   /**
-   * AD-071 §2.3: фактически применённая политика **встроенных** инструментов
+   * ADR-071 §2.3: фактически применённая политика **встроенных** инструментов
    * (`auto` уже разрешён в `consistency`/`available`) — видно, какая политика
    * сработала.
    */
   toolsPolicy?: Exclude<ToolsPolicy, 'auto'>;
   /**
-   * AD-071 §2.3: фактически применённая политика **MCP**-инструментов
+   * ADR-071 §2.3: фактически применённая политика **MCP**-инструментов
    * (`auto` уже разрешён в `consistency`/`available`). Независима от
    * `toolsPolicy`.
    */
   mcpPolicy?: Exclude<ToolsPolicy, 'auto'>;
   /**
-   * AD-071 §2.6: chars-per-token, применённый к `estTokens` (калибровка по
+   * ADR-071 §2.6: chars-per-token, применённый к `estTokens` (калибровка по
    * фактическому usage; 4 — без калибровки). `estTokens` — оценка, не факт.
    */
   ratio?: number;
   entries: PromptManifestEntry[];
 }
 
-// --- Оценка токенов по символам (AD-071 §2.6) ---
+// --- Оценка токенов по символам (ADR-071 §2.6) ---
 
 /** Дефолтный chars-per-token, если калибровки для модели нет. */
 export const DEFAULT_CHARS_PER_TOKEN = 4;
@@ -171,7 +171,7 @@ export const MAX_CHARS_PER_TOKEN = 16;
 export const MIN_CALIBRATION_INPUT_TOKENS = 500;
 
 /**
- * AD-071 §2.6: строка таблицы «Встроенные инструменты» в панели статистики.
+ * ADR-071 §2.6: строка таблицы «Встроенные инструменты» в панели статистики.
  * Отдаётся `GET /sessions/:id/prompt` полем `toolsDetail` (аддитивно).
  */
 export interface PromptToolDetail {
@@ -186,31 +186,31 @@ export interface PromptToolDetail {
    * `workspace` (не задан рабочий каталог проекта).
    */
   reason?: 'mode' | 'role' | 'admin_disabled' | 'dependency' | 'workspace';
-  /** AD-071 §2.1: источник инструмента (`built-in` — слой `tools`). */
+  /** ADR-071 §2.1: источник инструмента (`built-in` — слой `tools`). */
   source: 'built-in';
-  /** AD-071 §2.6: длина `JSON.stringify` LLM-определения тула (как слой `tools`). */
+  /** ADR-071 §2.6: длина `JSON.stringify` LLM-определения тула (как слой `tools`). */
   chars?: number;
-  /** AD-071 §2.6: оценка токенов (`ceil(chars / ratio)`) — значение оценочное. */
+  /** ADR-071 §2.6: оценка токенов (`ceil(chars / ratio)`) — значение оценочное. */
   estTokens?: number;
-  /** AD-071 §2.6: chars-per-token, применённый к оценке (4 — без калибровки). */
+  /** ADR-071 §2.6: chars-per-token, применённый к оценке (4 — без калибровки). */
   ratio?: number;
-  /** AD-071 §2.6: тул жёстко отключён администратором (`tools.disabled`). */
+  /** ADR-071 §2.6: тул жёстко отключён администратором (`tools.disabled`). */
   adminDisabled?: boolean;
 }
 
-/** AD-071 §2.6: строка тула MCP-сервера с оценкой токенов. */
+/** ADR-071 §2.6: строка тула MCP-сервера с оценкой токенов. */
 export interface McpToolDetail {
   name: string;
   /** Длина `JSON.stringify` LLM-определения тула (имя с префиксом сервера). */
   chars: number;
   estTokens: number;
   ratio: number;
-  /** AD-071 §2.6: тул отключён администратором (`tools.disabled`). */
+  /** ADR-071 §2.6: тул отключён администратором (`tools.disabled`). */
   adminDisabled?: boolean;
 }
 
-// --- Prompt history (AD-070 §2.5, слой messages) ---
-/** AD-070 §2.5: state-сообщения истории, сгруппированные по типу. */
+// --- Prompt history (ADR-070 §2.5, слой messages) ---
+/** ADR-070 §2.5: state-сообщения истории, сгруппированные по типу. */
 export interface PromptHistoryStateMessage {
   type: string;
   count: number;
@@ -218,7 +218,7 @@ export interface PromptHistoryStateMessage {
   estTokens: number;
 }
 
-/** AD-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
+/** ADR-070 §2.5: состав слоя истории (`messages`), зеркалит реальную отправку. */
 export interface PromptHistoryInfo {
   /** Реально отправляемые сообщения (после фильтрации), суммарно. */
   messages: { count: number; chars: number; estTokens: number };
@@ -228,11 +228,11 @@ export interface PromptHistoryInfo {
   excluded: { disabled: number; hidden: number; info: number };
   /** Мультимодальные части (не text). */
   attachments: { count: number; chars: number };
-  /** Число плейсхолдеров секретов ⟦SYNTH_SECRET_N⟧ в отправляемых сообщениях (AD-036). */
+  /** Число плейсхолдеров секретов ⟦SYNTH_SECRET_N⟧ в отправляемых сообщениях (ADR-036). */
   secretPlaceholders: number;
 }
 
-// --- Session statistics (AD-070 §2.6) ---
+// --- Session statistics (ADR-070 §2.6) ---
 /**
  * Статистика по агенту в рамках сессии (`GET /sessions/:id/stats`).
  * Итоги (`input_tokens`/`output_tokens`/`cache_*`/`reasoning_tokens`/`cost_usd`)
@@ -284,7 +284,7 @@ export interface SessionUserStats {
  * Сводка по сабагентам сессии (рекурсивно, tool `task`). Отдельный блок:
  * `SessionAgentStats` уже включает usage детей в свои итоги, а здесь — только
  * суммарная детализация по всем дочерним сессиям (в контекстное окно родителя
- * их usage не входит, AD-070 §2.6).
+ * их usage не входит, ADR-070 §2.6).
  */
 export interface SessionSubagentStats {
   sessions: number;
@@ -323,7 +323,7 @@ export interface Message {
   pinned: boolean;
   hidden: boolean;
   /**
-   * AD-046 §7.1: сообщение локальной `/`-команды (builtin-ответ) — видно в
+   * ADR-046 §7.1: сообщение локальной `/`-команды (builtin-ответ) — видно в
    * истории, но исключается из LLM-контекста.
    */
   ephemeral?: boolean;
@@ -337,7 +337,7 @@ export interface Message {
   author?: string;
   agentRole?: string;
   metadata?: Record<string, unknown>;
-  /** AD-070 §2.4: предсказание/валидация prompt-cache для этого хода. */
+  /** ADR-070 §2.4: предсказание/валидация prompt-cache для этого хода. */
   promptMeta?: PromptMeta;
   summaryOf?: number[];
   qa_pass?: boolean;
@@ -350,7 +350,7 @@ export interface SessionStatus {
   blockedAt?: string;
   /**
    * Персистентный флаг запроса отмены генерации (кнопка «Стоп», `/stop`).
-   * Живёт в JSON-хранилище (AD-005): позволяет остановить сессию, когда
+   * Живёт в JSON-хранилище (ADR-005): позволяет остановить сессию, когда
    * `currentStream`/cancel-token ещё не установлены (очередь, backoff).
    * Сбрасывается процессором очереди после обработки.
    */
@@ -366,7 +366,7 @@ export const SESSION_MODES = ['plan', 'act', 'yolo'] as const;
 export type SessionMode = (typeof SESSION_MODES)[number];
 
 /**
- * AD-071 §2.3: политика включения инструментов в запрос.
+ * ADR-071 §2.3: политика включения инструментов в запрос.
  * - `consistency` — в запрос идут все определения, недоступность кодируется
  *   permission-слоем (`unavailable(mode|role)`); приоритет — валидность кэша;
  * - `available` — в запрос идут только доступные агенту/режиму/роли тулы;
@@ -376,9 +376,9 @@ export type SessionMode = (typeof SESSION_MODES)[number];
 export const TOOLS_POLICIES = ['consistency', 'available', 'auto'] as const;
 export type ToolsPolicy = (typeof TOOLS_POLICIES)[number];
 
-// --- MCP: реестр серверов и сетевой доступ (AD-071 §2.3.1/§2.5) ---
+// --- MCP: реестр серверов и сетевой доступ (ADR-071 §2.3.1/§2.5) ---
 
-/** Версия схемы записи реестра MCP — для будущей миграции (AD-032). */
+/** Версия схемы записи реестра MCP — для будущей миграции (PROP-032). */
 export const MCP_REGISTRY_SCHEMA_VERSION = 1;
 
 export const MCP_REGISTRY_ORIGINS = ['instance', 'user'] as const;
@@ -394,9 +394,9 @@ export interface McpRegistryAuthor {
 }
 
 /**
- * AD-071 §2.5: плоская запись единого реестра MCP-серверов.
+ * ADR-071 §2.5: плоская запись единого реестра MCP-серверов.
  *
- * Логическая модель сразу проектируется под PostgreSQL (AD-032): стабильный
+ * Логическая модель сразу проектируется под PostgreSQL (PROP-032): стабильный
  * `id`, `schemaVersion`, timestamps; вложенность ограничена `config`/`author`
  * (раскладываются в JSONB/отдельные колонки). Instance- и пользовательские
  * записи различаются полем `origin`, не отдельными реестрами.
@@ -428,7 +428,7 @@ export const MCP_NETWORK_POLICY_MODES = ['allow', 'deny'] as const;
 export type McpNetworkPolicyMode = (typeof MCP_NETWORK_POLICY_MODES)[number];
 
 /**
- * AD-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP-серверов.
+ * ADR-071 §2.3.1: политика сетевого доступа пользовательских HTTP MCP-серверов.
  * - `deny` — перечисленные адреса/CIDR запрещены (дефолт: приватные диапазоны);
  * - `allow` — разрешены только перечисленные адреса/CIDR (всё прочее запрещено).
  */
@@ -449,19 +449,19 @@ export const DEFAULT_MCP_PRIVATE_CIDRS = [
   'fe80::/10',
 ] as const;
 
-/** Дефолтная политика: deny приватных диапазонов (AD-071 §2.3.1). */
+/** Дефолтная политика: deny приватных диапазонов (ADR-071 §2.3.1). */
 export const DEFAULT_MCP_NETWORK_POLICY: McpNetworkPolicy = {
   mode: 'deny',
   list: [...DEFAULT_MCP_PRIVATE_CIDRS],
 };
 
-// --- MCP: уровни/скоуп и эффективный набор (AD-071 §2.2/§2.4) ---
+// --- MCP: уровни/скоуп и эффективный набор (ADR-071 §2.2/§2.4) ---
 
 export const MCP_SERVER_LEVELS = ['system', 'project', 'session'] as const;
 export type McpServerLevel = (typeof MCP_SERVER_LEVELS)[number];
 
 /**
- * AD-071 §2.2: почему сервер отключён в эффективном наборе сессии:
+ * ADR-071 §2.2: почему сервер отключён в эффективном наборе сессии:
  * - `system_disabled` — выключен системным мастер-флагом (`McpRegistryEntry.enabled === false`);
  * - `project_disabled` — не разрешён проектом (`project.enabled` — hard-gate);
  * - `session_optout` — явный opt-out в сессии (`mcpDisabledServers`);
@@ -479,7 +479,7 @@ export const MCP_DISABLED_REASONS = [
 export type McpDisabledReason = (typeof MCP_DISABLED_REASONS)[number];
 
 /**
- * AD-071 §2.4: эффективное состояние MCP-сервера для сессии. Отдаётся API
+ * ADR-071 §2.4: эффективное состояние MCP-сервера для сессии. Отдаётся API
  * `GET /api/v2/sessions/:id/mcp`; отключённые серверы не исчезают из выдачи.
  */
 export interface McpServerEffective {
@@ -492,22 +492,22 @@ export interface McpServerEffective {
   origin: McpRegistryOrigin;
   trust: McpRegistryTrust;
   /**
-   * AD-071 §2.2/§2.6: транспортный статус для таблицы «MCP» в статистике:
+   * ADR-071 §2.2/§2.6: транспортный статус для таблицы «MCP» в статистике:
    * `disabled` — выключен в эффективном наборе, `connected`/`error`/`circuit-open`
    * — состояние подключения активного сервера.
    */
   status?: 'connected' | 'error' | 'disabled' | 'circuit-open';
-  /** AD-071 §2.5/§2.6: автор записи реестра (null для instance/config-серверов). */
+  /** ADR-071 §2.5/§2.6: автор записи реестра (null для instance/config-серверов). */
   author?: McpRegistryAuthor | null;
-  /** AD-071 §2.2/§2.6: имена инструментов сервера (пусто, если не подключён). */
+  /** ADR-071 §2.2/§2.6: имена инструментов сервера (пусто, если не подключён). */
   tools?: string[];
-  /** AD-071 §2.6: суммарные символы JSON-определений тулов сервера. */
+  /** ADR-071 §2.6: суммарные символы JSON-определений тулов сервера. */
   chars?: number;
-  /** AD-071 §2.6: оценка токенов сервера (`ceil(chars / ratio)`). */
+  /** ADR-071 §2.6: оценка токенов сервера (`ceil(chars / ratio)`). */
   estTokens?: number;
-  /** AD-071 §2.6: chars-per-token, применённый к оценке (4 — без калибровки). */
+  /** ADR-071 §2.6: chars-per-token, применённый к оценке (4 — без калибровки). */
   ratio?: number;
-  /** AD-071 §2.6: пер-тульные chars/estTokens/ratio + признак admin_disabled. */
+  /** ADR-071 §2.6: пер-тульные chars/estTokens/ratio + признак admin_disabled. */
   toolDetails?: McpToolDetail[];
 }
 
@@ -522,7 +522,7 @@ export interface TodoItem {
   content: string;
   status: TodoStatus;
   priority: TodoPriority;
-  /** Связь с пунктом плана проекта (AD-039). */
+  /** Связь с пунктом плана проекта (ADR-039). */
   planItemId?: string;
 }
 
@@ -539,15 +539,15 @@ export interface SessionSettings {
   debugEnabled: boolean;
   streamEnabled: boolean;
   agentRole?: string;
-  /** AD-071 §2.4: явно включённые в сессии серверы (session level). */
+  /** ADR-071 §2.4: явно включённые в сессии серверы (session level). */
   mcpServers?: string[];
   /**
-   * AD-071 §2.4: явные opt-out серверы сессии (включая системные). Вычитаются
+   * ADR-071 §2.4: явные opt-out серверы сессии (включая системные). Вычитаются
    * из эффективного набора (`(seed ∪ enabled) − disabled`).
    */
   mcpDisabledServers?: string[];
   /**
-   * AD-071 §2.4: СНАПШОТ MCP-серверов «по умолчанию» на момент создания сессии
+   * ADR-071 §2.4: СНАПШОТ MCP-серверов «по умолчанию» на момент создания сессии
    * (снимок `project.defaultOn` либо системного дефолта `enabledByDefault`).
    * Изменение дефолта проекта/системы не влияет на существующие сессии.
    */
@@ -565,7 +565,7 @@ export interface SessionSettings {
   showInterview: boolean;
   websocketEnabled: boolean;
   language?: string;
-  // === Роутинг (AD-034) ===
+  // === Роутинг (ADR-034) ===
   routingEnabled: boolean;
   routingStrategy: 'content' | 'cost' | 'content+cost' | 'auto';
   routingContent: {
@@ -593,7 +593,7 @@ export interface SessionSettings {
   };
   /** Категория, установленная моделью через classify_conversation. Приоритет над keyword-классификатором. */
   routingCategory?: 'coding' | 'chat' | 'research';
-  // === Микро-слой (AD-035) ===
+  // === Микро-слой (ADR-035) ===
   /** Включить микро-слой: обработка простых запросов без LLM (приветствия, классификация, enum-решения). */
   microFirst: boolean;
   /** Порог уверенности микро-слоя. confidence >= порог → OK, иначе UNSURE → LLM fallback. */
@@ -605,17 +605,17 @@ export interface SessionSettings {
   /** Модель для embedding. */
   embedModel?: string;
   /**
-   * AD-084: включить decision-уровень в микро-каскаде (перед локальной LLM).
+   * ADR-084: включить decision-уровень в микро-каскаде (перед локальной LLM).
    * Не задано — берётся `config.decision.enabled`; `false` — принудительное
    * отключение уровня в сессии.
    */
   decisionFirst?: boolean;
-  // === Permissions (AD-029) ===
+  // === Permissions (ADR-029) ===
   /** Гранулярные permissions сессии. Приоритетнее глобальной секции permission в config.yaml. */
   permission?: PermissionConfig;
   /** Доступность MCP-инструментов по режимам plan/act (serverName → настройки). */
   mcpToolSettings?: Record<string, McpServerToolSettings>;
-  // === Инструменты (AD-071 §2.3) ===
+  // === Инструменты (ADR-071 §2.3) ===
   /**
    * Per-session override политики включения **встроенных** инструментов. Если
    * задан — перекрывает глобальную `tools.policy` из config.yaml. `auto`
@@ -628,22 +628,22 @@ export interface SessionSettings {
    * `toolsPolicy`; `auto` резолвится по провайдеру/модели текущего запроса.
    */
   mcpPolicy?: ToolsPolicy;
-  // === Plan/Act (AD-025, AD-028) ===
+  // === Plan/Act (ADR-025, ADR-028) ===
   /** Строгость цикла Plan→Build: auto — модель сама решает, strict — план обязателен, off — планирование отключено. */
   planMode?: PlanMode;
-  // === Скиллы (AD-046 §4.5) ===
-  /** AD-046: явно включённые в сессии имена скиллов (session level, volatile-каталог). */
+  // === Скиллы (ADR-046 §4.5) ===
+  /** ADR-046: явно включённые в сессии имена скиллов (session level, volatile-каталог). */
   skills?: string[];
-  /** AD-046: opt-out сессии — имена, категории или группы скиллов (volatile-каталог). */
+  /** ADR-046: opt-out сессии — имена, категории или группы скиллов (volatile-каталог). */
   skillsDisabled?: string[];
   /**
-   * AD-046: СНАПШОТ скиллов «по умолчанию» на момент создания сессии (снимок
+   * ADR-046: СНАПШОТ скиллов «по умолчанию» на момент создания сессии (снимок
    * `project.skills.defaultOn` либо системного дефолта). Изменение дефолта
    * проекта/системы не влияет на существующие сессии.
    */
   skillsDefaultOn?: string[];
-  // === LLM Gateway (AD-036) ===
-  /** Per-session override LLM Gateway (AD-036). */
+  // === LLM Gateway (ADR-036) ===
+  /** Per-session override LLM Gateway (ADR-036). */
   llmGateway?: { enabled?: boolean };
 }
 
@@ -697,18 +697,18 @@ export interface Session {
   sessionOrigin: SessionOrigin;
   parentId?: string;
   branchPoint?: string;
-  /** Флаг «план утверждён через plan_exit» (AD-039), нужен для strict-режима AD-028. */
+  /** Флаг «план утверждён через plan_exit» (ADR-039), нужен для strict-режима ADR-028. */
   planApproved?: boolean;
-  /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение, 'act' — полный доступ. */
+  /** Текущий runtime-режим сессии (ADR-025): 'plan' — только чтение, 'act' — полный доступ. */
   mode?: SessionMode;
   /** Todo-список сессии (тул todo_write), как в OpenCode. */
   todos?: TodoItem[];
   /**
-   * AD-070 §2.4/§2.7: состояние промпта per-agent (ключ — agentRole или
+   * ADR-070 §2.4/§2.7: состояние промпта per-agent (ключ — agentRole или
    * `__default__`). Пишется только при смене generation.
    */
   promptStates?: Record<string, PromptState>;
-  /** Карта обфускации LLM Gateway (AD-036). Живёт всю сессию независимо от глобального тумблера. */
+  /** Карта обфускации LLM Gateway (ADR-036). Живёт всю сессию независимо от глобального тумблера. */
   obfuscationMap?: Record<string, string>;
   userId?: string;
   ownerId?: string;
@@ -728,11 +728,11 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   /**
-   * AD-089: ISO-8601 — время авто-архивации ephemeral-сессии (server-managed,
+   * ADR-089: ISO-8601 — время авто-архивации ephemeral-сессии (server-managed,
    * клиент задать не может). Задан — сессия скрывается из списков по умолчанию.
    */
   expiresAt?: string;
-  /** AD-089: ISO-8601 — время архивации сессии (server-managed). */
+  /** ADR-089: ISO-8601 — время архивации сессии (server-managed). */
   archivedAt?: string;
   inputTokens: number;
   outputTokens: number;
@@ -745,7 +745,7 @@ export interface Session {
   cacheReadCost: number;
   cacheWriteCost: number;
   /**
-   * AD-070 §2.3: доля кэшированных входных токенов сессии —
+   * ADR-070 §2.3: доля кэшированных входных токенов сессии —
    * `cacheReadTokens / inputTokens` (0 при `inputTokens === 0`).
    */
   cacheHitRate?: number;
@@ -753,7 +753,7 @@ export interface Session {
 
 // --- Git ---
 /**
- * AD-076: запись реестра git-репозиториев проекта. Старые данные (`repos` как
+ * ADR-076: запись реестра git-репозиториев проекта. Старые данные (`repos` как
  * `string[]` либо `{ path }`) нормализуются через `normalizeGitRepoConfig`.
  */
 export interface GitRepoConfig {
@@ -770,7 +770,7 @@ export interface GitRepoConfig {
 }
 
 /**
- * AD-076: SSH-ключ агента — отдельная сущность реестра (не в
+ * ADR-076: SSH-ключ агента — отдельная сущность реестра (не в
  * `AgentDefinition`). Секреты `privateKey`/`passphrase` шифруются at-rest
  * (AES-256-GCM; реализация — в core) и НИКОГДА не отдаются через API.
  */
@@ -839,7 +839,7 @@ export interface ProjectLogEntry {
 }
 
 /**
- * AD-071 §2.4/§2.5: проектный скоуп MCP — ссылки на записи единого реестра по
+ * ADR-071 §2.4/§2.5: проектный скоуп MCP — ссылки на записи единого реестра по
  * имени.
  * - `enabled` — hard-gate: серверы, разрешённые проекту. Не разрешённый сервер
  *   недоступен ни в одной сессии проекта (в т.ч. старой). Пустой массив — «всё
@@ -853,7 +853,7 @@ export interface ProjectMcpSettings {
 }
 
 /**
- * AD-046 §4.5: проектный скоуп скиллов (owner/lead) — аналог `ProjectMcpSettings`.
+ * ADR-046 §4.5: проектный скоуп скиллов (owner/lead) — аналог `ProjectMcpSettings`.
  * - `enabled` — hard-gate: доступные проекту скиллы. Пустой массив — «всё
  *   выключено» (opt-in); отсутствие `project.skills` — гейт не задан (legacy).
  * - `defaultOn` — сид «по умолчанию для новых сессий»: снапшот
@@ -865,7 +865,7 @@ export interface ProjectSkillSettings {
 }
 
 /**
- * AD-075: политика для абсолютного `project.workspace` вне `workspacesRoot`.
+ * ADR-075: политика для абсолютного `project.workspace` вне `workspacesRoot`.
  * - `confirm` — путь разрешён только с явным подтверждением (`confirmOutsideRoot`);
  * - `deny` — путь запрещён (managed-развёртывание: жёстко).
  *
@@ -875,7 +875,7 @@ export interface ProjectSkillSettings {
 export type WorkspaceOutsideRootPolicy = 'confirm' | 'deny';
 
 /**
- * AD-075: ответ `GET /api/v2/settings/workspace-policy`.
+ * ADR-075: ответ `GET /api/v2/settings/workspace-policy`.
  * `readOnly` (additive) — managed-развёртывание: политика задаётся развёртыванием,
  * `PUT`/`DELETE` возвращают 403 `WORKSPACE_POLICY_READ_ONLY`.
  */
@@ -898,12 +898,12 @@ export interface Project {
   color?: string;
   workspace?: string;
   repos?: GitRepoConfig[];
-  /** AD-071 §2.4: проектный скоуп MCP (owner/lead). */
+  /** ADR-071 §2.4: проектный скоуп MCP (owner/lead). */
   mcp?: ProjectMcpSettings;
-  /** AD-046 §4.5: проектный скоуп скиллов (owner/lead). */
+  /** ADR-046 §4.5: проектный скоуп скиллов (owner/lead). */
   skills?: ProjectSkillSettings;
   statusMessages: StatusMessage[];
-  /** Kanban-план проекта (AD-039). Владеет проектом, а не сессией. */
+  /** Kanban-план проекта (ADR-039). Владеет проектом, а не сессией. */
   plan?: ProjectPlan;
   /** Лог работ проекта (ведётся моделью через project_log_write). */
   log?: ProjectLogEntry[];
@@ -970,7 +970,7 @@ export const PROJECT_COLOR_KEYS = [
 
 export type ProjectColorKey = (typeof PROJECT_COLOR_KEYS)[number];
 
-// --- Plan (AD-039) ---
+// --- Plan (ADR-039) ---
 export interface PlanColumn {
   id: string;
   name: string;
@@ -1066,7 +1066,7 @@ export interface AgentDefinition {
   color?: string;
   description?: string;
   /**
-   * AD-046 §6.2: группы агентов для привязки скиллов
+   * ADR-046 §6.2: группы агентов для привязки скиллов
    * (`metadata.synth.groups`). Пусто/не задано — скилл с непустым `groups`
    * не привязан к агенту.
    */
@@ -1117,7 +1117,7 @@ export function hasPriceInput(body: unknown): boolean {
 }
 
 /**
- * AD-036/AD-072: дефолт rate limit LLM Gateway. Единый источник для Zod-схемы
+ * ADR-036/ADR-072: дефолт rate limit LLM Gateway. Единый источник для Zod-схемы
  * конфига и runtime-дефолтов (settings-роуты, fallback'и backend/core).
  */
 export const DEFAULT_LLM_GATEWAY_RATE_LIMIT = {
@@ -1168,12 +1168,12 @@ export interface ContextFileContent {
 }
 
 /**
- * AD-089: внешняя идентичность, привязанная к профилю пользователя.
+ * ADR-089: внешняя идентичность, привязанная к профилю пользователя.
  * Ключ — `provider` + `externalId` (числовой id источника). `username`/
  * `displayName` — display-кэш (может устареть), НЕ ключ.
  */
 export interface ExternalIdentity {
-  /** Префикс principalId (AD-089), напр. 'tg' (Telegram). */
+  /** Префикс principalId (ADR-089), напр. 'tg' (Telegram). */
   provider: string;
   /** Числовой id в источнике, строкой (напр. '450316139'). */
   externalId: string;
@@ -1188,7 +1188,7 @@ export interface ExternalIdentity {
 }
 
 /**
- * AD-089: principalId внешнего отправителя из пары провайдер+id.
+ * ADR-089: principalId внешнего отправителя из пары провайдер+id.
  * Формат — `<provider>:<externalId>` (напр. `tg:450316139`).
  */
 export function buildPrincipalId(provider: string, externalId: string): string {
@@ -1196,7 +1196,7 @@ export function buildPrincipalId(provider: string, externalId: string): string {
 }
 
 /**
- * AD-089: разбор principalId на `provider`/`externalId` — деление по **первому**
+ * ADR-089: разбор principalId на `provider`/`externalId` — деление по **первому**
  * `:`. Невалидное (нет `:`, пустые части) → `null`.
  */
 export function parsePrincipalId(principalId: string): { provider: string; externalId: string } | null {
@@ -1229,7 +1229,7 @@ export interface ProfileData {
   interviewCompletedAt?: string;
   displayName?: string;
   /**
-   * AD-089: внешние идентичности (Telegram и др.), привязанные к профилю.
+   * ADR-089: внешние идентичности (Telegram и др.), привязанные к профилю.
    * Опционально — legacy-профили без поля трактуются как `[]`. Ключ — пара
    * `provider`+`externalId`; `username`/`displayName` — display-кэш.
    */
@@ -1390,7 +1390,7 @@ export enum FsErrorCode {
   PERMISSION_DENIED = 'PERMISSION_DENIED',
   ALREADY_EXISTS = 'ALREADY_EXISTS',
   DIR_NOT_EMPTY = 'DIR_NOT_EMPTY',
-  /** AD-075: путь вне `workspacesRoot` запрещён политикой (managed). */
+  /** ADR-075: путь вне `workspacesRoot` запрещён политикой (managed). */
   WORKSPACE_OUTSIDE_ROOT_DENIED = 'WORKSPACE_OUTSIDE_ROOT_DENIED',
 }
 
@@ -1432,21 +1432,21 @@ export interface FsError {
 
 // Tool types — re-exported from tools.ts
 export * from './tools.js';
-// Permission types (AD-029) — re-exported from permission.ts
+// Permission types (ADR-029) — re-exported from permission.ts
 export * from './permission.js';
-// Skill types (AD-046) — re-exported from skills.ts
+// Skill types (ADR-046) — re-exported from skills.ts
 export * from './skills.js';
-// Slash-команды и bundles (AD-046 §7) — re-exported from commands.ts
+// Slash-команды и bundles (ADR-046 §7) — re-exported from commands.ts
 export * from './commands.js';
-// Внешние события (AD-089) — re-exported from events.ts
+// Внешние события (ADR-089) — re-exported from events.ts
 export * from './events.js';
-// Hooks агента и интеграций (AD-030) — re-exported from hooks.ts
+// Hooks агента и интеграций (ADR-030) — re-exported from hooks.ts
 export * from './hooks.js';
-// Планировщик расписаний (AD-051 срез / AD-089) — re-exported from schedules.ts
+// Планировщик расписаний (ADR-051 срез / ADR-089) — re-exported from schedules.ts
 export * from './schedules.js';
-// Decision-модели (AD-084): контракт state+questions → answers — re-exported from decision.ts
+// Decision-модели (ADR-084): контракт state+questions → answers — re-exported from decision.ts
 export * from './decision.js';
-// AD-052 (этап I): service-key — scopes + проектная проекция — re-exported from service-keys.ts
+// ADR-052 (этап I): service-key — scopes + проектная проекция — re-exported from service-keys.ts
 export * from './service-keys.js';
-// AD-052 (этап II): исходящие webhooks — типы и матчер событий — re-exported from webhooks.ts
+// ADR-052 (этап II): исходящие webhooks — типы и матчер событий — re-exported from webhooks.ts
 export * from './webhooks.js';

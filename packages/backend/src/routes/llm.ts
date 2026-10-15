@@ -32,7 +32,7 @@ import type {
 /**
  * LLM Proxy endpoint (гибридный режим, Часть 5).
  * OpenAI-совместимый POST /api/v2/llm/chat/completions, через который локальный
- * core гоняет LLM-запросы централизованно — с применением LLM Gateway (AD-036):
+ * core гоняет LLM-запросы централизованно — с применением LLM Gateway (ADR-036):
  * обфускация/блокировка секретов, rate limit, аудит, полный payload-лог.
  */
 
@@ -60,7 +60,7 @@ const chatCompletionsSchema = z.object({
   max_tokens: z.number().int().positive().optional(),
   top_p: z.number().optional(),
   stream: z.boolean().optional(),
-  // AD-070: remote-зеркала (RemoteProvider) просят usage в стриме. Внутренний
+  // ADR-070: remote-зеркала (RemoteProvider) просят usage в стриме. Внутренний
   // OpenAIProvider всегда шлёт stream_options.include_usage, но поле принимаем
   // явно, чтобы Zod его не срезал (контракт запроса).
   stream_options: z.object({ include_usage: z.boolean().optional() }).optional(),
@@ -158,7 +158,7 @@ function toLlmMessages(raw: ChatMessageInput[]): LLMMessage[] {
 export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
   const app = new Hono();
 
-  // AD-052: `llm:chat` — scope service-key; обычные креды scope не ограничивают.
+  // ADR-052: `llm:chat` — scope service-key; обычные креды scope не ограничивают.
   const middlewares = [scopeGuard('llm:chat'), ...(deps.rateLimiter ? [deps.rateLimiter] : [])];
 
   // POST /api/v2/llm/chat/completions — OpenAI-совместимый LLM Proxy
@@ -240,7 +240,7 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
       }, 502);
     }
 
-    // 3. AD-036: оборачиваем провайдер в GatewayProvider.
+    // 3. ADR-036: оборачиваем провайдер в GatewayProvider.
     // У локального core нет карты обфускации, поэтому для прокси держим
     // transient-карту на время запроса: getMap/saveMap читают/пишут её, а после
     // ответа деобфусцируем контент по той же карте (иначе клиент увидел бы

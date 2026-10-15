@@ -83,7 +83,7 @@ function pct(rate: number): string {
   return `${Math.round(rate * 100)}%`
 }
 
-/** AD-070 §2.5: подпись hit/miss последнего хода (из `promptMeta`). */
+/** ADR-070 §2.5: подпись hit/miss последнего хода (из `promptMeta`). */
 function promptCacheLabel(
   info: PromptInfoResponse,
   t: (key: string) => string,
@@ -99,7 +99,7 @@ function promptCacheLabel(
 }
 
 /**
- * AD-071 §2.6: подпись доступности встроенного тула. В режиме `available`
+ * ADR-071 §2.6: подпись доступности встроенного тула. В режиме `available`
  * недоступные тулы не уходят в запрос — помечаем их как скрытые; в
  * `consistency` показываем причину (переключить режим / делегировать роли).
  */
@@ -116,7 +116,7 @@ function toolAvailabilityLabel(
   return t('rightPanel.stats.toolUnavailable')
 }
 
-/** AD-071 §2.6: подпись доступности MCP-сервера (disabled + причина). */
+/** ADR-071 §2.6: подпись доступности MCP-сервера (disabled + причина). */
 function mcpAvailabilityLabel(server: McpServerEffective, t: (key: string) => string): string {
   if (server.enabled) return t('rightPanel.stats.toolAvailable')
   if (!server.reason) return t('rightPanel.stats.mcpDisabled')
@@ -124,12 +124,12 @@ function mcpAvailabilityLabel(server: McpServerEffective, t: (key: string) => st
   return `${t('rightPanel.stats.mcpDisabled')} · ${reason}`
 }
 
-/** AD-046 §9.3: подпись доступности скилла (capability-aware). */
+/** ADR-046 §9.3: подпись доступности скилла (capability-aware). */
 function skillAvailabilityLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
   return skill.available ? t('rightPanel.stats.toolAvailable') : t('rightPanel.stats.toolUnavailable')
 }
 
-/** AD-046 §9.3: подпись «включён в сессии» (disabled + причина). */
+/** ADR-046 §9.3: подпись «включён в сессии» (disabled + причина). */
 function skillEnabledLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
   if (!skill.disabled) return t('rightPanel.stats.skillEnabled')
   if (!skill.disabledReason) return t('rightPanel.stats.mcpDisabled')
@@ -137,7 +137,7 @@ function skillEnabledLabel(skill: EffectiveSkillEntry, t: (key: string) => strin
 }
 
 /**
- * AD-046 §9.3: источник записи скилла — `session` (включён/выключен в сессии),
+ * ADR-046 §9.3: источник записи скилла — `session` (включён/выключен в сессии),
  * `project` (гейт проекта) или `stable` (системный каталог промпта).
  */
 function skillSourceLabel(skill: EffectiveSkillEntry, t: (key: string) => string): string {
@@ -149,7 +149,7 @@ function skillSourceLabel(skill: EffectiveSkillEntry, t: (key: string) => string
 }
 
 /**
- * AD-046 §9.3: локальная оценка вклада скилла в каталог промпта —
+ * ADR-046 §9.3: локальная оценка вклада скилла в каталог промпта —
  * строка `name` + `description`. `~` — оценка, ratio берётся из манифеста.
  */
 function skillTokenEstimate(
@@ -163,7 +163,7 @@ function skillTokenEstimate(
 }
 
 /**
- * AD-071 §2.6: оценка токенов. `~` — оценка без калибровки (`ratio` = дефолт
+ * ADR-071 §2.6: оценка токенов. `~` — оценка без калибровки (`ratio` = дефолт
  * chars-per-token), без `~` — калиброванный ratio модели. Пусто → прочерк.
  */
 function tokenEstimate(
@@ -218,14 +218,14 @@ export const StatsTab: React.FC = () => {
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [historyExpanded, setHistoryExpanded] = useState(false)
-  // AD-071 §2.6: таблицы инструментов и MCP свёрнуты по умолчанию (как промпт/история).
+  // ADR-071 §2.6: таблицы инструментов и MCP свёрнуты по умолчанию (как промпт/история).
   const [toolsExpanded, setToolsExpanded] = useState(false)
   const [mcpExpanded, setMcpExpanded] = useState(false)
-  // AD-046 §9.3: таблица скиллов и счётчики команд.
+  // ADR-046 §9.3: таблица скиллов и счётчики команд.
   const [skillsExpanded, setSkillsExpanded] = useState(false)
   const [commandsExpanded, setCommandsExpanded] = useState(false)
 
-  // AD-046 §8.2: счётчики вызовов из событий skill.invoked / command.invoked.
+  // ADR-046 §8.2: счётчики вызовов из событий skill.invoked / command.invoked.
   const skillInvocationCounts = useSkillsStore((s) => s.skillInvocationCounts)
   const commandInvocationCounts = useSkillsStore((s) => s.commandInvocationCounts)
   const lastSkillInvocation = useSkillsStore((s) => s.lastSkillInvocation)
@@ -259,7 +259,7 @@ export const StatsTab: React.FC = () => {
     return null
   }, [sessionMessages])
 
-  // AD-070 §2.6 (live): активный стрим сессии — источник live-значений
+  // ADR-070 §2.6 (live): активный стрим сессии — источник live-значений
   // «Последнего ответа» и дельты секции «Сессия». `finishStream`/`cancelStream`
   // удаляют StreamState и сбрасывают live-сабагентов, поэтому после завершения
   // панель автоматически возвращается к серверным/сообщенческим значениям.
@@ -286,7 +286,7 @@ export const StatsTab: React.FC = () => {
 
   const sessionProjectId = activeSession?.project_id
 
-  // AD-070 §2.6: скорость/длительность/стоимость последнего ответа из metadata.
+  // ADR-070 §2.6: скорость/длительность/стоимость последнего ответа из metadata.
   const lastDurationMs = typeof lastAssistantMsg?.metadata?.duration_ms === 'number'
     ? lastAssistantMsg.metadata.duration_ms
     : undefined
@@ -301,10 +301,10 @@ export const StatsTab: React.FC = () => {
   const lastTps = lastDurationMs && lastDurationMs > 0 && typeof lastOutputTokens === 'number'
     ? lastOutputTokens / (lastDurationMs / 1000)
     : undefined
-  // Bug 4 (AD-070 §2.6): usage мог быть оценён при отмене/сбое — помечаем `~`.
+  // Bug 4 (ADR-070 §2.6): usage мог быть оценён при отмене/сбое — помечаем `~`.
   const lastTokenPrefix = lastAssistantMsg?.metadata?.usage_estimated === true ? '~' : ''
 
-  // AD-070 §2.6 (live): если активный стрим уже отдал usage — «Последний ответ»
+  // ADR-070 §2.6 (live): если активный стрим уже отдал usage — «Последний ответ»
   // берёт значения из него, иначе из последнего assistant-сообщения. Оценка
   // (`usageEstimated`) помечается `~`; точный usage оценкой не подменяется.
   const liveStreamUsage = activeStream?.usage
@@ -324,7 +324,7 @@ export const StatsTab: React.FC = () => {
   const hasRealContextWindow = !!contextWindowModel?.context_window && contextWindowModel.context_window > 0
   const isContextNearLimit = hasRealContextWindow && windowPercent >= CONTEXT_NEAR_LIMIT_PCT
 
-  // AD-070 §2.6 (live): компактная live-строка стрима — тот же билдер сегментов,
+  // ADR-070 §2.6 (live): компактная live-строка стрима — тот же билдер сегментов,
   // что у StreamingPlaceholder/MessageStats.
   const liveSegments = activeStream
     ? buildUsageSegments(
@@ -346,7 +346,7 @@ export const StatsTab: React.FC = () => {
     }
   }, [sessionProjectId, streamFinishTick])
 
-  // AD-070 §2.5: состав системного промпта (read-only). Обновляем при смене
+  // ADR-070 §2.5: состав системного промпта (read-only). Обновляем при смене
   // сессии и после каждого нового ответа (меняется promptMeta).
   useEffect(() => {
     if (!activeSessionId) {
@@ -360,7 +360,7 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick, toolsDisabledTick])
 
-  // AD-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с
+  // ADR-071 §2.4/§2.6: эффективный MCP-скоуп сессии (включая отключённые с
   // причиной) — для таблицы «MCP» рядом с «Составом промпта». Тот же триггер.
   useEffect(() => {
     if (!activeSessionId) {
@@ -374,7 +374,7 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick, toolsDisabledTick])
 
-  // AD-046 §4.5/§9.3: эффективный per-session скоуп скиллов для таблицы «Скиллы».
+  // ADR-046 §4.5/§9.3: эффективный per-session скоуп скиллов для таблицы «Скиллы».
   useEffect(() => {
     if (!activeSessionId) {
       setSkillsEffective(null)
@@ -388,7 +388,7 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick, toolsDisabledTick])
 
-  // AD-070 §2.6: статистика по агентам/авторам. Тот же триггер, что и у промпта.
+  // ADR-070 §2.6: статистика по агентам/авторам. Тот же триггер, что и у промпта.
   useEffect(() => {
     if (!activeSessionId) {
       setSessionStats(null)
@@ -401,18 +401,18 @@ export const StatsTab: React.FC = () => {
     return () => { cancelled = true }
   }, [activeSessionId, lastAssistantMsg?.id, streamFinishTick])
 
-  // AD-070 §2.5: порядок записей задаёт бэкенд (реальный порядок отправки:
+  // ADR-070 §2.5: порядок записей задаёт бэкенд (реальный порядок отправки:
   // тир → order, tools — последним). UI не пересортировывает.
   const promptEntries = promptInfo?.manifest.entries ?? []
 
-  // AD-071 §2.6: данные таблиц «Встроенные инструменты» и «MCP».
+  // ADR-071 §2.6: данные таблиц «Встроенные инструменты» и «MCP».
   const toolsDetail = promptInfo?.toolsDetail ?? []
   // Admin-disabled тулы не уходят в запрос — в таблице состава их не показываем.
   const visibleTools = toolsDetail.filter((tool) => !tool.adminDisabled)
   const toolsPolicy = promptInfo?.manifest.toolsPolicy
   const mcpServers = mcpEffective?.servers ?? []
 
-  // AD-046 §9.3: скиллы сессии + блочные размеры каталога из манифеста.
+  // ADR-046 §9.3: скиллы сессии + блочные размеры каталога из манифеста.
   const skillsList = skillsEffective?.skills ?? []
   const skillsCatalogEntries = promptEntries.filter(
     (entry) => entry.key === 'skills.catalog' || entry.key === 'skills.catalog.session',
@@ -420,7 +420,7 @@ export const StatsTab: React.FC = () => {
   const skillsCatalogTokens = skillsCatalogEntries.reduce((sum, entry) => sum + entry.estTokens, 0)
   const manifestRatio = promptInfo?.manifest.ratio
 
-  // AD-046 §8.2: счётчики вызовов команд/скиллов из стора.
+  // ADR-046 §8.2: счётчики вызовов команд/скиллов из стора.
   const commandCounterRows = Object.entries(commandInvocationCounts).sort((a, b) => b[1] - a[1])
   const skillCounterRows = Object.entries(skillInvocationCounts).sort((a, b) => b[1] - a[1])
   const hasInvocations = commandCounterRows.length > 0
@@ -430,19 +430,19 @@ export const StatsTab: React.FC = () => {
 
   const hasLastMsgUsage = !!displayUsage && Object.keys(displayUsage).length > 0
   const hasSubagents = !!sessionStats?.agents.some((a) => a.subagent_sessions > 0)
-  // AD-070 §2.6: блок сабагентов в «Последнем ответе» — из статистики самого
+  // ADR-070 §2.6: блок сабагентов в «Последнем ответе» — из статистики самого
   // последнего сообщения (metadata.subagents), а не сессионной сводки: иначе он
   // висит и после ответов без сабагентов.
   const lastSubagents = readMessageSubagents(lastAssistantMsg?.metadata)
   const hasLastSubagents = !!lastSubagents && lastSubagents.sessions > 0
 
-  // AD-070 §2.6 (live): live-вклад саб-агентов родителя (subagent.progress).
+  // ADR-070 §2.6 (live): live-вклад саб-агентов родителя (subagent.progress).
   const liveSubUsage = liveSubagent?.usage
   const hasLiveSubagents = !!liveSubUsage
     && (liveSubUsage.input_tokens > 0 || liveSubUsage.output_tokens > 0)
   const hasLiveStream = !!activeStream && (!!activeStream.usage || !!activeStream.agentRole)
 
-  // AD-070 §2.6: суммы секции «Сессия» включают сабагентов (sessionStats.subagents)
+  // ADR-070 §2.6: суммы секции «Сессия» включают сабагентов (sessionStats.subagents)
   // и live-дельту активного стрима/сабагентов. Live-значения ещё не в хранилище,
   // поэтому сложение не даёт задвоения; после завершения стрима live сбрасывается.
   const sessionSub = sessionStats?.subagents
@@ -472,7 +472,7 @@ export const StatsTab: React.FC = () => {
     : Math.round((activeSession?.cache_hit_rate ?? cacheHitRate(sessionCacheRead, sessionInput)) * 100)
   const hasSessionSubagents = !!sessionSub && sessionSub.sessions > 0
 
-  // AD-070 §2.6 / C2b: стоимость сессии — раздельные суммы по валютам (не
+  // ADR-070 §2.6 / C2b: стоимость сессии — раздельные суммы по валютам (не
   // арифметика разных валют). Серверные агенты уже включают сабагентов; live-
   // дельта текущего стрима/сабагентов добавляется в свою валюту.
   const serverSessionCostMap = useMemo(() => {
@@ -717,7 +717,7 @@ export const StatsTab: React.FC = () => {
         )}
       </Section>
 
-      {/* AD-071 §2.6: встроенные инструменты — имя/capability/доступность/токены/источник.
+      {/* ADR-071 §2.6: встроенные инструменты — имя/capability/доступность/токены/источник.
           Свёрнуты по умолчанию (как «Состав промпта»); admin-disabled не показываем. */}
       <Section title={t('rightPanel.stats.builtinTools')}>
         {toolsDetail.length > 0 ? (
@@ -770,7 +770,7 @@ export const StatsTab: React.FC = () => {
         )}
       </Section>
 
-      {/* AD-071 §2.6: MCP — сервер/уровень/статус/доступность/тулы/токены/автор.
+      {/* ADR-071 §2.6: MCP — сервер/уровень/статус/доступность/тулы/токены/автор.
           Показываются все серверы, включая отключённые (disabled + причина).
           Свёрнуто по умолчанию; при раскрытии — агрегат по серверу и строки тулов. */}
       <Section title={t('rightPanel.stats.mcpServers')}>
@@ -852,7 +852,7 @@ export const StatsTab: React.FC = () => {
         )}
       </Section>
 
-      {/* AD-046 §4.5/§9.3: скиллы — имя/scope-уровень/доступность/включение/
+      {/* ADR-046 §4.5/§9.3: скиллы — имя/scope-уровень/доступность/включение/
           причина/trust/вклад в каталог/источник. Включая отключённые (disabled + причина). */}
       <Section title={t('rightPanel.stats.skills')}>
         {skillsList.length > 0 ? (
@@ -920,7 +920,7 @@ export const StatsTab: React.FC = () => {
         )}
       </Section>
 
-      {/* AD-046 §8.2/§9.3: счётчики вызовов команд и скиллов из событий. */}
+      {/* ADR-046 §8.2/§9.3: счётчики вызовов команд и скиллов из событий. */}
       <Section title={t('rightPanel.stats.commands')}>
         {hasInvocations ? (
           <>

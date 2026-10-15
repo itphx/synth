@@ -137,7 +137,7 @@ describe('SystemPromptComposer', () => {
     expect(second.stablePrefix).toBe(first.stablePrefix);
   });
 
-  it('AD-070 §2.8: режим/план/todo не попадают в system; mode.policy и plan.guide — ровно по одному разу', async () => {
+  it('ADR-070 §2.8: режим/план/todo не попадают в system; mode.policy и plan.guide — ровно по одному разу', async () => {
     const composer = makeComposer();
     const session = makeSession({ projectId: 'p1', todos: makeTodos(), mode: 'plan' });
 
@@ -233,7 +233,7 @@ describe('SystemPromptComposer', () => {
     expect(withRouting.stablePrefix).not.toContain('[CLASSIFICATION]');
   });
 
-  describe('manifest (AD-070 §2.5)', () => {
+  describe('manifest (ADR-070 §2.5)', () => {
     it('отдаёт key/label/tier/размеры/status/provenance по каждому блоку', async () => {
       const composer = makeComposer();
       const session = makeSession({ projectId: 'p1' });
@@ -268,7 +268,7 @@ describe('SystemPromptComposer', () => {
       const ctx = makeCtx(session, { routingEnabled: true, tools });
 
       const manifest = await composer.manifest(ctx);
-      // AD-071 §2.1: слои инструментов (`tools`/`mcp.tools`) — не system-блоки.
+      // ADR-071 §2.1: слои инструментов (`tools`/`mcp.tools`) — не system-блоки.
       const systemEntries = manifest.entries.filter((e) => e.source === 'system');
 
       // role — первый; tools — сразу после последнего stable-блока (mode.policy)
@@ -317,7 +317,7 @@ describe('SystemPromptComposer', () => {
       // system-подмножество манифеста с блоками compose() в реальном порядке
       // отправки (sortPromptBlocks: тир → order).
       const sortedBlocks = sortPromptBlocks(composed.blocks);
-      // AD-071 §2.1: слои инструментов (`tools`/`mcp.tools`) — не system-блоки.
+      // ADR-071 §2.1: слои инструментов (`tools`/`mcp.tools`) — не system-блоки.
       const systemEntries = manifest.entries.filter((e) => e.source === 'system');
       expect(systemEntries.map((e) => e.key)).toEqual(sortedBlocks.map((b) => b.key));
 
@@ -394,7 +394,7 @@ describe('SystemPromptComposer', () => {
       expect(withoutTools.totalChars).toBe(systemChars);
     });
 
-    it('AD-071 §2.1: mcp.tools — volatile, не в staticPrefix; порядок tools → mcp.tools', async () => {
+    it('ADR-071 §2.1: mcp.tools — volatile, не в staticPrefix; порядок tools → mcp.tools', async () => {
       const composer = makeComposer();
       const session = makeSession({ projectId: 'p1' });
       const tools = [
@@ -477,7 +477,7 @@ describe('SystemPromptComposer', () => {
     });
   });
 
-  describe('mcp.servers / mcp.status (AD-071 §2.2)', () => {
+  describe('mcp.servers / mcp.status (ADR-071 §2.2)', () => {
     function makeMcpServers(): ComposerMcpServer[] {
       return [
         {
@@ -500,7 +500,7 @@ describe('SystemPromptComposer', () => {
       ];
     }
 
-    it('mcp.servers и mcp.status всегда volatile (AD-071 §2.3), не в stablePrefix', async () => {
+    it('mcp.servers и mcp.status всегда volatile (ADR-071 §2.3), не в stablePrefix', async () => {
       const composer = makeComposer();
       const session = makeSession();
       const { system, stablePrefix } = await composer.compose(
@@ -523,7 +523,7 @@ describe('SystemPromptComposer', () => {
       expect(system).toContain('- active-srv: connected');
       expect(system).toContain('- disabled-srv: disabled (не включён в сессии)');
 
-      // AD-071 §2.3: ни один MCP-блок не входит в кэшируемый stablePrefix.
+      // ADR-071 §2.3: ни один MCP-блок не входит в кэшируемый stablePrefix.
       expect(stablePrefix).not.toContain('[MCP-СЕРВЕРЫ]');
       expect(stablePrefix).not.toContain('[СТАТУС MCP]');
     });
@@ -590,7 +590,7 @@ describe('SystemPromptComposer', () => {
       expect(system).not.toContain('Instructions:');
     });
 
-    it('AD-071 §2.4: level-aware — уровень сервера и причина отключения', async () => {
+    it('ADR-071 §2.4: level-aware — уровень сервера и причина отключения', async () => {
       const composer = makeComposer();
       const session = makeSession();
       const servers: ComposerMcpServer[] = [
@@ -633,7 +633,7 @@ describe('SystemPromptComposer', () => {
     });
   });
 
-  describe('tools.policy (AD-071 §2.3)', () => {
+  describe('tools.policy (ADR-071 §2.3)', () => {
     const tools = [
       { type: 'function', function: { name: 'read_file', description: 'Read', parameters: {} } },
       { type: 'function', function: { name: 'write_file', description: 'Write', parameters: {} } },
@@ -713,7 +713,7 @@ describe('SystemPromptComposer', () => {
     });
   });
 
-  describe('mcp.policy (AD-071 §2.3)', () => {
+  describe('mcp.policy (ADR-071 §2.3)', () => {
     const tools = [
       { type: 'function', function: { name: 'read_file', description: 'Read', parameters: {} } },
     ];
@@ -792,7 +792,7 @@ describe('SystemPromptComposer', () => {
     expect(typeof parts!.systemChars).toBe('number');
   });
 
-  describe('instructions (AD-069)', () => {
+  describe('instructions (ADR-069)', () => {
     const instructions = {
       content: '[PROJECT INSTRUCTIONS]\n--- from ./AGENTS.md (10 chars) ---\nCORE-RULES\n[END PROJECT INSTRUCTIONS]',
       provenance: './AGENTS.md',
@@ -855,7 +855,7 @@ describe('SystemPromptComposer', () => {
     });
   });
 
-  describe('scheduler (AD-051)', () => {
+  describe('scheduler (ADR-051)', () => {
     it('schedulerActive:true → блок scheduler (context, order 16, provenance), статический', async () => {
       const composer = makeComposer();
       const session = makeSession();
@@ -917,7 +917,7 @@ describe('SystemPromptComposer', () => {
     });
   });
 
-  describe('scheduler.turn (AD-051)', () => {
+  describe('scheduler.turn (ADR-051)', () => {
     it('schedulerCurrentTurn:true → volatile-блок order 40, provenance, не в stablePrefix', async () => {
       const composer = makeComposer();
       const session = makeSession();
@@ -970,7 +970,7 @@ describe('SystemPromptComposer', () => {
     });
   });
 
-  describe('interviewEligible (AD-083/онбординг)', () => {
+  describe('interviewEligible (PROP-083/онбординг)', () => {
     it('пробрасывается в ContextBuilder.buildBaseBlocks', async () => {
       const captured: Array<Record<string, unknown>> = [];
       const stubBuilder = {

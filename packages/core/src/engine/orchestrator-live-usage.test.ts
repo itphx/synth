@@ -1,5 +1,5 @@
 /**
- * AD-070: live-статистика стрима — событие `stream.usage` (кумулятивный usage,
+ * ADR-070: live-статистика стрима — событие `stream.usage` (кумулятивный usage,
  * точный либо best-effort оценка, стоимость по ценам модели).
  */
 
@@ -72,7 +72,7 @@ function makeProviderClass(chunks: LLMChunk[]) {
 
 type Published = { event: string; data: Record<string, unknown> };
 
-describe('ChatOrchestrator — live stream.usage (AD-070)', () => {
+describe('ChatOrchestrator — live stream.usage (ADR-070)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 

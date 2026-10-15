@@ -1,5 +1,5 @@
 /**
- * ContentClassifier — классификатор запросов по содержимому (AD-034).
+ * ContentClassifier — классификатор запросов по содержимому (ADR-034).
  * Определяет категорию запроса: coding, research, chat.
  * Ключевые слова загружаются из DictionaryStore (YAML-файлы с языковой поддержкой).
  */
@@ -12,9 +12,9 @@ export interface ClassifyRequest {
   systemPrompt?: string;
   toolCalls?: string[];
   language?: string;
-  /** AD-085 задел: изображения текущего запроса (для decision-классификатора). */
+  /** PROP-085 задел: изображения текущего запроса (для decision-классификатора). */
   images?: string[];
-  /** AD-085 задел: видео текущего запроса (для decision-классификатора). */
+  /** PROP-085 задел: видео текущего запроса (для decision-классификатора). */
   videos?: string[];
 }
 

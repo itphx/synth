@@ -1,5 +1,5 @@
 /**
- * Тесты RulesModel (AD-035).
+ * Тесты RulesModel (ADR-035).
  */
 import { describe, it, expect } from 'vitest';
 import { RulesModel } from './rules-model.js';

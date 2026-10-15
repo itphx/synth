@@ -1,5 +1,5 @@
 /**
- * Тесты small-talk handler (AD-035).
+ * Тесты small-talk handler (ADR-035).
  */
 import { describe, it, expect } from 'vitest';
 import { handleSmallTalk } from './small-talk.js';

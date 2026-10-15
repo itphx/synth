@@ -9,7 +9,7 @@ import { clearMasterKeyCache } from '../security/crypto.js';
 const SECRET_MARKER = 'SUPERSECRETPRIVATEKEYMATERIAL';
 const SAMPLE_KEY = `-----BEGIN OPENSSH PRIVATE KEY-----\n${SECRET_MARKER}\n-----END OPENSSH PRIVATE KEY-----`;
 
-describe('SSHKeyStore (AD-076 §T2)', () => {
+describe('SSHKeyStore (ADR-076 §T2)', () => {
   let tmpDir: string;
   let store: SSHKeyStore;
 

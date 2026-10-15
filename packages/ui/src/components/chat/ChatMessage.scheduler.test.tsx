@@ -96,7 +96,7 @@ afterEach(async () => {
   useAuthStore.setState({ user: null, profile: null } as never)
 })
 
-describe('ChatMessage: сообщения планировщика (AD-051)', () => {
+describe('ChatMessage: сообщения планировщика (ADR-051)', () => {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
 
   beforeEach(() => {

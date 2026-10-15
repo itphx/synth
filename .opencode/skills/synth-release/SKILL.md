@@ -10,6 +10,7 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
 | Файл | Назначение | Триггер |
 |------|------------|---------|
 | `.gitverse/workflows/ci.yaml` | CI: typecheck, lint, тесты | `push`, `pull_request` |
+| `.gitverse/workflows/ci-docs.yaml` | Доки: `node scripts/adr-check.mjs` (индекс/статусы ADR/PROP) + `node scripts/docs-link-check.mjs` (относительные ссылки) | `push`/PR по доковым путям (`docs/**`, `**/*.md`, `AGENTS.md`, `packages/*/AGENTS.md`, `scripts/{adr-check,docs-link-check}.mjs`) |
 | `.gitverse/workflows/release.yaml` | Релиз: bump, сборка, npm, Docker, Release | `workflow_dispatch`, `push tags v*` |
 
 ## Секреты (настроены в репозитории)
@@ -53,6 +54,9 @@ pnpm test
 ```bash
 pnpm typecheck && pnpm lint && pnpm test
 ```
+
+Для правок документации дополнительно: `node scripts/adr-check.mjs && node scripts/docs-link-check.mjs`
+(это же гоняет `ci-docs.yaml`).
 
 ## Квота пакетов GitVerse — предварительная очистка
 

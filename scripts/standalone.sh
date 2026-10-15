@@ -7,7 +7,7 @@
 # `synth serve` (локальный HTTP API + UI, один API-ключ, FileStore в data-dir).
 #
 # Нужен для ручного/автоматического тестирования standalone-UI, в частности
-# диалога выбора рабочего каталога (AD-075), где managed-режим показывает
+# диалога выбора рабочего каталога (ADR-075), где managed-режим показывает
 # read-only, а standalone — `confirm`.
 #
 # Использование:
@@ -15,7 +15,7 @@
 #
 # По умолчанию поведение ровно как у пользователя npm-пакета, но с изолированным
 # локальным home: `synth serve --home ~/.local/share/synth-standalone` с очищенным
-# от SYNTH_* окружением. AD-079: config/data/profiles/credentials резолвятся от
+# от SYNTH_* окружением. ADR-079: config/data/profiles/credentials резолвятся от
 # home, поэтому standalone НЕ подхватывает lastProfile из общего
 # ~/.config/synth/profiles.json.
 # Порт/API-ключ берутся из дефолтов standalone (dataDir — <home>/data, host
@@ -26,7 +26,7 @@
 #                      4300 — разные инстансы можно запускать одновременно)
 #   --host <host>      явное переопределение адреса прослушивания
 #   --home <path>      локальный home-каталог (default: ~/.local/share/synth-standalone).
-#                      AD-079: config/data/profiles/credentials живут внутри home,
+#                      ADR-079: config/data/profiles/credentials живут внутри home,
 #                      что изолирует инстанс от общих ~/.config/synth и ~/.local/share/synth.
 #   --data-dir <path>  явное переопределение каталога данных (приоритетнее --home)
 #   --api-key <key>    явный API-ключ local auth (иначе — авто-генерация; печатается)
@@ -97,7 +97,7 @@ standalone.sh — запуск Synth в standalone-режиме из собра�
 
 По умолчанию — ровно как у пользователя npm-пакета, но с изолированным home:
 `synth serve --home ~/.local/share/synth-standalone` с очищенным от SYNTH_* окружением.
-AD-079: config/data/profiles/credentials резолвятся от home, поэтому standalone
+ADR-079: config/data/profiles/credentials резолвятся от home, поэтому standalone
 не подхватывает lastProfile из общего ~/.config/synth/profiles.json.
 
 Опции:
@@ -425,7 +425,7 @@ echo "  Лог:    $RUN_LOG"
 # `--home` и `--port` передаются в serve всегда (изоляция инстанса и предсказуемый
 # порт standalone — 4400, независимо от config); остальные флаги — только когда заданы.
 SERVE_ARGS=()
-# AD-079: home всегда передаётся явно (default ~/.local/share/synth-standalone) —
+# ADR-079: home всегда передаётся явно (default ~/.local/share/synth-standalone) —
 # env SYNTH_HOME уже очищен выше, флаг гарантирует изоляцию инстанса.
 SERVE_ARGS+=(--home "$HOME_DIR")
 # Порт всегда явный: standalone по умолчанию 4400 (hybrid — 4300).

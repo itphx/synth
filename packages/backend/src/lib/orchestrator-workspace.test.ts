@@ -99,7 +99,7 @@ describe('ChatOrchestrator workspace (backend main.ts сценарий)', () => 
     expect(result.metadata?.projectWorkspace).toBe(resolve(wsRoot, 'WS1'));
   });
 
-  it('createBackendApp пробрасывает defaultWorkingDir в оркестратор (AD-075)', async () => {
+  it('createBackendApp пробрасывает defaultWorkingDir в оркестратор (ADR-075)', async () => {
     const override = join(tmpDir, 'custom-default-ws');
     const dataDir = join(tmpDir, 'backend-data');
     const handle = await createBackendApp({
@@ -122,7 +122,7 @@ describe('ChatOrchestrator workspace (backend main.ts сценарий)', () => 
     expect(wsRes.status).toBe(200);
     expect((await wsRes.json() as { workspace: string }).workspace).toBe(override);
 
-    // AD-075: managed-backend зажимает политику вне root как deny.
+    // ADR-075: managed-backend зажимает политику вне root как deny.
     const policyRes = await handle.app.request('/api/v2/settings/workspace-policy', {
       headers: { Authorization: 'Bearer admin-key-123' },
     });

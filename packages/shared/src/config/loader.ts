@@ -8,10 +8,10 @@ import { applyEnvOverrides, applyObjectEnvOverrides } from './env-overrides.js';
 
 export interface LoadConfigOptions {
   configPath?: string;
-  /** AD-079: home-каталог — конфиг резолвится как `<home>/config.yaml`, если path не задан. */
+  /** ADR-079: home-каталог — конфиг резолвится как `<home>/config.yaml`, если path не задан. */
   home?: string;
   overrides?: Partial<SynthConfig>;
-  /** AD-023: источник env для оверрайдов; по умолчанию `process.env` (в тестах — свой env). */
+  /** ADR-023: источник env для оверрайдов; по умолчанию `process.env` (в тестах — свой env). */
   env?: NodeJS.ProcessEnv;
 }
 
@@ -25,7 +25,7 @@ const SYSTEM_CONFIG_PATH = '/etc/synth/config.yaml';
 
 function searchPaths(explicitPath?: string, home?: string): string[] {
   if (explicitPath) return [explicitPath];
-  // AD-079: при заданном home конфиг ищется строго в <home>/config.yaml
+  // ADR-079: при заданном home конфиг ищется строго в <home>/config.yaml
   // (home приоритетнее cwd/XDG-цепочки).
   if (home) return [join(home, 'config.yaml')];
   const paths: string[] = [];
@@ -57,7 +57,7 @@ async function tryReadYaml(path: string): Promise<Record<string, unknown> | null
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<SynthConfig> {
-  // AD-023/AD-071: явный путь — из опций, иначе из SYNTH_CONFIG (как в
+  // ADR-023/ADR-071: явный путь — из опций, иначе из SYNTH_CONFIG (как в
   // findConfigPath). Без этого dev-запуск backend с cwd=synth/ не читал
   // packages/backend/config.yaml (mcp.servers) и seed реестра был пустым.
   const explicitPath = options.configPath ?? process.env.SYNTH_CONFIG;
@@ -73,11 +73,11 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Synth
   }
 
   const merged = deepMerge(defaultConfig as unknown as Record<string, unknown>, fileConfig);
-  // AD-023: env-оверрайды скалярных ключей вложенных секций применяются одним
+  // ADR-023: env-оверрайды скалярных ключей вложенных секций применяются одним
   // местом — поверх defaults + config.yaml и ниже CLI-overrides
   // (приоритет: CLI > env > config.yaml > defaults).
   const withEnv = applyEnvOverrides(merged, options.env ?? process.env);
-  // AD-052/O1: объектный env-оверрайд installer service-key'ев
+  // ADR-052/O1: объектный env-оверрайд installer service-key'ев
   // (`SYNTH_BOOTSTRAP_SERVICE_KEYS`, JSON) — там же, до CLI-overrides.
   applyObjectEnvOverrides(withEnv, options.env ?? process.env);
   const finalConfig = options.overrides

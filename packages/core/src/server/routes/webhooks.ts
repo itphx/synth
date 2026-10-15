@@ -12,7 +12,7 @@ import type { WebhookService } from '../../engine/webhooks/service.js';
 import { evaluateWebhookTarget } from '../../engine/webhooks/network.js';
 
 /**
- * AD-052 (этап II): CRUD подписок на исходящие webhooks + журнал доставок +
+ * ADR-052 (этап II): CRUD подписок на исходящие webhooks + журнал доставок +
  * тестовая доставка. Единая реализация для core (standalone) и backend
  * (managed): RBAC задаётся `opts.writeGuard`/`opts.readGuard`, локализация —
  * `opts.messages`.
@@ -84,7 +84,7 @@ function currentUserId(c: Context, resolveUserId?: (c: Context) => string): stri
 }
 
 /**
- * AD-052 (этап II): `GET /` — список; `POST /` — создание (секрет единожды);
+ * ADR-052 (этап II): `GET /` — список; `POST /` — создание (секрет единожды);
  * `GET /:id`; `PATCH /:id`; `DELETE /:id`; `POST /:id/regenerate` — ротация
  * секрета; `POST /:id/revoke` — мягкое отключение; `POST /:id/test` — тестовая
  * доставка; `GET /:id/deliveries` — журнал. Конфликт метки → 409 `CONFLICT`;

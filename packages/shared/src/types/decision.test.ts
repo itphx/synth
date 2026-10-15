@@ -5,7 +5,7 @@ import {
   decisionQuestionSchema,
 } from './decision.js';
 
-describe('decision Zod-схемы (AD-084)', () => {
+describe('decision Zod-схемы (ADR-084)', () => {
   it('принимает запрос со всеми типами вопросов', () => {
     const parsed = decisionRequestSchema.safeParse({
       model: 'clef-flash',

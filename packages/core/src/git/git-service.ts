@@ -4,7 +4,7 @@ import { simpleGit, type SimpleGit, type LogResult } from 'simple-git';
 import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
 
 /**
- * AD-076 §T3: git-сервис ядра (перенос из backend `lib/git-service.ts`).
+ * ADR-076 §T3: git-сервис ядра (перенос из backend `lib/git-service.ts`).
  * Единая реализация git — в core; backend (T4) переходит на core-фабрику роутов.
  */
 
@@ -35,7 +35,7 @@ function relativeTime(isoDate: string): string {
 }
 
 /**
- * AD-076: резолвит относительный путь репозитория ВНУТРИ абсолютного workspace.
+ * ADR-076: резолвит относительный путь репозитория ВНУТРИ абсолютного workspace.
  * Абсолютный `repoRelPath` либо выход за workspace (`..`) → ошибка
  * `PATH_TRAVERSAL` (защита от traversal). Пустой `repoRelPath` — сам workspace.
  */
@@ -57,7 +57,7 @@ export function deriveRepoName(url: string): string {
 }
 
 /**
- * AD-076: не-git ключи, которые simple-git 3.36 блокирует по blocklist
+ * ADR-076: не-git ключи, которые simple-git 3.36 блокирует по blocklist
  * (`@simple-git/argv-parser`, `parseEnv`). Остальные блокируемые ключи —
  * `GIT_*` (`GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH`, `GIT_SSH_COMMAND`,
  * `GIT_ASKPASS`, …) — вырезаются по префиксу в `sanitizeGitEnv`.
@@ -234,7 +234,7 @@ export class GitService {
     };
   }
 
-  /** AD-076: fetch репозитория (при необходимости с SSH-окружением). */
+  /** ADR-076: fetch репозитория (при необходимости с SSH-окружением). */
   async fetchRepo(wsAbsPath: string, repoRelPath: string, opts?: GitFetchOptions): Promise<void> {
     const repoPath = resolveRepoPath(wsAbsPath, repoRelPath);
     await this.ensureRepo(repoPath, opts);
@@ -243,7 +243,7 @@ export class GitService {
   }
 
   /**
-   * AD-076: удаляет локальный каталог репозитория. `rm -rf` выполняется ТОЛЬКО
+   * ADR-076: удаляет локальный каталог репозитория. `rm -rf` выполняется ТОЛЬКО
    * после проверки containment через `resolveRepoPath` (защита от traversal);
    * корень workspace удалять запрещено.
    */

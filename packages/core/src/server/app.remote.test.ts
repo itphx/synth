@@ -817,7 +817,7 @@ describe('createStandaloneApp: гибрид-статус и oidc_enabled (адр
 });
 
 describe('createStandaloneApp: SSE /api/v2/events (standalone, subscribeAll)', () => {
-  it('доставляет событие сессии, созданной ПОСЛЕ подключения подписчика (AD-089)', async () => {
+  it('доставляет событие сессии, созданной ПОСЛЕ подключения подписчика (ADR-089)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'synth-app-sse-standalone-'));
     const abort = new AbortController();
     try {

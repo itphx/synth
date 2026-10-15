@@ -47,7 +47,7 @@ const todoWriteItemSchema = z.object({
   content: z.string().describe('Todo item text'),
   status: z.enum(TODO_STATUSES).describe('Current status of the item'),
   priority: z.enum(TODO_PRIORITIES).describe('Priority of the item'),
-  planItemId: z.string().optional().describe('Reference to a project plan item (AD-039)'),
+  planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
 });
 
 // Пункт для todo_add: content обязателен, status/priority — со значениями по умолчанию.
@@ -56,7 +56,7 @@ const todoAddItemSchema = z.object({
   content: z.string().describe('Todo item text'),
   status: z.enum(TODO_STATUSES).optional().default('pending').describe('Status of the item'),
   priority: z.enum(TODO_PRIORITIES).optional().default('medium').describe('Priority of the item'),
-  planItemId: z.string().optional().describe('Reference to a project plan item (AD-039)'),
+  planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
 });
 
 /** Приводит пункт к каноническому виду: генерирует id, если его нет. */
@@ -92,7 +92,7 @@ function requireSessionManager(
 }
 
 /**
- * Markdown-представление списка todo для system prompt (AD-039):
+ * Markdown-представление списка todo для system prompt (ADR-039):
  * строка на пункт `- [статус] [приоритет] содержание`. Пустой список → null.
  */
 export function renderTodosMarkdown(todos: TodoItem[]): string | null {
@@ -280,7 +280,7 @@ export const todoUpdateTool: ToolDefinition = {
     content: z.string().optional().describe('New item text'),
     status: z.enum(TODO_STATUSES).optional().describe('New status'),
     priority: z.enum(TODO_PRIORITIES).optional().describe('New priority'),
-    planItemId: z.string().optional().describe('Reference to a project plan item (AD-039)'),
+    planItemId: z.string().optional().describe('Reference to a project plan item (ADR-039)'),
   }),
   capabilities: [ToolCapability.RUNTIME],
   async execute(args, ctx) {

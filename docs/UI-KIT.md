@@ -165,7 +165,7 @@ iOS-режим (`alignItemWithTrigger`) в китовом `Select` **выклю�
 `chat/ReasoningLevelSelector.tsx`, `chat/MentionPopup.tsx`,
 `chat/CommandAutocomplete.tsx`.
 
-## Блоки настроек (AD-072)
+## Блоки настроек (ADR-072)
 
 Двухуровневый контракт «секция → пункт»: фон пункта всегда отличается от фона
 секции.
@@ -230,4 +230,4 @@ iOS-режим (`alignItemWithTrigger`) в китовом `Select` **выклю�
 - Примитивы плавающих слоёв: `components/ui/popover.tsx` (menu),
   `components/ui/select.tsx` (menu), `components/ui/dialog.tsx` (scrim).
 - Примитивы блоков настроек: `components/ui/settings/SettingsSection.tsx`,
-  `components/ui/settings/SettingsItem.tsx` (AD-072).
+  `components/ui/settings/SettingsItem.tsx` (ADR-072).

@@ -139,7 +139,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('SkillsAdminSettings — админ-реестр скиллов (AD-046 §9.2)', () => {
+describe('SkillsAdminSettings — админ-реестр скиллов (ADR-046 §9.2)', () => {
   it('рендерит реестр; правка/удаление доступны только instance-скиллам', async () => {
     mocks.getSkills.mockResolvedValue({
       skills: [summary('inst-skill'), summary('proj-skill', { scope: 'project', level: 'project' })],

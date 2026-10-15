@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { WEBHOOK_SECRET_PREFIX } from '@itphx/synth-shared';
 import { WebhookStore, WebhookConflictError } from './webhook-store.js';
 
-describe('WebhookStore (AD-052, этап II)', () => {
+describe('WebhookStore (ADR-052, этап II)', () => {
   let store: WebhookStore;
   let tmpDir: string;
 

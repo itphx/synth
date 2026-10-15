@@ -28,8 +28,8 @@ export interface UpdateSkillMarkdownInput {
 }
 
 /**
- * AD-046 §4.1/§4.3: instance-скиллы — дерево файлов под `{dataDir}/skills/<name>/`
- * (`SKILL.md` + supporting-файлы). Запись — атомарная (tmp → rename, AD-005),
+ * ADR-046 §4.1/§4.3: instance-скиллы — дерево файлов под `{dataDir}/skills/<name>/`
+ * (`SKILL.md` + supporting-файлы). Запись — атомарная (tmp → rename, ADR-005),
  * образец — `McpRegistryStore` (`AsyncLock` + `atomicWrite`).
  */
 export class SkillStore {

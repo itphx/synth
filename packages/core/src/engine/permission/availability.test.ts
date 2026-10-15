@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computeToolAvailability, isWorkspaceDependentTool } from './availability.js';
 
-describe('computeToolAvailability (AD-070 §2.9.1)', () => {
+describe('computeToolAvailability (ADR-070 §2.9.1)', () => {
   it('доступен по умолчанию', () => {
     expect(computeToolAvailability('read_file', ['file_read'], {})).toEqual({ available: true });
   });
@@ -139,7 +139,7 @@ describe('computeToolAvailability (AD-070 §2.9.1)', () => {
   });
 });
 
-describe('computeToolAvailability — workspace (AD-075)', () => {
+describe('computeToolAvailability — workspace (ADR-075)', () => {
   it('workspaceReady:false блокирует file/shell/git/search причиной workspace', () => {
     const cases: Array<[string, string]> = [
       ['read_file', 'file_read'],

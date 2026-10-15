@@ -33,16 +33,16 @@ async function gracefulShutdown(signal: string): Promise<void> {
   queueManager.stopAll();
   console.log('[Shutdown] Очередь остановлена');
 
-  // AD-089: остановить авто-архивацию ephemeral-сессий.
+  // ADR-089: остановить авто-архивацию ephemeral-сессий.
   stopEphemeralSweeper();
 
-  // AD-089: остановить retention-очистку журнала событий.
+  // ADR-089: остановить retention-очистку журнала событий.
   stopEventJournalPruner();
 
-  // AD-051 (срез): остановить планировщик расписаний.
+  // ADR-051 (срез): остановить планировщик расписаний.
   stopScheduler();
 
-  // AD-052 (этап II): остановить движок исходящих webhooks и retention-очистку.
+  // ADR-052 (этап II): остановить движок исходящих webhooks и retention-очистку.
   stopWebhookService();
   stopWebhookDeliveryPruner();
 

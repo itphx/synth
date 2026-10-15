@@ -44,7 +44,7 @@ export interface ProjectStatsSource {
 }
 
 /**
- * AD-075: опции provisioning workspace локальных проектов (core standalone).
+ * ADR-075: опции provisioning workspace локальных проектов (core standalone).
  */
 export interface ProjectRoutesOptions {
   /**
@@ -56,7 +56,7 @@ export interface ProjectRoutesOptions {
   /** Политика для абсолютного пути вне root; дефолт — `confirm`. */
   getOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy;
   /**
-   * Managed-режим (AD-075): включает строгую проверку явного пути (deny вне root)
+   * Managed-режим (ADR-075): включает строгую проверку явного пути (deny вне root)
    * и авто-имя workspace при пустом значении. Core standalone — `false`.
    */
   autoProvisionWorkspace?: boolean;
@@ -73,25 +73,25 @@ export interface ProjectRoutesOptions {
    */
   canEditContent?: (c: Context, project: Project, userId: string) => boolean;
   /**
-   * AD-089: доступ на чтение проекта по id (owner / любой `members` / LEAD / ADMIN).
+   * ADR-089: доступ на чтение проекта по id (owner / любой `members` / LEAD / ADMIN).
    * Не задан — разрешено (standalone). Мутации (`canManage`/`canEditContent`) не
    * расширяются этим предикатом — VIEWER не получает прав на редактирование.
    */
   canRead?: (c: Context, project: Project, userId: string) => boolean;
   /**
-   * AD-089: сквозной обзор (ADMIN/LEAD) — `GET /` возвращает все проекты.
+   * ADR-089: сквозной обзор (ADMIN/LEAD) — `GET /` возвращает все проекты.
    * `undefined`/`false` — прежнее поведение (проекты пользователя).
    */
   resolveElevated?: (c: Context) => boolean | Promise<boolean>;
   /** Сообщения (backend — i18n). */
   messages?: Partial<ProjectRouteMessages>;
   /**
-   * Источник известных MCP-серверов (AD-071 §2.4). Задан — регистрируются
+   * Источник известных MCP-серверов (ADR-071 §2.4). Задан — регистрируются
    * `GET/PUT /:id/mcp` (RBAC — через `canManage`). Не задан — роутов нет.
    */
   getMcpServers?: () => string[];
   /**
-   * AD-071 §2.4 / AD-046 §4.5: сид скоупа нового проекта (снимок системных
+   * ADR-071 §2.4 / ADR-046 §4.5: сид скоупа нового проекта (снимок системных
    * дефолтов). Не задан — проект создаётся без `mcp`/`skills` (legacy-гейт открыт).
    */
   getProjectSeeds?: () => Promise<{ mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings }> | { mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings };
@@ -100,7 +100,7 @@ export interface ProjectRoutesOptions {
 }
 
 /**
- * План проекта (AD-039): структурированный объект ProjectPlan, создаётся/редактируется
+ * План проекта (ADR-039): структурированный объект ProjectPlan, создаётся/редактируется
  * движком (plan_write). Отдельной zod-схемы в shared нет — принимаем произвольный
  * объект (перенос между мирами), null очищает план.
  */
@@ -127,8 +127,8 @@ function mapRemoteError(c: Context, err: unknown): Response | undefined {
 }
 
 /**
- * API проектов (AD-014/AD-017/AD-075). Единая реализация для core (standalone)
- * и backend (managed): RBAC-хуки, i18n-сообщения, MCP-скоуп (AD-071 §2.4) и
+ * API проектов (ADR-014/ADR-017/ADR-075). Единая реализация для core (standalone)
+ * и backend (managed): RBAC-хуки, i18n-сообщения, MCP-скоуп (ADR-071 §2.4) и
  * статистика задаются через `opts`. Гибридные ветки активны только при переданном
  * `getRemoteClient` (managed его не передаёт).
  */
@@ -162,7 +162,7 @@ export function createProjectRoutes(
 
   app.get('/', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();
-    // AD-089: elevated (ADMIN/LEAD) — все проекты; иначе — проекты пользователя.
+    // ADR-089: elevated (ADMIN/LEAD) — все проекты; иначе — проекты пользователя.
     const elevated = (await opts.resolveElevated?.(c)) ?? false;
     const userId = await currentUserId(c);
     const projects = elevated ? await store.list() : await store.list(userId);
@@ -220,7 +220,7 @@ export function createProjectRoutes(
       }, 400);
     }
 
-    // AD-075: нормализация + создание каталога workspace (managed — авто-имя).
+    // ADR-075: нормализация + создание каталога workspace (managed — авто-имя).
     const resolved = await provisionWorkspace(
       store,
       name,
@@ -234,7 +234,7 @@ export function createProjectRoutes(
       return c.json({ error: { code: resolved.code, message: resolved.message } }, resolved.status);
     }
 
-    // AD-071 §2.4 / AD-046 §4.5: сид скоупа проекта из системных дефолтов.
+    // ADR-071 §2.4 / ADR-046 §4.5: сид скоупа проекта из системных дефолтов.
     const seeds = await Promise.resolve(opts.getProjectSeeds?.()).catch(() => undefined);
 
     const project = store.create(name, await currentUserId(c), {
@@ -273,7 +273,7 @@ export function createProjectRoutes(
     if (!project) {
       return jsonNotFound(c);
     }
-    // AD-089: чтение проекта — owner / любой участник / LEAD / ADMIN. Права на
+    // ADR-089: чтение проекта — owner / любой участник / LEAD / ADMIN. Права на
     // редактирование (canManage/canEditContent) этим не расширяются.
     if (!canRead(c, project, await currentUserId(c))) {
       return jsonForbidden(c);
@@ -281,7 +281,7 @@ export function createProjectRoutes(
     return c.json(serializeProject(project));
   });
 
-  // AD-071 §2.4: проектный MCP-скоуп (только при заданном источнике серверов).
+  // ADR-071 §2.4: проектный MCP-скоуп (только при заданном источнике серверов).
   if (opts.getMcpServers) {
     const knownMcpServers = (): string[] => opts.getMcpServers?.() ?? [];
 
@@ -360,7 +360,7 @@ export function createProjectRoutes(
 
     // D5: горизонтальная авторизация. Проверки до любых мутаций — при отказе
     // проект не меняется вовсе.
-    // - смена workspace — только владелец / LEAD / ADMIN (AD-075);
+    // - смена workspace — только владелец / LEAD / ADMIN (ADR-075);
     // - изменение контента (name/description/…/plan) — владелец / EDITOR / LEAD / ADMIN.
     if (body.workspace !== undefined && !canManage(c, project, userId)) {
       return jsonForbidden(c);
@@ -411,7 +411,7 @@ export function createProjectRoutes(
           project.workspace = undefined;
         }
       } else if (typeof body.workspace === 'string') {
-        // AD-075: нормализация + создание каталога workspace (mkdir -p).
+        // ADR-075: нормализация + создание каталога workspace (mkdir -p).
         const resolved = await resolveWorkspaceForLocalProject(
           body.workspace,
           body.confirmOutsideRoot,

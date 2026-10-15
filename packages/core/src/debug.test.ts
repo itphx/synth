@@ -1,6 +1,6 @@
 /**
  * Тесты DebugCollector.addContext — формат debug-контекста (extra_context).
- * AD-084: микрослой/роутер пишут сюда `decision`/`decision_routing`.
+ * ADR-084: микрослой/роутер пишут сюда `decision`/`decision_routing`.
  */
 import { describe, it, expect } from 'vitest';
 import { DebugCollector } from './debug.js';

@@ -6,7 +6,7 @@ import { FieldTooltip } from '../FieldTooltip'
 export interface ToggleFieldProps {
   label: string
   description?: string
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   enabled: boolean
   onToggle: () => void
@@ -14,7 +14,7 @@ export interface ToggleFieldProps {
   ariaLabel?: string
 }
 
-/** AD-072: строка «лейбл + переключатель». */
+/** ADR-072: строка «лейбл + переключатель». */
 export function ToggleField({
   label,
   description,

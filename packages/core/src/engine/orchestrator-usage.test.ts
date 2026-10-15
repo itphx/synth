@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.3 (Ф3): агрегация нормализованного usage в сессию и расчёт
+ * ADR-070 §2.3 (Ф3): агрегация нормализованного usage в сессию и расчёт
  * стоимости cache read/write по modelPriceLoader; cache hit rate.
  */
 
@@ -79,7 +79,7 @@ class UsageProvider extends BaseProvider {
   }
 }
 
-describe('ChatOrchestrator — usage/стоимость (AD-070 §2.3)', () => {
+describe('ChatOrchestrator — usage/стоимость (ADR-070 §2.3)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 

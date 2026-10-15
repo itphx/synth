@@ -79,7 +79,7 @@ export type ScheduleInput = Omit<ScheduleInputRequest, 'enabled'> & { enabled?: 
 
 // --- events: ответы ---
 
-/** Одноразовый claim-код неизвестного отправителя (AD-089 claim-flow). */
+/** Одноразовый claim-код неизвестного отправителя (ADR-089 claim-flow). */
 export interface EventIdentityHint {
   code: string;
   expiresAt: string;

@@ -11,7 +11,7 @@ import {
   applyBootstrapServiceKeys,
 } from './service-api-key-store.js';
 
-describe('ServiceApiKeyStore (AD-052, этап I)', () => {
+describe('ServiceApiKeyStore (ADR-052, этап I)', () => {
   let store: ServiceApiKeyStore;
   let tmpDir: string;
 
@@ -192,7 +192,7 @@ describe('ServiceApiKeyStore (AD-052, этап I)', () => {
     await expect(store.revoke('../evil')).rejects.toThrow();
   });
 
-  describe('ensure (AD-052/O1, installer)', () => {
+  describe('ensure (ADR-052/O1, installer)', () => {
     it('создаёт ключ с внешним секретом; at-rest — только hash; секрет резолвится', async () => {
       const secret = 'synth_svc_external-secret-123';
       const { status, key } = await store.ensure({
@@ -261,7 +261,7 @@ describe('ServiceApiKeyStore (AD-052, этап I)', () => {
     });
   });
 
-  describe('applyBootstrapServiceKeys (AD-052/O1)', () => {
+  describe('applyBootstrapServiceKeys (ADR-052/O1)', () => {
     it('best-effort: невалидный entry не роняет провижининг остальных', async () => {
       await expect(
         applyBootstrapServiceKeys(store, [

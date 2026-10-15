@@ -124,29 +124,29 @@ export interface BackendAppHandle {
   orchestrator: ChatOrchestrator;
   queueManager: QueueProcessorManager;
   settingsStore: RuntimeSettingsStore;
-  // AD-089: ядро маршрутизации событий и единый funnel создания сессий.
+  // ADR-089: ядро маршрутизации событий и единый funnel создания сессий.
   eventRouter: EventRouter;
   requestSessionService: RequestSessionService;
   eventBindingStore: EventBindingStore;
   eventJournal: EventJournalStore;
-  /** AD-089: ingress-точка приёма внешних событий. */
+  /** ADR-089: ingress-точка приёма внешних событий. */
   ingress: EventIngress;
-  // AD-051 (срез) / AD-089: реестр расписаний и планировщик (cron/interval).
+  // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик (cron/interval).
   scheduleStore: ScheduleStore;
   scheduler: SchedulerService;
-  /** AD-051 (срез): остановка планировщика (на graceful shutdown). */
+  /** ADR-051 (срез): остановка планировщика (на graceful shutdown). */
   stopScheduler: () => void;
-  /** AD-089: остановка sweeper'а авто-архивации ephemeral-сессий. */
+  /** ADR-089: остановка sweeper'а авто-архивации ephemeral-сессий. */
   stopEphemeralSweeper: () => void;
-  /** AD-089: остановка периодической retention-очистки журнала событий. */
+  /** ADR-089: остановка периодической retention-очистки журнала событий. */
   stopEventJournalPruner: () => void;
-  /** AD-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
+  /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
   webhookStore: WebhookStore;
-  /** AD-052 (этап II): движок исходящих webhooks. */
+  /** ADR-052 (этап II): движок исходящих webhooks. */
   webhookService: WebhookService;
-  /** AD-052 (этап II): остановка движка webhooks (на graceful shutdown). */
+  /** ADR-052 (этап II): остановка движка webhooks (на graceful shutdown). */
   stopWebhookService: () => void;
-  /** AD-052 (этап II): остановка retention-очистки журнала доставок. */
+  /** ADR-052 (этап II): остановка retention-очистки журнала доставок. */
   stopWebhookDeliveryPruner: () => void;
   /**
    * Поднять HTTP-сервер (+ WebSocket /ws/events) на указанном порту.
@@ -246,10 +246,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       credentials: true,
     }));
 
-    // AD-052 (этап I): реестр service-key создаётся до auth — резолвер
+    // ADR-052 (этап I): реестр service-key создаётся до auth — резолвер
     // `synth_svc_…` нужен аутентификации (паритет с core `server/app.ts`).
     const serviceApiKeyStore = new ServiceApiKeyStore({ dataDir: backendConfig.dataDir });
-    // AD-052/O1: идемпотентный bootstrap installer-ключей из env/Secret
+    // ADR-052/O1: идемпотентный bootstrap installer-ключей из env/Secret
     // (best-effort — ошибка конфигурации не роняет старт, пишется в лог).
     await applyBootstrapServiceKeys(
       serviceApiKeyStore,
@@ -283,7 +283,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Прикрепляем пользователя ко всем запросам
     app.use('*', auth.attachUser);
 
-    // AD-052: per-key rate limit service-key (`rateLimitPerMinute` ключа;
+    // ADR-052: per-key rate limit service-key (`rateLimitPerMinute` ключа;
     // 0/не задан — без лимита). После attachUser: `serviceKey` уже в контексте.
     const serviceKeyRateLimiter = new KeyRateLimiter(60_000);
     app.use('*', createMiddleware(async (c, next) => {
@@ -303,12 +303,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     await ensureDataDir(dataDir);
     const fileStore = new FileStore({ dataDir });
     const projectStore = new ProjectStore({ dataDir });
-    // AD-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
+    // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
     const hooks = new HookBus();
     const sessionManager = new SessionManager(fileStore, {
       projectStore,
       hooks,
-      // AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий без проекта.
+      // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
       systemDefaultsProvider: async () => ({
         mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
         skillsDefaultOn: (await resolveProjectSkillSeed(
@@ -317,10 +317,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         )).enabled,
       }),
     });
-    // AD-089: авто-архивация ephemeral-сессий по TTL (таймер `unref`).
+    // ADR-089: авто-архивация ephemeral-сессий по TTL (таймер `unref`).
     // Остановка — через хэндл `stopEphemeralSweeper` на graceful shutdown.
     const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
-    // AD-076 §T4: SSH-ключи агентов — core-хранилище поверх общего dataDir.
+    // ADR-076 §T4: SSH-ключи агентов — core-хранилище поверх общего dataDir.
     // Мастер-ключ: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > файл dataDir.
     const sshKeyStore = new SSHKeyStore({
       dataDir,
@@ -333,12 +333,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
     const profilesStore = new FileProfileStore({ dataDir });
 
-    // AD-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
+    // ADR-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
     const patternStore = new SecretPatternStore({ dataDir });
 
-    // Runtime-настройки (AD-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
+    // Runtime-настройки (ADR-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
     const settingsStore = new RuntimeSettingsStore({ dataDir });
-    // AD-075: дефолтный рабочий каталог — runtime-override `settings/workspace`
+    // ADR-075: дефолтный рабочий каталог — runtime-override `settings/workspace`
     // приоритетнее config/env (`resolveDefaultWorkspace`), каталог создаётся
     // заранее (как в core `server/app.ts`), чтобы инструменты не падали.
     const runtimeWorkspace = await settingsStore.getWorkspace();
@@ -348,10 +348,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const getDefaultAgentId = async (): Promise<string> =>
       (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
 
-    // Умолчания оформления (AD-005): {dataDir}/defaults.json (переживают рестарт)
+    // Умолчания оформления (ADR-005): {dataDir}/defaults.json (переживают рестарт)
     const defaultsStore = new DefaultsStore({ dataDir });
 
-    // MCP: единый источник истины — реестр `McpRegistryStore` (AD-071 §2.5).
+    // MCP: единый источник истины — реестр `McpRegistryStore` (ADR-071 §2.5).
     // Legacy `YamlMcpConfigStore` удалён: instance-серверы из config.mcp.servers
     // сидируются в реестр при старте (seed без дублирования по имени).
     const mcpManager = new McpManager();
@@ -364,9 +364,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     mcpManager.setServerTrusts(mcpMaps.trusts);
     mcpManager.setServerAuthors(mcpMaps.authors);
     mcpManager.setDefaultServers(mcpMaps.defaults);
-    // AD-071 §2.4: системный мастер-флаг серверов (реестр `enabled`).
+    // ADR-071 §2.4: системный мастер-флаг серверов (реестр `enabled`).
     mcpManager.setServerSystemEnabled(mcpMaps.systemEnabled);
-    // AD-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
+    // ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
     // Runtime-настройка из админки (settings.json) приоритетнее config.yaml и
     // переживает рестарт; храним в изменяемой переменной, чтобы registry-роуты
     // видели свежее значение без рестарта. Слияние — единым helper'ом
@@ -394,7 +394,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const eventBus = new EventBus();
     const queueManager = new QueueProcessorManager();
 
-    // AD-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
+    // ADR-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
     // `whsec_…` шифруется at-rest мастер-ключом), append-only журнал доставок и
     // движок над той же шиной `EventBus`, что обслуживает сессии/SSE. Движок
     // подписывается на ВСЕ события шины (`subscribeAll`) — паритет с core
@@ -432,7 +432,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       return providerCache.get(name) ?? null;
     };
 
-    // AD-038: синхронизация провайдеров/моделей из переменных окружения (общая
+    // ADR-038: синхронизация провайдеров/моделей из переменных окружения (общая
     // core-реализация). Вызывается ПОСЛЕ создания providerStore/modelStore, но ДО
     // заполнения кэшей, чтобы env-провайдеры попали в providerCache/modelCache.
     await syncProvidersFromEnv(providerStore, modelStore);
@@ -505,31 +505,31 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const gatewayPayloadLogPath = backendConfig.synth.llmGateway.payloadLogPath
       || join(dataDir, 'audit', 'llm-payloads.jsonl');
 
-    // AD-036: runtime-настройка LLM Gateway (тумблер из UI, {dataDir}/settings.json)
+    // ADR-036: runtime-настройка LLM Gateway (тумблер из UI, {dataDir}/settings.json)
     // приоритетнее config.yaml — мёржим при старте, чтобы шлюз применялся к оркестратору.
     const runtimeGateway = await settingsStore.getLlmGatewaySettings();
     const gatewayConfig = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtimeGateway);
 
-    // AD-040: runtime-настройка защищённых путей (тумблер из UI, {dataDir}/settings.json)
+    // ADR-040: runtime-настройка защищённых путей (тумблер из UI, {dataDir}/settings.json)
     // приоритетнее config.yaml — мёржим при старте, чтобы защита применялась к оркестратору.
     const runtimeSecurity = await settingsStore.getSecuritySettings();
     const securityConfig = mergeSecurityConfig(backendConfig.synth.security, runtimeSecurity);
-    // AD-071 §2.3: runtime-политика встроенных инструментов (админка) приоритетнее config.yaml
+    // ADR-071 §2.3: runtime-политика встроенных инструментов (админка) приоритетнее config.yaml
     const runtimeToolsPolicy = await settingsStore.getToolsPolicy();
     const toolsPolicy = runtimeToolsPolicy ?? backendConfig.synth.tools.policy;
-    // AD-071 §2.3: runtime-политика MCP-инструментов (админка) приоритетнее config.yaml
+    // ADR-071 §2.3: runtime-политика MCP-инструментов (админка) приоритетнее config.yaml
     const runtimeMcpPolicy = await settingsStore.getMcpPolicy();
     const mcpPolicy = runtimeMcpPolicy ?? backendConfig.synth.mcp.policy;
-    // AD-071 §2.6: runtime-отключение инструментов (админка) приоритетнее config.yaml
+    // ADR-071 §2.6: runtime-отключение инструментов (админка) приоритетнее config.yaml
     const runtimeToolsDisabled = await settingsStore.getToolsDisabled();
     const toolsDisabled: ToolsDisabledConfig =
       runtimeToolsDisabled ?? backendConfig.synth.tools.disabled ?? { capabilities: [], tools: [] };
-    // AD-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
+    // ADR-046 §4.5: runtime-отключение скиллов (админка) — hard-gate системного уровня.
     const skillsDisabled = (await settingsStore.getSkillsDisabled())
       ?? { categories: [], groups: [], skills: [] };
-    // AD-084: runtime/эффективный конфиг decision-слоя (админка) приоритетнее
+    // ADR-084: runtime/эффективный конфиг decision-слоя (админка) приоритетнее
     // config.yaml `decision`. Live-применяется ко всем трём потребителям
-    // (микро-каскад, роутер, события AD-089) через `onDecisionChange`.
+    // (микро-каскад, роутер, события ADR-089) через `onDecisionChange`.
     const runtimeDecision = await settingsStore.getDecision();
     let effectiveDecisionSettings = mergeDecisionConfig(backendConfig.synth.decision, runtimeDecision);
     const protectedPathsStore = new ProtectedPathsStore({ dataDir });
@@ -538,7 +538,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const toolRegistry = createToolRegistry();
     const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
-    // AD-046: сервис скиллов (discovery + instance-запись + каталог промпта).
+    // ADR-046: сервис скиллов (discovery + instance-запись + каталог промпта).
     const skillService = new SkillService({
       dataDir,
       configPaths: backendConfig.synth.skills.paths,
@@ -547,7 +547,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       toolsets: backendConfig.synth.skills.toolsets,
     });
 
-    // AD-046 §7: slash-команды и bundles (mirror core).
+    // ADR-046 §7: slash-команды и bundles (mirror core).
     const bundleStore = new SkillBundleStore({
       dataDir,
       bundlesPath: backendConfig.synth.commands.bundlesPath,
@@ -585,16 +585,16 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       projectStore,
       // Онбординг: тул `profile_update` сохраняет ответы интервью в профиль.
       profilesStore,
-      // AD-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
+      // ADR-076 §T6: тот же store, что у git/ssh-роутов — без дублей инстансов.
       sshKeyStore,
       workspacesRoot: backendConfig.workspacesRoot,
-      // AD-075: backend — managed-режим, workspace вне workspacesRoot запрещён.
+      // ADR-075: backend — managed-режим, workspace вне workspacesRoot запрещён.
       workspaceManaged: true,
-      // AD-075: без defaultWorkingDir сессия без проекта получала бы
+      // ADR-075: без defaultWorkingDir сессия без проекта получала бы
       // {dataDir}/workspaces/default мимо runtime-override settings/workspace.
       defaultWorkingDir,
       routerConfig: backendConfig.synth.router,
-      // AD-084: decision-слой микро-каскада (config.decision).
+      // ADR-084: decision-слой микро-каскада (config.decision).
       decisionConfig: effectiveDecisionSettings,
       permissionConfig: backendConfig.synth.permission,
       defaultPlanMode: backendConfig.synth.session.planMode,
@@ -607,25 +607,25 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       toolsPolicy,
       mcpPolicy,
       toolsDisabled,
-      // AD-046 §4.5: системный hard-gate скиллов (runtime-настройка).
+      // ADR-046 §4.5: системный hard-gate скиллов (runtime-настройка).
       skillsDisabled,
-      // AD-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
+      // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
       runtimeDeps: await detectRuntimeDeps(),
-      // AD-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
+      // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
       tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
       onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
-      // AD-046 §5: каталог скиллов в промпт + тул `skill`.
+      // ADR-046 §5: каталог скиллов в промпт + тул `skill`.
       skillRuntime: skillService,
-      // AD-046 §7: резолвинг `/`-команд до LLM.
+      // ADR-046 §7: резолвинг `/`-команд до LLM.
       commandRuntime: commandService,
-      // AD-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
+      // ADR-069 Фаза 1: проектные инструкции (merged chain AGENTS.md).
       instructionsConfig: backendConfig.synth.instructions,
-      // AD-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
+      // ADR-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
       instructionsTrustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
-      // AD-089: late-bound funnel создания сессий для тула `task` (саб-агент).
+      // ADR-089: late-bound funnel создания сессий для тула `task` (саб-агент).
       // Сервис создаётся ниже (после оркестратора) — геттер читает его в рантайме.
       getRequestSessionService: () => requestSessionService,
-      // AD-051: late-bound резолвер активности расписания в сессии (ScheduleStore
+      // ADR-051: late-bound резолвер активности расписания в сессии (ScheduleStore
       // создаётся ниже) — включает статический блок `Scheduler` в промпт.
       isSchedulerActive: (sid) => scheduleStore.hasEnabledTargetFor(sid),
       // «Стоп»: персистентный флаг отмены сессии — прерывает длинный
@@ -636,22 +636,22 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     const processMessage = orchestrator.createProcessMessage();
 
-    // AD-089: ядро маршрутизации внешних событий и единый funnel создания сессий.
+    // ADR-089: ядро маршрутизации внешних событий и единый funnel создания сессий.
     // Funnel подключён к `POST /sessions` и тулу `task` (Этап 5); приём внешних
     // событий — на следующих этапах.
     const eventBindingStore = new EventBindingStore({ dataDir });
-    // AD-089/AD-052: API-ключи привязок для аутентификации приёма событий.
+    // ADR-089/ADR-052: API-ключи привязок для аутентификации приёма событий.
     const eventApiKeyStore = new EventApiKeyStore({ dataDir });
     const eventJournal = new EventJournalStore({ dataDir });
-    // AD-089: реестр правил маршрутизации (проектные/инстанс-правила).
+    // ADR-089: реестр правил маршрутизации (проектные/инстанс-правила).
     const routeRuleStore = new RouteRuleStore({ dataDir });
-    // AD-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
+    // ADR-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
     const identityClaimStore = new IdentityClaimStore({ dataDir });
-    // AD-089 (Блок 3): runtime-настройки «События» (админка) поверх config.yaml.
+    // ADR-089 (Блок 3): runtime-настройки «События» (админка) поверх config.yaml.
     const runtimeEvents = await settingsStore.getEvents();
     const effectiveEvents = mergeEventsConfig(backendConfig.synth.events, runtimeEvents);
     let effectiveEventsSettings = effectiveEvents;
-    // AD-051/AD-089: источник дедупа — in-process (default) или файловый
+    // ADR-051/ADR-089: источник дедупа — in-process (default) или файловый
     // межпроцессный (`events.dedupStore: file`).
     const dedupStore = backendConfig.synth.events.dedupStore === 'file'
       ? new FileDedupStore({ dataDir })
@@ -669,11 +669,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         autoBindAgentTemplate: effectiveEvents.autoBindAgentTemplate,
       },
     });
-    // AD-089 (Блок 2): retention-очистка журнала событий (сразу + каждые 6 ч).
+    // ADR-089 (Блок 2): retention-очистка журнала событий (сразу + каждые 6 ч).
     const stopEventJournalPruner = startEventJournalPruner(eventJournal, {
       getRetentionDays: () => effectiveEventsSettings.journalRetentionDays,
     });
-    // AD-051 (срез) / AD-089: правило маршрутизации cron-событий по расписанию
+    // ADR-051 (срез) / ADR-089: правило маршрутизации cron-событий по расписанию
     // (паритет с core `server/app.ts`; store без дублей).
     const scheduleStore = new ScheduleStore({
       dataDir,
@@ -683,11 +683,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     eventRouter.registerRuleProvider(
       new SchedulerRuleProvider(scheduleStore, effectiveEvents.ephemeralTtl),
     );
-    // AD-089: правила маршрутизации по матчу события (после scheduler).
+    // ADR-089: правила маршрутизации по матчу события (после scheduler).
     eventRouter.registerRuleProvider(
       new ProjectRuleProvider(routeRuleStore, effectiveEvents.ephemeralTtl),
     );
-    // AD-084 × AD-089: decision-маршрутизация при промахе декларативных правил
+    // ADR-084 × ADR-089: decision-маршрутизация при промахе декларативных правил
     // (opt-in `events.decisionRouting`). Паритет с core `server/app.ts`.
     eventRouter.registerRuleProvider(
       new DecisionRuleProvider({
@@ -707,7 +707,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           })),
       }),
     );
-    // AD-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
+    // ADR-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
     // неизвестный или отключённый агент → `null`.
     const resolveAgentTemplate = (template: string): string | null => {
       const agent = agentRegistry.get(template);
@@ -715,9 +715,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     };
     // EventHub — центральный диспетчер подписок. Создаётся до funnel: колбэк
     // `onSessionMaterialized` подписывает клиентов владельца на сессии,
-    // созданные после их подключения (`subscribeToSession`, AD-089).
+    // созданные после их подключения (`subscribeToSession`, ADR-089).
     const eventHub = new EventHub(eventBus, sessionManager);
-    // AD-089: резолвер внешнего отправителя (профиль `identities`, principalId) в
+    // ADR-089: резолвер внешнего отправителя (профиль `identities`, principalId) в
     // пользователя инстанса; override `identityMap` — приоритетнее профиля.
     // `getIdentityMap` читает актуальное значение — `onEventsChange` обновляет
     // runtime-настройку live. Вынесен в локальную константу: переиспользуется
@@ -736,12 +736,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         unknownAgentTemplate: effectiveEvents.unknownAgentTemplate,
       },
       resolveAgentTemplate,
-      // AD-089: маппинг идентичности внешнего отправителя на владельца сессии
+      // ADR-089: маппинг идентичности внешнего отправителя на владельца сессии
       // (`events.identityMap`) — напр. Telegram-чат → человек.
       identityMap: effectiveEvents.identityMap,
-      // AD-089: резолвинг внешнего отправителя → владелец сессии.
+      // ADR-089: резолвинг внешнего отправителя → владелец сессии.
       resolveExternalIdentity,
-      // AD-089 (claim-flow): неизвестному отправителю выдаём одноразовый код
+      // ADR-089 (claim-flow): неизвестному отправителю выдаём одноразовый код
       // подтверждения владения идентичностью (`provider`/`externalId` — из
       // серверного разбора `identity.principalId`).
       issueIdentityClaim: async (event) => {
@@ -757,7 +757,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         });
         return { code: claim.code, expiresAt: claim.expiresAt };
       },
-      // AD-089: подписка хаба на сессию владельца сразу после материализации —
+      // ADR-089: подписка хаба на сессию владельца сразу после материализации —
       // чтобы клиент, подключённый до создания сессии (events-funnel), получал
       // её события. `subscribeToSession` синхронно ставит подписки, поэтому
       // последующая доставка события не теряется.
@@ -768,25 +768,25 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           console.warn('subscribeToSession failed:', e),
         );
       },
-      // AD-089: дефолтные provider/model инстанса (llm.defaultProvider/defaultModel)
+      // ADR-089: дефолтные provider/model инстанса (llm.defaultProvider/defaultModel)
       // — для сессий из внешних событий (materialize ephemeral/bind), чтобы агент
       // мог ответить без ручной простановки модели.
       resolveLlmDefaults: () => ({
         provider: backendConfig.synth.llm.defaultProvider,
         model: backendConfig.synth.llm.defaultModel,
       }),
-      // AD-089: агент по умолчанию инстанса — чтобы сессия из внешнего события
+      // ADR-089: агент по умолчанию инстанса — чтобы сессия из внешнего события
       // (auto-bind/bind/ephemeral) фиксировала `settings.agentRole` и UI рисовал
       // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
       // «Агенты» (`getDefaultAgentId`) поверх `DEFAULT_AGENT_ID`.
       resolveDefaultAgent: getDefaultAgentId,
-      // AD-089: UI-событие после материализации внешнего события.
+      // ADR-089: UI-событие после материализации внешнего события.
       publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
       deliver: async (sessionId, event, mode, context) => {
-        // AD-051: cron-сообщение — от системного пользователя `Scheduler`, текст
+        // ADR-051: cron-сообщение — от системного пользователя `Scheduler`, текст
         // задания — чистый контент сообщения (описание Scheduler — в system-блоке).
         let message = eventToMessage(event);
-        // AD-089: для слинкованного человека `displayName` из резолвера приоритетнее
+        // ADR-089: для слинкованного человека `displayName` из резолвера приоритетнее
         // имени из `payload.from` (tg-имя). Cron (`Scheduler`) не переопределяем.
         if (event.source !== 'cron' && event.identity?.principalId) {
           try {
@@ -796,7 +796,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
             // attribution не критична — оставляем автора из `eventToMessage`
           }
         }
-        // AD-089 (этап 5): эффективные роли отправителя — в metadata хода.
+        // ADR-089 (этап 5): эффективные роли отправителя — в metadata хода.
         if (context) {
           message.metadata = {
             ...(message.metadata ?? {}),
@@ -805,14 +805,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           };
         }
         if (mode === 'run') {
-          // AD-036: обфускация user-сообщения ДО сохранения в историю (паритет с
+          // ADR-036: обфускация user-сообщения ДО сохранения в историю (паритет с
           // prompt-путём — core routes/sessions.ts).
           await enqueueUserMessage(
             sessionManager, eventBus, sessionId, message, queueManager, processMessage,
             (sid, msg) => orchestrator.obfuscateUserMessageForHistory(sid, msg),
           );
         } else {
-          // AD-036: `defer` тоже кладёт сообщение в историю — обфусцируем до
+          // ADR-036: `defer` тоже кладёт сообщение в историю — обфусцируем до
           // постановки. Старт процессора не выполняем (только очередь владельца).
           message = await orchestrator.obfuscateUserMessageForHistory(sessionId, message);
           await sessionManager.addPendingMessage(sessionId, message);
@@ -820,10 +820,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     });
 
-    // AD-089: ingress-точка приёма внешних событий (Этап 6).
+    // ADR-089: ingress-точка приёма внешних событий (Этап 6).
     const eventIngress = new EventIngress({ requestSessionService });
 
-    // AD-051 (срез) / AD-089: планировщик публикует cron-события через ingress.
+    // ADR-051 (срез) / ADR-089: планировщик публикует cron-события через ingress.
     // `start()` гейтится конфигом (`scheduler.enabled: false` — тикер не стартует),
     // ошибки старта логируются и не роняют процесс; остановка — `stopScheduler`.
     const schedulerTickMs = backendConfig.synth.scheduler.tickSec * 1000;
@@ -835,7 +835,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
       catchUp: backendConfig.synth.scheduler.catchUp,
       jobRetentionDays: backendConfig.synth.scheduler.jobRetentionDays,
-      // AD-051/AD-089: тикер стартует только у лидера (default — AlwaysLeader).
+      // ADR-051/ADR-089: тикер стартует только у лидера (default — AlwaysLeader).
       leader: backendConfig.synth.scheduler.leaderElection === 'file'
         ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
         : new AlwaysLeader(),
@@ -846,7 +846,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       });
     }
 
-    // AD-071 §2.4 / AD-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
+    // ADR-071 §2.4 / ADR-046 §4.5: разовая миграция снапшотов скоупа существующих сессий.
     await migrateSessionScopeSnapshots({
       sessionManager,
       projectStore,
@@ -872,7 +872,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.get('/api/v2/i18n/translations/ru', (c) => c.json(getTranslations('ru')));
     app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
 
-    // AD-052 (этап I): публичный OpenAPI-документ (spike) за requireAuth;
+    // ADR-052 (этап I): публичный OpenAPI-документ (spike) за requireAuth;
     // публичную выдачу без auth согласуем отдельно.
     app.get('/api/v2/openapi.json', auth.requireAuth, (c) => c.json(getPublicOpenApiDocument()));
 
@@ -888,8 +888,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Queue routes
     app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
 
-    // FS routes (AD-075): core-фабрика, managed поверх workspace проекта.
-    // AD-089 (P0): доступ к проекту обязателен — иначе любой USER читал/писал бы
+    // FS routes (ADR-075): core-фабрика, managed поверх workspace проекта.
+    // ADR-089 (P0): доступ к проекту обязателен — иначе любой USER читал/писал бы
     // файлы чужого проекта по id (IDOR). Чтение — canRead, мутации — canEditContent.
     const projectAccess = createProjectAccess(auth);
     app.route('/api/v2/fs', createFsRoutes(auth, backendConfig.workspacesRoot, undefined, {
@@ -928,7 +928,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // User admin routes
     app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
 
-    // Git routes (AD-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
+    // Git routes (ADR-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
     // (init/clone/register/remove/fetch) требуют прав на изменение контента
     // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — requireAuth.
     app.route('/api/v2/git', createGitRoutes(auth, projectStore, backendConfig.workspacesRoot, {
@@ -942,7 +942,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     }));
 
-    // SSH-ключи агентов (AD-076 §T5): core-фабрика + managed RBAC.
+    // SSH-ключи агентов (ADR-076 §T5): core-фабрика + managed RBAC.
     // Ключи — секреты: чтение — requireAuth (глобально), запись — только ADMIN.
     app.route('/api/v2/ssh-keys', createSshKeyRoutes(auth, sshKeyStore, {
       writeGuard: auth.requireAdmin,
@@ -951,8 +951,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       writeGuard: auth.requireAdmin,
     }));
 
-    // AD-089: приём внешних событий (ingress), биндинги и журнал. Ingress —
-    // requireAuth + rate limit (внешние сервисы до AD-052 используют общий ключ);
+    // ADR-089: приём внешних событий (ingress), биндинги и журнал. Ingress —
+    // requireAuth + rate limit (внешние сервисы до ADR-052 используют общий ключ);
     // чтение биндингов/журнала — requireAuth; мутации биндингов — ADMIN.
     // `GET /` не переопределяем — на этом пути SSE-хаб ниже.
     app.route('/api/v2/events', createEventRoutes(
@@ -963,14 +963,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         // requireAuth (приём по API-ключу привязки креды пользователя не требует).
         ingestPreGuard: createRateLimiter(120, 60_000),
         ingestGuard: auth.requireAuth,
-        // AD-089/AD-052: мутации bindings/routes/keys — LEAD и ADMIN; чтение
+        // ADR-089/ADR-052: мутации bindings/routes/keys — LEAD и ADMIN; чтение
         // ключей привязки — тоже LEAD и ADMIN (чувствительные метаданные).
         writeGuard: auth.requirePermission('ADMIN', 'LEAD'),
         keyReadGuard: auth.requirePermission('ADMIN', 'LEAD'),
-        // AD-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
+        // ADR-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
         scopeGuard,
         projectGuard,
-        // AD-089/AD-052: per-key rate limit и мастер-выключатель приёма (live).
+        // ADR-089/ADR-052: per-key rate limit и мастер-выключатель приёма (live).
         getKeyRateLimitPerMinute: () => effectiveEventsSettings.keyRateLimitPerMinute,
         isEnabled: () => effectiveEventsSettings.enabled,
         resolveAgentTemplate,
@@ -1000,7 +1000,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     ));
 
-    // AD-051 / AD-089: CRUD расписаний, принудительный запуск и Job-история.
+    // ADR-051 / ADR-089: CRUD расписаний, принудительный запуск и Job-история.
     // Чтение — requireAuth (дефолт core-фабрики), мутации — ADMIN. `run` —
     // ADMIN + rate limit (образец — ingest внешних событий): 10 запусков / 60 c
     // на ключ, т.к. каждый запуск ингестит событие в Router.
@@ -1011,7 +1011,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         writeGuard: auth.requireAdmin,
         runGuard: auth.requireAdmin,
         runMiddleware: [createRateLimiter(10, 60_000)],
-        // AD-052 (этап I): scope-гейт, проектная проекция и резолвинг
+        // ADR-052 (этап I): scope-гейт, проектная проекция и резолвинг
         // projectId `bound`/`queue`-целей расписания.
         scopeGuard,
         projectGuard,
@@ -1019,7 +1019,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     ));
 
-    // AD-052 (этап I): CRUD service-key инстанса (`synth_svc_…`). Managed RBAC:
+    // ADR-052 (этап I): CRUD service-key инстанса (`synth_svc_…`). Managed RBAC:
     // только ADMIN (ключи дают машинный доступ — управление админское), i18n.
     app.route('/api/v2/service-keys', createServiceKeyRoutes(
       { requireAuth: auth.requireAuth },
@@ -1040,7 +1040,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     ));
 
-    // AD-052 (этап II): подписки на исходящие webhooks (CRUD + журнал + тест).
+    // ADR-052 (этап II): подписки на исходящие webhooks (CRUD + журнал + тест).
     // Managed RBAC: только ADMIN (webhook может утекать данные на произвольный
     // URL), i18n. Мастер-выключатель `webhooks.enabled` → 503 на мутации/тест.
     app.route('/api/v2/webhooks', createWebhookRoutes(
@@ -1072,7 +1072,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       getNetworkPolicy: () => effectiveNetworkPolicy,
     }));
 
-    // Скиллы (AD-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.
+    // Скиллы (ADR-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.
     app.route('/api/v2/skills', createSkillRoutes(auth as unknown as CoreAuthKit, {
       skillService,
       resolveProjectWorkspace: async (projectId) => {
@@ -1084,7 +1084,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     }, { writeGuard: requireAdminOrScope('addons:install') }));
 
-    // AD-046 §7/§9.1: команды и bundles (mirror core, мутации — ADMIN).
+    // ADR-046 §7/§9.1: команды и bundles (mirror core, мутации — ADMIN).
     app.route('/api/v2/commands', createCommandRoutes(auth as unknown as CoreAuthKit, {
       commandService,
       resolveProjectWorkspace: async (projectId) => {
@@ -1106,7 +1106,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     }, { writeGuard: auth.requireAdmin }));
 
-    // AD-046 §4.5: scope-API скиллов. Доступ к сессии — владелец|ADMIN
+    // ADR-046 §4.5: scope-API скиллов. Доступ к сессии — владелец|ADMIN
     // (canAccess, как в session-роутах); проект — owner/LEAD/ADMIN.
     const resolveSkillWorkspace = async (projectId: string): Promise<string | undefined> => {
       const project = await projectStore.load(projectId);
@@ -1131,7 +1131,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       permissionConfig: backendConfig.synth.permission,
       resolveProjectWorkspace: resolveSkillWorkspace,
     }, {
-      // AD-046 §4.5: проектным уровнем управляют owner/LEAD/ADMIN — как в
+      // ADR-046 §4.5: проектным уровнем управляют owner/LEAD/ADMIN — как в
       // project-MCP (`canManageProjectMcp`), поэтому writeGuard не requireAdmin;
       // владение проверяет canAccessProject (403 не-членам, 404 — нет проекта).
       writeGuard: auth.requireAuth,
@@ -1147,7 +1147,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
     }));
 
-    // AD-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).
+    // ADR-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).
     // RBAC: аутентифицированный пользователь (только свои); линковка — claim-flow
     // (`POST /api/v2/me/identities/claim`).
     // Резолвим **id профиля** по `username` аутентифицированного пользователя
@@ -1162,7 +1162,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         return profile.id;
       },
       claimStore: identityClaimStore,
-      // AD-089 (claim-flow): анти-брутфорс одноразового кода (6 символов, TTL 10 мин) —
+      // ADR-089 (claim-flow): анти-брутфорс одноразового кода (6 символов, TTL 10 мин) —
       // per-user fixed window 60 c (ключ — Authorization-токен, не IP).
       rateLimitGuard: createRateLimiter(
         10,
@@ -1178,7 +1178,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
     }));
 
-    // LLM Gateway audit routes (AD-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
+    // LLM Gateway audit routes (ADR-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
     app.route('/api/v2/audit', createAuditRoutes(auth, {
       auditLogPath: gatewayAuditLogger.logPath,
       sessionExists: async (sessionId: string) => {
@@ -1194,11 +1194,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       payloadLogPath: gatewayPayloadLogPath,
     }));
 
-    // LLM Gateway patterns routes (AD-036) — управление regex-паттернами детекции секретов, только ADMIN
+    // LLM Gateway patterns routes (ADR-036) — управление regex-паттернами детекции секретов, только ADMIN
     app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));
 
     // LLM Proxy (гибридный режим, Часть 5) — OpenAI-совместимый POST /api/v2/llm/chat/completions.
-    // Локальный core гоняет LLM-запросы централизованно через LLM Gateway (AD-036):
+    // Локальный core гоняет LLM-запросы централизованно через LLM Gateway (ADR-036):
     // обфускация/блокировка секретов, rate limit, аудит, полный payload-лог.
     app.route('/api/v2/llm', createLlmRoutes(auth, {
       providerLoader,
@@ -1220,14 +1220,14 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/api/v2/settings', createSettingsRoutes(auth as unknown as CoreAuthKit, {
       settingsStore,
       fallbackWorkspace: defaultWorkingDir,
-      // AD-075: managed-развёртывание — политика вне `workspacesRoot` всегда `deny`
+      // ADR-075: managed-развёртывание — политика вне `workspacesRoot` всегда `deny`
       // (enforcement — в `routes/projects.ts`); строго read-only: GET отдаёт
       // fallback + readOnly, PUT/DELETE → 403 WORKSPACE_POLICY_READ_ONLY.
       fallbackWorkspaceOutsideRootPolicy: 'deny',
       workspacePolicyReadOnly: true,
       // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
       fallbackDefaultAgent: DEFAULT_AGENT_ID,
-      // AD-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
+      // ADR-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
       fallbackLlmGateway: {
         enabled: backendConfig.synth.llmGateway.enabled,
         inputMode: backendConfig.synth.llmGateway.inputMode,
@@ -1239,10 +1239,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
       fallbackSecurity: {
         protectedPaths: { enabled: backendConfig.synth.security.protectedPaths?.enabled ?? true },
-        // AD-029: askTimeoutMs живёт в permission-секции конфига (не в security).
+        // ADR-029: askTimeoutMs живёт в permission-секции конфига (не в security).
         askTimeoutMs: backendConfig.synth.permission?.askTimeoutMs,
       },
-      // AD-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
+      // ADR-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
       onLlmGatewayChange: async (runtime) => {
         const merged = mergeLlmGatewayConfig(backendConfig.synth.llmGateway, runtime);
         orchestrator.setGatewayConfig(merged);
@@ -1252,17 +1252,17 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         const merged = mergeSecurityConfig(backendConfig.synth.security, runtime);
         orchestrator.setSecurityConfig(merged);
       },
-      // AD-071 §2.3: live-применение политики встроенных инструментов из админки.
+      // ADR-071 §2.3: live-применение политики встроенных инструментов из админки.
       fallbackToolsPolicy: backendConfig.synth.tools.policy,
       onToolsPolicyChange: async (policy) => {
         orchestrator.setToolsPolicy(policy);
       },
-      // AD-071 §2.3: live-применение политики MCP-инструментов из админки.
+      // ADR-071 §2.3: live-применение политики MCP-инструментов из админки.
       fallbackMcpPolicy: backendConfig.synth.mcp.policy,
       onMcpPolicyChange: async (policy) => {
         orchestrator.setMcpPolicy(policy);
       },
-      // AD-071 §2.6: live-применение instance-wide отключения инструментов.
+      // ADR-071 §2.6: live-применение instance-wide отключения инструментов.
       fallbackToolsDisabled: backendConfig.synth.tools.disabled,
       onToolsDisabledChange: async (disabled) => {
         orchestrator.setToolsDisabled(disabled);
@@ -1271,15 +1271,15 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         name: tool.name,
         capabilities: [...tool.capabilities],
       })),
-      // AD-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
+      // ADR-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
       fallbackMcpNetworkPolicy: backendConfig.synth.mcp.networkPolicy,
       onMcpNetworkPolicyChange: async (policy) => {
         effectiveNetworkPolicy = policy;
         mcpManager.setNetworkPolicy(policy);
       },
-      // AD-089: дефолт config.yaml для GET/DELETE-сброса раздела «События».
+      // ADR-089: дефолт config.yaml для GET/DELETE-сброса раздела «События».
       fallbackEvents: backendConfig.synth.events,
-      // AD-089: live-применение runtime-настроек «События» — Router/funnel/pruner.
+      // ADR-089: live-применение runtime-настроек «События» — Router/funnel/pruner.
       onEventsChange: (effective) => {
         effectiveEventsSettings = effective;
         eventRouter.updateConfig({
@@ -1295,9 +1295,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
           identityMap: effective.identityMap,
         });
       },
-      // AD-084: дефолт config.yaml для GET/DELETE-сброса decision-слоя.
+      // ADR-084: дефолт config.yaml для GET/DELETE-сброса decision-слоя.
       fallbackDecision: backendConfig.synth.decision,
-      // AD-084: live-применение runtime-настроек decision-слоя — микро-каскад и
+      // ADR-084: live-применение runtime-настроек decision-слоя — микро-каскад и
       // роутер читают конфиг геттером оркестратора; события — геттером выше.
       onDecisionChange: (effective) => {
         effectiveDecisionSettings = effective;
@@ -1305,9 +1305,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       },
       protectedPathsStore,
     }, {
-      // AD-089: мутации раздела «События» — только ADMIN (managed RBAC).
+      // ADR-089: мутации раздела «События» — только ADMIN (managed RBAC).
       eventsWriteGuard: auth.requirePermission('ADMIN'),
-      // AD-084: мутации decision-слоя — только ADMIN (managed RBAC).
+      // ADR-084: мутации decision-слоя — только ADMIN (managed RBAC).
       decisionWriteGuard: auth.requirePermission('ADMIN'),
     }));
 
@@ -1320,7 +1320,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       { writeGuard: auth.requireAdmin },
     ));
 
-    // AD-069 §9.3: прозрачность проектных инструкций — core-фабрика (резолвер не
+    // ADR-069 §9.3: прозрачность проектных инструкций — core-фабрика (резолвер не
     // дублируется). RBAC: сессия — владелец|ADMIN (canAccess, как в session-роутах);
     // проект — owner/LEAD/ADMIN (canAccessProject, как в project-скиллах).
     const instructionsInfoResolver = createInstructionsInfoResolver(
@@ -1329,7 +1329,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         dictionaryStore,
         dataDir,
         trustedProjectDirs: backendConfig.synth.skills.trustedProjectDirs,
-        // AD-069 R3: авто-trust workspace внутри workspacesRoot (managed-каталоги).
+        // ADR-069 R3: авто-trust workspace внутри workspacesRoot (managed-каталоги).
         workspacesRoot: backendConfig.workspacesRoot,
       }),
       backendConfig.synth.instructions,
@@ -1355,11 +1355,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     }));
 
     // Глобальный SSE-хаб для всех сессий пользователя.
-    // AD-052: `events:watch` — scope service-key для подписки на поток событий.
+    // ADR-052: `events:watch` — scope service-key для подписки на поток событий.
     app.get('/api/v2/events', auth.requireAuth, scopeGuard('events:watch'), async (c) => {
       const user = (await auth.getCurrentUser(c))!;
       const signal = c.req.raw.signal;
-      // AD-052 (этап IV) / AD-089: машинный watcher (service-key со scope
+      // ADR-052 (этап IV) / ADR-089: машинный watcher (service-key со scope
       // `events:watch`) и роли сквозного обзора ADMIN/LEAD получают события ВСЕХ
       // сессий (паритет со standalone-core `subscribeAll`), обычный пользователь —
       // только своих. Без этого синтетический `service:<keyId>` шлюза не владеет
@@ -1496,7 +1496,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
             return;
           }
 
-          // AD-052 (этап IV) / AD-089: тот же watch-all, что у SSE. В WS-апгрейде
+          // ADR-052 (этап IV) / ADR-089: тот же watch-all, что у SSE. В WS-апгрейде
           // Hono-контекста нет, поэтому service-key распознаётся по синтетическому
           // id `service:<keyId>` (его ставит резолвер `getCurrentUser`); ADMIN/LEAD —
           // сквозной обзор. Обычный USER получает только свои сессии.
@@ -1537,7 +1537,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
             });
 
             /**
-             * AD-089 (P0): сессия, доступная текущему клиенту, либо `null`.
+             * ADR-089 (P0): сессия, доступная текущему клиенту, либо `null`.
              * Единое правило видимости (`isSessionVisible`) — владелец/участник
              * проекта; ADMIN/LEAD и service-key (allSessions) видят всё.
              * Недоступная чужая сессия неотличима от несуществующей.
@@ -1636,7 +1636,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
                   const once = typeof msg.once === 'boolean' ? msg.once : undefined;
 
                   (async () => {
-                    // AD-089 (P0): подтверждать права можно только в своей сессии.
+                    // ADR-089 (P0): подтверждать права можно только в своей сессии.
                     const session = await loadVisibleSession(sid);
                     if (!session) return;
                     eventBus.publish(sid, 'permission.replied', {
@@ -1655,7 +1655,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
                   (async () => {
                     // «Остановить таймер»: publish permission.hold — оркестратор снимает
                     // авто-отклонение по таймауту, запрос ждёт ответа пользователя.
-                    // AD-089 (P0): только для своей сессии.
+                    // ADR-089 (P0): только для своей сессии.
                     const session = await loadVisibleSession(sid);
                     if (!session) return;
                     eventBus.publish(sid, 'permission.hold', {
@@ -1709,19 +1709,19 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       orchestrator,
       queueManager,
       settingsStore,
-      // AD-089: ядро событий (понадобится на этапах 5–6).
+      // ADR-089: ядро событий (понадобится на этапах 5–6).
       eventRouter,
       requestSessionService,
       eventBindingStore,
       eventJournal,
       ingress: eventIngress,
-      // AD-051 (срез) / AD-089: реестр расписаний и планировщик.
+      // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик.
       scheduleStore,
       scheduler: schedulerService,
       stopScheduler: () => schedulerService.stop(),
       stopEphemeralSweeper,
       stopEventJournalPruner,
-      // AD-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
+      // ADR-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
       webhookStore,
       webhookService,
       stopWebhookService: () => webhookService.stop(),

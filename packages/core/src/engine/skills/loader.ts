@@ -5,11 +5,11 @@ import type { SkillSummary } from '@itphx/synth-shared';
 import { t as sm } from '../system-messages.js';
 import type { DiscoveredSkill, LoadedSkill } from './types.js';
 
-/** AD-046 §5: не более 10 supporting-файлов в выдаче тула `skill`. */
+/** ADR-046 §5: не более 10 supporting-файлов в выдаче тула `skill`. */
 export const MAX_SKILL_FILES = 10;
-/** AD-046 §5: обрезка вывода — 50 KB. */
+/** ADR-046 §5: обрезка вывода — 50 KB. */
 export const SKILL_MAX_BYTES = 50 * 1024;
-/** AD-046 §5: обрезка вывода — 2000 строк. */
+/** ADR-046 §5: обрезка вывода — 2000 строк. */
 export const SKILL_MAX_LINES = 2000;
 
 /** Рекурсивный список файлов скилла (относительные пути, без `SKILL.md`), отсортирован. */
@@ -59,7 +59,7 @@ export async function readSupportingFile(
 }
 
 /**
- * AD-046 §5: обрезка вывода тула `skill` — 50 KB / 2000 строк (локально,
+ * ADR-046 §5: обрезка вывода тула `skill` — 50 KB / 2000 строк (локально,
  * аналог ToolOutputStore).
  */
 export function truncateSkillOutput(content: string): string {
@@ -91,7 +91,7 @@ export function truncateSkillOutput(content: string): string {
 }
 
 /**
- * AD-046 §5 (по образцу opencode): `<skill_content>` + тело + base directory +
+ * ADR-046 §5 (по образцу opencode): `<skill_content>` + тело + base directory +
  * `<skill_files>` (до 10 путей, без содержимого).
  */
 export function buildSkillContentBlock(

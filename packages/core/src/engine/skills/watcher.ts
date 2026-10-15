@@ -3,13 +3,13 @@ import { join } from 'node:path';
 import { filesSignature } from '../file-signature.js';
 
 /**
- * AD-046 §8.3 / решение 2: ленивая инвалидация кэша скиллов по mtime.
+ * ADR-046 §8.3 / решение 2: ленивая инвалидация кэша скиллов по mtime.
  *
  * `fs.watch`/chokidar не используются: реестр при каждом обращении сравнивает
  * дешёвую подпись каталога-источника с сохранённой и пере-сканирует только при
  * изменении. Явный `POST /api/v2/skills/reload` вызывает `SkillRegistry.reload()`.
  *
- * Тонкая обёртка над общим `filesSignature` (AD-069 §3.5/R5).
+ * Тонкая обёртка над общим `filesSignature` (ADR-069 §3.5/R5).
  */
 export class SkillWatcher {
   private readonly _snapshots = new Map<string, string>();

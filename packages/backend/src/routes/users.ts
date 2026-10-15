@@ -33,7 +33,7 @@ export function createUserRoutes(kit: AuthKit, profiles: ProfileStore): Hono {
   });
 
   // GET /api/v2/users/:id — детали пользователя (ADMIN или scope `users:read`).
-  // AD-089/O1: отдаёт `identities` профиля (snake_case) — нужно аддонам для
+  // ADR-089/O1: отдаёт `identities` профиля (snake_case) — нужно аддонам для
   // адресации внешних идентичностей машинной кредой.
   app.get('/:id', requireAdminOrScope('users:read'), async (c) => {
     const id = c.req.param('id');

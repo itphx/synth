@@ -53,7 +53,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
 
   createSession: async (data) => {
     try {
-      // Переносим глобальные дефолты маршрутизации (AD-034) в новую сессию,
+      // Переносим глобальные дефолты маршрутизации (ADR-034) в новую сессию,
       // если вызывающий код явно не передал settings.
       const session = await synthApi.createSession({
         ...data,
@@ -162,7 +162,7 @@ export const useSessionsStore = create<SessionsStore>((set, get) => ({
     }
   },
 
-  // Plan/Act режим сессии (AD-025): PATCH /sessions/:id { mode }
+  // Plan/Act режим сессии (ADR-025): PATCH /sessions/:id { mode }
   // Бросает ошибку при неудаче — вызывающий код решает, что показать.
   setSessionMode: async (sessionId, mode) => {
     try {

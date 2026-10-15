@@ -13,7 +13,7 @@ const rule = (overrides: Partial<UpsertRouteRuleInput> = {}): UpsertRouteRuleInp
   ...overrides,
 });
 
-describe('RouteRuleStore (AD-089)', () => {
+describe('RouteRuleStore (ADR-089)', () => {
   let store: RouteRuleStore;
   let tmpDir: string;
 

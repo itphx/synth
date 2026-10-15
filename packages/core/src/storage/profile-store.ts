@@ -6,7 +6,7 @@ import type { ProfileStore, CreateProfileParams } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
 import { info, warning } from '../logger.js';
 
-/** AD-089: сериализация внешней идентичности профиля (snake_case, как остальной JSON). */
+/** ADR-089: сериализация внешней идентичности профиля (snake_case, как остальной JSON). */
 interface SerializedIdentity {
   provider: string;
   external_id: string;
@@ -29,7 +29,7 @@ interface SerializedProfile {
   interview_completed: boolean;
   interview_completed_at?: string;
   display_name?: string;
-  /** AD-089: внешние идентичности; отсутствие у legacy-профиля → `[]`. */
+  /** ADR-089: внешние идентичности; отсутствие у legacy-профиля → `[]`. */
   identities: SerializedIdentity[];
   created_at: string;
   updated_at: string;
@@ -61,7 +61,7 @@ export class FileProfileStore implements ProfileStore {
       interview_completed: profile.interviewCompleted,
       interview_completed_at: profile.interviewCompletedAt,
       display_name: profile.displayName,
-      // AD-089: инициализируем `identities` при записи (legacy-профиль без поля).
+      // ADR-089: инициализируем `identities` при записи (legacy-профиль без поля).
       identities: (profile.identities ?? []).map((i) => ({
         provider: i.provider,
         external_id: i.externalId,
@@ -86,7 +86,7 @@ export class FileProfileStore implements ProfileStore {
     const interviewCompletedAt = data.interview_completed_at
       ?? (legacyInterview ? data.updated_at : undefined);
 
-    // AD-089: legacy-профиль без `identities` → пустой список.
+    // ADR-089: legacy-профиль без `identities` → пустой список.
     const identities: ExternalIdentity[] = (data.identities ?? []).map((i) => ({
       provider: i.provider,
       externalId: i.external_id,
@@ -221,7 +221,7 @@ export class FileProfileStore implements ProfileStore {
   }
 
   /**
-   * AD-089: профиль, к которому привязана идентичность `provider`+`externalId`.
+   * ADR-089: профиль, к которому привязана идентичность `provider`+`externalId`.
    * Инвариант уникальности: пара не более чем у одного профиля. Масштаб мал —
    * полный перебор `listProfiles`.
    */
@@ -233,7 +233,7 @@ export class FileProfileStore implements ProfileStore {
   }
 
   /**
-   * AD-089: привязать внешнюю идентичность к профилю (идемпотентно).
+   * ADR-089: привязать внешнюю идентичность к профилю (идемпотентно).
    * Возвращает обновлённый профиль; `null` — профиля нет либо пара уже занята
    * **другим** профилем (конфликт, не перезаписываем). Повторная привязка той же
    * пары к тому же профилю — no-op (возвращаем профиль без записи).
@@ -256,7 +256,7 @@ export class FileProfileStore implements ProfileStore {
   }
 
   /**
-   * AD-089: отвязать внешнюю идентичность. Возвращает обновлённый профиль;
+   * ADR-089: отвязать внешнюю идентичность. Возвращает обновлённый профиль;
    * `null` — профиля нет или идентичность не найдена (ничего не удалено).
    */
   async unlinkIdentity(userId: string, provider: string, externalId: string): Promise<ProfileData | null> {

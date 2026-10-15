@@ -6,7 +6,7 @@ import { nowISO } from '@itphx/synth-shared';
 import type { IdentityClaimStore } from '../../storage/identity-claim-store.js';
 
 /**
- * AD-089: маршруты идентичностей текущего пользователя (`/api/v2/me/identities`).
+ * ADR-089: маршруты идентичностей текущего пользователя (`/api/v2/me/identities`).
  * Единая реализация для core (standalone) и backend (managed).
  *
  * ВАЖНО: резолвер `opts.resolveProfileId` возвращает **id профиля**
@@ -34,11 +34,11 @@ export interface IdentityRoutesAuth {
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы. */
 export interface IdentityRouteMessages {
   identityNotFound: (c: Context) => string;
-  /** AD-089 (claim-flow): код неизвестен/истёк/использован. */
+  /** ADR-089 (claim-flow): код неизвестен/истёк/использован. */
   claimNotFound: (c: Context) => string;
-  /** AD-089 (claim-flow): идентичность уже привязана к другому профилю. */
+  /** ADR-089 (claim-flow): идентичность уже привязана к другому профилю. */
   claimConflict: (c: Context) => string;
-  /** AD-089 (claim-flow): пустой код подтверждения. */
+  /** ADR-089 (claim-flow): пустой код подтверждения. */
   claimCodeRequired: (c: Context) => string;
   /** Не удалось определить профиль текущего пользователя (пустой id). */
   unauthorized: (c: Context) => string;
@@ -65,12 +65,12 @@ export interface IdentityRoutesOptions {
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<IdentityRouteMessages>;
   /**
-   * AD-089 (claim-flow): хранилище одноразовых claim-кодов. Не передан —
+   * ADR-089 (claim-flow): хранилище одноразовых claim-кодов. Не передан —
    * `POST /identities/claim` не определяется (роут неактивен).
    */
   claimStore?: IdentityClaimStore;
   /**
-   * AD-089 (claim-flow): необязательный rate-limit guard на `POST /identities/claim`
+   * ADR-089 (claim-flow): необязательный rate-limit guard на `POST /identities/claim`
    * (per-user, напр. fixed window 60 c) — защита 6-символьного одноразового кода
    * от брутфорса. Core/backend передают свой middleware (в core — поверх
    * `KeyRateLimiter`, в backend — `createRateLimiter`); без него роут работает
@@ -80,7 +80,7 @@ export interface IdentityRoutesOptions {
 }
 
 /**
- * AD-089: список, отвязка и подтверждение внешних идентичностей текущего
+ * ADR-089: список, отвязка и подтверждение внешних идентичностей текущего
  * пользователя.
  *
  * - `GET /identities` → `{ identities: ExternalIdentity[] }`;
@@ -134,7 +134,7 @@ export function createIdentityRoutes(
   if (opts.claimStore) {
     const claimStore = opts.claimStore;
 
-    // AD-089 (claim-flow): анти-брутфорс одноразового кода — rate-limit guard
+    // ADR-089 (claim-flow): анти-брутфорс одноразового кода — rate-limit guard
     // (per-user) до обработчика. Регистрируется до роута, поэтому применяется
     // к `POST /identities/claim` (guard ключуется по аутентификации, не по IP).
     if (opts.rateLimitGuard) {
@@ -173,7 +173,7 @@ export function createIdentityRoutes(
         );
       }
 
-      // AD-089: идентичность привязывается к текущему профилю; конфликт с другим
+      // ADR-089: идентичность привязывается к текущему профилю; конфликт с другим
       // профилем (`linkIdentity` вернул `null`) → 409. Пара берётся из серверной
       // записи claim, не из тела запроса — подставить чужой id нельзя.
       const identity: ExternalIdentity = {

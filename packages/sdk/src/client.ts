@@ -1,5 +1,5 @@
 /**
- * @itphx/synth-sdk — типизированный клиент публичного API Synth (AD-052).
+ * @itphx/synth-sdk — типизированный клиент публичного API Synth (ADR-052).
  *
  * Runtime-agnostic: использует глобальный `fetch` (инъекция — для тестов и
  * кастомных рантаймов), ESM-only, без Node-only импортов на верхнем уровне.
@@ -50,7 +50,7 @@ export interface SynthClientOptions {
   token?: string;
   /** API-ключ инстанса (`SYNTH_API_KEY`). */
   apiKey?: string;
-  /** Scoped service-key `synth_svc_…` (AD-052). */
+  /** Scoped service-key `synth_svc_…` (ADR-052). */
   serviceKey?: string;
   /** Инъекция fetch (тесты/нестандартные рантаймы); по умолчанию — глобальный `fetch`. */
   fetch?: typeof fetch;
@@ -83,7 +83,7 @@ export interface ScheduleJobsParams {
   limit?: number;
 }
 
-/** Namespace `events` (AD-089). */
+/** Namespace `events` (ADR-089). */
 export interface EventsNamespace {
   /** Приём внешнего события (`POST /events`). */
   ingest(body: EventIngestRequest): Promise<EventIngestResponse>;
@@ -125,7 +125,7 @@ export interface SessionsNamespace {
   status(id: string): Promise<SessionStatusResponse>;
 }
 
-/** Namespace `schedules` (AD-051). */
+/** Namespace `schedules` (ADR-051). */
 export interface SchedulesNamespace {
   list(): Promise<Schedule[]>;
   create(body: ScheduleInput): Promise<Schedule>;
@@ -135,7 +135,7 @@ export interface SchedulesNamespace {
   jobs(id: string, params?: ScheduleJobsParams): Promise<ScheduleJob[]>;
 }
 
-/** Namespace `llm` (OpenAI-совместимый прокси, AD-036). */
+/** Namespace `llm` (OpenAI-совместимый прокси, ADR-036). */
 export interface LlmNamespace {
   chatCompletions(body: ChatCompletionsRequest): Promise<ChatCompletionsResponse>;
 }

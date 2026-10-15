@@ -11,7 +11,7 @@ ProviderFactory.register('anthropic', AnthropicProvider);
 ProviderFactory.register('ollama', OllamaProvider);
 ProviderFactory.register('remote', RemoteProvider);
 ProviderFactory.register('synth-server', RemoteProvider);
-// AD-084: decision-модели (System One) — единый не-чат адаптер с двумя
+// ADR-084: decision-модели (System One) — единый не-чат адаптер с двумя
 // протоколами: `decision` (RouterAI, /decisions) и `systemone` (Ollama, /v1/systemone).
 ProviderFactory.register('decision', DecisionProvider);
 ProviderFactory.register('systemone', DecisionProvider);

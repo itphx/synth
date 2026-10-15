@@ -13,7 +13,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('toSnakeCase / envOverrideName (AD-023)', () => {
+describe('toSnakeCase / envOverrideName (ADR-023)', () => {
   it('camelCase → SNAKE_CASE', () => {
     expect(toSnakeCase('autoBind')).toBe('AUTO_BIND');
     expect(toSnakeCase('ephemeralTtl')).toBe('EPHEMERAL_TTL');
@@ -40,7 +40,7 @@ describe('toSnakeCase / envOverrideName (AD-023)', () => {
   });
 });
 
-describe('parseEnvValue (AD-023)', () => {
+describe('parseEnvValue (ADR-023)', () => {
   it('boolean: true/1/false/0 регистронезависимо', () => {
     expect(parseEnvValue('true', 'boolean')).toEqual({ ok: true, value: true });
     expect(parseEnvValue('TRUE', 'boolean')).toEqual({ ok: true, value: true });
@@ -82,7 +82,7 @@ describe('parseEnvValue (AD-023)', () => {
   });
 });
 
-describe('applyEnvOverrides (AD-023)', () => {
+describe('applyEnvOverrides (ADR-023)', () => {
   function makeConfig(): Record<string, unknown> {
     return {
       events: { enabled: true, autoBind: false, ephemeralTtl: '24h', journalRetentionDays: 30 },
@@ -165,10 +165,10 @@ describe('applyEnvOverrides (AD-023)', () => {
 });
 
 /**
- * AD-052/O1: installer service-key'и из env (`SYNTH_BOOTSTRAP_SERVICE_KEYS`,
+ * ADR-052/O1: installer service-key'и из env (`SYNTH_BOOTSTRAP_SERVICE_KEYS`,
  * JSON). Секрет передаётся из env/Secret, а не из config.yaml.
  */
-describe('applyObjectEnvOverrides (AD-052/O1)', () => {
+describe('applyObjectEnvOverrides (ADR-052/O1)', () => {
   function makeConfig(): Record<string, unknown> {
     return { security: { secretKey: '', bootstrapServiceKeys: [] } };
   }

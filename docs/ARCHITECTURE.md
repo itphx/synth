@@ -14,8 +14,8 @@ Synth состоит из шести пакетов в монорепозито�
 | **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, CLI, HTTP API v2 | TypeScript, Hono |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
-| **@itphx/synth-sdk** | Типизированный клиент публичного API (AD-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
-| **@itphx/synth** | Публикуемая тонкая CLI-обёртка (`bin: synth`) над core/ui/shared (AD-038). Не бандлит core, не копирует ассеты | TypeScript, commander |
+| **@itphx/synth-sdk** | Типизированный клиент публичного API (ADR-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
+| **@itphx/synth** | Публикуемая тонкая CLI-обёртка (`bin: synth`) над core/ui/shared (ADR-038). Не бандлит core, не копирует ассеты | TypeScript, commander |
 
 Публичный HTTP-контракт описан **public-OpenAPI**-спекой (28 операций интеграционного ядра,
 `packages/core/src/server/openapi/public-openapi.ts`, отдаётся `GET /api/v2/openapi.json`); SDK её
@@ -45,7 +45,7 @@ flowchart TB
         providers["Любой OpenAI-совместимый"]
     end
 
-    subgraph PublicClients["Публичные клиенты (AD-052)"]
+    subgraph PublicClients["Публичные клиенты (ADR-052)"]
         synth_sdk["@itphx/synth-sdk — клиент публичного API"]
     end
 
@@ -98,7 +98,7 @@ synth-ui (localhost) ←→ synth-core (:4300)
 ### Локальный + внешние движки (планируется)
 
 Внешние движки (opencode/cline) через встроенный Runner-мост — **не реализовано**
-(план: AD-018, AD-050). В ядре остаётся плумбинг: флаг `serve --runner` и секция
+(план: ADR-018, PROP-050). В ядре остаётся плумбинг: флаг `serve --runner` и секция
 конфига `runner`, но адаптеров движков и маршрутизации нет; фактическое исполнение
 идёт собственным движком `synth`.
 
@@ -111,7 +111,7 @@ synth-ui (localhost) ←→ synth-core (:4300)
 Локальный core становится **агрегатором двух миров**: локальные и удалённые
 (backend) проекты/сессии доступны из одного локального UI. Удалённые сессии
 исполняются сервером, локальные — локальным движком, но их LLM-запросы идут
-через **LLM Proxy** на сервере (централизованные ключи, модели и аудит, AD-036).
+через **LLM Proxy** на сервере (централизованные ключи, модели и аудит, ADR-036).
 
 ```mermaid
 flowchart LR
@@ -130,7 +130,7 @@ flowchart LR
         Backend["@itphx/synth-backend (:5000)"]
         OIDC["OIDC / Keycloak (device flow)"]
         LLMProxy["LLM Proxy: POST /api/v2/llm/chat/completions"]
-        Gateway["Gateway AD-036 (аудит, обфускация, rate limit)"]
+        Gateway["Gateway ADR-036 (аудит, обфускация, rate limit)"]
         Providers["Центральные провайдеры (ключи на сервере)"]
         RemoteSessions["Удалённые сессии (ChatOrchestrator)"]
         SSE["События: GET /api/v2/events (SSE)"]
@@ -156,7 +156,7 @@ flowchart LR
   SSE сервера в локальный EventBus; события удалённых сессий переписываются в
   `remote:<id>` и доходят до UI.
 - **LLM Proxy** (`packages/backend/src/routes/llm.ts`) — OpenAI-совместимый
-  `POST /api/v2/llm/chat/completions`; прогоняет запросы через Gateway (AD-036).
+  `POST /api/v2/llm/chat/completions`; прогоняет запросы через Gateway (ADR-036).
   При `remote.llm: server` локальные провайдеры запрещены полностью.
 - **publish / fork** (`packages/core/src/remote/transfer.ts`) —
   `synth project publish <id> --remote` (локальный проект → сервер) и
@@ -186,14 +186,14 @@ synth/
     ├── core/     → @itphx/synth-core
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
-    ├── sdk/      → @itphx/synth-sdk (клиент публичного API, AD-052)
+    ├── sdk/      → @itphx/synth-sdk (клиент публичного API, ADR-052)
     └── synth/    → @itphx/synth (тонкая CLI-обёртка, bin: synth)
 ```
 
 ## Модель «Runner» (планируется)
 
 Мост между бэкендом и внешними движками (opencode/cline) — **не реализован**
-(план: AD-018, AD-050). Задуманный раннер поднимает LLM Proxy и маршрутизирует
+(план: ADR-018, PROP-050). Задуманный раннер поднимает LLM Proxy и маршрутизирует
 запросы в выбранный движок; движки stateless (история — на бэкенде).
 
 ## Stateless модель движка
@@ -213,13 +213,13 @@ synth/
 
 ## Внешние события и хуки
 
-Ядро AD-030 (min) + AD-089: события агента и внешние события идут через общую
+Ядро ADR-030 (min) + ADR-089: события агента и внешние события идут через общую
 hook-шину, а создание сессий сведено в один funnel.
 
 - **`HookBus`** (`engine/hooks/hook-bus.ts`) — шина хуков жизненного цикла агента
   (`session_requested`, `external_event`, …); async-хуки с таймаутом
   (`HOOK_ASYNC_TIMEOUT_MS`), результат может заблокировать событие (`blocked`/`reason`).
-  Это фундамент; Plugin SDK и загрузка плагинов (AD-090) не реализованы.
+  Это фундамент; Plugin SDK и загрузка плагинов (PROP-090) не реализованы.
 - **`EventRouter`** (`engine/events/event-router.ts`) — чистое решение по событию
   плюс запись в журнал. Порядок `decide`: `allowedSources` (не в списке → `drop`) →
   dedup по `dedupKey` (ленивый кэш из журнала) → явный `EventBinding` по
@@ -227,8 +227,8 @@ hook-шину, а создание сессий сведено в один funne
   фоллбек `drop no_route`. Все дропы «аудируемые» — событие не теряется молча.
 - **`EventBinding`** (`bound | ephemeral | queue`) связывает внешний адрес
   (`source` + `chatKey`/`threadKey`) с сессией/шаблоном; хранится в
-  `EventBindingStore`, решения — в `EventJournalStore` (журнал, AD-005).
-- **API-ключи привязок** (`EventApiKeyStore`, `{dataDir}/events/api-keys.json`, AD-089/AD-052) —
+  `EventBindingStore`, решения — в `EventJournalStore` (журнал, ADR-005).
+- **API-ключи привязок** (`EventApiKeyStore`, `{dataDir}/events/api-keys.json`, ADR-089/ADR-052) —
   первый срез публичного API: обязательная уникальная (глобально) метка `label` +
   `description`/`expiresAt`/`rateLimitPerMinute`, мягкий отзыв (`revoke`); секрет
   `synth_evt_<base64url>` хранится только как sha256-хеш,
@@ -236,7 +236,7 @@ hook-шину, а создание сессий сведено в один funne
   аутентифицирует без пользовательских кред (source/чат из привязки), использование пишется
   в журнал (`keyId`); per-key rate limit — лимит ключа либо глобальный `events.keyRateLimitPerMinute`
   (`KeyRateLimiter`, 429); ключи — инстанс-локальные (не переносятся publish/fork).
-- **Service-key** (`ServiceApiKeyStore`, `{dataDir}/service-keys.json`, AD-052 этап I) — независимый
+- **Service-key** (`ServiceApiKeyStore`, `{dataDir}/service-keys.json`, ADR-052 этап I) — независимый
   от binding-key scoped-ключ инстанса для внешних сервисов: секрет `synth_svc_<base64url>` (at-rest
   sha256), обязательная уникальная `label`, `roles`/`scopes`/`allowedProjects` (проектная проекция)/
   срок/лимит; аутентифицирует машину в синтетического пользователя, `scopes` ограничивают эндпоинты
@@ -249,7 +249,7 @@ hook-шину, а создание сессий сведено в один funne
   эндпоинта не изменился.
 - **`EventIngress`** (`engine/events/ingest.ts`) — точка приёма: нормализует вход в
   `SynthEvent` (id `evt_<uuid>`, дефолтный dedup-ключ) и передаёт в funnel.
-- **Webhooks** (`WebhookStore` + `WebhookService`, AD-052 этап II) — **исходящий** мост,
+- **Webhooks** (`WebhookStore` + `WebhookService`, ADR-052 этап II) — **исходящий** мост,
   обратный контур к входящим событиям: `WebhookService` подписывается на все события шины
   (`eventBus.subscribeAll`), фильтрует их паттернами подписки (`matchWebhookEvent`) и шлёт
   подписчикам HTTP-POST с HMAC-SHA256-подписью; retry/backoff с джиттером, дедуп по
@@ -269,8 +269,8 @@ hook-шину, а создание сессий сведено в один funne
 ```
 
 API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `docs/CONFIGURATION.md`
-(секция `events`). Источники/интеграции: шедулер AD-051 (cron), API-ключи привязок, service-key
+(секция `events`). Источники/интеграции: шедулер ADR-051 (cron), API-ключи привязок, service-key
 со scopes/проектной проекцией, webhooks, public-OpenAPI (28 операций, `GET /api/v2/openapi.json`)
-и SDK `@itphx/synth-sdk` — **AD-052 закрыт целиком (этапы I–IV: включая перевод Telegram-шлюза
+и SDK `@itphx/synth-sdk` — **ADR-052 закрыт целиком (этапы I–IV: включая перевод Telegram-шлюза
 на scoped service-key)**; первый add-on — Telegram-шлюз (`addons/synth-gateway-telegram`) —
-реализован; не реализованы плагины (Plugin SDK, AD-090) и пайплайны (AD-059).
+реализован; не реализованы плагины (Plugin SDK, PROP-090) и пайплайны (PROP-059).

@@ -10,7 +10,7 @@ import { rotateSecretsMasterKey } from './rotate.js';
 const SECRET_MARKER = 'SUPERSECRETPRIVATEKEYMATERIAL';
 const SAMPLE_KEY = `-----BEGIN OPENSSH PRIVATE KEY-----\n${SECRET_MARKER}\n-----END OPENSSH PRIVATE KEY-----`;
 
-describe('rotateSecretsMasterKey (AD-076)', () => {
+describe('rotateSecretsMasterKey (ADR-076)', () => {
   let tmpDir: string;
   let oldKey: Buffer;
 

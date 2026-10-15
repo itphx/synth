@@ -4,7 +4,7 @@ import type { FsError, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
 import { FsErrorCode } from '@itphx/synth-shared';
 
 /**
- * AD-075: единая (core) реализация резолва workspace проекта и детекта
+ * ADR-075: единая (core) реализация резолва workspace проекта и детекта
  * бинарных файлов для FS-эндпоинтов. Перенесено из backend
  * (`routes/fs.ts`/`lib/workspace-resolver.ts`) в рамках унификации: backend
  * монтирует core-`createFsRoutes` и передаёт `getProjectWorkspace`.
@@ -22,7 +22,7 @@ export interface ResolveProjectWorkspaceOptions {
   getProject: (projectId: string) => Promise<{ workspace?: string } | null>;
   /**
    * Политика путей вне `workspacesRoot`: `deny` (managed — 403), иначе абсолютный
-   * workspace вне root разрешается (standalone, AD-075). По умолчанию — `deny`.
+   * workspace вне root разрешается (standalone, ADR-075). По умолчанию — `deny`.
    */
   outsideRootPolicy?: () => WorkspaceOutsideRootPolicy;
   /**
@@ -33,7 +33,7 @@ export interface ResolveProjectWorkspaceOptions {
 }
 
 /**
- * AD-075: резолв абсолютного каталога workspace проекта.
+ * ADR-075: резолв абсолютного каталога workspace проекта.
  * - относительный `project.workspace` → от `workspacesRoot`;
  * - абсолютный внутри root → как есть; вне root — по политике (`deny` → 403);
  * - containment через `relative` (соседний `rootfoo` не считается внутри root).

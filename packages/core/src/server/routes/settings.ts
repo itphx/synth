@@ -13,7 +13,7 @@ import { decisionMetrics } from '../../engine/router/decision-metrics.js';
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
 type Middleware = ReturnType<typeof createMiddleware>;
 
-/** AD-072 Ф2: эффективные дефолты LLM Gateway (config.yaml без runtime). */
+/** ADR-072 Ф2: эффективные дефолты LLM Gateway (config.yaml без runtime). */
 const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
   enabled: false,
   inputMode: 'obfuscate',
@@ -21,7 +21,7 @@ const DEFAULT_LLM_GATEWAY: LlmGatewayRuntimeSettings = {
   rateLimit: { ...DEFAULT_LLM_GATEWAY_RATE_LIMIT },
 };
 
-/** AD-072 Ф2: дефолты секции «Безопасность» (config.yaml без runtime). */
+/** ADR-072 Ф2: дефолты секции «Безопасность» (config.yaml без runtime). */
 function resolveSecurityDefaults(fallback?: Partial<SecurityRuntimeSettings>): {
   protectedPaths: { enabled: boolean };
   askTimeoutMs: number;
@@ -32,7 +32,7 @@ function resolveSecurityDefaults(fallback?: Partial<SecurityRuntimeSettings>): {
   };
 }
 
-/** AD-072 Ф2: дефолты LLM Gateway (config.yaml без runtime), вложенный rateLimit мёржится по полям. */
+/** ADR-072 Ф2: дефолты LLM Gateway (config.yaml без runtime), вложенный rateLimit мёржится по полям. */
 function resolveLlmGatewayDefaults(fallback?: Partial<LlmGatewayRuntimeSettings>): LlmGatewayRuntimeSettings {
   return {
     enabled: fallback?.enabled ?? DEFAULT_LLM_GATEWAY.enabled,
@@ -45,7 +45,7 @@ function resolveLlmGatewayDefaults(fallback?: Partial<LlmGatewayRuntimeSettings>
   };
 }
 
-/** AD-072 Ф2: runtime-поле присутствует в settings.json (объект с хотя бы одним ключом / скаляр). */
+/** ADR-072 Ф2: runtime-поле присутствует в settings.json (объект с хотя бы одним ключом / скаляр). */
 function hasOverride(value: unknown): boolean {
   if (value === undefined || value === null) return false;
   if (typeof value === 'object' && !Array.isArray(value)) {
@@ -54,7 +54,7 @@ function hasOverride(value: unknown): boolean {
   return true;
 }
 
-/** AD-089: эффективные дефолты раздела «События» (config без runtime). */
+/** ADR-089: эффективные дефолты раздела «События» (config без runtime). */
 function resolveEventsDefaults(fallback?: Partial<EventsRuntimeSettings>): EventsRuntimeSettings {
   const base = defaultConfig.events;
   return {
@@ -72,7 +72,7 @@ function resolveEventsDefaults(fallback?: Partial<EventsRuntimeSettings>): Event
   };
 }
 
-/** AD-089: валидация runtime-настроек раздела «События» (частичный патч). */
+/** ADR-089: валидация runtime-настроек раздела «События» (частичный патч). */
 function validateEventsSettings(
   value: unknown,
 ): { ok: true; value: Partial<EventsRuntimeSettings> } | { ok: false; message: string } {
@@ -155,7 +155,7 @@ function validateEventsSettings(
   return { ok: true, value: result };
 }
 
-/** AD-089: эффективные события = дефолты (config) поверх runtime-патча. */
+/** ADR-089: эффективные события = дефолты (config) поверх runtime-патча. */
 function effectiveEvents(
   defaults: EventsRuntimeSettings,
   runtime: Partial<EventsRuntimeSettings>,
@@ -175,7 +175,7 @@ function effectiveEvents(
   };
 }
 
-/** AD-084: эффективные дефолты decision-слоя (config без runtime). */
+/** ADR-084: эффективные дефолты decision-слоя (config без runtime). */
 function resolveDecisionDefaults(fallback?: Partial<DecisionRuntimeSettings>): DecisionConfig {
   const base = defaultConfig.decision;
   return {
@@ -188,7 +188,7 @@ function resolveDecisionDefaults(fallback?: Partial<DecisionRuntimeSettings>): D
   };
 }
 
-/** AD-084: валидация runtime-настроек decision-слоя (частичный патч). */
+/** ADR-084: валидация runtime-настроек decision-слоя (частичный патч). */
 function validateDecisionSettings(
   value: unknown,
 ): { ok: true; value: Partial<DecisionRuntimeSettings> } | { ok: false; message: string } {
@@ -232,7 +232,7 @@ function validateDecisionSettings(
   return { ok: true, value: result };
 }
 
-/** AD-084: эффективный decision-конфиг = дефолты (config) поверх runtime-патча. */
+/** ADR-084: эффективный decision-конфиг = дефолты (config) поверх runtime-патча. */
 function effectiveDecision(
   defaults: DecisionConfig,
   runtime: Partial<DecisionRuntimeSettings>,
@@ -252,32 +252,32 @@ export interface SettingsRoutesDeps {
   settingsStore: RuntimeSettingsStore;
   /** Значение по умолчанию (env > config > {dataDir}/workspaces/default), если runtime-настройка не задана. */
   fallbackWorkspace: string;
-  /** AD-072 Ф2: дефолт LLM Gateway из config.yaml (без runtime) для GET/DELETE /llm-gateway. */
+  /** ADR-072 Ф2: дефолт LLM Gateway из config.yaml (без runtime) для GET/DELETE /llm-gateway. */
   fallbackLlmGateway?: Partial<LlmGatewayRuntimeSettings>;
-  /** AD-072 Ф2: дефолт секции «Безопасность» из config.yaml для GET/DELETE /security. */
+  /** ADR-072 Ф2: дефолт секции «Безопасность» из config.yaml для GET/DELETE /security. */
   fallbackSecurity?: Partial<SecurityRuntimeSettings>;
   /** Вызывается после успешного PUT /llm-gateway (live-применение runtime-настройки). */
   onLlmGatewayChange?: (runtime: Partial<LlmGatewayRuntimeSettings>) => void | Promise<void>;
   /** Вызывается после успешного PUT /security (live-применение тумблера защищённых путей). */
   onSecurityChange?: (runtime: Partial<SecurityRuntimeSettings>) => void | Promise<void>;
-  /** AD-071 §2.3: значение tools.policy из config.yaml (если runtime не задан). */
+  /** ADR-071 §2.3: значение tools.policy из config.yaml (если runtime не задан). */
   fallbackToolsPolicy?: ToolsPolicy;
   /** Вызывается после успешного PUT /tools-policy (live-применение политики встроенных инструментов). */
   onToolsPolicyChange?: (policy: ToolsPolicy) => void | Promise<void>;
-  /** AD-071 §2.3: значение mcp.policy из config.yaml (если runtime не задан). */
+  /** ADR-071 §2.3: значение mcp.policy из config.yaml (если runtime не задан). */
   fallbackMcpPolicy?: ToolsPolicy;
   /** Вызывается после успешного PUT /mcp-policy (live-применение политики MCP-инструментов). */
   onMcpPolicyChange?: (policy: ToolsPolicy) => void | Promise<void>;
-  /** AD-071 §2.3.1: значение mcp.networkPolicy из config.yaml (если runtime не задан). */
+  /** ADR-071 §2.3.1: значение mcp.networkPolicy из config.yaml (если runtime не задан). */
   fallbackMcpNetworkPolicy?: McpNetworkPolicy;
   /** Вызывается после успешного PUT /mcp-network-policy (live-применение). */
   onMcpNetworkPolicyChange?: (policy: McpNetworkPolicy) => void | Promise<void>;
-  /** AD-071 §2.6: значение tools.disabled из config.yaml (если runtime не задан). */
+  /** ADR-071 §2.6: значение tools.disabled из config.yaml (если runtime не задан). */
   fallbackToolsDisabled?: ToolsDisabledConfig;
   /** Вызывается после успешного PUT /tools-disabled (live-применение). */
   onToolsDisabledChange?: (config: ToolsDisabledConfig) => void | Promise<void>;
   /**
-   * AD-071 §2.6: известные инструменты (имя → capabilities) для защиты
+   * ADR-071 §2.6: известные инструменты (имя → capabilities) для защиты
    * `runtime`-тулов от отключения. Не задан — проверка по имени пропускается
    * (capability `runtime` всё равно отклоняется).
    */
@@ -289,26 +289,26 @@ export interface SettingsRoutesDeps {
   /** Вызывается после успешного PUT /default-agent (live-применение). */
   onDefaultAgentChange?: (id: string) => void | Promise<void>;
   /**
-   * AD-075: дефолт политики для абсолютного workspace вне `workspacesRoot`
+   * ADR-075: дефолт политики для абсолютного workspace вне `workspacesRoot`
    * (config.yaml/env), если runtime-настройка не задана. По умолчанию — `confirm`.
    */
   fallbackWorkspaceOutsideRootPolicy?: WorkspaceOutsideRootPolicy;
   /** Вызывается после успешного PUT /workspace-policy (live-применение в роутах проектов). */
   onWorkspacePolicyChange?: (policy: WorkspaceOutsideRootPolicy) => void | Promise<void>;
   /**
-   * AD-075: managed-развёртывание — политика вне `workspacesRoot` задаётся
+   * ADR-075: managed-развёртывание — политика вне `workspacesRoot` задаётся
    * развёртыванием (`fallbackWorkspaceOutsideRootPolicy: 'deny'`). При `true`
    * GET отдаёт fallback без override + `readOnly: true`, а PUT/DELETE → 403
    * `WORKSPACE_POLICY_READ_ONLY`. Standalone (по умолчанию `false`) не меняется.
    */
   workspacePolicyReadOnly?: boolean;
-  /** AD-089: дефолт раздела «События» из config.yaml для GET/DELETE-сброса. */
+  /** ADR-089: дефолт раздела «События» из config.yaml для GET/DELETE-сброса. */
   fallbackEvents?: Partial<EventsRuntimeSettings>;
-  /** AD-089: вызывается после успешного PUT/DELETE /events — live-применение. */
+  /** ADR-089: вызывается после успешного PUT/DELETE /events — live-применение. */
   onEventsChange?: (effective: EventsRuntimeSettings) => void | Promise<void>;
-  /** AD-084: дефолт decision-слоя из config.yaml для GET/DELETE-сброса. */
+  /** ADR-084: дефолт decision-слоя из config.yaml для GET/DELETE-сброса. */
   fallbackDecision?: Partial<DecisionRuntimeSettings>;
-  /** AD-084: вызывается после успешного PUT/DELETE /decision — live-применение. */
+  /** ADR-084: вызывается после успешного PUT/DELETE /decision — live-применение. */
   onDecisionChange?: (effective: DecisionConfig) => void | Promise<void>;
 }
 
@@ -326,7 +326,7 @@ export interface SettingsRoutesOptions {
   decisionWriteGuard?: Middleware;
 }
 
-/** AD-071 §2.3: валидна ли политика включения инструментов. */
+/** ADR-071 §2.3: валидна ли политика включения инструментов. */
 function isValidToolsPolicy(value: unknown): value is ToolsPolicy {
   return typeof value === 'string' && (TOOLS_POLICIES as readonly string[]).includes(value);
 }
@@ -339,7 +339,7 @@ function isValidAgentId(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && AGENT_ID_REGEX.test(value.trim());
 }
 
-/** AD-071 §2.3.1: валидна ли политика сетевого доступа MCP ({ mode, list }). */
+/** ADR-071 §2.3.1: валидна ли политика сетевого доступа MCP ({ mode, list }). */
 function isValidMcpNetworkPolicy(value: unknown): value is McpNetworkPolicy {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const p = value as Record<string, unknown>;
@@ -349,7 +349,7 @@ function isValidMcpNetworkPolicy(value: unknown): value is McpNetworkPolicy {
 }
 
 /**
- * AD-071 §2.6: валидация `tools.disabled`. Структура — Zod-схемой
+ * ADR-071 §2.6: валидация `tools.disabled`. Структура — Zod-схемой
  * (`toolsDisabledSchema`), поэтому неизвестная capability отклоняется (закрытый
  * набор: опечатка молча ничего бы не отключила). Имена инструментов — свободные
  * строки (реестр динамический: MCP-тулы регистрируются лениво), но инструмент
@@ -476,7 +476,7 @@ function isValidProtectedPathsOverride(value: unknown): value is { version?: num
  * Настройки приложения для UI (раздел «Проекты»).
  *
  * GET/PUT /api/v2/settings/workspace — рабочий каталог по умолчанию.
- * Значение сохраняется в {dataDir}/settings.json (AD-005, атомарно) и
+ * Значение сохраняется в {dataDir}/settings.json (ADR-005, атомарно) и
  * переживает рестарт: при старте createStandaloneApp читает его и применяет
  * в приоритете над config.yaml.
  */
@@ -550,9 +550,9 @@ export function createSettingsRoutes(
   });
 
   /**
-   * GET/PUT /api/v2/settings/llm-gateway — глобальные настройки LLM Gateway (AD-036).
+   * GET/PUT /api/v2/settings/llm-gateway — глобальные настройки LLM Gateway (ADR-036).
    * Тумблер включается/выключается через UI (раздел «Шлюз безопасности», только ADMIN).
-   * Значение сохраняется в {dataDir}/settings.json (AD-005) и переживает рестарт.
+   * Значение сохраняется в {dataDir}/settings.json (ADR-005) и переживает рестарт.
    */
   app.get('/llm-gateway', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getLlmGatewaySettings();
@@ -583,7 +583,7 @@ export function createSettingsRoutes(
     }
 
     await deps.settingsStore.setLlmGatewaySettings(llmGateway);
-    // AD-036: live-применение runtime-настройки — оркестратор переконфигурируется без рестарта.
+    // ADR-036: live-применение runtime-настройки — оркестратор переконфигурируется без рестарта.
     await deps.onLlmGatewayChange?.(llmGateway);
     return c.json({ llmGateway });
   });
@@ -600,7 +600,7 @@ export function createSettingsRoutes(
    * GET/PUT /api/v2/settings/security — глобальные настройки секции «Безопасность».
    * Тумблер защищённых путей + глобальный таймаут подтверждения (askTimeoutMs)
    * настраиваются через UI (только ADMIN). Значение сохраняется в
-   * {dataDir}/settings.json (AD-005) и переживает рестарт.
+   * {dataDir}/settings.json (ADR-005) и переживает рестарт.
    */
   app.get('/security', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getSecuritySettings();
@@ -649,7 +649,7 @@ export function createSettingsRoutes(
   });
 
   /**
-   * GET/PUT /api/v2/settings/tools-policy — AD-071 §2.3: глобальная админская
+   * GET/PUT /api/v2/settings/tools-policy — ADR-071 §2.3: глобальная админская
    * политика включения инструментов (`consistency` | `available` | `auto`).
    * Runtime-значение ({dataDir}/settings.json) приоритетнее config.yaml;
    * per-session override — `session.settings.toolsPolicy`.
@@ -689,7 +689,7 @@ export function createSettingsRoutes(
   });
 
   /**
-   * GET/PUT /api/v2/settings/mcp-policy — AD-071 §2.3: глобальная админская
+   * GET/PUT /api/v2/settings/mcp-policy — ADR-071 §2.3: глобальная админская
    * политика включения **MCP**-инструментов (`consistency` | `available` |
    * `auto`). Независима от `tools.policy` (встроенные). Runtime-значение
    * ({dataDir}/settings.json) приоритетнее config.yaml `mcp.policy`;
@@ -729,7 +729,7 @@ export function createSettingsRoutes(
   });
 
   /**
-   * GET/PUT /api/v2/settings/mcp-network-policy — AD-071 §2.3.1: политика
+   * GET/PUT /api/v2/settings/mcp-network-policy — ADR-071 §2.3.1: политика
    * сетевого доступа пользовательских HTTP MCP-серверов (`allow`/`deny` +
    * список host/CIDR). Runtime-значение ({dataDir}/settings.json) приоритетнее
    * config.yaml `mcp.networkPolicy`; дефолт — deny приватных диапазонов.
@@ -811,7 +811,7 @@ export function createSettingsRoutes(
   });
 
   /**
-   * AD-075: GET/PUT/DELETE /api/v2/settings/workspace-policy — политика для
+   * ADR-075: GET/PUT/DELETE /api/v2/settings/workspace-policy — политика для
    * абсолютного `project.workspace` вне `workspacesRoot` (`confirm` | `deny`).
    * Runtime-значение ({dataDir}/settings.json) приоритетнее config.yaml/env;
    * на managed-развёртывании (`workspacePolicyReadOnly: true`) — строго
@@ -866,7 +866,7 @@ export function createSettingsRoutes(
   });
 
   /**
-   * GET/PUT /api/v2/settings/tools-disabled — AD-071 §2.6: instance-wide
+   * GET/PUT /api/v2/settings/tools-disabled — ADR-071 §2.6: instance-wide
    * жёсткое отключение инструментов администратором (`capabilities` + `tools`).
    * Отключённые тулы не попадают в запрос независимо от `tools.policy`;
    * `runtime`-capability (ядро сессии) неотключаема. Runtime-значение
@@ -960,7 +960,7 @@ export function createSettingsRoutes(
   });
 
   /**
-   * AD-089: GET/PUT/DELETE /api/v2/settings/events — runtime-настройки раздела
+   * ADR-089: GET/PUT/DELETE /api/v2/settings/events — runtime-настройки раздела
    * «События» (мастер-выключатель, режим маршрутизации, TTL ephemeral, retention
    * журнала, белый список источников, политика неизвестного агента, per-key
    * rate limit). Runtime-значение ({dataDir}/settings.json) приоритетнее
@@ -1000,11 +1000,11 @@ export function createSettingsRoutes(
   });
 
   /**
-   * AD-084: GET/PUT/DELETE /api/v2/settings/decision — runtime-настройки
+   * ADR-084: GET/PUT/DELETE /api/v2/settings/decision — runtime-настройки
    * decision-слоя (мастер-выключатель, провайдер/модель, порог уверенности).
    * Runtime-значение ({dataDir}/settings.json) приоритетнее config.yaml
    * `decision`; live-применение — через `onDecisionChange` (микро-каскад,
-   * роутер, события AD-089). Транспорт задаётся типом провайдера.
+   * роутер, события ADR-089). Транспорт задаётся типом провайдера.
    */
   app.get('/decision', auth.requireAuth, async (c) => {
     const runtime = await deps.settingsStore.getDecision();
@@ -1040,7 +1040,7 @@ export function createSettingsRoutes(
   });
 
   /**
-   * AD-084: агрегатные метрики decision-слоя (in-memory).
+   * ADR-084: агрегатные метрики decision-слоя (in-memory).
    * GET — чтение снимка; DELETE — сброс накопителей (под `decisionWriteGuard`).
    * Пути не конфликтуют с `/decision` (разные полные маршруты).
    */

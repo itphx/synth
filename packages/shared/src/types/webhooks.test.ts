@@ -5,7 +5,7 @@ import {
   matchWebhookEvent,
 } from './webhooks.js';
 
-describe('webhooks: матчер событий (AD-052, этап II)', () => {
+describe('webhooks: матчер событий (ADR-052, этап II)', () => {
   it('пустой список — дефолтный набор', () => {
     expect(matchWebhookEvent(undefined, 'session.created')).toBe(true);
     expect(matchWebhookEvent([], 'stream.done')).toBe(true);

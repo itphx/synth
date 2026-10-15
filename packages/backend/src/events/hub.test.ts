@@ -106,7 +106,7 @@ describe('EventHub — автоподписка на дочерние сесси
   });
 });
 
-describe('EventHub — доставка сессий, созданных после подключения (AD-089)', () => {
+describe('EventHub — доставка сессий, созданных после подключения (ADR-089)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {
@@ -187,11 +187,11 @@ describe('EventHub — доставка сессий, созданных пос�
   });
 });
 
-// AD-052 (этап IV) / AD-089: машинные watcher'ы (service-key) и роли сквозного
+// ADR-052 (этап IV) / ADR-089: машинные watcher'ы (service-key) и роли сквозного
 // обзора подписываются на глобальный поток `eventBus.subscribeAll`, а не по
 // владельцу сессий. Раньше синтетический пользователь `service:<keyId>` не владел
 // сессиями → подписок 0 → ответы агента не доходили до шлюза.
-describe('EventHub — watch-all клиенты (AD-052/AD-089)', () => {
+describe('EventHub — watch-all клиенты (ADR-052/ADR-089)', () => {
   it('all-клиент получает события чужой сессии без явной подписки', async () => {
     const { eventBus, hub } = makeHub([]);
     const { client, received } = makeClient(true);

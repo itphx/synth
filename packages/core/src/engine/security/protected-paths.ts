@@ -37,7 +37,7 @@ export interface ProtectedPathsPolicy {
   /** Префиксы команд, запрещённые целиком — только для shell-команд. */
   deniedCommandPrefixes: string[];
   /**
-   * dataDir инстанса (AD-005), если известен: политика дополняется динамическими
+   * dataDir инстанса (ADR-005), если известен: политика дополняется динамическими
    * защищёнными префиксами `{dataDir}/secrets` и `{dataDir}/security` (их нет в
    * статическом JSON — путь зависит от инстанса). Передаётся и в shell-guard
    * (резолв `$SYNTH_DATA_DIR`, маркеры защищённых путей).
@@ -78,7 +78,7 @@ export interface ProtectedPathsOptions {
   /** Пользовательский override: {dataDir}/security/protected-paths.json. */
   overridePath?: string;
   /**
-   * dataDir инстанса (AD-005). Задан — политика дополняется динамическими
+   * dataDir инстанса (ADR-005). Задан — политика дополняется динамическими
    * защищёнными префиксами `{dataDir}/secrets` (мастер-ключ, api-key,
    * ssh-keys) и `{dataDir}/security` (override-файл политики). Не задан —
    * путь выводится из конвенции `overridePath` = `{dataDir}/security/

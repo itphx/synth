@@ -4,7 +4,7 @@ import { Icon, type IconName } from '@/components/icon/Icon'
 import { useI18n } from '@/lib/i18n'
 
 /**
- * AD-046 §7.1: служебные сообщения (команда, сводка, отладка, ошибка, инфо) —
+ * ADR-046 §7.1: служебные сообщения (команда, сводка, отладка, ошибка, инфо) —
  * единый центрированный блок. Текст внутри выровнен по левому краю, у блока
  * всегда есть шапка (иконка + подпись) и кнопка «Копировать».
  */
@@ -27,7 +27,7 @@ const VARIANT_STYLES: Record<NoticeVariant, NoticeVariantStyle> = {
   debug: { icon: 'bug', box: 'bg-status-warning/5 border-status-warning/30 text-status-warning' },
   error: { icon: 'error-warning', box: 'bg-destructive/10 border-destructive/30 text-destructive' },
   info: { icon: 'information', box: 'bg-surface-inset border-border/30 text-muted-foreground', compact: true },
-  // AD-051: сообщения планировщика (source:'cron') — нейтральный системный блок
+  // ADR-051: сообщения планировщика (source:'cron') — нейтральный системный блок
   // с иконкой расписания; иконка совпадает с вкладкой «Шедулер».
   scheduler: { icon: 'calendar-schedule', box: 'bg-surface-inset border-border/40 text-foreground' },
 }

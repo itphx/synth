@@ -45,7 +45,7 @@ afterEach(async () => {
   await rm(tmpDir, { recursive: true, force: true });
 });
 
-describe('исключение ephemeral-сообщений из LLM-контекста (AD-046 §7.1)', () => {
+describe('исключение ephemeral-сообщений из LLM-контекста (ADR-046 §7.1)', () => {
   it('локальные user+assistant команды не попадают в контекст', async () => {
     const session = await sessionWith([
       msg(MessageRole.USER, '/help', true),

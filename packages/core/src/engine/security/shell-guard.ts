@@ -38,7 +38,7 @@ export interface ShellPolicy {
   /** Префиксы команд, запрещённые целиком (например "rm -rf /"). */
   deniedCommandPrefixes: string[];
   /**
-   * dataDir инстанса (AD-005), если известен. Используется для резолва
+   * dataDir инстанса (ADR-005), если известен. Используется для резолва
    * `$SYNTH_DATA_DIR`/`${SYNTH_DATA_DIR}` в токенах. Политику защищённых путей
    * (`ProtectedPathsPolicy`) оркестратор передаёт как shell-policy, поэтому поле
    * приходит и сюда (для `{dataDir}/secrets` in `deniedPrefixes`).

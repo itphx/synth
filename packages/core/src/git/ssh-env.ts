@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 /**
- * AD-076 §T3: подготовка SSH-окружения для git (ключа `GIT_SSH_COMMAND`).
+ * ADR-076 §T3: подготовка SSH-окружения для git (ключа `GIT_SSH_COMMAND`).
  *
  * Приватный ключ пишется во временный файл `0600` в каталоге `0700`
  * (`mkdtemp` в `os.tmpdir()`); при наличии `passphrase` там же создаётся

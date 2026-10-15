@@ -8,11 +8,11 @@ export interface WebhookDeliveryStoreConfig {
 }
 
 /**
- * AD-052 (этап II): append-only журнал доставок webhooks.
+ * ADR-052 (этап II): append-only журнал доставок webhooks.
  *
  * JSONL `{dataDir}/webhooks/deliveries.jsonl` (одна строка = одна запись, как
  * `EventJournalStore`). Append защищён общим `AsyncLock`; `prune` — атомарная
- * перезапись (tmp→rename, AD-005).
+ * перезапись (tmp→rename, ADR-005).
  */
 export class WebhookDeliveryStore {
   private _lock = new AsyncLock();

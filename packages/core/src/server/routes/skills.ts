@@ -8,7 +8,7 @@ import type { SkillService } from '../../engine/skills/service.js';
 export interface SkillRoutesDeps {
   skillService: SkillService;
   /**
-   * AD-046 §4.3: резолв абсолютного рабочего каталога проекта по id — для
+   * ADR-046 §4.3: резолв абсолютного рабочего каталога проекта по id — для
    * project-скиллов в listing/detail. Не задан — project-скоуп не участвует.
    */
   resolveProjectWorkspace?: (projectId: string) => Promise<string | undefined>;
@@ -36,7 +36,7 @@ export interface SkillRoutesOptions {
 }
 
 /**
- * AD-046 §9.1: core API скиллов.
+ * ADR-046 §9.1: core API скиллов.
  *
  * `GET /` — реестр (с опциональной диагностикой), `POST /` — создание
  * instance-скилла, `GET/PATCH/DELETE /:name`, `GET/PUT/DELETE /:name/files/*`,
@@ -75,7 +75,7 @@ export function createSkillRoutes(
   };
 
   /**
-   * AD-046 §3.2: невалидное имя скилла (не проходит `SKILL_NAME_REGEX`) не
+   * ADR-046 §3.2: невалидное имя скилла (не проходит `SKILL_NAME_REGEX`) не
    * является ресурсом → 404 (как у PATCH), без обращения к store и без 500.
    * Единая проверка на уровне роута; `assertSkillName` в store остаётся
    * внутренней защитой от небезопасных имён (`..`/`/`).

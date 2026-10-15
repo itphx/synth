@@ -24,7 +24,7 @@ const event = (overrides: Partial<SynthEvent> = {}): SynthEvent => ({
   ...overrides,
 });
 
-describe('RequestSessionService (AD-089)', () => {
+describe('RequestSessionService (ADR-089)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let bindingStore: EventBindingStore;
@@ -220,7 +220,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.settings.agentRole).toBeUndefined();
   });
 
-  // --- AD-089: агент по умолчанию инстанса для событийных сессий ---
+  // --- ADR-089: агент по умолчанию инстанса для событийных сессий ---
   // Баг: сессии, материализуемые funnel'ом (auto-bind/bind/ephemeral), создавались
   // без `settings.agentRole`, поэтому оркестратор не писал `agent` в assistant-сообщение
   // и UI не рисовал бейдж агента. Фикс: при пустом шаблоне применяем `resolveDefaultAgent`.
@@ -390,7 +390,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(await bindingStore.list()).toHaveLength(1);
   });
 
-  it('handleEvent ephemeral: владелец из deps.resolveOwnerId (AD-089)', async () => {
+  it('handleEvent ephemeral: владелец из deps.resolveOwnerId (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:own',
@@ -405,7 +405,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('local');
   });
 
-  it('handleEvent auto-bind: владелец из deps.resolveOwnerId (AD-089)', async () => {
+  it('handleEvent auto-bind: владелец из deps.resolveOwnerId (ADR-089)', async () => {
     const router = new EventRouter({
       bindingStore,
       journal,
@@ -418,7 +418,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('local');
   });
 
-  it('handleEvent opts.ownerId переопределяет deps.resolveOwnerId (AD-089)', async () => {
+  it('handleEvent opts.ownerId переопределяет deps.resolveOwnerId (ADR-089)', async () => {
     const router = new EventRouter({
       bindingStore,
       journal,
@@ -432,7 +432,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('u-42');
   });
 
-  it('handleEvent без резолвера/opts → владелец не задан (principalId — не id инстанса) (AD-089)', async () => {
+  it('handleEvent без резолвера/opts → владелец не задан (principalId — не id инстанса) (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:cron',
@@ -448,7 +448,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('');
   });
 
-  it('handleEvent: identityMap по chatKey задаёт владельца сессии (AD-089)', async () => {
+  it('handleEvent: identityMap по chatKey задаёт владельца сессии (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:42',
@@ -466,7 +466,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('u-human');
   });
 
-  it('handleEvent: identityMap по principalId задаёт владельца (AD-089)', async () => {
+  it('handleEvent: identityMap по principalId задаёт владельца (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:pi',
@@ -482,7 +482,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('u-tg');
   });
 
-  it('handleEvent: principalId из identityMap приоритетнее chatKey (AD-089)', async () => {
+  it('handleEvent: principalId из identityMap приоритетнее chatKey (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:both',
@@ -499,7 +499,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('u-principal');
   });
 
-  it('handleEvent: резолвер внешней идентичности переопределяет identityMap (AD-089)', async () => {
+  it('handleEvent: резолвер внешней идентичности переопределяет identityMap (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:resolver',
@@ -517,7 +517,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('u-resolved');
   });
 
-  it('handleEvent: резолвер внешней идентичности > identityMap(principalId) > identityMap(chatKey) > per-event > resolveOwnerId (AD-089)', async () => {
+  it('handleEvent: резолвер внешней идентичности > identityMap(principalId) > identityMap(chatKey) > per-event > resolveOwnerId (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:prio',
@@ -562,7 +562,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(r5.session?.ownerId).toBe('local');
   });
 
-  it('handleEvent: чат не определяет владельца при наличии principalId (резолвер) (AD-089)', async () => {
+  it('handleEvent: чат не определяет владельца при наличии principalId (резолвер) (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:group',
@@ -580,7 +580,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('user:tg:author');
   });
 
-  it('handleEvent: без совпадения в identityMap — прежняя логика (opts.ownerId) (AD-089)', async () => {
+  it('handleEvent: без совпадения в identityMap — прежняя логика (opts.ownerId) (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:nomatch',
@@ -596,7 +596,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('u-agent');
   });
 
-  it('onSessionMaterialized: вызывается для explicit-сессии с её владельцем (AD-089)', async () => {
+  it('onSessionMaterialized: вызывается для explicit-сессии с её владельцем (ADR-089)', async () => {
     const onMaterialized = vi.fn();
     const created = await service(undefined, { onSessionMaterialized: onMaterialized }).request(
       { initiator: 'user', intent: 'explicit' },
@@ -607,7 +607,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(onMaterialized).toHaveBeenCalledWith(expect.objectContaining({ id: created!.id, userId: 'u-explicit' }));
   });
 
-  it('onSessionMaterialized: вызывается для materialized auto-bind до deliver (AD-089)', async () => {
+  it('onSessionMaterialized: вызывается для materialized auto-bind до deliver (ADR-089)', async () => {
     const router = new EventRouter({
       bindingStore,
       journal,
@@ -651,7 +651,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.ownerId).toBe('');
   });
 
-  it('handleEvent ephemeral: дефолтные provider/model из deps.resolveLlmDefaults (AD-089)', async () => {
+  it('handleEvent ephemeral: дефолтные provider/model из deps.resolveLlmDefaults (ADR-089)', async () => {
     await bindingStore.upsert({
       source: 'telegram',
       chatKey: 'chat:telegram:def',
@@ -668,7 +668,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.settings.model).toBe('m-def');
   });
 
-  it('handleEvent auto-bind: дефолтные provider/model из deps.resolveLlmDefaults (AD-089)', async () => {
+  it('handleEvent auto-bind: дефолтные provider/model из deps.resolveLlmDefaults (ADR-089)', async () => {
     const router = new EventRouter({
       bindingStore,
       journal,
@@ -698,7 +698,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.settings.model).toBeUndefined();
   });
 
-  it('request explicit: дефолтные provider/model из deps.resolveLlmDefaults (AD-089)', async () => {
+  it('request explicit: дефолтные provider/model из deps.resolveLlmDefaults (ADR-089)', async () => {
     const created = await service(undefined, {
       resolveLlmDefaults: () => ({ provider: 'p-def', model: 'm-def' }),
     }).request({ initiator: 'user', intent: 'explicit' });
@@ -707,7 +707,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(created?.settings.model).toBe('m-def');
   });
 
-  it('request explicit: явные provider/model приоритетнее дефолтов (AD-089)', async () => {
+  it('request explicit: явные provider/model приоритетнее дефолтов (ADR-089)', async () => {
     const created = await service(undefined, {
       resolveLlmDefaults: () => ({ provider: 'p-def', model: 'm-def' }),
     }).request({
@@ -720,7 +720,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(created?.settings.model).toBe('m-explicit');
   });
 
-  it('request explicit: частичное переопределение — задан provider, model добирается из дефолта (AD-089)', async () => {
+  it('request explicit: частичное переопределение — задан provider, model добирается из дефолта (ADR-089)', async () => {
     const created = await service(undefined, {
       resolveLlmDefaults: () => ({ provider: 'p-def', model: 'm-def' }),
     }).request({
@@ -733,7 +733,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(created?.settings.model).toBe('m-def');
   });
 
-  it('request explicit: пустые дефолты не заполняют provider/model (AD-089)', async () => {
+  it('request explicit: пустые дефолты не заполняют provider/model (ADR-089)', async () => {
     const created = await service(undefined, {
       resolveLlmDefaults: () => ({ provider: '', model: '' }),
     }).request({ initiator: 'user', intent: 'explicit' });
@@ -810,7 +810,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it('handleEvent opts.audit пишет keyId/principalId в журнал (AD-089/AD-052)', async () => {
+  it('handleEvent opts.audit пишет keyId/principalId в журнал (ADR-089/ADR-052)', async () => {
     const target = await sessionManager.createSession({ title: 'Bound' });
     await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:1', mode: 'bound', sessionId: target.id });
 
@@ -852,7 +852,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(entries[0]?.decision).toEqual({ kind: 'drop', reason: 'no_route', audited: true });
   });
 
-  // --- AD-089 (этап 5): эффективные роли отправителя в deliver ---
+  // --- ADR-089 (этап 5): эффективные роли отправителя в deliver ---
 
   const boundTo = async (chatKey: string): Promise<Session> => {
     const target = await sessionManager.createSession({ title: 'Bound' });
@@ -946,7 +946,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(deliver).toHaveBeenCalledWith(owner.id, e, 'defer', { roles: ['LEAD'], linked: true });
   });
 
-  // --- AD-089 (claim-flow): переустановка владельца существующей сессии ---
+  // --- ADR-089 (claim-flow): переустановка владельца существующей сессии ---
 
   it('bound: машинный владелец (service:key) → сопознанный человек «забирает» сессию', async () => {
     const machine = await sessionManager.createSession({
@@ -1131,7 +1131,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(session?.userId).toBe('u-creator');
   });
 
-  // --- AD-089 (claim-flow): выпуск claim-кода неизвестному отправителю ---
+  // --- ADR-089 (claim-flow): выпуск claim-кода неизвестному отправителю ---
 
   it('handleEvent: неизвестный отправитель (резолвер null) → identityHint от issueIdentityClaim', async () => {
     const e = event({ identity: { principalId: 'tg:777', chatKey: 'chat:telegram:777' } });
@@ -1278,7 +1278,7 @@ describe('RequestSessionService (AD-089)', () => {
     });
   });
 
-  it('eventToMessage: внешний отправитель `from.username` → author @username (AD-089)', () => {
+  it('eventToMessage: внешний отправитель `from.username` → author @username (ADR-089)', () => {
     const e = event({
       identity: { chatKey: 'chat:telegram:-100', principalId: 'tg:123', threadKey: 'thread:telegram:-100:7' },
       payload: { text: 'hi', from: { username: 'durov', firstName: 'Pavel' } },
@@ -1293,19 +1293,19 @@ describe('RequestSessionService (AD-089)', () => {
     });
   });
 
-  it('eventToMessage: `from` без username → author firstName lastName (AD-089)', () => {
+  it('eventToMessage: `from` без username → author firstName lastName (ADR-089)', () => {
     const e = event({ payload: { text: 'hi', from: { firstName: 'Pavel', lastName: 'Durov' } } });
     const msg = eventToMessage(e);
     expect(msg.author).toBe('Pavel Durov');
   });
 
-  it('eventToMessage: `from` без имени → author = principalId (AD-089)', () => {
+  it('eventToMessage: `from` без имени → author = principalId (ADR-089)', () => {
     const e = event({ identity: { principalId: 'tg:123' }, payload: { text: 'hi', from: {} } });
     const msg = eventToMessage(e);
     expect(msg.author).toBe('tg:123');
   });
 
-  it('eventToMessage: внешний источник без from/principalId → author undefined (AD-089)', () => {
+  it('eventToMessage: внешний источник без from/principalId → author undefined (ADR-089)', () => {
     const e = event({ identity: { chatKey: 'chat:telegram:1' }, payload: { text: 'hi' } });
     const msg = eventToMessage(e);
     expect(msg.author).toBeUndefined();
@@ -1314,7 +1314,7 @@ describe('RequestSessionService (AD-089)', () => {
     expect(msg.metadata?.thread_key).toBeUndefined();
   });
 
-  it('eventToMessage: cron не ломается атрибуцией внешнего отправителя (AD-051/AD-089)', () => {
+  it('eventToMessage: cron не ломается атрибуцией внешнего отправителя (ADR-051/ADR-089)', () => {
     const e = event({
       source: 'cron',
       payload: { scheduleId: 'sch_1', text: 'tick', from: { username: 'ignored' } },

@@ -2,7 +2,7 @@ import type { EventIdentity, ProfileStore } from '@itphx/synth-shared';
 import { parsePrincipalId } from '@itphx/synth-shared';
 
 /**
- * AD-089: резолвер внешнего отправителя → пользователь инстанса.
+ * ADR-089: резолвер внешнего отправителя → пользователь инстанса.
  * Порядок: override `identityMap` (principalId, затем chatKey) → профиль
  * (`identities`, по principalId). Неизвестен → null.
  *
@@ -10,7 +10,7 @@ import { parsePrincipalId } from '@itphx/synth-shared';
  * побеждать профиль, но явная карта администратора — сильнее всего). Профилей
  * десятки — **не кэшируем** (простота; при необходимости кэш добавится позже).
  *
- * AD-089 (этап 5): профильная ветка дополнительно возвращает `roles` профиля —
+ * ADR-089 (этап 5): профильная ветка дополнительно возвращает `roles` профиля —
  * базу для эффективных ролей отправителя (`resolveEffectiveRoles`). Ветка
  * override `identityMap` роли **не** знает (карта хранит только id) → `roles`
  * не задаётся (трактуется как «нет ролей», fail-closed).

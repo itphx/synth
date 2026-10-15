@@ -33,20 +33,20 @@ export function ProjectTab() {
   const [project, setProject] = useState<ProjectData | null>(null)
   const [loading, setLoading] = useState(false)
   const [workspaceDraft, setWorkspaceDraft] = useState('')
-  // AD-075: выбор каталога через FS-диалог + подтверждение пути вне workspacesRoot.
+  // ADR-075: выбор каталога через FS-диалог + подтверждение пути вне workspacesRoot.
   const [pickerOpen, setPickerOpen] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null)
   const [invariantsDraft, setInvariantsDraft] = useState('')
 
-  // AD-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
+  // ADR-071 §2.4: проектный MCP-скоуп (owner/lead/admin)
   const user = useAuthStore((s) => s.user)
-  // AD-075: managed-развёртывание владеет ФС проекта — путь не редактируется.
+  // ADR-075: managed-развёртывание владеет ФС проекта — путь не редактируется.
   const deployment = useAuthStore((s) => s.deployment)
   const [projectMcp, setProjectMcp] = useState<ProjectMcpResponse | null>(null)
   const [mcpRegistry, setMcpRegistry] = useState<McpRegistryEntry[]>([])
 
-  // AD-046 §4.5: проектный скоуп скиллов (owner/lead/admin)
+  // ADR-046 §4.5: проектный скоуп скиллов (owner/lead/admin)
   const [projectSkills, setProjectSkills] = useState<ProjectSkillsResponse | null>(null)
 
   const projectId = session?.project_id ?? null
@@ -132,7 +132,7 @@ export function ProjectTab() {
     })
   }
 
-  /** AD-046 §4.5: проектный скоуп скиллов — «Доступен»/«Включён по умолчанию». */
+  /** ADR-046 §4.5: проектный скоуп скиллов — «Доступен»/«Включён по умолчанию». */
   const handleToggleProjectSkill = async (name: string, kind: 'enabled' | 'defaultOn') => {
     if (!projectId || !projectSkills) return
     const key = `skill:${name}`
@@ -295,13 +295,13 @@ export function ProjectTab() {
     )
   }
 
-  // AD-075: managed-проект (ФС у backend) и remote-проект (локальный UI без доступа к ФС)
+  // ADR-075: managed-проект (ФС у backend) и remote-проект (локальный UI без доступа к ФС)
   // — workspace задаётся сервером, поле только для чтения.
   const isRemoteProject = project?.origin === 'remote' || (project?.id?.startsWith('remote:') ?? false)
   const workspaceReadOnly = deployment === 'managed' || isRemoteProject
 
   /**
-   * AD-075: сохранить workspace. При 409 `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`
+   * ADR-075: сохранить workspace. При 409 `WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`
    * (путь вне `workspacesRoot`, политика confirm) показывает ConfirmDialog и
    * повторяет запрос с `confirmOutsideRoot: true`; 403 — понятная ошибка.
    */
@@ -522,7 +522,7 @@ export function ProjectTab() {
   )
 }
 
-/** AD-071 §2.4: проектный скоуп MCP — доступность и default-on (owner/lead/admin). */
+/** ADR-071 §2.4: проектный скоуп MCP — доступность и default-on (owner/lead/admin). */
 function ProjectMcpBlock({
   mcp,
   registry,
@@ -595,7 +595,7 @@ function ProjectMcpBlock({
   )
 }
 
-/** AD-046 §4.5: проектный скоуп скиллов — «Доступен» и «Включён по умолчанию». */
+/** ADR-046 §4.5: проектный скоуп скиллов — «Доступен» и «Включён по умолчанию». */
 function ProjectSkillsBlock({
   skills,
   isPending,

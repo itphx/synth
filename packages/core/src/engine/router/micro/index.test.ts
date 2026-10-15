@@ -1,5 +1,5 @@
 /**
- * Интеграционные тесты MicroPipeline (AD-035).
+ * Интеграционные тесты MicroPipeline (ADR-035).
  */
 import { describe, it, expect } from 'vitest';
 import { MicroPipeline } from './index.js';

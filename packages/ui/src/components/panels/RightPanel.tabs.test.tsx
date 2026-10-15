@@ -24,7 +24,7 @@ vi.hoisted(() => {
 import { RIGHT_TABS } from './RightPanel'
 import { useUIStore } from '@/stores/useUIStore'
 
-describe('RightPanel — порядок вкладок (AD-071)', () => {
+describe('RightPanel — порядок вкладок (ADR-071)', () => {
   it('первый ряд — «Сессия», «Проект», «Контекст», «Статистика»', () => {
     const ids = RIGHT_TABS.map((tab) => tab.id)
     expect(ids).toEqual(['params', 'project', 'context', 'stats', 'references', 'scheduler'])

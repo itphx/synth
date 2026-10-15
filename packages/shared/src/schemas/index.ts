@@ -63,7 +63,7 @@ export const sessionSettingsSchema = z.object({
   debugEnabled: z.boolean().default(true),
   streamEnabled: z.boolean().default(true),
   agentRole: z.string().optional(),
-  // AD-071 §2.4: сессионный скоуп MCP (явно включённые / opt-out).
+  // ADR-071 §2.4: сессионный скоуп MCP (явно включённые / opt-out).
   mcpServers: z.array(z.string()).optional(),
   mcpDisabledServers: z.array(z.string()).optional(),
   contextOptimization: z.enum(['none', 'sliding_window', 'summarization', 'sticky_notes']).default('none'),
@@ -79,13 +79,13 @@ export const sessionSettingsSchema = z.object({
   showInterview: z.boolean().default(true),
   websocketEnabled: z.boolean().default(true),
   language: z.string().optional(),
-  // === Plan/Act (AD-025) ===
+  // === Plan/Act (ADR-025) ===
   planMode: z.enum(['auto', 'strict', 'off']).optional(),
-  // === Скиллы (AD-046 §4.5) ===
+  // === Скиллы (ADR-046 §4.5) ===
   skills: z.array(z.string()).optional(),
   skillsDisabled: z.array(z.string()).optional(),
-  // === Микро-слой (AD-035/AD-084) ===
-  /** AD-084: per-session гейт decision-уровня микро-каскада (undefined → config.decision.enabled). */
+  // === Микро-слой (ADR-035/ADR-084) ===
+  /** ADR-084: per-session гейт decision-уровня микро-каскада (undefined → config.decision.enabled). */
   decisionFirst: z.boolean().optional(),
 });
 
@@ -112,7 +112,7 @@ export const sessionUpdateSchema = z.object({
 });
 
 /**
- * AD-076: запись реестра git-репозиториев. `path` обязателен, остальные поля
+ * ADR-076: запись реестра git-репозиториев. `path` обязателен, остальные поля
  * опциональны; старые формы (`string` / `{ path }`) принимаются через
  * `normalizeGitRepoConfig` и union в `repos`.
  */
@@ -128,7 +128,7 @@ export const gitRepoConfigSchema = z.object({
 });
 
 /**
- * AD-076: нормализация legacy-значения `repos` к `GitRepoConfig`.
+ * ADR-076: нормализация legacy-значения `repos` к `GitRepoConfig`.
  * `string` → `{ path }`; объект → прогон через `gitRepoConfigSchema`
  * (невалидный → `null`). Всё прочее → `null`.
  */
@@ -163,7 +163,7 @@ export const projectUpdateSchema = z.object({
   repos: z.array(z.union([z.string(), gitRepoConfigSchema])).optional(),
 });
 
-/** AD-076: тело создания SSH-ключа (`POST /api/v2/ssh-keys`). */
+/** ADR-076: тело создания SSH-ключа (`POST /api/v2/ssh-keys`). */
 export const sshKeyCreateSchema = z.object({
   name: z.string().min(1).max(200),
   type: z.string().optional(),
@@ -172,11 +172,11 @@ export const sshKeyCreateSchema = z.object({
   agentIds: z.array(z.string()).optional(),
 });
 
-/** AD-076: тело обновления SSH-ключа (без id/createdAt). */
+/** ADR-076: тело обновления SSH-ключа (без id/createdAt). */
 export const sshKeyUpdateSchema = sshKeyCreateSchema.partial();
 
 /**
- * AD-071 §2.4: проектный скоуп MCP (ссылки на реестр по имени).
+ * ADR-071 §2.4: проектный скоуп MCP (ссылки на реестр по имени).
  * PUT-семантика: `undefined` ≠ `[]` — отсутствующее поле сохраняет текущее
  * значение, поэтому `.default([])` здесь недопустим.
  */
@@ -186,7 +186,7 @@ export const projectMcpUpdateSchema = z.object({
 });
 
 /**
- * AD-075: тело `PUT /api/v2/settings/workspace-policy` — политика для
+ * ADR-075: тело `PUT /api/v2/settings/workspace-policy` — политика для
  * абсолютного workspace вне `workspacesRoot`.
  */
 export const workspacePolicySchema = z.object({
@@ -245,7 +245,7 @@ export const fsDownloadQuerySchema = z.object({
 });
 
 /**
- * AD-075: запрос навигации по корню workspace (`GET /fs/workspace-root/browse`,
+ * ADR-075: запрос навигации по корню workspace (`GET /fs/workspace-root/browse`,
  * `GET /fs/workspace-root`). `includeHidden` принимает строковые `true`/`false`
  * (query-параметры) — `z.coerce.boolean()` не подходит, т.к. `'false'` → `true`.
  */
@@ -256,7 +256,7 @@ export const fsWorkspaceBrowseQuerySchema = z.object({
     .default(false),
 });
 
-/** AD-075: тело `POST /fs/workspace-root/mkdir` — создание каталога в корне workspace. */
+/** ADR-075: тело `POST /fs/workspace-root/mkdir` — создание каталога в корне workspace. */
 export const fsWorkspaceMkdirBodySchema = z.object({
   path: z.string().min(1),
   /** `confirm`-политика: явное подтверждение создания каталога вне `workspacesRoot`. */
@@ -286,7 +286,7 @@ export const gitCloneBodySchema = z.object({
 });
 
 /**
- * AD-076: тело `POST /api/v2/git/repos/register` — upsert записи реестра
+ * ADR-076: тело `POST /api/v2/git/repos/register` — upsert записи реестра
  * (идемпотентно по `path`). Используется UI для добавления уже существующего
  * локально репозитория.
  */
@@ -301,7 +301,7 @@ export const gitReposRegisterBodySchema = z.object({
 });
 
 /**
- * AD-076: тело `POST /api/v2/git/repos/remove` — удаление записи реестра;
+ * ADR-076: тело `POST /api/v2/git/repos/remove` — удаление записи реестра;
  * обязателен `id` либо `path`. `deleteLocal` — удалить каталог репозитория.
  */
 export const gitReposRemoveBodySchema = z
@@ -313,7 +313,7 @@ export const gitReposRemoveBodySchema = z
   })
   .refine((v) => Boolean(v.id || v.path), { message: 'Требуется id или path' });
 
-/** AD-076: тело `POST /api/v2/git/repos/fetch` — обязателен `id` либо `path`. */
+/** ADR-076: тело `POST /api/v2/git/repos/fetch` — обязателен `id` либо `path`. */
 export const gitReposFetchBodySchema = z
   .object({
     projectId: z.string().min(1),
@@ -337,7 +337,7 @@ export const gitCommitQuerySchema = z.object({
 const toolCapabilityValues = Object.values(ToolCapability) as [string, ...string[]];
 
 /**
- * AD-071 §2.6: фабрика схемы `tools.disabled` (единый источник значений
+ * ADR-071 §2.6: фабрика схемы `tools.disabled` (единый источник значений
  * на базе `ToolCapability`).
  *
  * - `strictCapabilities: true` (API, `PUT /settings/tools-disabled`) — закрытый
@@ -359,7 +359,7 @@ export function createToolsDisabledSchema(strictCapabilities: boolean) {
 }
 
 /**
- * AD-071 §2.6: тело `PUT /api/v2/settings/tools-disabled`. Неизвестная
+ * ADR-071 §2.6: тело `PUT /api/v2/settings/tools-disabled`. Неизвестная
  * capability — ошибка (закрытый набор: опечатка молча ничего не отключит).
  * Имена инструментов принимаются как строки (реестр динамический — MCP-тулы
  * регистрируются лениво); непустые.
@@ -367,7 +367,7 @@ export function createToolsDisabledSchema(strictCapabilities: boolean) {
 export const toolsDisabledSchema = createToolsDisabledSchema(true);
 
 /**
- * AD-071 §2.4: базовый контракт MCP-скоупа сессии (ссылки на реестр по имени).
+ * ADR-071 §2.4: базовый контракт MCP-скоупа сессии (ссылки на реестр по имени).
  * `undefined` ≠ `[]`: отсутствующее поле сохраняет текущее значение.
  */
 export const sessionMcpScopeSchema = z
@@ -381,7 +381,7 @@ export const sessionMcpScopeSchema = z
   );
 
 /**
- * AD-071 §2.4: тело `PUT /api/v2/sessions/:id/mcp`: точечный toggle
+ * ADR-071 §2.4: тело `PUT /api/v2/sessions/:id/mcp`: точечный toggle
  * (`{ name, enabled }`, в т.ч. opt-out системного сервера) или полная/частичная
  * замена (`{ mcpServers?, mcpDisabledServers? }`).
  */
@@ -427,13 +427,13 @@ export type GitReposFetchBody = z.infer<typeof gitReposFetchBodySchema>;
 export type GitLogQuery = z.infer<typeof gitLogQuerySchema>;
 export type GitCommitQuery = z.infer<typeof gitCommitQuerySchema>;
 
-// --- Скиллы (AD-046) ---
+// --- Скиллы (ADR-046) ---
 
-/** AD-046 §3.2: имя скилла — 1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`. */
+/** ADR-046 §3.2: имя скилла — 1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`. */
 export const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const SKILL_NAME_MIN = 1;
 export const SKILL_NAME_MAX = 64;
-/** AD-046 §3.2: длина `description`. */
+/** ADR-046 §3.2: длина `description`. */
 export const SKILL_DESCRIPTION_MIN = 1;
 export const SKILL_DESCRIPTION_MAX = 1024;
 
@@ -469,7 +469,7 @@ export const skillFileWriteSchema = z.object({
 });
 
 /**
- * AD-046 §4.5: per-session enable/disable скиллов (по образцу MCP-скоупа).
+ * ADR-046 §4.5: per-session enable/disable скиллов (по образцу MCP-скоупа).
  * `undefined` ≠ `[]`: отсутствующее поле сохраняет текущее значение.
  */
 export const skillSessionOverrideSchema = z.object({
@@ -482,9 +482,9 @@ export type SkillUpdateRequest = z.infer<typeof skillUpdateSchema>;
 export type SkillFileWriteRequest = z.infer<typeof skillFileWriteSchema>;
 export type SkillSessionOverrideRequest = z.infer<typeof skillSessionOverrideSchema>;
 
-// --- Slash-команды и bundles (AD-046 §7) ---
+// --- Slash-команды и bundles (ADR-046 §7) ---
 
-/** AD-046 §7.3: тело `POST/PATCH /api/v2/skill-bundles` (YAML-группа скиллов). */
+/** ADR-046 §7.3: тело `POST/PATCH /api/v2/skill-bundles` (YAML-группа скиллов). */
 export const skillBundleSchema = z.object({
   name: skillNameSchema,
   description: z.string().min(SKILL_DESCRIPTION_MIN).max(SKILL_DESCRIPTION_MAX),
@@ -494,7 +494,7 @@ export const skillBundleSchema = z.object({
 
 export type SkillBundleRequest = z.infer<typeof skillBundleSchema>;
 
-/** AD-046 §7.4: тело `PUT /api/v2/settings/skills-disabled` (группы/имена). */
+/** ADR-046 §7.4: тело `PUT /api/v2/settings/skills-disabled` (группы/имена). */
 export const skillsDisabledSchema = z.object({
   categories: z.array(z.string()).default([]),
   groups: z.array(z.string()).default([]),
@@ -504,7 +504,7 @@ export const skillsDisabledSchema = z.object({
 export type SkillsDisabledRequest = z.infer<typeof skillsDisabledSchema>;
 
 /**
- * AD-046 §4.5: тело `PUT /api/v2/settings/skills` — системные настройки:
+ * ADR-046 §4.5: тело `PUT /api/v2/settings/skills` — системные настройки:
  * - `disabled` — hard-gate: скиллы, недоступные НИГДЕ;
  * - `disabledForNewProjects` — сид для НОВЫХ проектов (снимок при создании);
  * - `policy` — политика доступности (строкой, валидируется роутом).
@@ -518,7 +518,7 @@ export const skillsSystemSettingsSchema = z.object({
 export type SkillsSystemSettingsRequest = z.infer<typeof skillsSystemSettingsSchema>;
 
 /**
- * AD-046 §4.5: тело `PUT /api/v2/sessions/:id/skills`: точечный toggle
+ * ADR-046 §4.5: тело `PUT /api/v2/sessions/:id/skills`: точечный toggle
  * (`{ name, enabled }`) или полная/частичная замена (`{ skills?, skillsDisabled? }`).
  */
 export const sessionSkillUpdateSchema = z
@@ -535,7 +535,7 @@ export const sessionSkillUpdateSchema = z
     { message: 'Требуется name, skills или skillsDisabled' },
   );
 
-/** AD-046 §4.5: тело `PUT /api/v2/projects/:id/skills`. */
+/** ADR-046 §4.5: тело `PUT /api/v2/projects/:id/skills`. */
 export const projectSkillUpdateSchema = z.object({
   enabled: z.array(z.string()).optional(),
   defaultOn: z.array(z.string()).optional(),
@@ -544,9 +544,9 @@ export const projectSkillUpdateSchema = z.object({
 export type SessionSkillUpdateRequest = z.infer<typeof sessionSkillUpdateSchema>;
 export type ProjectSkillUpdateRequest = z.infer<typeof projectSkillUpdateSchema>;
 
-// --- Внешние события (AD-089) ---
+// --- Внешние события (ADR-089) ---
 
-/** AD-089: схема идентичности отправителя внешнего события. */
+/** ADR-089: схема идентичности отправителя внешнего события. */
 export const eventIdentitySchema = z.object({
   principalId: z.string().optional(),
   chatKey: z.string().optional(),
@@ -554,7 +554,7 @@ export const eventIdentitySchema = z.object({
   roles: z.array(z.string()).optional(),
 });
 
-/** AD-089: схема нормализованного внешнего события (`payload` не типизируется). */
+/** ADR-089: схема нормализованного внешнего события (`payload` не типизируется). */
 export const synthEventSchema = z.object({
   id: z.string().min(1),
   source: z.string().min(1),
@@ -565,10 +565,10 @@ export const synthEventSchema = z.object({
   ts: z.string().min(1),
 });
 
-/** AD-089: режимы доставки `EventBinding` (без `drop`). */
+/** ADR-089: режимы доставки `EventBinding` (без `drop`). */
 const eventDeliveryModeSchema = z.enum(['bound', 'ephemeral', 'queue']);
 
-/** AD-089: схема устойчивой привязки внешнего адреса к сессии/шаблону. */
+/** ADR-089: схема устойчивой привязки внешнего адреса к сессии/шаблону. */
 export const eventBindingSchema = z.object({
   id: z.string().min(1),
   source: z.string().min(1),
@@ -580,7 +580,7 @@ export const eventBindingSchema = z.object({
   project: z.string().optional(),
 });
 
-/** AD-089: схема запроса создания/привязки сессии — единый funnel. */
+/** ADR-089: схема запроса создания/привязки сессии — единый funnel. */
 export const sessionRequestSchema = z.object({
   initiator: z.enum(['user', 'agent', 'external', 'system']),
   intent: z.enum(['explicit', 'event']),
@@ -602,7 +602,7 @@ export const sessionRequestSchema = z.object({
 });
 
 /**
- * AD-089: вход приёма внешнего события (`POST /api/v2/events`). `id`/`dedupKey`/`ts`
+ * ADR-089: вход приёма внешнего события (`POST /api/v2/events`). `id`/`dedupKey`/`ts`
  * нормализуются `EventIngress`, поэтому здесь опциональны.
  */
 export const eventIngestSchema = z.object({
@@ -616,7 +616,7 @@ export const eventIngestSchema = z.object({
 
 export type EventIngestRequest = z.infer<typeof eventIngestSchema>;
 
-/** AD-089: вход upsert биндинга (`POST /api/v2/events/bindings`) — без `id`. */
+/** ADR-089: вход upsert биндинга (`POST /api/v2/events/bindings`) — без `id`. */
 export const eventBindingInputSchema = z.object({
   source: z.string().min(1),
   chatKey: z.string().optional(),
@@ -630,7 +630,7 @@ export const eventBindingInputSchema = z.object({
 export type EventBindingInputRequest = z.infer<typeof eventBindingInputSchema>;
 
 /**
- * AD-089/AD-052: метаданные API-ключа привязки для приёма событий.
+ * ADR-089/ADR-052: метаданные API-ключа привязки для приёма событий.
  * Секрет (`key`) и его хеш здесь отсутствуют — наружу не отдаются.
  */
 export const eventBindingApiKeySchema = z.object({
@@ -643,14 +643,14 @@ export const eventBindingApiKeySchema = z.object({
   createdAt: z.string().min(1),
   lastUsedAt: z.string().optional(),
   prefix: z.string().min(1),
-  // AD-052 (задел): срок действия / отзыв ключа.
+  // ADR-052 (задел): срок действия / отзыв ключа.
   expiresAt: z.string().optional(),
   revokedAt: z.string().optional(),
 });
 
 export type EventBindingApiKeyMeta = z.infer<typeof eventBindingApiKeySchema>;
 
-/** AD-089/AD-052: тело создания API-ключа привязки — обязательная уникальная `label`. */
+/** ADR-089/ADR-052: тело создания API-ключа привязки — обязательная уникальная `label`. */
 export const eventBindingApiKeyCreateSchema = z.object({
   label: z.string().min(1),
   description: z.string().optional(),
@@ -661,7 +661,7 @@ export const eventBindingApiKeyCreateSchema = z.object({
 export type EventBindingApiKeyCreateRequest = z.infer<typeof eventBindingApiKeyCreateSchema>;
 
 /**
- * AD-089/AD-052: тело обновления API-ключа привязки. Все поля опциональны;
+ * ADR-089/ADR-052: тело обновления API-ключа привязки. Все поля опциональны;
  * `null` для `description`/`expiresAt`/`rateLimitPerMinute` — сброс значения.
  */
 export const eventBindingApiKeyUpdateSchema = z.object({
@@ -673,7 +673,7 @@ export const eventBindingApiKeyUpdateSchema = z.object({
 
 export type EventBindingApiKeyUpdateRequest = z.infer<typeof eventBindingApiKeyUpdateSchema>;
 
-/** AD-089: ответ создания ключа — метаданные + plaintext-секрет (единожды). */
+/** ADR-089: ответ создания ключа — метаданные + plaintext-секрет (единожды). */
 export const eventBindingApiKeyCreatedSchema = eventBindingApiKeySchema.extend({
   key: z.string().min(1),
 });
@@ -681,17 +681,17 @@ export const eventBindingApiKeyCreatedSchema = eventBindingApiKeySchema.extend({
 export type EventBindingApiKeyCreatedRequest = z.infer<typeof eventBindingApiKeyCreatedSchema>;
 
 /**
- * AD-089: вход `POST /events` при аутентификации API-ключом привязки. Как
+ * ADR-089: вход `POST /events` при аутентификации API-ключом привязки. Как
  * `eventIngestSchema`, но `source` опционален — источник берётся из привязки.
  */
 export const eventKeyIngestSchema = eventIngestSchema.partial({ source: true });
 
 export type EventKeyIngestRequest = z.infer<typeof eventKeyIngestSchema>;
 
-// --- Service-key (AD-052, этап I) ---
+// --- Service-key (ADR-052, этап I) ---
 
 /**
- * AD-052: каталог скоупов service-key + wildcard-семейства. Глобальный `*` не
+ * ADR-052: каталог скоупов service-key + wildcard-семейства. Глобальный `*` не
  * принимается (`isKnownScope`).
  */
 export const serviceScopeSchema = z
@@ -702,7 +702,7 @@ export const serviceScopeSchema = z
 const serviceScopesSchema = z.array(serviceScopeSchema).min(1);
 
 /**
- * AD-052: метаданные service-key (ответы API). Секрет (`key`) и его хеш здесь
+ * ADR-052: метаданные service-key (ответы API). Секрет (`key`) и его хеш здесь
  * отсутствуют — наружу не отдаются (в списке — `prefix`).
  */
 export const serviceApiKeySchema = z.object({
@@ -723,7 +723,7 @@ export const serviceApiKeySchema = z.object({
 
 export type ServiceApiKeyMeta = z.infer<typeof serviceApiKeySchema>;
 
-/** AD-052: тело создания service-key. `roles` не заданы — дефолт хранилища. */
+/** ADR-052: тело создания service-key. `roles` не заданы — дефолт хранилища. */
 export const serviceApiKeyCreateSchema = z.object({
   label: z.string().min(1),
   description: z.string().optional(),
@@ -737,7 +737,7 @@ export const serviceApiKeyCreateSchema = z.object({
 export type ServiceApiKeyCreateRequest = z.infer<typeof serviceApiKeyCreateSchema>;
 
 /**
- * AD-052: тело обновления service-key. Все поля опциональны; `null` для
+ * ADR-052: тело обновления service-key. Все поля опциональны; `null` для
  * `description`/`allowedProjects`/`rateLimitPerMinute`/`expiresAt` — сброс.
  */
 export const serviceApiKeyUpdateSchema = z.object({
@@ -752,29 +752,29 @@ export const serviceApiKeyUpdateSchema = z.object({
 
 export type ServiceApiKeyUpdateRequest = z.infer<typeof serviceApiKeyUpdateSchema>;
 
-/** AD-052: ответ создания service-key — метаданные + plaintext-секрет (единожды). */
+/** ADR-052: ответ создания service-key — метаданные + plaintext-секрет (единожды). */
 export const serviceApiKeyCreatedSchema = serviceApiKeySchema.extend({
   key: z.string().min(1),
 });
 
 export type ServiceApiKeyCreatedRequest = z.infer<typeof serviceApiKeyCreatedSchema>;
 
-// --- Webhooks (AD-052, этап II) ---
+// --- Webhooks (ADR-052, этап II) ---
 
-/** AD-052 (этап II): паттерн события подписки — exact либо `prefix.*`. */
+/** ADR-052 (этап II): паттерн события подписки — exact либо `prefix.*`. */
 export const webhookEventPatternSchema = z
   .string()
   .min(1)
   .refine((value) => isWebhookEventPattern(value), { message: 'Некорректный паттерн события' });
 
-/** AD-052 (этап II): целевой URL — только http/https (SSRF-политика — в core). */
+/** ADR-052 (этап II): целевой URL — только http/https (SSRF-политика — в core). */
 export const webhookUrlSchema = z
   .string()
   .url()
   .refine((value) => /^https?:\/\//i.test(value), { message: 'URL должен быть http(s)' });
 
 /**
- * AD-052 (этап II): метаданные подписки (ответы API). Секрет (`secret`) и его
+ * ADR-052 (этап II): метаданные подписки (ответы API). Секрет (`secret`) и его
  * хеш здесь отсутствуют — наружу не отдаются (в списке — `secretPrefix`).
  */
 export const webhookSubscriptionSchema = z.object({
@@ -794,7 +794,7 @@ export const webhookSubscriptionSchema = z.object({
 
 export type WebhookSubscriptionMeta = z.infer<typeof webhookSubscriptionSchema>;
 
-/** AD-052 (этап II): тело создания подписки. `enabled` не задан — активна. */
+/** ADR-052 (этап II): тело создания подписки. `enabled` не задан — активна. */
 export const webhookSubscriptionCreateSchema = z.object({
   label: z.string().min(1),
   description: z.string().optional(),
@@ -806,7 +806,7 @@ export const webhookSubscriptionCreateSchema = z.object({
 export type WebhookSubscriptionCreateRequest = z.infer<typeof webhookSubscriptionCreateSchema>;
 
 /**
- * AD-052 (этап II): тело обновления подписки. Все поля опциональны; `null` для
+ * ADR-052 (этап II): тело обновления подписки. Все поля опциональны; `null` для
  * `description` — сброс.
  */
 export const webhookSubscriptionUpdateSchema = z.object({
@@ -819,14 +819,14 @@ export const webhookSubscriptionUpdateSchema = z.object({
 
 export type WebhookSubscriptionUpdateRequest = z.infer<typeof webhookSubscriptionUpdateSchema>;
 
-/** AD-052 (этап II): ответ создания/ротации подписки — метаданные + секрет (единожды). */
+/** ADR-052 (этап II): ответ создания/ротации подписки — метаданные + секрет (единожды). */
 export const webhookSubscriptionCreatedSchema = webhookSubscriptionSchema.extend({
   secret: z.string().min(1),
 });
 
 export type WebhookSubscriptionCreatedRequest = z.infer<typeof webhookSubscriptionCreatedSchema>;
 
-/** AD-052 (этап II): запись журнала доставки. */
+/** ADR-052 (этап II): запись журнала доставки. */
 export const webhookDeliverySchema = z.object({
   id: z.string().min(1),
   subscriptionId: z.string().min(1),
@@ -841,7 +841,7 @@ export const webhookDeliverySchema = z.object({
 
 export type WebhookDeliveryMeta = z.infer<typeof webhookDeliverySchema>;
 
-/** AD-051/AD-089: цель расписания (дискриминированный союз по `mode`). */
+/** ADR-051/ADR-089: цель расписания (дискриминированный союз по `mode`). */
 export const scheduleTargetSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('bound'), sessionId: z.string().min(1) }),
   z.object({
@@ -854,7 +854,7 @@ export const scheduleTargetSchema = z.discriminatedUnion('mode', [
 ]);
 
 /**
- * AD-089: цель правила маршрутизации — дискриминированный союз по `mode`
+ * ADR-089: цель правила маршрутизации — дискриминированный союз по `mode`
  * (семантика та же, что у `scheduleTargetSchema`).
  */
 export const eventRouteTargetSchema = z.discriminatedUnion('mode', [
@@ -866,7 +866,7 @@ export const eventRouteTargetSchema = z.discriminatedUnion('mode', [
     ttl: z.string().optional(),
   }),
   z.object({ mode: z.literal('queue'), sessionId: z.string().min(1) }),
-  // AD-089 (auto-bind): цель закрепляет внешний адрес за сессией (binding создаёт Router).
+  // ADR-089 (auto-bind): цель закрепляет внешний адрес за сессией (binding создаёт Router).
   z.object({
     mode: z.literal('bind'),
     agentTemplate: z.string().optional(),
@@ -874,7 +874,7 @@ export const eventRouteTargetSchema = z.discriminatedUnion('mode', [
   }),
 ]);
 
-/** AD-089: условие срабатывания правила (AND по заполненным полям). */
+/** ADR-089: условие срабатывания правила (AND по заполненным полям). */
 export const eventRouteMatchSchema = z.object({
   source: z.string().optional(),
   type: z.string().optional(),
@@ -885,7 +885,7 @@ export const eventRouteMatchSchema = z.object({
   keywords: z.array(z.string()).optional(),
 });
 
-/** AD-089: полная сущность правила маршрутизации событий (ответы API). */
+/** ADR-089: полная сущность правила маршрутизации событий (ответы API). */
 export const eventRouteRuleSchema = z.object({
   id: z.string().min(1),
   name: z.string().optional(),
@@ -895,7 +895,7 @@ export const eventRouteRuleSchema = z.object({
   target: eventRouteTargetSchema,
 });
 
-/** AD-089: вход создания/обновления правила (`upsert`) — без `id`. */
+/** ADR-089: вход создания/обновления правила (`upsert`) — без `id`. */
 export const eventRouteRuleInputSchema = z.object({
   name: z.string().optional(),
   priority: z.number().int().default(0),
@@ -905,7 +905,7 @@ export const eventRouteRuleInputSchema = z.object({
 });
 
 /**
- * AD-089: тело upsert-запроса правила — вход + необязательный `id` (обновление
+ * ADR-089: тело upsert-запроса правила — вход + необязательный `id` (обновление
  * существующего правила; отсутствие — создание нового `rule_<uuid>`).
  */
 export const eventRouteRuleUpsertSchema = eventRouteRuleInputSchema.extend({
@@ -917,7 +917,7 @@ export type EventRouteRuleInputRequest = z.infer<typeof eventRouteRuleInputSchem
 export type EventRouteRuleUpsertRequest = z.infer<typeof eventRouteRuleUpsertSchema>;
 
 /**
- * AD-051/AD-089: ровно одно из `cron` / `every` задано. Пустые строки
+ * ADR-051/ADR-089: ровно одно из `cron` / `every` задано. Пустые строки
  * трактуются как отсутствие поля.
  */
 function refineScheduleTrigger(
@@ -935,7 +935,7 @@ function refineScheduleTrigger(
   }
 }
 
-/** AD-051/AD-089: вход создания/обновления расписания (`ScheduleInput`). */
+/** ADR-051/ADR-089: вход создания/обновления расписания (`ScheduleInput`). */
 export const scheduleInputSchema = z
   .object({
     name: z.string().min(1),
@@ -950,7 +950,7 @@ export const scheduleInputSchema = z
   })
   .superRefine(refineScheduleTrigger);
 
-/** AD-051/AD-089: полная сущность расписания (ответы API). */
+/** ADR-051/ADR-089: полная сущность расписания (ответы API). */
 export const scheduleSchema = z
   .object({
     id: z.string().min(1),
@@ -975,10 +975,10 @@ export const scheduleSchema = z
 export type ScheduleInputRequest = z.infer<typeof scheduleInputSchema>;
 export type ScheduleRequest = z.infer<typeof scheduleSchema>;
 
-/** AD-051: триггер срабатывания расписания в Job-истории. */
+/** ADR-051: триггер срабатывания расписания в Job-истории. */
 export const scheduleJobTriggerSchema = z.enum(['cron', 'manual', 'catchup']);
 
-/** AD-051: запись Job-истории (ответы `GET /api/v2/schedules/:id/jobs`). */
+/** ADR-051: запись Job-истории (ответы `GET /api/v2/schedules/:id/jobs`). */
 export const scheduleJobSchema = z.object({
   id: z.string().min(1),
   scheduleId: z.string().min(1),

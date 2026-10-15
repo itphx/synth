@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.6: агрегация статистики сессии — агенты, пользователи,
+ * ADR-070 §2.6: агрегация статистики сессии — агенты, пользователи,
  * рекурсивный rollup usage саб-агентов (tool `task`), защита от циклов/глубины.
  */
 
@@ -47,7 +47,7 @@ const pricingByCurrency = (model: string) => {
   return null;
 };
 
-describe('computeSessionStats (AD-070 §2.6)', () => {
+describe('computeSessionStats (ADR-070 §2.6)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
 

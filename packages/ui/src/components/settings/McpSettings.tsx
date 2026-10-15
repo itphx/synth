@@ -111,7 +111,7 @@ export const McpSettings = () => {
     },
   })
 
-  // AD-071 §2.3: глобальная политика MCP-инструментов (mcp.policy).
+  // ADR-071 §2.3: глобальная политика MCP-инструментов (mcp.policy).
   const [mcpPolicy, setMcpPolicy] = useState<ToolsPolicy>('auto')
   const [savedMcpPolicy, setSavedMcpPolicy] = useState<ToolsPolicy>('auto')
   const [mcpPolicyDefault, setMcpPolicyDefault] = useState<ToolsPolicy>('auto')
@@ -124,7 +124,7 @@ export const McpSettings = () => {
   const [probing, setProbing] = useState<Record<string, boolean>>({})
   const [probeError, setProbeError] = useState<Record<string, string | null>>({})
 
-  // AD-072: единый контракт черновика поверх toolSettings стора.
+  // ADR-072: единый контракт черновика поверх toolSettings стора.
   // Дефолт доступности — серверный `{ plan: false, act: true }` на каждый сервер.
   const availabilityDefault = useMemo<Record<string, McpServerToolsSettings>>(
     () =>
@@ -153,7 +153,7 @@ export const McpSettings = () => {
     fetchToolSettings()
   }, [fetchRegistry, fetchToolSettings])
 
-  // AD-071 §2.3: политику MCP читает любой пользователь (эндпоинт без admin-гейта),
+  // ADR-071 §2.3: политику MCP читает любой пользователь (эндпоинт без admin-гейта),
   // меняет только ADMIN — карточка доступна в админ-категории.
   useEffect(() => {
     let cancelled = false
@@ -177,7 +177,7 @@ export const McpSettings = () => {
     }
   }, [])
 
-  // AD-071 §2.3.1: сетевую политику читают только админы (секция скрыта для остальных).
+  // ADR-071 §2.3.1: сетевую политику читают только админы (секция скрыта для остальных).
   useEffect(() => {
     if (isAdmin) fetchNetworkPolicy()
   }, [isAdmin, fetchNetworkPolicy])
@@ -610,7 +610,7 @@ export const McpSettings = () => {
         )}
       </SettingsSection>
 
-      {/* AD-071 §2.3: глобальная политика MCP-инструментов (mcp.policy). */}
+      {/* ADR-071 §2.3: глобальная политика MCP-инструментов (mcp.policy). */}
       <PolicySettingsCard
         scope="mcp"
         value={mcpPolicy}
@@ -624,7 +624,7 @@ export const McpSettings = () => {
         isDefault={mcpPolicy === mcpPolicyDefault}
       />
 
-      {/* AD-071 §2.3.1: сетевой доступ пользовательских HTTP MCP (только ADMIN) */}
+      {/* ADR-071 §2.3.1: сетевой доступ пользовательских HTTP MCP (только ADMIN) */}
       {isAdmin && (
         <NetworkPolicySection
           policy={networkPolicy}
@@ -650,7 +650,7 @@ export const McpSettings = () => {
   )
 }
 
-/** AD-071 §2.3.1 / AD-072: редактор политики сетевого доступа (allow/deny + host/CIDR). */
+/** ADR-071 §2.3.1 / ADR-072: редактор политики сетевого доступа (allow/deny + host/CIDR). */
 function NetworkPolicySection({
   policy,
   defaultValue,

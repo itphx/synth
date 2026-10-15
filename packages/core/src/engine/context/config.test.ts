@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ContextConfig } from './config.js';
 
-describe('ContextConfig.getModePrompt (AD-025)', () => {
+describe('ContextConfig.getModePrompt (ADR-025)', () => {
   let userDataDir: string;
 
   beforeEach(async () => {
@@ -178,7 +178,7 @@ describe('ContextConfig.getRules / getRoutingInstructions (локализаци�
   });
 });
 
-describe('ContextConfig.getPlanModePrompt / getPlanGuide (AD-028/AD-039)', () => {
+describe('ContextConfig.getPlanModePrompt / getPlanGuide (ADR-028/ADR-039)', () => {
   let userDataDir: string;
 
   beforeEach(async () => {
@@ -302,7 +302,7 @@ describe('ContextConfig.getPlanModePrompt / getPlanGuide (AD-028/AD-039)', () =>
   });
 });
 
-describe('ContextConfig.getModePolicy (AD-070 §3.1)', () => {
+describe('ContextConfig.getModePolicy (ADR-070 §3.1)', () => {
   let userDataDir: string;
 
   beforeEach(async () => {
@@ -331,7 +331,7 @@ describe('ContextConfig.getModePolicy (AD-070 §3.1)', () => {
   });
 });
 
-describe('ContextConfig.getSchedulerNotice (AD-051)', () => {
+describe('ContextConfig.getSchedulerNotice (ADR-051)', () => {
   let userDataDir: string;
 
   beforeEach(async () => {
@@ -369,7 +369,7 @@ describe('ContextConfig.getSchedulerNotice (AD-051)', () => {
   });
 });
 
-describe('ContextConfig.getSchedulerTurnNotice (AD-051)', () => {
+describe('ContextConfig.getSchedulerTurnNotice (ADR-051)', () => {
   let userDataDir: string;
 
   beforeEach(async () => {

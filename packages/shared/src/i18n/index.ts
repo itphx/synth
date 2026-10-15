@@ -245,14 +245,14 @@ export const ENGINE_MESSAGE_KEYS = [
   'micro.intent.debug',
   'micro.intent.fix',
   'micro.intent.test',
-  // --- Скиллы (AD-046) ---
+  // --- Скиллы (ADR-046) ---
   'skill.args_error',
   'skill.not_found',
   'skill.untrusted',
   'skill.delegation',
   'skill.file_not_found',
   'skill.scope_disabled',
-  // --- Slash-команды (AD-046 §7) ---
+  // --- Slash-команды (ADR-046 §7) ---
   'command.unknown',
   'command.denied',
   'command.unavailable',
@@ -261,13 +261,13 @@ export const ENGINE_MESSAGE_KEYS = [
   'command.skills_empty',
   'command.summary_enqueued',
   'command.summary_unavailable',
-  // --- Inline shell (AD-046 §7.4) ---
+  // --- Inline shell (ADR-046 §7.4) ---
   'command.inline_shell_disabled',
   'command.inline_shell_denied',
   'command.inline_shell_failed',
   'command.inline_shell_truncated',
   'command.inline_shell_unavailable',
-  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  // --- Git-репозитории и SSH-ключи (ADR-076) ---
   'sshkey.not_found',
   'sshkey.name_exists',
   'sshkey.encryption_unavailable',
@@ -276,7 +276,7 @@ export const ENGINE_MESSAGE_KEYS = [
   'git.ssh_key_required',
   'git.repo_path_invalid',
   'git.repo_exists',
-  // --- Внешние события и хуки (AD-030 / AD-089) ---
+  // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested',
   'event.routed.bound',
   'event.routed.ephemeral',
@@ -531,14 +531,14 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'micro.intent.debug': [],
   'micro.intent.fix': [],
   'micro.intent.test': [],
-  // --- Скиллы (AD-046) ---
+  // --- Скиллы (ADR-046) ---
   'skill.args_error': ["issues"],
   'skill.not_found': ["name"],
   'skill.untrusted': ["name"],
   'skill.delegation': ["name","capabilities","agent"],
   'skill.file_not_found': ["path"],
   'skill.scope_disabled': ["name","reason"],
-  // --- Slash-команды (AD-046 §7) ---
+  // --- Slash-команды (ADR-046 §7) ---
   'command.unknown': ["name"],
   'command.denied': ["name"],
   'command.unavailable': ["name","capabilities"],
@@ -547,13 +547,13 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'command.skills_empty': [],
   'command.summary_enqueued': [],
   'command.summary_unavailable': [],
-  // --- Inline shell (AD-046 §7.4) ---
+  // --- Inline shell (ADR-046 §7.4) ---
   'command.inline_shell_disabled': [],
   'command.inline_shell_denied': ["command","reason"],
   'command.inline_shell_failed': ["output"],
   'command.inline_shell_truncated': ["limit"],
   'command.inline_shell_unavailable': [],
-  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  // --- Git-репозитории и SSH-ключи (ADR-076) ---
   'sshkey.not_found': ["id"],
   'sshkey.name_exists': ["name"],
   'sshkey.encryption_unavailable': [],
@@ -562,7 +562,7 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'git.ssh_key_required': ["path"],
   'git.repo_path_invalid': ["path"],
   'git.repo_exists': ["path"],
-  // --- Внешние события и хуки (AD-030 / AD-089) ---
+  // --- Внешние события и хуки (ADR-030 / ADR-089) ---
   'event.ingested': ["id","source"],
   'event.routed.bound': ["sessionId"],
   'event.routed.ephemeral': ["agentTemplate"],

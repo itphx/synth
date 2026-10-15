@@ -4,8 +4,8 @@ import type { SkillMeta } from '@itphx/synth-shared';
 import type { DiscoveredSkill, SkillSource } from './types.js';
 
 /**
- * AD-046 §9.5: встроенные (builtin) скиллы — объявлены в коде (TS-константа),
- * без нового asset-каталога (AD-038). Не сидятся на ФС: `dir` — синтетический
+ * ADR-046 §9.5: встроенные (builtin) скиллы — объявлены в коде (TS-константа),
+ * без нового asset-каталога (ADR-038). Не сидятся на ФС: `dir` — синтетический
  * маркер, читать его не нужно (supporting-файлов нет).
  */
 export const BUILTIN_SKILLS_DIRNAME = '.builtin';
@@ -14,9 +14,9 @@ export const BUILTIN_SKILLS_DIRNAME = '.builtin';
 export const SKILL_CREATOR_NAME = 'skill-creator';
 
 /**
- * AD-069 §8.2: имя встроенного скилла генерации/аудита проектных инструкций.
+ * ADR-069 §8.2: имя встроенного скилла генерации/аудита проектных инструкций.
  * Slash-команда — `agents-md`, а не `init`: имя `init` занято встроенной
- * командой `/init` (AD-069 §8.1), а `resolveCatalog` при коллизии эмитит
+ * командой `/init` (ADR-069 §8.1), а `resolveCatalog` при коллизии эмитит
  * диагностику `shadowed` и скилл был бы недостижим.
  */
 export const SYNTH_AGENTS_MD_NAME = 'synth-agents-md';
@@ -110,7 +110,7 @@ export function buildSkillCreatorMeta(): SkillMeta {
 const SYNTH_AGENTS_MD_BODY = `# AGENTS.md
 
 Create, update and audit \`AGENTS.md\` — repository project instructions that
-Synth loads automatically (AD-069).
+Synth loads automatically (ADR-069).
 
 ## When to use
 - The user runs \`/init\` or \`/${SYNTH_AGENTS_MD_COMMAND}\`.
@@ -141,7 +141,7 @@ Synth loads automatically (AD-069).
 - Confirm commands mentioned in it actually exist in package/CI config.
 - Note that project instructions load only from a trusted workspace.`;
 
-/** `SkillMeta` встроенного `synth-agents-md` (AD-069 §8.2). */
+/** `SkillMeta` встроенного `synth-agents-md` (ADR-069 §8.2). */
 export function buildSynthAgentsMdMeta(): SkillMeta {
   return {
     name: SYNTH_AGENTS_MD_NAME,

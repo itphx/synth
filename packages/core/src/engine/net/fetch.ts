@@ -1,5 +1,5 @@
 /**
- * AD-046 §4.2/AD-069 §5.1: общие сетевые хелперы Synth — SSRF-guard и
+ * ADR-046 §4.2/ADR-069 §5.1: общие сетевые хелперы Synth — SSRF-guard и
  * безопасная загрузка текста по URL.
  *
  * Модуль не знает о скиллах/инструкциях: только протокол http/https, запрет
@@ -17,7 +17,7 @@ export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
 /**
  * Запрещённые IPv4-диапазоны (SSRF): loopback/private/link-local/CGNAT/спец.
- * `0.0.0.0/8` и `100.64.0.0/10` — усиление (не указаны явно в AD-046).
+ * `0.0.0.0/8` и `100.64.0.0/10` — усиление (не указаны явно в ADR-046).
  */
 const BLOCKED_V4_CIDRS: readonly string[] = [
   '0.0.0.0/8',

@@ -24,7 +24,7 @@ import {
 } from './index.js';
 import { PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS } from '../types/index.js';
 
-describe('normalizeGitRepoConfig (AD-076)', () => {
+describe('normalizeGitRepoConfig (ADR-076)', () => {
   it('строка → { path }', () => {
     expect(normalizeGitRepoConfig('repos/app')).toEqual({ path: 'repos/app' });
   });
@@ -60,7 +60,7 @@ describe('normalizeGitRepoConfig (AD-076)', () => {
   });
 });
 
-describe('gitRepoConfigSchema (AD-076)', () => {
+describe('gitRepoConfigSchema (ADR-076)', () => {
   it('path обязателен', () => {
     expect(gitRepoConfigSchema.safeParse({}).success).toBe(false);
     expect(gitRepoConfigSchema.safeParse({ path: 'r' }).success).toBe(true);
@@ -73,7 +73,7 @@ describe('gitRepoConfigSchema (AD-076)', () => {
   });
 });
 
-describe('project repos: legacy + новая форма (AD-076)', () => {
+describe('project repos: legacy + новая форма (ADR-076)', () => {
   it('projectCreateSchema принимает string[] и объекты', () => {
     const parsed = projectCreateSchema.safeParse({
       name: 'demo',
@@ -88,7 +88,7 @@ describe('project repos: legacy + новая форма (AD-076)', () => {
   });
 });
 
-describe('sshKeyCreateSchema (AD-076)', () => {
+describe('sshKeyCreateSchema (ADR-076)', () => {
   it('валидный минимальный payload', () => {
     const parsed = sshKeyCreateSchema.safeParse({
       name: 'deploy',
@@ -199,7 +199,7 @@ describe('иконки/цвета проектов и сессий', () => {
   });
 });
 
-describe('synthEventSchema (AD-089)', () => {
+describe('synthEventSchema (ADR-089)', () => {
   it('валидное событие, identity по умолчанию — пустой объект', () => {
     const parsed = synthEventSchema.safeParse({
       id: 'evt_1',
@@ -246,7 +246,7 @@ describe('synthEventSchema (AD-089)', () => {
   });
 });
 
-describe('eventBindingSchema (AD-089)', () => {
+describe('eventBindingSchema (ADR-089)', () => {
   it('валидные режимы bound/ephemeral/queue', () => {
     for (const mode of ['bound', 'ephemeral', 'queue'] as const) {
       expect(eventBindingSchema.safeParse({ id: 'b1', source: 'telegram', mode }).success).toBe(true);
@@ -274,7 +274,7 @@ describe('eventBindingSchema (AD-089)', () => {
   });
 });
 
-describe('sessionRequestSchema (AD-089)', () => {
+describe('sessionRequestSchema (ADR-089)', () => {
   it('валидный минимальный запрос', () => {
     const parsed = sessionRequestSchema.safeParse({ initiator: 'external', intent: 'event' });
     expect(parsed.success).toBe(true);
@@ -322,7 +322,7 @@ describe('sessionRequestSchema (AD-089)', () => {
   });
 });
 
-describe('schedule schemas (AD-051 / AD-089)', () => {
+describe('schedule schemas (ADR-051 / ADR-089)', () => {
   it('scheduleTargetSchema: три варианта', () => {
     expect(scheduleTargetSchema.safeParse({ mode: 'bound', sessionId: 's1' }).success).toBe(true);
     expect(scheduleTargetSchema.safeParse({ mode: 'queue', sessionId: 's1' }).success).toBe(true);
@@ -331,7 +331,7 @@ describe('schedule schemas (AD-051 / AD-089)', () => {
     expect(scheduleTargetSchema.safeParse({ mode: 'other' }).success).toBe(false);
   });
 
-  it('eventRouteTargetSchema: четыре варианта, включая bind (AD-089 auto-bind)', () => {
+  it('eventRouteTargetSchema: четыре варианта, включая bind (ADR-089 auto-bind)', () => {
     expect(eventRouteTargetSchema.safeParse({ mode: 'bound', sessionId: 's1' }).success).toBe(true);
     expect(eventRouteTargetSchema.safeParse({ mode: 'queue', sessionId: 's1' }).success).toBe(true);
     expect(eventRouteTargetSchema.safeParse({ mode: 'ephemeral', ttl: '30m' }).success).toBe(true);

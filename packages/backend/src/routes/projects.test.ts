@@ -113,7 +113,7 @@ describe('Project API Routes', () => {
       expect(res.status).toBe(400);
     });
 
-    it('создаёт проект с планом (AD-039) и сохраняет его в store', async () => {
+    it('создаёт проект с планом (ADR-039) и сохраняет его в store', async () => {
       const plan = {
         version: 1,
         updatedAt: '2026-01-01T00:00:00.000Z',
@@ -276,7 +276,7 @@ describe('Project API Routes', () => {
 });
 
 // ---------------------------------------------------------------------------
-// AD-075: provisioning workspace managed-проекта (автосоздание, авто-имя, пути, RBAC)
+// ADR-075: provisioning workspace managed-проекта (автосоздание, авто-имя, пути, RBAC)
 // ---------------------------------------------------------------------------
 
 interface WsMockUser extends User {
@@ -331,7 +331,7 @@ function makeWorkspaceApp() {
   return { app, store };
 }
 
-describe('Project workspace provisioning (AD-075, managed backend)', () => {
+describe('Project workspace provisioning (ADR-075, managed backend)', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-proj-ws-'));
   });
@@ -629,10 +629,10 @@ describe('Project RBAC (D5): контент и удаление', () => {
 });
 
 // ---------------------------------------------------------------------------
-// AD-089: видимость проектов (LEAD/ADMIN — все) и read-уровень GET /:id
+// ADR-089: видимость проектов (LEAD/ADMIN — все) и read-уровень GET /:id
 // ---------------------------------------------------------------------------
 
-describe('Project visibility (AD-089, backend RBAC)', () => {
+describe('Project visibility (ADR-089, backend RBAC)', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-proj-vis-'));
   });

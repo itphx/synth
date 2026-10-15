@@ -353,7 +353,7 @@ describe('Settings API Routes (workspace)', () => {
     });
   });
 
-  describe('LLM Gateway (AD-036)', () => {
+  describe('LLM Gateway (ADR-036)', () => {
     it('PUT /api/v2/settings/llm-gateway переживает рестарт', async () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       await app.request('/api/v2/settings/llm-gateway', {
@@ -465,7 +465,7 @@ describe('Settings API Routes (workspace)', () => {
     });
   });
 
-  describe('tools-policy (AD-071 §2.3)', () => {
+  describe('tools-policy (ADR-071 §2.3)', () => {
     it('GET возвращает fallback (config), если runtime не задан', async () => {
       const app = new Hono();
       const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
@@ -480,7 +480,7 @@ describe('Settings API Routes (workspace)', () => {
       expect(body).toEqual({ toolsPolicy: 'available', isOverridden: false, defaults: 'available' });
     });
 
-    it('GET по умолчанию auto (AD-071 §2.3)', async () => {
+    it('GET по умолчанию auto (ADR-071 §2.3)', async () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/tools-policy');
       const body: any = await res.json();
@@ -535,7 +535,7 @@ describe('Settings API Routes (workspace)', () => {
     });
   });
 
-  describe('mcp-policy (AD-071 §2.3)', () => {
+  describe('mcp-policy (ADR-071 §2.3)', () => {
     it('GET по умолчанию auto', async () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/mcp-policy');
@@ -623,7 +623,7 @@ describe('Settings API Routes (workspace)', () => {
     });
   });
 
-  describe('mcp-network-policy (AD-071 §2.3.1)', () => {
+  describe('mcp-network-policy (ADR-071 §2.3.1)', () => {
     it('GET по умолчанию возвращает deny приватных диапазонов', async () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/mcp-network-policy');
@@ -709,7 +709,7 @@ describe('Settings API Routes (workspace)', () => {
     });
   });
 
-  describe('tools-disabled (AD-071 §2.6)', () => {
+  describe('tools-disabled (ADR-071 §2.6)', () => {
     it('GET по умолчанию возвращает пустой конфиг', async () => {
       const { app } = createTestApp(tmpDir, FALLBACK);
       const res = await app.request('/api/v2/settings/tools-disabled');
@@ -853,7 +853,7 @@ describe('Settings API Routes (workspace)', () => {
     });
   });
 
-  describe('AD-072 Ф2: сброс runtime-настроек к умолчанию (GET meta + DELETE)', () => {
+  describe('ADR-072 Ф2: сброс runtime-настроек к умолчанию (GET meta + DELETE)', () => {
     it('DELETE /workspace очищает override и возвращает fallback', async () => {
       const { app, settingsStore } = createTestApp(tmpDir, FALLBACK);
       await app.request('/api/v2/settings/workspace', {
@@ -1220,7 +1220,7 @@ async function settingsLoad(tmpDir: string): Promise<{ workspace?: string; mcpSe
   return JSON.parse(raw);
 }
 
-describe('Settings API Routes (workspace-policy, AD-075)', () => {
+describe('Settings API Routes (workspace-policy, ADR-075)', () => {
   let tmpDir: string;
   const FALLBACK = '/default/ws';
 
@@ -1325,7 +1325,7 @@ describe('Settings API Routes (workspace-policy, AD-075)', () => {
   });
 });
 
-describe('Settings API Routes (events, AD-089)', () => {
+describe('Settings API Routes (events, ADR-089)', () => {
   let tmpDir: string;
   const FALLBACK = '/default/env-or-config-workspace';
 
@@ -1405,7 +1405,7 @@ describe('Settings API Routes (events, AD-089)', () => {
     expect(get.events.enabled).toBe(false);
   });
 
-  it('PUT /events — autoBind/autoBindAgentTemplate сохраняются и применяются (AD-089)', async () => {
+  it('PUT /events — autoBind/autoBindAgentTemplate сохраняются и применяются (ADR-089)', async () => {
     const { app, settingsStore, onEventsChange } = makeEventsApp();
     const res = await app.request('/api/v2/settings/events', {
       method: 'PUT',
@@ -1421,7 +1421,7 @@ describe('Settings API Routes (events, AD-089)', () => {
     );
   });
 
-  it('PUT /events — identityMap сохраняется и применяется (AD-089)', async () => {
+  it('PUT /events — identityMap сохраняется и применяется (ADR-089)', async () => {
     const { app, settingsStore, onEventsChange } = makeEventsApp();
     const res = await app.request('/api/v2/settings/events', {
       method: 'PUT',
@@ -1506,7 +1506,7 @@ describe('Settings API Routes (events, AD-089)', () => {
   });
 });
 
-describe('Settings API Routes (decision, AD-084)', () => {
+describe('Settings API Routes (decision, ADR-084)', () => {
   let tmpDir: string;
   const FALLBACK = '/default/env-or-config-workspace';
 

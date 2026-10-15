@@ -42,7 +42,7 @@ function makeEvent(type: string, sessionId: string, data: Record<string, unknown
   return { type, session_id: sessionId, data }
 }
 
-describe('transportStore dispatcher: context.instructions_loaded (AD-069 §9.3)', () => {
+describe('transportStore dispatcher: context.instructions_loaded (ADR-069 §9.3)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useInstructionsStore.setState({

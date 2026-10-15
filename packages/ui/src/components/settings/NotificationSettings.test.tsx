@@ -91,7 +91,7 @@ const switchByLabel = (container: HTMLElement, label: string) =>
 const byTestId = (container: HTMLElement, id: string) =>
   container.querySelector(`[data-testid="${id}"]`) as HTMLButtonElement | null
 
-describe('NotificationSettings — миграция на Settings UI Kit (AD-072)', () => {
+describe('NotificationSettings — миграция на Settings UI Kit (ADR-072)', () => {
   it('каркас — SettingsPanel с единственным scroll-контейнером и без pr-2', async () => {
     const container = await renderSettings()
 

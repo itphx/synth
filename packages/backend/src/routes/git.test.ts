@@ -1,4 +1,4 @@
-// AD-076 §T4: backend монтирует core-фабрику git-роутов с managed-RBAC.
+// ADR-076 §T4: backend монтирует core-фабрику git-роутов с managed-RBAC.
 // Проверяем: non-editor → 403, owner/EDITOR/LEAD/ADMIN → запись разрешена,
 // read-only (scan/log/commit) legacy-поведение не сломано.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -71,7 +71,7 @@ async function createBareRepo(base: string): Promise<string> {
   return bare;
 }
 
-describe('Git API Routes (AD-076 §T4, backend)', () => {
+describe('Git API Routes (ADR-076 §T4, backend)', () => {
   let root: string;
   let dataDir: string;
   let workspacesRoot: string;

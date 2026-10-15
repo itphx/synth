@@ -48,7 +48,7 @@ function ctx(extra: Record<string, unknown>, agentRole?: string): ToolContext {
   };
 }
 
-describe('core-тул skill (AD-046 §5)', () => {
+describe('core-тул skill (ADR-046 §5)', () => {
   it('возвращает <skill_content> + base directory + ≤10 файлов', async () => {
     const skill = discovered('api-review');
     const files = Array.from({ length: 14 }, (_, i) => `references/f${i}.md`);
@@ -59,7 +59,7 @@ describe('core-тул skill (AD-046 §5)', () => {
     expect(res.content).toContain('Body of api-review');
     expect(res.content).toContain('Base directory for this skill: file:///skills/api-review');
     expect(res.content).toContain('<skill_files>');
-    // не более 10 путей, формат <file>путь</file> (AD-046 §5)
+    // не более 10 путей, формат <file>путь</file> (ADR-046 §5)
     expect((res.content.match(/<file>references\/f\d+\.md<\/file>/g) ?? []).length).toBe(10);
     expect(res.content).not.toContain('references/f10.md');
   });
@@ -131,7 +131,7 @@ describe('core-тул skill (AD-046 §5)', () => {
     expect(res.isError).toBe(true);
   });
 
-  it('AD-046 §4.5: projectEnabled=[] → skill.scope_disabled (reason=project)', async () => {
+  it('ADR-046 §4.5: projectEnabled=[] → skill.scope_disabled (reason=project)', async () => {
     const runtime = makeRuntime(discovered('a'));
     const res = await skillTool.execute(
       { name: 'a' },
@@ -143,7 +143,7 @@ describe('core-тул skill (AD-046 §5)', () => {
     expect(res.metadata).toMatchObject({ disabledReason: 'project' });
   });
 
-  it('AD-046 §4.5: системный hard-gate → skill.scope_disabled (reason=system)', async () => {
+  it('ADR-046 §4.5: системный hard-gate → skill.scope_disabled (reason=system)', async () => {
     const runtime = makeRuntime(discovered('a'));
     const res = await skillTool.execute(
       { name: 'a' },
@@ -153,7 +153,7 @@ describe('core-тул skill (AD-046 §5)', () => {
     expect(res.metadata).toMatchObject({ disabledReason: 'system' });
   });
 
-  it('AD-046 §4.5: скилл вне снапшота и без включения → scope_disabled (reason=session)', async () => {
+  it('ADR-046 §4.5: скилл вне снапшота и без включения → scope_disabled (reason=session)', async () => {
     const runtime = makeRuntime(discovered('a'));
     const res = await skillTool.execute(
       { name: 'a' },
@@ -163,7 +163,7 @@ describe('core-тул skill (AD-046 §5)', () => {
     expect(res.metadata).toMatchObject({ disabledReason: 'session' });
   });
 
-  it('AD-046 §4.5: снапшот включает скилл → загружается', async () => {
+  it('ADR-046 §4.5: снапшот включает скилл → загружается', async () => {
     const runtime = makeRuntime(discovered('a'));
     const res = await skillTool.execute(
       { name: 'a' },

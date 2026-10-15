@@ -9,7 +9,7 @@ import { decisionFromTarget } from './target-decision.js';
 import type { RouteRuleInput, RouteRuleProvider } from './types.js';
 
 /**
- * AD-089: правило маршрутизации по матчу события (`source`/`type`/ключи
+ * ADR-089: правило маршрутизации по матчу события (`source`/`type`/ключи
  * идентичности/`label`/`keywords`). Провайдер вызывается Router'ом после явного
  * `EventBinding` и dedup; первое (по `priority` desc) совпадение выигрывает.
  * Нет совпадения → `null` (решает фоллбек Router, не drop).

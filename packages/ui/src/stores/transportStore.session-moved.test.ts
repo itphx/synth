@@ -24,7 +24,7 @@ function makeEvent(type: string, sessionId: string, data: Record<string, unknown
   return { type, session_id: sessionId, data }
 }
 
-describe('transportStore dispatcher: session.moved (AD-040)', () => {
+describe('transportStore dispatcher: session.moved (ADR-040)', () => {
   let loadSpy: ReturnType<typeof vi.spyOn>
   let refreshSpy: ReturnType<typeof vi.spyOn>
 

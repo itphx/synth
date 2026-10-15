@@ -14,15 +14,15 @@ export interface SessionProjectStoreLike {
 export interface SessionManagerOptions {
   /** Поставщик глобальных настроек доступности MCP-серверов (runtime settings). */
   mcpSettingsProvider?: () => Promise<Record<string, McpServerToolSettings> | undefined>;
-  /** AD-071 §2.4 / AD-046 §4.5: загрузка проекта — снапшот `defaultOn` при создании сессии. */
+  /** ADR-071 §2.4 / ADR-046 §4.5: загрузка проекта — снапшот `defaultOn` при создании сессии. */
   projectStore?: SessionProjectStoreLike;
   /**
-   * AD-071 §2.4 / AD-046 §4.5: системные дефолты для сессий БЕЗ проекта —
+   * ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий БЕЗ проекта —
    * снапшоты `mcpDefaultOn`/`skillsDefaultOn` при создании.
    */
   systemDefaultsProvider?: () => Promise<{ mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined>;
   /**
-   * AD-030: ядровая шина хуков — `session_start` (создание) и `session_end`
+   * ADR-030: ядровая шина хуков — `session_start` (создание) и `session_end`
    * (удаление). Не задана — эмиты не выполняются, поведение менеджера не меняется.
    */
   hooks?: HookBus;
@@ -79,7 +79,7 @@ export class SessionManager {
       sessionOrigin: data.sessionOrigin || 'user',
       parentId: data.parentId,
       userId: data.userId || '',
-      // AD-075/D5: владелец сессии нужен для атрибуции при RBAC проектных данных
+      // ADR-075/D5: владелец сессии нужен для атрибуции при RBAC проектных данных
       // (plan_write). Раньше поле объявлялось, но не проставлялось.
       ownerId: data.ownerId || data.userId || '',
       projectId: data.projectId,
@@ -104,12 +104,12 @@ export class SessionManager {
         summarizationTailMessages: data.settings?.summarizationTailMessages ?? 3,
         showInterview: data.settings?.showInterview ?? true,
         websocketEnabled: data.settings?.websocketEnabled ?? true,
-        // AD-071 §2.1: активные MCP-серверы сессии. Раньше терялись при создании
+        // ADR-071 §2.1: активные MCP-серверы сессии. Раньше терялись при создании
         // (`POST /sessions` с `settings.mcpServers`) — сессия теряла их.
         mcpServers: data.settings?.mcpServers,
-        // AD-071 §2.4: явные opt-out сессии (включая системные) не теряются.
+        // ADR-071 §2.4: явные opt-out сессии (включая системные) не теряются.
         mcpDisabledServers: data.settings?.mcpDisabledServers,
-        // AD-046 §4.5: session-level overrides скиллов (ранее терялись при создании).
+        // ADR-046 §4.5: session-level overrides скиллов (ранее терялись при создании).
         skills: data.settings?.skills,
         skillsDisabled: data.settings?.skillsDisabled,
         provider: data.settings?.provider,
@@ -118,7 +118,7 @@ export class SessionManager {
         agentRole: data.settings?.agentRole,
         language: data.settings?.language,
         planMode: data.settings?.planMode,
-        // AD-071 §2.3: per-session override политик встроенных/MCP-инструментов
+        // ADR-071 §2.3: per-session override политик встроенных/MCP-инструментов
         // не теряется при создании.
         toolsPolicy: data.settings?.toolsPolicy,
         mcpPolicy: data.settings?.mcpPolicy,
@@ -147,7 +147,7 @@ export class SessionManager {
       cacheHitRate: 0,
       createdAt: nowISO(),
       updatedAt: nowISO(),
-      // AD-089: ephemeral-сессия архивируется sweeper'ом по `expiresAt`.
+      // ADR-089: ephemeral-сессия архивируется sweeper'ом по `expiresAt`.
       expiresAt: data.expiresAt,
       inputTokens: 0,
       outputTokens: 0,
@@ -156,10 +156,10 @@ export class SessionManager {
       cacheWriteTokens: 0,
       reasoningTokens: 0,
     };
-    // AD-071 §2.4 / AD-046 §4.5: снапшоты скоупа на момент создания сессии.
+    // ADR-071 §2.4 / ADR-046 §4.5: снапшоты скоупа на момент создания сессии.
     await this._materializeScopeSnapshots(session, data.projectId, data.settings);
     await this.store.save(session);
-    // AD-030: `session_start` — неблокирующий эмит после сохранения сессии.
+    // ADR-030: `session_start` — неблокирующий эмит после сохранения сессии.
     this._options.hooks?.emitAsync('session_start', {
       sessionId: session.id,
       ...(data.projectId ? { projectId: data.projectId } : {}),
@@ -169,7 +169,7 @@ export class SessionManager {
   }
 
   /**
-   * AD-071 §2.4 / AD-046 §4.5: материализует `mcpDefaultOn`/`skillsDefaultOn`
+   * ADR-071 §2.4 / ADR-046 §4.5: материализует `mcpDefaultOn`/`skillsDefaultOn`
    * сессии из `project.defaultOn` (или системного дефолта, если проекта нет).
    * Явно переданные в `settings` значения не перетираются. Не заданы нигде —
    * остаются `undefined` (legacy-режим каталога до миграции).
@@ -217,7 +217,7 @@ export class SessionManager {
   async deleteSession(sessionId: string): Promise<void> {
     await this.store.delete(sessionId);
     this._locks.delete(sessionId);
-    // AD-030: `session_end` — неблокирующий эмит после удаления сессии.
+    // ADR-030: `session_end` — неблокирующий эмит после удаления сессии.
     this._options.hooks?.emitAsync('session_end', { sessionId });
   }
 
@@ -225,14 +225,14 @@ export class SessionManager {
     filter?: { projectId?: string; userId?: string; projectIds?: string[] },
     options?: { includeArchived?: boolean },
   ): Promise<Session[]> {
-    // AD-089: `projectIds` — командная видимость (свои + сессии проектов-участий),
+    // ADR-089: `projectIds` — командная видимость (свои + сессии проектов-участий),
     // `userId` — только свои. Оба заданы — `projectIds` приоритетнее (он шире).
     const sessions = filter?.projectIds
       ? await this.store.listForUserScope(filter.userId ?? '', filter.projectIds)
       : filter?.userId
         ? await this.store.listForUser(filter.userId)
         : await this.store.list(filter);
-    // AD-089: архивированные сессии скрыты из списков по умолчанию (доступ — getSession по id).
+    // ADR-089: архивированные сессии скрыты из списков по умолчанию (доступ — getSession по id).
     if (options?.includeArchived) return sessions;
     return sessions.filter((s) => !s.archivedAt);
   }
@@ -243,8 +243,8 @@ export class SessionManager {
   }
 
   /**
-   * AD-089: архивирует сессию (идемпотентно). Уже архивированная или
-   * отсутствующая — `null`. Успешный архив эмитит `session_end` (AD-030).
+   * ADR-089: архивирует сессию (идемпотентно). Уже архивированная или
+   * отсутствующая — `null`. Успешный архив эмитит `session_end` (ADR-030).
    */
   async archiveSession(sessionId: string): Promise<Session | null> {
     const session = await this.store.load(sessionId);
@@ -257,7 +257,7 @@ export class SessionManager {
   }
 
   /**
-   * AD-089: архивирует все ephemeral-сессии с истёкшим `expiresAt`
+   * ADR-089: архивирует все ephemeral-сессии с истёкшим `expiresAt`
    * (`expiresAt <= now`, `archivedAt` не задан). Возвращает id архивированных.
    */
   async archiveExpired(now: Date = new Date()): Promise<string[]> {
@@ -312,7 +312,7 @@ export class SessionManager {
   }
 
   async cleanupStaleLocks(timeoutMinutes = 15): Promise<string[]> {
-    // AD-089: архивированные сессии тоже могут держать устаревший lock — проходим все.
+    // ADR-089: архивированные сессии тоже могут держать устаревший lock — проходим все.
     const sessions = await this.listSessions(undefined, { includeArchived: true });
     const stale: string[] = [];
     const now = new Date();
@@ -623,7 +623,7 @@ export class SessionManager {
       const existingTitles = siblings.map((s) => s.title || '');
       const forkedTitle = options.title || getForkedTitle(source.title, existingTitles);
 
-      // AD-089: materialization (ветвление как факт копии истории), не request —
+      // ADR-089: materialization (ветвление как факт копии истории), не request —
       // прямой `createSession`; funnel `session.requested` сюда не применяется.
       const forked = await this.createSession({
         title: forkedTitle,
@@ -634,7 +634,7 @@ export class SessionManager {
         sessionOrigin: 'fork' as SessionOrigin,
         parentId: sourceSessionId,
         settings: { ...source.settings },
-        // AD-075/D5: при отсутствии явной атрибуции наследуем владельца источника,
+        // ADR-075/D5: при отсутствии явной атрибуции наследуем владельца источника,
         // иначе форк терял владельца и выпадал из RBAC проектных данных.
         userId: options.userId ?? source.userId,
         ownerId: options.ownerId ?? source.ownerId,

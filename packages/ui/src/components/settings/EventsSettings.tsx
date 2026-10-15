@@ -24,7 +24,7 @@ const UNKNOWN_AGENT_POLICIES: Array<EventsSettingsData['unknownAgentTemplate']> 
 ]
 
 /**
- * AD-089 / AD-072: админ-секция «Параметры событий» — runtime-настройки обработки
+ * ADR-089 / ADR-072: админ-секция «Параметры событий» — runtime-настройки обработки
  * внешних событий (`/settings/events`): мастер-выключатель, режим по умолчанию,
  * TTL ephemeral, retention журнала, белый список источников, политика неизвестного
  * агента и глобальный лимит запросов на API-ключ. Мутации — ADMIN (guard сервера).
@@ -66,7 +66,7 @@ export function EventsSettings() {
     if (!draft.draft) return
     setSaving(true)
     try {
-      // AD-089: сервер отклоняет пустые ключи identityMap (400) — фильтруем пары
+      // ADR-089: сервер отклоняет пустые ключи identityMap (400) — фильтруем пары
       // с пустым/пробельным ключом перед отправкой.
       const payload: EventsSettingsData = {
         ...draft.draft,

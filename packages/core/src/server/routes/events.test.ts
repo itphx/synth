@@ -29,7 +29,7 @@ function createIngress(decision: RouteDecision, session: Session | null, identit
   return new EventIngress({ requestSessionService: service });
 }
 
-describe('Events API Routes (AD-089)', () => {
+describe('Events API Routes (ADR-089)', () => {
   let tmpDir: string;
   let bindingStore: EventBindingStore;
   let apiKeyStore: EventApiKeyStore;
@@ -105,7 +105,7 @@ describe('Events API Routes (AD-089)', () => {
     expect(body.error.code).toBe('VALIDATION_ERROR');
   });
 
-  // --- AD-089 (claim-flow): identityHint в ответе POST /events ---
+  // --- ADR-089 (claim-flow): identityHint в ответе POST /events ---
 
   it('POST / — неизвестный отправитель → ответ содержит identityHint', async () => {
     const hint = { code: 'ABC-DEF', expiresAt: '2030-01-01T00:00:00.000Z' };
@@ -374,7 +374,7 @@ describe('Events API Routes (AD-089)', () => {
     expect(limitedBody.entries[1].event.id).toBe('evt_2');
   });
 
-  // --- AD-089/AD-052: API-ключи привязок и приём события по ключу ---
+  // --- ADR-089/ADR-052: API-ключи привязок и приём события по ключу ---
 
   /** Ingress с захватом аргументов `handleEvent` (для проверки forced binding). */
   function capturingIngress(decision: RouteDecision, session: Session | null) {
@@ -657,7 +657,7 @@ describe('Events API Routes (AD-089)', () => {
     expect(call[1].audit).toBeUndefined();
   });
 
-  // --- AD-089/AD-052: обычный пользовательский Bearer vs binding-key ---
+  // --- ADR-089/ADR-052: обычный пользовательский Bearer vs binding-key ---
 
   it('POST / — обычный Bearer (без префикса synth_evt_) идёт на fallback ingestGuard', async () => {
     const resolveApiKeySecret = vi.fn(async () => null);
@@ -730,9 +730,9 @@ describe('Events API Routes (AD-089)', () => {
     expect(await apiKeyStore.listByBinding(binding.id)).toHaveLength(0);
   });
 
-  // --- AD-089: атрибуция владельца создаваемых funnel'ом сессий ---
+  // --- ADR-089: атрибуция владельца создаваемых funnel'ом сессий ---
 
-  it('POST / по ключу: владелец сессии = создатель ключа привязки (AD-089)', async () => {
+  it('POST / по ключу: владелец сессии = создатель ключа привязки (ADR-089)', async () => {
     const binding = await bindingStore.upsert({ source: 'telegram', chatKey: 'chat:telegram:21', mode: 'bound', sessionId: 's-bound' });
     const created = await apiKeyStore.create({ bindingId: binding.id, label: 'd', createdBy: 'creator-7' });
 
@@ -752,7 +752,7 @@ describe('Events API Routes (AD-089)', () => {
     expect(call[1].ownerId).toBe('creator-7');
   });
 
-  it('POST / без ключа: владелец сессии = аутентифицированный пользователь (AD-089)', async () => {
+  it('POST / без ключа: владелец сессии = аутентифицированный пользователь (ADR-089)', async () => {
     const authWithUser = {
       getCurrentUser: () => ({ id: 'u-9' }),
       requireAuth: async (c: Context, next: Next) => {

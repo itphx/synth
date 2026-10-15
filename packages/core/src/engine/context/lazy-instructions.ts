@@ -1,5 +1,5 @@
 /**
- * AD-069 §4: lazy-догрузка вложенных проектных инструкций.
+ * ADR-069 §4: lazy-догрузка вложенных проектных инструкций.
  *
  * Инструкции ближайшего каталога подклеиваются **в результат file/shell-тула**
  * (не в system prompt — сохраняем prompt-cache), с пометкой
@@ -10,7 +10,7 @@
  *   `write_file`/`edit_file`/`delete_file`/`create_directory`/`execute_shell`;
  * - вверх от каталога файла не более `lazy.maxAncestors` (5), только внутри
  *   `project.workspace`, с исключением `lazy.excludeDirs`;
- * - trust-гейт как у system-chain (AD-069 §3.5/R1): недоверенный workspace
+ * - trust-гейт как у system-chain (ADR-069 §3.5/R1): недоверенный workspace
  *   (`untrusted`) инструкции не догружает;
  * - на каталог — приоритет файлов как в резолвере
  *   (`AGENTS.override.md` > `AGENTS.md` > `agents.md`; `CLAUDE.md` при
@@ -19,7 +19,7 @@
  *   lazy-догрузки) + sha256 по содержимому;
  * - один раз на assistant-сообщение (`claims` по сообщению);
  * - кап блока `lazy.maxChars` (8000), head/tail-обрезка с маркером пути;
- * - threat-scan (AD-036) до вставки; `block` — файл не грузится.
+ * - threat-scan (ADR-036) до вставки; `block` — файл не грузится.
  *
  * Резолвер stateless; состояние (`loaded`/`claims`) — per-session в оркестраторе.
  */
@@ -44,10 +44,10 @@ import {
 } from '../security/prompt-injection.js';
 import type { DictionaryStore } from '../router/dictionary-store.js';
 
-/** Пометка lazy-блока в tool result (AD-069 §4.3.6). */
+/** Пометка lazy-блока в tool result (ADR-069 §4.3.6). */
 export const LAZY_INSTRUCTIONS_PREFIX = '[Subdirectory context discovered:';
 
-/** Тулы-триггеры lazy-догрузки (AD-069 §4.2). */
+/** Тулы-триггеры lazy-догрузки (ADR-069 §4.2). */
 export const LAZY_TRIGGER_TOOLS: ReadonlySet<string> = new Set([
   'read_file',
   'grep_files',
@@ -102,11 +102,11 @@ export interface LazyInstructionsDeps {
   /** Доли head/tail при обрезке (из `instructions`). */
   headRatio: number;
   tailRatio: number;
-  /** AD-069 §3.5/R1: `config.skills.trustedProjectDirs` — project-trust гейт. */
+  /** ADR-069 §3.5/R1: `config.skills.trustedProjectDirs` — project-trust гейт. */
   trustedProjectDirs?: readonly string[];
-  /** AD-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
+  /** ADR-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
   workspacesRoot?: string;
-  /** Словарь threat-scan (AD-036). */
+  /** Словарь threat-scan (ADR-036). */
   dictionaryStore?: DictionaryStore | null;
 }
 
@@ -121,7 +121,7 @@ export interface LazyResolveArgs {
   /** Абсолютный `project.workspace` — граница lazy-догрузки. */
   workspace: string;
   language?: string;
-  /** Политика threat-scan (как у tool-контента, AD-036). */
+  /** Политика threat-scan (как у tool-контента, ADR-036). */
   injection?: { enabled: boolean; mode: InjectionPolicy };
 }
 
@@ -235,10 +235,10 @@ export class LazyInstructionsLoader {
 
     const targetDir = this._resolveTargetDir(args, workspace);
     if (!targetDir) return empty;
-    // Граница: только внутри project.workspace (AD-069 §4.3.3).
+    // Граница: только внутри project.workspace (ADR-069 §4.3.3).
     if (!isInsideDir(workspace, targetDir)) return empty;
 
-    // AD-069 §3.5/R1: общий с project-chain trust-гейт — вложенные инструкции
+    // ADR-069 §3.5/R1: общий с project-chain trust-гейт — вложенные инструкции
     // недоверенного workspace не грузятся (причина `untrusted`).
     if (
       !resolveInstructionsTrusted(workspace, {
@@ -406,7 +406,7 @@ export class LazyInstructionsLoader {
     return set;
   }
 
-  /** Threat-scan (AD-036): flag/sanitize/block на контенте lazy-инструкций. */
+  /** Threat-scan (ADR-036): flag/sanitize/block на контенте lazy-инструкций. */
   private _scan(
     content: string,
     args: LazyResolveArgs,

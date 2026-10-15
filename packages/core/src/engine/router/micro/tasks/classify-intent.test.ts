@@ -1,5 +1,5 @@
 /**
- * Тесты classify-intent handler (AD-035).
+ * Тесты classify-intent handler (ADR-035).
  */
 import { describe, it, expect } from 'vitest';
 import { handleClassifyIntent } from './classify-intent.js';

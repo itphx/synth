@@ -29,7 +29,7 @@ function makeApp(cred?: ServiceKeyCredential) {
   return app;
 }
 
-describe('requireScope (AD-052)', () => {
+describe('requireScope (ADR-052)', () => {
   it('без serviceKey — пропускает (интерактивные креды не ограничиваются)', async () => {
     const app = makeApp();
     expect((await app.request('/watch')).status).toBe(200);
@@ -52,7 +52,7 @@ describe('requireScope (AD-052)', () => {
   });
 });
 
-describe('isProjectAllowed / checkProjectAccess (AD-052)', () => {
+describe('isProjectAllowed / checkProjectAccess (ADR-052)', () => {
   it('пусто/отсутствует allowedProjects — разрешено любой проект', () => {
     expect(isProjectAllowed(undefined, 'p1')).toBe(true);
     expect(isProjectAllowed({ allowedProjects: [] }, 'p1')).toBe(true);

@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import type { EventBinding } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
 
-/** Версия схемы файла биндингов — для будущей миграции (AD-032). */
+/** Версия схемы файла биндингов — для будущей миграции (PROP-032). */
 export const EVENT_BINDINGS_SCHEMA_VERSION = 1;
 
 export interface EventBindingStoreConfig {
@@ -19,10 +19,10 @@ interface BindingsFile {
 }
 
 /**
- * AD-089: реестр устойчивых привязок внешнего адреса к сессии/шаблону.
+ * ADR-089: реестр устойчивых привязок внешнего адреса к сессии/шаблону.
  *
- * Хранится одним JSON-файлом `{dataDir}/events/bindings.json` (AD-005,
- * атомарная запись tmp→rename). Модель PG-ready (AD-032): плоские записи со
+ * Хранится одним JSON-файлом `{dataDir}/events/bindings.json` (ADR-005,
+ * атомарная запись tmp→rename). Модель PG-ready (PROP-032): плоские записи со
  * стабильным `id` и `schemaVersion`.
  */
 export class EventBindingStore {

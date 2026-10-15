@@ -1,4 +1,4 @@
-// AD-051 (срез) / AD-089: backend монтирует core-фабрику расписаний с managed-RBAC.
+// ADR-051 (срез) / ADR-089: backend монтирует core-фабрику расписаний с managed-RBAC.
 // Проверяем: чтение (GET) — requireAuth; мутации (POST/PUT/DELETE) и принудительный
 // запуск (`POST /:id/run`) — только ADMIN; валидация тела → 400; отсутствие записи → 404.
 // Плюс сшивка в createBackendApp: при `scheduler.enabled: false` роуты смонтированы,
@@ -55,7 +55,7 @@ const VALID_BODY: ScheduleInput = {
   prompt: 'ping',
 };
 
-describe('Schedules API Routes (AD-051 срез / AD-089, backend RBAC)', () => {
+describe('Schedules API Routes (ADR-051 срез / ADR-089, backend RBAC)', () => {
   let dataDir: string;
   let scheduleStore: ScheduleStore;
   let scheduler: SchedulerService;

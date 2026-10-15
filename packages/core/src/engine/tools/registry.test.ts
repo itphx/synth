@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.1: тегирование источника инструментов и per-session выборка
+ * ADR-071 §2.1: тегирование источника инструментов и per-session выборка
  * (встроенные + MCP только активных серверов).
  */
 
@@ -30,7 +30,7 @@ function mcpTool(server: string, name: string): ToolDefinition {
   };
 }
 
-describe('ToolRegistry — источник и per-session выборка (AD-071 §2.1)', () => {
+describe('ToolRegistry — источник и per-session выборка (ADR-071 §2.1)', () => {
   it('встроенные тулы получают source: builtin по умолчанию', () => {
     const registry = new ToolRegistry();
     registry.register(builtinTool('read_file'));

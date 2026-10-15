@@ -6,7 +6,7 @@ import type { RouteRuleInput, RouteRuleProvider } from '../events/types.js';
 const DEFAULT_EPHEMERAL_TTL = '24h';
 
 /**
- * AD-051 (минимальный срез) / AD-089: правило маршрутизации cron-событий.
+ * ADR-051 (минимальный срез) / ADR-089: правило маршрутизации cron-событий.
  *
  * Router вызывает провайдер после явного `Binding` и после dedup — это ок.
  * Поддерживаются только события `source === 'cron'` с `payload.scheduleId`:
@@ -35,7 +35,7 @@ export class SchedulerRuleProvider implements RouteRuleProvider {
     const schedule = await this._store.get(scheduleId);
     if (!schedule) return { kind: 'drop', reason: 'schedule_not_found', audited: true };
 
-    // AD-051: force-запуск (`POST /:id/run`) обходит проверку `enabled`.
+    // ADR-051: force-запуск (`POST /:id/run`) обходит проверку `enabled`.
     const force =
       !!payload && typeof payload === 'object' && (payload as { force?: unknown }).force === true;
     if (!schedule.enabled && !force) {

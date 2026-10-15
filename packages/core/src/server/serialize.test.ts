@@ -10,7 +10,7 @@ function message(over: Partial<Message> = {}): Message {
   };
 }
 
-describe('serializeMessage — ephemeral (AD-046 §7.1)', () => {
+describe('serializeMessage — ephemeral (ADR-046 §7.1)', () => {
   it('отдаёт ephemeral:true для локального ответа команды', () => {
     const out = serializeMessage(message({ ephemeral: true }), 0) as Record<string, unknown>;
     expect(out.ephemeral).toBe(true);

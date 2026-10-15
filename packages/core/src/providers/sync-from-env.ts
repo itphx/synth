@@ -3,10 +3,10 @@ import type { JsonStoreLike } from '../storage/json-store.js';
 
 /**
  * Синхронизация провайдеров/моделей из переменных окружения `SYNTH_PROVIDER_*`
- * (AD-038). Формат: `SYNTH_PROVIDER_<NAME>_(API_KEY|URL|MODEL|TYPE)`;
+ * (ADR-038). Формат: `SYNTH_PROVIDER_<NAME>_(API_KEY|URL|MODEL|TYPE)`;
  * имя приводится к lowercase с `_` → `-`. Провайдеры сохраняются в `providerStore`
  * (дефолтный `type: 'openai'`), указанная `MODEL` дополнительно создаёт модель
- * `<name>/<model>` с `isDefault: true`, если её ещё нет. `TYPE` (AD-084) задаёт
+ * `<name>/<model>` с `isDefault: true`, если её ещё нет. `TYPE` (ADR-084) задаёт
  * тип провайдера, в т.ч. decision-протокол (`decision`|`systemone`).
  *
  * Общая точка для core и backend: вызывается после создания stores и до

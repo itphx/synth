@@ -58,7 +58,7 @@ const ctx = (overrides: Partial<SessionOwnerCtx> = {}): SessionOwnerCtx => ({
   ...overrides,
 });
 
-describe('isSessionVisible (AD-089)', () => {
+describe('isSessionVisible (ADR-089)', () => {
   it('elevated (ADMIN/LEAD) видит всё, даже без владельца/проекта', async () => {
     const store = storeOf({});
     expect(await isSessionVisible(session({ ownerId: 'someone', projectId: 'p1' }), store, ctx({ elevated: true }))).toBe(true);

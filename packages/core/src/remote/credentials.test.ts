@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { loadCredentials, saveCredentials, clearCredentials, defaultCredentialsPath } from './credentials.js';
 import type { RemoteCredentials } from './types.js';
 
-describe('defaultCredentialsPath (AD-079)', () => {
+describe('defaultCredentialsPath (ADR-079)', () => {
   it('с home → <home>/credentials.json', () => {
     expect(defaultCredentialsPath('/tmp/synth-home')).toBe(join('/tmp/synth-home', 'credentials.json'));
   });

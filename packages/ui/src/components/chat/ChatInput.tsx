@@ -149,7 +149,7 @@ export function ChatInput({
     end: number
     position: { left: number }
   } | null>(null)
-  // AD-046 §9.3: `/`-автокомплит команд (триггер — ввод начинается с `/`).
+  // ADR-046 §9.3: `/`-автокомплит команд (триггер — ввод начинается с `/`).
   const [commandState, setCommandState] = useState<{
     query: string
     position: { left: number }
@@ -204,7 +204,7 @@ export function ChatInput({
       setMentionState(null)
     }
 
-    // AD-046 §9.3: `/`-команда — ввод начинается с `/`, первый токен без пробелов.
+    // ADR-046 §9.3: `/`-команда — ввод начинается с `/`, первый токен без пробелов.
     const commandMatch = /^\/(\S*)$/.exec(newValue)
     if (commandMatch) {
       setCommandState({
@@ -347,7 +347,7 @@ export function ChatInput({
       return
     }
 
-    // AD-046 §9.3: пока открыт непустой список команд — навигация/выбор у
+    // ADR-046 §9.3: пока открыт непустой список команд — навигация/выбор у
     // CommandAutocomplete, сообщение не отправляется.
     if (commandState) {
       if (e.key === 'Escape') {

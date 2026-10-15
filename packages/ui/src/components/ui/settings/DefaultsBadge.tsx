@@ -5,7 +5,7 @@ export interface DefaultsBadgeProps {
   className?: string
 }
 
-/** AD-072: пилюля «По умолчанию» рядом с настройкой на дефолтном значении. */
+/** ADR-072: пилюля «По умолчанию» рядом с настройкой на дефолтном значении. */
 export function DefaultsBadge({ className }: DefaultsBadgeProps) {
   const { t } = useI18n()
   return (

@@ -41,7 +41,7 @@ async function createBareRepo(base: string): Promise<string> {
   return bare;
 }
 
-describe('GitService (AD-076 §T3)', () => {
+describe('GitService (ADR-076 §T3)', () => {
   let root: string;
   let ws: string;
   let service: GitService;
@@ -114,7 +114,7 @@ describe('GitService (AD-076 §T3)', () => {
     expect(sanitized).toEqual({ PATH: '/usr/bin', HOME: '/home/user' });
   });
 
-  it('git-вызов с env не падает, даже если process.env содержит blocklist-ключи (регресс AD-076)', async () => {
+  it('git-вызов с env не падает, даже если process.env содержит blocklist-ключи (регресс ADR-076)', async () => {
     const saved: Record<string, string | undefined> = {
       EDITOR: process.env.EDITOR,
       PAGER: process.env.PAGER,

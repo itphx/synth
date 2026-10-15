@@ -31,7 +31,7 @@ function skillFile(name: string): string {
   return `---\nname: ${name}\ndescription: desc-${name}\n---\n\nBody of ${name}\n`;
 }
 
-describe('validateRemoteUrl / isBlockedHost — SSRF-guard (AD-046 §4.2)', () => {
+describe('validateRemoteUrl / isBlockedHost — SSRF-guard (ADR-046 §4.2)', () => {
   it('только http/https', () => {
     expect('error' in validateRemoteUrl('ftp://example.com/skills')).toBe(true);
     expect('error' in validateRemoteUrl('file:///etc/passwd')).toBe(true);

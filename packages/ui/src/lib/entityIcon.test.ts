@@ -6,7 +6,7 @@ import {
   DEFAULT_SESSION_ICON_COLOR,
 } from './entityIcon'
 
-describe('resolveIconName — единый резолвер иконок (AD-075)', () => {
+describe('resolveIconName — единый резолвер иконок (ADR-075)', () => {
   it('канонические ключи реестра → имя иконки', () => {
     expect(resolveIconName('code')).toBe('code-box')
     expect(resolveIconName('rocket')).toBe('rocket')
@@ -27,7 +27,7 @@ describe('resolveIconName — единый резолвер иконок (AD-075
   })
 })
 
-describe('resolveIconColor — единый резолвер цветов (AD-075)', () => {
+describe('resolveIconColor — единый резолвер цветов (ADR-075)', () => {
   it('канонические ключи → CSS-переменные палитры', () => {
     expect(resolveIconColor('a11')).toBe('var(--palette-11)')
     expect(resolveIconColor('a1')).toBe('var(--palette-1)')

@@ -22,7 +22,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
   } as Project;
 }
 
-describe('SessionManager — снапшоты скоупа (AD-071 §2.4 / AD-046 §4.5)', () => {
+describe('SessionManager — снапшоты скоупа (ADR-071 §2.4 / ADR-046 §4.5)', () => {
   let store: FileStore;
   let tmpDir: string;
   let project: Project | null;

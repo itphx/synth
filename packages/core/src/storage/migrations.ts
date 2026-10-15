@@ -15,7 +15,7 @@ export interface SessionScopeMigrationDeps {
 }
 
 /**
- * AD-071 §2.4 / AD-046 §4.5: разовая идемпотентная миграция. Материализует
+ * ADR-071 §2.4 / ADR-046 §4.5: разовая идемпотентная миграция. Материализует
  * снапшоты `mcpDefaultOn`/`skillsDefaultOn` у существующих сессий:
  * `project.mcp/skills.defaultOn` (при наличии настроек проекта) либо системный
  * дефолт. Guard — маркер `migrations.session-scope-snapshots-v1` в runtime settings.
@@ -25,7 +25,7 @@ export interface SessionScopeMigrationDeps {
 export async function migrateSessionScopeSnapshots(deps: SessionScopeMigrationDeps): Promise<number> {
   if (await deps.settingsStore.getMigrationMarker(SESSION_SCOPE_SNAPSHOT_MIGRATION)) return 0;
 
-  // AD-089: миграция должна видеть и архивированные сессии (архив не влияет на скоуп).
+  // ADR-089: миграция должна видеть и архивированные сессии (архив не влияет на скоуп).
   const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true });
   const projects = new Map<string, Project | null>();
   let systemDefaults: { mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined;

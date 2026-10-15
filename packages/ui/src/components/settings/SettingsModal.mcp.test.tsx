@@ -7,7 +7,7 @@ function visibleFor(roles: string[]) {
   return CATEGORIES.filter((cat) => !cat.roles || cat.roles.some((r) => roles.includes(r)))
 }
 
-describe('SettingsModal — разделение MCP-категорий (AD-071 §2.5/§2.6)', () => {
+describe('SettingsModal — разделение MCP-категорий (ADR-071 §2.5/§2.6)', () => {
   it('`mcp` — пользовательская категория без roles, `mcpAdmin` — только ADMIN', () => {
     const mcp = CATEGORIES.find((cat) => cat.id === 'mcp')!
     expect(mcp.roles).toBeUndefined()

@@ -81,7 +81,7 @@ function makeService(opts: {
 
 const CTX = { projectWorkspace: '/work' };
 
-describe('CommandService — builtins (AD-046 §7.2)', () => {
+describe('CommandService — builtins (ADR-046 §7.2)', () => {
   it('/help — локальный ответ', async () => {
     const { service } = makeService();
     const r = await service.resolve('/help', CTX);
@@ -113,7 +113,7 @@ describe('CommandService — builtins (AD-046 §7.2)', () => {
     expect(r?.status).toBe('prompt');
     expect(r?.kind).toBe('builtin');
     expect(isLocalCommandStatus(r!.status)).toBe(false);
-    // Промпт содержит ключевые секции AD-069 §8.1 и пользовательский фокус.
+    // Промпт содержит ключевые секции ADR-069 §8.1 и пользовательский фокус.
     expect(r?.prompt).toContain('## Investigate');
     expect(r?.prompt).toContain('## Extract');
     expect(r?.prompt).toContain('## Questions');
@@ -226,7 +226,7 @@ async function writeTemplateCommand(dir: string, name: string) {
   );
 }
 
-describe('CommandService — trust-гейт проектных шаблонов (AD-046 §4.4/§7.1)', () => {
+describe('CommandService — trust-гейт проектных шаблонов (ADR-046 §4.4/§7.1)', () => {
   let dataDir: string;
   let ws: string;
 
@@ -274,7 +274,7 @@ describe('CommandService — trust-гейт проектных шаблонов 
   });
 });
 
-describe('CommandService — /skill-creator (builtin, AD-046 §9.5)', () => {
+describe('CommandService — /skill-creator (builtin, ADR-046 §9.5)', () => {
   let dataDir: string;
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-skill-creator-'));
@@ -308,7 +308,7 @@ describe('CommandService — /skill-creator (builtin, AD-046 §9.5)', () => {
   });
 });
 
-describe('CommandService — /agents-md (builtin skill, AD-069 §8.2)', () => {
+describe('CommandService — /agents-md (builtin skill, ADR-069 §8.2)', () => {
   let dataDir: string;
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'synth-cmd-agents-md-'));
@@ -359,7 +359,7 @@ describe('CommandService — /agents-md (builtin skill, AD-069 §8.2)', () => {
 });
 
 
-describe('CommandService — inline shell (AD-046 §7.4)', () => {
+describe('CommandService — inline shell (ADR-046 §7.4)', () => {
   let dataDir: string;
 
   beforeEach(async () => {

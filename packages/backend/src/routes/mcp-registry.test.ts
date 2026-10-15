@@ -22,7 +22,7 @@ function userFromHeader(header: string | undefined): MockUser | null {
 }
 
 /**
- * AD-052/O1: mock service-key — `svc-scope` несёт scope `addons:install`,
+ * ADR-052/O1: mock service-key — `svc-scope` несёт scope `addons:install`,
  * `svc-noscope` — пустые scopes. Возвращает synthetic-user + credential.
  */
 function serviceKeyFromHeader(
@@ -92,7 +92,7 @@ const PUBLIC_IP = '93.184.216.34';
 const httpConfig = (url = `http://${PUBLIC_IP}/mcp`): McpServerConfig => ({ type: 'sse', url });
 const stdioConfig = (): McpServerConfig => ({ type: 'stdio', command: 'node', args: ['s.js'] });
 
-describe('MCP registry API (AD-071 §2.5)', () => {
+describe('MCP registry API (ADR-071 §2.5)', () => {
   let registry: McpRegistryStore;
   let tmpDir: string;
   let mcpManager: ReturnType<typeof createMockMcpManager>;
@@ -329,7 +329,7 @@ describe('MCP registry API (AD-071 §2.5)', () => {
     expect(res.status).toBe(404);
   });
 
-  // AD-052/O1: guard «ADMIN или scope `addons:install`» + installer видит instance-origin.
+  // ADR-052/O1: guard «ADMIN или scope `addons:install`» + installer видит instance-origin.
   it('service-key со scope addons:install: POST /registry (http) → 201 instance/builtin', async () => {
     const res = await makeApp().request('/api/v2/mcp/registry', {
       method: 'POST',

@@ -50,7 +50,7 @@ export const AppearanceSettings = () => {
     uiScale,
   }))
 
-  // AD-072 (фидбек): live-preview без персиста. Все визуальные настройки
+  // ADR-072 (фидбек): live-preview без персиста. Все визуальные настройки
   // применяются к UI сразу, но в профиль/localStorage попадают только по Save.
   const applyAppearance = (next: AppearanceDraft) => {
     const preset = THEME_PRESETS.find((p) => p.id === next.themePresetName)

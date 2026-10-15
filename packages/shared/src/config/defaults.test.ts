@@ -27,29 +27,29 @@ describe('defaultConfig', () => {
     expect(defaultConfig.llm.defaultModel).toBe('');
   });
 
-  it('llm.cache по умолчанию auto (AD-070)', () => {
+  it('llm.cache по умолчанию auto (ADR-070)', () => {
     expect(defaultConfig.llm.cache).toBe('auto');
   });
 
-  it('tools.policy по умолчанию auto (AD-071 §2.3)', () => {
+  it('tools.policy по умолчанию auto (ADR-071 §2.3)', () => {
     expect(defaultConfig.tools.policy).toBe('auto');
   });
 
-  it('mcp.policy по умолчанию auto (AD-071 §2.3)', () => {
+  it('mcp.policy по умолчанию auto (ADR-071 §2.3)', () => {
     expect(defaultConfig.mcp.policy).toBe('auto');
   });
 
-  it('tools.disabled по умолчанию пусто (AD-071 §2.6)', () => {
+  it('tools.disabled по умолчанию пусто (ADR-071 §2.6)', () => {
     expect(defaultConfig.tools.disabled).toEqual({ capabilities: [], tools: [] });
   });
 
-  it('skills по умолчанию пусты (paths/urls), inlineShell выключен (AD-046)', () => {
+  it('skills по умолчанию пусты (paths/urls), inlineShell выключен (ADR-046)', () => {
     expect(defaultConfig.skills).toEqual({
       paths: [], urls: [], trustedProjectDirs: [], inlineShell: false, toolsets: {},
     });
   });
 
-  it('commands по умолчанию: bundle-wins, лимиты, пустые paths (AD-046 §7)', () => {
+  it('commands по умолчанию: bundle-wins, лимиты, пустые paths (ADR-046 §7)', () => {
     expect(defaultConfig.commands).toEqual({
       paths: [],
       bundlesPath: 'skill-bundles',
@@ -59,7 +59,7 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('instructions: enabled, claudeCompat, кап от окна, пустые sources (AD-069)', () => {
+  it('instructions: enabled, claudeCompat, кап от окна, пустые sources (ADR-069)', () => {
     expect(defaultConfig.instructions.enabled).toBe(true);
     expect(defaultConfig.instructions.claudeCompat).toBe(true);
     expect(defaultConfig.instructions.contextCompat).toBe(false);
@@ -115,15 +115,15 @@ describe('defaultConfig', () => {
     expect(defaultConfig.summarization.promptFile).toBe('SUMMARIZER');
   });
 
-  it('security.secretKey по умолчанию пуст (AD-076: файл master.key)', () => {
+  it('security.secretKey по умолчанию пуст (ADR-076: файл master.key)', () => {
     expect(defaultConfig.security.secretKey).toBe('');
   });
 
-  it('security.bootstrapServiceKeys по умолчанию пуст (AD-052/O1)', () => {
+  it('security.bootstrapServiceKeys по умолчанию пуст (ADR-052/O1)', () => {
     expect(defaultConfig.security.bootstrapServiceKeys).toEqual([]);
   });
 
-  it('events по умолчанию: enabled, bound, 24h, 30 дней, все источники, dedup memory (AD-089)', () => {
+  it('events по умолчанию: enabled, bound, 24h, 30 дней, все источники, dedup memory (ADR-089)', () => {
     expect(defaultConfig.events).toEqual({
       enabled: true,
       defaultMode: 'bound',
@@ -140,7 +140,7 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('scheduler по умолчанию: enabled, тик 60 c, catch-up skip, retention 30, OFF-флаги (AD-051)', () => {
+  it('scheduler по умолчанию: enabled, тик 60 c, catch-up skip, retention 30, OFF-флаги (ADR-051)', () => {
     expect(defaultConfig.scheduler).toEqual({
       enabled: true,
       tickSec: 60,
@@ -151,7 +151,7 @@ describe('defaultConfig', () => {
     });
   });
 
-  it('decision по умолчанию: выключен, провайдер/модель пусты, порог 0.6, эскалация пуста (AD-084)', () => {
+  it('decision по умолчанию: выключен, провайдер/модель пусты, порог 0.6, эскалация пуста (ADR-084)', () => {
     expect(defaultConfig.decision).toEqual({
       enabled: false,
       provider: '',

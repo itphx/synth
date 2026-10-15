@@ -100,7 +100,7 @@ describe('McpClient (stdio)', () => {
     expect(client.tools[1]!.name).toBe('fetch');
   });
 
-  it('AD-071 §2.2: connect сохраняет instructions', async () => {
+  it('ADR-071 §2.2: connect сохраняет instructions', async () => {
     expect(client.instructions).toBeUndefined();
 
     await client.connect();
@@ -238,7 +238,7 @@ describe('McpClient (sse)', () => {
     expect(client.tools).toEqual([]);
   });
 
-  it('AD-090: headers конфига прокидываются в транспорт (requestInit.headers)', async () => {
+  it('PROP-090: headers конфига прокидываются в транспорт (requestInit.headers)', async () => {
     const headers = { Authorization: 'Bearer tok', 'X-Tenant': 'tg-dev' };
     const withHeaders = new McpClient('hdr', makeSseConfig({ headers }));
     await withHeaders.connect();

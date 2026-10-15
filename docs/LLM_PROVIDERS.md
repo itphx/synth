@@ -40,7 +40,7 @@ export SYNTH_PROVIDER_ANTHROPIC_MODEL=claude-sonnet-4-20250514
 export SYNTH_PROVIDER_ANTHROPIC_TYPE=anthropic
 ```
 
-### Decision-модели (System One, AD-084)
+### Decision-модели (System One, ADR-084)
 
 Отдельный класс моделей: не чат, а `state` (текст/JSON) + типизированные вопросы →
 вероятности за один forward-pass. Протокол задаётся **типом провайдера**:
@@ -108,4 +108,4 @@ synth config provider delete ollama
 | Qwen2.5 Coder 1.5B | `ollama pull qwen2.5-coder:1.5b` |
 | Nomic Embed Text | `ollama pull nomic-embed-text:latest` |
 
-Для эмбеддинг-классификации (микро-слой, AD-035) используется `local.nomic-embed-text:latest` (см. [Маршрутизация](ROUTING.md)).
+Для эмбеддинг-классификации (микро-слой, ADR-035) используется `local.nomic-embed-text:latest` (см. [Маршрутизация](ROUTING.md)).

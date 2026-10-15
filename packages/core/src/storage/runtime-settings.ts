@@ -27,7 +27,7 @@ export interface SecurityRuntimeSettings {
 }
 
 /**
- * AD-089: runtime-настройки раздела «События» (админка), сохраняемые через UI.
+ * ADR-089: runtime-настройки раздела «События» (админка), сохраняемые через UI.
  * Эффективные значения = `mergeEventsConfig(config.eventsConfig, runtime)`.
  * `dedupStore` намеренно не входит — это deployment-настройка, не runtime.
  */
@@ -41,21 +41,21 @@ export interface EventsRuntimeSettings {
   /** Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита). */
   keyRateLimitPerMinute: number;
   /**
-   * AD-084 × AD-089: decision-маршрутизация внешних событий (opt-in).
+   * ADR-084 × ADR-089: decision-маршрутизация внешних событий (opt-in).
    * `false` — только декларативные правила; `true` — при промахе правил
    * decision-модель выбирает шаблон агента (fail-safe → `defaultMode`).
    */
   decisionRouting: boolean;
   /**
-   * AD-089 (auto-bind): фоллбек Router закрепляет событие с `identity.chatKey`/
+   * ADR-089 (auto-bind): фоллбек Router закрепляет событие с `identity.chatKey`/
    * `threadKey` за новой сессией (`EventBinding mode='bound'`). Влияет только на
    * фоллбек.
    */
   autoBind: boolean;
-  /** AD-089 (auto-bind): шаблон агента auto-bind-сессий (пусто — по умолчанию). */
+  /** ADR-089 (auto-bind): шаблон агента auto-bind-сессий (пусто — по умолчанию). */
   autoBindAgentTemplate: string;
   /**
-   * AD-089: маппинг идентичности внешнего отправителя (`identity.chatKey` или
+   * ADR-089: маппинг идентичности внешнего отправителя (`identity.chatKey` или
    * `identity.principalId`) на владельца синт-сессии. Применяется при
    * материализации `ephemeral`/`bind`; пусто — владелец не переопределяется.
    */
@@ -63,7 +63,7 @@ export interface EventsRuntimeSettings {
 }
 
 /**
- * AD-084: runtime-настройки decision-слоя (админка), сохраняемые через UI.
+ * ADR-084: runtime-настройки decision-слоя (админка), сохраняемые через UI.
  * Эффективные значения = `mergeDecisionConfig(config.decisionConfig, runtime)`.
  */
 export type DecisionRuntimeSettings = Partial<DecisionConfig>;
@@ -73,44 +73,44 @@ export interface RuntimeSettings {
   workspace?: string;
   /** Глобальные настройки доступности MCP-серверов по режимам plan/act. */
   mcpServers?: Record<string, McpServerToolSettings>;
-  /** Глобальный тумблер LLM Gateway (AD-036): включается/выключается через UI (только ADMIN). */
+  /** Глобальный тумблер LLM Gateway (ADR-036): включается/выключается через UI (только ADMIN). */
   llmGateway?: Partial<LlmGatewayRuntimeSettings>;
   /** Глобальные настройки секции «Безопасность» (защищённые пути). */
   security?: Partial<SecurityRuntimeSettings>;
-  /** AD-071 §2.3: глобальная политика включения встроенных инструментов (админка). */
+  /** ADR-071 §2.3: глобальная политика включения встроенных инструментов (админка). */
   toolsPolicy?: ToolsPolicy;
-  /** AD-071 §2.3: глобальная политика включения MCP-инструментов (админка). */
+  /** ADR-071 §2.3: глобальная политика включения MCP-инструментов (админка). */
   mcpPolicy?: ToolsPolicy;
-  /** AD-071 §2.6: instance-wide отключение инструментов (админка). */
+  /** ADR-071 §2.6: instance-wide отключение инструментов (админка). */
   toolsDisabled?: ToolsDisabledConfig;
-  /** AD-046 §4.5: instance-wide отключение скиллов группами/точечно (админка). */
+  /** ADR-046 §4.5: instance-wide отключение скиллов группами/точечно (админка). */
   skillsDisabled?: SkillsDisabledRequest;
   /**
-   * AD-046 §4.5: сид для НОВЫХ проектов — скиллы, отключённые по умолчанию
+   * ADR-046 §4.5: сид для НОВЫХ проектов — скиллы, отключённые по умолчанию
    * (снимок при создании проекта).
    */
   skillsDisabledForNewProjects?: SkillsDisabledRequest;
-  /** AD-046 §4.5: глобальная политика включения скиллов (админка). */
+  /** ADR-046 §4.5: глобальная политика включения скиллов (админка). */
   skillsPolicy?: ToolsPolicy;
   /** Разовые идемпотентные миграции: имя → `true` (выполнено). */
   migrations?: Record<string, boolean>;
-  /** AD-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
+  /** ADR-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
   mcpNetworkPolicy?: McpNetworkPolicy;
   /**
-   * AD-071 §2.6: откалиброванный chars-per-token по модели (promptChars /
+   * ADR-071 §2.6: откалиброванный chars-per-token по модели (promptChars /
    * usage.inputTokens). Используется для `estTokens`; отсутствие — дефолт 4.
    */
   tokenRatios?: Record<string, number>;
   /** Агент по умолчанию (админка «Агенты»); отсутствие — `DEFAULT_AGENT_ID`. */
   defaultAgent?: string;
   /**
-   * AD-075: политика для абсолютного workspace вне `workspacesRoot`
+   * ADR-075: политика для абсолютного workspace вне `workspacesRoot`
    * (`confirm` | `deny`); отсутствие — значение из config.yaml/env.
    */
   workspacePolicy?: WorkspaceOutsideRootPolicy;
-  /** AD-089: runtime-настройки раздела «События» (админка). */
+  /** ADR-089: runtime-настройки раздела «События» (админка). */
   events?: Partial<EventsRuntimeSettings>;
-  /** AD-084: runtime-настройки decision-слоя (админка). */
+  /** ADR-084: runtime-настройки decision-слоя (админка). */
   decision?: DecisionRuntimeSettings;
 }
 
@@ -159,7 +159,7 @@ export function mergeSecurityConfig(
     protectedPaths: {
       enabled: runtime.protectedPaths?.enabled ?? base?.protectedPaths?.enabled ?? true,
     },
-    // AD-076: мастер-ключ не относится к runtime-настройкам UI — переносим из config.
+    // ADR-076: мастер-ключ не относится к runtime-настройкам UI — переносим из config.
     secretKey: base?.secretKey ?? '',
     askTimeoutMs: runtime.askTimeoutMs
       ?? (base as SecurityConfig & { askTimeoutMs?: number })?.askTimeoutMs
@@ -168,7 +168,7 @@ export function mergeSecurityConfig(
 }
 
 /**
- * AD-071 §2.3.1: мёржит runtime-политику сетевого доступа MCP поверх config.yaml.
+ * ADR-071 §2.3.1: мёржит runtime-политику сетевого доступа MCP поверх config.yaml.
  * Runtime приоритетнее; при отсутствии обоих возвращает undefined (вызывающий
  * подставляет дефолт `DEFAULT_MCP_NETWORK_POLICY`).
  */
@@ -184,7 +184,7 @@ export function mergeMcpNetworkPolicy(
 }
 
 /**
- * AD-089: мёржит runtime-настройки раздела «События» (админка) поверх config.yaml.
+ * ADR-089: мёржит runtime-настройки раздела «События» (админка) поверх config.yaml.
  * Runtime приоритетнее; отсутствие полей — значения из config, затем дефолты.
  */
 export function mergeEventsConfig(
@@ -208,7 +208,7 @@ export function mergeEventsConfig(
 }
 
 /**
- * AD-084: мёржит runtime-настройки decision-слоя (админка) поверх config.yaml
+ * ADR-084: мёржит runtime-настройки decision-слоя (админка) поверх config.yaml
  * `decision`. Runtime приоритетнее; отсутствие полей — значения из config,
  * затем дефолты схемы. Возвращает полный `DecisionConfig` (все поля заданы).
  */
@@ -228,7 +228,7 @@ export function mergeDecisionConfig(
 }
 
 /**
- * Runtime-настройки приложения (AD-005).
+ * Runtime-настройки приложения (ADR-005).
  *
  * Хранятся одним JSON-файлом `{dataDir}/settings.json`. Запись атомарная:
  * временный файл `.tmp.{uuid}` → `rename()`. Значения переживают рестарт
@@ -328,7 +328,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-071 §2.3: runtime-политика встроенных инструментов (админка), undefined — не задана. */
+  /** ADR-071 §2.3: runtime-политика встроенных инструментов (админка), undefined — не задана. */
   async getToolsPolicy(): Promise<ToolsPolicy | undefined> {
     const settings = await this.load();
     return settings.toolsPolicy;
@@ -346,7 +346,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-071 §2.3: runtime-политика MCP-инструментов (админка), undefined — не задана. */
+  /** ADR-071 §2.3: runtime-политика MCP-инструментов (админка), undefined — не задана. */
   async getMcpPolicy(): Promise<ToolsPolicy | undefined> {
     const settings = await this.load();
     return settings.mcpPolicy;
@@ -364,7 +364,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-071 §2.6: instance-wide отключение инструментов (админка), undefined — не задано. */
+  /** ADR-071 §2.6: instance-wide отключение инструментов (админка), undefined — не задано. */
   async getToolsDisabled(): Promise<ToolsDisabledConfig | undefined> {
     const settings = await this.load();
     return settings.toolsDisabled;
@@ -382,7 +382,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-046 §4.5: instance-wide отключение скиллов (админка). */
+  /** ADR-046 §4.5: instance-wide отключение скиллов (админка). */
   async getSkillsDisabled(): Promise<SkillsDisabledRequest | undefined> {
     const settings = await this.load();
     return settings.skillsDisabled;
@@ -400,7 +400,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-046 §4.5: сид «отключено по умолчанию» для новых проектов. */
+  /** ADR-046 §4.5: сид «отключено по умолчанию» для новых проектов. */
   async getSkillsDisabledForNewProjects(): Promise<SkillsDisabledRequest | undefined> {
     const settings = await this.load();
     return settings.skillsDisabledForNewProjects;
@@ -431,7 +431,7 @@ export class RuntimeSettingsStore {
     }));
   }
 
-  /** AD-046 §4.5: глобальная политика включения скиллов (админка). */
+  /** ADR-046 §4.5: глобальная политика включения скиллов (админка). */
   async getSkillsPolicy(): Promise<ToolsPolicy | undefined> {
     const settings = await this.load();
     return settings.skillsPolicy;
@@ -449,7 +449,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-071 §2.6: chars-per-token модели (undefined — калибровки нет). */
+  /** ADR-071 §2.6: chars-per-token модели (undefined — калибровки нет). */
   async getTokenRatio(model: string): Promise<number | undefined> {
     const settings = await this.load();
     return settings.tokenRatios?.[model];
@@ -460,7 +460,7 @@ export class RuntimeSettingsStore {
     return settings.tokenRatios ?? {};
   }
 
-  /** AD-071 §2.6: сохранить откалиброванный chars-per-token модели. */
+  /** ADR-071 §2.6: сохранить откалиброванный chars-per-token модели. */
   async setTokenRatio(model: string, ratio: number): Promise<void> {
     await this._update((current) => ({
       ...current,
@@ -468,7 +468,7 @@ export class RuntimeSettingsStore {
     }));
   }
 
-  /** AD-071 §2.3.1: runtime-политика сетевого доступа MCP (админка). */
+  /** ADR-071 §2.3.1: runtime-политика сетевого доступа MCP (админка). */
   async getMcpNetworkPolicy(): Promise<McpNetworkPolicy | undefined> {
     const settings = await this.load();
     return settings.mcpNetworkPolicy;
@@ -504,7 +504,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-075: runtime-политика workspace вне root (админка), undefined — не задана. */
+  /** ADR-075: runtime-политика workspace вне root (админка), undefined — не задана. */
   async getWorkspacePolicy(): Promise<WorkspaceOutsideRootPolicy | undefined> {
     const settings = await this.load();
     return settings.workspacePolicy;
@@ -522,7 +522,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-089: runtime-настройки «События» (админка), undefined — не заданы. */
+  /** ADR-089: runtime-настройки «События» (админка), undefined — не заданы. */
   async getEvents(): Promise<Partial<EventsRuntimeSettings>> {
     const settings = await this.load();
     return settings.events ?? {};
@@ -540,7 +540,7 @@ export class RuntimeSettingsStore {
     });
   }
 
-  /** AD-084: runtime-настройки decision-слоя (админка), {} — не заданы. */
+  /** ADR-084: runtime-настройки decision-слоя (админка), {} — не заданы. */
   async getDecision(): Promise<Partial<DecisionRuntimeSettings>> {
     const settings = await this.load();
     return settings.decision ?? {};

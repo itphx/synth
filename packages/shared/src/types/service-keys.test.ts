@@ -12,7 +12,7 @@ import {
   serviceApiKeyCreatedSchema,
 } from '../schemas/index.js';
 
-describe('service-key scopes (AD-052)', () => {
+describe('service-key scopes (ADR-052)', () => {
   it('каталог скоупов и семейства непусты и согласованы', () => {
     expect(SERVICE_SCOPES.length).toBeGreaterThan(0);
     // Каждый скоуп либо из wildcard-семейства, либо из «одиночного» пространства
@@ -68,7 +68,7 @@ describe('service-key scopes (AD-052)', () => {
   });
 });
 
-describe('service-key schemas (AD-052)', () => {
+describe('service-key schemas (ADR-052)', () => {
   const base = {
     id: 'svk_1',
     label: 'gateway',

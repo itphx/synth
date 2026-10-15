@@ -9,7 +9,7 @@ import { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
 import { WebhookService, computeBackoffMs } from './service.js';
 import { verifyWebhookSignature } from './signature.js';
 
-describe('WebhookService (AD-052, этап II)', () => {
+describe('WebhookService (ADR-052, этап II)', () => {
   let tmpDir: string;
   let store: WebhookStore;
   let deliveryStore: WebhookDeliveryStore;

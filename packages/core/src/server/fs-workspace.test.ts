@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative, resolve, isAbsolute } from 'node:path';
 import { resolveProjectWorkspace, isTextFile } from './fs-workspace.js';
 
-describe('resolveProjectWorkspace (AD-075)', () => {
+describe('resolveProjectWorkspace (ADR-075)', () => {
   let tmpDir: string;
   let root: string;
   let outside: string;
@@ -40,7 +40,7 @@ describe('resolveProjectWorkspace (AD-075)', () => {
     expect(dir).toBe(resolve(root, 'my-project'));
   });
 
-  it('относительный root нормализуется к абсолютному (регрессия AD-075)', async () => {
+  it('относительный root нормализуется к абсолютному (регрессия ADR-075)', async () => {
     const relRoot = relative(process.cwd(), root);
     expect(isAbsolute(relRoot)).toBe(false);
     const dir = await resolveProjectWorkspace('p', {
@@ -110,7 +110,7 @@ describe('resolveProjectWorkspace (AD-075)', () => {
   });
 });
 
-describe('isTextFile (AD-075)', () => {
+describe('isTextFile (ADR-075)', () => {
   let tmpDir: string;
 
   beforeEach(async () => {

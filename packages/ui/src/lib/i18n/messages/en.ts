@@ -143,7 +143,7 @@ export const dict = {
     'mcpPolicy.saved': 'MCP policy saved',
   'mcpPolicy.saveError': 'Failed to save MCP policy: {error}',
 
-  // Skills & slash-commands (AD-046)
+  // Skills & slash-commands (ADR-046)
   'skillsPolicy.title': 'Skills policy',
   'skillsPolicy.description': 'Which skill definitions are sent to the model in requests. The catalog and command resolution mechanism is always on.',
   'skillsPolicy.label': 'Global skills policy',
@@ -455,7 +455,7 @@ export const dict = {
   'project.name': 'Name',
   'project.description': 'Description',
   'project.save': 'Save',
-  // Engine key (AD-041/AD-075)
+  // Engine key (ADR-041/ADR-075)
   'project.workspace_create_error': 'Error creating project workspace: {error}',
   'project.write_forbidden': 'Error: you do not have permission to modify this project (owner or editor role required)',
   'project.updated': 'Project updated.',
@@ -599,7 +599,7 @@ export const dict = {
   'rightPanel.stats.cacheReadTokens': 'Cache read',
   'rightPanel.stats.cacheWriteTokens': 'Cache write',
   'rightPanel.stats.cacheHitRate': 'Cache hit rate',
-  // AD-070 §2.6: short column headers in agent/user tables
+  // ADR-070 §2.6: short column headers in agent/user tables
   'rightPanel.stats.colCache': 'Cache',
   'rightPanel.stats.colCacheHit': '%',
   'rightPanel.stats.reasoningTokens': 'Reasoning',
@@ -610,7 +610,7 @@ export const dict = {
   'rightPanel.stats.noProject': 'No project',
   'rightPanel.stats.contextWindow': 'Context window',
   'rightPanel.stats.contextNearLimit': 'Context limit is near',
-  // AD-070 §2.6: agent and author stats
+  // ADR-070 §2.6: agent and author stats
   'rightPanel.stats.agentsStats': 'Agent stats',
   'rightPanel.stats.usersStats': 'User stats',
   'rightPanel.stats.agent': 'Agent',
@@ -618,19 +618,19 @@ export const dict = {
   'rightPanel.stats.messages': 'Messages',
   'rightPanel.stats.subagents': 'Subagents',
   'rightPanel.stats.subagentTokens': 'Subagent tokens',
-  // AD-070 §2.6: separate subagent block in "Last answer"
+  // ADR-070 §2.6: separate subagent block in "Last answer"
   'rightPanel.stats.subagentsTitle': 'Subagents',
   'rightPanel.stats.subagentsSessions': 'Sessions',
   'rightPanel.stats.subagentsNote': 'Separate from the answer — not counted in the context window',
   'rightPanel.stats.subagentsIncluded': 'incl. subagents',
-  // AD-070 §2.6: live-строка статистики активного стрима
+  // ADR-070 §2.6: live-строка статистики активного стрима
   'rightPanel.stats.live': 'live',
   'rightPanel.stats.speed': 'Speed',
   'rightPanel.stats.duration': 'Duration',
   'rightPanel.stats.cost': 'Cost',
   'rightPanel.stats.expand': 'More',
   'rightPanel.stats.collapse': 'Hide',
-  // AD-070 §2.5: prompt composition (manifest)
+  // ADR-070 §2.5: prompt composition (manifest)
   'rightPanel.stats.promptComposition': 'Prompt composition',
   'rightPanel.stats.promptTotal': 'Total chars\n~tokens',
   'rightPanel.stats.promptStaticPrefix': 'Static\nprefix, chars.',
@@ -668,7 +668,7 @@ export const dict = {
   'rightPanel.stats.promptBlock.mcp.tools': 'MCP tools',
   'rightPanel.stats.promptBlock.mcp.servers': 'MCP servers',
   'rightPanel.stats.promptBlock.mcp.status': 'MCP status',
-  // AD-071 §2.6: built-in tools + MCP tables
+  // ADR-071 §2.6: built-in tools + MCP tables
   'rightPanel.stats.builtinTools': 'Built-in tools',
   'rightPanel.stats.mcpServers': 'MCP',
   'rightPanel.stats.colTool': 'Tool',
@@ -699,7 +699,7 @@ export const dict = {
   'rightPanel.stats.mcpReason.system_disabled': 'disabled by administrator',
   'rightPanel.stats.mcpReason.not_default': 'not default',
   'rightPanel.stats.tokenEstimate': 'Estimated tokens: ~{tokens} (chars {chars}, ratio {ratio})',
-  // AD-070 §2.5: history layer (messages) — composition of sent messages
+  // ADR-070 §2.5: history layer (messages) — composition of sent messages
   'rightPanel.stats.history': 'History',
   'rightPanel.stats.historyMessages': 'Messages',
   'rightPanel.stats.historyColType': 'Type',
@@ -753,7 +753,7 @@ export const dict = {
   'projectTab.invariants.saving': 'Saving…',
   'projectTab.log.title': 'Log',
   'projectTab.log.hint': 'Project work log (maintained by the model via project_log_write)',
-  // AD-071 §2.4: project MCP scope (owner/lead/admin)
+  // ADR-071 §2.4: project MCP scope (owner/lead/admin)
   'projectTab.mcp.title': 'MCP servers',
   'projectTab.mcp.empty': 'No MCP servers in the registry yet.',
   'projectTab.mcp.available': 'Available',
@@ -776,7 +776,7 @@ export const dict = {
   'sessionTab.todo.priority.high': 'High',
   'sessionTab.todo.priority.medium': 'Medium',
   'sessionTab.todo.priority.low': 'Low',
-  // AD-069 §9.3: project instructions (AGENTS.md chain/sources)
+  // ADR-069 §9.3: project instructions (AGENTS.md chain/sources)
   'sessionTab.instructions.title': 'Project instructions',
   'sessionTab.instructions.summary': '{count, plural, one {# file} other {# files}} · {chars} chars',
   'sessionTab.instructions.truncatedCount': '{count, plural, one {# file truncated} other {# files truncated}}',
@@ -837,7 +837,7 @@ export const dict = {
   'rightPanel.context.notLoaded': 'Session not loaded',
   'rightPanel.context.noStickyNotes': 'No notes',
   'rightPanel.context.hint.stickyNotes': 'Notes are added to the system prompt and visible to the model in every request.',
-  // Scheduler (AD-051/AD-089)
+  // Scheduler (ADR-051/ADR-089)
   'rightPanel.scheduler.add': 'Add schedule',
   'rightPanel.scheduler.count': '{count, plural, one {# schedule} other {# schedules}}',
   'rightPanel.scheduler.empty': 'No schedules configured',
@@ -1021,11 +1021,11 @@ export const dict = {
   'chat.actions.fork': 'Create branch',
   'chat.actions.debug': 'Debug',
 
-  // AD-046 §7.1: нейтральный system-блок системной (builtin) команды
+  // ADR-046 §7.1: нейтральный system-блок системной (builtin) команды
   'chat.command.title': 'Command',
   'chat.command.copy': 'Copy',
 
-  // AD-046 §7.1: единый Notice служебных сообщений
+  // ADR-046 §7.1: единый Notice служебных сообщений
   'chat.notice.summary': 'Summary',
   'chat.notice.debug': 'Debug',
   'chat.notice.error': 'Error',
@@ -1044,7 +1044,7 @@ export const dict = {
   'chat.message.forked': 'Branch created',
   'chat.message.empty': 'Empty message',
 
-  // AD-070 §2.6: per-message answer stats
+  // ADR-070 §2.6: per-message answer stats
   'chat.messageStats.stopped': 'Stopped',
   'chat.messageStats.error': 'Error',
   'chat.messageStats.limit': 'Iteration limit',
@@ -1159,7 +1159,7 @@ export const dict = {
   'chat.footer.collapse': 'Collapse',
   'chat.footer.mode': 'Mode',
 
-  // Session Plan/Act mode (AD-025)
+  // Session Plan/Act mode (ADR-025)
   'chat.mode.title': 'Session mode: Plan (read-only) / Act (full access) / YOLO (auto-approve)',
   'chat.mode.plan': 'Plan',
   'chat.mode.act': 'Act',
@@ -1242,7 +1242,7 @@ export const dict = {
   'sessionSettings.askTimeoutSeconds': 'Approval timeout (sec)',
   'sessionSettings.askTimeoutEnabled': 'Enabled',
   'sessionSettings.askTimeoutDisabled': 'Disabled',
-  // AD-029: session approvals
+  // ADR-029: session approvals
   'sessionSettings.allow.title': 'Session approvals',
   'sessionSettings.allow.empty': 'No approved tools',
   'sessionSettings.allow.hint': 'Allow-rules appear after "Allow in session" in the approval panel',
@@ -1257,12 +1257,12 @@ export const dict = {
   'sessionSettings.micro.decision': 'Decision level',
   'sessionSettings.micro.decisionHint': 'Decision-model (Clef/System One) classification in the micro-cascade follows the global decision setting. Turning it off forcibly disables the level for this session.',
   'sessionSettings.routing.tooltip': 'Requests not handled by Quick answers are distributed across models automatically: the strategy picks a model by task type (coding/chat/research), by cost, or a combination. Additionally, quality control applies: if the answer is uncertain or too short, the request is forwarded to a fallback model. If routing is off, the model selected in the session is used.',
-  // AD-071 §2.4: MCP scope in session
+  // ADR-071 §2.4: MCP scope in session
   'sessionSettings.mcp.title': 'MCP servers',
   'sessionSettings.mcp.hint': 'Session-level toggle. Overrides project settings.',
   'sessionSettings.mcp.toggleLabel': 'Enabled',
 
-  // AD-046 §4.5/§8.2/§9.3: skills & commands (panels, stats, autocomplete)
+  // ADR-046 §4.5/§8.2/§9.3: skills & commands (panels, stats, autocomplete)
   'sessionSettings.skills.title': 'Skills',
   'sessionSettings.skills.hint': 'Session-level toggle. Overrides project settings.',
   'sessionSettings.skills.toggleLabel': 'Enabled',
@@ -1721,7 +1721,7 @@ export const dict = {
   'mcp.type.http': 'HTTP (streamable)',
   'mcp.type.sse.legacy': 'SSE (legacy)',
 
-  // MCP: registry (AD-071 §2.5)
+  // MCP: registry (ADR-071 §2.5)
   'mcp.registry.author': 'author: {name}',
   'mcp.registry.stdioAdminOnly': 'stdio servers can only be added by an administrator',
   'mcp.registry.testAfterSave': 'Save the server first, then test the connection.',
@@ -1730,7 +1730,7 @@ export const dict = {
   'mcp.trust.builtin': 'trusted',
   'mcp.trust.community': 'community',
 
-  // MCP: network access policy (AD-071 §2.3.1)
+  // MCP: network access policy (ADR-071 §2.3.1)
   'mcp.network.title': 'Network access for user MCP servers',
   'mcp.network.description': 'Restricts which hosts user-added HTTP MCP servers may connect to (SSRF/egress protection).',
   'mcp.network.mode': 'Mode',
@@ -1766,7 +1766,7 @@ export const dict = {
   'mcp.permissions.perTool': 'Server tools',
   'mcp.permissions.toolDefaultHint': 'No custom setting — uses "All tools"',
 
-  // MCP: user settings (AD-071 §2.5)
+  // MCP: user settings (ADR-071 §2.5)
   'mcp.user.title': 'MCP Servers',
   'mcp.user.description': 'Add your own HTTP MCP servers. They become available to sessions according to the administrator policy.',
   'mcp.user.empty': 'You have no servers yet. Add an HTTP server to extend model capabilities.',
@@ -1785,7 +1785,7 @@ export const dict = {
   'mcp.error.loadToolsDisabled': 'Failed to load disabled tools',
   'mcp.error.saveToolsDisabled': 'Failed to save disabled tools',
 
-  // MCP: admin tools.disabled (AD-071 §2.6)
+  // MCP: admin tools.disabled (ADR-071 §2.6)
   'mcpAdmin.tools.title': 'Built-in tools',
   'mcpAdmin.tools.description': 'Manage which built-in tools are available instance-wide. A checked tool is enabled; uncheck it to disable it — disabled tools never go into the model request regardless of the tools policy. Session runtime tools are always on.',
   'mcpAdmin.tools.checkHint': 'Checked — enabled. Uncheck to disable.',
@@ -1831,7 +1831,7 @@ export const dict = {
   'merge.copy': 'Copy',
   'merge.copied': 'Copied {count} msgs',
 
-  // Routing (AD-034)
+  // Routing (ADR-034)
   'routing.title': 'Routing',
   'routing.globalDescription': 'Default routing settings for new sessions.',
   'routing.strategy': 'Strategy',
@@ -1878,7 +1878,7 @@ export const dict = {
   'routing.dictionaries.confirmReset': 'Restore system dictionary {name}?',
   'routing.dictionaries.restored': 'System dictionary restored',
 
-  // --- Git-репозитории и SSH-ключи (AD-076) ---
+  // --- Git-репозитории и SSH-ключи (ADR-076) ---
   'sshkey.not_found': 'SSH key {id} not found',
   'sshkey.name_exists': 'SSH key with name "{name}" already exists',
   'sshkey.encryption_unavailable': 'SSH key encryption is unavailable: secret key is not configured',
@@ -1888,7 +1888,7 @@ export const dict = {
   'git.repo_path_invalid': 'Invalid repository path "{path}" (must be inside the project workspace)',
   'git.repo_exists': 'Repository already exists at "{path}"',
 
-  // --- SSH-ключи: UI раздела «Агенты» (AD-076, T8) ---
+  // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH keys',
   'sshKeys.description': 'Per-agent SSH keys for git operations. Private keys and passphrases are encrypted at rest and are never shown after saving.',
   'sshKeys.add': 'Add key',
@@ -1917,7 +1917,7 @@ export const dict = {
   'sshKeys.error.nameRequired': 'Name is required',
   'sshKeys.error.keyRequired': 'Private key is required',
 
-  // --- Внешние события (AD-089) ---
+  // --- Внешние события (ADR-089) ---
   'events.title': 'Events',
   'events.description': 'External event bindings and the routing journal. Events are normalized and routed to sessions by source/chat/thread; changes require the LEAD or ADMIN role.',
   'events.bindings.title': 'Bindings',
@@ -2000,7 +2000,7 @@ export const dict = {
   'events.routes.form.ttl': 'TTL',
   'events.routes.form.sessionRequired': 'Session ID is required for bound/queue mode',
 
-  // --- External events: field tooltips, API keys (AD-089) ---
+  // --- External events: field tooltips, API keys (ADR-089) ---
   'events.form.sourceTooltip': 'Event source identifier, e.g. telegram, webhook or ci.',
   'events.form.modeTooltip': 'How the binding delivers events: to an existing session, to a temporary session or to the queue.',
   'events.form.projectTooltip': 'Project container for the bound/temporary session.',
@@ -2070,7 +2070,7 @@ export const dict = {
   'events.journal.principal': 'Principal',
   'events.journal.openInLogs': 'Open in Logs & Audit',
 
-  // --- Event settings (AD-089, admin) ---
+  // --- Event settings (ADR-089, admin) ---
   'eventsConfig.title': 'Event settings',
   'eventsConfig.description': 'Runtime settings for external event handling: master switch, default mode, ephemeral session TTL, journal retention, source allow-list and the global per-key request limit.',
   'eventsConfig.enabled': 'External events enabled',
@@ -2104,7 +2104,7 @@ export const dict = {
   'eventsConfig.saved': 'Event settings saved',
   'eventsConfig.saveError': 'Failed to save event settings: {error}',
 
-  // --- Decision models (AD-084, admin) ---
+  // --- Decision models (ADR-084, admin) ---
   'decisionConfig.title': 'Decision models',
   'decisionConfig.description': 'Runtime settings for the decision layer (System One: Clef/Jev/…): master switch, decision-protocol provider and model, confidence threshold.',
   'decisionConfig.enabled': 'Decision layer enabled',
@@ -2148,7 +2148,7 @@ export const dict = {
   'decisionConfig.metricLatencyAvg': 'Latency avg, ms',
   'decisionConfig.metricLatencyMax': 'Latency max, ms',
 
-  // --- Service keys (AD-052 stage I, admin) ---
+  // --- Service keys (ADR-052 stage I, admin) ---
   'serviceKeys.title': 'Service keys',
   'serviceKeys.description': 'Instance-scoped API keys for external services: scopes limit which endpoints the key can call, the project projection limits it to a subset of projects. The secret is shown only once — at creation.',
   'serviceKeys.listTitle': 'Keys',
@@ -2210,7 +2210,7 @@ export const dict = {
   'serviceKeys.role.LEAD': 'LEAD',
   'serviceKeys.role.AUDITOR': 'AUDITOR',
 
-  // --- Webhooks (AD-052 stage II, admin) ---
+  // --- Webhooks (ADR-052 stage II, admin) ---
   'webhooks.title': 'Webhooks',
   'webhooks.description': 'Outgoing event subscriptions: Synth signs each delivery with a per-subscription secret (HMAC-SHA256). The signing secret is shown only once.',
   'webhooks.listTitle': 'Subscriptions',

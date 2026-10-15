@@ -21,7 +21,7 @@ export interface ApprovalDecision {
 }
 
 /**
- * AD-029: минимальный механизм подтверждения для действия `ask`.
+ * ADR-029: минимальный механизм подтверждения для действия `ask`.
  *
  * Публикует событие `permission.asked` в EventBus (UI/пользователь может ответить),
  * затем ожидает `permission.replied` с совпадающим approval_id до таймаута.
@@ -43,7 +43,7 @@ export class PermissionApprovalManager {
       let done = false;
       let held = false;
       let unsub: () => void = () => {};
-      // AD-029: askTimeoutMs <= 0 (0 = «таймаут выключен») — таймер не ставим,
+      // ADR-029: askTimeoutMs <= 0 (0 = «таймаут выключен») — таймер не ставим,
       // ждём permission.replied бесконечно (без авто-отклонения).
       const timer = typeof timeoutMs === 'number' && timeoutMs > 0
         ? setTimeout(() => {

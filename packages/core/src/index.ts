@@ -110,7 +110,7 @@ export type {
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
-// AD-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
+// ADR-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
 export * as crypto from './security/crypto.js';
 export {
   CryptoError,
@@ -132,7 +132,7 @@ export type {
   RotateMasterKeyOptions,
   RotateMasterKeyResult,
 } from './storage/ssh-key-store.js';
-// AD-076: one-shot ротация мастер-ключа секретов (SSH-ключи).
+// ADR-076: one-shot ротация мастер-ключа секретов (SSH-ключи).
 export { rotateSecretsMasterKey, MasterKeyRotationError } from './security/rotate.js';
 export type {
   RotateSecretsMasterKeyOptions,
@@ -140,14 +140,14 @@ export type {
   MasterKeyRotationErrorCode,
   MasterKeySource,
 } from './security/rotate.js';
-// AD-076 §T3: git-сервис ядра, SSH-окружение и фабрика git-роутов.
+// ADR-076 §T3: git-сервис ядра, SSH-окружение и фабрика git-роутов.
 export { GitService, resolveRepoPath, deriveRepoName } from './git/git-service.js';
 export type { GitEnvOptions, GitFetchOptions } from './git/git-service.js';
 export { isSshUrl, createSshEnv, SshEnvError } from './git/ssh-env.js';
 export type { CreateSshEnvOptions, SshEnv, SshEnvErrorCode } from './git/ssh-env.js';
 export { createGitRoutes } from './server/routes/git.js';
 export type { GitRoutesAuth, GitProjectStore, GitRoutesOptions } from './server/routes/git.js';
-// AD-014/AD-017/AD-075: единая фабрика проектов (standalone и managed через opts).
+// ADR-014/ADR-017/ADR-075: единая фабрика проектов (standalone и managed через opts).
 export { createProjectRoutes } from './server/routes/projects.js';
 export type {
   ProjectRoutesAuth,
@@ -155,15 +155,15 @@ export type {
   ProjectRouteMessages,
   ProjectStatsSource,
 } from './server/routes/projects.js';
-// AD-089: единый хелпер видимости сессии (списки/доступ по id).
+// ADR-089: единый хелпер видимости сессии (списки/доступ по id).
 export { isSessionVisible } from './server/session-visibility.js';
 export type { SessionOwnerCtx } from './server/session-visibility.js';
-// AD-075: единая project-aware фабрика FS-роутов (standalone + managed через opts).
+// ADR-075: единая project-aware фабрика FS-роутов (standalone + managed через opts).
 export { createFsRoutes } from './server/routes/fs.js';
 export type { FsRoutesOptions, FsRoutesAuth } from './server/routes/fs.js';
 export { resolveProjectWorkspace, isTextFile } from './server/fs-workspace.js';
 export type { ResolveProjectWorkspaceOptions } from './server/fs-workspace.js';
-// AD-076 §T5: SSH-ключи агентов (flat + nested-роуты).
+// ADR-076 §T5: SSH-ключи агентов (flat + nested-роуты).
 export { createSshKeyRoutes, createAgentSshKeyRoutes } from './server/routes/ssh-keys.js';
 export type { SshKeyRoutesAuth, SshKeyRoutesOptions } from './server/routes/ssh-keys.js';
 export { ProjectStore } from './storage/project-store.js';
@@ -174,10 +174,10 @@ export type {
   AddMcpRegistryEntryInput,
   UpdateMcpRegistryEntryInput,
 } from './storage/mcp-registry-store.js';
-// AD-089: реестр биндингов внешних событий и журнал обработки/решений Router.
+// ADR-089: реестр биндингов внешних событий и журнал обработки/решений Router.
 export { EventBindingStore, EVENT_BINDINGS_SCHEMA_VERSION } from './storage/event-binding-store.js';
 export type { EventBindingStoreConfig, UpsertEventBindingInput } from './storage/event-binding-store.js';
-// AD-089/AD-052: реестр API-ключей привязок (приём событий по ключу).
+// ADR-089/ADR-052: реестр API-ключей привязок (приём событий по ключу).
 export {
   EventApiKeyStore,
   EventApiKeyConflictError,
@@ -189,7 +189,7 @@ export type {
   CreateEventApiKeyInput,
   UpdateEventApiKeyPatch,
 } from './storage/event-api-key-store.js';
-// AD-052 (этап I): service-key — реестр, scopes, проектная проекция, роуты.
+// ADR-052 (этап I): service-key — реестр, scopes, проектная проекция, роуты.
 export {
   ServiceApiKeyStore,
   ServiceApiKeyConflictError,
@@ -221,7 +221,7 @@ export type {
   ServiceKeyRoutesOptions,
   ServiceKeyRouteMessages,
 } from './server/routes/service-keys.js';
-// AD-052 (этап II): исходящие webhooks — реестр подписок и журнал доставок.
+// ADR-052 (этап II): исходящие webhooks — реестр подписок и журнал доставок.
 export {
   WebhookStore,
   WebhookConflictError,
@@ -259,32 +259,32 @@ export type {
 } from './server/routes/webhooks.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
-// AD-089: retention-очистка журнала событий (периодический pruner).
+// ADR-089: retention-очистка журнала событий (периодический pruner).
 export { startEventJournalPruner } from './engine/events/journal-prune.js';
 export type { EventJournalPrunerOptions } from './engine/events/journal-prune.js';
-// AD-089: реестр правил маршрутизации внешних событий.
+// ADR-089: реестр правил маршрутизации внешних событий.
 export { RouteRuleStore, ROUTE_RULES_SCHEMA_VERSION } from './storage/route-rule-store.js';
 export type { RouteRuleStoreConfig, UpsertRouteRuleInput } from './storage/route-rule-store.js';
-// AD-051 (срез) / AD-089: реестр расписаний планировщика.
+// ADR-051 (срез) / ADR-089: реестр расписаний планировщика.
 export { ScheduleStore, SCHEDULES_SCHEMA_VERSION } from './storage/schedule-store.js';
 export type { ScheduleStoreConfig, ScheduleRunUpdate } from './storage/schedule-store.js';
-// AD-051: append-only история срабатываний расписаний.
+// ADR-051: append-only история срабатываний расписаний.
 export { JobStore } from './storage/job-store.js';
 export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
-// AD-089: ядро маршрутизации событий и единый funnel создания сессии.
+// ADR-089: ядро маршрутизации событий и единый funnel создания сессии.
 export { EventRouter } from './engine/events/event-router.js';
 export type { EventRouterDeps } from './engine/events/event-router.js';
-// AD-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
+// ADR-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
 export { IdentityClaimStore, IDENTITY_CLAIMS_SCHEMA_VERSION, IDENTITY_CLAIM_TTL_SEC } from './storage/identity-claim-store.js';
 export type { IdentityClaimRecord, IdentityClaimStoreConfig } from './storage/identity-claim-store.js';
-// AD-051/AD-089: источник дедупа (in-process / файловый межпроцессный).
+// ADR-051/ADR-089: источник дедупа (in-process / файловый межпроцессный).
 export { MemoryDedupStore, FileDedupStore } from './engine/events/dedup-store.js';
 export type { DedupStore, FileDedupStoreConfig } from './engine/events/dedup-store.js';
 export { EventIngress } from './engine/events/ingest.js';
 export type { EventIngestInput, EventIngressDeps } from './engine/events/ingest.js';
-// AD-089/AD-052: контекст машинной аутентификации по API-ключу привязки.
+// ADR-089/ADR-052: контекст машинной аутентификации по API-ключу привязки.
 export type { EventKeyCredential } from './engine/events/credential.js';
-// AD-089/AD-052: in-memory per-key rate limiter приёма событий.
+// ADR-089/ADR-052: in-memory per-key rate limiter приёма событий.
 export { KeyRateLimiter } from './engine/events/key-rate-limiter.js';
 export {
   RequestSessionService,
@@ -304,9 +304,9 @@ export type {
   RouteRuleProvider,
   SessionResolution,
 } from './engine/events/types.js';
-// AD-089: правило маршрутизации по матчу события и маппинг target→decision.
+// ADR-089: правило маршрутизации по матчу события и маппинг target→decision.
 export { ProjectRuleProvider } from './engine/events/project-rule-provider.js';
-// AD-084 × AD-089: decision-маршрутизация внешних событий (шаблон агента).
+// ADR-084 × ADR-089: decision-маршрутизация внешних событий (шаблон агента).
 export {
   DecisionRuleProvider,
   DECISION_ROUTING_QUESTION_ID,
@@ -316,7 +316,7 @@ export type {
   DecisionRuleProviderDeps,
 } from './engine/events/decision-rule-provider.js';
 export { decisionFromTarget } from './engine/events/target-decision.js';
-// AD-051 (срез) / AD-089: планировщик расписаний (cron/interval).
+// ADR-051 (срез) / ADR-089: планировщик расписаний (cron/interval).
 export {
   nextCronDate,
   isValidCron,
@@ -336,10 +336,10 @@ export type {
   SchedulerLeader,
   FileLeaderOptions,
 } from './engine/scheduler/index.js';
-// AD-051/AD-089: файловый мьютекс (общий dataDir на одном хосте/FS).
+// ADR-051/ADR-089: файловый мьютекс (общий dataDir на одном хосте/FS).
 export { FileMutex } from './storage/file-mutex.js';
 export type { FileMutexOptions } from './storage/file-mutex.js';
-// AD-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
+// ADR-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
 export { SkillService } from './engine/skills/service.js';
 export type { SkillServiceOptions, SkillListOptions } from './engine/skills/service.js';
 export { SkillRegistry } from './engine/skills/registry.js';
@@ -366,7 +366,7 @@ export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
 export { createSkillRoutes } from './server/routes/skills.js';
 export type { SkillRoutesDeps, SkillRoutesOptions, SkillRoutesMessages } from './server/routes/skills.js';
-// AD-069 §9.3: прозрачность проектных инструкций (резолвер снимка + API-роут).
+// ADR-069 §9.3: прозрачность проектных инструкций (резолвер снимка + API-роут).
 export {
   ProjectInstructionsResolver,
   buildInstructionsInfo,
@@ -388,7 +388,7 @@ export type {
   ContextRoutesMessages,
   ContextProjectStore,
 } from './server/routes/context.js';
-// AD-046 §7: slash-команды и bundles.
+// ADR-046 §7: slash-команды и bundles.
 export { CommandService } from './engine/commands/service.js';
 export type { CommandServiceOptions, CommandSkillSource } from './engine/commands/service.js';
 export { CommandRegistry } from './engine/commands/registry.js';
@@ -464,7 +464,7 @@ export type {
   IdentityRouteMessages,
 } from './server/routes/identities.js';
 export { createExternalIdentityResolver } from './engine/events/external-identity.js';
-// AD-089 (этап 5): эффективные роли внешнего отправителя (профиль ∩ identity.roles).
+// ADR-089 (этап 5): эффективные роли внешнего отправителя (профиль ∩ identity.roles).
 export { resolveEffectiveRoles, normalizeRole } from './engine/events/identity-roles.js';
 export type { EffectiveRoles } from './engine/events/identity-roles.js';
 export { createMessageRoutes } from './server/routes/messages.js';

@@ -98,7 +98,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('DebugPanel — AD-072: действия в каждой секции', () => {
+describe('DebugPanel — ADR-072: действия в каждой секции', () => {
   it('рендерит AI и SERVICE секции с отдельными Save', async () => {
     const container = await renderPanel()
 

@@ -8,7 +8,7 @@ export interface SettingsItemProps {
 }
 
 /**
- * AD-072: пункт-блок внутри SettingsSection (строка списка/тумблер/чекбокс).
+ * ADR-072: пункт-блок внутри SettingsSection (строка списка/тумблер/чекбокс).
  *
  * Контракт фонов (не нарушать):
  * - `SettingsSection` — контейнер группы, фон `bg-card` (elevated);

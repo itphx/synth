@@ -2,7 +2,7 @@ import type { Schedule } from '@itphx/synth-shared';
 import { nextCronDate } from './cron.js';
 import { parseDurationMs } from './duration.js';
 
-/** AD-051/AD-089: триггер расписания — ровно одно из `cron` / `every`. */
+/** ADR-051/ADR-089: триггер расписания — ровно одно из `cron` / `every`. */
 export type ScheduleTrigger = Pick<Schedule, 'cron' | 'every'>;
 
 /**

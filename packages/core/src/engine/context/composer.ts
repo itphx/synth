@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.1/§3.1: `SystemPromptComposer` — единственная точка сборки
+ * ADR-070 §2.1/§3.1: `SystemPromptComposer` — единственная точка сборки
  * системного промпта. Собирает блоки из состояния **идемпотентно** (заново, не
  * аппендит), сортирует по тирам (`stable` → `context` → `volatile`) и склеивает.
  *
@@ -30,7 +30,7 @@ import { agentKeyOf } from './prompt-state.js';
 import { RUNTIME_DEP_BINARY, type RuntimeDeps } from '../tools/runtime-deps.js';
 import type { DebugCollector } from '../../debug.js';
 
-/** Эвристика оценки токенов (AD-070 §2.5, открытый вопрос 4 — chars/4). */
+/** Эвристика оценки токенов (ADR-070 §2.5, открытый вопрос 4 — chars/4). */
 const EST_TOKENS_DIVISOR = 4;
 
 /** Человекочитаемые подписи блоков манифеста (UI локализует по `key`). */
@@ -61,14 +61,14 @@ const PROMPT_BLOCK_LABELS: Record<string, string> = {
   'skills.catalog.session': 'Session skills',
 };
 
-/** AD-071 §2.6: есть ли непустые административные отключения инструментов. */
+/** ADR-071 §2.6: есть ли непустые административные отключения инструментов. */
 export function hasAdminDisabled(
   disabled?: { capabilities: string[]; tools: string[] },
 ): boolean {
   return !!disabled && (disabled.capabilities.length > 0 || disabled.tools.length > 0);
 }
 
-/** AD-070 §2.9.1: есть ли отсутствующие во внешнем окружении зависимости. */
+/** ADR-070 §2.9.1: есть ли отсутствующие во внешнем окружении зависимости. */
 export function hasMissingDeps(deps?: RuntimeDeps): boolean {
   return !!deps && (deps.git === false || deps.rg === false || deps.sh === false);
 }
@@ -83,17 +83,17 @@ function missingDepsList(deps?: RuntimeDeps): string[] {
   return out;
 }
 
-/** AD-071 §2.2: статус MCP-сервера в блоке `mcp.status`. */
+/** ADR-071 §2.2: статус MCP-сервера в блоке `mcp.status`. */
 export type ComposerMcpServerStatus = 'connected' | 'error' | 'disabled' | 'circuit-open';
 
-/** AD-071 §2.2: инструмент MCP-сервера в блоке `mcp.servers` (без схемы параметров). */
+/** ADR-071 §2.2: инструмент MCP-сервера в блоке `mcp.servers` (без схемы параметров). */
 export interface ComposerMcpServerTool {
   name: string;
   description?: string;
 }
 
 /**
- * AD-071 §2.2: данные MCP-сервера для промпта. Собираются вызывающей стороной
+ * ADR-071 §2.2: данные MCP-сервера для промпта. Собираются вызывающей стороной
  * (оркестратором) из `McpManager` + активного набора сессии; Composer не знает
  * про MCP и работает только с этой моделью.
  */
@@ -105,10 +105,10 @@ export interface ComposerMcpServer {
   instructions?: string;
   tools: ComposerMcpServerTool[];
   status: ComposerMcpServerStatus;
-  /** AD-071 §2.4: уровень сервера (`system`/`project`/`session`). */
+  /** ADR-071 §2.4: уровень сервера (`system`/`project`/`session`). */
   level?: McpServerLevel;
   /**
-   * AD-071 §2.2: причина `disabled` — конфиг, opt-out сессии, проектный
+   * ADR-071 §2.2: причина `disabled` — конфиг, opt-out сессии, проектный
    * default или отсутствие `enabledByDefault`. `'session'` оставлен для
    * обратной совместимости с прежним значением.
    */
@@ -116,7 +116,7 @@ export interface ComposerMcpServer {
 }
 
 /**
- * AD-069 §3.3/§11: результат резолва проектных инструкций для блока
+ * ADR-069 §3.3/§11: результат резолва проектных инструкций для блока
  * `instructions` (тир `context`, order 15). Резолвит оркестратор (нужны
  * workspace/модель), Composer только вставляет блок.
  */
@@ -129,7 +129,7 @@ export interface ComposerInstructions {
 
 export interface ComposerContext {
   session: Session;
-  /** Определение агента из реестра (AD-070 §2.7). */
+  /** Определение агента из реестра (ADR-070 §2.7). */
   agentDef?: AgentDefinition;
   /** Эффективная роль агента (message.agentRole || session.settings.agentRole). */
   agentRole?: string;
@@ -137,9 +137,9 @@ export interface ComposerContext {
   agentContextFile?: string;
   workingDir: string;
   language: string;
-  /** Для блока `[CLASSIFICATION]` (config-gate routingEnabled, AD-034). */
+  /** Для блока `[CLASSIFICATION]` (config-gate routingEnabled, ADR-034). */
   routingEnabled: boolean;
-  /** Для GATEWAY-инструкции (AD-036). */
+  /** Для GATEWAY-инструкции (ADR-036). */
   gatewayEnabled: boolean;
   historyMessages?: Message[];
   userId?: string;
@@ -152,86 +152,86 @@ export interface ComposerContext {
   stickyNotes?: StickyNote[];
   summaryContent?: string;
   /**
-   * AD-071 §2.4: уже загруженный проект сессии (носитель project-скоупа MCP
+   * ADR-071 §2.4: уже загруженный проект сессии (носитель project-скоупа MCP
    * и данных `session.info`). Если задан (в т.ч. `null`) — Composer не читает
    * хранилище повторно; иначе — fallback на `projectStore.load`.
    */
   project?: Project | null;
   /**
-   * AD-070 §2.5 + AD-071 §2.1: описания **встроенных** инструментов, реально
+   * ADR-070 §2.5 + ADR-071 §2.1: описания **встроенных** инструментов, реально
    * уходящие в запрос (слой `tools`, stable). Учитываются только в манифесте
    * (`tools → system → messages`), в system-текст `compose()` не входят.
    */
   tools?: Array<Record<string, unknown>>;
   /**
-   * AD-071 §2.3: фактически применённая политика **встроенных** инструментов
+   * ADR-071 §2.3: фактически применённая политика **встроенных** инструментов
    * (`auto` уже разрешён вызывающей стороной в `consistency`/`available`).
    * Влияет на тир слоя `tools` и текст инструкции `tools.guide`.
    */
   toolsPolicy?: Exclude<ToolsPolicy, 'auto'>;
   /**
-   * AD-071 §2.3: фактически применённая политика **MCP**-инструментов (`auto`
+   * ADR-071 §2.3: фактически применённая политика **MCP**-инструментов (`auto`
    * уже разрешён). Независима от `toolsPolicy`; влияет на текст инструкции
    * `tools.guide`, но не на тиры MCP-блоков (они всегда `volatile`).
    */
   mcpPolicy?: Exclude<ToolsPolicy, 'auto'>;
   /**
-   * AD-071 §2.1: описания MCP-инструментов активных серверов сессии (слой
+   * ADR-071 §2.1: описания MCP-инструментов активных серверов сессии (слой
    * `mcp.tools`, volatile). В system-текст не входят; входят в `totalChars`, но
    * не в `staticPrefixChars` (MCP не кэшируется).
    */
   mcpTools?: Array<Record<string, unknown>>;
   /**
-   * AD-071 §2.2: данные MCP-серверов (все настроенные, включая отключённые).
+   * ADR-071 §2.2: данные MCP-серверов (все настроенные, включая отключённые).
    * Формируют блоки `mcp.servers` (имя/description/instructions/тулы) и
    * `mcp.status` (статус подключения) — оба **всегда `volatile`** (§2.3: MCP не
    * кэшируется). Пустой/отсутствующий список — блоки не добавляются.
    */
   mcpServers?: ComposerMcpServer[];
   /**
-   * AD-046 §4.5/§5: каталог скиллов — `stable` (system/project, доступные) и
+   * ADR-046 §4.5/§5: каталог скиллов — `stable` (system/project, доступные) и
    * `session` (session enable/disable + маркеры `unavailable`). Тело скиллов в
    * промпт не попадает (progressive disclosure). При `systemPrompt`-override
    * каталог не добавляется (§5).
    */
   skillsCatalog?: ComposerSkillsCatalog;
   /**
-   * AD-069 §2.1/§3: проектные инструкции (merged chain `AGENTS.md`), тир
+   * ADR-069 §2.1/§3: проектные инструкции (merged chain `AGENTS.md`), тир
    * `context`, order 15 (после `profile`, до `project.info`). Не добавляются
    * при `session.settings.systemPrompt` override (как `skills.catalog`).
    */
   instructions?: ComposerInstructions;
   /**
-   * AD-051: в сессии активно расписание (`cron`-источник) — добавляет
+   * ADR-051: в сессии активно расписание (`cron`-источник) — добавляет
    * статическое описание системного пользователя `Scheduler` (блок `scheduler`,
    * тир `context`). При `session.settings.systemPrompt` override не добавляется.
    */
   schedulerActive?: boolean;
   /**
-   * AD-051: текущий ход инициирован планировщиком (`metadata.scheduler === true`).
+   * ADR-051: текущий ход инициирован планировщиком (`metadata.scheduler === true`).
    * Добавляет volatile-блок `scheduler.turn` — пояснение модели, что человек в
    * этом ходе не участвует.
    */
   schedulerCurrentTurn?: boolean;
   /**
-   * AD-071 §2.6: instance-wide отключение инструментов администратором
+   * ADR-071 §2.6: instance-wide отключение инструментов администратором
    * (`tools.disabled`). Непустой список добавляет в `tools.guide` строку про
    * административные ограничения (даже в режиме `consistency`).
    */
   adminDisabled?: { capabilities: string[]; tools: string[] };
   /**
-   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh). Непустой
+   * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh). Непустой
    * список отсутствующих добавляет в `tools.guide` строку про зависимость
    * окружения (даже в режиме `consistency`).
    */
   envDeps?: RuntimeDeps;
   /**
-   * AD-071 §2.6: chars-per-token для оценки `estTokens` (калибровка по usage).
+   * ADR-071 §2.6: chars-per-token для оценки `estTokens` (калибровка по usage).
    * Не задан — дефолт 4.
    */
   tokenRatio?: number;
   /**
-   * AD-070 §2.5: per-message `DebugCollector`. Передаётся оркестратором на
+   * ADR-070 §2.5: per-message `DebugCollector`. Передаётся оркестратором на
    * каждый ход и имеет приоритет над `deps.debugCollector` (сборка промпта —
    * общая точка, а коллектор живёт в рамках одного сообщения).
    */
@@ -295,7 +295,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-070 §2.5: манифест состава промпта. Использует тот же обход
+   * ADR-070 §2.5: манифест состава промпта. Использует тот же обход
    * источников, что и `compose()`, но **без побочных эффектов**: не вызывает
    * `captureSystemPromptParts` и не пишет состояние. Размеры блоков считаются
    * без разделителей `\n\n`, поэтому тест паритета сравнивает сумму `chars`
@@ -305,10 +305,10 @@ export class SystemPromptComposer {
    */
   async manifest(ctx: ComposerContext): Promise<PromptManifest> {
     const blocks = await this._collectBlocks(ctx);
-    // AD-071 §2.6: chars-per-token для оценки (калибровка per-model).
+    // ADR-071 §2.6: chars-per-token для оценки (калибровка per-model).
     const ratio = ctx.tokenRatio && ctx.tokenRatio > 0 ? ctx.tokenRatio : EST_TOKENS_DIVISOR;
 
-    // AD-070 §2.5: порядок записей = реальный порядок отправки system-блоков
+    // ADR-070 §2.5: порядок записей = реальный порядок отправки system-блоков
     // (`sortPromptBlocks`: тир → order), тот же, что в `compose().system`.
     const entries: PromptManifestEntry[] = sortPromptBlocks(blocks).map((block) => ({
       key: block.key,
@@ -322,7 +322,7 @@ export class SystemPromptComposer {
       ...(block.provenance ? { provenance: block.provenance } : {}),
     }));
 
-    // AD-070 §2.5 + AD-071 §2.1/§2.3: слои описаний инструментов — отдельные
+    // ADR-070 §2.5 + ADR-071 §2.1/§2.3: слои описаний инструментов — отдельные
     // записи (`tools → mcp.servers → mcp.tools → mcp.status → system → messages`).
     // В system-текст (`compose`) `tools`/`mcp.tools` не входят, но отражаются в
     // манифесте и учитываются в общих размерах.
@@ -372,7 +372,7 @@ export class SystemPromptComposer {
     const nonEmpty = blocks.filter((block) => block.content !== '');
     const totalChars =
       nonEmpty.reduce((sum, block) => sum + block.content.length, 0) + toolsChars + mcpToolsChars;
-    // AD-071 §2.1/§2.3: MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) всегда
+    // ADR-071 §2.1/§2.3: MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) всегда
     // volatile и в кэшируемый stable-префикс не входят; `tools` в режиме
     // `available` (context) — тоже.
     const staticPrefixChars =
@@ -391,7 +391,7 @@ export class SystemPromptComposer {
       staticPrefixChars,
       toolsPolicy,
       mcpPolicy,
-      // AD-071 §2.6: применённый chars-per-token — признак оценочности.
+      // ADR-071 §2.6: применённый chars-per-token — признак оценочности.
       ratio,
       entries,
     };
@@ -428,7 +428,7 @@ export class SystemPromptComposer {
           summaryContent: ctx.summaryContent,
         });
 
-    // Проект: используем уже загруженный вызывающей стороной (AD-071 §2.4);
+    // Проект: используем уже загруженный вызывающей стороной (ADR-071 §2.4);
     // `projectStore` — fallback при отсутствии переданного значения.
     let project: Project | null;
     if (ctx.project !== undefined) {
@@ -446,7 +446,7 @@ export class SystemPromptComposer {
 
     const extraBlocks: PromptBlock[] = [];
 
-    // AD-036: инструкция по обфусцированным секретам (stable).
+    // ADR-036: инструкция по обфусцированным секретам (stable).
     if (ctx.gatewayEnabled) {
       extraBlocks.push({
         key: 'gateway',
@@ -457,7 +457,7 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-039: постоянная инструкция по ведению плана/todo (stable).
+    // ADR-039: постоянная инструкция по ведению плана/todo (stable).
     extraBlocks.push({
       key: 'plan.guide',
       tier: 'stable',
@@ -466,7 +466,7 @@ export class SystemPromptComposer {
       provenance: 'prompts/system/PLAN_GUIDE',
     });
 
-    // AD-070 §3.1 (строка 5): политика режимов — константа сессии (stable).
+    // ADR-070 §3.1 (строка 5): политика режимов — константа сессии (stable).
     // Режим/план/todo передаются chronological-сообщениями (state-messages.ts),
     // а не блоками system, поэтому смена режима не инвалидирует stable-префикс.
     extraBlocks.push({
@@ -477,7 +477,7 @@ export class SystemPromptComposer {
       provenance: 'prompts/system/MODE_POLICY',
     });
 
-    // AD-046 §5: каталог скиллов — только name + краткое description
+    // ADR-046 §5: каталог скиллов — только name + краткое description
     // (progressive disclosure). `stable` — system/project-скиллы (константа
     // сессии), `session` — session enable/disable и маркеры `unavailable`.
     // При `session.settings.systemPrompt` override каталог не добавляется.
@@ -504,7 +504,7 @@ export class SystemPromptComposer {
       }
     }
 
-    // AD-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md) — тир
+    // ADR-069 §2.1/§3: проектные инструкции (merged chain AGENTS.md) — тир
     // `context`, order 15 (после `profile`(10), до `project.info`(20)).
     // При `session.settings.systemPrompt` override не добавляются (как каталог
     // скиллов): override заменяет систему целиком.
@@ -519,7 +519,7 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-051: в сессии активно расписание (`cron`) — статическое описание
+    // ADR-051: в сессии активно расписание (`cron`) — статическое описание
     // системного пользователя `Scheduler` (тир `context`, order 16, после
     // instructions). При `systemPrompt` override не добавляется (как
     // instructions/каталог скиллов). Пустой ассет — блок не добавляется.
@@ -536,7 +536,7 @@ export class SystemPromptComposer {
       }
     }
 
-    // AD-051: текущий ход инициирован планировщиком — volatile-пояснение, что
+    // ADR-051: текущий ход инициирован планировщиком — volatile-пояснение, что
     // человек в этом ходе не участвует (в отличие от статического `scheduler`,
     // описывающего самого системного пользователя). При `systemPrompt` override
     // не добавляется (как прочие Composer-блоки).
@@ -553,7 +553,7 @@ export class SystemPromptComposer {
       }
     }
 
-    // AD-071 §2.2/§2.3: MCP-блоки всегда volatile — MCP не участвует в
+    // ADR-071 §2.2/§2.3: MCP-блоки всегда volatile — MCP не участвует в
     // prompt-cache (состав динамичен: серверы включаются/выключаются, статус
     // меняется), поэтому ни `mcp.servers`, ни `mcp.status` не должны попадать
     // в stable-префикс. Политики `tools.policy`/`mcp.policy` на тир не влияют.
@@ -574,7 +574,7 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-071 §2.3/§2.6 + AD-070 §2.9.1: блок добавляется, если **любая** из
+    // ADR-071 §2.3/§2.6 + ADR-070 §2.9.1: блок добавляется, если **любая** из
     // политик сужает состав до доступных (`available` — встроенные и/или MCP),
     // и/или есть instance-wide отключения администратора (`tools.disabled`),
     // и/или в окружении отсутствуют программы (`git`/`rg`/`sh`) — тогда модель
@@ -601,7 +601,7 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-034: инструкция classify_conversation — config-gate routingEnabled (volatile).
+    // ADR-034: инструкция classify_conversation — config-gate routingEnabled (volatile).
     // Текст — prompt-ассет prompts/system/CLASSIFICATION.{lang}.md (переопределяемый).
     if (ctx.routingEnabled) {
       extraBlocks.push({
@@ -613,7 +613,7 @@ export class SystemPromptComposer {
       });
     }
 
-    // AD-040: информация о сессии — проект/рабочий каталог/ограничения (context).
+    // ADR-040: информация о сессии — проект/рабочий каталог/ограничения (context).
     extraBlocks.push({
       key: 'session.info',
       tier: 'context',
@@ -626,7 +626,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-036: GATEWAY-инструкция — делегирует ContextBuilder (тот читает
+   * ADR-036: GATEWAY-инструкция — делегирует ContextBuilder (тот читает
    * prompts/system/GATEWAY.{lang}.md через ContextConfig).
    */
   private _getGatewayInstructions(lang: string): string {
@@ -634,7 +634,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-071 §2.2: stable-блок `mcp.servers` — по каждому серверу имя, описание,
+   * ADR-071 §2.2: stable-блок `mcp.servers` — по каждому серверу имя, описание,
    * `instructions` и список тулов (имена + краткие описания; полные схемы
    * параметров остаются в `mcp.tools`). Сервер без описания/instructions всё
    * равно присутствует (имя + тулы). Пустых блоков не бывает: метод вызывается
@@ -668,7 +668,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-071 §2.2: volatile-блок `mcp.status` — статус подключения по каждому
+   * ADR-071 §2.2: volatile-блок `mcp.status` — статус подключения по каждому
    * серверу (`connected`/`error`/`disabled`/`circuit-open`). Для `disabled`
    * добавляется причина (opt-out сессии / не разрешён проектом / не включён
    * по умолчанию).
@@ -707,7 +707,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-071 §2.3/§2.6: инструкция к слою инструментов. Для `available` —
+   * ADR-071 §2.3/§2.6: инструкция к слою инструментов. Для `available` —
    * «доступны только перечисленные» с указанием, каких инструментов касается
    * ограничение (встроенные / MCP); при административных отключениях —
    * дополнительная строка про ограничения администратора.
@@ -768,7 +768,7 @@ export class SystemPromptComposer {
   }
 
   /**
-   * AD-040: блок «информация о сессии» — наличие/отсутствие проекта, рабочий
+   * ADR-040: блок «информация о сессии» — наличие/отсутствие проекта, рабочий
    * каталог и ограничения. Перенесён из `ChatOrchestrator._buildSessionContextPrompt`.
    */
   private _buildSessionContext(

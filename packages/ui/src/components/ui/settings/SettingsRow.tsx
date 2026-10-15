@@ -9,13 +9,13 @@ export interface SettingsRowProps {
   description?: string
   control: React.ReactNode
   htmlFor?: string
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   className?: string
 }
 
 /**
- * AD-072: строка «лейбл слева — контрол справа».
+ * ADR-072: строка «лейбл слева — контрол справа».
  * На теле колонка, с `sm` — строка.
  */
 export function SettingsRow({

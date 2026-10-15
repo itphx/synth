@@ -78,7 +78,7 @@ describe('Project API Routes (workspace normalization)', () => {
   });
 });
 
-describe('Project API Routes (workspace provisioning, AD-075)', () => {
+describe('Project API Routes (workspace provisioning, ADR-075)', () => {
   let tmpDir: string;
   let workspacesRoot: string;
   let store: ProjectStore;
@@ -571,10 +571,10 @@ describe('Project API Routes (icon/color)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// AD-089: видимость проектов (elevated) и read-уровень доступа по id
+// ADR-089: видимость проектов (elevated) и read-уровень доступа по id
 // ---------------------------------------------------------------------------
 
-describe('Project API Routes (visibility, AD-089)', () => {
+describe('Project API Routes (visibility, ADR-089)', () => {
   let tmpDir: string;
   let store: ProjectStore;
 

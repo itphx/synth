@@ -37,7 +37,7 @@ async function createBareRepo(base: string): Promise<string> {
   return bare;
 }
 
-describe('Git API Routes (AD-076 §T3)', () => {
+describe('Git API Routes (ADR-076 §T3)', () => {
   let root: string;
   let dataDir: string;
   let workspacesRoot: string;

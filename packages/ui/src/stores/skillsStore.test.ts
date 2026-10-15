@@ -281,7 +281,7 @@ describe('skillsStore — instance-настройки', () => {
   })
 })
 
-describe('skillsStore — события skill.invoked / command.invoked (AD-046 §8.2)', () => {
+describe('skillsStore — события skill.invoked / command.invoked (ADR-046 §8.2)', () => {
   it('recordSkillInvoked накапливает счётчики и последний вызов', () => {
     const store = useSkillsStore.getState()
     store.recordSkillInvoked({ sessionId: 's1', name: 'api-review', source: 'user' })

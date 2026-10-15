@@ -2,7 +2,7 @@ import { load as parseYaml, dump as dumpYaml } from 'js-yaml';
 import type { SkillIssue } from '../types/skills.js';
 
 /**
- * AD-046 §3.1: толерантный парсер YAML-frontmatter `SKILL.md`.
+ * ADR-046 §3.1: толерантный парсер YAML-frontmatter `SKILL.md`.
  *
  * - Неизвестные ключи — не ошибка (совместимость Anthropic/opencode/Claude Code).
  * - Невалидный YAML — фиксируется issue, но не бросает исключение.

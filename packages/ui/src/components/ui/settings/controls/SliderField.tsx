@@ -43,7 +43,7 @@ function computeSliderFill(value: number, min: number, max: number): string {
   return `${Math.round(ratio * 100)}%`
 }
 
-/** AD-072: единый слайдер (`.ui-range`) с подписью значения и опциональным сбросом. */
+/** ADR-072: единый слайдер (`.ui-range`) с подписью значения и опциональным сбросом. */
 export function SliderField({
   label,
   description,

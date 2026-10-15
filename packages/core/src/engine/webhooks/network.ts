@@ -3,9 +3,9 @@ import { evaluateMcpNetworkAccess } from '../mcp/network-policy.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 
 /**
- * AD-052 (этап II): SSRF-политика исходящих webhooks.
+ * ADR-052 (этап II): SSRF-политика исходящих webhooks.
  *
- * Переиспользует проверку MCP (`evaluateMcpNetworkAccess`, AD-071): блокируются
+ * Переиспользует проверку MCP (`evaluateMcpNetworkAccess`, ADR-071): блокируются
  * loopback/private/link-local диапазоны. Дополнительно по умолчанию требуется
  * `https`. Флаг `allowPrivateTargets` (для dev) снимает оба ограничения.
  */

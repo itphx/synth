@@ -1,13 +1,13 @@
 # @itphx/synth-sdk
 
 > Точечные правила пакета. Общие инварианты, команды и стиль — в корневом
-> [AGENTS.md](../../AGENTS.md); публичный контракт и AD-052 — в
-> [AD-052](../../docs/arch_decisions/ad-052-public-api-platform.md).
+> [AGENTS.md](../../AGENTS.md); публичный контракт и ADR-052 — в
+> [ADR-052](../../docs/arch_decisions/adr-052-public-api-platform.md).
 
 ## Роль и границы
 
 `@itphx/synth-sdk` — **публикуемый** типизированный клиент **публичного** API
-Synth (AD-052, этап III, часть 2). Тонкий пакет по образцу `synth`.
+Synth (ADR-052, этап III, часть 2). Тонкий пакет по образцу `synth`.
 
 - Зависит только от `@itphx/synth-shared` — **не** тянет core/backend/ui;
   HTTP-контракт описан в `packages/core/src/server/openapi/public-openapi.ts`
@@ -40,4 +40,4 @@ bindings/keys/routes), `sessions` (CRUD + prompt/messages/status), `schedules`
   перед этим нужен собранный `@itphx/synth-shared` (типы из `dist`).
 - Публикация — вместе с остальными пакетами (`scripts/publish-packages.sh`,
   порядок `… core → sdk → synth`); поле `repository` в `package.json` не
-  добавлять (GitVerse → 403, AD-038).
+  добавлять (GitVerse → 403, ADR-038).

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { resolveEffectiveRoles, normalizeRole } from './identity-roles.js';
 
-describe('resolveEffectiveRoles (AD-089, этап 5)', () => {
+describe('resolveEffectiveRoles (ADR-089, этап 5)', () => {
   it('профиль отсутствует (null) → ролей нет, linked=false (fail-closed)', () => {
     expect(resolveEffectiveRoles(null, undefined)).toEqual({ roles: [], linked: false });
     expect(resolveEffectiveRoles(null, ['ADMIN'])).toEqual({ roles: [], linked: false });

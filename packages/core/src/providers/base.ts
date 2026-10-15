@@ -188,13 +188,13 @@ export interface ProviderConfig {
 }
 
 /**
- * AD-070 §2.2: политика prompt-cache. `auto` — ставить маркеры кэша,
+ * ADR-070 §2.2: политика prompt-cache. `auto` — ставить маркеры кэша,
  * `none` — полностью отключить (для отладки/сравнений).
  */
 export type CachePolicy = 'auto' | 'none';
 
 /**
- * AD-070 §2.2: system prompt как payload для управления prompt-cache.
+ * ADR-070 §2.2: system prompt как payload для управления prompt-cache.
  * Провайдеры принимают как строку (обратная совместимость, в т.ч. саб-агенты),
  * так и этот объект.
  */
@@ -208,7 +208,7 @@ export interface SystemPromptPayload {
   /** Политика кэша: auto (по умолчанию) | none. */
   cachePolicy?: CachePolicy;
   /**
-   * AD-071 §2.1: число встроенных инструментов в начале `tools`-массива
+   * ADR-071 §2.1: число встроенных инструментов в начале `tools`-массива
    * (граница stable-слоя). Кэш-брейкпоинт ставится на последний встроенный
    * инструмент; MCP-инструменты после границы не кэшируются. Если не задан —
    * провайдер сохраняет прежнее поведение (брейкпоинт на последний инструмент).
@@ -306,7 +306,7 @@ export abstract class BaseProvider {
   }
 
   /**
-   * AD-084: decision-запрос (`state + questions → answers`). Реализуют только
+   * ADR-084: decision-запрос (`state + questions → answers`). Реализуют только
    * провайдеры типа `decision`; прочие типы бросают `ProviderError` (единый
    * fail-safe контракт для `GatewayProvider.decide`).
    */
@@ -388,7 +388,7 @@ export class ProviderFactory {
   static _normalizeUrl(url: string, providerType: string): string {
     const trimmed = url.replace(/\/+$/, '');
 
-    // AD-084: decision-провайдеры (`decision` → /decisions, `systemone` →
+    // ADR-084: decision-провайдеры (`decision` → /decisions, `systemone` →
     // /v1/systemone) строят endpoint сами — url остаётся базовым.
     if (providerType === 'decision' || providerType === 'systemone') {
       return trimmed;

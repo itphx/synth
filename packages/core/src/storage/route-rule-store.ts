@@ -3,7 +3,7 @@ import { join, dirname } from 'node:path';
 import type { EventRouteRule } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
 
-/** Версия схемы файла правил маршрутизации — для будущей миграции (AD-032). */
+/** Версия схемы файла правил маршрутизации — для будущей миграции (PROP-032). */
 export const ROUTE_RULES_SCHEMA_VERSION = 1;
 
 export interface RouteRuleStoreConfig {
@@ -32,10 +32,10 @@ function isRouteRule(value: unknown): value is EventRouteRule {
 }
 
 /**
- * AD-089: реестр правил маршрутизации внешних событий (проектные/инстанс-правила).
+ * ADR-089: реестр правил маршрутизации внешних событий (проектные/инстанс-правила).
  *
- * Хранится одним JSON-файлом `{dataDir}/events/routes.json` (AD-005, атомарная
- * запись tmp→rename). Модель PG-ready (AD-032): плоские записи со стабильным
+ * Хранится одним JSON-файлом `{dataDir}/events/routes.json` (ADR-005, атомарная
+ * запись tmp→rename). Модель PG-ready (PROP-032): плоские записи со стабильным
  * `id` и `schemaVersion`.
  */
 export class RouteRuleStore {

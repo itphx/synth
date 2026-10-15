@@ -11,7 +11,7 @@ import { WEBHOOK_SECRET_PREFIX } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itphx/synth-shared';
 import { decryptSecret, encryptSecret, isEncrypted, resolveMasterKey } from '../security/crypto.js';
 
-/** AD-052 (этап II): версия схемы файла подписок webhooks (для будущей миграции AD-032). */
+/** ADR-052 (этап II): версия схемы файла подписок webhooks (для будущей миграции PROP-032). */
 export const WEBHOOKS_SCHEMA_VERSION = 1;
 
 const SECRET_PREFIX_VISIBLE = 12;
@@ -24,7 +24,7 @@ export interface WebhookStoreConfig {
 }
 
 /**
- * AD-052 (этап II): конфликт метки подписки — метка неуникальна
+ * ADR-052 (этап II): конфликт метки подписки — метка неуникальна
  * (регистронезависимо) в пределах инстанса. Роуты маппят в 409 CONFLICT.
  */
 export class WebhookConflictError extends Error {
@@ -48,14 +48,14 @@ interface WebhooksFile {
 }
 
 /**
- * AD-052 (этап II): реестр подписок на исходящие события.
+ * ADR-052 (этап II): реестр подписок на исходящие события.
  *
- * Хранится одним JSON-файлом `{dataDir}/webhooks/subscriptions.json` (AD-005,
- * атомарная запись tmp→rename). В отличие от API-ключей (AD-089/AD-052), здесь
+ * Хранится одним JSON-файлом `{dataDir}/webhooks/subscriptions.json` (ADR-005,
+ * атомарная запись tmp→rename). В отличие от API-ключей (ADR-089/ADR-052), здесь
  * нельзя хранить sha256-хеш: HMAC-подпись доставки требует исходный секрет,
- * поэтому `secret` шифруется at-rest мастер-ключом (AES-256-GCM, AD-076) и
+ * поэтому `secret` шифруется at-rest мастер-ключом (AES-256-GCM, ADR-076) и
  * расшифровывается только при отправке (`getSecret`). Plaintext наружу —
- * единственный раз при создании/ротации. Модель PG-ready (AD-032): плоские
+ * единственный раз при создании/ротации. Модель PG-ready (PROP-032): плоские
  * записи со стабильным `id` и `schemaVersion`.
  */
 export class WebhookStore {

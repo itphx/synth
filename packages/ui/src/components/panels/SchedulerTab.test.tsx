@@ -158,7 +158,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('SchedulerTab — список расписаний (AD-051/AD-089)', () => {
+describe('SchedulerTab — список расписаний (ADR-051/ADR-089)', () => {
   it('рендерит список: имя, триггер, цель, статус и времена', async () => {
     const container = await renderTab()
 
@@ -335,7 +335,7 @@ function job(overrides: Partial<ScheduleJob> = {}): ScheduleJob {
   }
 }
 
-describe('SchedulerTab — рекомендация контекста (AD-051)', () => {
+describe('SchedulerTab — рекомендация контекста (ADR-051)', () => {
   it('показывает рекомендацию и кнопка открывает вкладку «Контекст»', async () => {
     useUIStore.setState({ rightPanelTab: 'scheduler' })
     const container = await renderTab()
@@ -348,7 +348,7 @@ describe('SchedulerTab — рекомендация контекста (AD-051)'
   })
 })
 
-describe('SchedulerTab — история запусков (AD-051)', () => {
+describe('SchedulerTab — история запусков (ADR-051)', () => {
   it('история лениво грузится при первом раскрытии и рендерит поля Job', async () => {
     mocks.getScheduleJobs.mockResolvedValue({
       jobs: [

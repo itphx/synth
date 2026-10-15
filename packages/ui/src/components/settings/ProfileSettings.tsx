@@ -67,11 +67,11 @@ export const ProfileSettings = () => {
   const [success, setSuccess] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // AD-089: внешние идентичности (не часть черновика профиля — отдельный ресурс).
+  // ADR-089: внешние идентичности (не часть черновика профиля — отдельный ресурс).
   const [identities, setIdentities] = useState<ExternalIdentity[] | null>(null)
   const [identitiesError, setIdentitiesError] = useState<string | null>(null)
   const [unlinkingId, setUnlinkingId] = useState<string | null>(null)
-  // AD-089 (claim-flow): ввод одноразового кода и его подтверждение.
+  // ADR-089 (claim-flow): ввод одноразового кода и его подтверждение.
   const [claimCode, setClaimCode] = useState('')
   const [claimError, setClaimError] = useState<string | null>(null)
   const [claiming, setClaiming] = useState(false)
@@ -121,7 +121,7 @@ export const ProfileSettings = () => {
     }
   }
 
-  // AD-089 (claim-flow): подтверждение владения идентичностью по коду.
+  // ADR-089 (claim-flow): подтверждение владения идентичностью по коду.
   const handleClaimIdentity = async () => {
     const code = claimCode.trim()
     if (!code || claiming) return
@@ -448,7 +448,7 @@ export const ProfileSettings = () => {
           </ul>
         )}
 
-        {/* AD-089 (claim-flow): одноразовый код из чата → привязка идентичности. */}
+        {/* ADR-089 (claim-flow): одноразовый код из чата → привязка идентичности. */}
         <div className="mt-3 space-y-2 border-t border-border/60 pt-3">
           <TextField
             id="profile-identity-claim-code"

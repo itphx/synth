@@ -118,7 +118,7 @@ describe('McpManager', () => {
     expect(cfg?.command).toBe('node');
   });
 
-  it('AD-071 §2.4: isServerSystemEnabled — мастер только из реестра, config.enabled не гейт', () => {
+  it('ADR-071 §2.4: isServerSystemEnabled — мастер только из реестра, config.enabled не гейт', () => {
     // config.enabled=false — лишь сид записи реестра; без карты реестра сервер включён.
     manager.setConfig({ 'cfg-off': { ...makeStdioConfig('cfg-off'), enabled: false } });
     expect(manager.isServerSystemEnabled('cfg-off')).toBe(true);
@@ -190,7 +190,7 @@ describe('McpManager', () => {
     expect(registry.get('test-server_tool1')?.capabilities).toContain(ToolCapability.MCP);
   });
 
-  it('AD-071: registerTools тегирует источник (source: mcp, mcpServer)', async () => {
+  it('ADR-071: registerTools тегирует источник (source: mcp, mcpServer)', async () => {
     mockClientConnected = true;
     await manager.registerTools('test-server', registry);
 
@@ -199,7 +199,7 @@ describe('McpManager', () => {
     expect(tool.mcpServer).toBe('test-server');
   });
 
-  it('AD-071: registerTools идемпотентен — повторный вызов не теряет имена для deregister', async () => {
+  it('ADR-071: registerTools идемпотентен — повторный вызов не теряет имена для deregister', async () => {
     mockClientConnected = true;
     await manager.registerTools('test-server', registry);
     const names = await manager.registerTools('test-server', registry);
@@ -337,13 +337,13 @@ describe('McpManager', () => {
     expect(tools).toBeNull();
   });
 
-  it('AD-071 §2.2: getServerDescription берёт описание из конфига', () => {
+  it('ADR-071 §2.2: getServerDescription берёт описание из конфига', () => {
     manager.setConfig({ 'test-server': { ...makeStdioConfig(), description: 'Мой сервер' } });
     expect(manager.getServerDescription('test-server')).toBe('Мой сервер');
     expect(manager.getServerDescription('unknown')).toBeUndefined();
   });
 
-  it('AD-071 §2.2: getServerInstructions после подключения', async () => {
+  it('ADR-071 §2.2: getServerInstructions после подключения', async () => {
     mockClientConnected = true;
     await manager.connectServer('test-server');
 
@@ -352,7 +352,7 @@ describe('McpManager', () => {
     expect(manager.getServerInstructions('unknown')).toBeUndefined();
   });
 
-  it('AD-071 §2.2: getServerStatus — disconnected/connected/error', async () => {
+  it('ADR-071 §2.2: getServerStatus — disconnected/connected/error', async () => {
     expect(manager.getServerStatus('test-server')).toBe('disconnected');
     expect(manager.getServerStatus('unknown')).toBe('disconnected');
 
@@ -414,7 +414,7 @@ describe('McpManager', () => {
     expect(servers[0]!.name).toBe('new-srv');
   });
 
-  describe('сетевая политика (AD-071 §2.3.1)', () => {
+  describe('сетевая политика (ADR-071 §2.3.1)', () => {
     it('connectServer блокирует пользовательский приватный HTTP при deny', async () => {
       manager.setConfig({ 'http-srv': { type: 'sse', url: 'http://10.0.0.5/mcp' } });
       manager.setServerOrigins({ 'http-srv': 'user' });

@@ -9,7 +9,7 @@ export type { McpRoutesOptions } from './mcp-registry.js';
 
 /**
  * Backend MCP: probe (`POST /probe`) — общая логика core-фабрики; legacy
- * `/servers*`, `/session/:id` и единый реестр `/registry*` (AD-071) —
+ * `/servers*`, `/session/:id` и единый реестр `/registry*` (ADR-071) —
  * backend-only (см. `mcp-registry.ts`). Порядок монтирования: core probe
  * первым, затем backend-only.
  */

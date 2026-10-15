@@ -94,23 +94,23 @@ export interface SubagentResumeDeps {
   /** Fallback permission (глобальный конфиг), если у дочерней сессии нет своей. */
   permissionConfig?: PermissionConfig;
   /**
-   * AD-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
+   * ADR-070 §2.9.1: доступность внешних программ окружения (git/rg/sh) —
    * dependency-гейт в permission-слое resumed-саб-агента и `[НЕДОСТУПНЫЕ ТУЛЫ]`.
    */
   runtimeDeps?: RuntimeDeps;
-  /** AD-071 §2.1: активные MCP-серверы — дочерняя сессия наследует скоуп родителя. */
+  /** ADR-071 §2.1: активные MCP-серверы — дочерняя сессия наследует скоуп родителя. */
   mcpServers?: string[];
   shellPolicy?: ShellPolicy | null;
   protectedPaths?: ProtectedPathsPolicy | null;
   protectedPathsEnabled?: boolean;
-  /** AD-070: цены моделей для live-стоимости resumed-саб-агента (как в `task`). */
+  /** ADR-070: цены моделей для live-стоимости resumed-саб-агента (как в `task`). */
   modelPriceLoader?: (model: string) => UsagePricing | null;
-  /** AD-046 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
+  /** ADR-046 §5: рантайм скиллов — каталог resumed-саб-агенту (binding родителя). */
   skillRuntime?: import('../skills/types.js').SkillRuntime;
-  /** AD-046 §4.5: scope-гейты скиллов родительского контекста. */
+  /** ADR-046 §4.5: scope-гейты скиллов родительского контекста. */
   skillScope?: import('../skills/types.js').SkillScopeOptions;
   /**
-   * AD-075/AD-076: проектные зависимости resumed-саб-агента — прокидываются в
+   * ADR-075/ADR-076: проектные зависимости resumed-саб-агента — прокидываются в
    * `TaskExtra`, чтобы проектные и сетевые git-тулы работали и после resume.
    * Контейнер гарантирует только чтение (`load`); в рантайме оркестратор передаёт
    * полный `ProjectStore`.
@@ -124,7 +124,7 @@ export interface SubagentResumeDeps {
   workspaceManaged?: boolean;
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;
   /**
-   * AD-069 §7: уже резолвленные проектные инструкции resumed-саб-агента
+   * ADR-069 §7: уже резолвленные проектные инструкции resumed-саб-агента
    * (резолвит оркестратор; в ребёнке повторного резолва нет).
    */
   getProjectInstructions?: (child: Session, parent: Session, workingDir: string) => Promise<string | undefined>;
@@ -133,7 +133,7 @@ export interface SubagentResumeDeps {
   /** Рабочий каталог дочерней сессии. */
   getWorkingDir: (child: Session) => Promise<string>;
   /**
-   * AD-075: задан ли рабочий каталог проекта дочерней сессии (гейт `workspace`
+   * ADR-075: задан ли рабочий каталог проекта дочерней сессии (гейт `workspace`
    * в permission-слое resumed-саб-агента). Не задан — fail-open.
    */
   getWorkspaceReady?: (child: Session) => Promise<boolean>;
@@ -214,7 +214,7 @@ export async function runSubagentResume(
       throw new SubagentResumeError('NO_PROVIDER', sm('task.resume_provider_unavailable', { id: child.id }));
     }
     const workingDir = await deps.getWorkingDir(child);
-    // AD-075: workspace-гейт resumed-саб-агента — как у родителя.
+    // ADR-075: workspace-гейт resumed-саб-агента — как у родителя.
     const workspaceReady = deps.getWorkspaceReady ? await deps.getWorkspaceReady(child) : undefined;
 
     // ─── 2. Synthetic user-маркер resume в историю дочерней сессии ──
@@ -256,7 +256,7 @@ export async function runSubagentResume(
       deps.contextConfig?.systemPromptsDir,
     );
 
-    // AD-046 §5/§6.2: каталог скиллов resumed-саб-агенту. Binding — родителя,
+    // ADR-046 §5/§6.2: каталог скиллов resumed-саб-агенту. Binding — родителя,
     // capabilities — самого resumed-агента (executor).
     if (deps.skillRuntime) {
       try {
@@ -282,7 +282,7 @@ export async function runSubagentResume(
       }
     }
 
-    // AD-069 §7/§9.2: проектные инструкции resumed-саб-агента. Не добавляются
+    // ADR-069 §7/§9.2: проектные инструкции resumed-саб-агента. Не добавляются
     // при `session.settings.systemPrompt` override (как основная сессия).
     if (deps.getProjectInstructions && !child.settings.systemPrompt?.trim()) {
       try {
@@ -293,7 +293,7 @@ export async function runSubagentResume(
       }
     }
 
-    // AD-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
+    // ADR-070 §2.9.1: недоступные по внешней зависимости (git/rg/sh) тулы —
     // в системный промпт resumed-саб-агента (как state-сообщение родителя).
     const subagentTools = deps.agentRegistry.getToolsForAgent(agentDef.id, deps.mcpServers);
     const unavailableSection = buildSubagentUnavailableToolsSection(
@@ -323,23 +323,23 @@ export async function runSubagentResume(
       sessionId: child.id,
       callerAgentRole: agentRole,
       permissionConfig: child.settings.permission ?? deps.permissionConfig,
-      // AD-070 §2.9.1: dependency-гейт permission-слоя resumed-саб-агента.
+      // ADR-070 §2.9.1: dependency-гейт permission-слоя resumed-саб-агента.
       runtimeDeps: deps.runtimeDeps,
-      // AD-075: workspace-гейт permission-слоя resumed-саб-агента.
+      // ADR-075: workspace-гейт permission-слоя resumed-саб-агента.
       workspaceReady,
       securityConfig: deps.securityConfig,
       language: child.settings.language || 'ru',
       shellPolicy: deps.shellPolicy ?? undefined,
       protectedPaths: deps.protectedPaths ?? undefined,
       protectedPathsEnabled: deps.protectedPathsEnabled,
-      // AD-071 §2.1: дочерняя сессия наследует MCP-скоуп родителя.
+      // ADR-071 §2.1: дочерняя сессия наследует MCP-скоуп родителя.
       mcpServers: deps.mcpServers,
-      // AD-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
+      // ADR-070: live-стоимость resumed-саб-агента тем же загрузчиком цен.
       modelPriceLoader: deps.modelPriceLoader,
-      // AD-046 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
+      // ADR-046 §5: тул `skill` у resumed-саб-агента (тот же рантайм).
       skillRuntime: deps.skillRuntime,
       skillScope: deps.skillScope,
-      // AD-075/AD-076: проектные зависимости — проектные и сетевые git-тулы
+      // ADR-075/ADR-076: проектные зависимости — проектные и сетевые git-тулы
       // доступны resumed-саб-агенту (иначе projectStore/workspacesRoot/sshKeyStore
       // отсутствуют и гейт `canEditProject`/SSH-окружение деградируют).
       projectStore: deps.projectStore,

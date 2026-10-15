@@ -80,7 +80,7 @@ afterEach(async () => {
   vi.clearAllMocks()
 })
 
-describe('ChatInput — `/`-автокомплит (AD-046 §9.3)', () => {
+describe('ChatInput — `/`-автокомплит (ADR-046 §9.3)', () => {
   it('открывается на `/`, а выбор подставляет `/name ` без отправки', async () => {
     const container = await renderInput()
     const textarea = container.querySelector('textarea') as HTMLTextAreaElement

@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.6: оценка токенов по символам и калибровка chars-per-token.
+ * ADR-071 §2.6: оценка токенов по символам и калибровка chars-per-token.
  */
 
 import { describe, it, expect } from 'vitest';

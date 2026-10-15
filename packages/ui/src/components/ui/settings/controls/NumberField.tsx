@@ -11,15 +11,15 @@ export interface NumberFieldProps extends Omit<React.InputHTMLAttributes<HTMLInp
   error?: string
   /** Единица измерения справа от поля (%, ms, …). */
   suffix?: string
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   /** Дополнительные классы контейнера `SettingsField`. */
   containerClassName?: string
-  /** AD-072: строка «подпись слева — поле справа» вместо вертикального лейбла. */
+  /** ADR-072: строка «подпись слева — поле справа» вместо вертикального лейбла. */
   inline?: boolean
 }
 
-/** AD-072: числовое поле с выравниванием вправо; на теле — на всю ширину. */
+/** ADR-072: числовое поле с выравниванием вправо; на теле — на всю ширину. */
 export function NumberField({
   label,
   description,

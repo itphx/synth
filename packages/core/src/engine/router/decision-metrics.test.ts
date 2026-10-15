@@ -1,5 +1,5 @@
 /**
- * Тесты агрегатных метрик decision-слоя (AD-084): накопление счётчиков,
+ * Тесты агрегатных метрик decision-слоя (ADR-084): накопление счётчиков,
  * разбивка по моделям, фоллбек/эскалация, сброс.
  */
 import { describe, it, expect } from 'vitest';
@@ -51,7 +51,7 @@ function rejected(provider = 'p', model = 'm'): DecisionCascadeOutcome {
   };
 }
 
-describe('DecisionMetrics (AD-084)', () => {
+describe('DecisionMetrics (ADR-084)', () => {
   it('начинается с нулей', () => {
     const snap = new DecisionMetrics().snapshot();
     expect(snap).toEqual({

@@ -1,6 +1,6 @@
 /**
- * DecisionModel — микро-модель на decision-модели (AD-084).
- * Уровень каскада AD-035 между embedding и локальной LLM: decision пытается
+ * DecisionModel — микро-модель на decision-модели (ADR-084).
+ * Уровень каскада ADR-035 между embedding и локальной LLM: decision пытается
  * первым, `micro_llm` остаётся фоллбеком.
  *
  * Decision-модель (System One: Clef/Jev/…) за один forward-pass отвечает на
@@ -36,9 +36,9 @@ export interface DecisionConfigLike {
   model: string;
   /** Порог уверенности: ниже — `UNSURE` (fail-safe). */
   confidenceThreshold: number;
-  /** AD-084: провайдер тира эскалации (необязательный точный тир). */
+  /** ADR-084: провайдер тира эскалации (необязательный точный тир). */
   escalationProvider?: string;
-  /** AD-084: модель тира эскалации (необязательный точный тир). */
+  /** ADR-084: модель тира эскалации (необязательный точный тир). */
   escalationModel?: string;
 }
 
@@ -96,7 +96,7 @@ export class DecisionModel implements MicroModel {
     const questions = this._buildQuestions(taskClass);
     info('DECISION', `Запрос decision-модели ${providerName}/${modelName} (${taskClass})`);
 
-    // Единый каскад primary → escalation (AD-084); fail-safe внутри.
+    // Единый каскад primary → escalation (ADR-084); fail-safe внутри.
     const outcome = await decideChoiceCascade({
       resolver: this._resolver,
       config,
@@ -127,7 +127,7 @@ export class DecisionModel implements MicroModel {
 
   // ── private ──
 
-  /** Сигнал отказа каскада по статусу последней попытки (AD-084). */
+  /** Сигнал отказа каскада по статусу последней попытки (ADR-084). */
   private _failSignal(outcome: DecisionCascadeOutcome): string {
     const last = outcome.attempts[outcome.attempts.length - 1];
     switch (outcome.lastStatus) {

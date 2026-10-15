@@ -1,5 +1,5 @@
 /**
- * AD-069 Фаза 1: интеграция проектных инструкций с оркестратором.
+ * ADR-069 Фаза 1: интеграция проектных инструкций с оркестратором.
  *
  * Проверяем: инструкции попадают в system prompt (блок `instructions`), их
  * изменение инвалидирует `promptStates` (generation bump, т.к. блок в тире
@@ -133,7 +133,7 @@ function makeInstructionsConfig(overrides: Partial<InstructionsConfig> = {}): In
   };
 }
 
-describe('ChatOrchestrator — проектные инструкции (AD-069 Фаза 1)', () => {
+describe('ChatOrchestrator — проектные инструкции (ADR-069 Фаза 1)', () => {
   let tmpDir: string;
   let wsDir: string;
   let sessionManager: SessionManager;
@@ -184,7 +184,7 @@ describe('ChatOrchestrator — проектные инструкции (AD-069 �
           defaultModel: 'm',
         }) as unknown as import('@itphx/synth-shared').ProviderConfig,
       instructionsConfig: config,
-      // AD-069 Фаза 2a: project-trust гейт — доверяем temp-workspace.
+      // ADR-069 Фаза 2a: project-trust гейт — доверяем temp-workspace.
       instructionsTrustedProjectDirs: [wsDir],
     });
   }
@@ -258,7 +258,7 @@ describe('ChatOrchestrator — проектные инструкции (AD-069 �
     expect(info.manifest.entries.find((e) => e.key === 'instructions')).toBeUndefined();
   });
 
-  it('сессия без проекта: проектные инструкции не грузятся (AD-040)', async () => {
+  it('сессия без проекта: проектные инструкции не грузятся (ADR-040)', async () => {
     const orchestrator = makeOrchestrator(makeInstructionsConfig());
     const session = await createSession(false);
 

@@ -10,7 +10,7 @@ import { SettingsField } from '../SettingsField'
 export interface KeyValueFieldProps {
   label: string
   description?: string
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   /** Пары ключ→значение; порядок строк — как в `Object.entries`. */
   value: Record<string, string>
@@ -50,7 +50,7 @@ const samePairs = (value: Record<string, string>, prev: Record<string, string>):
 }
 
 /**
- * AD-072: редактор пар ключ→значение (`Record<string, string>`, напр. `identityMap`).
+ * ADR-072: редактор пар ключ→значение (`Record<string, string>`, напр. `identityMap`).
  *
  * Строки держатся локальным массивом пар: так порядок сохраняется, а «пустой»/
  * дублирующийся ключ не схлопывает строку прямо во время ввода (наружу уходит

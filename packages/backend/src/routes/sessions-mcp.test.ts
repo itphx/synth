@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.4: MCP-скоуп сессии — эффективный список и переключение.
+ * ADR-071 §2.4: MCP-скоуп сессии — эффективный список и переключение.
  * RBAC: владелец сессии (обычный пользователь) или ADMIN.
  */
 
@@ -103,7 +103,7 @@ function auth(user: string) {
   return { Authorization: `Bearer ${user}`, 'Content-Type': 'application/json' };
 }
 
-describe('Session MCP scope API (AD-071 §2.4)', () => {
+describe('Session MCP scope API (ADR-071 §2.4)', () => {
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-sess-mcp-'));
   });

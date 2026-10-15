@@ -1,5 +1,5 @@
 /**
- * AD-084: единый decision-каскад `primary → escalation`.
+ * ADR-084: единый decision-каскад `primary → escalation`.
  *
  * Точка переиспользования для трёх потребителей decision-слоя — микро-модели
  * (`DecisionModel`), классификатора категории (`DecisionContentClassifier`) и
@@ -77,9 +77,9 @@ export interface DecideChoiceCascadeOptions {
   questionId: string;
   /** Проверка допустимости метки для конкретного потребителя. */
   validate: (label: string) => boolean;
-  /** AD-085 задел: медиа-вложения (изображения). */
+  /** PROP-085 задел: медиа-вложения (изображения). */
   images?: string[];
-  /** AD-085 задел: медиа-вложения (видео). */
+  /** PROP-085 задел: медиа-вложения (видео). */
   videos?: string[];
   /** Метка потребителя для логов (напр. `микро`/`классификатор`/`маршрутизация события`). */
   logLabel?: string;
@@ -111,7 +111,7 @@ export async function decideChoiceCascade(
   for (let i = 0; i < tiers.length; i += 1) {
     const { tier, providerName, modelName } = tiers[i]!;
 
-    // Переход на тир эскалации (наблюдаемость AD-084).
+    // Переход на тир эскалации (наблюдаемость ADR-084).
     if (tier === 'escalation') {
       const prev = attempts[attempts.length - 1];
       info(

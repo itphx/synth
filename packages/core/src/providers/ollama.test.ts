@@ -146,7 +146,7 @@ describe('OllamaProvider — нормализация function.arguments', () =>
   });
 });
 
-describe('OllamaProvider — system prompt payload (AD-070 §2.2)', () => {
+describe('OllamaProvider — system prompt payload (ADR-070 §2.2)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -206,7 +206,7 @@ describe('OllamaProvider — system prompt payload (AD-070 §2.2)', () => {
   });
 });
 
-describe('OllamaProvider — usage (AD-070 §2.3)', () => {
+describe('OllamaProvider — usage (ADR-070 §2.3)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });

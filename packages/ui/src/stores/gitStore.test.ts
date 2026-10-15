@@ -49,7 +49,7 @@ const REGISTRY_ENTRY: GitRepoConfigData = {
   lastFetch: '2026-01-01T00:00:00Z',
 }
 
-describe('gitStore — реестр репозиториев (AD-076)', () => {
+describe('gitStore — реестр репозиториев (ADR-076)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     useGitStore.setState({ reposByProject: {}, commitsByRepo: {}, loading: false, error: null })

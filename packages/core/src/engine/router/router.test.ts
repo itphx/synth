@@ -1,5 +1,5 @@
 /**
- * Тесты ModelRouter × DecisionContentClassifier (AD-084 × AD-034).
+ * Тесты ModelRouter × DecisionContentClassifier (ADR-084 × ADR-034).
  * Проверяем порядок приоритетов: keyword >= 0.5 → routingCategory → decision →
  * keyword-fallback, а также что `route` стал async.
  */
@@ -58,7 +58,7 @@ function stubDecision(impl: () => Promise<ClassifyResult | null>): DecisionStub 
   return { classifier: { classify } as unknown as DecisionContentClassifier, classify };
 }
 
-describe('ModelRouter × decision-классификатор (AD-084)', () => {
+describe('ModelRouter × decision-классификатор (ADR-084)', () => {
   it('keyword < 0.5 и нет routingCategory → используется decision-результат', async () => {
     const decision = stubDecision(async () => ({
       category: 'research',

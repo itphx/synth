@@ -1,5 +1,5 @@
 /**
- * SecretPatternStore (AD-036) — редактируемый список regex-паттернов детекции секретов.
+ * SecretPatternStore (ADR-036) — редактируемый список regex-паттернов детекции секретов.
  *
  * Схема «системный + override» (по аналогии с ContextConfig):
  * - дефолтный список встроен в код (DEFAULT_PATTERNS из secret-detector.ts);

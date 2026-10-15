@@ -4,7 +4,7 @@ import { hasServiceScope } from '@itphx/synth-shared';
 import type { ServiceKeyCredential } from '../storage/service-api-key-store.js';
 
 /**
- * AD-052 (этап I): enforcement service-key — scopes и проектная проекция.
+ * ADR-052 (этап I): enforcement service-key — scopes и проектная проекция.
  *
  * `requireScope` — middleware **рядом** с `requirePermission` (не перегрузка
  * permission-слоя тулов: роль-оси тот by design не имеет). Интерактивные креды
@@ -51,7 +51,7 @@ export function requireScope(...required: string[]): Middleware {
 }
 
 /**
- * AD-052 §«Проектная проекция»: пусто/отсутствует `allowedProjects` — ключ
+ * ADR-052 §«Проектная проекция»: пусто/отсутствует `allowedProjects` — ключ
  * действует по политике инстанса (доступ разрешён). Задан непустой список —
  * доступен только проект из списка (fail-closed: без projectId — запрещено).
  */

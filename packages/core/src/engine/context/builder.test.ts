@@ -8,7 +8,7 @@ import { ContextConfig } from './config.js';
 import { ContextBuilder } from './builder.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
 
-/** AD-070: обёртка удалена из класса — тесты собирают промпт через buildBaseBlocks. */
+/** ADR-070: обёртка удалена из класса — тесты собирают промпт через buildBaseBlocks. */
 async function buildSystemPrompt(
   builder: ContextBuilder,
   params: Parameters<ContextBuilder['buildBaseBlocks']>[0],

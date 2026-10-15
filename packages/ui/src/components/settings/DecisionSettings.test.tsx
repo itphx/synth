@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
 }))
 
-// Провайдеры/модели: только `decision`/`systemone` — decision-протокол (AD-084).
+// Провайдеры/модели: только `decision`/`systemone` — decision-протокол (ADR-084).
 const providersStore = vi.hoisted(() => ({
   providers: [
     { name: 'routerai-decision', type: 'decision', enabled: true },
@@ -205,7 +205,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('DecisionSettings — админ-раздел «Decision-модели» (AD-084)', () => {
+describe('DecisionSettings — админ-раздел «Decision-модели» (ADR-084)', () => {
   it('загружает настройки и рендерит заголовок/описание', async () => {
     const container = await renderSettings()
 
@@ -451,7 +451,7 @@ describe('DecisionSettings — админ-раздел «Decision-модели»
   })
 })
 
-describe('DecisionSettings — права доступа (ADMIN) и i18n (AD-084)', () => {
+describe('DecisionSettings — права доступа (ADMIN) и i18n (ADR-084)', () => {
   it('категория «Decision-модели» — только ADMIN', () => {
     const config = CATEGORIES.find((cat) => cat.id === 'decisionConfig')!
     expect(config).toBeDefined()

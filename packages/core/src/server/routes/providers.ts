@@ -66,7 +66,7 @@ const DEFAULT_MESSAGES: ProviderRouteMessages = {
 };
 
 /**
- * API провайдеров (AD-005/AD-017). Общая реализация для core (standalone) и
+ * API провайдеров (ADR-005/ADR-017). Общая реализация для core (standalone) и
  * backend (managed): отличается только guard'ами (core — requireAuth, backend —
  * requireAdmin) и текстами (core — литералы, backend — t()).
  */

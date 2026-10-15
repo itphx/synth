@@ -1,5 +1,5 @@
 /**
- * AD-089: домен внешних событий — нормализованное `Event`, устойчивая `Binding`
+ * ADR-089: домен внешних событий — нормализованное `Event`, устойчивая `Binding`
  * и решение Router. Контракты без бизнес-логики: сам Router/приём событий живут
  * в core, здесь только типы.
  */
@@ -17,7 +17,7 @@ export type EventMode = 'bound' | 'ephemeral' | 'queue' | 'drop';
 /** Режим доставки события в `EventBinding` (без `drop`). */
 export type EventDeliveryMode = Exclude<EventMode, 'drop'>;
 
-/** AD-089: идентичность отправителя события (маппинг на RBAC — AD-029/AD-043). */
+/** ADR-089: идентичность отправителя события (маппинг на RBAC — ADR-029/ADR-043). */
 export interface EventIdentity {
   /** Внешний идентификатор пользователя. */
   principalId?: string;
@@ -29,14 +29,14 @@ export interface EventIdentity {
   roles?: string[];
 }
 
-/** AD-089: нормализованное внешнее событие (источник-специфика — в `payload`). */
+/** ADR-089: нормализованное внешнее событие (источник-специфика — в `payload`). */
 export interface SynthEvent {
   /** `'evt_<uuid>'`, уникален в пределах инстанса. */
   id: string;
   source: string;
   /** `'message' | 'callback' | 'webhook' | 'schedule' | 'ci_event' | 'session.requested'`. */
   type: string;
-  /** Нормализованное тело: текст, ссылки на вложения (AD-085), метаданные. */
+  /** Нормализованное тело: текст, ссылки на вложения (PROP-085), метаданные. */
   payload: unknown;
   identity: EventIdentity;
   /** Стабильный ключ идемпотентности. */
@@ -45,7 +45,7 @@ export interface SynthEvent {
   ts: string;
 }
 
-/** AD-089: устойчивая привязка внешнего адреса к сессии/шаблону. */
+/** ADR-089: устойчивая привязка внешнего адреса к сессии/шаблону. */
 export interface EventBinding {
   id: string;
   source: string;
@@ -56,13 +56,13 @@ export interface EventBinding {
   /** Конкретная постоянная сессия (mode=`bound`). */
   sessionId?: string;
   mode: EventDeliveryMode;
-  /** Шаблон агента/скилла для создания/настройки сессии (AD-046). */
+  /** Шаблон агента/скилла для создания/настройки сессии (ADR-046). */
   agentTemplate?: string;
-  /** `projectId` — контейнер сессии (AD-014). */
+  /** `projectId` — контейнер сессии (ADR-014). */
   project?: string;
 }
 
-/** AD-089/AD-052: API-ключ привязки для аутентификации приёма событий. */
+/** ADR-089/ADR-052: API-ключ привязки для аутентификации приёма событий. */
 export interface EventBindingApiKey {
   /** `eak_<uuid>`. */
   id: string;
@@ -72,7 +72,7 @@ export interface EventBindingApiKey {
   /** Опциональное описание назначения ключа. */
   description?: string;
   /**
-   * Опциональный лимит запросов в минуту для этого ключа (AD-089/AD-052).
+   * Опциональный лимит запросов в минуту для этого ключа (ADR-089/ADR-052).
    * Не задан — глобальный дефолт `events.keyRateLimitPerMinute`; `0` — без лимита.
    */
   rateLimitPerMinute?: number;
@@ -85,25 +85,25 @@ export interface EventBindingApiKey {
   /** Префикс ключа для идентификации в UI (секрет наружу не отдаётся). */
   prefix: string;
   /**
-   * AD-052 (задел): ISO-8601 срок действия ключа. Заполнен и уже прошёл —
+   * ADR-052 (задел): ISO-8601 срок действия ключа. Заполнен и уже прошёл —
    * ключ недействителен (`resolveBySecret` → `null`). Не задан — бессрочно.
    */
   expiresAt?: string;
   /**
-   * AD-052 (задел): ISO-8601 отзыв ключа (мягкое удаление). Заполнен —
+   * ADR-052 (задел): ISO-8601 отзыв ключа (мягкое удаление). Заполнен —
    * ключ недействителен независимо от срока (`EventApiKeyStore.revoke`).
    */
   revokedAt?: string;
 }
 
-/** AD-089: ответ создания ключа — метаданные + однократно показываемый секрет. */
+/** ADR-089: ответ создания ключа — метаданные + однократно показываемый секрет. */
 export interface EventBindingApiKeyCreated extends EventBindingApiKey {
   /** Plaintext-секрет; возвращается единственный раз при создании. */
   key: string;
 }
 
 /**
- * AD-089: цель правила маршрутизации (та же семантика, что у
+ * ADR-089: цель правила маршрутизации (та же семантика, что у
  * `EventBinding`/`ScheduleTarget`).
  */
 export type EventRouteTarget =
@@ -111,13 +111,13 @@ export type EventRouteTarget =
   | { mode: 'ephemeral'; agentTemplate?: string; project?: string; ttl?: string }
   | { mode: 'queue'; sessionId: string }
   /**
-   * AD-089 (auto-bind): правило закрепляет внешний адрес события
+   * ADR-089 (auto-bind): правило закрепляет внешний адрес события
    * (`chatKey`/`threadKey`) за сессией — Router создаёт `EventBinding`
    * (`mode='bound'`) при первой доставке.
    */
   | { mode: 'bind'; agentTemplate?: string; project?: string };
 
-/** AD-089: условие срабатывания правила (AND по заполненным полям). */
+/** ADR-089: условие срабатывания правила (AND по заполненным полям). */
 export interface EventRouteMatch {
   source?: string;
   type?: string;
@@ -130,7 +130,7 @@ export interface EventRouteMatch {
   keywords?: string[];
 }
 
-/** AD-089: правило маршрутизации событий «событие → сессия» (проектные/инстанс-правила). */
+/** ADR-089: правило маршрутизации событий «событие → сессия» (проектные/инстанс-правила). */
 export interface EventRouteRule {
   /** `rule_<uuid>`, уникален в пределах инстанса. */
   id: string;
@@ -143,7 +143,7 @@ export interface EventRouteRule {
 }
 
 /**
- * AD-089/AD-084: диагностическая мета решения Router. Необязательные поля,
+ * ADR-089/ADR-084: диагностическая мета решения Router. Необязательные поля,
  * не ломают дискриминант `kind`; заполняются decision-слоем (`confidence`)
  * и маршрутизацией (`signals`) — попадают в ответ `POST /events` и в журнал.
  */
@@ -157,14 +157,14 @@ export interface RouteDecisionMeta {
   signals?: string[];
 }
 
-/** AD-089: вариант решения Router без меты (дискриминант `kind`). */
+/** ADR-089: вариант решения Router без меты (дискриминант `kind`). */
 type RouteDecisionKind =
   | { kind: 'bound'; sessionId: string }
   | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string }
   | { kind: 'queue'; owner: string; reason: string }
   | { kind: 'drop'; reason: string; audited: true }
   /**
-   * AD-089 (auto-bind): Router решает закрепить событие за новой сессией —
+   * ADR-089 (auto-bind): Router решает закрепить событие за новой сессией —
    * `RequestSessionService` создаёт сессию без `expiresAt` и `EventBinding`
    * (`mode='bound'`), после чего доставляет событие. Источник решения — фоллбек
    * при `events.autoBind` и наличии `identity.chatKey|threadKey`, либо правило
@@ -172,14 +172,14 @@ type RouteDecisionKind =
    */
   | { kind: 'bind'; agentTemplate: string; project?: string };
 
-/** AD-089: решение Router — куда направить событие (или отложить/отбросить). */
+/** ADR-089: решение Router — куда направить событие (или отложить/отбросить). */
 export type RouteDecision = RouteDecisionKind & RouteDecisionMeta;
 
-/** AD-089: инициатор запроса на сессию. */
+/** ADR-089: инициатор запроса на сессию. */
 export type EventInitiator = 'user' | 'agent' | 'external' | 'system';
 
 /**
- * AD-089: намерение создать/привязать сессию — единый funnel. Создание сессии
+ * ADR-089: намерение создать/привязать сессию — единый funnel. Создание сессии
  * обрабатывается тем же Router'ом, независимо от инициатора.
  */
 export interface SessionRequest {

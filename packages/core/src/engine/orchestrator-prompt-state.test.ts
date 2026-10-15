@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.4/§2.7 (Ф2-часть 2): оркестратор хранит promptStates per-agent,
+ * ADR-070 §2.4/§2.7 (Ф2-часть 2): оркестратор хранит promptStates per-agent,
  * предсказывает cache hit/miss и заполняет promptMeta фактическим usage.
  */
 
@@ -70,7 +70,7 @@ class CacheMetaProvider extends BaseProvider {
   }
 }
 
-describe('ChatOrchestrator — promptStates/promptMeta (AD-070 §2.4)', () => {
+describe('ChatOrchestrator — promptStates/promptMeta (ADR-070 §2.4)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let orchestrator: ChatOrchestrator;
@@ -269,7 +269,7 @@ describe('ChatOrchestrator — promptStates/promptMeta (AD-070 §2.4)', () => {
     expect(reloaded.promptStates!.developer!.updatedAt).toBe(after.promptStates!.developer!.updatedAt);
   });
 
-  describe('_buildPromptHistoryInfo (AD-070 §2.5, слой messages)', () => {
+  describe('_buildPromptHistoryInfo (ADR-070 §2.5, слой messages)', () => {
     it('считает отправляемые сообщения, а disabled/hidden/info — в excluded', async () => {
       const session = await createSessionWithUser();
       await sessionManager.addMessage(session.id, makeUserMessage('Привет'));

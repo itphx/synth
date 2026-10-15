@@ -47,7 +47,7 @@ export class ContextBuilder {
   }
 
   /**
-   * AD-070 §2.1: собирает «сырые» блоки системного промпта с тирами.
+   * ADR-070 §2.1: собирает «сырые» блоки системного промпта с тирами.
    * Пустой `content` означает, что блок не отправляется. Порядок блоков
    * фиксирован, финальную сортировку по тирам делает `sortPromptBlocks`.
    */
@@ -158,7 +158,7 @@ export class ContextBuilder {
   }
 
   /**
-   * AD-036: инструкция по работе с обфусцированными секретами (⟦SYNTH_SECRET_N⟧).
+   * ADR-036: инструкция по работе с обфусцированными секретами (⟦SYNTH_SECRET_N⟧).
    * Делегирует ContextConfig.getGatewayInstructions (prompts/system/GATEWAY.{lang}.md).
    */
   getGatewayInstructions(language = 'ru'): string {

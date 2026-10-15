@@ -15,7 +15,7 @@ import { McpRegistryForm } from './McpRegistryForm'
 import { useMcpRegistryEditor } from './useMcpRegistryEditor'
 
 /**
- * AD-071 §2.5 / AD-072: пользовательская часть MCP — собственные HTTP-серверы
+ * ADR-071 §2.5 / ADR-072: пользовательская часть MCP — собственные HTTP-серверы
  * (категория `mcp`). Реестр целиком, stdio, enabledByDefault, сетевой доступ,
  * permissions и tools.disabled — в админ-категории `mcpAdmin`.
  */

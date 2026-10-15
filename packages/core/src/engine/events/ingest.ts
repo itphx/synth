@@ -10,7 +10,7 @@ import { nowISO } from '@itphx/synth-shared';
 import type { RequestSessionService, IdentityClaimHint } from './request-session.js';
 
 /**
- * AD-089: вход приёма внешнего события. `id`/`dedupKey`/`ts` необязательны —
+ * ADR-089: вход приёма внешнего события. `id`/`dedupKey`/`ts` необязательны —
  * нормализуются `EventIngress.normalize`.
  */
 export interface EventIngestInput {
@@ -42,7 +42,7 @@ function defaultDedupKey(input: EventIngestInput, identity: EventIdentity): stri
 }
 
 /**
- * AD-089: ingress-точка приёма внешних событий. Нормализует вход во внутренний
+ * ADR-089: ingress-точка приёма внешних событий. Нормализует вход во внутренний
  * `SynthEvent` (id `evt_<uuid>`, defaults) и передаёт в единый funnel
  * `RequestSessionService.handleEvent` (Router → материализация → журнал).
  */
@@ -70,10 +70,10 @@ export class EventIngress {
   /**
    * Нормализация + маршрутизация/материализация через `RequestSessionService`.
    *
-   * AD-089: `opts.binding` (аутентификация по API-ключу привязки) прокидывается
+   * ADR-089: `opts.binding` (аутентификация по API-ключу привязки) прокидывается
    * в funnel — событие маршрутизируется в эту привязку.
-   * AD-089/AD-052: `opts.audit` (id ключа/идентичность) прокидывается в журнал.
-   * AD-089: `opts.ownerId` (владелец создаваемой сессии) прокидывается в funnel.
+   * ADR-089/ADR-052: `opts.audit` (id ключа/идентичность) прокидывается в журнал.
+   * ADR-089: `opts.ownerId` (владелец создаваемой сессии) прокидывается в funnel.
    */
   async ingest(
     input: EventIngestInput,

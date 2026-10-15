@@ -6,7 +6,7 @@
 #   1. @itphx/synth-shared   — типы, схемы, утилиты (фундамент)
 #   2. @itphx/synth-core     — движок, провайдеры, HTTP API, CLI
 #   3. @itphx/synth-ui       — React SPA (Vite production build)
-#   4. @itphx/synth-sdk      — типизированный клиент публичного API (AD-052)
+#   4. @itphx/synth-sdk      — типизированный клиент публичного API (ADR-052)
 #   5. @itphx/synth    — npm-пакет: бандл CLI + UI + промпты
 #   6. Docker-образ    — (опционально) сборка контейнера
 #

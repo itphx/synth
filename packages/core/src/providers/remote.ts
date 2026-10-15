@@ -1,7 +1,7 @@
 // RemoteProvider — виртуальный LLM-провайдер гибридного режима (Часть 6).
 // Локальный core ходит за LLM через серверный /api/v2/llm/chat/completions
 // (LLM Proxy backend, OpenAI-совместимый): все LLM-запросы проходят централизованно
-// через backend (gateway AD-036 применяется на сервере).
+// через backend (gateway ADR-036 применяется на сервере).
 //
 // Токен берётся из:
 //   1. this.getToken (конструктор) — обычно RemoteSession.getToken (авто-refresh);
@@ -388,12 +388,12 @@ export class RemoteProvider extends BaseProvider {
       temperature: this.temperature,
     };
     if (stream) body.stream = true;
-    // AD-070: просим backend-proxy отдать usage в стриме (как OpenAIProvider),
+    // ADR-070: просим backend-proxy отдать usage в стриме (как OpenAIProvider),
     // иначе live-статистика remote-провайдера до финального чанка недоступна.
     if (stream) body.stream_options = { include_usage: true };
     if (tools?.length) body.tools = tools;
     if (this.maxTokens && this.maxTokens > 0) body.max_tokens = this.maxTokens;
-    // AD-070 §2.2: prompt_cache_key пробрасывается на backend LLM Proxy, который
+    // ADR-070 §2.2: prompt_cache_key пробрасывается на backend LLM Proxy, который
     // исполняет провайдера с этим именем; при cachePolicy:'none' — не отправляем.
     if (
       typeof systemPrompt === 'object'
@@ -481,7 +481,7 @@ export class RemoteProvider extends BaseProvider {
     }
     const completionDetails = usage.completion_tokens_details as Record<string, number> | undefined;
     const promptDetails = usage.prompt_tokens_details as Record<string, number> | undefined;
-    // AD-070 §2.3: backend LLM Proxy отдаёт OpenAI-совместимый usage; cache read
+    // ADR-070 §2.3: backend LLM Proxy отдаёт OpenAI-совместимый usage; cache read
     // приходит в prompt_tokens_details.cached_tokens (fallback — Anthropic-поле).
     const cacheReadTokens =
       promptDetails?.cached_tokens

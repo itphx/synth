@@ -44,7 +44,7 @@ export interface CommandServiceOptions {
 }
 
 /**
- * AD-046 §7: фасад резолвинга `/`-команд — discovery шаблонов, встроенные
+ * ADR-046 §7: фасад резолвинга `/`-команд — discovery шаблонов, встроенные
  * команды, скиллы-как-команды и bundles. Единый путь для UI/CLI/гибрида;
  * оркестратор получает объект через `OrchestratorOptions.commandRuntime`.
  */
@@ -110,7 +110,7 @@ export class CommandService implements CommandRuntime {
       sessionEnabled?: string[];
       sessionDisabled?: string[];
       permissionConfig?: PermissionConfig;
-      /** AD-046 §7.4: раннер inline shell (готовое замыкание от оркестратора). */
+      /** ADR-046 §7.4: раннер inline shell (готовое замыкание от оркестратора). */
       runShell?: (cmd: string) => Promise<{ output: string; isError: boolean }>;
     },
   ): Promise<CommandResolveResult | undefined> {
@@ -207,7 +207,7 @@ export class CommandService implements CommandRuntime {
       return { status: 'builtin', name, args, kind: 'builtin', output: renderCommandsList(visible) };
     }
     if (name === 'init') {
-      // AD-069 §8.1: `/init` генерирует prompt для LLM (status `prompt`), а не
+      // ADR-069 §8.1: `/init` генерирует prompt для LLM (status `prompt`), а не
       // локальный ответ. `isLocalCommandStatus` его не покрывает — CLI не
       // короткозамыкает, оркестратор инжектит prompt в user-сообщение.
       return { status: 'prompt', name, args, kind: 'builtin', prompt: renderInitPrompt(args) };
@@ -292,7 +292,7 @@ export class CommandService implements CommandRuntime {
     const { commands: templates, diagnostics: templateDiags } = await this._registry.list({
       projectWorkspace: ctx.projectWorkspace,
     });
-    // AD-046 §4.4/§7.1: недоверенные проектные template-команды не входят в
+    // ADR-046 §4.4/§7.1: недоверенные проектные template-команды не входят в
     // каталог — не резолвятся и не видны в `/`-автокомплите и GET /commands;
     // диагностика `untrusted` сохраняется (эмитится в discovery/merge).
     const trustedTemplates = templates.filter((t) => t.trusted);
@@ -318,10 +318,10 @@ export class CommandService implements CommandRuntime {
 export { parseBundleFile };
 
 /**
- * AD-046 §7.1: статусы, которые завершаются локальным ответом без LLM.
+ * ADR-046 §7.1: статусы, которые завершаются локальным ответом без LLM.
  * `summarization` сюда НЕ входит — `/summary` должен пройти через оркестратор
  * и запустить реальную суммаризацию (единое поведение CLI/SSE). `prompt`
- * (AD-069 §8.1, `/init`) тоже НЕ локальный: prompt уходит в LLM.
+ * (ADR-069 §8.1, `/init`) тоже НЕ локальный: prompt уходит в LLM.
  */
 export function isLocalCommandStatus(status: CommandResolveStatus): boolean {
   return status === 'builtin' || status === 'unknown' || status === 'denied' || status === 'unavailable';

@@ -21,9 +21,9 @@ export interface PermissionCheckInput {
   params: Record<string, unknown>;
   workingDir: string;
   capabilities?: readonly string[];
-  /** Текущий runtime-режим сессии (AD-025): 'plan' — только чтение. */
+  /** Текущий runtime-режим сессии (ADR-025): 'plan' — только чтение. */
   sessionMode?: SessionMode;
-  /** Строгость цикла Plan→Build (AD-028): auto | strict | off. */
+  /** Строгость цикла Plan→Build (ADR-028): auto | strict | off. */
   planMode?: PlanMode;
   /** Утверждён ли план в сессии (после plan_exit). */
   planApproved?: boolean;
@@ -36,7 +36,7 @@ export interface PermissionCheckInput {
   /** Тумблер полного отключения защищённых путей (default true). false — проверка путей пропускается. */
   protectedPathsEnabled?: boolean;
   /**
-   * AD-070 §2.9.1: capabilities агента, выполняющего tool_call. Если заданы и
+   * ADR-070 §2.9.1: capabilities агента, выполняющего tool_call. Если заданы и
    * ни одна из них не пересекается с capabilities тула — тул недоступен по роли
    * (`unavailable(role)`), а не жёстко запрещён.
    */
@@ -48,7 +48,7 @@ export interface PermissionCheckInput {
    */
   runtimeDeps?: RuntimeDeps;
   /**
-   * AD-075: задан ли рабочий каталог проекта. `false` — file/shell/git-тулы
+   * ADR-075: задан ли рабочий каталог проекта. `false` — file/shell/git-тулы
    * получают `deny` с `unavailable(workspace)` (относительные пути не имеют
    * базы). `true`/`undefined` — fail-open (обратная совместимость).
    */
@@ -56,7 +56,7 @@ export interface PermissionCheckInput {
 }
 
 /**
- * AD-025: активна ли рестрикция write-тулов.
+ * ADR-025: активна ли рестрикция write-тулов.
  * - mode === 'plan' — сессия в режиме планирования (plan_enter).
  * - planMode === 'strict' и план не утверждён — принудительный план перед записью.
  * - planMode === 'off' — планирование отключено, рестрикция никогда не активна.
@@ -72,13 +72,13 @@ export function isPlanRestricted(
   return false;
 }
 
-/** Является ли тул write/edit/delete (группа edit по AD-029). */
+/** Является ли тул write/edit/delete (группа edit по ADR-029). */
 export function isEditTool(toolName: string, capabilities?: readonly string[]): boolean {
   return getToolGroups(toolName, capabilities).includes('edit');
 }
 
 /**
- * AD-025: тулы, блокируемые в plan-режиме (и strict без утверждённого плана):
+ * ADR-025: тулы, блокируемые в plan-режиме (и strict без утверждённого плана):
  * edit-группа (write/edit/delete файлов) + git-запись (git_commit/git_push/...).
  * Read-only git-тулы (git_status/git_diff/...) в группу не входят и остаются доступны.
  */
@@ -107,7 +107,7 @@ export function getMcpToolAvailability(
 }
 
 /**
- * AD-029: PermissionEvaluator — вычисление решения для одного tool_call.
+ * ADR-029: PermissionEvaluator — вычисление решения для одного tool_call.
  *
  * Приоритет правил:
  *   1. Правило по конкретному имени тула (специфичный файловый паттерн > '*')
@@ -139,7 +139,7 @@ export class PermissionEvaluator {
   }
 
   check(input: PermissionCheckInput): PermissionDecision {
-    // AD-070 §2.9.1: ролевая недоступность — приоритетнее прочих правил. Тул
+    // ADR-070 §2.9.1: ролевая недоступность — приоритетнее прочих правил. Тул
     // виден модели (список тулов постоянен), но недоступен текущему агенту;
     // отказ несёт подсказку делегировать задачу другому агенту через `@`.
     if (input.agentCapabilities) {
@@ -159,7 +159,7 @@ export class PermissionEvaluator {
 
     const decision = this._computeDecision(input);
 
-    // AD-025-yolo: в режиме yolo все ask-запросы автоматически подтверждаются
+    // ADR-025-yolo: в режиме yolo все ask-запросы автоматически подтверждаются
     // (allow) без события permission.asked и без ожидания пользователя.
     // deny-правила остаются deny — трансформируется только действие ask.
     if (decision.action === 'ask' && input.sessionMode === 'yolo') {
@@ -185,7 +185,7 @@ export class PermissionEvaluator {
       ? (typeof params.cwd === 'string' && params.cwd.trim() !== '' ? resolvePath(params.cwd, workingDir) : workingDir)
       : workingDir;
 
-    // AD-025: plan-рестрикция применяется поверх конфига. В режиме plan (или
+    // ADR-025: plan-рестрикция применяется поверх конфига. В режиме plan (или
     // strict без утверждённого плана) все write/edit/delete тулы и git-запись → deny.
     if (isPlanRestricted(sessionMode, planMode, planApproved) && isPlanBlockedTool(toolName, capabilities)) {
       const restrictionSource = sessionMode === 'plan' ? sm('permission.plan_source_mode') : sm('permission.plan_source_strict');
@@ -198,7 +198,7 @@ export class PermissionEvaluator {
       };
     }
 
-    // AD-025: в plan-режиме мутирующие shell-команды запрещены, read-only разрешены.
+    // ADR-025: в plan-режиме мутирующие shell-команды запрещены, read-only разрешены.
     if (shellCommand !== undefined && isPlanRestricted(sessionMode, planMode, planApproved)
       && isMutatingCommand(tokenizeCommand(shellCommand), shellCommand)) {
       return {
@@ -225,7 +225,7 @@ export class PermissionEvaluator {
       };
     }
 
-    // 4. Рабочий каталог проекта (AD-075): без `project.workspace` file/shell/git-
+    // 4. Рабочий каталог проекта (ADR-075): без `project.workspace` file/shell/git-
     // тулы недоступны — deny с подсказкой создать/привязать проект и задать
     // рабочий каталог. Тул виден модели (набор дефинишенов постоянен).
     if (workspaceReady === false && isWorkspaceDependentTool(capabilities)) {
@@ -305,7 +305,7 @@ export class PermissionEvaluator {
       }
     }
 
-    // AD-046 §8.1: per-skill permissions — правило `skill` (строка или glob по
+    // ADR-046 §8.1: per-skill permissions — правило `skill` (строка или glob по
     // имени скилла). `deny` скрывает скилл из каталога; `ask` спрашивает.
     if (toolName === 'skill' && typeof params.name === 'string' && params.name.trim() !== '') {
       const skillDecision = resolveSkillRule(this._config, params.name);
@@ -320,7 +320,7 @@ export class PermissionEvaluator {
     }
     // 2. external_directory — только пути вне workingDir.
     //
-    // AD-075/AD-029 (fail-closed): путь вне рабочего каталога проекта БЕЗ явного
+    // ADR-075/ADR-029 (fail-closed): путь вне рабочего каталога проекта БЕЗ явного
     // правила `permission.rules.external_directory` не разрешается молча.
     // Абсолютные пути и разворачивание `~`/`$HOME`/`$PWD` (`resolvePath`) больше
     // не обходят workspace-гейт: по умолчанию `ask` (нужно явное подтверждение),
@@ -487,7 +487,7 @@ export function matchPathPattern(pattern: string, absolutePath: string, workingD
 }
 
 /**
- * AD-046 §8.1: именованные правила `permission.rules.<key>` — строка (действие
+ * ADR-046 §8.1: именованные правила `permission.rules.<key>` — строка (действие
  * для всех) либо объект glob-паттернов по имени. Общий резолвер для скиллов
  * (`skill`) и команд (`command`).
  */
@@ -532,7 +532,7 @@ function resolveNamedRule(
 }
 
 /**
- * AD-046 §8.1: per-skill permissions. Правило — `permission.rules.skill`:
+ * ADR-046 §8.1: per-skill permissions. Правило — `permission.rules.skill`:
  * строка (действие для всех скиллов) либо объект glob-паттернов по имени
  * скилла. `deny` скрывает скилл из каталога (в отличие от capability-unavailable,
  * где скилл виден); наследуется саб-агентами (derive.ts).
@@ -545,7 +545,7 @@ export function resolveSkillRule(
 }
 
 /**
- * AD-046 §8.1: per-command permissions. Правило — `permission.rules.command`:
+ * ADR-046 §8.1: per-command permissions. Правило — `permission.rules.command`:
  * строка либо объект glob-паттернов по имени команды. `deny` скрывает команду
  * из `/commands` и блокирует резолвинг; наследуется саб-агентами (derive.ts).
  */

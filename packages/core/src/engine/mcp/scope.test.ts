@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.4: разрешение эффективного набора MCP-серверов.
+ * ADR-071 §2.4: разрешение эффективного набора MCP-серверов.
  *
  * Модель per-item: системный мастер (`systemEnabled`) → проектный hard-gate
  * (`project.enabled`) → сессионный opt-out → снапшот (`session.defaultOn`)
@@ -28,7 +28,7 @@ function byName(
   return decisions.find((d) => d.name === name)!;
 }
 
-describe('resolveMcpScope (AD-071 §2.4)', () => {
+describe('resolveMcpScope (ADR-071 §2.4)', () => {
   it('сид сессии (defaultOn) включает системный сервер', () => {
     const result = resolveMcpScope([server('sys')], null, { defaultOn: ['sys'] });
     expect(byName(result, 'sys')).toMatchObject({ level: 'system', enabled: true, origin: 'instance' });

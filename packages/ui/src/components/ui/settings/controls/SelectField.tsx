@@ -7,7 +7,7 @@ export interface SelectFieldProps {
   label?: string
   description?: string
   error?: string
-  /** AD-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
   tooltip?: string
   value: string
   onValueChange: (value: string) => void
@@ -22,7 +22,7 @@ export interface SelectFieldProps {
   containerClassName?: string
 }
 
-/** AD-072: управляемый select; триггер занимает всю ширину. */
+/** ADR-072: управляемый select; триггер занимает всю ширину. */
 export function SelectField({
   label,
   description,

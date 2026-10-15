@@ -10,7 +10,7 @@ import { nextRunAt } from './schedule-time.js';
 export interface SchedulerServiceDeps {
   scheduleStore: ScheduleStore;
   ingress: EventIngress;
-  /** История срабатываний (AD-051); без неё Job не пишутся. */
+  /** История срабатываний (ADR-051); без неё Job не пишутся. */
   jobStore?: JobStore;
   /** Период тика, мс. По умолчанию 60 000. */
   tickMs?: number;
@@ -21,7 +21,7 @@ export interface SchedulerServiceDeps {
   /** Срок хранения Job-истории, дни. По умолчанию 30. */
   jobRetentionDays?: number;
   /**
-   * AD-051/AD-089: лидер-владелец тикера. По умолчанию `AlwaysLeader`
+   * ADR-051/ADR-089: лидер-владелец тикера. По умолчанию `AlwaysLeader`
    * (single-process). `FileLeader` — тикер стартует только у лидера.
    */
   leader?: SchedulerLeader;
@@ -40,7 +40,7 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * AD-051 / AD-089: cron/interval-планировщик с Job-историей и catch-up.
+ * ADR-051 / ADR-089: cron/interval-планировщик с Job-историей и catch-up.
  *
  * Не создаёт сессии сам: срабатывание публикует событие `{source:'cron',
  * type:'schedule_fired', payload:{scheduleId, name, text, ...}}` через
@@ -82,7 +82,7 @@ export class SchedulerService {
   /**
    * Планирует `nextRunAt` для включённых расписаний, обрабатывает catch-up,
    * чистит Job-историю и запускает тикер (`unref`). Повторный вызов идемпотентен.
-   * Тикер стартует только у лидера (AD-051/AD-089, `scheduler.leaderElection`).
+   * Тикер стартует только у лидера (ADR-051/ADR-089, `scheduler.leaderElection`).
    */
   async start(): Promise<void> {
     if (this._timer) return;

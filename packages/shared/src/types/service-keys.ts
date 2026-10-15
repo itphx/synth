@@ -1,5 +1,5 @@
 /**
- * AD-052 (этап I): service-key — независимый от binding-key (AD-089) ключ
+ * ADR-052 (этап I): service-key — независимый от binding-key (ADR-089) ключ
  * инстанса для внешних сервисов со **скоупами** (`scopes`) и **проектной
  * проекцией** (`allowedProjects`). Здесь только контракты и browser-safe
  * матчер скоупов; хранилище и enforcement живут в core.
@@ -8,7 +8,7 @@ import type { GlobalRole } from './index.js';
 
 /**
  * Семейства скоупов с wildcard-поддержкой. Глобальный `*` намеренно не вводится
- * (AD-052 §«Scopes»): `events:*` покрывает все `events:*`, но не `bindings:*`.
+ * (ADR-052 §«Scopes»): `events:*` покрывает все `events:*`, но не `bindings:*`.
  */
 export const SERVICE_SCOPE_FAMILIES = [
   'events',
@@ -22,11 +22,11 @@ export const SERVICE_SCOPE_FAMILIES = [
 export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
 
 /**
- * Каталог скоупов service-key (AD-052 §«Scopes», уточняется на этапе I).
+ * Каталог скоупов service-key (ADR-052 §«Scopes», уточняется на этапе I).
  * Точечные скоупы вне wildcard-семейств:
  * - `llm:chat` — LLM-прокси (роут без проектного измерения);
  * - `addons:install` — зонтичный скоуп installer-ключа: установка/обновление
- *   MCP-реестра и скиллов (AD-090 installer);
+ *   MCP-реестра и скиллов (PROP-090 installer);
  * - `users:read` — чтение пользователей/идентичностей машинной кредой
  *   (консент-сервисы аддонов).
  */
@@ -82,7 +82,7 @@ export function hasServiceScope(granted: readonly string[], required: string): b
 }
 
 /**
- * AD-052: service-key инстанса.
+ * ADR-052: service-key инстанса.
  *
  * Секрет (`synth_svc_<base64url>`) не хранится в этой сущности: at-rest лежит
  * только sha256-хеш (внутренняя запись хранилища), наружу отдаётся `prefix`.
@@ -99,11 +99,11 @@ export interface ServiceApiKey {
    * managed-режима / доступность эндпоинтов).
    */
   roles: GlobalRole[];
-  /** Выданные скоупы (каталог + wildcard-семейства, AD-052 §«Scopes»). */
+  /** Выданные скоупы (каталог + wildcard-семейства, ADR-052 §«Scopes»). */
   scopes: string[];
   /**
    * Проектная проекция: ключ ограничен подмножеством проектов инстанса
-   * (AD-014). Пусто/отсутствует — ключ действует по политике инстанса.
+   * (ADR-014). Пусто/отсутствует — ключ действует по политике инстанса.
    */
   allowedProjects?: string[];
   /** Лимит запросов/мин (0 — без лимита); не задан — без лимита. */
@@ -122,13 +122,13 @@ export interface ServiceApiKey {
   prefix: string;
 }
 
-/** AD-052: ответ создания service-key — метаданные + однократно показываемый секрет. */
+/** ADR-052: ответ создания service-key — метаданные + однократно показываемый секрет. */
 export interface ServiceApiKeyCreated extends ServiceApiKey {
   /** Plaintext-секрет `synth_svc_<base64url>`; возвращается единственный раз. */
   key: string;
 }
 
-/** AD-052: тело создания service-key (`POST /api/v2/service-keys`). */
+/** ADR-052: тело создания service-key (`POST /api/v2/service-keys`). */
 export interface CreateServiceApiKeyInput {
   label: string;
   description?: string;
@@ -140,7 +140,7 @@ export interface CreateServiceApiKeyInput {
 }
 
 /**
- * AD-052: тело обновления service-key (`PATCH /api/v2/service-keys/:id`).
+ * ADR-052: тело обновления service-key (`PATCH /api/v2/service-keys/:id`).
  * `undefined` — не трогать; `null` — сбросить опциональное значение.
  */
 export interface UpdateServiceApiKeyPatch {

@@ -14,7 +14,7 @@ function createMockService(result?: {
   } as unknown as RequestSessionService;
 }
 
-describe('EventIngress (AD-089)', () => {
+describe('EventIngress (ADR-089)', () => {
   it('normalize: id с префиксом evt_, identity/ts/dedupKey по умолчанию', () => {
     const ingress = new EventIngress({ requestSessionService: createMockService() });
 

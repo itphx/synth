@@ -34,7 +34,7 @@ const en: Dictionary = {
   'errors.validation.claimCodeRequired': 'Confirmation code is required',
   'errors.validation.invalidUsername': 'Invalid username',
 
-  // AD-089: приём внешних событий
+  // ADR-089: приём внешних событий
   'errors.validation.invalidEvent': 'Invalid event payload',
   'errors.validation.invalidBinding': 'Invalid binding payload',
   'errors.notFound.binding': 'Binding not found',
@@ -45,7 +45,7 @@ const en: Dictionary = {
   'errors.validation.invalidEventKeyUpdate': 'Invalid event API key update',
   'errors.notFound.eventKey': 'Event API key not found',
 
-  // AD-052 (этап I): service-key
+  // ADR-052 (этап I): service-key
   'errors.validation.invalidServiceKey': 'Invalid service key payload',
   'errors.notFound.serviceKey': 'Service key not found',
   'errors.conflict.serviceKeyLabel': 'Service key label is already used',
@@ -53,7 +53,7 @@ const en: Dictionary = {
   'errors.forbidden.projectForbidden': 'Project is not available for this service key',
   'errors.rateLimited.serviceKey': 'Service key rate limit exceeded',
 
-  // AD-052 (этап II): исходящие webhooks
+  // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Invalid webhook subscription payload',
   'errors.notFound.webhook': 'Webhook subscription not found',
   'errors.conflict.webhookLabel': 'Webhook label is already used',
@@ -129,7 +129,7 @@ const ru: Dictionary = {
   'errors.validation.claimCodeRequired': 'Укажите код подтверждения',
   'errors.validation.invalidUsername': 'Некорректное имя пользователя',
 
-  // AD-089: приём внешних событий
+  // ADR-089: приём внешних событий
   'errors.validation.invalidEvent': 'Некорректное тело события',
   'errors.validation.invalidBinding': 'Некорректное тело биндинга',
   'errors.notFound.binding': 'Биндинг не найден',
@@ -140,7 +140,7 @@ const ru: Dictionary = {
   'errors.validation.invalidEventKeyUpdate': 'Некорректное тело обновления API-ключа события',
   'errors.notFound.eventKey': 'API-ключ события не найден',
 
-  // AD-052 (этап I): service-key
+  // ADR-052 (этап I): service-key
   'errors.validation.invalidServiceKey': 'Некорректное тело service-key',
   'errors.notFound.serviceKey': 'Service-key не найден',
   'errors.conflict.serviceKeyLabel': 'Метка service-key уже используется',
@@ -148,7 +148,7 @@ const ru: Dictionary = {
   'errors.forbidden.projectForbidden': 'Проект недоступен для этого service-key',
   'errors.rateLimited.serviceKey': 'Превышен лимит запросов по service-key',
 
-  // AD-052 (этап II): исходящие webhooks
+  // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Некорректное тело webhook-подписки',
   'errors.notFound.webhook': 'Webhook-подписка не найдена',
   'errors.conflict.webhookLabel': 'Метка webhook уже используется',

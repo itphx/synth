@@ -4,7 +4,7 @@ import { nowISO } from '@itphx/synth-shared';
 type EventHandler = (event: BusEvent) => void;
 
 /**
- * SessionEventBus — async pub/sub для событий сессии (AD-009).
+ * SessionEventBus — async pub/sub для событий сессии (ADR-009).
  * Каждый подписчик получает все события сессии через callback.
  */
 export class EventBus {

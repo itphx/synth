@@ -11,7 +11,7 @@ export interface SegmentedControlOption<T extends string> {
 }
 
 /**
- * AD-072: сегментированный переключатель из двух/нескольких вариантов.
+ * ADR-072: сегментированный переключатель из двух/нескольких вариантов.
  * Унифицирован в Kit (ранее жил в legacy-разметке раздела настроек).
  */
 export const SegmentedControl = <T extends string>({

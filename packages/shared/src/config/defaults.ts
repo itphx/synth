@@ -118,18 +118,18 @@ export const defaultConfig: SynthConfig = {
     ephemeralTtl: '24h',
     journalRetentionDays: 30,
     allowedSources: [],
-    // Default OFF: дедуп in-process, поведение single-process не меняется (AD-051/AD-089).
+    // Default OFF: дедуп in-process, поведение single-process не меняется (ADR-051/ADR-089).
     dedupStore: 'memory',
-    // Неизвестный agentTemplate → drop с аудитом (fail-safe, AD-089).
+    // Неизвестный agentTemplate → drop с аудитом (fail-safe, ADR-089).
     unknownAgentTemplate: 'drop',
     // Глобальный дефолт лимита запросов/мин на API-ключ привязки (0 — без лимита).
     keyRateLimitPerMinute: 0,
-    // AD-084 × AD-089: decision-маршрутизация событий выключена по умолчанию (opt-in).
+    // ADR-084 × ADR-089: decision-маршрутизация событий выключена по умолчанию (opt-in).
     decisionRouting: false,
-    // AD-089 (auto-bind): фоллбек-закрепление события с chatKey/threadKey за сессией — по умолчанию выключено.
+    // ADR-089 (auto-bind): фоллбек-закрепление события с chatKey/threadKey за сессией — по умолчанию выключено.
     autoBind: false,
     autoBindAgentTemplate: '',
-    // AD-089: маппинг идентичности отправителя события на владельца сессии (пусто — не переопределяется).
+    // ADR-089: маппинг идентичности отправителя события на владельца сессии (пусто — не переопределяется).
     identityMap: {},
   },
   scheduler: {
@@ -137,22 +137,22 @@ export const defaultConfig: SynthConfig = {
     tickSec: 60,
     catchUp: 'skip',
     jobRetentionDays: 30,
-    // Default OFF: leader election и межпроцессные локи выключены (AD-051/AD-089).
+    // Default OFF: leader election и межпроцессные локи выключены (ADR-051/ADR-089).
     leaderElection: 'none',
     crossProcessLocks: false,
   },
   decision: {
-    // AD-084: decision-слой выключен по умолчанию (провайдер задаёт админ).
+    // ADR-084: decision-слой выключен по умолчанию (провайдер задаёт админ).
     enabled: false,
     provider: '',
     model: '',
     confidenceThreshold: 0.6,
-    // AD-084: тир эскалации не задан (пусто — эскалации нет).
+    // ADR-084: тир эскалации не задан (пусто — эскалации нет).
     escalationProvider: '',
     escalationModel: '',
   },
   webhooks: {
-    // AD-052 (этап II): доставка webhooks выключена по умолчанию (opt-in).
+    // ADR-052 (этап II): доставка webhooks выключена по умолчанию (opt-in).
     enabled: false,
     maxAttempts: 5,
     timeoutMs: 10_000,
@@ -261,9 +261,9 @@ export const defaultConfig: SynthConfig = {
     protectedPaths: {
       enabled: true,
     },
-    // Пусто — core использует файл {dataDir}/secrets/master.key (AD-076).
+    // Пусто — core использует файл {dataDir}/secrets/master.key (ADR-076).
     secretKey: '',
-    // AD-052/O1: installer service-key'и из env/Secret (по умолчанию нет).
+    // ADR-052/O1: installer service-key'и из env/Secret (по умолчанию нет).
     bootstrapServiceKeys: [],
   },
 };

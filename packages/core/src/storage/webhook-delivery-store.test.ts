@@ -17,7 +17,7 @@ function delivery(overrides: Partial<WebhookDelivery>): WebhookDelivery {
   };
 }
 
-describe('WebhookDeliveryStore (AD-052, этап II)', () => {
+describe('WebhookDeliveryStore (ADR-052, этап II)', () => {
   let store: WebhookDeliveryStore;
   let tmpDir: string;
 

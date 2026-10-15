@@ -1,5 +1,5 @@
 /**
- * Тесты единого decision-каскада (AD-084): успех primary, low → escalation,
+ * Тесты единого decision-каскада (ADR-084): успех primary, low → escalation,
  * оба промаха, отсутствие escalation-конфига, no_provider. Проверяем также
  * суммарную latency, статусы попыток и запись метрик.
  */
@@ -68,7 +68,7 @@ function makeCascade(opts: {
   });
 }
 
-describe('decideChoiceCascade (AD-084)', () => {
+describe('decideChoiceCascade (ADR-084)', () => {
   it('успех primary: accepted, tier=primary, статус ok', async () => {
     const decide = vi.fn(async () => choiceResponse('a', 0.9));
     const outcome = await makeCascade({

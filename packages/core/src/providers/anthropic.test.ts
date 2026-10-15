@@ -1,5 +1,5 @@
 /**
- * AD-070 §2.2 (Ф2-часть 1): Anthropic prompt-cache — `body.system` массивом,
+ * ADR-070 §2.2 (Ф2-часть 1): Anthropic prompt-cache — `body.system` массивом,
  * `cache_control: {type:'ephemeral'}` на границе stable-префикса, конце system,
  * последнем tool-дефинишене и последнем user text-part. Бюджет ≤4 breakpoint'а.
  */
@@ -67,7 +67,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('AnthropicProvider — prompt-cache (AD-070 §2.2)', () => {
+describe('AnthropicProvider — prompt-cache (ADR-070 §2.2)', () => {
   it('stablePrefix: system — два блока, breakpoints на stable/end, tools и message', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);
@@ -101,7 +101,7 @@ describe('AnthropicProvider — prompt-cache (AD-070 §2.2)', () => {
     expect(countCacheControls(body)).toBe(4);
   });
 
-  it('AD-071: stableToolCount — брейкпоинт на последнем встроенном, MCP не кэшируется', async () => {
+  it('ADR-071: stableToolCount — брейкпоинт на последнем встроенном, MCP не кэшируется', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
@@ -130,7 +130,7 @@ describe('AnthropicProvider — prompt-cache (AD-070 §2.2)', () => {
     expect(sent[2]!.cache_control).toBeUndefined();
   });
 
-  it('AD-071: stableToolCount=0 (только MCP) — tools-брейкпоинт не ставится', async () => {
+  it('ADR-071: stableToolCount=0 (только MCP) — tools-брейкпоинт не ставится', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
@@ -216,7 +216,7 @@ describe('AnthropicProvider — prompt-cache (AD-070 §2.2)', () => {
   });
 });
 
-describe('AnthropicProvider — usage (AD-070 §2.3)', () => {
+describe('AnthropicProvider — usage (ADR-070 §2.3)', () => {
   it('non-stream: inputTokens = input_tokens + cacheRead + cacheWrite', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       content: [{ type: 'text', text: 'ok' }],
@@ -445,7 +445,7 @@ describe('AnthropicProvider — пары tool_use/tool_result из _sessionMessa
   });
 });
 
-describe('AnthropicProvider — ошибки прокси (AD-041)', () => {
+describe('AnthropicProvider — ошибки прокси (ADR-041)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });

@@ -17,7 +17,7 @@ function bundle(name: string, skills: string[]): SkillBundle {
   return { name, description: `bundle ${name}`, skills };
 }
 
-describe('resolver: режимы конфликта (AD-046 §7.1/§7.3)', () => {
+describe('resolver: режимы конфликта (ADR-046 §7.1/§7.3)', () => {
   it('bundle-wins: bundle > builtin > template > skill', () => {
     const r = resolveCatalog({
       templates: [template('shared')],

@@ -20,7 +20,7 @@ function job(overrides: Partial<ScheduleJob> = {}): ScheduleJob {
   };
 }
 
-describe('JobStore (AD-051)', () => {
+describe('JobStore (ADR-051)', () => {
   let tmpDir: string;
   let store: JobStore;
 

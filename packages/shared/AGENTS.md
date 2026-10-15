@@ -1,7 +1,7 @@
 # @itphx/synth-shared
 
 > Точечные правила пакета. Слои, инварианты и команды — в корневом [AGENTS.md](../../AGENTS.md);
-> конфиг — [AD-023](../../docs/arch_decisions/ad-023-configuration.md), i18n — [AD-041](../../docs/arch_decisions/ad-041-llm-error-taxonomy.md) (здесь не дублируются).
+> конфиг — [ADR-023](../../docs/arch_decisions/adr-023-configuration.md), i18n — [ADR-041](../../docs/arch_decisions/adr-041-llm-error-taxonomy.md) (здесь не дублируются).
 
 ## Граница пакета
 
@@ -30,64 +30,64 @@
 defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureDataDir`).
 - **Добавление поля = `types.ts` + `defaults.ts` + тест** (`defaults.test.ts`).
 - Читать только через `@itphx/synth-shared/config` (корневой инвариант 10).
-- AD-046: секции `skills` (`paths`/`trustedProjectDirs`/`inlineShell`/`toolsets`) и
+- ADR-046: секции `skills` (`paths`/`trustedProjectDirs`/`inlineShell`/`toolsets`) и
   `commands` (`paths`/`bundlesPath`/`conflict`/лимиты); типы команд/бандлов —
   `src/types/commands.ts`, Zod — `schemas` (`skillBundleSchema`, session/project/settings-skills).
-- Скоп/уровни (AD-046 §4.5 / AD-071 §2.4): `ProjectSkillSettings`/`ProjectMcpSettings`
+- Скоп/уровни (ADR-046 §4.5 / ADR-071 §2.4): `ProjectSkillSettings`/`ProjectMcpSettings`
   (`enabled` — hard-gate, `defaultOn` — сид новых сессий), `SessionSettings.skillsDefaultOn`/
   `mcpDefaultOn` (снапшот-дефолты), `McpRegistryEntry.enabled` (мастер hard-gate) +
   `enabledByDefault` (дефолт новых проектов); Zod — `skillsSystemSettingsSchema`
   (`disabled`/`disabledForNewProjects`/`policy`), `projectSkillUpdateSchema`/`sessionSkillUpdateSchema`.
-- AD-076: `security.secretKey` (мастер-ключ секретов at-rest; env `SYNTH_SECRET_KEY`,
+- ADR-076: `security.secretKey` (мастер-ключ секретов at-rest; env `SYNTH_SECRET_KEY`,
   резолвер `resolveSecretKey`, пусто — файл `{dataDir}/secrets/master.key`); типы
   `GitRepoConfig` (реестр, `path` обязателен) и `SSHKey`/`SSHKeyMeta` (`agentIds: string[]`),
   `gitRepoConfigSchema`/`normalizeGitRepoConfig` (legacy `repos`) и `sshKeyCreate/UpdateSchema`;
   i18n-ключ `sshkey.env_failed` (сбой подготовки SSH-окружения/askpass).
-- AD-052/O1: `security.bootstrapServiceKeys` (installer service-key'и:
+- ADR-052/O1: `security.bootstrapServiceKeys` (installer service-key'и:
   `label`/`secret`/`scopes`/`roles?`/`description?`; Zod `bootstrapServiceKeySchema`/
   `bootstrapServiceKeysSchema`); объектный env-оверрайд `SYNTH_BOOTSTRAP_SERVICE_KEYS`
   (JSON) — `applyObjectEnvOverrides` (`src/config/env-overrides.ts`), приоритетнее
   config.yaml, невалидное значение → warn + игнор (fail-soft).
-- AD-079: `resolveHome(explicitHome?, env?)` (env `SYNTH_HOME`); home-параметр
+- ADR-079: `resolveHome(explicitHome?, env?)` (env `SYNTH_HOME`); home-параметр
   (`home?`) у резолверов путей (`resolveDataDir`, `resolveWorkspacesRoot`,
   `resolveDefaultWorkspace`, `findConfigPath`, `defaultConfigPath`, `ensureFirstRun`)
   и новые `resolveProfilesPath`/`resolveCredentialsPath`; `loader.home` — при home
   конфиг читается строго из `<home>/config.yaml` (без отката к XDG).
-- AD-089: секция `events` (`enabled`/`defaultMode`/`ephemeralTtl`/
+- ADR-089: секция `events` (`enabled`/`defaultMode`/`ephemeralTtl`/
   `journalRetentionDays`/`allowedSources`/`dedupStore`/`unknownAgentTemplate`/
-  `keyRateLimitPerMinute`/`decisionRouting`/`autoBind`/`autoBindAgentTemplate`/`identityMap`). AD-051/AD-089: секция
+  `keyRateLimitPerMinute`/`decisionRouting`/`autoBind`/`autoBindAgentTemplate`/`identityMap`). ADR-051/ADR-089: секция
   `scheduler` (`enabled`/`tickSec`/`catchUp`/`jobRetentionDays`/`leaderElection`/
   `crossProcessLocks`); file-based флаги (`dedupStore: file`, `leaderElection: file`,
   `crossProcessLocks`) — default OFF, поведение single-process не меняют.
-- AD-052 (этап II): секция `webhooks` (`enabled` (default `false`)/`maxAttempts`/
+- ADR-052 (этап II): секция `webhooks` (`enabled` (default `false`)/`maxAttempts`/
   `timeoutMs`/`allowPrivateTargets`/`deliveryRetentionDays`; `webhooksConfigSchema` +
   `WebhooksConfig`) — исходящие webhooks: параметры доставки, retry и SSRF-политики.
-- AD-084: секция `decision` (`enabled`/`provider`/`model`/`confidenceThreshold`/
+- ADR-084: секция `decision` (`enabled`/`provider`/`model`/`confidenceThreshold`/
   `escalationProvider`/`escalationModel`; `decisionConfigSchema` + `DecisionConfig`);
   `provider` — имя провайдера decision-протокола (тип `decision`/`systemone`),
   `escalationProvider`/`escalationModel` — необязательный точный тир на эскалацию
   (пусто — эскалации нет), env-резолверы `SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`;
-  поле `events.decisionRouting` (decision-маршрутизация внешних событий, default `false`, AD-084 × AD-089).
+  поле `events.decisionRouting` (decision-маршрутизация внешних событий, default `false`, ADR-084 × ADR-089).
 - **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision` —
   реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
-  приоритет `CLI > env > config.yaml > defaults` (AD-023). Объектные/нескалярные ключи
+  приоритет `CLI > env > config.yaml > defaults` (ADR-023). Объектные/нескалярные ключи
   (`events.identityMap`, `events.dedupStore`, `mcp.servers`, …) остаются в config.yaml.
 
 ## Схемы и типы
 
 `src/types/index.ts` + `src/schemas/index.ts` — единые контракты сущностей; схемы `projectCreate/Update`, `sessionCreate/Update`.
-- `EventType` включает `fs.changed` (мутирующий тул ядра изменил workspace) и `session.moved` (перенос сессии между проектами); потребители — `transportStore` UI (AD-024).
-- AD-030/AD-089: хуки — `HookName`/`HookMode`/`HookResult`/`HookContextMap` (`types/hooks.ts`); события — `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest`/`EventMode`/`EventDeliveryMode` и правила `EventRouteRule`/`EventRouteTarget`/`EventRouteMatch` (`types/events.ts`); Zod `synthEventSchema`, `eventBindingSchema`, `sessionRequestSchema`, `eventIngestSchema`, `eventBindingInputSchema`, `eventRouteRuleSchema`/`eventRouteRuleInputSchema`/`eventRouteRuleUpsertSchema`/`eventRouteTargetSchema`/`eventRouteMatchSchema`. Поля `Session.expiresAt`/`archivedAt` — ephemeral TTL/архив (AD-089).
-- AD-089/AD-052: API-ключи привязок — типы `EventBindingApiKey` (поля `label` (обязательная, уникальная глобально по инстансу)/`description?`/`rateLimitPerMinute?`/`createdBy`/`prefix`/`lastUsedAt?`, `expiresAt?`/`revokedAt?`) и `EventBindingApiKeyCreated` (+ `key` — plaintext единожды), `EventKeyCredential` (в core); Zod `eventBindingApiKeySchema`/`eventBindingApiKeyCreateSchema` (`{label, description?, expiresAt?, rateLimitPerMinute?}`)/`eventBindingApiKeyUpdateSchema` (`null` — сброс поля)/`eventBindingApiKeyCreatedSchema` и `eventKeyIngestSchema` (`eventIngestSchema.partial({ source: true })` — приём по ключу).
-- AD-052 (этап I): **service-key** — тип `ServiceApiKey` (`id` `svk_<uuid>`/`label`/`description?`/`roles: GlobalRole[]`/`scopes: string[]`/`allowedProjects?: string[]`/`rateLimitPerMinute?`/`expiresAt?`/`revokedAt?`/`createdBy`/`createdAt`/`lastUsedAt?`/`prefix`) и `ServiceApiKeyCreated` (+ `key` — plaintext единожды) (`types/service-keys.ts`, re-export из `types`); входные `CreateServiceApiKeyInput`/`UpdateServiceApiKeyPatch` (`null` — сброс поля). Реестры/матчер: `SERVICE_SCOPES` (точечные scope'ы), `SERVICE_SCOPE_FAMILIES` (wildcard-семейства, глобального `*` нет), `isKnownScope`/`hasServiceScope`. Zod — `serviceApiKeySchema`/`serviceApiKeyCreateSchema`/`serviceApiKeyUpdateSchema`/`serviceApiKeyCreatedSchema` (валидация scope/role).
-- AD-052 (этап II): **webhooks** — типы `WebhookSubscription` (`id` `whk_<uuid>`/`label` (уникальна)/`description?`/`url`/`events: string[]`/`enabled`/`secretPrefix`/`createdBy`/`createdAt`/`lastDeliveryAt?`/`lastStatus?`/`disabledAt?`) и `WebhookSubscriptionCreated` (+ `secret` — plaintext единожды), `WebhookDelivery` (`whd_<uuid>`/`subscriptionId`/`eventType`/`status`/`attempts`/`responseStatus?`/`error?`/`createdAt`/`completedAt?`), входные `CreateWebhookSubscriptionInput`/`UpdateWebhookSubscriptionPatch` (`types/webhooks.ts`, re-export из `types`); матчер `matchWebhookEvent(patterns, type)` (exact/`prefix.*`, пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), валидатор `isWebhookEventPattern`, префикс `WEBHOOK_SECRET_PREFIX` (`whsec_`). Zod — `webhookSubscriptionSchema`/`webhookSubscriptionCreateSchema`/`webhookSubscriptionUpdateSchema`/`webhookSubscriptionCreatedSchema`/`webhookDeliverySchema`/`webhookEventPatternSchema`/`webhookUrlSchema`.
-- AD-084: типы decision-моделей — `DecisionQuestion`/`DecisionAnswer` (варианты `noul`/`choice`/`score`),
+- `EventType` включает `fs.changed` (мутирующий тул ядра изменил workspace) и `session.moved` (перенос сессии между проектами); потребители — `transportStore` UI (ADR-024).
+- ADR-030/ADR-089: хуки — `HookName`/`HookMode`/`HookResult`/`HookContextMap` (`types/hooks.ts`); события — `SynthEvent`/`EventBinding`/`RouteDecision`/`SessionRequest`/`EventMode`/`EventDeliveryMode` и правила `EventRouteRule`/`EventRouteTarget`/`EventRouteMatch` (`types/events.ts`); Zod `synthEventSchema`, `eventBindingSchema`, `sessionRequestSchema`, `eventIngestSchema`, `eventBindingInputSchema`, `eventRouteRuleSchema`/`eventRouteRuleInputSchema`/`eventRouteRuleUpsertSchema`/`eventRouteTargetSchema`/`eventRouteMatchSchema`. Поля `Session.expiresAt`/`archivedAt` — ephemeral TTL/архив (ADR-089).
+- ADR-089/ADR-052: API-ключи привязок — типы `EventBindingApiKey` (поля `label` (обязательная, уникальная глобально по инстансу)/`description?`/`rateLimitPerMinute?`/`createdBy`/`prefix`/`lastUsedAt?`, `expiresAt?`/`revokedAt?`) и `EventBindingApiKeyCreated` (+ `key` — plaintext единожды), `EventKeyCredential` (в core); Zod `eventBindingApiKeySchema`/`eventBindingApiKeyCreateSchema` (`{label, description?, expiresAt?, rateLimitPerMinute?}`)/`eventBindingApiKeyUpdateSchema` (`null` — сброс поля)/`eventBindingApiKeyCreatedSchema` и `eventKeyIngestSchema` (`eventIngestSchema.partial({ source: true })` — приём по ключу).
+- ADR-052 (этап I): **service-key** — тип `ServiceApiKey` (`id` `svk_<uuid>`/`label`/`description?`/`roles: GlobalRole[]`/`scopes: string[]`/`allowedProjects?: string[]`/`rateLimitPerMinute?`/`expiresAt?`/`revokedAt?`/`createdBy`/`createdAt`/`lastUsedAt?`/`prefix`) и `ServiceApiKeyCreated` (+ `key` — plaintext единожды) (`types/service-keys.ts`, re-export из `types`); входные `CreateServiceApiKeyInput`/`UpdateServiceApiKeyPatch` (`null` — сброс поля). Реестры/матчер: `SERVICE_SCOPES` (точечные scope'ы), `SERVICE_SCOPE_FAMILIES` (wildcard-семейства, глобального `*` нет), `isKnownScope`/`hasServiceScope`. Zod — `serviceApiKeySchema`/`serviceApiKeyCreateSchema`/`serviceApiKeyUpdateSchema`/`serviceApiKeyCreatedSchema` (валидация scope/role).
+- ADR-052 (этап II): **webhooks** — типы `WebhookSubscription` (`id` `whk_<uuid>`/`label` (уникальна)/`description?`/`url`/`events: string[]`/`enabled`/`secretPrefix`/`createdBy`/`createdAt`/`lastDeliveryAt?`/`lastStatus?`/`disabledAt?`) и `WebhookSubscriptionCreated` (+ `secret` — plaintext единожды), `WebhookDelivery` (`whd_<uuid>`/`subscriptionId`/`eventType`/`status`/`attempts`/`responseStatus?`/`error?`/`createdAt`/`completedAt?`), входные `CreateWebhookSubscriptionInput`/`UpdateWebhookSubscriptionPatch` (`types/webhooks.ts`, re-export из `types`); матчер `matchWebhookEvent(patterns, type)` (exact/`prefix.*`, пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), валидатор `isWebhookEventPattern`, префикс `WEBHOOK_SECRET_PREFIX` (`whsec_`). Zod — `webhookSubscriptionSchema`/`webhookSubscriptionCreateSchema`/`webhookSubscriptionUpdateSchema`/`webhookSubscriptionCreatedSchema`/`webhookDeliverySchema`/`webhookEventPatternSchema`/`webhookUrlSchema`.
+- ADR-084: типы decision-моделей — `DecisionQuestion`/`DecisionAnswer` (варианты `noul`/`choice`/`score`),
   `DecisionRequest`/`DecisionResponse`/`DecisionUsage` и медиа-контракт `DecisionMediaInput`
-  (`images?`/`videos?`, задел AD-085) (`types/decision.ts`); Zod
+  (`images?`/`videos?`, задел PROP-085) (`types/decision.ts`); Zod
   `decisionQuestionSchema`/`decisionAnswerSchema`/`decisionRequestSchema`/`decisionResponseSchema`;
-  per-session флаг `SessionSettings.decisionFirst` (AD-035).
-- AD-089: внешняя идентичность профиля — тип `ExternalIdentity` (`provider` (префикс principalId,
+  per-session флаг `SessionSettings.decisionFirst` (ADR-035).
+- ADR-089: внешняя идентичность профиля — тип `ExternalIdentity` (`provider` (префикс principalId,
   напр. `tg`) / `externalId` (числовой id источника строкой) / `username?`/`displayName?` —
   display-кэш, НЕ ключ / `linkedAt` ISO / `linkedBy?`); `ProfileData.identities?: ExternalIdentity[]`
   (опционально — legacy-профили без поля трактуются как `[]`). Хелперы там же:
@@ -103,12 +103,12 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 `src/i18n/index.ts` — словарь-контракт без текста: `ENGINE_MESSAGE_KEYS`,
 `ENGINE_MESSAGE_PARAMS` (плейсхолдеры), `extractParams`; синхронизируется с core
 `engine/system-messages.ts` (en) и ui `lib/i18n/messages/ru.ts` (ru).
-- AD-078: ключи `tool.binary_missing` (`{tool}`/`{binary}`) и
+- ADR-078: ключи `tool.binary_missing` (`{tool}`/`{binary}`) и
   `permission.dep_unavailable` (`{binary}`) — тул недоступен, т.к. в окружении нет
   внешней программы (`git`/`rg`/`sh`).
-- AD-046: `skill.scope_disabled` (`{name}`/`{reason}`) — скилл недоступен по scope
+- ADR-046: `skill.scope_disabled` (`{name}`/`{reason}`) — скилл недоступен по scope
   (причина `system`/`project`/`session`).
-- AD-030/AD-089: `event.ingested`, `event.routed.*`, `event.binding.not_found`,
+- ADR-030/ADR-089: `event.ingested`, `event.routed.*`, `event.binding.not_found`,
   `event.source_not_allowed`, `event.duplicate`, `hook.blocked`.
 
 ## Тесты и сборка

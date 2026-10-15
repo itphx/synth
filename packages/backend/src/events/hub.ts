@@ -8,8 +8,8 @@ export interface EventClient {
   /**
    * Watch-all: клиент получает события ВСЕХ сессий через глобальный поток
    * `eventBus.subscribeAll`, а не только сессии владельца `userId`.
-   * Используется машинными watcher'ами (service-key, AD-052 этап IV) и ролями
-   * сквозного обзора ADMIN/LEAD (AD-089) — паритет со standalone-core SSE.
+   * Используется машинными watcher'ами (service-key, ADR-052 этап IV) и ролями
+   * сквозного обзора ADMIN/LEAD (ADR-089) — паритет со standalone-core SSE.
    */
   allSessions?: boolean
   send(event: BusEvent): void

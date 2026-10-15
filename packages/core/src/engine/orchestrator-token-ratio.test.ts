@@ -1,5 +1,5 @@
 /**
- * AD-071 §2.6: калибровка chars-per-token из фактического usage и применение
+ * ADR-071 §2.6: калибровка chars-per-token из фактического usage и применение
  * к последующим оценкам (`toolsDetail`/манифест).
  */
 
@@ -100,7 +100,7 @@ class RatioProvider extends BaseProvider {
   }
 }
 
-describe('ChatOrchestrator — калибровка chars-per-token (AD-071 §2.6)', () => {
+describe('ChatOrchestrator — калибровка chars-per-token (ADR-071 §2.6)', () => {
   let tmpDir: string;
   let sessionManager: SessionManager;
   let orchestrator: ChatOrchestrator;

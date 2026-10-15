@@ -1,5 +1,5 @@
 /**
- * DecisionRuleProvider — decision-классификация внешних событий (AD-084 × AD-089).
+ * DecisionRuleProvider — decision-классификация внешних событий (ADR-084 × ADR-089).
  *
  * Вызывается `EventRouter` после декларативных правил (`ProjectRuleProvider`) и
  * только при их промахе: decision-модель (System One: Clef/Jev/…) за один
@@ -87,7 +87,7 @@ export class DecisionRuleProvider implements RouteRuleProvider {
     const candidates = this._getAgentCandidates();
     if (candidates.length < MIN_ROUTING_CANDIDATES) return null;
 
-    // 3. Единый каскад primary → escalation (AD-084); fail-safe внутри:
+    // 3. Единый каскад primary → escalation (ADR-084); fail-safe внутри:
     //    отказ (в т.ч. нет провайдера/низкая уверенность/невалидный шаблон) → null.
     const state = buildEventState(event);
     const question = buildAgentQuestion(candidates);
@@ -106,7 +106,7 @@ export class DecisionRuleProvider implements RouteRuleProvider {
     const template = outcome.label;
     const confidence = outcome.confidence ?? 0;
 
-    // Наблюдаемость успешного пути (AD-084 × AD-089): агент, уверенность,
+    // Наблюдаемость успешного пути (ADR-084 × ADR-089): агент, уверенность,
     // порог, модель, тир и latency. Мета (confidence/signals) уезжает в
     // решение — далее в ответ `POST /events` и в журнал.
     info(

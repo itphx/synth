@@ -162,7 +162,7 @@ describe('MCP API Routes (legacy /servers — адаптеры над реест
       expect(await registry.getByName('new-server')).not.toBeNull();
     });
 
-    it('AD-071: сохраняет description сервера', async () => {
+    it('ADR-071: сохраняет description сервера', async () => {
       const app = createTestApp(registry, mcpManager, sessionManager);
       const res = await app.request('/api/v2/mcp/servers', {
         method: 'POST',

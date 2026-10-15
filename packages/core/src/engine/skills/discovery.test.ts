@@ -29,7 +29,7 @@ async function writeSkill(dir: string, name: string, description = 'desc', extra
   return skillDir;
 }
 
-describe('buildSkillSources (AD-046 §4.2/§4.3)', () => {
+describe('buildSkillSources (ADR-046 §4.2/§4.3)', () => {
   it('порядок project > instance > config.paths, приоритет/trust', () => {
     const sources = buildSkillSources({
       dataDir: '/data',
@@ -38,7 +38,7 @@ describe('buildSkillSources (AD-046 §4.2/§4.3)', () => {
       trustedProjectDirs: ['/work/proj'],
       home: '/home/u',
     });
-    // Первые три — заявленный приоритет; далее external (AD-046 §4.2).
+    // Первые три — заявленный приоритет; далее external (ADR-046 §4.2).
     expect(sources.slice(0, 3).map((s) => s.origin)).toEqual(['project', 'instance', 'config']);
     expect(sources[0]!.dir).toBe(join('/work/proj', '.synth', 'skills'));
     expect(sources[0]!.trusted).toBe(true);
@@ -74,7 +74,7 @@ describe('buildSkillSources (AD-046 §4.2/§4.3)', () => {
     expect(sources[2]!.dir).toBe(join('/home/u', '.config', 'opencode', 'skills'));
   });
 
-  it('external-каталоги после config.paths, в порядке .opencode/skills > .opencode/skill > .claude/skills > .agents/skills > ~/.config/opencode/skills (AD-046 §4.2)', () => {
+  it('external-каталоги после config.paths, в порядке .opencode/skills > .opencode/skill > .claude/skills > .agents/skills > ~/.config/opencode/skills (ADR-046 §4.2)', () => {
     const sources = buildSkillSources({
       dataDir: '/data',
       projectWorkspace: '/work/proj',
@@ -109,7 +109,7 @@ describe('buildSkillSources (AD-046 §4.2/§4.3)', () => {
     expect(projectExternal.every((s) => s.trusted === false)).toBe(true);
   });
 
-  it('skills.urls → url-кэш-источники trusted:false, пути детерминированы (AD-046 §4.3)', () => {
+  it('skills.urls → url-кэш-источники trusted:false, пути детерминированы (ADR-046 §4.3)', () => {
     const urls = ['https://example.com/skills', 'https://example.org/catalog/index.json'];
     const sources = buildSkillSources({
       dataDir: '/data',
@@ -191,7 +191,7 @@ describe('scanSkillSource + mergeSkillScans', () => {
   });
 });
 
-describe('SkillRegistry — ленивая инвалидация по mtime (AD-046 §8.3)', () => {
+describe('SkillRegistry — ленивая инвалидация по mtime (ADR-046 §8.3)', () => {
   it('пере-сканирует при изменении SKILL.md', async () => {
     const src = join(root, 'src');
     const skillDir = await writeSkill(src, 's', 'first');

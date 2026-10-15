@@ -68,7 +68,7 @@ afterEach(async () => {
   document.body.innerHTML = ''
 })
 
-describe('ContextPanel — вкладки на Kit Tabs (AD-072)', () => {
+describe('ContextPanel — вкладки на Kit Tabs (ADR-072)', () => {
   it('рисует tablist с тремя вкладками и aria-label, активна User', async () => {
     const container = await renderPanel()
 

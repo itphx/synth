@@ -1,5 +1,5 @@
 /**
- * Общие утилиты для подсистемы роутинга (AD-034).
+ * Общие утилиты для подсистемы роутинга (ADR-034).
  */
 
 import type { ProviderConfig as SharedProviderConfig, ReasoningLevel } from '@itphx/synth-shared';

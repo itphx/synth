@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseBundleFile, loadBundle } from './bundles.js';
 
-describe('bundles (AD-046 §7.3)', () => {
+describe('bundles (ADR-046 §7.3)', () => {
   it('parseBundleFile: валидный YAML', () => {
     const raw = [
       'name: backend-dev',

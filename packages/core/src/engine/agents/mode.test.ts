@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { isModeApplicable } from './mode.js';
 
-describe('isModeApplicable (AD-025)', () => {
+describe('isModeApplicable (ADR-025)', () => {
   it('агент не найден (undefined/null) → режим применим', () => {
     expect(isModeApplicable(undefined)).toBe(true);
     expect(isModeApplicable(null)).toBe(true);

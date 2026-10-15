@@ -115,7 +115,7 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
     store = new FileStore({ dataDir: tmpDir });
     sessionManager = new SessionManager(store);
     projectStore = new ProjectStore({ dataDir: tmpDir });
-    // AD-075: file/shell/git-тулы доступны только при заданном workspace проекта.
+    // ADR-075: file/shell/git-тулы доступны только при заданном workspace проекта.
     const project = projectStore.create('IPI', 'u1', { workspace: tmpDir });
     await projectStore.save(project);
     projectId = project.id;
@@ -149,10 +149,10 @@ describe('ChatOrchestrator × IPI (Indirect Prompt Injection)', () => {
       },
       toolRegistry,
       // IPI/trust-тесты читают контент (в т.ч. внешний `/etc/hostname`), чтобы
-      // проверить обёртку [CONTENT | trust: ...]; workspace-гейт (AD-075) здесь
+      // проверить обёртку [CONTENT | trust: ...]; workspace-гейт (ADR-075) здесь
       // не предмет проверки — external_directory явно разрешён.
       permissionConfig: { rules: { external_directory: { '*': 'allow' } }, askTimeoutMs: 1000 },
-      // AD-076: secretKey в тестах не важен — добавляем пустой.
+      // ADR-076: secretKey в тестах не важен — добавляем пустой.
       securityConfig: { ...securityConfig, secretKey: '' },
       projectStore,
       defaultWorkingDir: tmpDir,

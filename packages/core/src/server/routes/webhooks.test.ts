@@ -19,7 +19,7 @@ const mockAuth = {
   }) as MiddlewareHandler,
 };
 
-describe('Webhooks API Routes (AD-052, этап II)', () => {
+describe('Webhooks API Routes (ADR-052, этап II)', () => {
   let tmpDir: string;
   let store: WebhookStore;
   let deliveryStore: WebhookDeliveryStore;

@@ -60,7 +60,7 @@ function makeAssistantMessage(streamId: string): MessageData {
   }
 }
 
-describe('chatStore: updateStreamUsage (AD-070 §2.6)', () => {
+describe('chatStore: updateStreamUsage (ADR-070 §2.6)', () => {
   it('обновляет StreamState: usage, cost, breakdown, estimated, model/provider', () => {
     const store = useChatStore.getState()
     store.startStream('s1', 'st1', 'developer')
@@ -86,7 +86,7 @@ describe('chatStore: updateStreamUsage (AD-070 §2.6)', () => {
   })
 
   it('нет StreamState → создаётся минимальный usage-only (дочерняя сессия без stream.start)', () => {
-    // AD-070 §2.6 (Bug 2): дочерний саб-агент не публикует stream.start, поэтому
+    // ADR-070 §2.6 (Bug 2): дочерний саб-агент не публикует stream.start, поэтому
     // первый stream.usage обязан создать live-состояние, иначе live не виден.
     useChatStore.getState().updateStreamUsage('child', 'st-child', {
       usage: { input_tokens: 200, output_tokens: 40, total_tokens: 240 },
@@ -178,7 +178,7 @@ describe('chatStore: updateStreamUsage (AD-070 §2.6)', () => {
   })
 })
 
-describe('chatStore: finishStream переносит финальную статистику (AD-070 §2.6, Bug 1)', () => {
+describe('chatStore: finishStream переносит финальную статистику (ADR-070 §2.6, Bug 1)', () => {
   it('top-level duration_ms/cost_usd/cost_breakdown/usage_estimated/provider → metadata сообщения', () => {
     const store = useChatStore.getState()
     store.startStream('s1', 'st1', 'developer')
@@ -247,7 +247,7 @@ describe('chatStore: finishStream переносит финальную стат
   })
 })
 
-describe('chatStore: cancelStream сохраняет статистику (AD-070 §2.6)', () => {
+describe('chatStore: cancelStream сохраняет статистику (ADR-070 §2.6)', () => {
   it('usage/cost/status/usage_estimated попадают в assistant-сообщение по stream_id', () => {
     const store = useChatStore.getState()
     store.startStream('s1', 'st1', null)
@@ -345,7 +345,7 @@ describe('chatStore: addToolCall помечает стрим содержате�
   })
 })
 
-describe('chatStore: liveSubagentUsageBySession (AD-070 §2.6)', () => {
+describe('chatStore: liveSubagentUsageBySession (ADR-070 §2.6)', () => {
   it('накапливает вклад по вызовам и агрегирует сессию', () => {
     const store = useChatStore.getState()
     store.updateLiveSubagentUsage('parent', 'call-1', {
@@ -509,7 +509,7 @@ function cmdMessage(partial: Partial<MessageData>): MessageData {
   }
 }
 
-describe('chatStore: addMessage upsert (AD-046 §7.1)', () => {
+describe('chatStore: addMessage upsert (ADR-046 §7.1)', () => {
   it('повторный message.added по тому же index не дублирует, объединяет metadata', () => {
     const store = useChatStore.getState()
     store.addMessage('s1', cmdMessage({ index: 0, role: 'user', content: '/help', metadata: { stream_id: 'st1' } }))
@@ -535,7 +535,7 @@ describe('chatStore: addMessage upsert (AD-046 §7.1)', () => {
   })
 })
 
-describe('chatStore: finishStream ответа локальной команды (AD-046 §7.1)', () => {
+describe('chatStore: finishStream ответа локальной команды (ADR-046 §7.1)', () => {
   it('использует message_index/message_id из stream.done, не сталкивается с user-командой', () => {
     const store = useChatStore.getState()
     // live message.added user-команды (metadata без commandPrompt)

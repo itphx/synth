@@ -9,7 +9,7 @@ import {
 import { SelectContent, SelectItem } from '../ui/select'
 
 /**
- * AD-071 §2.3 / AD-072: карточка глобальной политики включения инструментов.
+ * ADR-071 §2.3 / ADR-072: карточка глобальной политики включения инструментов.
  * `scope` задаёт пространство i18n и эндпоинт-семейство:
  * - `tools` — встроенные инструменты (`tools.policy`, `toolsPolicy.*`);
  * - `mcp` — MCP-инструменты (`mcp.policy`, `mcpPolicy.*`);

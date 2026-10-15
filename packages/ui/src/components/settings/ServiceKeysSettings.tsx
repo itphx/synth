@@ -22,7 +22,7 @@ import {
 } from '../ui/settings'
 
 /**
- * AD-052: фоллбек-каталог scope'ов/ролей. Основной источник — серверный
+ * ADR-052: фоллбек-каталог scope'ов/ролей. Основной источник — серверный
  * `GET /service-keys/scopes` (каталог не компилируется в бандл); константы
  * используются, только если эндпоинт недоступен (гибрид/старый сервер).
  */
@@ -31,11 +31,11 @@ const FALLBACK_SCOPE_OPTIONS: string[] = [
   ...SERVICE_SCOPE_FAMILIES.map((family) => `${family}:*`),
 ]
 
-/** AD-052: фоллбек-набор ролей синтетического пользователя service-ключа. */
+/** ADR-052: фоллбек-набор ролей синтетического пользователя service-ключа. */
 const FALLBACK_ROLE_OPTIONS = Object.values(GlobalRole) as GlobalRole[]
 
 /**
- * AD-052: тестовый curl обращения по service-key (read-only подсказка).
+ * ADR-052: тестовый curl обращения по service-key (read-only подсказка).
  * `GET /projects` требует scope `sessions:read`/`sessions:create` в семействе,
  * поэтому в примере — безопасный список проектов.
  */
@@ -85,7 +85,7 @@ function parseOptionalInt(raw: string): number | undefined {
 type ApiErrorLike = { status?: number; code?: string }
 
 /**
- * AD-052 (этап I) / AD-072: админ-секция «Сервисные ключи» — CRUD scoped-ключей
+ * ADR-052 (этап I) / ADR-072: админ-секция «Сервисные ключи» — CRUD scoped-ключей
  * инстанса (`/service-keys`). Список метаданных (label/prefix/статус/роли/scopes/
  * проектная проекция), создание (однократный показ секрета + curl), инлайн-редактор,
  * мягкий отзыв и удаление. Мутации — ADMIN (guard сервера); для остальных ролей —
@@ -103,7 +103,7 @@ export function ServiceKeysSettings() {
   const [keys, setKeys] = useState<ServiceApiKey[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // AD-052: каталог scope'ов/ролей с сервера (`null` — ещё не загружен/ошибка → фоллбек).
+  // ADR-052: каталог scope'ов/ролей с сервера (`null` — ещё не загружен/ошибка → фоллбек).
   const [scopeCatalog, setScopeCatalog] = useState<string[] | null>(null)
   const [roleCatalog, setRoleCatalog] = useState<GlobalRole[] | null>(null)
 
@@ -157,7 +157,7 @@ export function ServiceKeysSettings() {
     void loadProjects()
   }, [loadProjects])
 
-  // AD-052: каталог scope'ов/ролей берём с сервера (не компилируем в бандл).
+  // ADR-052: каталог scope'ов/ролей берём с сервера (не компилируем в бандл).
   // Best-effort: при ошибке (гибрид/старый сервер) остаются shared-константы.
   useEffect(() => {
     let cancelled = false

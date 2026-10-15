@@ -6,7 +6,7 @@ import { loadConfig } from './loader.js';
 import { defaultConfig } from './defaults.js';
 
 /**
- * AD-023/AD-071: `SYNTH_CONFIG` задаёт явный путь к config.yaml. dev.sh
+ * ADR-023/ADR-071: `SYNTH_CONFIG` задаёт явный путь к config.yaml. dev.sh
  * запускает backend с cwd=synth/, поэтому без env `packages/backend/config.yaml`
  * (mcp.servers) не читался и seed реестра MCP был пустым.
  */
@@ -58,10 +58,10 @@ describe('loadConfig — SYNTH_CONFIG', () => {
 });
 
 /**
- * AD-023: env-оверрайды скалярных ключей вложенных секций применяются в
+ * ADR-023: env-оверрайды скалярных ключей вложенных секций применяются в
  * `loadConfig` одним местом — поверх config.yaml и ниже CLI-overrides.
  */
-describe('loadConfig — env-оверрайды вложенных секций (AD-023)', () => {
+describe('loadConfig — env-оверрайды вложенных секций (ADR-023)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {
@@ -169,10 +169,10 @@ describe('loadConfig — env-оверрайды вложенных секций 
 });
 
 /**
- * AD-052/O1: installer service-key'и — JSON-список из env применяется поверх
+ * ADR-052/O1: installer service-key'и — JSON-список из env применяется поверх
  * config.yaml (секрет не в файле); при невалидном JSON — warn + игнор.
  */
-describe('loadConfig — SYNTH_BOOTSTRAP_SERVICE_KEYS (AD-052/O1)', () => {
+describe('loadConfig — SYNTH_BOOTSTRAP_SERVICE_KEYS (ADR-052/O1)', () => {
   let dir: string | null = null;
 
   afterEach(async () => {

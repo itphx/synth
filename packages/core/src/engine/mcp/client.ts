@@ -27,7 +27,7 @@ export class McpClient {
   private _tools: McpToolDef[] = [];
   private _connected = false;
   private _toolTimeout: number;
-  /** AD-071 §2.2: `instructions` из MCP initialize (getInstructions()). */
+  /** ADR-071 §2.2: `instructions` из MCP initialize (getInstructions()). */
   private _instructions: string | undefined;
 
   constructor(name: string, config: McpServerConfig) {
@@ -48,7 +48,7 @@ export class McpClient {
     return this._tools;
   }
 
-  /** AD-071 §2.2: инструкции сервера из MCP initialize (если сервер отдал). */
+  /** ADR-071 §2.2: инструкции сервера из MCP initialize (если сервер отдал). */
   get instructions(): string | undefined {
     return this._instructions;
   }
@@ -65,7 +65,7 @@ export class McpClient {
         await this._connectStreamableHttp();
       }
 
-      // AD-071 §2.2: `instructions` доступны сразу после initialize (connect);
+      // ADR-071 §2.2: `instructions` доступны сразу после initialize (connect);
       // сохраняем до загрузки тулов, чтобы блок `mcp.servers` их видел.
       this._instructions = this._client?.getInstructions();
 
@@ -175,7 +175,7 @@ export class McpClient {
       throw new Error(`MCP-сервер "${this._name}": не указан URL`);
     }
 
-    // AD-090: конфиг допускает `headers` (auth/tenant-заголовки) — прокидываем
+    // PROP-090: конфиг допускает `headers` (auth/tenant-заголовки) — прокидываем
     // их в транспорт. `requestInit` применяется SDK ко всем HTTP-запросам
     // (initialize/tools/list/tools/call).
     const headers = this._config.headers;

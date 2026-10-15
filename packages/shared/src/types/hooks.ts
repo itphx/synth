@@ -1,11 +1,11 @@
 /**
- * AD-030: контракты hook-шины событий агента и интеграций. Система хуков не
+ * ADR-030: контракты hook-шины событий агента и интеграций. Система хуков не
  * реализована в рантайме (Plugin SDK — отдельный этап), здесь только типы:
  * имена хуков, режим выполнения, результат и карта контекстов.
  */
 import type { SynthEvent, EventInitiator } from './events.js';
 
-/** AD-030: имена хуков жизненного цикла агента и интеграций (AD-089). */
+/** ADR-030: имена хуков жизненного цикла агента и интеграций (ADR-089). */
 export type HookName =
   | 'pre_tool_use' | 'post_tool_use'
   | 'session_start' | 'session_end'
@@ -21,14 +21,14 @@ export type HookName =
  */
 export type HookMode = 'sync' | 'async';
 
-/** AD-030: результат хука. `block`/`reason` — только для `sync`. */
+/** ADR-030: результат хука. `block`/`reason` — только для `sync`. */
 export interface HookResult {
   block?: boolean;
   reason?: string;
   patch?: Record<string, unknown>;
 }
 
-/** AD-030: карта контекста по имени хука (минимально необходимые поля). */
+/** ADR-030: карта контекста по имени хука (минимально необходимые поля). */
 export interface HookContextMap {
   pre_tool_use: { tool: string; input: unknown; agent?: string };
   post_tool_use: { tool: string; input: unknown; output?: unknown; duration: number };

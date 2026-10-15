@@ -108,7 +108,7 @@ export class OllamaProvider extends BaseProvider {
 
     let accumulatedReasoning = '';
     let accumulatedContent = '';
-    // AD-070 §2.3: у Ollama cache-полей нет — cacheRead/cacheWrite = 0.
+    // ADR-070 §2.3: у Ollama cache-полей нет — cacheRead/cacheWrite = 0.
     const accumulatedUsage: TokenUsage = {
       inputTokens: 0,
       outputTokens: 0,
@@ -188,7 +188,7 @@ export class OllamaProvider extends BaseProvider {
 
               const msg = chunkData.message as Record<string, unknown> | undefined;
 
-              // AD-070: накапливаем usage ДО yield'ов, иначе чанк уносит
+              // ADR-070: накапливаем usage ДО yield'ов, иначе чанк уносит
               // предыдущее (устаревшее) значение, а актуальное попадёт только
               // в следующий чанк/финал. Семантика — running total.
               if (typeof chunkData.prompt_eval_count === 'number') {
@@ -588,7 +588,7 @@ export class OllamaProvider extends BaseProvider {
 
     const inputTokens = (data.prompt_eval_count as number) || 0;
     const outputTokens = (data.eval_count as number) || 0;
-    // AD-070 §2.3: у Ollama cache-полей нет — cacheRead/cacheWrite = 0.
+    // ADR-070 §2.3: у Ollama cache-полей нет — cacheRead/cacheWrite = 0.
     const parsedUsage: TokenUsage = {
       inputTokens,
       outputTokens,

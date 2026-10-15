@@ -7,7 +7,7 @@ import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-
 import type { CreateServiceApiKeyInput, UpdateServiceApiKeyPatch } from '@itphx/synth-shared';
 import { info, warning } from '../logger.js';
 
-/** AD-052 (этап I): версия схемы файла service-key (для будущей миграции AD-032). */
+/** ADR-052 (этап I): версия схемы файла service-key (для будущей миграции PROP-032). */
 export const SERVICE_API_KEYS_SCHEMA_VERSION = 1;
 
 /**
@@ -33,7 +33,7 @@ export interface ServiceApiKeyStoreConfig {
 }
 
 /**
- * AD-052: контекст машинной аутентификации по service-key. Секрет здесь не
+ * ADR-052: контекст машинной аутентификации по service-key. Секрет здесь не
  * хранится — только стабильные поля ключа, нужные для enforcement (scopes,
  * роли, проектная проекция, лимит).
  */
@@ -46,12 +46,12 @@ export interface ServiceKeyCredential {
   allowedProjects?: string[];
   /** Лимит запросов/мин ключа (0/отсутствует — без лимита). */
   rateLimitPerMinute?: number;
-  /** Задел AD-052/AD-090: идентичность отправителя/сервиса. */
+  /** Задел ADR-052/PROP-090: идентичность отправителя/сервиса. */
   principalId?: string;
 }
 
 /**
- * AD-052: конфликт метки service-key — метка неуникальна (регистронезависимо)
+ * ADR-052: конфликт метки service-key — метка неуникальна (регистронезависимо)
  * в пределах инстанса. Роуты маппят в 409 CONFLICT.
  */
 export class ServiceApiKeyConflictError extends Error {
@@ -96,12 +96,12 @@ export interface EnsureServiceKeyInput {
 export type ServiceKeyEnsureStatus = 'created' | 'updated' | 'unchanged';
 
 /**
- * AD-052 (этап I): реестр service-key — независимый от `EventApiKeyStore`
- * (AD-089) ключ инстанса для внешних сервисов.
+ * ADR-052 (этап I): реестр service-key — независимый от `EventApiKeyStore`
+ * (ADR-089) ключ инстанса для внешних сервисов.
  *
- * Хранится одним JSON-файлом `{dataDir}/service-keys.json` (AD-005, атомарная
+ * Хранится одним JSON-файлом `{dataDir}/service-keys.json` (ADR-005, атомарная
  * запись tmp→rename). Plaintext-секрет не сохраняется — только sha256-хеш;
- * секрет возвращается единственный раз в `create`. Модель PG-ready (AD-032):
+ * секрет возвращается единственный раз в `create`. Модель PG-ready (PROP-032):
  * плоские записи со стабильным `id` и `schemaVersion`.
  */
 export class ServiceApiKeyStore {
@@ -234,7 +234,7 @@ export class ServiceApiKeyStore {
   }
 
   /**
-   * AD-052/O1 (installer): идемпотентный провижининг ключа с **внешним**
+   * ADR-052/O1 (installer): идемпотентный провижининг ключа с **внешним**
    * секретом (из env/Secret). Ключа с такой меткой нет — создаёт его с заданным
    * секретом (at-rest хранится только sha256-хеш; `prefix` считается); есть —
    * синхронизирует `scopes` и (если переданы) `roles`, секрет не меняет.
@@ -449,7 +449,7 @@ export interface BootstrapServiceKeyEntry {
 }
 
 /**
- * AD-052/O1: best-effort провижининг списка installer service-key'ев при старте
+ * ADR-052/O1: best-effort провижининг списка installer service-key'ев при старте
  * (core standalone и backend). Каждый ключ обрабатывается независимо:
  * `ensure` идемпотентно создаёт/синхронизирует ключ; ошибка одного entry
  * логируется (без секрета) и **не** роняет старт инстанса — installer просто не

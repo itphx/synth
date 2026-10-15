@@ -51,7 +51,7 @@ program
     // Единый каталог данных локального мира — НЕ зависит от удалённого сервера.
     // Профили серверов (profiles.json) остаются мета-реестром для UX (известные
     // серверы/lastServer), все runtime-данные лежат в одном dataDir.
-    // AD-079: `--home`/`SYNTH_HOME` задаёт плоскую раскладку (config/data/profiles/credentials),
+    // ADR-079: `--home`/`SYNTH_HOME` задаёт плоскую раскладку (config/data/profiles/credentials),
     // изолируя инстанс от общих XDG-путей.
     const home = resolveHome(options.home);
     const firstRun = await ensureFirstRun(
@@ -61,7 +61,7 @@ program
     );
     const dataDir = firstRun.dataDir;
 
-    // AD-079: реестр профилей — home-относительный, с точечным --profiles.
+    // ADR-079: реестр профилей — home-относительный, с точечным --profiles.
     const profilesPath = options.profiles || resolveProfilesPath(home);
 
     // Источник адреса для тихого авто-входа (defaultBackendUrl):
@@ -106,7 +106,7 @@ program
 
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
 
-    // AD-069 §9.2: `--ignore-rules`/`--safe-mode` (или env SYNTH_IGNORE_RULES) —
+    // ADR-069 §9.2: `--ignore-rules`/`--safe-mode` (или env SYNTH_IGNORE_RULES) —
     // проектные инструкции не грузятся (конфиг не мутируем).
     const ignoreRules = resolveIgnoreRules(!!(options.ignoreRules || options.safeMode), process.env);
 
@@ -152,7 +152,7 @@ program
     // адреса это гибрид — адрес вводится в UI (поле «Адрес сервера»).
     const hybridEnabled = synth.remote.enabled || oidcFallbackGiven;
 
-    // AD-079: путь credentials — явный --credentials > config (remote.credentialsPath) >
+    // ADR-079: путь credentials — явный --credentials > config (remote.credentialsPath) >
     // home-относительный (<home>/credentials.json); без home — XDG-дефолт.
     const credentialsPath =
       options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
@@ -164,7 +164,7 @@ program
       workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
       uiDistPath,
-      // AD-069: конфигурация проектных инструкций (AGENTS.md); при
+      // ADR-069: конфигурация проектных инструкций (AGENTS.md); при
       // --ignore-rules/--safe-mode — выключена.
       instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
@@ -496,7 +496,7 @@ program
       agent: options.agent,
       dataDir,
       config: synth,
-      // AD-069 §9.2: ignore-rules/safe-mode → instructions.enabled=false.
+      // ADR-069 §9.2: ignore-rules/safe-mode → instructions.enabled=false.
       instructionsConfig: resolveIgnoreRules(!!(options.ignoreRules || options.safeMode), process.env)
         ? { ...synth.instructions, enabled: false }
         : synth.instructions,
@@ -599,7 +599,7 @@ program.addCommand(configCmd);
 
 program
   .command('audit')
-  .description('Просмотр аудита LLM Gateway (AD-036)')
+  .description('Просмотр аудита LLM Gateway (ADR-036)')
   .option('--tail <n>', 'количество последних записей (по умолчанию 20)')
   .option('--userId <id>', 'фильтр по пользователю')
   .option('--sessionId <id>', 'фильтр по сессии')
@@ -657,7 +657,7 @@ program
 
 program
   .command('secrets')
-  .description('Управление секретами шифрования (AD-076)')
+  .description('Управление секретами шифрования (ADR-076)')
   .addCommand(
     new Command('rotate')
       .description('Перешифровать SSH-ключи новым мастер-ключом (one-shot)')

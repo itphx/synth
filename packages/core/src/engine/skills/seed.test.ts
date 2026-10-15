@@ -29,7 +29,7 @@ function service(skills: SkillSummary[]): SkillService {
   } as unknown as SkillService;
 }
 
-describe('resolveProjectSkillSeed (AD-046 §4.5)', () => {
+describe('resolveProjectSkillSeed (ADR-046 §4.5)', () => {
   it('сид = все обнаруженные скиллы, кроме disabledForNewProjects', async () => {
     const seed = await resolveProjectSkillSeed(
       service([
@@ -50,7 +50,7 @@ describe('resolveProjectSkillSeed (AD-046 §4.5)', () => {
   });
 });
 
-describe('resolveProjectMcpSeed (AD-071 §2.4)', () => {
+describe('resolveProjectMcpSeed (ADR-071 §2.4)', () => {
   it('сид MCP = серверы enabledByDefault (enabled = defaultOn)', () => {
     const seed = resolveProjectMcpSeed(['s1', 's2']);
     expect(seed).toEqual({ enabled: ['s1', 's2'], defaultOn: ['s1', 's2'] });

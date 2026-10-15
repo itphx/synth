@@ -1,5 +1,5 @@
 /**
- * AD-052 (этап II): исходящие webhooks — подписки и журнал доставок. Здесь
+ * ADR-052 (этап II): исходящие webhooks — подписки и журнал доставок. Здесь
  * только контракты (browser-safe): сами хранилище и движок доставки живут в core.
  */
 
@@ -60,7 +60,7 @@ export function isWebhookEventPattern(value: string): boolean {
 }
 
 /**
- * AD-052 (этап II): подписка на исходящие события. Секрет подписи (`secret`)
+ * ADR-052 (этап II): подписка на исходящие события. Секрет подписи (`secret`)
  * наружу не отдаётся — только `secretPrefix`; полный секрет возвращается
  * единственный раз в `WebhookSubscriptionCreated`.
  */
@@ -96,7 +96,7 @@ export interface WebhookSubscriptionCreated extends WebhookSubscription {
   secret: string;
 }
 
-/** AD-052 (этап II): запись журнала доставки webhook. */
+/** ADR-052 (этап II): запись журнала доставки webhook. */
 export interface WebhookDelivery {
   /** `whd_<uuid>`. */
   id: string;
@@ -116,7 +116,7 @@ export interface WebhookDelivery {
   completedAt?: string;
 }
 
-/** AD-052 (этап II): тело создания подписки (`POST /api/v2/webhooks`). */
+/** ADR-052 (этап II): тело создания подписки (`POST /api/v2/webhooks`). */
 export interface CreateWebhookSubscriptionInput {
   label: string;
   description?: string;
@@ -126,7 +126,7 @@ export interface CreateWebhookSubscriptionInput {
 }
 
 /**
- * AD-052 (этап II): тело обновления подписки. `undefined` — не трогать;
+ * ADR-052 (этап II): тело обновления подписки. `undefined` — не трогать;
  * `null` — сбросить опциональное значение (`description`).
  */
 export interface UpdateWebhookSubscriptionPatch {

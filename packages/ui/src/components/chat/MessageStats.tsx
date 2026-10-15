@@ -18,7 +18,7 @@ function readNumber(
 const STATUS_VALUES: readonly string[] = ['completed', 'cancelled', 'stopped', 'error', 'limit']
 
 /**
- * AD-070 §2.6: статус ответа из metadata.status. Для старых сообщений (до
+ * ADR-070 §2.6: статус ответа из metadata.status. Для старых сообщений (до
  * появления поля) — fallback по metadata.i18n.key. Неизвестно → undefined
  * (трактуется как обычный ответ без префикса).
  */
@@ -52,7 +52,7 @@ export function hasMessageStats(message: Pick<MessageData, 'usage' | 'metadata'>
   // Содержательный статус (остановлено/ошибка/лимит) — сам по себе сегмент.
   const status = readStatus(message.metadata)
   if (status && status !== 'completed') return true
-  // AD-070 §2.6: сабагенты без usage/duration/cost — тоже валидный сегмент.
+  // ADR-070 §2.6: сабагенты без usage/duration/cost — тоже валидный сегмент.
   if (readMessageSubagents(message.metadata)) return true
   return false
 }
@@ -63,7 +63,7 @@ interface MessageStatsProps {
 }
 
 /**
- * Компактная статистика ответа ассистента (AD-070 §2.6):
+ * Компактная статистика ответа ассистента (ADR-070 §2.6):
  * `[Остановлено ·] 11m 34s · 1.7M вх · 33.3k исх · ~ 0.03 $ · 93% кэш · 12.3 tok/s`
  * — одной строкой без переноса.
  *
@@ -87,7 +87,7 @@ export function MessageStats({ message, className }: MessageStatsProps) {
     ? message.metadata.cost_currency
     : undefined
   const status = readStatus(message.metadata)
-  // Bug 4 (AD-070 §2.6): usage мог быть оценён (провайдер не успел отдать
+  // Bug 4 (ADR-070 §2.6): usage мог быть оценён (провайдер не успел отдать
   // финальный чанк при отмене/сбое) — помечаем токены `~`, чтобы не выдавать
   // оценку за точные данные.
   const usageEstimated = message.metadata?.usage_estimated === true
@@ -108,7 +108,7 @@ export function MessageStats({ message, className }: MessageStatsProps) {
     segments.push(formatDuration(durationMs))
   }
 
-  // AD-070 §2.6: общий с live-строкой стрима билдер сегментов usage/cost/cache.
+  // ADR-070 §2.6: общий с live-строкой стрима билдер сегментов usage/cost/cache.
   segments.push(...buildUsageSegments({ usage, costUsd, costCurrency, tokenPrefix }, t))
 
   if (usage) {
@@ -116,7 +116,7 @@ export function MessageStats({ message, className }: MessageStatsProps) {
     if (tps !== undefined) segments.push(t('chat.messageStats.speed', { speed: formatTps(tps) }))
   }
 
-  // AD-070 §2.6: отдельная (вторая) строка статистики сабагентов этого хода.
+  // ADR-070 §2.6: отдельная (вторая) строка статистики сабагентов этого хода.
   const subagents = readMessageSubagents(message.metadata)
   const subagentSegments: string[] = []
   if (subagents) {

@@ -1,5 +1,5 @@
 /**
- * Input Guard (AD-036): обфускация или блокировка секретов во входящем запросе
+ * Input Guard (ADR-036): обфускация или блокировка секретов во входящем запросе
  * (messages + systemPrompt + tools) перед отправкой в LLM.
  */
 
@@ -116,7 +116,7 @@ export async function runInputGuard(
     }
     obfuscatedSystem = result.text;
   } else if (systemPrompt) {
-    // AD-070 §2.2: payload — обфусцируем и text, и stablePrefix одной картой,
+    // ADR-070 §2.2: payload — обфусцируем и text, и stablePrefix одной картой,
     // чтобы граница stable-префикса не поехала (обфускация детерминирована).
     const textResult = obfuscateSecrets(systemPrompt.text, currentMap, patterns);
     currentMap = textResult.map;

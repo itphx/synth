@@ -11,7 +11,7 @@ import {
 import { DEFAULT_MCP_NETWORK_POLICY } from '@itphx/synth-shared';
 import type { McpNetworkPolicy } from '@itphx/synth-shared';
 
-describe('network-policy: IP/CIDR (AD-071 §2.3.1)', () => {
+describe('network-policy: IP/CIDR (ADR-071 §2.3.1)', () => {
   it('ipv4ToBigInt', () => {
     expect(ipv4ToBigInt('0.0.0.0')).toBe(0n);
     expect(ipv4ToBigInt('255.255.255.255')).toBe(4294967295n);
@@ -57,7 +57,7 @@ describe('network-policy: IP/CIDR (AD-071 §2.3.1)', () => {
   });
 });
 
-describe('evaluateMcpNetworkAccess (AD-071 §2.3.1)', () => {
+describe('evaluateMcpNetworkAccess (ADR-071 §2.3.1)', () => {
   const resolveTo = (address: string) => async () => [address];
 
   it('deny по умолчанию блокирует приватные IP', async () => {

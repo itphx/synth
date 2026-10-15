@@ -18,7 +18,7 @@ interface MessageActionsProps {
   /** Содержимое поповера со статистикой ответа. */
   statsContent?: ReactNode
   /**
-   * AD-046 §7.1: встроить действия в чужой футер (Notice) — без своей рамки,
+   * ADR-046 §7.1: встроить действия в чужой футер (Notice) — без своей рамки,
    * отступов и opacity-обёртки (их рисует родитель).
    */
   embedded?: boolean
@@ -99,7 +99,7 @@ export function MessageActions({
         <ActionBtn onClick={onDebug} title={t('chat.actions.debug')} icon="bug" active={debugActive} />
       )}
 
-      {/* AD-070 §2.6: статистика ответа — кнопка в ряду, содержимое в поповере.
+      {/* ADR-070 §2.6: статистика ответа — кнопка в ряду, содержимое в поповере.
           Единое поведение на всех платформах, инлайн не рендерится. */}
       {!isUser && hasStats && statsContent && <StatsPopoverButton>{statsContent}</StatsPopoverButton>}
     </div>

@@ -1,6 +1,6 @@
 import type { MessageData } from '@/stores/chatStore'
 
-/** metadata.type durable state-сообщений (AD-070 §2.8). */
+/** metadata.type durable state-сообщений (ADR-070 §2.8). */
 export const STATE_MESSAGE_TYPES = new Set([
   'mode_change',
   'plan_updated',
@@ -22,8 +22,8 @@ export function isStateMessage(m: Pick<MessageData, 'metadata'>): boolean {
 
 /**
  * Видимость сообщения в транскрипте: скрываем служебный tool-chain
- * (`metadata.tool_chain`), state-сообщения (AD-070 §2.8) и user-сообщение
- * системной команды (`metadata.commandPrompt`, AD-046 §7.1 — команда
+ * (`metadata.tool_chain`), state-сообщения (ADR-070 §2.8) и user-сообщение
+ * системной команды (`metadata.commandPrompt`, ADR-046 §7.1 — команда
  * объединена с локальным выводом в один блок и отдельным пузырём не нужна).
  * `hidden` здесь не используется — он исключает сообщение и из LLM-запроса.
  */

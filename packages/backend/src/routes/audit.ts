@@ -21,7 +21,7 @@ function toInt(value: string | undefined, fallback: number): number {
 }
 
 /**
- * GET /api/v2/audit — просмотр аудита LLM Gateway (AD-036).
+ * GET /api/v2/audit — просмотр аудита LLM Gateway (ADR-036).
  * RBAC: только ADMIN/AUDITOR.
  * Фильтры: userId, sessionId, since/until (ISO), limit (дефолт 100, макс 500).
  */
@@ -44,7 +44,7 @@ export function createAuditRoutes(kit: AuthKit, deps: AuditRoutesDeps): Hono {
   });
 
   /**
-   * POST /api/v2/audit/revealed — логирование раскрытия плейсхолдера (AD-036).
+   * POST /api/v2/audit/revealed — логирование раскрытия плейсхолдера (ADR-036).
    * RBAC: любой авторизованный (клик по бейджу SecretPlaceholder делает
    * пользователь сессии), userId фиксируется из токена.
    * Тело: { sessionId, placeholder } (placeholder вида ⟦SYNTH_SECRET_N⟧).

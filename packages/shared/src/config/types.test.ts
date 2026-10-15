@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
-describe('mcpServerConfigSchema (AD-071 §2.2)', () => {
+describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
   it('принимает optional description', () => {
     const parsed = mcpServerConfigSchema.parse({
       type: 'sse',
@@ -22,7 +22,7 @@ describe('mcpServerConfigSchema (AD-071 §2.2)', () => {
   });
 });
 
-describe('mcpNetworkPolicySchema (AD-071 §2.3.1)', () => {
+describe('mcpNetworkPolicySchema (ADR-071 §2.3.1)', () => {
   it('дефолт — deny приватных диапазонов', () => {
     const policy = mcpNetworkPolicySchema.parse({});
     expect(policy.mode).toBe('deny');
@@ -35,7 +35,7 @@ describe('mcpNetworkPolicySchema (AD-071 §2.3.1)', () => {
     expect(parsed.servers).toEqual({});
   });
 
-  it('mcpConfigSchema: policy по умолчанию auto (AD-071 §2.3)', () => {
+  it('mcpConfigSchema: policy по умолчанию auto (ADR-071 §2.3)', () => {
     expect(mcpConfigSchema.parse({}).policy).toBe('auto');
   });
 
@@ -59,7 +59,7 @@ describe('mcpNetworkPolicySchema (AD-071 §2.3.1)', () => {
   });
 });
 
-describe('toolsConfigSchema (AD-071 §2.3)', () => {
+describe('toolsConfigSchema (ADR-071 §2.3)', () => {
   it('дефолт policy=auto', () => {
     expect(toolsConfigSchema.parse({}).policy).toBe('auto');
   });
@@ -74,7 +74,7 @@ describe('toolsConfigSchema (AD-071 §2.3)', () => {
   });
 });
 
-describe('skillsConfigSchema (AD-046)', () => {
+describe('skillsConfigSchema (ADR-046)', () => {
   it('дефолты: пустые списки, inlineShell=false', () => {
     const parsed = skillsConfigSchema.parse({});
     expect(parsed.paths).toEqual([]);
@@ -101,7 +101,7 @@ describe('skillsConfigSchema (AD-046)', () => {
   });
 });
 
-describe('instructionsConfigSchema (AD-069)', () => {
+describe('instructionsConfigSchema (ADR-069)', () => {
   it('дефолты: enabled/claudeCompat, кап от окна, пустые sources/excludeProjects', () => {
     const parsed = instructionsConfigSchema.parse({});
     expect(parsed.enabled).toBe(true);
@@ -118,7 +118,7 @@ describe('instructionsConfigSchema (AD-069)', () => {
     expect(parsed.allowInstallTreeFallback).toBe(false);
   });
 
-  it('дефолты lazy и fetch (AD-069 §4/§5.1)', () => {
+  it('дефолты lazy и fetch (ADR-069 §4/§5.1)', () => {
     const parsed = instructionsConfigSchema.parse({});
     expect(parsed.lazy).toEqual({
       enabled: true,

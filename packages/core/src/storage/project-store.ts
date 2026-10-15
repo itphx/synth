@@ -110,7 +110,7 @@ export class ProjectStore {
       color: data?.color,
       workspace: data?.workspace,
       repos: data?.repos,
-      // AD-071 §2.4 / AD-046 §4.5: сид скоупа новых проектов (снимок системных дефолтов).
+      // ADR-071 §2.4 / ADR-046 §4.5: сид скоупа новых проектов (снимок системных дефолтов).
       ...(data?.mcp ? { mcp: data.mcp } : {}),
       ...(data?.skills ? { skills: data.skills } : {}),
       statusMessages: [],

@@ -1,9 +1,9 @@
-/** Компактное форматирование статистики (AD-070 §2.6). */
+/** Компактное форматирование статистики (ADR-070 §2.6). */
 
 import { DEFAULT_CHARS_PER_TOKEN } from '@itphx/synth-shared/types'
 import { formatMoney } from './currency'
 
-// AD-071 §2.6: дефолтный chars-per-token — из общего контракта shared.
+// ADR-071 §2.6: дефолтный chars-per-token — из общего контракта shared.
 export { DEFAULT_CHARS_PER_TOKEN }
 // C2b: мультивалютная сумма — единая реализация в `lib/currency`.
 export { formatCostMap } from './currency'
@@ -31,7 +31,7 @@ export function formatCost(usd: number, currency?: string | null): string {
   return formatMoney(usd, currency, { compact: true })
 }
 
-/** AD-070 §2.3: cache hit rate = cacheRead / input (0 при input = 0). */
+/** ADR-070 §2.3: cache hit rate = cacheRead / input (0 при input = 0). */
 export function cacheHitRate(cacheRead: number | undefined, inputTokens: number | undefined): number {
   const input = inputTokens || 0
   if (input <= 0) return 0

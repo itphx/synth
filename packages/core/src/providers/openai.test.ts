@@ -98,7 +98,7 @@ describe('OpenAIProvider — нормализация function.arguments и reas
   });
 });
 
-describe('OpenAIProvider — prompt_cache_key (AD-070 §2.2)', () => {
+describe('OpenAIProvider — prompt_cache_key (ADR-070 §2.2)', () => {
   function okResponse(): Response {
     return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: {} }), {
       status: 200,
@@ -150,7 +150,7 @@ describe('OpenAIProvider — prompt_cache_key (AD-070 §2.2)', () => {
   });
 });
 
-describe('OpenAIProvider — usage (AD-070 §2.3)', () => {
+describe('OpenAIProvider — usage (ADR-070 §2.3)', () => {
   function sseResponse(events: string[]): Response {
     return new Response(events.map((e) => `data: ${e}\n\n`).join(''), {
       status: 200,

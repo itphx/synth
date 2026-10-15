@@ -11,7 +11,7 @@ const binding = (overrides: Partial<UpsertEventBindingInput> = {}): UpsertEventB
   ...overrides,
 });
 
-describe('EventBindingStore (AD-089)', () => {
+describe('EventBindingStore (ADR-089)', () => {
   let store: EventBindingStore;
   let tmpDir: string;
 

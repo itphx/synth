@@ -1,5 +1,5 @@
 /**
- * Обработчик small_talk (AD-035).
+ * Обработчик small_talk (ADR-035).
  * Приветствия/прощания/благодарности → готовый ответ.
  */
 import type { MicroResult } from '../types.js';

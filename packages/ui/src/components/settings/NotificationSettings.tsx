@@ -23,7 +23,7 @@ export function NotificationSettings() {
   const prefs = useNotificationStore(s => s.prefs)
   const setAllCategories = useNotificationStore(s => s.setAllCategories)
 
-  // AD-072 (фидбек): без автосохранения. Тумблеры меняют только черновик;
+  // ADR-072 (фидбек): без автосохранения. Тумблеры меняют только черновик;
   // стор и persist обновляются по кнопке Save.
   const draft = useSettingsDraft<Record<NotifyCategory, boolean>>({
     value: prefs.enabledCategories,
