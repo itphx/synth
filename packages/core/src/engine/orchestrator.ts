@@ -127,6 +127,12 @@ interface LlmFailureContext {
   promptChars?: number;
   toolResults?: Array<Record<string, unknown>>;
   promptMeta?: PromptMeta;
+  /**
+   * Явный тип ошибки (AD-041). Нужен там, где сообщение локализовано и
+   * `classifyLlmError` не может определить тип по тексту (например
+   * `provider_not_found`): при переданном значении приоритетнее классификации.
+   */
+  errorType?: string;
 }
 
 export interface ModelPricing {
@@ -2697,11 +2703,24 @@ export class ChatOrchestrator {
       const routeResult = await this._routeProvider(session, message, effectiveReasoningLevel, debugCollector);
       if (!routeResult) {
         const providerName = (message.provider as string) || session.settings.provider || '';
-        return {
-          error: sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') }),
-          errorType: 'provider_not_found',
-          canRetry: false,
-        };
+        // Терминальная ошибка конфигурации провайдера: раньше возвращалась без
+        // персистентности — после перезагрузки сессия выглядела как «агент
+        // думает». Теперь проходит общий путь `_handleLlmFailure` (assistant-
+        // сообщение с metadata.status='error'/i18n + last_error в user-сообщении).
+        return this._handleLlmFailure(
+          session.id,
+          streamId,
+          new Error(sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') })),
+          attempt,
+          {
+            debugCollector,
+            durationMs: Date.now() - streamStartedAt,
+            model: session.settings.model,
+            providerName,
+            agentRole: effectiveAgentRole,
+            errorType: 'provider_not_found',
+          },
+        );
       }
       const { provider, providerName, decision: routingDecision } = routeResult;
 
@@ -4796,6 +4815,12 @@ export class ChatOrchestrator {
       const role = msg.role;
       if (role === MessageRole.INFO) continue;
 
+      // AD-070 §2.6 / AD-041: assistant-сообщение о терминальной ошибке LLM
+      // (metadata.status='error') персистится для UI и аудита, но не является
+      // частью диалога — не отдаём его модели как обычную реплику assistant,
+      // иначе на следующем ходу модель видит собственный «сбой» в контексте.
+      if (role === MessageRole.ASSISTANT && msg.metadata?.status === 'error') continue;
+
       // AD-070 §2.8: durable state-сообщения хранятся с role system (скрыты в
       // UI), но в LLM-запрос уходят как синтетическое user-сообщение с
       // обёрткой `<system-state>` — Anthropic не принимает role system в
@@ -5215,6 +5240,7 @@ export class ChatOrchestrator {
       case 'rate_limit': return i18nMeta('router.rate_limit_exceeded');
       case 'context_length': return i18nMeta('router.context_length_exceeded');
       case 'no_user_query': return i18nMeta('router.no_user_query');
+      case 'provider_not_found': return i18nMeta('router.provider_not_found');
       default: return undefined;
     }
   }
@@ -5242,9 +5268,10 @@ export class ChatOrchestrator {
     // ContextLengthExceededError несёт русское сообщение («Контекстное окно
     // превышено») — текстовый классификатор его не распознаёт, поэтому тип
     // определяем по классу ошибки, чтобы UI показал дружелюбное сообщение.
-    const errorType = error instanceof ContextLengthExceededError
-      ? 'context_length'
-      : classifyLlmError(rawError);
+    const errorType = ctx?.errorType
+      ?? (error instanceof ContextLengthExceededError
+        ? 'context_length'
+        : classifyLlmError(rawError));
     const canRetry = isLlmErrorRecoverable(error, rawError, errorType);
 
     // AD-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,

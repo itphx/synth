@@ -1943,6 +1943,8 @@ export const dict = {
   'web.fetch_all_failed': 'Не удалось загрузить ни один из URL',
   'web.no_results': 'По запросу «{query}» ничего не найдено.',
   'web.search_error': 'Ошибка веб-поиска: {error}',
+  'web.ssrf_blocked': '🚫 Заблокировано сетевой политикой: {reason}',
+  'web.too_many_redirects': '❌ Слишком много перенаправлений',
 
   // --- Поиск ---
   'search.no_matches': '(совпадений не найдено)',

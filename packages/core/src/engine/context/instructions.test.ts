@@ -103,6 +103,10 @@ describe('ProjectInstructionsResolver (AD-069 Фаза 1)', () => {
       // AD-069 §3.5: project-trust гейт — по умолчанию доверяем temp-каталогу.
       trustedProjectDirs: [base],
       dataDir: base,
+      // Домашний каталог изолирован от реального HOME/TMPDIR: иначе при TMPDIR
+      // под $HOME абсолютные пути сокращались бы до `~/...` и provenance-тесты
+      // падали. `__home__` не является родителем тестовых путей.
+      home: join(base, '__home__'),
       ...deps,
     });
   }

@@ -7,17 +7,21 @@ services:
     ports:
       - "4300:4300"
     environment:
-      - SYNTH_API_KEY=my-secret-key
-      - SYNTH_PROVIDER_OLLAMA_API_KEY=
-      - SYNTH_PROVIDER_OLLAMA_URL=http://ollama:11434/v1
-      - SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.5
+      # Ключ API берётся из .env (обязателен): задайте `SYNTH_API_KEY=...`
+      # в .env рядом с docker-compose.yml или в окружении. Хардкод убран,
+      # чтобы compose не перекрывал .env.
+      - SYNTH_API_KEY=${SYNTH_API_KEY:?set SYNTH_API_KEY in .env}
+      - SYNTH_PROVIDER_OLLAMA_API_KEY=${SYNTH_PROVIDER_OLLAMA_API_KEY:-}
+      # Ollama ≥0.32: суффикс /v1 → OpenAI-совместимый /v1/chat/completions.
+      - SYNTH_PROVIDER_OLLAMA_URL=${SYNTH_PROVIDER_OLLAMA_URL:-http://ollama:11434/v1}
+      - SYNTH_PROVIDER_OLLAMA_MODEL=${SYNTH_PROVIDER_OLLAMA_MODEL:-qwen3:14b}
       - SYNTH_PROVIDER_OLLAMA_TYPE=ollama
     volumes:
       - synth-data:/var/synth/data
     restart: unless-stopped
 
   # Опционально: Ollama для локального запуска LLM
-  # Чтобы загрузить модель: docker compose exec ollama ollama pull qwen3.5
+  # Чтобы загрузить модель: docker compose exec ollama ollama pull qwen3:14b
   ollama:
     image: ollama/ollama:latest
     container_name: synth-ollama

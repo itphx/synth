@@ -1,5 +1,26 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { fetchModelsCatalog, parseTokenPricing, toNonNegativeNumber } from './base.js';
+import { fetchModelsCatalog, parseTokenPricing, toNonNegativeNumber, ProviderFactory } from './base.js';
+
+describe('ProviderFactory._normalizeUrl — Ollama (совместимость ≥0.32)', () => {
+  it('базовый URL с суффиксом /v1 → OpenAI-совместимый /v1/chat/completions', () => {
+    expect(ProviderFactory._normalizeUrl('http://localhost:11434/v1', 'ollama'))
+      .toBe('http://localhost:11434/v1/chat/completions');
+    // Завершающий слэш снимается.
+    expect(ProviderFactory._normalizeUrl('http://localhost:11434/v1/', 'ollama'))
+      .toBe('http://localhost:11434/v1/chat/completions');
+  });
+
+  it('базовый URL без /v1 → нативный /api/chat (обратная совместимость)', () => {
+    expect(ProviderFactory._normalizeUrl('http://localhost:11434', 'ollama'))
+      .toBe('http://localhost:11434/api/chat');
+  });
+
+  it('уже готовые пути не дублируются (идемпотентность)', () => {
+    expect(ProviderFactory._normalizeUrl('http://x/api/chat', 'ollama')).toBe('http://x/api/chat');
+    expect(ProviderFactory._normalizeUrl('http://x/v1/chat/completions', 'ollama'))
+      .toBe('http://x/v1/chat/completions');
+  });
+});
 
 describe('toNonNegativeNumber', () => {
   it('принимает числа и числовые строки', () => {

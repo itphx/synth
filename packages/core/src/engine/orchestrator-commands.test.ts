@@ -179,7 +179,11 @@ describe('ChatOrchestrator — slash-команды (AD-046 §7)', () => {
     expect(storedUser.content).toBe('INIT PROMPT фокус');
     expect(storedUser.metadata?.command).toEqual({ name: 'init', kind: 'builtin', args: 'фокус' });
     // Локальной команды нет: ephemeral assistant-ответ не создаётся.
-    expect(after.messages.some((m) => m.role === MessageRole.ASSISTANT)).toBe(false);
+    // P2: терминальная ошибка LLM теперь персистится assistant-сообщением
+    // (metadata.status === 'error') — это запись сбоя, а не ответ команды.
+    expect(
+      after.messages.some((m) => m.role === MessageRole.ASSISTANT && m.metadata?.status !== 'error'),
+    ).toBe(false);
     expect(chunks.some((c) => c.event === 'stream.done')).toBe(false);
     expect(events.some((e) => e.type === 'command.invoked' && e.data.command === 'init')).toBe(true);
   });

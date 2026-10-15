@@ -309,4 +309,67 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
     expect(assistant.metadata?.status).toBe('error');
     expect((assistant.metadata?.i18n as { key?: string } | undefined)?.key).toBe('router.no_user_query');
   });
+
+  // P2: провайдер не найден — терминальная ошибка конфигурации. Раньше
+  // возвращалась без персистентности, и после перезагрузки сессия выглядела
+  // как «агент думает». Теперь пишется assistant-сообщение с metadata.status
+  // 'error'/i18n + last_error, а в LLM-контекст ошибка не уходит.
+  it('provider_not_found: персистится assistant-сообщение об ошибке и не попадает в LLM-контекст', async () => {
+    const orchestrator = new ChatOrchestrator({
+      sessionManager,
+      eventBus,
+      contextBuilder: makeCtxBuilder(),
+      providerLoader: () => undefined as unknown as import('@itphx/synth-shared').ProviderConfig,
+      defaultWorkingDir: tmpDir,
+    });
+    const session = await sessionManager.createSession({
+      title: 'NoProvider',
+      settings: { provider: 'ghost', model: 'm', systemPrompt: 'test', agentRole: 'developer' },
+    });
+    const msg = makeMessage();
+    await sessionManager.addMessage(session.id, msg);
+    const fresh = (await sessionManager.getSession(session.id))!;
+
+    const result = await orchestrator.createProcessMessage()(
+      fresh, msg, new AbortController().signal, () => {}, 1,
+    );
+
+    expect(result.errorType).toBe('provider_not_found');
+    expect(result.canRetry).toBe(false);
+
+    const after = (await sessionManager.getSession(session.id))!;
+    const assistant = after.messages.find((m) => m.role === MessageRole.ASSISTANT);
+    expect(assistant).toBeDefined();
+    expect(assistant!.metadata?.status).toBe('error');
+    expect((assistant!.metadata?.i18n as { key?: string } | undefined)?.key).toBe('router.provider_not_found');
+
+    const userMsg = after.messages.find((m) => m.role === MessageRole.USER);
+    expect(userMsg!.metadata?.last_error).toBeTruthy();
+
+    // История для LLM не содержит персистентную ошибку как реплику assistant.
+    const llm = ChatOrchestrator._sessionMessagesToLlm(after.messages, 'developer', 'user');
+    expect(llm.some((m) => m.role === 'assistant' && m.content.includes('not found'))).toBe(false);
+  });
+
+  it('_sessionMessagesToLlm исключает assistant-сообщение со status=error', () => {
+    const errorMsg: Message = {
+      ...makeMessage(),
+      role: MessageRole.ASSISTANT,
+      content: 'Provider ghost not found or not configured',
+      agentRole: 'developer',
+      metadata: { stream_id: 's-x', status: 'error' },
+    };
+    const normalMsg: Message = {
+      ...makeMessage(),
+      role: MessageRole.ASSISTANT,
+      content: 'обычный ответ',
+      agentRole: 'developer',
+      metadata: { stream_id: 's-y', status: 'completed' },
+    };
+
+    const llm = ChatOrchestrator._sessionMessagesToLlm([errorMsg, normalMsg], 'developer', 'user');
+
+    expect(llm.some((m) => m.content.includes('not found'))).toBe(false);
+    expect(llm.some((m) => m.content === 'обычный ответ')).toBe(true);
+  });
 });

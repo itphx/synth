@@ -1,13 +1,17 @@
 import { z } from 'zod';
 import { parse } from 'parse5';
-import { ToolCapability } from '@itphx/synth-shared';
+import { ToolCapability, DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, isAbortError, signalAborted, abortedResult } from './abort.js';
+import { evaluateMcpNetworkAccess } from '../mcp/network-policy.js';
+import type { HostResolver } from '../mcp/network-policy.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
 const MAX_RESPONSE_SIZE = 50_000;
 const MAX_FETCH_URLS = 5;
+/** Лимит редиректов web_fetch: каждый хоп отдельно проверяется SSRF-политикой. */
+const MAX_REDIRECTS = 5;
 const DDG_SEARCH_URL = 'https://html.duckduckgo.com/html/';
 const BING_SEARCH_URL = 'https://www.bing.com/search';
 const SEARCH_ATTEMPTS = 3;
@@ -280,6 +284,80 @@ function normalizeUrl(raw: string): string {
   return 'https://' + trimmed;
 }
 
+// ─── SSRF-политика web_fetch (AD-071 §2.3.1, переиспользование MCP-политики) ─
+
+/** Политика: запрет private/loopback/link-local (в т.ч. `169.254.169.254`). */
+const PRIVATE_NETWORK_POLICY = {
+  mode: 'deny' as const,
+  list: [...DEFAULT_MCP_PRIVATE_CIDRS],
+};
+
+/**
+ * Инъекция DNS-резолвера (тесты). По умолчанию — системный `dns.lookup` через
+ * `evaluateMcpNetworkAccess`. Экспорт — только для тестового сьюта.
+ */
+let _hostResolver: HostResolver | undefined;
+
+/** Тестовый seam: подмена DNS-резолвера SSRF-проверки web_fetch. */
+export function _setWebFetchHostResolver(resolver: HostResolver | undefined): void {
+  _hostResolver = resolver;
+}
+
+/** Ошибка сетевой политики web_fetch (SSRF): URL/хоп запрещён. */
+class WebFetchBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WebFetchBlockedError';
+  }
+}
+
+/**
+ * Проверяет URL по SSRF-политике: только `http(s)` и адрес не из приватных
+ * диапазонов. DNS-резолв — через `evaluateMcpNetworkAccess` (AD-071).
+ */
+async function ensureUrlAllowed(url: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new WebFetchBlockedError(`Некорректный URL: ${url}`);
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new WebFetchBlockedError(`Недопустимая схема URL: ${parsed.protocol}`);
+  }
+  const check = await evaluateMcpNetworkAccess(url, PRIVATE_NETWORK_POLICY, {
+    resolveHost: _hostResolver,
+  });
+  if (!check.allowed) {
+    throw new WebFetchBlockedError(check.reason ?? `Адрес запрещён сетевой политикой: ${url}`);
+  }
+}
+
+/**
+ * fetch с отключёнными автопереходами: каждый редирект проверяется политикой
+ * (не более MAX_REDIRECTS хопов). `redirect: 'manual'` не даёт уйти на приватный
+ * адрес в обход проверки.
+ */
+async function fetchWithSsrfGuard(url: string, signal: AbortSignal): Promise<Response> {
+  let current = url;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await ensureUrlAllowed(current);
+    const response = await fetch(current, {
+      signal,
+      headers: BROWSER_HEADERS,
+      redirect: 'manual',
+    });
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location) return response;
+      current = new URL(location, current).toString();
+      continue;
+    }
+    return response;
+  }
+  throw new WebFetchBlockedError(sm('web.too_many_redirects'));
+}
+
 // ─── Тулы ────────────────────────────────────────────────────────────────────
 
 export const webFetchTool: ToolDefinition = {
@@ -330,10 +408,7 @@ export const webFetchTool: ToolDefinition = {
       const unlink = linkSignal(controller, ctx.abortSignal);
 
       try {
-        const response = await fetch(url, {
-          signal: controller.signal,
-          headers: BROWSER_HEADERS,
-        });
+        const response = await fetchWithSsrfGuard(url, controller.signal);
         clearTimeout(timer);
         unlink();
 
@@ -381,6 +456,8 @@ export const webFetchTool: ToolDefinition = {
         }
         if (error.name === 'AbortError') {
           blocks.push(`### ${url}\n\n${sm('web.block_timeout')}`);
+        } else if (error instanceof WebFetchBlockedError) {
+          blocks.push(`### ${url}\n\n${sm('web.ssrf_blocked', { reason: error.message })}`);
         } else {
           blocks.push(`### ${url}\n\n${sm('web.block_error', { error: error.message || String(err) })}`);
         }

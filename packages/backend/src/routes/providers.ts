@@ -130,6 +130,7 @@ export function createProviderRoutes(
         providerNotFound: (c) => t('errors.notFound.provider', undefined, c),
         providerDisabled: (c) => t('errors.providerDisabled', undefined, c),
         urlRequired: (c) => t('errors.validation.urlRequired', undefined, c),
+        urlInvalid: (c) => t('errors.validation.invalidUrl', undefined, c),
         connectionError: (c) => t('errors.connectionError', undefined, c),
       },
     },

@@ -73,6 +73,8 @@ npm i -g @itphx/synth
 # Запуск с Ollama (локальные модели)
 ollama pull qwen3:14b
 
+# Ollama ≥0.32: используйте OpenAI-совместимый URL с суффиксом /v1
+# (Synth достроит /v1/chat/completions). Без /v1 используется нативный /api/chat.
 SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434/v1 \
 SYNTH_PROVIDER_OLLAMA_MODEL=qwen3:14b \
 SYNTH_PROVIDER_OLLAMA_TYPE=ollama \

@@ -69,3 +69,92 @@ describe('routes/providers (core): синхронизация in-memory кеша
     expect(stores.providerCache.has('p1')).toBe(false);
   });
 });
+
+describe('routes/providers (core): алиасы полей и валидация URL', () => {
+  let tmpDir: string;
+  let stores: Awaited<ReturnType<typeof makeApp>>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-providers-alias-'));
+    stores = await makeApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('POST только с url/model/apiKey (как отдаёт GET) — сохраняется и GET отдаёт их', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'by-get',
+      type: 'openai',
+      url: 'https://api.example.com/v1',
+      model: 'gpt-4o-mini',
+      apiKey: 'sk-alias',
+    }));
+    expect(res.status).toBe(201);
+
+    const saved = await stores.providerStore.load('by-get');
+    expect(saved?.baseUrl).toBe('https://api.example.com/v1');
+    expect(saved?.defaultModel).toBe('gpt-4o-mini');
+    expect(saved?.apiKey).toBe('sk-alias');
+
+    const list = await (await stores.app.request('/')).json() as {
+      providers: Array<Record<string, unknown>>;
+    };
+    const provider = list.providers.find((p) => p.name === 'by-get')!;
+    expect(provider.url).toBe('https://api.example.com/v1');
+    expect(provider.model).toBe('gpt-4o-mini');
+  });
+
+  it('POST без url → 400 VALIDATION_ERROR, провайдер не сохранён', async () => {
+    const res = await stores.app.request('/', postJSON({ name: 'no-url', type: 'openai' }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(await stores.providerStore.load('no-url')).toBeNull();
+  });
+
+  it('POST с относительным/невалидным url → 400 VALIDATION_ERROR', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'bad-url', type: 'openai', base_url: 'not-a-url',
+    }));
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(await stores.providerStore.load('bad-url')).toBeNull();
+  });
+
+  it('PATCH /:name частично обновляет поля, алиасы принимаются, url валидируется', async () => {
+    await stores.providerStore.save('p-patch', {
+      name: 'p-patch', type: 'openai', baseUrl: 'http://old.local', enabled: true,
+    });
+
+    // Частичное обновление без url — baseUrl сохраняется.
+    const ok = await stores.app.request('/p-patch', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'new-model' }),
+    });
+    expect(ok.status).toBe(200);
+    const saved = await stores.providerStore.load('p-patch');
+    expect(saved?.baseUrl).toBe('http://old.local');
+    expect(saved?.defaultModel).toBe('new-model');
+    expect(stores.providerCache.get('p-patch')?.defaultModel).toBe('new-model');
+
+    // Невалидный url → 400, изменения не применяются.
+    const bad = await stores.app.request('/p-patch', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: 'ftp://x/y' }),
+    });
+    expect(bad.status).toBe(400);
+    expect((await stores.providerStore.load('p-patch'))?.baseUrl).toBe('http://old.local');
+
+    const missing = await stores.app.request('/missing', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(missing.status).toBe(404);
+  });
+});

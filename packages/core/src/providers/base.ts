@@ -393,7 +393,17 @@ export class ProviderFactory {
     if (providerType === 'decision' || providerType === 'systemone') {
       return trimmed;
     }
-    if (providerType === 'ollama' && !trimmed.endsWith('/api/chat')) {
+    // Ollama: базовый URL с суффиксом `/v1` — это OpenAI-совместимый эндпоинт
+    // (Ollama ≥0.32 нативный `/api/chat` не отдаёт, работает `/v1`), поэтому
+    // достраиваем `/chat/completions`. Иначе — прежнее нативное поведение
+    // `/api/chat` (обратная совместимость со старыми конфигами).
+    if (providerType === 'ollama') {
+      if (trimmed.endsWith('/api/chat') || trimmed.includes('/chat/completions')) {
+        return trimmed;
+      }
+      if (trimmed.endsWith('/v1')) {
+        return `${trimmed}/chat/completions`;
+      }
       return `${trimmed}/api/chat`;
     }
     if (providerType === 'anthropic' && !trimmed.endsWith('/v1/messages')) {

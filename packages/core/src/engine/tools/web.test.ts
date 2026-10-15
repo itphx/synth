@@ -1,6 +1,13 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
-import { parseDuckDuckGoResults, parseBingResults, webSearchTool, webFetchTool } from './web.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { parseDuckDuckGoResults, parseBingResults, webSearchTool, webFetchTool, _setWebFetchHostResolver } from './web.js';
 import type { ToolContext } from '@itphx/synth-shared';
+
+// Тестовый DNS-резолвер SSRF-проверки web_fetch: все хосты, кроме localhost,
+// считаются публичными (иначе проверка уйдёт в реальный DNS и заблокирует
+// фейковые домены тестов).
+beforeEach(() => {
+  _setWebFetchHostResolver(async (host) => (host === 'localhost' ? ['127.0.0.1'] : ['93.184.216.34']));
+});
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -84,6 +91,7 @@ const BING_HTML_FIXTURE = `<!DOCTYPE html>
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  _setWebFetchHostResolver(undefined);
 });
 
 describe('parseDuckDuckGoResults', () => {
@@ -300,6 +308,83 @@ describe('webFetchTool', () => {
     expect(result.isError).toBeFalsy();
     expect(fetchMock).toHaveBeenCalledWith('https://example.com', expect.anything());
     expect(result.content).toContain('### https://example.com');
+  });
+
+  it('SSRF: приватный/loopback адрес блокируется без сетевого вызова', async () => {
+    const fetchMock = vi.fn(async () => new Response('secret', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      { urls: ['http://127.0.0.1/admin', 'http://169.254.169.254/latest/meta-data', 'http://localhost/x'] },
+      { sessionId: 's1', messageId: 'm1', workingDir: '/tmp' },
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.content).toContain('Blocked by the network policy');
+  });
+
+  it('SSRF: не-http(s) схема блокируется', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      { url: 'ftp://example.com/x' },
+      { sessionId: 's1', messageId: 'm1', workingDir: '/tmp' },
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.content).toContain('Blocked by the network policy');
+  });
+
+  it('SSRF: редирект на приватный адрес блокируется (хоп не выполняется)', async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url) === 'https://public.example/start') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'http://127.0.0.1/internal' },
+        });
+      }
+      return new Response('should-not-be-fetched', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      { url: 'https://public.example/start' },
+      { sessionId: 's1', messageId: 'm1', workingDir: '/tmp' },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.content).toContain('Blocked by the network policy');
+    expect(result.content).not.toContain('should-not-be-fetched');
+  });
+
+  it('SSRF: публичный редирект отслеживается с ручным режимом', async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url) === 'https://public.example/start') {
+        return new Response(null, {
+          status: 301,
+          headers: { location: 'https://public.example/final' },
+        });
+      }
+      if (String(url) === 'https://public.example/final') {
+        return new Response('<html><body>Final page</body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      }
+      throw new Error(`unexpected fetch: ${String(url)}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute(
+      { url: 'https://public.example/start' },
+      { sessionId: 's1', messageId: 'm1', workingDir: '/tmp' },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.content).toContain('Final page');
+    // Автопереходы отключены — редиректы обрабатываются вручную.
+    expect(fetchMock.mock.calls.every((call) => ((call as unknown[])[1] as RequestInit | undefined)?.redirect === 'manual')).toBe(true);
   });
 });
 

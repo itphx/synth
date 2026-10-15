@@ -370,14 +370,18 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
       .rejects.toMatchObject({ code: 'LOCKED', httpStatus: 409 });
     await sessionManager.releaseLock(child, 'other-process');
 
-    // Двойной resume: первый захватил лок, второй получает 409
-    const first = await orchestrator.startSubagentResume(child);
-    await expect(orchestrator.startSubagentResume(child))
+    // Двойной resume: первый прогон держит лок, второй получает 409. Используем
+    // медленный провайдер, иначе быстрый (mockres) успевал завершиться и снять
+    // лок до второго вызова — флейк на гонке. Со `mockslow` лок держится до
+    // явной отмены (детерминированно).
+    const slow = await createInterruptedChild('mockslow');
+    const first = await orchestrator.startSubagentResume(slow.child);
+    await expect(orchestrator.startSubagentResume(slow.child))
       .rejects.toMatchObject({ code: 'LOCKED', httpStatus: 409 });
     // Останавливаем первый прогон
     orchestrator.cancel(first.stream_id);
     await vi.waitFor(async () => {
-      const s = await sessionManager.getSession(child);
+      const s = await sessionManager.getSession(slow.child);
       expect(s?.status.blocked).toBeFalsy();
     }, { timeout: 5000 });
   });

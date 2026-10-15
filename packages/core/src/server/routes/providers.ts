@@ -20,7 +20,25 @@ export interface ProviderRouteMessages {
   providerNotFound: (c: Context) => string;
   providerDisabled: (c: Context) => string;
   urlRequired: (c: Context) => string;
+  /** URL задан, но не является абсолютным http(s). */
+  urlInvalid: (c: Context) => string;
   connectionError: (c: Context) => string;
+}
+
+/** Первое заданное (не `undefined`) значение — для алиасов входных полей. */
+function firstDefined(...values: unknown[]): unknown {
+  return values.find((value) => value !== undefined);
+}
+
+/** Абсолютный http(s)-URL (обязательное требование к baseUrl провайдера). */
+function isAbsoluteHttpUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 export interface ProviderRoutesOptions {
@@ -43,6 +61,7 @@ const DEFAULT_MESSAGES: ProviderRouteMessages = {
   providerNotFound: () => 'Провайдер не найден',
   providerDisabled: () => 'Провайдер отключён',
   urlRequired: () => 'URL обязателен',
+  urlInvalid: () => 'URL обязателен и должен быть абсолютным http(s)',
   connectionError: () => 'Ошибка подключения',
 };
 
@@ -96,21 +115,69 @@ export function createProviderRoutes(
         error: { code: 'VALIDATION_ERROR', message: 'currency должен быть одним из: RUB, USD, CNY' },
       }, 400);
     }
-    const currency = resolvedCurrency.currency;
+    // Поля принимаются в обоих наборах имён: snake_case (`base_url`/`default_model`/
+    // `api_key` — то, что шлёт UI) и короткие/camelCase (`url`/`model`/`apiKey` —
+    // то, что отдаёт GET). Иначе «создание по образцу GET» молча писало пустой URL.
+    const baseUrl = firstDefined(body.base_url, body.baseUrl, body.url, existing?.baseUrl);
+    if (!isAbsoluteHttpUrl(baseUrl)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.urlInvalid(c) } }, 400);
+    }
+    const apiKey = firstDefined(body.api_key, body.apiKey, existing?.apiKey);
+    const defaultModel = firstDefined(
+      body.default_model, body.defaultModel, body.model, existing?.defaultModel,
+    );
     const provider: ProviderConfig = {
       name,
       type: body.type || existing?.type || 'openai',
-      baseUrl: body.base_url ?? body.baseUrl ?? existing?.baseUrl,
-      apiKey: body.api_key ?? body.apiKey ?? existing?.apiKey,
-      defaultModel: body.default_model ?? body.defaultModel ?? existing?.defaultModel,
+      baseUrl,
+      apiKey: typeof apiKey === 'string' ? apiKey : undefined,
+      defaultModel: typeof defaultModel === 'string' ? defaultModel : undefined,
       timeout: body.timeout ?? existing?.timeout ?? 120,
       enabled: body.enabled ?? existing?.enabled ?? true,
       icon: body.icon !== undefined ? body.icon : (existing?.icon ?? ''),
-      currency,
+      currency: resolvedCurrency.currency,
     };
     await store.save(name, provider);
     providerCache.set(name, provider);
     return c.json(provider, existing ? 200 : 201);
+  });
+
+  // PATCH /:name — частичное обновление (те же алиасы полей и валидация URL).
+  app.patch('/:name', writeGuard, async (c) => {
+    const name = c.req.param('name');
+    const existing = await store.load(name);
+    if (!existing) {
+      return c.json({ error: { code: 'NOT_FOUND', message: messages.providerNotFound(c) } }, 404);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const resolvedCurrency = parseCurrencyInput(body.currency, existing.currency);
+    if (!resolvedCurrency.ok) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'currency должен быть одним из: RUB, USD, CNY' },
+      }, 400);
+    }
+    const baseUrl = firstDefined(body.base_url, body.baseUrl, body.url, existing.baseUrl);
+    if (!isAbsoluteHttpUrl(baseUrl)) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.urlInvalid(c) } }, 400);
+    }
+    const apiKey = firstDefined(body.api_key, body.apiKey, existing.apiKey);
+    const defaultModel = firstDefined(
+      body.default_model, body.defaultModel, body.model, existing.defaultModel,
+    );
+    const provider: ProviderConfig = {
+      ...existing,
+      type: body.type || existing.type,
+      baseUrl,
+      apiKey: typeof apiKey === 'string' ? apiKey : undefined,
+      defaultModel: typeof defaultModel === 'string' ? defaultModel : undefined,
+      timeout: body.timeout ?? existing.timeout,
+      enabled: body.enabled ?? existing.enabled,
+      icon: body.icon !== undefined ? body.icon : existing.icon,
+      currency: resolvedCurrency.currency,
+    };
+    await store.save(name, provider);
+    providerCache.set(name, provider);
+    return c.json(provider, 200);
   });
 
   app.delete('/:name', writeGuard, async (c) => {

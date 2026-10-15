@@ -97,6 +97,8 @@ export const SYSTEM_MESSAGES = {
   'web.fetch_all_failed': 'Failed to load any of the URLs',
   'web.no_results': 'No results found for "{query}".',
   'web.search_error': 'Web search error: {error}',
+  'web.ssrf_blocked': '🚫 Blocked by the network policy: {reason}',
+  'web.too_many_redirects': '❌ Too many redirects',
 
   // --- Поиск ---
   'search.no_matches': '(no matches found)',
