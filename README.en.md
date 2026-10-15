@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/resources/Synth-v0.svg" alt="Synth" width="80"/>
+  <img src="docs/resources/synth-logo.svg" alt="Synth" width="96"/>
 </p>
 
 # Synth
