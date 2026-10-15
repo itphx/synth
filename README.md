@@ -11,7 +11,7 @@
 # Synth
 
 **AI-платформа для командной работы.**  
-*Статус: MVP — активная разработка, ядро стабильно. Версия: 0.10.0.*
+*Статус: MVP — активная разработка, ядро стабильно. Версия: 0.10.1.*
 
 > 🌐 [English](./README.en.md) · **Русский**
 > Зеркало: [GitHub](https://github.com/itphx/synth).
@@ -82,9 +82,11 @@ npm i -g @itphx/synth
 # Запуск с Ollama (локальные модели)
 ollama pull qwen3.8:27b
 
-# Ollama ≥0.32: используйте OpenAI-совместимый URL с суффиксом /v1
-# (Synth достроит /v1/chat/completions). Без /v1 используется нативный /api/chat.
-SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434/v1 \
+# type: ollama ходит на нативный /api/chat — URL указывайте без суффикса /v1.
+# Совместимость: старый URL с /v1 (или /v1/chat/completions) сработает — Synth
+# снимает суффикс и пишет предупреждение в лог. OpenAI-совместимый путь Ollama —
+# это отдельный провайдер type: openai/generic.
+SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434 \
 SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.8:27b \
 SYNTH_PROVIDER_OLLAMA_TYPE=ollama \
 SYNTH_API_KEY=my-secret-key \
@@ -92,10 +94,11 @@ synth serve
 ```
 
 > **Контекстное окно.** `qwen3.8:27b` даёт окно ~100k–256k токенов, но Ollama по
-> умолчанию поднимает его небольшим. Synth ходит на OpenAI-совместимый `/v1`, где
-> `num_ctx` не передаётся, поэтому «сырое» окно задаётся **на стороне Ollama**:
-> запускайте сервер с `OLLAMA_CONTEXT_LENGTH=262144 ollama serve` (или соберите
-> модель с `PARAMETER num_ctx 262144`). Подробнее —
+> умолчанию поднимает его небольшим. Провайдер `type: ollama` работает через
+> нативный `/api/chat`, где `num_ctx` **применяется**: задайте окно через Synth
+> (`SYNTH_PROVIDER_OLLAMA_NUM_CTX=262144` или поле `num_ctx` у провайдера), иначе
+> действует серверный дефолт Ollama (`OLLAMA_CONTEXT_LENGTH=262144 ollama serve`
+> или модель с `PARAMETER num_ctx 262144`). Подробнее —
 > [LLM-провайдеры](docs/LLM_PROVIDERS.md).
 
 Откройте [http://localhost:4300](http://localhost:4300), введите ключ `my-secret-key`.

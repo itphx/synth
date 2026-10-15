@@ -455,6 +455,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099](./docs/arch_decisions/prop-099-memory-footprint-optimization.md) |
+| PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | [prop-100](./docs/arch_decisions/prop-100-ssrf-dns-rebinding.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.

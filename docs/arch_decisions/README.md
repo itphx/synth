@@ -97,6 +97,7 @@
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098-mid-turn-steering.md](./prop-098-mid-turn-steering.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
+| PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
 
 ## Vision
 
@@ -120,4 +121,4 @@
 
 ---
 
-Всего документов: 85 (Решения: 36, Частично: 7, Предложения: 32, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 86 (Решения: 36, Частично: 7, Предложения: 33, Vision: 9, Icebox: 0, Legacy: 1).

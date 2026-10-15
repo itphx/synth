@@ -11,7 +11,7 @@
 # Synth
 
 **AI platform for teamwork.**  
-*Status: MVP — active development, the core is stable. Version: 0.10.0.*
+*Status: MVP — active development, the core is stable. Version: 0.10.1.*
 
 > 🌐 **English** · [Russian](./README.md)
 > This is the public GitHub mirror — development happens on [GitVerse](https://gitverse.ru/itphx/synth); see [CONTRIBUTING.md](./CONTRIBUTING.md) for the PR workflow.
@@ -84,9 +84,11 @@ npm i -g @itphx/synth
 # Run with Ollama (local models)
 ollama pull qwen3.8:27b
 
-# Ollama >=0.32: use the OpenAI-compatible URL with the /v1 suffix
-# (Synth appends /v1/chat/completions). Without /v1 the native /api/chat is used.
-SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434/v1 \
+# type: ollama talks over the native /api/chat — specify the URL without the /v1 suffix.
+# Compatibility: an old URL with /v1 (or /v1/chat/completions) still works — Synth
+# strips the suffix and logs a warning. Ollama's OpenAI-compatible path is a
+# separate provider: type: openai/generic.
+SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434 \
 SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.8:27b \
 SYNTH_PROVIDER_OLLAMA_TYPE=ollama \
 SYNTH_API_KEY=my-secret-key \
@@ -94,10 +96,12 @@ synth serve
 ```
 
 > **Context window.** `qwen3.8:27b` provides a window of ~100k–256k tokens, but
-> Ollama raises it only slightly by default. Synth talks to the OpenAI-compatible
-> `/v1`, where `num_ctx` is not passed, so the "raw" window is set **on the Ollama
-> side**: start the server with `OLLAMA_CONTEXT_LENGTH=262144 ollama serve` (or
-> build the model with `PARAMETER num_ctx 262144`). See
+> Ollama serves only a small one by default. A provider with `type: ollama` talks
+> over the native `/api/chat`, where `num_ctx` **does apply**: set the window
+> through Synth (`SYNTH_PROVIDER_OLLAMA_NUM_CTX=262144` or the provider's `num_ctx`
+> field), otherwise the Ollama server-side default applies
+> (`OLLAMA_CONTEXT_LENGTH=262144 ollama serve` or a model built with
+> `PARAMETER num_ctx 262144`). See
 > [LLM providers](docs/LLM_PROVIDERS.md) for details.
 
 Open [http://localhost:4300](http://localhost:4300) and enter the key `my-secret-key`.
