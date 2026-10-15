@@ -256,7 +256,9 @@
   (`llm.defaultProvider`/`llm.defaultModel`) для `ephemeral`/`bind`/explicit;
   `deps.resolveDefaultAgent` — агент по умолчанию инстанса для событийной сессии без
   явного шаблона (`_resolveSessionAgent`: приоритет явного шаблона; `unknownAgentTemplate: 'drop'`
-  → `agent_not_found`; без резолвера — `agentRole` не проставляется);
+  → `agent_not_found`; без резолвера — `agentRole` не проставляется; проводка —
+  core `createStandaloneApp`/backend `createBackendApp`: `getDefaultAgentId` — значение
+  раздела «Агенты» поверх `DEFAULT_AGENT_ID`);
   `_maybeReassignOwner` — при доставке в **существующую** сессию (`kind:'bound'`, `kind:'bind'`
   с найденной привязкой) владелец-человек из `deps.resolveExternalIdentity` переустанавливается,
   если текущий пуст/машинный (`service:<keyId>`), сессия сохраняется и уведомляется хаб
@@ -347,9 +349,11 @@
   `record`/`list`/`listBySubscription`/`prune`),
   `IdentityClaimStore` (`identity-claim-store.ts`, `events/identity-claims.json`, ADR-089 claim-flow:
   одноразовые коды подтверждения владения идентичностью; `create`/`consume`/`cleanup`/`list`;
-  код `XXX-XXX`, алфавит base32 без `0/O/1/I`, TTL 10 мин по умолчанию, нормализация ввода —
+  код `XXX-XXX`, алфавит base32 без `0/O/1/I`, 6 знаков ≈ 2³⁰ (перебор нецелесообразен),
+  TTL 10 мин по умолчанию, нормализация ввода —
   upper + удаление дефисов/пробелов, одноразовость через `consumedAt`, гонка consume
-  сериализуется `AsyncLock`; `provider`/`externalId` — из серверной записи)
+  сериализуется `AsyncLock`; `provider`/`externalId` — из серверной записи; store
+  **инстанс-локальный** — не переносится publish/fork, ADR-042/PROP-081)
   и `JobStore` (`scheduler/jobs.jsonl`, Job-история, ADR-051);
   `migrations.ts` — идемпотентная разовая миграция снапшотов
   `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).

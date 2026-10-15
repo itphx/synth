@@ -220,6 +220,14 @@ hook-шину, а создание сессий сведено в один funne
   (`session_requested`, `external_event`, …); async-хуки с таймаутом
   (`HOOK_ASYNC_TIMEOUT_MS`), результат может заблокировать событие (`blocked`/`reason`).
   Это фундамент; Plugin SDK и загрузка плагинов (PROP-090) не реализованы.
+- **Сущности** (`shared/types/events.ts`, Zod-схемы рядом). `SynthEvent` — нормализованное
+  внешнее событие `{id: 'evt_<uuid>', source, type, payload, identity{principalId?, chatKey?,
+  threadKey?, roles?}, dedupKey, ts}` (известные `source`: `telegram`/`synth-media`/`webhook`/
+  `cron`/`ci`/`ui`; `identity.roles` — потолок прав отправителя, сужает роли профиля);
+  `EventBinding` — `{source, chatKey?, threadKey?, sessionId?, mode: bound|ephemeral|queue,
+  agentTemplate?, project?}`; `RouteDecision` — `bound|ephemeral|queue|drop|bind`
+  (`drop` несёт `reason`+`audited`, `bind` — auto-bind); `EventBindingApiKey` — API-ключ
+  привязки (см. ниже).
 - **`EventRouter`** (`engine/events/event-router.ts`) — чистое решение по событию
   плюс запись в журнал. Порядок `decide`: `allowedSources` (не в списке → `drop`) →
   dedup по `dedupKey` (ленивый кэш из журнала) → явный `EventBinding` по
