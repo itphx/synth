@@ -152,6 +152,43 @@ Local backfill of the GitHub mirror: synchronizes refs and creates/updates the G
 It does **not** build Docker images (they are built by GitVerse CI → `gitverse.ru` + `ghcr.io`) and does not
 publish npm. Details — [Release to the GitHub mirror](#release-to-the-github-mirror).
 
+### `changelog.sh` — release body
+
+```bash
+./scripts/changelog.sh                                  # RU, changelog-partial.md
+./scripts/changelog.sh --lang en --out tmp/changelog-en.md
+./scripts/changelog.sh --help
+```
+
+Options: `--lang <ru|en>` (default `ru`), `--out <path>` (default `changelog-partial.md`).
+The version is read from `packages/synth/package.json` (`<VERSION>`). For the role of release
+descriptions see [Release descriptions](#release-descriptions).
+
+## Release descriptions
+
+Every release has a **pair** of files in `docs/releases/`; `changelog.sh` takes a file **as a whole**
+and uses it as the release body (when such a file exists, the commit-based auto-generation is skipped).
+Prepare the descriptions in advance, before the tag is pushed.
+
+| File | Language | Where the body goes |
+|------|----------|---------------------|
+| `docs/releases/<VERSION>.md` | Russian | body of the **GitVerse Release** (job `create-release`) |
+| `docs/releases/<VERSION>.en.md` | English | body of the **GitHub Release** (job `publish-github`) |
+
+What to write: what is included in the release, the key changes, **breaking changes**, and an
+installation block (`npm`/`docker`/`helm` commands). For the structure, use
+[`docs/releases/0.10.0.md`](../releases/0.10.0.md) as a reference.
+
+`changelog.sh` behaviour:
+
+- `--lang ru` (default) — prefers `docs/releases/<VERSION>.md`;
+- `--lang en` — prefers `docs/releases/<VERSION>.en.md`; if it is missing but the Russian file
+  exists, the Russian file is used and a warning is printed that the English description is missing;
+  if neither exists, the body is auto-generated from the commits between the previous tag and HEAD
+  (with a warning).
+
+Example names for version `0.10.1`: `docs/releases/0.10.1.md` and `docs/releases/0.10.1.en.md`.
+
 ## CI/CD (GitVerse)
 
 **Principle: build and publish only on release tags; a regular push — tests; small (docs) pushes — a lightweight check.**
@@ -229,7 +266,7 @@ The additional images (`synth-backend`/`synth-ui`) are **not published** to GHCR
 The `publish-github` job in `.gitverse/workflows/release.yaml` runs after the npm and Docker build/publish (`build-docker`) and after the `changelog` job:
 
 1. **Mirror:** push `master→main` and all tags to `https://github.com/itphx/synth.git` (only `main` + tags, no other branches);
-2. **GitHub Release** for the tag `v<version>` — the body is taken from the same `changelog-partial.md` as the GitVerse release (so the bodies match), plus an "Installation" block; creation is idempotent (if a release for the tag exists, the body is updated);
+2. **GitHub Release** for the tag `v<version>` — the body is **in English**: `bash scripts/changelog.sh --lang en` reads `docs/releases/<version>.en.md` (if it is missing — the Russian description with a warning, then commit-based auto-generation), plus an English "Installation" block (npm from npmjs.org/GitVerse, the image from `ghcr.io/itphx/synth:<version>`); creation is idempotent (if a release for the tag exists, the body is updated);
 3. **Assets — best-effort:** `cli.js` (an artifact of the `build` job), the Helm chart (`helm package charts/synth`, version from `Chart.yaml`), `SHA256SUMS`. If a file is missing, a warning is printed and the work continues; an asset upload error **does not fail** the job, but is visible in the log. On GitHub the standard `uploads.github.com` is used (unlike the GitVerse API, which returns 500 for assets — there the asset is also best-effort).
 
 The base `synth` image is built in the `build-docker` job (kaniko) into **two** registries at once: `gitverse.ru/itphx/synth:<version>` and `ghcr.io/itphx/synth:<version>`. Authorization in GHCR comes from the `GH_TOKEN` secret.

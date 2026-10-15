@@ -446,12 +446,14 @@ jobs:
   # билд-контур — этот CI (kaniko), а базовый образ synth уже зеркалируется в GHCR
   # шагом выше. GitHub Actions в репозитории не используются вовсе.
   #
-  # Джоба идёт ПОСЛЕ build-docker (образ в GHCR) и changelog (тело релиза), без
+  # Джоба идёт ПОСЛЕ build-docker (образ в GHCR) и changelog (GitVerse-релиз), без
   # continue-on-error: npm и Docker к этому моменту уже опубликованы, поэтому
   # падение здесь — сигнал чинить, а не глушить. Она делает три вещи:
   #   1. push зеркала: master→main и все теги (никаких других ветвей);
-  #   2. GitHub Release с телом из того же changelog-partial.md, что и GitVerse;
-  #      создание идемпотентно (есть релиз по тегу — обновляем тело);
+  #   2. GitHub Release с АНГЛИЙСКИМ телом — scripts/changelog.sh --lang en берёт
+  #      docs/releases/<version>.en.md (фоллбек — русское описание, затем
+  #      авто-генерация из коммитов); создание идемпотентно (есть релиз по тегу —
+  #      обновляем тело);
   #   3. ассеты best-effort (cli.js, Helm-чарт, SHA256SUMS): отсутствующий файл —
   #      предупреждение, ошибка загрузки не валит джобу (видно в логе).
   #
@@ -496,11 +498,6 @@ jobs:
           git push github HEAD:refs/heads/main
           git push github --tags
 
-      - name: Скачать CHANGELOG
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-
       - name: Скачать CLI-бандл
         uses: actions/download-artifact@v4
         with:
@@ -512,21 +509,23 @@ jobs:
           set -euo pipefail
           mkdir -p tmp/assets
 
-          # Тело релиза — тот же changelog-partial.md, что и у GitVerse Release.
-          cp changelog-partial.md tmp/release-body.md
+          # Тело релиза — английское описание docs/releases/<version>.en.md
+          # (фоллбек на русское описание, затем авто-генерация из коммитов).
+          bash scripts/changelog.sh --lang en --out tmp/changelog-en.md
+          cp tmp/changelog-en.md tmp/release-body.md
           {
-            printf '\n## Установка\n\n'
-            printf 'CLI (npm — из npmjs.org или GitVerse Package Registry):\n\n'
+            printf '\n## Installation\n\n'
+            printf 'CLI (npm — from npmjs.org or the GitVerse Package Registry):\n\n'
             printf '```bash\n'
             printf 'npm install -g @itphx/synth@%s\n' "${{ steps.gh_version.outputs.version }}"
             printf '```\n\n'
-            printf 'Docker-образ (базовый) из GitHub Container Registry:\n\n'
+            printf 'Base Docker image from the GitHub Container Registry:\n\n'
             printf '```bash\n'
             printf 'docker pull ghcr.io/itphx/synth:%s\n' "${{ steps.gh_version.outputs.version }}"
             printf 'docker run -p 4300:4300 ghcr.io/itphx/synth:%s\n' "${{ steps.gh_version.outputs.version }}"
             printf '```\n\n'
-            printf 'Основной реестр образов — `gitverse.ru/itphx/synth:%s`;\n' "${{ steps.gh_version.outputs.version }}"
-            printf 'образы `synth-backend`/`synth-ui` публикуются только в gitverse.ru (в GHCR их нет).\n'
+            printf 'The primary image registry is `gitverse.ru/itphx/synth:%s`;\n' "${{ steps.gh_version.outputs.version }}"
+            printf 'the `synth-backend`/`synth-ui` images are published to gitverse.ru only (not to GHCR).\n'
           } >> tmp/release-body.md
 
           if [ -f packages/synth/dist/cli.js ]; then

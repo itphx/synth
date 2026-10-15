@@ -152,6 +152,41 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 Docker-образы **не** собирает (их собирает CI GitVerse → `gitverse.ru` + `ghcr.io`), npm не
 публикует. Подробности — [Релиз в GitHub-зеркале](#релиз-в-github-зеркале).
 
+### `changelog.sh` — тело релиза
+
+```bash
+./scripts/changelog.sh                                  # RU, changelog-partial.md
+./scripts/changelog.sh --lang en --out tmp/changelog-en.md
+./scripts/changelog.sh --help
+```
+
+Опции: `--lang <ru|en>` (по умолчанию `ru`), `--out <path>` (по умолчанию `changelog-partial.md`).
+Версия берётся из `packages/synth/package.json` (`<VERSION>`). О роли описаний релизов — см.
+[Описания релизов](#описания-релизов).
+
+## Описания релизов
+
+Каждому релизу соответствует **пара** файлов в `docs/releases/`; `changelog.sh` берёт файл
+**целиком** и подставляет его как тело релиза (при наличии файла авто-сборка из коммитов не
+запускается). Поэтому описания готовятся заранее — до публикации тега.
+
+| Файл | Язык | Куда идёт тело |
+|------|------|----------------|
+| `docs/releases/<VERSION>.md` | русский | тело **GitVerse Release** (job `create-release`) |
+| `docs/releases/<VERSION>.en.md` | английский | тело **GitHub Release** (job `publish-github`) |
+
+Что писать: что вошло в релиз, ключевые изменения, **breaking changes**, блок установки
+(команды `npm`/`docker`/`helm`). Ориентир по структуре — [`docs/releases/0.10.0.md`](./releases/0.10.0.md).
+
+Поведение `changelog.sh`:
+
+- `--lang ru` (по умолчанию) — приоритет у `docs/releases/<VERSION>.md`;
+- `--lang en` — приоритет у `docs/releases/<VERSION>.en.md`; если его нет, но есть RU-файл —
+  используется RU-файл и печатается предупреждение (`[changelog] НЕТ английского описания …`);
+  если нет ни одного — авто-сборка из коммитов между предыдущим тегом и HEAD (с предупреждением).
+
+Пример имён для версии `0.10.1`: `docs/releases/0.10.1.md` и `docs/releases/0.10.1.en.md`.
+
 ## CI/CD (GitVerse)
 
 **Принцип: сборка и публикация — только на тегах релизов; обычный push — тесты; мелкие (доковые) пуши — облегчённая проверка.**
@@ -229,7 +264,7 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 Джоба `publish-github` в `.gitverse/workflows/release.yaml` запускается после сборки/публикации npm и Docker (`build-docker`) и после джобы `changelog`:
 
 1. **Зеркало:** push `master→main` и всех тегов в `https://github.com/itphx/synth.git` (только `main` + теги, никаких других ветвей);
-2. **GitHub Release** для тега `v<version>` — тело берётся из того же `changelog-partial.md`, что и у GitVerse-релиза (чтобы тела совпадали), плюс блок «Установка»; создание идемпотентно (если релиз по тегу есть — тело обновляется);
+2. **GitHub Release** для тега `v<version>` — тело **на английском**: `bash scripts/changelog.sh --lang en` берёт `docs/releases/<version>.en.md` (при отсутствии — русское описание с предупреждением, затем авто-сборка из коммитов), плюс англоязычный блок установки «Installation» (npm из npmjs.org/GitVerse, образ из `ghcr.io/itphx/synth:<version>`); создание идемпотентно (если релиз по тегу есть — тело обновляется);
 3. **Ассеты — best-effort:** `cli.js` (артефакт джобы `build`), Helm-чарт (`helm package charts/synth`, версия из `Chart.yaml`), `SHA256SUMS`. Если файла нет — печатается предупреждение и работа продолжается; ошибка загрузки ассета **не валит** джобу, но видна в логе. На GitHub используется штатный `uploads.github.com` (в отличие от GitVerse API, который на ассеты отдаёт 500 — там ассет также best-effort).
 
 Базовый образ `synth` собирается в джобе `build-docker` (kaniko) сразу в **два** реестра: `gitverse.ru/itphx/synth:<version>` и `ghcr.io/itphx/synth:<version>`. Авторизация в GHCR — из секрета `GH_TOKEN`.
