@@ -121,6 +121,12 @@ export class SessionManager {
         // не теряется при создании.
         toolsPolicy: data.settings?.toolsPolicy,
         mcpPolicy: data.settings?.mcpPolicy,
+        // ADR-029: per-session override гранулярных permissions не теряется при
+        // создании. Раньше опускался в whitelist — none-режим саб-агента (создание
+        // через `createSession`/funnel) терял унаследованные от родителя правила, а
+        // resume (`child.settings.permission ?? deps.permissionConfig`) брал
+        // глобальный конфиг вместо родительского.
+        permission: data.settings?.permission,
         routingEnabled: data.settings?.routingEnabled ?? false,
         routingStrategy: data.settings?.routingStrategy ?? 'auto',
         routingContent: data.settings?.routingContent ?? { coding: { provider: '', model: '' }, chat: { provider: '', model: '' }, research: { provider: '', model: '' } },

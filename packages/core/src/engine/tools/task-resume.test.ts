@@ -19,7 +19,7 @@ import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
 import type { GitService } from '../../git/git-service.js';
 import { z } from 'zod';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { Message, ProviderConfig, ToolContext, ToolDefinition } from '@itphx/synth-shared';
+import type { Message, PermissionConfig, ProviderConfig, ToolContext, ToolDefinition } from '@itphx/synth-shared';
 
 // ─────────────────────────────────────────────────────────────────────
 // B1: Retry саб-агента при ошибках провайдера (taskTool)
@@ -646,6 +646,74 @@ describe('resume дочерней сессии саб-агента (B2)', () => 
 
     expect(capturedMcp).toEqual(['srvA']);
     expect(loadedModels.length).toBeGreaterThan(0);
+  });
+
+  it('ADR-029: resume использует наследованный child.settings.permission, а не deps.permissionConfig', async () => {
+    const { parent, child } = await createInterruptedChild();
+    // Наследованные от родителя правила — на дочерней сессии.
+    const childPerm: PermissionConfig = { rules: { write_file: 'deny' }, askTimeoutMs: 1111 };
+    await sessionManager.withLock(child, async (s) => {
+      s.settings.permission = childPerm;
+      await sessionManager.saveSession(s);
+    });
+
+    // Probe-тул фиксирует эффективный permission-конфиг, который видит саб-агент.
+    const seen: Record<string, unknown> = {};
+    const probeTool: ToolDefinition = {
+      name: 'probe_permission',
+      description: 'probe',
+      parameters: z.object({}),
+      capabilities: [],
+      execute: async (_args: unknown, ctx: ToolContext) => {
+        seen.permissionConfig = ((ctx.extra ?? {}) as Record<string, unknown>).permissionConfig;
+        return { content: 'probe-ok' };
+      },
+    };
+    const toolRegistry = createToolRegistry();
+    toolRegistry.register(probeTool);
+
+    let calls = 0;
+    const provider = {
+      model: 'm',
+      name: 'mockres',
+      chatAsync: vi.fn().mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield {
+            isFinal: false,
+            content: '',
+            toolCalls: [{
+              id: 'probe_p1',
+              type: 'function',
+              function: { name: 'probe_permission', arguments: '{}' },
+            }],
+          };
+        } else {
+          yield { isFinal: true, content: 'done', toolCalls: [] };
+        }
+      }),
+    };
+
+    await runSubagentResume(
+      {
+        sessionManager,
+        eventBus,
+        agentRegistry: makeMockAgentRegistry(),
+        toolRegistry,
+        // Глобальный конфиг — с другими правилами; он НЕ должен использоваться.
+        permissionConfig: { rules: { write_file: 'allow' }, askTimeoutMs: 2222 },
+        getProvider: () => provider as never,
+        getWorkingDir: async () => tmpDir,
+      },
+      {
+        child: (await sessionManager.getSession(child))!,
+        parent: (await sessionManager.getSession(parent))!,
+        streamId: 'st-perm',
+        abortSignal: new AbortController().signal,
+      },
+    );
+
+    expect(seen.permissionConfig).toEqual(childPerm);
   });
 
   it('ADR-075/ADR-076: проектные зависимости прокидываются в tool-extra resumed-саб-агента', async () => {
