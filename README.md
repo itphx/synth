@@ -1,5 +1,11 @@
+<!-- Логотип README: знак цветной, фон подставляется темой.
+     Светлая тема — synth-logo-light.svg, тёмная — synth-logo-dark.svg (prefers-color-scheme).
+     Пути без "./" — GitVerse ломает /raw/branch/<branch>/./<path>. -->
 <p align="center">
-  <img src="docs/resources/synth-logo.svg" alt="Synth" width="96"/>
+  <picture>
+    <source srcset="docs/resources/synth-logo-dark.svg" media="(prefers-color-scheme: dark)">
+    <img src="docs/resources/synth-logo-light.svg" alt="Synth" width="96">
+  </picture>
 </p>
 
 # Synth
