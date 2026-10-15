@@ -37,7 +37,7 @@ import { createLogsRoutes, resolveLogDir } from '../routes/logs.js';
 import { createGatewayPatternsRoutes } from '../routes/gateway-patterns.js';
 import { createLlmRoutes } from '../routes/llm.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
-import { scopeGuard, projectGuard } from '../auth/service-scope.js';
+import { scopeGuard, serviceProjectProjection } from '../auth/service-scope.js';
 import { requireAdminOrScope } from '../auth/guards.js';
 import { t, getTranslations } from '../lib/i18n.js';
 import type { AuthKit } from '../auth/middleware.js';
@@ -96,10 +96,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId, requestSessionService));
 
   // Messages routes
-  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus));
+  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus, projectStore));
 
   // Queue routes
-  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
+  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage, projectStore));
 
   // FS routes (ADR-075): core-фабрика, managed поверх workspace проекта.
   // ADR-089 (P0): доступ к проекту обязателен — иначе любой USER читал/писал бы
@@ -182,7 +182,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       keyReadGuard: auth.requirePermission('ADMIN', 'LEAD'),
       // ADR-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
       scopeGuard,
-      projectGuard,
+      serviceProjectProjection,
       // ADR-089/ADR-052: per-key rate limit и мастер-выключатель приёма (live).
       getKeyRateLimitPerMinute: () => live.getEvents().keyRateLimitPerMinute,
       isEnabled: () => live.getEvents().enabled,
@@ -227,7 +227,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       // ADR-052 (этап I): scope-гейт, проектная проекция и резолвинг
       // projectId `bound`/`queue`-целей расписания.
       scopeGuard,
-      projectGuard,
+      serviceProjectProjection,
       resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
     },
   ));
@@ -319,8 +319,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
   }, { writeGuard: auth.requireAdmin }));
 
-  // ADR-046 §4.5: scope-API скиллов. Доступ к сессии — владелец|ADMIN
-  // (canAccess, как в session-роутах); проект — owner/LEAD/ADMIN.
+  // ADR-046 §4.5: scope-API скиллов. Доступ к сессии — та же семантика, что у
+  // `createSessionRoutes` (единая точка истины на ресурс сессии): владелец|ADMIN
+  // (`canAccess`), участник проекта (`resolveCanAccessExtra`), сквозной обзор
+  // ADMIN/LEAD (`resolveElevated`); проект — owner/LEAD/ADMIN.
   const resolveSkillWorkspace = async (projectId: string): Promise<string | undefined> => {
     const project = await projectStore.load(projectId);
     if (!project?.workspace) return undefined;
@@ -338,6 +340,22 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     canAccess: (session, c, userId) =>
       (session.ownerId ?? session.userId) === userId
       || auth.isAdmin(c as never),
+    resolveElevated: (c) =>
+      auth.isAdmin(c as never) || auth.hasRole(c as never, 'LEAD'),
+    // read/write по роли в проекте (та же модель `createProjectAccess`, что и в
+    // session/message/queue-фабриках): GET — owner/любой участник, PUT — owner/EDITOR.
+    resolveCanAccessExtra: (() => {
+      const { canReadProject, canEditProjectContent } = createProjectAccess(auth);
+      return async (session, c, userId, access) => {
+        if (!session.projectId) return false;
+        const project = await projectStore.load(session.projectId);
+        if (!project) return false;
+        const ctx = c as Parameters<typeof auth.isAdmin>[0];
+        return access === 'read'
+          ? canReadProject(ctx, project, userId)
+          : canEditProjectContent(ctx, project, userId);
+      };
+    })(),
   }));
   app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth as unknown as CoreAuthKit, {
     sessionManager, skillService, settingsStore, projectStore,

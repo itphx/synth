@@ -91,7 +91,7 @@ describe('Queue API Routes', () => {
   describe('POST /api/v2/queue/:sessionId/return', () => {
     it('без index возвращает все тексты, очищает очередь и удаляет user-сообщения из истории', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
-      const session = await sessionManager.createSession({ title: 'R' });
+      const session = await sessionManager.createSession({ title: 'R', userId: 'test-user' });
       const msg1 = makeMessage('первое');
       const msg2 = makeMessage('второе');
       await sessionManager.addPendingMessage(session.id, msg1);
@@ -111,7 +111,7 @@ describe('Queue API Routes', () => {
 
     it('с index=N возвращает одно сообщение и удаляет только его', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
-      const session = await sessionManager.createSession({ title: 'R' });
+      const session = await sessionManager.createSession({ title: 'R', userId: 'test-user' });
       const msg1 = makeMessage('первое');
       const msg2 = makeMessage('второе');
       await sessionManager.addPendingMessage(session.id, msg1);
@@ -133,7 +133,7 @@ describe('Queue API Routes', () => {
 
     it('не удаляет из истории сообщение активного (не отменённого) стрима', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
-      const session = await sessionManager.createSession({ title: 'R' });
+      const session = await sessionManager.createSession({ title: 'R', userId: 'test-user' });
       const active = makeMessage('активное');
       const queued = makeMessage('в очереди');
       await sessionManager.addPendingMessage(session.id, active);
@@ -166,7 +166,7 @@ describe('Queue API Routes', () => {
 
     it('при зависшей сессии (currentStream.cancelled=true) возвращает все тексты, удаляет сообщения и разблокирует', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
-      const session = await sessionManager.createSession({ title: 'Stalled' });
+      const session = await sessionManager.createSession({ title: 'Stalled', userId: 'test-user' });
       const msg = makeMessage('зависшее');
       await sessionManager.addPendingMessage(session.id, msg);
       await sessionManager.addMessage(session.id, msg);
@@ -198,7 +198,7 @@ describe('Queue API Routes', () => {
 
     it('возвращает 404 для несуществующего index', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
-      const session = await sessionManager.createSession({ title: 'R' });
+      const session = await sessionManager.createSession({ title: 'R', userId: 'test-user' });
       const msg = makeMessage('первое');
       await sessionManager.addPendingMessage(session.id, msg);
 
@@ -210,7 +210,7 @@ describe('Queue API Routes', () => {
   describe('POST /api/v2/queue/:sessionId/resume', () => {
     it('не дублирует: не публикует message.queued, если сообщение уже в истории', async () => {
       const { app, sessionManager, eventBus } = createTestApp(tmpDir);
-      const session = await sessionManager.createSession({ title: 'Resume' });
+      const session = await sessionManager.createSession({ title: 'Resume', userId: 'test-user' });
       const msg = makeMessage('зависшее');
       const streamId = msg.metadata!.stream_id as string;
       await sessionManager.addPendingMessage(session.id, msg);
@@ -234,7 +234,7 @@ describe('Queue API Routes', () => {
 
     it('публикует message.queued с существующим stream_id, если сообщение не в истории', async () => {
       const { app, sessionManager, eventBus } = createTestApp(tmpDir);
-      const session = await sessionManager.createSession({ title: 'Resume' });
+      const session = await sessionManager.createSession({ title: 'Resume', userId: 'test-user' });
       const msg = makeMessage('новое');
       const streamId = msg.metadata!.stream_id as string;
       await sessionManager.addPendingMessage(session.id, msg);
@@ -255,7 +255,7 @@ describe('Queue API Routes', () => {
 
     it('возвращает pending_count 0 для пустой очереди', async () => {
       const { app, sessionManager } = createTestApp(tmpDir);
-      const session = await sessionManager.createSession({ title: 'Resume' });
+      const session = await sessionManager.createSession({ title: 'Resume', userId: 'test-user' });
 
       const res = await app.request(`/api/v2/queue/${session.id}/resume`, { method: 'POST' });
       expect(res.status).toBe(200);
@@ -263,5 +263,22 @@ describe('Queue API Routes', () => {
       expect(body.resumed).toBe(true);
       expect(body.pending_count).toBe(0);
     });
+  });
+
+  it('чужой USER → 403 (guard доступа к сессии в backend-обёртке)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir);
+    const session = await sessionManager.createSession({ title: 'Foreign', userId: 'owner' });
+
+    const res = await app.request(`/api/v2/queue/${session.id}/resume`, { method: 'POST' });
+    expect(res.status).toBe(403);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('managed (нет getRemoteClient): remote:<id> → 404, а не 502', async () => {
+    const { app } = createTestApp(tmpDir);
+    const res = await app.request('/api/v2/queue/remote:abc/clear', { method: 'POST' });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
   });
 });

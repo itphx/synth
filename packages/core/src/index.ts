@@ -228,11 +228,24 @@ export type {
 } from './storage/service-api-key-store.js';
 export {
   requireScope,
+  checkServiceProjectProjection,
   checkProjectAccess,
   getServiceCredential,
   isProjectAllowed,
 } from './server/service-scope.js';
-export type { ScopeGuardFactory, ProjectGuard } from './server/service-scope.js';
+export type {
+  ScopeGuardFactory,
+  ServiceProjectProjectionGuard,
+  ProjectGuard,
+} from './server/service-scope.js';
+// Доступ к сессии как инвариант на префиксе роутера (IDOR-класс).
+export { createSessionAccessGuard, createSessionAccessPredicate } from './server/session-access-guard.js';
+export type {
+  SessionAccessGuardOptions,
+  SessionAccessPredicate,
+  SessionAccessPredicateOptions,
+  SessionAccessMessages,
+} from './server/session-access-guard.js';
 export { createServiceKeyRoutes } from './server/routes/service-keys.js';
 export type {
   ServiceKeyRoutesAuth,

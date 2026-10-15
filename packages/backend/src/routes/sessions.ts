@@ -1,5 +1,4 @@
 import { Hono } from 'hono';
-import type { Context } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { SessionManager } from '@itphx/synth-core';
 import type { EventBus } from '@itphx/synth-core';
@@ -15,19 +14,21 @@ import {
   normalizeIconKey,
   normalizeColorKey,
 } from '@itphx/synth-shared';
-import type { Message, Session, SessionSettings, User } from '@itphx/synth-shared';
+import type { Message, Session, SessionSettings } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
-import { scopeGuard, projectGuard } from '../auth/service-scope.js';
+import { scopeGuard, serviceProjectProjection } from '../auth/service-scope.js';
 import {
   enqueueUserMessage,
   serializeSession,
-  isSessionVisible,
+  createSessionAccessGuard,
+  createSessionAccessPredicate,
   createSessionRoutes as createCoreSessionRoutes,
 } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
 import type { ProjectStore } from '@itphx/synth-core';
+import { createProjectAccess } from './projects.js';
 
 /**
  * Backend-обёртка над core-фабрикой сессий (ТД-1, фаза B2). Здесь остаются только
@@ -62,38 +63,74 @@ export function createSessionRoutes(
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
+  const { canReadProject, canEditProjectContent } = createProjectAccess(kit);
 
   // ADR-071 §2.4: владелец сессии — обычный пользователь, управляющий её MCP-скоупом.
   const isSessionOwner = (session: Session, userId: string): boolean =>
     (session.ownerId ?? session.userId) === userId;
 
   /**
-   * ADR-089 / безопасность: доступ к сессии по id для backend-only роутов
-   * (export/notes/optimization/debug-system-message). Единое правило —
-   * `isSessionVisible` из core: elevated (ADMIN/LEAD) → всё; владелец → да;
-   * сессия без владельца → да; иначе сессия проекта видна её owner/участникам
-   * (`projectStore`). Нет доступа → 404 NOT_FOUND: не раскрываем существование
-   * чужой сессии (защита от перебора id; ранее здесь была IDOR-уязвимость).
+   * Rate limit на тяжёлые/неинтерактивные операции ресурса сессий (import/export/
+   * fork/merge): 10 запросов / 60 с на креду — тот же in-memory `createRateLimiter`,
+   * что у `POST /:id/prompt` (30/60) и `schedules/:id/run` (10/60). Значение ниже
+   * prompt: операции не частые в живом UI, но дорогие (полный объект сессии,
+   * создание форка, копирование сообщений) — защита от всплесков/выкачивания.
    */
-  const sessionAccessDenied = async (
-    c: Context,
-    session: Session,
-    currentUser?: User,
-  ): Promise<Response | null> => {
-    const user = currentUser ?? (await kit.getCurrentUser(c))!;
-    // Вызовы `kit.isAdmin`/`hasRole` защищены `typeof` — у мок-AuthKit в тестах
-    // они могут отсутствовать (паритет с resolveElevated ниже).
-    const elevated =
-      (typeof kit.isAdmin === 'function'
-        && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]))
-      || (typeof kit.hasRole === 'function'
-        && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD'));
-    if (await isSessionVisible(session, projectStore, { userId: user.id, elevated })) return null;
-    return c.json(
-      { error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } },
-      404,
-    );
-  };
+  const importRateLimit = createRateLimiter(10, 60_000);
+  const exportRateLimit = createRateLimiter(10, 60_000);
+  const forkRateLimit = createRateLimiter(10, 60_000);
+  const mergeRateLimit = createRateLimiter(10, 60_000);
+
+  /**
+   * Единое правило доступа к сессии (читать/писать) — ОДНА точка на весь ресурс
+   * `/api/v2/sessions`, включая backend-only маршруты (export/debug/optimization/
+   * notes) и core-маршруты. Правило:
+   * - elevated (ADMIN/LEAD) → всё (осознанное решение: мутации чужих сессий
+   *   у LEAD/ADMIN сохранены как есть);
+   * - владелец сессии или сессия без владельца → всё;
+   * - иначе — роль в проекте: чтение (`GET`/`HEAD`) — проектное чтение
+   *   (`canReadProject`: owner проекта или любой участник), мутация — проектное
+   *   редактирование (`canEditProjectContent`: owner/EDITOR).
+   * Разделение read/write делает prefix-guard по HTTP-методу (единая точка).
+   */
+  const sessionAccessPredicate = createSessionAccessPredicate({
+    canAccess: (session, c, userId) => {
+      const owner = session.ownerId ?? session.userId;
+      return !owner || owner === userId
+        || (typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]));
+    },
+    resolveCanAccessExtra: async (session, c, userId, access) => {
+      if (!projectStore || !session.projectId) return false;
+      const project = await projectStore.load(session.projectId);
+      if (!project) return false;
+      const ctx = c as Parameters<typeof kit.isAdmin>[0];
+      return access === 'read'
+        ? canReadProject(ctx, project, userId)
+        : canEditProjectContent(ctx, project, userId);
+    },
+    localUserId: 'local',
+  });
+
+  const sessionAccessGuard = createSessionAccessGuard({
+    param: 'id',
+    resolveSession: (id) => sessionManager.getSession(id),
+    resolveUserId: async (c) => (await kit.getCurrentUser(c))?.id ?? '',
+    isAllowed: async (session, c, userId, access) => {
+      // Мок-AuthKit в тестах может не иметь isAdmin/hasRole — защищаем typeof.
+      const isAdmin =
+        typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]);
+      const isLead =
+        typeof kit.hasRole === 'function' && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD');
+      if (isAdmin || isLead) return true;
+      return sessionAccessPredicate(session, c, userId, access);
+    },
+    messages: {
+      sessionNotFound: (c) => t('errors.notFound.session', undefined, c),
+      forbidden: (c) => t('auth.forbidden', undefined, c),
+    },
+    // `/import` — статический сегмент (не id сессии).
+    skipForId: (id) => id === 'import',
+  });
 
   /** ADR-071 §2.4: эффективный MCP-скоуп сессии (включая отключённые с причиной). */
   const buildSessionMcpPayload = async (session: Session) => {
@@ -185,18 +222,24 @@ export function createSessionRoutes(
     return c.json({ sessionId: session.id, secrets: session.obfuscationMap ?? {} });
   });
 
+  // Единый prefix-guard ресурса сессий: вешается ПОСЛЕ `/:id/mcp` и `/:id/secrets`
+  // (у них собственные задокументированные правила) и покрывает экспорт, отладку,
+  // оптимизацию, заметки и все core-маршруты (core-фабрика регистрируется с
+  // registerAccessGuard:false — иначе был бы второй источник правил). `/import`
+  // пропускается через guard.skipForId (статический сегмент, не сессия).
+  app.use('/:id', kit.requireAuth, sessionAccessGuard as never);
+  app.use('/:id/*', kit.requireAuth, sessionAccessGuard as never);
+
   // GET /api/v2/sessions/:id/export — полный экспорт сессии для переноса между
   // мирами (publish/fork). Внутренний формат: объект Session (camelCase) из
   // SessionManager — история сообщений, todos, настройки, заметки, ссылки,
   // чекпоинты, план-флаг и карта обфускации. Не публичный DTO.
-  // RBAC: владелец сессии / elevated (ADMIN/LEAD) / участник проекта (ADR-089).
-  app.get('/:id/export', kit.requireAuth, async (c) => {
+  // Доступ проверяет prefix-guard выше (владелец/elevated/роль в проекте).
+  app.get('/:id/export', kit.requireAuth, exportRateLimit, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
     return c.json(session);
   });
 
@@ -205,7 +248,7 @@ export function createSessionRoutes(
   // (целевой проект; если не задан — берётся из экспорта). LLM не запускается.
   // ADR-089: это materialization-операция (создание-как-факт переноса истории),
   // а не request — идёт прямым `createSession`, минуя funnel `session.requested`.
-  app.post('/import', kit.requireAuth, async (c) => {
+  app.post('/import', kit.requireAuth, importRateLimit, async (c) => {
     const user = (await kit.getCurrentUser(c))!;
     const body = await c.req.json().catch(() => ({}));
 
@@ -223,13 +266,19 @@ export function createSessionRoutes(
       if (!existing) {
         return c.json({ error: { code: 'PROJECT_NOT_FOUND', message: 'Проект не найден' } }, 400);
       }
+      // Безопасность: импорт привязывает сессию к проекту и выдаёт агенту его
+      // workspace — без проверки доступа к проекту получается IDOR (чтение/запись
+      // файлов чужого проекта). Требуем доступ по единому правилу проекта
+      // (owner/участник/LEAD/ADMIN) — тот же `createProjectAccess`, что у project-роутов.
+      if (!canReadProject(c as Parameters<typeof kit.isAdmin>[0], existing, user.id)) {
+        return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+      }
     }
 
     // ADR-089: materialization (перенос истории), не request — прямой createSession.
     const session = await sessionManager.createSession({
       title: typeof body.title === 'string' ? body.title : undefined,
       projectId: targetProjectId,
-      engine: typeof body.engine === 'string' ? (body.engine as Session['engine']) : undefined,
       sessionOrigin: (body.session_origin ?? body.sessionOrigin) as Session['sessionOrigin'] | undefined,
       settings: (body.settings ?? {}) as Partial<SessionSettings>,
       userId: user.id,
@@ -300,8 +349,7 @@ export function createSessionRoutes(
     }
 
     const user = (await kit.getCurrentUser(c))!;
-    const denied = await sessionAccessDenied(c, session, user);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     const streamId = generateStreamId();
 
@@ -335,8 +383,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     return c.json({
       context_optimization: session.settings.contextOptimization,
@@ -359,8 +406,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     const body = await c.req.json().catch(() => ({}));
 
@@ -389,8 +435,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     if (!contextOptimizer) {
       return c.json({ sliding_window: { triggered: false }, summarization: { triggered: false } });
@@ -413,8 +458,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     await sessionManager.withLock(session.id, async (s) => {
       s.summarizationPending = false;
@@ -443,8 +487,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     return c.json({ notes: session.stickyNotes });
   });
@@ -456,8 +499,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     const body = await c.req.json().catch(() => ({}));
     if (!body.content?.trim()) {
@@ -490,8 +532,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     const body = await c.req.json().catch(() => ({}));
     const noteId = c.req.param('noteId');
@@ -518,8 +559,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    const denied = await sessionAccessDenied(c, session);
-    if (denied) return denied;
+    // Доступ — у единого prefix-guard'а выше (владелец/elevated/роль в проекте).
 
     const noteId = c.req.param('noteId');
 
@@ -542,9 +582,13 @@ export function createSessionRoutes(
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,
       forkWithOwner: true,
-      canAccess: (session, c, userId) => isSessionOwner(session, userId) || kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]),
-      // ADR-089: сквозной обзор сессий для ADMIN/LEAD. Вызовы `kit.isAdmin`/`hasRole`
-      // защищены `typeof` — у мок-AuthKit в тестах они могут отсутствовать.
+      // Доступ к сессии обеспечивает единый prefix-guard ресурса (см. выше):
+      // `registerAccessGuard: false` отключает собственный guard core-фабрики,
+      // чтобы не появился второй источник правил.
+      registerAccessGuard: false,
+      // ADR-089: сквозной обзор сессий для ADMIN/LEAD (`GET /` — список всех).
+      // Вызовы `kit.isAdmin`/`hasRole` защищены `typeof` — у мок-AuthKit в тестах
+      // они могут отсутствовать.
       resolveElevated: (c) => {
         const isAdmin = typeof kit.isAdmin === 'function' && kit.isAdmin(c as Parameters<typeof kit.isAdmin>[0]);
         const isLead = typeof kit.hasRole === 'function' && kit.hasRole(c as Parameters<typeof kit.hasRole>[0], 'LEAD');
@@ -556,13 +600,6 @@ export function createSessionRoutes(
         const projects = await projectStore.list(userId);
         return projects.map((p) => p.id);
       },
-      // ADR-089: доступ по id — участник проекта сессии (owner/член), не только владелец.
-      resolveCanAccessExtra: async (session, _c, userId) => {
-        if (!projectStore || !session.projectId) return false;
-        const project = await projectStore.load(session.projectId);
-        if (!project) return false;
-        return project.ownerId === userId || userId in (project.members ?? {});
-      },
       resolveAuthor: async (c) => (await kit.getCurrentUser(c))!.username,
       promptMessageId: 'stream',
       publishRenamed: false,
@@ -571,11 +608,13 @@ export function createSessionRoutes(
       onSessionDeleted: (userId, sessionId) => { eventHub.unsubscribeFromSession(userId, sessionId); },
       onSessionForked:  (userId, sessionId) => { void eventHub.subscribeToSession(userId, sessionId).catch((e: unknown) => console.warn('subscribeToSession failed:', e)); },
       promptMiddleware: [createRateLimiter(30, 60_000)],
+      forkMiddleware: [forkRateLimit],
+      mergeMiddleware: [mergeRateLimit],
       enableSessionEvents: false,
       resolveDefaultAgent,
       // ADR-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
       scopeGuard,
-      projectGuard,
+      serviceProjectProjection,
       messages: {
         sessionNotFound: (c) => t('errors.notFound.session', undefined, c),
         forbidden: (c) => t('auth.forbidden', undefined, c),

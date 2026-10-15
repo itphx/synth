@@ -6,8 +6,8 @@
  *
  * Единое правило видимости — `isSessionVisible` из core: elevated (ADMIN/LEAD) →
  * всё; владелец → да; сессия без владельца → да; иначе сессия проекта видна её
- * owner/участникам. Отказ → 404 NOT_FOUND (не раскрываем существование чужой
- * сессии — defense-in-depth против перебора id).
+ * owner/участникам. Отказ → 403 FORBIDDEN (единый код для «сессия недоступна»
+ * во всём ресурсе сессий; 404 остаётся только для реально отсутствующей сессии).
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -114,16 +114,16 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
     return { app, sessionManager, id: session.id };
   }
 
-  const denied = 404;
+  const denied = 403;
   const ok = 200;
 
   describe('GET /:id/export', () => {
-    it('чужой USER → 404, владелец/ADMIN/LEAD → 200', async () => {
+    it('чужой USER → 403, владелец/ADMIN/LEAD → 200', async () => {
       const { app, id } = await seedOwnedSession();
 
       const foreign = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth('other') });
       expect(foreign.status).toBe(denied);
-      expect(((await foreign.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+      expect(((await foreign.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
 
       for (const u of ['owner', 'admin', 'lead']) {
         const res = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth(u) });
@@ -133,14 +133,14 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
   });
 
   describe('notes', () => {
-    it('GET /:id/notes: чужой → 404, владелец/ADMIN → 200', async () => {
+    it('GET /:id/notes: чужой → 403, владелец/ADMIN → 200', async () => {
       const { app, id } = await seedOwnedSession();
       expect((await app.request(`/api/v2/sessions/${id}/notes`, { headers: auth('other') })).status).toBe(denied);
       expect((await app.request(`/api/v2/sessions/${id}/notes`, { headers: auth('owner') })).status).toBe(ok);
       expect((await app.request(`/api/v2/sessions/${id}/notes`, { headers: auth('admin') })).status).toBe(ok);
     });
 
-    it('POST /:id/notes: чужой → 404 (заметка не создаётся), владелец → 201', async () => {
+    it('POST /:id/notes: чужой → 403 (заметка не создаётся), владелец → 201', async () => {
       const { app, sessionManager, id } = await seedOwnedSession();
 
       const foreign = await app.request(`/api/v2/sessions/${id}/notes`, {
@@ -160,7 +160,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       expect((await sessionManager.getSession(id))!.stickyNotes).toHaveLength(1);
     });
 
-    it('PATCH /:id/notes/:noteId: чужой → 404 (не меняется), владелец → 200', async () => {
+    it('PATCH /:id/notes/:noteId: чужой → 403 (не меняется), владелец → 200', async () => {
       const { app, sessionManager, id } = await seedOwnedSession();
       const created = await app.request(`/api/v2/sessions/${id}/notes`, {
         method: 'POST',
@@ -186,7 +186,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       expect((await sessionManager.getSession(id))!.stickyNotes[0]!.content).toBe('updated');
     });
 
-    it('DELETE /:id/notes/:noteId: чужой → 404 (не удаляется), владелец → 200', async () => {
+    it('DELETE /:id/notes/:noteId: чужой → 403 (не удаляется), владелец → 200', async () => {
       const { app, sessionManager, id } = await seedOwnedSession();
       const created = await app.request(`/api/v2/sessions/${id}/notes`, {
         method: 'POST',
@@ -212,14 +212,14 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
   });
 
   describe('optimization', () => {
-    it('GET /:id/optimization: чужой → 404, владелец/ADMIN → 200', async () => {
+    it('GET /:id/optimization: чужой → 403, владелец/ADMIN → 200', async () => {
       const { app, id } = await seedOwnedSession();
       expect((await app.request(`/api/v2/sessions/${id}/optimization`, { headers: auth('other') })).status).toBe(denied);
       expect((await app.request(`/api/v2/sessions/${id}/optimization`, { headers: auth('owner') })).status).toBe(ok);
       expect((await app.request(`/api/v2/sessions/${id}/optimization`, { headers: auth('admin') })).status).toBe(ok);
     });
 
-    it('PATCH /:id/optimization: чужой → 404 (не меняется), владелец → 200', async () => {
+    it('PATCH /:id/optimization: чужой → 403 (не меняется), владелец → 200', async () => {
       const { app, sessionManager, id } = await seedOwnedSession();
 
       const foreign = await app.request(`/api/v2/sessions/${id}/optimization`, {
@@ -239,7 +239,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       expect((await sessionManager.getSession(id))!.settings.summarizationEnabled).toBe(true);
     });
 
-    it('POST /:id/optimization/check: чужой → 404, владелец → 200', async () => {
+    it('POST /:id/optimization/check: чужой → 403, владелец → 200', async () => {
       const { app, id } = await seedOwnedSession();
       expect((await app.request(`/api/v2/sessions/${id}/optimization/check`, {
         method: 'POST', headers: auth('other'),
@@ -249,7 +249,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       })).status).toBe(ok);
     });
 
-    it('POST /:id/optimization/cancel-summarization: чужой → 404, владелец → 200', async () => {
+    it('POST /:id/optimization/cancel-summarization: чужой → 403, владелец → 200', async () => {
       const { app, id } = await seedOwnedSession();
       expect((await app.request(`/api/v2/sessions/${id}/optimization/cancel-summarization`, {
         method: 'POST', headers: auth('other'),
@@ -261,7 +261,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
   });
 
   describe('POST /:id/debug-system-message', () => {
-    it('чужой USER → 404, владелец/ADMIN → 200', async () => {
+    it('чужой USER → 403, владелец/ADMIN → 200', async () => {
       const { app, id } = await seedOwnedSession();
 
       const foreign = await app.request(`/api/v2/sessions/${id}/debug-system-message`, {
@@ -288,7 +288,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
   });
 
   describe('проектная видимость', () => {
-    it('участник проекта открывает сессию проекта (200), посторонний → 404', async () => {
+    it('участник проекта открывает сессию проекта (200), посторонний → 403', async () => {
       const { app, sessionManager, projectStore } = await makeApp();
       const project = projectStore.create('P', 'owner');
       project.members['member'] = 'viewer' as never;

@@ -122,6 +122,18 @@ describe('project_create / project_attach', () => {
     expect(result.content).toContain('not found');
   });
 
+  it('project_attach к чужому проекту — отказ (write_forbidden), сессия не привязана', async () => {
+    const foreign = projectStore.create('Foreign', 'someone-else');
+    await projectStore.save(foreign);
+
+    const result = await projectAttachTool.execute({ projectId: foreign.id }, makeCtx());
+    expect(result.isError).toBe(true);
+    expect(result.metadata?.i18n).toEqual({ key: 'project.write_forbidden' });
+
+    const session = (await sessionManager.getSession(sessionId))!;
+    expect(session.projectId).toBeUndefined();
+  });
+
   it('project_attach публикует session.moved', async () => {
     const project = projectStore.create('Target', 'u1');
     await projectStore.save(project);

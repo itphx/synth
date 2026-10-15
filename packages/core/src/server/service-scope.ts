@@ -18,8 +18,15 @@ type Middleware = ReturnType<typeof createMiddleware>;
 /** Фабрика scope-guard'а (совместима с `requireScope`). */
 export type ScopeGuardFactory = (...required: string[]) => Middleware;
 
-/** Гейт проектной проекции: `undefined` — доступ разрешён, иначе — готовый 403-ответ. */
-export type ProjectGuard = (c: Context, projectId?: string) => Response | undefined;
+/**
+ * Гейт **проектной проекции service-key** (`allowedProjects`): `undefined` —
+ * доступ разрешён, иначе — готовый 403-ответ. Это НЕ проверка прав пользователя
+ * (RBAC) и для интерактивных кред — no-op: имя отражает суть.
+ */
+export type ServiceProjectProjectionGuard = (c: Context, projectId?: string) => Response | undefined;
+
+/** @deprecated Переименовано в `ServiceProjectProjectionGuard` (честное имя). */
+export type ProjectGuard = ServiceProjectProjectionGuard;
 
 /** Контекст service-key из запроса (`undefined` — не service-key). */
 export function getServiceCredential(c: Context): ServiceKeyCredential | undefined {
@@ -65,11 +72,12 @@ export function isProjectAllowed(
 }
 
 /**
- * Гейт проектной проекции для роутов, адресующих проект/сессию. Возвращает
- * готовый 403-ответ, если service-key ограничен проектами и target не входит в
- * `allowedProjects`; иначе `undefined` (запрос можно продолжать).
+ * Гейт **проектной проекции service-key** для роутов, адресующих проект/сессию.
+ * Возвращает готовый 403-ответ, если service-key ограничен проектами и target не
+ * входит в `allowedProjects`; иначе `undefined` (запрос можно продолжать).
+ * Интерактивные креды (нет service-key) не ограничиваются — это не RBAC.
  */
-export function checkProjectAccess(c: Context, projectId?: string): Response | undefined {
+export function checkServiceProjectProjection(c: Context, projectId?: string): Response | undefined {
   const cred = getServiceCredential(c);
   if (isProjectAllowed(cred, projectId)) return undefined;
   return c.json(
@@ -77,3 +85,6 @@ export function checkProjectAccess(c: Context, projectId?: string): Response | u
     403,
   );
 }
+
+/** @deprecated Переименовано в `checkServiceProjectProjection` (честное имя). */
+export const checkProjectAccess = checkServiceProjectProjection;

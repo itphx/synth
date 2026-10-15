@@ -494,7 +494,6 @@ describe('Session API Routes', () => {
       expect(body.messages[0].content).toBe('hello');
       expect(body.todos).toEqual([{ id: 't1', content: 'task', status: 'pending', priority: 'medium' }]);
       expect(body.settings).toBeTruthy();
-      expect(body.engine).toBe('synth');
     });
 
     it('возвращает 404 для отсутствующей сессии', async () => {
@@ -551,7 +550,6 @@ describe('Session API Routes', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: 'Snake',
-          engine: 'synth',
           session_origin: 'user',
           project_id: proj.id,
           messages: [{
@@ -601,6 +599,67 @@ describe('Session API Routes', () => {
       expect(res.status).toBe(400);
       const body: any = await res.json();
       expect(body.error.code).toBe('PROJECT_NOT_FOUND');
+    });
+
+    it('чужой проект → 403 (не выдаём workspace чужого проекта)', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const foreign = projectStore.create('Foreign', 'someone-else');
+      await projectStore.save(foreign);
+
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'X', import: { project_id: foreign.id } }),
+      });
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+      // Сессия не создана.
+      const created = (await sessionManager.listSessions({ userId: 'test-user' })).filter(
+        (s) => s.title === 'X',
+      );
+      expect(created).toHaveLength(0);
+    });
+
+    it('проект участника (VIEWER) → 201 (чтение-уровень доступа к проекту)', async () => {
+      const { app, projectStore } = createTestApp(tmpDir);
+      const project = projectStore.create('Shared', 'someone-else');
+      project.members['test-user'] = 'viewer' as never;
+      await projectStore.save(project);
+
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'X', import: { project_id: project.id } }),
+      });
+      expect(res.status).toBe(201);
+    });
+  });
+
+  describe('rate limit тяжёлых операций ресурса сессий', () => {
+    it('GET /:id/export — 10/60c, 11-й → 429', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'E', userId: 'test-user' });
+      const statuses: number[] = [];
+      for (let i = 0; i < 11; i++) {
+        statuses.push((await app.request(`/api/v2/sessions/${session.id}/export`)).status);
+      }
+      expect(statuses.slice(0, 10).every((s) => s === 200)).toBe(true);
+      expect(statuses[10]).toBe(429);
+    });
+
+    it('POST /:id/fork — 10/60c, 11-й → 429', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'F', userId: 'test-user' });
+      const statuses: number[] = [];
+      for (let i = 0; i < 11; i++) {
+        statuses.push((await app.request(`/api/v2/sessions/${session.id}/fork`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        })).status);
+      }
+      expect(statuses.slice(0, 10).every((s) => s === 201)).toBe(true);
+      expect(statuses[10]).toBe(429);
     });
   });
 

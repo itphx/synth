@@ -19,8 +19,8 @@ import type { EventApiKeyStore } from '../../storage/event-api-key-store.js';
 import type { EventBindingStore } from '../../storage/event-binding-store.js';
 import type { EventJournalStore } from '../../storage/event-journal-store.js';
 import type { RouteRuleStore } from '../../storage/route-rule-store.js';
-import { requireScope, checkProjectAccess } from '../service-scope.js';
-import type { ScopeGuardFactory, ProjectGuard } from '../service-scope.js';
+import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
+import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 
 /**
  * ADR-089: маршруты приёма внешних событий и управления биндингами.
@@ -130,10 +130,11 @@ export interface EventRoutesOptions {
    */
   scopeGuard?: ScopeGuardFactory;
   /**
-   * ADR-052 (этап I): гейт проектной проекции. По умолчанию — `checkProjectAccess`
-   * из core (нет service-key/`allowedProjects` → пропускает).
+   * ADR-052 (этап I): гейт **проектной проекции service-key**. По умолчанию —
+   * `checkServiceProjectProjection` из core (нет service-key/`allowedProjects` →
+   * пропускает). Это не RBAC.
    */
-  projectGuard?: ProjectGuard;
+  serviceProjectProjection?: ServiceProjectProjectionGuard;
 }
 
 const DEFAULT_MESSAGES: EventRouteMessages = {
@@ -184,7 +185,7 @@ export function createEventRoutes(
   const ingestGuard: Middleware = opts.ingestGuard ?? auth.requireAuth;
   // ADR-052 (этап I): scope-гейты service-key и проектная проекция.
   const scoped = opts.scopeGuard ?? requireScope;
-  const projectGuard = opts.projectGuard ?? checkProjectAccess;
+  const serviceProjectProjection = opts.serviceProjectProjection ?? checkServiceProjectProjection;
   // ADR-089/ADR-052: per-key rate limit (fixed window 60 c), один на приложение.
   const keyRateLimiter = new KeyRateLimiter(60_000);
 
@@ -339,7 +340,7 @@ export function createEventRoutes(
 
     const input = parsed.data;
     // ADR-052: проектная проекция — биндинг адресует проект (`input.project`).
-    const denied = projectGuard(c, input.project);
+    const denied = serviceProjectProjection(c, input.project);
     if (denied) return denied;
     // Существующую привязку по ключу заменяем (id сохраняется) — это upsert.
     const existing = input.threadKey || input.chatKey

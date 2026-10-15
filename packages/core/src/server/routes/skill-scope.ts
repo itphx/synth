@@ -14,6 +14,8 @@ import type { AuthKit } from '../../auth/local.js';
 import { resolveSkillRule } from '../../engine/permission/evaluator.js';
 import { resolveSkillAvailability } from '../../engine/skills/scope.js';
 import type { SkillScopeOptions } from '../../engine/skills/types.js';
+import { accessKindOf, createSessionAccessPredicate } from '../session-access-guard.js';
+import type { SessionAccessKind } from '../session-access-guard.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -41,6 +43,19 @@ export interface SkillScopeRoutesOptions {
   resolveUserId?: (c: Context) => string | Promise<string>;
   /** Доступ к сессии (владелец|ADMIN). Standalone — owner local/none. */
   canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
+  /**
+   * Доп. правило доступа к сессии (например, участие в проекте) — та же семантика,
+   * что у `createSessionRoutes` (единая точка истины на ресурс сессии). `access`
+   * различает чтение (`GET`) и мутацию (`PUT`).
+   */
+  resolveCanAccessExtra?: (
+    session: Session,
+    c: Context,
+    userId: string,
+    access: SessionAccessKind,
+  ) => boolean | Promise<boolean>;
+  /** Сквозной обзор (ADMIN/LEAD) — доступ ко всем сессиям (единая семантика). */
+  resolveElevated?: (c: Context) => boolean | Promise<boolean>;
   /** Доступ к управлению проектом (owner/LEAD/ADMIN). Standalone — разрешено. */
   canAccessProject?: (project: Project, c: Context, userId: string) => boolean | Promise<boolean>;
   /** ADR-046 §4.5: live-обновление системного hard-gate скиллов (оркестратор). */
@@ -123,12 +138,19 @@ export function createSessionSkillScopeRoutes(
   const app = new Hono();
   const writeGuard = opts?.writeGuard ?? (async (_c, next) => { await next(); });
   const resolveUserId = opts?.resolveUserId ?? (() => LOCAL_USER_ID);
-  // Standalone: владелец `local`/без владельца — доступен; backend переопределяет
-  // `opts.canAccess` (владелец|ADMIN), как в `createSessionRoutes`.
+  // Единая с `createSessionRoutes` семантика доступа к сессии: elevated
+  // (ADMIN/LEAD) → всё; иначе владелец|ADMIN (`canAccess`) либо участник проекта
+  // (`resolveCanAccessExtra`); standalone-дефолт — владелец `local`/без владельца.
+  // Маршруты скиллов монтируются отдельной фабрикой (не под prefix-guard'ом
+  // сессий), поэтому используют ровно тот же предикат, чтобы правила не расходились.
+  const accessPredicate = createSessionAccessPredicate({
+    canAccess: opts?.canAccess,
+    resolveCanAccessExtra: opts?.resolveCanAccessExtra,
+    localUserId: LOCAL_USER_ID,
+  });
   const canAccess = async (session: Session, c: Context, userId: string): Promise<boolean> => {
-    if (opts?.canAccess) return opts.canAccess(session, c, userId);
-    const owner = session.ownerId ?? session.userId;
-    return !owner || owner === LOCAL_USER_ID;
+    if ((await opts?.resolveElevated?.(c)) ?? false) return true;
+    return accessPredicate(session, c, userId, accessKindOf(c.req.method));
   };
   const forbidden = (c: Context) => c.json(
     { error: { code: 'FORBIDDEN', message: 'Недостаточно прав для доступа к сессии' } },

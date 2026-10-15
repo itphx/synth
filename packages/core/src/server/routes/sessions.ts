@@ -12,8 +12,10 @@ import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
-import { requireScope, checkProjectAccess } from '../service-scope.js';
-import type { ScopeGuardFactory, ProjectGuard } from '../service-scope.js';
+import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
+import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
+import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
+import type { SessionAccessKind } from '../session-access-guard.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -79,6 +81,10 @@ export interface SessionRoutesOptions {
   onSessionForked?: (userId: string, sessionId: string) => void | Promise<void>;
   /** Доп. middleware на POST /:id/prompt (rate limiter). */
   promptMiddleware?: Middleware[];
+  /** Доп. middleware на POST /:id/fork (rate limiter; backend). */
+  forkMiddleware?: Middleware[];
+  /** Доп. middleware на POST /:id/messages/merge (rate limiter; backend). */
+  mergeMiddleware?: Middleware[];
   /** Регистрировать core-only роут `GET /:id/events`. Core — true; backend — false. */
   enableSessionEvents?: boolean;
   messages?: Partial<SessionRouteMessages>;
@@ -98,20 +104,34 @@ export interface SessionRoutesOptions {
    */
   resolveMemberProjectIds?: (c: Context, userId: string) => Promise<string[]> | string[];
   /**
-   * ADR-089: доп. проверка доступа к сессии по id (например, участник проекта).
-   * Вызывается, когда `opts.canAccess` не дал положительный ответ.
+   * ADR-089: доп. проверка доступа к сессии по id (например, участие в проекте).
+   * Вызывается, когда `opts.canAccess` не дал положительный ответ. `access`
+   * различает чтение/мутацию (backend: VIEWER-участник читает, но не мутирует).
    */
-  resolveCanAccessExtra?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
+  resolveCanAccessExtra?: (
+    session: Session,
+    c: Context,
+    userId: string,
+    access: SessionAccessKind,
+  ) => boolean | Promise<boolean>;
+  /**
+   * Регистрировать ли собственный prefix-guard доступа к сессии (по умолчанию —
+   * да). Backend ставит `false` и вешает ОДИН guard на весь ресурс `/api/v2/sessions`
+   * сам (чтобы покрыть и backend-only маршруты export/debug/optimization/notes той
+   * же семантикой) — иначе получилось бы два источника правил.
+   */
+  registerAccessGuard?: boolean;
   /**
    * ADR-052 (этап I): фабрика scope-guard'а для service-key. По умолчанию —
    * `requireScope` из core (нет service-key в контексте → пропускает).
    */
   scopeGuard?: ScopeGuardFactory;
   /**
-   * ADR-052 (этап I): гейт проектной проекции (`allowedProjects`). По умолчанию —
-   * `checkProjectAccess` из core (нет service-key/`allowedProjects` → пропускает).
+   * ADR-052 (этап I): гейт **проектной проекции service-key** (`allowedProjects`).
+   * По умолчанию — `checkServiceProjectProjection` из core (нет
+   * service-key/`allowedProjects` → пропускает). Это не RBAC.
    */
-  projectGuard?: ProjectGuard;
+  serviceProjectProjection?: ServiceProjectProjectionGuard;
 }
 
 const DEFAULT_MESSAGES: SessionRouteMessages = {
@@ -134,17 +154,24 @@ function invalidMetaMessage(label: 'icon' | 'color', value: unknown, allowed: re
 function chainMiddleware(middlewares: Middleware[]): Middleware {
   return async (c, next) => {
     let lastIndex = -1;
-    const dispatch = async (index: number): Promise<void> => {
+    // Короткое замыкание middleware (например, 429 rate limiter) надо вернуть в
+    // Hono через замыкание, а не через `return next()`: промежуточные middleware
+    // (requireAuth) не пробрасывают возврат next() — иначе ответ терялся, а запрос
+    // падал в handler/500 («Context is not finalized»).
+    let shortCircuit: Response | undefined;
+    const dispatch = async (index: number): Promise<Response | void> => {
       if (index <= lastIndex) throw new Error('next() called multiple times');
       lastIndex = index;
       const mw = middlewares[index];
       if (!mw) {
         await next();
-        return;
+        return shortCircuit;
       }
-      await mw(c, () => dispatch(index + 1));
+      const res = await mw(c, (() => dispatch(index + 1)) as () => Promise<void>);
+      if (res instanceof Response && !shortCircuit) shortCircuit = res;
+      return shortCircuit;
     };
-    await dispatch(0);
+    return dispatch(0);
   };
 }
 
@@ -187,11 +214,13 @@ export function createSessionRoutes(
   const publishRenamed = opts.publishRenamed ?? true;
   const publishDeletedBefore = opts.publishDeletedBefore ?? true;
   const promptMiddleware = opts.promptMiddleware ?? [];
+  const forkMiddleware = opts.forkMiddleware ?? [];
+  const mergeMiddleware = opts.mergeMiddleware ?? [];
   const messages: SessionRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
   const resolveAuthorName = createResolveAuthorName(deps.profilesStore);
   // ADR-052 (этап I): scope-гейты service-key и проектная проекция сессии.
   const scoped = opts.scopeGuard ?? requireScope;
-  const projectGuard = opts.projectGuard ?? checkProjectAccess;
+  const serviceProjectProjection = opts.serviceProjectProjection ?? checkServiceProjectProjection;
 
   /**
    * ADR-071/безопасность: доступ к локальной сессии. Standalone — однопользовательский
@@ -200,16 +229,36 @@ export function createSessionRoutes(
    * ADR-089: `opts.resolveCanAccessExtra` (напр. участник проекта / LEAD) даёт доступ
    * по id, если базовый `canAccess` отказал.
    */
-  const canAccessSession = async (session: Session, c: Context, userId: string): Promise<boolean> => {
-    if (opts.canAccess) {
-      if (await opts.canAccess(session, c, userId)) return true;
-    } else {
-      const owner = session.ownerId ?? session.userId;
-      if (!owner || owner === LOCAL_USER_ID) return true;
-    }
-    if (opts.resolveCanAccessExtra) return opts.resolveCanAccessExtra(session, c, userId);
-    return false;
-  };
+  const canAccessSession = createSessionAccessPredicate({
+    canAccess: opts.canAccess,
+    resolveCanAccessExtra: opts.resolveCanAccessExtra,
+    localUserId: LOCAL_USER_ID,
+  });
+
+  /**
+   * Авторизация сессий как инвариант на префиксе: guard вешается один раз до
+   * маршрутов и покрывает все `:id`-маршруты (включая будущие). `requireAuth`
+   * идёт в той же цепочке ДО guard'а — иначе `resolveUserId` не имел бы
+   * пользователя. Remote-ref (`remote:<uuid>`) пропускается: проверка — на
+   * удалённой стороне (ADR-042).
+   */
+  const sessionAccessGuard = createSessionAccessGuard({
+    param: 'id',
+    resolveSession: (id) => sessionManager.getSession(id),
+    resolveUserId,
+    isAllowed: async (session, c, userId, access) => {
+      if ((await opts.resolveElevated?.(c)) ?? false) return true;
+      return canAccessSession(session, c, userId, access);
+    },
+    messages: { sessionNotFound: messages.sessionNotFound, forbidden: messages.forbidden },
+    skipForId: (id) => hasRemoteGetter && isRemoteRef(id),
+  });
+  if (opts.registerAccessGuard !== false) {
+    app.use('/:id', auth.requireAuth);
+    app.use('/:id', sessionAccessGuard);
+    app.use('/:id/*', auth.requireAuth);
+    app.use('/:id/*', sessionAccessGuard);
+  }
 
   /**
    * Локальная фильтрация списка по project_id. remote-ref (`remote:<uuid>`)
@@ -296,7 +345,7 @@ export function createSessionRoutes(
 
     // ADR-052 (этап I): проектная проекция — сессия адресует проект
     // (`project_id`/`projectId`); при заданном `allowedProjects` чужой проект → 403.
-    const createDenied = projectGuard(c, body.project_id || body.projectId || undefined);
+    const createDenied = serviceProjectProjection(c, body.project_id || body.projectId || undefined);
     if (createDenied) return createDenied;
 
     // Метаданные (icon/color): только канонические ключи; null/undefined — сброс.
@@ -319,7 +368,6 @@ export function createSessionRoutes(
       icon: body.icon ?? undefined,
       color: body.color ?? undefined,
       projectId: body.project_id || body.projectId || undefined,
-      engine: body.engine || 'synth',
       parentId: body.parent_id || body.parentId || undefined,
       sessionOrigin: body.session_origin || body.sessionOrigin || undefined,
       settings: { ...body.settings, agentRole: body.settings?.agentRole ?? await resolveDefaultAgent() },
@@ -365,7 +413,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    const readonlyDenied = projectGuard(c, session.projectId);
+    const readonlyDenied = serviceProjectProjection(c, session.projectId);
     if (readonlyDenied) return readonlyDenied;
     return c.json(serializeSession(session, { agentRegistry }));
   });
@@ -391,7 +439,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    const patchDenied = projectGuard(c, session.projectId);
+    const patchDenied = serviceProjectProjection(c, session.projectId);
     if (patchDenied) return patchDenied;
     const body = await c.req.json().catch(() => ({}));
 
@@ -428,7 +476,7 @@ export function createSessionRoutes(
       }
       const resolved = newProjectId || undefined;
       // ADR-052 (этап I): проектная проекция — и старая, и новая цель сессии.
-      const moveDenied = projectGuard(c, resolved);
+      const moveDenied = serviceProjectProjection(c, resolved);
       if (moveDenied) return moveDenied;
       if (prevProjectId !== resolved) {
         session.projectId = resolved;
@@ -444,7 +492,6 @@ export function createSessionRoutes(
         eventBus.publish(session.id, 'session.renamed', { session_id: session.id, title: body.title, prev_title: prevTitle });
       }
     }
-    if (body.engine !== undefined) session.engine = body.engine;
     if (body.icon !== undefined) session.icon = parsed.data.icon ?? undefined;
     if (body.color !== undefined) session.color = parsed.data.color ?? undefined;
     if (body.mode !== undefined) {
@@ -490,7 +537,7 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    const deleteDenied = projectGuard(c, session.projectId);
+    const deleteDenied = serviceProjectProjection(c, session.projectId);
     if (deleteDenied) return deleteDenied;
     const userId = await resolveUserId(c);
     if (publishDeletedBefore) {
@@ -510,12 +557,11 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    const statusDenied = projectGuard(c, session.projectId);
+    const statusDenied = serviceProjectProjection(c, session.projectId);
     if (statusDenied) return statusDenied;
-    const userId = await resolveUserId(c);
-    if (!(await canAccessSession(session, c, userId))) {
-      return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
-    }
+    // Доступ к сессии — единственная точка истины: prefix-guard выше. Повторная
+    // проверка здесь недопустима (давала разные правила: guard учитывает elevated
+    // ADMIN/LEAD, а handler — нет → ложный 403 для LEAD).
     return c.json({
       blocked: !!session.status.blocked,
       pending_count: session.pendingMessages.length,
@@ -530,12 +576,9 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    const accessDenied = projectGuard(c, session.projectId);
+    const accessDenied = serviceProjectProjection(c, session.projectId);
     if (accessDenied) return accessDenied;
-    const userId = await resolveUserId(c);
-    if (!(await canAccessSession(session, c, userId))) {
-      return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
-    }
+    // Доступ — у prefix-guard (единая точка истины); здесь не дублируем.
     const info = await orchestrator.getPromptInfo(session);
     return c.json(info);
   });
@@ -547,12 +590,9 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    const accessDenied = projectGuard(c, session.projectId);
+    const accessDenied = serviceProjectProjection(c, session.projectId);
     if (accessDenied) return accessDenied;
-    const userId = await resolveUserId(c);
-    if (!(await canAccessSession(session, c, userId))) {
-      return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
-    }
+    // Доступ — у prefix-guard (единая точка истины); здесь не дублируем.
     const stats = await computeSessionStats(session, {
       getSession: (id) => sessionManager.getSession(id),
       getModelPricing: (model) => orchestrator.getModelPricing(model),
@@ -592,12 +632,11 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    const promptDenied = projectGuard(c, session.projectId);
+    const promptDenied = serviceProjectProjection(c, session.projectId);
     if (promptDenied) return promptDenied;
-    const userId = await resolveUserId(c);
-    if (!(await canAccessSession(session, c, userId))) {
-      return c.json({ error: { code: 'FORBIDDEN', message: messages.forbidden(c) } }, 403);
-    }
+    // Доступ — у prefix-guard (единая точка истины): он учитывает владельца,
+    // участника проекта и сквозной обзор ADMIN/LEAD. Здесь остаётся только
+    // специфика тела запроса (проверка контента выше).
 
     const streamId = body.messageId || generateStreamId();
     const author = await resolveAuthor(c);
@@ -691,12 +730,11 @@ export function createSessionRoutes(
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    const messagesDenied = projectGuard(c, session.projectId);
+    const messagesDenied = serviceProjectProjection(c, session.projectId);
     if (messagesDenied) return messagesDenied;
     return c.json({
       messages: session.messages.map((m, i) => serializeMessage(m, i)),
       session_id: session.id,
-      engine: session.engine,
     });
   });
 
@@ -883,7 +921,7 @@ export function createSessionRoutes(
     return c.json(tree);
   });
 
-  app.post('/:id/fork', auth.requireAuth, async (c) => {
+  app.post('/:id/fork', chainMiddleware([auth.requireAuth, ...forkMiddleware]), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const forkOptions: { messageId?: string; messageIndex?: number; title?: string; userId?: string; ownerId?: string } = {
       messageId: body.message_id ?? body.messageId,
@@ -937,7 +975,7 @@ export function createSessionRoutes(
   });
 
   // POST /api/v2/sessions/:id/messages/merge — копировать сообщения из другой сессии
-  app.post('/:id/messages/merge', auth.requireAuth, async (c) => {
+  app.post('/:id/messages/merge', chainMiddleware([auth.requireAuth, ...mergeMiddleware]), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const sourceSessionId = body.source_session_id || body.sourceSessionId;
     const sourceRange = body.source_range || body.sourceRange;

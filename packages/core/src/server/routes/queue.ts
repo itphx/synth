@@ -3,8 +3,11 @@ import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus } from '../../index.js';
 import { generateStreamId, MessageRole } from '@itphx/synth-shared';
+import type { Session } from '@itphx/synth-shared';
 import { isRemoteRef, toLocalId, remoteErrorToHttp } from '../../remote/aggregate.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
+import type { SessionAccessKind } from '../session-access-guard.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -18,16 +21,33 @@ export interface QueueRoutesAuth {
 export interface QueueRouteMessages {
   sessionNotFound: (c: Context) => string;
   messageNotFoundIndex: (c: Context) => string;
+  forbidden: (c: Context) => string;
 }
 
 export interface QueueRoutesOptions {
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<QueueRouteMessages>;
+  /** userId запроса. Core — 'local'; backend — id из AuthKit. */
+  resolveUserId?: (c: Context) => string | Promise<string>;
+  /** Доступ к содержимому сессии. Core — local-owner; backend — owner|ADMIN. */
+  canAccess?: (session: Session, c: Context, userId: string) => boolean | Promise<boolean>;
+  /** Доп. правило доступа (например, участие в проекте; `access` — read/write). */
+  resolveCanAccessExtra?: (
+    session: Session,
+    c: Context,
+    userId: string,
+    access: SessionAccessKind,
+  ) => boolean | Promise<boolean>;
+  /** Сквозной обзор (ADMIN/LEAD) — доступ ко всем сессиям. */
+  resolveElevated?: (c: Context) => boolean | Promise<boolean>;
 }
+
+const LOCAL_USER_ID = 'local';
 
 const DEFAULT_MESSAGES: QueueRouteMessages = {
   sessionNotFound: () => 'Сессия не найдена',
   messageNotFoundIndex: () => 'Сообщение не найдено по индексу',
+  forbidden: () => 'Доступ к сессии запрещён',
 };
 
 /** Преобразовать RemoteError в HTTP-ответ API v2; не-RemoteError → undefined (пробросить дальше). */
@@ -56,7 +76,37 @@ export function createQueueRoutes(
 ): Hono {
   const app = new Hono();
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
+  /**
+   * Единая семантика с `createSessionRoutes`: `remote:<uuid>` пропускается только
+   * при настроенном гибриде (геттер передан); в managed такой id даёт
+   * предсказуемый 404, а не 502 «из-за отсутствия геттера».
+   */
+  const hasRemoteGetter = getRemoteClient !== undefined;
   const messages: QueueRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
+  const resolveUserId = opts?.resolveUserId ?? (() => LOCAL_USER_ID);
+  const accessPredicate = createSessionAccessPredicate({
+    canAccess: opts?.canAccess,
+    resolveCanAccessExtra: opts?.resolveCanAccessExtra,
+    localUserId: LOCAL_USER_ID,
+  });
+
+  // Авторизация очереди — инвариант на префиксе `/:sessionId`: guard до маршрутов
+  // + `requireAuth` в цепочке. Remote-ref пропускается (ADR-042).
+  const sessionAccessGuard = createSessionAccessGuard({
+    param: 'sessionId',
+    resolveSession: (id) => sessionManager.getSession(id),
+    resolveUserId,
+    isAllowed: async (session, c, userId, access) => {
+      if ((await opts?.resolveElevated?.(c)) ?? false) return true;
+      return accessPredicate(session, c, userId, access);
+    },
+    messages: { sessionNotFound: messages.sessionNotFound, forbidden: messages.forbidden },
+    skipForId: (id) => hasRemoteGetter && isRemoteRef(id),
+  });
+  app.use('/:sessionId', auth.requireAuth);
+  app.use('/:sessionId', sessionAccessGuard);
+  app.use('/:sessionId/*', auth.requireAuth);
+  app.use('/:sessionId/*', sessionAccessGuard);
 
   app.post('/:sessionId/clear', auth.requireAuth, async (c) => {
     const remoteClient = resolveClient();

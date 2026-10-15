@@ -251,6 +251,24 @@ export const projectAttachTool: ToolDefinition = {
       return { content: sm('project.not_found', { id: params.projectId }), isError: true, metadata: { i18n: i18nMeta('project.not_found', { id: params.projectId }) } };
     }
 
+    // Безопасность (ADR-075/D5): привязка сессии к чужому проекту выдаёт агенту его
+    // workspace — чтение/запись файлов. Проверяем права на целевой проект тем же
+    // механизмом, что и запись проектных данных (`canEditProject`: owner/EDITOR;
+    // глобальные роли LEAD/ADMIN в core недоступны — известное ограничение core).
+    let session: Session | null = null;
+    try {
+      session = await extra.sessionManager.getSession(extra.sessionId);
+    } catch {
+      return { content: sm('project.session_read_error'), isError: true };
+    }
+    if (!canEditProject(session, project)) {
+      return {
+        content: sm('project.write_forbidden'),
+        isError: true,
+        metadata: { i18n: i18nMeta('project.write_forbidden') },
+      };
+    }
+
     await attachSessionToProject(
       extra.sessionManager,
       extra.projectStore,

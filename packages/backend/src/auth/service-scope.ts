@@ -1,6 +1,6 @@
 import { createMiddleware } from 'hono/factory';
-import { requireScope, checkProjectAccess } from '@itphx/synth-core';
-import type { ProjectGuard, ScopeGuardFactory } from '@itphx/synth-core';
+import { requireScope, checkServiceProjectProjection } from '@itphx/synth-core';
+import type { ServiceProjectProjectionGuard, ScopeGuardFactory } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 
 /**
@@ -33,9 +33,13 @@ export const scopeGuard: ScopeGuardFactory = (...required: string[]) => {
   });
 };
 
-/** Гейт проектной проекции: делегирует core-`checkProjectAccess`, переводит 403. */
-export const projectGuard: ProjectGuard = (c, projectId) => {
-  const denied = checkProjectAccess(c, projectId);
+/**
+ * Гейт **проектной проекции service-key**: делегирует core-
+ * `checkServiceProjectProjection`, переводит 403. Это не проверка прав
+ * пользователя (RBAC): для интерактивных кред — no-op.
+ */
+export const serviceProjectProjection: ServiceProjectProjectionGuard = (c, projectId) => {
+  const denied = checkServiceProjectProjection(c, projectId);
   if (!denied) return undefined;
   return c.json(
     {

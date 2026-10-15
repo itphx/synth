@@ -69,7 +69,7 @@ afterEach(async () => {
 describe('scope-API скиллов (ADR-046 §4.5)', () => {
   it('sessions: GET effective + PUT toggle', async () => {
     const app = makeApp();
-    const session = await sessionManager.createSession({ engine: 'synth' });
+    const session = await sessionManager.createSession({});
     const get = await app.request(`/api/v2/sessions/${session.id}/skills`);
     expect(get.status).toBe(200);
     const body: any = await get.json();
@@ -96,7 +96,7 @@ describe('scope-API скиллов (ADR-046 §4.5)', () => {
 
   it('sessions: settings.permission = {} не роняет GET → 200', async () => {
     const app = makeApp();
-    const session = await sessionManager.createSession({ engine: 'synth' });
+    const session = await sessionManager.createSession({});
     // Пустой permission без `rules` — как его может записать автосейв UI.
     session.settings.permission = {} as never;
     await sessionManager.updateSession(session);
@@ -137,7 +137,7 @@ describe('scope-API скиллов (ADR-046 §4.5)', () => {
       },
       permissionConfig: { rules: { skill: { denied: 'deny' } }, askTimeoutMs: 30_000 },
     });
-    const session = await sessionManager.createSession({ engine: 'synth' });
+    const session = await sessionManager.createSession({});
     const body: any = await (await app.request(`/api/v2/sessions/${session.id}/skills`)).json();
     const names = body.skills.map((s: any) => s.name);
     expect(names).toContain('allowed');
@@ -171,7 +171,7 @@ describe('scope-API — контроль доступа (IDOR)', () => {
   it('чужой пользователь: GET + /effective + PUT → 403, мутации нет', async () => {
     const user = 'bob';
     const app = makeApp(undefined, accessOpts(() => user));
-    const session = await sessionManager.createSession({ engine: 'synth', ownerId: 'alice', userId: 'alice' });
+    const session = await sessionManager.createSession({ ownerId: 'alice', userId: 'alice' });
 
     expect((await app.request(`/api/v2/sessions/${session.id}/skills`)).status).toBe(403);
     expect((await app.request(`/api/v2/sessions/${session.id}/skills/effective`)).status).toBe(403);
@@ -185,7 +185,7 @@ describe('scope-API — контроль доступа (IDOR)', () => {
   it('владелец и admin: GET/PUT → 200', async () => {
     let user = 'alice';
     const app = makeApp(undefined, accessOpts(() => user));
-    const session = await sessionManager.createSession({ engine: 'synth', ownerId: 'alice', userId: 'alice' });
+    const session = await sessionManager.createSession({ ownerId: 'alice', userId: 'alice' });
 
     expect((await app.request(`/api/v2/sessions/${session.id}/skills`)).status).toBe(200);
     const put = await json(app, `/api/v2/sessions/${session.id}/skills`, { name: 'own', enabled: true }, 'PUT');

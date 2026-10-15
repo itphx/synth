@@ -8,8 +8,8 @@ import type { JobStore } from '../../storage/job-store.js';
 import type { SchedulerService } from '../../engine/scheduler/scheduler.js';
 import { isValidCron } from '../../engine/scheduler/cron.js';
 import { parseDurationMs } from '../../engine/scheduler/duration.js';
-import { requireScope, checkProjectAccess } from '../service-scope.js';
-import type { ScopeGuardFactory, ProjectGuard } from '../service-scope.js';
+import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
+import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 
 /**
  * ADR-051 (минимальный срез) / ADR-089: маршруты управления расписаниями
@@ -52,9 +52,11 @@ export interface SchedulerRoutesOptions {
    */
   scopeGuard?: ScopeGuardFactory;
   /**
-   * ADR-052 (этап I): гейт проектной проекции. По умолчанию — `checkProjectAccess`.
+   * ADR-052 (этап I): гейт **проектной проекции service-key**. По умолчанию —
+   * `checkServiceProjectProjection` (нет service-key/`allowedProjects` → пропускает).
+   * Это не RBAC.
    */
-  projectGuard?: ProjectGuard;
+  serviceProjectProjection?: ServiceProjectProjectionGuard;
   /**
    * ADR-052: резолвер `sessionId` → `projectId` цели расписания (`bound`/`queue`).
    * Проект `ephemeral`-цели берётся из `target.project`. Не задан — проектный
@@ -102,7 +104,7 @@ export function createSchedulerRoutes(
   const runGuard: Middleware = opts.runGuard ?? writeGuard;
   // ADR-052 (этап I): scope-гейты service-key и проектная проекция цели.
   const scoped = opts.scopeGuard ?? requireScope;
-  const projectGuard = opts.projectGuard ?? checkProjectAccess;
+  const serviceProjectProjection = opts.serviceProjectProjection ?? checkServiceProjectProjection;
 
   /** projectId цели расписания (ephemeral — сам target, bound/queue — сессия). */
   const projectForTarget = async (
@@ -144,7 +146,7 @@ export function createSchedulerRoutes(
     if (triggerError) return invalid(c, triggerError);
 
     // ADR-052: проектная проекция — цель расписания адресует проект/сессию.
-    const denied = projectGuard(c, await projectForTarget(parsed.data.target));
+    const denied = serviceProjectProjection(c, await projectForTarget(parsed.data.target));
     if (denied) return denied;
 
     const created = await deps.scheduleStore.create(parsed.data);
@@ -170,7 +172,7 @@ export function createSchedulerRoutes(
     if (triggerError) return invalid(c, triggerError);
 
     // ADR-052: проектная проекция — цель расписания адресует проект/сессию.
-    const denied = projectGuard(c, await projectForTarget(parsed.data.target));
+    const denied = serviceProjectProjection(c, await projectForTarget(parsed.data.target));
     if (denied) return denied;
 
     const updated = await deps.scheduleStore.update(id, parsed.data);
@@ -209,7 +211,7 @@ export function createSchedulerRoutes(
     // ADR-052: проектная проекция — цель существующего расписания.
     const existing = await deps.scheduleStore.get(id);
     if (!existing) return notFound(c);
-    const denied = projectGuard(c, await projectForTarget(existing.target));
+    const denied = serviceProjectProjection(c, await projectForTarget(existing.target));
     if (denied) return denied;
 
     const schedule = await deps.scheduler.runNow(id);

@@ -26,9 +26,21 @@ function makeMessage(content = 'Привет'): Message {
 }
 
 function createMockKit() {
+  const user = {
+    id: 'test-user',
+    username: 'test-user',
+    roles: ['USER'],
+    preferredLanguage: 'ru',
+    createdAt: '',
+    teamRole: 'USER',
+    notes: '',
+    interviewCompleted: false,
+  };
   return {
     requireAuth: async (_c: Context, next: Next) => { await next(); },
-    getCurrentUser: () => null,
+    getCurrentUser: () => user,
+    isAdmin: () => false,
+    hasRole: () => false,
   };
 }
 
@@ -61,7 +73,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
 
   it('DELETE перенумеровывает seq удалённых сообщений (core-поведение)', async () => {
     const { app, sessionManager } = createTestApp(tmpDir, null);
-    const session = await sessionManager.createSession({ title: 'M' });
+    const session = await sessionManager.createSession({ title: 'M', userId: 'test-user' });
     await sessionManager.addMessage(session.id, makeMessage('a'));
     await sessionManager.addMessage(session.id, makeMessage('b'));
     await sessionManager.addMessage(session.id, makeMessage('c'));
@@ -76,7 +88,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
 
   it('404 при неверном индексе — локализованное ru-сообщение', async () => {
     const { app, sessionManager } = createTestApp(tmpDir, null);
-    const session = await sessionManager.createSession({ title: 'M' });
+    const session = await sessionManager.createSession({ title: 'M', userId: 'test-user' });
     await sessionManager.addMessage(session.id, makeMessage('a'));
 
     const res = await app.request(`/api/v2/messages/${session.id}/5/pin`, { method: 'PATCH' });
@@ -91,7 +103,7 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
       shouldSummarize: vi.fn().mockReturnValue({ triggered: false }),
     };
     const { app, sessionManager, eventBus } = createTestApp(tmpDir, contextOptimizer);
-    const session = await sessionManager.createSession({ title: 'M' });
+    const session = await sessionManager.createSession({ title: 'M', userId: 'test-user' });
     await sessionManager.addMessage(session.id, makeMessage('a'));
 
     const events: any[] = [];
@@ -104,5 +116,39 @@ describe('Messages API Routes (core-фабрика через backend-обёрт
     const s = await sessionManager.getSession(session.id);
     expect(s!.canSummarize).toBe(true);
     expect(events.some((e) => e.type === 'session.updated')).toBe(true);
+  });
+
+  it('чужой USER → 403 (guard доступа к сессии в backend-обёртке)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, null);
+    const session = await sessionManager.createSession({ title: 'Foreign', userId: 'owner' });
+
+    const res = await app.request(`/api/v2/messages/${session.id}/0/pin`, { method: 'PATCH' });
+    expect(res.status).toBe(403);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('POST /:sessionId/batch с пустым телом → 400 (не 500)', async () => {
+    const { app, sessionManager } = createTestApp(tmpDir, null);
+    const session = await sessionManager.createSession({ title: 'M', userId: 'test-user' });
+
+    const res = await app.request(`/api/v2/messages/${session.id}/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('INVALID_ACTION');
+  });
+
+  it('managed (нет getRemoteClient): remote:<id> → 404, а не 502', async () => {
+    const { app } = createTestApp(tmpDir, null);
+    const res = await app.request('/api/v2/messages/remote:abc/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'pin', indices: [0] }),
+    });
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
   });
 });
