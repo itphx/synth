@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { ContextFileInfo, ContextFileContent, ContextCategory } from '@itphx/synth-shared';
 import { atomicWrite } from '@itphx/synth-shared';
 import { info, warning } from '../../logger.js';
+import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -50,7 +51,7 @@ interface ContextConfigOptions {
   systemPromptsDir?: string;
 }
 
-export class ContextConfig {
+export class ContextConfig implements ContextFileRepository {
   readonly systemPromptsDir: string;
   readonly userPromptsDir: string;
   readonly userRolesDir: string;

@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { EventBindingApiKey, EventBindingApiKeyCreated } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
 import type { EventKeyCredential } from '../engine/events/credential.js';
+import type { EventApiKeyRepository } from './ports/event-api-key-repository.js';
 
 /** ADR-089/ADR-052: версия схемы файла API-ключей привязок (для миграции PROP-032). */
 export const EVENT_API_KEYS_SCHEMA_VERSION = 1;
@@ -85,7 +86,7 @@ function hashSecret(secret: string): string {
  * `sha256`-хеш; секрет возвращается единственный раз в `create`. Модель PG-ready
  * (PROP-032): плоские записи со стабильным `id` и `schemaVersion`.
  */
-export class EventApiKeyStore {
+export class EventApiKeyStore implements EventApiKeyRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: EventApiKeyStoreConfig) {}

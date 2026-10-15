@@ -11,6 +11,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite } from '@itphx/synth-shared';
 import { warning } from '../../logger.js';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 
 const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -59,7 +60,7 @@ export interface StoredDictionary {
 /** Имя пользовательского файла tools (безъязыковой, для категории coding). */
 const TOOLS_FILE = 'coding.tools.yaml';
 
-export class DictionaryStore {
+export class DictionaryStore implements DictionaryRepository {
   readonly systemDir: string;
   readonly userDir: string;
 

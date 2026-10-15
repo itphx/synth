@@ -4,6 +4,7 @@ import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
 import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
+import type { SettingsRepository } from './ports/settings-repository.js';
 
 /** Runtime-настройки LLM Gateway, сохраняемые через UI (раздел «Шлюз безопасности»). */
 export interface LlmGatewayRuntimeSettings {
@@ -235,7 +236,7 @@ export function mergeDecisionConfig(
  * сервера: при старте `createStandaloneApp` читает workspace отсюда и
  * применяет в приоритете над config.yaml.
  */
-export class RuntimeSettingsStore {
+export class RuntimeSettingsStore implements SettingsRepository {
   private _locks = new Map<string, AsyncLock>();
 
   constructor(private _opts: { dataDir: string }) {}

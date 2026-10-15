@@ -131,6 +131,42 @@ export type {
 export { FileProfileStore } from './storage/profile-store.js';
 export { JsonStore } from './storage/json-store.js';
 export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
+// PROP-032 (W2.1): доменные порты слоя хранения + файловая реализация BlobStore.
+export { FileBlobStore } from './storage/file-blob-store.js';
+export type { FileBlobStoreConfig } from './storage/file-blob-store.js';
+export type {
+  SessionRepository,
+  SessionFilter,
+  ProjectRepository,
+  CreateProjectData,
+  ProfileRepository,
+  SettingsRepository,
+  McpRegistryRepository,
+  McpRegistryManagerMaps,
+  ServiceKeyRepository,
+  ServiceKeyResolution,
+  EventApiKeyRepository,
+  EventApiKeyResolution,
+  EventBindingRepository,
+  EventRouteRepository,
+  EventJournalRepository,
+  IdentityClaimRepository,
+  WebhookRepository,
+  WebhookDeliveryRepository,
+  ScheduleRepository,
+  JobRepository,
+  DedupRepository,
+  SecretPatternRepository,
+  ProtectedPathsRepository,
+  SkillRepository,
+  SkillBundleRepository,
+  DictionaryRepository,
+  ContextFileRepository,
+  SSHKeyRepository,
+  BlobStore,
+  DefaultsRepository,
+  AppearanceDefaults,
+} from './storage/ports/index.js';
 // ADR-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
 export * as crypto from './security/crypto.js';
 export {

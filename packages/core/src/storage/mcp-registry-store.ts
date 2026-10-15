@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { McpServerConfig, McpRegistryEntry, McpRegistryAuthor, McpRegistryOrigin, McpRegistryTrust } from '@itphx/synth-shared';
 import { MCP_REGISTRY_SCHEMA_VERSION, generateId, nowISO, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
+import type { McpRegistryRepository } from './ports/mcp-registry-repository.js';
 
 export interface McpRegistryStoreConfig {
   dataDir: string;
@@ -47,7 +48,7 @@ interface RegistryFile {
  * Instance-серверы из `config.mcp.servers` подтягиваются в реестр при старте
  * (`seedFromConfig`) — без дублирования по имени.
  */
-export class McpRegistryStore {
+export class McpRegistryStore implements McpRegistryRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: McpRegistryStoreConfig) {}

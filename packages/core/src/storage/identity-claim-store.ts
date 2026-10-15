@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { randomInt } from 'node:crypto';
 import { AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
+import type { IdentityClaimRepository } from './ports/identity-claim-repository.js';
 
 /** ADR-089 (claim-flow): версия схемы файла claim-кодов (для будущей миграции PROP-032). */
 export const IDENTITY_CLAIMS_SCHEMA_VERSION = 1;
@@ -66,7 +67,7 @@ interface ClaimsFile {
  * записи, а не из тела запроса на подтверждение, — подставить чужой id нельзя.
  * Код одноразовый: `consume` помечает `consumedAt` и повторно не срабатывает.
  */
-export class IdentityClaimStore {
+export class IdentityClaimStore implements IdentityClaimRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: IdentityClaimStoreConfig) {}

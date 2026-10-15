@@ -8,6 +8,7 @@ import {
   AsyncLock,
   atomicWrite,
 } from '@itphx/synth-shared';
+import type { SkillRepository } from './ports/skill-repository.js';
 
 export interface SkillStoreConfig {
   dataDir: string;
@@ -32,7 +33,7 @@ export interface UpdateSkillMarkdownInput {
  * (`SKILL.md` + supporting-файлы). Запись — атомарная (tmp → rename, ADR-005),
  * образец — `McpRegistryStore` (`AsyncLock` + `atomicWrite`).
  */
-export class SkillStore {
+export class SkillStore implements SkillRepository {
   private readonly _lock = new AsyncLock();
 
   constructor(private readonly _config: SkillStoreConfig) {}

@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import type { Schedule, ScheduleInput, ScheduleRunStatus } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itphx/synth-shared';
 import { FileMutex } from './file-mutex.js';
+import type { ScheduleRepository } from './ports/schedule-repository.js';
 
 /** ADR-051: версия схемы файла расписаний — для будущей миграции (PROP-032). */
 export const SCHEDULES_SCHEMA_VERSION = 1;
@@ -48,7 +49,7 @@ function isSchedule(value: unknown): value is Schedule {
  * запись tmp→rename). Модель PG-ready (PROP-032): плоские записи со стабильным
  * `id` и `schemaVersion`.
  */
-export class ScheduleStore {
+export class ScheduleStore implements ScheduleRepository {
   private _lock = new AsyncLock();
   private _mutex?: FileMutex;
 

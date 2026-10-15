@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import type { SkillBundle } from '@itphx/synth-shared';
 import { SKILL_NAME_REGEX, SKILL_NAME_MAX, AsyncLock, atomicWrite, stringifyFrontmatter } from '@itphx/synth-shared';
 import { parseBundleFile } from '../engine/commands/bundles.js';
+import type { SkillBundleRepository } from './ports/skill-bundle-repository.js';
 
 export interface SkillBundleStoreConfig {
   dataDir: string;
@@ -14,7 +15,7 @@ export interface SkillBundleStoreConfig {
  * ADR-046 §7.3/§8.3: instance-хранилище bundles (`{dataDir}/{bundlesPath}/<name>.yaml`).
  * Запись — атомарная (tmp → rename, ADR-005), образец — `SkillStore`.
  */
-export class SkillBundleStore {
+export class SkillBundleStore implements SkillBundleRepository {
   private readonly _lock = new AsyncLock();
 
   constructor(private readonly _config: SkillBundleStoreConfig) {}

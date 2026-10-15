@@ -1,7 +1,8 @@
 import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { Project, GitRepoConfig, ProjectMcpSettings, ProjectSkillSettings } from '@itphx/synth-shared';
+import type { Project } from '@itphx/synth-shared';
 import { ProjectRole, generateId, nowISO, AsyncLock, atomicWrite, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
+import type { CreateProjectData, ProjectRepository } from './ports/project-repository.js';
 
 export interface ProjectStoreConfig {
   dataDir: string;
@@ -11,12 +12,11 @@ export interface ProjectStoreConfig {
  * Структурный контракт хранилища проектов. Нужен, чтобы core-фабрики роутов можно
  * было переиспользовать в backend с его собственным `ProjectStore` (у классов есть
  * приватные поля, поэтому напрямую типы не совместимы, а публичный API — общий).
+ * Алиас на доменный порт: только операция загрузки.
  */
-export interface ProjectStoreLike {
-  load(id: string): Promise<Project | null>;
-}
+export type ProjectStoreLike = Pick<ProjectRepository, 'load'>;
 
-export class ProjectStore {
+export class ProjectStore implements ProjectRepository {
   private _lock = new AsyncLock();
 
   constructor(private config: ProjectStoreConfig) {}
@@ -97,7 +97,7 @@ export class ProjectStore {
     );
   }
 
-  create(name: string, ownerId: string, data?: { description?: string; icon?: string; color?: string; workspace?: string; repos?: GitRepoConfig[]; mcp?: ProjectMcpSettings; skills?: ProjectSkillSettings }): Project {
+  create(name: string, ownerId: string, data?: CreateProjectData): Project {
     const project: Project = {
       id: generateId(),
       name,
@@ -136,6 +136,6 @@ export class ProjectStore {
 /**
  * Структурный контракт полного хранилища проектов (чтение + запись) — для тулов
  * и provisioning, которым нужны `save`/`create`/`list`, а не только `load`.
- * Не привязан к классу (у него приватные поля), совместим с реализациями других пакетов.
+ * Алиас на доменный порт (без `delete`).
  */
-export type ProjectStoreContract = Pick<ProjectStore, 'load' | 'save' | 'create' | 'list'>;
+export type ProjectStoreContract = Pick<ProjectRepository, 'load' | 'save' | 'create' | 'list'>;

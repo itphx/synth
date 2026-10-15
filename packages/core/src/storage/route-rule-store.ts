@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { EventRouteRule } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
+import type { EventRouteRepository } from './ports/event-route-repository.js';
 
 /** Версия схемы файла правил маршрутизации — для будущей миграции (PROP-032). */
 export const ROUTE_RULES_SCHEMA_VERSION = 1;
@@ -38,7 +39,7 @@ function isRouteRule(value: unknown): value is EventRouteRule {
  * запись tmp→rename). Модель PG-ready (PROP-032): плоские записи со стабильным
  * `id` и `schemaVersion`.
  */
-export class RouteRuleStore {
+export class RouteRuleStore implements EventRouteRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: RouteRuleStoreConfig) {}

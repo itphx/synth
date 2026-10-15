@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { EventBinding } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
+import type { EventBindingRepository } from './ports/event-binding-repository.js';
 
 /** Версия схемы файла биндингов — для будущей миграции (PROP-032). */
 export const EVENT_BINDINGS_SCHEMA_VERSION = 1;
@@ -25,7 +26,7 @@ interface BindingsFile {
  * атомарная запись tmp→rename). Модель PG-ready (PROP-032): плоские записи со
  * стабильным `id` и `schemaVersion`.
  */
-export class EventBindingStore {
+export class EventBindingStore implements EventBindingRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: EventBindingStoreConfig) {}

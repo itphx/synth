@@ -3,13 +3,12 @@ import { getForkedTitle, MessageRole } from '@itphx/synth-shared';
 import { nowISO, generateId, makeTextPart, makePart } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { FileStore } from '../storage/file-store.js';
+import type { ProjectRepository } from '../storage/ports/project-repository.js';
 import type { HookBus } from '../engine/hooks/hook-bus.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
 
 /** Структурный контракт загрузки проекта (для снапшотов скоупа). */
-export interface SessionProjectStoreLike {
-  load(id: string): Promise<Project | null>;
-}
+export type SessionProjectStoreLike = Pick<ProjectRepository, 'load'>;
 
 export interface SessionManagerOptions {
   /** Поставщик глобальных настроек доступности MCP-серверов (runtime settings). */

@@ -10,6 +10,7 @@ import type {
 import { WEBHOOK_SECRET_PREFIX } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itphx/synth-shared';
 import { decryptSecret, encryptSecret, isEncrypted, resolveMasterKey } from '../security/crypto.js';
+import type { WebhookRepository } from './ports/webhook-repository.js';
 
 /** ADR-052 (этап II): версия схемы файла подписок webhooks (для будущей миграции PROP-032). */
 export const WEBHOOKS_SCHEMA_VERSION = 1;
@@ -58,7 +59,7 @@ interface WebhooksFile {
  * единственный раз при создании/ротации. Модель PG-ready (PROP-032): плоские
  * записи со стабильным `id` и `schemaVersion`.
  */
-export class WebhookStore {
+export class WebhookStore implements WebhookRepository {
   private _lock = new AsyncLock();
   private _masterKeyPromise?: Promise<Buffer>;
 

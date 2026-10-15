@@ -2,6 +2,7 @@ import { appendFile, readFile, writeFile, rename, mkdir } from 'node:fs/promises
 import { join, dirname } from 'node:path';
 import type { ScheduleJob } from '@itphx/synth-shared';
 import { AsyncLock, atomicWrite } from '@itphx/synth-shared';
+import type { JobRepository } from './ports/job-repository.js';
 
 export interface JobStoreConfig {
   dataDir: string;
@@ -23,7 +24,7 @@ export interface JobListOptions {
  * (атомарная перезапись tmp→rename, ADR-005); `id` формирует вызывающий
  * (`job_<uuid>`).
  */
-export class JobStore {
+export class JobStore implements JobRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: JobStoreConfig) {}

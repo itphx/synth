@@ -1,6 +1,7 @@
 import { mkdir, open } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import type { DedupRepository } from '../../storage/ports/dedup-repository.js';
 
 /**
  * ADR-051/ADR-089: источник дедупа событий по стабильному `dedupKey`.
@@ -8,19 +9,17 @@ import { join } from 'node:path';
  * `EventRouter` не решает сам, что считать дубликатом, а спрашивает у store.
  * Атомарность `tryClaim` — контракт реализации: два конкурентных вызова с одним
  * ключом должны вернуть `true` ровно один раз, даже между процессами.
+ *
+ * Порт — `DedupRepository` (`storage/ports`); `DedupStore` оставлен алиасом
+ * для публичного API.
  */
-export interface DedupStore {
-  /** Атомарный claim ключа: true — ключ наш (впервые), false — уже занят. */
-  tryClaim(key: string): Promise<boolean>;
-  /** Предзаполнить кэш ключами (например, из журнала при старте). */
-  seed(keys: Iterable<string>): void;
-}
+export type DedupStore = DedupRepository;
 
 /**
  * In-process реализация дедупа (текущее поведение ADR-089): `Set` ключей.
  * Дефолт: single-process, межпроцессной атомарности нет.
  */
-export class MemoryDedupStore implements DedupStore {
+export class MemoryDedupStore implements DedupRepository {
   private _seen = new Set<string>();
 
   seed(keys: Iterable<string>): void {
@@ -46,7 +45,7 @@ export interface FileDedupStoreConfig {
  * считаем ключ нашим (`true`) — лучше не потерять событие, чем отбросить его.
  * `seed` — no-op: маркеры персистентны, отдельный кэш не нужен.
  */
-export class FileDedupStore implements DedupStore {
+export class FileDedupStore implements DedupRepository {
   private _dir: string;
   private _ensured?: Promise<void>;
 

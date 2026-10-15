@@ -2,6 +2,7 @@ import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'nod
 import { join, dirname } from 'node:path';
 import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference, PromptState, PromptMeta } from '@itphx/synth-shared';
 import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
+import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
 
 export interface StorageConfig {
   dataDir: string;
@@ -400,7 +401,7 @@ function deserializeSession(data: SerializedSession): Session {
   };
 }
 
-export class FileStore {
+export class FileStore implements SessionRepository {
   private _sessionLocks = new Map<string, AsyncLock>();
 
   constructor(private config: StorageConfig) {}
@@ -465,7 +466,7 @@ export class FileStore {
     }
   }
 
-  async list(filter?: { projectId?: string; userId?: string; search?: string; parentId?: string }): Promise<Session[]> {
+  async list(filter?: SessionFilter): Promise<Session[]> {
     const dir = this._sessionsDir();
     let files: string[];
     try {
@@ -508,6 +509,15 @@ export class FileStore {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Поиск сессий по содержимому (заголовок + сообщения) — доменный метод порта
+   * `SessionRepository` (для SQL-бэкенда PROP-032: полнотекстовый поиск). Файловая
+   * реализация делегирует сканирующему `list`.
+   */
+  async search(query: string, filter?: SessionFilter): Promise<Session[]> {
+    return this.list({ ...filter, search: query });
   }
 
   async listForUser(userId: string, ownerIds: string[] = []): Promise<Session[]> {

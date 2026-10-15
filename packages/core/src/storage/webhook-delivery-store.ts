@@ -2,6 +2,7 @@ import { appendFile, readFile, writeFile, rename, mkdir } from 'node:fs/promises
 import { join, dirname } from 'node:path';
 import type { WebhookDelivery } from '@itphx/synth-shared';
 import { AsyncLock, atomicWrite } from '@itphx/synth-shared';
+import type { WebhookDeliveryRepository } from './ports/webhook-delivery-repository.js';
 
 export interface WebhookDeliveryStoreConfig {
   dataDir: string;
@@ -14,7 +15,7 @@ export interface WebhookDeliveryStoreConfig {
  * `EventJournalStore`). Append защищён общим `AsyncLock`; `prune` — атомарная
  * перезапись (tmp→rename, ADR-005).
  */
-export class WebhookDeliveryStore {
+export class WebhookDeliveryStore implements WebhookDeliveryRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: WebhookDeliveryStoreConfig) {}

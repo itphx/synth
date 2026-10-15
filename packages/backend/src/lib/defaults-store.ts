@@ -1,14 +1,11 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
+import type { AppearanceDefaults, DefaultsRepository } from '@itphx/synth-core';
 
-export interface AppearanceDefaults {
-  locale?: 'ru' | 'en';
-  themeMode?: 'system' | 'light' | 'dark';
-  theme?: string;
-  uiScaleMobile?: number;
-  uiScaleDesktop?: number;
-}
+// Тип умолчаний оформления перенесён в порт core (`storage/ports/defaults-repository`);
+// реэкспорт сохранён для обратной совместимости (`../lib/defaults-store.js`).
+export type { AppearanceDefaults };
 
 export const UI_SCALE_MIN = 0.5;
 export const UI_SCALE_MAX = 1.2;
@@ -67,7 +64,7 @@ function sanitize(raw: unknown): AppearanceDefaults {
  * Хранятся одним JSON-файлом `{dataDir}/defaults.json`. Запись атомарная:
  * временный файл `.tmp.{uuid}` → `rename()`. Значения переживают рестарт.
  */
-export class DefaultsStore {
+export class DefaultsStore implements DefaultsRepository {
   private _lock = new AsyncLock();
 
   constructor(private _opts: { dataDir: string }) {}

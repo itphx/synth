@@ -2,8 +2,9 @@ import { readFile, writeFile, rename, mkdir, unlink, readdir } from 'node:fs/pro
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ProfileData, ExternalIdentity } from '@itphx/synth-shared';
-import type { ProfileStore, CreateProfileParams } from '@itphx/synth-shared';
+import type { CreateProfileParams } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
+import type { ProfileRepository } from './ports/profile-repository.js';
 import { info, warning } from '../logger.js';
 
 /** ADR-089: сериализация внешней идентичности профиля (snake_case, как остальной JSON). */
@@ -36,7 +37,7 @@ interface SerializedProfile {
   last_login?: string;
 }
 
-export class FileProfileStore implements ProfileStore {
+export class FileProfileStore implements ProfileRepository {
   private readonly _profilesDir: string;
 
   constructor(options: { dataDir: string }) {

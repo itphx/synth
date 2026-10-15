@@ -5,6 +5,7 @@ import { GlobalRole } from '@itphx/synth-shared';
 import type { ServiceApiKey, ServiceApiKeyCreated } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse } from '@itphx/synth-shared';
 import type { CreateServiceApiKeyInput, UpdateServiceApiKeyPatch } from '@itphx/synth-shared';
+import type { ServiceKeyRepository } from './ports/service-key-repository.js';
 import { info, warning } from '../logger.js';
 
 /** ADR-052 (этап I): версия схемы файла service-key (для будущей миграции PROP-032). */
@@ -104,7 +105,7 @@ export type ServiceKeyEnsureStatus = 'created' | 'updated' | 'unchanged';
  * секрет возвращается единственный раз в `create`. Модель PG-ready (PROP-032):
  * плоские записи со стабильным `id` и `schemaVersion`.
  */
-export class ServiceApiKeyStore {
+export class ServiceApiKeyStore implements ServiceKeyRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: ServiceApiKeyStoreConfig) {}

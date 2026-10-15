@@ -19,6 +19,7 @@ import { atomicWrite } from '@itphx/synth-shared';
 
 import { info, warning } from '../../logger.js';
 import { DEFAULT_PATTERNS } from './secret-detector.js';
+import type { SecretPatternRepository } from '../../storage/ports/secret-pattern-repository.js';
 
 /** Сериализуемый паттерн детекции: regex — строка (source), компилируется с флагом 'g'. */
 export interface SecretPattern {
@@ -59,7 +60,7 @@ function _isValidPattern(p: unknown): p is SecretPattern {
   }
 }
 
-export class SecretPatternStore {
+export class SecretPatternStore implements SecretPatternRepository {
   readonly overridePath: string;
   private readonly _defaultPatterns: SecretPattern[];
 

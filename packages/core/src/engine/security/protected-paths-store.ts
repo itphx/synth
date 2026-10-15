@@ -29,6 +29,7 @@ import {
   packageDirectoryForDefinitions,
 } from './protected-paths.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from './protected-paths.js';
+import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 
 export interface ProtectedPathsStoreOptions {
   dataDir: string;
@@ -62,7 +63,7 @@ function _isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
-export class ProtectedPathsStore {
+export class ProtectedPathsStore implements ProtectedPathsRepository {
   readonly overridePath: string;
   private readonly _systemDir: string;
   private readonly _legacyPath: string;

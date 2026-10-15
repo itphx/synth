@@ -2,6 +2,7 @@ import { appendFile, readFile, writeFile, rename, mkdir } from 'node:fs/promises
 import { join, dirname } from 'node:path';
 import type { SynthEvent, RouteDecision } from '@itphx/synth-shared';
 import { AsyncLock, atomicWrite } from '@itphx/synth-shared';
+import type { EventJournalRepository } from './ports/event-journal-repository.js';
 
 /** ADR-089: запись журнала обработки внешнего события (локальный тип core). */
 export interface EventJournalEntry {
@@ -30,7 +31,7 @@ export interface EventJournalStoreConfig {
  * общим `AsyncLock`, чтобы конкурирующие `record` не перемешивали строки.
  * Формат `prune` — атомарная перезапись (tmp→rename, ADR-005).
  */
-export class EventJournalStore {
+export class EventJournalStore implements EventJournalRepository {
   private _lock = new AsyncLock();
 
   constructor(private _config: EventJournalStoreConfig) {}
