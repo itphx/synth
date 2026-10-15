@@ -260,7 +260,8 @@ jobs:
         run: bash scripts/wait-npm-version.sh "${{ steps.docker_tags.outputs.version }}"
 
       # Авторизация сразу в двух реестрах: gitverse.ru (как раньше) и ghcr.io
-      # (базовый образ synth зеркалируется в GitHub Container Registry).
+      # (все три базовых образа — synth/synth-backend/synth-ui — зеркалируются
+      # в GitHub Container Registry).
       # Пользователь для ghcr.io — владелец токена GH_TOKEN; переопределяется
       # необязательным секретом GHCR_USER (по умолчанию владелец репозитория).
       - name: Авторизация для Docker Registry (gitverse.ru + ghcr.io)
@@ -287,11 +288,11 @@ jobs:
           GV_TOKEN: ${{ secrets.GV_TOKEN }}
         run: node scripts/docker-cleanup.mjs synth synth-backend synth-ui
 
-      # Политика образов: базовый (standalone) образ `synth` публикуется в ДВА
-      # реестра — gitverse.ru (основной) и ghcr.io (зеркало GitHub-контура).
-      # Дополнительные образы (synth-backend/synth-ui) в GHCR НЕ публикуются:
-      # лимит размера артефактов ~500 МБ; когда появится соответствующая фича,
-      # они пойдут только в Docker Hub. Только версионный тег, без `latest`.
+      # Политика образов: все три БАЗОВЫХ образа (synth, synth-backend, synth-ui)
+      # публикуются в ДВА реестра — gitverse.ru (основной) и ghcr.io (зеркало
+      # GitHub-контура). Будущие дополнительные/full-образы (flavor-образы из
+      # PROP-082: dev/devops/browser/full и т.п.) пойдут ТОЛЬКО в Docker Hub —
+      # лимит размера артефактов GHCR ~500 МБ. Только версионный тег, без `latest`.
       - name: Сборка и публикация Docker образа synth (kaniko → gitverse.ru + ghcr.io)
         uses: docker://gcr.io/kaniko-project/executor:v1.24.0
         env:
@@ -317,6 +318,7 @@ jobs:
             --dockerfile=docker/Dockerfile.backend
             --build-arg=SYNTH_BACKEND_VERSION=${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth-backend:${{ steps.docker_tags.outputs.version }}
+            --destination=ghcr.io/itphx/synth-backend:${{ steps.docker_tags.outputs.version }}
             --snapshot-mode=redo
             --push-retry=3
             --verbosity=info
@@ -331,6 +333,7 @@ jobs:
             --dockerfile=docker/Dockerfile.ui
             --build-arg=SYNTH_UI_VERSION=${{ steps.docker_tags.outputs.version }}
             --destination=gitverse.ru/itphx/synth-ui:${{ steps.docker_tags.outputs.version }}
+            --destination=ghcr.io/itphx/synth-ui:${{ steps.docker_tags.outputs.version }}
             --snapshot-mode=redo
             --push-retry=3
             --verbosity=info
@@ -443,10 +446,10 @@ jobs:
   # --- GitHub-зеркало: push refs + GitHub Release (без сборки образов) ---
   #
   # GitHub — только ЗЕРКАЛО и релизы. Контейнеры здесь НЕ собираются: единственный
-  # билд-контур — этот CI (kaniko), а базовый образ synth уже зеркалируется в GHCR
-  # шагом выше. GitHub Actions в репозитории не используются вовсе.
+  # билд-контур — этот CI (kaniko), а базовые образы (synth/synth-backend/synth-ui) уже
+  # зеркалируются в GHCR шагом выше. GitHub Actions в репозитории не используются вовсе.
   #
-  # Джоба идёт ПОСЛЕ build-docker (образ в GHCR) и changelog (GitVerse-релиз), без
+  # Джоба идёт ПОСЛЕ build-docker (образы в GHCR) и changelog (GitVerse-релиз), без
   # continue-on-error: npm и Docker к этому моменту уже опубликованы, поэтому
   # падение здесь — сигнал чинить, а не глушить. Она делает три вещи:
   #   1. push зеркала: master→main и все теги (никаких других ветвей);
@@ -525,7 +528,8 @@ jobs:
             printf 'docker run -p 4300:4300 ghcr.io/itphx/synth:%s\n' "${{ steps.gh_version.outputs.version }}"
             printf '```\n\n'
             printf 'The primary image registry is `gitverse.ru/itphx/synth:%s`;\n' "${{ steps.gh_version.outputs.version }}"
-            printf 'the `synth-backend`/`synth-ui` images are published to gitverse.ru only (not to GHCR).\n'
+            printf 'all three base images (`synth`, `synth-backend`, `synth-ui`) are published to\n'
+            printf 'both gitverse.ru and ghcr.io (version tag only).\n'
           } >> tmp/release-body.md
 
           if [ -f packages/synth/dist/cli.js ]; then

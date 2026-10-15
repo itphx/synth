@@ -52,7 +52,7 @@ gitverse.ru/itphx/synth:<version>
 
 Тег `latest` **не публикуется** — в реестре остаются только версионные теги. Причина: квота «Пакеты» в GitVerse считает размер каждой версии без дедупликации — `latest` и версия указывают на один digest, но оплачиваются дважды (лимит 500 МБ на репозиторий). Поэтому `docker pull gitverse.ru/itphx/synth` без тега не работает — указывайте версию.
 
-Дополнительно **базовый образ `synth`** (и только он) зеркалируется в GitHub Container Registry — `ghcr.io/itphx/synth:<version>`; образы `synth-backend`/`synth-ui` в GHCR не публикуются. Политика и причина — в разделе [Релиз в GitHub-зеркале](#релиз-в-github-зеркале).
+Дополнительно **все три базовых образа** (`synth`, `synth-backend`, `synth-ui`) зеркалируются в GitHub Container Registry: `ghcr.io/itphx/synth:<version>`, `ghcr.io/itphx/synth-backend:<version>`, `ghcr.io/itphx/synth-ui:<version>`. Политика — в разделе [Релиз в GitHub-зеркале](#релиз-в-github-зеркале).
 
 ## Helm-чарт
 
@@ -207,7 +207,7 @@ Docker-образы **не** собирает (их собирает CI GitVerse
 
 Ручной `workflow_dispatch` сохранён в `release.yaml` (пункты 1–2) — это единственный способ запустить сборку/публикацию без тега.
 
-Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko → `gitverse.ru/itphx/synth` + `ghcr.io/itphx/synth`) → публикация Helm-чарта (`publish-helm`) → создание GitVerse Release → GitHub-зеркало (`publish-github`: push `main`+теги, GitHub Release).
+Релизный workflow: bump версии (version.ts + package.json + `charts/synth/Chart.yaml`) → CI-проверки → сборка → CHANGELOG → публикация npmjs → публикация GitVerse npm → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → публикация Helm-чарта (`publish-helm`) → создание GitVerse Release → GitHub-зеркало (`publish-github`: push `main`+теги, GitHub Release).
 
 npm-пакеты публикуются **только** из GitVerse (`publish-npmjs`/`publish-gitverse-npm`) — GitHub-контур npm не публикует.
 
@@ -238,7 +238,7 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 |--------|------------|
 | `NPM_TOKEN` | Публикация в npmjs.org |
 | `GV_TOKEN` | Единый токен GitVerse (API, Docker Registry, npm registry, git push от бота) |
-| `GH_TOKEN` | GitHub-зеркало: push refs, GitHub Release, публикация базового образа в GHCR (classic PAT, scope `repo` + `write:packages`) |
+| `GH_TOKEN` | GitHub-зеркало: push refs, GitHub Release, публикация базовых образов в GHCR (classic PAT, scope `repo` + `write:packages`) |
 | `GHCR_USER` | Необязательно: логин владельца `GH_TOKEN` для `ghcr.io` (по умолчанию `itphx`) |
 
 Префикс `GITVERSE_` запрещён в именах секретов GitVerse — использовать `GV_`.
@@ -249,15 +249,15 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 
 ### Политика образов
 
-Из-за лимита размера артефактов (~500 МБ и на GitVerse, и на GitHub) публикуется **только базовый образ `synth`** (standalone):
+Все три **базовых образа** публикуются в оба реестра — `gitverse.ru` (основной) и GitHub Container Registry (`ghcr.io`):
 
 | Образ | `gitverse.ru` | GHCR (`ghcr.io/itphx/…`) | Docker Hub |
 |---|---|---|---|
-| `synth` | ✅ | ✅ (зеркало) | — (позже) |
-| `synth-backend` | ✅ | ❌ | — (позже) |
-| `synth-ui` | ✅ | ❌ | — (позже) |
+| `synth` | ✅ | ✅ (зеркало) | — |
+| `synth-backend` | ✅ | ✅ (зеркало) | — |
+| `synth-ui` | ✅ | ✅ (зеркало) | — |
 
-Дополнительные образы (`synth-backend`/`synth-ui`) в GHCR **не публикуются**; когда появится соответствующая фича (полный образ), они пойдут **только в Docker Hub**. Публикуется только версионный тег (без `latest`) — та же политика, что и в GitVerse-контуре.
+Ограничение по размеру артефактов (~500 МБ) касается не базовых образов, а **будущих дополнительных/full-образов** (flavor-образы из PROP-082: `dev`, `devops`, `browser`, `full` и т.п.) — когда они появятся, они пойдут **только в Docker Hub**. Публикуется только версионный тег (без `latest`) — та же политика, что и в GitVerse-контуре.
 
 ### Что делает CI GitVerse
 
@@ -267,7 +267,7 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 2. **GitHub Release** для тега `v<version>` — тело **на английском**: `bash scripts/changelog.sh --lang en` берёт `docs/releases/<version>.en.md` (при отсутствии — русское описание с предупреждением, затем авто-сборка из коммитов), плюс англоязычный блок установки «Installation» (npm из npmjs.org/GitVerse, образ из `ghcr.io/itphx/synth:<version>`); создание идемпотентно (если релиз по тегу есть — тело обновляется);
 3. **Ассеты — best-effort:** `cli.js` (артефакт джобы `build`), Helm-чарт (`helm package charts/synth`, версия из `Chart.yaml`), `SHA256SUMS`. Если файла нет — печатается предупреждение и работа продолжается; ошибка загрузки ассета **не валит** джобу, но видна в логе. На GitHub используется штатный `uploads.github.com` (в отличие от GitVerse API, который на ассеты отдаёт 500 — там ассет также best-effort).
 
-Базовый образ `synth` собирается в джобе `build-docker` (kaniko) сразу в **два** реестра: `gitverse.ru/itphx/synth:<version>` и `ghcr.io/itphx/synth:<version>`. Авторизация в GHCR — из секрета `GH_TOKEN`.
+Все три базовых образа (`synth`, `synth-backend`, `synth-ui`) собираются в джобе `build-docker` (kaniko) сразу в **два** реестра: `gitverse.ru/itphx/<image>:<version>` и `ghcr.io/itphx/<image>:<version>`. Авторизация в GHCR — из секрета `GH_TOKEN` (переиспользуется всеми тремя kaniko-шагами).
 
 ### Локальный backfill
 
@@ -284,7 +284,7 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 
 ### Почему без GitHub Actions
 
-Осознанное решение: единственный билд-контур — CI GitVerse (kaniko). Дублирование сборки на GitHub ломало бы воспроизводимость (два источника истины для образов/релизов) и упиралось бы в лимиты артефактов. GitHub-контур намеренно тонкий: зеркало кода + релизы + публикация одного базового образа в GHCR.
+Осознанное решение: единственный билд-контур — CI GitVerse (kaniko). Дублирование сборки на GitHub ломало бы воспроизводимость (два источника истины для образов/релизов) и упиралось бы в лимиты артефактов. GitHub-контур намеренно тонкий: зеркало кода + релизы + публикация базовых образов в GHCR.
 
 ### Секреты GitHub-контура
 

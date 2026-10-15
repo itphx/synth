@@ -52,7 +52,7 @@ gitverse.ru/itphx/synth:<version>
 
 The `latest` tag is **not published** — only versioned tags remain in the registry. Reason: the "Packages" quota in GitVerse counts each version's size without dedup — `latest` and the version point to the same digest but are paid for twice (500 MB limit per repository). Therefore `docker pull gitverse.ru/itphx/synth` without a tag does not work — specify the version.
 
-Additionally the **base `synth` image** (and only it) is mirrored to the GitHub Container Registry — `ghcr.io/itphx/synth:<version>`; the `synth-backend`/`synth-ui` images are not published to GHCR. The policy and the reason are in the section [Release to the GitHub mirror](#release-to-the-github-mirror).
+Additionally **all three base images** (`synth`, `synth-backend`, `synth-ui`) are mirrored to the GitHub Container Registry: `ghcr.io/itphx/synth:<version>`, `ghcr.io/itphx/synth-backend:<version>`, `ghcr.io/itphx/synth-ui:<version>`. The policy is in the section [Release to the GitHub mirror](#release-to-the-github-mirror).
 
 ## Helm chart
 
@@ -209,7 +209,7 @@ The split is done via `paths`/`paths-ignore`: `ci.yaml` has `docs/**` and `**/*.
 
 The manual `workflow_dispatch` is kept in `release.yaml` (items 1–2) — this is the only way to start a build/publish without a tag.
 
-Release workflow: version bump (version.ts + package.json + `charts/synth/Chart.yaml`) → CI checks → build → CHANGELOG → npmjs publish → GitVerse npm publish → Docker (kaniko → `gitverse.ru/itphx/synth` + `ghcr.io/itphx/synth`) → Helm chart publish (`publish-helm`) → create the GitVerse Release → GitHub mirror (`publish-github`: push `main`+tags, GitHub Release).
+Release workflow: version bump (version.ts + package.json + `charts/synth/Chart.yaml`) → CI checks → build → CHANGELOG → npmjs publish → GitVerse npm publish → Docker (kaniko → `gitverse.ru/itphx/{synth,synth-backend,synth-ui}` + `ghcr.io/itphx/{synth,synth-backend,synth-ui}`) → Helm chart publish (`publish-helm`) → create the GitVerse Release → GitHub mirror (`publish-github`: push `main`+tags, GitHub Release).
 
 npm packages are published **only** from GitVerse (`publish-npmjs`/`publish-gitverse-npm`) — the GitHub side does not publish npm.
 
@@ -240,7 +240,7 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 |--------|------------|
 | `NPM_TOKEN` | Publishing to npmjs.org |
 | `GV_TOKEN` | Single GitVerse token (API, Docker Registry, npm registry, git push from the bot) |
-| `GH_TOKEN` | GitHub mirror: push refs, GitHub Release, publishing the base image to GHCR (classic PAT, scopes `repo` + `write:packages`) |
+| `GH_TOKEN` | GitHub mirror: push refs, GitHub Release, publishing the base images to GHCR (classic PAT, scopes `repo` + `write:packages`) |
 | `GHCR_USER` | Optional: the login of the `GH_TOKEN` owner for `ghcr.io` (default `itphx`) |
 
 The `GITVERSE_` prefix is forbidden in GitVerse secret names — use `GV_`.
@@ -251,15 +251,15 @@ GitHub is a **mirror and releases**, not a build contour. GitHub Actions are **n
 
 ### Image policy
 
-Due to the artifact size limit (~500 MB both on GitVerse and on GitHub), **only the base `synth` image** (standalone) is published:
+All three **base images** are published to both registries — `gitverse.ru` (primary) and the GitHub Container Registry (`ghcr.io`):
 
 | Image | `gitverse.ru` | GHCR (`ghcr.io/itphx/…`) | Docker Hub |
 |---|---|---|---|
-| `synth` | ✅ | ✅ (mirror) | — (later) |
-| `synth-backend` | ✅ | ❌ | — (later) |
-| `synth-ui` | ✅ | ❌ | — (later) |
+| `synth` | ✅ | ✅ (mirror) | — |
+| `synth-backend` | ✅ | ✅ (mirror) | — |
+| `synth-ui` | ✅ | ✅ (mirror) | — |
 
-The additional images (`synth-backend`/`synth-ui`) are **not published** to GHCR; when the corresponding feature appears (the full image), they will go **only to Docker Hub**. Only the versioned tag is published (no `latest`) — the same policy as in the GitVerse side.
+The artifact size limit (~500 MB) applies not to the base images but to **future additional/full images** (the PROP-082 flavor images: `dev`, `devops`, `browser`, `full`, etc.) — when they appear, they will go **only to Docker Hub**. Only the versioned tag is published (no `latest`) — the same policy as on the GitVerse side.
 
 ### What GitVerse CI does
 
@@ -269,7 +269,7 @@ The `publish-github` job in `.gitverse/workflows/release.yaml` runs after the np
 2. **GitHub Release** for the tag `v<version>` — the body is **in English**: `bash scripts/changelog.sh --lang en` reads `docs/releases/<version>.en.md` (if it is missing — the Russian description with a warning, then commit-based auto-generation), plus an English "Installation" block (npm from npmjs.org/GitVerse, the image from `ghcr.io/itphx/synth:<version>`); creation is idempotent (if a release for the tag exists, the body is updated);
 3. **Assets — best-effort:** `cli.js` (an artifact of the `build` job), the Helm chart (`helm package charts/synth`, version from `Chart.yaml`), `SHA256SUMS`. If a file is missing, a warning is printed and the work continues; an asset upload error **does not fail** the job, but is visible in the log. On GitHub the standard `uploads.github.com` is used (unlike the GitVerse API, which returns 500 for assets — there the asset is also best-effort).
 
-The base `synth` image is built in the `build-docker` job (kaniko) into **two** registries at once: `gitverse.ru/itphx/synth:<version>` and `ghcr.io/itphx/synth:<version>`. Authorization in GHCR comes from the `GH_TOKEN` secret.
+All three base images (`synth`, `synth-backend`, `synth-ui`) are built in the `build-docker` job (kaniko) into **two** registries at once: `gitverse.ru/itphx/<image>:<version>` and `ghcr.io/itphx/<image>:<version>`. Authorization in GHCR comes from the `GH_TOKEN` secret (reused by all three kaniko steps).
 
 ### Local backfill
 
@@ -286,7 +286,7 @@ The script does **not** build or publish Docker images (GitVerse CI does that) a
 
 ### Why without GitHub Actions
 
-A deliberate decision: the single build contour is GitVerse CI (kaniko). Duplicating the build on GitHub would break reproducibility (two sources of truth for images/releases) and would hit artifact limits. The GitHub side is deliberately thin: a code mirror + releases + publishing one base image to GHCR.
+A deliberate decision: the single build contour is GitVerse CI (kaniko). Duplicating the build on GitHub would break reproducibility (two sources of truth for images/releases) and would hit artifact limits. The GitHub side is deliberately thin: a code mirror + releases + publishing the base images to GHCR.
 
 ### Secrets of the GitHub side
 

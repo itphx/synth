@@ -283,7 +283,7 @@ if $DO_RELEASE; then
             printf 'docker run -p 4300:4300 ghcr.io/itphx/synth:%s\n' "$VERSION"
             printf '```\n\n'
             printf 'Основной реестр образов — `gitverse.ru/itphx/synth:%s`;\n' "$VERSION"
-            printf 'образы `synth-backend`/`synth-ui` публикуются только в gitverse.ru.\n'
+            printf 'базовые образы `synth`/`synth-backend`/`synth-ui` публикуются также в ghcr.io (версионный тег).\n'
         } >> "$ASSETS/release-body.md"
     fi
 
