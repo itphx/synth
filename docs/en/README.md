@@ -19,7 +19,7 @@ the language rule in the root [AGENTS.md](../../AGENTS.md)).
 |---|---|---|
 | [`README.md`](../../README.md) | [`README.en.md`](../../README.en.md) | ✅ available |
 | — | [`docs/en/GLOSSARY.md`](./GLOSSARY.md) | ✅ available |
-| [`docs/API_V2.md`](../API_V2.md) | `docs/en/API_V2.md` | ⏳ planned |
+| [`docs/API_V2.md`](../API_V2.md) | [`docs/en/API_V2.md`](./API_V2.md) | ✅ available |
 | [`docs/CONFIGURATION.md`](../CONFIGURATION.md) | [`docs/en/CONFIGURATION.md`](./CONFIGURATION.md) | ✅ available |
 | [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) | [`docs/en/ARCHITECTURE.md`](./ARCHITECTURE.md) | ✅ available |
 | [`docs/HYBRID.md`](../HYBRID.md) | [`docs/en/HYBRID.md`](./HYBRID.md) | ✅ available |
