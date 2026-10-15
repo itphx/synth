@@ -67,11 +67,15 @@ export class ScheduleStore {
   /**
    * Мутация под in-process `AsyncLock` (+ file-мьютекс при `crossProcess`):
    * read-modify-write не теряет записи даже при нескольких репликах.
+   *
+   * Долгая операция держит file-лок живым через heartbeat (`withLock` c
+   * `heartbeat: true`): иначе секция > `staleMs` (30 c) считалась бы устаревшей
+   * и могла быть перехвачена живым владельцем.
    */
   private async _lockedMutation<T>(fn: () => Promise<T>): Promise<T> {
     await this._lock.acquire();
     try {
-      if (this._mutex) return await this._mutex.withLock(fn);
+      if (this._mutex) return await this._mutex.withLock(fn, { heartbeat: true });
       return await fn();
     } finally {
       this._lock.release();

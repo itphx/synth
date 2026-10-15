@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ScheduleInput } from '@itphx/synth-shared';
 import { ScheduleStore } from './schedule-store.js';
+import { FileMutex } from './file-mutex.js';
 
 const input = (overrides: Partial<ScheduleInput> = {}): ScheduleInput => ({
   name: 'Ночная проверка',
@@ -180,6 +181,31 @@ describe('ScheduleStore (ADR-051 / ADR-089)', () => {
     await expect(stat(join(tmpDir, 'scheduler', 'schedules.lock'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  it('crossProcess: heartbeat продлевает file-лок при долгой мутации (не перехватывается)', async () => {
+    const store = new ScheduleStore({ dataDir: tmpDir, crossProcess: true });
+    const internals = store as unknown as {
+      _mutex: FileMutex;
+      _lockedMutation: <T>(fn: () => Promise<T>) => Promise<T>;
+    };
+    // Ускоряем тест: в проде staleMs = 30 c; heartbeat = staleMs / 3.
+    (internals._mutex as unknown as { _staleMs: number })._staleMs = 1_000;
+
+    const competitor = new FileMutex({
+      path: join(tmpDir, 'scheduler', 'schedules.lock'),
+      staleMs: 1_000,
+    });
+
+    await internals._lockedMutation(async () => {
+      // «Долгая» мутация: дольше исходного staleMs (1 c). Без heartbeat лок
+      // протух бы и конкурент перехватил его; с heartbeat — он всё ещё наш.
+      await new Promise((r) => setTimeout(r, 1_600));
+      expect(await competitor.tryAcquire()).toBe(false);
+    });
+
+    // После мутации лок освобождён штатно.
+    expect(await competitor.tryAcquire()).toBe(true);
   });
 
   it('crossProcess: конкурентные markRun сохраняют nextRunAt последнего (нет lost update файла)', async () => {

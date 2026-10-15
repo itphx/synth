@@ -87,6 +87,74 @@ describe('FileMutex (ADR-051/ADR-089)', () => {
     expect(await other.tryAcquire()).toBe(true);
   });
 
+  it('ownership-токен: устаревший владелец не удаляет лок нового владельца при release', async () => {
+    const a = new FileMutex({ path: lockPath, staleMs: 1_000 });
+    expect(await a.tryAcquire()).toBe(true);
+
+    // Лок A «протухает»: операция затянулась дольше staleMs.
+    const old = new Date(Date.now() - 10_000);
+    await utimes(lockPath, old, old);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // B перехватывает лок (rm + mkdir + свой токен).
+    const b = new FileMutex({ path: lockPath, staleMs: 1_000 });
+    expect(await b.tryAcquire()).toBe(true);
+
+    // A завершает работу и вызывает release — лок B не должен быть удалён.
+    await a.release();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('принадлежит другому владельцу'));
+
+    // «Зомби»-heartbeat протухшего владельца не продлевает чужой лок.
+    warn.mockClear();
+    await a.touch();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('heartbeat пропущен'));
+
+    // Лок B на месте и B остаётся владельцем (живой лок, staleMs большой).
+    const c = new FileMutex({ path: lockPath, staleMs: 60_000 });
+    expect(await c.tryAcquire()).toBe(false);
+
+    // B освобождает штатно — лок исчезает.
+    await b.release();
+    await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    warn.mockRestore();
+  });
+
+  it('withLock heartbeat: долгая секция не перехватывается по staleMs', async () => {
+    const holder = new FileMutex({ path: lockPath, staleMs: 1_000 });
+    const competitor = new FileMutex({ path: lockPath, staleMs: 1_000 });
+
+    await holder.withLock(
+      async () => {
+        await new Promise((r) => setTimeout(r, 1_500));
+        // Лок продлевается heartbeat'ом → конкурент не может перехватить.
+        expect(await competitor.tryAcquire()).toBe(false);
+      },
+      { heartbeat: true },
+    );
+
+    // После завершения секции лок освобождён.
+    expect(await competitor.tryAcquire()).toBe(true);
+  });
+
+  it('без heartbeat долгая секция перехватывается (stale takeover) и release не сносит чужой лок', async () => {
+    const holder = new FileMutex({ path: lockPath, staleMs: 1_000 });
+    const competitor = new FileMutex({ path: lockPath, staleMs: 1_000 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await holder.withLock(async () => {
+      await new Promise((r) => setTimeout(r, 1_400));
+      // Лок протух — конкурент перехватывает (баг, который закрывает heartbeat).
+      expect(await competitor.tryAcquire()).toBe(true);
+    });
+
+    // `release` протухшего владельца не сносит лок перехватившего конкурента.
+    expect(await competitor.touch()).toBeUndefined();
+    const other = new FileMutex({ path: lockPath, staleMs: 60_000 });
+    expect(await other.tryAcquire()).toBe(false);
+    warn.mockRestore();
+  });
+
   it('withLock сериализует конкурентные секции на общем пути', async () => {
     const a = new FileMutex({ path: lockPath, retryMs: 5, timeoutMs: 2_000 });
     const b = new FileMutex({ path: lockPath, retryMs: 5, timeoutMs: 2_000 });
