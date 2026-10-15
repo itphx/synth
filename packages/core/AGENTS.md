@@ -273,7 +273,11 @@
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill, profile_update); git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
-  (ADR-076; ошибки — `sshkey.env_failed`). Тулы `task`/`task-resume` собирают промпт
+  (ADR-076; ошибки — `sshkey.env_failed`). Тул `task` (ADR-095 шаг 5) разбит на
+  `engine/tools/task/*`: `tool.ts` (`taskTool`), `fork.ts` (fork/контекст-режимы ADR-026 +
+  permissions), `child-session.ts` (создание/сообщения/события), `run-cycle.ts` (общий
+  tool-loop `runSubagent`, используемый и `task-resume.ts`), `prompt.ts`, `args.ts`, `types.ts`;
+  `task.ts` — фасад-реэкспорт. Тулы `task`/`task-resume` собирают промпт
   саб-агента (`resolveSubagentPrompt`) — проектные инструкции (ADR-069) добавляются,
   кроме `task(skip_context_files=true)`. Тулы управления проектом:
   `project_update`/`project_workspace_set` (`project-manage.ts`) и
