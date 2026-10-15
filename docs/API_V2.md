@@ -354,6 +354,20 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/providers/:name/test` | оба | ADMIN / auth | Тест подключения |
 | POST | `/api/v2/providers/fetch-icon` | backend | ADMIN | Favicon домена (сырой data-URL); UI сохраняет иконку уже сжатой (маленький PNG data-URL) |
 
+> **Поле `num_ctx` / `numCtx` (размер контекста).** Размер контекста
+> провайдера (`ProviderConfig.numCtx`, у Ollama — `num_ctx`) задаётся полем
+> `num_ctx` (он же `numCtx`) в теле `POST /api/v2/providers` и
+> `PATCH /api/v2/providers/:name` — принимается целое > 0, `null`/`''` — сброс
+> (невалидное → `400 VALIDATION_ERROR`). `GET /api/v2/providers` отдаёт значение
+> как `num_ctx` (snake_case), `GET /api/v2/providers/:name` — как хранимое
+> `numCtx` (camelCase). Приоритет: явный `numCtx` провайдера >
+> `ModelConfig.contextWindow`. Поле также синхронизируется из env
+> `SYNTH_PROVIDER_<NAME>_NUM_CTX` (`syncProvidersFromEnv`) и задаётся CLI-флагом
+> `--num-ctx` у `synth config provider add`. `num_ctx` отправляется в теле
+> запроса, в т.ч. на OpenAI-совместимом `/v1/chat/completions`, но Ollama этот
+> слой `options` игнорирует — эффект даёт только нативный `/api/chat` (URL без
+> суффикса `/v1`) или окно на стороне Ollama (`OLLAMA_CONTEXT_LENGTH`/Modelfile).
+
 ### 5.10 Models — `/api/v2/models`
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |

@@ -23,20 +23,35 @@ export SYNTH_PROVIDER_OLLAMA_API_KEY=""
 ```
 
 > **Контекстное окно и `num_ctx`.** У модели окно ~100k–256k токенов, но Ollama
-> по умолчанию поднимает его небольшим. Synth не может задать `num_ctx` через
-> свой конфиг (нет ни поля в провайдере/модели, ни CLI-флага, ни `SYNTH_PROVIDER_*`),
-> потому что обращается к Ollama по OpenAI-совместимому `/v1`, где `num_ctx` не
-> передаётся. «Сырое» окно задаётся **на стороне Ollama**:
+> по умолчанию поднимает его небольшим. `num_ctx` **задаётся через Synth**
+> (`ProviderConfig.numCtx`) и **передаётся** в теле запроса — в том числе на
+> OpenAI-совместимом пути `/v1/chat/completions`. Однако Ollama этот слой
+> `options` **игнорирует**, поэтому эффект (фактическое окно) даёт только
+> **нативный** `/api/chat` — URL провайдера **без** суффикса `/v1`.
+>
+> Способы задать (приоритет: явный `numCtx` провайдера → `ModelConfig.contextWindow`
+> → справочник):
 >
 > ```bash
-> # 1) Основной способ — переменная окружения сервера Ollama
-> OLLAMA_CONTEXT_LENGTH=262144 ollama serve
+> # 1) CLI — флаг есть только у `config provider add` (подкоманды `edit` нет)
+> synth config provider add \
+>   --name ollama --type ollama \
+>   --url http://localhost:11434 \
+>   --model qwen3.8:27b \
+>   --num-ctx 262144
 >
-> # 2) Либо модель с явным num_ctx (Modelfile)
-> # FROM qwen3.8:27b
-> # PARAMETER num_ctx 262144
-> ollama create qwen3.8-27b-256k -f Modelfile
+> # 2) Переменная окружения (имя провайдера в env-форме: OLLAMA → ollama, `_` → `-`)
+> export SYNTH_PROVIDER_OLLAMA_NUM_CTX=262144
+>
+> # 3) API — поле `num_ctx` (он же `numCtx`) в POST/PATCH /api/v2/providers;
+> #    GET отдаёт значение; null/'' — сброс
 > ```
+>
+> У существующего провайдера поле правится через `PATCH /api/v2/providers/:name`.
+>
+> Чтобы окно применилось и на OpenAI-совместимом пути, задайте его **на стороне
+> Ollama**: `OLLAMA_CONTEXT_LENGTH=262144 ollama serve` или модель с явным
+> `PARAMETER num_ctx 262144` (Modelfile → `ollama create`).
 >
 > Synth для бюджета контекста использует `contextWindow` модели (синхронизируется
 > из Ollama `/api/tags` или задаётся вручную), но фактическое окно определяет Ollama.
@@ -107,7 +122,7 @@ synth config provider list
 synth config provider delete ollama
 ```
 
-Обязательные флаги: `--name`, `--type` (openai | anthropic | ollama | decision | systemone). Опциональные: `--url`, `--model`, `--api-key`, `--data-dir`.
+Обязательные флаги: `--name`, `--type` (openai | anthropic | ollama | decision | systemone). Опциональные: `--url`, `--model`, `--api-key`, `--num-ctx <n>` (размер контекста, `num_ctx` Ollama; целое > 0), `--data-dir`.
 
 ## Через веб-интерфейс
 

@@ -139,7 +139,7 @@
 
 - Единственная точка входа конфига — `loadBackendConfig()` (`src/lib/app-config.ts`) → shared `loadConfig`; возвращает `{ synth, dataDir, workspacesRoot, port, auth }`.
 - `buildAuthConfig` читает `SYNTH_AUTH_DEBUG`, `SYNTH_API_KEY`, `SYNTH_OIDC_*`, `SYNTH_SESSION_MAX_AGE`, `SYNTH_TEST_*_KEY`; тестовые пользователи — только при debug.
-- `SYNTH_PROVIDER_*_API_KEY|URL|MODEL|TYPE` синхронизируются в `JsonStore` провайдеров/моделей при старте (`syncProvidersFromEnv`).
+- `SYNTH_PROVIDER_*_API_KEY|URL|MODEL|TYPE|NUM_CTX` синхронизируются в `JsonStore` провайдеров/моделей при старте (`syncProvidersFromEnv`). `NUM_CTX` (целое > 0) задаёт `ProviderConfig.numCtx` — размер контекста провайдера (`num_ctx` Ollama); приоритет над `ModelConfig.contextWindow`.
 - `packages/backend/config.yaml` содержит только `mcp.servers`; остальной конфиг ищется каскадно (`findConfigPath`). В dev `dev.sh` задаёт `SYNTH_CONFIG` на этот файл (если он существует), поэтому `mcp.servers` подхватываются; `loadConfig` учитывает `SYNTH_CONFIG` (ADR-023).
 - При старте `mcp.servers` из config сидируются в `McpRegistryStore` — единственный источник истины MCP (ADR-071). Legacy-роуты `/api/v2/mcp/servers*` и `/mcp/session/:id` — тонкие адаптеры над реестром; собственного хранилища MCP-конфига (`YamlMcpConfigStore`/`McpConfigStore`) в backend больше нет.
 - Сообщения ошибок — через `t()` из `src/lib/i18n.js`; язык `/api/v2/i18n/current` определяется по `Accept-Language` (inline в `app.ts`).

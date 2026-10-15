@@ -85,9 +85,34 @@ export SYNTH_PROVIDER_OLLAMA_TYPE=ollama
 ### Контекстное окно и `num_ctx`
 
 `qwen3.8:27b` поддерживает окно **~100k–256k токенов**, но Ollama по умолчанию
-поднимает его небольшим. Synth обращается к Ollama по OpenAI-совместимому
-`/v1`-эндпоинту, где `num_ctx` не передаётся, поэтому «сырое» окно задаётся
-**на стороне Ollama** (не через конфиг Synth):
+поднимает его небольшим. `num_ctx` **задаётся через Synth** (`ProviderConfig.numCtx`)
+и **передаётся** в теле запроса, в том числе на OpenAI-совместимом пути
+`/v1/chat/completions` — но Ollama этот слой `options` **игнорирует**, поэтому
+эффект (фактическое окно) даёт только **нативный** `/api/chat` (URL провайдера
+**без** суффикса `/v1`).
+
+Задать `num_ctx` через Synth (приоритет: явный `numCtx` провайдера >
+`contextWindow` модели):
+
+```bash
+# 1) CLI — флаг есть только у `config provider add` (подкоманды `edit` нет)
+synth config provider add \
+  --name ollama --type ollama \
+  --url http://localhost:11434 \
+  --model qwen3.8:27b \
+  --num-ctx 262144
+
+# 2) Переменная окружения (OLLAMA → ollama, `_` в имени → `-`)
+export SYNTH_PROVIDER_OLLAMA_NUM_CTX=262144
+
+# 3) API — поле `num_ctx` (он же `numCtx`) в POST/PATCH /api/v2/providers;
+#    GET отдаёт значение; null/'' — сброс
+```
+
+У существующего провайдера поле правится через `PATCH /api/v2/providers/:name`.
+
+Чтобы окно применилось и на OpenAI-совместимом пути, задайте его **на стороне
+Ollama**:
 
 ```bash
 # 1) Основной способ — переменная окружения сервера Ollama (при запуске `ollama serve`)
@@ -103,8 +128,9 @@ ollama create qwen3.8-27b-256k -f Modelfile
 ```
 
 Бюджет контекста самого Synth считается по `contextWindow` модели: он
-синхронизируется из Ollama (`/api/tags`) или задаётся вручную у модели и влияет
-на обрезку истории, но **фактическое** окно определяет Ollama.
+синхронизируется из Ollama (`/api/tags`) или задаётся вручную у модели; явный
+`numCtx` провайдера имеет приоритет над `contextWindow`. Но **фактическое** окно
+определяет Ollama.
 
 ## 3. Запуск
 
