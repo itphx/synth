@@ -1,15 +1,15 @@
-import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptHistoryStateMessage, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, lookupContextWindow, generateStreamId } from '@itphx/synth-shared';
+import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SessionManager } from '../sessions/manager.js';
 import type { EventBus } from '../events/bus.js';
 import { DebugCollector } from '../debug.js';
-import { ProviderFactory } from '../providers/base.js';
-import { computeCacheHitRate, computeUsageCost } from '../providers/usage.js';
-import { ContextLengthExceededError } from '../providers/exceptions.js';
-import type { LLMMessage, CancellationToken, ProviderConfig as CoreProviderConfig, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
+
+import { computeUsageCost } from '../providers/usage.js';
+
+import type { LLMMessage, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
 import { ContextConfig } from './context/config.js';
@@ -19,25 +19,9 @@ import { LazyInstructionsLoader } from './context/lazy-instructions.js';
 import type { ComposerSkillsCatalog } from './skills/catalog.js';
 import type { SkillRuntime, SkillScopeOptions } from './skills/types.js';
 import type { CommandRuntime } from '@itphx/synth-shared';
-import { calibrateCharsPerToken, estimateTokens, estimatePromptChars, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
-import {
-  agentKeyOf,
-  buildPromptState,
-  computeExpected,
-  isBlockChanged,
-  isPrefixUnchanged,
-  validateExpected,
-  type PromptStateReason,
-} from './context/prompt-state.js';
-import {
-  syncStateMessages,
-  createStateMessage,
-  findLastStateMessage,
-  buildModeChangeContent,
-  buildPlanUpdatedContent,
-  wrapStateContent,
-  type UnavailableTool,
-} from './context/state-messages.js';
+import { calibrateCharsPerToken, estimateTokens, DEFAULT_CHARS_PER_TOKEN } from './context/token-ratio.js';
+import { agentKeyOf, buildPromptState, computeExpected, isBlockChanged, isPrefixUnchanged, type PromptStateReason } from './context/prompt-state.js';
+import { syncStateMessages, createStateMessage, findLastStateMessage, buildModeChangeContent, buildPlanUpdatedContent, wrapStateContent, type UnavailableTool } from './context/state-messages.js';
 import type { ToolRegistry } from './tools/registry.js';
 import type { AgentRegistry } from './agents/registry.js';
 import type { McpManager } from './mcp/manager.js';
@@ -62,30 +46,33 @@ import { emptyPermissionConfig } from './permission/derive.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 import { GitService } from '../git/git-service.js';
-import { classifyLlmError, isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, MAX_DOOM_LOOP_COUNT } from './llm-error.js';
+import { MAX_DOOM_LOOP_COUNT } from './llm-error.js';
 import { runSubagentResume, validateSubagentResume, SubagentResumeError, type SubagentResumeDeps } from './tools/task-resume.js';
 import { buildDenyResult, executeToolDef } from './tools/tool-execution.js';
 import type { HookBus } from './hooks/hook-bus.js';
 import type { RequestSessionService } from './events/request-session.js';
-import { resolveFsChange } from './fs-change.js';
-import {
-  ALL_RUNTIME_DEPS_AVAILABLE,
-  RUNTIME_DEP_BINARY,
-  TOOL_RUNTIME_DEP,
-  type RuntimeDeps,
-} from './tools/runtime-deps.js';
+
+import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './tools/runtime-deps.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
-import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, PLACEHOLDER_PATTERN, type SecretPatternStore } from './gateway/index.js';
+import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, type SecretPatternStore } from './gateway/index.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
+// ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
+import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, publishLiveUsage, aggregateSubagentStats, type PublishLiveUsageParams } from './orchestrator/usage.js';
+import { publishFsChange } from './orchestrator/fs-change.js';
+import { saveAssistantMessage, persistToolChain, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus } from './orchestrator/persistence.js';
+import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
+import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type RouteProviderDeps } from './orchestrator/routing.js';
+import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn } from './orchestrator/prompt-info.js';
+import { publishLocalCompletion as publishLocalCompletionFn, finishLocalCommand as finishLocalCommandFn, type FinishLocalCommandDeps } from './orchestrator/commands.js';
+import { handleDebugSystemMessage as handleDebugSystemMessageFn, type DebugSystemMessageDeps } from './orchestrator/debug.js';
+import { handleSummarization as handleSummarizationFn, type SummarizationDeps } from './orchestrator/summarization.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
-/** ADR-070: окно троттлинга live-события `stream.usage` (~300 мс). */
-const STREAM_USAGE_THROTTLE_MS = 300;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
 const CONTEXT_LIMIT_WARNING_PERCENT = 90;
 
@@ -96,44 +83,11 @@ const CONTEXT_LIMIT_WARNING_PERCENT = 90;
  * - `stopped` — остановлен (отказ в туле / блокировка);
  * - `error` — ошибка/пустой ответ LLM;
  * - `limit` — достигнут лимит итераций.
+ *
+ * ADR-095 (шаг 6a): тип и валидация вынесены в `orchestrator/persistence.ts`;
+ * реэкспорт сохраняет прежний публичный контракт (`orchestrator.js`).
  */
-export type AssistantMessageStatus = 'completed' | 'cancelled' | 'stopped' | 'error' | 'limit';
-
-const ASSISTANT_MESSAGE_STATUSES: readonly AssistantMessageStatus[] = [
-  'completed', 'cancelled', 'stopped', 'error', 'limit',
-];
-
-/** Валидный ли статус (защита от произвольного значения в metadata.status). */
-function isAssistantMessageStatus(value: unknown): value is AssistantMessageStatus {
-  return typeof value === 'string' && (ASSISTANT_MESSAGE_STATUSES as readonly string[]).includes(value);
-}
-
-/**
- * ADR-070 §2.6: контекст для сохранения assistant-сообщения об ошибке LLM.
- * Заполняется на месте сбоя (там доступны накопленные usage/контент/debug).
- */
-interface LlmFailureContext {
-  debugCollector: DebugCollector;
-  /** Длительность прогона до сбоя (metadata.duration_ms). */
-  durationMs: number;
-  /** Фактический usage, если провайдер успел его отдать (иначе — оценка). */
-  usage?: TokenUsage;
-  model?: string;
-  providerName?: string;
-  agentRole?: string;
-  /** Частичный ответ до сбоя — база для оценки output-токенов. */
-  content?: string;
-  /** Размер отправленного промпта в символах — база для оценки input-токенов. */
-  promptChars?: number;
-  toolResults?: Array<Record<string, unknown>>;
-  promptMeta?: PromptMeta;
-  /**
-   * Явный тип ошибки (ADR-041). Нужен там, где сообщение локализовано и
-   * `classifyLlmError` не может определить тип по тексту (например
-   * `provider_not_found`): при переданном значении приоритетнее классификации.
-   */
-  errorType?: string;
-}
+export type { AssistantMessageStatus } from './orchestrator/persistence.js';
 
 export interface ModelPricing {
   inputPrice?: number;
@@ -354,18 +308,6 @@ export interface PromptDiagnostics {  manifest: PromptManifest;
   toolsDetail: PromptToolDetail[];
 }
 
-function toCoreProviderConfig(shared: SharedProviderConfig, model: string, reasoningLevel?: ReasoningLevel): CoreProviderConfig {
-  return {
-    name: shared.name,
-    type: shared.type,
-    url: shared.baseUrl || '',
-    apiKey: shared.apiKey || '',
-    model,
-    timeout: shared.timeout,
-    reasoningLevel,
-  };
-}
-
 /**
  * ChatOrchestrator — единый оркестратор обработки чат-сообщений.
  * Предоставляет processMessage callback для QueueProcessor.
@@ -482,8 +424,7 @@ export class ChatOrchestrator {
     model: string | undefined,
     usage: TokenUsage | undefined,
   ): ReturnType<typeof computeUsageCost> {
-    if (!model || !usage) return null;
-    return computeUsageCost(usage, this._modelPriceLoader?.(model) ?? null);
+    return computeMessageCost(model, usage, this._modelPriceLoader);
   }
 
   /**
@@ -498,7 +439,7 @@ export class ChatOrchestrator {
     provider: BaseProvider | undefined,
     session: Session,
   ): string | undefined {
-    return chunkModel || finalModel || provider?.model || session.settings.model || undefined;
+    return resolveMessageModel(chunkModel, finalModel, provider, session);
   }
 
   /**
@@ -513,33 +454,7 @@ export class ChatOrchestrator {
     promptChars: number,
     outputChars: number,
   ): { usage: TokenUsage; estimated: boolean } {
-    const base: TokenUsage = usage ?? { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    let inputTokens = base.inputTokens || 0;
-    let outputTokens = base.outputTokens || 0;
-    let estimated = false;
-
-    if (inputTokens <= 0 && promptChars > 0) {
-      inputTokens = Math.ceil(promptChars / 4);
-      estimated = true;
-    }
-    if (outputTokens <= 0 && outputChars > 0) {
-      outputTokens = Math.ceil(outputChars / 4);
-      estimated = true;
-    }
-
-    const totalTokens = base.totalTokens && base.totalTokens > 0
-      ? base.totalTokens
-      : inputTokens + outputTokens;
-
-    return {
-      usage: {
-        ...base,
-        inputTokens,
-        outputTokens,
-        totalTokens,
-      },
-      estimated,
-    };
+    return estimateUsage(usage, promptChars, outputChars);
   }
 
   /**
@@ -552,8 +467,7 @@ export class ChatOrchestrator {
     systemPrompt: SystemPromptPayload | string | undefined,
     tools?: Record<string, unknown>[],
   ): number {
-    const systemText = typeof systemPrompt === 'string' ? systemPrompt : (systemPrompt?.text ?? '');
-    return estimatePromptChars(messages, systemText, tools);
+    return estimatePromptCharsFn(messages, systemPrompt, tools);
   }
 
   /**
@@ -569,56 +483,8 @@ export class ChatOrchestrator {
    * Live-значения эфемерны: в сессию/агрегаты НЕ пишутся (персистится только
    * финальное сообщение/`stream.done`).
    */
-  private _publishLiveUsage(params: {
-    publishChunk: (event: string, data: Record<string, unknown>) => void;
-    state: {
-      lastPublishedAt: number;
-      lastSignature: string;
-      /** Опубликован точный output (output>0/reasoning) — форсируем один раз. */
-      exactPublished: boolean;
-      /** Опубликован точный input (Anthropic message_start) — форсируем один раз. */
-      inputExactPublished: boolean;
-    };
-    sessionId: string;
-    streamId: string;
-    iteration: number;
-    agentRole?: string;
-    model?: string;
-    provider?: string;
-    usage: TokenUsage;
-    estimated: boolean;
-    force?: boolean;
-  }): void {
-    const signature = [
-      params.estimated ? 'e' : 'x',
-      params.usage.inputTokens,
-      params.usage.outputTokens,
-      params.usage.totalTokens,
-      params.usage.cacheReadTokens ?? 0,
-      params.usage.cacheWriteTokens ?? 0,
-      params.usage.reasoningTokens ?? 0,
-    ].join(':');
-    const now = Date.now();
-    if (!params.force && signature === params.state.lastSignature) return;
-    if (!params.force && now - params.state.lastPublishedAt < STREAM_USAGE_THROTTLE_MS) return;
-    params.state.lastPublishedAt = now;
-    params.state.lastSignature = signature;
-
-    const cost = params.model ? this._computeMessageCost(params.model, params.usage) : null;
-
-    params.publishChunk('stream.usage', {
-      session_id: params.sessionId,
-      stream_id: params.streamId,
-      iteration: params.iteration,
-      ...(params.agentRole ? { agent_role: params.agentRole } : {}),
-      ...(params.model ? { model: params.model } : {}),
-      ...(params.provider ? { provider: params.provider } : {}),
-      // Копия: провайдеры мутируют объект running total in place — событие
-      // должно нести снимок значений на момент публикации.
-      usage: { ...params.usage },
-      ...(cost ? { cost_usd: cost.costUsd, cost_currency: cost.currency, cost_breakdown: cost.breakdown } : {}),
-      estimated: params.estimated,
-    });
+  private _publishLiveUsage(params: PublishLiveUsageParams): void {
+    publishLiveUsage(params, (model, usage) => this._computeMessageCost(model, usage));
   }
 
   /**
@@ -640,55 +506,7 @@ export class ChatOrchestrator {
     cost_usd: number;
     cost_by_currency: Record<string, number>;
   } | undefined {
-    let sessions = 0;
-    let input = 0;
-    let output = 0;
-    let cacheRead = 0;
-    let cacheWrite = 0;
-    let reasoning = 0;
-    let cost = 0;
-    const costByCurrency: Record<string, number> = {};
-    let found = false;
-
-    for (const raw of toolResults) {
-      if (!raw || typeof raw !== 'object') continue;
-      const entry = raw as Record<string, unknown>;
-      if (entry.name !== 'task') continue;
-      const resultMeta = (entry.result as { metadata?: Record<string, unknown> } | undefined)?.metadata;
-      if (!resultMeta) continue;
-      const childId = resultMeta.child_session_id;
-      const usage = resultMeta.subagent_usage as TokenUsage | undefined;
-      if (!childId && !usage) continue;
-
-      found = true;
-      sessions += 1;
-      if (usage) {
-        input += usage.inputTokens || 0;
-        output += usage.outputTokens || 0;
-        cacheRead += usage.cacheReadTokens || 0;
-        cacheWrite += usage.cacheWriteTokens || 0;
-        reasoning += usage.reasoningTokens || 0;
-        const model = (resultMeta.subagent_model as string | undefined)
-          || (resultMeta.routing_model as string | undefined);
-        const c = this._computeMessageCost(model, usage);
-        if (c) {
-          cost += c.costUsd;
-          costByCurrency[c.currency] = (costByCurrency[c.currency] || 0) + c.costUsd;
-        }
-      }
-    }
-
-    if (!found) return undefined;
-    return {
-      sessions,
-      input_tokens: input,
-      output_tokens: output,
-      cache_read_tokens: cacheRead,
-      cache_write_tokens: cacheWrite,
-      reasoning_tokens: reasoning,
-      cost_usd: cost,
-      cost_by_currency: costByCurrency,
-    };
+    return aggregateSubagentStats(toolResults, (model, usage) => this._computeMessageCost(model, usage));
   }
 
   /**
@@ -1456,14 +1274,7 @@ export class ChatOrchestrator {
     projectId?: string;
     injection: { enabled: boolean; mode: InjectionPolicy };
   }): string {
-    return JSON.stringify([
-      input.workingDir,
-      input.model,
-      input.contextWindow,
-      input.language,
-      input.projectId ?? '',
-      `${input.injection.enabled ? 1 : 0}:${input.injection.mode}`,
-    ]);
+    return instructionsMemoKeyFn(input);
   }
 
   /** Резолв без per-turn мемоизации (кэш уровня резолвера при этом работает). */
@@ -1682,25 +1493,16 @@ export class ChatOrchestrator {
       messageId?: string;
     },
   ): void {
-    publishChunk('stream.chunk', {
-      stream_id: streamId,
-      content,
-      is_final: true,
-      ...(opts?.model ? { model: opts.model } : {}),
-      ...(opts?.provider ? { provider: opts.provider } : {}),
-    });
-    publishChunk('stream.done', {
-      stream_id: streamId,
-      content,
-      pending_count: 0,
-      model: opts?.model ?? 'command',
-      provider: opts?.provider ?? 'command',
-      ...(opts?.messageIndex !== undefined ? { message_index: opts.messageIndex } : {}),
-      ...(opts?.messageId ? { message_id: opts.messageId } : {}),
-      ...(opts?.usage ? { usage: opts.usage } : {}),
-      ...(opts?.durationMs !== undefined ? { duration_ms: opts.durationMs } : {}),
-      ...(opts?.metadata ? { metadata: opts.metadata } : {}),
-    });
+    publishLocalCompletionFn(publishChunk, streamId, content, opts);
+  }
+
+  /** Зависимости локального ответа команды (ADR-095 шаг 6a). */
+  private _finishLocalCommandDeps(): FinishLocalCommandDeps {
+    return {
+      sessionManager: this._sessionManager,
+      eventBus: this._eventBus,
+      publishLocalCompletion: publishLocalCompletionFn,
+    };
   }
 
   /**
@@ -1720,82 +1522,15 @@ export class ChatOrchestrator {
     streamId: string,
     command?: { name: string; args?: string; i18nKey?: string },
   ): Promise<ProcessMessageResult> {
-    // Признак команды для UI — и в сохранённом assistant-сообщении, и в
-    // `stream.done.metadata`: локальный ответ приходит в UI через stream.done
-    // (без `message.added`), поэтому без metadata оптимистичное сообщение
-    // отрисовалось бы как ответ агента.
-    const commandMetadata: Record<string, unknown> = {
-      command: true,
-      ...(command ? { commandName: command.name, commandArgs: command.args ?? '' } : {}),
-      // ADR-041: строки движка локализуются в UI по `metadata.i18n`.
-      ...(command?.i18nKey ? { i18n: i18nMeta(command.i18nKey) } : {}),
-    };
-
-    const assistant: Message = {
-      id: generateId(),
-      role: MessageRole.ASSISTANT,
-      seq: 0,
-      origin: 'local',
-      parts: [makeTextPart(output)],
-      content: output,
-      createdAt: nowISO(),
-      disabled: false,
-      pinned: false,
-      hidden: false,
-      ephemeral: true,
-      model: 'command',
-      provider: 'command',
-      agentRole: userMessage.agentRole || session.settings.agentRole,
-      metadata: commandMetadata,
-    };
-
-    // Помечаем пользовательское сообщение эфемерным и командным (`commandPrompt` —
-    // UI не рисует отдельный user-пузырь: команда объединена с выводом) и сохраняем
-    // ДО addMessage, иначе updateSession(session) перезапишет сессию без только что
-    // добавленного ответа. Существующие metadata не затираем.
-    userMessage.ephemeral = true;
-    userMessage.metadata = { ...(userMessage.metadata ?? {}), commandPrompt: true };
-    const idx = session.messages.findIndex((m) => m.id === userMessage.id);
-    if (idx >= 0) {
-      session.messages[idx] = {
-        ...session.messages[idx]!,
-        ephemeral: true,
-        metadata: userMessage.metadata,
-      };
-    }
-    await this._sessionManager.updateSession(session).catch(() => {});
-
-    // Сохраняем ответ и только потом публикуем завершение: нужны реальные
-    // `message_index`/`message_id`, иначе UI в `finishStream` вычислит index
-    // fallback'ом и столкнётся с user-командой (дубли ключей в списке).
-    const updated = await this._sessionManager.addMessage(session.id, assistant);
-    const messageIndex = updated ? updated.messages.length - 1 : undefined;
-    const userIndex = updated
-      ? updated.messages.findIndex((m) => m.id === userMessage.id)
-      : -1;
-
-    // Обновляем user-команду в UI (upsert по index в `chatStore.addMessage`):
-    // live `message.added` из процессора нёс metadata без `commandPrompt`,
-    // поэтому без повторной публикации пузырь команды оставался видимым.
-    if (userIndex >= 0) {
-      this._eventBus.publish(session.id, 'message.added', {
-        message_index: userIndex,
-        role: userMessage.role,
-        content: userMessage.content ?? '',
-        author: userMessage.author,
-        agent_role: userMessage.agentRole,
-        metadata: userMessage.metadata,
-      });
-    }
-
-    this._publishLocalCompletion(publishChunk, streamId, output, {
-      model: 'command',
-      provider: 'command',
-      metadata: commandMetadata,
-      messageIndex,
-      messageId: assistant.id,
-    });
-    return {};
+    return finishLocalCommandFn(
+      session,
+      userMessage,
+      publishChunk,
+      output,
+      streamId,
+      command,
+      this._finishLocalCommandDeps(),
+    );
   }
 
   /**
@@ -2088,20 +1823,7 @@ export class ChatOrchestrator {
     workingDir: string,
     args?: Record<string, unknown>,
   ): void {
-    if (toolResult.isError) return;
-    const change = resolveFsChange(toolName, toolResult.metadata, workingDir, args);
-    if (!change) return;
-    this._eventBus.publish(session.id, 'fs.changed', {
-      session_id: session.id,
-      project_id: session.projectId ?? null,
-      scope: change.scope,
-      ...(change.paths ? { paths: change.paths } : {}),
-      ...(change.op ? { op: change.op } : {}),
-      ...(change.from ? { from: change.from } : {}),
-      ...(change.to ? { to: change.to } : {}),
-      ...(change.workspaceChanged ? { workspace_changed: true } : {}),
-      tool: toolName,
-    });
+    publishFsChange(session, toolName, toolResult, workingDir, this._eventBus, args);
   }
 
   /**
@@ -2401,82 +2123,12 @@ export class ChatOrchestrator {
     agentRole?: string,
     tokenRatio: number = DEFAULT_CHARS_PER_TOKEN,
   ): PromptHistoryInfo {
-    const sent = ChatOrchestrator._sessionMessagesToLlm(session.messages, agentRole, session.userId);
-
-    // Сообщения: chars = content + JSON(toolUse) + reasoning, estTokens — по
-    // калиброванному chars-per-token (как в манифесте промпта).
-    let chars = 0;
-    let secretPlaceholders = 0;
-    const placeholderRe = new RegExp(PLACEHOLDER_PATTERN.source, 'g');
-    for (const msg of sent) {
-      let msgChars = msg.content.length;
-      if (msg.toolUse) msgChars += JSON.stringify(msg.toolUse).length;
-      if (msg.reasoning) msgChars += msg.reasoning.length;
-      chars += msgChars;
-      const matches = msg.content.match(placeholderRe);
-      if (matches) secretPlaceholders += matches.length;
-    }
-
-    // State-сообщения: role system (не disabled/hidden), текст — как уходит в LLM.
-    const stateMap = new Map<string, { count: number; chars: number }>();
-    for (const msg of session.messages) {
-      if (msg.role !== MessageRole.SYSTEM || msg.disabled || msg.hidden) continue;
-      const type = typeof msg.metadata?.type === 'string' ? msg.metadata.type : 'state';
-      const entry = stateMap.get(type) ?? { count: 0, chars: 0 };
-      entry.count += 1;
-      entry.chars += wrapStateContent(type, msg.content).length;
-      stateMap.set(type, entry);
-    }
-    const stateMessages: PromptHistoryStateMessage[] = [...stateMap.entries()]
-      .map(([type, v]) => ({
-        type,
-        count: v.count,
-        chars: v.chars,
-        estTokens: estimateTokens(v.chars, tokenRatio),
-      }))
-      .sort((a, b) => b.chars - a.chars || a.type.localeCompare(b.type));
-
-    // Исключённые: ровно то, что отфильтровывает `_sessionMessagesToLlm`.
-    const excluded = { disabled: 0, hidden: 0, info: 0 };
-    for (const msg of session.messages) {
-      if (msg.disabled) excluded.disabled += 1;
-      if (msg.hidden) excluded.hidden += 1;
-      if (msg.role === MessageRole.INFO) excluded.info += 1;
-    }
-
-    // Вложения: нетекстовые части отправляемых сообщений.
-    let attachmentCount = 0;
-    let attachmentChars = 0;
-    for (const msg of session.messages) {
-      if (msg.disabled || msg.hidden || msg.role === MessageRole.INFO) continue;
-      for (const part of msg.parts) {
-        if (part.type === 'text') continue;
-        attachmentCount += 1;
-        const data = part.data === undefined ? '' : JSON.stringify(part.data) ?? '';
-        const meta = (part as { metadata?: unknown }).metadata;
-        const metaStr = meta === undefined ? '' : JSON.stringify(meta) ?? '';
-        attachmentChars += data.length + metaStr.length;
-      }
-    }
-
-    return {
-      messages: { count: sent.length, chars, estTokens: estimateTokens(chars, tokenRatio) },
-      stateMessages,
-      excluded,
-      attachments: { count: attachmentCount, chars: attachmentChars },
-      secretPlaceholders,
-    };
+    return buildPromptHistoryInfoFn(session, agentRole, tokenRatio);
   }
 
   /** `promptMeta` последнего assistant-сообщения активного агента. */
   private _lastPromptMeta(session: Session, agentRole?: string): PromptMeta | null {
-    for (let i = session.messages.length - 1; i >= 0; i--) {
-      const msg = session.messages[i]!;
-      if (msg.role !== MessageRole.ASSISTANT || !msg.promptMeta) continue;
-      if (agentRole && msg.promptMeta.agentRole && msg.promptMeta.agentRole !== agentRole) continue;
-      return msg.promptMeta;
-    }
-    return null;
+    return lastPromptMetaFn(session, agentRole);
   }
 
   /**
@@ -4341,6 +3993,21 @@ export class ChatOrchestrator {
     };
   }
 
+  private _debugSystemMessageDeps(): DebugSystemMessageDeps {
+    return {
+      getProvider: (providerName, session, reasoningLevel) =>
+        this._getProvider(providerName, session, reasoningLevel),
+      cancellationTokens: this._cancellationTokens,
+      handleLlmFailure: (sessionId, streamId, error, attempt, ctx) =>
+        this._handleLlmFailure(sessionId, streamId, error, attempt, ctx),
+      estimatePromptChars: (messages, systemPrompt, tools) =>
+        this._estimatePromptChars(messages, systemPrompt, tools),
+      computeMessageCost: (model, usage) => this._computeMessageCost(model, usage),
+      saveAssistantMessage: this._saveAssistantMessage.bind(this),
+      sessionManager: this._sessionManager,
+    };
+  }
+
   private async _handleDebugSystemMessage(
     session: Session,
     message: Message,
@@ -4351,116 +4018,25 @@ export class ChatOrchestrator {
     reasoningLevel?: ReasoningLevel,
     attempt?: number,
   ): Promise<ProcessMessageResult> {
-    // ADR-070 §2.6: длительность этого прогона.
-    const startedAt = Date.now();
-    const providerName = (message.provider as string) || session.settings.provider || '';
-    const provider = this._getProvider(providerName, session, reasoningLevel);
-    if (!provider) {
-      return {
-        error: sm('router.provider_not_found', { provider: providerName || sm('router.provider_unspecified') }),
-        errorType: 'provider_not_found',
-        canRetry: false,
-      };
-    }
-
-    debugCollector.captureSessionInfo(session.id, provider.model, providerName, {
-      provider_type: provider.type,
-      debug_enabled: session.settings.debugEnabled,
-      context_optimization: 'debug_system_message',
-    });
-
-    const lang = session.settings.language || 'ru';
-    const systemPrompt = lang === 'ru'
-      ? 'Ты получил отладочное системное сообщение. Ответь коротко, подтвердив, что ты его получил и обработал. Опиши свою текущую роль и модель.'
-      : 'You received a debug system message. Respond briefly, confirming you received and processed it. Describe your current role and model.';
-
-    const llmMessages: LLMMessage[] = [
-      { id: '', role: 'system', content: systemPrompt, usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, disabled: false, pinned: false, branchId: '' },
-      { id: '', role: 'user', content: lang === 'ru' ? 'Привет! Это отладочное системное сообщение. Как ты здесь оказался?' : 'Hi! This is a debug system message. How did you get here?', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 }, disabled: false, pinned: false, branchId: '' },
-    ];
-
-    let accumulatedContent = '';
-    let accumulatedReasoning = '';
-    let finalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    let finalModel: string | undefined;
-
-    const cancelToken: CancellationToken = {
-      cancelled: false,
-      cancel: () => { cancelToken.cancelled = true; },
-    };
-    this._cancellationTokens.set(streamId, cancelToken);
-
-    signal.addEventListener('abort', () => cancelToken.cancel(), { once: true });
-
-    try {
-      for await (const chunk of provider.chatAsync(llmMessages, systemPrompt, undefined, debugCollector, cancelToken)) {
-        if (cancelToken.cancelled) break;
-        if (chunk.isFinal) accumulatedContent = chunk.content;
-        else accumulatedContent += chunk.content;
-        if (chunk.usage) finalUsage = chunk.usage;
-        if (chunk.model) finalModel = chunk.model;
-        if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
-
-        publishChunk('stream.chunk', {
-          stream_id: streamId,
-          content: chunk.isFinal ? '' : chunk.content,
-          reasoning: chunk.reasoning,
-          is_final: chunk.isFinal,
-          agent_role: 'debug',
-          model: finalModel,
-          provider: providerName,
-        });
-      }
-    } catch (e) {
-      warning('ORCHESTRATOR', `Debug system message stream error: ${e}`);
-      this._cancellationTokens.delete(streamId);
-      return this._handleLlmFailure(session.id, streamId, e, attempt, {
-        debugCollector,
-        durationMs: Date.now() - startedAt,
-        usage: finalUsage,
-        model: finalModel ?? provider.model ?? session.settings.model,
-        providerName,
-        agentRole: 'debug',
-        content: accumulatedContent,
-        promptChars: this._estimatePromptChars(llmMessages, systemPrompt),
-      });
-    }
-
-    if (cancelToken.cancelled) {
-      publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent, status: 'cancelled' });
-      this._cancellationTokens.delete(streamId);
-      return {};
-    }
-
-    // Сохранить debug-сообщение (без message.added — UI получит его через stream.done)
-
-    const durationMs = Date.now() - startedAt;
-    const messageCost = this._computeMessageCost(finalModel, finalUsage);
-    await this._saveAssistantMessage(
-      session.id, accumulatedContent, streamId, 'debug',
-      finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
-      MessageRole.DEBUG, undefined, true,
-      undefined, undefined, undefined, undefined, { duration_ms: durationMs },
+    return handleDebugSystemMessageFn(
+      session, message, signal, publishChunk, debugCollector, streamId,
+      reasoningLevel, attempt, this._debugSystemMessageDeps(),
     );
+  }
 
-    const updatedSession = await this._sessionManager.getSession(session.id);
-
-    publishChunk('stream.done', {
-      stream_id: streamId,
-      content: accumulatedContent,
-      message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
-      pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
-      model: finalModel,
-      provider: providerName,
-      usage: finalUsage,
-      duration_ms: durationMs,
-      status: 'completed',
-      ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
-      metadata: { type: 'debug_system_message' },
-    });
-
-    this._cancellationTokens.delete(streamId);
-    return {};
+  private _summarizationDeps(): SummarizationDeps {
+    return {
+      optimizer: this._optimizer,
+      cancellationTokens: this._cancellationTokens,
+      handleLlmFailure: (sessionId, streamId, error, attempt, ctx) =>
+        this._handleLlmFailure(sessionId, streamId, error, attempt, ctx),
+      estimatePromptChars: (messages, systemPrompt, tools) =>
+        this._estimatePromptChars(messages, systemPrompt, tools),
+      computeMessageCost: (model, usage) => this._computeMessageCost(model, usage),
+      saveAssistantMessage: this._saveAssistantMessage.bind(this),
+      sessionManager: this._sessionManager,
+      eventBus: this._eventBus,
+    };
   }
 
   private async _handleSummarization(
@@ -4472,182 +4048,31 @@ export class ChatOrchestrator {
     streamId: string,
     attempt?: number,
   ): Promise<ProcessMessageResult> {
-    if (!this._optimizer) {
-      return { error: 'ContextOptimizer not available', errorType: 'internal', canRetry: false };
-    }
-
-    // ADR-070 §2.6: длительность этого прогона суммаризации.
-    const startedAt = Date.now();
-    const lang = session.settings.language || 'ru';
-
-    let prep: {
-      provider: import('../providers/base.js').BaseProvider;
-      llmMessages: import('../providers/base.js').LLMMessage[];
-      summarizerPrompt: string;
-      messagesToSummarize: Message[];
-      indices: number[];
-    };
-
-    try {
-      prep = this._optimizer.prepareSummarizationForOrchestrator(session, lang);
-    } catch (e) {
-      return { error: String(e), errorType: 'summarization_prep_failed', canRetry: false };
-    }
-
-    const provider = prep.provider;
-    const providerName = (message.provider as string) || session.settings.provider || '';
-
-    debugCollector.captureSessionInfo(session.id, provider.model, providerName, {
-      provider_type: provider.type,
-      debug_enabled: session.settings.debugEnabled,
-      context_optimization: 'summarization',
-    });
-
-    // Стрим от LLM суммаризатора
-    let accumulatedContent = '';
-    let accumulatedReasoning = '';
-    let finalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-    let finalModel: string | undefined;
-
-    const cancelToken: import('../providers/base.js').CancellationToken = {
-      cancelled: false,
-      cancel: () => { cancelToken.cancelled = true; },
-    };
-    this._cancellationTokens.set(streamId, cancelToken);
-
-    signal.addEventListener('abort', () => cancelToken.cancel(), { once: true });
-
-    try {
-      for await (const chunk of provider.chatAsync(prep.llmMessages, prep.summarizerPrompt, undefined, debugCollector, cancelToken)) {
-        if (cancelToken.cancelled) break;
-        if (chunk.isFinal) accumulatedContent = chunk.content;
-        else accumulatedContent += chunk.content;
-        if (chunk.usage) finalUsage = chunk.usage;
-        if (chunk.model) finalModel = chunk.model;
-        if (chunk.reasoning) accumulatedReasoning = chunk.reasoning;
-
-        publishChunk('stream.chunk', {
-          stream_id: streamId,
-          content: chunk.isFinal ? '' : chunk.content,
-          reasoning: chunk.reasoning,
-          is_final: chunk.isFinal,
-          agent_role: 'summary',
-          model: finalModel,
-          provider: providerName,
-        });
-      }
-    } catch (e) {
-      warning('ORCHESTRATOR', `Summarization stream error: ${e}`);
-      this._cancellationTokens.delete(streamId);
-      return this._handleLlmFailure(session.id, streamId, e, attempt, {
-        debugCollector,
-        durationMs: Date.now() - startedAt,
-        usage: finalUsage,
-        model: finalModel ?? provider.model ?? session.settings.model,
-        providerName,
-        agentRole: 'summary',
-        content: accumulatedContent,
-        promptChars: this._estimatePromptChars(prep.llmMessages, prep.summarizerPrompt),
-      });
-    }
-
-    if (cancelToken.cancelled) {
-      publishChunk('stream.cancelled', { stream_id: streamId, content: accumulatedContent, status: 'cancelled' });
-      this._cancellationTokens.delete(streamId);
-      return {};
-    }
-
-    // Сохранить summary-сообщение (без message.added — UI получит его через stream.done)
-    const durationMs = Date.now() - startedAt;
-    const messageCost = this._computeMessageCost(finalModel, finalUsage);
-    await this._saveAssistantMessage(
-      session.id, accumulatedContent, streamId, 'summary',
-      finalUsage, finalModel, accumulatedReasoning, debugCollector, false, providerName,
-      MessageRole.SUMMARY, prep.indices, true,
-      undefined, undefined, undefined, undefined, { duration_ms: durationMs },
+    return handleSummarizationFn(
+      session, message, signal, publishChunk, debugCollector, streamId,
+      attempt, this._summarizationDeps(),
     );
+  }
 
-    // Отключить засуммаризированные сообщения
-    await this._sessionManager.withLock(session.id, async (s) => {
-      for (const idx of prep.indices) {
-        if (idx >= 0 && idx < s.messages.length && !s.messages[idx]!.pinned) {
-          s.messages[idx]!.disabled = true;
-        }
-      }
-      await this._sessionManager.saveSession(s);
-    });
-
-    const updatedSession = await this._sessionManager.getSession(session.id);
-
-    const doneData: Record<string, unknown> = {
-      stream_id: streamId,
-      content: accumulatedContent,
-      message_index: (updatedSession?.messages.length ?? session.messages.length + 1) - 1,
-      pending_count: Math.max(0, (updatedSession?.pendingMessages.length ?? 1) - 1),
-      model: finalModel,
-      provider: providerName,
-      usage: finalUsage,
-      duration_ms: durationMs,
-      status: 'completed',
-      ...(messageCost ? { cost_usd: messageCost.costUsd, cost_currency: messageCost.currency } : {}),
-      metadata: { type: 'summary', indices: prep.indices },
+  /** Зависимости routing/gateway (ADR-095 шаг 6a: заглушка для делегаций). */
+  private _routingDeps(): RouteProviderDeps {
+    return {
+      providerLoader: this._providerLoader,
+      optimizer: this._optimizer,
+      router: this._router,
+      gateway: {
+        gatewayConfig: this._gatewayConfig,
+        gatewayPatternStore: this._gatewayPatternStore,
+        obfMapStore: this._obfMapStore,
+        gatewayAudit: this._gatewayAudit,
+        gatewayRateLimiter: this._gatewayRateLimiter,
+        gatewayPayloadLogPath: this._gatewayPayloadLogPath,
+      },
     };
-
-    publishChunk('stream.done', doneData);
-
-    // Обновить canSummarize
-    if (updatedSession) {
-      await this._sessionManager.withLock(session.id, async (s) => {
-        s.canSummarize = this._optimizer!.canSummarize(s);
-        await this._sessionManager.saveSession(s);
-      });
-
-      const freshSession = await this._sessionManager.getSession(session.id);
-
-      this._eventBus.publish(session.id, 'session.updated', {
-        session_id: session.id,
-        summarization_pending: false,
-        can_summarize: freshSession?.canSummarize ?? false,
-        input_tokens: freshSession?.inputTokens ?? 0,
-        output_tokens: freshSession?.outputTokens ?? 0,
-        total_tokens: freshSession?.totalTokens ?? 0,
-        cache_read_tokens: freshSession?.cacheReadTokens ?? 0,
-        cache_write_tokens: freshSession?.cacheWriteTokens ?? 0,
-        reasoning_tokens: freshSession?.reasoningTokens ?? 0,
-        cache_hit_rate: freshSession?.cacheHitRate ?? 0,
-        input_cost: freshSession?.inputCost ?? 0,
-        output_cost: freshSession?.outputCost ?? 0,
-        cache_read_cost: freshSession?.cacheReadCost ?? 0,
-        cache_write_cost: freshSession?.cacheWriteCost ?? 0,
-      });
-    }
-
-    this._cancellationTokens.delete(streamId);
-    return {};
   }
 
   private _getProvider(providerName: string, session: Session, reasoningLevel?: ReasoningLevel) {
-    const modelName = session.settings.model || '';
-    const sharedConfig = this._providerLoader(providerName);
-    if (!sharedConfig) return null;
-
-    try {
-      const effectiveModel = modelName || sharedConfig.defaultModel || '';
-      const contextWindow = this._resolveModelContextWindow(effectiveModel);
-      const provider = ProviderFactory.create(
-        providerName,
-        {
-          ...toCoreProviderConfig(sharedConfig, effectiveModel, reasoningLevel ?? session.settings.reasoningLevel),
-          maxTokens: session.settings.maxTokens,
-          numCtx: contextWindow > 0 ? contextWindow : undefined,
-        },
-        session.settings.temperature,
-      );
-      return this._wrapWithGateway(provider, session);
-    } catch (e) {
-      warning('ORCHESTRATOR', `Failed to create provider ${providerName}: ${e}`);
-      return null;
-    }
+    return getProvider(providerName, session, reasoningLevel, this._routingDeps());
   }
 
   /**
@@ -4655,9 +4080,7 @@ export class ChatOrchestrator {
    * (ModelConfig.contextWindow через оптимизатор), иначе справочник.
    */
   private _resolveModelContextWindow(modelName: string): number {
-    const window = this._optimizer?.getContextWindow(modelName);
-    if (window && window > 0) return window;
-    return lookupContextWindow(modelName).window;
+    return resolveModelContextWindow(modelName, this._optimizer);
   }
 
   /**
@@ -4688,22 +4111,11 @@ export class ChatOrchestrator {
    * Если gateway выключен — возвращает провайдер как есть (обратная совместимость).
    */
   private _wrapWithGateway(provider: BaseProvider, session: Session): BaseProvider {
-    if (!this._gatewayConfig) return provider;
-    const patternStore = this._gatewayPatternStore;
-    return new GatewayProvider(provider, this._gatewayConfig, {
-      getMap: () => this._obfMapStore!.get(session.id),
-      saveMap: (map) => this._obfMapStore!.set(session.id, map),
-      getAudit: () => this._gatewayAudit!,
-      getRateLimiter: () => this._gatewayRateLimiter!,
-      getPatterns: patternStore ? () => patternStore.getPatterns() : undefined,
-      payloadLogPath: this._gatewayPayloadLogPath,
-      sessionId: session.id,
-      userId: session.userId ?? '',
-    });
+    return wrapWithGateway(provider, session, this._routingDeps().gateway);
   }
 
   private _getEffectiveModel(session: Session, providerName: string): string {
-    return session.settings.model || this._providerLoader(providerName)?.defaultModel || '';
+    return getEffectiveModel(session, providerName, this._providerLoader);
   }
 
   /**
@@ -4716,76 +4128,7 @@ export class ChatOrchestrator {
     reasoningLevel?: ReasoningLevel,
     debugCollector?: DebugCollector,
   ): Promise<{ provider: BaseProvider; providerName: string; modelName: string; decision?: RoutingDecision } | null> {
-    if (this._router && session.settings.routingEnabled !== false) {
-      const toolCallNames = message.toolCalls?.map((tc) => {
-        const func = tc.function as { name: string } | undefined;
-        return func?.name || '';
-      }).filter(Boolean);
-
-      const decision = await this._router.route({
-        sessionSettings: session.settings,
-        userMessage: message.content,
-        toolCalls: toolCallNames,
-      });
-
-      // ADR-084: метрики decision-классификации категории (ADR-034). Сигнал
-      // публикуется только когда категорию определила decision-модель
-      // (`strategy='decision'`), а не словарный классификатор.
-      if (debugCollector && decision.strategy === 'decision') {
-        debugCollector.addContext('decision_routing', {
-          category: decision.category,
-          confidence: decision.confidence,
-          signals: decision.signals,
-        });
-      }
-
-      const routedWindow = this._resolveModelContextWindow(decision.modelName);
-      let provider = this._router.getProvider(
-        decision,
-        undefined,
-        reasoningLevel ?? session.settings.reasoningLevel,
-        session.settings.maxTokens,
-        routedWindow > 0 ? routedWindow : undefined,
-      );
-      if (provider) {
-        // ADR-036: ProviderPool уже оборачивает провайдера через gatewayFactory.
-        // Повторная обёртка дублировала бы guard/аудит/rate-limit — пропускаем.
-        if (!(provider instanceof GatewayProvider)) {
-          provider = this._wrapWithGateway(provider, session);
-        }
-        return {
-          provider,
-          providerName: decision.providerName,
-          modelName: decision.modelName,
-          decision,
-        };
-      }
-
-      // Fallback: если decision не содержит валидного провайдера/модели
-      // (например, категория не имеет маппинга в routingContent),
-      // используем стандартный _getProvider() для провайдера сессии
-      const fallbackName = session.settings.provider || '';
-      provider = this._getProvider(fallbackName, session, reasoningLevel);
-      if (provider) {
-        return {
-          provider,
-          providerName: fallbackName,
-          modelName: this._getEffectiveModel(session, fallbackName),
-          decision,
-        };
-      }
-    }
-
-    // Fallback: старый метод (если роутер недоступен или все пути выше не сработали)
-    const providerName = (message.provider as string) || session.settings.provider || '';
-    const provider = this._getProvider(providerName, session, reasoningLevel);
-    if (!provider) return null;
-
-    return {
-      provider,
-      providerName,
-      modelName: provider.model,
-    };
+    return routeProvider(session, message, reasoningLevel, debugCollector, this._routingDeps());
   }
 
   static _sessionMessagesToLlm(
@@ -4793,110 +4136,7 @@ export class ChatOrchestrator {
     currentAgentRole?: string,
     currentAuthor?: string,
   ): LLMMessage[] {
-    const result: LLMMessage[] = [];
-
-    // Defensive pairing (фикс «осиротевших» tool): id вызовов, для которых уже
-    // выдан assistant с tool_use. Tool-результат валиден только после своего
-    // вызова в этой же выдаче; всё остальное (disabled/hidden assistant, или
-    // результат без вызова) уходит user-текстом — `tool` без `tool_calls`
-    // ломает OpenAI-совместимые API и Anthropic.
-    const emittedToolCallIds = new Set<string>();
-
-    // Атрибуция чужого сообщения: `[agent]: ` / `{author}: ` / `[anonymous]: `.
-    const withAttribution = (m: Message): string => {
-      if (m.agentRole) return `[${m.agentRole}]: ${m.content}`;
-      if (m.author) return `{${m.author}}: ${m.content}`;
-      return `[anonymous]: ${m.content}`;
-    };
-
-    for (const msg of messages) {
-      if (msg.disabled || msg.hidden) continue;
-
-      const role = msg.role;
-      if (role === MessageRole.INFO) continue;
-
-      // ADR-070 §2.6 / ADR-041: assistant-сообщение о терминальной ошибке LLM
-      // (metadata.status='error') персистится для UI и аудита, но не является
-      // частью диалога — не отдаём его модели как обычную реплику assistant,
-      // иначе на следующем ходу модель видит собственный «сбой» в контексте.
-      if (role === MessageRole.ASSISTANT && msg.metadata?.status === 'error') continue;
-
-      // ADR-070 §2.8: durable state-сообщения хранятся с role system (скрыты в
-      // UI), но в LLM-запрос уходят как синтетическое user-сообщение с
-      // обёрткой `<system-state>` — Anthropic не принимает role system в
-      // messages. Без префикса `[anonymous]`.
-      if (role === MessageRole.SYSTEM) {
-        const stateType = typeof msg.metadata?.type === 'string' ? msg.metadata.type : 'state';
-        result.push({
-          id: '',
-          role: 'user',
-          content: wrapStateContent(stateType, msg.content),
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          disabled: false,
-          pinned: false,
-          branchId: '',
-        });
-        continue;
-      }
-
-      // Сообщение считается «своим», если agentRole не задан (легаси/сабагент —
-      // иначе такие assistant порождали бы сирот) или совпадает с активным
-      // агентом. User — по автору.
-      const isOwnAssistant =
-        role === MessageRole.ASSISTANT &&
-        (msg.agentRole === undefined || msg.agentRole === currentAgentRole);
-      const isOwnUser = role === MessageRole.USER && msg.author === currentAuthor;
-      const hasToolCalls =
-        role === MessageRole.ASSISTANT && !!msg.toolCalls && msg.toolCalls.length > 0;
-      // Tool-результат валиден только в паре с уже выданным assistant(tool_use).
-      // Осиротевший результат отдаём user-текстом: `tool` без `tool_calls`
-      // ломает OpenAI-совместимые API и Anthropic (`invalid_request_error`:
-      // на каждый `tool_result` нужен `tool_use`).
-      const isPairedTool =
-        role === MessageRole.TOOL && !!msg.toolCallId && emittedToolCallIds.has(msg.toolCallId);
-
-      let content: string;
-      let llmRole: string;
-      let toolUse: Record<string, unknown>[] | undefined;
-
-      if (hasToolCalls) {
-        // Assistant с tool_calls — своего ИЛИ чужого агента — сохраняет
-        // структуру вызова (role assistant + toolUse), чтобы парные
-        // tool-результаты не осиротели. Чужому агенту добавляем текстовый
-        // префикс атрибуции (при пустом content достаточно одних tool_calls).
-        llmRole = MessageRole.ASSISTANT;
-        toolUse = msg.toolCalls;
-        for (const tc of msg.toolCalls ?? []) {
-          if (typeof tc.id === 'string') emittedToolCallIds.add(tc.id);
-        }
-        content = isOwnAssistant || !msg.content
-          ? msg.content
-          : `[${msg.agentRole}]: ${msg.content}`;
-      } else if (isOwnAssistant || isOwnUser || isPairedTool) {
-        content = msg.content;
-        llmRole = role;
-      } else {
-        llmRole = 'user';
-        content = withAttribution(msg);
-      }
-
-      result.push({
-        id: '',
-        role: llmRole,
-        content,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        disabled: false,
-        pinned: false,
-        branchId: '',
-        toolUse,
-        toolCallId: isPairedTool ? msg.toolCallId : undefined,
-        // Reasoning чужого агента не прокидываем; у tool-сообщений его нет.
-        reasoning: isOwnAssistant ? msg.reasoning : undefined,
-        agentRole: msg.agentRole,
-      });
-    }
-
-    return result;
+    return sessionMessagesToLlmFn(messages, currentAgentRole, currentAuthor);
   }
 
   /**
@@ -4905,25 +4145,17 @@ export class ChatOrchestrator {
    * Пустой объект если карты нет, плейсхолдеров нет или gateway выключен.
    */
   private async _getAssistantSecrets(sessionId: string, content: string): Promise<Record<string, string>> {
-    if (!content || !this._obfMapStore) return {};
-    try {
-      const obfMap = await this._obfMapStore.get(sessionId);
-      if (Object.keys(obfMap).length === 0) return {};
-      const found = new Set<string>();
-      let match: RegExpExecArray | null;
-      const placeholderRe = new RegExp(PLACEHOLDER_PATTERN.source, 'g');
-      while ((match = placeholderRe.exec(content)) !== null) {
-        found.add(match[0]);
-      }
-      const secrets: Record<string, string> = {};
-      for (const ph of found) {
-        if (ph in obfMap) secrets[ph] = obfMap[ph]!;
-      }
-      return secrets;
-    } catch (e) {
-      warning('ORCHESTRATOR', `Ошибка раскрытия секретов в metadata: ${e instanceof Error ? e.message : String(e)}`);
-      return {};
-    }
+    return getAssistantSecrets(sessionId, content, this._obfMapStore);
+  }
+
+  /** Зависимости персистентности сообщений (ADR-095 шаг 6a: заглушка делегаций). */
+  private _persistenceDeps(): SaveAssistantMessageDeps {
+    return {
+      sessionManager: this._sessionManager,
+      eventBus: this._eventBus,
+      obfMapStore: this._obfMapStore,
+      modelPriceLoader: this._modelPriceLoader,
+    };
   }
 
   /**
@@ -4945,64 +4177,18 @@ export class ChatOrchestrator {
     allIntermediateTexts: Array<{ text: string; iteration: number }>,
     allReasoning: Array<{ text: string; iteration: number }>,
   ): Promise<void> {
-    for (const raw of allRawToolCalls) {
-      const iteration = raw.iteration;
-      const iterText = allIntermediateTexts.find((t) => t.iteration === iteration)?.text ?? '';
-      const iterReasoning = allReasoning.find((r) => r.iteration === iteration)?.text;
-
-      const assistantMsg: Message = {
-        id: generateId(),
-        role: MessageRole.ASSISTANT,
-        seq: 0,
-        origin: 'local',
-        parts: [makeTextPart(iterText)],
-        content: iterText,
-        toolCalls: raw.calls,
-        createdAt: nowISO(),
-        disabled: false,
-        pinned: false,
-        hidden: false,
-        model: finalModel,
-        provider: providerName,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        agentRole,
-        metadata: { stream_id: streamId, tool_chain: true },
-        ...(iterReasoning ? { reasoning: iterReasoning } : {}),
-      };
-      await this._sessionManager.addMessage(sessionId, assistantMsg);
-
-      for (const tc of allToolCalls.filter((t) => t.iteration === iteration)) {
-        const toolContent = String((tc.result as { content?: string } | undefined)?.content ?? '');
-        // metadata ToolResult (в т.ч. i18n) пробрасывается в metadata сообщения —
-        // иначе локализационные ключи не доходят до истории и UI.
-        const toolResultMeta = (tc.result as { metadata?: Record<string, unknown> } | undefined)?.metadata;
-        const toolMsg: Message = {
-          id: generateId(),
-          role: MessageRole.TOOL,
-          seq: 0,
-          origin: 'local',
-          parts: [makeTextPart(toolContent)],
-          content: toolContent,
-          toolCallId: tc.id as string,
-          createdAt: nowISO(),
-          disabled: false,
-          pinned: false,
-          hidden: false,
-          model: finalModel,
-          provider: providerName,
-          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-          agentRole,
-          metadata: {
-            ...(toolResultMeta ?? {}),
-            stream_id: streamId,
-            tool_chain: true,
-            tool_name: tc.name,
-            args: tc.args,
-          },
-        };
-        await this._sessionManager.addMessage(sessionId, toolMsg);
-      }
-    }
+    return persistToolChain(
+      this._sessionManager,
+      sessionId,
+      streamId,
+      providerName,
+      agentRole,
+      finalModel,
+      allRawToolCalls,
+      allToolCalls,
+      allIntermediateTexts,
+      allReasoning,
+    );
   }
 
   /**
@@ -5015,9 +4201,7 @@ export class ChatOrchestrator {
     intermediateTexts: Array<{ text: string; iteration: number }>,
     current: string,
   ): string {
-    const parts = [...intermediateTexts.map((t) => t.text), current]
-      .filter((t) => t && t.trim().length > 0);
-    return parts.join('\n\n');
+    return joinAccumulatedTexts(intermediateTexts, current);
   }
 
   /**
@@ -5028,24 +4212,7 @@ export class ChatOrchestrator {
     isCancelled: boolean,
     metadataExtra?: Record<string, unknown>,
   ): AssistantMessageStatus {
-    if (isCancelled) return 'cancelled';
-    const key = (metadataExtra?.i18n as { key?: string } | undefined)?.key;
-    switch (key) {
-      case 'session.stopped':
-      case 'session.denied_blocked':
-        return 'stopped';
-      case 'session.max_iterations':
-        return 'limit';
-      case 'session.empty_response':
-      case 'router.timeout':
-      case 'router.network_error':
-      case 'router.rate_limit_exceeded':
-      case 'router.context_length_exceeded':
-      case 'router.no_user_query':
-        return 'error';
-      default:
-        return 'completed';
-    }
+    return resolveAssistantStatus(isCancelled, metadataExtra);
   }
 
   private async _saveAssistantMessage(
@@ -5076,143 +4243,29 @@ export class ChatOrchestrator {
      */
     precomputedCost?: ReturnType<typeof computeUsageCost>,
   ): Promise<string> {
-    const finalContent = content;
-
-    if (!isCancelled && content) {
-      debugCollector.captureRawModelResponse(content);
-    }
-
-    if (debugCollector.enabled) {
-      debugCollector.captureReasoning(reasoning);
-    }
-
-    const debugInfo = debugCollector.getDebugInfo();
-
-    // ADR-070 §2.4: usage доступен в момент сохранения — заполняем фактические
-    // cachedTokens и подтверждаем/опровергаем предсказание.
-    const resolvedPromptMeta: PromptMeta | undefined = promptMeta
-      ? {
-          ...promptMeta,
-          cachedTokens: usage?.cacheReadTokens ?? 0,
-          validated: validateExpected(promptMeta.expected, usage?.cacheReadTokens ?? 0),
-        }
-      : undefined;
-
-    const metadata: Record<string, unknown> = { stream_id: streamId, ...metadataExtra };
-    // ADR-070 §2.6: единая точка простановки статуса ответа — ни один путь
-    // сохранения (обычный, cancel, tool-chain, summary, debug, micro) не
-    // пропускает его. UI показывает префикс по этому полю.
-    // Явный status (например 'error' для assistant-сообщения о сбое LLM)
-    // приоритетнее вывода из i18n — иначе rate_limit/context_length без
-    // маппинга получили бы 'completed'.
-    metadata.status = isAssistantMessageStatus(metadataExtra?.status)
-      ? metadataExtra.status
-      : this._resolveAssistantStatus(isCancelled, metadataExtra);
-    if (toolResults && toolResults.length > 0) {
-      metadata.tool_results = toolResults;
-      // ADR-070 §2.6: per-message статистика сабагентов (попап сообщения и
-      // «Последний ответ») — агрегируется из task-результатов этого хода.
-      const subagents = this._aggregateSubagentStats(toolResults);
-      if (subagents) metadata.subagents = subagents;
-    }
-    if (intermediateTextBlocks && intermediateTextBlocks.length > 0) {
-      metadata.intermediate_text_blocks = intermediateTextBlocks;
-    }
-
-    // ADR-070 §2.6: стоимость хода по цене модели (только если цены известны).
-    const messageCost = precomputedCost !== undefined
-      ? precomputedCost
-      : this._computeMessageCost(model, usage);
-    if (messageCost) {
-      metadata.cost_usd = messageCost.costUsd;
-      metadata.cost_currency = messageCost.currency;
-      metadata.cost_breakdown = messageCost.breakdown;
-    }
-
-    // ADR-036: раскрытие секретов в UI. Реальные значения плейсхолдеров из
-    // карты обфускации сессии встраиваются в metadata.secrets (клик раскрывает
-    // локально). Только существующие плейсхолдеры; карта — секрет, в логи не пишется.
-    if (role === MessageRole.ASSISTANT && finalContent && this._obfMapStore) {
-      const secrets = await this._getAssistantSecrets(sessionId, finalContent);
-      if (Object.keys(secrets).length > 0) {
-        metadata.secrets = { ...(metadata.secrets as Record<string, string> | undefined), ...secrets };
-      }
-    }
-
-    const msg: Message = {
-      id: generateId(),
-      role,
-      seq: 0, // filled by addMessage
-      origin: 'local',
-      parts: [makeTextPart(finalContent)],
-      content: finalContent,
-      createdAt: nowISO(),
-      disabled: false,
-      pinned: false,
-      hidden: false,
-      model,
-      provider: provider || '',
-      usage,
-      reasoning,
+    return saveAssistantMessage(
+      this._persistenceDeps(),
+      sessionId,
+      content,
+      streamId,
       agentRole,
-      debugData: debugInfo ?? undefined,
-      metadata,
-      ...(resolvedPromptMeta ? { promptMeta: resolvedPromptMeta } : {}),
-      ...(summaryOf ? { summaryOf } : {}),
-      ...(qaPass !== undefined ? { qa_pass: qaPass } : {}),
-      ...(qaReason !== undefined ? { qa_reason: qaReason } : {}),
-    };
-
-    await this._sessionManager.addMessage(sessionId, msg);
-
-    // Accumulate session token counters and costs
-    if (usage) {
-      await this._sessionManager.withLock(sessionId, async (s) => {
-        s.inputTokens += usage.inputTokens || 0;
-        s.outputTokens += usage.outputTokens || 0;
-        s.totalTokens += usage.totalTokens || 0;
-        s.cacheReadTokens += usage.cacheReadTokens || 0;
-        s.cacheWriteTokens += usage.cacheWriteTokens || 0;
-        s.reasoningTokens += usage.reasoningTokens || 0;
-        // ADR-070 §2.3: hit rate по накопленным токенам сессии.
-        s.cacheHitRate = computeCacheHitRate(s.cacheReadTokens, s.inputTokens);
-
-        // ADR-070 §2.6: единый helper стоимости — тот же, что для per-message.
-        const effectiveModel = model || msg.model;
-        const cost = effectiveModel
-          ? computeUsageCost(usage, this._modelPriceLoader?.(effectiveModel) ?? null)
-          : null;
-        if (cost) {
-          s.inputCost += cost.breakdown.input;
-          s.outputCost += cost.breakdown.output;
-          s.cacheReadCost += cost.breakdown.cacheRead;
-          s.cacheWriteCost += cost.breakdown.cacheWrite;
-        }
-        s.updatedAt = nowISO();
-        await this._sessionManager.saveSession(s);
-      });
-    }
-
-    // Publish message.added for UI
-    if (!skipEvent) {
-      const session = await this._sessionManager.getSession(sessionId);
-      if (session) {
-        this._eventBus.publish(sessionId, 'message.added', {
-          message_index: session.messages.length - 1,
-          role: msg.role,
-          content: finalContent.slice(0, 500),
-          model,
-          provider: provider || '',
-          agent_role: agentRole,
-          reasoning: reasoning || null,
-          tool_calls: toolResults && toolResults.length > 0 ? toolResults : null,
-          intermediate_text_blocks: intermediateTextBlocks && intermediateTextBlocks.length > 0 ? intermediateTextBlocks : null,
-          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-        });
-      }
-    }
-
-    return finalContent;
+      usage,
+      model,
+      reasoning,
+      debugCollector,
+      isCancelled,
+      provider,
+      role,
+      summaryOf,
+      skipEvent,
+      toolResults,
+      intermediateTextBlocks,
+      qaPass,
+      qaReason,
+      metadataExtra,
+      promptMeta,
+      precomputedCost,
+    );
   }
 
   /**
@@ -5221,28 +4274,12 @@ export class ChatOrchestrator {
    * metadata (UI локализует сам).
    */
   private _formatLlmError(error: unknown): { text: string; i18n?: ReturnType<typeof i18nMeta> } {
-    const raw = error instanceof Error ? error.message : String(error);
-    const lower = raw.toLowerCase();
-    if (lower.includes('abort') || lower.includes('operation was aborted') || lower.includes('timed out') || lower.includes('timeout')) {
-      return { text: sm('router.timeout'), i18n: i18nMeta('router.timeout') };
-    }
-    if (lower.includes('fetch failed') || lower.includes('network') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('eai_again')) {
-      return { text: sm('router.network_error'), i18n: i18nMeta('router.network_error') };
-    }
-    return { text: raw };
+    return formatLlmError(error);
   }
 
   /** i18n-ключ по типу ошибки (ADR-041) для metadata assistant-сообщения об ошибке. */
   private _errorTypeI18n(errorType: string): ReturnType<typeof i18nMeta> | undefined {
-    switch (errorType) {
-      case 'timeout': return i18nMeta('router.timeout');
-      case 'network_error': return i18nMeta('router.network_error');
-      case 'rate_limit': return i18nMeta('router.rate_limit_exceeded');
-      case 'context_length': return i18nMeta('router.context_length_exceeded');
-      case 'no_user_query': return i18nMeta('router.no_user_query');
-      case 'provider_not_found': return i18nMeta('router.provider_not_found');
-      default: return undefined;
-    }
+    return errorTypeI18n(errorType);
   }
 
   /**
@@ -5262,65 +4299,10 @@ export class ChatOrchestrator {
     attempt?: number,
     ctx?: LlmFailureContext,
   ): Promise<ProcessMessageResult> {
-    const rawError = error instanceof Error ? error.message : String(error);
-    const formatted = this._formatLlmError(error);
-    const humanError = formatted.text;
-    // ContextLengthExceededError несёт русское сообщение («Контекстное окно
-    // превышено») — текстовый классификатор его не распознаёт, поэтому тип
-    // определяем по классу ошибки, чтобы UI показал дружелюбное сообщение.
-    const errorType = ctx?.errorType
-      ?? (error instanceof ContextLengthExceededError
-        ? 'context_length'
-        : classifyLlmError(rawError));
-    const canRetry = isLlmErrorRecoverable(error, rawError, errorType);
-
-    // ADR-070 §2.6 (Bug 1): assistant-сообщение об ошибке пишем только тогда,
-    // когда повтора уже не будет (unrecoverable / последняя попытка / прямой
-    // вызов без QueueProcessor). Иначе на каждый recoverable-ретрай в истории
-    // появлялся бы дубль, а `message.added` мигал бы в UI.
-    const isTerminal = !canRetry || attempt === undefined || attempt > LLM_MAX_ATTEMPTS;
-
-    if (isTerminal && ctx) {
-      try {
-        const estimated = this._estimateUsage(
-          ctx.usage,
-          ctx.promptChars ?? 0,
-          (ctx.content ?? '').length,
-        );
-        const i18n = formatted.i18n ?? this._errorTypeI18n(errorType);
-        await this._saveAssistantMessage(
-          sessionId, humanError, streamId, ctx.agentRole,
-          estimated.usage, ctx.model, undefined, ctx.debugCollector, false, ctx.providerName,
-          MessageRole.ASSISTANT, undefined, false, ctx.toolResults, undefined,
-          undefined, undefined,
-          {
-            duration_ms: ctx.durationMs,
-            status: 'error',
-            ...(i18n ? { i18n } : {}),
-            ...(estimated.estimated ? { usage_estimated: true } : {}),
-          },
-          ctx.promptMeta,
-        );
-      } catch (err) {
-        warning('ORCHESTRATOR', `Не удалось сохранить assistant-сообщение об ошибке: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-
-    try {
-      await this._sessionManager.withLock(sessionId, async (s) => {
-        const userMsg = s.messages.find(
-          (m) => m.role === MessageRole.USER && m.metadata?.stream_id === streamId,
-        );
-        if (userMsg) {
-          userMsg.metadata = { ...userMsg.metadata, last_error: humanError };
-          await this._sessionManager.saveSession(s);
-        }
-      });
-    } catch (err) {
-      warning('ORCHESTRATOR', `Не удалось записать last_error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-
-    return { error: humanError, errorType, canRetry };
+    return handleLlmFailure(sessionId, streamId, error, attempt, ctx, {
+      sessionManager: this._sessionManager,
+      saveAssistantMessage: this._saveAssistantMessage.bind(this),
+    });
   }
 
   /** Строит permission-конфиг с добавленным грантом для заданной базы правил. */
