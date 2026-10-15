@@ -1,0 +1,230 @@
+// PROP-091: `synth backup` — архив каталога данных (`$SYNTH_DATA_DIR`) в tar.gz
+// с манифестом (версия схемы/пакета, время, список файлов, контрольная сумма),
+// опциональными секретами и опциональными рабочими каталогами.
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { chmod, mkdir, stat } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import { SYNTH_VERSION } from '@itphx/synth-shared';
+import { readInstanceMeta } from '../storage/instance-meta.js';
+import {
+  listFilesForArchive,
+  writeTarGz,
+  type ArchiveEntryMeta,
+  type ArchiveSource,
+} from './archive.js';
+
+/** Манифест архива backup (PROP-091). */
+export interface BackupManifest {
+  tool: 'synth-backup';
+  formatVersion: 1;
+  /** Версия схемы данных из `meta.json` (нет — 0). */
+  schemaVersion: number;
+  /** `SYNTH_VERSION` на момент снятия. */
+  instanceVersion: string;
+  createdAt: string;
+  withSecrets: boolean;
+  withWorkspace: boolean;
+  /** Применённые исключения (паттерны). */
+  excluded: string[];
+  /** Записи архива (без `manifest.json`). */
+  entries: ArchiveEntryMeta[];
+  /** sha256 от join(sha256 файлов, '\n'). */
+  contentChecksum: string;
+  dataDir: string;
+}
+
+/** Опции `createBackup` (PROP-091). */
+export interface CreateBackupOptions {
+  dataDir: string;
+  /** Путь к архиву; каталог — положить файл внутрь. По умолчанию — текущий каталог. */
+  out?: string;
+  /** Включить `secrets/` (архив становится секретом). */
+  withSecrets?: boolean;
+  /** Включить `workspaces/`. */
+  withWorkspace?: boolean;
+  /** Снятие с работающего сервиса (`--live`): срез не транзакционный. */
+  live?: boolean;
+  /** Момент времени (для имени файла и `createdAt`); по умолчанию — текущий. */
+  now?: Date;
+  /** Канал вывода (по умолчанию — тихий). */
+  log?: (msg: string) => void;
+}
+
+/** Опции CLI-команды `synth backup` (PROP-091). */
+export interface BackupCommandOptions extends CreateBackupOptions {
+  /** Канал ошибок (по умолчанию `console.error`). */
+  error?: (msg: string) => void;
+}
+
+/** Строит метку времени `YYYYMMDD-HHmmss` (локальное время). */
+export function formatBackupStamp(date: Date): string {
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return (
+    `${date.getFullYear()}${p(date.getMonth() + 1)}${p(date.getDate())}` +
+    `-${p(date.getHours())}${p(date.getMinutes())}${p(date.getSeconds())}`
+  );
+}
+
+/** Строит набор исключений (паттерны + предикат) по флагам. */
+function _buildExclusions(opts: { withSecrets: boolean; withWorkspace: boolean }): {
+  patterns: string[];
+  predicate: (relPath: string, isDir: boolean) => boolean;
+} {
+  const patterns = ['tmp/', 'logs/', '.doctor-probe', '*.lock'];
+  if (!opts.withWorkspace) patterns.push('workspaces/');
+  if (!opts.withSecrets) patterns.push('secrets/');
+
+  const predicate = (relPath: string, _isDir: boolean): boolean => {
+    const top = relPath.split('/')[0];
+    if (top === 'tmp' || top === 'logs') return true;
+    if (relPath === '.doctor-probe') return true;
+    if (relPath.endsWith('.lock')) return true;
+    if (!opts.withWorkspace && top === 'workspaces') return true;
+    if (!opts.withSecrets && top === 'secrets') return true;
+    return false;
+  };
+
+  return { patterns, predicate };
+}
+
+/** sha256 файла потоково. */
+function _hashFile(absPath: string): Promise<string> {
+  return new Promise<string>((resolveHash, reject) => {
+    const hash = createHash('sha256');
+    const rs = createReadStream(absPath);
+    rs.on('error', reject);
+    rs.on('end', () => resolveHash(hash.digest('hex')));
+    rs.on('data', (chunk) => hash.update(chunk));
+  });
+}
+
+/** Контрольная сумма содержимого: sha256 от join(sha256 файлов, '\n'). */
+export function computeContentChecksum(entries: ArchiveEntryMeta[]): string {
+  const hashes = entries
+    .filter((entry) => entry.type === 'file' && typeof entry.sha256 === 'string')
+    .map((entry) => entry.sha256 as string);
+  return createHash('sha256').update(hashes.join('\n')).digest('hex');
+}
+
+/** Резолвит итоговый путь архива (каталог → имя по умолчанию внутри). */
+async function _resolveOutPath(out: string | undefined, defaultName: string): Promise<string> {
+  if (!out) return resolve(defaultName);
+  const abs = resolve(out);
+  try {
+    if ((await stat(abs)).isDirectory()) return join(abs, defaultName);
+  } catch {
+    // Путь не существует — трактуем как файл.
+  }
+  return abs;
+}
+
+/**
+ * Создаёт архив каталога данных (PROP-091).
+ *
+ * Исключения по умолчанию: `workspaces/` (без `--with-workspace`), `tmp/`,
+ * `logs/`, `.doctor-probe`, `*.lock`; `secrets/` — без `--with-secrets`.
+ * Файл архива — `0600`.
+ */
+export async function createBackup(opts: CreateBackupOptions): Promise<{
+  path: string;
+  manifest: BackupManifest;
+  bytes: number;
+}> {
+  const log = opts.log ?? ((): void => {});
+  const now = opts.now ?? new Date();
+  const dataDir = resolve(opts.dataDir);
+  const withSecrets = !!opts.withSecrets;
+  const withWorkspace = !!opts.withWorkspace;
+  const live = !!opts.live;
+
+  const meta = await readInstanceMeta(dataDir);
+  const schemaVersion = meta?.schemaVersion ?? 0;
+  const instanceVersion = SYNTH_VERSION;
+
+  const defaultName = `synth-backup-${instanceVersion}-${formatBackupStamp(now)}.tar.gz`;
+  const outPath = await _resolveOutPath(opts.out, defaultName);
+
+  const { patterns, predicate } = _buildExclusions({ withSecrets, withWorkspace });
+  const sources: ArchiveSource[] = await listFilesForArchive(dataDir, { exclude: predicate });
+
+  // Предварительный расчёт записей: манифест пишется в архив последним, поэтому
+  // его содержимое (с хешами) должно быть известно до записи.
+  const entries: ArchiveEntryMeta[] = [];
+  for (const source of sources) {
+    if (source.type === 'dir') {
+      entries.push({ path: source.path, type: 'dir', size: 0, mode: source.mode });
+      continue;
+    }
+    const info = await stat(source.absPath);
+    entries.push({
+      path: source.path,
+      type: 'file',
+      size: info.size,
+      mode: source.mode,
+      sha256: await _hashFile(source.absPath),
+    });
+  }
+
+  const manifest: BackupManifest = {
+    tool: 'synth-backup',
+    formatVersion: 1,
+    schemaVersion,
+    instanceVersion,
+    createdAt: now.toISOString(),
+    withSecrets,
+    withWorkspace,
+    excluded: patterns,
+    entries,
+    contentChecksum: computeContentChecksum(entries),
+    dataDir,
+  };
+
+  if (live) {
+    log(
+      'Предупреждение: --live — снятие с работающего сервиса; каждый файл валиден, но срез не транзакционный (возможна межсущностная несогласованность).',
+    );
+  } else {
+    log(
+      'Предупреждение: корректный бэкап снимается при остановленном сервисе (или из read-only-снапшота).',
+    );
+  }
+  if (withSecrets) {
+    log('Предупреждение: архив содержит секреты; храните его как секрет (0600, вне публичных мест).');
+  }
+
+  await mkdir(dirname(outPath), { recursive: true });
+  await writeTarGz(outPath, sources, {
+    extraFile: {
+      path: 'manifest.json',
+      content: Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8'),
+    },
+  });
+  await chmod(outPath, 0o600);
+
+  const bytes = (await stat(outPath)).size;
+  return { path: outPath, manifest, bytes };
+}
+
+/**
+ * Тело CLI-команды `synth backup` (PROP-091): снимает архив и печатает сводку.
+ *
+ * @returns код выхода процесса (0 — успех, 1 — ошибка).
+ */
+export async function runBackupCommand(opts: BackupCommandOptions): Promise<number> {
+  const log = opts.log ?? ((msg: string) => console.log(msg));
+  const error = opts.error ?? ((msg: string) => console.error(msg));
+  try {
+    const result = await createBackup({ ...opts, log });
+    log(`Бэкап создан: ${result.path}`);
+    log(`  размер: ${result.bytes} Б`);
+    log(`  записей: ${result.manifest.entries.length}`);
+    log(`  секреты: ${result.manifest.withSecrets ? 'да' : 'нет'}`);
+    log(`  workspace: ${result.manifest.withWorkspace ? 'да' : 'нет'}`);
+    log(`  контрольная сумма: ${result.manifest.contentChecksum}`);
+    return 0;
+  } catch (err) {
+    error(`Ошибка бэкапа: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+}

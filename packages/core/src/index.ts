@@ -427,6 +427,21 @@ export type {
   DoctorOptions,
   DoctorCommandOptions,
 } from './maintenance/doctor.js';
+// PROP-091: `synth backup`/`restore` — архив каталога данных с манифестом,
+// контрольными суммами, опциональными секретами и страховочной копией.
+export {
+  listFilesForArchive,
+  writeTarGz,
+  readTarGz,
+  listTarGz,
+  readFileFromTarGz,
+  ArchivePathError,
+} from './maintenance/archive.js';
+export type { ArchiveEntryMeta, ArchiveSource, ReadTarGzEntry } from './maintenance/archive.js';
+export { createBackup, runBackupCommand, computeContentChecksum } from './maintenance/backup.js';
+export type { BackupManifest, CreateBackupOptions, BackupCommandOptions } from './maintenance/backup.js';
+export { restoreBackup, runRestoreCommand, BackupChecksumError } from './maintenance/restore.js';
+export type { RestoreOptions, RestoreCommandOptions } from './maintenance/restore.js';
 export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
 export { createSkillRoutes } from './server/routes/skills.js';

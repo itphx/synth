@@ -1090,4 +1090,56 @@ program
     if (code !== 0) process.exit(code);
   });
 
+program
+  .command('backup')
+  .description('Создать архив каталога данных с манифестом (PROP-091)')
+  .option('--out <path>', 'путь к архиву или каталогу (по умолчанию — текущий каталог)')
+  .option('--with-secrets', 'включить секреты (secrets/) — архив становится секретом')
+  .option('--with-workspace', 'включить рабочие каталоги (workspaces/)')
+  .option('--live', 'снять с работающего сервиса (срез не транзакционный)')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .action(async (options) => {
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
+
+    const { runBackupCommand } = await import('./maintenance/backup.js');
+    const code = await runBackupCommand({
+      dataDir,
+      out: options.out,
+      withSecrets: !!options.withSecrets,
+      withWorkspace: !!options.withWorkspace,
+      live: !!options.live,
+    });
+    if (code !== 0) process.exit(code);
+  });
+
+program
+  .command('restore')
+  .description('Восстановить каталог данных из архива backup (PROP-091)')
+  .argument('<archive>', 'путь к архиву backup')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--dry-run', 'проверить архив и показать план без записи')
+  .option('--yes', 'подтвердить восстановление (перезапись данных)')
+  .option('--no-safety-copy', 'не создавать страховочную копию текущих данных')
+  .action(async (archive, options) => {
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
+
+    const { runRestoreCommand } = await import('./maintenance/restore.js');
+    const code = await runRestoreCommand({
+      archive,
+      dataDir,
+      dryRun: !!options.dryRun,
+      yes: !!options.yes,
+      noSafetyCopy: options.safetyCopy === false,
+    });
+    if (code !== 0) process.exit(code);
+  });
+
 program.parse();
