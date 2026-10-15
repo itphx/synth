@@ -93,6 +93,8 @@
 | PROP-092 | Обслуживание инстанса: обновление, миграции, откат и удаление: `meta.json`/`schemaVersion` + реестр миграций и `synth migrate`, `synth update --to <version>` и `helm rollback`, `synth uninstall [--purge]`, runbook эксплуатации | 🧩 Предложение | [prop-092-instance-lifecycle-maintenance.md](./prop-092-instance-lifecycle-maintenance.md) |
 | PROP-093 | Версионирование документации: версионные подкаталоги портала + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093-docs-versioning.md](./prop-093-docs-versioning.md) |
 | PROP-094 | Наблюдаемость и эксплуатационные метрики: `/metrics` (Prometheus), `/ready` + раздельные probes, структурные логи (`request_id`/`session_id`, редакция секретов), SLO/алерты, sizing | 🧩 Предложение | [prop-094-observability-metrics.md](./prop-094-observability-metrics.md) |
+| PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
+| PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
 
 ## Vision
 
@@ -116,4 +118,4 @@
 
 ---
 
-Всего документов: 81 (Решения: 35, Частично: 8, Предложения: 28, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 83 (Решения: 35, Частично: 8, Предложения: 30, Vision: 9, Icebox: 0, Legacy: 1).
