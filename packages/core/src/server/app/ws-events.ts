@@ -5,12 +5,13 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { MessageRole, generateStreamId, nowISO, makeTextPart } from '@itphx/synth-shared';
-import type { Message } from '@itphx/synth-shared';
+import type { BusEvent, Message } from '@itphx/synth-shared';
 import { enqueueUserMessage } from '../../index.js';
 import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator } from '../../index.js';
 import type { RemoteConnection } from '../../remote/connection.js';
 import type { LocalAuthKit } from '../../auth/local.js';
 import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
+import { extractChildSessionId, extractCreatedSession } from '../../events/child-session.js';
 
 export interface EventWebSocketDeps {
   /** HTTP-сервер, на `upgrade` которого вешается обработчик. */
@@ -26,10 +27,25 @@ export interface EventWebSocketDeps {
   orchestrator: ChatOrchestrator;
   /**
    * ADR-089: реестр подписок активных клиентов. Funnel (`RequestSessionService`)
-   * через `onSessionMaterialized` подписывает клиентов владельца на сессии,
-   * созданные ПОСЛЕ их подключения (паритет с managed `EventHub.subscribeToSession`).
+   * через `onSessionMaterialized`, роуты через `onSessionCreated`/`onSessionForked`
+   * и сам хаб (по событиям `session.created`/`child.*`/`subagent.resume.*`)
+   * подписывают клиентов владельца на сессии, созданные ПОСЛЕ их подключения
+   * (паритет с managed `EventHub.subscribeToSession` + автоподписка на child).
    */
   subscriptions: EventWebSocketSubscriptions;
+}
+
+/** Активный WS-клиент standalone в реестре подписок (ADR-089). */
+export interface EventWsClient {
+  /** Владелец клиента (в standalone — `local` либо серверная личность гибрида). */
+  userId: string;
+  /**
+   * Подписать клиента на сессию (идемпотентно у клиента).
+   * @returns `true` — подписка установлена впервые.
+   */
+  subscribe: (sessionId: string) => boolean;
+  /** Отправить событие клиенту (WS-кадр; форвард полезной нагрузки авто-подписки). */
+  send: (event: BusEvent) => void;
 }
 
 /**
@@ -42,13 +58,16 @@ export interface EventWebSocketDeps {
  * явный `POST /api/v2/sessions`, тул `task`), оставались без подписчиков —
  * `event.routed`/`session.created`/стрим ответа терялись («0 subscribers —
  * EVENT LOST»), и дерево сессий в UI обновлялось только после перезагрузки.
+ *
+ * Дополнительно (инвариант «путь, публикующий `session.created`, уведомляет
+ * хаб»): дочерние сессии саб-агентов и импортированные сессии подписываются
+ * автоматически — см. `subscribeToNewSession` и обработчик в `attachEventWebSocket`.
  */
 export class EventWebSocketSubscriptions {
-  private _clients = new Set<{ userId: string; subscribe: (sessionId: string) => void }>();
+  private _clients = new Set<EventWsClient>();
 
   /** Зарегистрировать подписку клиента пользователя; возвращает снятие регистрации. */
-  register(userId: string, subscribe: (sessionId: string) => void): () => void {
-    const client = { userId, subscribe };
+  register(client: EventWsClient): () => void {
     this._clients.add(client);
     return () => { this._clients.delete(client); };
   }
@@ -57,6 +76,25 @@ export class EventWebSocketSubscriptions {
   subscribeToSession(userId: string, sessionId: string): void {
     for (const client of this._clients) {
       if (client.userId === userId) client.subscribe(sessionId);
+    }
+  }
+
+  /**
+   * Авто-подписка владельца на новую сессию, о которой хаб узнал из события,
+   * опубликованного в **её собственный** канал (`session.created` /
+   * `session.fork.created`; так публикуют `remote/transfer.ts` и роуты).
+   * Событие-триггер форвардится клиентам, подписанным впервые, — иначе первый
+   * кадр `session.created` потерялся бы у клиента, не подписанного заранее
+   * (роуты/снимок подписывают клиента до publish — тогда форварда нет: `subscribe`
+   * возвращает `false`, дублей не возникает).
+   *
+   * Видимость не расширяется: подписываются только клиенты, чей `userId` совпал
+   * с владельцем из payload (`owner_id`/`user_id`).
+   */
+  subscribeToNewSession(userId: string, sessionId: string, event: BusEvent): void {
+    for (const client of this._clients) {
+      if (client.userId !== userId) continue;
+      if (client.subscribe(sessionId)) client.send(event);
     }
   }
 
@@ -74,6 +112,19 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
   const { server, auth, connection, eventBus, sessionManager, queueManager, processMessage, orchestrator, subscriptions } = deps;
   // WebSocket /ws/events
   const wss = new WebSocketServer({ noServer: true });
+
+  // ADR-089 (инвариант): новая сессия, о которой хаб узнаёт из
+  // `session.created`/`session.fork.created` в **её собственном** канале
+  // (импорт `remote/transfer.ts`, роуты), автоматически подписывает клиентов
+  // владельца — без переподключения. Роуты и снимок подписывают клиента ДО
+  // publish → форварда нет, дублей не возникает. Записи, опубликованные в канал
+  // родителя (тул `task`), обрабатывает per-client `handler` выше.
+  const unsubCreatedSession = eventBus.subscribeAll((event) => {
+    const created = extractCreatedSession(event);
+    if (!created || created.id !== event.sessionId) return;
+    subscriptions.subscribeToNewSession(created.owner, created.id, event);
+  });
+  wss.on('close', () => unsubCreatedSession());
 
   server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url || '', `http://${request.headers.host}`);
@@ -105,7 +156,7 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
         /** Уже подписанные сессии клиента (идемпотентность точечной подписки). */
         const subscribed = new Set<string>();
 
-        const handler = (event: { type: string; data: Record<string, unknown> }) => {
+        const send = (event: BusEvent): void => {
           try {
             if (ws.readyState === ws.OPEN) {
               ws.send(JSON.stringify(event));
@@ -113,11 +164,29 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
           } catch { /* ignore */ }
         };
 
-        /** Точечная подписка клиента на сессию (idempotent). */
-        const subscribe = (sessionId: string): void => {
-          if (subscribed.has(sessionId)) return;
+        /**
+         * Обработчик событий подписанных сессий: доставка + авто-подписка на
+         * дочернюю сессию саб-агента (паритет с managed `EventHub`). Тул `task`
+         * публикует `session.created`/`child.message.added`/`subagent.resume.*` в
+         * канал родителя — клиент на них уже подписан, а на ребёнка — нет.
+         */
+        const handler = (event: BusEvent): void => {
+          send(event);
+          const childId = extractChildSessionId(event);
+          if (childId && childId !== event.sessionId) {
+            // Владелец ребёнка — владелец родителя (fork.ts наследует userId/ownerId),
+            // поэтому подписываем клиентов того же пользователя, что получил событие:
+            // это не расширяет видимость (клиент уже видел родителя).
+            subscriptions.subscribeToSession(user.id, childId);
+          }
+        };
+
+        /** Точечная подписка клиента на сессию (idempotent); true — подписка новая. */
+        const subscribe = (sessionId: string): boolean => {
+          if (subscribed.has(sessionId)) return false;
           subscribed.add(sessionId);
           unsubs.push(eventBus.subscribe(sessionId, handler));
+          return true;
         };
 
         // Снятие регистрации в реестре подписок (ADR-089) — на close/error.
@@ -135,7 +204,7 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
           // ADR-089: сессии, материализованные funnel'ом (`RequestSessionService`)
           // ПОСЛЕ этого снимка, доставляются точечной подпиской владельца —
           // `onSessionMaterialized` → `subscribeToSession`.
-          unregister = subscriptions.register(user.id, subscribe);
+          unregister = subscriptions.register({ userId: user.id, subscribe, send });
         }
 
         ws.send(JSON.stringify({

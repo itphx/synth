@@ -6,6 +6,7 @@ import { MessageRole } from '@itphx/synth-shared';
 import { FileStore } from '../storage/file-store.js';
 import { SessionManager } from '../sessions/manager.js';
 import { ProjectStore } from '../storage/project-store.js';
+import { EventBus } from '../events/bus.js';
 import type { RemoteBackendClient } from './client.js';
 import {
   syncProjectToRemote,
@@ -368,6 +369,35 @@ describe('transfer helpers', () => {
       expect(downloaded.toString()).toBe('hi');
       const wsStat = await stat(join(workspacesRoot, 'remote-project'));
       expect(wsStat.isDirectory()).toBe(true);
+    });
+
+    it('публикует session.created для импортированной сессии при заданном eventBus (ADR-089)', async () => {
+      const client = makeFakeRemoteClient();
+      const projectStore = new ProjectStore({ dataDir: tmpDir });
+      const sessionManager = new SessionManager(new FileStore({ dataDir: tmpDir }));
+      const eventBus = new EventBus();
+      const seen: Array<{ type: string; sessionId: string; data: Record<string, unknown> }> = [];
+      eventBus.subscribeAll((e) => { seen.push({ type: e.type, sessionId: e.sessionId, data: e.data }); });
+
+      const stats = await forkProjectToLocal({
+        remoteProjectId: 'remote-1',
+        remoteClient: client,
+        localProjectStore: projectStore,
+        localSessionManager: sessionManager,
+        includeFiles: false,
+        includeSessions: true,
+        localWorkspacesRoot: workspacesRoot,
+        eventBus,
+      });
+
+      const sessions = await sessionManager.listSessions({ projectId: stats.projectId });
+      expect(sessions).toHaveLength(1);
+      const created = seen.filter((e) => e.type === 'session.created');
+      expect(created).toHaveLength(1);
+      // Событие — в собственный канал сессии, payload `serializeSession` с владельцем.
+      expect(created[0]!.sessionId).toBe(sessions[0]!.id);
+      expect(created[0]!.data.id).toBe(sessions[0]!.id);
+      expect(created[0]!.data.owner_id).toBe('local');
     });
 
     it('фильтрует сессии не из этого проекта', async () => {

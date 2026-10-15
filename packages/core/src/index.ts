@@ -8,6 +8,8 @@ export { parseTtl, startEphemeralSweeper, DEFAULT_EPHEMERAL_SWEEP_INTERVAL_MS } 
 export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
 export type { SessionStatsDeps } from './sessions/stats.js';
 export { EventBus, sseEventStream } from './events/bus.js';
+export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
+export type { CreatedSessionTarget } from './events/child-session.js';
 export { HookBus, HOOK_ASYNC_TIMEOUT_MS } from './engine/hooks/index.js';
 export type { HookHandler, HookRegistrationOptions, HookEmitResult } from './engine/hooks/index.js';
 export { QueueProcessor, QueueProcessorManager, enqueueUserMessage } from './queue/processor.js';

@@ -14,6 +14,7 @@ import type { AuthKit } from '../../auth/local.js';
 import type { ProjectStore } from '../../storage/project-store.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+import type { EventBus } from '../../events/bus.js';
 import { isRemoteRef, toLocalId, toRemoteRef, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { resolveLocalWorkspace, syncProjectToRemote, forkProjectToLocal } from '../../remote/transfer.js';
 import { serializeProject } from '../serialize.js';
@@ -51,6 +52,12 @@ export function createProjectTransferRoutes(
    * возвращает null, когда гибрид не подключён.
    */
   getRemoteClient?: () => RemoteBackendClient | null,
+  /**
+   * ADR-089: шина событий локального инстанса — для уведомления WS-хаба о
+   * сессиях, импортированных `forkProjectToLocal` (авто-подписка клиентов
+   * владельца по `session.created`, без переподключения).
+   */
+  eventBus?: EventBus,
 ): Hono {
   const app = new Hono();
   const resolveClient = (): RemoteBackendClient | undefined => getRemoteClient?.() ?? undefined;
@@ -143,6 +150,7 @@ export function createProjectTransferRoutes(
         includeSessions: true,
         localWorkspacesRoot: workspacesRoot,
         localName,
+        eventBus,
       });
       const localProject = await store.load(stats.projectId);
       if (!localProject) {

@@ -12,6 +12,8 @@ import type { DirectoryListResult } from '@itphx/synth-shared';
 import type { ProjectStore } from '../storage/project-store.js';
 import type { SessionManager } from '../sessions/manager.js';
 import type { RemoteBackendClient } from './client.js';
+import type { EventBus } from '../events/bus.js';
+import { serializeSession } from '../server/serialize.js';
 
 /** Каталоги, исключаемые из прямой синхронизации файлов. */
 export const EXCLUDED_DIRS = new Set(['node_modules', '.git', '.synth']);
@@ -256,6 +258,15 @@ export interface ForkProjectToLocalOptions {
   /** Имя локального проекта (по умолчанию — имя удалённого). */
   localName?: string;
   log?: (msg: string) => void;
+  /**
+   * ADR-089: шина событий локального инстанса. Задана — для каждой
+   * импортированной сессии публикуется `session.created` в её собственный канал;
+   * WS-хаб (standalone `/ws/events`) подписывает на неё клиентов владельца
+   * (авто-подписка по событию) — клиент, подключённый до переноса, видит
+   * импортированные сессии без переподключения. Не задана — перенос работает
+   * как прежде (уведомление хаба не выполняется).
+   */
+  eventBus?: EventBus;
 }
 
 export interface TransferStats {
@@ -402,7 +413,7 @@ export async function syncProjectToRemote(opts: SyncProjectToRemoteOptions): Pro
 export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promise<TransferStats> {
   const {
     remoteProjectId, remoteClient, localProjectStore, localSessionManager,
-    includeFiles, includeSessions, localWorkspacesRoot, localName, log,
+    includeFiles, includeSessions, localWorkspacesRoot, localName, log, eventBus,
   } = opts;
   const logger = log ?? (() => {});
 
@@ -547,6 +558,11 @@ export async function forkProjectToLocal(opts: ForkProjectToLocalOptions): Promi
       await localSessionManager.saveSession(session);
       mapping.set(id, session.id);
       sessionsImported++;
+      // ADR-089: уведомить WS-хаб о новой сессии (авто-подписка по событию) —
+      // клиент, подключённый до переноса, получит импортированные сессии и их
+      // события без переподключения. Публикация в собственный канал сессии; хаб
+      // ловит `session.created` глобальным слушателем.
+      eventBus?.publish(session.id, 'session.created', serializeSession(session));
       logger(`  сессия: ${session.title || session.id}`);
     }
   }

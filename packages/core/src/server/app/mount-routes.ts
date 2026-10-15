@@ -144,6 +144,7 @@ export function mountStandaloneRoutes(
     config.workspacesRoot ?? join(dataDir, 'workspaces'),
     defaultWorkingDir,
     () => getClient(),
+    eventBus,
   ));
 
   // Providers

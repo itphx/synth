@@ -1,3 +1,4 @@
+import { extractChildSessionId } from '@itphx/synth-core';
 import type { EventBus } from '@itphx/synth-core';
 import type { BusEvent } from '@itphx/synth-shared';
 import type { SessionManager } from '@itphx/synth-core';
@@ -17,59 +18,6 @@ export interface EventClient {
 
 /** Служебный ключ глобальной подписки all-клиента в `clientSubs`. */
 const ALL_SESSIONS_KEY = '*';
-
-/** Типизированные payload'ы дочерних событий (ключи — из эмиттеров тула `task`). */
-interface SessionCreatedPayload {
-  id?: unknown;
-}
-
-interface ChildSessionUpdatedPayload {
-  session?: { id?: unknown };
-  child_session_id?: unknown;
-}
-
-interface ChildSessionRefPayload {
-  child_session_id?: unknown;
-}
-
-/** Безопасное чтение непустой строки из `unknown`. */
-function readString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
-}
-
-/**
- * Извлечь id новой дочерней сессии из события, опубликованного в родительскую
- * сессию. Дочерние сессии саб-агентов создаются тулом `task` напрямую через
- * `SessionManager`, минуя роуты, поэтому клиент изначально на них не подписан.
- * Тул `task` публикует `session.created` (payload — serializeSession ребёнка) в
- * родителя ДО старта LLM-стрима ребёнка, так что автоподписка успевает.
- * `child.session.updated` несёт `session` (id внутри), `child.message.added` и
- * resume-события — `child_session_id`. Ключи каждого события читаются ровно в
- * одном месте (типизированные payload-интерфейсы выше).
- */
-function extractChildSessionId(event: BusEvent): string | undefined {
-  const data = event.data as Record<string, unknown> | undefined;
-  if (!data) return undefined;
-
-  switch (event.type) {
-    case 'session.created': {
-      const payload = data as SessionCreatedPayload;
-      return readString(payload.id);
-    }
-    case 'child.session.updated': {
-      const payload = data as ChildSessionUpdatedPayload;
-      return readString(payload.session?.id) ?? readString(payload.child_session_id);
-    }
-    case 'child.message.added':
-    case 'subagent.resume.started':
-    case 'subagent.resume.finished': {
-      const payload = data as ChildSessionRefPayload;
-      return readString(payload.child_session_id);
-    }
-    default:
-      return undefined;
-  }
-}
 
 /**
  * EventHub — центральный диспетчер подписок на события сессий.
