@@ -8,7 +8,7 @@
  * Что проверяет:
  *   1. markdown-ссылки `[текст](цель)` и картинки `![alt](цель)` в файлах:
  *      `docs/**` (кроме `docs/arch_decisions/**` — за неё отвечает `scripts/adr-check.mjs`),
- *      `README.md`, `AGENTS.md`, `packages/<pkg>/AGENTS.md`.
+ *      корневые `README*.md` (включая `README.en.md`), `AGENTS.md`, `packages/<pkg>/AGENTS.md`.
  *   2. цель ссылки обязана резолвиться (файл или каталог существует) относительно
  *      каталога самого файла (или корня репозитория для путей, начинающихся с `/`).
  *
@@ -66,7 +66,8 @@ function walkMarkdown(dir, out = []) {
 /** Целевые файлы проверки (относительные пути от корня). */
 function collectTargets() {
   const files = walkMarkdown(join(ROOT, 'docs'));
-  for (const name of ['README.md', 'AGENTS.md']) {
+  for (const name of readdirSync(ROOT)) {
+    if (name !== 'AGENTS.md' && !/^README.*\.md$/.test(name)) continue;
     const full = join(ROOT, name);
     if (existsSync(full)) files.push(full);
   }
