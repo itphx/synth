@@ -241,6 +241,38 @@ synth/
 Эндпоинты/RBAC — `docs/API_V2.md` §5.17–§5.17.2; конфиг — `docs/CONFIGURATION.md`
 (секции `skills`/`commands`); формат `SKILL.md` — `packages/core/AGENTS.md`.
 
+## Проектные инструкции (AGENTS.md)
+
+Автозагрузка репозиторных инструкций (ADR-069) — отдельный тир между глобальной identity
+и вложенными подкаталогами.
+
+- **Тиры (не смешивать):** identity (`SOUL.md`/`COMPANY.md`/`ABOUT.md`) → проектные
+  инструкции (только при `project.workspace`, ADR-014/ADR-040) → вложенные подкаталоги
+  (lazy). Блок `[PROJECT INSTRUCTIONS]` — тир `context` (ADR-070).
+- **Discovery** (`engine/context/instructions.ts`, `ProjectInstructionsResolver`): merged chain
+  `git root → … → workspace` (глубже = позже = приоритетнее), на каталог ровно один кандидат
+  (`AGENTS.override.md` > `AGENTS.md` > `agents.md` > `CLAUDE.md` (opt-in) > `CONTEXT.md`
+  (deprecated)); дедуп sha256; provenance-заголовок `--- from <путь> (<chars> chars[, truncated]) ---`
+  (путь — относительно workspace). `config.instructions.sources` (`path`/`url`) встают `before`/`after`
+  цепочки; URL — read-only fetch с TTL-кэшем `{dataDir}/instructions-cache` (без фонового таймера)
+  и капом `maxBytes`.
+- **Обрезка:** head/tail (`headRatio`/`tailRatio`) с маркером
+  `[TRUNCATED: see <путь> — read_file(path, offset, limit)]`; кап динамический от окна модели
+  (`clamp(windowRatio*window, minChars, maxCharsCeiling)`), общий на цепочку; `maxChars` — override.
+- **Threat-scan** (`engine/security/prompt-injection.ts`, ADR-036) до вставки: `block` — блок
+  не грузится, `flag` — WARN-строка. Гейты — project-trust (ADR-046, общий с lazy) и
+  install-tree guard (внутри дерева исходников Synth — `skipped-install-tree`).
+- **Lazy-догрузка** (`engine/context/lazy-instructions.ts`): по аргументам file/shell-тулов
+  (`LAZY_TRIGGER_TOOLS`) ищет ближайший instruction-файл вверх (≤`lazy.maxAncestors`), только
+  внутри `workspace`, исключая `lazy.excludeDirs`; дедуп (`loaded` + sha256); контент идёт
+  **в результат тула** (`[Subdirectory context discovered: <путь>]`), один раз на
+  assistant-сообщение, а не в system prompt (prompt-cache). Состояние — per-session в оркестраторе.
+- **Кэш/инвалидация:** подписи кандидатов (`engine/file-signature.ts`, `mtime:size`) → результатный
+  кэш резолвера (`.clear()` — сброс) + per-turn мемоизация в оркестраторе; TTL-слот подписи для URL.
+  Снимок для UI — `GET /api/v2/context/instructions` + событие `context.instructions_loaded`.
+
+Конфиг — `docs/CONFIGURATION.md` (`instructions`); `/init` и скилл `synth-agents-md` — ADR-046.
+
 ## Внешние события и хуки
 
 Ядро ADR-030 (min) + ADR-089: события агента и внешние события идут через общую

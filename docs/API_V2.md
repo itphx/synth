@@ -409,7 +409,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/context/enabled` | ADMIN | `{enabled:[]}` |
 | POST | `/api/v2/context/enabled` | ADMIN | `{files:[]}` |
 
-### 5.13.1 Проектные инструкции — `/api/v2/context/instructions` (core+backend, ADR-069 §9.3)
+### 5.13.1 Проектные инструкции — `/api/v2/context/instructions` (core+backend, ADR-069)
 
 Read-only прозрачность загруженных проектных инструкций (`AGENTS.md` и совместимые).
 

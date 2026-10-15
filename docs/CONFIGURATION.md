@@ -437,6 +437,7 @@ inline shell в шаблонных командах и удалёнными ка
 | `instructions.allowInstallTreeFallback` | Грузить инструкции внутри дерева исходников Synth | `false` |
 
 - Discovery: цепочка `git root → … → workspace` (глубже = приоритетнее), на каталог `AGENTS.override.md` > `AGENTS.md` > `agents.md` > `CLAUDE.md` > `CONTEXT.md`; дедуп sha256.
+- **`sources`:** `position: before|after` — до/после merged chain; `kind: path` — `value` относительный/glob/`~/`/абсолютный; `kind: url` — read-only fetch с TTL-кэшем `{dataDir}/instructions-cache` (`ttlSec` переопределяет `fetch.cacheTtlSec`), кап `fetch.maxBytes`.
 - Каждый блок проходит **threat-scan** (ADR-036): `block` — не грузится, `flag` — с WARN-строкой.
 - **Project-trust:** инструкции недоверенного проекта (нет в `skills.trustedProjectDirs`) не грузятся (статус `untrusted`). Каталог внутри `storage.workspacesRoot` доверяется **автоматически** (R3) — гейт общий для system-chain и lazy-догрузки; на project-trust скиллов (ADR-046) не влияет.
 - **Install-tree guard:** внутри дерева исходников Synth инструкции не грузятся (статус `skipped-install-tree`), кроме `allowInstallTreeFallback: true`.

@@ -203,6 +203,23 @@
 - `engine/router/*` — routing моделей и micro-model слой (ADR-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, ADR-084), `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`), единый каскад `decision-cascade.ts` (`decideChoiceCascade`: `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`, fail-safe) и агрегатные метрики `decision-metrics.ts` (синглтон `decisionMetrics`: `calls`/`handled`/`fallback`/`escalated`/`attempts`/`rejected`/`by_model`). Мультимодальный контракт (задел PROP-085): `MicroInput.images`/`videos`, `ClassifyRequest.images`/`videos`, `DecisionProvider.decide(opts.images/videos)` — добавляются в тело запроса только если непусты.
 - `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
+  Проектные инструкции (ADR-069): `instructions.ts` — `ProjectInstructionsResolver`
+  (merged chain `git root → … → workspace`, кандидаты `AGENTS.override.md` > `AGENTS.md` >
+  `agents.md` > `CLAUDE.md` (opt-in) > `CONTEXT.md` (deprecated); дедуп sha256;
+  provenance `--- from … ---`; `waterFillAllocate` + `truncateHeadTail` с маркером `read_file`;
+  `resolveInstructionsCap` — динамический кап; `config.sources` `before`/`after` + URL-fetch
+  с TTL-кэшем `{dataDir}/instructions-cache`; `project-trust` (`skills.trustedProjectDirs` +
+  авто-trust `workspacesRoot`) и install-tree guard; блочный резолвер `buildInstructionsInfo`/
+  `createInstructionsInfoResolver` — снимок для `GET /api/v2/context/instructions`),
+  `lazy-instructions.ts` — `LazyInstructionsLoader` (tool-result догрузка: `LAZY_TRIGGER_TOOLS`,
+  `extractLazyTargetDir`/`extractShellDir`, ≤`lazy.maxAncestors` внутри workspace,
+  `LAZY_INSTRUCTIONS_PREFIX`, реестры `loaded`/`claims` + sha256; резолвер stateless,
+  состояние per-session — в оркестраторе, `seed()` инициализирует `loaded` из merged chain).
+  Резолвится оркестратором и отдаётся composer'у как блок `instructions` тира `context`
+  (ADR-070); per-turn мемоизация — `_resolveProjectInstructions(turnId)` в `engine/orchestrator.ts`.
+- `engine/file-signature.ts` — ADR-069 (R5) / ADR-046: `filesSignature`/`dirsSignature`
+  (`id:floor(mtimeMs):size`, отсутствующий кандидат — маркер `!`) для ленивой инвалидации
+  кэшей (общий со скиллами).
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
 - `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (ADR-046);
@@ -221,17 +238,22 @@
   `requires_toolsets`, `fallback_for_capabilities`, `agents`, `groups`, `scope`,
   `trigger`, `command`, `mode`. `invocation` — комбинация двух флагов: `both`/`user`/
   `model`/`none` (`scope.ts`). Невалидный скилл не попадает в реестр (ошибка в
-  `GET /api/v2/skills?diagnostics=1`), discovery остальных не ломает. Тесты —
+  `GET /api/v2/skills?diagnostics=1`), discovery остальных не ломает. Встроенные
+  (`builtin.ts`) — `skill-creator` и `synth-agents-md` (ADR-069: команда `/agents-md`,
+  capability-aware `file_read`/`search`/`file_write`). Тесты —
   `engine/skills/*.test.ts`.
 - `engine/commands/*` — slash-команды и bundles (ADR-046): `parser`/`template`/
   `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
   до LLM, событие `command.invoked`; per-command права `permission.rules.command`;
   локальные builtin-ответы — `Message.ephemeral` (вне LLM-контекста); inline shell
-  (`` !`cmd` ``) — opt-in через `execute_shell`. Тесты — `engine/commands/*.test.ts`.
+  (`` !`cmd` ``) — opt-in через `execute_shell`; встроенная `/init` (ADR-069) —
+  prompt-команда генерации/обновления `AGENTS.md` (`INIT_INSTRUCTION_PATH`). Тесты — `engine/commands/*.test.ts`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill, profile_update); git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`
-  (ADR-076; ошибки — `sshkey.env_failed`). Тулы управления проектом:
+  (ADR-076; ошибки — `sshkey.env_failed`). Тулы `task`/`task-resume` собирают промпт
+  саб-агента (`resolveSubagentPrompt`) — проектные инструкции (ADR-069) добавляются,
+  кроме `task(skip_context_files=true)`. Тулы управления проектом:
   `project_update`/`project_workspace_set` (`project-manage.ts`) и
   `project_repo_clone|init|add|fetch|remove` (`project-repos.ts`) — проект берётся
   из сессии, смена workspace/регистрация репозиториев сохраняются `ProjectStore.save`
