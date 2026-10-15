@@ -15,10 +15,10 @@ import type { EventIngestInput } from '../../engine/events/ingest.js';
 import type { EventKeyCredential } from '../../engine/events/credential.js';
 import { KeyRateLimiter } from '../../engine/events/key-rate-limiter.js';
 import { EventApiKeyConflictError, isEventApiKeySecret } from '../../storage/event-api-key-store.js';
-import type { EventApiKeyStore } from '../../storage/event-api-key-store.js';
-import type { EventBindingStore } from '../../storage/event-binding-store.js';
-import type { EventJournalStore } from '../../storage/event-journal-store.js';
-import type { RouteRuleStore } from '../../storage/route-rule-store.js';
+import type { EventApiKeyRepository } from '../../storage/ports/event-api-key-repository.js';
+import type { EventBindingRepository } from '../../storage/ports/event-binding-repository.js';
+import type { EventJournalRepository } from '../../storage/ports/event-journal-repository.js';
+import type { EventRouteRepository } from '../../storage/ports/event-route-repository.js';
 import { requireScope, checkServiceProjectProjection } from '../service-scope.js';
 import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../service-scope.js';
 
@@ -67,12 +67,12 @@ export interface EventRouteMessages {
 
 export interface EventRoutesDeps {
   ingress: EventIngress;
-  bindingStore: EventBindingStore;
-  journal: EventJournalStore;
+  bindingStore: EventBindingRepository;
+  journal: EventJournalRepository;
   /** ADR-089: реестр правил маршрутизации (проектные/инстанс-правила). */
-  routeRuleStore: RouteRuleStore;
+  routeRuleStore: EventRouteRepository;
   /** ADR-089/ADR-052: реестр API-ключей привязок для приёма событий. */
-  apiKeyStore: EventApiKeyStore;
+  apiKeyStore: EventApiKeyRepository;
 }
 
 export interface EventRoutesOptions {

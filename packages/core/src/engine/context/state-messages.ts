@@ -13,7 +13,7 @@
 
 import type { Message, ProjectPlan, Session, SessionMode, PlanMode, TodoItem } from '@itphx/synth-shared';
 import { MessageRole, generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
-import type { ContextConfig } from './config.js';
+import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import { renderPlanMarkdown } from '../tools/plan.js';
 import { renderTodosMarkdown } from '../tools/todo.js';
 
@@ -102,7 +102,7 @@ export function buildModeChangeContent(
   planMode: PlanMode,
   planApproved: boolean,
   language: string,
-  contextConfig: ContextConfig | null | undefined,
+  contextConfig: ContextFileRepository | null | undefined,
   unavailableTools?: UnavailableTool[],
 ): string {
   if (!contextConfig) return '';
@@ -145,7 +145,7 @@ export function buildTodosUpdatedContent(todos: TodoItem[] | null | undefined): 
 }
 
 export interface SyncStateMessagesDeps {
-  contextConfig?: ContextConfig | null;
+  contextConfig?: ContextFileRepository | null;
   language?: string;
   /** Актуальный план проекта (`project.plan`) — источник `plan_updated`. */
   plan?: ProjectPlan | null;

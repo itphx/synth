@@ -13,8 +13,8 @@ interface WebhookSourceEvent {
   timestamp: string;
 }
 import type { EventBus } from '../../events/bus.js';
-import type { WebhookStore } from '../../storage/webhook-store.js';
-import type { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
+import type { WebhookRepository } from '../../storage/ports/webhook-repository.js';
+import type { WebhookDeliveryRepository } from '../../storage/ports/webhook-delivery-repository.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 import type { FetchLike } from '../net/fetch.js';
 import { buildSignatureHeader } from './signature.js';
@@ -50,8 +50,8 @@ export interface WebhookServiceConfig {
 }
 
 export interface WebhookServiceDeps {
-  store: WebhookStore;
-  deliveryStore: WebhookDeliveryStore;
+  store: WebhookRepository;
+  deliveryStore: WebhookDeliveryRepository;
   eventBus: EventBus;
   config: WebhookServiceConfig;
   /** Инъекция fetch (тесты). */

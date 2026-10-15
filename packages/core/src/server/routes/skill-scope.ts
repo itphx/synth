@@ -8,7 +8,7 @@ import {
 } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { SkillService } from '../../engine/skills/service.js';
-import type { RuntimeSettingsStore } from '../../storage/runtime-settings.js';
+import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { Project, PermissionConfig, Session, SkillsDisabledRequest } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
 import { resolveSkillRule } from '../../engine/permission/evaluator.js';
@@ -30,7 +30,7 @@ export interface SkillScopeRoutesDeps {
   sessionManager: SessionManager;
   /** Для project-скоупа и effective-списка. */
   skillService?: SkillService;
-  settingsStore?: RuntimeSettingsStore;
+  settingsStore?: SettingsRepository;
   projectStore?: SkillScopeProjectStore;
   /** Глобальный permission-конфиг (fallback, если у сессии нет своего). */
   permissionConfig?: PermissionConfig;

@@ -42,7 +42,7 @@ import {
   detectPromptInjection,
   type InjectionPolicy,
 } from '../security/prompt-injection.js';
-import type { DictionaryStore } from '../router/dictionary-store.js';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 
 /** Пометка lazy-блока в tool result (ADR-069 §4.3.6). */
 export const LAZY_INSTRUCTIONS_PREFIX = '[Subdirectory context discovered:';
@@ -107,7 +107,7 @@ export interface LazyInstructionsDeps {
   /** ADR-069 R3: `storage.workspacesRoot` — авто-trust workspace внутри него. */
   workspacesRoot?: string;
   /** Словарь threat-scan (ADR-036). */
-  dictionaryStore?: DictionaryStore | null;
+  dictionaryStore?: DictionaryRepository | null;
 }
 
 export interface LazyResolveArgs {

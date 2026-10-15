@@ -25,7 +25,7 @@ import type {
   CommandRuntimeConfig,
   CommandSkillEntry,
 } from './types.js';
-import type { SkillBundleStore } from '../../storage/skill-bundle-store.js';
+import type { SkillBundleRepository } from '../../storage/ports/skill-bundle-repository.js';
 
 /** Источник скиллов для каталога команд (структурно — `SkillService`). */
 export interface CommandSkillSource {
@@ -40,7 +40,7 @@ export interface CommandServiceOptions {
   skillRuntime: SkillRuntime;
   skillSource: CommandSkillSource;
   registry?: CommandRegistry;
-  bundleStore?: SkillBundleStore;
+  bundleStore?: SkillBundleRepository;
 }
 
 /**
@@ -53,7 +53,7 @@ export class CommandService implements CommandRuntime {
   private readonly _skillRuntime: SkillRuntime;
   private readonly _skillSource: CommandSkillSource;
   private readonly _registry: CommandRegistry;
-  private readonly _bundleStore: SkillBundleStore | null;
+  private readonly _bundleStore: SkillBundleRepository | null;
 
   constructor(opts: CommandServiceOptions) {
     this._config = opts.config;

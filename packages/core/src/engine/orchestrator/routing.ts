@@ -10,7 +10,8 @@ import { lookupContextWindow } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/base.js';
 import type { ProviderConfig as CoreProviderConfig, BaseProvider } from '../../providers/base.js';
 import { GatewayProvider } from '../gateway/index.js';
-import type { ObfuscationMapStore, AuditLogger, RateLimiter, SecretPatternStore } from '../gateway/index.js';
+import type { ObfuscationMapStore, AuditLogger, RateLimiter } from '../gateway/index.js';
+import type { SecretPatternRepository } from '../../storage/ports/secret-pattern-repository.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ModelRouter, RoutingDecision } from '../router/router.js';
 import { warning } from '../../logger.js';
@@ -51,7 +52,7 @@ export function getEffectiveModel(
 /** Зависимости gateway-обвязки провайдера (ADR-036). */
 export interface GatewayWrapDeps {
   gatewayConfig: LLMGatewayConfig | null;
-  gatewayPatternStore: SecretPatternStore | null;
+  gatewayPatternStore: SecretPatternRepository | null;
   obfMapStore: ObfuscationMapStore | null;
   gatewayAudit: AuditLogger | null;
   gatewayRateLimiter: RateLimiter | null;

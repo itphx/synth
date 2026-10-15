@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Hono } from 'hono';
 import { enqueueUserMessage, isSessionVisible } from '@itphx/synth-core';
-import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectStore } from '@itphx/synth-core';
+import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository } from '@itphx/synth-core';
 import { nowISO, MessageRole, generateStreamId } from '@itphx/synth-shared';
 import type { AuthKit } from '../auth/middleware.js';
 import type { EventClient, EventHub } from '../events/hub.js';
@@ -57,7 +57,7 @@ export interface BackendListenDeps {
   auth: AuthKit;
   eventHub: EventHub;
   sessionManager: SessionManager;
-  projectStore: ProjectStore;
+  projectStore: ProjectRepository;
   eventBus: EventBus;
   queueManager: QueueProcessorManager;
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>;

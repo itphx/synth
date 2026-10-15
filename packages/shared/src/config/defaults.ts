@@ -11,6 +11,7 @@ export const defaultConfig: SynthConfig = {
   },
   storage: {
     dataDir: '/var/synth/data',
+    backend: 'file',
     workspacesRoot: '',
     defaultWorkspace: '',
     workspaceOutsideRoot: '',

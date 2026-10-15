@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SecretPattern, SecretPatternStore } from '@itphx/synth-core';
+import type { SecretPattern, SecretPatternRepository } from '@itphx/synth-core';
 
 function isValidPattern(p: unknown): p is SecretPattern {
   if (typeof p !== 'object' || p === null) return false;
@@ -20,7 +20,7 @@ function isValidPattern(p: unknown): p is SecretPattern {
  * Схема «системный + override»: пользовательский список полностью заменяет дефолтный,
  * DELETE сбрасывает к встроенным паттернам. Только ADMIN.
  */
-export function createGatewayPatternsRoutes(kit: AuthKit, store: SecretPatternStore): Hono {
+export function createGatewayPatternsRoutes(kit: AuthKit, store: SecretPatternRepository): Hono {
   const app = new Hono();
 
   // GET /api/v2/gateway/patterns — текущий список + признак override + дефолт

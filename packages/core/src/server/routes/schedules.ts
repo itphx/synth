@@ -3,8 +3,8 @@ import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import { scheduleInputSchema } from '@itphx/synth-shared';
 import type { ScheduleInputRequest } from '@itphx/synth-shared';
-import type { ScheduleStore } from '../../storage/schedule-store.js';
-import type { JobStore } from '../../storage/job-store.js';
+import type { ScheduleRepository } from '../../storage/ports/schedule-repository.js';
+import type { JobRepository } from '../../storage/ports/job-repository.js';
 import type { SchedulerService } from '../../engine/scheduler/scheduler.js';
 import { isValidCron } from '../../engine/scheduler/cron.js';
 import { parseDurationMs } from '../../engine/scheduler/duration.js';
@@ -32,10 +32,10 @@ export interface SchedulerRouteMessages {
 }
 
 export interface SchedulerRoutesDeps {
-  scheduleStore: ScheduleStore;
+  scheduleStore: ScheduleRepository;
   scheduler: SchedulerService;
   /** История срабатываний (ADR-051); без неё `GET /:id/jobs` отдаёт `[]`. */
-  jobStore?: JobStore;
+  jobStore?: JobRepository;
 }
 
 export interface SchedulerRoutesOptions {

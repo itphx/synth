@@ -7,7 +7,8 @@ import { createLazyOidcClient, oidcUserToUser } from '../auth/oidc.js';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';
 import { getDefaultLang, setDefaultLang, type Lang } from '../lib/i18n-config.js';
-import type { DefaultsStore, AppearanceDefaults } from '../lib/defaults-store.js';
+import type { AppearanceDefaults } from '../lib/defaults-store.js';
+import type { DefaultsRepository } from '@itphx/synth-core';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 
@@ -27,7 +28,7 @@ export function createAuthRoutes(
   config: AuthConfig,
   profiles?: ProfileStore,
   dataDir?: string,
-  defaultsStore?: DefaultsStore | null,
+  defaultsStore?: DefaultsRepository | null,
 ): Hono {
   const app = new Hono();
   const avatarsDir = dataDir ? join(dataDir, 'auth', 'avatars') : null;

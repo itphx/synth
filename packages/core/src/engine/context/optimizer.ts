@@ -1,6 +1,6 @@
 import type { Message, Session, ProviderConfig as SharedProviderConfig, SummarizationConfig, LLMGatewayConfig } from '@itphx/synth-shared';
 import { MessageRole, nowISO, lookupContextWindow, generateId, makeTextPart } from '@itphx/synth-shared';
-import type { ContextConfig } from './config.js';
+import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import type { LLMMessage } from '../../providers/base.js';
 import { BaseProvider, ProviderFactory } from '../../providers/index.js';
 import { info, warning } from '../../logger.js';
@@ -50,7 +50,7 @@ function toCoreProviderConfig(shared: SharedProviderConfig, model: string): { ur
 }
 
 export class ContextOptimizer {
-  private readonly _contextConfig: ContextConfig;
+  private readonly _contextConfig: ContextFileRepository;
   private readonly _providerLoader: (name: string) => SharedProviderConfig | null;
   private readonly _summarizationConfig: SummarizationConfig;
   /**
@@ -66,7 +66,7 @@ export class ContextOptimizer {
   private static readonly CHARS_PER_TOKEN = 4;
 
   constructor(
-    contextConfig: ContextConfig,
+    contextConfig: ContextFileRepository,
     providerLoader: (name: string) => SharedProviderConfig | null,
     summarizationConfig: SummarizationConfig,
     modelWindowLoader?: (modelId: string) => number,

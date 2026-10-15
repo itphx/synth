@@ -1,6 +1,6 @@
 import type { Project, Session } from '@itphx/synth-shared';
 import type { SessionManager } from '../sessions/manager.js';
-import type { RuntimeSettingsStore } from './runtime-settings.js';
+import type { SettingsRepository } from './ports/settings-repository.js';
 import type { SessionProjectStoreLike } from '../sessions/manager.js';
 
 /** Маркер разовой миграции снапшотов скоупа (идемпотентность). */
@@ -9,7 +9,7 @@ export const SESSION_SCOPE_SNAPSHOT_MIGRATION = 'session-scope-snapshots-v1';
 export interface SessionScopeMigrationDeps {
   sessionManager: SessionManager;
   projectStore?: SessionProjectStoreLike;
-  settingsStore: RuntimeSettingsStore;
+  settingsStore: SettingsRepository;
   /** Системные дефолты для сессий без проекта (или проекта без настроек). */
   resolveSystemDefaults?: () => Promise<{ mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined>;
 }

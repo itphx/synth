@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { z } from 'zod';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager, McpManager, McpRegistryStore } from '@itphx/synth-core';
+import type { SessionManager, McpManager, McpRegistryRepository } from '@itphx/synth-core';
 import { evaluateMcpNetworkAccess, getServiceCredential } from '@itphx/synth-core';
 import type { McpServerConfig, McpNetworkPolicy, User } from '@itphx/synth-shared';
 import { sessionMcpScopeSchema, hasServiceScope } from '@itphx/synth-shared';
@@ -41,7 +41,7 @@ const registryUpdateSchema = z.object({
 
 export interface McpRoutesOptions {
   /** ADR-071 §2.5: единый реестр MCP-серверов (источник истины для `/servers` и `/registry`). */
-  registry: McpRegistryStore;
+  registry: McpRegistryRepository;
   /** ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов. */
   networkPolicy?: McpNetworkPolicy;
   /**

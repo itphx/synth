@@ -2,10 +2,10 @@ import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
 import { skillBundleSchema, SKILL_NAME_MAX, SKILL_NAME_REGEX } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
-import type { SkillBundleStore } from '../../storage/skill-bundle-store.js';
+import type { SkillBundleRepository } from '../../storage/ports/skill-bundle-repository.js';
 
 export interface SkillBundleRoutesDeps {
-  bundleStore: SkillBundleStore;
+  bundleStore: SkillBundleRepository;
   /** Проверка существования скиллов из bundle (обычно `SkillService`). */
   validateSkills?: (names: readonly string[]) => Promise<string[]>;
 }

@@ -7,7 +7,7 @@
  *   (категория injection, языки ru/en).
  * - applyPolicy: применение политики flag / sanitize / block.
  */
-import type { DictionaryStore } from '../router/dictionary-store.js';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 import { t as sm } from '../system-messages.js';
 
 export type TrustLevel = 'trusted' | 'untrusted';
@@ -60,7 +60,7 @@ export function wrapContent(
  */
 export function detectPromptInjection(
   content: string,
-  dictionaryStore: DictionaryStore,
+  dictionaryStore: DictionaryRepository,
   lang: string,
 ): InjectionDetection {
   const lower = content.toLowerCase();

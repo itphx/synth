@@ -10,6 +10,7 @@ import {
   getServiceCredential,
   getPublicOpenApiDocument,
 } from '../index.js';
+import type { StorageBackendKind } from '../index.js';
 import { createLocalAuth } from '../auth/local.js';
 import { RemoteConnection } from '../remote/connection.js';
 import { createHealthRoutes } from './routes/health.js';
@@ -28,6 +29,12 @@ export interface StandaloneConfig {
   port: number;
   dataDir: string;
   apiKey: string;
+  /**
+   * PROP-032: физический backend хранения (`storage.backend`; env
+   * `SYNTH_STORAGE_BACKEND` > config.yaml > `file`). Не задан — `file`.
+   * `memory` — энергонезависимо (герметичные тесты).
+   */
+  storageBackend?: StorageBackendKind;
   workspacesRoot?: string;
   /** Рабочий каталог по умолчанию для сессий без проекта. Дефолт: {dataDir}/workspaces/default. */
   defaultWorkingDir?: string;

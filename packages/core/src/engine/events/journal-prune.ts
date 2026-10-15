@@ -1,4 +1,4 @@
-import type { EventJournalStore } from '../../storage/event-journal-store.js';
+import type { EventJournalRepository } from '../../storage/ports/event-journal-repository.js';
 
 export interface EventJournalPrunerOptions {
   /** Текущий срок хранения журнала в днях (<= 0 — prune пропускается). */
@@ -19,7 +19,7 @@ const DEFAULT_INTERVAL_MS = 6 * 3600_000;
  * и не роняют процесс. Возвращает stop-функцию (остановка таймера).
  */
 export function startEventJournalPruner(
-  journal: EventJournalStore,
+  journal: EventJournalRepository,
   opts: EventJournalPrunerOptions,
 ): () => void {
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;

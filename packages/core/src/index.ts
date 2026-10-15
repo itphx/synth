@@ -195,6 +195,19 @@ export {
   MemoryBlobStore,
   MemorySSHKeyRepository,
 } from './storage/memory/index.js';
+// PROP-032 (W2.3): умолчания оформления (перенесено из backend) — файловая реализация.
+export { DefaultsStore, UI_SCALE_MIN, UI_SCALE_MAX } from './storage/defaults-store.js';
+// PROP-032 (W2.3): единый контекст слоя хранения + фабрики `file`/`memory`.
+export {
+  createFileStorage,
+  createMemoryStorage,
+  createStorageContext,
+} from './storage/storage-context.js';
+export type {
+  StorageContext,
+  StorageContextConfig,
+  StorageBackendKind,
+} from './storage/storage-context.js';
 // ADR-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
 export * as crypto from './security/crypto.js';
 export {

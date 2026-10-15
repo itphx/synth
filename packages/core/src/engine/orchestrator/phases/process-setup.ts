@@ -32,7 +32,7 @@ import type { McpManager } from '../../mcp/manager.js';
 import type { McpScopeDecision } from '../../mcp/scope.js';
 import type { ToolRegistry } from '../../tools/registry.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
-import type { ContextConfig } from '../../context/config.js';
+import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
 import type { ComposerContext, ComposerInstructions, ComposerMcpServer, SystemPromptComposer } from '../../context/composer.js';
 import type { InstructionsFileInfo } from '../../context/instructions.js';
 import type { UnavailableTool } from '../../context/state-messages.js';
@@ -125,7 +125,7 @@ export interface ProcessSetupDeps {
     attempt: number | undefined,
     ctx: LlmFailureContext,
   ) => Promise<ProcessSetupResult>;
-  contextConfig: ContextConfig | null;
+  contextConfig: ContextFileRepository | null;
   permissionConfig: PermissionConfig;
   cachePolicy: CachePolicy;
   resolveMcpDecisions: (session: Session, project: Project | null) => McpScopeDecision[];

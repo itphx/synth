@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { SkillDetail, SkillDiagnostic, SkillMeta, SkillSummary } from '@itphx/synth-shared';
 import { SkillStore, type CreateSkillInput, type UpdateSkillMarkdownInput } from '../../storage/skill-store.js';
+import type { SkillRepository } from '../../storage/ports/skill-repository.js';
 import { buildBuiltinSkills } from './builtin.js';
 import { buildSkillSources } from './discovery.js';
 import { refreshRemoteCatalogs } from './remote.js';
@@ -27,7 +28,7 @@ export interface SkillServiceOptions {
   /** `config.skills.toolsets` — экспансия `requires_toolsets` (ADR-046 §3.2). */
   toolsets?: Record<string, readonly string[]>;
   home?: string;
-  store?: SkillStore;
+  store?: SkillRepository;
   registry?: SkillRegistry;
 }
 
@@ -42,7 +43,7 @@ export interface SkillListOptions {
  * этот сервис; роуты `/api/v2/skills` — CRUD над instance-деревом.
  */
 export class SkillService {
-  private readonly _store: SkillStore;
+  private readonly _store: SkillRepository;
   private readonly _registry: SkillRegistry;
   private readonly _toolsets: Record<string, readonly string[]>;
   private readonly _urls: readonly string[];

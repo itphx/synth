@@ -3,7 +3,7 @@ import type {
   RouteDecision,
   SynthEvent,
 } from '@itphx/synth-shared';
-import type { RouteRuleStore } from '../../storage/route-rule-store.js';
+import type { EventRouteRepository } from '../../storage/ports/event-route-repository.js';
 import { eventToMessageText } from './request-session.js';
 import { decisionFromTarget } from './target-decision.js';
 import type { RouteRuleInput, RouteRuleProvider } from './types.js';
@@ -18,7 +18,7 @@ export class ProjectRuleProvider implements RouteRuleProvider {
   readonly name = 'project-rules';
 
   constructor(
-    private _store: RouteRuleStore,
+    private _store: EventRouteRepository,
     private _defaultEphemeralTtl: string,
   ) {}
 

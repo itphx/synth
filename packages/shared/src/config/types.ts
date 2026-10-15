@@ -27,6 +27,16 @@ export const serverConfigSchema = z.object({
 
 export const storageConfigSchema = z.object({
   dataDir: z.string().default('/var/synth/data'),
+  /**
+   * PROP-032: физический backend хранения. `file` — JSON-файлы с атомарной
+   * записью tmp→rename (ADR-005, дефолт); `memory` — in-memory (энергонезависимо
+   * НЕ сохраняется, для герметичных тестов). Читать через `resolveStorageBackend`
+   * (env `SYNTH_STORAGE_BACKEND` > это поле > `file`).
+   *
+   * Необязательно: частичные override-объекты (`{ dataDir, workspacesRoot, … }`)
+   * остаются валидными, а дефолт `file` задают `defaults.ts`/`resolveStorageBackend`.
+   */
+  backend: z.enum(['file', 'memory']).optional(),
   workspacesRoot: z.string().default(''),
   /** Рабочий каталог по умолчанию для сессий без проекта. Резолвится от dataDir: {dataDir}/workspaces/default. */
   defaultWorkspace: z.string().default(''),

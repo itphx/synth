@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, resolveMaxUploadBytes, ensureFirstRun } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, resolveMaxUploadBytes, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -303,6 +303,39 @@ describe('resolveSecretKey (ADR-076)', () => {
   it('НЕ читает реальный process.env, если передан env без переменной', () => {
     vi.stubEnv('SYNTH_SECRET_KEY', 'should-not-be-used');
     expect(resolveSecretKey(cfg, {})).toBe('');
+  });
+});
+
+describe('resolveStorageBackend (PROP-032)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it('env SYNTH_STORAGE_BACKEND имеет приоритет над config', () => {
+    expect(resolveStorageBackend(cfg, { SYNTH_STORAGE_BACKEND: 'memory' })).toBe('memory');
+    expect(resolveStorageBackend(cfg, { SYNTH_STORAGE_BACKEND: 'file' })).toBe('file');
+  });
+
+  it('config.storage.backend используется, если env не задан', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, backend: 'memory' } };
+    expect(resolveStorageBackend(c, {})).toBe('memory');
+  });
+
+  it('дефолт — file (при пустом env и дефолтном config)', () => {
+    expect(resolveStorageBackend(cfg, {})).toBe('file');
+  });
+
+  it('невалидное env-значение игнорируется → config/дефолт', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(resolveStorageBackend(cfg, { SYNTH_STORAGE_BACKEND: 'redis' })).toBe('file');
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, backend: 'memory' } };
+    expect(resolveStorageBackend(c, { SYNTH_STORAGE_BACKEND: 'postgres' })).toBe('memory');
+  });
+
+  it('НЕ читает реальный process.env, если передан env без переменной', () => {
+    vi.stubEnv('SYNTH_STORAGE_BACKEND', 'memory');
+    expect(resolveStorageBackend(cfg, {})).toBe('file');
   });
 });
 

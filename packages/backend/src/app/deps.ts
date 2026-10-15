@@ -9,37 +9,34 @@ import type {
   SummarizationConfig, McpNetworkPolicy, DecisionConfig,
 } from '@itphx/synth-shared';
 import {
-  ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey,
+  ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
 } from '@itphx/synth-shared';
 import {
-  FileStore, SessionManager, EventBus, QueueProcessorManager,
-  ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator, FileProfileStore,
+  SessionManager, EventBus, QueueProcessorManager,
+  ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage,
-  createToolRegistry, createAgentRegistry, McpManager, McpRegistryStore,
+  createToolRegistry, createAgentRegistry, McpManager,
   DEFAULT_AGENT_ID,
-  RuntimeSettingsStore, AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
-  mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig, ProtectedPathsStore,
-  SecretPatternStore,
+  AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
+  mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig,
   SkillService, resolveProjectSkillSeed,
-  CommandService, SkillBundleStore,
-  SSHKeyStore, detectRuntimeDeps, syncProvidersFromEnv,
+  CommandService,
+  detectRuntimeDeps, syncProvidersFromEnv,
   HookBus,
   startEphemeralSweeper,
   assertInstanceDataNotTooNew,
   applyStartupMigrations,
-  EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  RouteRuleStore, ProjectRuleProvider, DecisionRuleProvider,
-  IdentityClaimStore,
-  ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
-  MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
+  EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  ProjectRuleProvider, DecisionRuleProvider,
+  SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
   createExternalIdentityResolver,
   startEventJournalPruner,
-  WebhookStore, WebhookDeliveryStore, WebhookService, startWebhookDeliveryPruner,
-  JsonStore, ProjectStore,
+  WebhookService, startWebhookDeliveryPruner,
+  JsonStore,
+  createStorageContext,
 } from '@itphx/synth-core';
 import type { DecisionAgentCandidate, EventsRuntimeSettings } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
-import { DefaultsStore } from '../lib/defaults-store.js';
 import { EventHub } from '../events/hub.js';
 import { seedDebugTestUsers } from './bootstrap.js';
 
@@ -58,8 +55,45 @@ export async function createBackendDeps(config: BackendConfig) {
   // с обязательной страховочной копией ниже (`applyStartupMigrations`).
   await assertInstanceDataNotTooNew(dataDir);
 
-  const fileStore = new FileStore({ dataDir });
-  const projectStore = new ProjectStore({ dataDir });
+  // PROP-032 (W2.3): единый контекст хранения — домен получает порты из одного
+  // места. `file` (дефолт) собирает те же реализации/аргументы, что были здесь
+  // раньше (побайтовое поведение); `memory` — энергонезависимо (тесты).
+  const storageKind = resolveStorageBackend(config.synth, process.env);
+  if (storageKind === 'memory') {
+    console.warn('⚠️ storage.backend=memory: данные не сохраняются на диск');
+  }
+  const storage = createStorageContext(storageKind, {
+    dataDir,
+    secretKey: resolveSecretKey(config.synth),
+    env: process.env,
+    dedupStore: config.synth.events.dedupStore,
+    scheduleCrossProcess: config.synth.scheduler.crossProcessLocks,
+    bundlesPath: config.synth.commands.bundlesPath,
+  });
+  const {
+    settings: settingsStore,
+    defaults: defaultsStore,
+    secretPatterns: patternStore,
+    protectedPaths: protectedPathsStore,
+    sessions: fileStore,
+    projects: projectStore,
+    profiles: profilesStore,
+    sshKeys: sshKeyStore,
+    contextFiles: contextConfig,
+    webhooks: webhookStore,
+    webhookDeliveries: webhookDeliveryStore,
+    eventBindings: eventBindingStore,
+    eventApiKeys: eventApiKeyStore,
+    eventJournal,
+    eventRoutes: routeRuleStore,
+    identityClaims: identityClaimStore,
+    dedup: dedupStore,
+    schedules: scheduleStore,
+    jobs: jobStore,
+    skillBundles: bundleStore,
+    mcpRegistry: mcpRegistryStore,
+  } = storage;
+
   // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
   const hooks = new HookBus();
   const sessionManager = new SessionManager(fileStore, {
@@ -77,24 +111,12 @@ export async function createBackendDeps(config: BackendConfig) {
   // ADR-089: авто-архивация ephemeral-сессий по TTL (таймер `unref`).
   // Остановка — через хэндл `stopEphemeralSweeper` на graceful shutdown.
   const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
-  // ADR-076 §T4: SSH-ключи агентов — core-хранилище поверх общего dataDir.
-  // Мастер-ключ: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > файл dataDir.
-  const sshKeyStore = new SSHKeyStore({
-    dataDir,
-    secretKey: resolveSecretKey(config.synth),
-    env: process.env,
-  });
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
   const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
   const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
-  const contextConfig = new ContextConfig({ userDataDir: `${dataDir}/context` });
-  const profilesStore = new FileProfileStore({ dataDir });
 
-  // ADR-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
-  const patternStore = new SecretPatternStore({ dataDir });
-
-  // Runtime-настройки (ADR-005): workspace/mcp из {dataDir}/settings.json (переживают рестарт)
-  const settingsStore = new RuntimeSettingsStore({ dataDir });
+  // ADR-036/ADR-005: паттерны секретов и runtime-настройки («workspace/mcp»,
+  // умолчания оформления) — из контекста хранения (собраны выше).
   // ADR-075: дефолтный рабочий каталог — runtime-override `settings/workspace`
   // приоритетнее config/env (`resolveDefaultWorkspace`), каталог создаётся
   // заранее (как в core `server/app.ts`), чтобы инструменты не падали.
@@ -105,14 +127,10 @@ export async function createBackendDeps(config: BackendConfig) {
   const getDefaultAgentId = async (): Promise<string> =>
     (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
 
-  // Умолчания оформления (ADR-005): {dataDir}/defaults.json (переживают рестарт)
-  const defaultsStore = new DefaultsStore({ dataDir });
-
   // MCP: единый источник истины — реестр `McpRegistryStore` (ADR-071 §2.5).
   // Legacy `YamlMcpConfigStore` удалён: instance-серверы из config.mcp.servers
   // сидируются в реестр при старте (seed без дублирования по имени).
   const mcpManager = new McpManager();
-  const mcpRegistryStore = new McpRegistryStore({ dataDir });
   await mcpRegistryStore.seedFromConfig(config.synth.mcp.servers);
   // Одно чтение реестра на все карты менеджера (вместо пяти).
   const mcpMaps = await mcpRegistryStore.toManagerMaps();
@@ -148,12 +166,6 @@ export async function createBackendDeps(config: BackendConfig) {
   // подписывается на ВСЕ события шины (`subscribeAll`) — паритет с core
   // `server/app.ts`; `webhooks.enabled: false` (дефолт) глушит диспетчеризацию.
   const webhooksConfig: WebhooksConfig = config.synth.webhooks;
-  const webhookStore = new WebhookStore({
-    dataDir: config.dataDir,
-    secretKey: resolveSecretKey(config.synth),
-    env: process.env,
-  });
-  const webhookDeliveryStore = new WebhookDeliveryStore({ dataDir: config.dataDir });
   const webhookService = new WebhookService({
     store: webhookStore,
     deliveryStore: webhookDeliveryStore,
@@ -280,7 +292,6 @@ export async function createBackendDeps(config: BackendConfig) {
   // (микро-каскад, роутер, события ADR-089) через `live.setDecision`.
   const runtimeDecision = await settingsStore.getDecision();
   let effectiveDecisionSettings = mergeDecisionConfig(config.synth.decision, runtimeDecision);
-  const protectedPathsStore = new ProtectedPathsStore({ dataDir });
 
   // Orchestrator
   const toolRegistry = createToolRegistry();
@@ -296,10 +307,6 @@ export async function createBackendDeps(config: BackendConfig) {
   });
 
   // ADR-046 §7: slash-команды и bundles (mirror core).
-  const bundleStore = new SkillBundleStore({
-    dataDir,
-    bundlesPath: config.synth.commands.bundlesPath,
-  });
   const commandService = new CommandService({
     config: {
       dataDir,
@@ -386,24 +393,12 @@ export async function createBackendDeps(config: BackendConfig) {
 
   // ADR-089: ядро маршрутизации внешних событий и единый funnel создания сессий.
   // Funnel подключён к `POST /sessions` и тулу `task` (Этап 5); приём внешних
-  // событий — на следующих этапах.
-  const eventBindingStore = new EventBindingStore({ dataDir });
-  // ADR-089/ADR-052: API-ключи привязок для аутентификации приёма событий.
-  const eventApiKeyStore = new EventApiKeyStore({ dataDir });
-  const eventJournal = new EventJournalStore({ dataDir });
-  // ADR-089: реестр правил маршрутизации (проектные/инстанс-правила).
-  const routeRuleStore = new RouteRuleStore({ dataDir });
-  // ADR-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
-  const identityClaimStore = new IdentityClaimStore({ dataDir });
+  // событий — на следующих этапах. Сторы bindings/ключей/журнала/правил/claim,
+  // дедуп и расписания/jobs — из единого контекста хранения (собраны выше).
   // ADR-089 (Блок 3): runtime-настройки «События» (админка) поверх config.yaml.
   const runtimeEvents = await settingsStore.getEvents();
   const effectiveEvents = mergeEventsConfig(config.synth.events, runtimeEvents);
   let effectiveEventsSettings = effectiveEvents;
-  // ADR-051/ADR-089: источник дедупа — in-process (default) или файловый
-  // межпроцессный (`events.dedupStore: file`).
-  const dedupStore = config.synth.events.dedupStore === 'file'
-    ? new FileDedupStore({ dataDir })
-    : new MemoryDedupStore();
   const eventRouter = new EventRouter({
     bindingStore: eventBindingStore,
     journal: eventJournal,
@@ -423,11 +418,6 @@ export async function createBackendDeps(config: BackendConfig) {
   });
   // ADR-051 (срез) / ADR-089: правило маршрутизации cron-событий по расписанию
   // (паритет с core `server/app.ts`; store без дублей).
-  const scheduleStore = new ScheduleStore({
-    dataDir,
-    crossProcess: config.synth.scheduler.crossProcessLocks,
-  });
-  const jobStore = new JobStore({ dataDir });
   eventRouter.registerRuleProvider(
     new SchedulerRuleProvider(scheduleStore, effectiveEvents.ephemeralTtl),
   );

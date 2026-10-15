@@ -27,7 +27,7 @@ import type { EventBus } from '../../events/bus.js';
 import type { AgentRegistry } from '../agents/registry.js';
 import type { ToolRegistry } from './registry.js';
 import { normalizeAgentModes } from '../agents/normalize.js';
-import type { ContextConfig } from '../context/config.js';
+import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ShellPolicy } from '../security/shell-guard.js';
 import type { ProtectedPathsPolicy } from '../security/protected-paths.js';
@@ -36,7 +36,7 @@ import { serializeMessage, serializeSession } from '../../server/serialize.js';
 import { formatSkillsCatalogBlock } from '../skills/catalog.js';
 import type { RuntimeDeps } from './runtime-deps.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
-import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 import type { GitService } from '../../git/git-service.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import {
@@ -87,7 +87,7 @@ export interface SubagentResumeDeps {
   eventBus: EventBus;
   agentRegistry: AgentRegistry;
   toolRegistry?: ToolRegistry;
-  contextConfig?: ContextConfig;
+  contextConfig?: ContextFileRepository;
   contextOptimizer?: ContextOptimizer;
   routerConfig?: RouterConfig;
   securityConfig?: SecurityConfig;
@@ -119,7 +119,7 @@ export interface SubagentResumeDeps {
   /** Онбординг: хранилище профилей resumed-саб-агенту (тул `profile_update`). */
   profilesStore?: ProfileStore;
   workspacesRoot?: string;
-  sshKeyStore?: SSHKeyStore;
+  sshKeyStore?: SSHKeyRepository;
   gitService?: GitService;
   workspaceManaged?: boolean;
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;

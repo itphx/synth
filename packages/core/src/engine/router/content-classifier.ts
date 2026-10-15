@@ -3,7 +3,7 @@
  * Определяет категорию запроса: coding, research, chat.
  * Ключевые слова загружаются из DictionaryStore (YAML-файлы с языковой поддержкой).
  */
-import type { DictionaryStore } from './dictionary-store.js';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 
 export type ContentCategory = 'coding' | 'chat' | 'research';
 
@@ -25,12 +25,12 @@ export interface ClassifyResult {
 }
 
 export class ContentClassifier {
-  private readonly _dict: DictionaryStore;
+  private readonly _dict: DictionaryRepository;
   private _codingKeywordsCache: string[] | null = null;
   private _researchKeywordsCache: string[] | null = null;
   private _langCache: string | null = null;
 
-  constructor(dictionaryStore: DictionaryStore) {
+  constructor(dictionaryStore: DictionaryRepository) {
     this._dict = dictionaryStore;
   }
 

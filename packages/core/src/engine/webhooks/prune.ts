@@ -1,4 +1,4 @@
-import type { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
+import type { WebhookDeliveryRepository } from '../../storage/ports/webhook-delivery-repository.js';
 
 export interface WebhookDeliveryPrunerOptions {
   /** Текущий срок хранения журнала в днях (<= 0 — prune пропускается). */
@@ -18,7 +18,7 @@ const DEFAULT_INTERVAL_MS = 6 * 3600_000;
  * пропускается (безлимитное хранение). Возвращает stop-функцию.
  */
 export function startWebhookDeliveryPruner(
-  deliveries: WebhookDeliveryStore,
+  deliveries: WebhookDeliveryRepository,
   opts: WebhookDeliveryPrunerOptions,
 ): () => void {
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;

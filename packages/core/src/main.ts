@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -106,6 +106,8 @@ program
       port,
       dataDir,
       apiKey,
+      // PROP-032: физический backend хранения (env > config.yaml > file).
+      storageBackend: resolveStorageBackend(synth, process.env),
       workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
       maxUploadBytes: resolveMaxUploadBytes(synth),

@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { ProjectStore, SessionManager, McpManager, SkillService, RuntimeSettingsStore, McpRegistryStore } from '@itphx/synth-core';
+import type {
+  ProjectRepository, SessionManager, McpManager, SkillService,
+  SettingsRepository, McpRegistryRepository,
+} from '@itphx/synth-core';
 import { createProjectRoutes as createCoreProjectRoutes, resolveProjectSkillSeed } from '@itphx/synth-core';
 import type { Project } from '@itphx/synth-shared';
 import { ProjectRole } from '@itphx/synth-shared';
@@ -45,15 +48,15 @@ export function createProjectAccess(kit: AuthKit) {
  */
 export function createProjectRoutes(
   kit: AuthKit,
-  store: ProjectStore,
+  store: ProjectRepository,
   sessionManager: SessionManager,
   workspacesRoot: string,
   /** ADR-071 §2.4: источник известных MCP-серверов для проектного скоупа. */
   mcpManager?: McpManager,
   /** ADR-046 §4.5: сид скиллов нового проекта (системные дефолты). */
   skillService?: SkillService,
-  settingsStore?: RuntimeSettingsStore,
-  mcpRegistryStore?: McpRegistryStore,
+  settingsStore?: SettingsRepository,
+  mcpRegistryStore?: McpRegistryRepository,
 ): Hono {
   const { canManageProject, canEditProjectContent, canReadProject } = createProjectAccess(kit);
 

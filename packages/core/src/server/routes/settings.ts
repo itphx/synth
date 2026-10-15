@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { AuthKit } from '../../auth/local.js';
-import type { RuntimeSettingsStore, LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings } from '../../storage/runtime-settings.js';
-import type { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
+import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings } from '../../storage/runtime-settings.js';
+import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
+import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
 import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig } from '@itphx/synth-shared';
@@ -249,7 +250,7 @@ function effectiveDecision(
 
 export interface SettingsRoutesDeps {
   /** Store runtime-настроек ({dataDir}/settings.json). */
-  settingsStore: RuntimeSettingsStore;
+  settingsStore: SettingsRepository;
   /** Значение по умолчанию (env > config > {dataDir}/workspaces/default), если runtime-настройка не задана. */
   fallbackWorkspace: string;
   /** ADR-072 Ф2: дефолт LLM Gateway из config.yaml (без runtime) для GET/DELETE /llm-gateway. */
@@ -283,7 +284,7 @@ export interface SettingsRoutesDeps {
    */
   knownTools?: () => Array<{ name: string; capabilities: string[] }>;
   /** Store override политики защищённых путей ({dataDir}/security/protected-paths.json). */
-  protectedPathsStore?: ProtectedPathsStore;
+  protectedPathsStore?: ProtectedPathsRepository;
   /** Агент по умолчанию из config.yaml (если runtime не задан); иначе — `DEFAULT_AGENT_ID`. */
   fallbackDefaultAgent?: string;
   /** Вызывается после успешного PUT /default-agent (live-применение). */

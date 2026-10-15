@@ -5,7 +5,7 @@
  * Реализация: правила + ключевые слова через DictionaryStore.
  */
 import type { MicroTaskClass, MicroInput } from './types.js';
-import type { DictionaryStore } from '../dictionary-store.js';
+import type { DictionaryRepository } from '../../../storage/ports/dictionary-repository.js';
 
 export interface ClassifyOut {
   taskClass: MicroTaskClass;
@@ -13,12 +13,12 @@ export interface ClassifyOut {
 }
 
 export class TaskClassifier {
-  private readonly _dict: DictionaryStore;
+  private readonly _dict: DictionaryRepository;
   private _smallTalkCache: { lang: string; keywords: string[]; categories: Record<string, string[]> } | null = null;
   private _intentsCache: { lang: string; keywords: Record<string, string[]> } | null = null;
   private _enumCache: { lang: string; keywords: Record<string, string[]> } | null = null;
 
-  constructor(dictionaryStore: DictionaryStore) {
+  constructor(dictionaryStore: DictionaryRepository) {
     this._dict = dictionaryStore;
   }
 

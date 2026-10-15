@@ -1,6 +1,6 @@
 import type { EventBinding, RouteDecision, SynthEvent } from '@itphx/synth-shared';
-import type { EventBindingStore } from '../../storage/event-binding-store.js';
-import type { EventJournalStore } from '../../storage/event-journal-store.js';
+import type { EventBindingRepository } from '../../storage/ports/event-binding-repository.js';
+import type { EventJournalRepository } from '../../storage/ports/event-journal-repository.js';
 import type { HookBus } from '../hooks/hook-bus.js';
 import { MemoryDedupStore } from './dedup-store.js';
 import type { DedupStore } from './dedup-store.js';
@@ -11,8 +11,8 @@ const FALLBACK_DEFAULT_MODE = 'bound' as const;
 
 /** ADR-089: параметры `EventRouter`. */
 export interface EventRouterDeps {
-  bindingStore: EventBindingStore;
-  journal: EventJournalStore;
+  bindingStore: EventBindingRepository;
+  journal: EventJournalRepository;
   config?: Partial<EventRouterConfig>;
   ruleProviders?: RouteRuleProvider[];
   /**
@@ -45,8 +45,8 @@ const FALLBACK_EPHEMERAL_TTL = '24h';
  * и в `memory`-режиме.
  */
 export class EventRouter {
-  private _bindingStore: EventBindingStore;
-  private _journal: EventJournalStore;
+  private _bindingStore: EventBindingRepository;
+  private _journal: EventJournalRepository;
   private _config: EventRouterConfig;
   private _ruleProviders: RouteRuleProvider[] = [];
   private _dedupStore: DedupStore;

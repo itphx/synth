@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { atomicWrite, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SessionManager, SessionProjectStoreLike } from '../sessions/manager.js';
 import { migrateSessionScopeSnapshots, SESSION_SCOPE_SNAPSHOT_MIGRATION } from './migrations.js';
-import type { RuntimeSettingsStore } from './runtime-settings.js';
+import type { SettingsRepository } from './ports/settings-repository.js';
 
 /** Применённая версия схемы данных инстанса (`{dataDir}/meta.json`). */
 export interface InstanceMeta {
@@ -30,7 +30,7 @@ export interface MigrationDeps {
   /** Каталог данных инстанса. */
   dataDir: string;
   /** Runtime-настройки: маркеры разовых миграций (`settings.json`). */
-  settingsStore: RuntimeSettingsStore;
+  settingsStore: SettingsRepository;
   /** Менеджер сессий (миграции данных сессий); нет — шаг не выполняется. */
   sessionManager?: SessionManager;
   /** Загрузка проекта (для снапшотов скоупа). */

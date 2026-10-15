@@ -271,6 +271,27 @@ export function resolveMaxUploadBytes(config: SynthConfig, env?: NodeJS.ProcessE
 }
 
 /**
+ * PROP-032: физический backend хранения. Приоритет (ADR-023): env
+ * `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `'file'`. Некорректное
+ * env-значение (не `file`/`memory`) — warn и фолбэк на config/дефолт
+ * (fail-soft, как остальные env-резолверы).
+ */
+export function resolveStorageBackend(
+  config: SynthConfig,
+  env?: NodeJS.ProcessEnv,
+): 'file' | 'memory' {
+  const raw = (env ?? process.env).SYNTH_STORAGE_BACKEND;
+  if (raw !== undefined && raw !== '') {
+    if (raw === 'file' || raw === 'memory') return raw;
+    console.warn(
+      `[config] невалидное значение SYNTH_STORAGE_BACKEND="${raw}" ` +
+      `(ожидается 'file' или 'memory') — игнорируется`,
+    );
+  }
+  return config.storage.backend ?? 'file';
+}
+
+/**
  * ADR-076: мастер-ключ шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
  * Приоритет: env `SYNTH_SECRET_KEY` > `config.security.secretKey` > `''`
  * (пусто — core использует файл `{dataDir}/secrets/master.key`).

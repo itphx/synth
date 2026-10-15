@@ -1,17 +1,17 @@
 import type { Schedule, ScheduleJob, ScheduleJobTrigger } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
 import type { EventIngress } from '../events/ingest.js';
-import type { ScheduleStore } from '../../storage/schedule-store.js';
-import type { JobStore } from '../../storage/job-store.js';
+import type { ScheduleRepository } from '../../storage/ports/schedule-repository.js';
+import type { JobRepository } from '../../storage/ports/job-repository.js';
 import { AlwaysLeader } from './leader.js';
 import type { SchedulerLeader } from './leader.js';
 import { nextRunAt } from './schedule-time.js';
 
 export interface SchedulerServiceDeps {
-  scheduleStore: ScheduleStore;
+  scheduleStore: ScheduleRepository;
   ingress: EventIngress;
   /** История срабатываний (ADR-051); без неё Job не пишутся. */
-  jobStore?: JobStore;
+  jobStore?: JobRepository;
   /** Период тика, мс. По умолчанию 60 000. */
   tickMs?: number;
   /** TTL ephemeral-сессий по умолчанию (когда target его не задаёт). */
@@ -52,9 +52,9 @@ function errorMessage(err: unknown): string {
  * in-flight guard по `scheduleId` плюс флаг `_busy` на тик.
  */
 export class SchedulerService {
-  private _store: ScheduleStore;
+  private _store: ScheduleRepository;
   private _ingress: EventIngress;
-  private _jobStore?: JobStore;
+  private _jobStore?: JobRepository;
   private _tickMs: number;
   private _defaultEphemeralTtl: string;
   private _catchUp: 'skip' | 'once';

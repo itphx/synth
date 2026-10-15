@@ -12,7 +12,7 @@ import type { EventBus } from '../../../events/bus.js';
 import type { HookBus } from '../../hooks/hook-bus.js';
 import type { RequestSessionService } from '../../events/request-session.js';
 import type { ContextOptimizer } from '../../context/optimizer.js';
-import type { ContextConfig } from '../../context/config.js';
+import type { ContextFileRepository } from '../../../storage/ports/context-file-repository.js';
 import type { ModelRouter } from '../../router/router.js';
 import type { UsagePricing } from '../../../providers/usage.js';
 import type { ShellPolicy } from '../../security/shell-guard.js';
@@ -20,7 +20,7 @@ import type { ProtectedPathsPolicy } from '../../security/protected-paths.js';
 import type { RuntimeDeps } from '../runtime-deps.js';
 import type { SkillRuntime, SkillScopeOptions } from '../../skills/types.js';
 import type { ProjectStoreLike } from '../../../storage/project-store.js';
-import type { SSHKeyStore } from '../../../storage/ssh-key-store.js';
+import type { SSHKeyRepository } from '../../../storage/ports/ssh-key-repository.js';
 import type { GitService } from '../../../git/git-service.js';
 
 export interface TaskExtra {
@@ -44,7 +44,7 @@ export interface TaskExtra {
   mcpServers?: string[];
   modelRouter?: ModelRouter;
   routerConfig?: RouterConfig;
-  contextConfig?: ContextConfig;
+  contextConfig?: ContextFileRepository;
   publish?: (type: string, data: Record<string, unknown>) => void;
   streamId?: string;
   sessionId?: string;
@@ -103,7 +103,7 @@ export interface TaskExtra {
   /** Онбординг: хранилище профилей — тул `profile_update` у саб-агента. */
   profilesStore?: ProfileStore;
   workspacesRoot?: string;
-  sshKeyStore?: SSHKeyStore;
+  sshKeyStore?: SSHKeyRepository;
   gitService?: GitService;
   workspaceManaged?: boolean;
   getWorkspaceOutsideRootPolicy?: () => WorkspaceOutsideRootPolicy | Promise<WorkspaceOutsideRootPolicy>;

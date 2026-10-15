@@ -22,11 +22,11 @@ import {
   ProviderFactory,
   RateLimitError,
   RateLimiter,
-  SecretPatternStore,
 } from '@itphx/synth-core';
 import type {
   CancellationToken,
   LLMMessage,
+  SecretPatternRepository,
 } from '@itphx/synth-core';
 
 /**
@@ -86,7 +86,7 @@ export interface LlmRoutesDeps {
   /** Путь к JSONL полного лога запросов/ответов LLM. */
   gatewayPayloadLogPath?: string;
   /** Хранилище кастомных regex-паттернов детекции секретов (null — дефолт детектора). */
-  patternStore: SecretPatternStore | null;
+  patternStore: SecretPatternRepository | null;
   /** HTTP-мидлварь лимита запросов на ключ/пользователя (необязательно). */
   rateLimiter?: ReturnType<typeof createRateLimiter>;
 }

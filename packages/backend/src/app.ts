@@ -28,10 +28,10 @@ import {
   getServiceCredential,
 } from '@itphx/synth-core';
 import type {
-  EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectStore,
-  RuntimeSettingsStore, EventRouter, RequestSessionService, EventBindingStore,
-  EventJournalStore, EventIngress, ScheduleStore, SchedulerService,
-  WebhookStore, WebhookService,
+  EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository,
+  SettingsRepository, EventRouter, RequestSessionService, EventBindingRepository,
+  EventJournalRepository, EventIngress, ScheduleRepository, SchedulerService,
+  WebhookRepository, WebhookService,
 } from '@itphx/synth-core';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
@@ -69,19 +69,19 @@ export interface BackendAppHandle {
   eventBus: EventBus;
   eventHub: EventHub;
   sessionManager: SessionManager;
-  projectStore: ProjectStore;
+  projectStore: ProjectRepository;
   orchestrator: ChatOrchestrator;
   queueManager: QueueProcessorManager;
-  settingsStore: RuntimeSettingsStore;
+  settingsStore: SettingsRepository;
   // ADR-089: ядро маршрутизации событий и единый funnel создания сессий.
   eventRouter: EventRouter;
   requestSessionService: RequestSessionService;
-  eventBindingStore: EventBindingStore;
-  eventJournal: EventJournalStore;
+  eventBindingStore: EventBindingRepository;
+  eventJournal: EventJournalRepository;
   /** ADR-089: ingress-точка приёма внешних событий. */
   ingress: EventIngress;
   // ADR-051 (срез) / ADR-089: реестр расписаний и планировщик (cron/interval).
-  scheduleStore: ScheduleStore;
+  scheduleStore: ScheduleRepository;
   scheduler: SchedulerService;
   /** ADR-051 (срез): остановка планировщика (на graceful shutdown). */
   stopScheduler: () => void;
@@ -90,7 +90,7 @@ export interface BackendAppHandle {
   /** ADR-089: остановка периодической retention-очистки журнала событий. */
   stopEventJournalPruner: () => void;
   /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
-  webhookStore: WebhookStore;
+  webhookStore: WebhookRepository;
   /** ADR-052 (этап II): движок исходящих webhooks. */
   webhookService: WebhookService;
   /** ADR-052 (этап II): остановка движка webhooks (на graceful shutdown). */

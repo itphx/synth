@@ -23,7 +23,7 @@ import type {
   ToolsPolicy,
 } from '@itphx/synth-shared';
 import type { ContextBuilder } from './builder.js';
-import type { ContextConfig } from './config.js';
+import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
 import { formatSkillsCatalogBlock, type ComposerSkillsCatalog } from '../skills/catalog.js';
 import { agentKeyOf } from './prompt-state.js';
@@ -249,14 +249,14 @@ export interface ComposedPrompt {
 
 export interface SystemPromptComposerDeps {
   contextBuilder: ContextBuilder;
-  contextConfig?: ContextConfig | null;
+  contextConfig?: ContextFileRepository | null;
   projectStore?: { load(id: string): Promise<Project | null> } | null;
   debugCollector?: DebugCollector;
 }
 
 export class SystemPromptComposer {
   private readonly _contextBuilder: ContextBuilder;
-  private readonly _contextConfig: ContextConfig | null;
+  private readonly _contextConfig: ContextFileRepository | null;
   private readonly _projectStore: { load(id: string): Promise<Project | null> } | null;
   private readonly _debug: DebugCollector | undefined;
 

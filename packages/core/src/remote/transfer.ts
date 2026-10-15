@@ -9,7 +9,7 @@ import { join, dirname, basename, isAbsolute, normalize, resolve } from 'node:pa
 import { slugifyWorkspaceName, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
 import type { Project, Session, Message, SessionSettings } from '@itphx/synth-shared';
 import type { DirectoryListResult } from '@itphx/synth-shared';
-import type { ProjectStore } from '../storage/project-store.js';
+import type { ProjectRepository } from '../storage/ports/project-repository.js';
 import type { SessionManager } from '../sessions/manager.js';
 import type { RemoteBackendClient } from './client.js';
 import type { EventBus } from '../events/bus.js';
@@ -249,7 +249,7 @@ export interface SyncProjectToRemoteOptions {
 export interface ForkProjectToLocalOptions {
   remoteProjectId: string;
   remoteClient: RemoteBackendClient;
-  localProjectStore: ProjectStore;
+  localProjectStore: ProjectRepository;
   localSessionManager: SessionManager;
   includeFiles: boolean;
   includeSessions: boolean;

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { ContextConfig } from '@itphx/synth-core';
+import type { ContextFileRepository } from '@itphx/synth-core';
 import type { ContextCategory } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
 
@@ -11,7 +11,7 @@ function parseCategory(s: string | undefined): ContextCategory {
   return 'user';
 }
 
-export function createContextRoutes(kit: AuthKit, config: ContextConfig): Hono {
+export function createContextRoutes(kit: AuthKit, config: ContextFileRepository): Hono {
   const app = new Hono();
 
   // GET /api/v2/context/files — список контекстных файлов

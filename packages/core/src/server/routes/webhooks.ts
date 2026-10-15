@@ -6,8 +6,8 @@ import {
   webhookSubscriptionUpdateSchema,
 } from '@itphx/synth-shared';
 import { WebhookConflictError } from '../../storage/webhook-store.js';
-import type { WebhookStore } from '../../storage/webhook-store.js';
-import type { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
+import type { WebhookRepository } from '../../storage/ports/webhook-repository.js';
+import type { WebhookDeliveryRepository } from '../../storage/ports/webhook-delivery-repository.js';
 import type { WebhookService } from '../../engine/webhooks/service.js';
 import { evaluateWebhookTarget } from '../../engine/webhooks/network.js';
 
@@ -39,8 +39,8 @@ export interface WebhookRouteMessages {
 }
 
 export interface WebhookRoutesDeps {
-  store: WebhookStore;
-  deliveryStore: WebhookDeliveryStore;
+  store: WebhookRepository;
+  deliveryStore: WebhookDeliveryRepository;
   /** Движок доставки — для `POST /:id/test`. Не передан — тест недоступен. */
   service?: WebhookService;
 }

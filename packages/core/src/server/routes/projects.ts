@@ -10,7 +10,7 @@ import {
   isProjectIconKey,
   isProjectColorKey,
 } from '@itphx/synth-shared';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import { provisionWorkspace, resolveWorkspaceForLocalProject } from '../../engine/workspace-provision.js';
 import { serializeProject } from '../serialize.js';
 import { isRemoteRef, toLocalId, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
@@ -134,7 +134,7 @@ function mapRemoteError(c: Context, err: unknown): Response | undefined {
  */
 export function createProjectRoutes(
   auth: ProjectRoutesAuth,
-  store: ProjectStore,
+  store: ProjectRepository,
   getRemoteClient?: () => RemoteBackendClient | null,
   opts: ProjectRoutesOptions = {},
 ): Hono {

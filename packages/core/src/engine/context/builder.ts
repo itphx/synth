@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import type { Message, StickyNote } from '@itphx/synth-shared';
 import type { ProfileData, ProfileStore } from '@itphx/synth-shared';
-import { ContextConfig } from './config.js';
+import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import { isInterviewCompleted } from './interview.js';
 import { joinPromptBlocks, sortPromptBlocks, type PromptBlock } from './prompt-blocks.js';
 import type { DebugCollector } from '../../debug.js';
@@ -32,13 +32,13 @@ export interface ContextBuilderOptions {
 }
 
 export class ContextBuilder {
-  private readonly _config: ContextConfig;
+  private readonly _config: ContextFileRepository;
   private readonly _profiles?: ProfileStore;
   private readonly _projectDataDir?: string;
   private readonly _debug?: DebugCollector;
   private readonly _defaultLanguage: string;
 
-  constructor(config: ContextConfig, options?: ContextBuilderOptions) {
+  constructor(config: ContextFileRepository, options?: ContextBuilderOptions) {
     this._config = config;
     this._profiles = options?.profilesStore;
     this._projectDataDir = options?.projectDataDir;

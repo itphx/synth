@@ -4,7 +4,8 @@ import type { createMiddleware } from 'hono/factory';
 import { ZodError } from 'zod';
 import type { SSHKeyMeta } from '@itphx/synth-shared';
 import { sshKeyCreateSchema, sshKeyUpdateSchema } from '@itphx/synth-shared';
-import { SSHKeyStoreError, type SSHKeyStore } from '../../storage/ssh-key-store.js';
+import { SSHKeyStoreError } from '../../storage/ssh-key-store.js';
+import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 
 /**
  * ADR-076 §T5: SSH-ключи агентов (`/api/v2/ssh-keys` и
@@ -107,7 +108,7 @@ function notFound(id: string): SSHKeyStoreError {
  */
 export function createSshKeyRoutes(
   auth: SshKeyRoutesAuth,
-  sshKeyStore: SSHKeyStore,
+  sshKeyStore: SSHKeyRepository,
   opts: SshKeyRoutesOptions = {},
 ): Hono {
   const app = new Hono();
@@ -189,7 +190,7 @@ export function createSshKeyRoutes(
  */
 export function createAgentSshKeyRoutes(
   auth: SshKeyRoutesAuth,
-  sshKeyStore: SSHKeyStore,
+  sshKeyStore: SSHKeyRepository,
   opts: SshKeyRoutesOptions = {},
 ): Hono {
   const app = new Hono();

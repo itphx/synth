@@ -1,5 +1,5 @@
 import type { RouteDecision } from '@itphx/synth-shared';
-import type { ScheduleStore } from '../../storage/schedule-store.js';
+import type { ScheduleRepository } from '../../storage/ports/schedule-repository.js';
 import { decisionFromTarget } from '../events/target-decision.js';
 import type { RouteRuleInput, RouteRuleProvider } from '../events/types.js';
 
@@ -18,7 +18,7 @@ export class SchedulerRuleProvider implements RouteRuleProvider {
   readonly name = 'scheduler';
 
   constructor(
-    private _store: ScheduleStore,
+    private _store: ScheduleRepository,
     private _defaultEphemeralTtl: string = DEFAULT_EPHEMERAL_TTL,
   ) {}
 

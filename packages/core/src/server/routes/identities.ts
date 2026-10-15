@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { ExternalIdentity, ProfileStore } from '@itphx/synth-shared';
 import { nowISO } from '@itphx/synth-shared';
-import type { IdentityClaimStore } from '../../storage/identity-claim-store.js';
+import type { IdentityClaimRepository } from '../../storage/ports/identity-claim-repository.js';
 
 /**
  * ADR-089: маршруты идентичностей текущего пользователя (`/api/v2/me/identities`).
@@ -68,7 +68,7 @@ export interface IdentityRoutesOptions {
    * ADR-089 (claim-flow): хранилище одноразовых claim-кодов. Не передан —
    * `POST /identities/claim` не определяется (роут неактивен).
    */
-  claimStore?: IdentityClaimStore;
+  claimStore?: IdentityClaimRepository;
   /**
    * ADR-089 (claim-flow): необязательный rate-limit guard на `POST /identities/claim`
    * (per-user, напр. fixed window 60 c) — защита 6-символьного одноразового кода

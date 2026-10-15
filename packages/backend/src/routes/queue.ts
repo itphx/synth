@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus, ProjectStore } from '@itphx/synth-core';
+import type { SessionManager, QueueProcessorManager, ChatOrchestrator, EventBus, ProjectRepository } from '@itphx/synth-core';
 import { createQueueRoutes as createCoreQueueRoutes } from '@itphx/synth-core';
 import type { Session } from '@itphx/synth-shared';
 import { t } from '../lib/i18n.js';
@@ -17,7 +17,7 @@ export function createQueueRoutes(
   queueManager: QueueProcessorManager,
   eventBus: EventBus,
   processMessage: ReturnType<ChatOrchestrator['createProcessMessage']>,
-  projectStore?: ProjectStore,
+  projectStore?: ProjectRepository,
 ): Hono {
   const app = new Hono();
   const { canReadProject, canEditProjectContent } = createProjectAccess(kit);

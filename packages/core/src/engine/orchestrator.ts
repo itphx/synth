@@ -12,7 +12,7 @@ import { computeUsageCost } from '../providers/usage.js';
 import type { LLMMessage, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
-import { ContextConfig } from './context/config.js';
+import type { ContextFileRepository } from '../storage/ports/context-file-repository.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
 import { ProjectInstructionsResolver, type InstructionsFileInfo } from './context/instructions.js';
 import { LazyInstructionsLoader } from './context/lazy-instructions.js';
@@ -33,6 +33,7 @@ import { DecisionContentClassifier } from './router/decision-content-classifier.
 import { ProviderPool } from './router/provider-pool.js';
 import { QualityChecker } from './router/quality-checker.js';
 import { DictionaryStore } from './router/dictionary-store.js';
+import type { DictionaryRepository } from '../storage/ports/dictionary-repository.js';
 import { MicroPipeline } from './router/micro/index.js';
 import { TaskClassifier } from './router/micro/task-classifier.js';
 import { RulesModel, EmbeddingModel, MicroLlmModel, DecisionModel } from './router/micro/models/index.js';
@@ -43,6 +44,7 @@ import { computeToolAvailability } from './permission/availability.js';
 import { PermissionApprovalManager } from './permission/approval.js';
 import { emptyPermissionConfig } from './permission/derive.js';
 import { SSHKeyStore } from '../storage/ssh-key-store.js';
+import type { SSHKeyRepository } from '../storage/ports/ssh-key-repository.js';
 import type { ProjectStoreLike } from '../storage/project-store.js';
 import { GitService } from '../git/git-service.js';
 import { MAX_DOOM_LOOP_COUNT } from './llm-error.js';
@@ -56,7 +58,8 @@ import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
-import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, type SecretPatternStore } from './gateway/index.js';
+import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret } from './gateway/index.js';
+import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
@@ -112,7 +115,7 @@ export interface OrchestratorOptions {
   contextBuilder: ContextBuilder;
   providerLoader: (name: string) => SharedProviderConfig | null;
   contextOptimizer?: ContextOptimizer;
-  contextConfig?: ContextConfig;
+  contextConfig?: ContextFileRepository;
   modelPriceLoader?: (modelName: string) => ModelPricing | null;
   dataDir?: string;
   toolRegistry?: ToolRegistry;
@@ -137,7 +140,7 @@ export interface OrchestratorOptions {
    * Не задано — создаётся лениво из `dataDir` (+ env); без `dataDir` — git
    * использует ambient ssh (реестр/ключи недоступны).
    */
-  sshKeyStore?: SSHKeyStore;
+  sshKeyStore?: SSHKeyRepository;
   defaultWorkingDir?: string;
   /**
    * Корень каталога workspaces: `join(dataDir, 'workspaces')` по умолчанию
@@ -173,7 +176,7 @@ export interface OrchestratorOptions {
   /** Аудит LLM Gateway — если создаётся снаружи (backend/runner). Иначе создаётся внутри. */
   gatewayAuditLogger?: AuditLogger;
   /** Хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт). */
-  gatewayPatternStore?: SecretPatternStore;
+  gatewayPatternStore?: SecretPatternRepository;
   /** ADR-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
@@ -332,12 +335,12 @@ export class ChatOrchestrator {
   /** ADR-084: конфиг decision-слоя (runtime-изменяемая, гейт микро-каскада). */
   private _decisionConfig: DecisionConfig | null;
   private readonly _microPipeline: MicroPipeline | null;
-  private readonly _contextConfig: ContextConfig | null;
+  private readonly _contextConfig: ContextFileRepository | null;
   private readonly _projectStore: ProjectStoreLike | null;
   /** Онбординг: хранилище профилей (тул `profile_update`, сохранение интервью). */
   private readonly _profilesStore: ProfileStore | null;
   /** ADR-076 §T6: хранилище SSH-ключей (сетевые git-тулы); null — без dataDir. */
-  private readonly _sshKeyStore: SSHKeyStore | null;
+  private readonly _sshKeyStore: SSHKeyRepository | null;
   private readonly _gitService: GitService;
   private readonly _workspaceManaged: boolean;
   private readonly _getWorkspaceOutsideRootPolicy:
@@ -350,12 +353,12 @@ export class ChatOrchestrator {
   private readonly _approvalManager: PermissionApprovalManager;
   private readonly _defaultPlanMode: PlanMode;
   private _securityConfig: SecurityConfig;
-  private readonly _dictionaryStore: DictionaryStore;
+  private readonly _dictionaryStore: DictionaryRepository;
   private _gatewayConfig: LLMGatewayConfig | null;
   private _obfMapStore: ObfuscationMapStore | null;
   private _gatewayAudit: AuditLogger | null;
   private _gatewayRateLimiter: RateLimiter | null;
-  private readonly _gatewayPatternStore: SecretPatternStore | null;
+  private readonly _gatewayPatternStore: SecretPatternRepository | null;
   private readonly _dataDir: string;
   /** Путь к JSONL полного лога запросов/ответов LLM (передаётся в GatewayProvider). */
   private readonly _gatewayPayloadLogPath: string | undefined;

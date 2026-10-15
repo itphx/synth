@@ -12,7 +12,7 @@ import type {
 import { MessageRole, generateId, nowISO } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import { parseTtl } from '../../sessions/ephemeral.js';
-import type { EventBindingStore } from '../../storage/event-binding-store.js';
+import type { EventBindingRepository } from '../../storage/ports/event-binding-repository.js';
 import type { HookBus } from '../hooks/hook-bus.js';
 import type { EventRouter } from './event-router.js';
 import type { EventDelivery, EventDeliveryContext } from './types.js';
@@ -54,7 +54,7 @@ export interface RequestSessionServiceDeps {
    * ADR-089 (auto-bind): реестр привязок — материализация решения `kind: 'bind'`
    * создаёт/переиспользует `EventBinding` (`mode='bound'`).
    */
-  bindingStore: EventBindingStore;
+  bindingStore: EventBindingRepository;
   hooks?: HookBus;
   config: { defaultEphemeralTtl: string; unknownAgentTemplate?: 'drop' | 'default-agent' };
   deliver: EventDelivery;
@@ -276,7 +276,7 @@ function eventTitle(event: SynthEvent): string | undefined {
 export class RequestSessionService {
   private _sessionManager: SessionManager;
   private _eventRouter: EventRouter;
-  private _bindingStore: EventBindingStore;
+  private _bindingStore: EventBindingRepository;
   private _hooks?: HookBus;
   private _config: { defaultEphemeralTtl: string; unknownAgentTemplate: 'drop' | 'default-agent' };
   private _deliver: EventDelivery;

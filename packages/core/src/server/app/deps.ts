@@ -10,36 +10,31 @@ import type {
 } from '@itphx/synth-shared';
 import { ensureDataDir, parsePrincipalId } from '@itphx/synth-shared';
 import {
-  FileStore, SessionManager, EventBus, QueueProcessorManager,
-  ContextConfig, ContextBuilder, ContextOptimizer, ChatOrchestrator,
+  SessionManager, EventBus, QueueProcessorManager,
+  ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  SecretPatternStore, ProtectedPathsStore, DEFAULT_AGENT_ID,
+  DEFAULT_AGENT_ID,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
-  EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
-  RouteRuleStore, ProjectRuleProvider, DecisionRuleProvider,
-  IdentityClaimStore,
+  EventRouter, RequestSessionService, EventIngress, eventToMessage,
+  ProjectRuleProvider, DecisionRuleProvider,
   type DecisionAgentCandidate,
-  ScheduleStore, SchedulerRuleProvider, SchedulerService, JobStore,
-  MemoryDedupStore, FileDedupStore, AlwaysLeader, FileLeader,
-  WebhookStore, WebhookDeliveryStore, WebhookService,
+  SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
+  WebhookService,
   createExternalIdentityResolver,
   startEventJournalPruner,
   startWebhookDeliveryPruner,
+  createStorageContext,
 } from '../../index.js';
 import { JsonStore } from '../../storage/json-store.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
-import { FileProfileStore } from '../../storage/profile-store.js';
-import { ProjectStore } from '../../storage/project-store.js';
-import { SSHKeyStore } from '../../storage/ssh-key-store.js';
 import {
-  RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig,
+  mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
 import { applyStartupMigrations } from '../../maintenance/startup.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
-import { SkillBundleStore } from '../../storage/skill-bundle-store.js';
 import { CommandService } from '../../engine/commands/service.js';
 import { createLocalOwnerResolver, LOCAL_USER_ID } from '../local-owner.js';
 import type { StandaloneConfig } from '../app.js';
@@ -84,8 +79,47 @@ export async function createStandaloneDeps(
   // страховочной копией ниже (`applyStartupMigrations`), после сборки стораджей.
   await assertInstanceDataNotTooNew(dataDir);
 
+  // PROP-032 (W2.3): единый контекст хранения — домен получает порты из одного
+  // места, а не собирает конкретные классы. `file` (дефолт) собирает те же
+  // реализации/аргументы, что были здесь раньше (побайтовое поведение);
+  // `memory` — энергонезависимо (герметичные тесты).
+  const storageKind = config.storageBackend ?? 'file';
+  if (storageKind === 'memory') {
+    console.warn('⚠️ storage.backend=memory: данные не сохраняются на диск');
+  }
+  const storage = createStorageContext(storageKind, {
+    dataDir,
+    secretKey: config.secretKey,
+    env: process.env,
+    dedupStore: config.eventsConfig?.dedupStore,
+    scheduleCrossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
+    systemPromptsDir: config.systemPromptsDir,
+    bundlesPath: config.commandsConfig?.bundlesPath,
+  });
+  const {
+    settings: settingsStore,
+    defaults: defaultsStore,
+    secretPatterns: patternStore,
+    protectedPaths: protectedPathsStore,
+    sessions: fileStore,
+    projects: projectStore,
+    profiles: profilesStore,
+    sshKeys: sshKeyStore,
+    contextFiles: contextConfig,
+    webhooks: webhookStore,
+    webhookDeliveries: webhookDeliveryStore,
+    eventBindings: eventBindingStore,
+    eventApiKeys: eventApiKeyStore,
+    eventJournal,
+    eventRoutes: routeRuleStore,
+    identityClaims: identityClaimStore,
+    dedup: dedupStore,
+    schedules: scheduleStore,
+    jobs: jobStore,
+    skillBundles: bundleStore,
+  } = storage;
+
   // Runtime-настройки (ADR-005): workspace из {dataDir}/settings.json приоритетнее config/env
-  const settingsStore = new RuntimeSettingsStore({ dataDir });
   // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
   const getDefaultAgentId = async (): Promise<string> =>
     (await settingsStore.getDefaultAgent()) ?? DEFAULT_AGENT_ID;
@@ -127,16 +161,9 @@ export async function createStandaloneDeps(
   const runtimeDecision = await settingsStore.getDecision();
   let effectiveDecisionSettings = mergeDecisionConfig(config.decisionConfig, runtimeDecision);
 
-  // ADR-036: хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт)
-  const patternStore = new SecretPatternStore({ dataDir });
-
-  // Защищённые пути: store override-политики (add/remove) + миграция legacy shell-policy
-  const protectedPathsStore = new ProtectedPathsStore({ dataDir });
-
-  const fileStore = new FileStore({ dataDir });
-  const projectStore = new ProjectStore({ dataDir });
-  // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора
-  // (эмиты жизненного цикла агента). Пока обработчиков нет — поведение прежнее.
+  // ADR-036: паттерны детекции секретов и ADR-075 защищённые пути — из контекста
+  // хранения (собраны выше); ADR-030: ядровая шина хуков — общий инстанс для
+  // SessionManager и оркестратора (эмиты жизненного цикла агента).
   const hooks = new HookBus();
   const sessionManager = new SessionManager(fileStore, {
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
@@ -157,15 +184,9 @@ export async function createStandaloneDeps(
   // (тесты/короткоживущие процессы не держатся); остановка — на shutdown
   // через возвращаемый хэндл `stopEphemeralSweeper`.
   const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
-  // ADR-076: SSH-ключи агентов (шифрование at-rest мастер-ключом из dataDir/env).
-  const sshKeyStore = new SSHKeyStore({ dataDir, secretKey: config.secretKey, env: process.env });
   const providerStore = new JsonStore<ProviderConfig>({ dataDir, subdir: 'providers' });
   const modelStore = new JsonStore<ModelConfig>({ dataDir, subdir: 'models' });
   const agentStore = new JsonStore<AgentDefinition>({ dataDir, subdir: 'agents' });
-  const contextConfig = new ContextConfig({
-    userDataDir: `${dataDir}/context`,
-    systemPromptsDir: config.systemPromptsDir,
-  });
 
   const mcpManager = new McpManager();
   mcpManager.setConfig(config.mcpServers ?? {});
@@ -194,8 +215,6 @@ export async function createStandaloneDeps(
     allowPrivateTargets: config.webhooksConfig?.allowPrivateTargets ?? false,
     deliveryRetentionDays: config.webhooksConfig?.deliveryRetentionDays ?? 30,
   };
-  const webhookStore = new WebhookStore({ dataDir, secretKey: config.secretKey });
-  const webhookDeliveryStore = new WebhookDeliveryStore({ dataDir });
   const webhookService = new WebhookService({
     store: webhookStore,
     deliveryStore: webhookDeliveryStore,
@@ -207,7 +226,6 @@ export async function createStandaloneDeps(
     getRetentionDays: () => webhooksConfig.deliveryRetentionDays,
   });
 
-  const profilesStore = new FileProfileStore({ dataDir });
   // ADR-089 (standalone): единая нормализация legacy-владельца при чтении — id
   // профиля `local` (UUID, созданный до фикса резолвера внешней идентичности)
   // трактуется как `local` (списки/доступ по id/WS-подписка). Read-only:
@@ -318,10 +336,6 @@ export async function createStandaloneDeps(
   });
 
   // ADR-046 §7: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
-  const bundleStore = new SkillBundleStore({
-    dataDir,
-    bundlesPath: config.commandsConfig?.bundlesPath,
-  });
   const commandService = new CommandService({
     config: {
       dataDir,
@@ -407,26 +421,14 @@ export async function createStandaloneDeps(
 
   // ADR-089: ядро маршрутизации внешних событий и единый funnel создания сессий.
   // Funnel подключён к `POST /sessions` и тулу `task` (Этап 5); приём внешних
-  // событий — на следующих этапах.
-  const eventBindingStore = new EventBindingStore({ dataDir });
-  // ADR-089/ADR-052: API-ключи привязок для аутентификации приёма событий.
-  const eventApiKeyStore = new EventApiKeyStore({ dataDir });
-  const eventJournal = new EventJournalStore({ dataDir });
-  // ADR-089: реестр правил маршрутизации (проектные/инстанс-правила).
-  const routeRuleStore = new RouteRuleStore({ dataDir });
-  // ADR-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
-  const identityClaimStore = new IdentityClaimStore({ dataDir });
+  // событий — на следующих этапах. Сторы bindings/ключей/журнала/правил/claim —
+  // из единого контекста хранения (собраны выше).
   // ADR-089 (Блок 3): runtime-настройки «События» (админка) поверх config.yaml.
   // Эффективные значения — единый источник для Router/funnel/pruner/роутов;
   // live-изменяются через `onEventsChange` без рестарта.
   const runtimeEvents = await settingsStore.getEvents();
   const effectiveEvents = mergeEventsConfig(config.eventsConfig, runtimeEvents);
   let effectiveEventsSettings = effectiveEvents;
-  // ADR-051/ADR-089: источник дедупа — in-process (default) или файловый
-  // межпроцессный (config.events.dedupStore === 'file').
-  const dedupStore = config.eventsConfig?.dedupStore === 'file'
-    ? new FileDedupStore({ dataDir })
-    : new MemoryDedupStore();
   const eventRouter = new EventRouter({
     bindingStore: eventBindingStore,
     journal: eventJournal,
@@ -445,11 +447,6 @@ export async function createStandaloneDeps(
     getRetentionDays: () => effectiveEventsSettings.journalRetentionDays,
   });
   // ADR-051 (срез) / ADR-089: правило маршрутизации cron-событий по расписанию.
-  const scheduleStore = new ScheduleStore({
-    dataDir,
-    crossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
-  });
-  const jobStore = new JobStore({ dataDir });
   eventRouter.registerRuleProvider(
     new SchedulerRuleProvider(scheduleStore, effectiveEvents.ephemeralTtl),
   );
@@ -631,6 +628,8 @@ export async function createStandaloneDeps(
   return {
     dataDir,
     settingsStore,
+    // PROP-032 (W2.3): умолчания оформления из контекста хранения (паритет с backend).
+    defaultsStore,
     getDefaultAgentId,
     defaultWorkingDir,
     /** ADR-075: начальная политика workspace вне root (config/env + runtime-override). */

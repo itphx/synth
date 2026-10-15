@@ -15,7 +15,7 @@ import type {
 import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreContract } from '../../storage/project-store.js';
 import type { EventBus } from '../../events/bus.js';
-import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 import { GitService, deriveRepoName } from '../../git/git-service.js';
 import { isSshUrl } from '../../git/ssh-env.js';
 import { isAborted, abortedResult } from './abort.js';
@@ -40,7 +40,7 @@ interface ProjectReposExtra {
   /** ADR-076: git-сервис (containment + операции). */
   gitService?: GitService;
   /** ADR-076: хранилище SSH-ключей для сетевых операций. */
-  sshKeyStore?: SSHKeyStore;
+  sshKeyStore?: SSHKeyRepository;
 }
 
 function getExtra(ctx: ToolContext): ProjectReposExtra {

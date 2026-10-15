@@ -1,7 +1,7 @@
 // Bootstrap-сиды backend.
 // Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
 import type { AuthConfig } from '@itphx/synth-shared';
-import type { FileProfileStore } from '@itphx/synth-core';
+import type { ProfileRepository } from '@itphx/synth-core';
 
 /**
  * Сидировать профили тестовых пользователей (debug mode). Fire-and-forget
@@ -11,7 +11,7 @@ import type { FileProfileStore } from '@itphx/synth-core';
  * построения рантайма (оркестратор/события/шедулер) — как в прежнем `app.ts`,
  * где сид стоял между хранилищами и рантаймом.
  */
-export function seedDebugTestUsers(profilesStore: FileProfileStore, auth: AuthConfig): void {
+export function seedDebugTestUsers(profilesStore: ProfileRepository, auth: AuthConfig): void {
   // Сидирование тестовых пользователей (debug mode)
   if (auth.debugMode && auth.testUsers) {
     for (const tu of auth.testUsers) {

@@ -31,7 +31,7 @@ import {
 import { expandHome, isProjectTrusted } from '../skills/trust.js';
 import { fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
 import type { HostResolver } from '../mcp/network-policy.js';
-import type { DictionaryStore } from '../router/dictionary-store.js';
+import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 
 /** Fallback-окно модели, если оно неизвестно (ADR-069 §5.1: разумный дефолт). */
 export const DEFAULT_INSTRUCTIONS_CONTEXT_WINDOW = 128_000;
@@ -162,7 +162,7 @@ export interface ProjectInstructionsResolveArgs {
 
 export interface ProjectInstructionsDeps {
   config: InstructionsConfig;
-  dictionaryStore?: DictionaryStore | null;
+  dictionaryStore?: DictionaryRepository | null;
   /** Подменяемый git-раннер (тесты). */
   runGitFn?: (args: string[], cwd: string, signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>;
   /** ADR-069 §3.5: `config.skills.trustedProjectDirs` — project-trust гейт. */
@@ -511,7 +511,7 @@ interface CacheEntry {
  */
 export class ProjectInstructionsResolver {
   private readonly _config: InstructionsConfig;
-  private readonly _dictionaryStore: DictionaryStore | null;
+  private readonly _dictionaryStore: DictionaryRepository | null;
   private readonly _runGit: NonNullable<ProjectInstructionsDeps['runGitFn']>;
   private readonly _trustedProjectDirs: readonly string[];
   private readonly _workspacesRoot: string;

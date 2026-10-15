@@ -13,7 +13,7 @@ import {
   InstanceDataTooNewError,
   runMigrations,
 } from '../storage/instance-meta.js';
-import type { RuntimeSettingsStore } from '../storage/runtime-settings.js';
+import type { SettingsRepository } from '../storage/ports/settings-repository.js';
 import { createBackup, safetyCopyPath } from './backup.js';
 
 /** Опции `applyStartupMigrations` (PROP-092). */
@@ -21,7 +21,7 @@ export interface ApplyStartupMigrationsOptions {
   /** Каталог данных инстанса. */
   dataDir: string;
   /** Runtime-настройки: маркеры разовых миграций (`settings.json`). */
-  settingsStore: RuntimeSettingsStore;
+  settingsStore: SettingsRepository;
   /** Менеджер сессий (миграции данных сессий); нет — шаг не выполняется. */
   sessionManager?: SessionManager;
   /** Загрузка проекта (для снапшотов скоупа). */

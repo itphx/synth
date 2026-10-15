@@ -3,7 +3,7 @@ import type { Project, ToolContext } from '@itphx/synth-shared';
 import { normalizeGitRepoConfig } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
-import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 import { SSHKeyStoreError } from '../../storage/ssh-key-store.js';
 import { createSshEnv, SshEnvError } from '../../git/ssh-env.js';
 
@@ -21,7 +21,7 @@ interface GitSshExtra {
   sessionManager?: SessionManager;
   projectStore?: ProjectStoreLike;
   sessionId?: string;
-  sshKeyStore?: SSHKeyStore;
+  sshKeyStore?: SSHKeyRepository;
   workspacesRoot?: string;
 }
 
@@ -56,7 +56,7 @@ export interface SshEnvByIdResult {
  * нет ключа/не расшифрован → `sshkey.not_found`; сбой подготовки → `sshkey.env_failed`.
  */
 export async function resolveSshEnvById(
-  sshKeyStore: SSHKeyStore | undefined,
+  sshKeyStore: SSHKeyRepository | undefined,
   sshKeyId?: string,
 ): Promise<SshEnvByIdResult> {
   if (!sshKeyId) return { cleanup: noopCleanup };

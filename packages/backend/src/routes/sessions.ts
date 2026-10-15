@@ -27,7 +27,7 @@ import {
 } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
-import type { ProjectStore } from '@itphx/synth-core';
+import type { ProjectRepository } from '@itphx/synth-core';
 import { createProjectAccess } from './projects.js';
 
 /**
@@ -50,7 +50,7 @@ export function createSessionRoutes(
   orchestrator: ChatOrchestrator,
   eventHub: EventHub,
   contextOptimizer?: ContextOptimizer,
-  projectStore?: ProjectStore,
+  projectStore?: ProjectRepository,
   /** Профили пользователей: display name для статистики (fallback — username). */
   profilesStore?: ProfileStore,
   /** Агент по умолчанию для новых сессий без `settings.agentRole` (runtime-настройка). */

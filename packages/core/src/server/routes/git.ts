@@ -21,7 +21,7 @@ import {
 import { GitService, deriveRepoName, resolveRepoPath } from '../../git/git-service.js';
 import { isSshUrl } from '../../git/ssh-env.js';
 import { resolveSshEnvById } from '../../engine/tools/git-ssh.js';
-import type { SSHKeyStore } from '../../storage/ssh-key-store.js';
+import type { SSHKeyRepository } from '../../storage/ports/ssh-key-repository.js';
 
 /**
  * ADR-076 §T3: git-роуты ядра (`/api/v2/git`). Единая реализация для core
@@ -44,7 +44,7 @@ export interface GitProjectStore {
 
 export interface GitRoutesOptions {
   /** Хранилище SSH-ключей; без него `sshKeyId` → 404. */
-  sshKeyStore?: SSHKeyStore;
+  sshKeyStore?: SSHKeyRepository;
   /** Guard на write-эндпоинты; по умолчанию — `requireAuth`. */
   writeGuard?: Middleware;
   /** Проверка доступа к проекту (managed RBAC); `false` → 403. */

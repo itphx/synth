@@ -11,7 +11,7 @@ import { stat } from 'node:fs/promises';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { AuthKit } from '../../auth/local.js';
-import type { ProjectStore } from '../../storage/project-store.js';
+import type { ProjectRepository } from '../../storage/ports/project-repository.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
 import type { EventBus } from '../../events/bus.js';
@@ -41,7 +41,7 @@ function mapTransferError(c: Context, err: unknown): Response {
 
 export function createProjectTransferRoutes(
   auth: AuthKit,
-  store: ProjectStore,
+  store: ProjectRepository,
   sessionManager: SessionManager,
   /** Корень локальных workspace ({dataDir}/workspaces) — для resolveLocalWorkspace и forkProjectToLocal. */
   workspacesRoot: string,
