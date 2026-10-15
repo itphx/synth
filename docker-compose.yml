@@ -14,19 +14,24 @@ services:
       - SYNTH_PROVIDER_OLLAMA_API_KEY=${SYNTH_PROVIDER_OLLAMA_API_KEY:-}
       # Ollama ≥0.32: суффикс /v1 → OpenAI-совместимый /v1/chat/completions.
       - SYNTH_PROVIDER_OLLAMA_URL=${SYNTH_PROVIDER_OLLAMA_URL:-http://ollama:11434/v1}
-      - SYNTH_PROVIDER_OLLAMA_MODEL=${SYNTH_PROVIDER_OLLAMA_MODEL:-qwen3:14b}
+      - SYNTH_PROVIDER_OLLAMA_MODEL=${SYNTH_PROVIDER_OLLAMA_MODEL:-qwen3.8:27b}
       - SYNTH_PROVIDER_OLLAMA_TYPE=ollama
     volumes:
       - synth-data:/var/synth/data
     restart: unless-stopped
 
   # Опционально: Ollama для локального запуска LLM
-  # Чтобы загрузить модель: docker compose exec ollama ollama pull qwen3:14b
+  # Чтобы загрузить модель: docker compose exec ollama ollama pull qwen3.8:27b
   ollama:
     image: ollama/ollama:latest
     container_name: synth-ollama
     ports:
       - "11434:11434"
+    environment:
+      # Контекстное окно Ollama (num_ctx) задаётся на стороне сервера: Synth
+      # ходит на OpenAI-совместимый /v1, куда num_ctx не передаётся.
+      # 262144 = 256k токенов; уменьшите, если не хватает памяти/VRAM.
+      - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-262144}
     volumes:
       - ollama-data:/root/.ollama
     restart: unless-stopped

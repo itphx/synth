@@ -53,11 +53,12 @@ node packages/synth/dist/cli.js serve --api-key my-secret-key
 Минимальная настройка — добавить провайдера через CLI. Провайдеры хранятся как JSON-файлы в `{dataDir}/providers/`.
 
 ```bash
-# Ollama (локальные модели)
+# Ollama (локальные модели); рекомендуемая модель — qwen3.8:27b
+# ollama pull qwen3.8:27b
 synth config provider add \
   --name ollama --type ollama \
   --url http://localhost:11434/v1 \
-  --model qwen3:14b
+  --model qwen3.8:27b
 ```
 
 ```bash
@@ -75,11 +76,35 @@ synth config provider add \
 
 ```bash
 export SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434/v1
-export SYNTH_PROVIDER_OLLAMA_MODEL=qwen3:14b
+export SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.8:27b
 export SYNTH_PROVIDER_OLLAMA_TYPE=ollama
 ```
 
 Подробнее — [LLM-провайдеры](LLM_PROVIDERS.md).
+
+### Контекстное окно и `num_ctx`
+
+`qwen3.8:27b` поддерживает окно **~100k–256k токенов**, но Ollama по умолчанию
+поднимает его небольшим. Synth обращается к Ollama по OpenAI-совместимому
+`/v1`-эндпоинту, где `num_ctx` не передаётся, поэтому «сырое» окно задаётся
+**на стороне Ollama** (не через конфиг Synth):
+
+```bash
+# 1) Основной способ — переменная окружения сервера Ollama (при запуске `ollama serve`)
+OLLAMA_CONTEXT_LENGTH=262144 ollama serve
+
+# 2) Либо модель с явным num_ctx (Modelfile)
+cat > Modelfile <<'EOF'
+FROM qwen3.8:27b
+PARAMETER num_ctx 262144
+EOF
+ollama create qwen3.8-27b-256k -f Modelfile
+# затем используйте модель qwen3.8-27b-256k
+```
+
+Бюджет контекста самого Synth считается по `contextWindow` модели: он
+синхронизируется из Ollama (`/api/tags`) или задаётся вручную у модели и влияет
+на обрезку истории, но **фактическое** окно определяет Ollama.
 
 ## 3. Запуск
 
@@ -101,10 +126,10 @@ synth serve --api-key my-secret-key
 
 ```bash
 # Одноразовый запрос
-synth chat "привет" --provider ollama --model qwen3:14b
+synth chat "привет" --provider ollama --model qwen3.8:27b
 
 # Интерактивный режим
-synth chat --provider ollama --model qwen3:14b
+synth chat --provider ollama --model qwen3.8:27b
 
 # Просто synth — сразу в интерактивный чат
 synth

@@ -6,7 +6,7 @@ Synth поддерживает провайдеров типов `openai`, `anth
 
 | Имя | Тип | Назначение |
 |-----|-----|------------|
-| `itphx` | openai | Рабочий провайдер (ai.itphx.ru), модель `local.qwen3:14b` |
+| `itphx` | openai | Рабочий провайдер (ai.itphx.ru), модель `local.qwen3.8:27b` |
 | `ollama` | ollama | Локальный Ollama (owu.itphx.loc:11434) |
 
 ## Настройка через переменные окружения
@@ -17,10 +17,29 @@ Synth поддерживает провайдеров типов `openai`, `anth
 
 ```bash
 export SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434/v1
-export SYNTH_PROVIDER_OLLAMA_MODEL=qwen3:14b
+export SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.8:27b
 export SYNTH_PROVIDER_OLLAMA_TYPE=ollama
 export SYNTH_PROVIDER_OLLAMA_API_KEY=""
 ```
+
+> **Контекстное окно и `num_ctx`.** У модели окно ~100k–256k токенов, но Ollama
+> по умолчанию поднимает его небольшим. Synth не может задать `num_ctx` через
+> свой конфиг (нет ни поля в провайдере/модели, ни CLI-флага, ни `SYNTH_PROVIDER_*`),
+> потому что обращается к Ollama по OpenAI-совместимому `/v1`, где `num_ctx` не
+> передаётся. «Сырое» окно задаётся **на стороне Ollama**:
+>
+> ```bash
+> # 1) Основной способ — переменная окружения сервера Ollama
+> OLLAMA_CONTEXT_LENGTH=262144 ollama serve
+>
+> # 2) Либо модель с явным num_ctx (Modelfile)
+> # FROM qwen3.8:27b
+> # PARAMETER num_ctx 262144
+> ollama create qwen3.8-27b-256k -f Modelfile
+> ```
+>
+> Synth для бюджета контекста использует `contextWindow` модели (синхронизируется
+> из Ollama `/api/tags` или задаётся вручную), но фактическое окно определяет Ollama.
 
 ### Любой OpenAI-совместимый API (LM-Studio, vLLM, Together, Groq, …)
 
@@ -75,11 +94,11 @@ export SYNTH_PROVIDER_OLLAMA_DECISION_MODEL=clef-flash
 Провайдеры хранятся как JSON-файлы в `{dataDir}/providers/`. Команды — через публичную CLI-обёртку `synth`:
 
 ```bash
-# Добавить провайдера
+# Добавить провайдера (рекомендуемая локальная модель — qwen3.8:27b)
 synth config provider add \
   --name ollama --type ollama \
   --url http://localhost:11434/v1 \
-  --model qwen3:14b
+  --model qwen3.8:27b
 
 # Список провайдеров
 synth config provider list
@@ -100,8 +119,7 @@ synth config provider delete ollama
 
 | Модель | Команда для установки |
 |--------|-----------------------|
-| Qwen3 14B | `ollama pull qwen3:14b` |
-| Qwen3.5 9B | `ollama pull qwen3.5:9b` |
+| Qwen3.8 27B **(рекомендуемая)** | `ollama pull qwen3.8:27b` |
 | DeepSeek Coder V2 16B | `ollama pull deepseek-coder-v2:16b` |
 | DeepSeek R1 14B | `ollama pull deepseek-r1:14b` |
 | Gemma 4 12B | `ollama pull gemma4:12b` |

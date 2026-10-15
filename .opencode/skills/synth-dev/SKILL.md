@@ -32,7 +32,7 @@ description: Запуск и настройка dev-окружения Synth: de
 
 | Имя | Тип | Назначение |
 |-----|-----|------------|
-| `itphx` | openai | Рабочий провайдер (ai.itphx.ru), модель `local.qwen3:14b` |
+| `itphx` | openai | Рабочий провайдер (ai.itphx.ru), модель `local.qwen3.8:27b` |
 | `ollama` | ollama | Локальный Ollama (owu.itphx.loc:11434) |
 
 Для добавления нового провайдера достаточно создать JSON-файл в `providers/`, для модели — в `models/`.
