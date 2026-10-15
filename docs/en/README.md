@@ -26,11 +26,11 @@ the language rule in the root [AGENTS.md](../../AGENTS.md)).
 | [`docs/UI-KIT.md`](../UI-KIT.md) | [`docs/en/UI-KIT.md`](./UI-KIT.md) | ✅ available |
 | [`docs/ROUTING.md`](../ROUTING.md) | [`docs/en/ROUTING.md`](./ROUTING.md) | ✅ available |
 | [`docs/LLM_PROVIDERS.md`](../LLM_PROVIDERS.md) | [`docs/en/LLM_PROVIDERS.md`](./LLM_PROVIDERS.md) | ✅ available |
-| [`docs/QUICKSTART.md`](../QUICKSTART.md) | `docs/en/QUICKSTART.md` | ⏳ planned |
-| [`docs/DEVELOPMENT.md`](../DEVELOPMENT.md) | `docs/en/DEVELOPMENT.md` | ⏳ planned |
-| [`docs/PUBLISHING.md`](../PUBLISHING.md) | `docs/en/PUBLISHING.md` | ⏳ planned |
-| [`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md) | `docs/en/TROUBLESHOOTING.md` | ⏳ planned |
-| [`docs/KEYCLOAK.md`](../KEYCLOAK.md) | `docs/en/KEYCLOAK.md` | ⏳ planned |
+| [`docs/QUICKSTART.md`](../QUICKSTART.md) | [`docs/en/QUICKSTART.md`](./QUICKSTART.md) | ✅ available |
+| [`docs/DEVELOPMENT.md`](../DEVELOPMENT.md) | [`docs/en/DEVELOPMENT.md`](./DEVELOPMENT.md) | ✅ available |
+| [`docs/PUBLISHING.md`](../PUBLISHING.md) | [`docs/en/PUBLISHING.md`](./PUBLISHING.md) | ✅ available |
+| [`docs/TROUBLESHOOTING.md`](../TROUBLESHOOTING.md) | [`docs/en/TROUBLESHOOTING.md`](./TROUBLESHOOTING.md) | ✅ available |
+| [`docs/KEYCLOAK.md`](../KEYCLOAK.md) | [`docs/en/KEYCLOAK.md`](./KEYCLOAK.md) | ✅ available |
 | [`docs/ARCH_DECISIONS.md`](../ARCH_DECISIONS.md) | — | stays Russian |
 | [`docs/roadmap.md`](../roadmap.md) | — | stays Russian |
 

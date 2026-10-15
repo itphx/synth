@@ -1,5 +1,7 @@
 # Быстрый старт
 
+> 🌐 [English](./en/QUICKSTART.md) · **Русский**
+
 > [!NOTE]
 > Актуальная пользовательская версия этого документа — в портале документации:
 > https://docs.synth.itphx.ru/getting-started/quickstart/.

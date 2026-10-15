@@ -1,5 +1,7 @@
 # Разработка Synth
 
+> 🌐 [English](./en/DEVELOPMENT.md) · **Русский**
+
 ## Требования
 
 - **Node.js** >= 22

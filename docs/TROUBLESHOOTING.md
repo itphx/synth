@@ -1,5 +1,7 @@
 # Диагностика и решение проблем
 
+> 🌐 [English](./en/TROUBLESHOOTING.md) · **Русский**
+
 > [!NOTE]
 > Пользовательская диагностика — в портале документации:
 > https://docs.synth.itphx.ru/help/troubleshooting/. Здесь остаются инженерные
