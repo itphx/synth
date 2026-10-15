@@ -20,10 +20,10 @@ the language rule in the root [AGENTS.md](../../AGENTS.md)).
 | [`README.md`](../../README.md) | [`README.en.md`](../../README.en.md) | ✅ available |
 | — | [`docs/en/GLOSSARY.md`](./GLOSSARY.md) | ✅ available |
 | [`docs/API_V2.md`](../API_V2.md) | `docs/en/API_V2.md` | ⏳ planned |
-| [`docs/CONFIGURATION.md`](../CONFIGURATION.md) | `docs/en/CONFIGURATION.md` | ⏳ planned |
+| [`docs/CONFIGURATION.md`](../CONFIGURATION.md) | [`docs/en/CONFIGURATION.md`](./CONFIGURATION.md) | ✅ available |
 | [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) | [`docs/en/ARCHITECTURE.md`](./ARCHITECTURE.md) | ✅ available |
-| [`docs/HYBRID.md`](../HYBRID.md) | `docs/en/HYBRID.md` | ⏳ planned |
-| [`docs/UI-KIT.md`](../UI-KIT.md) | `docs/en/UI-KIT.md` | ⏳ planned |
+| [`docs/HYBRID.md`](../HYBRID.md) | [`docs/en/HYBRID.md`](./HYBRID.md) | ✅ available |
+| [`docs/UI-KIT.md`](../UI-KIT.md) | [`docs/en/UI-KIT.md`](./UI-KIT.md) | ✅ available |
 | [`docs/ROUTING.md`](../ROUTING.md) | [`docs/en/ROUTING.md`](./ROUTING.md) | ✅ available |
 | [`docs/LLM_PROVIDERS.md`](../LLM_PROVIDERS.md) | [`docs/en/LLM_PROVIDERS.md`](./LLM_PROVIDERS.md) | ✅ available |
 | [`docs/QUICKSTART.md`](../QUICKSTART.md) | `docs/en/QUICKSTART.md` | ⏳ planned |

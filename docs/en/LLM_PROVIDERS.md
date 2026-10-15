@@ -111,7 +111,7 @@ export SYNTH_PROVIDER_OLLAMA_DECISION_MODEL=clef-flash
 ```
 
 The layer is enabled by the `decision` section (`enabled`, `provider`, `model`, `confidenceThreshold`) —
-see [CONFIGURATION.md](../CONFIGURATION.md). Every decision request goes through
+see [CONFIGURATION.md](./CONFIGURATION.md). Every decision request goes through
 `GatewayProvider` (guard/obfuscation/rate limit/audit); on an error or low
 confidence it falls back to the current behaviour (fail-safe).
 

@@ -1,5 +1,7 @@
 # Конфигурация Synth
 
+> 🌐 [English](./en/CONFIGURATION.md) · **Русский**
+
 > [!NOTE]
 > Пользовательская часть по настройке — в портале документации:
 > https://docs.synth.itphx.ru/admin/configuration/.

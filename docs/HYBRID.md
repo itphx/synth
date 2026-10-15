@@ -1,5 +1,7 @@
 # Гибридный режим (HYBRID)
 
+> 🌐 [English](./en/HYBRID.md) · **Русский**
+
 > [!NOTE]
 > Пользовательский how-to по гибридному режиму — в портале документации:
 > https://docs.synth.itphx.ru/deploy/hybrid/.
