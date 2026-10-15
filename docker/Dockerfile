@@ -28,6 +28,14 @@ RUN set -eux; \
 
 FROM node:22-alpine
 
+# OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
+# репозиторием-источником (иначе GitHub Packages не показывает связь и
+# унаследованные права доступа). Для GitVerse-сборки (kaniko) метки инертны.
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth"
+LABEL org.opencontainers.image.description="Synth standalone core: CLI + embedded HTTP API and web UI."
+
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 ENV NODE_ENV=production

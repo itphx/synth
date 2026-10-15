@@ -16,6 +16,14 @@ RUN pnpm install --filter @itphx/synth-ui --filter @itphx/synth-shared \
 
 FROM nginx:alpine
 
+# OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
+# репозиторием-источником (иначе GitHub Packages не показывает связь и
+# унаследованные права доступа). Для GitVerse-сборки (kaniko) метки инертны.
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth UI"
+LABEL org.opencontainers.image.description="Synth web UI: React 19 SPA served by nginx."
+
 # Собранный SPA (vite) + конфиг nginx с прокси на backend.
 COPY --from=build /repo/packages/ui/dist /usr/share/nginx/html
 # Гарантируем читаемость статики для nginx-воркера независимо от прав в контексте сборки

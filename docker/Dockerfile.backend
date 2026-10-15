@@ -21,6 +21,14 @@ RUN mkdir -p /out && pnpm --filter @itphx/synth-backend deploy --prod --legacy /
 
 FROM node:22-alpine
 
+# OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
+# репозиторием-источником (иначе GitHub Packages не показывает связь и
+# унаследованные права доступа). Для GitVerse-сборки (kaniko) метки инертны.
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Backend"
+LABEL org.opencontainers.image.description="Synth backend API hub: OIDC/RBAC, runner registry, LLM proxy."
+
 ENV NODE_ENV=production
 ENV SYNTH_DATA_DIR=/var/synth/data
 ENV SYNTH_PORT=5000

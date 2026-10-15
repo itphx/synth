@@ -17,6 +17,7 @@ on:
       - 'LICENSE'
       - '.gitignore'
       - '.gitverse/**'
+      - '.github/**'
   pull_request:
     types: [opened, edited, synchronize, reopened]
     branches:
