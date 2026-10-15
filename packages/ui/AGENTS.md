@@ -51,7 +51,7 @@
 2. иконка в `TAB_ICONS` (`components/layout/CenterTabs.tsx:25`);
 3. `case` в `renderTabContent` (`components/layout/CenterPanel.tsx:35`).
 
-**Новая вкладка панели**: `RIGHT_TABS` (`components/panels/RightPanel.tsx:14`) / `LEFT_TABS` (`components/panels/LeftPanel.tsx:30`). Role-gating — по образцу `secrets` (`RightPanel.tsx:31-34`): вкладка добавляется условно + эффект-нормализация, если активной стала недоступная. Схлопывание подписей в иконки при переполнении даёт `useAdaptiveIcons` (`LeftPanel.tsx:1700`, `RightPanel.tsx:47`) — он измеряет `span[data-tab-label]`, поэтому подпись вкладки оборачивать в этот маркер.
+**Новая вкладка панели**: `RIGHT_TABS` (`components/panels/RightPanel.tsx:14`) / `LEFT_TABS` (`components/panels/LeftPanel.tsx`). Role-gating — по образцу `secrets` (`RightPanel.tsx:31-34`): вкладка добавляется условно + эффект-нормализация, если активной стала недоступная. Схлопывание подписей в иконки при переполнении даёт `useAdaptiveIcons` (`hooks/useAdaptiveIcons.ts`, используется в `LeftPanel.tsx`/`RightPanel.tsx`) — он измеряет `span[data-tab-label]`, поэтому подпись вкладки оборачивать в этот маркер.
 
 **Новая левая вкладка с тулбаром**: toolbar выбирается по `leftPanelTab` в `App.tsx:140-143` (`ProjectsTabToolbar`/`FilesTabToolbar`/`GitTabToolbar`) — добавить свой `case`, иначе шапка панели останется пустой.
 
@@ -156,7 +156,7 @@
 
 ## Git и SSH-ключи (ADR-076)
 
-- **Git-вкладка** (`components/panels/LeftPanel.tsx` → `GitTab`, `stores/gitStore.ts`): реестр `project.repos` с `destination`/`type`/`url`/`ssh-key`/`lastFetch`; `scan → register`, `clone`/`init` с полями `name`/`path` и селектором SSH-ключа, `fetch`, `remove` (через `ConfirmDialog`, опц. `deleteLocal`). Методы — `synthApi.*GitRepo*`.
+- **Git-вкладка** (`components/panels/left-panel/GitTab.tsx`, `stores/gitStore.ts`): реестр `project.repos` с `destination`/`type`/`url`/`ssh-key`/`lastFetch`; `scan → register`, `clone`/`init` с полями `name`/`path` и селектором SSH-ключа, `fetch`, `remove` (через `ConfirmDialog`, опц. `deleteLocal`). Методы — `synthApi.*GitRepo*`.
 - **SSH-ключи** (`components/settings/SshKeysSettings.tsx`, встраивается в админ-категорию «Агенты» `admin/AgentsPanel.tsx`): CRUD per-agent ключей, привязка к агентам (`agentIds`), редактирование без обязательной замены ключа. Поля «Тип» нет (дублировало имя) — в shared `SSHKey.type?`/`sshKeyCreateSchema.type?` сохранены для обратной совместимости, UI их не задаёт и не показывает. API `synthApi.*SshKey*` отдаёт только `SSHKeyMeta` (без `privateKey`/`passphrase`); ошибки — ключи `sshkey.*` (в т.ч. `sshkey.env_failed`), i18n ru/en. Ключи с `passphrase` поддерживаются (git-операция — через askpass).
 
 ## Внешние события (ADR-089)
