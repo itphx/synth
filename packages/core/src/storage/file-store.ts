@@ -51,6 +51,9 @@ interface SerializedMessage {
   /** ADR-070 §2.4: предсказание/валидация prompt-cache (camelCase внутри). */
   prompt_meta?: PromptMeta;
   summary_of?: number[];
+  /** ADR-034: результат проверки качества ответа (QC-бейдж в UI). */
+  qa_pass?: boolean;
+  qa_reason?: string;
 }
 
 interface SerializedSessionReference {
@@ -175,6 +178,8 @@ function serializeMessage(msg: Message): SerializedMessage {
     metadata: msg.metadata,
     prompt_meta: msg.promptMeta,
     summary_of: msg.summaryOf,
+    qa_pass: msg.qa_pass,
+    qa_reason: msg.qa_reason,
   };
 }
 
@@ -247,6 +252,9 @@ function deserializeMessage(data: SerializedMessage): Message {
     metadata: data.metadata,
     promptMeta: data.prompt_meta,
     summaryOf: data.summary_of,
+    // Обратная совместимость: legacy-сессии без полей → undefined (без дефолтов).
+    qa_pass: data.qa_pass,
+    qa_reason: data.qa_reason,
   };
 }
 

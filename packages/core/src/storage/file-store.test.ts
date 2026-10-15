@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStore } from './file-store.js';
@@ -124,6 +124,88 @@ describe('FileStore', () => {
     expect(loaded!.messages).toHaveLength(2);
     expect(loaded!.messages[0]!.content).toBe('hello');
     expect(loaded!.messages[1]!.model).toBe('gpt-4o');
+  });
+
+  it('save → load сохраняет qa_pass/qa_reason (QC-бейдж, ADR-034)', async () => {
+    const session = makeSession({
+      id: 'with-qa',
+      messages: [
+        {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 1,
+          origin: 'local' as const,
+          parts: [makeTextPart('answer')],
+          content: 'answer',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          qa_pass: false,
+          qa_reason: 'Response is shorter than 10 characters',
+        },
+        {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 2,
+          origin: 'local' as const,
+          parts: [makeTextPart('escalated')],
+          content: 'escalated',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+          qa_pass: true,
+          qa_reason: 'router.escalation',
+        },
+      ],
+    });
+    await store.save(session);
+
+    // Поля уезжают на диск в snake_case JSON.
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'with-qa.json'), 'utf-8'));
+    expect(raw.messages[0].qa_pass).toBe(false);
+    expect(raw.messages[0].qa_reason).toBe('Response is shorter than 10 characters');
+    expect(raw.messages[1].qa_pass).toBe(true);
+    expect(raw.messages[1].qa_reason).toBe('router.escalation');
+
+    const loaded = await store.load('with-qa');
+    expect(loaded!.messages[0]!.qa_pass).toBe(false);
+    expect(loaded!.messages[0]!.qa_reason).toBe('Response is shorter than 10 characters');
+    expect(loaded!.messages[1]!.qa_pass).toBe(true);
+    expect(loaded!.messages[1]!.qa_reason).toBe('router.escalation');
+  });
+
+  it('legacy-сообщение без qa_pass/qa_reason читается как раньше (undefined, без дефолтов)', async () => {
+    const session = makeSession({
+      id: 'legacy-qa',
+      messages: [
+        {
+          id: generateId(),
+          role: MessageRole.ASSISTANT,
+          seq: 1,
+          origin: 'local' as const,
+          parts: [makeTextPart('legacy answer')],
+          content: 'legacy answer',
+          createdAt: new Date().toISOString(),
+          disabled: false,
+          pinned: false,
+          hidden: false,
+        },
+      ],
+    });
+    await store.save(session);
+
+    // В файле ключей нет вовсе — это и есть legacy-формат.
+    const raw = JSON.parse(await readFile(join(tmpDir, 'sessions', 'legacy-qa.json'), 'utf-8'));
+    expect('qa_pass' in raw.messages[0]).toBe(false);
+    expect('qa_reason' in raw.messages[0]).toBe(false);
+
+    const loaded = await store.load('legacy-qa');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.messages[0]!.content).toBe('legacy answer');
+    expect(loaded!.messages[0]!.qa_pass).toBeUndefined();
+    expect(loaded!.messages[0]!.qa_reason).toBeUndefined();
   });
 
   it('load несуществующей сессии возвращает null', async () => {

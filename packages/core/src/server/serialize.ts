@@ -111,6 +111,10 @@ export function serializeMessage(msg: Message, index: number) {
     /** ADR-070 §2.4: предсказание/валидация prompt-cache для хода. */
     prompt_meta: msg.promptMeta ?? null,
     summary_of: msg.summaryOf || null,
+    // ADR-034: QC-бейдж. Поля опускаются, если проверки не было — `null`
+    // включил бы бейдж в UI (проверка `qa_pass !== undefined`).
+    ...(msg.qa_pass !== undefined ? { qa_pass: msg.qa_pass } : {}),
+    ...(msg.qa_reason !== undefined ? { qa_reason: msg.qa_reason } : {}),
     usage: msg.usage
       ? {
           input_tokens: msg.usage.inputTokens,
