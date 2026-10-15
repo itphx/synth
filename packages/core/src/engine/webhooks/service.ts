@@ -19,9 +19,13 @@ import type { HostResolver } from '../mcp/network-policy.js';
 import type { FetchLike } from '../net/fetch.js';
 import { buildSignatureHeader } from './signature.js';
 import { evaluateWebhookTarget } from './network.js';
+import { PRIVATE_EGRESS_POLICY, EgressBlockedError, fetchWithEgressGuard } from '../net/egress-guard.js';
 
 /** Пользовательский агент HTTP-доставки. */
 const USER_AGENT = 'Synth-Webhooks/1.0';
+
+/** Максимум редиректов при доставке (каждый хоп проверяется SSRF-политикой). */
+const MAX_REDIRECTS = 5;
 
 /** Верхняя граница задержки экспоненциального backoff, мс. */
 const MAX_BACKOFF_MS = 30_000;
@@ -236,18 +240,30 @@ export class WebhookService {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this._deps.config.timeoutMs);
       try {
-        const response = await this._fetch(sub.url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': USER_AGENT,
-            'X-Synth-Event': event.type,
-            'X-Synth-Delivery': deliveryId,
-            'X-Synth-Signature': buildSignatureHeader(secret, timestamp, body),
+        const response = await fetchWithEgressGuard(
+          sub.url,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': USER_AGENT,
+              'X-Synth-Event': event.type,
+              'X-Synth-Delivery': deliveryId,
+              'X-Synth-Signature': buildSignatureHeader(secret, timestamp, body),
+            },
+            body,
+            signal: controller.signal,
           },
-          body,
-          signal: controller.signal,
-        });
+          {
+            // Приватные/локальные цели допускаются только флагом (dev).
+            policy: this._deps.config.allowPrivateTargets ? undefined : PRIVATE_EGRESS_POLICY,
+            requireHttps: !this._deps.config.allowPrivateTargets,
+            resolveHost: this._deps.resolveHost,
+            maxHops: MAX_REDIRECTS,
+            // Проверка каждого хопа редиректа: приватный адрес — отказ без запроса.
+            fetchImpl: this._fetch,
+          },
+        );
         responseStatus = response.status;
         if (response.ok) {
           error = undefined;
@@ -257,6 +273,8 @@ export class WebhookService {
       } catch (err) {
         responseStatus = undefined;
         error = err instanceof Error ? err.message : String(err);
+        // Запрещённый хоп/цель — отказ, ретраи не помогут.
+        if (err instanceof EgressBlockedError) break;
       } finally {
         clearTimeout(timer);
       }

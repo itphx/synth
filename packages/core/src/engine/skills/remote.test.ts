@@ -27,17 +27,24 @@ afterEach(async () => {
 
 const URL_BASE = 'https://example.com/skills';
 
+/**
+ * Герметичный DNS-резолвер теста (seam `resolveHost`): без реальной сети.
+ * Все хосты — публичный адрес; `private.example` намеренно резолвится в приватный.
+ */
+const PUBLIC_RESOLVER = async (host: string): Promise<string[]> =>
+  host === 'private.example' ? ['10.0.0.5'] : ['93.184.216.34'];
+
 function skillFile(name: string): string {
   return `---\nname: ${name}\ndescription: desc-${name}\n---\n\nBody of ${name}\n`;
 }
 
 describe('validateRemoteUrl / isBlockedHost — SSRF-guard (ADR-046 §4.2)', () => {
-  it('только http/https', () => {
-    expect('error' in validateRemoteUrl('ftp://example.com/skills')).toBe(true);
-    expect('error' in validateRemoteUrl('file:///etc/passwd')).toBe(true);
-    expect('error' in validateRemoteUrl('not a url')).toBe(true);
-    expect('error' in validateRemoteUrl('https://example.com/skills')).toBe(false);
-    expect('error' in validateRemoteUrl('http://example.com/skills')).toBe(false);
+  it('только http/https', async () => {
+    expect('error' in await validateRemoteUrl('ftp://example.com/skills')).toBe(true);
+    expect('error' in await validateRemoteUrl('file:///etc/passwd')).toBe(true);
+    expect('error' in await validateRemoteUrl('not a url')).toBe(true);
+    expect('error' in await validateRemoteUrl('https://example.com/skills', { resolveHost: PUBLIC_RESOLVER })).toBe(false);
+    expect('error' in await validateRemoteUrl('http://example.com/skills', { resolveHost: PUBLIC_RESOLVER })).toBe(false);
   });
 
   it.each([
@@ -55,16 +62,57 @@ describe('validateRemoteUrl / isBlockedHost — SSRF-guard (ADR-046 §4.2)', () 
     '::1',
     'fd00::1',
     'fe80::1',
+    'fe80::1%eth0',
     '::ffff:127.0.0.1',
-  ])('блокирует приватный/локальный хост %s', (host) => {
+    '::ffff:169.254.169.254',
+  ])('блокирует приватный/локальный хост %s', async (host) => {
     expect(isBlockedHost(host)).toBe(true);
-    expect('error' in validateRemoteUrl(`http://${host.includes(':') ? `[${host}]` : host}/skills`)).toBe(true);
+    const url = `http://${host.includes(':') ? `[${host}]` : host}/skills`;
+    expect('error' in await validateRemoteUrl(url, { resolveHost: PUBLIC_RESOLVER })).toBe(true);
   });
 
   it('пропускает обычные публичные хосты', () => {
     expect(isBlockedHost('example.com')).toBe(false);
     expect(isBlockedHost('8.8.8.8')).toBe(false);
     expect(isBlockedHost('2606:4700:4700::1111')).toBe(false);
+  });
+
+  // PROP-100 дефект 1: политика обязана резолвить DNS, а не проверять только литерал.
+  it('блокирует hostname, резолвящийся в приватный адрес (fail-closed по всем A-записям)', async () => {
+    const resolve = (map: Record<string, string[]>) => async (host: string) => map[host] ?? [];
+    expect('error' in await validateRemoteUrl('https://evil.example/skills', {
+      resolveHost: resolve({ 'evil.example': ['127.0.0.1'] }),
+    })).toBe(true);
+    expect('error' in await validateRemoteUrl('https://meta.example/skills', {
+      resolveHost: resolve({ 'meta.example': ['169.254.169.254'] }),
+    })).toBe(true);
+    expect('error' in await validateRemoteUrl('https://lan.example/skills', {
+      resolveHost: resolve({ 'lan.example': ['192.168.1.10'] }),
+    })).toBe(true);
+    // Несколько A-записей, одна приватная → запрещено (нельзя «проскочить» на публичную).
+    expect('error' in await validateRemoteUrl('https://mixed.example/skills', {
+      resolveHost: resolve({ 'mixed.example': ['93.184.216.34', '10.0.0.5'] }),
+    })).toBe(true);
+    // IPv4-mapped через DNS-резолв — тоже запрещено.
+    expect('error' in await validateRemoteUrl('https://mapped.example/skills', {
+      resolveHost: resolve({ 'mapped.example': ['::ffff:169.254.169.254'] }),
+    })).toBe(true);
+  });
+
+  it('публичный hostname разрешён', async () => {
+    const valid = await validateRemoteUrl('https://public.example/skills', {
+      resolveHost: async () => ['93.184.216.34'],
+    });
+    expect('url' in valid).toBe(true);
+  });
+
+  it('ошибка/пустой DNS-резолв → запрет (fail-closed)', async () => {
+    expect('error' in await validateRemoteUrl('https://unknown.example/skills', {
+      resolveHost: async () => { throw new Error('ENOTFOUND'); },
+    })).toBe(true);
+    expect('error' in await validateRemoteUrl('https://empty.example/skills', {
+      resolveHost: async () => [],
+    })).toBe(true);
   });
 });
 
@@ -131,6 +179,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: ['ftp://example.com/skills'],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
     });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -144,6 +193,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: ['http://169.254.169.254/latest/meta-data', 'http://[::1]/skills'],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
     });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -155,6 +205,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: [URL_BASE],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
       timeoutMs: 20,
     });
@@ -166,6 +217,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: [URL_BASE],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
       maxIndexBytes: 10,
     });
@@ -183,6 +235,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: [URL_BASE],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
     });
     expect(res.diagnostics.some((d) => d.code === 'read-error' && /превышен лимит/.test(d.message))).toBe(true);
@@ -208,6 +261,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: [URL_BASE],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
     });
 
@@ -229,6 +283,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: [URL_BASE],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -243,6 +298,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: [URL_BASE],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -258,6 +314,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: [URL_BASE],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
     });
 
@@ -280,6 +337,7 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     const res = await refreshRemoteCatalogs({
       urls: [URL_BASE],
       cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
       fetchImpl: fetchImpl as unknown as FetchLike,
     });
 

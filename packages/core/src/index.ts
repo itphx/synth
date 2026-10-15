@@ -81,8 +81,27 @@ export {
   evaluateMcpNetworkAccess,
   isIpInCidr,
   isHttpMcpConfig,
+  normalizeIp,
+  mappedIpv4,
 } from './engine/mcp/index.js';
 export type { McpNetworkCheckResult, HostResolver } from './engine/mcp/index.js';
+
+// PROP-100 / ADR-071 §2.3.1: единый SSRF/egress-guard исходящих запросов
+// (схема + DNS-резолв всех A/AAAA + приватные CIDR + проверка каждого хопа редиректа).
+export {
+  PRIVATE_EGRESS_POLICY,
+  DEFAULT_EGRESS_MAX_HOPS,
+  checkEgressUrl,
+  fetchWithEgressGuard,
+  EgressBlockedError,
+  isBlockedHost,
+  isBlockedIp,
+} from './engine/net/egress-guard.js';
+export type {
+  EgressCheckResult,
+  EgressCheckOptions,
+  EgressFetchOptions,
+} from './engine/net/egress-guard.js';
 
 export {
   PermissionEvaluator,

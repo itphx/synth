@@ -7,6 +7,7 @@ import type { SkillSource } from './types.js';
 // ADR-046 §4.2: общий SSRF-guard/fetch — вынесен в `engine/net/fetch.ts`,
 // чтобы не дублироваться с проектными инструкциями (ADR-069).
 import { describeError, fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
+import type { HostResolver } from '../mcp/network-policy.js';
 
 // Обратная совместимость: исторические импорты из `./remote.js` продолжают работать.
 export {
@@ -53,6 +54,8 @@ export interface RefreshRemoteCatalogsOptions {
   maxIndexBytes?: number;
   maxSkills?: number;
   maxHops?: number;
+  /** Инъекция DNS-резолвера SSRF-проверки (тесты). */
+  resolveHost?: HostResolver;
 }
 
 export interface RefreshRemoteCatalogsResult {
@@ -172,7 +175,7 @@ export async function refreshRemoteCatalogs(
     const source = buildUrlSource(opts.cacheDir, url);
     sources.push(source);
 
-    const valid = validateRemoteUrl(url);
+    const valid = await validateRemoteUrl(url, { resolveHost: opts.resolveHost });
     if ('error' in valid) {
       diagnostics.push({ level: 'error', code: 'remote', dir: source.dir, message: valid.error });
       continue;
@@ -184,6 +187,7 @@ export async function refreshRemoteCatalogs(
       maxBytes: maxIndexBytes,
       maxHops,
       fetchImpl,
+      resolveHost: opts.resolveHost,
     });
     if ('error' in index) {
       diagnostics.push({
@@ -228,6 +232,7 @@ export async function refreshRemoteCatalogs(
         maxBytes: REMOTE_FILE_MAX_BYTES,
         maxHops,
         fetchImpl,
+        resolveHost: opts.resolveHost,
       });
       if ('error' in file) {
         diagnostics.push({

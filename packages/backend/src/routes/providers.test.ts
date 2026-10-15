@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -228,8 +228,7 @@ describe('routes/providers: RBAC (мутации/детали/тест — то�
   });
 });
 
-describe('routes/providers: rate limit на POST /:name/test (5/60с)', () => {
-  let tmpDir: string;
+describe('routes/providers: rate limit на POST /:name/test (5/60с)', () => {  let tmpDir: string;
   let stores: Awaited<ReturnType<typeof makeApp>>;
 
   beforeEach(async () => {
@@ -254,5 +253,75 @@ describe('routes/providers: rate limit на POST /:name/test (5/60с)', () => {
     const body = await stores.app.request(`${BASE}/p1/test`, { method: 'POST' });
     expect(body.status).toBe(429);
     expect((await body.json() as { error: { code: string } }).error.code).toBe('RATE_LIMITED');
+  });
+});
+
+describe('routes/providers: fetch-icon — SSRF-политика resolved-URL (PROP-100 дефект 3)', () => {
+  let tmpDir: string;
+  let stores: Awaited<ReturnType<typeof makeApp>>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-providers-fetchicon-test-'));
+    stores = await makeApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('origin с приватным/локальным адресом → 400, сеть не дёргается', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await stores.app.request(`${BASE}/fetch-icon`, postJSON({ url: 'http://127.0.0.1/' }));
+
+    expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('HTML указывает на приватный/локальный адрес → отказ, приватный URL не загружается', async () => {
+    const fetchMock = vi.fn(async (input: string) => {
+      if (String(input).endsWith('/favicon.ico')) return new Response('nope', { status: 404 });
+      return new Response(
+        '<html><head><link rel="icon" href="http://127.0.0.1/secret.png"></head></html>',
+        { status: 200, headers: { 'content-type': 'text/html' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await stores.app.request(`${BASE}/fetch-icon`, postJSON({ url: 'https://93.184.216.34/' }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { icon: string | null };
+    expect(body.icon).toBeNull();
+    expect(fetchMock.mock.calls.map((c) => String(c[0]))).not.toContain('http://127.0.0.1/secret.png');
+    // Только favicon.ico + HTML origin; приватный resolved-URL не запрашивался.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('HTML указывает на публичный адрес → иконка загружается', async () => {
+    const fetchMock = vi.fn(async (input: string) => {
+      const url = String(input);
+      if (url.endsWith('/favicon.ico')) return new Response('nope', { status: 404 });
+      if (url === 'https://93.184.216.34') {
+        return new Response(
+          '<html><head><link rel="icon" href="https://93.184.216.34/icon.png"></head></html>',
+          { status: 200, headers: { 'content-type': 'text/html' } },
+        );
+      }
+      if (url === 'https://93.184.216.34/icon.png') {
+        return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await stores.app.request(`${BASE}/fetch-icon`, postJSON({ url: 'https://93.184.216.34/' }));
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { icon: string | null; source?: string };
+    expect(body.icon).toMatch(/^data:image\/png;base64,/);
+    expect(body.source).toBe('https://93.184.216.34/icon.png');
   });
 });

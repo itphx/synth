@@ -5,6 +5,8 @@ import {
   parseCidr,
   isIpInCidr,
   hostFromUrl,
+  normalizeIp,
+  mappedIpv4,
   evaluateMcpNetworkAccess,
   isHttpMcpConfig,
 } from './network-policy.js';
@@ -54,6 +56,48 @@ describe('network-policy: IP/CIDR (ADR-071 §2.3.1)', () => {
     expect(hostFromUrl('http://localhost:8080/mcp')).toBe('localhost');
     expect(hostFromUrl('https://[::1]:9000/mcp')).toBe('::1');
     expect(hostFromUrl('not a url')).toBeNull();
+  });
+
+  it('mappedIpv4: IPv4-mapped формы → вложенный IPv4, иначе null', () => {
+    expect(mappedIpv4('::ffff:127.0.0.1')).toBe('127.0.0.1');
+    expect(mappedIpv4('::ffff:169.254.169.254')).toBe('169.254.169.254');
+    expect(mappedIpv4('::ffff:7f00:1')).toBe('127.0.0.1');
+    expect(mappedIpv4('0:0:0:0:0:ffff:a9fe:a9fe')).toBe('169.254.169.254');
+    expect(mappedIpv4('fe80::1%eth0')).toBeNull();
+    expect(mappedIpv4('127.0.0.1')).toBeNull();
+    expect(mappedIpv4('::1')).toBeNull();
+  });
+
+  it('normalizeIp: zone-id снимается, mapped → IPv4, публичные не меняются', () => {
+    expect(normalizeIp('::ffff:127.0.0.1')).toBe('127.0.0.1');
+    expect(normalizeIp('::ffff:7f00:1')).toBe('127.0.0.1');
+    expect(normalizeIp('fe80::1%eth0')).toBe('fe80::1');
+    expect(normalizeIp('127.0.0.1')).toBe('127.0.0.1');
+    expect(normalizeIp('93.184.216.34')).toBe('93.184.216.34');
+    expect(normalizeIp('2606:4700:4700::1111')).toBe('2606:4700:4700::1111');
+    expect(normalizeIp('not-an-ip')).toBeNull();
+  });
+
+  it('isIpInCidr: IPv4-mapped матчится и с v4-, и с v6-диапазоном', () => {
+    // Закрытый обход: mapped-loopback/metadata раньше не попадали в v4-диапазоны.
+    expect(isIpInCidr('::ffff:127.0.0.1', '127.0.0.0/8')).toBe(true);
+    expect(isIpInCidr('::ffff:7f00:1', '127.0.0.0/8')).toBe(true);
+    expect(isIpInCidr('::ffff:169.254.169.254', '169.254.0.0/16')).toBe(true);
+    expect(isIpInCidr('::ffff:10.0.0.5', '10.0.0.0/8')).toBe(true);
+    expect(isIpInCidr('::ffff:8.8.8.8', '::ffff:0:0/96')).toBe(true);
+    // Обычный v4 в v6-диапазон и mapped-диапазон не попадает (семейства не смешиваются).
+    expect(isIpInCidr('8.8.8.8', '::ffff:0:0/96')).toBe(false);
+    expect(isIpInCidr('127.0.0.1', '::ffff:0:0/96')).toBe(false);
+    expect(isIpInCidr('::ffff:8.8.8.8', '8.8.8.0/24')).toBe(true);
+  });
+
+  it('isIpInCidr: zone-id и новые служебные диапазоны', () => {
+    expect(isIpInCidr('fe80::1%eth0', 'fe80::/10')).toBe(true);
+    expect(isIpInCidr('0.0.0.0', '0.0.0.0/8')).toBe(true);
+    expect(isIpInCidr('0.1.2.3', '0.0.0.0/8')).toBe(true);
+    expect(isIpInCidr('100.100.100.200', '100.64.0.0/10')).toBe(true);
+    expect(isIpInCidr('100.128.0.1', '100.64.0.0/10')).toBe(false);
+    expect(isIpInCidr('::', '::/128')).toBe(true);
   });
 });
 
@@ -106,6 +150,40 @@ describe('evaluateMcpNetworkAccess (ADR-071 §2.3.1)', () => {
 
   it('undefined-политика не блокирует', async () => {
     expect((await evaluateMcpNetworkAccess('http://10.0.0.5/mcp', undefined)).allowed).toBe(true);
+  });
+
+  it('deny блокирует IPv4-mapped loopback/link-local/metadata (обход через v6)', async () => {
+    for (const url of [
+      'http://[::ffff:127.0.0.1]:8080/mcp',
+      'http://[::ffff:169.254.169.254]/latest/meta-data/',
+      'https://[::ffff:a9fe:a9fe]/',
+    ]) {
+      const result = await evaluateMcpNetworkAccess(url, DEFAULT_MCP_NETWORK_POLICY);
+      expect(result.allowed, url).toBe(false);
+    }
+  });
+
+  it('deny блокирует mapped-адрес, пришедший из DNS-резолва', async () => {
+    const result = await evaluateMcpNetworkAccess('http://evil.example/mcp', DEFAULT_MCP_NETWORK_POLICY, {
+      resolveHost: resolveTo('::ffff:169.254.169.254'),
+    });
+    expect(result.allowed).toBe(false);
+  });
+
+  it('публичные адреса не ломаются: v4 и v6 разрешены, mapped-форма — ужесточение', async () => {
+    expect((await evaluateMcpNetworkAccess('https://v4.example/mcp', DEFAULT_MCP_NETWORK_POLICY, { resolveHost: resolveTo('93.184.216.34') })).allowed).toBe(true);
+    expect((await evaluateMcpNetworkAccess('https://v6.example/mcp', DEFAULT_MCP_NETWORK_POLICY, { resolveHost: resolveTo('2606:4700:4700::1111') })).allowed).toBe(true);
+    // mapped-запись публичного IPv4 блокируется целиком (`::ffff:0:0/96`):
+    // легитимные адреса приходят обычным v4/v6, mapped — типичный обход.
+    expect((await evaluateMcpNetworkAccess('https://mapped.example/mcp', DEFAULT_MCP_NETWORK_POLICY, { resolveHost: resolveTo('::ffff:8.8.8.8') })).allowed).toBe(false);
+  });
+
+  it('allow-режим: mapped-адрес матчится v4-диапазоном', async () => {
+    const policy: McpNetworkPolicy = { mode: 'allow', list: ['169.254.0.0/16'] };
+    const result = await evaluateMcpNetworkAccess('http://meta.example/mcp', policy, {
+      resolveHost: resolveTo('::ffff:169.254.169.254'),
+    });
+    expect(result.allowed).toBe(true);
   });
 
   it('isHttpMcpConfig: stdio не HTTP', () => {

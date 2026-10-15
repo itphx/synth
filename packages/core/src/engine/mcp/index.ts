@@ -8,5 +8,7 @@ export {
   evaluateMcpNetworkAccess,
   isIpInCidr,
   isHttpMcpConfig,
+  normalizeIp,
+  mappedIpv4,
 } from './network-policy.js';
 export type { McpNetworkCheckResult, HostResolver } from './network-policy.js';

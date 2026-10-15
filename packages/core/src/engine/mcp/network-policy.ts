@@ -79,6 +79,40 @@ export function ipv6ToBigInt(ip: string): bigint | null {
   return value;
 }
 
+/** Снимает zone-id (`fe80::1%eth0` → `fe80::1`) и обрезает пробелы. */
+function stripZone(ip: string): string {
+  return ip.trim().split('%')[0] ?? '';
+}
+
+/**
+ * Встроенный IPv4 адреса вида `::ffff:a.b.c.d` (диапазон `::ffff:0:0/96`),
+ * включая hex-запись `::ffff:7f00:1`; `null` — адрес не mapped.
+ *
+ * IPv4-mapped — это тот же IPv4-хост в v6-обёртке: `::ffff:127.0.0.1`
+ * подключается к `127.0.0.1`, `::ffff:169.254.169.254` — к метаданным облака.
+ */
+export function mappedIpv4(ip: string): string | null {
+  const bare = stripZone(ip);
+  if (isIP(bare) !== 6) return null;
+  const value = ipv6ToBigInt(bare);
+  if (value === null || value >> 32n !== 0xffffn) return null;
+  const v4 = value & 0xffffffffn;
+  return `${(v4 >> 24n) & 0xffn}.${(v4 >> 16n) & 0xffn}.${(v4 >> 8n) & 0xffn}.${v4 & 0xffn}`;
+}
+
+/**
+ * Канонизация IP перед проверкой политики: снимает zone-id, приводит
+ * IPv4-mapped IPv6 (`::ffff:0:0/96`, в т.ч. hex-форму) к вложенному IPv4.
+ * `null` — не IP-литерал. Единая точка нормализации для всех SSRF-проверок.
+ */
+export function normalizeIp(ip: string): string | null {
+  const bare = stripZone(ip);
+  const version = isIP(bare);
+  if (version === 4) return bare;
+  if (version !== 6) return null;
+  return mappedIpv4(bare) ?? bare;
+}
+
 interface CidrRange {
   v4: boolean;
   base: bigint;
@@ -107,16 +141,33 @@ export function parseCidr(cidr: string): CidrRange | null {
   return { v4, base: ipInt & mask, mask };
 }
 
-/** Входит ли IP в CIDR (типы v4/v6 не смешиваются). */
+/**
+ * Входит ли IP в CIDR.
+ *
+ * Версии сравниваются в своём семействе, но IPv4-mapped IPv6 проверяется в
+ * **обоих**: `::ffff:127.0.0.1` матчится и с `127.0.0.0/8` (по вложенному IPv4),
+ * и с `::ffff:0:0/96` (по полной v6-форме). Обычный (не mapped) IPv4 в v6-диапазоны
+ * не попадает — семейства по-прежнему не смешиваются.
+ */
 export function isIpInCidr(ip: string, cidr: string): boolean {
   const range = parseCidr(cidr);
   if (!range) return false;
-  const version = isIP(ip);
-  if (version === 0) return false;
-  if ((version === 4) !== range.v4) return false;
-  const ipInt = range.v4 ? ipv4ToBigInt(ip) : ipv6ToBigInt(ip);
-  if (ipInt === null) return false;
-  return (ipInt & range.mask) === range.base;
+
+  const normalized = normalizeIp(ip);
+  if (normalized === null) return false;
+
+  // Кандидаты: канонический адрес и (для mapped) исходная v6-форма.
+  const candidates = new Set<string>([normalized]);
+  const bare = stripZone(ip);
+  if (bare !== normalized && isIP(bare) === 6) candidates.add(bare);
+
+  for (const candidate of candidates) {
+    const isV4 = isIP(candidate) === 4;
+    if (isV4 !== range.v4) continue;
+    const ipInt = isV4 ? ipv4ToBigInt(candidate) : ipv6ToBigInt(candidate);
+    if (ipInt !== null && (ipInt & range.mask) === range.base) return true;
+  }
+  return false;
 }
 
 /** Извлекает hostname из URL; null — некорректный URL. Скобки IPv6 снимаются. */

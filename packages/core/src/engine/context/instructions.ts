@@ -30,6 +30,7 @@ import {
 } from '../security/prompt-injection.js';
 import { expandHome, isProjectTrusted } from '../skills/trust.js';
 import { fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
+import type { HostResolver } from '../mcp/network-policy.js';
 import type { DictionaryStore } from '../router/dictionary-store.js';
 
 /** Fallback-окно модели, если оно неизвестно (ADR-069 §5.1: разумный дефолт). */
@@ -172,6 +173,8 @@ export interface ProjectInstructionsDeps {
   dataDir?: string;
   /** Подменяемый fetch (тесты). */
   fetchImpl?: FetchLike;
+  /** Инъекция DNS-резолвера SSRF-проверки URL-источников (тесты). */
+  resolveHost?: HostResolver;
   /** Домашний каталог (тесты/раскрытие `~`). */
   home?: string;
   /** Часы (тесты TTL). */
@@ -514,6 +517,7 @@ export class ProjectInstructionsResolver {
   private readonly _workspacesRoot: string;
   private readonly _dataDir: string | null;
   private readonly _fetchImpl: FetchLike;
+  private readonly _resolveHost: HostResolver | undefined;
   private readonly _home: string;
   private readonly _now: () => number;
   /**
@@ -533,6 +537,7 @@ export class ProjectInstructionsResolver {
     this._workspacesRoot = deps.workspacesRoot ?? '';
     this._dataDir = deps.dataDir ?? null;
     this._fetchImpl = deps.fetchImpl ?? ((input, init) => fetch(input, init));
+    this._resolveHost = deps.resolveHost;
     this._home = deps.home ?? expandHome('~');
     this._now = deps.nowFn ?? (() => Date.now());
   }
@@ -773,7 +778,7 @@ export class ProjectInstructionsResolver {
     source: InstructionSourceConfig,
   ): Promise<{ part: string; cacheable: boolean }> {
     const hash = createHash('sha1').update(url).digest('hex');
-    if ('error' in validateRemoteUrl(url)) {
+    if ('error' in (await validateRemoteUrl(url, { resolveHost: this._resolveHost }))) {
       return { part: `url:${hash}:invalid`, cacheable: true };
     }
 
@@ -1104,7 +1109,7 @@ export class ProjectInstructionsResolver {
     url: string,
     source: InstructionSourceConfig,
   ): Promise<{ content: string; warning?: string } | { error: string }> {
-    const valid = validateRemoteUrl(url);
+    const valid = await validateRemoteUrl(url, { resolveHost: this._resolveHost });
     if ('error' in valid) return { error: valid.error };
 
     const fetchCfg = this._config.fetch;
@@ -1122,6 +1127,7 @@ export class ProjectInstructionsResolver {
       maxBytes: fetchCfg.maxBytes,
       maxHops: INSTRUCTIONS_MAX_REDIRECTS,
       fetchImpl: this._fetchImpl,
+      resolveHost: this._resolveHost,
     });
     if ('error' in result) {
       if (cached) return { content: cached.content, warning: result.error };

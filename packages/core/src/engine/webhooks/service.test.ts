@@ -7,6 +7,7 @@ import { EventBus } from '../../events/bus.js';
 import { WebhookStore } from '../../storage/webhook-store.js';
 import { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
 import { WebhookService, computeBackoffMs } from './service.js';
+import type { WebhookServiceDeps } from './service.js';
 import { verifyWebhookSignature } from './signature.js';
 
 describe('WebhookService (ADR-052, этап II)', () => {
@@ -23,7 +24,11 @@ describe('WebhookService (ADR-052, этап II)', () => {
     allowPrivateTargets: true,
   };
 
-  const makeService = (fetchImpl: FetchLike, overrides: Partial<typeof baseConfig> = {}) => {
+  const makeService = (
+    fetchImpl: FetchLike,
+    overrides: Partial<typeof baseConfig> = {},
+    deps: Partial<WebhookServiceDeps> = {},
+  ) => {
     service = new WebhookService({
       store,
       deliveryStore,
@@ -32,6 +37,7 @@ describe('WebhookService (ADR-052, этап II)', () => {
       fetchImpl,
       // backoff без реальных пауз
       sleep: async () => {},
+      ...deps,
     });
     service.start();
     return service;
@@ -198,6 +204,70 @@ describe('WebhookService (ADR-052, этап II)', () => {
     // `_dispatch` — ждать нечего, проверяем сразу (без «магической» паузы).
     bus.publish('s1', 'session.created', {});
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('редирект на приватный адрес → отказ (хоп не выполняется, PROP-100 дефект 2)', async () => {
+    await store.create({ label: 's', url: 'https://hooks.example/hook', events: ['session.created'] }, 'u-1');
+    const fetchImpl = vi.fn<FetchLike>(async (input) => {
+      if (String(input) === 'https://hooks.example/hook') {
+        return new Response(null, { status: 302, headers: { location: 'https://internal.example/secret' } });
+      }
+      return okResponse();
+    });
+    makeService(fetchImpl, { allowPrivateTargets: false }, {
+      resolveHost: async (host) => (host === 'internal.example' ? ['10.0.0.5'] : ['93.184.216.34']),
+    });
+
+    bus.publish('s1', 'session.created', {});
+    await vi.waitFor(async () => {
+      expect(await deliveryStore.list()).toHaveLength(1);
+    });
+    const delivery = (await deliveryStore.list())[0]!;
+    expect(delivery.status).toBe('failed');
+    // Приватный хоп не запрашивается: был только исходный запрос.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain('https://internal.example/secret');
+  });
+
+  it('редирект на публичный адрес → доставка', async () => {
+    await store.create({ label: 's', url: 'https://hooks.example/hook', events: ['session.created'] }, 'u-1');
+    const fetchImpl = vi.fn<FetchLike>(async (input) => {
+      if (String(input) === 'https://hooks.example/hook') {
+        return new Response(null, { status: 301, headers: { location: 'https://target.example/final' } });
+      }
+      if (String(input) === 'https://target.example/final') return okResponse();
+      throw new Error(`unexpected: ${String(input)}`);
+    });
+    makeService(fetchImpl, { allowPrivateTargets: false }, {
+      resolveHost: async () => ['93.184.216.34'],
+    });
+
+    bus.publish('s1', 'session.created', {});
+    await vi.waitFor(async () => {
+      expect(await deliveryStore.list()).toHaveLength(1);
+    });
+    const delivery = (await deliveryStore.list())[0]!;
+    expect(delivery.status).toBe('ok');
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('превышение лимита редиректов → failed (без бесконечного цикла)', async () => {
+    await store.create({ label: 's', url: 'https://hooks.example/hook', events: ['session.created'] }, 'u-1');
+    const fetchImpl = vi.fn<FetchLike>(async () =>
+      new Response(null, { status: 302, headers: { location: 'https://hooks.example/loop' } }));
+    makeService(fetchImpl, { allowPrivateTargets: false, maxAttempts: 1 }, {
+      resolveHost: async () => ['93.184.216.34'],
+    });
+
+    bus.publish('s1', 'session.created', {});
+    await vi.waitFor(async () => {
+      expect(await deliveryStore.list()).toHaveLength(1);
+    });
+    const delivery = (await deliveryStore.list())[0]!;
+    expect(delivery.status).toBe('failed');
+    expect(delivery.error).toMatch(/редирект/i);
+    // 5 разрешённых хопов + начальный запрос = 6, дальше отказ.
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
   });
 
   it('computeBackoffMs: экспоненциальный рост и джиттер в границах', () => {

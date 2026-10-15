@@ -1,10 +1,10 @@
 import { z } from 'zod';
 import { parse } from 'parse5';
-import { ToolCapability, DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
+import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, isAbortError, signalAborted, abortedResult } from './abort.js';
-import { evaluateMcpNetworkAccess } from '../mcp/network-policy.js';
+import { PRIVATE_EGRESS_POLICY, EgressBlockedError, fetchWithEgressGuard } from '../net/egress-guard.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
@@ -284,16 +284,15 @@ function normalizeUrl(raw: string): string {
   return 'https://' + trimmed;
 }
 
-// ─── SSRF-политика web_fetch (ADR-071 §2.3.1, переиспользование MCP-политики) ─
-
-/** Политика: запрет private/loopback/link-local (в т.ч. `169.254.169.254`). */
-const PRIVATE_NETWORK_POLICY = {
-  mode: 'deny' as const,
-  list: [...DEFAULT_MCP_PRIVATE_CIDRS],
-};
+// ─── SSRF-политика web_fetch (ADR-071 §2.3.1, PROP-100) ─────────────────────
+//
+// Единая реализация — `engine/net/egress-guard.ts`: схема + DNS-резолв всех
+// A/AAAA + приватные CIDR (`checkEgressUrl`/`PRIVATE_EGRESS_POLICY`), редиректы
+// с проверкой каждого хопа (`fetchWithEgressGuard`). Собственной копии политики
+// здесь нет.
 
 /**
- * Инъекция DNS-резолвера (тесты). По умолчанию — системный `dns.lookup` через
+ * Инъекция DNS-резолвера (тесты). По умолчанию — системный `dns.lookup` внутри
  * `evaluateMcpNetworkAccess`. Экспорт — только для тестового сьюта.
  */
 let _hostResolver: HostResolver | undefined;
@@ -303,59 +302,21 @@ export function _setWebFetchHostResolver(resolver: HostResolver | undefined): vo
   _hostResolver = resolver;
 }
 
-/** Ошибка сетевой политики web_fetch (SSRF): URL/хоп запрещён. */
-class WebFetchBlockedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'WebFetchBlockedError';
-  }
-}
-
 /**
- * Проверяет URL по SSRF-политике: только `http(s)` и адрес не из приватных
- * диапазонов. DNS-резолв — через `evaluateMcpNetworkAccess` (ADR-071).
+ * fetch с отключёнными автопереходами: каждый хоп редиректа проверяется
+ * политикой (не более MAX_REDIRECTS хопов). `redirect: 'manual'` не даёт уйти на
+ * приватный адрес в обход проверки.
  */
-async function ensureUrlAllowed(url: string): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new WebFetchBlockedError(`Некорректный URL: ${url}`);
-  }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new WebFetchBlockedError(`Недопустимая схема URL: ${parsed.protocol}`);
-  }
-  const check = await evaluateMcpNetworkAccess(url, PRIVATE_NETWORK_POLICY, {
-    resolveHost: _hostResolver,
-  });
-  if (!check.allowed) {
-    throw new WebFetchBlockedError(check.reason ?? `Адрес запрещён сетевой политикой: ${url}`);
-  }
-}
-
-/**
- * fetch с отключёнными автопереходами: каждый редирект проверяется политикой
- * (не более MAX_REDIRECTS хопов). `redirect: 'manual'` не даёт уйти на приватный
- * адрес в обход проверки.
- */
-async function fetchWithSsrfGuard(url: string, signal: AbortSignal): Promise<Response> {
-  let current = url;
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    await ensureUrlAllowed(current);
-    const response = await fetch(current, {
-      signal,
-      headers: BROWSER_HEADERS,
-      redirect: 'manual',
-    });
-    if (response.status >= 300 && response.status < 400) {
-      const location = response.headers.get('location');
-      if (!location) return response;
-      current = new URL(location, current).toString();
-      continue;
-    }
-    return response;
-  }
-  throw new WebFetchBlockedError(sm('web.too_many_redirects'));
+function fetchWithSsrfGuard(url: string, signal: AbortSignal): Promise<Response> {
+  return fetchWithEgressGuard(
+    url,
+    { signal, headers: BROWSER_HEADERS },
+    {
+      policy: PRIVATE_EGRESS_POLICY,
+      resolveHost: _hostResolver,
+      maxHops: MAX_REDIRECTS,
+    },
+  );
 }
 
 // ─── Тулы ────────────────────────────────────────────────────────────────────
@@ -456,7 +417,7 @@ export const webFetchTool: ToolDefinition = {
         }
         if (error.name === 'AbortError') {
           blocks.push(`### ${url}\n\n${sm('web.block_timeout')}`);
-        } else if (error instanceof WebFetchBlockedError) {
+        } else if (error instanceof EgressBlockedError) {
           blocks.push(`### ${url}\n\n${sm('web.ssrf_blocked', { reason: error.message })}`);
         } else {
           blocks.push(`### ${url}\n\n${sm('web.block_error', { error: error.message || String(err) })}`);

@@ -43,4 +43,9 @@ describe('webhooks: SSRF-политика (ADR-052, этап II)', () => {
     expect((await evaluateWebhookTarget('ftp://x/y')).allowed).toBe(false);
     expect((await evaluateWebhookTarget('not-a-url')).allowed).toBe(false);
   });
+
+  it('IPv4-mapped loopback/link-local блокируются (обход через v6)', async () => {
+    expect((await evaluateWebhookTarget('https://[::ffff:127.0.0.1]/hook')).allowed).toBe(false);
+    expect((await evaluateWebhookTarget('https://[::ffff:169.254.169.254]/hook')).allowed).toBe(false);
+  });
 });

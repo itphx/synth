@@ -3,7 +3,11 @@ import type { AuthKit } from '../auth/middleware.js';
 import { JsonStore } from '@itphx/synth-core';
 import type { ProviderConfig } from '@itphx/synth-shared';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
-import { createProviderRoutes as createCoreProviderRoutes, evaluateMcpNetworkAccess } from '@itphx/synth-core';
+import {
+  createProviderRoutes as createCoreProviderRoutes,
+  checkEgressUrl,
+  fetchWithEgressGuard,
+} from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 
@@ -46,7 +50,7 @@ export function createProviderRoutes(
     }
 
     // SSRF-защита: внутренние/приватные адреса запрещены (включая DNS-резолв).
-    const networkCheck = await evaluateMcpNetworkAccess(origin, PROVIDER_URL_NETWORK_POLICY);
+    const networkCheck = await checkEgressUrl(origin, PROVIDER_URL_NETWORK_POLICY);
     if (!networkCheck.allowed) {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
@@ -56,10 +60,10 @@ export function createProviderRoutes(
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 5000);
 
-      const resp = await fetch(iconUrl, {
+      const resp = await fetchWithEgressGuard(iconUrl, {
         signal: controller.signal,
         headers: { Accept: 'image/*' },
-      });
+      }, { policy: PROVIDER_URL_NETWORK_POLICY });
       clearTimeout(timer);
 
       if (resp.ok && resp.headers.get('content-type')?.includes('image')) {
@@ -73,10 +77,10 @@ export function createProviderRoutes(
       const htmlController = new AbortController();
       const htmlTimer = setTimeout(() => htmlController.abort(), 5000);
 
-      const htmlResp = await fetch(origin, {
+      const htmlResp = await fetchWithEgressGuard(origin, {
         signal: htmlController.signal,
         headers: { Accept: 'text/html' },
-      });
+      }, { policy: PROVIDER_URL_NETWORK_POLICY });
       clearTimeout(htmlTimer);
 
       if (htmlResp.ok) {
@@ -91,10 +95,10 @@ export function createProviderRoutes(
             if (resolved.startsWith('/')) resolved = `${origin}${resolved}`;
             else if (!resolved.startsWith('http')) resolved = `${origin}/${resolved}`;
 
-            const iconResp = await fetch(resolved, {
+            const iconResp = await fetchWithEgressGuard(resolved, {
               signal: AbortSignal.timeout(5000),
               headers: { Accept: 'image/*' },
-            });
+            }, { policy: PROVIDER_URL_NETWORK_POLICY });
             if (iconResp.ok) {
               const buffer = await iconResp.arrayBuffer();
               const ct = iconResp.headers.get('content-type') || 'image/x-icon';
