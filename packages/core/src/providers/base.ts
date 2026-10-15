@@ -1,5 +1,6 @@
 import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency, DecisionQuestion, DecisionResponse } from '@itphx/synth-shared';
 import type { DebugCollector } from '../debug.js';
+import { warning } from '../logger.js';
 import { ProviderError } from './exceptions.js';
 
 /** Таймаут best-effort загрузки каталога моделей, мс. */
@@ -393,16 +394,30 @@ export class ProviderFactory {
     if (providerType === 'decision' || providerType === 'systemone') {
       return trimmed;
     }
-    // Ollama: базовый URL с суффиксом `/v1` — это OpenAI-совместимый эндпоинт
-    // (Ollama ≥0.32 нативный `/api/chat` не отдаёт, работает `/v1`), поэтому
-    // достраиваем `/chat/completions`. Иначе — прежнее нативное поведение
-    // `/api/chat` (обратная совместимость со старыми конфигами).
+    // Ollama: класс провайдера нативный — тело запроса несёт `options`
+    // (`num_ctx`), `think` и нативный формат `tools`, а сервер понимает их
+    // только на `/api/chat`. Поэтому URL всегда приводится к нативному
+    // `/api/chat`; OpenAI-совместимый суффикс `/v1` (в т.ч. полный
+    // `/v1/chat/completions`) снимается — иначе OpenAI-слой Ollama молча
+    // проигнорировал бы `options`/`think`/`tools`. Для OpenAI-совместимого
+    // пути используйте `type: openai`/`generic`.
     if (providerType === 'ollama') {
-      if (trimmed.endsWith('/api/chat') || trimmed.includes('/chat/completions')) {
-        return trimmed;
+      if (trimmed.endsWith('/api/chat')) return trimmed;
+      if (trimmed.endsWith('/v1/chat/completions')) {
+        const base = trimmed.slice(0, -'/v1/chat/completions'.length);
+        warning(
+          'OLLAMA',
+          `type: ollama ожидает нативный базовый URL без /v1 — «${trimmed}» нормализован в «${base}/api/chat» (для OpenAI-совместимого пути используйте type: openai/generic)`,
+        );
+        return `${base}/api/chat`;
       }
       if (trimmed.endsWith('/v1')) {
-        return `${trimmed}/chat/completions`;
+        const base = trimmed.slice(0, -'/v1'.length);
+        warning(
+          'OLLAMA',
+          `type: ollama ожидает нативный базовый URL без суффикса /v1 — «${trimmed}» нормализован в «${base}/api/chat» (для OpenAI-совместимого пути используйте type: openai/generic)`,
+        );
+        return `${base}/api/chat`;
       }
       return `${trimmed}/api/chat`;
     }

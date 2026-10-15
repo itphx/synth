@@ -55,9 +55,11 @@ node packages/synth/dist/cli.js serve --api-key my-secret-key
 ```bash
 # Ollama (локальные модели); рекомендуемая модель — qwen3.8:27b
 # ollama pull qwen3.8:27b
+# URL без /v1: type: ollama ходит на нативный /api/chat
+# (так работают num_ctx, think и инструменты).
 synth config provider add \
   --name ollama --type ollama \
-  --url http://localhost:11434/v1 \
+  --url http://localhost:11434 \
   --model qwen3.8:27b
 ```
 
@@ -75,7 +77,7 @@ synth config provider add \
 Альтернатива — переменные окружения (`SYNTH_PROVIDER_<NAME>_*`):
 
 ```bash
-export SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434/v1
+export SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434
 export SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.8:27b
 export SYNTH_PROVIDER_OLLAMA_TYPE=ollama
 ```
@@ -86,10 +88,9 @@ export SYNTH_PROVIDER_OLLAMA_TYPE=ollama
 
 `qwen3.8:27b` поддерживает окно **~100k–256k токенов**, но Ollama по умолчанию
 поднимает его небольшим. `num_ctx` **задаётся через Synth** (`ProviderConfig.numCtx`)
-и **передаётся** в теле запроса, в том числе на OpenAI-совместимом пути
-`/v1/chat/completions` — но Ollama этот слой `options` **игнорирует**, поэтому
-эффект (фактическое окно) даёт только **нативный** `/api/chat` (URL провайдера
-**без** суффикса `/v1`).
+и **передаётся** в теле запроса: провайдер `type: ollama` работает через
+**нативный** `/api/chat`, поэтому `options.num_ctx` применяется (вместе с `think`
+и нативным форматом инструментов). Базовый URL указывайте **без** суффикса `/v1`.
 
 Задать `num_ctx` через Synth (приоритет: явный `numCtx` провайдера >
 `contextWindow` модели):
@@ -111,8 +112,13 @@ export SYNTH_PROVIDER_OLLAMA_NUM_CTX=262144
 
 У существующего провайдера поле правится через `PATCH /api/v2/providers/:name`.
 
-Чтобы окно применилось и на OpenAI-совместимом пути, задайте его **на стороне
-Ollama**:
+**`type: ollama` работает только нативно.** URL всегда нормализуется к
+`/api/chat`: старый базовый URL с суффиксом `/v1` (или `/v1/chat/completions`)
+сработает — суффикс снимается, в лог уходит предупреждение. OpenAI-совместимый
+путь Ollama нужен отдельным провайдером: `type: openai`/`generic` с URL
+`http://localhost:11434/v1` (там `num_ctx` не применяется).
+
+Альтернатива на стороне Ollama — серверный дефолт окна:
 
 ```bash
 # 1) Основной способ — переменная окружения сервера Ollama (при запуске `ollama serve`)

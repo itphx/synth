@@ -12,8 +12,10 @@ services:
       # чтобы compose не перекрывал .env.
       - SYNTH_API_KEY=${SYNTH_API_KEY:?set SYNTH_API_KEY in .env}
       - SYNTH_PROVIDER_OLLAMA_API_KEY=${SYNTH_PROVIDER_OLLAMA_API_KEY:-}
-      # Ollama ≥0.32: суффикс /v1 → OpenAI-совместимый /v1/chat/completions.
-      - SYNTH_PROVIDER_OLLAMA_URL=${SYNTH_PROVIDER_OLLAMA_URL:-http://ollama:11434/v1}
+      # Ollama: нативный базовый URL без /v1 — type: ollama ходит на /api/chat
+      # (так применяются num_ctx/options, think и инструменты).
+      # Для OpenAI-совместимого пути используйте type: openai/generic.
+      - SYNTH_PROVIDER_OLLAMA_URL=${SYNTH_PROVIDER_OLLAMA_URL:-http://ollama:11434}
       - SYNTH_PROVIDER_OLLAMA_MODEL=${SYNTH_PROVIDER_OLLAMA_MODEL:-qwen3.8:27b}
       - SYNTH_PROVIDER_OLLAMA_TYPE=ollama
     volumes:
@@ -28,8 +30,9 @@ services:
     ports:
       - "11434:11434"
     environment:
-      # Контекстное окно Ollama (num_ctx) задаётся на стороне сервера: Synth
-      # ходит на OpenAI-совместимый /v1, куда num_ctx не передаётся.
+      # Серверный дефолт контекстного окна Ollama. num_ctx можно задать и через
+      # Synth (--num-ctx / SYNTH_PROVIDER_OLLAMA_NUM_CTX / поле API) — он
+      # передаётся в теле нативного /api/chat и приоритетнее этого значения.
       # 262144 = 256k токенов; уменьшите, если не хватает памяти/VRAM.
       - OLLAMA_CONTEXT_LENGTH=${OLLAMA_CONTEXT_LENGTH:-262144}
     volumes:

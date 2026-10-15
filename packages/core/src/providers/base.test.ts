@@ -2,24 +2,43 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fetchModelsCatalog, parseTokenPricing, toNonNegativeNumber, ProviderFactory } from './base.js';
 import './index.js';
 
-describe('ProviderFactory._normalizeUrl — Ollama (совместимость ≥0.32)', () => {
-  it('базовый URL с суффиксом /v1 → OpenAI-совместимый /v1/chat/completions', () => {
-    expect(ProviderFactory._normalizeUrl('http://localhost:11434/v1', 'ollama'))
-      .toBe('http://localhost:11434/v1/chat/completions');
-    // Завершающий слэш снимается.
-    expect(ProviderFactory._normalizeUrl('http://localhost:11434/v1/', 'ollama'))
-      .toBe('http://localhost:11434/v1/chat/completions');
-  });
-
-  it('базовый URL без /v1 → нативный /api/chat (обратная совместимость)', () => {
+describe('ProviderFactory._normalizeUrl — Ollama (нативный /api/chat)', () => {
+  it('базовый URL всегда приводится к нативному /api/chat', () => {
     expect(ProviderFactory._normalizeUrl('http://localhost:11434', 'ollama'))
       .toBe('http://localhost:11434/api/chat');
   });
 
-  it('уже готовые пути не дублируются (идемпотентность)', () => {
+  it('суффикс /v1 снимается → нативный /api/chat (обратная совместимость) + предупреждение', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // Завершающий слэш снимается, суффикс /v1 — тоже.
+      expect(ProviderFactory._normalizeUrl('http://localhost:11434/v1', 'ollama'))
+        .toBe('http://localhost:11434/api/chat');
+      expect(ProviderFactory._normalizeUrl('http://localhost:11434/v1/', 'ollama'))
+        .toBe('http://localhost:11434/api/chat');
+      // Полный OpenAI-совместимый путь тоже приводится к нативному.
+      expect(ProviderFactory._normalizeUrl('http://localhost:11434/v1/chat/completions', 'ollama'))
+        .toBe('http://localhost:11434/api/chat');
+
+      expect(warn).toHaveBeenCalled();
+      expect(warn.mock.calls.some((args) => String(args[0]).includes('/v1'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('уже нормализованный путь не дублируется (идемпотентность)', () => {
     expect(ProviderFactory._normalizeUrl('http://x/api/chat', 'ollama')).toBe('http://x/api/chat');
-    expect(ProviderFactory._normalizeUrl('http://x/v1/chat/completions', 'ollama'))
-      .toBe('http://x/v1/chat/completions');
+  });
+
+  it('нативный URL без /v1 предупреждений не пишет', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(ProviderFactory._normalizeUrl('http://x', 'ollama')).toBe('http://x/api/chat');
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

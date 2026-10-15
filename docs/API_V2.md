@@ -364,9 +364,10 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > `ModelConfig.contextWindow`. Поле также синхронизируется из env
 > `SYNTH_PROVIDER_<NAME>_NUM_CTX` (`syncProvidersFromEnv`) и задаётся CLI-флагом
 > `--num-ctx` у `synth config provider add`. `num_ctx` отправляется в теле
-> запроса, в т.ч. на OpenAI-совместимом `/v1/chat/completions`, но Ollama этот
-> слой `options` игнорирует — эффект даёт только нативный `/api/chat` (URL без
-> суффикса `/v1`) или окно на стороне Ollama (`OLLAMA_CONTEXT_LENGTH`/Modelfile).
+> запроса к нативному `/api/chat` (провайдер `type: ollama` всегда нормализует
+> URL туда, снимая суффикс `/v1`, — с предупреждением в лог; OpenAI-совместимый
+> путь — отдельный провайдер `type: openai`/`generic`). Альтернатива —
+> окно на стороне Ollama (`OLLAMA_CONTEXT_LENGTH`/Modelfile).
 
 ### 5.10 Models — `/api/v2/models`
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { OllamaProvider } from './ollama.js';
-import type { LLMMessage, SystemPromptPayload } from './base.js';
+import { ProviderFactory, type LLMMessage, type SystemPromptPayload } from './base.js';
+import './index.js';
 import type { TokenUsage, LLMChunk } from '@itphx/synth-shared';
 
 const baseParams = {
@@ -390,20 +391,25 @@ describe('OllamaProvider — num_ctx (numCtx)', () => {
     expect(body.options).toBeUndefined();
   });
 
-  it('chat: при /v1-URL num_ctx всё равно в теле (OpenAI-совместимый endpoint его игнорирует)', async () => {
+  it('chat: /v1-URL нормализуется фабрикой в нативный /api/chat, num_ctx в теле', async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    const provider = new OllamaProvider({
-      ...baseParams,
-      url: 'http://omn.example.test/v1/chat/completions',
+    // Старый `/v1`-конфиг: фабрика снимает суффикс и работает нативно.
+    const provider = ProviderFactory.create('ollama', {
+      url: 'http://omn.example.test/v1',
+      apiKey: '',
+      model: 'qwen3.8:27b',
       numCtx: 2048,
     });
+    expect(provider).toBeInstanceOf(OllamaProvider);
+    expect(provider.url).toBe('http://omn.example.test/api/chat');
+
     await provider.chat([makeMessage()]);
 
+    // Запрос уходит на нативный эндпоинт — там `options` (num_ctx) имеет эффект.
+    expect(fetchMock.mock.calls[0]![0]).toBe('http://omn.example.test/api/chat');
     const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
-    // Тело нативное (`options`), отправляется на /v1/chat/completions; сам
-    // OpenAI-совместимый слой Ollama поле `options` не понимает — эффекта нет.
     expect(body.options).toEqual({ num_ctx: 2048 });
   });
 });

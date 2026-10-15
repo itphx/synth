@@ -16,7 +16,7 @@ Synth поддерживает провайдеров типов `openai`, `anth
 ### Ollama (локально, бесплатно)
 
 ```bash
-export SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434/v1
+export SYNTH_PROVIDER_OLLAMA_URL=http://localhost:11434
 export SYNTH_PROVIDER_OLLAMA_MODEL=qwen3.8:27b
 export SYNTH_PROVIDER_OLLAMA_TYPE=ollama
 export SYNTH_PROVIDER_OLLAMA_API_KEY=""
@@ -24,10 +24,10 @@ export SYNTH_PROVIDER_OLLAMA_API_KEY=""
 
 > **Контекстное окно и `num_ctx`.** У модели окно ~100k–256k токенов, но Ollama
 > по умолчанию поднимает его небольшим. `num_ctx` **задаётся через Synth**
-> (`ProviderConfig.numCtx`) и **передаётся** в теле запроса — в том числе на
-> OpenAI-совместимом пути `/v1/chat/completions`. Однако Ollama этот слой
-> `options` **игнорирует**, поэтому эффект (фактическое окно) даёт только
-> **нативный** `/api/chat` — URL провайдера **без** суффикса `/v1`.
+> (`ProviderConfig.numCtx`) и **передаётся** в теле запроса: провайдер
+> `type: ollama` работает через **нативный** `/api/chat`, поэтому `options.num_ctx`
+> применяется — как и `think` и нативный формат инструментов. Базовый URL
+> указывайте **без** суффикса `/v1`.
 >
 > Способы задать (приоритет: явный `numCtx` провайдера → `ModelConfig.contextWindow`
 > → справочник):
@@ -49,8 +49,15 @@ export SYNTH_PROVIDER_OLLAMA_API_KEY=""
 >
 > У существующего провайдера поле правится через `PATCH /api/v2/providers/:name`.
 >
-> Чтобы окно применилось и на OpenAI-совместимом пути, задайте его **на стороне
-> Ollama**: `OLLAMA_CONTEXT_LENGTH=262144 ollama serve` или модель с явным
+> **`type: ollama` работает только нативно.** URL всегда нормализуется к
+> `/api/chat`: старый базовый URL с суффиксом `/v1` (или
+> `/v1/chat/completions`) сработает — суффикс снимается, в лог уходит
+> предупреждение. OpenAI-совместимый путь Ollama нужен отдельным провайдером:
+> `type: openai`/`generic` с URL `http://localhost:11434/v1` (там `num_ctx`
+> не применяется).
+>
+> Альтернатива на стороне Ollama — серверный дефолт окна:
+> `OLLAMA_CONTEXT_LENGTH=262144 ollama serve` или модель с явным
 > `PARAMETER num_ctx 262144` (Modelfile → `ollama create`).
 >
 > Synth для бюджета контекста использует `contextWindow` модели (синхронизируется
@@ -109,10 +116,11 @@ export SYNTH_PROVIDER_OLLAMA_DECISION_MODEL=clef-flash
 Провайдеры хранятся как JSON-файлы в `{dataDir}/providers/`. Команды — через публичную CLI-обёртку `synth`:
 
 ```bash
-# Добавить провайдера (рекомендуемая локальная модель — qwen3.8:27b)
+# Добавить провайдера (рекомендуемая локальная модель — qwen3.8:27b).
+# URL без /v1: type: ollama ходит на нативный /api/chat.
 synth config provider add \
   --name ollama --type ollama \
-  --url http://localhost:11434/v1 \
+  --url http://localhost:11434 \
   --model qwen3.8:27b
 
 # Список провайдеров
