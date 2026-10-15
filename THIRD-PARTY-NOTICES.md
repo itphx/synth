@@ -47,7 +47,6 @@ Notes:
 | `hono-rate-limiter` | backend |
 | `jose` | backend |
 | `js-yaml` | shared, backend |
-| `katex` | ui |
 | `marked` | ui |
 | `motion` | ui |
 | `parse5` | core |
