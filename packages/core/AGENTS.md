@@ -127,7 +127,12 @@
 ## Карта модулей
 
 - `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, …).
-- `server/app.ts` — `createStandaloneApp`: Hono, WS, статика UI, provisioning.
+- `server/app.ts` — `createStandaloneApp`: фасад-композиция (auth/bootstrap service-key,
+  middleware, вызовы вынесенных модулей, сборка хендла). ADR-095 (шаг 4a) вынес блоки
+  в `server/app/*`: `deps.ts` (сборка зависимостей), `mount-routes.ts` (весь порядок
+  монтирования — порядок критичен для приоритетов роутов), `hybrid-remote.ts`
+  (зеркала/`injectRemoteProvider`), `ws-events.ts` (`/ws/events`), `sse-events.ts`
+  (`GET /api/v2/events`), `http-server.ts` (Node-адаптер), `static.ts` (раздача UI).
   ADR-052 (этап I): глобальный per-key rate limit service-key (`KeyRateLimiter`, fixed
   window 60 c, ключ — `keyId`) — после `requireAuth`, до роутов; `rateLimitPerMinute`
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
