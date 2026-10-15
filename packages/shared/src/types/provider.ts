@@ -53,6 +53,12 @@ export interface ProviderConfig {
   icon?: string;
   /** Валюта по умолчанию для моделей провайдера. Отсутствует → USD. */
   currency?: Currency;
+  /**
+   * Размер контекстного окна провайдера (`num_ctx` Ollama). Опционально;
+   * приоритетнее `ModelConfig.contextWindow`. Применяется только нативным
+   * путём Ollama (`/api/chat`).
+   */
+  numCtx?: number;
 }
 
 export type ContextSource = 'api' | 'reference' | 'manual' | 'unknown';

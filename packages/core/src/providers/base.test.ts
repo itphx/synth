@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fetchModelsCatalog, parseTokenPricing, toNonNegativeNumber, ProviderFactory } from './base.js';
+import './index.js';
 
 describe('ProviderFactory._normalizeUrl — Ollama (совместимость ≥0.32)', () => {
   it('базовый URL с суффиксом /v1 → OpenAI-совместимый /v1/chat/completions', () => {
@@ -167,5 +168,26 @@ describe('fetchModelsCatalog — конверт { data: [...] } и очистк�
 
     await expect(fetchModelsCatalog('http://example.test/models', {})).resolves.toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('ProviderFactory.create — проброс numCtx', () => {
+  it('передаёт config.numCtx в созданный провайдер', () => {
+    const provider = ProviderFactory.create('ollama', {
+      url: 'http://localhost:11434',
+      apiKey: '',
+      model: 'qwen3:8b',
+      numCtx: 8192,
+    });
+    expect(provider.numCtx).toBe(8192);
+  });
+
+  it('без numCtx — undefined', () => {
+    const provider = ProviderFactory.create('ollama', {
+      url: 'http://localhost:11434',
+      apiKey: '',
+      model: 'qwen3:8b',
+    });
+    expect(provider.numCtx).toBeUndefined();
   });
 });

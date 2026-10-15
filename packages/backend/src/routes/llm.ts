@@ -230,6 +230,7 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
         model: modelConfig.name,
         timeout: providerConfig.timeout ?? 120,
         maxTokens: body.max_tokens,
+        numCtx: providerConfig.numCtx,
       }, body.temperature, body.top_p);
     } catch (e) {
       return c.json({

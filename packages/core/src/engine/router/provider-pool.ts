@@ -56,7 +56,9 @@ export class ProviderPool {
         reasoningLevel,
       );
       coreConfig.maxTokens = maxTokens;
-      coreConfig.numCtx = numCtx;
+      // Приоритет: явный provider.numCtx (из shared-конфига) > переданный
+      // numCtx (ModelConfig.contextWindow).
+      coreConfig.numCtx = coreConfig.numCtx ?? numCtx;
       const provider = ProviderFactory.create(
         providerName,
         coreConfig,

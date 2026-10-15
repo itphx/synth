@@ -263,3 +263,40 @@ describe('ProviderPool × LLM Gateway (ADR-036)', () => {
     expect(provider).toBeInstanceOf(MockDecisionProvider);
   });
 });
+
+describe('ProviderPool — приоритет numCtx', () => {
+  beforeEach(() => {
+    ProviderFactory.register('mockpool', MockPoolProvider);
+  });
+
+  afterEach(() => {
+    ProviderFactory['_providers'].delete('mockpool');
+  });
+
+  function loaderWithNumCtx(numCtx?: number): (name: string) => import('@itphx/synth-shared').ProviderConfig | null {
+    return (name: string) => {
+      if (name !== 'mockpool') return null;
+      return {
+        name,
+        type: 'mockpool',
+        baseUrl: 'http://localhost:9999/v1',
+        apiKey: 'test-key',
+        defaultModel: 'mock-model',
+        timeout: 10,
+        numCtx,
+      };
+    };
+  }
+
+  it('явный provider.numCtx приоритетнее переданного окна (contextWindow)', () => {
+    const pool = new ProviderPool(loaderWithNumCtx(8192));
+    const provider = pool.getProvider('mockpool', 'mock-model', undefined, undefined, undefined, 4096);
+    expect(provider?.numCtx).toBe(8192);
+  });
+
+  it('без provider.numCtx используется переданное окно (contextWindow)', () => {
+    const pool = new ProviderPool(loaderWithNumCtx(undefined));
+    const provider = pool.getProvider('mockpool', 'mock-model', undefined, undefined, undefined, 4096);
+    expect(provider?.numCtx).toBe(4096);
+  });
+});

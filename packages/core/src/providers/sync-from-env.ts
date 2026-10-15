@@ -3,11 +3,13 @@ import type { JsonStoreLike } from '../storage/json-store.js';
 
 /**
  * Синхронизация провайдеров/моделей из переменных окружения `SYNTH_PROVIDER_*`
- * (ADR-038). Формат: `SYNTH_PROVIDER_<NAME>_(API_KEY|URL|MODEL|TYPE)`;
+ * (ADR-038). Формат: `SYNTH_PROVIDER_<NAME>_(API_KEY|URL|MODEL|TYPE|NUM_CTX)`;
  * имя приводится к lowercase с `_` → `-`. Провайдеры сохраняются в `providerStore`
  * (дефолтный `type: 'openai'`), указанная `MODEL` дополнительно создаёт модель
  * `<name>/<model>` с `isDefault: true`, если её ещё нет. `TYPE` (ADR-084) задаёт
- * тип провайдера, в т.ч. decision-протокол (`decision`|`systemone`).
+ * тип провайдера, в т.ч. decision-протокол (`decision`|`systemone`). `NUM_CTX`
+ * (целое > 0) задаёт размер контекста провайдера (`num_ctx` Ollama); невалидное
+ * значение игнорируется.
  *
  * Общая точка для core и backend: вызывается после создания stores и до
  * заполнения in-memory кэшей провайдеров/моделей.
@@ -16,7 +18,7 @@ export async function syncProvidersFromEnv(
   providerStore: JsonStoreLike<ProviderConfig>,
   modelStore: JsonStoreLike<ModelConfig>,
 ): Promise<void> {
-  const providerPattern = /^SYNTH_PROVIDER_([A-Z][A-Z0-9_]*?)_(API_KEY|URL|MODEL|TYPE)$/;
+  const providerPattern = /^SYNTH_PROVIDER_([A-Z][A-Z0-9_]*?)_(API_KEY|URL|MODEL|TYPE|NUM_CTX)$/;
   const providers: Map<string, Partial<ProviderConfig> & { model?: string }> = new Map();
 
   for (const [key, value] of Object.entries(process.env)) {
@@ -37,6 +39,11 @@ export async function syncProvidersFromEnv(
       case 'URL': p.baseUrl = value; break;
       case 'MODEL': p.model = value; break;
       case 'TYPE': p.type = value; break;
+      case 'NUM_CTX': {
+        const num = Number(value);
+        if (Number.isInteger(num) && num > 0) p.numCtx = num;
+        break;
+      }
     }
   }
 
@@ -51,6 +58,7 @@ export async function syncProvidersFromEnv(
       timeout: existing?.timeout ?? 120,
       enabled: true,
       icon: existing?.icon ?? '',
+      numCtx: envConfig.numCtx ?? existing?.numCtx,
     };
     await providerStore.save(name, provider);
 

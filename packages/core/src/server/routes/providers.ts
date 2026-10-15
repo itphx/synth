@@ -23,11 +23,26 @@ export interface ProviderRouteMessages {
   /** URL задан, но не является абсолютным http(s). */
   urlInvalid: (c: Context) => string;
   connectionError: (c: Context) => string;
+  /** `num_ctx`/`numCtx` задан, но не целое > 0. */
+  numCtxInvalid: (c: Context) => string;
 }
 
 /** Первое заданное (не `undefined`) значение — для алиасов входных полей. */
 function firstDefined(...values: unknown[]): unknown {
   return values.find((value) => value !== undefined);
+}
+
+/**
+ * Разбор `num_ctx`/`numCtx` (размер контекста Ollama): `undefined` — не задано
+ * (сохранить existing); `null`/`''` — явно очистить; целое > 0 — принять;
+ * иное — ошибка (`ok: false`).
+ */
+function parseNumCtx(raw: unknown): { ok: true; defined: boolean; value?: number } | { ok: false } {
+  if (raw === undefined) return { ok: true, defined: false };
+  if (raw === null || raw === '') return { ok: true, defined: true, value: undefined };
+  const num = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isInteger(num) || num <= 0) return { ok: false };
+  return { ok: true, defined: true, value: num };
 }
 
 /** Абсолютный http(s)-URL (обязательное требование к baseUrl провайдера). */
@@ -63,6 +78,7 @@ const DEFAULT_MESSAGES: ProviderRouteMessages = {
   urlRequired: () => 'URL обязателен',
   urlInvalid: () => 'URL обязателен и должен быть абсолютным http(s)',
   connectionError: () => 'Ошибка подключения',
+  numCtxInvalid: () => 'num_ctx должен быть целым числом > 0',
 };
 
 /**
@@ -95,6 +111,7 @@ export function createProviderRoutes(
         enabled: p.enabled !== false,
         is_default: p === defaultProvider,
         currency: p.currency,
+        num_ctx: p.numCtx,
         ...renderIcon(p.icon, p.baseUrl),
       })),
       default_provider: defaultProvider?.name || '',
@@ -126,6 +143,10 @@ export function createProviderRoutes(
     const defaultModel = firstDefined(
       body.default_model, body.defaultModel, body.model, existing?.defaultModel,
     );
+    const parsedNumCtx = parseNumCtx(firstDefined(body.num_ctx, body.numCtx));
+    if (!parsedNumCtx.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.numCtxInvalid(c) } }, 400);
+    }
     const provider: ProviderConfig = {
       name,
       type: body.type || existing?.type || 'openai',
@@ -136,6 +157,7 @@ export function createProviderRoutes(
       enabled: body.enabled ?? existing?.enabled ?? true,
       icon: body.icon !== undefined ? body.icon : (existing?.icon ?? ''),
       currency: resolvedCurrency.currency,
+      numCtx: parsedNumCtx.defined ? parsedNumCtx.value : existing?.numCtx,
     };
     await store.save(name, provider);
     providerCache.set(name, provider);
@@ -164,6 +186,10 @@ export function createProviderRoutes(
     const defaultModel = firstDefined(
       body.default_model, body.defaultModel, body.model, existing.defaultModel,
     );
+    const parsedNumCtx = parseNumCtx(firstDefined(body.num_ctx, body.numCtx));
+    if (!parsedNumCtx.ok) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: messages.numCtxInvalid(c) } }, 400);
+    }
     const provider: ProviderConfig = {
       ...existing,
       type: body.type || existing.type,
@@ -174,6 +200,7 @@ export function createProviderRoutes(
       enabled: body.enabled ?? existing.enabled,
       icon: body.icon !== undefined ? body.icon : existing.icon,
       currency: resolvedCurrency.currency,
+      numCtx: parsedNumCtx.defined ? parsedNumCtx.value : existing.numCtx,
     };
     await store.save(name, provider);
     providerCache.set(name, provider);
@@ -230,6 +257,7 @@ export function createProviderRoutes(
           apiKey: provider.apiKey || '',
           model: provider.defaultModel || '',
           timeout: 30,
+          numCtx: provider.numCtx,
         });
         const models = await instance.listModels();
         return c.json({

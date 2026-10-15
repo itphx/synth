@@ -158,3 +158,103 @@ describe('routes/providers (core): алиасы полей и валидация
     expect(missing.status).toBe(404);
   });
 });
+
+describe('routes/providers (core): num_ctx / numCtx', () => {
+  let tmpDir: string;
+  let stores: Awaited<ReturnType<typeof makeApp>>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-providers-numctx-'));
+    stores = await makeApp(tmpDir);
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('POST принимает snake_case num_ctx и GET отдаёт поле', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'ollama',
+      type: 'ollama',
+      base_url: 'http://localhost:11434',
+      num_ctx: 8192,
+    }));
+    expect(res.status).toBe(201);
+    expect((await stores.providerStore.load('ollama'))?.numCtx).toBe(8192);
+
+    const detail = await (await stores.app.request('/ollama')).json() as { numCtx?: number };
+    expect(detail.numCtx).toBe(8192);
+
+    const list = await (await stores.app.request('/')).json() as {
+      providers: Array<Record<string, unknown>>;
+    };
+    expect(list.providers.find((p) => p.name === 'ollama')?.num_ctx).toBe(8192);
+  });
+
+  it('POST принимает camelCase numCtx (алиас)', async () => {
+    const res = await stores.app.request('/', postJSON({
+      name: 'ollama-camel',
+      type: 'ollama',
+      base_url: 'http://localhost:11434',
+      numCtx: 4096,
+    }));
+    expect(res.status).toBe(201);
+    expect((await stores.providerStore.load('ollama-camel'))?.numCtx).toBe(4096);
+  });
+
+  it('POST с num_ctx <= 0 или не-целым → 400 VALIDATION_ERROR, не сохраняется', async () => {
+    for (const bad of [0, -1, 1.5, 'abc']) {
+      const res = await stores.app.request('/', postJSON({
+        name: `bad-${String(bad)}`,
+        type: 'ollama',
+        base_url: 'http://localhost:11434',
+        num_ctx: bad,
+      }));
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(await stores.providerStore.load(`bad-${String(bad)}`)).toBeNull();
+    }
+  });
+
+  it('PATCH /:name задаёт num_ctx, null очищает; без поля — сохраняется', async () => {
+    await stores.providerStore.save('p', {
+      name: 'p', type: 'ollama', baseUrl: 'http://localhost:11434', enabled: true, numCtx: 2048,
+    });
+
+    // Без поля — значение сохраняется.
+    const keep = await stores.app.request('/p', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'qwen3:8b' }),
+    });
+    expect(keep.status).toBe(200);
+    expect((await stores.providerStore.load('p'))?.numCtx).toBe(2048);
+
+    // Обновление.
+    const upd = await stores.app.request('/p', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ numCtx: 16384 }),
+    });
+    expect(upd.status).toBe(200);
+    expect((await stores.providerStore.load('p'))?.numCtx).toBe(16384);
+
+    // Явная очистка.
+    const clear = await stores.app.request('/p', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ num_ctx: null }),
+    });
+    expect(clear.status).toBe(200);
+    expect((await stores.providerStore.load('p'))?.numCtx).toBeUndefined();
+
+    // Невалидное значение → 400, значение не меняется.
+    const bad = await stores.app.request('/p', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ num_ctx: -5 }),
+    });
+    expect(bad.status).toBe(400);
+  });
+});

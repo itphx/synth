@@ -25,6 +25,7 @@ export function toCoreProviderConfig(shared: SharedProviderConfig, model: string
     model,
     timeout: shared.timeout,
     reasoningLevel,
+    numCtx: shared.numCtx,
   };
 }
 
@@ -102,7 +103,8 @@ export function getProvider(
       {
         ...toCoreProviderConfig(sharedConfig, effectiveModel, reasoningLevel ?? session.settings.reasoningLevel),
         maxTokens: session.settings.maxTokens,
-        numCtx: contextWindow > 0 ? contextWindow : undefined,
+        // Приоритет: явный provider.numCtx > ModelConfig.contextWindow.
+        numCtx: sharedConfig.numCtx ?? (contextWindow > 0 ? contextWindow : undefined),
       },
       session.settings.temperature,
     );

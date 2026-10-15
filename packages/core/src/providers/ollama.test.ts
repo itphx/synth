@@ -339,6 +339,75 @@ describe('OllamaProvider — форматирование tool_use/tool_result',
   });
 });
 
+describe('OllamaProvider — num_ctx (numCtx)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function okResponse(): Response {
+    return new Response(JSON.stringify({ message: { content: 'ok' } }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  it('chat: numCtx → body.options.num_ctx (нативный путь /api/chat)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OllamaProvider({ ...baseParams, numCtx: 8192 });
+    await provider.chat([makeMessage()]);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.options).toEqual({ num_ctx: 8192 });
+  });
+
+  it('chatAsync: numCtx → body.options.num_ctx', async () => {
+    const lines = [JSON.stringify({ message: { content: 'ok' }, done: true })].join('\n') + '\n';
+    const fetchMock = vi.fn().mockResolvedValue(new Response(lines, {
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OllamaProvider({ ...baseParams, numCtx: 4096 });
+    const chunks: LLMChunk[] = [];
+    for await (const c of provider.chatAsync([makeMessage()])) chunks.push(c);
+    expect(chunks.length).toBeGreaterThan(0);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.options).toEqual({ num_ctx: 4096 });
+  });
+
+  it('chat: без numCtx (0/undefined) options не добавляется', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OllamaProvider({ ...baseParams, numCtx: 0 });
+    await provider.chat([makeMessage()]);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    expect(body.options).toBeUndefined();
+  });
+
+  it('chat: при /v1-URL num_ctx всё равно в теле (OpenAI-совместимый endpoint его игнорирует)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new OllamaProvider({
+      ...baseParams,
+      url: 'http://omn.example.test/v1/chat/completions',
+      numCtx: 2048,
+    });
+    await provider.chat([makeMessage()]);
+
+    const body = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as Record<string, unknown>;
+    // Тело нативное (`options`), отправляется на /v1/chat/completions; сам
+    // OpenAI-совместимый слой Ollama поле `options` не понимает — эффекта нет.
+    expect(body.options).toEqual({ num_ctx: 2048 });
+  });
+});
+
 describe('OllamaProvider — listModelsDetailed (метаданные и fallback контекста)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

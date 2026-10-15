@@ -18,5 +18,6 @@ export function toCoreProviderConfig(
     model,
     timeout: shared.timeout,
     reasoningLevel,
+    numCtx: shared.numCtx,
   };
 }

@@ -147,6 +147,7 @@ export function createModelRoutes(
         model: provider.defaultModel || '',
         timeout: 30,
         currency: provider.currency,
+        numCtx: provider.numCtx,
       };
 
       if (!providerConfig.url) continue;

@@ -511,6 +511,7 @@ program
           .option('--api-key <key>', 'API-ключ')
           .option('--url <url>', 'базовый URL')
           .option('--model <model>', 'модель по умолчанию')
+          .option('--num-ctx <n>', 'размер контекста (num_ctx Ollama), целое > 0')
           .option('--data-dir <path>', 'каталог данных')
           .action(async (options) => {
             const synth = await loadConfig({});
@@ -518,7 +519,13 @@ program
             await ensureDataDir(dataDir);
 
             const { JsonStore } = await import('./storage/json-store.js');
-            const store = new JsonStore<{ name: string; type: string; baseUrl?: string; apiKey?: string; defaultModel?: string; timeout?: number; enabled?: boolean; icon?: string }>({ dataDir, subdir: 'providers' });
+            const store = new JsonStore<{ name: string; type: string; baseUrl?: string; apiKey?: string; defaultModel?: string; timeout?: number; enabled?: boolean; icon?: string; numCtx?: number }>({ dataDir, subdir: 'providers' });
+
+            const parsedNumCtx = options.numCtx === undefined ? undefined : Number(options.numCtx);
+            if (parsedNumCtx !== undefined && (!Number.isInteger(parsedNumCtx) || parsedNumCtx <= 0)) {
+              console.error('--num-ctx должен быть целым числом > 0');
+              process.exit(1);
+            }
 
             const existing = await store.load(options.name);
             const provider = {
@@ -530,6 +537,7 @@ program
               timeout: existing?.timeout ?? 120,
               enabled: existing?.enabled ?? true,
               icon: existing?.icon ?? '',
+              numCtx: parsedNumCtx ?? existing?.numCtx,
             };
             await store.save(options.name, provider);
             console.log(`Провайдер "${options.name}" сохранён (${existing ? 'обновлён' : 'создан'})`);
