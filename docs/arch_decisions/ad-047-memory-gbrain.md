@@ -1,6 +1,6 @@
 # AD-047: Память Synth (Gbrain + композиция)
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** 🧩 Предложение (vision) — Память Synth (Gbrain + композиция): RAG по памяти и коду/докам, компрессия tool output, Obsidian bridge
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D2, идея 2); Obsidian-vault `Memory-Architecture.md`,
 > `Memory-Analysis.md`, `Roadmap.md` (Фаза 3); прототип `~/dev/aic/t11` (`app/embeddings/`).

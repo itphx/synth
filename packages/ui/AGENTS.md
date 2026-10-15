@@ -180,7 +180,7 @@
 
 ## Мобильный / PWA
 
-- Полные конвенции (зоны ≤768 / 769–1199 / ≥1200, дроверы, touch-first, PWA-шелл) — в корневом `AGENTS.md` и [AD-044](../../docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md); здесь не дублируются.
+- Полные конвенции (зоны ≤768 / 769–1199 / ≥1200, дроверы, touch-first, PWA-шелл, баннер обновления) — в [AD-044](../../docs/arch_decisions/ad-044-mobile-adaptive-ui-pwa.md) и кратко в корневом `AGENTS.md`; классами/баннером конкретно здесь не дублируются.
 - Локально: `initDeviceClasses()` (`lib/device.ts:38`) вешает классы на `<html>`; для логики использовать `useDevice()`/`useMediaQuery()` (`hooks/`), а не `window.innerWidth` вручную.
 - Мобильный CSS гейтится `html.device-*`/`html.pointer-coarse`; JS-признак — `deviceType !== 'desktop'`.
 - `PwaUpdatePrompt` — баннер вне `AuthGate` (работает и на экране входа); источники — `SW.waiting` и `synthApi.getHealth().version !== SYNTH_VERSION`; проверка при монтировании, раз в 30 мин, по `visibilitychange` и на первом действии после простоя >1 ч; версия `sw.js` подставляется плагином `vite.config.ts` (`serviceWorkerVersionPlugin`) из `packages/shared/package.json`.

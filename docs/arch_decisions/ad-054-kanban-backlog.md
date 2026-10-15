@@ -1,6 +1,7 @@
 # AD-054: Kanban-доска, backlog, управление проектами
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** 🧩 Предложение — Kanban-доска поверх `project.plan` + глобальный backlog, assignee/WIP-лимиты
+> **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D9, идея 9 + Roadmap «Kanban/Backlog», Obsidian `Фичи.md`).
 > **Связано:** [AD-039](./ad-039-plan-in-project.md), [AD-033](./ad-033-session-branching-merge.md),

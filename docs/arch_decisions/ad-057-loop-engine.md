@@ -1,6 +1,6 @@
 # AD-057: Loop Engine и Loop Design Wizard
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** 🧩 Предложение (vision) — Loop Engine и Loop Design Wizard: outer loop, Verification Rubric, LoopRunner, терминация
 > **Дата:** 2026-10-08
 > **Источник:** перенесено из `AD-DRAFTS.md` (D12; черновик 2026-09-16); Roadmap Фаза 1; Obsidian-vault
 > `Loop-Engineering-Inner-Outer.md` (READ-ONLY).

@@ -1,6 +1,7 @@
 # AD-049: Git worktrees
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** 🧩 Предложение — Git worktrees: тулы `git_worktree_*`, per-session cwd на базе worktree, детект secondary worktree, UI
+> **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D4, идея 4 + Obsidian `Фичи.md`).
 > **Связано:** [AD-014](./ad-014-project-container.md), [AD-029](./ad-029-granular-permissions.md),

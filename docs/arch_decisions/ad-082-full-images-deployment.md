@@ -1,6 +1,7 @@
 # AD-082: Full-образы и базовое развёртывание (flavor'ы с toolchain)
 
-> **Статус:** ⏳ Не реализовано
+> **Статус:** 🧩 Предложение — Flavor-образы с toolchain (`slim`/`core`/`dev`/`devops`/`browser`/`full`) — шаг до AD-077
+> **Решение до:** 2026-11-14
 > **Источник:** 2026-09-30 (выделено из [AD-077](./ad-077-runtime-toolchain.md); ближайший практический шаг)
 > **Согласовано:** Debian для `browser`/`full`; `buildah` вместо `kaniko`; docker — только CLI (без socket); `lite` → `core`.
 

@@ -1,8 +1,6 @@
 # AD-086: Расширяемость Synth: классы расширений, editions и contribution flow
 
-> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`;
-> класс **Gateway** выделен в [AD-087](./ad-087-gateways.md) (HA/leader election — нет); Plugin SDK
-> ([AD-090](./ad-090-extension-api.md)), editions и contribution flow — нет
+> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`; класс **Gateway** выделен в [AD-087](./ad-087-gateways.md) (HA/leader election — нет); Plugin SDK ([AD-090](./ad-090-extension-api.md)), editions и contribution flow — нет
 > **Дата:** 2026-10-02
 > **Обновлено:** 2026-10-14 — **реструктуризация классов расширений**: класс **Gateway** выделен в действующий
 > [AD-087](./ad-087-gateways.md) (туда перенесён весь материал Telegram-шлюза, в AD-086 дубликатов нет), а AD-086

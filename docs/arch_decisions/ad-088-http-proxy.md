@@ -1,6 +1,7 @@
 # AD-088: Работа через HTTP-прокси (единый egress-слой, включая аутентификацию и Kerberos)
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** 🧩 Предложение — Единый egress-слой: HTTP-прокси, `no_proxy`/исключения, доверенные CA, Basic/NTLM/Negotiate (Kerberos)
+> **Решение до:** 2026-11-14
 > **Дата:** 2026-10-01
 > **Источник:** перенесено из `AD-DRAFTS.md` (D25); **перенумеровано с AD-083** — номер AD-083 занят брендингом ([AD-083](./ad-083-instance-customization-branding.md)).
 > **Связано:** [AD-023](./ad-023-configuration.md), [AD-036](./ad-036-llm-gateway.md), [AD-076](./ad-076-git-repo-registry-ssh.md),

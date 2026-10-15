@@ -1,6 +1,6 @@
 # AD-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник событий через AD-089, идентичность сообщений `Scheduler`), Job-история, catch-up и force-запуск (rate limit); семы и file-based мульти-инстанс/идемпотентность (`events.dedupStore`, `scheduler.leaderElection`, `scheduler.crossProcessLocks`; default OFF); пайплайны (AD-059) и размещение в гибриде — нет; K8s Lease/PG advisory lock и разные dataDir на реплику — будущее.
+> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через AD-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и семы/file-based мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection`, `scheduler.crossProcessLocks`; default OFF); пайплайны (AD-059), размещение в гибриде, K8s Lease/PG advisory lock и разные dataDir на реплику — нет
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D6, идея 6 + Roadmap Фаза 2; прототип
 > `~/dev/aic/t11/synth/app/scheduler.py`).

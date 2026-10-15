@@ -1,6 +1,7 @@
 # AD-048: Self-help скиллы и admin-MCP для Synth
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** 🧩 Предложение — Self-help: dogfooding-развёртывание, runbook-скиллы, read-only status-MCP, deploy-тулы (ADMIN)
+> **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D3, идея 3 — dogfooding).
 > **Связано:** [AD-046](./ad-046-skills-and-slash-commands.md), [AD-036](./ad-036-llm-gateway.md),

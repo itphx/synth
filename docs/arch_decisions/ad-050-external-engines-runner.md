@@ -1,6 +1,7 @@
 # AD-050: Управление внешними движками (opencode/cline) — Runner
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** 🧩 Предложение — Runner внешних движков (opencode/cline): EngineManager, адаптеры, WS-канал backend↔runner, LLM Proxy
+> **Решение до:** 2026-11-14
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D5, идея 5 + [AD-018](./ad-018-session-engine-selection.md),
 > [AD-022](./ad-022-typescript-stack-runner.md), `docs/ARCHITECTURE.md`).

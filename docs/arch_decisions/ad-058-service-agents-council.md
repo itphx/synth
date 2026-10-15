@@ -1,6 +1,6 @@
 # AD-058: Служебные агенты и консилиум (Council)
 
-> **Статус:** ⏳ Не реализовано (проект)
+> **Статус:** 🧩 Предложение (vision) — Служебные агенты и консилиум (Council): panel/consensus/debate/verifier/judge, Council Gate
 > **Дата:** 2026-10-08
 > **Источник:** перенесено из `AD-DRAFTS.md` (D13; черновик 2026-09-16); Roadmap + Obsidian-vault
 > `Loop-Engineering-Inner-Outer.md`, `Заметки/Harness Engineering.md` (READ-ONLY). **Включает

@@ -1,6 +1,6 @@
 # AD-089: Synth как платформа внешних событий и автоматизации
 
-> **Статус:** ⚠️ Частично реализовано (ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок — label/лимит/revoke + per-key rate limit, retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind; [AD-052](./ad-052-public-api-platform.md) — ✅ этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK `@itphx/synth-sdk`, перевод шлюза; первый add-on/gateway — Telegram-шлюз ([AD-087](./ad-087-gateways.md)) — реализован; остаток — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)), остаток AD-087 (HA/второй канал) и стриминг ответа наружу)
+> **Статус:** ⚠️ Частично — ядро Event/Binding/Router, единый funnel, API/UI, источник cron (AD-051), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», decision-маршрутизация (AD-084, opt-in), auto-bind, идентичности профиля + claim-flow, права внешних отправителей (fail-closed), надёжный Stop; остаток — Plugin SDK ([AD-090](./ad-090-extension-api.md)), пайплайны ([AD-059](./ad-059-pipeline-automation.md)), остаток AD-087 (HA/второй канал) и стриминг ответа наружу
 > **Дата:** 2026-10-08
 > **Обновлено:** 2026-10-13 — синхронизация статусов: [AD-052](./ad-052-public-api-platform.md)
 > закрыт целиком (этапы I–IV), первый add-on (`addons/synth-gateway-telegram`) реализован; остаток

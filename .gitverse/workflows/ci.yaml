@@ -23,6 +23,19 @@ on:
       - master
 
 jobs:
+  # Индекс AD и целостность ссылок/статусов. Зависимостей нет (только node:*-модули),
+  # поэтому job не ждёт pnpm install. Внимание: push-триггер выше игнорирует `docs/**`,
+  # поэтому docs-only изменения проверяются в pull_request (там paths-ignore нет).
+  adr-check:
+    name: AD-индекс (ссылки и статусы)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверка индекса и целостности AD
+        run: node scripts/adr-check.mjs
+
   lint-and-typecheck:
     name: Линтинг + Typecheck
     runs-on: ubuntu-latest
