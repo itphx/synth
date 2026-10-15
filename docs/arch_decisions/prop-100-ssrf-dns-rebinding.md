@@ -42,7 +42,7 @@
 
 ### Соседние дефекты того же класса (найдены при подготовке документа)
 
-Уточнение при подготовке документа: **MCP-SDK управляем** — `StreamableHTTPClientTransportOptions` (`@modelcontextprotocol/sdk@1.29.0`) принимает `fetch?: FetchLike` («Custom fetch implementation used for all network requests»), значит MCP-транспорт покрывается тем же пиннинг-хелпером, что и остальное (в исходной оценке он считался неохватываемым).
+Уточнение при подготовке документа: **MCP-SDK управляем** — `StreamableHTTPClientTransportOptions` (`@modelcontextprotocol/sdk@1.29.0`; проверено повторно на `1.32.1`) принимает `fetch?: FetchLike` («Custom fetch implementation used for all network requests»), значит MCP-транспорт покрывается тем же пиннинг-хелпером, что и остальное (в исходной оценке он считался неохватываемым).
 
 Кроме ребиндинга, в тех же путях видны отдельные дефекты того же класса (чинятся тем же транспортом):
 

@@ -1,6 +1,6 @@
 {
   "schema": "synth.security.policy/v1",
-  "updated": "2026-10-16",
+  "updated": "2026-10-15",
   "recordDir": "docs/security/releases",
   "requiredCheckIds": ["secret-scan", "auth-matrix", "ci-baseline", "dependencies", "security-review"],
   "authMatrix": {
@@ -20,22 +20,22 @@
   "dependencies": {
     "mode": "ratchet",
     "command": "pnpm audit --json",
-    "profile": "pre-upgrade",
+    "profile": "post-upgrade",
     "profileSwitch": {
       "owner": "владелец задачи апгрейда зависимостей (@devops/@orchestrator)",
-      "moveWhen": "после мержа апгрейдов @modelcontextprotocol/sdk >= 1.31.0 и simple-git 4.x (и проверки фактического pnpm audit) поменять profile на \"post-upgrade\"; заодно уточнить baseline по факту",
+      "moveWhen": "условие переключения: после апгрейдов @modelcontextprotocol/sdk >= 1.31.0 и simple-git 4.x (и проверки фактического pnpm audit) поменять profile на \"post-upgrade\" и уточнить baseline по факту. ВЫПОЛНЕНО 2026-10-15: @modelcontextprotocol/sdk 1.29.0 → 1.32.1, simple-git 3.36.0 → 4.0.2 (+ транзитивный proxy-addr 2.0.7 → 2.0.8), profile = \"post-upgrade\", baseline уточнён фактом (critical 0, high 39).",
       "why": "переключатель виден в диффе: ослабление/усиление ратчета — явное изменение политики, а не тихая правка проверки"
     },
     "profiles": {
       "pre-upgrade": {
         "baseline": { "critical": 3, "high": 42 },
         "failOnDirect": true,
-        "note": "Текущее состояние (2026-10-16, pnpm audit --json): 3 critical + 42 high (moderate ~48, low ~12–13 — база advisory дрейфует, для ратчета не важны); все 45 critical+high — транзитивные, у всех 15 затронутых модулей есть patched_versions. Действует до апгрейда sdk/simple-git."
+        "note": "ИСТОРИЧЕСКОЕ состояние до апгрейдов (2026-10-16, pnpm audit --json): 3 critical + 42 high (moderate ~48, low ~12–13 — база advisory дрейфует, для ратчета не важны); все 45 critical+high — транзитивные, у всех 15 затронутых модулей есть patched_versions. Действовало до апгрейда sdk/simple-git; профиль не активен."
       },
       "post-upgrade": {
         "baseline": { "critical": 0, "high": 39 },
         "failOnDirect": true,
-        "note": "Целевое состояние после @modelcontextprotocol/sdk >= 1.31.0 (снимает critical proxy-addr GHSA-jqcg-44mw-7w3h и high самого sdk) и simple-git 4.x (снимает critical GHSA-x6jw-m9v5-85vh, GHSA-v5rq-49vh-5v5c и high GHSA-g4wm-2vf7-vfgr, GHSA-858h-whjf-mvg5): critical 0, high ≈ 42 − 3 = 39. Значение 39 — ОЦЕНКА: уточнить фактическим `pnpm audit --json` сразу после апгрейдов и записать точное число."
+        "note": "АКТИВНЫЙ профиль с 2026-10-15 (факт, `pnpm audit --json` после апгрейдов): critical 0, high 39, moderate 48, low 12, прямых уязвимых модулей 0. Снято: critical proxy-addr GHSA-jqcg-44mw-7w3h (proxy-addr 2.0.8), critical GHSA-x6jw-m9v5-85vh (simple-git 4.0.2), critical GHSA-v5rq-49vh-5v5c (@simple-git/argv-parser 2.0.1), high GHSA-6qxp-vccf-f47h (@modelcontextprotocol/sdk 1.32.1), high GHSA-858h-whjf-mvg5 (simple-git). Остаток high 39 — транзитивные патч-уровня (undici 6, brace-expansion 15, fast-uri 7, js-yaml 3, nanoid 2, hono/vite/ws/postcss/source-map-js/ip-address по 1), все с patched_versions и вне прямых зависимостей; падение порогов — отдельной волной апгрейдов."
       }
     }
   }

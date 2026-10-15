@@ -83,7 +83,8 @@ pnpm install --frozen-lockfile
 pnpm audit --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).metadata.vulnerabilities))'
 ```
 
-Ожидаемо для профиля `pre-upgrade`: `critical ≤ 3`, `high ≤ 42`, прямых уязвимых модулей 0.
+Ожидаемо для активного профиля ратчета (`post-upgrade`, с 2026-10-15): `critical 0`, `high 39`,
+прямых уязвимых модулей 0. Канонические пороги — `policy.dependencies.profiles[policy.dependencies.profile].baseline`.
 Новые critical/high → апгрейд до `patched_versions`, либо исключение в записи (`exceptions[]` с
 `owner` и `dueRelease`), либо **блокировка релиза**.
 
@@ -92,8 +93,10 @@ pnpm audit --audit-level=high          # человекочитаемо; в ci.y
 node scripts/security-gate.mjs --only dependencies --skip-tests   # ровно то, что проверяет гейт
 ```
 
-Если апгрейды `@modelcontextprotocol/sdk ≥ 1.31.0` / `simple-git 4.x` уже в релизе — проверьте, что
-в `policy.json` переключён профиль ратчета на `post-upgrade` (и уточнён фактический `baseline`).
+Апгрейды `@modelcontextprotocol/sdk ≥ 1.31.0` (`1.32.1`) и `simple-git 4.x` (`4.0.2`) внесены 2026-10-15 —
+профиль ратчета в `policy.json` переключён на `post-upgrade`, `baseline` уточнён фактом
+(`critical 0`, `high 39`). Меняя пороги, правьте `policy.dependencies.profile`/`profiles` (историю
+состояний оставляйте в `profiles`).
 
 ## 5. Baseline CI
 

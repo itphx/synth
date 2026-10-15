@@ -103,8 +103,8 @@ git tag -a v0.10.2 -m "Release v0.10.2" && git push --follow-tags
 
 | Профиль (`policy.dependencies.profile`) | Пороги | Когда действует |
 |---|---|---|
-| `pre-upgrade` (сейчас) | `critical ≤ 3`, `high ≤ 42`, `failOnDirect: true` | до апгрейдов `@modelcontextprotocol/sdk ≥ 1.31.0` и `simple-git 4.x` |
-| `post-upgrade` (цель) | `critical 0`, `high ≈ 39`, `failOnDirect: true` | после мержа апгрейдов; число 39 — оценка (снимаются 3 critical и 3 high), уточняется фактическим `pnpm audit --json` |
+| `pre-upgrade` (историческое) | `critical ≤ 3`, `high ≤ 42`, `failOnDirect: true` | до апгрейдов `@modelcontextprotocol/sdk ≥ 1.31.0` и `simple-git 4.x`; профиль не активен |
+| `post-upgrade` (**сейчас**, с 2026-10-15) | `critical 0`, `high 39`, `failOnDirect: true` | после апгрейдов `@modelcontextprotocol/sdk 1.29.0 → 1.32.1`, `simple-git 3.36.0 → 4.0.2` (+ транзитивный `proxy-addr 2.0.7 → 2.0.8`). Пороги — факт по `pnpm audit --json` (critical 0, high 39, moderate 48, low 12, прямых 0): сняты 3 critical (proxy-addr, simple-git, @simple-git/argv-parser) и 3 high (сам sdk + два simple-git), остаток high — транзитивные патч-уровня |
 
 Переключатель — `policy.dependencies.profile` (поле `profileSwitch` описывает, **кто** и **когда**
 его двигает). Ослабление/усиление ратчета видно в диффе и не может быть сделано незаметно.

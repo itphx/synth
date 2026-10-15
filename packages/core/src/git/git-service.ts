@@ -57,19 +57,22 @@ export function deriveRepoName(url: string): string {
 }
 
 /**
- * ADR-076: не-git ключи, которые simple-git 3.36 блокирует по blocklist
- * (`@simple-git/argv-parser`, `parseEnv`). Остальные блокируемые ключи —
- * `GIT_*` (`GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH`, `GIT_SSH_COMMAND`,
- * `GIT_ASKPASS`, …) — вырезаются по префиксу в `sanitizeGitEnv`.
+ * ADR-076: не-git ключи, которые simple-git блокирует по blocklist
+ * (`@simple-git/argv-parser`: `isGitEnvKey` — `EDITOR`, `VISUAL`, `PAGER`,
+ * `PREFIX`, `SSH_ASKPASS`, …). Остальные блокируемые ключи — `GIT_*`
+ * (`GIT_EDITOR`, `GIT_PAGER`, `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, …) —
+ * вырезаются по префиксу в `sanitizeGitEnv`. `SSH_ASKPASS_REQUIRE` сам не в
+ * blocklist, но вырезается вместе с `SSH_ASKPASS`: сервис ставит его только сам
+ * (см. `createSshEnv`) — ambient-значение не должно протекать в git.
  * `allowUnsafeEditor`/`allowUnsafePager` сознательно НЕ включаем.
  */
-const BLOCKED_ENV_KEYS = new Set(['editor', 'pager', 'prefix', 'ssh_askpass']);
+const BLOCKED_ENV_KEYS = new Set(['editor', 'visual', 'pager', 'prefix', 'ssh_askpass', 'ssh_askpass_require']);
 
 /**
  * Санитизирует окружение перед передачей в `simpleGit.env()`: вырезает
- * `git*`-ключи (без учёта регистра) и не-git blocklist (`EDITOR`, `PAGER`,
- * `PREFIX`, `SSH_ASKPASS`). Иначе `process.env` хоста (например `EDITOR`
- * из dev-шелла) роняет вызов на blockUnsafeOperationsPlugin.
+ * `git*`-ключи (без учёта регистра) и не-git blocklist (`EDITOR`, `VISUAL`,
+ * `PAGER`, `PREFIX`, `SSH_ASKPASS`, …). Иначе `process.env` хоста (например
+ * `EDITOR` из dev-шелла) роняет вызов на environment-guard / blockUnsafeOperationsPlugin.
  */
 export function sanitizeGitEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
@@ -87,9 +90,17 @@ export function sanitizeGitEnv(source: NodeJS.ProcessEnv = process.env): Record<
  * ставит сам (`GIT_SSH_COMMAND` из расшифрованного SSH-ключа, `SSH_ASKPASS`
  * для ключей с passphrase). `allowUnsafeEditor`/`allowUnsafePager` не включаем —
  * соответствующие переменные вырезаются санитайзером.
+ *
+ * `allowEnvironment` (simple-git 4.x) — двойной opt-in: environment-guard
+ * отклоняет задачу, если через `.env()` явно передан `GIT_*`/blocklist-ключ,
+ * не названный здесь. Список — ровно те переменные, которые сервис ставит сам:
+ * `GIT_TERMINAL_PROMPT` (неинтерактивность) и SSH-набор из `createSshEnv`.
+ * Ambient-значения этих ключей не протекают: `.env()` получает санитайзенный
+ * `process.env` (см. `withEnv`).
  */
 const GIT_UNSAFE_OPTIONS = {
   unsafe: { allowUnsafeSshCommand: true, allowUnsafeAskPass: true },
+  allowEnvironment: ['GIT_TERMINAL_PROMPT', 'GIT_SSH_COMMAND', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE'],
 } as const;
 
 /** Создаёт simple-git с разрешёнными SSH/askpass-операциями. */
@@ -98,13 +109,16 @@ function createGit(baseDir?: string): SimpleGit {
 }
 
 /**
- * Применяет дополнительные env к simple-git. `simpleGit.env(obj)` ЗАМЕНЯЕТ
- * окружение процесса, поэтому базовый `process.env` обязательно объединяем —
- * но только после санитайза (иначе blocklist simple-git роняет вызов).
+ * Применяет env к simple-git. `simpleGit.env(obj)` ЗАМЕНЯЕТ окружение процесса,
+ * поэтому базовый `process.env` обязательно объединяем — но только после
+ * санитайза: с simple-git 4.x environment-guard отклоняет задачу, если в `.env()`
+ * явно передан `GIT_*`/blocklist-ключ без `allowEnvironment`, а ambient-`GIT_*`
+ * без этого не протекает. Поэтому `.env()` ставится ВСЕГДА (даже без `env`):
+ * дочерний git получает предсказуемое санитайзенное окружение и не наследует
+ * `GIT_*`/`EDITOR`/… из окружения хоста.
  * `GIT_TERMINAL_PROMPT=0` — неинтерактивность: git не ждёт ввода без askpass.
  */
 function withEnv(git: SimpleGit, env?: Record<string, string>): SimpleGit {
-  if (!env) return git;
   return git.env({ ...sanitizeGitEnv(process.env), GIT_TERMINAL_PROMPT: '0', ...env });
 }
 
