@@ -449,10 +449,11 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-092 | Обслуживание инстанса: обновление, миграции схемы данных (`meta.json`/`schemaVersion` + `synth migrate`), откат (`synth update --to <version>`, `helm rollback`), удаление (`synth uninstall [--purge]`), runbook эксплуатации | 🧩 Предложение | [prop-092](./docs/arch_decisions/prop-092-instance-lifecycle-maintenance.md) |
 | PROP-093 | Версионирование документации портала: версионные подкаталоги + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093](./docs/arch_decisions/prop-093-docs-versioning.md) |
 | PROP-094 | Наблюдаемость и эксплуатационные метрики: `/metrics` (Prometheus), `/ready` + раздельные probes, структурные логи (`request_id`/`session_id`, редакция секретов), SLO/алерты, sizing | 🧩 Предложение | [prop-094](./docs/arch_decisions/prop-094-observability-metrics.md) |
-| ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ⚠️ Частично | [adr-095](./docs/arch_decisions/adr-095-god-object-decomposition.md) |
+| ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095](./docs/arch_decisions/adr-095-god-object-decomposition.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096](./docs/arch_decisions/prop-096-background-subagent-sessions.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
+| PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099](./docs/arch_decisions/prop-099-memory-footprint-optimization.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.

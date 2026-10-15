@@ -10,7 +10,9 @@
 > - [ADR-042](./adr-042-hybrid-mode.md) «Гибридный режим» — `publish`/`fork` как перенос проекта между мирами;
 > - [PROP-055](./prop-055-instance-exchange.md) «Обмен между инстансами» — будущий канал синхронизации, опирается на портативный формат экспорта;
 > - [PROP-074](./prop-074-soft-delete-retention.md) «Скрытие вместо удаления» — hidden/purge сущности и их место в бэкапе;
-> - [ADR-079](./adr-079-local-home-independent-instances.md) «Локальный home» — раскладка путей локального инстанса.
+> - [ADR-079](./adr-079-local-home-independent-instances.md) «Локальный home» — раскладка путей локального инстанса;
+> - [PROP-092](./prop-092-instance-lifecycle-maintenance.md) «Обслуживание инстанса» — миграции/обновление/откат/uninstall, часть общего эксплуатационного контура;
+> - [PROP-048](./prop-048-self-help-skills-admin-mcp.md) «Self-help скиллы» — автоматизация эксплуатации (setup/verify/backup/restore) через локальный Synth.
 
 ## Решение
 
@@ -20,8 +22,10 @@
 2. **`synth restore --yes`** — проверяет архив (манифест, версия схемы, контрольная сумма), делает страховочную копию текущих данных и восстанавливает; без `--yes` и без `--dry-run` — отказ (по образцу `synth secrets rotate`).
 3. **Портативный экспорт/импорт данных** — проект целиком (проект + сессии + файлы + план + реестр репозиториев) в переносимый бандл, **без секретов**; переиспользует `remote/transfer.ts` и существующие `GET /sessions/:id/export` / `POST /sessions/import`.
 4. **Эксплуатационный гайд** — бэкап/восстановление каталога данных, мастер-ключа, PVC/K8s; снапшот-подход для онлайн-режима.
+5. **Первичная настройка (bootstrap-гайд)** — пошаговый setup инстанса «с нуля»: данные (`dataDir`/`--home`), ключи (мастер-ключ и его ротация), провайдеры/модели, workspace, первый вход (аутентификация/роли).
+6. **`synth doctor` / проверка (verify)** — health инстанса, целостность данных, доступность мастер-ключа и секретов, провайдеры/модели, write-доступ к `dataDir`, состояние миграций. После `restore` проверка (verify) **обязательна** и входит в сценарий восстановления.
 
-MVP — **пункты 1, 2, 4** (CLI + документация). Портативный экспорт (3) — второй этап. Онлайн-консистентный бэкап и PITR — после [PROP-032](./prop-032-history-storage-postgresql.md).
+MVP — **пункты 1, 2, 4, 5, 6** (CLI + документация): backup/restore + первичная настройка + `synth doctor`. Портативный экспорт (3) — второй этап. Онлайн-консистентный бэкап и PITR — после [PROP-032](./prop-032-history-storage-postgresql.md).
 
 ---
 
@@ -78,10 +82,37 @@ MVP — **пункты 1, 2, 4** (CLI + документация). Портат�
 
 ## Объём MVP и этапы
 
-1. **MVP:** `synth backup` / `synth restore` (offline + `--live` предупреждение, `--with-secrets`, `--dry-run`/`--yes`, манифест). Доковая страница «Бэкап и восстановление» + guidance по PVC/snapshot. ~2–4 дня.
-2. Портативный экспорт/импорт проекта (standalone + HTTP). ~3–5 дней.
+1. **MVP (контур «поднять → проверить → забэкапить → восстановить»):**
+   - `synth backup` / `synth restore` (offline + `--live` предупреждение, `--with-secrets`, `--dry-run`/`--yes`, манифест);
+   - **первичная настройка** — bootstrap-гайд (данные/ключи/провайдеры/workspace/первый вход);
+   - **`synth doctor`** — health, целостность данных, доступность ключей/мастера, провайдеры, write-доступ к `dataDir`, состояние миграций; проверка после `restore` обязательна;
+   - руководства (runbook): «Первичная настройка», «Проверка и диагностика», «Бэкап и восстановление» + guidance по PVC/snapshot. ~3–5 дней.
+2. Портативный экспорт/импорт проекта (standalone + HTTP) + руководство «Перенос проекта». ~3–5 дней.
 3. Admin API backup/restore для managed + шифрование. ~2–3 дня.
 4. Онлайн-консистентный/инкрементальный бэкап — после [PROP-032](./prop-032-history-storage-postgresql.md).
+
+## Утилиты и руководства
+
+Эксплуатационный контур — единый набор команд `synth` + страницы-руководства (runbook) портала:
+
+| Область | Утилита | Руководство (runbook) |
+|---|---|---|
+| Первичная настройка | `synth serve` / `synth init` (`dataDir`/`--home`, ключи, провайдеры, workspace, первый вход) | «Первичная настройка инстанса» (setup) |
+| Проверка | `synth doctor` (health, целостность данных, ключи/мастер, провайдеры, write-доступ к `dataDir`, миграции) | «Проверка и диагностика» (verify) |
+| Бэкап | `synth backup` | «Бэкап и восстановление» → «Бэкап» |
+| Восстановление | `synth restore --yes` + обязательный `synth doctor` после | «Бэкап и восстановление» → «Восстановление» |
+| Экспорт/импорт | `synth project export` / `synth project import` | «Перенос проекта» (export/import) |
+| Миграции | `synth migrate` ([PROP-092](./prop-092-instance-lifecycle-maintenance.md)) | «Обслуживание инстанса» → «Миграции» |
+
+- Руководства — **класс Runbook** ([docs/ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §1): пошаговые процедуры с
+  проверками и ожидаемым результатом, а не справка «что делает команда».
+- Миграции, обновление/откат и удаление (`synth migrate`, `synth update --to`, `synth uninstall`) детально —
+  [PROP-092](./prop-092-instance-lifecycle-maintenance.md); здесь — только место в общем контуре и правило
+  «бэкап перед необратимым шагом».
+- Автоматизация этих же шагов через локальный Synth (ops-скиллы: setup/verify/backup/restore/export/migrate) —
+  [PROP-048](./prop-048-self-help-skills-admin-mcp.md).
+- Сквозной сценарий проверяется целиком: **setup → verify → backup → restore → verify → migrate** (после
+  `restore` — обязательный `doctor`).
 
 ## Открытые вопросы
 
@@ -92,8 +123,8 @@ MVP — **пункты 1, 2, 4** (CLI + документация). Портат�
 
 ## Связи
 
-- [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-042](./adr-042-hybrid-mode.md), [PROP-055](./prop-055-instance-exchange.md), [PROP-074](./prop-074-soft-delete-retention.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md).
+- [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-042](./adr-042-hybrid-mode.md), [PROP-055](./prop-055-instance-exchange.md), [PROP-074](./prop-074-soft-delete-retention.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [PROP-092](./prop-092-instance-lifecycle-maintenance.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md).
 
 ## Порядок реализации
 
-MVP CLI + доки → портативный экспорт → admin API/шифрование → онлайн-консистентность (после PROP-032). Первый шаг даёт максимум пользы при низком риске и не зависит от PostgreSQL.
+MVP CLI (backup/restore + первичная настройка + `synth doctor`) + доки → портативный экспорт → admin API/шифрование → онлайн-консистентность (после PROP-032). Первый шаг даёт максимум пользы при низком риске и не зависит от PostgreSQL; миграции/обновление/откат — в [PROP-092](./prop-092-instance-lifecycle-maintenance.md), автоматизация скиллами — в [PROP-048](./prop-048-self-help-skills-admin-mcp.md).

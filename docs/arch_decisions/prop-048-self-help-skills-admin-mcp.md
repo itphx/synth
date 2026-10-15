@@ -7,12 +7,18 @@
 > **Связано:** [ADR-046](./adr-046-skills-and-slash-commands.md), [ADR-036](./adr-036-llm-gateway.md),
 > [PROP-037](./prop-037-commit-security-step.md), [PROP-056](./prop-056-synth-mcp-server.md),
 > [ADR-023](./adr-023-configuration.md), [ADR-029](./adr-029-granular-permissions.md),
-> [ADR-079](./adr-079-local-home-independent-instances.md).
+> [ADR-079](./adr-079-local-home-independent-instances.md), [PROP-091](./prop-091-backup-restore-transfer.md),
+> [PROP-092](./prop-092-instance-lifecycle-maintenance.md), [PROP-032](./prop-032-history-storage-postgresql.md).
 
 **Решение:** использовать Synth для развёртывания и сопровождения самого Synth (**dogfooding**): админ
 поднимает локальный Synth и **с его помощью** разворачивает сервер, управляет им и диагностирует проблемы.
 Механизм доставки — продуктовые **runbook-скиллы** (deploy/admin/troubleshoot) + **read-only status-MCP**
 Synth (здоровье, версии, состояние деплоя) + deploy-тулы, с **явным гейтингом ADMIN**.
+
+Тот же dogfooding покрывает **эксплуатацию** ([PROP-091](./prop-091-backup-restore-transfer.md),
+[PROP-092](./prop-092-instance-lifecycle-maintenance.md), хранилище — [PROP-032](./prop-032-history-storage-postgresql.md)):
+ops-скиллы автоматизируют **через локальный Synth** первичную настройку, `doctor`/проверку,
+бэкап/восстановление, экспорт/импорт, миграцию/откат (см. «Ops-скиллы» ниже).
 
 ## Контекст
 
@@ -39,6 +45,18 @@ Synth (здоровье, версии, состояние деплоя) + deploy
 - Продуктовые скиллы (формат `SKILL.md`, механизм — [ADR-046](./adr-046-skills-and-slash-commands.md))
   для типовых задач: **deploy**, **admin**, **troubleshoot**.
 - Скиллы несут пошаговый сценарий, ссылки на проверки/тулы и правила безопасной работы с секретами.
+
+### Ops-скиллы (эксплуатация через локальный Synth)
+
+Эксплуатационный контур ([PROP-091](./prop-091-backup-restore-transfer.md), [PROP-092](./prop-092-instance-lifecycle-maintenance.md), хранилище — [PROP-032](./prop-032-history-storage-postgresql.md)) автоматизируется **через локальный Synth** (dogfooding): поднятый локально инстанс своими скиллами и утилитами проходит шаги сопровождения.
+
+- **Первичная настройка** — bootstrap (данные/`--home`, ключи, провайдеры, workspace, первый вход).
+- **`doctor`/проверка** — health, целостность данных, доступность ключей/мастера, провайдеры, write-доступ к `dataDir`, миграции; после `restore` — обязательна.
+- **Бэкап/восстановление** — `synth backup`/`restore` по runbook, с проверкой результата.
+- **Экспорт/импорт** — перенос проекта между инстансами.
+- **Миграция/откат** — `synth migrate`, `synth update --to`, `helm rollback`.
+
+Каждый ops-скилл = runbook-скилл ([ADR-046](./adr-046-skills-and-slash-commands.md)) + при необходимости вызов утилиты/скрипта; секреты не попадают в контекст LLM ([ADR-036](./adr-036-llm-gateway.md), [PROP-037](./prop-037-commit-security-step.md)). Так «Synth эксплуатирует Synth»: те же шаги, что для клиента, выполняются агентом под своим локальным инстансом ([ADR-079](./adr-079-local-home-independent-instances.md)).
 
 ### Read-only status-MCP
 
