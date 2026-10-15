@@ -67,6 +67,7 @@ import { nowISO, ensureDataDir, MessageRole, generateStreamId, SYNTH_VERSION, DE
 import type { BusEvent } from '@itphx/synth-shared';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
+import { resolveCorsOrigin } from './lib/cors.js';
 import { createAuthMiddleware } from './auth/middleware.js';
 import type { AuthKit } from './auth/middleware.js';
 import { scopeGuard, projectGuard } from './auth/service-scope.js';
@@ -228,19 +229,20 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.get('/health', (c) => c.json({ status: 'healthy', version: SYNTH_VERSION, time: nowISO() }));
     app.get('/api/v2/health', (c) => c.json({ status: 'healthy', version: SYNTH_VERSION, time: nowISO() }));
 
-    // Динамический CORS origin: если задан explicit ORIGIN через env var, использовать его;
-    // если задан список allowedOrigins — проверять и эхо; если список пуст — разрешить все.
+    // Динамический CORS origin (fail-closed): явный ORIGIN через env `SYNTH_CORS_ORIGIN`;
+    // иначе явный dev-флаг `SYNTH_CORS_ALLOW_ALL=true` (отражать любой origin);
+    // иначе — точное совпадение с белым списком `server.allowedOrigins`.
+    // Пустой белый список НЕ разрешает все origin — заголовки CORS не выставляются.
     const allowedOrigins: string[] = backendConfig.synth.server.allowedOrigins ?? [];
-    const envCorsOrigin = process.env.SYNTH_CORS_ORIGIN;
+    const envCorsOrigin = process.env.SYNTH_CORS_ORIGIN || undefined;
+    const allowAllOrigins = process.env.SYNTH_CORS_ALLOW_ALL === 'true';
 
     app.use(cors({
-      origin: (origin) => {
-        if (envCorsOrigin) return envCorsOrigin;
-        if (!origin) return origin;
-        if (allowedOrigins.length === 0) return origin;
-        if (allowedOrigins.includes(origin)) return origin;
-        return allowedOrigins[0];
-      },
+      origin: (origin) => resolveCorsOrigin(origin, {
+        allowedOrigins,
+        envOrigin: envCorsOrigin,
+        allowAll: allowAllOrigins,
+      }),
       credentials: true,
     }));
 
@@ -1160,6 +1162,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
         return profile.id;
       },
       claimStore: identityClaimStore,
+      // AD-089 (claim-flow): анти-брутфорс одноразового кода (6 символов, TTL 10 мин) —
+      // per-user fixed window 60 c (ключ — Authorization-токен, не IP).
+      rateLimitGuard: createRateLimiter(
+        10,
+        60_000,
+        (c) => t('errors.rateLimited.identityClaim', undefined, c),
+      ),
       messages: {
         identityNotFound: (c) => t('errors.notFound.identity', undefined, c),
         claimNotFound: (c) => t('errors.notFound.identityClaim', undefined, c),

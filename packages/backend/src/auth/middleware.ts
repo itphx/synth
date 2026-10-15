@@ -9,6 +9,14 @@ import { createLazyOidcClient } from './oidc.js';
 const SESSION_COOKIE = 'user_session';
 
 /**
+ * Флаг `Secure` cookie сессии: по умолчанию `true`; локальная http-разработка
+ * отключает его явным `SYNTH_COOKIE_INSECURE=true` (небезопасно вне localhost).
+ */
+export function isSessionCookieSecure(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.SYNTH_COOKIE_INSECURE !== 'true';
+}
+
+/**
  * AD-052 (этап I): резолвер service-key (`synth_svc_…`) → синтетический
  * пользователь (RBAC) + контекст (`scopes`/`allowedProjects`/лимит).
  * `null` — секрет неизвестен/отозван/истёк либо резолвер не настроен.
@@ -44,6 +52,16 @@ function extractBearerToken(h: string | undefined): string | null {
 export function createAuthMiddleware(config: AuthMiddlewareConfig) {
   // Ленивый OIDC-клиент (мемоизация, безопасно при отсутствии oidc — null)
   const getOidcClient = createLazyOidcClient(config.oidc);
+
+  // Cookie сессии — `Secure` по умолчанию; отключается только явным opt-out
+  // для локальной http-разработки (`SYNTH_COOKIE_INSECURE=true`).
+  const cookieSecure = isSessionCookieSecure();
+  if (!cookieSecure) {
+    console.warn(
+      '[auth] SYNTH_COOKIE_INSECURE=true — cookie сессии устанавливается без флага Secure '
+      + '(допустимо только для локальной http-разработки)',
+    );
+  }
 
   /**
    * AD-052: машинная аутентификация по service-key. Распознаётся по префиксу
@@ -235,7 +253,7 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
     setCookie(c, SESSION_COOKIE, sessionId, {
       path: '/',
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: cookieSecure,
       sameSite: 'Lax',
       maxAge: config.sessionMaxAgeMinutes * 60,
     });

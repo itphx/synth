@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtemp, rm, access } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Hono } from 'hono';
+import { ensureDataDir } from '@itphx/synth-shared';
 import type { AuthConfig } from '@itphx/synth-shared';
 import { createAuthRoutes } from './auth.js';
 
@@ -66,5 +70,75 @@ describe('routes/auth: GET /auth/oidc-meta', () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).not.toHaveProperty('clientSecret');
     expect(body).not.toHaveProperty('client_secret');
+  });
+});
+
+// Path traversal в аватаре: username приходит из OIDC и раньше подставлялся в
+// `join(avatarsDir, `${username}.png`)` без санитайза.
+describe('routes/auth: GET/POST /auth/profile/avatar — санитайз username', () => {
+  let root: string;
+
+  const makeApp = (username: string): Hono => {
+    const kit = {
+      getCurrentUser: async () => ({
+        id: 'u1',
+        username,
+        roles: ['USER'],
+        preferredLanguage: 'ru',
+        createdAt: '',
+        teamRole: 'USER',
+        notes: '',
+        interviewCompleted: false,
+      }),
+    };
+    const app = new Hono();
+    app.route('/auth', createAuthRoutes(kit as never, BASE_CONFIG, undefined, root));
+    return app;
+  };
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'synth-avatar-'));
+    await ensureDataDir(root);
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+
+  it('POST с traversal-username (../../evil) → 400, файл вне каталога не создаётся', async () => {
+    const app = makeApp('../../evil');
+    const res = await app.request('/auth/profile/avatar', {
+      method: 'POST',
+      body: Buffer.from([1, 2, 3]),
+    });
+    expect(res.status).toBe(400);
+    await expect(access(join(root, 'evil.png'))).rejects.toThrow();
+  });
+
+  it('POST с username-разделителем пути (a/b) → 400', async () => {
+    const app = makeApp('a/b');
+    const res = await app.request('/auth/profile/avatar', {
+      method: 'POST',
+      body: Buffer.from([1]),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('GET с traversal-username (..) → 400', async () => {
+    const app = makeApp('..');
+    const res = await app.request('/auth/profile/avatar');
+    expect(res.status).toBe(400);
+  });
+
+  it('корректный username → 200, файл внутри каталога аватаров', async () => {
+    const app = makeApp('alice');
+    const post = await app.request('/auth/profile/avatar', {
+      method: 'POST',
+      body: Buffer.from([1, 2, 3]),
+    });
+    expect(post.status).toBe(200);
+    await expect(access(join(root, 'auth', 'avatars', 'alice.png'))).resolves.toBeUndefined();
+    const get = await app.request('/auth/profile/avatar');
+    expect(get.status).toBe(200);
   });
 });

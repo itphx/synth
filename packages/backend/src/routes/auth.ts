@@ -9,7 +9,7 @@ import { t } from '../lib/i18n.js';
 import { getDefaultLang, setDefaultLang, type Lang } from '../lib/i18n-config.js';
 import type { DefaultsStore, AppearanceDefaults } from '../lib/defaults-store.js';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 const OIDC_STATE_COOKIE = 'oidc_state';
 
@@ -31,6 +31,22 @@ export function createAuthRoutes(
 ): Hono {
   const app = new Hono();
   const avatarsDir = dataDir ? join(dataDir, 'auth', 'avatars') : null;
+  // Корень каталога аватаров (абсолютный) — для containment-проверки.
+  const avatarsRoot = avatarsDir ? resolve(avatarsDir) : null;
+
+  /**
+   * Безопасный абсолютный путь к файлу аватара по `username`.
+   * Отклоняет пустое имя, разделители пути (`/`, `\`) и `.`/`..` (traversal),
+   * а также результат вне каталога аватаров (defense-in-depth). `null` — отказ.
+   */
+  const resolveAvatarPath = (username: string): string | null => {
+    if (!avatarsRoot) return null;
+    const name = username.trim();
+    if (!name || name === '.' || name === '..') return null;
+    if (/[/\\\0]/.test(name)) return null;
+    const full = resolve(avatarsRoot, `${name}.png`);
+    return full.startsWith(avatarsRoot + sep) ? full : null;
+  };
 
   // Сохранённые умолчания перекрывают встроенные; uiScaleMobile/uiScaleDesktop: null — умолчание не задано.
   const resolveDefaults = async () => {
@@ -428,7 +444,10 @@ export function createAuthRoutes(
     if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     if (!avatarsDir) return c.body(null, 404);
 
-    const avatarPath = join(avatarsDir, `${user.username}.png`);
+    const avatarPath = resolveAvatarPath(user.username);
+    if (!avatarPath) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUsername', undefined, c) } }, 400);
+    }
     try {
       const data = await readFile(avatarPath);
       return new Response(data, {
@@ -445,11 +464,16 @@ export function createAuthRoutes(
     if (!user) return c.json({ error: { code: 'UNAUTHORIZED' } }, 401);
     if (!avatarsDir) return c.json({ error: { code: 'INTERNAL_ERROR' } }, 500);
 
+    const avatarPath = resolveAvatarPath(user.username);
+    if (!avatarPath) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUsername', undefined, c) } }, 400);
+    }
+
     try {
       const buffer = await c.req.arrayBuffer();
       if (buffer.byteLength === 0) {
         // Удаление аватара
-        await unlink(join(avatarsDir, `${user.username}.png`)).catch(() => {});
+        await unlink(avatarPath).catch(() => {});
         if (profiles) {
           const profile = await profiles.getOrCreateProfile({ username: user.username, roles: user.roles });
           const prefs = { ...(profile.preferences as Record<string, unknown> || {}), avatar: '' };
@@ -458,7 +482,6 @@ export function createAuthRoutes(
         }
         return c.json({ status: 'ok' });
       }
-      const avatarPath = join(avatarsDir, `${user.username}.png`);
       await writeFile(avatarPath, Buffer.from(buffer));
       if (profiles) {
         const profile = await profiles.getOrCreateProfile({ username: user.username, roles: user.roles });

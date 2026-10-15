@@ -7,6 +7,7 @@ import { join, extname, isAbsolute, normalize, resolve } from 'node:path';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { createMiddleware } from 'hono/factory';
 import type { ProviderConfig, ModelConfig, AgentDefinition, Message, PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig } from '@itphx/synth-shared';
 import {
   FileStore, SessionManager, EventBus, QueueProcessorManager,
@@ -1508,9 +1509,22 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // AD-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).
   // Standalone — профиль `local` (id генерируется стором, не литерал `local`);
   // линковка только через claim-flow (`POST /api/v2/me/identities/claim`).
+  // Анти-брутфорс одноразового кода — per-user fixed window 60 c (ключ — токен).
+  const identityClaimRateLimiter = new KeyRateLimiter(60_000);
+  const identityClaimRateLimitGuard = createMiddleware(async (c, next) => {
+    const key = c.req.header('Authorization') || 'anonymous';
+    if (!identityClaimRateLimiter.check(key, 10)) {
+      return c.json(
+        { error: { code: 'RATE_LIMITED', message: 'Превышен лимит запросов' } },
+        429,
+      );
+    }
+    await next();
+  });
   app.route('/api/v2/me', createIdentityRoutes(auth, profilesStore, {
     resolveProfileId: async () => (await profilesStore.getOrCreateProfile({ username: 'local' })).id,
     claimStore: identityClaimStore,
+    rateLimitGuard: identityClaimRateLimitGuard,
   }));
 
   // AD-069 §9.3: read-only прозрачность проектных инструкций (session/project scope).

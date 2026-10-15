@@ -69,6 +69,14 @@ export interface IdentityRoutesOptions {
    * `POST /identities/claim` не определяется (роут неактивен).
    */
   claimStore?: IdentityClaimStore;
+  /**
+   * AD-089 (claim-flow): необязательный rate-limit guard на `POST /identities/claim`
+   * (per-user, напр. fixed window 60 c) — защита 6-символьного одноразового кода
+   * от брутфорса. Core/backend передают свой middleware (в core — поверх
+   * `KeyRateLimiter`, в backend — `createRateLimiter`); без него роут работает
+   * без ограничения.
+   */
+  rateLimitGuard?: Middleware;
 }
 
 /**
@@ -125,6 +133,13 @@ export function createIdentityRoutes(
   // Код одноразовый: `consume` гасит его; повторно использовать нельзя.
   if (opts.claimStore) {
     const claimStore = opts.claimStore;
+
+    // AD-089 (claim-flow): анти-брутфорс одноразового кода — rate-limit guard
+    // (per-user) до обработчика. Регистрируется до роута, поэтому применяется
+    // к `POST /identities/claim` (guard ключуется по аутентификации, не по IP).
+    if (opts.rateLimitGuard) {
+      app.use('/identities/claim', opts.rateLimitGuard);
+    }
 
     app.post('/identities/claim', auth.requireAuth, async (c) => {
       let body: unknown;

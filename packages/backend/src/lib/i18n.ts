@@ -32,6 +32,7 @@ const en: Dictionary = {
   'errors.validation.groupsRequired': 'groups is required',
   'errors.validation.expectedFilesArray': 'expected { files: string[] }',
   'errors.validation.claimCodeRequired': 'Confirmation code is required',
+  'errors.validation.invalidUsername': 'Invalid username',
 
   // AD-089: приём внешних событий
   'errors.validation.invalidEvent': 'Invalid event payload',
@@ -73,6 +74,7 @@ const en: Dictionary = {
   'errors.faviconFetchError': 'Error fetching favicon',
   'errors.generic': 'Error',
   'errors.rateLimited.eventKey': 'Event API key rate limit exceeded',
+  'errors.rateLimited.identityClaim': 'Too many identity confirmation attempts, try again later',
   'errors.unavailable.eventsDisabled': 'External event ingestion is disabled',
 
   // Auth
@@ -125,6 +127,7 @@ const ru: Dictionary = {
   'errors.validation.groupsRequired': 'groups обязательны',
   'errors.validation.expectedFilesArray': 'expected { files: string[] }',
   'errors.validation.claimCodeRequired': 'Укажите код подтверждения',
+  'errors.validation.invalidUsername': 'Некорректное имя пользователя',
 
   // AD-089: приём внешних событий
   'errors.validation.invalidEvent': 'Некорректное тело события',
@@ -166,6 +169,7 @@ const ru: Dictionary = {
   'errors.faviconFetchError': 'Ошибка получения favicon',
   'errors.generic': 'Ошибка',
   'errors.rateLimited.eventKey': 'Превышен лимит запросов по API-ключу события',
+  'errors.rateLimited.identityClaim': 'Слишком много попыток подтверждения идентичности, повторите позже',
   'errors.unavailable.eventsDisabled': 'Приём внешних событий отключён',
 
   // Auth

@@ -10,7 +10,18 @@ export interface OidcConfig {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
+  /**
+   * Дополнительные допустимые `aud` (в дополнение к дефолтам: для id_token —
+   * `clientId`, для access_token — `clientId`/`account`). В Keycloak
+   * `id_token.aud` = clientId, а `access_token.aud` обычно `account` (строкой
+   * или массивом); доп. значения — только для нестандартных конфигураций.
+   * Issuer проверяется всегда.
+   */
+  audience?: string[];
 }
+
+/** Audience access_token по умолчанию (Keycloak): клиент либо `account`. */
+const DEFAULT_ACCESS_TOKEN_AUDIENCE = 'account';
 
 /** Подмножество документа discovery OpenID Connect. */
 export interface OidcDiscovery {
@@ -131,12 +142,19 @@ export class OidcClient {
 
   /**
    * Проверка JWT (id_token или access_token) через JWKS провайдера.
+   * Проверяются подпись, `iss` (issuer) и `aud`.
    * Возвращает User-подобный объект: id, username, email, roles.
    */
   async verifyToken(token: string): Promise<OidcUser> {
     const discovery = await this.getDiscovery();
     const jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
-    const { payload } = await jwtVerify(token, jwks);
+    // Тип bearer-токена заранее неизвестен (id_token или access_token), поэтому
+    // принимаем audience обоих классов: clientId (id_token) и clientId/`account`
+    // (access_token Keycloak). Issuer проверяется всегда.
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer: this.config.issuer,
+      audience: this._anyTokenAudience(),
+    });
     return extractUser(payload, this.config.clientId);
   }
 
@@ -147,9 +165,41 @@ export class OidcClient {
   async verifyTokens(idToken: string, accessToken: string): Promise<OidcUser> {
     const discovery = await this.getDiscovery();
     const jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
-    const { payload: idPayload } = await jwtVerify(idToken, jwks);
-    const { payload: accessPayload } = await jwtVerify(accessToken, jwks);
+    const { payload: idPayload } = await jwtVerify(idToken, jwks, {
+      issuer: this.config.issuer,
+      // id_token.aud = clientId (+ доп. из конфига).
+      audience: this._idTokenAudience(),
+    });
+    const { payload: accessPayload } = await jwtVerify(accessToken, jwks, {
+      issuer: this.config.issuer,
+      // Keycloak кладёт в access_token.aud `account`, а клиента — в `azp`;
+      // принимаем clientId ИЛИ `account` (+ доп. из конфига), чтобы не ломать
+      // валидные токены. `azp` намеренно не форсим (иначе токены realm-клиентов,
+      // напр. `synth-cli`, отвергались бы) — issuer и подпись проверяются всегда.
+      audience: this._accessTokenAudience(),
+    });
     return extractUserFromTokens(idPayload, accessPayload, this.config.clientId);
+  }
+
+  /** Допустимые `aud` id_token: clientId (+ дополнительные из конфига). */
+  private _idTokenAudience(): string[] {
+    return [...new Set([this.config.clientId, ...(this.config.audience ?? [])])].filter(Boolean);
+  }
+
+  /** Допустимые `aud` access_token: clientId ИЛИ `account` (+ дополнительные). */
+  private _accessTokenAudience(): string[] {
+    return [
+      ...new Set([
+        this.config.clientId,
+        DEFAULT_ACCESS_TOKEN_AUDIENCE,
+        ...(this.config.audience ?? []),
+      ]),
+    ].filter(Boolean);
+  }
+
+  /** Допустимые `aud` для bearer-токена неизвестного типа — объединение. */
+  private _anyTokenAudience(): string[] {
+    return [...new Set([...this._idTokenAudience(), ...this._accessTokenAudience()])];
   }
 }
 

@@ -56,6 +56,14 @@ export VITE_PORT="${VITE_PORT:-5002}"
 export VITE_ALLOWED_HOSTS="${VITE_ALLOWED_HOSTS:-true}"
 export SYNTH_CORS_ORIGIN="${SYNTH_CORS_ORIGIN:-}"
 
+# CORS backend по умолчанию fail-closed (пустой белый список НЕ разрешает все
+# origin). Для локальной разработки UI (другой порт) открываем CORS явно.
+export SYNTH_CORS_ALLOW_ALL="${SYNTH_CORS_ALLOW_ALL:-true}"
+
+# Cookie сессии — `Secure` по умолчанию; локальная разработка идёт по http,
+# поэтому явно отключаем флаг только в dev.
+export SYNTH_COOKIE_INSECURE="${SYNTH_COOKIE_INSECURE:-true}"
+
 mkdir -p "$LOGDIR"
 
 # Очистка занятых портов (если предыдущий запуск завершился некорректно)

@@ -101,4 +101,24 @@ describe('AD-089 (claim-flow): идентичности на backend (user.id �
     expect(res.status).toBe(401);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('UNAUTHORIZED');
   });
+
+  it('POST /me/identities/claim — превышение лимита попыток → 429 RATE_LIMITED', async () => {
+    // Отдельный токен (lead-key-789) — свой rate-limit-ключ, не пересекается с
+    // предыдущими тестами. Лимит route — 10 запросов / 60 c.
+    const token = 'lead-key-789';
+    const send = (): Promise<Response> =>
+      req('/api/v2/me/identities/claim', jsonInit('POST', { code: 'ZZZ-ZZZ' }), token);
+
+    // В пределах лимита запрос обрабатывается (неизвестный код → 404, не 429).
+    const first = await send();
+    expect(first.status).toBe(404);
+    for (let i = 1; i < 10; i++) {
+      expect((await send()).status).toBe(404);
+    }
+
+    // 11-й запрос в окне — превышение лимита.
+    const limited = await send();
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as { error: { code: string } }).error.code).toBe('RATE_LIMITED');
+  });
 });
