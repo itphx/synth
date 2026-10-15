@@ -1,6 +1,6 @@
 {
   "name": "@itphx/synth-sdk",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "Типизированный клиент публичного API Synth (ADR-052)",
   "license": "MIT",
   "type": "module",
