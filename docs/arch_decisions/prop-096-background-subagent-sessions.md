@@ -33,7 +33,7 @@ MVP: `background` у `task` + уведомление о завершении + �
 ### Модель
 
 - **Запуск.** `task({ prompt, agent, background: true, contextMode })`:
-  1. создаёт дочернюю сессию существующим путём (`fork`/`createSession` по режиму контекста, AD-026) — это **materialization**, не прямой request (инвариант 16);
+  1. создаёт дочернюю сессию существующим путём (`fork`/`createSession` по режиму контекста, AD-026) — это **materialization**, не прямой request (инвариант 15);
   2. регистрирует фоновый прогон в супервизоре (см. PROP-097: тот же реестр — для детей тип `subagent`);
   3. немедленно возвращает `tool_result { childSessionId, status: 'running' }`.
 - **Уведомление родителя.** По завершении: событие `child.completed|failed|cancelled` (EventHub) + **инъекция в родительскую сессию** системного сообщения-уведомления (`metadata.subagent`, `childSessionId`, статус, краткое резюме/ошибка). Это делает результат видимым и в истории, и в UI (по аналогии с `Notice` для планировщика).

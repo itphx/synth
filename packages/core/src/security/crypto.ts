@@ -8,7 +8,7 @@ import { atomicWrite } from '@itphx/synth-shared';
  *
  * Формат токена: `enc:v1:<base64 iv(12 Б)>:<base64 authTag(16 Б)>:<base64 ciphertext>`.
  * Значение без префикса `enc:v1:` считается plaintext и возвращается как есть
- * (back-compat со старыми данными, как в прототипе t11).
+ * (back-compat со старыми данными).
  */
 
 export const ENCRYPTED_PREFIX = 'enc:v1:';

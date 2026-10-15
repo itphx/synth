@@ -53,7 +53,7 @@ describe('crypto: encrypt/decrypt (ADR-076)', () => {
   it('не-enc:v1 значение возвращается как есть (back-compat plaintext)', () => {
     expect(isEncrypted('plain')).toBe(false);
     expect(decryptSecret('plain-private-key', KEY)).toBe('plain-private-key');
-    expect(decryptSecret('encrypted:legacy-t11', KEY)).toBe('encrypted:legacy-t11');
+    expect(decryptSecret('encrypted:legacy-data', KEY)).toBe('encrypted:legacy-data');
   });
 
   it('tamper ciphertext → SecretDecryptionError', () => {

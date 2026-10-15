@@ -19,15 +19,10 @@
 9. Ошибки LLM — через `classifyLlmError`/`isLlmErrorRecoverable`; строки движка — через ключи `shared/i18n` (ADR-041).
 10. Конфиг — приоритет CLI-флаги > `SYNTH_*` env > config.yaml > defaults; читать только через `@itphx/synth-shared/config` (ADR-023).
 11. Состояние агента передаётся через Tool Use, а не JSON-блоком в ответе модели (ADR-039).
-12. Прототип `~/dev/aic/t11` — **read-only**: сначала смотрим, как сделано там; решения конечного продукта могут отличаться.
-13. Коммит — только по явной просьбе пользователя. Новые зависимости/инструменты — только с разрешения.
-14. Секреты (токены, ключи, пароли) — не коммитить и не писать открытым текстом в журнал задач и документацию (только плейсхолдеры); секреты живут в `secrets/` вне git-репозитория `synth/`.
-15. AGENTS.md (корневой и пакетные) держать в актуальном состоянии: изменил поведение пакета/процесс/окружение — обнови соответствующий файл; правки инструкций согласовывать с пользователем; процедура — скилл `synth-agents-md`.
-16. Создание сессии — только через единый funnel `RequestSessionService` → `EventRouter` (явный запрос — `direct`, внешнее событие — через Router); `SessionManager.createSession` — materialization-примитив (fork/import/материализация события), для прямых запросов его не вызывать (ADR-089).
-
-## Прототип
-
-`~/dev/aic/t11` (t11). Код **не менять** — только читать. Локально: бэкенд `:5100`, UI `:5101`, ключ аутентификации `your-secret-api-key`. При новой функциональности сначала исследовать, как это сделано в прототипе; решения конечного продукта могут отличаться.
+12. Коммит — только по явной просьбе пользователя. Новые зависимости/инструменты — только с разрешения.
+13. Секреты (токены, ключи, пароли) — не коммитить и не писать открытым текстом в журнал задач и документацию (только плейсхолдеры); секреты живут в `secrets/` вне git-репозитория `synth/`.
+14. AGENTS.md (корневой и пакетные) держать в актуальном состоянии: изменил поведение пакета/процесс/окружение — обнови соответствующий файл; правки инструкций согласовывать с пользователем; процедура — скилл `synth-agents-md`.
+15. Создание сессии — только через единый funnel `RequestSessionService` → `EventRouter` (явный запрос — `direct`, внешнее событие — через Router); `SessionManager.createSession` — materialization-примитив (fork/import/материализация события), для прямых запросов его не вызывать (ADR-089).
 
 ## Карта репозитория
 
@@ -175,7 +170,7 @@ $SYNTH_DATA_DIR/ → sessions/ projects/ providers/ models/ agents/ context/ aut
 
 Переход — только после критерия и явной команды пользователя (или молчаливого согласия).
 
-1. **Investigate** — прочитать затронутые файлы, найти паттерны, при необходимости сверить прототип, задать вопросы. Не править код, не запускать сервер. *Критерий:* сформулированы файлы под правку и почему.
+1. **Investigate** — прочитать затронутые файлы, найти паттерны, задать вопросы. Не править код, не запускать сервер. *Критерий:* сформулированы файлы под правку и почему.
 2. **Plan** — атомарный todo-список, оценка влияния на другие части, подтверждение пользователя. *Критерий:* пользователь подтвердил план (или сказал «приступай»).
 3. **Implement** — строго по плану, минимальными правками, в код-стиле проекта. *Критерий:* `pnpm build` из `synth/` без ошибок.
 4. **Verify** — по порядку: `pnpm typecheck` → `pnpm lint` → `pnpm test`; затем `./scripts/dev.sh backend` + curl затронутых эндпоинтов; затем `./scripts/dev.sh` (backend+UI) и визуальная проверка UI в браузере. Не ставить новые инструменты, не писать сложные bash-скрипты, не гонять LLM без просьбы, не писать в JSON-хранилище вручную (провайдер/модель — через API, сообщение — `POST /sessions/:id/prompt`). *Критерий:* typecheck+lint+test зелёные, эндпоинты отвечают ожидаемым кодом/форматом.
@@ -295,7 +290,7 @@ env SYNTH_DEFAULT_WORKSPACE > config storage.defaultWorkspace > {DATA}/workspace
 
 - **Хуки (ADR-030).** `HookBus` (`engine/hooks/hook-bus.ts`) — ядровый in-process примитив, отдельный от session-`EventBus`: `on/off/emit/emitAsync`, priority, `sync` (pre, blockable/patch) и `async` (post, fire-and-forget + timeout 5s). Эмиты: `pre_tool_use`, `post_tool_use`, `plan_approved`, `permission_denied`, `agent_spawned/completed/failed`, `session_start`/`session_end` (в т.ч. при архивации).
 - **Внешние события (ADR-089).** `EventRouter`: порядок `allowedSources` → dedup → `EventBinding` → `RouteRuleProvider` → фоллбек (при `events.autoBind` и `identity.chatKey|threadKey` — `{kind:'bind'}`; иначе по `events.defaultMode`: `bound` → `drop no_route`, `ephemeral` → временная сессия). `EventIngress` — ingest/нормализация, `EventDelivery` — `run`/`defer`, `DecisionRuleProvider` (ADR-084) — decision-шаг при `events.decisionRouting` (fail-safe). Хранилища: `{dataDir}/events/{bindings.json, journal.jsonl, routes.json, api-keys.json}`.
-- **Единый funnel (инвариант 16).** Создание сессии — только через `RequestSessionService` (explicit → `direct` + hook `session_requested`; внешнее → hook `external_event` → Router); `forkSession`/backend `/import`/`remote/transfer.ts` — materialization, не request. `agentTemplate` резолвится через `AgentRegistry` (политика `unknownAgentTemplate` `drop`/`default-agent`); событийная сессия без явного шаблона получает агент по умолчанию инстанса (`deps.resolveDefaultAgent`).
+- **Единый funnel (инвариант 15).** Создание сессии — только через `RequestSessionService` (explicit → `direct` + hook `session_requested`; внешнее → hook `external_event` → Router); `forkSession`/backend `/import`/`remote/transfer.ts` — materialization, не request. `agentTemplate` резолвится через `AgentRegistry` (политика `unknownAgentTemplate` `drop`/`default-agent`); событийная сессия без явного шаблона получает агент по умолчанию инстанса (`deps.resolveDefaultAgent`).
 - **Ключи (ADR-089/ADR-052).** Несколько API-ключей привязки на `EventBinding`: обязательная глобально уникальная `label`, `description?`/`expiresAt?`/`revokedAt?`/`rateLimitPerMinute?`; секрет `synth_evt_<base64url>` — at-rest sha256, plaintext один раз; per-key лимит (`KeyRateLimiter`, окно 60 c) → 429 `RATE_LIMITED`. **binding-key** (жёстко привязан к source/чату привязки) ≠ **service-key** (ADR-052: `scopes` + `allowedProjects`). Ключи инстанс-локальные (не переносятся publish/fork). RBAC managed: мутации bindings/routes и чтение keys — LEAD/ADMIN.
 - **Runtime-настройки «События» (ADR-089).** `GET/PUT/DELETE /api/v2/settings/events` (`RuntimeSettings.events` + `mergeEventsConfig`): `enabled`, `defaultMode`, `ephemeralTtl`, `journalRetentionDays`, `allowedSources`, `unknownAgentTemplate`, `keyRateLimitPerMinute`, `decisionRouting`, `autoBind`, `autoBindAgentTemplate`, `identityMap` (override поверх `ProfileData.identities[]`). Live через `EventRouter.updateConfig`/`RequestSessionService.updateConfig`; `enabled: false` → ingest 503. Retention журнала — `startEventJournalPruner` (prune на старте и каждые 6 ч).
 - **Владелец и attribution (ADR-089).** Владелец — человек (`principalId`), а не чат: `deps.resolveExternalIdentity` (override `events.identityMap` → профиль `identities[]` → чат-fallback) → per-event владелец → `resolveOwnerId` (standalone — `local`). Funnel уведомляет хаб (`deps.onSessionMaterialized` → `EventHub.subscribeToSession`) **до** доставки события; при доставке в существующую сессию `_maybeReassignOwner` меняет только пустого/машинного владельца (`service:<keyId>`), «чужой человеческий» не трогает. В `metadata` — `principal_id`/`chat_key`/`thread_key`, `author` из `payload.from`; cron — `Scheduler`.

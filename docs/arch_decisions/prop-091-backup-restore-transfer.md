@@ -66,7 +66,7 @@ MVP — **пункты 1, 2, 4, 5, 6** (CLI + документация): backup/
 
 - Формат: `synth-project-<slug>-<version>.zip` — `project.json`, `sessions/*.json`, `plan`, `repos[]` (без SSH-ключей), `workspace/` (опционально).
 - Операции: `synth project export <id>` / `synth project import <file>`; HTTP-вариант под scope `sessions:create` (managed).
-- Импорт — **materialization** (не `session.requested`), паритет с `POST /sessions/import` (инвариант 16, [ADR-089](./adr-089-external-events-automation.md)).
+- Импорт — **materialization** (не `session.requested`), паритет с `POST /sessions/import` (инвариант 15, [ADR-089](./adr-089-external-events-automation.md)).
 - Совместимость: манифест с версией схемы; неизвестная старшая версия → отказ, младшая → миграция.
 
 ### API для managed (этап 3, опционально)
