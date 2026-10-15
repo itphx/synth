@@ -36,6 +36,10 @@ import {
   mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig,
 } from '../../storage/runtime-settings.js';
 import { migrateSessionScopeSnapshots } from '../../storage/migrations.js';
+import {
+  assertInstanceDataNotTooNew,
+  checkInstanceCompatibility,
+} from '../../storage/instance-meta.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { SkillBundleStore } from '../../storage/skill-bundle-store.js';
@@ -77,6 +81,16 @@ export async function createStandaloneDeps(
 ) {
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
+
+  // PROP-092: guard совместимости схемы данных — данные новее Synth → отказ старта,
+  // устаревшая схема → предупреждение (миграция — `synth migrate`), без записи.
+  await assertInstanceDataNotTooNew(dataDir);
+  const schemaCompatibility = await checkInstanceCompatibility(dataDir);
+  if (schemaCompatibility.status === 'pending') {
+    console.warn(
+      `⚠️ Схема данных устарела (${schemaCompatibility.currentVersion} → ${schemaCompatibility.expectedVersion}). Запустите: synth migrate`,
+    );
+  }
 
   // Runtime-настройки (ADR-005): workspace из {dataDir}/settings.json приоритетнее config/env
   const settingsStore = new RuntimeSettingsStore({ dataDir });

@@ -1045,4 +1045,26 @@ program
       }),
   );
 
+program
+  .command('migrate')
+  .description('Применить миграции схемы данных инстанса (PROP-092)')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--dry-run', 'показать план миграций без записи')
+  .option('--yes', 'подтвердить необратимую миграцию (обязательно без --dry-run)')
+  .action(async (options) => {
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
+
+    const { runMigrateCommand } = await import('./maintenance/migrate.js');
+    const code = await runMigrateCommand({
+      dataDir,
+      dryRun: !!options.dryRun,
+      yes: !!options.yes,
+    });
+    if (code !== 0) process.exit(code);
+  });
+
 program.parse();

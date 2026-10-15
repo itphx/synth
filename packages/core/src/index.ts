@@ -403,6 +403,21 @@ export type {
 export { resolveProjectSkillSeed, resolveProjectMcpSeed } from './engine/skills/seed.js';
 export { migrateSessionScopeSnapshots, SESSION_SCOPE_SNAPSHOT_MIGRATION } from './storage/migrations.js';
 export type { SessionScopeMigrationDeps } from './storage/migrations.js';
+// PROP-092: версионирование схемы данных инстанса, реестр миграций, guard совместимости.
+export {
+  SCHEMA_VERSION,
+  MIGRATIONS,
+  SESSION_SCOPE_SNAPSHOTS_MIGRATION_V1,
+  InstanceDataTooNewError,
+  readInstanceMeta,
+  writeInstanceMeta,
+  checkInstanceCompatibility,
+  assertInstanceDataNotTooNew,
+  runMigrations,
+} from './storage/instance-meta.js';
+export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } from './storage/instance-meta.js';
+export { runMigrateCommand } from './maintenance/migrate.js';
+export type { MigrateCommandOptions } from './maintenance/migrate.js';
 export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
 export { createSkillRoutes } from './server/routes/skills.js';

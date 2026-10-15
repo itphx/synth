@@ -25,6 +25,8 @@ import {
   SSHKeyStore, detectRuntimeDeps, syncProvidersFromEnv,
   HookBus,
   startEphemeralSweeper,
+  assertInstanceDataNotTooNew,
+  checkInstanceCompatibility,
   EventBindingStore, EventApiKeyStore, EventJournalStore, EventRouter, RequestSessionService, EventIngress, eventToMessage,
   RouteRuleStore, ProjectRuleProvider, DecisionRuleProvider,
   IdentityClaimStore,
@@ -50,6 +52,17 @@ export async function createBackendDeps(config: BackendConfig) {
   // Хранилища
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
+
+  // PROP-092: guard совместимости схемы данных (паритет со standalone-core):
+  // данные новее Synth → отказ старта, устаревшая схема → предупреждение.
+  await assertInstanceDataNotTooNew(dataDir);
+  const schemaCompatibility = await checkInstanceCompatibility(dataDir);
+  if (schemaCompatibility.status === 'pending') {
+    console.warn(
+      `⚠️ Схема данных устарела (${schemaCompatibility.currentVersion} → ${schemaCompatibility.expectedVersion}). Запустите: synth migrate`,
+    );
+  }
+
   const fileStore = new FileStore({ dataDir });
   const projectStore = new ProjectStore({ dataDir });
   // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
