@@ -205,12 +205,29 @@
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
 - `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
-- `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (ADR-046 Фаза 1);
-  гейты уровней (system/project/session) — `scope.ts` (`resolveSkillAvailability`),
-  сид новых проектов — `seed.ts` (мастер `disabled` + `disabledForNewProjects`).
-- `engine/commands/*` — slash-команды и bundles (ADR-046 §7): `parser`/`template`/
+- `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (ADR-046);
+  гейты уровней (system/project/session) — `scope.ts` (`resolveSkillAvailability`,
+  `skill.scope_disabled`), сид новых проектов — `seed.ts` (мастер `disabled` +
+  `disabledForNewProjects`); ленивая инвалидация кэша по mtime/size — `watcher.ts`;
+  per-skill права `permission.rules.skill` (allow/deny/ask + glob, наследование) —
+  `permission/evaluator.ts`/`derive.ts`.
+  **Формат `SKILL.md` (spec):** Markdown + толерантный YAML-frontmatter
+  (`shared/src/skills/frontmatter.ts`, js-yaml; невалидный YAML → `issues` без throw,
+  неизвестные ключи → `SkillMeta.extra`). Обязательные — `name` (1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`, совпадает с
+  именем каталога) и `description` (1–1024); опциональные — `license`, `compatibility`,
+  `metadata`, `allowed-tools` (advisory), `when_to_use`, `model`, `agent`, `argument-hint`,
+  `user-invocable` (default `true`), `disable-model-invocation` (default `false`);
+  `metadata.synth.*` — `tags`, `category`, `related_skills`, `requires_capabilities`,
+  `requires_toolsets`, `fallback_for_capabilities`, `agents`, `groups`, `scope`,
+  `trigger`, `command`, `mode`. `invocation` — комбинация двух флагов: `both`/`user`/
+  `model`/`none` (`scope.ts`). Невалидный скилл не попадает в реестр (ошибка в
+  `GET /api/v2/skills?diagnostics=1`), discovery остальных не ломает. Тесты —
+  `engine/skills/*.test.ts`.
+- `engine/commands/*` — slash-команды и bundles (ADR-046): `parser`/`template`/
   `discovery`/`registry`/`bundles`/`builtin`/`resolver`/`service`; резолвинг в core
-  до LLM, событие `command.invoked`.
+  до LLM, событие `command.invoked`; per-command права `permission.rules.command`;
+  локальные builtin-ответы — `Message.ephemeral` (вне LLM-контекста); inline shell
+  (`` !`cmd` ``) — opt-in через `execute_shell`. Тесты — `engine/commands/*.test.ts`.
 - `engine/tools/*` — `ToolRegistry` + встроенные тулы (fs, shell, git, search, web,
   plan, todo, project, task, skill, profile_update); git-тулы принимают необязательный `repo_path`
   (containment внутри `project.workspace`), SSH-окружение — `engine/tools/git-ssh.ts`

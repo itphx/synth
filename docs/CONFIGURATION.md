@@ -445,7 +445,7 @@ inline shell в шаблонных командах и удалёнными ка
 - Прозрачность: `GET /api/v2/context/instructions?session_id=…` и событие `context.instructions_loaded`; UI — секция «Проектные инструкции» в правой панели (вкладка «Сессия»).
 - `/init` — builtin-команда (статус `prompt`), генерирует/обновляет `AGENTS.md`; скилл `synth-agents-md` (`/agents-md`) — аудит/обновление инструкций.
 
-### Slash-команды (`commands.*`, ADR-046 §7)
+### Slash-команды (`commands.*`, ADR-046)
 
 Резолвинг `/`-команд выполняется в core. Секция `commands`:
 

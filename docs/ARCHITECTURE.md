@@ -211,6 +211,36 @@ synth/
 - Перезапуск движка без потери истории
 - Очередь сообщений на бэкенде, доставка по одной
 
+## Скиллы и slash-команды
+
+Механизм скиллов и `/`-команд (ADR-046). Скилл — папка с `SKILL.md` + supporting-файлами;
+скиллы — **инструкции**, новых тулов не регистрируют, единственный core-тул — `skill`.
+
+- **Discovery** (`engine/skills/*`): `{project.workspace}/.synth/skills` (project) >
+  `{dataDir}/skills` (instance) > `config.skills.paths` > внешние read-only каталоги
+  (`.opencode/skills|skill`, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`) >
+  `config.skills.urls` (read-only индекс в `{dataDir}/skills-cache`, `trusted:false`).
+  Дедуп first-wins, проигравшие — `shadowed`; кэш инвалидируется лениво по mtime/size (`watcher.ts`).
+- **Project-trust** (`trust.ts`): скиллы недоверенного проектного каталога (нет в
+  `skills.trustedProjectDirs`) видны, но не грузятся — защита от подмены через `git pull`.
+- **Каталог в промпт** (`catalog.ts` + Composer): только `name` + обрезанный `description`;
+  стабильная часть (system/project) — тир `stable`, session-динамика/`unavailable` — `volatile`.
+  Каталог добавляется и саб-агентам (`task`, binding родителя).
+- **Тул `skill`** (`tools/skill.ts`): тело `SKILL.md` как `<skill_content>` + base dir +
+  ≤10 supporting-файлов; обрезка `ToolOutputStore` (50 KB / 2000 строк); capability-aware —
+  при нехватке capabilities делегирование через `task`.
+- **Уровни включения** (`scope.ts`, модель ADR-071 §2.4): `system`/`project`/`session`; hard-gate
+  (мастер `disabled`, `project.enabled`) — live; дефолты/снапшот (`skillsDefaultOn`) — snapshot;
+  дефолт opt-in. Единый резолвер — `resolveSkillAvailability`.
+- **Slash-команды** (`engine/commands/*`): резолвинг в core до LLM (UI/CLI/гибрид); встроенные
+  (`/help`, `/skills`, `/commands`, `/summary`, `/init`), шаблонные `.md` (`$ARGUMENTS`/`@file`),
+  скиллы-как-команды и bundles (`/bundle-name`); права `permission.rules.command`; inline shell
+  (`` !`cmd` ``) — opt-in через `execute_shell`. События `skill.invoked`/`command.invoked`;
+  builtin `skill-creator` — скилл-инструкция в коде.
+
+Эндпоинты/RBAC — `docs/API_V2.md` §5.17–§5.17.2; конфиг — `docs/CONFIGURATION.md`
+(секции `skills`/`commands`); формат `SKILL.md` — `packages/core/AGENTS.md`.
+
 ## Внешние события и хуки
 
 Ядро ADR-030 (min) + ADR-089: события агента и внешние события идут через общую

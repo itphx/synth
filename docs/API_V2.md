@@ -291,7 +291,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | PATCH | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Обновить заметку |
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Удалить заметку |
 
-> `SessionSettings` MCP/скиллов (ADR-071 §2.4 / ADR-046 §4.5): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
+> `SessionSettings` MCP/скиллов (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
 > **Видимость `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии проектов, участником которых является пользователь (`owner` проекта или любой `members`, любая роль). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости. Доступ **по id** (`GET /:id/status|prompt|stats`, `POST /:id/prompt`, `GET /:id/messages` и т.п.) — владелец сессии **или** участник проекта сессии, а также `ADMIN`/`LEAD`; иначе `403 FORBIDDEN`. Хелпер — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
 > **Scope service-key (ADR-052):** `GET /` и `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages` — `sessions:read`. При непустом `allowedProjects` проектная проекция проверяется по `project_id` сессии, иначе `403 PROJECT_FORBIDDEN`.
 > **Надёжный «Стоп» — `POST /api/v2/sessions/:id/abort` (ADR-005).** Роут ставит **персистентный** флаг `SessionStatus.cancelRequested` (+ `cancelRequestedAt`) под локом сессии — поэтому отмена срабатывает и когда `currentStream`/cancel-token ещё не установлены (сессия в очереди, в backoff, между итерациями Tool Use), где прежний `orchestrator.cancel` был no-op. При живом стриме дополнительно вызывается graceful `orchestrator.cancel` (публикует `stream.cancelled`, сохраняет частичный ответ); затем `QueueProcessorManager.requestStop` прерывает backoff/активный LLM-вызов и завершает цикл (`_handleStopRequest`: очистка `pendingMessages`, снятие `blocked`/флага, `stream.cancelled` ровно один раз — без дубля graceful-ветки). Если обработчика нет, флаг снимается, чтобы следующий запуск не отменился ложно. Ответ — `{status:'aborted'}`; без сессии — 404. В сериализованной сессии (`GET /api/v2/sessions/:id`) поле `status` содержит `cancel_requested` (bool) и `cancel_requested_at` (ISO|null). Гибридная ветка (удалённая сессия) делегирует `remoteClient.abortSession`.
@@ -549,7 +549,7 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | DELETE | `/api/v2/skills/:name/files/*` | оба | backend ADMIN или scope `addons:install` / core auth | Удаление supporting-файла |
 | POST | `/api/v2/skills/reload` | оба | backend ADMIN или scope `addons:install` / core auth | Принудительный ре-скан реестра (ленивая инвалидация по mtime) |
 
-Источники discovery (Фаза 1): `{dataDir}/skills` (instance), `{project.workspace}/.synth/skills` (project, project-trust гейт), `config.skills.paths`. Внешние каталоги (`.opencode`, `.claude`, `.agents`) и `skills.urls` не подключаются.
+Источники discovery (приоритет, first-wins): `{project.workspace}/.synth/skills` (project, project-trust гейт), `{dataDir}/skills` (instance), `config.skills.paths`, внешние read-only каталоги (`.opencode/skills|skill`, `.claude/skills`, `.agents/skills`, `~/.config/opencode/skills`) и `config.skills.urls` (read-only индексация в `{dataDir}/skills-cache`, `trusted:false`). Проигравшие дубли — `shadowed`-диагностика; кэш инвалидируется лениво по mtime/size.
 
 ### 5.17.1 Команды и bundles — `/api/v2/commands`, `/api/v2/skill-bundles` (оба, ADR-046 Фаза 2)
 
@@ -562,9 +562,9 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | PATCH | `/api/v2/skill-bundles/:name` | оба | backend ADMIN / core auth | Обновить bundle |
 | DELETE | `/api/v2/skill-bundles/:name` | оба | backend ADMIN / core auth | Удалить bundle |
 
-Резолвинг `/`-команд выполняется **в core** (единообразно для UI/CLI/гибрида, ADR-046 §7.1): builtin-ответы (`/help`, `/skills`, `/commands`) не вызывают LLM, а события `command.invoked`/`skill.invoked` уходят в шину. Порядок имён зависит от `commands.conflict.mode`.
+Резолвинг `/`-команд выполняется **в core** (единообразно для UI/CLI/гибрида, ADR-046): builtin-ответы (`/help`, `/skills`, `/commands`) не вызывают LLM, а события `command.invoked`/`skill.invoked` уходят в шину. Порядок имён зависит от `commands.conflict.mode`.
 
-### 5.17.2 Scope скиллов — `/api/v2/sessions|projects|settings/skills` (оба, ADR-046 §4.5)
+### 5.17.2 Scope скиллов — `/api/v2/sessions|projects|settings/skills` (оба, ADR-046)
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |
 |---|---|---|---|---|
@@ -577,7 +577,7 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | PUT | `/api/v2/settings/skills` | оба | backend ADMIN / core auth | Задать `{disabled?, disabledForNewProjects?, policy?}` (union групп/имён, семантика `tools.disabled`) |
 | DELETE | `/api/v2/settings/skills` | оба | backend ADMIN / core auth | Сбросить instance-wide `disabled`/`disabledForNewProjects`/`policy` |
 
-> Резолвинг скиллов per-item (ADR-046 §4.5): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; дефолт — opt-in (off). Системное/проектное отключение — live hard-gate (в т.ч. старые сессии), дефолты — snapshot (`skillsDefaultOn`). Отсутствие `project.skills` — гейт не задан (legacy).
+> Резолвинг скиллов per-item (ADR-046): `enabled = systemOn && projectOn && !sessionOff && (snapshotOn || sessionOn)`; дефолт — opt-in (off). Системное/проектное отключение — live hard-gate (в т.ч. старые сессии), дефолты — snapshot (`skillsDefaultOn`). Отсутствие `project.skills` — гейт не задан (legacy).
 
 ### 5.18 Audit — `/api/v2/audit` (backend)
 
