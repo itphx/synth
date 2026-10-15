@@ -95,6 +95,7 @@
 | PROP-094 | Наблюдаемость и эксплуатационные метрики: `/metrics` (Prometheus), `/ready` + раздельные probes, структурные логи (`request_id`/`session_id`, редакция секретов), SLO/алерты, sizing | 🧩 Предложение | [prop-094-observability-metrics.md](./prop-094-observability-metrics.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
+| PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098-mid-turn-steering.md](./prop-098-mid-turn-steering.md) |
 
 ## Vision
 
@@ -118,4 +119,4 @@
 
 ---
 
-Всего документов: 83 (Решения: 35, Частично: 8, Предложения: 30, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 84 (Решения: 35, Частично: 8, Предложения: 31, Vision: 9, Icebox: 0, Legacy: 1).

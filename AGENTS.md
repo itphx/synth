@@ -452,6 +452,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ⚠️ Частично | [adr-095](./docs/arch_decisions/adr-095-god-object-decomposition.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096](./docs/arch_decisions/prop-096-background-subagent-sessions.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
+| PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
