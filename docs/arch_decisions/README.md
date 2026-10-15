@@ -47,6 +47,7 @@
 | ADR-078 | Авто-отключение инструментов при отсутствии внешней зависимости (детект `git`/`rg`/`sh`, `unavailable(dependency)`, пояснение модели и UI) | ✅ Реализовано | [adr-078-runtime-dependency-availability.md](./adr-078-runtime-dependency-availability.md) |
 | ADR-079 | Локальный home-каталог (`--home`/`SYNTH_HOME`): плоская раскладка config/data/profiles/credentials, приоритеты путей, независимые инстансы standalone и hybrid | ✅ Реализовано | [adr-079-local-home-independent-instances.md](./adr-079-local-home-independent-instances.md) |
 | ADR-084 | Decision-модели (Clef/Clef-Flash): `DecisionProvider` (контракт `state + questions → answers`: `noul`/`choice`/`score`; транспорты RouterAI и Ollama; вызов через `GatewayProvider`) + decision-слой в «Быстрых ответах» (уровень микро-каскада ADR-035, per-session `decisionFirst`), «Маршрутизации» (классификатор категории ADR-034) и внешних событиях (ADR-089, `events.decisionRouting`); эскалация `primary → escalation`, агрегатные метрики (`GET/DELETE /settings/decision/metrics`), мультимодальный контракт (`images`/`videos`; источник — PROP-085); runtime-настройки `GET/PUT/DELETE /settings/decision` + UI-раздел «Decision-модели» | ✅ Реализовано | [adr-084-decision-models-clef.md](./adr-084-decision-models-clef.md) |
+| ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
 
 ## Частично
 
@@ -59,7 +60,6 @@
 | ADR-086 | Расширяемость Synth (зонтик «Классы расширений»): Plugin (PROP-090), **Gateway** (ADR-087), Add-on, контент-паки (PROP-068), Editions, Contribution flow; единый манифест `synth.pack`; первый add-on/gateway — Telegram-шлюз — реализован и мультитенантен; Plugin SDK/editions/contribution — нет | ⚠️ Частично | [adr-086-extensibility-plugins-editions.md](./adr-086-extensibility-plugins-editions.md) |
 | ADR-087 | **Шлюзы (gateways)** — отдельный класс расширений (внешний сервис-транспорт внешний мир ↔ Synth, двусторонний обмен): контракт (приём через `POST /api/v2/events`, доставка наружу через SSE-watcher, MCP-часть, Binding, identity/claim-flow, allowlist, вложения, дедуп, прокси/egress, секреты at-rest); Telegram-шлюз (`addons/synth-gateway-telegram`) реализован и **мультитенантен** («несколько ботов → несколько сред», `tenants.json`); HA через leader election, webhook-транспорт, второй канал — нет | ⚠️ Частично | [adr-087-gateways.md](./adr-087-gateways.md) |
 | ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; остаток — Plugin SDK (PROP-090), пайплайны (PROP-059), остаток ADR-087 (HA/второй канал) | ⚠️ Частично | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
-| ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ⚠️ Частично | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
 
 ## Предложения
 
@@ -119,4 +119,4 @@
 
 ---
 
-Всего документов: 84 (Решения: 35, Частично: 8, Предложения: 31, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 84 (Решения: 36, Частично: 7, Предложения: 31, Vision: 9, Icebox: 0, Legacy: 1).

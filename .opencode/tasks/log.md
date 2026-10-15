@@ -1115,3 +1115,16 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - **Откат:** test — `helm -n synth rollback synth-test 10`, `helm -n synth rollback synth-gateway-telegram 25`, GitOps — `git -C synth-deploy revert 6a15854 && git push origin main`; preprod — `helm -n synth-release rollback synth-release 4`. Образ `:0.10.0` в `git.itphx.ru` уже указывает на новый диджест — откат кода возможен только пересборкой под новым тегом.
 - **Сопутствующее (в этом же цикле):** release-джоба CI переведена на `scripts/publish-release.mjs` (`src` — GitVerse сам создаёт релиз на тег → `409 TAG_EXISTS`; ассеты best-effort), коммит `12513c9`; скилл `synth-release` дополнен порядком создания релиза — `bef23d4`.
 - **Наблюдения (не блокируют):** SealedSecret `synth-secrets` в preprod получает warning от `rancher-webhook` (`no endpoints available`) — состояние кластера; head `synth` во время выката сдвинулся `4bab000` → `bef23d4` (CI-фикс и скилл; `charts/`/`packages/` не менялись — на артефакты не влияет).
+
+## 2026-10-15 — ADR-095: декомпозиция god-объектов (завершено, остаток отложен)
+
+Выполнен рефакторинг «вынос по швам» (фасад + доменные модули, без изменения поведения):
+- `ui/lib/api/synthApi.ts` 2596→161 + `lib/api/*` (32 домена) + контрактный тест;
+- `shared/types/index.ts` 1452→51 + `types/*` (12 модулей);
+- `ui/panels/LeftPanel.tsx` 2230→59 + `panels/left-panel/*`;
+- `core/server/app.ts` 2014→380 + `server/app/*` (7);
+- `backend/app.ts` 1738→286 + `app/*` (5);
+- `core/engine/tools/task.ts` 1926→29 + `engine/tools/task/*` (7);
+- `core/engine/orchestrator.ts` 5393→3777 + `engine/orchestrator/*` (9) + `phases/*`; `_processMessage` 1668→~980.
+Итого ≈13 000 строк в модули; полный прогон 5084 теста зелёный; шаги — отдельными коммитами.
+Осознанный остаток 6b-2 — тело цикла Tool Use в `_processMessage` (задокументирован в ADR-095).
