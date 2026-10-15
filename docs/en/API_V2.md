@@ -84,8 +84,9 @@ Debug users (`SYNTH_AUTH_DEBUG=true`):
 | `requirePermission(...roles)` | None of the listed roles → `403 FORBIDDEN`. Used by `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
 
 Separate from `middleware.ts` — **service key scope gates** (`packages/backend/src/auth/service-scope.ts`:
-`scopeGuard`/`projectGuard`, they delegate to the core `requireScope`/`checkProjectAccess` and return
-localized `403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`; outside a service key — no-op).
+`scopeGuard`/`serviceProjectProjection`, they delegate to the core `requireScope`/`checkServiceProjectProjection` and return
+localized `403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`; outside a service key — no-op; this is the service key's
+project projection, **not** RBAC).
 
 ### Standalone core (`packages/core/src/auth/local.ts`)
 
@@ -94,7 +95,7 @@ localized `403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`; outside a service key — no
 | `Authorization: Bearer <apiKey>` | Matches `config.apiKey` → user `local` (role `ADMIN`). |
 | `Authorization: Bearer synth_svc_…` | Service key (ADR-052): the key's synthetic user + `scopes`/`allowedProjects` in the context; revoked/expired/unknown → `401`. |
 | `synth_session` cookie | An HMAC-signed API key (v1) or JSON `{v:2, kind:'local'\|'server', user}` (v2, hybrid identity). |
-| `requireAuth` | The only guard; there are no `403`/`ADMIN` checks in standalone (the `requireScope`/`checkProjectAccess` scope gates work only for a service key). |
+| `requireAuth` | The only global guard; there are no role-based `403`/`ADMIN` checks in standalone (the `requireScope`/`checkServiceProjectProjection` scope gates work only for a service key). The local **session access prefix-guard** (`server/session-access-guard.ts`) is mounted here too: in single-user mode all sessions belong to `local`/have no owner (access granted), a foreign owner → `403`, a missing session → `404`. |
 
 In standalone, `requireAuth` is attached globally to `/api/*`, so all `/api/v2/*`
 endpoints (except health and `hybrid/status`) require a key. The hybrid login
@@ -295,7 +296,8 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Delete a note |
 
 > `SessionSettings` for MCP/skills (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session overrides (a single switch); `mcpDefaultOn`/`skillsDefaultOn` — a **snapshot** of the defaults (`project.defaultOn`/the system default) at session creation time, set by the system, not overwritten by a change of the project default; `undefined` — legacy mode (see the scope endpoints in §5.17.2).
-> **Visibility of `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **all** sessions; otherwise — own personal ones **plus** sessions of projects the user is a member of (the project `owner` or any `members`, any role). A session **without an owner** is visible (parity with access by id). Personal sessions of other users are not visible. `?project_id=` filters on top of this visibility. Access **by id** (`GET /:id/status|prompt|stats`, `POST /:id/prompt`, `GET /:id/messages`, etc.) — the session owner **or** a member of the session's project, as well as `ADMIN`/`LEAD`; otherwise `403 FORBIDDEN`. Helper — `server/session-visibility.ts` (`isSessionVisible`), scan — `FileStore.listForUserScope`.
+> **Visibility of `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **all** sessions; otherwise — own personal ones **plus** sessions of projects the user is a member of (the project `owner` or any `members`, any role). A session **without an owner** is visible (parity with access by id). Personal sessions of other users are not visible. `?project_id=` filters on top of this visibility.
+> **Access by id — all `:id` routes of the resource (ADR-089).** A single prefix-guard `server/session-access-guard.ts` (mounted on `/:id` and `/:id/*` together with `requireAuth`; the access kind `read`/`write` is derived from the HTTP method), rule: `ADMIN`/`LEAD` — reading **and** mutating someone else's session are allowed (a deliberate product decision; pinned by the matrix `routes/session-idor-matrix.test.ts`); the session owner / a session without an owner — everything; a member of the session's project: **read** (`GET`/`HEAD`) — any role, including `VIEWER`, **mutation** — `OWNER`/`EDITOR` (`canEditProjectContent`); a foreign user → `403 FORBIDDEN`; a missing session → `404 NOT_FOUND`. Codes are consistent across the whole resource (for a foreign user any `:id` route returns `403`); explicit exceptions: `GET /:id/mcp` — owner|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR`. List helper — `server/session-visibility.ts` (`isSessionVisible`), scan — `FileStore.listForUserScope`.
 > **Service-key scope (ADR-052):** `GET /` and `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages` — `sessions:read`. With a non-empty `allowedProjects`, the project projection is checked against the session's `project_id`, otherwise `403 PROJECT_FORBIDDEN`.
 > **Reliable Stop — `POST /api/v2/sessions/:id/abort` (ADR-005).** The route sets a **persistent** `SessionStatus.cancelRequested` flag (+ `cancelRequestedAt`) under the session lock — that is why the cancellation also fires when `currentStream`/the cancel token is not yet set (a session in the queue, in backoff, between Tool Use iterations), where the previous `orchestrator.cancel` was a no-op. With a live stream, a graceful `orchestrator.cancel` is additionally invoked (publishes `stream.cancelled`, keeps the partial response); then `QueueProcessorManager.requestStop` interrupts backoff/the active LLM call and ends the loop (`_handleStopRequest`: clearing `pendingMessages`, releasing `blocked`/the flag, `stream.cancelled` exactly once — without duplicating the graceful branch). If there is no processor, the flag is cleared so that the next run is not falsely cancelled. The response is `{status:'aborted'}`; without a session — 404. In a serialized session (`GET /api/v2/sessions/:id`) the `status` field contains `cancel_requested` (bool) and `cancel_requested_at` (ISO|null). The hybrid branch (a remote session) delegates to `remoteClient.abortSession`.
 
@@ -398,16 +400,17 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 | GET | `/api/v2/fs` | both | auth | Directory listing; `?project_id=&path=&maxDepth=&includeHidden=` |
 | GET | `/api/v2/fs/read` | both | auth | Contents; `?project_id=&path=` |
 | POST | `/api/v2/fs/write` | both | auth | `{projectId, path, content}` |
-| POST | `/api/v2/fs/upload` | both | auth | multipart: `project_id`, `path`, `file` |
+| POST | `/api/v2/fs/upload` | both | auth | multipart: `project_id`, `path`, `file`; size limit (default 100 MiB, `DEFAULT_MAX_UPLOAD_BYTES`) → `413 PAYLOAD_TOO_LARGE` |
 | GET | `/api/v2/fs/download` | both | auth | Download; `?project_id=&path=` |
 | DELETE | `/api/v2/fs` | both | auth | Delete a file/an empty directory; `?project_id=&path=` |
 | POST | `/api/v2/fs/mkdir` | both | auth | `{projectId, path}` |
 | POST | `/api/v2/fs/move` | both | auth | `{projectId, sourcePath, targetPath, targetProjectId?}` |
-| GET | `/api/v2/fs/workspace-root` | both | auth | Subdirectories of the workspace root (ADR-075); `?includeHidden=` → `{root, entries}` |
-| GET | `/api/v2/fs/workspace-root/browse` | both | auth | Listing inside the root (ADR-075); `?path=&includeHidden=` → `{root, path, entries}` |
-| POST | `/api/v2/fs/workspace-root/mkdir` | both | auth | Create a directory in the root (ADR-075); `{path, confirmOutsideRoot?}` → 201 `{created, path}` |
+| GET | `/api/v2/fs/workspace-root` | both | auth (managed → `403 FORBIDDEN`) | Subdirectories of the workspace root (ADR-075); `?includeHidden=` → `{root, entries}` |
+| GET | `/api/v2/fs/workspace-root/browse` | both | auth (managed → `403 FORBIDDEN`) | Listing inside the root (ADR-075); `?path=&includeHidden=` → `{root, path, entries}` |
+| POST | `/api/v2/fs/workspace-root/mkdir` | both | auth (managed → `403 FORBIDDEN`) | Create a directory in the root (ADR-075); `{path, confirmOutsideRoot?}` → 201 `{created, path}` |
 
-> `workspace-root*` (ADR-075): an absolute path inside `workspacesRoot` works; outside root — per policy.
+> `workspace-root*` (ADR-075): an absolute path inside `workspacesRoot` works; outside root — per policy. Manual workspace selection exists in standalone only: in managed (`requireProjectId`) all three routes return `403 FORBIDDEN` for any role (the project directory is auto-provisioned, and the list of managed workspaces is not exposed).
+> `POST /upload` — a file size limit (default `DEFAULT_MAX_UPLOAD_BYTES` = 100 MiB, overridable via the `FsRoutesOptions.maxUploadBytes` option); checked threefold (the declared `content-length`, `File.size`, the actual number of bytes read) → `413 PAYLOAD_TOO_LARGE` (the actual size guards against a lying/missing `content-length`).
 > `confirm`: browse is allowed, mkdir requires `confirmOutsideRoot: true`, otherwise `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > `deny`: `403 WORKSPACE_OUTSIDE_ROOT_DENIED` (including `..` traversal); protected paths → `403 PROTECTED_PATH_DENIED`.
 > `mkdir` of an existing path → `409 ALREADY_EXISTS`; browsing a non-existent directory → `404 NOT_FOUND`, not a directory → `400 NOT_A_DIRECTORY`.

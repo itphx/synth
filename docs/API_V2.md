@@ -84,8 +84,9 @@ Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 | `requirePermission(...roles)` | Нет ни одной из перечисленных ролей → `403 FORBIDDEN`. Используют `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
 
 Отдельно от `middleware.ts` — **scope-гейты service-key** (`packages/backend/src/auth/service-scope.ts`:
-`scopeGuard`/`projectGuard`, делегируют core-`requireScope`/`checkProjectAccess` и отдают
-локализованные `403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`; вне service-key — no-op).
+`scopeGuard`/`serviceProjectProjection`, делегируют core-`requireScope`/`checkServiceProjectProjection` и отдают
+локализованные `403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`; вне service-key — no-op; это проектная проекция
+service-key, **не** RBAC).
 
 ### Standalone-core (`packages/core/src/auth/local.ts`)
 
@@ -94,7 +95,7 @@ Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 | `Authorization: Bearer <apiKey>` | Совпал с `config.apiKey` → пользователь `local` (роль `ADMIN`). |
 | `Authorization: Bearer synth_svc_…` | Service-key (ADR-052): синтетический пользователь ключа + `scopes`/`allowedProjects` в контексте; отозванный/истёкший/неизвестный → `401`. |
 | Cookie `synth_session` | HMAC-подписанный API-ключ (v1) либо JSON `{v:2, kind:'local'\|'server', user}` (v2, гибридная личность). |
-| `requireAuth` | Единственный guard; `403`/`ADMIN`-проверок в standalone нет (scope-гейты `requireScope`/`checkProjectAccess` работают только для service-key). |
+| `requireAuth` | Единственный глобальный guard; ролевых `403`/`ADMIN`-проверок в standalone нет (scope-гейты `requireScope`/`checkServiceProjectProjection` работают только для service-key). Локальный **prefix-guard доступа к сессии** (`server/session-access-guard.ts`) навешен и здесь: в single-user все сессии — владельца `local`/без владельца (доступ есть), чужой владелец → `403`, нет сессии → `404`. |
 
 В standalone `requireAuth` навешан глобально на `/api/*`, поэтому все `/api/v2/*`
 эндпоинты (кроме health и `hybrid/status`) требуют ключ. Гибридный вход
@@ -295,7 +296,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | DELETE | `/api/v2/sessions/:id/notes/:noteId` | backend | auth | Удалить заметку |
 
 > `SessionSettings` MCP/скиллов (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
-> **Видимость `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии проектов, участником которых является пользователь (`owner` проекта или любой `members`, любая роль). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости. Доступ **по id** (`GET /:id/status|prompt|stats`, `POST /:id/prompt`, `GET /:id/messages` и т.п.) — владелец сессии **или** участник проекта сессии, а также `ADMIN`/`LEAD`; иначе `403 FORBIDDEN`. Хелпер — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
+> **Видимость `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии проектов, участником которых является пользователь (`owner` проекта или любой `members`, любая роль). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости.
+> **Доступ по id — все `:id`-маршруты ресурса (ADR-089).** Единый prefix-guard `server/session-access-guard.ts` (вешается на `/:id` и `/:id/*` вместе с `requireAuth`; вид доступа `read`/`write` выводится из HTTP-метода), правило: `ADMIN`/`LEAD` — чтение **и** мутация чужой сессии разрешены (осознанное решение продукта; зафиксировано матрицей `routes/session-idor-matrix.test.ts`); владелец сессии / сессия без владельца — всё; участник проекта сессии: **чтение** (`GET`/`HEAD`) — любая роль, включая `VIEWER`, **мутация** — `OWNER`/`EDITOR` (`canEditProjectContent`); чужой пользователь → `403 FORBIDDEN`; несуществующая сессия → `404 NOT_FOUND`. Коды согласованы по всему ресурсу (для чужого на любом `:id`-маршруте — `403`); явные исключения: `GET /:id/mcp` — владелец|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR`. Хелпер списка — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
 > **Scope service-key (ADR-052):** `GET /` и `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages` — `sessions:read`. При непустом `allowedProjects` проектная проекция проверяется по `project_id` сессии, иначе `403 PROJECT_FORBIDDEN`.
 > **Надёжный «Стоп» — `POST /api/v2/sessions/:id/abort` (ADR-005).** Роут ставит **персистентный** флаг `SessionStatus.cancelRequested` (+ `cancelRequestedAt`) под локом сессии — поэтому отмена срабатывает и когда `currentStream`/cancel-token ещё не установлены (сессия в очереди, в backoff, между итерациями Tool Use), где прежний `orchestrator.cancel` был no-op. При живом стриме дополнительно вызывается graceful `orchestrator.cancel` (публикует `stream.cancelled`, сохраняет частичный ответ); затем `QueueProcessorManager.requestStop` прерывает backoff/активный LLM-вызов и завершает цикл (`_handleStopRequest`: очистка `pendingMessages`, снятие `blocked`/флага, `stream.cancelled` ровно один раз — без дубля graceful-ветки). Если обработчика нет, флаг снимается, чтобы следующий запуск не отменился ложно. Ответ — `{status:'aborted'}`; без сессии — 404. В сериализованной сессии (`GET /api/v2/sessions/:id`) поле `status` содержит `cancel_requested` (bool) и `cancel_requested_at` (ISO|null). Гибридная ветка (удалённая сессия) делегирует `remoteClient.abortSession`.
 
@@ -398,16 +400,17 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | GET | `/api/v2/fs` | оба | auth | Список каталога; `?project_id=&path=&maxDepth=&includeHidden=` |
 | GET | `/api/v2/fs/read` | оба | auth | Содержимое; `?project_id=&path=` |
 | POST | `/api/v2/fs/write` | оба | auth | `{projectId, path, content}` |
-| POST | `/api/v2/fs/upload` | оба | auth | multipart: `project_id`, `path`, `file` |
+| POST | `/api/v2/fs/upload` | оба | auth | multipart: `project_id`, `path`, `file`; лимит размера (по умолчанию 100 МиБ, `DEFAULT_MAX_UPLOAD_BYTES`) → `413 PAYLOAD_TOO_LARGE` |
 | GET | `/api/v2/fs/download` | оба | auth | Скачать; `?project_id=&path=` |
 | DELETE | `/api/v2/fs` | оба | auth | Удалить файл/пустой каталог; `?project_id=&path=` |
 | POST | `/api/v2/fs/mkdir` | оба | auth | `{projectId, path}` |
 | POST | `/api/v2/fs/move` | оба | auth | `{projectId, sourcePath, targetPath, targetProjectId?}` |
-| GET | `/api/v2/fs/workspace-root` | оба | auth | Подкаталоги корня workspace (ADR-075); `?includeHidden=` → `{root, entries}` |
-| GET | `/api/v2/fs/workspace-root/browse` | оба | auth | Список внутри корня (ADR-075); `?path=&includeHidden=` → `{root, path, entries}` |
-| POST | `/api/v2/fs/workspace-root/mkdir` | оба | auth | Создать каталог в корне (ADR-075); `{path, confirmOutsideRoot?}` → 201 `{created, path}` |
+| GET | `/api/v2/fs/workspace-root` | оба | auth (managed → `403 FORBIDDEN`) | Подкаталоги корня workspace (ADR-075); `?includeHidden=` → `{root, entries}` |
+| GET | `/api/v2/fs/workspace-root/browse` | оба | auth (managed → `403 FORBIDDEN`) | Список внутри корня (ADR-075); `?path=&includeHidden=` → `{root, path, entries}` |
+| POST | `/api/v2/fs/workspace-root/mkdir` | оба | auth (managed → `403 FORBIDDEN`) | Создать каталог в корне (ADR-075); `{path, confirmOutsideRoot?}` → 201 `{created, path}` |
 
-> `workspace-root*` (ADR-075): абсолютный путь внутри `workspacesRoot` работает; вне root — по политике.
+> `workspace-root*` (ADR-075): абсолютный путь внутри `workspacesRoot` работает; вне root — по политике. Ручной выбор workspace — только standalone: в managed (`requireProjectId`) все три маршрута отдают `403 FORBIDDEN` для любой роли (каталог проекта авто-провижнится, перечень управляемых workspace не раскрывается).
+> `POST /upload` — лимит размера файла (по умолчанию `DEFAULT_MAX_UPLOAD_BYTES` = 100 МиБ, переопределяется опцией `FsRoutesOptions.maxUploadBytes`); проверяется троично (заявленный `content-length`, `File.size`, фактический размер прочитанных байт) → `413 PAYLOAD_TOO_LARGE` (фактический размер — защита от лживого/отсутствующего `content-length`).
 > `confirm`: browse разрешён, mkdir требует `confirmOutsideRoot: true`, иначе `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > `deny`: `403 WORKSPACE_OUTSIDE_ROOT_DENIED` (в т.ч. traversal `..`); protected-paths → `403 PROTECTED_PATH_DENIED`.
 > `mkdir` существующего пути → `409 ALREADY_EXISTS`; несуществующий каталог browse → `404 NOT_FOUND`, не каталог → `400 NOT_A_DIRECTORY`.

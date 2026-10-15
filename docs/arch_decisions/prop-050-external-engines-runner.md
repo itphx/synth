@@ -15,7 +15,7 @@
   (`--auto --json`);
 - WS-канал backend ↔ runner для управления и событий;
 - **LLM Proxy** `:9090/v1` (OpenAI-совместимый) — чтобы трафик движка шёл через Synth для guard/аудита;
-- маршрутизация по полю `Session.engine`;
+- маршрутизация по выбору движка сессии — поле `Session.engine` вводится/возвращается в контракт вместе с Runner'ом (сейчас поля нет, удалено `43f3a69c`);
 - UI-селектор движка.
 
 Модель **«движок stateless»** ([ADR-022](./adr-022-typescript-stack-runner.md), инвариант №4 корневого
@@ -25,13 +25,12 @@
 
 ### Что уже есть
 
-- Поле `Session.engine` (`'synth' | 'opencode' | 'cline'`) и плумбинг выбора — есть:
-  `packages/shared/src/types/index.ts`, `packages/shared/src/schemas/index.ts`.
+- Поля выбора движка в контракте **нет**: `Session.engine` удалён коммитом `43f3a69c` — плумбилось сквозь слои, но логики по нему не было, при этом оно попало в публичный OpenAPI/SDK. Возврат поля (или иного механизма выбора) — часть объёма этого предложения; историческое место — `packages/shared/src/types/index.ts`, `packages/shared/src/schemas/index.ts`.
 - Конфиг раннера: `runner.enginePorts` (opencode=4100, cline=4200) и `runner.proxyPort` (=9090) —
   `packages/shared/src/config/types.ts` / `defaults.ts`.
 - LLM Proxy частично реализован на backend: OpenAI-совместимый `POST /api/v2/llm/chat/completions`
   (`packages/backend/src/routes/llm.ts`).
-- `packages/runner/src/main.ts` — **заглушка** (37 строк, `// TODO: реализация раннера`); адаптеров движков нет.
+- Пакета `packages/runner` и его заглушки (`src/main.ts`, `// TODO: реализация раннера`) **больше нет** — удалён коммитом `3b1b32e6`; адаптеров движков нет, Runner создаётся с нуля.
 
 ### Проблема
 
@@ -54,7 +53,7 @@ Loop Engine (D12/PROP-057), где шаг цикла может исполнят
 
 - WS-контрольный канал backend ↔ runner (не плодить новых каналов в UI — там остаётся EventHub,
   [ADR-024](./adr-024-eventhub-transport.md)).
-- Роутинг по `Session.engine`; движок stateless, сессия/история — на бэкенде.
+- Роутинг по выбору движка сессии (поле `Session.engine` — часть объёма Runner'а, в контракте пока отсутствует); движок stateless, сессия/история — на бэкенде.
 
 ### LLM Proxy
 
@@ -70,17 +69,16 @@ Loop Engine (D12/PROP-057), где шаг цикла может исполнят
 
 ## Статус реализации в коде
 
-**Не реализовано (заглушка).**
+**Не реализовано (Runner'а в коде нет).**
 
 Проверено точечным grep по `packages/**` (исключая `dist/`, `node_modules/`):
 
-- `packages/runner/src/main.ts` — 37 строк, содержит только `console.log` и комментарий
-  `// TODO: реализация раннера — Gateway, Engine Manager, LLM Proxy`. Адаптеров нет.
-- `Session.engine` (`'synth' | 'opencode' | 'cline'`) — есть в `shared` (типы + zod-схема).
+- `packages/runner` — пакета **нет** (удалён `3b1b32e6`); заглушки `src/main.ts` с `// TODO: реализация раннера` больше не существует. Адаптеров нет.
+- Поля выбора движка в `shared` **нет**: `Session.engine` (`'synth' | 'opencode' | 'cline'`) удалён из типов/zod-схем/публичного OpenAPI/SDK (`43f3a69c`); возврат — часть объёма Runner'а.
 - Порты движков и `proxyPort` (9090) — есть в конфиге раннера (`shared/config`).
 - OpenAI-совместимый прокси существует на backend (`packages/backend/src/routes/llm.ts`,
   `POST /api/v2/llm/chat/completions`); отдельного runner-прокси `:9090/v1` нет.
-- Тестов на `packages/runner` — нет.
+- Тестов на Runner — нет (тестировать нечего: пакет удалён).
 
 > В черновике упомянуто, что LLM Proxy «заявлен» на раннере; фактически OpenAI-совместимый прокси
 > реализован на **backend**, а `runner.proxyPort` остаётся конфигом.
@@ -94,10 +92,14 @@ Loop Engine (D12/PROP-057), где шаг цикла может исполнят
 
 ## Связи
 
-- [ADR-018](./adr-018-session-engine-selection.md) «Выбор AI-движка на уровне сессии» — закрывает отложенные адаптеры.
+- [ADR-018](./adr-018-session-engine-selection.md) «Выбор AI-движка на уровне сессии» — поле `Session.engine` удалено из контракта (`43f3a69c`); выбор движка и отложенные адаптеры — объём этого предложения.
 - [ADR-022](./adr-022-typescript-stack-runner.md) «Runner-архитектура» — движки stateless, мост к движкам.
 - [ADR-024](./adr-024-eventhub-transport.md) «EventHub + TransportClient» — транспорт событий.
 - [ADR-029](./adr-029-granular-permissions.md) «Гранулярные permissions» — права внутри движка.
 - [ADR-036](./adr-036-llm-gateway.md) «LLM Gateway» — аудит трафика движка через прокси.
 - [PROP-057](./prop-057-loop-engine.md) «Loop Engine» — исполнение шага цикла через Runner.
 - Смежные: D15/PROP-060 (Contour Bridge — на базе Runner), D28/ADR-086 (плагины/points расширения).
+
+## История
+
+- 2026-10-16 — поле `Session.engine` удалено из контракта (`43f3a69c`), пакет-заглушка `packages/runner` удалён (`3b1b32e6`); предложение переписано под «Runner с нуля» (выбор движка вводится вместе с ним).

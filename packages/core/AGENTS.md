@@ -62,7 +62,7 @@
   (`/ws/events`) с SSE-фоллбеком (ADR-008/009/024).
 - Машинный доступ внешних сервисов — через **service-key** (ADR-052 этап I): `ServiceApiKeyStore`
   + синтетический пользователь + `scopes`/`allowedProjects`; enforcement — `requireScope`/
-  `checkProjectAccess` (`server/service-scope.ts`), **не** через permission-слой тулов (тот
+  `checkServiceProjectProjection` (`server/service-scope.ts`), **не** через permission-слой тулов (тот
   роль-оси не имеет, ADR-029). Каталог scope включает зонтичный `addons:install` (установка
   аддонов: MCP-реестр/скиллы) и `users:read`. Провижининг installer-ключа — `security.bootstrapServiceKeys`
   (config) / env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (JSON) → `applyBootstrapServiceKeys` при старте.
@@ -94,6 +94,17 @@
   Для per-session подписок (managed backend `EventHub`) funnel вызывает необязательный
   `deps.onSessionMaterialized(session)` сразу после создания сессии и **до** доставки
   события — потребитель подписывает клиентов владельца (`subscribeToSession`).
+  Standalone-core подключает тот же шов к WS: `EventWebSocketSubscriptions`
+  (`server/app/ws-events.ts`) — реестр подписок клиентов владельца, заполняется из
+  `onSessionMaterialized` (сессии после connect) и из `onSessionCreated`/`onSessionForked`
+  сессионных фабрик (fork/import мимо funnel) — плюс **авто-подписка по событию**
+  (`session.created`/`session.fork.created` в канале новой сессии → `subscribeToNewSession`
+  с форвардом; `session.created`/`child.*`/`subagent.resume.*` в канале родителя → подписка
+  на child); детект — общий `events/child-session.ts` (`extractChildSessionId`/`extractCreatedSession`,
+  один код на managed `EventHub` и standalone-хаб), поэтому путь создания сессии уведомляет хаб,
+  лишь публикуя событие (инвариант 18 корневого `AGENTS.md`); `forkProjectToLocal`
+  (`remote/transfer.ts`) публикует `session.created` сам. Подписка строго по владельцу — чужую
+  сессию не подписывает и не доставляет.
 - **Права внешнего отправителя (ADR-089 этап 5).** База — роли **профиля** Synth
   отправителя; `identity.roles` (роль из allowlist шлюза) только **сужают** (пересечение),
   не повышают; несопознанный (нет профиля) → прав нет (fail-closed). Резолвер —
@@ -142,9 +153,16 @@
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
   `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`, `webhooks`.
 - `server/service-scope.ts` — ADR-052 (этап I): enforcement service-key — `requireScope(...)`
-  (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkProjectAccess`/
-  `isProjectAllowed` (проектная проекция `allowedProjects`), `getServiceCredential`
-  (`serviceKey` из контекста), типы `ScopeGuardFactory`/`ProjectGuard`.
+  (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkServiceProjectProjection`/
+  `isProjectAllowed` (проектная проекция `allowedProjects`; это **не** RBAC), `getServiceCredential`
+  (`serviceKey` из контекста), типы `ScopeGuardFactory`/`ServiceProjectProjectionGuard`. Прежние имена
+  `checkProjectAccess`/`ProjectGuard` оставлены `@deprecated`-алиасами — в коде и доках использовать новые.
+- `server/session-access-guard.ts` — инвариант авторизации сессий (ADR-089): единый prefix-guard
+  `createSessionAccessGuard` (`app.use('/:id', requireAuth, guard)` + `/:id/*`, до регистрации маршрутов —
+  покрывает и будущие), `createSessionAccessPredicate` (владелец → роль → участие в проекте), `accessKindOf`
+  (вид `read`/`write` из HTTP-метода). Один факт нарушения → один код (`403`), нет сессии → `404`;
+  read/write-разграничение ролей проекта живёт в ОДНОЙ точке, а не в обработчиках. Матрица —
+  `packages/backend/src/routes/session-idor-matrix.test.ts`.
 - `server/session-visibility.ts` — ADR-089: `isSessionVisible` (+ `SessionOwnerCtx`) —
   единое правило видимости сессии в списке (elevated/владелец/ownerless/проект-участие).
 - `server/routes/identities.ts` — `createIdentityRoutes` (ADR-089): идентичности текущего
@@ -168,7 +186,7 @@
   списка/создания, `PATCH` метаданных, `POST .../revoke` (мягкий отзыв), `DELETE`; `label` обязательна
   и уникальна глобально (дубль → 409 `CONFLICT`). ADR-052: scope-гейты на роутах
   (`events:ingest`, `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`)
-  и проектная проекция через `scopeGuard`/`projectGuard` (core-дефолты — `requireScope`/`checkProjectAccess`).
+  и проектная проекция через `scopeGuard`/`serviceProjectProjection` (core-дефолты — `requireScope`/`checkServiceProjectProjection`).
 - `server/routes/service-keys.ts` — `createServiceKeyRoutes` (ADR-052 этап I): CRUD service-key
   инстанса (`GET/POST /api/v2/service-keys`, `GET /scopes` — каталог scope'ов/семейств/ролей из shared,
   `GET/PATCH/DELETE /:id`, `POST /:id/revoke`),
@@ -458,7 +476,7 @@
   FS: плоский root / workspace проекта через `getProjectWorkspace`, ADR-075),
   `createServiceKeyRoutes` (ADR-052 этап I: CRUD service-key, `writeGuard`/`readGuard`/`messages`).
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
-  `scopeGuard`/`projectGuard` (ADR-052; core-дефолты — `requireScope`/`checkProjectAccess`).
+  `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и
