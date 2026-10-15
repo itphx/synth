@@ -473,64 +473,77 @@ export function createSessionRoutes(
 
     // ADR-040: перенос сессии между проектами (project_id). Валидируем существование
     // нового проекта и публикуем session.moved при фактической смене проекта.
-    const prevProjectId = session.projectId;
-    let projectChanged = false;
-    if (body.project_id !== undefined || body.projectId !== undefined) {
-      const newProjectId: string | null | undefined = body.project_id ?? body.projectId;
-      if (newProjectId) {
+    // (Валидация/авторизация — по предварительному чтению; сама мутация — под локом ниже.)
+    const projectParam = body.project_id ?? body.projectId;
+    if (projectParam !== undefined) {
+      if (projectParam) {
         if (!deps.projectStore) {
           return c.json({
             error: { code: 'INTERNAL_ERROR', message: 'Хранилище проектов недоступно' },
           }, 500);
         }
-        const existing = await deps.projectStore.load(newProjectId);
+        const existing = await deps.projectStore.load(projectParam);
         if (!existing) {
           return c.json({
             error: { code: 'PROJECT_NOT_FOUND', message: 'Проект не найден' },
           }, 400);
         }
       }
-      const resolved = newProjectId || undefined;
       // ADR-052 (этап I): проектная проекция — и старая, и новая цель сессии.
-      const moveDenied = serviceProjectProjection(c, resolved);
+      const moveDenied = serviceProjectProjection(c, projectParam || undefined);
       if (moveDenied) return moveDenied;
-      if (prevProjectId !== resolved) {
-        session.projectId = resolved;
-        session.planApproved = false;
-        projectChanged = true;
+    }
+
+    // Валидация mode — до лока (не зависит от сессии; 400 ничего не пишет).
+    if (body.mode !== undefined && !SESSION_MODES.includes(body.mode)) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'mode должен быть "plan", "act" или "yolo"' },
+      }, 400);
+    }
+
+    // read-modify-write сессии — только под `SessionManager.withLock`: без лока
+    // параллельные PATCH/clear/skills затирают правки друг друга (lost update —
+    // победитель сохраняет свой снапшот целиком). Внутри лока сессия перечитывается.
+    const { updatedSession, prevProjectId, prevTitle, projectChanged } = await sessionManager.withLock(id, async (s) => {
+      const prevProjectId = s.projectId;
+      let projectChanged = false;
+      if (projectParam !== undefined) {
+        const resolved = projectParam || undefined;
+        if (prevProjectId !== resolved) {
+          s.projectId = resolved;
+          s.planApproved = false;
+          projectChanged = true;
+        }
       }
-    }
-    if (body.name !== undefined) session.title = body.name;
-    if (body.title !== undefined) {
-      const prevTitle = session.title;
-      session.title = body.title;
-      if (prevTitle !== body.title && publishRenamed) {
-        eventBus.publish(session.id, 'session.renamed', { session_id: session.id, title: body.title, prev_title: prevTitle });
+      if (body.name !== undefined) s.title = body.name;
+      let prevTitle: string | undefined;
+      if (body.title !== undefined) {
+        prevTitle = s.title;
+        s.title = body.title;
       }
-    }
-    if (body.icon !== undefined) session.icon = parsed.data.icon ?? undefined;
-    if (body.color !== undefined) session.color = parsed.data.color ?? undefined;
-    if (body.mode !== undefined) {
-      if (!SESSION_MODES.includes(body.mode)) {
-        return c.json({
-          error: { code: 'VALIDATION_ERROR', message: 'mode должен быть "plan", "act" или "yolo"' },
-        }, 400);
+      if (body.icon !== undefined) s.icon = parsed.data.icon ?? undefined;
+      if (body.color !== undefined) s.color = parsed.data.color ?? undefined;
+      if (body.mode !== undefined) s.mode = body.mode;
+      if (parsed.data.settings !== undefined) {
+        s.settings = { ...s.settings, ...parsed.data.settings };
       }
-      session.mode = body.mode;
+      await sessionManager.updateSession(s);
+      return { updatedSession: s, prevProjectId, prevTitle, projectChanged };
+    });
+
+    // Порядок публикации сохранён: renamed → updated → moved.
+    if (publishRenamed && prevTitle !== undefined && prevTitle !== body.title) {
+      eventBus.publish(updatedSession.id, 'session.renamed', { session_id: updatedSession.id, title: body.title, prev_title: prevTitle });
     }
-    if (parsed.data.settings !== undefined) {
-      session.settings = { ...session.settings, ...parsed.data.settings };
-    }
-    await sessionManager.updateSession(session);
-    eventBus.publish(session.id, 'session.updated', serializeSession(session, { agentRegistry }));
+    eventBus.publish(updatedSession.id, 'session.updated', serializeSession(updatedSession, { agentRegistry }));
     if (projectChanged) {
-      eventBus.publish(session.id, 'session.moved', {
-        session_id: session.id,
-        project_id: session.projectId ?? null,
+      eventBus.publish(updatedSession.id, 'session.moved', {
+        session_id: updatedSession.id,
+        project_id: updatedSession.projectId ?? null,
         prev_project_id: prevProjectId ?? null,
       });
     }
-    return c.json(serializeSession(session, { agentRegistry }));
+    return c.json(serializeSession(updatedSession, { agentRegistry }));
   });
 
   app.delete('/:id', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
@@ -755,20 +768,26 @@ export function createSessionRoutes(
   });
 
   app.post('/:id/clear', auth.requireAuth, async (c) => {
-    const session = await sessionManager.getSession(c.req.param('id'));
-    if (!session) {
+    const id = c.req.param('id');
+    const existing = await sessionManager.getSession(id);
+    if (!existing) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.sessionNotFound(c) } }, 404);
     }
-    session.messages = session.messages.filter((m) => m.pinned);
-    session.pendingMessages = [];
-    session.inputTokens = 0;
-    session.outputTokens = 0;
-    session.totalTokens = 0;
-    session.inputCost = 0;
-    session.outputCost = 0;
-    session.cacheReadCost = 0;
-    session.cacheWriteCost = 0;
-    await sessionManager.updateSession(session);
+    // read-modify-write сессии — только под `SessionManager.withLock`: без лока
+    // конкурентная правка (PATCH/сообщение) затирается снапшотом clear (lost update).
+    const session = await sessionManager.withLock(id, async (s) => {
+      s.messages = s.messages.filter((m) => m.pinned);
+      s.pendingMessages = [];
+      s.inputTokens = 0;
+      s.outputTokens = 0;
+      s.totalTokens = 0;
+      s.inputCost = 0;
+      s.outputCost = 0;
+      s.cacheReadCost = 0;
+      s.cacheWriteCost = 0;
+      await sessionManager.updateSession(s);
+      return s;
+    });
     return c.json(serializeSession(session, { agentRegistry }));
   });
 

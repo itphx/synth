@@ -353,6 +353,44 @@ describe('Session API Routes (PATCH mode)', () => {
     });
   });
 
+  describe('GET /api/v2/sessions/:id/messages — QC-поля (ADR-034)', () => {
+    it('отдаёт персистентные qa_pass/qa_reason сообщения', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.ASSISTANT, seq: 0, origin: 'local',
+        parts: [makeTextPart('answer')], content: 'answer', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false,
+        qa_pass: true, qa_reason: 'qc.all_passed',
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages`);
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.session_id).toBe(session.id);
+      expect(body.messages[0].qa_pass).toBe(true);
+      expect(body.messages[0].qa_reason).toBe('qc.all_passed');
+    });
+
+    it('legacy-сообщение без QC-полей не содержит ключей (бейдж не появляется)', async () => {
+      const { app, sessionManager } = createTestApp(tmpDir);
+      const session = await sessionManager.createSession({ title: 'S', userId: 'local' });
+      await sessionManager.addMessage(session.id, {
+        id: generateId(), role: MessageRole.ASSISTANT, seq: 0, origin: 'local',
+        parts: [makeTextPart('legacy')], content: 'legacy', createdAt: nowISO(),
+        disabled: false, pinned: false, hidden: false,
+      });
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/messages`);
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect('qa_pass' in body.messages[0]).toBe(false);
+      expect('qa_reason' in body.messages[0]).toBe(false);
+    });
+  });
+
   describe('POST /api/v2/sessions — агент по умолчанию', () => {
     it('без settings.agentRole берёт значение из resolveDefaultAgent', async () => {
       const { app, sessionManager } = createTestApp(tmpDir, undefined, { resolveDefaultAgent: () => 'analyst' });

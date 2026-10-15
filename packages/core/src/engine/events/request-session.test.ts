@@ -54,7 +54,7 @@ describe('RequestSessionService (ADR-089)', () => {
       resolveOwnerId?: () => string | Promise<string | undefined>;
       resolveLlmDefaults?: () => { provider?: string; model?: string } | Promise<{ provider?: string; model?: string }>;
       resolveDefaultAgent?: () => string | Promise<string>;
-      resolveExternalIdentity?: (identity: EventIdentity) => { userId: string; displayName?: string; roles?: string[] } | null;
+      resolveExternalIdentity?: (identity: EventIdentity) => { userId: string; displayName?: string; roles?: string[] } | null | Promise<{ userId: string; displayName?: string; roles?: string[] } | null>;
       identityMap?: Record<string, string>;
       onSessionMaterialized?: (session: Session) => void | Promise<void>;
       issueIdentityClaim?: (event: SynthEvent) => Promise<{ code: string; expiresAt: string } | null>;
@@ -1114,6 +1114,53 @@ describe('RequestSessionService (ADR-089)', () => {
     expect((await sessionManager.getSession(existing.id))?.userId).toBe('u-linked');
     expect(onMaterialized).toHaveBeenCalledWith(expect.objectContaining({ id: existing.id }));
     expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it('bound (claim-flow): конкурентная правка сессии не теряется при переустановке владельца', async () => {
+    const machine = await sessionManager.createSession({
+      title: 'RMW',
+      userId: 'service:svk_rmw',
+      ownerId: 'service:svk_rmw',
+    });
+    await bindingStore.upsert({
+      source: 'telegram',
+      chatKey: 'chat:telegram:rmw',
+      mode: 'bound',
+      sessionId: machine.id,
+    });
+
+    // Резолвер вызывается дважды: (1) `_resolveDeliveryContext` (до чтения сессии),
+    // (2) `_maybeReassignOwner` (после чтения). На втором вызове «зависаем», чтобы
+    // вклинить конкурентную правку ровно в анализируемое окно read-modify-write.
+    let calls = 0;
+    let enteredReassign!: () => void;
+    const enteredP = new Promise<void>((r) => { enteredReassign = r; });
+    let releaseResolver!: () => void;
+    const releaseP = new Promise<void>((r) => { releaseResolver = r; });
+    const resolveExternalIdentity = async (): Promise<{ userId: string }> => {
+      calls += 1;
+      if (calls === 2) { enteredReassign(); await releaseP; }
+      return { userId: 'u-human' };
+    };
+
+    const e = event({ identity: { chatKey: 'chat:telegram:rmw', principalId: 'tg:1' } });
+    const pending = service(undefined, { resolveExternalIdentity }).handleEvent(e);
+    await enteredP;
+
+    // Конкурентная правка сессии «под локом» (как это делают роуты/тулы).
+    await sessionManager.withLock(machine.id, async (s) => {
+      s.icon = 'folder';
+      await sessionManager.updateSession(s);
+    });
+
+    releaseResolver();
+    const { session } = await pending;
+
+    expect(session?.ownerId).toBe('u-human');
+    const reloaded = await sessionManager.getSession(machine.id);
+    expect(reloaded?.ownerId).toBe('u-human');
+    // Старая реализация сохраняла устаревший снапшот — конкурентный icon пропадал.
+    expect(reloaded?.icon).toBe('folder');
   });
 
   it('регресс: bind-сессия при создании получает владельца-человека от резолвера', async () => {

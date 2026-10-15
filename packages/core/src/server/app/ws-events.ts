@@ -349,9 +349,18 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
               (async () => {
                 const session = await sessionManager.getSession(sid);
                 if (session?.currentStream) {
-                  orchestrator.cancel(session.currentStream.streamId);
-                  session.currentStream.cancelled = true;
-                  await sessionManager.updateSession(session);
+                  const streamId = session.currentStream.streamId;
+                  // read-modify-write сессии — только под `SessionManager.withLock`:
+                  // иначе снятие/запись `cancelled` затёрло бы конкурентную запись
+                  // (частичный ответ процессора). `currentStream` перечитывается под
+                  // локом: если стрим уже завершён — ничего не пишем.
+                  const cancelled = await sessionManager.withLock(sid, async (s) => {
+                    if (!s.currentStream) return false;
+                    s.currentStream.cancelled = true;
+                    await sessionManager.updateSession(s);
+                    return true;
+                  });
+                  if (cancelled) orchestrator.cancel(streamId);
                 }
                 queueManager.stop(sid);
               })().catch(() => {});

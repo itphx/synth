@@ -659,9 +659,24 @@ export class RequestSessionService {
     // Чужая человеческая сессия — не угоняем (общий чат: пишет другой человек).
     if (currentOwner && !isMachineOwnerId(currentOwner)) return;
 
+    // read-modify-write сессии — только под `SessionManager.withLock`: окно между
+    // `getSession` выше и сохранением узкое, но конкурентная запись (процессор
+    // очереди, HTTP-роут) в нём терялась бы. Под локом сессия перечитывается, а
+    // решение «чужой человеческий владелец» принимается по актуальному состоянию.
+    const reassigned = await this._sessionManager.withLock(session.id, async (s) => {
+      const owner = s.ownerId || s.userId || '';
+      if (owner === externalUserId) return false;
+      if (owner && !isMachineOwnerId(owner)) return false;
+      s.ownerId = externalUserId;
+      s.userId = externalUserId;
+      await this._sessionManager.updateSession(s);
+      return true;
+    });
+    if (!reassigned) return;
+    // Отражаем нового владельца в переданном объекте: он используется вызывающим
+    // (`_deliver`/хаб ниже) и возвращается из `handleEvent`.
     session.ownerId = externalUserId;
     session.userId = externalUserId;
-    await this._sessionManager.updateSession(session);
     // ADR-089: подписываем хаб на сессию уже от лица нового владельца — до доставки.
     await this._onSessionMaterialized?.(session);
   }

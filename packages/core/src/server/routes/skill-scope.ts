@@ -215,17 +215,22 @@ export function createSessionSkillScopeRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'Некорректные данные скиллов сессии' } }, 400);
     }
     const { name, enabled, skills, skillsDisabled } = parsed.data;
-    if (name !== undefined) {
-      const enabledList = new Set(session.settings.skills ?? []);
-      const disabledList = new Set(session.settings.skillsDisabled ?? []);
-      if (enabled) { enabledList.add(name); disabledList.delete(name); }
-      else { enabledList.delete(name); disabledList.add(name); }
-      session.settings.skills = [...enabledList];
-      session.settings.skillsDisabled = [...disabledList];
-    }
-    if (skills !== undefined) session.settings.skills = skills;
-    if (skillsDisabled !== undefined) session.settings.skillsDisabled = skillsDisabled;
-    await deps.sessionManager.updateSession(session);
+    // read-modify-write сессии — только под `SessionManager.withLock`: без лока
+    // параллельные PUT/PATCH на одной сессии затирают правки друг друга
+    // (lost update — победитель сохраняет свой снапшот целиком).
+    await deps.sessionManager.withLock(session.id, async (s) => {
+      if (name !== undefined) {
+        const enabledList = new Set(s.settings.skills ?? []);
+        const disabledList = new Set(s.settings.skillsDisabled ?? []);
+        if (enabled) { enabledList.add(name); disabledList.delete(name); }
+        else { enabledList.delete(name); disabledList.add(name); }
+        s.settings.skills = [...enabledList];
+        s.settings.skillsDisabled = [...disabledList];
+      }
+      if (skills !== undefined) s.settings.skills = skills;
+      if (skillsDisabled !== undefined) s.settings.skillsDisabled = skillsDisabled;
+      await deps.sessionManager.updateSession(s);
+    });
     return effective(c);
   });
 
