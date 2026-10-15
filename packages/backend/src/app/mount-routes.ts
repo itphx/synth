@@ -1,0 +1,561 @@
+// Монтирование HTTP-роутов API v2 backend (Hono API Hub).
+// Порядок `app.route`/`app.get` сохраняется 1:1 с прежним `app.ts` — он
+// определяет приоритеты маршрутов (статические сегменты раньше параметрических,
+// SSE-хаб `/api/v2/events` после роутов событий, но до admin-роутов).
+// Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
+import { isAbsolute, normalize, resolve } from 'node:path';
+import type { Hono } from 'hono';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole } from '@itphx/synth-shared';
+import {
+  DEFAULT_AGENT_ID, DictionaryStore, RateLimiter,
+  getPublicOpenApiDocument,
+  createFsRoutes, createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
+  createEventRoutes, createSchedulerRoutes, createServiceKeyRoutes, createWebhookRoutes,
+  mergeLlmGatewayConfig, mergeSecurityConfig,
+  createSkillRoutes, createCommandRoutes, createSkillBundleRoutes,
+  createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
+  createIdentityRoutes,
+  ProjectInstructionsResolver, createInstructionsInfoResolver,
+  createSettingsRoutes, createDictionaryRoutes,
+  createContextRoutes as createCoreContextRoutes,
+  resolveProjectWorkspace,
+} from '@itphx/synth-core';
+import type { AuthKit as CoreAuthKit, ServiceApiKeyStore } from '@itphx/synth-core';
+import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
+import { createSessionRoutes } from '../routes/sessions.js';
+import { createMessageRoutes } from '../routes/messages.js';
+import { createQueueRoutes } from '../routes/queue.js';
+import { createProviderRoutes } from '../routes/providers.js';
+import { createModelRoutes } from '../routes/models.js';
+import { createAgentRoutes } from '../routes/agents.js';
+import { createMcpRoutes } from '../routes/mcp.js';
+import { createContextRoutes as createContextFileRoutes } from '../routes/context.js';
+import { createDebugRoutes } from '../routes/debug.js';
+import { createUserRoutes } from '../routes/users.js';
+import { createAuditRoutes } from '../routes/audit.js';
+import { createLogsRoutes, resolveLogDir } from '../routes/logs.js';
+import { createGatewayPatternsRoutes } from '../routes/gateway-patterns.js';
+import { createLlmRoutes } from '../routes/llm.js';
+import { createRateLimiter } from '../middleware/rate-limiter.js';
+import { scopeGuard, projectGuard } from '../auth/service-scope.js';
+import { requireAdminOrScope } from '../auth/guards.js';
+import { t, getTranslations } from '../lib/i18n.js';
+import type { AuthKit } from '../auth/middleware.js';
+import type { BackendConfig } from '../lib/app-config.js';
+import type { BackendDeps } from './deps.js';
+import { registerEventsSse } from './sse-events.js';
+
+export interface BackendRoutesContext {
+  /** Конфиг backend (config.yaml + env + dataDir). */
+  config: BackendConfig;
+  /** Зависимости backend (`createBackendDeps`). */
+  deps: BackendDeps;
+  /** ADR-052 (этап I): реестр service-key (создаётся до `auth` в `app.ts`). */
+  serviceApiKeyStore: ServiceApiKeyStore;
+}
+
+/**
+ * Смонтировать все `/api/v2/*`-роуты и служебные заглушки (`/api/config/themes`,
+ * i18n-эндпоинты) в порядке, идентичном прежнему `createBackendApp`.
+ */
+export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesContext): void {
+  const { config, deps, serviceApiKeyStore } = ctx;
+  const {
+    dataDir, projectStore, sessionManager, eventBus, queueManager, processMessage, orchestrator,
+    profilesStore, getDefaultAgentId, requestSessionService, contextOptimizer, protectedPathsStore,
+    providerStore, providerCache, modelStore, modelCache, agentStore, agentRegistry, contextConfig,
+    sshKeyStore, commandService, bundleStore,
+    eventIngress, eventBindingStore, eventJournal, routeRuleStore, eventApiKeyStore,
+    schedulerService, scheduleStore, jobStore, webhookStore, webhookDeliveryStore, webhookService,
+    webhooksConfig, eventHub, mcpManager, mcpRegistryStore, skillService, settingsStore,
+    defaultWorkingDir, patternStore, toolRegistry, gatewayAuditLogger, gatewayPayloadLogPath,
+    gatewayConfig, providerLoader, modelLoader, modelWindowLoader, resolveAgentTemplate,
+    identityClaimStore, live,
+  } = deps;
+
+  // API-заглушки для UI
+  app.get('/api/config/themes', (c) => c.json({ themes: [] }));
+
+  // i18n endpoints
+  app.get('/api/v2/i18n/current', (c) => {
+    const header = c.req.header('Accept-Language');
+    const lang = header?.split(',')[0]?.trim()?.slice(0, 2) === 'en' ? 'en' : 'ru';
+    return c.json({ language: lang, locale: lang });
+  });
+  app.get('/api/v2/i18n/translations/ru', (c) => c.json(getTranslations('ru')));
+  app.get('/api/v2/i18n/translations/en', (c) => c.json(getTranslations('en')));
+
+  // ADR-052 (этап I): публичный OpenAPI-документ (spike) за requireAuth;
+  // публичную выдачу без auth согласуем отдельно.
+  app.get('/api/v2/openapi.json', auth.requireAuth, (c) => c.json(getPublicOpenApiDocument()));
+
+  // Projects routes
+  app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore));
+
+  // Sessions routes
+  app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId, requestSessionService));
+
+  // Messages routes
+  app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus));
+
+  // Queue routes
+  app.route('/api/v2/queue', createQueueRoutes(auth, sessionManager, queueManager, eventBus, processMessage));
+
+  // FS routes (ADR-075): core-фабрика, managed поверх workspace проекта.
+  // ADR-089 (P0): доступ к проекту обязателен — иначе любой USER читал/писал бы
+  // файлы чужого проекта по id (IDOR). Чтение — canRead, мутации — canEditContent.
+  const projectAccess = createProjectAccess(auth);
+  app.route('/api/v2/fs', createFsRoutes(auth, config.workspacesRoot, undefined, {
+    requireProjectId: true,
+    getOutsideRootPolicy: () => 'deny',
+    getProtectedPathsPolicy: () => protectedPathsStore.getPolicy(),
+    authorizeProject: async (c, projectId) => {
+      const user = await auth.getCurrentUser(c);
+      if (!user) return false;
+      const project = await projectStore.load(projectId);
+      if (!project) return false;
+      return c.req.method === 'GET'
+        ? projectAccess.canReadProject(c, project, user.id)
+        : projectAccess.canEditProjectContent(c, project, user.id);
+    },
+    getProjectWorkspace: (projectId) => resolveProjectWorkspace(projectId, {
+      workspacesRoot: config.workspacesRoot,
+      getProject: (id) => projectStore.load(id),
+      outsideRootPolicy: () => 'deny',
+      strict: true,
+    }),
+  }));
+
+  // Providers routes
+  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache));
+
+  // Models routes
+  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache));
+
+  // Agents routes
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
+
+  // Context routes (глобальные identity-файлы; админ-мутации)
+  app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig));
+
+  // User admin routes
+  app.route('/api/v2/users', createUserRoutes(auth, profilesStore));
+
+  // Git routes (ADR-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
+  // (init/clone/register/remove/fetch) требуют прав на изменение контента
+  // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — requireAuth.
+  app.route('/api/v2/git', createGitRoutes(auth, projectStore, config.workspacesRoot, {
+    sshKeyStore,
+    authorizeProject: async (c, projectId) => {
+      const user = await auth.getCurrentUser(c);
+      if (!user) return false;
+      const project = await projectStore.load(projectId);
+      if (!project) return false;
+      return projectAccess.canEditProjectContent(c, project, user.id);
+    },
+  }));
+
+  // SSH-ключи агентов (ADR-076 §T5): core-фабрика + managed RBAC.
+  // Ключи — секреты: чтение — requireAuth (глобально), запись — только ADMIN.
+  app.route('/api/v2/ssh-keys', createSshKeyRoutes(auth, sshKeyStore, {
+    writeGuard: auth.requireAdmin,
+  }));
+  app.route('/api/v2/agents/:agentId/ssh-keys', createAgentSshKeyRoutes(auth, sshKeyStore, {
+    writeGuard: auth.requireAdmin,
+  }));
+
+  // ADR-089: приём внешних событий (ingress), биндинги и журнал. Ingress —
+  // requireAuth + rate limit (внешние сервисы до ADR-052 используют общий ключ);
+  // чтение биндингов/журнала — requireAuth; мутации биндингов — ADMIN.
+  // `GET /` не переопределяем — на этом пути SSE-хаб ниже.
+  app.route('/api/v2/events', createEventRoutes(
+    { requireAuth: auth.requireAuth },
+    { ingress: eventIngress, bindingStore: eventBindingStore, journal: eventJournal, routeRuleStore, apiKeyStore: eventApiKeyStore },
+    {
+      // Rate limit — до решения о способе аутентификации; fallback-креды —
+      // requireAuth (приём по API-ключу привязки креды пользователя не требует).
+      ingestPreGuard: createRateLimiter(120, 60_000),
+      ingestGuard: auth.requireAuth,
+      // ADR-089/ADR-052: мутации bindings/routes/keys — LEAD и ADMIN; чтение
+      // ключей привязки — тоже LEAD и ADMIN (чувствительные метаданные).
+      writeGuard: auth.requirePermission('ADMIN', 'LEAD'),
+      keyReadGuard: auth.requirePermission('ADMIN', 'LEAD'),
+      // ADR-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
+      scopeGuard,
+      projectGuard,
+      // ADR-089/ADR-052: per-key rate limit и мастер-выключатель приёма (live).
+      getKeyRateLimitPerMinute: () => live.getEvents().keyRateLimitPerMinute,
+      isEnabled: () => live.getEvents().enabled,
+      resolveAgentTemplate,
+      sessionExists: async (id) => (await sessionManager.getSession(id)) !== null,
+      resolveApiKeySecret: async (raw) => {
+        const resolved = await eventApiKeyStore.resolveBySecret(raw);
+        if (!resolved) return null;
+        const binding = await eventBindingStore.get(resolved.credential.bindingId);
+        if (!binding) return null;
+        return { binding, credential: resolved.credential };
+      },
+      touchApiKey: (id) => eventApiKeyStore.touch(id),
+      messages: {
+        invalidEvent: (c) => t('errors.validation.invalidEvent', undefined, c),
+        invalidBinding: (c) => t('errors.validation.invalidBinding', undefined, c),
+        bindingNotFound: (c) => t('errors.notFound.binding', undefined, c),
+        invalidRule: (c) => t('errors.validation.invalidRule', undefined, c),
+        ruleNotFound: (c) => t('errors.notFound.rule', undefined, c),
+        unknownAgent: (c) => t('errors.validation.unknownAgent', undefined, c),
+        invalidKey: (c) => t('errors.validation.invalidEventKey', undefined, c),
+        keyNotFound: (c) => t('errors.notFound.eventKey', undefined, c),
+        invalidKeyUpdate: (c) => t('errors.validation.invalidEventKeyUpdate', undefined, c),
+        keyLabelConflict: (c) => t('errors.conflict.eventKeyLabel', undefined, c),
+        rateLimitedKey: (c) => t('errors.rateLimited.eventKey', undefined, c),
+        eventsDisabled: (c) => t('errors.unavailable.eventsDisabled', undefined, c),
+      },
+    },
+  ));
+
+  // ADR-051 / ADR-089: CRUD расписаний, принудительный запуск и Job-история.
+  // Чтение — requireAuth (дефолт core-фабрики), мутации — ADMIN. `run` —
+  // ADMIN + rate limit (образец — ingest внешних событий): 10 запусков / 60 c
+  // на ключ, т.к. каждый запуск ингестит событие в Router.
+  app.route('/api/v2/schedules', createSchedulerRoutes(
+    auth,
+    { scheduleStore, scheduler: schedulerService, jobStore },
+    {
+      writeGuard: auth.requireAdmin,
+      runGuard: auth.requireAdmin,
+      runMiddleware: [createRateLimiter(10, 60_000)],
+      // ADR-052 (этап I): scope-гейт, проектная проекция и резолвинг
+      // projectId `bound`/`queue`-целей расписания.
+      scopeGuard,
+      projectGuard,
+      resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
+    },
+  ));
+
+  // ADR-052 (этап I): CRUD service-key инстанса (`synth_svc_…`). Managed RBAC:
+  // только ADMIN (ключи дают машинный доступ — управление админское), i18n.
+  app.route('/api/v2/service-keys', createServiceKeyRoutes(
+    { requireAuth: auth.requireAuth },
+    { store: serviceApiKeyStore },
+    {
+      writeGuard: auth.requirePermission('ADMIN'),
+      readGuard: auth.requirePermission('ADMIN'),
+      // createdBy: `attachUser` уже положил пользователя в контекст — берём его id.
+      resolveUserId: (c) => {
+        const user = c.get('user') as { id?: string } | undefined;
+        return user?.id ?? '';
+      },
+      messages: {
+        invalidKey: (c) => t('errors.validation.invalidServiceKey', undefined, c),
+        keyNotFound: (c) => t('errors.notFound.serviceKey', undefined, c),
+        keyLabelConflict: (c) => t('errors.conflict.serviceKeyLabel', undefined, c),
+      },
+    },
+  ));
+
+  // ADR-052 (этап II): подписки на исходящие webhooks (CRUD + журнал + тест).
+  // Managed RBAC: только ADMIN (webhook может утекать данные на произвольный
+  // URL), i18n. Мастер-выключатель `webhooks.enabled` → 503 на мутации/тест.
+  app.route('/api/v2/webhooks', createWebhookRoutes(
+    { requireAuth: auth.requireAuth },
+    { store: webhookStore, deliveryStore: webhookDeliveryStore, service: webhookService },
+    {
+      writeGuard: auth.requirePermission('ADMIN'),
+      readGuard: auth.requirePermission('ADMIN'),
+      resolveUserId: (c) => {
+        const user = c.get('user') as { id?: string } | undefined;
+        return user?.id ?? 'unknown';
+      },
+      isEnabled: () => webhooksConfig.enabled,
+      allowPrivateTargets: webhooksConfig.allowPrivateTargets,
+      messages: {
+        invalid: (c) => t('errors.validation.invalidWebhook', undefined, c),
+        notFound: (c) => t('errors.notFound.webhook', undefined, c),
+        labelConflict: (c) => t('errors.conflict.webhookLabel', undefined, c),
+        targetForbidden: (c) => t('errors.validation.webhookTargetForbidden', undefined, c),
+        disabled: (c) => t('errors.unavailable.webhooksDisabled', undefined, c),
+      },
+    },
+  ));
+
+  // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
+  app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
+    registry: mcpRegistryStore,
+    networkPolicy: live.getNetworkPolicy(),
+    getNetworkPolicy: () => live.getNetworkPolicy(),
+  }));
+
+  // Скиллы (ADR-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.
+  app.route('/api/v2/skills', createSkillRoutes(auth as unknown as CoreAuthKit, {
+    skillService,
+    resolveProjectWorkspace: async (projectId) => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      return isAbsolute(project.workspace)
+        ? normalize(project.workspace)
+        : resolve(config.workspacesRoot, project.workspace);
+    },
+  }, { writeGuard: requireAdminOrScope('addons:install') }));
+
+  // ADR-046 §7/§9.1: команды и bundles (mirror core, мутации — ADMIN).
+  app.route('/api/v2/commands', createCommandRoutes(auth as unknown as CoreAuthKit, {
+    commandService,
+    resolveProjectWorkspace: async (projectId) => {
+      const project = await projectStore.load(projectId);
+      if (!project?.workspace) return undefined;
+      return isAbsolute(project.workspace)
+        ? normalize(project.workspace)
+        : resolve(config.workspacesRoot, project.workspace);
+    },
+  }));
+  app.route('/api/v2/skill-bundles', createSkillBundleRoutes(auth as unknown as CoreAuthKit, {
+    bundleStore,
+    validateSkills: async (names) => {
+      const missing: string[] = [];
+      for (const name of names) {
+        if (!(await skillService.get(name))) missing.push(name);
+      }
+      return missing;
+    },
+  }, { writeGuard: auth.requireAdmin }));
+
+  // ADR-046 §4.5: scope-API скиллов. Доступ к сессии — владелец|ADMIN
+  // (canAccess, как в session-роутах); проект — owner/LEAD/ADMIN.
+  const resolveSkillWorkspace = async (projectId: string): Promise<string | undefined> => {
+    const project = await projectStore.load(projectId);
+    if (!project?.workspace) return undefined;
+    return isAbsolute(project.workspace)
+      ? normalize(project.workspace)
+      : resolve(config.workspacesRoot, project.workspace);
+  };
+  app.route('/api/v2/sessions', createSessionSkillScopeRoutes(auth as unknown as CoreAuthKit, {
+    sessionManager, skillService, settingsStore, projectStore,
+    permissionConfig: config.synth.permission,
+    resolveProjectWorkspace: resolveSkillWorkspace,
+  }, {
+    writeGuard: auth.requireAuth,
+    resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+    canAccess: (session, c, userId) =>
+      (session.ownerId ?? session.userId) === userId
+      || auth.isAdmin(c as never),
+  }));
+  app.route('/api/v2/projects', createProjectSkillScopeRoutes(auth as unknown as CoreAuthKit, {
+    sessionManager, skillService, settingsStore, projectStore,
+    permissionConfig: config.synth.permission,
+    resolveProjectWorkspace: resolveSkillWorkspace,
+  }, {
+    // ADR-046 §4.5: проектным уровнем управляют owner/LEAD/ADMIN — как в
+    // project-MCP (`canManageProjectMcp`), поэтому writeGuard не requireAdmin;
+    // владение проверяет canAccessProject (403 не-членам, 404 — нет проекта).
+    writeGuard: auth.requireAuth,
+    resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+    canAccessProject: (project, c, userId) =>
+      auth.isAdmin(c as never)
+      || auth.hasRole(c as never, 'LEAD')
+      || project.ownerId === userId
+      || project.members?.[userId] === ProjectRole.OWNER,
+  }));
+  app.route('/api/v2/settings', createSkillSettingsRoutes(auth as unknown as CoreAuthKit, { settingsStore }, {
+    writeGuard: auth.requireAdmin,
+    onSkillsDisabledChange: (disabled) => orchestrator.setSkillsDisabled(disabled),
+  }));
+
+  // ADR-089: идентичности текущего пользователя (`GET/DELETE /api/v2/me/identities`).
+  // RBAC: аутентифицированный пользователь (только свои); линковка — claim-flow
+  // (`POST /api/v2/me/identities/claim`).
+  // Резолвим **id профиля** по `username` аутентифицированного пользователя
+  // (OIDC `sub` — не id профиля: профили хранятся под сгенерированным id).
+  // Не передаём `roles` — чтобы не перезаписывать роли существующего профиля.
+  app.route('/api/v2/me', createIdentityRoutes(auth as unknown as CoreAuthKit, profilesStore, {
+    resolveProfileId: async (c) => {
+      const u = await auth.getCurrentUser(c as never);
+      if (!u) return '';
+      const profile = (await profilesStore.getProfileByUsername(u.username))
+        ?? (await profilesStore.getOrCreateProfile({ username: u.username, email: u.email }));
+      return profile.id;
+    },
+    claimStore: identityClaimStore,
+    // ADR-089 (claim-flow): анти-брутфорс одноразового кода (6 символов, TTL 10 мин) —
+    // per-user fixed window 60 c (ключ — Authorization-токен, не IP).
+    rateLimitGuard: createRateLimiter(
+      10,
+      60_000,
+      (c) => t('errors.rateLimited.identityClaim', undefined, c),
+    ),
+    messages: {
+      identityNotFound: (c) => t('errors.notFound.identity', undefined, c),
+      claimNotFound: (c) => t('errors.notFound.identityClaim', undefined, c),
+      claimConflict: (c) => t('errors.conflict.identityClaim', undefined, c),
+      claimCodeRequired: (c) => t('errors.validation.claimCodeRequired', undefined, c),
+      unauthorized: (c) => t('auth.unauthorized', undefined, c),
+    },
+  }));
+
+  // LLM Gateway audit routes (ADR-036) — GET только ADMIN/AUDITOR, POST /revealed — все авторизованные
+  app.route('/api/v2/audit', createAuditRoutes(auth, {
+    auditLogPath: gatewayAuditLogger.logPath,
+    sessionExists: async (sessionId: string) => {
+      const session = await sessionManager.getSession(sessionId);
+      return session !== null;
+    },
+    logger: gatewayAuditLogger,
+  }));
+
+  // Логи сервисов (core/ui/backend) + полный лог запросов/ответов LLM — чтение, только ADMIN/AUDITOR
+  app.route('/api/v2/logs', createLogsRoutes(auth, {
+    logDir: resolveLogDir(),
+    payloadLogPath: gatewayPayloadLogPath,
+  }));
+
+  // LLM Gateway patterns routes (ADR-036) — управление regex-паттернами детекции секретов, только ADMIN
+  app.route('/api/v2/gateway', createGatewayPatternsRoutes(auth, patternStore));
+
+  // LLM Proxy (гибридный режим, Часть 5) — OpenAI-совместимый POST /api/v2/llm/chat/completions.
+  // Локальный core гоняет LLM-запросы централизованно через LLM Gateway (ADR-036):
+  // обфускация/блокировка секретов, rate limit, аудит, полный payload-лог.
+  app.route('/api/v2/llm', createLlmRoutes(auth, {
+    providerLoader,
+    modelLoader,
+    // mergeLlmGatewayConfig может вернуть undefined, если ни base, ни runtime не заданы —
+    // но schema с default({}) гарантирует base, поэтому подставляем его.
+    gatewayConfig: gatewayConfig ?? config.synth.llmGateway,
+    gatewayAuditLogger,
+    gatewayRateLimiter: new RateLimiter(
+      (gatewayConfig ?? config.synth.llmGateway).rateLimit.userPerMinute,
+      (gatewayConfig ?? config.synth.llmGateway).rateLimit.providerPerMinute,
+    ),
+    gatewayPayloadLogPath,
+    patternStore,
+    rateLimiter: createRateLimiter(120, 60_000),
+  }));
+
+  // Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)
+  app.route('/api/v2/settings', createSettingsRoutes(auth as unknown as CoreAuthKit, {
+    settingsStore,
+    fallbackWorkspace: defaultWorkingDir,
+    // ADR-075: managed-развёртывание — политика вне `workspacesRoot` всегда `deny`
+    // (enforcement — в `routes/projects.ts`); строго read-only: GET отдаёт
+    // fallback + readOnly, PUT/DELETE → 403 WORKSPACE_POLICY_READ_ONLY.
+    fallbackWorkspaceOutsideRootPolicy: 'deny',
+    workspacePolicyReadOnly: true,
+    // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
+    fallbackDefaultAgent: DEFAULT_AGENT_ID,
+    // ADR-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
+    fallbackLlmGateway: {
+      enabled: config.synth.llmGateway.enabled,
+      inputMode: config.synth.llmGateway.inputMode,
+      logPayloads: config.synth.llmGateway.logPayloads,
+      rateLimit: {
+        userPerMinute: config.synth.llmGateway.rateLimit?.userPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.userPerMinute,
+        providerPerMinute: config.synth.llmGateway.rateLimit?.providerPerMinute ?? DEFAULT_LLM_GATEWAY_RATE_LIMIT.providerPerMinute,
+      },
+    },
+    fallbackSecurity: {
+      protectedPaths: { enabled: config.synth.security.protectedPaths?.enabled ?? true },
+      // ADR-029: askTimeoutMs живёт в permission-секции конфига (не в security).
+      askTimeoutMs: config.synth.permission?.askTimeoutMs,
+    },
+    // ADR-036: live-применение тумблера LLM Gateway из UI — без рестарта сервера.
+    onLlmGatewayChange: async (runtime) => {
+      const merged = mergeLlmGatewayConfig(config.synth.llmGateway, runtime);
+      orchestrator.setGatewayConfig(merged);
+    },
+    // live-применение тумблера защищённых путей из UI — без рестарта сервера.
+    onSecurityChange: async (runtime) => {
+      const merged = mergeSecurityConfig(config.synth.security, runtime);
+      orchestrator.setSecurityConfig(merged);
+    },
+    // ADR-071 §2.3: live-применение политики встроенных инструментов из админки.
+    fallbackToolsPolicy: config.synth.tools.policy,
+    onToolsPolicyChange: async (policy) => {
+      orchestrator.setToolsPolicy(policy);
+    },
+    // ADR-071 §2.3: live-применение политики MCP-инструментов из админки.
+    fallbackMcpPolicy: config.synth.mcp.policy,
+    onMcpPolicyChange: async (policy) => {
+      orchestrator.setMcpPolicy(policy);
+    },
+    // ADR-071 §2.6: live-применение instance-wide отключения инструментов.
+    fallbackToolsDisabled: config.synth.tools.disabled,
+    onToolsDisabledChange: async (disabled) => {
+      orchestrator.setToolsDisabled(disabled);
+    },
+    knownTools: () => toolRegistry.list().map((tool) => ({
+      name: tool.name,
+      capabilities: [...tool.capabilities],
+    })),
+    // ADR-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
+    fallbackMcpNetworkPolicy: config.synth.mcp.networkPolicy,
+    onMcpNetworkPolicyChange: async (policy) => {
+      live.setNetworkPolicy(policy);
+    },
+    // ADR-089: дефолт config.yaml для GET/DELETE-сброса раздела «События».
+    fallbackEvents: config.synth.events,
+    // ADR-089: live-применение runtime-настроек «События» — Router/funnel/pruner.
+    onEventsChange: (effective) => {
+      live.setEvents(effective);
+    },
+    // ADR-084: дефолт config.yaml для GET/DELETE-сброса decision-слоя.
+    fallbackDecision: config.synth.decision,
+    // ADR-084: live-применение runtime-настроек decision-слоя — микро-каскад и
+    // роутер читают конфиг геттером оркестратора; события — через `live.setEvents`.
+    onDecisionChange: (effective) => {
+      live.setDecision(effective);
+    },
+    protectedPathsStore,
+  }, {
+    // ADR-089: мутации раздела «События» — только ADMIN (managed RBAC).
+    eventsWriteGuard: auth.requirePermission('ADMIN'),
+    // ADR-084: мутации decision-слоя — только ADMIN (managed RBAC).
+    decisionWriteGuard: auth.requirePermission('ADMIN'),
+  }));
+
+  // Словари классификации: чтение — все авторизованные, запись/сброс — ADMIN
+  // (тот же guard, что у users.ts). Реализация общая с core.
+  const dictionaryStore = new DictionaryStore(dataDir);
+  app.route('/api/v2/dictionaries', createDictionaryRoutes(
+    auth,
+    dictionaryStore,
+    { writeGuard: auth.requireAdmin },
+  ));
+
+  // ADR-069 §9.3: прозрачность проектных инструкций — core-фабрика (резолвер не
+  // дублируется). RBAC: сессия — владелец|ADMIN (canAccess, как в session-роутах);
+  // проект — owner/LEAD/ADMIN (canAccessProject, как в project-скиллах).
+  const instructionsInfoResolver = createInstructionsInfoResolver(
+    new ProjectInstructionsResolver({
+      config: config.synth.instructions,
+      dictionaryStore,
+      dataDir,
+      trustedProjectDirs: config.synth.skills.trustedProjectDirs,
+      // ADR-069 R3: авто-trust workspace внутри workspacesRoot (managed-каталоги).
+      workspacesRoot: config.workspacesRoot,
+    }),
+    config.synth.instructions,
+  );
+  app.route('/api/v2/context', createCoreContextRoutes(auth as unknown as CoreAuthKit, {
+    resolveInstructions: instructionsInfoResolver,
+    sessionManager,
+    projectStore,
+    resolveProjectWorkspace: resolveSkillWorkspace,
+    resolveContextWindow: (session) => {
+      const model = session?.settings.model;
+      return model ? modelWindowLoader(model) || undefined : undefined;
+    },
+    resolveUserId: async (c) => (await auth.getCurrentUser(c as never))?.id ?? '',
+    canAccess: (session, c, userId) =>
+      (session.ownerId ?? session.userId) === userId
+      || auth.isAdmin(c as never),
+    canAccessProject: (project, c, userId) =>
+      auth.isAdmin(c as never)
+      || auth.hasRole(c as never, 'LEAD')
+      || project.ownerId === userId
+      || project.members?.[userId] === ProjectRole.OWNER,
+  }));
+
+  // Глобальный SSE-хаб для всех сессий пользователя (ADR-052: `events:watch`).
+  registerEventsSse(app, { auth, eventHub, scopeGuard });
+
+  // Admin routes (кроме graceful shutdown — он живёт в main.ts, т.к. требует server)
+  app.route('/api/v2/admin/debug', createDebugRoutes(auth));
+}

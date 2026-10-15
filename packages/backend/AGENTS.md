@@ -14,7 +14,7 @@
 
 Бэкенд — композиция: ядро даёт логику, backend — транспорт, auth и точки монтирования.
 
-Из `@itphx/synth-core` (импорты в `src/app.ts`):
+Из `@itphx/synth-core` (импорты в `src/app/deps.ts`):
 
 | Из core | Зачем |
 |---|---|
@@ -39,7 +39,7 @@
 
 Локально только:
 
-- `src/app.ts` — фабрика `createBackendApp()`; `src/main.ts` — listen и graceful shutdown.
+- `src/app.ts` — фабрика `createBackendApp()` (фасад-композиция, ADR-095 шаг 4b) + модули `src/app/*`: `deps.ts` (сборка зависимостей: хранилища, оркестратор, событийное ядро/шедулер/webhooks, live-аксессоры), `mount-routes.ts` (весь порядок монтирования роутов), `listen.ts` (HTTP `listen` + WS `/ws/events`), `sse-events.ts` (`GET /api/v2/events`), `bootstrap.ts` (сид debug-профилей); `src/main.ts` — listen и graceful shutdown.
 - `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware, OIDC и scope-гейты service-key
   (`service-scope.ts`: `scopeGuard`/`projectGuard`); `src/events/hub.ts` — `EventHub`.
 - `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `i18n`.
@@ -64,7 +64,7 @@
 ## Правила эндпоинта
 
 - Всё API — единое дерево `/api/v2/*`; админка отличается правами, не путём.
-- Роутер — фабрика `createXxxRoutes(...)`, монтируется в `src/app.ts` через `app.route(...)`. Новый роутер = фабрика + одна строка в `app.ts`.
+- Роутер — фабрика `createXxxRoutes(...)`, монтируется в `src/app/mount-routes.ts` через `app.route(...)`. Новый роутер = фабрика + одна строка в `mount-routes.ts`.
 - RBAC — только через `AuthKit`: `getCurrentUser`, `attachUser`, `requireAuth`, `requireAdmin`, `requirePermission(...roles)` (`src/auth/middleware.ts`). Проверок ролей внутри роутеров не хардкодить.
 - `attachUser` вешается глобально (`app.use('*', ...)`) до роутов и просто кладёт `c.set('user')`; `requireAuth` возвращает 401, `requireAdmin`/`requirePermission` — 403.
 - Формат ошибки — `{ error: { code, message } }`; встречающиеся коды: `VALIDATION_ERROR`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`, `BAD_REQUEST`, `RATE_LIMITED`, `INTERNAL_ERROR`. Исключение: FS и git отдают shared-форму `{ error: { error, code } }` (`FsError`).
@@ -72,10 +72,10 @@
 - Rate limiter (`createRateLimiter(max, windowMs)`; in-memory, ключ — `Authorization` или `x-forwarded-for`) вешается на публичные мутации: `prompt`, `spa-login`, `providers/:name/test`, `models/fetch`, LLM-прокси.
 - Вход валидируется Zod-схемами из `@itphx/synth-shared` (образец — `src/routes/models.ts`).
 - Порядок регистрации важен: статические сегменты объявляй раньше параметрических (в `routes/agents.ts` `/all` зарегистрирован до `/:id`).
-- Часть admin-роутов живёт в `src/main.ts`, а не в `app.ts` (`POST /admin/shutdown`, заглушка `GET /admin/sessions/blocked`), т.к. требует server/graceful shutdown.
+- Часть admin-роутов живёт в `src/main.ts`, а не в `app.ts`/`app/mount-routes.ts` (`POST /admin/shutdown`, заглушка `GET /admin/sessions/blocked`), т.к. требует server/graceful shutdown.
 - CORS — динамический: explicit `SYNTH_CORS_ORIGIN` → белый список `synth.server.allowedOrigins` → разрешить всё.
 
-## Монтирование роутов (`src/app.ts`)
+## Монтирование роутов (`src/app/mount-routes.ts`)
 
 | Префикс | Источник |
 |---|---|
@@ -102,7 +102,7 @@
 | `/api/v2/service-keys` | core `createServiceKeyRoutes` (ADR-052 этап I): CRUD scoped-ключей инстанса, `writeGuard`/`readGuard` = `requirePermission('ADMIN')`, `messages` — i18n, `resolveUserId` — id из `attachUser`; store `ServiceApiKeyStore` (`{dataDir}/service-keys.json`) |
 | `/api/v2/webhooks` | core `createWebhookRoutes` (ADR-052 этап II): CRUD подписок исходящих webhooks + журнал доставок + тест, `writeGuard`/`readGuard` = `requirePermission('ADMIN')` (webhook может утекать данные на произвольный URL), `messages` — i18n, `resolveUserId` — id из `attachUser`, `isEnabled` — мастер `webhooks.enabled` (→ 503 на мутации/тест), `allowPrivateTargets` — SSRF-политика; store `WebhookStore` (`{dataDir}/webhooks/subscriptions.json`), журнал `WebhookDeliveryStore` (`{dataDir}/webhooks/deliveries.jsonl`), движок `WebhookService` над `EventBus.subscribeAll` |
 | `/health`, `/api/v2/health` | публичные, без auth |
-| `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `app.ts` |
+| `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `src/app/mount-routes.ts` |
 
 `/api/v2/{providers,models,sessions,projects,messages,queue,agents}` — тонкие обёртки над core-фабриками; `/api/v2/{fs,git,ssh-keys,settings,dictionaries}` — прямое монтирование core-фабрик с RBAC/спецификой в `opts`: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`/`authorizeProject`, rate limiter и backend-only роуты (например, `models/fetch` — rate limit, `providers/fetch-icon`, `mcp-registry`). Дублировать хендлеры core нельзя.
 
@@ -118,13 +118,13 @@
 
 ## Транспорт событий
 
-- Единственный WS-канал — `/ws/events` (upgrade в `src/app.ts`); один клиент на пользователя, автоподписка на все его сессии.
+- Единственный WS-канал — `/ws/events` (upgrade в `src/app/listen.ts`); один клиент на пользователя, автоподписка на все его сессии.
 - SSE-фоллбек — `GET /api/v2/events` (`auth.requireAuth`, keepalive раз в 30 c).
 - `EventHub` (`src/events/hub.ts`) — диспетчер подписок поверх core-`EventBus`; новых транспортных каналов не плодить (ADR-008/009/024).
 - **Watch-all клиенты (ADR-052).** `EventClient.allSessions` — клиент получает события **всех** сессий через глобальную подписку `eventBus.subscribeAll` (паритет со standalone-core), а не только своих по `listSessions({ userId })`. Так подключаются SSE/WS при аутентификации **service-key** (`service:<keyId>` владельцем сессий не является) и для «сквозного обзора» (`ADMIN`/`LEAD`, ADR-089). Для обычного USER поведение прежнее (только свои сессии). Без этого SSE-подписчик на service-key получал `0` подписок и не видел `stream.done` (ответы не доставлялись).
 - **Webhooks (ADR-052 этап II).** Движок `WebhookService` подписывается на **ту же** шину `eventBus` (`subscribeAll`), что обслуживает сессии и глобальный SSE `GET /api/v2/events`: `subscribeAll` — глобальная подписка core-`EventBus`, доступная на общем инстансе, поэтому отдельный мост не нужен. Движок фильтрует события по паттернам подписок, шлёт HMAC-подписанные POST и пишет журнал; `webhooks.enabled: false` (дефолт) глушит диспетчеризацию. Retention — `startWebhookDeliveryPruner`; остановка — `stopWebhookService`/`stopWebhookDeliveryPruner` на shutdown.
 - Новую сессию подписывай через `eventHub.subscribeToSession(...)`, а не сырым `eventBus.subscribe`.
-- Сессии, создаваемые events-funnel'ом (`RequestSessionService`: external `ephemeral`/`bind`, explicit из тула `task`), `app.ts` подписывает автоматически через `deps.onSessionMaterialized` → `eventHub.subscribeToSession(owner, sessionId)` — клиент, подключённый до создания сессии, получает её события. Владелец сессии — по `deps.resolveExternalIdentity` (`createExternalIdentityResolver`: override `identityMap` по `identity.principalId`/`chatKey` → профиль `identities` по `principalId`), затем `events.identityMap` (фоллбек-совместимость), затем per-event (пользователь/владелец ключа привязки), `resolveOwnerId`. Резолвер читает `identityMap` геттером (`() => effectiveEventsSettings.identityMap`), поэтому `onEventsChange` применяет runtime-настройку live, без рестарта.
+- Сессии, создаваемые events-funnel'ом (`RequestSessionService`: external `ephemeral`/`bind`, explicit из тула `task`), `src/app/deps.ts` подписывает автоматически через `deps.onSessionMaterialized` → `eventHub.subscribeToSession(owner, sessionId)` — клиент, подключённый до создания сессии, получает её события. Владелец сессии — по `deps.resolveExternalIdentity` (`createExternalIdentityResolver`: override `identityMap` по `identity.principalId`/`chatKey` → профиль `identities` по `principalId`), затем `events.identityMap` (фоллбек-совместимость), затем per-event (пользователь/владелец ключа привязки), `resolveOwnerId`. Резолвер читает `identityMap` геттером (`() => effectiveEventsSettings.identityMap`), поэтому `onEventsChange` применяет runtime-настройку live, без рестарта.
 - **Права внешнего отправителя (ADR-089 этап 5).** Funnel считает эффективные роли отправителя (`resolveEffectiveRoles`: база — роли профиля, `identity.roles` только сужают, несопознанный → без прав/fail-closed) и передаёт `EventDeliveryContext {roles, linked}` в `deliver`; backend-`deliver` кладёт их в `metadata` хода (`effective_roles`/`identity_linked`) — аудит/attribution. `match`/RBAC backend (`requirePermission`) определяется **аутентификацией запроса** (service-account шлюза); роль-оси в permission-слое **нет by design** (роли = доступность эндпоинтов). Практический эффект: права машинного аккаунта шлюза больше не «раздаются» произвольным внешним отправителям; машинный доступ сужается scoped **service-key** (ADR-052).
 
 ## LLM Proxy
@@ -133,7 +133,7 @@
 - ADR-052: на прокси навешан `scopeGuard('llm:chat')` — service-key без `llm:chat` → `403 SCOPE_REQUIRED` (проектной проекции у прокси нет).
 - Реализован на ядре: `GatewayProvider` + `ProviderFactory` + `AuditLogger`/`RateLimiter`/`SecretPatternStore`. Любой LLM-вызов — только через Gateway (ADR-036); провайдера напрямую не инстанцировать.
 - Один `AuditLogger` и один payload-лог шарятся между оркестратором и чтением (`/api/v2/audit`, `/api/v2/logs/llm`) — не создавай вторые.
-- Runtime-тумблеры Gateway/security из UI применяются на живой оркестратор через колбэки `onLlmGatewayChange`/`onSecurityChange` в `app.ts`.
+- Runtime-тумблеры Gateway/security из UI применяются на живой оркестратор через колбэки `onLlmGatewayChange`/`onSecurityChange` в `src/app/deps.ts`.
 
 ## Конфигурация и i18n
 
