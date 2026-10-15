@@ -167,6 +167,34 @@ export type {
   DefaultsRepository,
   AppearanceDefaults,
 } from './storage/ports/index.js';
+// PROP-032 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
+export {
+  MemorySessionRepository,
+  MemoryProjectRepository,
+  MemoryProfileRepository,
+  MemorySettingsRepository,
+  MemoryDefaultsRepository,
+  MemorySecretPatternRepository,
+  MemoryProtectedPathsRepository,
+  MemoryDictionaryRepository,
+  MemoryEventBindingRepository,
+  MemoryEventRouteRepository,
+  MemoryEventJournalRepository,
+  MemoryEventApiKeyRepository,
+  MemoryIdentityClaimRepository,
+  MemoryDedupRepository,
+  MemoryMcpRegistryRepository,
+  MemoryServiceKeyRepository,
+  MemoryWebhookRepository,
+  MemoryWebhookDeliveryRepository,
+  MemoryScheduleRepository,
+  MemoryJobRepository,
+  MemorySkillRepository,
+  MemorySkillBundleRepository,
+  MemoryContextFileRepository,
+  MemoryBlobStore,
+  MemorySSHKeyRepository,
+} from './storage/memory/index.js';
 // ADR-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
 export * as crypto from './security/crypto.js';
 export {
