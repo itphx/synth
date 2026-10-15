@@ -178,7 +178,7 @@ export type {
 export { isSessionVisible } from './server/session-visibility.js';
 export type { SessionOwnerCtx } from './server/session-visibility.js';
 // ADR-075: единая project-aware фабрика FS-роутов (standalone + managed через opts).
-export { createFsRoutes } from './server/routes/fs.js';
+export { createFsRoutes, DEFAULT_MAX_UPLOAD_BYTES } from './server/routes/fs.js';
 export type { FsRoutesOptions, FsRoutesAuth } from './server/routes/fs.js';
 export { resolveProjectWorkspace, isTextFile } from './server/fs-workspace.js';
 export type { ResolveProjectWorkspaceOptions } from './server/fs-workspace.js';
