@@ -315,13 +315,24 @@ export interface SettingsRoutesDeps {
 /** Опции фабрики настроек (guard'ы). */
 export interface SettingsRoutesOptions {
   /**
+   * Guard на мутации **instance-wide** настроек (все PUT/DELETE под
+   * `/api/v2/settings/*`: workspace, mcp, llm-gateway, security, tools-policy,
+   * mcp-policy, mcp-network-policy, default-agent, workspace-policy,
+   * tools-disabled, protected-paths, events, decision); по умолчанию —
+   * `auth.requireAuth`. Standalone (один ключ → ADMIN) оставляет дефолт;
+   * managed backend передаёт `requirePermission('ADMIN')`.
+   */
+  settingsWriteGuard?: Middleware;
+  /**
    * Guard на мутации раздела «События» (PUT/DELETE /events); по умолчанию —
-   * `auth.requireAuth`. Backend передаёт `requirePermission('ADMIN')`.
+   * `settingsWriteGuard` (ранее `auth.requireAuth`). Backend передаёт
+   * `requirePermission('ADMIN')` (в т.ч. через `settingsWriteGuard`).
    */
   eventsWriteGuard?: Middleware;
   /**
    * Guard на мутации decision-слоя (PUT/DELETE /decision); по умолчанию —
-   * `auth.requireAuth`. Backend передаёт `requirePermission('ADMIN')`.
+   * `settingsWriteGuard` (ранее `auth.requireAuth`). Backend передаёт
+   * `requirePermission('ADMIN')` (в т.ч. через `settingsWriteGuard`).
    */
   decisionWriteGuard?: Middleware;
 }
@@ -486,8 +497,9 @@ export function createSettingsRoutes(
   opts: SettingsRoutesOptions = {},
 ): Hono {
   const app = new Hono();
-  const eventsWriteGuard: Middleware = opts.eventsWriteGuard ?? auth.requireAuth;
-  const decisionWriteGuard: Middleware = opts.decisionWriteGuard ?? auth.requireAuth;
+  const settingsWriteGuard: Middleware = opts.settingsWriteGuard ?? auth.requireAuth;
+  const eventsWriteGuard: Middleware = opts.eventsWriteGuard ?? settingsWriteGuard;
+  const decisionWriteGuard: Middleware = opts.decisionWriteGuard ?? settingsWriteGuard;
 
   app.get('/workspace', auth.requireAuth, async (c) => {
     const runtimeWorkspace = await deps.settingsStore.getWorkspace();
@@ -498,7 +510,7 @@ export function createSettingsRoutes(
     });
   });
 
-  app.put('/workspace', auth.requireAuth, async (c) => {
+  app.put('/workspace', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const workspace = typeof body.workspace === 'string' ? body.workspace.trim() : '';
 
@@ -512,7 +524,7 @@ export function createSettingsRoutes(
     return c.json({ workspace });
   });
 
-  app.delete('/workspace', auth.requireAuth, async (c) => {
+  app.delete('/workspace', settingsWriteGuard, async (c) => {
     await deps.settingsStore.clearWorkspace();
     return c.json({
       status: 'restored',
@@ -527,7 +539,7 @@ export function createSettingsRoutes(
     return c.json({ servers, isOverridden: hasOverride(servers), defaults: {} });
   });
 
-  app.put('/mcp', auth.requireAuth, async (c) => {
+  app.put('/mcp', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const servers = (body as { servers?: unknown }).servers;
 
@@ -544,7 +556,7 @@ export function createSettingsRoutes(
     return c.json({ servers });
   });
 
-  app.delete('/mcp', auth.requireAuth, async (c) => {
+  app.delete('/mcp', settingsWriteGuard, async (c) => {
     await deps.settingsStore.clearMcpSettings();
     return c.json({ status: 'restored', servers: {}, isOverridden: false, defaults: {} });
   });
@@ -569,7 +581,7 @@ export function createSettingsRoutes(
     return c.json({ llmGateway, isOverridden: hasOverride(runtime), defaults });
   });
 
-  app.put('/llm-gateway', auth.requireAuth, async (c) => {
+  app.put('/llm-gateway', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const llmGateway = (body as { llmGateway?: unknown }).llmGateway;
 
@@ -588,7 +600,7 @@ export function createSettingsRoutes(
     return c.json({ llmGateway });
   });
 
-  app.delete('/llm-gateway', auth.requireAuth, async (c) => {
+  app.delete('/llm-gateway', settingsWriteGuard, async (c) => {
     await deps.settingsStore.clearLlmGatewaySettings();
     // Пустой runtime → mergeLlmGatewayConfig вернёт config.yaml (или undefined — шлюз выключен).
     await deps.onLlmGatewayChange?.({});
@@ -615,7 +627,7 @@ export function createSettingsRoutes(
     });
   });
 
-  app.put('/security', auth.requireAuth, async (c) => {
+  app.put('/security', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const security = (body as { security?: unknown }).security;
 
@@ -640,7 +652,7 @@ export function createSettingsRoutes(
     });
   });
 
-  app.delete('/security', auth.requireAuth, async (c) => {
+  app.delete('/security', settingsWriteGuard, async (c) => {
     await deps.settingsStore.clearSecuritySettings();
     // Пустой runtime → mergeSecurityConfig вернёт config.yaml.
     await deps.onSecurityChange?.({});
@@ -660,7 +672,7 @@ export function createSettingsRoutes(
     return c.json({ toolsPolicy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
-  app.put('/tools-policy', auth.requireAuth, async (c) => {
+  app.put('/tools-policy', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const toolsPolicy = (body as { toolsPolicy?: unknown }).toolsPolicy;
 
@@ -680,7 +692,7 @@ export function createSettingsRoutes(
     return c.json({ toolsPolicy });
   });
 
-  app.delete('/tools-policy', auth.requireAuth, async (c) => {
+  app.delete('/tools-policy', settingsWriteGuard, async (c) => {
     const defaults = deps.fallbackToolsPolicy ?? 'auto';
     await deps.settingsStore.clearToolsPolicy();
     // Live-применение дефолта из config.yaml.
@@ -701,7 +713,7 @@ export function createSettingsRoutes(
     return c.json({ mcpPolicy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
-  app.put('/mcp-policy', auth.requireAuth, async (c) => {
+  app.put('/mcp-policy', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const mcpPolicy = (body as { mcpPolicy?: unknown }).mcpPolicy;
 
@@ -721,7 +733,7 @@ export function createSettingsRoutes(
     return c.json({ mcpPolicy });
   });
 
-  app.delete('/mcp-policy', auth.requireAuth, async (c) => {
+  app.delete('/mcp-policy', settingsWriteGuard, async (c) => {
     const defaults = deps.fallbackMcpPolicy ?? 'auto';
     await deps.settingsStore.clearMcpPolicy();
     await deps.onMcpPolicyChange?.(defaults);
@@ -740,7 +752,7 @@ export function createSettingsRoutes(
     return c.json({ policy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
-  app.put('/mcp-network-policy', auth.requireAuth, async (c) => {
+  app.put('/mcp-network-policy', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const policy = (body as { policy?: unknown }).policy;
 
@@ -760,7 +772,7 @@ export function createSettingsRoutes(
     return c.json({ policy });
   });
 
-  app.delete('/mcp-network-policy', auth.requireAuth, async (c) => {
+  app.delete('/mcp-network-policy', settingsWriteGuard, async (c) => {
     const defaults = deps.fallbackMcpNetworkPolicy ?? DEFAULT_MCP_NETWORK_POLICY;
     await deps.settingsStore.clearMcpNetworkPolicy();
     await deps.onMcpNetworkPolicyChange?.(defaults);
@@ -784,7 +796,7 @@ export function createSettingsRoutes(
     });
   });
 
-  app.put('/default-agent', auth.requireAuth, async (c) => {
+  app.put('/default-agent', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const raw = (body as { defaultAgent?: unknown }).defaultAgent;
     const defaultAgent = typeof raw === 'string' ? raw.trim() : raw;
@@ -803,7 +815,7 @@ export function createSettingsRoutes(
     return c.json({ defaultAgent });
   });
 
-  app.delete('/default-agent', auth.requireAuth, async (c) => {
+  app.delete('/default-agent', settingsWriteGuard, async (c) => {
     const fallback = deps.fallbackDefaultAgent ?? DEFAULT_AGENT_ID;
     await deps.settingsStore.clearDefaultAgent();
     await deps.onDefaultAgentChange?.(fallback);
@@ -827,7 +839,7 @@ export function createSettingsRoutes(
     return c.json({ outsideRoot: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
-  app.put('/workspace-policy', auth.requireAuth, async (c) => {
+  app.put('/workspace-policy', settingsWriteGuard, async (c) => {
     if (deps.workspacePolicyReadOnly) {
       return c.json({
         error: {
@@ -850,7 +862,7 @@ export function createSettingsRoutes(
     return c.json({ outsideRoot: parsed.data.outsideRoot });
   });
 
-  app.delete('/workspace-policy', auth.requireAuth, async (c) => {
+  app.delete('/workspace-policy', settingsWriteGuard, async (c) => {
     if (deps.workspacePolicyReadOnly) {
       return c.json({
         error: {
@@ -878,7 +890,7 @@ export function createSettingsRoutes(
     return c.json({ toolsDisabled: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
   });
 
-  app.put('/tools-disabled', auth.requireAuth, async (c) => {
+  app.put('/tools-disabled', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const result = validateToolsDisabled(
       (body as { toolsDisabled?: unknown }).toolsDisabled,
@@ -894,7 +906,7 @@ export function createSettingsRoutes(
     return c.json({ toolsDisabled: result.config });
   });
 
-  app.delete('/tools-disabled', auth.requireAuth, async (c) => {
+  app.delete('/tools-disabled', settingsWriteGuard, async (c) => {
     const defaults = deps.fallbackToolsDisabled ?? { capabilities: [], tools: [] };
     await deps.settingsStore.clearToolsDisabled();
     await deps.onToolsDisabledChange?.(defaults);
@@ -920,7 +932,7 @@ export function createSettingsRoutes(
     });
   });
 
-  app.put('/protected-paths', auth.requireAuth, async (c) => {
+  app.put('/protected-paths', settingsWriteGuard, async (c) => {
     if (!deps.protectedPathsStore) {
       return c.json({ error: { code: 'NOT_AVAILABLE', message: 'protectedPathsStore не доступен в standalone-режиме' } }, 404);
     }
@@ -951,7 +963,7 @@ export function createSettingsRoutes(
     return c.json({ policy: raw.policy, base: raw.base, is_overridden: raw.isOverridden, saved: true });
   });
 
-  app.delete('/protected-paths', auth.requireAuth, async (c) => {
+  app.delete('/protected-paths', settingsWriteGuard, async (c) => {
     if (!deps.protectedPathsStore) {
       return c.json({ error: { code: 'NOT_AVAILABLE', message: 'protectedPathsStore не доступен в standalone-режиме' } }, 404);
     }

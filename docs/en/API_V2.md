@@ -627,38 +627,38 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 | Method | Path | RBAC | Purpose |
 |---|---|---|---|
 | GET | `/api/v2/settings/workspace` | auth | Default working directory: `{workspace, isOverridden, defaults}` (`defaults` — env/config) |
-| PUT | `/api/v2/settings/workspace` | auth | `{workspace}` |
-| DELETE | `/api/v2/settings/workspace` | auth | Reset the runtime override to the default; `{status:"restored", workspace, isOverridden:false, defaults}` |
+| PUT | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | `{workspace}` |
+| DELETE | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | Reset the runtime override to the default; `{status:"restored", workspace, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/workspace-policy` | auth | Policy for an absolute workspace outside `workspacesRoot` (ADR-075): `{outsideRoot:"confirm"\|"deny", isOverridden, defaults, readOnly?}` (managed — `readOnly:true`, effectively `deny`) |
-| PUT | `/api/v2/settings/workspace-policy` | auth | `{outsideRoot}` (live application, persisted); an invalid value → `400`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
-| DELETE | `/api/v2/settings/workspace-policy` | auth | Reset to the config/env default; `{status:"restored", outsideRoot, isOverridden:false, defaults}`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
+| PUT | `/api/v2/settings/workspace-policy` | ADMIN (managed) / auth (core) | `{outsideRoot}` (live application, persisted); an invalid value → `400`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
+| DELETE | `/api/v2/settings/workspace-policy` | ADMIN (managed) / auth (core) | Reset to the config/env default; `{status:"restored", outsideRoot, isOverridden:false, defaults}`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
 | GET | `/api/v2/settings/mcp` | auth | MCP availability by mode: `{servers, isOverridden, defaults:{}}` |
-| PUT | `/api/v2/settings/mcp` | auth | `{servers}` |
-| DELETE | `/api/v2/settings/mcp` | auth | Reset the runtime MCP availability; `{status:"restored", servers:{}, isOverridden:false, defaults:{}}` |
+| PUT | `/api/v2/settings/mcp` | ADMIN (managed) / auth (core) | `{servers}` |
+| DELETE | `/api/v2/settings/mcp` | ADMIN (managed) / auth (core) | Reset the runtime MCP availability; `{status:"restored", servers:{}, isOverridden:false, defaults:{}}` |
 | GET | `/api/v2/settings/default-agent` | auth | Default agent (the “Agents” admin panel): `{defaultAgent, isOverridden, defaults}` (runtime from `settings.json`, otherwise `DEFAULT_AGENT_ID` — `assistant` on first deployment); used when creating a session without `settings.agentRole` and as `default_agent` in `/agents` |
-| PUT | `/api/v2/settings/default-agent` | auth | `{defaultAgent}` — the agent id (`^[a-z0-9_-]+$`), persisted; invalid/empty → 400 |
-| DELETE | `/api/v2/settings/default-agent` | auth | Reset to the default; `{status:"restored", defaultAgent, isOverridden:false, defaults}` |
+| PUT | `/api/v2/settings/default-agent` | ADMIN (managed) / auth (core) | `{defaultAgent}` — the agent id (`^[a-z0-9_-]+$`), persisted; invalid/empty → 400 |
+| DELETE | `/api/v2/settings/default-agent` | ADMIN (managed) / auth (core) | Reset to the default; `{status:"restored", defaultAgent, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/tools-policy` | auth | Policy for enabling **built-in** tools (ADR-071 §2.3): `{toolsPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime from `settings.json`, otherwise `tools.policy` from config.yaml; default `auto`) |
-| PUT | `/api/v2/settings/tools-policy` | auth | `{toolsPolicy}` (live application, persisted); an unknown value → 400 |
-| DELETE | `/api/v2/settings/tools-policy` | auth | Reset to the config default; `{status:"restored", toolsPolicy, isOverridden:false, defaults}` + live application of the default |
+| PUT | `/api/v2/settings/tools-policy` | ADMIN (managed) / auth (core) | `{toolsPolicy}` (live application, persisted); an unknown value → 400 |
+| DELETE | `/api/v2/settings/tools-policy` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", toolsPolicy, isOverridden:false, defaults}` + live application of the default |
 | GET | `/api/v2/settings/mcp-policy` | auth | Policy for enabling **MCP** tools (ADR-071 §2.3): `{mcpPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime from `settings.json`, otherwise `mcp.policy` from config.yaml; default `auto`) |
-| PUT | `/api/v2/settings/mcp-policy` | auth | `{mcpPolicy}` (live application, persisted); independent of `tools-policy`; an unknown value → 400 |
-| DELETE | `/api/v2/settings/mcp-policy` | auth | Reset to the config default; `{status:"restored", mcpPolicy, isOverridden:false, defaults}` + live application of the default |
+| PUT | `/api/v2/settings/mcp-policy` | ADMIN (managed) / auth (core) | `{mcpPolicy}` (live application, persisted); independent of `tools-policy`; an unknown value → 400 |
+| DELETE | `/api/v2/settings/mcp-policy` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", mcpPolicy, isOverridden:false, defaults}` + live application of the default |
 | GET | `/api/v2/settings/mcp-network-policy` | auth | Network access policy for user HTTP MCP servers (ADR-071 §2.3.1): `{policy, isOverridden, defaults}` (default — deny private ranges) |
-| PUT | `/api/v2/settings/mcp-network-policy` | auth | `{policy:{mode:"allow"\|"deny",list:string[]}}` (live application, persisted) |
-| DELETE | `/api/v2/settings/mcp-network-policy` | auth | Reset to the config default; `{status:"restored", policy, isOverridden:false, defaults}` + live application of the default |
+| PUT | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | `{policy:{mode:"allow"\|"deny",list:string[]}}` (live application, persisted) |
+| DELETE | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", policy, isOverridden:false, defaults}` + live application of the default |
 | GET | `/api/v2/settings/tools-disabled` | auth | Disabling of built-in tools (ADR-071 §2.6): `{toolsDisabled:{capabilities,tools}, isOverridden, defaults}` (runtime value from `settings.json`, otherwise `tools.disabled` from config.yaml) |
-| PUT | `/api/v2/settings/tools-disabled` | auth | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live application, persisted); an unknown capability → 400, `runtime` tools cannot be disabled. The UI section is an ADMIN category |
-| DELETE | `/api/v2/settings/tools-disabled` | auth | Reset to the config default (empty by default); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live application of the default |
+| PUT | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live application, persisted); an unknown capability → 400, `runtime` tools cannot be disabled. The UI section is an ADMIN category |
+| DELETE | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | Reset to the config default (empty by default); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live application of the default |
 | GET | `/api/v2/settings/llm-gateway` | auth | Effective LLM Gateway settings: `{llmGateway:{enabled,inputMode,logPayloads,rateLimit}, isOverridden, defaults}` (runtime on top of config.yaml) |
-| PUT | `/api/v2/settings/llm-gateway` | auth | `{llmGateway}` (live application) |
-| DELETE | `/api/v2/settings/llm-gateway` | auth | Reset to the config default; `{status:"restored", llmGateway, isOverridden:false, defaults}` + live application of `{}` (the gateway from config.yaml) |
+| PUT | `/api/v2/settings/llm-gateway` | ADMIN (managed) / auth (core) | `{llmGateway}` (live application) |
+| DELETE | `/api/v2/settings/llm-gateway` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", llmGateway, isOverridden:false, defaults}` + live application of `{}` (the gateway from config.yaml) |
 | GET | `/api/v2/settings/security` | auth | Effective `{protectedPaths, askTimeoutMs}` + `{isOverridden, defaults}` (runtime on top of config.yaml) |
-| PUT | `/api/v2/settings/security` | auth | `{security}` (live application) |
-| DELETE | `/api/v2/settings/security` | auth | Reset to the config default; `{status:"restored", security, isOverridden:false, defaults}` + live application of `{}` |
+| PUT | `/api/v2/settings/security` | ADMIN (managed) / auth (core) | `{security}` (live application) |
+| DELETE | `/api/v2/settings/security` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", security, isOverridden:false, defaults}` + live application of `{}` |
 | GET | `/api/v2/settings/protected-paths` | auth | `{policy, base, is_overridden}` |
-| PUT | `/api/v2/settings/protected-paths` | auth | `{policy}` or `{version, add, remove}` |
-| DELETE | `/api/v2/settings/protected-paths` | auth | Reset to the system policy |
+| PUT | `/api/v2/settings/protected-paths` | ADMIN (managed) / auth (core) | `{policy}` or `{version, add, remove}` |
+| DELETE | `/api/v2/settings/protected-paths` | ADMIN (managed) / auth (core) | Reset to the system policy |
 | GET | `/api/v2/settings/events` | auth | Runtime settings of the “Events” section (ADR-089): `{events:{enabled, defaultMode, ephemeralTtl, journalRetentionDays, allowedSources, unknownAgentTemplate, keyRateLimitPerMinute, decisionRouting, autoBind, autoBindAgentTemplate}, defaults, isOverridden}` (runtime from `settings.json` on top of the config.yaml `events`) |
 | PUT | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Patch `{events:{…}}` (live application: the Router/funnel/pruner are reconfigured); an invalid value → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Reset the runtime settings to the config default; `{status:"restored", events, isOverridden:false, defaults}` |

@@ -1421,6 +1421,7 @@ export const dict = {
   'admin.projects.workspace.pathRequired': 'Path cannot be empty',
   'admin.projects.workspace.current': 'Current: {path}',
   'admin.projects.workspace.hint': 'Default: <dataDir>/workspaces/default. Can be overridden via env SYNTH_DEFAULT_WORKSPACE.',
+  'admin.projects.workspace.adminOnly': 'Only an administrator can change the default workspace',
 
   // Providers
   'admin.providers.title': 'Providers',

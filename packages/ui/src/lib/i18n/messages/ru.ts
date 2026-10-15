@@ -1401,6 +1401,7 @@ export const dict = {
   'admin.projects.workspace.pathRequired': 'Путь не может быть пустым',
   'admin.projects.workspace.current': 'Текущий: {path}',
   'admin.projects.workspace.hint': 'По умолчанию <dataDir>/workspaces/default. Можно переопределить через env SYNTH_DEFAULT_WORKSPACE.',
+  'admin.projects.workspace.adminOnly': 'Изменять рабочий каталог по умолчанию может только администратор',
 
   // Providers
   'admin.providers.title': 'Провайдеры',

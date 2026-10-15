@@ -3,6 +3,7 @@ import { synthApi, type ProjectData } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { Button } from '../ui/button'
 import { useI18n } from '@/lib/i18n'
+import { useAuthStore } from '@/stores/authStore'
 import { confirm } from '@/lib/confirm'
 import { useNotification } from '@/hooks/useNotification'
 import {
@@ -17,6 +18,9 @@ import { WorkspacePolicySection } from './WorkspacePolicySection'
 export const ProjectsPanel = () => {
   const { t } = useI18n()
   const { notify } = useNotification()
+  // Категория «Проекты» доступна ADMIN/LEAD, но instance-wide настройка
+  // рабочего каталога по умолчанию — мутация только для ADMIN (managed RBAC).
+  const isAdmin = useAuthStore((s) => (s.user?.roles ?? []).includes('ADMIN'))
   const [projects, setProjects] = useState<ProjectData[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -51,6 +55,7 @@ export const ProjectsPanel = () => {
   }, [])
 
   const handleSaveWorkspace = async () => {
+    if (!isAdmin) return
     const path = workspaceDraft.trim()
     if (!path) {
       setError(t('admin.projects.workspace.pathRequired'))
@@ -116,6 +121,7 @@ export const ProjectsPanel = () => {
               onChange={(e) => { setWorkspaceDraft(e.target.value); setError('') }}
               placeholder={t('admin.projects.workspace.placeholder')}
               mono
+              disabled={!isAdmin}
               aria-label={t('admin.projects.workspace.title')}
               onKeyDown={(e) => e.key === 'Enter' && handleSaveWorkspace()}
             />
@@ -124,7 +130,7 @@ export const ProjectsPanel = () => {
             size="sm"
             className="shrink-0"
             onClick={handleSaveWorkspace}
-            disabled={workspaceSaving}
+            disabled={workspaceSaving || !isAdmin}
           >
             {workspaceSaving ? t('admin.projects.workspace.saving') : t('admin.projects.workspace.save')}
           </Button>
@@ -137,6 +143,11 @@ export const ProjectsPanel = () => {
         <p className="text-xs text-muted-foreground/70 min-w-0 break-words">
           {t('admin.projects.workspace.hint')}
         </p>
+        {!isAdmin && (
+          <p className="text-xs text-muted-foreground min-w-0 break-words" data-testid="workspace-admin-only">
+            {t('admin.projects.workspace.adminOnly')}
+          </p>
+        )}
         {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}
       </SettingsSection>
 

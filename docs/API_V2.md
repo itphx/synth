@@ -627,38 +627,38 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
 | GET | `/api/v2/settings/workspace` | auth | Рабочий каталог по умолчанию: `{workspace, isOverridden, defaults}` (`defaults` — env/config) |
-| PUT | `/api/v2/settings/workspace` | auth | `{workspace}` |
-| DELETE | `/api/v2/settings/workspace` | auth | Сброс runtime-override к дефолту; `{status:"restored", workspace, isOverridden:false, defaults}` |
+| PUT | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | `{workspace}` |
+| DELETE | `/api/v2/settings/workspace` | ADMIN (managed) / auth (core) | Сброс runtime-override к дефолту; `{status:"restored", workspace, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/workspace-policy` | auth | Политика абсолютного workspace вне `workspacesRoot` (ADR-075): `{outsideRoot:"confirm"\|"deny", isOverridden, defaults, readOnly?}` (managed — `readOnly:true`, эффективно `deny`) |
-| PUT | `/api/v2/settings/workspace-policy` | auth | `{outsideRoot}` (live-применение, persist); невалидное значение → `400`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
-| DELETE | `/api/v2/settings/workspace-policy` | auth | Сброс к config/env-дефолту; `{status:"restored", outsideRoot, isOverridden:false, defaults}`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
+| PUT | `/api/v2/settings/workspace-policy` | ADMIN (managed) / auth (core) | `{outsideRoot}` (live-применение, persist); невалидное значение → `400`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
+| DELETE | `/api/v2/settings/workspace-policy` | ADMIN (managed) / auth (core) | Сброс к config/env-дефолту; `{status:"restored", outsideRoot, isOverridden:false, defaults}`; managed → `403 WORKSPACE_POLICY_READ_ONLY` |
 | GET | `/api/v2/settings/mcp` | auth | Доступность MCP по режимам: `{servers, isOverridden, defaults:{}}` |
-| PUT | `/api/v2/settings/mcp` | auth | `{servers}` |
-| DELETE | `/api/v2/settings/mcp` | auth | Сброс runtime-доступности MCP; `{status:"restored", servers:{}, isOverridden:false, defaults:{}}` |
+| PUT | `/api/v2/settings/mcp` | ADMIN (managed) / auth (core) | `{servers}` |
+| DELETE | `/api/v2/settings/mcp` | ADMIN (managed) / auth (core) | Сброс runtime-доступности MCP; `{status:"restored", servers:{}, isOverridden:false, defaults:{}}` |
 | GET | `/api/v2/settings/default-agent` | auth | Агент по умолчанию (админка «Агенты»): `{defaultAgent, isOverridden, defaults}` (runtime из `settings.json`, иначе `DEFAULT_AGENT_ID` — `assistant` при первом развёртывании); используется при создании сессии без `settings.agentRole` и как `default_agent` в `/agents` |
-| PUT | `/api/v2/settings/default-agent` | auth | `{defaultAgent}` — id агента (`^[a-z0-9_-]+$`), persist; невалидный/пустой → 400 |
-| DELETE | `/api/v2/settings/default-agent` | auth | Сброс к дефолту; `{status:"restored", defaultAgent, isOverridden:false, defaults}` |
+| PUT | `/api/v2/settings/default-agent` | ADMIN (managed) / auth (core) | `{defaultAgent}` — id агента (`^[a-z0-9_-]+$`), persist; невалидный/пустой → 400 |
+| DELETE | `/api/v2/settings/default-agent` | ADMIN (managed) / auth (core) | Сброс к дефолту; `{status:"restored", defaultAgent, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/tools-policy` | auth | Политика включения **встроенных** инструментов (ADR-071 §2.3): `{toolsPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime из `settings.json`, иначе `tools.policy` из config.yaml; дефолт `auto`) |
-| PUT | `/api/v2/settings/tools-policy` | auth | `{toolsPolicy}` (live-применение, persist); неизвестное значение → 400 |
-| DELETE | `/api/v2/settings/tools-policy` | auth | Сброс к config-дефолту; `{status:"restored", toolsPolicy, isOverridden:false, defaults}` + live-применение дефолта |
+| PUT | `/api/v2/settings/tools-policy` | ADMIN (managed) / auth (core) | `{toolsPolicy}` (live-применение, persist); неизвестное значение → 400 |
+| DELETE | `/api/v2/settings/tools-policy` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", toolsPolicy, isOverridden:false, defaults}` + live-применение дефолта |
 | GET | `/api/v2/settings/mcp-policy` | auth | Политика включения **MCP**-инструментов (ADR-071 §2.3): `{mcpPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime из `settings.json`, иначе `mcp.policy` из config.yaml; дефолт `auto`) |
-| PUT | `/api/v2/settings/mcp-policy` | auth | `{mcpPolicy}` (live-применение, persist); независима от `tools-policy`; неизвестное значение → 400 |
-| DELETE | `/api/v2/settings/mcp-policy` | auth | Сброс к config-дефолту; `{status:"restored", mcpPolicy, isOverridden:false, defaults}` + live-применение дефолта |
+| PUT | `/api/v2/settings/mcp-policy` | ADMIN (managed) / auth (core) | `{mcpPolicy}` (live-применение, persist); независима от `tools-policy`; неизвестное значение → 400 |
+| DELETE | `/api/v2/settings/mcp-policy` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", mcpPolicy, isOverridden:false, defaults}` + live-применение дефолта |
 | GET | `/api/v2/settings/mcp-network-policy` | auth | Политика сетевого доступа пользовательских HTTP MCP (ADR-071 §2.3.1): `{policy, isOverridden, defaults}` (дефолт — deny приватных диапазонов) |
-| PUT | `/api/v2/settings/mcp-network-policy` | auth | `{policy:{mode:"allow"\|"deny",list:string[]}}` (live-применение, persist) |
-| DELETE | `/api/v2/settings/mcp-network-policy` | auth | Сброс к config-дефолту; `{status:"restored", policy, isOverridden:false, defaults}` + live-применение дефолта |
+| PUT | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | `{policy:{mode:"allow"\|"deny",list:string[]}}` (live-применение, persist) |
+| DELETE | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", policy, isOverridden:false, defaults}` + live-применение дефолта |
 | GET | `/api/v2/settings/tools-disabled` | auth | Отключение встроенных инструментов (ADR-071 §2.6): `{toolsDisabled:{capabilities,tools}, isOverridden, defaults}` (runtime-значение из `settings.json`, иначе `tools.disabled` из config.yaml) |
-| PUT | `/api/v2/settings/tools-disabled` | auth | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); неизвестная capability → 400, `runtime`-тулы неотключаемы. UI-раздел — ADMIN-категория |
-| DELETE | `/api/v2/settings/tools-disabled` | auth | Сброс к config-дефолту (по умолчанию пусто); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live-применение дефолта |
+| PUT | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); неизвестная capability → 400, `runtime`-тулы неотключаемы. UI-раздел — ADMIN-категория |
+| DELETE | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | Сброс к config-дефолту (по умолчанию пусто); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live-применение дефолта |
 | GET | `/api/v2/settings/llm-gateway` | auth | Эффективные настройки LLM Gateway: `{llmGateway:{enabled,inputMode,logPayloads,rateLimit}, isOverridden, defaults}` (runtime поверх config.yaml) |
-| PUT | `/api/v2/settings/llm-gateway` | auth | `{llmGateway}` (live-применение) |
-| DELETE | `/api/v2/settings/llm-gateway` | auth | Сброс к config-дефолту; `{status:"restored", llmGateway, isOverridden:false, defaults}` + live-применение `{}` (шлюз из config.yaml) |
+| PUT | `/api/v2/settings/llm-gateway` | ADMIN (managed) / auth (core) | `{llmGateway}` (live-применение) |
+| DELETE | `/api/v2/settings/llm-gateway` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", llmGateway, isOverridden:false, defaults}` + live-применение `{}` (шлюз из config.yaml) |
 | GET | `/api/v2/settings/security` | auth | Эффективное `{protectedPaths, askTimeoutMs}` + `{isOverridden, defaults}` (runtime поверх config.yaml) |
-| PUT | `/api/v2/settings/security` | auth | `{security}` (live-применение) |
-| DELETE | `/api/v2/settings/security` | auth | Сброс к config-дефолту; `{status:"restored", security, isOverridden:false, defaults}` + live-применение `{}` |
+| PUT | `/api/v2/settings/security` | ADMIN (managed) / auth (core) | `{security}` (live-применение) |
+| DELETE | `/api/v2/settings/security` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", security, isOverridden:false, defaults}` + live-применение `{}` |
 | GET | `/api/v2/settings/protected-paths` | auth | `{policy, base, is_overridden}` |
-| PUT | `/api/v2/settings/protected-paths` | auth | `{policy}` или `{version, add, remove}` |
-| DELETE | `/api/v2/settings/protected-paths` | auth | Сброс к системной политике |
+| PUT | `/api/v2/settings/protected-paths` | ADMIN (managed) / auth (core) | `{policy}` или `{version, add, remove}` |
+| DELETE | `/api/v2/settings/protected-paths` | ADMIN (managed) / auth (core) | Сброс к системной политике |
 | GET | `/api/v2/settings/events` | auth | Runtime-настройки раздела «События» (ADR-089): `{events:{enabled, defaultMode, ephemeralTtl, journalRetentionDays, allowedSources, unknownAgentTemplate, keyRateLimitPerMinute, decisionRouting, autoBind, autoBindAgentTemplate}, defaults, isOverridden}` (runtime из `settings.json` поверх config.yaml `events`) |
 | PUT | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Патч `{events:{…}}` (live-применение: Router/funnel/pruner переконфигурируются); невалидное значение → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/events` | ADMIN (managed) / auth (core) | Сброс runtime-настроек к config-дефолту; `{status:"restored", events, isOverridden:false, defaults}` |

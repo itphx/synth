@@ -524,10 +524,12 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     },
     protectedPathsStore,
   }, {
-    // ADR-089: мутации раздела «События» — только ADMIN (managed RBAC).
-    eventsWriteGuard: auth.requirePermission('ADMIN'),
-    // ADR-084: мутации decision-слоя — только ADMIN (managed RBAC).
-    decisionWriteGuard: auth.requirePermission('ADMIN'),
+    // Instance-wide настройки (ADR-072): все мутации `/api/v2/settings/*`
+    // (workspace, mcp, llm-gateway, security, tools-policy, mcp-policy,
+    // mcp-network-policy, default-agent, workspace-policy, tools-disabled,
+    // protected-paths, events, decision) — только ADMIN (managed RBAC).
+    // События/decision наследуют тот же guard (если не заданы отдельно).
+    settingsWriteGuard: auth.requirePermission('ADMIN'),
   }));
 
   // Словари классификации: чтение — все авторизованные, запись/сброс — ADMIN
