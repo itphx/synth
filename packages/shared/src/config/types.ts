@@ -8,6 +8,9 @@ import {
   DEFAULT_MCP_PRIVATE_CIDRS,
   DEFAULT_MCP_NETWORK_POLICY,
   DEFAULT_LLM_GATEWAY_RATE_LIMIT,
+  DEFAULT_MAX_UPLOAD_BYTES,
+  MIN_UPLOAD_BYTES,
+  MAX_UPLOAD_BYTES_LIMIT,
   ToolCapability,
 } from '../types/index.js';
 
@@ -33,6 +36,14 @@ export const storageConfigSchema = z.object({
    * `confirm`), читать через `resolveWorkspaceOutsideRootPolicy`.
    */
   workspaceOutsideRoot: z.enum(['confirm', 'deny']).or(z.literal('')).default(''),
+  /**
+   * Максимальный размер загружаемого файла (`POST /api/v2/fs/upload`), в байтах.
+   * Валидируется (положительное целое в границах `MIN_UPLOAD_BYTES`…
+   * `MAX_UPLOAD_BYTES_LIMIT`), читать через `resolveMaxUploadBytes` (env
+   * `SYNTH_MAX_UPLOAD_BYTES` > это поле > `DEFAULT_MAX_UPLOAD_BYTES`).
+   * Не задано — резолвер подставляет `DEFAULT_MAX_UPLOAD_BYTES` (100 МиБ).
+   */
+  maxUploadBytes: z.number().int().min(MIN_UPLOAD_BYTES).max(MAX_UPLOAD_BYTES_LIMIT).optional(),
 });
 
 export const authConfigSchema = z.object({

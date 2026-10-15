@@ -27,6 +27,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_WORKSPACES_ROOT` | Корень каталогов workspace проектов (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | ADR-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
+| `SYNTH_MAX_UPLOAD_BYTES` | Максимальный размер загрузки файла `/api/v2/fs/upload` (`storage.maxUploadBytes`), байт | `104857600` (100 МиБ) |
 | `SYNTH_CONFIG` | Путь к `config.yaml` (приоритетнее каскадного поиска) | каскадный поиск |
 | `SYNTH_HOME` | ADR-079: базовый home-каталог локального инстанса (`--home`): config/data/profiles/credentials резолвятся от него | — |
 | `SYNTH_HOST` | Адрес прослушивания HTTP-серверов (backend — `0.0.0.0`; `synth serve` — `127.0.0.1`) | `0.0.0.0` / `127.0.0.1` (serve) |
@@ -150,6 +151,8 @@ storage:
   workspaceOutsideRoot: ""        # ADR-075: политика для абсолютного workspace вне workspacesRoot
                                   # confirm | deny; пусто — дефолт по режиму (standalone — confirm,
                                   # managed — deny); SYNTH_WORKSPACE_OUTSIDE_ROOT
+  maxUploadBytes: 104857600       # лимит загрузки файла /api/v2/fs/upload, байт (>=1024, <=2 ГиБ);
+                                  # не задано — 100 МиБ; SYNTH_MAX_UPLOAD_BYTES
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
@@ -305,6 +308,7 @@ remote:                           # гибридный режим: локаль�
 - `storage.workspacesRoot` — корень каталогов workspace проектов; если не задан — `{dataDir}/workspaces` (`SYNTH_WORKSPACES_ROOT`). Managed-проекты создают workspace внутри него (авто-имя `slugify(name)` + суффикс `-2/-3…`); абсолютный путь внутри root нормализуется в относительный.
 - `storage.defaultWorkspace` — рабочий каталог сессий без проекта; если не задан — `{dataDir}/workspaces/default` (`SYNTH_DEFAULT_WORKSPACE`). Runtime-override — `PUT /api/v2/settings/workspace`.
 - `storage.workspaceOutsideRoot` — политика для абсолютного `project.workspace` вне `workspacesRoot` (`confirm` — подтверждение флагом `confirmOutsideRoot`, `deny` — запрет). Пусто (`''`) — не задано, эффективно `confirm` в standalone; managed-backend жёстко использует `deny`. Env `SYNTH_WORKSPACE_OUTSIDE_ROOT`, runtime — `GET/PUT/DELETE /api/v2/settings/workspace-policy` (managed — read-only).
+- `storage.maxUploadBytes` — максимальный размер загрузки файла `POST /api/v2/fs/upload`, байт. Не задан — `104857600` (100 МиБ). Валидация (config.yaml): целое в границах `1024`…`2147483648` (2 ГиБ), иначе — ошибка конфигурации (`Невалидная конфигурация`); env-значение вне границ/не число — warn + фолбэк на config (fail-soft). Env `SYNTH_MAX_UPLOAD_BYTES`, резолвер `resolveMaxUploadBytes` (приоритет env > config > дефолт). Лимит проверяется до чтения тела (по `content-length` и размеру `File`) и повторно по фактическому размеру; превышение → `413 PAYLOAD_TOO_LARGE`. Тело по-прежнему буферизуется в память целиком (стриминговый лимит не реализован).
 
 ### Секреты at-rest (`security.secretKey`, ADR-076)
 

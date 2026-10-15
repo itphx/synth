@@ -6,7 +6,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { FileEntry, FsError, WorkspaceOutsideRootPolicy } from '@itphx/synth-shared';
-import { FsErrorCode, fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema } from '@itphx/synth-shared';
+import { FsErrorCode, fsWorkspaceBrowseQuerySchema, fsWorkspaceMkdirBodySchema, DEFAULT_MAX_UPLOAD_BYTES } from '@itphx/synth-shared';
 import { checkPath, loadProtectedPaths } from '../../engine/security/protected-paths.js';
 import type { ProtectedPathsPolicy } from '../../engine/security/protected-paths.js';
 import { isInsideReal } from '../../engine/tools/path-utils.js';
@@ -61,9 +61,11 @@ export interface FsRoutesOptions {
   authorizeProject?: (c: Context, projectId: string) => Promise<boolean>;
   /**
    * Максимальный размер загружаемого файла (`POST /upload`), в байтах.
-   * По умолчанию — `DEFAULT_MAX_UPLOAD_BYTES` (100 МиБ). Проверяется до чтения
-   * тела (по `content-length` и размеру `File`) и повторно по фактическому
-   * размеру прочитанных байт — защита от обхода/лжи в `content-length`.
+   * Не задан — `DEFAULT_MAX_UPLOAD_BYTES` (100 МиБ); точки монтирования
+   * (standalone/backend) передают сюда `resolveMaxUploadBytes(config)`.
+   * Проверяется до чтения тела (по `content-length` и размеру `File`) и
+   * повторно по фактическому размеру прочитанных байт — защита от обхода/лжи
+   * в `content-length`.
    */
   maxUploadBytes?: number;
 }
@@ -72,10 +74,13 @@ type FsHttpStatus = 400 | 403 | 404 | 409 | 413 | 422 | 500;
 
 /**
  * Лимит загрузки файла по умолчанию (`POST /upload`), в байтах: щедро, но
- * ограничивает DoS (тело буферизуется в память целиком). Переопределяется
- * опцией `FsRoutesOptions.maxUploadBytes`.
+ * ограничивает DoS (тело буферизуется в память целиком). Константа живёт в
+ * `@itphx/synth-shared` (чтобы config-схема и core-дефолт не расходились);
+ * реэкспорт сохраняет прежний публичный импорт из `@itphx/synth-core`.
+ * Эффективный лимит: конфиг/env (`resolveMaxUploadBytes`) → эта опция фабрики
+ * `FsRoutesOptions.maxUploadBytes` (для тестов) → `DEFAULT_MAX_UPLOAD_BYTES`.
  */
-export const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+export { DEFAULT_MAX_UPLOAD_BYTES };
 
 /** FsError-форма (`{ error: { error, code } }`) — единый формат ошибок FS. */
 function makeFsError(code: string, error: string): { error: FsError } {

@@ -27,6 +27,7 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_WORKSPACES_ROOT` | Root of the project workspace directories (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Default working directory (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | ADR-075: policy for an absolute workspace outside `workspacesRoot` (`confirm`/`deny`) | per mode (standalone — `confirm`, managed — `deny`) |
+| `SYNTH_MAX_UPLOAD_BYTES` | Maximum file upload size for `/api/v2/fs/upload` (`storage.maxUploadBytes`), bytes | `104857600` (100 MiB) |
 | `SYNTH_CONFIG` | Path to `config.yaml` (takes precedence over the cascading search) | cascading search |
 | `SYNTH_HOME` | ADR-079: base home directory of a local instance (`--home`): config/data/profiles/credentials are resolved from it | — |
 | `SYNTH_HOST` | Listening address of the HTTP servers (backend — `0.0.0.0`; `synth serve` — `127.0.0.1`) | `0.0.0.0` / `127.0.0.1` (serve) |
@@ -150,6 +151,8 @@ storage:
   workspaceOutsideRoot: ""        # ADR-075: policy for an absolute workspace outside workspacesRoot
                                   # confirm | deny; empty — the default per mode (standalone — confirm,
                                   # managed — deny); SYNTH_WORKSPACE_OUTSIDE_ROOT
+  maxUploadBytes: 104857600       # file upload limit for /api/v2/fs/upload, bytes (>=1024, <=2 GiB);
+                                  # unset — 100 MiB; SYNTH_MAX_UPLOAD_BYTES
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
@@ -305,6 +308,7 @@ The full list of fields (including `logging`, `tsm`, `context`, `summarization`,
 - `storage.workspacesRoot` — the root of the project workspace directories; if not set — `{dataDir}/workspaces` (`SYNTH_WORKSPACES_ROOT`). Managed projects create a workspace inside it (auto name `slugify(name)` + suffix `-2/-3…`); an absolute path inside the root is normalized to a relative one.
 - `storage.defaultWorkspace` — the working directory of sessions without a project; if not set — `{dataDir}/workspaces/default` (`SYNTH_DEFAULT_WORKSPACE`). Runtime override — `PUT /api/v2/settings/workspace`.
 - `storage.workspaceOutsideRoot` — policy for an absolute `project.workspace` outside `workspacesRoot` (`confirm` — confirmation with the `confirmOutsideRoot` flag, `deny` — forbidden). Empty (`''`) — not set, effectively `confirm` in standalone; the managed backend hard-uses `deny`. Env `SYNTH_WORKSPACE_OUTSIDE_ROOT`, runtime — `GET/PUT/DELETE /api/v2/settings/workspace-policy` (managed — read-only).
+- `storage.maxUploadBytes` — the maximum file upload size for `POST /api/v2/fs/upload`, in bytes. If not set — `104857600` (100 MiB). Validation (config.yaml): an integer within `1024`…`2147483648` (2 GiB), otherwise a configuration error (`Невалидная конфигурация`); an out-of-range/non-numeric env value — warn + fall back to config (fail-soft). Env `SYNTH_MAX_UPLOAD_BYTES`, resolver `resolveMaxUploadBytes` (priority env > config > default). The limit is checked before reading the body (via `content-length` and `File.size`) and again against the actual size; exceeding it → `413 PAYLOAD_TOO_LARGE`. The body is still buffered into memory in full (no streaming limit implemented).
 
 ### At-rest secrets (`security.secretKey`, ADR-076)
 

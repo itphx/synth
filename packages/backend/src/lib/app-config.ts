@@ -1,5 +1,5 @@
 import type { AuthConfig, TestUser, SynthConfig } from '@itphx/synth-shared';
-import { loadConfig, resolveDataDir, resolvePort, resolveWorkspacesRoot } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveMaxUploadBytes } from '@itphx/synth-shared';
 import type { LoadConfigOptions } from '@itphx/synth-shared/config';
 
 const envStr = (key: string, fallback = ''): string => process.env[key] || fallback;
@@ -14,6 +14,8 @@ export interface BackendConfig {
   synth: SynthConfig;
   dataDir: string;
   workspacesRoot: string;
+  /** Максимальный размер загрузки файла (`POST /api/v2/fs/upload`), байт (config/env). */
+  maxUploadBytes: number;
   port: number;
   auth: AuthConfig;
 }
@@ -76,7 +78,8 @@ export async function loadBackendConfig(options?: LoadConfigOptions): Promise<Ba
   const auth = buildAuthConfig(synth.auth);
   const dataDir = resolveDataDir(synth);
   const workspacesRoot = resolveWorkspacesRoot(synth);
+  const maxUploadBytes = resolveMaxUploadBytes(synth);
   const port = resolvePort(synth, 'SYNTH_PORT', synth.server.port);
 
-  return { synth, dataDir, workspacesRoot, port, auth };
+  return { synth, dataDir, workspacesRoot, maxUploadBytes, port, auth };
 }

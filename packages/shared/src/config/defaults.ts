@@ -1,5 +1,6 @@
 import type { SynthConfig } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
+import { DEFAULT_MAX_UPLOAD_BYTES } from '../types/index.js';
 
 export const defaultConfig: SynthConfig = {
   server: {
@@ -13,6 +14,7 @@ export const defaultConfig: SynthConfig = {
     workspacesRoot: '',
     defaultWorkspace: '',
     workspaceOutsideRoot: '',
+    maxUploadBytes: DEFAULT_MAX_UPLOAD_BYTES,
   },
   auth: {
     debugMode: false,

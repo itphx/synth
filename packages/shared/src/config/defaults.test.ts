@@ -111,6 +111,10 @@ describe('defaultConfig', () => {
     expect(defaultConfig.storage.defaultWorkspace).toBe('');
   });
 
+  it('storage.maxUploadBytes по умолчанию 100 МиБ (config/env-настраиваемый лимит загрузки)', () => {
+    expect(defaultConfig.storage.maxUploadBytes).toBe(100 * 1024 * 1024);
+  });
+
   it('summarization.promptFile == SUMMARIZER', () => {
     expect(defaultConfig.summarization.promptFile).toBe('SUMMARIZER');
   });

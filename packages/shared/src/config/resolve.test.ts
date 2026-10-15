@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, ensureFirstRun } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, resolveMaxUploadBytes, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -195,6 +195,52 @@ describe('resolveWorkspaceOutsideRootPolicy (ADR-075)', () => {
   it('не читает реальный process.env, если передан env без переменной', () => {
     vi.stubEnv('SYNTH_WORKSPACE_OUTSIDE_ROOT', 'deny');
     expect(resolveWorkspaceOutsideRootPolicy(cfg, {})).toBe('');
+  });
+});
+
+describe('resolveMaxUploadBytes (лимит загрузки файла)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('дефолт — 100 МиБ, если ни env, ни config не заданы', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxUploadBytes: undefined } };
+    expect(resolveMaxUploadBytes(c, {})).toBe(100 * 1024 * 1024);
+  });
+
+  it('config.storage.maxUploadBytes применяется, если env не задан', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxUploadBytes: 5 * 1024 * 1024 } };
+    expect(resolveMaxUploadBytes(c, {})).toBe(5 * 1024 * 1024);
+  });
+
+  it('env SYNTH_MAX_UPLOAD_BYTES приоритетнее config (CLI > env > config.yaml > defaults)', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxUploadBytes: 5 * 1024 * 1024 } };
+    expect(resolveMaxUploadBytes(c, { SYNTH_MAX_UPLOAD_BYTES: String(1024) })).toBe(1024);
+  });
+
+  it('невалидное env (не число / вне границ) → warn + фолбэк на config', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxUploadBytes: 7 * 1024 * 1024 } };
+
+    expect(resolveMaxUploadBytes(c, { SYNTH_MAX_UPLOAD_BYTES: 'nope' })).toBe(7 * 1024 * 1024);
+    // Ниже минимума (нельзя «залимитировать всё») — игнор, фолбэк на config.
+    expect(resolveMaxUploadBytes(c, { SYNTH_MAX_UPLOAD_BYTES: '1' })).toBe(7 * 1024 * 1024);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+
+  it('пустое env-значение → тихий игнор (фолбэк на config), без warn', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxUploadBytes: 3 * 1024 * 1024 } };
+    expect(resolveMaxUploadBytes(c, { SYNTH_MAX_UPLOAD_BYTES: '' })).toBe(3 * 1024 * 1024);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('не читает реальный process.env, если передан env без переменной', () => {
+    vi.stubEnv('SYNTH_MAX_UPLOAD_BYTES', '1024');
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, maxUploadBytes: 9 * 1024 * 1024 } };
+    expect(resolveMaxUploadBytes(c, {})).toBe(9 * 1024 * 1024);
   });
 });
 

@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { dump as dumpYaml } from 'js-yaml';
 import type { SynthConfig } from './types.js';
 import type { WorkspaceOutsideRootPolicy } from '../types/index.js';
+import { DEFAULT_MAX_UPLOAD_BYTES, MIN_UPLOAD_BYTES, MAX_UPLOAD_BYTES_LIMIT } from '../types/index.js';
 import { defaultConfig } from './defaults.js';
 
 export type DeployMode = 'user' | 'docker' | 'server' | 'dev';
@@ -245,6 +246,28 @@ export function resolveWorkspaceOutsideRootPolicy(
   const cfgVal = config.storage.workspaceOutsideRoot;
   if (cfgVal === 'confirm' || cfgVal === 'deny') return cfgVal;
   return '';
+}
+
+/**
+ * Максимальный размер загружаемого файла (`POST /api/v2/fs/upload`), в байтах.
+ * Приоритет: env `SYNTH_MAX_UPLOAD_BYTES` > `config.storage.maxUploadBytes` >
+ * `DEFAULT_MAX_UPLOAD_BYTES` (100 МиБ). Некорректное env-значение (не число или
+ * вне границ `MIN_UPLOAD_BYTES`…`MAX_UPLOAD_BYTES_LIMIT`) — warn и фолбэк на
+ * config/дефолт (fail-soft, как остальные env-резолверы; не падаем).
+ */
+export function resolveMaxUploadBytes(config: SynthConfig, env?: NodeJS.ProcessEnv): number {
+  const raw = (env ?? process.env).SYNTH_MAX_UPLOAD_BYTES;
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= MIN_UPLOAD_BYTES && n <= MAX_UPLOAD_BYTES_LIMIT) {
+      return Math.floor(n);
+    }
+    console.warn(
+      `[config] невалидное значение SYNTH_MAX_UPLOAD_BYTES="${raw}" ` +
+      `(ожидается число от ${MIN_UPLOAD_BYTES} до ${MAX_UPLOAD_BYTES_LIMIT}) — игнорируется`,
+    );
+  }
+  return config.storage.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
 }
 
 /**

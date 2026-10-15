@@ -709,6 +709,16 @@ describe('FS upload: лимит размера (DoS-защита)', () => {
     return app;
   }
 
+  /** Фабрика без опции `maxUploadBytes` — проверяем дефолт (100 МиБ). */
+  function makeDefaultApp(): Hono {
+    const app = new Hono();
+    app.route('/api/v2/fs', createFsRoutes(createMockAuth(), workspacesRoot, undefined, {
+      getOutsideRootPolicy: () => 'confirm',
+      getProtectedPathsPolicy: () => NO_PROTECTED,
+    }));
+    return app;
+  }
+
   beforeEach(async () => {
     tmpDir = await mkdtemp(join(tmpdir(), 'synth-fs-upload-'));
     workspacesRoot = join(tmpDir, 'workspaces');
@@ -726,6 +736,15 @@ describe('FS upload: лимит размера (DoS-защита)', () => {
     const res = await makeApp(1024).request('/api/v2/fs/upload', { method: 'POST', body: fd });
     expect(res.status).toBe(201);
     expect(await readFile(join(workspacesRoot, 'ok.txt'), 'utf-8')).toBe('hello');
+  });
+
+  it('без опции maxUploadBytes применяется дефолт (100 МиБ): небольшой файл → 201', async () => {
+    const fd = new FormData();
+    fd.set('file', new File(['default-limit'], 'default.txt', { type: 'text/plain' }));
+
+    const res = await makeDefaultApp().request('/api/v2/fs/upload', { method: 'POST', body: fd });
+    expect(res.status).toBe(201);
+    expect(await readFile(join(workspacesRoot, 'default.txt'), 'utf-8')).toBe('default-limit');
   });
 
   it('файл больше лимита → 413 PAYLOAD_TOO_LARGE, файл не записан', async () => {
