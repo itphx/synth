@@ -20,7 +20,8 @@ dictionary (`synth-landing/js/main.js`).
 | Russian (RU) | English (EN) | Meaning / context | Keep as-is |
 |---|---|---|---|
 | сессия | session | A conversation with the agent; history and state live on the server | `Session` |
-| подсессия саб-агента | subagent session (child session) | Session spawned by the `task` tool | `SessionManager` |
+| дочерняя сессия | child session | Session spawned by the `task` tool and linked to a parent session (child/parent relationship) | `childSessionId`, `child_session_id` |
+| сессия саб-агента | subsession / subagent session | The subagent's own session (the child session where the subagent runs); product strings prefer “subagent session” | `subagentSessions` |
 | проект | project | Container for sessions, files and context; optional for a session | `projectId`, `Project` |
 | агент | agent | Configured assistant with tools, capabilities and a system prompt | `AgentRegistry` |
 | саб-агент | subagent | Agent invoked from within a session via the `task` tool | `task` tool |
@@ -53,11 +54,14 @@ dictionary (`synth-landing/js/main.js`).
 | шлюз | gateway | 1) security layer for LLM traffic; 2) class of extensions (e.g. Telegram) | `LLM Gateway`, `GatewayProvider`, `synth-gateway-telegram` |
 | аддон | add-on | External companion service running next to Synth | `synth-media` |
 | плагин | plugin | In-process code extension (Extension API) | `@itphx/synth-plugin` |
+| шов / точка расширения | seam | Extension point for future plugins/registries — convention, from code comments, not a product string | `RouteRuleProvider`, `ContextSource` |
+| плумбинг | plumbing | Wiring already present in the core but not yet used (e.g. the Runner flag) — convention, from a code comment, not a product string | `serve --runner` |
 | webhook | webhook | Outbound HTTP subscription with HMAC signing | `whsec_…` |
 | расписание (schedule) | schedule | Cron-based rule that fires events | `Schedule` |
 | задание (job) | job | One recorded execution of a schedule | `jobs.jsonl` |
 | шедулер | scheduler | Component that fires schedules | `SchedulerService` |
 | гибридный режим | hybrid mode | Local core plus a remote server in one UI | `origin`, `remote:<uuid>` |
+| агрегатор миров | aggregator of two worlds | The local core presents local and remote projects/sessions as one — doc convention, not a product string | `origin` |
 | managed | managed | Server-deployed instance; roles come from the server | — |
 | standalone | standalone | Local single-user instance with the ADMIN role | — |
 | инстанс | instance | One Synth installation with its own data directory | `SYNTH_DATA_DIR` |
@@ -68,8 +72,10 @@ dictionary (`synth-landing/js/main.js`).
 | RBAC | RBAC | Role-based access control for HTTP endpoints | `requirePermission` |
 | роль | role | One of `ADMIN` / `USER` / `LEAD` / `AUDITOR`, or a project role | `ADMIN`, `USER`, `LEAD`, `AUDITOR` |
 | scope | scope | Fine-grained token permission (e.g. `events:ingest`) | `requireScope` |
+| потолок прав | permission ceiling | Sender roles that only narrow (never raise) the profile roles — convention, not a product string | `identity.roles` |
 | service-key | service key | Scoped instance key for external services | `synth_svc_…` |
 | binding-key | binding key | API key bound to an event source/chat | `synth_evt_…` |
+| мягкий отзыв | soft revocation | Marking a key revoked without deleting it — the UI string is “Revoke”/“Revoked”; “soft” is a convention | `revoke`, `revokedAt` |
 | ephemeral-сессия | ephemeral session | Temporary session with a time to live | `expiresAt` |
 | TTL | TTL | Time to live before an ephemeral session is swept | `parseTtl` |
 | артефакт | artifact | Data produced by a step and passed to the next one (pipelines) | — |
@@ -106,9 +112,18 @@ dictionary (`synth-landing/js/main.js`).
 | пакет | package | npm package under `packages/` | `@itphx/synth-*` |
 | системный промпт | system prompt | Composed prompt sent before the conversation | `SystemPromptComposer` |
 | кэш промпта | prompt cache | Reusing the stable prompt prefix | `prompt-cache` |
+| provenance-заголовок | provenance header | `--- from <path> (<chars> chars[, truncated]) ---` emitted before injected instructions — core code, not a UI string | `provenance` |
 | decision-модель | decision model | Small model used for fast decisions and routing | `Clef-Flash` |
 | эскалация | escalation | Falling back to a stronger model | `decision-cascade` |
 | порог уверенности | confidence threshold | Confidence below which escalation happens | `confidenceThreshold` |
+| быстрые ответы | quick answers | Instant-answer layer for simple requests (rules / embeddings / decision, without the large model); UI section “Quick answers” | `settings.microFirst.*`, `sessionSettings.micro.*` |
+| микро-слой | micro layer | The rules + embeddings + decision level in front of the LLM (product keys use `micro`; the product hint writes “micro-layer”) | `micro` |
+| decision-уровень | decision level | Decision-model classification inside Quick answers; per-session opt-out `decisionFirst` | `sessionSettings.micro.decision` |
+| каскад моделей | model cascade | Chain of models engaged only when the previous one is unconfident | `micro-cascade`, `decision-cascade` |
+| контроль качества | quality check | Post-answer check (min length) that forwards the request to the fallback model | `routing.escalation.*` |
+| уверенность (0–1) | confidence | Model confidence in the 0–1 range, compared against the threshold | `confidenceThreshold` |
+| эмбеддинг / эмбеддинг-модель | embedding / embedding model | Vector representation used for semantic classification | `settings.microFirst.embedding`, `sessionSettings.micro.embeddingModel` |
+| запасная модель | fallback (fallback model) | Spare model used when the primary answer fails the quality check | `routing.escalation.fallback`, `decisionConfig.metricFallback` |
 | задача (task) | task | Unit of work delegated to a subagent | `task` tool |
 | приём события | event ingestion (ingest) | Accepting an external event through the API | `EventIngress` |
 | доставка | delivery | Passing an answer to a session or channel | `EventDelivery` |
@@ -145,5 +160,11 @@ names stay exactly as in the source:
   `pnpm-lock.yaml`.
 - **ADR/PROP identifiers:** `ADR-NNN`, `PROP-NNN` — file names and numbers are
   stable and are never translated or renumbered.
+- **Prompt blocks (engine markers, never translated):** `[SESSION INFO]`,
+  `[ADDITIONAL CONTEXT]`, `[PROJECT INSTRUCTIONS]`, `[CLASSIFICATION]`,
+  `[APPROVED PLAN]`, `[TODO]`, `[TRUNCATED: …]`,
+  `[Subdirectory context discovered: …]`.
+- **API platform identifiers:** `public-OpenAPI` — kept as a single hyphenated
+  identifier, never split or translated.
 - **Upstream products:** Keycloak, Ollama, OpenAI, Anthropic, Hono, React,
   Vitest, pnpm, Docker, Kubernetes, Telegram, GitVerse, GitHub.

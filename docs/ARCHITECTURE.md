@@ -1,5 +1,7 @@
 # Архитектура Synth
 
+> 🌐 [English](./en/ARCHITECTURE.md) · **Русский**
+
 > [!NOTE]
 > Пользовательские сценарии развёртывания (локально, Docker, Kubernetes, гибрид) —
 > в портале документации: https://docs.synth.itphx.ru/deploy/local/.

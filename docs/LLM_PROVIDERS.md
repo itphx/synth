@@ -1,5 +1,7 @@
 # LLM-провайдеры
 
+> 🌐 [English](./en/LLM_PROVIDERS.md) · **Русский**
+
 Synth поддерживает провайдеров типов `openai`, `anthropic`, `ollama`, `decision` и `systemone` (проверяется в `synth config provider add --type`).
 
 ## Провайдеры для разработки

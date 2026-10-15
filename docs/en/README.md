@@ -21,11 +21,11 @@ the language rule in the root [AGENTS.md](../../AGENTS.md)).
 | — | [`docs/en/GLOSSARY.md`](./GLOSSARY.md) | ✅ available |
 | [`docs/API_V2.md`](../API_V2.md) | `docs/en/API_V2.md` | ⏳ planned |
 | [`docs/CONFIGURATION.md`](../CONFIGURATION.md) | `docs/en/CONFIGURATION.md` | ⏳ planned |
-| [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) | `docs/en/ARCHITECTURE.md` | ⏳ planned |
+| [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md) | [`docs/en/ARCHITECTURE.md`](./ARCHITECTURE.md) | ✅ available |
 | [`docs/HYBRID.md`](../HYBRID.md) | `docs/en/HYBRID.md` | ⏳ planned |
 | [`docs/UI-KIT.md`](../UI-KIT.md) | `docs/en/UI-KIT.md` | ⏳ planned |
-| [`docs/ROUTING.md`](../ROUTING.md) | `docs/en/ROUTING.md` | ⏳ planned |
-| [`docs/LLM_PROVIDERS.md`](../LLM_PROVIDERS.md) | `docs/en/LLM_PROVIDERS.md` | ⏳ planned |
+| [`docs/ROUTING.md`](../ROUTING.md) | [`docs/en/ROUTING.md`](./ROUTING.md) | ✅ available |
+| [`docs/LLM_PROVIDERS.md`](../LLM_PROVIDERS.md) | [`docs/en/LLM_PROVIDERS.md`](./LLM_PROVIDERS.md) | ✅ available |
 | [`docs/QUICKSTART.md`](../QUICKSTART.md) | `docs/en/QUICKSTART.md` | ⏳ planned |
 | [`docs/DEVELOPMENT.md`](../DEVELOPMENT.md) | `docs/en/DEVELOPMENT.md` | ⏳ planned |
 | [`docs/PUBLISHING.md`](../PUBLISHING.md) | `docs/en/PUBLISHING.md` | ⏳ planned |
