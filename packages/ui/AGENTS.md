@@ -137,6 +137,23 @@
 - **`/`-автокомплит.** `components/chat/CommandAutocomplete.tsx` + `ChatInput`: источник `GET /api/v2/commands`, навигация ArrowUp/Down/Enter/Tab/Escape, клик, подстановка `/name ` (не отправка), тач-таргеты (ADR-044).
 - ⚠️ **Инвариант импортов shared.** Для runtime/value-импортов из `@itphx/synth-shared` использовать **только subpath**: `@itphx/synth-shared/types`, `/schemas`, `/i18n`, `/version`. Value-импорт из **корня** `@itphx/synth-shared` тянет `config/loader` → `node:fs` в браузерный бандл и роняет всё приложение (реальный инцидент commit 2; `import type` из корня безопасен — стирается компилятором). Проверять при добавлении любых констант/функций из shared в UI.
 
+## Промпт и статистика (ADR-070)
+
+- **`StatsTab`** (`components/panels/StatsTab.tsx`, правая панель «Статистика») — read-only; данные из
+  `GET /api/v2/sessions/:id/prompt` и `GET /api/v2/sessions/:id/stats`.
+- **«Состав промпта»** — таблица записей манифеста в реальном порядке отправки (тир
+  `stable`/`context`/`volatile`, блок по i18n-ключу `promptBlock.*`, `Симв.`/`~Токенов`/`Статус`,
+  provenance), строки «Всего символов/~токенов» и «Статический префикс», строка «Описание инструментов»
+  (`tools`), hit/miss последнего хода (`promptMeta` → `promptHit`/`promptMiss`). Секция «История» —
+  раскрывающаяся таблица state-сообщений по типам + исключённые (`disabled`/`hidden`/`info`)/вложения/
+  число секретов.
+- **Cache-статистика** — «Кэш чтение»/«Кэш запись»/«Попадание в кэш» (`cache_hit_rate` сессии либо
+  расчёт `cache_read_tokens / input_tokens`); у последнего ответа — разбивка стоимости.
+- **Агенты/пользователи и сабагенты** — таблицы «Статистика агентов»/«пользователей» (сообщения,
+  токены, «Сабагентов»/«Токенов сабагентов», «в т.ч. сабагенты»); сумму сессии даёт `sessionStats`,
+  включая саб-агентов; у агентов нет «Скорость»/«Длительность». Live-обновление — по активному стриму
+  и `streamFinishTick`; единый вид (иконка+имя в цвет сущности, колонки «Кэш»/«%», общий поповер).
+
 ## Git и SSH-ключи (ADR-076)
 
 - **Git-вкладка** (`components/panels/LeftPanel.tsx` → `GitTab`, `stores/gitStore.ts`): реестр `project.repos` с `destination`/`type`/`url`/`ssh-key`/`lastFetch`; `scan → register`, `clone`/`init` с полями `name`/`path` и селектором SSH-ключа, `fetch`, `remove` (через `ConfirmDialog`, опц. `deleteLocal`). Методы — `synthApi.*GitRepo*`.

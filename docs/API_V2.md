@@ -270,7 +270,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/sessions/import` | backend | auth | Импорт сессии из экспорта → 201 |
 | GET | `/api/v2/sessions/:id/status` | оба | auth | `{blocked, pending_count, processor_running}` |
 | POST | `/api/v2/sessions/:id/prompt` | оба | auth | Поставить сообщение в очередь, вернуть **SSE-стрим** |
-| GET | `/api/v2/sessions/:id/prompt` | оба | auth | Состав системного промпта (ADR-070 §2.5): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (тулы с `chars`/`estTokens` и флагом оценки, ADR-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — применённые политики встроенных/MCP (ADR-071 §2.3); записи: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, не в `staticPrefixChars`) |
+| GET | `/api/v2/sessions/:id/prompt` | оба | auth | Состав системного промпта (ADR-070): `manifest` + `history` + `promptState` + `lastPromptMeta` + `toolsDetail` (тулы с `chars`/`estTokens` и флагом оценки, ADR-071 §2.8). `manifest.toolsPolicy`/`manifest.mcpPolicy` — применённые политики встроенных/MCP (ADR-071 §2.3); записи: `tools` (stable/context) → `mcp.servers`/`mcp.tools`/`mcp.status` (volatile, не в `staticPrefixChars`) |
+| GET | `/api/v2/sessions/:id/stats` | оба | auth | Статистика usage (ADR-070): сообщения + рекурсивный usage саб-агентов (tool `task`), агрегаты по агентам/пользователям (`computeSessionStats`) |
 | GET | `/api/v2/sessions/:id/messages` | оба | auth | `{messages, session_id, engine}` |
 | POST | `/api/v2/sessions/:id/clear` | оба | auth | Очистить историю (кроме pinned) |
 | POST | `/api/v2/sessions/:id/abort` | оба | auth | Надёжный «Стоп» (ADR-005): ставит персистентный флаг `status.cancel_requested`, при живом стриме — graceful-отмена, затем остановка процессора очереди; `{status:'aborted'}`; 404 если сессии нет (см. ниже) |

@@ -211,6 +211,61 @@ synth/
 - Перезапуск движка без потери истории
 - Очередь сообщений на бэкенде, доставка по одной
 
+## Композиция системного промпта (SystemPromptComposer)
+
+Системный промпт собирает `SystemPromptComposer` (`engine/context/composer.ts`, ADR-070) —
+**единственная точка сборки** для основной сессии и саб-агентов. `ContextBuilder` поставляет «сырые»
+блоки, оркестратор не конкатенирует строки; специализированные промпты (debug-эхо,
+`SUMMARIZER.{lang}.md`) — исключение, остаются inline.
+
+- **Три тира, порядок отправки `stable` → `context` → `volatile`.** `stable` — побайтово константные на
+  сессию блоки: role-prompt (+ политики «профиль пуст → интервью», «проекта нет → предложи создать»),
+  `[ADDITIONAL CONTEXT]` (SOUL/COMPANY/ABOUT), `GATEWAY`, `PLAN_GUIDE`, политика режимов `mode.policy`.
+  `context` — profile, `[PROJECT: info.md]`, проектные инструкции (ADR-069), каталог скиллов (ADR-046),
+  `[ИНФОРМАЦИЯ О СЕССИИ]`. `volatile` — sticky, participants, summary, компактные state-маркеры,
+  `[CLASSIFICATION]` (config-gate), interview-артефакт.
+- **Правило «политика — в `stable`, состояние — в `volatile`».** В `stable` попадает только константное
+  на всю сессию; всё условное/переходное (текст опросника, факт «профиль пуст») — `volatile`, **после**
+  границы stable-префикса (граница — после `mode.policy`). Появление/исчезновение условной добавки не
+  инвалидирует кэшируемый префикс.
+- **Идемпотентность и byte-stability.** `compose()` собирает промпт из состояния **заново** (никаких
+  `base + …`); при неизменном состоянии `stablePrefix` побайтово стабилен. В `stable` не попадает
+  `Date.now()` с секундной точностью (дата — только date-only). Это by design устраняет баг дублей блоков
+  после `plan_enter`/`plan_exit`.
+- **Режим/план/todo — chronological system-сообщения истории, не system prompt.** `MODE_*`/`PLAN_MODE_*`/
+  `[APPROVED PLAN]`/`[TODO]` уходят durable `role: system` сообщениями (`metadata.type` =
+  `mode_change`/`plan_updated`/`todos_updated`/`agent_switch`; скрыты **только в UI**), для LLM —
+  обёрткой `<system-state type="…">`. Обоснование — иерархия инвалидации `tools → system → messages`:
+  событие хода не должно обнулять system-кэш. Смена режима/плана/todo system baseline не пересобирает.
+- **CachePolicy — в провайдерах/Gateway, не в тулах** (ADR-036): Anthropic — `system` массивом блоков с
+  `cache_control` (≤4 breakpoint'а, приоритет tools → system → messages; два system-breakpoint'а — конец
+  stable-префикса и конец system; TTL по умолчанию `5m`, опция `1h` не включена); OpenAI —
+  `prompt_cache_key` (стабильный id сессии; `agentKey` в ключ не входит — изоляция агентов через их
+  `staticPrefix`/`promptStates`) + `stream_options.include_usage`. Маркеры ставятся **после**
+  нормализации/санитайза; `none` отключает маркеры и ключ.
+- **Usage/статистика.** Нормализованный `Usage` (`input`/`output`/`nonCached`/`cacheRead`/`cacheWrite`/
+  `reasoning`/`total`, инвариант `nonCached + cacheRead + cacheWrite = input`); стоимость с cache
+  read/write; **cache hit rate** — доля кэшированных входных токенов сессии (сессия/API/UI).
+- **Состояние промпта — per-agent.** `session.promptStates[agentKey]` (`agentKey` = agentRole либо
+  `__default__`): generation, `staticPrefixHash`, закреплённые байты `staticPrefix`, блочные хэши.
+  Пишется **только при смене generation**; в каждом assistant-сообщении — компактный `promptMeta`
+  (`agentRole`, generation, `expected: hit|miss`, фактические cachedTokens, `validated`). Смена режима и
+  модели/провайдера generation **не** поднимают (смена модели даёт `expected: 'miss'` без пересборки
+  stable-префикса); смена агента не переиспользует чужой префикс. `promptStates` саб-агентов не персистятся.
+- **Прозрачность.** Манифест источников (`key`/`label`/`tier`/`chars`/`estTokens`/`status`/`provenance`/
+  `source`) + запись `tools` (самый ранний кэшируемый слой, вставляется в конце тира `stable`) + слой
+  истории (`PromptHistoryInfo`); `manifest()` и `compose()` используют один обход, есть тест паритета
+  «манифест ↔ отправленные байты». API `GET /api/v2/sessions/:id/prompt` (manifest + history +
+  promptState + promptMeta) и UI-секция «Состав промпта»; `DebugCollector` проброшен во все точки создания.
+- **`ContextSource`-шов** (`{ key, load(ctx) }`) — задел под будущий реестр источников (сейчас источники
+  внутри Composer).
+- **Тулы постоянны во всех режимах** (plan/act/yolo): `_filterToolsByMode` удалён, ограничения — только
+  permission-слой, расширенный осью доступности `ToolAccess` (`allow`/`ask`/`deny`/`unavailable(mode|role)`;
+  причина `dependency` — ADR-078). Доступность **не** кодируется в `description` тула (он в tool-префиксе).
+
+Механика модулей/типов — `packages/core/AGENTS.md`; конфиг — `docs/CONFIGURATION.md` (`llm.cache`);
+эндпоинт — `docs/API_V2.md` §5.5; UI — `packages/ui/AGENTS.md`.
+
 ## Скиллы и slash-команды
 
 Механизм скиллов и `/`-команд (ADR-046). Скилл — папка с `SKILL.md` + supporting-файлами;

@@ -159,7 +159,8 @@ llm:
   defaultModel: ""
   maxRetries: 3
   timeout: 60
-  cache: "auto"                   # ADR-070: политика prompt-cache — auto (ставить маркеры) | none
+  cache: "auto"                   # ADR-070: политика prompt-cache — auto (маркеры/ключ) | none (отключить);
+                                  # применяется в провайдерах (Anthropic cache_control, OpenAI prompt_cache_key)
 
 core:
   port: 4300

@@ -197,12 +197,29 @@
   + `QueueProcessorManager.requestStop`; без процессора флаг снимается).
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
-- `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен.
+- `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit; `decide()` — не-chat
   decision-вызов (ADR-084: guard/обфускация `state`, тот же `_prepare`/аудит, что у chat-путей).
+  `SystemPromptPayload` (`stablePrefix`/`cacheKey`/`cachePolicy`, ADR-070) проходит через Gateway в
+  провайдер без изменений — prompt-cache-маркеры ставятся в провайдерах **после** guard/обфускации.
 - `engine/router/*` — routing моделей и micro-model слой (ADR-034/035); decision-слой — `DecisionContentClassifier` (`decision-content-classifier.ts`, ADR-084), `DecisionModel` в `micro/models/` (`kind='decision'`, per-session `decisionFirst`), единый каскад `decision-cascade.ts` (`decideChoiceCascade`: `primary → escalation` по необязательной паре `escalationProvider`/`escalationModel`, fail-safe) и агрегатные метрики `decision-metrics.ts` (синглтон `decisionMetrics`: `calls`/`handled`/`fallback`/`escalated`/`attempts`/`rejected`/`by_model`). Мультимодальный контракт (задел PROP-085): `MicroInput.images`/`videos`, `ClassifyRequest.images`/`videos`, `DecisionProvider.decide(opts.images/videos)` — добавляются в тело запроса только если непусты.
-- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
+- `engine/permission/*` — permissions; `engine/security/*` — injection/shell/protected paths; слой доступности (`engine/permission/availability.ts`, ось `ToolAccess` — ADR-070: `allow`/`ask`/`deny`/`unavailable(mode|role|dependency|workspace)`) учитывает причины `dependency` — нет внешней программы тула (`engine/tools/runtime-deps.ts`, ADR-078) — и `workspace` — не задан рабочий каталог проекта для file/shell/git-тулов (`isWorkspaceDependentTool`, ADR-075); `security/crypto.ts` — AES-256-GCM и мастер-ключ секретов, `security/rotate.ts` — ротация мастера (ADR-076).
 - `engine/context/*` — `ContextBuilder`, `ContextOptimizer`, `ContextConfig`, интервью (статус — поле `ProfileData.interviewCompleted`; блок `[INTERVIEW]` — только первое сообщение сессии от пользователя при незаполненном профиле и доступном агенту `profile_update`, гейт `interviewEligible`).
+  Системный промпт (ADR-070): `composer.ts` — `SystemPromptComposer` (единственная точка сборки
+  промпта основной сессии и саб-агентов: `compose()` идемпотентно собирает из состояния, `manifest()` —
+  манифест источников; типы `ComposedPrompt`/`PromptBlock`, `ContextSource`-шов `{ key, load(ctx) }`);
+  `prompt-blocks.ts` — тиры `stable`/`context`/`volatile` и детерминированная склейка
+  (`sortPromptBlocks`/`joinPromptBlocks`); `prompt-state.ts` — состояние промпта per-agent
+  (`agentKeyOf`/`DEFAULT_AGENT_KEY`, `buildPromptState`/`computeExpected`/`validateExpected`, запись
+  `session.promptStates[agentKey]` только при смене generation); `state-messages.ts` — chronological
+  state-сообщения (`mode_change`/`plan_updated`/`todos_updated`/`agent_switch`, `syncStateMessages`,
+  обёртка `<system-state type="…">`, `UnavailableTool`). Специализированные промпты debug-эха и
+  `SUMMARIZER.{lang}.md` идут мимо Composer (inline). Манифест: system-блоки в реальном порядке +
+  запись `tools` (`source: 'tools'`, в конце тира `stable`), `PromptHistoryInfo` — слой истории
+  (`_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`).
+  Профиль/интервью в промпте резолвит единый `_resolveProfile(userId)` (`loadProfile(userId) ??
+  getProfileByUsername(userId)`; `session.userId` — username, профиль ключуется по id-UUID); `profilesStore`
+  проброшен и в standalone `ContextBuilder` (`server/app.ts`, `server/chat.ts`).
   Проектные инструкции (ADR-069): `instructions.ts` — `ProjectInstructionsResolver`
   (merged chain `git root → … → workspace`, кандидаты `AGENTS.override.md` > `AGENTS.md` >
   `agents.md` > `CLAUDE.md` (opt-in) > `CONTEXT.md` (deprecated); дедуп sha256;
@@ -399,9 +416,11 @@
 - `sessions/ephemeral.ts` — ephemeral TTL (ADR-089): `parseTtl`
   (`30s`/`15m`/`24h`/`7d`), `startEphemeralSweeper` (sweep 60 c, unref); поля
   `Session.expiresAt`/`archivedAt`, списки сессий по умолчанию без архива.
+- `sessions/stats.ts` — `computeSessionStats` (ADR-070): usage сообщений + рекурсивный usage
+  саб-агентов (tool `task`), агрегаты по агентам/пользователям — для `GET /api/v2/sessions/:id/stats`.
 - `queue/processor.ts` — `QueueProcessor`/`QueueProcessorManager`; надёжный «Стоп» — `requestStop()` (in-memory запрос: будит backoff, абортит активный LLM-вызов) + `_shouldStop`/`_handleStopRequest` (проверка in-memory запроса и персистентного `status.cancelRequested` на границах цикла, очистка `pendingMessages`, снятие `blocked`/флага и `stream.cancelled` ровно один раз).
 - `remote/*` — клиент, сессии, credentials, device-flow, transfer, aggregate, event-bridge.
-- `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote, `DecisionProvider` (ADR-084: типы `decision` (RouterAI, `POST {base}/decisions`) и `systemone` (Ollama, `POST {base}/v1/systemone`) — endpoint выбирается по типу провайдера).
+- `providers/*` — `ProviderFactory`, `BaseProvider`, OpenAI/Anthropic/Ollama/Remote, `DecisionProvider` (ADR-084: типы `decision` (RouterAI, `POST {base}/decisions`) и `systemone` (Ollama, `POST {base}/v1/systemone`) — endpoint выбирается по типу провайдера). Prompt-cache (ADR-070, `CachePolicy = 'auto' | 'none'` в `base.ts`): `SystemPromptPayload` (`text`/`stablePrefix`/`cacheKey`/`cachePolicy`) — Anthropic отдаёт `system` массивом блоков с `cache_control` (≤4 breakpoint'а, два system), OpenAI/Remote — `prompt_cache_key` (= id сессии) + `stream_options.include_usage`; `usage.ts` — нормализация usage и `computeCacheHitRate` (`cacheReadTokens / inputTokens`, 0 при нуле). Нормализация по провайдерам: Anthropic — `input = input_tokens + cacheRead + cacheWrite`; OpenAI — `prompt_tokens_details.cached_tokens` → `cacheRead`; Remote — usage из ответа прокси в тот же контракт; Ollama — cache-полей нет (`cacheRead = cacheWrite = 0`).
 - `profiles.ts` — реестр серверных профилей гибрида.
 - `prompts/` (system, roles, subagents, security), `definitions/`
   (`protected-paths.json`, `shell-policy.json`), `dictionaries/` — ассеты движка.
