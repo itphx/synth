@@ -236,14 +236,25 @@ export async function runProcessEarly(
       session.outputTokens += finalUsage.outputTokens;
       session.totalTokens += finalUsage.totalTokens;
 
-      // Авто-тайтл если это первое сообщение
-      if (session.messages.filter((m) => m.role === MessageRole.USER && !m.ephemeral).length <= 1) {
-        try {
-          session.title = sm('session.dialog_title', { id: session.id.slice(0, 8) });
-          await deps.sessionManager.saveSession(session);
-        } catch {
-          // ok
-        }
+      // Авто-тайтл если это первое сообщение.
+      // Персист счётчиков/тайтла идёт по актуальному состоянию хранилища
+      // (`withLock` перечитывает сессию): `session` — снапшот вызывающего, и
+      // его сохранение затирало бы только что добавленный ответ ассистента
+      // (ответ пропадал из истории при перезагрузке сессии).
+      const autoTitle = session.messages.filter((m) => m.role === MessageRole.USER && !m.ephemeral).length <= 1
+        ? sm('session.dialog_title', { id: session.id.slice(0, 8) })
+        : null;
+      if (autoTitle) session.title = autoTitle;
+      try {
+        await deps.sessionManager.withLock(session.id, async (s) => {
+          s.inputTokens += finalUsage.inputTokens;
+          s.outputTokens += finalUsage.outputTokens;
+          s.totalTokens += finalUsage.totalTokens;
+          if (autoTitle) s.title = autoTitle;
+          await deps.sessionManager.saveSession(s);
+        });
+      } catch {
+        // ok
       }
 
       info('MICRO', `Ответ через микро-слой: ${microResult.microResult.taskClass} (${microResult.microResult.latencyMs}ms, confidence=${microResult.microResult.confidence.toFixed(2)})`);
