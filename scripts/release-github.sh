@@ -268,22 +268,23 @@ if $DO_RELEASE; then
     info "Тело релиза:  $CHANGELOG_MODE"
     info "Версия чарта: ${CHART_VERSION:-не определена}"
 
-    run_sh "(cd '$WORKTREE' && bash scripts/changelog.sh)"
+    run_sh "(cd '$WORKTREE' && bash scripts/changelog.sh --lang en)"
     run_sh "cp '$WORKTREE/changelog-partial.md' '$ASSETS/release-body.md'"
     if ! $DRY_RUN; then
         {
-            printf '\n## Установка\n\n'
-            printf 'CLI (npm — из npmjs.org или GitVerse Package Registry):\n\n'
+            printf '\n## Installation\n\n'
+            printf 'CLI (npm — from npmjs.org or the GitVerse Package Registry):\n\n'
             printf '```bash\n'
             printf 'npm install -g @itphx/synth@%s\n' "$VERSION"
             printf '```\n\n'
-            printf 'Docker-образ (базовый) из GitHub Container Registry:\n\n'
+            printf 'Base Docker image from the GitHub Container Registry:\n\n'
             printf '```bash\n'
             printf 'docker pull ghcr.io/itphx/synth:%s\n' "$VERSION"
             printf 'docker run -p 4300:4300 ghcr.io/itphx/synth:%s\n' "$VERSION"
             printf '```\n\n'
-            printf 'Основной реестр образов — `gitverse.ru/itphx/synth:%s`;\n' "$VERSION"
-            printf 'базовые образы `synth`/`synth-backend`/`synth-ui` публикуются также в ghcr.io (версионный тег).\n'
+            printf 'The primary image registry is `gitverse.ru/itphx/synth:%s`;\n' "$VERSION"
+            printf 'all three base images (`synth`, `synth-backend`, `synth-ui`) are published to\n'
+            printf 'both gitverse.ru and ghcr.io (version tag only).\n'
         } >> "$ASSETS/release-body.md"
     fi
 

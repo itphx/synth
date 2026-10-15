@@ -42,7 +42,11 @@
  *   RELEASE_BODY_FILE  — путь к готовому телу релиза (обязателен)
  *   RELEASE_ASSET      — один необязательный ассет (имя = basename файла)
  *   RELEASE_ASSETS     — необязательный список ассетов (через пробел/запятую/перевод строки)
- *   RELEASE_TARGET     — target_commitish для создания (по умолчанию = тег)
+ *   RELEASE_TARGET     — target_commitish для создания (по умолчанию: для GitHub —
+ *                        GITHUB_SHA или 'main', для GitVerse — тег). GitHub отвечает
+ *                        422 «invalid target_commitish», если передать имя тега
+ *                        (воспроизведено на v0.10.1), поэтому для GitHub по
+ *                        умолчанию берём ветку/SHA, а не тег.
  *   RELEASE_PRERELEASE — true/1 — пометить pre-release (необязательно)
  *   RELEASE_PLATFORM   — gitverse|github (то же, что --platform)
  *
@@ -110,7 +114,7 @@ const repo = isGithub
 const token = isGithub ? process.env.GH_TOKEN || process.env.GITHUB_TOKEN : process.env.GV_TOKEN;
 const tag = process.env.RELEASE_TAG;
 const bodyFile = process.env.RELEASE_BODY_FILE;
-const target = process.env.RELEASE_TARGET || tag;
+const target = process.env.RELEASE_TARGET || (isGithub ? process.env.GITHUB_SHA || 'main' : tag);
 const prerelease = /^(1|true|yes)$/i.test(process.env.RELEASE_PRERELEASE || '');
 const PER_PAGE = 50;
 

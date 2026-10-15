@@ -231,6 +231,14 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 3. **`${...}` в inline bash** — GitVerse парсит как Go-шаблон, скрипт падает. Сложный bash выносить в отдельный файл (см. `scripts/changelog.sh`).
 4. **`${GITHUB_REF_NAME}`** — синтаксис GitHub; в GitVerse: `echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||'`
 5. Версия Node.js в раннере: 22 (предустановлена).
+6. **Версия в npmjs появляется с задержкой 4–6 мин** (автоматический review/репликация). Бюджет
+   верификации в `scripts/publish-packages.sh` — 15 мин (`VERIFY_TIMEOUT=900`), таймаут джобы
+   `publish-npmjs` — 30 мин; на 0.10.1 джоба была срезана таймаутом уже после публикации всех
+   6 пакетов.
+7. **Перезапустить run с повторной загрузкой артефакта нельзя** — `actions/upload-artifact@v4` падает
+   с `Failed to CreateArtifact (409) Conflict`, пока живы артефакты предыдущего прогона. Обход: снять
+   артефакты рана через API (`GET /repos/{owner}/{repo}/actions/artifacts` → `DELETE
+   /repos/{owner}/{repo}/actions/artifacts/{id}` → 204), затем `POST /repos/{owner}/{repo}/actions/runs/{id}/rerun`.
 
 ### Секреты
 

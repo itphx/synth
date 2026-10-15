@@ -11,6 +11,11 @@
 # публикации, которую npm увёл в automated review («Validating»), в реестре
 # такой версии ещё нет.
 #
+# npm отдаёт опубликованную версию с задержкой: публикация проходит
+# автоматический review/репликацию, и версия становится видна в реестре через
+# 4–6 мин (наблюдалось на 0.10.1). Поэтому бюджет ожидания в фазе проверки —
+# 15 мин, а таймаут джобы publish-npmjs в release.yaml — 30 мин.
+#
 # Использование:
 #   ./scripts/publish-packages.sh https://registry.npmjs.org
 #   ./scripts/publish-packages.sh https://gitverse.ru/api/packages/itphx/npm/
@@ -130,7 +135,9 @@ fi
 
 # --- Проверка, что версии реально доступны в реестре ---
 # pnpm может напечатать "Published", но версия останется в automated review
-# («Validating») и будет отдавать 404. Ждём появления с ретраями.
+# («Validating») и будет отдавать 404. npm публикует версию с задержкой
+# (автоматический review/репликация; наблюдалось 4–6 мин), поэтому ждём
+# появления с ретраями и бюджетом 15 мин (VERIFY_TIMEOUT), а не 2 мин.
 
 http_code() {
     local code
@@ -156,8 +163,8 @@ version_available() {
 }
 
 VERIFY_PACKAGES=(shared core ui backend sdk synth)
-VERIFY_TIMEOUT=120   # общий бюджет ожидания, с
-VERIFY_DELAY=5       # шаг опроса, с
+VERIFY_TIMEOUT=900   # общий бюджет ожидания, с (npm отдаёт версию с задержкой 4–6 мин)
+VERIFY_DELAY=15      # шаг опроса, с
 
 echo ""
 echo "Проверка версии $VERSION в $REGISTRY (до ~${VERIFY_TIMEOUT} с, шаг ${VERIFY_DELAY} с)..."

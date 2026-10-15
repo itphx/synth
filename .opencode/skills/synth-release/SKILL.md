@@ -30,6 +30,25 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
 4. **`${GITHUB_REF_NAME}`** — синтаксис GitHub, в GitVerse: `echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||'`
 5. Версия Node.js в раннере: 22 (предустановлена).
 
+## Грабли (проверено на 0.10.1)
+
+- **npmjs публикует версию медленно** — версия видна в реестре через 4–6 мин (автоматический
+  review/репликация). Бюджет верификации в `scripts/publish-packages.sh` — 15 мин
+  (`VERIFY_TIMEOUT=900`), таймаут джобы `publish-npmjs` — 30 мин. Иначе получается расклад
+  «все 6 пакетов опубликованы, а джоба срезана таймаутом».
+- **Перезапуск run в GitVerse падает на `actions/upload-artifact@v4`** →
+  `Failed to CreateArtifact (409) Conflict`: артефакты предыдущего прогона ещё существуют.
+  Перед `POST /repos/{owner}/{repo}/actions/runs/{id}/rerun` нужно снять артефакты рана:
+  `GET .../actions/artifacts` → `DELETE .../actions/artifacts/{id}` (204).
+- **Джоба `build-docker` публикует в ДВА реестра** (gitverse.ru + ghcr.io) — шесть пушей на три
+  образа, при этом kaniko стартует поздно (pull образа исполнителя). Таймаут держать ≥45 мин.
+- **`scripts/publish-release.mjs` для GitHub требует `target_commitish`** = ветка/SHA: если передать
+  имя тега, GitHub отвечает `422 invalid target_commitish` (воспроизведено на v0.10.1). По умолчанию
+  для GitHub берётся `GITHUB_SHA` → `main` (для GitVerse — тег, как было).
+- **Образы GHCR создаются приватными**, если публикуются PAT'ом (не GitHub Actions). Анонимный
+  `docker pull ghcr.io/...` заработает только после переключения видимости пакета в public в UI
+  GitHub Packages.
+
 ## Порядок сборки в CI
 
 ```

@@ -180,12 +180,17 @@ jobs:
           path: changelog-partial.md
 
   # --- Публикация npm ---
+  # Таймаут 30 мин (было 10): npm отдаёт опубликованную версию с задержкой
+  # 4–6 мин (автоматический review/репликация), и 6 пакетов + верификация в
+  # scripts/publish-packages.sh не укладываются в 10 мин. На 0.10.1 джоба была
+  # срезана таймаутом уже после публикации всех 6 пакетов — при том что публикация
+  # прошла успешно, джоба «упала».
   publish-npmjs:
     name: npmjs.org
     needs: [build]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -237,12 +242,15 @@ jobs:
   # на 0.9.0 вышло 607,4 МБ из 500). Старые теги удаляет шаг «Очистка…».
   # Docker-образ ставит @itphx/synth@<version> из npmjs (npm install -g),
   # поэтому ждём публикации npmjs — иначе гонка: kaniko не находит пакет (ETARGET)
+  # Таймаут 45 мин (было 20): kaniko стартует поздно (сначала pull образа
+  # исполнителя), а публикация идёт в ДВА реестра — gitverse.ru и ghcr.io, то есть
+  # шесть пушей на три образа. На 0.10.1 джоба упёрлась в 20 мин.
   build-docker:
     name: Docker образ
     needs: [build, publish-npmjs]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
