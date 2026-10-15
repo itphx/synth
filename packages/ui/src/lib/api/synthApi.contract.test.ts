@@ -1,0 +1,80 @@
+import { describe, it, expect } from 'vitest'
+import { synthApi } from './synthApi'
+
+/**
+ * Контрактный тест (ADR-095, шаг 1): фиксирует полный состав публичного объекта
+ * `synthApi` после декомпозиции на доменные модули (`lib/api/<домен>.ts`).
+ *
+ * Защита от «тихого» пересечения имён при спредах доменов и от случайной потери
+ * метода: при осознанном добавлении/удалении методa тест обновляется руками.
+ */
+const EXPECTED_API_METHODS = [
+  'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'auditRevealed',
+  'batchMessages', 'browseWorkspaceRoot', 'cancelQueueRetry', 'cancelSummarization',
+  'checkUpdate', 'claimIdentity', 'clearQueue', 'clearSession',
+  'clearWorkspacePolicy', 'cloneGitRepo', 'createAgentSshKey', 'createDirectory',
+  'createEventBindingKey', 'createEventRoute', 'createProject', 'createProvider',
+  'createSchedule', 'createServiceKey', 'createSession', 'createSkill',
+  'createSkillBundle', 'createSshKey', 'createUser', 'createWebhookSubscription',
+  'deleteAgent', 'deleteContextFile', 'deleteEntry', 'deleteEventBinding',
+  'deleteEventBindingKey', 'deleteEventRoute', 'deleteMcpRegistryEntry', 'deleteMessage',
+  'deleteModel', 'deleteMyIdentity', 'deleteProject', 'deleteProvider',
+  'deleteSchedule', 'deleteServiceKey', 'deleteSession', 'deleteSkill',
+  'deleteSkillBundle', 'deleteSkillFile', 'deleteSshKey', 'deleteStickyNote',
+  'deleteUser', 'deleteWebhookSubscription', 'downloadFile', 'enqueueMessage',
+  'fetchGitRepo', 'fetchJSON', 'fetchModels', 'fetchProviderIcon',
+  'forkRemoteProject', 'forkSession', 'getAgentDetail', 'getAgents',
+  'getAllAgents', 'getAudit', 'getCommands', 'getCommitDetail',
+  'getCommitLog', 'getContextFile', 'getContextFiles', 'getDebugConfig',
+  'getDecisionMetrics', 'getDecisionSettings', 'getDefaultAgentInfo', 'getDictionaries',
+  'getDictionary', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
+  'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus',
+  'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
+  'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getModels',
+  'getMyIdentities', 'getOptimization', 'getProject', 'getProjectMcp',
+  'getProjectSkills', 'getProjectStats', 'getProjects', 'getProtectedPaths',
+  'getProviders', 'getScheduleJobs', 'getSchedules', 'getSecuritySettings',
+  'getServiceKey', 'getServiceKeyScopes', 'getServiceKeys', 'getSession',
+  'getSessionInstructions', 'getSessionMcpEffective', 'getSessionMessages', 'getSessionPrompt',
+  'getSessionReferences', 'getSessionSecrets', 'getSessionSkills', 'getSessionSkillsEffective',
+  'getSessionStats', 'getSessions', 'getSkill', 'getSkillBundle',
+  'getSkillBundles', 'getSkillFile', 'getSkillFiles', 'getSkills',
+  'getSkillsSettings', 'getStickyNotes', 'getToolsDisabledInfo', 'getToolsPolicyInfo',
+  'getUser', 'getUsers', 'getWebhookDeliveries', 'getWebhookSubscription',
+  'getWebhookSubscriptions', 'getWorkspacePolicy', 'getWorkspaceRoot', 'getWorkspaceSetting',
+  'initGitRepo', 'listAgentSshKeys', 'listDirectory', 'listEventBindings',
+  'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
+  'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject',
+  'putSkillFile', 'readFile', 'regenerateWebhookSecret', 'registerGitRepo',
+  'reloadSkills', 'removeGitRepo', 'removeSessionReference', 'resetContextFile',
+  'resetDecisionMetrics', 'resetDecisionSettings', 'resetDefaultAgent', 'resetDictionary',
+  'resetEventsSettings', 'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy',
+  'resetMcpPolicy', 'resetMcpSettings', 'resetProtectedPaths', 'resetSkillsSettings',
+  'resetToolsDisabled', 'resetToolsPolicy', 'resumeQueue', 'resumeSubagent',
+  'retryMessage', 'retryQueueNow', 'returnQueue', 'revokeEventBindingKey',
+  'revokeServiceKey', 'runSchedule', 'saveAgent', 'saveContextFile',
+  'saveDebugConfig', 'saveDictionary', 'saveGatewayPatterns', 'saveLlmGatewaySettings',
+  'saveMcpNetworkPolicy', 'saveMcpPolicy', 'saveMcpToolSettings', 'saveModel',
+  'saveProtectedPaths', 'saveSecuritySettings', 'saveToolsDisabled', 'saveToolsPolicy',
+  'scanGitRepos', 'setDefaultAgent', 'setWorkspacePolicy', 'setWorkspaceSetting',
+  'stopGeneration', 'summarizeSession', 'testProvider', 'testWebhookSubscription',
+  'toggleAgent', 'toggleContextFile', 'toggleMessage', 'unlinkAgentSshKey',
+  'updateDecisionSettings', 'updateEventBindingKey', 'updateEventsSettings', 'updateMcpRegistryEntry',
+  'updateOptimization', 'updateProject', 'updateProjectMcp', 'updateProjectSkills',
+  'updateProvider', 'updateSchedule', 'updateServiceKey', 'updateSession',
+  'updateSessionMcp', 'updateSessionSkills', 'updateSkill', 'updateSkillBundle',
+  'updateSkillsSettings', 'updateSshKey', 'updateStickyNote', 'updateUser',
+  'updateWebhookSubscription', 'uploadFile', 'upsertEventBinding', 'writeFile',
+] as const
+
+describe('synthApi contract (ADR-095)', () => {
+  it('набор методов совпадает с зафиксированным (224)', () => {
+    expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
+  })
+
+  it('каждый член — функция', () => {
+    for (const name of Object.keys(synthApi)) {
+      expect(typeof (synthApi as Record<string, unknown>)[name]).toBe('function')
+    }
+  })
+})

@@ -61,7 +61,7 @@
 
 **Новый store**: `create<T>()(...)`, при необходимости `persist` (образец `stores/useUIStore.ts:130-131`). Пользовательские настройки — только через `persist`; runtime-флаги (дроверы, `centralNarrow`, наведение) не персистятся. Селекторы — `useStore(s => s.x)`; в экшенах/вне React — `useStore.getState()`. Подтверждения — `confirm()` (`lib/confirm.ts:9`) + `confirmStore`, не `window.confirm`.
 
-**Новый метод API**: метод в объект `synthApi` (`lib/api/synthApi.ts:251`) + типы рядом; `BASE_URL = '/api/v2'` уже задан (`:5`). Прямой `fetch` из компонентов/сторов — нарушение.
+**Новый метод API** (ADR-095): метод добавляется в доменный модуль `lib/api/<домен>.ts` (типы/DTO — рядом с доменом) и попадает в публичный объект `synthApi` через barrel `lib/api/synthApi.ts`; общие `BASE_URL = '/api/v2'`, `fetchJSON`, `encodeFilePath` — в `lib/api/base.ts`. Полный состав `synthApi` фиксирует контрактный тест `lib/api/synthApi.contract.test.ts`. Прямой `fetch` из компонентов/сторов — нарушение.
 
 ## Соглашения
 
@@ -98,7 +98,7 @@
 - Не замыкаться в экшенах на хуки — `useStore.getState()`.
 
 ### API и i18n
-- API v2 — только через `synthApi` (`lib/api/synthApi.ts:5`); `/auth` — `lib/api/client.ts` (`BASE_URL = '/auth'`, `:75`). Ошибки бросаются как `Error` — ловить и показывать через i18n.
+- API v2 — только через `synthApi` (`lib/api/synthApi.ts` — barrel; доменные модули — `lib/api/<домен>.ts`, база `BASE_URL`/`fetchJSON`/`encodeFilePath` — `lib/api/base.ts`); `/auth` — `lib/api/client.ts` (`BASE_URL = '/auth'`, `:75`). Ошибки бросаются как `Error` — ловить и показывать через i18n.
 - Строки — только `useI18n().t('ключ')`, не хардкодить. `messages/en.ts` — базовый словарь, `messages/ru.ts` — ленивая загрузка (`import()`); ключ добавлять в оба. Плюрализация — ICU-подобным синтаксисом прямо в значении словаря: `'{count, plural, one {# сервер} few {# сервера} many {# серверов}}'` (ru — формы `one`/`few`/`many`, en — `one`/`other`). `#` внутри формы — само число, также работают обычные `{param}`-плейсхолдеры. `t(key, { count })` сам выбирает форму по локали (правила — `lib/i18n/plural.ts`, `pluralCategory`); если формы нужной категории нет — fallback `other → many → one → few → zero → two`.
 - Движковые ключи синхронизируются с `@itphx/synth-shared/i18n` по контракту ADR-041; проверка автоматическая — `messages/engine-keys.test.ts`.
 - Системные сообщения ядра несут `metadata.i18n = { key, params }`: для отображения использовать `resolveI18n`/`isValidI18nMeta`/`useResolveI18n` (`lib/i18n/`), а не собирать строку в UI.
