@@ -81,6 +81,11 @@ jobs:
         run: pnpm --filter @itphx/synth-shared build
       - name: Сборка @itphx/synth-core
         run: pnpm --filter @itphx/synth-core build
+      # Тесты деградации хранилища (storage-context.degraded.test.ts) не гейтятся
+      # SYNTH_TEST_POSTGRES_DSN и динамически импортируют драйвер, поэтому его
+      # dist должен быть собран до прогона тестов core.
+      - name: Сборка @itphx/synth-storage-postgres
+        run: pnpm --filter @itphx/synth-storage-postgres build
       - name: Тесты
         run: pnpm --filter @itphx/synth-core test
 
