@@ -31,6 +31,26 @@ export function describeSessionRepository(
       expect(await repo.load('s1')).toBeNull();
     });
 
+    it('legacy-сообщения (seq=0 у всех и дубликаты id) сохраняются round-trip в исходном порядке и без потерь', async () => {
+      const { repo } = await make();
+      // Воспроизведение реальных legacy-данных: у всех сообщений `seq = 0`
+      // (снятие коллизии `UNIQUE (session_id, seq)`) и один `id` повторяется.
+      const first = { ...makeMessage('legacy-first'), id: 'dup-id', seq: 0 };
+      const second = { ...makeMessage('legacy-second'), id: 'dup-id', seq: 0 };
+      const third = { ...makeMessage('legacy-third'), id: 'unique-id', seq: 0 };
+
+      await repo.save(makeSession({ id: 'legacy', messages: [first, second, third] }));
+
+      const loaded = await repo.load('legacy');
+      expect(loaded?.messages).toHaveLength(3);
+      expect(loaded?.messages.map((m) => m.id)).toEqual(['dup-id', 'dup-id', 'unique-id']);
+      expect(loaded?.messages.map((m) => m.content)).toEqual([
+        'legacy-first',
+        'legacy-second',
+        'legacy-third',
+      ]);
+    });
+
     it('list не теряет записи и сортирует по updatedAt desc', async () => {
       const { repo } = await make();
       await repo.save(makeSession({ id: 'a', updatedAt: '2024-01-01T00:00:00.000Z' }));

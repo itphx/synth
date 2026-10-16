@@ -290,17 +290,23 @@ export function serializeMessage(msg: Message): SerializedMessage {
  * Сообщение → строка `messages`: к сериализованной форме добавляются обязательные
  * колонки (`session_id`, дефолты NOT NULL-полей, `id`). Значения `undefined` для
  * nullable-колонок остаются как есть — их приводит к `NULL` слой параметров.
+ *
+ * `seq` — **позиционный**: драйвер передаёт номер сообщения в массиве (`1..n`),
+ * поэтому порядок сообщений в БД однозначен даже для legacy-сессий, где у всех
+ * сообщений исторически `seq = 0` (снятие коллизии `UNIQUE (session_id, seq)`).
+ * Без явного `seq` используется значение домена (или `0`).
  */
 export function messageRow(
   msg: Message,
   sessionId: string,
+  seq?: number,
 ): Record<string, unknown> {
   const serialized = serializeMessage(msg) as unknown as Record<string, unknown>;
   return {
     ...serialized,
     id: serialized.id ?? generateId(),
     session_id: sessionId,
-    seq: serialized.seq ?? 0,
+    seq: seq ?? serialized.seq ?? 0,
     role: serialized.role ?? 'user',
     origin: serialized.origin ?? 'local',
     content: serialized.content ?? '',

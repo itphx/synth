@@ -66,8 +66,13 @@ CREATE INDEX sessions_expires_at_idx  ON sessions (expires_at) WHERE expires_at 
 CREATE INDEX sessions_archived_at_idx ON sessions (archived_at) WHERE archived_at IS NOT NULL;
 
 -- ── Сообщения (нормализованы; порядок — UNIQUE(session_id, seq)) ──────────
+-- Суррогатный PK (message_uid): доменный id сообщения НЕ уникален в пределах
+-- сессии (legacy-данные содержат дубликаты id), поэтому PK по id невозможен.
+-- id остаётся обычной колонкой с индексом (session_id, id) для поиска/отладки;
+-- seq — позиционный (драйвер нормализует при записи).
 CREATE TABLE messages (
-  id            text PRIMARY KEY,
+  message_uid   bigserial PRIMARY KEY,
+  id            text NOT NULL,
   session_id    text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   seq           integer NOT NULL,
   role          text NOT NULL,
@@ -96,8 +101,9 @@ CREATE TABLE messages (
   hidden        boolean NOT NULL DEFAULT false,
   ephemeral     boolean NOT NULL DEFAULT false,
   created_at    timestamptz NOT NULL,
-  CONSTRAINT messages_session_seq_key UNIQUE (session_id, seq) DEFERRABLE INITIALLY IMMEDIATE
+  CONSTRAINT messages_session_seq_key UNIQUE (session_id, seq)
 );
+CREATE INDEX messages_session_id_idx    ON messages (session_id, id);
 CREATE INDEX messages_session_seq_idx   ON messages (session_id, seq);
 CREATE INDEX messages_content_trgm_idx  ON messages USING gin (content gin_trgm_ops);
 

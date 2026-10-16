@@ -6,19 +6,23 @@
  *
  * Семантика — паритет с файловой (`FileStore`) и in-memory
  * (`MemorySessionRepository`) реализациями:
- *   - `save` — **одна транзакция**: upsert строки `sessions` + согласование
- *     сообщений и child-таблиц (`session_references`/`checkpoints`/`sticky_notes`):
- *     upsert по естественному ключу + `DELETE` отсутствующих (полного rewrite нет);
- *     `session_references` — полная замена (ссылки допускают дубликаты одной
- *     `ref_session_id`, порядок — `ordinal`);
+ *   - `save` — **одна транзакция**: upsert строки `sessions` + **полная замена**
+ *     child-таблиц (`messages`/`session_references`/`checkpoints`/`sticky_notes`):
+ *     `DELETE … WHERE session_id` + массовый `INSERT` (по чанкам);
+ *   - `seq` сообщений — **позиционный**: при записи драйвер нормализует его по
+ *     порядку массива `1..n`. Это снимает legacy-коллизию `UNIQUE (session_id, seq)`
+ *     (у старых сессий у всех сообщений `seq = 0`) и делает порядок однозначным;
+ *     домен и так переставляет `seq = i+1` при ветвлении/merge — приведение к
+ *     позиции смысла не меняет;
+ *   - `id` сообщения **не уникален** в пределах сессии (legacy-дубликаты):
+ *     PK `messages` — суррогатный `message_uid`, поэтому дубликаты `id`
+ *     сохраняются без потерь (upsert по `id` их молча схлопывал);
  *   - per-session сериализация записи — транзакционный `pg_advisory_xact_lock`
  *     (держится до `COMMIT`; аналог per-session `AsyncLock` файловой реализации);
- *   - `UNIQUE (session_id, seq)` в `messages` объявлен `DEFERRABLE` — на время
- *     записи берётся `SET CONSTRAINTS ALL DEFERRED`, поэтому перестановка `seq`
- *     (ветвление/merge) валидна к концу транзакции;
  *   - чтения (`load`/`list`/`listForUser`/`listForUserScope`/`search`) отдают
  *     **полную** `Session`; сообщения/child-строки подгружаются **батчем**
- *     (`WHERE session_id = ANY($1)`, без N+1);
+ *     (`WHERE session_id = ANY($1)`, без N+1); порядок сообщений — по `seq` с
+ *     тайбрейкером `created_at`, затем `id` (детерминированное чтение);
  *   - `listLight` — метаданные без истории (`messages`/`pendingMessages`/
  *     `checkpoints` пусты, child-таблицы не читаются): одна выборка из `sessions`
  *     тем же `WHERE`/порядком, что у `list`;
@@ -200,13 +204,6 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (char) => `\\${char}`);
 }
 
-/** Дедупликация строк по ключу (одна и та же строка не может быть затронута дважды в `INSERT`). */
-function dedupeByKey(rows: Array<Record<string, unknown>>, key: string): Array<Record<string, unknown>> {
-  const unique = new Map<string, Record<string, unknown>>();
-  for (const row of rows) unique.set(String(row[key]), row);
-  return [...unique.values()];
-}
-
 /** Пакетный upsert строк (по частям, чтобы не упираться в лимит параметров). */
 async function upsertRows(
   tx: PostgresExecutor,
@@ -240,18 +237,47 @@ async function upsertRows(
   }
 }
 
-/** Удаление строк сессии, отсутствующих в текущем состоянии (дельтовое согласование). */
-async function deleteAbsent(
+/**
+ * Пакетный `INSERT` строк без `ON CONFLICT` (по частям, чтобы не упираться в
+ * лимит параметров). Вызывается после `DELETE … WHERE session_id` — полная
+ * замена child-строк в той же транзакции.
+ */
+async function insertRows(
   tx: PostgresExecutor,
   table: string,
-  keyColumn: string,
-  sessionId: string,
-  keys: string[],
+  fields: readonly string[],
+  rows: Array<Record<string, unknown>>,
+  jsonFields: ReadonlySet<string>,
 ): Promise<void> {
-  await tx.query(
-    `DELETE FROM ${table} WHERE session_id = $1 AND ${keyColumn} <> ALL($2::text[])`,
-    [sessionId, keys],
-  );
+  if (rows.length === 0) return;
+
+  for (let offset = 0; offset < rows.length; offset += INSERT_CHUNK_SIZE) {
+    const chunk = rows.slice(offset, offset + INSERT_CHUNK_SIZE);
+    const valuesSql = chunk
+      .map((_row, rowIndex) =>
+        `(${fields.map((_field, colIndex) => `$${rowIndex * fields.length + colIndex + 1}`).join(', ')})`,
+      )
+      .join(', ');
+    const params = chunk.flatMap((row) => rowValues(row, fields, jsonFields));
+
+    await tx.query(
+      `INSERT INTO ${table} (${fields.join(', ')}) VALUES ${valuesSql}`,
+      params,
+    );
+  }
+}
+
+/** Полная замена child-строк сессии: `DELETE` + массовый `INSERT`. */
+async function replaceRows(
+  tx: PostgresExecutor,
+  table: string,
+  fields: readonly string[],
+  rows: Array<Record<string, unknown>>,
+  jsonFields: ReadonlySet<string>,
+  sessionId: string,
+): Promise<void> {
+  await tx.query(`DELETE FROM ${table} WHERE session_id = $1`, [sessionId]);
+  await insertRows(tx, table, fields, rows, jsonFields);
 }
 
 /** `WHERE` для `list`/`search` (фильтры — по колонкам `sessions`). */
@@ -304,53 +330,49 @@ export class PostgresSessionRepository implements SessionRepository {
   }
 
   /**
-   * Запись сессии: одна транзакция, per-session advisory-лок, дельтовое
-   * согласование сообщений и child-таблиц.
+   * Запись сессии: одна транзакция, per-session advisory-лок, **полная замена**
+   * истории и child-таблиц. `seq` сообщений нормализуется позиционно (`1..n`),
+   * дубликаты `id` сохраняются как есть.
    */
   async save(session: Session): Promise<void> {
     const sessionRow = serializeSession(session);
-    const messageRows = dedupeByKey(
-      (session.messages ?? []).map((msg) => messageRow(msg, session.id)),
-      'id',
+    // `seq` — позиция сообщения в массиве (`1..n`): снимает legacy-коллизию
+    // `UNIQUE (session_id, seq)` (у старых сессий `seq = 0` у всех) и делает
+    // порядок однозначным. Дубликаты `id` сообщений сохраняются (PK — суррогатный).
+    const messageRows = (session.messages ?? []).map((msg, index) =>
+      messageRow(msg, session.id, index + 1),
     );
     const referenceRows = (session.references ?? []).map((ref, index) =>
       referenceRow(session.id, ref, index),
     );
-    const checkpointRows = dedupeByKey((session.checkpoints ?? []).map(checkpointRow), 'id');
-    const noteRows = dedupeByKey(
-      (session.stickyNotes ?? []).map((note) => stickyNoteRow(session.id, note)),
-      'id',
-    );
+    const checkpointRows = (session.checkpoints ?? []).map(checkpointRow);
+    const noteRows = (session.stickyNotes ?? []).map((note) => stickyNoteRow(session.id, note));
 
     await this._connection.withTransaction(async (tx) => {
       await this._lockSession(tx, session.id);
-      // `UNIQUE (session_id, seq)` объявлен DEFERRABLE: перестановка `seq`
-      // (ветвление/merge) проверяется на COMMIT, а не на каждой вставке.
-      await tx.query('SET CONSTRAINTS ALL DEFERRED');
 
       await upsertRows(tx, 'sessions', SESSION_FIELDS, [sessionRow], SESSION_JSON_FIELDS, ['id']);
 
-      await upsertRows(tx, 'messages', MESSAGE_FIELDS, messageRows, MESSAGE_JSON_FIELDS, ['id']);
-      await deleteAbsent(tx, 'messages', 'id', session.id, messageRows.map((row) => String(row.id)));
+      // Сообщения — полная замена в той же транзакции: `DELETE` + массовый
+      // `INSERT`. Дубликаты `id` допустимы (суррогатный PK `message_uid`);
+      // уникальность `(session_id, seq)` выполняется по построению (позиция).
+      await replaceRows(tx, 'messages', MESSAGE_FIELDS, messageRows, MESSAGE_JSON_FIELDS, session.id);
 
       // Ссылки — полная замена (паритет с файловой реализацией: `save`
       // перезаписывает `session.references` целиком); `id`/`ordinal` — свежие,
       // дубликаты одной `ref_session_id` допустимы (разные диапазоны).
-      await tx.query('DELETE FROM session_references WHERE session_id = $1', [session.id]);
-      await upsertRows(
+      await replaceRows(
         tx,
         'session_references',
         REFERENCE_FIELDS,
         referenceRows,
         REFERENCE_JSON_FIELDS,
-        ['id'],
+        session.id,
       );
 
-      await upsertRows(tx, 'checkpoints', CHECKPOINT_FIELDS, checkpointRows, CHECKPOINT_JSON_FIELDS, ['id']);
-      await deleteAbsent(tx, 'checkpoints', 'id', session.id, checkpointRows.map((row) => String(row.id)));
+      await replaceRows(tx, 'checkpoints', CHECKPOINT_FIELDS, checkpointRows, CHECKPOINT_JSON_FIELDS, session.id);
 
-      await upsertRows(tx, 'sticky_notes', NOTE_FIELDS, noteRows, NOTE_JSON_FIELDS, ['id']);
-      await deleteAbsent(tx, 'sticky_notes', 'id', session.id, noteRows.map((row) => String(row.id)));
+      await replaceRows(tx, 'sticky_notes', NOTE_FIELDS, noteRows, NOTE_JSON_FIELDS, session.id);
     });
   }
 
@@ -484,7 +506,8 @@ export class PostgresSessionRepository implements SessionRepository {
 
     const [messages, references, checkpoints, notes] = await Promise.all([
       this._connection.query<MessageRow>(
-        'SELECT * FROM messages WHERE session_id = ANY($1::text[]) ORDER BY session_id, seq',
+        'SELECT * FROM messages WHERE session_id = ANY($1::text[]) '
+          + 'ORDER BY session_id, seq, created_at, id',
         [sessionIds],
       ),
       this._connection.query<SessionReferenceRow>(

@@ -129,6 +129,15 @@ dev-Postgres). Проводка домена — через `storage.backend = p
     отличаем «поле отсутствует (legacy)» от «явный false»; чтение воспроизводит
     `??`-семантику `FileProfileStore._deserialize` + backfill метки `[ИНТЕРВЬЮ]`
     (время завершения legacy — `updated_at`).
+  - `messages` — **суррогатный** `message_uid bigserial PRIMARY KEY`: доменный
+    `id` сообщения **не уникален** в пределах сессии (legacy-дубликаты допустимы),
+    поэтому `id` — обычная колонка `text NOT NULL` с индексом `(session_id, id)`;
+    `UNIQUE (session_id, seq)` сохранён как страховка порядка. `seq` —
+    **позиционный**: драйвер нормализует его при записи по порядку массива
+    (`1..n`), чтение — `ORDER BY session_id, seq, created_at, id` (детерминированный
+    тайбрейкер для legacy-строк). Запись сообщений и child-таблиц — **полная
+    замена в транзакции** (`DELETE … WHERE session_id` + массовый `INSERT` по
+    чанкам); upsert по `id` для сообщений убран (он молча схлопывал дубликаты).
   - `session_references` — суррогатный `id text PK` + `ordinal int NOT NULL`
     (индекс `(session_id, ordinal)`); **дубликаты одной `ref_session_id`
     разрешены** (разные диапазоны), `addReference` — append, `getReferences` —
@@ -144,7 +153,8 @@ dev-Postgres). Проводка домена — через `storage.backend = p
   suite `dispose` не вызывает, поэтому прогон чистит ресурсы в `afterEach`
   (`ctx.close()` + `DROP SCHEMA … CASCADE` + tmp-каталог).
 - **DDL.** Все таблицы/индексы заведены сразу (`001_init`): `sessions` (jsonb-поля +
-  partial/`updated_at DESC`-индексы), `messages` (нормализованные, `UNIQUE(session_id,seq)`,
+  partial/`updated_at DESC`-индексы), `messages` (нормализованные, суррогатный
+  `message_uid bigserial PK`, `UNIQUE(session_id,seq)`, индекс `(session_id,id)`,
   `GIN(content gin_trgm_ops)` через `CREATE EXTENSION IF NOT EXISTS pg_trgm`),
   child-таблицы (`session_references`/`checkpoints`/`sticky_notes`), `projects`/
   `project_members`, `profiles`/`profile_identities`, `settings`/`token_ratios`/
