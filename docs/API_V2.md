@@ -953,6 +953,89 @@ try {
 
 > Спека — источник контракта, SDK её не дублирует логикой; детали и статус — ADR-052.
 
+### 5.31 Обслуживание инстанса — `/api/v2/maintenance` (оба, ADR-091/ADR-092)
+
+Admin-API обслуживания инстанса: health (`synth doctor`), версия схемы данных и миграции,
+бэкапы и восстановление. Единая фабрика `createMaintenanceRoutes` для core и backend;
+сервисный слой — `packages/core/src/maintenance/service.ts`. RBAC: managed (backend) —
+только `ADMIN` на чтение и мутации; core (standalone) — единый `requireAuth`. Архивы
+ищутся строго в `{dataDir}/backups/` (включая `backups/uploads/`); имя — только basename
+`*.tar.gz`, абсолютные пути от клиента не принимаются. Архив с `withSecrets` — **сам
+секрет**.
+
+**Ключевая семантика — восстановление офлайн.** `POST /restore` **не выполняет**
+восстановление: он лишь планирует его (запрос `{dataDir}/maintenance/restore-request.json`,
+атомарно) и отвечает `{pending, appliesOnNextStart: true}`. Применение — при следующем
+старте инстанса (`applyPendingRestore`, до миграций). Под живым процессом каталог данных
+не вычищается. Деструктивные операции (применение миграций, планирование восстановления)
+требуют `{confirm: true}`.
+
+| Метод | Путь | Сборка | RBAC (managed / core) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/maintenance/status` | оба | ADMIN / auth | Сводный статус: `{version, dataDir, schema:{current, expected, applied, pending}, backups, pendingRestore, doctor:{ok, fail, warn}}` |
+| GET | `/api/v2/maintenance/doctor` | оба | ADMIN / auth | Полный прогон `synth doctor`: `{ok, checks:[{id, title, status, detail?, hint?}], dataDir, version}` (`ok: false` при любом `fail`) |
+| GET | `/api/v2/maintenance/migrations` | оба | ADMIN / auth | Состояние схемы данных: `{current, expected, applied, pending:[{id, toVersion, description}]}` |
+| POST | `/api/v2/maintenance/migrations/apply` | оба | ADMIN / auth | Применить pending-миграции; тело `{confirm: true}` обязательно (иначе 400 `VALIDATION_ERROR`); перед записью обязательна страховочная копия (fail-closed), применение под локом → 200 `{applied, safetyCopyPath?}`; данные новее пакета → 409 `CONFLICT` (код `SCHEMA_TOO_NEW`) |
+| GET | `/api/v2/maintenance/backups` | оба | ADMIN / auth | Список архивов `{backups}` (`MaintenanceBackupInfo[]`, свежие сверху) |
+| POST | `/api/v2/maintenance/backups` | оба | ADMIN / auth | Снять архив: `{withSecrets?, withWorkspace?, live?}` (по умолчанию все `false`; `live` — нетранзакционный срез с работающего сервиса) → 200 `MaintenanceBackupInfo`; архив пишется в `{dataDir}/backups/` (исключён из самих архивов) |
+| GET | `/api/v2/maintenance/backups/:name/download` | оба | ADMIN / auth | Скачать архив (стриминг): `Content-Type: application/gzip`, `Content-Disposition: attachment`, `Content-Length`; небезопасное имя → 400; нет файла → 404 |
+| DELETE | `/api/v2/maintenance/backups/:name` | оба | ADMIN / auth | Удалить архив → 204; небезопасное имя → 400; нет файла → 404 |
+| POST | `/api/v2/maintenance/restore/validate` | оба | ADMIN / auth | Проверить архив восстановления: JSON `{archive}` (имя из `backups/`) **или** multipart `file` (загрузка в `backups/uploads/`); → 200 `{ok, problem?, manifest?}` (+ `staged` для загрузки); превышение лимита загрузки → 413 `PAYLOAD_TOO_LARGE`; невалидное тело/имя → 400; нет архива → 404 |
+| GET | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Отложенный запрос на восстановление `{pending}` (`PendingRestoreRequest \| null`) |
+| POST | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Спланировать восстановление: `{archive, confirm: true, safetyCopy?}` (`confirm` обязателен; `safetyCopy` по умолчанию `true`) → 201 `{pending, appliesOnNextStart: true}`; архив не прошёл проверку → 400 `VALIDATION_ERROR`; нет архива → 404 |
+| DELETE | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Отменить отложенный запрос → 200 `{cancelled}` |
+
+**Поля `MaintenanceBackupInfo`:** `name` (basename), `path`, `bytes`, `createdAt`,
+`schemaVersion` (из манифеста), `instanceVersion`, `withSecrets`, `withWorkspace`, `entries`
+(число записей манифеста). **`PendingRestoreRequest`:** `archive` (абсолютный путь только
+внутри `{dataDir}/backups/`), `requestedBy?`, `requestedAt`, `safetyCopy`.
+
+**Лимит загрузки.** Multipart `POST /restore/validate` ограничен `storage.maxUploadBytes`
+(по умолчанию 100 МиБ, `DEFAULT_MAX_UPLOAD_BYTES`); DoS-защита проверяет заявленный
+`content-length`, размер `File` и фактически прочитанные байты — превышение → 413
+`PAYLOAD_TOO_LARGE`.
+
+**Коды ошибок.** 400 `VALIDATION_ERROR` (невалидное тело/имя архива, отсутствие
+`confirm: true`, архив не прошёл проверку), 404 `NOT_FOUND` (нет архива/записи), 413
+`PAYLOAD_TOO_LARGE` (превышен лимит загрузки), 409 `CONFLICT` с кодом `SCHEMA_TOO_NEW`
+(данные новее версии Synth при применении миграций), 401/403 (нет кред/недостаточно прав).
+
+**Пример.**
+
+```bash
+# Сводный статус и полный synth doctor (ADMIN).
+curl http://localhost:5000/api/v2/maintenance/status -H 'Authorization: Bearer <ADMIN_TOKEN>'
+curl http://localhost:5000/api/v2/maintenance/doctor -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Создать архив (без секретов и workspaces) и скачать его.
+curl -X POST http://localhost:5000/api/v2/maintenance/backups \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"withSecrets":false,"withWorkspace":false,"live":false}'
+curl -OJ http://localhost:5000/api/v2/maintenance/backups/<name>.tar.gz/download \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Проверить архив и запланировать восстановление (применится при следующем старте).
+curl -X POST http://localhost:5000/api/v2/maintenance/restore/validate \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"archive":"synth-backup-<instanceVersion>-<stamp>.tar.gz"}'
+curl -X POST http://localhost:5000/api/v2/maintenance/restore \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"archive":"synth-backup-<instanceVersion>-<stamp>.tar.gz","confirm":true}'
+
+# Применить миграции схемы (необратимо; перед записью — страховочная копия).
+curl -X POST http://localhost:5000/api/v2/maintenance/migrations/apply \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' -d '{"confirm":true}'
+
+# Отменить отложенное восстановление.
+curl -X DELETE http://localhost:5000/api/v2/maintenance/restore \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+```
+
+**UI.** Раздел «Обслуживание» (Настройки → «Обслуживание», только `ADMIN`) построен на этих
+же ручках (`packages/ui/src/components/settings/MaintenanceSettings.tsx`, API-домен
+`packages/ui/src/lib/api/maintenance.ts`). Процедуры и правила безопасности —
+[docs/MAINTENANCE.md](./MAINTENANCE.md).
+
 ---
 
 ## 6. Источники
@@ -967,6 +1050,7 @@ try {
 | Публичный OpenAPI (ADR-052, этап III) | `packages/core/src/server/openapi/public-openapi.ts` |
 | SDK публичного API (ADR-052, этап III) | `packages/sdk/*` (`@itphx/synth-sdk`) |
 | Webhooks store/журнал/роуты/движок (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
+| Admin-API обслуживания инстанса (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

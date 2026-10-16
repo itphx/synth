@@ -156,7 +156,15 @@
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
-  `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`, `webhooks`.
+  `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`, `webhooks`,
+  `maintenance`.
+- `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
+  admin-API/UI (список/создание бэкапов, отложенное восстановление
+  `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
+  `{dataDir}/maintenance/`), `backup.ts`/`restore.ts` (архив/снятие), `doctor.ts` (`synth doctor`),
+  `startup.ts` (`applyPendingRestore` — офлайн-восстановление при старте, `applyStartupMigrations` —
+  авто-миграции со страховочной копией). HTTP-фабрика — `server/routes/maintenance.ts`
+  (`createMaintenanceRoutes`).
 - `server/service-scope.ts` — ADR-052 (этап I): enforcement service-key — `requireScope(...)`
   (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkServiceProjectProjection`/
   `isProjectAllowed` (проектная проекция `allowedProjects`; это **не** RBAC), `getServiceCredential`
@@ -492,7 +500,9 @@
   `createModelRoutes`, `createSessionRoutes`, `createGitRoutes`,
   `createSshKeyRoutes`, `createAgentSshKeyRoutes`, `createFsRoutes` (project-aware
   FS: плоский root / workspace проекта через `getProjectWorkspace`, ADR-075),
-  `createServiceKeyRoutes` (ADR-052 этап I: CRUD service-key, `writeGuard`/`readGuard`/`messages`).
+  `createServiceKeyRoutes` (ADR-052 этап I: CRUD service-key, `writeGuard`/`readGuard`/`messages`),
+  `createMaintenanceRoutes` (ADR-091/ADR-092: admin-API обслуживания — status/doctor/migrations/
+  backups/restore; `writeGuard`/`readGuard`/`messages`/`maxUploadBytes`, восстановление — офлайн).
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
   `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки

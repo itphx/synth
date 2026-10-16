@@ -1,6 +1,6 @@
 # ADR-092: Обслуживание инстанса — версия схемы данных, миграции и удаление
 
-> **Статус:** ⚠️ Частично — MVP реализован (`meta.json`, реестр миграций, авто-миграции, `synth migrate`, `synth uninstall`); остаток — `synth update --to`, аудит-события, мульти-инстанс-локи.
+> **Статус:** ⚠️ Частично — MVP реализован (`meta.json`, реестр миграций, авто-миграции, `synth migrate`, `synth uninstall`); миграции доступны через admin-API/UI (`/api/v2/maintenance`, раздел «Обслуживание»); остаток — `synth update --to`, аудит-события, мульти-инстанс-локи.
 > **Дата:** 2026-10-16
 > **Связано:** [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-038](./adr-038-npm-packages.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-091](./adr-091-backup-restore-transfer.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
@@ -48,9 +48,10 @@
 
 - `synth update --to <version>` (обновление/откат пакета) — **не реализовано** (см. таблицу выше);
 - аудит-события `maintenance.migrate`/`maintenance.rollback`/`uninstall.purge`;
-- публикация runbook на портале `docs.synth.itphx.ru` (dev-вариант — [docs/MAINTENANCE.md](../MAINTENANCE.md));
+- публикация runbook на портале `docs.synth.itphx.ru` (dev-вариант — [docs/MAINTENANCE.md](../MAINTENANCE.md)); admin-API/UI для обслуживания (миграции/бэкапы/doctor/restore) — **готовы** (`/api/v2/maintenance`, раздел «Обслуживание»);
 - K8s Lease / PG advisory lock для мульти-инстанса (после [PROP-032](./prop-032-history-storage-postgresql.md)).
 
 ## История
 
 - 2026-10-16 — PROP-092 принят как ADR-092 (MVP реализован; остаток вынесен) (коммиты ветки feat/storage-seam).
+- 2026-10-16 — миграции/бэкапы/doctor/restore выведены в admin-API (`/api/v2/maintenance`) и UI-раздел «Обслуживание» (ADMIN); применение миграций — под страховочной копией (fail-closed), восстановление — офлайн (ветка feat/storage-seam).

@@ -101,6 +101,8 @@ synth migrate                # миграции схемы данных (--dry-r
 synth uninstall              # удаление инстанса (--purge|--dry-run|--yes; по умолчанию данные сохраняются) — ADR-092
 ```
 
+Тот же контур доступен из UI (Настройки → «Обслуживание», только ADMIN) и по admin-API `/api/v2/maintenance/*` (managed — `ADMIN`, core — `requireAuth`); восстановление — **офлайн-операция** (применяется при следующем старте, `appliesOnNextStart`). Процедуры — [docs/MAINTENANCE.md](./docs/MAINTENANCE.md); спека — [docs/API_V2.md](./docs/API_V2.md) §5.31.
+
 Сборка core копирует `prompts/` и `definitions/*.json` в `dist/` — это **fallback для Docker**; источник истины промптов — `packages/core/prompts` (публикуется в npm через `files`), дубликатов ассетов нет (ADR-038). Логи dev-запуска: `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`.
 
 ## Порты

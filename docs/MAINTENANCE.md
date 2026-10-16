@@ -167,6 +167,105 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
 5. *Ожидаемо:* после обновления — старт без ошибок совместимости схемы, `synth doctor` без `fail`;
    страховочная копия перед авто-миграцией — в `{dataDir}/backups/`.
 
+## Обслуживание из UI
+
+**Цель:** выполнить эксплуатационные операции без CLI; доступно только роли ADMIN.
+
+Раздел живёт в **Настройки → «Обслуживание»** (админ-категория `maintenance`, видна только
+роли `ADMIN`; компонент —
+`packages/ui/src/components/settings/MaintenanceSettings.tsx`). UI лишь прячет раздел —
+**защита на сервере**: в managed роуты под `requirePermission('ADMIN')`, в standalone-core —
+`requireAuth`. Ожидаемый результат — статус/бэкапы/восстановление управляются мышью, а сама
+операция восстановления требует перезапуска инстанса.
+
+1. **Состояние инстанса.** Показывает версию Synth, каталог данных, версию схемы и сводку
+   `synth doctor` (`ok`/`fail`/`warn`). Кнопка «Проверить» перезапускает `synth doctor` и
+   перечитывает статус; ниже — список проверок с подсказками. *Ожидаемо:* зелёная сводка при
+   отсутствии `fail`; проверки `warn` — повод разобраться, но не блокер.
+2. **Схема данных.** Текущая/ожидаемая версия, применённые миграции, список pending. Кнопка
+   «Применить миграции» (с подтверждением) вызывает `POST /maintenance/migrations/apply`
+   `{confirm:true}`; перед записью создаётся **обязательная страховочная копия** (fail-closed).
+   *Ожидаемо:* тост «применено N», в списке больше нет pending. Если данные новее пакета —
+   ошибка 409 `SCHEMA_TOO_NEW` («обновите Synth»), а не откат.
+3. **Бэкапы.** Чекбоксы `secrets`/`workspace`/`live` и кнопка «Создать» — снятие архива каталога
+   данных (см. «Бэкап»). Список архивов: имя, бейджи `secrets`/`workspace`, дата/размер/версия
+   схемы/версия инстанса/число записей; на карточке — **скачивание** (`*.tar.gz`) и **удаление**
+   (с подтверждением). *Ожидаемо:* созданный архив появляется в списке; скачивание отдаёт gzip.
+4. **Восстановление.** Выберите архив из списка **или** загрузите файл `*.tar.gz` с устройства →
+   «Проверить» (валидация: манифест/формат/версия схемы/контрольные суммы; при успехе показывается
+   манифест) → «Запланировать» (с подтверждением). **Восстановление применится при следующем
+   запуске инстанса, а не сейчас.** Пока запрос отложен, показывается плашка с архивом/датой и
+   кнопкой «Отменить». *Ожидаемо:* плашка «запланировано» и признак «применится при следующем
+   старте»; после перезапуска инстанса — данные из архива.
+
+## Обслуживание по API
+
+**Цель:** те же операции из скриптов/пайплайнов. Полная спека — [API_V2.md](./API_V2.md) §5.31.
+RBAC: managed (backend) — только `ADMIN`; core (standalone) — `requireAuth`. Токен в примерах —
+плейсхолдер `<ADMIN_TOKEN>`; сами секреты в документации не приводятся.
+
+| Метод/путь | Назначение |
+|---|---|
+| `GET /api/v2/maintenance/status` | Сводный статус (схема/бэкапы/pending/doctor) |
+| `GET /api/v2/maintenance/doctor` | Полный `synth doctor` |
+| `GET /api/v2/maintenance/migrations` | Состояние схемы данных |
+| `POST /api/v2/maintenance/migrations/apply` | Применить миграции (`{confirm:true}`) |
+| `GET /api/v2/maintenance/backups` | Список архивов |
+| `POST /api/v2/maintenance/backups` | Создать архив |
+| `GET /api/v2/maintenance/backups/:name/download` | Скачать архив |
+| `DELETE /api/v2/maintenance/backups/:name` | Удалить архив |
+| `POST /api/v2/maintenance/restore/validate` | Проверить архив (JSON или multipart) |
+| `GET /api/v2/maintenance/restore` | Отложенный запрос на восстановление |
+| `POST /api/v2/maintenance/restore` | Запланировать восстановление (`{confirm:true}`) |
+| `DELETE /api/v2/maintenance/restore` | Отменить отложенный запрос |
+
+Примеры:
+
+```bash
+# Статус и полный synth doctor.
+curl http://localhost:5000/api/v2/maintenance/status -H 'Authorization: Bearer <ADMIN_TOKEN>'
+curl http://localhost:5000/api/v2/maintenance/doctor  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Создать архив (без секретов/workspaces) и скачать.
+curl -X POST http://localhost:5000/api/v2/maintenance/backups \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"withSecrets":false,"withWorkspace":false,"live":false}'
+curl -OJ http://localhost:5000/api/v2/maintenance/backups/<name>.tar.gz/download \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Проверить архив из backups/ и запланировать восстановление (применится при следующем старте).
+curl -X POST http://localhost:5000/api/v2/maintenance/restore/validate \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"archive":"synth-backup-<instanceVersion>-<stamp>.tar.gz"}'
+curl -X POST http://localhost:5000/api/v2/maintenance/restore \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"archive":"synth-backup-<instanceVersion>-<stamp>.tar.gz","confirm":true}'
+
+# Загрузить архив из файла и проверить (multipart).
+curl -X POST http://localhost:5000/api/v2/maintenance/restore/validate \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -F 'file=@./synth-backup.tar.gz'
+
+# Отменить отложенное восстановление.
+curl -X DELETE http://localhost:5000/api/v2/maintenance/restore \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+```
+
+**Правила безопасности.**
+
+- **Восстановление — офлайн-операция.** `POST /restore` только планирует его; применение — при
+  следующем старте инстанса (`appliesOnNextStart: true`, `applyPendingRestore` до миграций). Под
+  живым процессом каталог данных не вычищается — не ждите немедленного эффекта.
+- **Managed — только ADMIN.** И чтение, и мутации под `requirePermission('ADMIN')`; в
+  standalone-core — `requireAuth`. Токены/ключи — секреты, в примерах только плейсхолдеры.
+- **Архив с секретами — сам секрет.** `--with-secrets`/`withSecrets:true` включает `secrets/`
+  (в т.ч. `master.key`); такой архив храните `0600` вне публичных мест. Без мастер-ключа
+  зашифрованные SSH-ключи из архива невосстановимы.
+- **Деструктивность.** Применение миграций и планирование восстановления требуют `confirm: true`;
+  восстановление возвращает каталог к снимку (`backups/` и `workspaces/` без `--with-workspace`
+  сохраняются); страховочная копия создаётся автоматически (`safetyCopy:false`/`--no-safety-copy`
+  отключают — рискованно).
+
 ## История
 
 - 2026-10-16 — runbook создан (первичная настройка, диагностика, бэкап/восстановление, миграции, удаление, обновление/откат).
+- 2026-10-16 — добавлены разделы «Обслуживание из UI» (Настройки → «Обслуживание», ADMIN) и «Обслуживание по API» (admin-API `/api/v2/maintenance/*`, [API_V2.md](./API_V2.md) §5.31); восстановление — офлайн (`appliesOnNextStart`, отложенный запрос применяется при старте).

@@ -23,6 +23,7 @@
 | `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `IdentityClaimStore`, `ProjectRuleProvider`, `eventToMessage`, `startEventJournalPruner` | единый funnel создания сессии, приём внешних событий, API-ключи привязок, одноразовые claim-коды идентичностей, правила маршрутизации и retention-очистка журнала (ADR-089/ADR-052) |
 | `ServiceApiKeyStore`, `createServiceKeyRoutes`, `requireScope`, `checkServiceProjectProjection`, `getServiceCredential` | scoped service-key (ADR-052 этап I): реестр ключей, CRUD-роуты, scope-гейт и проектная проекция |
 | `WebhookStore`, `WebhookDeliveryStore`, `WebhookService`, `startWebhookDeliveryPruner`, `createWebhookRoutes` | исходящие webhooks (ADR-052 этап II): реестр подписок, журнал доставок, движок над `EventBus.subscribeAll`, retention-очистка и CRUD-роуты |
+| `createMaintenanceRoutes` | admin-API обслуживания инстанса (ADR-091/ADR-092): status/doctor/migrations/backups/restore |
 | `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (ADR-051 срез / ADR-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
@@ -104,6 +105,7 @@
 | `/api/v2/schedules` | core `createSchedulerRoutes` (ADR-051 срез / ADR-089): чтение — `requireAuth`, мутации — `requireAdmin`; `POST /:id/run` — `requireAdmin` + rate limit (10/60 c, `runMiddleware`), `GET /:id/jobs` — Job-история (ADR-051); ADR-052 — `scopeGuard`/`serviceProjectProjection`; `SchedulerRuleProvider` на `eventRouter`, `SchedulerService.start()` по `scheduler.enabled` |
 | `/api/v2/service-keys` | core `createServiceKeyRoutes` (ADR-052 этап I): CRUD scoped-ключей инстанса, `writeGuard`/`readGuard` = `requirePermission('ADMIN')`, `messages` — i18n, `resolveUserId` — id из `attachUser`; store `ServiceApiKeyStore` (`{dataDir}/service-keys.json`) |
 | `/api/v2/webhooks` | core `createWebhookRoutes` (ADR-052 этап II): CRUD подписок исходящих webhooks + журнал доставок + тест, `writeGuard`/`readGuard` = `requirePermission('ADMIN')` (webhook может утекать данные на произвольный URL), `messages` — i18n, `resolveUserId` — id из `attachUser`, `isEnabled` — мастер `webhooks.enabled` (→ 503 на мутации/тест), `allowPrivateTargets` — SSRF-политика; store `WebhookStore` (`{dataDir}/webhooks/subscriptions.json`), журнал `WebhookDeliveryStore` (`{dataDir}/webhooks/deliveries.jsonl`), движок `WebhookService` над `EventBus.subscribeAll` |
+| `/api/v2/maintenance` | core `createMaintenanceRoutes` (ADR-091/ADR-092): admin-API обслуживания инстанса — status/doctor/migrations/backups/restore; `writeGuard`/`readGuard` = `requirePermission('ADMIN')` (архивы могут содержать секреты), `messages` — i18n, `maxUploadBytes` — лимит загрузки архива; восстановление — офлайн (планируется, применяется при следующем старте) |
 | `/health`, `/api/v2/health` | публичные, без auth |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `src/app/mount-routes.ts` |
 

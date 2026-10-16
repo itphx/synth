@@ -953,6 +953,87 @@ try {
 
 > The spec is the source of the contract; the SDK does not duplicate it in logic; details and status — ADR-052.
 
+### 5.31 Instance maintenance — `/api/v2/maintenance` (both, ADR-091/ADR-092)
+
+Admin API for instance maintenance: health (`synth doctor`), the data schema version and
+migrations, backups and restore. The single factory `createMaintenanceRoutes` for core and
+backend; the service layer — `packages/core/src/maintenance/service.ts`. RBAC: managed
+(backend) — `ADMIN` only for reads and mutations; core (standalone) — the single `requireAuth`.
+Archives are looked up strictly inside `{dataDir}/backups/` (including `backups/uploads/`);
+the name is a basename `*.tar.gz` only, absolute paths from the client are not accepted. An
+archive with `withSecrets` is **a secret itself**.
+
+**Key semantics — restore is offline.** `POST /restore` does **not** perform a restore: it only
+schedules it (the request `{dataDir}/maintenance/restore-request.json`, written atomically) and
+responds `{pending, appliesOnNextStart: true}`. It is applied on the next instance start
+(`applyPendingRestore`, before migrations). The data directory is not wiped under a live process.
+Destructive operations (applying migrations, scheduling a restore) require `{confirm: true}`.
+
+| Method | Path | Build | RBAC (managed / core) | Purpose / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/maintenance/status` | both | ADMIN / auth | Summary status: `{version, dataDir, schema:{current, expected, applied, pending}, backups, pendingRestore, doctor:{ok, fail, warn}}` |
+| GET | `/api/v2/maintenance/doctor` | both | ADMIN / auth | A full `synth doctor` run: `{ok, checks:[{id, title, status, detail?, hint?}], dataDir, version}` (`ok: false` on any `fail`) |
+| GET | `/api/v2/maintenance/migrations` | both | ADMIN / auth | Data schema state: `{current, expected, applied, pending:[{id, toVersion, description}]}` |
+| POST | `/api/v2/maintenance/migrations/apply` | both | ADMIN / auth | Apply pending migrations; the body `{confirm: true}` is mandatory (otherwise 400 `VALIDATION_ERROR`); a safety copy is mandatory before writing (fail-closed), the application runs under a lock → 200 `{applied, safetyCopyPath?}`; data newer than the package → 409 `CONFLICT` (code `SCHEMA_TOO_NEW`) |
+| GET | `/api/v2/maintenance/backups` | both | ADMIN / auth | List of archives `{backups}` (`MaintenanceBackupInfo[]`, newest first) |
+| POST | `/api/v2/maintenance/backups` | both | ADMIN / auth | Take an archive: `{withSecrets?, withWorkspace?, live?}` (all default to `false`; `live` — a non-transactional snapshot of a running service) → 200 `MaintenanceBackupInfo`; the archive is written to `{dataDir}/backups/` (excluded from the archives themselves) |
+| GET | `/api/v2/maintenance/backups/:name/download` | both | ADMIN / auth | Download an archive (streaming): `Content-Type: application/gzip`, `Content-Disposition: attachment`, `Content-Length`; an unsafe name → 400; no file → 404 |
+| DELETE | `/api/v2/maintenance/backups/:name` | both | ADMIN / auth | Delete an archive → 204; an unsafe name → 400; no file → 404 |
+| POST | `/api/v2/maintenance/restore/validate` | both | ADMIN / auth | Validate a restore archive: JSON `{archive}` (a name from `backups/`) **or** multipart `file` (uploaded into `backups/uploads/`); → 200 `{ok, problem?, manifest?}` (+ `staged` for uploads); exceeding the upload limit → 413 `PAYLOAD_TOO_LARGE`; an invalid body/name → 400; no archive → 404 |
+| GET | `/api/v2/maintenance/restore` | both | ADMIN / auth | The pending restore request `{pending}` (`PendingRestoreRequest \| null`) |
+| POST | `/api/v2/maintenance/restore` | both | ADMIN / auth | Schedule a restore: `{archive, confirm: true, safetyCopy?}` (`confirm` is mandatory; `safetyCopy` defaults to `true`) → 201 `{pending, appliesOnNextStart: true}`; an archive that fails validation → 400 `VALIDATION_ERROR`; no archive → 404 |
+| DELETE | `/api/v2/maintenance/restore` | both | ADMIN / auth | Cancel the pending request → 200 `{cancelled}` |
+
+**`MaintenanceBackupInfo` fields:** `name` (basename), `path`, `bytes`, `createdAt`,
+`schemaVersion` (from the manifest), `instanceVersion`, `withSecrets`, `withWorkspace`,
+`entries` (the manifest record count). **`PendingRestoreRequest`:** `archive` (an absolute path
+only inside `{dataDir}/backups/`), `requestedBy?`, `requestedAt`, `safetyCopy`.
+
+**Upload limit.** The multipart `POST /restore/validate` is capped by `storage.maxUploadBytes`
+(default 100 MiB, `DEFAULT_MAX_UPLOAD_BYTES`); the DoS guard checks the declared `content-length`,
+the `File` size and the bytes actually read — exceeding it → 413 `PAYLOAD_TOO_LARGE`.
+
+**Error codes.** 400 `VALIDATION_ERROR` (an invalid body/archive name, a missing `confirm: true`,
+an archive that fails validation), 404 `NOT_FOUND` (no archive/record), 413 `PAYLOAD_TOO_LARGE`
+(the upload limit is exceeded), 409 `CONFLICT` with the code `SCHEMA_TOO_NEW` (data newer than the
+Synth version when applying migrations), 401/403 (no credentials/insufficient rights).
+
+**Example.**
+
+```bash
+# Summary status and a full synth doctor (ADMIN).
+curl http://localhost:5000/api/v2/maintenance/status -H 'Authorization: Bearer <ADMIN_TOKEN>'
+curl http://localhost:5000/api/v2/maintenance/doctor -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Take an archive (without secrets and workspaces) and download it.
+curl -X POST http://localhost:5000/api/v2/maintenance/backups \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"withSecrets":false,"withWorkspace":false,"live":false}'
+curl -OJ http://localhost:5000/api/v2/maintenance/backups/<name>.tar.gz/download \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Validate an archive and schedule a restore (applied on the next start).
+curl -X POST http://localhost:5000/api/v2/maintenance/restore/validate \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"archive":"synth-backup-<instanceVersion>-<stamp>.tar.gz"}'
+curl -X POST http://localhost:5000/api/v2/maintenance/restore \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"archive":"synth-backup-<instanceVersion>-<stamp>.tar.gz","confirm":true}'
+
+# Apply schema migrations (irreversible; a safety copy is mandatory before writing).
+curl -X POST http://localhost:5000/api/v2/maintenance/migrations/apply \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' -d '{"confirm":true}'
+
+# Cancel the pending restore.
+curl -X DELETE http://localhost:5000/api/v2/maintenance/restore \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+```
+
+**UI.** The "Maintenance" section (Settings → "Maintenance", `ADMIN` only) is built on these same
+endpoints (`packages/ui/src/components/settings/MaintenanceSettings.tsx`, the API domain
+`packages/ui/src/lib/api/maintenance.ts`). Procedures and security rules —
+[docs/MAINTENANCE.md](../MAINTENANCE.md) (in Russian).
+
 ---
 
 ## 6. Sources
@@ -967,6 +1048,7 @@ try {
 | Public OpenAPI (ADR-052, stage III) | `packages/core/src/server/openapi/public-openapi.ts` |
 | Public API SDK (ADR-052, stage III) | `packages/sdk/*` (`@itphx/synth-sdk`) |
 | Webhooks store/journal/routes/engine (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
+| Instance maintenance admin API (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

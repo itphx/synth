@@ -1,6 +1,6 @@
 # ADR-091: Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor`
 
-> **Статус:** ⚠️ Частично — MVP реализован (`synth backup`/`restore`/`doctor`); остаток — портативный экспорт/импорт, admin-API, `--encrypt`, онлайн-консистентность.
+> **Статус:** ⚠️ Частично — MVP реализован (`synth backup`/`restore`/`doctor`); admin-API/UI добавлены (`/api/v2/maintenance`, раздел «Обслуживание»); остаток — портативный экспорт/импорт, `--encrypt`, онлайн-консистентность.
 > **Дата:** 2026-10-16
 > **Связано:** [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [PROP-055](./prop-055-instance-exchange.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
@@ -16,6 +16,7 @@
 2. **`synth restore <archive>`** — строгий порядок: манифест → формат → `schemaVersion` (`>` текущей → отказ) → контрольные суммы → `--dry-run` → `--yes` (без него отказ) → страховочная копия → очистка цели → распаковка. Правило: **restore возвращает каталог к снимку** — удаляются все элементы верхнего уровня, которых нет в архиве, кроме `backups/`, поэтому лишние и повреждённые файлы не переживают восстановление; страховочная копия создаётся автоматически (`{dataDir}/backups/synth-pre-restore-<stamp>.tar.gz`, `--no-safety-copy` отключает с предупреждением). **`workspaces/` — исключение:** если архив его **не** содержит (бэкап без `--with-workspace`), каталог при очистке **сохраняется** (иначе потеряли бы рабочие файлы проектов, восстановить которые из архива нечем); если архив снят с `--with-workspace`, `workspaces/` заменяется архивным — обычная семантика снимка. После restore **обязателен `synth doctor`**.
 3. **`synth doctor`** — health инстанса (`--json`): `data-dir` (write-доступ пробным файлом), `schema`, `master-key`, `secrets-permissions`, `data-integrity`, `providers`, `locks`, `version`; exit 1 при любом `fail`. Read-only, кроме пробного файла.
 4. **`{dataDir}/backups/`** — единый каталог страховочных копий (`pre-restore`/`pre-migrate`), исключённый из архивов бэкапа. Архив с секретами — секрет сам по себе.
+5. **admin-API и UI (`/api/v2/maintenance`, раздел «Обслуживание»)** — тот же контур без CLI: `createMaintenanceRoutes` (status/doctor/migrations/backups/restore; managed — только `ADMIN`, core — `requireAuth`; скачивание архива — `application/gzip`). Восстановление из API/UI — **офлайн**: `POST /restore` не выполняется сразу, а планируется и применяется при следующем старте (`applyPendingRestore`); под живым процессом данные не вычищаются.
 
 Процедуры (setup → verify → backup → restore → verify → migrate), флаги и коды выхода — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
@@ -36,7 +37,6 @@
 
 - `workspaces/` по умолчанию не входит в бэкап (исключение по объёму): при восстановлении он **сохраняется**, поэтому полный откат рабочих файлов проектов даёт только архив с `--with-workspace`; вкладывать рабочие каталоги автоматически — не решено;
 - портативный экспорт/импорт проекта (`synth project export|import`; standalone + HTTP, без секретов; materialization, не `session.requested`) — этап 2;
-- admin-API для managed (`GET/POST /api/v2/admin/backup|restore`, только `ADMIN`, с аудитом) — этап 3;
 - шифрование `--encrypt`;
 - онлайн-консистентный/инкрементальный бэкап и PITR — после [PROP-032](./prop-032-history-storage-postgresql.md);
 - руководства портала `docs.synth.itphx.ru`; автоматизация ops-скиллами ([PROP-048](./prop-048-self-help-skills-admin-mcp.md)).
@@ -45,3 +45,4 @@
 
 - 2026-10-16 — PROP-091 принят как ADR-091 (MVP реализован; остаток вынесен) (коммиты ветки feat/storage-seam).
 - 2026-10-16 — фикс: `restore` сохраняет `workspaces/`, если архив его не содержит (бэкап без `--with-workspace`); иначе восстановление удаляло рабочие файлы проектов без возможности возврата (ветка feat/storage-seam).
+- 2026-10-16 — добавлены admin-API (`/api/v2/maintenance`) и UI-раздел «Обслуживание» (Настройки → «Обслуживание», ADMIN); восстановление — офлайн: `POST /restore` планирует запрос, `applyPendingRestore` применяет его при следующем старте (ветка feat/storage-seam).
