@@ -17,6 +17,7 @@ import {
   createServiceKeyRoutes, createWebhookRoutes, createSkillRoutes, createCommandRoutes,
   createSkillBundleRoutes, createSessionSkillScopeRoutes, createProjectSkillScopeRoutes,
   createSkillSettingsRoutes, createIdentityRoutes, createContextRoutes,
+  createMaintenanceRoutes,
 } from '../../index.js';
 import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
@@ -209,6 +210,14 @@ export function mountStandaloneRoutes(
 
   // Updates
   app.route('/api/v2/updates', createUpdateRoutes(auth, dataDir));
+
+  // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
+  // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
+  app.route('/api/v2/maintenance', createMaintenanceRoutes(
+    auth,
+    { dataDir, secretKey: config.secretKey, env: process.env },
+    { maxUploadBytes: config.maxUploadBytes },
+  ));
 
   // Messages (batch operations)
   app.route('/api/v2/messages', createMessageRoutes(

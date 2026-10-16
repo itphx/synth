@@ -60,6 +60,15 @@ const en: Dictionary = {
   'errors.validation.webhookTargetForbidden': 'Webhook target URL is not allowed by security policy',
   'errors.unavailable.webhooksDisabled': 'Webhook delivery is disabled',
 
+  // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate)
+  'errors.validation.invalidMaintenanceBody': 'Invalid maintenance request payload',
+  'errors.validation.maintenanceConfirmRequired': 'Confirmation is required (confirm: true)',
+  'errors.validation.invalidBackupName': 'Invalid backup archive name',
+  'errors.validation.invalidRestoreArchive': 'Backup archive failed validation',
+  'errors.notFound.backup': 'Backup archive not found',
+  'errors.conflict.schemaTooNew': 'Instance data is newer than this Synth version; update Synth',
+  'errors.payloadTooLarge': 'Uploaded file exceeds the allowed size',
+
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
   'errors.conflict.emailExists': 'A user with this email already exists',
@@ -154,6 +163,15 @@ const ru: Dictionary = {
   'errors.conflict.webhookLabel': 'Метка webhook уже используется',
   'errors.validation.webhookTargetForbidden': 'Целевой URL webhook запрещён политикой безопасности',
   'errors.unavailable.webhooksDisabled': 'Доставка webhooks отключена',
+
+  // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate)
+  'errors.validation.invalidMaintenanceBody': 'Некорректное тело запроса обслуживания',
+  'errors.validation.maintenanceConfirmRequired': 'Требуется подтверждение (confirm: true)',
+  'errors.validation.invalidBackupName': 'Некорректное имя архива',
+  'errors.validation.invalidRestoreArchive': 'Архив не прошёл проверку',
+  'errors.notFound.backup': 'Архив не найден',
+  'errors.conflict.schemaTooNew': 'Данные новее версии Synth; обновите Synth',
+  'errors.payloadTooLarge': 'Загруженный файл превышает допустимый размер',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',

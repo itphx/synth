@@ -5,7 +5,7 @@
 // Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
 import { isAbsolute, normalize, resolve } from 'node:path';
 import type { Hono } from 'hono';
-import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole } from '@itphx/synth-shared';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveSecretKey } from '@itphx/synth-shared';
 import {
   DEFAULT_AGENT_ID, RateLimiter,
   getPublicOpenApiDocument,
@@ -15,6 +15,7 @@ import {
   createSkillRoutes, createCommandRoutes, createSkillBundleRoutes,
   createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
   createIdentityRoutes,
+  createMaintenanceRoutes,
   ProjectInstructionsResolver, createInstructionsInfoResolver,
   createSettingsRoutes, createDictionaryRoutes,
   createContextRoutes as createCoreContextRoutes,
@@ -274,6 +275,32 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         labelConflict: (c) => t('errors.conflict.webhookLabel', undefined, c),
         targetForbidden: (c) => t('errors.validation.webhookTargetForbidden', undefined, c),
         disabled: (c) => t('errors.unavailable.webhooksDisabled', undefined, c),
+      },
+    },
+  ));
+
+  // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
+  // Managed RBAC: только ADMIN — операции меняют/отдают данные всего инстанса
+  // (архивы могут содержать секреты), i18n.
+  app.route('/api/v2/maintenance', createMaintenanceRoutes(
+    { requireAuth: auth.requireAuth },
+    { dataDir, secretKey: resolveSecretKey(config.synth), env: process.env },
+    {
+      writeGuard: auth.requirePermission('ADMIN'),
+      readGuard: auth.requirePermission('ADMIN'),
+      maxUploadBytes: config.maxUploadBytes,
+      resolveUserId: (c) => {
+        const user = c.get('user') as { id?: string } | undefined;
+        return user?.id ?? 'unknown';
+      },
+      messages: {
+        invalidBody: (c) => t('errors.validation.invalidMaintenanceBody', undefined, c),
+        confirmRequired: (c) => t('errors.validation.maintenanceConfirmRequired', undefined, c),
+        backupNotFound: (c) => t('errors.notFound.backup', undefined, c),
+        invalidBackupName: (c) => t('errors.validation.invalidBackupName', undefined, c),
+        payloadTooLarge: (c) => t('errors.payloadTooLarge', undefined, c),
+        invalidArchive: (c) => t('errors.validation.invalidRestoreArchive', undefined, c),
+        schemaTooNew: (c) => t('errors.conflict.schemaTooNew', undefined, c),
       },
     },
   ));

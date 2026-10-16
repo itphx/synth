@@ -378,6 +378,14 @@ export type {
   WebhookRoutesOptions,
   WebhookRouteMessages,
 } from './server/routes/webhooks.js';
+// ADR-091/ADR-092: admin-API обслуживания инстанса (backup/restore/doctor/migrate).
+export { createMaintenanceRoutes } from './server/routes/maintenance.js';
+export type {
+  MaintenanceRoutesAuth,
+  MaintenanceRoutesDeps,
+  MaintenanceRoutesOptions,
+  MaintenanceRouteMessages,
+} from './server/routes/maintenance.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
 // ADR-089: retention-очистка журнала событий (периодический pruner).

@@ -93,6 +93,7 @@ describe('backend: контракт монтирования роутов (mount
       'POST /api/v2/schedules/:id/run',
       'GET /api/v2/service-keys',
       'GET /api/v2/webhooks',
+      'GET /api/v2/maintenance/status',
       'GET /api/v2/mcp/registry',
       'GET /api/v2/audit',
       'GET /api/v2/logs/llm',
@@ -156,6 +157,8 @@ describe('backend: контракт монтирования роутов (mount
     '/api/v2/schedules',
     '/api/v2/service-keys',
     '/api/v2/webhooks',
+    '/api/v2/maintenance/status',
+    '/api/v2/maintenance/backups',
     '/api/v2/mcp/registry',
     '/api/v2/skills',
     '/api/v2/commands',
@@ -216,6 +219,7 @@ describe('backend: контракт монтирования роутов (mount
       { method: 'POST', path: '/api/v2/projects', body: { name: 'x' } },
       { method: 'POST', path: '/api/v2/service-keys', body: { label: 'x', roles: ['USER'] } },
       { method: 'POST', path: '/api/v2/webhooks', body: { label: 'x', url: 'https://example.com', events: ['*'] } },
+      { method: 'POST', path: '/api/v2/maintenance/backups', body: {} },
       { method: 'POST', path: '/api/v2/agents', body: { id: 'x' } },
       { method: 'POST', path: '/api/v2/events/bindings', body: {} },
       { method: 'POST', path: '/api/v2/schedules', body: {} },
@@ -245,6 +249,8 @@ describe('backend: контракт монтирования роутов (mount
     '/api/v2/agents/all',
     '/api/v2/service-keys',
     '/api/v2/webhooks',
+    '/api/v2/maintenance/status',
+    '/api/v2/maintenance/backups',
   ];
 
   it('ADMIN-only GET: USER → 403, ADMIN → доступ', async () => {
