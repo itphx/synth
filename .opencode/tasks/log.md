@@ -1283,3 +1283,22 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - **Верификация:** `typecheck` 6/6, `lint` 0 ошибок, `test` 3898+1380+564+267+24 зелёных, `adr:check`/`docs-link-check` 0 ошибок.
 - **Примечание:** в этом же рабочем дереве параллельно работает другая сессия (PROP-101/ADR-097) — её коммиты не затрагивались; при коммите своих волн сгенерированные строки чужого документа из индексов исключались.
 - **Открыто:** онлайн-консистентный/PITR-бэкап и мульти-инстанс-локи (после PROP-032); руководства на портале `docs.synth.itphx.ru`; ops-скиллы (PROP-048); внешний audit-sink (при `uninstall --purge` запись уходит вместе с каталогом).
+
+## 2026-10-16 — PROP-032: PostgreSQL как второй backend хранения (волны 1–6)
+
+- **Задача:** реализовать хранилище PostgreSQL за портами ADR-096 + деградированный режим при отказе БД + единый источник доверия TLS/CA. Ветка `feat/storage-postgres` (worktree `/mnt/data/Agent/dev/Synth/synth-storage-pg`, от `feat/storage-seam`), **не пушена**.
+- **Исполнители:** @orchestrator → 2× исследователя (R1/R2), 2× (F1/F2), 3× (спайки TLS/pg/git), ~25 @fixer/@tester/@devops в фоне.
+
+### Что сделано (15 коммитов, `e3dbf8da`…`182687b4`)
+- **Волна 2:** конфиг `storage.backend=postgres` + `storage.postgres` (пароль только env/`{dataDir}/secrets/postgres-password`), fail-closed `resolveStorageBackend`, `createStorageContextAsync`/`buildStorageContext`, async-каскад, снятие хардкодов `'file'`; новый пакет `@itphx/synth-storage-postgres` (peer-dep core, `pg` optional, ленивый `import()`), впись в сборку/публикацию/CI.
+- **Волна 3:** драйвер — пул, `synth_schema_migrations` под advisory-lock (fail-closed при «схема новее»), DDL 29 таблиц, маппинг ошибок; **все 27 портов** реализованы и проходят контрактный suite; `@itphx/synth-shared` объявлен зависимостью, синхронные данные core инжектируются (без `createRequire`-хаков).
+- **Волна 4:** `listLight` (публичный API не тронут), БД-локи (`PgMutex`/`PgLeader`) вместо файловых, CI-гейт контрактного suite на живом PostgreSQL (`scripts/ci-postgres.sh`, `test-postgres`, гейт по `SYNTH_TEST_POSTGRES_DSN`).
+- **Волна 5:** обслуживание с учётом backend (`doctor` db-checks + `skipped`, `synth migrate` применяет SQL-схему, `backup` с `storageBackend` и честным предупреждением, `uninstall --purge-db`); `synth storage migrate --to postgres|file` (идемпотентно, через порты, с честными ограничениями: хеш-секреты перевыпускаются); **safe mode** (`fallback-file`/`halt`, матрица fail-closed vs деградация, `{dataDir}/fallback`, ADMIN-only + read-only, `/health` degraded, скилл `synth-storage-recovery`, авто-возврата нет).
+- **Волна 6:** единый источник доверия TLS/CA — `security.tls` (+env `SYNTH_TLS_*`, mTLS), модуль `core/security/tls.ts` (`egressFetch`, глобальный undici-dispatcher, `initTlsTrust`), перевод всех исходящих точек, PG `sslmode`+CA/mTLS c **запретом TLS-параметров в DSN**, git-CA через `simpleGit({config})`, Helm/compose; **ADR-099** (PROP-088 → ⛔ Заменено), **ADR-098** (деградация), инвариант 22 в AGENTS.md.
+- **Найдено живыми прогонами (не поймали ни юнит-тесты, ни контрактный suite):** legacy-сессии с `seq=0` ломали запись (29 из 297) и дубли `id` теряли сообщения (2941→2939) — исправлено (позиционный `seq`, полная замена в транзакции, суррогатный ключ) + регресс в «паспорт порта»; `PostgresConnection.end()` не закрывал пул (ленивое пересоздание); фоллбек маскировал ошибки конфигурации.
+
+### Верификация
+`build/typecheck/lint` — 0 ошибок; `pnpm test` без DSN: shared 322, sdk 24, ui 1380, storage-postgres 26+14 skip, core 4008+62 skip, backend 564; контрактный suite против живого PostgreSQL **58/58**, тесты драйвера **40**; живой перенос реальных данных 297 сессий/2941 сообщение; `secret-scan` чисто; `adr-check` 0 ошибок; `docs-link-check` 0 ошибок.
+
+### Остаток / решения владельца
+Пуш ветки и ревью; отдельная тестовая БД на выделенном хосте (+ секрет `GV_TEST_POSTGRES_DSN`, `pg_trgm`, права CREATE/DROP SCHEMA); секреты CA/клиентских сертификатов для чарта; не реализовано: HTTP-прокси/`no_proxy`/Kerberos (остаток PROP-088), авто-возврат из деградации без рестарта, `kind:"storage"` в манифесте, установка сторонних драйверов, публикация 7-го пакета.
