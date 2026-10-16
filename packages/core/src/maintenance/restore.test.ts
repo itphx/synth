@@ -167,6 +167,92 @@ describe('restore', () => {
     expect(result.restored).toBe(1);
     expect(logs.join('\n')).toContain('synth migrate');
   });
+
+  it('лишний файл удаляется (возврат к снимку)', async () => {
+    const target = join(tmpDir, 'stale');
+    await mkdir(join(target, 'sessions'), { recursive: true });
+    await writeFile(join(target, 'sessions', 'extra.json'), '{"id":"extra"}', 'utf-8');
+    await writeFile(join(target, 'stale.txt'), 'stale', 'utf-8');
+
+    const result = await restoreBackup({ archive, dataDir: target });
+
+    expect(result.removed).toBeGreaterThanOrEqual(2);
+    await expect(stat(join(target, 'sessions', 'extra.json'))).rejects.toThrow();
+    await expect(stat(join(target, 'stale.txt'))).rejects.toThrow();
+    expect(await readFile(join(target, 'sessions', 's1.json'), 'utf-8')).toBe('{"id":"s1"}');
+  });
+
+  it('повреждённый файл заменяется архивным (sha256 совпадает)', async () => {
+    const target = join(tmpDir, 'corrupt-file');
+    await mkdir(join(target, 'sessions'), { recursive: true });
+    await writeFile(join(target, 'sessions', 's1.json'), 'BROKEN {', 'utf-8');
+
+    await restoreBackup({ archive, dataDir: target });
+
+    const content = await readFile(join(target, 'sessions', 's1.json'));
+    const expected = createHash('sha256').update('{"id":"s1"}').digest('hex');
+    expect(createHash('sha256').update(content).digest('hex')).toBe(expected);
+  });
+
+  it('backups/ сохраняется при восстановлении', async () => {
+    const target = join(tmpDir, 'keep-backups');
+    await mkdir(join(target, 'backups'), { recursive: true });
+    await writeFile(join(target, 'backups', 'marker.txt'), 'keep', 'utf-8');
+
+    await restoreBackup({ archive, dataDir: target });
+
+    expect(await readFile(join(target, 'backups', 'marker.txt'), 'utf-8')).toBe('keep');
+    expect(await readFile(join(target, 'sessions', 's1.json'), 'utf-8')).toBe('{"id":"s1"}');
+  });
+
+  it('--dry-run: печатает план очистки, но ничего не удаляет и не пишет', async () => {
+    const target = join(tmpDir, 'dry-cleanup');
+    await mkdir(target, { recursive: true });
+    await writeFile(join(target, 'stale.txt'), 'stale', 'utf-8');
+
+    const logs: string[] = [];
+    const result = await restoreBackup({
+      archive,
+      dataDir: target,
+      dryRun: true,
+      log: (m) => logs.push(m),
+    });
+
+    expect(result.removed).toBe(0);
+    expect(await readFile(join(target, 'stale.txt'), 'utf-8')).toBe('stale');
+    expect(logs.join('\n')).toContain('stale.txt');
+    await expect(stat(join(target, 'sessions'))).rejects.toThrow();
+  });
+
+  it('целевой каталог не существует → создаётся, распаковка проходит', async () => {
+    const target = join(tmpDir, 'fresh-target');
+
+    const result = await restoreBackup({ archive, dataDir: target });
+
+    expect(result.removed).toBe(0);
+    expect(await readFile(join(target, 'sessions', 's1.json'), 'utf-8')).toBe('{"id":"s1"}');
+    expect(await readFile(join(target, 'secrets', 'master.key'), 'utf-8')).toBe('KEY');
+  });
+
+  it('--no-safety-copy: копия не создаётся, вычистка и распаковка выполняются', async () => {
+    const target = join(tmpDir, 'no-safety');
+    await mkdir(target, { recursive: true });
+    await writeFile(join(target, 'stale.txt'), 'stale', 'utf-8');
+
+    const warns: string[] = [];
+    const result = await restoreBackup({
+      archive,
+      dataDir: target,
+      safetyCopy: false,
+      warn: (m) => warns.push(m),
+    });
+
+    expect(result.safetyCopyPath).toBeUndefined();
+    expect(warns.join('\n')).toContain('откат');
+    await expect(stat(join(target, 'stale.txt'))).rejects.toThrow();
+    await expect(stat(join(target, 'backups'))).rejects.toThrow();
+    expect(await readFile(join(target, 'sessions', 's1.json'), 'utf-8')).toBe('{"id":"s1"}');
+  });
 });
 
 /** Базовый манифест с корректными полями. */

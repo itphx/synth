@@ -785,14 +785,17 @@ program
 
 program
   .command('restore')
-  .description('Восстановить каталог данных из архива backup (PROP-091)')
+  .description('Восстановить каталог данных из архива backup — возврат к снимку (PROP-091)')
   .argument('<archive>', 'путь к архиву backup')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
   .option('--dry-run', 'проверить архив и показать план без записи')
   .option('--yes', 'подтвердить восстановление (перезапись данных)')
-  .option('--no-safety-copy', 'не создавать страховочную копию текущих данных')
+  .option(
+    '--no-safety-copy',
+    'не создавать страховочную копию данных (откат восстановления станет невозможен)',
+  )
   .action(async (archive, options) => {
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });

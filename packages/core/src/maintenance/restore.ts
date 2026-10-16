@@ -1,9 +1,11 @@
 // PROP-091: `synth restore` — восстановление каталога данных из архива backup.
 // Строгий порядок: манифест → формат → версия схемы → контрольные суммы →
-// dry-run → подтверждение (`--yes`) → страховочная копия → извлечение.
+// dry-run → подтверждение (`--yes`) → страховочная копия → очистка цели →
+// извлечение. Восстановление — возврат к снимку: данные, появившиеся после
+// бэкапа и отсутствующие в архиве, удаляются.
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve, sep } from 'node:path';
+import { chmod, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve, sep } from 'node:path';
 import { SCHEMA_VERSION } from '../storage/instance-meta.js';
 import { ArchivePathError, readFileFromTarGz, readTarGz } from './archive.js';
 import {
@@ -24,6 +26,9 @@ export class BackupChecksumError extends Error {
   }
 }
 
+/** Каталог страховочных копий — сохраняется при возврате к снимку (PROP-092). */
+const BACKUPS_DIR = 'backups';
+
 /** Опции `restoreBackup` (PROP-091). */
 export interface RestoreOptions {
   /** Путь к архиву backup. */
@@ -36,6 +41,8 @@ export interface RestoreOptions {
   safetyCopy?: boolean;
   /** Канал вывода (по умолчанию — тихий). */
   log?: (msg: string) => void;
+  /** Канал предупреждений (по умолчанию — тихий; CLI передаёт stderr). */
+  warn?: (msg: string) => void;
 }
 
 /** Опции CLI-команды `synth restore` (PROP-091). */
@@ -117,6 +124,34 @@ async function _dirNotEmpty(dir: string): Promise<boolean> {
   }
 }
 
+/** Элементы верхнего уровня каталога (каталога нет → пустой список). */
+async function _listTopLevel(dir: string): Promise<string[]> {
+  try {
+    return await readdir(dir);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
+/**
+ * Возврат к снимку: удаляет **все** элементы верхнего уровня в `dir`, кроме
+ * перечисленных в `keep` (`backups/` — только что созданная страховочная копия).
+ * Каталог отсутствует — просто создаётся. Ошибки удаления не глотаются (`rm` с
+ * `force` игнорирует лишь ENOENT).
+ */
+async function _resetDataDir(
+  dir: string,
+  keep: ReadonlySet<string>,
+): Promise<{ removed: number; names: string[] }> {
+  const names = (await _listTopLevel(dir)).filter((name) => !keep.has(name));
+  await mkdir(dir, { recursive: true });
+  for (const name of names) {
+    await rm(join(dir, name), { recursive: true, force: true });
+  }
+  return { removed: names.length, names };
+}
+
 /** Путь назначения внутри `dataDir` (containment). */
 function _safeTarget(dataDir: string, relPath: string): string {
   const target = resolve(dataDir, relPath);
@@ -129,17 +164,26 @@ function _safeTarget(dataDir: string, relPath: string): string {
 /**
  * Восстанавливает каталог данных из архива backup (PROP-091).
  *
+ * Восстановление — **возврат к снимку**: перед распаковкой все элементы верхнего
+ * уровня в `dataDir` удаляются (данные, появившиеся после бэкапа и отсутствующие
+ * в архиве, а также повреждённые файлы), кроме `backups/` — только что созданной
+ * страховочной копии. Страховочная копия создаётся автоматически; её можно
+ * отключить `--no-safety-copy` (`safetyCopy: false`) — тогда откат восстановления
+ * невозможен, и об этом выводится предупреждение в канал `warn`.
+ *
  * Без `--dry-run` (и без подтверждения на уровне CLI) перезаписывает данные;
- * перед записью при непустом `dataDir` создаётся страховочная копия.
+ * в `--dry-run` план (в т.ч. список удаляемых элементов) печатается без записи.
  *
  * @throws Error если архив невалиден, из более новой схемы или повреждён.
  */
 export async function restoreBackup(opts: RestoreOptions): Promise<{
   restored: number;
+  removed: number;
   safetyCopyPath?: string;
   manifest: BackupManifest;
 }> {
   const log = opts.log ?? ((): void => {});
+  const warn = opts.warn ?? ((): void => {});
   const archive = resolve(opts.archive);
   const dataDir = resolve(opts.dataDir);
   const dryRun = !!opts.dryRun;
@@ -162,14 +206,21 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
 
   // 5. Предпросмотр.
   if (dryRun) {
+    const stale = (await _listTopLevel(dataDir)).filter((name) => name !== BACKUPS_DIR);
     log(`[dry-run] Восстановление из ${archive} в ${dataDir}`);
     log(`  схема архива: ${manifest.schemaVersion} (текущая ${SCHEMA_VERSION})`);
     log(`  версия пакета в архиве: ${manifest.instanceVersion}`);
     log(`  секреты: ${manifest.withSecrets ? 'да' : 'нет'}`);
     log(`  файлов к восстановлению: ${fileCount}`);
+    log(
+      stale.length === 0
+        ? '  очистка каталога: удалять нечего'
+        : `  очистка каталога: будет удалено элементов — ${stale.length} (${stale.join(', ')})`,
+    );
+    log(`  ${BACKUPS_DIR}/ сохраняется (страховочная копия)`);
     if (schemaOlder) log('  предупреждение: схема старше — после восстановления выполните `synth migrate`');
     log('  (dry-run: изменения не записаны)');
-    return { restored: fileCount, manifest };
+    return { restored: fileCount, removed: 0, manifest };
   }
 
   // 7. Страховочная копия текущих данных (до перезаписи) — в единый каталог
@@ -181,9 +232,20 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
     safetyPath = copy.path;
     log(`Страховочная копия: ${copy.path}`);
   }
+  if (!safetyCopy) {
+    warn(
+      'Предупреждение: --no-safety-copy — страховочная копия не создана; откат восстановления невозможен.',
+    );
+  }
 
-  // 8. Извлечение (перезапись; каталоги — mkdir -p, права — из записи).
-  await mkdir(dataDir, { recursive: true });
+  // 8. Очистка цели (возврат к снимку): удаляются все элементы верхнего уровня,
+  // кроме `backups/` со страховочной копией; повреждённые/лишние файлы не переживут restore.
+  const reset = await _resetDataDir(dataDir, new Set([BACKUPS_DIR]));
+  log(`Очистка каталога данных: удалено элементов — ${reset.removed}`);
+  if (reset.removed > 0) log(`  удалено: ${reset.names.join(', ')}`);
+  log(`  ${BACKUPS_DIR}/ сохранён (страховочная копия)`);
+
+  // 9. Извлечение (перезапись; каталоги — mkdir -p, права — из записи).
   let restored = 0;
   await readTarGz(archive, async (entry) => {
     if (entry.path === 'manifest.json') return;
@@ -203,18 +265,21 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
     restored += 1;
   });
 
-  // 9. Итог.
+  // 10. Итог.
   log(`Восстановлено файлов: ${restored}`);
+  log(`  удалено лишних файлов/каталогов: ${reset.removed}`);
   if (safetyPath) log(`  страховочная копия: ${safetyPath}`);
   log('Напоминание: выполните `synth doctor` (проверка после восстановления).');
   if (schemaOlder) log('Напоминание: схема старше — выполните `synth migrate`.');
 
-  return { restored, safetyCopyPath: safetyPath, manifest };
+  return { restored, removed: reset.removed, safetyCopyPath: safetyPath, manifest };
 }
 
 /**
  * Тело CLI-команды `synth restore` (PROP-091). Без `--dry-run` и без `--yes` —
- * отказ («перезапись данных»). Проверка архива выполняется всегда.
+ * отказ («перезапись данных»). Проверка архива выполняется всегда. Восстановление
+ * возвращает каталог к снимку (лишние файлы удаляются; `backups/` сохраняется);
+ * при `--no-safety-copy` откат невозможен — предупреждение идёт в stderr.
  *
  * @returns код выхода процесса (0 — успех, 1 — отказ/ошибка).
  */
@@ -237,6 +302,7 @@ export async function runRestoreCommand(opts: RestoreCommandOptions): Promise<nu
       dryRun,
       safetyCopy: !opts.noSafetyCopy,
       log,
+      warn: error,
     });
     return 0;
   } catch (err) {
