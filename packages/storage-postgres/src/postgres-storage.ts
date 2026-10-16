@@ -21,6 +21,7 @@ import { PostgresStorageConfigError } from './errors.js';
 import { assertSchemaCurrent, runMigrations } from './migrate.js';
 import {
   createPostgresConnection,
+  assertNoDsnTlsParams,
   type PostgresConnectionConfig,
 } from './pool.js';
 import { DEFAULT_SCHEMA, assertValidSchema } from './schema.js';
@@ -81,6 +82,10 @@ export function validatePostgresConfig(config: PostgresStorageConfig): void {
 
   if (config.schema !== undefined) assertValidSchema(config.schema);
 
+  // ADR-099/PROP-032: fail-closed до обращения к БД — TLS-параметры в DSN
+  // молча перекрываются конфигом (`pg` накладывает DSN поверх `ssl`).
+  assertNoDsnTlsParams(config.connectionString);
+
   const hasConnectionString = isNonEmptyString(config.connectionString);
   const hasPoolFields = !!pool && isNonEmptyString(pool.host) && isNonEmptyString(pool.database);
 
@@ -106,6 +111,9 @@ export async function createPostgresStorage(config: PostgresStorageConfig): Prom
   const conn = createPostgresConnection({
     connectionString: config.connectionString,
     pool: config.pool,
+    // ADR-099: доверие TLS/CA (`security.tls`) и env для резолва — единый источник.
+    tls: config.tls,
+    env: config.env,
     password: config.password,
     schema,
     statementTimeoutMillis: config.statementTimeoutMillis,

@@ -16,7 +16,14 @@
 import { createHash } from 'node:crypto';
 import type { Pool as PgPool, PoolClient as PgPoolClient, QueryResultRow } from 'pg';
 import {
+  buildPostgresSslOptions,
+  findDsnTlsParams,
+  type PostgresSslMode,
+  type SecurityTlsConfig,
+} from '@itphx/synth-shared';
+import {
   PostgresConnectionError,
+  PostgresStorageConfigError,
   PostgresStorageDependencyError,
   mapPgError,
 } from './errors.js';
@@ -76,7 +83,15 @@ export interface PostgresPoolConfig {
   connectionTimeoutMillis?: number;
   /** Таймаут простаивающего соединения, мс (дефолт 30000). */
   idleTimeoutMillis?: number;
-  /** TLS: `true`/`false` либо объект опций (`ca`/`rejectUnauthorized`/…). */
+  /**
+   * ADR-099/PROP-032: TLS-режим (`disable`/`require`/`verify-full`; `verify-ca` —
+   * алиас `verify-full`). Не задан — используется legacy `ssl`, иначе без TLS.
+   */
+  sslmode?: PostgresSslMode;
+  /**
+   * TLS: `true`/`false` либо объект опций (`ca`/`rejectUnauthorized`/…).
+   * Legacy-поле: применяется, только если `sslmode` не задан.
+   */
   ssl?: boolean | Record<string, unknown>;
 }
 
@@ -86,6 +101,13 @@ export interface PostgresConnectionConfig {
   connectionString?: string;
   /** Параметры подключения, если не задана `connectionString`. */
   pool?: PostgresPoolConfig;
+  /**
+   * ADR-099: доверие TLS/CA (`security.tls`) — источник CA/mTLS для
+   * `sslmode=verify-full` (`buildPostgresSslOptions`).
+   */
+  tls?: SecurityTlsConfig;
+  /** Env для резолва `security.tls` (ADR-023: env > config). */
+  env?: NodeJS.ProcessEnv;
   /** Пароль БД отдельным полем (env/файл) — приоритетнее `pool.password`. */
   password?: string;
   /** Схема БД (namespace таблиц); по умолчанию `public`. */
@@ -142,6 +164,11 @@ export function advisoryLockKeyToBigInt(key: string): bigint {
 
 /** Собирает объект конфигурации `pg.Pool` из конфига драйвера. */
 export function buildPoolConfig(config: PostgresConnectionConfig, schema: string): Record<string, unknown> {
+  // ADR-099/PROP-032: TLS-параметры в DSN запрещены — `pg` накладывает DSN поверх
+  // конфига (`Object.assign({}, config, parse(connectionString))`) и молча
+  // перекрывает явные ssl-опции (вплоть до отключения TLS).
+  assertNoDsnTlsParams(config.connectionString);
+
   const pool = config.pool;
   const pgConfig: Record<string, unknown> = {
     max: pool?.max ?? DEFAULT_POOL_MAX,
@@ -170,9 +197,48 @@ export function buildPoolConfig(config: PostgresConnectionConfig, schema: string
 
   const password = config.password ?? pool?.password;
   if (password) pgConfig.password = password;
-  if (pool?.ssl !== undefined) pgConfig.ssl = pool.ssl;
+
+  // ADR-099/PROP-032: единый источник TLS — `sslmode` (`storage.postgres.sslmode`)
+  // + `security.tls` (CA/mTLS). Не задан — прежнее поведение (legacy `ssl` либо
+  // дефолт `pg` — без TLS). Ошибки сборки (нет CA при `verify-full`) — fail-closed
+  // доменной ошибкой конфигурации.
+  if (pool?.sslmode !== undefined) {
+    let ssl: boolean | Record<string, unknown> | undefined;
+    try {
+      ssl = buildPostgresSslOptions({
+        sslmode: pool.sslmode,
+        connectionString: config.connectionString,
+        host: pool.host,
+        config: config.tls ? { security: { tls: config.tls } } : undefined,
+        env: config.env,
+      }).ssl;
+    } catch (err) {
+      throw new PostgresStorageConfigError(err instanceof Error ? err.message : String(err));
+    }
+    if (ssl !== undefined) pgConfig.ssl = ssl;
+  } else if (pool?.ssl !== undefined) {
+    pgConfig.ssl = pool.ssl;
+  }
 
   return pgConfig;
+}
+
+/**
+ * ADR-099/PROP-032: fail-closed проверка DSN на TLS-параметры. DSN из
+ * `storage.postgres.dsn` не должен нести `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/…:
+ * `pg` накладывает DSN поверх конфига и молча перекрывает `ssl`-объект, что
+ * обнуляло бы политику CA. Задавайте TLS только в `storage.postgres.sslmode` +
+ * `security.tls`.
+ */
+export function assertNoDsnTlsParams(connectionString: string | undefined): void {
+  const found = findDsnTlsParams(connectionString);
+  if (found.length === 0) return;
+  throw new PostgresStorageConfigError(
+    `TLS-параметры в DSN запрещены (обнаружено: ${found.join(', ')}). ` +
+      'Драйвер `pg` накладывает DSN поверх конфига и молча перекрывает ssl-опции ' +
+      '(вплоть до отключения TLS) — уберите TLS-параметры из DSN или задайте их ' +
+      'только в storage.postgres.sslmode + security.tls',
+  );
 }
 
 /** Минимальный контракт соединения/пула `pg` (без жёсткой привязки к overload-ам). */

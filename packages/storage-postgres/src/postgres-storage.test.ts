@@ -49,6 +49,17 @@ describe('validatePostgresConfig', () => {
       validatePostgresConfig({ dataDir: DATA_DIR, connectionString: '   ' }),
     ).toThrow(PostgresStorageConfigError);
   });
+
+  it('отклоняет TLS-параметры в DSN (fail-closed до подключения)', () => {
+    expect(() =>
+      validatePostgresConfig({ dataDir: DATA_DIR, connectionString: `${CONNECTION_STRING}?sslmode=require` }),
+    ).toThrow(/TLS-параметры в DSN/);
+    expect(() =>
+      validatePostgresConfig({ dataDir: DATA_DIR, connectionString: `${CONNECTION_STRING}?sslrootcert=/ca.pem` }),
+    ).toThrow(PostgresStorageConfigError);
+    // Чистый DSN — по-прежнему валиден.
+    expect(() => validatePostgresConfig({ dataDir: DATA_DIR, connectionString: CONNECTION_STRING })).not.toThrow();
+  });
 });
 
 describe('createPostgresStorage', () => {

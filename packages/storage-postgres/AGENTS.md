@@ -54,6 +54,16 @@ ADR-097): реализация доменных портов `StorageContext` (`
 (`packages/core/src/storage/contract/postgres.test.ts` → 56/56 против
 dev-Postgres). Проводка домена — через `storage.backend = postgres`.
 
+**Текущий статус (сводно).** Реализованы: все 27 доменных портов (группы
+`ports/*`), лёгкие выборки `@future-backend` (в т.ч. `listLight` — метаданные
+сессий без истории, `ports/sessions.ts`), координация на session-level
+advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуживание
+(`health`-probe, `schemaMigrations` (plan/apply), `purgeSchema` — `--purge-db`),
+перенос данных между backend'ами (`synth storage migrate`) и деградированный
+режим (надстройка core, ADR-098). **Остаток:** `kind:"storage"` в едином
+манифесте расширений (ADR-097) и установка сторонних драйверов-хранилищ
+(сейчас in-tree-драйвер из коробки).
+
 - **Подключение (`pool.ts`).** `createPostgresConnection(config)` → `PostgresConnection`
   с ленивым `pg.Pool` (модуль `pg` не required на импорте). Дефолты: `poolMax=10`
   (session-advisory-локи держат соединения), `statement_timeout=15s`,
@@ -163,6 +173,30 @@ dev-Postgres). Проводка домена — через `storage.backend = p
   `ssh_key_agents`, `service_keys`, `mcp_registry`, `skill_bundles`, `maintenance_audit`.
   Все времена — `timestamptz`; FK — только внутри инстанса (по `user_id`/`owner_id` FK нет);
   FK событийно-зависимых таблиц, мешавшие паритету, сняты — см. «Схема — источник истины».
+
+## TLS соединения с PostgreSQL (ADR-099 × PROP-032)
+
+Единый источник доверия — `security.tls` (ADR-099); драйвер **не** читает конфиг
+сам, а получает уже собранные `ssl`-опции `pg` из shared-хелпера
+`buildPostgresSslOptions` (резолверы `resolveTlsConfig`/`resolveTlsTrust`, см.
+`packages/shared/AGENTS.md`). В `pool.ts` (`createPostgresConnection`):
+
+- `storage.postgres.sslmode` (`disable` | `require` | `verify-full`; алиас
+  `verify-ca` → `verify-full` с warn) — режим TLS; при `require`/`verify-full`
+  CA и клиентский серт (mTLS) берутся из `security.tls` (`caFile`/`caPem`/
+  `certFile`/`keyFile`). **Fail-closed:** `verify-full` без сконфигурированного CA
+  бросает ошибку — никакого тихого `rejectUnauthorized:false`. Не задан — прежнее
+  поведение (legacy-поле `ssl` либо без TLS), чтобы не ломать dev-сервер без TLS.
+- **TLS-параметры в DSN запрещены** (`findDsnTlsParams`/`DSN_TLS_PARAMS`):
+  `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/… в `storage.postgres.dsn` отвергаются
+  с внятной ошибкой. Причина — в `pg`: он накладывает распарсенный
+  `connectionString` **поверх** явного конфига (`Object.assign({}, config,
+  parse(connectionString))`), поэтому `sslmode` из DSN молча перекрывает
+  переданный `ssl`-объект — вплоть до отключения TLS. Политика доверия задаётся
+  только `storage.postgres.sslmode` + `security.tls`.
+
+Позиционная нумерация `seq` (`UNIQUE(session_id, seq)`, нормализация `1..n` при
+записи) — см. «Схема — источник истины» выше (не дублируется).
 
 ## Известные расхождения / ограничения
 
