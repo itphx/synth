@@ -56,7 +56,7 @@ tmp/                   # Временные файлы. Использовать
 
 Все 6 пакетов публикуются в npm; `@itphx/synth` — тонкая CLI-обёртка над core/ui/shared: не бандлит core в `cli.js` (external) и не копирует ассеты — всё резолвится из npm-зависимостей (ADR-038). `@itphx/synth-sdk` — самостоятельный клиент публичного API (зависит только от shared).
 
-**Слой хранения (ADR-096).** Домен работает через доменные порты (`packages/core/src/storage/ports/*`), а физический backend взаимозаменяем: `storage/memory/*` (in-memory, герметичные тесты), `FileStore`/`JsonStore` и прочие файловые реализации (default), БД — следующий шаг (PROP-032). Точка сборки — `packages/core/src/storage/storage-context.ts` (`createFileStorage`/`createMemoryStorage`/`createStorageContext`); выбор через `storage.backend` (`file`|`memory`; env `SYNTH_STORAGE_BACKEND`). Контракт любой реализации («паспорт порта») — suite `packages/core/src/storage/contract/*`. Конфиг-словари (провайдеры/модели/агенты) — порт `DocumentRepository<T>`.
+**Слой хранения (ADR-096).** Домен работает через доменные порты (`packages/core/src/storage/ports/*`), а физический backend взаимозаменяем: `storage/memory/*` (in-memory, герметичные тесты), `FileStore`/`JsonStore` и прочие файловые реализации (default), БД — следующий шаг (PROP-032). Точка сборки — `packages/core/src/storage/storage-context.ts` (`createFileStorage`/`createMemoryStorage`/`createStorageContext`); выбор через `storage.backend` (`file`|`memory`; env `SYNTH_STORAGE_BACKEND`). Контракт любой реализации («паспорт порта») — suite `packages/core/src/storage/contract/*`. Конфиг-словари (провайдеры/модели/агенты) — порт `DocumentRepository<T>`. Класс расширения **«хранилище»** ([ADR-097](./docs/arch_decisions/adr-097-storage-provider-class.md)); БД-драйвер — in-tree опциональный пакет из коробки ([PROP-032](./docs/arch_decisions/prop-032-history-storage-postgresql.md)).
 
 ### Слои зависимостей
 
@@ -477,10 +477,12 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095](./docs/arch_decisions/adr-095-god-object-decomposition.md) |
 | ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096](./docs/arch_decisions/adr-096-storage-layer.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096](./docs/arch_decisions/prop-096-background-subagent-sessions.md) |
+| ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097](./docs/arch_decisions/adr-097-storage-provider-class.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097](./docs/arch_decisions/prop-097-background-processes-registry.md) |
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098](./docs/arch_decisions/prop-098-mid-turn-steering.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099](./docs/arch_decisions/prop-099-memory-footprint-optimization.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | [prop-100](./docs/arch_decisions/prop-100-ssrf-dns-rebinding.md) |
+| PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101](./docs/arch_decisions/prop-101-local-installers-platforms.md) |
 <!-- ad-index:end -->
 
 Правило: `docs/arch_decisions/` — единственный дом ADR/PROP; номера и файлы стабильны (ссылок на id по репозиторию — тысячи), файлы не переносятся и не удаляются.
@@ -492,7 +494,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | пользовательская документация / портал | https://docs.synth.itphx.ru/ |
 | документация (портал и dev-доки) | скилл `synth-docs` |
 | storage / JSON / FileStore | [ADR-005](./docs/arch_decisions/adr-005-json-storage.md) |
-| хранилище / backend / порты | [ADR-096](./docs/arch_decisions/adr-096-storage-layer.md), [PROP-032](./docs/arch_decisions/prop-032-history-storage-postgresql.md) |
+| хранилище / backend / порты | [ADR-096](./docs/arch_decisions/adr-096-storage-layer.md), [ADR-097](./docs/arch_decisions/adr-097-storage-provider-class.md), [PROP-032](./docs/arch_decisions/prop-032-history-storage-postgresql.md) |
 | события / WS / SSE | [ADR-008](./docs/arch_decisions/adr-008-websocket-events.md), [ADR-009](./docs/arch_decisions/adr-009-session-event-bus.md), [ADR-024](./docs/arch_decisions/adr-024-eventhub-transport.md) |
 | проект / сессии / ветвление / merge | [ADR-014](./docs/arch_decisions/adr-014-project-container.md), [ADR-033](./docs/arch_decisions/adr-033-session-branching-merge.md), [ADR-040](./docs/arch_decisions/adr-040-sessions-without-project.md) |
 | API v2 / Hono | [ADR-017](./docs/arch_decisions/adr-017-api-v2-hono.md), [docs/API_V2.md](./docs/API_V2.md) |

@@ -63,6 +63,7 @@
 | ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; остаток — Plugin SDK (PROP-090), пайплайны (PROP-059), остаток ADR-087 (HA/второй канал) | ⚠️ Частично | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
 | ADR-091 | Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor` | ⚠️ Частично | [adr-091-backup-restore-transfer.md](./adr-091-backup-restore-transfer.md) |
 | ADR-092 | Обслуживание инстанса — версия схемы данных, миграции и удаление | ⚠️ Частично | [adr-092-instance-lifecycle-maintenance.md](./adr-092-instance-lifecycle-maintenance.md) |
+| ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097-storage-provider-class.md](./adr-097-storage-provider-class.md) |
 
 ## Предложения
 
@@ -99,6 +100,7 @@
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098-mid-turn-steering.md](./prop-098-mid-turn-steering.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
+| PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101-local-installers-platforms.md](./prop-101-local-installers-platforms.md) |
 
 ## Vision
 
@@ -122,4 +124,4 @@
 
 ---
 
-Всего документов: 87 (Решения: 37, Частично: 9, Предложения: 31, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 89 (Решения: 37, Частично: 10, Предложения: 32, Vision: 9, Icebox: 0, Legacy: 1).

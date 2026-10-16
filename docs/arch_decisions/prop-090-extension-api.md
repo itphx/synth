@@ -173,7 +173,7 @@ React-компонентов; до неё — только декларатив�
 |---|---|
 | `name` | Имя расширения (npm-имя для плагина; идентификатор для остальных классов) |
 | `version` | SemVer расширения |
-| `kind` | Класс: `plugin` \| `gateway` \| `addon` \| `pack` (для `pack` дополнительно `packType`) |
+| `kind` | Класс: `plugin` \| `gateway` \| `addon` \| `pack` \| `storage` (для `pack` дополнительно `packType`; `storage` — драйвер слоя хранения, [ADR-097](./adr-097-storage-provider-class.md)) |
 | `host` | Диапазон версий Synth (host-приложения), semver-range — как `engines` |
 | `contracts` | Версия контракта Extension API (semver-major-совместимость; сейчас `"1"`) |
 | `description` | Краткое описание (инспекция/каталог) |

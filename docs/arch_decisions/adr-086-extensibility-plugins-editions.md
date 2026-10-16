@@ -1,7 +1,8 @@
 # ADR-086: Расширяемость Synth: классы расширений, editions и contribution flow
 
-> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`; класс **Gateway** выделен в [ADR-087](./adr-087-gateways.md) (HA/leader election — нет); Plugin SDK ([PROP-090](./prop-090-extension-api.md)), editions и contribution flow — нет
+> **Статус:** ⚠️ Частично — первый **Gateway** (Telegram-шлюз) реализован и мультитенантен; эталон **Add-on** — `synth-media`; класс **Gateway** выделен в [ADR-087](./adr-087-gateways.md) (HA/leader election — нет); класс **Storage** выделен в [ADR-097](./adr-097-storage-provider-class.md) (PostgreSQL-драйвер — нет); Plugin SDK ([PROP-090](./prop-090-extension-api.md)), editions и contribution flow — нет
 > **Дата:** 2026-10-02
+> **Обновлено:** 2026-10-16 — добавлен класс **Storage** (драйверы слоя хранения; `kind: "storage"`) — [ADR-097](./adr-097-storage-provider-class.md); посторонние материалы не дублируются.
 > **Обновлено:** 2026-10-14 — **реструктуризация классов расширений**: класс **Gateway** выделен в действующий
 > [ADR-087](./adr-087-gateways.md) (туда перенесён весь материал Telegram-шлюза, в ADR-086 дубликатов нет), а ADR-086
 > стал **зонтиком «Классы расширений»** (Plugin / Gateway / Add-on / контент-пак + Editions + Contribution flow);
@@ -12,7 +13,7 @@
 > hybrid — allow-list сервера с server-scoped токенами). Ранее (2026-10-08) добавлен четвёртый столп «внешние
 > сервисы-надстройки (add-ons)».
 > **Классы расширений:** Plugin → [PROP-090](./prop-090-extension-api.md); **Gateway → [ADR-087](./adr-087-gateways.md)**;
-> Add-on → этот AD; контент-паки → [PROP-068](./prop-068-skills-agents-registry.md); Edition → этот AD.
+> Add-on → этот AD; контент-паки → [PROP-068](./prop-068-skills-agents-registry.md); **Storage → [ADR-097](./adr-097-storage-provider-class.md)**; Edition → этот AD.
 > **Связано:** [PROP-090](./prop-090-extension-api.md) «Extension API v1», [ADR-087](./adr-087-gateways.md) «Шлюзы (gateways)»,
 > [ADR-030](./adr-030-hooks-agent-events.md) «Hooks/Plugin SDK», [ADR-038](./adr-038-npm-packages.md) «npm-пакеты»,
 > [ADR-046](./adr-046-skills-and-slash-commands.md) «Скиллы», [PROP-068](./prop-068-skills-agents-registry.md) «Реестр и каталог»,
@@ -26,9 +27,10 @@
 
 1. **Extension API** (спецификация — [PROP-090](./prop-090-extension-api.md)) — расширять без форка: версионированный
    контракт плагинов, точки расширения, загрузка из npm/каталога/реестра, trust/scan/install-policy (по образцу
-   [PROP-068](./prop-068-skills-agents-registry.md)). Терминология жёсткая — четыре класса: **Plugin** (код в процессе
+   [PROP-068](./prop-068-skills-agents-registry.md)). Терминология жёсткая — пять классов: **Plugin** (код в процессе
    ядра) / **Gateway** ([ADR-087](./adr-087-gateways.md), внешний сервис-транспорт) / **Add-on** (внешний сервис
-   иного назначения) / **контент-пак** (данные без кода) — см. §«Классы расширений».
+   иного назначения) / **контент-пак** (данные без кода) / **Storage** ([ADR-097](./adr-097-storage-provider-class.md),
+   драйвер слоя хранения) — см. §«Классы расширений».
 2. **Editions** — собрать и поддерживать свою редакцию (по образцу Ubuntu): пресет-метапакет из плагинов,
    скиллов, агентов (agent-packs), тем, локалей (i18n), провайдер/модель-паков, flavor-образов и тулчейна.
 3. **Contribution flow** — предложить функционал в mainline и реализовать его своим Synth'ом за свой счёт:
@@ -50,6 +52,7 @@
 | **Plugin** | код **в процессе ядра** (Extension API, фасад `@itphx/synth-plugin`) | [PROP-090](./prop-090-extension-api.md) |
 | **Gateway** | **внешний сервис-транспорт** внешний мир ↔ Synth (двусторонний обмен) | **[ADR-087](./adr-087-gateways.md)** |
 | **Add-on** | **внешний сервис** иного назначения (свой репозиторий/образы/деплой) | этот AD, §4 |
+| **Storage** | **драйвер слоя хранения** (доменные порты + контрактный suite; `file`/`memory`/`postgres`) | **[ADR-097](./adr-097-storage-provider-class.md)** |
 | **Контент-пак** | **данные без кода** (скиллы, agents, mcp, темы, i18n, провайдеры, промпты, automation, policies, memory, ui) | [PROP-068](./prop-068-skills-agents-registry.md) |
 | **Edition** | пресет-метапакет (плагины + контент-паки + образ + тулчейн) | этот AD, §2 |
 
@@ -84,13 +87,14 @@ disposer-модель, bundle-only дистрибуция, install/activate (`pl
 
 ### Плагины, add-on'ы, шлюзы и режимы (обновлено 2026-10-14)
 
-Четыре класса расширений Synth (терминология жёсткая, [PROP-090](./prop-090-extension-api.md)):
+Пять классов расширений Synth (терминология жёсткая, [PROP-090](./prop-090-extension-api.md)):
 
 | Класс | Что запускается | Режимы |
 |---|---|---|
 | **Plugin** | Код **в процессе core** (загружается через Extension API, фасад `@itphx/synth-plugin`) | standalone — владелец/ADMIN; **managed** — установка ADMIN (deploy-time — дефолт, runtime-install — опция, по умолчанию `deny`); **hybrid** — allow-list сервера + server-scoped токены |
 | **Gateway** | **Внешний сервис-транспорт** внешний мир ↔ Synth (двусторонний); свой репозиторий/образы | Любой режим; общается по API v2/событиям/MCP; детали — [ADR-087](./adr-087-gateways.md) |
 | **Add-on** | **Внешний сервис** иного назначения со своим репозиторием/образами/деплоем (эталон — `synth-media`) | Любой режим; общается по API v2/MCP/событиям |
+| **Storage** | **Драйвер слоя хранения** (доменные порты `storage/ports/*` + контрактный suite `storage/contract/*`) | Любой режим; in-tree (`file`/`memory`) либо опциональный пакет; выбор — `storage.backend` ([ADR-023](./adr-023-configuration.md)); детали — [ADR-097](./adr-097-storage-provider-class.md) |
 | **Контент-пак** | **Контент без кода** (скиллы, agent-packs, темы, i18n, провайдеры, промпты, automation, policies, memory, ui) | Любой режим; устанавливается из каталога ([PROP-068](./prop-068-skills-agents-registry.md)) |
 
 **Ограничение «плагин только standalone» снято:** плагины разрешены во всех режимах. В **managed**
@@ -142,10 +146,11 @@ leader election, singleton-гарантия) — в [ADR-087](./adr-087-gateways
 расширения. Схема/загрузка для классов с кодом — [PROP-090](./prop-090-extension-api.md); для контент-паков
 (индекс/trust/install-policy/провенанс) — [PROP-068](./prop-068-skills-agents-registry.md).
 
-Поля: `name`, `version`, `kind` (`plugin|gateway|addon|pack`), `host`, `contracts`, `description`,
+Поля: `name`, `version`, `kind` (`plugin|gateway|addon|pack|storage`), `host`, `contracts`, `description`,
 `provides` (для `pack` дополнительно `packType`).
 
 - `kind: "plugin" | "gateway" | "addon"` — класс кода/сервиса (Plugin/Gateway/Add-on);
+- `kind: "storage"` — драйвер слоя хранения (доменные порты; [ADR-097](./adr-097-storage-provider-class.md));
 - `kind: "pack"` + `packType` — тип контент-пака: `skills`, `agents`, `mcp`, `themes`, `i18n`, `providers`,
   `prompts`, `automation`, `policies`, `memory`, `ui` ([PROP-068](./prop-068-skills-agents-registry.md)).
 
@@ -248,8 +253,9 @@ _Вопросы шлюза (топология приёма, HA-стейт, ре
 
 ## Связи
 
-- [PROP-090](./prop-090-extension-api.md) — Extension API v1: терминология 4 классов, манифест `synth.pack`, загрузка, install/activate, trust/scan, режимы (спецификация плагинов; вынесена из ADR-086).
+- [PROP-090](./prop-090-extension-api.md) — Extension API v1: терминология классов, манифест `synth.pack`, загрузка, install/activate, trust/scan, режимы (спецификация плагинов; вынесена из ADR-086).
 - [ADR-087](./adr-087-gateways.md) — класс «Шлюзы (gateways)»: контракт, Telegram-шлюз, мультитенантность, HA.
+- [ADR-097](./adr-097-storage-provider-class.md) — класс «хранилище» (storage): драйвер слоя хранения (доменные порты + контрактный suite; `kind: "storage"`).
 - [ADR-030](./adr-030-hooks-agent-events.md) — hooks/Plugin SDK: фундамент Extension API и событийных add-on'ов.
 - [ADR-038](./adr-038-npm-packages.md) — npm-пакеты: enabler editions и распространения плагинов.
 - [PROP-068](./prop-068-skills-agents-registry.md) — переиспользуемая инфраструктура trust/guard/каталога/провенанса и единый манифест контент-паков `synth.pack`.

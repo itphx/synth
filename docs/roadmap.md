@@ -26,12 +26,12 @@
 
 Пометка: это приоритет **0.11**; состав целей и их порядок могут уточняться.
 
-## Предложения к решению (31)
+## Предложения к решению (32)
 
 | ID | Тема | Статус | Решение до | Заметка |
 |---|---|---|---|---|
 | [PROP-031](./arch_decisions/prop-031-verification-agent.md) | Verification синт (`verifier`) после реализации | 🧩 Предложение | 2026-11-14 | зависит от хуков ADR-030 и цикла ADR-028 |
-| [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Второй вариант хранения — БД (PostgreSQL) за единым слоем | 🧩 Предложение | 2026-11-14 | предпосылка выполнена (ADR-096: порты + контрактный suite); БД-реализация не начата; блокирует PROP-077; логическая модель уже в JSON (ADR-005/ADR-033) |
+| [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Второй вариант хранения — БД (PostgreSQL) за единым слоем | 🧩 Предложение | 2026-11-14 | предпосылка выполнена (ADR-096: порты + контрактный suite); класс `storage` — [ADR-097](./arch_decisions/adr-097-storage-provider-class.md); форма поставки — in-tree пакет `@itphx/synth-storage-postgres` (динамический `import()`); БД-реализация не начата; блокирует PROP-077; логическая модель уже в JSON (ADR-005/ADR-033) |
 | [PROP-037](./arch_decisions/prop-037-commit-security-step.md) | Security step перед коммитом (hook + маркер-хеш) | 🧩 Предложение | 2026-11-14 | опирается на ADR-029/ADR-036 |
 | [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Self-help скиллы и admin-MCP (dogfooding) | 🧩 Предложение | 2026-11-14 | read-only status-MCP + deploy-тулы, гейтинг ADMIN |
 | [PROP-049](./arch_decisions/prop-049-git-worktrees.md) | Git worktrees: тулы, per-session cwd, UI | 🧩 Предложение | 2026-11-14 | усиливает ADR-075/ADR-076 |
@@ -43,7 +43,7 @@
 | [PROP-064](./arch_decisions/prop-064-ui-browser-terminal.md) | Встроенные в UI браузер и терминал | 🧩 Предложение | 2026-11-14 | PTY/WS-терминал + webview |
 | [PROP-065](./arch_decisions/prop-065-ui-docs-plan-todo.md) | Просмотр документации, планов и ToDo в UI | 🧩 Предложение | 2026-11-14 | docs-браузер, Obsidian Bridge |
 | [PROP-066](./arch_decisions/prop-066-doc-style-skills.md) | Doc-стандарты и docs-lint | 🧩 Предложение | 2026-11-14 | скиллы оформления документации (ADR-046) |
-| [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) | Реестр и каталог скиллов и агентов | 🧩 Предложение | 2026-11-14 | остаток ADR-046 (backend-админка каталога) |
+| [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) | Реестр и каталог скиллов и агентов | 🧩 Предложение | 2026-11-14 | остаток ADR-046 (backend-админка каталога); §12 — формат портала распространения (маркетплейс), реализация — отдельным проектом позже |
 | [PROP-073](./arch_decisions/prop-073-client-integrity-hybrid.md) | Целостность клиента в гибриде | 🧩 Предложение | 2026-11-14 | enforcement на сервере; сигналы — опционально |
 | [PROP-074](./arch_decisions/prop-074-soft-delete-retention.md) | Soft-delete и аудит-режим | 🧩 Предложение | 2026-11-14 | restore/purge — ADMIN |
 | [PROP-077](./arch_decisions/prop-077-runtime-toolchain.md) | Toolchain/executor (thin backend + executor, S3) | 🧩 Предложение | 2026-11-14 | после PROP-032; ближайший шаг — PROP-082 |
@@ -61,6 +61,7 @@
 | [PROP-098](./arch_decisions/prop-098-mid-turn-steering.md) | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | 2026-11-14 | `mode: queue\|steer\|interrupt` у `/prompt`; отдельно от «Стоп» |
 | [PROP-099](./arch_decisions/prop-099-memory-footprint-optimization.md) | Оптимизация потребления памяти | 🧩 Предложение | 2026-11-14 | цель релиза 0.11; RSS-бюджет, bounded-кэши, лёгкие листинги; связано с PROP-032/PROP-094 |
 | [PROP-100](./arch_decisions/prop-100-ssrf-dns-rebinding.md) | SSRF: TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | 2026-11-14 | остаток SSRF после фикса IPv4-mapped; `fetch-icon`/remote-скиллы/инструкции; класс SSRF/egress аудита |
+| [PROP-101](./arch_decisions/prop-101-local-installers-platforms.md) | Локальные инсталляторы и платформенная дистрибуция (Win/mac/Linux) | 🧩 Предложение | 2026-12-31 | реализация — до 1.0.0; CI Linux-only (нативные раннеры + подписи/нотаризация — пререквизиты); flatpak/snap не берём; этапы 0–3 |
 
 ## Vision (9)
 
@@ -110,6 +111,6 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-089](./arch_decisions/adr-089-external-events-automation.md) | Платформа внешних событий | ⚠️ Частично | Plugin SDK → PROP-090, пайплайны → PROP-059, остаток ADR-087, стриминг ответа наружу |
 
 Итого: ADR — 46 (из них 37 со статусом `✅ Реализовано` и 9 со статусом `⚠️ Частично`, в т.ч. 5 —
-«принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089), предложений — 40 (31 actionable + 9 vision),
+«принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089), предложений — 41 (32 actionable + 9 vision),
 legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 9 файлов — ADR-018, ADR-030, ADR-046,
 ADR-051, ADR-086, ADR-087, ADR-089, ADR-091, ADR-092 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).
