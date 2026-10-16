@@ -23,6 +23,8 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import { DEFAULT_MAX_UPLOAD_BYTES } from '@itphx/synth-shared';
+import type { MaintenanceAuditEntry, MaintenanceAuditOp } from '@itphx/synth-shared';
+import type { MaintenanceAuditRepository } from '../../storage/ports/index.js';
 import { checkInstanceCompatibility, InstanceDataTooNewError } from '../../storage/instance-meta.js';
 import { createStorageContext } from '../../storage/storage-context.js';
 import { SessionManager } from '../../sessions/manager.js';
@@ -67,6 +69,12 @@ export interface MaintenanceRoutesDeps {
    * по умолчанию — `SYNTH_VERSION`.
    */
   version?: string;
+  /**
+   * ADR-092: аудит-журнал обслуживания — доменный порт слоя хранения
+   * (`StorageContext.maintenanceAudit`, ADR-096). Не передан — `GET /audit`
+   * отдаёт пустой список, `DELETE /audit` — `{ cleared: 0 }` (не 500).
+   */
+  audit?: MaintenanceAuditRepository;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы. */
@@ -78,6 +86,8 @@ export interface MaintenanceRouteMessages {
   payloadTooLarge: (c: Context) => string;
   invalidArchive: (c: Context) => string;
   schemaTooNew: (c: Context) => string;
+  invalidAuditLimit: (c: Context) => string;
+  invalidAuditOp: (c: Context) => string;
 }
 
 export interface MaintenanceRoutesOptions {
@@ -100,7 +110,35 @@ const DEFAULT_MESSAGES: MaintenanceRouteMessages = {
   payloadTooLarge: () => 'Архив превышает допустимый размер',
   invalidArchive: () => 'Архив не прошёл проверку',
   schemaTooNew: () => 'Данные новее версии Synth; обновите Synth',
+  invalidAuditLimit: () => 'Некорректное значение limit (целое 1..500)',
+  invalidAuditOp: () => 'Неизвестная операция журнала обслуживания',
 };
+
+/** Дефолтный и максимальный размер страницы аудит-журнала (`GET /audit`). */
+const DEFAULT_AUDIT_LIMIT = 50;
+const MAX_AUDIT_LIMIT = 500;
+
+/**
+ * ADR-092: известные виды операций аудит-журнала (валидация query `op`).
+ * `satisfies` держит список синхронным с типом `MaintenanceAuditOp`.
+ */
+const MAINTENANCE_AUDIT_OPS = [
+  'backup.created',
+  'backup.failed',
+  'backup.deleted',
+  'restore.scheduled',
+  'restore.cancelled',
+  'restore.applied',
+  'restore.failed',
+  'migrate.applied',
+  'migrate.failed',
+  'update.applied',
+  'rollback.applied',
+  'update.failed',
+  'uninstall.purge',
+  'export.created',
+  'import.applied',
+] as const satisfies readonly MaintenanceAuditOp[];
 
 /** Каталог архивов инстанса (`{dataDir}/backups/`). */
 function _backupsDir(dataDir: string): string {
@@ -173,10 +211,14 @@ function _toBackupInfo(
  * | `GET /restore` | отложенный запрос на восстановление | read |
  * | `POST /restore` | спланировать восстановление (`{archive, confirm:true}`) | write |
  * | `DELETE /restore` | отменить отложенный запрос | write |
+ * | `GET /audit` | журнал обслуживания (`limit`, `op`) | read |
+ * | `DELETE /audit` | очистить журнал (`{confirm:true}`) | write |
  *
  * `POST /restore` **не выполняет** восстановление: оно применится при следующем
  * запуске инстанса. `POST /migrations/apply` на данных новее `SCHEMA_VERSION`
- * отдаёт `409 CONFLICT` с кодом `SCHEMA_TOO_NEW`.
+ * отдаёт `409 CONFLICT` с кодом `SCHEMA_TOO_NEW`. Аудит-журнал (ADR-092) —
+ * append-only, «свежие первыми»; при отсутствии порта `audit` роуты отдают
+ * пустой результат, а не 500.
  */
 export function createMaintenanceRoutes(
   auth: MaintenanceRoutesAuth,
@@ -202,6 +244,10 @@ export function createMaintenanceRoutes(
     c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidArchive(c) } }, 400);
   const payloadTooLarge = (c: Context) =>
     c.json({ error: { code: 'PAYLOAD_TOO_LARGE', message: messages.payloadTooLarge(c) } }, 413);
+  const invalidAuditLimit = (c: Context) =>
+    c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidAuditLimit(c) } }, 400);
+  const invalidAuditOp = (c: Context) =>
+    c.json({ error: { code: 'VALIDATION_ERROR', message: messages.invalidAuditOp(c) } }, 400);
 
   /** userId инициатора, если резолвится (для `requestedBy`); иначе `undefined`. */
   const userId = (c: Context): string | undefined => {
@@ -260,6 +306,8 @@ export function createMaintenanceRoutes(
         settingsStore: storage.settings,
         sessionManager: new SessionManager(storage.sessions),
         projectStore: storage.projects,
+        audit: deps.audit,
+        actor: userId(c),
       });
       return c.json(result);
     } catch (err) {
@@ -293,6 +341,8 @@ export function createMaintenanceRoutes(
       withSecrets: body.withSecrets === true,
       withWorkspace: body.withWorkspace === true,
       live: body.live === true,
+      audit: deps.audit,
+      actor: userId(c),
     });
     return c.json(_toBackupInfo(result.path, result.manifest, result.bytes), 200);
   });
@@ -321,7 +371,7 @@ export function createMaintenanceRoutes(
   app.delete('/backups/:name', writeGuard, async (c) => {
     const name = c.req.param('name');
     if (!isSafeBackupName(name)) return invalidName(c);
-    const removed = await deleteBackup(dataDir, name);
+    const removed = await deleteBackup(dataDir, name, { audit: deps.audit, actor: userId(c) });
     if (!removed) return notFound(c);
     return c.body(null, 204);
   });
@@ -401,6 +451,7 @@ export function createMaintenanceRoutes(
         archive: target,
         requestedBy: userId(c),
         safetyCopy: body.safetyCopy !== false,
+        audit: deps.audit,
       });
       return c.json({ pending, appliesOnNextStart: true }, 201);
     } catch {
@@ -411,8 +462,41 @@ export function createMaintenanceRoutes(
 
   // DELETE /api/v2/maintenance/restore — отмена отложенного запроса.
   app.delete('/restore', writeGuard, async (c) => {
-    const cancelled = await cancelPendingRestore(dataDir);
+    const cancelled = await cancelPendingRestore(dataDir, deps.audit);
     return c.json({ cancelled });
+  });
+
+  // GET /api/v2/maintenance/audit — журнал обслуживания инстанса (ADR-092).
+  // «Свежие первыми»; query `limit` (целое 1..500, дефолт 50) и `op` (вид
+  // операции). Порт не передан — пустой список (не 500).
+  app.get('/audit', readGuard, async (c) => {
+    const rawLimit = c.req.query('limit');
+    let limit = DEFAULT_AUDIT_LIMIT;
+    if (rawLimit !== undefined && rawLimit !== '') {
+      const parsed = Number(rawLimit);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_AUDIT_LIMIT) {
+        return invalidAuditLimit(c);
+      }
+      limit = parsed;
+    }
+
+    const rawOp = c.req.query('op');
+    if (rawOp !== undefined && rawOp !== '' && !(MAINTENANCE_AUDIT_OPS as readonly string[]).includes(rawOp)) {
+      return invalidAuditOp(c);
+    }
+
+    if (!deps.audit) return c.json({ entries: [] as MaintenanceAuditEntry[] });
+    const entries = await deps.audit.list(rawOp ? { limit, op: rawOp as MaintenanceAuditOp } : { limit });
+    return c.json({ entries });
+  });
+
+  // DELETE /api/v2/maintenance/audit — полная очистка журнала (`{confirm:true}`).
+  app.delete('/audit', writeGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if ((body as { confirm?: unknown }).confirm !== true) return confirmRequired(c);
+    if (!deps.audit) return c.json({ cleared: 0 });
+    const cleared = await deps.audit.clear();
+    return c.json({ cleared });
   });
 
   return app;

@@ -222,14 +222,27 @@ export async function listBackups(dataDir: string): Promise<MaintenanceBackupInf
   return infos;
 }
 
+/** Опции `deleteBackup` (ADR-092): аудит-журнал и инициатор (best-effort). */
+export interface DeleteBackupOptions {
+  /** ADR-092: аудит-журнал обслуживания; ошибка записи не ломает удаление. */
+  audit?: MaintenanceAuditRepository;
+  /** ADR-092: инициатор (`userId` при API/UI, `'cli'` при командной строке). */
+  actor?: string;
+}
+
 /**
  * Удаляет архив по имени (ADR-091). Имя валидируется (`basename`, расширение
  * `.tar.gz`, без слэшей/`..`); поиск — только в `{dataDir}/backups/` и
- * `{dataDir}/backups/uploads/`.
+ * `{dataDir}/backups/uploads/`. При успешном удалении best-effort фиксирует
+ * событие `backup.deleted` в аудит-журнале обслуживания (ADR-092).
  *
  * @returns `true` — файл был и удалён; `false` — небезопасное имя или файла нет.
  */
-export async function deleteBackup(dataDir: string, name: string): Promise<boolean> {
+export async function deleteBackup(
+  dataDir: string,
+  name: string,
+  opts: DeleteBackupOptions = {},
+): Promise<boolean> {
   if (!isSafeBackupName(name)) return false;
   for (const dir of [_backupsDir(dataDir), _uploadsDir(dataDir)]) {
     const target = join(dir, name);
@@ -240,6 +253,12 @@ export async function deleteBackup(dataDir: string, name: string): Promise<boole
       continue;
     }
     await rm(target, { force: true });
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'backup.deleted',
+      status: 'ok',
+      actor: opts.actor,
+      details: { name },
+    });
     return true;
   }
   return false;

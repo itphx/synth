@@ -13,6 +13,7 @@
 export type MaintenanceAuditOp =
   | 'backup.created'
   | 'backup.failed'
+  | 'backup.deleted'
   | 'restore.scheduled'
   | 'restore.cancelled'
   | 'restore.applied'

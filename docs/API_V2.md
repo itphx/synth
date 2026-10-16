@@ -986,11 +986,24 @@ Admin-API обслуживания инстанса: health (`synth doctor`), в
 | GET | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Отложенный запрос на восстановление `{pending}` (`PendingRestoreRequest \| null`) |
 | POST | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Спланировать восстановление: `{archive, confirm: true, safetyCopy?}` (`confirm` обязателен; `safetyCopy` по умолчанию `true`) → 201 `{pending, appliesOnNextStart: true}`; архив не прошёл проверку → 400 `VALIDATION_ERROR`; нет архива → 404 |
 | DELETE | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Отменить отложенный запрос → 200 `{cancelled}` |
+| GET | `/api/v2/maintenance/audit` | оба | ADMIN / auth | Журнал обслуживания: `{entries: MaintenanceAuditEntry[]}` («свежие первыми»); query `limit` (целое 1..500, дефолт 50) и `op` (вид операции); невалидные `limit`/`op` → 400 `VALIDATION_ERROR`; порт не подключён → пустой список (не 500) |
+| DELETE | `/api/v2/maintenance/audit` | оба | ADMIN / auth | Очистить журнал; тело `{confirm: true}` обязательно (иначе 400 `VALIDATION_ERROR`) → 200 `{cleared}`; порт не подключён → `{cleared: 0}` |
 
 **Поля `MaintenanceBackupInfo`:** `name` (basename), `path`, `bytes`, `createdAt`,
 `schemaVersion` (из манифеста), `instanceVersion`, `withSecrets`, `withWorkspace`, `entries`
 (число записей манифеста). **`PendingRestoreRequest`:** `archive` (абсолютный путь только
 внутри `{dataDir}/backups/`), `requestedBy?`, `requestedAt`, `safetyCopy`.
+
+**Аудит-журнал обслуживания (ADR-092).** `MaintenanceAuditEntry` — append-only запись
+жизненного цикла: `id` (`ma_<uuid>`), `ts` (ISO-8601), `op` (`backup.created`/`backup.failed`/
+`backup.deleted`/`restore.scheduled`/`restore.cancelled`/`restore.applied`/`restore.failed`/`migrate.applied`/
+`migrate.failed`/`update.applied`/`rollback.applied`/`update.failed`/`uninstall.purge`/
+`export.created`/`import.applied`), `status` (`ok`/`failed`/`scheduled`), `actor?` (инициатор:
+`userId` при API/UI, `cli` при командной строке, `startup` при применении на старте), `version?`
+(`SYNTH_VERSION`), `details?` (поля зависят от `op`), `error?` (при `status: failed`). Записи
+пишутся best-effort из самих операций (`recordMaintenanceAudit`) и отдаются через доменный порт
+`MaintenanceAuditRepository` (`{dataDir}/audit/maintenance.jsonl`, ADR-096). RBAC — как у всего
+раздела: managed — `ADMIN`, standalone — `requireAuth`.
 
 **Лимит загрузки.** Multipart `POST /restore/validate` ограничен `storage.maxUploadBytes`
 (по умолчанию 100 МиБ, `DEFAULT_MAX_UPLOAD_BYTES`); DoS-защита проверяет заявленный
@@ -1030,6 +1043,10 @@ curl -X POST http://localhost:5000/api/v2/maintenance/migrations/apply \
 
 # Отменить отложенное восстановление.
 curl -X DELETE http://localhost:5000/api/v2/maintenance/restore \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Прочитать журнал обслуживания (последние 5 записей).
+curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
   -H 'Authorization: Bearer <ADMIN_TOKEN>'
 ```
 

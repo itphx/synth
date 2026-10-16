@@ -985,11 +985,24 @@ Destructive operations (applying migrations, scheduling a restore) require `{con
 | GET | `/api/v2/maintenance/restore` | both | ADMIN / auth | The pending restore request `{pending}` (`PendingRestoreRequest \| null`) |
 | POST | `/api/v2/maintenance/restore` | both | ADMIN / auth | Schedule a restore: `{archive, confirm: true, safetyCopy?}` (`confirm` is mandatory; `safetyCopy` defaults to `true`) → 201 `{pending, appliesOnNextStart: true}`; an archive that fails validation → 400 `VALIDATION_ERROR`; no archive → 404 |
 | DELETE | `/api/v2/maintenance/restore` | both | ADMIN / auth | Cancel the pending request → 200 `{cancelled}` |
+| GET | `/api/v2/maintenance/audit` | both | ADMIN / auth | Maintenance journal: `{entries: MaintenanceAuditEntry[]}` (newest first); query `limit` (an integer 1..500, default 50) and `op` (operation kind); invalid `limit`/`op` → 400 `VALIDATION_ERROR`; the port is not wired → an empty list (not 500) |
+| DELETE | `/api/v2/maintenance/audit` | both | ADMIN / auth | Clear the journal; the body `{confirm: true}` is mandatory (otherwise 400 `VALIDATION_ERROR`) → 200 `{cleared}`; the port is not wired → `{cleared: 0}` |
 
 **`MaintenanceBackupInfo` fields:** `name` (basename), `path`, `bytes`, `createdAt`,
 `schemaVersion` (from the manifest), `instanceVersion`, `withSecrets`, `withWorkspace`,
 `entries` (the manifest record count). **`PendingRestoreRequest`:** `archive` (an absolute path
 only inside `{dataDir}/backups/`), `requestedBy?`, `requestedAt`, `safetyCopy`.
+
+**Maintenance audit journal (ADR-092).** A `MaintenanceAuditEntry` is an append-only lifecycle
+record: `id` (`ma_<uuid>`), `ts` (ISO-8601), `op` (`backup.created`/`backup.failed`/
+`backup.deleted`/`restore.scheduled`/`restore.cancelled`/`restore.applied`/`restore.failed`/`migrate.applied`/
+`migrate.failed`/`update.applied`/`rollback.applied`/`update.failed`/`uninstall.purge`/
+`export.created`/`import.applied`), `status` (`ok`/`failed`/`scheduled`), `actor?` (the initiator:
+`userId` via API/UI, `cli` from the command line, `startup` when applied at start), `version?`
+(`SYNTH_VERSION`), `details?` (fields depend on `op`), `error?` (when `status: failed`). Records are
+written best-effort by the operations themselves (`recordMaintenanceAudit`) and served through the
+domain port `MaintenanceAuditRepository` (`{dataDir}/audit/maintenance.jsonl`, ADR-096). RBAC is the
+same as for the whole section: managed — `ADMIN`, standalone — `requireAuth`.
 
 **Upload limit.** The multipart `POST /restore/validate` is capped by `storage.maxUploadBytes`
 (default 100 MiB, `DEFAULT_MAX_UPLOAD_BYTES`); the DoS guard checks the declared `content-length`,
@@ -1028,6 +1041,10 @@ curl -X POST http://localhost:5000/api/v2/maintenance/migrations/apply \
 
 # Cancel the pending restore.
 curl -X DELETE http://localhost:5000/api/v2/maintenance/restore \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Read the maintenance journal (last 5 entries).
+curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
   -H 'Authorization: Bearer <ADMIN_TOKEN>'
 ```
 

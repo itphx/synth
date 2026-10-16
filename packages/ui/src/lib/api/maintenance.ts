@@ -6,7 +6,10 @@
 // (см. `packages/ui/AGENTS.md`). Восстановление — офлайн-операция: `POST /restore`
 // только планирует её, применение — при следующем старте инстанса.
 
+import type { MaintenanceAuditEntry } from '@itphx/synth-shared/types'
 import { BASE_URL, fetchJSON } from './base'
+
+export type { MaintenanceAuditEntry }
 
 /** ADR-091: метаданные архива бэкапа (элемент `GET/POST /maintenance/backups`). */
 export interface MaintenanceBackupInfo {
@@ -142,6 +145,14 @@ export interface CreateBackupOptions {
   live?: boolean
 }
 
+/** ADR-092: опции выборки аудит-журнала обслуживания (`GET /maintenance/audit`). */
+export interface ListAuditOptions {
+  /** Вернуть последние N записей (1..500; серверный дефолт — 50). */
+  limit?: number
+  /** Фильтр по виду операции (напр. `backup.created`). */
+  op?: string
+}
+
 export const maintenanceApi = {
   // --- ADR-091/ADR-092: admin-API обслуживания инстанса ---
   /** GET /maintenance/status — сводный статус инстанса (схема/бэкапы/pending/doctor). */
@@ -243,6 +254,26 @@ export const maintenanceApi = {
   async cancelRestore(): Promise<{ cancelled: boolean }> {
     return fetchJSON<{ cancelled: boolean }>(`${BASE_URL}/maintenance/restore`, {
       method: 'DELETE',
+    })
+  },
+
+  // --- ADR-092: аудит-журнал обслуживания инстанса ---
+  /** GET /maintenance/audit — последние записи журнала («свежие первыми»). */
+  async listAudit(opts: ListAuditOptions = {}): Promise<{ entries: MaintenanceAuditEntry[] }> {
+    const params = new URLSearchParams()
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+    if (opts.op) params.set('op', opts.op)
+    const qs = params.toString()
+    return fetchJSON<{ entries: MaintenanceAuditEntry[] }>(
+      `${BASE_URL}/maintenance/audit${qs ? `?${qs}` : ''}`,
+    )
+  },
+
+  /** DELETE /maintenance/audit — полная очистка журнала (`{confirm:true}`). */
+  async clearAudit(): Promise<{ cleared: number }> {
+    return fetchJSON<{ cleared: number }>(`${BASE_URL}/maintenance/audit`, {
+      method: 'DELETE',
+      body: JSON.stringify({ confirm: true }),
     })
   },
 }

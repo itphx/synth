@@ -4,8 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler, Next } from 'hono';
+import type { MaintenanceAuditEntry } from '@itphx/synth-shared';
 import { createMaintenanceRoutes } from './maintenance.js';
 import type { MaintenanceRoutesOptions } from './maintenance.js';
+import { MemoryMaintenanceAuditRepository } from '../../storage/memory/audit.js';
+import type { MaintenanceAuditRepository } from '../../storage/ports/index.js';
 
 /** Mock-auth: requireAuth пропускает запрос (для проверки самих роутов). */
 const passAuth = {
@@ -248,5 +251,203 @@ describe('Maintenance API Routes (ADR-091/ADR-092)', () => {
     const res = await app.request('/api/v2/maintenance/restore/validate', { method: 'POST', body: fd });
     expect(res.status).toBe(413);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  describe('AUDIT — журнал обслуживания (ADR-092)', () => {
+    const auditEntry = (over: Partial<MaintenanceAuditEntry>): MaintenanceAuditEntry => ({
+      id: 'ma_1',
+      ts: '2026-10-16T12:00:00.000Z',
+      op: 'backup.created',
+      status: 'ok',
+      ...over,
+    });
+
+    const makeAuditApp = (
+      audit: MaintenanceAuditRepository,
+      opts: MaintenanceRoutesOptions = {},
+    ): Hono => {
+      const app = new Hono();
+      app.route(
+        '/api/v2/maintenance',
+        createMaintenanceRoutes(passAuth, { dataDir: tmpDir, audit }, opts),
+      );
+      return app;
+    };
+
+    /** userId инициатора для проверки поля `actor` (core-дефолт — из `c.get('user')`). */
+    const withActor: MaintenanceRoutesOptions = { resolveUserId: () => 'admin' };
+
+    it('GET /audit без порта — 200 и пустой список (не 500)', async () => {
+      const res = await makeApp().request('/api/v2/maintenance/audit');
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { entries: unknown[] }).entries).toEqual([]);
+    });
+
+    it('GET /audit — «свежие первыми», фильтры op и limit', async () => {
+      const audit = new MemoryMaintenanceAuditRepository();
+      await audit.append(auditEntry({ id: 'ma_1', op: 'backup.created' }));
+      await audit.append(auditEntry({ id: 'ma_2', op: 'migrate.applied' }));
+      await audit.append(auditEntry({ id: 'ma_3', op: 'backup.created', status: 'failed' }));
+      const app = makeAuditApp(audit);
+
+      const all = (await (await app.request('/api/v2/maintenance/audit')).json()) as {
+        entries: MaintenanceAuditEntry[];
+      };
+      expect(all.entries.map((e) => e.id)).toEqual(['ma_3', 'ma_2', 'ma_1']);
+
+      const filtered = (await (
+        await app.request('/api/v2/maintenance/audit?op=backup.created')
+      ).json()) as { entries: MaintenanceAuditEntry[] };
+      expect(filtered.entries.map((e) => e.id)).toEqual(['ma_3', 'ma_1']);
+
+      const limited = (await (
+        await app.request('/api/v2/maintenance/audit?limit=1')
+      ).json()) as { entries: MaintenanceAuditEntry[] };
+      expect(limited.entries.map((e) => e.id)).toEqual(['ma_3']);
+    });
+
+    it('GET /audit — невалидные limit/op → 400 VALIDATION_ERROR', async () => {
+      const app = makeAuditApp(new MemoryMaintenanceAuditRepository());
+      for (const query of ['limit=0', 'limit=501', 'limit=abc', 'limit=1.5', 'op=unknown.op']) {
+        const res = await app.request(`/api/v2/maintenance/audit?${query}`);
+        expect(res.status, query).toBe(400);
+        expect(((await res.json()) as { error: { code: string } }).error.code, query).toBe(
+          'VALIDATION_ERROR',
+        );
+      }
+    });
+
+    it('DELETE /audit — без confirm 400; с confirm очищает и возвращает число удалённых', async () => {
+      const audit = new MemoryMaintenanceAuditRepository();
+      await audit.append(auditEntry({ id: 'ma_1' }));
+      await audit.append(auditEntry({ id: 'ma_2' }));
+      const app = makeAuditApp(audit);
+
+      const noConfirm = await app.request('/api/v2/maintenance/audit', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      expect(noConfirm.status).toBe(400);
+
+      const cleared = await app.request('/api/v2/maintenance/audit', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true }),
+      });
+      expect(cleared.status).toBe(200);
+      expect(((await cleared.json()) as { cleared: number }).cleared).toBe(2);
+      expect((await audit.list())).toEqual([]);
+    });
+
+    it('DELETE /audit без порта — 200 {cleared: 0}', async () => {
+      const res = await makeApp().request('/api/v2/maintenance/audit', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true }),
+      });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { cleared: number }).cleared).toBe(0);
+    });
+
+    it('POST /backups — пишет backup.created с actor и именем архива', async () => {
+      const audit = new MemoryMaintenanceAuditRepository();
+      const app = makeAuditApp(audit, withActor);
+
+      const name = await createBackupViaApi(app);
+
+      const entries = await audit.list({ op: 'backup.created' });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.status).toBe('ok');
+      expect(entries[0]!.actor).toBe('admin');
+      expect(entries[0]!.details).toMatchObject({ name });
+    });
+
+    it('DELETE /backups/:name — пишет backup.deleted с actor; отсутствующий — без события', async () => {
+      const audit = new MemoryMaintenanceAuditRepository();
+      const app = makeAuditApp(audit, withActor);
+
+      const name = await createBackupViaApi(app);
+      const del = await app.request(
+        `/api/v2/maintenance/backups/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      );
+      expect(del.status).toBe(204);
+
+      const entries = await audit.list({ op: 'backup.deleted' });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.status).toBe('ok');
+      expect(entries[0]!.actor).toBe('admin');
+      expect(entries[0]!.details).toMatchObject({ name });
+
+      // Повторное удаление: файла нет → 404, нового события не появляется.
+      const again = await app.request(
+        `/api/v2/maintenance/backups/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      );
+      expect(again.status).toBe(404);
+      expect(await audit.list({ op: 'backup.deleted' })).toHaveLength(1);
+    });
+
+    it('POST /restore и DELETE /restore — пишут restore.scheduled (actor) и restore.cancelled', async () => {
+      const audit = new MemoryMaintenanceAuditRepository();
+      const app = makeAuditApp(audit, withActor);
+
+      const name = await createBackupViaApi(app);
+      const scheduled = await postJson(app, '/api/v2/maintenance/restore', {
+        archive: name,
+        confirm: true,
+      });
+      expect(scheduled.status).toBe(201);
+
+      const scheduledEntries = await audit.list({ op: 'restore.scheduled' });
+      expect(scheduledEntries).toHaveLength(1);
+      expect(scheduledEntries[0]!.status).toBe('scheduled');
+      expect(scheduledEntries[0]!.actor).toBe('admin');
+
+      const cancelled = await app.request('/api/v2/maintenance/restore', { method: 'DELETE' });
+      expect(cancelled.status).toBe(200);
+
+      const cancelledEntries = await audit.list({ op: 'restore.cancelled' });
+      expect(cancelledEntries).toHaveLength(1);
+      expect(cancelledEntries[0]!.status).toBe('ok');
+    });
+
+    it('POST /migrations/apply — пишет migrate.applied с actor', async () => {
+      const audit = new MemoryMaintenanceAuditRepository();
+      const app = makeAuditApp(audit, withActor);
+
+      const res = await postJson(app, '/api/v2/maintenance/migrations/apply', { confirm: true });
+      expect(res.status).toBe(200);
+
+      const entries = await audit.list({ op: 'migrate.applied' });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.status).toBe('ok');
+      expect(entries[0]!.actor).toBe('admin');
+    });
+
+    it('без порта audit — операции по-прежнему работают (аудит best-effort)', async () => {
+      const app = makeApp();
+
+      const name = await createBackupViaApi(app);
+
+      const scheduled = await postJson(app, '/api/v2/maintenance/restore', {
+        archive: name,
+        confirm: true,
+      });
+      expect(scheduled.status).toBe(201);
+
+      const cancelled = await app.request('/api/v2/maintenance/restore', { method: 'DELETE' });
+      expect(cancelled.status).toBe(200);
+
+      const applied = await postJson(app, '/api/v2/maintenance/migrations/apply', { confirm: true });
+      expect(applied.status).toBe(200);
+
+      const del = await app.request(
+        `/api/v2/maintenance/backups/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      );
+      expect(del.status).toBe(204);
+    });
   });
 });

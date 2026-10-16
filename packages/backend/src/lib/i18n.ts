@@ -68,6 +68,8 @@ const en: Dictionary = {
   'errors.notFound.backup': 'Backup archive not found',
   'errors.conflict.schemaTooNew': 'Instance data is newer than this Synth version; update Synth',
   'errors.payloadTooLarge': 'Uploaded file exceeds the allowed size',
+  'errors.validation.invalidAuditLimit': 'Invalid limit value (an integer 1..500)',
+  'errors.validation.invalidAuditOp': 'Unknown maintenance journal operation',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
@@ -172,6 +174,8 @@ const ru: Dictionary = {
   'errors.notFound.backup': 'Архив не найден',
   'errors.conflict.schemaTooNew': 'Данные новее версии Synth; обновите Synth',
   'errors.payloadTooLarge': 'Загруженный файл превышает допустимый размер',
+  'errors.validation.invalidAuditLimit': 'Некорректное значение limit (целое 1..500)',
+  'errors.validation.invalidAuditOp': 'Неизвестная операция журнала обслуживания',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',

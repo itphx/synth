@@ -677,6 +677,8 @@ export async function createBackendDeps(
     stopEventJournalPruner,
     scheduleStore,
     jobStore,
+    // ADR-092: аудит-журнал обслуживания — порт слоя хранения (ADR-096).
+    maintenanceAudit: storage.maintenanceAudit,
     resolveAgentTemplate,
     eventHub,
     requestSessionService,

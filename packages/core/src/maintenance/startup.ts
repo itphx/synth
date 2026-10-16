@@ -110,6 +110,11 @@ export interface ApplyStartupMigrationsOptions {
   log?: (m: string) => void;
   /** ADR-092: аудит-журнал обслуживания (best-effort). */
   audit?: MaintenanceAuditRepository;
+  /**
+   * ADR-092: инициатор операции — `userId` при применении из API/UI; при старте
+   * инстанса не задаётся (по умолчанию `'startup'`).
+   */
+  actor?: string;
 }
 
 /**
@@ -185,7 +190,7 @@ export async function applyStartupMigrations(
     await recordMaintenanceAudit(opts.audit, {
       op: 'migrate.applied',
       status: 'ok',
-      actor: 'startup',
+      actor: opts.actor ?? 'startup',
       details: {
         from: compatibility.currentVersion,
         to: compatibility.expectedVersion,

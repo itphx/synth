@@ -698,6 +698,8 @@ export async function createStandaloneDeps(
     stopEventJournalPruner,
     scheduleStore,
     jobStore,
+    // ADR-092: аудит-журнал обслуживания — порт слоя хранения (ADR-096).
+    maintenanceAudit: storage.maintenanceAudit,
     schedulerService,
     resolveAgentTemplate,
     requestSessionService,

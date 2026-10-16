@@ -69,7 +69,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     webhooksConfig, eventHub, mcpManager, mcpRegistryStore, skillService, settingsStore,
     defaultWorkingDir, patternStore, toolRegistry, gatewayAuditLogger, gatewayPayloadLogPath,
     gatewayConfig, providerLoader, modelLoader, modelWindowLoader, resolveAgentTemplate,
-    identityClaimStore, live,
+    identityClaimStore, live, maintenanceAudit,
   } = deps;
 
   // API-заглушки для UI
@@ -284,7 +284,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // (архивы могут содержать секреты), i18n.
   app.route('/api/v2/maintenance', createMaintenanceRoutes(
     { requireAuth: auth.requireAuth },
-    { dataDir, secretKey: resolveSecretKey(config.synth), env: process.env },
+    { dataDir, secretKey: resolveSecretKey(config.synth), env: process.env, audit: maintenanceAudit },
     {
       writeGuard: auth.requirePermission('ADMIN'),
       readGuard: auth.requirePermission('ADMIN'),
@@ -301,6 +301,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         payloadTooLarge: (c) => t('errors.payloadTooLarge', undefined, c),
         invalidArchive: (c) => t('errors.validation.invalidRestoreArchive', undefined, c),
         schemaTooNew: (c) => t('errors.conflict.schemaTooNew', undefined, c),
+        invalidAuditLimit: (c) => t('errors.validation.invalidAuditLimit', undefined, c),
+        invalidAuditOp: (c) => t('errors.validation.invalidAuditOp', undefined, c),
       },
     },
   ));

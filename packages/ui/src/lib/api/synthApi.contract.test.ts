@@ -12,7 +12,7 @@ const EXPECTED_API_METHODS = [
   'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'applyMigrations', 'auditRevealed',
   'backupDownloadUrl', 'batchMessages', 'browseWorkspaceRoot', 'cancelQueueRetry', 'cancelRestore',
   'cancelSummarization',
-  'checkUpdate', 'claimIdentity', 'clearQueue', 'clearSession',
+  'checkUpdate', 'claimIdentity', 'clearAudit', 'clearQueue', 'clearSession',
   'clearWorkspacePolicy', 'cloneGitRepo', 'createAgentSshKey', 'createBackup', 'createDirectory',
   'createEventBindingKey', 'createEventRoute', 'createProject', 'createProvider',
   'createSchedule', 'createServiceKey', 'createSession', 'createSkill',
@@ -43,7 +43,7 @@ const EXPECTED_API_METHODS = [
   'getSkillsSettings', 'getStatus', 'getStickyNotes', 'getToolsDisabledInfo', 'getToolsPolicyInfo',
   'getUser', 'getUsers', 'getWebhookDeliveries', 'getWebhookSubscription',
   'getWebhookSubscriptions', 'getWorkspacePolicy', 'getWorkspaceRoot', 'getWorkspaceSetting',
-  'initGitRepo', 'listAgentSshKeys', 'listBackups', 'listDirectory', 'listEventBindings',
+  'initGitRepo', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings',
   'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
   'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject',
   'putSkillFile', 'readFile', 'regenerateWebhookSecret', 'registerGitRepo',
@@ -70,7 +70,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (237)', () => {
+  it('набор методов совпадает с зафиксированным (239)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

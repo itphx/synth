@@ -13,6 +13,7 @@ import {
   synthApi,
   type DoctorCheck,
   type DoctorStatus,
+  type MaintenanceAuditEntry,
   type MaintenanceBackupInfo,
   type MaintenanceStatus,
   type MigrationPlan,
@@ -51,6 +52,28 @@ export function formatBytes(bytes: number): string {
 export function archiveBaseName(path: string): string {
   const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] || path
+}
+
+/** Бейдж статуса записи аудит-журнала обслуживания (ADR-092). */
+const AUDIT_STATUS_CLASS: Record<MaintenanceAuditEntry['status'], string> = {
+  ok: 'bg-status-success/15 text-status-success',
+  failed: 'bg-destructive/15 text-destructive',
+  scheduled: 'bg-status-warning/15 text-status-warning',
+}
+
+/**
+ * ADR-092: краткая сводка `details` записи журнала — пары `ключ: значение`
+ * через запятую (объекты/массивы — компактным JSON). Пусто — пустая строка.
+ */
+export function summarizeAuditDetails(details?: Record<string, unknown>): string {
+  if (!details) return ''
+  return Object.entries(details)
+    .map(([key, value]) => {
+      const text =
+        value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value)
+      return `${key}: ${text}`
+    })
+    .join(', ')
 }
 
 /** Опции снятия архива (ADR-091). */
@@ -94,6 +117,11 @@ export function MaintenanceSettings() {
   const [scheduling, setScheduling] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const [auditEntries, setAuditEntries] = useState<MaintenanceAuditEntry[] | null>(null)
+  const [auditLoading, setAuditLoading] = useState(true)
+  const [auditError, setAuditError] = useState<string | null>(null)
+  const [clearingAudit, setClearingAudit] = useState(false)
+
   const loadStatus = useCallback(async () => {
     setStatusLoading(true)
     setStatusError(null)
@@ -118,6 +146,20 @@ export function MaintenanceSettings() {
     }
   }, [t])
 
+  const loadAudit = useCallback(async () => {
+    setAuditLoading(true)
+    setAuditError(null)
+    try {
+      const { entries } = await synthApi.listAudit()
+      setAuditEntries(entries)
+    } catch (err) {
+      setAuditEntries(null)
+      setAuditError(err instanceof Error ? err.message : t('maintenance.audit.loadError'))
+    } finally {
+      setAuditLoading(false)
+    }
+  }, [t])
+
   useEffect(() => {
     void loadStatus()
   }, [loadStatus])
@@ -125,6 +167,10 @@ export function MaintenanceSettings() {
   useEffect(() => {
     void loadMigrations()
   }, [loadMigrations])
+
+  useEffect(() => {
+    void loadAudit()
+  }, [loadAudit])
 
   /** «Проверить»: перезапускает `synth doctor` и перечитывает статус (сводка проверок). */
   const handleCheck = useCallback(async () => {
@@ -331,6 +377,37 @@ export function MaintenanceSettings() {
       setScheduling(false)
     }
   }, [t, notify, loadStatus])
+
+  const handleClearAudit = useCallback(async () => {
+    const ok = await confirm({
+      title: t('maintenance.audit.clearTitle'),
+      message: t('maintenance.audit.clearConfirm'),
+      confirmLabel: t('maintenance.audit.clear'),
+      variant: 'danger',
+      icon: 'delete-bin',
+    })
+    if (!ok) return
+    setClearingAudit(true)
+    try {
+      const { cleared } = await synthApi.clearAudit()
+      notify({
+        text: t('maintenance.audit.cleared', { count: cleared }),
+        type: 'success',
+        category: 'system',
+      })
+      await loadAudit()
+    } catch (err) {
+      notify({
+        text: t('maintenance.audit.clearError', {
+          error: err instanceof Error ? err.message : t('common.error'),
+        }),
+        type: 'error',
+        category: 'error',
+      })
+    } finally {
+      setClearingAudit(false)
+    }
+  }, [t, notify, loadAudit])
 
   const backups = status?.backups ?? []
   const pendingRestore = status?.pendingRestore ?? null
@@ -842,6 +919,115 @@ export function MaintenanceSettings() {
             )}
           </div>
         )}
+      </SettingsSection>
+
+      {/* 5. Журнал обслуживания (ADR-092) */}
+      <SettingsSection
+        title={t('maintenance.audit.title')}
+        description={t('maintenance.audit.description')}
+      >
+        {auditError && (
+          <div
+            role="alert"
+            data-testid="maintenance-audit-error"
+            className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive"
+          >
+            {auditError}
+          </div>
+        )}
+
+        {auditLoading && auditEntries === null && (
+          <div className="py-3 text-center text-xs text-muted-foreground">{t('common.loading')}</div>
+        )}
+
+        {auditEntries !== null && (
+          <>
+            <div className="text-xs text-muted-foreground" data-testid="maintenance-audit-count">
+              {t('maintenance.audit.count', { count: auditEntries.length })}
+            </div>
+
+            {auditEntries.length === 0 ? (
+              <div
+                className="flex flex-col items-center gap-1 py-4 text-center text-muted-foreground"
+                data-testid="maintenance-audit-empty"
+              >
+                <Icon name="file-list" className="size-6 opacity-40" />
+                <p className="text-xs">{t('maintenance.audit.empty')}</p>
+              </div>
+            ) : (
+              <ul className="space-y-2 min-w-0" data-testid="maintenance-audit-list">
+                {auditEntries.map((entry) => (
+                  <li
+                    key={entry.id}
+                    data-testid={`maintenance-audit-${entry.id}`}
+                    className="space-y-1 rounded-lg border border-border/60 bg-surface-inset p-2.5 min-w-0"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                      <span className="min-w-0 break-all font-mono text-xs text-foreground">
+                        {entry.op}
+                      </span>
+                      <span
+                        className={cn(
+                          'shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-medium',
+                          AUDIT_STATUS_CLASS[entry.status],
+                        )}
+                        data-testid={`maintenance-audit-status-${entry.id}`}
+                      >
+                        {t(`maintenance.audit.status.${entry.status}`)}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[0.6875rem] text-muted-foreground min-w-0">
+                      <span className="min-w-0 break-words">
+                        {t('maintenance.audit.colTime')}: {formatDateTime(entry.ts, locale)}
+                      </span>
+                      <span className="min-w-0 break-words">
+                        {t('maintenance.audit.colActor')}:{' '}
+                        {entry.actor ?? t('maintenance.audit.actorUnknown')}
+                      </span>
+                    </div>
+
+                    {entry.error && (
+                      <div className="min-w-0 break-words text-[0.6875rem] text-destructive">
+                        {entry.error}
+                      </div>
+                    )}
+
+                    {entry.details && (
+                      <div
+                        className="min-w-0 break-words font-mono text-[0.6875rem] text-muted-foreground"
+                        data-testid={`maintenance-audit-details-${entry.id}`}
+                      >
+                        {summarizeAuditDetails(entry.details)}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => void loadAudit()}
+            disabled={auditLoading}
+            data-testid="maintenance-audit-refresh"
+          >
+            <Icon name="refresh" className={cn('size-3.5', auditLoading && 'animate-spin')} />
+            {auditLoading ? t('maintenance.audit.refreshing') : t('maintenance.audit.refresh')}
+          </Button>
+          <Button
+            variant="outline-muted"
+            onClick={() => void handleClearAudit()}
+            disabled={clearingAudit || (auditEntries?.length ?? 0) === 0}
+            data-testid="maintenance-audit-clear"
+          >
+            <Icon name="delete-bin" className="size-3.5" />
+            {t('maintenance.audit.clear')}
+          </Button>
+        </div>
       </SettingsSection>
     </SettingsPanel>
   )

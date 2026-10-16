@@ -74,7 +74,7 @@ export function mountStandaloneRoutes(
     webhookService, webhooksConfig, eventIngress, eventBindingStore, eventJournal, routeRuleStore,
     eventApiKeyStore, resolveAgentTemplate, schedulerService, scheduleStore, jobStore,
     identityClaimStore, modelWindowLoader, eventRouter, dataDir, defaultWorkingDir,
-    commandService, bundleStore, dictionaries,
+    commandService, bundleStore, dictionaries, maintenanceAudit,
   } = deps;
   const serviceApiKeyStore = deps.serviceApiKeyStore;
   const {
@@ -215,7 +215,7 @@ export function mountStandaloneRoutes(
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
   app.route('/api/v2/maintenance', createMaintenanceRoutes(
     auth,
-    { dataDir, secretKey: config.secretKey, env: process.env },
+    { dataDir, secretKey: config.secretKey, env: process.env, audit: maintenanceAudit },
     { maxUploadBytes: config.maxUploadBytes },
   ));
 

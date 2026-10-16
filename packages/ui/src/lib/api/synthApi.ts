@@ -116,6 +116,8 @@ export type {
   MaintenanceStatus,
   MaintenanceBackupInfo,
   MaintenanceMigration,
+  MaintenanceAuditEntry,
+  ListAuditOptions,
   MigrationPlan,
   DoctorStatus,
   DoctorCheck,

@@ -38,6 +38,8 @@ const mocks = vi.hoisted(() => ({
   getPendingRestore: vi.fn(),
   scheduleRestore: vi.fn(),
   cancelRestore: vi.fn(),
+  listAudit: vi.fn(),
+  clearAudit: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -52,10 +54,11 @@ import { confirm } from '@/lib/confirm'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { MaintenanceSettings, archiveBaseName, formatBytes } from './MaintenanceSettings'
+import { MaintenanceSettings, archiveBaseName, formatBytes, summarizeAuditDetails } from './MaintenanceSettings'
 import { CATEGORIES, resolveActiveSettingsPage } from './SettingsModal'
 import type {
   DoctorResult,
+  MaintenanceAuditEntry,
   MaintenanceBackupInfo,
   MaintenanceStatus,
   MigrationPlan,
@@ -159,6 +162,26 @@ const VALIDATION_UPLOAD: RestoreValidation = { ...VALIDATION_OK, staged: 'upload
 
 const VALIDATION_FAIL: RestoreValidation = { ok: false, problem: 'checksum mismatch' }
 
+const AUDIT_ENTRIES: MaintenanceAuditEntry[] = [
+  {
+    id: 'ma_2',
+    ts: '2026-10-16T12:30:00.000Z',
+    op: 'backup.created',
+    status: 'ok',
+    actor: 'admin',
+    version: '1.2.3',
+    details: { name: 'synth-backup.tar.gz', bytes: 1536 },
+  },
+  {
+    id: 'ma_1',
+    ts: '2026-10-16T12:00:00.000Z',
+    op: 'migrate.applied',
+    status: 'failed',
+    actor: 'cli',
+    error: 'boom',
+  },
+]
+
 const clickTestId = async (container: HTMLElement, testId: string) => {
   const el = container.querySelector(`[data-testid="${testId}"]`)
   expect(el, `элемент ${testId}`).toBeTruthy()
@@ -228,6 +251,8 @@ beforeEach(() => {
   mocks.getPendingRestore.mockResolvedValue({ pending: null })
   mocks.scheduleRestore.mockResolvedValue({ pending: PENDING_RESTORE, appliesOnNextStart: true })
   mocks.cancelRestore.mockResolvedValue({ cancelled: true })
+  mocks.listAudit.mockResolvedValue({ entries: AUDIT_ENTRIES })
+  mocks.clearAudit.mockResolvedValue({ cleared: 2 })
   vi.mocked(confirm).mockResolvedValue(true)
   anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 })
@@ -502,6 +527,81 @@ describe('MaintenanceSettings — админ-раздел «Обслуживан
   })
 })
 
+describe('MaintenanceSettings — журнал обслуживания (ADR-092)', () => {
+  it('загружает журнал и рендерит записи (операция, статус, автор, сводка details)', async () => {
+    const container = await renderSettings()
+
+    expect(mocks.listAudit).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-testid="maintenance-audit-count"]')!.textContent).toContain(
+      '2 entries',
+    )
+
+    const created = container.querySelector('[data-testid="maintenance-audit-ma_2"]')!
+    expect(created.textContent).toContain('backup.created')
+    expect(created.textContent).toContain('ok')
+    expect(created.textContent).toContain('admin')
+    expect(
+      container.querySelector('[data-testid="maintenance-audit-details-ma_2"]')!.textContent,
+    ).toContain('synth-backup.tar.gz')
+
+    const migrated = container.querySelector('[data-testid="maintenance-audit-ma_1"]')!
+    expect(migrated.textContent).toContain('migrate.applied')
+    expect(migrated.textContent).toContain('failed')
+    expect(migrated.textContent).toContain('cli')
+    expect(migrated.textContent).toContain('boom')
+  })
+
+  it('«Обновить» перечитывает журнал', async () => {
+    const container = await renderSettings()
+    mocks.listAudit.mockClear()
+
+    await clickTestId(container, 'maintenance-audit-refresh')
+    await act(async () => {})
+
+    expect(mocks.listAudit).toHaveBeenCalledTimes(1)
+  })
+
+  it('«Очистить журнал» подтверждается через confirm и вызывает clearAudit + refresh', async () => {
+    const container = await renderSettings()
+
+    await clickTestId(container, 'maintenance-audit-clear')
+    await act(async () => {})
+
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(mocks.clearAudit).toHaveBeenCalledTimes(1)
+    expect(mocks.listAudit).toHaveBeenCalledTimes(2) // mount + refresh после очистки
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', category: 'system' }),
+    )
+  })
+
+  it('пустой журнал показывает заглушку и блокирует очистку', async () => {
+    mocks.listAudit.mockResolvedValue({ entries: [] })
+    const container = await renderSettings()
+
+    expect(container.querySelector('[data-testid="maintenance-audit-empty"]')).not.toBeNull()
+    expect(
+      (container.querySelector('[data-testid="maintenance-audit-clear"]') as HTMLButtonElement)
+        .disabled,
+    ).toBe(true)
+  })
+
+  it('ошибка загрузки журнала показывается и не ломает раздел', async () => {
+    mocks.listAudit.mockRejectedValueOnce(new Error('audit boom'))
+    const container = await renderSettings()
+
+    const error = container.querySelector('[data-testid="maintenance-audit-error"]')!
+    expect(error.textContent).toContain('audit boom')
+    expect(container.querySelector('[data-testid="maintenance-audit-list"]')).toBeNull()
+  })
+
+  it('summarizeAuditDetails склеивает пары и объекты', () => {
+    expect(summarizeAuditDetails(undefined)).toBe('')
+    expect(summarizeAuditDetails({ name: 'x.tar.gz', count: 3 })).toBe('name: x.tar.gz, count: 3')
+    expect(summarizeAuditDetails({ nested: { a: 1 } })).toBe('nested: {"a":1}')
+  })
+})
+
 describe('MaintenanceSettings — утилиты, права (ADMIN) и i18n (ADR-091/ADR-092)', () => {
   it('formatBytes форматирует размер', () => {
     expect(formatBytes(0)).toBe('0 B')
@@ -555,5 +655,11 @@ describe('MaintenanceSettings — утилиты, права (ADMIN) и i18n (AD
     expect(ruDict['maintenance.restore.schedule']).toBeTruthy()
     expect(enDict['maintenance.restore.warning']).toBeTruthy()
     expect(ruDict['maintenance.restore.warning']).toBeTruthy()
+    expect(enDict['maintenance.audit.title']).toBeTruthy()
+    expect(ruDict['maintenance.audit.title']).toBeTruthy()
+    expect(enDict['maintenance.audit.clear']).toBeTruthy()
+    expect(ruDict['maintenance.audit.clear']).toBeTruthy()
+    expect(enDict['maintenance.audit.status.scheduled']).toBeTruthy()
+    expect(ruDict['maintenance.audit.status.scheduled']).toBeTruthy()
   })
 })
