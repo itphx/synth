@@ -31,6 +31,7 @@ import { decisionApi } from './decision'
 import { schedulesApi } from './schedules'
 import { serviceKeysApi } from './service-keys'
 import { webhooksApi } from './webhooks'
+import { maintenanceApi } from './maintenance'
 import { logsApi } from './logs'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
@@ -112,6 +113,19 @@ export type {
 } from './decision'
 export type { HybridStatus } from './hybrid'
 export type {
+  MaintenanceStatus,
+  MaintenanceBackupInfo,
+  MaintenanceMigration,
+  MigrationPlan,
+  DoctorStatus,
+  DoctorCheck,
+  DoctorResult,
+  PendingRestoreRequest,
+  RestoreArchiveManifest,
+  RestoreValidation,
+  CreateBackupOptions,
+} from './maintenance'
+export type {
   InstructionFileStatus,
   InstructionSourceKind,
   InstructionScanInfo,
@@ -155,6 +169,7 @@ export const synthApi = {
   ...schedulesApi,
   ...serviceKeysApi,
   ...webhooksApi,
+  ...maintenanceApi,
   ...logsApi,
   ...hybridApi,
   ...instructionsApi,
