@@ -100,6 +100,45 @@ jobs:
       - name: Тесты
         run: pnpm --filter @itphx/synth-storage-postgres test
 
+  # Гейт «контрактный suite на живой PostgreSQL» (PROP-032, волна 4).
+  # Контрактный suite портов (packages/core/src/storage/contract/postgres.test.ts) и
+  # smoke-тест драйвера включаются только при SYNTH_TEST_POSTGRES_DSN — здесь его
+  # резолвит scripts/ci-postgres.sh по цепочке: секрет GV_TEST_POSTGRES_DSN →
+  # локальный initdb → apt/apk → docker-образ postgres:17-alpine. Логика подъёма БД
+  # живёт в скрипте, а не в inline bash: `${...}` в inline-скрипте GitVerse парсит как
+  # Go-шаблон и роняет шаг (см. §«GitVerse CI — особенности» в AGENTS.md).
+  # Поведение без БД: если внешний DSN задан — тесты просто падают (молчаливого
+  # «зелёного» прохода нет); если внешнего DSN нет и поднять БД не удалось — шаг
+  # печатает крупный ПРОПУСК-предупреждение и не валит джобу. Жёсткий режим —
+  # SYNTH_PG_REQUIRE: '1' (после подтверждения, что БД поднимается на раннере).
+  test-postgres:
+    name: Контрактный suite на живой PostgreSQL (PROP-032)
+    runs-on: ubuntu-latest
+    needs: test-shared
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Установка
+        run: npm install -g pnpm@latest && pnpm install --frozen-lockfile
+      - name: Сборка @itphx/synth-shared
+        run: pnpm --filter @itphx/synth-shared build
+      - name: Сборка @itphx/synth-core
+        run: pnpm --filter @itphx/synth-core build
+      - name: Сборка @itphx/synth-storage-postgres
+        run: pnpm --filter @itphx/synth-storage-postgres build
+      - name: Диагностика источников PostgreSQL
+        env:
+          GV_TEST_POSTGRES_DSN: ${{ secrets.GV_TEST_POSTGRES_DSN }}
+        run: bash scripts/ci-postgres.sh diagnose
+      - name: Поднять PostgreSQL и прогнать контрактный suite
+        env:
+          # Необязательный секрет: пусто → поднимается локальная БД (см. scripts/ci-postgres.sh).
+          GV_TEST_POSTGRES_DSN: ${{ secrets.GV_TEST_POSTGRES_DSN }}
+          # '1' — недоступная БД валит джобу (жёсткий гейт). Пока подъём БД на раннере
+          # не подтверждён эмпирически — мягкий пропуск с предупреждением.
+          SYNTH_PG_REQUIRE: '0'
+        run: bash scripts/ci-postgres.sh run
+
   test-backend:
     name: Тесты @itphx/synth-backend
     runs-on: ubuntu-latest
