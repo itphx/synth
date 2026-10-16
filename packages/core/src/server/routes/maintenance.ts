@@ -34,6 +34,8 @@ import { applyStartupMigrations } from '../../maintenance/startup.js';
 import {
   cancelPendingRestore,
   deleteBackup,
+  ENCRYPTED_ARCHIVE_SUFFIX,
+  ENCRYPTED_RESTORE_PROBLEM,
   getMaintenanceStatus,
   getPendingRestore,
   isSafeBackupName,
@@ -88,6 +90,8 @@ export interface MaintenanceRouteMessages {
   schemaTooNew: (c: Context) => string;
   invalidAuditLimit: (c: Context) => string;
   invalidAuditOp: (c: Context) => string;
+  /** ADR-091: восстановление зашифрованного `.enc` через API недоступно. */
+  encryptedRestore: (c: Context) => string;
 }
 
 export interface MaintenanceRoutesOptions {
@@ -112,6 +116,7 @@ const DEFAULT_MESSAGES: MaintenanceRouteMessages = {
   schemaTooNew: () => 'Данные новее версии Synth; обновите Synth',
   invalidAuditLimit: () => 'Некорректное значение limit (целое 1..500)',
   invalidAuditOp: () => 'Неизвестная операция журнала обслуживания',
+  encryptedRestore: () => ENCRYPTED_RESTORE_PROBLEM,
 };
 
 /** Дефолтный и максимальный размер страницы аудит-журнала (`GET /audit`). */
@@ -444,6 +449,14 @@ export function createMaintenanceRoutes(
     if (!name || !isSafeBackupName(name)) return invalidName(c);
     const target = await _findBackupPath(dataDir, name);
     if (!target) return notFound(c);
+    // ADR-091: зашифрованный архив восстанавливается только через CLI (ключ
+    // серверу недоступен) — 400 с понятной причиной, не 500.
+    if (target.endsWith(ENCRYPTED_ARCHIVE_SUFFIX)) {
+      return c.json(
+        { error: { code: 'VALIDATION_ERROR', message: messages.encryptedRestore(c) } },
+        400,
+      );
+    }
 
     try {
       const pending = await scheduleRestore({

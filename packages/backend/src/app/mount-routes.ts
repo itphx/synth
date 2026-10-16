@@ -303,6 +303,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         schemaTooNew: (c) => t('errors.conflict.schemaTooNew', undefined, c),
         invalidAuditLimit: (c) => t('errors.validation.invalidAuditLimit', undefined, c),
         invalidAuditOp: (c) => t('errors.validation.invalidAuditOp', undefined, c),
+        encryptedRestore: (c) => t('errors.validation.encryptedRestoreUnsupported', undefined, c),
       },
     },
   ));

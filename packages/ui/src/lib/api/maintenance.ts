@@ -31,6 +31,10 @@ export interface MaintenanceBackupInfo {
   withWorkspace: boolean
   /** Число записей в манифесте. */
   entries: number
+  /** ADR-091: архив зашифрован (`.tar.gz.enc`); метаданные — из sidecar. */
+  encrypted?: boolean
+  /** ADR-091: метаданные зашифрованного архива доступны (sidecar есть и валиден). */
+  metadataAvailable?: boolean
 }
 
 /** ADR-091: отложенный запрос на восстановление (`{dataDir}/maintenance/restore-request.json`). */

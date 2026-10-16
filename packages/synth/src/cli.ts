@@ -794,6 +794,8 @@ program
   .option('--with-secrets', 'включить секреты (secrets/) — архив становится секретом')
   .option('--with-workspace', 'включить рабочие каталоги (workspaces/)')
   .option('--live', 'снять с работающего сервиса (срез не транзакционный)')
+  .option('--encrypt', 'зашифровать архив (AES-256-GCM; ключ — --key-file/SYNTH_BACKUP_KEY_FILE/SYNTH_BACKUP_KEY)')
+  .option('--key-file <path>', 'файл с ключом шифрования (32 байта base64/hex)')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
@@ -809,6 +811,9 @@ program
       withSecrets: !!options.withSecrets,
       withWorkspace: !!options.withWorkspace,
       live: !!options.live,
+      encrypt: !!options.encrypt,
+      keyFile: options.keyFile,
+      env: process.env,
       audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
@@ -829,6 +834,7 @@ program
     '--no-safety-copy',
     'не создавать страховочную копию данных (откат восстановления станет невозможен)',
   )
+  .option('--key-file <path>', 'файл с ключом шифрования (для архива .tar.gz.enc)')
   .action(async (archive, options) => {
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
@@ -841,6 +847,8 @@ program
       dryRun: !!options.dryRun,
       yes: !!options.yes,
       noSafetyCopy: options.safetyCopy === false,
+      keyFile: options.keyFile,
+      env: process.env,
       audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);

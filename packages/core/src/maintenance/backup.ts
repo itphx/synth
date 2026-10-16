@@ -3,7 +3,7 @@
 // опциональными секретами и опциональными рабочими каталогами.
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { chmod, mkdir, stat } from 'node:fs/promises';
+import { chmod, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { SYNTH_VERSION } from '@itphx/synth-shared';
 import { readInstanceMeta } from '../storage/instance-meta.js';
@@ -15,6 +15,14 @@ import {
   type ArchiveSource,
 } from './archive.js';
 import { recordMaintenanceAudit } from './audit.js';
+import {
+  BackupEncryptionError,
+  buildEncryptedMeta,
+  encryptedArchivePath,
+  encryptedMetaPath,
+  encryptArchiveToFile,
+  resolveBackupKey,
+} from './backup-crypto.js';
 
 /** Манифест архива backup (ADR-091). */
 export interface BackupManifest {
@@ -47,6 +55,16 @@ export interface CreateBackupOptions {
   withWorkspace?: boolean;
   /** Снятие с работающего сервиса (`--live`): срез не транзакционный. */
   live?: boolean;
+  /**
+   * ADR-091: зашифровать архив внешним ключом оператора → `<archive>.tar.gz.enc`
+   * (+ sidecar `*.enc.meta.json`). Требует `encryptKey`.
+   */
+  encrypt?: boolean;
+  /**
+   * ADR-091: 32-байтовый внешний ключ шифрования; обязателен при `encrypt`.
+   * Не логируется; резолвится CLI (`resolveBackupKey`) из `--key-file`/env.
+   */
+  encryptKey?: Buffer;
   /** Момент времени (для имени файла и `createdAt`); по умолчанию — текущий. */
   now?: Date;
   /** Канал вывода (по умолчанию — тихий). */
@@ -61,6 +79,10 @@ export interface CreateBackupOptions {
 export interface BackupCommandOptions extends CreateBackupOptions {
   /** Канал ошибок (по умолчанию `console.error`). */
   error?: (msg: string) => void;
+  /** ADR-091: путь к файлу с ключом шифрования (иначе env-резолв ключа). */
+  keyFile?: string;
+  /** Окружение для env-резолва ключа шифрования (по умолчанию — `process.env`). */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Строит метку времени `YYYYMMDD-HHmmss` (локальное время). */
@@ -142,6 +164,17 @@ async function _resolveOutPath(out: string | undefined, defaultName: string): Pr
 }
 
 /**
+ * Результат снятия архива бэкапа (ADR-091): путь итогового файла (для `encrypt` —
+ * `.tar.gz.enc`), манифест и размер; `encrypted` — был ли применён `--encrypt`.
+ */
+export interface CreateBackupResult {
+  path: string;
+  manifest: BackupManifest;
+  bytes: number;
+  encrypted: boolean;
+}
+
+/**
  * Создаёт архив каталога данных (ADR-091).
  *
  * Исключения по умолчанию: `backups/` (страховочные копии — не бэкапятся
@@ -150,11 +183,7 @@ async function _resolveOutPath(out: string | undefined, defaultName: string): Pr
  * `*.lock`; `secrets/` — без `--with-secrets`.
  * Файл архива — `0600`.
  */
-async function _createBackup(opts: CreateBackupOptions): Promise<{
-  path: string;
-  manifest: BackupManifest;
-  bytes: number;
-}> {
+async function _createBackup(opts: CreateBackupOptions): Promise<CreateBackupResult> {
   const log = opts.log ?? ((): void => {});
   const now = opts.now ?? new Date();
   const dataDir = resolve(opts.dataDir);
@@ -226,8 +255,28 @@ async function _createBackup(opts: CreateBackupOptions): Promise<{
   });
   await chmod(outPath, 0o600);
 
+  // ADR-091: шифрование архива внешним ключом оператора. Плейнтекст-архив
+  // удаляется; рядом кладётся sidecar-метаданные (без путей/хешей).
+  if (opts.encrypt) {
+    if (!opts.encryptKey) {
+      throw new BackupEncryptionError('Не задан ключ шифрования бэкапа');
+    }
+    const encPath = encryptedArchivePath(outPath);
+    await encryptArchiveToFile(outPath, encPath, opts.encryptKey);
+    await chmod(encPath, 0o600);
+    await rm(outPath, { force: true });
+    await writeFile(
+      encryptedMetaPath(encPath),
+      Buffer.from(JSON.stringify(buildEncryptedMeta(manifest), null, 2), 'utf-8'),
+      { mode: 0o600 },
+    );
+    await chmod(encryptedMetaPath(encPath), 0o600);
+    const encBytes = (await stat(encPath)).size;
+    return { path: encPath, manifest, bytes: encBytes, encrypted: true };
+  }
+
   const bytes = (await stat(outPath)).size;
-  return { path: outPath, manifest, bytes };
+  return { path: outPath, manifest, bytes, encrypted: false };
 }
 
 /**
@@ -235,11 +284,7 @@ async function _createBackup(opts: CreateBackupOptions): Promise<{
  * аудит-журнале обслуживания (ADR-092): `backup.created` при успехе,
  * `backup.failed` при ошибке. Ошибка аудит-порта не ломает бэкап.
  */
-export async function createBackup(opts: CreateBackupOptions): Promise<{
-  path: string;
-  manifest: BackupManifest;
-  bytes: number;
-}> {
+export async function createBackup(opts: CreateBackupOptions): Promise<CreateBackupResult> {
   try {
     const result = await _createBackup(opts);
     await recordMaintenanceAudit(opts.audit, {
@@ -253,6 +298,7 @@ export async function createBackup(opts: CreateBackupOptions): Promise<{
         withSecrets: result.manifest.withSecrets,
         withWorkspace: result.manifest.withWorkspace,
         live: !!opts.live,
+        encrypted: result.encrypted,
         dataDir: resolve(opts.dataDir),
       },
     });
@@ -278,12 +324,23 @@ export async function runBackupCommand(opts: BackupCommandOptions): Promise<numb
   const log = opts.log ?? ((msg: string) => console.log(msg));
   const error = opts.error ?? ((msg: string) => console.error(msg));
   try {
-    const result = await createBackup({ ...opts, log, actor: opts.actor ?? 'cli' });
+    // ADR-091: `--encrypt` требует внешний ключ (--key-file/env); значение ключа
+    // не логируется. Резолв до записи → нет плейнтекст-архива при ошибке ключа.
+    const encryptKey = opts.encrypt
+      ? await resolveBackupKey({ keyFile: opts.keyFile, env: opts.env })
+      : undefined;
+    const result = await createBackup({
+      ...opts,
+      ...(encryptKey !== undefined ? { encryptKey } : {}),
+      log,
+      actor: opts.actor ?? 'cli',
+    });
     log(`Бэкап создан: ${result.path}`);
     log(`  размер: ${result.bytes} Б`);
     log(`  записей: ${result.manifest.entries.length}`);
     log(`  секреты: ${result.manifest.withSecrets ? 'да' : 'нет'}`);
     log(`  workspace: ${result.manifest.withWorkspace ? 'да' : 'нет'}`);
+    log(`  шифрование: ${result.encrypted ? 'да' : 'нет'}`);
     log(`  контрольная сумма: ${result.manifest.contentChecksum}`);
     return 0;
   } catch (err) {

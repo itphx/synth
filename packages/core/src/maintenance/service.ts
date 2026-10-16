@@ -13,6 +13,7 @@ import { checkInstanceCompatibility } from '../storage/instance-meta.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { runDoctor } from './doctor.js';
 import { recordMaintenanceAudit } from './audit.js';
+import { encryptedMetaPath, readEncryptedMeta } from './backup-crypto.js';
 import {
   assertArchiveSchemaCompatible,
   readBackupManifest,
@@ -29,6 +30,15 @@ const MAINTENANCE_DIR = 'maintenance';
 const RESTORE_REQUEST_FILE = 'restore-request.json';
 /** Расширение архива бэкапа. */
 const ARCHIVE_SUFFIX = '.tar.gz';
+/** Расширение зашифрованного архива бэкапа (ADR-091). */
+export const ENCRYPTED_ARCHIVE_SUFFIX = '.tar.gz.enc';
+
+/**
+ * ADR-091: сообщение серверу о зашифрованном архиве — расшифровка доступна
+ * только через CLI (ключ не покидает оператора и серверу недоступен).
+ */
+export const ENCRYPTED_RESTORE_PROBLEM =
+  'Архив зашифрован — расшифровка доступна только через CLI (synth restore <archive.enc>); ключ серверу недоступен.';
 
 /** Метаданные архива бэкапа для admin-UI (ADR-091). */
 export interface MaintenanceBackupInfo {
@@ -50,6 +60,17 @@ export interface MaintenanceBackupInfo {
   withWorkspace: boolean;
   /** Число записей в манифесте. */
   entries: number;
+  /**
+   * ADR-091: архив зашифрован (`.tar.gz.enc`); метаданные — из sidecar
+   * `*.enc.meta.json` (манифест изнутри без ключа недоступен).
+   */
+  encrypted?: boolean;
+  /**
+   * ADR-091: метаданные зашифрованного архива доступны (sidecar есть и валиден).
+   * `false` — sidecar отсутствует/битый: в списке показывается только признак
+   * «зашифрован» и предупреждение «метаданные недоступны».
+   */
+  metadataAvailable?: boolean;
 }
 
 /** Отложенный запрос на восстановление (ADR-091): применяется при старте. */
@@ -132,12 +153,15 @@ function _ownedArchivePath(dataDir: string, archive: string): string {
   return target;
 }
 
-/** Имя — безопасный basename архива (`*.tar.gz`, без слэшей/`..`). */
+/**
+ * Имя — безопасный basename архива (`*.tar.gz` или зашифрованный `*.tar.gz.enc`,
+ * без слэшей/`..`). Sidecar `*.enc.meta.json` безопасным именем не считается.
+ */
 export function isSafeBackupName(name: string): boolean {
   if (!name || name === '.' || name === '..') return false;
   if (name.includes('/') || name.includes('\\') || name.includes('\0')) return false;
   if (name !== basename(name)) return false;
-  return name.endsWith(ARCHIVE_SUFFIX);
+  return name.endsWith(ARCHIVE_SUFFIX) || name.endsWith(ENCRYPTED_ARCHIVE_SUFFIX);
 }
 
 /**
@@ -166,14 +190,51 @@ async function _uniqueName(dir: string, name: string): Promise<string> {
   }
 }
 
-/** Читает метаданные одного архива; битый/чужой файл → `null` (не падаем). */
+/**
+ * Читает метаданные одного архива; битый/чужой файл → `null` (не падаем).
+ * Для зашифрованного `.tar.gz.enc` метаданные берутся из sidecar; если sidecar
+ * отсутствует/битый — возвращается запись с `encrypted:true` и
+ * `metadataAvailable:false` (список не рушится).
+ */
 async function _readBackupInfo(filePath: string): Promise<MaintenanceBackupInfo | null> {
   try {
     const info = await stat(filePath);
     if (!info.isFile()) return null;
+    const name = basename(filePath);
+    if (name.endsWith(ENCRYPTED_ARCHIVE_SUFFIX)) {
+      const meta = await readEncryptedMeta(filePath);
+      if (!meta) {
+        return {
+          name,
+          path: resolve(filePath),
+          bytes: info.size,
+          createdAt: info.mtime.toISOString(),
+          schemaVersion: 0,
+          instanceVersion: '',
+          withSecrets: false,
+          withWorkspace: false,
+          entries: 0,
+          encrypted: true,
+          metadataAvailable: false,
+        };
+      }
+      return {
+        name,
+        path: resolve(filePath),
+        bytes: info.size,
+        createdAt: meta.createdAt,
+        schemaVersion: meta.schemaVersion,
+        instanceVersion: meta.instanceVersion,
+        withSecrets: meta.withSecrets === true,
+        withWorkspace: meta.withWorkspace === true,
+        entries: meta.entries,
+        encrypted: true,
+        metadataAvailable: true,
+      };
+    }
     const manifest = await readBackupManifest(filePath);
     return {
-      name: basename(filePath),
+      name,
       path: resolve(filePath),
       bytes: info.size,
       createdAt: manifest.createdAt,
@@ -188,7 +249,7 @@ async function _readBackupInfo(filePath: string): Promise<MaintenanceBackupInfo 
   }
 }
 
-/** Список `*.tar.gz` в каталоге (каталога нет → пусто). */
+/** Список архивов `*.tar.gz`/`*.tar.gz.enc` в каталоге (каталога нет → пусто). */
 async function _listArchiveFiles(dir: string): Promise<string[]> {
   let entries: string[];
   try {
@@ -196,14 +257,16 @@ async function _listArchiveFiles(dir: string): Promise<string[]> {
   } catch {
     return [];
   }
-  return entries.filter((name) => name.endsWith(ARCHIVE_SUFFIX)).map((name) => join(dir, name));
+  return entries
+    .filter((name) => name.endsWith(ARCHIVE_SUFFIX) || name.endsWith(ENCRYPTED_ARCHIVE_SUFFIX))
+    .map((name) => join(dir, name));
 }
 
 /**
- * Список архивов инстанса (ADR-091): `{dataDir}/backups/*.tar.gz` и
- * `{dataDir}/backups/uploads/*.tar.gz`. Метаданные — из манифеста; битый или
- * чужой файл пропускается (список не рушится). Порядок — по `createdAt` (свежие
- * сверху).
+ * Список архивов инстанса (ADR-091): `{dataDir}/backups/*.tar.gz` (и
+ * зашифрованные `*.tar.gz.enc`) плюс то же в `{dataDir}/backups/uploads/`.
+ * Метаданные — из манифеста (или sidecar для `.enc`); битый или чужой файл
+ * пропускается (список не рушится). Порядок — по `createdAt` (свежие сверху).
  */
 export async function listBackups(dataDir: string): Promise<MaintenanceBackupInfo[]> {
   const files = [
@@ -253,6 +316,10 @@ export async function deleteBackup(
       continue;
     }
     await rm(target, { force: true });
+    // ADR-091: у зашифрованного архива есть sidecar-метаданные — удаляем вместе.
+    if (name.endsWith(ENCRYPTED_ARCHIVE_SUFFIX)) {
+      await rm(encryptedMetaPath(target), { force: true });
+    }
     await recordMaintenanceAudit(opts.audit, {
       op: 'backup.deleted',
       status: 'ok',
@@ -309,6 +376,10 @@ function _toManifestInfo(manifest: {
  * контрольные суммы. Ничего не пишет. Архив обязан лежать в
  * `{dataDir}/backups/` (с учётом `uploads/`).
  *
+ * ADR-091: зашифрованный архив (`.tar.gz.enc`) проверке не подлежит — расшифровка
+ * доступна только через CLI (ключ серверу недоступен), поэтому возвращается
+ * `{ok:false, problem}` с понятной причиной.
+ *
  * @returns `{ok:true, manifest}` или `{ok:false, problem}` (не бросает).
  */
 export async function validateRestoreArchive(opts: {
@@ -319,6 +390,9 @@ export async function validateRestoreArchive(opts: {
     const target = _ownedArchivePath(opts.dataDir, opts.archive);
     const info = await stat(target);
     if (!info.isFile()) throw new Error('Архив не найден.');
+    if (target.endsWith(ENCRYPTED_ARCHIVE_SUFFIX)) {
+      return { ok: false, problem: ENCRYPTED_RESTORE_PROBLEM };
+    }
     const manifest = await readBackupManifest(target);
     assertArchiveSchemaCompatible(manifest);
     await verifyBackupArchive(target, manifest);

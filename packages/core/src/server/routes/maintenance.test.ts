@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Hono } from 'hono';
@@ -448,6 +448,91 @@ describe('Maintenance API Routes (ADR-091/ADR-092)', () => {
         { method: 'DELETE' },
       );
       expect(del.status).toBe(204);
+    });
+  });
+
+  describe('зашифрованные архивы `.enc` (ADR-091)', () => {
+    const encName = 'synth-backup-1.2.3-20261016-120000.tar.gz.enc';
+    const encMeta = {
+      tool: 'synth-backup',
+      formatVersion: 1,
+      schemaVersion: 3,
+      instanceVersion: '1.2.3',
+      createdAt: '2026-10-16T12:00:00.000Z',
+      withSecrets: false,
+      withWorkspace: false,
+      entries: 7,
+      encrypted: true,
+    };
+
+    const stageEncrypted = async (): Promise<void> => {
+      const dir = join(tmpDir, 'backups');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, encName), 'encrypted-bytes', 'utf-8');
+      await writeFile(join(dir, `${encName}.meta.json`), JSON.stringify(encMeta), 'utf-8');
+    };
+
+    it('GET /backups включает `.enc` с encrypted:true (метаданные из sidecar)', async () => {
+      const app = makeApp();
+      await stageEncrypted();
+
+      const list = (await (await app.request('/api/v2/maintenance/backups')).json()) as {
+        backups: Array<{
+          name: string;
+          encrypted?: boolean;
+          metadataAvailable?: boolean;
+          entries: number;
+        }>;
+      };
+      const info = list.backups.find((b) => b.name === encName);
+      expect(info).toBeTruthy();
+      expect(info!.encrypted).toBe(true);
+      expect(info!.metadataAvailable).toBe(true);
+      expect(info!.entries).toBe(7);
+    });
+
+    it('download и DELETE для `.enc` работают (sidecar удаляется вместе)', async () => {
+      const app = makeApp();
+      await stageEncrypted();
+
+      const dl = await app.request(
+        `/api/v2/maintenance/backups/${encodeURIComponent(encName)}/download`,
+      );
+      expect(dl.status).toBe(200);
+      expect(dl.headers.get('Content-Type')).toBe('application/gzip');
+
+      const del = await app.request(
+        `/api/v2/maintenance/backups/${encodeURIComponent(encName)}`,
+        { method: 'DELETE' },
+      );
+      expect(del.status).toBe(204);
+      await expect(stat(join(tmpDir, 'backups', `${encName}.meta.json`))).rejects.toThrow();
+    });
+
+    it('POST /restore с `.enc` → 400 VALIDATION_ERROR с понятной причиной (не 500)', async () => {
+      const app = makeApp();
+      await stageEncrypted();
+
+      const res = await postJson(app, '/api/v2/maintenance/restore', {
+        archive: encName,
+        confirm: true,
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toContain('зашифрован');
+      expect(body.error.message).toContain('CLI');
+    });
+
+    it('POST /restore/validate `.enc` → 200 ok:false с причиной', async () => {
+      const app = makeApp();
+      await stageEncrypted();
+
+      const res = await postJson(app, '/api/v2/maintenance/restore/validate', { archive: encName });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; problem?: string };
+      expect(body.ok).toBe(false);
+      expect(body.problem).toContain('зашифрован');
     });
   });
 });

@@ -94,6 +94,34 @@ const BACKUP_2: MaintenanceBackupInfo = {
   entries: 12,
 }
 
+const BACKUP_ENC: MaintenanceBackupInfo = {
+  name: 'synth-backup-1.2.3-20261016-130000.tar.gz.enc',
+  path: '/var/synth/data/backups/synth-backup-1.2.3-20261016-130000.tar.gz.enc',
+  bytes: 2048,
+  createdAt: '2026-10-16T13:00:00.000Z',
+  schemaVersion: 3,
+  instanceVersion: '1.2.3',
+  withSecrets: false,
+  withWorkspace: false,
+  entries: 42,
+  encrypted: true,
+  metadataAvailable: true,
+}
+
+const BACKUP_ENC_NO_META: MaintenanceBackupInfo = {
+  name: 'synth-backup-1.2.3-20261016-140000.tar.gz.enc',
+  path: '/var/synth/data/backups/synth-backup-1.2.3-20261016-140000.tar.gz.enc',
+  bytes: 1024,
+  createdAt: '2026-10-16T14:00:00.000Z',
+  schemaVersion: 0,
+  instanceVersion: '',
+  withSecrets: false,
+  withWorkspace: false,
+  entries: 0,
+  encrypted: true,
+  metadataAvailable: false,
+}
+
 const STATUS: MaintenanceStatus = {
   version: '1.2.3',
   dataDir: '/var/synth/data',
@@ -525,6 +553,55 @@ describe('MaintenanceSettings — админ-раздел «Обслуживан
 
     expect(container.querySelector('[role="alert"]')!.textContent).toContain('boom')
   })
+
+  it('зашифрованный бэкап: бейдж, отключённое скачивание, вне выбора восстановления', async () => {
+    mocks.getStatus.mockResolvedValue({ ...STATUS, backups: [BACKUP, BACKUP_ENC] })
+    const container = await renderSettings()
+
+    const badge = container.querySelector(
+      `[data-testid="maintenance-backup-encrypted-${BACKUP_ENC.name}"]`,
+    )
+    expect(badge).toBeTruthy()
+    expect(badge!.textContent).toContain(enDict['maintenance.backups.badgeEncrypted'])
+
+    const encDownload = container.querySelector(
+      `[data-testid="maintenance-backup-download-${BACKUP_ENC.name}"]`,
+    ) as HTMLButtonElement
+    expect(encDownload.disabled).toBe(true)
+    expect(encDownload.getAttribute('title')).toContain('CLI')
+
+    // Незашифрованный бэкап по-прежнему скачивается.
+    const plainDownload = container.querySelector(
+      `[data-testid="maintenance-backup-download-${BACKUP.name}"]`,
+    ) as HTMLButtonElement
+    expect(plainDownload.disabled).toBe(false)
+
+    // В выборе восстановления — только незашифрованные архивы.
+    const trigger = container.querySelector(
+      '[data-testid="maintenance-restore-select"]',
+    ) as HTMLElement
+    await act(async () => {
+      trigger.click()
+    })
+    const listId = trigger.getAttribute('aria-controls')
+    const scope = listId ? document.getElementById(listId) ?? document.body : document.body
+    const optionTexts = [...scope.querySelectorAll('[role="option"]')].map((o) =>
+      o.textContent?.trim(),
+    )
+    expect(optionTexts.some((text) => text?.startsWith(BACKUP.name))).toBe(true)
+    expect(optionTexts.some((text) => text?.startsWith(BACKUP_ENC.name))).toBe(false)
+  })
+
+  it('зашифрованный бэкап без sidecar: пометка «метаданные недоступны»', async () => {
+    mocks.getStatus.mockResolvedValue({ ...STATUS, backups: [BACKUP_ENC_NO_META] })
+    const container = await renderSettings()
+
+    const note = container.querySelector(
+      `[data-testid="maintenance-backup-meta-unavailable-${BACKUP_ENC_NO_META.name}"]`,
+    )
+    expect(note).toBeTruthy()
+    expect(note!.textContent).toContain(enDict['maintenance.backups.metaUnavailable'])
+  })
 })
 
 describe('MaintenanceSettings — журнал обслуживания (ADR-092)', () => {
@@ -661,5 +738,11 @@ describe('MaintenanceSettings — утилиты, права (ADMIN) и i18n (AD
     expect(ruDict['maintenance.audit.clear']).toBeTruthy()
     expect(enDict['maintenance.audit.status.scheduled']).toBeTruthy()
     expect(ruDict['maintenance.audit.status.scheduled']).toBeTruthy()
+    expect(enDict['maintenance.backups.badgeEncrypted']).toBeTruthy()
+    expect(ruDict['maintenance.backups.badgeEncrypted']).toBeTruthy()
+    expect(enDict['maintenance.backups.encryptedCli']).toBeTruthy()
+    expect(ruDict['maintenance.backups.encryptedCli']).toBeTruthy()
+    expect(enDict['maintenance.backups.metaUnavailable']).toBeTruthy()
+    expect(ruDict['maintenance.backups.metaUnavailable']).toBeTruthy()
   })
 })

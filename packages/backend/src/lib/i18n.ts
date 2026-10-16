@@ -70,6 +70,8 @@ const en: Dictionary = {
   'errors.payloadTooLarge': 'Uploaded file exceeds the allowed size',
   'errors.validation.invalidAuditLimit': 'Invalid limit value (an integer 1..500)',
   'errors.validation.invalidAuditOp': 'Unknown maintenance journal operation',
+  'errors.validation.encryptedRestoreUnsupported':
+    'The archive is encrypted — decryption is available only via the CLI (synth restore <archive.enc>); the key is not available to the server.',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
@@ -176,6 +178,8 @@ const ru: Dictionary = {
   'errors.payloadTooLarge': 'Загруженный файл превышает допустимый размер',
   'errors.validation.invalidAuditLimit': 'Некорректное значение limit (целое 1..500)',
   'errors.validation.invalidAuditOp': 'Неизвестная операция журнала обслуживания',
+  'errors.validation.encryptedRestoreUnsupported':
+    'Архив зашифрован — расшифровка доступна только через CLI (synth restore <archive.enc>); ключ серверу недоступен.',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',

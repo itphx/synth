@@ -410,6 +410,9 @@ export function MaintenanceSettings() {
   }, [t, notify, loadAudit])
 
   const backups = status?.backups ?? []
+  // ADR-091: зашифрованные архивы восстанавливаются только через CLI (ключ
+  // серверу недоступен) — из выбора восстановления исключаются.
+  const restorableBackups = backups.filter((backup) => !backup.encrypted)
   const pendingRestore = status?.pendingRestore ?? null
 
   /** Строка-чекбокс опций снятия архива. */
@@ -684,8 +687,17 @@ export function MaintenanceSettings() {
                       size="sm"
                       className="min-h-10 min-w-10"
                       onClick={() => handleDownload(backup.name)}
-                      title={t('maintenance.backups.download')}
-                      aria-label={t('maintenance.backups.download')}
+                      disabled={!!backup.encrypted}
+                      title={
+                        backup.encrypted
+                          ? t('maintenance.backups.encryptedCli')
+                          : t('maintenance.backups.download')
+                      }
+                      aria-label={
+                        backup.encrypted
+                          ? t('maintenance.backups.encryptedCli')
+                          : t('maintenance.backups.download')
+                      }
                       data-testid={`maintenance-backup-download-${backup.name}`}
                     >
                       <Icon name="download" className="size-4" />
@@ -705,8 +717,16 @@ export function MaintenanceSettings() {
                   </div>
                 </div>
 
-                {(backup.withSecrets || backup.withWorkspace) && (
+                {(backup.encrypted || backup.withSecrets || backup.withWorkspace) && (
                   <div className="flex flex-wrap gap-1 min-w-0">
+                    {backup.encrypted && (
+                      <span
+                        className="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-primary"
+                        data-testid={`maintenance-backup-encrypted-${backup.name}`}
+                      >
+                        {t('maintenance.backups.badgeEncrypted')}
+                      </span>
+                    )}
                     {backup.withSecrets && (
                       <span className="shrink-0 rounded bg-status-warning/15 px-1.5 py-0.5 text-[0.625rem] font-medium text-status-warning">
                         {t('maintenance.backups.badgeSecrets')}
@@ -728,15 +748,27 @@ export function MaintenanceSettings() {
                   <span className="min-w-0 break-words">
                     {t('maintenance.backups.metaSize')}: {formatBytes(backup.bytes)}
                   </span>
-                  <span className="min-w-0 break-words">
-                    {t('maintenance.backups.metaSchema')}: {backup.schemaVersion}
-                  </span>
-                  <span className="min-w-0 break-words">
-                    {t('maintenance.backups.metaInstance')}: {backup.instanceVersion}
-                  </span>
-                  <span className="min-w-0 break-words">
-                    {t('maintenance.backups.metaEntries')}: {backup.entries}
-                  </span>
+                  {backup.metadataAvailable !== false && (
+                    <>
+                      <span className="min-w-0 break-words">
+                        {t('maintenance.backups.metaSchema')}: {backup.schemaVersion}
+                      </span>
+                      <span className="min-w-0 break-words">
+                        {t('maintenance.backups.metaInstance')}: {backup.instanceVersion}
+                      </span>
+                      <span className="min-w-0 break-words">
+                        {t('maintenance.backups.metaEntries')}: {backup.entries}
+                      </span>
+                    </>
+                  )}
+                  {backup.metadataAvailable === false && (
+                    <span
+                      className="min-w-0 break-words text-status-warning"
+                      data-testid={`maintenance-backup-meta-unavailable-${backup.name}`}
+                    >
+                      {t('maintenance.backups.metaUnavailable')}
+                    </span>
+                  )}
                 </div>
               </li>
             ))}
@@ -789,11 +821,11 @@ export function MaintenanceSettings() {
             setRestoreError(null)
           }}
           triggerTestId="maintenance-restore-select"
-          items={backups.map((backup) => ({ label: backup.name, value: backup.name }))}
+          items={restorableBackups.map((backup) => ({ label: backup.name, value: backup.name }))}
         >
           <SelectContent>
             <SelectItem value="">{t('maintenance.restore.selectPlaceholder')}</SelectItem>
-            {backups.map((backup) => (
+            {restorableBackups.map((backup) => (
               <SelectItem key={backup.name} value={backup.name}>
                 {backup.name}
               </SelectItem>

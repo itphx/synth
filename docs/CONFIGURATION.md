@@ -107,6 +107,18 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, ADR-052/O1; см. ниже) |
 
+### Env-переменные обслуживания (ADR-091)
+
+Ключ шифрования архива бэкапа — **внешний ключ оператора** (не мастер-ключ инстанса).
+Резолвится для `synth backup --encrypt` и `synth restore <archive>.tar.gz.enc`; приоритет:
+флаг `--key-file` > `SYNTH_BACKUP_KEY_FILE` > `SYNTH_BACKUP_KEY` (32 байта в base64 или 64
+hex-символа). Ключ не логируется и не попадает в аудит; храните его отдельно от архива.
+
+| Переменная | Назначение |
+|-----------|------------|
+| `SYNTH_BACKUP_KEY` | Ключ шифрования архива бэкапа (32 байта base64 / 64 hex), ADR-091 |
+| `SYNTH_BACKUP_KEY_FILE` | Путь к файлу с ключом шифрования архива (приоритетнее `SYNTH_BACKUP_KEY`), ADR-091 |
+
 Пример:
 
 ```bash

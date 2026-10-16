@@ -990,8 +990,19 @@ Destructive operations (applying migrations, scheduling a restore) require `{con
 
 **`MaintenanceBackupInfo` fields:** `name` (basename), `path`, `bytes`, `createdAt`,
 `schemaVersion` (from the manifest), `instanceVersion`, `withSecrets`, `withWorkspace`,
-`entries` (the manifest record count). **`PendingRestoreRequest`:** `archive` (an absolute path
+`entries` (the manifest record count), `encrypted?` (ADR-091: the archive is encrypted),
+`metadataAvailable?` (for `.enc`: the sidecar metadata exists and is valid). **`PendingRestoreRequest`:** `archive` (an absolute path
 only inside `{dataDir}/backups/`), `requestedBy?`, `requestedAt`, `safetyCopy`.
+
+**Encrypted archives (ADR-091).** An archive taken with the CLI `synth backup --encrypt` is a
+container `<archive>.tar.gz.enc` (+ a plaintext sidecar `<archive>.tar.gz.enc.meta.json` with a
+summary and no paths/hashes). Such archives are listed by `GET /backups` (`encrypted: true`; if the
+sidecar is missing or corrupted — `metadataAvailable: false`, "metadata unavailable"), and can be
+downloaded and deleted via the API, but **cannot be restored via the API**: `POST /restore` on
+`.enc` returns 400 `VALIDATION_ERROR` ("decryption is available only via the CLI"), and
+`POST /restore/validate` returns `{ok:false, problem}`. Decryption is CLI-only
+(`synth restore <archive>.enc`, an operator key); `POST /backups` does **not** support the
+`encrypt` option — the server has no key.
 
 **Maintenance audit journal (ADR-092).** A `MaintenanceAuditEntry` is an append-only lifecycle
 record: `id` (`ma_<uuid>`), `ts` (ISO-8601), `op` (`backup.created`/`backup.failed`/

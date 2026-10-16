@@ -95,8 +95,8 @@ pnpm clean                  # очистка dist/
 
 ```bash
 synth doctor                 # health инстанса (--json) — ADR-091
-synth backup --out <dir>     # архив каталога данных (--with-secrets|--with-workspace|--live) — ADR-091
-synth restore <archive>      # восстановление (--dry-run|--yes|--no-safety-copy) — ADR-091
+synth backup --out <dir>     # архив каталога данных (--with-secrets|--with-workspace|--live|--encrypt [--key-file]) — ADR-091
+synth restore <archive>      # восстановление (--dry-run|--yes|--no-safety-copy|--key-file) — ADR-091
 synth migrate                # миграции схемы данных (--dry-run|--yes) — ADR-092
 synth update [--apply] [--to <version>]  # проверка/обновление/откат пакета (--dry-run|--yes|--json) — ADR-092
 synth uninstall              # удаление инстанса (--purge|--dry-run|--yes; по умолчанию данные сохраняются) — ADR-092

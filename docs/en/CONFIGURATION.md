@@ -107,6 +107,19 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
 
+### Maintenance env variables (ADR-091)
+
+The backup archive encryption key is an **external operator key** (not the instance master key).
+It is resolved for `synth backup --encrypt` and `synth restore <archive>.tar.gz.enc`; priority:
+the `--key-file` flag > `SYNTH_BACKUP_KEY_FILE` > `SYNTH_BACKUP_KEY` (32 bytes in base64 or 64 hex
+characters). The key is never logged or written to the audit journal; keep it separate from the
+archive.
+
+| Variable | Purpose |
+|-----------|------------|
+| `SYNTH_BACKUP_KEY` | Backup archive encryption key (32 bytes base64 / 64 hex), ADR-091 |
+| `SYNTH_BACKUP_KEY_FILE` | Path to a file with the archive encryption key (takes precedence over `SYNTH_BACKUP_KEY`), ADR-091 |
+
 Example:
 
 ```bash

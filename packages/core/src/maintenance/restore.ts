@@ -3,7 +3,7 @@
 // dry-run → подтверждение (`--yes`) → страховочная копия → очистка цели →
 // извлечение. Восстановление — возврат к снимку: данные, появившиеся после
 // бэкапа и отсутствующие в архиве, удаляются.
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { SCHEMA_VERSION } from '../storage/instance-meta.js';
@@ -15,6 +15,7 @@ import {
   safetyCopyPath,
   type BackupManifest,
 } from './backup.js';
+import { decryptArchiveToFile, isEncryptedArchivePath, resolveBackupKey } from './backup-crypto.js';
 import { recordMaintenanceAudit } from './audit.js';
 
 /** Расхождение контрольной суммы файла при проверке архива (ADR-091). */
@@ -39,9 +40,17 @@ const BACKUPS_DIR = 'backups';
  */
 const WORKSPACES_DIR = 'workspaces';
 
+/**
+ * Транзиентный каталог `{dataDir}/tmp` (ADR-091): в него кладётся расшифрованный
+ * во временный файл архив. Каталог исключён из архивов бэкапа; при восстановлении
+ * он сохраняется, пока в нём лежит временный файл (иначе он был бы вычищен на
+ * шаге «возврата к снимку» до извлечения).
+ */
+const TMP_DIR = 'tmp';
+
 /** Опции `restoreBackup` (ADR-091). */
 export interface RestoreOptions {
-  /** Путь к архиву backup. */
+  /** Путь к архиву backup (`.tar.gz` или зашифрованный `.tar.gz.enc`). */
   archive: string;
   /** Каталог данных (цель восстановления). */
   dataDir: string;
@@ -57,6 +66,15 @@ export interface RestoreOptions {
   audit?: MaintenanceAuditRepository;
   /** ADR-092: инициатор операции (`'cli'` | `userId`). */
   actor?: string;
+  /**
+   * ADR-091: 32-байтовый внешний ключ для расшифровки `.tar.gz.enc`
+   * (если не задан — резолвится из `keyFile`/env).
+   */
+  encryptKey?: Buffer;
+  /** ADR-091: путь к файлу с ключом шифрования (флаг CLI `--key-file`). */
+  keyFile?: string;
+  /** ADR-091: окружение для env-резолва ключа (по умолчанию — `process.env`). */
+  env?: NodeJS.ProcessEnv;
 }
 
 /** Опции CLI-команды `synth restore` (ADR-091). */
@@ -271,6 +289,11 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
 /**
  * Внутренняя реализация восстановления (без аудита); вызывается из
  * `restoreBackup`, которая фиксирует событие `restore.applied`/`restore.failed`.
+ *
+ * ADR-091: если входной архив зашифрован (`.tar.gz.enc`), он потоково
+ * расшифровывается внешним ключом во временный файл `{dataDir}/tmp/…`, который
+ * удаляется в `finally` (даже при ошибке); дальше идёт обычный путь
+ * восстановления по расшифрованному tar.gz.
  */
 async function _restoreBackup(opts: RestoreOptions): Promise<{
   restored: number;
@@ -279,9 +302,68 @@ async function _restoreBackup(opts: RestoreOptions): Promise<{
   manifest: BackupManifest;
 }> {
   const log = opts.log ?? ((): void => {});
-  const warn = opts.warn ?? ((): void => {});
-  const archive = resolve(opts.archive);
   const dataDir = resolve(opts.dataDir);
+  const sourceArchive = resolve(opts.archive);
+  let archive = sourceArchive;
+  let tempArchive: string | undefined;
+  let encryptKey: Buffer | undefined;
+
+  // Ключ и каталог готовятся до `try` — при ошибке здесь временный файл ещё не
+  // создан. Сама расшифровка идёт внутри `try`: `decryptArchiveToFile` пишет
+  // плейнтекст потоково и при несовпадении auth-tag (неверный ключ/повреждение)
+  // успевает создать частичный файл — `finally` гарантирует его удаление на любом
+  // пути выхода (успех, ошибка расшифровки, ошибка восстановления, `--dry-run`).
+  if (isEncryptedArchivePath(archive)) {
+    encryptKey =
+      opts.encryptKey ?? (await resolveBackupKey({ keyFile: opts.keyFile, env: opts.env }));
+    tempArchive = join(dataDir, TMP_DIR, `restore-decrypt-${randomUUID()}.tar.gz`);
+    await mkdir(dirname(tempArchive), { recursive: true });
+  }
+
+  try {
+    if (tempArchive && encryptKey) {
+      await decryptArchiveToFile(archive, tempArchive, encryptKey);
+      // Логируем путь шифрованного источника, а не путь временного плейнтекста
+      // (внутренняя деталь; окно утечки минимизируется).
+      log(`Архив расшифрован: ${archive}`);
+      archive = tempArchive;
+    }
+    return await _restoreFromArchive({
+      ...opts,
+      archive,
+      dataDir,
+      // Путь источника для вывода dry-run — без временного плейнтекста.
+      displayArchive: sourceArchive,
+      keepTempDir: tempArchive !== undefined,
+    });
+  } finally {
+    if (tempArchive) await rm(tempArchive, { force: true });
+  }
+}
+
+/**
+ * Основной путь восстановления из (возможно, уже расшифрованного) архива
+ * (ADR-091): манифест → формат → версия схемы → контрольные суммы → dry-run →
+ * страховочная копия → очистка цели → извлечение.
+ */
+async function _restoreFromArchive(
+  opts: RestoreOptions & {
+    archive: string;
+    dataDir: string;
+    keepTempDir?: boolean;
+    /** Путь-источник для вывода (не временный плейнтекст); по умолчанию — `archive`. */
+    displayArchive?: string;
+  },
+): Promise<{
+  restored: number;
+  removed: number;
+  safetyCopyPath?: string;
+  manifest: BackupManifest;
+}> {
+  const log = opts.log ?? ((): void => {});
+  const warn = opts.warn ?? ((): void => {});
+  const archive = opts.archive;
+  const dataDir = opts.dataDir;
   const dryRun = !!opts.dryRun;
   const safetyCopy = opts.safetyCopy !== false;
 
@@ -302,11 +384,14 @@ async function _restoreBackup(opts: RestoreOptions): Promise<{
   const keepWorkspaces = !_archiveContainsWorkspaces(manifest);
   const keep = new Set<string>([BACKUPS_DIR]);
   if (keepWorkspaces) keep.add(WORKSPACES_DIR);
+  // ADR-091: временный расшифрованный архив лежит в `tmp/` — сохраняем каталог
+  // до извлечения (иначе «возврат к снимку» вычистил бы его до чтения).
+  if (opts.keepTempDir) keep.add(TMP_DIR);
 
   // 5. Предпросмотр.
   if (dryRun) {
     const stale = (await _listTopLevel(dataDir)).filter((name) => !keep.has(name));
-    log(`[dry-run] Восстановление из ${archive} в ${dataDir}`);
+    log(`[dry-run] Восстановление из ${opts.displayArchive ?? archive} в ${dataDir}`);
     log(`  схема архива: ${manifest.schemaVersion} (текущая ${SCHEMA_VERSION})`);
     log(`  версия пакета в архиве: ${manifest.instanceVersion}`);
     log(`  секреты: ${manifest.withSecrets ? 'да' : 'нет'}`);
@@ -409,6 +494,9 @@ export async function runRestoreCommand(opts: RestoreCommandOptions): Promise<nu
       warn: error,
       audit: opts.audit,
       actor: opts.actor ?? 'cli',
+      ...(opts.encryptKey !== undefined ? { encryptKey: opts.encryptKey } : {}),
+      ...(opts.keyFile !== undefined ? { keyFile: opts.keyFile } : {}),
+      ...(opts.env !== undefined ? { env: opts.env } : {}),
     });
     return 0;
   } catch (err) {

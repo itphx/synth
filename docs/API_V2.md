@@ -991,8 +991,18 @@ Admin-API обслуживания инстанса: health (`synth doctor`), в
 
 **Поля `MaintenanceBackupInfo`:** `name` (basename), `path`, `bytes`, `createdAt`,
 `schemaVersion` (из манифеста), `instanceVersion`, `withSecrets`, `withWorkspace`, `entries`
-(число записей манифеста). **`PendingRestoreRequest`:** `archive` (абсолютный путь только
+(число записей манифеста), `encrypted?` (ADR-091: архив зашифрован), `metadataAvailable?`
+(для `.enc`: sidecar-метаданные есть и валидны). **`PendingRestoreRequest`:** `archive` (абсолютный путь только
 внутри `{dataDir}/backups/`), `requestedBy?`, `requestedAt`, `safetyCopy`.
+
+**Зашифрованные архивы (ADR-091).** Архив, снятый CLI-командой `synth backup --encrypt`, — это
+контейнер `<archive>.tar.gz.enc` (+ плейнтекст-sidecar `<archive>.tar.gz.enc.meta.json` со сводкой
+без путей и хешей). Такие архивы видны в `GET /backups` (`encrypted: true`; при отсутствии или
+повреждении sidecar — `metadataAvailable: false`, «метаданные недоступны»), их можно скачать и
+удалить по API, но **восстановить через API нельзя**: `POST /restore` по `.enc` отвечает
+400 `VALIDATION_ERROR` («расшифровка доступна только через CLI»), а `POST /restore/validate` —
+`{ok:false, problem}`. Расшифровка — только в CLI (`synth restore <archive>.enc`, ключ оператора);
+опцию `encrypt` `POST /backups` **не поддерживает** — сервер ключом не располагает.
 
 **Аудит-журнал обслуживания (ADR-092).** `MaintenanceAuditEntry` — append-only запись
 жизненного цикла: `id` (`ma_<uuid>`), `ts` (ISO-8601), `op` (`backup.created`/`backup.failed`/
