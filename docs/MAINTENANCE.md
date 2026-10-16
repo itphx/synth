@@ -44,7 +44,9 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
 6. **Первый вход и роли.** Standalone — один API-ключ (`--api-key`/`SYNTH_API_KEY`/`core.apiKey`, иначе
    автогенерация в `{dataDir}/secrets/api-key`) → роль ADMIN. Managed — OIDC/Keycloak (учётки и настройки —
    [KEYCLOAK.md](./KEYCLOAK.md)) либо `SYNTH_API_KEY`. Роли: `ADMIN`, `USER`, `LEAD`, `AUDITOR`.
-   *Ожидаемо:* аутентифицированный запрос к `GET /api/v2/sessions` отвечает 200, без кред — 401.
+   *Ожидаемо:* аутентифицированный запрос к `GET /api/v2/sessions` отвечает 200, без кред — 401. Правило
+   единое для всех guard'ов: без аутентификации — 401 `UNAUTHORIZED` (в т.ч. на ADMIN-роутах); 403 `FORBIDDEN` —
+   только у аутентифицированного пользователя без нужной роли.
 
 ## Проверка и диагностика
 

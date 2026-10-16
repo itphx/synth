@@ -22,6 +22,11 @@ function scopeDenied(c: Context): Response {
   );
 }
 
+/** `true`, если пользователь аутентифицирован (в контексте есть `user`). */
+function isAuthenticated(c: { get(key: 'user'): unknown }): boolean {
+  return !!c.get('user');
+}
+
 /** `true`, если в контексте ADMIN (роли synthetic service-пользователя или человека). */
 function isAdmin(c: { get(key: 'user'): unknown }): boolean {
   const user = c.get('user') as { roles?: string[] } | undefined;
@@ -33,7 +38,8 @@ function isAdmin(c: { get(key: 'user'): unknown }): boolean {
  * - запрос с service-key → требуется хотя бы один из `scopes`
  *   (`403 SCOPE_REQUIRED` иначе);
  * - интерактивные креды (cookie/debug/OIDC/API-key/локальный ключ) → требуем
- *   роль ADMIN (`403 FORBIDDEN` иначе) — прежнее поведение этих роутов.
+ *   роль ADMIN: нет аутентификации → `401 UNAUTHORIZED`, аутентифицирован без
+ *   роли → `403 FORBIDDEN` (семантика HTTP; раньше оба случая склеивались в 403).
  *
  * Требует уже отработавшего `attachUser`/`requireAuth` (пользователь/ключ в
  * контексте). Используется на мутациях реестра MCP (`/servers*`), записи
@@ -48,6 +54,12 @@ export function requireAdminOrScope(...scopes: string[]) {
       }
       await next();
       return;
+    }
+    if (!isAuthenticated(c)) {
+      return c.json(
+        { error: { code: 'UNAUTHORIZED', message: t('auth.unauthorized', undefined, c) } },
+        401,
+      );
     }
     if (!isAdmin(c)) {
       return c.json(

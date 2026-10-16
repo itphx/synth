@@ -233,6 +233,23 @@ describe('backend: контракт монтирования роутов (mount
     }
   });
 
+  it('ADMIN-роуты (requirePermission/requireAdminOrScope): аноним → 401, USER → 403, ADMIN → 2xx', async () => {
+    // Семантика HTTP на РЕАЛЬНОМ наборе guard'ов смонтированного приложения:
+    // нет аутентификации → 401 UNAUTHORIZED; аутентифицирован без роли → 403 FORBIDDEN.
+    for (const path of ['/api/v2/maintenance/status', '/api/v2/service-keys', '/api/v2/webhooks']) {
+      const anon = await req(path);
+      expect(anon.status, `аноним ${path}`).toBe(401);
+      expect(((await anon.json()) as { error: { code: string } }).error.code).toBe('UNAUTHORIZED');
+
+      const user = await req(path, {}, USER);
+      expect(user.status, `USER ${path}`).toBe(403);
+      expect(((await user.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+
+      const admin = await req(path, {}, ADMIN);
+      expect([401, 403], `ADMIN ${path} (получен ${admin.status})`).not.toContain(admin.status);
+    }
+  });
+
   // ---------------------------------------------------------------------------
   // 4. RBAC-матрица по ролям
   // ---------------------------------------------------------------------------

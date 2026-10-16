@@ -2,6 +2,7 @@ import type { AuthConfig, User } from '@itphx/synth-shared';
 import { isServiceKeySecret } from '@itphx/synth-core';
 import type { ServiceKeyCredential } from '@itphx/synth-core';
 import { createMiddleware } from 'hono/factory';
+import type { Context } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { t } from '../lib/i18n.js';
 import { createLazyOidcClient } from './oidc.js';
@@ -197,10 +198,24 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
     await next();
   });
 
+  /**
+   * Семантика HTTP для ролевых guard'ов (`requireAdmin`/`requirePermission`):
+   * нет аутентификации → `401 UNAUTHORIZED`; аутентифицирован, но роли не хватает
+   * → `403 FORBIDDEN`. Возвращает готовый 401-ответ, если пользователя в контексте
+   * нет (иначе `null`). Раньше оба случая склеивались в 403, и анонимный запрос к
+   * ADMIN-роуту получал 403 вместо 401.
+   */
+  const ensureAuthenticated = (c: Context): Response | null => {
+    if (c.get('user')) return null;
+    return c.json({ error: { code: 'UNAUTHORIZED', message: t('auth.unauthorized', undefined, c) } }, 401);
+  };
+
   // Middleware: требовать роль ADMIN
   const requireAdmin = createMiddleware(async (c, next) => {
-    const user = c.get('user') as User | undefined;
-    if (!user || !user.roles.includes('ADMIN')) {
+    const unauthenticated = ensureAuthenticated(c);
+    if (unauthenticated) return unauthenticated;
+    const user = c.get('user') as User;
+    if (!user.roles.includes('ADMIN')) {
       return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
     await next();
@@ -225,8 +240,10 @@ export function createAuthMiddleware(config: AuthMiddlewareConfig) {
 
   // Middleware: требовать одну из указанных ролей (например, ADMIN/AUDITOR)
   const requirePermission = (...roles: string[]) => createMiddleware(async (c, next) => {
-    const user = c.get('user') as User | undefined;
-    if (!user || !roles.some((r) => user.roles.includes(r))) {
+    const unauthenticated = ensureAuthenticated(c);
+    if (unauthenticated) return unauthenticated;
+    const user = c.get('user') as User;
+    if (!roles.some((r) => user.roles.includes(r))) {
       return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
     }
     await next();

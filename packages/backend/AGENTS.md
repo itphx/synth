@@ -69,7 +69,7 @@
 - Всё API — единое дерево `/api/v2/*`; админка отличается правами, не путём.
 - Роутер — фабрика `createXxxRoutes(...)`, монтируется в `src/app/mount-routes.ts` через `app.route(...)`. Новый роутер = фабрика + одна строка в `mount-routes.ts`.
 - RBAC — только через `AuthKit`: `getCurrentUser`, `attachUser`, `requireAuth`, `requireAdmin`, `requirePermission(...roles)` (`src/auth/middleware.ts`). Проверок ролей внутри роутеров не хардкодить.
-- `attachUser` вешается глобально (`app.use('*', ...)`) до роутов и просто кладёт `c.set('user')`; `requireAuth` возвращает 401, `requireAdmin`/`requirePermission` — 403.
+- `attachUser` вешается глобально (`app.use('*', ...)`) до роутов и просто кладёт `c.set('user')`. Семантика HTTP у guard'ов: нет аутентификации → **401 `UNAUTHORIZED`**; аутентифицирован, но роли/права не хватает → **403 `FORBIDDEN`** (`requireAuth` — только 401; `requireAdmin`/`requirePermission` — 401 без пользователя, 403 без нужной роли).
 - Формат ошибки — `{ error: { code, message } }`; встречающиеся коды: `VALIDATION_ERROR`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN`, `BAD_REQUEST`, `RATE_LIMITED`, `INTERNAL_ERROR`. Исключение: FS и git отдают shared-форму `{ error: { error, code } }` (`FsError`).
 - Общий 404 — `app.notFound` в `src/app.ts`; тексты — через `t()`.
 - Rate limiter (`createRateLimiter(max, windowMs)`; in-memory, ключ — `Authorization` или `x-forwarded-for`) вешается на публичные мутации: `prompt`, `spa-login`, `providers/:name/test`, `models/fetch`, LLM-прокси.
@@ -115,7 +115,7 @@
 
 - Порядок в `getCurrentUser`: service-key (`synth_svc_…`, ADR-052 — синтетический пользователь `{id:'service:<keyId>', roles}` + `scopes`/`allowedProjects`) → cookie `user_session` → debug test-users (по `Authorization`) → OIDC JWT (если `oidc.enabled`) → единый API-key (`SYNTH_API_KEY`, роль ADMIN, вне debug/OIDC). Резолвер ключа — `config.resolveServiceKey` (`ServiceApiKeyStore.resolveBySecret` + `touch`), неизвестный/отозванный/истёкший → 401.
 - Scope-гейты service-key (`scopeGuard`/`serviceProjectProjection`, `src/auth/service-scope.ts`) работают поверх `requireAuth`/`requirePermission`: ограничивают только service-key (`403 SCOPE_REQUIRED`/`PROJECT_FORBIDDEN`), для интерактивных кред — no-op.
-- Комбинированные guard'ы `src/auth/guards.ts` (ADR-052/O1): `requireAdminOrScope(...scopes)` — service-key требует scope, интерактив — роль ADMIN (роуты `/mcp/servers*` PUT/DELETE/test, запись скиллов, чтение user-API); `requireScopeForServiceKey(...scopes)` — service-key требует scope, интерактив без изменений (`POST /mcp/registry`).
+- Комбинированные guard'ы `src/auth/guards.ts` (ADR-052/O1): `requireAdminOrScope(...scopes)` — service-key требует scope (`403 SCOPE_REQUIRED`), интерактив — роль ADMIN (нет аутентификации → `401 UNAUTHORIZED`, аутентифицирован без ADMIN → `403 FORBIDDEN`); роуты `/mcp/servers*` PUT/DELETE/test, запись скиллов, чтение user-API. `requireScopeForServiceKey(...scopes)` — service-key требует scope, интерактив без изменений (`POST /mcp/registry`).
 - Cookie-сессии — in-memory (`Map`), переживают только процесс; срок — `sessionMaxAgeMinutes`.
 - Логин/логаут/сессия и **профиль** — под `/auth/*`: `/auth/profile`, `/auth/profile/preferences`, `/auth/profile/avatar`.
 - Debug-ключи и `SYNTH_AUTH_DEBUG` описаны в корневом `AGENTS.md` — не дублировать; сами ключи задаёт `buildAuthConfig` в `src/lib/app-config.ts`.

@@ -80,8 +80,10 @@ Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 | `getCurrentUser(c)` | Пытается определить пользователя по cookie/debug/JWT/API key; возвращает `User \| null` без ошибки. |
 | `attachUser` | Глобальный middleware `app.use('*', ...)`: кладёт пользователя в `c.set('user', ...)`, если он есть, и всегда вызывает `next()`. |
 | `requireAuth` | Нет пользователя → `401 {error:{code:'UNAUTHORIZED'}}`; иначе кладёт в контекст и `next()`. |
-| `requireAdmin` | Нет роли `ADMIN` → `403 {error:{code:'FORBIDDEN'}}`. |
-| `requirePermission(...roles)` | Нет ни одной из перечисленных ролей → `403 FORBIDDEN`. Используют `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
+| `requireAdmin` | Нет пользователя → `401 UNAUTHORIZED`; пользователь есть, но нет роли `ADMIN` → `403 {error:{code:'FORBIDDEN'}}`. |
+| `requirePermission(...roles)` | Нет пользователя → `401 UNAUTHORIZED`; пользователь есть, но ни одной из перечисленных ролей → `403 FORBIDDEN`. Используют `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), webhooks (`ADMIN`), maintenance (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
+
+> **Правило 401/403 (semantics):** отсутствие аутентификации → `401 UNAUTHORIZED`; аутентифицирован, но роли/прав не хватает → `403 FORBIDDEN`; service-key без нужного scope → `403 SCOPE_REQUIRED` (это про scope, не про аутентификацию).
 
 Отдельно от `middleware.ts` — **scope-гейты service-key** (`packages/backend/src/auth/service-scope.ts`:
 `scopeGuard`/`serviceProjectProjection`, делегируют core-`requireScope`/`checkServiceProjectProjection` и отдают
@@ -135,8 +137,8 @@ backend и standalone монтируют одну и ту же фабрику.
 | Код | Где |
 |---|---|
 | `VALIDATION_ERROR`, `BAD_REQUEST`, `INVALID_REQUEST` | валидация тел/параметров |
-| `UNAUTHORIZED` | `requireAuth`, auth-роуты, неверный/отозванный/истёкший service-key (ADR-052) |
-| `FORBIDDEN` | `requireAdmin`/`requirePermission`, filesystem |
+| `UNAUTHORIZED` | Нет аутентификации (`requireAuth`, `requireAdmin`, `requirePermission`, `requireAdminOrScope`), auth-роуты, неверный/отозванный/истёкший service-key (ADR-052) |
+| `FORBIDDEN` | Аутентифицирован, но роли/прав не хватает (`requireAdmin`/`requirePermission`/`requireAdminOrScope`), filesystem |
 | `SCOPE_REQUIRED` | service-key без нужного scope (ADR-052; только для service-key) |
 | `PROJECT_FORBIDDEN` | service-key с `allowedProjects` без доступа к проекту (ADR-052) |
 | `NOT_FOUND` | отсутствие сессии/проекта/провайдера/модели/агента/файла/лога |

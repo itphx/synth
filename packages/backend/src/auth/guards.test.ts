@@ -97,3 +97,21 @@ describe('backend skills writeGuard — ADMIN или scope addons:install (ADR-0
     expect(reload).toHaveBeenCalled();
   });
 });
+
+// Семантика HTTP у комбинированного guard'а: без service-key и без пользователя
+// (аноним) → 401 UNAUTHORIZED, а не 403; аутентифицирован без ADMIN → 403 FORBIDDEN.
+describe('requireAdminOrScope — 401 без аутентификации (ADR-052)', () => {
+  const app = new Hono();
+  app.get('/guard', requireAdminOrScope('addons:install'), (c) => c.json({ ok: true }));
+
+  const call = (auth?: string): Promise<Response> =>
+    Promise.resolve(app.request('/guard', {
+      headers: auth ? { Authorization: auth } : {},
+    }));
+
+  it('без cred и без пользователя → 401 UNAUTHORIZED', async () => {
+    const res = await call();
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('UNAUTHORIZED');
+  });
+});

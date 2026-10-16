@@ -80,8 +80,10 @@ Debug users (`SYNTH_AUTH_DEBUG=true`):
 | `getCurrentUser(c)` | Tries to determine the user from cookie/debug/JWT/API key; returns `User \| null` without an error. |
 | `attachUser` | Global middleware `app.use('*', ...)`: puts the user into `c.set('user', ...)` if it exists and always calls `next()`. |
 | `requireAuth` | No user → `401 {error:{code:'UNAUTHORIZED'}}`; otherwise puts them into the context and calls `next()`. |
-| `requireAdmin` | No `ADMIN` role → `403 {error:{code:'FORBIDDEN'}}`. |
-| `requirePermission(...roles)` | None of the listed roles → `403 FORBIDDEN`. Used by `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
+| `requireAdmin` | No user → `401 UNAUTHORIZED`; user present but no `ADMIN` role → `403 {error:{code:'FORBIDDEN'}}`. |
+| `requirePermission(...roles)` | No user → `401 UNAUTHORIZED`; user present but holds none of the listed roles → `403 FORBIDDEN`. Used by `audit`, `logs` (`ADMIN`,`AUDITOR`), `sessions/:id/secrets` (`ADMIN`,`AUDITOR`), service-keys (`ADMIN`), webhooks (`ADMIN`), maintenance (`ADMIN`), events bindings/routes/keys (`ADMIN`,`LEAD`). |
+
+> **401/403 rule (semantics):** no authentication → `401 UNAUTHORIZED`; authenticated but lacking the role/rights → `403 FORBIDDEN`; a service key missing the required scope → `403 SCOPE_REQUIRED` (this is about scope, not authentication).
 
 Separate from `middleware.ts` — **service key scope gates** (`packages/backend/src/auth/service-scope.ts`:
 `scopeGuard`/`serviceProjectProjection`, they delegate to the core `requireScope`/`checkServiceProjectProjection` and return
@@ -135,8 +137,8 @@ Actual codes (from the code):
 | Code | Where |
 |---|---|
 | `VALIDATION_ERROR`, `BAD_REQUEST`, `INVALID_REQUEST` | validation of bodies/parameters |
-| `UNAUTHORIZED` | `requireAuth`, auth routes, an invalid/revoked/expired service key (ADR-052) |
-| `FORBIDDEN` | `requireAdmin`/`requirePermission`, filesystem |
+| `UNAUTHORIZED` | No authentication (`requireAuth`, `requireAdmin`, `requirePermission`, `requireAdminOrScope`), auth routes, an invalid/revoked/expired service key (ADR-052) |
+| `FORBIDDEN` | Authenticated but lacking the role/rights (`requireAdmin`/`requirePermission`/`requireAdminOrScope`), filesystem |
 | `SCOPE_REQUIRED` | service key without the required scope (ADR-052; service key only) |
 | `PROJECT_FORBIDDEN` | service key with `allowedProjects` and no access to the project (ADR-052) |
 | `NOT_FOUND` | a missing session/project/provider/model/agent/file/log |
