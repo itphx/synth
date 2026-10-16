@@ -5,6 +5,7 @@ import type { ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, isAbortError, signalAborted, abortedResult } from './abort.js';
 import { PRIVATE_EGRESS_POLICY, EgressBlockedError, fetchWithEgressGuard } from '../net/egress-guard.js';
+import { egressFetch } from '../../security/tls.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
@@ -142,7 +143,7 @@ async function duckDuckGoSearch(query: string, limit: number, abortSignal?: Abor
     const unlink = linkSignal(controller, abortSignal);
 
     try {
-      const response = await fetch(DDG_SEARCH_URL, {
+      const response = await egressFetch(DDG_SEARCH_URL, {
         method: 'POST',
         signal: controller.signal,
         headers: {
@@ -225,7 +226,7 @@ async function bingSearch(query: string, limit: number, abortSignal?: AbortSigna
 
   try {
     const url = `${BING_SEARCH_URL}?q=${encodeURIComponent(query)}&count=${limit}`;
-    const response = await fetch(url, {
+    const response = await egressFetch(url, {
       signal: controller.signal,
       headers: BROWSER_HEADERS,
     });

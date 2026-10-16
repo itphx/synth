@@ -35,6 +35,7 @@ import {
   startEventJournalPruner,
   WebhookService, startWebhookDeliveryPruner,
   createStorageContextAsync,
+  initTlsTrust,
 } from '@itphx/synth-core';
 import type { DecisionAgentCandidate, EventsRuntimeSettings, StorageContext } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -47,6 +48,11 @@ import { seedDebugTestUsers } from './bootstrap.js';
  * сидированию instance-серверов), а `createBackendDeps` переиспользует инстанс.
  */
 export async function createBackendStorage(config: BackendConfig): Promise<StorageContext> {
+  // ADR-099: единый механизм доверия TLS/CA — применяем **до** первого исходящего
+  // запроса (сборка хранилища/PG, дискавери OIDC, сид провайдеров из env ниже).
+  // Вызывается в начале `createBackendApp` (env-оверрайды уже выставлены).
+  // Fail-closed: битый/отсутствующий CA останавливает старт (не тихий фоллбэк).
+  await initTlsTrust({ security: config.synth.security }, process.env);
   const kind = resolveStorageBackend(config.synth, process.env);
   if (kind === 'memory') {
     console.warn('storage.backend=memory: данные не сохраняются на диск');

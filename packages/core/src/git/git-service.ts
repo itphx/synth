@@ -1,7 +1,9 @@
 import { readdir, mkdir, rm } from 'node:fs/promises';
 import { resolve as pathResolve, relative, join, isAbsolute, sep } from 'node:path';
-import { simpleGit, type SimpleGit, type LogResult } from 'simple-git';
+import { simpleGit, type SimpleGit, type SimpleGitOptions, type LogResult } from 'simple-git';
 import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
+// ADR-099: доверие TLS/CA для git — пер-вызовом через `-c http.sslCAInfo=<path>`.
+import { gitCaConfig } from '../security/tls.js';
 
 /**
  * ADR-076 §T3: git-сервис ядра (перенос из backend `lib/git-service.ts`).
@@ -103,9 +105,26 @@ const GIT_UNSAFE_OPTIONS = {
   allowEnvironment: ['GIT_TERMINAL_PROMPT', 'GIT_SSH_COMMAND', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE'],
 } as const;
 
-/** Создаёт simple-git с разрешёнными SSH/askpass-операциями. */
+/**
+ * ADR-099: опции инстанса `simple-git` = разрешённые SSH/askpass-категории +
+ * args git-конфига доверия CA (`git -c <arg>`).
+ *
+ * Доверие уже инициализировано при старте (`initTlsTrust`) — путь CA берём
+ * геттером `gitCaConfig()`, конфиг в git-модуль не тянем. `GIT_SSL_CAINFO` как
+ * env-канал недоступен: `sanitizeGitEnv` вырезает `git*`-env, а
+ * `allowEnvironment`-guard отклоняет задачу, поэтому CA передаётся только
+ * пер-вызовом. Без `security.tls.caFile` — пусто (системное доверие, прежнее
+ * поведение, поле `config` не появляется).
+ */
+function gitInstanceOptions(): Partial<SimpleGitOptions> {
+  const caConfig = gitCaConfig();
+  return caConfig.length > 0 ? { ...GIT_UNSAFE_OPTIONS, config: caConfig } : GIT_UNSAFE_OPTIONS;
+}
+
+/** Создаёт simple-git с разрешёнными SSH/askpass-операциями и CA доверия. */
 function createGit(baseDir?: string): SimpleGit {
-  return baseDir === undefined ? simpleGit(GIT_UNSAFE_OPTIONS) : simpleGit(baseDir, GIT_UNSAFE_OPTIONS);
+  const options = gitInstanceOptions();
+  return baseDir === undefined ? simpleGit(options) : simpleGit(baseDir, options);
 }
 
 /**

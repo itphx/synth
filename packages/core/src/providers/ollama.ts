@@ -11,6 +11,8 @@ import {
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
+// ADR-099: запросы к Ollama — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 
 /** Максимум best-effort POST /api/show за один синк (первые N моделей). */
 const MAX_CONTEXT_PROBES = 50;
@@ -57,7 +59,7 @@ export class OllamaProvider extends BaseProvider {
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
 
     try {
-      const resp = await fetch(this.url, {
+      const resp = await egressFetch(this.url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -139,7 +141,7 @@ export class OllamaProvider extends BaseProvider {
     try {
       let resp: Response;
       try {
-        resp = await fetch(this.url, {
+        resp = await egressFetch(this.url, {
           method: 'POST',
           headers,
           body: JSON.stringify(body),
@@ -297,7 +299,7 @@ export class OllamaProvider extends BaseProvider {
 
     // Формат 1: новый /api/embed с полем input → embeddings[0]
     try {
-      const resp = await fetch(`${baseUrl}/api/embed`, {
+      const resp = await egressFetch(`${baseUrl}/api/embed`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model: ollamaModel, input: text }),
@@ -312,7 +314,7 @@ export class OllamaProvider extends BaseProvider {
     }
 
     // Формат 2: старый /api/embeddings с полем prompt → embedding
-    const resp2 = await fetch(`${baseUrl}/api/embeddings`, {
+    const resp2 = await egressFetch(`${baseUrl}/api/embeddings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: ollamaModel, prompt: text }),
@@ -345,7 +347,7 @@ export class OllamaProvider extends BaseProvider {
 
     let models: DetailedModelInfo[] | undefined;
     try {
-      const resp = await fetch(tagsUrl, { signal: controller.signal });
+      const resp = await egressFetch(tagsUrl, { signal: controller.signal });
 
       if (resp.ok) {
         const data = await resp.json() as {
@@ -462,7 +464,7 @@ export class OllamaProvider extends BaseProvider {
     const timer = setTimeout(() => controller.abort(), 10_000);
 
     try {
-      const resp = await fetch(`${baseUrl}/api/show`, {
+      const resp = await egressFetch(`${baseUrl}/api/show`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ model }),

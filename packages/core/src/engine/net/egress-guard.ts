@@ -24,6 +24,7 @@ import {
   normalizeIp,
 } from '../mcp/network-policy.js';
 import type { HostResolver } from '../mcp/network-policy.js';
+import { egressFetch } from '../../security/tls.js';
 
 /** Подменяемая реализация `fetch` (тесты/инъекция транспорта). */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -180,7 +181,9 @@ export async function fetchWithEgressGuard(
   options: EgressFetchOptions = {},
 ): Promise<Response> {
   const maxHops = options.maxHops ?? DEFAULT_EGRESS_MAX_HOPS;
-  const fetchImpl: FetchLike = options.fetchImpl ?? ((input, i) => fetch(input, i));
+  // ADR-099: транспорт по умолчанию — `egressFetch` (единое доверие TLS/CA),
+  // а не «сырой» глобальный `fetch`.
+  const fetchImpl: FetchLike = options.fetchImpl ?? egressFetch;
   let current = rawUrl;
   for (let hop = 0; hop <= maxHops; hop++) {
     const check = await checkEgressUrl(current, options.policy, {

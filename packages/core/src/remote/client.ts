@@ -4,6 +4,8 @@
 
 import { RemoteError } from './types.js';
 import { CURRENCIES, type Currency } from '@itphx/synth-shared';
+// ADR-099: запросы к удалённому backend — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 
 /** Валидирует валюту по списку RUB/USD/CNY; иначе — undefined. */
 function asCurrency(value: unknown): Currency | undefined {
@@ -122,7 +124,7 @@ export class RemoteBackendClient {
 
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await egressFetch(url, {
         method,
         headers,
         body: fetchBody,
@@ -411,7 +413,7 @@ export class RemoteBackendClient {
   /** Быстрая проверка доступности backend (GET /health, короткий таймаут). */
   async isReachable(): Promise<boolean> {
     try {
-      const res = await fetch(new URL('/health', this._backendUrl), {
+      const res = await egressFetch(new URL('/health', this._backendUrl), {
         signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
       });
       return res.ok;

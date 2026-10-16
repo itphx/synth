@@ -9,6 +9,7 @@ import {
   KeyRateLimiter,
   getServiceCredential,
   getPublicOpenApiDocument,
+  initTlsTrust,
 } from '../index.js';
 import type { StorageBackendKind } from '../index.js';
 import { createLocalAuth } from '../auth/local.js';
@@ -171,6 +172,10 @@ export type { RemoteProviderSpec } from './app/hybrid-remote.js';
  * `app/sse-events.ts`/`app/ws-events.ts`/`app/http-server.ts`, статика — `app/static.ts`.
  */
 export async function createStandaloneApp(config: StandaloneConfig) {
+  // ADR-099: единый механизм доверия TLS/CA — применяем **до** первого исходящего
+  // запроса (сборка хранилища, сид провайдеров из env, дискавери/провайдеры ниже).
+  // Fail-closed: битый/отсутствующий CA останавливает старт (не тихий фоллбэк).
+  await initTlsTrust({ security: config.securityConfig }, process.env);
   const app = new Hono();
   // PROP-032 (W2.4): единый контекст хранения собирается здесь — реестр
   // service-key (`storage.serviceKeys`) нужен аутентификации до сборки

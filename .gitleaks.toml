@@ -52,6 +52,8 @@ paths = [
   '''packages/core/src/storage/service-api-key-store\.test\.ts$''',
   '''packages/core/src/security/rotate\.test\.ts$''',
   '''packages/core/src/engine/tools/git-ssh\.test\.ts$''',
+  '''packages/core/src/server/app\.fs-upload-limit\.test\.ts$''',
+  '''packages/core/src/server/app\.legacy-local-owner\.test\.ts$''',
 ]
 regexes = [
   '''backend-secret''',
@@ -60,5 +62,31 @@ regexes = [
   '''SUPERSECRETPRIVATEKEYMATERIAL''',
   '''NEWSECRETMATERIAL''',
   '''synth_svc_external[-]secret-123''',
+  '''fs-upload-limit-test-key''',
+  '''legacy-local-owner-key''',
+]
+regexTarget = "line"
+
+# 4. Фикстура самоподписанного TLS-ключа (ADR-099): throwaway-ключ для
+#    интеграционного теста единого доверия TLS/CA (`node:https` + `egressFetch`),
+#    не реальный кред. Подавляем строго по пути фикстуры — правило не отключается.
+[[allowlists]]
+description = "тестовый самоподписанный TLS-ключ (фикстура ADR-099, TEST ONLY)"
+paths = [
+  '''packages/core/src/security/__fixtures__/tls-test-selfsigned\.key$''',
+]
+
+# 5. Inline-PEM-фикстуры приватного ключа в unit-тесте TLS-резолверов (ADR-099):
+#    строка-литерал с PEM-маркерами приватного ключа (BEGIN и END на одной строке,
+#    тело `QUJD` = base64 «ABC») — правило `private-key` считает это ключом; на деле
+#    это dummy-фикстура «есть PEM-разметка», не реальный кред. Подавляем парой
+#    «путь + dummy-маркер» (AND), поэтому реальный ключ в том же файле останется находкой.
+[[allowlists]]
+description = "inline-PEM фикстуры приватного ключа в тесте TLS-резолверов (ADR-099, TEST ONLY)"
+paths = [
+  '''packages/shared/src/config/tls\.test\.ts$''',
+]
+regexes = [
+  '''QUJD''',
 ]
 regexTarget = "line"

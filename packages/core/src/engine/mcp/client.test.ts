@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { McpClient } from './client.js';
+import { egressFetch } from '../../security/tls.js';
 import type { McpServerConfig } from '@itphx/synth-shared';
 
 const mockConnect = vi.fn<() => Promise<void>>();
@@ -247,16 +248,17 @@ describe('McpClient (sse)', () => {
     expect(mockStreamableCtor).toHaveBeenCalledTimes(1);
     const [url, options] = mockStreamableCtor.mock.calls[0]!;
     expect(url).toBeInstanceOf(URL);
-    expect(options).toEqual({ requestInit: { headers } });
+    // ADR-099: транспорт всегда получает `fetch` с единым доверием TLS/CA.
+    expect(options).toEqual({ fetch: egressFetch, requestInit: { headers } });
   });
 
-  it('без headers опции транспорта не передаются', async () => {
+  it('без headers requestInit не передаётся, но fetch доверия TLS остаётся (ADR-099)', async () => {
     const noHeaders = new McpClient('nohdr', makeSseConfig());
     await noHeaders.connect();
     await noHeaders.disconnect();
 
     expect(mockStreamableCtor).toHaveBeenCalledTimes(1);
-    expect(mockStreamableCtor.mock.calls[0]![1]).toBeUndefined();
+    expect(mockStreamableCtor.mock.calls[0]![1]).toEqual({ fetch: egressFetch });
   });
 });
 

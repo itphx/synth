@@ -12,8 +12,9 @@
  */
 
 import { join } from 'node:path';
-import type { AgentDefinition, ModelConfig, PostgresStorageConfig, ProviderConfig, SynthConfig } from '@itphx/synth-shared';
+import type { AgentDefinition, ModelConfig, PostgresSslMode, PostgresStorageConfig, ProviderConfig, SecurityTlsConfig, SynthConfig } from '@itphx/synth-shared';
 import {
+  normalizePostgresSslMode,
   resolveDegradedMode,
   resolvePostgresConfig,
   resolvePostgresPassword,
@@ -307,6 +308,11 @@ export interface StorageContextConfig {
    * сюда НЕ входит — отдельное поле `postgresPassword` (инвариант 13).
    */
   postgres?: PostgresStorageConfig;
+  /**
+   * ADR-099: доверие TLS/CA (`security.tls`) — источник CA/mTLS для
+   * `storage.postgres.sslmode=verify-full` (прокидывается драйверу БД).
+   */
+  security?: { tls?: SecurityTlsConfig };
   /** PROP-032: пароль PostgreSQL (env/файл, не config.yaml). */
   postgresPassword?: string;
   /** PROP-032: режим работы со схемой БД при сборке (см. `PostgresSchemaMode`). */
@@ -372,9 +378,21 @@ export interface PostgresStorageDriverConfig {
     database?: string;
     /** Максимальный размер пула (`storage.postgres.poolMax`). */
     max?: number;
-    /** Требовать TLS (`storage.postgres.ssl`). */
+    /**
+     * ADR-099/PROP-032: TLS-режим (`storage.postgres.sslmode`, нормализованный;
+     * `verify-ca` → `verify-full`). Не задан — используется legacy `ssl`.
+     */
+    sslmode?: PostgresSslMode;
+    /** Legacy-флаг TLS (`storage.postgres.ssl`; когда `sslmode` не задан). */
     ssl?: boolean;
   };
+  /**
+   * ADR-099: доверие TLS/CA (`security.tls`) — CA/mTLS для `verify-full`.
+   * Единый источник доверия (тот же, что для исходящих https-запросов).
+   */
+  tls?: SecurityTlsConfig;
+  /** Env для резолва `security.tls` (ADR-023). */
+  env?: NodeJS.ProcessEnv;
   /** Схема БД (namespace таблиц). */
   schema?: string;
   /** Пароль БД (инвариант 13: не из config.yaml; env/файл). */
@@ -576,6 +594,8 @@ export async function createPostgresStorage(config: StorageContextConfig): Promi
   if (pg?.user) pool.user = pg.user;
   if (pg?.database) pool.database = pg.database;
   if (pg?.poolMax !== undefined) pool.max = pg.poolMax;
+  const sslmode = pg?.sslmode !== undefined ? normalizePostgresSslMode(pg.sslmode) : undefined;
+  if (sslmode !== undefined) pool.sslmode = sslmode;
   if (pg?.ssl !== undefined) pool.ssl = pg.ssl;
   if (config.postgresPassword) pool.password = config.postgresPassword;
 
@@ -584,6 +604,9 @@ export async function createPostgresStorage(config: StorageContextConfig): Promi
     ...(pg?.dsn ? { connectionString: pg.dsn } : {}),
     ...(Object.keys(pool).length > 0 ? { pool } : {}),
     ...(pg?.schema ? { schema: pg.schema } : {}),
+    // ADR-099: единый источник доверия TLS (CA/mTLS) — прокидка в драйвер.
+    ...(config.security?.tls ? { tls: config.security.tls } : {}),
+    ...(config.env ? { env: config.env } : {}),
     ...(config.postgresPassword ? { password: config.postgresPassword } : {}),
     ...(config.postgresSchemaMode ? { schemaMode: config.postgresSchemaMode } : {}),
     // ADR-097/PROP-032: core собирает sync-данные портов (ассеты/реестры) сам и
@@ -864,6 +887,8 @@ export async function buildStorageContext(
     env,
     postgres: resolvePostgresConfig(opts.config, env),
     postgresPassword: resolvePostgresPassword({ dataDir: opts.dataDir }, env),
+    // ADR-099: единый источник доверия TLS (CA/mTLS) для `sslmode=verify-full`.
+    ...(opts.config.security?.tls ? { security: { tls: opts.config.security.tls } } : {}),
     ...(opts.postgresSchemaMode ? { postgresSchemaMode: opts.postgresSchemaMode } : {}),
     degradedMode: resolveDegradedMode(opts.config),
     fallbackDir: resolveStorageFallbackDir(opts.config, env, opts.home ?? null),

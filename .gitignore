@@ -71,6 +71,10 @@ charts/**/charts/
 *.pem
 *.key
 secrets/
+# Исключение: тестовая фикстура самоподписанного TLS-серта/ключа (ADR-099) —
+# throwaway-материал только для интеграционного теста egress-транспорта.
+!packages/core/src/security/__fixtures__/*.pem
+!packages/core/src/security/__fixtures__/*.key
 
 # Changelog
 changelog-partial.md

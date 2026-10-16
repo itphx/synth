@@ -30,6 +30,8 @@ import {
   ProviderError,
   RateLimitError,
 } from './exceptions.js';
+// ADR-099: запросы decision-провайдера — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 
 /** Ответ decision-провайдера (answers без гарантии `type` — нормализуем сами). */
 type RawAnswers = Record<string, unknown>;
@@ -91,7 +93,7 @@ export class DecisionProvider extends BaseProvider {
 
     let resp: Response;
     try {
-      resp = await fetch(url, {
+      resp = await egressFetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),

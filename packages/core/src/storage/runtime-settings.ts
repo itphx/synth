@@ -148,6 +148,17 @@ export function mergeLlmGatewayConfig(
  * askTimeoutMs не входит в SecurityConfig (это permission-настройка), поэтому
  * возвращается как доп. поле — потребитель (onSecurityChange) пробрасывает его
  * в дефолтный permission-конфиг оркестратора.
+ *
+ * ADR-099: `security.tls` **намеренно не входит** в runtime-настройки UI. Доверие
+ * TLS/CA — стартовая конфигурация процесса: оно применяется один раз при старте
+ * (`initTlsTrust`, до первого исходящего запроса) и строит глобальный
+ * undici-dispatcher/читает PEM-файлы. Node не перечитывает CA на лету, а смена
+ * политики доверия во время работы небезопасна (смена MITM-периметра без рестарта),
+ * поэтому `tls` резолвится напрямую из `config.security.tls` + env `SYNTH_TLS_*`
+ * (`resolveTlsTrust`, ADR-023), независимо от этой функции. Возвращаемый
+ * `SecurityConfig` здесь несёт только runtime-изменяемые поля
+ * (`promptInjection`/`protectedPaths`/`secretKey`/`askTimeoutMs`); потребители
+ * (`onSecurityChange`, оркестратор) `tls` не читают — потери доверия нет.
  */
 export function mergeSecurityConfig(
   base: SecurityConfig | undefined,

@@ -1,9 +1,25 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import * as undici from 'undici';
 import { simpleGit } from 'simple-git';
 import { GitService, resolveRepoPath, sanitizeGitEnv } from './git-service.js';
+import { initTlsTrust, _resetTlsTrustForTests } from '../security/tls.js';
+
+/** CA-фикстура (самоподписанный тестовый серт) — валидный PEM. */
+const CERT_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'security',
+  '__fixtures__',
+  'tls-test-selfsigned.pem',
+);
+/** Живые сетевые проверки — только по явному запросу (`SYNTH_TEST_NETWORK=1`). */
+const LIVE_NETWORK = process.env.SYNTH_TEST_NETWORK === '1';
+/** Системный CA-бандл (Linux) для живой проверки https. */
+const SYSTEM_CA = '/etc/ssl/certs/ca-certificates.crt';
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -158,5 +174,38 @@ describe('GitService (ADR-076 §T3)', () => {
 
     await expect(service.removeLocal(ws, '../outside')).rejects.toBeTruthy();
     await expect(service.removeLocal(ws, '')).rejects.toBeTruthy();
+  });
+
+  /**
+   * ADR-099: живая проверка канала CA. Env-путь (`GIT_SSL_CAINFO`) сервису
+   * закрыт (sanitizeGitEnv + allowEnvironment-guard), поэтому CA передаётся
+   * пер-вызовом через опцию `config` инстанса simple-git. Здесь проверяем, что
+   * такой `-c http.sslCAInfo=<path>` реально доезжает до git и им принимается.
+   */
+  it('ADR-099: config-опция simple-git доезжает до git (http.sslCAInfo принимается)', async () => {
+    const bare = await createBareRepo(root);
+    const g = simpleGit({ config: [`http.sslCAInfo=${CERT_PATH}`] });
+    const refs = await g.listRemote([bare]);
+    expect(refs).toContain('refs/heads/main');
+  });
+
+  it('ADR-099: git-сервис с сконфигурированным CA работает (clone из file://)', async () => {
+    await initTlsTrust({ security: { tls: { caFile: CERT_PATH } } }, {});
+    try {
+      const bare = await createBareRepo(root);
+      await service.cloneRepo(ws, 'repos/ca', `file://${bare}`);
+      expect(await exists(join(ws, 'repos', 'ca', 'README.md'))).toBe(true);
+    } finally {
+      _resetTlsTrustForTests();
+      undici.setGlobalDispatcher(new undici.Agent());
+    }
+  });
+
+  // Живая сетевая проверка (по умолчанию выключена): `SYNTH_TEST_NETWORK=1`
+  // `pnpm --filter @itphx/synth-core test -- --run src/git/git-service.test.ts`.
+  it.runIf(LIVE_NETWORK)('ADR-099 (live): ls-remote публичного репозитория с валидным CA', async () => {
+    const g = simpleGit({ config: [`http.sslCAInfo=${SYSTEM_CA}`] });
+    const refs = await g.listRemote(['https://github.com/octocat/Hello-World.git', 'HEAD']);
+    expect(refs.trim().length).toBeGreaterThan(0);
   });
 });

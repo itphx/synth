@@ -20,6 +20,7 @@ import type { FetchLike } from '../net/fetch.js';
 import { buildSignatureHeader } from './signature.js';
 import { evaluateWebhookTarget } from './network.js';
 import { PRIVATE_EGRESS_POLICY, EgressBlockedError, fetchWithEgressGuard } from '../net/egress-guard.js';
+import { egressFetch } from '../../security/tls.js';
 
 /** Пользовательский агент HTTP-доставки. */
 const USER_AGENT = 'Synth-Webhooks/1.0';
@@ -94,7 +95,8 @@ export class WebhookService {
   private readonly _logger: { warn: (message: string) => void };
 
   constructor(private readonly _deps: WebhookServiceDeps) {
-    this._fetch = _deps.fetchImpl ?? ((input, init) => fetch(input, init));
+    // ADR-099: транспорт доставки по умолчанию — `egressFetch` (единое доверие TLS/CA).
+    this._fetch = _deps.fetchImpl ?? egressFetch;
     this._sleep = _deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this._random = _deps.random ?? Math.random;
     this._nowMs = _deps.now ?? Date.now;

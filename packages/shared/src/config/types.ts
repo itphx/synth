@@ -43,7 +43,23 @@ export const postgresStorageConfigSchema = z.object({
   user: z.string().optional(),
   /** Схема БД (namespace таблиц). */
   schema: z.string().optional(),
-  /** Требовать TLS-соединение. */
+  /**
+   * ADR-099/PROP-032: TLS-режим соединения с БД.
+   * `disable` — без TLS; `require` — шифрование без проверки сертификата;
+   * `verify-full` — проверка сертификата сервера по CA из `security.tls`.
+   * `verify-ca` принимается как **алиас** `verify-full` (нормализуется с
+   * предупреждением). **Не задано — прежнее поведение (`ssl: false`, без TLS)**,
+   * чтобы не сломать dev/существующие установки (dev-сервер без TLS).
+   * Читать/мапить — `resolvePostgresConfig` + `buildPostgresSslOptions`
+   * (`resolve.ts`/`tls.ts`, core — `storage/storage-context.ts`).
+   * TLS-параметры (`sslmode`/`sslrootcert`/…) **запрещены в `dsn`** — `pg`
+   * накладывает DSN поверх конфига и молча перекрывает `ssl`.
+   */
+  sslmode: z.enum(['disable', 'require', 'verify-full', 'verify-ca']).optional(),
+  /**
+   * Legacy-флаг TLS (`true`/`false`); используется, только если `sslmode` не
+   * задан (обратная совместимость). Новые установки — через `sslmode`.
+   */
   ssl: z.boolean().optional(),
   /** Максимальный размер пула соединений. */
   poolMax: z.number().int().min(1).optional(),
@@ -558,9 +574,38 @@ export const bootstrapServiceKeySchema = z.object({
 
 export const bootstrapServiceKeysSchema = z.array(bootstrapServiceKeySchema);
 
+/**
+ * ADR-099 (единый механизм доверия TLS/CA): секция `security.tls`.
+ *
+ * Задаёт доверие для **исходящих** соединений Synth (https-провайдеры, MCP,
+ * webhooks, гибридный backend, OIDC, git, загрузка иконок/обновлений):
+ * - `caFile` — путь к PEM-файлу с доверенным CA-сертификатом (корпоративный CA);
+ * - `caPem` — сам PEM-сертификат (например из Secret) — **взаимоисключающ** с `caFile`;
+ * - `certFile`/`keyFile` — клиентский сертификат и ключ (mTLS);
+ * - `rejectUnauthorized` — проверять сертификат сервера (по умолчанию `true`).
+ *
+ * Читать эффективные значения через `resolveTlsConfig`/`resolveTlsTrust` (ADR-023:
+ * env > config.yaml > defaults). Пусто — системное доверие (поведение не меняется).
+ * Опционально — литеральные `SecurityConfig` без поля валидны.
+ */
+export const securityTlsConfigSchema = z.object({
+  /** Путь к PEM-файлу доверенного CA. Взаимоисключающ с `caPem`. */
+  caFile: z.string().optional(),
+  /** PEM доверенного CA (приоритетно над файлом; взаимоисключающ с `caFile`). */
+  caPem: z.string().optional(),
+  /** Путь к PEM-файлу клиентского сертификата (mTLS). */
+  certFile: z.string().optional(),
+  /** Путь к PEM-файлу приватного ключа клиента (mTLS). */
+  keyFile: z.string().optional(),
+  /** Проверять сертификат сервера (по умолчанию `true`). */
+  rejectUnauthorized: z.boolean().optional(),
+});
+
 export const securityConfigSchema = z.object({
   promptInjection: promptInjectionConfigSchema.default({}),
   protectedPaths: protectedPathsConfigSchema.default({}),
+  /** ADR-099: единый механизм доверия TLS/CA для исходящих соединений. */
+  tls: securityTlsConfigSchema.optional(),
   /**
    * ADR-076: мастер-ключ для шифрования секретов at-rest (SSH-ключи, AES-256-GCM).
    * Приоритет — env `SYNTH_SECRET_KEY` (читать через `resolveSecretKey`).
@@ -768,6 +813,8 @@ export type PermissionConfig = z.infer<typeof permissionConfigSchema>;
 export type PromptInjectionConfig = z.infer<typeof promptInjectionConfigSchema>;
 export type ProtectedPathsConfig = z.infer<typeof protectedPathsConfigSchema>;
 export type SecurityConfig = z.infer<typeof securityConfigSchema>;
+/** ADR-099: секция `security.tls` — доверие TLS/CA исходящих соединений. */
+export type SecurityTlsConfig = z.infer<typeof securityTlsConfigSchema>;
 export type BootstrapServiceKeyConfig = z.infer<typeof bootstrapServiceKeySchema>;
 export type LLMGatewayRateLimitConfig = z.infer<typeof llmGatewayRateLimitConfigSchema>;
 export type LLMGatewayAuditConfig = z.infer<typeof llmGatewayAuditConfigSchema>;

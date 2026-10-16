@@ -269,6 +269,9 @@ export const defaultConfig: SynthConfig = {
     protectedPaths: {
       enabled: true,
     },
+    // ADR-099: доверие TLS/CA исходящих соединений. Пусто — системное доверие
+    // (поведение не меняется); caFile — корпоративный CA, cert/key — mTLS.
+    tls: {},
     // Пусто — core использует файл {dataDir}/secrets/master.key (ADR-076).
     secretKey: '',
     // ADR-052/O1: installer service-key'и из env/Secret (по умолчанию нет).

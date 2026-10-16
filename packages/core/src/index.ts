@@ -224,6 +224,20 @@ export type {
   PostgresStorageDriverConfig,
   BuildStorageContextOptions,
 } from './storage/storage-context.js';
+// ADR-099: единый механизм доверия TLS/CA исходящих соединений.
+export {
+  buildTlsTrust,
+  applyGlobalTlsTrust,
+  initTlsTrust,
+  egressFetch,
+  isTlsTrustConfigured,
+  getTlsCaPath,
+  getTlsTrustConfig,
+  gitCaConfig,
+  TlsDependencyUnavailableError,
+  _resetTlsTrustForTests,
+} from './security/tls.js';
+export type { TlsTrust, FetchLike as EgressFetchLike, LoadUndici, EgressFetchDeps, ApplyTlsTrustDeps } from './security/tls.js';
 // ADR-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
 export * as crypto from './security/crypto.js';
 export {

@@ -6,9 +6,26 @@ import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
-import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey } from '@itphx/synth-core';
+import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust } from '@itphx/synth-core';
 
 const require = createRequire(import.meta.url);
+
+/**
+ * ADR-099: применить единое доверие TLS/CA перед исходящими запросами команды.
+ * Публичный CLI не передаёт `securityConfig` в `createStandaloneApp`, поэтому
+ * доверие из config.yaml (`security.tls`) применяется здесь же. Fail-closed:
+ * битый/отсутствующий CA → внятная ошибка и ненулевой выход (не тихий фоллбэк).
+ */
+async function initTls(synth: SynthConfig): Promise<void> {
+  try {
+    await initTlsTrust({ security: synth.security }, process.env);
+  } catch (err) {
+    console.error(
+      `Ошибка инициализации доверия TLS/CA: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    process.exit(1);
+  }
+}
 
 /**
  * Резолвинг корня npm-зависимости по её package.json (через node-резолвер).
@@ -105,6 +122,9 @@ program
       home: home ?? undefined,
       overrides,
     });
+
+    // ADR-099: доверие TLS/CA — до первого исходящего запроса (гибрид/провайдеры).
+    await initTls(synth);
 
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
 
@@ -284,6 +304,8 @@ program
   .action(async (options) => {
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    // ADR-099: доверие TLS/CA — до запросов к удалённому backend (device flow).
+    await initTls(synth);
     const credentialsPath =
       options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
     const { RemoteSession } = await import('@itphx/synth-core/remote');
@@ -384,6 +406,8 @@ projectCmd
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
+    // ADR-099: доверие TLS/CA — до запросов к удалённому backend.
+    await initTls(synth);
     const { FileStore, SessionManager, ProjectStore } = await import('@itphx/synth-core');
     const { syncProjectToRemote, resolveLocalWorkspace } = await import('@itphx/synth-core/remote');
 
@@ -452,6 +476,8 @@ projectCmd
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
+    // ADR-099: доверие TLS/CA — до запросов к удалённому backend.
+    await initTls(synth);
     const { FileStore, SessionManager, ProjectStore } = await import('@itphx/synth-core');
     const { forkProjectToLocal } = await import('@itphx/synth-core/remote');
 
@@ -600,6 +626,8 @@ program
     }
 
     const synth = await loadConfig({});
+    // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
+    await initTls(synth);
     const { dataDir } = await ensureFirstRun(options['data-dir'] as string | undefined);
 
     await runSingleChat({
@@ -907,6 +935,8 @@ program
   .action(async (options) => {
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    // ADR-099: доверие TLS/CA — до проверки обновлений (npm-реестр).
+    await initTls(synth);
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
 
     const { runUpdateCommand, buildStorageContext } = await import('@itphx/synth-core');
@@ -1101,6 +1131,8 @@ async function startRepl(options: Record<string, unknown>) {
   });
 
   const synth = await loadConfig({});
+  // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
+  await initTls(synth);
   const { dataDir } = await ensureFirstRun((options['data-dir'] as string) || undefined);
 
   console.log(`Провайдер: ${options.provider || synth.llm.defaultProvider || '(не задан)'}`);

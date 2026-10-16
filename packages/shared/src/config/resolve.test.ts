@@ -420,6 +420,47 @@ describe('resolvePostgresConfig / resolvePostgresPassword (PROP-032)', () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
+  it('sslmode из config прокидывается; verify-ca нормализуется в verify-full (warn)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const c: SynthConfig = {
+        ...cfg,
+        storage: { ...cfg.storage, postgres: { host: 'h', sslmode: 'verify-full' } },
+      };
+      expect(resolvePostgresConfig(c, {})).toEqual({ host: 'h', sslmode: 'verify-full' });
+
+      const c2: SynthConfig = {
+        ...cfg,
+        storage: { ...cfg.storage, postgres: { host: 'h', sslmode: 'verify-ca' } },
+      };
+      expect(resolvePostgresConfig(c2, {})).toEqual({ host: 'h', sslmode: 'verify-full' });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('verify-ca'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('sslmode: env приоритетнее config; невалидное env → warn + игнор', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const c: SynthConfig = {
+        ...cfg,
+        storage: { ...cfg.storage, postgres: { host: 'h', sslmode: 'disable' } },
+      };
+      expect(resolvePostgresConfig(c, { SYNTH_POSTGRES_SSLMODE: 'require' })).toEqual({
+        host: 'h',
+        sslmode: 'require',
+      });
+      expect(resolvePostgresConfig(c, { SYNTH_POSTGRES_SSLMODE: 'bogus' })).toEqual({
+        host: 'h',
+        sslmode: 'disable',
+      });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('SYNTH_POSTGRES_SSLMODE'));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('пароль НЕ включается в объект (инвариант 13)', () => {
     const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, postgres: { host: 'h' } } };
     const result = resolvePostgresConfig(c, { SYNTH_POSTGRES_PASSWORD: 'secret' }) as Record<string, unknown>;

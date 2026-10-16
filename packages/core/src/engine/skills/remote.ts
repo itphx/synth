@@ -7,6 +7,7 @@ import type { SkillSource } from './types.js';
 // ADR-046 §4.2: общий SSRF-guard/fetch — вынесен в `engine/net/fetch.ts`,
 // чтобы не дублироваться с проектными инструкциями (ADR-069).
 import { describeError, fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
+import { egressFetch } from '../../security/tls.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 
 // Обратная совместимость: исторические импорты из `./remote.js` продолжают работать.
@@ -159,7 +160,8 @@ async function writeCacheSkillFile(sourceDir: string, dirName: string, content: 
 export async function refreshRemoteCatalogs(
   opts: RefreshRemoteCatalogsOptions,
 ): Promise<RefreshRemoteCatalogsResult> {
-  const fetchImpl: FetchLike = opts.fetchImpl ?? ((input, init) => fetch(input, init));
+  // ADR-099: транспорт удалённых каталогов по умолчанию — `egressFetch` (единое доверие TLS/CA).
+  const fetchImpl: FetchLike = opts.fetchImpl ?? egressFetch;
   const timeoutMs = opts.timeoutMs ?? REMOTE_INDEX_TIMEOUT_MS;
   const maxIndexBytes = opts.maxIndexBytes ?? REMOTE_INDEX_MAX_BYTES;
   const maxSkills = opts.maxSkills ?? REMOTE_MAX_SKILLS;

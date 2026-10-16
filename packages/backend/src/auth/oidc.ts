@@ -1,5 +1,7 @@
-import { jwtVerify, createRemoteJWKSet } from 'jose';
+import { jwtVerify, createRemoteJWKSet, customFetch } from 'jose';
 import type { User } from '@itphx/synth-shared';
+// ADR-099: дискавери/токен-эндпоинты/JWKS OIDC — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '@itphx/synth-core';
 
 /**
  * Конфигурация OIDC-клиента (Keycloak, confidential client).
@@ -54,7 +56,8 @@ export class OidcClient {
   async getDiscovery(): Promise<OidcDiscovery> {
     if (this._discovery) return this._discovery;
     const url = `${this.config.issuer}/.well-known/openid-configuration`;
-    const res = await fetch(url);
+    // ADR-099: дискавери — через единый транспорт доверия TLS/CA.
+    const res = await egressFetch(url);
     if (!res.ok) {
       throw new Error(`OIDC discovery failed: ${res.status} ${url}`);
     }
@@ -94,7 +97,8 @@ export class OidcClient {
       client_secret: this.config.clientSecret,
     });
 
-    const res = await fetch(discovery.token_endpoint, {
+    // ADR-099: обмен кода на токены — через единый транспорт доверия TLS/CA.
+    const res = await egressFetch(discovery.token_endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
@@ -124,7 +128,8 @@ export class OidcClient {
       password,
       scope: 'openid',
     });
-    const res = await fetch(discovery.token_endpoint, {
+    // ADR-099: ROPC-вход — через единый транспорт доверия TLS/CA.
+    const res = await egressFetch(discovery.token_endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: body.toString(),
@@ -147,7 +152,7 @@ export class OidcClient {
    */
   async verifyToken(token: string): Promise<OidcUser> {
     const discovery = await this.getDiscovery();
-    const jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
+    const jwks = this._remoteJwks(discovery.jwks_uri);
     // Тип bearer-токена заранее неизвестен (id_token или access_token), поэтому
     // принимаем audience обоих классов: clientId (id_token) и clientId/`account`
     // (access_token Keycloak). Issuer проверяется всегда.
@@ -164,7 +169,7 @@ export class OidcClient {
    */
   async verifyTokens(idToken: string, accessToken: string): Promise<OidcUser> {
     const discovery = await this.getDiscovery();
-    const jwks = createRemoteJWKSet(new URL(discovery.jwks_uri));
+    const jwks = this._remoteJwks(discovery.jwks_uri);
     const { payload: idPayload } = await jwtVerify(idToken, jwks, {
       issuer: this.config.issuer,
       // id_token.aud = clientId (+ доп. из конфига).
@@ -179,6 +184,24 @@ export class OidcClient {
       audience: this._accessTokenAudience(),
     });
     return extractUserFromTokens(idPayload, accessPayload, this.config.clientId);
+  }
+
+  /**
+   * ADR-099: JWKS-набор с **явным** транспортом доверия TLS/CA (`egressFetch`),
+   * а не через глобальный dispatcher процесса — точка не зависит от глобального
+   * состояния (`applyGlobalTlsTrust` остаётся основным каналом для прочих fetch).
+   * jose 6 отдаёт кастомный транспорт через символ `customFetch`.
+   */
+  private _remoteJwks(jwksUri: string): ReturnType<typeof createRemoteJWKSet> {
+    return createRemoteJWKSet(new URL(jwksUri), {
+      [customFetch]: (url, options) =>
+        egressFetch(url, {
+          headers: options.headers,
+          method: options.method,
+          redirect: options.redirect,
+          signal: options.signal,
+        }),
+    });
   }
 
   /** Допустимые `aud` id_token: clientId (+ дополнительные из конфига). */

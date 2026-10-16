@@ -5,6 +5,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServerConfig } from '@itphx/synth-shared';
 import { SYNTH_VERSION } from '@itphx/synth-shared';
 import { info, warning, error } from '../../logger.js';
+import { egressFetch } from '../../security/tls.js';
 
 export interface McpToolDef {
   name: string;
@@ -178,12 +179,16 @@ export class McpClient {
     // PROP-090: конфиг допускает `headers` (auth/tenant-заголовки) — прокидываем
     // их в транспорт. `requestInit` применяется SDK ко всем HTTP-запросам
     // (initialize/tools/list/tools/call).
+    //
+    // ADR-099: явно передаём `fetch` с единым доверием TLS/CA — иначе SDK ходит
+    // собственным (глобальным) транспортом и настройка `security.tls.caFile`/`caPem`
+    // к MCP-серверу не применялась бы.
     const headers = this._config.headers;
     const hasHeaders = !!headers && Object.keys(headers).length > 0;
-    const transport = new StreamableHTTPClientTransport(
-      new URL(url),
-      hasHeaders ? { requestInit: { headers: { ...headers } } } : undefined,
-    );
+    const transport = new StreamableHTTPClientTransport(new URL(url), {
+      fetch: egressFetch,
+      ...(hasHeaders ? { requestInit: { headers: { ...headers } } } : {}),
+    });
 
     const client = new Client(
       { name: 'synth-core', version: SYNTH_VERSION },

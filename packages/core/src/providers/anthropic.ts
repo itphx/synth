@@ -14,6 +14,8 @@ import {
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
+// ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 
 const ANTHROPIC_API_VERSION = '2023-06-01';
 
@@ -126,7 +128,7 @@ export class AnthropicProvider extends BaseProvider {
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
 
     try {
-      const resp = await fetch(this.url, {
+      const resp = await egressFetch(this.url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -196,7 +198,7 @@ export class AnthropicProvider extends BaseProvider {
     let firstChunkReceived = false;
 
     try {
-      const resp = await fetch(this.url, {
+      const resp = await egressFetch(this.url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),

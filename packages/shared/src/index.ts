@@ -64,6 +64,8 @@ export {
   type RemoteConfig,
   type MicroFirstConfig,
   type SecurityConfig,
+  securityTlsConfigSchema,
+  type SecurityTlsConfig,
   type PromptInjectionConfig,
   type ProtectedPathsConfig,
   type LLMGatewayConfig,
@@ -74,5 +76,22 @@ export { defaultConfig, loadConfig } from './config/index.js';
 export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveIgnoreRules, resolveHome, resolveProfilesPath, resolveCredentialsPath, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun, resolveDecisionProvider, resolveDecisionModel, resolveMaxUploadBytes } from './config/index.js';
 export type { StorageBackend, ResolvedPostgresConfig } from './config/index.js';
 export { applyEnvOverrides, envOverrideName, toSnakeCase, parseEnvValue, ENV_OVERRIDES } from './config/index.js';
+// ADR-099: резолверы доверия TLS/CA (`security.tls`).
+export { resolveTlsConfig, resolveTlsTrust, isPemContent, TLS_ENV } from './config/index.js';
+export type { ResolvedTlsConfig, ResolvedTlsTrust, TlsConfigSource } from './config/index.js';
+// ADR-099 × PROP-032: единый построитель TLS-опций PostgreSQL (sslmode + security.tls).
+export {
+  buildPostgresSslOptions,
+  findDsnTlsParams,
+  normalizePostgresSslMode,
+  POSTGRES_SSL_MODES,
+  POSTGRES_SSL_MODE_ALIASES,
+  DSN_TLS_PARAMS,
+} from './config/index.js';
+export type {
+  PostgresSslMode,
+  PostgresSslBuildInput,
+  PostgresSslBuildResult,
+} from './config/index.js';
 export type { DeployMode } from './config/index.js';
 export type { EnvOverrideDefinition, EnvOverrideType, ParsedEnvValue } from './config/index.js';

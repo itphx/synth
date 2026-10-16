@@ -6,6 +6,7 @@ import type { PostgresStorageConfig, SynthConfig } from './types.js';
 import type { WorkspaceOutsideRootPolicy } from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES, MIN_UPLOAD_BYTES, MAX_UPLOAD_BYTES_LIMIT } from '../types/index.js';
 import { defaultConfig } from './defaults.js';
+import { normalizePostgresSslMode, type PostgresSslMode } from './tls.js';
 
 export type DeployMode = 'user' | 'docker' | 'server' | 'dev';
 
@@ -321,6 +322,9 @@ export interface ResolvedPostgresConfig {
   database?: string;
   user?: string;
   schema?: string;
+  /** ADR-099/PROP-032: эффективный TLS-режим (нормализованный; `verify-ca` → `verify-full`). */
+  sslmode?: PostgresSslMode;
+  /** Legacy-флаг TLS (когда `sslmode` не задан). */
   ssl?: boolean;
   poolMax?: number;
 }
@@ -368,6 +372,25 @@ export function resolvePostgresConfig(
 
   const ssl = resolveBooleanEnv(e.SYNTH_POSTGRES_SSL, cfg.ssl, 'SYNTH_POSTGRES_SSL');
   if (ssl !== undefined) result.ssl = ssl;
+
+  // ADR-099/PROP-032: sslmode (env `SYNTH_POSTGRES_SSLMODE` > config); `verify-ca`
+  // — алиас `verify-full` (warn). Невалидное env-значение — warn + фолбэк на
+  // config (fail-soft, как прочие env-резолверы).
+  const rawEnvSslmode = e.SYNTH_POSTGRES_SSLMODE;
+  let sslmode: PostgresSslMode | undefined;
+  if (rawEnvSslmode !== undefined && rawEnvSslmode !== '') {
+    sslmode = normalizePostgresSslMode(rawEnvSslmode);
+    if (sslmode === undefined) {
+      console.warn(
+        `[config] невалидное значение SYNTH_POSTGRES_SSLMODE="${rawEnvSslmode}" ` +
+          `(ожидается disable/require/verify-full/verify-ca) — игнорируется`,
+      );
+    }
+  }
+  if (sslmode === undefined && cfg.sslmode !== undefined) {
+    sslmode = normalizePostgresSslMode(cfg.sslmode);
+  }
+  if (sslmode !== undefined) result.sslmode = sslmode;
 
   return result;
 }

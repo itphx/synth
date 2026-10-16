@@ -2,6 +2,8 @@ import type { TokenUsage, LLMChunk, LLMResponse, ReasoningLevel, Currency, Decis
 import type { DebugCollector } from '../debug.js';
 import { warning } from '../logger.js';
 import { ProviderError } from './exceptions.js';
+// ADR-099: запросы провайдеров — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 
 /** Таймаут best-effort загрузки каталога моделей, мс. */
 const MODELS_CATALOG_TIMEOUT_MS = 10_000;
@@ -135,7 +137,7 @@ export async function fetchModelsCatalog(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const resp = await fetch(url, { headers, signal: controller.signal });
+    const resp = await egressFetch(url, { headers, signal: controller.signal });
     if (!resp.ok) return [];
     const data = await resp.json() as { data?: Array<Record<string, unknown>> };
     return Array.isArray(data.data) ? data.data : [];

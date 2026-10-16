@@ -10,6 +10,8 @@
 
 import { RemoteBackendClient } from './client.js';
 import type { RemoteCredentials, RemoteUser } from './types.js';
+// ADR-099: дискавери OIDC — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 import { RemoteError } from './types.js';
 import { loadCredentials, saveCredentials, listCredentials } from './credentials.js';
 import { refreshAccessToken } from './device-flow.js';
@@ -99,7 +101,7 @@ export class RemoteConnection {
 
     let res: Response;
     try {
-      res = await fetch(`${base}/auth/oidc-meta`, {
+      res = await egressFetch(`${base}/auth/oidc-meta`, {
         signal: AbortSignal.timeout(this.deps.timeoutMs ?? DEFAULT_OIDC_META_TIMEOUT_MS),
       });
     } catch {

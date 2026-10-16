@@ -13,6 +13,8 @@ import type { LLMChunk, LLMResponse, TokenUsage } from '@itphx/synth-shared';
 import { BaseProvider, resolveSystemPromptText, type LLMMessage, type SystemPromptInput, type CancellationToken } from './base.js';
 import { ProviderError, ContextLengthExceededError, RateLimitError } from './exceptions.js';
 import { info } from '../logger.js';
+// ADR-099: запросы к backend-прокси — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 import type { DebugCollector } from '../debug.js';
 
 /** Параметры RemoteProvider. url — базовый URL backend (без /api/v2). */
@@ -332,7 +334,7 @@ export class RemoteProvider extends BaseProvider {
     const effectiveSignal = signal ?? controller.signal;
 
     try {
-      const resp = await fetch(url, {
+      const resp = await egressFetch(url, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,

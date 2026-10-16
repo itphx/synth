@@ -30,6 +30,7 @@ import {
 } from '../security/prompt-injection.js';
 import { expandHome, isProjectTrusted } from '../skills/trust.js';
 import { fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
+import { egressFetch } from '../../security/tls.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
 
@@ -536,7 +537,8 @@ export class ProjectInstructionsResolver {
     this._trustedProjectDirs = deps.trustedProjectDirs ?? [];
     this._workspacesRoot = deps.workspacesRoot ?? '';
     this._dataDir = deps.dataDir ?? null;
-    this._fetchImpl = deps.fetchImpl ?? ((input, init) => fetch(input, init));
+    // ADR-099: транспорт URL-источников по умолчанию — `egressFetch` (единое доверие TLS/CA).
+    this._fetchImpl = deps.fetchImpl ?? egressFetch;
     this._resolveHost = deps.resolveHost;
     this._home = deps.home ?? expandHome('~');
     this._now = deps.nowFn ?? (() => Date.now());

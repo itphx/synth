@@ -1,6 +1,8 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { SYNTH_VERSION } from '@itphx/synth-shared';
+// ADR-099: запросы к реестру npm — через единый транспорт доверия TLS/CA.
+import { egressFetch } from './security/tls.js';
 
 export interface UpdateInfo {
   currentVersion: string;
@@ -87,7 +89,7 @@ export async function fetchLatestVersion(): Promise<string> {
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
   try {
-    const response = await fetch(NPM_REGISTRY, {
+    const response = await egressFetch(NPM_REGISTRY, {
       signal: controller.signal,
       headers: { 'Accept': 'application/json' },
     });
@@ -120,7 +122,7 @@ export async function fetchAvailableVersions(): Promise<string[]> {
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
   try {
-    const response = await fetch(NPM_REGISTRY_PACKAGE, {
+    const response = await egressFetch(NPM_REGISTRY_PACKAGE, {
       signal: controller.signal,
       headers: { 'Accept': 'application/json' },
     });

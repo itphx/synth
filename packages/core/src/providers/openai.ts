@@ -13,6 +13,8 @@ import {
 import { info, warning } from '../logger.js';
 import type { DebugCollector } from '../debug.js';
 import { ContextLengthExceededError, RateLimitError } from './exceptions.js';
+// ADR-099: запросы провайдера — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 
 export class OpenAIProvider extends BaseProvider {
   getProviderName(): string {
@@ -49,7 +51,7 @@ export class OpenAIProvider extends BaseProvider {
     const timer = setTimeout(() => controller.abort(), this.timeout * 1000);
 
     try {
-      const resp = await fetch(this.url, {
+      const resp = await egressFetch(this.url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -127,7 +129,7 @@ export class OpenAIProvider extends BaseProvider {
     try {
       let resp: Response;
       try {
-        resp = await fetch(this.url, {
+        resp = await egressFetch(this.url, {
           method: 'POST',
           headers,
           body: JSON.stringify(body),

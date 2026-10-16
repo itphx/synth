@@ -4,6 +4,8 @@
 
 import { RemoteError } from './types.js';
 import type { RemoteErrorCode } from './types.js';
+// ADR-099: OIDC device flow — через единый транспорт доверия TLS/CA.
+import { egressFetch } from '../security/tls.js';
 
 /** Таймаут HTTP-запросов к серверу авторизации. */
 const AUTH_HTTP_TIMEOUT_MS = 15_000;
@@ -67,7 +69,7 @@ function num(value: unknown): number | undefined {
 async function getJson(url: string): Promise<Record<string, unknown>> {
   let res: Response;
   try {
-    res = await fetch(url, { signal: AbortSignal.timeout(AUTH_HTTP_TIMEOUT_MS) });
+    res = await egressFetch(url, { signal: AbortSignal.timeout(AUTH_HTTP_TIMEOUT_MS) });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new RemoteError(`Сервер авторизации недоступен: ${reason}`, 'AUTH');
@@ -85,7 +87,7 @@ export async function postForm(
 ): Promise<Record<string, unknown>> {
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await egressFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params,
