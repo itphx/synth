@@ -1,93 +1,42 @@
 /**
- * Драйвер слоя хранения Synth на PostgreSQL — форма поставки (ADR-096/ADR-097,
+ * Драйвер слоя хранения Synth на PostgreSQL — публичная фабрика (ADR-096/ADR-097,
  * PROP-032).
  *
  * Пакет `@itphx/synth-storage-postgres` — in-tree **опциональный** драйвер: он
  * реализует доменные порты `StorageContext` и подключается из
  * `createStorageContext` динамическим `import()` при `storage.backend === 'postgres'`.
  *
- * Волна 2b: контракт функции и форма поставки. Реальная реализация портов —
- * следующая волна, поэтому `createPostgresStorage` валидирует конфиг и
- * завершается понятной ошибкой «не реализовано».
+ * Волна 3a — **инфраструктура**: пул/подключение, схема БД и миграции
+ * (`migrate.ts` + `migrations/*`), сборка контекста (`storage-context.ts`).
+ * Доменные порты реализуются следующей волной, поэтому `createPostgresStorage`
+ * применяет (или проверяет) схему и возвращает контекст с файловыми FS-портами
+ * и заглушками PG-портов.
  *
- * `pg` — `optionalDependencies` пакета и подключается **лениво** (внутри функции,
- * а не на верхнем уровне модуля): импорт самого драйвера не должен требовать
- * установленного `pg`.
+ * `pg` — `optionalDependencies` пакета и подключается **лениво** (`pool.ts`):
+ * импорт модуля драйвера не требует установленного `pg`.
  */
 
 import type { StorageContext, StorageContextConfig } from '@itphx/synth-core';
+import { PostgresStorageConfigError } from './errors.js';
+import { assertSchemaCurrent, runMigrations } from './migrate.js';
+import {
+  createPostgresConnection,
+  type PostgresConnectionConfig,
+} from './pool.js';
+import { DEFAULT_SCHEMA, assertValidSchema } from './schema.js';
+import { buildPostgresStorageContext } from './storage-context.js';
 
-/**
- * Имя optional-зависимости драйвера. Тип намеренно расширен до `string`, чтобы
- * `import()` не требовал типов `pg` на этапе компиляции (типы — для реализации
- * следующей волны).
- */
-const PG_MODULE: string = 'pg';
-
-/** Параметры подключения к PostgreSQL (транслируются в пул `pg`). */
-export interface PostgresPoolConfig {
-  host?: string;
-  port?: number;
-  user?: string;
-  password?: string;
-  database?: string;
-  /** Максимальный размер пула (при отсутствии — дефолт `pg`). */
-  max?: number;
-  /** Таймаут установления соединения, мс. */
-  connectionTimeoutMillis?: number;
-  /** Таймаут простаивающего соединения, мс. */
-  idleTimeoutMillis?: number;
-  /** TLS: `true`/`false` либо объект опций (`ca`/`rejectUnauthorized`/…). */
-  ssl?: boolean | Record<string, unknown>;
-}
+// Реэкспорт ошибок драйвера (в т.ч. для обратной совместимости импортов).
+export * from './errors.js';
+export type { PostgresPoolConfig, PostgresConnectionConfig } from './pool.js';
+export type { PostgresExecutor } from './pool.js';
 
 /** Конфиг драйвера: параметры подключения к БД + общие параметры слоя хранения. */
-export interface PostgresStorageConfig extends StorageContextConfig {
-  /** Строка подключения `postgres://…`; приоритетнее полей `pool`. */
-  connectionString?: string;
-  /** Параметры подключения, если не задана `connectionString`. */
-  pool?: PostgresPoolConfig;
+export interface PostgresStorageConfig extends StorageContextConfig, PostgresConnectionConfig {
   /** Схема БД (по умолчанию — `public`). */
   schema?: string;
   /** Применять миграции схемы при сборке контекста (по умолчанию — `true`). */
   migrate?: boolean;
-}
-
-/** Базовая ошибка драйвера хранения PostgreSQL. */
-export class PostgresStorageError extends Error {
-  readonly code: string;
-
-  constructor(message: string, code: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = 'PostgresStorageError';
-    this.code = code;
-  }
-}
-
-/** Конфиг драйвера невалиден (не задан способ подключения и т.п.). */
-export class PostgresStorageConfigError extends PostgresStorageError {
-  constructor(message: string) {
-    super(message, 'STORAGE_POSTGRES_CONFIG_INVALID');
-    this.name = 'PostgresStorageConfigError';
-  }
-}
-
-/** Optional-зависимость `pg` недоступна (не установлена). */
-export class PostgresStorageDependencyError extends PostgresStorageError {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, 'STORAGE_POSTGRES_DEPENDENCY_MISSING', options);
-    this.name = 'PostgresStorageDependencyError';
-  }
-}
-
-/** Реализация портов ещё не поставлена (скелет волны 2b). */
-export class PostgresStorageNotImplementedError extends PostgresStorageError {
-  constructor(
-    message = 'PostgreSQL-драйвер хранения ещё не реализован (PROP-032, скелет волны 2b).',
-  ) {
-    super(message, 'STORAGE_POSTGRES_NOT_IMPLEMENTED');
-    this.name = 'PostgresStorageNotImplementedError';
-  }
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -96,7 +45,8 @@ function isNonEmptyString(value: unknown): value is string {
 
 /**
  * Валидация конфига **до** любого обращения к БД: нужен либо
- * `connectionString`, либо пара `pool.host` + `pool.database`.
+ * `connectionString`, либо пара `pool.host` + `pool.database`; схема — безопасный
+ * идентификатор.
  */
 export function validatePostgresConfig(config: PostgresStorageConfig): void {
   if (!isNonEmptyString(config.dataDir)) {
@@ -113,6 +63,8 @@ export function validatePostgresConfig(config: PostgresStorageConfig): void {
     }
   }
 
+  if (config.schema !== undefined) assertValidSchema(config.schema);
+
   const hasConnectionString = isNonEmptyString(config.connectionString);
   const hasPoolFields = !!pool && isNonEmptyString(pool.host) && isNonEmptyString(pool.database);
 
@@ -124,36 +76,46 @@ export function validatePostgresConfig(config: PostgresStorageConfig): void {
 }
 
 /**
- * Ленивая загрузка optional-зависимости `pg`.
- *
- * Импорт выполняется внутри функции — модуль драйвера остаётся импортируемым
- * без установленного `pg` (PROP-032 §«Форма поставки»).
- */
-async function loadPgModule(): Promise<void> {
-  try {
-    await import(PG_MODULE);
-  } catch (cause) {
-    throw new PostgresStorageDependencyError(
-      'Не удалось загрузить драйвер `pg` (optional-зависимость). Установите его: pnpm add pg',
-      { cause },
-    );
-  }
-}
-
-/**
  * Собрать `StorageContext` на PostgreSQL (форма — ADR-097/PROP-032).
  *
- * Скелет: валидирует конфиг, лениво проверяет наличие `pg` и завершается
- * `PostgresStorageNotImplementedError`; реализация доменных портов
- * (`storage/ports/*`) и прогон контрактного suite — следующая волна.
+ * Валидирует конфиг, лениво подключается к БД, применяет миграции (или, при
+ * `migrate:false`, проверяет актуальность схемы — fail-closed) и возвращает
+ * контекст: FS/package-bound порты (`skills`/`contextFiles`/`blobs`) — файловые,
+ * остальные — заглушки PG (порты реализуются следующей волной).
  */
-export async function createPostgresStorage(
-  config: PostgresStorageConfig,
-): Promise<StorageContext> {
+export async function createPostgresStorage(config: PostgresStorageConfig): Promise<StorageContext> {
   validatePostgresConfig(config);
 
-  // Ленивая загрузка optional-зависимости (не на верхнем уровне модуля).
-  await loadPgModule();
+  const schema = config.schema ?? DEFAULT_SCHEMA;
+  const conn = createPostgresConnection({
+    connectionString: config.connectionString,
+    pool: config.pool,
+    password: config.password,
+    schema,
+    statementTimeoutMillis: config.statementTimeoutMillis,
+    idleInTransactionTimeoutMillis: config.idleInTransactionTimeoutMillis,
+    applicationName: config.applicationName,
+  });
 
-  throw new PostgresStorageNotImplementedError();
+  try {
+    if (config.migrate === false) {
+      await assertSchemaCurrent(conn, { schema });
+    } else {
+      await runMigrations(conn, { schema });
+    }
+  } catch (err) {
+    await conn.end().catch(() => undefined);
+    throw err;
+  }
+
+  // Волна 3a: соединение не удерживается в контексте (порты — заглушки),
+  // поэтому пул закрывается, чтобы не утекал. Следующая волна удержит соединение
+  // внутри PG-реализаций портов.
+  await conn.end().catch(() => undefined);
+
+  return buildPostgresStorageContext({
+    dataDir: config.dataDir,
+    secretKey: config.secretKey,
+    env: config.env,
+  });
 }

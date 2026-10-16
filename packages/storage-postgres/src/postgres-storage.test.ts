@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createPostgresStorage,
   PostgresStorageConfigError,
-  PostgresStorageNotImplementedError,
+  PostgresStorageError,
   validatePostgresConfig,
 } from './postgres-storage.js';
 
@@ -52,15 +52,24 @@ describe('validatePostgresConfig', () => {
 });
 
 describe('createPostgresStorage', () => {
-  it('скелет: валидный конфиг → ошибка «не реализовано»', async () => {
-    await expect(
-      createPostgresStorage({ dataDir: DATA_DIR, connectionString: CONNECTION_STRING }),
-    ).rejects.toBeInstanceOf(PostgresStorageNotImplementedError);
-  });
-
   it('падает на невалидном конфиге до обращения к БД', async () => {
     await expect(createPostgresStorage({ dataDir: DATA_DIR })).rejects.toBeInstanceOf(
       PostgresStorageConfigError,
     );
+  });
+
+  it('падает на некорректной схеме до обращения к БД', async () => {
+    await expect(
+      createPostgresStorage({ dataDir: DATA_DIR, connectionString: CONNECTION_STRING, schema: 'bad-schema!' }),
+    ).rejects.toBeInstanceOf(PostgresStorageConfigError);
+  });
+
+  it('недоступная БД → доменная ошибка соединения (не сырой трейс pg)', async () => {
+    await expect(
+      createPostgresStorage({
+        dataDir: DATA_DIR,
+        pool: { host: '127.0.0.1', port: 1, database: 'synth', connectionTimeoutMillis: 500 },
+      }),
+    ).rejects.toBeInstanceOf(PostgresStorageError);
   });
 });
