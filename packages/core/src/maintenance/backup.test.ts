@@ -1,4 +1,4 @@
-// PROP-091: тесты `synth backup` на временных каталогах данных.
+// ADR-091: тесты `synth backup` на временных каталогах данных.
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -147,7 +147,7 @@ describe('createBackup', () => {
     expect(meta?.type).toBe('file');
   });
 
-  it('safetyCopyPath: единый каталог backups/ с меткой вида (PROP-092)', () => {
+  it('safetyCopyPath: единый каталог backups/ с меткой вида (ADR-092)', () => {
     const now = new Date('2026-07-08T09:10:11');
     expect(safetyCopyPath(dataDir, 'pre-migrate', now)).toBe(
       join(dataDir, 'backups', 'synth-pre-migrate-20260708-091011.tar.gz'),

@@ -1,0 +1,45 @@
+# ADR-091: Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor`
+
+> **Статус:** ⚠️ Частично — MVP реализован (`synth backup`/`restore`/`doctor`); остаток — портативный экспорт/импорт, admin-API, `--encrypt`, онлайн-консистентность.
+> **Дата:** 2026-10-16
+> **Связано:** [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [PROP-055](./prop-055-instance-exchange.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
+
+## Контекст
+
+Восстановление после сбоя держалось на ручном копировании каталога данных и нигде не было описано: не было команды, манифеста и версии архива, правила, что архив с `secrets/` — сам секрет (без `master.key` зашифрованные SSH-ключи невосстановимы). Файловое хранилище ([ADR-005](./adr-005-json-storage.md)) атомарно на уровне файла, но сквозной транзакции между сущностями нет — архив с работающего сервиса даёт несогласованный срез.
+
+## Решение
+
+Ввести контур жизненного цикла данных инстанса:
+
+1. **`synth backup`** — архив каталога данных (`$SYNTH_DATA_DIR`) в `tar.gz`, записанный **своим потоковым ustar-писателем без внешних зависимостей**; внутри — `manifest.json` (tool/formatVersion, `schemaVersion` из `meta.json`, `instanceVersion`, время, флаги, исключения, записи с sha256) и `contentChecksum`. Имя `synth-backup-<instanceVersion>-<YYYYMMDD-HHmmss>.tar.gz`, права `0600`. Флаги: `--out`, `--with-secrets`, `--with-workspace`, `--live` (предупреждение о нетранзакционном срезе). Исключаются `backups/`, `tmp/`, `logs/`, `*.lock`, `workspaces/` (без флага), `secrets/` (без флага).
+2. **`synth restore <archive>`** — строгий порядок: манифест → формат → `schemaVersion` (`>` текущей → отказ) → контрольные суммы → `--dry-run` → `--yes` (без него отказ) → страховочная копия → очистка цели → распаковка. Правило: **restore возвращает каталог к снимку** — удаляются все элементы верхнего уровня, которых нет в архиве, кроме `backups/`, поэтому лишние и повреждённые файлы не переживают восстановление; страховочная копия создаётся автоматически (`{dataDir}/backups/synth-pre-restore-<stamp>.tar.gz`, `--no-safety-copy` отключает с предупреждением). После restore **обязателен `synth doctor`**.
+3. **`synth doctor`** — health инстанса (`--json`): `data-dir` (write-доступ пробным файлом), `schema`, `master-key`, `secrets-permissions`, `data-integrity`, `providers`, `locks`, `version`; exit 1 при любом `fail`. Read-only, кроме пробного файла.
+4. **`{dataDir}/backups/`** — единый каталог страховочных копий (`pre-restore`/`pre-migrate`), исключённый из архивов бэкапа. Архив с секретами — секрет сам по себе.
+
+Процедуры (setup → verify → backup → restore → verify → migrate), флаги и коды выхода — [docs/MAINTENANCE.md](../MAINTENANCE.md).
+
+## Альтернативы
+
+- **Системный `tar`/`gzip` через `child_process`** — отклонён: нет на Windows и в минимальных образах, внешняя зависимость в рантайме.
+- **Готовая библиотека архивации** — отклонена: новая зависимость ради простого ustar-формата и контроля путей (отвергаем абсолютные и `..`).
+- **Бэкапить только БД** — преждевременно: файлового уровня ещё нет (БД — следующий шаг, [PROP-032](./prop-032-history-storage-postgresql.md)).
+
+## Последствия
+
+- (+) Восстановление после сбоя — воспроизводимая проверяемая процедура, а не ручное копирование; архив самодостаточен (манифест + контрольные суммы).
+- (+) Ноль новых зависимостей; `doctor` даёт машинно-читаемый health (`--json`, exit-код) и обязателен после restore.
+- (−) Онлайн-срез нетранзакционен (best-effort, `--live`); прод-подход — снапшот ФС (PVC/LVM/ZFS).
+- (−) Restore деструктивен по цели (возврат к снимку) — отсюда обязательная страховочная копия и подтверждение `--yes`.
+
+## Остаток
+
+- портативный экспорт/импорт проекта (`synth project export|import`; standalone + HTTP, без секретов; materialization, не `session.requested`) — этап 2;
+- admin-API для managed (`GET/POST /api/v2/admin/backup|restore`, только `ADMIN`, с аудитом) — этап 3;
+- шифрование `--encrypt`;
+- онлайн-консистентный/инкрементальный бэкап и PITR — после [PROP-032](./prop-032-history-storage-postgresql.md);
+- руководства портала `docs.synth.itphx.ru`; автоматизация ops-скиллами ([PROP-048](./prop-048-self-help-skills-admin-mcp.md)).
+
+## История
+
+- 2026-10-16 — PROP-091 принят как ADR-091 (MVP реализован; остаток вынесен) (коммиты ветки feat/storage-seam).

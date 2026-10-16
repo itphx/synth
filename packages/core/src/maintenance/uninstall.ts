@@ -1,17 +1,17 @@
-// PROP-092: `synth uninstall` — осознанное удаление инстанса.
+// ADR-092: `synth uninstall` — осознанное удаление инстанса.
 //
 // По умолчанию данные **сохраняются** (печатается сводка, что осталось и где);
 // `--purge` удаляет каталог данных (требует `--yes`), `--dry-run` показывает
 // план без записи. Для локального home (ADR-079) после удаления сообщаем, что
 // `{home}/config.yaml`/`profiles.json`/`credentials.json` остаются.
 //
-// Аудит-событие `uninstall.purge` в этой итерации не реализован — остаток PROP-092.
+// Аудит-событие `uninstall.purge` в этой итерации не реализован — остаток ADR-092.
 import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readInstanceMeta } from '../storage/instance-meta.js';
 import { masterKeyFilePath } from '../security/crypto.js';
 
-/** Опции CLI-команды `synth uninstall` (PROP-092). */
+/** Опции CLI-команды `synth uninstall` (ADR-092). */
 export interface UninstallCommandOptions {
   /** Каталог данных инстанса (резолвится CLI: `--data-dir`/`--home`/config). */
   dataDir: string;
@@ -29,7 +29,7 @@ export interface UninstallCommandOptions {
   error?: (msg: string) => void;
 }
 
-/** Сводка каталога данных (PROP-092): что сохраняется/будет удалено. */
+/** Сводка каталога данных (ADR-092): что сохраняется/будет удалено. */
 export interface UninstallSummary {
   dataDir: string;
   /** Каталог данных существует. */
@@ -117,7 +117,7 @@ async function _exists(path: string): Promise<boolean> {
   }
 }
 
-/** Собирает сводку каталога данных (PROP-092). */
+/** Собирает сводку каталога данных (ADR-092). */
 export async function collectUninstallSummary(dataDir: string): Promise<UninstallSummary> {
   const meta = await readInstanceMeta(dataDir);
   return {
@@ -147,7 +147,7 @@ function _renderSummary(summary: UninstallSummary): string[] {
 }
 
 /**
- * Тело CLI-команды `synth uninstall` (PROP-092).
+ * Тело CLI-команды `synth uninstall` (ADR-092).
  *
  * @returns код выхода процесса (0 — успех/dry-run, 1 — отказ/ошибка).
  */

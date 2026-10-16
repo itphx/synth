@@ -8,7 +8,7 @@
 > - [ADR-051](./adr-051-scheduler-pipelines.md) — job-история планировщика как источник метрик;
 > - [ADR-052](./adr-052-public-api-platform.md) — webhooks и service-key, чьи доставки/вызовы нужно измерять;
 > - [ADR-005](./adr-005-json-storage.md) / [PROP-032](./prop-032-history-storage-postgresql.md) — хранилище, объём и рост которого надо отслеживать;
-> - [PROP-092](./prop-092-instance-lifecycle-maintenance.md) — эксплуатационный контур, в который встраивается мониторинг.
+> - [ADR-092](./adr-092-instance-lifecycle-maintenance.md) — эксплуатационный контур, в который встраивается мониторинг.
 
 ## Решение
 
@@ -53,7 +53,7 @@
 ### Health / readiness
 
 - `/health` — liveness: процесс жив (текущее поведение, без авторизации).
-- `/ready` — readiness: каталог данных доступен на запись, стораджи инициализированы, миграции применены ([PROP-092](./prop-092-instance-lifecycle-maintenance.md)), очередь готова; при неготовности — `503` с причиной.
+- `/ready` — readiness: каталог данных доступен на запись, стораджи инициализированы, миграции применены ([ADR-092](./adr-092-instance-lifecycle-maintenance.md)), очередь готова; при неготовности — `503` с причиной.
 - Helm: `livenessProbe` → `/health`, `readinessProbe` → `/ready` (по умолчанию, с возможностью переопределить).
 
 ### Логи
@@ -88,7 +88,7 @@
 
 ## Связи
 
-- [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-052](./adr-052-public-api-platform.md), [PROP-088](./prop-088-http-proxy.md), [PROP-092](./prop-092-instance-lifecycle-maintenance.md).
+- [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-052](./adr-052-public-api-platform.md), [PROP-088](./prop-088-http-proxy.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md).
 
 ## Порядок реализации
 

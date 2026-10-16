@@ -1,4 +1,4 @@
-// PROP-092: авто-миграции схемы данных при старте инстанса. Порядок:
+// ADR-092: авто-миграции схемы данных при старте инстанса. Порядок:
 // guard совместимости → обязательная страховочная копия (fail-closed) →
 // применение pending-миграций под межпроцессным локом `{dataDir}/migrate`.
 //
@@ -16,7 +16,7 @@ import {
 import type { SettingsRepository } from '../storage/ports/settings-repository.js';
 import { createBackup, safetyCopyPath } from './backup.js';
 
-/** Опции `applyStartupMigrations` (PROP-092). */
+/** Опции `applyStartupMigrations` (ADR-092). */
 export interface ApplyStartupMigrationsOptions {
   /** Каталог данных инстанса. */
   dataDir: string;
@@ -33,7 +33,7 @@ export interface ApplyStartupMigrationsOptions {
 }
 
 /**
- * Применяет pending-миграции схемы данных при старте инстанса (PROP-092).
+ * Применяет pending-миграции схемы данных при старте инстанса (ADR-092).
  *
  * 1. `checkInstanceCompatibility`; `too-new` → `InstanceDataTooNewError`;
  *    нет pending → `{applied: []}` (ничего не пишется).
@@ -66,7 +66,7 @@ export async function applyStartupMigrations(
   }
   if (compatibility.pending.length === 0) return { applied: [] };
 
-  // 2. Страховочная копия — обязательна перед записью (PROP-092). Без неё не
+  // 2. Страховочная копия — обязательна перед записью (ADR-092). Без неё не
   //    мигрируем: повреждение данных без отката недопустимо.
   const copyPath = safetyCopyPath(dataDir, 'pre-migrate');
   try {

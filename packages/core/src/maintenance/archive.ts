@@ -1,4 +1,4 @@
-// PROP-091: минимальный потоковый tar.gz (ustar) без внешних зависимостей.
+// ADR-091: минимальный потоковый tar.gz (ustar) без внешних зависимостей.
 // Используется `synth backup`/`restore` для архива каталога данных с манифестом.
 // Пишем/читаем только `node:fs`, `node:zlib`, `node:crypto`, `node:path`.
 //
@@ -18,7 +18,7 @@ const ARCHIVE_MODE = 0o600;
 /** Пустой буфер (для каталогов/пустых файлов). */
 const EMPTY = Buffer.alloc(0);
 
-/** Метаданные записи архива (PROP-091). */
+/** Метаданные записи архива (ADR-091). */
 export interface ArchiveEntryMeta {
   /** Путь относительно корня архива (POSIX-разделители, без завершающего `/`). */
   path: string;
@@ -29,7 +29,7 @@ export interface ArchiveEntryMeta {
   sha256?: string;
 }
 
-/** Источник для записи в архив (PROP-091). */
+/** Источник для записи в архив (ADR-091). */
 export interface ArchiveSource {
   /** Путь относительно корня архива. */
   path: string;

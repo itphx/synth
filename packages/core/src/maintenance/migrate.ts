@@ -1,4 +1,4 @@
-// PROP-092: тело CLI-команды `synth migrate` — переиспользуется dev-CLI
+// ADR-092: тело CLI-команды `synth migrate` — переиспользуется dev-CLI
 // (`packages/core/src/main.ts`) и публичным `synth` (`packages/synth/src/cli.ts`).
 import {
   MIGRATIONS,

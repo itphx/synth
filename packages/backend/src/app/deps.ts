@@ -72,7 +72,7 @@ export async function createBackendDeps(
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
 
-  // PROP-092: guard совместимости схемы данных (паритет со standalone-core):
+  // ADR-092: guard совместимости схемы данных (паритет со standalone-core):
   // данные новее Synth → отказ старта (fail-fast); устаревшая схема → авто-миграции
   // с обязательной страховочной копией ниже (`applyStartupMigrations`).
   await assertInstanceDataNotTooNew(dataDir);
@@ -598,7 +598,7 @@ export async function createBackendDeps(
     });
   }
 
-  // PROP-092: авто-миграции схемы данных при старте (паритет со standalone-core) —
+  // ADR-092: авто-миграции схемы данных при старте (паритет со standalone-core) —
   // обязательная страховочная копия + межпроцессный лок. Миграция снапшотов скоупа —
   // зарегистрированная миграция реестра (`session-scope-snapshots-v1`), отдельный
   // прямой вызов больше не нужен. Fail-closed: ошибка не глушится.

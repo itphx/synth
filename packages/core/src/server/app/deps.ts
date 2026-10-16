@@ -97,7 +97,7 @@ export async function createStandaloneDeps(
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
 
-  // PROP-092: guard совместимости схемы данных — данные новее Synth → отказ старта
+  // ADR-092: guard совместимости схемы данных — данные новее Synth → отказ старта
   // (дешёвая fail-fast проверка). Устаревшая схема → авто-миграции с обязательной
   // страховочной копией ниже (`applyStartupMigrations`), после сборки стораджей.
   await assertInstanceDataNotTooNew(dataDir);
@@ -326,7 +326,7 @@ export async function createStandaloneDeps(
   // ADR-046 §4.2/§4.3: read-only индексация skills.urls — фоном, старт не блокируем.
   void skillService.refreshRemote().catch(() => {});
 
-  // PROP-092: авто-миграции схемы данных при старте — с обязательной страховочной
+  // ADR-092: авто-миграции схемы данных при старте — с обязательной страховочной
   // копией и под межпроцессным локом. Миграция снапшотов скоупа — зарегистрированная
   // миграция реестра (`session-scope-snapshots-v1`, маркер внутри сохранён → no-op
   // при повторном запуске), отдельный прямой вызов больше не нужен.

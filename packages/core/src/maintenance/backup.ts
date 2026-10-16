@@ -1,4 +1,4 @@
-// PROP-091: `synth backup` — архив каталога данных (`$SYNTH_DATA_DIR`) в tar.gz
+// ADR-091: `synth backup` — архив каталога данных (`$SYNTH_DATA_DIR`) в tar.gz
 // с манифестом (версия схемы/пакета, время, список файлов, контрольная сумма),
 // опциональными секретами и опциональными рабочими каталогами.
 import { createHash } from 'node:crypto';
@@ -14,7 +14,7 @@ import {
   type ArchiveSource,
 } from './archive.js';
 
-/** Манифест архива backup (PROP-091). */
+/** Манифест архива backup (ADR-091). */
 export interface BackupManifest {
   tool: 'synth-backup';
   formatVersion: 1;
@@ -34,7 +34,7 @@ export interface BackupManifest {
   dataDir: string;
 }
 
-/** Опции `createBackup` (PROP-091). */
+/** Опции `createBackup` (ADR-091). */
 export interface CreateBackupOptions {
   dataDir: string;
   /** Путь к архиву; каталог — положить файл внутрь. По умолчанию — текущий каталог. */
@@ -51,7 +51,7 @@ export interface CreateBackupOptions {
   log?: (msg: string) => void;
 }
 
-/** Опции CLI-команды `synth backup` (PROP-091). */
+/** Опции CLI-команды `synth backup` (ADR-091). */
 export interface BackupCommandOptions extends CreateBackupOptions {
   /** Канал ошибок (по умолчанию `console.error`). */
   error?: (msg: string) => void;
@@ -66,11 +66,11 @@ export function formatBackupStamp(date: Date): string {
   );
 }
 
-/** Вид страховочной копии (PROP-092): перед миграцией или перед восстановлением. */
+/** Вид страховочной копии (ADR-092): перед миграцией или перед восстановлением. */
 export type SafetyCopyKind = 'pre-migrate' | 'pre-restore';
 
 /**
- * Путь страховочной копии в едином каталоге `{dataDir}/backups/` (PROP-092):
+ * Путь страховочной копии в едином каталоге `{dataDir}/backups/` (ADR-092):
  * `synth-<kind>-<YYYYMMDD-HHmmss>.tar.gz`. Каталог `backups/` исключён из
  * архивов бэкапа по умолчанию, поэтому копии не попадают в бэкап рекурсивно.
  */
@@ -132,7 +132,7 @@ async function _resolveOutPath(out: string | undefined, defaultName: string): Pr
 }
 
 /**
- * Создаёт архив каталога данных (PROP-091).
+ * Создаёт архив каталога данных (ADR-091).
  *
  * Исключения по умолчанию: `backups/` (страховочные копии — не бэкапятся
  * рекурсивно), `workspaces/` (без `--with-workspace`), `tmp/`, `logs/`,
@@ -220,7 +220,7 @@ export async function createBackup(opts: CreateBackupOptions): Promise<{
 }
 
 /**
- * Тело CLI-команды `synth backup` (PROP-091): снимает архив и печатает сводку.
+ * Тело CLI-команды `synth backup` (ADR-091): снимает архив и печатает сводку.
  *
  * @returns код выхода процесса (0 — успех, 1 — ошибка).
  */

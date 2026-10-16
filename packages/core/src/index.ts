@@ -483,7 +483,7 @@ export type {
 export { resolveProjectSkillSeed, resolveProjectMcpSeed } from './engine/skills/seed.js';
 export { migrateSessionScopeSnapshots, SESSION_SCOPE_SNAPSHOT_MIGRATION } from './storage/migrations.js';
 export type { SessionScopeMigrationDeps } from './storage/migrations.js';
-// PROP-092: версионирование схемы данных инстанса, реестр миграций, guard совместимости.
+// ADR-092: версионирование схемы данных инстанса, реестр миграций, guard совместимости.
 export {
   SCHEMA_VERSION,
   MIGRATIONS,
@@ -498,13 +498,13 @@ export {
 export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } from './storage/instance-meta.js';
 export { runMigrateCommand } from './maintenance/migrate.js';
 export type { MigrateCommandOptions } from './maintenance/migrate.js';
-// PROP-092: авто-миграции при старте (обязательная страховочная копия, лок).
+// ADR-092: авто-миграции при старте (обязательная страховочная копия, лок).
 export { applyStartupMigrations } from './maintenance/startup.js';
 export type { ApplyStartupMigrationsOptions } from './maintenance/startup.js';
-// PROP-092: `synth uninstall` — сохранение/удаление данных инстанса.
+// ADR-092: `synth uninstall` — сохранение/удаление данных инстанса.
 export { runUninstallCommand, collectUninstallSummary } from './maintenance/uninstall.js';
 export type { UninstallCommandOptions, UninstallSummary } from './maintenance/uninstall.js';
-// PROP-091: `synth doctor` — health инстанса, целостность данных, ключи/мастер, провайдеры, dataDir, миграции.
+// ADR-091: `synth doctor` — health инстанса, целостность данных, ключи/мастер, провайдеры, dataDir, миграции.
 export { runDoctor, renderDoctorResult, runDoctorCommand } from './maintenance/doctor.js';
 export type {
   DoctorStatus,
@@ -513,7 +513,7 @@ export type {
   DoctorOptions,
   DoctorCommandOptions,
 } from './maintenance/doctor.js';
-// PROP-091: `synth backup`/`restore` — архив каталога данных с манифестом,
+// ADR-091: `synth backup`/`restore` — архив каталога данных с манифестом,
 // контрольными суммами, опциональными секретами и страховочной копией.
 export {
   listFilesForArchive,

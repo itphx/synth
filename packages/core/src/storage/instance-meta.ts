@@ -1,4 +1,4 @@
-// PROP-092: версионирование схемы данных инстанса, реестр миграций и guard
+// ADR-092: версионирование схемы данных инстанса, реестр миграций и guard
 // совместимости.
 //
 // Глобальная версия схемы каталога данных хранится в `{dataDir}/meta.json`:
@@ -25,7 +25,7 @@ export interface InstanceMeta {
   updatedAt: string;
 }
 
-/** Зависимости миграции (PROP-092). */
+/** Зависимости миграции (ADR-092). */
 export interface MigrationDeps {
   /** Каталог данных инстанса. */
   dataDir: string;
@@ -39,7 +39,7 @@ export interface MigrationDeps {
   resolveSystemDefaults?: () => Promise<{ mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined>;
 }
 
-/** Элемент реестра миграций (PROP-092). */
+/** Элемент реестра миграций (ADR-092). */
 export interface Migration {
   /** Стабильный id, напр. `session-scope-snapshots-v1`. */
   id: string;
@@ -66,7 +66,7 @@ export interface InstanceCompatibility {
 /**
  * Данные инстанса новее версии Synth (схема `meta.schemaVersion` > `expected`).
  * Fail-closed: старт/миграция должны отказаться, иначе можно повредить данные
- * старшей схемы (понижение версии не мигрирует назад — PROP-092).
+ * старшей схемы (понижение версии не мигрирует назад — ADR-092).
  */
 export class InstanceDataTooNewError extends Error {
   readonly meta: InstanceMeta;
@@ -84,7 +84,7 @@ export class InstanceDataTooNewError extends Error {
 
 /**
  * ADR-071 §2.4 / ADR-046 §4.5: разовая миграция снапшотов скоупа как элемент
- * общего реестра (PROP-092). Проверка маркера сохранена ВНУТРИ самой миграции
+ * общего реестра (ADR-092). Проверка маркера сохранена ВНУТРИ самой миграции
  * (`migrateSessionScopeSnapshots`) — повторный запуск по-прежнему no-op.
  */
 export const SESSION_SCOPE_SNAPSHOTS_MIGRATION_V1: Migration = {
@@ -190,7 +190,7 @@ export async function assertInstanceDataNotTooNew(dataDir: string): Promise<void
 }
 
 /**
- * Применяет pending-миграции (PROP-092).
+ * Применяет pending-миграции (ADR-092).
  *
  * `dryRun` — только строит план (`planned`), ничего не выполняет и не пишет.
  * Иначе выполняет миграции по порядку и **один раз** пишет `meta.json`:

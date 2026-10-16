@@ -1,4 +1,4 @@
-// PROP-092: тесты авто-миграций при старте (`applyStartupMigrations`):
+// ADR-092: тесты авто-миграций при старте (`applyStartupMigrations`):
 // обязательная страховочная копия, fail-closed, идемпотентность, too-new.
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,7 +16,7 @@ import {
 import { readFileFromTarGz } from './archive.js';
 import { applyStartupMigrations } from './startup.js';
 
-describe('applyStartupMigrations (PROP-092)', () => {
+describe('applyStartupMigrations (ADR-092)', () => {
   let tmpDir: string;
   let dataDir: string;
   let settingsStore: RuntimeSettingsStore;

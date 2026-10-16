@@ -1,4 +1,4 @@
-// PROP-091: тесты минимального потокового tar.gz (ustar) на временных каталогах.
+// ADR-091: тесты минимального потокового tar.gz (ustar) на временных каталогах.
 import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

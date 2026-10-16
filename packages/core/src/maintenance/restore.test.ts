@@ -1,4 +1,4 @@
-// PROP-091: тесты `synth restore` на временных каталогах данных.
+// ADR-091: тесты `synth restore` на временных каталогах данных.
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -92,7 +92,7 @@ describe('restore', () => {
     expect(result.safetyCopyPath).toBeTruthy();
     const copyPath = result.safetyCopyPath as string;
     expect(basename(copyPath)).toMatch(/^synth-pre-restore-\d{8}-\d{6}\.tar\.gz$/);
-    // PROP-092: страховочная копия — в едином каталоге {dataDir}/backups/.
+    // ADR-092: страховочная копия — в едином каталоге {dataDir}/backups/.
     expect(dirname(copyPath)).toBe(join(target, 'backups'));
     await expect(stat(copyPath)).resolves.toBeTruthy();
 

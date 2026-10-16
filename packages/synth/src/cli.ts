@@ -714,7 +714,7 @@ program
 
 program
   .command('migrate')
-  .description('Применить миграции схемы данных инстанса (PROP-092)')
+  .description('Применить миграции схемы данных инстанса (ADR-092)')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
@@ -736,7 +736,7 @@ program
 
 program
   .command('doctor')
-  .description('Проверить состояние инстанса (health, данные, ключи, провайдеры) — PROP-091')
+  .description('Проверить состояние инстанса (health, данные, ключи, провайдеры) — ADR-091')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
@@ -759,7 +759,7 @@ program
 
 program
   .command('backup')
-  .description('Создать архив каталога данных с манифестом (PROP-091)')
+  .description('Создать архив каталога данных с манифестом (ADR-091)')
   .option('--out <path>', 'путь к архиву или каталогу (по умолчанию — текущий каталог)')
   .option('--with-secrets', 'включить секреты (secrets/) — архив становится секретом')
   .option('--with-workspace', 'включить рабочие каталоги (workspaces/)')
@@ -785,7 +785,7 @@ program
 
 program
   .command('restore')
-  .description('Восстановить каталог данных из архива backup — возврат к снимку (PROP-091)')
+  .description('Восстановить каталог данных из архива backup — возврат к снимку (ADR-091)')
   .argument('<archive>', 'путь к архиву backup')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
@@ -814,7 +814,7 @@ program
 
 program
   .command('uninstall')
-  .description('Удалить инстанс: по умолчанию данные сохраняются, --purge удаляет (PROP-092)')
+  .description('Удалить инстанс: по умолчанию данные сохраняются, --purge удаляет (ADR-092)')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')

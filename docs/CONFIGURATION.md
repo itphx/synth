@@ -24,6 +24,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 |-----------|------------|--------------|
 | `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль ADMIN). Если не задан, `synth serve` генерирует устойчивый локальный ключ в `{dataDir}/secrets/api-key` | — |
 | `SYNTH_DATA_DIR` | Каталог данных (сессии, проекты, провайдеры, модели) | по режиму: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
+| `SYNTH_STORAGE_BACKEND` | ADR-096: физический backend хранения: `file` (JSON-файлы, ADR-005) или `memory` (in-memory, данные **не** сохраняются) | `file` |
 | `SYNTH_WORKSPACES_ROOT` | Корень каталогов workspace проектов (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | ADR-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
@@ -146,6 +147,9 @@ server:
 
 storage:
   dataDir: "/var/synth/data"      # каталог данных вне репозитория
+  backend: "file"                 # ADR-096: физический backend хранения — file (JSON-файлы с атомарной записью,
+                                  # дефолт) | memory (in-memory, данные НЕ сохраняются — герметичные тесты/эмуляция);
+                                  # SYNTH_STORAGE_BACKEND
   workspacesRoot: ""              # если пусто — {dataDir}/workspaces; SYNTH_WORKSPACES_ROOT
   defaultWorkspace: ""            # если пусто — {dataDir}/workspaces/default; SYNTH_DEFAULT_WORKSPACE
   workspaceOutsideRoot: ""        # ADR-075: политика для абсолютного workspace вне workspacesRoot
@@ -309,6 +313,13 @@ remote:                           # гибридный режим: локаль�
 - `storage.defaultWorkspace` — рабочий каталог сессий без проекта; если не задан — `{dataDir}/workspaces/default` (`SYNTH_DEFAULT_WORKSPACE`). Runtime-override — `PUT /api/v2/settings/workspace`.
 - `storage.workspaceOutsideRoot` — политика для абсолютного `project.workspace` вне `workspacesRoot` (`confirm` — подтверждение флагом `confirmOutsideRoot`, `deny` — запрет). Пусто (`''`) — не задано, эффективно `confirm` в standalone; managed-backend жёстко использует `deny`. Env `SYNTH_WORKSPACE_OUTSIDE_ROOT`, runtime — `GET/PUT/DELETE /api/v2/settings/workspace-policy` (managed — read-only).
 - `storage.maxUploadBytes` — максимальный размер загрузки файла `POST /api/v2/fs/upload`, байт. Не задан — `104857600` (100 МиБ). Валидация (config.yaml): целое в границах `1024`…`2147483648` (2 ГиБ), иначе — ошибка конфигурации (`Невалидная конфигурация`); env-значение вне границ/не число — warn + фолбэк на config (fail-soft). Env `SYNTH_MAX_UPLOAD_BYTES`, резолвер `resolveMaxUploadBytes` (приоритет env > config > дефолт). Лимит проверяется до чтения тела (по `content-length` и размеру `File`) и повторно по фактическому размеру; превышение → `413 PAYLOAD_TOO_LARGE`. Тело по-прежнему буферизуется в память целиком (стриминговый лимит не реализован).
+
+### Backend хранения (`storage.backend`, ADR-096)
+
+- `storage.backend` — физический backend хранения: `file` (JSON-файлы с атомарной записью tmp→rename, [ADR-005](./arch_decisions/adr-005-json-storage.md); по умолчанию) или `memory` (in-memory, данные **не** сохраняются на диск — для герметичных тестов и эмуляции). Домен работает через доменные порты, backend взаимозаменяем ([ADR-096](./arch_decisions/adr-096-storage-layer.md)).
+- **Приоритет** ([ADR-023](./arch_decisions/adr-023-configuration.md)): env `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `file`. Некорректное значение (не `file`/`memory`) — warn и фолбэк на config/дефолт (fail-soft). Резолвер — `resolveStorageBackend` (`@itphx/synth-shared/config`); выбор применяется в точке сборки `StorageContext` (`createFileStorage`/`createMemoryStorage`/`createStorageContext`).
+- `memory` печатает предупреждение `storage.backend=memory: данные не сохраняются на диск` — режим **не для прода** (только тесты/эмуляция).
+- Следующий backend — БД за тем же слоем (порты + контрактный suite, «паспорт порта») — [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md).
 
 ### Секреты at-rest (`security.secretKey`, ADR-076)
 

@@ -15,7 +15,7 @@ import {
   writeInstanceMeta,
 } from './instance-meta.js';
 
-describe('instance-meta (PROP-092)', () => {
+describe('instance-meta (ADR-092)', () => {
   let tmpDir: string;
   let settingsStore: RuntimeSettingsStore;
 

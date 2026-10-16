@@ -21,12 +21,12 @@
 | # | Цель | Документы | Критерий готовности |
 |---|---|---|---|
 | 1 | **Хранилище: два варианта (файлы и БД) за единым слоем** | [ADR-096](./arch_decisions/adr-096-storage-layer.md), [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Единый слой (доменные порты + контрактный suite + `StorageContext`) ✅ сделан; остаток — БД-реализация (PROP-032): идемпотентная миграция JSON→БД, откат, паритет функциональности, замеры на N сессий |
-| 2 | **Эксплуатация: утилиты, руководства и ops-скиллы** | [PROP-091](./arch_decisions/prop-091-backup-restore-transfer.md), [PROP-092](./arch_decisions/prop-092-instance-lifecycle-maintenance.md), [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Ops-MVP (`backup`/`restore`/`doctor`/`migrate`/`uninstall`) ✅ реализован; остаток — руководства на портале, `synth update --to`, ops-скиллы (PROP-048) |
+| 2 | **Эксплуатация: утилиты, руководства и ops-скиллы** | [ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md), [ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md), [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Ops-MVP (`backup`/`restore`/`doctor`/`migrate`/`uninstall`) ✅ реализован ([ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)); остаток — руководства на портале, `synth update --to`, ops-скиллы (PROP-048) |
 | 3 | **Оптимизация потребления памяти** | [PROP-099](./arch_decisions/prop-099-memory-footprint-optimization.md) | RSS-бюджет на N активных сессий и отсутствие неограниченного роста кэшей |
 
 Пометка: это приоритет **0.11**; состав целей и их порядок могут уточняться.
 
-## Предложения к решению (33)
+## Предложения к решению (31)
 
 | ID | Тема | Статус | Решение до | Заметка |
 |---|---|---|---|---|
@@ -54,8 +54,6 @@
 | [PROP-085](./arch_decisions/prop-085-multimodal-input.md) | Мультимодальный ввод (звук/изображения/видео) | 🧩 Предложение | 2026-11-14 | контракт `Part`; зависит от PROP-032/PROP-077 |
 | [PROP-088](./arch_decisions/prop-088-http-proxy.md) | Единый egress-слой (прокси, CA, Kerberos) | 🧩 Предложение | 2026-11-14 | требуется для корпоративных контуров |
 | [PROP-090](./arch_decisions/prop-090-extension-api.md) | Extension API v1 (плагины, загрузчик) | 🧩 Предложение | 2026-11-14 | остаток ADR-030/ADR-086; trust/scan — PROP-068 |
-| [PROP-091](./arch_decisions/prop-091-backup-restore-transfer.md) | Бэкап, восстановление и перенос данных | 🧩 Предложение | 2026-11-14 | `synth backup`/`restore`; онлайн-консистентность — после PROP-032 |
-| [PROP-092](./arch_decisions/prop-092-instance-lifecycle-maintenance.md) | Обслуживание инстанса (обновление, миграции, удаление) | 🧩 Предложение | 2026-11-14 | `schemaVersion` + `synth migrate`; пример новых правил ведения AD |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации портала | 🧩 Предложение | 2026-11-14 | вариант A (nginx) или B (`mike`) |
 | [PROP-094](./arch_decisions/prop-094-observability-metrics.md) | Наблюдаемость и эксплуатационные метрики | 🧩 Предложение | 2026-11-14 | `/metrics`, `/ready`, структурные логи, SLO |
 | [PROP-096](./arch_decisions/prop-096-background-subagent-sessions.md) | Фоновые сессии саб-агентов (не блокируют основную) | 🧩 Предложение | 2026-11-14 | аналог `subagent background` в OpenCode; общий реестр с PROP-097 |
@@ -111,7 +109,7 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-087](./arch_decisions/adr-087-gateways.md) | Шлюзы (gateways) | ⚠️ Частично | HA/leader election, webhook-транспорт, второй канал |
 | [ADR-089](./arch_decisions/adr-089-external-events-automation.md) | Платформа внешних событий | ⚠️ Частично | Plugin SDK → PROP-090, пайплайны → PROP-059, остаток ADR-087, стриминг ответа наружу |
 
-Итого: ADR — 44 (из них 37 со статусом `✅ Реализовано` и 7 со статусом `⚠️ Частично`, в т.ч. 5 —
-«принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089), предложений — 42 (33 actionable + 9 vision),
-legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 7 файлов — ADR-018, ADR-030, ADR-046,
-ADR-051, ADR-086, ADR-087, ADR-089 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).
+Итого: ADR — 46 (из них 37 со статусом `✅ Реализовано` и 9 со статусом `⚠️ Частично`, в т.ч. 5 —
+«принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089), предложений — 40 (31 actionable + 9 vision),
+legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 9 файлов — ADR-018, ADR-030, ADR-046,
+ADR-051, ADR-086, ADR-087, ADR-089, ADR-091, ADR-092 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).

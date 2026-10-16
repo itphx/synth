@@ -1,4 +1,4 @@
-// PROP-091: `synth restore` — восстановление каталога данных из архива backup.
+// ADR-091: `synth restore` — восстановление каталога данных из архива backup.
 // Строгий порядок: манифест → формат → версия схемы → контрольные суммы →
 // dry-run → подтверждение (`--yes`) → страховочная копия → очистка цели →
 // извлечение. Восстановление — возврат к снимку: данные, появившиеся после
@@ -15,7 +15,7 @@ import {
   type BackupManifest,
 } from './backup.js';
 
-/** Расхождение контрольной суммы файла при проверке архива (PROP-091). */
+/** Расхождение контрольной суммы файла при проверке архива (ADR-091). */
 export class BackupChecksumError extends Error {
   readonly path: string;
 
@@ -26,10 +26,10 @@ export class BackupChecksumError extends Error {
   }
 }
 
-/** Каталог страховочных копий — сохраняется при возврате к снимку (PROP-092). */
+/** Каталог страховочных копий — сохраняется при возврате к снимку (ADR-092). */
 const BACKUPS_DIR = 'backups';
 
-/** Опции `restoreBackup` (PROP-091). */
+/** Опции `restoreBackup` (ADR-091). */
 export interface RestoreOptions {
   /** Путь к архиву backup. */
   archive: string;
@@ -45,7 +45,7 @@ export interface RestoreOptions {
   warn?: (msg: string) => void;
 }
 
-/** Опции CLI-команды `synth restore` (PROP-091). */
+/** Опции CLI-команды `synth restore` (ADR-091). */
 export interface RestoreCommandOptions extends RestoreOptions {
   /** Подтверждение перезаписи данных (обязательно без `--dry-run`). */
   yes?: boolean;
@@ -162,7 +162,7 @@ function _safeTarget(dataDir: string, relPath: string): string {
 }
 
 /**
- * Восстанавливает каталог данных из архива backup (PROP-091).
+ * Восстанавливает каталог данных из архива backup (ADR-091).
  *
  * Восстановление — **возврат к снимку**: перед распаковкой все элементы верхнего
  * уровня в `dataDir` удаляются (данные, появившиеся после бэкапа и отсутствующие
@@ -224,7 +224,7 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
   }
 
   // 7. Страховочная копия текущих данных (до перезаписи) — в единый каталог
-  // `{dataDir}/backups/` (PROP-092), исключённый из архивов бэкапа.
+  // `{dataDir}/backups/` (ADR-092), исключённый из архивов бэкапа.
   let safetyPath: string | undefined;
   if (safetyCopy && (await _dirNotEmpty(dataDir))) {
     const out = safetyCopyPath(dataDir, 'pre-restore');
@@ -276,7 +276,7 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
 }
 
 /**
- * Тело CLI-команды `synth restore` (PROP-091). Без `--dry-run` и без `--yes` —
+ * Тело CLI-команды `synth restore` (ADR-091). Без `--dry-run` и без `--yes` —
  * отказ («перезапись данных»). Проверка архива выполняется всегда. Восстановление
  * возвращает каталог к снимку (лишние файлы удаляются; `backups/` сохраняется);
  * при `--no-safety-copy` откат невозможен — предупреждение идёт в stderr.

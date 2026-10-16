@@ -94,11 +94,11 @@ pnpm clean                  # очистка dist/
 **Обслуживание инстанса** (runbook — [docs/MAINTENANCE.md](./docs/MAINTENANCE.md)):
 
 ```bash
-synth doctor                 # health инстанса (--json) — PROP-091
-synth backup --out <dir>     # архив каталога данных (--with-secrets|--with-workspace|--live) — PROP-091
-synth restore <archive>      # восстановление (--dry-run|--yes|--no-safety-copy) — PROP-091
-synth migrate                # миграции схемы данных (--dry-run|--yes) — PROP-092
-synth uninstall              # удаление инстанса (--purge|--dry-run|--yes; по умолчанию данные сохраняются) — PROP-092
+synth doctor                 # health инстанса (--json) — ADR-091
+synth backup --out <dir>     # архив каталога данных (--with-secrets|--with-workspace|--live) — ADR-091
+synth restore <archive>      # восстановление (--dry-run|--yes|--no-safety-copy) — ADR-091
+synth migrate                # миграции схемы данных (--dry-run|--yes) — ADR-092
+synth uninstall              # удаление инстанса (--purge|--dry-run|--yes; по умолчанию данные сохраняются) — ADR-092
 ```
 
 Сборка core копирует `prompts/` и `definitions/*.json` в `dist/` — это **fallback для Docker**; источник истины промптов — `packages/core/prompts` (публикуется в npm через `files`), дубликатов ассетов нет (ADR-038). Логи dev-запуска: `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`.
@@ -467,8 +467,8 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | PROP-088 | Работа через HTTP-прокси: единый egress-слой, `no_proxy`/исключения, доверенные CA, аутентификация Basic/NTLM/Negotiate (Kerberos) | 🧩 Предложение | [prop-088](./docs/arch_decisions/prop-088-http-proxy.md) |
 | ADR-089 | Synth как платформа внешних событий и автоматизации: сущности Event/Binding/Router, приём внешних событий на hook-шине, `session.requested` — тоже событие. Реализовано: ядро Event/Binding/Router, единый funnel, API/UI, ключи привязок, идентичности профиля + claim-flow, auto-bind, права внешних отправителей (fail-closed), надёжный Stop; остаток — PROP-090/PROP-059/ADR-087 | ⚠️ Частично | [adr-089](./docs/arch_decisions/adr-089-external-events-automation.md) |
 | PROP-090 | Extension API v1: 4 класса (Plugin / Gateway / Add-on / контент-пак), определение Plugin (код в процессе ядра), таксономия влияния (contribution / interception / observation), единый манифест `synth.pack` (`kind`/`contracts`/`provides`), фасад `@itphx/synth-plugin` + disposer-модель, bundle-only дистрибуция, install/activate (`plugins.lock.json`/`plugins.json`), trust/scan по PROP-068, плагины в managed (ADMIN, deploy-time + runtime-опция) и hybrid (allow-list + server-scoped токены) | 🧩 Предложение | [prop-090](./docs/arch_decisions/prop-090-extension-api.md) |
-| PROP-091 | Бэкап, восстановление и перенос данных: `synth backup`/`restore` (архив каталога данных + манифест, `--with-secrets`, `--dry-run`/`--yes`, шифрование), портативный экспорт/импорт проекта (без секретов), admin API для managed; онлайн-консистентность — после PROP-032 | 🧩 Предложение | [prop-091](./docs/arch_decisions/prop-091-backup-restore-transfer.md) |
-| PROP-092 | Обслуживание инстанса: обновление, миграции схемы данных (`meta.json`/`schemaVersion` + `synth migrate`), откат (`synth update --to <version>`, `helm rollback`), удаление (`synth uninstall [--purge]`), runbook эксплуатации | 🧩 Предложение | [prop-092](./docs/arch_decisions/prop-092-instance-lifecycle-maintenance.md) |
+| ADR-091 | Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor` | ⚠️ Частично | [adr-091](./docs/arch_decisions/adr-091-backup-restore-transfer.md) |
+| ADR-092 | Обслуживание инстанса — версия схемы данных, миграции и удаление | ⚠️ Частично | [adr-092](./docs/arch_decisions/adr-092-instance-lifecycle-maintenance.md) |
 | PROP-093 | Версионирование документации портала: версионные подкаталоги + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093](./docs/arch_decisions/prop-093-docs-versioning.md) |
 | PROP-094 | Наблюдаемость и эксплуатационные метрики: `/metrics` (Prometheus), `/ready` + раздельные probes, структурные логи (`request_id`/`session_id`, редакция секретов), SLO/алерты, sizing | 🧩 Предложение | [prop-094](./docs/arch_decisions/prop-094-observability-metrics.md) |
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095](./docs/arch_decisions/adr-095-god-object-decomposition.md) |
@@ -532,9 +532,9 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 | MCP-сервер Synth | [PROP-056](./docs/arch_decisions/prop-056-synth-mcp-server.md), [PROP-048](./docs/arch_decisions/prop-048-self-help-skills-admin-mcp.md) |
 | внешние add-on сервисы / шлюзы / плагины / editions | [ADR-086](./docs/arch_decisions/adr-086-extensibility-plugins-editions.md), [ADR-087](./docs/arch_decisions/adr-087-gateways.md), [PROP-090](./docs/arch_decisions/prop-090-extension-api.md), [PROP-068](./docs/arch_decisions/prop-068-skills-agents-registry.md), [ADR-030](./docs/arch_decisions/adr-030-hooks-agent-events.md) |
 | прокси / egress | [PROP-088](./docs/arch_decisions/prop-088-http-proxy.md) |
-| бэкап / восстановление / экспорт / импорт данных | [PROP-091](./docs/arch_decisions/prop-091-backup-restore-transfer.md), [ADR-005](./docs/arch_decisions/adr-005-json-storage.md), [PROP-055](./docs/arch_decisions/prop-055-instance-exchange.md) |
-| обслуживание инстанса / бэкап / миграции | [PROP-091](./docs/arch_decisions/prop-091-backup-restore-transfer.md), [PROP-092](./docs/arch_decisions/prop-092-instance-lifecycle-maintenance.md), [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) |
-| обновление / миграции схемы / откат / удаление инстанса | [PROP-092](./docs/arch_decisions/prop-092-instance-lifecycle-maintenance.md), [ADR-038](./docs/arch_decisions/adr-038-npm-packages.md), [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) |
+| бэкап / восстановление / экспорт / импорт данных | [ADR-091](./docs/arch_decisions/adr-091-backup-restore-transfer.md), [ADR-005](./docs/arch_decisions/adr-005-json-storage.md), [PROP-055](./docs/arch_decisions/prop-055-instance-exchange.md) |
+| обслуживание инстанса / бэкап / миграции | [ADR-091](./docs/arch_decisions/adr-091-backup-restore-transfer.md), [ADR-092](./docs/arch_decisions/adr-092-instance-lifecycle-maintenance.md), [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) |
+| обновление / миграции схемы / откат / удаление инстанса | [ADR-092](./docs/arch_decisions/adr-092-instance-lifecycle-maintenance.md), [ADR-038](./docs/arch_decisions/adr-038-npm-packages.md), [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) |
 | версионирование документации | [PROP-093](./docs/arch_decisions/prop-093-docs-versioning.md), скилл `synth-docs` |
 | наблюдаемость / метрики / health / ready / SLO | [PROP-094](./docs/arch_decisions/prop-094-observability-metrics.md), [ADR-036](./docs/arch_decisions/adr-036-llm-gateway.md) |
 | мультимодальный ввод | [PROP-085](./docs/arch_decisions/prop-085-multimodal-input.md) |

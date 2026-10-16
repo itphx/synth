@@ -1,4 +1,4 @@
-// PROP-091, раздел «Проверка»: тесты `synth doctor` на временных каталогах.
+// ADR-091, раздел «Проверка»: тесты `synth doctor` на временных каталогах.
 import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

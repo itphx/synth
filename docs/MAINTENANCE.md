@@ -2,13 +2,13 @@
 
 > **Класс документа:** Runbook ([ARCH_DECISIONS.md](./ARCH_DECISIONS.md) §1) — пошаговые процедуры с
 > ожидаемым результатом. Это не справка команд: назначение и описание флагов — в `--help` и
-> [PROP-091](./arch_decisions/prop-091-backup-restore-transfer.md)/[PROP-092](./arch_decisions/prop-092-instance-lifecycle-maintenance.md).
+> [ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md).
 > Разработка/окружение — [DEVELOPMENT.md](./DEVELOPMENT.md); конфиг — [CONFIGURATION.md](./CONFIGURATION.md).
 
 Решения-основания: [ADR-079](./arch_decisions/adr-079-local-home-independent-instances.md) (локальный
 home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (мастер-ключ, `secrets rotate`),
-[ADR-096](./arch_decisions/adr-096-storage-layer.md) (слой хранения), [PROP-091](./arch_decisions/prop-091-backup-restore-transfer.md)
-(бэкап/восстановление), [PROP-092](./arch_decisions/prop-092-instance-lifecycle-maintenance.md)
+[ADR-096](./arch_decisions/adr-096-storage-layer.md) (слой хранения), [ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)
+(бэкап/восстановление), [ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)
 (миграции/обновление/удаление).
 
 Общие команды ниже даны для CLI `synth`; в dev-пакете доступны те же команды у `node dist/main.js`
@@ -141,12 +141,12 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
    **удалит PVC** с данными. Если данные нужны — выставьте `keepOnUninstall: true` заранее (позднее
    `kubectl annotate` живого PVC не помогает: Helm смотрит манифест релиза). Удаление инстанса — это
    также очистка PVC, Secret (`synth-secrets`, signing-ключи), образов и namespace.
-6. Аудит-событие `uninstall.purge` в текущей итерации не реализовано (остаток [PROP-092](./arch_decisions/prop-092-instance-lifecycle-maintenance.md)).
+6. Аудит-событие `uninstall.purge` в текущей итерации не реализовано (остаток [ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
 
 ## Обновление и откат
 
 > ⚠️ **`synth update --apply --to <version>` ещё не реализовано.** Сегодня `synth update` только
-> показывает current/latest; параметра версии и отката пакета нет (остаток [PROP-092](./arch_decisions/prop-092-instance-lifecycle-maintenance.md)).
+> показывает current/latest; параметра версии и отката пакета нет (остаток [ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
 
 1. **Перед обновлением — бэкап** (см. «Бэкап»): после обновления миграция может изменить данные
    необратимо.

@@ -1,4 +1,4 @@
-// PROP-091, раздел «Проверка»: команда `synth doctor` — health инстанса,
+// ADR-091, раздел «Проверка»: команда `synth doctor` — health инстанса,
 // целостность данных, доступность мастер-ключа/секретов, провайдеры и модели,
 // write-доступ к `dataDir` и состояние миграций.
 //
@@ -11,10 +11,10 @@ import { SYNTH_VERSION } from '@itphx/synth-shared';
 import { checkInstanceCompatibility, readInstanceMeta } from '../storage/instance-meta.js';
 import { masterKeyFilePath, readMasterKeyFile } from '../security/crypto.js';
 
-/** Статус отдельной проверки (PROP-091). */
+/** Статус отдельной проверки (ADR-091). */
 export type DoctorStatus = 'ok' | 'warn' | 'fail';
 
-/** Результат одной проверки инстанса (PROP-091). */
+/** Результат одной проверки инстанса (ADR-091). */
 export interface DoctorCheck {
   /** Стабильный id проверки, напр. `data-dir`. */
   id: string;
@@ -27,7 +27,7 @@ export interface DoctorCheck {
   hint?: string;
 }
 
-/** Итог `synth doctor` (PROP-091). */
+/** Итог `synth doctor` (ADR-091). */
 export interface DoctorResult {
   /** `false`, если хотя бы одна проверка завершилась `fail`. */
   ok: boolean;
@@ -37,7 +37,7 @@ export interface DoctorResult {
   version: string;
 }
 
-/** Опции прогона проверок (PROP-091). */
+/** Опции прогона проверок (ADR-091). */
 export interface DoctorOptions {
   /** Каталог данных инстанса (явный `--data-dir`). */
   dataDir: string;
@@ -49,7 +49,7 @@ export interface DoctorOptions {
   configSecretKey?: string;
 }
 
-/** Опции CLI-команды `synth doctor` (PROP-091). */
+/** Опции CLI-команды `synth doctor` (ADR-091). */
 export interface DoctorCommandOptions extends DoctorOptions {
   /** Вывод в JSON вместо человекочитаемого. */
   json?: boolean;
@@ -148,7 +148,7 @@ async function _checkDataDir(dataDir: string): Promise<DoctorCheck> {
   return { ...base, status: 'ok', detail: dataDir };
 }
 
-/** Проверка 2: совместимость схемы данных (PROP-092). */
+/** Проверка 2: совместимость схемы данных (ADR-092). */
 async function _checkSchema(dataDir: string): Promise<DoctorCheck> {
   const base: Pick<DoctorCheck, 'id' | 'title'> = { id: 'schema', title: 'Схема данных' };
   const compatibility = await checkInstanceCompatibility(dataDir);
@@ -363,7 +363,7 @@ async function _checkVersion(dataDir: string): Promise<DoctorCheck> {
 }
 
 /**
- * Прогоняет проверки инстанса (PROP-091). Строго read-only, кроме пробного файла
+ * Прогоняет проверки инстанса (ADR-091). Строго read-only, кроме пробного файла
  * `{dataDir}/.doctor-probe` (создать → удалить). Каждая проверка независима:
  * исключение внутри превращается в `fail` с текстом ошибки, остальные выполняются.
  */
@@ -433,7 +433,7 @@ export function renderDoctorResult(result: DoctorResult, opts?: { json?: boolean
 }
 
 /**
- * Тело CLI-команды `synth doctor` (PROP-091): прогон проверок и вывод.
+ * Тело CLI-команды `synth doctor` (ADR-091): прогон проверок и вывод.
  *
  * @returns код выхода процесса (1 — есть `fail`, иначе 0).
  */

@@ -1,4 +1,4 @@
-// PROP-092: тесты `synth uninstall` — сохранение данных по умолчанию, защита
+// ADR-092: тесты `synth uninstall` — сохранение данных по умолчанию, защита
 // необратимого удаления (`--purge` требует `--yes`), dry-run и локальный home.
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runUninstallCommand } from './uninstall.js';
 
-describe('runUninstallCommand (PROP-092)', () => {
+describe('runUninstallCommand (ADR-092)', () => {
   let tmpDir: string;
   let dataDir: string;
 
