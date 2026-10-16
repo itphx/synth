@@ -536,6 +536,15 @@ export {
 export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } from './storage/instance-meta.js';
 export { runMigrateCommand } from './maintenance/migrate.js';
 export type { MigrateCommandOptions } from './maintenance/migrate.js';
+// PROP-032 (волна 5): `synth storage migrate` — идемпотентный перенос данных инстанса между backend'ами (file ↔ postgres).
+export { runStorageMigrateCommand, migrateStorageData, STORAGE_MIGRATION_ENTITIES } from './maintenance/storage-migrate.js';
+export type {
+  StorageMigrateCommandOptions,
+  StorageMigrateTarget,
+  StorageMigrationReport,
+  StorageMigrationEntity,
+  MigrateStorageDataOptions,
+} from './maintenance/storage-migrate.js';
 // ADR-092: `synth update` — проверка/обновление/откат пакета (`--to <version>`), паритет dev-CLI и публичного CLI (PROP-053).
 export { runUpdateCommand, operationOf } from './maintenance/update.js';
 export type { UpdateCommandOptions, UpdateCommandDeps, UpdateOperation } from './maintenance/update.js';

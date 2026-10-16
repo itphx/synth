@@ -1164,6 +1164,44 @@ program
   });
 
 program
+  .command('storage')
+  .description('Управление физическим слоем хранения (PROP-032)')
+  .addCommand(
+    new Command('migrate')
+      .description('Перенести данные инстанса между backend\'ами хранения (file ↔ postgres), идемпотентно')
+      .requiredOption('--to <backend>', 'целевой backend: file | postgres')
+      .option('--target-data-dir <path>', 'каталог данных файловой цели (--to file; по умолчанию — --data-dir)')
+      .option('--data-dir <path>', 'каталог данных источника (и файловой цели по умолчанию)')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+      .option('--dry-run', 'показать счётчики по сущностям без записи')
+      .option('--yes', 'подтвердить перенос (обязательно без --dry-run)')
+      .action(async (options) => {
+        const to = options.to as string;
+        if (to !== 'file' && to !== 'postgres') {
+          console.error(`Ошибка: неизвестный целевой backend "${to}" (ожидается file | postgres).`);
+          process.exit(1);
+        }
+        const home = resolveHome(options.home);
+        const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+        const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
+
+        const { runStorageMigrateCommand } = await import('./maintenance/storage-migrate.js');
+        const code = await runStorageMigrateCommand({
+          dataDir,
+          config: synth,
+          to,
+          targetDataDir: options.targetDataDir,
+          dryRun: !!options.dryRun,
+          yes: !!options.yes,
+          env: process.env,
+          home,
+        });
+        if (code !== 0) process.exit(code);
+      }),
+  );
+
+program
   .command('doctor')
   .description('Проверить состояние инстанса (health, данные, ключи, провайдеры) — ADR-091')
   .option('--data-dir <path>', 'каталог данных')

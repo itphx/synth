@@ -9,6 +9,7 @@ import {
   detectRuntimeDeps,
   createStorageContextAsync,
 } from '../index.js';
+import type { StorageContext } from '../index.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
@@ -29,6 +30,35 @@ export interface SingleChatOptions {
 }
 
 export async function runSingleChat(options: SingleChatOptions): Promise<void> {
+  // PROP-032 (W2.4): единый контекст хранения (`createStorageContextAsync` —
+  // resolved backend, включая `postgres` через динамический драйвер).
+  const storage = await createStorageContextAsync(
+    resolveStorageBackend(options.config, process.env),
+    {
+      dataDir: options.dataDir,
+      env: process.env,
+      postgres: resolvePostgresConfig(options.config, process.env),
+      postgresPassword: resolvePostgresPassword({ dataDir: options.dataDir }, process.env),
+      bundlesPath: options.config.commands?.bundlesPath,
+    },
+  );
+  // PROP-032 (волна 5): one-shot путь — контекст закрываем явно (`close?()`
+  // освобождает пул БД), не полагаясь только на `allowExitOnIdle` драйвера.
+  let code = 1;
+  try {
+    code = await _runSingleChat(options, storage);
+  } finally {
+    await storage.close?.().catch(() => {});
+  }
+  if (code !== 0) process.exit(code);
+}
+
+/**
+ * Тело одного чат-запроса (PROP-032: контекст хранения передаётся снаружи —
+ * его освобождает `runSingleChat`). Возвращает код выхода процесса: 0 — успех,
+ * 1 — ошибка (выход выполняет обёртка — после закрытия контекста).
+ */
+async function _runSingleChat(options: SingleChatOptions, storage: StorageContext): Promise<number> {
   const dataDir = options.dataDir;
 
   const defaultWorkingDir = resolveDefaultWorkspace(options.config, {
@@ -42,18 +72,6 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     SYNTH_DATA_DIR: options.dataDir,
   });
 
-  // PROP-032 (W2.4): единый контекст хранения (`createStorageContextAsync` —
-  // resolved backend, включая `postgres` через динамический драйвер).
-  const storage = await createStorageContextAsync(
-    resolveStorageBackend(options.config, process.env),
-    {
-      dataDir,
-      env: process.env,
-      postgres: resolvePostgresConfig(options.config, process.env),
-      postgresPassword: resolvePostgresPassword({ dataDir }, process.env),
-      bundlesPath: options.config.commands?.bundlesPath,
-    },
-  );
   const sessionManager = new SessionManager(storage.sessions);
   const providerStore = storage.providers;
   const modelStore = storage.models;
@@ -101,7 +119,7 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     const localOnly = resolved && isLocalCommandStatus(resolved.status);
     if (localOnly && resolved) {
       console.log(resolved.output ?? '');
-      return;
+      return 0;
     }
   }
 
@@ -111,14 +129,14 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
   if (!providerName || !modelName) {
     console.error('Ошибка: не указан провайдер и/или модель.');
     console.error('Укажите через --provider и --model или настройте конфигурацию.');
-    process.exit(1);
+    return 1;
   }
 
   const providerConfig = providerCache.get(providerName);
   if (!providerConfig) {
     console.error(`Ошибка: провайдер "${providerName}" не найден.`);
     console.error('Настройте провайдера через: synth config provider add');
-    process.exit(1);
+    return 1;
   }
 
   const eventBus = new EventBus();
@@ -265,15 +283,16 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
 
     if (result.error) {
       console.error('\nОшибка:', result.error);
-      process.exit(1);
+      return 1;
     }
   } catch (err) {
     console.error('\nОшибка:', err instanceof Error ? err.message : String(err));
-    process.exit(1);
+    return 1;
   } finally {
     // Удаляем временную сессию
     await sessionManager.deleteSession(session.id).catch(() => {});
   }
 
   console.log(); // завершающий перевод строки
+  return 0;
 }

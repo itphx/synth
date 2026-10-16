@@ -493,7 +493,9 @@ projectCmd
     await ensureDataDir(dataDir);
 
     const { exportProject, buildStorageContext } = await import('@itphx/synth-core');
+    // PROP-032: one-shot путь — контекст закрываем явно (не полагаемся на `allowExitOnIdle`).
     const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
+    let exitCode = 0;
     try {
       const result = await exportProject({
         dataDir,
@@ -514,8 +516,11 @@ projectCmd
       console.log(`  workspace: ${result.withWorkspace ? 'да' : 'нет'}`);
     } catch (err) {
       console.error(`Ошибка экспорта: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
+      exitCode = 1;
+    } finally {
+      await storage.close?.().catch(() => {});
     }
+    if (exitCode !== 0) process.exit(exitCode);
   });
 
 projectCmd
@@ -537,7 +542,9 @@ projectCmd
     await ensureDataDir(dataDir);
 
     const { importProject, buildStorageContext } = await import('@itphx/synth-core');
+    // PROP-032: one-shot путь — контекст закрываем явно (не полагаемся на `allowExitOnIdle`).
     const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
+    let exitCode = 0;
     try {
       const result = await importProject({
         dataDir,
@@ -565,8 +572,11 @@ projectCmd
       }
     } catch (err) {
       console.error(`Ошибка импорта: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
+      exitCode = 1;
+    } finally {
+      await storage.close?.().catch(() => {});
     }
+    if (exitCode !== 0) process.exit(exitCode);
   });
 
 program.addCommand(projectCmd);
@@ -829,15 +839,59 @@ program
 
     const { runMigrateCommand, buildStorageContext } = await import('@itphx/synth-core');
     const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
-    const code = await runMigrateCommand({
-      dataDir,
-      dryRun: !!options.dryRun,
-      yes: !!options.yes,
-      audit: storage.maintenanceAudit,
-      storage,
-    });
+    let code = 1;
+    try {
+      code = await runMigrateCommand({
+        dataDir,
+        dryRun: !!options.dryRun,
+        yes: !!options.yes,
+        audit: storage.maintenanceAudit,
+        storage,
+      });
+    } finally {
+      await storage.close?.().catch(() => {});
+    }
     if (code !== 0) process.exit(code);
   });
+
+program
+  .command('storage')
+  .description('Управление физическим слоем хранения (PROP-032)')
+  .addCommand(
+    new Command('migrate')
+      .description('Перенести данные инстанса между backend\'ами хранения (file ↔ postgres), идемпотентно')
+      .requiredOption('--to <backend>', 'целевой backend: file | postgres')
+      .option('--target-data-dir <path>', 'каталог данных файловой цели (--to file; по умолчанию — --data-dir)')
+      .option('--data-dir <path>', 'каталог данных источника (и файловой цели по умолчанию)')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+      .option('--dry-run', 'показать счётчики по сущностям без записи')
+      .option('--yes', 'подтвердить перенос (обязательно без --dry-run)')
+      .action(async (options) => {
+        const to = options.to as string;
+        if (to !== 'file' && to !== 'postgres') {
+          console.error(`Ошибка: неизвестный целевой backend "${to}" (ожидается file | postgres).`);
+          process.exit(1);
+        }
+        const home = resolveHome(options.home);
+        const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+        const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
+
+        // PROP-032: контексты собираются и закрываются внутри команды (`finally`).
+        const { runStorageMigrateCommand } = await import('@itphx/synth-core');
+        const code = await runStorageMigrateCommand({
+          dataDir,
+          config: synth,
+          to,
+          targetDataDir: options.targetDataDir,
+          dryRun: !!options.dryRun,
+          yes: !!options.yes,
+          env: process.env,
+          home,
+        });
+        if (code !== 0) process.exit(code);
+      }),
+  );
 
 program
   .command('update')
@@ -856,15 +910,21 @@ program
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
 
     const { runUpdateCommand, buildStorageContext } = await import('@itphx/synth-core');
-    const code = await runUpdateCommand({
-      dataDir,
-      to: options.to as string | undefined,
-      apply: !!options.apply,
-      dryRun: !!options.dryRun,
-      yes: !!options.yes,
-      json: !!options.json,
-      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home })).maintenanceAudit,
-    });
+    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
+    let code = 1;
+    try {
+      code = await runUpdateCommand({
+        dataDir,
+        to: options.to as string | undefined,
+        apply: !!options.apply,
+        dryRun: !!options.dryRun,
+        yes: !!options.yes,
+        json: !!options.json,
+        audit: storage.maintenanceAudit,
+      });
+    } finally {
+      await storage.close?.().catch(() => {});
+    }
     if (code !== 0) process.exit(code);
   });
 
@@ -930,18 +990,24 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runBackupCommand, buildStorageContext } = await import('@itphx/synth-core');
-    const code = await runBackupCommand({
-      dataDir,
-      out: options.out,
-      withSecrets: !!options.withSecrets,
-      withWorkspace: !!options.withWorkspace,
-      live: !!options.live,
-      encrypt: !!options.encrypt,
-      keyFile: options.keyFile,
-      env: process.env,
-      storageBackend: resolveStorageBackend(synth, process.env),
-      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' })).maintenanceAudit,
-    });
+    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
+    let code = 1;
+    try {
+      code = await runBackupCommand({
+        dataDir,
+        out: options.out,
+        withSecrets: !!options.withSecrets,
+        withWorkspace: !!options.withWorkspace,
+        live: !!options.live,
+        encrypt: !!options.encrypt,
+        keyFile: options.keyFile,
+        env: process.env,
+        storageBackend: resolveStorageBackend(synth, process.env),
+        audit: storage.maintenanceAudit,
+      });
+    } finally {
+      await storage.close?.().catch(() => {});
+    }
     if (code !== 0) process.exit(code);
   });
 
@@ -967,16 +1033,22 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runRestoreCommand, buildStorageContext } = await import('@itphx/synth-core');
-    const code = await runRestoreCommand({
-      archive,
-      dataDir,
-      dryRun: !!options.dryRun,
-      yes: !!options.yes,
-      noSafetyCopy: options.safetyCopy === false,
-      keyFile: options.keyFile,
-      env: process.env,
-      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' })).maintenanceAudit,
-    });
+    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
+    let code = 1;
+    try {
+      code = await runRestoreCommand({
+        archive,
+        dataDir,
+        dryRun: !!options.dryRun,
+        yes: !!options.yes,
+        noSafetyCopy: options.safetyCopy === false,
+        keyFile: options.keyFile,
+        env: process.env,
+        audit: storage.maintenanceAudit,
+      });
+    } finally {
+      await storage.close?.().catch(() => {});
+    }
     if (code !== 0) process.exit(code);
   });
 
@@ -997,17 +1069,22 @@ program
 
     const { runUninstallCommand, buildStorageContext } = await import('@itphx/synth-core');
     const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
-    const code = await runUninstallCommand({
-      dataDir,
-      home: home ?? undefined,
-      purge: !!options.purge,
-      purgeDb: !!options.purgeDb,
-      dryRun: !!options.dryRun,
-      yes: !!options.yes,
-      storageBackend: resolveStorageBackend(synth, process.env),
-      ...(storage.purgeSchema ? { purgeSchema: () => storage.purgeSchema!() } : {}),
-      audit: storage.maintenanceAudit,
-    });
+    let code = 1;
+    try {
+      code = await runUninstallCommand({
+        dataDir,
+        home: home ?? undefined,
+        purge: !!options.purge,
+        purgeDb: !!options.purgeDb,
+        dryRun: !!options.dryRun,
+        yes: !!options.yes,
+        storageBackend: resolveStorageBackend(synth, process.env),
+        ...(storage.purgeSchema ? { purgeSchema: () => storage.purgeSchema!() } : {}),
+        audit: storage.maintenanceAudit,
+      });
+    } finally {
+      await storage.close?.().catch(() => {});
+    }
     if (code !== 0) process.exit(code);
   });
 
