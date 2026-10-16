@@ -1,6 +1,6 @@
 # ADR-092: Обслуживание инстанса — версия схемы данных, миграции и удаление
 
-> **Статус:** ⚠️ Частично — MVP реализован (`meta.json`, реестр миграций, авто-миграции, `synth migrate`, `synth uninstall`); миграции доступны через admin-API/UI (`/api/v2/maintenance`, раздел «Обслуживание»); остаток — `synth update --to`, аудит-события, мульти-инстанс-локи.
+> **Статус:** ⚠️ Частично — MVP реализован (`meta.json`, реестр миграций, авто-миграции, `synth migrate`, `synth update`/`--to` (обновление и откат), `synth uninstall`, аудит-журнал обслуживания); миграции доступны через admin-API/UI (`/api/v2/maintenance`, раздел «Обслуживание»); остаток — публикация runbook на портале, мульти-инстанс-локи.
 > **Дата:** 2026-10-16
 > **Связано:** [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-038](./adr-038-npm-packages.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [ADR-051](./adr-051-scheduler-pipelines.md), [ADR-091](./adr-091-backup-restore-transfer.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
@@ -17,16 +17,20 @@
 3. **Guard совместимости на старте** (паритет standalone-core и managed-backend): `meta.schemaVersion > SCHEMA_VERSION` → **отказ старта** («данные новее версии; обновите Synth»). Правило: **понижение версии не мигрирует данные назад** — откат данных только `synth restore` из бэкапа ([ADR-091](./adr-091-backup-restore-transfer.md)).
 4. **Авто-миграции при старте** (`applyStartupMigrations`): guard → **обязательная страховочная копия** (fail-closed: без копии не мигрируем, `{dataDir}/backups/synth-pre-migrate-<stamp>.tar.gz`) → pending-миграции под межпроцессным локом `{dataDir}/migrate` (`FileMutex`, heartbeat). Вручную: `synth migrate --dry-run` (план) / `synth migrate --yes` (без `--dry-run` и без `--yes` — отказ).
 5. **`synth uninstall [--purge|--dry-run|--yes]`** — по умолчанию данные **сохраняются** (сводка: размер, сессии/проекты, `secrets/`/`master.key`, версия схемы, число копий); `--purge` требует `--yes` и предупреждает об утрате мастер-ключа и страховочных копий; для локального home ([ADR-079](./adr-079-local-home-independent-instances.md)) перечисляет остающиеся `config.yaml`/`profiles.json`/`credentials.json`.
+6. **`synth update [--apply] [--to <version>] [--dry-run] [--yes] [--json]`** — проверка/обновление/**откат** пакета `@itphx/synth` (тело — `maintenance/update.ts`, паритет dev-CLI и публичного CLI, PROP-053): без `--apply` — только проверка; `--dry-run` — план без установки; `--to` валидируется (semver, наличие в реестре npm) и при версии ниже текущей помечается как откат («ОТКАТ» в приглашении). Аудит — `update.applied`/`rollback.applied`/`update.failed` (см. «Аудит» ниже).
 
 **Обновление и откат:**
 
 | Операция | Команда | Замечание |
 |---|---|---|
-| Проверить | `synth update` | показывает current/latest |
-| Обновить | `synth update --apply [--to <version>]` | без `--to` — последняя стабильная из известных, не слепой `latest` |
-| Откат (standalone, npm) | `synth update --to <prev> --apply` | downgrade пакета |
+| Проверить | `synth update` | показывает current/target и тип операции (`--json` — машиночитаемо) |
+| Предпросмотр | `synth update --dry-run [--to <version>]` | печатает план, ничего не устанавливает |
+| Обновить | `synth update --apply [--to <version>]` | без `--to` — последняя по `latest`; **реализовано** |
+| Откат (standalone, npm) | `synth update --to <prev> --apply` | downgrade пакета; в приглашении — «ОТКАТ»; **реализовано** |
 | Откат (K8s) | `helm rollback <release> <revision>` | + при необходимости restore данных из бэкапа ([ADR-091](./adr-091-backup-restore-transfer.md)) |
 | Совместимость | — | понижение версии не мигрирует данные назад; откат данных = только restore из бэкапа |
+
+**Аудит.** Операции обслуживания фиксируются best-effort в `{dataDir}/audit/maintenance.jsonl` (порт `MaintenanceAuditRepository`, ADR-096): `backup.created`/`restore.scheduled|applied`/`migrate.applied`/`update.applied`/`rollback.applied`/`uninstall.purge`, при неудаче — `*.failed`.
 
 **Безопасность.** Перед обновлением — бэкап: после обновления миграция может изменить данные необратимо. Миграция/откат/purge — привилегированные операции: подтверждение (`--yes`), `--dry-run`, страховочная копия перед изменяющими шагами; секретов в логах нет (при purge — предупреждение об утрате мастер-ключа). Процедуры и оговорка про `helm` — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
@@ -46,12 +50,12 @@
 
 ## Остаток
 
-- `synth update --to <version>` (обновление/откат пакета) — **не реализовано** (см. таблицу выше);
-- аудит-события `maintenance.migrate`/`maintenance.rollback`/`uninstall.purge`;
-- публикация runbook на портале `docs.synth.itphx.ru` (dev-вариант — [docs/MAINTENANCE.md](../MAINTENANCE.md)); admin-API/UI для обслуживания (миграции/бэкапы/doctor/restore) — **готовы** (`/api/v2/maintenance`, раздел «Обслуживание»);
+- публикация runbook на портале `docs.synth.itphx.ru` (dev-вариант — [docs/MAINTENANCE.md](../MAINTENANCE.md));
+- внешний audit-sink и запись аудита обслуживания вне инстанса (`uninstall --purge` удаляет запись вместе с каталогом);
 - K8s Lease / PG advisory lock для мульти-инстанса (после [PROP-032](./prop-032-history-storage-postgresql.md)).
 
 ## История
 
 - 2026-10-16 — PROP-092 принят как ADR-092 (MVP реализован; остаток вынесен) (коммиты ветки feat/storage-seam).
 - 2026-10-16 — миграции/бэкапы/doctor/restore выведены в admin-API (`/api/v2/maintenance`) и UI-раздел «Обслуживание» (ADMIN); применение миграций — под страховочной копией (fail-closed), восстановление — офлайн (ветка feat/storage-seam).
+- 2026-10-16 — `synth update [--apply] [--to <version>] [--dry-run] [--yes] [--json]` реализован в core (`maintenance/update.ts`) и добавлен в публикуемый CLI (паритет PROP-053); аудит `update.applied`/`rollback.applied`/`update.failed` (ветка feat/storage-seam).

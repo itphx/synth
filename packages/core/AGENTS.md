@@ -162,9 +162,11 @@
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
   `{dataDir}/maintenance/`), `backup.ts`/`restore.ts` (архив/снятие), `doctor.ts` (`synth doctor`),
-  `startup.ts` (`applyPendingRestore` — офлайн-восстановление при старте, `applyStartupMigrations` —
-  авто-миграции со страховочной копией), `audit.ts` (`recordMaintenanceAudit` — best-effort запись
-  аудит-событий обслуживания `backup`/`restore`/`migrate`/`uninstall`, ADR-092; порт
+  `update.ts` (`synth update` — проверка/обновление/**откат** пакета `--to <version>`, аудит
+  `update.applied`/`rollback.applied`/`update.failed`), `startup.ts` (`applyPendingRestore` —
+  офлайн-восстановление при старте, `applyStartupMigrations` — авто-миграции со страховочной копией),
+  `audit.ts` (`recordMaintenanceAudit` — best-effort запись аудит-событий обслуживания
+  `backup`/`restore`/`migrate`/`update`/`rollback`/`uninstall`, ADR-092; порт
   `MaintenanceAuditRepository`). HTTP-фабрика — `server/routes/maintenance.ts`
   (`createMaintenanceRoutes`).
 - `server/service-scope.ts` — ADR-052 (этап I): enforcement service-key — `requireScope(...)`

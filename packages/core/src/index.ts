@@ -515,6 +515,9 @@ export {
 export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } from './storage/instance-meta.js';
 export { runMigrateCommand } from './maintenance/migrate.js';
 export type { MigrateCommandOptions } from './maintenance/migrate.js';
+// ADR-092: `synth update` — проверка/обновление/откат пакета (`--to <version>`), паритет dev-CLI и публичного CLI (PROP-053).
+export { runUpdateCommand, operationOf } from './maintenance/update.js';
+export type { UpdateCommandOptions, UpdateCommandDeps, UpdateOperation } from './maintenance/update.js';
 // ADR-092: авто-миграции при старте (обязательная страховочная копия, лок).
 export { applyStartupMigrations, applyPendingRestore } from './maintenance/startup.js';
 export type {

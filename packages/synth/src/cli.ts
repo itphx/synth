@@ -736,6 +736,35 @@ program
   });
 
 program
+  .command('update')
+  .description('Проверить обновления, установить или откатить пакет (ADR-092)')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .option('--apply', 'установить целевую версию (без него — только проверка)')
+  .option('--to <version>', 'целевая версия X.Y.Z — обновление или откат')
+  .option('--dry-run', 'показать план без установки')
+  .option('--yes', 'пропустить подтверждение')
+  .option('--json', 'вывод в JSON')
+  .action(async (options) => {
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
+
+    const { runUpdateCommand, createFileStorage } = await import('@itphx/synth-core');
+    const code = await runUpdateCommand({
+      dataDir,
+      to: options.to as string | undefined,
+      apply: !!options.apply,
+      dryRun: !!options.dryRun,
+      yes: !!options.yes,
+      json: !!options.json,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
+    });
+    if (code !== 0) process.exit(code);
+  });
+
+program
   .command('doctor')
   .description('Проверить состояние инстанса (health, данные, ключи, провайдеры) — ADR-091')
   .option('--data-dir <path>', 'каталог данных')

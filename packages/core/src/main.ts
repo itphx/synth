@@ -1,7 +1,6 @@
 import { Command } from 'commander';
 import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
-import { spawn } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
 import { t as sm } from './engine/system-messages.js';
@@ -641,61 +640,31 @@ async function startRepl(options: Record<string, unknown>) {
 
 program
   .command('update')
-  .description('Проверить наличие обновлений и установить')
-  .option('--apply', 'установить обновление')
+  .description('Проверить обновления, установить или откатить пакет (ADR-092)')
+  .option('--apply', 'установить целевую версию (без него — только проверка)')
+  .option('--to <version>', 'целевая версия X.Y.Z — обновление или откат')
+  .option('--dry-run', 'показать план без установки')
+  .option('--json', 'вывод в JSON')
   .option('-y, --yes', 'пропустить подтверждение')
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
-    const { checkForUpdates } = await import('./update-checker.js');
     const synth = await loadConfig({});
     const dataDir = resolve(options.dataDir || resolveDataDir(synth));
     await ensureDataDir(dataDir);
 
-    const info = await checkForUpdates(dataDir);
+    const { runUpdateCommand } = await import('./maintenance/update.js');
+    const { createFileStorage } = await import('./storage/storage-context.js');
 
-    console.log(`Текущая версия: ${info.currentVersion}`);
-    console.log(`Последняя версия: ${info.latestVersion}`);
-
-    if (!info.hasUpdate) {
-      console.log('Обновления не найдены.');
-      return;
-    }
-
-    console.log(`\nДоступна новая версия ${info.latestVersion}!\n`);
-
-    if (!options.apply) {
-      console.log('Для установки выполните: synth update --apply');
-      return;
-    }
-
-    if (!options.yes) {
-      const readline = await import('node:readline');
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(`Установить @itphx/synth@${info.latestVersion}? [y/N] `, resolve);
-      });
-      rl.close();
-      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes' && answer.toLowerCase() !== 'д' && answer.toLowerCase() !== 'да') {
-        console.log('Отменено.');
-        return;
-      }
-    }
-
-    console.log(`Установка @itphx/synth@${info.latestVersion}...\n`);
-
-    const child = spawn('npm', ['install', '-g', `@itphx/synth@${info.latestVersion}`], {
-      stdio: 'inherit',
-      env: { ...process.env },
+    const code = await runUpdateCommand({
+      dataDir,
+      to: options.to as string | undefined,
+      apply: !!options.apply,
+      dryRun: !!options.dryRun,
+      yes: !!options.yes,
+      json: !!options.json,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        console.log('\nОбновление установлено. Перезапустите synth serve.');
-      } else {
-        console.log(`\nОшибка установки (код ${code})`);
-        process.exit(1);
-      }
-    });
+    if (code !== 0) process.exit(code);
   });
 
 program
