@@ -392,17 +392,19 @@ export const eventsConfigSchema = z.object({
  * - `jobRetentionDays` — срок хранения Job-истории (дни, `prune` на старте);
  * - `leaderElection` — выбор лидера-владельца тикера: `none` (каждый процесс
  *   считает себя лидером, поведение single-process) | `file` (file-based lock на
- *   общем `dataDir`). Default — `none` (OFF);
+ *   общем `dataDir`) | `postgres` (session-level advisory-lock БД; требует
+ *   `storage.backend=postgres`, иначе — `AlwaysLeader`). Default — `none` (OFF);
  * - `crossProcessLocks` — межпроцессная сериализация мутаций `ScheduleStore`
  *   (file-мьютекс поверх in-process `AsyncLock`). Default — `false` (OFF):
- *   поведение single-process не меняется.
+ *   поведение single-process не меняется. Под `storage.backend=postgres`
+ *   `ScheduleStore` не используется (мутации — атомарные SQL), лок не создаётся.
  */
 export const schedulerConfigSchema = z.object({
   enabled: z.boolean().default(true),
   tickSec: z.number().int().min(1).max(3600).default(60),
   catchUp: z.enum(['skip', 'once']).default('skip'),
   jobRetentionDays: z.number().int().min(0).default(30),
-  leaderElection: z.enum(['none', 'file']).default('none'),
+  leaderElection: z.enum(['none', 'file', 'postgres']).default('none'),
   crossProcessLocks: z.boolean().default(false),
 });
 

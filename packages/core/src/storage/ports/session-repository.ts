@@ -26,11 +26,27 @@ export interface SessionRepository {
   delete(sessionId: string): Promise<void>;
   /**
    * Список сессий с фильтром; сортировка по `updatedAt` desc.
+   * Возвращает **полную** сессию, включая историю (`messages`/`pendingMessages`/
+   * `checkpoints`). Там, где история не нужна, использовать `listLight`.
    * @future-backend — фильтрация/сортировка в SQL; файловая реализация сканирует каталог.
    */
   list(filter?: SessionFilter): Promise<Session[]>;
   /**
-   * Поиск по содержимому (заголовок + сообщения).
+   * **Лёгкий** список сессий: тот же набор id в том же порядке (`updatedAt` desc),
+   * что у `list`, но **метаданные без истории** — `messages`/`pendingMessages`/
+   * `checkpoints` пусты. Контракт общий для всех backend'ов (проверяется suite
+   * `storage/contract`).
+   *
+   * Использовать только там, где сообщения не нужны (видимость, подписки,
+   * архивация/TTL, чистка локов, учёт дерева). Для выдачи сессии целиком —
+   * `load`/`list`.
+   * @future-backend — выборка без join `messages`/child-таблиц (файловая
+   * реализация всё равно десериализует запись целиком).
+   */
+  listLight(filter?: SessionFilter): Promise<Session[]>;
+  /**
+   * Поиск по содержимому (заголовок + сообщения). Возвращает **полную** сессию
+   * (с `messages`): поиск идёт по тексту сообщений.
    * @future-backend — полнотекстовый поиск в БД; файловая реализация сканирует.
    */
   search(query: string, filter?: SessionFilter): Promise<Session[]>;

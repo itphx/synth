@@ -1,6 +1,6 @@
 # ADR-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через ADR-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и семы/file-based мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection`, `scheduler.crossProcessLocks`; default OFF); пайплайны (PROP-059), размещение в гибриде, K8s Lease/PG advisory lock и разные dataDir на реплику — нет
+> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через ADR-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection` — `none`/`file`/`postgres`, `scheduler.crossProcessLocks`; default OFF), в т.ч. PG advisory-lock лидер-выбор (PROP-032); пайплайны (PROP-059), размещение в гибриде, K8s Lease и разные dataDir на реплику — нет
 > **Дата:** 2026-09-16
 > **Источник:** перенесено из `AD-DRAFTS.md` (D6, идея 6 + Roadmap Фаза 2; прототип
 > `~/dev/aic/t11/synth/app/scheduler.py`).
@@ -190,20 +190,28 @@ Job-история, catch-up и принудительный (force) запус�
    (default, поведение single-process) и `FileLeader` (file-мьютекс
    `{dataDir}/scheduler/leader.lock`, stale `3×tick`); `SchedulerService.start()` стартует
    тикер только у лидера, `tick()` — heartbeat, `stop()` — release. Режим —
-   `scheduler.leaderElection: none|file` (default `none`).
+   `scheduler.leaderElection: none|file|postgres` (default `none`). `postgres`
+   (PROP-032) — `PgLeader` драйвера `@itphx/synth-storage-postgres`: session-level
+   advisory-lock на удерживаемом соединении; доступен при `storage.backend=postgres`,
+   потеря соединения явно снимает лидерство (heartbeat не нужен).
 3. **Межпроцессная сериализация мутаций `ScheduleStore`** — `FileMutex`
    (`storage/file-mutex.ts`, `mkdir`-лок + stale takeover) поверх in-process `AsyncLock`;
    read-modify-write `create/update/remove/markRun/setNextRun` не теряет `nextRunAt`.
-   Режим — `scheduler.crossProcessLocks: boolean` (default `false`).
+   Режим — `scheduler.crossProcessLocks: boolean` (default `false`). При
+   `storage.backend=postgres` мьютекс не нужен: мутации `schedules` — атомарные
+   одиночные `INSERT/UPDATE/DELETE`, файловый лок не создаётся (`Mutex`-шов —
+   `PgMutex` при необходимости, PROP-032).
 
 Все три флага по умолчанию **OFF** — поведение single-process (`replicaCount: 1`) не меняется.
 File-based реализация рассчитана на **общий `dataDir` на одном хосте/FS** и **не** решает
 задачу для разных dataDir/хостов.
 
 **Статус:** ✅ реализованы семы `DedupStore`/`SchedulerLeader` и file-based `FileDedupStore`/
-`FileLeader`/`FileMutex` (default OFF, тесты). ⏳ Остаётся будущим: K8s `Lease`
-(`coordination.k8s.io`), отдельный Deployment планировщика (`replicas: 1`), Postgres
-advisory lock / unique-index (после PROP-032), а также решение для разных dataDir на реплику.
+`FileLeader`/`FileMutex` (default OFF, тесты); PROP-032: PG advisory-lock лидер-выбор
+(`PgLeader`) и мьютекс (`PgMutex`) при `storage.backend=postgres`. ⏳ Остаётся будущим:
+K8s `Lease` (`coordination.k8s.io`), отдельный Deployment планировщика (`replicas: 1`),
+Postgres unique-index/`FOR UPDATE`-семы при нескольких репликах (частично закрыто PG
+advisory-локом), а также решение для разных dataDir на реплику.
 Связано с открытым вопросом «где живёт планировщик в гибриде» (ADR-042).
 
 ## Открытые вопросы

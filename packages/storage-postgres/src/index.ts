@@ -24,7 +24,17 @@ export {
   advisoryLockKeyToBigInt,
   loadPgModule,
 } from './pool.js';
-export type { PostgresPoolConfig, PostgresConnectionConfig, PostgresExecutor } from './pool.js';
+export type {
+  PostgresPoolConfig,
+  PostgresConnectionConfig,
+  PostgresExecutor,
+  HeldPostgresClient,
+} from './pool.js';
+
+// PROP-032: БД-механизмы координации (advisory-локи) — мьютекс, лидер-выбор,
+// фабрика `StorageLocks` для `StorageContext.locks`.
+export { PgMutex, PgLeader, createPostgresLocks, postgresLockKey, DEFAULT_LEADER_LOCK_NAME } from './locks.js';
+export type { PgMutexOptions, PgLeaderOptions } from './locks.js';
 
 // Схема и миграции.
 export { runMigrations, assertSchemaCurrent, readSchemaVersion, MIGRATIONS_TABLE } from './migrate.js';

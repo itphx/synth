@@ -19,6 +19,9 @@
  *   - чтения (`load`/`list`/`listForUser`/`listForUserScope`/`search`) отдают
  *     **полную** `Session`; сообщения/child-строки подгружаются **батчем**
  *     (`WHERE session_id = ANY($1)`, без N+1);
+ *   - `listLight` — метаданные без истории (`messages`/`pendingMessages`/
+ *     `checkpoints` пусты, child-таблицы не читаются): одна выборка из `sessions`
+ *     тем же `WHERE`/порядком, что у `list`;
  *   - `list`/`listForUser*` сортируют `updated_at DESC`; архивированные сессии
  *     **не** отфильтровываются — это ответственность менеджера
  *     (`SessionManager.listSessions`, как и у файловой/memory реализаций);
@@ -40,6 +43,7 @@ import {
   checkpointRow,
   deserializeReference,
   deserializeSession,
+  deserializeSessionLight,
   emptySessionChildren,
   messageRow,
   referenceRow,
@@ -369,6 +373,21 @@ export class PostgresSessionRepository implements SessionRepository {
   async list(filter?: SessionFilter): Promise<Session[]> {
     const { sql, params } = buildListWhere(filter);
     return this._listByWhere(sql, params);
+  }
+
+  /**
+   * Лёгкий список (`SessionRepository.listLight`): тот же `WHERE`/порядок, что у
+   * `list`, но **без** батчевой подгрузки child-таблиц — сообщения/чекпоинты не
+   * читаются вовсе. SQL содержит только `FROM sessions` (для `filter.search`
+   * добавляется `EXISTS (SELECT 1 FROM messages …)` — подзапрос-предикат, не join).
+   */
+  async listLight(filter?: SessionFilter): Promise<Session[]> {
+    const { sql, params } = buildListWhere(filter);
+    const rows = await this._connection.query<SessionRow>(
+      `SELECT s.* FROM sessions s ${sql} ORDER BY s.updated_at DESC, s.id ASC`,
+      params,
+    );
+    return rows.map(deserializeSessionLight);
   }
 
   /** Поиск по содержимому — тот же скан, что у `list` (паритет с файловой реализацией). */

@@ -41,6 +41,39 @@ export function describeSessionRepository(
       expect(list.map((s) => s.id)).toEqual(['b', 'c', 'a']);
     });
 
+    it('listLight: тот же набор id и порядок, что list; messages/pendingMessages/checkpoints пусты', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'a',
+        title: 'alpha',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [makeMessage('history-a')],
+        pendingMessages: [makeMessage('pending-a')],
+        checkpoints: [{ id: 'cp-a', sessionId: 'a', messages: [makeMessage('cp-msg')], createdAt: '2024-01-01T00:00:00.000Z' }],
+      }));
+      await repo.save(makeSession({
+        id: 'b',
+        title: 'beta',
+        updatedAt: '2024-03-01T00:00:00.000Z',
+        messages: [makeMessage('history-b')],
+      }));
+      await repo.save(makeSession({ id: 'c', updatedAt: '2024-02-01T00:00:00.000Z' }));
+
+      const full = await repo.list();
+      const light = await repo.listLight();
+
+      // Тот же набор id в том же порядке (updatedAt DESC), что у `list`.
+      expect(light.map((s) => s.id)).toEqual(full.map((s) => s.id));
+      expect(light.map((s) => s.id)).toEqual(['b', 'c', 'a']);
+      // Метаданные сохранены, история вырезана.
+      expect(light.find((s) => s.id === 'a')?.title).toBe('alpha');
+      for (const session of light) {
+        expect(session.messages).toEqual([]);
+        expect(session.pendingMessages).toEqual([]);
+        expect(session.checkpoints).toEqual([]);
+      }
+    });
+
     it('search находит по содержимому сообщения', async () => {
       const { repo } = await make();
       await repo.save(makeSession({ id: 'a', title: 'alpha', messages: [] }));

@@ -591,6 +591,14 @@ export async function createBackendDeps(
   // `start()` гейтится конфигом (`scheduler.enabled: false` — тикер не стартует),
   // ошибки старта логируются и не роняют процесс; остановка — `stopScheduler`.
   const schedulerTickMs = config.synth.scheduler.tickSec * 1000;
+  // PROP-032: `leaderElection=postgres` требует advisory-локов backend'а
+  // (`storage.backend=postgres`); иначе — предупреждение и AlwaysLeader.
+  if (config.synth.scheduler.leaderElection === 'postgres' && !storageContext.locks) {
+    console.warn(
+      '[scheduler] leaderElection=postgres, но backend не предоставляет advisory-локи ' +
+        '(нужен storage.backend=postgres) — используется AlwaysLeader',
+    );
+  }
   const schedulerService = new SchedulerService({
     scheduleStore,
     ingress: eventIngress,
@@ -599,10 +607,15 @@ export async function createBackendDeps(
     defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
     catchUp: config.synth.scheduler.catchUp,
     jobRetentionDays: config.synth.scheduler.jobRetentionDays,
-    // ADR-051/ADR-089: тикер стартует только у лидера (default — AlwaysLeader).
-    leader: config.synth.scheduler.leaderElection === 'file'
-      ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
-      : new AlwaysLeader(),
+    // ADR-051/ADR-089/PROP-032: тикер стартует только у лидера (default —
+    // AlwaysLeader). `file` — файловый лок на общем dataDir, `postgres` —
+    // session-level advisory-lock драйвера (доступен только при PG-backend).
+    leader:
+      config.synth.scheduler.leaderElection === 'file'
+        ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
+        : config.synth.scheduler.leaderElection === 'postgres' && storageContext.locks
+          ? storageContext.locks.createLeader({ name: 'scheduler/leader', tickMs: schedulerTickMs })
+          : new AlwaysLeader(),
   });
   if (config.synth.scheduler.enabled !== false) {
     void schedulerService.start().catch((err) => {
@@ -619,6 +632,10 @@ export async function createBackendDeps(
     settingsStore,
     sessionManager,
     projectStore,
+    // PROP-032: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
+    ...(storageContext.locks
+      ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
+      : {}),
     resolveSystemDefaults: async () => ({
       mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
       skillsDefaultOn: (await resolveProjectSkillSeed(

@@ -232,7 +232,8 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
           const ownerIds = localOwnerResolver
             ? [...(await localOwnerResolver.resolveLocalOwnerIds())]
             : undefined;
-          const allSessions = await sessionManager.listSessions({ userId: 'local', ownerIds });
+          // Нужны только id сессий владельца — лёгкая выборка (без истории).
+          const allSessions = await sessionManager.listSessions({ userId: 'local', ownerIds }, { light: true });
           for (const s of allSessions) {
             subscribe(s.id);
           }

@@ -2,6 +2,7 @@ import type { Stats } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import type { LockOptions, Mutex } from './mutex.js';
 
 export interface FileMutexOptions {
   /** Путь к каталогу-локу (создаётся атомарно через `mkdir`). */
@@ -44,7 +45,7 @@ function delay(ms: number): Promise<void> {
  *
  * Fail-open: ошибки логируются `console.warn` и не роняют вызывающего.
  */
-export class FileMutex {
+export class FileMutex implements Mutex {
   private _path: string;
   private _staleMs: number;
   private _retryMs: number;
@@ -234,7 +235,7 @@ export class FileMutex {
    * (заметно меньше `staleMs`). Таймер снимается в `finally`; при fail-open
    * (лок не захвачен) heartbeat не стартует.
    */
-  async withLock<T>(fn: () => Promise<T>, opts?: { heartbeat?: boolean }): Promise<T> {
+  async withLock<T>(fn: () => Promise<T>, opts?: LockOptions): Promise<T> {
     const deadline = Date.now() + this._timeoutMs;
     let acquired = false;
     while (Date.now() < deadline) {

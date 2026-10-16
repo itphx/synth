@@ -26,7 +26,9 @@ export async function migrateSessionScopeSnapshots(deps: SessionScopeMigrationDe
   if (await deps.settingsStore.getMigrationMarker(SESSION_SCOPE_SNAPSHOT_MIGRATION)) return 0;
 
   // ADR-089: миграция должна видеть и архивированные сессии (архив не влияет на скоуп).
-  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true });
+  // Лёгкая выборка: для отбора кандидатов нужны только `settings`/`projectId`;
+  // уже мигрированные сессии не читают историю вовсе.
+  const sessions = await deps.sessionManager.listSessions(undefined, { includeArchived: true, light: true });
   const projects = new Map<string, Project | null>();
   let systemDefaults: { mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined;
   const getSystemDefaults = async () => {
@@ -59,10 +61,15 @@ export async function migrateSessionScopeSnapshots(deps: SessionScopeMigrationDe
     }
     if (mcpDefaultOn === undefined && skillsDefaultOn === undefined) continue;
 
+    // `saveSession` перезаписывает сессию целиком (включая `messages`), поэтому
+    // обновляем только полную запись — лёгкая (`listLight`) потеряла бы историю.
+    const full = await deps.sessionManager.getSession(session.id);
+    if (!full) continue;
+
     const updatedSession: Session = {
-      ...session,
+      ...full,
       settings: {
-        ...session.settings,
+        ...full.settings,
         ...(mcpDefaultOn !== undefined ? { mcpDefaultOn } : {}),
         ...(skillsDefaultOn !== undefined ? { skillsDefaultOn } : {}),
       },

@@ -32,6 +32,37 @@ export interface SessionTree {
   children: SessionTree[];
 }
 
+/**
+ * Лёгкая проекция «свои сессии» (паритет с `listForUser`): владелец задан в
+ * `userId`/`ownerIds`. Применяется к лёгкому списку (`listLight`), где сообщения
+ * не нужны.
+ */
+function filterByUser(sessions: Session[], userId: string, ownerIds: string[]): Session[] {
+  const ids = new Set<string>([userId, ...ownerIds]);
+  return sessions.filter(
+    (s) => (s.userId !== undefined && ids.has(s.userId))
+      || (s.ownerId !== undefined && ids.has(s.ownerId)),
+  );
+}
+
+/**
+ * Лёгкая проекция «свои + сессии проектов участия» (паритет с `listForUserScope`,
+ * ADR-089).
+ */
+function filterByUserScope(
+  sessions: Session[],
+  userId: string,
+  projectIds: string[],
+  ownerIds: string[],
+): Session[] {
+  const ids = new Set<string>([userId, ...ownerIds]);
+  return sessions.filter(
+    (s) => (s.userId !== undefined && ids.has(s.userId))
+      || (s.ownerId !== undefined && ids.has(s.ownerId))
+      || (s.projectId !== undefined && projectIds.includes(s.projectId)),
+  );
+}
+
 export class SessionManager {
   private _locks = new Map<string, Promise<void>>();
 
@@ -227,24 +258,38 @@ export class SessionManager {
 
   async listSessions(
     filter?: { projectId?: string; userId?: string; projectIds?: string[]; ownerIds?: string[] },
-    options?: { includeArchived?: boolean },
+    options?: { includeArchived?: boolean; light?: boolean },
   ): Promise<Session[]> {
     // ADR-089: `projectIds` — командная видимость (свои + сессии проектов-участий),
     // `userId` — только свои. Оба заданы — `projectIds` приоритетнее (он шире).
     // `ownerIds` — доп. id владельца (standalone: legacy-UUID профиля `local`,
     // нормализованный при чтении, ADR-089).
-    const sessions = filter?.projectIds
-      ? await this.store.listForUserScope(filter.userId ?? '', filter.projectIds, filter.ownerIds)
-      : filter?.userId
-        ? await this.store.listForUser(filter.userId, filter.ownerIds)
-        : await this.store.list(filter);
+    // `light` — метаданные без истории (`SessionRepository.listLight`): вызывающие,
+    // которым нужны только id/статус/projectId/settings и т.п. Лёгкая выборка
+    // получается целиком (без фильтра) и «свои/проектные» проекции считаются в
+    // памяти — семантика идентична `listForUser`/`listForUserScope`, но без
+    // загрузки `messages`/`checkpoints`.
+    const light = options?.light === true;
+    let sessions: Session[];
+    if (filter?.projectIds) {
+      sessions = light
+        ? filterByUserScope(await this.store.listLight(), filter.userId ?? '', filter.projectIds, filter.ownerIds ?? [])
+        : await this.store.listForUserScope(filter.userId ?? '', filter.projectIds, filter.ownerIds);
+    } else if (filter?.userId) {
+      sessions = light
+        ? filterByUser(await this.store.listLight(), filter.userId, filter.ownerIds ?? [])
+        : await this.store.listForUser(filter.userId, filter.ownerIds);
+    } else {
+      sessions = light ? await this.store.listLight(filter) : await this.store.list(filter);
+    }
     // ADR-089: архивированные сессии скрыты из списков по умолчанию (доступ — getSession по id).
     if (options?.includeArchived) return sessions;
     return sessions.filter((s) => !s.archivedAt);
   }
 
   async listActiveSessions(options?: { includeArchived?: boolean }): Promise<Session[]> {
-    const sessions = await this.listSessions(undefined, options);
+    // Лёгкая выборка: нужны только `status.blocked`/`currentStream` (без истории).
+    const sessions = await this.listSessions(undefined, { ...options, light: true });
     return sessions.filter((s) => s.status.blocked || s.currentStream);
   }
 
@@ -267,7 +312,9 @@ export class SessionManager {
    * (`expiresAt <= now`, `archivedAt` не задан). Возвращает id архивированных.
    */
   async archiveExpired(now: Date = new Date()): Promise<string[]> {
-    const sessions = await this.listSessions(undefined, { includeArchived: true });
+    // Лёгкая выборка: нужны только `expiresAt`/`archivedAt`; архивация подгружает
+    // сессию целиком (`archiveSession` → `store.load`), поэтому история не теряется.
+    const sessions = await this.listSessions(undefined, { includeArchived: true, light: true });
     const archived: string[] = [];
     for (const session of sessions) {
       if (!session.expiresAt || session.archivedAt) continue;
@@ -319,7 +366,8 @@ export class SessionManager {
 
   async cleanupStaleLocks(timeoutMinutes = 15): Promise<string[]> {
     // ADR-089: архивированные сессии тоже могут держать устаревший lock — проходим все.
-    const sessions = await this.listSessions(undefined, { includeArchived: true });
+    // Лёгкая выборка: нужен только `status.blocked`/`blockedAt`.
+    const sessions = await this.listSessions(undefined, { includeArchived: true, light: true });
     const stale: string[] = [];
     const now = new Date();
 
@@ -412,13 +460,22 @@ export class SessionManager {
     });
   }
 
-  async getChildren(parentId: string): Promise<Session[]> {
-    return this.store.list({ parentId });
+  /**
+   * Дочерние сессии. `options.light` — метаданные без истории (нужны только
+   * `id`/`title`/`parentId`): оптимизация для дерева (`getSessionTree`) и
+   * fork (уникализация title). По умолчанию — полная сессия (роут
+   * `GET /:id/children` и CLI `children` сериализуют/считают сообщения).
+   */
+  async getChildren(parentId: string, options?: { light?: boolean }): Promise<Session[]> {
+    return options?.light === true
+      ? this.store.listLight({ parentId })
+      : this.store.list({ parentId });
   }
 
   async getSessionTree(rootId: string): Promise<SessionTree> {
     const root = await this.getSession(rootId);
-    const children = await this.getChildren(rootId);
+    // Дети нужны только для рекурсии по `id`; сами сессии загружаются `getSession`.
+    const children = await this.getChildren(rootId, { light: true });
     const childTrees = await Promise.all(
       children.map((c) => this.getSessionTree(c.id)),
     );
@@ -625,7 +682,8 @@ export class SessionManager {
     options: { messageId?: string; messageIndex?: number; title?: string; userId?: string; ownerId?: string },
   ): Promise<Session> {
     return this.withLock(sourceSessionId, async (source) => {
-      const siblings = await this.getChildren(sourceSessionId);
+      // Нужны только заголовки детей (уникализация title) — метаданные без истории.
+      const siblings = await this.getChildren(sourceSessionId, { light: true });
       const existingTitles = siblings.map((s) => s.title || '');
       const forkedTitle = options.title || getForkedTitle(source.title, existingTitles);
 

@@ -33,6 +33,7 @@ import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPrincipalPorts } from './ports/principals.js';
 import { buildSessionPorts } from './ports/sessions.js';
+import { createPostgresLocks } from './locks.js';
 
 /** Опции сборки контекста PostgreSQL. */
 export interface BuildPostgresContextOptions {
@@ -79,6 +80,9 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // PROP-032: соединение живёт в контексте; `close()` закрывает пул (graceful
     // shutdown домена).
     close: () => opts.connection.end(),
+    // PROP-032: примитивы координации БД (advisory-локи) — composition root
+    // подставляет их вместо файловых `FileMutex`/`FileLeader`.
+    locks: createPostgresLocks(opts.connection),
     ...buildSessionPorts(deps),
     ...buildPrincipalPorts(deps),
     ...buildEventPorts(deps),

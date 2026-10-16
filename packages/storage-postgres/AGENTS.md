@@ -60,7 +60,9 @@ dev-Postgres). Проводка домена — через `storage.backend = p
   `idle_in_transaction_session_timeout=60s`, `application_name=synth`; схема —
   первая в `search_path`. Публичные примитивы: `query`, `withTransaction(fn)`,
   `withAdvisoryLock(key, fn)` (session-level, выделенное соединение),
-  `tryAdvisoryLock(key, fn)`. Сырые ошибки `pg` маппятся в доменные классы
+  `tryAdvisoryLock(key, fn)`, `acquireHeldClient()` (выделенное соединение,
+  удерживаемое вызывающим, + `onError`-детект разрыва — для долгоживущих
+  advisory-локов). Сырые ошибки `pg` маппятся в доменные классы
   (`mapPgError`): `23505` → `PostgresUniqueViolationError`, `42P01` →
   `PostgresUndefinedTableError`, `55P03` → `PostgresLockTimeoutError`, сетевые
   (класс `08`/`57P0x`/`ECONNREFUSED`/…) → `PostgresConnectionError`, прочее →
@@ -75,6 +77,20 @@ dev-Postgres). Проводка домена — через `storage.backend = p
   ожидаемой (`STORAGE_POSTGRES_SCHEMA_TOO_NEW`). `migrate:false` (DBA-режим) —
   `assertSchemaCurrent` без применения: схема отстаёт/отсутствует →
   `STORAGE_POSTGRES_SCHEMA_OUTDATED`. `readSchemaVersion` — текущая версия.
+- **Координация (`locks.ts`, PROP-032 волна 4).** `PgMutex implements Mutex` и
+  `PgLeader implements SchedulerLeader` (типы — `@itphx/synth-core`, только
+  `import type`) поверх session-level advisory-локов на выделенном соединении;
+  ключ — детерминированный 64-битный хеш namespaced-имени (`synth:` + имя,
+  `advisoryLockKeyToBigInt`), не пересекается с ключом миграций
+  (`synth:migrate:<schema>`). `withLock` — ретраи `pg_try_advisory_lock` до
+  `timeoutMs`, по истечении `warn` + выполнение без лока (паритет с `FileMutex`);
+  при **недоступной БД** — понятная ошибка (не зависание). `PgLeader` держит
+  соединение всё время лидерства (`touch()` — no-op), при разрыве соединения
+  явно снимает лидерство (лог). Публикуется через `StorageContext.locks`
+  (`createPostgresLocks`): core подставляет `PgMutex`/`PgLeader` при
+  `storage.backend=postgres` (`scheduler.leaderElection: postgres`, лок миграций).
+  **Риск пула:** удерживаемое соединение не возвращается в пул — держите не больше
+  одного на процесс; `poolMax` по умолчанию 10 (`pool.ts`).
 - **Сборка контекста (`storage-context.ts` + `src/ports/*`).** Порты разложены по
   четырём независимым файлам-группам (по одному владельцу-агенту на файл, волна
   реализации правит их параллельно и без конфликтов); каждая группа экспортирует

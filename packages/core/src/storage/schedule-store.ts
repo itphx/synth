@@ -3,6 +3,7 @@ import { join, dirname } from 'node:path';
 import type { Schedule, ScheduleInput, ScheduleRunStatus } from '@itphx/synth-shared';
 import { generateId, AsyncLock, atomicWrite, safeJsonParse, nowISO } from '@itphx/synth-shared';
 import { FileMutex } from './file-mutex.js';
+import type { Mutex } from './mutex.js';
 import type { ScheduleRepository } from './ports/schedule-repository.js';
 
 /** ADR-051: версия схемы файла расписаний — для будущей миграции (PROP-032). */
@@ -16,6 +17,12 @@ export interface ScheduleStoreConfig {
    * Default `false` — поведение single-process не меняется.
    */
   crossProcess?: boolean;
+  /**
+   * PROP-032: внешний мьютекс (file/PG) — приоритетнее `crossProcess`. Позволяет
+   * composition root'у подставить backend-специфичную реализацию; не задан и
+   * `crossProcess` — мутации идут только под in-process `AsyncLock`.
+   */
+  mutex?: Mutex;
 }
 
 /** ADR-051/ADR-089: результат очередного запуска расписания (`markRun`). */
@@ -51,14 +58,14 @@ function isSchedule(value: unknown): value is Schedule {
  */
 export class ScheduleStore implements ScheduleRepository {
   private _lock = new AsyncLock();
-  private _mutex?: FileMutex;
+  private _mutex?: Mutex;
 
   constructor(private _config: ScheduleStoreConfig) {
-    if (_config.crossProcess) {
-      this._mutex = new FileMutex({
-        path: join(_config.dataDir, 'scheduler', 'schedules.lock'),
-      });
-    }
+    this._mutex =
+      _config.mutex ??
+      (_config.crossProcess
+        ? new FileMutex({ path: join(_config.dataDir, 'scheduler', 'schedules.lock') })
+        : undefined);
   }
 
   private _filePath(): string {

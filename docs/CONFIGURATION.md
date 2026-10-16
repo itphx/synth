@@ -625,13 +625,14 @@ Cron/interval-планировщик публикует события `source: 
 | `scheduler.tickSec` | Период тика, секунды (1..3600) | `60` |
 | `scheduler.catchUp` | Поведение при пропущенном на старте срабатывании: `skip` — Job `skipped` с пересчётом `nextRunAt`, `once` — одно догоняющее (`trigger:'catchup'`); расписание может переопределить полем `catchUp` | `skip` |
 | `scheduler.jobRetentionDays` | Срок хранения Job-истории (`{dataDir}/scheduler/jobs.jsonl`), дни; `prune` на старте сервиса | `30` |
-| `scheduler.leaderElection` | Выбор лидера-владельца тикера: `none` — каждый процесс считает себя лидером (single-process), `file` — file-лок `{dataDir}/scheduler/leader.lock` (stale `3×tick`), тикер стартует только у лидера | `none` |
-| `scheduler.crossProcessLocks` | Межпроцессная сериализация мутаций `ScheduleStore` (file-мьютекс `{dataDir}/scheduler/schedules.lock` поверх in-process `AsyncLock`); защита от потери `nextRunAt` при нескольких репликах | `false` |
+| `scheduler.leaderElection` | Выбор лидера-владельца тикера: `none` — каждый процесс считает себя лидером (single-process), `file` — file-лок `{dataDir}/scheduler/leader.lock` (stale `3×tick`), `postgres` — session-level advisory-lock БД (требует `storage.backend=postgres`; иначе — предупреждение и `AlwaysLeader`), тикер стартует только у лидера | `none` |
+| `scheduler.crossProcessLocks` | Межпроцессная сериализация мутаций `ScheduleStore` (file-мьютекс `{dataDir}/scheduler/schedules.lock` поверх in-process `AsyncLock`); защита от потери `nextRunAt` при нескольких репликах. Под `storage.backend=postgres` неактуален: записи `schedules` — атомарные SQL-мутации, файловый лок не создаётся | `false` |
 
 File-based флаги (`events.dedupStore: file`, `scheduler.leaderElection: file`,
 `scheduler.crossProcessLocks: true`) рассчитаны на **общий `dataDir` на одном хосте/FS** и
-по умолчанию выключены (поведение single-process не меняется). Для разных dataDir на реплику
-или нескольких хостов нужен K8s `Lease`/PG advisory lock (будущий шаг, ADR-051).
+по умолчанию выключены (поведение single-process не меняется). Для реплик без общего FS
+используйте `storage.backend=postgres` и `scheduler.leaderElection: postgres` (advisory-лок
+БД, PROP-032); K8s `Lease` — будущий шаг (ADR-051).
 
 Пример:
 

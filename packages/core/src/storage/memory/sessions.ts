@@ -74,6 +74,15 @@ export class MemorySessionRepository implements SessionRepository {
       .map((s) => this._normalize(s));
   }
 
+  /**
+   * Лёгкий список (порт `SessionRepository.listLight`): тот же набор id и порядок,
+   * что у `list`, но `messages`/`pendingMessages`/`checkpoints` очищены.
+   */
+  async listLight(filter?: SessionFilter): Promise<Session[]> {
+    const sessions = await this.list(filter);
+    return sessions.map((s) => ({ ...s, messages: [], pendingMessages: [], checkpoints: [] }));
+  }
+
   async search(query: string, filter?: SessionFilter): Promise<Session[]> {
     return this.list({ ...filter, search: query });
   }

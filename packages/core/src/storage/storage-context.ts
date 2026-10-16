@@ -83,6 +83,8 @@ import { SkillBundleStore } from './skill-bundle-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
+import type { LeaderFactoryOptions, Mutex, MutexFactoryOptions } from './mutex.js';
+import type { SchedulerLeader } from '../engine/scheduler/leader.js';
 
 // ── In-memory реализации ───────────────────────────────────────────────
 import {
@@ -119,6 +121,19 @@ import {
 export type StorageBackendKind = 'file' | 'memory' | 'postgres';
 
 /**
+ * PROP-032: backend-специфичные примитивы межпроцессной координации
+ * (advisory-локи БД). Предоставляется backend'ом, у которого есть механизм
+ * блокировки за пределами общего FS (сейчас — только `postgres`); file/memory
+ * `locks` не задают, и домен использует `FileMutex`/`FileLeader` напрямую.
+ */
+export interface StorageLocks {
+  /** Мьютекс для namespaced-имени (PG: session-level advisory-lock). */
+  createMutex(options: MutexFactoryOptions): Mutex;
+  /** Лидер-выбор планировщика для namespaced-имени (PG: удерживаемый advisory-lock). */
+  createLeader(options: LeaderFactoryOptions): SchedulerLeader;
+}
+
+/**
  * Собранный слой хранения: домен получает порты (а не конкретные классы).
  * Поле `kind` — какой backend собран (для диагностики/предупреждений).
  */
@@ -131,6 +146,11 @@ export interface StorageContext {
    * `close()` на graceful shutdown (`synth serve`).
    */
   close?(): Promise<void>;
+  /**
+   * PROP-032: примитивы координации БД (advisory-локи). Не задано для
+   * file/memory — домен тогда использует файловые `FileMutex`/`FileLeader`.
+   */
+  locks?: StorageLocks;
   sessions: SessionRepository;
   projects: ProjectRepository;
   profiles: ProfileRepository;

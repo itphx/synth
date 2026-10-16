@@ -438,7 +438,10 @@
   `FileStore.listForUserScope(userId, projectIds)` — «свои + сессии моих проектов» (ADR-089;
   `listForUser` — только свои),
   `FileMutex` (`file-mutex.ts`, ADR-051/ADR-089: `mkdir`-лок + stale takeover для общего
-  `dataDir`; `ScheduleStore.crossProcess` сериализует мутации), `RuntimeSettingsStore`
+  `dataDir`; `ScheduleStore.crossProcess` сериализует мутации) — реализация интерфейса
+  `Mutex` (`mutex.ts`: `withLock(fn, opts?)`; `ScheduleStore`/лок миграций зависят от
+  интерфейса, а не класса; PROP-032 — при `storage.backend=postgres` подставляется
+  `PgMutex` драйвера через `StorageContext.locks`), `RuntimeSettingsStore`
   (`events` + `mergeEventsConfig` — runtime-настройки раздела «События» (включая `identityMap` — **override**
   поверх основного источника — привязок в `ProfileData.identities[]`), ADR-089; `decision` +
   `mergeDecisionConfig` — runtime-настройки decision-слоя, ADR-084, включая `escalationProvider`/`escalationModel`),

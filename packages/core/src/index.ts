@@ -217,6 +217,7 @@ export type {
   StorageContext,
   StorageContextConfig,
   StorageBackendKind,
+  StorageLocks,
   PostgresStorageDriverConfig,
   BuildStorageContextOptions,
 } from './storage/storage-context.js';
@@ -492,6 +493,8 @@ export type {
 // ADR-051/ADR-089: файловый мьютекс (общий dataDir на одном хосте/FS).
 export { FileMutex } from './storage/file-mutex.js';
 export type { FileMutexOptions } from './storage/file-mutex.js';
+// PROP-032: контракт межпроцессного мьютекса (file/PG) — общий шов координации.
+export type { Mutex, LockOptions, MutexFactoryOptions, LeaderFactoryOptions } from './storage/mutex.js';
 // ADR-046: скиллы (реестр/discovery/каталог/instance-запись/роуты).
 export { SkillService } from './engine/skills/service.js';
 export type { SkillServiceOptions, SkillListOptions } from './engine/skills/service.js';

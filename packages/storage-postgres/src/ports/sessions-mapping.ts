@@ -591,3 +591,17 @@ export function deserializeSession(
     cacheHitRate: toNumberOrUndefined(row.cache_hit_rate),
   };
 }
+
+/**
+ * Строка `sessions` → доменная сессия **без истории** (`SessionRepository.listLight`,
+ * PROP-032): `messages`/`pendingMessages`/`checkpoints` пусты, child-таблицы не
+ * читаются. Метаданные (id/статус/settings/projectId/expiresAt/…) идентичны
+ * `deserializeSession` — механика переиспользуется.
+ */
+export function deserializeSessionLight(row: SessionRow): Session {
+  const session = deserializeSession(row, emptySessionChildren());
+  session.messages = [];
+  session.pendingMessages = [];
+  session.checkpoints = [];
+  return session;
+}

@@ -502,6 +502,18 @@ export class FileStore implements SessionRepository {
     );
   }
 
+  /**
+   * Лёгкий список (порт `SessionRepository.listLight`): тот же набор id и порядок,
+   * что у `list`, но `messages`/`pendingMessages`/`checkpoints` очищены. Сессия
+   * хранится одним JSON-файлом, поэтому `JSON.parse` неизбежно читает историю —
+   * экономится только десериализация сообщений; для БД-бэкенда (PROP-032) это
+   * полноценная выборка без join.
+   */
+  async listLight(filter?: SessionFilter): Promise<Session[]> {
+    const sessions = await this.list(filter);
+    return sessions.map((s) => ({ ...s, messages: [], pendingMessages: [], checkpoints: [] }));
+  }
+
   async exists(sessionId: string): Promise<boolean> {
     try {
       await access(this._sessionPath(sessionId));

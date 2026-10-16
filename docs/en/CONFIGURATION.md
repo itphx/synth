@@ -626,13 +626,14 @@ The cron/interval scheduler publishes `source: 'cron'` events through
 | `scheduler.tickSec` | Tick period, seconds (1..3600) | `60` |
 | `scheduler.catchUp` | Behaviour on a firing missed at start: `skip` — job `skipped` with a recomputed `nextRunAt`, `once` — one catch-up (`trigger:'catchup'`); a schedule can override it with the `catchUp` field | `skip` |
 | `scheduler.jobRetentionDays` | Job history retention (`{dataDir}/scheduler/jobs.jsonl`), days; `prune` at service start | `30` |
-| `scheduler.leaderElection` | Election of the ticker-owner leader: `none` — each process considers itself the leader (single-process), `file` — a file lock `{dataDir}/scheduler/leader.lock` (stale `3×tick`), the ticker starts only on the leader | `none` |
-| `scheduler.crossProcessLocks` | Cross-process serialization of `ScheduleStore` mutations (a file mutex `{dataDir}/scheduler/schedules.lock` over the in-process `AsyncLock`); protection from losing `nextRunAt` with several replicas | `false` |
+| `scheduler.leaderElection` | Election of the ticker-owner leader: `none` — each process considers itself the leader (single-process), `file` — a file lock `{dataDir}/scheduler/leader.lock` (stale `3×tick`), `postgres` — a session-level DB advisory lock (requires `storage.backend=postgres`; otherwise a warning and `AlwaysLeader`); the ticker starts only on the leader | `none` |
+| `scheduler.crossProcessLocks` | Cross-process serialization of `ScheduleStore` mutations (a file mutex `{dataDir}/scheduler/schedules.lock` over the in-process `AsyncLock`); protection from losing `nextRunAt` with several replicas. With `storage.backend=postgres` it is irrelevant: `schedules` writes are atomic SQL mutations and no file lock is created | `false` |
 
 File-based flags (`events.dedupStore: file`, `scheduler.leaderElection: file`,
 `scheduler.crossProcessLocks: true`) are designed for a **shared `dataDir` on one host/FS** and
-are disabled by default (single-process behaviour is unchanged). For a different dataDir per replica
-or several hosts, a K8s `Lease`/PG advisory lock is needed (a future step, ADR-051).
+are disabled by default (single-process behaviour is unchanged). For replicas without a shared FS,
+use `storage.backend=postgres` and `scheduler.leaderElection: postgres` (a DB advisory lock,
+PROP-032); a K8s `Lease` is a future step (ADR-051).
 
 Example:
 

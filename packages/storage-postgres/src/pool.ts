@@ -112,6 +112,21 @@ export interface PostgresExecutor {
   query<T extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<T[]>;
 }
 
+/**
+ * PROP-032: выделенное соединение, удерживаемое вызывающим (напр. для
+ * session-level advisory-лока лидера). Пока оно не возвращено в пул, пул не
+ * может его переиспользовать — держите не больше одного такого соединения на
+ * процесс, если в этом нет необходимости (`poolMax` по умолчанию невелик).
+ */
+export interface HeldPostgresClient {
+  /** Исполнитель запросов на выделенном соединении. */
+  executor: PostgresExecutor;
+  /** Вернуть соединение в пул (идемпотентно, best-effort). */
+  release(): void;
+  /** Подписка на разрыв/ошибку соединения (детект потери advisory-лока). */
+  onError(handler: (err: unknown) => void): void;
+}
+
 /** Преобразует пользовательский ключ в 64-битный знаковый advisory-лок-ключ. */
 export function advisoryLockKeyToBigInt(key: string): bigint {
   const digest = createHash('sha256').update(key).digest();
@@ -276,6 +291,57 @@ export class PostgresConnection implements PostgresExecutor {
         await tx.query('SELECT pg_advisory_unlock($1::bigint)', [lockKey]).catch(() => undefined);
       }
     });
+  }
+
+  /**
+   * Захватить выделенное соединение, удерживаемое вызывающим (не возвращается в
+   * пул до `release()`). Нужно для session-level advisory-локов: лок живёт ровно
+   * столько, сколько открыто соединение, и снимается автоматически при его
+   * разрыве/закрытии (PROP-032).
+   */
+  async acquireHeldClient(): Promise<HeldPostgresClient> {
+    const client = await this._acquire();
+    const executor = wrapExecutor(client);
+    let released = false;
+    const errorHandlers: Array<(err: unknown) => void> = [];
+
+    // `pg.PoolClient` — EventEmitter; на ошибке соединения (сервер упал, сеть
+    // оборвалась) эмитит `error`. Потребитель (лидер) снимает себя с лидерства.
+    // Слушатель снимаем на `release()`: клиент возвращается в пул и
+    // переиспользуется — иначе накопились бы «висячие» обработчики.
+    const onClientError = (err: unknown): void => {
+      for (const handler of errorHandlers) {
+        try {
+          handler(err);
+        } catch {
+          // обратный вызов потребителя не должен ломать обработку ошибки
+        }
+      }
+    };
+    const emitter = client as unknown as {
+      on?: (event: string, cb: (err: unknown) => void) => void;
+      off?: (event: string, cb: (err: unknown) => void) => void;
+      removeListener?: (event: string, cb: (err: unknown) => void) => void;
+    };
+    emitter.on?.('error', onClientError);
+
+    return {
+      executor,
+      release: () => {
+        if (released) return;
+        released = true;
+        if (emitter.off) emitter.off('error', onClientError);
+        else emitter.removeListener?.('error', onClientError);
+        try {
+          client.release();
+        } catch {
+          // пул закрывается / соединение уже отдано — best-effort
+        }
+      },
+      onError: (handler) => {
+        errorHandlers.push(handler);
+      },
+    };
   }
 
   /** Закрыть пул (идемпотентно). */

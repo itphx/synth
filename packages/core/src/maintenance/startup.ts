@@ -12,6 +12,7 @@
 import { join } from 'node:path';
 import type { SessionManager, SessionProjectStoreLike } from '../sessions/manager.js';
 import { FileMutex } from '../storage/file-mutex.js';
+import type { Mutex } from '../storage/mutex.js';
 import {
   checkInstanceCompatibility,
   InstanceDataTooNewError,
@@ -115,6 +116,12 @@ export interface ApplyStartupMigrationsOptions {
    * инстанса не задаётся (по умолчанию `'startup'`).
    */
   actor?: string;
+  /**
+   * PROP-032: межпроцессный мьютекс для шага миграций. Не задан — файловый лок
+   * `{dataDir}/migrate` (поведение file-backend). При `storage.backend=postgres`
+   * composition root передаёт advisory-мьютекс драйвера.
+   */
+  mutex?: Mutex;
 }
 
 /**
@@ -163,8 +170,9 @@ export async function applyStartupMigrations(
     );
   }
 
-  // 3. Применение миграций под межпроцессным локом.
-  const mutex = new FileMutex({ path: join(dataDir, 'migrate') });
+  // 3. Применение миграций под межпроцессным локом (file — `{dataDir}/migrate`,
+  //    PG — advisory-лок драйвера, переданный composition root'ом).
+  const mutex = opts.mutex ?? new FileMutex({ path: join(dataDir, 'migrate') });
   const result = await mutex.withLock(
     () =>
       runMigrations({

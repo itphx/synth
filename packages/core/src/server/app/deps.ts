@@ -347,6 +347,10 @@ export async function createStandaloneDeps(
     settingsStore,
     sessionManager,
     projectStore,
+    // PROP-032: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
+    ...(storageContext.locks
+      ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
+      : {}),
     resolveSystemDefaults: async () => ({
       mcpDefaultOn: Object.entries(config.mcpServers ?? {})
         .filter(([, cfg]) => cfg.enabledByDefault === true)
@@ -631,6 +635,14 @@ export async function createStandaloneDeps(
   // ADR-051 (срез) / ADR-089: планировщик публикует cron-события через ingress.
   // `start()` гейтится конфигом; остановка — на shutdown (`stopScheduler`).
   const schedulerTickMs = (config.schedulerConfig?.tickSec ?? 60) * 1000;
+  // PROP-032: `leaderElection=postgres` требует advisory-локов backend'а
+  // (`storage.backend=postgres`); иначе — предупреждение и AlwaysLeader.
+  if (config.schedulerConfig?.leaderElection === 'postgres' && !storageContext.locks) {
+    console.warn(
+      '[scheduler] leaderElection=postgres, но backend не предоставляет advisory-локи ' +
+        '(нужен storage.backend=postgres) — используется AlwaysLeader',
+    );
+  }
   const schedulerService = new SchedulerService({
     scheduleStore,
     ingress: eventIngress,
@@ -639,10 +651,15 @@ export async function createStandaloneDeps(
     defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
     catchUp: config.schedulerConfig?.catchUp ?? 'skip',
     jobRetentionDays: config.schedulerConfig?.jobRetentionDays ?? 30,
-    // ADR-051/ADR-089: тикер стартует только у лидера (default — AlwaysLeader).
-    leader: config.schedulerConfig?.leaderElection === 'file'
-      ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
-      : new AlwaysLeader(),
+    // ADR-051/ADR-089/PROP-032: тикер стартует только у лидера (default —
+    // AlwaysLeader). `file` — файловый лок на общем dataDir, `postgres` —
+    // session-level advisory-lock драйвера (доступен только при PG-backend).
+    leader:
+      config.schedulerConfig?.leaderElection === 'file'
+        ? new FileLeader({ dataDir, tickMs: schedulerTickMs })
+        : config.schedulerConfig?.leaderElection === 'postgres' && storageContext.locks
+          ? storageContext.locks.createLeader({ name: 'scheduler/leader', tickMs: schedulerTickMs })
+          : new AlwaysLeader(),
   });
   if (config.schedulerConfig?.enabled !== false) {
     void schedulerService.start().catch((err) => {
