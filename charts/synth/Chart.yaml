@@ -3,5 +3,5 @@ name: synth
 description: Helm-чарт для развёртывания AI-платформы Synth для командной работы (backend API Hub + UI SPA) в Kubernetes. Self-hosted, enterprise-ready.
 type: application
 # Версию чарта синхронизировать с версией релиза приложения (см. scripts/version-bump.sh).
-version: 0.10.2
-appVersion: "0.10.2"
+version: 0.10.3
+appVersion: "0.10.3"
