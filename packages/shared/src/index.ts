@@ -26,6 +26,8 @@ export {
   type SynthConfig,
   type ServerConfig,
   type StorageConfig,
+  type PostgresStorageConfig,
+  postgresStorageConfigSchema,
   type AuthConfig as SynthAuthConfig,
   type LLMConfig,
   type CoreConfig,
@@ -69,7 +71,8 @@ export {
   type LLMGatewayAuditConfig,
 } from './config/index.js';
 export { defaultConfig, loadConfig } from './config/index.js';
-export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolveIgnoreRules, resolveHome, resolveProfilesPath, resolveCredentialsPath, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun, resolveDecisionProvider, resolveDecisionModel, resolveMaxUploadBytes } from './config/index.js';
+export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveIgnoreRules, resolveHome, resolveProfilesPath, resolveCredentialsPath, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun, resolveDecisionProvider, resolveDecisionModel, resolveMaxUploadBytes } from './config/index.js';
+export type { StorageBackend, ResolvedPostgresConfig } from './config/index.js';
 export { applyEnvOverrides, envOverrideName, toSnakeCase, parseEnvValue, ENV_OVERRIDES } from './config/index.js';
 export type { DeployMode } from './config/index.js';
 export type { EnvOverrideDefinition, EnvOverrideType, ParsedEnvValue } from './config/index.js';

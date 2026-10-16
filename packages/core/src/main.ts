@@ -1,11 +1,21 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
 import { t as sm } from './engine/system-messages.js';
 
 const program = new Command();
+
+/**
+ * PROP-032: единый контекст хранения для CLI-команд — resolved backend
+ * (`file`/`memory`/`postgres`) из конфига инстанса. Хелпер, чтобы не дублировать
+ * резолвинг по всем командам (у CLI нет `StandaloneConfig`).
+ */
+async function buildCliStorage(synth: SynthConfig, dataDir: string, home?: string | null) {
+  const { buildStorageContext } = await import('./storage/storage-context.js');
+  return buildStorageContext({ dataDir, config: synth, env: process.env, home: home ?? null });
+}
 
 program
   .name('synth')
@@ -40,7 +50,10 @@ program
         port: parseInt(options.port, 10),
         apiKey: options.apiKey,
       },
-      storage: options.dataDir ? { dataDir: options.dataDir, workspacesRoot: '', defaultWorkspace: '', workspaceOutsideRoot: '' } : undefined,
+      // PROP-032: частичный override — `deepMerge` на рантайме дошлёт дефолты
+      // `storage` (`postgres`/`degradedMode`/`fallbackDir`/…); тип требует
+      // полную `StorageConfig`, поэтому сужаем кастом (как для `remote` ниже).
+      storage: options.dataDir ? ({ dataDir: options.dataDir } as SynthConfig['storage']) : undefined,
     };
     if (options.connect) {
       // deepMerge на рантайме сольёт частичную секцию remote с defaultConfig; тип требует полный RemoteConfig.
@@ -107,6 +120,10 @@ program
       apiKey,
       // PROP-032: физический backend хранения (env > config.yaml > file).
       storageBackend: resolveStorageBackend(synth, process.env),
+      postgresConfig: resolvePostgresConfig(synth, process.env),
+      postgresPassword: resolvePostgresPassword({ dataDir }, process.env),
+      degradedMode: resolveDegradedMode(synth),
+      fallbackDir: resolveStorageFallbackDir(synth, process.env, home),
       workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
       maxUploadBytes: resolveMaxUploadBytes(synth),
@@ -347,12 +364,11 @@ projectCmd
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
-    const { createStorageContext } = await import('./storage/storage-context.js');
     const { SessionManager } = await import('./sessions/manager.js');
     const { syncProjectToRemote, resolveLocalWorkspace } = await import('./remote/transfer.js');
 
-    // PROP-032 (W2.4): хранилища — из единого контекста (дефолт `file`).
-    const storage = createStorageContext('file', { dataDir });
+    // PROP-032: хранилища — из единого контекста (resolved backend).
+    const storage = await buildCliStorage(synth, dataDir, home);
     const project = await storage.projects.load(projectId);
     if (!project) {
       console.error(`Ошибка: локальный проект ${projectId} не найден`);
@@ -417,12 +433,11 @@ projectCmd
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
-    const { createStorageContext } = await import('./storage/storage-context.js');
     const { SessionManager } = await import('./sessions/manager.js');
     const { forkProjectToLocal } = await import('./remote/transfer.js');
 
-    // PROP-032 (W2.4): хранилища — из единого контекста (дефолт `file`).
-    const storage = createStorageContext('file', { dataDir });
+    // PROP-032: хранилища — из единого контекста (resolved backend).
+    const storage = await buildCliStorage(synth, dataDir, home);
     const session = await ensureRemoteSession(options, synth, home);
     const remoteClient = session.getClient();
 
@@ -461,7 +476,7 @@ projectCmd
     await ensureDataDir(dataDir);
 
     const { exportProject } = await import('./projects/portable.js');
-    const { createFileStorage } = await import('./storage/storage-context.js');
+    const storage = await buildCliStorage(synth, dataDir, home);
     try {
       const result = await exportProject({
         dataDir,
@@ -469,7 +484,8 @@ projectCmd
         out: options.out as string | undefined,
         withWorkspace: !!options.withWorkspace,
         workspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
-        audit: createFileStorage({ dataDir }).maintenanceAudit,
+        audit: storage.maintenanceAudit,
+        storage,
         actor: 'cli',
         log: (msg) => console.log(msg),
       });
@@ -504,7 +520,7 @@ projectCmd
     await ensureDataDir(dataDir);
 
     const { importProject } = await import('./projects/portable.js');
-    const { createFileStorage } = await import('./storage/storage-context.js');
+    const storage = await buildCliStorage(synth, dataDir, home);
     try {
       const result = await importProject({
         dataDir,
@@ -515,7 +531,8 @@ projectCmd
         dryRun: !!options.dryRun,
         yes: !!options.yes,
         workspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
-        audit: createFileStorage({ dataDir }).maintenanceAudit,
+        audit: storage.maintenanceAudit,
+        storage,
         actor: 'cli',
         log: (msg) => console.log(msg),
       });
@@ -743,7 +760,7 @@ program
     await ensureDataDir(dataDir);
 
     const { runUpdateCommand } = await import('./maintenance/update.js');
-    const { createFileStorage } = await import('./storage/storage-context.js');
+    const storage = await buildCliStorage(synth, dataDir);
 
     const code = await runUpdateCommand({
       dataDir,
@@ -752,7 +769,7 @@ program
       dryRun: !!options.dryRun,
       yes: !!options.yes,
       json: !!options.json,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: storage.maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -770,10 +787,9 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
-        const store = createStorageContext('file', { dataDir }).sessions;
+        const store = (await buildCliStorage(synth, dataDir)).sessions;
         const manager = new SessionManager(store);
         const sessions = await manager.listSessions();
 
@@ -805,10 +821,9 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
-        const store = createStorageContext('file', { dataDir }).sessions;
+        const store = (await buildCliStorage(synth, dataDir)).sessions;
         const manager = new SessionManager(store);
         await manager.renameSession(sessionId, title);
         console.log(`Сессия ${sessionId} переименована в "${title}"`);
@@ -828,10 +843,9 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
-        const store = createStorageContext('file', { dataDir }).sessions;
+        const store = (await buildCliStorage(synth, dataDir)).sessions;
         const manager = new SessionManager(store);
         const fork = await manager.forkSession(sessionId, {
           messageId: options.message,
@@ -852,10 +866,9 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
-        const store = createStorageContext('file', { dataDir }).sessions;
+        const store = (await buildCliStorage(synth, dataDir)).sessions;
         const manager = new SessionManager(store);
         const children = await manager.getChildren(sessionId);
 
@@ -888,7 +901,6 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
         let sourceSessionId = arg;
@@ -917,7 +929,7 @@ program
           process.exit(1);
         }
 
-        const store = createStorageContext('file', { dataDir }).sessions;
+        const store = (await buildCliStorage(synth, dataDir)).sessions;
         const manager = new SessionManager(store);
         const ref = await manager.addReference(targetId, sourceSessionId, {
           label: options.label,
@@ -943,7 +955,6 @@ program
         const dataDir = resolve(options.dataDir || resolveDataDir(synth));
         await ensureDataDir(dataDir);
 
-        const { createStorageContext } = await import('./storage/storage-context.js');
         const { SessionManager } = await import('./sessions/manager.js');
 
         let sourceSessionId = arg;
@@ -972,7 +983,7 @@ program
           process.exit(1);
         }
 
-        const store = createStorageContext('file', { dataDir }).sessions;
+        const store = (await buildCliStorage(synth, dataDir)).sessions;
         const manager = new SessionManager(store);
 
         const sourceSession = await manager.getSession(sourceSessionId);
@@ -1121,12 +1132,13 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runMigrateCommand } = await import('./maintenance/migrate.js');
-    const { createFileStorage } = await import('./storage/storage-context.js');
+    const storage = await buildCliStorage(synth, dataDir, home);
     const code = await runMigrateCommand({
       dataDir,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: storage.maintenanceAudit,
+      storage,
     });
     if (code !== 0) process.exit(code);
   });
@@ -1172,7 +1184,7 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runBackupCommand } = await import('./maintenance/backup.js');
-    const { createFileStorage } = await import('./storage/storage-context.js');
+    const storage = await buildCliStorage(synth, dataDir, home);
     const code = await runBackupCommand({
       dataDir,
       out: options.out,
@@ -1182,7 +1194,7 @@ program
       encrypt: !!options.encrypt,
       keyFile: options.keyFile,
       env: process.env,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: storage.maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -1209,7 +1221,7 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runRestoreCommand } = await import('./maintenance/restore.js');
-    const { createFileStorage } = await import('./storage/storage-context.js');
+    const storage = await buildCliStorage(synth, dataDir, home);
     const code = await runRestoreCommand({
       archive,
       dataDir,
@@ -1218,7 +1230,7 @@ program
       noSafetyCopy: options.safetyCopy === false,
       keyFile: options.keyFile,
       env: process.env,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: storage.maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -1238,14 +1250,14 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runUninstallCommand } = await import('./maintenance/uninstall.js');
-    const { createFileStorage } = await import('./storage/storage-context.js');
+    const storage = await buildCliStorage(synth, dataDir, home);
     const code = await runUninstallCommand({
       dataDir,
       home: home ?? undefined,
       purge: !!options.purge,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: storage.maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });

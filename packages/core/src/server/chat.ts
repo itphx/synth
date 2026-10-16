@@ -1,13 +1,13 @@
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SynthConfig, InstructionsConfig } from '@itphx/synth-shared';
-import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend } from '@itphx/synth-shared';
+import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
   createToolRegistry, createAgentRegistry,
   detectRuntimeDeps,
-  createStorageContext,
+  createStorageContextAsync,
 } from '../index.js';
 import type { ProviderConfig, ModelConfig, SummarizationConfig } from '@itphx/synth-shared';
 import type { Message } from '@itphx/synth-shared';
@@ -42,12 +42,18 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
     SYNTH_DATA_DIR: options.dataDir,
   });
 
-  // PROP-032 (W2.4): единый контекст хранения (дефолт `file`, поведение прежнее).
-  const storage = createStorageContext(resolveStorageBackend(options.config, process.env), {
-    dataDir,
-    env: process.env,
-    bundlesPath: options.config.commands?.bundlesPath,
-  });
+  // PROP-032 (W2.4): единый контекст хранения (`createStorageContextAsync` —
+  // resolved backend, включая `postgres` через динамический драйвер).
+  const storage = await createStorageContextAsync(
+    resolveStorageBackend(options.config, process.env),
+    {
+      dataDir,
+      env: process.env,
+      postgres: resolvePostgresConfig(options.config, process.env),
+      postgresPassword: resolvePostgresPassword({ dataDir }, process.env),
+      bundlesPath: options.config.commands?.bundlesPath,
+    },
+  );
   const sessionManager = new SessionManager(storage.sessions);
   const providerStore = storage.providers;
   const modelStore = storage.models;

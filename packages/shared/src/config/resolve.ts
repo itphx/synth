@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { dump as dumpYaml } from 'js-yaml';
-import type { SynthConfig } from './types.js';
+import type { PostgresStorageConfig, SynthConfig } from './types.js';
 import type { WorkspaceOutsideRootPolicy } from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES, MIN_UPLOAD_BYTES, MAX_UPLOAD_BYTES_LIMIT } from '../types/index.js';
 import { defaultConfig } from './defaults.js';
@@ -272,23 +272,181 @@ export function resolveMaxUploadBytes(config: SynthConfig, env?: NodeJS.ProcessE
 
 /**
  * PROP-032: физический backend хранения. Приоритет (ADR-023): env
- * `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `'file'`. Некорректное
- * env-значение (не `file`/`memory`) — warn и фолбэк на config/дефолт
- * (fail-soft, как остальные env-резолверы).
+ * `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `'file'`.
+ *
+ * **Fail-closed**: если значение задано явно (env или config) и не входит в
+ * поддерживаемый набор (`file`|`memory`|`postgres`) — бросаем ошибку с внятным
+ * текстом (раньше был warn + тихий фоллбэк на `file`, что маскировало
+ * опечатку и запускало инстанс не на том backend'е).
  */
 export function resolveStorageBackend(
   config: SynthConfig,
   env?: NodeJS.ProcessEnv,
-): 'file' | 'memory' {
+): StorageBackend {
   const raw = (env ?? process.env).SYNTH_STORAGE_BACKEND;
   if (raw !== undefined && raw !== '') {
-    if (raw === 'file' || raw === 'memory') return raw;
-    console.warn(
-      `[config] невалидное значение SYNTH_STORAGE_BACKEND="${raw}" ` +
-      `(ожидается 'file' или 'memory') — игнорируется`,
+    if (isStorageBackend(raw)) return raw;
+    throw new Error(
+      `[config] невалидное значение SYNTH_STORAGE_BACKEND="${raw}": ` +
+        `ожидается одно из ${STORAGE_BACKENDS.map((b) => `'${b}'`).join(', ')}`,
     );
   }
-  return config.storage.backend ?? 'file';
+
+  const cfg = config.storage.backend;
+  if (cfg !== undefined) {
+    if (isStorageBackend(cfg)) return cfg;
+    throw new Error(
+      `[config] невалидное значение storage.backend="${String(cfg)}": ` +
+        `ожидается одно из ${STORAGE_BACKENDS.map((b) => `'${b}'`).join(', ')}`,
+    );
+  }
+
+  return 'file';
+}
+
+/** Поддерживаемые физические backend'ы хранения (PROP-032). */
+export type StorageBackend = 'file' | 'memory' | 'postgres';
+
+const STORAGE_BACKENDS: readonly StorageBackend[] = ['file', 'memory', 'postgres'];
+
+function isStorageBackend(value: unknown): value is StorageBackend {
+  return typeof value === 'string' && (STORAGE_BACKENDS as readonly string[]).includes(value);
+}
+
+/** PROP-032: эффективные параметры PostgreSQL-backend (без пароля — инвариант 13). */
+export interface ResolvedPostgresConfig {
+  dsn?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  schema?: string;
+  ssl?: boolean;
+  poolMax?: number;
+}
+
+/**
+ * PROP-032: параметры PostgreSQL-backend. Приоритет (ADR-023): env
+ * (`SYNTH_POSTGRES_*`) > `config.storage.postgres`. **Пароль не включается**
+ * (инвариант 13) — см. `resolvePostgresPassword`. Некорректное env-значение
+ * (не число/булево) — warn и фолбэк на config (fail-soft, как прочие
+ * env-резолверы).
+ */
+export function resolvePostgresConfig(
+  config: SynthConfig,
+  env?: NodeJS.ProcessEnv,
+): ResolvedPostgresConfig {
+  const e = env ?? process.env;
+  const cfg: Partial<PostgresStorageConfig> = config.storage.postgres ?? {};
+  const result: ResolvedPostgresConfig = {};
+
+  const pickString = (envKey: string, cfgValue: string | undefined): string | undefined => {
+    const envValue = e[envKey];
+    if (envValue !== undefined && envValue !== '') return envValue;
+    return cfgValue !== undefined && cfgValue !== '' ? cfgValue : undefined;
+  };
+
+  const dsn = pickString('SYNTH_POSTGRES_DSN', cfg.dsn);
+  if (dsn !== undefined) result.dsn = dsn;
+  const host = pickString('SYNTH_POSTGRES_HOST', cfg.host);
+  if (host !== undefined) result.host = host;
+  const database = pickString('SYNTH_POSTGRES_DATABASE', cfg.database);
+  if (database !== undefined) result.database = database;
+  const user = pickString('SYNTH_POSTGRES_USER', cfg.user);
+  if (user !== undefined) result.user = user;
+  const schema = pickString('SYNTH_POSTGRES_SCHEMA', cfg.schema);
+  if (schema !== undefined) result.schema = schema;
+
+  const port = resolvePositiveIntEnv(e.SYNTH_POSTGRES_PORT, cfg.port, 'SYNTH_POSTGRES_PORT');
+  if (port !== undefined) result.port = port;
+  const poolMax = resolvePositiveIntEnv(
+    e.SYNTH_POSTGRES_POOL_MAX,
+    cfg.poolMax,
+    'SYNTH_POSTGRES_POOL_MAX',
+  );
+  if (poolMax !== undefined) result.poolMax = poolMax;
+
+  const ssl = resolveBooleanEnv(e.SYNTH_POSTGRES_SSL, cfg.ssl, 'SYNTH_POSTGRES_SSL');
+  if (ssl !== undefined) result.ssl = ssl;
+
+  return result;
+}
+
+/** Парсит положительное целое из env; невалидно → warn + фолбэк на config. */
+function resolvePositiveIntEnv(
+  rawEnv: string | undefined,
+  cfgValue: number | undefined,
+  envName: string,
+): number | undefined {
+  if (rawEnv !== undefined && rawEnv !== '') {
+    const n = Number(rawEnv);
+    if (Number.isFinite(n) && Number.isInteger(n) && n > 0) return n;
+    console.warn(
+      `[config] невалидное значение ${envName}="${rawEnv}" (ожидается целое > 0) — игнорируется`,
+    );
+  }
+  return cfgValue;
+}
+
+/** Парсит булево из env (`true`/`1`/`false`/`0`); невалидно → warn + фолбэк на config. */
+function resolveBooleanEnv(
+  rawEnv: string | undefined,
+  cfgValue: boolean | undefined,
+  envName: string,
+): boolean | undefined {
+  if (rawEnv !== undefined && rawEnv !== '') {
+    const v = rawEnv.toLowerCase();
+    if (v === 'true' || v === '1') return true;
+    if (v === 'false' || v === '0') return false;
+    console.warn(
+      `[config] невалидное значение ${envName}="${rawEnv}" (ожидается true/1/false/0) — игнорируется`,
+    );
+  }
+  return cfgValue;
+}
+
+/**
+ * PROP-032: пароль PostgreSQL. **Только** env `SYNTH_POSTGRES_PASSWORD` →
+ * файл `{dataDir}/secrets/postgres-password` (инвариант 13: в config.yaml
+ * секретов нет). Файла нет — `undefined` (решение об ошибке принимает драйвер:
+ * для peer/trust-аутентификации пароль не нужен). Читается только, не создаётся.
+ */
+export function resolvePostgresPassword(
+  opts: { dataDir: string },
+  env?: NodeJS.ProcessEnv,
+): string | undefined {
+  const envValue = (env ?? process.env).SYNTH_POSTGRES_PASSWORD;
+  if (envValue) return envValue;
+
+  const file = join(opts.dataDir, 'secrets', 'postgres-password');
+  if (existsSync(file)) {
+    const raw = readFileSync(file, 'utf-8').trim();
+    return raw.length > 0 ? raw : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * PROP-032 (задел W5): политика при недоступности выбранного backend —
+ * `fallback-file` (default) | `halt`. Читать через этот резолвер.
+ */
+export function resolveDegradedMode(
+  config: SynthConfig,
+): 'fallback-file' | 'halt' {
+  return config.storage.degradedMode ?? 'fallback-file';
+}
+
+/**
+ * PROP-032 (задел W5): каталог файлового фоллбека. Приоритет: явный
+ * `config.storage.fallbackDir` → `''` (эффективно `{dataDir}/fallback`).
+ */
+export function resolveStorageFallbackDir(
+  config: SynthConfig,
+  env?: NodeJS.ProcessEnv,
+  home?: string | null,
+): string {
+  if (config.storage.fallbackDir) return resolve(config.storage.fallbackDir);
+  return join(resolveDataDir(config, env, home), 'fallback');
 }
 
 /**

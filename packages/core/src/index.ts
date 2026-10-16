@@ -208,11 +208,17 @@ export {
   createFileStorage,
   createMemoryStorage,
   createStorageContext,
+  createStorageContextAsync,
+  createPostgresStorage,
+  buildStorageContext,
+  StorageBackendUnavailableError,
 } from './storage/storage-context.js';
 export type {
   StorageContext,
   StorageContextConfig,
   StorageBackendKind,
+  PostgresStorageDriverConfig,
+  BuildStorageContextOptions,
 } from './storage/storage-context.js';
 // ADR-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
 export * as crypto from './security/crypto.js';

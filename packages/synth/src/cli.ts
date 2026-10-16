@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
 import { join, dirname, resolve } from 'node:path';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveSecretKey, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, defaultConfig, ensureFirstRun, ensureDataDir, SYNTH_VERSION } from '@itphx/synth-shared';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
@@ -82,7 +82,9 @@ program
         port: parseInt(options.port, 10),
         apiKey: options.apiKey,
       },
-      storage: { dataDir, workspacesRoot: '', defaultWorkspace: '', workspaceOutsideRoot: '' },
+      // PROP-032: `deepMerge` дошлёт дефолты `storage` (postgres/degradedMode/…);
+      // тип требует полный StorageConfig — сужаем кастом (как для `remote` ниже).
+      storage: { dataDir } as SynthConfig['storage'],
     };
     if (startupBackendUrl) {
       // deepMerge на рантайме сольёт частичную секцию remote с defaultConfig; тип требует полный RemoteConfig.
@@ -161,6 +163,14 @@ program
       port,
       dataDir,
       apiKey,
+      // PROP-032: физический backend хранения (env > config.yaml > file) —
+      // паритет с core `main.ts`/`chat.ts` (иначе публичный `synth serve`
+      // игнорировал бы `storage.backend`).
+      storageBackend: resolveStorageBackend(synth, process.env),
+      postgresConfig: resolvePostgresConfig(synth, process.env),
+      postgresPassword: resolvePostgresPassword({ dataDir }, process.env),
+      degradedMode: resolveDegradedMode(synth),
+      fallbackDir: resolveStorageFallbackDir(synth, process.env, home),
       workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
       maxUploadBytes: resolveMaxUploadBytes(synth),
@@ -482,7 +492,8 @@ projectCmd
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
-    const { exportProject, createFileStorage } = await import('@itphx/synth-core');
+    const { exportProject, buildStorageContext } = await import('@itphx/synth-core');
+    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
     try {
       const result = await exportProject({
         dataDir,
@@ -490,7 +501,8 @@ projectCmd
         out: options.out as string | undefined,
         withWorkspace: !!options.withWorkspace,
         workspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
-        audit: createFileStorage({ dataDir }).maintenanceAudit,
+        audit: storage.maintenanceAudit,
+        storage,
         actor: 'cli',
         log: (msg) => console.log(msg),
       });
@@ -524,7 +536,8 @@ projectCmd
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
     await ensureDataDir(dataDir);
 
-    const { importProject, createFileStorage } = await import('@itphx/synth-core');
+    const { importProject, buildStorageContext } = await import('@itphx/synth-core');
+    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
     try {
       const result = await importProject({
         dataDir,
@@ -535,7 +548,8 @@ projectCmd
         dryRun: !!options.dryRun,
         yes: !!options.yes,
         workspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
-        audit: createFileStorage({ dataDir }).maintenanceAudit,
+        audit: storage.maintenanceAudit,
+        storage,
         actor: 'cli',
         log: (msg) => console.log(msg),
       });
@@ -813,12 +827,14 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
 
-    const { runMigrateCommand, createFileStorage } = await import('@itphx/synth-core');
+    const { runMigrateCommand, buildStorageContext } = await import('@itphx/synth-core');
+    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
     const code = await runMigrateCommand({
       dataDir,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: storage.maintenanceAudit,
+      storage,
     });
     if (code !== 0) process.exit(code);
   });
@@ -839,7 +855,7 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
 
-    const { runUpdateCommand, createFileStorage } = await import('@itphx/synth-core');
+    const { runUpdateCommand, buildStorageContext } = await import('@itphx/synth-core');
     const code = await runUpdateCommand({
       dataDir,
       to: options.to as string | undefined,
@@ -847,7 +863,7 @@ program
       dryRun: !!options.dryRun,
       yes: !!options.yes,
       json: !!options.json,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home })).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -892,7 +908,7 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
-    const { runBackupCommand, createFileStorage } = await import('@itphx/synth-core');
+    const { runBackupCommand, buildStorageContext } = await import('@itphx/synth-core');
     const code = await runBackupCommand({
       dataDir,
       out: options.out,
@@ -902,7 +918,7 @@ program
       encrypt: !!options.encrypt,
       keyFile: options.keyFile,
       env: process.env,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home })).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -928,7 +944,7 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
-    const { runRestoreCommand, createFileStorage } = await import('@itphx/synth-core');
+    const { runRestoreCommand, buildStorageContext } = await import('@itphx/synth-core');
     const code = await runRestoreCommand({
       archive,
       dataDir,
@@ -937,7 +953,7 @@ program
       noSafetyCopy: options.safetyCopy === false,
       keyFile: options.keyFile,
       env: process.env,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home })).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -956,14 +972,14 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
-    const { runUninstallCommand, createFileStorage } = await import('@itphx/synth-core');
+    const { runUninstallCommand, buildStorageContext } = await import('@itphx/synth-core');
     const code = await runUninstallCommand({
       dataDir,
       home: home ?? undefined,
       purge: !!options.purge,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
-      audit: createFileStorage({ dataDir }).maintenanceAudit,
+      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home })).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig } from '@itphx/synth-shared';
+import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig, PostgresStorageConfig } from '@itphx/synth-shared';
 import {
   applyBootstrapServiceKeys,
   KeyRateLimiter,
@@ -31,9 +31,17 @@ export interface StandaloneConfig {
   /**
    * PROP-032: физический backend хранения (`storage.backend`; env
    * `SYNTH_STORAGE_BACKEND` > config.yaml > `file`). Не задан — `file`.
-   * `memory` — энергонезависимо (герметичные тесты).
+   * `memory` — энергонезависимо (герметичные тесты); `postgres` — БД.
    */
   storageBackend?: StorageBackendKind;
+  /** PROP-032: параметры PostgreSQL (при `storageBackend: 'postgres'`). */
+  postgresConfig?: PostgresStorageConfig;
+  /** PROP-032: пароль PostgreSQL (env/файл; не config.yaml — инвариант 13). */
+  postgresPassword?: string;
+  /** PROP-032 (задел W5): политика при недоступности backend. */
+  degradedMode?: 'fallback-file' | 'halt';
+  /** PROP-032 (задел W5): каталог файлового фоллбека при деградации. */
+  fallbackDir?: string;
   workspacesRoot?: string;
   /** Рабочий каталог по умолчанию для сессий без проекта. Дефолт: {dataDir}/workspaces/default. */
   defaultWorkingDir?: string;
@@ -159,7 +167,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // PROP-032 (W2.4): единый контекст хранения собирается здесь — реестр
   // service-key (`storage.serviceKeys`) нужен аутентификации до сборки
   // зависимостей; тот же инстанс переиспользует `createStandaloneDeps`.
-  const storage = createStandaloneStorage(config);
+  const storage = await createStandaloneStorage(config);
   // ADR-052 (этап I): реестр service-key — резолвер ключа (`synth_svc_…`)
   // нужен локальной аутентификации (`requireAuth`).
   const serviceApiKeyStore = storage.serviceKeys;

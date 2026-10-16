@@ -115,6 +115,13 @@ describe('defaultConfig', () => {
     expect(defaultConfig.storage.maxUploadBytes).toBe(100 * 1024 * 1024);
   });
 
+  it('storage.backend по умолчанию file, postgres пуст, degradedMode fallback-file (PROP-032)', () => {
+    expect(defaultConfig.storage.backend).toBe('file');
+    expect(defaultConfig.storage.postgres).toEqual({});
+    expect(defaultConfig.storage.degradedMode).toBe('fallback-file');
+    expect(defaultConfig.storage.fallbackDir).toBe('');
+  });
+
   it('summarization.promptFile == SUMMARIZER', () => {
     expect(defaultConfig.summarization.promptFile).toBe('SUMMARIZER');
   });

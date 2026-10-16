@@ -12,6 +12,11 @@ export const defaultConfig: SynthConfig = {
   storage: {
     dataDir: '/var/synth/data',
     backend: 'file',
+    // PROP-032: параметры PostgreSQL-backend (пусто — драйвер берёт дефолты/env).
+    postgres: {},
+    // PROP-032 (задел W5): при недоступности backend — файловый фоллбек в {dataDir}/fallback.
+    degradedMode: 'fallback-file',
+    fallbackDir: '',
     workspacesRoot: '',
     defaultWorkspace: '',
     workspaceOutsideRoot: '',

@@ -422,7 +422,11 @@
   `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore`), `storage/defaults-store.ts`
   (`DefaultsStore` — перенесён из backend, там реэкспорт). Точка сборки standalone —
   `createStandaloneStorage` (`server/app/deps.ts`, строится до `auth`: реестр `serviceKeys` нужен
-  резолверу ключа).
+  резолверу ключа). Опциональный БД-драйвер (ADR-097/ADR-096, PROP-032) — отдельный in-tree пакет
+  `@itphx/synth-storage-postgres` (`createPostgresStorage(config): Promise<StorageContext>`), объявлен
+  в `optionalDependencies` core и подключается динамическим `import()` по `storage.backend === 'postgres'`
+  (`pg` — optional у драйвера, core его рантаймом не тянет); сейчас драйвер — скелет (валидация конфига
+  + ошибка «не реализовано»), реализация портов — следующая волна.
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`
   (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`; ADR-089 —
   `identities: ExternalIdentity[]` в snake_case (`external_id`/`display_name`/`linked_at`/`linked_by`),

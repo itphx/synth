@@ -1,0 +1,40 @@
+{
+  "name": "@itphx/synth-storage-postgres",
+  "version": "0.10.3",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@itphx/synth-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@itphx/synth-core": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.0",
+    "typescript": "^5.8.0"
+  },
+  "optionalDependencies": {
+    "pg": "^8.13.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

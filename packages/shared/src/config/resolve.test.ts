@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve as resolvePath } from 'node:path';
-import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, resolveMaxUploadBytes, ensureFirstRun } from './resolve.js';
+import { resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveIgnoreRules, resolveHome, defaultConfigPath, findConfigPath, resolveProfilesPath, resolveCredentialsPath, resolveMaxUploadBytes, ensureFirstRun } from './resolve.js';
 import { defaultConfig } from './defaults.js';
 import type { SynthConfig } from './types.js';
 
@@ -317,6 +317,14 @@ describe('resolveStorageBackend (PROP-032)', () => {
     expect(resolveStorageBackend(cfg, { SYNTH_STORAGE_BACKEND: 'file' })).toBe('file');
   });
 
+  it('postgres — валидное значение backend (env и config)', () => {
+    expect(resolveStorageBackend(cfg, { SYNTH_STORAGE_BACKEND: 'postgres' })).toBe('postgres');
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, backend: 'postgres' } };
+    expect(resolveStorageBackend(c, {})).toBe('postgres');
+    // env приоритетнее config: postgres в config перебивается memory из env.
+    expect(resolveStorageBackend(c, { SYNTH_STORAGE_BACKEND: 'memory' })).toBe('memory');
+  });
+
   it('config.storage.backend используется, если env не задан', () => {
     const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, backend: 'memory' } };
     expect(resolveStorageBackend(c, {})).toBe('memory');
@@ -326,16 +334,142 @@ describe('resolveStorageBackend (PROP-032)', () => {
     expect(resolveStorageBackend(cfg, {})).toBe('file');
   });
 
-  it('невалидное env-значение игнорируется → config/дефолт', () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    expect(resolveStorageBackend(cfg, { SYNTH_STORAGE_BACKEND: 'redis' })).toBe('file');
-    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, backend: 'memory' } };
-    expect(resolveStorageBackend(c, { SYNTH_STORAGE_BACKEND: 'postgres' })).toBe('memory');
+  it('fail-closed: невалидное env-значение → ошибка (не тихий фоллбэк)', () => {
+    expect(() => resolveStorageBackend(cfg, { SYNTH_STORAGE_BACKEND: 'redis' })).toThrow(
+      /SYNTH_STORAGE_BACKEND="redis"/,
+    );
+  });
+
+  it('fail-closed: невалидный config.storage.backend → ошибка', () => {
+    const c = { ...cfg, storage: { ...cfg.storage, backend: 'sqlite' as never } };
+    expect(() => resolveStorageBackend(c, {})).toThrow(/storage\.backend="sqlite"/);
+  });
+
+  it('пустое env-значение → тихий фоллбэк на config/дефолт', () => {
+    expect(resolveStorageBackend(cfg, { SYNTH_STORAGE_BACKEND: '' })).toBe('file');
   });
 
   it('НЕ читает реальный process.env, если передан env без переменной', () => {
     vi.stubEnv('SYNTH_STORAGE_BACKEND', 'memory');
     expect(resolveStorageBackend(cfg, {})).toBe('file');
+  });
+});
+
+describe('resolvePostgresConfig / resolvePostgresPassword (PROP-032)', () => {
+  let dir: string | null = null;
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+    if (dir) {
+      await rm(dir, { recursive: true, force: true });
+      dir = null;
+    }
+  });
+
+  it('env имеет приоритет над config', () => {
+    const c: SynthConfig = {
+      ...cfg,
+      storage: {
+        ...cfg.storage,
+        postgres: { host: 'cfg-host', port: 5432, database: 'cfg-db', user: 'cfg-user' },
+      },
+    };
+    const env = {
+      SYNTH_POSTGRES_HOST: 'env-host',
+      SYNTH_POSTGRES_PORT: '6432',
+      SYNTH_POSTGRES_DATABASE: 'env-db',
+      SYNTH_POSTGRES_USER: 'env-user',
+    };
+    expect(resolvePostgresConfig(c, env)).toEqual({
+      host: 'env-host',
+      port: 6432,
+      database: 'env-db',
+      user: 'env-user',
+    });
+  });
+
+  it('config используется, если env не задан', () => {
+    const c: SynthConfig = {
+      ...cfg,
+      storage: {
+        ...cfg.storage,
+        postgres: { dsn: 'postgres://x', host: 'h', port: 5432, ssl: true, poolMax: 10, schema: 'synth' },
+      },
+    };
+    expect(resolvePostgresConfig(c, {})).toEqual({
+      dsn: 'postgres://x',
+      host: 'h',
+      port: 5432,
+      ssl: true,
+      poolMax: 10,
+      schema: 'synth',
+    });
+  });
+
+  it('невалидное env (порт/ssl) → warn + фолбэк на config', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const c: SynthConfig = {
+      ...cfg,
+      storage: { ...cfg.storage, postgres: { port: 5432, ssl: true } },
+    };
+    expect(resolvePostgresConfig(c, { SYNTH_POSTGRES_PORT: 'nope', SYNTH_POSTGRES_SSL: 'maybe' })).toEqual({
+      port: 5432,
+      ssl: true,
+    });
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('пароль НЕ включается в объект (инвариант 13)', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, postgres: { host: 'h' } } };
+    const result = resolvePostgresConfig(c, { SYNTH_POSTGRES_PASSWORD: 'secret' }) as Record<string, unknown>;
+    expect(result).not.toHaveProperty('password');
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
+  it('пароль из env имеет приоритет над файлом', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-pg-'));
+    const secrets = join(dir, 'secrets');
+    await mkdir(secrets, { recursive: true });
+    await writeFile(join(secrets, 'postgres-password'), 'file-pass\n', 'utf-8');
+    expect(resolvePostgresPassword({ dataDir: dir }, { SYNTH_POSTGRES_PASSWORD: 'env-pass' })).toBe('env-pass');
+  });
+
+  it('пароль из файла {dataDir}/secrets/postgres-password (trim)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-pg-'));
+    const secrets = join(dir, 'secrets');
+    await mkdir(secrets, { recursive: true });
+    await writeFile(join(secrets, 'postgres-password'), '  file-pass \n', 'utf-8');
+    expect(resolvePostgresPassword({ dataDir: dir }, {})).toBe('file-pass');
+  });
+
+  it('пароля нет (ни env, ни файла) → undefined', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'synth-pg-'));
+    expect(resolvePostgresPassword({ dataDir: dir }, {})).toBeUndefined();
+  });
+});
+
+describe('resolveDegradedMode / resolveStorageFallbackDir (PROP-032, задел W5)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('дефолт degradedMode — fallback-file', () => {
+    expect(resolveDegradedMode(cfg)).toBe('fallback-file');
+  });
+
+  it('config.storage.degradedMode применяется', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, degradedMode: 'halt' } };
+    expect(resolveDegradedMode(c)).toBe('halt');
+  });
+
+  it('дефолт fallbackDir — {dataDir}/fallback', () => {
+    expect(resolveStorageFallbackDir(cfg, {})).toBe('/test/data/fallback');
+  });
+
+  it('явный config.storage.fallbackDir приоритетнее', () => {
+    const c: SynthConfig = { ...cfg, storage: { ...cfg.storage, fallbackDir: '/custom/fallback' } };
+    expect(resolveStorageFallbackDir(c, {})).toBe('/custom/fallback');
   });
 });
 

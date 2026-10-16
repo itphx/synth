@@ -12,7 +12,15 @@
  */
 
 import { join } from 'node:path';
-import type { AgentDefinition, ModelConfig, ProviderConfig } from '@itphx/synth-shared';
+import type { AgentDefinition, ModelConfig, PostgresStorageConfig, ProviderConfig, SynthConfig } from '@itphx/synth-shared';
+import {
+  resolveDegradedMode,
+  resolvePostgresConfig,
+  resolvePostgresPassword,
+  resolveSecretKey,
+  resolveStorageBackend,
+  resolveStorageFallbackDir,
+} from '@itphx/synth-shared';
 import type {
   BlobStore,
   ContextFileRepository,
@@ -104,7 +112,7 @@ import {
 } from './memory/index.js';
 
 /** Физический backend хранения (`storage.backend` в конфиге). */
-export type StorageBackendKind = 'file' | 'memory';
+export type StorageBackendKind = 'file' | 'memory' | 'postgres';
 
 /**
  * Собранный слой хранения: домен получает порты (а не конкретные классы).
@@ -162,7 +170,77 @@ export interface StorageContextConfig {
   bundlesPath?: string;
   /** Каталог встроенных промптов (`StandaloneConfig.systemPromptsDir`). */
   systemPromptsDir?: string;
+  /**
+   * PROP-032: параметры PostgreSQL (используются при `kind: 'postgres'`); пароль
+   * сюда НЕ входит — отдельное поле `postgresPassword` (инвариант 13).
+   */
+  postgres?: PostgresStorageConfig;
+  /** PROP-032: пароль PostgreSQL (env/файл, не config.yaml). */
+  postgresPassword?: string;
+  /** PROP-032 (задел W5): политика при недоступности backend. */
+  degradedMode?: 'fallback-file' | 'halt';
+  /** PROP-032 (задел W5): каталог файлового фоллбека при деградации. */
+  fallbackDir?: string;
 }
+
+/**
+ * PROP-032/ADR-078: выбранный внешний backend недоступен (нет пакета-драйвера
+ * или он не экспортирует фабрику). Ошибка «внешняя зависимость недоступна» —
+ * потребитель показывает понятное сообщение, а не сырой трейс `import()`.
+ */
+export class StorageBackendUnavailableError extends Error {
+  readonly code = 'STORAGE_BACKEND_UNAVAILABLE';
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = 'StorageBackendUnavailableError';
+    if (options && options.cause !== undefined) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
+/**
+ * Конфиг, передаваемый драйверу `@itphx/synth-storage-postgres` — форма драйвера
+ * (ADR-097/PROP-032): `connectionString` либо `pool.{host, database}`. Резолвер
+ * `resolvePostgresConfig` отдаёт «плоскую» форму (`dsn`/`host`/…), поэтому
+ * `createPostgresStorage` мапит её в этот контракт (иначе драйвер не получал бы
+ * способа подключения и падал на валидации).
+ */
+export interface PostgresStorageDriverConfig {
+  /** Каталог данных инстанса (`{dataDir}`) — для секретов/файловых нужд драйвера. */
+  dataDir: string;
+  /** Строка подключения `postgres://…` (из `storage.postgres.dsn`/`SYNTH_POSTGRES_DSN`); приоритетнее `pool`. */
+  connectionString?: string;
+  /** Параметры пула, если `connectionString` не задана. */
+  pool?: {
+    host?: string;
+    port?: number;
+    user?: string;
+    password?: string;
+    database?: string;
+    /** Максимальный размер пула (`storage.postgres.poolMax`). */
+    max?: number;
+    /** Требовать TLS (`storage.postgres.ssl`). */
+    ssl?: boolean;
+  };
+  /** Схема БД (namespace таблиц). */
+  schema?: string;
+  /** Пароль БД (инвариант 13: не из config.yaml; env/файл). */
+  password?: string;
+}
+
+/** Локальный тип фабрики драйвера (пакет опционален и не резолвится на этапе типов). */
+interface PostgresStorageDriverModule {
+  createPostgresStorage(config: PostgresStorageDriverConfig): Promise<StorageContext>;
+}
+
+/**
+ * PROP-032: имя пакета-драйвера. Аннотация `string` намеренная — путь не должен
+ * резолвиться TypeScript'ом на этапе типов (пакет опционален), `import()`
+ * выполняется только в рантайме.
+ */
+const POSTGRES_DRIVER_PACKAGE: string = '@itphx/synth-storage-postgres';
 
 /**
  * Файловый backend: те же реализации и аргументы, что собирал
@@ -263,10 +341,136 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
   };
 }
 
-/** Диспетчер backend'а по `storage.backend`. */
+/**
+ * PROP-032: диспетчер backend'а по `storage.backend`. Синхронный — только для
+ * `file`/`memory` (обратная совместимость тестов). `postgres` требует
+ * асинхронной сборки (динамический `import()` драйвера) — используйте
+ * `createStorageContextAsync`. Домен должен вызывать async-версию.
+ *
+ * @deprecated используйте `createStorageContextAsync` (единый асинхронный каскад).
+ */
 export function createStorageContext(
   kind: StorageBackendKind,
   config: StorageContextConfig,
 ): StorageContext {
-  return kind === 'memory' ? createMemoryStorage(config) : createFileStorage(config);
+  if (kind === 'memory') return createMemoryStorage(config);
+  if (kind === 'postgres') {
+    throw new StorageBackendUnavailableError(
+      "createStorageContext('postgres', …) синхронно недоступен — используйте createStorageContextAsync().",
+    );
+  }
+  return createFileStorage(config);
+}
+
+/**
+ * PROP-032: сборка PostgreSQL-backend через динамический `import()` опционального
+ * пакета-драйвера. Пакет не резолвится на этапе типов (см. `POSTGRES_DRIVER_PACKAGE`).
+ * Нет пакета/`pg` — понятная ошибка `StorageBackendUnavailableError` (ADR-078),
+ * а не сырой трейс `import()`.
+ */
+export async function createPostgresStorage(config: StorageContextConfig): Promise<StorageContext> {
+  let mod: PostgresStorageDriverModule;
+  try {
+    mod = (await import(POSTGRES_DRIVER_PACKAGE)) as PostgresStorageDriverModule;
+  } catch (err) {
+    throw new StorageBackendUnavailableError(
+      `storage.backend='postgres' недоступен: не удалось загрузить драйвер ` +
+        `'${POSTGRES_DRIVER_PACKAGE}'. Установите пакет (npm i ${POSTGRES_DRIVER_PACKAGE} pg) ` +
+        `или выберите другой backend ('file'/'memory').`,
+      { cause: err },
+    );
+  }
+
+  if (!mod || typeof mod.createPostgresStorage !== 'function') {
+    throw new StorageBackendUnavailableError(
+      `storage.backend='postgres': драйвер '${POSTGRES_DRIVER_PACKAGE}' ` +
+        `не экспортирует createPostgresStorage().`,
+    );
+  }
+
+  // Маппинг «плоской» resolved-формы (dsn/host/…) в контракт драйвера
+  // (`connectionString` / `pool`): пароль — только из env/файла (инвариант 13).
+  const pg = config.postgres;
+  const pool: NonNullable<PostgresStorageDriverConfig['pool']> = {};
+  if (pg?.host) pool.host = pg.host;
+  if (pg?.port !== undefined) pool.port = pg.port;
+  if (pg?.user) pool.user = pg.user;
+  if (pg?.database) pool.database = pg.database;
+  if (pg?.poolMax !== undefined) pool.max = pg.poolMax;
+  if (pg?.ssl !== undefined) pool.ssl = pg.ssl;
+  if (config.postgresPassword) pool.password = config.postgresPassword;
+
+  const driverConfig: PostgresStorageDriverConfig = {
+    dataDir: config.dataDir,
+    ...(pg?.dsn ? { connectionString: pg.dsn } : {}),
+    ...(Object.keys(pool).length > 0 ? { pool } : {}),
+    ...(pg?.schema ? { schema: pg.schema } : {}),
+    ...(config.postgresPassword ? { password: config.postgresPassword } : {}),
+  };
+  return mod.createPostgresStorage(driverConfig);
+}
+
+/**
+ * PROP-032: единый **асинхронный** каскад сборки слоя хранения. `file`/`memory` —
+ * существующие синхронные фабрики, `postgres` — динамическая загрузка драйвера.
+ * Именно эту функцию должен вызывать домен (composition root).
+ */
+export async function createStorageContextAsync(
+  kind: StorageBackendKind,
+  config: StorageContextConfig,
+): Promise<StorageContext> {
+  switch (kind) {
+    case 'memory':
+      return createMemoryStorage(config);
+    case 'postgres':
+      return createPostgresStorage(config);
+    default:
+      return createFileStorage(config);
+  }
+}
+
+/** Опции `buildStorageContext` — сборка слоя из конфига инстанса (CLI/backend). */
+export interface BuildStorageContextOptions {
+  dataDir: string;
+  /** Полный конфиг инстанса (источник `storage.*`). */
+  config: SynthConfig;
+  env?: NodeJS.ProcessEnv;
+  /** ADR-079: home-каталог (для резолва `{dataDir}`/фоллбека). */
+  home?: string | null;
+  /** ADR-076: мастер-ключ (иначе резолвится из config/env). */
+  secretKey?: string;
+  dedupStore?: 'memory' | 'file';
+  scheduleCrossProcess?: boolean;
+  systemPromptsDir?: string;
+  bundlesPath?: string;
+  contextUserDataDir?: string;
+  systemDictionariesDir?: string;
+}
+
+/**
+ * PROP-032: собрать слой хранения из конфига инстанса — resolved backend +
+ * параметры PG + пароль (env/файл) + задел деградации. Общий хелпер для мест без
+ * `StandaloneConfig` (CLI-команды, `chat.ts`, maintenance), чтобы не дублировать
+ * резолвинг. Домен должен предпочитать этот хелпер / `createStorageContextAsync`.
+ */
+export async function buildStorageContext(
+  opts: BuildStorageContextOptions,
+): Promise<StorageContext> {
+  const env = opts.env ?? process.env;
+  const kind = resolveStorageBackend(opts.config, env);
+  return createStorageContextAsync(kind, {
+    dataDir: opts.dataDir,
+    secretKey: opts.secretKey ?? resolveSecretKey(opts.config, env),
+    env,
+    postgres: resolvePostgresConfig(opts.config, env),
+    postgresPassword: resolvePostgresPassword({ dataDir: opts.dataDir }, env),
+    degradedMode: resolveDegradedMode(opts.config),
+    fallbackDir: resolveStorageFallbackDir(opts.config, env, opts.home ?? null),
+    dedupStore: opts.dedupStore,
+    scheduleCrossProcess: opts.scheduleCrossProcess,
+    systemPromptsDir: opts.systemPromptsDir,
+    bundlesPath: opts.bundlesPath,
+    contextUserDataDir: opts.contextUserDataDir,
+    systemDictionariesDir: opts.systemDictionariesDir,
+  });
 }

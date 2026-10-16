@@ -6,7 +6,7 @@ import {
   runMigrations,
 } from '../storage/instance-meta.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
-import { createStorageContext } from '../storage/storage-context.js';
+import { createStorageContextAsync, type StorageContext } from '../storage/storage-context.js';
 import { SessionManager } from '../sessions/manager.js';
 import { recordMaintenanceAudit } from './audit.js';
 
@@ -23,6 +23,11 @@ export interface MigrateCommandOptions {
   error?: (msg: string) => void;
   /** ADR-092: аудит-журнал обслуживания (best-effort). */
   audit?: MaintenanceAuditRepository;
+  /**
+   * PROP-032: готовый контекст хранения (иначе собирается `file`-контекст) —
+   * чтобы миграции работали на выбранном backend (напр. `postgres`).
+   */
+  storage?: StorageContext;
 }
 
 /**
@@ -70,8 +75,8 @@ export async function runMigrateCommand(opts: MigrateCommandOptions): Promise<nu
   }
 
   // Дефолтные зависимости данных инстанса: сессии/проекты/маркеры миграций.
-  // PROP-032 (W2.4): собираются из единого контекста хранения (`file`).
-  const storage = createStorageContext('file', { dataDir });
+  // PROP-032: готовый контекст (любой backend) либо дефолтный `file`-контекст.
+  const storage = opts.storage ?? (await createStorageContextAsync('file', { dataDir }));
   const deps = {
     settingsStore: storage.settings,
     sessionManager: new SessionManager(storage.sessions),

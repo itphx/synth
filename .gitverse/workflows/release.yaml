@@ -68,7 +68,7 @@ jobs:
       - name: Обновить package.json
         run: |
           NEW="${{ steps.bump.outputs.new_version }}"
-          for pkg_dir in packages/shared packages/core packages/backend packages/ui packages/sdk packages/synth; do
+          for pkg_dir in packages/shared packages/core packages/storage-postgres packages/backend packages/ui packages/sdk packages/synth; do
             node -e "
               const fs = require('fs');
               const p = require('./$pkg_dir/package.json');
@@ -205,6 +205,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter @itphx/synth-shared build
           pnpm --filter @itphx/synth-core build
+          pnpm --filter @itphx/synth-storage-postgres build
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-sdk build
@@ -258,6 +259,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter @itphx/synth-shared build
           pnpm --filter @itphx/synth-core build
+          pnpm --filter @itphx/synth-storage-postgres build
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-sdk build
@@ -283,6 +285,7 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm --filter @itphx/synth-shared build
           pnpm --filter @itphx/synth-core build
+          pnpm --filter @itphx/synth-storage-postgres build
           pnpm --filter @itphx/synth-ui build
           pnpm --filter @itphx/synth-backend build
           pnpm --filter @itphx/synth-sdk build

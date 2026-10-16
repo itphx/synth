@@ -23,7 +23,7 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   startWebhookDeliveryPruner,
-  createStorageContext,
+  createStorageContextAsync,
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
@@ -73,15 +73,19 @@ export interface StandaloneDepsAccessors extends HybridMirrorAccessors {
  * `createStandaloneDeps` переиспользует тот же инстанс (один контекст, а не
  * россыпь конкретных классов по `main.ts`/`chat.ts`/`app.ts`).
  */
-export function createStandaloneStorage(config: StandaloneConfig): StorageContext {
+export async function createStandaloneStorage(config: StandaloneConfig): Promise<StorageContext> {
   const kind = config.storageBackend ?? 'file';
   if (kind === 'memory') {
     console.warn('storage.backend=memory: данные не сохраняются на диск');
   }
-  return createStorageContext(kind, {
+  return createStorageContextAsync(kind, {
     dataDir: config.dataDir,
     secretKey: config.secretKey,
     env: process.env,
+    postgres: config.postgresConfig,
+    postgresPassword: config.postgresPassword,
+    degradedMode: config.degradedMode,
+    fallbackDir: config.fallbackDir,
     dedupStore: config.eventsConfig?.dedupStore,
     scheduleCrossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
     systemPromptsDir: config.systemPromptsDir,
@@ -92,8 +96,9 @@ export function createStandaloneStorage(config: StandaloneConfig): StorageContex
 export async function createStandaloneDeps(
   config: StandaloneConfig,
   accessors: StandaloneDepsAccessors,
-  storage: StorageContext = createStandaloneStorage(config),
+  storage?: StorageContext,
 ) {
+  const storageContext = storage ?? (await createStandaloneStorage(config));
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
 
@@ -139,7 +144,7 @@ export async function createStandaloneDeps(
     schedules: scheduleStore,
     jobs: jobStore,
     skillBundles: bundleStore,
-  } = storage;
+  } = storageContext;
 
   // Runtime-настройки (ADR-005): workspace из {dataDir}/settings.json приоритетнее config/env
   // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
@@ -699,7 +704,7 @@ export async function createStandaloneDeps(
     scheduleStore,
     jobStore,
     // ADR-092: аудит-журнал обслуживания — порт слоя хранения (ADR-096).
-    maintenanceAudit: storage.maintenanceAudit,
+    maintenanceAudit: storageContext.maintenanceAudit,
     schedulerService,
     resolveAgentTemplate,
     requestSessionService,

@@ -58,7 +58,7 @@
 
 **Хранилище (единый слой хранения, ADR-096):**
 
-- `createBackendStorage(config)` (`src/app/deps.ts`) собирает **единственный `StorageContext`** (доменные порты) и делает это **до `auth`** — реестр `serviceKeys` нужен резолверу ключа, `mcpRegistry` — сидированию instance-серверов; `createBackendDeps` переиспользует тот же инстанс. backend **не конструирует стораджи напрямую** (ни новых классов, ни «россыпи» в роутах).
+- `createBackendStorage(config)` (`src/app/deps.ts`) — **async** (`await`): собирает **единственный `StorageContext`** (доменные порты) через `createStorageContextAsync` по `storage.backend` (`file`|`memory`|`postgres`; env `SYNTH_STORAGE_BACKEND`, fail-closed на неизвестном явном значении) и делает это **до `auth`** — реестр `serviceKeys` нужен резолверу ключа, `mcpRegistry` — сидированию instance-серверов; `createBackendDeps` (тоже async) переиспользует тот же инстанс. backend **не конструирует стораджи напрямую** (ни новых классов, ни «россыпи» в роутах).
 - `JsonStore<T>` (из `@itphx/synth-core`, порт `DocumentRepository<T>`) — `<dataDir>/<subdir>/<key>.json`; атомарная запись через shared `atomicWrite` (tmp → rename) + per-key `AsyncLock`; ключ проверяется от `..` и `\`; `list()` собирает вложенные ключи (`provider/model`).
 - `ProjectStore` (из `@itphx/synth-core`, порт `ProjectRepository`) — `<dataDir>/projects/<id>.json`; один `AsyncLock` на все проекты; `create()` инициализирует план, лог и владельца.
 - `DefaultsStore` (порт `DefaultsRepository`) — теперь в core (`storage/defaults-store.ts`); в backend — реэкспорт (`src/lib/defaults-store.ts`) для прежних импортов.

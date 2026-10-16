@@ -162,7 +162,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // service-key (`storage.serviceKeys`) нужен резолверу `synth_svc_…`; тот же
     // инстанс переиспользует `createBackendDeps` (в т.ч. `mcpRegistry`, который
     // деп сидирует instance-серверами).
-    const storage = createBackendStorage(backendConfig);
+    const storage = await createBackendStorage(backendConfig);
     // ADR-052 (этап I): реестр service-key — резолвер ключа `synth_svc_…`
     // нужен аутентификации (паритет с core `server/app.ts`).
     const serviceApiKeyStore = storage.serviceKeys;

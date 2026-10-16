@@ -19,7 +19,9 @@ export default defineConfig({
     'node:*',
     '@itphx/synth-core',
     '@itphx/synth-shared',
+    '@itphx/synth-storage-postgres',
     '@itphx/synth-ui',
+    'pg',
   ],
   platform: 'node',
   banner: {

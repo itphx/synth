@@ -73,6 +73,15 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
   приоритет `CLI > env > config.yaml > defaults` (ADR-023). Объектные/нескалярные ключи
   (`events.identityMap`, `events.dedupStore`, `mcp.servers`, …) остаются в config.yaml.
+- PROP-032 (слой хранения, ADR-096/ADR-097): секция `storage` — `backend`
+  (`file`|`memory`|`postgres`, резолвер `resolveStorageBackend` + env
+  `SYNTH_STORAGE_BACKEND`, **fail-closed** на неизвестном явном значении), `postgres`
+  (`dsn`/`host`/`port`/`database`/`user`/`schema`/`ssl`/`poolMax`, резолвер
+  `resolvePostgresConfig` + env `SYNTH_POSTGRES_*`), задел деградации
+  `degradedMode` (`fallback-file`|`halt`, `resolveDegradedMode`) / `fallbackDir`
+  (`resolveStorageFallbackDir`). Пароль БД в схеме **не хранится** (инвариант 13) —
+  `resolvePostgresPassword` (env `SYNTH_POSTGRES_PASSWORD` → файл
+  `{dataDir}/secrets/postgres-password`).
 
 ## Схемы и типы
 

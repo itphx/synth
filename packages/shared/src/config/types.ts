@@ -25,18 +25,58 @@ export const serverConfigSchema = z.object({
   allowedOrigins: z.array(z.string()).default([]),
 });
 
+/**
+ * PROP-032: параметры подключения к PostgreSQL (секция `storage.postgres`).
+ *
+ * Пароль здесь **не хранится** (инвариант 13) — его читает резолвер
+ * `resolvePostgresPassword` (env `SYNTH_POSTGRES_PASSWORD` → файл
+ * `{dataDir}/secrets/postgres-password`); решение об ошибке отсутствия пароля
+ * принимает драйвер (`@itphx/synth-storage-postgres`). `dsn` задан —
+ * приоритетнее отдельных `host`/`port`/`database`/`user`.
+ */
+export const postgresStorageConfigSchema = z.object({
+  /** Полная строка подключения; задана — приоритетнее host/port/database/user. */
+  dsn: z.string().optional(),
+  host: z.string().optional(),
+  port: z.number().int().min(1).max(65535).optional(),
+  database: z.string().optional(),
+  user: z.string().optional(),
+  /** Схема БД (namespace таблиц). */
+  schema: z.string().optional(),
+  /** Требовать TLS-соединение. */
+  ssl: z.boolean().optional(),
+  /** Максимальный размер пула соединений. */
+  poolMax: z.number().int().min(1).optional(),
+});
+
 export const storageConfigSchema = z.object({
   dataDir: z.string().default('/var/synth/data'),
   /**
    * PROP-032: физический backend хранения. `file` — JSON-файлы с атомарной
    * записью tmp→rename (ADR-005, дефолт); `memory` — in-memory (энергонезависимо
-   * НЕ сохраняется, для герметичных тестов). Читать через `resolveStorageBackend`
-   * (env `SYNTH_STORAGE_BACKEND` > это поле > `file`).
+   * НЕ сохраняется, для герметичных тестов); `postgres` — БД (драйвер —
+   * in-tree опциональный пакет `@itphx/synth-storage-postgres`). Читать через
+   * `resolveStorageBackend` (env `SYNTH_STORAGE_BACKEND` > это поле > `file`,
+   * fail-closed на неизвестном явно заданном значении).
    *
    * Необязательно: частичные override-объекты (`{ dataDir, workspacesRoot, … }`)
    * остаются валидными, а дефолт `file` задают `defaults.ts`/`resolveStorageBackend`.
    */
-  backend: z.enum(['file', 'memory']).optional(),
+  backend: z.enum(['file', 'memory', 'postgres']).optional(),
+  /** PROP-032: параметры PostgreSQL-backend (используются при `backend: postgres`). */
+  postgres: postgresStorageConfigSchema.default({}),
+  /**
+   * PROP-032 (задел под волну 5): поведение при недоступности выбранного backend
+   * — `fallback-file` (перейти на файловое хранилище в `fallbackDir`, default) |
+   * `halt` (остановить старт). Читать через `resolveDegradedMode`.
+   */
+  degradedMode: z.enum(['fallback-file', 'halt']).default('fallback-file'),
+  /**
+   * PROP-032 (задел под волну 5): каталог файлового фоллбека при деградации.
+   * `''` — не задано (эффективно `{dataDir}/fallback`), читать через
+   * `resolveStorageFallbackDir`.
+   */
+  fallbackDir: z.string().default(''),
   workspacesRoot: z.string().default(''),
   /** Рабочий каталог по умолчанию для сессий без проекта. Резолвится от dataDir: {dataDir}/workspaces/default. */
   defaultWorkspace: z.string().default(''),
@@ -685,6 +725,8 @@ export const synthConfigSchema = z.object({
 
 export type ServerConfig = z.infer<typeof serverConfigSchema>;
 export type StorageConfig = z.infer<typeof storageConfigSchema>;
+/** PROP-032: параметры PostgreSQL-backend (`storage.postgres`). */
+export type PostgresStorageConfig = z.infer<typeof postgresStorageConfigSchema>;
 export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type LLMConfig = z.infer<typeof llmConfigSchema>;
 export type CoreConfig = z.infer<typeof coreConfigSchema>;

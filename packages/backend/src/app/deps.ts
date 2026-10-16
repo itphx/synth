@@ -10,6 +10,7 @@ import type {
 } from '@itphx/synth-shared';
 import {
   ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
+  resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir,
 } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus, QueueProcessorManager,
@@ -33,7 +34,7 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   WebhookService, startWebhookDeliveryPruner,
-  createStorageContext,
+  createStorageContextAsync,
 } from '@itphx/synth-core';
 import type { DecisionAgentCandidate, EventsRuntimeSettings, StorageContext } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -45,15 +46,19 @@ import { seedDebugTestUsers } from './bootstrap.js';
  * её до `auth` (реестр `serviceKeys` нужен резолверу ключа, `mcpRegistry` —
  * сидированию instance-серверов), а `createBackendDeps` переиспользует инстанс.
  */
-export function createBackendStorage(config: BackendConfig): StorageContext {
+export async function createBackendStorage(config: BackendConfig): Promise<StorageContext> {
   const kind = resolveStorageBackend(config.synth, process.env);
   if (kind === 'memory') {
     console.warn('storage.backend=memory: данные не сохраняются на диск');
   }
-  return createStorageContext(kind, {
+  return createStorageContextAsync(kind, {
     dataDir: config.dataDir,
     secretKey: resolveSecretKey(config.synth),
     env: process.env,
+    postgres: resolvePostgresConfig(config.synth, process.env),
+    postgresPassword: resolvePostgresPassword({ dataDir: config.dataDir }, process.env),
+    degradedMode: resolveDegradedMode(config.synth),
+    fallbackDir: resolveStorageFallbackDir(config.synth, process.env),
     dedupStore: config.synth.events.dedupStore,
     scheduleCrossProcess: config.synth.scheduler.crossProcessLocks,
     bundlesPath: config.synth.commands.bundlesPath,
@@ -67,7 +72,7 @@ export function createBackendStorage(config: BackendConfig): StorageContext {
  */
 export async function createBackendDeps(
   config: BackendConfig,
-  storage: StorageContext = createBackendStorage(config),
+  storage?: StorageContext,
 ) {
   // Хранилища
   const dataDir = config.dataDir;
@@ -86,6 +91,7 @@ export async function createBackendDeps(
   // PROP-032 (W2.3/W2.4): единый контекст хранения — домен получает порты из
   // одного места. По умолчанию собирается `createBackendStorage`, готовый можно
   // передать (паритет с `app.ts`, где `serviceKeys`/`mcpRegistry` нужны до `auth`).
+  const storageContext = storage ?? (await createBackendStorage(config));
   const {
     settings: settingsStore,
     defaults: defaultsStore,
@@ -113,7 +119,7 @@ export async function createBackendDeps(
     jobs: jobStore,
     skillBundles: bundleStore,
     mcpRegistry: mcpRegistryStore,
-  } = storage;
+  } = storageContext;
 
   // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
   const hooks = new HookBus();
@@ -678,7 +684,7 @@ export async function createBackendDeps(
     scheduleStore,
     jobStore,
     // ADR-092: аудит-журнал обслуживания — порт слоя хранения (ADR-096).
-    maintenanceAudit: storage.maintenanceAudit,
+    maintenanceAudit: storageContext.maintenanceAudit,
     resolveAgentTemplate,
     eventHub,
     requestSessionService,

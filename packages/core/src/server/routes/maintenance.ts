@@ -26,7 +26,7 @@ import { DEFAULT_MAX_UPLOAD_BYTES } from '@itphx/synth-shared';
 import type { MaintenanceAuditEntry, MaintenanceAuditOp } from '@itphx/synth-shared';
 import type { MaintenanceAuditRepository } from '../../storage/ports/index.js';
 import { checkInstanceCompatibility, InstanceDataTooNewError } from '../../storage/instance-meta.js';
-import { createStorageContext } from '../../storage/storage-context.js';
+import { createStorageContextAsync } from '../../storage/storage-context.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { createBackup } from '../../maintenance/backup.js';
 import { runDoctor } from '../../maintenance/doctor.js';
@@ -300,7 +300,7 @@ export function createMaintenanceRoutes(
     const body = await c.req.json().catch(() => ({}));
     if ((body as { confirm?: unknown }).confirm !== true) return confirmRequired(c);
 
-    const storage = createStorageContext('file', {
+    const storage = await createStorageContextAsync('file', {
       dataDir,
       secretKey: deps.secretKey,
       env: deps.env,
