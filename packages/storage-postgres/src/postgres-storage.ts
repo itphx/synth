@@ -115,6 +115,8 @@ export async function createPostgresStorage(config: PostgresStorageConfig): Prom
     dataDir: config.dataDir,
     secretKey: config.secretKey,
     env: config.env,
+    systemDictionariesDir: config.systemDictionariesDir,
+    contextUserDataDir: config.contextUserDataDir,
     connection: conn,
   });
 }

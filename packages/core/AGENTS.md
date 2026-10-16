@@ -25,7 +25,9 @@
   `createToolRegistry()` (`engine/tools/index.ts`), `createAgentRegistry()`
   (`engine/agents/index.ts`), `FileStore`/`JsonStore`/`ProjectStore`/
   `FileProfileStore`/`RuntimeSettingsStore`/`SSHKeyStore`/`ServiceApiKeyStore` (`storage/*`),
-  слой хранения — `StorageContext`/`createFileStorage`/`createMemoryStorage`/
+  слой хранения — `StorageContext` (в т.ч. опциональный `close?()` —
+  освобождение ресурсов backend'а, напр. пула БД, на graceful shutdown)/
+  `createFileStorage`/`createMemoryStorage`/
   `createStorageContext` (`storage/storage-context.ts`), `FileBlobStore`
   (`storage/file-blob-store.ts`, порт `BlobStore`), `DefaultsStore` (`storage/defaults-store.ts`),
   `ChatOrchestrator`
@@ -425,8 +427,10 @@
   резолверу ключа). Опциональный БД-драйвер (ADR-097/ADR-096, PROP-032) — отдельный in-tree пакет
   `@itphx/synth-storage-postgres` (`createPostgresStorage(config): Promise<StorageContext>`), объявлен
   в `optionalDependencies` core и подключается динамическим `import()` по `storage.backend === 'postgres'`
-  (`pg` — optional у драйвера, core его рантаймом не тянет); сейчас драйвер — скелет (валидация конфига
-  + ошибка «не реализовано»), реализация портов — следующая волна.
+  (`pg` — optional у драйвера, core его рантаймом не тянет); драйвер применяет/проверяет схему и
+  **удерживает соединение в `StorageContext`** — `close?()` закрывает пул, ресурсы освобождает домен;
+  порты реализуются по группам `src/ports/*` (`sessions`/`principals`/`events`/`content`), сейчас — заглушки
+  «не реализовано» (реализация — следующая волна).
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`
   (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`; ADR-089 —
   `identities: ExternalIdentity[]` в snake_case (`external_id`/`display_name`/`linked_at`/`linked_by`),

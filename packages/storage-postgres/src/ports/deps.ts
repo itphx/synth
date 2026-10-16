@@ -1,0 +1,36 @@
+/**
+ * Общие зависимости сборки доменных портов PostgreSQL-драйвера
+ * (PROP-032, волна 3b).
+ *
+ * Один объект `PortDeps` передаётся во все четыре файла-группы
+ * (`sessions`/`principals`/`events`/`content`), чтобы каждая группа брала только
+ * нужное ей и не зависела от остальных. Поля описывают ровно то, что реально
+ * требуется портам при реализации поверх SQL:
+ *   - `connection` — живой пул/примитивы запросов (`query`/`withTransaction`/
+ *     `withAdvisoryLock`) из `pool.ts`, удерживается в `StorageContext`;
+ *   - `dataDir` — базовый каталог инстанса (файловые нужды, пути по умолчанию);
+ *   - `secretKey`/`env` — шифрование секретов at-rest (`sshKeys`/`webhooks`);
+ *   - `systemDictionariesDir`/`contextUserDataDir` — файловые пути словарей и
+ *     контента (для групп, которые совмещают SQL-хранение с файловым контентом).
+ *
+ * Никаких модульных синглтонов: `deps` собирается на каждый
+ * `buildPostgresStorageContext` (герметичность тестов и переключаемых схем).
+ */
+
+import type { PostgresConnection } from '../pool.js';
+
+/** Общие зависимости портов: соединение + пути/ключи, не привязанные к порту. */
+export interface PortDeps {
+  /** Живое соединение драйвера (пул + примитивы запросов/транзакций/локов). */
+  connection: PostgresConnection;
+  /** Базовый каталог данных инстанса. */
+  dataDir: string;
+  /** ADR-076: мастер-ключ секретов at-rest (env > config > файл в dataDir). */
+  secretKey?: string;
+  /** Окружение процесса (резолвинг секретов/путей). */
+  env?: NodeJS.ProcessEnv;
+  /** Каталог системных словарей (по умолчанию — `dictionaries/` пакета core). */
+  systemDictionariesDir?: string;
+  /** Корень пользовательских промптов/ролей (по умолчанию `{dataDir}/context`). */
+  contextUserDataDir?: string;
+}

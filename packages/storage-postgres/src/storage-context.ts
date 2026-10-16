@@ -1,13 +1,23 @@
 /**
- * Сборка `StorageContext` PostgreSQL-драйвера (PROP-032, волна 3a).
+ * Сборка `StorageContext` PostgreSQL-драйвера (PROP-032, волна 3b-каркас).
  *
- * До реализации доменных портов (следующая волна) контекст собирается так:
- *   - **файловые реализации** для FS/package-bound портов (`skills`,
- *     `contextFiles`, `blobs`) — контент скиллов/prompts-ролей и blob-дерево
- *     остаются на диске (ADR-091/ADR-092: ФС-периметр вне портов);
- *   - **заглушки PG** для остальных портов — бросают
- *     `PostgresStorageNotImplementedError` с именем порта (контракт для
- *     следующих волн).
+ * Контекст собирается из четырёх независимых файлов-групп
+ * (`src/ports/{sessions,principals,events,content}.ts`) — по одной фабрике на
+ * группу, чтобы волна реализации правила группы параллельно и без конфликтов:
+ *   - `buildSessionPorts(deps)`   → `sessions`;
+ *   - `buildPrincipalPorts(deps)` → `projects`/`profiles`/`settings`/`defaults`/
+ *     `providers`/`models`/`agents`;
+ *   - `buildEventPorts(deps)`     → `eventBindings`/`eventRoutes`/`eventApiKeys`/
+ *     `eventJournal`/`identityClaims`/`dedup`/`schedules`/`jobs`/`webhooks`/
+ *     `webhookDeliveries`;
+ *   - `buildContentPorts(deps)`   → `serviceKeys`/`sshKeys`/`mcpRegistry`/
+ *     `skillBundles`/`dictionaries`/`secretPatterns`/`protectedPaths`/
+ *     `maintenanceAudit`.
+ *
+ * Сейчас все четыре группы отдают заглушки `notImplementedPort`; FS/package-bound
+ * порты (`skills`, `contextFiles`, `blobs`) — **файловые реализации** core
+ * (контент скиллов/prompts-ролей и blob-дерево остаются на диске; ADR-091/ADR-092:
+ * ФС-периметр вне портов).
  *
  * Осознанное исключение: драйвер в этой части **импортирует core рантаймом**
  * (`createFileStorage`), чтобы переиспользовать уже проверенные файловые
@@ -17,49 +27,30 @@
 
 import { createFileStorage } from '@itphx/synth-core';
 import type { StorageContext } from '@itphx/synth-core';
-import { PostgresStorageNotImplementedError } from './errors.js';
 import type { PostgresConnection } from './pool.js';
-
-/**
- * Заглушка порта: любой доступ к методу бросает понятную ошибку с именем порта.
- * Методы кэшируются (стабильные ссылки на функцию), символьные ключи не трогаем.
- */
-export function notImplementedPort<T>(port: string): T {
-  const methods = new Map<PropertyKey, () => never>();
-  const proxy = new Proxy(
-    {},
-    {
-      get(_target, prop): unknown {
-        if (typeof prop === 'symbol') return undefined;
-        let method = methods.get(prop);
-        if (!method) {
-          method = () => {
-            throw new PostgresStorageNotImplementedError(
-              `Порт '${port}' ещё не реализован в PostgreSQL-драйвере (PROP-032, волна реализации портов).`,
-            );
-          };
-          methods.set(prop, method);
-        }
-        return method;
-      },
-    },
-  );
-  return proxy as T;
-}
+import { buildContentPorts } from './ports/content.js';
+import type { PortDeps } from './ports/deps.js';
+import { buildEventPorts } from './ports/events.js';
+import { buildPrincipalPorts } from './ports/principals.js';
+import { buildSessionPorts } from './ports/sessions.js';
 
 /** Опции сборки контекста PostgreSQL. */
 export interface BuildPostgresContextOptions {
   dataDir: string;
   secretKey?: string;
   env?: NodeJS.ProcessEnv;
+  /** Каталог системных словарей (пробрасывается группе `content`/файловым портам). */
+  systemDictionariesDir?: string;
+  /** Корень пользовательских промптов/ролей (файловый порт `contextFiles`). */
+  contextUserDataDir?: string;
   /**
-   * PROP-032: живое соединение драйвера — удерживается в контексте, чтобы порты
-   * БД (следующая волна) ходили через него. `close()` контекста закрывает пул.
+   * PROP-032: живое соединение драйвера — удерживается в контексте, порты БД
+   * ходят через него; `close()` контекста закрывает пул.
    */
-  connection?: PostgresConnection;
+  connection: PostgresConnection;
 }
 
-/** Собрать `StorageContext` с файловыми FS-портами и заглушками остальных. */
+/** Собрать `StorageContext`: четыре группы портов + файловые FS-порты + `close`. */
 export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): StorageContext {
   // Файловый контекст переиспользуется только для FS/package-bound портов
   // (`skills`/`contextFiles`/`blobs`); прочие его порты не задействованы.
@@ -67,41 +58,28 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     dataDir: opts.dataDir,
     secretKey: opts.secretKey,
     env: opts.env,
+    systemDictionariesDir: opts.systemDictionariesDir,
+    contextUserDataDir: opts.contextUserDataDir,
   });
 
-  const connection = opts.connection;
+  const deps: PortDeps = {
+    connection: opts.connection,
+    dataDir: opts.dataDir,
+    secretKey: opts.secretKey,
+    env: opts.env,
+    systemDictionariesDir: opts.systemDictionariesDir,
+    contextUserDataDir: opts.contextUserDataDir,
+  };
 
   return {
     kind: 'postgres',
     // PROP-032: соединение живёт в контексте; `close()` закрывает пул (graceful
-    // shutdown домена). Без соединения (заглушки) ресурсов освобождать нечего.
-    ...(connection ? { close: () => connection.end() } : {}),
-    sessions: notImplementedPort('sessions'),
-    projects: notImplementedPort('projects'),
-    profiles: notImplementedPort('profiles'),
-    settings: notImplementedPort('settings'),
-    defaults: notImplementedPort('defaults'),
-    secretPatterns: notImplementedPort('secretPatterns'),
-    protectedPaths: notImplementedPort('protectedPaths'),
-    dictionaries: notImplementedPort('dictionaries'),
-    providers: notImplementedPort('providers'),
-    models: notImplementedPort('models'),
-    agents: notImplementedPort('agents'),
-    mcpRegistry: notImplementedPort('mcpRegistry'),
-    serviceKeys: notImplementedPort('serviceKeys'),
-    eventApiKeys: notImplementedPort('eventApiKeys'),
-    eventBindings: notImplementedPort('eventBindings'),
-    eventRoutes: notImplementedPort('eventRoutes'),
-    eventJournal: notImplementedPort('eventJournal'),
-    identityClaims: notImplementedPort('identityClaims'),
-    webhooks: notImplementedPort('webhooks'),
-    webhookDeliveries: notImplementedPort('webhookDeliveries'),
-    schedules: notImplementedPort('schedules'),
-    jobs: notImplementedPort('jobs'),
-    maintenanceAudit: notImplementedPort('maintenanceAudit'),
-    dedup: notImplementedPort('dedup'),
-    skillBundles: notImplementedPort('skillBundles'),
-    sshKeys: notImplementedPort('sshKeys'),
+    // shutdown домена).
+    close: () => opts.connection.end(),
+    ...buildSessionPorts(deps),
+    ...buildPrincipalPorts(deps),
+    ...buildEventPorts(deps),
+    ...buildContentPorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
     skills: file.skills,
     contextFiles: file.contextFiles,
