@@ -135,8 +135,20 @@ backend:
 ```
 
 - `clientSecret` is not set in values — it is placed in a SealedSecret as `SYNTH_OIDC_CLIENT_SECRET`;
-- if Keycloak is signed by an internal CA, set `backend.extraEnv.NODE_EXTRA_CA_CERTS` to the path of the CA certificate
-  and mount it (otherwise the backend cannot verify the JWT or reach the issuer).
+- if Keycloak is signed by an internal CA, configure trust via the **standard path** — the `security.tls`
+  section (`caFile`/`caPem`) or the env var `SYNTH_TLS_CA_FILE` (otherwise the backend cannot verify the JWT
+  or reach the issuer):
+
+  ```yaml
+  security:
+    tls:
+      caFile: /etc/synth/tls/ca.crt    # or caPem — the PEM itself; SYNTH_TLS_CA_FILE / SYNTH_TLS_CA_PEM
+  ```
+
+  In Helm it is convenient to put the CA in a Secret and mount it (`security.tls.existingSecret` + `caKey`) —
+  see `charts/synth/README.md`. `backend.extraEnv.NODE_EXTRA_CA_CERTS` remains only a compatibility channel
+  for child processes and is **not** Synth configuration (when `security.tls` is set, Synth installs its own
+  global TLS dispatcher and ignores that variable).
 
 ## 4. Verification and diagnostics
 
@@ -168,7 +180,7 @@ The decoded `id_token` must contain `realm_access.roles` with the expected role 
 | All users get `USER`, no admin UI | The role mapper does not include roles in `id_token`/`access_token` | Enable `id.token.claim` and `access.token.claim` on the realm roles / client roles mappers (see 2.4) |
 | The role exists in Keycloak, but not in the UI | The role is not named from the known list (`ADMIN/USER/LEAD/AUDITOR`) | Rename the role or add it to `KNOWN_ROLES` |
 | The role is assigned, but as a client role to another client | `resource_access.<clientId>` does not match the Synth `clientId` | Assign the role to the `synth` client or assign a realm role |
-| The backend cannot verify the JWT / 401 on sign-in | The backend does not trust the Keycloak CA | Configure `NODE_EXTRA_CA_CERTS` (see 3.3) |
+| The backend cannot verify the JWT / 401 on sign-in | The backend does not trust the Keycloak CA | Configure `security.tls.caFile`/`caPem` (env `SYNTH_TLS_CA_FILE`, see 3.3) |
 
 ## 5. Test environment accounts
 

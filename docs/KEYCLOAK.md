@@ -135,8 +135,19 @@ backend:
 ```
 
 - `clientSecret` не указывается в values — кладётся в SealedSecret как `SYNTH_OIDC_CLIENT_SECRET`;
-- если Keycloak подписан внутренним CA, укажите `backend.extraEnv.NODE_EXTRA_CA_CERTS` с путём к CA-сертификату
-  и смонтируйте его (иначе backend не сможет проверить JWT и обращаться к issuer).
+- если Keycloak подписан внутренним CA, задайте доверие **штатным путём** — секция `security.tls`
+  (`caFile`/`caPem`) или env `SYNTH_TLS_CA_FILE` (иначе backend не сможет проверить JWT и обратиться к issuer):
+
+  ```yaml
+  security:
+    tls:
+      caFile: /etc/synth/tls/ca.crt    # или caPem — сам PEM; SYNTH_TLS_CA_FILE / SYNTH_TLS_CA_PEM
+  ```
+
+  В Helm CA удобно положить в Secret и смонтировать (`security.tls.existingSecret` + `caKey`) —
+  см. `charts/synth/README.md`. `backend.extraEnv.NODE_EXTRA_CA_CERTS` оставлен лишь как
+  совместимость для дочерних процессов и **не** является конфигурацией Synth (при заданном
+  `security.tls` Synth ставит собственный глобальный TLS-dispatcher и эту переменную не учитывает).
 
 ## 4. Проверка и диагностика
 
@@ -168,7 +179,7 @@ curl -s -X POST "https://<keycloak-host>/realms/synth/protocol/openid-connect/to
 | Все пользователи получают `USER`, админки нет | Маппер ролей не включает роли в `id_token`/`access_token` | Включить `id.token.claim` и `access.token.claim` у мапперов realm roles / client roles (см. 2.4) |
 | Роль есть в Keycloak, но в UI её нет | Роль называется не из списка известных (`ADMIN/USER/LEAD/AUDITOR`) | Переименовать роль или добавить её в `KNOWN_ROLES` |
 | Роль выдана, но как client-роль другому клиенту | `resource_access.<clientId>` не совпадает с `clientId` Synth | Выдавать роль клиенту `synth` или назначить realm-роль |
-| Backend не может проверить JWT / 401 при входе | Backend не доверяет CA Keycloak | Настроить `NODE_EXTRA_CA_CERTS` (см. 3.3) |
+| Backend не может проверить JWT / 401 при входе | Backend не доверяет CA Keycloak | Настроить `security.tls.caFile`/`caPem` (env `SYNTH_TLS_CA_FILE`, см. 3.3) |
 
 ## 5. Учётные записи тестового окружения
 

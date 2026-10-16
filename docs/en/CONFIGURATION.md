@@ -24,7 +24,19 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 |-----------|------------|--------------|
 | `SYNTH_API_KEY` | Key to log into the API (backend → role ADMIN; core standalone → role ADMIN). If not set, `synth serve` generates a stable local key in `{dataDir}/secrets/api-key` | — |
 | `SYNTH_DATA_DIR` | Data directory (sessions, projects, providers, models) | per mode: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
-| `SYNTH_STORAGE_BACKEND` | ADR-096: physical storage backend: `file` (JSON files, ADR-005) or `memory` (in-memory, data is **not** persisted) | `file` |
+| `SYNTH_STORAGE_BACKEND` | ADR-096: physical storage backend: `file` (JSON files, ADR-005), `memory` (in-memory, data is **not** persisted) or `postgres` (PROP-032) | `file` |
+| `SYNTH_POSTGRES_DSN` | PROP-032: PostgreSQL connection string (takes precedence over separate `host`/`port`/`database`/`user`) | — |
+| `SYNTH_POSTGRES_HOST` | PROP-032: PostgreSQL host | — |
+| `SYNTH_POSTGRES_PORT` | PROP-032: PostgreSQL port | — |
+| `SYNTH_POSTGRES_DATABASE` | PROP-032: PostgreSQL database name | — |
+| `SYNTH_POSTGRES_USER` | PROP-032: PostgreSQL user | — |
+| `SYNTH_POSTGRES_SCHEMA` | PROP-032: DB schema (namespace of the driver's tables) | — |
+| `SYNTH_POSTGRES_SSL` | PROP-032: legacy TLS-connection flag (`true`/`false`); used only when `SYNTH_POSTGRES_SSLMODE` is not set | — |
+| `SYNTH_POSTGRES_SSLMODE` | PROP-032/ADR-099: TLS mode for the DB connection: `disable` / `require` / `verify-full` (`verify-ca` is an alias of `verify-full`); takes precedence over the legacy `ssl` | — |
+| `SYNTH_POSTGRES_POOL_MAX` | PROP-032: maximum connection pool size | `10` |
+| `SYNTH_POSTGRES_PASSWORD` | PROP-032: DB password — **only** via env or the file `{dataDir}/secrets/postgres-password` (never stored in `config.yaml`, invariant 13) | — |
+| `SYNTH_DEGRADED_MODE` | PROP-032/ADR-098: behaviour when the DB is unreachable (`fallback-file`/`halt`) | `fallback-file` |
+| `SYNTH_STORAGE_FALLBACK_DIR` | PROP-032/ADR-098: directory of the file fallback in degraded mode | `{dataDir}/fallback` |
 | `SYNTH_WORKSPACES_ROOT` | Root of the project workspace directories (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Default working directory (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | ADR-075: policy for an absolute workspace outside `workspacesRoot` (`confirm`/`deny`) | per mode (standalone — `confirm`, managed — `deny`) |
@@ -106,6 +118,11 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON array | `security.bootstrapServiceKeys` (an object env override, ADR-052/O1; see below) |
+| `SYNTH_TLS_CA_FILE` | ADR-099: path to a PEM file with the trusted CA (corporate CA); mutually exclusive with `SYNTH_TLS_CA_PEM` | — |
+| `SYNTH_TLS_CA_PEM` | ADR-099: PEM of the trusted CA (e.g. from a Secret); mutually exclusive with `SYNTH_TLS_CA_FILE` | — |
+| `SYNTH_TLS_CERT_FILE` | ADR-099: path to the PEM file of the client certificate (mTLS) | — |
+| `SYNTH_TLS_KEY_FILE` | ADR-099: path to the PEM file of the client private key (mTLS) | — |
+| `SYNTH_TLS_REJECT_UNAUTHORIZED` | ADR-099: verify the server certificate (`true`/`1`/`false`/`0`) | `true` |
 
 ### Maintenance env variables (ADR-091)
 
@@ -161,8 +178,26 @@ server:
 storage:
   dataDir: "/var/synth/data"      # data directory outside the repository
   backend: "file"                 # ADR-096: physical storage backend — file (JSON files with atomic write,
-                                  # default) | memory (in-memory, data is NOT persisted — hermetic tests/emulation);
+                                  # default) | memory (in-memory, data is NOT persisted — hermetic tests/emulation)
+                                  # | postgres (PROP-032: optional driver @itphx/synth-storage-postgres);
                                   # SYNTH_STORAGE_BACKEND
+  postgres:                       # PROP-032: PostgreSQL parameters (used when backend: postgres)
+    # dsn: "postgres://synth@db:5432/synth"   # connection string; takes precedence over host/port/database/user
+    host: ""                      # SYNTH_POSTGRES_HOST
+    port: 5432                    # SYNTH_POSTGRES_PORT
+    database: ""                  # SYNTH_POSTGRES_DATABASE
+    user: ""                      # SYNTH_POSTGRES_USER
+    schema: ""                    # SYNTH_POSTGRES_SCHEMA — namespace of the driver's tables
+    ssl: false                    # SYNTH_POSTGRES_SSL — legacy: require TLS (only when sslmode is not set)
+    sslmode: ""                   # ADR-099: disable | require | verify-full (verify-ca is an alias);
+                                  # CA/mTLS come from security.tls; SYNTH_POSTGRES_SSLMODE; TLS params in dsn are forbidden
+    poolMax: 10                   # SYNTH_POSTGRES_POOL_MAX — maximum pool size
+    # The PASSWORD is NOT stored here (invariant 13): env SYNTH_POSTGRES_PASSWORD or the file
+    # {dataDir}/secrets/postgres-password.
+  degradedMode: "fallback-file"   # PROP-032/ADR-098: on DB unavailability — fallback-file (file fallback,
+                                  # strict read-only) | halt (stop startup); SYNTH_DEGRADED_MODE
+  fallbackDir: ""                 # PROP-032/ADR-098: file fallback directory; empty — {dataDir}/fallback;
+                                  # SYNTH_STORAGE_FALLBACK_DIR
   workspacesRoot: ""              # if empty — {dataDir}/workspaces; SYNTH_WORKSPACES_ROOT
   defaultWorkspace: ""            # if empty — {dataDir}/workspaces/default; SYNTH_DEFAULT_WORKSPACE
   workspaceOutsideRoot: ""        # ADR-075: policy for an absolute workspace outside workspacesRoot
@@ -300,6 +335,12 @@ security:
     mode: "flag"                  # flag | sanitize | block
   protectedPaths:
     enabled: true
+  tls:                            # ADR-099: TLS/CA trust for outbound connections (env SYNTH_TLS_*)
+    caFile: ""                    # path to a PEM file with the trusted CA (corporate CA); mutually exclusive with caPem
+    # caPem: ""                   # PEM of the trusted CA (e.g. from a Secret); mutually exclusive with caFile
+    certFile: ""                  # mTLS: path to the client certificate PEM file
+    keyFile: ""                   # mTLS: path to the client private key PEM file
+    rejectUnauthorized: true      # verify the server certificate (default true)
   secretKey: ""                   # ADR-076: master key of the at-rest secrets (empty → file dataDir/secrets/master.key)
   bootstrapServiceKeys: []        # ADR-052/O1: installer service keys (label/secret/scopes/roles?) — see below; usually via the env SYNTH_BOOTSTRAP_SERVICE_KEYS
 
@@ -329,10 +370,80 @@ The full list of fields (including `logging`, `tsm`, `context`, `summarization`,
 
 ### Storage backend (`storage.backend`, ADR-096)
 
-- `storage.backend` — the physical storage backend: `file` (JSON files with atomic tmp→rename write, [ADR-005](../arch_decisions/adr-005-json-storage.md); default) or `memory` (in-memory, data is **not** persisted to disk — for hermetic tests and emulation). The domain works through domain ports, the backend is interchangeable ([ADR-096](../arch_decisions/adr-096-storage-layer.md)).
-- **Priority** ([ADR-023](../arch_decisions/adr-023-configuration.md)): env `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `file`. An invalid value (not `file`/`memory`) — warn and fall back to config/default (fail-soft). Resolver — `resolveStorageBackend` (`@itphx/synth-shared/config`); the choice is applied at the assembly point `StorageContext` (`createFileStorage`/`createMemoryStorage`/`createStorageContext`).
+- `storage.backend` — the physical storage backend: `file` (JSON files with atomic tmp→rename write, [ADR-005](../arch_decisions/adr-005-json-storage.md); default), `memory` (in-memory, data is **not** persisted to disk — for hermetic tests and emulation) or `postgres` (PostgreSQL; optional in-tree driver `@itphx/synth-storage-postgres`, [PROP-032](../arch_decisions/prop-032-history-storage-postgresql.md)). The domain works through domain ports, the backend is interchangeable ([ADR-096](../arch_decisions/adr-096-storage-layer.md)); any backend must pass the contract suite `packages/core/src/storage/contract/*`.
+- **Priority** ([ADR-023](../arch_decisions/adr-023-configuration.md)): env `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `file`. An invalid value (not `file`/`memory`/`postgres`) — warn and fall back to config/default (fail-soft); an unknown **explicit** value in `resolveStorageBackend` itself — **fail-closed** (an error, not a silent fallback to files). Resolver — `resolveStorageBackend` (`@itphx/synth-shared/config`); the choice is applied at the assembly point `StorageContext` (`createStorageContextAsync`/`buildStorageContext`; the synchronous `createStorageContext` throws for `postgres`).
 - `memory` prints the warning `storage.backend=memory: данные не сохраняются на диск` — a mode **not for production** (tests/emulation only).
-- The next backend is a DB behind the same layer (ports + contract suite, the "port passport") — [PROP-032](../arch_decisions/prop-032-history-storage-postgresql.md).
+- `postgres` requires the installed driver (`@itphx/synth-storage-postgres`, shipped with `@itphx/synth`; `pg` is an optional dependency of the driver) and a reachable DB. The driver applies/asserts **its own** DB schema (`synth_schema_migrations`, inline SQL migrations) — separate from `meta.json`/`synth migrate` (ADR-092); "DB schema is newer than the driver" — fail-closed.
+
+### PostgreSQL (`storage.postgres`, PROP-032)
+
+The section is used when `storage.backend: postgres`. Source of truth — `postgresStorageConfigSchema` (`packages/shared/src/config/types.ts`); resolver — `resolvePostgresConfig` (env `SYNTH_POSTGRES_*` > `config.storage.postgres`; [ADR-023](../arch_decisions/adr-023-configuration.md)).
+
+| Field | Env | Purpose |
+|------|-----|------------|
+| `dsn` | `SYNTH_POSTGRES_DSN` | Connection string `postgres://…`; takes precedence over `host`/`port`/`database`/`user` |
+| `host` | `SYNTH_POSTGRES_HOST` | DB server host |
+| `port` | `SYNTH_POSTGRES_PORT` | Port (1–65535) |
+| `database` | `SYNTH_POSTGRES_DATABASE` | Database name |
+| `user` | `SYNTH_POSTGRES_USER` | User |
+| `schema` | `SYNTH_POSTGRES_SCHEMA` | DB schema (namespace of the driver's tables; default — the first in `search_path`) |
+| `sslmode` | `SYNTH_POSTGRES_SSLMODE` | TLS mode: `disable` / `require` / `verify-full` (`verify-ca` is an alias of `verify-full`); takes precedence over the legacy `ssl` ([ADR-099](../arch_decisions/adr-099-egress-tls-trust.md)) |
+| `ssl` | `SYNTH_POSTGRES_SSL` | Legacy TLS flag (`true`/`false`); applied only when `sslmode` is not set |
+| `poolMax` | `SYNTH_POSTGRES_POOL_MAX` | Maximum connection pool size (default `10`) |
+
+- The **password** is **not stored** in the section (invariant 13). Source — env `SYNTH_POSTGRES_PASSWORD` > the file `{dataDir}/secrets/postgres-password` (resolver `resolvePostgresPassword`); a k8s Secret → env is recommended.
+- Invalid numeric/boolean env values — a resolver error with a clear message (no silent passthrough).
+- Driver contract and DB schema — `packages/storage-postgres/AGENTS.md`; acceptance criterion — the suite `packages/core/src/storage/contract/*` (run against a live DB via env `SYNTH_TEST_POSTGRES_DSN`).
+
+### TLS for the PostgreSQL connection (`storage.postgres.sslmode`, ADR-099 × PROP-032)
+
+The source of truth for the TLS policy is `storage.postgres.sslmode`; the CA and client certificates (mTLS) come from the **shared** `security.tls` section (see below). The mode resolver is `normalizePostgresSslMode`, the `pg` `ssl` options are assembled by `buildPostgresSslOptions` (`packages/shared/src/config/tls.ts`).
+
+| `sslmode` | What we do |
+|---|---|
+| not set | Previous behaviour: the legacy `ssl` field (`true`/`false`) or the `pg` default — a connection **without TLS** (dev/compatibility) |
+| `disable` | TLS explicitly off (`ssl: false`); CA/mTLS are ignored |
+| `require` | Encryption **without** server-certificate verification (`rejectUnauthorized: false`); mTLS (`cert`/`key` from `security.tls`) is added if configured |
+| `verify-full` | Server-certificate verification against the CA from `security.tls` (`rejectUnauthorized: true` + `ca`); mTLS — if configured; for a non-IP host without a DSN, `servername` (SNI) is set |
+| `verify-ca` | An **alias** of `verify-full` (normalized with a warning: `pg-connection-string` treats it as `verify-full`, host-name verification enabled) |
+
+- **Fail-closed:** `verify-full` without a configured CA (`security.tls.caFile`/`caPem`) → a configuration error (no silent `rejectUnauthorized: false` — otherwise server-certificate verification is impossible). mTLS requires **both** files — `certFile` and `keyFile`.
+- **TLS parameters in the DSN are forbidden.** The `storage.postgres.dsn` connection string must not carry `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/`ssl`/`sslnegotiation`/`uselibpqcompat`: the `pg` driver lays the parsed DSN **over** the explicit config (`Object.assign({}, config, parse(connectionString))`) and silently overrides the `ssl` object — up to disabling TLS. Detection → a configuration error: `TLS-параметры в DSN запрещены (обнаружено: …). … задайте их только в storage.postgres.sslmode + security.tls` (`assertNoDsnTlsParams`, `packages/storage-postgres/src/pool.ts`). Both the URL form (`?sslmode=…`) and the libpq-like form (`sslmode=…`) are checked.
+- **TLS is startup configuration** (not runtime): changes are applied at startup; to switch the mode — restart.
+
+### Degraded mode on DB unavailability (`storage.degradedMode`, ADR-098)
+
+If `postgres` is selected but the DB is unreachable at startup, the behaviour is set by `storage.degradedMode` (env `SYNTH_DEGRADED_MODE` > config > `fallback-file`; resolver `resolveDegradedMode`):
+
+- `fallback-file` (default) — the service starts on a **file fallback** in `storage.fallbackDir` (env `SYNTH_STORAGE_FALLBACK_DIR` > config > `{dataDir}/fallback`; a **separate** directory from `dataDir`) in **strict read-only**: mutations → `503 STORAGE_DEGRADED_READONLY`, non-administrators — `503 STORAGE_DEGRADED`. `/health` returns `status: 'degraded'` + a `storage.{backend,fallbackDir,reason,since}` block; diagnostics — `GET /api/v2/storage/status`.
+- `halt` — startup stops with a clear error (`STORAGE_UNAVAILABLE`).
+
+**Fail-closed** (the fallback is **not** applied regardless of `degradedMode`): a configuration/credentials error (`STORAGE_POSTGRES_CONFIG_INVALID`), a missing dependency (`…DEPENDENCY_MISSING`, no `pg`), a driver package that cannot be loaded (`STORAGE_BACKEND_UNAVAILABLE`), a DB schema newer than the driver (`…SCHEMA_TOO_NEW`). Degradation covers a **DB failure** (network/class `08`/`57P0x`, a server auth error, `…SCHEMA_OUTDATED` — fixed by `synth migrate`, other runtime errors). There is **no** auto-return to the DB — only a restart after the connection is restored ([ADR-098](../arch_decisions/adr-098-storage-degraded-recovery.md)); procedures — [MAINTENANCE.md](../MAINTENANCE.md).
+
+### TLS and mTLS trust for outbound connections (`security.tls`, ADR-099)
+
+A single source of TLS/CA trust for **all** outbound connections of Synth (LLM providers, MCP HTTP,
+`web_fetch`/`web_search`, webhooks, the hybrid backend, instructions/skills by URL, the update checker,
+OIDC/JWKS, provider icons, git, PostgreSQL). The section is read by the resolvers `resolveTlsConfig`/`resolveTlsTrust`
+(`packages/shared/src/config/tls.ts`); priority — the general one ([ADR-023](../arch_decisions/adr-023-configuration.md)):
+env > `config.yaml` > defaults. Invariant — [ADR-099](../arch_decisions/adr-099-egress-tls-trust.md):
+subsystems do not create their own agents/dispatchers.
+
+| Field | Env | Purpose |
+|---|---|---|
+| `caFile` | `SYNTH_TLS_CA_FILE` | Path to a PEM file with the trusted CA (corporate CA); **mutually exclusive** with `caPem` |
+| `caPem` | `SYNTH_TLS_CA_PEM` | PEM of the trusted CA (e.g. from a Secret); **mutually exclusive** with `caFile` |
+| `certFile` | `SYNTH_TLS_CERT_FILE` | mTLS: path to the client certificate PEM file |
+| `keyFile` | `SYNTH_TLS_KEY_FILE` | mTLS: path to the client private key PEM file |
+| `rejectUnauthorized` | `SYNTH_TLS_REJECT_UNAUTHORIZED` | Verify the server certificate (`true`/`1`/`false`/`0`); default `true` |
+
+- **An empty section — system trust** (Node's system CAs), behaviour is unchanged.
+- **`rejectUnauthorized`:** `true` (default) — server-certificate verification; `false` — verification disabled (a deliberate MITM risk; debugging only). An invalid env value — `warn` + fall back to config/default.
+- **mTLS:** `certFile` **and** `keyFile` must be set together; exactly one — a configuration error.
+- **Fail-closed:** `caFile` and `caPem` together → an error; an explicitly set `caFile` that is missing/unreadable/not PEM → an error (no silent fallback to system trust); configured trust without the installed `undici` package (a direct dependency of core `undici@^7`) → a clear error, not an untrusted transport.
+- **Application:** at process startup a global undici dispatcher is built (`setGlobalDispatcher`), so the ordinary `fetch` inherits the trust; points outside the shared transport (git) get the CA via `http.sslCAInfo=<caFile>` (`caPem` without a file is unavailable to the git channel).
+- **`NODE_EXTRA_CA_CERTS` — compatibility only** (inherited by child processes: MCP stdio, git), **not** a configurable trust mechanism.
+- **TLS is startup configuration:** the section is **not** part of the runtime settings (`RuntimeSettings`); changes are applied at startup and require a restart.
 
 ### At-rest secrets (`security.secretKey`, ADR-076)
 

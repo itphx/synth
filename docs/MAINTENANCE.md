@@ -58,7 +58,9 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
    пакета), `master-key` (есть зашифрованные SSH-ключи, но мастер-ключ отсутствует/битый),
    `data-integrity` (битый JSON сессий/проектов). `warn` — повод разобраться, но не блокер: `schema`
    (`pending` → `synth migrate`), `secrets-permissions` (не `0700`/`0600`), `locks` (возможен стухший лок),
-   `providers` (нет провайдера/модели).
+   `providers` (нет провайдера/модели). При `storage.backend=postgres` файловые проверки данных помечаются
+   `skipped` («неприменимо (backend=postgres)»), а вместо них идут `db-connection`/`db-schema` (реальная
+   проба БД + версия схемы драйвера); ошибка пробы → `fail` (см. «PostgreSQL как backend хранения»).
 4. Проверки преимущественно read-only; единственная запись — пробный файл `{dataDir}/.doctor-probe`
    (создать → удалить) для проверки доступа.
 5. Прочее: логи dev-запуска — `tmp/*.log`; типовые проблемы — [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
@@ -73,7 +75,10 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
    транзакционный** (каждый файл валиден, но межсущностная согласованность не гарантируется).
 2. Снимите архив: `synth backup --out /backup/` (каталог или файл; по умолчанию — текущий каталог).
    Исключаются по умолчанию: `backups/`, `tmp/`, `logs/`, `.doctor-probe`, `*.lock`, `workspaces/`
-   (без `--with-workspace`), `secrets/` (без `--with-secrets`).
+   (без `--with-workspace`), `secrets/` (без `--with-secrets`). При `storage.backend=postgres` архив
+   **не содержит данных БД** (сессии/проекты/настройки) — он снимает только файловый периметр, в манифест
+   пишется `storageBackend: postgres`; данные БД бэкапьте средствами СУБД (`pg_dump`/PITR — см.
+   «PostgreSQL как backend хранения»).
 3. **Секреты.** `--with-secrets` включает `secrets/` — архив становится **секретом сам по себе**:
    храните `0600` вне публичных мест; без мастер-ключа часть данных нерасшифровываема, но и бэкап
    **без** него не восстановит зашифрованные SSH-ключи.
@@ -212,6 +217,103 @@ idMap}` (маппинг старый id → новый id). Лимит загр�
 4. Идемпотентность: повторный запуск ничего не ломает (миграции с маркером — no-op).
 5. *Ожидаемо:* печать текущей/ожидаемой версии, списка применённых миграций и числа обновлённых записей.
 
+## PostgreSQL как backend хранения (`storage.backend=postgres`)
+
+**Цель:** эксплуатировать инстанс с БД-backend'ом ([ADR-096](./arch_decisions/adr-096-storage-layer.md),
+[ADR-097](./arch_decisions/adr-097-storage-provider-class.md), [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md));
+ожидаемый результат — `synth doctor` без `fail` по `db-connection`/`db-schema`, сервис отвечает на `GET /health`
+со `status: healthy`. Конфиг — [CONFIGURATION.md](./CONFIGURATION.md) («PostgreSQL»); драйвер и схема БД —
+`packages/storage-postgres/AGENTS.md`.
+
+Включается значением `storage.backend: postgres` (env `SYNTH_STORAGE_BACKEND`); параметры — секция
+`storage.postgres` + env `SYNTH_POSTGRES_*`, пароль — env `SYNTH_POSTGRES_PASSWORD` или файл
+`{dataDir}/secrets/postgres-password` (в `config.yaml` не хранится). Драйвер подключается core динамически;
+драйвер `pg` и пакет `@itphx/synth-storage-postgres` входят в комплект `@itphx/synth`.
+
+1. **Схема БД — отдельно от `meta.json`.** У драйвера **свой** контур версионирования: таблица
+   `synth_schema_migrations` в схеме драйвера, миграции — инлайн-SQL. Это не `meta.json`/`synth migrate`
+   из ADR-092 (тот контур — про файловый периметр). Схема применяется при сборке контекста (режим `apply`);
+   режим DBA — `assert` (только проверка, без применения); `skip` — только подключение (диагностика/CLI,
+   управляющие миграциями сами).
+2. **`synth migrate`.** На `backend=postgres` команда применяет/выравнивает **SQL-схему драйвера**
+   (создание схемы, применение миграций по возрастанию версии под advisory-локом). **Fail-closed**, если
+   версия схемы в БД **новее** ожидаемой (`STORAGE_POSTGRES_SCHEMA_TOO_NEW`) — старт/миграция отказываются
+   («обновите Synth»), назад данные не мигрируются. Если схема **отстаёт** — `STORAGE_POSTGRES_SCHEMA_OUTDATED`
+   (лечится применением миграций). *Ожидаемо:* схема на актуальной версии; повторный прогон — no-op.
+3. **`synth doctor`.** При `backend=postgres` файловые проверки данных помечаются `skipped`
+   («неприменимо (backend=postgres)»), добавляются `db-connection` (реальная проба: latency/ошибка) и
+   `db-schema` (текущая vs ожидаемая версия). Ошибка/исключение пробы → `fail`. Прочие проверки
+   (`master-key`, `secrets-permissions`, `locks` — файлового периметра) сохраняются.
+4. **`synth backup`.** Архив снимает **каталог данных** (файловый периметр); **данных БД в нём нет** —
+   в манифест пишется `storageBackend: postgres` и выводится предупреждение о неполноте архива. Данные БД
+   бэкапьте средствами СУБД: `pg_dump`/`pg_basebackup`/pgBackRest, PITR по WAL. Для согласованного среза
+   останавливайте сервис (или используйте снапшот тома); `--live` полноты БД не гарантирует.
+5. **`synth restore`.** Восстанавливает каталог данных (файловый периметр) — БД это **не** трогает.
+   Порядок: остановить сервис → восстановить БД (`pg_restore`/PITR) → при необходимости `synth restore` для
+   файлового периметра → `synth doctor`. Если схема БД отстаёт — `synth migrate`.
+6. **`synth uninstall --purge-db`.** По умолчанию данные **БД не удаляются** (команда об этом сообщает).
+   Удаление схемы БД — только явным `--purge-db`, который осмыслен **только** при `storage.backend=postgres`
+   (иначе — ошибка, fail-closed) и требует `--purge` и `--yes`; выполняется `DROP SCHEMA … CASCADE`
+   (необратимо).
+
+### Деградированный режим (БД недоступна)
+
+**Цель:** понять, что сервис работает в аварийном режиме, и вернуть его в норму
+([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)).
+
+- **Как выглядит.** Если выбран `postgres`, а БД недоступна на старте, при `storage.degradedMode: fallback-file`
+  (дефолт) сервис поднимается на **файловом фоллбеке** в `storage.fallbackDir` (отдельный каталог, не `dataDir`).
+  В логе — блок `[storage] ⚠️ PostgreSQL недоступен …` с причиной и каталогом фоллбека.
+- **Что доступно.** Строгий **read-only**: `GET`/диагностика/ремонтные операции (maintenance doctor/backup/export):
+  мутации (`POST/PUT/PATCH/DELETE`) → `503 STORAGE_DEGRADED_READONLY`; не-администраторы → `503 STORAGE_DEGRADED`.
+  Реестр тулов отдаёт только безопасные (`skill`, `web_fetch`, `web_search`).
+- **Диагностика.** `GET /health` → `status: degraded` + блок `storage.{backend,fallbackDir,reason,since}`;
+  `GET /api/v2/storage/status` — проба исходного backend'а (`recovery.connection.ok`) и признак
+  `recovery.restartRequired: true`; `synth doctor` (проверки БД); лог сервера.
+- **Как выходить.** Авто-возврата к БД **нет** (контекст хранения замкнут в deps, живая подмена рискованна):
+  устраните причину (сеть/креды/схема — `synth migrate`), подтвердите пробу
+  (`GET /api/v2/storage/status` → `connection.ok: true`) и **перезапустите сервис**. Не копируйте данные из
+  файлового фоллбека в БД вручную — фоллбек диагностический, его содержимое не переносится.
+- **Fail-closed.** Ошибки конфигурации/кред, отсутствие зависимости (`pg`), незагружаемый драйвер и «схема
+  новее» фоллбеком **не** маскируются — старт останавливается (независимо от `degradedMode`).
+- **Скилл `synth-storage-recovery`.** Встроенный скилл-рунбук (`/storage-recovery`): диагностика, классификация
+  причины, лечение, что доступно в деградации, возврат в норму. Доступен и в норме, и в аварийном режиме.
+
+### Перенос данных между backend'ами (`synth storage migrate`)
+
+**Цель:** перенести данные инстанса между физическими backend'ами (`file` ↔ `postgres`)
+идемпотентно, через доменные порты ([ADR-096](./arch_decisions/adr-096-storage-layer.md)).
+
+```bash
+synth storage migrate --to postgres [--dry-run|--yes]   # file → postgres
+synth storage migrate --to file                          # postgres → file (откат; --target-data-dir <path>)
+```
+
+Копирование идёт **только через доменные порты** (`StorageContext`): сущность читается доменным методом
+источника и пишется методом цели, перед записью наличие проверяется по стабильному id/ключу/метке —
+повторный прогон ничего не дублирует. Без `--dry-run` и без `--yes` — отказ; `--dry-run` печатает счётчики
+`copied`/`skipped` по сущностям без записи.
+
+**Что переносится:** `sessions` (с `messages`/`references`/`checkpoints`/`stickyNotes`), `projects`
+(с `members`), `profiles`, `settings`, `defaults`, `providers`/`models`/`agents`, события
+(`eventBindings`/`eventRoutes`/`eventApiKeys`/`eventJournal`/`identityClaims`), `schedules`/`jobs`,
+`webhooks`/`webhookDeliveries`, `sshKeys`, `serviceKeys`, `mcpRegistry`, `skillBundles`, `maintenanceAudit`.
+
+**Что НЕ переносится (честные ограничения):**
+
+- **секреты, хранящиеся только хешем/шифром, перевыпускаются** — `eventApiKeys`, `serviceKeys` (sha256),
+  signing-секреты `webhooks` (шифр): создаётся **новая** запись с **новым** секретом (метаданные сохраняются),
+  о чём выводится предупреждение;
+- `schedules`/`webhooks`/`sshKeys`/`mcpRegistry` получают **новые `id`** (порт `create`/`add` их генерирует;
+  привязки по id переезжают как есть);
+- `dedup` — транзиентный (окно идемпотентности событий живёт минуты) — не переносится;
+- `skills`/`contextFiles`/`blobs` — **файловые в обоих backend'ах** (драйвер `postgres` отдаёт их файловыми
+  реализациями core) — переезжать нечему;
+- файловый периметр вне портов (`audit/*.jsonl`, prompts, `meta.json`, `workspaces/`, `secrets/master.key`) —
+  копируется/переносится отдельно (ADR-091/ADR-092).
+
+*Ожидаемо:* отчёт `copied`/`skipped` по сущностям, предупреждения о перевыпуске секретов и новых id.
+
 ## Удаление инстанса
 
 **Цель:** осознанно удалить инстанс; по умолчанию данные **сохраняются**.
@@ -222,14 +324,18 @@ idMap}` (маппинг старый id → новый id). Лимит загр�
 3. `synth uninstall --purge --yes` — удаляет каталог данных рекурсивно (необратимо). Без `--yes` —
    отказ. Перед удалением предупреждает: **мастер-ключ** внутри каталога → зашифрованные SSH-ключи
    невосстановимы; **страховочные копии** в `backups/` тоже будут удалены.
-4. **Локальный home** ([ADR-079](./arch_decisions/adr-079-local-home-independent-instances.md)): после
+4. **`storage.backend=postgres`.** По умолчанию `--purge` удаляет только файловый периметр — данные БД
+   (сессии/проекты/настройки) **не** затрагиваются. Удаление схемы БД — только явным
+   `synth uninstall --purge --purge-db --yes` (`DROP SCHEMA … CASCADE`, необратимо). `--purge-db` без
+   `--purge`/`--yes` или при `backend≠postgres` — ошибка (fail-closed).
+5. **Локальный home** ([ADR-079](./arch_decisions/adr-079-local-home-independent-instances.md)): после
    `--purge` команда перечисляет остающиеся `{home}/config.yaml`, `profiles.json`, `credentials.json` —
    удалите их вручную при необходимости.
-5. **Helm/K8s.** `helm uninstall synth -n synth` при `persistence.keepOnUninstall: false` (дефолт чарта)
+6. **Helm/K8s.** `helm uninstall synth -n synth` при `persistence.keepOnUninstall: false` (дефолт чарта)
    **удалит PVC** с данными. Если данные нужны — выставьте `keepOnUninstall: true` заранее (позднее
    `kubectl annotate` живого PVC не помогает: Helm смотрит манифест релиза). Удаление инстанса — это
    также очистка PVC, Secret (`synth-secrets`, signing-ключи), образов и namespace.
-6. Аудит-событие `uninstall.purge` фиксируется в `{dataDir}/audit/maintenance.jsonl` (ADR-092); при
+7. Аудит-событие `uninstall.purge` фиксируется в `{dataDir}/audit/maintenance.jsonl` (ADR-092); при
    `--purge` запись удаляется вместе с каталогом данных — для сохранности аудита вне инстанса нужен
    внешний audit-sink (остаток [ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
 
@@ -392,6 +498,7 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 
 ## История
 
+- 2026-10-16 — добавлен раздел «PostgreSQL как backend хранения» ([PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md)/[ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)): схема драйвера и `synth migrate`, db-проверки `doctor`, бэкап/restore (данных БД в архиве нет — `pg_dump`/PITR), `uninstall --purge-db`, деградированный режим и скилл `synth-storage-recovery`, перенос данных `synth storage migrate` с честными ограничениями.
 - 2026-10-16 — runbook создан (первичная настройка, диагностика, бэкап/восстановление, миграции, удаление, обновление/откат).
 - 2026-10-16 — добавлены разделы «Обслуживание из UI» (Настройки → «Обслуживание», ADMIN) и «Обслуживание по API» (admin-API `/api/v2/maintenance/*`, [API_V2.md](./API_V2.md) §5.31); восстановление — офлайн (`appliesOnNextStart`, отложенный запрос применяется при старте).
 - 2026-10-16 — добавлен журнал обслуживания (`GET/DELETE /api/v2/maintenance/audit`, ADR-092): история операций жизненного цикла, видна в разделе «Обслуживание» и по API.

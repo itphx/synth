@@ -20,18 +20,18 @@
 
 | # | Цель | Документы | Критерий готовности |
 |---|---|---|---|
-| 1 | **Хранилище: два варианта (файлы и БД) за единым слоем** | [ADR-096](./arch_decisions/adr-096-storage-layer.md), [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Единый слой (доменные порты + контрактный suite + `StorageContext`) ✅ сделан; остаток — БД-реализация (PROP-032): идемпотентная миграция JSON→БД, откат, паритет функциональности, замеры на N сессий |
+| 1 | **Хранилище: два варианта (файлы и БД) за единым слоем** | [ADR-096](./arch_decisions/adr-096-storage-layer.md), [ADR-097](./arch_decisions/adr-097-storage-provider-class.md), [ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md), [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md), [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Единый слой (доменные порты + контрактный suite + `StorageContext`) ✅ сделан; БД-backend **реализован поэтапно** (PROP-032, волны 1–5: конфиг, драйвер и все 27 портов, `listLight`, БД-локи, CI-гейт, обслуживание, перенос данных, деградированный режим — [ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md); TLS/CA соединения с БД — [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)); остаток — авто-возврат к БД без рестарта, документы |
 | 2 | **Эксплуатация: утилиты, руководства и ops-скиллы** | [ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md), [ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md), [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Ops-MVP (`backup`/`restore`/`doctor`/`migrate`/`update`/`uninstall`) ✅ реализован ([ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)); CLI + admin-API (`/api/v2/maintenance`) + UI-раздел «Обслуживание» ✅; остаток — руководства на портале, ops-скиллы (PROP-048) |
 | 3 | **Оптимизация потребления памяти** | [PROP-099](./arch_decisions/prop-099-memory-footprint-optimization.md) | RSS-бюджет на N активных сессий и отсутствие неограниченного роста кэшей |
 
 Пометка: это приоритет **0.11**; состав целей и их порядок могут уточняться.
 
-## Предложения к решению (32)
+## Предложения к решению (31)
 
 | ID | Тема | Статус | Решение до | Заметка |
 |---|---|---|---|---|
 | [PROP-031](./arch_decisions/prop-031-verification-agent.md) | Verification синт (`verifier`) после реализации | 🧩 Предложение | 2026-11-14 | зависит от хуков ADR-030 и цикла ADR-028 |
-| [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Второй вариант хранения — БД (PostgreSQL) за единым слоем | 🧩 Предложение | 2026-11-14 | предпосылка выполнена (ADR-096: порты + контрактный suite); класс `storage` — [ADR-097](./arch_decisions/adr-097-storage-provider-class.md); форма поставки — in-tree пакет `@itphx/synth-storage-postgres` (динамический `import()`); БД-реализация не начата; блокирует PROP-077; логическая модель уже в JSON (ADR-005/ADR-033) |
+| [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md) | Второй вариант хранения — БД (PostgreSQL) за единым слоем | 🧩 Предложение | 2026-11-14 | волны 1–5 в коде: драйвер `@itphx/synth-storage-postgres` (все 27 портов, контрактный suite против живой БД, `SYNTH_TEST_POSTGRES_DSN`), async-каскад сборки, БД-локи, обслуживание (`migrate`/`doctor`/`backup`/`uninstall --purge-db`), перенос `synth storage migrate`, деградированный режим ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)); TLS/CA соединения с БД — [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md); остаток — авто-возврат к БД без рестарта, документы; блокирует PROP-077 |
 | [PROP-037](./arch_decisions/prop-037-commit-security-step.md) | Security step перед коммитом (hook + маркер-хеш) | 🧩 Предложение | 2026-11-14 | опирается на ADR-029/ADR-036 |
 | [PROP-048](./arch_decisions/prop-048-self-help-skills-admin-mcp.md) | Self-help скиллы и admin-MCP (dogfooding) | 🧩 Предложение | 2026-11-14 | read-only status-MCP + deploy-тулы, гейтинг ADMIN |
 | [PROP-049](./arch_decisions/prop-049-git-worktrees.md) | Git worktrees: тулы, per-session cwd, UI | 🧩 Предложение | 2026-11-14 | усиливает ADR-075/ADR-076 |
@@ -52,7 +52,7 @@
 | [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) | Flavor-образы с toolchain | 🧩 Предложение | 2026-11-14 | практический шаг до PROP-077 |
 | [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) | Кастомизация инстанса и брендинг | 🧩 Предложение | 2026-11-14 | приветственное окно, ватермарка; позже — locked settings |
 | [PROP-085](./arch_decisions/prop-085-multimodal-input.md) | Мультимодальный ввод (звук/изображения/видео) | 🧩 Предложение | 2026-11-14 | контракт `Part`; зависит от PROP-032/PROP-077 |
-| [PROP-088](./arch_decisions/prop-088-http-proxy.md) | Единый egress-слой (прокси, CA, Kerberos) | 🧩 Предложение | 2026-11-14 | требуется для корпоративных контуров |
+| [PROP-088](./arch_decisions/prop-088-http-proxy.md) | Единый egress-слой (прокси, CA, Kerberos) | ⛔ Заменено | — | надстроен [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md): TLS/CA + mTLS реализованы; остаток — HTTP-прокси/`no_proxy`/аутентификация прокси (Basic/NTLM/Negotiate/Kerberos) (строка сохранена для трассируемости) |
 | [PROP-090](./arch_decisions/prop-090-extension-api.md) | Extension API v1 (плагины, загрузчик) | 🧩 Предложение | 2026-11-14 | остаток ADR-030/ADR-086; trust/scan — PROP-068 |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации портала | 🧩 Предложение | 2026-11-14 | вариант A (nginx) или B (`mike`) |
 | [PROP-094](./arch_decisions/prop-094-observability-metrics.md) | Наблюдаемость и эксплуатационные метрики | 🧩 Предложение | 2026-11-14 | `/metrics`, `/ready`, структурные логи, SLO |
@@ -62,6 +62,10 @@
 | [PROP-099](./arch_decisions/prop-099-memory-footprint-optimization.md) | Оптимизация потребления памяти | 🧩 Предложение | 2026-11-14 | цель релиза 0.11; RSS-бюджет, bounded-кэши, лёгкие листинги; связано с PROP-032/PROP-094 |
 | [PROP-100](./arch_decisions/prop-100-ssrf-dns-rebinding.md) | SSRF: TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | 2026-11-14 | остаток SSRF после фикса IPv4-mapped; `fetch-icon`/remote-скиллы/инструкции; класс SSRF/egress аудита |
 | [PROP-101](./arch_decisions/prop-101-local-installers-platforms.md) | Локальные инсталляторы и платформенная дистрибуция (Win/mac/Linux) | 🧩 Предложение | 2026-12-31 | реализация — до 1.0.0; CI Linux-only (нативные раннеры + подписи/нотаризация — пререквизиты); flatpak/snap не берём; этапы 0–3 |
+
+Пометка: `PROP-088` переведён в `⛔ Заменено` (надстроен [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)):
+TLS/CA- и mTLS-часть реализованы, HTTP-прокси/`no_proxy`/аутентификация прокси — остаток; строка оставлена
+для трассируемости и в счёт actionable-предложений не входит.
 
 ## Vision (9)
 
@@ -110,7 +114,7 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-087](./arch_decisions/adr-087-gateways.md) | Шлюзы (gateways) | ⚠️ Частично | HA/leader election, webhook-транспорт, второй канал |
 | [ADR-089](./arch_decisions/adr-089-external-events-automation.md) | Платформа внешних событий | ⚠️ Частично | Plugin SDK → PROP-090, пайплайны → PROP-059, остаток ADR-087, стриминг ответа наружу |
 
-Итого: ADR — 46 (из них 37 со статусом `✅ Реализовано` и 9 со статусом `⚠️ Частично`, в т.ч. 5 —
-«принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089), предложений — 41 (32 actionable + 9 vision),
-legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 9 файлов — ADR-018, ADR-030, ADR-046,
-ADR-051, ADR-086, ADR-087, ADR-089, ADR-091, ADR-092 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).
+Итого: ADR — 49 (из них 37 со статусом `✅ Реализовано` и 12 со статусом `⚠️ Частично`, в т.ч. 5 —
+«принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089), предложений — 40 (31 actionable + 9 vision),
+legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 12 файлов — ADR-018, ADR-030, ADR-046,
+ADR-051, ADR-086, ADR-087, ADR-089, ADR-091, ADR-092, ADR-097, ADR-098, ADR-099 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).

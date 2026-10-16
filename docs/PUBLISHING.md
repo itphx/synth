@@ -6,13 +6,13 @@
 
 ## Порядок публикации пакетов
 
-Публикуются **все 6 пакетов** в строгом порядке зависимостей:
+Публикуются **все 7 пакетов** в строгом порядке зависимостей:
 
 ```
-shared → core → ui → backend → sdk → synth
+shared → core → storage-postgres → ui → backend → sdk → synth
 ```
 
-Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (ADR-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (ADR-038).
+Порядок задан иерархией зависимостей: `@itphx/synth-shared` — фундамент, `@itphx/synth-core` импортирует shared, `@itphx/synth-storage-postgres` — опциональный драйвер слоя хранения (`peerDependencies: @itphx/synth-core`, `pg` — `optionalDependencies`, ADR-097/PROP-032), `@itphx/synth-backend`/`@itphx/synth-ui` импортируют core, `@itphx/synth-sdk` — тонкий клиент публичного API над shared (ADR-052), `@itphx/synth` — тонкая обёртка над core/ui/shared (ADR-038).
 
 ## `pnpm publish` вместо `npm publish`
 

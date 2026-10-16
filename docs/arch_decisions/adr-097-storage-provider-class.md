@@ -1,6 +1,6 @@
 # ADR-097: Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки
 
-> **Статус:** ⚠️ Частично — класс `storage` выделен, контракт класса (доменные порты + suite) и драйверы `file`/`memory` есть; БД-драйвер `postgres`, `kind: "storage"` в манифесте и установка сторонних драйверов — нет
+> **Статус:** ⚠️ Частично — класс `storage` выделен, контракт класса (доменные порты + suite) и драйверы `file`/`memory`/`postgres` есть; `kind: "storage"` в манифесте и установка сторонних драйверов — нет
 > **Дата:** 2026-10-16
 > **Связано:** [ADR-096](./adr-096-storage-layer.md), [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-005](./adr-005-json-storage.md), [ADR-023](./adr-023-configuration.md), [ADR-038](./adr-038-npm-packages.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [PROP-032](./prop-032-history-storage-postgresql.md), [PROP-090](./prop-090-extension-api.md), [PROP-068](./prop-068-skills-agents-registry.md).
 
@@ -54,16 +54,19 @@ singleton-слой хранения против disposer-модели плаг�
 
 ## Статус реализации в коде
 
-- **Есть:** порты (26) + suite + `file`/`memory` + `StorageContext` ([ADR-096](./adr-096-storage-layer.md));
-  `StorageBackendKind = 'file' | 'memory'`, `storageConfigSchema.backend: z.enum(['file','memory'])`,
-  `resolveStorageBackend` (env `SYNTH_STORAGE_BACKEND` > config > `'file'`).
-- **Нет:** `postgres`-драйвер, `kind: "storage"` в манифесте, установка сторонних драйверов.
-- **Границы/хардкоды:** `createStorageContext('file', …)` игнорирует `storage.backend` в
-  `packages/core/src/main.ts`, `maintenance/migrate.ts`, `server/routes/maintenance.ts`; при невалидном
-  `storage.backend` — тихий фоллбэк на `file` (нужен fail-closed). Maintenance (миграции `meta.json`/`schemaVersion`,
-  `backup`/`restore`, `master.key`, `ssh-keys/`) — FS-центрично; ФС-периметр вне портов (контент скиллов, промпты,
-  аватары, audit `*.jsonl`, workspace) — по [ADR-091](./adr-091-backup-restore-transfer.md)/[ADR-092](./adr-092-instance-lifecycle-maintenance.md).
+- **Есть:** порты (27) + suite + драйверы `file`/`memory` + `StorageContext` ([ADR-096](./adr-096-storage-layer.md));
+  `StorageBackendKind = 'file' | 'memory' | 'postgres'`, `storageConfigSchema.backend: z.enum(['file','memory','postgres'])`,
+  `resolveStorageBackend` (env `SYNTH_STORAGE_BACKEND` > config > `'file'`; **fail-closed** на неизвестном явном значении).
+- **Драйвер БД реализован:** `@itphx/synth-storage-postgres` ([PROP-032](./prop-032-history-storage-postgresql.md)) —
+  in-tree опциональный пакет (`peerDependencies: @itphx/synth-core`, `pg` — `optionalDependencies`, ленивый `import()`),
+  подключается async-каскадом `createStorageContextAsync`/`buildStorageContext` по `storage.backend === 'postgres'`;
+  все 27 портов реализованы и проходят контрактный suite (гейт env `SYNTH_TEST_POSTGRES_DSN`). Деградация при
+  недоступности БД — [ADR-098](./adr-098-storage-degraded-recovery.md).
+- **Нет:** `kind: "storage"` в манифесте `synth.pack`, установка сторонних драйверов (реестр/trust/install — [PROP-068](./prop-068-skills-agents-registry.md)).
+- **Файловый периметр вне портов** (контент скиллов, промпты, аватары, audit `*.jsonl`, workspace, секреты в `dataDir`) —
+  остаётся file-специфичным/гибридным ([ADR-091](./adr-091-backup-restore-transfer.md)/[ADR-092](./adr-092-instance-lifecycle-maintenance.md)).
 
 ## История
 
 - 2026-10-16 — ADR заведён: класс «хранилище» выделен из класса Plugin; PostgreSQL — in-tree драйвер из коробки ([PROP-032](./prop-032-history-storage-postgresql.md)).
+- 2026-10-16 — драйвер `postgres` реализован (все 27 портов, async-каскад сборки, деградация — [ADR-098](./adr-098-storage-degraded-recovery.md)); остаток — `kind: "storage"` в манифесте и установка сторонних драйверов.

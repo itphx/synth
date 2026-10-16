@@ -1,11 +1,12 @@
 # PROP-032: Второй вариант хранения — БД (PostgreSQL) за единым слоем
 
-> **Статус:** 🧩 Предложение
+> **Статус:** 🧩 Предложение — реализуется поэтапно: волны 1–5 в коде (конфиг, драйвер, все 27 портов, `listLight`, БД-локи, CI-гейт, обслуживание, перенос, деградированный режим), см. «Статус реализации в коде»; остаток — CA/TLS и документы. Токен `⚠️ Частично` — только для ADR ([ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §4), поэтому у предложения он не ставится; принятие в ADR, когда остаток закроется.
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-09-17
 > **Парные документы:**
 > - [ADR-097](./adr-097-storage-provider-class.md) «Класс расширения «хранилище» (storage)» — драйвер БД как **in-tree опциональный пакет из коробки**; контракт класса — порты + контрактный suite;
 > - [ADR-096](./adr-096-storage-layer.md) «Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами» — **предпосылка выполнена**: порты, контрактный suite и `StorageContext` уже есть;
+> - [ADR-098](./adr-098-storage-degraded-recovery.md) «Деградированный режим и восстановление хранилища» — поведение при недоступности БД (fail-closed/деградация, read-only, восстановление);
 > - [ADR-005](./adr-005-json-storage.md) «JSON-файлы как хранилище» — текущий (и остающийся дефолтным) файловый backend;
 > - [ADR-033](./adr-033-session-branching-merge.md) «Ветвление сессий и межсессионное слияние» — потребитель `parent_id`/`branch_point`/`origin`, опирается на логическую модель;
 > - [ADR-026](./adr-026-subagent-context-modes.md) «Режимы контекста саб-агента» — `summary`-режим (сущность `context_snapshot`);
@@ -27,7 +28,7 @@ suite** (`storage/contract/*`), плюс эффективные выборки �
 
 **Форма поставки (in-tree драйвер).** PostgreSQL-драйвер поставляется из коробки **отдельным опциональным
 npm-пакетом** `@itphx/synth-storage-postgres` (реэкспорт `createPostgresStorage(config): Promise<StorageContext>`),
-подключаемым из `createStorageContext` **динамическим `import()`** по `storage.backend === 'postgres'`; зависимость
+подключаемым из асинхронного каскада `createStorageContextAsync`/`buildStorageContext` **динамическим `import()`** по `storage.backend === 'postgres'`; зависимость
 `pg` — **optional** (standalone/локальный home не тянут БД). Критерий приёмки — прохождение suite
 `packages/core/src/storage/contract/*` («паспорт порта»). Класс расширения — [ADR-097](./adr-097-storage-provider-class.md).
 
@@ -118,38 +119,34 @@ managed-контура — не правка этого предложения, 
 
 ## Статус реализации в коде
 
-- **Единый слой — сделан** ([ADR-096](./adr-096-storage-layer.md)): доменные порты (`storage/ports/*`, 26),
-  in-memory реализации, контрактный suite, `StorageContext` + `createFileStorage`/`createMemoryStorage`/
-  `createStorageContext`, конфиг `storage.backend` (`file`|`memory`, env `SYNTH_STORAGE_BACKEND`).
-- **БД-реализация — не начата.** В `packages/*/package.json` нет зависимостей `pg`/`postgres`/`prisma`/
-  `drizzle`/`better-sqlite3`; SQL (`CREATE TABLE`, `INSERT INTO`, `SELECT … FROM`) в исходниках не
-  встречается; каталогов миграций нет.
-- **Готово к подключению:** порты и их контракт (suite), `StorageContext` как точка сборки (`storage.backend`
-  уже ветвит backend), файловая/memory-реализации как эталон семантики; реализация БД добавляется новым
-  значением `storage.backend` и новым набором реализаций — домен и роуты не переписываются.
-- **Логическая модель** (`MessageOrigin`, `seq`, `sourceMsgId`, `parent_id`, `branch_point`) реализована
-  в JSON-схеме и сохраняется при переходе на БД.
+Реализовано (волны 1–5): драйвер `@itphx/synth-storage-postgres` в дереве, конфиг, все доменные порты поверх SQL, БД-локи, контур обслуживания, перенос данных и деградированный режим.
 
-### Шаги и известные ограничения первого этапа
+- **Единый слой — сделан** ([ADR-096](./adr-096-storage-layer.md)): доменные порты (`storage/ports/*`, 27), in-memory и файловые реализации, контрактный suite, `StorageContext` + `createFileStorage`/`createMemoryStorage`/`createStorageContext` и **async-каскад** `createStorageContextAsync`/`buildStorageContext`, конфиг `storage.backend` (`file`|`memory`|`postgres`, env `SYNTH_STORAGE_BACKEND`, **fail-closed** на неизвестном явном значении).
+- **Конфиг (волна 2).** Секция `storage.postgres` (`dsn`/`host`/`port`/`database`/`user`/`schema`/`ssl`/`poolMax`) + env `SYNTH_POSTGRES_*`; пароль — только env `SYNTH_POSTGRES_PASSWORD`/файл `{dataDir}/secrets/postgres-password` (инвариант 13). Задел деградации — `storage.degradedMode`/`storage.fallbackDir` (+ env `SYNTH_DEGRADED_MODE`/`SYNTH_STORAGE_FALLBACK_DIR`). Резолверы — `resolvePostgresConfig`/`resolvePostgresPassword`/`resolveDegradedMode`/`resolveStorageFallbackDir` (`@itphx/synth-shared/config`); `PostgresStorageConfig` в `shared/config/types.ts`.
+- **Драйвер (волна 3).** `@itphx/synth-storage-postgres`: пул/подключение (`pg` — optional, ленивый `import()`), своя схема БД и инлайн-SQL-миграции (`synth_schema_migrations`, **fail-closed** «схема новее» — `STORAGE_POSTGRES_SCHEMA_TOO_NEW`), **все 27 портов** `StorageContext` реализованы и проходят контрактный suite (27/27 против живой БД); `StorageContext.{health?,close?,schemaMigrations?,purgeSchema?,locks?,degraded?}`. Core подключает драйвер динамическим `import()` (`POSTGRES_DRIVER_PACKAGE`) через async-каскад; домен (`deps.ts` core/backend, CLI/обслуживание) вызывает async-фабрику.
+- **Эффективные выборки (волна 3b).** `@future-backend`-методы: «лёгкие» листинги без `messages` (`listLight`), фильтры/пагинация, транзакционные `consume`/`tryClaim`, уникальность `label`, prune по `ORDER BY`. Позиционный `seq` сообщений (`UNIQUE(session_id, seq)`), суррогатные ключи — детали в `packages/storage-postgres/AGENTS.md`.
+- **Координация (волна 4).** `PgMutex`/`PgLeader` поверх PG advisory-локов → `StorageContext.locks`; scheduler `leaderElection: postgres`, лок миграций драйвера.
+- **Обслуживание (волна 5а).** `synth migrate` применяет/выравнивает SQL-схему драйвера; `doctor` — `db-connection`/`db-schema` (файловые проверки помечаются `неприменимо`); `backup` — манифест `storageBackend` (данных БД в архиве каталога нет — `pg_dump`/PITR); `uninstall --purge-db` (fail-closed, требует `--purge` и `--yes`).
+- **Перенос данных (волна 5б).** `synth storage migrate --to file|postgres` — идемпотентно, только через доменные порты; честные ограничения (секреты-хеши/шифр перевыпускаются; `schedules`/`webhooks`/`sshKeys`/`mcpRegistry` — новые `id`; `dedup` не переносится; `skills`/`contextFiles`/`blobs` остаются файловыми) — `packages/core/src/maintenance/storage-migrate.ts`.
+- **Деградированный режим (волна 5в).** [ADR-098](./adr-098-storage-degraded-recovery.md): матрица `fail-closed`/деградация, файловый `fallbackDir`, ADMIN-only + строгий read-only, `/health` → `degraded`, `GET /api/v2/storage/status`, встроенный скилл `synth-storage-recovery`.
+- **Контрактный suite против живой БД** гейтится env `SYNTH_TEST_POSTGRES_DSN` (задача `test-postgres` в CI, `scripts/ci-postgres.sh`); smoke и suite — `packages/storage-postgres/src/postgres.integration.test.ts` и `packages/core/src/storage/contract/postgres.test.ts`.
+- **Логическая модель** (`MessageOrigin`, `seq`, `sourceMsgId`, `parent_id`, `branch_point`) сохраняется при переходе на БД.
 
-1. Расширить `storageConfigSchema.backend` и `StorageBackendKind` значением `postgres`.
-2. `resolveStorageBackend` — **fail-closed** при явно заданном неизвестном backend (сейчас — тихий фоллбэк на `file`).
-3. Убрать хардкоды `createStorageContext('file', …)` в `core/src/main.ts`, `maintenance/migrate.ts`,
-   `server/routes/maintenance.ts` (иначе команды обслуживания уйдут в файлы).
-4. Решить sync/async сборки (`createStorageContext` синхронный, у БД — пул): async-каскад либо синхронный
-   кэш-фасад для синхронных геттеров (`SecretPatternRepository`/`ProtectedPathsRepository`/`DictionaryRepository`/`ContextFileRepository`).
-5. Ограничение этапа: maintenance (миграции/бэкап/restore), секреты в `dataDir` и «ФС-периметр вне портов»
-   (контент скиллов, промпты, аватары, audit `*.jsonl`, workspace) остаются file-специфичными/гибридными —
-   снимается контуром [ADR-091](./adr-091-backup-restore-transfer.md)/[ADR-092](./adr-092-instance-lifecycle-maintenance.md).
+### Остаток (не реализовано)
+
+1. **CA/TLS-настройки** соединения сверх `storage.postgres.ssl` (кастомные CA, mTLS/клиентские сертификаты).
+2. **Авто-возврат к БД без рестарта** и DB-aware `/ready`-проба/метрики ([ADR-098](./adr-098-storage-degraded-recovery.md), [PROP-094](./prop-094-observability-metrics.md)).
+3. **Документы**: эксплуатационный runbook БД-backend'а готов ([docs/MAINTENANCE.md](../MAINTENANCE.md)); портал `docs.synth.itphx.ru` — отдельно.
+4. **`kind: "storage"` в манифесте `synth.pack`** и установка сторонних драйверов — остаток [ADR-097](./adr-097-storage-provider-class.md).
 
 ## Связи
 
-- [ADR-096](./adr-096-storage-layer.md), [ADR-005](./adr-005-json-storage.md), [ADR-033](./adr-033-session-branching-merge.md), [ADR-026](./adr-026-subagent-context-modes.md), [ADR-017](./adr-017-api-v2-hono.md), [PROP-077](./prop-077-runtime-toolchain.md), [PROP-085](./prop-085-multimodal-input.md).
+- [ADR-096](./adr-096-storage-layer.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-098](./adr-098-storage-degraded-recovery.md), [ADR-005](./adr-005-json-storage.md), [ADR-033](./adr-033-session-branching-merge.md), [ADR-026](./adr-026-subagent-context-modes.md), [ADR-017](./adr-017-api-v2-hono.md), [PROP-077](./prop-077-runtime-toolchain.md), [PROP-085](./prop-085-multimodal-input.md).
 - **PROP-077 и PROP-085 по-прежнему зависят от этого шага:** инструментальное окружение исполнения
   (thin backend + executor, общий volume, S3) и мультимодальные вложения планируются поверх БД-слоя.
 
 ## История
 
-- 2026-09-17 — предложение заведено (хранение истории в PostgreSQL).
-- 2026-10-16 — переформулировано как **второй (selectable) backend за портами ADR-096** (не замена файлов); предпосылка (единый слой + контрактный suite) выполнена, БД-реализация не начата.
+- 2026-10-16 — переформулировано как **второй (selectable) backend за портами ADR-096** (не замена файлов); предпосылка (единый слой + контрактный suite) выполнена.
 - 2026-10-16 — зафиксирована форма поставки: in-tree опциональный пакет `@itphx/synth-storage-postgres` + динамический `import()`; класс «хранилище» — [ADR-097](./adr-097-storage-provider-class.md).
+- 2026-10-16 — волны 2–5 реализованы (конфиг, драйвер и все 27 портов, `listLight`, БД-локи, CI-гейт, обслуживание, перенос данных, деградированный режим — [ADR-098](./adr-098-storage-degraded-recovery.md)); остаток — CA/TLS и документы.

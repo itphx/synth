@@ -8,12 +8,13 @@
 
 ## Components
 
-Synth consists of six packages in a monorepo:
+Synth consists of seven packages in a monorepo:
 
 | Package | Purpose | Stack |
 |-------|-----------|------|
 | **@itphx/synth-shared** | Types, interfaces, Zod schemas, protocols, configuration | TypeScript |
 | **@itphx/synth-core** | Standalone engine: sessions, queue, LLM providers, CLI, HTTP API v2 | TypeScript, Hono |
+| **@itphx/synth-storage-postgres** | Optional storage-layer driver over PostgreSQL (ADR-097/PROP-032): implements the `StorageContext` domain ports, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + admin panel (role-based rendering) | TypeScript, React 19, Vite |
 | **@itphx/synth-sdk** | Typed public API client (ADR-052): a wrapper over `public-OpenAPI` (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
@@ -51,6 +52,11 @@ flowchart TB
         synth_sdk["@itphx/synth-sdk — public API client"]
     end
 
+    subgraph Storage["Storage layer (ADR-096)"]
+        storage_file["file / memory (in-tree, default)"]
+        storage_pg["postgres — @itphx/synth-storage-postgres (optional)"]
+    end
+
     subgraph Integrations["Integrations"]
         event_sources["External event sources"]
         webhook_targets["HTTP subscribers (webhooks)"]
@@ -71,6 +77,11 @@ flowchart TB
 
     synth_sdk -->|service-key / HTTP API v2| synth_core
     synth_sdk -->|HTTP API v2| synth_backend
+
+    synth_core -->|StorageContext| storage_file
+    synth_core -->|StorageContext| storage_pg
+    synth_backend -->|StorageContext| storage_file
+    synth_backend -->|StorageContext| storage_pg
 ```
 
 ## Deployment scenarios
@@ -174,6 +185,19 @@ Key elements:
 The full index of architecture decisions (AD) with statuses is in the root
 [AGENTS.md](../../AGENTS.md), in the "Architecture decision index" section.
 
+## Storage layer (backends)
+
+Physical storage is behind **domain ports** ([ADR-096](../arch_decisions/adr-096-storage-layer.md)):
+the domain works with `StorageContext` (`packages/core/src/storage/ports/*`, 27 ports) and the backend is
+swappable. The assembly point is `packages/core/src/storage/storage-context.ts`
+(`createFileStorage`/`createMemoryStorage` + the async cascade `createStorageContextAsync`/`buildStorageContext`);
+the choice — `storage.backend` (`file`|`memory`|`postgres`, env `SYNTH_STORAGE_BACKEND`).
+
+- **`file`** (default) — `FileStore`/`JsonStore`, JSON + atomic tmp→rename write ([ADR-005](../arch_decisions/adr-005-json-storage.md)); **`memory`** — in-memory (hermetic tests, semantics reference).
+- **`postgres`** — the second selectable backend ([PROP-032](../arch_decisions/prop-032-history-storage-postgresql.md)): a separate in-tree driver package **`@itphx/synth-storage-postgres`** ([ADR-097](../arch_decisions/adr-097-storage-provider-class.md)), loaded by core via a dynamic `import()`; `pg` is optional. Any backend must pass the contract suite `packages/core/src/storage/contract/*` (the "port passport"); running the driver against a live DB is gated by env `SYNTH_TEST_POSTGRES_DSN`.
+- **Degraded mode** ([ADR-098](../arch_decisions/adr-098-storage-degraded-recovery.md)): when the DB is unreachable, the service starts on a file fallback in strict read-only (ADMIN-only, `/health` → `degraded`); there is no auto-return — only a restart. Configuration/dependency/"schema newer" errors — fail-closed.
+- **Not everything is behind the ports:** the "file perimeter" stays file-specific/hybrid — secrets in `secrets/` (master key, API keys), `meta.json`/`synth migrate`, `workspaces/`, skill and prompt content, audit journals (`audit/*.jsonl`), instruction URL caches ([ADR-091](../arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](../arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
+
 ## Monorepo structure
 
 ```
@@ -186,6 +210,7 @@ synth/
 └── packages/
     ├── shared/   → @itphx/synth-shared
     ├── core/     → @itphx/synth-core
+    ├── storage-postgres/ → @itphx/synth-storage-postgres (opt. DB driver, ADR-097/PROP-032)
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
     ├── sdk/      → @itphx/synth-sdk (public API client, ADR-052)

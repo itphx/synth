@@ -24,7 +24,19 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 |-----------|------------|--------------|
 | `SYNTH_API_KEY` | Ключ для входа в API (backend → роль ADMIN; core standalone → роль ADMIN). Если не задан, `synth serve` генерирует устойчивый локальный ключ в `{dataDir}/secrets/api-key` | — |
 | `SYNTH_DATA_DIR` | Каталог данных (сессии, проекты, провайдеры, модели) | по режиму: `~/.local/share/synth` (user), `./data` (dev), `/var/synth/data` (docker/server) |
-| `SYNTH_STORAGE_BACKEND` | ADR-096: физический backend хранения: `file` (JSON-файлы, ADR-005) или `memory` (in-memory, данные **не** сохраняются) | `file` |
+| `SYNTH_STORAGE_BACKEND` | ADR-096: физический backend хранения: `file` (JSON-файлы, ADR-005), `memory` (in-memory, данные **не** сохраняются) или `postgres` (PROP-032) | `file` |
+| `SYNTH_POSTGRES_DSN` | PROP-032: строка подключения PostgreSQL (приоритетнее отдельных `host`/`port`/`database`/`user`) | — |
+| `SYNTH_POSTGRES_HOST` | PROP-032: хост PostgreSQL | — |
+| `SYNTH_POSTGRES_PORT` | PROP-032: порт PostgreSQL | — |
+| `SYNTH_POSTGRES_DATABASE` | PROP-032: имя базы данных PostgreSQL | — |
+| `SYNTH_POSTGRES_USER` | PROP-032: пользователь PostgreSQL | — |
+| `SYNTH_POSTGRES_SCHEMA` | PROP-032: схема БД (namespace таблиц драйвера) | — |
+| `SYNTH_POSTGRES_SSL` | PROP-032: legacy-флаг TLS-соединения (`true`/`false`); используется, только если `SYNTH_POSTGRES_SSLMODE` не задан | — |
+| `SYNTH_POSTGRES_SSLMODE` | PROP-032/ADR-099: TLS-режим соединения с БД: `disable` / `require` / `verify-full` (`verify-ca` — алиас `verify-full`); приоритетнее legacy `ssl` | — |
+| `SYNTH_POSTGRES_POOL_MAX` | PROP-032: максимальный размер пула соединений | `10` |
+| `SYNTH_POSTGRES_PASSWORD` | PROP-032: пароль БД — **только** env или файл `{dataDir}/secrets/postgres-password` (в `config.yaml` не хранится, инвариант 13) | — |
+| `SYNTH_DEGRADED_MODE` | PROP-032/ADR-098: поведение при недоступности БД (`fallback-file`/`halt`) | `fallback-file` |
+| `SYNTH_STORAGE_FALLBACK_DIR` | PROP-032/ADR-098: каталог файлового фоллбека при деградации | `{dataDir}/fallback` |
 | `SYNTH_WORKSPACES_ROOT` | Корень каталогов workspace проектов (`storage.workspacesRoot`) | `{dataDir}/workspaces` |
 | `SYNTH_DEFAULT_WORKSPACE` | Рабочий каталог по умолчанию (`storage.defaultWorkspace`) | `{dataDir}/workspaces/default` |
 | `SYNTH_WORKSPACE_OUTSIDE_ROOT` | ADR-075: политика абсолютного workspace вне `workspacesRoot` (`confirm`/`deny`) | по режиму (standalone — `confirm`, managed — `deny`) |
@@ -106,6 +118,11 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, ADR-052/O1; см. ниже) |
+| `SYNTH_TLS_CA_FILE` | ADR-099: путь к PEM-файлу доверенного CA (корпоративный CA); взаимоисключающ с `SYNTH_TLS_CA_PEM` | — |
+| `SYNTH_TLS_CA_PEM` | ADR-099: PEM доверенного CA (например из Secret); взаимоисключающ с `SYNTH_TLS_CA_FILE` | — |
+| `SYNTH_TLS_CERT_FILE` | ADR-099: путь к PEM-файлу клиентского сертификата (mTLS) | — |
+| `SYNTH_TLS_KEY_FILE` | ADR-099: путь к PEM-файлу приватного ключа клиента (mTLS) | — |
+| `SYNTH_TLS_REJECT_UNAUTHORIZED` | ADR-099: проверять сертификат сервера (`true`/`1`/`false`/`0`) | `true` |
 
 ### Env-переменные обслуживания (ADR-091)
 
@@ -160,8 +177,26 @@ server:
 storage:
   dataDir: "/var/synth/data"      # каталог данных вне репозитория
   backend: "file"                 # ADR-096: физический backend хранения — file (JSON-файлы с атомарной записью,
-                                  # дефолт) | memory (in-memory, данные НЕ сохраняются — герметичные тесты/эмуляция);
+                                  # дефолт) | memory (in-memory, данные НЕ сохраняются — герметичные тесты/эмуляция)
+                                  # | postgres (PROP-032: опциональный драйвер @itphx/synth-storage-postgres);
                                   # SYNTH_STORAGE_BACKEND
+  postgres:                       # PROP-032: параметры PostgreSQL (используются при backend: postgres)
+    # dsn: "postgres://synth@db:5432/synth"   # строка подключения; задана — приоритетнее host/port/database/user
+    host: ""                      # SYNTH_POSTGRES_HOST
+    port: 5432                    # SYNTH_POSTGRES_PORT
+    database: ""                  # SYNTH_POSTGRES_DATABASE
+    user: ""                      # SYNTH_POSTGRES_USER
+    schema: ""                    # SYNTH_POSTGRES_SCHEMA — namespace таблиц драйвера
+    ssl: false                    # SYNTH_POSTGRES_SSL — legacy: требовать TLS (только если sslmode не задан)
+    sslmode: ""                   # ADR-099: disable | require | verify-full (verify-ca — алиас);
+                                  # CA/mTLS — из security.tls; SYNTH_POSTGRES_SSLMODE; TLS-параметры в dsn запрещены
+    poolMax: 10                   # SYNTH_POSTGRES_POOL_MAX — максимальный размер пула
+    # ПАРОЛЬ здесь НЕ хранится (инвариант 13): env SYNTH_POSTGRES_PASSWORD или файл
+    # {dataDir}/secrets/postgres-password.
+  degradedMode: "fallback-file"   # PROP-032/ADR-098: при недоступности БД — fallback-file (файловый фоллбек,
+                                  # строго read-only) | halt (остановить старт); SYNTH_DEGRADED_MODE
+  fallbackDir: ""                 # PROP-032/ADR-098: каталог файлового фоллбека; пусто — {dataDir}/fallback;
+                                  # SYNTH_STORAGE_FALLBACK_DIR
   workspacesRoot: ""              # если пусто — {dataDir}/workspaces; SYNTH_WORKSPACES_ROOT
   defaultWorkspace: ""            # если пусто — {dataDir}/workspaces/default; SYNTH_DEFAULT_WORKSPACE
   workspaceOutsideRoot: ""        # ADR-075: политика для абсолютного workspace вне workspacesRoot
@@ -299,6 +334,12 @@ security:
     mode: "flag"                  # flag | sanitize | block
   protectedPaths:
     enabled: true
+  tls:                            # ADR-099: доверие TLS/CA исходящих соединений (env SYNTH_TLS_*)
+    caFile: ""                    # путь к PEM-файлу доверенного CA (корпоративный CA); взаимоисключающ с caPem
+    # caPem: ""                   # PEM доверенного CA (например из Secret); взаимоисключающ с caFile
+    certFile: ""                  # mTLS: путь к PEM-файлу клиентского сертификата
+    keyFile: ""                   # mTLS: путь к PEM-файлу приватного ключа клиента
+    rejectUnauthorized: true      # проверять сертификат сервера (по умолчанию true)
   secretKey: ""                   # ADR-076: мастер-ключ секретов at-rest (пусто → файл dataDir/secrets/master.key)
   bootstrapServiceKeys: []        # ADR-052/O1: installer service-key'и (label/secret/scopes/roles?) — см. ниже; обычно через env SYNTH_BOOTSTRAP_SERVICE_KEYS
 
@@ -328,10 +369,80 @@ remote:                           # гибридный режим: локаль�
 
 ### Backend хранения (`storage.backend`, ADR-096)
 
-- `storage.backend` — физический backend хранения: `file` (JSON-файлы с атомарной записью tmp→rename, [ADR-005](./arch_decisions/adr-005-json-storage.md); по умолчанию) или `memory` (in-memory, данные **не** сохраняются на диск — для герметичных тестов и эмуляции). Домен работает через доменные порты, backend взаимозаменяем ([ADR-096](./arch_decisions/adr-096-storage-layer.md)).
-- **Приоритет** ([ADR-023](./arch_decisions/adr-023-configuration.md)): env `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `file`. Некорректное значение (не `file`/`memory`) — warn и фолбэк на config/дефолт (fail-soft). Резолвер — `resolveStorageBackend` (`@itphx/synth-shared/config`); выбор применяется в точке сборки `StorageContext` (`createFileStorage`/`createMemoryStorage`/`createStorageContext`).
+- `storage.backend` — физический backend хранения: `file` (JSON-файлы с атомарной записью tmp→rename, [ADR-005](./arch_decisions/adr-005-json-storage.md); по умолчанию), `memory` (in-memory, данные **не** сохраняются на диск — для герметичных тестов и эмуляции) или `postgres` (PostgreSQL; опциональный in-tree драйвер `@itphx/synth-storage-postgres`, [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md)). Домен работает через доменные порты, backend взаимозаменяем ([ADR-096](./arch_decisions/adr-096-storage-layer.md)); любой backend обязан пройти контрактный suite `packages/core/src/storage/contract/*`.
+- **Приоритет** ([ADR-023](./arch_decisions/adr-023-configuration.md)): env `SYNTH_STORAGE_BACKEND` > `config.storage.backend` > `file`. Некорректное значение (не `file`/`memory`/`postgres`) — warn и фолбэк на config/дефолт (fail-soft); неизвестное **явное** значение в самом `resolveStorageBackend` — **fail-closed** (ошибка, а не тихий уход на файлы). Резолвер — `resolveStorageBackend` (`@itphx/synth-shared/config`); выбор применяется в точке сборки `StorageContext` (`createStorageContextAsync`/`buildStorageContext`; синхронный `createStorageContext` для `postgres` бросает).
 - `memory` печатает предупреждение `storage.backend=memory: данные не сохраняются на диск` — режим **не для прода** (только тесты/эмуляция).
-- Следующий backend — БД за тем же слоем (порты + контрактный suite, «паспорт порта») — [PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md).
+- `postgres` требует установленного драйвера (`@itphx/synth-storage-postgres`, ставится в комплекте `@itphx/synth`; `pg` — optional-зависимость драйвера) и доступной БД. Драйвер применяет/проверяет **свою** схему БД (`synth_schema_migrations`, инлайн-SQL-миграции) — отдельно от `meta.json`/`synth migrate` (ADR-092); «схема БД новее драйвера» — fail-closed.
+
+### PostgreSQL (`storage.postgres`, PROP-032)
+
+Секция используется при `storage.backend: postgres`. Источник истины — `postgresStorageConfigSchema` (`packages/shared/src/config/types.ts`); резолвер — `resolvePostgresConfig` (env `SYNTH_POSTGRES_*` > `config.storage.postgres`; [ADR-023](./arch_decisions/adr-023-configuration.md)).
+
+| Поле | Env | Назначение |
+|------|-----|------------|
+| `dsn` | `SYNTH_POSTGRES_DSN` | Строка подключения `postgres://…`; задана — приоритетнее `host`/`port`/`database`/`user` |
+| `host` | `SYNTH_POSTGRES_HOST` | Хост сервера БД |
+| `port` | `SYNTH_POSTGRES_PORT` | Порт (1–65535) |
+| `database` | `SYNTH_POSTGRES_DATABASE` | Имя базы |
+| `user` | `SYNTH_POSTGRES_USER` | Пользователь |
+| `schema` | `SYNTH_POSTGRES_SCHEMA` | Схема БД (namespace таблиц драйвера; по умолчанию — первая в `search_path`) |
+| `sslmode` | `SYNTH_POSTGRES_SSLMODE` | TLS-режим: `disable` / `require` / `verify-full` (`verify-ca` — алиас `verify-full`); приоритетнее legacy `ssl` ([ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)) |
+| `ssl` | `SYNTH_POSTGRES_SSL` | Legacy-флаг TLS (`true`/`false`); применяется, только если `sslmode` не задан |
+| `poolMax` | `SYNTH_POSTGRES_POOL_MAX` | Максимальный размер пула соединений (по умолчанию `10`) |
+
+- **Пароль** в секции **не хранится** (инвариант 13). Источник — env `SYNTH_POSTGRES_PASSWORD` > файл `{dataDir}/secrets/postgres-password` (резолвер `resolvePostgresPassword`); рекомендуется k8s Secret → env.
+- Невалидные числовые/boolean env-значения — ошибка резолвинга с внятным сообщением (не «тихо как есть»).
+- Контракт драйвера и схема БД — `packages/storage-postgres/AGENTS.md`; критерий приёмки — suite `packages/core/src/storage/contract/*` (прогон против живой БД по env `SYNTH_TEST_POSTGRES_DSN`).
+
+### TLS соединения с PostgreSQL (`storage.postgres.sslmode`, ADR-099 × PROP-032)
+
+Источник истины для TLS-политики — `storage.postgres.sslmode`; CA и клиентские сертификаты (mTLS) берутся из **общей** секции `security.tls` (см. ниже). Резолвер режима — `normalizePostgresSslMode`, сборка `ssl`-опций `pg` — `buildPostgresSslOptions` (`packages/shared/src/config/tls.ts`).
+
+| `sslmode` | Что делаем |
+|---|---|
+| не задано | Прежнее поведение: legacy-поле `ssl` (`true`/`false`) либо дефолт `pg` — соединение **без TLS** (dev/совместимость) |
+| `disable` | TLS выключен явно (`ssl: false`); CA/mTLS игнорируются |
+| `require` | Шифрование **без** проверки сертификата сервера (`rejectUnauthorized: false`); mTLS (`cert`/`key` из `security.tls`) добавляется, если задан |
+| `verify-full` | Проверка сертификата сервера по CA из `security.tls` (`rejectUnauthorized: true` + `ca`); mTLS — если задан; для non-IP хоста без DSN проставляется `servername` (SNI) |
+| `verify-ca` | **Алиас** `verify-full` (нормализуется с предупреждением: `pg-connection-string` трактует его как `verify-full`, проверка имени хоста включена) |
+
+- **Fail-closed:** `verify-full` без сконфигурированного CA (`security.tls.caFile`/`caPem`) → ошибка конфигурации (никакого тихого `rejectUnauthorized: false` — иначе проверка сертификата сервера невозможна). mTLS требует **оба** файла — `certFile` и `keyFile`.
+- **TLS-параметры в DSN запрещены.** Строка подключения `storage.postgres.dsn` не должна нести `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/`ssl`/`sslnegotiation`/`uselibpqcompat`: драйвер `pg` накладывает распарсенный DSN **поверх** явного конфига (`Object.assign({}, config, parse(connectionString))`) и молча перекрывает `ssl`-объект — вплоть до отключения TLS. Обнаружение → ошибка конфигурации: `TLS-параметры в DSN запрещены (обнаружено: …). … задайте их только в storage.postgres.sslmode + security.tls` (`assertNoDsnTlsParams`, `packages/storage-postgres/src/pool.ts`). Проверяются и URL-форма (`?sslmode=…`), и libpq-подобная (`sslmode=…`).
+- **TLS — стартовая конфигурация** (не runtime): изменения применяются при старте; для переключения режима — рестарт.
+
+### Деградированный режим при недоступности БД (`storage.degradedMode`, ADR-098)
+
+Если выбран `postgres`, но БД недоступна на старте, поведение задаёт `storage.degradedMode` (env `SYNTH_DEGRADED_MODE` > config > `fallback-file`; резолвер `resolveDegradedMode`):
+
+- `fallback-file` (по умолчанию) — сервис поднимается на **файловом фоллбеке** в `storage.fallbackDir` (env `SYNTH_STORAGE_FALLBACK_DIR` > config > `{dataDir}/fallback`; **отдельный** от `dataDir` каталог) в **строгом read-only**: мутации → `503 STORAGE_DEGRADED_READONLY`, не-администраторам — `503 STORAGE_DEGRADED`. `/health` отдаёт `status: 'degraded'` + блок `storage.{backend,fallbackDir,reason,since}`; диагностика — `GET /api/v2/storage/status`.
+- `halt` — старт останавливается с внятной ошибкой (`STORAGE_UNAVAILABLE`).
+
+**Fail-closed** (фоллбек **не** применяется независимо от `degradedMode`): ошибка конфигурации/кред (`STORAGE_POSTGRES_CONFIG_INVALID`), отсутствие зависимости (`…DEPENDENCY_MISSING`, нет `pg`), незагружаемый пакет-драйвер (`STORAGE_BACKEND_UNAVAILABLE`), схема БД новее драйвера (`…SCHEMA_TOO_NEW`). Деградация охватывает **отказ БД** (сеть/класс `08`/`57P0x`, auth-ошибка сервера, `…SCHEMA_OUTDATED` — лечится `synth migrate`, прочие runtime-ошибки). Авто-возврата к БД **нет** — только рестарт после восстановления соединения ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)); процедуры — [MAINTENANCE.md](./MAINTENANCE.md).
+
+### Доверие TLS и mTLS исходящих соединений (`security.tls`, ADR-099)
+
+Единый источник доверия TLS/CA для **всех** исходящих соединений Synth (провайдеры LLM, MCP HTTP,
+`web_fetch`/`web_search`, webhooks, гибридный backend, инструкции/скиллы по URL, update-checker,
+OIDC/JWKS, иконки провайдеров, git, PostgreSQL). Секция читается резолверами `resolveTlsConfig`/`resolveTlsTrust`
+(`packages/shared/src/config/tls.ts`); приоритет — общий ([ADR-023](./arch_decisions/adr-023-configuration.md)):
+env > `config.yaml` > дефолты. Инвариант — [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md):
+подсистемы не создают собственных агентов/диспетчеров.
+
+| Поле | Env | Назначение |
+|---|---|---|
+| `caFile` | `SYNTH_TLS_CA_FILE` | Путь к PEM-файлу доверенного CA (корпоративный CA); **взаимоисключающ** с `caPem` |
+| `caPem` | `SYNTH_TLS_CA_PEM` | PEM доверенного CA (например из Secret); **взаимоисключающ** с `caFile` |
+| `certFile` | `SYNTH_TLS_CERT_FILE` | mTLS: путь к PEM-файлу клиентского сертификата |
+| `keyFile` | `SYNTH_TLS_KEY_FILE` | mTLS: путь к PEM-файлу приватного ключа клиента |
+| `rejectUnauthorized` | `SYNTH_TLS_REJECT_UNAUTHORIZED` | Проверять сертификат сервера (`true`/`1`/`false`/`0`); по умолчанию `true` |
+
+- **Пустая секция — системное доверие** (системные CA Node), поведение не меняется.
+- **`rejectUnauthorized`:** `true` (дефолт) — проверка сертификата сервера; `false` — проверка отключена (осознанный риск MITM; только для отладки). Невалидное env-значение — `warn` + фолбэк на config/дефолт.
+- **mTLS:** задаются `certFile` **и** `keyFile` одновременно; задан ровно один — ошибка конфигурации.
+- **Fail-closed:** `caFile` и `caPem` одновременно → ошибка; явно заданный `caFile`, который отсутствует/не читается/не PEM → ошибка (никакого тихого фоллбэка на системное доверие); заданное доверие без установленного пакета `undici` (прямая зависимость core `undici@^7`) → внятная ошибка, а не недоверенный транспорт.
+- **Применение:** при старте процесса строится глобальный undici-dispatcher (`setGlobalDispatcher`), обычный `fetch` наследует доверие; точки вне общего транспорта (git) получают CA через `http.sslCAInfo=<caFile>` (`caPem` без файла git-каналу недоступен).
+- **`NODE_EXTRA_CA_CERTS` — только совместимость** (наследуется дочерними процессами: MCP stdio, git), **не** конфигурируемый механизм доверия.
+- **TLS — стартовая конфигурация:** секция **не входит** в runtime-настройки (`RuntimeSettings`); изменения применяются при старте и требуют рестарта.
 
 ### Секреты at-rest (`security.secretKey`, ADR-076)
 

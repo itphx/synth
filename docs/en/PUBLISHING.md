@@ -6,13 +6,13 @@ Developer/maintainer guide: how to build, publish and release Synth. All command
 
 ## Package publishing order
 
-**All 6 packages** are published in strict dependency order:
+**All 7 packages** are published in strict dependency order:
 
 ```
-shared → core → ui → backend → sdk → synth
+shared → core → storage-postgres → ui → backend → sdk → synth
 ```
 
-The order is set by the dependency hierarchy: `@itphx/synth-shared` is the foundation, `@itphx/synth-core` imports shared, `@itphx/synth-backend`/`@itphx/synth-ui` import core, `@itphx/synth-sdk` is a thin client of the public API over shared (ADR-052), `@itphx/synth` is a thin wrapper over core/ui/shared (ADR-038).
+The order is set by the dependency hierarchy: `@itphx/synth-shared` is the foundation, `@itphx/synth-core` imports shared, `@itphx/synth-storage-postgres` is the optional storage-layer driver (`peerDependencies: @itphx/synth-core`, `pg` — `optionalDependencies`, ADR-097/PROP-032), `@itphx/synth-backend`/`@itphx/synth-ui` import core, `@itphx/synth-sdk` is a thin client of the public API over shared (ADR-052), `@itphx/synth` is a thin wrapper over core/ui/shared (ADR-038).
 
 ## `pnpm publish` instead of `npm publish`
 
@@ -106,7 +106,7 @@ All scripts are in `synth/scripts/`.
 
 Updates:
 1. `packages/shared/src/version.ts` — the `SYNTH_VERSION` constant
-2. `packages/*/package.json` — the `version` field in all 6 packages
+2. `packages/*/package.json` — the `version` field in all 7 packages
 
 The single source of the version is `SYNTH_VERSION` in `packages/shared/src/version.ts` (imported from `@itphx/synth-shared`).
 
@@ -295,7 +295,7 @@ A deliberate decision: the single build contour is GitVerse CI (kaniko). Duplica
 
 ## Important: the `repository` field in package.json
 
-For publishing to the GitVerse Package Registry the `repository` field in `package.json` **must be absent**: when linking a package to a repository by `repository.url`, GitVerse checks permissions and returns 403 "no permission". In all 6 packages the `repository` field has been removed — do not add it back.
+For publishing to the GitVerse Package Registry the `repository` field in `package.json` **must be absent**: when linking a package to a repository by `repository.url`, GitVerse checks permissions and returns 403 "no permission". In all 7 packages the `repository` field has been removed — do not add it back.
 
 ## Local check before pushing
 

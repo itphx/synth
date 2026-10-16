@@ -76,12 +76,23 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - PROP-032 (слой хранения, ADR-096/ADR-097): секция `storage` — `backend`
   (`file`|`memory`|`postgres`, резолвер `resolveStorageBackend` + env
   `SYNTH_STORAGE_BACKEND`, **fail-closed** на неизвестном явном значении), `postgres`
-  (`dsn`/`host`/`port`/`database`/`user`/`schema`/`ssl`/`poolMax`, резолвер
-  `resolvePostgresConfig` + env `SYNTH_POSTGRES_*`), задел деградации
-  `degradedMode` (`fallback-file`|`halt`, `resolveDegradedMode`) / `fallbackDir`
-  (`resolveStorageFallbackDir`). Пароль БД в схеме **не хранится** (инвариант 13) —
-  `resolvePostgresPassword` (env `SYNTH_POSTGRES_PASSWORD` → файл
-  `{dataDir}/secrets/postgres-password`).
+  (`dsn`/`host`/`port`/`database`/`user`/`schema`/`sslmode`/`ssl`/`poolMax`, резолвер
+  `resolvePostgresConfig` + env `SYNTH_POSTGRES_*`, `sslmode` — env
+  `SYNTH_POSTGRES_SSLMODE`), задел деградации `degradedMode` (`fallback-file`|`halt`,
+  `resolveDegradedMode`) / `fallbackDir` (`resolveStorageFallbackDir`). Пароль БД в схеме
+  **не хранится** (инвариант 13) — `resolvePostgresPassword` (env `SYNTH_POSTGRES_PASSWORD`
+  → файл `{dataDir}/secrets/postgres-password`).
+- ADR-099 (единый механизм доверия TLS/CA): секция `security.tls` (`caFile`/`caPem`/
+  `certFile`/`keyFile`/`rejectUnauthorized`; взаимоисключение `caFile`↔`caPem`, fail-closed
+  на битый/нечитаемый PEM) — типы `SecurityTlsConfig` (`config/types.ts`) и резолверы
+  `resolveTlsConfig`/`resolveTlsTrust` + `isPemContent`, env-имена `TLS_ENV` (`SYNTH_TLS_CA_FILE`/
+  `SYNTH_TLS_CA_PEM`/`SYNTH_TLS_CERT_FILE`/`SYNTH_TLS_KEY_FILE`/`SYNTH_TLS_REJECT_UNAUTHORIZED`)
+  в `config/tls.ts`. Резолверы хранят только **чтение/валидацию** конфига — построение
+  undici-dispatcher и применение к запросам живут в core (`security/tls.ts`). Там же — TLS-опции
+  PostgreSQL (ADR-099 × PROP-032): `normalizePostgresSslMode` (`disable`/`require`/`verify-full`,
+  алиас `verify-ca`→`verify-full`), `buildPostgresSslOptions` (sslmode + CA/mTLS из `security.tls`;
+  **fail-closed** `verify-full` без CA) и `findDsnTlsParams`/`DSN_TLS_PARAMS` — **TLS-параметры в
+  DSN запрещены** (`pg` накладывает DSN `Object.assign`-ом поверх конфига и молча перекрывает `ssl`).
 
 ## Схемы и типы
 

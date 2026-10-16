@@ -1,14 +1,26 @@
 # PROP-088: Работа через HTTP-прокси (единый egress-слой, включая аутентификацию и Kerberos)
 
-> **Статус:** 🧩 Предложение — Единый egress-слой: HTTP-прокси, `no_proxy`/исключения, доверенные CA, Basic/NTLM/Negotiate (Kerberos)
-> **Решение до:** 2026-11-14
+> **Статус:** ⛔ Заменено — TLS/CA- и mTLS-часть надстроена [ADR-099](./adr-099-egress-tls-trust.md) (единый egress-слой доверия); ниже сохранён **нереализованный остаток** — HTTP-прокси/`no_proxy`/аутентификация прокси (Basic/NTLM/Negotiate/Kerberos), mTLS для прокси, пересборка dispatcher без рестарта.
+> **Заменено/надстроено:** [ADR-099](./adr-099-egress-tls-trust.md) (2026-10-16) — решение о доверии TLS/CA перенесено туда; файл оставлен как живой остаток по HTTP-прокси (номер и файл стабильны, [ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §3).
 > **Дата:** 2026-10-01
 > **Источник:** перенесено из `AD-DRAFTS.md` (D25); **перенумеровано с PROP-083** — номер PROP-083 занят брендингом ([PROP-083](./prop-083-instance-customization-branding.md)).
-> **Связано:** [ADR-023](./adr-023-configuration.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md),
+> **Связано:** [ADR-099](./adr-099-egress-tls-trust.md), [ADR-023](./adr-023-configuration.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md),
 > [ADR-071](./adr-071-mcp-servers-prompt.md), [ADR-042](./adr-042-hybrid-mode.md), [PROP-050](./prop-050-external-engines-runner.md),
 > [PROP-055](./prop-055-instance-exchange.md), [PROP-056](./prop-056-synth-mcp-server.md), [ADR-041](./adr-041-llm-error-taxonomy.md).
 
-**Решение:** ввести в Synth единый сетевой **egress-слой**: настройка исходящего HTTP/HTTPS-прокси (и, возможно,
+## Замена (ADR-099)
+
+Замысел «единый egress-слой» **разделён на две части**:
+
+- **Реализовано — доверие TLS/CA + mTLS** → [ADR-099](./adr-099-egress-tls-trust.md): секция
+  `security.tls`, общий транспорт (`egressFetch`/`applyGlobalTlsTrust`/`egress-guard`), перевод всех
+  исходящих точек, git-CA, PostgreSQL `sslmode` + запрет TLS-параметров в DSN. Здесь это больше
+  **не проектируется**.
+- **Остаётся предложением — HTTP-прокси** (этот файл): `proxy.url`/`httpProxy`/`httpsProxy`/`allProxy` +
+  `no_proxy`, аутентификация на прокси (Basic/NTLM/Negotiate/Kerberos), mTLS для прокси, пересборка
+  dispatcher без рестарта. Эти пункты в ADR-099 **не вошли** и сохранены в теле ниже как остаток.
+
+**Решение (остаток):** ввести в Synth единый сетевой **egress-слой**: настройка исходящего HTTP/HTTPS-прокси (и, возможно,
 SOCKS), `no_proxy`/списки исключений, доверенные CA-сертификаты, а аутентификация на прокси — Basic/NTLM/Negotiate
 (**Kerberos**). Все исходящие HTTP(S)-вызовы — провайдеры LLM, MCP HTTP-транспорт, `web_fetch`/`web_search`,
 HTTPS-git, OIDC-дискавери, гибридный обмен — идут через **общий dispatcher/agent**, а не через «сырой» `fetch`
@@ -90,12 +102,15 @@ runtime-настройкой — в открытых вопросах.
 
 ## Статус реализации в коде
 
-**Не реализовано, кода нет.** Проверено grep по `packages/**` (исключая `dist/`/`node_modules/`, включая `package.json`):
+**Разделено (см. «Замена»).** Доверие TLS/CA + mTLS **реализовано** в [ADR-099](./adr-099-egress-tls-trust.md)
+(секция `security.tls`, общий транспорт `egressFetch`/`applyGlobalTlsTrust`, прямая зависимость `undici@^7`,
+env `SYNTH_TLS_*`). Ниже — остаток, относящийся **только к HTTP-прокси**; он **не реализован**:
 
-- Единого сетевого слоя нет: `fetch` вызывается точечно (см. таблицу выше).
-- Нет прямых зависимостей `undici`/`proxy-agent`/`https-proxy-agent`/`socks-proxy-agent`/`axios` ни в одном
-  `package.json` пакетов `synth`.
-- Env `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`/`NODE_EXTRA_CA_CERTS` не читается.
+- HTTP-прокси, аутентификация на прокси (Basic/NTLM/Negotiate/Kerberos), mTLS для прокси — нет;
+  прямых зависимостей `proxy-agent`/`https-proxy-agent`/`socks-proxy-agent`/`axios` нет.
+- Env `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` **не читается**. (`NODE_EXTRA_CA_CERTS` в
+  Helm-чарте пробрасывается дочерним процессам как слой совместимости — ADR-099 §7; `SYNTH_TLS_*` —
+  доверие CA, а не прокси.)
 - В `packages/shared/src/config/types.ts` секции `network`/`proxy` нет. Есть только:
   - `runner.proxyPort` (дефолт 9090, `types.ts:87`, `defaults.ts:40`) — **внутренний LLM Proxy раннера**
     (план: [PROP-050](./prop-050-external-engines-runner.md)), не HTTP-прокси;
@@ -109,7 +124,7 @@ runtime-настройкой — в открытых вопросах.
 - Kerberos: нативная зависимость (`kerberos`) / внешний SPNEGO-helper / только Basic+NTLM на первом этапе?
 - SOCKS5 нужен и на каком этапе?
 - MCP stdio-серверы ходят в сеть сами (дочерний процесс) — вне зоны контроля Node? Проксировать через окружение процесса?
-- CA/self-signed: единый bypass для LLM/MCP/веба и как он согласуется с guard [ADR-036](./adr-036-llm-gateway.md)?
+- ~CA/self-signed: единый bypass для LLM/MCP/веба и как он согласуется с guard [ADR-036](./adr-036-llm-gateway.md)?~ — **снят**: доверие TLS/CA (и mTLS) решено в [ADR-099](./adr-099-egress-tls-trust.md) (секция `security.tls`, общий транспорт).
 - Прокси один общий или per-provider/per-service?
 - Как egress-прокси взаимодействует с `mcp.networkPolicy` ([ADR-071](./adr-071-mcp-servers-prompt.md)) и политиками гибрида ([ADR-042](./adr-042-hybrid-mode.md))?
 - Как пробрасывать прокси во внешние движки/runner ([PROP-050](./prop-050-external-engines-runner.md)) — env при спавне?
@@ -125,3 +140,7 @@ runtime-настройкой — в открытых вопросах.
 - [PROP-055](./prop-055-instance-exchange.md) «Обмен между инстансами», [PROP-056](./prop-056-synth-mcp-server.md) «MCP-сервер Synth» — соседние egress-потребители.
 - [ADR-041](./adr-041-llm-error-taxonomy.md) «Ошибки LLM/i18n» — ключи ошибок прокси (healthcheck/подключение).
 - `synth-media` (`git.itphx.ru:itphx/synth-media`) — частный случай/подтверждение необходимости (Telegram через SOCKS/HTTP-прокси).
+
+## История
+
+- 2026-10-16 — статус переведён в `⛔ Заменено`: TLS/CA- и mTLS-часть надстроена [ADR-099](./adr-099-egress-tls-trust.md); HTTP-прокси/`no_proxy`/аутентификация прокси/Kerberos остаются предложением (остаток сохранён в теле).

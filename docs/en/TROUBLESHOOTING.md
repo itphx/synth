@@ -11,7 +11,7 @@ Verified symptoms, causes and solutions from real experience. If your problem is
 
 ## 1. GitVerse npm: 403 "no permission" when publishing `@itphx/synth`
 
-**Symptom:** publishing `@itphx/synth` to `https://gitverse.ru/api/packages/itphx/npm/` fails with 403 "no permission", while the other six packages publish fine.
+**Symptom:** publishing `@itphx/synth` to `https://gitverse.ru/api/packages/itphx/npm/` fails with 403 "no permission", while the other six packages (seven in total) publish fine.
 
 **Cause:** the `repository` field in `packages/synth/package.json` (`{"type": "git", "url": "https://gitverse.ru/itphx/synth"}`). When linking a package to a repository by `repository.url`, GitVerse checks permissions and returns 403.
 
@@ -67,6 +67,62 @@ setsid pnpm --filter @itphx/synth-ui dev > tmp/ui.log 2>&1 &
 - **Via the API** (if available): `GET/PUT/DELETE /api/v2/settings/protected-paths` — an override of the form `{version: 1, add: [...], remove: [...]}`
 - **Via a file:** `{dataDir}/security/protected-paths.json` (add/remove format, version: 1)
 - **Disable protection:** the `security.protectedPaths.enabled` toggle in the UI "Security" section or `false` in `config.yaml`
+
+## 7. TLS/certificates (outgoing connections and PostgreSQL)
+
+The single source of TLS/CA trust in Synth is the `security.tls` section (ADR-099). All outgoing connections (LLM providers, MCP, webhooks, hybrid, OIDC/JWKS, icon/update fetching, `web_fetch`) and TLS to PostgreSQL take their CA/client certificates from there.
+
+### `self-signed certificate in certificate chain` / `DEPTH_ZERO_SELF_SIGNED_CERT`
+
+**Symptom:** a request to an LLM/MCP/OIDC/webhook fails with a certificate verification error (`self-signed certificate in certificate chain`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `unable to verify the first certificate`).
+
+**Cause:** the server (corporate proxy/gateway, self-hosted IdP) is signed by an internal CA that is not in the system trust store, and `security.tls` is not set.
+
+**Solution:** provide the trusted CA (the git channel requires a file):
+
+```yaml
+security:
+  tls:
+    caFile: /etc/synth/tls/ca.crt      # or caPem — the PEM itself (mutually exclusive with caFile)
+```
+
+or the env var `SYNTH_TLS_CA_FILE=/etc/synth/tls/ca.crt` (`caPem` — `SYNTH_TLS_CA_PEM`). For mTLS add `certFile`/`keyFile` (`SYNTH_TLS_CERT_FILE`/`SYNTH_TLS_KEY_FILE`). A broken/missing file is fail-closed (a clear error at startup, not a silent fallback).
+
+**Why `NODE_EXTRA_CA_CERTS` is not a solution for the Synth process itself:** the variable affects only Node's standard transport and is **not** Synth configuration; when `security.tls` is set, Synth installs its own global undici dispatcher (`initTlsTrust`), which ignores it. The canonical path is `security.tls`; `NODE_EXTRA_CA_CERTS` remains only a compatibility channel for child processes.
+
+### `The server does not support SSL connections`
+
+**Symptom:** the PostgreSQL driver fails at startup with `The server does not support SSL connections`.
+
+**Cause:** `storage.postgres.sslmode` (`require`/`verify-full`) is set, but the DB server does not support TLS (or `pg_hba.conf` does not allow it).
+
+**Solution:** enable TLS on the DB server or drop `sslmode` (or `sslmode: disable`) — but note that `disable` also turns off certificate verification.
+
+### "TLS parameters in DSN are forbidden (found: …)"
+
+**Symptom:** the driver rejects `storage.postgres.dsn` with a message about forbidden TLS parameters.
+
+**Cause:** the DSN contains `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/… — `pg` overlays the DSN on top of the config (`Object.assign`) and silently overrides the `ssl` options (up to disabling TLS), so they are forbidden.
+
+**Solution:** remove the TLS parameters from the DSN and set them where they belong:
+
+```yaml
+storage:
+  postgres:
+    dsn: postgres://synth@db.internal:5432/synth   # no ?sslmode=…
+    sslmode: verify-full                             # disable | require | verify-full
+security:
+  tls:
+    caFile: /etc/synth/tls/ca.crt                    # CA for verify-full
+```
+
+### git-over-https problems (clone/fetch with a corporate CA)
+
+**Symptom:** `project_repo_clone`/`git fetch` over https fails with a certificate verification error.
+
+**Cause:** git does not trust the server CA. The env channel (`GIT_SSL_CAINFO`) is unavailable: `git-service.ts` sanitizes the environment (`sanitizeGitEnv`/`allowEnvironment`).
+
+**Solution:** provide the CA **as a file** via `security.tls.caFile` — the git channel passes it per call (`git -c http.sslCAInfo=<path>`). `caPem` (a PEM without a file) is unavailable to the git channel — a `caFile` is required.
 
 ## Where to look at the logs
 

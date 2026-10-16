@@ -68,6 +68,62 @@ setsid pnpm --filter @itphx/synth-ui dev > tmp/ui.log 2>&1 &
 - **Файлом:** `{dataDir}/security/protected-paths.json` (формат add/remove, version: 1)
 - **Отключить защиту:** тумблер `security.protectedPaths.enabled` в секции «Безопасность» UI или `false` в `config.yaml`
 
+## 7. TLS/сертификаты (исходящие соединения и PostgreSQL)
+
+Единый источник доверия TLS/CA в Synth — секция `security.tls` (ADR-099). Все исходящие соединения (LLM-провайдеры, MCP, webhooks, гибрид, OIDC/JWKS, загрузка иконок/обновлений, `web_fetch`) и TLS к PostgreSQL берут CA/клиентские сертификаты оттуда.
+
+### `self-signed certificate in certificate chain` / `DEPTH_ZERO_SELF_SIGNED_CERT`
+
+**Симптом:** запрос к LLM/MCP/OIDC/вебхуку падает с ошибкой проверки сертификата (`self-signed certificate in certificate chain`, `DEPTH_ZERO_SELF_SIGNED_CERT`, `unable to verify the first certificate`).
+
+**Причина:** сервер (корпоративный прокси/шлюз, self-host IdP) подписан внутренним CA, которого нет в системном хранилище, а `security.tls` не задан.
+
+**Решение:** задайте доверенный CA (для git-канала нужен именно файл):
+
+```yaml
+security:
+  tls:
+    caFile: /etc/synth/tls/ca.crt      # или caPem — сам PEM (взаимоисключающ с caFile)
+```
+
+или env `SYNTH_TLS_CA_FILE=/etc/synth/tls/ca.crt` (`caPem` — `SYNTH_TLS_CA_PEM`). Для mTLS добавьте `certFile`/`keyFile` (`SYNTH_TLS_CERT_FILE`/`SYNTH_TLS_KEY_FILE`). Битый/отсутствующий файл — fail-closed (понятная ошибка на старте, не тихий фоллбэк).
+
+**Почему `NODE_EXTRA_CA_CERTS` — не решение для самого процесса Synth:** переменная влияет только на стандартный транспорт Node и **не** является конфигурацией Synth; при заданном `security.tls` Synth ставит собственный глобальный undici-dispatcher (`initTlsTrust`), который её не учитывает. Штатный путь — `security.tls`; `NODE_EXTRA_CA_CERTS` остаётся лишь совместимостью для дочерних процессов.
+
+### `The server does not support SSL connections`
+
+**Симптом:** PostgreSQL-драйвер при старте падает с `The server does not support SSL connections`.
+
+**Причина:** задан `storage.postgres.sslmode` (`require`/`verify-full`), а сервер БД TLS не поддерживает (или `pg_hba.conf` его не разрешает).
+
+**Решение:** включите TLS на сервере БД либо уберите `sslmode` (или `sslmode: disable`) — но помните, что `disable` отключает и проверку сертификата.
+
+### «TLS-параметры в DSN запрещены (обнаружено: …)»
+
+**Симптом:** драйвер отвергает `storage.postgres.dsn` с сообщением про запрещённые TLS-параметры.
+
+**Причина:** в DSN есть `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/… — `pg` накладывает DSN поверх конфига (`Object.assign`) и молча перекрывает `ssl`-опции (вплоть до отключения TLS), поэтому они запрещены.
+
+**Решение:** уберите TLS-параметры из DSN и задайте их там, где им место:
+
+```yaml
+storage:
+  postgres:
+    dsn: postgres://synth@db.internal:5432/synth   # без ?sslmode=…
+    sslmode: verify-full                             # disable | require | verify-full
+security:
+  tls:
+    caFile: /etc/synth/tls/ca.crt                    # CA для verify-full
+```
+
+### Проблемы git-over-https (клон/фетч с корпоративным CA)
+
+**Симптом:** `project_repo_clone`/`git fetch` по https падает с ошибкой проверки сертификата.
+
+**Причина:** git не доверяет CA сервера. Env-канал (`GIT_SSL_CAINFO`) недоступен: `git-service.ts` санитайзит окружение (`sanitizeGitEnv`/`allowEnvironment`).
+
+**Решение:** задайте CA **файлом** через `security.tls.caFile` — git-канал передаёт его пер-вызовом (`git -c http.sslCAInfo=<path>`). `caPem` (PEM без файла) git-каналу недоступен — нужен именно `caFile`.
+
 ## Где смотреть логи
 
 | Сервис | Лог |

@@ -8,12 +8,13 @@
 
 ## Компоненты
 
-Synth состоит из шести пакетов в монорепозитории:
+Synth состоит из семи пакетов в монорепозитории:
 
 | Пакет | Назначение | Стек |
 |-------|-----------|------|
 | **@itphx/synth-shared** | Типы, интерфейсы, Zod-схемы, протоколы, конфигурация | TypeScript |
 | **@itphx/synth-core** | Автономный движок: сессии, очередь, LLM-провайдеры, CLI, HTTP API v2 | TypeScript, Hono |
+| **@itphx/synth-storage-postgres** | Опциональный драйвер слоя хранения поверх PostgreSQL (ADR-097/PROP-032): реализует доменные порты `StorageContext`, `peer-dep` core, `pg` — optional | TypeScript, `pg` |
 | **@itphx/synth-backend** | API Hub: OIDC, Runner Registry, LLM Proxy, RBAC, SessionEventBus | TypeScript, Hono |
 | **@itphx/synth-ui** | React 19 SPA + админка (рендеринг по ролям) | TypeScript, React 19, Vite |
 | **@itphx/synth-sdk** | Типизированный клиент публичного API (ADR-052): обёртка над public-OpenAPI (`events`/`sessions`/`schedules`/`llm`) | TypeScript, ESM |
@@ -51,6 +52,11 @@ flowchart TB
         synth_sdk["@itphx/synth-sdk — клиент публичного API"]
     end
 
+    subgraph Storage["Слой хранения (ADR-096)"]
+        storage_file["file / memory (in-tree, default)"]
+        storage_pg["postgres — @itphx/synth-storage-postgres (опц.)"]
+    end
+
     subgraph Integrations["Интеграции"]
         event_sources["Внешние источники событий"]
         webhook_targets["HTTP-подписчики (webhooks)"]
@@ -71,6 +77,11 @@ flowchart TB
 
     synth_sdk -->|service-key / HTTP API v2| synth_core
     synth_sdk -->|HTTP API v2| synth_backend
+
+    synth_core -->|StorageContext| storage_file
+    synth_core -->|StorageContext| storage_pg
+    synth_backend -->|StorageContext| storage_file
+    synth_backend -->|StorageContext| storage_pg
 ```
 
 ## Сценарии развёртывания
@@ -174,6 +185,19 @@ flowchart LR
 Полный индекс архитектурных решений (AD) со статусами — в корневом
 [AGENTS.md](../AGENTS.md), раздел «Индекс архитектурных решений».
 
+## Слой хранения (backend'ы)
+
+Физическое хранение вынесено за **доменные порты** ([ADR-096](./arch_decisions/adr-096-storage-layer.md)):
+домен работает с `StorageContext` (`packages/core/src/storage/ports/*`, 27 портов), а backend подменяем.
+Точка сборки — `packages/core/src/storage/storage-context.ts` (`createFileStorage`/`createMemoryStorage` +
+асинхронный каскад `createStorageContextAsync`/`buildStorageContext`); выбор — `storage.backend`
+(`file`|`memory`|`postgres`, env `SYNTH_STORAGE_BACKEND`).
+
+- **`file`** (default) — `FileStore`/`JsonStore`, JSON + атомарная запись tmp→rename ([ADR-005](./arch_decisions/adr-005-json-storage.md)); **`memory`** — in-memory (герметичные тесты, эталон семантики).
+- **`postgres`** — второй selectable backend ([PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md)): отдельный in-tree пакет-драйвер **`@itphx/synth-storage-postgres`** ([ADR-097](./arch_decisions/adr-097-storage-provider-class.md)), подключаемый core **динамическим `import()`**; `pg` — optional. Любой backend обязан пройти контрактный suite `packages/core/src/storage/contract/*` («паспорт порта»); прогон драйвера против живой БД гейтится env `SYNTH_TEST_POSTGRES_DSN`.
+- **Деградированный режим** ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)): при недоступности БД сервис поднимается на файловом фоллбеке в строгом read-only (ADMIN-only, `/health` → `degraded`); авто-возврата нет — только рестарт. Ошибки конфигурации/зависимостей/«схема новее» — fail-closed.
+- **За портами не всё:** «файловый периметр» остаётся file-специфичным/гибридным — секреты в `secrets/` (мастер-ключ, API-ключи), `meta.json`/`synth migrate`, `workspaces/`, содержимое скиллов и промптов, аудит-журналы (`audit/*.jsonl`), URL-кэши инструкций ([ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
+
 ## Структура монорепозитория
 
 ```
@@ -186,6 +210,7 @@ synth/
 └── packages/
     ├── shared/   → @itphx/synth-shared
     ├── core/     → @itphx/synth-core
+    ├── storage-postgres/ → @itphx/synth-storage-postgres (опц. БД-драйвер, ADR-097/PROP-032)
     ├── backend/  → @itphx/synth-backend
     ├── ui/       → @itphx/synth-ui
     ├── sdk/      → @itphx/synth-sdk (клиент публичного API, ADR-052)

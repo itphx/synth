@@ -64,6 +64,8 @@
 | ADR-091 | Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor` | ⚠️ Частично | [adr-091-backup-restore-transfer.md](./adr-091-backup-restore-transfer.md) |
 | ADR-092 | Обслуживание инстанса — версия схемы данных, миграции и удаление | ⚠️ Частично | [adr-092-instance-lifecycle-maintenance.md](./adr-092-instance-lifecycle-maintenance.md) |
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097-storage-provider-class.md](./adr-097-storage-provider-class.md) |
+| ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098-storage-degraded-recovery.md](./adr-098-storage-degraded-recovery.md) |
+| ADR-099 | Единый egress-слой — доверие TLS/CA (и mTLS) для исходящих соединений | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
 
 ## Предложения
 
@@ -91,7 +93,6 @@
 | PROP-082 | Flavor-образы с toolchain: `slim`/`core`/`dev`/`devops`/`browser`/`full` (alpine + debian) для local containerized и managed single-instance | 🧩 Предложение | [prop-082-full-images-deployment.md](./prop-082-full-images-deployment.md) |
 | PROP-083 | Кастомизация инстанса и брендинг: приветственное окно (+повторный вызов), конфиг брендинга (название/лого-подпись/ватермарка), серверная выдача; на потом — locked settings | 🧩 Предложение | [prop-083-instance-customization-branding.md](./prop-083-instance-customization-branding.md) |
 | PROP-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер | 🧩 Предложение | [prop-085-multimodal-input.md](./prop-085-multimodal-input.md) |
-| PROP-088 | Работа через HTTP-прокси (единый egress-слой): прокси/`no_proxy`/CA, аутентификация Basic/NTLM/Negotiate (Kerberos) | 🧩 Предложение | [prop-088-http-proxy.md](./prop-088-http-proxy.md) |
 | PROP-090 | Extension API v1: манифест, загрузка, установка и активация плагинов: 4 класса (Plugin / Gateway / Add-on / контент-пак), определение Plugin (код в процессе ядра), таксономия влияния (contribution / interception / observation), единый манифест `synth.pack` (`kind`/`contracts`/`provides`), точки расширения, `@itphx/synth-plugin`, bundle-only, install/activate, trust/scan (PROP-068), плагины в managed (ADMIN: deploy-time + runtime-опция) и hybrid (allow-list + server-scoped токены) | 🧩 Предложение | [prop-090-extension-api.md](./prop-090-extension-api.md) |
 | PROP-093 | Версионирование документации: версионные подкаталоги портала + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093-docs-versioning.md](./prop-093-docs-versioning.md) |
 | PROP-094 | Наблюдаемость и эксплуатационные метрики: `/metrics` (Prometheus), `/ready` + раздельные probes, структурные логи (`request_id`/`session_id`, редакция секретов), SLO/алерты, sizing | 🧩 Предложение | [prop-094-observability-metrics.md](./prop-094-observability-metrics.md) |
@@ -116,6 +117,12 @@
 | PROP-063 | Обучение пользователя и метрики: Pre-PR check, анализ сессий, дашборд без рейтингов | 🧩 Предложение (vision) | [prop-063-user-learning-metrics.md](./prop-063-user-learning-metrics.md) |
 | PROP-067 | «Впитывание» организационных гайдлайнов → дефолты инстанса: ingestion, scope, версионирование/аудит | 🧩 Предложение (vision) | [prop-067-org-guidelines-defaults.md](./prop-067-org-guidelines-defaults.md) |
 
+## Заменено
+
+| ID | Тема | Статус | Файл |
+|----|------|--------|------|
+| PROP-088 | Работа через HTTP-прокси (единый egress-слой): прокси/`no_proxy`/CA, аутентификация Basic/NTLM/Negotiate (Kerberos) | ⛔ Заменено | [prop-088-http-proxy.md](./prop-088-http-proxy.md) |
+
 ## Legacy
 
 | ID | Тема | Статус | Файл |
@@ -124,4 +131,4 @@
 
 ---
 
-Всего документов: 89 (Решения: 37, Частично: 10, Предложения: 32, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 91 (Решения: 37, Частично: 12, Предложения: 31, Vision: 9, Icebox: 0, Legacy: 1).

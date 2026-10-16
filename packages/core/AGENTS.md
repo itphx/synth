@@ -16,7 +16,8 @@
   OIDC/RBAC — на стороне backend; `createStandaloneApp` поднимает
   `@itphx/synth`); **hybrid** (локальный core + удалённый backend).
 - `src/main.ts` — точка входа CLI (внутренний инструмент: `serve`, `chat`,
-  `connect`, `project publish|fork`, `config`, `session`, `audit`, `update`).
+  `connect`, `project publish|fork`, `config`, `session`, `audit`, `update`,
+  `storage migrate` — перенос данных между backend'ами, PROP-032).
   Публичный CLI `synth` — это пакет `@itphx/synth`, не core.
 
 ## Инварианты core
@@ -25,10 +26,12 @@
   `createToolRegistry()` (`engine/tools/index.ts`), `createAgentRegistry()`
   (`engine/agents/index.ts`), `FileStore`/`JsonStore`/`ProjectStore`/
   `FileProfileStore`/`RuntimeSettingsStore`/`SSHKeyStore`/`ServiceApiKeyStore` (`storage/*`),
-  слой хранения — `StorageContext` (в т.ч. опциональный `close?()` —
-  освобождение ресурсов backend'а, напр. пула БД, на graceful shutdown)/
+  слой хранения — `StorageContext` (в т.ч. опциональные `close?()` —
+  освобождение ресурсов backend'а, напр. пула БД, на graceful shutdown — `locks?`, `health?`,
+  `schemaMigrations?`, `purgeSchema?`, `degraded?` — см. ADR-098)/
   `createFileStorage`/`createMemoryStorage`/
-  `createStorageContext` (`storage/storage-context.ts`), `FileBlobStore`
+  `createStorageContext` (`@deprecated`; для `postgres` бросает) и async-каскад
+  `createStorageContextAsync`/`buildStorageContext` (`storage/storage-context.ts`), `FileBlobStore`
   (`storage/file-blob-store.ts`, порт `BlobStore`), `DefaultsStore` (`storage/defaults-store.ts`),
   `ChatOrchestrator`
   (`engine/orchestrator.ts`), `SessionManager` (`sessions/manager.ts`),
@@ -54,6 +57,19 @@
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
 - Конфиг — через `@itphx/synth-shared/config` (ADR-023); приоритет
   CLI-флаги > `SYNTH_*` env > config.yaml > defaults.
+- **Доверие TLS/CA исходящих соединений — единый слой (ADR-099).**
+  `security/tls.ts`: `initTlsTrust` — инициализация при старте процесса
+  (`main.ts`, `server/app.ts`, backend) **до** первого исходящего запроса;
+  `buildTlsTrust` — чтение PEM CA/клиентского серта; `applyGlobalTlsTrust` —
+  глобальный undici-dispatcher (`setGlobalDispatcher`, покрывает обычный `fetch`
+  по всему процессу); `egressFetch` — `fetch` с **явным** dispatcher (не зависит
+  от глобального состояния); `getTlsCaPath`/`gitCaConfig` — путь CA для git.
+  **Новые исходящие вызовы — только через `egressFetch`** (или
+  `fetchWithEgressGuard`/`web.ts`-обёртки поверх него), своих `Agent`/dispatcher
+  не создавать; пустая конфигурация — системное доверие, поведение прежнее.
+  git-CA (`git/git-service.ts`): `simpleGit({ config: ['http.sslCAInfo=…'] })` —
+  env-канал `GIT_SSL_CAINFO` недоступен (`sanitizeGitEnv`/`allowEnvironment`),
+  CA передаётся только пер-вызовом; `caFile` (путь), не `caPem`.
 - Секреты at-rest (SSH-ключи, ADR-076) — AES-256-GCM (`security/crypto.ts`);
   мастер-ключ — `SYNTH_SECRET_KEY` > `security.secretKey` > файл
   `{dataDir}/secrets/master.key` (`0600`, каталог `0700`, создаётся при первом
@@ -414,13 +430,17 @@
 - `engine/fs-change.ts` — `resolveFsChange`: классификация мутирующих тулов → событие `fs.changed` (scope `file`/`all`, `workspaceChanged`, `op: 'write'|'delete'|'mkdir'|'move'` для файловых тулов; `move` (`from`/`to`) выделяется из простой `mv`/`git mv` в `execute_shell`, вне workspace/непростая команда → `{scope:'all'}`); read-only → `null` (событие не публикуется).
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
-  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
+  `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
+  git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
+  `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
 - `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (27; `DocumentRepository<T>` —
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   файловые реализации (объявляют `implements` портов — поведение не менялось), in-memory
   `storage/memory/*`, контрактный suite `storage/contract/*` («паспорт» порта, обязателен для любой
-  реализации), `storage/storage-context.ts` — `StorageContext` + `createFileStorage`/`createMemoryStorage`/
-  `createStorageContext` (backend по `storage.backend`, env `SYNTH_STORAGE_BACKEND`),
+  реализации), `storage/storage-context.ts` — `StorageContext` (в т.ч. опциональные
+  `close?`/`locks?`/`health?`/`schemaMigrations?`/`purgeSchema?`/`degraded?`) + `createFileStorage`/`createMemoryStorage`/
+  `createStorageContext` (`@deprecated`) и **async-каскад** `createStorageContextAsync`/`buildStorageContext`
+  (backend по `storage.backend`, env `SYNTH_STORAGE_BACKEND`),
   `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore`), `storage/defaults-store.ts`
   (`DefaultsStore` — перенесён из backend, там реэкспорт). Точка сборки standalone —
   `createStandaloneStorage` (`server/app/deps.ts`, строится до `auth`: реестр `serviceKeys` нужен
@@ -429,8 +449,12 @@
   в `optionalDependencies` core и подключается динамическим `import()` по `storage.backend === 'postgres'`
   (`pg` — optional у драйвера, core его рантаймом не тянет); драйвер применяет/проверяет схему и
   **удерживает соединение в `StorageContext`** — `close?()` закрывает пул, ресурсы освобождает домен;
-  порты реализуются по группам `src/ports/*` (`sessions`/`principals`/`events`/`content`), сейчас — заглушки
-  «не реализовано» (реализация — следующая волна).
+  **все порты реализованы** (по группам `src/ports/*`: `sessions`/`principals`/`events`/`content`),
+  координация — `StorageContext.locks` (`PgMutex`/`PgLeader`, scheduler `leaderElection: postgres`).
+  **Деградированный режим** (ADR-098): недоступность БД → файловый фоллбек строго read-only
+  (`createStorageContextAsync` публикует состояние в `engine/permission/storage-state.ts`), HTTP-guard и
+  `GET /api/v2/storage/status` — `server/storage-degraded.ts`, `/health` → `degraded`; `doctor`/`backup`/
+  `uninstall --purge-db` и перенос `synth storage migrate` учитывают `storage.backend` (`maintenance/*`).
 - `storage/*` — `FileStore`, `JsonStore`, `ProjectStore`, `FileProfileStore`
   (профиль владельца; поле `interviewCompleted` + legacy-backfill из `[ИНТЕРВЬЮ]`; ADR-089 —
   `identities: ExternalIdentity[]` в snake_case (`external_id`/`display_name`/`linked_at`/`linked_by`),
