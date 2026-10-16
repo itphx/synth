@@ -21,6 +21,7 @@ describe('createBackup', () => {
     await mkdir(join(dataDir, 'tmp'), { recursive: true });
     await mkdir(join(dataDir, 'logs'), { recursive: true });
     await mkdir(join(dataDir, 'backups'), { recursive: true });
+    await mkdir(join(dataDir, 'maintenance'), { recursive: true });
 
     await writeFile(join(dataDir, 'sessions', 's1.json'), '{"id":"s1"}', 'utf-8');
     await writeFile(join(dataDir, 'projects', 'p1.json'), '{"id":"p1"}', 'utf-8');
@@ -29,6 +30,7 @@ describe('createBackup', () => {
     await writeFile(join(dataDir, 'tmp', 'scratch'), 'tmp', 'utf-8');
     await writeFile(join(dataDir, 'logs', 'app.log'), 'log', 'utf-8');
     await writeFile(join(dataDir, 'backups', 'synth-pre-migrate-20260101-000000.tar.gz'), 'copy', 'utf-8');
+    await writeFile(join(dataDir, 'maintenance', 'restore-request.json'), '{}', 'utf-8');
     await writeFile(join(dataDir, '.doctor-probe'), 'probe', 'utf-8');
     await writeFile(join(dataDir, 'scheduler.lock'), 'lock', 'utf-8');
     await writeFile(
@@ -59,6 +61,8 @@ describe('createBackup', () => {
     expect(manifest.excluded).toContain('secrets/');
     expect(manifest.excluded).toContain('workspaces/');
     expect(manifest.excluded).toContain('backups/');
+    // ADR-091/ADR-092: транзиентное состояние обслуживания не архивируется.
+    expect(manifest.excluded).toContain('maintenance/');
 
     const paths = manifest.entries.map((entry) => entry.path);
     expect(paths).toContain('sessions/s1.json');
@@ -68,6 +72,7 @@ describe('createBackup', () => {
     expect(paths.some((p) => p === 'workspaces' || p.startsWith('workspaces/'))).toBe(false);
     expect(paths.some((p) => p === 'tmp' || p.startsWith('tmp/'))).toBe(false);
     expect(paths.some((p) => p === 'backups' || p.startsWith('backups/'))).toBe(false);
+    expect(paths.some((p) => p === 'maintenance' || p.startsWith('maintenance/'))).toBe(false);
     expect(paths).not.toContain('.doctor-probe');
     expect(paths).not.toContain('scheduler.lock');
     expect(paths).not.toContain('manifest.json');

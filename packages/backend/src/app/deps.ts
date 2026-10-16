@@ -26,6 +26,7 @@ import {
   startEphemeralSweeper,
   assertInstanceDataNotTooNew,
   applyStartupMigrations,
+  applyPendingRestore,
   EventRouter, RequestSessionService, EventIngress, eventToMessage,
   ProjectRuleProvider, DecisionRuleProvider,
   SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
@@ -71,6 +72,11 @@ export async function createBackendDeps(
   // Хранилища
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
+
+  // ADR-091: отложенное восстановление из бэкапа (паритет со standalone-core) —
+  // офлайн-операция при старте **до** миграций и до использования стораджей.
+  // Fail-closed: невалидный запрос останавливает старт, запрос не удаляется.
+  await applyPendingRestore({ dataDir });
 
   // ADR-092: guard совместимости схемы данных (паритет со standalone-core):
   // данные новее Synth → отказ старта (fail-fast); устаревшая схема → авто-миграции

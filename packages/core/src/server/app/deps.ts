@@ -32,7 +32,7 @@ import {
   mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
-import { applyStartupMigrations } from '../../maintenance/startup.js';
+import { applyStartupMigrations, applyPendingRestore } from '../../maintenance/startup.js';
 import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { CommandService } from '../../engine/commands/service.js';
@@ -96,6 +96,12 @@ export async function createStandaloneDeps(
 ) {
   const dataDir = config.dataDir;
   await ensureDataDir(dataDir);
+
+  // ADR-091: отложенное восстановление из бэкапа — офлайн-операция, применяется
+  // при старте **до** миграций и до использования стораджей (меняет данные
+  // каталога: возврат к снимку). Fail-closed: невалидный запрос останавливает
+  // старт (запрос не удаляется — оператор исправляет или отменяет).
+  await applyPendingRestore({ dataDir });
 
   // ADR-092: guard совместимости схемы данных — данные новее Synth → отказ старта
   // (дешёвая fail-fast проверка). Устаревшая схема → авто-миграции с обязательной

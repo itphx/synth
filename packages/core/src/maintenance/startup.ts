@@ -1,10 +1,14 @@
-// ADR-092: авто-миграции схемы данных при старте инстанса. Порядок:
-// guard совместимости → обязательная страховочная копия (fail-closed) →
-// применение pending-миграций под межпроцессным локом `{dataDir}/migrate`.
+// ADR-091/ADR-092: операции обслуживания при старте инстанса.
+//
+// Порядок: отложенное восстановление (`applyPendingRestore`, ADR-091) →
+// авто-миграции схемы данных (`applyStartupMigrations`, ADR-092): guard
+// совместимости → обязательная страховочная копия (fail-closed) → применение
+// pending-миграций под межпроцессным локом `{dataDir}/migrate`. Восстановление
+// меняет данные, поэтому миграции идут строго по восстановленным данным.
 //
 // Общий для standalone-core (`server/app/deps.ts`) и managed-backend
-// (`backend/src/app/deps.ts`) — чтобы авто-миграция шла один раз на старт,
-// а не на каждый ход, и данные не портились без копии.
+// (`backend/src/app/deps.ts`) — чтобы операции шли один раз на старт, а не на
+// каждый ход, и данные не портились без копии.
 import { join } from 'node:path';
 import type { SessionManager, SessionProjectStoreLike } from '../sessions/manager.js';
 import { FileMutex } from '../storage/file-mutex.js';
@@ -15,6 +19,52 @@ import {
 } from '../storage/instance-meta.js';
 import type { SettingsRepository } from '../storage/ports/settings-repository.js';
 import { createBackup, safetyCopyPath } from './backup.js';
+import { cancelPendingRestore, getPendingRestore } from './service.js';
+import { restoreBackup } from './restore.js';
+
+/** Опции `applyPendingRestore` (ADR-091). */
+export interface ApplyPendingRestoreOptions {
+  /** Каталог данных инстанса. */
+  dataDir: string;
+  /** Канал вывода (по умолчанию `console.warn`). */
+  log?: (m: string) => void;
+}
+
+/**
+ * Применяет отложенный запрос на восстановление (ADR-091) — офлайн-операция,
+ * выполняемая при старте до миграций и до использования стораджей.
+ *
+ * - Запроса нет → `{restored:false}` (ничего не делает).
+ * - Запрос есть → `restoreBackup` (со страховочной копией по `safetyCopy`),
+ *   затем файл запроса удаляется (восстановление возвращает каталог к снимку,
+ *   поэтому `maintenance/` уже сброшен — удаление идемпотентно).
+ * - Ошибка валидации/восстановления → запрос **не** удаляется, ошибка
+ *   пробрасывается выше (fail-closed: старт с невалидным запросом
+ *   останавливается с понятным сообщением — оператор исправляет или отменяет).
+ *
+ * @returns признак применения и путь восстановленного архива.
+ */
+export async function applyPendingRestore(
+  opts: ApplyPendingRestoreOptions,
+): Promise<{ restored: boolean; archive?: string }> {
+  const log = opts.log ?? ((m: string) => console.warn(m));
+  const request = await getPendingRestore(opts.dataDir);
+  if (!request) return { restored: false };
+
+  const result = await restoreBackup({
+    archive: request.archive,
+    dataDir: opts.dataDir,
+    safetyCopy: request.safetyCopy,
+  });
+  // Восстановление уже сбросило `maintenance/` (возврат к снимку) — вызов
+  // идемпотентен и страхует случай, когда запрос сохранился.
+  await cancelPendingRestore(opts.dataDir);
+  log(
+    `⚠️ Обнаружен запрос на восстановление из ${request.archive}: восстановление выполнено ` +
+      `(страховочная копия: ${result.safetyCopyPath ?? 'не создавалась'}).`,
+  );
+  return { restored: true, archive: request.archive };
+}
 
 /** Опции `applyStartupMigrations` (ADR-092). */
 export interface ApplyStartupMigrationsOptions {

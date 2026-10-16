@@ -499,8 +499,32 @@ export type { InstanceMeta, Migration, MigrationDeps, InstanceCompatibility } fr
 export { runMigrateCommand } from './maintenance/migrate.js';
 export type { MigrateCommandOptions } from './maintenance/migrate.js';
 // ADR-092: авто-миграции при старте (обязательная страховочная копия, лок).
-export { applyStartupMigrations } from './maintenance/startup.js';
-export type { ApplyStartupMigrationsOptions } from './maintenance/startup.js';
+export { applyStartupMigrations, applyPendingRestore } from './maintenance/startup.js';
+export type {
+  ApplyStartupMigrationsOptions,
+  ApplyPendingRestoreOptions,
+} from './maintenance/startup.js';
+// ADR-091/ADR-092: сервисный слой обслуживания инстанса для admin-API/UI —
+// статус (схема/бэкапы/doctor), список/удаление бэкапов, проверка архива и
+// отложенное восстановление (применяется при старте).
+export {
+  getMaintenanceStatus,
+  listBackups,
+  deleteBackup,
+  validateRestoreArchive,
+  scheduleRestore,
+  getPendingRestore,
+  cancelPendingRestore,
+  stageUploadedArchive,
+  sanitizeBackupName,
+  isSafeBackupName,
+} from './maintenance/service.js';
+export type {
+  MaintenanceStatus,
+  MaintenanceBackupInfo,
+  PendingRestoreRequest,
+  RestoreArchiveManifest,
+} from './maintenance/service.js';
 // ADR-092: `synth uninstall` — сохранение/удаление данных инстанса.
 export { runUninstallCommand, collectUninstallSummary } from './maintenance/uninstall.js';
 export type { UninstallCommandOptions, UninstallSummary } from './maintenance/uninstall.js';

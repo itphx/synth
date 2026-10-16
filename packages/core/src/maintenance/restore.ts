@@ -63,8 +63,12 @@ export interface RestoreCommandOptions extends RestoreOptions {
   error?: (msg: string) => void;
 }
 
-/** Читает и валидирует манифест архива. */
-async function _readManifest(archive: string): Promise<BackupManifest> {
+/**
+ * Читает и валидирует манифест архива (ADR-091). Общий хелпер для
+ * `restoreBackup` и сервисного слоя (`validateRestoreArchive`, ADR-091/092) —
+ * без дублирования проверок формата.
+ */
+export async function readBackupManifest(archive: string): Promise<BackupManifest> {
   const buffer = await readFileFromTarGz(archive, 'manifest.json');
   if (!buffer) {
     throw new Error('Архив не содержит manifest.json — это не бэкап Synth.');
@@ -88,8 +92,14 @@ async function _readManifest(archive: string): Promise<BackupManifest> {
   return manifest;
 }
 
-/** Проверяет контрольные суммы манифеста и содержимого архива (до любой записи). */
-async function _verifyArchive(archive: string, manifest: BackupManifest): Promise<void> {
+/**
+ * Проверяет контрольные суммы манифеста и содержимого архива (до любой записи).
+ * Общий хелпер для `restoreBackup` и сервисного слоя (ADR-091/092).
+ */
+export async function verifyBackupArchive(
+  archive: string,
+  manifest: BackupManifest,
+): Promise<void> {
   const recomputed = computeContentChecksum(manifest.entries);
   if (recomputed !== manifest.contentChecksum) {
     throw new Error('Контрольная сумма манифеста (contentChecksum) не совпадает с его записями.');
@@ -120,6 +130,21 @@ async function _verifyArchive(archive: string, manifest: BackupManifest): Promis
 
   for (const path of expected.keys()) {
     if (!seen.has(path)) throw new BackupChecksumError(path);
+  }
+}
+
+/**
+ * Guard совместимости схемы архива (ADR-092): архив из более новой схемы, чем
+ * `SCHEMA_VERSION`, восстанавливать нельзя — понижение версии не мигрирует назад.
+ * Общий хелпер для `restoreBackup` и сервисного слоя (ADR-091/092).
+ *
+ * @throws Error если `manifest.schemaVersion > SCHEMA_VERSION`.
+ */
+export function assertArchiveSchemaCompatible(manifest: BackupManifest): void {
+  if (manifest.schemaVersion > SCHEMA_VERSION) {
+    throw new Error(
+      `Архив из более новой версии Synth (схема ${manifest.schemaVersion} > ${SCHEMA_VERSION}); обновите Synth.`,
+    );
   }
 }
 
@@ -215,19 +240,15 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
   const safetyCopy = opts.safetyCopy !== false;
 
   // 1–2. Манифест и формат.
-  const manifest = await _readManifest(archive);
+  const manifest = await readBackupManifest(archive);
 
   // 3. Версия схемы.
-  if (manifest.schemaVersion > SCHEMA_VERSION) {
-    throw new Error(
-      `Архив из более новой версии Synth (схема ${manifest.schemaVersion} > ${SCHEMA_VERSION}); обновите Synth.`,
-    );
-  }
+  assertArchiveSchemaCompatible(manifest);
   const schemaOlder = manifest.schemaVersion < SCHEMA_VERSION;
   const fileCount = manifest.entries.filter((entry) => entry.type === 'file').length;
 
   // 4. Контрольные суммы — до любой записи.
-  await _verifyArchive(archive, manifest);
+  await verifyBackupArchive(archive, manifest);
 
   // Сохраняемые элементы верхнего уровня: `backups/` всегда + `workspaces/`,
   // если архив его не содержит (бэкап без `--with-workspace`) — иначе потеряли

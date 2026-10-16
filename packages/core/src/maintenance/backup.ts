@@ -83,13 +83,17 @@ function _buildExclusions(opts: { withSecrets: boolean; withWorkspace: boolean }
   patterns: string[];
   predicate: (relPath: string, isDir: boolean) => boolean;
 } {
-  const patterns = ['backups/', 'tmp/', 'logs/', '.doctor-probe', '*.lock'];
+  // ADR-091/ADR-092: транзиентное состояние обслуживания (`backups/`,
+  // `maintenance/` — запросы на восстановление, `tmp/`, `logs/`) в архив не
+  // попадает: копии не бэкапятся рекурсивно, а вложенный запрос на
+  // восстановление архива смысла не имеет.
+  const patterns = ['backups/', 'tmp/', 'logs/', 'maintenance/', '.doctor-probe', '*.lock'];
   if (!opts.withWorkspace) patterns.push('workspaces/');
   if (!opts.withSecrets) patterns.push('secrets/');
 
   const predicate = (relPath: string, _isDir: boolean): boolean => {
     const top = relPath.split('/')[0];
-    if (top === 'backups' || top === 'tmp' || top === 'logs') return true;
+    if (top === 'backups' || top === 'tmp' || top === 'logs' || top === 'maintenance') return true;
     if (relPath === '.doctor-probe') return true;
     if (relPath.endsWith('.lock')) return true;
     if (!opts.withWorkspace && top === 'workspaces') return true;
@@ -135,8 +139,9 @@ async function _resolveOutPath(out: string | undefined, defaultName: string): Pr
  * Создаёт архив каталога данных (ADR-091).
  *
  * Исключения по умолчанию: `backups/` (страховочные копии — не бэкапятся
- * рекурсивно), `workspaces/` (без `--with-workspace`), `tmp/`, `logs/`,
- * `.doctor-probe`, `*.lock`; `secrets/` — без `--with-secrets`.
+ * рекурсивно), `maintenance/` (транзиентные запросы обслуживания, ADR-091/092),
+ * `workspaces/` (без `--with-workspace`), `tmp/`, `logs/`, `.doctor-probe`,
+ * `*.lock`; `secrets/` — без `--with-secrets`.
  * Файл архива — `0600`.
  */
 export async function createBackup(opts: CreateBackupOptions): Promise<{
