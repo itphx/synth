@@ -8,7 +8,7 @@ export type { ContentCategory, ClassifyRequest, ClassifyResult } from './content
 
 export { DecisionContentClassifier, DECISION_CATEGORY_QUESTION_ID } from './decision-content-classifier.js';
 
-export { DictionaryStore, DICTIONARY_LANGUAGES } from './dictionary-store.js';
+export { DictionaryStore, DICTIONARY_LANGUAGES, DICTIONARY_MAX_KEYWORDS, DICTIONARY_MAX_TOOLS } from './dictionary-store.js';
 export type { StoredDictionary, DictionaryLanguage } from './dictionary-store.js';
 
 export { ProviderPool } from './provider-pool.js';

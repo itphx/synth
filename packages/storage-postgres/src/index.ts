@@ -41,7 +41,8 @@ export type { BuildPostgresContextOptions } from './storage-context.js';
 
 // Группы портов (владелец каждого файла — один агент волны реализации).
 export { notImplementedPort } from './ports/stub.js';
-export type { PortDeps } from './ports/deps.js';
+export type { PortDeps, CoreSyncDeps } from './ports/deps.js';
+export { resolveCoreSyncDeps, POSTGRES_EMPTY_USER_DICTIONARIES_SUBDIR } from './ports/core-sync.js';
 export { buildSessionPorts } from './ports/sessions.js';
 export type { SessionPorts } from './ports/sessions.js';
 export { buildPrincipalPorts } from './ports/principals.js';

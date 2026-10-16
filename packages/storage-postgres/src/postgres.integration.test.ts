@@ -8,14 +8,15 @@
  * прогоняет миграции в ней; `afterEach` удаляет схему (`DROP SCHEMA … CASCADE`).
  *
  * Полный контрактный suite портов (`packages/core/src/storage/contract/*`)
- * подключается следующей волной — когда порты будут реализованы.
+ * прогоняется отдельно против PG — `packages/core/src/storage/contract/postgres.test.ts`
+ * (тот же гейт `SYNTH_TEST_POSTGRES_DSN`).
  */
 
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PostgresStorageNotImplementedError, PostgresStorageSchemaError } from './errors.js';
+import { PostgresStorageSchemaError } from './errors.js';
 import { assertSchemaCurrent, readSchemaVersion, runMigrations } from './migrate.js';
 import { createPostgresConnection, type PostgresConnection } from './pool.js';
 import { createPostgresStorage } from './postgres-storage.js';
@@ -89,14 +90,17 @@ describePg('PostgreSQL-драйвер: smoke (подключение, мигра
     );
   });
 
-  it('createPostgresStorage: применяет схему и собирает контекст (FS-порты + заглушки)', async () => {
+  it('createPostgresStorage: применяет схему и собирает контекст (порты + FS-порты)', async () => {
     const ctx = await createPostgresStorage({ dataDir: DATA_DIR, connectionString: DSN, schema });
     expect(ctx.kind).toBe('postgres');
+    // Реализованные доменные порты отвечают (пустая схема → пустые списки).
+    expect(await ctx.sessions.list()).toEqual([]);
+    expect(await ctx.projects.list()).toEqual([]);
+    expect(await ctx.eventBindings.list()).toEqual([]);
     // FS/package-bound порты — файловые реализации.
     expect(typeof ctx.blobs.read).toBe('function');
     expect(typeof ctx.skills.listNames).toBe('function');
-    // Прочие порты — заглушки PG с понятной ошибкой.
-    expect(() => ctx.sessions.list()).toThrow(PostgresStorageNotImplementedError);
+    expect(typeof ctx.contextFiles.listAllFiles).toBe('function');
     // PROP-032: соединение удерживается в контексте — закрываем явно.
     await ctx.close?.();
   });

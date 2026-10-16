@@ -16,6 +16,21 @@ ADR-097): реализация доменных портов `StorageContext` (`
 - Публичная функция — `createPostgresStorage(config): Promise<StorageContext>`
   (форма — PROP-032 §«Решение»). Как и `createStorageContext`, она **не** создаёт
   модульных синглтонов: каждый вызов возвращает собранный контекст.
+- `@itphx/synth-shared` — **обычная зависимость** (`dependencies`): доменные типы
+  и утилиты (`Session`/`Message`/`Project`/`ProfileData`, `generateId`/`nowISO`,
+  `normalizeIconKey`/`normalizeColorKey`, `makeTextPart`/`buildContentFromParts`,
+  реестры/константы `SKILL_NAME_*`, `MCP_REGISTRY_SCHEMA_VERSION`, `GlobalRole`)
+  импортируются **статически**. Цикла нет: `shared → driver`.
+- **Синхронные данные core — инъекция, а не обход `exports`-карты.** Sync-геттеры
+  портов (`secretPatterns`/`protectedPaths`/`dictionaries`) работают на горячем
+  пути и не могут ждать I/O или ленивый `import()`. Core собирает эти значения у
+  себя (`DEFAULT_PATTERNS`, `definitions/protected-paths.json`, системный
+  `DictionaryStore`) в `packages/core/src/storage/storage-context.ts` и передаёт
+  драйверу в конфиге (поле `coreSync` → `PortDeps.coreSync`); при прямом вызове
+  `createPostgresStorage` (контрактный suite, внешний потребитель) тот же набор
+  собирается ленивым `import('@itphx/synth-core')` в `ports/core-sync.ts`.
+  `createRequire`/`import.meta.resolve`-трюки и зависимость от версии Node
+  запрещены.
 - `@itphx/synth-core` — **`peerDependencies` + `devDependencies`**. Импорт типов
   портов/`StorageContext` — только `import type`. Это разрывает цикл core ↔ драйвер:
   core держит драйвер в `optionalDependencies` и подключает его динамическим
@@ -24,7 +39,9 @@ ADR-097): реализация доменных портов `StorageContext` (`
   `contextFiles`, `blobs`) отдаются **файловыми реализациями** `core`
   (`createFileStorage`), поэтому `storage-context.ts` импортирует `core` рантаймом.
   Импорт core — только за файловыми портами; порты БД тянутся core'ом динамически
-  (`import()` по строке), статической зависимости core от драйвера нет.
+  (`import()` по строке), статической зависимости core от драйвера нет. Runtime-хелперы
+  core (доменные ошибки, крипто) в остальных портах грузятся **ленивым**
+  `import()` внутри async-методов.
 - `pg` — **`optionalDependencies`**: отсутствие драйвера не ломает импорт модуля
   (`pool.ts` подключает его лениво, `import()` внутри функции), а standalone/локальный
   home не тянут БД. Типы — `@types/pg` в `devDependencies`.
@@ -32,9 +49,10 @@ ADR-097): реализация доменных портов `StorageContext` (`
 ## Текущий статус
 
 Волна **3a — инфраструктура драйвера** (готова): пул/подключение, схема БД и
-миграции, сборка контекста. Волна **3b — каркас портов** (эта задача): реализация
-портов разложена по четырём независимым файлам-группам `src/ports/*` (сейчас —
-заглушки). Реализация доменных портов поверх SQL — следующая волна.
+миграции, сборка контекста. Волна **3b — порты** (готова): все доменные порты
+`StorageContext` реализованы поверх SQL и проходят контрактный suite
+(`packages/core/src/storage/contract/postgres.test.ts` → 56/56 против
+dev-Postgres). Проводка домена — через `storage.backend = postgres`.
 
 - **Подключение (`pool.ts`).** `createPostgresConnection(config)` → `PostgresConnection`
   с ленивым `pg.Pool` (модуль `pg` не required на импорте). Дефолты: `poolMax=10`
@@ -73,13 +91,37 @@ ADR-097): реализация доменных портов `StorageContext` (`
 
   Общий тип зависимостей — `PortDeps` (`ports/deps.ts`): `connection` (живой
   `PostgresConnection`), `dataDir`, `secretKey?`, `env?`, `systemDictionariesDir?`,
-  `contextUserDataDir?`. Общая заглушка `notImplementedPort(name)` — `ports/stub.ts`.
-  `buildPostgresStorageContext` собирает контекст как
+  `contextUserDataDir?`. `buildPostgresStorageContext` собирает контекст как
   `{ kind:'postgres', ...buildSessionPorts, ...buildPrincipalPorts,
   ...buildEventPorts, ...buildContentPorts, skills/contextFiles/blobs, close }`;
   `skills`/`contextFiles`/`blobs` — **файловые** реализации `createFileStorage`
-  (FS/package-bound, см. исключение выше). Сейчас все четыре группы отдают
-  заглушки, бросающие `PostgresStorageNotImplementedError` с именем порта.
+  (FS/package-bound, см. исключение выше). `ports/stub.ts` (`notImplementedPort`)
+  оставлен как исторический экспорт, но портами не используется.
+- **Схема — источник истины.** Правили `001-init` **на месте** (схема нигде не
+  развёрнута; версия остаётся 1, миграции `002` нет). Выравнивание по домену:
+  - **FK без референсной целостности сняты** (каскад — в коде, как в файловой
+    реализации): `event_api_keys.binding_id` (чистит `removeByBinding`) и
+    `webhook_deliveries.subscription_id` (чистит `webhooks.remove` в транзакции).
+    Колонки и индексы по ним оставлены; «заглушки-родители»
+    (`_ensureBinding`/`_ensureSubscription`) убраны.
+  - `event_journal` — колонки `identity jsonb`/`dedup_key text`/`error text`/
+    `principal_id text`; `list()` собирает `EventJournalEntry` из колонок (полная
+    запись в `payload` больше не хранится).
+  - `identity_claims` — колонки `chat_key text`/`principal_id text NOT NULL`;
+    `principalId` персистится напрямую (не склейкой `provider:external_id`).
+  - `profiles.interview_completed` — **nullable** (без `NOT NULL DEFAULT false`):
+    отличаем «поле отсутствует (legacy)» от «явный false»; чтение воспроизводит
+    `??`-семантику `FileProfileStore._deserialize` + backfill метки `[ИНТЕРВЬЮ]`
+    (время завершения legacy — `updated_at`).
+  - `session_references` — суррогатный `id text PK` + `ordinal int NOT NULL`
+    (индекс `(session_id, ordinal)`); **дубликаты одной `ref_session_id`
+    разрешены** (разные диапазоны), `addReference` — append, `getReferences` —
+    `ORDER BY ordinal`, `removeReference` удаляет **все** совпадения
+    (паритет с file/memory).
+  - `ssh_keys` — `UNIQUE INDEX (lower(name))`: код делает предпроверку, БД
+    гарантирует инвариант и закрывает гонку.
+  - `projects` — нормализация `icon`/`color` **при чтении**
+    (`normalizeIconKey`/`normalizeColorKey`), паритет с `ProjectStore.load`.
 - **Жизненный цикл соединения.** `createPostgresStorage` применяет/проверяет схему,
   удерживает соединение в `StorageContext` (`close?()` закрывает пул) и **не**
   закрывает пул сам — ресурсы освобождает домен на graceful shutdown. Контрактный
@@ -93,7 +135,22 @@ ADR-097): реализация доменных портов `StorageContext` (`
   `migration_markers`, `documents`, события (`event_*`/`identity_claims`/`dedup`),
   `schedules`/`jobs`, `webhooks`/`webhook_deliveries` (`secret_enc bytea`), `ssh_keys`/
   `ssh_key_agents`, `service_keys`, `mcp_registry`, `skill_bundles`, `maintenance_audit`.
-  Все времена — `timestamptz`; FK — только внутри инстанса (по `user_id`/`owner_id` FK нет).
+  Все времена — `timestamptz`; FK — только внутри инстанса (по `user_id`/`owner_id` FK нет);
+  FK событийно-зависимых таблиц, мешавшие паритету, сняты — см. «Схема — источник истины».
+
+## Известные расхождения / ограничения
+
+- **Sync-геттеры — процесс-локальный кэш.** `secretPatterns`/`protectedPaths`/
+  `dictionaries` читаются синхронно из памяти; override прогревается из БД
+  best-effort при сборке контекста и поддерживается **write-through** при
+  мутациях. Правки override **другим процессом/инстансом** видны только после
+  рестарта (кэш не инвалидируется по БД); короткое окно сразу после старта может
+  отдать системный дефолт до завершения прогрева. Override хранится в
+  `settings(key text PK, value jsonb)` — это соответствует замыслу порта
+  («секции — в ключ-значение сторе»).
+- **Retention `dedup` не реализован**: в порту `DedupRepository` нет метода
+  prune (`seed` — no-op, durable-бэкенд хранит ключи сам), поэтому таблица
+  `dedup` растёт без очистки.
 
 ## Критерий приёмки
 
@@ -118,12 +175,12 @@ workspace) остаются file-специфичными ([ADR-091](../../docs/
   `SYNTH_TEST_POSTGRES_DSN`: без него — `describe.skip`. С DSN — прогон против
   dev-Postgres: каждый тест создаёт **уникальную схему** (`synth_test_<random>`) +
   миграции, `afterEach` — `DROP SCHEMA … CASCADE`. Проверяет подключение,
-  применение/идемпотентность миграций, fail-closed «версия новее». **Контрактный
-  прогон портов** живёт в core — `packages/core/src/storage/contract/postgres.test.ts`
-  (тот же гейт `SYNTH_TEST_POSTGRES_DSN`, уникальная схема на каждый `make()`):
-  сейчас проходят FS/package-bound блоки (`skills`/`contextFiles`/`blobs`),
-  остальные 24 блока падают `PostgresStorageNotImplementedError` (порты ждут
-  реализации — волна 3b); по мере наполнения групп `src/ports/*` блоки зеленеют.
+  применение/идемпотентность миграций, fail-closed «версия новее», сборка
+  контекста (реализованные порты отвечают, FS/package-bound — файловые).
+  **Контрактный прогон портов** живёт в core — `packages/core/src/storage/contract/postgres.test.ts`
+  (тот же гейт `SYNTH_TEST_POSTGRES_DSN`, уникальная схема на каждый `make()`,
+  `vi.setConfig({ testTimeout: 30000 })` — миграции под параллельной нагрузкой):
+  проходят **все 56** блоков (27 портов).
   Пример: `SYNTH_TEST_POSTGRES_DSN="postgres://synth:<pw>@127.0.0.1:5432/synth_test" pnpm --filter @itphx/synth-storage-postgres test`.
 - Сборка: `pnpm --filter @itphx/synth-storage-postgres build` (`tsc -p tsconfig.build.json`);
   порядок релизной сборки — `shared → core → storage-postgres → ui → sdk → synth`

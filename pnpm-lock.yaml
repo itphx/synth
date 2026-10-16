@@ -162,6 +162,10 @@ importers:
         version: 5.9.3
 
   packages/storage-postgres:
+    dependencies:
+      '@itphx/synth-shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       '@itphx/synth-core':
         specifier: workspace:*

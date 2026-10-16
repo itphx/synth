@@ -103,14 +103,16 @@ CREATE INDEX messages_content_trgm_idx  ON messages USING gin (content gin_trgm_
 
 -- ── Child-таблицы сессий ──────────────────────────────────────────────────
 CREATE TABLE session_references (
+  id             text PRIMARY KEY,
   session_id     text NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   ref_session_id text NOT NULL,
   label          text NOT NULL,
   message_range  jsonb NOT NULL,
   auto_summary   text,
-  created_at     timestamptz NOT NULL,
-  PRIMARY KEY (session_id, ref_session_id)
+  ordinal        integer NOT NULL,
+  created_at     timestamptz NOT NULL
 );
+CREATE INDEX session_references_session_id_idx ON session_references (session_id, ordinal);
 
 CREATE TABLE checkpoints (
   id         text PRIMARY KEY,
@@ -172,7 +174,9 @@ CREATE TABLE profiles (
   is_active              boolean NOT NULL DEFAULT true,
   preferences            jsonb NOT NULL DEFAULT '{}'::jsonb,
   notes                  text NOT NULL DEFAULT '',
-  interview_completed    boolean NOT NULL DEFAULT false,
+  -- Nullable: отличаем «поле отсутствует (legacy-профиль)» от «явный false».
+  -- Backfill метки [ИНТЕРВЬЮ] — в порту при чтении (паритет с FileProfileStore).
+  interview_completed    boolean,
   interview_completed_at timestamptz,
   display_name           text,
   created_at             timestamptz NOT NULL,
@@ -245,7 +249,10 @@ CREATE INDEX event_routes_priority_idx ON event_routes (priority DESC);
 
 CREATE TABLE event_api_keys (
   id                    text PRIMARY KEY,
-  binding_id            text NOT NULL REFERENCES event_bindings(id) ON DELETE CASCADE,
+  -- FK на event_bindings НЕТ: каскад реализован в коде (removeByBinding),
+  -- как в файловой реализации (bindings.json и api-keys.json — независимые
+  -- сторы, референсной целостности БД не требуют). Колонка и индекс — остаются.
+  binding_id            text NOT NULL,
   label                 text NOT NULL,
   description           text,
   secret_hash           text NOT NULL,
@@ -262,24 +269,31 @@ CREATE UNIQUE INDEX event_api_keys_secret_hash_uq ON event_api_keys (secret_hash
 CREATE INDEX        event_api_keys_binding_id_idx ON event_api_keys (binding_id);
 
 CREATE TABLE event_journal (
-  seq      bigserial PRIMARY KEY,
-  id       text NOT NULL,
-  ts       timestamptz NOT NULL,
-  source   text,
-  type     text,
-  decision jsonb,
-  key_id   text,
-  payload  jsonb
+  seq          bigserial PRIMARY KEY,
+  id           text NOT NULL,
+  ts           timestamptz NOT NULL,
+  source       text,
+  type         text,
+  decision     jsonb,
+  key_id       text,
+  identity     jsonb,
+  dedup_key    text,
+  error        text,
+  principal_id text,
+  payload      jsonb
 );
 CREATE INDEX event_journal_ts_idx ON event_journal (ts DESC);
 
 CREATE TABLE identity_claims (
-  code        text PRIMARY KEY,
-  provider    text NOT NULL,
-  external_id text NOT NULL,
-  created_at  timestamptz NOT NULL,
-  expires_at  timestamptz NOT NULL,
-  consumed_at timestamptz
+  code         text PRIMARY KEY,
+  provider     text NOT NULL,
+  external_id  text NOT NULL,
+  chat_key     text,
+  -- Полный principalId отправителя (не восстанавливается склейкой provider:id).
+  principal_id text NOT NULL,
+  created_at   timestamptz NOT NULL,
+  expires_at   timestamptz NOT NULL,
+  consumed_at  timestamptz
 );
 
 CREATE TABLE dedup (
@@ -348,7 +362,10 @@ CREATE UNIQUE INDEX webhooks_label_uq ON webhooks (lower(label));
 CREATE TABLE webhook_deliveries (
   seq             bigserial PRIMARY KEY,
   id              text NOT NULL,
-  subscription_id text NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+  -- FK на webhooks НЕТ: каскад реализован в коде (webhooks.remove чистит
+  -- доставки отвязанной подписки), как у файловой реализации (deliveries.jsonl —
+  -- отдельный журнал). Колонка и индекс — остаются.
+  subscription_id text NOT NULL,
   event_type      text NOT NULL,
   status          text NOT NULL,
   attempts        integer NOT NULL DEFAULT 0,
@@ -369,6 +386,9 @@ CREATE TABLE ssh_keys (
   created_at     timestamptz NOT NULL,
   updated_at     timestamptz
 );
+-- Уникальность имени (регистронезависимо): код по-прежнему делает предпроверку,
+-- но БД гарантирует инвариант и закрывает гонку.
+CREATE UNIQUE INDEX ssh_keys_name_uq ON ssh_keys (lower(name));
 
 CREATE TABLE ssh_key_agents (
   key_id   text NOT NULL REFERENCES ssh_keys(id) ON DELETE CASCADE,

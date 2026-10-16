@@ -24,6 +24,8 @@ import {
   type PostgresConnectionConfig,
 } from './pool.js';
 import { DEFAULT_SCHEMA, assertValidSchema } from './schema.js';
+import { resolveCoreSyncDeps } from './ports/core-sync.js';
+import type { CoreSyncDeps } from './ports/deps.js';
 import { buildPostgresStorageContext } from './storage-context.js';
 
 // Реэкспорт ошибок драйвера (в т.ч. для обратной совместимости импортов).
@@ -37,6 +39,13 @@ export interface PostgresStorageConfig extends StorageContextConfig, PostgresCon
   schema?: string;
   /** Применять миграции схемы при сборке контекста (по умолчанию — `true`). */
   migrate?: boolean;
+  /**
+   * ADR-097/PROP-032: синхронные данные/хелперы core (`secretPatterns`/
+   * `protectedPaths`/`dictionaries`), инъектируемые core'ом
+   * (`packages/core/src/storage/storage-context.ts`). Не заданы (прямой вызов
+   * фабрики) — драйвер собирает их ленивым `import('@itphx/synth-core')`.
+   */
+  coreSync?: CoreSyncDeps;
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -118,5 +127,12 @@ export async function createPostgresStorage(config: PostgresStorageConfig): Prom
     systemDictionariesDir: config.systemDictionariesDir,
     contextUserDataDir: config.contextUserDataDir,
     connection: conn,
+    // Инъекция из core (штатный путь) либо ленивый `import()` (прямой вызов).
+    coreSync:
+      config.coreSync ??
+      (await resolveCoreSyncDeps({
+        dataDir: config.dataDir,
+        systemDictionariesDir: config.systemDictionariesDir,
+      })),
   });
 }

@@ -17,7 +17,28 @@
  * `buildPostgresStorageContext` (герметичность тестов и переключаемых схем).
  */
 
+import type { DictionaryRepository, ProtectedPathsPolicy, SecretPattern } from '@itphx/synth-core';
 import type { PostgresConnection } from '../pool.js';
+
+/**
+ * Синхронные данные/хелперы `@itphx/synth-core`, нужные sync-геттерам портов
+ * (`secretPatterns`/`protectedPaths`/`dictionaries`).
+ *
+ * Sync-геттеры вызываются на горячем пути (сборка промпта, детекция секретов,
+ * маршрутизация) и не могут ждать I/O или ленивый `import()`. Core **инъектирует**
+ * их в конфиг драйвера (`packages/core/src/storage/storage-context.ts`) —
+ * это заменяет прежний обход `exports`-карты core; при прямом вызове
+ * `createPostgresStorage` (контрактный suite, внешний потребитель) драйвер
+ * собирает тот же набор ленивым `import('@itphx/synth-core')` (`core-sync.ts`).
+ */
+export interface CoreSyncDeps {
+  /** Дефолтные паттерны детекции секретов в сериализуемой форме (core `DEFAULT_PATTERNS`). */
+  secretPatterns: SecretPattern[];
+  /** Системный base политики защищённых путей (core `loadProtectedPaths`, без override). */
+  protectedPathsBase: ProtectedPathsPolicy;
+  /** Системный источник словарей (core `DictionaryStore`, реализация `DictionaryRepository`). */
+  systemDictionaries: DictionaryRepository;
+}
 
 /** Общие зависимости портов: соединение + пути/ключи, не привязанные к порту. */
 export interface PortDeps {
@@ -33,4 +54,6 @@ export interface PortDeps {
   systemDictionariesDir?: string;
   /** Корень пользовательских промптов/ролей (по умолчанию `{dataDir}/context`). */
   contextUserDataDir?: string;
+  /** ADR-097/PROP-032: инъекция sync-данных core (см. `CoreSyncDeps`). */
+  coreSync: CoreSyncDeps;
 }

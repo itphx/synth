@@ -59,7 +59,11 @@ import { FileProfileStore } from './profile-store.js';
 import { RuntimeSettingsStore } from './runtime-settings.js';
 import { DefaultsStore } from './defaults-store.js';
 import { SecretPatternStore } from '../engine/gateway/secret-pattern-store.js';
+import type { SecretPattern } from '../engine/gateway/secret-pattern-store.js';
+import { DEFAULT_PATTERNS } from '../engine/gateway/secret-detector.js';
 import { ProtectedPathsStore } from '../engine/security/protected-paths-store.js';
+import { loadProtectedPaths } from '../engine/security/protected-paths.js';
+import type { ProtectedPathsPolicy } from '../engine/security/protected-paths.js';
 import { DictionaryStore } from '../engine/router/dictionary-store.js';
 import { McpRegistryStore } from './mcp-registry-store.js';
 import { ServiceApiKeyStore } from './service-api-key-store.js';
@@ -235,11 +239,30 @@ export interface PostgresStorageDriverConfig {
   schema?: string;
   /** Пароль БД (инвариант 13: не из config.yaml; env/файл). */
   password?: string;
+  /**
+   * ADR-097/PROP-032: инъекция синхронных данных core в драйвер — sync-геттеры
+   * портов (`secretPatterns`/`protectedPaths`/`dictionaries`) не могут ждать I/O
+   * или ленивый `import()`. Core собирает значения у себя (ассеты/реестры) и
+   * передаёт драйверу вместо обхода его `exports`-карты.
+   */
+  coreSync?: PostgresCoreSyncDeps;
+}
+
+/** Синхронные данные core, инъектируемые в драйвер (форма — `PortDeps` драйвера). */
+export interface PostgresCoreSyncDeps {
+  /** Дефолтные паттерны детекции секретов (`DEFAULT_PATTERNS`, `RegExp.source` → строка). */
+  secretPatterns: SecretPattern[];
+  /** Системный base политики защищённых путей (`loadProtectedPaths`, без override). */
+  protectedPathsBase: ProtectedPathsPolicy;
+  /** Системный источник словарей (`DictionaryStore`). */
+  systemDictionaries: DictionaryRepository;
 }
 
 /** Локальный тип фабрики драйвера (пакет опционален и не резолвится на этапе типов). */
 interface PostgresStorageDriverModule {
   createPostgresStorage(config: PostgresStorageDriverConfig): Promise<StorageContext>;
+  /** Каталог-заглушка пользовательских словарей драйвера (общий с его `resolveCoreSyncDeps`). */
+  POSTGRES_EMPTY_USER_DICTIONARIES_SUBDIR?: string;
 }
 
 /**
@@ -413,8 +436,38 @@ export async function createPostgresStorage(config: StorageContextConfig): Promi
     ...(Object.keys(pool).length > 0 ? { pool } : {}),
     ...(pg?.schema ? { schema: pg.schema } : {}),
     ...(config.postgresPassword ? { password: config.postgresPassword } : {}),
+    // ADR-097/PROP-032: core собирает sync-данные портов (ассеты/реестры) сам и
+    // инъектирует их драйверу — тот не обходит `exports`-карту core.
+    coreSync: buildPostgresCoreSyncDeps(mod, config),
   };
   return mod.createPostgresStorage(driverConfig);
+}
+
+/**
+ * PROP-032/ADR-097: собрать синхронные данные core для драйвера (инъекция).
+ *
+ * Sync-геттеры портов драйвера (`secretPatterns`/`protectedPaths`/`dictionaries`)
+ * работают на горячем пути и не могут ждать I/O: core отдаёт готовые значения
+ * (дефолтные паттерны детекции, системный base защищённых путей, системный
+ * источник словарей) вместо обхода `exports`-карты со стороны драйвера.
+ */
+function buildPostgresCoreSyncDeps(
+  mod: PostgresStorageDriverModule,
+  config: StorageContextConfig,
+): PostgresCoreSyncDeps {
+  const emptyUserDictionariesSubdir =
+    mod.POSTGRES_EMPTY_USER_DICTIONARIES_SUBDIR ?? 'storage-postgres/no-user-dictionaries';
+  return {
+    secretPatterns: DEFAULT_PATTERNS.map((pattern) => ({
+      type: pattern.type,
+      regex: typeof pattern.regex === 'string' ? pattern.regex : pattern.regex.source,
+    })),
+    protectedPathsBase: loadProtectedPaths({ overridePath: '' }),
+    systemDictionaries: new DictionaryStore(
+      join(config.dataDir, emptyUserDictionariesSubdir),
+      config.systemDictionariesDir,
+    ),
+  };
 }
 
 /**

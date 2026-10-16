@@ -22,6 +22,9 @@
     "test:watch": "vitest",
     "clean": "rm -rf dist"
   },
+  "dependencies": {
+    "@itphx/synth-shared": "workspace:*"
+  },
   "peerDependencies": {
     "@itphx/synth-core": "workspace:*"
   },

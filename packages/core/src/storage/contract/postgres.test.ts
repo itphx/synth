@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, afterEach, describe } from 'vitest';
+import { afterAll, afterEach, describe, vi } from 'vitest';
 import type { ProviderConfig } from '@itphx/synth-shared';
+
+// Схема создаётся + применяются миграции на каждый `make()` под параллельной
+// нагрузкой — первый тест может не уложиться в дефолтные 5 c.
+vi.setConfig({ testTimeout: 30000 });
 
 import {
   createTmpDir,
@@ -50,16 +54,9 @@ import type { StorageContext } from '../storage-context.js';
  * `storage-context.ts` в core): `@itphx/synth-storage-postgres` — опциональная
  * зависимость, статический импорт сломал бы typecheck core без собранного драйвера.
  *
- * Статус блоков (порты БД — следующая волна, сейчас заглушки `notImplementedPort`):
- *   - **проходят** (FS/package-bound порты — файловые реализации внутри драйвера):
- *     `describeSkillRepository` (ctx.skills), `describeContextFileRepository`
- *     (ctx.contextFiles), `describeBlobStore` (ctx.blobs);
- *   - **падают** `PostgresStorageNotImplementedError` (порт ждёт реализации —
- *     волна 3b): sessions, projects, profiles, settings, defaults, secretPatterns,
- *     protectedPaths, dictionaries, providers/models/agents (shared `providers`),
- *     mcpRegistry, serviceKeys, eventApiKeys, eventBindings, eventRoutes,
- *     eventJournal, identityClaims, webhooks, webhookDeliveries, schedules, jobs,
- *     maintenanceAudit, dedup, skillBundles, sshKeys.
+ * Все 27 доменных портов реализованы (волна 3b): контрактные блоки проходят
+ * против живой БД; FS/package-bound порты (`skills`/`contextFiles`/`blobs`) —
+ * файловые реализации внутри драйвера.
  */
 
 const DSN = process.env.SYNTH_TEST_POSTGRES_DSN;

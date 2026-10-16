@@ -59,7 +59,7 @@ export type { SubagentResumeDeps, SubagentResumeOptions, SubagentResumeResult, S
 export { SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS } from './engine/tools/task.js';
 export type { SubagentRetryConfig, SubagentRunConfig } from './engine/tools/task.js';
 
-export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker, DictionaryStore, DICTIONARY_LANGUAGES } from './engine/router/index.js';
+export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker, DictionaryStore, DICTIONARY_LANGUAGES, DICTIONARY_MAX_KEYWORDS, DICTIONARY_MAX_TOOLS } from './engine/router/index.js';
 export type { StoredDictionary, DictionaryLanguage } from './engine/router/index.js';
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
@@ -299,6 +299,7 @@ export {
   EventApiKeyStore,
   EventApiKeyConflictError,
   EVENT_API_KEYS_SCHEMA_VERSION,
+  EVENT_API_KEY_SECRET_PREFIX,
 } from './storage/event-api-key-store.js';
 export type {
   EventApiKeyStoreConfig,
@@ -427,7 +428,7 @@ export type { MaintenanceAuditRecord } from './maintenance/audit.js';
 export { EventRouter } from './engine/events/event-router.js';
 export type { EventRouterDeps } from './engine/events/event-router.js';
 // ADR-089 (claim-flow): одноразовые коды подтверждения владения идентичностью.
-export { IdentityClaimStore, IDENTITY_CLAIMS_SCHEMA_VERSION, IDENTITY_CLAIM_TTL_SEC } from './storage/identity-claim-store.js';
+export { IdentityClaimStore, IDENTITY_CLAIMS_SCHEMA_VERSION, IDENTITY_CLAIM_TTL_SEC, IDENTITY_CLAIM_ALPHABET, IDENTITY_CLAIM_LENGTH } from './storage/identity-claim-store.js';
 export type { IdentityClaimRecord, IdentityClaimStoreConfig } from './storage/identity-claim-store.js';
 // ADR-051/ADR-089: источник дедупа (in-process / файловый межпроцессный).
 export { MemoryDedupStore, FileDedupStore } from './engine/events/dedup-store.js';

@@ -29,7 +29,7 @@ import { createFileStorage } from '@itphx/synth-core';
 import type { StorageContext } from '@itphx/synth-core';
 import type { PostgresConnection } from './pool.js';
 import { buildContentPorts } from './ports/content.js';
-import type { PortDeps } from './ports/deps.js';
+import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPrincipalPorts } from './ports/principals.js';
 import { buildSessionPorts } from './ports/sessions.js';
@@ -48,6 +48,8 @@ export interface BuildPostgresContextOptions {
    * ходят через него; `close()` контекста закрывает пул.
    */
   connection: PostgresConnection;
+  /** ADR-097/PROP-032: синхронные данные/хелперы core (см. `CoreSyncDeps`). */
+  coreSync: CoreSyncDeps;
 }
 
 /** Собрать `StorageContext`: четыре группы портов + файловые FS-порты + `close`. */
@@ -69,6 +71,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     env: opts.env,
     systemDictionariesDir: opts.systemDictionariesDir,
     contextUserDataDir: opts.contextUserDataDir,
+    coreSync: opts.coreSync,
   };
 
   return {
