@@ -2607,7 +2607,7 @@ export const dict = {
   'maintenance.status.checks': 'Проверки',
   'maintenance.status.checksEmpty': 'Проверок пока нет — нажмите «Проверить».',
   'maintenance.schema.title': 'Схема данных',
-  'maintenance.schema.description': 'Применённые и ожидающие миграции схемы данных (ADR-092).',
+  'maintenance.schema.description': 'Применённые и ожидающие миграции схемы данных.',
   'maintenance.schema.applied': 'Применённые миграции',
   'maintenance.schema.pending': 'Ожидающие миграции',
   'maintenance.schema.noneApplied': 'нет',

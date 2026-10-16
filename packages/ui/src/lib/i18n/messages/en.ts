@@ -2298,7 +2298,7 @@ export const dict = {
   'maintenance.status.checks': 'Checks',
   'maintenance.status.checksEmpty': 'No checks yet — press "Check".',
   'maintenance.schema.title': 'Data schema',
-  'maintenance.schema.description': 'Applied and pending data schema migrations (ADR-092).',
+  'maintenance.schema.description': 'Applied and pending data schema migrations.',
   'maintenance.schema.applied': 'Applied migrations',
   'maintenance.schema.pending': 'Pending migrations',
   'maintenance.schema.noneApplied': 'none',
