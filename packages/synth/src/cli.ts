@@ -725,11 +725,12 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
 
-    const { runMigrateCommand } = await import('@itphx/synth-core');
+    const { runMigrateCommand, createFileStorage } = await import('@itphx/synth-core');
     const code = await runMigrateCommand({
       dataDir,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -772,13 +773,14 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
-    const { runBackupCommand } = await import('@itphx/synth-core');
+    const { runBackupCommand, createFileStorage } = await import('@itphx/synth-core');
     const code = await runBackupCommand({
       dataDir,
       out: options.out,
       withSecrets: !!options.withSecrets,
       withWorkspace: !!options.withWorkspace,
       live: !!options.live,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -803,13 +805,14 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
-    const { runRestoreCommand } = await import('@itphx/synth-core');
+    const { runRestoreCommand, createFileStorage } = await import('@itphx/synth-core');
     const code = await runRestoreCommand({
       archive,
       dataDir,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
       noSafetyCopy: options.safetyCopy === false,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -828,13 +831,14 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
-    const { runUninstallCommand } = await import('@itphx/synth-core');
+    const { runUninstallCommand, createFileStorage } = await import('@itphx/synth-core');
     const code = await runUninstallCommand({
       dataDir,
       home: home ?? undefined,
       purge: !!options.purge,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });

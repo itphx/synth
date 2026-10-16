@@ -10,7 +10,9 @@ import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/p
 import { basename, join, resolve, sep } from 'node:path';
 import { atomicWrite, SYNTH_VERSION } from '@itphx/synth-shared';
 import { checkInstanceCompatibility } from '../storage/instance-meta.js';
+import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { runDoctor } from './doctor.js';
+import { recordMaintenanceAudit } from './audit.js';
 import {
   assertArchiveSchemaCompatible,
   readBackupManifest,
@@ -350,6 +352,8 @@ export async function scheduleRestore(opts: {
   archive: string;
   requestedBy?: string;
   safetyCopy?: boolean;
+  /** ADR-092: аудит-журнал обслуживания (best-effort). */
+  audit?: MaintenanceAuditRepository;
 }): Promise<PendingRestoreRequest> {
   const target = _ownedArchivePath(opts.dataDir, opts.archive);
   const validation = await validateRestoreArchive({ dataDir: opts.dataDir, archive: target });
@@ -363,6 +367,12 @@ export async function scheduleRestore(opts: {
   };
   if (opts.requestedBy) request.requestedBy = opts.requestedBy;
   await _writeRestoreRequest(opts.dataDir, request);
+  await recordMaintenanceAudit(opts.audit, {
+    op: 'restore.scheduled',
+    status: 'scheduled',
+    actor: opts.requestedBy,
+    details: { archive: target, requestedAt: request.requestedAt, safetyCopy: request.safetyCopy },
+  });
   return request;
 }
 
@@ -380,11 +390,15 @@ export async function getPendingRestore(dataDir: string): Promise<PendingRestore
 }
 
 /**
- * Отменяет отложенный запрос на восстановление (ADR-091).
+ * Отменяет отложенный запрос на восстановление (ADR-091) и фиксирует событие
+ * `restore.cancelled` в аудит-журнале (ADR-092, best-effort).
  *
  * @returns `true` — запрос был и удалён; `false` — запроса нет.
  */
-export async function cancelPendingRestore(dataDir: string): Promise<boolean> {
+export async function cancelPendingRestore(
+  dataDir: string,
+  audit?: MaintenanceAuditRepository,
+): Promise<boolean> {
   const path = _restoreRequestPath(dataDir);
   try {
     await stat(path);
@@ -392,6 +406,11 @@ export async function cancelPendingRestore(dataDir: string): Promise<boolean> {
     return false;
   }
   await rm(path, { force: true });
+  await recordMaintenanceAudit(audit, {
+    op: 'restore.cancelled',
+    status: 'ok',
+    details: { dataDir: resolve(dataDir) },
+  });
   return true;
 }
 

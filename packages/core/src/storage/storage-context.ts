@@ -26,6 +26,7 @@ import type {
   EventRouteRepository,
   IdentityClaimRepository,
   JobRepository,
+  MaintenanceAuditRepository,
   McpRegistryRepository,
   ProfileRepository,
   ProjectRepository,
@@ -63,6 +64,7 @@ import { WebhookStore } from './webhook-store.js';
 import { WebhookDeliveryStore } from './webhook-delivery-store.js';
 import { ScheduleStore } from './schedule-store.js';
 import { JobStore } from './job-store.js';
+import { MaintenanceAuditStore } from './maintenance-audit-store.js';
 import { FileDedupStore, MemoryDedupStore } from '../engine/events/dedup-store.js';
 import { SkillStore } from './skill-store.js';
 import { SkillBundleStore } from './skill-bundle-store.js';
@@ -83,6 +85,7 @@ import {
   MemoryEventRouteRepository,
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
+  MemoryMaintenanceAuditRepository,
   MemoryMcpRegistryRepository,
   MemoryProfileRepository,
   MemoryProjectRepository,
@@ -132,6 +135,7 @@ export interface StorageContext {
   webhookDeliveries: WebhookDeliveryRepository;
   schedules: ScheduleRepository;
   jobs: JobRepository;
+  maintenanceAudit: MaintenanceAuditRepository;
   dedup: DedupRepository;
   skills: SkillRepository;
   skillBundles: SkillBundleRepository;
@@ -201,6 +205,7 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
       crossProcess: config.scheduleCrossProcess,
     }),
     jobs: new JobStore({ dataDir }),
+    maintenanceAudit: new MaintenanceAuditStore({ dataDir }),
     // ADR-051/ADR-089: источник дедупа — in-process (default) или файловый межпроцессный.
     dedup: config.dedupStore === 'file' ? new FileDedupStore({ dataDir }) : new MemoryDedupStore(),
     skills: new SkillStore({ dataDir }),
@@ -248,6 +253,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     webhookDeliveries: new MemoryWebhookDeliveryRepository(),
     schedules: new MemoryScheduleRepository(),
     jobs: new MemoryJobRepository(),
+    maintenanceAudit: new MemoryMaintenanceAuditRepository(),
     dedup: new MemoryDedupRepository(),
     skills: new MemorySkillRepository(),
     skillBundles: new MemorySkillBundleRepository(),

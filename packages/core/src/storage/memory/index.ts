@@ -31,6 +31,8 @@ export { MemoryWebhookRepository, MemoryWebhookDeliveryRepository } from './webh
 
 export { MemoryScheduleRepository, MemoryJobRepository } from './scheduler.js';
 
+export { MemoryMaintenanceAuditRepository } from './audit.js';
+
 export {
   MemorySkillRepository,
   MemorySkillBundleRepository,

@@ -14,6 +14,7 @@ import {
   describeEventRouteRepository,
   describeIdentityClaimRepository,
   describeJobRepository,
+  describeMaintenanceAuditRepository,
   describeMcpRegistryRepository,
   describeProfileRepository,
   describeProjectRepository,
@@ -42,6 +43,7 @@ import { IdentityClaimStore } from '../identity-claim-store.js';
 import { FileDedupStore } from '../../engine/events/dedup-store.js';
 import { ScheduleStore } from '../schedule-store.js';
 import { JobStore } from '../job-store.js';
+import { MaintenanceAuditStore } from '../maintenance-audit-store.js';
 import { ServiceApiKeyStore } from '../service-api-key-store.js';
 import { SSHKeyStore } from '../ssh-key-store.js';
 import { WebhookStore } from '../webhook-store.js';
@@ -119,6 +121,17 @@ describe('контрактные тесты файловых реализаци�
   describeJobRepository('JobStore → JobRepository', async () => ({
     repo: new JobStore({ dataDir: await tmp() }),
   }));
+
+  describeMaintenanceAuditRepository(
+    'MaintenanceAuditStore → MaintenanceAuditRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new MaintenanceAuditStore({ dataDir: dir }),
+        filePath: join(dir, 'audit', 'maintenance.jsonl'),
+      };
+    },
+  );
 
   describeServiceKeyRepository('ServiceApiKeyStore → ServiceKeyRepository', async () => ({
     repo: new ServiceApiKeyStore({ dataDir: await tmp() }),

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
 import { runUninstallCommand } from './uninstall.js';
 
 describe('runUninstallCommand (ADR-092)', () => {
@@ -138,5 +139,42 @@ describe('runUninstallCommand (ADR-092)', () => {
     expect(out).not.toContain('credentials.json');
     // Файлы home остались на диске.
     expect(await exists(join(home, 'config.yaml'))).toBe(true);
+  });
+
+  it('--purge --yes пишет uninstall.purge до удаления (ADR-092)', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+    const logs: string[] = [];
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purge: true,
+      yes: true,
+      audit,
+      log: (m) => logs.push(m),
+    });
+
+    expect(code).toBe(0);
+    expect(await exists(dataDir)).toBe(false);
+    const list = await audit.list();
+    expect(list).toHaveLength(1);
+    const e = list[0]!;
+    expect(e.op).toBe('uninstall.purge');
+    expect(e.status).toBe('ok');
+    expect(e.actor).toBe('cli');
+    expect(e.details).toMatchObject({ dataDir, sessions: 2, projects: 1 });
+    expect(typeof e.details?.sizeBytes).toBe('number');
+
+    // Вывод явно предупреждает, что запись удаляется вместе с каталогом.
+    const out = logs.join('\n');
+    expect(out).toContain('uninstall.purge');
+    expect(out).toContain('внешний audit-sink');
+  });
+
+  it('--purge без --yes не пишет событие', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+    const code = await runUninstallCommand({ dataDir, purge: true, audit, log: () => {}, error: () => {} });
+
+    expect(code).toBe(1);
+    expect(await audit.list()).toEqual([]);
   });
 });

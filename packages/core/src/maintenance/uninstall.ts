@@ -5,11 +5,15 @@
 // план без записи. Для локального home (ADR-079) после удаления сообщаем, что
 // `{home}/config.yaml`/`profiles.json`/`credentials.json` остаются.
 //
-// Аудит-событие `uninstall.purge` в этой итерации не реализован — остаток ADR-092.
+// Аудит-событие `uninstall.purge` фиксируется до удаления каталога (ADR-092);
+// при `--purge` запись журнала удаляется вместе с каталогом — внешний audit-sink
+// остаётся остатком ADR-092.
 import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readInstanceMeta } from '../storage/instance-meta.js';
+import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { masterKeyFilePath } from '../security/crypto.js';
+import { recordMaintenanceAudit } from './audit.js';
 
 /** Опции CLI-команды `synth uninstall` (ADR-092). */
 export interface UninstallCommandOptions {
@@ -27,6 +31,8 @@ export interface UninstallCommandOptions {
   log?: (msg: string) => void;
   /** Канал ошибок (по умолчанию `console.error`). */
   error?: (msg: string) => void;
+  /** ADR-092: аудит-журнал обслуживания (best-effort). */
+  audit?: MaintenanceAuditRepository;
 }
 
 /** Сводка каталога данных (ADR-092): что сохраняется/будет удалено. */
@@ -200,6 +206,26 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
         'Если они нужны — скопируйте их заранее.',
     );
   }
+
+  // ADR-092: аудит-событие фиксируется ДО удаления каталога — журнал лежит
+  // внутри удаляемого дерева (`{dataDir}/audit/maintenance.jsonl`).
+  await recordMaintenanceAudit(opts.audit, {
+    op: 'uninstall.purge',
+    status: 'ok',
+    actor: 'cli',
+    details: {
+      dataDir,
+      sessions: summary.sessions,
+      projects: summary.projects,
+      sizeBytes: summary.bytes,
+    },
+  });
+  log('');
+  log(`Аудит-событие uninstall.purge записано в ${join(dataDir, 'audit', 'maintenance.jsonl')}`);
+  log(
+    '⚠️ При --purge запись журнала удаляется вместе с каталогом данных; для сохранности ' +
+      'аудита вне инстанса нужен внешний audit-sink (остаток ADR-092).',
+  );
 
   try {
     await rm(dataDir, { recursive: true, force: true });

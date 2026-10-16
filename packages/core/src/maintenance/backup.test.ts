@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
+import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
 import { listTarGz, readFileFromTarGz } from './archive.js';
 import { createBackup, safetyCopyPath, type BackupManifest } from './backup.js';
 
@@ -160,5 +162,61 @@ describe('createBackup', () => {
     expect(safetyCopyPath(dataDir, 'pre-restore', now)).toMatch(
       /\/backups\/synth-pre-restore-\d{8}-\d{6}\.tar\.gz$/,
     );
+  });
+
+  it('успех пишет backup.created (actor, details, version) — ADR-092', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+    const out = join(tmpDir, 'audit-ok.tar.gz');
+
+    await createBackup({ dataDir, out, withSecrets: true, live: true, audit, actor: 'cli' });
+
+    const list = await audit.list();
+    expect(list).toHaveLength(1);
+    const e = list[0]!;
+    expect(e.op).toBe('backup.created');
+    expect(e.status).toBe('ok');
+    expect(e.actor).toBe('cli');
+    expect(e.version).toBeTruthy();
+    expect(e.details).toMatchObject({
+      name: 'audit-ok.tar.gz',
+      withSecrets: true,
+      withWorkspace: false,
+      live: true,
+      dataDir,
+    });
+    expect(typeof e.details?.bytes).toBe('number');
+    expect(typeof e.details?.entries).toBe('number');
+  });
+
+  it('ошибка бэкапа пишет backup.failed и пробрасывается — ADR-092', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+    // `out` под файлом-родителем → mkdir пути архива падает.
+    const blocker = join(tmpDir, 'blocker');
+    await writeFile(blocker, 'x', 'utf-8');
+
+    await expect(
+      createBackup({ dataDir, out: join(blocker, 'x.tar.gz'), audit, actor: 'cli' }),
+    ).rejects.toThrow();
+
+    const list = await audit.list();
+    expect(list.map((e) => e.op)).toEqual(['backup.failed']);
+    expect(list[0]!.status).toBe('failed');
+    expect(list[0]!.error).toBeTruthy();
+  });
+
+  it('ошибка аудит-порта не ломает бэкап (best-effort) — ADR-092', async () => {
+    const audit: MaintenanceAuditRepository = {
+      append: async () => {
+        throw new Error('audit down');
+      },
+      list: async () => [],
+      clear: async () => 0,
+    };
+    const out = join(tmpDir, 'robust.tar.gz');
+
+    const result = await createBackup({ dataDir, out, audit });
+
+    expect(result.bytes).toBeGreaterThan(0);
+    await expect(stat(out)).resolves.toBeTruthy();
   });
 });

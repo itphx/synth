@@ -49,3 +49,5 @@ export * from './decision.js';
 export * from './service-keys.js';
 // ADR-052 (этап II): исходящие webhooks — типы и матчер событий — re-exported from webhooks.ts
 export * from './webhooks.js';
+// ADR-092 (остаток): аудит-журнал обслуживания инстанса — re-exported from maintenance.ts
+export * from './maintenance.js';

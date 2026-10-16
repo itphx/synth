@@ -48,6 +48,10 @@ export type { WebhookRepository } from './webhook-repository.js';
 export type { WebhookDeliveryRepository } from './webhook-delivery-repository.js';
 export type { ScheduleRepository } from './schedule-repository.js';
 export type { JobRepository } from './job-repository.js';
+export type {
+  MaintenanceAuditRepository,
+  MaintenanceAuditListOptions,
+} from './maintenance-audit-repository.js';
 export type { DedupRepository } from './dedup-repository.js';
 export type { SecretPatternRepository } from './secret-pattern-repository.js';
 export type { ProtectedPathsRepository } from './protected-paths-repository.js';

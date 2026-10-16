@@ -1062,10 +1062,12 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runMigrateCommand } = await import('./maintenance/migrate.js');
+    const { createFileStorage } = await import('./storage/storage-context.js');
     const code = await runMigrateCommand({
       dataDir,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -1109,12 +1111,14 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runBackupCommand } = await import('./maintenance/backup.js');
+    const { createFileStorage } = await import('./storage/storage-context.js');
     const code = await runBackupCommand({
       dataDir,
       out: options.out,
       withSecrets: !!options.withSecrets,
       withWorkspace: !!options.withWorkspace,
       live: !!options.live,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -1140,12 +1144,14 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runRestoreCommand } = await import('./maintenance/restore.js');
+    const { createFileStorage } = await import('./storage/storage-context.js');
     const code = await runRestoreCommand({
       archive,
       dataDir,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
       noSafetyCopy: options.safetyCopy === false,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -1165,12 +1171,14 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runUninstallCommand } = await import('./maintenance/uninstall.js');
+    const { createFileStorage } = await import('./storage/storage-context.js');
     const code = await runUninstallCommand({
       dataDir,
       home: home ?? undefined,
       purge: !!options.purge,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
+      audit: createFileStorage({ dataDir }).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });

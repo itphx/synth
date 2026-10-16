@@ -163,7 +163,9 @@
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
   `{dataDir}/maintenance/`), `backup.ts`/`restore.ts` (архив/снятие), `doctor.ts` (`synth doctor`),
   `startup.ts` (`applyPendingRestore` — офлайн-восстановление при старте, `applyStartupMigrations` —
-  авто-миграции со страховочной копией). HTTP-фабрика — `server/routes/maintenance.ts`
+  авто-миграции со страховочной копией), `audit.ts` (`recordMaintenanceAudit` — best-effort запись
+  аудит-событий обслуживания `backup`/`restore`/`migrate`/`uninstall`, ADR-092; порт
+  `MaintenanceAuditRepository`). HTTP-фабрика — `server/routes/maintenance.ts`
   (`createMaintenanceRoutes`).
 - `server/service-scope.ts` — ADR-052 (этап I): enforcement service-key — `requireScope(...)`
   (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkServiceProjectProjection`/
@@ -409,7 +411,7 @@
 - `git/*` — `git-service.ts` (clone/init/fetch/remove/log, `simple-git`) и
   `ssh-env.ts` (`GIT_SSH_COMMAND`, temp-ключ `0600`; passphrase — askpass-скрипт
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (26; `DocumentRepository<T>` —
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (27; `DocumentRepository<T>` —
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   файловые реализации (объявляют `implements` портов — поведение не менялось), in-memory
   `storage/memory/*`, контрактный suite `storage/contract/*` («паспорт» порта, обязателен для любой
@@ -460,7 +462,8 @@
   upper + удаление дефисов/пробелов, одноразовость через `consumedAt`, гонка consume
   сериализуется `AsyncLock`; `provider`/`externalId` — из серверной записи; store
   **инстанс-локальный** — не переносится publish/fork, ADR-042/PROP-081)
-  и `JobStore` (`scheduler/jobs.jsonl`, Job-история, ADR-051);
+  и `JobStore` (`scheduler/jobs.jsonl`, Job-история, ADR-051),
+  `MaintenanceAuditStore` (`audit/maintenance.jsonl`, append-only аудит-журнал обслуживания, ADR-092);
   `migrations.ts` — идемпотентная разовая миграция снапшотов
   `mcpDefaultOn`/`skillsDefaultOn` (маркер `session-scope-snapshots-v1`).
 - `sessions/ephemeral.ts` — ephemeral TTL (ADR-089): `parseTtl`

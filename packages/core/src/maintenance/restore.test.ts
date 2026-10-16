@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { listFilesForArchive, readFileFromTarGz, writeTarGz, type ArchiveEntryMeta } from './archive.js';
 import { computeContentChecksum, createBackup } from './backup.js';
 import { SCHEMA_VERSION } from '../storage/instance-meta.js';
+import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
 import { BackupChecksumError, restoreBackup, runRestoreCommand } from './restore.js';
 
 describe('restore', () => {
@@ -308,6 +309,64 @@ describe('restore', () => {
     await expect(stat(join(target, 'stale.txt'))).rejects.toThrow();
     await expect(stat(join(target, 'backups'))).rejects.toThrow();
     expect(await readFile(join(target, 'sessions', 's1.json'), 'utf-8')).toBe('{"id":"s1"}');
+  });
+});
+
+describe('restoreBackup — аудит-журнал (ADR-092)', () => {
+  let tmpDir: string;
+  let dataDir: string;
+  let archive: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-restore-audit-'));
+    dataDir = join(tmpDir, 'data');
+    archive = join(tmpDir, 'backup.tar.gz');
+    await mkdir(join(dataDir, 'sessions'), { recursive: true });
+    await writeFile(join(dataDir, 'sessions', 's1.json'), '{"id":"s1"}', 'utf-8');
+    await createBackup({ dataDir, out: archive, withSecrets: true });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('успех пишет restore.applied (actor, details)', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+    const target = join(tmpDir, 'audit-target');
+
+    await restoreBackup({ archive, dataDir: target, audit, actor: 'cli' });
+
+    const list = await audit.list();
+    expect(list).toHaveLength(1);
+    const e = list[0]!;
+    expect(e.op).toBe('restore.applied');
+    expect(e.status).toBe('ok');
+    expect(e.actor).toBe('cli');
+    expect(e.details).toMatchObject({ archive, removed: 0, removedWorkspaces: false });
+    expect(typeof e.details?.restored).toBe('number');
+  });
+
+  it('--dry-run не пишет событие (предпросмотр не меняет данные)', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+
+    await restoreBackup({ archive, dataDir: join(tmpDir, 'dry-audit'), dryRun: true, audit });
+
+    expect(await audit.list()).toEqual([]);
+  });
+
+  it('ошибка восстановления пишет restore.failed и пробрасывается', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+    const bad = join(tmpDir, 'not-a-backup.tar.gz');
+    await writeFile(bad, 'без архива', 'utf-8');
+
+    await expect(
+      restoreBackup({ archive: bad, dataDir: join(tmpDir, 'x'), audit }),
+    ).rejects.toThrow();
+
+    const list = await audit.list();
+    expect(list.map((e) => e.op)).toEqual(['restore.failed']);
+    expect(list[0]!.status).toBe('failed');
+    expect(list[0]!.error).toBeTruthy();
   });
 });
 

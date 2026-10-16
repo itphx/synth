@@ -155,6 +155,8 @@ export type {
   WebhookDeliveryRepository,
   ScheduleRepository,
   JobRepository,
+  MaintenanceAuditRepository,
+  MaintenanceAuditListOptions,
   DedupRepository,
   SecretPatternRepository,
   ProtectedPathsRepository,
@@ -190,6 +192,7 @@ export {
   MemoryWebhookDeliveryRepository,
   MemoryScheduleRepository,
   MemoryJobRepository,
+  MemoryMaintenanceAuditRepository,
   MemorySkillRepository,
   MemorySkillBundleRepository,
   MemoryContextFileRepository,
@@ -400,6 +403,12 @@ export type { ScheduleStoreConfig, ScheduleRunUpdate } from './storage/schedule-
 // ADR-051: append-only история срабатываний расписаний.
 export { JobStore } from './storage/job-store.js';
 export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
+// ADR-092 (остаток): аудит-журнал обслуживания инстанса — файловая реализация порта.
+export { MaintenanceAuditStore } from './storage/maintenance-audit-store.js';
+export type { MaintenanceAuditStoreConfig } from './storage/maintenance-audit-store.js';
+// ADR-092: best-effort запись аудит-событий обслуживания из операций.
+export { recordMaintenanceAudit } from './maintenance/audit.js';
+export type { MaintenanceAuditRecord } from './maintenance/audit.js';
 // ADR-089: ядро маршрутизации событий и единый funnel создания сессии.
 export { EventRouter } from './engine/events/event-router.js';
 export type { EventRouterDeps } from './engine/events/event-router.js';

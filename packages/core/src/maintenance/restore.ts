@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { SCHEMA_VERSION } from '../storage/instance-meta.js';
+import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { ArchivePathError, readFileFromTarGz, readTarGz } from './archive.js';
 import {
   computeContentChecksum,
@@ -14,6 +15,7 @@ import {
   safetyCopyPath,
   type BackupManifest,
 } from './backup.js';
+import { recordMaintenanceAudit } from './audit.js';
 
 /** Расхождение контрольной суммы файла при проверке архива (ADR-091). */
 export class BackupChecksumError extends Error {
@@ -51,6 +53,10 @@ export interface RestoreOptions {
   log?: (msg: string) => void;
   /** Канал предупреждений (по умолчанию — тихий; CLI передаёт stderr). */
   warn?: (msg: string) => void;
+  /** ADR-092: аудит-журнал обслуживания (best-effort; ошибка записи не ломает операцию). */
+  audit?: MaintenanceAuditRepository;
+  /** ADR-092: инициатор операции (`'cli'` | `userId`). */
+  actor?: string;
 }
 
 /** Опции CLI-команды `synth restore` (ADR-091). */
@@ -232,6 +238,46 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
   safetyCopyPath?: string;
   manifest: BackupManifest;
 }> {
+  try {
+    const result = await _restoreBackup(opts);
+    // Предпросмотр не меняет данные — событие не фиксируется.
+    if (!opts.dryRun) {
+      await recordMaintenanceAudit(opts.audit, {
+        op: 'restore.applied',
+        status: 'ok',
+        actor: opts.actor,
+        details: {
+          archive: resolve(opts.archive),
+          restored: result.restored,
+          removed: result.removed,
+          ...(result.safetyCopyPath !== undefined ? { safetyCopy: result.safetyCopyPath } : {}),
+          removedWorkspaces: _archiveContainsWorkspaces(result.manifest),
+        },
+      });
+    }
+    return result;
+  } catch (err) {
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'restore.failed',
+      status: 'failed',
+      actor: opts.actor,
+      details: { archive: resolve(opts.archive), dataDir: resolve(opts.dataDir) },
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+/**
+ * Внутренняя реализация восстановления (без аудита); вызывается из
+ * `restoreBackup`, которая фиксирует событие `restore.applied`/`restore.failed`.
+ */
+async function _restoreBackup(opts: RestoreOptions): Promise<{
+  restored: number;
+  removed: number;
+  safetyCopyPath?: string;
+  manifest: BackupManifest;
+}> {
   const log = opts.log ?? ((): void => {});
   const warn = opts.warn ?? ((): void => {});
   const archive = resolve(opts.archive);
@@ -361,6 +407,8 @@ export async function runRestoreCommand(opts: RestoreCommandOptions): Promise<nu
       safetyCopy: !opts.noSafetyCopy,
       log,
       warn: error,
+      audit: opts.audit,
+      actor: opts.actor ?? 'cli',
     });
     return 0;
   } catch (err) {

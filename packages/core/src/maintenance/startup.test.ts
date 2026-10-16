@@ -8,6 +8,7 @@ import { SessionManager } from '../sessions/manager.js';
 import { FileStore } from '../storage/file-store.js';
 import { ProjectStore } from '../storage/project-store.js';
 import { RuntimeSettingsStore } from '../storage/runtime-settings.js';
+import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
 import {
   InstanceDataTooNewError,
   SCHEMA_VERSION,
@@ -112,6 +113,29 @@ describe('applyStartupMigrations (ADR-092)', () => {
     // Схема НЕ обновлена (fail-closed).
     expect((await readInstanceMeta(dataDir))?.schemaVersion).toBe(0);
   });
+
+  it('аудит: реальное применение пишет migrate.applied (trigger startup); no-op — нет', async () => {
+    await writeMeta(0);
+    const audit = new MemoryMaintenanceAuditRepository();
+
+    const result = await applyStartupMigrations({ ...deps(), audit });
+    expect(result.applied).toContain('session-scope-snapshots-v1');
+
+    const list = await audit.list();
+    expect(list.map((e) => e.op)).toEqual(['migrate.applied']);
+    expect(list[0]!.actor).toBe('startup');
+    expect(list[0]!.details).toMatchObject({
+      trigger: 'startup',
+      from: 0,
+      to: SCHEMA_VERSION,
+    });
+    expect(list[0]!.details?.applied).toContain('session-scope-snapshots-v1');
+
+    // Повторный запуск (pending пуст) — событие не пишется.
+    await audit.clear();
+    await applyStartupMigrations({ ...deps(), audit });
+    expect(await audit.list()).toEqual([]);
+  });
 });
 
 describe('applyPendingRestore (ADR-091)', () => {
@@ -182,5 +206,34 @@ describe('applyPendingRestore (ADR-091)', () => {
     // Запрос на месте (fail-closed: оператор исправляет или отменяет).
     expect(await getPendingRestore(dataDir)).not.toBeNull();
     await expect(stat(requestPath())).resolves.toBeTruthy();
+  });
+
+  it('аудит: применение запроса пишет restore.applied (trigger startup, actor startup)', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+    await scheduleRestore({ dataDir, archive });
+
+    const result = await applyPendingRestore({ dataDir, audit });
+
+    expect(result.restored).toBe(true);
+    const list = await audit.list();
+    expect(list.map((e) => e.op)).toEqual(['restore.applied']);
+    expect(list[0]!.actor).toBe('startup');
+    expect(list[0]!.details).toMatchObject({ trigger: 'startup', archive });
+  });
+
+  it('аудит: ошибка восстановления при старте пишет restore.failed (actor startup)', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+    await scheduleRestore({ dataDir, archive });
+    // Портим архив после планирования — восстановление обязано отказать.
+    const buffer = await readFile(archive);
+    buffer[Math.floor(buffer.length / 2)] = (buffer[Math.floor(buffer.length / 2)] as number) ^ 0xff;
+    await writeFile(archive, buffer);
+
+    await expect(applyPendingRestore({ dataDir, audit })).rejects.toThrow();
+
+    const list = await audit.list();
+    expect(list.map((e) => e.op)).toEqual(['restore.failed']);
+    expect(list[0]!.actor).toBe('startup');
+    expect(list[0]!.error).toBeTruthy();
   });
 });

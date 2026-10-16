@@ -18,9 +18,11 @@ import {
   runMigrations,
 } from '../storage/instance-meta.js';
 import type { SettingsRepository } from '../storage/ports/settings-repository.js';
+import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { createBackup, safetyCopyPath } from './backup.js';
 import { cancelPendingRestore, getPendingRestore } from './service.js';
 import { restoreBackup } from './restore.js';
+import { recordMaintenanceAudit } from './audit.js';
 
 /** Опции `applyPendingRestore` (ADR-091). */
 export interface ApplyPendingRestoreOptions {
@@ -28,6 +30,8 @@ export interface ApplyPendingRestoreOptions {
   dataDir: string;
   /** Канал вывода (по умолчанию `console.warn`). */
   log?: (m: string) => void;
+  /** ADR-092: аудит-журнал обслуживания (best-effort). */
+  audit?: MaintenanceAuditRepository;
 }
 
 /**
@@ -51,14 +55,38 @@ export async function applyPendingRestore(
   const request = await getPendingRestore(opts.dataDir);
   if (!request) return { restored: false };
 
-  const result = await restoreBackup({
-    archive: request.archive,
-    dataDir: opts.dataDir,
-    safetyCopy: request.safetyCopy,
-  });
+  let result;
+  try {
+    result = await restoreBackup({
+      archive: request.archive,
+      dataDir: opts.dataDir,
+      safetyCopy: request.safetyCopy,
+    });
+  } catch (err) {
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'restore.failed',
+      status: 'failed',
+      actor: 'startup',
+      details: { archive: request.archive, trigger: 'startup' },
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
   // Восстановление уже сбросило `maintenance/` (возврат к снимку) — вызов
   // идемпотентен и страхует случай, когда запрос сохранился.
   await cancelPendingRestore(opts.dataDir);
+  await recordMaintenanceAudit(opts.audit, {
+    op: 'restore.applied',
+    status: 'ok',
+    actor: 'startup',
+    details: {
+      archive: request.archive,
+      restored: result.restored,
+      removed: result.removed,
+      ...(result.safetyCopyPath !== undefined ? { safetyCopy: result.safetyCopyPath } : {}),
+      trigger: 'startup',
+    },
+  });
   log(
     `⚠️ Обнаружен запрос на восстановление из ${request.archive}: восстановление выполнено ` +
       `(страховочная копия: ${result.safetyCopyPath ?? 'не создавалась'}).`,
@@ -80,6 +108,8 @@ export interface ApplyStartupMigrationsOptions {
   resolveSystemDefaults?: () => Promise<{ mcpDefaultOn?: string[]; skillsDefaultOn?: string[] } | undefined>;
   /** Канал вывода (по умолчанию `console.warn`). */
   log?: (m: string) => void;
+  /** ADR-092: аудит-журнал обслуживания (best-effort). */
+  audit?: MaintenanceAuditRepository;
 }
 
 /**
@@ -149,6 +179,22 @@ export async function applyStartupMigrations(
     `⚠️ Схема данных устарела (${compatibility.currentVersion} → ${compatibility.expectedVersion}): ` +
       `создана страховочная копия ${copyPath}, миграции применены: ${result.applied.join(', ')}`,
   );
+
+  // 5. ADR-092: фиксация применения миграций (только при реальном применении).
+  if (result.applied.length > 0) {
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'migrate.applied',
+      status: 'ok',
+      actor: 'startup',
+      details: {
+        from: compatibility.currentVersion,
+        to: compatibility.expectedVersion,
+        applied: result.applied,
+        safetyCopy: copyPath,
+        trigger: 'startup',
+      },
+    });
+  }
 
   return { applied: result.applied, safetyCopyPath: copyPath };
 }

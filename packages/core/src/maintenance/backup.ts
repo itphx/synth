@@ -4,15 +4,17 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { chmod, mkdir, stat } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { SYNTH_VERSION } from '@itphx/synth-shared';
 import { readInstanceMeta } from '../storage/instance-meta.js';
+import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import {
   listFilesForArchive,
   writeTarGz,
   type ArchiveEntryMeta,
   type ArchiveSource,
 } from './archive.js';
+import { recordMaintenanceAudit } from './audit.js';
 
 /** Манифест архива backup (ADR-091). */
 export interface BackupManifest {
@@ -49,6 +51,10 @@ export interface CreateBackupOptions {
   now?: Date;
   /** Канал вывода (по умолчанию — тихий). */
   log?: (msg: string) => void;
+  /** ADR-092: аудит-журнал обслуживания (best-effort; ошибка записи не ломает бэкап). */
+  audit?: MaintenanceAuditRepository;
+  /** ADR-092: инициатор операции (`'cli'` | `userId`). */
+  actor?: string;
 }
 
 /** Опции CLI-команды `synth backup` (ADR-091). */
@@ -144,7 +150,7 @@ async function _resolveOutPath(out: string | undefined, defaultName: string): Pr
  * `*.lock`; `secrets/` — без `--with-secrets`.
  * Файл архива — `0600`.
  */
-export async function createBackup(opts: CreateBackupOptions): Promise<{
+async function _createBackup(opts: CreateBackupOptions): Promise<{
   path: string;
   manifest: BackupManifest;
   bytes: number;
@@ -225,6 +231,45 @@ export async function createBackup(opts: CreateBackupOptions): Promise<{
 }
 
 /**
+ * Создаёт архив каталога данных (ADR-091) и best-effort фиксирует событие в
+ * аудит-журнале обслуживания (ADR-092): `backup.created` при успехе,
+ * `backup.failed` при ошибке. Ошибка аудит-порта не ломает бэкап.
+ */
+export async function createBackup(opts: CreateBackupOptions): Promise<{
+  path: string;
+  manifest: BackupManifest;
+  bytes: number;
+}> {
+  try {
+    const result = await _createBackup(opts);
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'backup.created',
+      status: 'ok',
+      actor: opts.actor,
+      details: {
+        name: basename(result.path),
+        bytes: result.bytes,
+        entries: result.manifest.entries.length,
+        withSecrets: result.manifest.withSecrets,
+        withWorkspace: result.manifest.withWorkspace,
+        live: !!opts.live,
+        dataDir: resolve(opts.dataDir),
+      },
+    });
+    return result;
+  } catch (err) {
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'backup.failed',
+      status: 'failed',
+      actor: opts.actor,
+      details: { dataDir: resolve(opts.dataDir) },
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+/**
  * Тело CLI-команды `synth backup` (ADR-091): снимает архив и печатает сводку.
  *
  * @returns код выхода процесса (0 — успех, 1 — ошибка).
@@ -233,7 +278,7 @@ export async function runBackupCommand(opts: BackupCommandOptions): Promise<numb
   const log = opts.log ?? ((msg: string) => console.log(msg));
   const error = opts.error ?? ((msg: string) => console.error(msg));
   try {
-    const result = await createBackup({ ...opts, log });
+    const result = await createBackup({ ...opts, log, actor: opts.actor ?? 'cli' });
     log(`Бэкап создан: ${result.path}`);
     log(`  размер: ${result.bytes} Б`);
     log(`  записей: ${result.manifest.entries.length}`);

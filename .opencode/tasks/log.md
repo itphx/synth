@@ -1219,6 +1219,16 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - **План:** подготовлен (этапы A runtime-портативность, B упаковка/Docker, C запуск без bash, D доки Win/mac, E верификация); ждёт подтверждения владельца. Dev-окружение (`scripts/dev.sh`) и платформенные установщики — вне этого этапа.
 - **Открыто:** приёмка на реальных Win/mac (вне CI), решение по scope.
 
+## 2026-10-16 — Платформенные инсталляторы: выполнимость и каналы (research)
+
+- **Задача:** проработать тему платформенных инсталляторов (всё-в-одном vs пререквизиты; Linux-таргеты RHEL/Debian/Arch; flatpak/snap). **Исполнитель:** @orchestrator → 2× @researcher (параллельно).
+- **Ключевой блокер — CI Linux-only:** все джобы `.gitverse/workflows/{release,ci,ci-docs}.yaml` на `ubuntu-latest`; `.github/workflows/` отсутствует (подтверждено `docs/PUBLISHING.md:256,293-295`). Нативные Win/mac-артефакты (`.msi`/`.msix`, `.pkg`/`.dmg`, notarization, `signtool`) требуют нативных раннеров — их нет. Собираемо на Linux: `.deb`, `.rpm`, AppImage, tarball, **NSIS** (`makensis`) + подпись `osslsigncode`, генерация манифестов winget/scoop/Homebrew-tap/AUR.
+- **«Всё в одном»:** единого артефакта на все ОС не бывает; выбор по оси Node — system Node (текущий npm-путь) vs bundled Node (+50–100 МБ/arch, per-arch сборка). Единый standalone-бинарник сегодня недостижим: `cli.js` external'ит core/shared/ui (`tsup.config.ts:11-21`, ADR-038), core — мультифайловый `tsc`-dist с ассетами из `node_modules`. Ориентир размера: ~60–120 МБ без git.
+- **Пререквизиты неизбежны** независимо от формата: `sh`, `git`, `rg` (+`ssh`, `npm` для самообновления); bundled Node снимает только Node. `rg` бандлится легко (~5 МБ), `git` тяжело, `sh` на Windows нативно отсутствует (Git-Bash/msys2). `synth update --to` не реализован → обновление ложится на пакетный менеджер/инсталлятор.
+- **Linux-каналы:** официальные репозитории (Debian/Ubuntu/Arch/RHEL) для стороннего проекта фактически закрыты → реалистично `.deb` (+PPA/свой apt-репо), `.rpm` (+COPR/EPEL/свой репо), Arch — **AUR** PKGBUILD; AppImage/tarball — дистро-агностик. glibc: собирать на старейшей целевой базе.
+- **flatpak/snap — рекомендация НЕ брать:** sandbox-модель конфликтует с профилем Synth (локальный сервер + произвольный workspace/ФС + спавн `sh`/`git`/`rg` + SSH-ключи + bind-порта); рабочий вариант требует `classic`/`--filesystem=host`, что обнуляет ценность песочницы, и тащит snapd/flatpak + desktop-runtime. Пересмотреть только при появлении desktop-GUI клиента (PROP-064).
+- **Открыто (решения за владельцем):** стратегия Node (bundled vs system); поднимать ли нативные раннеры (macOS/Windows self-hosted); подписи (Apple Developer $99/год, Windows code-signing cert); состав пакетных менеджеров; PROP-082 (flavor-образы) не реализован.
+
 ## 2026-10-16 — Admin-API и UI-раздел «Обслуживание» (ADR-091/ADR-092)
 
 - **Задача:** «нужен UI для эксплуатационных операций; ветку не пушить — жду ревью». **Исполнители:** @orchestrator → @explore ×1, @fixer ×4. **Результат:** PASS.

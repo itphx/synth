@@ -19,7 +19,7 @@ const PORT_KEYS = [
   'protectedPaths', 'dictionaries', 'providers', 'models', 'agents', 'mcpRegistry',
   'serviceKeys', 'eventApiKeys',
   'eventBindings', 'eventRoutes', 'eventJournal', 'identityClaims', 'webhooks',
-  'webhookDeliveries', 'schedules', 'jobs', 'dedup', 'skills', 'skillBundles',
+  'webhookDeliveries', 'schedules', 'jobs', 'maintenanceAudit', 'dedup', 'skills', 'skillBundles',
   'contextFiles', 'sshKeys', 'blobs',
 ] as const satisfies readonly (keyof StorageContext)[];
 

@@ -24,6 +24,7 @@ export { describeDedupRepository } from './events.js';
 
 export { describeScheduleRepository } from './scheduler.js';
 export { describeJobRepository } from './scheduler.js';
+export { describeMaintenanceAuditRepository } from './maintenance.js';
 
 export { describeServiceKeyRepository } from './secrets.js';
 export { describeSSHKeyRepository } from './secrets.js';

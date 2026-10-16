@@ -5,8 +5,10 @@ import {
   checkInstanceCompatibility,
   runMigrations,
 } from '../storage/instance-meta.js';
+import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { createStorageContext } from '../storage/storage-context.js';
 import { SessionManager } from '../sessions/manager.js';
+import { recordMaintenanceAudit } from './audit.js';
 
 /** Опции команды `synth migrate`. */
 export interface MigrateCommandOptions {
@@ -19,6 +21,8 @@ export interface MigrateCommandOptions {
   log?: (msg: string) => void;
   /** Канал ошибок (по умолчанию `console.error`). */
   error?: (msg: string) => void;
+  /** ADR-092: аудит-журнал обслуживания (best-effort). */
+  audit?: MaintenanceAuditRepository;
 }
 
 /**
@@ -82,9 +86,30 @@ export async function runMigrateCommand(opts: MigrateCommandOptions): Promise<nu
       log(`    - ${id}${migration ? `: ${migration.description}` : ''}`);
     }
     log(`  обновлённых записей: ${result.updated}`);
+    if (result.applied.length > 0) {
+      await recordMaintenanceAudit(opts.audit, {
+        op: 'migrate.applied',
+        status: 'ok',
+        actor: 'cli',
+        details: {
+          from: compatibility.currentVersion,
+          to: compatibility.expectedVersion,
+          applied: result.applied,
+          trigger: 'cli',
+        },
+      });
+    }
     return 0;
   } catch (err) {
-    error(`Ошибка миграции: ${err instanceof Error ? err.message : String(err)}`);
+    const message = err instanceof Error ? err.message : String(err);
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'migrate.failed',
+      status: 'failed',
+      actor: 'cli',
+      details: { dataDir, trigger: 'cli' },
+      error: message,
+    });
+    error(`Ошибка миграции: ${message}`);
     return 1;
   }
 }

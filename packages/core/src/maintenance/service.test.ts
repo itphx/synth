@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SCHEMA_VERSION } from '../storage/instance-meta.js';
+import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
 import { createBackup } from './backup.js';
 import {
   cancelPendingRestore,
@@ -231,6 +232,28 @@ describe('maintenance service (ADR-091/ADR-092)', () => {
       await createBackup({ dataDir, out: outside });
 
       await expect(scheduleRestore({ dataDir, archive: outside })).rejects.toThrow(/бэкапов/);
+    });
+
+    it('аудит: scheduleRestore пишет restore.scheduled (actor=requestedBy), cancel — restore.cancelled', async () => {
+      const audit = new MemoryMaintenanceAuditRepository();
+      const path = await makeArchive('audit-sched.tar.gz');
+
+      await scheduleRestore({ dataDir, archive: path, requestedBy: 'admin', audit });
+
+      let list = await audit.list();
+      expect(list).toHaveLength(1);
+      expect(list[0]!.op).toBe('restore.scheduled');
+      expect(list[0]!.status).toBe('scheduled');
+      expect(list[0]!.actor).toBe('admin');
+      expect(list[0]!.details).toMatchObject({ archive: path, safetyCopy: true });
+
+      expect(await cancelPendingRestore(dataDir, audit)).toBe(true);
+
+      list = await audit.list();
+      expect(list.map((e) => e.op)).toEqual(['restore.cancelled', 'restore.scheduled']);
+      // Повторная отмена (запроса нет) событие не пишет.
+      expect(await cancelPendingRestore(dataDir, audit)).toBe(false);
+      expect((await audit.list()).filter((e) => e.op === 'restore.cancelled')).toHaveLength(1);
     });
   });
 
