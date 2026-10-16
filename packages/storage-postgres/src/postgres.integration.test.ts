@@ -97,5 +97,7 @@ describePg('PostgreSQL-драйвер: smoke (подключение, мигра
     expect(typeof ctx.skills.listNames).toBe('function');
     // Прочие порты — заглушки PG с понятной ошибкой.
     expect(() => ctx.sessions.list()).toThrow(PostgresStorageNotImplementedError);
+    // PROP-032: соединение удерживается в контексте — закрываем явно.
+    await ctx.close?.();
   });
 });

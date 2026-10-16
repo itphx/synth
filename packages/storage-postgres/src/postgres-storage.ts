@@ -108,14 +108,13 @@ export async function createPostgresStorage(config: PostgresStorageConfig): Prom
     throw err;
   }
 
-  // Волна 3a: соединение не удерживается в контексте (порты — заглушки),
-  // поэтому пул закрывается, чтобы не утекал. Следующая волна удержит соединение
-  // внутри PG-реализаций портов.
-  await conn.end().catch(() => undefined);
-
+  // PROP-032: соединение удерживается в контексте (порты БД ходят через него),
+  // `ctx.close()` закрывает пул. Незанятые соединения не удерживают event loop
+  // (`allowExitOnIdle` в `pool.ts`), поэтому CLI-команды завершаются.
   return buildPostgresStorageContext({
     dataDir: config.dataDir,
     secretKey: config.secretKey,
     env: config.env,
+    connection: conn,
   });
 }

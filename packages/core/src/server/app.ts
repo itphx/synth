@@ -412,6 +412,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     webhookService: deps.webhookService,
     // ADR-051 (срез): остановка планировщика (на graceful shutdown).
     stopScheduler: () => deps.schedulerService.stop(),
+    // PROP-032: освобождение ресурсов backend'а хранения (пул соединений PG);
+    // `file`/`memory` `close` не задают — вызов безопасен (optional).
+    closeStorage: async () => {
+      await storage.close?.();
+    },
     // Текущий мост событий (создаётся/обновляется в applyConnected) — для stop() при shutdown.
     get remoteEventBridge(): RemoteEventBridge | undefined {
       return hybrid.getRemoteEventBridge();

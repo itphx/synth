@@ -1,0 +1,186 @@
+import { randomUUID } from 'node:crypto';
+import { afterAll, afterEach, describe } from 'vitest';
+import type { ProviderConfig } from '@itphx/synth-shared';
+
+import {
+  createTmpDir,
+  describeBlobStore,
+  describeContextFileRepository,
+  describeDefaultsRepository,
+  describeDedupRepository,
+  describeDictionaryRepository,
+  describeDocumentRepository,
+  describeEventApiKeyRepository,
+  describeEventBindingRepository,
+  describeEventJournalRepository,
+  describeEventRouteRepository,
+  describeIdentityClaimRepository,
+  describeJobRepository,
+  describeMaintenanceAuditRepository,
+  describeMcpRegistryRepository,
+  describeProfileRepository,
+  describeProjectRepository,
+  describeProtectedPathsRepository,
+  describeScheduleRepository,
+  describeSecretPatternRepository,
+  describeServiceKeyRepository,
+  describeSessionRepository,
+  describeSettingsRepository,
+  describeSkillBundleRepository,
+  describeSkillRepository,
+  describeSSHKeyRepository,
+  describeWebhookDeliveryRepository,
+  describeWebhookRepository,
+} from './index.js';
+import type { StorageContext } from '../storage-context.js';
+
+/**
+ * Контрактный прогон доменных портов на PostgreSQL-драйвере
+ * (PROP-032, волна 3b-lifecycle) — рядом с `file.test.ts`/`memory.test.ts`.
+ *
+ * Гейт по env `SYNTH_TEST_POSTGRES_DSN`: без него весь файл `describe.skip`
+ * (герметичный запуск без БД). С DSN каждый `make()` создаёт **уникальную схему**
+ * (`synth_test_<random>`) и уникальный временный `dataDir` (для FS/package-bound
+ * портов), прогоняет миграции и собирает `StorageContext` драйвера
+ * (`createPostgresStorage`). Контрактный suite `dispose` не вызывает, поэтому
+ * освобождение ресурсов делает `afterEach`: `ctx.close()` (пул соединений) +
+ * `DROP SCHEMA … CASCADE` + удаление tmp-каталога.
+ *
+ * Драйвер тянется **динамическим** `import()` по строке-константе (как
+ * `storage-context.ts` в core): `@itphx/synth-storage-postgres` — опциональная
+ * зависимость, статический импорт сломал бы typecheck core без собранного драйвера.
+ *
+ * Статус блоков (порты БД — следующая волна, сейчас заглушки `notImplementedPort`):
+ *   - **проходят** (FS/package-bound порты — файловые реализации внутри драйвера):
+ *     `describeSkillRepository` (ctx.skills), `describeContextFileRepository`
+ *     (ctx.contextFiles), `describeBlobStore` (ctx.blobs);
+ *   - **падают** `PostgresStorageNotImplementedError` (порт ждёт реализации —
+ *     волна 3b): sessions, projects, profiles, settings, defaults, secretPatterns,
+ *     protectedPaths, dictionaries, providers/models/agents (shared `providers`),
+ *     mcpRegistry, serviceKeys, eventApiKeys, eventBindings, eventRoutes,
+ *     eventJournal, identityClaims, webhooks, webhookDeliveries, schedules, jobs,
+ *     maintenanceAudit, dedup, skillBundles, sshKeys.
+ */
+
+const DSN = process.env.SYNTH_TEST_POSTGRES_DSN;
+const describePg = DSN ? describe : describe.skip;
+
+/** Аннотация `string` намеренная — `import()` не резолвится на этапе типов (опциональный пакет). */
+const POSTGRES_DRIVER_PACKAGE: string = '@itphx/synth-storage-postgres';
+
+/** Минимальный локальный контракт драйвера (типы пакета не резолвятся статически). */
+interface PostgresDriverModule {
+  createPostgresStorage(config: Record<string, unknown>): Promise<StorageContext>;
+  /** Отдельное соединение — для `DROP SCHEMA … CASCADE` при очистке. */
+  createPostgresConnection(config: Record<string, unknown>): { dropSchema(schema?: string): Promise<void> };
+}
+
+let driverPromise: Promise<PostgresDriverModule> | null = null;
+
+async function loadDriver(): Promise<PostgresDriverModule> {
+  if (!driverPromise) {
+    driverPromise = import(POSTGRES_DRIVER_PACKAGE) as unknown as Promise<PostgresDriverModule>;
+  }
+  return driverPromise;
+}
+
+/** Уникальная схема прогона (каждый `make()` — независимое состояние). */
+function uniqueSchema(): string {
+  return `synth_test_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+}
+
+// Контрактный suite не вызывает `dispose` — освобождаем ресурсы в `afterEach`.
+let activeDisposers: Array<() => Promise<void>> = [];
+
+async function makeContext(): Promise<{ ctx: StorageContext; dispose: () => Promise<void> }> {
+  const driver = await loadDriver();
+  const schema = uniqueSchema();
+  const { dir, dispose: disposeDir } = await createTmpDir('synth-pg-contract-');
+
+  let ctx: StorageContext;
+  try {
+    ctx = await driver.createPostgresStorage({
+      dataDir: dir,
+      connectionString: DSN,
+      schema,
+    });
+  } catch (err) {
+    await disposeDir().catch(() => undefined);
+    throw err;
+  }
+
+  const dispose = async (): Promise<void> => {
+    const close = ctx.close;
+    if (close) await close().catch(() => undefined);
+    await driver
+      .createPostgresConnection({ connectionString: DSN, schema })
+      .dropSchema(schema)
+      .catch(() => undefined);
+    await disposeDir().catch(() => undefined);
+  };
+
+  activeDisposers.push(dispose);
+  return { ctx, dispose };
+}
+
+/** `make()` контракта: уникальный контекст драйвера + один из его портов. */
+async function makePort<K extends keyof StorageContext>(
+  port: K,
+): Promise<{ repo: StorageContext[K]; dispose: () => Promise<void> }> {
+  const { ctx, dispose } = await makeContext();
+  return { repo: ctx[port], dispose };
+}
+
+describePg('контрактные тесты PostgreSQL-драйвера (уникальная схема + миграции)', () => {
+  afterEach(async () => {
+    const pending = activeDisposers;
+    activeDisposers = [];
+    await Promise.allSettled(pending.map((d) => d()));
+  });
+
+  afterAll(async () => {
+    const pending = activeDisposers;
+    activeDisposers = [];
+    await Promise.allSettled(pending.map((d) => d()));
+  });
+
+  describeSessionRepository('PG → SessionRepository', () => makePort('sessions'));
+  describeProjectRepository('PG → ProjectRepository', () => makePort('projects'));
+  describeProfileRepository('PG → ProfileRepository', () => makePort('profiles'));
+  describeSettingsRepository('PG → SettingsRepository', () => makePort('settings'));
+
+  describeEventBindingRepository('PG → EventBindingRepository', () => makePort('eventBindings'));
+  describeEventRouteRepository('PG → EventRouteRepository', () => makePort('eventRoutes'));
+  describeEventJournalRepository('PG → EventJournalRepository', () => makePort('eventJournal'));
+  describeEventApiKeyRepository('PG → EventApiKeyRepository', () => makePort('eventApiKeys'));
+  describeIdentityClaimRepository('PG → IdentityClaimRepository', () => makePort('identityClaims'));
+  describeDedupRepository('PG → DedupRepository', () => makePort('dedup'));
+
+  describeScheduleRepository('PG → ScheduleRepository', () => makePort('schedules'));
+  describeJobRepository('PG → JobRepository', () => makePort('jobs'));
+  describeMaintenanceAuditRepository('PG → MaintenanceAuditRepository', () => makePort('maintenanceAudit'));
+
+  describeServiceKeyRepository('PG → ServiceKeyRepository', () => makePort('serviceKeys'));
+  describeSSHKeyRepository('PG → SSHKeyRepository', () => makePort('sshKeys'));
+  describeWebhookRepository('PG → WebhookRepository', () => makePort('webhooks'));
+  describeWebhookDeliveryRepository('PG → WebhookDeliveryRepository', () => makePort('webhookDeliveries'));
+
+  describeMcpRegistryRepository('PG → McpRegistryRepository', () => makePort('mcpRegistry'));
+  describeSkillRepository('PG → SkillRepository (file-backed)', () => makePort('skills'));
+  describeSkillBundleRepository('PG → SkillBundleRepository', () => makePort('skillBundles'));
+  describeDictionaryRepository('PG → DictionaryRepository', () => makePort('dictionaries'));
+
+  // PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — один порт-провайдер.
+  describeDocumentRepository<ProviderConfig>(
+    'PG → DocumentRepository (providers)',
+    () => makePort('providers'),
+    (key) => ({ name: key } as unknown as ProviderConfig),
+  );
+
+  describeContextFileRepository('PG → ContextFileRepository (file-backed)', () => makePort('contextFiles'));
+  describeSecretPatternRepository('PG → SecretPatternRepository', () => makePort('secretPatterns'));
+  describeProtectedPathsRepository('PG → ProtectedPathsRepository', () => makePort('protectedPaths'));
+
+  describeBlobStore('PG → BlobStore (file-backed)', () => makePort('blobs'));
+  describeDefaultsRepository('PG → DefaultsRepository', () => makePort('defaults'));
+});

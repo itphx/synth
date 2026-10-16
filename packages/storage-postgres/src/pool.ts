@@ -131,6 +131,10 @@ export function buildPoolConfig(config: PostgresConnectionConfig, schema: string
     max: pool?.max ?? DEFAULT_POOL_MAX,
     connectionTimeoutMillis: pool?.connectionTimeoutMillis ?? DEFAULT_CONNECTION_TIMEOUT_MS,
     idleTimeoutMillis: pool?.idleTimeoutMillis ?? DEFAULT_IDLE_TIMEOUT_MS,
+    // PROP-032: незанятые соединения не удерживают event loop — CLI-команды
+    // (`synth migrate`/`doctor`/…) со `storage.backend=postgres` завершаются,
+    // а не висят вечно из-за открытых idle-клиентов пула.
+    allowExitOnIdle: true,
     statement_timeout: config.statementTimeoutMillis ?? DEFAULT_STATEMENT_TIMEOUT_MS,
     idle_in_transaction_session_timeout:
       config.idleInTransactionTimeoutMillis ?? DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,

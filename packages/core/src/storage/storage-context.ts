@@ -120,6 +120,13 @@ export type StorageBackendKind = 'file' | 'memory' | 'postgres';
  */
 export interface StorageContext {
   kind: StorageBackendKind;
+  /**
+   * PROP-032: освобождение ресурсов backend'а (пул соединений и т.п.).
+   * Опционально: `file`/`memory` его не задают (ресурсов процесса нет), драйвер
+   * БД удерживает соединение в контексте и закрывает его здесь. Домен зовёт
+   * `close()` на graceful shutdown (`synth serve`).
+   */
+  close?(): Promise<void>;
   sessions: SessionRepository;
   projects: ProjectRepository;
   profiles: ProfileRepository;

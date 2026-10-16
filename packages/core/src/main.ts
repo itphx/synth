@@ -202,6 +202,12 @@ program
       // ADR-051 (срез): остановить планировщик расписаний.
       appHandle.stopScheduler?.();
 
+      // PROP-032: закрыть backend хранения (пул соединений PG); `file`/`memory`
+      // ресурсов не держат — вызов no-op (см. `StorageContext.close?`).
+      if (appHandle.closeStorage) {
+        await appHandle.closeStorage().catch(() => {});
+      }
+
       server.close((err: Error | undefined) => {
         if (err) console.error('[Shutdown] Server close error:', err);
       });

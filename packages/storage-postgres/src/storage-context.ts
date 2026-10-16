@@ -18,6 +18,7 @@
 import { createFileStorage } from '@itphx/synth-core';
 import type { StorageContext } from '@itphx/synth-core';
 import { PostgresStorageNotImplementedError } from './errors.js';
+import type { PostgresConnection } from './pool.js';
 
 /**
  * Заглушка порта: любой доступ к методу бросает понятную ошибку с именем порта.
@@ -51,6 +52,11 @@ export interface BuildPostgresContextOptions {
   dataDir: string;
   secretKey?: string;
   env?: NodeJS.ProcessEnv;
+  /**
+   * PROP-032: живое соединение драйвера — удерживается в контексте, чтобы порты
+   * БД (следующая волна) ходили через него. `close()` контекста закрывает пул.
+   */
+  connection?: PostgresConnection;
 }
 
 /** Собрать `StorageContext` с файловыми FS-портами и заглушками остальных. */
@@ -63,8 +69,13 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     env: opts.env,
   });
 
+  const connection = opts.connection;
+
   return {
     kind: 'postgres',
+    // PROP-032: соединение живёт в контексте; `close()` закрывает пул (graceful
+    // shutdown домена). Без соединения (заглушки) ресурсов освобождать нечего.
+    ...(connection ? { close: () => connection.end() } : {}),
     sessions: notImplementedPort('sessions'),
     projects: notImplementedPort('projects'),
     profiles: notImplementedPort('profiles'),
