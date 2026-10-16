@@ -279,20 +279,130 @@ idMap}` (маппинг старый id → новый id). Лимит загр�
 - **Скилл `synth-storage-recovery`.** Встроенный скилл-рунбук (`/storage-recovery`): диагностика, классификация
   причины, лечение, что доступно в деградации, возврат в норму. Доступен и в норме, и в аварийном режиме.
 
-### Перенос данных между backend'ами (`synth storage migrate`)
+## Перенос данных между backend'ами (`synth storage migrate`)
 
-**Цель:** перенести данные инстанса между физическими backend'ами (`file` ↔ `postgres`)
-идемпотентно, через доменные порты ([ADR-096](./arch_decisions/adr-096-storage-layer.md)).
+**Цель:** перевести инстанс между физическими backend'ами хранения (`file` ↔ `postgres`)
+идемпотентно, через доменные порты ([ADR-096](./arch_decisions/adr-096-storage-layer.md)),
+не потеряв данные и сохранив возможность отката. Ожидаемый результат — данные перенесены
+(счётчики `copied`/`skipped` сходятся с периметром источника), сервис стартует на целевом
+backend'е (`GET /health` → `healthy`, `synth doctor` без `fail`), новые записи идут в цель, а
+файловые данные остаются **вторым уровнем отката**.
 
 ```bash
-synth storage migrate --to postgres [--dry-run|--yes]   # file → postgres
-synth storage migrate --to file                          # postgres → file (откат; --target-data-dir <path>)
+synth storage migrate --to postgres [--dry-run|--yes]                       # file → postgres
+synth storage migrate --to file --target-data-dir <path> [--dry-run|--yes]  # postgres → file (откат)
 ```
 
-Копирование идёт **только через доменные порты** (`StorageContext`): сущность читается доменным методом
-источника и пишется методом цели, перед записью наличие проверяется по стабильному id/ключу/метке —
-повторный прогон ничего не дублирует. Без `--dry-run` и без `--yes` — отказ; `--dry-run` печатает счётчики
-`copied`/`skipped` по сущностям без записи.
+Копирование идёт **только через доменные порты** (`StorageContext`): сущность читается доменным
+методом источника и пишется методом цели, перед записью наличие проверяется по стабильному
+id/ключу/метке — повторный прогон ничего не дублирует. Без `--dry-run` и без `--yes` — отказ.
+Успех/провал пишутся в `{dataDir}/audit/maintenance.jsonl` (`migrate.applied`/`migrate.failed`,
+[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)); `--dry-run` аудит не пишет.
+
+Описание флагов — в `--help`; параметры БД и `storage.degradedMode` — [CONFIGURATION.md](./CONFIGURATION.md)
+(§«Backend хранения», §«PostgreSQL», §«Деградированный режим»); контракт и схема драйвера —
+`packages/storage-postgres/AGENTS.md`. Dev-специфика (контейнер PostgreSQL, креды, бэкапы) —
+[DEVELOPMENT.md](./DEVELOPMENT.md).
+
+### Предусловия
+
+1. **Целевая БД доступна.** Для `--to postgres` — сервер БД поднят, база и роль созданы,
+   драйвер `@itphx/synth-storage-postgres` и `pg` установлены (входят в комплект `@itphx/synth`).
+   Схему БД создаёт сама команда (режим `apply`).
+2. **Цель адресуется через env, а не через `config.storage`.** Параметры БД-цели задайте
+   переменными окружения — `SYNTH_POSTGRES_HOST`/`_PORT`/`_DATABASE`/`_USER`/`_PASSWORD`
+   (или `SYNTH_POSTGRES_DSN`); **пароль** — только env `SYNTH_POSTGRES_PASSWORD` либо файл
+   `{dataDir}/secrets/postgres-password` (в `config.yaml` не хранится, инвариант 13).
+   Пока перенос не завершён, секцию `storage.backend` в конфиге менять **не нужно** — иначе
+   изменится и источник.
+3. **`SYNTH_STORAGE_BACKEND` при вызове не выставлять.** Источник резолвится из конфига/env
+   (`resolveStorageBackend`), цель задаётся **только** флагом `--to`. Если источник и цель
+   совпадут, команда откажет: «источник и цель совпадают … цель задаётся `--to`».
+4. **Остановить сервис** (offline-перенос): параллельная запись в файлы разъедется с БД.
+   Контейнер/сервер PostgreSQL останавливать **не нужно**.
+5. **Снять бэкап** файлового периметра (см. «Порядок») — это страховка и второй уровень отката.
+6. **Файловые данные не удалять** — до подтверждённой сверки и работы на БД они остаются
+   полноценным откатом.
+
+### Порядок переноса
+
+1. **Остановите сервис** и дождитесь освобождения портов. В dev это процессная группа `dev.sh`
+   (см. [DEVELOPMENT.md](./DEVELOPMENT.md)); в managed — штатная остановка пода/юнита.
+   *Ожидаемо:* сервис не пишет, порты свободны.
+2. **Бэкап файлового периметра.** `synth backup --out <dataDir>/backups --data-dir <dataDir>`.
+   Архив — с `manifest.json` (в нём `backend: file`), числом записей и `sha256`. Каталог
+   `backups/` **не** удаляйте; файлы `sessions/`/`projects/` в `{dataDir}` не трогайте.
+   *Ожидаемо:* путь архива, размер, число записей, контрольная сумма.
+3. **Dry-run.** `synth storage migrate --to postgres --data-dir <dataDir> --dry-run` — печатает
+   счётчики `copied`/`skipped` по сущностям **без записи**. Сверьте ключевые числа (`sessions`,
+   `projects`, сообщения) с файловым периметром **до** применения.
+4. **Применить.** Тот же вызов с `--yes`: `synth storage migrate --to postgres --data-dir <dataDir> --yes`.
+   *Ожидаемо:* отчёт `copied`/`skipped` по сущностям и предупреждения о перевыпуске секретов и
+   новых id (см. «Ограничения и fail-closed»).
+
+### Сверка результата (вне отчёта команды)
+
+Проверьте перенос **независимо** от собственного отчёта команды:
+
+```bash
+# 1) Объёмы в БД (значения — пример; сверьте со своим периметром).
+psql "host=127.0.0.1 port=5432 dbname=<db> user=<user>" -c \
+  'select (select count(*) from sessions) sessions, (select count(*) from messages) messages, (select count(*) from projects) projects;'
+
+# 2) Doctor на целевом backend'е: файловые проверки данных помечаются
+#    skipped («неприменимо (backend=postgres)»), добавлены db-connection/db-schema.
+SYNTH_STORAGE_BACKEND=postgres synth doctor --json
+```
+
+*Ожидаемо:* в БД — таблицы схемы драйвера, счётчики совпадают с dry-run/периметром; `doctor` →
+`ok: true`, `db-connection: ok`, `db-schema: ok`, файловые проверки `skipped`.
+
+> **Известное наблюдение.** `synth doctor` в режиме `postgres` может печатать предупреждения
+> прогрева портов (`прогрев порта '…' не удался: пул недоступен`) при общем `ok: true` и
+> `db-connection: ok`. На работоспособность это не влияет — пул поднимается к моменту реальной
+> пробы; предупреждение ожидаемо.
+
+### Закрепление режима
+
+1. Пропишите целевой backend в конфиг инстанса (для dev — `packages/backend/config.yaml`, файл
+   untracked/gitignored; пароль в нём **не** хранится):
+
+   ```yaml
+   storage:
+     backend: postgres
+     postgres: { host: 127.0.0.1, port: 5432, database: synth, user: synth }
+   ```
+
+2. **Рекомендуется `storage.degradedMode: halt`** для БД-режима: при `fallback-file` (дефолт)
+   сервис **молча** поднимется на файловом фоллбеке и данные разъедутся (см. ниже). Смена
+   режима — стартовая настройка, применяется при рестарте.
+
+### Верификация после старта
+
+1. **Health.** `GET /health` → `healthy` (не `degraded`).
+2. **Логи.** В `tmp/backend.log`/`tmp/core.log` (dev) нет блока `[storage] ⚠️ PostgreSQL недоступен …`.
+3. **Объёмы по API.** `GET /api/v2/sessions` / `GET /api/v2/projects` отдают ожидаемые числа.
+   *Ожидаемо (пример):* список сессий может быть **меньше** числа строк в БД, если часть сессий
+   архивирована (`archivedAt`/`expiresAt`) — `listSessions` по умолчанию исключает архив. Это норма,
+   а не потеря.
+4. **Запись действительно в БД.** Выполните **безопасную мутацию** (например,
+   `PUT /api/v2/settings/workspace` с текущим значением) → 2xx; запись видна в БД, а `mtime`
+   файлов `{dataDir}/settings.json` и `{dataDir}/sessions/*` **не** меняется.
+
+### Откат
+
+- **Возврат к файлам без переноса БД→файл.** Уберите секцию `storage` (или `storage.backend`)
+  из конфига → рестарт → снова файловый backend. Данные в `{dataDir}` не тронуты (перенос их
+  **не** удаляет), поэтому файловое состояние остаётся рабочим.
+- **Перенос изменений из БД обратно.** Возможен, но в **свежий** каталог, чтобы не смешивать:
+  `synth storage migrate --to file --target-data-dir <пустой каталог> --data-dir <dataDir> --yes`.
+  Если целевой каталог уже содержит данные, команда предупредит, что существующие записи
+  **не перезаписываются** (пропускаются). Затем укажите файловый backend/`--data-dir` и
+  перезапустите сервис.
+- **Полный откат через бэкап** — `synth restore` (см. «Восстановление»); для БД-режима данные БД
+  восстанавливаются средствами СУБД (`pg_restore`/PITR), а `synth restore` — только файловый периметр.
+
+### Ограничения и fail-closed
 
 **Что переносится:** `sessions` (с `messages`/`references`/`checkpoints`/`stickyNotes`), `projects`
 (с `members`), `profiles`, `settings`, `defaults`, `providers`/`models`/`agents`, события
@@ -302,17 +412,38 @@ synth storage migrate --to file                          # postgres → file (о
 **Что НЕ переносится (честные ограничения):**
 
 - **секреты, хранящиеся только хешем/шифром, перевыпускаются** — `eventApiKeys`, `serviceKeys` (sha256),
-  signing-секреты `webhooks` (шифр): создаётся **новая** запись с **новым** секретом (метаданные сохраняются),
-  о чём выводится предупреждение;
-- `schedules`/`webhooks`/`sshKeys`/`mcpRegistry` получают **новые `id`** (порт `create`/`add` их генерирует;
-  привязки по id переезжают как есть);
-- `dedup` — транзиентный (окно идемпотентности событий живёт минуты) — не переносится;
-- `skills`/`contextFiles`/`blobs` — **файловые в обоих backend'ах** (драйвер `postgres` отдаёт их файловыми
-  реализациями core) — переезжать нечему;
-- файловый периметр вне портов (`audit/*.jsonl`, prompts, `meta.json`, `workspaces/`, `secrets/master.key`) —
-  копируется/переносится отдельно (ADR-091/ADR-092).
+  signing-секреты `webhooks` (шифр): создаётся **новая** запись с **новым** секретом (метаданные
+  сохраняются), о чём выводится предупреждение;
+- `schedules`/`webhooks`/`sshKeys`/`mcpRegistry` получают **новые `id`** (порт `create`/`add` их
+  генерирует; привязки по id переезжают как есть);
+- `identityClaims` и `dedup` — транзиентные/инстанс-локальные (окно идемпотентности событий живёт
+  минуты) — не переносятся;
+- `skills`/`contextFiles`/`blobs` — **файловые в обоих backend'ах** (драйвер `postgres` отдаёт их
+  файловыми реализациями core) — переезжать нечему;
+- файловый периметр вне портов — `skills/`, `skill-bundles/`, `context/`, `audit/*.jsonl`, `meta.json`,
+  `workspaces/`, `secrets/` (`master.key`, `postgres-password`, `ssh-keys/`), `auth/`, `gateway/`,
+  `security/` — остаётся файловым по конструкции (ожидаемо, не потеря данных); копируется/переносится
+  отдельно ([ADR-091](./arch_decisions/adr-091-backup-restore-transfer.md)/[ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)).
 
-*Ожидаемо:* отчёт `copied`/`skipped` по сущностям, предупреждения о перевыпуске секретов и новых id.
+**Fail-closed (перенос отменяется с ошибкой — данные не пишутся):**
+
+- **цель недоступна** — сборка целевого контекста ушла в файловый фоллбек (`target.kind ≠ --to`):
+  команда откажет, чтобы не записать данные в чужой каталог (`fallbackDir`) с отчётом об успехе;
+- **схема БД новее драйвера** (`STORAGE_POSTGRES_SCHEMA_TOO_NEW`) — «обновите Synth», назад данные
+  не мигрируются;
+- **нет драйвера/`pg`** (`STORAGE_BACKEND_UNAVAILABLE`/`…DEPENDENCY_MISSING`) — команда/старт
+  останавливаются (деградация не маскирует отсутствие зависимости);
+- ошибка конфигурации/кред (`STORAGE_POSTGRES_CONFIG_INVALID`), в т.ч. TLS-параметры в DSN
+  ([CONFIGURATION.md](./CONFIGURATION.md) §«TLS соединения с PostgreSQL»).
+
+### Деградированный режим — проверьте настройку до переключения
+
+`storage.degradedMode` по умолчанию — `fallback-file`: если БД окажется недоступна на старте,
+сервис **молча** поднимется на файловом фоллбеке в `{dataDir}/fallback` (строгий read-only) и
+данные разъедутся с БД. Авто-возврата к БД **нет** — только рестарт после восстановления
+соединения. Для БД-режима рекомендуется `storage.degradedMode: halt` (старт с внятной ошибкой
+вместо тихого фоллбека); порядок действий в аварии — раздел «Деградированный режим (БД недоступна)»
+выше и встроенный скилл `synth-storage-recovery`.
 
 ## Удаление инстанса
 
@@ -498,6 +629,7 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 
 ## История
 
+- 2026-10-16 — краткое описание `synth storage migrate` развёрнуто в runbook «Перенос данных между backend'ами»: цель, предусловия (env-адресация цели, запрет `SYNTH_STORAGE_BACKEND` при вызове, останов сервиса), порядок (бэкап → dry-run → apply), независимая сверка (`psql`/`doctor`), закрепление режима, верификация после старта (в т.ч. проверка записи в БД), откат, ограничения/fail-closed и предупреждение о `storage.degradedMode`; проверено на живом dev-переносе (2026-10-16).
 - 2026-10-16 — добавлен раздел «PostgreSQL как backend хранения» ([PROP-032](./arch_decisions/prop-032-history-storage-postgresql.md)/[ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)): схема драйвера и `synth migrate`, db-проверки `doctor`, бэкап/restore (данных БД в архиве нет — `pg_dump`/PITR), `uninstall --purge-db`, деградированный режим и скилл `synth-storage-recovery`, перенос данных `synth storage migrate` с честными ограничениями.
 - 2026-10-16 — runbook создан (первичная настройка, диагностика, бэкап/восстановление, миграции, удаление, обновление/откат).
 - 2026-10-16 — добавлены разделы «Обслуживание из UI» (Настройки → «Обслуживание», ADMIN) и «Обслуживание по API» (admin-API `/api/v2/maintenance/*`, [API_V2.md](./API_V2.md) §5.31); восстановление — офлайн (`appliesOnNextStart`, отложенный запрос применяется при старте).

@@ -62,6 +62,91 @@ pnpm lint
 
 Ключи переопределяются через: `SYNTH_TEST_ADMIN_KEY`, `SYNTH_TEST_USER_KEY`, `SYNTH_TEST_LEAD_KEY`, `SYNTH_TEST_AUDITOR_KEY`.
 
+## Dev на PostgreSQL (backend хранения `postgres`)
+
+Для отладки на БД в dev поднят контейнер PostgreSQL, а dev-конфиг переключает backend
+хранения. Полный runbook переноса данных (бэкап → dry-run → apply → сверка → откат) —
+[MAINTENANCE.md](./MAINTENANCE.md) §«Перенос данных между backend'ами»; параметры и
+`storage.degradedMode` — [CONFIGURATION.md](./CONFIGURATION.md) §«PostgreSQL».
+
+### Контейнер
+
+- Имя — `synth-postgres-dev` (образ `postgres:17-alpine`, `RestartPolicy=unless-stopped`,
+  volume `synth-pg-dev-data`, публикация `127.0.0.1:5432`).
+
+```bash
+docker ps --filter name=synth-postgres-dev                 # статус (должен быть Up … (healthy))
+docker start synth-postgres-dev                            # если остановлен
+docker logs --tail 50 synth-postgres-dev                   # логи БД
+docker inspect synth-postgres-dev \
+  --format 'RestartPolicy={{.HostConfig.RestartPolicy.Name}} Volumes={{range .Mounts}}{{.Name}} {{end}}'
+```
+
+### Креды и пароль
+
+- **Учётные данные контейнера** (создание роли/базы) — `secrets/postgres-dev.env`
+  (`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`), файл вне git; пароль в документации
+  не приводится — берите значение из файла (`set -a; . secrets/postgres-dev.env; set +a`).
+- **Пароль для рантайма Synth** — файл `{dataDir}/secrets/postgres-password` (режим `600`),
+  приоритетнее — env `SYNTH_POSTGRES_PASSWORD` (см. `resolvePostgresPassword`). Значение файла
+  не печатать и не коммитить.
+
+### Переключение конфига
+
+`dev.sh` подхватывает `packages/backend/config.yaml` как `SYNTH_CONFIG` (если файл существует),
+поэтому backend-режим включается секцией в этом файле (**untracked/gitignored** — правка
+допустима, пароль в конфиге не хранится):
+
+```yaml
+storage:
+  backend: postgres
+  postgres: { host: 127.0.0.1, port: 5432, database: synth, user: synth }
+```
+
+### Запуск и перезапуск
+
+Сервис останавливать целиком (процессная группа `dev.sh`) — иначе параллельная запись в файлы
+разъедется с БД:
+
+```bash
+# Остановить dev (PGID текущего dev.sh; порты 5000/4300/5002 должны освободиться).
+kill -TERM -<pgid>          # pgid — группа процесса dev.sh
+# Затем — обычный запуск.
+./scripts/dev.sh            # backend (:5000) + UI (:5002)
+```
+
+### Возврат на файловый backend
+
+Уберите секцию `storage` из `packages/backend/config.yaml` → перезапустите dev. Данные в
+`{dataDir}` (по умолчанию `<repo>/../data`) при переносе **не** удаляются, поэтому файловое
+состояние остаётся рабочим; при необходимости перенесите изменения из БД обратно в свежий
+каталог (`--to file --target-data-dir <пустой каталог>`, см. [MAINTENANCE.md](./MAINTENANCE.md)).
+
+### Где лежат бэкап и файловые данные
+
+- Файловые данные — `../data` (dev): `sessions/`, `projects/`, `settings.json`, `secrets/`,
+  `backups/` и т.д.
+- Бэкап файлового периметра перед переносом — `../data/backups/synth-backup-<version>-<stamp>.tar.gz`
+  (`synth backup --out <dataDir>/backups --data-dir <dataDir>`); файловые данные не удаляйте —
+  это второй уровень отката.
+
+### Известные грабли (dev)
+
+- **Не выставляйте `SYNTH_STORAGE_BACKEND` при вызове `synth storage migrate`.** Источник
+  резолвится из конфига/env, цель задаётся флагом `--to`; при совпадении команда откажет
+  («источник и цель совпадают»). Параметры БД-цели задавайте через `SYNTH_POSTGRES_*`, а не через
+  `config.storage.postgres`, пока перенос не завершён.
+- **`synth doctor` в режиме `postgres`** может печатать предупреждения прогрева портов
+  (`прогрев порта '…' не удался: пул недоступен`) при общем `ok: true` и `db-connection: ok` —
+  на работоспособность не влияет (ожидаемое поведение).
+- **Числа сессий могут не совпадать:** `GET /api/v2/sessions` по умолчанию исключает архивные
+  сессии (`archivedAt`/`expiresAt`), поэтому в примере прогона API отдаёт 296 при 297 строках в БД.
+  Сверяйтесь со счётчиком в БД (`select count(*) from sessions`), а не только с API.
+- **`storage.degradedMode` по умолчанию `fallback-file`** — при недоступной БД сервис молча
+  поднимется на файловом фоллбеке (`{dataDir}/fallback`) и данные разъедутся. Для БД-режима
+  рассмотрите `storage.degradedMode: halt` (см. [MAINTENANCE.md](./MAINTENANCE.md) §«Деградированный
+  режим»).
+
 ## standalone.sh
 
 Запуск Synth «как у конечного пользователя» — `synth/scripts/standalone.sh`:

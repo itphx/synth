@@ -62,6 +62,90 @@ The login form shows a user selector with test keys:
 
 The keys are overridden via: `SYNTH_TEST_ADMIN_KEY`, `SYNTH_TEST_USER_KEY`, `SYNTH_TEST_LEAD_KEY`, `SYNTH_TEST_AUDITOR_KEY`.
 
+## Dev on PostgreSQL (`postgres` storage backend)
+
+For debugging against a database, dev runs a PostgreSQL container and the dev config switches
+the storage backend. The full data-migration runbook (backup → dry-run → apply → verify →
+rollback) is in [MAINTENANCE.md](../MAINTENANCE.md) (Russian); parameters and
+`storage.degradedMode` — [CONFIGURATION.md](./CONFIGURATION.md).
+
+### Container
+
+- Name — `synth-postgres-dev` (image `postgres:17-alpine`, `RestartPolicy=unless-stopped`,
+  volume `synth-pg-dev-data`, published on `127.0.0.1:5432`).
+
+```bash
+docker ps --filter name=synth-postgres-dev                 # status (should be Up … (healthy))
+docker start synth-postgres-dev                            # if stopped
+docker logs --tail 50 synth-postgres-dev                   # database logs
+docker inspect synth-postgres-dev \
+  --format 'RestartPolicy={{.HostConfig.RestartPolicy.Name}} Volumes={{range .Mounts}}{{.Name}} {{end}}'
+```
+
+### Credentials and password
+
+- **Container credentials** (role/database creation) — `secrets/postgres-dev.env`
+  (`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`), outside git; the password is not
+  quoted in the docs — take it from the file (`set -a; . secrets/postgres-dev.env; set +a`).
+- **Runtime password for Synth** — the file `{dataDir}/secrets/postgres-password` (mode `600`),
+  overridden by the env `SYNTH_POSTGRES_PASSWORD` (see `resolvePostgresPassword`). Never print or
+  commit the value.
+
+### Switching the config
+
+`dev.sh` picks up `packages/backend/config.yaml` as `SYNTH_CONFIG` (if the file exists), so the
+backend mode is enabled by a section in that file (**untracked/gitignored** — editing is allowed,
+the password is not stored in the config):
+
+```yaml
+storage:
+  backend: postgres
+  postgres: { host: 127.0.0.1, port: 5432, database: synth, user: synth }
+```
+
+### Start and restart
+
+Stop the whole service (the `dev.sh` process group) — otherwise parallel writes to files will
+diverge from the database:
+
+```bash
+# Stop dev (the PGID of the running dev.sh; ports 5000/4300/5002 must be released).
+kill -TERM -<pgid>          # pgid — the dev.sh process group
+# Then start as usual.
+./scripts/dev.sh            # backend (:5000) + UI (:5002)
+```
+
+### Back to the file backend
+
+Remove the `storage` section from `packages/backend/config.yaml` → restart dev. The data in
+`{dataDir}` (default `<repo>/../data`) is **not** deleted by the migration, so the file state
+stays usable; if needed, migrate changes back from the database into a fresh directory
+(`--to file --target-data-dir <empty dir>`, see [MAINTENANCE.md](../MAINTENANCE.md)).
+
+### Where the backup and file data live
+
+- File data — `../data` (dev): `sessions/`, `projects/`, `settings.json`, `secrets/`,
+  `backups/`, etc.
+- File-perimeter backup before migration — `../data/backups/synth-backup-<version>-<stamp>.tar.gz`
+  (`synth backup --out <dataDir>/backups --data-dir <dataDir>`); do not delete the file data —
+  it is the second rollback level.
+
+### Known gotchas (dev)
+
+- **Do not set `SYNTH_STORAGE_BACKEND` when calling `synth storage migrate`.** The source is
+  resolved from config/env, the target is set by the `--to` flag; if they match, the command
+  fails (“source and target are the same”). Provide the DB target parameters via `SYNTH_POSTGRES_*`,
+  not via `config.storage.postgres`, until the migration is done.
+- **`synth doctor` in `postgres` mode** may print port warm-up warnings
+  (`port '…' warm-up failed: pool unavailable`) while the overall status is `ok: true` and
+  `db-connection: ok` — it does not affect operation (expected behaviour).
+- **Session counts may differ:** `GET /api/v2/sessions` excludes archived sessions by default
+  (`archivedAt`/`expiresAt`), so in the sample run the API returned 296 while the DB had 297 rows.
+  Compare against the DB counter (`select count(*) from sessions`), not only the API.
+- **`storage.degradedMode` defaults to `fallback-file`** — if the DB is down, the service silently
+  comes up on the file fallback (`{dataDir}/fallback`) and the data diverges. For DB mode consider
+  `storage.degradedMode: halt` (see [MAINTENANCE.md](../MAINTENANCE.md)).
+
 ## standalone.sh
 
 Running Synth "as an end user" — `synth/scripts/standalone.sh`:
