@@ -116,12 +116,16 @@ ingress:
 | `storage.postgres.database` | `""` | Имя БД |
 | `storage.postgres.user` | `""` | Пользователь БД |
 | `storage.postgres.schema` | `""` | Схема БД (namespace таблиц; пусто → схема драйвера) |
-| `storage.postgres.ssl` | `false` | Требовать TLS-соединение (`sslmode`) |
+| `storage.postgres.ssl` | `false` | Legacy-флаг: `true` → `ssl: true` в конфиге (эквивалент `sslmode=require`); тонкий `sslmode` (`disable`\|`require`\|`verify-full`) задаётся через `backend.config.storage.postgres.sslmode` |
 | `storage.postgres.poolMax` | `10` | Максимальный размер пула соединений |
 | `storage.postgres.existingSecret` | `""` | Secret с паролем БД (пусто → `secrets.existingSecret`) |
 | `storage.postgres.secretPasswordKey` | `SYNTH_POSTGRES_PASSWORD` | Ключ внутри Secret с паролем БД |
 | `storage.degradedMode` | `""` | Задел деградации: `fallback-file` \| `halt` (пусто → дефолт core) |
 | `storage.fallbackDir` | `""` | Каталог файлового фоллбека (пусто → `{dataDir}/fallback`) |
+| `security.tls.existingSecret` | `""` | Secret с CA/клиентскими сертификатами → mount в `/etc/synth/tls` (ADR-099) |
+| `security.tls.caKey` / `certKey` / `keyKey` | `""` | Ключи внутри Secret → `security.tls.{caFile,certFile,keyFile}` (путь `/etc/synth/tls/<key>`) |
+| `security.tls.caFile` / `certFile` / `keyFile` | `""` | Явные пути внутри контейнера (когда файлы смонтированы вами) |
+| `security.tls.rejectUnauthorized` | `""` | `""` (дефолт `true`) \| `"true"` \| `"false"` → `security.tls.rejectUnauthorized` |
 | `ui.image.repository` | `gitverse.ru/itphx/synth-ui` | Образ UI |
 | `ui.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `ui.imagePullSecrets` | `[]` | Секреты для приватного реестра |
@@ -240,6 +244,31 @@ kubectl create secret generic synth-secrets -n <namespace> \
 - **не бэкапит БД**: `synth backup` архивирует каталог данных, а при
   `backend: postgres` данные — в БД, поэтому бэкап/восстановление — средствами
   СУБД (`pg_dump`/`pg_basebackup`/pgBackRest, `CronJob` или managed-бэкап).
+
+### TLS соединения с БД (`sslmode`)
+
+Режим TLS задаётся `storage.postgres.sslmode` (`disable` | `require` | `verify-full`;
+алиас `verify-ca` → `verify-full`). Отдельного value в чарте нет — задайте его через
+`backend.config.storage.postgres.sslmode` (chart-значение `storage.postgres.ssl: true`
+— legacy-эквивалент `require`):
+
+```yaml
+backend:
+  config:
+    storage:
+      postgres:
+        sslmode: verify-full
+security:
+  tls:
+    existingSecret: corp-tls
+    caKey: ca.crt
+```
+
+`verify-full` требует доверенный CA из `security.tls` — **fail-closed** без него.
+**TLS-параметры в DSN запрещены** (`sslmode`/`sslrootcert`/`sslcert`/`sslkey`/…):
+`pg` накладывает DSN поверх конфига (`Object.assign`) и молча перекрывает `ssl`-опции
+(вплоть до отключения TLS), поэтому политика доверия задаётся только
+`storage.postgres.sslmode` + `security.tls` (DSN при необходимости — без TLS-параметров).
 
 ### PVC при `backend: postgres` — только периферия
 
@@ -411,6 +440,60 @@ backend:
 ```bash
 helm install synth ./charts/synth --set-file caCert=./my-ca.crt -f my-values.yaml
 ```
+
+> `caCert` → `NODE_EXTRA_CA_CERTS` — это **process-level** канал Node: он влияет только
+> на стандартный транспорт и остаётся как совместимость **для дочерних процессов**.
+> Для доверия **самого Synth** (исходящие https-вызовы, включая PostgreSQL
+> `verify-full`) канонический путь — секция `security.tls` (см. ниже); при заданном
+> `security.tls` Synth ставит собственный глобальный TLS-dispatcher и
+> `NODE_EXTRA_CA_CERTS` не учитывает.
+
+## Доверие TLS/CA исходящих соединений (`security.tls`)
+
+ADR-099: единый источник доверия TLS/CA для **всех** исходящих соединений Synth
+(LLM-провайдеры, MCP, webhooks, гибрид, OIDC/JWKS, загрузка иконок/обновлений,
+git-over-https) и для TLS к PostgreSQL (`verify-full`). Пусто (дефолт) → системное
+доверие Node, манифесты не меняются.
+
+Секретов в ConfigMap нет (инвариант 13): в `config.yaml` попадают **только пути**
+внутри контейнера, сами файлы — в Secret, который монтируется в backend как
+`/etc/synth/tls` (readOnly, `0400`).
+
+```yaml
+# my-values.yaml
+security:
+  tls:
+    existingSecret: corp-tls   # Secret с CA/клиентскими сертификатами
+    caKey: ca.crt              # ключи внутри Secret → путь /etc/synth/tls/<key>
+    certKey: client.crt        # опционально (mTLS)
+    keyKey: client.key         # опционально (mTLS)
+    rejectUnauthorized: "true" # "" = дефолт (true)
+
+backend:
+  config:
+    storage:
+      postgres:
+        sslmode: verify-full   # CA для verify-full берётся из security.tls
+```
+
+Поведение:
+
+- непустой `security.tls.existingSecret` → Secret монтируется в `/etc/synth/tls`;
+  пути в `config.yaml` выводятся из ключей (`caKey`/`certKey`/`keyKey`) —
+  `security.tls.{caFile,certFile,keyFile} = /etc/synth/tls/<key>`;
+- явные `caFile`/`certFile`/`keyFile` приоритетнее выведенных из ключей Secret
+  (для случая, когда файлы смонтированы вами) — тогда чарт ничего не монтирует,
+  а лишь рендерит секцию в `config.yaml`;
+- `rejectUnauthorized` строка `"true"`/`"false"` → булево в `config.yaml`
+  (иное значение — `helm`-ошибка);
+- нужен `caPem` **без файла** (например из env)? Чарт рендерит только пути; для
+  git-канала (`git -c http.sslCAInfo`) `caPem` вообще недоступен — задавайте
+  `caFile`.
+
+Отличие от `caCert`/`NODE_EXTRA_CA_CERTS`: `caCert` — process-level канал Node
+(ConfigMap + `/etc/ssl/certs/itphx-ca.crt` + env, для дочерних процессов);
+`security.tls` — штатная конфигурация доверия самого Synth (и CA для PostgreSQL
+`verify-full`). Для Synth предпочтителен `security.tls`.
 
 ## Декларативный config.yaml
 

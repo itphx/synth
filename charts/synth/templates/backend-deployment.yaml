@@ -98,6 +98,13 @@ spec:
               mountPath: /etc/ssl/certs/itphx-ca.crt
               subPath: itphx-ca.crt
             {{- end }}
+            {{- /* ADR-099: Secret с CA/клиентскими сертификатами (только чтение,
+                   0400). В config.yaml уходят ТОЛЬКО пути внутри контейнера. */}}
+            {{- if include "synth.tls.mounted" . }}
+            - name: tls
+              mountPath: {{ include "synth.backend.tlsMountDir" . }}
+              readOnly: true
+            {{- end }}
           {{- with .Values.backend.probes.liveness }}
           livenessProbe:
             httpGet:
@@ -140,4 +147,11 @@ spec:
         - name: itphx-ca
           configMap:
             name: {{ include "synth.name" . }}-itphx-ca
+        {{- end }}
+        {{- /* ADR-099: CA/клиентские сертификаты — из Secret, права 0400. */}}
+        {{- if include "synth.tls.mounted" . }}
+        - name: tls
+          secret:
+            secretName: {{ .Values.security.tls.existingSecret }}
+            defaultMode: 0400
         {{- end }}

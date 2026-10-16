@@ -150,6 +150,45 @@ storage:
   fallbackDir: ""
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Доверие TLS/CA исходящих соединений Synth (ADR-099, конфиг `security.tls`).
+# Пусто (дефолт) → системное доверие Node; манифесты не меняются.
+#
+# Пароли/ключи в ConfigMap НЕ кладутся (инвариант 13) — в config.yaml попадают
+# ТОЛЬКО пути внутри контейнера. Сами файлы — в Secret (`existingSecret`),
+# который монтируется в backend как /etc/synth/tls (readOnly, 0400).
+#
+# Пример: корпоративный CA и клиентский сертификат (mTLS) в Secret `corp-tls`:
+#   security:
+#     tls:
+#       existingSecret: corp-tls   # ключи внутри Secret
+#       caKey: ca.crt
+#       certKey: client.crt
+#       keyKey: client.key
+#       rejectUnauthorized: "true" # "" = дефолт (true)
+# → config.yaml: security.tls.{caFile,certFile,keyFile} = /etc/synth/tls/<key>
+#
+# Файлы уже смонтированы вами (свой Secret/volume)? Задайте пути напрямую
+# (caFile/certFile/keyFile) — чарт тогда ничего не монтирует, только рендерит
+# секцию в config.yaml. Для git-канала (`-c http.sslCAInfo`) нужен именно
+# `caFile` (путь): `caPem` без файла git не поддерживает.
+# ─────────────────────────────────────────────────────────────────────────────
+security:
+  tls:
+    # Secret с CA/клиентскими сертификатами → mount в /etc/synth/tls (0400).
+    # Пусто → ничего не монтируется.
+    existingSecret: ""
+    # Ключи внутри existingSecret; пусто → путь не рендерится.
+    caKey: ""
+    certKey: ""
+    keyKey: ""
+    # Явные пути внутри контейнера (когда файлы смонтированы вами).
+    caFile: ""
+    certFile: ""
+    keyFile: ""
+    # "" (дефолт true) | "true" | "false" → security.tls.rejectUnauthorized.
+    rejectUnauthorized: ""
+
+# ─────────────────────────────────────────────────────────────────────────────
 # UI — @itphx/synth-ui (React SPA) под nginx, проксирует /api /ws /auth /admin на backend.
 # ─────────────────────────────────────────────────────────────────────────────
 ui:

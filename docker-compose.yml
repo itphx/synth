@@ -55,6 +55,16 @@ services:
       - SYNTH_POSTGRES_PASSWORD=${SYNTH_POSTGRES_PASSWORD:-}
       # Задел деградации (storage.degradedMode | fallbackDir) env-переменных не
       # имеет — задаётся в config.yaml (SYNTH_CONFIG или ./config.yaml).
+      # --- Доверие TLS/CA исходящих соединений (ADR-099, security.tls) ---
+      # Пусто → системное доверие Node (поведение не меняется). Значения — пути
+      # К ФАЙЛАМ ВНУТРИ контейнера (смонтируйте CA/клиентские сертификаты сами
+      # через volumes ниже или свой Secret); PEM целиком — SYNTH_TLS_CA_PEM.
+      # Секреты в compose-файл не хардкодим, значения берутся из .env.
+      - SYNTH_TLS_CA_FILE=${SYNTH_TLS_CA_FILE:-}
+      - SYNTH_TLS_CA_PEM=${SYNTH_TLS_CA_PEM:-}
+      - SYNTH_TLS_CERT_FILE=${SYNTH_TLS_CERT_FILE:-}
+      - SYNTH_TLS_KEY_FILE=${SYNTH_TLS_KEY_FILE:-}
+      - SYNTH_TLS_REJECT_UNAUTHORIZED=${SYNTH_TLS_REJECT_UNAUTHORIZED:-}
     volumes:
       # При backend=file — здесь ВСЕ данные Synth (сессии, проекты, сообщения,
       # провайдеры/модели/агенты, события, расписания, …).
