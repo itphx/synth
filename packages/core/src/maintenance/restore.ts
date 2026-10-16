@@ -29,6 +29,14 @@ export class BackupChecksumError extends Error {
 /** Каталог страховочных копий — сохраняется при возврате к снимку (ADR-092). */
 const BACKUPS_DIR = 'backups';
 
+/**
+ * Каталог рабочих файлов проектов. В бэкап по умолчанию не входит
+ * (`workspaces/` исключается без `--with-workspace`), поэтому при восстановлении
+ * такого архива его нельзя удалять — иначе рабочие файлы проектов потерялись бы
+ * безвозвратно (ADR-091).
+ */
+const WORKSPACES_DIR = 'workspaces';
+
 /** Опции `restoreBackup` (ADR-091). */
 export interface RestoreOptions {
   /** Путь к архиву backup. */
@@ -135,10 +143,22 @@ async function _listTopLevel(dir: string): Promise<string[]> {
 }
 
 /**
+ * Содержит ли архив записи под `workspaces/` (файл/каталог `workspaces` или
+ * его поддерево). Только такой архив вправе заменить `workspaces/` при
+ * восстановлении; иначе каталог сохраняется (ADR-091) — бэкап без
+ * `--with-workspace` его не содержит, и восстановить было бы нечего.
+ */
+function _archiveContainsWorkspaces(manifest: BackupManifest): boolean {
+  return manifest.entries.some(
+    (entry) => entry.path === WORKSPACES_DIR || entry.path.startsWith(`${WORKSPACES_DIR}/`),
+  );
+}
+
+/**
  * Возврат к снимку: удаляет **все** элементы верхнего уровня в `dir`, кроме
- * перечисленных в `keep` (`backups/` — только что созданная страховочная копия).
- * Каталог отсутствует — просто создаётся. Ошибки удаления не глотаются (`rm` с
- * `force` игнорирует лишь ENOENT).
+ * перечисленных в `keep` (`backups/` — страховочная копия; `workspaces/`, если
+ * архив его не содержит). Каталог отсутствует — просто создаётся. Ошибки
+ * удаления не глотаются (`rm` с `force` игнорирует лишь ENOENT).
  */
 async function _resetDataDir(
   dir: string,
@@ -167,12 +187,17 @@ function _safeTarget(dataDir: string, relPath: string): string {
  * Восстановление — **возврат к снимку**: перед распаковкой все элементы верхнего
  * уровня в `dataDir` удаляются (данные, появившиеся после бэкапа и отсутствующие
  * в архиве, а также повреждённые файлы), кроме `backups/` — только что созданной
- * страховочной копии. Страховочная копия создаётся автоматически; её можно
+ * страховочной копии — и `workspaces/`, если архив его **не** содержит: `workspaces/`
+ * не входит в бэкап по умолчанию (без `--with-workspace`) и при восстановлении
+ * сохраняется, иначе рабочие файлы проектов потерялись бы безвозвратно. Архив,
+ * снятый с `--with-workspace`, `workspaces/` заменяет (обычная семантика снимка).
+ * Страховочная копия создаётся автоматически; её можно
  * отключить `--no-safety-copy` (`safetyCopy: false`) — тогда откат восстановления
  * невозможен, и об этом выводится предупреждение в канал `warn`.
  *
  * Без `--dry-run` (и без подтверждения на уровне CLI) перезаписывает данные;
- * в `--dry-run` план (в т.ч. список удаляемых элементов) печатается без записи.
+ * в `--dry-run` план (в т.ч. список удаляемых/сохраняемых элементов) печатается
+ * без записи.
  *
  * @throws Error если архив невалиден, из более новой схемы или повреждён.
  */
@@ -204,9 +229,16 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
   // 4. Контрольные суммы — до любой записи.
   await _verifyArchive(archive, manifest);
 
+  // Сохраняемые элементы верхнего уровня: `backups/` всегда + `workspaces/`,
+  // если архив его не содержит (бэкап без `--with-workspace`) — иначе потеряли
+  // бы рабочие файлы проектов, которых в архиве нет.
+  const keepWorkspaces = !_archiveContainsWorkspaces(manifest);
+  const keep = new Set<string>([BACKUPS_DIR]);
+  if (keepWorkspaces) keep.add(WORKSPACES_DIR);
+
   // 5. Предпросмотр.
   if (dryRun) {
-    const stale = (await _listTopLevel(dataDir)).filter((name) => name !== BACKUPS_DIR);
+    const stale = (await _listTopLevel(dataDir)).filter((name) => !keep.has(name));
     log(`[dry-run] Восстановление из ${archive} в ${dataDir}`);
     log(`  схема архива: ${manifest.schemaVersion} (текущая ${SCHEMA_VERSION})`);
     log(`  версия пакета в архиве: ${manifest.instanceVersion}`);
@@ -218,6 +250,7 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
         : `  очистка каталога: будет удалено элементов — ${stale.length} (${stale.join(', ')})`,
     );
     log(`  ${BACKUPS_DIR}/ сохраняется (страховочная копия)`);
+    if (keepWorkspaces) log(`  ${WORKSPACES_DIR}/ сохранён (в архиве отсутствует)`);
     if (schemaOlder) log('  предупреждение: схема старше — после восстановления выполните `synth migrate`');
     log('  (dry-run: изменения не записаны)');
     return { restored: fileCount, removed: 0, manifest };
@@ -239,11 +272,13 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
   }
 
   // 8. Очистка цели (возврат к снимку): удаляются все элементы верхнего уровня,
-  // кроме `backups/` со страховочной копией; повреждённые/лишние файлы не переживут restore.
-  const reset = await _resetDataDir(dataDir, new Set([BACKUPS_DIR]));
+  // кроме `backups/` (страховочная копия) и `workspaces/`, если его нет в архиве;
+  // повреждённые/лишние файлы не переживут restore.
+  const reset = await _resetDataDir(dataDir, keep);
   log(`Очистка каталога данных: удалено элементов — ${reset.removed}`);
   if (reset.removed > 0) log(`  удалено: ${reset.names.join(', ')}`);
   log(`  ${BACKUPS_DIR}/ сохранён (страховочная копия)`);
+  if (keepWorkspaces) log(`  ${WORKSPACES_DIR}/ сохранён (в архиве отсутствует)`);
 
   // 9. Извлечение (перезапись; каталоги — mkdir -p, права — из записи).
   let restored = 0;
@@ -268,6 +303,7 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
   // 10. Итог.
   log(`Восстановлено файлов: ${restored}`);
   log(`  удалено лишних файлов/каталогов: ${reset.removed}`);
+  if (keepWorkspaces) log(`  ${WORKSPACES_DIR}/ сохранён (в архиве отсутствует)`);
   if (safetyPath) log(`  страховочная копия: ${safetyPath}`);
   log('Напоминание: выполните `synth doctor` (проверка после восстановления).');
   if (schemaOlder) log('Напоминание: схема старше — выполните `synth migrate`.');
@@ -278,7 +314,8 @@ export async function restoreBackup(opts: RestoreOptions): Promise<{
 /**
  * Тело CLI-команды `synth restore` (ADR-091). Без `--dry-run` и без `--yes` —
  * отказ («перезапись данных»). Проверка архива выполняется всегда. Восстановление
- * возвращает каталог к снимку (лишние файлы удаляются; `backups/` сохраняется);
+ * возвращает каталог к снимку (лишние файлы удаляются; `backups/` сохраняется,
+ * `workspaces/` — если его нет в архиве);
  * при `--no-safety-copy` откат невозможен — предупреждение идёт в stderr.
  *
  * @returns код выхода процесса (0 — успех, 1 — отказ/ошибка).

@@ -1121,7 +1121,9 @@ program
 
 program
   .command('restore')
-  .description('Восстановить каталог данных из архива backup — возврат к снимку (ADR-091)')
+  .description(
+    'Восстановить каталог данных из архива backup — возврат к снимку; workspaces/ сохраняется, если нет в архиве (ADR-091)',
+  )
   .argument('<archive>', 'путь к архиву backup')
   .option('--data-dir <path>', 'каталог данных')
   .option('--config <path>', 'путь к config.yaml')

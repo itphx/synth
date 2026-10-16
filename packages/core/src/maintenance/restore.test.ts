@@ -205,6 +205,62 @@ describe('restore', () => {
     expect(await readFile(join(target, 'sessions', 's1.json'), 'utf-8')).toBe('{"id":"s1"}');
   });
 
+  it('архив без workspaces: workspaces/ сохраняется, лишние файлы удаляются', async () => {
+    const target = join(tmpDir, 'keep-workspaces');
+    await mkdir(join(target, 'workspaces', 'proj'), { recursive: true });
+    await writeFile(join(target, 'workspaces', 'proj', 'file.txt'), 'work', 'utf-8');
+    await writeFile(join(target, 'stale.txt'), 'stale', 'utf-8');
+
+    const logs: string[] = [];
+    await restoreBackup({ archive, dataDir: target, log: (m) => logs.push(m) });
+
+    // Рабочие файлы проекта на месте — бэкап их не содержал, удалять нельзя.
+    expect(await readFile(join(target, 'workspaces', 'proj', 'file.txt'), 'utf-8')).toBe('work');
+    // Возврат к снимку для остального каталога.
+    expect(await readFile(join(target, 'sessions', 's1.json'), 'utf-8')).toBe('{"id":"s1"}');
+    await expect(stat(join(target, 'stale.txt'))).rejects.toThrow();
+    expect(logs.join('\n')).toContain('workspaces/ сохранён (в архиве отсутствует)');
+  });
+
+  it('архив с workspaces (--with-workspace): workspaces/ заменяется архивным содержимым', async () => {
+    const src = join(tmpDir, 'ws-src');
+    await mkdir(join(src, 'workspaces', 'proj'), { recursive: true });
+    await writeFile(join(src, 'workspaces', 'proj', 'new.txt'), 'archived', 'utf-8');
+    const wsArchive = join(tmpDir, 'with-workspace.tar.gz');
+    await createBackup({ dataDir: src, out: wsArchive, withWorkspace: true });
+
+    const target = join(tmpDir, 'ws-target');
+    await mkdir(join(target, 'workspaces'), { recursive: true });
+    await writeFile(join(target, 'workspaces', 'old.txt'), 'old', 'utf-8');
+
+    await restoreBackup({ archive: wsArchive, dataDir: target });
+
+    // Обычная семантика снимка: архивное содержимое заменило прежнее.
+    expect(await readFile(join(target, 'workspaces', 'proj', 'new.txt'), 'utf-8')).toBe('archived');
+    await expect(stat(join(target, 'workspaces', 'old.txt'))).rejects.toThrow();
+  });
+
+  it('--dry-run: workspaces/ не удаляется, в выводе видно сохранение', async () => {
+    const target = join(tmpDir, 'dry-workspaces');
+    await mkdir(join(target, 'workspaces', 'proj'), { recursive: true });
+    await writeFile(join(target, 'workspaces', 'proj', 'file.txt'), 'work', 'utf-8');
+    await writeFile(join(target, 'stale.txt'), 'stale', 'utf-8');
+
+    const logs: string[] = [];
+    const result = await restoreBackup({
+      archive,
+      dataDir: target,
+      dryRun: true,
+      log: (m) => logs.push(m),
+    });
+
+    expect(result.removed).toBe(0);
+    expect(await readFile(join(target, 'workspaces', 'proj', 'file.txt'), 'utf-8')).toBe('work');
+    const out = logs.join('\n');
+    expect(out).toContain('stale.txt');
+    expect(out).toContain('workspaces/ сохранён (в архиве отсутствует)');
+  });
+
   it('--dry-run: печатает план очистки, но ничего не удаляет и не пишет', async () => {
     const target = join(tmpDir, 'dry-cleanup');
     await mkdir(target, { recursive: true });
