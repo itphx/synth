@@ -84,8 +84,8 @@ export async function createStandaloneStorage(config: StandaloneConfig): Promise
     env: process.env,
     postgres: config.postgresConfig,
     postgresPassword: config.postgresPassword,
-    degradedMode: config.degradedMode,
-    fallbackDir: config.fallbackDir,
+    degradedMode: config.degradedMode ?? 'fallback-file',
+    fallbackDir: config.fallbackDir ?? join(config.dataDir, 'fallback'),
     dedupStore: config.eventsConfig?.dedupStore,
     scheduleCrossProcess: config.schedulerConfig?.crossProcessLocks ?? false,
     systemPromptsDir: config.systemPromptsDir,
@@ -100,6 +100,11 @@ export async function createStandaloneDeps(
 ) {
   const storageContext = storage ?? (await createStandaloneStorage(config));
   const dataDir = config.dataDir;
+  // PROP-032 (W5): деградированное хранилище (postgres недоступен → файловый
+  // фоллбек, read-only). Фоновые ПИСАТЕЛИ (миграции, провайдеры из env, шедулер,
+  // webhooks, sweeper/ephemeral, retention-прунеры) отключаются, чтобы не
+  // создавать доменные данные в фоллбеке (split-brain).
+  const storageDegraded = storageContext.degraded !== undefined;
   await ensureDataDir(dataDir);
 
   // ADR-091: отложенное восстановление из бэкапа — офлайн-операция, применяется
@@ -210,7 +215,7 @@ export async function createStandaloneDeps(
   // ADR-089: авто-архивация ephemeral-сессий по TTL. Таймер `unref`-ится
   // (тесты/короткоживущие процессы не держатся); остановка — на shutdown
   // через возвращаемый хэндл `stopEphemeralSweeper`.
-  const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
+  const stopEphemeralSweeper = storageDegraded ? () => {} : startEphemeralSweeper(sessionManager);
   const mcpManager = new McpManager();
   mcpManager.setConfig(config.mcpServers ?? {});
 
@@ -223,8 +228,8 @@ export async function createStandaloneDeps(
     mergeMcpNetworkPolicy(config.mcpNetworkPolicy, runtimeMcpNetworkPolicy),
   );
 
-  // Парсим провайдеров из переменных окружения
-  await syncProvidersFromEnv(providerStore, modelStore);
+  // Парсим провайдеров из переменных окружения (в деградации — не пишем в фоллбек).
+  if (!storageDegraded) await syncProvidersFromEnv(providerStore, modelStore);
 
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
@@ -244,10 +249,12 @@ export async function createStandaloneDeps(
     eventBus,
     config: webhooksConfig,
   });
-  webhookService.start();
-  const stopWebhookDeliveryPruner = startWebhookDeliveryPruner(webhookDeliveryStore, {
-    getRetentionDays: () => webhooksConfig.deliveryRetentionDays,
-  });
+  if (!storageDegraded) webhookService.start();
+  const stopWebhookDeliveryPruner = storageDegraded
+    ? () => {}
+    : startWebhookDeliveryPruner(webhookDeliveryStore, {
+        getRetentionDays: () => webhooksConfig.deliveryRetentionDays,
+      });
 
   // ADR-089 (standalone): единая нормализация legacy-владельца при чтении — id
   // профиля `local` (UUID, созданный до фикса резолвера внешней идентичности)
@@ -342,25 +349,29 @@ export async function createStandaloneDeps(
   // миграция реестра (`session-scope-snapshots-v1`, маркер внутри сохранён → no-op
   // при повторном запуске), отдельный прямой вызов больше не нужен.
   // Fail-closed: ошибка копии/миграции не глушится — старт прерывается.
-  await applyStartupMigrations({
-    dataDir,
-    settingsStore,
-    sessionManager,
-    projectStore,
-    // PROP-032: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
-    ...(storageContext.locks
-      ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
-      : {}),
-    resolveSystemDefaults: async () => ({
-      mcpDefaultOn: Object.entries(config.mcpServers ?? {})
-        .filter(([, cfg]) => cfg.enabledByDefault === true)
-        .map(([name]) => name),
-      skillsDefaultOn: (await resolveProjectSkillSeed(
-        skillService,
-        await settingsStore.getSkillsDisabledForNewProjects(),
-      )).enabled,
-    }),
-  });
+  // PROP-032 (W5): в деградации миграции не применяем — фоллбек-каталог пуст,
+  // а страховочная копия/миграция были бы доменной записью в фоллбек.
+  if (!storageDegraded) {
+    await applyStartupMigrations({
+      dataDir,
+      settingsStore,
+      sessionManager,
+      projectStore,
+      // PROP-032: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
+      ...(storageContext.locks
+        ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
+        : {}),
+      resolveSystemDefaults: async () => ({
+        mcpDefaultOn: Object.entries(config.mcpServers ?? {})
+          .filter(([, cfg]) => cfg.enabledByDefault === true)
+          .map(([name]) => name),
+        skillsDefaultOn: (await resolveProjectSkillSeed(
+          skillService,
+          await settingsStore.getSkillsDisabledForNewProjects(),
+        )).enabled,
+      }),
+    });
+  }
 
   // ADR-046 §7: slash-команды и bundles — единый резолвинг в core (UI/CLI/гибрид).
   const commandService = new CommandService({
@@ -472,9 +483,11 @@ export async function createStandaloneDeps(
     },
   });
   // ADR-089 (Блок 2): retention-очистка журнала событий (сразу + каждые 6 ч).
-  const stopEventJournalPruner = startEventJournalPruner(eventJournal, {
-    getRetentionDays: () => effectiveEventsSettings.journalRetentionDays,
-  });
+  const stopEventJournalPruner = storageDegraded
+    ? () => {}
+    : startEventJournalPruner(eventJournal, {
+        getRetentionDays: () => effectiveEventsSettings.journalRetentionDays,
+      });
   // ADR-051 (срез) / ADR-089: правило маршрутизации cron-событий по расписанию.
   eventRouter.registerRuleProvider(
     new SchedulerRuleProvider(scheduleStore, effectiveEvents.ephemeralTtl),
@@ -661,7 +674,7 @@ export async function createStandaloneDeps(
           ? storageContext.locks.createLeader({ name: 'scheduler/leader', tickMs: schedulerTickMs })
           : new AlwaysLeader(),
   });
-  if (config.schedulerConfig?.enabled !== false) {
+  if (config.schedulerConfig?.enabled !== false && !storageDegraded) {
     void schedulerService.start().catch((err) => {
       console.warn(`[scheduler] не удалось запустить: ${err instanceof Error ? err.message : String(err)}`);
     });

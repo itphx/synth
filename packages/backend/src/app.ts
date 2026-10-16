@@ -30,8 +30,9 @@ import type {
   EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository,
   SettingsRepository, EventRouter, RequestSessionService, EventBindingRepository,
   EventJournalRepository, EventIngress, ScheduleRepository, SchedulerService,
-  WebhookRepository, WebhookService,
+  WebhookRepository, WebhookService, StorageContext,
 } from '@itphx/synth-core';
+import { storageHealthFields, createStorageDegradedGuard, createStorageStatusRoutes } from '@itphx/synth-core/server/storage-degraded.js';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
 import { resolveCorsOrigin } from './lib/cors.js';
@@ -137,9 +138,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.use(logger());
     // CORS настраивается после загрузки конфига
 
-    // Health (без auth)
-    app.get('/health', (c) => c.json({ status: 'healthy', version: SYNTH_VERSION, time: nowISO() }));
-    app.get('/api/v2/health', (c) => c.json({ status: 'healthy', version: SYNTH_VERSION, time: nowISO() }));
+    // Health (без auth). PROP-032 (W5): при деградации хранилища status='degraded'
+    // + блок storage (аддитивно к {status, version, time}). `degradedInfo`
+    // заполняется после сборки контекста хранения ниже (до первого запроса).
+    let degradedInfo: StorageContext['degraded'] | null = null;
+    const health = () => ({ ...storageHealthFields(degradedInfo), version: SYNTH_VERSION, time: nowISO() });
+    app.get('/health', (c) => c.json(health()));
+    app.get('/api/v2/health', (c) => c.json(health()));
 
     // Динамический CORS origin (fail-closed): явный ORIGIN через env `SYNTH_CORS_ORIGIN`;
     // иначе явный dev-флаг `SYNTH_CORS_ALLOW_ALL=true` (отражать любой origin);
@@ -163,6 +168,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // инстанс переиспользует `createBackendDeps` (в т.ч. `mcpRegistry`, который
     // деп сидирует instance-серверами).
     const storage = await createBackendStorage(backendConfig);
+    // PROP-032 (W5): состояние деградации — для health/guard/диагностики.
+    degradedInfo = storage.degraded ?? null;
     // ADR-052 (этап I): реестр service-key — резолвер ключа `synth_svc_…`
     // нужен аутентификации (паритет с core `server/app.ts`).
     const serviceApiKeyStore = storage.serviceKeys;
@@ -221,6 +228,22 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, deps.profilesStore, deps.dataDir, deps.defaultsStore));
+
+    // PROP-032 (W5): деградированное хранилище — managed: доступ только роли
+    // ADMIN (остальным 503 STORAGE_DEGRADED), мутации — 503 STORAGE_DEGRADED_READONLY
+    // (кроме ремонтных операций maintenance). Guard — после auth-роутов (логин/health
+    // не блокируются) и до admin-роутов.
+    app.use('/api/*', createStorageDegradedGuard({
+      getDegraded: () => degradedInfo,
+      isAdmin: (c) => {
+        const user = c.get('user') as { roles?: string[] } | undefined;
+        return Array.isArray(user?.roles) && user.roles.includes('ADMIN');
+      },
+      mutationAllowlist: ['/api/v2/maintenance'],
+    }));
+
+    // PROP-032 (W5): диагностика деградации (проверка соединения + «нужен рестарт»).
+    app.route('/', createStorageStatusRoutes({ getDegraded: () => degradedInfo }));
 
     // Роуты API v2 (порядок монтирования — как раньше, см. mount-routes.ts).
     mountBackendRoutes(app, auth, { config: backendConfig, deps });

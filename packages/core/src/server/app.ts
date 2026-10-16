@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig, PostgresStorageConfig } from '@itphx/synth-shared';
@@ -23,6 +24,13 @@ import { mountStandaloneRoutes } from './app/mount-routes.js';
 import { registerEventsSse } from './app/sse-events.js';
 import { attachEventWebSocket, EventWebSocketSubscriptions } from './app/ws-events.js';
 import { createStandaloneHttpServer } from './app/http-server.js';
+import { createStorageDegradedGuard, createStorageStatusRoutes } from './storage-degraded.js';
+
+/** Роль ADMIN у пользователя запроса (standalone — единственный владелец `local`). */
+function hasAdminRole(c: Context): boolean {
+  const user = c.get('user') as { roles?: string[] } | undefined;
+  return Array.isArray(user?.roles) && user.roles.includes('ADMIN');
+}
 
 export interface StandaloneConfig {
   port: number;
@@ -231,7 +239,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   });
 
   // Health — без auth
-  const healthRoutes = createHealthRoutes();
+  const healthRoutes = createHealthRoutes({ getStorageDegraded: () => storage.degraded ?? null });
   app.route('/', healthRoutes);
 
   // Hybrid status — без auth (как health): UI опрашивает статус подключения
@@ -257,6 +265,21 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Всё остальное требует аутентификации
   app.use('/api/*', auth.requireAuth);
   app.use('/ws/*', auth.requireAuth);
+
+  // PROP-032 (W5): деградированное хранилище — ADMIN-only + строгий read-only.
+  // Guard идёт после `requireAuth` (нужен `user` для admin-проверки) и до роутов.
+  // Ремонтные операции (maintenance: doctor/бэкап/выгрузка-перенос данных) не
+  // блокируются — их нужно успеть выполнить до рестарта.
+  app.use('/api/*', createStorageDegradedGuard({
+    getDegraded: () => storage.degraded ?? null,
+    isAdmin: (c) => hasAdminRole(c),
+    mutationAllowlist: ['/api/v2/maintenance'],
+  }));
+
+  // PROP-032 (W5): диагностика деградации — проверка соединения с БД и признак
+  // «нужен рестарт» (авто-возврат не реализован). Монтируется после guard'а:
+  // не-администраторы получают 503 ещё до хендлера.
+  app.route('/', createStorageStatusRoutes({ getDegraded: () => storage.degraded ?? null }));
 
   // ADR-052 (этап I): per-key rate limit service-key (`rateLimitPerMinute` ключа;
   // 0/не задан — без лимита) — паритет с managed backend (`app.ts`). После

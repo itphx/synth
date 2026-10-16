@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SkillRegistry } from './registry.js';
-import { buildBuiltinSkills, SYNTH_AGENTS_MD_NAME } from './builtin.js';
+import { buildBuiltinSkills, SYNTH_AGENTS_MD_NAME, SYNTH_STORAGE_RECOVERY_NAME } from './builtin.js';
 import type { SkillSource } from './types.js';
 
 let root: string;
@@ -40,7 +40,12 @@ describe('SkillRegistry — builtin (ADR-046 §9.5)', () => {
     });
 
     const { skills } = await registry.list();
-    expect(skills.map((s) => s.name)).toEqual(['skill-creator', SYNTH_AGENTS_MD_NAME, 'local-skill']);
+    expect(skills.map((s) => s.name)).toEqual([
+      'skill-creator',
+      SYNTH_AGENTS_MD_NAME,
+      SYNTH_STORAGE_RECOVERY_NAME,
+      'local-skill',
+    ]);
     expect(skills[0]!.trusted).toBe(true);
     expect(skills[0]!.source.level).toBe('system');
 
@@ -78,6 +83,10 @@ describe('SkillRegistry — builtin (ADR-046 §9.5)', () => {
     });
     registry.reload();
 
-    expect((await registry.list()).skills.map((s) => s.name)).toEqual(['skill-creator', SYNTH_AGENTS_MD_NAME]);
+    expect((await registry.list()).skills.map((s) => s.name)).toEqual([
+      'skill-creator',
+      SYNTH_AGENTS_MD_NAME,
+      SYNTH_STORAGE_RECOVERY_NAME,
+    ]);
   });
 });

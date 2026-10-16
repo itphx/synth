@@ -3,7 +3,8 @@ import { globMatch, ToolCapability } from '@itphx/synth-shared';
 import type { PermissionAction, PermissionConfig, PermissionDecision, PermissionRule, PlanMode, SessionMode, McpServerToolSettings, McpToolAvailability } from '@itphx/synth-shared';
 import { resolvePath, isLexicallyInside, isInsideReal } from '../tools/path-utils.js';
 import { t as sm } from '../system-messages.js';
-import { computeToolAvailability, isWorkspaceDependentTool } from './availability.js';
+import { computeToolAvailability, isWorkspaceDependentTool, isToolAvailableInDegradedMode } from './availability.js';
+import { isStorageDegraded } from './storage-state.js';
 import {
   isRuntimeDepAvailable,
   RUNTIME_DEP_BINARY,
@@ -184,6 +185,20 @@ export class PermissionEvaluator {
     const shellCwd = toolName === 'execute_shell'
       ? (typeof params.cwd === 'string' && params.cwd.trim() !== '' ? resolvePath(params.cwd, workingDir) : workingDir)
       : workingDir;
+
+    // PROP-032 (W5): деградированное хранилище — строгий read-only. Доступны
+    // только безопасные тулы (скиллы/веб) — паритет с осью доступности
+    // (`computeToolAvailability` → `unavailable(storage)`); прочие жёстко `deny`
+    // (доменные мутации в файловом фоллбеке → split-brain).
+    if (isStorageDegraded() && !isToolAvailableInDegradedMode(toolName)) {
+      return {
+        action: 'deny',
+        reason: sm('permission.storage_unavailable'),
+        matchedRule: 'storage.unavailable',
+        unavailable: { reason: 'storage' },
+        messageId: 'tool-unavailable-storage',
+      };
+    }
 
     // ADR-025: plan-рестрикция применяется поверх конфига. В режиме plan (или
     // strict без утверждённого плана) все write/edit/delete тулы и git-запись → deny.

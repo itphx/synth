@@ -229,6 +229,8 @@ export const SYSTEM_MESSAGES = {
     'Tool is unavailable: the required program "{binary}" is not installed in the environment',
   'permission.workspace_unavailable':
     'Tool is unavailable: the project working directory is not set. Create or attach a project and set its working directory first.',
+  'permission.storage_unavailable':
+    'Tool is unavailable: the storage backend is down and Synth runs read-only in degraded mode. Restore the database connection and restart the instance (see GET /api/v2/storage/status).',
   'permission.external_directory_default':
     'Path "{path}" is outside the project working directory → {action} (permission.rules.external_directory)',
   'permission.no_rules': 'no permission rules for "{tool}" — allowed by default',

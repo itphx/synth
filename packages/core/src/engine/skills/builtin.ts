@@ -25,6 +25,16 @@ export const SYNTH_AGENTS_MD_NAME = 'synth-agents-md';
 export const SYNTH_AGENTS_MD_COMMAND = 'agents-md';
 
 /**
+ * PROP-032 (W5): имя встроенного скилла-руководства по восстановлению
+ * недоступного хранилища (деградированный режим). Read-only по природе — доступен
+ * и в обычном режиме (профилактика/диагностика), и в аварийном.
+ */
+export const SYNTH_STORAGE_RECOVERY_NAME = 'synth-storage-recovery';
+
+/** Slash-команда скилла `synth-storage-recovery`. */
+export const SYNTH_STORAGE_RECOVERY_COMMAND = 'storage-recovery';
+
+/**
  * Синтетический каталог-источник builtin-скиллов: system-уровень, `trusted: true`.
  * Идёт **первым** в discovery, поэтому не перекрывается project/instance.
  */
@@ -164,6 +174,75 @@ export function buildSynthAgentsMdMeta(): SkillMeta {
   };
 }
 
+/** Тело встроенного `synth-storage-recovery` (модель-facing runbook, PROP-032 W5). */
+const SYNTH_STORAGE_RECOVERY_BODY = `# Storage recovery (degraded mode)
+
+Runbook for restoring Synth storage: the configured backend (\`storage.backend=postgres\`)
+is unreachable, so the service started on a **file fallback** in strict **read-only**
+(degraded mode). No auto-recovery exists — recovery requires a **restart** after the
+underlying problem is fixed.
+
+## 1. Diagnose
+- \`GET /api/v2/health\` — \`status: "degraded"\` plus \`storage.{backend, fallbackDir, reason, since}\`.
+- \`GET /api/v2/storage/status\` — probes the original backend and reports
+  \`recovery.connection.ok\` + \`recovery.restartRequired: true\`. Use it to tell
+  "DB is back" (needs restart) from "DB is still down".
+- \`synth doctor\` — instance health (data dir, schema, storage backend probe).
+- Server log — the loud \`[storage] PostgreSQL недоступен … \` block entered at startup
+  contains the concrete failure reason (network/credentials/schema).
+
+## 2. Classify the cause
+- **Network / DNS / port** — the DB host/port is unreachable (firewall, container down,
+  wrong \`SYNTH_POSTGRES_HOST\`/\`SYNTH_POSTGRES_PORT\`).
+- **Credentials** — authentication failed (\`SYNTH_POSTGRES_PASSWORD\` / \`{dataDir}/secrets/postgres-password\`).
+- **Schema** — driver failed to apply/assert migrations (\`storage.backend=postgres\`, DBA mode \`assert\`).
+- **Capacity / locked** — DB out of connections or schema locked by another process.
+
+## 3. Recover (pick per cause)
+- Network/credentials: fix the config/secret/network, then verify with
+  \`GET /api/v2/storage/status\` (probe \`ok: true\`) — **a restart is still required**
+  (the storage context is bound at startup).
+- Schema: apply migrations against the DB (\`synth migrate\`) and restart.
+- Data loss: restore from a \`synth backup\` dump, then restart.
+- Never copy data out of the file fallback back into the DB by hand — the fallback is
+  diagnostic-only and its contents are not migrated.
+
+## 4. What stays available in degraded mode
+- READ requests and diagnostics (\`GET /health\`, \`GET /api/v2/storage/status\`, maintenance
+  doctor/backup/export). Mutating requests (\`POST/PUT/PATCH/DELETE\`) are rejected with
+  \`503 STORAGE_DEGRADED_READONLY\`; non-administrators get \`503 STORAGE_DEGRADED\`.
+- The tool registry exposes only safe tools (\`skill\`, \`web_fetch\`, \`web_search\`).
+
+## 5. Return to normal
+1. Confirm the probe: \`GET /api/v2/storage/status\` → \`recovery.connection.ok: true\`.
+2. Restart the service (auto-recovery is intentionally disabled — live backend swap is
+   risky). On startup the driver reconnects to PostgreSQL with the configured schema mode.
+
+## Verify
+- \`GET /api/v2/health\` → \`status: "healthy"\` (no \`storage\` block).
+- \`GET /api/v2/storage/status\` → \`status: "healthy"\`.`;
+
+/** `SkillMeta` встроенного `synth-storage-recovery` (PROP-032 W5). */
+export function buildSynthStorageRecoveryMeta(): SkillMeta {
+  return {
+    name: SYNTH_STORAGE_RECOVERY_NAME,
+    description:
+      'Восстановление хранилища: диагностика и лечение деградированного режима (backend недоступен, read-only фоллбек)',
+    userInvocable: true,
+    disableModelInvocation: false,
+    invocation: 'both',
+    trigger: 'manual',
+    command: SYNTH_STORAGE_RECOVERY_COMMAND,
+    category: 'ops',
+    tags: [SYNTH_STORAGE_RECOVERY_NAME, 'storage', 'postgres', 'recovery', 'degraded', 'runbook'],
+    relatedSkills: [SYNTH_AGENTS_MD_NAME],
+    // Read-only по природе (диагностика через HTTP/CLI) — не требует файловых capabilities.
+    requiresCapabilities: [],
+    scope: 'instance',
+    mode: 'any',
+  };
+}
+
 /**
  * Собирает встроенные скиллы. `dir`/`file` — синтетические пути (на ФС нет);
  * `mtimeMs: 0` — builtin вне mtime-инвалидации watcher'а.
@@ -190,5 +269,6 @@ export function buildBuiltinSkills(opts: { dataDir?: string } = {}): DiscoveredS
   return [
     build(SKILL_CREATOR_NAME, buildSkillCreatorMeta(), SKILL_CREATOR_BODY),
     build(SYNTH_AGENTS_MD_NAME, buildSynthAgentsMdMeta(), SYNTH_AGENTS_MD_BODY),
+    build(SYNTH_STORAGE_RECOVERY_NAME, buildSynthStorageRecoveryMeta(), SYNTH_STORAGE_RECOVERY_BODY),
   ];
 }

@@ -92,6 +92,10 @@ export async function createBackendDeps(
   // одного места. По умолчанию собирается `createBackendStorage`, готовый можно
   // передать (паритет с `app.ts`, где `serviceKeys`/`mcpRegistry` нужны до `auth`).
   const storageContext = storage ?? (await createBackendStorage(config));
+  // PROP-032 (W5): деградированное хранилище (postgres недоступен → файловый
+  // фоллбек, read-only). Фоновые писатели отключаются (split-brain): миграции,
+  // провайдеры из env, шедулер, webhooks, sweeper/ephemeral, retention-прунеры.
+  const storageDegraded = storageContext.degraded !== undefined;
   const {
     settings: settingsStore,
     defaults: defaultsStore,
@@ -137,7 +141,7 @@ export async function createBackendDeps(
   });
   // ADR-089: авто-архивация ephemeral-сессий по TTL (таймер `unref`).
   // Остановка — через хэндл `stopEphemeralSweeper` на graceful shutdown.
-  const stopEphemeralSweeper = startEphemeralSweeper(sessionManager);
+  const stopEphemeralSweeper = storageDegraded ? () => {} : startEphemeralSweeper(sessionManager);
 
   // ADR-036/ADR-005: паттерны секретов и runtime-настройки («workspace/mcp»,
   // умолчания оформления) — из контекста хранения (собраны выше).
@@ -196,11 +200,13 @@ export async function createBackendDeps(
     eventBus,
     config: webhooksConfig,
   });
-  webhookService.start();
+  if (!storageDegraded) webhookService.start();
   // Retention-очистка журнала доставок: сразу при старте + каждые 6 ч (unref).
-  const stopWebhookDeliveryPruner = startWebhookDeliveryPruner(webhookDeliveryStore, {
-    getRetentionDays: () => webhooksConfig.deliveryRetentionDays,
-  });
+  const stopWebhookDeliveryPruner = storageDegraded
+    ? () => {}
+    : startWebhookDeliveryPruner(webhookDeliveryStore, {
+        getRetentionDays: () => webhooksConfig.deliveryRetentionDays,
+      });
 
   // Context builder
   const contextBuilder = new ContextBuilder(contextConfig, {
@@ -219,7 +225,8 @@ export async function createBackendDeps(
   // ADR-038: синхронизация провайдеров/моделей из переменных окружения (общая
   // core-реализация). Вызывается ПОСЛЕ создания providerStore/modelStore, но ДО
   // заполнения кэшей, чтобы env-провайдеры попали в providerCache/modelCache.
-  await syncProvidersFromEnv(providerStore, modelStore);
+  // PROP-032 (W5): в деградации не пишем в фоллбек.
+  if (!storageDegraded) await syncProvidersFromEnv(providerStore, modelStore);
 
   // Кеш провайдеров (заполняется при старте)
   const providerCache = new Map<string, ProviderConfig>();
@@ -439,9 +446,11 @@ export async function createBackendDeps(
     },
   });
   // ADR-089 (Блок 2): retention-очистка журнала событий (сразу + каждые 6 ч).
-  const stopEventJournalPruner = startEventJournalPruner(eventJournal, {
-    getRetentionDays: () => effectiveEventsSettings.journalRetentionDays,
-  });
+  const stopEventJournalPruner = storageDegraded
+    ? () => {}
+    : startEventJournalPruner(eventJournal, {
+        getRetentionDays: () => effectiveEventsSettings.journalRetentionDays,
+      });
   // ADR-051 (срез) / ADR-089: правило маршрутизации cron-событий по расписанию
   // (паритет с core `server/app.ts`; store без дублей).
   eventRouter.registerRuleProvider(
@@ -617,7 +626,7 @@ export async function createBackendDeps(
           ? storageContext.locks.createLeader({ name: 'scheduler/leader', tickMs: schedulerTickMs })
           : new AlwaysLeader(),
   });
-  if (config.synth.scheduler.enabled !== false) {
+  if (config.synth.scheduler.enabled !== false && !storageDegraded) {
     void schedulerService.start().catch((err) => {
       console.warn(`[scheduler] не удалось запустить: ${err instanceof Error ? err.message : String(err)}`);
     });
@@ -627,23 +636,27 @@ export async function createBackendDeps(
   // обязательная страховочная копия + межпроцессный лок. Миграция снапшотов скоупа —
   // зарегистрированная миграция реестра (`session-scope-snapshots-v1`), отдельный
   // прямой вызов больше не нужен. Fail-closed: ошибка не глушится.
-  await applyStartupMigrations({
-    dataDir,
-    settingsStore,
-    sessionManager,
-    projectStore,
-    // PROP-032: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
-    ...(storageContext.locks
-      ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
-      : {}),
-    resolveSystemDefaults: async () => ({
-      mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
-      skillsDefaultOn: (await resolveProjectSkillSeed(
-        skillService,
-        await settingsStore.getSkillsDisabledForNewProjects(),
-      )).enabled,
-    }),
-  });
+  // PROP-032 (W5): в деградации миграции не применяем (фоллбек-каталог пуст —
+  // страховочная копия/миграция были бы доменной записью в фоллбек).
+  if (!storageDegraded) {
+    await applyStartupMigrations({
+      dataDir,
+      settingsStore,
+      sessionManager,
+      projectStore,
+      // PROP-032: под PG — advisory-лок драйвера вместо файлового `{dataDir}/migrate`.
+      ...(storageContext.locks
+        ? { mutex: storageContext.locks.createMutex({ name: 'startup-migrate' }) }
+        : {}),
+      resolveSystemDefaults: async () => ({
+        mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
+        skillsDefaultOn: (await resolveProjectSkillSeed(
+          skillService,
+          await settingsStore.getSkillsDisabledForNewProjects(),
+        )).enabled,
+      }),
+    });
+  }
 
   return {
     dataDir,

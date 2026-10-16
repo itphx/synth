@@ -41,17 +41,25 @@ afterEach(async () => {
 });
 
 describe('/api/v2/skills (ADR-046 §9.1)', () => {
-  it('GET / — реестр содержит builtin skill-creator и synth-agents-md (ADR-046 §9.5)', async () => {
+  it('GET / — реестр содержит builtin skill-creator/synth-agents-md/synth-storage-recovery (ADR-046 §9.5)', async () => {
     const { app } = makeApp();
     const res = await app.request('/api/v2/skills');
     expect(res.status).toBe(200);
     const body: any = await res.json();
-    expect(body.skills.map((s: any) => s.name)).toEqual(['skill-creator', 'synth-agents-md']);
+    expect(body.skills.map((s: any) => s.name)).toEqual([
+      'skill-creator',
+      'synth-agents-md',
+      'synth-storage-recovery',
+    ]);
     expect(body.skills[0].trusted).toBe(true);
     expect(body.skills[0].scope).toBe('instance');
     expect(body.skills[0].level).toBe('system');
     expect(body.skills[1].trusted).toBe(true);
     expect(body.skills[1].requiresCapabilities).toEqual(['file_read', 'search', 'file_write']);
+    // PROP-032 (W5): builtin-руководство по восстановлению хранилища — read-only
+    // (диагностика через HTTP/CLI), файловых capabilities не требует.
+    expect(body.skills[2].trusted).toBe(true);
+    expect(body.skills[2].requiresCapabilities).toEqual([]);
   });
 
   it('POST / создаёт instance-скилл; GET /:name отдаёт деталь', async () => {
@@ -205,7 +213,11 @@ describe('/api/v2/skills/:name — невалидные и отсутствую�
     expect(res.status).toBe(404);
     const list: any = await (await app.request('/api/v2/skills')).json();
     // Только builtin; скилл с невалидным именем не создан.
-    expect(list.skills.map((s: any) => s.name)).toEqual(['skill-creator', 'synth-agents-md']);
+    expect(list.skills.map((s: any) => s.name)).toEqual([
+      'skill-creator',
+      'synth-agents-md',
+      'synth-storage-recovery',
+    ]);
     expect(await skillService.instanceExists('Bad_Name')).toBe(false);
   });
 });

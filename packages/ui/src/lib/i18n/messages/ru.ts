@@ -2068,6 +2068,7 @@ export const dict = {
   'permission.mcp_unavailable': 'MCP-инструмент недоступен в режиме {mode}',
   'permission.dep_unavailable': 'Инструмент недоступен: в окружении не установлена программа «{binary}»',
   'permission.workspace_unavailable': 'Инструмент недоступен: не задан рабочий каталог проекта. Сначала создайте/привяжите проект и задайте его рабочий каталог.',
+  'permission.storage_unavailable': 'Инструмент недоступен: хранилище недоступно, сервис работает в аварийном read-only режиме. Восстановите подключение к БД и перезапустите инстанс (см. GET /api/v2/storage/status).',
   'permission.external_directory_default': 'Путь «{path}» вне рабочего каталога проекта → {action} (permission.rules.external_directory)',
   'permission.no_rules': 'нет правил доступа для «{tool}» — разрешено по умолчанию',
   'permission.rule_matched': 'правило «{key}» → {action}',

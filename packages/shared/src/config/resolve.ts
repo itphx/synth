@@ -426,25 +426,48 @@ export function resolvePostgresPassword(
   return undefined;
 }
 
+/** PROP-032 (W5): допустимые политики при недоступности backend'а. */
+const DEGRADED_MODES: readonly ('fallback-file' | 'halt')[] = ['fallback-file', 'halt'];
+
+function isDegradedMode(value: unknown): value is 'fallback-file' | 'halt' {
+  return typeof value === 'string' && (DEGRADED_MODES as readonly string[]).includes(value);
+}
+
 /**
- * PROP-032 (задел W5): политика при недоступности выбранного backend —
+ * PROP-032 (W5): политика при недоступности выбранного backend —
  * `fallback-file` (default) | `halt`. Читать через этот резолвер.
+ *
+ * Приоритет (ADR-023): env `SYNTH_DEGRADED_MODE` > `config.storage.degradedMode` >
+ * `fallback-file`. Невалидное env-значение — warn и фолбэк на config (fail-soft,
+ * как прочие env-резолверы storage-секции `SYNTH_STORAGE_BACKEND`/`SYNTH_POSTGRES_*`).
  */
 export function resolveDegradedMode(
   config: SynthConfig,
+  env?: NodeJS.ProcessEnv,
 ): 'fallback-file' | 'halt' {
+  const raw = (env ?? process.env).SYNTH_DEGRADED_MODE;
+  if (raw !== undefined && raw !== '') {
+    if (isDegradedMode(raw)) return raw;
+    console.warn(
+      `[config] невалидное значение SYNTH_DEGRADED_MODE="${raw}" ` +
+        `(ожидается ${DEGRADED_MODES.map((m) => `'${m}'`).join(' | ')}) — игнорируется`,
+    );
+  }
   return config.storage.degradedMode ?? 'fallback-file';
 }
 
 /**
- * PROP-032 (задел W5): каталог файлового фоллбека. Приоритет: явный
- * `config.storage.fallbackDir` → `''` (эффективно `{dataDir}/fallback`).
+ * PROP-032 (W5): каталог файлового фоллбека. Приоритет (ADR-023): env
+ * `SYNTH_STORAGE_FALLBACK_DIR` > явный `config.storage.fallbackDir` → `''`
+ * (эффективно `{dataDir}/fallback`).
  */
 export function resolveStorageFallbackDir(
   config: SynthConfig,
   env?: NodeJS.ProcessEnv,
   home?: string | null,
 ): string {
+  const envVal = (env ?? process.env).SYNTH_STORAGE_FALLBACK_DIR;
+  if (envVal) return resolve(envVal);
   if (config.storage.fallbackDir) return resolve(config.storage.fallbackDir);
   return join(resolveDataDir(config, env, home), 'fallback');
 }

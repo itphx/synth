@@ -17,8 +17,9 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { McpServerToolSettings, PlanMode, SessionMode } from '@itphx/synth-shared';
 import { getMcpToolAvailability, isPlanBlockedTool, isPlanRestricted } from './evaluator.js';
 import { isRuntimeDepAvailable, TOOL_RUNTIME_DEP, type RuntimeDeps } from '../tools/runtime-deps.js';
+import { isStorageDegraded } from './storage-state.js';
 
-export type ToolUnavailableReason = 'mode' | 'role' | 'dependency' | 'workspace';
+export type ToolUnavailableReason = 'mode' | 'role' | 'dependency' | 'workspace' | 'storage';
 
 /**
  * Capabilities, привязанные к рабочему каталогу проекта: без него относительные
@@ -32,6 +33,27 @@ const WORKSPACE_CAPABILITIES: ReadonlySet<string> = new Set([
   ToolCapability.GIT_READ,
   ToolCapability.GIT_WRITE,
 ]);
+
+/**
+ * PROP-032 (W5): тулы, остающиеся доступными при деградированном хранилище
+ * (строгий read-only). Деградация — аварийный режим диагностики: доступны только
+ * загрузка скиллов (`skill` — runbook восстановления) и веб-поиск/чтение
+ * (`web_fetch`/`web_search`) — они не трогают доменное хранилище.
+ *
+ * Всё остальное (file/shell/git-тулы, `task`, запись плана/todo, работа с
+ * проектом/сессиями) недоступно: доменные мутации в файловом фоллбеке привели бы
+ * к split-brain (данные, созданные в фоллбеке, исчезнут при возврате к БД).
+ */
+const DEGRADED_SAFE_TOOLS: ReadonlySet<string> = new Set([
+  'skill',
+  'web_fetch',
+  'web_search',
+]);
+
+/** Доступен ли тул при деградированном хранилище (строгий read-only). */
+export function isToolAvailableInDegradedMode(toolName: string): boolean {
+  return DEGRADED_SAFE_TOOLS.has(toolName);
+}
 
 /** Зависит ли тул от рабочего каталога проекта (file/shell/git/search). */
 export function isWorkspaceDependentTool(capabilities?: readonly string[]): boolean {
@@ -57,12 +79,20 @@ export interface ToolAvailabilityOptions {
    * недоступны (`workspace`); `true`/`undefined` — fail-open (обратная совместимость).
    */
   workspaceReady?: boolean;
+  /**
+   * PROP-032 (W5): хранилище в деградированном read-only режиме. Не задано —
+   * берётся рантайм-состояние (`isStorageDegraded`). `true` — доступны только
+   * безопасные тулы (`isToolAvailableInDegradedMode`), прочие `unavailable(storage)`.
+   */
+  storageDegraded?: boolean;
 }
 
 /**
  * Вычисляет доступность тула.
  *
  * Порядок проверок:
+ *  0. storage — хранилище недоступно (деградация): доступны только безопасные
+ *     тулы (скиллы/веб); остальное `unavailable(storage)`.
  *  1. role — если `agentCapabilities` заданы и ни одна capability тула не
  *     пересекается с ними. Тул без capabilities считается доступным (нельзя
  *     определить принадлежность).
@@ -77,6 +107,13 @@ export function computeToolAvailability(
   capabilities: readonly string[] | undefined,
   opts: ToolAvailabilityOptions,
 ): ToolAvailability {
+  // 0. Хранилище: деградированный режим — строгий read-only. Доступны только
+  // безопасные тулы (скиллы/веб), остальные видимы модели как `unavailable(storage)`.
+  const degraded = opts.storageDegraded ?? isStorageDegraded();
+  if (degraded && !isToolAvailableInDegradedMode(toolName)) {
+    return { available: false, reason: 'storage' };
+  }
+
   // 1. Ролевая недоступность: у агента нет ни одной capability тула.
   if (opts.agentCapabilities && capabilities && capabilities.length > 0) {
     const agentCaps = new Set(opts.agentCapabilities);

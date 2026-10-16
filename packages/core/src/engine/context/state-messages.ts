@@ -19,10 +19,10 @@ import { renderTodosMarkdown } from '../tools/todo.js';
 
 export type StateMessageType = 'mode_change' | 'plan_updated' | 'todos_updated' | 'agent_switch';
 
-/** ADR-070 §2.9.1: недоступный тул и причина — режим, роль, зависимость окружения или отсутствие workspace. */
+/** ADR-070 §2.9.1: недоступный тул и причина — режим, роль, зависимость окружения, отсутствие workspace или деградация хранилища. */
 export interface UnavailableTool {
   name: string;
-  reason: 'mode' | 'role' | 'dependency' | 'workspace';
+  reason: 'mode' | 'role' | 'dependency' | 'workspace' | 'storage';
   /** Для `dependency` — человекочитаемое имя отсутствующей программы. */
   binary?: string;
 }
@@ -58,6 +58,13 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
   const en = language === 'en';
   const header = en ? '[UNAVAILABLE TOOLS]' : '[НЕДОСТУПНЫЕ ТУЛЫ]';
   const lines: string[] = [];
+  // PROP-032 (W5): деградированное хранилище — все несейфовые тулы схлопываются
+  // в одну строку с указанием аварийного режима.
+  if (tools.some((t) => t.reason === 'storage')) {
+    lines.push(en
+      ? '- tools are unavailable: the storage backend is down and Synth runs read-only in degraded mode. Restore the database connection and restart the instance'
+      : '- инструменты недоступны: хранилище (PostgreSQL) недоступно, сервис работает в аварийном read-only режиме. Восстановите подключение к БД и перезапустите инстанс');
+  }
   // ADR-075: все file/shell/git-тулы без workspace схлопываются в одну строку —
   // их десятки, перечислять имена бессмысленно и шумно.
   if (tools.some((t) => t.reason === 'workspace')) {
@@ -66,7 +73,7 @@ export function renderUnavailableTools(tools: UnavailableTool[], language: strin
       : '- file/shell/git-инструменты — недоступны: не задан рабочий каталог проекта. Создайте/привяжите проект и задайте рабочий каталог (project_create/project_attach + project_workspace_set)');
   }
   for (const { name, reason, binary } of tools) {
-    if (reason === 'workspace') continue;
+    if (reason === 'workspace' || reason === 'storage') continue;
     if (reason === 'dependency') {
       const program = binary ?? (en ? 'required program' : 'необходимая программа');
       const cause = en

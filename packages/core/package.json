@@ -24,6 +24,10 @@
       "types": "./dist/server/app.d.ts",
       "import": "./dist/server/app.js"
     },
+    "./server/storage-degraded.js": {
+      "types": "./dist/server/storage-degraded.d.ts",
+      "import": "./dist/server/storage-degraded.js"
+    },
     "./server/chat.js": {
       "types": "./dist/server/chat.d.ts",
       "import": "./dist/server/chat.js"

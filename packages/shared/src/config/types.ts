@@ -66,15 +66,17 @@ export const storageConfigSchema = z.object({
   /** PROP-032: параметры PostgreSQL-backend (используются при `backend: postgres`). */
   postgres: postgresStorageConfigSchema.default({}),
   /**
-   * PROP-032 (задел под волну 5): поведение при недоступности выбранного backend
-   * — `fallback-file` (перейти на файловое хранилище в `fallbackDir`, default) |
-   * `halt` (остановить старт). Читать через `resolveDegradedMode`.
+   * PROP-032 (волна 5): поведение при недоступности выбранного backend —
+   * `fallback-file` (перейти на файловое хранилище в `fallbackDir`, default) |
+   * `halt` (остановить старт). Читать через `resolveDegradedMode`
+   * (приоритет env `SYNTH_DEGRADED_MODE` > это поле > `fallback-file`).
    */
   degradedMode: z.enum(['fallback-file', 'halt']).default('fallback-file'),
   /**
-   * PROP-032 (задел под волну 5): каталог файлового фоллбека при деградации.
+   * PROP-032 (волна 5): каталог файлового фоллбека при деградации.
    * `''` — не задано (эффективно `{dataDir}/fallback`), читать через
-   * `resolveStorageFallbackDir`.
+   * `resolveStorageFallbackDir` (приоритет env `SYNTH_STORAGE_FALLBACK_DIR` >
+   * это поле > `{dataDir}/fallback`).
    */
   fallbackDir: z.string().default(''),
   workspacesRoot: z.string().default(''),

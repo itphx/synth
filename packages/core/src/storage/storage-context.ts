@@ -85,6 +85,7 @@ import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
 import type { LeaderFactoryOptions, Mutex, MutexFactoryOptions } from './mutex.js';
 import type { SchedulerLeader } from '../engine/scheduler/leader.js';
+import { setStorageDegradedState } from '../engine/permission/storage-state.js';
 
 // ── In-memory реализации ───────────────────────────────────────────────
 import {
@@ -175,11 +176,55 @@ export interface StorageSchemaMigrationResult {
 export type PostgresSchemaMode = 'apply' | 'assert' | 'skip';
 
 /**
+ * PROP-032 (W5): снимок пробного подключения к недоступному backend'у
+ * (диагностика деградированного режима — `/api/v2/storage/status`).
+ */
+export interface StorageBackendProbe {
+  /** Соединение установлено. */
+  ok: boolean;
+  /** Задержка пробного запроса, мс. */
+  latencyMs?: number;
+  /** Текст ошибки, если соединения нет. */
+  error?: string;
+}
+
+/**
+ * PROP-032 (W5): деградированный режим хранилища. Возникает, когда выбранный
+ * backend (`postgres`) недоступен на старте, а `storage.degradedMode`
+ * `fallback-file`: сервис поднимается на файловом хранилище в `fallbackDir`,
+ * **строго read-only** (мутации отклоняются, `503 STORAGE_DEGRADED_READONLY`).
+ * Доступ — только администраторам (managed) / единственному владельцу (standalone).
+ *
+ * Авто-возврата к БД нет: `StorageContext` замкнут в deps, живая подмена
+ * рискованна. Возврат — рестарт после восстановления соединения; проверка
+ * соединения — `probe` (`GET /api/v2/storage/status`).
+ */
+export interface StorageDegradedInfo {
+  /** Всегда `true` (маркер состояния). */
+  active: true;
+  /** Backend, который оказался недоступен. */
+  backend: StorageBackendKind;
+  /** Каталог файлового фоллбека, на котором поднят сервис (отдельный от dataDir!). */
+  fallbackDir: string;
+  /** Человекочитаемая причина недоступности backend'а. */
+  reason: string;
+  /** Момент входа в режим (ISO). */
+  since: string;
+  /** Пробное подключение к исходному backend'у (для диагностики возврата). */
+  probe?: () => Promise<StorageBackendProbe>;
+}
+
+/**
  * Собранный слой хранения: домен получает порты (а не конкретные классы).
  * Поле `kind` — какой backend собран (для диагностики/предупреждений).
  */
 export interface StorageContext {
   kind: StorageBackendKind;
+  /**
+   * PROP-032 (W5): сервис работает на файловом фоллбеке, т.к. выбранный backend
+   * (`postgres`) недоступен. Задано только в деградированном режиме.
+   */
+  degraded?: StorageDegradedInfo;
   /**
    * PROP-032: освобождение ресурсов backend'а (пул соединений и т.п.).
    * Опционально: `file`/`memory` его не задают (ресурсов процесса нет), драйвер
@@ -283,6 +328,23 @@ export class StorageBackendUnavailableError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message);
     this.name = 'StorageBackendUnavailableError';
+    if (options && options.cause !== undefined) {
+      (this as Error & { cause?: unknown }).cause = options.cause;
+    }
+  }
+}
+
+/**
+ * PROP-032 (W5): выбранный backend (`postgres`) недоступен, а политика
+ * `storage.degradedMode='halt'` запрещает файловый фоллбек — старт остановлен.
+ * Ошибка с внятным текстом (что не так и что делать), а не сырой трейс драйвера.
+ */
+export class StorageUnavailableError extends Error {
+  readonly code = 'STORAGE_UNAVAILABLE';
+
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message);
+    this.name = 'StorageUnavailableError';
     if (options && options.cause !== undefined) {
       (this as Error & { cause?: unknown }).cause = options.cause;
     }
@@ -467,12 +529,16 @@ export function createStorageContext(
   config: StorageContextConfig,
 ): StorageContext {
   if (kind === 'memory') return createMemoryStorage(config);
+  if (kind === 'file') return createFileStorage(config);
   if (kind === 'postgres') {
     throw new StorageBackendUnavailableError(
       "createStorageContext('postgres', …) синхронно недоступен — используйте createStorageContextAsync().",
     );
   }
-  return createFileStorage(config);
+  // Fail-closed: неизвестный backend (опечатка в значении) не подменяется файловым.
+  throw new StorageUnavailableError(
+    `storage.backend="${String(kind)}" не поддерживается — ожидается 'file' | 'memory' | 'postgres'.`,
+  );
 }
 
 /**
@@ -555,21 +621,209 @@ function buildPostgresCoreSyncDeps(
 }
 
 /**
+ * PROP-032 (W5): коды ошибок хранения, при которых файловый фоллбек **запрещён**
+ * (fail-closed) — см. матрицу у `createPostgresStorageWithFallback`.
+ */
+const FAIL_CLOSED_STORAGE_CODES: ReadonlySet<string> = new Set([
+  'STORAGE_POSTGRES_CONFIG_INVALID',
+  'STORAGE_POSTGRES_DEPENDENCY_MISSING',
+  'STORAGE_BACKEND_UNAVAILABLE',
+  'STORAGE_POSTGRES_SCHEMA_TOO_NEW',
+]);
+
+/** Классы ошибок хранения, при которых фоллбек запрещён (страховка по `name`). */
+const FAIL_CLOSED_STORAGE_NAMES: ReadonlySet<string> = new Set([
+  'PostgresStorageConfigError',
+  'PostgresStorageDependencyError',
+  'StorageBackendUnavailableError',
+]);
+
+/** Код ошибки «схема БД отстаёт от драйвера» (лечится `synth migrate`). */
+const SCHEMA_OUTDATED_CODE = 'STORAGE_POSTGRES_SCHEMA_OUTDATED';
+
+function storageErrorCodeOf(err: unknown): string | undefined {
+  if (err && typeof err === 'object') {
+    const code = (err as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+  }
+  return undefined;
+}
+
+/** Ошибка конфигурации/зависимости/«схема новее» — фоллбек на пустой файл запрещён. */
+function isFailClosedStorageError(err: unknown): boolean {
+  const code = storageErrorCodeOf(err);
+  if (code !== undefined && FAIL_CLOSED_STORAGE_CODES.has(code)) return true;
+  const name = err instanceof Error ? err.name : undefined;
+  return name !== undefined && FAIL_CLOSED_STORAGE_NAMES.has(name);
+}
+
+/** Схема БД отстаёт от драйвера (`STORAGE_POSTGRES_SCHEMA_OUTDATED`). */
+function isSchemaOutdatedError(err: unknown): boolean {
+  return storageErrorCodeOf(err) === SCHEMA_OUTDATED_CODE;
+}
+
+/**
+ * PROP-032 (W5): политика при недоступности backend'а (`storage.degradedMode`).
+ * `fallback-file` (default) — подняться на файловом фоллбеке в `fallbackDir`
+ * (отдельный каталог!), `halt` — остановить старт с внятной ошибкой.
+ *
+ * ── Матрица «тип ошибки → поведение» ─────────────────────────────────────────
+ *
+ * **fail-closed** (старт остановлен, `StorageUnavailableError`, `degradedMode` не
+ * применяется): файловый фоллбек запрещён, т.к. он маскировал бы проблему
+ * развёртывания пустым хранилищем — администратор видел бы «все данные исчезли»
+ * вместо внятной ошибки.
+ *
+ *   | Тип ошибки (класс / код)                                  | Почему fail-closed |
+ *   |-----------------------------------------------------------|--------------------|
+ *   | `PostgresStorageConfigError` (`…CONFIG_INVALID`)          | неверный конфиг/креды/схема — опечатка, а не отказ БД |
+ *   | `PostgresStorageDependencyError` (`…DEPENDENCY_MISSING`)  | нет модуля `pg` — проблема развёртывания, не отказ БД |
+ *   | `StorageBackendUnavailableError` (`…BACKEND_UNAVAILABLE`) | не загрузился пакет-драйвер — то же |
+ *   | `PostgresStorageSchemaError` `…SCHEMA_TOO_NEW`            | БД новее драйвера (откат версии) — нельзя молча стартовать на пустом фоллбеке |
+ *
+ * **деградация** (фоллбек при `fallback-file`, ошибка при `halt`) — это **отказ БД**:
+ *
+ *   | Тип ошибки (класс / код)                                  | Почему деградация |
+ *   |-----------------------------------------------------------|-------------------|
+ *   | `PostgresConnectionError` (сеть/класс `08`/`57P0x`)       | БД недоступна по сети — штатный сценарий фоллбека |
+ *   | auth-ошибка сервера (`28P01`/`28000`/`42501` → `QueryError`) | сервер ответил «доступ запрещён» — отказ БД, не конфиг |
+ *   | `PostgresStorageSchemaError` `…SCHEMA_OUTDATED`           | схема отстаёт — данные в БД есть, лечится `synth migrate` (подсказка в причине) |
+ *   | прочие runtime-ошибки (`QueryError`/`LockTimeoutError`)   | сбой выполнения в БД; доступ к read-only диагностике нужнее простоя |
+ */
+async function createPostgresStorageWithFallback(
+  config: StorageContextConfig,
+): Promise<StorageContext> {
+  try {
+    return await createPostgresStorage(config);
+  } catch (err) {
+    const rawReason = err instanceof Error ? err.message : String(err);
+
+    // Fail-closed: конфиг/зависимость/схема новее — фоллбек не применяется.
+    if (isFailClosedStorageError(err)) {
+      console.error(
+        '[storage] ✗ fail-closed: конфигурация/зависимость/схема хранилища неисправна — ' +
+          'файловый фоллбек запрещён (storage.degradedMode не применяется)',
+      );
+      console.error(`[storage]   причина: ${rawReason}`);
+      throw new StorageUnavailableError(
+        `Не удалось собрать PostgreSQL-хранилище (storage.backend='postgres'): ` +
+          `ошибка конфигурации/зависимости/схемы — старт остановлен (fail-closed), ` +
+          `файловый фоллбек не применяется независимо от storage.degradedMode. ` +
+          `Проверьте способ подключения/креды, установите драйвер (\`pg\`) либо выровняйте ` +
+          `схему БД, затем перезапустите. Причина: ${rawReason}`,
+        { cause: err },
+      );
+    }
+
+    const mode = config.degradedMode ?? 'fallback-file';
+    const reason = isSchemaOutdatedError(err)
+      ? `${rawReason} — подсказка: примените миграции схемы (synth migrate) и перезапустите сервис.`
+      : rawReason;
+
+    if (mode === 'halt') {
+      throw new StorageUnavailableError(
+        `Не удалось подключиться к PostgreSQL (storage.backend='postgres'), ` +
+          `а storage.degradedMode='halt' запрещает файловый фоллбек — старт остановлен. ` +
+          `Проверьте доступность БД/сеть/креды и схему (synth doctor), затем перезапустите. ` +
+          `Причина: ${reason}`,
+        { cause: err },
+      );
+    }
+
+    const fallbackDir =
+      config.fallbackDir && config.fallbackDir !== ''
+        ? config.fallbackDir
+        : join(config.dataDir, 'fallback');
+
+    // Громкое предупреждение (PROP-032 W5): сервис поднимается в аварийном read-only.
+    console.error('[storage] ⚠️  PostgreSQL недоступен — переход в ДЕГРАДИРОВАННЫЙ режим (fallback-file)');
+    console.error(`[storage]   причина: ${reason}`);
+    console.error(`[storage]   файловый фоллбек: ${fallbackDir}`);
+    console.error('[storage]   режим строгого read-only: мутации отклоняются (503 STORAGE_DEGRADED_READONLY);');
+    console.error('[storage]   доступ — только администраторам; для возврата к БД восстановите соединение и перезапустите сервис.');
+
+    // Файловое хранилище в отдельном каталоге-фоллбеке (не dataDir!) — чтобы не
+    // смешивать с реальными данными (split-brain).
+    const fallback = createFileStorage({ ...config, dataDir: fallbackDir });
+    const since = new Date().toISOString();
+    return {
+      ...fallback,
+      degraded: {
+        active: true,
+        backend: 'postgres',
+        fallbackDir,
+        reason,
+        since,
+        probe: () => probePostgresBackend(config),
+      },
+    };
+  }
+}
+
+/** PROP-032 (W5): пробное подключение к исходному postgres-backend'у (диагностика). */
+async function probePostgresBackend(config: StorageContextConfig): Promise<StorageBackendProbe> {
+  try {
+    const ctx = await createPostgresStorage({ ...config, postgresSchemaMode: 'skip' });
+    try {
+      const health = ctx.health ? await ctx.health() : { ok: true };
+      return { ok: health.ok, latencyMs: health.latencyMs, error: health.error };
+    } finally {
+      await ctx.close?.();
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * PROP-032: единый **асинхронный** каскад сборки слоя хранения. `file`/`memory` —
  * существующие синхронные фабрики, `postgres` — динамическая загрузка драйвера.
  * Именно эту функцию должен вызывать домен (composition root).
+ *
+ * PROP-032 (W5): при недоступности `postgres` применяется `storage.degradedMode`
+ * (`fallback-file` → файловый фоллбек в `fallbackDir`, `halt` → ошибка старта).
+ * Диагностический режим `postgresSchemaMode: 'skip'` (doctor/CLI-миграции) политику
+ * деградации не применяет — ошибка подключения пробрасывается наверх, а
+ * runtime-состояние деградации не трогается.
+ *
+ * При сборке **основного** контекста публикует состояние деградации в ось
+ * доступности тулов (`setStorageDegradedState`).
  */
 export async function createStorageContextAsync(
+  kind: StorageBackendKind,
+  config: StorageContextConfig,
+): Promise<StorageContext> {
+  if (kind === 'postgres' && config.postgresSchemaMode === 'skip') {
+    // Диагностика (`synth doctor`, управление миграциями): ошибку не маскируем.
+    return createPostgresStorage(config);
+  }
+
+  const context = await createStorageContextWithDegradation(kind, config);
+  setStorageDegradedState(
+    context.degraded
+      ? { degraded: true, fallbackDir: context.degraded.fallbackDir, reason: context.degraded.reason }
+      : null,
+  );
+  return context;
+}
+
+/** Сборка контекста по backend'у с применением политики деградации (postgres). */
+async function createStorageContextWithDegradation(
   kind: StorageBackendKind,
   config: StorageContextConfig,
 ): Promise<StorageContext> {
   switch (kind) {
     case 'memory':
       return createMemoryStorage(config);
-    case 'postgres':
-      return createPostgresStorage(config);
-    default:
+    case 'file':
       return createFileStorage(config);
+    case 'postgres':
+      return createPostgresStorageWithFallback(config);
+    default:
+      // Fail-closed: невалидный `storage.backend` не уводится на файловый backend.
+      throw new StorageUnavailableError(
+        `storage.backend="${String(kind)}" не поддерживается — ожидается 'file' | 'memory' | 'postgres'.`,
+      );
   }
 }
 

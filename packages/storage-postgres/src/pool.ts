@@ -16,6 +16,7 @@
 import { createHash } from 'node:crypto';
 import type { Pool as PgPool, PoolClient as PgPoolClient, QueryResultRow } from 'pg';
 import {
+  PostgresConnectionError,
   PostgresStorageDependencyError,
   mapPgError,
 } from './errors.js';
@@ -202,6 +203,8 @@ export class PostgresConnection implements PostgresExecutor {
   private readonly _schema: string;
   private readonly _poolConfig: Record<string, unknown>;
   private _pool: PgPool | null = null;
+  /** `end()` уже вызван: пул закрыт, ленивое пересоздание запрещено. */
+  private _closed = false;
 
   constructor(config: PostgresConnectionConfig) {
     this._schema = assertValidSchema(config.schema ?? DEFAULT_SCHEMA);
@@ -215,6 +218,13 @@ export class PostgresConnection implements PostgresExecutor {
 
   /** Ленивое создание пула (первое обращение к БД). */
   async getPool(): Promise<PgPool> {
+    // PROP-032 (W5): после `end()` пул не пересоздаётся — иначе запрос после
+    // `close()` снова поднимал бы соединение и «закрытие» было бы фиктивным.
+    if (this._closed) {
+      throw new PostgresConnectionError(
+        'Соединение с PostgreSQL закрыто (end()): пул недоступен.',
+      );
+    }
     if (!this._pool) {
       const pg = await loadPgModule();
       this._pool = new pg.Pool(this._poolConfig);
@@ -344,8 +354,9 @@ export class PostgresConnection implements PostgresExecutor {
     };
   }
 
-  /** Закрыть пул (идемпотентно). */
+  /** Закрыть пул (идемпотентно). После закрытия запросы запрещены (не пересоздаём пул). */
   async end(): Promise<void> {
+    this._closed = true;
     const pool = this._pool;
     this._pool = null;
     if (pool) await pool.end();

@@ -1,8 +1,10 @@
 export { PermissionEvaluator } from './evaluator.js';
 export type { PermissionCheckInput } from './evaluator.js';
 export { extractPaths, matchPathPattern, isInsideWorkingDir, isPlanBlockedTool, getMcpToolAvailability } from './evaluator.js';
-export { computeToolAvailability } from './availability.js';
+export { computeToolAvailability, isToolAvailableInDegradedMode } from './availability.js';
 export type { ToolAvailability, ToolUnavailableReason } from './availability.js';
+export { setStorageDegradedState, isStorageDegraded, getStorageDegradedState } from './storage-state.js';
+export type { StorageAvailabilityState } from './storage-state.js';
 export { PermissionApprovalManager } from './approval.js';
 export type { ApprovalRequest, ApprovalDecision } from './approval.js';
 export { deriveSubagentPermission, emptyPermissionConfig, DEFAULT_ASK_TIMEOUT_MS } from './derive.js';
