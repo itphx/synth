@@ -1,0 +1,756 @@
+// ADR-091 (этап 2): портативный экспорт/импорт проекта между инстансами Synth.
+//
+// Экспорт — самодостаточный архив `<name>.synth-project.tar.gz`: `manifest.json`
+// (tool/formatVersion, проект, число сессий, записи с sha256), `project.json`
+// (`serializeProject`) и `sessions/<id>.json` (переносимый payload
+// `buildSessionExport`) по каждой **локальной** сессии проекта; опционально
+// `workspace/**` (`--with-workspace`). Секретов в архиве нет: `secrets/`, ключи,
+// credentials, токены, API-ключи не попадают (это проверяется тестом).
+//
+// Импорт — materialization, НЕ `session.requested` (ADR-089, инвариант 15):
+// создаётся **новый** `projectId`, сессии получают **новые** id через
+// `SessionManager.createSession` (примитив материализации, не request). Экспорт/
+// импорт — перенос проекта между инстансами, а не снятие снимка каталога данных
+// (ADR-091): новый инстанс не содержит прежних данных.
+//
+// Хранилище — через доменные порты слоя хранения (`StorageContext`, ADR-096);
+// физический backend — файловый (дефолт). Архив/манифест — своим потоковым
+// ustar-писателем (`maintenance/archive.ts`), без внешних зависимостей.
+
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
+import {
+  SYNTH_VERSION,
+  generateId,
+  nowISO,
+  normalizeColorKey,
+  normalizeIconKey,
+  slugifyWorkspaceName,
+} from '@itphx/synth-shared';
+import type {
+  Message,
+  Part,
+  Project,
+  Session,
+  SessionMode,
+  SessionOrigin,
+  SessionReference,
+  SessionSettings,
+} from '@itphx/synth-shared';
+import { SessionManager } from '../sessions/manager.js';
+import { createFileStorage, type StorageContext } from '../storage/storage-context.js';
+import { provisionManagedWorkspace } from '../engine/workspace-provision.js';
+import { serializeProject } from '../server/serialize.js';
+import { LOCAL_USER_ID } from '../server/local-owner.js';
+import { buildSessionExport, resolveLocalWorkspace, walkDir } from '../remote/transfer.js';
+import {
+  ArchivePathError,
+  readFileFromTarGz,
+  readTarGz,
+  writeTarGz,
+  type ArchiveSource,
+} from '../maintenance/archive.js';
+import { recordMaintenanceAudit } from '../maintenance/audit.js';
+import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
+
+/** Префикс staging-каталога экспорта в `{dataDir}/tmp`. */
+const EXPORT_STAGING_PREFIX = 'project-export-';
+
+/** Код ошибки портативного экспорта/импорта проекта (ADR-091). */
+export type ProjectPortableErrorCode =
+  | 'invalid-archive'
+  | 'checksum-mismatch'
+  | 'project-not-found'
+  | 'project-name-conflict'
+  | 'confirmation-required'
+  | 'workspace-error';
+
+/** Ошибка портативного экспорта/импорта проекта (сообщения по-русски). */
+export class ProjectPortableError extends Error {
+  readonly code: ProjectPortableErrorCode;
+
+  constructor(code: ProjectPortableErrorCode, message: string) {
+    super(message);
+    this.name = 'ProjectPortableError';
+    this.code = code;
+  }
+}
+
+/** Запись манифеста архива проекта (файл + размер + sha256 содержимого). */
+export interface ProjectExportEntry {
+  /** Путь относительно корня архива (POSIX-разделители). */
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+/** Манифест архива портативного экспорта проекта (ADR-091). */
+export interface ProjectExportManifest {
+  tool: 'synth-project-export';
+  formatVersion: 1;
+  exportedAt: string;
+  /** `SYNTH_VERSION` на момент экспорта. */
+  instanceVersion: string;
+  /** Проект-источник (id + имя). */
+  project: { id: string; name: string };
+  /** Число экспортированных локальных сессий. */
+  sessions: number;
+  withWorkspace: boolean;
+  /** Записи архива (без `manifest.json`). */
+  entries: ProjectExportEntry[];
+}
+
+/** Опции `exportProject` (ADR-091). */
+export interface ExportProjectOptions {
+  dataDir: string;
+  projectId: string;
+  /** Путь к архиву; каталог — положить файл внутрь. По умолчанию — текущий каталог. */
+  out?: string;
+  /** Включить `workspace/**` (рабочий каталог проекта). */
+  withWorkspace?: boolean;
+  /** Корень локальных workspace (по умолчанию `{dataDir}/workspaces`). */
+  workspacesRoot?: string;
+  /** ADR-092: аудит-журнал обслуживания (best-effort; ошибка записи не ломает операцию). */
+  audit?: MaintenanceAuditRepository;
+  /** ADR-092: инициатор операции (`'cli'` | `userId`). */
+  actor?: string;
+  /** Канал вывода (по умолчанию — тихий). */
+  log?: (msg: string) => void;
+}
+
+/** Результат `exportProject` (ADR-091). */
+export interface ExportProjectResult {
+  path: string;
+  bytes: number;
+  sessions: number;
+  entries: number;
+  withWorkspace: boolean;
+}
+
+/** Опции `importProject` (ADR-091). */
+export interface ImportProjectOptions {
+  dataDir: string;
+  archive: string;
+  /** Имя нового проекта (по умолчанию — из архива + суффикс при коллизии имён). */
+  name?: string;
+  /** ID существующего проекта — импортировать сессии в него. */
+  mergeInto?: string;
+  /** Распаковать `workspace/**` в каталог проекта. */
+  withWorkspace?: boolean;
+  /** Предпросмотр: валидация архива и план без записи. */
+  dryRun?: boolean;
+  /** Подтверждение создания проекта/сессий (обязательно без `--dry-run`). */
+  yes?: boolean;
+  /** Корень локальных workspace (по умолчанию `{dataDir}/workspaces`). */
+  workspacesRoot?: string;
+  /** Владелец новых проекта/сессий (standalone — `local`). */
+  ownerId?: string;
+  /** ADR-092: аудит-журнал обслуживания (best-effort). */
+  audit?: MaintenanceAuditRepository;
+  /** ADR-092: инициатор операции (`'cli'` | `userId`). */
+  actor?: string;
+  /** Канал вывода (по умолчанию — тихий). */
+  log?: (msg: string) => void;
+  /**
+   * ADR-089 (инвариант 18): колбэк на каждую материализованную сессию —
+   * публикация `session.created`, чтобы хабы подписали владельца. В CLI — нет
+   * (no-op); managed/standalone — подключают шину событий.
+   */
+  onSessionCreated?: (sessionId: string) => void | Promise<void>;
+}
+
+/** Результат `importProject` (ADR-091). */
+export interface ImportProjectResult {
+  projectId: string;
+  sessionsImported: number;
+  messagesImported: number;
+  workspaceRestored: boolean;
+  /** Маппинг старый id → новый id (по импортированным сессиям). */
+  idMap: Record<string, string>;
+}
+
+/** sha256 файла потоково (без чтения целиком в память). */
+function _hashFile(absPath: string): Promise<string> {
+  return new Promise<string>((resolveHash, reject) => {
+    const hash = createHash('sha256');
+    const rs = createReadStream(absPath);
+    rs.on('error', reject);
+    rs.on('end', () => resolveHash(hash.digest('hex')));
+    rs.on('data', (chunk) => hash.update(chunk));
+  });
+}
+
+/** Текст ошибки (для сообщений `ProjectPortableError`). */
+function _errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Резолвит итоговый путь архива (каталог/путь с завершающим `/` → имя по умолчанию внутри). */
+async function _resolveOutPath(out: string | undefined, defaultName: string): Promise<string> {
+  if (!out) return resolve(defaultName);
+  const dirHint = /[\\/]$/.test(out);
+  const abs = resolve(out);
+  let isDir = false;
+  try {
+    isDir = (await stat(abs)).isDirectory();
+  } catch {
+    // Путь ещё не существует: завершающий разделитель трактуем как каталог.
+    isDir = dirHint;
+  }
+  return isDir ? join(abs, defaultName) : abs;
+}
+/** Сессия принадлежит другому инстансу (агрегация миров, ADR-042). */
+function _isRemoteSession(session: Session): boolean {
+  const origin = (session as { origin?: string }).origin;
+  return origin === 'remote' || session.id.startsWith('remote:');
+}
+
+/** Массив из неизвестного значения (иначе — пустой). */
+function _asArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? (value as Array<Record<string, unknown>>) : [];
+}
+
+/** Число из неизвестного значения. */
+function _num(value: unknown, def = 0): number {
+  return typeof value === 'number' ? value : def;
+}
+
+/** Парсит JSON-объект из буфера; иначе `invalid-archive`. */
+function _parseJsonObject(buffer: Buffer, path: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(buffer.toString('utf-8'));
+  } catch {
+    throw new ProjectPortableError('invalid-archive', `Файл ${path} невалиден (не JSON).`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new ProjectPortableError('invalid-archive', `Файл ${path} невалиден (не JSON-объект).`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** Переписать `session_reference`-часть сообщения по mapping (не перенесено → null). */
+function _rewriteReferencePart(part: Part, mapping: Map<string, string>): Part {
+  if (!part || part.type !== 'session_reference' || !part.data || typeof part.data !== 'object') {
+    return part;
+  }
+  const data = { ...(part.data as Record<string, unknown>) };
+  const sid = data.sessionId ?? data.session_id;
+  if (typeof sid === 'string') {
+    data.sessionId = mapping.get(sid) ?? null;
+    delete data.session_id;
+  }
+  return { ...part, data };
+}
+
+/** Уникальное имя нового проекта (при коллизии имён и авто-имени — суффикс). */
+function _uniqueProjectName(base: string, names: Set<string>): string {
+  for (let i = 2; i < 10_000; i++) {
+    const candidate = `${base} (${i})`;
+    if (!names.has(candidate)) return candidate;
+  }
+  return `${base} (${Date.now()})`;
+}
+
+/**
+ * Экспортирует проект в портативный архив (ADR-091) и best-effort фиксирует
+ * событие `export.created` в аудит-журнале обслуживания (ADR-092). Ошибка
+ * аудит-порта не ломает экспорт.
+ *
+ * @throws ProjectPortableError `project-not-found` — проект не найден.
+ */
+export async function exportProject(opts: ExportProjectOptions): Promise<ExportProjectResult> {
+  const result = await _exportProject(opts);
+  await recordMaintenanceAudit(opts.audit, {
+    op: 'export.created',
+    status: 'ok',
+    actor: opts.actor,
+    details: {
+      projectId: opts.projectId,
+      sessions: result.sessions,
+      workspace: result.withWorkspace,
+      bytes: result.bytes,
+    },
+  });
+  return result;
+}
+
+async function _exportProject(opts: ExportProjectOptions): Promise<ExportProjectResult> {
+  const log = opts.log ?? ((): void => {});
+  const dataDir = resolve(opts.dataDir);
+  const withWorkspace = !!opts.withWorkspace;
+  const workspacesRoot = opts.workspacesRoot ? resolve(opts.workspacesRoot) : join(dataDir, 'workspaces');
+  const storage = createFileStorage({ dataDir });
+
+  const project = await storage.projects.load(opts.projectId);
+  if (!project) {
+    throw new ProjectPortableError('project-not-found', `Проект ${opts.projectId} не найден.`);
+  }
+
+  const manager = new SessionManager(storage.sessions);
+  const all = await manager.listSessions({ projectId: project.id });
+  const localSessions: Session[] = [];
+  let skippedRemote = 0;
+  for (const session of all) {
+    if (_isRemoteSession(session)) {
+      skippedRemote++;
+      log(`  пропущена удалённая сессия ${session.id} (принадлежит другому инстансу)`);
+      continue;
+    }
+    localSessions.push(session);
+  }
+  if (skippedRemote > 0) {
+    log(`Предупреждение: пропущено удалённых сессий — ${skippedRemote} (origin: remote).`);
+  }
+  localSessions.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+
+  const baseName = slugifyWorkspaceName(project.name) || 'project';
+  const outPath = await _resolveOutPath(opts.out, `${baseName}.synth-project.tar.gz`);
+
+  const staging = join(dataDir, 'tmp', `${EXPORT_STAGING_PREFIX}${generateId()}`);
+  await mkdir(staging, { recursive: true });
+  try {
+    const sources: ArchiveSource[] = [];
+
+    // project.json — metadata проекта (serializeProject).
+    const projectPath = join(staging, 'project.json');
+    await writeFile(projectPath, JSON.stringify(serializeProject(project), null, 2), 'utf-8');
+    sources.push({ path: 'project.json', type: 'file', absPath: projectPath, mode: 0o644 });
+
+    // sessions/<id>.json — переносимый payload каждой локальной сессии.
+    const sessionsDir = join(staging, 'sessions');
+    await mkdir(sessionsDir, { recursive: true });
+    for (const session of localSessions) {
+      const path = join(sessionsDir, `${session.id}.json`);
+      await writeFile(path, JSON.stringify(buildSessionExport(session), null, 2), 'utf-8');
+      sources.push({ path: `sessions/${session.id}.json`, type: 'file', absPath: path, mode: 0o644 });
+    }
+
+    // workspace/** — опционально (--with-workspace); секретов там нет.
+    if (withWorkspace) {
+      const projectDir = resolveLocalWorkspace(
+        project,
+        workspacesRoot,
+        join(workspacesRoot, 'default'),
+      );
+      const files = await walkDir(projectDir);
+      for (const rel of files) {
+        sources.push({
+          path: `workspace/${rel}`,
+          type: 'file',
+          absPath: join(projectDir, rel),
+          mode: 0o644,
+        });
+      }
+    }
+
+    // Записи манифеста известны до записи (манифест пишется последним).
+    const entries: ProjectExportEntry[] = [];
+    for (const source of sources) {
+      const info = await stat(source.absPath);
+      entries.push({ path: source.path, size: info.size, sha256: await _hashFile(source.absPath) });
+    }
+
+    const manifest: ProjectExportManifest = {
+      tool: 'synth-project-export',
+      formatVersion: 1,
+      exportedAt: nowISO(),
+      instanceVersion: SYNTH_VERSION,
+      project: { id: project.id, name: project.name },
+      sessions: localSessions.length,
+      withWorkspace,
+      entries,
+    };
+
+    await mkdir(dirname(outPath), { recursive: true });
+    await writeTarGz(outPath, sources, {
+      extraFile: {
+        path: 'manifest.json',
+        content: Buffer.from(JSON.stringify(manifest, null, 2), 'utf-8'),
+      },
+    });
+    const bytes = (await stat(outPath)).size;
+    log(`Экспорт проекта «${project.name}»: ${outPath}`);
+    return { path: outPath, bytes, sessions: localSessions.length, entries: entries.length, withWorkspace };
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+/** Читает и валидирует манифест архива проекта (ADR-091). */
+async function _readManifest(archive: string): Promise<ProjectExportManifest> {
+  let buffer: Buffer | null;
+  try {
+    buffer = await readFileFromTarGz(archive, 'manifest.json');
+  } catch (err) {
+    throw new ProjectPortableError('invalid-archive', `Не удалось прочитать архив: ${_errMsg(err)}`);
+  }
+  if (!buffer) {
+    throw new ProjectPortableError('invalid-archive', 'Архив не содержит manifest.json — это не экспорт проекта Synth.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(buffer.toString('utf-8'));
+  } catch {
+    throw new ProjectPortableError('invalid-archive', 'manifest.json невалиден (не JSON).');
+  }
+  const manifest = parsed as Partial<ProjectExportManifest> | null;
+  if (!manifest || manifest.tool !== 'synth-project-export') {
+    throw new ProjectPortableError('invalid-archive', 'Архив не является экспортом проекта Synth (неверный tool).');
+  }
+  if (typeof manifest.formatVersion !== 'number' || manifest.formatVersion > 1) {
+    throw new ProjectPortableError('invalid-archive', `Неподдерживаемая версия формата архива: ${String(manifest.formatVersion)}.`);
+  }
+  if (!Array.isArray(manifest.entries)) {
+    throw new ProjectPortableError('invalid-archive', 'manifest.json невалиден: отсутствует список записей.');
+  }
+  if (!manifest.project || typeof manifest.project !== 'object'
+    || typeof manifest.project.id !== 'string' || typeof manifest.project.name !== 'string') {
+    throw new ProjectPortableError('invalid-archive', 'manifest.json невалиден: отсутствует проект.');
+  }
+  return manifest as ProjectExportManifest;
+}
+
+/**
+ * Проверяет контрольные суммы архива и собирает нужные файлы (project.json,
+ * sessions/**, workspace/**) за один проход. Несовпадение sha256 или отсутствие
+ * файла из манифеста → `checksum-mismatch`; повреждённый/небезопасный архив →
+ * `invalid-archive`.
+ */
+async function _verifyArchive(
+  archive: string,
+  manifest: ProjectExportManifest,
+): Promise<Map<string, Buffer>> {
+  const expected = new Map<string, string>();
+  for (const entry of manifest.entries) {
+    if (entry && typeof entry.path === 'string' && typeof entry.sha256 === 'string') {
+      expected.set(entry.path, entry.sha256);
+    }
+  }
+
+  const collected = new Map<string, Buffer>();
+  const seen = new Set<string>();
+  try {
+    await readTarGz(archive, (entry) => {
+      if (entry.type !== 'file' || entry.path === 'manifest.json') return;
+      const want = expected.get(entry.path);
+      if (want) {
+        const got = createHash('sha256').update(entry.content).digest('hex');
+        if (got !== want) {
+          throw new ProjectPortableError('checksum-mismatch', `Контрольная сумма не совпадает: ${entry.path}`);
+        }
+        seen.add(entry.path);
+      }
+      if (
+        entry.path === 'project.json'
+        || entry.path.startsWith('sessions/')
+        || entry.path === 'workspace'
+        || entry.path.startsWith('workspace/')
+      ) {
+        collected.set(entry.path, entry.content);
+      }
+    });
+  } catch (err) {
+    if (err instanceof ProjectPortableError) throw err;
+    if (err instanceof ArchivePathError) {
+      throw new ProjectPortableError('invalid-archive', `Небезопасный путь в архиве: ${err.path}`);
+    }
+    throw new ProjectPortableError('invalid-archive', `Не удалось разобрать архив: ${_errMsg(err)}`);
+  }
+
+  for (const path of expected.keys()) {
+    if (!seen.has(path)) {
+      throw new ProjectPortableError('checksum-mismatch', `В архиве отсутствует файл: ${path}`);
+    }
+  }
+  return collected;
+}
+
+/**
+ * Импортирует проект из портативного архива (ADR-091) — materialization, не
+ * `session.requested` (ADR-089, инвариант 15). Создаёт новый `projectId` и новые
+ * сессии; `mergeInto` импортирует сессии в существующий проект. Без `--dry-run`
+ * и без `--yes` — отказ (`confirmation-required`).
+ *
+ * @throws ProjectPortableError `invalid-archive`/`checksum-mismatch` — битый архив;
+ *   `project-not-found` — нет проекта для `mergeInto`; `project-name-conflict` —
+ *   явное имя занято; `confirmation-required` — нет подтверждения.
+ */
+export async function importProject(opts: ImportProjectOptions): Promise<ImportProjectResult> {
+  const dryRun = !!opts.dryRun;
+  if (!dryRun && !opts.yes) {
+    throw new ProjectPortableError(
+      'confirmation-required',
+      'Импорт создаёт новый проект и сессии. Используйте --dry-run для проверки или --yes для применения.',
+    );
+  }
+
+  const result = await _importProject(opts);
+  if (!dryRun) {
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'import.applied',
+      status: 'ok',
+      actor: opts.actor,
+      details: {
+        projectId: result.projectId,
+        from: resolve(opts.archive),
+        sessions: result.sessionsImported,
+        ...(opts.mergeInto ? { mergeInto: opts.mergeInto } : {}),
+      },
+    });
+  }
+  return result;
+}
+
+async function _importProject(opts: ImportProjectOptions): Promise<ImportProjectResult> {
+  const log = opts.log ?? ((): void => {});
+  const dryRun = !!opts.dryRun;
+  const dataDir = resolve(opts.dataDir);
+  const archive = resolve(opts.archive);
+  const withWorkspace = !!opts.withWorkspace;
+  const workspacesRoot = opts.workspacesRoot ? resolve(opts.workspacesRoot) : join(dataDir, 'workspaces');
+  const ownerId = opts.ownerId ?? LOCAL_USER_ID;
+
+  const manifest = await _readManifest(archive);
+  const collected = await _verifyArchive(archive, manifest);
+
+  const projectBuffer = collected.get('project.json');
+  if (!projectBuffer) {
+    throw new ProjectPortableError('invalid-archive', 'Архив не содержит project.json.');
+  }
+  const projectDto = _parseJsonObject(projectBuffer, 'project.json');
+
+  const sessionFiles: Array<{ id: string; data: Record<string, unknown> }> = [];
+  for (const [path, content] of collected) {
+    if (!path.startsWith('sessions/') || !path.endsWith('.json')) continue;
+    const id = path.slice('sessions/'.length, -'.json'.length);
+    sessionFiles.push({ id, data: _parseJsonObject(content, path) });
+  }
+  sessionFiles.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+  const messagesTotal = sessionFiles.reduce(
+    (sum, file) => sum + _asArray(file.data.messages).length,
+    0,
+  );
+
+  const storage = createFileStorage({ dataDir });
+
+  // Целевой проект: существующий (`--merge-into`) либо новый.
+  let target: Project | null = null;
+  let name = opts.name ?? manifest.project.name;
+  if (opts.mergeInto) {
+    target = await storage.projects.load(opts.mergeInto);
+    if (!target) {
+      throw new ProjectPortableError('project-not-found', `Проект ${opts.mergeInto} не найден.`);
+    }
+  } else {
+    const existingNames = new Set((await storage.projects.list()).map((p) => p.name));
+    if (existingNames.has(name)) {
+      if (opts.name) {
+        throw new ProjectPortableError('project-name-conflict', `Проект с именем «${name}» уже существует.`);
+      }
+      name = _uniqueProjectName(name, existingNames);
+    }
+  }
+
+  if (dryRun) {
+    log(`[dry-run] Импорт проекта из ${archive}`);
+    log(`  проект-источник: ${manifest.project.name} (${manifest.project.id})`);
+    log(`  целевой проект: ${opts.mergeInto ? `существующий ${opts.mergeInto}` : `новый «${name}»`}`);
+    log(`  сессий к импорту: ${sessionFiles.length}`);
+    log(`  сообщений к импорту: ${messagesTotal}`);
+    log(`  workspace: ${withWorkspace && manifest.withWorkspace ? 'будет восстановлен' : 'нет'}`);
+    log('  (dry-run: изменения не записаны)');
+    return {
+      projectId: opts.mergeInto ?? '',
+      sessionsImported: sessionFiles.length,
+      messagesImported: messagesTotal,
+      workspaceRestored: false,
+      idMap: {},
+    };
+  }
+
+  if (!target) {
+    target = storage.projects.create(name, ownerId, {
+      description: typeof projectDto.description === 'string' ? projectDto.description : '',
+      icon: normalizeIconKey(projectDto.icon),
+      color: normalizeColorKey(projectDto.color),
+      repos: Array.isArray(projectDto.repos) ? (projectDto.repos as Project['repos']) : undefined,
+      mcp: projectDto.mcp && typeof projectDto.mcp === 'object' ? (projectDto.mcp as Project['mcp']) : undefined,
+    });
+    target.currentTask = typeof projectDto.current_task === 'string' ? projectDto.current_task : '';
+    target.invariants = typeof projectDto.invariants === 'string' ? projectDto.invariants : '';
+    target.statusMessages = Array.isArray(projectDto.status_messages)
+      ? (projectDto.status_messages as Project['statusMessages'])
+      : [];
+    target.log = Array.isArray(projectDto.log) ? (projectDto.log as Project['log']) : [];
+    if (projectDto.plan && typeof projectDto.plan === 'object') {
+      target.plan = projectDto.plan as Project['plan'];
+    }
+    await storage.projects.save(target);
+    log(`Проект создан: ${target.id} («${target.name}»)`);
+  } else {
+    log(`Импорт в существующий проект: ${target.id} («${target.name}»)`);
+  }
+
+  // ADR-089: materialization — прямой createSession (не funnel `session.requested`).
+  const manager = new SessionManager(storage.sessions, { projectStore: storage.projects });
+  const mapping = new Map<string, string>();
+  const staged: Array<{ id: string; session: Session; data: Record<string, unknown> }> = [];
+
+  for (const file of sessionFiles) {
+    const data = file.data;
+    const session = await manager.createSession({
+      title: typeof data.title === 'string' ? data.title : undefined,
+      icon: normalizeIconKey(data.icon),
+      color: normalizeColorKey(data.color),
+      projectId: target.id,
+      sessionOrigin: (typeof data.sessionOrigin === 'string' ? data.sessionOrigin : undefined) as SessionOrigin | undefined,
+      settings: (data.settings && typeof data.settings === 'object'
+        ? data.settings
+        : {}) as unknown as Partial<SessionSettings>,
+      userId: ownerId,
+      ownerId,
+    });
+    mapping.set(file.id, session.id);
+    staged.push({ id: file.id, session, data });
+  }
+
+  const idMap: Record<string, string> = {};
+  for (const [oldId, newId] of mapping) idMap[oldId] = newId;
+
+  const transferredMessageIds = new Set<string>();
+  for (const item of staged) {
+    for (const message of _asArray(item.data.messages)) {
+      if (typeof message.id === 'string') transferredMessageIds.add(message.id);
+    }
+  }
+
+  let sessionsImported = 0;
+  let messagesImported = 0;
+  for (const item of staged) {
+    const data = item.data;
+    const session = item.session;
+
+    // Ссылки на перенесённые сессии → новые id; внешние — зануляются.
+    session.parentId = typeof data.parentId === 'string' ? (mapping.get(data.parentId) ?? undefined) : undefined;
+    session.branchPoint = typeof data.branchPoint === 'string' ? data.branchPoint : undefined;
+    session.planApproved = typeof data.planApproved === 'boolean' ? data.planApproved : false;
+    session.mode = typeof data.mode === 'string' ? (data.mode as SessionMode) : undefined;
+
+    const messages: Message[] = _asArray(data.messages).map(
+      (message) => structuredClone(message) as unknown as Message,
+    );
+    messages.forEach((message, i) => { message.seq = i + 1; });
+    for (const message of messages) {
+      if (typeof message.sourceMsgId === 'string' && !transferredMessageIds.has(message.sourceMsgId)) {
+        message.sourceMsgId = undefined;
+      }
+      message.parts = message.parts.map((part) => _rewriteReferencePart(part, mapping));
+    }
+    session.messages = messages;
+    session.pendingMessages = [];
+    session.todos = Array.isArray(data.todos) ? (data.todos as Session['todos']) : undefined;
+    session.stickyNotes = Array.isArray(data.stickyNotes)
+      ? (data.stickyNotes as Session['stickyNotes'])
+      : [];
+    session.references = _asArray(data.references).map((ref) => ({
+      ...ref,
+      sessionId: typeof ref.sessionId === 'string'
+        ? (mapping.get(ref.sessionId) ?? null)
+        : (ref.sessionId ?? null),
+    })) as unknown as SessionReference[];
+    session.checkpoints = Array.isArray(data.checkpoints)
+      ? (data.checkpoints as Session['checkpoints'])
+      : [];
+    session.obfuscationMap = data.obfuscationMap && typeof data.obfuscationMap === 'object'
+      ? (data.obfuscationMap as Session['obfuscationMap'])
+      : undefined;
+
+    // Безопасное состояние: не переносим блокировки/активный стрим/отмену/архив.
+    session.status = {};
+    session.currentStream = undefined;
+    session.summarizationPending = false;
+    session.canSummarize = false;
+    session.expiresAt = undefined;
+    session.archivedAt = undefined;
+    session.userId = ownerId;
+    session.ownerId = ownerId;
+
+    session.inputTokens = _num(data.inputTokens);
+    session.outputTokens = _num(data.outputTokens);
+    session.totalTokens = _num(data.totalTokens);
+    session.cacheReadTokens = _num(data.cacheReadTokens);
+    session.cacheWriteTokens = _num(data.cacheWriteTokens);
+    session.reasoningTokens = _num(data.reasoningTokens);
+    session.inputCost = _num(data.inputCost);
+    session.outputCost = _num(data.outputCost);
+    session.cacheReadCost = _num(data.cacheReadCost);
+    session.cacheWriteCost = _num(data.cacheWriteCost);
+    if (typeof data.createdAt === 'string') session.createdAt = data.createdAt;
+
+    await manager.saveSession(session);
+    sessionsImported++;
+    messagesImported += messages.length;
+    // ADR-089 (инвариант 18): уведомить хаб о новой сессии (авто-подписка).
+    await opts.onSessionCreated?.(session.id);
+    log(`  сессия: ${session.title || session.id}`);
+  }
+
+  let workspaceRestored = false;
+  if (withWorkspace && manifest.withWorkspace) {
+    workspaceRestored = await _restoreWorkspace(storage, target, workspacesRoot, collected, log);
+  }
+
+  return { projectId: target.id, sessionsImported, messagesImported, workspaceRestored, idMap };
+}
+
+/**
+ * Восстанавливает `workspace/**` архива в каталог проекта (ADR-075): при
+ * отсутствии workspace у проекта — авто-имя через общий provisioning. Путь цели
+ * проверяется на containment (защита от path traversal).
+ */
+async function _restoreWorkspace(
+  storage: StorageContext,
+  project: Project,
+  workspacesRoot: string,
+  collected: Map<string, Buffer>,
+  log: (msg: string) => void,
+): Promise<boolean> {
+  let workspaceDir: string;
+  if (project.workspace) {
+    workspaceDir = isAbsolute(project.workspace)
+      ? normalize(project.workspace)
+      : resolve(workspacesRoot, project.workspace);
+  } else {
+    const provisioned = await provisionManagedWorkspace(storage.projects, workspacesRoot, project.name, undefined);
+    if (!provisioned.ok || !provisioned.workspace) {
+      throw new ProjectPortableError(
+        'workspace-error',
+        provisioned.ok ? 'Не удалось определить каталог workspace проекта.' : provisioned.message,
+      );
+    }
+    project.workspace = provisioned.workspace;
+    await storage.projects.save(project);
+    workspaceDir = resolve(workspacesRoot, provisioned.workspace);
+  }
+  await mkdir(workspaceDir, { recursive: true });
+
+  let restored = 0;
+  for (const [path, content] of collected) {
+    if (!path.startsWith('workspace/')) continue;
+    const rel = path.slice('workspace/'.length);
+    if (!rel) continue;
+    const target = resolve(workspaceDir, rel);
+    if (target !== workspaceDir && !target.startsWith(workspaceDir + sep)) {
+      throw new ProjectPortableError('invalid-archive', `Небезопасный путь workspace: ${path}`);
+    }
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content);
+    restored++;
+  }
+  if (restored > 0) log(`  workspace восстановлен: ${workspaceDir} (${restored} файлов)`);
+  return restored > 0;
+}

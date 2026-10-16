@@ -102,6 +102,17 @@ synth update [--apply] [--to <version>]  # проверка/обновление
 synth uninstall              # удаление инстанса (--purge|--dry-run|--yes; по умолчанию данные сохраняются) — ADR-092
 ```
 
+**Перенос проекта между инстансами** (ADR-091 §6, без секретов; materialization с новыми id):
+
+```bash
+synth project export <projectId> [--out <file|dir>] [--with-workspace]        # портативный экспорт проекта
+synth project import <archive> [--name <name>] [--merge-into <projectId>] \
+  [--with-workspace] [--dry-run|--yes]                                        # импорт (без --dry-run и --yes — отказ)
+```
+
+Тот же перенос доступен по HTTP API (`GET /api/v2/projects/:id/export`, `POST /api/v2/projects/import`
+— скачивание архива и импорт multipart; спека — [docs/API_V2.md](./docs/API_V2.md) §5.8.1).
+
 Тот же контур доступен из UI (Настройки → «Обслуживание», только ADMIN) и по admin-API `/api/v2/maintenance/*` (managed — `ADMIN`, core — `requireAuth`); восстановление — **офлайн-операция** (применяется при следующем старте, `appliesOnNextStart`). Процедуры — [docs/MAINTENANCE.md](./docs/MAINTENANCE.md); спека — [docs/API_V2.md](./docs/API_V2.md) §5.31.
 
 Сборка core копирует `prompts/` и `definitions/*.json` в `dist/` — это **fallback для Docker**; источник истины промптов — `packages/core/prompts` (публикуется в npm через `files`), дубликатов ассетов нет (ADR-038). Логи dev-запуска: `tmp/backend.log`, `tmp/ui.log`, `tmp/core.log`.

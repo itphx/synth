@@ -349,6 +349,46 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 > an absolute path outside root — `deny` → `403`, `confirm` without `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > Directory creation error → `422 WORKSPACE_CREATE_FAILED`.
 
+### 5.8.1 Portable project export/import — `/api/v2/projects` (both, ADR-091 §6)
+
+Moving a project between Synth instances: download a self-contained
+`<name>.synth-project.tar.gz` archive and import it from the UI/API. A single factory,
+`createProjectPortableRoutes`, serves core and backend; the work lives in the core
+(`packages/core/src/projects/portable.ts`). The archive contains `manifest.json`
+(sha256 entries), `project.json`, and `sessions/<id>.json`; optionally `workspace/**`.
+**The archive contains no secrets** (keys, tokens, credentials, `secrets/` are not included).
+
+Import is **materialization** (ADR-089, invariant 15): a **new** `projectId` and new
+sessions are created (source id → new id in `idMap`), not via the `session.requested`
+funnel. `mergeInto` imports sessions into an existing project. The core notifies the hub
+(`onSessionCreated` → owner subscription, ADR-089 invariant 18). Operations are recorded
+in the maintenance audit journal (`export.created`/`import.applied`, ADR-092).
+
+| Method | Path | Build | RBAC (managed / core) | Purpose |
+|---|---|---|---|---|
+| GET | `/api/v2/projects/:id/export` | both | auth / owner·member·LEAD·ADMIN | Download a portable archive (streaming): `Content-Type: application/gzip`, `Content-Disposition: attachment; filename="<slug>.synth-project.tar.gz"`, `Content-Length`; query `withWorkspace=true` (by default no `workspace/**`); no project → 404 `NOT_FOUND`; no read right → 403 `FORBIDDEN` |
+| POST | `/api/v2/projects/import` | both | auth / any role (with `mergeInto` — owner·EDITOR·LEAD·ADMIN) | Import an archive (multipart) → 201 `{projectId, sessionsImported, messagesImported, workspaceRestored, idMap}` |
+
+**`POST /import`** — `multipart/form-data`: `file` (the archive, required), `name`
+(the new project name), `mergeInto` (an existing project id), `withWorkspace` (`'true'`
+— unpack `workspace/**`), `confirm` (`'true'`). **`confirm` is not required**: importing
+into a new/existing project is non-destructive (it deletes no data), so no confirmation is
+requested (`importProject` is called with `yes: true`), and the field is accepted for UI
+compatibility. Success → 201 `ImportProjectResult`; a colliding new project name gets a
+`(N)` suffix (an explicit `name` that is taken → 409).
+
+**Upload limit.** The multipart `POST /import` is limited by `storage.maxUploadBytes`
+(100 MiB by default, `DEFAULT_MAX_UPLOAD_BYTES`); the DoS protection checks the declared
+`content-length`, the `File` size, and the bytes actually read — exceeding it → 413
+`PAYLOAD_TOO_LARGE`.
+
+**Error codes.** 400 `VALIDATION_ERROR` (a broken/corrupted archive, a sha256 mismatch,
+an unsafe path in the archive, a workspace restore error, a non-multipart body, or a missing
+`file`), 404 `NOT_FOUND` (no project or no `mergeInto` target), 409 `CONFLICT` (the project
+name is taken), 413 `PAYLOAD_TOO_LARGE` (the limit is exceeded), 401/403 (no credentials/no
+project read or edit right). Sources — `packages/core/src/server/routes/project-portable.ts`,
+`packages/core/src/projects/portable.ts`.
+
 ### 5.9 Providers — `/api/v2/providers`
 
 | Method | Path | Build | RBAC (backend / core) | Purpose |

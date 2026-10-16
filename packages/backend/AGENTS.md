@@ -24,6 +24,7 @@
 | `ServiceApiKeyStore`, `createServiceKeyRoutes`, `requireScope`, `checkServiceProjectProjection`, `getServiceCredential` | scoped service-key (ADR-052 этап I): реестр ключей, CRUD-роуты, scope-гейт и проектная проекция |
 | `WebhookStore`, `WebhookDeliveryStore`, `WebhookService`, `startWebhookDeliveryPruner`, `createWebhookRoutes` | исходящие webhooks (ADR-052 этап II): реестр подписок, журнал доставок, движок над `EventBus.subscribeAll`, retention-очистка и CRUD-роуты |
 | `createMaintenanceRoutes` | admin-API обслуживания инстанса (ADR-091/ADR-092): status/doctor/migrations/backups/restore |
+| `createProjectPortableRoutes` | HTTP-перенос проекта (ADR-091 §6): `GET /api/v2/projects/:id/export`, `POST /api/v2/projects/import` |
 | `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (ADR-051 срез / ADR-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
 | `ContextConfig`, `ContextBuilder`, `ContextOptimizer` | контекст и его оптимизация |
@@ -83,7 +84,7 @@
 | Префикс | Источник |
 |---|---|
 | `/auth` | local `routes/auth.ts` (логин, сессии, профиль, avatar) |
-| `/api/v2/projects` | `routes/projects.ts` — обёртка над core `createProjectRoutes` (RBAC-хуки owner/EDITOR/LEAD/ADMIN + read `canRead` owner/член/LEAD/ADMIN, `resolveElevated` — LEAD/ADMIN видят все, managed-provisioning, `/stats`, `/:id/mcp`) + `createProjectAccess` для git-роутов |
+| `/api/v2/projects` | `routes/projects.ts` — обёртка над core `createProjectRoutes` (RBAC-хуки owner/EDITOR/LEAD/ADMIN + read `canRead` owner/член/LEAD/ADMIN, `resolveElevated` — LEAD/ADMIN видят все, managed-provisioning, `/stats`, `/:id/mcp`) + `createProjectAccess` для git-роутов; портативный перенос проекта (ADR-091 §6, core `createProjectPortableRoutes`): `GET /:id/export` (право чтения проекта), `POST /import` (любая роль; `mergeInto` — право редактирования), `messages` — i18n, владелец новых сущностей — текущий пользователь |
 | `/api/v2/messages`, `/queue` | `routes/{messages,queue}.ts` — обёртки над core `createMessageRoutes`/`createQueueRoutes` (i18n, `onMessagesChanged` = `recalc-can-summarize`) |
 | `/api/v2/agents` | `routes/agents.ts` — обёртка над core `createAgentRoutes` (guards: `GET /` = `requireAuth`, `/all`+мутации = `requireAdmin`) |
 | `/api/v2/mcp` | core `createMcpRoutes` (`/probe`) + backend `routes/mcp-registry.ts` (legacy `/servers*`, `/session/:id`, `/registry*`, ADR-071; запись — ADMIN или service-key со scope `addons:install`) |

@@ -17,7 +17,7 @@ import {
   createServiceKeyRoutes, createWebhookRoutes, createSkillRoutes, createCommandRoutes,
   createSkillBundleRoutes, createSessionSkillScopeRoutes, createProjectSkillScopeRoutes,
   createSkillSettingsRoutes, createIdentityRoutes, createContextRoutes,
-  createMaintenanceRoutes,
+  createMaintenanceRoutes, createProjectPortableRoutes,
 } from '../../index.js';
 import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
@@ -146,6 +146,21 @@ export function mountStandaloneRoutes(
     defaultWorkingDir,
     () => getClient(),
     eventBus,
+  ));
+
+  // ADR-091 (этап 2) / ADR-096: портативный экспорт/импорт проекта (скачать и
+  // загрузить архив). Standalone — дефолтные guard'ы (`requireAuth`); доступ к
+  // проекту одного пользователя отдельно не ограничиваем. `onSessionCreated` —
+  // ускоритель подписки WS-хаба владельца (`local`) на импортированные сессии.
+  app.route('/api/v2/projects', createProjectPortableRoutes(
+    auth,
+    {
+      dataDir,
+      getProject: (id) => projectStore.load(id),
+      audit: maintenanceAudit,
+      maxUploadBytes: config.maxUploadBytes,
+      onSessionCreated: (sessionId, ownerId) => { ctx.subscribeWsSession?.(ownerId, sessionId); },
+    },
   ));
 
   // Providers

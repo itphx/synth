@@ -73,6 +73,13 @@ const en: Dictionary = {
   'errors.validation.encryptedRestoreUnsupported':
     'The archive is encrypted — decryption is available only via the CLI (synth restore <archive.enc>); the key is not available to the server.',
 
+  // ADR-091 (этап 2): перенос проекта (экспорт/импорт)
+  'errors.validation.projectImportBody': 'Invalid project import request (multipart archive file is required)',
+  'errors.validation.invalidProjectArchive': 'Project archive is invalid or corrupted',
+  'errors.validation.projectArchiveChecksum': 'Project archive checksum mismatch',
+  'errors.validation.projectWorkspaceRestore': 'Failed to restore the project workspace',
+  'errors.conflict.projectNameInUse': 'A project with this name already exists',
+
   // Conflict errors
   'errors.conflict.usernameExists': 'A user with this username already exists',
   'errors.conflict.emailExists': 'A user with this email already exists',
@@ -180,6 +187,13 @@ const ru: Dictionary = {
   'errors.validation.invalidAuditOp': 'Неизвестная операция журнала обслуживания',
   'errors.validation.encryptedRestoreUnsupported':
     'Архив зашифрован — расшифровка доступна только через CLI (synth restore <archive.enc>); ключ серверу недоступен.',
+
+  // ADR-091 (этап 2): перенос проекта (экспорт/импорт)
+  'errors.validation.projectImportBody': 'Некорректный запрос импорта проекта (нужен multipart-файл архива)',
+  'errors.validation.invalidProjectArchive': 'Архив проекта недействителен или повреждён',
+  'errors.validation.projectArchiveChecksum': 'Контрольная сумма архива проекта не совпадает',
+  'errors.validation.projectWorkspaceRestore': 'Не удалось восстановить рабочий каталог проекта',
+  'errors.conflict.projectNameInUse': 'Проект с таким именем уже существует',
 
   // Conflict errors
   'errors.conflict.usernameExists': 'Пользователь с таким именем уже существует',

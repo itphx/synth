@@ -128,6 +128,73 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
    «Восстановлено файлов: N», строка про удалённые лишние файлы, путь страховочной копии,
    напоминания про `doctor`/`migrate`.
 
+## Перенос проекта между инстансами
+
+**Цель:** перенести проект (сессии/сообщения/план/todo, опционально рабочие файлы) на другой
+инстанс Synth; ожидаемый результат — на целевом инстансе появился новый проект с новыми id и
+без секретов.
+
+Контур — `synth project export|import` ([ADR-091 §6](./arch_decisions/adr-091-backup-restore-transfer.md),
+реализация — `projects/portable.ts`). Это **не** снимок каталога данных (`backup`/`restore`):
+переносятся данные одного проекта, и на целевом инстансе создаётся **новый** проект.
+
+1. **Экспорт.** `synth project export <projectId> [--out <file|dir>] [--with-workspace]` — собирает
+   архив `<name>.synth-project.tar.gz` с `manifest.json`, `project.json` и `sessions/<id>.json`
+   по каждой **локальной** сессии (сессии `origin: remote` пропускаются с предупреждением).
+   `--out` — файл или каталог (каталог — архив кладётся внутрь под именем по умолчанию).
+   `--with-workspace` добавляет рабочий каталог проекта (`workspace/**`; служебные
+   `node_modules`/`.git`/`.synth` исключаются). *Ожидаемо:* путь архива, число сессий/записей,
+   размер и флаг workspace; архив `0600`.
+2. **Секретов в архиве нет.** `secrets/`, ключи, credentials, токены, API-ключи не попадают —
+   их переносят отдельно или создают заново на целевом инстансе.
+3. **Предпросмотр.** `synth project import <archive> --dry-run` — валидирует манифест/формат/
+   контрольные суммы и печатает план (проект-источник, целевой проект, число сессий/сообщений,
+   workspace) **без записи**.
+4. **Импорт.** `synth project import <archive> --yes` — создаёт **новый** проект и **новые** сессии
+   (materialization, не `session.requested`, ADR-089/инвариант 15; `status` сессий сбрасывается в
+   безопасное). Без `--dry-run` и без `--yes` — отказ. Флаги: `--name <name>` — имя нового проекта
+   (по умолчанию — из архива; при коллизии имён авто-имя получает суффикс, а явное `--name` даёт
+   ошибку `project-name-conflict`); `--merge-into <projectId>` — импортировать сессии в существующий
+   проект (новый проект не создаётся); `--with-workspace` — распаковать `workspace/**` в каталог
+   проекта (при отсутствии workspace — авто-имя через provisioning, ADR-075). *Ожидаемо:* новый
+   `projectId`, число сессий/сообщений, статус workspace и **маппинг старый id → новый id**.
+5. **Что не переносится.** Секреты, ключи/токены, привязки событий (ADR-089), расписания,
+   service-key/webhook-секреты, project-scope `skills` — инстанс-локальные сущности.
+   Импортированные сессии принадлежат локальному пользователю (`local`).
+6. **Аудит** ([ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md)): успех
+   фиксируется в `{dataDir}/audit/maintenance.jsonl` как `export.created` (детали `projectId`,
+   `sessions`, `workspace`, `bytes`) и `import.applied` (детали `projectId`, `from`, `sessions`,
+   опц. `mergeInto`); в `--dry-run` аудит не пишется.
+
+**Через HTTP API и UI** (те же операции, роуты `/api/v2/projects/:id/export` и
+`/api/v2/projects/import`; спека — [API_V2.md](./API_V2.md) §5.8.1). Managed: скачивание —
+право чтения проекта (owner/участник/`LEAD`/`ADMIN`), импорт в существующий проект
+(`mergeInto`) — право редактирования; `confirm` для импорта **не** требуется (операция
+не деструктивна):
+
+```bash
+# Скачать портативный экспорт проекта (owner/участник/LEAD/ADMIN).
+curl -OJ 'http://localhost:5000/api/v2/projects/<PROJECT_ID>/export' \
+  -H 'Authorization: Bearer <TOKEN>'
+# С рабочим каталогом проекта (workspace/**):
+curl -OJ 'http://localhost:5000/api/v2/projects/<PROJECT_ID>/export?withWorkspace=true' \
+  -H 'Authorization: Bearer <TOKEN>'
+
+# Импортировать архив в новый проект (multipart; имя — опционально).
+curl -X POST 'http://localhost:5000/api/v2/projects/import' \
+  -H 'Authorization: Bearer <TOKEN>' \
+  -F 'file=@<name>.synth-project.tar.gz' -F 'name=Imported project' -F 'withWorkspace=true'
+# Импортировать сессии в существующий проект (нужно право редактирования):
+curl -X POST 'http://localhost:5000/api/v2/projects/import' \
+  -H 'Authorization: Bearer <TOKEN>' \
+  -F 'file=@<name>.synth-project.tar.gz' -F 'mergeInto=<PROJECT_ID>'
+```
+
+Ответ импорта — `201 {projectId, sessionsImported, messagesImported, workspaceRestored,
+idMap}` (маппинг старый id → новый id). Лимит загрузки архива — `storage.maxUploadBytes`
+(по умолчанию 100 МиБ; превышение → `413 PAYLOAD_TOO_LARGE`). Процедуры, секреты и аудит —
+как в CLI-контуре выше.
+
 ## Миграции схемы
 
 **Цель:** привести данные к текущей версии схемы; ожидаемый результат — `meta.json` с актуальным
@@ -329,3 +396,5 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 - 2026-10-16 — добавлены разделы «Обслуживание из UI» (Настройки → «Обслуживание», ADMIN) и «Обслуживание по API» (admin-API `/api/v2/maintenance/*`, [API_V2.md](./API_V2.md) §5.31); восстановление — офлайн (`appliesOnNextStart`, отложенный запрос применяется при старте).
 - 2026-10-16 — добавлен журнал обслуживания (`GET/DELETE /api/v2/maintenance/audit`, ADR-092): история операций жизненного цикла, видна в разделе «Обслуживание» и по API.
 - 2026-10-16 — добавлено шифрование архива бэкапа (ADR-091): `synth backup --encrypt` (внешний ключ `--key-file`/`SYNTH_BACKUP_KEY[_FILE]`, формат `<archive>.tar.gz.enc` + sidecar `.enc.meta.json`), восстановление `.enc` только через CLI (`synth restore <archive>.enc`); в UI зашифрованные архивы помечаются и исключены из скачивания/восстановления.
+- 2026-10-16 — добавлен раздел «Перенос проекта между инстансами» (`synth project export|import`, ADR-091 §6): архив без секретов, materialization с новыми id, `--merge-into`/`--dry-run`/`--yes`/`--with-workspace`, маппинг id.
+- 2026-10-16 — перенос проекта доступен по HTTP API (роуты `GET /api/v2/projects/:id/export` и `POST /api/v2/projects/import`, [API_V2.md](./API_V2.md) §5.8.1): скачивание архива и импорт multipart; `confirm` не требуется.

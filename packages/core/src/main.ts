@@ -445,6 +445,96 @@ projectCmd
     if (!options.noFiles) console.log(`  файлов скачано: ${stats.filesDownloaded}`);
   });
 
+projectCmd
+  .command('export')
+  .description('Экспортировать проект в портативный архив (ADR-091)')
+  .argument('<projectId>', 'ID локального проекта')
+  .option('--out <path>', 'путь к архиву или каталогу (по умолчанию — текущий каталог)')
+  .option('--with-workspace', 'включить рабочий каталог проекта (workspace/)')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .action(async (projectId, options) => {
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
+    await ensureDataDir(dataDir);
+
+    const { exportProject } = await import('./projects/portable.js');
+    const { createFileStorage } = await import('./storage/storage-context.js');
+    try {
+      const result = await exportProject({
+        dataDir,
+        projectId,
+        out: options.out as string | undefined,
+        withWorkspace: !!options.withWorkspace,
+        workspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
+        audit: createFileStorage({ dataDir }).maintenanceAudit,
+        actor: 'cli',
+        log: (msg) => console.log(msg),
+      });
+      console.log('─'.repeat(60));
+      console.log(`Готово: архив ${result.path}`);
+      console.log(`  сессий: ${result.sessions}`);
+      console.log(`  записей: ${result.entries}`);
+      console.log(`  размер: ${result.bytes} Б`);
+      console.log(`  workspace: ${result.withWorkspace ? 'да' : 'нет'}`);
+    } catch (err) {
+      console.error(`Ошибка экспорта: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
+projectCmd
+  .command('import')
+  .description('Импортировать проект из портативного архива (ADR-091)')
+  .argument('<archive>', 'путь к архиву *.synth-project.tar.gz')
+  .option('--name <name>', 'имя нового проекта (по умолчанию — из архива)')
+  .option('--merge-into <projectId>', 'импортировать сессии в существующий проект')
+  .option('--with-workspace', 'распаковать workspace в каталог проекта')
+  .option('--dry-run', 'проверить архив и показать план без записи')
+  .option('--yes', 'подтвердить создание проекта и сессий')
+  .option('--config <path>', 'путь к config.yaml')
+  .option('--data-dir <path>', 'каталог данных')
+  .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+  .action(async (archive, options) => {
+    const home = resolveHome(options.home);
+    const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+    const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
+    await ensureDataDir(dataDir);
+
+    const { importProject } = await import('./projects/portable.js');
+    const { createFileStorage } = await import('./storage/storage-context.js');
+    try {
+      const result = await importProject({
+        dataDir,
+        archive,
+        name: options.name as string | undefined,
+        mergeInto: options.mergeInto as string | undefined,
+        withWorkspace: !!options.withWorkspace,
+        dryRun: !!options.dryRun,
+        yes: !!options.yes,
+        workspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
+        audit: createFileStorage({ dataDir }).maintenanceAudit,
+        actor: 'cli',
+        log: (msg) => console.log(msg),
+      });
+      console.log('─'.repeat(60));
+      console.log(`${options.dryRun ? '[dry-run] ' : ''}Готово: проект ${result.projectId}`);
+      console.log(`  сессий импортировано: ${result.sessionsImported}`);
+      console.log(`  сообщений импортировано: ${result.messagesImported}`);
+      console.log(`  workspace: ${result.workspaceRestored ? 'восстановлен' : 'нет'}`);
+      const ids = Object.entries(result.idMap);
+      if (ids.length > 0) {
+        console.log('  маппинг id:');
+        for (const [from, to] of ids) console.log(`    ${from} → ${to}`);
+      }
+    } catch (err) {
+      console.error(`Ошибка импорта: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+  });
+
 program.addCommand(projectCmd);
 
 program

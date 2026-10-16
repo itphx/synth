@@ -389,6 +389,14 @@ export type {
   MaintenanceRoutesOptions,
   MaintenanceRouteMessages,
 } from './server/routes/maintenance.js';
+// ADR-091 (этап 2): HTTP-перенос проекта — скачать экспорт / импортировать архив.
+export { createProjectPortableRoutes } from './server/routes/project-portable.js';
+export type {
+  ProjectPortableRoutesAuth,
+  ProjectPortableRoutesDeps,
+  ProjectPortableRoutesOptions,
+  ProjectPortableRouteMessages,
+} from './server/routes/project-portable.js';
 export { EventJournalStore } from './storage/event-journal-store.js';
 export type { EventJournalStoreConfig, EventJournalEntry } from './storage/event-journal-store.js';
 // ADR-089: retention-очистка журнала событий (периодический pruner).
@@ -572,6 +580,17 @@ export { createBackup, runBackupCommand, computeContentChecksum, safetyCopyPath 
 export type { BackupManifest, CreateBackupOptions, BackupCommandOptions, SafetyCopyKind } from './maintenance/backup.js';
 export { restoreBackup, runRestoreCommand, BackupChecksumError } from './maintenance/restore.js';
 export type { RestoreOptions, RestoreCommandOptions } from './maintenance/restore.js';
+// ADR-091 (этап 2): портативный экспорт/импорт проекта (`synth project export|import`).
+export { exportProject, importProject, ProjectPortableError } from './projects/portable.js';
+export type {
+  ExportProjectOptions,
+  ExportProjectResult,
+  ImportProjectOptions,
+  ImportProjectResult,
+  ProjectExportEntry,
+  ProjectExportManifest,
+  ProjectPortableErrorCode,
+} from './projects/portable.js';
 export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';
 export { createSkillRoutes } from './server/routes/skills.js';

@@ -349,6 +349,46 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 > абсолютный вне root — `deny` → `403`, `confirm` без `confirmOutsideRoot` → `409 WORKSPACE_OUTSIDE_ROOT_CONFIRM_REQUIRED`.
 > Ошибка создания каталога → `422 WORKSPACE_CREATE_FAILED`.
 
+### 5.8.1 Портативный экспорт/импорт проекта — `/api/v2/projects` (оба, ADR-091 §6)
+
+Перенос проекта между инстансами Synth: скачать самодостаточный архив
+`<name>.synth-project.tar.gz` и импортировать его из UI/API. Единая фабрика
+`createProjectPortableRoutes` для core и backend; работа — в ядре
+(`packages/core/src/projects/portable.ts`). Архив содержит `manifest.json`
+(sha256-записи), `project.json` и `sessions/<id>.json`; опционально `workspace/**`.
+**Секретов в архиве нет** (ключи, токены, credentials, `secrets/` не попадают).
+
+Импорт — **materialization** (ADR-089, инвариант 15): создаётся **новый** `projectId`
+и новые сессии (источник id → новый id в `idMap`), не через funnel `session.requested`.
+`mergeInto` импортирует сессии в существующий проект. Ядро уведомляет хаб
+(`onSessionCreated` → подписка владельца, ADR-089 инвариант 18). Операции фиксируются
+в аудит-журнале обслуживания (`export.created`/`import.applied`, ADR-092).
+
+| Метод | Путь | Сборка | RBAC (managed / core) | Назначение |
+|---|---|---|---|---|
+| GET | `/api/v2/projects/:id/export` | оба | auth / owner·участник·LEAD·ADMIN | Скачать портативный архив (стриминг): `Content-Type: application/gzip`, `Content-Disposition: attachment; filename="<slug>.synth-project.tar.gz"`, `Content-Length`; query `withWorkspace=true` (по умолчанию без `workspace/**`); нет проекта → 404 `NOT_FOUND`; нет права чтения → 403 `FORBIDDEN` |
+| POST | `/api/v2/projects/import` | оба | auth / любая роль (в `mergeInto` — owner·EDITOR·LEAD·ADMIN) | Импортировать архив (multipart) → 201 `{projectId, sessionsImported, messagesImported, workspaceRestored, idMap}` |
+
+**`POST /import`** — `multipart/form-data`: `file` (архив, обязательно), `name`
+(имя нового проекта), `mergeInto` (id существующего проекта), `withWorkspace` (`'true'`
+— распаковать `workspace/**`), `confirm` (`'true'`). **`confirm` не обязателен**: импорт в
+новый/существующий проект не деструктивен (не удаляет данные), поэтому подтверждение не
+запрашивается (`importProject` вызывается с `yes: true`), поле принимается для совместимости
+с UI. Успех → 201 `ImportProjectResult`; имя нового проекта при коллизии получает суффикс
+`(N)` (явное `name`, занятое → 409).
+
+**Лимит загрузки.** Multipart `POST /import` ограничен `storage.maxUploadBytes`
+(по умолчанию 100 МиБ, `DEFAULT_MAX_UPLOAD_BYTES`); DoS-защита проверяет заявленный
+`content-length`, размер `File` и фактически прочитанные байты — превышение → 413
+`PAYLOAD_TOO_LARGE`.
+
+**Коды ошибок.** 400 `VALIDATION_ERROR` (битый/повреждённый архив, несовпадение
+sha256, небезопасный путь в архиве, ошибка восстановления workspace, не-multipart тело или
+отсутствие `file`), 404 `NOT_FOUND` (нет проекта или цели `mergeInto`), 409 `CONFLICT`
+(имя проекта занято), 413 `PAYLOAD_TOO_LARGE` (превышен лимит), 401/403 (нет кред/нет права
+чтения или редактирования проекта). Источники — `packages/core/src/server/routes/project-portable.ts`,
+`packages/core/src/projects/portable.ts`.
+
 ### 5.9 Providers — `/api/v2/providers`
 
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение |

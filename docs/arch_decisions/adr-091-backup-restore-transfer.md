@@ -1,6 +1,6 @@
 # ADR-091: Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor`
 
-> **Статус:** ⚠️ Частично — MVP реализован (`synth backup`/`restore`/`doctor`); admin-API/UI добавлены (`/api/v2/maintenance`, раздел «Обслуживание»); шифрование архива (`--encrypt`) реализовано; остаток — портативный экспорт/импорт, онлайн-консистентность.
+> **Статус:** ⚠️ Частично — MVP реализован (`synth backup`/`restore`/`doctor`); admin-API/UI добавлены (`/api/v2/maintenance`, раздел «Обслуживание»); шифрование архива (`--encrypt`) реализовано; портативный экспорт/импорт проекта (`synth project export|import`) реализован (ядро + CLI); остаток — онлайн-консистентность/PITR.
 > **Дата:** 2026-10-16
 > **Связано:** [ADR-005](./adr-005-json-storage.md), [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-079](./adr-079-local-home-independent-instances.md), [PROP-055](./prop-055-instance-exchange.md), [PROP-048](./prop-048-self-help-skills-admin-mcp.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
@@ -17,6 +17,7 @@
 3. **`synth doctor`** — health инстанса (`--json`): `data-dir` (write-доступ пробным файлом), `schema`, `master-key`, `secrets-permissions`, `data-integrity`, `providers`, `locks`, `version`; exit 1 при любом `fail`. Read-only, кроме пробного файла.
 4. **`{dataDir}/backups/`** — единый каталог страховочных копий (`pre-restore`/`pre-migrate`), исключённый из архивов бэкапа. Архив с секретами — секрет сам по себе.
 5. **admin-API и UI (`/api/v2/maintenance`, раздел «Обслуживание»)** — тот же контур без CLI: `createMaintenanceRoutes` (status/doctor/migrations/backups/restore; managed — только `ADMIN`, core — `requireAuth`; скачивание архива — `application/gzip`). Восстановление из API/UI — **офлайн**: `POST /restore` не выполняется сразу, а планируется и применяется при следующем старте (`applyPendingRestore`); под живым процессом данные не вычищаются.
+6. **`synth project export|import` — портативный перенос проекта между инстансами (этап 2).** Экспорт — самодостаточный архив `<name>.synth-project.tar.gz`: `manifest.json` (tool `synth-project-export`/`formatVersion`, проект, число сессий, записи с `sha256`), `project.json` (`serializeProject`) и `sessions/<id>.json` (переносимый payload `buildSessionExport`) по каждой **локальной** сессии проекта (сессии `origin: remote` пропускаются с предупреждением — они принадлежат другому инстансу); опционально `workspace/**` (`--with-workspace`). **Секретов в архиве нет** — `secrets/`, ключи, credentials, токены, API-ключи не попадают (проверяется тестом). Импорт — **materialization**, а не `session.requested` (ADR-089, инвариант 15): `SessionManager.createSession` создаёт **новый** `projectId` и **новые** id сессий (`--merge-into <projectId>` — импорт сессий в существующий проект); переносятся `title`/`icon`/`color`/`settings`/`messages` (в порядке)/`todos`/план проекта/описание, `status` сессии сбрасывается в безопасное (`idle`, без `blocked`/`currentStream`/`cancelRequested`), ссылки `parentId`/`references`/`session_reference` переписываются на новые id; по каждой материализованной сессии публикуется `session.created` (инвариант 18). `--dry-run` — валидация архива (манифест/формат/чек-суммы) и план без записи; без `--dry-run` и без `--yes` — отказ. Реализация — `projects/portable.ts` (ядро) + CLI `synth`/`core`. HTTP-роуты — следующая волна.
 
 Процедуры (setup → verify → backup → restore → verify → migrate), флаги и коды выхода — [docs/MAINTENANCE.md](../MAINTENANCE.md).
 
@@ -36,8 +37,8 @@
 ## Остаток
 
 - `workspaces/` по умолчанию не входит в бэкап (исключение по объёму): при восстановлении он **сохраняется**, поэтому полный откат рабочих файлов проектов даёт только архив с `--with-workspace`; вкладывать рабочие каталоги автоматически — не решено;
-- портативный экспорт/импорт проекта (`synth project export|import`; standalone + HTTP, без секретов; materialization, не `session.requested`) — этап 2;
 - онлайн-консистентный/инкрементальный бэкап и PITR — после [PROP-032](./prop-032-history-storage-postgresql.md);
+- HTTP-роуты портативного экспорта/импорта проекта (`/api/v2/projects/:id/export|import`) и UI — следующая волна;
 - руководства портала `docs.synth.itphx.ru`; автоматизация ops-скиллами ([PROP-048](./prop-048-self-help-skills-admin-mcp.md)).
 
 ## История
@@ -46,3 +47,4 @@
 - 2026-10-16 — фикс: `restore` сохраняет `workspaces/`, если архив его не содержит (бэкап без `--with-workspace`); иначе восстановление удаляло рабочие файлы проектов без возможности возврата (ветка feat/storage-seam).
 - 2026-10-16 — добавлены admin-API (`/api/v2/maintenance`) и UI-раздел «Обслуживание» (Настройки → «Обслуживание», ADMIN); восстановление — офлайн: `POST /restore` планирует запрос, `applyPendingRestore` применяет его при следующем старте (ветка feat/storage-seam).
 - 2026-10-16 — реализовано шифрование архива (`--encrypt`): контейнер `<archive>.tar.gz.enc` (AES-256-GCM, внешний ключ оператора), sidecar `.enc.meta.json`, `listBackups` видит `.enc`; восстановление `.enc` — только через CLI, API/UI-восстановление запрещено (400), скачивание/удаление `.enc` по API доступны (ветка feat/storage-seam).
+- 2026-10-16 — этап 2: портативный экспорт/импорт проекта `synth project export|import` (ядро `projects/portable.ts` + CLI `synth`/`core`): архив `<name>.synth-project.tar.gz` без секретов, materialization с новыми id, `--merge-into`/`--dry-run`/`--yes`/`--with-workspace`, аудит `export.created`/`import.applied` (ветка feat/storage-seam).

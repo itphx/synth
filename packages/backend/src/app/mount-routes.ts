@@ -16,6 +16,7 @@ import {
   createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
   createIdentityRoutes,
   createMaintenanceRoutes,
+  createProjectPortableRoutes,
   ProjectInstructionsResolver, createInstructionsInfoResolver,
   createSettingsRoutes, createDictionaryRoutes,
   createContextRoutes as createCoreContextRoutes,
@@ -90,6 +91,52 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
 
   // Projects routes
   app.route('/api/v2/projects', createProjectRoutes(auth, projectStore, sessionManager, config.workspacesRoot, mcpManager, skillService, settingsStore, mcpRegistryStore));
+
+  // ADR-091 (этап 2): портативный экспорт/импорт проекта (скачать/загрузить архив).
+  // Managed RBAC: скачивание — право чтения проекта (owner/участник/LEAD/ADMIN),
+  // импорт в существующий проект (`mergeInto`) — право редактирования; создание
+  // нового проекта — любая аутентифицированная роль. Владелец новых сущностей —
+  // текущий пользователь; хаб подписывается на импортированные сессии
+  // (ADR-089, инвариант 18).
+  app.route('/api/v2/projects', createProjectPortableRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      dataDir,
+      getProject: (id) => projectStore.load(id),
+      canRead: async (c, projectId) => {
+        const user = await auth.getCurrentUser(c);
+        if (!user) return false;
+        const project = await projectStore.load(projectId);
+        return project ? projectAccess.canReadProject(c, project, user.id) : false;
+      },
+      canEdit: async (c, projectId) => {
+        const user = await auth.getCurrentUser(c);
+        if (!user) return false;
+        const project = await projectStore.load(projectId);
+        return project ? projectAccess.canEditProjectContent(c, project, user.id) : false;
+      },
+      audit: maintenanceAudit,
+      maxUploadBytes: config.maxUploadBytes,
+      resolveOwnerId: (c) => {
+        const user = c.get('user') as { id?: string } | undefined;
+        return user?.id;
+      },
+      onSessionCreated: (sessionId, ownerId) => {
+        void eventHub.subscribeToSession(ownerId, sessionId);
+      },
+      messages: {
+        forbidden: (c) => t('auth.forbidden', undefined, c),
+        notFound: (c) => t('errors.notFound.project', undefined, c),
+        invalidBody: (c) => t('errors.validation.projectImportBody', undefined, c),
+        invalidArchive: (c) => t('errors.validation.invalidProjectArchive', undefined, c),
+        checksumMismatch: (c) => t('errors.validation.projectArchiveChecksum', undefined, c),
+        nameConflict: (c) => t('errors.conflict.projectNameInUse', undefined, c),
+        confirmRequired: (c) => t('errors.validation.maintenanceConfirmRequired', undefined, c),
+        workspaceError: (c) => t('errors.validation.projectWorkspaceRestore', undefined, c),
+        payloadTooLarge: (c) => t('errors.payloadTooLarge', undefined, c),
+      },
+    },
+  ));
 
   // Sessions routes
   app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId, requestSessionService));

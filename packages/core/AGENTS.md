@@ -154,7 +154,7 @@
   ключа, 0/не задан — без лимита, превышение → 429 `RATE_LIMITED` (паритет с backend).
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
-  `project-transfer`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
+  `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
   `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`, `webhooks`,
   `maintenance`.
