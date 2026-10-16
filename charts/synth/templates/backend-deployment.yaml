@@ -5,7 +5,7 @@
 {{- $providerKeys = append $providerKeys .name -}}
 {{- end -}}
 {{- end -}}
-{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert .Values.installerKey.enabled -}}
+{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -73,11 +73,22 @@ spec:
                   name: {{ .Values.installerKey.existingSecret | default .Values.installerKey.secretName }}
                   key: {{ .Values.installerKey.bootstrapKey }}
             {{- end }}
+            {{- /* PROP-032: пароль БД — только env из Secret (в config.yaml не
+                   попадает, инвариант 13). Пустой/отсутствующий ключ → core
+                   попробует файл {dataDir}/secrets/postgres-password. */}}
+            {{- if include "synth.storage.isPostgres" . }}
+            - name: SYNTH_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.storage.postgres.existingSecret | default .Values.secrets.existingSecret }}
+                  key: {{ .Values.storage.postgres.secretPasswordKey }}
+                  optional: true
+            {{- end }}
           {{- end }}
           volumeMounts:
             - name: data
               mountPath: /var/synth/data
-            {{- if .Values.backend.config }}
+            {{- if include "synth.backend.hasConfigMap" . }}
             - name: config
               mountPath: /etc/synth
               readOnly: true
@@ -120,7 +131,7 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "synth.backend.fullname" . }}-data
           {{- end }}
-        {{- if .Values.backend.config }}
+        {{- if include "synth.backend.hasConfigMap" . }}
         - name: config
           configMap:
             name: {{ include "synth.name" . }}-config

@@ -11,10 +11,24 @@ const program = new Command();
  * PROP-032: единый контекст хранения для CLI-команд — resolved backend
  * (`file`/`memory`/`postgres`) из конфига инстанса. Хелпер, чтобы не дублировать
  * резолвинг по всем командам (у CLI нет `StandaloneConfig`).
+ *
+ * `postgresSchemaMode: 'skip'` — не применять миграции схемы при сборке
+ * (команды обслуживания управляют схемой сами / работают read-only).
  */
-async function buildCliStorage(synth: SynthConfig, dataDir: string, home?: string | null) {
+async function buildCliStorage(
+  synth: SynthConfig,
+  dataDir: string,
+  home?: string | null,
+  opts?: { postgresSchemaMode?: 'apply' | 'assert' | 'skip' },
+) {
   const { buildStorageContext } = await import('./storage/storage-context.js');
-  return buildStorageContext({ dataDir, config: synth, env: process.env, home: home ?? null });
+  return buildStorageContext({
+    dataDir,
+    config: synth,
+    env: process.env,
+    home: home ?? null,
+    ...(opts?.postgresSchemaMode ? { postgresSchemaMode: opts.postgresSchemaMode } : {}),
+  });
 }
 
 program
@@ -1138,7 +1152,7 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runMigrateCommand } = await import('./maintenance/migrate.js');
-    const storage = await buildCliStorage(synth, dataDir, home);
+    const storage = await buildCliStorage(synth, dataDir, home, { postgresSchemaMode: 'skip' });
     const code = await runMigrateCommand({
       dataDir,
       dryRun: !!options.dryRun,
@@ -1162,12 +1176,34 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runDoctorCommand } = await import('./maintenance/doctor.js');
+    const backend = resolveStorageBackend(synth, process.env);
+    // PROP-032: при backend=postgres — read-only проба БД (контекст в режиме
+    // `skip`, миграции не применяются); ошибка сборки → fail `db-connection`.
+    let dbHealth: (() => Promise<import('./storage/storage-context.js').StorageHealth>) | undefined;
+    if (backend === 'postgres') {
+      dbHealth = async () => {
+        try {
+          const storage = await buildCliStorage(synth, dataDir, home, { postgresSchemaMode: 'skip' });
+          try {
+            return storage.health
+              ? await storage.health()
+              : { ok: false, error: 'драйвер postgres не предоставляет health()' };
+          } finally {
+            await storage.close?.();
+          }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      };
+    }
     const code = await runDoctorCommand({
       dataDir,
       secretKey: resolveSecretKey(synth, process.env),
       configSecretKey: synth.security.secretKey,
       env: process.env,
       json: !!options.json,
+      storageBackend: backend,
+      ...(dbHealth ? { dbHealth } : {}),
     });
     if (code !== 0) process.exit(code);
   });
@@ -1190,7 +1226,7 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runBackupCommand } = await import('./maintenance/backup.js');
-    const storage = await buildCliStorage(synth, dataDir, home);
+    const storage = await buildCliStorage(synth, dataDir, home, { postgresSchemaMode: 'skip' });
     const code = await runBackupCommand({
       dataDir,
       out: options.out,
@@ -1200,6 +1236,7 @@ program
       encrypt: !!options.encrypt,
       keyFile: options.keyFile,
       env: process.env,
+      storageBackend: resolveStorageBackend(synth, process.env),
       audit: storage.maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
@@ -1227,7 +1264,7 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runRestoreCommand } = await import('./maintenance/restore.js');
-    const storage = await buildCliStorage(synth, dataDir, home);
+    const storage = await buildCliStorage(synth, dataDir, home, { postgresSchemaMode: 'skip' });
     const code = await runRestoreCommand({
       archive,
       dataDir,
@@ -1248,6 +1285,7 @@ program
   .option('--config <path>', 'путь к config.yaml')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
   .option('--purge', 'удалить каталог данных (необратимо; требует --yes)')
+  .option('--purge-db', 'удалить схему БД при backend=postgres (DROP SCHEMA; требует --purge и --yes)')
   .option('--dry-run', 'показать, что будет удалено, без удаления')
   .option('--yes', 'подтвердить необратимое удаление (обязательно без --dry-run)')
   .action(async (options) => {
@@ -1256,13 +1294,16 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runUninstallCommand } = await import('./maintenance/uninstall.js');
-    const storage = await buildCliStorage(synth, dataDir, home);
+    const storage = await buildCliStorage(synth, dataDir, home, { postgresSchemaMode: 'skip' });
     const code = await runUninstallCommand({
       dataDir,
       home: home ?? undefined,
       purge: !!options.purge,
+      purgeDb: !!options.purgeDb,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
+      storageBackend: resolveStorageBackend(synth, process.env),
+      ...(storage.purgeSchema ? { purgeSchema: () => storage.purgeSchema!() } : {}),
       audit: storage.maintenanceAudit,
     });
     if (code !== 0) process.exit(code);

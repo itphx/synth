@@ -828,7 +828,7 @@ program
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
 
     const { runMigrateCommand, buildStorageContext } = await import('@itphx/synth-core');
-    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
+    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
     const code = await runMigrateCommand({
       dataDir,
       dryRun: !!options.dryRun,
@@ -880,13 +880,34 @@ program
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
 
-    const { runDoctorCommand } = await import('@itphx/synth-core');
+    const { runDoctorCommand, buildStorageContext } = await import('@itphx/synth-core');
+    const backend = resolveStorageBackend(synth, process.env);
+    // PROP-032: при backend=postgres — read-only проба БД (`postgresSchemaMode:'skip'`).
+    let dbHealth: (() => Promise<{ ok: boolean; latencyMs?: number; schemaVersion?: number | null; expectedSchemaVersion?: number; error?: string }>) | undefined;
+    if (backend === 'postgres') {
+      dbHealth = async () => {
+        try {
+          const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
+          try {
+            return storage.health
+              ? await storage.health()
+              : { ok: false, error: 'драйвер postgres не предоставляет health()' };
+          } finally {
+            await storage.close?.();
+          }
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      };
+    }
     const code = await runDoctorCommand({
       dataDir,
       secretKey: resolveSecretKey(synth, process.env),
       configSecretKey: synth.security.secretKey,
       env: process.env,
       json: !!options.json,
+      storageBackend: backend,
+      ...(dbHealth ? { dbHealth } : {}),
     });
     if (code !== 0) process.exit(code);
   });
@@ -918,7 +939,8 @@ program
       encrypt: !!options.encrypt,
       keyFile: options.keyFile,
       env: process.env,
-      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home })).maintenanceAudit,
+      storageBackend: resolveStorageBackend(synth, process.env),
+      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' })).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -953,7 +975,7 @@ program
       noSafetyCopy: options.safetyCopy === false,
       keyFile: options.keyFile,
       env: process.env,
-      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home })).maintenanceAudit,
+      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' })).maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });
@@ -965,6 +987,7 @@ program
   .option('--config <path>', 'путь к config.yaml')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
   .option('--purge', 'удалить каталог данных (необратимо; требует --yes)')
+  .option('--purge-db', 'удалить схему БД при backend=postgres (DROP SCHEMA; требует --purge и --yes)')
   .option('--dry-run', 'показать, что будет удалено, без удаления')
   .option('--yes', 'подтвердить необратимое удаление (обязательно без --dry-run)')
   .action(async (options) => {
@@ -973,13 +996,17 @@ program
     const dataDir = resolve(options.dataDir || resolveDataDir(synth, undefined, home));
 
     const { runUninstallCommand, buildStorageContext } = await import('@itphx/synth-core');
+    const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
     const code = await runUninstallCommand({
       dataDir,
       home: home ?? undefined,
       purge: !!options.purge,
+      purgeDb: !!options.purgeDb,
       dryRun: !!options.dryRun,
       yes: !!options.yes,
-      audit: (await buildStorageContext({ dataDir, config: synth, env: process.env, home })).maintenanceAudit,
+      storageBackend: resolveStorageBackend(synth, process.env),
+      ...(storage.purgeSchema ? { purgeSchema: () => storage.purgeSchema!() } : {}),
+      audit: storage.maintenanceAudit,
     });
     if (code !== 0) process.exit(code);
   });

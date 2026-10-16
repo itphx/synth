@@ -1,7 +1,8 @@
 # Чарт `synth`
 
 Helm-чарт для развёртывания AI-платформы **Synth** для командной работы в Kubernetes:
-**backend** (API Hub: OIDC/RBAC + встроенный движок, JSON-хранилище) и
+**backend** (API Hub: OIDC/RBAC + встроенный движок, хранилище: JSON-файлы в PVC или
+PostgreSQL) и
 **ui** (React SPA под nginx, проксирует `/api /ws /auth /admin /health` на backend).
 
 Чарт универсален: подходит для self-host у заказчиков. Self-hosted, enterprise-ready.
@@ -13,12 +14,13 @@ Helm-чарт для развёртывания AI-платформы **Synth** 
 
 | Сервис | Образ (по умолчанию) | Порт | Роль |
 |---|---|---|---|
-| `backend` | `gitverse.ru/itphx/synth-backend` | 5000 | API Hub: OIDC + RBAC + движок; JSON-данные в PVC |
+| `backend` | `gitverse.ru/itphx/synth-backend` | 5000 | API Hub: OIDC + RBAC + движок; данные — JSON в PVC (по умолчанию) или PostgreSQL (`storage.backend: postgres`) |
 | `ui` | `gitverse.ru/itphx/synth-ui` | 8080 | React SPA под nginx; проксирует API на backend |
 
-Backend самодостаточен (встроенный движок + JSON-хранилище в PVC), поэтому
-отдельный runner не разворачивается. Хранилище JSON не масштабируется —
-backend всегда 1 реплика.
+Backend самодостаточен (встроенный движок + хранилище), поэтому отдельный runner
+не разворачивается. Backend всегда 1 реплика (`backend.replicaCount`), чарт не
+разворачивает HA: файловое хранилище не масштабируется, а PostgreSQL-бэкенд в
+этом чарте — смена носителя данных, не переход на мультирепличный режим.
 
 ## Требования
 
@@ -28,6 +30,8 @@ backend всегда 1 реплика.
   авто-редиректа HTTP→HTTPS. Без контроллера чарт тоже работает
   (`ingress.controller: none`).
 - Secret с секретами (см. ниже).
+- (Опционально) PostgreSQL, если выбран `storage.backend: postgres`, и Secret с
+  паролем БД — см. раздел «PostgreSQL как backend хранения».
 
 ## Установка
 
@@ -105,7 +109,19 @@ ingress:
 | `backend.persistence.*` | `enabled: true`, `10Gi` | PVC для JSON-данных |
 | `backend.persistence.keepOnUninstall` | `false` | Не удалять PVC при `helm uninstall` (аннотация `helm.sh/resource-policy: keep` в манифесте релиза); для окружений, где данные нельзя терять |
 | `backend.extraEnv` | `{}` | Доп. env для backend |
-| `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`) |
+| `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`); сюда же домерживается секция `storage` из значений ниже |
+| `storage.backend` | `file` | Backend хранения (PROP-032): `file` \| `memory` \| `postgres` |
+| `storage.postgres.host` | `""` | Хост БД (при `backend: postgres`) |
+| `storage.postgres.port` | `5432` | Порт БД |
+| `storage.postgres.database` | `""` | Имя БД |
+| `storage.postgres.user` | `""` | Пользователь БД |
+| `storage.postgres.schema` | `""` | Схема БД (namespace таблиц; пусто → схема драйвера) |
+| `storage.postgres.ssl` | `false` | Требовать TLS-соединение (`sslmode`) |
+| `storage.postgres.poolMax` | `10` | Максимальный размер пула соединений |
+| `storage.postgres.existingSecret` | `""` | Secret с паролем БД (пусто → `secrets.existingSecret`) |
+| `storage.postgres.secretPasswordKey` | `SYNTH_POSTGRES_PASSWORD` | Ключ внутри Secret с паролем БД |
+| `storage.degradedMode` | `""` | Задел деградации: `fallback-file` \| `halt` (пусто → дефолт core) |
+| `storage.fallbackDir` | `""` | Каталог файлового фоллбека (пусто → `{dataDir}/fallback`) |
 | `ui.image.repository` | `gitverse.ru/itphx/synth-ui` | Образ UI |
 | `ui.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `ui.imagePullSecrets` | `[]` | Секреты для приватного реестра |
@@ -141,6 +157,7 @@ namespace релиза. Имя задаётся `secrets.existingSecret` (по �
 |---|---|
 | `SYNTH_OIDC_CLIENT_SECRET` | при `backend.oidc.enabled: true` |
 | `SYNTH_PROVIDER_<NAME>_API_KEY` | для каждого провайдера с `apiKey: true` (`<NAME>` — name в верхнем регистре, `-` → `_`) |
+| `SYNTH_POSTGRES_PASSWORD` | при `storage.backend: postgres` — пароль БД (ключ переопределяется `storage.postgres.secretPasswordKey`, Secret — `storage.postgres.existingSecret`) |
 
 Пример:
 
@@ -148,11 +165,117 @@ namespace релиза. Имя задаётся `secrets.existingSecret` (по �
 kubectl create secret generic synth-secrets \
   --namespace synth \
   --from-literal=SYNTH_OIDC_CLIENT_SECRET='<client-secret>' \
-  --from-literal=SYNTH_PROVIDER_OPENAI_API_KEY='<api-key>'
+  --from-literal=SYNTH_PROVIDER_OPENAI_API_KEY='<api-key>' \
+  --from-literal=SYNTH_POSTGRES_PASSWORD='<db-password>'
 ```
 
 Секреты можно создавать любым способом: вручную, External Secrets Operator,
 sealed-secrets и т.п. Зашифрованных секретов в чарте нет.
+
+> Пароль БД подключается как `optional: true` (env `SYNTH_POSTGRES_PASSWORD`): если
+> ключа в Secret нет, под стартует без env, и core ищет пароль в файле
+> `{dataDir}/secrets/postgres-password` (внутри PVC) — fallback для схем, где
+> пароль лежит в томе, а не в Secret. Отсутствие пароля там, где он нужен,
+> приводит к ошибке подключения в логах backend, а не к молчаливой работе.
+
+## PostgreSQL как backend хранения (`storage.backend: postgres`)
+
+PROP-032 / ADR-096 / ADR-097: физический backend хранения выбирается значением
+`storage.backend` — `file` (JSON-файлы в PVC, по умолчанию), `memory` (данные не
+сохраняются — тесты/эмуляция), `postgres` (БД). Драйвер
+`@itphx/synth-storage-postgres` и `pg` входят в образ backend (optionalDependencies
+ядра) — доустанавливать в кластер ничего не нужно.
+
+```yaml
+# my-values.yaml — плейсхолдеры <...> заменить
+storage:
+  backend: postgres
+  postgres:
+    host: "synth-postgres.<namespace>.svc.cluster.local"
+    port: 5432
+    database: synth
+    user: synth
+    schema: synth          # "" → схема драйвера
+    ssl: true              # sslmode=require
+    poolMax: 10
+    existingSecret: ""     # "" → secrets.existingSecret
+    secretPasswordKey: SYNTH_POSTGRES_PASSWORD
+  degradedMode: ""         # "" | fallback-file | halt (задел, см. ниже)
+  fallbackDir: ""          # "" → {dataDir}/fallback
+```
+
+Пароль БД — только в Secret, не в values:
+
+```bash
+kubectl create secret generic synth-secrets -n <namespace> \
+  --from-literal=SYNTH_POSTGRES_PASSWORD='<db-password>'
+```
+
+Что делает чарт:
+
+- домерживает в `config.yaml` (`ConfigMap <release>-config` → `/etc/synth/config.yaml`)
+  секцию `storage` **без пароля**: `storage.backend` + `storage.postgres.*`
+  (`host`/`port`/`database`/`user`/`schema`/`ssl`/`poolMax`);
+- прокидывает пароль **только** в env `SYNTH_POSTGRES_PASSWORD` из Secret
+  (`secretKeyRef`, `optional: true`) — пароля нет ни в values, ни в ConfigMap;
+- приоритет при конфликте: chart-значения `storage.*` **выше**
+  `backend.config.storage.*` (глубокая домержка; остальные ключи `backend.config`
+  сохраняются как есть).
+
+Чего чарт намеренно не делает:
+
+- **не задаёт `dsn`**: полная строка подключения почти всегда содержит пароль, а
+  значение ушло бы в ConfigMap. Нужен DSN — задайте его сами в `backend.config`
+  (без пароля) или отдельным env из вашего Secret.
+- **не разворачивает PostgreSQL и не создаёт Secret с паролем** (как и остальные
+  секреты чарта): БД и её креды — ответственность оператора (managed-сервис,
+  оператор Zalando/Crunchy, helm-чарт БД). Локальный пример — профиль `postgres`
+  в `docker-compose.yml` репозитория.
+- **не проверяет БД в probes**: liveness/readiness смотрят `/health` (живость
+  процесса backend). Выключать под из балансировки при недоступной БД нельзя:
+  вместе с backend недоступен UI (nginx проксирует `/api`), а при
+  `storage.degradedMode: fallback-file` деградация — штатный режим, а не отказ.
+  DB-aware готовность подключайте внешним мониторингом БД; при необходимости —
+  своим `CronJob` с `pg_isready`.
+- **не бэкапит БД**: `synth backup` архивирует каталог данных, а при
+  `backend: postgres` данные — в БД, поэтому бэкап/восстановление — средствами
+  СУБД (`pg_dump`/`pg_basebackup`/pgBackRest, `CronJob` или managed-бэкап).
+
+### PVC при `backend: postgres` — только периферия
+
+PVC (`backend.persistence.*`) остаётся смонтированным в `/var/synth/data`, но
+хранит только периферию — «файловый периметр» (терминология `synth backup`):
+
+- `secrets/` — мастер-ключ секретов at-rest (ADR-076), api-key, SSH-ключи агентов,
+  при необходимости `postgres-password` (если пароль не в Secret);
+- `meta.json` — версия схемы данных инстанса (ADR-092);
+- `workspaces/` — рабочие каталоги проектов (файлы агента) и файловый фоллбек
+  (`storage.fallbackDir`, по умолчанию `{dataDir}/fallback`);
+- `backups/` — архивы `synth backup`, если они пишутся в каталог данных.
+
+Данные (сессии, проекты, сообщения, провайдеры/модели/агенты, события,
+расписания, service-keys, webhooks) — в PostgreSQL. Следствия:
+
+- **бэкап/восстановление данных — средствами СУБД**; `synth backup`/`synth restore`
+  по каталогу данных не заменяют дамп БД (и не вернут данные БД);
+- PVC всё ещё нужен (секреты/workspace) — не отключайте `backend.persistence`
+  без отдельного хранилища для `secrets/`: иначе мастер-ключ и SSH-ключи окажутся
+  в эфемерном слое;
+- `backend.persistence.keepOnUninstall` защищает только PVC; БД — снаружи чарта.
+
+### Миграции схемы
+
+Драйвер применяет миграции при старте (`schemaMode=apply` по умолчанию) —
+отдельная инициализация БД не нужна (достаточно прав на DDL в схеме). Вручную —
+`synth migrate` (см. `docs/MAINTENANCE.md`).
+
+### Задел деградации (`storage.degradedMode`)
+
+`fallback-file` (дефолт core) — при недоступности БД инстанс переходит на файловое
+хранилище в `storage.fallbackDir` (пусто → `{dataDir}/fallback`); `halt` — старт не
+выполняется. Реализация — параллельная волна PROP-032; чарт лишь доводит значения
+до `config.yaml` (env-переменных у этих ключей нет). Значение `storage.backend`
+валидируется приложением (при неизвестном — ошибка старта), чарт его не проверяет.
 
 ## Installer service-key (опция `installerKey`)
 
@@ -301,6 +424,9 @@ defaults. Runtime-настройки, изменённые через UI/API (`s
 применяются поверх файла — файл задаёт базовые значения, а не жёстко
 фиксирует их. Это отдельный объект от `backend.extraEnv`/ConfigMap
 `<release>-env` и не конфликтует с ними.
+Секция `storage` может задаваться и chart-значениями `storage.*` — они
+домерживаются поверх `backend.config.storage` (см. раздел «PostgreSQL как backend
+хранения»).
 
 Когда использовать: декларативно поставлять базовый конфиг инстанса, например
 включить авто-привязку внешних событий или шедулер.

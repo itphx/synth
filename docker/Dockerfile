@@ -2,6 +2,14 @@
 # Зависимости (@itphx/synth-core, @itphx/synth-ui, @itphx/synth-shared) ставятся как
 # транзитивные npm-зависимости глобально, промпты/UI резолвятся оттуда.
 #
+# Слой хранения (PROP-032, ADR-096/ADR-097): драйвер `@itphx/synth-storage-postgres`
+# — optionalDependency ядра, `pg` — optionalDependency драйвера. npm ставит
+# optional-зависимости транзитивных пакетов по умолчанию, поэтому
+# `storage.backend=postgres` работает без доустановки; `--omit=optional`/
+# `--no-optional` здесь использовать НЕЛЬЗЯ (иначе драйвер выкинется из образа).
+# В чанки ниже драйвер попадает в @[g-p]* (`@itphx`), `pg` — в [g-p]* — новых
+# слоёв не требуется.
+#
 # Multi-stage: ставим пакет в builder, а в runtime переносим только нужные каталоги.
 # Иначе один слой `npm install -g` (npm-кэш + все зависимости) весит ~280 МБ, и
 # GitVerse registry отклоняет загрузку такого blob'а с 413 Request Entity Too Large.

@@ -10,9 +10,13 @@ import { join } from 'node:path';
 import { SYNTH_VERSION } from '@itphx/synth-shared';
 import { checkInstanceCompatibility, readInstanceMeta } from '../storage/instance-meta.js';
 import { masterKeyFilePath, readMasterKeyFile } from '../security/crypto.js';
+import type { StorageBackendKind, StorageHealth } from '../storage/storage-context.js';
 
-/** Статус отдельной проверки (ADR-091). */
-export type DoctorStatus = 'ok' | 'warn' | 'fail';
+/**
+ * Статус отдельной проверки (ADR-091). `skipped` — проверка неприменима к
+ * выбранному backend'у хранения (напр. файловые проверки при `storage.backend=postgres`).
+ */
+export type DoctorStatus = 'ok' | 'warn' | 'fail' | 'skipped';
 
 /** Результат одной проверки инстанса (ADR-091). */
 export interface DoctorCheck {
@@ -47,6 +51,18 @@ export interface DoctorOptions {
   env?: NodeJS.ProcessEnv;
   /** `synth.security.secretKey`, если задан в config. */
   configSecretKey?: string;
+  /**
+   * PROP-032: физический backend хранения (`storage.backend`); по умолчанию
+   * `file`. При `postgres` файловые проверки помечаются `skipped`, добавляются
+   * `db-connection`/`db-schema`.
+   */
+  storageBackend?: StorageBackendKind;
+  /**
+   * PROP-032: read-only проба БД (`postgres`) — соединение (latency) и версия
+   * схемы. Реализуется драйвером (`StorageContext.health`). Не задана, а
+   * backend=`postgres` — проверка `db-connection` падает с понятной причиной.
+   */
+  dbHealth?: () => Promise<StorageHealth>;
 }
 
 /** Опции CLI-команды `synth doctor` (ADR-091). */
@@ -343,6 +359,72 @@ async function _checkLocks(dataDir: string): Promise<DoctorCheck> {
   return { ...base, status: 'ok', ...(count > 0 ? { detail: `локов: ${count}` } : {}) };
 }
 
+/** Помечает проверку неприменимой к текущему backend'у (ADR-091/PROP-032). */
+function _skippedCheck(id: string, title: string, detail = 'неприменимо (backend=postgres)'): DoctorCheck {
+  return { id, title, status: 'skipped', detail };
+}
+
+/**
+ * Проверка БД: реальное подключение (probe) + задержка. `postgres` — единственный
+ * backend с `health()`; ошибка/исключение пробы → `fail`.
+ */
+async function _checkDbConnection(getHealth: () => Promise<StorageHealth>): Promise<DoctorCheck> {
+  const base: Pick<DoctorCheck, 'id' | 'title'> = { id: 'db-connection', title: 'Подключение к БД' };
+  try {
+    const health = await getHealth();
+    if (!health.ok) {
+      return {
+        ...base,
+        status: 'fail',
+        detail: health.error ? `ошибка: ${health.error}` : 'БД недоступна',
+        hint: 'проверьте storage.postgres (host/port/database), пароль и доступность сервера БД',
+      };
+    }
+    const latency = health.latencyMs !== undefined ? `, ${health.latencyMs} мс` : '';
+    return { ...base, status: 'ok', detail: `соединение установлено${latency}` };
+  } catch (err) {
+    return {
+      ...base,
+      status: 'fail',
+      detail: err instanceof Error ? err.message : String(err),
+      hint: 'проверьте storage.postgres и доступность сервера БД',
+    };
+  }
+}
+
+/**
+ * Проверка схемы БД (PROP-032): сравнение версии БД с ожидаемой драйвером.
+ * Схема новее → `fail` (понижение версии не мигрирует назад); отстаёт/нет → `warn`
+ * (`synth migrate`); нет соединения — `skipped` (не вводим в заблуждение).
+ */
+async function _checkDbSchema(getHealth: () => Promise<StorageHealth>): Promise<DoctorCheck> {
+  const base: Pick<DoctorCheck, 'id' | 'title'> = { id: 'db-schema', title: 'Схема БД' };
+  const health = await getHealth();
+  if (!health.ok) {
+    return { ...base, status: 'skipped', detail: 'пропущено: нет соединения с БД' };
+  }
+  const current = health.schemaVersion ?? null;
+  const expected = health.expectedSchemaVersion;
+  const detail = `схема ${current === null ? 'не инициализирована' : current}${
+    expected !== undefined ? ` (ожидается ${expected})` : ''
+  }`;
+  if (current === null) {
+    return { ...base, status: 'warn', detail, hint: 'synth migrate' };
+  }
+  if (expected !== undefined && current > expected) {
+    return {
+      ...base,
+      status: 'fail',
+      detail,
+      hint: 'схема БД новее драйвера — обновите Synth (понижение версии не мигрирует назад)',
+    };
+  }
+  if (expected !== undefined && current < expected) {
+    return { ...base, status: 'warn', detail, hint: 'synth migrate' };
+  }
+  return { ...base, status: 'ok', detail };
+}
+
 /** Проверка 8: версия пакета и версия данных (`meta.json`). */
 async function _checkVersion(dataDir: string): Promise<DoctorCheck> {
   const base: Pick<DoctorCheck, 'id' | 'title'> = { id: 'version', title: 'Версия' };
@@ -369,24 +451,66 @@ async function _checkVersion(dataDir: string): Promise<DoctorCheck> {
  */
 export async function runDoctor(opts: DoctorOptions): Promise<DoctorResult> {
   const checks: DoctorCheck[] = [];
+  const postgres = opts.storageBackend === 'postgres';
+  // Проба БД выполняется один раз и переиспользуется проверками `db-*`.
+  let healthPromise: Promise<StorageHealth> | undefined;
+  const getHealth = (): Promise<StorageHealth> => {
+    if (!healthPromise) {
+      healthPromise = opts.dbHealth
+        ? opts.dbHealth()
+        : Promise.resolve({ ok: false, error: 'проба БД не сконфигурирована' });
+    }
+    return healthPromise;
+  };
+
   const specs: Array<{ id: string; title: string; run: () => Promise<DoctorCheck> }> = [
     { id: 'data-dir', title: 'Каталог данных', run: () => _checkDataDir(opts.dataDir) },
-    { id: 'schema', title: 'Схема данных', run: () => _checkSchema(opts.dataDir) },
-    { id: 'master-key', title: 'Мастер-ключ', run: () => _checkMasterKey(opts) },
-    {
-      id: 'secrets-permissions',
-      title: 'Права на секреты',
-      run: () => _checkSecretsPermissions(opts.dataDir),
-    },
-    {
-      id: 'data-integrity',
-      title: 'Целостность данных',
-      run: () => _checkDataIntegrity(opts.dataDir),
-    },
-    { id: 'providers', title: 'Провайдеры и модели', run: () => _checkProviders(opts.dataDir) },
-    { id: 'locks', title: 'Файловые локи', run: () => _checkLocks(opts.dataDir) },
-    { id: 'version', title: 'Версия', run: () => _checkVersion(opts.dataDir) },
   ];
+  if (postgres) {
+    // ADR-091/PROP-032: при backend=postgres данные в БД — файловые проверки
+    // неприменимы (`skipped`), вместо них проба соединения и версия схемы БД.
+    specs.push(
+      { id: 'db-connection', title: 'Подключение к БД', run: () => _checkDbConnection(getHealth) },
+      { id: 'db-schema', title: 'Схема БД', run: () => _checkDbSchema(getHealth) },
+      { id: 'master-key', title: 'Мастер-ключ', run: () => _checkMasterKey(opts) },
+      {
+        id: 'secrets-permissions',
+        title: 'Права на секреты',
+        run: () => _checkSecretsPermissions(opts.dataDir),
+      },
+      { id: 'schema', title: 'Схема данных', run: async () => _skippedCheck('schema', 'Схема данных') },
+      {
+        id: 'data-integrity',
+        title: 'Целостность данных',
+        run: async () => _skippedCheck('data-integrity', 'Целостность данных'),
+      },
+      {
+        id: 'providers',
+        title: 'Провайдеры и модели',
+        run: async () => _skippedCheck('providers', 'Провайдеры и модели'),
+      },
+      { id: 'locks', title: 'Файловые локи', run: async () => _skippedCheck('locks', 'Файловые локи') },
+      { id: 'version', title: 'Версия', run: async () => _skippedCheck('version', 'Версия') },
+    );
+  } else {
+    specs.push(
+      { id: 'schema', title: 'Схема данных', run: () => _checkSchema(opts.dataDir) },
+      { id: 'master-key', title: 'Мастер-ключ', run: () => _checkMasterKey(opts) },
+      {
+        id: 'secrets-permissions',
+        title: 'Права на секреты',
+        run: () => _checkSecretsPermissions(opts.dataDir),
+      },
+      {
+        id: 'data-integrity',
+        title: 'Целостность данных',
+        run: () => _checkDataIntegrity(opts.dataDir),
+      },
+      { id: 'providers', title: 'Провайдеры и модели', run: () => _checkProviders(opts.dataDir) },
+      { id: 'locks', title: 'Файловые локи', run: () => _checkLocks(opts.dataDir) },
+      { id: 'version', title: 'Версия', run: () => _checkVersion(opts.dataDir) },
+    );
+  }
 
   for (const spec of specs) {
     try {
@@ -410,7 +534,7 @@ export async function runDoctor(opts: DoctorOptions): Promise<DoctorResult> {
 }
 
 /** Иконка статуса для человекочитаемого вывода. */
-const STATUS_ICON: Record<DoctorStatus, string> = { ok: '✓', warn: '⚠', fail: '✗' };
+const STATUS_ICON: Record<DoctorStatus, string> = { ok: '✓', warn: '⚠', fail: '✗', skipped: '−' };
 
 /** Рендерит результат: человекочитаемый вывод (✓/⚠/✗ + hint) либо JSON. */
 export function renderDoctorResult(result: DoctorResult, opts?: { json?: boolean }): string {
@@ -427,8 +551,10 @@ export function renderDoctorResult(result: DoctorResult, opts?: { json?: boolean
 
   const warn = result.checks.filter((c) => c.status === 'warn').length;
   const fail = result.checks.filter((c) => c.status === 'fail').length;
+  const skipped = result.checks.filter((c) => c.status === 'skipped').length;
   const summary = result.ok ? 'Инстанс в порядке' : 'Обнаружены проблемы';
-  lines.push('', `${summary} (warn: ${warn}, fail: ${fail})`);
+  const skippedPart = skipped > 0 ? `, skipped: ${skipped}` : '';
+  lines.push('', `${summary} (warn: ${warn}, fail: ${fail}${skippedPart})`);
   return lines.join('\n');
 }
 

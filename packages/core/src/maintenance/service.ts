@@ -11,6 +11,7 @@ import { basename, join, resolve, sep } from 'node:path';
 import { atomicWrite, SYNTH_VERSION } from '@itphx/synth-shared';
 import { checkInstanceCompatibility } from '../storage/instance-meta.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
+import type { StorageBackendKind, StorageHealth } from '../storage/storage-context.js';
 import { runDoctor } from './doctor.js';
 import { recordMaintenanceAudit } from './audit.js';
 import { encryptedMetaPath, readEncryptedMeta } from './backup-crypto.js';
@@ -58,6 +59,8 @@ export interface MaintenanceBackupInfo {
   withSecrets: boolean;
   /** Архив содержит `workspaces/`. */
   withWorkspace: boolean;
+  /** PROP-032: физический backend хранения в архиве (`postgres` — данных БД внутри нет). */
+  storageBackend?: string;
   /** Число записей в манифесте. */
   entries: number;
   /**
@@ -116,6 +119,8 @@ export interface RestoreArchiveManifest {
   instanceVersion: string;
   withSecrets: boolean;
   withWorkspace: boolean;
+  /** PROP-032: backend архива (`postgres` — данные БД в архив не входят). */
+  storageBackend?: string;
   entries: number;
   createdAt: string;
 }
@@ -227,6 +232,7 @@ async function _readBackupInfo(filePath: string): Promise<MaintenanceBackupInfo 
         instanceVersion: meta.instanceVersion,
         withSecrets: meta.withSecrets === true,
         withWorkspace: meta.withWorkspace === true,
+        ...(meta.storageBackend ? { storageBackend: meta.storageBackend } : {}),
         entries: meta.entries,
         encrypted: true,
         metadataAvailable: true,
@@ -242,6 +248,7 @@ async function _readBackupInfo(filePath: string): Promise<MaintenanceBackupInfo 
       instanceVersion: manifest.instanceVersion,
       withSecrets: manifest.withSecrets === true,
       withWorkspace: manifest.withWorkspace === true,
+      ...(manifest.storageBackend ? { storageBackend: manifest.storageBackend } : {}),
       entries: Array.isArray(manifest.entries) ? manifest.entries.length : 0,
     };
   } catch {
@@ -357,6 +364,7 @@ function _toManifestInfo(manifest: {
   instanceVersion: string;
   withSecrets: boolean;
   withWorkspace: boolean;
+  storageBackend?: string;
   entries: unknown[];
   createdAt: string;
 }): RestoreArchiveManifest {
@@ -365,6 +373,7 @@ function _toManifestInfo(manifest: {
     instanceVersion: manifest.instanceVersion,
     withSecrets: manifest.withSecrets === true,
     withWorkspace: manifest.withWorkspace === true,
+    ...(manifest.storageBackend ? { storageBackend: manifest.storageBackend } : {}),
     entries: Array.isArray(manifest.entries) ? manifest.entries.length : 0,
     createdAt: manifest.createdAt,
   };
@@ -516,13 +525,23 @@ export async function getMaintenanceStatus(opts: {
   dataDir: string;
   secretKey?: string;
   env?: NodeJS.ProcessEnv;
+  /** PROP-032: физический backend хранения (по умолчанию `file`). */
+  storageBackend?: StorageBackendKind;
+  /** PROP-032: read-only проба БД (postgres) для `doctor`. */
+  dbHealth?: () => Promise<StorageHealth>;
 }): Promise<MaintenanceStatus> {
   const dataDir = resolve(opts.dataDir);
   const compatibility = await checkInstanceCompatibility(dataDir);
   const [backups, pendingRestore, doctor] = await Promise.all([
     listBackups(dataDir),
     getPendingRestore(dataDir),
-    runDoctor({ dataDir, secretKey: opts.secretKey, env: opts.env }),
+    runDoctor({
+      dataDir,
+      secretKey: opts.secretKey,
+      env: opts.env,
+      storageBackend: opts.storageBackend,
+      dbHealth: opts.dbHealth,
+    }),
   ]);
 
   return {

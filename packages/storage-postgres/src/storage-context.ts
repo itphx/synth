@@ -26,8 +26,10 @@
  */
 
 import { createFileStorage } from '@itphx/synth-core';
-import type { StorageContext } from '@itphx/synth-core';
+import type { StorageContext, StorageHealth, StorageSchemaMigrationResult } from '@itphx/synth-core';
 import type { PostgresConnection } from './pool.js';
+import { latestSchemaVersion, MIGRATIONS } from './migrations/index.js';
+import { planMigrations, readSchemaVersion, runMigrations } from './migrate.js';
 import { buildContentPorts } from './ports/content.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
@@ -80,6 +82,44 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // PROP-032: соединение живёт в контексте; `close()` закрывает пул (graceful
     // shutdown домена).
     close: () => opts.connection.end(),
+    // PROP-032/ADR-091: диагностика backend'а — реальный probe БД + версия схемы
+    // (read-only, без применения миграций) для `synth doctor`/admin-API.
+    health: async (): Promise<StorageHealth> => {
+      const started = Date.now();
+      try {
+        await opts.connection.query('SELECT 1');
+        const schemaVersion = await readSchemaVersion(opts.connection, opts.connection.schema);
+        return {
+          ok: true,
+          latencyMs: Date.now() - started,
+          schemaVersion,
+          expectedSchemaVersion: latestSchemaVersion(MIGRATIONS),
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          latencyMs: Date.now() - started,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    },
+    // PROP-032/ADR-092: миграции схемы БД — план (`dryRun`) или применение
+    // (лок/транзакции берёт `runMigrations`).
+    schemaMigrations: async (migrationOpts?: { dryRun?: boolean }): Promise<StorageSchemaMigrationResult> => {
+      if (migrationOpts?.dryRun) {
+        const plan = await planMigrations(opts.connection, { schema: opts.connection.schema });
+        return { ...plan, applied: [] };
+      }
+      const result = await runMigrations(opts.connection, { schema: opts.connection.schema });
+      return {
+        current: result.version,
+        expected: result.version,
+        pending: [],
+        applied: result.applied,
+      };
+    },
+    // PROP-032: удаление схемы БД — только по явному `uninstall --purge-db`.
+    purgeSchema: () => opts.connection.dropSchema(),
     // PROP-032: примитивы координации БД (advisory-локи) — composition root
     // подставляет их вместо файловых `FileMutex`/`FileLeader`.
     locks: createPostgresLocks(opts.connection),

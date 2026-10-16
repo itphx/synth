@@ -218,6 +218,9 @@ export type {
   StorageContextConfig,
   StorageBackendKind,
   StorageLocks,
+  StorageHealth,
+  StorageSchemaMigrationResult,
+  PostgresSchemaMode,
   PostgresStorageDriverConfig,
   BuildStorageContextOptions,
 } from './storage/storage-context.js';

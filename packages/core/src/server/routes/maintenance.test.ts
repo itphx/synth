@@ -535,4 +535,120 @@ describe('Maintenance API Routes (ADR-091/ADR-092)', () => {
       expect(body.problem).toContain('зашифрован');
     });
   });
+
+  // PROP-032: admin-API при `storage.backend=postgres` — doctor/миграции ходят в
+  // БД через переданные швы (`dbHealth`/`schemaMigrations`), файловые проверки
+  // помечаются `skipped`; архивы несут `storageBackend`.
+  describe('PROP-032 — backend=postgres', () => {
+    const pgApp = (extra: {
+      dbHealth?: () => Promise<{ ok: boolean; latencyMs?: number; schemaVersion?: number | null; expectedSchemaVersion?: number; error?: string }>;
+      schemaMigrations?: (opts?: { dryRun?: boolean }) => Promise<{
+        current: number | null;
+        expected: number;
+        pending: number[];
+        applied: number[];
+      }>;
+    }): Hono => {
+      const app = new Hono();
+      app.route(
+        '/api/v2/maintenance',
+        createMaintenanceRoutes(passAuth, { dataDir: tmpDir, storageBackend: 'postgres', ...extra }),
+      );
+      return app;
+    };
+
+    it('GET /doctor: db-connection/db-schema и skipped у файловых проверок', async () => {
+      const app = pgApp({
+        dbHealth: async () => ({ ok: true, latencyMs: 2, schemaVersion: 3, expectedSchemaVersion: 3 }),
+      });
+
+      const res = await app.request('/api/v2/maintenance/doctor');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { checks: Array<{ id: string; status: string }> };
+      const status = (id: string) => body.checks.find((check) => check.id === id)?.status;
+
+      expect(status('db-connection')).toBe('ok');
+      expect(status('db-schema')).toBe('ok');
+      expect(status('data-integrity')).toBe('skipped');
+      expect(status('providers')).toBe('skipped');
+    });
+
+    it('GET /status: сводка doctor считает только fail/warn (skipped не проваливает ok)', async () => {
+      const app = pgApp({
+        dbHealth: async () => ({ ok: true, schemaVersion: 2, expectedSchemaVersion: 3 }),
+      });
+
+      const res = await app.request('/api/v2/maintenance/status');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { doctor: { ok: boolean; fail: number; warn: number } };
+      expect(body.doctor.fail).toBe(0);
+      expect(body.doctor.ok).toBe(true);
+      expect(body.doctor.warn).toBeGreaterThanOrEqual(1); // отстающая схема БД
+    });
+
+    it('GET /migrations: план SQL-схемы БД (backend=postgres)', async () => {
+      const app = pgApp({
+        schemaMigrations: async () => ({ current: 1, expected: 3, pending: [2, 3], applied: [] }),
+      });
+
+      const res = await app.request('/api/v2/maintenance/migrations');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        backend: string;
+        current: number;
+        expected: number;
+        pending: Array<{ id: string; toVersion: number }>;
+      };
+      expect(body.backend).toBe('postgres');
+      expect(body.current).toBe(1);
+      expect(body.expected).toBe(3);
+      expect(body.pending.map((m) => m.toVersion)).toEqual([2, 3]);
+      expect(body.pending[0]!.id).toBe('postgres:2');
+    });
+
+    it('POST /migrations/apply: применяет SQL-схему и возвращает версию', async () => {
+      const calls: Array<{ dryRun?: boolean } | undefined> = [];
+      const app = pgApp({
+        schemaMigrations: async (opts) => {
+          calls.push(opts);
+          return opts?.dryRun
+            ? { current: 1, expected: 3, pending: [2, 3], applied: [] }
+            : { current: 3, expected: 3, pending: [], applied: [2, 3] };
+        },
+      });
+
+      const res = await postJson(app, '/api/v2/maintenance/migrations/apply', { confirm: true });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { backend: string; applied: number[]; version: number };
+      expect(body).toMatchObject({ backend: 'postgres', applied: [2, 3], version: 3 });
+      expect(calls).toEqual([{ dryRun: false }]);
+    });
+
+    it('POST /migrations/apply: схема БД новее драйвера → 409 SCHEMA_TOO_NEW', async () => {
+      const app = pgApp({
+        schemaMigrations: async () => {
+          const err = new Error('схема БД новее драйвера') as Error & { code?: string };
+          err.code = 'STORAGE_POSTGRES_SCHEMA_TOO_NEW';
+          throw err;
+        },
+      });
+
+      const res = await postJson(app, '/api/v2/maintenance/migrations/apply', { confirm: true });
+      expect(res.status).toBe(409);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('SCHEMA_TOO_NEW');
+    });
+
+    it('POST /backups: архив каталога при postgres помечен storageBackend в списке', async () => {
+      const app = pgApp({});
+
+      const created = await postJson(app, '/api/v2/maintenance/backups', {});
+      expect(created.status).toBe(200);
+      expect(((await created.json()) as { storageBackend?: string }).storageBackend).toBe('postgres');
+
+      const listRes = await app.request('/api/v2/maintenance/backups');
+      const list = (await listRes.json()) as { backups: Array<{ storageBackend?: string }> };
+      expect(list.backups[0]!.storageBackend).toBe('postgres');
+    });
+  });
 });

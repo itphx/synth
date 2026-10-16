@@ -5,7 +5,7 @@
 // Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
 import { isAbsolute, normalize, resolve } from 'node:path';
 import type { Hono } from 'hono';
-import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveSecretKey } from '@itphx/synth-shared';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword } from '@itphx/synth-shared';
 import {
   DEFAULT_AGENT_ID, RateLimiter,
   getPublicOpenApiDocument,
@@ -17,12 +17,13 @@ import {
   createIdentityRoutes,
   createMaintenanceRoutes,
   createProjectPortableRoutes,
+  createStorageContextAsync,
   ProjectInstructionsResolver, createInstructionsInfoResolver,
   createSettingsRoutes, createDictionaryRoutes,
   createContextRoutes as createCoreContextRoutes,
   resolveProjectWorkspace,
 } from '@itphx/synth-core';
-import type { AuthKit as CoreAuthKit } from '@itphx/synth-core';
+import type { AuthKit as CoreAuthKit, StorageContext } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
 import { createSessionRoutes } from '../routes/sessions.js';
 import { createMessageRoutes } from '../routes/messages.js';
@@ -329,9 +330,47 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
   // Managed RBAC: только ADMIN — операции меняют/отдают данные всего инстанса
   // (архивы могут содержать секреты), i18n.
+  // PROP-032: при backend=postgres doctor/migrations ходят в БД через read-only
+  // пробу (контекст в режиме `skip` — миграции не применяются).
+  const maintenanceBackend = resolveStorageBackend(config.synth, process.env);
+  const withPostgresContext = maintenanceBackend === 'postgres'
+    ? async <T>(fn: (ctx: StorageContext) => Promise<T>): Promise<T> => {
+        const ctx = await createStorageContextAsync('postgres', {
+          dataDir,
+          secretKey: resolveSecretKey(config.synth),
+          env: process.env,
+          postgres: resolvePostgresConfig(config.synth, process.env),
+          postgresPassword: resolvePostgresPassword({ dataDir }, process.env),
+          postgresSchemaMode: 'skip',
+        });
+        try {
+          return await fn(ctx);
+        } finally {
+          await ctx.close?.();
+        }
+      }
+    : undefined;
   app.route('/api/v2/maintenance', createMaintenanceRoutes(
     { requireAuth: auth.requireAuth },
-    { dataDir, secretKey: resolveSecretKey(config.synth), env: process.env, audit: maintenanceAudit },
+    {
+      dataDir,
+      secretKey: resolveSecretKey(config.synth),
+      env: process.env,
+      audit: maintenanceAudit,
+      storageBackend: maintenanceBackend,
+      ...(withPostgresContext
+        ? {
+            dbHealth: () =>
+              withPostgresContext(
+                (ctx) => (ctx.health ? ctx.health() : Promise.resolve({ ok: false, error: 'нет health()' })),
+              ),
+            schemaMigrations: (o?: { dryRun?: boolean }) =>
+              withPostgresContext((ctx) =>
+                ctx.schemaMigrations ? ctx.schemaMigrations(o) : Promise.reject(new Error('нет schemaMigrations()')),
+              ),
+          }
+        : {}),
+    },
     {
       writeGuard: auth.requirePermission('ADMIN'),
       readGuard: auth.requirePermission('ADMIN'),

@@ -18,7 +18,9 @@ import {
   createSkillBundleRoutes, createSessionSkillScopeRoutes, createProjectSkillScopeRoutes,
   createSkillSettingsRoutes, createIdentityRoutes, createContextRoutes,
   createMaintenanceRoutes, createProjectPortableRoutes,
+  createStorageContextAsync,
 } from '../../index.js';
+import type { StorageContext } from '../../index.js';
 import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
@@ -228,9 +230,47 @@ export function mountStandaloneRoutes(
 
   // ADR-091/ADR-092: обслуживание инстанса (backup/restore/doctor/migrate).
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
+  // PROP-032: при backend=postgres doctor/migrations ходят в БД через read-only
+  // пробу (контекст собирается в режиме `skip` — миграции не применяются).
+  const storageBackend = config.storageBackend ?? 'file';
+  const withPostgresContext = storageBackend === 'postgres'
+    ? async <T>(fn: (ctx: StorageContext) => Promise<T>): Promise<T> => {
+        const ctx = await createStorageContextAsync('postgres', {
+          dataDir,
+          secretKey: config.secretKey,
+          env: process.env,
+          postgres: config.postgresConfig,
+          postgresPassword: config.postgresPassword,
+          postgresSchemaMode: 'skip',
+        });
+        try {
+          return await fn(ctx);
+        } finally {
+          await ctx.close?.();
+        }
+      }
+    : undefined;
   app.route('/api/v2/maintenance', createMaintenanceRoutes(
     auth,
-    { dataDir, secretKey: config.secretKey, env: process.env, audit: maintenanceAudit },
+    {
+      dataDir,
+      secretKey: config.secretKey,
+      env: process.env,
+      audit: maintenanceAudit,
+      storageBackend,
+      ...(withPostgresContext
+        ? {
+            dbHealth: () =>
+              withPostgresContext(
+                (ctx) => (ctx.health ? ctx.health() : Promise.resolve({ ok: false, error: 'нет health()' })),
+              ),
+            schemaMigrations: (o?: { dryRun?: boolean }) =>
+              withPostgresContext((ctx) =>
+                ctx.schemaMigrations ? ctx.schemaMigrations(o) : Promise.reject(new Error('нет schemaMigrations()')),
+              ),
+          }
+        : {}),
+    },
     { maxUploadBytes: config.maxUploadBytes },
   ));
 

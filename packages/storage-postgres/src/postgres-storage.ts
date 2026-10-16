@@ -40,6 +40,13 @@ export interface PostgresStorageConfig extends StorageContextConfig, PostgresCon
   /** Применять миграции схемы при сборке контекста (по умолчанию — `true`). */
   migrate?: boolean;
   /**
+   * PROP-032: режим работы со схемой при сборке (`apply`/`assert`/`skip`);
+   * приоритетнее `migrate`. `skip` — только подключение (диагностика/CLI,
+   * управляющие миграциями сами). Не задан — выводится из `migrate`
+   * (`false` → `assert`, иначе `apply`).
+   */
+  schemaMode?: 'apply' | 'assert' | 'skip';
+  /**
    * ADR-097/PROP-032: синхронные данные/хелперы core (`secretPatterns`/
    * `protectedPaths`/`dictionaries`), инъектируемые core'ом
    * (`packages/core/src/storage/storage-context.ts`). Не заданы (прямой вызов
@@ -107,9 +114,12 @@ export async function createPostgresStorage(config: PostgresStorageConfig): Prom
   });
 
   try {
-    if (config.migrate === false) {
+    // PROP-032: режим схемы — `apply` (дефолт), `assert` (DBA), `skip` (диагностика).
+    const schemaMode = config.schemaMode ?? config.postgresSchemaMode
+      ?? (config.migrate === false ? 'assert' : 'apply');
+    if (schemaMode === 'assert') {
       await assertSchemaCurrent(conn, { schema });
-    } else {
+    } else if (schemaMode === 'apply') {
       await runMigrations(conn, { schema });
     }
   } catch (err) {

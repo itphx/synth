@@ -21,13 +21,14 @@ import {
 } from '@/lib/api/synthApi'
 
 /** Символ статуса проверки `synth doctor` (паритет с CLI `renderDoctorResult`). */
-const DOCTOR_GLYPH: Record<DoctorStatus, string> = { ok: '✓', warn: '⚠', fail: '✗' }
+const DOCTOR_GLYPH: Record<DoctorStatus, string> = { ok: '✓', warn: '⚠', fail: '✗', skipped: '−' }
 
 /** Цвет статуса проверки. */
 const DOCTOR_CLASS: Record<DoctorStatus, string> = {
   ok: 'text-status-success',
   warn: 'text-status-warning',
   fail: 'text-destructive',
+  skipped: 'text-muted-foreground',
 }
 
 /**

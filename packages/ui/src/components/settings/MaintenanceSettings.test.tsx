@@ -171,6 +171,13 @@ const DOCTOR: DoctorResult = {
       detail: 'missing',
       hint: 'set SYNTH_SECRET_KEY',
     },
+    // PROP-032: при backend=postgres файловые проверки помечаются skipped.
+    {
+      id: 'providers',
+      title: 'Providers',
+      status: 'skipped',
+      detail: 'неприменимо (backend=postgres)',
+    },
   ],
 }
 
@@ -349,10 +356,12 @@ describe('MaintenanceSettings — админ-раздел «Обслуживан
     expect(checks.textContent).toContain('synth migrate')
     expect(checks.textContent).toContain('Master key')
     expect(checks.textContent).toContain('set SYNTH_SECRET_KEY')
-    // Глифы статусов ✓/⚠/✗.
+    // Глифы статусов ✓/⚠/✗ и «−» (неприменимо к backend'у, PROP-032).
     expect(checks.textContent).toContain('✓')
     expect(checks.textContent).toContain('⚠')
     expect(checks.textContent).toContain('✗')
+    expect(checks.textContent).toContain('−')
+    expect(checks.textContent).toContain('backend=postgres')
   })
 
   it('показывает применённые и ожидающие миграции, кнопка «Применить» при pending', async () => {

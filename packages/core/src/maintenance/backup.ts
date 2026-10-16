@@ -8,6 +8,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { SYNTH_VERSION } from '@itphx/synth-shared';
 import { readInstanceMeta } from '../storage/instance-meta.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
+import type { StorageBackendKind } from '../storage/storage-context.js';
 import {
   listFilesForArchive,
   writeTarGz,
@@ -35,6 +36,12 @@ export interface BackupManifest {
   createdAt: string;
   withSecrets: boolean;
   withWorkspace: boolean;
+  /**
+   * PROP-032: физический backend хранения на момент снятия. `postgres` —
+   * архив каталога данных **не содержит** данных БД (сессии/проекты/настройки/
+   * секреты-в-БД); для полного бэкапа нужен `pg_dump`/PITR.
+   */
+  storageBackend?: StorageBackendKind;
   /** Применённые исключения (паттерны). */
   excluded: string[];
   /** Записи архива (без `manifest.json`). */
@@ -53,6 +60,12 @@ export interface CreateBackupOptions {
   withSecrets?: boolean;
   /** Включить `workspaces/`. */
   withWorkspace?: boolean;
+  /**
+   * PROP-032: физический backend хранения — пишется в манифест
+   * (`storageBackend`) и включает предупреждение о неполноте архива при
+   * `postgres` (данные БД в архив каталога не попадают).
+   */
+  storageBackend?: StorageBackendKind;
   /** Снятие с работающего сервиса (`--live`): срез не транзакционный. */
   live?: boolean;
   /**
@@ -227,6 +240,7 @@ async function _createBackup(opts: CreateBackupOptions): Promise<CreateBackupRes
     createdAt: now.toISOString(),
     withSecrets,
     withWorkspace,
+    ...(opts.storageBackend ? { storageBackend: opts.storageBackend } : {}),
     excluded: patterns,
     entries,
     contentChecksum: computeContentChecksum(entries),
@@ -244,6 +258,14 @@ async function _createBackup(opts: CreateBackupOptions): Promise<CreateBackupRes
   }
   if (withSecrets) {
     log('Предупреждение: архив содержит секреты; храните его как секрет (0600, вне публичных мест).');
+  }
+  if (opts.storageBackend === 'postgres') {
+    log(
+      'Предупреждение: backend=postgres — архив каталога данных НЕ содержит сессий, проектов, ' +
+        'настроек и секретов, хранящихся в БД. Для полного бэкапа данных используйте pg_dump ' +
+        '(например: pg_dump -Fc -f synth.dump <db>) и восстановление через pg_restore/PITR; ' +
+        'этот архив покрывает только файловый периметр (secrets/…, workspaces/…, meta.json, backups/…).',
+    );
   }
 
   await mkdir(dirname(outPath), { recursive: true });
@@ -299,6 +321,7 @@ export async function createBackup(opts: CreateBackupOptions): Promise<CreateBac
         withWorkspace: result.manifest.withWorkspace,
         live: !!opts.live,
         encrypted: result.encrypted,
+        ...(result.manifest.storageBackend ? { storageBackend: result.manifest.storageBackend } : {}),
         dataDir: resolve(opts.dataDir),
       },
     });
@@ -340,6 +363,9 @@ export async function runBackupCommand(opts: BackupCommandOptions): Promise<numb
     log(`  записей: ${result.manifest.entries.length}`);
     log(`  секреты: ${result.manifest.withSecrets ? 'да' : 'нет'}`);
     log(`  workspace: ${result.manifest.withWorkspace ? 'да' : 'нет'}`);
+    if (result.manifest.storageBackend) {
+      log(`  backend: ${result.manifest.storageBackend}`);
+    }
     log(`  шифрование: ${result.encrypted ? 'да' : 'нет'}`);
     log(`  контрольная сумма: ${result.manifest.contentChecksum}`);
     return 0;

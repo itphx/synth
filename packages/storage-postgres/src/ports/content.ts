@@ -81,6 +81,7 @@ import type {
 } from '@itphx/synth-core';
 import type { PostgresExecutor } from '../pool.js';
 import { PostgresUniqueViolationError } from '../errors.js';
+import { readSchemaVersion } from '../migrate.js';
 import type { PortDeps } from './deps.js';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -182,12 +183,56 @@ async function deleteSetting(tx: PostgresExecutor, key: string): Promise<boolean
   return rows.length > 0;
 }
 
-/** Best-effort лог прогрева (не роняет сборку контекста). */
+/** Best-effort лог драйвера (не роняет сборку контекста). */
+function warnStorage(message: string): void {
+  void loadCore()
+    .then((core) => core.warning('STORAGE', `postgres: ${message}`))
+    .catch(() => undefined);
+}
+
+/** Best-effort лог прогрева порта (не роняет сборку контекста). */
 function warnWarm(port: string, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
-  void loadCore()
-    .then((core) => core.warning('STORAGE', `postgres: прогрев порта '${port}' не удался: ${message}`))
-    .catch(() => undefined);
+  warnStorage(`прогрев порта '${port}' не удался: ${message}`);
+}
+
+/** Синхронные порты-кэши группы `content`, которые нужно прогреть из БД. */
+interface WarmableContentPorts {
+  secretPatterns: PostgresSecretPatternRepository;
+  protectedPaths: PostgresProtectedPathsRepository;
+  dictionaries: PostgresDictionaryRepository;
+}
+
+/**
+ * Best-effort прогрев синхронных кэшей (`secretPatterns`/`protectedPaths`/
+ * `dictionaries`) из `settings`.
+ *
+ * Перед прогревом **один раз** проверяется версия схемы: если таблицы миграций
+ * ещё нет (схема не инициализирована — напр. диагностика `doctor` с
+ * `postgresSchemaMode:'skip'` до `synth migrate`), прогрев пропускается с
+ * **одним** понятным предупреждением, а не пачкой ошибок `relation "settings"
+ * does not exist` по каждому порту. Прогрев никогда не роняет сборку контекста.
+ */
+async function warmContentCaches(deps: PortDeps, ports: WarmableContentPorts): Promise<void> {
+  let schemaVersion: number | null;
+  try {
+    schemaVersion = await readSchemaVersion(deps.connection, deps.connection.schema);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    warnStorage(`не удалось проверить схему хранилища: ${message}`);
+    return;
+  }
+
+  if (schemaVersion === null) {
+    warnStorage('хранилище не инициализировано — выполните `synth migrate`');
+    return;
+  }
+
+  await Promise.all([
+    ports.secretPatterns.warm().catch((err: unknown) => warnWarm('secretPatterns', err)),
+    ports.protectedPaths.warm().catch((err: unknown) => warnWarm('protectedPaths', err)),
+    ports.dictionaries.warm().catch((err: unknown) => warnWarm('dictionaries', err)),
+  ]);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1324,6 +1369,9 @@ class PostgresSecretPatternRepository implements SecretPatternRepository {
   async warm(): Promise<void> {
     if (this._warmed) return;
     const value = await loadSetting(this._deps.connection, SECRET_PATTERNS_KEY);
+    // Гонка warm ↔ мутация: пока ждали БД, мутация уже прогрела/записала кэш
+    // (`_warmed = true`) — не перетираем его устаревшим чтением.
+    if (this._warmed) return;
     if (Array.isArray(value) && value.every(isValidPattern)) {
       this._override = value.map((pattern) => ({ type: pattern.type, regex: pattern.regex }));
     }
@@ -1444,6 +1492,8 @@ class PostgresProtectedPathsRepository implements ProtectedPathsRepository {
   async warm(): Promise<void> {
     if (this._warmed) return;
     const value = await loadSetting(this._deps.connection, PROTECTED_PATHS_KEY);
+    // См. `secretPatterns.warm`: не перетираем кэш после конкурентной мутации.
+    if (this._warmed) return;
     if (typeof value === 'object' && value !== null) {
       this._override = normalizeOverride(value as Partial<ProtectedPathsOverride>);
     }
@@ -1624,6 +1674,8 @@ class PostgresDictionaryRepository implements DictionaryRepository {
   async warm(): Promise<void> {
     if (this._warmed) return;
     const value = await loadSetting(this._deps.connection, DICTIONARIES_KEY);
+    // См. `secretPatterns.warm`: не перетираем кэш после конкурентной мутации.
+    if (this._warmed) return;
     if (typeof value === 'object' && value !== null) {
       const parsed = value as Partial<DictionariesOverride>;
       const entries: Record<string, DictionaryOverrideData> = {};
@@ -1768,9 +1820,8 @@ export function buildContentPorts(deps: PortDeps): ContentPorts {
   // фабрика синхронная, а awaited-конструктора у драйвера нет). Мутации
   // write-through, поэтому кэш консистентен сразу после записи; pre-existing
   // override появляется в кэше по завершении прогрева (короткое окно старта).
-  void secretPatterns.warm().catch((err: unknown) => warnWarm('secretPatterns', err));
-  void protectedPaths.warm().catch((err: unknown) => warnWarm('protectedPaths', err));
-  void dictionaries.warm().catch((err: unknown) => warnWarm('dictionaries', err));
+  // Если схема ещё не инициализирована — прогрев пропускается с одним сообщением.
+  void warmContentCaches(deps, { secretPatterns, protectedPaths, dictionaries });
 
   return {
     serviceKeys: new PostgresServiceKeyRepository(deps),

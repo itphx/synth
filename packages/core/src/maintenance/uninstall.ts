@@ -12,6 +12,7 @@ import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readInstanceMeta } from '../storage/instance-meta.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
+import type { StorageBackendKind } from '../storage/storage-context.js';
 import { masterKeyFilePath } from '../security/crypto.js';
 import { recordMaintenanceAudit } from './audit.js';
 
@@ -23,6 +24,19 @@ export interface UninstallCommandOptions {
   home?: string;
   /** Удалить каталог данных (необратимо; требует `--yes`). */
   purge?: boolean;
+  /**
+   * PROP-032: явно удалить **схему БД** (`DROP SCHEMA … CASCADE`) при
+   * `storage.backend=postgres` (флаг `--purge-db`; требует `--purge` и `--yes`).
+   * По умолчанию данные БД не трогаются.
+   */
+  purgeDb?: boolean;
+  /**
+   * PROP-032: шов удаления схемы БД (`StorageContext.purgeSchema`). Задан только
+   * при backend=postgres; `--purge-db` без шва → понятная ошибка.
+   */
+  purgeSchema?: () => Promise<void>;
+  /** PROP-032: физический backend хранения (по умолчанию `file`). */
+  storageBackend?: StorageBackendKind;
   /** Показать план без удаления. */
   dryRun?: boolean;
   /** Подтверждение необратимого удаления. */
@@ -162,18 +176,41 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
   const error = opts.error ?? ((msg: string) => console.error(msg));
   const home = opts.home;
   const purge = !!opts.purge;
+  const purgeDb = !!opts.purgeDb;
   const dryRun = !!opts.dryRun;
   const dataDir = opts.dataDir;
+  const postgres = opts.storageBackend === 'postgres';
+
+  if (purgeDb && !purge) {
+    error('Ошибка: --purge-db применяется только вместе с --purge.');
+    return 1;
+  }
+
+  // PROP-032: `--purge-db` осмыслен только при `storage.backend=postgres` (удаление
+  // схемы БД). Fail-closed: явная ошибка вместо молчаливого no-op — иначе флаг
+  // создавал бы иллюзию, что данные БД удалены.
+  if (purgeDb && !postgres) {
+    error(
+      'Ошибка: --purge-db требует storage.backend=postgres (удаление схемы БД недоступно).',
+    );
+    return 1;
+  }
 
   const summary = await collectUninstallSummary(dataDir);
 
   log(`Synth uninstall${dryRun ? ' [dry-run]' : ''}: ${purge ? 'удаление каталога данных (--purge)' : 'данные сохраняются'}`);
+  if (postgres) log('  backend: postgres (данные сессий/проектов/настроек хранятся в БД)');
   for (const line of _renderSummary(summary)) log(line);
 
   // Без --purge: данные остаются. Явная подсказка, как удалить.
   if (!purge) {
     log('');
-    log('Данные не удалены; удалить — --purge (необратимо, требует --yes).');
+    if (postgres) {
+      log('backend=postgres: данные БД (сессии/проекты/настройки/секреты-в-БД) НЕ затрагиваются.');
+      log('Удалить файловый периметр — --purge (+ --purge-db для схемы БД, необратимо, требует --yes).');
+    } else {
+      log('Данные не удалены; удалить — --purge (необратимо, требует --yes).');
+    }
     if (dryRun) log('(dry-run: изменения не записаны)');
     return 0;
   }
@@ -182,6 +219,13 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
   if (dryRun) {
     log('');
     log(`[dry-run] Было бы удалено: ${dataDir} (полностью, рекурсивно)`);
+    if (postgres) {
+      log(
+        purgeDb
+          ? '[dry-run] Была бы удалена схема БД (DROP SCHEMA … CASCADE)'
+          : '[dry-run] Схема БД НЕ удаляется (для удаления данных БД нужен --purge-db)',
+      );
+    }
     log('(dry-run: изменения не записаны)');
     return 0;
   }
@@ -190,6 +234,20 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
   if (!opts.yes) {
     error('Ошибка: удаление данных необратимо; используйте --dry-run для просмотра или --yes.');
     return 1;
+  }
+
+  // PROP-032: backend=postgres — данные БД по умолчанию не трогаем; удаление
+  // схемы БД только по явному --purge-db (отдельное подтверждение).
+  if (postgres) {
+    log('');
+    if (purgeDb) {
+      log('⚠️ --purge-db: будет удалена схема БД (DROP SCHEMA … CASCADE) — необратимо.');
+    } else {
+      log(
+        '⚠️ backend=postgres: данные БД (сессии/проекты/настройки/секреты-в-БД) НЕ удаляются. ' +
+          'Для удаления схемы БД укажите --purge-db.',
+      );
+    }
   }
 
   // Предупреждения перед необратимым удалением.
@@ -218,6 +276,7 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
       sessions: summary.sessions,
       projects: summary.projects,
       sizeBytes: summary.bytes,
+      ...(postgres ? { backend: 'postgres', purgeDb } : {}),
     },
   });
   log('');
@@ -228,6 +287,21 @@ export async function runUninstallCommand(opts: UninstallCommandOptions): Promis
   );
 
   try {
+    // PROP-032: при `--purge-db` сначала удаляем схему БД; ошибка → dataDir не
+    // трогаем (пользователь может повторить/разобраться).
+    if (purgeDb) {
+      if (!opts.purgeSchema) {
+        error('Ошибка: драйвер postgres не предоставляет удаление схемы (purgeSchema).');
+        return 1;
+      }
+      try {
+        await opts.purgeSchema();
+      } catch (err) {
+        error(`Ошибка удаления схемы БД: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+      log('Схема БД удалена (DROP SCHEMA … CASCADE).');
+    }
     await rm(dataDir, { recursive: true, force: true });
   } catch (err) {
     error(`Ошибка удаления ${dataDir}: ${err instanceof Error ? err.message : String(err)}`);

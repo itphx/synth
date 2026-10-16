@@ -1,3 +1,22 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Способы запуска:
+#
+#   1) Файловое хранилище (по умолчанию, ADR-005/ADR-096):
+#        docker compose up -d
+#      Поднимается только `synth`; данные — в томе `synth-data`.
+#
+#   2) PostgreSQL как backend хранения (PROP-032, ADR-096/ADR-097):
+#      задайте в .env рядом с этим файлом (минимум — пароль БД):
+#        SYNTH_STORAGE_BACKEND=postgres
+#        SYNTH_POSTGRES_PASSWORD=<пароль>          # секрет, в git не коммитить
+#      и поднимите профиль `postgres`:
+#        docker compose --profile postgres up -d
+#      `synth` дождётся healthcheck БД (мягкая зависимость `required: false`,
+#      нужен Docker Compose ≥ v2.20) и стартует с backend=postgres.
+#
+#   Образы не меняются: драйвер `@itphx/synth-storage-postgres` и `pg` приходят
+#   транзитивно (optionalDependencies ядра) — правка Dockerfile не нужна.
+# ─────────────────────────────────────────────────────────────────────────────
 services:
   synth:
     build:
@@ -18,8 +37,39 @@ services:
       - SYNTH_PROVIDER_OLLAMA_URL=${SYNTH_PROVIDER_OLLAMA_URL:-http://ollama:11434}
       - SYNTH_PROVIDER_OLLAMA_MODEL=${SYNTH_PROVIDER_OLLAMA_MODEL:-qwen3.8:27b}
       - SYNTH_PROVIDER_OLLAMA_TYPE=ollama
+      # --- Слой хранения (PROP-032, ADR-096/ADR-097) ---
+      # backend: file (дефолт) | memory (данные НЕ сохраняются) | postgres.
+      # При postgres поднимите профиль `postgres` (сервис ниже) — иначе хост
+      # `postgres` не разрешится в DNS Docker-сети.
+      - SYNTH_STORAGE_BACKEND=${SYNTH_STORAGE_BACKEND:-file}
+      - SYNTH_POSTGRES_HOST=${SYNTH_POSTGRES_HOST:-postgres}
+      - SYNTH_POSTGRES_PORT=${SYNTH_POSTGRES_PORT:-5432}
+      - SYNTH_POSTGRES_DATABASE=${SYNTH_POSTGRES_DATABASE:-synth}
+      - SYNTH_POSTGRES_USER=${SYNTH_POSTGRES_USER:-synth}
+      - SYNTH_POSTGRES_SCHEMA=${SYNTH_POSTGRES_SCHEMA:-}
+      - SYNTH_POSTGRES_SSL=${SYNTH_POSTGRES_SSL:-false}
+      - SYNTH_POSTGRES_POOL_MAX=${SYNTH_POSTGRES_POOL_MAX:-}
+      # Пароль БД — только из env (в git и в логи не попадает). Пусто → core
+      # прочитает файл {dataDir}/secrets/postgres-password из тома synth-data
+      # (удобно, когда пароль не хочется держать в .env).
+      - SYNTH_POSTGRES_PASSWORD=${SYNTH_POSTGRES_PASSWORD:-}
+      # Задел деградации (storage.degradedMode | fallbackDir) env-переменных не
+      # имеет — задаётся в config.yaml (SYNTH_CONFIG или ./config.yaml).
     volumes:
+      # При backend=file — здесь ВСЕ данные Synth (сессии, проекты, сообщения,
+      # провайдеры/модели/агенты, события, расписания, …).
+      # При backend=postgres — только ПЕРИФЕРИЯ: secrets/ (мастер-ключ,
+      # api-key, ssh-keys, при необходимости postgres-password), meta.json
+      # (версия схемы данных) и workspace'ы проектов.
+      # Данные (сессии/проекты/…) — в БД (том postgres-data).
       - synth-data:/var/synth/data
+    # Мягкая зависимость: без профиля `postgres` сервиса в модели нет — запуск
+    # остаётся файловым (проверено `docker compose config` без профиля).
+    # С включённым профилем Compose дожидается `service_healthy` у БД.
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
 
   # Опционально: Ollama для локального запуска LLM
@@ -41,6 +91,39 @@ services:
     profiles:
       - ollama
 
+  # PostgreSQL — backend хранения (PROP-032). Профиль `postgres`: без него
+  # `docker compose up` остаётся файловым (сервис и том не создаются).
+  # Требуется SYNTH_POSTGRES_PASSWORD (см. шапку файла) — пароль попадает в
+  # контейнер БД через env, в git/compose-файл не хардкодится.
+  # Порт публикуется ТОЛЬКО на localhost (по умолчанию); при необходимости
+  # переопределите SYNTH_POSTGRES_PUBLISH (например "5432:5432" — не рекомендуется).
+  postgres:
+    image: postgres:17-alpine
+    container_name: synth-postgres
+    ports:
+      - "${SYNTH_POSTGRES_PUBLISH:-127.0.0.1:5432}:5432"
+    environment:
+      - POSTGRES_DB=${SYNTH_POSTGRES_DATABASE:-synth}
+      - POSTGRES_USER=${SYNTH_POSTGRES_USER:-synth}
+      - POSTGRES_PASSWORD=${SYNTH_POSTGRES_PASSWORD:-}
+      # Инициализация схемы не нужна: миграции применяются драйвером при старте
+      # (schemaMode=apply по умолчанию); вручную — `synth migrate`.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready с тем же пользователем/БД, что заданы выше.
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${SYNTH_POSTGRES_USER:-synth} -d ${SYNTH_POSTGRES_DATABASE:-synth}
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    profiles:
+      - postgres
+
 volumes:
   synth-data:
   ollama-data:
+  postgres-data:

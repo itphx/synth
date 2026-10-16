@@ -89,6 +89,34 @@ function outdatedError(schema: string, actual: number | null, expected: number):
 }
 
 /**
+ * План миграций схемы **без** применения: текущая/ожидаемая версии и версии,
+ * требующие применения (для `synth migrate --dry-run` и диагностики).
+ */
+export interface PlannedMigrations {
+  current: number | null;
+  expected: number;
+  pending: number[];
+}
+
+/**
+ * Построить план миграций (read-only): текущая версия из БД, ожидаемая —
+ * максимум реестра, `pending` — версии больше текущей (по возрастанию).
+ */
+export async function planMigrations(
+  executor: PostgresExecutor,
+  options?: RunMigrationsOptions,
+): Promise<PlannedMigrations> {
+  const schema = resolveSchema(options);
+  const migrations = [...resolveMigrations(options)].sort((a, b) => a.version - b.version);
+  const expected = latestSchemaVersion(migrations);
+  const current = await readSchemaVersion(executor, schema);
+  const pending = migrations
+    .filter((migration) => current === null || migration.version > current)
+    .map((migration) => migration.version);
+  return { current, expected, pending };
+}
+
+/**
  * Применить недостающие миграции. `CREATE SCHEMA IF NOT EXISTS`, advisory-лок,
  * применение по возрастанию версии; версия в БД > ожидаемой → fail-closed.
  */

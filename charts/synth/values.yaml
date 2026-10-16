@@ -74,6 +74,12 @@ backend:
       memory: 256Mi
 
   probes:
+    # ВНИМАНИЕ: probes проверяют только живость процесса backend (`/health`).
+    # Доступность БД при `storage.backend: postgres` здесь НЕ проверяется:
+    # readiness=false на недоступной БД выключал бы из балансировки и UI
+    # (nginx проксирует /api на backend), а при `storage.degradedMode:
+    # fallback-file` деградация — штатный сценарий, а не отказ.
+    # DB-aware готовность подключайте внешним мониторингом (см. README чарта).
     liveness:
       path: /health
       initialDelaySeconds: 15
@@ -101,7 +107,47 @@ backend:
   # Приоритет: CLI-флаги > SYNTH_* env > config.yaml > defaults; runtime-настройки
   # из UI/API (settings.json) применяются поверх файла.
   # Пример: { events: { autoBind: true } }.
+  # Секция `storage` ниже домержится в этот же config.yaml (PROP-032).
   config: {}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Слой хранения (PROP-032, ADR-096/ADR-097) — instance-wide для backend.
+# ─────────────────────────────────────────────────────────────────────────────
+# Всё, кроме пароля, рендерится в config.yaml (ConfigMap <release>-config) и
+# монтируется в backend как /etc/synth/config.yaml. Пароль БД в values НЕ
+# хранится (инвариант 13): он читается в env SYNTH_POSTGRES_PASSWORD из Secret
+# (postgres.existingSecret | secrets.existingSecret, ключ secretPasswordKey).
+storage:
+  # file (дефолт) | memory (данные НЕ сохраняются — тесты/эмуляция) | postgres.
+  # Драйвер `@itphx/synth-storage-postgres` + `pg` входят в образ (optional
+  # dependencies ядра) — при backend=postgres ничего доустанавливать не нужно.
+  backend: file
+
+  postgres:
+    # Параметры подключения (не секреты). Полная строка подключения (`dsn`)
+    # намеренно не поддержана: значение ушло бы в ConfigMap, а DSN обычно
+    # содержит пароль. Нужен DSN — задайте его сами в backend.config (без
+    # пароля) или отдельным env из вашего Secret.
+    host: ""
+    port: 5432
+    database: ""
+    user: ""
+    # Схема БД (namespace таблиц); пусто → схема драйвера по умолчанию.
+    schema: ""
+    # Требовать TLS-соединение (sslmode=require).
+    ssl: false
+    # Максимальный размер пула соединений.
+    poolMax: 10
+    # Secret с паролем БД. Пусто → secrets.existingSecret (по умолчанию
+    # `synth-secrets`). Ключ внутри Secret — secretPasswordKey.
+    existingSecret: ""
+    secretPasswordKey: SYNTH_POSTGRES_PASSWORD
+
+  # Задел деградированного режима (реализация — параллельная волна): "" (не
+  # задано) | fallback-file (перейти на файловое хранилище) | halt (не стартовать).
+  degradedMode: ""
+  # Каталог файлового фоллбека; пусто → {dataDir}/fallback (внутри PVC backend).
+  fallbackDir: ""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # UI — @itphx/synth-ui (React SPA) под nginx, проксирует /api /ws /auth /admin на backend.

@@ -178,3 +178,203 @@ describe('runUninstallCommand (ADR-092)', () => {
     expect(await audit.list()).toEqual([]);
   });
 });
+
+// PROP-032: `synth uninstall` при `storage.backend=postgres` по умолчанию не
+// трогает данные БД — схема удаляется только явным `--purge-db`.
+describe('runUninstallCommand — backend=postgres (PROP-032)', () => {
+  let tmpDir: string;
+  let dataDir: string;
+
+  const exists = async (p: string): Promise<boolean> => {
+    try {
+      await stat(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-uninstall-pg-'));
+    dataDir = join(tmpDir, 'data');
+    await mkdir(join(dataDir, 'sessions'), { recursive: true });
+    await writeFile(join(dataDir, 'sessions', 's1.json'), '{"id":"s1"}', 'utf-8');
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('--purge --yes без --purge-db: файловый периметр удалён, схема БД не тронута', async () => {
+    let purgeCalls = 0;
+    const logs: string[] = [];
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purge: true,
+      yes: true,
+      storageBackend: 'postgres',
+      purgeSchema: async () => {
+        purgeCalls += 1;
+      },
+      log: (m) => logs.push(m),
+    });
+
+    expect(code).toBe(0);
+    expect(purgeCalls).toBe(0);
+    expect(await exists(dataDir)).toBe(false);
+    const out = logs.join('\n');
+    expect(out).toContain('backend: postgres');
+    expect(out).toContain('НЕ удаляются');
+    expect(out).toContain('--purge-db');
+  });
+
+  it('--purge --yes --purge-db: схема БД удаляется (purgeSchema вызван)', async () => {
+    let purgeCalls = 0;
+    const logs: string[] = [];
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purge: true,
+      yes: true,
+      purgeDb: true,
+      storageBackend: 'postgres',
+      purgeSchema: async () => {
+        purgeCalls += 1;
+      },
+      log: (m) => logs.push(m),
+    });
+
+    expect(code).toBe(0);
+    expect(purgeCalls).toBe(1);
+    expect(await exists(dataDir)).toBe(false);
+    expect(logs.join('\n')).toContain('Схема БД удалена');
+  });
+
+  it('--purge-db без --purge: отказ, схема и каталог не тронуты', async () => {
+    let purgeCalls = 0;
+    const errors: string[] = [];
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purgeDb: true,
+      storageBackend: 'postgres',
+      purgeSchema: async () => {
+        purgeCalls += 1;
+      },
+      log: () => {},
+      error: (m) => errors.push(m),
+    });
+
+    expect(code).toBe(1);
+    expect(purgeCalls).toBe(0);
+    expect(await exists(dataDir)).toBe(true);
+    expect(errors.join('\n')).toContain('--purge');
+  });
+
+  it('--purge-db без шва purgeSchema: понятная ошибка, каталог не удалён', async () => {
+    const errors: string[] = [];
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purge: true,
+      yes: true,
+      purgeDb: true,
+      storageBackend: 'postgres',
+      log: () => {},
+      error: (m) => errors.push(m),
+    });
+
+    expect(code).toBe(1);
+    expect(errors.join('\n')).toContain('purgeSchema');
+    expect(await exists(dataDir)).toBe(true);
+  });
+
+  it('ошибка удаления схемы БД: каталог данных не трогается', async () => {
+    const errors: string[] = [];
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purge: true,
+      yes: true,
+      purgeDb: true,
+      storageBackend: 'postgres',
+      purgeSchema: async () => {
+        throw new Error('drop failed');
+      },
+      log: () => {},
+      error: (m) => errors.push(m),
+    });
+
+    expect(code).toBe(1);
+    expect(errors.join('\n')).toContain('drop failed');
+    expect(await exists(dataDir)).toBe(true);
+  });
+
+  it('--purge-db при backend≠postgres: ошибка, каталог цел (fail-closed)', async () => {
+    const errors: string[] = [];
+    const logs: string[] = [];
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purge: true,
+      yes: true,
+      purgeDb: true,
+      storageBackend: 'file',
+      log: (m) => logs.push(m),
+      error: (m) => errors.push(m),
+    });
+
+    // Fail-closed: явная ошибка вместо молчаливого no-op.
+    expect(code).toBe(1);
+    const err = errors.join('\n');
+    expect(err).toContain('--purge-db');
+    expect(err).toContain('postgres');
+    // Каталог данных не тронут — удаление не начиналось.
+    expect(await exists(dataDir)).toBe(true);
+    expect(await exists(join(dataDir, 'sessions', 's1.json'))).toBe(true);
+  });
+
+  it('--dry-run --purge --purge-db: план о схеме, ничего не удалено', async () => {
+    let purgeCalls = 0;
+    const logs: string[] = [];
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purge: true,
+      purgeDb: true,
+      dryRun: true,
+      storageBackend: 'postgres',
+      purgeSchema: async () => {
+        purgeCalls += 1;
+      },
+      log: (m) => logs.push(m),
+    });
+
+    expect(code).toBe(0);
+    expect(purgeCalls).toBe(0);
+    expect(await exists(dataDir)).toBe(true);
+    const out = logs.join('\n');
+    expect(out).toContain('DROP SCHEMA');
+    expect(out).toContain('[dry-run]');
+  });
+
+  it('--purge --yes пишет backend/purgeDb в аудит-запись uninstall.purge — ADR-092', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+
+    const code = await runUninstallCommand({
+      dataDir,
+      purge: true,
+      yes: true,
+      purgeDb: true,
+      storageBackend: 'postgres',
+      purgeSchema: async () => {},
+      audit,
+      log: () => {},
+    });
+
+    expect(code).toBe(0);
+    const list = await audit.list();
+    expect(list[0]!.details).toMatchObject({ backend: 'postgres', purgeDb: true });
+  });
+});

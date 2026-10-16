@@ -37,8 +37,8 @@ export { PgMutex, PgLeader, createPostgresLocks, postgresLockKey, DEFAULT_LEADER
 export type { PgMutexOptions, PgLeaderOptions } from './locks.js';
 
 // Схема и миграции.
-export { runMigrations, assertSchemaCurrent, readSchemaVersion, MIGRATIONS_TABLE } from './migrate.js';
-export type { RunMigrationsOptions, MigrationResult } from './migrate.js';
+export { runMigrations, assertSchemaCurrent, readSchemaVersion, planMigrations, MIGRATIONS_TABLE } from './migrate.js';
+export type { RunMigrationsOptions, MigrationResult, PlannedMigrations } from './migrate.js';
 export { MIGRATIONS, latestSchemaVersion } from './migrations/index.js';
 export type { PostgresMigration } from './migrations/index.js';
 

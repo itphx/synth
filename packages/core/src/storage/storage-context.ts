@@ -134,6 +134,47 @@ export interface StorageLocks {
 }
 
 /**
+ * PROP-032/ADR-091: снимок здоровья backend'а хранения — диагностика
+ * `synth doctor` и admin-API. Для `postgres` — реальный пробный запрос
+ * (`latencyMs`) и версия схемы БД; файловые backend'ы шов не задают.
+ */
+export interface StorageHealth {
+  /** Проба прошла успешно (соединение живо). */
+  ok: boolean;
+  /** Задержка пробного запроса, мс. */
+  latencyMs?: number;
+  /** Версия схемы backend'а (postgres: `synth_schema_migrations`); `null` — нет схемы. */
+  schemaVersion?: number | null;
+  /** Ожидаемая (поддержанная драйвером) версия схемы. */
+  expectedSchemaVersion?: number;
+  /** Текст ошибки, если проба не удалась. */
+  error?: string;
+}
+
+/**
+ * PROP-032/ADR-092: план/применение миграций схемы **backend'а** (postgres).
+ * Отдельный контур от файлового `meta.json` (ADR-092) — версия живёт в БД.
+ */
+export interface StorageSchemaMigrationResult {
+  /** Текущая версия схемы (`null` — таблица миграций/схема отсутствует). */
+  current: number | null;
+  /** Ожидаемая (целевая) версия. */
+  expected: number;
+  /** Версии, ожидающие применения (по возрастанию). */
+  pending: number[];
+  /** Применённые в этом вызове версии (пусто при `dryRun`). */
+  applied: number[];
+}
+
+/**
+ * PROP-032: режим работы со схемой БД при сборке контекста (`postgres`):
+ * `apply` (дефолт) — применить недостающие миграции; `assert` — проверить
+ * актуальность (fail-closed, DBA-режим); `skip` — не трогать схему
+ * (диагностика `synth doctor` и CLI-команды, которые управляют миграциями сами).
+ */
+export type PostgresSchemaMode = 'apply' | 'assert' | 'skip';
+
+/**
  * Собранный слой хранения: домен получает порты (а не конкретные классы).
  * Поле `kind` — какой backend собран (для диагностики/предупреждений).
  */
@@ -151,6 +192,21 @@ export interface StorageContext {
    * file/memory — домен тогда использует файловые `FileMutex`/`FileLeader`.
    */
   locks?: StorageLocks;
+  /**
+   * PROP-032/ADR-091: диагностика backend'а (probe БД + версия схемы). Не задано
+   * для file/memory — контур `doctor` тогда работает по файловому каталогу.
+   */
+  health?(): Promise<StorageHealth>;
+  /**
+   * PROP-032/ADR-092: миграции схемы backend'а (`postgres`) — план (`dryRun`) или
+   * применение. Не задано для file/memory (там `meta.json`/`runMigrations` core).
+   */
+  schemaMigrations?(opts?: { dryRun?: boolean }): Promise<StorageSchemaMigrationResult>;
+  /**
+   * PROP-032: удаление схемы backend'а (`postgres`) — `synth uninstall --purge-db`.
+   * По умолчанию данные БД не трогаются; вызывается только по явному флагу.
+   */
+  purgeSchema?(): Promise<void>;
   sessions: SessionRepository;
   projects: ProjectRepository;
   profiles: ProfileRepository;
@@ -208,6 +264,8 @@ export interface StorageContextConfig {
   postgres?: PostgresStorageConfig;
   /** PROP-032: пароль PostgreSQL (env/файл, не config.yaml). */
   postgresPassword?: string;
+  /** PROP-032: режим работы со схемой БД при сборке (см. `PostgresSchemaMode`). */
+  postgresSchemaMode?: PostgresSchemaMode;
   /** PROP-032 (задел W5): политика при недоступности backend. */
   degradedMode?: 'fallback-file' | 'halt';
   /** PROP-032 (задел W5): каталог файлового фоллбека при деградации. */
@@ -259,6 +317,11 @@ export interface PostgresStorageDriverConfig {
   schema?: string;
   /** Пароль БД (инвариант 13: не из config.yaml; env/файл). */
   password?: string;
+  /**
+   * PROP-032: режим работы со схемой при сборке контекста (`apply`/`assert`/`skip`).
+   * `skip` — только подключение (диагностика/CLI, управляющие миграциями сами).
+   */
+  schemaMode?: PostgresSchemaMode;
   /**
    * ADR-097/PROP-032: инъекция синхронных данных core в драйвер — sync-геттеры
    * портов (`secretPatterns`/`protectedPaths`/`dictionaries`) не могут ждать I/O
@@ -456,6 +519,7 @@ export async function createPostgresStorage(config: StorageContextConfig): Promi
     ...(Object.keys(pool).length > 0 ? { pool } : {}),
     ...(pg?.schema ? { schema: pg.schema } : {}),
     ...(config.postgresPassword ? { password: config.postgresPassword } : {}),
+    ...(config.postgresSchemaMode ? { schemaMode: config.postgresSchemaMode } : {}),
     // ADR-097/PROP-032: core собирает sync-данные портов (ассеты/реестры) сам и
     // инъектирует их драйверу — тот не обходит `exports`-карту core.
     coreSync: buildPostgresCoreSyncDeps(mod, config),
@@ -525,6 +589,8 @@ export interface BuildStorageContextOptions {
   bundlesPath?: string;
   contextUserDataDir?: string;
   systemDictionariesDir?: string;
+  /** PROP-032: режим работы со схемой БД при сборке (`postgres`). */
+  postgresSchemaMode?: PostgresSchemaMode;
 }
 
 /**
@@ -544,6 +610,7 @@ export async function buildStorageContext(
     env,
     postgres: resolvePostgresConfig(opts.config, env),
     postgresPassword: resolvePostgresPassword({ dataDir: opts.dataDir }, env),
+    ...(opts.postgresSchemaMode ? { postgresSchemaMode: opts.postgresSchemaMode } : {}),
     degradedMode: resolveDegradedMode(opts.config),
     fallbackDir: resolveStorageFallbackDir(opts.config, env, opts.home ?? null),
     dedupStore: opts.dedupStore,

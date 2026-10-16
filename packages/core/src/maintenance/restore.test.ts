@@ -370,6 +370,85 @@ describe('restoreBackup — аудит-журнал (ADR-092)', () => {
   });
 });
 
+// PROP-032: архив, снятый при `storage.backend=postgres`, покрывает только
+// файловый периметр — при восстановлении выводится предупреждение (данные БД
+// восстанавливаются через pg_restore/PITR, не этой командой).
+describe('restoreBackup — архив backend=postgres (PROP-032)', () => {
+  let tmpDir: string;
+  let dataDir: string;
+  let archive: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-restore-pg-'));
+    dataDir = join(tmpDir, 'data');
+    archive = join(tmpDir, 'pg-backup.tar.gz');
+    await mkdir(join(dataDir, 'sessions'), { recursive: true });
+    await writeFile(join(dataDir, 'sessions', 's1.json'), '{"id":"s1"}', 'utf-8');
+    await createBackup({ dataDir, out: archive, storageBackend: 'postgres' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('--dry-run: предупреждение о неполноте и backend в плане, цель не тронута', async () => {
+    const target = join(tmpDir, 'dry-target');
+    await mkdir(target, { recursive: true });
+    await writeFile(join(target, 'existing.txt'), 'old', 'utf-8');
+    const warnings: string[] = [];
+    const logs: string[] = [];
+
+    await restoreBackup({
+      archive,
+      dataDir: target,
+      dryRun: true,
+      warn: (m) => warnings.push(m),
+      log: (m) => logs.push(m),
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('backend=postgres');
+    expect(warnings[0]).toContain('pg_restore');
+    const out = logs.join('\n');
+    expect(out).toContain('backend: postgres');
+    expect(out).toContain('данные БД в архив не входят');
+    expect(out).toContain('dry-run');
+    expect(await readdir(target)).toEqual(['existing.txt']);
+  });
+
+  it('применение останавливается на проверке контрольной суммы — цель не тронута, предупреждение выведено', async () => {
+    const warnings: string[] = [];
+    const target = join(tmpDir, 'apply-target');
+    const corrupt = join(tmpDir, 'corrupt-pg.tar.gz');
+    await _stageAndArchive(tmpDir, corrupt, [{ path: 'sessions/s1.json', content: 'x' }], (entries) =>
+      _manifest(entries, { storageBackend: 'postgres', contentChecksum: 'deadbeef' }),
+    );
+
+    await expect(
+      restoreBackup({ archive: corrupt, dataDir: target, warn: (m) => warnings.push(m) }),
+    ).rejects.toThrow(/Контрольная сумма манифеста/);
+
+    // Предупреждение печатается до любой записи — даже когда восстановление отменено.
+    expect(warnings.join('\n')).toContain('backend=postgres');
+    await expect(stat(target)).rejects.toThrow();
+  });
+
+  it('архив без storageBackend: предупреждения про postgres нет', async () => {
+    const fileArchive = join(tmpDir, 'file-backup.tar.gz');
+    await createBackup({ dataDir, out: fileArchive });
+    const warnings: string[] = [];
+
+    await restoreBackup({
+      archive: fileArchive,
+      dataDir: join(tmpDir, 'file-target'),
+      dryRun: true,
+      warn: (m) => warnings.push(m),
+    });
+
+    expect(warnings).toEqual([]);
+  });
+});
+
 /** Базовый манифест с корректными полями. */
 function _manifest(
   entries: ArchiveEntryMeta[],

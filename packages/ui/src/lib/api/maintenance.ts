@@ -29,6 +29,8 @@ export interface MaintenanceBackupInfo {
   withSecrets: boolean
   /** Архив содержит `workspaces/`. */
   withWorkspace: boolean
+  /** PROP-032: backend хранения в архиве (`postgres` — данных БД внутри нет). */
+  storageBackend?: string
   /** Число записей в манифесте. */
   entries: number
   /** ADR-091: архив зашифрован (`.tar.gz.enc`); метаданные — из sidecar. */
@@ -71,8 +73,12 @@ export interface MigrationPlan {
   pending: MaintenanceMigration[]
 }
 
-/** ADR-091: статус отдельной проверки `synth doctor`. */
-export type DoctorStatus = 'ok' | 'warn' | 'fail'
+/**
+ * ADR-091/PROP-032: статус отдельной проверки `synth doctor`. `skipped` —
+ * проверка неприменима к выбранному backend'у хранения (напр. файловые
+ * проверки при `storage.backend=postgres`).
+ */
+export type DoctorStatus = 'ok' | 'warn' | 'fail' | 'skipped'
 
 /** ADR-091: результат одной проверки инстанса. */
 export interface DoctorCheck {
@@ -124,6 +130,8 @@ export interface RestoreArchiveManifest {
   instanceVersion: string
   withSecrets: boolean
   withWorkspace: boolean
+  /** PROP-032: backend хранения в архиве (`postgres` — данных БД внутри нет). */
+  storageBackend?: string
   entries: number
   createdAt: string
 }

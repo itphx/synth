@@ -25,6 +25,11 @@ import type { createMiddleware } from 'hono/factory';
 import { DEFAULT_MAX_UPLOAD_BYTES } from '@itphx/synth-shared';
 import type { MaintenanceAuditEntry, MaintenanceAuditOp } from '@itphx/synth-shared';
 import type { MaintenanceAuditRepository } from '../../storage/ports/index.js';
+import type {
+  StorageBackendKind,
+  StorageHealth,
+  StorageSchemaMigrationResult,
+} from '../../storage/storage-context.js';
 import { checkInstanceCompatibility, InstanceDataTooNewError } from '../../storage/instance-meta.js';
 import { createStorageContextAsync } from '../../storage/storage-context.js';
 import { SessionManager } from '../../sessions/manager.js';
@@ -77,6 +82,18 @@ export interface MaintenanceRoutesDeps {
    * отдаёт пустой список, `DELETE /audit` — `{ cleared: 0 }` (не 500).
    */
   audit?: MaintenanceAuditRepository;
+  /**
+   * PROP-032: физический backend хранения (`storage.backend`; по умолчанию
+   * `file`). При `postgres` `doctor`/`migrations`/`backups` работают с БД.
+   */
+  storageBackend?: StorageBackendKind;
+  /** PROP-032: read-only проба БД (`postgres`) — соединение + версия схемы. */
+  dbHealth?: () => Promise<StorageHealth>;
+  /**
+   * PROP-032: миграции схемы БД (`postgres`) — план/применение. Не задано —
+   * используется файловый контур `meta.json` (ADR-092).
+   */
+  schemaMigrations?: (opts?: { dryRun?: boolean }) => Promise<StorageSchemaMigrationResult>;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы. */
@@ -182,6 +199,7 @@ function _toBackupInfo(
     instanceVersion: string;
     withSecrets: boolean;
     withWorkspace: boolean;
+    storageBackend?: string;
     entries: unknown[];
   },
   bytes: number,
@@ -195,6 +213,7 @@ function _toBackupInfo(
     instanceVersion: manifest.instanceVersion,
     withSecrets: manifest.withSecrets === true,
     withWorkspace: manifest.withWorkspace === true,
+    ...(manifest.storageBackend ? { storageBackend: manifest.storageBackend } : {}),
     entries: Array.isArray(manifest.entries) ? manifest.entries.length : 0,
   };
 }
@@ -267,20 +286,44 @@ export function createMaintenanceRoutes(
       dataDir,
       secretKey: deps.secretKey,
       env: deps.env,
+      storageBackend: deps.storageBackend,
+      dbHealth: deps.dbHealth,
     });
     return c.json(deps.version ? { ...status, version: deps.version } : status);
   });
 
   // GET /api/v2/maintenance/doctor — полный прогон проверок.
   app.get('/doctor', readGuard, async (c) => {
-    const result = await runDoctor({ dataDir, secretKey: deps.secretKey, env: deps.env });
+    const result = await runDoctor({
+      dataDir,
+      secretKey: deps.secretKey,
+      env: deps.env,
+      storageBackend: deps.storageBackend,
+      dbHealth: deps.dbHealth,
+    });
     return c.json(result);
   });
 
   // GET /api/v2/maintenance/migrations — состояние схемы данных (ADR-092).
+  // PROP-032: при backend=postgres — состояние SQL-схемы БД (read-only план).
   app.get('/migrations', readGuard, async (c) => {
+    if (deps.storageBackend === 'postgres' && deps.schemaMigrations) {
+      const plan = await deps.schemaMigrations({ dryRun: true });
+      return c.json({
+        backend: 'postgres',
+        current: plan.current ?? 0,
+        expected: plan.expected,
+        applied: [] as string[],
+        pending: plan.pending.map((version) => ({
+          id: `postgres:${version}`,
+          toVersion: version,
+          description: 'SQL-миграция схемы БД (postgres)',
+        })),
+      });
+    }
     const compatibility = await checkInstanceCompatibility(dataDir);
     return c.json({
+      backend: deps.storageBackend ?? 'file',
       current: compatibility.currentVersion,
       expected: compatibility.expectedVersion,
       applied: compatibility.meta?.migrations ?? [],
@@ -299,6 +342,23 @@ export function createMaintenanceRoutes(
   app.post('/migrations/apply', writeGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
     if ((body as { confirm?: unknown }).confirm !== true) return confirmRequired(c);
+
+    // PROP-032: backend=postgres — мигрируется SQL-схема БД (контур драйвера).
+    if (deps.storageBackend === 'postgres' && deps.schemaMigrations) {
+      try {
+        const result = await deps.schemaMigrations({ dryRun: false });
+        return c.json({
+          backend: 'postgres',
+          applied: result.applied,
+          version: result.current ?? result.expected,
+        });
+      } catch (err) {
+        if ((err as { code?: unknown })?.code === 'STORAGE_POSTGRES_SCHEMA_TOO_NEW') {
+          return c.json({ error: { code: 'SCHEMA_TOO_NEW', message: messages.schemaTooNew(c) } }, 409);
+        }
+        throw err;
+      }
+    }
 
     const storage = await createStorageContextAsync('file', {
       dataDir,
@@ -346,6 +406,7 @@ export function createMaintenanceRoutes(
       withSecrets: body.withSecrets === true,
       withWorkspace: body.withWorkspace === true,
       live: body.live === true,
+      ...(deps.storageBackend ? { storageBackend: deps.storageBackend } : {}),
       audit: deps.audit,
       actor: userId(c),
     });

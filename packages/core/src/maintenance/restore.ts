@@ -375,6 +375,19 @@ async function _restoreFromArchive(
   const schemaOlder = manifest.schemaVersion < SCHEMA_VERSION;
   const fileCount = manifest.entries.filter((entry) => entry.type === 'file').length;
 
+  // PROP-032: архив снят при backend=postgres — данные БД (сессии/проекты/
+  // настройки/секреты-в-БД) в архив каталога не попадают и не восстанавливаются;
+  // восстанавливается только файловый периметр. Данные БД — через pg_restore/PITR.
+  const postgresArchive = manifest.storageBackend === 'postgres';
+  if (postgresArchive) {
+    warn(
+      'Предупреждение: архив снят при backend=postgres — данные БД (сессии, проекты, настройки, ' +
+        'секреты в БД) в архиве каталога данных ОТСУТСТВУЮТ и не восстанавливаются этой командой. ' +
+        'Восстанавливается только файловый периметр (secrets/…, workspaces/…, meta.json). ' +
+        'Данные БД восстанавливаются через pg_restore/PITR.',
+    );
+  }
+
   // 4. Контрольные суммы — до любой записи.
   await verifyBackupArchive(archive, manifest);
 
@@ -395,6 +408,10 @@ async function _restoreFromArchive(
     log(`  схема архива: ${manifest.schemaVersion} (текущая ${SCHEMA_VERSION})`);
     log(`  версия пакета в архиве: ${manifest.instanceVersion}`);
     log(`  секреты: ${manifest.withSecrets ? 'да' : 'нет'}`);
+    if (manifest.storageBackend) log(`  backend: ${manifest.storageBackend}`);
+    if (postgresArchive) {
+      log('  backend=postgres: данные БД в архив не входят — восстанавливается только файловый периметр');
+    }
     log(`  файлов к восстановлению: ${fileCount}`);
     log(
       stale.length === 0
@@ -459,6 +476,9 @@ async function _restoreFromArchive(
   if (safetyPath) log(`  страховочная копия: ${safetyPath}`);
   log('Напоминание: выполните `synth doctor` (проверка после восстановления).');
   if (schemaOlder) log('Напоминание: схема старше — выполните `synth migrate`.');
+  if (postgresArchive) {
+    log('Напоминание: данные БД (сессии/проекты/настройки) восстанавливаются через pg_restore/PITR.');
+  }
 
   return { restored, removed: reset.removed, safetyCopyPath: safetyPath, manifest };
 }

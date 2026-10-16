@@ -219,4 +219,50 @@ describe('createBackup', () => {
     expect(result.bytes).toBeGreaterThan(0);
     await expect(stat(out)).resolves.toBeTruthy();
   });
+
+  // PROP-032: манифест фиксирует backend хранения, а при `postgres` печатается
+  // предупреждение о неполноте архива каталога (данных БД в нём нет).
+  it('backend=postgres: storageBackend в манифесте + предупреждение про pg_dump', async () => {
+    const out = join(tmpDir, 'pg.tar.gz');
+    const logs: string[] = [];
+
+    const result = await createBackup({
+      dataDir,
+      out,
+      storageBackend: 'postgres',
+      log: (m) => logs.push(m),
+    });
+
+    expect(result.manifest.storageBackend).toBe('postgres');
+    const raw = await readFileFromTarGz(out, 'manifest.json');
+    const parsed = JSON.parse(raw?.toString('utf-8') ?? '{}') as BackupManifest;
+    expect(parsed.storageBackend).toBe('postgres');
+
+    const out2 = logs.join('\n');
+    expect(out2).toContain('backend=postgres');
+    expect(out2).toContain('pg_dump');
+    expect(out2).toContain('pg_restore');
+  });
+
+  it('backend=file (по умолчанию): поля storageBackend нет и предупреждения про БД нет', async () => {
+    const out = join(tmpDir, 'file.tar.gz');
+    const logs: string[] = [];
+
+    const result = await createBackup({ dataDir, out, storageBackend: 'file', log: (m) => logs.push(m) });
+
+    expect(result.manifest.storageBackend).toBe('file');
+    expect(logs.join('\n')).not.toContain('pg_dump');
+
+    const noFlag = await createBackup({ dataDir, out: join(tmpDir, 'noflag.tar.gz') });
+    expect(noFlag.manifest.storageBackend).toBeUndefined();
+  });
+
+  it('backend=postgres: storageBackend попадает в аудит-запись backup.created — ADR-092', async () => {
+    const audit = new MemoryMaintenanceAuditRepository();
+
+    await createBackup({ dataDir, out: join(tmpDir, 'pg-audit.tar.gz'), storageBackend: 'postgres', audit });
+
+    const list = await audit.list();
+    expect(list[0]!.details).toMatchObject({ storageBackend: 'postgres' });
+  });
 });

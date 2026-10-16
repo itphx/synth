@@ -48,6 +48,12 @@ export async function runMigrateCommand(opts: MigrateCommandOptions): Promise<nu
     return 1;
   }
 
+  // PROP-032: при backend=postgres мигрируется SQL-схема драйвера (свой контур
+  // версионирования, не `meta.json`); лок берёт `runMigrations` драйвера.
+  if (opts.storage?.kind === 'postgres') {
+    return _runPostgresMigrate(opts, log, error);
+  }
+
   const compatibility = await checkInstanceCompatibility(dataDir);
   log(`${dryRun ? '[dry-run] ' : ''}Миграция схемы данных (${dataDir})`);
   log(`  текущая версия схемы: ${compatibility.currentVersion}`);
@@ -112,6 +118,80 @@ export async function runMigrateCommand(opts: MigrateCommandOptions): Promise<nu
       status: 'failed',
       actor: 'cli',
       details: { dataDir, trigger: 'cli' },
+      error: message,
+    });
+    error(`Ошибка миграции: ${message}`);
+    return 1;
+  }
+}
+
+/**
+ * Миграции SQL-схемы драйвера при `storage.backend=postgres` (PROP-032).
+ * План — `--dry-run`; применение — `--yes`; контур `meta.json` не трогается.
+ * `runMigrations` драйвера берёт advisory-лок сам (не дублируем).
+ */
+async function _runPostgresMigrate(
+  opts: MigrateCommandOptions,
+  log: (msg: string) => void,
+  error: (msg: string) => void,
+): Promise<number> {
+  const { dataDir, dryRun = false } = opts;
+  const migrate = opts.storage?.schemaMigrations;
+  if (!migrate) {
+    error('Ошибка: драйвер postgres не предоставляет миграции схемы (schemaMigrations).');
+    return 1;
+  }
+
+  log(`${dryRun ? '[dry-run] ' : ''}Миграция схемы БД (backend=postgres)`);
+  try {
+    const plan = await migrate({ dryRun: true });
+    log(`  текущая версия схемы БД: ${plan.current === null ? 'не инициализирована' : plan.current}`);
+    log(`  ожидаемая версия: ${plan.expected}`);
+
+    if (plan.current !== null && plan.current > plan.expected) {
+      error(
+        `Ошибка: схема БД новее драйвера (${plan.current} > ${plan.expected}); обновите Synth.`,
+      );
+      return 1;
+    }
+    if (plan.pending.length === 0) {
+      log('  нечего применять');
+      return 0;
+    }
+    if (dryRun) {
+      log(`  план (${plan.pending.length}): ${plan.pending.map((v) => `v${v}`).join(', ')}`);
+      log('  (dry-run: изменения не записаны)');
+      return 0;
+    }
+
+    const result = await migrate({ dryRun: false });
+    log(`  применено миграций: ${result.applied.length}`);
+    if (result.applied.length > 0) {
+      log(`    - версии: ${result.applied.map((v) => `v${v}`).join(', ')}`);
+    }
+    log(`  версия схемы БД: ${result.current ?? result.expected}`);
+    if (result.applied.length > 0) {
+      await recordMaintenanceAudit(opts.audit, {
+        op: 'migrate.applied',
+        status: 'ok',
+        actor: 'cli',
+        details: {
+          backend: 'postgres',
+          from: plan.current,
+          to: result.current ?? result.expected,
+          applied: result.applied,
+          trigger: 'cli',
+        },
+      });
+    }
+    return 0;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordMaintenanceAudit(opts.audit, {
+      op: 'migrate.failed',
+      status: 'failed',
+      actor: 'cli',
+      details: { dataDir, backend: 'postgres', trigger: 'cli' },
       error: message,
     });
     error(`Ошибка миграции: ${message}`);

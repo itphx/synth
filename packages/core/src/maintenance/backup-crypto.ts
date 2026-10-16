@@ -126,6 +126,8 @@ export interface BackupEncryptedMeta {
   createdAt: string;
   withSecrets: boolean;
   withWorkspace: boolean;
+  /** PROP-032: физический backend хранения на момент снятия (см. `BackupManifest`). */
+  storageBackend?: string;
   /** Число записей манифеста (без путей/хешей). */
   entries: number;
   encrypted: true;
@@ -139,6 +141,7 @@ export function buildEncryptedMeta(manifest: {
   createdAt: string;
   withSecrets: boolean;
   withWorkspace: boolean;
+  storageBackend?: string;
   entries: unknown[];
 }): BackupEncryptedMeta {
   return {
@@ -149,6 +152,7 @@ export function buildEncryptedMeta(manifest: {
     createdAt: manifest.createdAt,
     withSecrets: manifest.withSecrets === true,
     withWorkspace: manifest.withWorkspace === true,
+    ...(manifest.storageBackend ? { storageBackend: manifest.storageBackend } : {}),
     entries: Array.isArray(manifest.entries) ? manifest.entries.length : 0,
     encrypted: true,
   };
@@ -177,6 +181,9 @@ export async function readEncryptedMeta(encryptedPath: string): Promise<BackupEn
       createdAt: parsed.createdAt,
       withSecrets: parsed.withSecrets === true,
       withWorkspace: parsed.withWorkspace === true,
+      ...(typeof parsed.storageBackend === 'string' && parsed.storageBackend
+        ? { storageBackend: parsed.storageBackend }
+        : {}),
       entries: typeof parsed.entries === 'number' ? parsed.entries : 0,
       encrypted: true,
     };

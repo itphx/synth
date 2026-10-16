@@ -9,14 +9,24 @@ WORKDIR /repo
 # Копируем весь монорепо целиком (для workspace-зависимостей и сборки shared→core→backend).
 COPY . .
 
-# Установка зависимостей workspace и сборка в порядке: shared → core → backend.
-RUN pnpm install --filter @itphx/synth-backend --filter @itphx/synth-core --filter @itphx/synth-shared \
+# Установка зависимостей workspace и сборка в порядке: shared → core →
+# storage-postgres → backend.
+#
+# `@itphx/synth-storage-postgres` — опциональный БД-драйвер слоя хранения
+# (PROP-032/ADR-097), обязательный для `storage.backend=postgres`. Его нужно и
+# установить, и собрать: `pnpm deploy` переносит workspace-пакеты по их `files`
+# (только `dist`), поэтому непособранный пакет уехал бы в образ без кода.
+# `--prod`/`--legacy` (ниже) optional-зависимости не выкидывают; `--no-optional`
+# использовать нельзя.
+RUN pnpm install --filter @itphx/synth-backend --filter @itphx/synth-core --filter @itphx/synth-shared --filter @itphx/synth-storage-postgres \
     && pnpm --filter @itphx/synth-shared build \
     && pnpm --filter @itphx/synth-core build \
+    && pnpm --filter @itphx/synth-storage-postgres build \
     && pnpm --filter @itphx/synth-backend build
 
 # pnpm deploy создаёт самодостаточную папку с реальными node_modules (без symlinks),
-# включая транзитивные runtime-зависимости (@itphx/synth-core, ws и т.д.).
+# включая транзитивные runtime-зависимости (@itphx/synth-core, ws и т.д.) и
+# optionalDependencies (@itphx/synth-storage-postgres + pg — PROP-032).
 RUN mkdir -p /out && pnpm --filter @itphx/synth-backend deploy --prod --legacy /out/app
 
 FROM node:22-alpine
