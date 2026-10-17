@@ -22,6 +22,8 @@ export interface WebhookTargetCheckOptions {
   policy?: WebhooksEgressPolicy;
   /** Инъекция DNS-резолвера (тесты). */
   resolveHost?: HostResolver;
+  /** ADR-099 (D1): запрос пойдёт через прокси — DNS/CIDR не выполняются. */
+  proxied?: boolean;
 }
 
 /**
@@ -56,6 +58,7 @@ export async function evaluateWebhookTarget(
   // `off` уже обработан: далее — обычная deny/allow-политика.
   const check = await checkEgressUrl(url, policy as EgressPolicy, {
     resolveHost: options.resolveHost,
+    proxied: options.proxied,
   });
   return check.allowed
     ? { allowed: true, addresses: check.addresses, matchedRule: check.matchedRule }

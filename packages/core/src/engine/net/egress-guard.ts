@@ -17,17 +17,25 @@
 
 import { isIP } from 'node:net';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressRequestScope, EgressRequestStatus } from '@itphx/synth-shared';
+import type {
+  EgressPolicy,
+  EgressRequestScope,
+  EgressRequestStatus,
+  EgressRequestVia,
+} from '@itphx/synth-shared';
 import {
   evaluateMcpNetworkAccess,
   findHostException,
   hostFromUrl,
+  hostMatchesRule,
+  isAddressRule,
   isLocalHostname,
   isIpInCidr,
   normalizeIp,
 } from '../mcp/network-policy.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 import { egressFetch } from '../../security/tls.js';
+import { shouldProxyUrl } from '../../security/proxy-state.js';
 
 /** Подменяемая реализация `fetch` (тесты/инъекция транспорта). */
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -118,15 +126,23 @@ export interface EgressCheckOptions {
   resolveHost?: HostResolver;
   /** Требовать `https` (webhooks; `false` при `egress.webhooks.mode='off'`). */
   requireHttps?: boolean;
+  /**
+   * ADR-099 (D1): запрос идёт через прокси. Тогда проверяется только схема и
+   * hostname-правила (`isBlockedHost`, `exceptions`/`list` по host/`*.suffix`);
+   * DNS-резолв и CIDR-сверка **не выполняются** (адрес назначения известен
+   * только прокси).
+   */
+  proxied?: boolean;
 }
 
 export type EgressCheckResult =
-  | { allowed: true; url: URL; addresses?: string[]; matchedRule?: string }
-  | { allowed: false; reason: string; matchedRule?: string; addresses?: string[] };
+  | { allowed: true; url: URL; addresses?: string[]; matchedRule?: string; proxied?: boolean }
+  | { allowed: false; reason: string; matchedRule?: string; addresses?: string[]; proxied?: boolean };
 
 /**
  * Единая проверка «URL допустим для исходящего запроса»: схема + hostname/
  * адресные исключения + DNS-резолв **всех** A/AAAA + CIDR-сверка каждого адреса.
+ * `proxied: true` — без DNS/CIDR (только hostname-правила, ADR-099 D1).
  * Fail-closed: `policy === undefined` → запрет.
  */
 export async function checkEgressUrl(
@@ -156,6 +172,51 @@ export async function checkEgressUrl(
   const host = hostFromUrl(parsed.toString());
   if (!host) return { allowed: false, reason: `не удалось выделить хост: ${raw}` };
 
+  // ADR-099 (D1): через прокси адрес назначения неизвестен — DNS/CIDR не
+  // выполняем; проверяем хостнейм-правила политики (exceptions/list по hostname)
+  // и литеральные локальные/IP-адреса. Fail-closed в allow-режиме, если
+  // политика состоит только из CIDR (проверить её через прокси невозможно).
+  if (options.proxied) {
+    const exception = findHostException(host, policy.exceptions);
+    if (exception) {
+      return { allowed: true, url: parsed, matchedRule: exception, proxied: true };
+    }
+    if (isBlockedHost(host, policy)) {
+      return {
+        allowed: false,
+        reason: `адрес запрещён сетевой политикой (proxied): ${raw}`,
+        matchedRule: 'local-hostname',
+        proxied: true,
+      };
+    }
+    const hostRules = policy.list.filter((rule) => !isAddressRule(rule));
+    if (policy.mode === 'deny') {
+      const rule = hostRules.find((entry) => hostMatchesRule(host, entry));
+      if (rule) {
+        return {
+          allowed: false,
+          reason: `адрес запрещён сетевой политикой (proxied): ${raw}`,
+          matchedRule: rule,
+          proxied: true,
+        };
+      }
+      return { allowed: true, url: parsed, proxied: true };
+    }
+    // allow: hostname должен входить в список; CIDR без DNS не проверяется.
+    const rule = hostRules.find((entry) => hostMatchesRule(host, entry));
+    if (!rule) {
+      return {
+        allowed: false,
+        reason:
+          `allow-политика не проверяема через прокси для "${host}" ` +
+          '(нет hostname-правила; CIDR/DNS не выполняются)',
+        matchedRule: 'proxied-allow-unverifiable',
+        proxied: true,
+      };
+    }
+    return { allowed: true, url: parsed, matchedRule: rule, proxied: true };
+  }
+
   const result = await evaluateMcpNetworkAccess(parsed.toString(), policy, {
     resolveHost: options.resolveHost,
   });
@@ -167,7 +228,13 @@ export async function checkEgressUrl(
       ...(result.addresses ? { addresses: result.addresses } : {}),
     };
   }
-  return { allowed: true, url: parsed, addresses: result.addresses, matchedRule: result.matchedRule };
+  return {
+    allowed: true,
+    url: parsed,
+    addresses: result.addresses,
+    matchedRule: result.matchedRule,
+    proxied: false,
+  };
 }
 
 /** Ошибка сетевой политики egress: URL/адрес/хоп запрещён либо превышен лимит редиректов. */
@@ -189,6 +256,8 @@ export interface EgressLogEvent {
   url: string;
   method?: string;
   status: EgressRequestStatus;
+  /** ADR-099 (D1): фактический маршрут запроса (proxy/direct/fallback). */
+  via?: EgressRequestVia;
   httpStatus?: number;
   bytes?: number;
   durationMs?: number;
@@ -273,8 +342,13 @@ export async function fetchWithEgressGuard(
 ): Promise<Response> {
   const maxHops = options.maxHops ?? DEFAULT_EGRESS_MAX_HOPS;
   // ADR-099: транспорт по умолчанию — `egressFetch` (единое доверие TLS/CA),
-  // а не «сырой» глобальный `fetch`.
-  const fetchImpl: FetchLike = options.fetchImpl ?? egressFetch;
+  // а не «сырой» глобальный `fetch`. `onVia` сообщает фактический маршрут
+  // (proxy/direct/fallback — ADR-099 D1) для журнала egress.
+  let currentVia: EgressRequestVia = 'direct';
+  const fetchImpl: FetchLike =
+    options.fetchImpl ??
+    ((input, requestInit) =>
+      egressFetch(input, requestInit, { onVia: (via) => { currentVia = via; } }));
   const now = options.now ?? Date.now;
   const method = init.method ?? 'GET';
   let current = rawUrl;
@@ -282,6 +356,10 @@ export async function fetchWithEgressGuard(
   for (let hop = 0; hop <= maxHops; hop++) {
     const started = now();
     const target = sanitizeEgressTarget(current);
+    // ADR-099 (D1): маршрут определяется для **каждого** хопа: host из no_proxy
+    // идёт напрямую (полная DNS/CIDR-проверка), проксируемый — только hostname.
+    const proxied = shouldProxyUrl(current);
+    currentVia = proxied ? 'proxy' : 'direct';
     if (options.skipPolicy) {
       // `off` (dev): проверок нет, редиректы обрабатывает транспорт.
       const response = await fetchImpl(current, { ...init });
@@ -290,6 +368,7 @@ export async function fetchWithEgressGuard(
         url: target.url,
         method,
         status: 'allowed',
+        via: currentVia,
         httpStatus: response.status,
         durationMs: Math.max(0, now() - started),
       });
@@ -298,6 +377,7 @@ export async function fetchWithEgressGuard(
     const check = await checkEgressUrl(current, options.policy, {
       resolveHost: options.resolveHost,
       requireHttps: options.requireHttps,
+      proxied,
     });
     if (!check.allowed) {
       await recordEgress(options, {
@@ -305,6 +385,7 @@ export async function fetchWithEgressGuard(
         url: target.url,
         method,
         status: 'blocked',
+        via: currentVia,
         reason: check.reason,
         matchedRule: check.matchedRule,
         durationMs: Math.max(0, now() - started),
@@ -322,6 +403,7 @@ export async function fetchWithEgressGuard(
         url: target.url,
         method,
         status: 'error',
+        via: currentVia,
         reason,
         durationMs: Math.max(0, now() - started),
       });
@@ -336,6 +418,7 @@ export async function fetchWithEgressGuard(
           url: target.url,
           method,
           status: 'allowed',
+          via: currentVia,
           httpStatus: response.status,
           durationMs: Math.max(0, now() - started),
         });
@@ -346,6 +429,7 @@ export async function fetchWithEgressGuard(
         url: target.url,
         method,
         status: 'allowed',
+        via: currentVia,
         httpStatus: response.status,
         durationMs: Math.max(0, now() - started),
       });
@@ -364,6 +448,7 @@ export async function fetchWithEgressGuard(
       url: target.url,
       method,
       status: 'allowed',
+      via: currentVia,
       httpStatus: response.status,
       ...(bytes !== undefined ? { bytes } : {}),
       durationMs: Math.max(0, now() - started),
@@ -376,6 +461,7 @@ export async function fetchWithEgressGuard(
     url: target.url,
     method,
     status: 'blocked',
+    via: currentVia,
     reason: `превышено число редиректов (${maxHops})`,
     matchedRule: 'redirect-limit',
   });

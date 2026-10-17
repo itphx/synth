@@ -50,6 +50,7 @@ export function createEgressLogSink(
       url: event.url,
       ...(event.method ? { method: event.method } : {}),
       status: event.status,
+      ...(event.via ? { via: event.via } : {}),
       ...(event.httpStatus !== undefined ? { httpStatus: event.httpStatus } : {}),
       ...(event.bytes !== undefined ? { bytes: event.bytes } : {}),
       ...(event.durationMs !== undefined ? { durationMs: event.durationMs } : {}),

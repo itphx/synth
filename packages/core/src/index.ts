@@ -275,10 +275,17 @@ export {
   getTlsCaPath,
   getTlsTrustConfig,
   gitCaConfig,
+  gitProxyConfig,
+  getEgressProxyStatus,
   TlsDependencyUnavailableError,
   _resetTlsTrustForTests,
 } from './security/tls.js';
 export type { TlsTrust, FetchLike as EgressFetchLike, LoadUndici, EgressFetchDeps, ApplyTlsTrustDeps } from './security/tls.js';
+// ADR-099 (D1): HTTP/HTTPS-прокси egress-слоя (dispatcher грузится динамически
+// из `security/tls.ts`, чтобы без прокси/доверия `undici` не тянулся).
+export { checkProxyConnectivity } from './security/proxy-check.js';
+export { getEgressProxyConfig, shouldProxyUrl } from './security/proxy-state.js';
+export type { EgressProxyStatus, ResolvedProxyConfig, ProxyCheckResult } from '@itphx/synth-shared';
 // ADR-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
 export * as crypto from './security/crypto.js';
 export {

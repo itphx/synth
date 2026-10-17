@@ -242,6 +242,15 @@ export const defaultConfig: SynthConfig = {
       provider: '',
     },
   },
+  proxy: {
+    // ADR-099 (D1): прокси выключен по умолчанию (поведение не меняется).
+    // `enabled` намеренно не задан: явный `false` в config.yaml подавляет
+    // стандартные HTTP_PROXY/…, а отсутствие — позволяет включиться из env.
+    noProxy: [],
+    fromEnv: true,
+    fallbackDirect: false,
+    connectTimeoutMs: 10_000,
+  },
   remote: {
     enabled: false,
     backendUrl: '',

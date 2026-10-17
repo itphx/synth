@@ -68,6 +68,8 @@ export interface StandaloneConfig {
   defaultPlanMode?: PlanMode;
   /** Секция безопасности (защита от Indirect Prompt Injection) из config.yaml. */
   securityConfig?: SecurityConfig;
+  /** ADR-099 (D1): секция `proxy` из config.yaml (HTTP/HTTPS-прокси egress). */
+  proxyConfig?: SynthConfig['proxy'];
   /**
    * ADR-076: мастер-ключ шифрования секретов at-rest (SSH-ключи). Задан —
    * приоритетнее env/файла; иначе `SSHKeyStore` использует `SYNTH_SECRET_KEY`
@@ -177,7 +179,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // ADR-099: единый механизм доверия TLS/CA — применяем **до** первого исходящего
   // запроса (сборка хранилища, сид провайдеров из env, дискавери/провайдеры ниже).
   // Fail-closed: битый/отсутствующий CA останавливает старт (не тихий фоллбэк).
-  await initTlsTrust({ security: config.securityConfig }, process.env);
+  await initTlsTrust({ security: config.securityConfig, proxy: config.proxyConfig }, process.env);
   const app = new Hono();
   // PROP-032 (W2.4): единый контекст хранения собирается здесь — реестр
   // service-key (`storage.serviceKeys`) нужен аутентификации до сборки

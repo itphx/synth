@@ -2,8 +2,8 @@ import { readdir, mkdir, rm } from 'node:fs/promises';
 import { resolve as pathResolve, relative, join, isAbsolute, sep } from 'node:path';
 import { simpleGit, type SimpleGit, type SimpleGitOptions, type LogResult } from 'simple-git';
 import type { RepoStatus, CommitInfo, CommitDetail, CommitFileInfo } from '@itphx/synth-shared';
-// ADR-099: доверие TLS/CA для git — пер-вызовом через `-c http.sslCAInfo=<path>`.
-import { gitCaConfig } from '../security/tls.js';
+// ADR-099: доверие TLS/CA и прокси для git — пер-вызовом через `-c <key>=<value>`.
+import { gitCaConfig, gitProxyConfig } from '../security/tls.js';
 
 /**
  * ADR-076 §T3: git-сервис ядра (перенос из backend `lib/git-service.ts`).
@@ -117,8 +117,10 @@ const GIT_UNSAFE_OPTIONS = {
  * поведение, поле `config` не появляется).
  */
 function gitInstanceOptions(): Partial<SimpleGitOptions> {
-  const caConfig = gitCaConfig();
-  return caConfig.length > 0 ? { ...GIT_UNSAFE_OPTIONS, config: caConfig } : GIT_UNSAFE_OPTIONS;
+  // ADR-099 (D1): прокси — `http.proxy=<url>` (без кред; SOCKS5 — D2).
+  // Ограничение: git не понимает `no_proxy`, правило действует на все remote.
+  const config = [...gitCaConfig(), ...gitProxyConfig()];
+  return config.length > 0 ? { ...GIT_UNSAFE_OPTIONS, config } : GIT_UNSAFE_OPTIONS;
 }
 
 /** Создаёт simple-git с разрешёнными SSH/askpass-операциями и CA доверия. */

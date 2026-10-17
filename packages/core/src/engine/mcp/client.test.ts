@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { McpClient } from './client.js';
 import { egressFetch } from '../../security/tls.js';
-import type { McpServerConfig } from '@itphx/synth-shared';
+import { resetEgressProxyState, setEgressProxyConfig } from '../../security/proxy-state.js';
+import { resolveProxyConfig, type McpServerConfig } from '@itphx/synth-shared';
 
 const mockConnect = vi.fn<() => Promise<void>>();
 const mockListTools = vi.fn<() => Promise<{ tools: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }> }>>();
@@ -21,8 +22,13 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   },
 }));
 
+const mockStdioCtor = vi.fn();
 vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
-  StdioClientTransport: class {},
+  StdioClientTransport: class {
+    constructor(...args: unknown[]) {
+      mockStdioCtor(...args);
+    }
+  },
 }));
 
 const mockStreamableCtor = vi.fn();
@@ -201,6 +207,43 @@ describe('McpClient (stdio)', () => {
     await client.connect();
     expect(client.tools).toEqual([]);
     expect(client.isConnected).toBe(true);
+  });
+
+  it('ADR-099 D1: прокси-переменные доезжают в env дочернего stdio-процесса', async () => {
+    setEgressProxyConfig(
+      resolveProxyConfig(
+        {
+          proxy: {
+            url: 'http://proxy.corp:3128',
+            httpsProxy: 'http://https.corp:3128',
+            noProxy: ['localhost', '.corp.example'],
+            fromEnv: false,
+          },
+        },
+        {},
+      ),
+    );
+
+    await client.connect();
+    const options = mockStdioCtor.mock.calls[0]![0] as { env?: Record<string, string> };
+    expect(options.env).toMatchObject({
+      NODE_ENV: 'test',
+      HTTP_PROXY: 'http://proxy.corp:3128',
+      HTTPS_PROXY: 'http://https.corp:3128',
+      ALL_PROXY: 'http://proxy.corp:3128',
+      NO_PROXY: 'localhost,.corp.example',
+    });
+    await client.disconnect();
+    resetEgressProxyState();
+  });
+
+  it('ADR-099 D1: без прокси в env нет прокси-переменных (поведение не меняется)', async () => {
+    setEgressProxyConfig(resolveProxyConfig({ proxy: { enabled: false } }, {}));
+    await client.connect();
+    const options = mockStdioCtor.mock.calls[0]![0] as { env?: Record<string, string> };
+    expect(options.env).toEqual({ NODE_ENV: 'test' });
+    await client.disconnect();
+    resetEgressProxyState();
   });
 });
 

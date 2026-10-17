@@ -4,7 +4,8 @@
  * - `security_audit` — append-only аудит изменений egress/security-политик
  *   (`before_jsonb`/`after_jsonb` — снимки политики, `version` — версия записи);
  * - `egress_requests` — append-only журнал внешних запросов (без тел/заголовков;
- *   `url` — без query/userinfo, обрезан до 2048 символов).
+ *   `url` — без query/userinfo, обрезан до 2048 символов); `via` — фактический
+ *   маршрут `proxy`/`direct`/`fallback` (ADR-099 D1).
  *
  * `seq bigserial` — стабильный порядок «свежие первыми» (как у `maintenance_audit`).
  */
@@ -36,6 +37,7 @@ CREATE TABLE egress_requests (
   url          text NOT NULL,
   method       text,
   status       text NOT NULL,
+  via          text,
   http_status  integer,
   bytes        bigint,
   duration_ms  integer,

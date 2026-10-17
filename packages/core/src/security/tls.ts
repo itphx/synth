@@ -22,12 +22,23 @@
  */
 import { readFileSync } from 'node:fs';
 import {
+  resolveProxyConfig,
   resolveTlsConfig,
   resolveTlsTrust,
+  type ProxyConfigSource,
+  type ResolvedProxyConfig,
   type ResolvedTlsConfig,
   type SecurityTlsConfig,
   type TlsConfigSource,
 } from '@itphx/synth-shared';
+import {
+  getEgressProxyConfig,
+  gitProxyConfig as gitProxyConfigFromState,
+  resetEgressProxyState,
+  setEgressProxyConfig,
+  wrapDispatcherWithVia,
+  type EgressVia,
+} from './proxy-state.js';
 
 /** Транспорт с явным dispatcher (undici-совместимый `fetch`). */
 export type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -49,6 +60,8 @@ export type LoadUndici = () => Promise<typeof import('undici')>;
 
 export interface ApplyTlsTrustDeps {
   loadUndici?: LoadUndici;
+  /** ADR-099 (D1): эффективная конфигурация прокси (по умолчанию — активная). */
+  proxy?: ResolvedProxyConfig | null;
 }
 
 export interface EgressFetchDeps {
@@ -56,6 +69,11 @@ export interface EgressFetchDeps {
   fetchImpl?: FetchLike;
   /** Явный undici-dispatcher (тесты) — по умолчанию dispatcher доверия процесса. */
   dispatcher?: unknown;
+  /**
+   * ADR-099 (D1): фактический маршрут запроса (`proxy`/`direct`/`fallback`) —
+   * для журнала egress. Вызывается dispatcher'ом; без прокси не вызывается.
+   */
+  onVia?: (via: EgressVia) => void;
 }
 
 /** Ошибка отсутствия зависимости: доверие задано, но применить его нечем (ADR-078-подобно). */
@@ -99,7 +117,8 @@ export async function applyGlobalTlsTrust(
   deps: ApplyTlsTrustDeps = {},
 ): Promise<void> {
   _trust = trust;
-  if (!isTlsTrustConfigured(trust)) {
+  const proxy = deps.proxy !== undefined ? deps.proxy : getEgressProxyConfig();
+  if (!isTlsTrustConfigured(trust) && !proxy?.enabled) {
     _dispatcher = null;
     return;
   }
@@ -111,20 +130,34 @@ export async function applyGlobalTlsTrust(
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new TlsDependencyUnavailableError(
-      'security.tls задан, но пакет undici недоступен: без него нельзя применить ' +
-        'ca/cert/key/rejectUnauthorized к исходящим https-запросам. ' +
+      'security.tls/proxy задан, но пакет undici недоступен: без него нельзя применить ' +
+        'ca/cert/key/rejectUnauthorized и HTTP-прокси к исходящим https-запросам. ' +
         `Установите undici@^7 (${reason})`,
     );
   }
 
-  _dispatcher = new undici.Agent({
-    connect: {
-      ca: trust.ca,
-      cert: trust.cert,
-      key: trust.key,
-      rejectUnauthorized: trust.rejectUnauthorized,
-    },
-  });
+  if (proxy?.enabled) {
+    // Прокси — единый dispatcher egress-слоя (TLS к цели + маршрут).
+    const { EgressDispatcher } = await import('./proxy-dispatcher.js');
+    _dispatcher = new EgressDispatcher({
+      proxy,
+      tls: {
+        ca: trust.ca,
+        cert: trust.cert,
+        key: trust.key,
+        rejectUnauthorized: trust.rejectUnauthorized,
+      },
+    });
+  } else {
+    _dispatcher = new undici.Agent({
+      connect: {
+        ca: trust.ca,
+        cert: trust.cert,
+        key: trust.key,
+        rejectUnauthorized: trust.rejectUnauthorized,
+      },
+    });
+  }
   undici.setGlobalDispatcher(_dispatcher as never);
 }
 
@@ -135,13 +168,18 @@ export async function applyGlobalTlsTrust(
  * проверка обновлений, дискавери OIDC).
  */
 export async function initTlsTrust(
-  config: TlsConfigSource | undefined,
+  config: (TlsConfigSource & ProxyConfigSource) | undefined,
   env: NodeJS.ProcessEnv = process.env,
   deps: ApplyTlsTrustDeps = {},
 ): Promise<TlsTrust> {
   const bundle = resolveTrustBundle(config, env);
+  // ADR-099 (D1): прокси резолвится здесь же (env > config > defaults) и
+  // применяется к исходящим запросам тем же dispatcher'ом. Fail-closed:
+  // битый URL/схема/userinfo останавливают старт (как caFile → не-PEM).
+  const proxy = resolveProxyConfig(config, env);
+  setEgressProxyConfig(proxy);
   _resolved = bundle.resolved;
-  await applyGlobalTlsTrust(bundle.trust, deps);
+  await applyGlobalTlsTrust(bundle.trust, { ...deps, proxy });
   return bundle.trust;
 }
 
@@ -160,7 +198,10 @@ export function egressFetch(
   if (dispatcher === null || dispatcher === undefined) {
     return impl(input, init);
   }
-  return impl(input, { ...(init ?? {}), dispatcher } as unknown as RequestInit);
+  // ADR-099 (D1): при запросе фактического маршрута (`onVia`) dispatcher
+  // оборачивается лёгким шимом, который передаёт колбэк в DispatchOptions.
+  const effective = deps.onVia ? wrapDispatcherWithVia(dispatcher, deps.onVia) : dispatcher;
+  return impl(input, { ...(init ?? {}), dispatcher: effective } as unknown as RequestInit);
 }
 
 /**
@@ -192,11 +233,28 @@ export function gitCaConfig(): string[] {
   return caFile ? [`http.sslCAInfo=${caFile}`] : [];
 }
 
+/**
+ * ADR-099 (D1): аргументы git-конфига для прокси (`git -c http.proxy=<url>`).
+ * Пусто — прокси выключен (или URL нет). SOCKS/креды — этап D2.
+ */
+export function gitProxyConfig(): string[] {
+  return gitProxyConfigFromState();
+}
+
+/**
+ * ADR-099 (D1): read-only статус прокси процесса (для
+ * `GET /api/v2/settings/proxy`; без userinfo/секретов).
+ */
+export { getEgressProxyStatus } from './proxy-state.js';
+export type { EgressProxyStatus, ResolvedProxyConfig, ProxyConfigSource } from '@itphx/synth-shared';
+export type { EgressVia } from './proxy-state.js';
+
 /** Сброс модульного состояния (изоляция тестов). Не для продакшн-кода. */
 export function _resetTlsTrustForTests(): void {
   _resolved = null;
   _trust = null;
   _dispatcher = null;
+  resetEgressProxyState();
 }
 
 // ─── внутреннее состояние ────────────────────────────────────────────────────

@@ -56,6 +56,14 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'egress', key: 'webhooks.mode', type: 'string' },
   { section: 'egress', key: 'log.enabled', type: 'boolean' },
   { section: 'egress', key: 'log.retentionDays', type: 'number' },
+  // proxy (ADR-099, D1): скалярные ключи секции; списки (noProxy) — в config/env.
+  { section: 'proxy', key: 'enabled', type: 'boolean' },
+  { section: 'proxy', key: 'url', type: 'string' },
+  { section: 'proxy', key: 'httpProxy', type: 'string' },
+  { section: 'proxy', key: 'httpsProxy', type: 'string' },
+  { section: 'proxy', key: 'allProxy', type: 'string' },
+  { section: 'proxy', key: 'fallbackDirect', type: 'boolean' },
+  { section: 'proxy', key: 'connectTimeoutMs', type: 'number' },
   // decision (ADR-084)
   { section: 'decision', key: 'enabled', type: 'boolean' },
   { section: 'decision', key: 'provider', type: 'string' },

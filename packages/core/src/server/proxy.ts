@@ -11,6 +11,9 @@
 
 import type { Context, MiddlewareHandler } from 'hono';
 import type { RemoteBackendClient } from '../remote/client.js';
+// ADR-099: форвард на удалённый backend — через единый egress-транспорт
+// (доверие TLS/CA + HTTP-прокси), а не «сырой» глобальный fetch.
+import { egressFetch } from '../security/tls.js';
 
 /**
  * Префиксы, источник истины которых — удалённый backend (в гибриде LLM
@@ -87,7 +90,7 @@ async function forwardToRemote(
 
   let res: Response;
   try {
-    res = await fetch(url, init);
+    res = await egressFetch(url, init);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     return new Response(JSON.stringify({

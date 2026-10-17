@@ -5,7 +5,8 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { McpServerConfig } from '@itphx/synth-shared';
 import { SYNTH_VERSION } from '@itphx/synth-shared';
 import { info, warning, error } from '../../logger.js';
-import { egressFetch } from '../../security/tls.js';
+import { egressFetch, getTlsCaPath } from '../../security/tls.js';
+import { mcpProxyEnv } from '../../security/proxy-state.js';
 
 export interface McpToolDef {
   name: string;
@@ -154,10 +155,21 @@ export class McpClient {
       throw new Error(`MCP-сервер "${this._name}": не указана команда для stdio`);
     }
 
+    // ADR-099 (D1): прокси и CA — в окружение дочернего процесса.
+    // SDK (`StdioClientTransport`) мержит `getDefaultEnvironment()` (whitelist
+    // HOME/PATH/…) с переданным `env` без фильтрации, поэтому HTTP_PROXY/
+    // HTTPS_PROXY/ALL_PROXY/NO_PROXY/NODE_EXTRA_CA_CERTS реально доезжают до
+    // MCP-сервера. Приоритет: config.env < resolved proxy/CA (управляется
+    // инстансом, не сервером).
+    const caFile = getTlsCaPath();
+    const managedEnv: Record<string, string> = {
+      ...mcpProxyEnv(),
+      ...(caFile ? { NODE_EXTRA_CA_CERTS: caFile } : {}),
+    };
     const transport = new StdioClientTransport({
       command,
       args: this._config.args || [],
-      env: this._config.env || undefined,
+      env: { ...(this._config.env ?? {}), ...managedEnv },
     });
 
     const client = new Client(

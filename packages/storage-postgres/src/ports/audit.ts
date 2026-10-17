@@ -138,6 +138,7 @@ interface EgressRequestRow extends Row {
   url: string;
   method: string | null;
   status: string;
+  via: string | null;
   http_status: number | null;
   bytes: number | string | null;
   duration_ms: number | null;
@@ -158,6 +159,7 @@ function egressRowToEntry(row: EgressRequestRow): EgressRequestLogEntry {
     status: row.status as EgressRequestLogEntry['status'],
   };
   if (row.method !== null) entry.method = row.method;
+  if (row.via !== null) entry.via = row.via as EgressRequestLogEntry['via'];
   if (row.http_status !== null) entry.httpStatus = row.http_status;
   const bytes = toNumber(row.bytes);
   if (bytes !== undefined) entry.bytes = bytes;
@@ -180,9 +182,9 @@ class PostgresEgressRequestLogRepository implements EgressRequestLogRepository {
   async append(entry: EgressRequestLogEntry): Promise<void> {
     await this._db().query(
       `INSERT INTO egress_requests
-         (id, ts, scope, host, url, method, status, http_status, bytes, duration_ms,
+         (id, ts, scope, host, url, method, status, via, http_status, bytes, duration_ms,
           reason, matched_rule, session_id, project_id, actor)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [
         entry.id,
         entry.ts,
@@ -191,6 +193,7 @@ class PostgresEgressRequestLogRepository implements EgressRequestLogRepository {
         entry.url,
         entry.method ?? null,
         entry.status,
+        entry.via ?? null,
         entry.httpStatus ?? null,
         entry.bytes ?? null,
         entry.durationMs ?? null,

@@ -79,6 +79,30 @@ export { applyEnvOverrides, envOverrideName, toSnakeCase, parseEnvValue, ENV_OVE
 // ADR-099: резолверы доверия TLS/CA (`security.tls`).
 export { resolveTlsConfig, resolveTlsTrust, isPemContent, TLS_ENV } from './config/index.js';
 export type { ResolvedTlsConfig, ResolvedTlsTrust, TlsConfigSource } from './config/index.js';
+// ADR-099 (D1): HTTP/HTTPS-прокси единого egress-слоя.
+export {
+  PROXY_ENV,
+  STANDARD_PROXY_ENV,
+  ProxyConfigError,
+  NoProxyMatcher,
+  parseProxyUrl,
+  redactProxyUrl,
+  resolveProxyConfig,
+  emptyResolvedProxyConfig,
+  proxyUrlFor,
+  shouldProxyUrl,
+  proxyStatus,
+} from './config/index.js';
+export type {
+  ProxyConfigSource,
+  ProxyConfigOrigin,
+  ResolvedProxyConfig,
+  EgressProxyStatus,
+  ProxyAuthChallenge,
+  ProxyCheckResult,
+  ParsedProxyUrl,
+} from './config/index.js';
+export { type ProxyConfig, proxyConfigSchema } from './config/index.js';
 // ADR-099 × PROP-032: единый построитель TLS-опций PostgreSQL (sslmode + security.tls).
 export {
   buildPostgresSslOptions,

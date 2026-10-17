@@ -5,16 +5,19 @@ import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeS
 import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult } from '@itphx/synth-shared';
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO } from '@itphx/synth-shared';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { validateEgressPolicy } from '../../engine/net/egress-policy.js';
 import { checkEgressUrl } from '../../engine/net/egress-guard.js';
 import { evaluateWebhookTarget } from '../../engine/webhooks/network.js';
 import { evaluateMcpNetworkAccess } from '../../engine/mcp/network-policy.js';
+import type { HostResolver } from '../../engine/mcp/network-policy.js';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import { decisionMetrics } from '../../engine/router/decision-metrics.js';
+import { getEgressProxyStatus, shouldProxyUrl } from '../../security/proxy-state.js';
+import { checkProxyConnectivity } from '../../security/proxy-check.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -326,6 +329,12 @@ export interface SettingsRoutesDeps {
   resolveActor?: (c: { get(key: 'user'): unknown }) => string;
   /** Live-применение egress-политики (опционально; резолвер читает стор сам). */
   onEgressChange?: (scope: EgressPolicyScope, policy: EgressPolicy | WebhooksEgressPolicy) => void | Promise<void>;
+  /** ADR-099 (D1): read-only статус прокси (по умолчанию — активная конфигурация). */
+  getProxyStatus?: () => EgressProxyStatus;
+  /** ADR-099 (D1): проверка коннекта к прокси (по умолчанию — TCP/HTTP-проба). */
+  checkProxy?: (url?: string) => Promise<ProxyCheckResult>;
+  /** Инъекция DNS-резолвера для `/egress/check` (тесты; по умолчанию — системный). */
+  resolveHost?: HostResolver;
 }
 
 /** Опции фабрики настроек (guard'ы). */
@@ -900,39 +909,99 @@ export function createSettingsRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url: ожидается непустая строка' } }, 400);
     }
 
+    // ADR-099 (D1): при прокси адресная проверка (DNS/CIDR) не выполняется —
+    // админ должен видеть это в ответе (`addressChecksActive: false`).
+    const proxied = shouldProxyUrl(url);
     if (scope === 'mcp') {
       const policy = await deps.settingsStore.getMcpNetworkPolicy()
         ?? deps.fallbackMcpNetworkPolicy
         ?? DEFAULT_MCP_NETWORK_POLICY;
-      const result = await evaluateMcpNetworkAccess(url, policy);
+      // ADR-099 п.15: при прокси — только hostname-правила/исключения,
+      // без DNS/CIDR (формат MCP-политики совместим с egress).
+      if (proxied) {
+        const result = await checkEgressUrl(url, policy as EgressPolicy, { proxied: true });
+        return c.json({
+          allowed: result.allowed,
+          ...(!result.allowed ? { reason: result.reason } : {}),
+          ...(result.matchedRule ? { matchedRule: result.matchedRule } : {}),
+          ...(result.addresses ? { addresses: result.addresses } : {}),
+          proxied: true,
+          addressChecksActive: false,
+          policy,
+        });
+      }
+      const result = await evaluateMcpNetworkAccess(url, policy, {
+        resolveHost: deps.resolveHost,
+      });
       return c.json({
         allowed: result.allowed,
         ...(result.reason ? { reason: result.reason } : {}),
         ...(result.matchedRule ? { matchedRule: result.matchedRule } : {}),
         ...(result.addresses ? { addresses: result.addresses } : {}),
+        proxied: false,
+        addressChecksActive: true,
         policy,
       });
     }
 
     const policy = await deps.settingsStore.getEgressPolicy(scope) ?? egressDefaults(scope);
     if (scope === 'webhooks') {
-      const result = await evaluateWebhookTarget(url, { policy: policy as WebhooksEgressPolicy });
+      const result = await evaluateWebhookTarget(url, {
+        policy: policy as WebhooksEgressPolicy,
+        proxied,
+        resolveHost: deps.resolveHost,
+      });
       return c.json({
         allowed: result.allowed,
         ...(result.reason ? { reason: result.reason } : {}),
         ...(result.matchedRule ? { matchedRule: result.matchedRule } : {}),
         ...(result.addresses ? { addresses: result.addresses } : {}),
+        proxied,
+        addressChecksActive: !proxied,
         policy,
       });
     }
-    const result = await checkEgressUrl(url, policy as EgressPolicy);
+    const result = await checkEgressUrl(url, policy as EgressPolicy, {
+      proxied,
+      resolveHost: deps.resolveHost,
+    });
     return c.json({
       allowed: result.allowed,
       ...(!result.allowed ? { reason: result.reason } : {}),
       ...(result.matchedRule ? { matchedRule: result.matchedRule } : {}),
       ...(result.addresses ? { addresses: result.addresses } : {}),
+      proxied,
+      addressChecksActive: !proxied,
       policy,
     });
+  });
+
+  /**
+   * ADR-099 (D1): read-only статус egress-прокси. Настройка применяется при
+   * старте (dispatcher), поэтому `restartRequired: true`; секреты/креды в URL
+   * не отдаются.
+   */
+  app.get('/proxy', auth.requireAuth, (c) => {
+    const status = deps.getProxyStatus ? deps.getProxyStatus() : getEgressProxyStatus();
+    return c.json(status);
+  });
+
+  /**
+   * ADR-099 (D1): проверка **только коннекта к прокси** (не к цели).
+   * Тело `{ url? }` — проверить конкретный прокси; иначе активный из конфига.
+   */
+  app.post('/proxy/check', settingsWriteGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const rawUrl = (body as { url?: unknown }).url;
+    if (rawUrl !== undefined && typeof rawUrl !== 'string') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url: ожидается строка' } }, 400);
+    }
+    const result = deps.checkProxy
+      ? await deps.checkProxy(typeof rawUrl === 'string' && rawUrl.trim() ? rawUrl.trim() : undefined)
+      : await checkProxyConnectivity({
+          url: typeof rawUrl === 'string' && rawUrl.trim() ? rawUrl.trim() : undefined,
+        });
+    return c.json(result);
   });
 
   /**

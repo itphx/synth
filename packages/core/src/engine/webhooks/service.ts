@@ -19,6 +19,7 @@ import type { HostResolver } from '../mcp/network-policy.js';
 import type { FetchLike } from '../net/fetch.js';
 import { buildSignatureHeader } from './signature.js';
 import { evaluateWebhookTarget } from './network.js';
+import { shouldProxyUrl } from '../../security/proxy-state.js';
 import { EgressBlockedError, fetchWithEgressGuard, sanitizeEgressTarget } from '../net/egress-guard.js';
 import { currentEgressLog } from '../net/egress-runtime.js';
 import { egressFetch } from '../../security/tls.js';
@@ -239,6 +240,8 @@ export class WebhookService {
     const target = await evaluateWebhookTarget(sub.url, {
       policy,
       resolveHost: this._deps.resolveHost,
+      // ADR-099 (D1): при прокси адрес назначения известен только прокси.
+      proxied: shouldProxyUrl(sub.url),
     });
     if (!target.allowed) {
       // Заблокированная цель (до HTTP-запроса) — фиксируем в журнале egress.

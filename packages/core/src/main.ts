@@ -16,7 +16,7 @@ const program = new Command();
  */
 async function initTls(synth: SynthConfig): Promise<void> {
   try {
-    await initTlsTrust({ security: synth.security }, process.env);
+    await initTlsTrust({ security: synth.security, proxy: synth.proxy }, process.env);
   } catch (err) {
     console.error(
       `Ошибка инициализации доверия TLS/CA: ${err instanceof Error ? err.message : String(err)}`,
@@ -166,6 +166,8 @@ program
       permissionConfig: synth.permission,
       defaultPlanMode: synth.session?.planMode,
       securityConfig: synth.security,
+      // ADR-099 (D1): HTTP/HTTPS-прокси единого egress-слоя.
+      proxyConfig: synth.proxy,
       // ADR-076: мастер-ключ шифрования SSH-ключей (env > config > file в dataDir).
       secretKey: resolveSecretKey(synth, process.env),
       gatewayConfig: synth.llmGateway,

@@ -18,7 +18,7 @@ const require = createRequire(import.meta.url);
  */
 async function initTls(synth: SynthConfig): Promise<void> {
   try {
-    await initTlsTrust({ security: synth.security }, process.env);
+    await initTlsTrust({ security: synth.security, proxy: synth.proxy }, process.env);
   } catch (err) {
     console.error(
       `Ошибка инициализации доверия TLS/CA: ${err instanceof Error ? err.message : String(err)}`,

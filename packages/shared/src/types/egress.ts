@@ -86,6 +86,13 @@ export const EGRESS_REQUEST_STATUSES = ['allowed', 'blocked', 'error'] as const;
 export type EgressRequestStatus = (typeof EGRESS_REQUEST_STATUSES)[number];
 
 /**
+ * ADR-099 (D1): фактический маршрут запроса — через прокси, напрямую либо
+ * direct-фоллбек после недоступного прокси (`proxy.fallbackDirect`).
+ */
+export const EGRESS_REQUEST_VIAS = ['proxy', 'direct', 'fallback'] as const;
+export type EgressRequestVia = (typeof EGRESS_REQUEST_VIAS)[number];
+
+/**
  * Запись журнала внешних запросов (append-only, без тел/заголовков).
  * `url` хранится без query/userinfo и обрезается до 2048 символов.
  */
@@ -97,6 +104,8 @@ export interface EgressRequestLogEntry {
   url: string;
   method?: string;
   status: EgressRequestStatus;
+  /** Маршрут запроса (ADR-099 D1): proxy/direct/fallback. */
+  via?: EgressRequestVia;
   httpStatus?: number;
   bytes?: number;
   durationMs?: number;

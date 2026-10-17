@@ -54,7 +54,7 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
   // запроса (сборка хранилища/PG, дискавери OIDC, сид провайдеров из env ниже).
   // Вызывается в начале `createBackendApp` (env-оверрайды уже выставлены).
   // Fail-closed: битый/отсутствующий CA останавливает старт (не тихий фоллбэк).
-  await initTlsTrust({ security: config.synth.security }, process.env);
+  await initTlsTrust({ security: config.synth.security, proxy: config.synth.proxy }, process.env);
   const kind = resolveStorageBackend(config.synth, process.env);
   if (kind === 'memory') {
     console.warn('storage.backend=memory: данные не сохраняются на диск');

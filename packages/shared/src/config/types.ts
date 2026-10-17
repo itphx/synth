@@ -661,6 +661,36 @@ export const securityConfigSchema = z.object({
   bootstrapServiceKeys: bootstrapServiceKeysSchema.optional(),
 });
 
+// --- Egress-прокси (ADR-099, этап D1) ---
+
+/**
+ * ADR-099 (D1): HTTP/HTTPS-прокси единого egress-слоя.
+ *
+ * - `enabled` — явный выключатель; **не задан** — прокси включается наличием
+ *   URL (в т.ч. из стандартных env при `fromEnv`); явный `false` подавляет
+ *   стандартные `HTTP_PROXY`/… (прокси не включается «из окружения»);
+ * - `url` + `httpProxy`/`httpsProxy`/`allProxy` — URL прокси (`http`/`https`;
+ *   SOCKS5 и userinfo-аутентификация — этап D2);
+ * - `noProxy` — исключения (host, `.suffix`, `*.suffix`, `host:port`, IP, CIDR, `*`);
+ * - `fromEnv` — учитывать стандартные `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`;
+ * - `fallbackDirect` — явный opt-in: при недоступном прокси идти напрямую (warn);
+ * - `connectTimeoutMs` — таймаут соединения с прокси.
+ *
+ * Эффективные значения — `resolveProxyConfig` (`config/proxy.ts`), приоритет
+ * `SYNTH_PROXY_*` > config.yaml > стандартные env > defaults (ADR-023).
+ */
+export const proxyConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  url: z.string().optional(),
+  httpProxy: z.string().optional(),
+  httpsProxy: z.string().optional(),
+  allProxy: z.string().optional(),
+  noProxy: z.array(z.string()).default([]),
+  fromEnv: z.boolean().default(true),
+  fallbackDirect: z.boolean().default(false),
+  connectTimeoutMs: z.number().int().min(1).default(10_000),
+});
+
 // --- LLM Gateway (ADR-036) ---
 
 export const llmGatewayRateLimitConfigSchema = z.object({
@@ -805,6 +835,7 @@ export const synthConfigSchema = z.object({
   webhooks: webhooksConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
+  proxy: proxyConfigSchema.default({}),
   remote: remoteConfigSchema.default({}),
   microFirst: microFirstConfigSchema.default({}),
   llmGateway: llmGatewayConfigSchema.default({}),
@@ -851,6 +882,8 @@ export type RouterCostConfig = z.infer<typeof routerCostConfigSchema>;
 export type RouterSubagentConfig = z.infer<typeof routerSubagentConfigSchema>;
 export type RouterConfig = z.infer<typeof routerConfigSchema>;
 export type RemoteConfig = z.infer<typeof remoteConfigSchema>;
+/** ADR-099 (D1): секция `proxy` — HTTP/HTTPS-прокси единого egress-слоя. */
+export type ProxyConfig = z.infer<typeof proxyConfigSchema>;
 export type MicroFirstConfig = z.infer<typeof microFirstConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;
 export type PermissionConfig = z.infer<typeof permissionConfigSchema>;
