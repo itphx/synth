@@ -291,6 +291,49 @@ export function assertCertMatchesKey(certPem: string, keyPem: string, where = 'c
 }
 
 /**
+ * Валидирует CA-бандл (1+ сертификатов) и возвращает метаданные для API/аудита.
+ * Невалидный/пустой PEM → ошибка без PEM-содержимого.
+ */
+export function validateCaPem(pem: string): { count: number; subjects: string[] } {
+  if (typeof pem !== 'string' || pem.trim() === '') {
+    throw new Error('[config] security.tls.caPem: ожидается непустой PEM-бандл');
+  }
+  const blocks = extractPemBlocks(pem, 'CERTIFICATE');
+  if (blocks.length === 0 || !isPemContent(pem)) {
+    throw new Error('[config] security.tls.caPem: не содержит PEM-сертификат (-----BEGIN CERTIFICATE-----)');
+  }
+  const subjects: string[] = [];
+  for (const [index, block] of blocks.entries()) {
+    let subject: string;
+    try {
+      subject = normalizeSubject(new X509Certificate(block).subject);
+    } catch {
+      throw new Error(`[config] security.tls.caPem: не удалось разобрать сертификат #${index + 1} (X509)`);
+    }
+    if (subject) subjects.push(subject);
+  }
+  return { count: blocks.length, subjects };
+}
+
+/**
+ * Валидирует клиентскую пару `certPem`/`keyPem` (PEM + соответствие публичных
+ * ключей). Возвращает subject сертификата (без PEM).
+ */
+export function validateClientPem(certPem: string, keyPem: string): { certSubject?: string } {
+  if (typeof certPem !== 'string' || certPem.trim() === '') {
+    throw new Error('[config] security.tls: certPem: ожидается непустой PEM-сертификат');
+  }
+  if (typeof keyPem !== 'string' || keyPem.trim() === '') {
+    throw new Error('[config] security.tls: keyPem: ожидается непустой PEM-ключ');
+  }
+  validatePemText(certPem, 'certPem', CERT_MARKER, 'CERTIFICATE');
+  validatePemText(keyPem, 'keyPem', KEY_MARKER, 'PRIVATE KEY');
+  assertCertMatchesKey(certPem, keyPem, 'certPem/keyPem');
+  const subject = certificateSubjectFromPem(certPem);
+  return subject !== undefined ? { certSubject: subject } : {};
+}
+
+/**
  * Subject сертификата (для read-only статуса API) — без PEM-содержимого.
  * Невалидный PEM → `undefined` (статус не должен падать из-за отображения).
  */

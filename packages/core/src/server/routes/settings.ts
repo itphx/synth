@@ -5,7 +5,7 @@ import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeS
 import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ResolvedProxyConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ResolvedProxyConfig, SecurityTlsConfig } from '@itphx/synth-shared';
 import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO, PROXY_PASSWORD_ENV, ProxyConfigError, proxyStatus, redactProxyUrl, resolveProxyConfig, validateProxyConfig } from '@itphx/synth-shared';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { validateEgressPolicy } from '../../engine/net/egress-policy.js';
@@ -23,6 +23,7 @@ import {
   removeProxyPasswordFile,
   writeProxyPasswordFile,
 } from '../../security/proxy-password.js';
+import { createTlsSettingsRoutes } from './settings-tls.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -340,6 +341,8 @@ export interface SettingsRoutesDeps {
   getProxyConfig?: () => ResolvedProxyConfig | null;
   /** ADR-099: `config.yaml proxy` (уровень defaults, без runtime-override). */
   fallbackProxy?: Partial<ProxyConfig>;
+  /** ADR-099: `config.yaml security.tls` (read-only слой для UI; env приоритетнее). */
+  fallbackTls?: SecurityTlsConfig;
   /** ADR-099: каталог данных — файл `{dataDir}/secrets/proxy-password`. */
   dataDir?: string;
   /** ADR-099: env (тесты); по умолчанию `process.env`. */
@@ -1487,6 +1490,20 @@ export function createSettingsRoutes(
     decisionMetrics.reset();
     return c.json({ metrics: decisionMetrics.snapshot() });
   });
+
+  // ADR-099: настройки доверия TLS/CA (bootstrap, применяются при старте).
+  // GET — `requireAuth`, мутации — общий `settingsWriteGuard` (managed — ADMIN).
+  app.route('/tls', createTlsSettingsRoutes(
+    auth,
+    {
+      dataDir: deps.dataDir,
+      env: proxyEnv,
+      fallbackTls: deps.fallbackTls,
+      securityAudit: deps.securityAudit,
+      resolveActor: deps.resolveActor,
+    },
+    { writeGuard: settingsWriteGuard },
+  ));
 
   return app;
 }

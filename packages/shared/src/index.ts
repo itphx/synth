@@ -112,6 +112,8 @@ export {
   writeTlsSecretFile,
   readTlsSecretFile,
   validateTlsRuntimeSettings,
+  validateCaPem,
+  validateClientPem,
   isValidHostPattern,
   assertCertMatchesKey,
   certificateSubjectFromPem,

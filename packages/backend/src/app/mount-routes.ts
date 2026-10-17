@@ -632,6 +632,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     fallbackEgressWebhooks: config.synth.egress.webhooks,
     // ADR-099: прокси — config-уровень, runtime-override и файл пароля.
     fallbackProxy: config.synth.proxy,
+    // ADR-099: TLS/CA — config-уровень (read-only в UI; runtime — bootstrap).
+    fallbackTls: config.synth.security?.tls,
     dataDir,
     env: process.env,
     securityAudit,

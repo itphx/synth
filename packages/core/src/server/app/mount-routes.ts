@@ -351,6 +351,8 @@ export function mountStandaloneRoutes(
     fallbackEgressWebhooks: config.egressConfig?.webhooks,
     // ADR-099: прокси — config-уровень, runtime-override и файл пароля.
     fallbackProxy: config.proxyConfig,
+    // ADR-099: TLS/CA — config-уровень (read-only в UI; runtime — bootstrap).
+    fallbackTls: config.securityConfig?.tls,
     dataDir,
     env: process.env,
     securityAudit,
