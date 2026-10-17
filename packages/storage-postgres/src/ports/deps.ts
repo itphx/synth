@@ -56,4 +56,11 @@ export interface PortDeps {
   contextUserDataDir?: string;
   /** ADR-097/PROP-032: инъекция sync-данных core (см. `CoreSyncDeps`). */
   coreSync: CoreSyncDeps;
+  /**
+   * Регистрация фоновой задачи сборки, которую владелец контекста обязан
+   * дождаться в `close()` **до** закрытия пула. Нужна для fire-and-forget
+   * прогрева синхронных кэшей `content`: без учёта warm-запросы попадают в уже
+   * закрытый пул и дают ложные предупреждения «пул недоступен».
+   */
+  trackBackground?: (task: Promise<unknown>) => void;
 }

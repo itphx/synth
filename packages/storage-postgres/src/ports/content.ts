@@ -1821,7 +1821,14 @@ export function buildContentPorts(deps: PortDeps): ContentPorts {
   // write-through, поэтому кэш консистентен сразу после записи; pre-existing
   // override появляется в кэше по завершении прогрева (короткое окно старта).
   // Если схема ещё не инициализирована — прогрев пропускается с одним сообщением.
-  void warmContentCaches(deps, { secretPatterns, protectedPaths, dictionaries });
+  //
+  // Прогрев остаётся fire-and-forget, но если владелец контекста умеет
+  // отслеживать фоновые задачи (`trackBackground`), регистрируем его — тогда
+  // `close()` дождётся завершения прогрева до закрытия пула. Иначе late
+  // warm-запросы уходят в закрытый пул и дают ложные «пул недоступен».
+  const warm = warmContentCaches(deps, { secretPatterns, protectedPaths, dictionaries });
+  if (deps.trackBackground) deps.trackBackground(warm);
+  else void warm;
 
   return {
     serviceKeys: new PostgresServiceKeyRepository(deps),

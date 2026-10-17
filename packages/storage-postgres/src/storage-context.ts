@@ -67,6 +67,8 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     contextUserDataDir: opts.contextUserDataDir,
   });
 
+  const background: Promise<unknown>[] = [];
+
   const deps: PortDeps = {
     connection: opts.connection,
     dataDir: opts.dataDir,
@@ -75,13 +77,22 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     systemDictionariesDir: opts.systemDictionariesDir,
     contextUserDataDir: opts.contextUserDataDir,
     coreSync: opts.coreSync,
+    // Фоновые задачи сборки (best-effort прогрев кэшей `content`) — дожидаемся
+    // их в `close()` до закрытия пула, иначе warm-запросы падают с «пул недоступен».
+    trackBackground: (task) => background.push(task),
   };
 
   return {
     kind: 'postgres',
     // PROP-032: соединение живёт в контексте; `close()` закрывает пул (graceful
-    // shutdown домена).
-    close: () => opts.connection.end(),
+    // shutdown домена). Перед закрытием дожидаемся фоновых задач сборки
+    // (best-effort прогрев синхронных кэшей `content`): warm-запросы не должны
+    // попадать в уже закрытый пул — иначе диагностика/`backup`/`migrate` видят
+    // ложные предупреждения «прогрев порта не удался: пул недоступен».
+    close: async () => {
+      await Promise.allSettled(background);
+      await opts.connection.end();
+    },
     // PROP-032/ADR-091: диагностика backend'а — реальный probe БД + версия схемы
     // (read-only, без применения миграций) для `synth doctor`/admin-API.
     health: async (): Promise<StorageHealth> => {
