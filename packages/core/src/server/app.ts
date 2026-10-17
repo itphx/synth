@@ -179,7 +179,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // ADR-099: единый механизм доверия TLS/CA — применяем **до** первого исходящего
   // запроса (сборка хранилища, сид провайдеров из env, дискавери/провайдеры ниже).
   // Fail-closed: битый/отсутствующий CA останавливает старт (не тихий фоллбэк).
-  await initTlsTrust({ security: config.securityConfig, proxy: config.proxyConfig }, process.env);
+  await initTlsTrust(
+    { security: config.securityConfig, proxy: config.proxyConfig },
+    process.env,
+    { dataDir: config.dataDir },
+  );
   const app = new Hono();
   // PROP-032 (W2.4): единый контекст хранения собирается здесь — реестр
   // service-key (`storage.serviceKeys`) нужен аутентификации до сборки

@@ -3,8 +3,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   proxyStatus,
   resolveProxyConfig,
@@ -99,7 +101,84 @@ describe('GET /api/v2/settings/proxy', () => {
   });
 });
 
+const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../security/__fixtures__');
+const PROXY_CERT = readFileSync(join(FIX_DIR, 'tls-test-proxy.pem'), 'utf-8');
+const PROXY_KEY = readFileSync(join(FIX_DIR, 'tls-test-proxy.key'), 'utf-8');
+
 describe('POST /api/v2/settings/proxy/check — только коннект к прокси', () => {
+  it('Basic: валидные креды из активного конфига → reachable', async () => {
+    const expected = `Basic ${Buffer.from('user:pass', 'utf8').toString('base64')}`;
+    const proxy = await startFakeProxy({ mode: 'tunnel', requireAuth: expected });
+    try {
+      setEgressProxyConfig(
+        resolveProxyConfig(
+          { proxy: { url: proxy.url, auth: { type: 'basic', username: 'user' }, fromEnv: false } },
+          { SYNTH_PROXY_PASSWORD: 'pass' },
+        ),
+      );
+      const app = createApp();
+      const res = await app.request('/api/v2/settings/proxy/check', { method: 'POST' });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.reachable).toBe(true);
+      expect(proxy.connectAuthHeaders[0]).toBe(expected);
+    } finally {
+      resetEgressProxyState();
+      await proxy.close();
+    }
+  });
+
+  it('https-прокси: TLS-хендшейк с proxy.tls CA → reachable', async () => {
+    const proxy = await startFakeProxy({
+      mode: 'tunnel',
+      tls: { key: PROXY_KEY, cert: PROXY_CERT },
+    });
+    try {
+      setEgressProxyConfig(
+        resolveProxyConfig(
+          {
+            proxy: {
+              url: `https://localhost:${proxy.port}`,
+              tls: { caPem: PROXY_CERT },
+              fromEnv: false,
+            },
+          },
+          {},
+        ),
+      );
+      const app = createApp();
+      const res = await app.request('/api/v2/settings/proxy/check', { method: 'POST' });
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.reachable).toBe(true);
+      expect(proxy.connects).toBe(1);
+    } finally {
+      resetEgressProxyState();
+      await proxy.close();
+    }
+  });
+
+  it('https-прокси без CA → reachable:false (self-signed)', async () => {
+    const proxy = await startFakeProxy({
+      mode: 'tunnel',
+      tls: { key: PROXY_KEY, cert: PROXY_CERT },
+    });
+    try {
+      setEgressProxyConfig(
+        resolveProxyConfig(
+          { proxy: { url: `https://localhost:${proxy.port}`, fromEnv: false } },
+          {},
+        ),
+      );
+      const app = createApp();
+      const res = await app.request('/api/v2/settings/proxy/check', { method: 'POST' });
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.reachable).toBe(false);
+      expect(String(body.error)).toMatch(/self-signed|SELF_SIGNED|CERT/i);
+    } finally {
+      resetEgressProxyState();
+      await proxy.close();
+    }
+  });
   it('reachable + authChallenge (407 → Basic)', async () => {
     const proxy = await startFakeProxy({ mode: '407', authChallenge: 'Basic realm="corp"' });
     try {

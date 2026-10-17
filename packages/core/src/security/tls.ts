@@ -62,6 +62,8 @@ export interface ApplyTlsTrustDeps {
   loadUndici?: LoadUndici;
   /** ADR-099 (D1): эффективная конфигурация прокси (по умолчанию — активная). */
   proxy?: ResolvedProxyConfig | null;
+  /** ADR-099 (D2a): каталог данных — для файла `{dataDir}/secrets/proxy-password`. */
+  dataDir?: string;
 }
 
 export interface EgressFetchDeps {
@@ -176,7 +178,7 @@ export async function initTlsTrust(
   // ADR-099 (D1): прокси резолвится здесь же (env > config > defaults) и
   // применяется к исходящим запросам тем же dispatcher'ом. Fail-closed:
   // битый URL/схема/userinfo останавливают старт (как caFile → не-PEM).
-  const proxy = resolveProxyConfig(config, env);
+  const proxy = resolveProxyConfig(config, env, { dataDir: deps.dataDir });
   setEgressProxyConfig(proxy);
   _resolved = bundle.resolved;
   await applyGlobalTlsTrust(bundle.trust, { ...deps, proxy });

@@ -12,15 +12,31 @@
  * ушёл через прокси (а не напрямую).
  */
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 
 export type FakeProxyMode = 'tunnel' | '407' | '502' | 'close' | 'silent';
 
+export interface FakeProxyTlsOptions {
+  key: string | Buffer;
+  cert: string | Buffer;
+  /** CA для проверки клиентского сертификата (mTLS). */
+  ca?: string | Buffer;
+  requestCert?: boolean;
+  rejectUnauthorized?: boolean;
+  /** Требовать клиентский сертификат (эмуляция mTLS: без него — destroy). */
+  requireClientCert?: boolean;
+}
+
 export interface FakeProxyOptions {
   mode?: FakeProxyMode;
   /** Значение `Proxy-Authenticate` для режима `407`. */
   authChallenge?: string;
+  /** Ожидаемый `Proxy-Authorization`; иначе/неверный → `407` (Basic-проверка). */
+  requireAuth?: string;
+  /** HTTPS-прокси (TLS + mTLS) — иначе plain HTTP. */
+  tls?: FakeProxyTlsOptions;
 }
 
 export interface FakeProxy {
@@ -30,6 +46,12 @@ export interface FakeProxy {
   readonly connects: number;
   /** Число absolute-URI HTTP-запросов. */
   readonly absoluteRequests: number;
+  /** `Proxy-Authorization` каждого CONNECT (в порядке поступления). */
+  readonly connectAuthHeaders: string[];
+  /** `Proxy-Authorization` каждого absolute-URI-запроса. */
+  readonly absoluteAuthHeaders: string[];
+  /** Subject клиентских сертификатов (mTLS), в порядке подключений. */
+  readonly clientCertSubjects: string[];
   close(): Promise<void>;
 }
 
@@ -38,11 +60,23 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
   const mode = options.mode ?? 'tunnel';
   let connects = 0;
   let absoluteRequests = 0;
+  const connectAuthHeaders: string[] = [];
+  const absoluteAuthHeaders: string[] = [];
+  const clientCertSubjects: string[] = [];
   const sockets = new Set<net.Socket>();
 
-  const server = http.createServer((req, res) => {
+  const authHeaderOf = (req: http.IncomingMessage): string | undefined => {
+    const raw = req.headers['proxy-authorization'];
+    return Array.isArray(raw) ? raw[0] : raw;
+  };
+
+  const authRejected = (header: string | undefined): boolean =>
+    options.requireAuth !== undefined && header !== options.requireAuth;
+
+  const handler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     absoluteRequests += 1;
-    if (mode === '407') {
+    absoluteAuthHeaders.push(authHeaderOf(req) ?? '');
+    if (mode === '407' || authRejected(authHeaderOf(req))) {
       res.writeHead(407, {
         'Proxy-Authenticate': options.authChallenge ?? 'Basic realm="fake"',
         'Content-Length': '0',
@@ -88,16 +122,34 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
       res.end('upstream error');
     });
     req.pipe(upstream);
-  });
+  };
+
+  const server: http.Server = options.tls
+    ? (https.createServer(options.tls, handler) as unknown as http.Server)
+    : http.createServer(handler);
 
   server.on('connection', (socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
   });
 
+  if (options.tls?.requireClientCert) {
+    // Эмуляция «mTLS обязателен»: TLS-хендшейк завершаем, но без клиентского
+    // сертификата рвём соединение (детерминированно, без ожидания таймаута).
+    (server as unknown as import('node:tls').Server).on('secureConnection', (socket) => {
+      const cert = (socket as import('node:tls').TLSSocket).getPeerCertificate();
+      const commonName = cert && Object.keys(cert).length > 0 ? cert.subject?.CN : undefined;
+      const subject = Array.isArray(commonName) ? commonName[0] : commonName;
+      clientCertSubjects.push(subject ?? '');
+      if (!subject) socket.destroy();
+    });
+  }
+
   server.on('connect', (req, clientSocket, head) => {
     connects += 1;
-    if (mode === '407') {
+    const auth = authHeaderOf(req);
+    connectAuthHeaders.push(auth ?? '');
+    if (mode === '407' || authRejected(auth)) {
       clientSocket.end(
         `HTTP/1.1 407 Proxy Authentication Required\r\n` +
           `Proxy-Authenticate: ${options.authChallenge ?? 'Basic realm="fake"'}\r\n` +
@@ -144,6 +196,15 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
     },
     get absoluteRequests() {
       return absoluteRequests;
+    },
+    get connectAuthHeaders() {
+      return connectAuthHeaders;
+    },
+    get absoluteAuthHeaders() {
+      return absoluteAuthHeaders;
+    },
+    get clientCertSubjects() {
+      return clientCertSubjects;
     },
     async close() {
       for (const socket of sockets) socket.destroy();

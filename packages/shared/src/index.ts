@@ -82,27 +82,46 @@ export type { ResolvedTlsConfig, ResolvedTlsTrust, TlsConfigSource } from './con
 // ADR-099 (D1): HTTP/HTTPS-прокси единого egress-слоя.
 export {
   PROXY_ENV,
+  PROXY_PASSWORD_ENV,
+  PROXY_TLS_ENV,
+  PROXY_URL_FIELDS,
   STANDARD_PROXY_ENV,
   ProxyConfigError,
   NoProxyMatcher,
   parseProxyUrl,
   redactProxyUrl,
   resolveProxyConfig,
+  resolveProxyTls,
   emptyResolvedProxyConfig,
   proxyUrlFor,
+  proxyEntryFor,
+  defaultProxyEntry,
   shouldProxyUrl,
   proxyStatus,
 } from './config/index.js';
 export type {
   ProxyConfigSource,
   ProxyConfigOrigin,
+  ProxyCredentials,
+  ProxyCredentialSet,
+  ProxyUrlField,
   ResolvedProxyConfig,
+  ResolvedProxyTls,
   EgressProxyStatus,
   ProxyAuthChallenge,
   ProxyCheckResult,
   ParsedProxyUrl,
 } from './config/index.js';
-export { type ProxyConfig, proxyConfigSchema } from './config/index.js';
+export {
+  type ProxyConfig,
+  type ProxyAuthConfig,
+  type ProxyAuthType,
+  type ProxyTlsConfig,
+  proxyConfigSchema,
+  proxyAuthConfigSchema,
+  proxyTlsConfigSchema,
+  PROXY_AUTH_TYPES,
+} from './config/index.js';
 // ADR-099 × PROP-032: единый построитель TLS-опций PostgreSQL (sslmode + security.tls).
 export {
   buildPostgresSslOptions,

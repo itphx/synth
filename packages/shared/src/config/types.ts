@@ -661,16 +661,45 @@ export const securityConfigSchema = z.object({
   bootstrapServiceKeys: bootstrapServiceKeysSchema.optional(),
 });
 
-// --- Egress-прокси (ADR-099, этап D1) ---
+// --- Egress-прокси (ADR-099, этапы D1/D2a) ---
+
+/** Тип аутентификации прокси: D2a — только `basic` (NTLM/Negotiate — D3/D4). */
+export const PROXY_AUTH_TYPES = ['basic', 'ntlm', 'negotiate'] as const;
+export type ProxyAuthType = (typeof PROXY_AUTH_TYPES)[number];
 
 /**
- * ADR-099 (D1): HTTP/HTTPS-прокси единого egress-слоя.
+ * Basic-аутентификация прокси (D2a). Пароль **не хранится в config**
+ * (инвариант 13): только env `SYNTH_PROXY_PASSWORD` или файл
+ * `{dataDir}/secrets/proxy-password`. Username также может быть в userinfo URL.
+ */
+export const proxyAuthConfigSchema = z.object({
+  type: z.enum(PROXY_AUTH_TYPES).default('basic'),
+  username: z.string().default(''),
+});
+
+/**
+ * TLS к **самому прокси** (D2a) — схема как у `security.tls` (ADR-099):
+ * `caFile`/`caPem` (взаимоисключающие), `certFile`/`keyFile` (mTLS к прокси),
+ * `rejectUnauthorized`. Доверие к цели по-прежнему задаёт `security.tls`.
+ */
+export const proxyTlsConfigSchema = z.object({
+  caFile: z.string().optional(),
+  caPem: z.string().optional(),
+  certFile: z.string().optional(),
+  keyFile: z.string().optional(),
+  rejectUnauthorized: z.boolean().optional(),
+});
+
+/**
+ * ADR-099 (D1/D2a): HTTP/HTTPS-прокси единого egress-слоя.
  *
  * - `enabled` — явный выключатель; **не задан** — прокси включается наличием
  *   URL (в т.ч. из стандартных env при `fromEnv`); явный `false` подавляет
  *   стандартные `HTTP_PROXY`/… (прокси не включается «из окружения»);
  * - `url` + `httpProxy`/`httpsProxy`/`allProxy` — URL прокси (`http`/`https`;
- *   SOCKS5 и userinfo-аутентификация — этап D2);
+ *   userinfo допускается, креды вырезаются в resolved-конфиг; SOCKS5 — D2b);
+ * - `auth` — Basic-аутентификация (`username`; пароль — env/файл, не config);
+ * - `tls` — TLS/mTLS к самому прокси (`proxyTls`);
  * - `noProxy` — исключения (host, `.suffix`, `*.suffix`, `host:port`, IP, CIDR, `*`);
  * - `fromEnv` — учитывать стандартные `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`;
  * - `fallbackDirect` — явный opt-in: при недоступном прокси идти напрямую (warn);
@@ -685,6 +714,8 @@ export const proxyConfigSchema = z.object({
   httpProxy: z.string().optional(),
   httpsProxy: z.string().optional(),
   allProxy: z.string().optional(),
+  auth: proxyAuthConfigSchema.optional(),
+  tls: proxyTlsConfigSchema.optional(),
   noProxy: z.array(z.string()).default([]),
   fromEnv: z.boolean().default(true),
   fallbackDirect: z.boolean().default(false),
@@ -884,6 +915,10 @@ export type RouterConfig = z.infer<typeof routerConfigSchema>;
 export type RemoteConfig = z.infer<typeof remoteConfigSchema>;
 /** ADR-099 (D1): секция `proxy` — HTTP/HTTPS-прокси единого egress-слоя. */
 export type ProxyConfig = z.infer<typeof proxyConfigSchema>;
+/** ADR-099 (D2a): Basic-аутентификация прокси (пароль — env/файл). */
+export type ProxyAuthConfig = z.infer<typeof proxyAuthConfigSchema>;
+/** ADR-099 (D2a): TLS/mTLS к самому прокси. */
+export type ProxyTlsConfig = z.infer<typeof proxyTlsConfigSchema>;
 export type MicroFirstConfig = z.infer<typeof microFirstConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;
 export type PermissionConfig = z.infer<typeof permissionConfigSchema>;

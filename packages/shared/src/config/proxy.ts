@@ -12,8 +12,10 @@
  * `security.tls.caFile` → не-PEM. Пароли не логируются и не отдаются наружу
  * (`redactProxyUrl`).
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { BlockList, isIP } from 'node:net';
-import type { ProxyConfig } from './types.js';
+import type { ProxyAuthConfig, ProxyConfig, ProxyTlsConfig } from './types.js';
 
 /** Env-имена секции `proxy` (ADR-023). */
 export const PROXY_ENV = {
@@ -26,6 +28,25 @@ export const PROXY_ENV = {
   fallbackDirect: 'SYNTH_PROXY_FALLBACK_DIRECT',
   connectTimeoutMs: 'SYNTH_PROXY_CONNECT_TIMEOUT_MS',
 } as const;
+
+/**
+ * Пароль Basic-аутентификации прокси: **только** env или файл
+ * `{dataDir}/secrets/proxy-password` (в config.yaml не хранится — инвариант 13).
+ */
+export const PROXY_PASSWORD_ENV = 'SYNTH_PROXY_PASSWORD';
+
+/** Env-имена секции `proxy.tls` (TLS/mTLS к прокси, ADR-023). */
+export const PROXY_TLS_ENV = {
+  caFile: 'SYNTH_PROXY_TLS_CA_FILE',
+  caPem: 'SYNTH_PROXY_TLS_CA_PEM',
+  certFile: 'SYNTH_PROXY_TLS_CERT_FILE',
+  keyFile: 'SYNTH_PROXY_TLS_KEY_FILE',
+  rejectUnauthorized: 'SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED',
+} as const;
+
+/** Поля URL прокси (для per-field кредов). */
+export const PROXY_URL_FIELDS = ['url', 'httpProxy', 'httpsProxy', 'allProxy'] as const;
+export type ProxyUrlField = (typeof PROXY_URL_FIELDS)[number];
 
 /** Стандартные env-имена прокси (учитываются только при `fromEnv`). */
 export const STANDARD_PROXY_ENV = {
@@ -54,15 +75,37 @@ export interface ProxyConfigSource {
 /** Откуда взято эффективное значение. */
 export type ProxyConfigOrigin = 'env' | 'config';
 
+/** Креды Basic-аутентификации прокси (в памяти; наружу не отдаются). */
+export interface ProxyCredentials {
+  username: string;
+  password: string;
+}
+
+/** Креды по полям URL (userinfo URL либо `proxy.auth` + env/файл-пароль). */
+export type ProxyCredentialSet = Partial<Record<ProxyUrlField, ProxyCredentials>>;
+
+/** Эффективный TLS/mTLS к самому прокси (CA/серт/ключ уже прочитаны). */
+export interface ResolvedProxyTls {
+  ca?: string;
+  cert?: string;
+  key?: string;
+  rejectUnauthorized: boolean;
+}
+
 /** Эффективная конфигурация прокси (после слияния env/config/defaults). */
 export interface ResolvedProxyConfig {
   enabled: boolean;
   /** Источник эффективного прокси-URL: `env` | `config`; `none` — прокси выключен. */
   source: 'env' | 'config' | 'none';
+  /** URL без userinfo (для логов/статуса/ProxyAgent `uri`). */
   url?: string;
   httpProxy?: string;
   httpsProxy?: string;
   allProxy?: string;
+  /** Креды Basic по полям (только если заданы). */
+  credentials?: ProxyCredentialSet;
+  /** TLS/mTLS к прокси (`ProxyAgent.proxyTls`); цель — `security.tls`. */
+  tls?: ResolvedProxyTls;
   noProxy: string[];
   fromEnv: boolean;
   /** Явный opt-in: при недоступном прокси идти напрямую (warn + via:'fallback'). */
@@ -96,13 +139,15 @@ export interface ProxyCheckResult {
   authChallenge: ProxyAuthChallenge;
 }
 
-/** Разобранный и нормализованный URL прокси (без userinfo). */
+/** Разобранный и нормализованный URL прокси (userinfo — отдельно). */
 export interface ParsedProxyUrl {
-  /** Нормализованный origin: `http://host:port` (path/query/hash отброшены). */
+  /** Нормализованный origin **без userinfo**: `http://host:port`. */
   href: string;
   protocol: 'http:' | 'https:';
   hostname: string;
   port: number;
+  username?: string;
+  password?: string;
 }
 
 /** Пустая (не заданная) конфигурация — прокси выключен (поведение не меняется). */
@@ -118,8 +163,10 @@ export function emptyResolvedProxyConfig(): ResolvedProxyConfig {
 }
 
 /**
- * Разбирает URL прокси. Только `http`/`https` (SOCKS5 — этап D2).
- * Fail-closed: нет схемы/хоста, чужая схема, userinfo (аутентификация — D2).
+ * Разбирает URL прокси. Только `http`/`https` (SOCKS5 — D2b).
+ * Userinfo (`user:pass@host`) разрешён: креды извлекаются отдельно, `href`
+ * всегда без userinfo (безопасен для логов/статуса). `password` без `username`
+ * — ошибка; отсутствие пароля при наличии username решает резолвер (env/файл).
  */
 export function parseProxyUrl(raw: string): ParsedProxyUrl {
   const value = raw.trim();
@@ -132,7 +179,7 @@ export function parseProxyUrl(raw: string): ParsedProxyUrl {
   }
   if (url.protocol === 'socks5:' || url.protocol === 'socks5h:' || url.protocol === 'socks:') {
     throw new ProxyConfigError(
-      'proxy: SOCKS5 пока не поддерживается (этап D2) — используйте http:// или https://',
+      'proxy: SOCKS5 пока не поддерживается (этап D2b) — используйте http:// или https://',
     );
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -140,18 +187,37 @@ export function parseProxyUrl(raw: string): ParsedProxyUrl {
       `proxy: схема "${url.protocol.replace(/:$/, '')}" не поддерживается (только http/https)`,
     );
   }
-  if (url.username || url.password) {
-    throw new ProxyConfigError(
-      'proxy: userinfo (Basic/NTLM) пока не поддерживается (этап D2) — ' +
-        'уберите логин/пароль из URL прокси',
-    );
-  }
   if (!url.hostname) {
     throw new ProxyConfigError(`proxy: не удалось выделить хост из "${redactProxyUrl(value)}"`);
   }
   const protocol = url.protocol as 'http:' | 'https:';
   const port = url.port ? Number(url.port) : protocol === 'https:' ? 443 : 80;
-  return { href: `${protocol}//${url.host}`, protocol, hostname: url.hostname, port };
+  const decoded = decodeUserinfo(url, value);
+  if (decoded.password !== undefined && decoded.username === undefined) {
+    throw new ProxyConfigError('proxy: пароль в URL задан без имени пользователя');
+  }
+  const parsed: ParsedProxyUrl = {
+    href: `${protocol}//${url.host}`,
+    protocol,
+    hostname: url.hostname,
+    port,
+  };
+  if (decoded.username !== undefined) parsed.username = decoded.username;
+  if (decoded.password !== undefined) parsed.password = decoded.password;
+  return parsed;
+}
+
+/** Декодирует userinfo; битый percent-encoding → fail-closed без эха секрета. */
+function decodeUserinfo(url: URL, raw: string): { username?: string; password?: string } {
+  if (!url.username && !url.password) return {};
+  try {
+    return {
+      ...(url.username ? { username: decodeURIComponent(url.username) } : {}),
+      ...(url.password ? { password: decodeURIComponent(url.password) } : {}),
+    };
+  } catch {
+    throw new ProxyConfigError(`proxy: некорректный userinfo в URL "${redactProxyUrl(raw)}"`);
+  }
 }
 
 /**
@@ -323,6 +389,117 @@ function splitEnvList(raw: string | undefined): string[] {
 interface PickedUrl {
   value?: string;
   origin?: ProxyConfigOrigin;
+  username?: string;
+  password?: string;
+}
+
+/** Читает пароль из env/файла (лениво: только если реально нужен). */
+function makePasswordResolver(env: NodeJS.ProcessEnv, dataDir: string | undefined): () => string | undefined {
+  let cached: string | undefined | null = null;
+  return () => {
+    if (cached !== null) return cached;
+    const fromEnv = envValue(env, PROXY_PASSWORD_ENV);
+    if (fromEnv !== undefined) {
+      cached = fromEnv;
+      return cached;
+    }
+    cached = dataDir ? readProxyPasswordFile(dataDir) : undefined;
+    return cached;
+  };
+}
+
+/** Файл `{dataDir}/secrets/proxy-password`; ENOENT → `undefined` (пароля нет). */
+function readProxyPasswordFile(dataDir: string): string | undefined {
+  const path = join(dataDir, 'secrets', 'proxy-password');
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new ProxyConfigError(`proxy: не удалось прочитать пароль из "${path}": ${reason}`);
+  }
+  const value = raw.trim();
+  return value === '' ? undefined : value;
+}
+
+/** PEM-маркер блока. */
+const PEM_BLOCK_RE = /-----BEGIN [A-Z0-9 ]+-----/;
+
+/** Читает PEM-файл прокси-TLS; нет/не читается/не PEM → fail-closed. */
+function readProxyPemFile(path: string, field: string, marker: RegExp): string {
+  let content: string;
+  try {
+    content = readFileSync(path, 'utf-8');
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new ProxyConfigError(
+      `[config] proxy.tls.${field}: не удалось прочитать файл "${path}": ${reason}`,
+    );
+  }
+  if (!marker.test(content)) {
+    throw new ProxyConfigError(
+      `[config] proxy.tls.${field}: файл "${path}" не содержит PEM ` +
+        `(ожидается блок "-----BEGIN ${field === 'keyFile' ? 'PRIVATE KEY' : 'CERTIFICATE'}-----")`,
+    );
+  }
+  return content;
+}
+
+/**
+ * Эффективный TLS/mTLS к **самому прокси** (`proxy.tls`, ADR-023).
+ * Схема — как `security.tls`: env `SYNTH_PROXY_TLS_*` > config.yaml > defaults;
+ * `caFile` ↔ `caPem` взаимоисключающие; `certFile`/`keyFile` — только вместе;
+ * нечитаемый/не-PEM файл → fail-closed.
+ */
+export function resolveProxyTls(
+  config: ProxyConfigSource | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedProxyTls {
+  const cfg = (config?.proxy?.tls ?? {}) as Partial<ProxyTlsConfig>;
+  const pick = (envKey: string, cfgValue: string | undefined): string | undefined => {
+    const envValueRaw = envValue(env, envKey);
+    if (envValueRaw !== undefined) return envValueRaw;
+    return cfgValue !== undefined && cfgValue !== '' ? cfgValue : undefined;
+  };
+  const caFile = pick(PROXY_TLS_ENV.caFile, cfg.caFile);
+  const caPem = pick(PROXY_TLS_ENV.caPem, cfg.caPem);
+  if (caFile !== undefined && caPem !== undefined) {
+    throw new ProxyConfigError(
+      `[config] proxy.tls: 'caFile' и 'caPem' взаимоисключащи — задайте ровно один ` +
+        `источник CA (${PROXY_TLS_ENV.caFile} ИЛИ ${PROXY_TLS_ENV.caPem})`,
+    );
+  }
+  const certFile = pick(PROXY_TLS_ENV.certFile, cfg.certFile);
+  const keyFile = pick(PROXY_TLS_ENV.keyFile, cfg.keyFile);
+  if ((certFile === undefined) !== (keyFile === undefined)) {
+    throw new ProxyConfigError(
+      '[config] proxy.tls: mTLS к прокси требует и certFile, и keyFile (задайте оба либо ни одного)',
+    );
+  }
+  const rejectUnauthorized =
+    envBoolean(envValue(env, PROXY_TLS_ENV.rejectUnauthorized), PROXY_TLS_ENV.rejectUnauthorized) ??
+    cfg.rejectUnauthorized ??
+    true;
+
+  const result: ResolvedProxyTls = { rejectUnauthorized };
+  if (caFile !== undefined) {
+    const content = readProxyPemFile(caFile, 'caFile', /-----BEGIN CERTIFICATE-----/);
+    result.ca = content;
+  } else if (caPem !== undefined) {
+    if (!PEM_BLOCK_RE.test(caPem)) {
+      throw new ProxyConfigError(
+        '[config] proxy.tls.caPem: значение не содержит PEM-сертификат ' +
+          '(ожидается блок "-----BEGIN CERTIFICATE-----")',
+      );
+    }
+    result.ca = caPem;
+  }
+  if (certFile !== undefined && keyFile !== undefined) {
+    result.cert = readProxyPemFile(certFile, 'certFile', /-----BEGIN CERTIFICATE-----/);
+    result.key = readProxyPemFile(keyFile, 'keyFile', /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/);
+  }
+  return result;
 }
 
 /**
@@ -331,29 +508,39 @@ interface PickedUrl {
  * Приоритет: `SYNTH_PROXY_*` > `config.proxy` > стандартные env (при `fromEnv`) >
  * defaults. Явный `proxy.enabled: false` (config) подавляет стандартные env —
  * прокси не включается «из окружения» вопреки конфигу.
+ *
+ * `options.dataDir` нужен только для файла пароля
+ * `{dataDir}/secrets/proxy-password` (инвариант 13).
  */
 export function resolveProxyConfig(
   config: ProxyConfigSource | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  options: { dataDir?: string } = {},
 ): ResolvedProxyConfig {
   const cfg = (config?.proxy ?? {}) as Partial<ProxyConfig>;
   const fromEnv = cfg.fromEnv ?? true;
   const empty = emptyResolvedProxyConfig();
+  const auth = validateProxyAuth(cfg.auth);
 
   const pickUrl = (
     envKey: string,
     cfgValue: string | undefined,
     standard: readonly string[],
   ): PickedUrl => {
+    const take = (raw: string, origin: ProxyConfigOrigin): PickedUrl => {
+      const parsed = parseProxyUrl(raw);
+      const picked: PickedUrl = { value: parsed.href, origin };
+      if (parsed.username !== undefined) picked.username = parsed.username;
+      if (parsed.password !== undefined) picked.password = parsed.password;
+      return picked;
+    };
     const synth = envValue(env, envKey);
-    if (synth !== undefined) return { value: parseProxyUrl(synth).href, origin: 'env' };
-    if (cfgValue !== undefined && cfgValue !== '') {
-      return { value: parseProxyUrl(cfgValue).href, origin: 'config' };
-    }
+    if (synth !== undefined) return take(synth, 'env');
+    if (cfgValue !== undefined && cfgValue !== '') return take(cfgValue, 'config');
     if (fromEnv) {
       for (const key of standard) {
         const raw = envValue(env, key);
-        if (raw !== undefined) return { value: parseProxyUrl(raw).href, origin: 'env' };
+        if (raw !== undefined) return take(raw, 'env');
       }
     }
     return {};
@@ -381,9 +568,32 @@ export function resolveProxyConfig(
     }
   }
 
-  const picked = [url, httpProxy, httpsProxy, allProxy];
+  const fields: Array<[ProxyUrlField, PickedUrl]> = [
+    ['url', url],
+    ['httpProxy', httpProxy],
+    ['httpsProxy', httpsProxy],
+    ['allProxy', allProxy],
+  ];
+  const picked = fields.map(([, value]) => value);
   const urls = picked.map((p) => p.value).filter((value): value is string => value !== undefined);
   const hasAnyUrl = urls.length > 0;
+
+  // Креды: userinfo URL приоритетнее `proxy.auth`; пароль — env/файл (если не в URL).
+  const password = makePasswordResolver(env, options.dataDir);
+  const credentials: ProxyCredentialSet = {};
+  for (const [field, value] of fields) {
+    if (value.value === undefined) continue;
+    const username = value.username ?? auth?.username;
+    if (username === undefined || username === '') continue;
+    const pwd = value.password ?? password();
+    if (pwd === undefined) {
+      throw new ProxyConfigError(
+        `proxy: для пользователя "${username}" не задан пароль — укажите ${PROXY_PASSWORD_ENV} ` +
+          'или файл {dataDir}/secrets/proxy-password (в config.yaml пароль не хранится)',
+      );
+    }
+    credentials[field] = { username, password: pwd };
+  }
 
   const explicitEnv = envBoolean(envValue(env, PROXY_ENV.enabled), PROXY_ENV.enabled);
   const explicitCfg = cfg.enabled;
@@ -426,12 +636,82 @@ export function resolveProxyConfig(
     fromEnv,
     fallbackDirect,
     connectTimeoutMs,
+    // TLS/mTLS к прокси: всегда резолвим (дефолт — системное доверие).
+    tls: resolveProxyTls(config, env),
   };
   if (url.value !== undefined) resolved.url = url.value;
   if (httpProxy.value !== undefined) resolved.httpProxy = httpProxy.value;
   if (httpsProxy.value !== undefined) resolved.httpsProxy = httpsProxy.value;
   if (allProxy.value !== undefined) resolved.allProxy = allProxy.value;
+  if (Object.keys(credentials).length > 0) resolved.credentials = credentials;
   return resolved;
+}
+
+/** Валидация `proxy.auth`: D2a — только `basic`; NTLM/Negotiate — D3/D4. */
+function validateProxyAuth(auth: ProxyAuthConfig | undefined): ProxyAuthConfig | undefined {
+  if (auth === undefined) return undefined;
+  if (auth.type !== 'basic') {
+    throw new ProxyConfigError(
+      `proxy.auth.type "${auth.type}" не поддерживается (NTLM/Negotiate — этапы D3/D4); ` +
+        "доступен только 'basic'",
+    );
+  }
+  if (!auth.username) {
+    throw new ProxyConfigError(
+      'proxy.auth.username обязателен для type=basic (либо задайте userinfo в URL прокси)',
+    );
+  }
+  return auth;
+}
+
+/** Поле URL, выбранное для target-origin (по схеме цели). */
+function proxyFieldFor(origin: string | URL): ProxyUrlField | undefined {
+  let protocol: string;
+  try {
+    protocol = typeof origin === 'string' ? new URL(origin).protocol : origin.protocol;
+  } catch {
+    return undefined;
+  }
+  if (protocol === 'https:') return 'httpsProxy';
+  if (protocol === 'http:') return 'httpProxy';
+  return undefined;
+}
+
+/**
+ * Эффективный прокси для target-origin: `{url, credentials?}` или `undefined`.
+ * Выбор: `httpsProxy`/`httpProxy` по схеме → `allProxy` → общий `url`.
+ */
+export function proxyEntryFor(
+  config: ResolvedProxyConfig,
+  origin: string | URL,
+): { url: string; credentials?: ProxyCredentials } | undefined {
+  const schemeField = proxyFieldFor(origin);
+  if (schemeField === undefined) return undefined;
+  const order: ProxyUrlField[] = [schemeField, 'allProxy', 'url'];
+  for (const field of order) {
+    const value = config[field];
+    if (value !== undefined) {
+      const credentials = config.credentials?.[field];
+      return credentials ? { url: value, credentials } : { url: value };
+    }
+  }
+  return undefined;
+}
+
+/** Прокси по умолчанию (для диагностики/`/settings/proxy/check`). */
+export function defaultProxyEntry(
+  config: ResolvedProxyConfig,
+): { url: string; credentials?: ProxyCredentials } | undefined {
+  if (!config.enabled) return undefined;
+  const order: ProxyUrlField[] = ['httpsProxy', 'allProxy', 'url', 'httpProxy'];
+  for (const field of order) {
+    const value = config[field];
+    if (value !== undefined) {
+      const credentials = config.credentials?.[field];
+      return credentials ? { url: value, credentials } : { url: value };
+    }
+  }
+  return undefined;
 }
 
 /**

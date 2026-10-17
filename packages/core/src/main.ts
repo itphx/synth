@@ -14,9 +14,13 @@ const program = new Command();
  * доверии) → внятная ошибка и ненулевой выход (не тихий фоллбэк на недоверенный
  * транспорт). Пустой конфиг — no-op (системное доверие).
  */
-async function initTls(synth: SynthConfig): Promise<void> {
+async function initTls(
+  synth: SynthConfig,
+  opts: { home?: string | null; dataDir?: string } = {},
+): Promise<void> {
   try {
-    await initTlsTrust({ security: synth.security, proxy: synth.proxy }, process.env);
+    const dataDir = opts.dataDir ? resolve(opts.dataDir) : resolveDataDir(synth, undefined, opts.home ?? null);
+    await initTlsTrust({ security: synth.security, proxy: synth.proxy }, process.env, { dataDir });
   } catch (err) {
     console.error(
       `Ошибка инициализации доверия TLS/CA: ${err instanceof Error ? err.message : String(err)}`,
@@ -107,10 +111,9 @@ program
       overrides,
     });
 
-    // ADR-099: доверие TLS/CA — до первого исходящего запроса (гибрид/обновления).
-    await initTls(synth);
-
     const dataDir = resolveDataDir(synth, undefined, home);
+    // ADR-099: доверие TLS/CA — до первого исходящего запроса (гибрид/обновления).
+    await initTls(synth, { home, dataDir });
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
     const apiKey = synth.core.apiKey || process.env.SYNTH_API_KEY || '';
 
@@ -312,7 +315,7 @@ program
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     // ADR-099: доверие TLS/CA — до запросов к удалённому backend (device flow).
-    await initTls(synth);
+    await initTls(synth, { home });
     const credentialsPath =
       options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
     const { RemoteSession } = await import('./remote/session.js');
@@ -410,9 +413,9 @@ projectCmd
   .action(async (projectId, options) => {
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
-    // ADR-099: доверие TLS/CA — до запросов к удалённому backend.
-    await initTls(synth);
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
+    // ADR-099: доверие TLS/CA — до запросов к удалённому backend.
+    await initTls(synth, { home, dataDir });
     await ensureDataDir(dataDir);
 
     const { SessionManager } = await import('./sessions/manager.js');
@@ -481,9 +484,9 @@ projectCmd
   .action(async (remoteProjectId, options) => {
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
-    // ADR-099: доверие TLS/CA — до запросов к удалённому backend.
-    await initTls(synth);
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
+    // ADR-099: доверие TLS/CA — до запросов к удалённому backend.
+    await initTls(synth, { home, dataDir });
     await ensureDataDir(dataDir);
 
     const { SessionManager } = await import('./sessions/manager.js');
@@ -628,9 +631,9 @@ program
     }
 
     const synth = await loadConfig({ configPath: options.config });
-    // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
-    await initTls(synth);
     const dataDir = resolve(options.dataDir || resolveDataDir(synth));
+    // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
+    await initTls(synth, { dataDir });
     await ensureDataDir(dataDir);
 
     checkForUpdatesBackground(dataDir, (info) => {
@@ -759,9 +762,9 @@ async function startRepl(options: Record<string, unknown>) {
   });
 
   const synth = await loadConfig({ configPath: options.config as string });
-  // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
-  await initTls(synth);
   const dataDir = resolve((options['data-dir'] as string) || resolveDataDir(synth));
+  // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
+  await initTls(synth, { dataDir });
   await ensureDataDir(dataDir);
 
   const { runSingleChat } = await import('./server/chat.js');
@@ -813,9 +816,9 @@ program
   .option('--data-dir <path>', 'каталог данных')
   .action(async (options) => {
     const synth = await loadConfig({});
-    // ADR-099: доверие TLS/CA — до проверки обновлений (npm-реестр).
-    await initTls(synth);
     const dataDir = resolve(options.dataDir || resolveDataDir(synth));
+    // ADR-099: доверие TLS/CA — до проверки обновлений (npm-реестр).
+    await initTls(synth, { dataDir });
     await ensureDataDir(dataDir);
 
     const { runUpdateCommand } = await import('./maintenance/update.js');

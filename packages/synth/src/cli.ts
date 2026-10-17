@@ -16,9 +16,13 @@ const require = createRequire(import.meta.url);
  * доверие из config.yaml (`security.tls`) применяется здесь же. Fail-closed:
  * битый/отсутствующий CA → внятная ошибка и ненулевой выход (не тихий фоллбэк).
  */
-async function initTls(synth: SynthConfig): Promise<void> {
+async function initTls(
+  synth: SynthConfig,
+  opts: { home?: string | null; dataDir?: string } = {},
+): Promise<void> {
   try {
-    await initTlsTrust({ security: synth.security, proxy: synth.proxy }, process.env);
+    const dataDir = opts.dataDir ? resolve(opts.dataDir) : resolveDataDir(synth, undefined, opts.home ?? null);
+    await initTlsTrust({ security: synth.security, proxy: synth.proxy }, process.env, { dataDir });
   } catch (err) {
     console.error(
       `Ошибка инициализации доверия TLS/CA: ${err instanceof Error ? err.message : String(err)}`,
@@ -124,7 +128,7 @@ program
     });
 
     // ADR-099: доверие TLS/CA — до первого исходящего запроса (гибрид/провайдеры).
-    await initTls(synth);
+    await initTls(synth, { home });
 
     const port = resolvePort(synth, 'SYNTH_CORE_PORT', synth.core.port);
 
@@ -305,7 +309,7 @@ program
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
     // ADR-099: доверие TLS/CA — до запросов к удалённому backend (device flow).
-    await initTls(synth);
+    await initTls(synth, { home });
     const credentialsPath =
       options.credentials || synth.remote.credentialsPath || (home ? resolveCredentialsPath(home) : undefined);
     const { RemoteSession } = await import('@itphx/synth-core/remote');
@@ -407,7 +411,7 @@ projectCmd
     await ensureDataDir(dataDir);
 
     // ADR-099: доверие TLS/CA — до запросов к удалённому backend.
-    await initTls(synth);
+    await initTls(synth, { home, dataDir });
     const { FileStore, SessionManager, ProjectStore } = await import('@itphx/synth-core');
     const { syncProjectToRemote, resolveLocalWorkspace } = await import('@itphx/synth-core/remote');
 
@@ -477,7 +481,7 @@ projectCmd
     await ensureDataDir(dataDir);
 
     // ADR-099: доверие TLS/CA — до запросов к удалённому backend.
-    await initTls(synth);
+    await initTls(synth, { home, dataDir });
     const { FileStore, SessionManager, ProjectStore } = await import('@itphx/synth-core');
     const { forkProjectToLocal } = await import('@itphx/synth-core/remote');
 
@@ -626,9 +630,9 @@ program
     }
 
     const synth = await loadConfig({});
-    // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
-    await initTls(synth);
     const { dataDir } = await ensureFirstRun(options['data-dir'] as string | undefined);
+    // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
+    await initTls(synth, { dataDir });
 
     await runSingleChat({
       message,
@@ -935,9 +939,9 @@ program
   .action(async (options) => {
     const home = resolveHome(options.home);
     const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
-    // ADR-099: доверие TLS/CA — до проверки обновлений (npm-реестр).
-    await initTls(synth);
     const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
+    // ADR-099: доверие TLS/CA — до проверки обновлений (npm-реестр).
+    await initTls(synth, { home, dataDir });
 
     const { runUpdateCommand, buildStorageContext } = await import('@itphx/synth-core');
     const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home });
@@ -1131,9 +1135,9 @@ async function startRepl(options: Record<string, unknown>) {
   });
 
   const synth = await loadConfig({});
-  // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
-  await initTls(synth);
   const { dataDir } = await ensureFirstRun((options['data-dir'] as string) || undefined);
+  // ADR-099: доверие TLS/CA — до запроса к LLM-провайдеру.
+  await initTls(synth, { dataDir });
 
   console.log(`Провайдер: ${options.provider || synth.llm.defaultProvider || '(не задан)'}`);
   console.log(`Модель: ${options.model || synth.llm.defaultModel || '(не задана)'}`);

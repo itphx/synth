@@ -17,9 +17,11 @@
 import { Agent, Dispatcher, ProxyAgent } from 'undici';
 import {
   NoProxyMatcher,
-  proxyUrlFor,
+  proxyEntryFor,
   redactProxyUrl,
+  type ProxyCredentials,
   type ResolvedProxyConfig,
+  type ResolvedProxyTls,
 } from '@itphx/synth-shared';
 import { EGRESS_VIA, type EgressVia, type EgressViaReporter } from './proxy-state.js';
 
@@ -31,6 +33,30 @@ export class EgressProxyUnavailableError extends Error {
     super(message, options);
     this.name = 'EgressProxyUnavailableError';
   }
+}
+
+/**
+ * Ошибка аутентификации прокси (D2a): `407` без кред либо с неверными.
+ * Direct-фоллбек для auth-ошибок **не применяется** даже при `fallbackDirect`.
+ */
+export class EgressProxyAuthError extends Error {
+  readonly code: 'EGRESS_PROXY_AUTH_REQUIRED' | 'EGRESS_PROXY_AUTH_FAILED';
+
+  constructor(
+    code: 'EGRESS_PROXY_AUTH_REQUIRED' | 'EGRESS_PROXY_AUTH_FAILED',
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = 'EgressProxyAuthError';
+    this.code = code;
+  }
+}
+
+/** `true`, если ошибка транспорта — ответ прокси `407` (auth required). */
+function isProxyAuthFailure(error: unknown): boolean {
+  const reason = error instanceof Error ? error.message : String(error);
+  return /Proxy Authentication Required \(407\)|Proxy response \(407\)/i.test(reason);
 }
 
 /** TLS-опции соединения (совместимы с `undici` `connect`/`requestTls`). */
@@ -82,7 +108,7 @@ export class EgressDispatcher extends Dispatcher {
     } catch {
       return 'direct';
     }
-    if (proxyUrlFor(this.#proxy, url) === undefined) return 'direct';
+    if (proxyEntryFor(this.#proxy, url) === undefined) return 'direct';
     const port = url.port || (url.protocol === 'https:' ? '443' : '80');
     return this.#matcher.matches(url.hostname, port) ? 'direct' : 'proxy';
   }
@@ -98,15 +124,15 @@ export class EgressDispatcher extends Dispatcher {
       return this.#direct.dispatch(opts, handler);
     }
 
-    const proxyUrl = url ? proxyUrlFor(this.#proxy, url) : undefined;
-    if (proxyUrl === undefined) {
+    const entry = url ? proxyEntryFor(this.#proxy, url) : undefined;
+    if (entry === undefined) {
       reporter?.('direct');
       return this.#direct.dispatch(opts, handler);
     }
 
-    const proxy = this.#proxyAgent(origin, proxyUrl);
+    const proxy = this.#proxyAgent(origin, entry.url, entry.credentials);
     reporter?.('proxy');
-    return this.#dispatchViaProxy(proxy, opts, handler, reporter, proxyUrl);
+    return this.#dispatchViaProxy(proxy, opts, handler, reporter, entry.url, entry.credentials !== undefined);
   }
 
   /** TLS-опции соединения с целью (CA/mTLS из `security.tls`). */
@@ -132,17 +158,25 @@ export class EgressDispatcher extends Dispatcher {
   }
 
   /** Прокси-агент для пары `origin+proxy` (кэш на время жизни процесса). */
-  #proxyAgent(origin: string | URL, proxyUrl: string): ProxyAgent {
-    const key = `${typeof origin === 'string' ? origin : origin.origin}|${proxyUrl}`;
+  #proxyAgent(origin: string | URL, proxyUrl: string, credentials?: ProxyCredentials): ProxyAgent {
+    const authKey = credentials ? `${credentials.username}:${credentials.password.length}` : '';
+    const key = `${typeof origin === 'string' ? origin : origin.origin}|${proxyUrl}|${authKey}`;
     const cached = this.#proxies.get(key);
     if (cached) return cached;
+    const proxyTls: ResolvedProxyTls = this.#proxy.tls ?? { rejectUnauthorized: true };
     const agent = new ProxyAgent({
       uri: proxyUrl,
       // TLS к **цели** — доверие `security.tls` (CA/mTLS).
       requestTls: this.#requestTls,
+      // TLS/mTLS к самому прокси (`proxy.tls`); https-прокси.
+      proxyTls: proxyTls as unknown as Record<string, unknown>,
       // Соединение с прокси — только таймаут; target-CA/mTLS сюда не попадают.
       connect: { timeout: this.#proxy.connectTimeoutMs },
-      // Задел D2: TLS к https-прокси (`proxyTls`) — системное доверие по умолчанию.
+      // Basic — именно `token` (undici кладёт `Proxy-Authorization` сразу
+      // в CONNECT-заголовки; `auth`/ручной заголовок запрещены undici).
+      ...(credentials
+        ? { token: `Basic ${Buffer.from(`${credentials.username}:${credentials.password}`, 'utf8').toString('base64')}` }
+        : {}),
     });
     this.#proxies.set(key, agent);
     return agent;
@@ -168,6 +202,7 @@ export class EgressDispatcher extends Dispatcher {
     handler: Dispatcher.DispatchHandler,
     reporter: EgressViaReporter | undefined,
     proxyUrl: string,
+    hasCredentials: boolean,
   ): boolean {
     let headersReceived = false;
 
@@ -191,7 +226,7 @@ export class EgressDispatcher extends Dispatcher {
       onResponseError: (controller, error) => {
         if (
           !headersReceived &&
-          this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, {
+          this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, hasCredentials, {
             style: 'response',
             controller,
           })
@@ -222,7 +257,9 @@ export class EgressDispatcher extends Dispatcher {
       onError: (error) => {
         if (
           !headersReceived &&
-          this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, { style: 'error' })
+          this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, hasCredentials, {
+            style: 'error',
+          })
         ) {
           return;
         }
@@ -238,7 +275,11 @@ export class EgressDispatcher extends Dispatcher {
     } catch (err) {
       // Синхронный throw (недоступность прокси обычно приходит асинхронно):
       // сообщаем хендлеру в его контракте, а не проглатываем.
-      if (this.#handleProxyFailure(err, opts, handler, reporter, proxyUrl, { style: 'response' })) {
+      if (
+        this.#handleProxyFailure(err, opts, handler, reporter, proxyUrl, hasCredentials, {
+          style: 'response',
+        })
+      ) {
         return true;
       }
       throw err;
@@ -256,9 +297,22 @@ export class EgressDispatcher extends Dispatcher {
     handler: Dispatcher.DispatchHandler,
     reporter: EgressViaReporter | undefined,
     proxyUrl: string,
+    hasCredentials: boolean,
     delivery: { style: 'response' | 'error'; controller?: Dispatcher.DispatchController },
   ): boolean {
     const reason = error instanceof Error ? error.message : String(error);
+    // D2a: 407 — auth-ошибка; direct-фоллбек запрещён даже при fallbackDirect.
+    if (isProxyAuthFailure(error)) {
+      const authError = new EgressProxyAuthError(
+        hasCredentials ? 'EGRESS_PROXY_AUTH_FAILED' : 'EGRESS_PROXY_AUTH_REQUIRED',
+        hasCredentials
+          ? `Прокси ${redactProxyUrl(proxyUrl)} отклонил учётные данные (407)`
+          : `Прокси ${redactProxyUrl(proxyUrl)} требует аутентификации (407)`,
+        { cause: error },
+      );
+      this.#deliverProxyError(authError, handler, delivery);
+      return true;
+    }
     if (this.#proxy.fallbackDirect) {
       this.#warn(
         `[egress] прокси ${redactProxyUrl(proxyUrl)} недоступен (${reason}); ` +
@@ -272,24 +326,31 @@ export class EgressDispatcher extends Dispatcher {
       `Прокси ${redactProxyUrl(proxyUrl)} недоступен: ${reason}`,
       { cause: error },
     );
-    // Приводим доставку к контракту хендлера: legacy → onError, new-style →
-    // onResponseError(controller, err). При синхронном throw controller ещё нет —
-    // отдаём безопасную заглушку (запрос не стартовал).
-    const respondWithError = (): void => {
-      const controller = delivery.controller ?? failedDispatchController(unavailable);
-      if (delivery.style === 'response' && typeof handler.onResponseError === 'function') {
-        handler.onResponseError(controller, unavailable);
-        return;
-      }
-      if (typeof handler.onError === 'function') {
-        handler.onError(unavailable);
-        return;
-      }
-      // Хендлер реализует только новый контракт, а транспорт сообщил legacy-ошибку.
-      handler.onResponseError?.(controller, unavailable);
-    };
-    respondWithError();
+    this.#deliverProxyError(unavailable, handler, delivery);
     return true;
+  }
+
+  /**
+   * Доставляет ошибку прокси в контракте хендлера: legacy → `onError`,
+   * new-style → `onResponseError(controller, err)`. При синхронном throw
+   * controller ещё нет — отдаём безопасную заглушку (запрос не стартовал).
+   */
+  #deliverProxyError(
+    error: Error,
+    handler: Dispatcher.DispatchHandler,
+    delivery: { style: 'response' | 'error'; controller?: Dispatcher.DispatchController },
+  ): void {
+    const controller = delivery.controller ?? failedDispatchController(error);
+    if (delivery.style === 'response' && typeof handler.onResponseError === 'function') {
+      handler.onResponseError(controller, error);
+      return;
+    }
+    if (typeof handler.onError === 'function') {
+      handler.onError(error);
+      return;
+    }
+    // Хендлер реализует только новый контракт, а транспорт сообщил legacy-ошибку.
+    handler.onResponseError?.(controller, error);
   }
 
   async #closeAll(kind: 'close' | 'destroy', err?: Error | null): Promise<void> {

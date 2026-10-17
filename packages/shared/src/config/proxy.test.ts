@@ -1,12 +1,17 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   NoProxyMatcher,
+  PROXY_PASSWORD_ENV,
   ProxyConfigError,
+  defaultProxyEntry,
   parseProxyUrl,
+  proxyEntryFor,
   proxyStatus,
   proxyUrlFor,
   redactProxyUrl,
   resolveProxyConfig,
+  resolveProxyTls,
   shouldProxyUrl,
 } from './proxy.js';
 
@@ -84,15 +89,15 @@ describe('parseProxyUrl (fail-closed)', () => {
     expect(() => parseProxyUrl('socks5://proxy:1080')).toThrow(ProxyConfigError);
   });
 
-  it('userinfo (Basic/NTLM) — этап D2 (ошибка, секрет не эхоится)', () => {
-    let message = '';
-    try {
-      parseProxyUrl('http://user:secret@proxy:3128');
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
-    }
-    expect(message).toMatch(/этап D2/i);
-    expect(message).not.toContain('secret');
+  it('userinfo извлекается отдельно, href — без кред', () => {
+    const parsed = parseProxyUrl('http://user:secret@proxy:3128');
+    expect(parsed.href).toBe('http://proxy:3128');
+    expect(parsed.username).toBe('user');
+    expect(parsed.password).toBe('secret');
+  });
+
+  it('пароль без username — ошибка', () => {
+    expect(() => parseProxyUrl('http://:secret@proxy:3128')).toThrow(ProxyConfigError);
   });
 
   it('битый URL/чужая схема — ошибка', () => {
@@ -246,5 +251,155 @@ describe('redactProxyUrl / proxyStatus (секреты не утекают)', ()
     expect(json).not.toContain('secret');
     expect(status.url).toBe('http://proxy:3128');
     expect(status.restartRequired).toBe(true);
+  });
+});
+
+describe('proxy.auth / credentials (D2a)', () => {
+  it('env-пароль + auth.username → Basic-креды', () => {
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'http://proxy:3128', auth: { type: 'basic', username: 'user' }, fromEnv: false } },
+      { [PROXY_PASSWORD_ENV]: 'secret' },
+    );
+    expect(cfg.url).toBe('http://proxy:3128');
+    expect(cfg.credentials?.url).toEqual({ username: 'user', password: 'secret' });
+  });
+
+  it('userinfo без пароля + env-пароль → креды из URL + env', () => {
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'http://user@proxy:3128', fromEnv: false } },
+      { [PROXY_PASSWORD_ENV]: 'secret' },
+    );
+    expect(cfg.url).toBe('http://proxy:3128');
+    expect(cfg.credentials?.url).toEqual({ username: 'user', password: 'secret' });
+  });
+
+  it('userinfo с паролем имеет приоритет (пароль не нужен)', () => {
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'http://user:urlpass@proxy:3128', fromEnv: false } },
+      { [PROXY_PASSWORD_ENV]: 'envpass' },
+    );
+    expect(cfg.credentials?.url).toEqual({ username: 'user', password: 'urlpass' });
+  });
+
+  it('username без пароля (нет env/файла) → fail-closed', () => {
+    expect(() =>
+      resolveProxyConfig(
+        { proxy: { url: 'http://user@proxy:3128', fromEnv: false } },
+        {},
+      ),
+    ).toThrow(/не задан пароль/);
+  });
+
+  it('auth.type ntlm/negotiate → ошибка (D3/D4)', () => {
+    expect(() =>
+      resolveProxyConfig(
+        { proxy: { url: 'http://proxy:3128', auth: { type: 'ntlm', username: 'u' }, fromEnv: false } },
+        {},
+      ),
+    ).toThrow(/D3\/D4/);
+    expect(() =>
+      resolveProxyConfig(
+        { proxy: { url: 'http://proxy:3128', auth: { type: 'negotiate', username: 'u' }, fromEnv: false } },
+        {},
+      ),
+    ).toThrow(/D3\/D4/);
+  });
+
+  it('креды по полям: httpProxy/httpsProxy независимы; proxyEntryFor выбирает по схеме', () => {
+    const cfg = resolveProxyConfig(
+      {
+        proxy: {
+          httpProxy: 'http://user:http@http-proxy:3128',
+          httpsProxy: 'http://user:https@https-proxy:3128',
+          fromEnv: false,
+        },
+      },
+      {},
+    );
+    expect(cfg.credentials?.httpProxy).toEqual({ username: 'user', password: 'http' });
+    expect(cfg.credentials?.httpsProxy).toEqual({ username: 'user', password: 'https' });
+    expect(proxyEntryFor(cfg, 'https://example.com')).toEqual({
+      url: 'http://https-proxy:3128',
+      credentials: { username: 'user', password: 'https' },
+    });
+    expect(proxyEntryFor(cfg, 'http://example.com')).toEqual({
+      url: 'http://http-proxy:3128',
+      credentials: { username: 'user', password: 'http' },
+    });
+    expect(defaultProxyEntry(cfg)?.url).toBe('http://https-proxy:3128');
+  });
+});
+
+describe('proxy.tls (D2a)', () => {
+  const fixture = (name: string): string =>
+    new URL(`../../../core/src/security/__fixtures__/${name}`, import.meta.url).pathname;
+
+  it('caPem/cert/key/rejectUnauthorized', () => {
+    const caPem = readFileSync(fixture('tls-test-proxy.pem'), 'utf8');
+    const cert = readFileSync(fixture('tls-test-proxy-client.pem'), 'utf8');
+    const key = readFileSync(fixture('tls-test-proxy-client.key'), 'utf8');
+    const cfg = resolveProxyConfig(
+      {
+        proxy: {
+          url: 'https://proxy:3128',
+          tls: {
+            caPem,
+            certFile: fixture('tls-test-proxy-client.pem'),
+            keyFile: fixture('tls-test-proxy-client.key'),
+            rejectUnauthorized: false,
+          },
+          fromEnv: false,
+        },
+      },
+      {},
+    );
+    expect(cfg.tls?.ca).toBe(caPem);
+    expect(cfg.tls?.rejectUnauthorized).toBe(false);
+    expect(cfg.tls?.cert).toBe(cert);
+    expect(cfg.tls?.key).toBe(key);
+  });
+
+  it('caFile ↔ caPem взаимоисключающие', () => {
+    expect(() =>
+      resolveProxyTls(
+        { proxy: { tls: { caFile: fixture('tls-test-proxy.pem'), caPem: 'x' } } },
+        {},
+      ),
+    ).toThrow(/взаимоисключащи/);
+  });
+
+  it('certFile без keyFile → ошибка; нечитаемый/не-PEM файл → fail-closed', () => {
+    expect(() =>
+      resolveProxyTls({ proxy: { tls: { certFile: fixture('tls-test-proxy.pem') } } }, {}),
+    ).toThrow(/certFile, и keyFile/);
+    expect(() =>
+      resolveProxyTls({ proxy: { tls: { caFile: '/no/such/proxy-ca.pem' } } }, {}),
+    ).toThrow(/proxy\.tls\.caFile/);
+    expect(() =>
+      resolveProxyTls({ proxy: { tls: { caFile: fixture('tls-test-proxy.key') } } }, {}),
+    ).toThrow(/не содержит PEM/);
+  });
+
+  it('env SYNTH_PROXY_TLS_* имеет приоритет', () => {
+    const tls = resolveProxyTls(
+      { proxy: { tls: { rejectUnauthorized: true } } },
+      { SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED: 'false' },
+    );
+    expect(tls.rejectUnauthorized).toBe(false);
+  });
+});
+
+describe('redaction resolved-конфига (D2a)', () => {
+  it('userinfo вырезан из URL/статуса, креды только в credentials', () => {
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'http://user:super-secret@proxy.corp:3128', fromEnv: false } },
+      {},
+    );
+    expect(cfg.url).toBe('http://proxy.corp:3128');
+    expect(cfg.credentials?.url).toEqual({ username: 'user', password: 'super-secret' });
+    const status = proxyStatus(cfg);
+    expect(status.url).toBe('http://proxy.corp:3128');
+    expect(JSON.stringify(status)).not.toContain('super-secret');
+    expect(JSON.stringify(status)).not.toContain('user:');
   });
 });
