@@ -35,6 +35,9 @@ ADR-097): реализация доменных портов `StorageContext` (`
   портов/`StorageContext` — только `import type`. Это разрывает цикл core ↔ драйвер:
   core держит драйвер в `optionalDependencies` и подключает его динамическим
   `import()` по `storage.backend === 'postgres'`, бандлить драйвер в `cli.js` нельзя.
+  Цикл **намеренный** и разрешён `ignoreWorkspaceCycles: true` в корневом
+  `pnpm-workspace.yaml` (pnpm ≥12 иначе роняет рекурсивные `pnpm typecheck`/`lint`/`test`
+  с `ERR_PNPM_TASK_CYCLE`; между задачами зависимостей нет).
   **Осознанное исключение** (волна 3a): FS/package-bound порты (`skills`,
   `contextFiles`, `blobs`) отдаются **файловыми реализациями** `core`
   (`createFileStorage`), поэтому `storage-context.ts` импортирует `core` рантаймом.

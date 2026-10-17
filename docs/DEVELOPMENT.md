@@ -5,7 +5,10 @@
 ## Требования
 
 - **Node.js** >= 22
-- **pnpm** >= 11
+- **pnpm** >= 11 (CI ставит `pnpm@latest`; цикл workspace-пакетов
+  `core ↔ @itphx/synth-storage-postgres` **намеренный** и разрешён
+  `ignoreWorkspaceCycles: true` в `pnpm-workspace.yaml` — иначе pnpm ≥12 роняет
+  рекурсивные `pnpm typecheck`/`lint`/`test` с `ERR_PNPM_TASK_CYCLE`)
 
 ## Быстрый старт
 

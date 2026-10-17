@@ -116,10 +116,16 @@ jobs:
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
 
-      - name: Сборка @itphx/synth-shared и @itphx/synth-core
+      # Драйвер хранилища собирается тем же шагом: рекурсивный `pnpm test` ниже включает
+      # тесты core, а тесты деградации (storage-context.degraded.test.ts) не гейтятся
+      # SYNTH_TEST_POSTGRES_DSN и динамически импортируют `@itphx/synth-storage-postgres` —
+      # без его собранного dist прогон падает (StorageBackendUnavailableError).
+      # Тот же шаг есть в ci.yaml (джоба `test-core`); порядок — shared → core → драйвер.
+      - name: Сборка @itphx/synth-shared, @itphx/synth-core и @itphx/synth-storage-postgres
         run: |
           pnpm --filter @itphx/synth-shared build
           pnpm --filter @itphx/synth-core build
+          pnpm --filter @itphx/synth-storage-postgres build
 
       - name: TypeScript (typecheck)
         run: pnpm typecheck
