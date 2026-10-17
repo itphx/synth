@@ -81,6 +81,7 @@ import { ScheduleStore } from './schedule-store.js';
 import { JobStore } from './job-store.js';
 import { MaintenanceAuditStore } from './maintenance-audit-store.js';
 import { SecurityAuditStore } from './security-audit-store.js';
+import { applyStartupProxyConfig } from '../security/proxy-startup.js';
 import { EgressRequestLogStore } from './egress-request-log-store.js';
 import { FileDedupStore, MemoryDedupStore } from '../engine/events/dedup-store.js';
 import { SkillStore } from './skill-store.js';
@@ -895,7 +896,7 @@ export async function buildStorageContext(
 ): Promise<StorageContext> {
   const env = opts.env ?? process.env;
   const kind = resolveStorageBackend(opts.config, env);
-  return createStorageContextAsync(kind, {
+  const storage = await createStorageContextAsync(kind, {
     dataDir: opts.dataDir,
     secretKey: opts.secretKey ?? resolveSecretKey(opts.config, env),
     env,
@@ -913,4 +914,14 @@ export async function buildStorageContext(
     contextUserDataDir: opts.contextUserDataDir,
     systemDictionariesDir: opts.systemDictionariesDir,
   });
+  // ADR-099: CLI/обслуживание — после создания storage применяем прокси
+  // (config ← runtime) до дальнейших исходящих запросов. В серверных точках
+  // (`createStandaloneApp`/`createBackendStorage`) тот же шаг выполняется явно.
+  await applyStartupProxyConfig(
+    storage.settings,
+    { proxy: opts.config.proxy },
+    env,
+    { dataDir: opts.dataDir },
+  );
+  return storage;
 }

@@ -8,6 +8,7 @@ import type {
   ToolsDisabledConfig,
   ToolsPolicy,
   WorkspaceOutsideRootPolicy,
+  ProxyConfig,
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
@@ -99,4 +100,9 @@ export interface SettingsRepository {
   getDecision(): Promise<Partial<DecisionRuntimeSettings>>;
   setDecision(config: Partial<DecisionRuntimeSettings>): Promise<void>;
   clearDecision(): Promise<void>;
+
+  /** ADR-099: runtime-override секции `proxy` (без секретов). */
+  getProxySettings(): Promise<Partial<ProxyConfig> | undefined>;
+  setProxySettings(config: Partial<ProxyConfig>): Promise<void>;
+  clearProxySettings(): Promise<void>;
 }

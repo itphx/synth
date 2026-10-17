@@ -630,6 +630,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // Egress: дефолты config.yaml для GET/DELETE-сброса + аудит изменений.
     fallbackEgressTools: config.synth.egress.tools,
     fallbackEgressWebhooks: config.synth.egress.webhooks,
+    // ADR-099: прокси — config-уровень, runtime-override и файл пароля.
+    fallbackProxy: config.synth.proxy,
+    dataDir,
+    env: process.env,
     securityAudit,
     resolveActor: (c) => {
       const user = c.get('user') as { id?: unknown } | undefined;

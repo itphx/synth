@@ -212,6 +212,7 @@ type McpNetworkPolicy = NonNullable<Awaited<ReturnType<SettingsPort['getMcpNetwo
 type WorkspacePolicy = NonNullable<Awaited<ReturnType<SettingsPort['getWorkspacePolicy']>>>;
 type EventsSettings = Awaited<ReturnType<SettingsPort['getEvents']>>;
 type DecisionSettings = Awaited<ReturnType<SettingsPort['getDecision']>>;
+type ProxySettings = NonNullable<Awaited<ReturnType<SettingsPort['getProxySettings']>>>;
 
 /** Секции `settings.json` «один геттер → один сеттер» (кроме карт-исключений). */
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
@@ -289,6 +290,11 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
     key: 'decision',
     read: (s) => s.getDecision(),
     write: (s, v) => s.setDecision(v as DecisionSettings),
+  },
+  {
+    key: 'proxy',
+    read: (s) => s.getProxySettings(),
+    write: (s, v) => s.setProxySettings(v as ProxySettings),
   },
 ];
 

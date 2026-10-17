@@ -28,6 +28,7 @@ import type {
   ToolsDisabledConfig,
   ToolsPolicy,
   WorkspaceOutsideRootPolicy,
+  ProxyConfig,
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
@@ -276,6 +277,18 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearDecision(): Promise<void> {
     this._clear('decision');
+  }
+
+  async getProxySettings(): Promise<Partial<ProxyConfig> | undefined> {
+    return this._settings.proxy ? structuredClone(this._settings.proxy) : undefined;
+  }
+
+  async setProxySettings(config: Partial<ProxyConfig>): Promise<void> {
+    this._patch({ proxy: config });
+  }
+
+  async clearProxySettings(): Promise<void> {
+    this._clear('proxy');
   }
 }
 

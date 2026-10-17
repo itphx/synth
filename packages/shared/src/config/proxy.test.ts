@@ -10,9 +10,11 @@ import {
   proxyStatus,
   proxyUrlFor,
   redactProxyUrl,
+  mergeProxyConfig,
   resolveProxyConfig,
   resolveProxyTls,
   shouldProxyUrl,
+  validateProxyConfig,
 } from './proxy.js';
 
 describe('NoProxyMatcher (ADR-099 D1)', () => {
@@ -462,5 +464,139 @@ describe('SOCKS5-конфиг (D2b)', () => {
     );
     expect(proxyStatus(cfg).url).toBe('socks5://proxy:1080');
     expect(JSON.stringify(proxyStatus(cfg))).not.toContain('secret');
+  });
+});
+
+describe('runtime-override (ADR-099: settings/UI)', () => {
+  it('runtime > config: URL и noProxy берутся из runtime, source=runtime', () => {
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'http://config:3128', noProxy: ['config.local'], fromEnv: false } },
+      {},
+      { runtime: { url: 'http://ui:8080', noProxy: ['ui.local'] } },
+    );
+    expect(cfg.url).toBe('http://ui:8080');
+    expect(cfg.noProxy).toEqual(['ui.local']);
+    expect(cfg.source).toBe('runtime');
+  });
+
+  it('env > runtime: явный SYNTH_PROXY_URL перекрывает UI', () => {
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'http://config:3128', fromEnv: false } },
+      { SYNTH_PROXY_URL: 'http://deploy:3128' },
+      { runtime: { url: 'http://ui:8080' } },
+    );
+    expect(cfg.url).toBe('http://deploy:3128');
+    expect(cfg.source).toBe('env');
+  });
+
+  it('runtime enabled:false подавляет config URL и стандартные env', () => {
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'http://config:3128' } },
+      { HTTPS_PROXY: 'http://std:3128' },
+      { runtime: { enabled: false } },
+    );
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.source).toBe('none');
+    expect(shouldProxyUrl(cfg, 'https://example.com')).toBe(false);
+  });
+
+  it('runtime fromEnv:false игнорирует стандартные env', () => {
+    const cfg = resolveProxyConfig(
+      {},
+      { HTTPS_PROXY: 'http://std:3128' },
+      { runtime: { fromEnv: false } },
+    );
+    expect(cfg.enabled).toBe(false);
+  });
+
+  it('креды не требуются, если прокси выключен (enabled:false)', () => {
+    const cfg = resolveProxyConfig(
+      {
+        proxy: {
+          enabled: false,
+          url: 'http://user@proxy:3128',
+          fromEnv: false,
+        },
+      },
+      {},
+    );
+    expect(cfg.enabled).toBe(false);
+    expect(cfg.credentials).toBeUndefined();
+  });
+
+  it('mergeProxyConfig: вложенные tls/auth мёржатся по полям', () => {
+    const merged = mergeProxyConfig(
+      { url: 'http://config:3128', tls: { caFile: '/ca.pem', rejectUnauthorized: true } },
+      { tls: { rejectUnauthorized: false } },
+    );
+    expect(merged.url).toBe('http://config:3128');
+    expect(merged.tls).toEqual({ caFile: '/ca.pem', rejectUnauthorized: false });
+  });
+});
+
+describe('validateProxyConfig (сохранение runtime-override)', () => {
+  it('возвращает нормализованную схему (defaults)', () => {
+    const config = validateProxyConfig({ url: 'http://proxy:3128' }, {});
+    expect(config.url).toBe('http://proxy:3128');
+    expect(config.noProxy).toEqual([]);
+    expect(config.fromEnv).toBe(true);
+    expect(config.fallbackDirect).toBe(false);
+    expect(config.connectTimeoutMs).toBe(10_000);
+  });
+
+  it('bad URL / socks: / ftp / ntlm → понятная ошибка', () => {
+    expect(() => validateProxyConfig({ url: 'not-a-url' }, {})).toThrow(/некорректный URL/);
+    expect(() => validateProxyConfig({ url: 'socks://proxy:1080' }, {})).toThrow(/socks:/);
+    expect(() => validateProxyConfig({ url: 'ftp://proxy:21' }, {})).toThrow(/не поддерживается/);
+    expect(() =>
+      validateProxyConfig({ url: 'http://proxy:3128', auth: { type: 'ntlm', username: 'u' } }, {}),
+    ).toThrow(/не поддерживается/);
+  });
+
+  it('пароль в userinfo запрещён (инвариант 13)', () => {
+    expect(() => validateProxyConfig({ url: 'http://user:pass@proxy:3128' }, {})).toThrow(
+      /пароль в URL не хранится/,
+    );
+  });
+
+  it('username без пароля (нет env/файла) → ошибка; с env → ok', () => {
+    const input = {
+      url: 'http://proxy:3128',
+      auth: { type: 'basic' as const, username: 'user' },
+      fromEnv: false,
+    };
+    expect(() => validateProxyConfig(input, {})).toThrow(/не задан пароль/);
+    expect(() => validateProxyConfig(input, { [PROXY_PASSWORD_ENV]: 'pass' })).not.toThrow();
+  });
+
+  it('tls: caFile ↔ caPem взаимоисключащи, cert/key только вместе', () => {
+    expect(() =>
+      validateProxyConfig(
+        { url: 'http://proxy:3128', tls: { caFile: '/a.pem', caPem: 'PEM' }, fromEnv: false },
+        {},
+      ),
+    ).toThrow(/взаимоисключащи/);
+    expect(() =>
+      validateProxyConfig(
+        { url: 'http://proxy:3128', tls: { certFile: '/c.pem' }, fromEnv: false },
+        {},
+      ),
+    ).toThrow(/certFile.*keyFile|и certFile, и keyFile/);
+  });
+
+  it('SYNTH_PROXY_* не маскируют невалидный сохраняемый объект', () => {
+    expect(() =>
+      validateProxyConfig({ url: 'not-a-url' }, { SYNTH_PROXY_URL: 'http://env:3128' }),
+    ).toThrow(/некорректный URL/);
+  });
+
+  it('ProxyConfigError-код', () => {
+    try {
+      validateProxyConfig({ url: 'not-a-url' }, {});
+      throw new Error('expected');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProxyConfigError);
+      expect((err as ProxyConfigError).code).toBe('EGRESS_PROXY_CONFIG_INVALID');
+    }
   });
 });

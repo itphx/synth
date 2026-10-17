@@ -25,6 +25,7 @@ import {
   resolveProxyConfig,
   resolveTlsConfig,
   resolveTlsTrust,
+  type ProxyConfig,
   type ProxyConfigSource,
   type ResolvedProxyConfig,
   type ResolvedTlsConfig,
@@ -64,6 +65,12 @@ export interface ApplyTlsTrustDeps {
   proxy?: ResolvedProxyConfig | null;
   /** ADR-099 (D2a): каталог данных — для файла `{dataDir}/secrets/proxy-password`. */
   dataDir?: string;
+}
+
+/** Опции применения runtime-override прокси при старте (`applyEgressProxyConfig`). */
+export interface ApplyEgressProxyDeps extends ApplyTlsTrustDeps {
+  /** Runtime-override (`RuntimeSettings.proxy`) поверх `config.yaml proxy`. */
+  runtime?: Partial<ProxyConfig> | undefined;
 }
 
 export interface EgressFetchDeps {
@@ -183,6 +190,35 @@ export async function initTlsTrust(
   _resolved = bundle.resolved;
   await applyGlobalTlsTrust(bundle.trust, { ...deps, proxy });
   return bundle.trust;
+}
+
+/**
+ * ADR-099: применить уже резолвленную конфигурацию прокси к процессу —
+ * заменить текущий TLS-dispatcher на `EgressDispatcher` (или вернуть `Agent`
+ * при выключенном прокси). Вызывается при старте; live-переключения нет.
+ */
+export async function configureEgressProxy(
+  proxy: ResolvedProxyConfig,
+  deps: ApplyTlsTrustDeps = {},
+): Promise<void> {
+  setEgressProxyConfig(proxy);
+  await applyGlobalTlsTrust(_trust ?? { rejectUnauthorized: true }, { ...deps, proxy });
+}
+
+/**
+ * Второй шаг инициализации egress после сборки хранилища: резолвит `proxy` с
+ * runtime-override (`{dataDir}/settings.json`/PG) и применяет dispatcher **до**
+ * создания провайдеров/deps. `initTlsTrust` остаётся первым (TLS/PG), потому что
+ * хранилище нужно, чтобы прочитать runtime-настройку.
+ */
+export async function applyEgressProxyConfig(
+  config: ProxyConfigSource | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  deps: ApplyEgressProxyDeps = {},
+): Promise<ResolvedProxyConfig> {
+  const proxy = resolveProxyConfig(config, env, { dataDir: deps.dataDir, runtime: deps.runtime });
+  await configureEgressProxy(proxy, deps);
+  return proxy;
 }
 
 /**

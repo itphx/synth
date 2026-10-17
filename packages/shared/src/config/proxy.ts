@@ -15,6 +15,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BlockList, isIP } from 'node:net';
+import { proxyConfigSchema } from './types.js';
 import type { ProxyAuthConfig, ProxyConfig, ProxyTlsConfig } from './types.js';
 
 /** Env-имена секции `proxy` (ADR-023). */
@@ -72,8 +73,8 @@ export interface ProxyConfigSource {
   proxy?: Partial<ProxyConfig> | undefined;
 }
 
-/** Откуда взято эффективное значение. */
-export type ProxyConfigOrigin = 'env' | 'config';
+/** Откуда взято эффективное значение (`runtime` — UI-override, `env` — `SYNTH_PROXY_*`). */
+export type ProxyConfigOrigin = 'env' | 'runtime' | 'config';
 
 /** Креды Basic-аутентификации прокси (в памяти; наружу не отдаются). */
 export interface ProxyCredentials {
@@ -92,11 +93,11 @@ export interface ResolvedProxyTls {
   rejectUnauthorized: boolean;
 }
 
-/** Эффективная конфигурация прокси (после слияния env/config/defaults). */
+/** Эффективная конфигурация прокси (после слияния env/runtime/config/defaults). */
 export interface ResolvedProxyConfig {
   enabled: boolean;
-  /** Источник эффективного прокси-URL: `env` | `config`; `none` — прокси выключен. */
-  source: 'env' | 'config' | 'none';
+  /** Источник эффективного прокси-URL: `env` | `runtime` | `config`; `none` — прокси выключен. */
+  source: 'env' | 'runtime' | 'config' | 'none';
   /** URL без userinfo (для логов/статуса/ProxyAgent `uri`). */
   url?: string;
   httpProxy?: string;
@@ -116,7 +117,7 @@ export interface ResolvedProxyConfig {
 /** Read-only статус прокси для `GET /api/v2/settings/proxy` (без секретов). */
 export interface EgressProxyStatus {
   enabled: boolean;
-  source: 'env' | 'config' | 'none';
+  source: 'env' | 'runtime' | 'config' | 'none';
   url?: string;
   httpProxy?: string;
   httpsProxy?: string;
@@ -126,6 +127,18 @@ export interface EgressProxyStatus {
   connectTimeoutMs: number;
   /** Настройка применяется при старте процесса. */
   restartRequired: true;
+}
+
+/**
+ * Источник пароля Basic-аутентификации прокси (значение **никогда** не отдаётся).
+ * `env` — `SYNTH_PROXY_PASSWORD` (деплой, UI не может удалить); `file` —
+ * `{dataDir}/secrets/proxy-password` (управляется через API); `none` — не задан.
+ */
+export interface ProxyPasswordStatus {
+  source: 'env' | 'file' | 'none';
+  set: boolean;
+  /** `true` — пароль можно удалить через `DELETE /settings/proxy/password`. */
+  removable: boolean;
 }
 
 /** Схема аутентификации, запрошенная прокси (D2 — Basic/NTLM/Negotiate). */
@@ -540,12 +553,64 @@ function isProxyTlsConfigured(cfg: Partial<ProxyConfig>, env: NodeJS.ProcessEnv)
   return Object.values(PROXY_TLS_ENV).some((key) => envValue(env, key) !== undefined);
 }
 
+/** Опции резолвера `proxy`: каталог данных и runtime-override из UI/`settings.json`. */
+export interface ResolveProxyConfigOptions {
+  /** Каталог данных — файл `{dataDir}/secrets/proxy-password` (инвариант 13). */
+  dataDir?: string;
+  /**
+   * Runtime-override (`RuntimeSettings.proxy`, `{dataDir}/settings.json`/PG).
+   * Приоритет: `config.yaml` ← runtime ← явные `SYNTH_PROXY_*` (ADR-023).
+   */
+  runtime?: Partial<ProxyConfig> | undefined;
+}
+
 /**
- * Сливает env и config.yaml для секции `proxy` (ADR-023).
+ * Поле-уровневое слияние `config.yaml proxy` и runtime-override (UI).
+ * Runtime приоритетнее; пустая строка трактуется как «не задано» (как в config).
+ * Вложенные `auth`/`tls` мёржатся по полям.
+ */
+export function mergeProxyConfig(
+  base: Partial<ProxyConfig> | undefined,
+  runtime: Partial<ProxyConfig> | undefined,
+): Partial<ProxyConfig> {
+  const b = (base ?? {}) as Partial<ProxyConfig>;
+  const r = (runtime ?? {}) as Partial<ProxyConfig>;
+  const pickString = (key: 'url' | 'httpProxy' | 'httpsProxy' | 'allProxy'): string | undefined => {
+    const value = r[key];
+    if (value !== undefined && value !== '') return value;
+    const fallback = b[key];
+    return fallback !== undefined && fallback !== '' ? fallback : undefined;
+  };
+  const merged: Partial<ProxyConfig> = {};
+  if (r.enabled !== undefined) merged.enabled = r.enabled;
+  else if (b.enabled !== undefined) merged.enabled = b.enabled;
+  const url = pickString('url');
+  if (url !== undefined) merged.url = url;
+  const httpProxy = pickString('httpProxy');
+  if (httpProxy !== undefined) merged.httpProxy = httpProxy;
+  const httpsProxy = pickString('httpsProxy');
+  if (httpsProxy !== undefined) merged.httpsProxy = httpsProxy;
+  const allProxy = pickString('allProxy');
+  if (allProxy !== undefined) merged.allProxy = allProxy;
+  if (r.auth !== undefined || b.auth !== undefined) merged.auth = r.auth ?? b.auth;
+  if (r.tls !== undefined || b.tls !== undefined) merged.tls = { ...(b.tls ?? {}), ...(r.tls ?? {}) };
+  if (r.noProxy !== undefined) merged.noProxy = r.noProxy;
+  else if (b.noProxy !== undefined) merged.noProxy = b.noProxy;
+  if (r.fromEnv !== undefined) merged.fromEnv = r.fromEnv;
+  else if (b.fromEnv !== undefined) merged.fromEnv = b.fromEnv;
+  if (r.fallbackDirect !== undefined) merged.fallbackDirect = r.fallbackDirect;
+  else if (b.fallbackDirect !== undefined) merged.fallbackDirect = b.fallbackDirect;
+  if (r.connectTimeoutMs !== undefined) merged.connectTimeoutMs = r.connectTimeoutMs;
+  else if (b.connectTimeoutMs !== undefined) merged.connectTimeoutMs = b.connectTimeoutMs;
+  return merged;
+}
+
+/**
+ * Сливает env, runtime и config.yaml для секции `proxy` (ADR-023).
  *
- * Приоритет: `SYNTH_PROXY_*` > `config.proxy` > стандартные env (при `fromEnv`) >
- * defaults. Явный `proxy.enabled: false` (config) подавляет стандартные env —
- * прокси не включается «из окружения» вопреки конфигу.
+ * Приоритет: явные `SYNTH_PROXY_*` > runtime (`settings.json`, UI) > `config.proxy`
+ * > стандартные env (при `fromEnv`) > defaults. Стандартные `HTTP_PROXY`/… не
+ * применяются, если runtime/config явно задали `enabled: false`.
  *
  * `options.dataDir` нужен только для файла пароля
  * `{dataDir}/secrets/proxy-password` (инвариант 13).
@@ -553,18 +618,23 @@ function isProxyTlsConfigured(cfg: Partial<ProxyConfig>, env: NodeJS.ProcessEnv)
 export function resolveProxyConfig(
   config: ProxyConfigSource | undefined,
   env: NodeJS.ProcessEnv = process.env,
-  options: { dataDir?: string } = {},
+  options: ResolveProxyConfigOptions = {},
 ): ResolvedProxyConfig {
-  const cfg = (config?.proxy ?? {}) as Partial<ProxyConfig>;
+  const cfg = mergeProxyConfig(config?.proxy, options.runtime);
   const fromEnv = cfg.fromEnv ?? true;
   const empty = emptyResolvedProxyConfig();
   const auth = validateProxyAuth(cfg.auth);
+  const explicitEnv = envBoolean(envValue(env, PROXY_ENV.enabled), PROXY_ENV.enabled);
+  const explicit = explicitEnv ?? cfg.enabled;
+  // Стандартные env — только при fromEnv и без явного `enabled:false`
+  // (runtime/config задают политику инстанса, env не «включает прокси обратно»).
+  const allowStandardEnv = fromEnv && explicit !== false;
 
-  const pickUrl = (
-    envKey: string,
-    cfgValue: string | undefined,
-    standard: readonly string[],
-  ): PickedUrl => {
+  const runtimeCfg = (options.runtime ?? {}) as Partial<ProxyConfig>;
+  const originOf = (field: ProxyUrlField): ProxyConfigOrigin =>
+    runtimeCfg[field] !== undefined && runtimeCfg[field] !== '' ? 'runtime' : 'config';
+
+  const pick = (envKey: string, field: ProxyUrlField, standard: readonly string[]): PickedUrl => {
     const take = (raw: string, origin: ProxyConfigOrigin): PickedUrl => {
       const parsed = parseProxyUrl(raw);
       const picked: PickedUrl = { value: parsed.href, origin };
@@ -574,8 +644,9 @@ export function resolveProxyConfig(
     };
     const synth = envValue(env, envKey);
     if (synth !== undefined) return take(synth, 'env');
-    if (cfgValue !== undefined && cfgValue !== '') return take(cfgValue, 'config');
-    if (fromEnv) {
+    const cfgValue = cfg[field];
+    if (cfgValue !== undefined && cfgValue !== '') return take(cfgValue, originOf(field));
+    if (allowStandardEnv) {
       for (const key of standard) {
         const raw = envValue(env, key);
         if (raw !== undefined) return take(raw, 'env');
@@ -584,10 +655,10 @@ export function resolveProxyConfig(
     return {};
   };
 
-  const url = pickUrl(PROXY_ENV.url, cfg.url, []);
-  const httpProxy = pickUrl(PROXY_ENV.httpProxy, cfg.httpProxy, STANDARD_PROXY_ENV.httpProxy);
-  const httpsProxy = pickUrl(PROXY_ENV.httpsProxy, cfg.httpsProxy, STANDARD_PROXY_ENV.httpsProxy);
-  const allProxy = pickUrl(PROXY_ENV.allProxy, cfg.allProxy, STANDARD_PROXY_ENV.allProxy);
+  const url = pick(PROXY_ENV.url, 'url', []);
+  const httpProxy = pick(PROXY_ENV.httpProxy, 'httpProxy', STANDARD_PROXY_ENV.httpProxy);
+  const httpsProxy = pick(PROXY_ENV.httpsProxy, 'httpsProxy', STANDARD_PROXY_ENV.httpsProxy);
+  const allProxy = pick(PROXY_ENV.allProxy, 'allProxy', STANDARD_PROXY_ENV.allProxy);
 
   // noProxy: SYNTH_PROXY_NO_PROXY > config.noProxy (непустой) > NO_PROXY (при fromEnv).
   let noProxy: string[] = [];
@@ -625,27 +696,6 @@ export function resolveProxyConfig(
     );
   }
 
-  // Креды: userinfo URL приоритетнее `proxy.auth`; пароль — env/файл (если не в URL).
-  const password = makePasswordResolver(env, options.dataDir);
-  const credentials: ProxyCredentialSet = {};
-  for (const [field, value] of fields) {
-    if (value.value === undefined) continue;
-    const username = value.username ?? auth?.username;
-    if (username === undefined || username === '') continue;
-    const pwd = value.password ?? password();
-    if (pwd === undefined) {
-      throw new ProxyConfigError(
-        `proxy: для пользователя "${username}" не задан пароль — укажите ${PROXY_PASSWORD_ENV} ` +
-          'или файл {dataDir}/secrets/proxy-password (в config.yaml пароль не хранится)',
-      );
-    }
-    credentials[field] = { username, password: pwd };
-  }
-
-  const explicitEnv = envBoolean(envValue(env, PROXY_ENV.enabled), PROXY_ENV.enabled);
-  const explicitCfg = cfg.enabled;
-  const explicit = explicitEnv ?? explicitCfg;
-
   let enabled: boolean;
   if (explicit !== undefined) {
     enabled = explicit;
@@ -660,6 +710,26 @@ export function resolveProxyConfig(
     );
   }
 
+  // Креды: userinfo URL приоритетнее `proxy.auth`; пароль — env/файл (если не в URL).
+  // Выключенному прокси пароль не нужен — не требуем его при сохранении disable.
+  const credentials: ProxyCredentialSet = {};
+  if (enabled) {
+    const password = makePasswordResolver(env, options.dataDir);
+    for (const [field, value] of fields) {
+      if (value.value === undefined) continue;
+      const username = value.username ?? auth?.username;
+      if (username === undefined || username === '') continue;
+      const pwd = value.password ?? password();
+      if (pwd === undefined) {
+        throw new ProxyConfigError(
+          `proxy: для пользователя "${username}" не задан пароль — укажите ${PROXY_PASSWORD_ENV} ` +
+            'или файл {dataDir}/secrets/proxy-password (в config.yaml пароль не хранится)',
+        );
+      }
+      credentials[field] = { username, password: pwd };
+    }
+  }
+
   const envFallback = envBoolean(envValue(env, PROXY_ENV.fallbackDirect), PROXY_ENV.fallbackDirect);
   const fallbackDirect = envFallback ?? cfg.fallbackDirect ?? empty.fallbackDirect;
   const connectTimeoutMs =
@@ -672,9 +742,11 @@ export function resolveProxyConfig(
     ? 'none'
     : origins.includes('env')
       ? 'env'
-      : origins.includes('config')
-        ? 'config'
-        : 'none';
+      : origins.includes('runtime')
+        ? 'runtime'
+        : origins.includes('config')
+          ? 'config'
+          : 'none';
 
   const resolved: ResolvedProxyConfig = {
     enabled,
@@ -684,7 +756,7 @@ export function resolveProxyConfig(
     fallbackDirect,
     connectTimeoutMs,
     // TLS/mTLS к прокси: всегда резолвим (дефолт — системное доверие).
-    tls: resolveProxyTls(config, env),
+    tls: resolveProxyTls({ proxy: cfg }, env),
   };
   if (url.value !== undefined) resolved.url = url.value;
   if (httpProxy.value !== undefined) resolved.httpProxy = httpProxy.value;
@@ -692,6 +764,54 @@ export function resolveProxyConfig(
   if (allProxy.value !== undefined) resolved.allProxy = allProxy.value;
   if (Object.keys(credentials).length > 0) resolved.credentials = credentials;
   return resolved;
+}
+
+/**
+ * Валидация входной секции `proxy` для сохранения runtime-override через API.
+ *
+ * Схема (`proxyConfigSchema`) + полный резолв (URL/схемы, `noProxy`, только
+ * `auth.type=basic`, `tls` caFile↔caPem, cert+key, пароль из env/файла).
+ * Дополнительно **запрещает пароль в userinfo URL** — в `settings.json`/PG
+ * секреты не хранятся (инвариант 13), пароль задаётся отдельным endpoint'ом.
+ * `SYNTH_PROXY_*`/стандартные env намеренно игнорируются, чтобы валидировать
+ * именно сохраняемый объект (пароль из `SYNTH_PROXY_PASSWORD`/файла остаётся).
+ */
+export function validateProxyConfig(
+  input: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+  options: { dataDir?: string } = {},
+): ProxyConfig {
+  const parsed = proxyConfigSchema.safeParse(input);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const path = issue?.path.join('.') || 'proxy';
+    throw new ProxyConfigError(`proxy.${path}: ${issue?.message ?? 'невалидная структура'}`);
+  }
+  const config = parsed.data;
+  for (const field of PROXY_URL_FIELDS) {
+    const raw = config[field];
+    if (raw === undefined || raw === '') continue;
+    const url = parseProxyUrl(raw);
+    if (url.password !== undefined) {
+      throw new ProxyConfigError(
+        `proxy.${field}: пароль в URL не хранится (инвариант 13) — задайте ` +
+          'proxy.auth.username и пароль через secrets/proxy-password или SYNTH_PROXY_PASSWORD',
+      );
+    }
+  }
+  const validationEnv: NodeJS.ProcessEnv = { ...env };
+  for (const key of [
+    ...Object.values(PROXY_ENV),
+    ...Object.values(PROXY_TLS_ENV),
+    ...STANDARD_PROXY_ENV.httpProxy,
+    ...STANDARD_PROXY_ENV.httpsProxy,
+    ...STANDARD_PROXY_ENV.allProxy,
+    ...STANDARD_PROXY_ENV.noProxy,
+  ]) {
+    delete validationEnv[key];
+  }
+  resolveProxyConfig({ proxy: config }, validationEnv, options);
+  return config;
 }
 
 /** Валидация `proxy.auth`: D2a — только `basic`; NTLM/Negotiate — D3/D4. */

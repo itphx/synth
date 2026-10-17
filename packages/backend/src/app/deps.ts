@@ -38,6 +38,7 @@ import {
   WebhookService, startWebhookDeliveryPruner,
   createStorageContextAsync,
   initTlsTrust,
+  applyStartupProxyConfig,
 } from '@itphx/synth-core';
 import type { DecisionAgentCandidate, EventsRuntimeSettings, StorageContext } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -63,7 +64,7 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
   if (kind === 'memory') {
     console.warn('storage.backend=memory: данные не сохраняются на диск');
   }
-  return createStorageContextAsync(kind, {
+  const storage = await createStorageContextAsync(kind, {
     dataDir: config.dataDir,
     secretKey: resolveSecretKey(config.synth),
     env: process.env,
@@ -75,6 +76,15 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
     scheduleCrossProcess: config.synth.scheduler.crossProcessLocks,
     bundlesPath: config.synth.commands.bundlesPath,
   });
+  // ADR-099: второй шаг egress — runtime-override прокси после хранилища и до
+  // создания deps/провайдеров (TLS/PG уже применены ранним `initTlsTrust`).
+  await applyStartupProxyConfig(
+    storage.settings,
+    { proxy: config.synth.proxy },
+    process.env,
+    { dataDir: config.dataDir },
+  );
+  return storage;
 }
 
 /**

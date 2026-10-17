@@ -10,6 +10,7 @@ import {
   getServiceCredential,
   getPublicOpenApiDocument,
   initTlsTrust,
+  applyStartupProxyConfig,
 } from '../index.js';
 import type { StorageBackendKind } from '../index.js';
 import { createLocalAuth } from '../auth/local.js';
@@ -189,6 +190,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // service-key (`storage.serviceKeys`) нужен аутентификации до сборки
   // зависимостей; тот же инстанс переиспользует `createStandaloneDeps`.
   const storage = await createStandaloneStorage(config);
+  // ADR-099: второй шаг egress — runtime-override прокси (`settings.json`/PG).
+  // Применяется после хранилища и **до** создания deps/провайдеров; TLS/PG уже
+  // инициализированы ранним `initTlsTrust` выше. Живого переключения нет.
+  await applyStartupProxyConfig(
+    storage.settings,
+    { proxy: config.proxyConfig },
+    process.env,
+    { dataDir: config.dataDir },
+  );
   // ADR-052 (этап I): реестр service-key — резолвер ключа (`synth_svc_…`)
   // нужен локальной аутентификации (`requireAuth`).
   const serviceApiKeyStore = storage.serviceKeys;

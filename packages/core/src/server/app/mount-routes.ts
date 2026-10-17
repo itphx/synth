@@ -349,6 +349,10 @@ export function mountStandaloneRoutes(
     // Egress: дефолты config.yaml для GET/DELETE-сброса + аудит изменений.
     fallbackEgressTools: config.egressConfig?.tools,
     fallbackEgressWebhooks: config.egressConfig?.webhooks,
+    // ADR-099: прокси — config-уровень, runtime-override и файл пароля.
+    fallbackProxy: config.proxyConfig,
+    dataDir,
+    env: process.env,
     securityAudit,
     onEgressChange: () => {
       // Live: резолвер/web_fetch/web_search/skills/instructions читают стор на

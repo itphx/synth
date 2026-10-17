@@ -219,5 +219,18 @@ export function describeSettingsRepository(
       expect(await repo.getTokenRatio('model-x')).toBe(3.5);
       expect(await repo.getTokenRatios()).toEqual({ 'model-x': 3.5 });
     });
+
+    it('proxy: set/get/clear runtime-override (без секретов)', async () => {
+      const { repo } = await make();
+      expect(await repo.getProxySettings()).toBeUndefined();
+      await repo.setProxySettings({ enabled: true, url: 'http://proxy:3128', noProxy: ['localhost'] });
+      expect(await repo.getProxySettings()).toEqual({
+        enabled: true,
+        url: 'http://proxy:3128',
+        noProxy: ['localhost'],
+      });
+      await repo.clearProxySettings();
+      expect(await repo.getProxySettings()).toBeUndefined();
+    });
   });
 }

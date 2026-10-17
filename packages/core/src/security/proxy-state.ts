@@ -10,6 +10,7 @@
  * конфига/env (`resolveProxyConfig`, ADR-023) и кладёт сюда. До инициализации —
  * прокси выключен (поведение не меняется).
  */
+import { createHash } from 'node:crypto';
 import {
   NoProxyMatcher,
   emptyResolvedProxyConfig,
@@ -60,6 +61,48 @@ export function proxyUrlForTarget(rawUrl: string): string | undefined {
 /** Read-only статус прокси для API (без секретов). */
 export function getEgressProxyStatus(): EgressProxyStatus {
   return proxyStatus(_config);
+}
+
+/** Хеш секрета для fingerprint (сравнение running/saved без раскрытия значения). */
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+/**
+ * Нормализованный отпечаток конфигурации прокси для `restartRequired`:
+ * маршрут/URL/noProxy/timeout/TLS/креды (пароль — только хеш). Выключенный
+ * прокси и отсутствие инициализации дают одинаковый `disabled` (рестарт не нужен).
+ */
+export function proxyConfigFingerprint(config: ResolvedProxyConfig | null | undefined): string {
+  if (!config || !config.enabled) return 'disabled';
+  const credentials = config.credentials
+    ? Object.entries(config.credentials)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([field, value]) => [
+          field,
+          value?.username ?? '',
+          value?.password !== undefined ? sha256(value.password) : '',
+        ])
+    : [];
+  return JSON.stringify({
+    enabled: true,
+    url: config.url ?? null,
+    httpProxy: config.httpProxy ?? null,
+    httpsProxy: config.httpsProxy ?? null,
+    allProxy: config.allProxy ?? null,
+    noProxy: [...config.noProxy].map((item) => item.toLowerCase()).sort(),
+    fallbackDirect: config.fallbackDirect,
+    connectTimeoutMs: config.connectTimeoutMs,
+    tls: config.tls
+      ? {
+          ca: config.tls.ca !== undefined ? sha256(config.tls.ca) : null,
+          cert: config.tls.cert !== undefined ? sha256(config.tls.cert) : null,
+          key: config.tls.key !== undefined ? sha256(config.tls.key) : null,
+          rejectUnauthorized: config.tls.rejectUnauthorized,
+        }
+      : null,
+    credentials,
+  });
 }
 
 /**

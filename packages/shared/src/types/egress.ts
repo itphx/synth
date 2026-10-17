@@ -116,8 +116,8 @@ export interface EgressRequestLogEntry {
   actor?: string;
 }
 
-/** Скоупы изменений egress-политик в security-аудите. */
-export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp'] as const;
+/** Скоупы изменений egress-политик/прокси в security-аудите. */
+export const SECURITY_AUDIT_SCOPES = ['tools', 'webhooks', 'mcp', 'proxy'] as const;
 export type SecurityAuditScope = (typeof SECURITY_AUDIT_SCOPES)[number];
 
 export const SECURITY_AUDIT_ACTIONS = ['update', 'reset'] as const;

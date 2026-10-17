@@ -5,8 +5,8 @@ import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeS
 import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult } from '@itphx/synth-shared';
-import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ResolvedProxyConfig } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO, PROXY_PASSWORD_ENV, ProxyConfigError, proxyStatus, redactProxyUrl, resolveProxyConfig, validateProxyConfig } from '@itphx/synth-shared';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { validateEgressPolicy } from '../../engine/net/egress-policy.js';
 import { checkEgressUrl } from '../../engine/net/egress-guard.js';
@@ -16,8 +16,13 @@ import type { HostResolver } from '../../engine/mcp/network-policy.js';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import { decisionMetrics } from '../../engine/router/decision-metrics.js';
-import { getEgressProxyStatus, shouldProxyUrl } from '../../security/proxy-state.js';
+import { getEgressProxyConfig, proxyConfigFingerprint, shouldProxyUrl } from '../../security/proxy-state.js';
 import { checkProxyConnectivity } from '../../security/proxy-check.js';
+import {
+  getProxyPasswordStatus,
+  removeProxyPasswordFile,
+  writeProxyPasswordFile,
+} from '../../security/proxy-password.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
 type Middleware = ReturnType<typeof createMiddleware>;
@@ -331,8 +336,16 @@ export interface SettingsRoutesDeps {
   onEgressChange?: (scope: EgressPolicyScope, policy: EgressPolicy | WebhooksEgressPolicy) => void | Promise<void>;
   /** ADR-099 (D1): read-only статус прокси (по умолчанию — активная конфигурация). */
   getProxyStatus?: () => EgressProxyStatus;
+  /** ADR-099: текущая (running) конфигурация прокси — для `restartRequired` (по умолчанию — модуль). */
+  getProxyConfig?: () => ResolvedProxyConfig | null;
+  /** ADR-099: `config.yaml proxy` (уровень defaults, без runtime-override). */
+  fallbackProxy?: Partial<ProxyConfig>;
+  /** ADR-099: каталог данных — файл `{dataDir}/secrets/proxy-password`. */
+  dataDir?: string;
+  /** ADR-099: env (тесты); по умолчанию `process.env`. */
+  env?: NodeJS.ProcessEnv;
   /** ADR-099 (D1): проверка коннекта к прокси (по умолчанию — TCP/HTTP-проба). */
-  checkProxy?: (url?: string) => Promise<ProxyCheckResult>;
+  checkProxy?: (request: { url?: string; config?: ResolvedProxyConfig | null }) => Promise<ProxyCheckResult>;
   /** Инъекция DNS-резолвера для `/egress/check` (тесты; по умолчанию — системный). */
   resolveHost?: HostResolver;
 }
@@ -520,6 +533,44 @@ function isValidProtectedPathsOverride(value: unknown): value is { version?: num
  * переживает рестарт: при старте createStandaloneApp читает его и применяет
  * в приоритете над config.yaml.
  */
+/**
+ * ADR-099: снимок секции `proxy` для аудита — без секретов. URL редактируются
+ * до origin (без userinfo), пароль в `settings.json` не хранится by design.
+ */
+function sanitizeProxyForAudit(config: Partial<ProxyConfig> | undefined): Partial<ProxyConfig> | null {
+  if (!config) return null;
+  const copy = structuredClone(config);
+  for (const field of ['url', 'httpProxy', 'httpsProxy', 'allProxy'] as const) {
+    const raw = copy[field];
+    if (raw === undefined || raw === '') continue;
+    copy[field] = redactProxyUrl(raw) || undefined;
+  }
+  return copy;
+}
+
+/** `true` — runtime-override секции `proxy` задан (объект с ключами). */
+function hasProxyOverride(runtime: Partial<ProxyConfig> | undefined): boolean {
+  return runtime !== undefined && Object.keys(runtime).length > 0;
+}
+
+/** Резолв эффективной секции прокси для API (runtime → config → env). */
+function resolveApiProxy(
+  fallback: Partial<ProxyConfig> | undefined,
+  runtime: Partial<ProxyConfig> | undefined,
+  env: NodeJS.ProcessEnv,
+  dataDir: string | undefined,
+): ResolvedProxyConfig {
+  return resolveProxyConfig({ proxy: fallback }, env, { dataDir, runtime });
+}
+
+/**
+ * Ошибка валидации `proxy` в ответ 400 (текст `ProxyConfigError` уже без секретов).
+ */
+function proxyValidationError(err: unknown): { code: 'VALIDATION_ERROR'; message: string } {
+  if (err instanceof ProxyConfigError) return { code: 'VALIDATION_ERROR', message: err.message };
+  return { code: 'VALIDATION_ERROR', message: err instanceof Error ? err.message : String(err) };
+}
+
 export function createSettingsRoutes(
   auth: AuthKit,
   deps: SettingsRoutesDeps,
@@ -529,6 +580,20 @@ export function createSettingsRoutes(
   const settingsWriteGuard: Middleware = opts.settingsWriteGuard ?? auth.requireAuth;
   const eventsWriteGuard: Middleware = opts.eventsWriteGuard ?? settingsWriteGuard;
   const decisionWriteGuard: Middleware = opts.decisionWriteGuard ?? settingsWriteGuard;
+  const proxyEnv = deps.env ?? process.env;
+
+  /** Running-конфигурация прокси (модульное состояние dispatcher'а). */
+  const runningProxyConfig = (): ResolvedProxyConfig | null =>
+    deps.getProxyConfig ? deps.getProxyConfig() : getEgressProxyConfig();
+
+  /** Saved-конфигурация: config.yaml ← runtime (UI) ← явные `SYNTH_PROXY_*`. */
+  const savedProxyConfig = async (): Promise<ResolvedProxyConfig> =>
+    resolveApiProxy(
+      deps.fallbackProxy,
+      await deps.settingsStore.getProxySettings(),
+      proxyEnv,
+      deps.dataDir,
+    );
 
   /** Актор изменения политики (id пользователя; core без RBAC — `local`). */
   const actorOf = (c: { get(key: 'user'): unknown }): string => {
@@ -540,7 +605,7 @@ export function createSettingsRoutes(
   /** Best-effort аудит изменения политики: ошибка записи не ломает операцию. */
   const auditPolicy = async (
     c: { get(key: 'user'): unknown },
-    scope: 'tools' | 'webhooks' | 'mcp',
+    scope: 'tools' | 'webhooks' | 'mcp' | 'proxy',
     action: 'update' | 'reset',
     before: unknown,
     after: unknown,
@@ -977,18 +1042,136 @@ export function createSettingsRoutes(
   });
 
   /**
-   * ADR-099 (D1): read-only статус egress-прокси. Настройка применяется при
-   * старте (dispatcher), поэтому `restartRequired: true`; секреты/креды в URL
-   * не отдаются.
+   * ADR-099: настройки egress-прокси (runtime-override, применяется при старте).
+   *
+   * GET отдаёт `saved` (config ← runtime ← env), `running` (текущий dispatcher),
+   * `restartRequired` (нормализованное сравнение), `password` (без значения) и
+   * `defaults` (config-уровень без runtime). Секреты/userinfo не отдаются.
    */
-  app.get('/proxy', auth.requireAuth, (c) => {
-    const status = deps.getProxyStatus ? deps.getProxyStatus() : getEgressProxyStatus();
-    return c.json(status);
+  app.get('/proxy', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getProxySettings();
+    let saved: ResolvedProxyConfig;
+    let defaults: ResolvedProxyConfig;
+    try {
+      saved = resolveApiProxy(deps.fallbackProxy, runtime, proxyEnv, deps.dataDir);
+      defaults = resolveApiProxy(deps.fallbackProxy, undefined, proxyEnv, deps.dataDir);
+    } catch (err) {
+      return c.json({ error: proxyValidationError(err) }, 400);
+    }
+    const runningConfig = runningProxyConfig();
+    const running = deps.getProxyStatus ? deps.getProxyStatus() : proxyStatus(runningConfig);
+    const password = await getProxyPasswordStatus(proxyEnv, deps.dataDir);
+    const savedStatus = proxyStatus(saved);
+    const restartRequired = proxyConfigFingerprint(saved) !== proxyConfigFingerprint(runningConfig);
+    return c.json({
+      // Обратная совместимость: плоские поля = saved (эффективная конфигурация).
+      ...savedStatus,
+      saved: savedStatus,
+      running,
+      isOverridden: hasProxyOverride(runtime),
+      defaults: proxyStatus(defaults),
+      password,
+      restartRequired,
+    });
   });
 
   /**
-   * ADR-099 (D1): проверка **только коннекта к прокси** (не к цели).
-   * Тело `{ url? }` — проверить конкретный прокси; иначе активный из конфига.
+   * ADR-099: сохранить runtime-override (без live-применения — только при старте).
+   * Валидация — как у резолвера; пароль в URL запрещён (инвариант 13), при
+   * `auth.username` пароль должен уже быть задан (env/файл), иначе 400.
+   */
+  app.put('/proxy', settingsWriteGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const raw = (body as { proxy?: unknown }).proxy;
+    let proxy: ProxyConfig;
+    try {
+      proxy = validateProxyConfig(raw, proxyEnv, { dataDir: deps.dataDir });
+    } catch (err) {
+      return c.json({ error: proxyValidationError(err) }, 400);
+    }
+    const previous = await deps.settingsStore.getProxySettings();
+    await deps.settingsStore.setProxySettings(proxy);
+    await auditPolicy(
+      c,
+      'proxy',
+      'update',
+      sanitizeProxyForAudit(previous ?? deps.fallbackProxy),
+      sanitizeProxyForAudit(proxy),
+    );
+    const saved = resolveApiProxy(deps.fallbackProxy, proxy, proxyEnv, deps.dataDir);
+    const running = deps.getProxyStatus ? deps.getProxyStatus() : proxyStatus(runningProxyConfig());
+    return c.json({ saved: proxyStatus(saved), running, restartRequired: true });
+  });
+
+  /** ADR-099: сбросить runtime-override (вернуться к config.yaml/env). */
+  app.delete('/proxy', settingsWriteGuard, async (c) => {
+    const previous = await deps.settingsStore.getProxySettings();
+    await deps.settingsStore.clearProxySettings();
+    await auditPolicy(c, 'proxy', 'reset', sanitizeProxyForAudit(previous), null);
+    const defaults = resolveApiProxy(deps.fallbackProxy, undefined, proxyEnv, deps.dataDir);
+    const saved = resolveApiProxy(deps.fallbackProxy, undefined, proxyEnv, deps.dataDir);
+    const running = deps.getProxyStatus ? deps.getProxyStatus() : proxyStatus(runningProxyConfig());
+    return c.json({
+      status: 'restored',
+      saved: proxyStatus(saved),
+      defaults: proxyStatus(defaults),
+      running,
+      restartRequired: proxyConfigFingerprint(saved) !== proxyConfigFingerprint(runningProxyConfig()),
+    });
+  });
+
+  /**
+   * ADR-099: пароль Basic-аутентификации прокси — только файл
+   * `{dataDir}/secrets/proxy-password` (0600/0700, атомарно). Значение никогда
+   * не возвращается, не логируется и не пишется в аудит.
+   */
+  app.put('/proxy/password', settingsWriteGuard, async (c) => {
+    if (proxyEnv[PROXY_PASSWORD_ENV] !== undefined && proxyEnv[PROXY_PASSWORD_ENV] !== '') {
+      return c.json({
+        error: {
+          code: 'CONFLICT',
+          message: `${PROXY_PASSWORD_ENV} задан в окружении — пароль прокси управляется деплоем (UI не может его изменить)`,
+        },
+      }, 409);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const password = (body as { password?: unknown }).password;
+    if (typeof password !== 'string' || password.trim() === '') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'password: ожидается непустая строка' } }, 400);
+    }
+    if (!deps.dataDir) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'dataDir не задан — файл пароля недоступен' } }, 500);
+    }
+    const before = await getProxyPasswordStatus(proxyEnv, deps.dataDir);
+    await writeProxyPasswordFile(deps.dataDir, password);
+    const after = await getProxyPasswordStatus(proxyEnv, deps.dataDir);
+    await auditPolicy(c, 'proxy', 'update', { password: before }, { password: after });
+    return c.json({ password: after });
+  });
+
+  app.delete('/proxy/password', settingsWriteGuard, async (c) => {
+    if (proxyEnv[PROXY_PASSWORD_ENV] !== undefined && proxyEnv[PROXY_PASSWORD_ENV] !== '') {
+      return c.json({
+        error: {
+          code: 'CONFLICT',
+          message: `${PROXY_PASSWORD_ENV} задан в окружении — пароль прокси управляется деплоем (UI не может его удалить)`,
+        },
+      }, 409);
+    }
+    if (!deps.dataDir) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'dataDir не задан — файл пароля недоступен' } }, 500);
+    }
+    const before = await getProxyPasswordStatus(proxyEnv, deps.dataDir);
+    await removeProxyPasswordFile(deps.dataDir);
+    const after = await getProxyPasswordStatus(proxyEnv, deps.dataDir);
+    await auditPolicy(c, 'proxy', 'reset', { password: before }, { password: after });
+    return c.json({ password: after });
+  });
+
+  /**
+   * ADR-099: проверка **только коннекта к прокси** (не к цели).
+   * Без явного `url` проверяется **saved**-конфигурация (эффективная с runtime/env),
+   * а не running — UI видит будущую конфигурацию после рестарта (`usingSaved:true`).
    */
   app.post('/proxy/check', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
@@ -996,12 +1179,21 @@ export function createSettingsRoutes(
     if (rawUrl !== undefined && typeof rawUrl !== 'string') {
       return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url: ожидается строка' } }, 400);
     }
+    const explicitUrl = typeof rawUrl === 'string' && rawUrl.trim() ? rawUrl.trim() : undefined;
+    let config: ResolvedProxyConfig | undefined;
+    if (!explicitUrl) {
+      try {
+        config = await savedProxyConfig();
+      } catch (err) {
+        return c.json({ error: proxyValidationError(err) }, 400);
+      }
+    }
     const result = deps.checkProxy
-      ? await deps.checkProxy(typeof rawUrl === 'string' && rawUrl.trim() ? rawUrl.trim() : undefined)
+      ? await deps.checkProxy({ ...(explicitUrl ? { url: explicitUrl } : { config }) })
       : await checkProxyConnectivity({
-          url: typeof rawUrl === 'string' && rawUrl.trim() ? rawUrl.trim() : undefined,
+          ...(explicitUrl ? { url: explicitUrl } : { config }),
         });
-    return c.json(result);
+    return c.json({ ...result, usingSaved: explicitUrl === undefined });
   });
 
   /**

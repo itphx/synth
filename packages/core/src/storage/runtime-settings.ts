@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig, ProxyConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
@@ -115,6 +115,12 @@ export interface RuntimeSettings {
   events?: Partial<EventsRuntimeSettings>;
   /** ADR-084: runtime-настройки decision-слоя (админка). */
   decision?: DecisionRuntimeSettings;
+  /**
+   * ADR-099: runtime-override секции `proxy` (админка). Секретов не содержит:
+   * пароль Basic — только `SYNTH_PROXY_PASSWORD`/`{dataDir}/secrets/proxy-password`.
+   * Применяется при следующем старте процесса (dispatcher start-only).
+   */
+  proxy?: Partial<ProxyConfig>;
 }
 
 /**
@@ -611,6 +617,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.decision;
+      return next;
+    });
+  }
+
+  /** ADR-099: runtime-override прокси (админка), undefined — не задан. */
+  async getProxySettings(): Promise<Partial<ProxyConfig> | undefined> {
+    const settings = await this.load();
+    return settings.proxy;
+  }
+
+  async setProxySettings(config: Partial<ProxyConfig>): Promise<void> {
+    await this._update((current) => ({ ...current, proxy: config }));
+  }
+
+  async clearProxySettings(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.proxy;
       return next;
     });
   }
