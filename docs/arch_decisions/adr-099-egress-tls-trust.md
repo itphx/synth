@@ -14,9 +14,13 @@
 > политики, `via` в журнале, git через child-env, прокси-env для `stdio`-MCP, API статуса/редактирования
 > и проверки коннекта, админ-секция UI; **runtime-настройка прокси из админ-UI** — оверрайд в
 > `RuntimeSettings.proxy` (`settings.json`/PG, `settings migrate`), сохранение без live-применения,
-> `restartRequired`, write-only пароль (файл/env), аудит `scope:'proxy'`. **Остаток:**
-> NTLM/Negotiate/Kerberos (нужен собственный CONNECT-цикл и нативная зависимость; приёмка — с AD/KDC
-> клиента), `security.tls` (CA/mTLS к цели) через SOCKS5 (ограничение `Socks5ProxyAgent`),
+> `restartRequired`, write-only пароль (файл/env), аудит `scope:'proxy'`; **(4) TLS runtime/UI** —
+> bootstrap `{dataDir}/security-tls.json` (читается до PG), CA-бандл, `rejectUnauthorized`, default
+> mTLS-клиент и per-host `mappings` (exact/`*.suffix`/`*`, первое совпадение), тот же профиль для PG,
+> API `settings/tls*`, раздел «Сеть» (Прокси + Доверенные CA), read-only параметры config/env, аудит
+> `scope:'tls'`, применение при старте (`restartRequired`). **Остаток:** NTLM/Negotiate/Kerberos (нужен
+> собственный CONNECT-цикл и нативная зависимость; приёмка — с AD/KDC клиента), per-host CA и несколько
+> default-сертов, `security.tls` (CA/mTLS к цели) через SOCKS5 (ограничение `Socks5ProxyAgent`),
 > runtime-reload прокси/TLS без рестарта, пиннинг проверенного адреса
 > ([PROP-100](./prop-100-ssrf-dns-rebinding.md)), метрики/наблюдаемость
 > ([PROP-094](./prop-094-observability-metrics.md)), перепроверка покрытия встроенного `fetch` на Node 22.
@@ -32,6 +36,9 @@
 > **Обновлено:** 2026-10-18 — прокси настраивается из админ-UI: runtime-override в сторе (file/PG),
 > приоритет `SYNTH_PROXY_*` > runtime > config.yaml, применение при следующем старте (`restartRequired`),
 > write-only пароль (`secrets/proxy-password`, env приоритетнее), аудит `scope:'proxy'`, `check` по saved.
+> **Обновлено:** 2026-10-18 — TLS настраивается из админ-UI (раздел «Сеть»): bootstrap
+> `security-tls.json` (до PG), приоритет `SYNTH_TLS_*` > runtime > config, CA-бандл, default mTLS-клиент
+> и per-host `mappings`, тот же профиль для PostgreSQL, API `settings/tls*`, аудит `scope:'tls'`.
 > **Связано:** [PROP-088](./prop-088-http-proxy.md) (заменён/надстроен), [PROP-100](./prop-100-ssrf-dns-rebinding.md),
 > [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
 > (webhooks), [ADR-041](./adr-041-llm-error-taxonomy.md) (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md),
@@ -91,10 +98,14 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
    накладывает распарсенный DSN **поверх** явного конфига (`Object.assign({}, config,
    parse(connectionString))`) и молча перекрывает `ssl`-объект — вплоть до отключения TLS. Нарушение —
    ошибка конфигурации с понятным текстом.
-6. **TLS-транспорт — стартовая конфигурация; адресная политика — runtime.** `security.tls` **не входит**
-   в `RuntimeSettings`: dispatcher процесс-глобальный, изменения применяются при старте и требуют
-   рестарта (hot-reload — остаток). Адресная политика (пункты 8–11) — наоборот, **live**: резолвится из
-   стора на каждый исходящий запрос, рестарт не нужен.
+6. **TLS применяется при старте, но настраивается runtime (bootstrap).** `security.tls` **не входит** в
+   `RuntimeSettings`/PG: dispatcher процесс-глобальный, изменения применяются при старте и требуют
+   рестарта (hot-reload — остаток). При этом у TLS есть **runtime-оверрайд** в bootstrap-файле
+   `{dataDir}/security-tls.json` (0600, каталог 0700, атомарная запись tmp→rename), который читается
+   **до** подключения к PostgreSQL: TLS нужен, чтобы это подключение вообще стало возможным, поэтому
+   настройки не могут жить в БД. Приоритет — env `SYNTH_TLS_*` > runtime (bootstrap/UI) > `config.yaml` >
+   defaults. Адресная политика (пункты 8–11) — наоборот, **live**: резолвится из стора на каждый
+   исходящий запрос, рестарт не нужен.
 7. **`NODE_EXTRA_CA_CERTS` — только совместимость**, не конфигурируемый механизм: он наследуется
    дочерними процессами (MCP stdio, git) и используется как провиз-совместимый слой в Helm, но
    управляемый источник доверия — `security.tls`.
@@ -187,8 +198,8 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
     `no_proxy` применяет libcurl, per-remote настройки нет). `stdio`-MCP получает
     `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` (+ `NODE_EXTRA_CA_CERTS`) без пароля. API —
     `GET/PUT/DELETE /api/v2/settings/proxy` (+ `/proxy/password`, `POST /proxy/check`, п. 21).
-    UI — админ-секция «Прокси (egress)» (редактируемая форма, статус saved/running, плашка рестарта,
-    «Проверить соединение»). Прокси — **start-only**: live-переключения нет, изменения требуют
+    UI — раздел «Сеть» → «Прокси» (редактируемая форма, статус saved/running, плашка рестарта,
+    «Проверить соединение»); рядом — «Доверенные CA (TLS)». Прокси — **start-only**: live-переключения нет, изменения требуют
     рестарта. PostgreSQL не проксируется (не HTTP). Прокси с IP-литералом и TLS требует DNS-хоста
     (SNI/servername по IP запрещён в Node), при этом диагностика `check` может показать `reachable`
     (она не ставит servername для IP).
@@ -213,6 +224,34 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
     Изменения пишутся в аудит `{dataDir}/audit/security.jsonl` со `scope:'proxy'` (before/after без
     пароля); `POST /proxy/check` проверяет **saved**-конфигурацию (`usingSaved: true`), чтобы UI видел
     будущее состояние после рестарта.
+
+22. **Runtime-настройки TLS из админ-UI (bootstrap).** `{dataDir}/security-tls.json` —
+    `{caFile?, caPem?, rejectUnauthorized?, defaultClient?:{certFile?,keyFile?}, mappings?:[{id, hosts,
+    certFile, keyFile, label?}]}`; PEM-материалы лежат в `{dataDir}/secrets/tls/` (`ca.pem`,
+    `client.crt`/`client.key`, `<id>.crt`/`<id>.key`; 0600, каталог 0700), в JSON — только пути и
+    публичный `caPem`. Bootstrap — **осознанное исключение** из «всё через порты хранилища»: файл
+    читается до PG; в `RuntimeSettings`/`settings.json` TLS не хранится. Приоритет поле-уровневый:
+    env `SYNTH_TLS_*` > runtime > config.yaml > defaults; `caFile`↔`caPem` взаимоисключающи (конфликт
+    между источниками — fail-closed). Параметры из config/env показываются в UI **read-only** с
+    пометкой источника; `PUT/DELETE` CA и default-клиента при env/config → 409 `CONFLICT`.
+23. **Клиентские TLS-профили (mTLS).** Один **CA-бандл** на весь egress (несколько сертификатов в
+    одном PEM допустимы); per-host CA **нет**. Один **default client** (глобальный серт+ключ) и
+    `mappings[]` — per-host пары: паттерны `exact`, `*.suffix`, `*` (все хосты), регистронезависимо;
+    выбор — **первое совпадение** в порядке маппингов, иначе default; без default и без совпадения —
+    без клиентского серта. `mappings` — только runtime (редактируются в UI). PostgreSQL использует
+    **тот же резолвер** (`selectTlsClientProfile` по host) — default-серт без маппинга предъявляется
+    и БД. TLS **к прокси** (`proxy.tls`) — отдельная секция, в UI только read-only; через SOCKS5
+    клиентский серт к цели не передаётся (ограничение `Socks5ProxyAgent`).
+24. **API/UI и аудит TLS.** `GET/PUT /api/v2/settings/tls` (CA-путь/`caPem`-бандл/`rejectUnauthorized`),
+    `PUT/DELETE /settings/tls/ca` (PEM-бандл, 1+ сертификатов), `PUT/DELETE /settings/tls/client`
+    (cert+key, write-only), `POST/PUT/DELETE /settings/tls/mappings[/:id]`, `POST /settings/tls/validate`
+    (разбор без записи). Ответы — только метаданные: источники, `ca{count,subjects}`, subject
+    клиентских сертов, `hasKey`, `readOnly`, `running/saved`, `restartRequired`; PEM/ключи/пароли
+    **не возвращаются**. Валидация: `caFile`↔`caPem`, неполная клиентская пара, битый PEM/ключ,
+    неизвестное поле → 400; нет маппинга → 404; read-only из env/config → 409. Изменения — аудит
+    `{dataDir}/audit/security.jsonl` со `scope:'tls'` (пути/hosts/subject, без PEM/ключей). UI —
+    раздел «Сеть» (ADMIN): «Прокси» и «Доверенные CA (TLS)»; применение — при следующем старте
+    (`restartRequired`).
 
 ## Альтернативы
 
@@ -257,6 +296,10 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `settings.json`/PG, переносится `storage migrate`, валидируется на записи, изменения аудируются
   (`scope:'proxy'`), пароль — write-only (файл/env), а `restartRequired` честно показывает расхождение
   saved/running.
+- (+) Доверие TLS и mTLS настраиваются из UI (раздел «Сеть»): CA-бандл, `rejectUnauthorized`, default
+  клиентский серт и per-host маппинги; параметры config/env видны read-only с источником, изменения
+  аудируются (`scope:'tls'`) без PEM/ключей, `restartRequired` показывает необходимость рестарта.
+  PostgreSQL использует тот же профиль, поэтому «серт для БД» не настраивается отдельно.
 - (−) Появилась прямая зависимость `undici@^7`; git-CA ограничен файлом (`caFile`).
 - (−) Политика — **не граница безопасности**: при доступном `execute_shell`, `stdio`-MCP или внешних
   движках ([PROP-050](./prop-050-external-engines-runner.md)) исходящий трафик идёт мимо guard;
@@ -266,6 +309,10 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `security.tls` (CA/mTLS к цели) не применяется через SOCKS5 (`Socks5ProxyAgent` не принимает
   `requestTls`) — только системное доверие; https-прокси/SOCKS по IP-литералу требуют DNS-хоста
   (SNI); SOCKS5 в undici экспериментален и всегда резолвит hostname на прокси.
+- (−) TLS-модель ограничена: один CA-бандл на весь egress (per-host CA нет), один default-клиент
+  (несколько default-сертов нельзя), default-серт без маппинга предъявляется всем целям, включая
+  PostgreSQL; TLS к прокси (`proxy.tls`) задаётся отдельно и в UI только read-only. Bootstrap
+  `security-tls.json` — осознанное исключение из «всё через порты хранилища» (читается до PG).
 - (−) Прокси — start-only: сохранение из UI не применяется на лету, нужен рестарт (runtime-reload
   dispatcher'а — остаток); явные `SYNTH_PROXY_*` деплоя приоритетнее UI, поэтому часть настроек
   инстанса UI не переопределит. Встроенный глобальный `fetch` не гарантирован:
@@ -283,8 +330,17 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   схемы `securityTlsConfigSchema` и `storage.postgres.sslmode` (`packages/shared/src/config/types.ts`);
   env `SYNTH_POSTGRES_SSLMODE` (`packages/shared/src/config/resolve.ts`).
 - **Транспорт доверия (core):** `packages/core/src/security/tls.ts` (`buildTlsTrust`,
-  `applyGlobalTlsTrust` через `setGlobalDispatcher`, `egressFetch`, `initTlsTrust`, `gitCaConfig`/`getTlsCaPath`,
-  `TlsDependencyUnavailableError`).
+  `applyGlobalTlsTrust` через `setGlobalDispatcher`, `egressFetch`, `initTlsTrust` с `tlsRuntime`,
+  `getTlsStatus` — статус без секретов, `gitCaConfig`/`getTlsCaPath`, `TlsDependencyUnavailableError`).
+- **TLS runtime/bootstrap (shared):** `packages/shared/src/config/tls-runtime.ts`
+  (`readTlsRuntimeSettings`/`writeTlsRuntimeSettings`, `writeTlsSecretFile`, `tlsSecretsDir`,
+  `TLS_RUNTIME_FILENAME`, `TLS_MATERIAL_NAMES`), `packages/shared/src/config/tls.ts`
+  (`TlsRuntimeSettings`/`TlsMappingSettings`, `resolveTlsProfiles`, `selectTlsClientProfile`,
+  `matchTlsHostPattern`, приоритет env > runtime > config, read-only-источники); `resolveTlsTrust`/
+  `buildPostgresSslOptions` принимают `runtime`.
+- **Профили в транспорте:** `packages/core/src/security/proxy-dispatcher.ts` (`tlsProfiles`,
+  `profileFor`/`plannedProfile` — per-origin выбор профиля), `packages/storage-postgres/src/pool.ts`
+  (`tlsRuntime` → `selectTlsClientProfile` по host: PostgreSQL использует тот же профиль).
 - **Адресная политика (shared):** `packages/shared/src/types/egress.ts` (`EgressPolicy`,
   `WebhooksEgressPolicy`, `EgressPolicyScope`, `EgressLogConfig`, `DEFAULT_EGRESS_TOOLS_POLICY`/
   `DEFAULT_EGRESS_WEBHOOKS_POLICY`/`DEFAULT_EGRESS_LOG`, `EGRESS_REQUEST_SCOPES`/`STATUSES`,
@@ -331,10 +387,9 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `SettingsRepository` (`getEgressPolicy`/`setEgressPolicy`/`clearEgressPolicy`); PG-драйвер —
   `packages/storage-postgres/src/ports/audit.ts` (`securityAudit`/`egressRequests`) и миграция
   `002-egress-audit` (таблицы `security_audit`, `egress_requests`).
-- **API:** секция egress в `packages/core/src/server/routes/settings.ts`
-  (`/settings/egress/tools`, `/settings/egress/webhooks`, `POST /settings/egress/check`, расширенный
-  `/settings/mcp-network-policy`, `GET/PUT/DELETE /settings/proxy`,
-  `PUT/DELETE /settings/proxy/password`, `POST /settings/proxy/check`),
+- **API:** `packages/core/src/server/routes/settings.ts` (egress и proxy: `/settings/egress/*`,
+  `/settings/proxy*`), `packages/core/src/server/routes/settings-tls.ts` (`/settings/tls`,
+  `/settings/tls/ca`, `/settings/tls/client`, `/settings/tls/mappings[/:id]`, `/settings/tls/validate`),
   `packages/core/src/server/routes/audit.ts` (`GET /api/v2/audit/security`, `GET /api/v2/audit/egress`).
 - **UI:** `components/settings/EgressPolicySection.tsx` — режим/список/исключения и «Проверить URL»;
   встроена в «Встроенные инструменты» (`ToolsDisabledSettings`), «Webhooks» (`WebhooksSettings`,
@@ -342,10 +397,12 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   вкладки «Безопасность (политики)» и «Внешние запросы» в «Логах и аудите»
   (`SecurityAuditPanel`/`EgressLogPanel`); i18n `egress.*`/`logs.security.*`/`logs.egress.*` (ru/en).
   Прокси — `components/settings/ProxyStatusSection.tsx` (+ `lib/api/proxy.ts`), встроена в
-  «Встроенные инструменты»: редактируемая форма (enabled, URL-поля, `noProxy`, `fromEnv`,
-  `fallbackDirect`, таймаут, Basic-username, TLS-пути), write-only пароль (задать/сбросить, disabled
-  при env), статус saved/running, плашка «изменения после рестарта», «Проверить соединение»; i18n
-  `proxy.*`.
+  раздел «Сеть» (`NetworkSettings`): «Прокси» — редактируемая форма (enabled, URL-поля, `noProxy`,
+  `fromEnv`, `fallbackDirect`, таймаут, Basic-username, TLS-пути), write-only пароль (задать/сбросить,
+  disabled при env), статус saved/running, плашка «изменения после рестарта», «Проверить соединение»;
+  «Доверенные CA (TLS)» — `TrustedCaSection` (CA-бандл вставкой/файлом + validate, read-only параметры
+  config/env с источником, default client upload, таблица маппингов, `rejectUnauthorized`, read-only
+  TLS к прокси); i18n `network.*`/`proxy.*`/`tls.*`.
 - **git:** `packages/core/src/git/git-service.ts` — `simpleGit({ config: gitCaConfig(), env: gitProxyEnv() })`
   (`http.sslCAInfo`; прокси/`no_proxy`/Basic — child-env, не argv). **MCP stdio:**
   `engine/mcp/client.ts` — `mcpProxyEnv()` + `NODE_EXTRA_CA_CERTS` в env дочернего процесса.
@@ -358,12 +415,16 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `packages/shared/src/config/resolve.test.ts`, `packages/core/src/engine/net/egress-guard.test.ts`
   (политика/журнал/аудит — тесты уровня подсистем), `packages/shared/src/config/proxy.test.ts`,
   `packages/core/src/security/proxy-dispatcher.test.ts`/`proxy-check.test.ts`/`proxy-optin.test.ts`/
-  `proxy-startup.test.ts`, `server/routes/settings-proxy.test.ts`, `shared/src/config/proxy.test.ts`
+  `proxy-startup.test.ts`, `server/routes/settings-proxy.test.ts`
   (fake HTTP/HTTPS-прокси, Basic/mTLS, fake SOCKS5, `no_proxy`-таблица, git env, runtime-override,
-  saved/running/`restartRequired`, пароль write-only); фикстуры —
+  saved/running/`restartRequired`, пароль write-only), `shared/src/config/tls-runtime.test.ts`,
+  `security/tls-runtime.test.ts`, `server/routes/settings-tls.test.ts`,
+  `packages/storage-postgres/src/pool-tls.test.ts`, UI `NetworkSettings.test.tsx`/
+  `TrustedCaSection.test.tsx`; фикстуры —
   `packages/core/src/security/__fixtures__/` (self-signed, `TEST ONLY`).
 - **Нет (остаток):** NTLM/Negotiate/Kerberos (собственный CONNECT-цикл + нативная зависимость,
   приёмка с AD/KDC), `security.tls` через SOCKS5, hot-reload прокси/TLS — [PROP-088](./prop-088-http-proxy.md);
+  per-host CA и несколько default-клиентских сертов — остаток (одна CA-бандл-модель);
   пиннинг адреса (TOCTOU), в т.ч. для direct/`noProxy`-хостов — [PROP-100](./prop-100-ssrf-dns-rebinding.md);
   метрики — [PROP-094](./prop-094-observability-metrics.md); перепроверка покрытия встроенного `fetch`
   на Node 22 в CI.
@@ -377,9 +438,11 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   (единый формат `mode`/`list`/`exceptions`, `off` только у webhooks), `mcp.networkPolicy` в том же
   формате, независимые экземпляры, live per-request, аудит изменений и журнал внешних запросов,
   удаление `webhooks.allowPrivateTargets`, правило взаимодействия с прокси.
-- 2026-10-17/18 — добавлен HTTP/HTTPS/SOCKS5-прокси (D1+D2 + runtime-UI): секция `proxy`,
-  `EgressDispatcher` с per-origin маршрутом, Basic и TLS/mTLS к https-прокси, `noProxy`
-  (host/порт/IP/CIDR), proxied-режим адресной политики и `via` в журнале, fail-closed/`fallbackDirect`,
-  git/MCP через env; runtime-override в `RuntimeSettings.proxy` (UI, применение при старте,
-  `restartRequired`, write-only пароль, аудит `scope:'proxy'`), API `settings/proxy*` (+`/password`,
-  `check` по saved), UI; NTLM/Negotiate/Kerberos — остаток.
+- 2026-10-17/18 — прокси и TLS настраиваются runtime: HTTP/HTTPS/SOCKS5-прокси (секция `proxy`,
+  `EgressDispatcher` с per-origin маршрутом, Basic и TLS/mTLS к https-прокси, `noProxy`, proxied-режим
+  адресной политики и `via`, fail-closed/`fallbackDirect`, git/MCP через env; runtime-override в
+  `RuntimeSettings.proxy`, применение при старте, `restartRequired`, write-only пароль, аудит
+  `scope:'proxy'`, API `settings/proxy*`) и TLS (bootstrap `security-tls.json` до PG, CA-бандл,
+  `rejectUnauthorized`, default mTLS-клиент и per-host `mappings`, тот же профиль для PG, API
+  `settings/tls*`, раздел «Сеть», read-only config/env, аудит `scope:'tls'`); NTLM/Negotiate/Kerberos —
+  остаток.

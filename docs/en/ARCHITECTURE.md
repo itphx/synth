@@ -434,9 +434,12 @@ implemented; plugins (Plugin SDK, PROP-090) and pipelines (PROP-059) are not imp
 All outbound HTTP(S) calls of Synth go through a single layer (ADR-099) rather than through a "raw" `fetch`
 in each subsystem. Three orthogonal parts:
 
-1. **TLS/CA trust (start-only).** The `security.tls` section (`caFile`/`caPem`, mTLS, `rejectUnauthorized`)
-   → `initTlsTrust` → the global undici dispatcher; `egressFetch` is a `fetch` with an explicit dispatcher
-   (`packages/core/src/security/tls.ts`).
+1. **TLS/CA trust (configured at runtime, applied at startup).** The `security.tls` section
+   (`caFile`/`caPem`, default mTLS client, `rejectUnauthorized`) and per-host `mappings` from the
+   **bootstrap file** `{dataDir}/security-tls.json` (edited in "Network" → "Trusted CA (TLS)", read
+   **before** PostgreSQL) → `initTlsTrust` → the global undici dispatcher with profiles; `egressFetch` is a
+   `fetch` with an explicit dispatcher (`packages/core/src/security/tls.ts`). Priority `SYNTH_TLS_*` >
+   runtime > config; PostgreSQL uses the same profile by host, TLS to the proxy is separate (`proxy.tls`).
 2. **Address policy (runtime, live per-request).** `egress.tools`/`egress.webhooks` and
    `mcp.networkPolicy` (`{mode, list, exceptions}`) are resolved from the store on every request; the check
    is `engine/net/egress-guard.ts` (`checkEgressUrl`/`fetchWithEgressGuard`, per-hop redirects, fail-closed).

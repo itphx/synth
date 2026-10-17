@@ -131,7 +131,7 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
   `secrets/proxy-password` (при `SYNTH_PROXY_PASSWORD` → 409 `CONFLICT`).
 - `POST /api/v2/settings/proxy/check` — проверка только коннекта к прокси (`authChallenge`, `latencyMs`);
   без `url` проверяется **saved**-конфигурация (`usingSaved: true`).
-- Админ-секция «Прокси (egress)» — редактируемая форма (URL-поля, `noProxy`, `fromEnv`,
+- Раздел «Сеть» → «Прокси» (админка) — редактируемая форма (URL-поля, `noProxy`, `fromEnv`,
   `fallbackDirect`, таймаут, Basic-username, TLS-пути), write-only пароль, статус saved/running,
   плашка рестарта, «Проверить соединение».
 

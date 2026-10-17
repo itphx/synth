@@ -433,9 +433,13 @@ API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `do
 Все исходящие HTTP(S)-вызовы Synth идут через единый слой (ADR-099), а не через «сырой» `fetch` в
 подсистемах. Три ортогональные части:
 
-1. **Доверие TLS/CA (start-only).** Секция `security.tls` (`caFile`/`caPem`, mTLS, `rejectUnauthorized`)
-   → `initTlsTrust` → глобальный undici-dispatcher; `egressFetch` — `fetch` с явным dispatcher
-   (`packages/core/src/security/tls.ts`).
+1. **Доверие TLS/CA (настраивается runtime, применяется при старте).** Секция `security.tls`
+   (`caFile`/`caPem`, default mTLS-клиент, `rejectUnauthorized`) и per-host `mappings` из
+   **bootstrap-файла** `{dataDir}/security-tls.json` (редактируется в разделе «Сеть» → «Доверенные CA
+   (TLS)», читается **до** PostgreSQL) → `initTlsTrust` → глобальный undici-dispatcher с профилями;
+   `egressFetch` — `fetch` с явным dispatcher (`packages/core/src/security/tls.ts`). Приоритет
+   `SYNTH_TLS_*` > runtime > config; PostgreSQL использует тот же профиль по host, TLS к прокси —
+   отдельно (`proxy.tls`).
 2. **Адресная политика (runtime, live per-request).** `egress.tools`/`egress.webhooks` и
    `mcp.networkPolicy` (`{mode, list, exceptions}`) резолвятся из стора на каждый запрос; проверка —
    `engine/net/egress-guard.ts` (`checkEgressUrl`/`fetchWithEgressGuard`, редиректы per-hop, fail-closed).

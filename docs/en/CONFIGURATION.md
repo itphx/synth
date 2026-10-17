@@ -426,7 +426,7 @@ The source of truth for the TLS policy is `storage.postgres.sslmode`; the CA and
 
 - **Fail-closed:** `verify-full` without a configured CA (`security.tls.caFile`/`caPem`) → a configuration error (no silent `rejectUnauthorized: false` — otherwise server-certificate verification is impossible). mTLS requires **both** files — `certFile` and `keyFile`.
 - **TLS parameters in the DSN are forbidden.** The `storage.postgres.dsn` connection string must not carry `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/`ssl`/`sslnegotiation`/`uselibpqcompat`: the `pg` driver lays the parsed DSN **over** the explicit config (`Object.assign({}, config, parse(connectionString))`) and silently overrides the `ssl` object — up to disabling TLS. Detection → a configuration error: `TLS-параметры в DSN запрещены (обнаружено: …). … задайте их только в storage.postgres.sslmode + security.tls` (`assertNoDsnTlsParams`, `packages/storage-postgres/src/pool.ts`). Both the URL form (`?sslmode=…`) and the libpq-like form (`sslmode=…`) are checked.
-- **TLS is startup configuration** (not runtime): changes are applied at startup; to switch the mode — restart.
+- **TLS is applied at startup** (no live switch): changes — including those saved from the UI into `security-tls.json` — take effect after a restart.
 
 ### Degraded mode on DB unavailability (`storage.degradedMode`, ADR-098)
 
@@ -441,26 +441,105 @@ If `postgres` is selected but the DB is unreachable at startup, the behaviour is
 
 A single source of TLS/CA trust for **all** outbound connections of Synth (LLM providers, MCP HTTP,
 `web_fetch`/`web_search`, webhooks, the hybrid backend, instructions/skills by URL, the update checker,
-OIDC/JWKS, provider icons, git, PostgreSQL). The section is read by the resolvers `resolveTlsConfig`/`resolveTlsTrust`
-(`packages/shared/src/config/tls.ts`); priority — the general one ([ADR-023](../arch_decisions/adr-023-configuration.md)):
-env > `config.yaml` > defaults. Invariant — [ADR-099](../arch_decisions/adr-099-egress-tls-trust.md):
-subsystems do not create their own agents/dispatchers.
+OIDC/JWKS, provider icons, git, PostgreSQL). The section is read by
+`resolveTlsProfiles`/`resolveTlsTrust` (`packages/shared/src/config/tls.ts`). It can be configured in
+`config.yaml`/env and **from the admin UI** (section "Network" → "Trusted CA (TLS)"); it is applied **at
+process startup** (the `EgressDispatcher` is start-only), so saving from the UI takes effect after a restart
+(`restartRequired`). Invariant — [ADR-099](../arch_decisions/adr-099-egress-tls-trust.md): subsystems do not
+create their own agents/dispatchers/CA pools.
+
+**Priority (field-level):** env `SYNTH_TLS_*` > runtime (bootstrap/UI) > `config.yaml` > defaults
+([ADR-023](../arch_decisions/adr-023-configuration.md)). Parameters set in config/env are shown in the UI
+**read-only** with their source; they cannot be overridden from the UI (per-host mappings are the exception).
 
 | Field | Env | Purpose |
 |---|---|---|
-| `caFile` | `SYNTH_TLS_CA_FILE` | Path to a PEM file with the trusted CA (corporate CA); **mutually exclusive** with `caPem` |
+| `caFile` | `SYNTH_TLS_CA_FILE` | Path to a trusted CA PEM file (one certificate or a **CA bundle** of several); **mutually exclusive** with `caPem` |
 | `caPem` | `SYNTH_TLS_CA_PEM` | PEM of the trusted CA (e.g. from a Secret); **mutually exclusive** with `caFile` |
-| `certFile` | `SYNTH_TLS_CERT_FILE` | mTLS: path to the client certificate PEM file |
-| `keyFile` | `SYNTH_TLS_KEY_FILE` | mTLS: path to the client private key PEM file |
+| `certFile` | `SYNTH_TLS_CERT_FILE` | mTLS: path to the client certificate PEM (default profile) |
+| `keyFile` | `SYNTH_TLS_KEY_FILE` | mTLS: path to the client private key PEM (default profile) |
 | `rejectUnauthorized` | `SYNTH_TLS_REJECT_UNAUTHORIZED` | Verify the server certificate (`true`/`1`/`false`/`0`); default `true` |
 
-- **An empty section — system trust** (Node's system CAs), behaviour is unchanged.
-- **`rejectUnauthorized`:** `true` (default) — server-certificate verification; `false` — verification disabled (a deliberate MITM risk; debugging only). An invalid env value — `warn` + fall back to config/default.
-- **mTLS:** `certFile` **and** `keyFile` must be set together; exactly one — a configuration error.
-- **Fail-closed:** `caFile` and `caPem` together → an error; an explicitly set `caFile` that is missing/unreadable/not PEM → an error (no silent fallback to system trust); configured trust without the installed `undici` package (a direct dependency of core `undici@^7`) → a clear error, not an untrusted transport.
-- **Application:** at process startup a global undici dispatcher is built (`setGlobalDispatcher`), so the ordinary `fetch` inherits the trust; points outside the shared transport (git) get the CA via `http.sslCAInfo=<caFile>` (`caPem` without a file is unavailable to the git channel).
-- **`NODE_EXTRA_CA_CERTS` — compatibility only** (inherited by child processes: MCP stdio, git), **not** a configurable trust mechanism.
-- **The TLS transport is startup configuration:** the section is **not** part of the runtime settings (`RuntimeSettings`); changes are applied at startup and require a restart. The same holds for the proxy (`proxy.*`, see below). The address policy, by contrast, is **runtime** (live per-request): see the next section.
+- **An empty configuration — system trust** (Node's system CAs), behaviour is unchanged.
+- **CA bundle:** one CA set for the whole egress; a PEM may contain several certificates. There is **no
+  per-host CA** — only client certificates (mTLS) differ per host.
+- **`rejectUnauthorized`:** `true` (default) — server-certificate verification; `false` — verification
+  disabled (a deliberate MITM risk; debugging only). An invalid env value — `warn` + fallback.
+- **mTLS profiles:** one **default** client (`certFile`+`keyFile`, set together only) and `mappings[]` —
+  per-host cert+key pairs. Patterns: exact host, `*.suffix` (subdomains), `*` (all hosts);
+  case-insensitive; the **first match** in mapping order wins, otherwise the default; if neither exists, no
+  client certificate is presented. `mappings[]` is runtime-only (UI), not in `config.yaml`.
+- **PostgreSQL** uses the **same** profile resolver by host — a default certificate without a mapping is
+  presented to the DB as well. There is no separate "DB certificate" setting.
+- **TLS to the proxy** (`proxy.tls`) is a **separate** section (CA/mTLS to the https proxy), not mixed with
+  target trust; the UI shows it read-only.
+- **Fail-closed:** `caFile` and `caPem` together (including across sources) → an error; an explicitly set
+  `caFile` that is missing/unreadable/not PEM → an error; an incomplete client pair → an error; configured
+  trust without `undici` → a clear error, not an untrusted transport.
+- **Application:** at startup a global undici dispatcher is built (`setGlobalDispatcher`), so the ordinary
+  `fetch` inherits the trust; points outside the shared transport (git) get the CA via
+  `http.sslCAInfo=<caFile>` (`caPem` without a file is unavailable to git).
+- **`NODE_EXTRA_CA_CERTS` — compatibility only** (inherited by child processes: MCP stdio, git), **not** a
+  configurable trust mechanism.
+- **Applied at startup:** `security.tls` is **not** part of `RuntimeSettings`/PG — the dispatcher is
+  process-global. The runtime override lives in the **bootstrap file** `{dataDir}/security-tls.json` (see
+  below), because it is read **before** connecting to PostgreSQL.
+
+#### Configuring from the UI (section "Network")
+
+- **"Proxy"** — the egress proxy (see `proxy.*`): editable form, write-only password, saved/running status,
+  restart banner.
+- **"Trusted CA (TLS)"** — the CA bundle (paste PEM or a file, several certificates, a validate button),
+  `rejectUnauthorized`, the **default** client cert+key (upload, write-only), a **per-host mapping** table
+  (`hosts`, `label`, cert+key; order = priority), read-only config/env parameters with their source, and
+  read-only TLS to the proxy.
+- **Where it is stored:** `{dataDir}/security-tls.json` (0600, directory 0700, atomic tmp→rename); PEM
+  materials — `{dataDir}/secrets/tls/` (`ca.pem`, `client.crt`/`client.key`, `<id>.crt`/`<id>.key`, 0600).
+  The JSON holds only paths and the public `caPem`; keys/secrets are never returned. This is a **deliberate
+  exception** to "everything goes through storage ports": the file is read before the DB.
+- **Application:** at the next startup (`restartRequired`); API — `GET/PUT /api/v2/settings/tls`,
+  `PUT/DELETE /settings/tls/ca`, `PUT/DELETE /settings/tls/client`,
+  `POST/PUT/DELETE /settings/tls/mappings[/:id]`, `POST /settings/tls/validate` (mutations — ADMIN in
+  managed). Changes are written to `{dataDir}/audit/security.jsonl` with `scope:'tls'` (paths, hosts,
+  subject — no PEM/keys). API responses never contain PEM/keys.
+
+Example `config.yaml`:
+
+```yaml
+security:
+  tls:
+    caFile: "/etc/synth/tls/corp-ca.pem"   # or caPem (mutually exclusive); a CA bundle is allowed
+    # certFile: "/etc/synth/tls/client.pem"  # default mTLS client (together with keyFile)
+    # keyFile:  "/etc/synth/tls/client.key"
+    rejectUnauthorized: true
+```
+
+Example runtime override (`{dataDir}/security-tls.json`, managed by the UI; paths under `secrets/tls/`):
+
+```json
+{
+  "caFile": "/var/synth/data/secrets/tls/ca.pem",
+  "rejectUnauthorized": true,
+  "defaultClient": {
+    "certFile": "/var/synth/data/secrets/tls/client.crt",
+    "keyFile": "/var/synth/data/secrets/tls/client.key"
+  },
+  "mappings": [
+    { "id": "m_1", "hosts": ["*.corp.example"], "label": "corp",
+      "certFile": "/var/synth/data/secrets/tls/m_1.crt",
+      "keyFile": "/var/synth/data/secrets/tls/m_1.key" },
+    { "id": "m_2", "hosts": ["*"], "label": "fallback",
+      "certFile": "/var/synth/data/secrets/tls/m_2.crt",
+      "keyFile": "/var/synth/data/secrets/tls/m_2.key" }
+  ]
+}
+```
+
+**Limitations.** No per-host CA (one CA bundle for the whole egress) and no multiple default certificates.
+A default certificate without a mapping is presented to all targets, including PostgreSQL. Through SOCKS5
+no client certificate is passed to the target (`Socks5ProxyAgent` does not accept `requestTls`). There is no
+runtime reload without a restart. The bootstrap file is an exception to "everything goes through storage
+ports" (read before PG).
 
 ### Address policy for outbound requests (`egress.*`, ADR-099)
 
@@ -551,7 +630,8 @@ mcp:
 
 An outbound HTTP/HTTPS/SOCKS5 proxy — part of the single egress layer (see also `security.tls` — trust for the
 **target** and for the https proxy, and `egress.*` — the address policy). The section is **top-level** and can
-be configured in `config.yaml`/env and **from the admin UI** (runtime override, see "Configuring from the UI").
+be configured in `config.yaml`/env and **from the admin UI** (section "Network" → "Proxy"; runtime
+override, see "Configuring from the UI" in the `security.tls` section).
 It is applied **at process startup** (the `EgressDispatcher` is start-only, like TLS): saving from the UI does
 not switch the route live — a restart is required. The route is chosen **per origin**:
 `httpsProxy`/`httpProxy` by the target scheme → `allProxy` → `url`; hosts in `noProxy` go direct.
@@ -590,7 +670,7 @@ hostname rules/`exceptions` are checked (no DNS/CIDR — the proxy resolves the 
 the check is full (DNS/CIDR per hop). The actual route is written to the egress journal (`via`:
 `proxy`/`direct`/`fallback`); `POST /api/v2/settings/egress/check` returns `proxied`/`addressChecksActive`.
 
-#### Configuring from the UI (runtime override)
+#### Configuring from the UI (section "Network" → "Proxy")
 
 - **What is editable:** `enabled`, `url`/`httpProxy`/`httpsProxy`/`allProxy`, `noProxy`, `fromEnv`,
   `fallbackDirect`, `connectTimeoutMs`, `auth.username`, `tls.*` paths. It is stored in

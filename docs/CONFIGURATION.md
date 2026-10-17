@@ -425,7 +425,7 @@ remote:                           # гибридный режим: локаль�
 
 - **Fail-closed:** `verify-full` без сконфигурированного CA (`security.tls.caFile`/`caPem`) → ошибка конфигурации (никакого тихого `rejectUnauthorized: false` — иначе проверка сертификата сервера невозможна). mTLS требует **оба** файла — `certFile` и `keyFile`.
 - **TLS-параметры в DSN запрещены.** Строка подключения `storage.postgres.dsn` не должна нести `sslmode`/`sslrootcert`/`sslcert`/`sslkey`/`ssl`/`sslnegotiation`/`uselibpqcompat`: драйвер `pg` накладывает распарсенный DSN **поверх** явного конфига (`Object.assign({}, config, parse(connectionString))`) и молча перекрывает `ssl`-объект — вплоть до отключения TLS. Обнаружение → ошибка конфигурации: `TLS-параметры в DSN запрещены (обнаружено: …). … задайте их только в storage.postgres.sslmode + security.tls` (`assertNoDsnTlsParams`, `packages/storage-postgres/src/pool.ts`). Проверяются и URL-форма (`?sslmode=…`), и libpq-подобная (`sslmode=…`).
-- **TLS — стартовая конфигурация** (не runtime): изменения применяются при старте; для переключения режима — рестарт.
+- **TLS применяется при старте** (live-переключения нет): изменения — в т.ч. сохранённые из UI в `security-tls.json` — вступают в силу после рестарта.
 
 ### Деградированный режим при недоступности БД (`storage.degradedMode`, ADR-098)
 
@@ -440,26 +440,105 @@ remote:                           # гибридный режим: локаль�
 
 Единый источник доверия TLS/CA для **всех** исходящих соединений Synth (провайдеры LLM, MCP HTTP,
 `web_fetch`/`web_search`, webhooks, гибридный backend, инструкции/скиллы по URL, update-checker,
-OIDC/JWKS, иконки провайдеров, git, PostgreSQL). Секция читается резолверами `resolveTlsConfig`/`resolveTlsTrust`
-(`packages/shared/src/config/tls.ts`); приоритет — общий ([ADR-023](./arch_decisions/adr-023-configuration.md)):
-env > `config.yaml` > дефолты. Инвариант — [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md):
-подсистемы не создают собственных агентов/диспетчеров.
+OIDC/JWKS, иконки провайдеров, git, PostgreSQL). Секция читается резолверами
+`resolveTlsProfiles`/`resolveTlsTrust` (`packages/shared/src/config/tls.ts`). Настраивается в
+`config.yaml`/env и **из админ-UI** (раздел «Сеть» → «Доверенные CA (TLS)»); применение — **при старте
+процесса** (`EgressDispatcher` start-only), сохранение из UI вступает в силу после рестарта
+(`restartRequired`). Инвариант — [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md): подсистемы не
+создают собственных агентов/диспетчеров/CA-пулов.
+
+**Приоритет (поле-уровневый):** env `SYNTH_TLS_*` > runtime (bootstrap/UI) > `config.yaml` > defaults
+([ADR-023](./arch_decisions/adr-023-configuration.md)). Параметры, заданные в config/env, показываются в
+UI **read-only** с пометкой источника; переопределить их из UI нельзя (кроме per-host маппингов).
 
 | Поле | Env | Назначение |
 |---|---|---|
-| `caFile` | `SYNTH_TLS_CA_FILE` | Путь к PEM-файлу доверенного CA (корпоративный CA); **взаимоисключающ** с `caPem` |
+| `caFile` | `SYNTH_TLS_CA_FILE` | Путь к PEM-файлу доверенного CA (один сертификат или **CA-бандл** из нескольких); **взаимоисключающ** с `caPem` |
 | `caPem` | `SYNTH_TLS_CA_PEM` | PEM доверенного CA (например из Secret); **взаимоисключающ** с `caFile` |
-| `certFile` | `SYNTH_TLS_CERT_FILE` | mTLS: путь к PEM-файлу клиентского сертификата |
-| `keyFile` | `SYNTH_TLS_KEY_FILE` | mTLS: путь к PEM-файлу приватного ключа клиента |
+| `certFile` | `SYNTH_TLS_CERT_FILE` | mTLS: путь к PEM-файлу клиентского сертификата (default-профиль) |
+| `keyFile` | `SYNTH_TLS_KEY_FILE` | mTLS: путь к PEM-файлу приватного ключа клиента (default-профиль) |
 | `rejectUnauthorized` | `SYNTH_TLS_REJECT_UNAUTHORIZED` | Проверять сертификат сервера (`true`/`1`/`false`/`0`); по умолчанию `true` |
 
-- **Пустая секция — системное доверие** (системные CA Node), поведение не меняется.
-- **`rejectUnauthorized`:** `true` (дефолт) — проверка сертификата сервера; `false` — проверка отключена (осознанный риск MITM; только для отладки). Невалидное env-значение — `warn` + фолбэк на config/дефолт.
-- **mTLS:** задаются `certFile` **и** `keyFile` одновременно; задан ровно один — ошибка конфигурации.
-- **Fail-closed:** `caFile` и `caPem` одновременно → ошибка; явно заданный `caFile`, который отсутствует/не читается/не PEM → ошибка (никакого тихого фоллбэка на системное доверие); заданное доверие без установленного пакета `undici` (прямая зависимость core `undici@^7`) → внятная ошибка, а не недоверенный транспорт.
-- **Применение:** при старте процесса строится глобальный undici-dispatcher (`setGlobalDispatcher`), обычный `fetch` наследует доверие; точки вне общего транспорта (git) получают CA через `http.sslCAInfo=<caFile>` (`caPem` без файла git-каналу недоступен).
-- **`NODE_EXTRA_CA_CERTS` — только совместимость** (наследуется дочерними процессами: MCP stdio, git), **не** конфигурируемый механизм доверия.
-- **TLS-транспорт — стартовая конфигурация:** секция **не входит** в runtime-настройки (`RuntimeSettings`); изменения применяются при старте и требуют рестарта. То же — для прокси (`proxy.*`, см. ниже). Адресная политика — наоборот, **runtime** (live per-request): см. следующий раздел.
+- **Пустая конфигурация — системное доверие** (системные CA Node), поведение не меняется.
+- **CA-бандл:** один CA-набор на весь egress; в PEM допустимо несколько сертификатов. **Per-host CA
+  нет** — различаются только клиентские сертификаты (mTLS).
+- **`rejectUnauthorized`:** `true` (дефолт) — проверка сертификата сервера; `false` — проверка
+  отключена (осознанный риск MITM; только для отладки). Невалидное env-значение — `warn` + фолбэк.
+- **mTLS-профили:** один **default** клиент (`certFile`+`keyFile`, задаются только вместе) и
+  `mappings[]` — per-host пары серт+ключ. Паттерны: точный host, `*.suffix` (поддомены), `*` (все
+  хосты); регистронезависимо; выбирается **первое совпадение** в порядке маппингов, иначе default; если
+  нет ни того, ни другого — клиентский серт не предъявляется. `mappings[]` — только runtime (UI), в
+  `config.yaml` их нет.
+- **PostgreSQL** использует **тот же** резолвер профилей по host — default-серт без маппинга
+  предъявляется и БД. Отдельной «настройки серта для БД» нет.
+- **TLS к прокси** (`proxy.tls`) — **отдельная** секция (CA/mTLS к https-прокси), не смешивается с
+  доверием к цели; в UI показывается read-only.
+- **Fail-closed:** `caFile` и `caPem` одновременно (в т.ч. между источниками) → ошибка; явно заданный
+  `caFile`, который отсутствует/не читается/не PEM → ошибка; неполная клиентская пара → ошибка;
+  заданное доверие без `undici` → внятная ошибка, а не недоверенный транспорт.
+- **Применение:** при старте строится глобальный undici-dispatcher (`setGlobalDispatcher`), обычный
+  `fetch` наследует доверие; точки вне общего транспорта (git) получают CA через
+  `http.sslCAInfo=<caFile>` (`caPem` без файла git-каналу недоступен).
+- **`NODE_EXTRA_CA_CERTS` — только совместимость** (наследуется дочерними процессами: MCP stdio, git),
+  **не** конфигурируемый механизм доверия.
+- **Применяется при старте:** `security.tls` **не входит** в `RuntimeSettings`/PG — dispatcher
+  процесс-глобальный. Runtime-оверрайд живёт в **bootstrap-файле** `{dataDir}/security-tls.json`
+  (см. ниже), потому что читается **до** подключения к PostgreSQL.
+
+#### Настройка из UI (раздел «Сеть»)
+
+- **«Прокси»** — egress-прокси (см. раздел `proxy.*`): редактируемая форма, пароль write-only,
+  статус saved/running, плашка рестарта.
+- **«Доверенные CA (TLS)»** — CA-бандл (вставка PEM или файл, несколько сертификатов, кнопка
+  проверки/`validate`), `rejectUnauthorized`, **default** клиентский серт+ключ (upload, write-only),
+  таблица **per-host маппингов** (`hosts`, `label`, серт+ключ; порядок = приоритет), read-only
+  параметры config/env с источником и read-only TLS к прокси.
+- **Где хранится:** `{dataDir}/security-tls.json` (0600, каталог 0700, атомарная запись tmp→rename);
+  PEM-материалы — `{dataDir}/secrets/tls/` (`ca.pem`, `client.crt`/`client.key`, `<id>.crt`/`<id>.key`,
+  0600). В JSON — только пути и публичный `caPem`; ключи/секреты наружу не отдаются. Это **осознанное
+  исключение** из «всё через порты хранилища»: файл читается до БД.
+- **Применение:** при следующем старте (`restartRequired`); API — `GET/PUT /api/v2/settings/tls`,
+  `PUT/DELETE /settings/tls/ca`, `PUT/DELETE /settings/tls/client`,
+  `POST/PUT/DELETE /settings/tls/mappings[/:id]`, `POST /settings/tls/validate` (мутации — ADMIN в
+  managed). Изменения пишутся в аудит `{dataDir}/audit/security.jsonl` со `scope:'tls'` (пути, hosts,
+  subject — без PEM/ключей). Ответы API не содержат PEM/ключей.
+
+Пример `config.yaml`:
+
+```yaml
+security:
+  tls:
+    caFile: "/etc/synth/tls/corp-ca.pem"   # или caPem (взаимоисключающи); допускается CA-бандл
+    # certFile: "/etc/synth/tls/client.pem"  # default mTLS-клиент (вместе с keyFile)
+    # keyFile:  "/etc/synth/tls/client.key"
+    rejectUnauthorized: true
+```
+
+Пример runtime-оверрайда (`{dataDir}/security-tls.json`, управляется UI; пути — в `secrets/tls/`):
+
+```json
+{
+  "caFile": "/var/synth/data/secrets/tls/ca.pem",
+  "rejectUnauthorized": true,
+  "defaultClient": {
+    "certFile": "/var/synth/data/secrets/tls/client.crt",
+    "keyFile": "/var/synth/data/secrets/tls/client.key"
+  },
+  "mappings": [
+    { "id": "m_1", "hosts": ["*.corp.example"], "label": "corp",
+      "certFile": "/var/synth/data/secrets/tls/m_1.crt",
+      "keyFile": "/var/synth/data/secrets/tls/m_1.key" },
+    { "id": "m_2", "hosts": ["*"], "label": "fallback",
+      "certFile": "/var/synth/data/secrets/tls/m_2.crt",
+      "keyFile": "/var/synth/data/secrets/tls/m_2.key" }
+  ]
+}
+```
+
+**Ограничения.** Нет per-host CA (один CA-бандл на весь egress) и нет нескольких default-сертов.
+Default-серт без маппинга предъявляется всем целям, включая PostgreSQL. Через SOCKS5 клиентский серт к
+цели не передаётся (`Socks5ProxyAgent` не принимает `requestTls`). Runtime-reload без рестарта нет.
+Bootstrap-файл — исключение из правила «всё через порты хранилища» (читается до PG).
 
 ### Адресная политика исходящих запросов (`egress.*`, ADR-099)
 
@@ -549,7 +628,8 @@ mcp:
 
 Исходящий HTTP/HTTPS/SOCKS5-прокси — часть единого egress-слоя (см. также `security.tls` — доверие к
 **цели** и к https-прокси, и `egress.*` — адресная политика). Секция **top-level**; настраивается в
-`config.yaml`/env и **из админ-UI** (runtime-override, см. «Настройка из UI»). Применение — **при
+`config.yaml`/env и **из админ-UI** (раздел «Сеть» → «Прокси»; runtime-override, см.
+«Настройка из UI» в разделе `security.tls`). Применение — **при
 старте процесса** (`EgressDispatcher` start-only, как TLS): сохранение из UI не переключает маршрут на
 лету, нужен рестарт. Маршрут выбирается **per-origin**: `httpsProxy`/`httpProxy` по схеме цели →
 `allProxy` → `url`; хосты из `noProxy` идут напрямую.
@@ -588,7 +668,7 @@ hostname-правила/`exceptions` (DNS/CIDR не выполняются — �
 проверка полная (DNS/CIDR каждого хопа). Фактический маршрут пишется в журнал egress (`via`:
 `proxy`/`direct`/`fallback`); `POST /api/v2/settings/egress/check` отдаёт `proxied`/`addressChecksActive`.
 
-#### Настройка из UI (runtime-override)
+#### Настройка из UI (раздел «Сеть» → «Прокси»)
 
 - **Что редактируется:** `enabled`, `url`/`httpProxy`/`httpsProxy`/`allProxy`, `noProxy`, `fromEnv`,
   `fallbackDirect`, `connectTimeoutMs`, `auth.username`, пути `tls.*`. Сохраняется в
