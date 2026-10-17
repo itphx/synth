@@ -24,6 +24,7 @@ import type {
   UpsertRouteRuleInput,
   EventApiKeyResolution,
   EventKeyCredential,
+  EventApiKeyRecord,
 } from '@itphx/synth-core';
 import type { PortDeps } from './deps.js';
 import {
@@ -264,6 +265,11 @@ function toPublicKey(row: ApiKeyRow): EventBindingApiKey {
   });
 }
 
+/** Внутренняя запись для переноса между backend'ами: публичные поля + sha256-хеш. */
+function toRecord(row: ApiKeyRow): EventApiKeyRecord {
+  return { ...toPublicKey(row), hash: row.secret_hash };
+}
+
 /**
  * ADR-089/ADR-052: реестр API-ключей привязок поверх `event_api_keys`.
  *
@@ -289,6 +295,61 @@ export class PgEventApiKeyRepository {
       [keyId, bindingId],
     );
     return rows[0] ? toPublicKey(rows[0]) : null;
+  }
+
+  /** Полные записи (включая `secret_hash`) — только для переноса между backend'ами. */
+  async exportAll(): Promise<EventApiKeyRecord[]> {
+    const rows = await this._deps.connection.query<ApiKeyRow>(
+      'SELECT * FROM event_api_keys ORDER BY created_at, id',
+    );
+    return rows.map(toRecord);
+  }
+
+  /**
+   * Импорт готовой записи как есть (PROP-032): `id`/`bindingId`/`prefix`/
+   * `secret_hash` сохраняются. `ON CONFLICT DO NOTHING` — идемпотентно; при
+   * конфликте возвращается существующая строка (по `id`, метке или хешу).
+   */
+  async importExisting(record: EventApiKeyRecord): Promise<EventBindingApiKey> {
+    const label = record.label?.trim() ?? '';
+    if (!record.id) throw new Error('id обязателен');
+    if (!record.bindingId) throw new Error('bindingId обязателен');
+    if (!label) throw new Error('label обязателен');
+    if (!record.hash) throw new Error('hash обязателен');
+
+    const inserted = await this._deps.connection.query<ApiKeyRow>(
+      `INSERT INTO event_api_keys
+         (id, binding_id, label, description, secret_hash, prefix, rate_limit_per_minute,
+          created_by, created_at, last_used_at, expires_at, revoked_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       ON CONFLICT DO NOTHING
+       RETURNING *`,
+      [
+        record.id,
+        record.bindingId,
+        label,
+        record.description ?? null,
+        record.hash,
+        record.prefix,
+        record.rateLimitPerMinute ?? null,
+        record.createdBy,
+        record.createdAt,
+        record.lastUsedAt ?? null,
+        record.expiresAt ?? null,
+        record.revokedAt ?? null,
+      ],
+    );
+    if (inserted[0]) return toPublicKey(inserted[0]);
+
+    const existing = await this._deps.connection.query<ApiKeyRow>(
+      `SELECT * FROM event_api_keys
+        WHERE id = $1 OR lower(label) = lower($2) OR secret_hash = $3
+        ORDER BY CASE WHEN id = $1 THEN 0 WHEN lower(label) = lower($2) THEN 1 ELSE 2 END
+        LIMIT 1`,
+      [record.id, label, record.hash],
+    );
+    if (!existing[0]) throw new Error(`API-ключ ${record.id} не импортирован (конфликт без записи)`);
+    return toPublicKey(existing[0]);
   }
 
   async create(input: CreateEventApiKeyInput): Promise<EventBindingApiKeyCreated> {

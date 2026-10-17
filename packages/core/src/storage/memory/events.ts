@@ -51,12 +51,17 @@ import type {
 import type { UpsertEventBindingInput } from '../event-binding-store.js';
 import type { UpsertRouteRuleInput } from '../route-rule-store.js';
 import type { EventJournalEntry } from '../event-journal-store.js';
-import type { CreateEventApiKeyInput, UpdateEventApiKeyPatch } from '../event-api-key-store.js';
+import type {
+  CreateEventApiKeyInput,
+  EventApiKeyRecord,
+  UpdateEventApiKeyPatch,
+} from '../event-api-key-store.js';
 import { EVENT_API_KEY_SECRET_PREFIX, EventApiKeyConflictError } from '../event-api-key-store.js';
 import type { IdentityClaimRecord } from '../identity-claim-store.js';
 import type { AddMcpRegistryEntryInput, UpdateMcpRegistryEntryInput } from '../mcp-registry-store.js';
 import type {
   EnsureServiceKeyInput,
+  ServiceApiKeyRecord,
   ServiceKeyCredential,
   ServiceKeyEnsureStatus,
 } from '../service-api-key-store.js';
@@ -218,6 +223,32 @@ export class MemoryEventApiKeyRepository implements EventApiKeyRepository {
   async get(bindingId: string, keyId: string): Promise<EventBindingApiKey | null> {
     const record = this._keys.get(keyId);
     return record && record.bindingId === bindingId ? this._toPublic(record) : null;
+  }
+
+  /** Полные записи (включая `hash`) — только для переноса между backend'ами. */
+  async exportAll(): Promise<EventApiKeyRecord[]> {
+    return [...this._keys.values()].map((record) => ({ ...record }));
+  }
+
+  /**
+   * Импорт готовой записи как есть (PROP-032): `id`/`prefix`/`hash` сохраняются.
+   * Идемпотентно: при совпадении `id`, метки или хеша возвращается существующая.
+   */
+  async importExisting(record: EventApiKeyRecord): Promise<EventBindingApiKey> {
+    if (!record.hash) throw new Error('hash обязателен');
+    const label = normalizeLabel(record.label);
+    const sameId = this._keys.get(record.id);
+    if (sameId) return this._toPublic(sameId);
+    for (const existing of this._keys.values()) {
+      if (labelKey(existing.label ?? '') === labelKey(label) || existing.hash === record.hash) {
+        return this._toPublic(existing);
+      }
+    }
+    const { name, ...rest } = record;
+    void name;
+    const stored: MemoryEventApiKeyRecord = { ...rest, label };
+    this._keys.set(stored.id, stored);
+    return this._toPublic(stored);
   }
 
   async create(input: CreateEventApiKeyInput): Promise<EventBindingApiKeyCreated> {
@@ -629,6 +660,41 @@ export class MemoryServiceKeyRepository implements ServiceKeyRepository {
   async get(id: string): Promise<ServiceApiKey | null> {
     const record = this._keys.get(id);
     return record ? this._toPublic(record) : null;
+  }
+
+  /** Полные записи (включая `hash`) — только для переноса между backend'ами. */
+  async exportAll(): Promise<ServiceApiKeyRecord[]> {
+    return [...this._keys.values()].map((record) => ({
+      ...record,
+      roles: [...record.roles],
+      scopes: [...record.scopes],
+      ...(record.allowedProjects ? { allowedProjects: [...record.allowedProjects] } : {}),
+    }));
+  }
+
+  /**
+   * Импорт готовой записи как есть (PROP-032): `id`/`prefix`/`hash` сохраняются.
+   * Идемпотентно: при совпадении `id`, метки или хеша возвращается существующая.
+   */
+  async importExisting(record: ServiceApiKeyRecord): Promise<ServiceApiKey> {
+    if (!record.hash) throw new Error('hash обязателен');
+    const label = normalizeLabel(record.label);
+    const sameId = this._keys.get(record.id);
+    if (sameId) return this._toPublic(sameId);
+    for (const existing of this._keys.values()) {
+      if (labelKey(existing.label ?? '') === labelKey(label) || existing.hash === record.hash) {
+        return this._toPublic(existing);
+      }
+    }
+    const stored: MemoryServiceKeyRecord = {
+      ...record,
+      label,
+      roles: [...record.roles],
+      scopes: [...record.scopes],
+      ...(record.allowedProjects ? { allowedProjects: [...record.allowedProjects] } : {}),
+    };
+    this._keys.set(stored.id, stored);
+    return this._toPublic(stored);
   }
 
   async create(input: CreateServiceApiKeyInput, createdBy: string): Promise<ServiceApiKeyCreated> {

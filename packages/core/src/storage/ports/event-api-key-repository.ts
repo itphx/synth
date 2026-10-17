@@ -1,6 +1,10 @@
 import type { EventBindingApiKey, EventBindingApiKeyCreated } from '@itphx/synth-shared';
 import type { EventKeyCredential } from '../../engine/events/credential.js';
-import type { CreateEventApiKeyInput, UpdateEventApiKeyPatch } from '../event-api-key-store.js';
+import type {
+  CreateEventApiKeyInput,
+  EventApiKeyRecord,
+  UpdateEventApiKeyPatch,
+} from '../event-api-key-store.js';
 
 /** Результат резолва секрета binding-key: публичные метаданные + контекст аутентификации. */
 export interface EventApiKeyResolution {
@@ -13,6 +17,10 @@ export interface EventApiKeyResolution {
  *
  * Метка уникальна глобально по инстансу (регистронезависимо) — инвариант любой
  * реализации; нарушение реализуется доменным конфликтом (`EventApiKeyConflictError`).
+ *
+ * `exportAll`/`importExisting` — служебная пара для переноса между backend'ами
+ * (`synth storage migrate`, PROP-032): она работает с **готовым хешем**, plaintext
+ * не участвует. HTTP-слой эти методы не использует.
  */
 export interface EventApiKeyRepository {
   listByBinding(bindingId: string): Promise<EventBindingApiKey[]>;
@@ -31,4 +39,17 @@ export interface EventApiKeyRepository {
   /** Резолв секрета `synth_evt_…`; revoked/expired/unknown → `null`. */
   resolveBySecret(rawSecret: string): Promise<EventApiKeyResolution | null>;
   touch(id: string): Promise<void>;
+  /**
+   * Полные записи, включая `hash` (sha256) — только для переноса между
+   * backend'ами (`synth storage migrate`); публичный API отдаёт `listByBinding`.
+   */
+  exportAll(): Promise<EventApiKeyRecord[]>;
+  /**
+   * Импорт готовой записи **как есть** (PROP-032): сохраняет `id`, `bindingId`,
+   * `prefix`, `hash` и метаданные; новый секрет не генерируется, plaintext не
+   * принимается. Идемпотентно: если запись с таким `id`, меткой
+   * (регистронезависимо) или хешем уже существует — возвращается она, запись не
+   * перезаписывается.
+   */
+  importExisting(record: EventApiKeyRecord): Promise<EventBindingApiKey>;
 }

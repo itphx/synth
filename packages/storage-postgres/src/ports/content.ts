@@ -73,6 +73,7 @@ import type {
   ServiceKeyEnsureStatus,
   ServiceKeyRepository,
   ServiceKeyResolution,
+  ServiceApiKeyRecord,
   SkillBundleRepository,
   SSHKeyRepository,
   SSHKeyStoreError,
@@ -285,6 +286,11 @@ function serviceKeyToPublic(row: ServiceKeyRow): ServiceApiKey {
   return key;
 }
 
+/** Внутренняя запись для переноса между backend'ами: публичные поля + sha256-хеш. */
+function serviceKeyToRecord(row: ServiceKeyRow): ServiceApiKeyRecord {
+  return { ...serviceKeyToPublic(row), hash: row.secret_hash };
+}
+
 /** Порт реестра service-key инстанса поверх таблицы `service_keys`. */
 class PostgresServiceKeyRepository implements ServiceKeyRepository {
   constructor(private readonly _deps: PortDeps) {}
@@ -304,6 +310,62 @@ class PostgresServiceKeyRepository implements ServiceKeyRepository {
     const rows = await this._db().query<ServiceKeyRow>('SELECT * FROM service_keys WHERE id = $1', [id]);
     const row = rows[0];
     return row ? serviceKeyToPublic(row) : null;
+  }
+
+  /** Полные записи (включая `secret_hash`) — только для переноса между backend'ами. */
+  async exportAll(): Promise<ServiceApiKeyRecord[]> {
+    const rows = await this._db().query<ServiceKeyRow>(
+      'SELECT * FROM service_keys ORDER BY created_at ASC',
+    );
+    return rows.map(serviceKeyToRecord);
+  }
+
+  /**
+   * Импорт готовой записи как есть (PROP-032): `id`/`prefix`/`secret_hash`
+   * сохраняются. `ON CONFLICT DO NOTHING` — идемпотентно; при конфликте
+   * возвращается существующая строка (по `id`, метке или хешу).
+   */
+  async importExisting(record: ServiceApiKeyRecord): Promise<ServiceApiKey> {
+    const label = record.label?.trim() ?? '';
+    if (!record.id) throw new Error('id обязателен');
+    if (!label) throw new Error('label обязателен');
+    if (!record.hash) throw new Error('hash обязателен');
+
+    const inserted = await this._db().query<ServiceKeyRow>(
+      `INSERT INTO service_keys
+         (id, label, description, roles, scopes, allowed_projects, rate_limit_per_minute,
+          secret_hash, prefix, created_by, created_at, last_used_at, expires_at, revoked_at)
+       VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14)
+       ON CONFLICT DO NOTHING
+       RETURNING *`,
+      [
+        record.id,
+        label,
+        record.description ?? null,
+        jsonParam(record.roles),
+        jsonParam(record.scopes),
+        record.allowedProjects !== undefined ? jsonParam(record.allowedProjects) : null,
+        record.rateLimitPerMinute ?? null,
+        record.hash,
+        record.prefix,
+        record.createdBy,
+        record.createdAt,
+        record.lastUsedAt ?? null,
+        record.expiresAt ?? null,
+        record.revokedAt ?? null,
+      ],
+    );
+    if (inserted[0]) return serviceKeyToPublic(inserted[0]);
+
+    const existing = await this._db().query<ServiceKeyRow>(
+      `SELECT * FROM service_keys
+        WHERE id = $1 OR lower(label) = lower($2) OR secret_hash = $3
+        ORDER BY CASE WHEN id = $1 THEN 0 WHEN lower(label) = lower($2) THEN 1 ELSE 2 END
+        LIMIT 1`,
+      [record.id, label, record.hash],
+    );
+    if (!existing[0]) throw new Error(`service-key ${record.id} не импортирован (конфликт без записи)`);
+    return serviceKeyToPublic(existing[0]);
   }
 
   private async _assertLabelUnique(label: string, excludeId?: string): Promise<void> {

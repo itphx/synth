@@ -198,6 +198,56 @@ export class ServiceApiKeyStore implements ServiceKeyRepository {
   }
 
   /**
+   * Полные записи (включая `hash`) — только для переноса между backend'ами
+   * (`synth storage migrate`, PROP-032); публичный API использует `list()`.
+   */
+  async exportAll(): Promise<ServiceApiKeyRecord[]> {
+    const file = await this._load();
+    return file.keys.map((record) => ({
+      ...record,
+      roles: [...record.roles],
+      scopes: [...record.scopes],
+      ...(record.allowedProjects ? { allowedProjects: [...record.allowedProjects] } : {}),
+    }));
+  }
+
+  /**
+   * Импорт готовой записи как есть: `id`/`prefix`/`hash`/метаданные сохраняются,
+   * новый секрет не генерируется. Идемпотентно: при совпадении `id`, метки или
+   * хеша возвращается существующая запись (без перезаписи).
+   */
+  async importExisting(record: ServiceApiKeyRecord): Promise<ServiceApiKey> {
+    this._validateId(record.id);
+    const label = this._normalizeLabel(record.label);
+    if (!record.hash) throw new Error('hash обязателен');
+    await this._lock.acquire();
+    try {
+      const file = await this._load();
+      const sameId = file.keys.find((k) => k.id === record.id);
+      if (sameId) return this._toPublic(sameId);
+      const sameLabel = file.keys.find(
+        (k) => this._labelKey(k.label ?? '') === this._labelKey(label),
+      );
+      if (sameLabel) return this._toPublic(sameLabel);
+      const sameHash = file.keys.find((k) => k.hash === record.hash);
+      if (sameHash) return this._toPublic(sameHash);
+
+      const stored: ServiceApiKeyRecord = {
+        ...record,
+        label,
+        roles: [...record.roles],
+        scopes: [...record.scopes],
+        ...(record.allowedProjects ? { allowedProjects: [...record.allowedProjects] } : {}),
+      };
+      file.keys.push(stored);
+      await this._save(file);
+      return this._toPublic(stored);
+    } finally {
+      this._lock.release();
+    }
+  }
+
+  /**
    * Создаёт ключ: генерирует секрет `synth_svc_<base64url>`, сохраняет только
    * его sha256-хеш и возвращает публичные метаданные + plaintext-секрет
    * (единственный раз). Метка `label` обязательна и уникальна глобально по

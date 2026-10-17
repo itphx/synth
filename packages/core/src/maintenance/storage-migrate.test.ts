@@ -211,9 +211,9 @@ describe('migrateStorageData — перенос данных через порт
     expect(await target!.skillBundles.exists('bundle-1')).toBe(true);
     expect((await target!.maintenanceAudit.list()).map((entry) => entry.id)).toEqual(['ma-1']);
 
-    // Секреты-хеши портом не переносятся — сущности помечены примечанием.
-    expect(entity(report, 'serviceKeys').note).toContain('перевыпущен');
-    expect(entity(report, 'eventApiKeys').note).toContain('перевыпущен');
+    // service-key и ключи привязок переносятся как есть (hash/prefix/id), webhooks — нет.
+    expect(entity(report, 'serviceKeys').note).toBeUndefined();
+    expect(entity(report, 'eventApiKeys').note).toBeUndefined();
     expect(entity(report, 'webhooks').note).toContain('перевыпущен');
   });
 
@@ -232,6 +232,43 @@ describe('migrateStorageData — перенос данных через порт
     expect(await target!.schedules.list()).toHaveLength(1);
     expect(await target!.maintenanceAudit.list()).toHaveLength(1);
     expect(await target!.eventBindings.list()).toHaveLength(1);
+  });
+
+  it('service-key и event-ключ переносятся с исходными id/hash/prefix — выданные токены работают', async () => {
+    const src = createMemoryStorage();
+    const dst = createMemoryStorage();
+    await src.eventBindings.upsert({ id: 'bnd-9', source: 'telegram', chatKey: 'chat-9', mode: 'bound' });
+    const eventKey = await src.eventApiKeys.create({ bindingId: 'bnd-9', label: 'gateway', createdBy: 'local' });
+    const serviceKey = await src.serviceKeys.create(
+      { label: 'installer-x', scopes: ['events:ingest'] },
+      'local',
+    );
+    const srcEvent = (await src.eventApiKeys.exportAll()).find((key) => key.id === eventKey.id)!;
+    const srcService = (await src.serviceKeys.exportAll()).find((key) => key.id === serviceKey.id)!;
+
+    await migrateStorageData({ source: src, target: dst });
+
+    // Токены, выданные до миграции, резолвятся на цели (регрессия 401).
+    const dstEvent = await dst.eventApiKeys.resolveBySecret(eventKey.key);
+    expect(dstEvent?.key.id).toBe(eventKey.id);
+    expect(dstEvent?.key.prefix).toBe(eventKey.prefix);
+    const dstService = await dst.serviceKeys.resolveBySecret(serviceKey.key);
+    expect(dstService?.key.id).toBe(serviceKey.id);
+    expect(dstService?.key.prefix).toBe(serviceKey.prefix);
+
+    // at-rest хеш перенесён без перегенерации.
+    expect((await dst.eventApiKeys.exportAll()).find((key) => key.id === eventKey.id)?.hash).toBe(
+      srcEvent.hash,
+    );
+    expect((await dst.serviceKeys.exportAll()).find((key) => key.id === serviceKey.id)?.hash).toBe(
+      srcService.hash,
+    );
+
+    // Повторный прогон ничего не дублирует.
+    const second = await migrateStorageData({ source: src, target: dst });
+    expect(second.copied).toBe(0);
+    expect(await dst.eventApiKeys.listByBinding('bnd-9')).toHaveLength(1);
+    expect((await dst.serviceKeys.list()).filter((key) => key.label === 'installer-x')).toHaveLength(1);
   });
 
   it('dry-run: счётчики считаются, цель не меняется', async () => {

@@ -142,6 +142,43 @@ export function describeEventApiKeyRepository(
       expect(await repo.resolveBySecret(created.key)).toBeNull();
       expect(await repo.resolveBySecret('synth_evt_unknown')).toBeNull();
     });
+
+    it('importExisting: id/prefix/hash/bindingId сохраняются, секрет резолвится, повтор не дублирует', async () => {
+      const source = await make();
+      const target = await make();
+      const created = await source.repo.create({ bindingId: 'b1', label: 'legacy', createdBy: 'u1' });
+      const records = await source.repo.exportAll();
+      expect(records).toHaveLength(1);
+      const record = records[0]!;
+      expect(record.hash).toMatch(/^[0-9a-f]{64}$/);
+
+      const imported = await target.repo.importExisting(record);
+      expect(imported.id).toBe(created.id);
+      expect(imported.bindingId).toBe('b1');
+      expect(imported.prefix).toBe(created.prefix);
+      expect(imported.createdAt).toBe(created.createdAt);
+      expect((await target.repo.exportAll())[0]?.hash).toBe(record.hash);
+
+      // Ключ, выданный до переноса, продолжает работать (регрессия 401).
+      const resolved = await target.repo.resolveBySecret(created.key);
+      expect(resolved?.key.id).toBe(created.id);
+
+      const again = await target.repo.importExisting(record);
+      expect(again.id).toBe(created.id);
+      expect(await target.repo.listByBinding('b1')).toHaveLength(1);
+    });
+
+    it('importExisting сохраняет revokedAt (импортированный ключ не резолвится)', async () => {
+      const source = await make();
+      const target = await make();
+      const created = await source.repo.create({ bindingId: 'b1', label: 'revoked', createdBy: 'u1' });
+      await source.repo.revoke('b1', created.id);
+      const record = (await source.repo.exportAll())[0]!;
+
+      const imported = await target.repo.importExisting(record);
+      expect(imported.revokedAt).toBeDefined();
+      expect(await target.repo.resolveBySecret(created.key)).toBeNull();
+    });
   });
 }
 

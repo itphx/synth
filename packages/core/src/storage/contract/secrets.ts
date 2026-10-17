@@ -46,6 +46,49 @@ export function describeServiceKeyRepository(
       await repo.revoke(created.id);
       expect(await repo.resolveBySecret(created.key)).toBeNull();
     });
+
+    it('importExisting: id/prefix/hash сохраняются, секрет резолвится, повтор не дублирует', async () => {
+      const source = await make();
+      const target = await make();
+      const created = await source.repo.create(
+        { label: 'legacy', scopes: ['events:read'] },
+        'admin',
+      );
+      const records = await source.repo.exportAll();
+      expect(records).toHaveLength(1);
+      const record = records[0]!;
+      expect(record.hash).toMatch(/^[0-9a-f]{64}$/);
+
+      const imported = await target.repo.importExisting(record);
+      expect(imported.id).toBe(created.id);
+      expect(imported.prefix).toBe(created.prefix);
+      expect(imported.label).toBe('legacy');
+      expect(imported.scopes).toEqual(['events:read']);
+      expect(imported.createdBy).toBe('admin');
+      expect(imported.createdAt).toBe(created.createdAt);
+      expect((await target.repo.exportAll())[0]?.hash).toBe(record.hash);
+
+      // Ключ, выданный до переноса, продолжает работать (регрессия 401).
+      const resolved = await target.repo.resolveBySecret(created.key);
+      expect(resolved?.key.id).toBe(created.id);
+
+      // Повторный импорт — идемпотентно.
+      const again = await target.repo.importExisting(record);
+      expect(again.id).toBe(created.id);
+      expect(await target.repo.list()).toHaveLength(1);
+    });
+
+    it('importExisting сохраняет revokedAt (импортированный ключ не резолвится)', async () => {
+      const source = await make();
+      const target = await make();
+      const created = await source.repo.create({ label: 'revoked', scopes: [] }, 'admin');
+      await source.repo.revoke(created.id);
+      const record = (await source.repo.exportAll())[0]!;
+
+      const imported = await target.repo.importExisting(record);
+      expect(imported.revokedAt).toBeDefined();
+      expect(await target.repo.resolveBySecret(created.key)).toBeNull();
+    });
   });
 }
 

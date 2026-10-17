@@ -23,13 +23,16 @@
 //   `meta.json`, `workspaces/`, `secrets/master.key` — см. ADR-091/ADR-092;
 // - `meta.json` (версия схемы данных инстанса) — контур `synth migrate`.
 //
-// ── Известные ограничения (порты не дают записать секрет at-rest) ─────────
-// - `eventApiKeys`/`serviceKeys`/`webhooks`: секрет хранится только хешем
-//   (sha256) либо шифруется мастер-ключом цели и наружу не отдаётся на запись —
-//   при переносе создаётся **новая** запись с **новым** секретом (метаданные
-//   сохраняются), о чём выводится предупреждение;
-// - `schedules`/`mcpRegistry`/`webhooks`/`sshKeys` получают новые `id`
+// ── Известные ограничения ────────────────────────────────────────────────
+// - `webhooks`: signing-секрет шифруется мастер-ключом цели и наружу на запись
+//   не отдаётся — при переносе создаётся **новая** подписка с **новым** секретом
+//   (метаданные сохраняются), о чём выводится предупреждение;
+// - `schedules`/`webhooks`/`sshKeys`/`mcpRegistry` получают новые `id`
 //   (порт `create`/`add` их генерирует), привязки по `id` переезжают как есть.
+//
+// `eventApiKeys`/`serviceKeys`, наоборот, переносятся **как есть** (`importExisting`):
+// сохраняются `id`, `prefix` и at-rest sha256-хеш, поэтому выданные ранее токены
+// продолжают работать (PROP-032, регрессия «401 после миграции»).
 import { readdir } from 'node:fs/promises';
 import type { SynthConfig } from '@itphx/synth-shared';
 import { resolveStorageBackend } from '@itphx/synth-shared';
@@ -53,7 +56,7 @@ export interface StorageMigrationEntity {
   entity: string;
   copied: number;
   skipped: number;
-  /** Замечание (напр. «секреты перевыпущены») — для отчёта. */
+  /** Замечание (напр. «signing-секрет перевыпущен») — для отчёта. */
   note?: string;
 }
 
@@ -434,46 +437,31 @@ async function copyEventRoutes(src: StorageContext, dst: StorageContext, ctx: Co
 }
 
 /**
- * API-ключи привязок: `secret_hash` (sha256) портом не отдаётся — метаданные
- * пересоздаются с **новым** секретом (`create`), отозванные — повторно
- * отзываются. Идемпотентность — по глобальной метке (`label`).
+ * API-ключи привязок: переносятся **как есть** (`importExisting`) — сохраняются
+ * `id`, `prefix`, `bindingId` и at-rest sha256-хеш, поэтому уже выданные токены
+ * остаются валидными. Идемпотентность — по `id`/метке/хешу.
  */
-async function copyEventApiKeys(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
-  const counter: Counter = { copied: 0, skipped: 0, note: 'секреты перевыпущены (at-rest sha256 не переносится)' };
-  let warned = false;
+async function copyEventApiKeys(
+  src: StorageContext,
+  dst: StorageContext,
+  ctx: CopyContext,
+): Promise<Counter> {
+  const counter: Counter = { copied: 0, skipped: 0 };
+  const keys = await src.eventApiKeys.exportAll();
+  if (keys.length === 0) return counter;
+  const existing = await dst.eventApiKeys.exportAll();
+  const ids = new Set(existing.map((key) => key.id));
+  const labels = new Set(existing.map((key) => key.label.toLowerCase()));
+  const hashes = new Set(existing.map((key) => key.hash));
 
-  for (const binding of await src.eventBindings.list()) {
-    const keys = await src.eventApiKeys.listByBinding(binding.id);
-    if (keys.length === 0) continue;
-    const existing = await dst.eventApiKeys.listByBinding(binding.id);
-    for (const key of keys) {
-      const exists = existing.some((item) => item.label.toLowerCase() === key.label.toLowerCase());
-      if (exists) {
-        counter.skipped += 1;
-        continue;
-      }
-      if (!warned) {
-        ctx.warn(
-          'Предупреждение: API-ключи привязок переносятся метаданными с НОВЫМ секретом ' +
-            '(at-rest хранится только sha256) — клиентам нужно получить новые ключи.',
-        );
-        warned = true;
-      }
-      if (ctx.dryRun) {
-        counter.copied += 1;
-        continue;
-      }
-      const created = await dst.eventApiKeys.create({
-        bindingId: key.bindingId,
-        label: key.label,
-        createdBy: key.createdBy || 'migrate',
-        ...(key.description !== undefined ? { description: key.description } : {}),
-        ...(key.expiresAt !== undefined ? { expiresAt: key.expiresAt } : {}),
-        ...(key.rateLimitPerMinute !== undefined ? { rateLimitPerMinute: key.rateLimitPerMinute } : {}),
-      });
-      if (key.revokedAt !== undefined) await dst.eventApiKeys.revoke(created.bindingId, created.id);
-      counter.copied += 1;
-    }
+  for (const key of keys) {
+    const exists = ids.has(key.id) || labels.has(key.label.toLowerCase()) || hashes.has(key.hash);
+    await _copyOne(
+      ctx.dryRun,
+      exists,
+      () => dst.eventApiKeys.importExisting(key).then(() => undefined),
+      counter,
+    );
   }
   return counter;
 }
@@ -687,46 +675,31 @@ async function copySshKeys(src: StorageContext, dst: StorageContext, ctx: CopyCo
 }
 
 /**
- * service-key инстанса: at-rest sha256 — секрет невосстановим, ключ пересоздаётся
- * с **новым** секретом (метаданные сохраняются). Идемпотентность — по метке.
+ * service-key инстанса: переносятся **как есть** (`importExisting`) — сохраняются
+ * `id`, `prefix` и at-rest sha256-хеш, поэтому уже выданные токены остаются
+ * валидными. Идемпотентность — по `id`/метке/хешу.
  */
-async function copyServiceKeys(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
-  const counter: Counter = { copied: 0, skipped: 0, note: 'секреты перевыпущены (at-rest sha256 не переносится)' };
-  const keys = await src.serviceKeys.list();
+async function copyServiceKeys(
+  src: StorageContext,
+  dst: StorageContext,
+  ctx: CopyContext,
+): Promise<Counter> {
+  const counter: Counter = { copied: 0, skipped: 0 };
+  const keys = await src.serviceKeys.exportAll();
   if (keys.length === 0) return counter;
-  const existing = new Set((await dst.serviceKeys.list()).map((key) => key.label.toLowerCase()));
-  let warned = false;
+  const existing = await dst.serviceKeys.exportAll();
+  const ids = new Set(existing.map((key) => key.id));
+  const labels = new Set(existing.map((key) => key.label.toLowerCase()));
+  const hashes = new Set(existing.map((key) => key.hash));
 
   for (const key of keys) {
-    if (existing.has(key.label.toLowerCase())) {
-      counter.skipped += 1;
-      continue;
-    }
-    if (!warned) {
-      ctx.warn(
-        'Предупреждение: service-key переносятся с НОВЫМ секретом (at-rest хранится только sha256) — ' +
-          'внешним сервисам нужно выдать новые ключи.',
-      );
-      warned = true;
-    }
-    if (ctx.dryRun) {
-      counter.copied += 1;
-      continue;
-    }
-    const created = await dst.serviceKeys.create(
-      {
-        label: key.label,
-        scopes: key.scopes,
-        roles: key.roles,
-        ...(key.description !== undefined ? { description: key.description } : {}),
-        ...(key.allowedProjects !== undefined ? { allowedProjects: key.allowedProjects } : {}),
-        ...(key.rateLimitPerMinute !== undefined ? { rateLimitPerMinute: key.rateLimitPerMinute } : {}),
-        ...(key.expiresAt !== undefined ? { expiresAt: key.expiresAt } : {}),
-      },
-      key.createdBy || 'migrate',
+    const exists = ids.has(key.id) || labels.has(key.label.toLowerCase()) || hashes.has(key.hash);
+    await _copyOne(
+      ctx.dryRun,
+      exists,
+      () => dst.serviceKeys.importExisting(key).then(() => undefined),
+      counter,
     );
-    if (key.revokedAt !== undefined) await dst.serviceKeys.revoke(created.id);
-    counter.copied += 1;
   }
   return counter;
 }
