@@ -15,7 +15,6 @@ import {
 } from '../ui/settings'
 import { PolicySettingsCard } from './PolicySettingsCard'
 import { EgressPolicySection } from './EgressPolicySection'
-import { ProxyStatusSection } from './ProxyStatusSection'
 import { cn } from '@/lib/utils'
 
 /**
@@ -381,9 +380,6 @@ export function ToolsDisabledSettings() {
         descriptionKey="egress.tools.description"
         testIdPrefix="egress-tools"
       />
-
-      {/* Read-only статус egress-прокси (ADR-099 D1) + проверка коннекта. */}
-      <ProxyStatusSection />
     </SettingsPanel>
   )
 }

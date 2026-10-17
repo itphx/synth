@@ -117,6 +117,7 @@ export const dict = {
   'settings.category.routing': 'Маршрутизация',
 
   'settings.category.security': 'Безопасность',
+  'settings.category.network': 'Сеть',
   'gateway.title': 'Шлюз безопасности',
   'gateway.description': 'Независимый слой защиты LLM-трафика: секреты (API-ключи, токены, email) обфусцируются до плейсхолдеров ⟦SYNTH_SECRET_N⟧ перед отправкой в модель и раскрываются только в точках потребления. Раскрытие значений в интерфейсе логируется в аудит.',
   'toolsPolicy.title': 'Политика встроенных инструментов',
@@ -1783,8 +1784,12 @@ export const dict = {
   'egress.loadError': 'Не удалось загрузить egress-политику: {error}',
   'egress.reset': 'Сбросить политику',
 
-  // Egress-прокси (ADR-099 D1): read-only статус + проверка соединения
-  'proxy.title': 'Egress-прокси',
+  // Сеть: сетевой доступ инстанса (прокси; доверенные CA — следующий этап)
+  'network.title': 'Сеть',
+  'network.description': 'Сетевой доступ инстанса: egress-прокси и доверенные CA.',
+
+  // Egress-прокси (ADR-099): статус, runtime-настройки и проверка соединения
+  'proxy.title': 'Прокси',
   'proxy.description': 'Настройки прокси для исходящих запросов. Изменения применяются после перезапуска инстанса; креды не показываются.',
   'proxy.enabled': 'Включён',
   'proxy.disabled': 'Выключен',
@@ -1838,8 +1843,6 @@ export const dict = {
   'proxy.form.tlsRejectUnauthorized': 'Проверять TLS-сертификат прокси',
   'proxy.form.tlsHelp': 'CA-файл и CA PEM взаимоисключающи; сертификат и ключ задаются вместе.',
   'proxy.form.unsaved': 'Есть несохранённые изменения',
-  'proxy.password.title': 'Пароль (Basic-аутентификация)',
-  'proxy.password.description': 'Только запись: значение никогда не показывается. Хранится в secrets/proxy-password.',
   'proxy.password.placeholder': 'Новый пароль',
   'proxy.password.set': 'Задать',
   'proxy.password.clear': 'Сбросить',

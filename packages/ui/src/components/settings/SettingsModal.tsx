@@ -12,6 +12,7 @@ import { NotificationSettings } from "./NotificationSettings"
 import { ChatSettings } from "./ChatSettings"
 import { RoutingSettings } from "./RoutingSettings"
 import { SecuritySettings } from "./SecuritySettings"
+import { NetworkSettings } from "./NetworkSettings"
 import { McpUserSettings } from "./McpUserSettings"
 import { McpAdminSettings } from "./McpAdminSettings"
 import { ToolsDisabledSettings } from "./ToolsDisabledSettings"
@@ -53,6 +54,7 @@ export const CATEGORIES: CategoryItem[] = [
   // Admin sections below
   { id: "dashboard", labelKey: "settings.category.dashboard", icon: "home", roles: ["ADMIN", "LEAD"] },
   { id: "security", labelKey: "settings.category.security", icon: "shield-keyhole", roles: ["ADMIN"] },
+  { id: "network", labelKey: "settings.category.network", icon: "global", roles: ["ADMIN"] },
   { id: "mcpAdmin", labelKey: "settings.category.mcpAdmin", icon: "tools", roles: ["ADMIN"] },
   { id: "builtinTools", labelKey: "settings.category.builtinTools", icon: "terminal-box", roles: ["ADMIN"] },
   { id: "skillsAdmin", labelKey: "settings.category.skillsAdmin", icon: "book-open", roles: ["ADMIN"] },
@@ -212,6 +214,7 @@ export const SettingsModal = () => {
             {activePage === "webhooks" && <WebhooksSettings />}
             {activePage === "maintenance" && <MaintenanceSettings />}
             {activePage === "security" && <SecuritySettings />}
+            {activePage === "network" && <NetworkSettings />}
             {activePage === "dashboard" && <DashboardPanel />}
             {activePage === "sessions" && <SessionsPanel />}
             {activePage === "projects" && <ProjectsPanel />}

@@ -607,6 +607,75 @@ export function ProxyStatusSection() {
                     data-testid="proxy-form-auth-username"
                   />
 
+                  {/* Пароль Basic — сразу под логином, write-only: значение не отображается. */}
+                  <div className="space-y-2 min-w-0 rounded-lg bg-surface-inset p-3">
+                    <SettingsRow
+                      label={t('proxy.password.source')}
+                      control={
+                        <span
+                          data-testid="proxy-password-status"
+                          className="text-sm text-foreground"
+                        >
+                          {t(`proxy.password.source.${info.password.source}`)}
+                        </span>
+                      }
+                    />
+
+                    {passwordFromEnv && (
+                      <div
+                        data-testid="proxy-password-env-hint"
+                        className="flex items-start gap-2 rounded-lg bg-interactive-hover p-2 text-xs text-muted-foreground"
+                      >
+                        <Icon name="information" className="mt-0.5 size-3.5 shrink-0" />
+                        <span className="min-w-0 break-words">{t('proxy.password.envDisabled')}</span>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-end gap-2 min-w-0">
+                      <TextField
+                        label={t('proxy.password.placeholder')}
+                        type="password"
+                        value={password}
+                        onChange={(e) => {
+                          setPassword(e.target.value)
+                          if (passwordError) setPasswordError(null)
+                        }}
+                        disabled={passwordFromEnv || passwordPending}
+                        autoComplete="new-password"
+                        containerClassName="flex-1 min-w-48"
+                        data-testid="proxy-password-input"
+                      />
+                      <Button
+                        variant="outline"
+                        className="shrink-0"
+                        onClick={() => void handleSetPassword()}
+                        disabled={passwordFromEnv || passwordPending || !password.trim()}
+                        data-testid="proxy-password-set"
+                      >
+                        {t('proxy.password.set')}
+                      </Button>
+                      <Button
+                        variant="outline-muted"
+                        className="shrink-0"
+                        onClick={() => void handleClearPassword()}
+                        disabled={passwordFromEnv || passwordPending || !info.password.set}
+                        data-testid="proxy-password-clear"
+                      >
+                        {t('proxy.password.clear')}
+                      </Button>
+                    </div>
+
+                    {passwordError && (
+                      <div
+                        role="alert"
+                        data-testid="proxy-password-error"
+                        className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive"
+                      >
+                        {passwordError}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="space-y-3 min-w-0 border-t border-border/60 pt-3">
                     <div className="text-sm font-medium text-foreground">{t('proxy.form.tls')}</div>
                     <p className="text-xs text-muted-foreground">{t('proxy.form.tlsHelp')}</p>
@@ -674,77 +743,6 @@ export function ProxyStatusSection() {
                 </div>
               </>
             )}
-
-            {/* Пароль Basic: write-only, значение никогда не отображается */}
-            <div className="space-y-3 min-w-0 rounded-lg border border-border/60 p-3">
-              <div>
-                <div className="text-sm font-medium text-foreground">{t('proxy.password.title')}</div>
-                <p className="text-xs text-muted-foreground">{t('proxy.password.description')}</p>
-              </div>
-
-              <SettingsRow
-                label={t('proxy.password.source')}
-                control={
-                  <span data-testid="proxy-password-status" className="text-sm text-foreground">
-                    {t(`proxy.password.source.${info.password.source}`)}
-                  </span>
-                }
-              />
-
-              {passwordFromEnv && (
-                <div
-                  data-testid="proxy-password-env-hint"
-                  className="flex items-start gap-2 rounded-lg bg-interactive-hover p-2 text-xs text-muted-foreground"
-                >
-                  <Icon name="information" className="mt-0.5 size-3.5 shrink-0" />
-                  <span className="min-w-0 break-words">{t('proxy.password.envDisabled')}</span>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-end gap-2 min-w-0">
-                <TextField
-                  label={t('proxy.password.placeholder')}
-                  type="password"
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value)
-                    if (passwordError) setPasswordError(null)
-                  }}
-                  disabled={passwordFromEnv || passwordPending}
-                  autoComplete="new-password"
-                  containerClassName="flex-1 min-w-48"
-                  data-testid="proxy-password-input"
-                />
-                <Button
-                  variant="outline"
-                  className="shrink-0"
-                  onClick={() => void handleSetPassword()}
-                  disabled={passwordFromEnv || passwordPending || !password.trim()}
-                  data-testid="proxy-password-set"
-                >
-                  {t('proxy.password.set')}
-                </Button>
-                <Button
-                  variant="outline-muted"
-                  className="shrink-0"
-                  onClick={() => void handleClearPassword()}
-                  disabled={passwordFromEnv || passwordPending || !info.password.set}
-                  data-testid="proxy-password-clear"
-                >
-                  {t('proxy.password.clear')}
-                </Button>
-              </div>
-
-              {passwordError && (
-                <div
-                  role="alert"
-                  data-testid="proxy-password-error"
-                  className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive"
-                >
-                  {passwordError}
-                </div>
-              )}
-            </div>
 
             {/* Проверка соединения с прокси (saved-конфигурация) */}
             <div className="space-y-2 min-w-0 border-t border-border/60 pt-3">

@@ -15,12 +15,6 @@ const mocks = vi.hoisted(() => ({
   saveEgressPolicy: vi.fn(),
   resetEgressPolicy: vi.fn(),
   checkEgress: vi.fn(),
-  getProxy: vi.fn(),
-  saveProxy: vi.fn(),
-  resetProxy: vi.fn(),
-  setProxyPassword: vi.fn(),
-  clearProxyPassword: vi.fn(),
-  checkProxy: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -120,35 +114,6 @@ beforeEach(() => {
     allowed: true,
     policy: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
   })
-  const proxyStatus = {
-    enabled: true,
-    source: 'env' as const,
-    url: 'http://proxy.local:3128',
-    noProxy: [],
-    fallbackDirect: false,
-    connectTimeoutMs: 5000,
-    restartRequired: true as const,
-  }
-  mocks.getProxy.mockResolvedValue({
-    ...proxyStatus,
-    saved: proxyStatus,
-    running: proxyStatus,
-    isOverridden: false,
-    defaults: proxyStatus,
-    password: { source: 'none', set: false, removable: false },
-  })
-  mocks.saveProxy.mockResolvedValue({ saved: proxyStatus, running: proxyStatus, restartRequired: true })
-  mocks.resetProxy.mockResolvedValue({
-    status: 'restored',
-    saved: proxyStatus,
-    defaults: proxyStatus,
-    running: proxyStatus,
-    restartRequired: true,
-  })
-  mocks.setProxyPassword.mockResolvedValue({ source: 'file', set: true, removable: true })
-  mocks.clearProxyPassword.mockResolvedValue({ source: 'none', set: false, removable: false })
-  mocks.checkProxy.mockResolvedValue({ reachable: true, latencyMs: 10, usingSaved: true })
-
   useMcpStore.setState({
     toolsDisabled: null,
     toolsDisabledDefaults: null,
@@ -442,16 +407,9 @@ describe('ToolsDisabledSettings — админский tools.disabled (ADR-071 �
     expect(mocks.getEgressPolicy).toHaveBeenCalledWith('tools')
   })
 
-  it('содержит read-only секцию egress-прокси после egress-политики', async () => {
+  it('не содержит секцию прокси — она переехала в раздел «Сеть»', async () => {
     const container = await renderSettings()
-    const egress = container.querySelector('[data-testid="egress-tools-section"]')!
-    const proxy = container.querySelector('[data-testid="proxy-status-section"]')!
-    expect(proxy).not.toBeNull()
-    expect(mocks.getProxy).toHaveBeenCalledTimes(1)
-    // Прокси-секция идёт после egress-политики.
-    expect(
-      egress.compareDocumentPosition(proxy) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
+    expect(container.querySelector('[data-testid="proxy-status-section"]')).toBeNull()
   })
 
   it('каркас SettingsPanel: один скролл, без pr-2, гриды с grid-cols-1', async () => {

@@ -118,6 +118,7 @@ export const dict = {
   'settings.category.routing': 'Routing',
 
   'settings.category.security': 'Security',
+  'settings.category.network': 'Network',
   'gateway.title': 'Security gateway',
   'gateway.description': 'Independent protection layer for LLM traffic: secrets (API keys, tokens, emails) are obfuscated to ⟦SYNTH_SECRET_N⟧ placeholders before sending to the model and revealed only at consumption points. Value reveal in the UI is audit-logged.',
   'toolsPolicy.title': 'Built-in tools policy',
@@ -1803,8 +1804,12 @@ export const dict = {
   'egress.loadError': 'Failed to load egress policy: {error}',
   'egress.reset': 'Reset policy',
 
-  // Egress proxy (ADR-099 D1): read-only status + connection check
-  'proxy.title': 'Egress proxy',
+  // Network: instance-wide egress settings (proxy; TLS CA — next stage)
+  'network.title': 'Network',
+  'network.description': 'Instance-wide network access settings: egress proxy and trusted CAs.',
+
+  // Egress proxy (ADR-099): status, runtime settings and connection check
+  'proxy.title': 'Proxy',
   'proxy.description': 'Egress proxy settings for outgoing requests. Changes are applied after an instance restart; credentials are never shown.',
   'proxy.enabled': 'Enabled',
   'proxy.disabled': 'Disabled',
@@ -1858,8 +1863,6 @@ export const dict = {
   'proxy.form.tlsRejectUnauthorized': 'Verify proxy TLS certificate',
   'proxy.form.tlsHelp': 'CA file and CA PEM are mutually exclusive; certificate and key are set together.',
   'proxy.form.unsaved': 'You have unsaved changes',
-  'proxy.password.title': 'Password (Basic auth)',
-  'proxy.password.description': 'Write-only: the value is never shown. Stored in secrets/proxy-password.',
   'proxy.password.placeholder': 'New password',
   'proxy.password.set': 'Set',
   'proxy.password.clear': 'Clear',

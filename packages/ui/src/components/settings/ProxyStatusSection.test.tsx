@@ -334,6 +334,20 @@ describe('ProxyStatusSection — форма runtime-override', () => {
 })
 
 describe('ProxyStatusSection — пароль (write-only)', () => {
+  it('пароль идёт сразу под логином в той же форме (без отдельной карточки)', async () => {
+    const container = await renderSection()
+    const username = byTestId(container, 'proxy-form-auth-username')!
+    const passwordInput = byTestId(container, 'proxy-password-input')!
+    const formRoot = byTestId(container, 'proxy-form-url')!.closest('div.rounded-lg')!
+
+    expect(
+      username.compareDocumentPosition(passwordInput) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(formRoot.contains(username)).toBe(true)
+    expect(formRoot.contains(passwordInput)).toBe(true)
+    expect(byTestId(container, 'proxy-password-status')).not.toBeNull()
+  })
+
   it('«Задать» отправляет пароль, очищает поле и не показывает значение', async () => {
     const container = await renderSection()
     const input = byTestId(container, 'proxy-password-input') as HTMLInputElement
