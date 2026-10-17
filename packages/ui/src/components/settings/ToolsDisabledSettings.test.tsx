@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
   saveEgressPolicy: vi.fn(),
   resetEgressPolicy: vi.fn(),
   checkEgress: vi.fn(),
+  getProxyStatus: vi.fn(),
+  checkProxy: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -114,6 +116,16 @@ beforeEach(() => {
     allowed: true,
     policy: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
   })
+  mocks.getProxyStatus.mockResolvedValue({
+    enabled: true,
+    source: 'env',
+    url: 'http://proxy.local:3128',
+    noProxy: [],
+    fallbackDirect: false,
+    connectTimeoutMs: 5000,
+    restartRequired: true,
+  })
+  mocks.checkProxy.mockResolvedValue({ reachable: true, latencyMs: 10, authChallenge: 'none' })
 
   useMcpStore.setState({
     toolsDisabled: null,
@@ -406,6 +418,18 @@ describe('ToolsDisabledSettings — админский tools.disabled (ADR-071 �
     const container = await renderSettings()
     expect(container.querySelector('[data-testid="egress-tools-section"]')).not.toBeNull()
     expect(mocks.getEgressPolicy).toHaveBeenCalledWith('tools')
+  })
+
+  it('содержит read-only секцию egress-прокси после egress-политики', async () => {
+    const container = await renderSettings()
+    const egress = container.querySelector('[data-testid="egress-tools-section"]')!
+    const proxy = container.querySelector('[data-testid="proxy-status-section"]')!
+    expect(proxy).not.toBeNull()
+    expect(mocks.getProxyStatus).toHaveBeenCalledTimes(1)
+    // Прокси-секция идёт после egress-политики.
+    expect(
+      egress.compareDocumentPosition(proxy) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 
   it('каркас SettingsPanel: один скролл, без pr-2, гриды с grid-cols-1', async () => {

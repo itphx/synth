@@ -34,6 +34,7 @@ import { webhooksApi } from './webhooks'
 import { maintenanceApi } from './maintenance'
 import { logsApi } from './logs'
 import { egressApi } from './egress'
+import { proxyApi } from './proxy'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
 
@@ -107,6 +108,7 @@ export type {
   SecurityAuditListResponse,
   EgressLogListResponse,
 } from './egress'
+export type { EgressProxyStatus, ProxyCheckResult } from './proxy'
 export type {
   CreateEventBindingKeyInput,
   UpdateEventBindingKeyPatch,
@@ -184,6 +186,7 @@ export const synthApi = {
   ...maintenanceApi,
   ...logsApi,
   ...egressApi,
+  ...proxyApi,
   ...hybridApi,
   ...instructionsApi,
 }
