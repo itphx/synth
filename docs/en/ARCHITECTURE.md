@@ -428,3 +428,27 @@ keys with scopes and a project projection, webhooks, `public-OpenAPI` (28 operat
 and the `@itphx/synth-sdk` SDK — **ADR-052 is closed in full (stages I–IV, including moving the Telegram gateway
 to a scoped service key)**; the first add-on is the Telegram gateway (`addons/synth-gateway-telegram`) —
 implemented; plugins (Plugin SDK, PROP-090) and pipelines (PROP-059) are not implemented.
+
+## Egress layer (outbound connections)
+
+All outbound HTTP(S) calls of Synth go through a single layer (ADR-099) rather than through a "raw" `fetch`
+in each subsystem. Three orthogonal parts:
+
+1. **TLS/CA trust (start-only).** The `security.tls` section (`caFile`/`caPem`, mTLS, `rejectUnauthorized`)
+   → `initTlsTrust` → the global undici dispatcher; `egressFetch` is a `fetch` with an explicit dispatcher
+   (`packages/core/src/security/tls.ts`).
+2. **Address policy (runtime, live per-request).** `egress.tools`/`egress.webhooks` and
+   `mcp.networkPolicy` (`{mode, list, exceptions}`) are resolved from the store on every request; the check
+   is `engine/net/egress-guard.ts` (`checkEgressUrl`/`fetchWithEgressGuard`, per-hop redirects, fail-closed).
+   Changes go to `{dataDir}/audit/security.jsonl`, requests to `{dataDir}/audit/egress.jsonl`.
+3. **Proxy (start-only).** The `proxy` section (HTTP/HTTPS/SOCKS5, Basic, TLS/mTLS to the https proxy,
+   `noProxy`) → `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): per-origin
+   direct/proxy choice, fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` without a direct fallback. git gets
+   the proxy via child env (`http_proxy`/… through libcurl), `stdio` MCP via the child process env;
+   PostgreSQL is not proxied.
+
+With a proxy enabled the address policy runs in **proxied mode**: only the scheme and hostname rules are
+checked, no DNS/CIDR (the proxy resolves the address); for `noProxy` hosts the check is full. The actual
+route is written to the journal (`via`: `proxy`/`direct`/`fallback`). API — `docs/API_V2.md` §5.21
+(`settings/egress/*`, `settings/proxy*`), configuration — `docs/CONFIGURATION.md` (`egress.*`, `proxy.*`,
+`security.tls`); limitations (NTLM/Kerberos, SOCKS + target CA, IP/SNI) — ADR-099 and PROP-088.

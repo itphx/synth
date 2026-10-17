@@ -114,6 +114,18 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_EGRESS_WEBHOOKS_MODE` | string (`deny`/`allow`/`off`) | `egress.webhooks.mode` |
 | `SYNTH_EGRESS_LOG_ENABLED` | boolean | `egress.log.enabled` |
 | `SYNTH_EGRESS_LOG_RETENTION_DAYS` | number | `egress.log.retentionDays` |
+| `SYNTH_PROXY_ENABLED` | boolean | `proxy.enabled` |
+| `SYNTH_PROXY_URL` | string | `proxy.url` |
+| `SYNTH_PROXY_HTTP_PROXY` | string | `proxy.httpProxy` |
+| `SYNTH_PROXY_HTTPS_PROXY` | string | `proxy.httpsProxy` |
+| `SYNTH_PROXY_ALL_PROXY` | string | `proxy.allProxy` |
+| `SYNTH_PROXY_NO_PROXY` | string (comma-separated list) | `proxy.noProxy` |
+| `SYNTH_PROXY_FALLBACK_DIRECT` | boolean | `proxy.fallbackDirect` |
+| `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | number | `proxy.connectTimeoutMs` |
+| `SYNTH_PROXY_PASSWORD` | string (secret) | proxy Basic auth password (not stored in config) |
+| `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | ADR-099: CA for the https proxy (mutually exclusive) | `proxy.tls` |
+| `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | ADR-099: mTLS to the https proxy | `proxy.tls` |
+| `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | boolean | `proxy.tls.rejectUnauthorized` |
 | `SYNTH_DECISION_ENABLED` | boolean | `decision.enabled` |
 | `SYNTH_DECISION_PROVIDER` | string | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | string | `decision.model` |
@@ -448,7 +460,7 @@ subsystems do not create their own agents/dispatchers.
 - **Fail-closed:** `caFile` and `caPem` together → an error; an explicitly set `caFile` that is missing/unreadable/not PEM → an error (no silent fallback to system trust); configured trust without the installed `undici` package (a direct dependency of core `undici@^7`) → a clear error, not an untrusted transport.
 - **Application:** at process startup a global undici dispatcher is built (`setGlobalDispatcher`), so the ordinary `fetch` inherits the trust; points outside the shared transport (git) get the CA via `http.sslCAInfo=<caFile>` (`caPem` without a file is unavailable to the git channel).
 - **`NODE_EXTRA_CA_CERTS` — compatibility only** (inherited by child processes: MCP stdio, git), **not** a configurable trust mechanism.
-- **The TLS transport is startup configuration:** the section is **not** part of the runtime settings (`RuntimeSettings`); changes are applied at startup and require a restart. The address policy, by contrast, is **runtime** (live per-request): see the next section.
+- **The TLS transport is startup configuration:** the section is **not** part of the runtime settings (`RuntimeSettings`); changes are applied at startup and require a restart. The same holds for the proxy (`proxy.*`, see below). The address policy, by contrast, is **runtime** (live per-request): see the next section.
 
 ### Address policy for outbound requests (`egress.*`, ADR-099)
 
@@ -506,9 +518,10 @@ per-project policy. The resolved address is not pinned (TOCTOU/DNS-rebinding —
 [PROP-100](../arch_decisions/prop-100-ssrf-dns-rebinding.md)).
 
 **Out of scope.** LLM providers are not written to the egress journal (they have their own LLM
-audit/payload log, ADR-036). Behind an HTTP proxy (once it exists,
-[PROP-088](../arch_decisions/prop-088-http-proxy.md)) the proxy resolves addresses: Synth's address check is
-disabled, hostname rules remain, responsibility lies with the proxy/allowlist (ADR-099 item 15). The policy
+audit/payload log, ADR-036). With an HTTP/HTTPS/SOCKS5 proxy enabled
+([`proxy.*`](#proxy-proxy-adr-099-d1d2) below) the proxy resolves addresses: Synth's address check runs in
+proxied mode (scheme and hostname rules only, no DNS/CIDR), responsibility lies with the proxy/allowlist
+(ADR-099 items 15/18); the exception is `proxy.noProxy` hosts (direct, full check). The policy
 is **not a security boundary** when a shell, `stdio` MCP or external engines are available.
 
 Example:
@@ -532,6 +545,83 @@ mcp:
     mode: "deny"
     list: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.169.254/32"]
     exceptions: []
+```
+
+### Proxy (`proxy.*`, ADR-099 D1+D2)
+
+An outbound HTTP/HTTPS/SOCKS5 proxy — part of the single egress layer (see also `security.tls` — trust for the
+**target** and for the https proxy, and `egress.*` — the address policy). The section is **top-level** and
+**start-only**: changes are applied at process startup (like `security.tls`), with no runtime switching. The
+route is chosen **per origin**: `httpsProxy`/`httpProxy` by the target scheme → `allProxy` → `url`; hosts in
+`noProxy` go direct.
+
+| Field | Env | Purpose | Default |
+|---|---|---|---|
+| `enabled` | `SYNTH_PROXY_ENABLED` | Explicit switch. Unset — the proxy is enabled by the presence of a URL (including the standard env vars when `fromEnv`); an explicit `false` suppresses the standard env | — (auto) |
+| `url` | `SYNTH_PROXY_URL` | Common proxy `http://`/`https://`/`socks5://`/`socks5h://` (userinfo allowed but stripped from status/logs) | — |
+| `httpProxy` / `httpsProxy` | `SYNTH_PROXY_HTTP_PROXY` / `SYNTH_PROXY_HTTPS_PROXY` | Proxy for targets by scheme (`http`/`https`); takes precedence over `allProxy`/`url` | — |
+| `allProxy` | `SYNTH_PROXY_ALL_PROXY` | Proxy for all schemes (when no scheme-specific one) | — |
+| `noProxy` | `SYNTH_PROXY_NO_PROXY` | Exceptions: `host`, `.suffix`, `*.suffix`, `host:port`, IP, CIDR (matched against the target IP literal — no DNS), `*` | `[]` |
+| `fromEnv` | — | Honour the standard `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` | `true` |
+| `fallbackDirect` | `SYNTH_PROXY_FALLBACK_DIRECT` | Explicit opt-in: go direct when the proxy is unavailable (warn + `via:'fallback'`). Auth errors (`407`) do **not** allow fallback | `false` |
+| `connectTimeoutMs` | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | Proxy connection timeout, ms | `10000` |
+| `auth.type` | — | `basic` — implemented; `ntlm`/`negotiate` → configuration error (remainder) | `basic` |
+| `auth.username` | — | Basic username (alternative — userinfo in the URL) | — |
+| `auth` password | `SYNTH_PROXY_PASSWORD` | Basic password: **only** the env var or the file `{dataDir}/secrets/proxy-password` (not stored in config.yaml, invariant 13) | — |
+| `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA for the **https proxy itself** (mutually exclusive) | system trust |
+| `tls.certFile` / `tls.keyFile` | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | mTLS to the https proxy | — |
+| `tls.rejectUnauthorized` | `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | Verify the proxy certificate | `true` |
+
+**Priority (ADR-023):** `SYNTH_PROXY_*` > `config.proxy` > the standard `HTTP_PROXY`/`HTTPS_PROXY`/
+`ALL_PROXY`/`NO_PROXY` (only with `fromEnv`) > defaults. An explicit `proxy.enabled: false` suppresses the
+standard env — the proxy is not enabled "from the environment" against the config. `noProxy`:
+`SYNTH_PROXY_NO_PROXY` > a non-empty `proxy.noProxy` > `NO_PROXY`.
+
+**Fail-closed.** A broken URL, an unknown scheme, `enabled=true` without a URL, Basic without a password,
+`auth.type` ≠ `basic`, `proxy.tls` together with `socks5://` → a configuration error at startup
+(`EGRESS_PROXY_CONFIG_INVALID`). An unavailable proxy → `EGRESS_PROXY_UNAVAILABLE` (no silent direct);
+`407`/SOCKS refusal → `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED`.
+
+**Address policy behind a proxy** (ADR-099 item 18): for requests through the proxy only the scheme and the
+hostname rules/`exceptions` are checked (no DNS/CIDR — the proxy resolves the address); for `noProxy` hosts
+the check is full (DNS/CIDR per hop). The actual route is written to the egress journal (`via`:
+`proxy`/`direct`/`fallback`); `POST /api/v2/settings/egress/check` returns `proxied`/`addressChecksActive`.
+
+**API/UI.** `GET /api/v2/settings/proxy` — a read-only status (redacted URL, source `env`/`config`/`none`,
+`noProxy`, `fallbackDirect`, `connectTimeoutMs`, `restartRequired: true`); `POST /api/v2/settings/proxy/check`
+— checks the proxy connection only (TCP/TLS/SOCKS handshake, `authChallenge`, `latencyMs`; the target is not
+requested). UI — the admin section "Proxy (egress)" in "Built-in tools".
+
+**Limitations.** NTLM/Negotiate/Kerberos are not implemented (a custom CONNECT loop and a native dependency
+are required; acceptance — with the customer's AD/KDC). `security.tls` for the **target** is not applied
+through SOCKS5 (a `Socks5ProxyAgent` limitation — system trust only). An https proxy/SOCKS by IP literal
+requires a DNS host (SNI by IP is forbidden in Node); `proxy/check` may still report `reachable`. SOCKS5/SOCKS5H
+in undici are experimental and resolve the hostname at the proxy. The built-in global `fetch` is not
+guaranteed (npm `setGlobalDispatcher` does not affect it on Node 26; on Node 22 — re-check in CI) — the paths
+through `egressFetch` are covered. PostgreSQL is not proxied (not HTTP). git applies `no_proxy` via libcurl,
+there is no per-remote setting; `stdio` MCP receives the proxy env without the password.
+
+Example:
+
+```yaml
+proxy:
+  enabled: true
+  # url: "http://proxy.corp.example:3128"        # common; or the scheme-specific ones below
+  httpProxy: "http://proxy.corp.example:3128"
+  httpsProxy: "https://proxy.corp.example:8443"  # https proxy: TLS — in proxy.tls
+  # allProxy: "socks5://proxy.corp.example:1080" # SOCKS5 (without proxy.tls)
+  noProxy: ["localhost", ".corp.example", "git.corp.example:22", "10.0.0.0/8"]
+  fromEnv: false
+  fallbackDirect: false
+  connectTimeoutMs: 10000
+  auth:
+    type: "basic"
+    username: "synth"              # password — SYNTH_PROXY_PASSWORD or {dataDir}/secrets/proxy-password
+  tls:                             # TLS/mTLS to the https proxy (not to the target)
+    caFile: "/etc/synth/tls/proxy-ca.pem"
+    # certFile: "/etc/synth/tls/proxy-client.pem"
+    # keyFile: "/etc/synth/tls/proxy-client.key"
+    rejectUnauthorized: true
 ```
 
 ### At-rest secrets (`security.secretKey`, ADR-076)

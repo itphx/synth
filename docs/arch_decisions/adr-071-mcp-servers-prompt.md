@@ -114,6 +114,14 @@ Runtime: `GET/PUT/DELETE /api/v2/settings/mcp-network-policy` (путь сохр
 между проверкой и соединением возможен TOCTOU/DNS-rebinding — остаток
 [PROP-100](./prop-100-ssrf-dns-rebinding.md).
 
+**При включённом прокси (ADR-099 п. 18).** Для пользовательских HTTP/SSE-серверов применяется
+**proxied-семантика**: проверяются схема и hostname-правила/`exceptions` (`deny`/`allow` по имени), а
+DNS-резолв и CIDR-сверка **не выполняются** — адрес назначения резолвит прокси. Хосты из `proxy.noProxy`
+идут напрямую и проверяются полностью (DNS/CIDR каждого адреса). В `allow`-режиме политика, состоящая
+только из CIDR, через прокси непроверяема → отказ (`proxied-allow-unverifiable`). Диагностика
+`POST /api/v2/settings/egress/check` `{scope:'mcp'}` отдаёт `proxied`/`addressChecksActive`, фактический
+маршрут — поле `via` в журнале egress.
+
 ### 2.4. Уровни и скоуп MCP
 
 | Уровень | Кто управляет | Скоуп | Hard-gate (`enabled`) и дефолт |

@@ -649,7 +649,7 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 | GET | `/api/v2/audit` | ADMIN/AUDITOR | Gateway audit; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
 | POST | `/api/v2/audit/revealed` | auth | `{sessionId, placeholder}` → `{ok:true}` |
 | GET | `/api/v2/audit/security` | ADMIN/AUDITOR (core — auth) | Audit of egress policy changes (ADR-099): append-only `{dataDir}/audit/security.jsonl`; `?limit=` (default 100, max 1000), `?scope=tools\|webhooks\|mcp` → `{entries, count}` (newest first) |
-| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR (core — auth) | Outbound request journal (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (default 100, max 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; bodies and headers are not logged |
+| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR (core — auth) | Outbound request journal (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (default 100, max 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; bodies and headers are not logged; `via` (`proxy`\|`direct`\|`fallback`) is the actual route |
 
 ### 5.19 Logs — `/api/v2/logs` (backend)
 
@@ -697,7 +697,9 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 | GET | `/api/v2/settings/egress/webhooks` | auth | Address egress policy for outgoing webhooks (ADR-099): the same format plus `mode:"off"` (dev: no checks and no `https` requirement) |
 | PUT | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | `{policy}` (live application, persisted); an invalid rule → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", policy, isOverridden:false, defaults}` + live application of the default |
-| POST | `/api/v2/settings/egress/check` | ADMIN (managed) / auth (core) | URL check **without performing the request**: `{scope:"tools"\|"webhooks"\|"mcp", url}` → `{allowed, reason?, matchedRule?, addresses?, policy}` (parse + DNS + matching; for `webhooks` an `https` requirement applies, except `mode:"off"`) |
+| POST | `/api/v2/settings/egress/check` | ADMIN (managed) / auth (core) | URL check **without performing the request**: `{scope:"tools"\|"webhooks"\|"mcp", url}` → `{allowed, reason?, matchedRule?, addresses?, proxied, addressChecksActive, policy}` (parse + DNS + matching; for `webhooks` an `https` requirement applies, except `mode:"off"`). With a proxy enabled `proxied:true`, `addressChecksActive:false` — only the scheme and hostname rules/`exceptions` are checked (no DNS/CIDR) |
+| GET | `/api/v2/settings/proxy` | auth | Read-only egress proxy status (ADR-099): `{enabled, source:"env"\|"config"\|"none", url?, httpProxy?, httpsProxy?, allProxy?, noProxy:string[], fallbackDirect, connectTimeoutMs, restartRequired:true}`; the URL is redacted (no userinfo/secrets); the proxy is applied at startup |
+| POST | `/api/v2/settings/proxy/check` | ADMIN (managed) / auth (core) | **Proxy connection check only** (not the target): `{url?}` → `{reachable, latencyMs, authChallenge:"Basic"\|"NTLM"\|"Negotiate"\|"none", error?}`; no `url` — the active proxy from the config; TCP/TLS/SOCKS handshake, no request to the target; an invalid `url` (not a string) → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/settings/tools-disabled` | auth | Disabling of built-in tools (ADR-071 §2.6): `{toolsDisabled:{capabilities,tools}, isOverridden, defaults}` (runtime value from `settings.json`, otherwise `tools.disabled` from config.yaml) |
 | PUT | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live application, persisted); an unknown capability → 400, `runtime` tools cannot be disabled. The UI section is an ADMIN category |
 | DELETE | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | Reset to the config default (empty by default); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live application of the default |
@@ -724,7 +726,9 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 > `deny` blocks when any resolved address is forbidden, `allow` permits only when all addresses are allowed;
 > `off` — webhooks only. The policy is applied **live** (per-request, no restart) and is **not mixed**
 > between scopes (tools ≠ webhooks ≠ MCP); changes go to `audit/security.jsonl`, requests to
-> `audit/egress.jsonl`. LLM providers are not part of the egress journal (they have their own LLM audit/payload log).
+> `audit/egress.jsonl` (`via` — `proxy`/`direct`/`fallback`). With a proxy enabled the address check runs in
+> proxied mode (`settings/egress/check` → `proxied`/`addressChecksActive`).
+> LLM providers are not part of the egress journal (they have their own LLM audit/payload log).
 
 ### 5.22 Dictionaries — `/api/v2/dictionaries` (both)
 
@@ -931,7 +935,8 @@ allowance via `exceptions`; `mode:"off"` — dev only, lifts the `https` require
 `X-Synth-Signature`; HMAC-SHA256 (`t=<unix>,v1=<hex>`, a timestamp window of 300 s); retry/backoff
 (exponential with jitter, `webhooks.maxAttempts`), request timeout (`webhooks.timeoutMs`),
 dedup by (subscription + event), journal + retention (`webhooks.deliveryRetentionDays`). A failure —
-a `status:'failed'` record in the journal. Configuration — `docs/CONFIGURATION.md` (the `webhooks` section); the design —
+a `status:'failed'` record in the journal. Delivery goes through the shared egress layer: with a proxy enabled
+the request uses it (`via` in the egress journal), while `noProxy` hosts go direct with the full address check. Configuration — `docs/CONFIGURATION.md` (the `webhooks` section); the design —
 `docs/ARCHITECTURE.md` ("External events and hooks").
 
 **Example.**

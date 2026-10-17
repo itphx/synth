@@ -52,7 +52,7 @@
 | [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) | Flavor-образы с toolchain | 🧩 Предложение | 2026-11-14 | практический шаг до PROP-077 |
 | [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) | Кастомизация инстанса и брендинг | 🧩 Предложение | 2026-11-14 | приветственное окно, ватермарка; позже — locked settings |
 | [PROP-085](./arch_decisions/prop-085-multimodal-input.md) | Мультимодальный ввод (звук/изображения/видео) | 🧩 Предложение | 2026-11-14 | контракт `Part`; зависит от PROP-032/PROP-077 |
-| [PROP-088](./arch_decisions/prop-088-http-proxy.md) | Единый egress-слой (прокси, CA, Kerberos) | ⛔ Заменено | — | надстроен [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md): TLS/CA + mTLS и адресная политика (`egress.*`/`mcp.networkPolicy`) реализованы; остаток — HTTP-прокси/`no_proxy`/аутентификация прокси (Basic/NTLM/Negotiate/Kerberos) (строка сохранена для трассируемости) |
+| [PROP-088](./arch_decisions/prop-088-http-proxy.md) | Единый egress-слой (прокси, CA, Kerberos) | ⛔ Заменено | — | надстроен [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md): TLS/CA + mTLS, адресная политика и прокси D1+D2 (HTTP/HTTPS/SOCKS5, Basic, mTLS к прокси, `no_proxy`) реализованы; остаток — NTLM/Negotiate/Kerberos (приёмка с AD/KDC) и runtime-reload (строка сохранена для трассируемости) |
 | [PROP-090](./arch_decisions/prop-090-extension-api.md) | Extension API v1 (плагины, загрузчик) | 🧩 Предложение | 2026-11-14 | остаток ADR-030/ADR-086; trust/scan — PROP-068 |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации портала | 🧩 Предложение | 2026-11-14 | вариант A (nginx) или B (`mike`) |
 | [PROP-094](./arch_decisions/prop-094-observability-metrics.md) | Наблюдаемость и эксплуатационные метрики | 🧩 Предложение | 2026-11-14 | `/metrics`, `/ready`, структурные логи, SLO |
@@ -60,12 +60,12 @@
 | [PROP-097](./arch_decisions/prop-097-background-processes-registry.md) | Фоновые процессы: реестр + контроль через UI | 🧩 Предложение | 2026-11-14 | аналог `shell background` в OpenCode; панель «Процессы», stop, live-лог |
 | [PROP-098](./arch_decisions/prop-098-mid-turn-steering.md) | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | 2026-11-14 | `mode: queue\|steer\|interrupt` у `/prompt`; отдельно от «Стоп» |
 | [PROP-099](./arch_decisions/prop-099-memory-footprint-optimization.md) | Оптимизация потребления памяти | 🧩 Предложение | 2026-11-14 | цель релиза 0.11; RSS-бюджет, bounded-кэши, лёгкие листинги; связано с PROP-032/PROP-094 |
-| [PROP-100](./arch_decisions/prop-100-ssrf-dns-rebinding.md) | SSRF: TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | 2026-11-14 | дефекты 1–3 закрыты 2026-10-17 (единый `engine/net/egress-guard.ts`); остаток — пиннинг адреса, правило при прокси, наблюдаемость; класс SSRF/egress аудита |
+| [PROP-100](./arch_decisions/prop-100-ssrf-dns-rebinding.md) | SSRF: TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | 2026-11-14 | дефекты 1–3 закрыты 2026-10-17 (единый `engine/net/egress-guard.ts`); прокси реализован (proxied-режим); остаток — пиннинг для direct/`noProxy`-хостов, наблюдаемость; класс SSRF/egress аудита |
 | [PROP-101](./arch_decisions/prop-101-local-installers-platforms.md) | Локальные инсталляторы и платформенная дистрибуция (Win/mac/Linux) | 🧩 Предложение | 2026-12-31 | реализация — до 1.0.0; CI Linux-only (нативные раннеры + подписи/нотаризация — пререквизиты); flatpak/snap не берём; этапы 0–3 |
 
 Пометка: `PROP-088` переведён в `⛔ Заменено` (надстроен [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)):
-TLS/CA- и mTLS-часть и адресная политика (`egress.*`/`mcp.networkPolicy`) реализованы,
-HTTP-прокси/`no_proxy`/аутентификация прокси — остаток; строка оставлена
+TLS/CA + mTLS, адресная политика и прокси D1+D2 (HTTP/HTTPS/SOCKS5, Basic, `no_proxy`) реализованы;
+остаток — NTLM/Negotiate/Kerberos и runtime-reload; строка оставлена
 для трассируемости и в счёт actionable-предложений не входит.
 
 ## Vision (9)
@@ -114,7 +114,7 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-086](./arch_decisions/adr-086-extensibility-plugins-editions.md) | Расширяемость (зонтик) | ⚠️ Частично | Plugin SDK → PROP-090, editions, contribution flow |
 | [ADR-087](./arch_decisions/adr-087-gateways.md) | Шлюзы (gateways) | ⚠️ Частично | HA/leader election, webhook-транспорт, второй канал |
 | [ADR-089](./arch_decisions/adr-089-external-events-automation.md) | Платформа внешних событий | ⚠️ Частично | Plugin SDK → PROP-090, пайплайны → PROP-059, остаток ADR-087, стриминг ответа наружу |
-| [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) | Единый egress-слой: TLS/CA (mTLS) + адресная политика | ⚠️ Частично | HTTP-прокси/Kerberos → PROP-088, пиннинг адреса → PROP-100, метрики → PROP-094, hot-reload TLS |
+| [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) | Единый egress-слой: TLS/CA (mTLS) + адресная политика + прокси | ⚠️ Частично | NTLM/Negotiate/Kerberos и hot-reload прокси/TLS → PROP-088, пиннинг адреса → PROP-100, метрики → PROP-094, перепроверка встроенного `fetch` на Node 22 |
 
 Итого: ADR — 49 (из них 37 со статусом `✅ Реализовано` и 12 со статусом `⚠️ Частично`, в т.ч. 6 —
 «принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089, 099), предложений — 40 (31 actionable + 9 vision),

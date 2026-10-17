@@ -114,6 +114,18 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_EGRESS_WEBHOOKS_MODE` | string (`deny`/`allow`/`off`) | `egress.webhooks.mode` |
 | `SYNTH_EGRESS_LOG_ENABLED` | boolean | `egress.log.enabled` |
 | `SYNTH_EGRESS_LOG_RETENTION_DAYS` | number | `egress.log.retentionDays` |
+| `SYNTH_PROXY_ENABLED` | boolean | `proxy.enabled` |
+| `SYNTH_PROXY_URL` | string | `proxy.url` |
+| `SYNTH_PROXY_HTTP_PROXY` | string | `proxy.httpProxy` |
+| `SYNTH_PROXY_HTTPS_PROXY` | string | `proxy.httpsProxy` |
+| `SYNTH_PROXY_ALL_PROXY` | string | `proxy.allProxy` |
+| `SYNTH_PROXY_NO_PROXY` | string (список через запятую) | `proxy.noProxy` |
+| `SYNTH_PROXY_FALLBACK_DIRECT` | boolean | `proxy.fallbackDirect` |
+| `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | number | `proxy.connectTimeoutMs` |
+| `SYNTH_PROXY_PASSWORD` | string (секрет) | пароль Basic-аутентификации прокси (в config не хранится) |
+| `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | ADR-099: CA к https-прокси (взаимоисключающи) | `proxy.tls` |
+| `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | ADR-099: mTLS к https-прокси | `proxy.tls` |
+| `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | boolean | `proxy.tls.rejectUnauthorized` |
 | `SYNTH_DECISION_ENABLED` | boolean | `decision.enabled` |
 | `SYNTH_DECISION_PROVIDER` | string | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | string | `decision.model` |
@@ -447,7 +459,7 @@ env > `config.yaml` > дефолты. Инвариант — [ADR-099](./arch_de
 - **Fail-closed:** `caFile` и `caPem` одновременно → ошибка; явно заданный `caFile`, который отсутствует/не читается/не PEM → ошибка (никакого тихого фоллбэка на системное доверие); заданное доверие без установленного пакета `undici` (прямая зависимость core `undici@^7`) → внятная ошибка, а не недоверенный транспорт.
 - **Применение:** при старте процесса строится глобальный undici-dispatcher (`setGlobalDispatcher`), обычный `fetch` наследует доверие; точки вне общего транспорта (git) получают CA через `http.sslCAInfo=<caFile>` (`caPem` без файла git-каналу недоступен).
 - **`NODE_EXTRA_CA_CERTS` — только совместимость** (наследуется дочерними процессами: MCP stdio, git), **не** конфигурируемый механизм доверия.
-- **TLS-транспорт — стартовая конфигурация:** секция **не входит** в runtime-настройки (`RuntimeSettings`); изменения применяются при старте и требуют рестарта. Адресная политика — наоборот, **runtime** (live per-request): см. следующий раздел.
+- **TLS-транспорт — стартовая конфигурация:** секция **не входит** в runtime-настройки (`RuntimeSettings`); изменения применяются при старте и требуют рестарта. То же — для прокси (`proxy.*`, см. ниже). Адресная политика — наоборот, **runtime** (live per-request): см. следующий раздел.
 
 ### Адресная политика исходящих запросов (`egress.*`, ADR-099)
 
@@ -504,10 +516,11 @@ core — `requireAuth`); изменения пишутся в аудит `{dataD
 Пиннинга проверенного адреса нет (TOCTOU/DNS-rebinding — [PROP-100](./arch_decisions/prop-100-ssrf-dns-rebinding.md)).
 
 **Что не входит.** Провайдеры LLM не пишутся в журнал egress (у них свой LLM audit/payload-лог, ADR-036).
-При работе через HTTP-прокси (когда появится, [PROP-088](./arch_decisions/prop-088-http-proxy.md)) адрес
-резолвит прокси: адресная проверка Synth отключается, hostname-правила остаются, ответственность — на
-прокси/allowlist (ADR-099 п. 15). Политика — **не граница безопасности** при доступном shell, `stdio`-MCP
-или внешних движках.
+При включённом HTTP/HTTPS/SOCKS5-прокси ([`proxy.*`](#прокси-proxy-adr-099-d1d2) ниже) адрес резолвит
+прокси: адресная проверка Synth работает в proxied-режиме (только схема и hostname-правила, без DNS/CIDR),
+ответственность — на прокси/allowlist (ADR-099 п. 15/18); исключение — хосты из `proxy.noProxy` (direct и
+полная проверка). Политика — **не граница безопасности** при доступном shell, `stdio`-MCP или внешних
+движках.
 
 Пример:
 
@@ -530,6 +543,83 @@ mcp:
     mode: "deny"
     list: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.169.254/32"]
     exceptions: []
+```
+
+### Прокси (`proxy.*`, ADR-099 D1+D2)
+
+Исходящий HTTP/HTTPS/SOCKS5-прокси — часть единого egress-слоя (см. также `security.tls` — доверие к
+**цели** и к https-прокси, и `egress.*` — адресная политика). Секция **top-level** и **start-only**:
+изменения применяются при старте процесса (как `security.tls`), runtime-переключения нет. Маршрут
+выбирается **per-origin**: `httpsProxy`/`httpProxy` по схеме цели → `allProxy` → `url`; хосты из `noProxy`
+идут напрямую.
+
+| Поле | Env | Назначение | По умолчанию |
+|---|---|---|---|
+| `enabled` | `SYNTH_PROXY_ENABLED` | Явный выключатель. Не задан — прокси включается наличием URL (в т.ч. из стандартных env при `fromEnv`); явный `false` подавляет стандартные env | — (авто) |
+| `url` | `SYNTH_PROXY_URL` | Общий прокси `http://`/`https://`/`socks5://`/`socks5h://` (userinfo допускается, но вырезается в статусе/логах) | — |
+| `httpProxy` / `httpsProxy` | `SYNTH_PROXY_HTTP_PROXY` / `SYNTH_PROXY_HTTPS_PROXY` | Прокси для целей по схеме (`http`/`https`); приоритетнее `allProxy`/`url` | — |
+| `allProxy` | `SYNTH_PROXY_ALL_PROXY` | Прокси для всех схем (если нет схемного) | — |
+| `noProxy` | `SYNTH_PROXY_NO_PROXY` | Исключения: `host`, `.suffix`, `*.suffix`, `host:port`, IP, CIDR (по IP-литералу цели — DNS не резолвится), `*` | `[]` |
+| `fromEnv` | — | Учитывать стандартные `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` | `true` |
+| `fallbackDirect` | `SYNTH_PROXY_FALLBACK_DIRECT` | Явный opt-in: при недоступном прокси идти напрямую (warn + `via:'fallback'`). Ошибки аутентификации (`407`) фоллбек **не** разрешают | `false` |
+| `connectTimeoutMs` | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | Таймаут соединения с прокси, мс | `10000` |
+| `auth.type` | — | `basic` — реализовано; `ntlm`/`negotiate` → ошибка конфигурации (остаток) | `basic` |
+| `auth.username` | — | Пользователь Basic (альтернатива — userinfo в URL) | — |
+| `auth`-пароль | `SYNTH_PROXY_PASSWORD` | Пароль Basic: **только** env или файл `{dataDir}/secrets/proxy-password` (в config.yaml не хранится, инвариант 13) | — |
+| `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA к **самому** https-прокси (взаимоисключающи) | системное доверие |
+| `tls.certFile` / `tls.keyFile` | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | mTLS к https-прокси | — |
+| `tls.rejectUnauthorized` | `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | Проверять сертификат прокси | `true` |
+
+**Приоритет (ADR-023):** `SYNTH_PROXY_*` > `config.proxy` > стандартные `HTTP_PROXY`/`HTTPS_PROXY`/
+`ALL_PROXY`/`NO_PROXY` (только при `fromEnv`) > defaults. Явный `proxy.enabled: false` подавляет
+стандартные env — прокси не включается «из окружения» вопреки конфигу. `noProxy`:
+`SYNTH_PROXY_NO_PROXY` > непустой `proxy.noProxy` > `NO_PROXY`.
+
+**Fail-closed.** Битый URL, неизвестная схема, `enabled=true` без URL, Basic без пароля,
+`auth.type` ≠ `basic`, `proxy.tls` вместе с `socks5://` → ошибка конфигурации на старте
+(`EGRESS_PROXY_CONFIG_INVALID`). Недоступный прокси → `EGRESS_PROXY_UNAVAILABLE` (тихого direct нет);
+`407`/SOCKS-отказ → `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED`.
+
+**Адресная политика при прокси** (ADR-099 п. 18): для запросов через прокси проверяются только схема и
+hostname-правила/`exceptions` (DNS/CIDR не выполняются — адрес резолвит прокси); для хостов из `noProxy`
+проверка полная (DNS/CIDR каждого хопа). Фактический маршрут пишется в журнал egress (`via`:
+`proxy`/`direct`/`fallback`); `POST /api/v2/settings/egress/check` отдаёт `proxied`/`addressChecksActive`.
+
+**API/UI.** `GET /api/v2/settings/proxy` — read-only статус (redacted URL, источник `env`/`config`/`none`,
+`noProxy`, `fallbackDirect`, `connectTimeoutMs`, `restartRequired: true`); `POST /api/v2/settings/proxy/check`
+— проверка только коннекта к прокси (TCP/TLS/SOCKS-handshake, `authChallenge`, `latencyMs`; цель не
+запрашивается). UI — админ-секция «Прокси (egress)» в «Встроенных инструментах».
+
+**Ограничения.** NTLM/Negotiate/Kerberos не реализованы (нужен собственный CONNECT-цикл и нативная
+зависимость; приёмка — с AD/KDC). `security.tls` к **цели** через SOCKS5 не применяется (ограничение
+`Socks5ProxyAgent` — только системное доверие). https-прокси/SOCKS по IP-литералу требуют DNS-хоста
+(SNI по IP запрещён в Node); `proxy/check` при этом может показать `reachable`. SOCKS5/SOCKS5H в undici
+экспериментальные и резолвят hostname на прокси. Встроенный глобальный `fetch` не гарантирован
+(npm-`setGlobalDispatcher` не влияет на него в Node 26; на Node 22 — перепроверка в CI) — покрыты пути
+через `egressFetch`. PostgreSQL не проксируется (не HTTP). git применяет `no_proxy` средствами libcurl,
+per-remote настройки нет; `stdio`-MCP получает прокси-env без пароля.
+
+Пример:
+
+```yaml
+proxy:
+  enabled: true
+  # url: "http://proxy.corp.example:3128"        # общий; либо схемные ниже
+  httpProxy: "http://proxy.corp.example:3128"
+  httpsProxy: "https://proxy.corp.example:8443"  # https-прокси: TLS — в proxy.tls
+  # allProxy: "socks5://proxy.corp.example:1080" # SOCKS5 (без proxy.tls)
+  noProxy: ["localhost", ".corp.example", "git.corp.example:22", "10.0.0.0/8"]
+  fromEnv: false
+  fallbackDirect: false
+  connectTimeoutMs: 10000
+  auth:
+    type: "basic"
+    username: "synth"              # пароль — SYNTH_PROXY_PASSWORD или {dataDir}/secrets/proxy-password
+  tls:                             # TLS/mTLS к https-прокси (не к цели)
+    caFile: "/etc/synth/tls/proxy-ca.pem"
+    # certFile: "/etc/synth/tls/proxy-client.pem"
+    # keyFile: "/etc/synth/tls/proxy-client.key"
+    rejectUnauthorized: true
 ```
 
 ### Секреты at-rest (`security.secretKey`, ADR-076)

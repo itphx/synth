@@ -427,3 +427,27 @@ API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `do
 и SDK `@itphx/synth-sdk` — **ADR-052 закрыт целиком (этапы I–IV: включая перевод Telegram-шлюза
 на scoped service-key)**; первый add-on — Telegram-шлюз (`addons/synth-gateway-telegram`) —
 реализован; не реализованы плагины (Plugin SDK, PROP-090) и пайплайны (PROP-059).
+
+## Egress-слой (исходящие соединения)
+
+Все исходящие HTTP(S)-вызовы Synth идут через единый слой (ADR-099), а не через «сырой» `fetch` в
+подсистемах. Три ортогональные части:
+
+1. **Доверие TLS/CA (start-only).** Секция `security.tls` (`caFile`/`caPem`, mTLS, `rejectUnauthorized`)
+   → `initTlsTrust` → глобальный undici-dispatcher; `egressFetch` — `fetch` с явным dispatcher
+   (`packages/core/src/security/tls.ts`).
+2. **Адресная политика (runtime, live per-request).** `egress.tools`/`egress.webhooks` и
+   `mcp.networkPolicy` (`{mode, list, exceptions}`) резолвятся из стора на каждый запрос; проверка —
+   `engine/net/egress-guard.ts` (`checkEgressUrl`/`fetchWithEgressGuard`, редиректы per-hop, fail-closed).
+   Изменения — аудит `{dataDir}/audit/security.jsonl`, запросы — журнал `{dataDir}/audit/egress.jsonl`.
+3. **Прокси (start-only).** Секция `proxy` (HTTP/HTTPS/SOCKS5, Basic, TLS/mTLS к https-прокси, `noProxy`)
+   → `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): per-origin выбор
+   direct/proxy, fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` без direct-фоллбека. git получает прокси
+   child-env (`http_proxy`/… через libcurl), `stdio`-MCP — env дочернего процесса; PostgreSQL не
+   проксируется.
+
+При включённом прокси адресная политика работает в **proxied-режиме**: проверяются схема и
+hostname-правила, DNS/CIDR не выполняются (адрес резолвит прокси); для хостов из `noProxy` — полная
+проверка. Фактический маршрут пишется в журнал (`via`: `proxy`/`direct`/`fallback`). API — `docs/API_V2.md`
+§5.21 (`settings/egress/*`, `settings/proxy*`), конфиг — `docs/CONFIGURATION.md` (`egress.*`, `proxy.*`,
+`security.tls`); ограничения (NTLM/Kerberos, SOCKS + CA к цели, IP/SNI) — ADR-099 и PROP-088.

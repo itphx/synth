@@ -65,7 +65,7 @@
 | ADR-092 | Обслуживание инстанса — версия схемы данных, миграции и удаление | ⚠️ Частично | [adr-092-instance-lifecycle-maintenance.md](./adr-092-instance-lifecycle-maintenance.md) |
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097-storage-provider-class.md](./adr-097-storage-provider-class.md) |
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098-storage-degraded-recovery.md](./adr-098-storage-degraded-recovery.md) |
-| ADR-099 | Единый egress-слой: доверие TLS/CA (mTLS) и адресная политика исходящих запросов (`egress.tools`/`egress.webhooks`, `mcp.networkPolicy`, аудит изменений и журнал запросов) | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
+| ADR-099 | Единый egress-слой: доверие TLS/CA (mTLS), адресная политика (`egress.tools`/`egress.webhooks`, `mcp.networkPolicy`) и HTTP/HTTPS/SOCKS5-прокси (`proxy.*`, Basic, `no_proxy`, proxied-режим, аудит и журнал) | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
 
 ## Предложения
 
@@ -121,7 +121,7 @@
 
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
-| PROP-088 | Работа через HTTP-прокси (остаток egress-слоя): прокси/`no_proxy`, аутентификация Basic/NTLM/Negotiate (Kerberos), mTLS для прокси | ⛔ Заменено | [prop-088-http-proxy.md](./prop-088-http-proxy.md) |
+| PROP-088 | Работа через HTTP-прокси (остаток egress-слоя): прокси/`no_proxy`/Basic/SOCKS5 реализованы (D1+D2), остаток — NTLM/Negotiate/Kerberos и runtime-reload | ⛔ Заменено | [prop-088-http-proxy.md](./prop-088-http-proxy.md) |
 
 ## Legacy
 

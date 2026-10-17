@@ -649,7 +649,7 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/audit` | ADMIN/AUDITOR | Аудит Gateway; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
 | POST | `/api/v2/audit/revealed` | auth | `{sessionId, placeholder}` → `{ok:true}` |
 | GET | `/api/v2/audit/security` | ADMIN/AUDITOR (core — auth) | Аудит изменений egress-политик (ADR-099): append-only `{dataDir}/audit/security.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=tools\|webhooks\|mcp` → `{entries, count}` («свежие первыми») |
-| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR (core — auth) | Журнал внешних запросов (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; тела/заголовки не логируются |
+| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR (core — auth) | Журнал внешних запросов (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; тела/заголовки не логируются; `via` (`proxy`\|`direct`\|`fallback`) — фактический маршрут |
 
 ### 5.19 Logs — `/api/v2/logs` (backend)
 
@@ -697,7 +697,9 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/settings/egress/webhooks` | auth | Адресная egress-политика исходящих webhooks (ADR-099): тот же формат + `mode:"off"` (dev: без проверок и без требования `https`) |
 | PUT | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | `{policy}` (live-применение, persist); невалидная запись → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", policy, isOverridden:false, defaults}` + live-применение дефолта |
-| POST | `/api/v2/settings/egress/check` | ADMIN (managed) / auth (core) | Проверка URL **без выполнения запроса**: `{scope:"tools"\|"webhooks"\|"mcp", url}` → `{allowed, reason?, matchedRule?, addresses?, policy}` (разбор + DNS + сверка; для `webhooks` — требование `https`, кроме `mode:"off"`) |
+| POST | `/api/v2/settings/egress/check` | ADMIN (managed) / auth (core) | Проверка URL **без выполнения запроса**: `{scope:"tools"\|"webhooks"\|"mcp", url}` → `{allowed, reason?, matchedRule?, addresses?, proxied, addressChecksActive, policy}` (разбор + DNS + сверка; для `webhooks` — требование `https`, кроме `mode:"off"`). При включённом прокси `proxied:true`, `addressChecksActive:false` — проверяются только схема и hostname-правила/`exceptions` (DNS/CIDR не выполняются) |
+| GET | `/api/v2/settings/proxy` | auth | Read-only статус egress-прокси (ADR-099): `{enabled, source:"env"\|"config"\|"none", url?, httpProxy?, httpsProxy?, allProxy?, noProxy:string[], fallbackDirect, connectTimeoutMs, restartRequired:true}`; URL — redacted (без userinfo/секретов), прокси применяется при старте |
+| POST | `/api/v2/settings/proxy/check` | ADMIN (managed) / auth (core) | Проверка **только коннекта к прокси** (не к цели): `{url?}` → `{reachable, latencyMs, authChallenge:"Basic"\|"NTLM"\|"Negotiate"\|"none", error?}`; `url` не задан — активный прокси из конфига; TCP/TLS/SOCKS-handshake, запрос к цели не выполняется; невалидный `url` (не строка) → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/settings/tools-disabled` | auth | Отключение встроенных инструментов (ADR-071 §2.6): `{toolsDisabled:{capabilities,tools}, isOverridden, defaults}` (runtime-значение из `settings.json`, иначе `tools.disabled` из config.yaml) |
 | PUT | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); неизвестная capability → 400, `runtime`-тулы неотключаемы. UI-раздел — ADMIN-категория |
 | DELETE | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | Сброс к config-дефолту (по умолчанию пусто); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live-применение дефолта |
@@ -724,7 +726,9 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 > `deny` — блок при любом запрещённом resolved-адресе, `allow` — только если разрешены все адреса;
 > `off` — только webhooks. Политика применяется **live** (per-request, без рестарта) и **не смешивается**
 > между скоупами (tools ≠ webhooks ≠ MCP); изменения пишутся в `audit/security.jsonl`, запросы — в
-> `audit/egress.jsonl`. Провайдеры LLM в журнал egress не входят (у них свой LLM audit/payload-лог).
+> `audit/egress.jsonl` (поле `via` — `proxy`/`direct`/`fallback`). При включённом прокси адресная
+> проверка выполняется в proxied-режиме (`settings/egress/check` → `proxied`/`addressChecksActive`).
+> Провайдеры LLM в журнал egress не входят (у них свой LLM audit/payload-лог).
 
 ### 5.22 Dictionaries — `/api/v2/dictionaries` (оба)
 
@@ -931,7 +935,8 @@ managed (backend) — только `ADMIN`, core (standalone) — единый `
 `X-Synth-Signature`; HMAC-SHA256 (`t=<unix>,v1=<hex>`, окно timestamp 300 c); retry/backoff
 (экспоненциальный с джиттером, `webhooks.maxAttempts`), таймаут запроса (`webhooks.timeoutMs`),
 дедуп по (подписка + событие), журнал + retention (`webhooks.deliveryRetentionDays`). Неуспех —
-запись `status:'failed'` в журнале. Конфиг — `docs/CONFIGURATION.md` (секция `webhooks`); устройство —
+запись `status:'failed'` в журнале. Доставка идёт через общий egress-слой: при включённом прокси запрос
+уходит через него (`via` в журнале egress), при `noProxy` — напрямую с полной адресной проверкой. Конфиг — `docs/CONFIGURATION.md` (секция `webhooks`); устройство —
 `docs/ARCHITECTURE.md` («Внешние события и хуки»).
 
 **Пример.**
