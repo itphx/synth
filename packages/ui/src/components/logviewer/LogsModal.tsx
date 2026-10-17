@@ -9,6 +9,8 @@ import { useDevice } from "@/hooks/useDevice"
 import { LogFilePanel } from "./LogFilePanel"
 import { AuditLogPanel } from "./AuditLogPanel"
 import { LlmPayloadPanel } from "./LlmPayloadPanel"
+import { SecurityAuditPanel } from "./SecurityAuditPanel"
+import { EgressLogPanel } from "./EgressLogPanel"
 import { EventJournalPanel } from "../settings/EventJournalPanel"
 
 interface CategoryItem {
@@ -23,6 +25,8 @@ const CATEGORIES: CategoryItem[] = [
   { id: "backend", labelKey: "logs.category.backend", icon: "server" },
   { id: "llm", labelKey: "logs.category.llm", icon: "file-code" },
   { id: "audit", labelKey: "logs.category.audit", icon: "shield-keyhole" },
+  { id: "security", labelKey: "logs.category.security", icon: "shield-keyhole" },
+  { id: "egress", labelKey: "logs.category.egress", icon: "global" },
   { id: "events", labelKey: "logs.category.events", icon: "send-plane" },
 ]
 
@@ -116,6 +120,8 @@ export const LogsModal = () => {
             )}
             {logsPage === "llm" && <LlmPayloadPanel />}
             {logsPage === "audit" && <AuditLogPanel />}
+            {logsPage === "security" && <SecurityAuditPanel />}
+            {logsPage === "egress" && <EgressLogPanel />}
             {logsPage === "events" && <EventJournalPanel />}
           </div>
         </div>

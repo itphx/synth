@@ -14,6 +14,7 @@ import {
   useSettingsDraft,
 } from '../ui/settings'
 import { PolicySettingsCard } from './PolicySettingsCard'
+import { EgressPolicySection } from './EgressPolicySection'
 import { cn } from '@/lib/utils'
 
 /**
@@ -370,6 +371,14 @@ export function ToolsDisabledSettings() {
         onSave={handleToolsPolicySave}
         onReset={handleToolsPolicyReset}
         isDefault={toolsPolicy === toolsPolicyDefault}
+      />
+
+      {/* Адресная egress-политика встроенных инструментов (`egress.tools`). */}
+      <EgressPolicySection
+        scope="tools"
+        titleKey="egress.tools.title"
+        descriptionKey="egress.tools.description"
+        testIdPrefix="egress-tools"
       />
     </SettingsPanel>
   )

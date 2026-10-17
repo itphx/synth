@@ -33,6 +33,7 @@ import { serviceKeysApi } from './service-keys'
 import { webhooksApi } from './webhooks'
 import { maintenanceApi } from './maintenance'
 import { logsApi } from './logs'
+import { egressApi } from './egress'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
 
@@ -97,6 +98,15 @@ export type {
   LlmPayloadEntry,
   LlmPayloadListResponse,
 } from './logs'
+export type {
+  EgressCheckScope,
+  EgressCheckResult,
+  EgressPolicyInfo,
+  AnyEgressPolicy,
+  ConfiguredEgressPolicy,
+  SecurityAuditListResponse,
+  EgressLogListResponse,
+} from './egress'
 export type {
   CreateEventBindingKeyInput,
   UpdateEventBindingKeyPatch,
@@ -173,6 +183,7 @@ export const synthApi = {
   ...webhooksApi,
   ...maintenanceApi,
   ...logsApi,
+  ...egressApi,
   ...hybridApi,
   ...instructionsApi,
 }

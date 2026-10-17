@@ -76,6 +76,26 @@ describe('synthApi.reset* — сброс runtime-настроек (ADR-072 Ф2)'
     expect(result).toEqual(policy)
   })
 
+  it('resetEgressPolicy(tools): DELETE /settings/egress/tools, возвращает policy', async () => {
+    const policy = { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] }
+    fetchMock.mockResolvedValue(jsonResponse({
+      status: 'restored', policy, isOverridden: false, defaults: policy,
+    }))
+    const result = await synthApi.resetEgressPolicy('tools')
+    expectDelete('/api/v2/settings/egress/tools')
+    expect(result).toEqual(policy)
+  })
+
+  it('resetEgressPolicy(webhooks): DELETE /settings/egress/webhooks, возвращает policy', async () => {
+    const policy = { mode: 'off', list: [], exceptions: [] }
+    fetchMock.mockResolvedValue(jsonResponse({
+      status: 'restored', policy, isOverridden: false, defaults: policy,
+    }))
+    const result = await synthApi.resetEgressPolicy('webhooks')
+    expectDelete('/api/v2/settings/egress/webhooks')
+    expect(result).toEqual(policy)
+  })
+
   it('resetToolsDisabled: DELETE /settings/tools-disabled, возвращает toolsDisabled', async () => {
     const config = { capabilities: [], tools: [] }
     fetchMock.mockResolvedValue(jsonResponse({

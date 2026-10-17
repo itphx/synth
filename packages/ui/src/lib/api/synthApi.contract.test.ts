@@ -11,7 +11,7 @@ import { synthApi } from './synthApi'
 const EXPECTED_API_METHODS = [
   'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'applyMigrations', 'auditRevealed',
   'backupDownloadUrl', 'batchMessages', 'browseWorkspaceRoot', 'cancelQueueRetry', 'cancelRestore',
-  'cancelSummarization',
+  'cancelSummarization', 'checkEgress',
   'checkUpdate', 'claimIdentity', 'clearAudit', 'clearQueue', 'clearSession',
   'clearWorkspacePolicy', 'cloneGitRepo', 'createAgentSshKey', 'createBackup', 'createDirectory',
   'createEventBindingKey', 'createEventRoute', 'createProject', 'createProvider',
@@ -28,13 +28,13 @@ const EXPECTED_API_METHODS = [
   'getAllAgents', 'getAudit', 'getCommands', 'getCommitDetail',
   'getCommitLog', 'getContextFile', 'getContextFiles', 'getDebugConfig',
   'getDecisionMetrics', 'getDecisionSettings', 'getDefaultAgentInfo', 'getDictionaries',
-  'getDictionary', 'getDoctor', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
+  'getDictionary', 'getDoctor', 'getEgressLog', 'getEgressPolicy', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
   'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
   'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMigrations', 'getModels',
   'getMyIdentities', 'getOptimization', 'getPendingRestore', 'getProject', 'getProjectMcp',
   'getProjectSkills', 'getProjectStats', 'getProjects', 'getProtectedPaths',
-  'getProviders', 'getScheduleJobs', 'getSchedules', 'getSecuritySettings',
+  'getProviders', 'getScheduleJobs', 'getSchedules', 'getSecurityAudit', 'getSecuritySettings',
   'getServiceKey', 'getServiceKeyScopes', 'getServiceKeys', 'getSession',
   'getSessionInstructions', 'getSessionMcpEffective', 'getSessionMessages', 'getSessionPrompt',
   'getSessionReferences', 'getSessionSecrets', 'getSessionSkills', 'getSessionSkillsEffective',
@@ -49,12 +49,12 @@ const EXPECTED_API_METHODS = [
   'putSkillFile', 'readFile', 'regenerateWebhookSecret', 'registerGitRepo',
   'reloadSkills', 'removeGitRepo', 'removeSessionReference', 'resetContextFile',
   'resetDecisionMetrics', 'resetDecisionSettings', 'resetDefaultAgent', 'resetDictionary',
-  'resetEventsSettings', 'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy',
+  'resetEgressPolicy', 'resetEventsSettings', 'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy',
   'resetMcpPolicy', 'resetMcpSettings', 'resetProtectedPaths', 'resetSkillsSettings',
   'resetToolsDisabled', 'resetToolsPolicy', 'resumeQueue', 'resumeSubagent',
   'retryMessage', 'retryQueueNow', 'returnQueue', 'revokeEventBindingKey',
   'revokeServiceKey', 'runSchedule', 'saveAgent', 'saveContextFile',
-  'saveDebugConfig', 'saveDictionary', 'saveGatewayPatterns', 'saveLlmGatewaySettings',
+  'saveDebugConfig', 'saveDictionary', 'saveEgressPolicy', 'saveGatewayPatterns', 'saveLlmGatewaySettings',
   'saveMcpNetworkPolicy', 'saveMcpPolicy', 'saveMcpToolSettings', 'saveModel',
   'saveProtectedPaths', 'saveSecuritySettings', 'saveToolsDisabled', 'saveToolsPolicy',
   'scanGitRepos', 'scheduleRestore', 'setDefaultAgent', 'setWorkspacePolicy', 'setWorkspaceSetting',
@@ -70,7 +70,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (239)', () => {
+  it('набор методов совпадает с зафиксированным (245)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

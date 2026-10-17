@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   resetMcpNetworkPolicy: vi.fn(),
   resetMcpPolicy: vi.fn(),
   probeMcpServer: vi.fn(),
+  checkEgress: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -116,6 +117,11 @@ beforeEach(() => {
   mocks.resetMcpNetworkPolicy.mockResolvedValue({ mode: 'deny', list: [] })
   mocks.resetMcpPolicy.mockResolvedValue('auto')
   mocks.probeMcpServer.mockResolvedValue({ name: 'sys', tools: [] })
+  mocks.checkEgress.mockResolvedValue({
+    allowed: true,
+    addresses: ['93.184.216.34'],
+    policy: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
+  })
 
   useMcpStore.setState({
     registry: null,
@@ -420,7 +426,65 @@ describe('McpSettings — сетевая политика (ADR-071 §2.3.1 / ADR
     expect(mocks.saveMcpNetworkPolicy).toHaveBeenCalledWith({
       mode: 'allow',
       list: ['10.0.0.0/8', '192.168.0.0/16'],
+      exceptions: [],
     })
+  })
+
+  it('исключения (chips) сохраняются вместе с политикой', async () => {
+    const container = await renderSettings()
+    const section = container.querySelector('[data-testid="mcp-network-policy"]')!
+    const exceptionsInput = section.querySelector(
+      'input[placeholder="api.example.com"]',
+    ) as HTMLInputElement
+    expect(exceptionsInput).not.toBeNull()
+
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(exceptionsInput, '*.internal.example.com')
+      exceptionsInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const addButtons = [...section.querySelectorAll('button')].filter(
+      (b) => b.textContent?.trim() === 'Add',
+    ) as HTMLButtonElement[]
+    expect(addButtons).toHaveLength(2)
+    await act(async () => {
+      addButtons[1].click()
+    })
+
+    const save = section.querySelector('[data-testid="mcp-network-save"]') as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    await act(async () => {
+      save.click()
+    })
+    await act(async () => {})
+
+    expect(mocks.saveMcpNetworkPolicy).toHaveBeenCalledWith({
+      mode: 'deny',
+      list: ['10.0.0.0/8'],
+      exceptions: ['*.internal.example.com'],
+    })
+  })
+
+  it('«Проверить URL» вызывает checkEgress со scope=mcp и показывает результат', async () => {
+    const container = await renderSettings()
+    const section = container.querySelector('[data-testid="mcp-network-policy"]')!
+    const urlInput = section.querySelector(
+      '[data-testid="mcp-network-check-url"]',
+    ) as HTMLInputElement
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(urlInput, 'https://example.com/mcp')
+      urlInput.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      ;(section.querySelector('[data-testid="mcp-network-check-button"]') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    expect(mocks.checkEgress).toHaveBeenCalledWith('mcp', 'https://example.com/mcp')
+    const result = section.querySelector('[data-testid="mcp-network-check-result"]')!
+    expect(result.textContent).toContain('Allowed')
+    expect(result.textContent).toContain('93.184.216.34')
   })
 
   it('не-ADMIN не видит секцию сетевой политики', async () => {

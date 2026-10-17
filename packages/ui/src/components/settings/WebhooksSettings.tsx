@@ -24,6 +24,7 @@ import {
   TextField,
   ToggleField,
 } from '../ui/settings'
+import { EgressPolicySection } from './EgressPolicySection'
 
 /**
  * ADR-052 (этап II): проверка целевого URL — абсолютный `https`-адрес.
@@ -999,6 +1000,17 @@ export function WebhooksSettings() {
           </ul>
         )}
       </SettingsSection>
+
+      {/* Egress-политика исходящих webhooks (`egress.webhooks`; `off` — dev). */}
+      {canManage && (
+        <EgressPolicySection
+          scope="webhooks"
+          allowOff
+          titleKey="egress.webhooks.title"
+          descriptionKey="egress.webhooks.description"
+          testIdPrefix="egress-webhooks"
+        />
+      )}
     </SettingsPanel>
   )
 }

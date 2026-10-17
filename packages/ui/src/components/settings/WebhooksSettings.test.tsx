@@ -33,6 +33,10 @@ const mocks = vi.hoisted(() => ({
   regenerateWebhookSecret: vi.fn(),
   testWebhookSubscription: vi.fn(),
   getWebhookDeliveries: vi.fn(),
+  getEgressPolicy: vi.fn(),
+  saveEgressPolicy: vi.fn(),
+  resetEgressPolicy: vi.fn(),
+  checkEgress: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -180,6 +184,17 @@ beforeEach(() => {
   mocks.regenerateWebhookSecret.mockResolvedValue({ ...SUB_ACTIVE, secret: 'whsec_rotated_value' })
   mocks.testWebhookSubscription.mockResolvedValue(DELIVERY_OK)
   mocks.getWebhookDeliveries.mockResolvedValue({ deliveries: [DELIVERY_OK, DELIVERY_FAIL] })
+  mocks.getEgressPolicy.mockResolvedValue({
+    policy: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
+    isOverridden: false,
+    defaults: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
+  })
+  mocks.saveEgressPolicy.mockImplementation(async (_scope: string, policy: unknown) => policy)
+  mocks.resetEgressPolicy.mockResolvedValue({ mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] })
+  mocks.checkEgress.mockResolvedValue({
+    allowed: true,
+    policy: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
+  })
   vi.mocked(confirm).mockResolvedValue(true)
 })
 
@@ -485,6 +500,18 @@ describe('WebhooksSettings — утилиты, права (ADMIN) и i18n (ADR-0
     )
     expect(visible.some((cat) => cat.id === 'webhooks')).toBe(false)
     expect(resolveActiveSettingsPage(visible, 'webhooks')).toBe(visible[0].id)
+  })
+
+  it('ADMIN видит секцию egress-политики webhooks (с режимом off)', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('[data-testid="egress-webhooks-section"]')).not.toBeNull()
+    expect(mocks.getEgressPolicy).toHaveBeenCalledWith('webhooks')
+  })
+
+  it('не-ADMIN не видит секцию egress-политики webhooks', async () => {
+    authStore.user = { id: 'u2', roles: ['USER'] }
+    const container = await renderSettings()
+    expect(container.querySelector('[data-testid="egress-webhooks-section"]')).toBeNull()
   })
 
   it('ключи «Webhooks» есть в ru и en словарях', () => {

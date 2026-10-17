@@ -17,6 +17,7 @@ import {
   SettingsPanel,
   SettingsRow,
   SettingsSection,
+  TextField,
   ToggleField,
   useSettingsDraft,
 } from '../ui/settings'
@@ -667,6 +668,10 @@ function NetworkPolicySection({
   const { t } = useI18n()
   const { notify } = useNotification()
   const [saving, setSaving] = useState(false)
+  const [checkUrl, setCheckUrl] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [checkResult, setCheckResult] = useState<Awaited<ReturnType<typeof synthApi.checkEgress>> | null>(null)
+  const [checkError, setCheckError] = useState<string | null>(null)
   const draft = useSettingsDraft<McpNetworkPolicy>({
     value: policy,
     // Серверный дефолт; до загрузки — null (Reset серый и неактивен).
@@ -678,9 +683,26 @@ function NetworkPolicySection({
     if (current == null) return
     setSaving(true)
     try {
-      await onSave(current)
+      // `exceptions` — общий с egress формат allow-правил (может отсутствовать
+      // в старом ответе сервера — нормализуем до пустого списка).
+      await onSave({ ...current, exceptions: current.exceptions ?? [] })
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleCheck = async () => {
+    const url = checkUrl.trim()
+    if (!url) return
+    setChecking(true)
+    setCheckResult(null)
+    setCheckError(null)
+    try {
+      setCheckResult(await synthApi.checkEgress('mcp', url))
+    } catch (err) {
+      setCheckError(t('egress.check.error', { error: err instanceof Error ? err.message : 'HTTP' }))
+    } finally {
+      setChecking(false)
     }
   }
 
@@ -729,11 +751,93 @@ function NetworkPolicySection({
 
             <ListField
               label={t('mcp.network.list')}
+              description={t('egress.listHelp')}
               values={current.list}
               onChange={(list) => draft.update({ list })}
               placeholder="10.0.0.0/8"
               variant="chips"
             />
+
+            <ListField
+              label={t('egress.exceptions')}
+              description={t('egress.exceptionsHelp')}
+              values={current.exceptions ?? []}
+              onChange={(exceptions) => draft.update({ exceptions })}
+              placeholder="api.example.com"
+              variant="chips"
+            />
+
+            <div className="space-y-2 min-w-0 border-t border-border/60 pt-3">
+              <div className="text-sm font-medium text-foreground">{t('egress.check.title')}</div>
+              <TextField
+                label={t('egress.check.url')}
+                description={t('egress.check.description')}
+                value={checkUrl}
+                onChange={(e) => {
+                  setCheckUrl(e.target.value)
+                  if (checkError) setCheckError(null)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    void handleCheck()
+                  }
+                }}
+                placeholder="https://example.com/mcp"
+                mono
+                data-testid="mcp-network-check-url"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => void handleCheck()}
+                disabled={checking || !checkUrl.trim()}
+                data-testid="mcp-network-check-button"
+              >
+                <Icon name="search" className="size-3.5" />
+                {checking ? t('egress.check.checking') : t('egress.check.button')}
+              </Button>
+
+              {checkError && (
+                <div
+                  role="alert"
+                  data-testid="mcp-network-check-error"
+                  className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive"
+                >
+                  {checkError}
+                </div>
+              )}
+
+              {checkResult && (
+                <div
+                  role="status"
+                  data-testid="mcp-network-check-result"
+                  className={cn(
+                    'space-y-1 rounded-lg p-2 text-xs',
+                    checkResult.allowed
+                      ? 'bg-status-success/10 text-status-success'
+                      : 'bg-destructive/10 text-destructive',
+                  )}
+                >
+                  <div className="font-medium">
+                    {checkResult.allowed
+                      ? t('egress.check.allowed')
+                      : t('egress.check.blocked', { reason: checkResult.reason ?? '—' })}
+                  </div>
+                  {checkResult.matchedRule && (
+                    <div className="min-w-0 break-words">
+                      {t('egress.check.matchedRule', { rule: checkResult.matchedRule })}
+                    </div>
+                  )}
+                  {checkResult.addresses && checkResult.addresses.length > 0 && (
+                    <div className="min-w-0 break-words font-mono">
+                      {t('egress.check.addresses', { addresses: checkResult.addresses.join(', ') })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             <SettingsActions
               onSave={() => { void handleSave() }}

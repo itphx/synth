@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => ({
   saveToolsPolicy: vi.fn(),
   resetToolsPolicy: vi.fn(),
   getSessionPrompt: vi.fn(),
+  getEgressPolicy: vi.fn(),
+  saveEgressPolicy: vi.fn(),
+  resetEgressPolicy: vi.fn(),
+  checkEgress: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -99,6 +103,17 @@ beforeEach(() => {
   mocks.saveToolsPolicy.mockImplementation(async (policy: unknown) => policy)
   mocks.resetToolsPolicy.mockResolvedValue('consistency')
   mocks.getSessionPrompt.mockResolvedValue({ manifest: {}, history: {}, toolsDetail: TOOLS_DETAIL })
+  mocks.getEgressPolicy.mockResolvedValue({
+    policy: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
+    isOverridden: false,
+    defaults: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
+  })
+  mocks.saveEgressPolicy.mockImplementation(async (_scope: string, policy: unknown) => policy)
+  mocks.resetEgressPolicy.mockResolvedValue({ mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] })
+  mocks.checkEgress.mockResolvedValue({
+    allowed: true,
+    policy: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
+  })
 
   useMcpStore.setState({
     toolsDisabled: null,
@@ -385,6 +400,12 @@ describe('ToolsDisabledSettings — админский tools.disabled (ADR-071 �
     const reset = container.querySelector('[data-testid="tools-disabled-reset"]') as HTMLButtonElement
     expect(reset.disabled).toBe(true)
     expect(reset.className).toContain('border-muted-foreground')
+  })
+
+  it('содержит секцию egress-политики встроенных инструментов', async () => {
+    const container = await renderSettings()
+    expect(container.querySelector('[data-testid="egress-tools-section"]')).not.toBeNull()
+    expect(mocks.getEgressPolicy).toHaveBeenCalledWith('tools')
   })
 
   it('каркас SettingsPanel: один скролл, без pr-2, гриды с grid-cols-1', async () => {
