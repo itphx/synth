@@ -550,47 +550,67 @@ mcp:
 ### Proxy (`proxy.*`, ADR-099 D1+D2)
 
 An outbound HTTP/HTTPS/SOCKS5 proxy — part of the single egress layer (see also `security.tls` — trust for the
-**target** and for the https proxy, and `egress.*` — the address policy). The section is **top-level** and
-**start-only**: changes are applied at process startup (like `security.tls`), with no runtime switching. The
-route is chosen **per origin**: `httpsProxy`/`httpProxy` by the target scheme → `allProxy` → `url`; hosts in
-`noProxy` go direct.
+**target** and for the https proxy, and `egress.*` — the address policy). The section is **top-level** and can
+be configured in `config.yaml`/env and **from the admin UI** (runtime override, see "Configuring from the UI").
+It is applied **at process startup** (the `EgressDispatcher` is start-only, like TLS): saving from the UI does
+not switch the route live — a restart is required. The route is chosen **per origin**:
+`httpsProxy`/`httpProxy` by the target scheme → `allProxy` → `url`; hosts in `noProxy` go direct.
 
 | Field | Env | Purpose | Default |
 |---|---|---|---|
 | `enabled` | `SYNTH_PROXY_ENABLED` | Explicit switch. Unset — the proxy is enabled by the presence of a URL (including the standard env vars when `fromEnv`); an explicit `false` suppresses the standard env | — (auto) |
-| `url` | `SYNTH_PROXY_URL` | Common proxy `http://`/`https://`/`socks5://`/`socks5h://` (userinfo allowed but stripped from status/logs) | — |
+| `url` | `SYNTH_PROXY_URL` | Common proxy `http://`/`https://`/`socks5://`/`socks5h://` (userinfo in config.yaml/env is allowed; when saving from the UI a password in the URL is **forbidden**) | — |
 | `httpProxy` / `httpsProxy` | `SYNTH_PROXY_HTTP_PROXY` / `SYNTH_PROXY_HTTPS_PROXY` | Proxy for targets by scheme (`http`/`https`); takes precedence over `allProxy`/`url` | — |
 | `allProxy` | `SYNTH_PROXY_ALL_PROXY` | Proxy for all schemes (when no scheme-specific one) | — |
 | `noProxy` | `SYNTH_PROXY_NO_PROXY` | Exceptions: `host`, `.suffix`, `*.suffix`, `host:port`, IP, CIDR (matched against the target IP literal — no DNS), `*` | `[]` |
 | `fromEnv` | — | Honour the standard `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` | `true` |
 | `fallbackDirect` | `SYNTH_PROXY_FALLBACK_DIRECT` | Explicit opt-in: go direct when the proxy is unavailable (warn + `via:'fallback'`). Auth errors (`407`) do **not** allow fallback | `false` |
 | `connectTimeoutMs` | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | Proxy connection timeout, ms | `10000` |
-| `auth.type` | — | `basic` — implemented; `ntlm`/`negotiate` → configuration error (remainder) | `basic` |
+| `auth.type` | — | Only `basic`; `ntlm`/`negotiate` → error/400 (remainder) | `basic` |
 | `auth.username` | — | Basic username (alternative — userinfo in the URL) | — |
-| `auth` password | `SYNTH_PROXY_PASSWORD` | Basic password: **only** the env var or the file `{dataDir}/secrets/proxy-password` (not stored in config.yaml, invariant 13) | — |
+| `auth` password | `SYNTH_PROXY_PASSWORD` | Basic password: **only** the env var or the file `{dataDir}/secrets/proxy-password` (not stored in config.yaml/`settings.json`, invariant 13); the env var takes precedence over the file and blocks UI management | — |
 | `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA for the **https proxy itself** (mutually exclusive) | system trust |
-| `tls.certFile` / `tls.keyFile` | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | mTLS to the https proxy | — |
+| `tls.certFile` / `tls.keyFile` | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | mTLS to the https proxy (set together) | — |
 | `tls.rejectUnauthorized` | `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | Verify the proxy certificate | `true` |
 
-**Priority (ADR-023):** `SYNTH_PROXY_*` > `config.proxy` > the standard `HTTP_PROXY`/`HTTPS_PROXY`/
-`ALL_PROXY`/`NO_PROXY` (only with `fromEnv`) > defaults. An explicit `proxy.enabled: false` suppresses the
-standard env — the proxy is not enabled "from the environment" against the config. `noProxy`:
-`SYNTH_PROXY_NO_PROXY` > a non-empty `proxy.noProxy` > `NO_PROXY`.
+**Priority (ADR-023):** defaults ← `config.yaml proxy` ← **runtime override (UI)** ← explicit
+`SYNTH_PROXY_*`; the standard `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` apply only with `fromEnv`
+and when runtime/config did not set an explicit `enabled: false`. The merge is field-level, so the UI edits
+the config layer but **does not override the explicit deployment env**. `noProxy`:
+`SYNTH_PROXY_NO_PROXY` > runtime > a non-empty `proxy.noProxy` > `NO_PROXY`.
 
 **Fail-closed.** A broken URL, an unknown scheme, `enabled=true` without a URL, Basic without a password,
-`auth.type` ≠ `basic`, `proxy.tls` together with `socks5://` → a configuration error at startup
-(`EGRESS_PROXY_CONFIG_INVALID`). An unavailable proxy → `EGRESS_PROXY_UNAVAILABLE` (no silent direct);
-`407`/SOCKS refusal → `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED`.
+`auth.type` ≠ `basic`, `proxy.tls` together with `socks5://`, `caFile`+`caPem`, `certFile` without
+`keyFile` → a configuration error (`EGRESS_PROXY_CONFIG_INVALID`) at startup and 400 `VALIDATION_ERROR` when
+saving from the UI. An unavailable proxy → `EGRESS_PROXY_UNAVAILABLE` (no silent direct); `407`/SOCKS refusal
+→ `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED`.
 
 **Address policy behind a proxy** (ADR-099 item 18): for requests through the proxy only the scheme and the
 hostname rules/`exceptions` are checked (no DNS/CIDR — the proxy resolves the address); for `noProxy` hosts
 the check is full (DNS/CIDR per hop). The actual route is written to the egress journal (`via`:
 `proxy`/`direct`/`fallback`); `POST /api/v2/settings/egress/check` returns `proxied`/`addressChecksActive`.
 
-**API/UI.** `GET /api/v2/settings/proxy` — a read-only status (redacted URL, source `env`/`config`/`none`,
-`noProxy`, `fallbackDirect`, `connectTimeoutMs`, `restartRequired: true`); `POST /api/v2/settings/proxy/check`
-— checks the proxy connection only (TCP/TLS/SOCKS handshake, `authChallenge`, `latencyMs`; the target is not
-requested). UI — the admin section "Proxy (egress)" in "Built-in tools".
+#### Configuring from the UI (runtime override)
+
+- **What is editable:** `enabled`, `url`/`httpProxy`/`httpsProxy`/`allProxy`, `noProxy`, `fromEnv`,
+  `fallbackDirect`, `connectTimeoutMs`, `auth.username`, `tls.*` paths. It is stored in
+  `RuntimeSettings.proxy` (`{dataDir}/settings.json`; with `storage.backend=postgres` — the `settings`
+  table, moved by `synth storage migrate`).
+- **Application:** at the **next startup** (`restartRequired`), not live. `GET /settings/proxy` returns
+  `saved` (config ← runtime ← env), `running` (the current dispatcher), `defaults`, `isOverridden`,
+  `restartRequired`; the flat response fields equal `saved` (backward compatibility). The UI shows a
+  "changes take effect after a restart" banner.
+- **Write-only password:** `PUT /settings/proxy/password` writes `{dataDir}/secrets/proxy-password`
+  (0600, directory 0700, atomic tmp→rename), `DELETE` removes it; the value is never returned and never
+  reaches the audit log/logs. If `SYNTH_PROXY_PASSWORD` is set, both calls → `409 CONFLICT` (the password is
+  managed by the deployment). `GET` returns only `password: {source:'env'|'file'|'none', set, removable}`.
+- **Check:** `POST /settings/proxy/check` without `url` checks the **saved** configuration
+  (`usingSaved:true`) so the UI sees the future state; an explicit `{url}` checks a specific proxy.
+- **Audit:** changes (save/reset/password) are written to `{dataDir}/audit/security.jsonl` with
+  `scope:'proxy'` (before/after without the password, URLs redacted).
+
+**RBAC:** read — `requireAuth`; save/reset, password and `check` — `settingsWriteGuard` (managed —
+`ADMIN`, core — `requireAuth`).
 
 **Limitations.** NTLM/Negotiate/Kerberos are not implemented (a custom CONNECT loop and a native dependency
 are required; acceptance — with the customer's AD/KDC). `security.tls` for the **target** is not applied
@@ -598,8 +618,9 @@ through SOCKS5 (a `Socks5ProxyAgent` limitation — system trust only). An https
 requires a DNS host (SNI by IP is forbidden in Node); `proxy/check` may still report `reachable`. SOCKS5/SOCKS5H
 in undici are experimental and resolve the hostname at the proxy. The built-in global `fetch` is not
 guaranteed (npm `setGlobalDispatcher` does not affect it on Node 26; on Node 22 — re-check in CI) — the paths
-through `egressFetch` are covered. PostgreSQL is not proxied (not HTTP). git applies `no_proxy` via libcurl,
-there is no per-remote setting; `stdio` MCP receives the proxy env without the password.
+through `egressFetch` are covered. There is no runtime reload without a restart. PostgreSQL is not proxied
+(not HTTP). git applies `no_proxy` via libcurl, there is no per-remote setting; `stdio` MCP receives the
+proxy env without the password.
 
 Example:
 

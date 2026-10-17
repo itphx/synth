@@ -11,21 +11,27 @@
 > (`audit/egress.jsonl`), удаление `webhooks.allowPrivateTargets`; **(3) HTTP/HTTPS/SOCKS5-прокси** —
 > секция `proxy` (URL-поля, `noProxy`, Basic-аутентификация, TLS/mTLS к https-прокси), `EgressDispatcher`
 > с per-origin маршрутом direct/proxy, fail-closed `EGRESS_PROXY_UNAVAILABLE`, proxied-режим адресной
-> политики, `via` в журнале, git через child-env, прокси-env для `stdio`-MCP, read-only API статуса и
-> проверка коннекта, админ-секция UI. **Остаток:** NTLM/Negotiate/Kerberos (нужен собственный CONNECT-цикл
-> и нативная зависимость; приёмка — с AD/KDC клиента), `security.tls` (CA/mTLS к цели) через SOCKS5
-> (ограничение `Socks5ProxyAgent`), runtime-reload прокси/TLS (только рестарт), пиннинг проверенного адреса
+> политики, `via` в журнале, git через child-env, прокси-env для `stdio`-MCP, API статуса/редактирования
+> и проверки коннекта, админ-секция UI; **runtime-настройка прокси из админ-UI** — оверрайд в
+> `RuntimeSettings.proxy` (`settings.json`/PG, `settings migrate`), сохранение без live-применения,
+> `restartRequired`, write-only пароль (файл/env), аудит `scope:'proxy'`. **Остаток:**
+> NTLM/Negotiate/Kerberos (нужен собственный CONNECT-цикл и нативная зависимость; приёмка — с AD/KDC
+> клиента), `security.tls` (CA/mTLS к цели) через SOCKS5 (ограничение `Socks5ProxyAgent`),
+> runtime-reload прокси/TLS без рестарта, пиннинг проверенного адреса
 > ([PROP-100](./prop-100-ssrf-dns-rebinding.md)), метрики/наблюдаемость
 > ([PROP-094](./prop-094-observability-metrics.md)), перепроверка покрытия встроенного `fetch` на Node 22.
 > Политика — **не граница безопасности**, когда доступны shell, `stdio`-MCP или внешние движки (см.
 > «Последствия»).
-> **Дата:** 2026-10-16 (адресная политика — 2026-10-17; прокси D1+D2 — 2026-10-17)
+> **Дата:** 2026-10-16 (адресная политика — 2026-10-17; прокси D1+D2 — 2026-10-17; runtime-UI — 2026-10-18)
 > **Обновлено:** 2026-10-17 — адресная egress-политика как часть того же слоя: `egress.tools`/
 > `egress.webhooks`, `mcp.networkPolicy` с `exceptions`, live per-request, аудит изменений и журнал
 > внешних запросов, удаление `webhooks.allowPrivateTargets`.
 > **Обновлено:** 2026-10-17 — HTTP/HTTPS/SOCKS5-прокси (этапы D1+D2): секция `proxy`, `EgressDispatcher`,
 > Basic и mTLS к прокси, `noProxy`, proxied-режим адресной политики, `via` в журнале, git/MCP через env,
 > API `settings/proxy*`, UI; NTLM/Negotiate/Kerberos — остаток.
+> **Обновлено:** 2026-10-18 — прокси настраивается из админ-UI: runtime-override в сторе (file/PG),
+> приоритет `SYNTH_PROXY_*` > runtime > config.yaml, применение при следующем старте (`restartRequired`),
+> write-only пароль (`secrets/proxy-password`, env приоритетнее), аудит `scope:'proxy'`, `check` по saved.
 > **Связано:** [PROP-088](./prop-088-http-proxy.md) (заменён/надстроен), [PROP-100](./prop-100-ssrf-dns-rebinding.md),
 > [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
 > (webhooks), [ADR-041](./adr-041-llm-error-taxonomy.md) (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md),
@@ -143,16 +149,20 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
     `noProxy`: там маршрут direct и проверка полная. Правило действует на каждый хоп редиректа, чтобы
     включение прокси не создавало ложного ощущения защиты.
 16. **Прокси — часть egress-слоя, а не транспорт подсистемы.** Top-level секция `proxy`
-    (start-only, как `security.tls`): `enabled`, `url`, `httpProxy`/`httpsProxy`/`allProxy`,
-    `noProxy[]`, `fromEnv`, `fallbackDirect`, `connectTimeoutMs`, `auth` (Basic), `tls` (CA/mTLS к
-    https-прокси). Маршрут выбирается **per-origin**: `httpsProxy`/`httpProxy` по схеме цели →
-    `allProxy` → `url`; подсистемы не создают собственных прокси-агентов и не читают env напрямую.
-    Транспорт — `EgressDispatcher` поверх `security.tls`: TLS к цели (`requestTls`) и к прокси
-    (`proxyTls`) разделены.
-17. **Приоритет и источники (ADR-023).** `SYNTH_PROXY_*` > `config.proxy` > стандартные
-    `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` (только при `fromEnv`) > defaults. Явный
-    `proxy.enabled: false` подавляет стандартные env (прокси не включается «из окружения» вопреки
-    конфигу). `noProxy`: `SYNTH_PROXY_NO_PROXY` > `noProxy` из config (непустой) > `NO_PROXY`.
+    (`enabled`, `url`, `httpProxy`/`httpsProxy`/`allProxy`, `noProxy[]`, `fromEnv`, `fallbackDirect`,
+    `connectTimeoutMs`, `auth` (Basic), `tls` (CA/mTLS к https-прокси)); та же секция может быть
+    сохранена как runtime-override из админ-UI (п. 21). Маршрут выбирается **per-origin**:
+    `httpsProxy`/`httpProxy` по схеме цели → `allProxy` → `url`; подсистемы не создают собственных
+    прокси-агентов и не читают env напрямую. Транспорт — `EgressDispatcher` поверх `security.tls`:
+    TLS к цели (`requestTls`) и к прокси (`proxyTls`) разделены. Прокси применяется **при старте**
+    (dispatcher start-only), как `security.tls`.
+17. **Приоритет и источники (ADR-023).** Явные `SYNTH_PROXY_*` > runtime-override из админ-UI
+    (`RuntimeSettings.proxy`, `settings.json`/PG) > `config.proxy` > стандартные
+    `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` (только при `fromEnv`) > defaults; слияние —
+    поле-уровневое. То есть UI правит config-уровень, но **не переопределяет явный env деплоя**.
+    Стандартные env не применяются, если runtime/config явно задали `enabled: false` (прокси не
+    включается «из окружения» вопреки конфигу инстанса). `noProxy`: `SYNTH_PROXY_NO_PROXY` >
+    runtime > непустой `noProxy` из config > `NO_PROXY`.
     **Секреты:** пароль Basic — только `SYNTH_PROXY_PASSWORD` или `{dataDir}/secrets/proxy-password`
     (в config.yaml не хранится, инвариант 13); userinfo в URL извлекается в resolved-креды и **не
     попадает** в конфиг, логи, статус и `proxyStatus` (только redacted URL). Ошибка конфигурации
@@ -175,15 +185,32 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
 20. **Точки вне HTTP-транспорта, API и границы.** git получает прокси через child-env
     (`http_proxy`/`https_proxy`/`all_proxy`/`no_proxy`, Basic — в userinfo env-URL, не в argv;
     `no_proxy` применяет libcurl, per-remote настройки нет). `stdio`-MCP получает
-    `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` (+ `NODE_EXTRA_CA_CERTS`) без пароля. API:
-    `GET /api/v2/settings/proxy` (read-only статус, redacted URL, `restartRequired: true`) и
-    `POST /api/v2/settings/proxy/check` (только коннект к прокси: TCP/TLS/SOCKS-handshake,
-    `authChallenge`, `latencyMs`, без запроса к цели). UI — админ-секция «Прокси (egress)» (статус,
-    источник, `noProxy`, `fallbackDirect`, таймаут, плашка рестарта, «Проверить соединение»).
-    Прокси — **start-only**: runtime-переключения нет, изменения требуют рестарта. PostgreSQL не
-    проксируется (не HTTP). Прокси с IP-литералом и TLS требует DNS-хоста (SNI/servername по IP
-    запрещён в Node), при этом диагностика `check` может показать `reachable` (она не ставит
-    servername для IP).
+    `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` (+ `NODE_EXTRA_CA_CERTS`) без пароля. API —
+    `GET/PUT/DELETE /api/v2/settings/proxy` (+ `/proxy/password`, `POST /proxy/check`, п. 21).
+    UI — админ-секция «Прокси (egress)» (редактируемая форма, статус saved/running, плашка рестарта,
+    «Проверить соединение»). Прокси — **start-only**: live-переключения нет, изменения требуют
+    рестарта. PostgreSQL не проксируется (не HTTP). Прокси с IP-литералом и TLS требует DNS-хоста
+    (SNI/servername по IP запрещён в Node), при этом диагностика `check` может показать `reachable`
+    (она не ставит servername для IP).
+21. **Runtime-настройка прокси из админ-UI.** Секция `proxy` сохраняется в `RuntimeSettings.proxy`
+    (`{dataDir}/settings.json`, PG — таблица `settings`; переносится `synth storage migrate`) и
+    **применяется при следующем старте**, а не live: порядок инициализации — ранний `initTlsTrust`
+    (TLS/CA и первичный прокси из config/env, нужен для PostgreSQL), затем сборка хранилища, затем
+    `applyStartupProxyConfig` (core `server/app.ts` до deps, backend `createBackendStorage`) —
+    дочитывает runtime-override и пересобирает `EgressDispatcher` **до** создания провайдеров.
+    `GET /api/v2/settings/proxy` отдаёт `saved` (config ← runtime ← env), `running` (текущий
+    dispatcher), `defaults`, `isOverridden`, `password` (только `{source:'env'|'file'|'none', set,
+    removable}`) и `restartRequired` (отпечаток saved ≠ running); плоские поля оставлены для обратной
+    совместимости и равны `saved`. `PUT` валидирует и сохраняет (live не применяет, ответ
+    `restartRequired: true`), `DELETE` сбрасывает к config/env. **Пароль** Basic — только
+    `SYNTH_PROXY_PASSWORD` (приоритетнее, UI не меняет: `PUT/DELETE /proxy/password` → 409 `CONFLICT`)
+    или файл `{dataDir}/secrets/proxy-password` (0600, каталог 0700, tmp→rename); значение не
+    отдаётся, не логируется и не попадает в аудит. Валидация: `auth.type` только `basic`
+    (`ntlm`/`negotiate` → 400 «не поддерживается»); пароль в userinfo URL в сохраняемой секции
+    **запрещён** (инвариант 13); `tls` — `caFile`↔`caPem` взаимоисключающи, `certFile`+`keyFile` вместе.
+    Изменения пишутся в аудит `{dataDir}/audit/security.jsonl` со `scope:'proxy'` (before/after без
+    пароля); `POST /proxy/check` проверяет **saved**-конфигурацию (`usingSaved: true`), чтобы UI видел
+    будущее состояние после рестарта.
 
 ## Альтернативы
 
@@ -224,6 +251,10 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   гибрид, OIDC и git ходят через HTTP/HTTPS/SOCKS5-прокси; недоступный прокси не «проваливается» в
   direct, `noProxy` соблюдается на каждом хопе, адресная политика в proxied-режиме честно сообщает,
   что DNS/CIDR не проверяются; креды и userinfo не попадают в логи/статус.
+- (+) Прокси управляется из админ-UI без правки config.yaml: runtime-override хранится в
+  `settings.json`/PG, переносится `storage migrate`, валидируется на записи, изменения аудируются
+  (`scope:'proxy'`), пароль — write-only (файл/env), а `restartRequired` честно показывает расхождение
+  saved/running.
 - (−) Появилась прямая зависимость `undici@^7`; git-CA ограничен файлом (`caFile`).
 - (−) Политика — **не граница безопасности**: при доступном `execute_shell`, `stdio`-MCP или внешних
   движках ([PROP-050](./prop-050-external-engines-runner.md)) исходящий трафик идёт мимо guard;
@@ -233,7 +264,9 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `security.tls` (CA/mTLS к цели) не применяется через SOCKS5 (`Socks5ProxyAgent` не принимает
   `requestTls`) — только системное доверие; https-прокси/SOCKS по IP-литералу требуют DNS-хоста
   (SNI); SOCKS5 в undici экспериментален и всегда резолвит hostname на прокси.
-- (−) Прокси — start-only (рестарт при изменении). Встроенный глобальный `fetch` не гарантирован:
+- (−) Прокси — start-only: сохранение из UI не применяется на лету, нужен рестарт (runtime-reload
+  dispatcher'а — остаток); явные `SYNTH_PROXY_*` деплоя приоритетнее UI, поэтому часть настроек
+  инстанса UI не переопределит. Встроенный глобальный `fetch` не гарантирован:
   spike на Node 26 показал, что npm-`setGlobalDispatcher` не влияет на встроенный fetch; покрыты
   пути через `egressFetch` (все защищённые), сторонний код/SDK — вне scope (на Node 22 — перепроверить
   в CI). PostgreSQL не проксируется; git применяет `no_proxy` средствами libcurl, per-remote
@@ -265,15 +298,24 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `packages/backend/src/routes/providers.ts`.
 - **Прокси (shared):** `packages/shared/src/config/proxy.ts` (`resolveProxyConfig`, `parseProxyUrl`,
   `redactProxyUrl`, `NoProxyMatcher`, `proxyEntryFor`/`proxyUrlFor`/`shouldProxyUrl`, `proxyStatus`,
-  `resolveProxyTls`, `ProxyConfigError`), схемы `proxyConfigSchema`/`proxyAuthConfigSchema`/
-  `proxyTlsConfigSchema` (`packages/shared/src/config/types.ts`), env `SYNTH_PROXY_*`/
-  `SYNTH_PROXY_PASSWORD`/`SYNTH_PROXY_TLS_*`; `EgressRequestLogEntry.via`
-  (`packages/shared/src/types/egress.ts`).
+  `resolveProxyTls`, `validateProxyConfig`, `ProxyConfigError`, `ProxyPasswordStatus`), схемы
+  `proxyConfigSchema`/`proxyAuthConfigSchema`/`proxyTlsConfigSchema`
+  (`packages/shared/src/config/types.ts`), env `SYNTH_PROXY_*`/`SYNTH_PROXY_PASSWORD`/`SYNTH_PROXY_TLS_*`;
+  `EgressRequestLogEntry.via`, `SECURITY_AUDIT_SCOPES` (+`proxy`) (`packages/shared/src/types/egress.ts`).
 - **Прокси (core):** `security/proxy-dispatcher.ts` (`EgressDispatcher`, `EgressProxyUnavailableError`,
   `EgressProxyAuthError`), `security/proxy-state.ts` (активная конфигурация, `gitProxyEnv`,
-  `mcpProxyEnv`, `EGRESS_VIA`), `security/proxy-check.ts` (`checkProxyConnectivity`); интеграция —
-  `security/tls.ts` (`initTlsTrust` резолвит прокси и строит `EgressDispatcher`),
+  `mcpProxyEnv`, `EGRESS_VIA`, `proxyConfigFingerprint`), `security/proxy-check.ts`
+  (`checkProxyConnectivity`), `security/proxy-password.ts` (файл `secrets/proxy-password`,
+  `getProxyPasswordStatus`, 0600/0700, tmp→rename), `security/proxy-startup.ts`
+  (`applyStartupProxyConfig`); интеграция — `security/tls.ts` (`initTlsTrust` — ранний TLS/CA +
+  первичный прокси, `applyEgressProxyConfig`/`configureEgressProxy` — второй шаг),
   `engine/net/egress-guard.ts` (proxied-режим, `via`), `server/routes/settings.ts`.
+- **Runtime-override прокси:** `RuntimeSettings.proxy` (`storage/runtime-settings.ts`), порт
+  `SettingsRepository.getProxySettings/setProxySettings/clearProxySettings`
+  (`storage/ports/settings-repository.ts`), file/memory-реализации, PG
+  (`packages/storage-postgres/src/ports/principals-settings.ts`), перенос
+  `maintenance/storage-migrate.ts`; применение — `server/app.ts` и `backend/app/deps.ts`
+  (`applyStartupProxyConfig` после сборки хранилища, до deps).
 - **Перевод исходящих точек (TLS):** `providers/{base,openai,anthropic,ollama,remote,decision}.ts`,
   `engine/mcp/client.ts`, `engine/webhooks/service.ts`, `engine/context/instructions.ts`,
   `engine/skills/remote.ts`, `engine/tools/web.ts`, `engine/net/egress-guard.ts` (иконки провайдеров
@@ -289,7 +331,8 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `002-egress-audit` (таблицы `security_audit`, `egress_requests`).
 - **API:** секция egress в `packages/core/src/server/routes/settings.ts`
   (`/settings/egress/tools`, `/settings/egress/webhooks`, `POST /settings/egress/check`, расширенный
-  `/settings/mcp-network-policy`, `GET /settings/proxy`, `POST /settings/proxy/check`),
+  `/settings/mcp-network-policy`, `GET/PUT/DELETE /settings/proxy`,
+  `PUT/DELETE /settings/proxy/password`, `POST /settings/proxy/check`),
   `packages/core/src/server/routes/audit.ts` (`GET /api/v2/audit/security`, `GET /api/v2/audit/egress`).
 - **UI:** `components/settings/EgressPolicySection.tsx` — режим/список/исключения и «Проверить URL»;
   встроена в «Встроенные инструменты» (`ToolsDisabledSettings`), «Webhooks» (`WebhooksSettings`,
@@ -297,8 +340,10 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   вкладки «Безопасность (политики)» и «Внешние запросы» в «Логах и аудите»
   (`SecurityAuditPanel`/`EgressLogPanel`); i18n `egress.*`/`logs.security.*`/`logs.egress.*` (ru/en).
   Прокси — `components/settings/ProxyStatusSection.tsx` (+ `lib/api/proxy.ts`), встроена в
-  «Встроенные инструменты»: статус, источник, redacted URL, `noProxy`, `fallbackDirect`, таймаут,
-  плашка рестарта, «Проверить соединение»; i18n `proxy.*`.
+  «Встроенные инструменты»: редактируемая форма (enabled, URL-поля, `noProxy`, `fromEnv`,
+  `fallbackDirect`, таймаут, Basic-username, TLS-пути), write-only пароль (задать/сбросить, disabled
+  при env), статус saved/running, плашка «изменения после рестарта», «Проверить соединение»; i18n
+  `proxy.*`.
 - **git:** `packages/core/src/git/git-service.ts` — `simpleGit({ config: gitCaConfig(), env: gitProxyEnv() })`
   (`http.sslCAInfo`; прокси/`no_proxy`/Basic — child-env, не argv). **MCP stdio:**
   `engine/mcp/client.ts` — `mcpProxyEnv()` + `NODE_EXTRA_CA_CERTS` в env дочернего процесса.
@@ -310,8 +355,10 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `packages/storage-postgres/src/pool-tls.test.ts`, `packages/core/src/git/git-ca.test.ts`,
   `packages/shared/src/config/resolve.test.ts`, `packages/core/src/engine/net/egress-guard.test.ts`
   (политика/журнал/аудит — тесты уровня подсистем), `packages/shared/src/config/proxy.test.ts`,
-  `packages/core/src/security/proxy-dispatcher.test.ts`/`proxy-check.test.ts`/`proxy-optin.test.ts`
-  (fake HTTP/HTTPS-прокси, Basic/mTLS, fake SOCKS5, `no_proxy`-таблица, git env); фикстуры —
+  `packages/core/src/security/proxy-dispatcher.test.ts`/`proxy-check.test.ts`/`proxy-optin.test.ts`/
+  `proxy-startup.test.ts`, `server/routes/settings-proxy.test.ts`, `shared/src/config/proxy.test.ts`
+  (fake HTTP/HTTPS-прокси, Basic/mTLS, fake SOCKS5, `no_proxy`-таблица, git env, runtime-override,
+  saved/running/`restartRequired`, пароль write-only); фикстуры —
   `packages/core/src/security/__fixtures__/` (self-signed, `TEST ONLY`).
 - **Нет (остаток):** NTLM/Negotiate/Kerberos (собственный CONNECT-цикл + нативная зависимость,
   приёмка с AD/KDC), `security.tls` через SOCKS5, hot-reload прокси/TLS — [PROP-088](./prop-088-http-proxy.md);
@@ -328,7 +375,9 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   (единый формат `mode`/`list`/`exceptions`, `off` только у webhooks), `mcp.networkPolicy` в том же
   формате, независимые экземпляры, live per-request, аудит изменений и журнал внешних запросов,
   удаление `webhooks.allowPrivateTargets`, правило взаимодействия с прокси.
-- 2026-10-17 — добавлен HTTP/HTTPS/SOCKS5-прокси (D1+D2): секция `proxy`, `EgressDispatcher` с
-  per-origin маршрутом, Basic и TLS/mTLS к https-прокси, `noProxy` (host/порт/IP/CIDR), proxied-режим
-  адресной политики и `via` в журнале, fail-closed/`fallbackDirect`, git/MCP через env, API
-  `settings/proxy*`, UI; NTLM/Negotiate/Kerberos — остаток.
+- 2026-10-17/18 — добавлен HTTP/HTTPS/SOCKS5-прокси (D1+D2 + runtime-UI): секция `proxy`,
+  `EgressDispatcher` с per-origin маршрутом, Basic и TLS/mTLS к https-прокси, `noProxy`
+  (host/порт/IP/CIDR), proxied-режим адресной политики и `via` в журнале, fail-closed/`fallbackDirect`,
+  git/MCP через env; runtime-override в `RuntimeSettings.proxy` (UI, применение при старте,
+  `restartRequired`, write-only пароль, аудит `scope:'proxy'`), API `settings/proxy*` (+`/password`,
+  `check` по saved), UI; NTLM/Negotiate/Kerberos — остаток.

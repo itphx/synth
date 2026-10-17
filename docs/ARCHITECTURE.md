@@ -440,9 +440,13 @@ API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `do
    `mcp.networkPolicy` (`{mode, list, exceptions}`) резолвятся из стора на каждый запрос; проверка —
    `engine/net/egress-guard.ts` (`checkEgressUrl`/`fetchWithEgressGuard`, редиректы per-hop, fail-closed).
    Изменения — аудит `{dataDir}/audit/security.jsonl`, запросы — журнал `{dataDir}/audit/egress.jsonl`.
-3. **Прокси (start-only).** Секция `proxy` (HTTP/HTTPS/SOCKS5, Basic, TLS/mTLS к https-прокси, `noProxy`)
-   → `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): per-origin выбор
-   direct/proxy, fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` без direct-фоллбека. git получает прокси
+3. **Прокси (настраивается runtime, применяется при старте).** Секция `proxy` (HTTP/HTTPS/SOCKS5,
+   Basic, TLS/mTLS к https-прокси, `noProxy`) из `config.yaml`/env **или runtime-оверрайда из админ-UI**
+   (`RuntimeSettings.proxy`, `settings.json`/PG; приоритет `SYNTH_PROXY_*` > runtime > config) →
+   `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): per-origin выбор direct/proxy,
+   fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` без direct-фоллбека. Применение — двумя шагами: ранний
+   `initTlsTrust` (TLS/PG), затем `applyStartupProxyConfig` после сборки хранилища и **до** deps;
+   `PUT /settings/proxy` только сохраняет (`restartRequired`), live-переключения нет. git получает прокси
    child-env (`http_proxy`/… через libcurl), `stdio`-MCP — env дочернего процесса; PostgreSQL не
    проксируется.
 

@@ -52,7 +52,7 @@
 | [PROP-082](./arch_decisions/prop-082-full-images-deployment.md) | Flavor-образы с toolchain | 🧩 Предложение | 2026-11-14 | практический шаг до PROP-077 |
 | [PROP-083](./arch_decisions/prop-083-instance-customization-branding.md) | Кастомизация инстанса и брендинг | 🧩 Предложение | 2026-11-14 | приветственное окно, ватермарка; позже — locked settings |
 | [PROP-085](./arch_decisions/prop-085-multimodal-input.md) | Мультимодальный ввод (звук/изображения/видео) | 🧩 Предложение | 2026-11-14 | контракт `Part`; зависит от PROP-032/PROP-077 |
-| [PROP-088](./arch_decisions/prop-088-http-proxy.md) | Единый egress-слой (прокси, CA, Kerberos) | ⛔ Заменено | — | надстроен [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md): TLS/CA + mTLS, адресная политика и прокси D1+D2 (HTTP/HTTPS/SOCKS5, Basic, mTLS к прокси, `no_proxy`) реализованы; остаток — NTLM/Negotiate/Kerberos (приёмка с AD/KDC) и runtime-reload (строка сохранена для трассируемости) |
+| [PROP-088](./arch_decisions/prop-088-http-proxy.md) | Единый egress-слой (прокси, CA, Kerberos) | ⛔ Заменено | — | надстроен [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md): TLS/CA + mTLS, адресная политика и прокси D1+D2+runtime-UI (HTTP/HTTPS/SOCKS5, Basic, mTLS к прокси, `no_proxy`, настройка из админки) реализованы; остаток — NTLM/Negotiate/Kerberos (приёмка с AD/KDC), runtime-reload без рестарта, CA к цели через SOCKS5 (строка сохранена для трассируемости) |
 | [PROP-090](./arch_decisions/prop-090-extension-api.md) | Extension API v1 (плагины, загрузчик) | 🧩 Предложение | 2026-11-14 | остаток ADR-030/ADR-086; trust/scan — PROP-068 |
 | [PROP-093](./arch_decisions/prop-093-docs-versioning.md) | Версионирование документации портала | 🧩 Предложение | 2026-11-14 | вариант A (nginx) или B (`mike`) |
 | [PROP-094](./arch_decisions/prop-094-observability-metrics.md) | Наблюдаемость и эксплуатационные метрики | 🧩 Предложение | 2026-11-14 | `/metrics`, `/ready`, структурные логи, SLO |
@@ -64,8 +64,8 @@
 | [PROP-101](./arch_decisions/prop-101-local-installers-platforms.md) | Локальные инсталляторы и платформенная дистрибуция (Win/mac/Linux) | 🧩 Предложение | 2026-12-31 | реализация — до 1.0.0; CI Linux-only (нативные раннеры + подписи/нотаризация — пререквизиты); flatpak/snap не берём; этапы 0–3 |
 
 Пометка: `PROP-088` переведён в `⛔ Заменено` (надстроен [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)):
-TLS/CA + mTLS, адресная политика и прокси D1+D2 (HTTP/HTTPS/SOCKS5, Basic, `no_proxy`) реализованы;
-остаток — NTLM/Negotiate/Kerberos и runtime-reload; строка оставлена
+TLS/CA + mTLS, адресная политика и прокси (HTTP/HTTPS/SOCKS5, Basic, `no_proxy`, runtime-UI) реализованы;
+остаток — NTLM/Negotiate/Kerberos, runtime-reload и CA к цели через SOCKS5; строка оставлена
 для трассируемости и в счёт actionable-предложений не входит.
 
 ## Vision (9)
@@ -114,7 +114,7 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-086](./arch_decisions/adr-086-extensibility-plugins-editions.md) | Расширяемость (зонтик) | ⚠️ Частично | Plugin SDK → PROP-090, editions, contribution flow |
 | [ADR-087](./arch_decisions/adr-087-gateways.md) | Шлюзы (gateways) | ⚠️ Частично | HA/leader election, webhook-транспорт, второй канал |
 | [ADR-089](./arch_decisions/adr-089-external-events-automation.md) | Платформа внешних событий | ⚠️ Частично | Plugin SDK → PROP-090, пайплайны → PROP-059, остаток ADR-087, стриминг ответа наружу |
-| [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) | Единый egress-слой: TLS/CA (mTLS) + адресная политика + прокси | ⚠️ Частично | NTLM/Negotiate/Kerberos и hot-reload прокси/TLS → PROP-088, пиннинг адреса → PROP-100, метрики → PROP-094, перепроверка встроенного `fetch` на Node 22 |
+| [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) | Единый egress-слой: TLS/CA (mTLS) + адресная политика + прокси (config/UI) | ⚠️ Частично | NTLM/Negotiate/Kerberos и hot-reload прокси/TLS → PROP-088, пиннинг адреса → PROP-100, метрики → PROP-094, перепроверка встроенного `fetch` на Node 22 |
 
 Итого: ADR — 49 (из них 37 со статусом `✅ Реализовано` и 12 со статусом `⚠️ Частично`, в т.ч. 6 —
 «принятое ядро + остаток-предложение»: 030, 051, 086, 087, 089, 099), предложений — 40 (31 actionable + 9 vision),

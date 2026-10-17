@@ -1,13 +1,14 @@
 # PROP-088: Работа через HTTP-прокси (единый egress-слой, включая аутентификацию и Kerberos)
 
-> **Статус:** ⛔ Заменено — TLS/CA, mTLS, адресная политика и **HTTP/HTTPS/SOCKS5-прокси (D1+D2)** надстроены
-> [ADR-099](./adr-099-egress-tls-trust.md) (единый egress-слой). Остаток: доменная аутентификация прокси
-> **NTLM/Negotiate/Kerberos** (нужен собственный CONNECT-цикл и нативная зависимость; приёмка — с AD/KDC
-> клиента) и runtime-reload прокси/TLS (сейчас start-only).
+> **Статус:** ⛔ Заменено — TLS/CA, mTLS, адресная политика и **HTTP/HTTPS/SOCKS5-прокси (D1+D2 + runtime-UI)**
+> надстроены [ADR-099](./adr-099-egress-tls-trust.md) (единый egress-слой). Остаток: доменная
+> аутентификация прокси **NTLM/Negotiate/Kerberos** (нужен собственный CONNECT-цикл и нативная зависимость;
+> приёмка — с AD/KDC клиента), runtime-reload прокси/TLS без рестарта и CA/mTLS к цели через SOCKS5
+> (ограничение `Socks5ProxyAgent`).
 > **Заменено/надстроено:** [ADR-099](./adr-099-egress-tls-trust.md) (2026-10-16; адресная политика —
-> 2026-10-17; прокси D1+D2 — 2026-10-17) — решения о доверии TLS/CA, адресной политике и прокси перенесены
-> туда; файл оставлен как живой остаток по NTLM/Negotiate/Kerberos (номер и файл стабильны,
-> [ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §3).
+> 2026-10-17; прокси D1+D2 — 2026-10-17; runtime-UI — 2026-10-18) — решения о доверии TLS/CA, адресной
+> политике и прокси перенесены туда; файл оставлен как живой остаток по NTLM/Negotiate/Kerberos (номер и
+> файл стабильны, [ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §3).
 > **Дата:** 2026-10-01
 > **Источник:** перенесено из `AD-DRAFTS.md` (D25); **перенумеровано с PROP-083** — номер PROP-083 занят брендингом ([PROP-083](./prop-083-instance-customization-branding.md)).
 > **Связано:** [ADR-099](./adr-099-egress-tls-trust.md), [ADR-023](./adr-023-configuration.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md),
@@ -24,9 +25,11 @@
 - **Реализовано — адресная политика (SSRF/allow-list)** → тот же [ADR-099](./adr-099-egress-tls-trust.md)
   (пункты 8–15): `egress.tools`, `egress.webhooks`, `mcp.networkPolicy` с `exceptions`, live per-request,
   аудит изменений и журнал внешних запросов ([docs/CONFIGURATION.md](../CONFIGURATION.md)).
-- **Реализовано — HTTP/HTTPS/SOCKS5-прокси (D1+D2)** → [ADR-099](./adr-099-egress-tls-trust.md) (пункты
-  16–20): секция `proxy`, `EgressDispatcher` с per-origin маршрутом direct/proxy, `noProxy`, Basic и
-  TLS/mTLS к https-прокси, proxied-режим адресной политики, git/MCP через env, API `settings/proxy*`, UI.
+- **Реализовано — HTTP/HTTPS/SOCKS5-прокси (D1+D2 + runtime-UI)** →
+  [ADR-099](./adr-099-egress-tls-trust.md) (пункты 16–21): секция `proxy`, `EgressDispatcher` с
+  per-origin маршрутом direct/proxy, `noProxy`, Basic и TLS/mTLS к https-прокси, proxied-режим адресной
+  политики, git/MCP через env; runtime-override из админ-UI (`RuntimeSettings.proxy`, применение при
+  старте, `restartRequired`, write-only пароль, аудит `scope:'proxy'`), API `settings/proxy*`.
 - **Остаётся предложением — доменная аутентификация** (этот файл): **NTLM/Negotiate/Kerberos** и
   runtime-reload прокси/TLS. Эти пункты в ADR-099 **не вошли** и сохранены в теле ниже как остаток.
 
@@ -119,11 +122,20 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
 
 ### API и UI
 
-Сделано: `GET /api/v2/settings/proxy` (read-only статус, redacted URL, `restartRequired: true`) и
-`POST /api/v2/settings/proxy/check` (только коннект к прокси: TCP/TLS/SOCKS-handshake, `authChallenge`,
-`latencyMs`); админ-секция «Прокси (egress)» в «Встроенных инструментах» — статус, источник, `noProxy`,
-`fallbackDirect`, таймаут, плашка рестарта, «Проверить соединение». Ошибки — ключи i18n
-([ADR-041](./adr-041-llm-error-taxonomy.md)).
+Сделано:
+
+- `GET /api/v2/settings/proxy` — `saved`/`running`/`defaults`, `isOverridden`, `password`
+  (`{source, set, removable}`, без значения), `restartRequired`; плоские поля = `saved`, URL redacted.
+- `PUT/DELETE /api/v2/settings/proxy` — сохранить/сбросить runtime-override (валидация; live не
+  применяет; аудит `scope:'proxy'`); `PUT/DELETE /api/v2/settings/proxy/password` — файл
+  `secrets/proxy-password` (при `SYNTH_PROXY_PASSWORD` → 409 `CONFLICT`).
+- `POST /api/v2/settings/proxy/check` — проверка только коннекта к прокси (`authChallenge`, `latencyMs`);
+  без `url` проверяется **saved**-конфигурация (`usingSaved: true`).
+- Админ-секция «Прокси (egress)» — редактируемая форма (URL-поля, `noProxy`, `fromEnv`,
+  `fallbackDirect`, таймаут, Basic-username, TLS-пути), write-only пароль, статус saved/running,
+  плашка рестарта, «Проверить соединение».
+
+Ошибки — ключи i18n ([ADR-041](./adr-041-llm-error-taxonomy.md)).
 
 ## Статус реализации в коде
 
@@ -135,15 +147,22 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
   (`initTlsTrust`), `engine/net/egress-guard.ts` (proxied-режим, `via`).
 - `packages/core/src/git/git-service.ts` — `gitProxyEnv()` (child-env, Basic в userinfo, `no_proxy` через
   libcurl); `packages/core/src/engine/mcp/client.ts` — `mcpProxyEnv()` (+ `NODE_EXTRA_CA_CERTS`).
+- Runtime-override — `RuntimeSettings.proxy` (`storage/runtime-settings.ts`), порт
+  `getProxySettings/setProxySettings/clearProxySettings`, file/memory/PG, `storage migrate`;
+  применение — `security/proxy-startup.ts` (`applyStartupProxyConfig`) в `server/app.ts` и
+  `backend/app/deps.ts`.
 - API — `packages/core/src/server/routes/settings.ts`; UI — `ProxyStatusSection.tsx`, `lib/api/proxy.ts`.
 - Тесты: `proxy-dispatcher.test.ts` (fake HTTP/HTTPS-прокси, Basic/mTLS), `proxy-check.test.ts`,
-  `proxy-optin.test.ts` (opt-in против реального прокси, 2/2), `fake-socks5-proxy.ts`,
+  `proxy-optin.test.ts` (opt-in против реального прокси, 2/2), `proxy-startup.test.ts`,
+  `settings-proxy.test.ts` (saved/running/`restartRequired`, пароль 409/0600), `fake-socks5-proxy.ts`,
   `git-proxy-env.test.ts`, `shared/src/config/proxy.test.ts`.
 
 **Остаток / известные ограничения:**
 
 - **NTLM/Negotiate/Kerberos** — нет (причина и условия приёмки — выше). Это единственная функциональная
-  дыра относительно исходного замысла PROP-088.
+  дыра относительно исходного замысла PROP-088; `auth.type` кроме `basic` → 400 при сохранении.
+- **Runtime-reload без рестарта** — нет: UI сохраняет override, но dispatcher пересобирается только при
+  старте (`restartRequired`).
 - **SOCKS5 + https-цель:** `Socks5ProxyAgent` (undici 7.26) не принимает `requestTls` → CA/mTLS к цели из
   `security.tls` через SOCKS **не применяется** (только системное доверие).
 - **https-прокси/SOCKS по IP-литералу:** SNI/`servername` = IP запрещён в Node — нужен DNS-хост; при этом
@@ -175,7 +194,8 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
 - **Kerberos:** нативная зависимость (`kerberos@7`) / внешний SPNEGO-helper / только Basic+NTLM на первом
   этапе? Нужны AD/KDC и участие клиента в приёмке.
 - **Runtime-reload прокси/TLS:** допустима ли пересборка `EgressDispatcher` без рестарта (гонки
-  процесс-глобального dispatcher'а) или оставляем start-only?
+  процесс-глобального dispatcher'а) или оставляем start-only? Сейчас — start-only, UI-оверрайд
+  применяется при следующем старте (`restartRequired`).
 - **Прокси и адресная политика:** правило зафиксировано в [ADR-099](./adr-099-egress-tls-trust.md) п. 15/18
   и реализовано (`proxied`/`addressChecksActive`, `via`); открыто — как это показывать в UI политики и как
   сочетать с политиками гибрида ([ADR-042](./adr-042-hybrid-mode.md)).
@@ -205,3 +225,6 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
 - 2026-10-17 — прокси реализован (D1+D2: HTTP/HTTPS/SOCKS5, Basic, TLS/mTLS к прокси, `no_proxy`, git/MCP env,
   API/UI); остаток сужен до NTLM/Negotiate/Kerberos и runtime-reload; открытые вопросы по приоритету/env,
   SOCKS5, MCP stdio и per-service закрыты.
+- 2026-10-18 — прокси настраивается из админ-UI (runtime-override в сторе, API `GET/PUT/DELETE
+  /settings/proxy`, `/password`, `check` по saved, аудит `scope:'proxy'`); «API и UI» закрыт, остаток —
+  NTLM/Negotiate/Kerberos, runtime-reload и `security.tls` через SOCKS5.

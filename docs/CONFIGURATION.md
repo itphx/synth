@@ -548,47 +548,67 @@ mcp:
 ### Прокси (`proxy.*`, ADR-099 D1+D2)
 
 Исходящий HTTP/HTTPS/SOCKS5-прокси — часть единого egress-слоя (см. также `security.tls` — доверие к
-**цели** и к https-прокси, и `egress.*` — адресная политика). Секция **top-level** и **start-only**:
-изменения применяются при старте процесса (как `security.tls`), runtime-переключения нет. Маршрут
-выбирается **per-origin**: `httpsProxy`/`httpProxy` по схеме цели → `allProxy` → `url`; хосты из `noProxy`
-идут напрямую.
+**цели** и к https-прокси, и `egress.*` — адресная политика). Секция **top-level**; настраивается в
+`config.yaml`/env и **из админ-UI** (runtime-override, см. «Настройка из UI»). Применение — **при
+старте процесса** (`EgressDispatcher` start-only, как TLS): сохранение из UI не переключает маршрут на
+лету, нужен рестарт. Маршрут выбирается **per-origin**: `httpsProxy`/`httpProxy` по схеме цели →
+`allProxy` → `url`; хосты из `noProxy` идут напрямую.
 
 | Поле | Env | Назначение | По умолчанию |
 |---|---|---|---|
 | `enabled` | `SYNTH_PROXY_ENABLED` | Явный выключатель. Не задан — прокси включается наличием URL (в т.ч. из стандартных env при `fromEnv`); явный `false` подавляет стандартные env | — (авто) |
-| `url` | `SYNTH_PROXY_URL` | Общий прокси `http://`/`https://`/`socks5://`/`socks5h://` (userinfo допускается, но вырезается в статусе/логах) | — |
+| `url` | `SYNTH_PROXY_URL` | Общий прокси `http://`/`https://`/`socks5://`/`socks5h://` (userinfo в config.yaml/env допускается; при сохранении из UI пароль в URL **запрещён**) | — |
 | `httpProxy` / `httpsProxy` | `SYNTH_PROXY_HTTP_PROXY` / `SYNTH_PROXY_HTTPS_PROXY` | Прокси для целей по схеме (`http`/`https`); приоритетнее `allProxy`/`url` | — |
 | `allProxy` | `SYNTH_PROXY_ALL_PROXY` | Прокси для всех схем (если нет схемного) | — |
 | `noProxy` | `SYNTH_PROXY_NO_PROXY` | Исключения: `host`, `.suffix`, `*.suffix`, `host:port`, IP, CIDR (по IP-литералу цели — DNS не резолвится), `*` | `[]` |
 | `fromEnv` | — | Учитывать стандартные `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` | `true` |
 | `fallbackDirect` | `SYNTH_PROXY_FALLBACK_DIRECT` | Явный opt-in: при недоступном прокси идти напрямую (warn + `via:'fallback'`). Ошибки аутентификации (`407`) фоллбек **не** разрешают | `false` |
 | `connectTimeoutMs` | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | Таймаут соединения с прокси, мс | `10000` |
-| `auth.type` | — | `basic` — реализовано; `ntlm`/`negotiate` → ошибка конфигурации (остаток) | `basic` |
+| `auth.type` | — | Только `basic`; `ntlm`/`negotiate` → ошибка/400 (остаток) | `basic` |
 | `auth.username` | — | Пользователь Basic (альтернатива — userinfo в URL) | — |
-| `auth`-пароль | `SYNTH_PROXY_PASSWORD` | Пароль Basic: **только** env или файл `{dataDir}/secrets/proxy-password` (в config.yaml не хранится, инвариант 13) | — |
+| `auth`-пароль | `SYNTH_PROXY_PASSWORD` | Пароль Basic: **только** env или файл `{dataDir}/secrets/proxy-password` (в config.yaml/`settings.json` не хранится, инвариант 13); env приоритетнее файла и блокирует управление из UI | — |
 | `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA к **самому** https-прокси (взаимоисключающи) | системное доверие |
-| `tls.certFile` / `tls.keyFile` | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | mTLS к https-прокси | — |
+| `tls.certFile` / `tls.keyFile` | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | mTLS к https-прокси (задаются вместе) | — |
 | `tls.rejectUnauthorized` | `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | Проверять сертификат прокси | `true` |
 
-**Приоритет (ADR-023):** `SYNTH_PROXY_*` > `config.proxy` > стандартные `HTTP_PROXY`/`HTTPS_PROXY`/
-`ALL_PROXY`/`NO_PROXY` (только при `fromEnv`) > defaults. Явный `proxy.enabled: false` подавляет
-стандартные env — прокси не включается «из окружения» вопреки конфигу. `noProxy`:
-`SYNTH_PROXY_NO_PROXY` > непустой `proxy.noProxy` > `NO_PROXY`.
+**Приоритет (ADR-023):** defaults ← `config.yaml proxy` ← **runtime-оверрайд (UI)** ← явные
+`SYNTH_PROXY_*`; стандартные `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` применяются только при
+`fromEnv` и если runtime/config не задали явный `enabled: false`. Слияние — поле-уровневое, то есть UI
+правит config-уровень, но **не переопределяет явный env деплоя**. `noProxy`:
+`SYNTH_PROXY_NO_PROXY` > runtime > непустой `proxy.noProxy` > `NO_PROXY`.
 
 **Fail-closed.** Битый URL, неизвестная схема, `enabled=true` без URL, Basic без пароля,
-`auth.type` ≠ `basic`, `proxy.tls` вместе с `socks5://` → ошибка конфигурации на старте
-(`EGRESS_PROXY_CONFIG_INVALID`). Недоступный прокси → `EGRESS_PROXY_UNAVAILABLE` (тихого direct нет);
-`407`/SOCKS-отказ → `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED`.
+`auth.type` ≠ `basic`, `proxy.tls` вместе с `socks5://`, `caFile`+`caPem` одновременно, `certFile` без
+`keyFile` — ошибка конфигурации (`EGRESS_PROXY_CONFIG_INVALID`) на старте и 400 `VALIDATION_ERROR` при
+сохранении из UI. Недоступный прокси → `EGRESS_PROXY_UNAVAILABLE` (тихого direct нет); `407`/SOCKS-отказ
+→ `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED`.
 
 **Адресная политика при прокси** (ADR-099 п. 18): для запросов через прокси проверяются только схема и
 hostname-правила/`exceptions` (DNS/CIDR не выполняются — адрес резолвит прокси); для хостов из `noProxy`
 проверка полная (DNS/CIDR каждого хопа). Фактический маршрут пишется в журнал egress (`via`:
 `proxy`/`direct`/`fallback`); `POST /api/v2/settings/egress/check` отдаёт `proxied`/`addressChecksActive`.
 
-**API/UI.** `GET /api/v2/settings/proxy` — read-only статус (redacted URL, источник `env`/`config`/`none`,
-`noProxy`, `fallbackDirect`, `connectTimeoutMs`, `restartRequired: true`); `POST /api/v2/settings/proxy/check`
-— проверка только коннекта к прокси (TCP/TLS/SOCKS-handshake, `authChallenge`, `latencyMs`; цель не
-запрашивается). UI — админ-секция «Прокси (egress)» в «Встроенных инструментах».
+#### Настройка из UI (runtime-override)
+
+- **Что редактируется:** `enabled`, `url`/`httpProxy`/`httpsProxy`/`allProxy`, `noProxy`, `fromEnv`,
+  `fallbackDirect`, `connectTimeoutMs`, `auth.username`, пути `tls.*`. Сохраняется в
+  `RuntimeSettings.proxy` (`{dataDir}/settings.json`; при `storage.backend=postgres` — таблица `settings`,
+  переносится `synth storage migrate`).
+- **Применение:** при **следующем старте** (`restartRequired`), не live. `GET /settings/proxy` отдаёт
+  `saved` (config ← runtime ← env), `running` (текущий dispatcher), `defaults`, `isOverridden`,
+  `restartRequired`; плоские поля ответа = `saved` (обратная совместимость). UI показывает плашку
+  «изменения вступят после рестарта».
+- **Пароль write-only:** `PUT /settings/proxy/password` пишет файл `{dataDir}/secrets/proxy-password`
+  (0600, каталог 0700, атомарно tmp→rename), `DELETE` — удаляет; значение никогда не возвращается и не
+  попадает в аудит/логи. Если задан `SYNTH_PROXY_PASSWORD`, оба вызова → `409 CONFLICT` (пароль
+  управляется деплоем). `GET` отдаёт только `password: {source:'env'|'file'|'none', set, removable}`.
+- **Проверка:** `POST /settings/proxy/check` без `url` проверяет **saved**-конфигурацию (`usingSaved:true`),
+  чтобы UI видел будущее состояние; явный `{url}` проверяет конкретный прокси.
+- **Аудит:** изменения (save/reset/password) пишутся в `{dataDir}/audit/security.jsonl` со
+  `scope:'proxy'` (before/after без пароля, URL — redacted).
+
+**RBAC:** чтение — `requireAuth`; сохранение/сброс, пароль и `check` — `settingsWriteGuard` (managed —
+`ADMIN`, core — `requireAuth`).
 
 **Ограничения.** NTLM/Negotiate/Kerberos не реализованы (нужен собственный CONNECT-цикл и нативная
 зависимость; приёмка — с AD/KDC). `security.tls` к **цели** через SOCKS5 не применяется (ограничение
@@ -596,8 +616,9 @@ hostname-правила/`exceptions` (DNS/CIDR не выполняются — �
 (SNI по IP запрещён в Node); `proxy/check` при этом может показать `reachable`. SOCKS5/SOCKS5H в undici
 экспериментальные и резолвят hostname на прокси. Встроенный глобальный `fetch` не гарантирован
 (npm-`setGlobalDispatcher` не влияет на него в Node 26; на Node 22 — перепроверка в CI) — покрыты пути
-через `egressFetch`. PostgreSQL не проксируется (не HTTP). git применяет `no_proxy` средствами libcurl,
-per-remote настройки нет; `stdio`-MCP получает прокси-env без пароля.
+через `egressFetch`. Runtime-reload без рестарта — нет. PostgreSQL не проксируется (не HTTP). git
+применяет `no_proxy` средствами libcurl, per-remote настройки нет; `stdio`-MCP получает прокси-env без
+пароля.
 
 Пример:
 

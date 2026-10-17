@@ -441,11 +441,14 @@ in each subsystem. Three orthogonal parts:
    `mcp.networkPolicy` (`{mode, list, exceptions}`) are resolved from the store on every request; the check
    is `engine/net/egress-guard.ts` (`checkEgressUrl`/`fetchWithEgressGuard`, per-hop redirects, fail-closed).
    Changes go to `{dataDir}/audit/security.jsonl`, requests to `{dataDir}/audit/egress.jsonl`.
-3. **Proxy (start-only).** The `proxy` section (HTTP/HTTPS/SOCKS5, Basic, TLS/mTLS to the https proxy,
-   `noProxy`) → `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): per-origin
-   direct/proxy choice, fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` without a direct fallback. git gets
-   the proxy via child env (`http_proxy`/… through libcurl), `stdio` MCP via the child process env;
-   PostgreSQL is not proxied.
+3. **Proxy (configured at runtime, applied at startup).** The `proxy` section (HTTP/HTTPS/SOCKS5, Basic,
+   TLS/mTLS to the https proxy, `noProxy`) from `config.yaml`/env **or the runtime override from the admin
+   UI** (`RuntimeSettings.proxy`, `settings.json`/PG; priority `SYNTH_PROXY_*` > runtime > config) →
+   `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): per-origin direct/proxy choice,
+   fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` without a direct fallback. Application is two-step: an early
+   `initTlsTrust` (TLS/PG), then `applyStartupProxyConfig` after the storage is built and **before** deps;
+   `PUT /settings/proxy` only saves (`restartRequired`), there is no live switch. git gets the proxy via
+   child env (`http_proxy`/… through libcurl), `stdio` MCP via the child process env; PostgreSQL is not proxied.
 
 With a proxy enabled the address policy runs in **proxied mode**: only the scheme and hostname rules are
 checked, no DNS/CIDR (the proxy resolves the address); for `noProxy` hosts the check is full. The actual
