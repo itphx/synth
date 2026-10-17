@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   setProxyPassword: vi.fn(),
   clearProxyPassword: vi.fn(),
   checkProxy: vi.fn(),
+  getTls: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -66,6 +67,27 @@ beforeEach(() => {
     defaults: STATUS,
     password: { source: 'none', set: false, removable: false },
   })
+  mocks.getTls.mockResolvedValue({
+    status: {
+      ca: { source: 'runtime', count: 0, subjects: [] },
+      rejectUnauthorized: true,
+      mappings: [],
+      params: {},
+    },
+    ca: { source: 'runtime', count: 0, subjects: [] },
+    rejectUnauthorized: true,
+    mappings: [],
+    params: {},
+    saved: null,
+    running: null,
+    defaults: {
+      ca: { source: 'none', count: 0, subjects: [] },
+      rejectUnauthorized: true,
+      mappings: [],
+      params: {},
+    },
+    restartRequired: false,
+  })
 })
 
 afterEach(async () => {
@@ -81,15 +103,23 @@ afterEach(async () => {
 })
 
 describe('NetworkSettings — админ-раздел «Сеть»', () => {
-  it('рендерит панель «Network» и секцию «Proxy»', async () => {
+  it('рендерит панель «Network»: «Прокси», затем «Доверенные CA (TLS)»', async () => {
     const container = await renderSettings()
 
     const header = container.querySelector('header')!
     expect(header.textContent).toContain('Network')
     expect(container.textContent).toContain('egress proxy and trusted CAs')
-    expect(container.querySelector('[data-testid="proxy-status-section"]')).not.toBeNull()
+
+    const proxy = container.querySelector('[data-testid="proxy-status-section"]')!
+    const tls = container.querySelector('[data-testid="tls-section"]')!
+    expect(proxy).not.toBeNull()
+    expect(tls).not.toBeNull()
     expect(container.textContent).toContain('Proxy')
-    expect(mocks.getProxy).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('Trusted CAs (TLS)')
+    expect(
+      proxy.compareDocumentPosition(tls) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(mocks.getTls).toHaveBeenCalledTimes(1)
   })
 
   it('категория «network» доступна только ADMIN и стоит сразу после «security»', () => {

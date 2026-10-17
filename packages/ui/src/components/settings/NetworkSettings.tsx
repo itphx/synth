@@ -1,14 +1,14 @@
 import { useI18n } from '@/lib/i18n'
 import { SettingsPanel } from '../ui/settings'
 import { ProxyStatusSection } from './ProxyStatusSection'
+import { TrustedCaSection } from './TrustedCaSection'
 
 /**
  * Админ-раздел «Сеть»: instance-wide сетевой доступ.
  *
- * Сейчас — только egress-прокси (`ProxyStatusSection`). Следующим этапом
- * (после готовности ядра) здесь появится отдельная `SettingsSection`
- * «Доверенные CA (TLS)» — без пользовательских заглушек: раздел показывает
- * лишь реально доступные настройки.
+ * Секции: «Прокси» (egress, ADR-099 D1/D2) → «Доверенные CA (TLS)»
+ * (trust-бандл, default-клиент/mTLS и per-host сертификаты). Обе настройки
+ * применяются при старте процесса (`restartRequired`).
  */
 export function NetworkSettings() {
   const { t } = useI18n()
@@ -16,7 +16,7 @@ export function NetworkSettings() {
   return (
     <SettingsPanel title={t('network.title')} description={t('network.description')}>
       <ProxyStatusSection />
-      {/* Следующий этап: <TrustedCaSection /> — SettingsSection «Доверенные CA (TLS)». */}
+      <TrustedCaSection />
     </SettingsPanel>
   )
 }

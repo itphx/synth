@@ -35,6 +35,7 @@ import { maintenanceApi } from './maintenance'
 import { logsApi } from './logs'
 import { egressApi } from './egress'
 import { proxyApi } from './proxy'
+import { tlsApi } from './tls'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
 
@@ -121,6 +122,22 @@ export type {
   ProxySource,
 } from './proxy'
 export type {
+  TlsSource,
+  TlsStatus,
+  TlsStatusCa,
+  TlsStatusClient,
+  TlsStatusMapping,
+  TlsStatusParams,
+  TlsGetResponse,
+  TlsMutationResponse,
+  TlsMappingMutationResponse,
+  TlsUpdateInput,
+  TlsMappingInput,
+  TlsMappingUpdateInput,
+  TlsValidateInput,
+  TlsValidateResult,
+} from './tls'
+export type {
   CreateEventBindingKeyInput,
   UpdateEventBindingKeyPatch,
   EventsSettings,
@@ -198,6 +215,7 @@ export const synthApi = {
   ...logsApi,
   ...egressApi,
   ...proxyApi,
+  ...tlsApi,
   ...hybridApi,
   ...instructionsApi,
 }
