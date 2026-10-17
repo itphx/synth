@@ -648,6 +648,8 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 |---|---|---|---|
 | GET | `/api/v2/audit` | ADMIN/AUDITOR | Аудит Gateway; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
 | POST | `/api/v2/audit/revealed` | auth | `{sessionId, placeholder}` → `{ok:true}` |
+| GET | `/api/v2/audit/security` | ADMIN/AUDITOR (core — auth) | Аудит изменений egress-политик (ADR-099): append-only `{dataDir}/audit/security.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=tools\|webhooks\|mcp` → `{entries, count}` («свежие первыми») |
+| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR (core — auth) | Журнал внешних запросов (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (дефолт 100, максимум 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; тела/заголовки не логируются |
 
 ### 5.19 Logs — `/api/v2/logs` (backend)
 
@@ -686,9 +688,16 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | GET | `/api/v2/settings/mcp-policy` | auth | Политика включения **MCP**-инструментов (ADR-071 §2.3): `{mcpPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime из `settings.json`, иначе `mcp.policy` из config.yaml; дефолт `auto`) |
 | PUT | `/api/v2/settings/mcp-policy` | ADMIN (managed) / auth (core) | `{mcpPolicy}` (live-применение, persist); независима от `tools-policy`; неизвестное значение → 400 |
 | DELETE | `/api/v2/settings/mcp-policy` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", mcpPolicy, isOverridden:false, defaults}` + live-применение дефолта |
-| GET | `/api/v2/settings/mcp-network-policy` | auth | Политика сетевого доступа пользовательских HTTP MCP (ADR-071 §2.3.1): `{policy, isOverridden, defaults}` (дефолт — deny приватных диапазонов) |
-| PUT | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | `{policy:{mode:"allow"\|"deny",list:string[]}}` (live-применение, persist) |
+| GET | `/api/v2/settings/mcp-network-policy` | auth | Сетевая политика пользовательских HTTP/SSE MCP (ADR-071 §2.3.1; экземпляр общей egress-политики, ADR-099): `{policy:{mode:"deny"\|"allow",list:string[],exceptions:string[]}, isOverridden, defaults}` (дефолт — deny приватных диапазонов) |
+| PUT | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | `{policy:{mode:"deny"\|"allow",list:string[],exceptions?:string[]}}` (live-применение, persist); невалидная запись → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", policy, isOverridden:false, defaults}` + live-применение дефолта |
+| GET | `/api/v2/settings/egress/tools` | auth | Адресная egress-политика встроенных инструментов и внутренних потребителей (`web_fetch`/`web_search`, URL-скиллы/инструкции, иконки провайдеров; ADR-099): `{policy:{mode:"deny"\|"allow",list:string[],exceptions:string[]}, isOverridden, defaults}` |
+| PUT | `/api/v2/settings/egress/tools` | ADMIN (managed) / auth (core) | `{policy}` (live-применение, persist); невалидная запись (hostname/`*.suffix`/CIDR) → 400 `VALIDATION_ERROR` |
+| DELETE | `/api/v2/settings/egress/tools` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", policy, isOverridden:false, defaults}` + live-применение дефолта |
+| GET | `/api/v2/settings/egress/webhooks` | auth | Адресная egress-политика исходящих webhooks (ADR-099): тот же формат + `mode:"off"` (dev: без проверок и без требования `https`) |
+| PUT | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | `{policy}` (live-применение, persist); невалидная запись → 400 `VALIDATION_ERROR` |
+| DELETE | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", policy, isOverridden:false, defaults}` + live-применение дефолта |
+| POST | `/api/v2/settings/egress/check` | ADMIN (managed) / auth (core) | Проверка URL **без выполнения запроса**: `{scope:"tools"\|"webhooks"\|"mcp", url}` → `{allowed, reason?, matchedRule?, addresses?, policy}` (разбор + DNS + сверка; для `webhooks` — требование `https`, кроме `mode:"off"`) |
 | GET | `/api/v2/settings/tools-disabled` | auth | Отключение встроенных инструментов (ADR-071 §2.6): `{toolsDisabled:{capabilities,tools}, isOverridden, defaults}` (runtime-значение из `settings.json`, иначе `tools.disabled` из config.yaml) |
 | PUT | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live-применение, persist); неизвестная capability → 400, `runtime`-тулы неотключаемы. UI-раздел — ADMIN-категория |
 | DELETE | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | Сброс к config-дефолту (по умолчанию пусто); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live-применение дефолта |
@@ -709,6 +718,13 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | DELETE | `/api/v2/settings/decision` | ADMIN (managed) / auth (core) | Сброс runtime-настроек к config-дефолту; `{status:"restored", decision, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/decision/metrics` | auth | Агрегатные in-memory метрики decision-слоя (ADR-084) → `{metrics, ts}`. Форма `metrics`: `{calls, handled, fallback, escalated, attempts:{primary, escalation}, rejected:{ok, low_confidence, invalid, no_answer, no_provider, error}, by_model:{"<provider>/<model>":{calls, handled, latency_ms_avg, latency_ms_max}}}`; сбрасываются при рестарте |
 | DELETE | `/api/v2/settings/decision/metrics` | ADMIN (managed) / auth (core) | Сброс накопителей метрик decision-слоя → `{metrics}` (обнулённый снимок) |
+
+> **Адресная egress-политика (ADR-099).** `egress.tools`/`egress.webhooks`/`mcp.networkPolicy` — единый
+> формат `{mode, list, exceptions}`: `exceptions` проверяются первыми (hostname, `*.suffix`, IP/CIDR),
+> `deny` — блок при любом запрещённом resolved-адресе, `allow` — только если разрешены все адреса;
+> `off` — только webhooks. Политика применяется **live** (per-request, без рестарта) и **не смешивается**
+> между скоупами (tools ≠ webhooks ≠ MCP); изменения пишутся в `audit/security.jsonl`, запросы — в
+> `audit/egress.jsonl`. Провайдеры LLM в журнал egress не входят (у них свой LLM audit/payload-лог).
 
 ### 5.22 Dictionaries — `/api/v2/dictionaries` (оба)
 
@@ -896,9 +912,9 @@ managed (backend) — только `ADMIN`, core (standalone) — единый `
 | Метод | Путь | Сборка | RBAC (backend / core) | Назначение / req-resp |
 |---|---|---|---|---|
 | GET | `/api/v2/webhooks` | оба | ADMIN / auth | Список подписок `{subscriptions}` (метаданные без секрета) |
-| POST | `/api/v2/webhooks` | оба | ADMIN / auth | Создать (`webhookSubscriptionCreateSchema`): `{label, description?, url, events?, enabled?}` → 201 `WebhookSubscriptionCreated` = метаданные + `secret` (plaintext `whsec_<base64url>`, показывается **один раз**); невалидное тело/URL → 400 `VALIDATION_ERROR`; URL вне SSRF-политики → 400; дубль метки → 409 `CONFLICT`; мастер выключен → 503 `UNAVAILABLE` |
+| POST | `/api/v2/webhooks` | оба | ADMIN / auth | Создать (`webhookSubscriptionCreateSchema`): `{label, description?, url, events?, enabled?}` → 201 `WebhookSubscriptionCreated` = метаданные + `secret` (plaintext `whsec_<base64url>`, показывается **один раз**); невалидное тело/URL → 400 `VALIDATION_ERROR`; URL вне политики `egress.webhooks` → 400; дубль метки → 409 `CONFLICT`; мастер выключен → 503 `UNAVAILABLE` |
 | GET | `/api/v2/webhooks/:id` | оба | ADMIN / auth | Метаданные подписки; нет подписки → 404 `NOT_FOUND` |
-| PATCH | `/api/v2/webhooks/:id` | оба | ADMIN / auth | Обновить (`webhookSubscriptionUpdateSchema`): `{label?, description?, url?, events?, enabled?}`; `null` для `description` — сброс, `undefined` — не трогать; смена метки проверяется на уникальность → 200; нет подписки → 404; дубль → 409; URL вне политики → 400 |
+| PATCH | `/api/v2/webhooks/:id` | оба | ADMIN / auth | Обновить (`webhookSubscriptionUpdateSchema`): `{label?, description?, url?, events?, enabled?}`; `null` для `description` — сброс, `undefined` — не трогать; смена метки проверяется на уникальность → 200; нет подписки → 404; дубль → 409; URL вне политики `egress.webhooks` → 400 |
 | DELETE | `/api/v2/webhooks/:id` | оба | ADMIN / auth | Удалить подписку → 204; нет записи → 404 |
 | POST | `/api/v2/webhooks/:id/regenerate` | оба | ADMIN / auth | Ротация signing-секрета → 200 `WebhookSubscriptionCreated` (+ `secret` единожды); нет подписки → 404 |
 | POST | `/api/v2/webhooks/:id/revoke` | оба | ADMIN / auth | Мягкое отключение (`enabled=false`, `disabledAt`; идемпотентно) → 200 метаданные; нет записи → 404 |
@@ -907,8 +923,8 @@ managed (backend) — только `ADMIN`, core (standalone) — единый `
 
 **Поля подписки** (`WebhookSubscription`): `id` (`whk_<uuid>`), `label` (обязательна; уникальна
 глобально по инстансу, регистронезависимо), `description?`, `url` (только http(s); по умолчанию —
-`https` + запрет private/loopback через `evaluateWebhookTarget` поверх `engine/mcp/network-policy.ts`,
-`webhooks.allowPrivateTargets` снимает оба ограничения), `events: string[]` (паттерны: точный тип
+`https` + адресная политика `egress.webhooks` (ADR-099): `deny` приватных/loopback-адресов по `list`,
+разрешение — через `exceptions`; `mode:"off"` — только dev, снимает и требование `https`), `events: string[]` (паттерны: точный тип
 `stream.done` либо префикс `session.*`; пусто — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), `enabled`,
 `secretPrefix`, `createdBy`/`createdAt`, `lastDeliveryAt?`/`lastStatus?`, `disabledAt?`.
 **Доставка:** POST `{id, type, createdAt, data}` с заголовками `X-Synth-Event`/`X-Synth-Delivery`/

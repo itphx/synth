@@ -406,8 +406,9 @@ hook-шину, а создание сессий сведено в один funne
   (`eventBus.subscribeAll`), фильтрует их паттернами подписки (`matchWebhookEvent`) и шлёт
   подписчикам HTTP-POST с HMAC-SHA256-подписью; retry/backoff с джиттером, дедуп по
   (подписка + событие), таймаут, журнал доставок (`{dataDir}/webhooks/deliveries.jsonl`) и
-  SSRF-политика (`engine/webhooks/network.ts` поверх `engine/mcp/network-policy.ts`). Эндпоинты и
-  формат подписи — `docs/API_V2.md` §5.29; конфиг — `docs/CONFIGURATION.md` (секция `webhooks`).
+  адресная политика цели доставки — `egress.webhooks` (`engine/net/egress-guard.ts`:
+  `checkEgressUrl`/`fetchWithEgressGuard`, редиректы с проверкой каждого хопа; ADR-099). Эндпоинты и
+  формат подписи — `docs/API_V2.md` §5.29; конфиг — `docs/CONFIGURATION.md` (секции `webhooks`, `egress`).
 - **Ephemeral-сессии** для внешних событий получают `expiresAt` из `ttl`
   (`config.events.ephemeralTtl`, default `24h`); очистка — `startEphemeralSweeper`.
   Режим `queue` доставляется как `defer` (сообщение в очередь без старта процессора).

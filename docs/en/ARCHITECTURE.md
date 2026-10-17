@@ -407,8 +407,9 @@ hook bus, and session creation is consolidated into a single funnel.
   (`eventBus.subscribeAll`), filters them by subscription patterns (`matchWebhookEvent`) and sends
   subscribers HTTP POSTs with an HMAC-SHA256 signature; retry/backoff with jitter, dedup by
   (subscription + event), timeout, a delivery journal (`{dataDir}/webhooks/deliveries.jsonl`) and
-  an SSRF policy (`engine/webhooks/network.ts` on top of `engine/mcp/network-policy.ts`). The endpoints and the
-  signature format — `docs/API_V2.md` §5.29; configuration — `docs/CONFIGURATION.md` (the `webhooks` section).
+  the delivery target address policy — `egress.webhooks` (`engine/net/egress-guard.ts`:
+  `checkEgressUrl`/`fetchWithEgressGuard`, redirects with per-hop checks; ADR-099). The endpoints and the
+  signature format — `docs/API_V2.md` §5.29; configuration — `docs/CONFIGURATION.md` (`webhooks`, `egress` sections).
 - **Ephemeral sessions** for external events receive `expiresAt` from `ttl`
   (`config.events.ephemeralTtl`, default `24h`); cleanup is handled by `startEphemeralSweeper`.
   The `queue` mode is delivered as `defer` (the message is put in the queue without starting the processor).

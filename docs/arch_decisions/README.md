@@ -65,7 +65,7 @@
 | ADR-092 | Обслуживание инстанса — версия схемы данных, миграции и удаление | ⚠️ Частично | [adr-092-instance-lifecycle-maintenance.md](./adr-092-instance-lifecycle-maintenance.md) |
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097-storage-provider-class.md](./adr-097-storage-provider-class.md) |
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098-storage-degraded-recovery.md](./adr-098-storage-degraded-recovery.md) |
-| ADR-099 | Единый egress-слой — доверие TLS/CA (и mTLS) для исходящих соединений | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
+| ADR-099 | Единый egress-слой: доверие TLS/CA (mTLS) и адресная политика исходящих запросов (`egress.tools`/`egress.webhooks`, `mcp.networkPolicy`, аудит изменений и журнал запросов) | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
 
 ## Предложения
 
@@ -100,7 +100,7 @@
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098-mid-turn-steering.md](./prop-098-mid-turn-steering.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
-| PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
+| PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению (дефекты 1–3 закрыты; остаток — пиннинг) | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
 | PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101-local-installers-platforms.md](./prop-101-local-installers-platforms.md) |
 
 ## Vision
@@ -121,7 +121,7 @@
 
 | ID | Тема | Статус | Файл |
 |----|------|--------|------|
-| PROP-088 | Работа через HTTP-прокси (единый egress-слой): прокси/`no_proxy`/CA, аутентификация Basic/NTLM/Negotiate (Kerberos) | ⛔ Заменено | [prop-088-http-proxy.md](./prop-088-http-proxy.md) |
+| PROP-088 | Работа через HTTP-прокси (остаток egress-слоя): прокси/`no_proxy`, аутентификация Basic/NTLM/Negotiate (Kerberos), mTLS для прокси | ⛔ Заменено | [prop-088-http-proxy.md](./prop-088-http-proxy.md) |
 
 ## Legacy
 

@@ -4,7 +4,7 @@
 > **Дата:** 2026-09-16 (этапы I–IV — 2026-10-13; сжатие до одной страницы — 2026-10-15).
 > **Источник:** перенесено из `AD-DRAFTS.md` (D7, идея 7).
 > **Парные документы (as-built):** [API_V2.md](../API_V2.md) §1/§5.28–§5.30 · [CONFIGURATION.md](../CONFIGURATION.md) (`webhooks`, `security.bootstrapServiceKeys`) · [ARCHITECTURE.md](../ARCHITECTURE.md) «Внешние события и хуки» · `packages/{core,backend}/AGENTS.md`.
-> **Связано:** [ADR-017](./adr-017-api-v2-hono.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-089](./adr-089-external-events-automation.md), [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-087](./adr-087-gateways.md), [PROP-055](./prop-055-instance-exchange.md).
+> **Связано:** [ADR-017](./adr-017-api-v2-hono.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-089](./adr-089-external-events-automation.md), [ADR-086](./adr-086-extensibility-plugins-editions.md), [ADR-087](./adr-087-gateways.md), [ADR-099](./adr-099-egress-tls-trust.md) (политика egress webhooks), [PROP-055](./prop-055-instance-exchange.md).
 
 ## Контекст
 
@@ -30,7 +30,9 @@ API v2 ([ADR-017](./adr-017-api-v2-hono.md)) — внутренний контр
 - **SDK.** Отдельный публикуемый пакет `@itphx/synth-sdk` — типизированный клиент над public-спекой.
 - **Webhooks (HMAC).** Исходящая доставка — подписки на события шины (`EventBus.subscribeAll`), HTTP-POST
   с подписью **HMAC-SHA256** per-subscription секретом (`whsec_…`, шифруется at-rest), retry/backoff, дедуп,
-  SSRF-политика; формат подписи — [API_V2.md](../API_V2.md) §5.29.
+  политика цели — **`egress.webhooks`** ([ADR-099](./adr-099-egress-tls-trust.md) п. 8–12: `mode`
+  `deny`/`allow`/`off`, `list`, `exceptions`, обязательный `https` кроме `mode:'off'`); формат подписи —
+  [API_V2.md](../API_V2.md) §5.29.
 - **Tenants исключены.** Self-host: изоляция = **инстанс**, группировка внутри — **проект**; третья сущность
   дублировала бы одну из них. Реальная мульти-организация в инстансе — отдельный AD (рядом с
   [PROP-055](./prop-055-instance-exchange.md)/[PROP-080](./prop-080-managed-hybrid-modes.md)), не ADR-052.

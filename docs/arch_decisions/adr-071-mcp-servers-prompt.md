@@ -6,6 +6,9 @@
 > **Дополнение (2026-09-20):** §2.6, §2.8, §2.9 — вкладки правой панели, оценка/калибровка токенов инструментов, admin-отключение встроенных инструментов (`tools.disabled`), разделение настроек MCP на пользовательские и админские (Ф6).
 > **Дополнение (2026-09-21):** §2.3 — политика разделена на две независимые: `tools.policy` (только встроенные, default `auto`) и `mcp.policy` (только MCP, default `auto`); MCP-блоки (`mcp.servers`/`mcp.tools`/`mcp.status`) — **всегда `volatile`**; порядок `tools → mcp.servers → mcp.tools → mcp.status`.
 > **Дополнение (2026-09-30):** §2.2/§2.4/§2.5 — единая per-item модель включения: `McpRegistryEntry.enabled` (мастер hard-gate), `enabledByDefault` = «дефолт для НОВЫХ проектов», `project.enabled` — hard-gate (в т.ч. для системных серверов), дефолты — snapshot (`session.settings.mcpDefaultOn`), причина `system_disabled`; ту же модель переиспользуют скиллы (ADR-046 §4.5).
+> **Дополнение (2026-10-17):** §2.3.1 — `mcp.networkPolicy` стал экземпляром общей адресной egress-политики
+> ([ADR-099](./adr-099-egress-tls-trust.md) п. 8–11): формат `{mode, list, exceptions}`, live per-request,
+> проверка только `origin:'user'` HTTP/SSE, аудит изменений.
 > **Парные документы:**
 > - [ADR-070](./adr-070-system-prompt-composer.md) «SystemPromptComposer» — тиры `stable`/`context`/`volatile`, манифест промпта, CachePolicy; ADR-071 добавляет слои `mcp.tools`/`mcp.servers` и уточняет правило «tools всегда `stable`»;
 > - [ADR-029](./adr-029-granular-permissions.md) «Гранулярные permissions» — `mcpToolSettings` (доступность MCP-тулов по режимам plan/act) сохраняется и учитывается политикой включения;
@@ -82,10 +85,34 @@
 - В `available` режиме `mcpToolSettings` (ADR-029) влияет на **состав** MCP-слоя запроса, а не только на permission-вердикт.
 - **Манифест:** `manifest.toolsPolicy` и `manifest.mcpPolicy` несут фактически применённые (уже разрешённые из `auto`) политики; `mcp.servers`/`mcp.tools`/`mcp.status` не входят в `staticPrefixChars`.
 - **Runtime API:** `GET/PUT /api/v2/settings/tools-policy` (встроенные) и `GET/PUT /api/v2/settings/mcp-policy` (MCP).
+- **Сетевой доступ — отдельно от политик включения:** адресная политика MCP-серверов —
+  `mcp.networkPolicy` (§2.3.1), экземпляр общей egress-политики ([ADR-099](./adr-099-egress-tls-trust.md)
+  п. 8–11); `tools.policy`/`mcp.policy` отвечают только за **состав** инструментов в промпте.
 
 #### 2.3.1. Сетевой доступ пользовательских MCP (admin-настройка)
 
-Глобальный параметр настроек (config.yaml + admin UI): политика сетевого доступа для пользовательских HTTP-серверов — режим `allow`/`deny` и списки адресов (host/CIDR). По умолчанию — запрет приватных диапазонов (`10/8`, `172.16/12`, `192.168/16`, `127/8`, link-local, metadata-endpoints). Применяется при добавлении сервера и при подключении (защита от SSRF/egress).
+**Экземпляр общей egress-политики** ([ADR-099](./adr-099-egress-tls-trust.md), п. 8–11): ключ
+`mcp.networkPolicy` (`config.yaml` + admin UI) с тем же форматом, что у `egress.*` —
+`{mode: 'deny'|'allow', list: string[], exceptions: string[]}`. `exceptions` — allow-правила, проверяются
+первыми: точный hostname, `*.suffix`, IP/CIDR. `deny` — блок, если хотя бы один resolved-адрес попал в
+`list`; `allow` — разрешено, только если **все** resolved-адреса в `list` либо сработало исключение.
+Дефолт — `deny` приватных/служебных диапазонов (`DEFAULT_MCP_PRIVATE_CIDRS`: `10/8`, `172.16/12`,
+`192.168/16`, `127/8`, link-local, CGNAT, metadata-endpoints). Невалидная запись → 400
+`VALIDATION_ERROR`. `mode: 'off'` для MCP **не** поддерживается (только у `egress.webhooks`).
+
+Runtime: `GET/PUT/DELETE /api/v2/settings/mcp-network-policy` (путь сохранён) — live per-request:
+политика резолвится из стора при каждой операции (runtime → config → встроенный дефолт), без рестарта
+и без фонового опроса; в рамках одного подключения — один снимок. Мутации — ADMIN (managed) /
+`requireAuth` (core), изменения пишутся в аудит `{dataDir}/audit/security.jsonl`
+(`GET /api/v2/audit/security`). Проверка «до коннекта» доступна через
+`POST /api/v2/settings/egress/check` `{scope:'mcp', url}`.
+
+**Что именно проверяется (as-built).** Политика применяется только к **пользовательским** HTTP/SSE
+серверам (`origin: 'user'`) — при записи в реестр и при подключении (`engine/mcp/manager.ts`); записи
+`origin: 'instance'` и `stdio`-серверы **не проверяются** (последние ходят в сеть сами, дочерним
+процессом). Per-project политики **нет** — ключ инстанс-уровневый. Пиннинга проверенного адреса нет:
+между проверкой и соединением возможен TOCTOU/DNS-rebinding — остаток
+[PROP-100](./prop-100-ssrf-dns-rebinding.md).
 
 ### 2.4. Уровни и скоуп MCP
 
@@ -105,7 +132,7 @@
 
 ### 2.5. Реестр MCP-серверов
 
-- **HTTP-серверы (`sse`/`http`):** добавить может **любой пользователь**; запись попадает в **реестр MCP-серверов** с фиксацией автора (`author`, `createdAt`) и признаком доверия (`community`/unverified).
+- **HTTP-серверы (`sse`/`http`):** добавить может **любой пользователь**; запись попадает в **реестр MCP-серверов** с фиксацией автора (`author`, `createdAt`) и признаком доверия (`community`/unverified). URL пользовательского HTTP/SSE-сервера проверяется адресной политикой `mcp.networkPolicy` (§2.3.1, общий формат с `egress.*`, [ADR-099](./adr-099-egress-tls-trust.md)) при записи и при подключении; `origin: 'instance'` и `stdio` не проверяются.
 - **`stdio`-серверы:** добавляет **только admin** на уровне инстанса (RCE-риск); admin же выставляет `enabledByDefault`.
 - **Включение по умолчанию для проекта:** только owner/lead (человеческий гейт для пользовательских серверов).
 - **Единый реестр.** Один реестр MCP-серверов (не разделяем на instance/пользовательский); instance- и пользовательские записи различаются полем `origin`. Логическая модель сразу проектируется под будущую миграцию на PostgreSQL (по образцу PROP-032): плоские записи со стабильным `id`, `schemaVersion`, timestamps, без вложенных структур, которые нельзя разложить в таблицы.
@@ -132,7 +159,7 @@
 
 **Настройки MCP разделены на два раздела:**
 - **Пользовательские** (настройки/сессия): вкл/выкл серверов в своей сессии, персональные HTTP-серверы, opt-out системных;
-- **Отдельная админ-категория** (RBAC `ADMIN`): system MCP и `stdio`, `enabledByDefault`, `tools.policy` + `mcp.policy`, `tools.disabled` (§2.9), сетевой доступ (§2.3.1), управление единым реестром.
+- **Отдельная админ-категория** (RBAC `ADMIN`): system MCP и `stdio`, `enabledByDefault`, `tools.policy` + `mcp.policy`, `tools.disabled` (§2.9), сетевой доступ MCP (`mcp.networkPolicy`, §2.3.1), управление единым реестром.
 
 ### 2.7. Связь с другими AD
 
@@ -204,7 +231,8 @@ tools:
 Решённые вопросы внесены в §2:
 
 1. **Реестр** — единый, PostgreSQL-ready (§2.5).
-2. **Сетевой доступ пользовательских HTTP-серверов** — параметр настроек (§2.3.1).
+2. **Сетевой доступ пользовательских HTTP-серверов** — `mcp.networkPolicy {mode, list, exceptions}`,
+   экземпляр общей egress-политики ([ADR-099](./adr-099-egress-tls-trust.md)), live per-request (§2.3.1).
 3. **Approval-флоу** при project-включении — не вводим; гейт — роль owner/lead (§2.5).
 4. **Неактивные серверы** — показываем с пометкой (§2.2, §2.4).
 5. **Конфликт имён** — приоритет `system > project > session` (§2.4).
@@ -214,7 +242,6 @@ tools:
 
 Остаётся уточнить на этапе реализации:
 
-- точный формат параметра сетевой политики (список host/CIDR, режим allow/deny, дефолт);
 - миграция существующих `session.settings.mcpServers` в новую модель (backfill `origin`/`enabledByDefault`, маппинг на реестр);
 - границы калибровочного ratio и место персистентности (per-model или per provider/model), способ сглаживания — §2.8;
 - канонический список неотключаемых `runtime`-тулов и их группировка — §2.9.

@@ -648,6 +648,8 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 |---|---|---|---|
 | GET | `/api/v2/audit` | ADMIN/AUDITOR | Gateway audit; `?userId=&sessionId=&since=&until=&limit=` (≤500) |
 | POST | `/api/v2/audit/revealed` | auth | `{sessionId, placeholder}` → `{ok:true}` |
+| GET | `/api/v2/audit/security` | ADMIN/AUDITOR (core — auth) | Audit of egress policy changes (ADR-099): append-only `{dataDir}/audit/security.jsonl`; `?limit=` (default 100, max 1000), `?scope=tools\|webhooks\|mcp` → `{entries, count}` (newest first) |
+| GET | `/api/v2/audit/egress` | ADMIN/AUDITOR (core — auth) | Outbound request journal (ADR-099): append-only `{dataDir}/audit/egress.jsonl`; `?limit=` (default 100, max 1000), `?scope=web_fetch\|web_search\|skills\|instructions\|webhooks\|providers\|mcp`, `?status=allowed\|blocked\|error` → `{entries, count}`; bodies and headers are not logged |
 
 ### 5.19 Logs — `/api/v2/logs` (backend)
 
@@ -686,9 +688,16 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 | GET | `/api/v2/settings/mcp-policy` | auth | Policy for enabling **MCP** tools (ADR-071 §2.3): `{mcpPolicy:"consistency"\|"available"\|"auto", isOverridden, defaults}` (runtime from `settings.json`, otherwise `mcp.policy` from config.yaml; default `auto`) |
 | PUT | `/api/v2/settings/mcp-policy` | ADMIN (managed) / auth (core) | `{mcpPolicy}` (live application, persisted); independent of `tools-policy`; an unknown value → 400 |
 | DELETE | `/api/v2/settings/mcp-policy` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", mcpPolicy, isOverridden:false, defaults}` + live application of the default |
-| GET | `/api/v2/settings/mcp-network-policy` | auth | Network access policy for user HTTP MCP servers (ADR-071 §2.3.1): `{policy, isOverridden, defaults}` (default — deny private ranges) |
-| PUT | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | `{policy:{mode:"allow"\|"deny",list:string[]}}` (live application, persisted) |
+| GET | `/api/v2/settings/mcp-network-policy` | auth | Network policy for user HTTP/SSE MCP servers (ADR-071 §2.3.1; an instance of the shared egress policy, ADR-099): `{policy:{mode:"deny"\|"allow",list:string[],exceptions:string[]}, isOverridden, defaults}` (default — deny private ranges) |
+| PUT | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | `{policy:{mode:"deny"\|"allow",list:string[],exceptions?:string[]}}` (live application, persisted); an invalid rule → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/mcp-network-policy` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", policy, isOverridden:false, defaults}` + live application of the default |
+| GET | `/api/v2/settings/egress/tools` | auth | Address egress policy for built-in tools and internal consumers (`web_fetch`/`web_search`, URL skills/instructions, provider icons; ADR-099): `{policy:{mode:"deny"\|"allow",list:string[],exceptions:string[]}, isOverridden, defaults}` |
+| PUT | `/api/v2/settings/egress/tools` | ADMIN (managed) / auth (core) | `{policy}` (live application, persisted); an invalid rule (hostname/`*.suffix`/CIDR) → 400 `VALIDATION_ERROR` |
+| DELETE | `/api/v2/settings/egress/tools` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", policy, isOverridden:false, defaults}` + live application of the default |
+| GET | `/api/v2/settings/egress/webhooks` | auth | Address egress policy for outgoing webhooks (ADR-099): the same format plus `mode:"off"` (dev: no checks and no `https` requirement) |
+| PUT | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | `{policy}` (live application, persisted); an invalid rule → 400 `VALIDATION_ERROR` |
+| DELETE | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", policy, isOverridden:false, defaults}` + live application of the default |
+| POST | `/api/v2/settings/egress/check` | ADMIN (managed) / auth (core) | URL check **without performing the request**: `{scope:"tools"\|"webhooks"\|"mcp", url}` → `{allowed, reason?, matchedRule?, addresses?, policy}` (parse + DNS + matching; for `webhooks` an `https` requirement applies, except `mode:"off"`) |
 | GET | `/api/v2/settings/tools-disabled` | auth | Disabling of built-in tools (ADR-071 §2.6): `{toolsDisabled:{capabilities,tools}, isOverridden, defaults}` (runtime value from `settings.json`, otherwise `tools.disabled` from config.yaml) |
 | PUT | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | `{toolsDisabled:{capabilities:string[],tools:string[]}}` (live application, persisted); an unknown capability → 400, `runtime` tools cannot be disabled. The UI section is an ADMIN category |
 | DELETE | `/api/v2/settings/tools-disabled` | ADMIN (managed) / auth (core) | Reset to the config default (empty by default); `{status:"restored", toolsDisabled, isOverridden:false, defaults}` + live application of the default |
@@ -709,6 +718,13 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 | DELETE | `/api/v2/settings/decision` | ADMIN (managed) / auth (core) | Reset the runtime settings to the config default; `{status:"restored", decision, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/decision/metrics` | auth | Aggregate in-memory metrics of the decision layer (ADR-084) → `{metrics, ts}`. The `metrics` shape: `{calls, handled, fallback, escalated, attempts:{primary, escalation}, rejected:{ok, low_confidence, invalid, no_answer, no_provider, error}, by_model:{"<provider>/<model>":{calls, handled, latency_ms_avg, latency_ms_max}}}`; reset on restart |
 | DELETE | `/api/v2/settings/decision/metrics` | ADMIN (managed) / auth (core) | Reset the decision-layer metric counters → `{metrics}` (a zeroed snapshot) |
+
+> **Address egress policy (ADR-099).** `egress.tools`/`egress.webhooks`/`mcp.networkPolicy` share one
+> format `{mode, list, exceptions}`: `exceptions` are checked first (hostname, `*.suffix`, IP/CIDR),
+> `deny` blocks when any resolved address is forbidden, `allow` permits only when all addresses are allowed;
+> `off` — webhooks only. The policy is applied **live** (per-request, no restart) and is **not mixed**
+> between scopes (tools ≠ webhooks ≠ MCP); changes go to `audit/security.jsonl`, requests to
+> `audit/egress.jsonl`. LLM providers are not part of the egress journal (they have their own LLM audit/payload log).
 
 ### 5.22 Dictionaries — `/api/v2/dictionaries` (both)
 
@@ -896,9 +912,9 @@ managed (backend) — `ADMIN` only, core (standalone) — the single `requireAut
 | Method | Path | Build | RBAC (backend / core) | Purpose / req-resp |
 |---|---|---|---|---|
 | GET | `/api/v2/webhooks` | both | ADMIN / auth | List of subscriptions `{subscriptions}` (metadata without the secret) |
-| POST | `/api/v2/webhooks` | both | ADMIN / auth | Create (`webhookSubscriptionCreateSchema`): `{label, description?, url, events?, enabled?}` → 201 `WebhookSubscriptionCreated` = metadata + `secret` (plaintext `whsec_<base64url>`, shown **once**); an invalid body/URL → 400 `VALIDATION_ERROR`; a URL outside the SSRF policy → 400; duplicate label → 409 `CONFLICT`; master off → 503 `UNAVAILABLE` |
+| POST | `/api/v2/webhooks` | both | ADMIN / auth | Create (`webhookSubscriptionCreateSchema`): `{label, description?, url, events?, enabled?}` → 201 `WebhookSubscriptionCreated` = metadata + `secret` (plaintext `whsec_<base64url>`, shown **once**); an invalid body/URL → 400 `VALIDATION_ERROR`; a URL outside the `egress.webhooks` policy → 400; duplicate label → 409 `CONFLICT`; master off → 503 `UNAVAILABLE` |
 | GET | `/api/v2/webhooks/:id` | both | ADMIN / auth | Subscription metadata; no subscription → 404 `NOT_FOUND` |
-| PATCH | `/api/v2/webhooks/:id` | both | ADMIN / auth | Update (`webhookSubscriptionUpdateSchema`): `{label?, description?, url?, events?, enabled?}`; `null` for `description` — reset, `undefined` — leave untouched; a label change is checked for uniqueness → 200; no subscription → 404; duplicate → 409; a URL outside the policy → 400 |
+| PATCH | `/api/v2/webhooks/:id` | both | ADMIN / auth | Update (`webhookSubscriptionUpdateSchema`): `{label?, description?, url?, events?, enabled?}`; `null` for `description` — reset, `undefined` — leave untouched; a label change is checked for uniqueness → 200; no subscription → 404; duplicate → 409; a URL outside the `egress.webhooks` policy → 400 |
 | DELETE | `/api/v2/webhooks/:id` | both | ADMIN / auth | Delete the subscription → 204; no record → 404 |
 | POST | `/api/v2/webhooks/:id/regenerate` | both | ADMIN / auth | Rotation of the signing secret → 200 `WebhookSubscriptionCreated` (+ `secret` once); no subscription → 404 |
 | POST | `/api/v2/webhooks/:id/revoke` | both | ADMIN / auth | Soft revocation (`enabled=false`, `disabledAt`; idempotent) → 200 metadata; no record → 404 |
@@ -907,8 +923,8 @@ managed (backend) — `ADMIN` only, core (standalone) — the single `requireAut
 
 **Subscription fields** (`WebhookSubscription`): `id` (`whk_<uuid>`), `label` (required; globally
 unique per instance, case-insensitive), `description?`, `url` (http(s) only; by default —
-`https` + a ban on private/loopback through `evaluateWebhookTarget` on top of `engine/mcp/network-policy.ts`,
-`webhooks.allowPrivateTargets` lifts both restrictions), `events: string[]` (patterns: an exact type
+`https` plus the `egress.webhooks` address policy (ADR-099): `deny` of private/loopback addresses via `list`,
+allowance via `exceptions`; `mode:"off"` — dev only, lifts the `https` requirement as well), `events: string[]` (patterns: an exact type
 `stream.done` or a prefix `session.*`; empty — `DEFAULT_WEBHOOK_EVENT_PATTERNS`), `enabled`,
 `secretPrefix`, `createdBy`/`createdAt`, `lastDeliveryAt?`/`lastStatus?`, `disabledAt?`.
 **Delivery:** POST `{id, type, createdAt, data}` with the headers `X-Synth-Event`/`X-Synth-Delivery`/

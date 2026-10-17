@@ -109,8 +109,11 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_WEBHOOKS_ENABLED` | boolean | `webhooks.enabled` |
 | `SYNTH_WEBHOOKS_MAX_ATTEMPTS` | number | `webhooks.maxAttempts` |
 | `SYNTH_WEBHOOKS_TIMEOUT_MS` | number | `webhooks.timeoutMs` |
-| `SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS` | boolean | `webhooks.allowPrivateTargets` |
 | `SYNTH_WEBHOOKS_DELIVERY_RETENTION_DAYS` | number | `webhooks.deliveryRetentionDays` |
+| `SYNTH_EGRESS_TOOLS_MODE` | string (`deny`/`allow`) | `egress.tools.mode` |
+| `SYNTH_EGRESS_WEBHOOKS_MODE` | string (`deny`/`allow`/`off`) | `egress.webhooks.mode` |
+| `SYNTH_EGRESS_LOG_ENABLED` | boolean | `egress.log.enabled` |
+| `SYNTH_EGRESS_LOG_RETENTION_DAYS` | number | `egress.log.retentionDays` |
 | `SYNTH_DECISION_ENABLED` | boolean | `decision.enabled` |
 | `SYNTH_DECISION_PROVIDER` | string | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | string | `decision.model` |
@@ -246,7 +249,9 @@ mcp:
   policy: "auto"                  # ADR-071 §2.3: политика включения MCP-инструментов
                                   # consistency | available | auto (дефолт auto)
                                   # независима от tools.policy; per-session override: session.settings.mcpPolicy
-  # servers / networkPolicy — см. packages/shared/src/config/types.ts
+  # servers — см. packages/shared/src/config/types.ts
+  # networkPolicy — адресная политика MCP {mode, list, exceptions} (тот же формат, что egress.*),
+  # см. «Адресная политика исходящих запросов (`egress.*`, ADR-099)»
 
 tools:
   policy: "auto"                  # ADR-071 §2.3: политика включения ВСТРОЕННЫХ инструментов
@@ -442,7 +447,90 @@ env > `config.yaml` > дефолты. Инвариант — [ADR-099](./arch_de
 - **Fail-closed:** `caFile` и `caPem` одновременно → ошибка; явно заданный `caFile`, который отсутствует/не читается/не PEM → ошибка (никакого тихого фоллбэка на системное доверие); заданное доверие без установленного пакета `undici` (прямая зависимость core `undici@^7`) → внятная ошибка, а не недоверенный транспорт.
 - **Применение:** при старте процесса строится глобальный undici-dispatcher (`setGlobalDispatcher`), обычный `fetch` наследует доверие; точки вне общего транспорта (git) получают CA через `http.sslCAInfo=<caFile>` (`caPem` без файла git-каналу недоступен).
 - **`NODE_EXTRA_CA_CERTS` — только совместимость** (наследуется дочерними процессами: MCP stdio, git), **не** конфигурируемый механизм доверия.
-- **TLS — стартовая конфигурация:** секция **не входит** в runtime-настройки (`RuntimeSettings`); изменения применяются при старте и требуют рестарта.
+- **TLS-транспорт — стартовая конфигурация:** секция **не входит** в runtime-настройки (`RuntimeSettings`); изменения применяются при старте и требуют рестарта. Адресная политика — наоборот, **runtime** (live per-request): см. следующий раздел.
+
+### Адресная политика исходящих запросов (`egress.*`, ADR-099)
+
+Настраиваемая политика «куда можно ходить» для исходящих запросов. Часть единого egress-слоя
+([ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) п. 8–15); доверие TLS/CA — отдельная секция
+`security.tls` (выше). Три **независимых** экземпляра политики:
+
+| Скоуп | Ключ | Что покрывает | Режимы |
+|---|---|---|---|
+| Инструменты | `egress.tools` | `web_fetch`/`web_search`, внутренние потребители `net/fetch` (URL-скиллы, URL-источники инструкций), иконки провайдеров | `deny`/`allow` |
+| Вебхуки | `egress.webhooks` | исходящие webhooks (доставка событий) | `deny`/`allow`/`off` |
+| MCP | `mcp.networkPolicy` | пользовательские HTTP/SSE MCP-серверы (`origin:'user'`) | `deny`/`allow` |
+
+Формат у всех трёх общий: `{mode, list: string[], exceptions: string[]}`.
+
+| Поле | Env | Назначение | По умолчанию |
+|---|---|---|---|
+| `egress.tools.mode` | `SYNTH_EGRESS_TOOLS_MODE` | `deny` — блок при попадании любого resolved-адреса в `list`; `allow` — разрешено, только если **все** адреса в `list` | `deny` |
+| `egress.tools.list` | — (только config.yaml) | Список правил: точный hostname, `*.suffix`, IP/CIDR | `DEFAULT_MCP_PRIVATE_CIDRS` |
+| `egress.tools.exceptions` | — | Allow-правила-исключения, проверяются **первыми** | `[]` |
+| `egress.webhooks.mode` | `SYNTH_EGRESS_WEBHOOKS_MODE` | То же + `off` — dev: без проверок и **без требования `https`** | `deny` |
+| `egress.webhooks.list` / `.exceptions` | — | Как у `egress.tools` | `DEFAULT_MCP_PRIVATE_CIDRS` / `[]` |
+| `egress.log.enabled` | `SYNTH_EGRESS_LOG_ENABLED` | Журнал внешних запросов `{dataDir}/audit/egress.jsonl` | `true` |
+| `egress.log.retentionDays` | `SYNTH_EGRESS_LOG_RETENTION_DAYS` | Срок хранения журнала, дни; `0` — не чистить; prune на старте и раз в 6 ч | `7` |
+
+**Семантика.**
+
+- `exceptions` — allow-правила и проверяются **первыми**: точный hostname, `*.suffix`, IP/CIDR.
+  Hostname-правило разрешает сразу, адресное — по резолву.
+- `deny` — блок, если **хотя бы один** resolved-адрес попал в `list`; `allow` — разрешено, только если
+  **все** resolved-адреса в `list` либо сработало исключение.
+- Литеральные `localhost`/`*.localhost`/`*.local`/`*.internal` и приватные адреса блокируются **самой
+  политикой** (проверка локальных имён + дефолтный `list`), а не отдельным зашитым списком подсистемы;
+  `exceptions` их разрешают.
+- `off` — **только** `egress.webhooks` (dev): проверок нет, требование `https` снято. Для `tools`/MCP
+  `off` не принимается (400).
+- Невалидная запись (мусор, regex-подобное, битый CIDR) → 400 `VALIDATION_ERROR`.
+- **Fail-closed:** нет значения → config.yaml → встроенный дефолт (`deny` приватных диапазонов);
+  «политика не задана» не означает «разрешено всё».
+- Env — только скаляры (`mode`, `log.*`); списки `list`/`exceptions` — только в `config.yaml`.
+
+**Live и хранилище.** Политика резолвится из стора при **каждой** исходящей операции (runtime override в
+`{dataDir}/settings.json` → `config.yaml` → встроенный дефолт), без фонового опроса и кэша; в рамках одного
+вызова — один снимок. Изменения применяются без рестарта. Управление — `GET/PUT/DELETE
+/api/v2/settings/egress/tools`, `.../egress/webhooks`, `GET/PUT/DELETE /api/v2/settings/mcp-network-policy`
+и проверка без выполнения запроса — `POST /api/v2/settings/egress/check` (мутации в managed — ADMIN,
+core — `requireAuth`); изменения пишутся в аудит `{dataDir}/audit/security.jsonl`
+(`GET /api/v2/audit/security`), запросы — в журнал `{dataDir}/audit/egress.jsonl`
+(`GET /api/v2/audit/egress`; без тел/заголовков, `url` — без query/userinfo).
+
+**MCP отдельно.** `mcp.networkPolicy` остаётся **отдельным ключом** (не `egress.mcp`), но использует тот же
+формат и валидатор; проверяются только пользовательские HTTP/SSE-серверы (`origin:'user'`) — при записи в
+реестр и при подключении; `origin:'instance'` и `stdio`-серверы не проверяются, per-project политики нет.
+Пиннинга проверенного адреса нет (TOCTOU/DNS-rebinding — [PROP-100](./arch_decisions/prop-100-ssrf-dns-rebinding.md)).
+
+**Что не входит.** Провайдеры LLM не пишутся в журнал egress (у них свой LLM audit/payload-лог, ADR-036).
+При работе через HTTP-прокси (когда появится, [PROP-088](./arch_decisions/prop-088-http-proxy.md)) адрес
+резолвит прокси: адресная проверка Synth отключается, hostname-правила остаются, ответственность — на
+прокси/allowlist (ADR-099 п. 15). Политика — **не граница безопасности** при доступном shell, `stdio`-MCP
+или внешних движках.
+
+Пример:
+
+```yaml
+egress:
+  tools:                          # web_fetch/web_search, URL-скиллы и инструкции, иконки провайдеров
+    mode: "deny"                  # deny | allow (SYNTH_EGRESS_TOOLS_MODE)
+    list: ["10.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "::1/128"]   # hostname | *.suffix | CIDR
+    exceptions: []                # allow-правила, проверяются первыми
+  webhooks:                       # исходящие webhooks (ADR-052 этап II)
+    mode: "deny"                  # deny | allow | off (off — dev, без https-требования)
+    list: ["10.0.0.0/8", "127.0.0.0/8"]
+    exceptions: ["hooks.internal.example"]   # напр. разрешить конкретный корпоративный хост
+  log:                            # журнал внешних запросов
+    enabled: true                 # SYNTH_EGRESS_LOG_ENABLED
+    retentionDays: 7              # 0 — не чистить (SYNTH_EGRESS_LOG_RETENTION_DAYS)
+
+mcp:
+  networkPolicy:                  # отдельный ключ, тот же формат
+    mode: "deny"
+    list: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.169.254/32"]
+    exceptions: []
+```
 
 ### Секреты at-rest (`security.secretKey`, ADR-076)
 
@@ -705,7 +793,7 @@ API (`POST /api/v2/events`, bindings, ключи привязок, journal) — 
 | `webhooks.enabled` | Мастер-выключатель доставки (opt-in); `false` — движок не доставляет, а мутации `/api/v2/webhooks` и тест отвечают 503 `UNAVAILABLE` (чтение доступно) | `false` |
 | `webhooks.maxAttempts` | Число HTTP-попыток на доставку (1..10); между попытками — экспоненциальный backoff с джиттером | `5` |
 | `webhooks.timeoutMs` | Таймаут одного HTTP-запроса, мс | `10000` |
-| `webhooks.allowPrivateTargets` | Разрешить `http` и приватные/loopback адреса (dev). `false` — только `https` и публичные адреса (SSRF-политика поверх `engine/mcp/network-policy.ts`) | `false` |
+| `egress.webhooks` | Политика цели доставки (ADR-099): `mode` `deny`/`allow`/`off`, `list`, `exceptions`; `off` — dev (снимает и требование `https`). Заменяет удалённый `webhooks.allowPrivateTargets` | `deny` приватных диапазонов |
 | `webhooks.deliveryRetentionDays` | Срок хранения журнала доставок (`{dataDir}/webhooks/deliveries.jsonl`), дни; `0` — без ограничения; prune на старте и каждые 6 ч | `30` |
 
 Пример:
@@ -715,12 +803,12 @@ webhooks:
   enabled: false
   maxAttempts: 5
   timeoutMs: 10000
-  allowPrivateTargets: false
   deliveryRetentionDays: 30
+# Политика цели доставки — в секции egress.webhooks (mode deny | allow | off), см. выше.
 ```
 
 API и формат подписи (`/api/v2/webhooks`, подписки/ротация секрета/журнал/тест) — `docs/API_V2.md` §5.29;
-устройство движка и SSRF — `docs/ARCHITECTURE.md` («Внешние события и хуки»)
+устройство движка и адресная политика — `docs/ARCHITECTURE.md` («Внешние события и хуки»)
 и [ADR-052](./arch_decisions/adr-052-public-api-platform.md).
 
 ### Планировщик расписаний (`scheduler.*`, ADR-051 срез / ADR-089)

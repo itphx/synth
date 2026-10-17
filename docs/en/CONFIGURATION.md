@@ -109,8 +109,11 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_WEBHOOKS_ENABLED` | boolean | `webhooks.enabled` |
 | `SYNTH_WEBHOOKS_MAX_ATTEMPTS` | number | `webhooks.maxAttempts` |
 | `SYNTH_WEBHOOKS_TIMEOUT_MS` | number | `webhooks.timeoutMs` |
-| `SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS` | boolean | `webhooks.allowPrivateTargets` |
 | `SYNTH_WEBHOOKS_DELIVERY_RETENTION_DAYS` | number | `webhooks.deliveryRetentionDays` |
+| `SYNTH_EGRESS_TOOLS_MODE` | string (`deny`/`allow`) | `egress.tools.mode` |
+| `SYNTH_EGRESS_WEBHOOKS_MODE` | string (`deny`/`allow`/`off`) | `egress.webhooks.mode` |
+| `SYNTH_EGRESS_LOG_ENABLED` | boolean | `egress.log.enabled` |
+| `SYNTH_EGRESS_LOG_RETENTION_DAYS` | number | `egress.log.retentionDays` |
 | `SYNTH_DECISION_ENABLED` | boolean | `decision.enabled` |
 | `SYNTH_DECISION_PROVIDER` | string | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | string | `decision.model` |
@@ -247,7 +250,9 @@ mcp:
   policy: "auto"                  # ADR-071 §2.3: policy for enabling MCP tools
                                   # consistency | available | auto (default auto)
                                   # independent of tools.policy; per-session override: session.settings.mcpPolicy
-  # servers / networkPolicy — see packages/shared/src/config/types.ts
+  # servers — see packages/shared/src/config/types.ts
+  # networkPolicy — the MCP address policy {mode, list, exceptions} (the same format as egress.*),
+  # see "Address policy for outbound requests (`egress.*`, ADR-099)"
 
 tools:
   policy: "auto"                  # ADR-071 §2.3: policy for enabling BUILT-IN tools
@@ -443,7 +448,91 @@ subsystems do not create their own agents/dispatchers.
 - **Fail-closed:** `caFile` and `caPem` together → an error; an explicitly set `caFile` that is missing/unreadable/not PEM → an error (no silent fallback to system trust); configured trust without the installed `undici` package (a direct dependency of core `undici@^7`) → a clear error, not an untrusted transport.
 - **Application:** at process startup a global undici dispatcher is built (`setGlobalDispatcher`), so the ordinary `fetch` inherits the trust; points outside the shared transport (git) get the CA via `http.sslCAInfo=<caFile>` (`caPem` without a file is unavailable to the git channel).
 - **`NODE_EXTRA_CA_CERTS` — compatibility only** (inherited by child processes: MCP stdio, git), **not** a configurable trust mechanism.
-- **TLS is startup configuration:** the section is **not** part of the runtime settings (`RuntimeSettings`); changes are applied at startup and require a restart.
+- **The TLS transport is startup configuration:** the section is **not** part of the runtime settings (`RuntimeSettings`); changes are applied at startup and require a restart. The address policy, by contrast, is **runtime** (live per-request): see the next section.
+
+### Address policy for outbound requests (`egress.*`, ADR-099)
+
+A configurable "where may we go" policy for outbound requests. It is part of the single egress layer
+([ADR-099](../arch_decisions/adr-099-egress-tls-trust.md) items 8–15); TLS/CA trust is a separate section
+`security.tls` (above). Three **independent** policy instances:
+
+| Scope | Key | Covers | Modes |
+|---|---|---|---|
+| Tools | `egress.tools` | `web_fetch`/`web_search`, internal `net/fetch` consumers (URL skills, URL instruction sources), provider icons | `deny`/`allow` |
+| Webhooks | `egress.webhooks` | outgoing webhooks (event delivery) | `deny`/`allow`/`off` |
+| MCP | `mcp.networkPolicy` | user HTTP/SSE MCP servers (`origin:'user'`) | `deny`/`allow` |
+
+All three share one format: `{mode, list: string[], exceptions: string[]}`.
+
+| Field | Env | Purpose | Default |
+|---|---|---|---|
+| `egress.tools.mode` | `SYNTH_EGRESS_TOOLS_MODE` | `deny` — block when any resolved address is in `list`; `allow` — permit only when **all** addresses are in `list` | `deny` |
+| `egress.tools.list` | — (config.yaml only) | Rules: exact hostname, `*.suffix`, IP/CIDR | `DEFAULT_MCP_PRIVATE_CIDRS` |
+| `egress.tools.exceptions` | — | Allow rules (checked **first**) | `[]` |
+| `egress.webhooks.mode` | `SYNTH_EGRESS_WEBHOOKS_MODE` | Same, plus `off` — dev: no checks and **no `https` requirement** | `deny` |
+| `egress.webhooks.list` / `.exceptions` | — | As in `egress.tools` | `DEFAULT_MCP_PRIVATE_CIDRS` / `[]` |
+| `egress.log.enabled` | `SYNTH_EGRESS_LOG_ENABLED` | Outbound request journal `{dataDir}/audit/egress.jsonl` | `true` |
+| `egress.log.retentionDays` | `SYNTH_EGRESS_LOG_RETENTION_DAYS` | Journal retention, days; `0` — never prune; prune at start and every 6 h | `7` |
+
+**Semantics.**
+
+- `exceptions` are allow rules and are checked **first**: exact hostname, `*.suffix`, IP/CIDR. A hostname
+  rule allows immediately; an address rule — by resolution.
+- `deny` — block when **at least one** resolved address is in `list`; `allow` — permit only when **all**
+  resolved addresses are in `list` or an exception matched.
+- Literal `localhost`/`*.localhost`/`*.local`/`*.internal` and private addresses are blocked by the
+  **policy itself** (local-name check + the default `list`), not by a separate hard-coded list of a
+  subsystem; `exceptions` may allow them.
+- `off` — **only** `egress.webhooks` (dev): no checks, the `https` requirement is lifted. For `tools`/MCP
+  `off` is rejected (400).
+- An invalid rule (garbage, regex-like, broken CIDR) → 400 `VALIDATION_ERROR`.
+- **Fail-closed:** no value → config.yaml → built-in default (`deny` private ranges); "no policy" never
+  means "everything is allowed".
+- Env — scalars only (`mode`, `log.*`); `list`/`exceptions` — `config.yaml` only.
+
+**Live and storage.** The policy is resolved from the store on **every** outbound operation (runtime
+override in `{dataDir}/settings.json` → `config.yaml` → built-in default), with no background polling and no
+cache; one snapshot per call. Changes apply without a restart. Management — `GET/PUT/DELETE
+/api/v2/settings/egress/tools`, `.../egress/webhooks`, `GET/PUT/DELETE /api/v2/settings/mcp-network-policy`
+and a check without performing the request — `POST /api/v2/settings/egress/check` (mutations in managed —
+ADMIN, core — `requireAuth`); changes are written to the audit `{dataDir}/audit/security.jsonl`
+(`GET /api/v2/audit/security`), requests to the journal `{dataDir}/audit/egress.jsonl`
+(`GET /api/v2/audit/egress`; no bodies/headers, `url` without query/userinfo).
+
+**MCP separately.** `mcp.networkPolicy` remains a **separate key** (not `egress.mcp`) but uses the same
+format and validator; only user HTTP/SSE servers (`origin:'user'`) are checked — when writing to the
+registry and when connecting; `origin:'instance'` and `stdio` servers are not checked, and there is no
+per-project policy. The resolved address is not pinned (TOCTOU/DNS-rebinding —
+[PROP-100](../arch_decisions/prop-100-ssrf-dns-rebinding.md)).
+
+**Out of scope.** LLM providers are not written to the egress journal (they have their own LLM
+audit/payload log, ADR-036). Behind an HTTP proxy (once it exists,
+[PROP-088](../arch_decisions/prop-088-http-proxy.md)) the proxy resolves addresses: Synth's address check is
+disabled, hostname rules remain, responsibility lies with the proxy/allowlist (ADR-099 item 15). The policy
+is **not a security boundary** when a shell, `stdio` MCP or external engines are available.
+
+Example:
+
+```yaml
+egress:
+  tools:                          # web_fetch/web_search, URL skills and instructions, provider icons
+    mode: "deny"                  # deny | allow (SYNTH_EGRESS_TOOLS_MODE)
+    list: ["10.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "::1/128"]   # hostname | *.suffix | CIDR
+    exceptions: []                # allow rules, checked first
+  webhooks:                       # outgoing webhooks (ADR-052 stage II)
+    mode: "deny"                  # deny | allow | off (off — dev, no https requirement)
+    list: ["10.0.0.0/8", "127.0.0.0/8"]
+    exceptions: ["hooks.internal.example"]   # e.g. allow a specific corporate host
+  log:                            # outbound request journal
+    enabled: true                 # SYNTH_EGRESS_LOG_ENABLED
+    retentionDays: 7              # 0 — never prune (SYNTH_EGRESS_LOG_RETENTION_DAYS)
+
+mcp:
+  networkPolicy:                  # a separate key, the same format
+    mode: "deny"
+    list: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.169.254/32"]
+    exceptions: []
+```
 
 ### At-rest secrets (`security.secretKey`, ADR-076)
 
@@ -706,7 +795,7 @@ The section is a deployment setting; the master switch `enabled` and delivery po
 | `webhooks.enabled` | Delivery master switch (opt-in); `false` — the engine does not deliver, and mutations of `/api/v2/webhooks` and the test respond 503 `UNAVAILABLE` (reading is available) | `false` |
 | `webhooks.maxAttempts` | Number of HTTP attempts per delivery (1..10); between attempts — exponential backoff with jitter | `5` |
 | `webhooks.timeoutMs` | Timeout of a single HTTP request, ms | `10000` |
-| `webhooks.allowPrivateTargets` | Allow `http` and private/loopback addresses (dev). `false` — only `https` and public addresses (SSRF policy over `engine/mcp/network-policy.ts`) | `false` |
+| `egress.webhooks` | Delivery target policy (ADR-099): `mode` `deny`/`allow`/`off`, `list`, `exceptions`; `off` — dev (lifts the `https` requirement as well). Replaces the removed `webhooks.allowPrivateTargets` | `deny` of private ranges |
 | `webhooks.deliveryRetentionDays` | Delivery journal retention (`{dataDir}/webhooks/deliveries.jsonl`), days; `0` — no limit; prune at start and every 6 h | `30` |
 
 Example:
@@ -716,12 +805,12 @@ webhooks:
   enabled: false
   maxAttempts: 5
   timeoutMs: 10000
-  allowPrivateTargets: false
   deliveryRetentionDays: 30
+# The delivery target policy lives in the egress.webhooks section (mode deny | allow | off), see above.
 ```
 
 The API and the signature format (`/api/v2/webhooks`, subscriptions/secret rotation/journal/test) — `docs/API_V2.md` §5.29;
-the engine design and SSRF — `docs/ARCHITECTURE.md` ("External events and hooks")
+the engine design and the address policy — `docs/ARCHITECTURE.md` ("External events and hooks")
 and [ADR-052](../arch_decisions/adr-052-public-api-platform.md).
 
 ### Scheduler (`scheduler.*`, ADR-051 slice / ADR-089)
