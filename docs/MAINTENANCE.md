@@ -445,6 +445,478 @@ SYNTH_STORAGE_BACKEND=postgres synth doctor --json
 вместо тихого фоллбека); порядок действий в аварии — раздел «Деградированный режим (БД недоступна)»
 выше и встроенный скилл `synth-storage-recovery`.
 
+## Миграция хранилища в Kubernetes (K3s/Fleet)
+
+**Цель:** перевести managed-инстанс (Helm-релиз в K3s/Fleet, файловый backend на PVC) на
+PostgreSQL, не потеряв данные и сохранив рабочий откат. Общая механика переноса — что копируется,
+что перевыпускается, какие ошибки fail-closed — в разделе «Перенос данных между backend'ами
+(`synth storage migrate`)» выше; здесь только managed-специфика: как это делается Job'ами на PVC,
+как переключается режим в чарте, как чистится PVC и как откатываться. Процесс проверен на
+test-инстансе 2026-10-17 (итог: `healthy`, `doctor` без `fail`, счётчики сошлись, освобождено ~14 МБ).
+
+Значения ниже — фактические для test-среды; для другой среды подставьте свои (хост/база/роль,
+релиз, PVC, namespace).
+
+| Компонент | Значение (test) |
+|---|---|
+| Кластер / namespace | K3s (Rancher Fleet), `synth` |
+| Релиз / чарт | `synth-test`, чарт `synth` из приватного Helm-реестра Gitea |
+| PVC | `synth-backend-data` → `/var/synth/data` (RWO, одна нода) |
+| Целевая БД | `box.itphx.loc:5432`, база `synth_test`, роль `synth` (PostgreSQL 15) |
+| Секрет с паролем | `synth-secrets` (SealedSecret), ключ `SYNTH_POSTGRES_PASSWORD` |
+
+### Предусловия
+
+1. **Кластер достукивается до БД.** Проверьте TCP из пода, а не «с машины админа»:
+
+   ```bash
+   kubectl -n synth exec deploy/synth-backend -- node -e "
+   const net = require('node:net');
+   const s = net.connect(5432, 'box.itphx.loc', () => { console.log('TCP OK'); s.end(); });
+   s.on('error', (e) => { console.error('TCP FAIL', e.message); process.exit(1); });"
+   ```
+
+   *Ожидаемо:* `TCP OK`. Если нет — сначала сеть/фаервол/`NetworkPolicy`, миграцию не начинать.
+2. **Роль умеет логиниться.** `NOLOGIN` даёт `FATAL: для роли "synth" вход запрещён` — это **не**
+   «неверный пароль»: пароль проверяется позже, поэтому сообщения разные. Симптом «неверный пароль»
+   при заведомо верном пароле — повод проверить именно `LOGIN`/`pg_hba`, а не перевыпускать пароль.
+3. **База создана и пуста** — либо уже содержит схему драйвера нужной версии (`synth_schema_migrations`).
+   Схему создаёт сама команда (режим `apply`); «схема новее драйвера» — fail-closed (см. выше).
+4. **Пароль — только в Secret** (инвариант 13), не в `values.yaml` и не в аргументах Job'а. Если
+   SealedSecret перезапечатывался (добавлялся третий ключ), **после применения сверьте sha256
+   остальных ключей** (OIDC-секрет, ключ провайдера) со значениями **до** перезапечатывания:
+   утилита не должна была их изменить, иначе сломается вход в UI. Пример сверки:
+
+   ```bash
+   kubectl -n synth get secret synth-secrets -o jsonpath='{.data.SYNTH_OIDC_CLIENT_SECRET}' \
+     | base64 -d | sha256sum
+   ```
+
+5. **Драйвер есть в образе.** Проверяется резолвингом из каталога core (см. «Артефакты и деплой»).
+6. **Снят бэкап** (см. «Бэкап») — это страховка и второй уровень отката.
+
+### Артефакты и деплой
+
+Для test-среды используется процедура «X.Y.Z-N»: версия приложения не бампается, перезаписывается
+тег образа, версия чарта автоинкрементится (`0.10.3` → `0.10.3-2`). Собирает и публикует
+`synth-deploy`:
+
+```bash
+cd synth-deploy
+GITEA_USER=<user> GITEA_TOKEN=<token> ./scripts/build-and-publish.sh --app-version 0.10.3 --dry-run
+GITEA_USER=<user> GITEA_TOKEN=<token> ./scripts/build-and-publish.sh --app-version 0.10.3
+```
+
+- Скрипт обновляет **только строки с маркером `# sync:`** в `test/values.yaml` (пиннинги образа и
+  версии чарта) — остальной текст файлов не трогается.
+- Публикуются **оба** чарта (`synth` и `synth-gateway-telegram`), даже если менялся только `test/`.
+- Реестр Gitea регенерирует `index.yaml` с задержкой: если чарта «нет», повторите запрос через
+  30–60 с, а не пересобирайте.
+- **Без бампа версии откат образа дорогой:** старый digest после перезаписи тега из реестра не
+  тянется. Откат — только пересборка из предыдущего коммита `synth` (или re-tag+push из локального
+  кэша). Для «настоящих» релизов поэтому и нужен бамп версии.
+
+**Проверка драйвера в образе.** `pnpm deploy` кладёт опциональные зависимости в `.pnpm`, поэтому
+`ls /app/node_modules/@itphx/` даёт **ложноотрицательный** результат. Единственная надёжная проверка —
+резолвинг из каталога core:
+
+```bash
+docker run --rm --entrypoint sh git.itphx.ru/itphx/synth-backend:0.10.3 -c \
+  'cd /app/node_modules/@itphx/synth-core && node --input-type=module -e "await import(\"@itphx/synth-storage-postgres\")"'
+```
+
+*Ожидаемо:* пустой вывод, код возврата 0. `ERR_MODULE_NOT_FOUND` — драйвера в образе нет,
+переключение режима даст fail-closed на старте.
+
+**Обязательный `rollout restart`.** В чарте нет checksum-аннотации пода, поэтому при **неизменном
+теге** `helm upgrade` поды не перекатывает. Сверяйте `imageID` до и после:
+
+```bash
+kubectl -n synth get pod -l app.kubernetes.io/name=synth-backend -o jsonpath='{..imageID}{"\n"}'
+kubectl -n synth rollout restart deploy/synth-backend
+kubectl -n synth rollout status deploy/synth-backend
+```
+
+### Бэкап
+
+PVC — `ReadWriteOnce`, поэтому архив снимается при **остановленном** backend: иначе получится
+несогласованный срез.
+
+1. Остановите backend и дождитесь удаления пода:
+
+   ```bash
+   kubectl -n synth scale deploy/synth-backend --replicas=0
+   kubectl -n synth wait --for=delete pod -l app.kubernetes.io/name=synth-backend --timeout=120s
+   ```
+
+2. Job с образом backend, тем же PVC и `restartPolicy: Never`:
+
+   ```yaml
+   ---
+   # Бэкап файлового периметра Synth на PVC перед миграцией storage backend file → postgres.
+   # Запускается при остановленном backend (deploy/synth-backend --replicas=0), т.к. PVC
+   # synth-backend-data — ReadWriteOnce и архив должен быть консистентным.
+   # Пароль БД не нужен: команда работает только с файловым dataDir.
+   apiVersion: batch/v1
+   kind: Job
+   metadata:
+     name: synth-backup-0-10-3
+     namespace: synth
+     labels:
+       app.kubernetes.io/name: synth
+       app.kubernetes.io/component: maintenance
+       app.kubernetes.io/instance: synth-test
+   spec:
+     backoffLimit: 0
+     ttlSecondsAfterFinished: 3600
+     template:
+       metadata:
+         labels:
+           app.kubernetes.io/name: synth
+           app.kubernetes.io/component: maintenance
+           app.kubernetes.io/instance: synth-test
+       spec:
+         restartPolicy: Never
+         imagePullSecrets:
+           - name: git.itphx.ru
+         securityContext:
+           runAsUser: 1000
+           runAsNonRoot: true
+           fsGroup: 1000
+         containers:
+           - name: backup
+             image: git.itphx.ru/itphx/synth-backend:0.10.3
+             imagePullPolicy: Always
+             command:
+               - node
+               - /app/node_modules/@itphx/synth-core/dist/main.js
+               - backup
+               - --out
+               - /var/synth/data/backups
+               - --data-dir
+               - /var/synth/data
+             resources:
+               requests:
+                 cpu: 100m
+                 memory: 128Mi
+               limits:
+                 cpu: "1"
+                 memory: 512Mi
+             volumeMounts:
+               - name: data
+                 mountPath: /var/synth/data
+         volumes:
+           - name: data
+             persistentVolumeClaim:
+               claimName: synth-backend-data
+   ```
+
+3. Запустите и дождитесь завершения:
+
+   ```bash
+   kubectl -n synth apply -f job-backup.yaml
+   kubectl -n synth wait --for=condition=complete job/synth-backup-0-10-3 --timeout=10m
+   kubectl -n synth logs job/synth-backup-0-10-3
+   ```
+
+4. Заберите архив и сверьте контрольную сумму. Копию оставьте **и** на PVC (`backups/`), и локально:
+
+   ```bash
+   POD="$(kubectl -n synth get pod -l job-name=synth-backup-0-10-3 \
+     -o jsonpath='{.items[0].metadata.name}')"
+   kubectl -n synth cp "$POD:/var/synth/data/backups/<archive>.tar.gz" ./<archive>.tar.gz
+   sha256sum ./<archive>.tar.gz
+   ```
+
+*Ожидаемо:* путь архива, размер, число записей и `sha256` в логе совпадают с локальной копией.
+
+### Миграция
+
+Job — тот же образ и PVC, но с env-адресацией **цели** и `SYNTH_STORAGE_BACKEND=file`. Источник
+обязательно `file`: цель задаётся **только** флагом `--to`, иначе команда откажет («источник и цель
+совпадают»). Пароль — через `valueFrom.secretKeyRef`, в аргументах и логах его нет.
+
+Сначала dry-run (только счётчики `copied`/`skipped`, без записи):
+
+```yaml
+---
+# Миграция файлового хранилища Synth (PVC synth-backend-data) в PostgreSQL (box.itphx.loc/synth_test).
+# Источник — file (SYNTH_STORAGE_BACKEND=file), цель — флаг --to postgres.
+# Пароль БД берётся только из Secret synth-secrets/SYNTH_POSTGRES_PASSWORD (valueFrom) —
+# в аргументах и логах его нет. Запускать при остановленном backend (PVC ReadWriteOnce).
+# Первый прогон — с --dry-run (только счётчики copied/skipped), затем тот же Job с --yes.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: synth-migrate-pg
+  namespace: synth
+  labels:
+    app.kubernetes.io/name: synth
+    app.kubernetes.io/component: maintenance
+    app.kubernetes.io/instance: synth-test
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: synth
+        app.kubernetes.io/component: maintenance
+        app.kubernetes.io/instance: synth-test
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: git.itphx.ru
+      securityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+      containers:
+        - name: migrate
+          image: git.itphx.ru/itphx/synth-backend:0.10.3
+          imagePullPolicy: Always
+          command:
+            - node
+            - /app/node_modules/@itphx/synth-core/dist/main.js
+            - storage
+            - migrate
+            - --to
+            - postgres
+            - --data-dir
+            - /var/synth/data
+            - --dry-run
+          env:
+            - name: SYNTH_STORAGE_BACKEND
+              value: file
+            - name: SYNTH_POSTGRES_HOST
+              value: box.itphx.loc
+            - name: SYNTH_POSTGRES_PORT
+              value: "5432"
+            - name: SYNTH_POSTGRES_DATABASE
+              value: synth_test
+            - name: SYNTH_POSTGRES_USER
+              value: synth
+            - name: SYNTH_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: synth-secrets
+                  key: SYNTH_POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/synth/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: synth-backend-data
+```
+
+Запуск и сверка dry-run:
+
+```bash
+kubectl -n synth apply -f job-migrate.yaml
+kubectl -n synth wait --for=condition=complete job/synth-migrate-pg --timeout=15m
+kubectl -n synth logs job/synth-migrate-pg
+```
+
+*Ожидаемо (пример test):* `sessions: 18`, `projects: 6`, `providers: 3`, `models: 583`,
+`serviceKeys: 2`, `итого: скопировано 650, пропущено 16`; в конце — «изменения не записаны».
+Ключевые числа сверьте с файловым периметром **до** применения.
+
+Применение — тот же манифест с двумя отличиями:
+
+```text
+metadata.name:  synth-migrate-pg-apply                 (было synth-migrate-pg)
+command:        … --data-dir /var/synth/data --yes     (было … --dry-run)
+```
+
+Повторный перенос идемпотентен: уже существующие записи пропускаются. **Первый прогон может упасть
+по таймауту холодного пула** — см. «Грабли», п. 1; это лечится повтором, а не правкой манифеста.
+
+Сверка результата (независимо от отчёта команды):
+
+```bash
+psql "host=box.itphx.loc port=5432 dbname=synth_test user=synth" -c \
+  'select (select count(*) from sessions) sessions, (select count(*) from messages) messages, (select count(*) from projects) projects;'
+psql "host=box.itphx.loc port=5432 dbname=synth_test user=synth" -c \
+  'select version from synth_schema_migrations order by version;'
+```
+
+*Ожидаемо (пример test):* `18 / 405 / 6`; таблиц схемы драйвера — 30, `version = 1`.
+
+### Переключение режима
+
+В `synth-deploy/test/values.yaml` добавьте секцию (пароля здесь **нет** — он в Secret):
+
+```yaml
+storage:
+  backend: postgres
+  degradedMode: halt
+  postgres:
+    host: box.itphx.loc   # пример test-среды — подставьте свой
+    port: 5432
+    database: synth_test
+    user: synth
+```
+
+`halt` выбран осознанно (то же решение принято в dev): при `fallback-file` сервис **молча**
+поднимется на файловом фоллбеке и данные разъедутся — при БД-режиме честнее остановиться. Смена
+значений в `values.yaml` меняет шаблон пода, поэтому Fleet перекатит под автоматически; если
+менялся только тег образа — `rollout restart` обязателен (см. выше).
+
+### Верификация
+
+1. **Health.** `GET /health` → `healthy` (не `degraded`).
+
+   ```bash
+   kubectl -n synth exec deploy/synth-backend -- \
+     node -e "fetch('http://127.0.0.1:5000/health').then(r=>r.text()).then(console.log)"
+   ```
+
+2. **Логи.** В логах backend нет блока `[storage] ⚠️ PostgreSQL недоступен …`:
+
+   ```bash
+   kubectl -n synth logs deploy/synth-backend | grep -F '[storage]'
+   ```
+
+3. **Doctor.** Файловые проверки данных — `skipped` («неприменимо (backend=postgres)»), добавлены
+   `db-connection`/`db-schema`:
+
+   ```bash
+   kubectl -n synth exec deploy/synth-backend -- \
+     node /app/node_modules/@itphx/synth-core/dist/main.js doctor --json --data-dir /var/synth/data
+   ```
+
+   *Ожидаемо:* `ok: true`, `db-connection: ok`, `db-schema: ok`.
+
+4. **Соединения реально есть.** `select count(*) from pg_stat_activity where datname='synth_test'` > 0.
+5. **Пишет именно в БД.** `mtime` файлов на PVC (`settings.json`, `sessions/*`) **не меняется**, а
+   записи видны в БД — например, обновляется `last_used_at` у используемого service-key:
+
+   ```sql
+   select label, last_used_at from service_keys order by last_used_at desc nulls last;
+   ```
+
+6. **Шлюз.** В логах `synth-gateway-telegram` тенант `test` — `up`, ошибок авторизации нет.
+
+### Service-key: дефект миграции и восстановление
+
+**Симптом.** После переключения все внешние потребители получают **401** — в нашем случае это
+Telegram-шлюз (service-key `telegram-gateway`), плюс мог пострадать installer-ключ.
+
+**Причина.** `copyServiceKeys` в `packages/core/src/maintenance/storage-migrate.ts` пересоздаёт
+ключи через `dst.serviceKeys.create(...)` и **не переносит `hash`/`prefix`** — создаётся новая
+запись с новым секретом (то же в `copyEventApiKeys` для ключей привязок событий). Предупреждение
+команды («секреты перевыпущены») формально верное, но фактически ломает уже настроенных клиентов.
+
+**Восстановление возможно, пока цел файловый стор.** At-rest хранится sha256, а не plaintext,
+поэтому для проверки токена достаточно вернуть исходный `hash`; plaintext потребителя не нужен.
+Исходные значения лежат в `/var/synth/data/service-keys.json` (поле `hash`, рядом `prefix`):
+
+```bash
+kubectl -n synth exec deploy/synth-backend -- cat /var/synth/data/service-keys.json
+```
+
+```sql
+update service_keys
+   set secret_hash = '<hash из файла>', prefix = '<prefix из файла>'
+ where label = '<label>';
+```
+
+(`prefix` — информационное поле «первые символы + `…`»; восстанавливается для консистентности
+выдачи, на проверку не влияет. Для ключей привязок — аналогично `event_api_keys`.)
+
+Затем перезапустите потребителей:
+
+```bash
+kubectl -n synth rollout restart deploy/synth-backend deploy/synth-gateway-telegram
+```
+
+**Проверка.** sha256 реального токена должен совпасть с `secret_hash`, а запрос этим ключом — дать 200:
+
+```bash
+printf '%s' '<token потребителя>' | sha256sum
+curl -s -o /dev/null -w '%{http_code}\n' https://synth.k3s.itphx.loc/api/v2/sessions \
+  -H 'Authorization: Bearer <token потребителя>'
+```
+
+**Известное ограничение (нужен фикс в коде).** Порта `ServiceKeyRepository`/`EventApiKeyRepository`
+не хватает метода импорта с готовым хэшем, поэтому «правильный» перенос сейчас невозможен, а
+восстановление из файлового стора — обходной путь. **После чистки PVC восстановить нельзя** —
+останется только перевыпуск ключей потребителям. Пока дефект не исправлен, чистку PVC делайте
+только после того, как убедились, что все потребители работают на восстановленных ключах.
+
+### Чистка PVC (после подтверждённой работы)
+
+Файловый периметр остаётся вторым уровнем отката, поэтому чистить его можно **только** после
+верификации выше (и лучше — после нескольких дней работы на БД).
+
+Удаляются данные, которые теперь живут в БД:
+
+```bash
+kubectl -n synth exec deploy/synth-backend -- sh -lc '
+  cd /var/synth/data &&
+  rm -rf sessions projects models providers mcp events auth/profiles secrets/ssh-keys \
+         service-keys.json settings.json audit/maintenance.jsonl'
+```
+
+> **До чистки** проверьте потребителей ключей привязок событий: их `secret_hash` лежит в
+> `events/api-keys.json`, и после удаления каталога восстановить его будет нечем (только перевыпуск).
+> Порядок тот же, что для service-key (см. выше), — сначала `update event_api_keys …`, затем чистка.
+
+**Остаются (by design):**
+
+| Путь | Почему |
+|---|---|
+| `skills/` | discovery скиллов идёт с ФС и в БД-режиме (файловая реализация core) |
+| `workspaces/` | рабочие каталоги проектов, не данные хранилища |
+| `backups/` | архивы, в т.ч. снятый перед миграцией |
+| `secrets/master.key` | мастер-ключ at-rest (SSH-ключи и пр.) |
+| `secrets/postgres-password` | файловый вариант пароля БД (если используется) |
+| `meta.json` | версия схемы файлового периметра |
+
+*Ожидаемо (пример test):* каталог данных сокращается с ~16,4 МБ до ~2,2 МБ.
+
+### Откат
+
+Порядок — от дешёвого к дорогому, **до чистки PVC** любой из шагов возвращает рабочее состояние:
+
+1. **Вернуть файловый backend.** Уберите секцию `storage` из `test/values.yaml` → push → Fleet
+   применит `file`. Файловые данные целы (миграция их не удаляет), сервис поднимется на них.
+2. **Откатить релиз Helm.** Если после переключения менялись и другие параметры:
+
+   ```bash
+   helm -n synth history synth-test
+   helm -n synth rollback synth-test <rev>
+   ```
+
+   Учтите: rollback вернёт и значения (включая отсутствие `storage`), но **не** пересоберёт образ.
+3. **Откатить образ.** Только пересборкой из предыдущего коммита `synth` (старый digest после
+   перезаписи тега недоступен) — см. «Артефакты и деплой».
+
+После чистки PVC шаг 1 не спасает: остаётся только `synth backup`-архив или `pg_dump` БД.
+
+### Грабли
+
+| Симптом | Причина | Что делать |
+|---|---|---|
+| `Connection terminated due to connection timeout` на первом прогоне миграции | Холодный старт пула: TCP до БД 8 мс, одиночный `pg.Client` — 101 мс, а первый `connect` пула успевает истечь; повтор проходит за 7–11 с | Повторить Job. Сеть ни при чём — проверяйте её отдельно (п. 1 «Предусловий»). При `degradedMode: halt` такие таймауты дают отказ старта — учитывайте при cold start |
+| `ls /app/node_modules/@itphx/` не показывает драйвер | `pnpm deploy` раскладывает опциональные зависимости в `.pnpm` | Проверять импортом из каталога core (см. «Артефакты и деплой») |
+| `helm upgrade` «прошёл», поды старые | Нет checksum-аннотации; при неизменном теге шаблон пода не меняется | `rollout restart` + сверка `imageID` до/после |
+| Откат образа «не тянется» | Тег перезаписан, старый digest удалён из реестра | Пересборка из предыдущего коммита; для релизов — бамп версии |
+| Чарта нет в реестре сразу после публикации | Gitea регенерирует `index.yaml` с задержкой | Повторить запрос через 30–60 с |
+| Неожиданно обновился чужой чарт | Скрипт публикует оба чарта (`synth`, `synth-gateway-telegram`) | Ожидаемо; проверяйте оба после публикации |
+| `FATAL: для роли "…" вход запрещён` | У роли `NOLOGIN`, пароль ещё не проверялся | `ALTER ROLE … LOGIN`, затем повторить; не путать с неверным паролем |
+| После перезапечатывания SealedSecret не работает вход | Утилита изменила посторонние ключи | Сверить sha256 OIDC-секрета и ключа провайдера с значениями **до**, при расхождении — откатить SealedSecret |
+| `apply` Job'а падает «field is immutable» | Job с тем же именем уже существует | `kubectl -n synth delete job <name>` перед повтором |
+| Внешние потребители получают 401 после переключения | Дефект `copyServiceKeys`/`copyEventApiKeys` (не переносятся `hash`/`prefix`) | Восстановить `secret_hash` из файлового стора (см. «Service-key») |
+
 ## Удаление инстанса
 
 **Цель:** осознанно удалить инстанс; по умолчанию данные **сохраняются**.
@@ -637,3 +1109,4 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 - 2026-10-16 — добавлено шифрование архива бэкапа (ADR-091): `synth backup --encrypt` (внешний ключ `--key-file`/`SYNTH_BACKUP_KEY[_FILE]`, формат `<archive>.tar.gz.enc` + sidecar `.enc.meta.json`), восстановление `.enc` только через CLI (`synth restore <archive>.enc`); в UI зашифрованные архивы помечаются и исключены из скачивания/восстановления.
 - 2026-10-16 — добавлен раздел «Перенос проекта между инстансами» (`synth project export|import`, ADR-091 §6): архив без секретов, materialization с новыми id, `--merge-into`/`--dry-run`/`--yes`/`--with-workspace`, маппинг id.
 - 2026-10-16 — перенос проекта доступен по HTTP API (роуты `GET /api/v2/projects/:id/export` и `POST /api/v2/projects/import`, [API_V2.md](./API_V2.md) §5.8.1): скачивание архива и импорт multipart; `confirm` не требуется.
+- 2026-10-17 — добавлен раздел «Миграция хранилища в Kubernetes (K3s/Fleet)»: предусловия (TCP из namespace, `NOLOGIN` ≠ неверный пароль, сверка sha256 ключей SealedSecret), артефакты/деплой без бампа версии (проверка драйвера в образе резолвингом, обязательный `rollout restart`), бэкап и миграция Job'ами на PVC (`job-backup`/`job-migrate`/`job-migrate-apply`), переключение режима в `values.yaml` с `degradedMode: halt`, верификация, дефект `copyServiceKeys`/`copyEventApiKeys` (не переносятся `hash`/`prefix`) и восстановление из файлового стора, чистка PVC, откат и грабли; проверено на test-инстансе (2026-10-17).
