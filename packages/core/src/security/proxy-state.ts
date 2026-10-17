@@ -17,6 +17,8 @@ import {
   proxyUrlFor,
   shouldProxyUrl as shouldProxyUrlFor,
   type EgressProxyStatus,
+  type ProxyCredentials,
+  type ProxyUrlField,
   type ResolvedProxyConfig,
 } from '@itphx/synth-shared';
 
@@ -61,14 +63,61 @@ export function getEgressProxyStatus(): EgressProxyStatus {
 }
 
 /**
- * Прокси-URL для git (`-c http.proxy=<url>`): `httpsProxy` → `allProxy` → `url`
- * → `httpProxy`. Пусто — прокси выключен. Учётные данные не поддерживаются (D2).
+ * Прокси-URL для git (`-c http.proxy=<url>`) — **legacy D1**, без кред и без
+ * `no_proxy`. Начиная с D2b `GitService` использует child-env (`gitProxyEnv`),
+ * где libcurl сам применяет `no_proxy` и Basic-креды из userinfo. Функция
+ * оставлена для диагностики/совместимости и в argv больше не попадает.
  */
 export function gitProxyConfig(): string[] {
   const config = _config;
   if (!config?.enabled) return [];
   const url = config.httpsProxy ?? config.allProxy ?? config.url ?? config.httpProxy;
   return url ? [`http.proxy=${url}`] : [];
+}
+
+/** URL с Basic-кредами в userinfo (percent-encoded); пароль не логируется. */
+function withCredentials(url: string, credentials: ProxyCredentials | undefined): string {
+  if (!credentials) return url;
+  const match = /^([a-z0-9]+:\/\/)(.*)$/i.exec(url);
+  if (!match) return url;
+  const user = encodeURIComponent(credentials.username);
+  const pass = encodeURIComponent(credentials.password);
+  return `${match[1]}${user}:${pass}@${match[2]}`;
+}
+
+/** Выбор URL+кред по приоритету полей (для `*_proxy` env). */
+function pickProxyField(
+  config: ResolvedProxyConfig,
+  fields: ProxyUrlField[],
+): { url: string; credentials?: ProxyCredentials } | undefined {
+  for (const field of fields) {
+    const url = config[field];
+    if (url !== undefined) {
+      const credentials = config.credentials?.[field];
+      return credentials ? { url, credentials } : { url };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Env-переменные прокси для **дочернего git** (D2b): `http_proxy`/`https_proxy`/
+ * `all_proxy`/`no_proxy` (lowercase — libcurl их понимает, включая применение
+ * `no_proxy`). Basic-креды — в userinfo URL; в argv/`-c` пароль не попадает.
+ * Пусто — прокси выключен (env не меняется).
+ */
+export function gitProxyEnv(): Record<string, string> {
+  const config = _config;
+  if (!config?.enabled) return {};
+  const env: Record<string, string> = {};
+  const http = pickProxyField(config, ['httpProxy', 'allProxy', 'url']);
+  const https = pickProxyField(config, ['httpsProxy', 'allProxy', 'url']);
+  const all = pickProxyField(config, ['allProxy', 'url']);
+  if (http) env.http_proxy = withCredentials(http.url, http.credentials);
+  if (https) env.https_proxy = withCredentials(https.url, https.credentials);
+  if (all) env.all_proxy = withCredentials(all.url, all.credentials);
+  if (config.noProxy.length > 0) env.no_proxy = config.noProxy.join(',');
+  return env;
 }
 
 /**

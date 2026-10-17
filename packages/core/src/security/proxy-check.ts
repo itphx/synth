@@ -15,8 +15,10 @@ import type { Socket } from 'node:net';
 import {
   ProxyConfigError,
   defaultProxyEntry,
+  isSocksProxyProtocol,
   parseProxyUrl,
   redactProxyUrl,
+  type ParsedProxyUrl,
   type ProxyAuthChallenge,
   type ProxyCheckResult,
   type ProxyCredentials,
@@ -52,14 +54,133 @@ function parseAuthChallenge(header: string | undefined): ProxyAuthChallenge {
 }
 
 /**
+ * Минимальный SOCKS5-probe (RFC 1928/1929): greeting → выбор метода →
+ * (user/pass) → CONNECT `probe.invalid:443`. `authChallenge='Basic'` при
+ * выборе метода 0x02 (или отказе аутентификации), иначе `none`.
+ */
+function socks5Probe(
+  parsed: ParsedProxyUrl,
+  credentials: ProxyCredentials | undefined,
+  timeoutMs: number,
+): Promise<ProxyCheckResult> {
+  const started = Date.now();
+  return new Promise<ProxyCheckResult>((resolve) => {
+    let settled = false;
+    let latencyMs = 0;
+    let buffer = Buffer.alloc(0);
+    let state: 'greeting' | 'auth' | 'connect' = 'greeting';
+    const socket = netConnect({ host: parsed.hostname, port: parsed.port });
+
+    const finish = (
+      result: Pick<ProxyCheckResult, 'reachable'> & {
+        latencyMs?: number;
+        authChallenge?: ProxyAuthChallenge;
+        error?: string;
+      },
+    ): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({
+        reachable: result.reachable,
+        latencyMs: result.latencyMs ?? latencyMs,
+        authChallenge: result.authChallenge ?? 'none',
+        ...(result.error ? { error: result.error } : {}),
+      });
+    };
+
+    const sendConnect = (): void => {
+      state = 'connect';
+      const host = Buffer.from('probe.invalid', 'utf8');
+      const packet = Buffer.concat([
+        Buffer.from([0x05, 0x01, 0x00, 0x03, host.length]),
+        host,
+        Buffer.from([0x01, 0xbb]), // 443
+      ]);
+      socket.write(packet);
+    };
+
+    const processBuffer = (): void => {
+      while (buffer.length >= 2) {
+        if (state === 'greeting') {
+          if (buffer.length < 2) return;
+          const method = buffer[1]!;
+          buffer = buffer.subarray(2);
+          if (method === 0x00) {
+            sendConnect();
+            continue;
+          }
+          if (method === 0x02) {
+            if (!credentials) {
+              finish({ reachable: true, authChallenge: 'Basic' });
+              return;
+            }
+            state = 'auth';
+            const user = Buffer.from(credentials.username, 'utf8');
+            const pass = Buffer.from(credentials.password, 'utf8');
+            socket.write(
+              Buffer.concat([
+                Buffer.from([0x01, user.length]),
+                user,
+                Buffer.from([pass.length]),
+                pass,
+              ]),
+            );
+            continue;
+          }
+          // 0xFF — нет приемлемого метода (обычно требуется auth).
+          finish({ reachable: true, authChallenge: 'Basic' });
+          return;
+        }
+        if (state === 'auth') {
+          if (buffer.length < 2) return;
+          const status = buffer[1]!;
+          buffer = buffer.subarray(2);
+          if (status !== 0x00) {
+            finish({ reachable: true, authChallenge: 'Basic' });
+            return;
+          }
+          sendConnect();
+          continue;
+        }
+        // connect: ждём минимум VER/REP/RSV/ATYP.
+        if (buffer.length < 4) return;
+        buffer = buffer.subarray(4);
+        finish({ reachable: true, authChallenge: 'none' });
+        return;
+      }
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once('timeout', () => {
+      if (latencyMs > 0) finish({ reachable: true, authChallenge: 'none' });
+      else finish({ reachable: false, error: `таймаут подключения к SOCKS5 (${timeoutMs} мс)` });
+    });
+    socket.once('error', (err) => finish({ reachable: false, error: err.message }));
+    socket.once('connect', () => {
+      latencyMs = Math.max(0, Date.now() - started);
+      const methods = credentials ? [0x00, 0x02] : [0x00];
+      socket.write(Buffer.from([0x05, methods.length, ...methods]));
+    });
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      processBuffer();
+    });
+    socket.once('close', () => {
+      if (!settled) finish({ reachable: latencyMs > 0, authChallenge: 'none' });
+    });
+  });
+}
+
+/**
  * Проверяет доступность прокси (только коннект к нему).
  *
  * - TCP-connect — базовый критерий `reachable`;
- * - для `http://` дополнительно шлётся `CONNECT probe.invalid:443`: `407`
- *   даёт `authChallenge` (Basic/NTLM/Negotiate), прочий ответ — `none`;
- * - `https://`-прокси: только TCP (TLS-проба — этап D2).
+ * - `http://` — TCP + `CONNECT probe.invalid:443` (`407` → `authChallenge`);
+ * - `https://` — TLS-хендшейк с `proxy.tls` (CA/mTLS), затем CONNECT-проба;
+ * - `socks5://`/`socks5h://` — greeting/methods → user/pass → CONNECT.
  *
- * Секреты в URL не поддерживаются (parseProxyUrl fail-closed), наружу не отдаются.
+ * Секреты в URL поддерживаются для Basic/SOCKS user/pass, наружу не отдаются.
  */
 export async function checkProxyConnectivity(
   options: ProxyCheckOptions = {},
@@ -103,6 +224,9 @@ export async function checkProxyConnectivity(
   }
 
   const timeoutMs = options.timeoutMs ?? config?.connectTimeoutMs ?? 10_000;
+  if (isSocksProxyProtocol(parsed.protocol)) {
+    return socks5Probe(parsed, credentials, timeoutMs);
+  }
   const proxyTls = config?.tls ?? { rejectUnauthorized: true };
   const started = Date.now();
 

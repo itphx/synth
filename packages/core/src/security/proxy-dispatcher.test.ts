@@ -9,6 +9,7 @@ import { resolveProxyConfig, type ResolvedProxyConfig } from '@itphx/synth-share
 import { EgressDispatcher } from './proxy-dispatcher.js';
 import { egressFetch } from './tls.js';
 import { startFakeProxy, startFakeTarget, type FakeProxy, type FakeTarget } from '../test-helpers/fake-proxy.js';
+import { startFakeSocks5Proxy } from '../test-helpers/fake-socks5-proxy.js';
 
 const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
 const PROXY_CERT = readFileSync(join(FIX_DIR, 'tls-test-proxy.pem'), 'utf-8');
@@ -383,6 +384,119 @@ describe('EgressDispatcher (ADR-099 D1)', () => {
     }
     expect(error).toBeDefined();
     expect(target.requests).toBe(1); // только успешный запрос с сертом
+  });
+
+  it('SOCKS5 no-auth: запрос идёт через SOCKS (CONNECT → target)', async () => {
+    const socks = await startFakeSocks5Proxy();
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => socks.close());
+    const dispatcher = dispatcherFor({ proxyUrl: socks.url });
+    cleanups.push(() => dispatcher.close());
+
+    const via: string[] = [];
+    const res = await egressFetch(`${target.url}/x`, {}, { dispatcher, onVia: (v) => via.push(v) });
+    expect(res.status).toBe(200);
+    expect(via).toEqual(['proxy']);
+    expect(socks.connections).toBe(1);
+    expect(socks.targets).toEqual([`127.0.0.1:${target.port}`]);
+  });
+
+  it('SOCKS5 user/pass: успешная аутентификация', async () => {
+    const socks = await startFakeSocks5Proxy({ auth: { username: 'user', password: 'pass' } });
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => socks.close());
+    const dispatcher = dispatcherFor({
+      proxyUrl: socks.url,
+      auth: { username: 'user', password: 'pass' },
+    });
+    cleanups.push(() => dispatcher.close());
+
+    const res = await egressFetch(`${target.url}/x`, {}, { dispatcher });
+    expect(res.status).toBe(200);
+    expect(socks.authAttempts).toBe(1);
+    expect(socks.targets).toEqual([`127.0.0.1:${target.port}`]);
+  });
+
+  it('SOCKS5: неверный пароль → EGRESS_PROXY_AUTH_FAILED, direct не ушёл', async () => {
+    const socks = await startFakeSocks5Proxy({ auth: { username: 'user', password: 'right' } });
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => socks.close());
+    const dispatcher = dispatcherFor({
+      proxyUrl: socks.url,
+      auth: { username: 'user', password: 'wrong' },
+      fallbackDirect: true,
+    });
+    cleanups.push(() => dispatcher.close());
+
+    let error: unknown;
+    try {
+      await egressFetch(`${target.url}/x`, {}, { dispatcher });
+    } catch (err) {
+      error = err;
+    }
+    expect(errorCode(error)).toBe('EGRESS_PROXY_AUTH_FAILED');
+    expect(target.requests).toBe(0);
+    expect(socks.targets).toEqual([]);
+  });
+
+  it('SOCKS5: прокси требует auth, кред нет → EGRESS_PROXY_AUTH_REQUIRED', async () => {
+    const socks = await startFakeSocks5Proxy({ auth: { username: 'user', password: 'pass' } });
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => socks.close());
+    const dispatcher = dispatcherFor({ proxyUrl: socks.url });
+    cleanups.push(() => dispatcher.close());
+
+    let error: unknown;
+    try {
+      await egressFetch(`${target.url}/x`, {}, { dispatcher });
+    } catch (err) {
+      error = err;
+    }
+    expect(errorCode(error)).toBe('EGRESS_PROXY_AUTH_REQUIRED');
+    expect(target.requests).toBe(0);
+  });
+
+  it('SOCKS5 + no_proxy → direct (SOCKS-сервер не получил соединений)', async () => {
+    const socks = await startFakeSocks5Proxy();
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => socks.close());
+    const dispatcher = dispatcherFor({ proxyUrl: socks.url, noProxy: ['127.0.0.1'] });
+    cleanups.push(() => dispatcher.close());
+
+    const res = await egressFetch(`${target.url}/x`, {}, { dispatcher });
+    expect(res.status).toBe(200);
+    expect(socks.connections).toBe(0);
+    expect(target.requests).toBe(1);
+  });
+
+  it('SOCKS5 + https-цель: CONNECT → TLS (системное доверие)', async () => {
+    const tlsTarget = createServer({ cert: TARGET_CERT, key: TARGET_KEY }, (_req, res) => {
+      res.writeHead(200);
+      res.end('socks-tls-ok');
+    });
+    await new Promise<void>((resolve) => tlsTarget.listen(0, '127.0.0.1', () => resolve()));
+    const targetPort = (tlsTarget.address() as AddressInfo).port;
+    cleanups.push(() => new Promise<void>((resolve) => tlsTarget.close(() => resolve())));
+
+    const socks = await startFakeSocks5Proxy();
+    cleanups.push(() => socks.close());
+    const dispatcher = dispatcherFor({ proxyUrl: socks.url });
+    cleanups.push(() => dispatcher.close());
+
+    // Ограничение undici Socks5ProxyAgent: TLS к цели — системное доверие
+    // (requestTls/security.tls не пробрасываются) → для self-signed отключаем
+    // проверку только на время теста.
+    const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+    try {
+      const res = await egressFetch(`https://localhost:${targetPort}/x`, {}, { dispatcher });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('socks-tls-ok');
+      expect(socks.targets).toEqual([`localhost:${targetPort}`]);
+    } finally {
+      if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+    }
   });
 
   it('407 от прокси → запрос не проходит (нет тихого direct)', async () => {

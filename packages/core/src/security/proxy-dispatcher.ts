@@ -14,9 +14,10 @@
  * Модуль тянет `undici` статически, поэтому `security/tls.ts` импортирует его
  * **динамически** — при конфигурации без прокси/доверия пакет не грузится.
  */
-import { Agent, Dispatcher, ProxyAgent } from 'undici';
+import { Agent, Dispatcher, ProxyAgent, Socks5ProxyAgent } from 'undici';
 import {
   NoProxyMatcher,
+  isSocksProxyProtocol,
   proxyEntryFor,
   redactProxyUrl,
   type ProxyCredentials,
@@ -59,6 +60,21 @@ function isProxyAuthFailure(error: unknown): boolean {
   return /Proxy Authentication Required \(407\)|Proxy response \(407\)/i.test(reason);
 }
 
+/** `true`, если ошибка — отказ SOCKS5-аутентификации (RFC 1929/0xFF). */
+function isSocksAuthFailure(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current; depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string' && code.includes('SOCKS5_AUTH')) return true;
+    const message = current instanceof Error ? current.message : String(current);
+    if (/no acceptable authentication|authentication failed|SOCKS5 authentication/i.test(message)) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /** TLS-опции соединения (совместимы с `undici` `connect`/`requestTls`). */
 export interface EgressDispatcherTls {
   ca?: string;
@@ -86,7 +102,7 @@ export class EgressDispatcher extends Dispatcher {
   readonly #proxy: ResolvedProxyConfig;
   readonly #matcher: NoProxyMatcher;
   readonly #direct: Agent;
-  readonly #proxies = new Map<string, ProxyAgent>();
+  readonly #proxies = new Map<string, Dispatcher>();
   readonly #requestTls: EgressDispatcherTls;
   readonly #warn: (message: string) => void;
 
@@ -158,11 +174,22 @@ export class EgressDispatcher extends Dispatcher {
   }
 
   /** Прокси-агент для пары `origin+proxy` (кэш на время жизни процесса). */
-  #proxyAgent(origin: string | URL, proxyUrl: string, credentials?: ProxyCredentials): ProxyAgent {
+  #proxyAgent(origin: string | URL, proxyUrl: string, credentials?: ProxyCredentials): Dispatcher {
     const authKey = credentials ? `${credentials.username}:${credentials.password.length}` : '';
     const key = `${typeof origin === 'string' ? origin : origin.origin}|${proxyUrl}|${authKey}`;
     const cached = this.#proxies.get(key);
     if (cached) return cached;
+
+    // D2b: SOCKS5 — отдельный агент undici (username/password по RFC 1929).
+    if (isSocksProxyProtocol(safeProtocol(proxyUrl))) {
+      const socks = new Socks5ProxyAgent(proxyUrl, {
+        ...(credentials ? { username: credentials.username, password: credentials.password } : {}),
+        connectTimeout: this.#proxy.connectTimeoutMs,
+      });
+      this.#proxies.set(key, socks);
+      return socks;
+    }
+
     const proxyTls: ResolvedProxyTls = this.#proxy.tls ?? { rejectUnauthorized: true };
     const agent = new ProxyAgent({
       uri: proxyUrl,
@@ -197,7 +224,7 @@ export class EgressDispatcher extends Dispatcher {
    * повтор напрямую (только явный opt-in), `via:'fallback'`.
    */
   #dispatchViaProxy(
-    proxy: ProxyAgent,
+    proxy: Dispatcher,
     opts: Dispatcher.DispatchOptions,
     handler: Dispatcher.DispatchHandler,
     reporter: EgressViaReporter | undefined,
@@ -301,8 +328,9 @@ export class EgressDispatcher extends Dispatcher {
     delivery: { style: 'response' | 'error'; controller?: Dispatcher.DispatchController },
   ): boolean {
     const reason = error instanceof Error ? error.message : String(error);
-    // D2a: 407 — auth-ошибка; direct-фоллбек запрещён даже при fallbackDirect.
-    if (isProxyAuthFailure(error)) {
+    // D2a/D2b: 407 (HTTP) или отказ SOCKS5-аутентификации — direct-фоллбек
+    // запрещён даже при fallbackDirect.
+    if (isProxyAuthFailure(error) || isSocksAuthFailure(error)) {
       const authError = new EgressProxyAuthError(
         hasCredentials ? 'EGRESS_PROXY_AUTH_FAILED' : 'EGRESS_PROXY_AUTH_REQUIRED',
         hasCredentials
@@ -354,7 +382,7 @@ export class EgressDispatcher extends Dispatcher {
   }
 
   async #closeAll(kind: 'close' | 'destroy', err?: Error | null): Promise<void> {
-    const targets: Array<Agent | ProxyAgent> = [this.#direct, ...this.#proxies.values()];
+    const targets: Dispatcher[] = [this.#direct, ...this.#proxies.values()];
     this.#proxies.clear();
     await Promise.allSettled(
       targets.map((target) => (kind === 'close' ? target.close() : err ? target.destroy(err) : target.destroy())),
@@ -376,6 +404,15 @@ function failedDispatchController(error: Error): Dispatcher.DispatchController {
     pause() {},
     resume() {},
   };
+}
+
+/** Протокол URL без исключения. */
+function safeProtocol(raw: string): string {
+  try {
+    return new URL(raw).protocol;
+  } catch {
+    return '';
+  }
 }
 
 /** Безопасно строит URL из `origin`+`path` (путь может быть абсолютным). */

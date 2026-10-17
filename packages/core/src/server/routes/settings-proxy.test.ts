@@ -253,16 +253,35 @@ describe('POST /api/v2/settings/proxy/check — только коннект к �
     expect(resolveHost).toHaveBeenCalledTimes(1);
   });
 
+  it('SOCKS5 url в теле → reachable (greeting/CONNECT)', async () => {
+    const { startFakeSocks5Proxy } = await import('../../test-helpers/fake-socks5-proxy.js');
+    const socks = await startFakeSocks5Proxy();
+    try {
+      const app = createApp();
+      const res = await app.request('/api/v2/settings/proxy/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: socks.url }),
+      });
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body.reachable).toBe(true);
+      expect(body.authChallenge).toBe('none');
+      expect(socks.targets).toContain('probe.invalid:443');
+    } finally {
+      await socks.close();
+    }
+  });
+
   it('невалидный url в теле → unreachable с ошибкой (не 500)', async () => {
     const app = createApp();
     const res = await app.request('/api/v2/settings/proxy/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url: 'socks5://proxy:1080' }),
+      body: JSON.stringify({ url: 'ftp://proxy:21' }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.reachable).toBe(false);
-    expect(String(body.error)).toMatch(/SOCKS5/i);
+    expect(String(body.error)).toMatch(/не поддерживается/i);
   });
 });

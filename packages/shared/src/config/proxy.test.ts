@@ -85,8 +85,21 @@ describe('parseProxyUrl (fail-closed)', () => {
     expect(parseProxyUrl('http://proxy.corp:3128/some/path').href).toBe('http://proxy.corp:3128');
   });
 
-  it('SOCKS5 — этап D2 (ошибка)', () => {
-    expect(() => parseProxyUrl('socks5://proxy:1080')).toThrow(ProxyConfigError);
+  it('SOCKS5/socks5h: порт по умолчанию 1080, userinfo отдельно', () => {
+    const plain = parseProxyUrl('socks5://proxy:1080');
+    expect(plain.href).toBe('socks5://proxy:1080');
+    expect(plain.protocol).toBe('socks5:');
+    expect(parseProxyUrl('socks5h://proxy').port).toBe(1080);
+    expect(parseProxyUrl('socks5h://proxy').href).toBe('socks5h://proxy');
+
+    const auth = parseProxyUrl('socks5://user:pass@proxy:1080');
+    expect(auth.href).toBe('socks5://proxy:1080');
+    expect(auth.username).toBe('user');
+    expect(auth.password).toBe('pass');
+  });
+
+  it('схема socks: (без 5) — ошибка', () => {
+    expect(() => parseProxyUrl('socks://proxy:1080')).toThrow(ProxyConfigError);
   });
 
   it('userinfo извлекается отдельно, href — без кред', () => {
@@ -401,5 +414,53 @@ describe('redaction resolved-конфига (D2a)', () => {
     expect(status.url).toBe('http://proxy.corp:3128');
     expect(JSON.stringify(status)).not.toContain('super-secret');
     expect(JSON.stringify(status)).not.toContain('user:');
+  });
+});
+
+describe('SOCKS5-конфиг (D2b)', () => {
+  it('userinfo/auth → username/password для SOCKS5', () => {
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'socks5://user:urlpass@proxy:1080', fromEnv: false } },
+      {},
+    );
+    expect(cfg.url).toBe('socks5://proxy:1080');
+    expect(cfg.credentials?.url).toEqual({ username: 'user', password: 'urlpass' });
+
+    const authCfg = resolveProxyConfig(
+      {
+        proxy: {
+          url: 'socks5h://proxy:1080',
+          auth: { type: 'basic', username: 'user' },
+          fromEnv: false,
+        },
+      },
+      { [PROXY_PASSWORD_ENV]: 'envpass' },
+    );
+    expect(authCfg.credentials?.url).toEqual({ username: 'user', password: 'envpass' });
+  });
+
+  it('proxy.tls вместе с socks5 → ошибка конфигурации', () => {
+    expect(() =>
+      resolveProxyConfig(
+        {
+          proxy: {
+            url: 'socks5://proxy:1080',
+            tls: { caPem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----' },
+            fromEnv: false,
+          },
+        },
+        {},
+      ),
+    ).toThrow(/несовместим с socks5/);
+  });
+
+  it('redaction SOCKS-URL: protocol//host, без userinfo (не "null")', () => {
+    expect(redactProxyUrl('socks5h://user:secret@proxy:1080/path')).toBe('socks5h://proxy:1080');
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'socks5://user:secret@proxy:1080', fromEnv: false } },
+      {},
+    );
+    expect(proxyStatus(cfg).url).toBe('socks5://proxy:1080');
+    expect(JSON.stringify(proxyStatus(cfg))).not.toContain('secret');
   });
 });

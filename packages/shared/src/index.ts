@@ -89,6 +89,7 @@ export {
   ProxyConfigError,
   NoProxyMatcher,
   parseProxyUrl,
+  isSocksProxyProtocol,
   redactProxyUrl,
   resolveProxyConfig,
   resolveProxyTls,

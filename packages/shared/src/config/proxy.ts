@@ -141,13 +141,25 @@ export interface ProxyCheckResult {
 
 /** Разобранный и нормализованный URL прокси (userinfo — отдельно). */
 export interface ParsedProxyUrl {
-  /** Нормализованный origin **без userinfo**: `http://host:port`. */
+  /** Нормализованный origin **без userinfo**: `http://host:port` / `socks5://…`. */
   href: string;
-  protocol: 'http:' | 'https:';
+  /**
+   * `socks5:` / `socks5h:` — один транспорт (SOCKS5). `socks5h` — стандартное
+   * написание «DNS резолвит прокси»; `socks5` — совместимость с libcurl-стилем.
+   * В текущей реализации undici (`Socks5ProxyAgent`) hostname цели уходит в
+   * SOCKS-CONNECT для **обеих** схем, т.е. фактически резолвит прокси; отдельного
+   * локального DNS-резолва клиентом нет.
+   */
+  protocol: 'http:' | 'https:' | 'socks5:' | 'socks5h:';
   hostname: string;
   port: number;
   username?: string;
   password?: string;
+}
+
+/** `true` — SOCKS5-прокси (D2b). */
+export function isSocksProxyProtocol(protocol: string): boolean {
+  return protocol === 'socks5:' || protocol === 'socks5h:';
 }
 
 /** Пустая (не заданная) конфигурация — прокси выключен (поведение не меняется). */
@@ -163,10 +175,14 @@ export function emptyResolvedProxyConfig(): ResolvedProxyConfig {
 }
 
 /**
- * Разбирает URL прокси. Только `http`/`https` (SOCKS5 — D2b).
- * Userinfo (`user:pass@host`) разрешён: креды извлекаются отдельно, `href`
- * всегда без userinfo (безопасен для логов/статуса). `password` без `username`
- * — ошибка; отсутствие пароля при наличии username решает резолвер (env/файл).
+ * Разбирает URL прокси: `http`, `https`, `socks5`, `socks5h` (D2b).
+ * Userinfo (`user:pass@host`) разрешён: креды извлекаются отдельно (для SOCKS5 —
+ * RFC 1929 user/pass), `href` всегда без userinfo (безопасен для логов/статуса).
+ * `password` без `username` — ошибка; отсутствие пароля при наличии username
+ * решает резолвер (env/файл).
+ *
+ * `socks5h://` — hostname цели резолвит прокси; `socks5://` — клиент (поведение
+ * зависит от клиента, undici передаёт hostname в SOCKS CONNECT).
  */
 export function parseProxyUrl(raw: string): ParsedProxyUrl {
   const value = raw.trim();
@@ -177,21 +193,27 @@ export function parseProxyUrl(raw: string): ParsedProxyUrl {
   } catch {
     throw new ProxyConfigError(`proxy: некорректный URL "${redactProxyUrl(value)}"`);
   }
-  if (url.protocol === 'socks5:' || url.protocol === 'socks5h:' || url.protocol === 'socks:') {
+  if (url.protocol === 'socks:') {
     throw new ProxyConfigError(
-      'proxy: SOCKS5 пока не поддерживается (этап D2b) — используйте http:// или https://',
+      'proxy: схема "socks:" не поддерживается — используйте socks5:// или socks5h://',
     );
   }
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+  if (
+    url.protocol !== 'http:' &&
+    url.protocol !== 'https:' &&
+    url.protocol !== 'socks5:' &&
+    url.protocol !== 'socks5h:'
+  ) {
     throw new ProxyConfigError(
-      `proxy: схема "${url.protocol.replace(/:$/, '')}" не поддерживается (только http/https)`,
+      `proxy: схема "${url.protocol.replace(/:$/, '')}" не поддерживается (только http/https/socks5/socks5h)`,
     );
   }
   if (!url.hostname) {
     throw new ProxyConfigError(`proxy: не удалось выделить хост из "${redactProxyUrl(value)}"`);
   }
-  const protocol = url.protocol as 'http:' | 'https:';
-  const port = url.port ? Number(url.port) : protocol === 'https:' ? 443 : 80;
+  const protocol = url.protocol as ParsedProxyUrl['protocol'];
+  const defaultPort = protocol === 'https:' ? 443 : isSocksProxyProtocol(protocol) ? 1080 : 80;
+  const port = url.port ? Number(url.port) : defaultPort;
   const decoded = decodeUserinfo(url, value);
   if (decoded.password !== undefined && decoded.username === undefined) {
     throw new ProxyConfigError('proxy: пароль в URL задан без имени пользователя');
@@ -232,8 +254,8 @@ export function redactProxyUrl(raw: string | undefined): string {
     url.password = '';
     url.search = '';
     url.hash = '';
-    url.pathname = '/';
-    return url.origin;
+    // `URL.origin` для не-special схем (socks5) равен "null" — собираем вручную.
+    return `${url.protocol}//${url.host}`;
   } catch {
     return '';
   }
@@ -502,6 +524,22 @@ export function resolveProxyTls(
   return result;
 }
 
+/** Протокол URL без исключения (для проверок конфигурации). */
+function safeProtocol(raw: string): string {
+  try {
+    return new URL(raw).protocol;
+  } catch {
+    return '';
+  }
+}
+
+/** Явно ли сконфигурирован TLS к прокси (config или env) — для проверки socks5. */
+function isProxyTlsConfigured(cfg: Partial<ProxyConfig>, env: NodeJS.ProcessEnv): boolean {
+  const fromCfg = Object.values(cfg.tls ?? {}).some((value) => value !== undefined && value !== '');
+  if (fromCfg) return true;
+  return Object.values(PROXY_TLS_ENV).some((key) => envValue(env, key) !== undefined);
+}
+
 /**
  * Сливает env и config.yaml для секции `proxy` (ADR-023).
  *
@@ -577,6 +615,15 @@ export function resolveProxyConfig(
   const picked = fields.map(([, value]) => value);
   const urls = picked.map((p) => p.value).filter((value): value is string => value !== undefined);
   const hasAnyUrl = urls.length > 0;
+
+  // D2b: SOCKS5 — только TCP-туннель; TLS к прокси (`proxy.tls`) неприменим.
+  const anySocks = urls.some((value) => isSocksProxyProtocol(safeProtocol(value)));
+  if (anySocks && isProxyTlsConfigured(cfg, env)) {
+    throw new ProxyConfigError(
+      'proxy.tls несовместим с socks5:// (TLS применяется только к http(s)-прокси); ' +
+        'уберите proxy.tls или используйте http(s)-прокси',
+    );
+  }
 
   // Креды: userinfo URL приоритетнее `proxy.auth`; пароль — env/файл (если не в URL).
   const password = makePasswordResolver(env, options.dataDir);
