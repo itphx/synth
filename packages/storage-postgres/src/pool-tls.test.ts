@@ -4,10 +4,14 @@
  * fail-closed без CA и защита от «тихого» DSN.
  */
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { assertNoDsnTlsParams, buildPoolConfig } from './pool.js';
 import { PostgresStorageConfigError } from './errors.js';
 
 const CERT_A = '-----BEGIN CERTIFICATE-----\nQUJB\n-----END CERTIFICATE-----\n';
+const CERT_B = '-----BEGIN CERTIFICATE-----\nQkNC\n-----END CERTIFICATE-----\n';
 const SCHEMA = 'public';
 
 /** Извлекает `ssl` из собранного pg-конфига. */
@@ -83,6 +87,40 @@ describe('buildPoolConfig: sslmode → ssl-опции', () => {
       env: { SYNTH_TLS_CA_PEM: CERT_A },
     });
     expect(ssl).toEqual({ rejectUnauthorized: true, ca: CERT_A });
+  });
+
+  it('ADR-099: runtime per-host профиль выбирается по host БД', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-pg-runtime-'));
+    try {
+      const defaultCert = join(dir, 'default.crt');
+      const defaultKey = join(dir, 'default.key');
+      const dbCert = join(dir, 'db.crt');
+      const dbKey = join(dir, 'db.key');
+      await writeFile(defaultCert, CERT_A, 'utf-8');
+      await writeFile(defaultKey, '-----BEGIN PRIVATE KEY-----\nQUJD\n-----END PRIVATE KEY-----\n', 'utf-8');
+      await writeFile(dbCert, CERT_B, 'utf-8');
+      await writeFile(dbKey, '-----BEGIN PRIVATE KEY-----\nREVG\n-----END PRIVATE KEY-----\n', 'utf-8');
+
+      const runtime = {
+        caPem: CERT_A,
+        defaultClient: { certFile: defaultCert, keyFile: defaultKey },
+        mappings: [{ id: 'db', hosts: ['db.internal'], certFile: dbCert, keyFile: dbKey }],
+      };
+
+      const mapped = sslOf({
+        pool: { host: 'db.internal', database: 'd', sslmode: 'verify-full' },
+        tlsRuntime: runtime,
+      }) as Record<string, unknown>;
+      expect(mapped.cert).toBe(CERT_B);
+
+      const fallback = sslOf({
+        pool: { host: 'other.internal', database: 'd', sslmode: 'verify-full' },
+        tlsRuntime: runtime,
+      }) as Record<string, unknown>;
+      expect(fallback.cert).toBe(CERT_A);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

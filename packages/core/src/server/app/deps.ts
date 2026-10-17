@@ -8,7 +8,7 @@ import type {
   ProviderConfig, ModelConfig, ToolsPolicy, ToolsDisabledConfig,
   WorkspaceOutsideRootPolicy, WebhooksConfig, SummarizationConfig, Session,
 } from '@itphx/synth-shared';
-import { ensureDataDir, parsePrincipalId } from '@itphx/synth-shared';
+import { ensureDataDir, parsePrincipalId, readTlsRuntimeSettings } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -88,6 +88,11 @@ export async function createStandaloneStorage(config: StandaloneConfig): Promise
     env: process.env,
     postgres: config.postgresConfig,
     postgresPassword: config.postgresPassword,
+    ...(config.securityConfig?.tls ? { security: { tls: config.securityConfig.tls } } : {}),
+    ...(() => {
+      const runtime = readTlsRuntimeSettings(config.dataDir);
+      return runtime ? { tlsRuntime: runtime } : {};
+    })(),
     degradedMode: config.degradedMode ?? 'fallback-file',
     fallbackDir: config.fallbackDir ?? join(config.dataDir, 'fallback'),
     dedupStore: config.eventsConfig?.dedupStore,

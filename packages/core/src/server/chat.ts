@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SynthConfig, InstructionsConfig } from '@itphx/synth-shared';
-import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword } from '@itphx/synth-shared';
+import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, readTlsRuntimeSettings } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -39,6 +39,11 @@ export async function runSingleChat(options: SingleChatOptions): Promise<void> {
       env: process.env,
       postgres: resolvePostgresConfig(options.config, process.env),
       postgresPassword: resolvePostgresPassword({ dataDir: options.dataDir }, process.env),
+      ...(options.config.security?.tls ? { security: { tls: options.config.security.tls } } : {}),
+      ...(() => {
+        const runtime = readTlsRuntimeSettings(options.dataDir);
+        return runtime ? { tlsRuntime: runtime } : {};
+      })(),
       bundlesPath: options.config.commands?.bundlesPath,
     },
   );

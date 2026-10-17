@@ -268,6 +268,8 @@ export type {
 // ADR-099: единый механизм доверия TLS/CA исходящих соединений.
 export {
   buildTlsTrust,
+  buildTlsTrustProfiles,
+  getTlsStatus,
   applyGlobalTlsTrust,
   initTlsTrust,
   configureEgressProxy,
@@ -282,7 +284,20 @@ export {
   TlsDependencyUnavailableError,
   _resetTlsTrustForTests,
 } from './security/tls.js';
-export type { TlsTrust, FetchLike as EgressFetchLike, LoadUndici, EgressFetchDeps, ApplyTlsTrustDeps, ApplyEgressProxyDeps } from './security/tls.js';
+export type {
+  TlsTrust,
+  TlsProfileTrust,
+  TlsStatus,
+  TlsStatusCa,
+  TlsStatusClient,
+  TlsStatusMapping,
+  TlsStatusOptions,
+  FetchLike as EgressFetchLike,
+  LoadUndici,
+  EgressFetchDeps,
+  ApplyTlsTrustDeps,
+  ApplyEgressProxyDeps,
+} from './security/tls.js';
 // ADR-099 (D1): HTTP/HTTPS-прокси egress-слоя (dispatcher грузится динамически
 // из `security/tls.ts`, чтобы без прокси/доверия `undici` не тянулся).
 export { checkProxyConnectivity } from './security/proxy-check.js';

@@ -20,6 +20,7 @@ import {
   findDsnTlsParams,
   type PostgresSslMode,
   type SecurityTlsConfig,
+  type TlsRuntimeSettings,
 } from '@itphx/synth-shared';
 import {
   PostgresConnectionError,
@@ -106,7 +107,12 @@ export interface PostgresConnectionConfig {
    * `sslmode=verify-full` (`buildPostgresSslOptions`).
    */
   tls?: SecurityTlsConfig;
-  /** Env для резолва `security.tls` (ADR-023: env > config). */
+  /**
+   * ADR-099: runtime bootstrap-настройки TLS (`{dataDir}/security-tls.json`) —
+   * per-host mTLS-профили (выбор по `host` БД) и CA/rejectUnauthorized.
+   */
+  tlsRuntime?: TlsRuntimeSettings;
+  /** Env для резолва `security.tls` (ADR-023: env > runtime > config). */
   env?: NodeJS.ProcessEnv;
   /** Пароль БД отдельным полем (env/файл) — приоритетнее `pool.password`. */
   password?: string;
@@ -211,6 +217,7 @@ export function buildPoolConfig(config: PostgresConnectionConfig, schema: string
         host: pool.host,
         config: config.tls ? { security: { tls: config.tls } } : undefined,
         env: config.env,
+        runtime: config.tlsRuntime,
       }).ssl;
     } catch (err) {
       throw new PostgresStorageConfigError(err instanceof Error ? err.message : String(err));

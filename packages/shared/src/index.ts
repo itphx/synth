@@ -77,8 +77,48 @@ export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorks
 export type { StorageBackend, ResolvedPostgresConfig } from './config/index.js';
 export { applyEnvOverrides, envOverrideName, toSnakeCase, parseEnvValue, ENV_OVERRIDES } from './config/index.js';
 // ADR-099: резолверы доверия TLS/CA (`security.tls`).
-export { resolveTlsConfig, resolveTlsTrust, isPemContent, TLS_ENV } from './config/index.js';
-export type { ResolvedTlsConfig, ResolvedTlsTrust, TlsConfigSource } from './config/index.js';
+export {
+  resolveTlsConfig,
+  resolveTlsTrust,
+  resolveTlsProfiles,
+  selectTlsClientProfile,
+  matchTlsHostPattern,
+  normalizeTlsHost,
+  isPemContent,
+  TLS_ENV,
+} from './config/index.js';
+export type {
+  ResolvedTlsConfig,
+  ResolvedTlsTrust,
+  ResolvedTlsProfiles,
+  TlsClientProfile,
+  TlsClientMaterial,
+  TlsMappingSettings,
+  TlsRuntimeSettings,
+  TlsSource,
+  TlsConfigSource,
+} from './config/index.js';
+// ADR-099: bootstrap-хранилище runtime-настроек TLS ({dataDir}/security-tls.json).
+export {
+  TLS_RUNTIME_FILENAME,
+  TLS_SECRETS_SUBDIR,
+  TLS_MATERIAL_NAMES,
+  tlsRuntimePath,
+  tlsSecretsDir,
+  tlsSecretFilePath,
+  tlsMappingFileName,
+  readTlsRuntimeSettings,
+  writeTlsRuntimeSettings,
+  writeTlsSecretFile,
+  readTlsSecretFile,
+  validateTlsRuntimeSettings,
+  isValidHostPattern,
+  assertCertMatchesKey,
+  certificateSubjectFromPem,
+  certificateSubjectFromFile,
+  certificateSubjectsFromPem,
+  countCertificates,
+} from './config/index.js';
 // ADR-099 (D1): HTTP/HTTPS-прокси единого egress-слоя.
 export {
   PROXY_ENV,

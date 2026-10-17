@@ -20,17 +20,27 @@
  * Заданная конфигурация без пакета `undici` — понятная ошибка (в духе ADR-078),
  * а не тихий фоллбэк на недоверенный транспорт.
  */
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
+  certificateSubjectFromFile,
+  certificateSubjectsFromPem,
+  countCertificates,
+  emptyResolvedProxyConfig,
+  readTlsRuntimeSettings,
   resolveProxyConfig,
   resolveTlsConfig,
+  resolveTlsProfiles,
   resolveTlsTrust,
   type ProxyConfig,
   type ProxyConfigSource,
   type ResolvedProxyConfig,
   type ResolvedTlsConfig,
   type SecurityTlsConfig,
+  type TlsClientProfile,
   type TlsConfigSource,
+  type TlsRuntimeSettings,
+  type TlsSource,
 } from '@itphx/synth-shared';
 import {
   getEgressProxyConfig,
@@ -54,6 +64,25 @@ export interface TlsTrust {
   key?: string;
   /** Проверять сертификат сервера. */
   rejectUnauthorized: boolean;
+  /**
+   * ADR-099: per-host клиентские профили (mTLS). Первый совпавший по host
+   * используется для запроса; нет совпадений — основной `ca/cert/key` (default).
+   * Пусто/не задано — прежнее поведение (один профиль).
+   */
+  profiles?: TlsProfileTrust[];
+}
+
+/** Прочитанный клиентский профиль (PEM уже загружен; наружу не отдаётся). */
+export interface TlsProfileTrust {
+  id: string;
+  hosts: string[];
+  label?: string;
+  source: TlsSource;
+  readOnly: boolean;
+  ca?: string;
+  cert?: string;
+  key?: string;
+  rejectUnauthorized: boolean;
 }
 
 /** Ленивая загрузка undici (инъекция — тесты на отсутствие зависимости). */
@@ -65,6 +94,11 @@ export interface ApplyTlsTrustDeps {
   proxy?: ResolvedProxyConfig | null;
   /** ADR-099 (D2a): каталог данных — для файла `{dataDir}/secrets/proxy-password`. */
   dataDir?: string;
+  /**
+   * ADR-099: bootstrap-настройки TLS (`{dataDir}/security-tls.json`). Не задано —
+   * читаются из `dataDir` (если он передан); `null` — явно не читать (тесты).
+   */
+  tlsRuntime?: TlsRuntimeSettings | null;
 }
 
 /** Опции применения runtime-override прокси при старте (`applyEgressProxyConfig`). */
@@ -97,7 +131,10 @@ export class TlsDependencyUnavailableError extends Error {
 export function isTlsTrustConfigured(trust?: TlsTrust): boolean {
   const t = trust ?? _trust;
   if (!t) return false;
-  return !!(t.ca || t.cert || t.key) || t.rejectUnauthorized === false;
+  if (!!(t.ca || t.cert || t.key) || t.rejectUnauthorized === false) return true;
+  return (t.profiles ?? []).some(
+    (profile) => !!(profile.ca || profile.cert || profile.key) || profile.rejectUnauthorized === false,
+  );
 }
 
 /**
@@ -110,8 +147,22 @@ export function isTlsTrustConfigured(trust?: TlsTrust): boolean {
 export function buildTlsTrust(
   config: TlsConfigSource | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  runtime?: TlsRuntimeSettings,
 ): TlsTrust {
-  return resolveTrustBundle(config, env).trust;
+  return resolveTrustBundle(config, env, runtime).trust;
+}
+
+/**
+ * ADR-099: доверие + per-host клиентские профили (mTLS) — для dispatcher'а и
+ * PostgreSQL. Профили читаются из runtime (bootstrap) и материалов; default —
+ * из env > runtime > config (поле-уровнево).
+ */
+export function buildTlsTrustProfiles(
+  config: TlsConfigSource | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  runtime?: TlsRuntimeSettings,
+): TlsTrust {
+  return resolveTrustBundle(config, env, runtime).trust;
 }
 
 /**
@@ -145,17 +196,28 @@ export async function applyGlobalTlsTrust(
     );
   }
 
-  if (proxy?.enabled) {
-    // Прокси — единый dispatcher egress-слоя (TLS к цели + маршрут).
+  const profiles = trust.profiles ?? [];
+  if (proxy?.enabled || profiles.length > 0) {
+    // Прокси и/или per-host профили — единый dispatcher egress-слоя.
     const { EgressDispatcher } = await import('./proxy-dispatcher.js');
     _dispatcher = new EgressDispatcher({
-      proxy,
+      proxy: proxy ?? emptyResolvedProxyConfig(),
       tls: {
         ca: trust.ca,
         cert: trust.cert,
         key: trust.key,
         rejectUnauthorized: trust.rejectUnauthorized,
       },
+      tlsProfiles: profiles.map((profile) => ({
+        id: profile.id,
+        hosts: profile.hosts,
+        tls: {
+          ca: profile.ca,
+          cert: profile.cert,
+          key: profile.key,
+          rejectUnauthorized: profile.rejectUnauthorized,
+        },
+      })),
     });
   } else {
     _dispatcher = new undici.Agent({
@@ -181,13 +243,24 @@ export async function initTlsTrust(
   env: NodeJS.ProcessEnv = process.env,
   deps: ApplyTlsTrustDeps = {},
 ): Promise<TlsTrust> {
-  const bundle = resolveTrustBundle(config, env);
+  // ADR-099: bootstrap-настройки читаются **до** подключения к PostgreSQL/DNS —
+  // настройки TLS нужны, чтобы это подключение вообще стало возможным. Явный
+  // `runtime` (в т.ч. `null`) приоритетнее чтения файла.
+  const runtime =
+    deps.tlsRuntime !== undefined
+      ? deps.tlsRuntime ?? undefined
+      : deps.dataDir
+        ? readTlsRuntimeSettings(deps.dataDir)
+        : undefined;
+  const bundle = resolveTrustBundle(config, env, runtime);
   // ADR-099 (D1): прокси резолвится здесь же (env > config > defaults) и
   // применяется к исходящим запросам тем же dispatcher'ом. Fail-closed:
   // битый URL/схема/userinfo останавливают старт (как caFile → не-PEM).
   const proxy = resolveProxyConfig(config, env, { dataDir: deps.dataDir });
   setEgressProxyConfig(proxy);
   _resolved = bundle.resolved;
+  _runtime = runtime ?? null;
+  _appliedFingerprint = fingerprintTrust(bundle.trust);
   await applyGlobalTlsTrust(bundle.trust, { ...deps, proxy });
   return bundle.trust;
 }
@@ -287,10 +360,142 @@ export { getEgressProxyStatus } from './proxy-state.js';
 export type { EgressProxyStatus, ResolvedProxyConfig, ProxyConfigSource } from '@itphx/synth-shared';
 export type { EgressVia } from './proxy-state.js';
 
+/**
+ * ADR-099: read-only статус доверия TLS для будущего API/UI.
+ * Секреты (PEM/ключи) **не отдаются**: только источники, subject'ы, пути и флаги.
+ */
+export interface TlsStatusCa {
+  source: TlsSource;
+  /** Количество сертификатов в CA-бандле. */
+  count: number;
+  /** Subject'ы сертификатов CA (без PEM). */
+  subjects: string[];
+}
+
+export interface TlsStatusClient {
+  source: TlsSource;
+  certSubject?: string;
+  hasKey: boolean;
+  /** `true` — источник env/config (UI только показывает). */
+  readOnly: boolean;
+}
+
+export interface TlsStatusMapping {
+  id: string;
+  hosts: string[];
+  label?: string;
+  certSubject?: string;
+  source: TlsSource;
+  readOnly: boolean;
+}
+
+export interface TlsStatus {
+  ca: TlsStatusCa;
+  rejectUnauthorized: boolean;
+  defaultClient?: TlsStatusClient;
+  mappings: TlsStatusMapping[];
+  /** Что пришло из config/env/runtime — для read-only отображения. */
+  params: {
+    ca?: { source: TlsSource; caFile?: string; hasPem: boolean };
+    client?: { source: TlsSource; certFile?: string; keyFile?: string; readOnly: boolean };
+  };
+  running?: { applied: boolean; profileIds: string[] };
+  saved?: { bootstrap: boolean; profileIds: string[] };
+  /** Изменения сохранены, но вступят в силу при следующем старте. */
+  restartRequired?: boolean;
+}
+
+export interface TlsStatusOptions {
+  config?: TlsConfigSource;
+  env?: NodeJS.ProcessEnv;
+  /** Bootstrap-настройки; `undefined` — прочитать из `dataDir`/применённые. */
+  runtime?: TlsRuntimeSettings | null;
+  dataDir?: string;
+}
+
+/**
+ * Собирает статус: эффективные источники (env > runtime > config), клиентские
+ * профили (per-host) и признак «нужен рестарт». Только метаданные.
+ */
+export function getTlsStatus(options: TlsStatusOptions = {}): TlsStatus {
+  const env = options.env ?? process.env;
+  const runtime =
+    options.runtime !== undefined
+      ? options.runtime ?? undefined
+      : options.dataDir
+        ? readTlsRuntimeSettings(options.dataDir)
+        : _runtime ?? undefined;
+
+  const profiles = resolveTlsProfiles(options.config, env, runtime);
+  const trust = resolveTrustBundle(options.config, env, runtime).trust;
+
+  const caPem = trust.ca;
+  const status: TlsStatus = {
+    ca: {
+      source: profiles.sources.ca,
+      count: countCertificates(caPem),
+      subjects: certificateSubjectsFromPem(caPem),
+    },
+    rejectUnauthorized: profiles.rejectUnauthorized,
+    mappings: profiles.mappings.map((mapping) => ({
+      id: mapping.id,
+      hosts: [...mapping.hosts],
+      ...(mapping.label !== undefined ? { label: mapping.label } : {}),
+      ...(certificateSubjectFromFile(mapping.certFile) !== undefined
+        ? { certSubject: certificateSubjectFromFile(mapping.certFile) }
+        : {}),
+      source: 'runtime',
+      readOnly: false,
+    })),
+    params: {},
+  };
+
+  if (profiles.default !== undefined) {
+    const profile = profiles.default;
+    status.defaultClient = {
+      source: profile.source,
+      ...(certificateSubjectFromFile(profile.certFile) !== undefined
+        ? { certSubject: certificateSubjectFromFile(profile.certFile) }
+        : {}),
+      hasKey: profile.keyFile !== '',
+      readOnly: profile.readOnly,
+    };
+    status.params.client = {
+      source: profile.source,
+      certFile: profile.certFile,
+      keyFile: profile.keyFile,
+      readOnly: profile.readOnly,
+    };
+  }
+  if (profiles.sources.ca !== 'none') {
+    status.params.ca = {
+      source: profiles.sources.ca,
+      ...(profiles.caFile !== undefined ? { caFile: profiles.caFile } : {}),
+      hasPem: profiles.caPem !== undefined,
+    };
+  }
+
+  if (_trust !== null) {
+    status.running = {
+      applied: true,
+      profileIds: ['default', ...(_trust.profiles ?? []).map((profile) => profile.id)],
+    };
+    status.saved = {
+      bootstrap: runtime !== undefined,
+      profileIds: ['default', ...profiles.mappings.map((mapping) => mapping.id)],
+    };
+    status.restartRequired = _appliedFingerprint !== fingerprintTrust(trust);
+  }
+
+  return status;
+}
+
 /** Сброс модульного состояния (изоляция тестов). Не для продакшн-кода. */
 export function _resetTlsTrustForTests(): void {
   _resolved = null;
   _trust = null;
+  _runtime = null;
+  _appliedFingerprint = null;
   _dispatcher = null;
   resetEgressProxyState();
 }
@@ -299,6 +504,8 @@ export function _resetTlsTrustForTests(): void {
 
 let _resolved: ResolvedTlsConfig | null = null;
 let _trust: TlsTrust | null = null;
+let _runtime: TlsRuntimeSettings | null = null;
+let _appliedFingerprint: string | null = null;
 let _dispatcher: unknown | null = null;
 
 interface TrustBundle {
@@ -306,10 +513,16 @@ interface TrustBundle {
   trust: TlsTrust;
 }
 
-/** Один проход: эффективный конфиг + прочитанное доверие (CA/cert/key). */
-function resolveTrustBundle(config: TlsConfigSource | undefined, env: NodeJS.ProcessEnv): TrustBundle {
-  const resolved = resolveTlsConfig(config, env);
-  const trustCfg = resolveTlsTrust(config, env);
+/** Один проход: эффективный конфиг + прочитанное доверие (CA/cert/key + профили). */
+function resolveTrustBundle(
+  config: TlsConfigSource | undefined,
+  env: NodeJS.ProcessEnv,
+  runtime?: TlsRuntimeSettings,
+): TrustBundle {
+  const resolved = resolveTlsConfig(config, env, runtime);
+  const trustCfg = resolveTlsTrust(config, env, runtime);
+  const profiles = resolveTlsProfiles(config, env, runtime);
+
   const trust: TlsTrust = { rejectUnauthorized: trustCfg.rejectUnauthorized };
   if (trustCfg.ca !== undefined) trust.ca = trustCfg.ca;
   if (trustCfg.certFile !== undefined) {
@@ -318,7 +531,53 @@ function resolveTrustBundle(config: TlsConfigSource | undefined, env: NodeJS.Pro
   if (trustCfg.keyFile !== undefined) {
     trust.key = readPemFile(trustCfg.keyFile, 'keyFile', /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/);
   }
+
+  if (profiles.mappings.length > 0) {
+    trust.profiles = profiles.mappings.map((profile) => loadProfile(profile, trustCfg.ca, trustCfg.rejectUnauthorized));
+  }
   return { resolved, trust };
+}
+
+/** Читает PEM-материалы клиентского профиля (fail-closed). */
+function loadProfile(
+  profile: TlsClientProfile,
+  ca: string | undefined,
+  rejectUnauthorized: boolean,
+): TlsProfileTrust {
+  const loaded: TlsProfileTrust = {
+    id: profile.id,
+    hosts: [...profile.hosts],
+    source: profile.source,
+    readOnly: profile.readOnly,
+    cert: readPemFile(profile.certFile, `mappings.${profile.id}.certFile`, /-----BEGIN CERTIFICATE-----/),
+    key: readPemFile(profile.keyFile, `mappings.${profile.id}.keyFile`, /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/),
+    rejectUnauthorized,
+  };
+  if (profile.label !== undefined) loaded.label = profile.label;
+  if (ca !== undefined) loaded.ca = ca;
+  return loaded;
+}
+
+/** Отпечаток применённого/сохранённого доверия (без раскрытия PEM). */
+function fingerprintTrust(trust: TlsTrust): string {
+  const digest = (value: string | undefined): string | null =>
+    value === undefined ? null : createHash('sha256').update(value).digest('hex');
+  return JSON.stringify({
+    ca: digest(trust.ca),
+    cert: digest(trust.cert),
+    key: digest(trust.key),
+    rejectUnauthorized: trust.rejectUnauthorized,
+    profiles: (trust.profiles ?? [])
+      .map((profile) => ({
+        id: profile.id,
+        hosts: profile.hosts.map((host) => host.toLowerCase()),
+        ca: digest(profile.ca),
+        cert: digest(profile.cert),
+        key: digest(profile.key),
+        rejectUnauthorized: profile.rejectUnauthorized,
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  });
 }
 
 /** Читает PEM-файл; нет/не читается/не PEM → внятная ошибка (fail-closed). */

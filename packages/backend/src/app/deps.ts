@@ -11,6 +11,7 @@ import type {
 import {
   ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
   resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir,
+  readTlsRuntimeSettings,
 } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus, QueueProcessorManager,
@@ -55,10 +56,13 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
   // запроса (сборка хранилища/PG, дискавери OIDC, сид провайдеров из env ниже).
   // Вызывается в начале `createBackendApp` (env-оверрайды уже выставлены).
   // Fail-closed: битый/отсутствующий CA останавливает старт (не тихий фоллбэк).
+  // ADR-099: bootstrap runtime-настройки TLS читаются до подключения к PG и
+  // передаются и в initTlsTrust, и драйверу (per-host mTLS по host БД).
+  const tlsRuntime = readTlsRuntimeSettings(config.dataDir);
   await initTlsTrust(
     { security: config.synth.security, proxy: config.synth.proxy },
     process.env,
-    { dataDir: config.dataDir },
+    { dataDir: config.dataDir, tlsRuntime: tlsRuntime ?? null },
   );
   const kind = resolveStorageBackend(config.synth, process.env);
   if (kind === 'memory') {
@@ -70,6 +74,8 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
     env: process.env,
     postgres: resolvePostgresConfig(config.synth, process.env),
     postgresPassword: resolvePostgresPassword({ dataDir: config.dataDir }, process.env),
+    ...(config.synth.security?.tls ? { security: { tls: config.synth.security.tls } } : {}),
+    ...(tlsRuntime ? { tlsRuntime } : {}),
     degradedMode: resolveDegradedMode(config.synth),
     fallbackDir: resolveStorageFallbackDir(config.synth, process.env),
     dedupStore: config.synth.events.dedupStore,

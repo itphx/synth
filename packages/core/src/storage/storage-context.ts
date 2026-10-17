@@ -12,9 +12,10 @@
  */
 
 import { join } from 'node:path';
-import type { AgentDefinition, ModelConfig, PostgresSslMode, PostgresStorageConfig, ProviderConfig, SecurityTlsConfig, SynthConfig } from '@itphx/synth-shared';
+import type { AgentDefinition, ModelConfig, PostgresSslMode, PostgresStorageConfig, ProviderConfig, SecurityTlsConfig, SynthConfig, TlsRuntimeSettings } from '@itphx/synth-shared';
 import {
   normalizePostgresSslMode,
+  readTlsRuntimeSettings,
   resolveDegradedMode,
   resolvePostgresConfig,
   resolvePostgresPassword,
@@ -324,6 +325,12 @@ export interface StorageContextConfig {
    * `storage.postgres.sslmode=verify-full` (прокидывается драйверу БД).
    */
   security?: { tls?: SecurityTlsConfig };
+  /**
+   * ADR-099: runtime bootstrap-настройки TLS (`{dataDir}/security-tls.json`) —
+   * per-host клиентские профили для БД и исходящих запросов. Читаются до
+   * подключения к PostgreSQL.
+   */
+  tlsRuntime?: TlsRuntimeSettings;
   /** PROP-032: пароль PostgreSQL (env/файл, не config.yaml). */
   postgresPassword?: string;
   /** PROP-032: режим работы со схемой БД при сборке (см. `PostgresSchemaMode`). */
@@ -402,6 +409,8 @@ export interface PostgresStorageDriverConfig {
    * Единый источник доверия (тот же, что для исходящих https-запросов).
    */
   tls?: SecurityTlsConfig;
+  /** ADR-099: runtime bootstrap-настройки TLS (per-host mTLS, CA/reject). */
+  tlsRuntime?: TlsRuntimeSettings;
   /** Env для резолва `security.tls` (ADR-023). */
   env?: NodeJS.ProcessEnv;
   /** Схема БД (namespace таблиц). */
@@ -621,6 +630,7 @@ export async function createPostgresStorage(config: StorageContextConfig): Promi
     ...(pg?.schema ? { schema: pg.schema } : {}),
     // ADR-099: единый источник доверия TLS (CA/mTLS) — прокидка в драйвер.
     ...(config.security?.tls ? { tls: config.security.tls } : {}),
+    ...(config.tlsRuntime ? { tlsRuntime: config.tlsRuntime } : {}),
     ...(config.env ? { env: config.env } : {}),
     ...(config.postgresPassword ? { password: config.postgresPassword } : {}),
     ...(config.postgresSchemaMode ? { schemaMode: config.postgresSchemaMode } : {}),
@@ -831,6 +841,12 @@ export async function createStorageContextAsync(
   kind: StorageBackendKind,
   config: StorageContextConfig,
 ): Promise<StorageContext> {
+  // ADR-099: bootstrap-настройки TLS читаются **до** подключения к PostgreSQL
+  // (настройки доверия нужны самому подключению). Явно переданные — приоритетнее.
+  if (kind === 'postgres' && config.tlsRuntime === undefined) {
+    const runtime = readTlsRuntimeSettings(config.dataDir);
+    if (runtime) config = { ...config, tlsRuntime: runtime };
+  }
   if (kind === 'postgres' && config.postgresSchemaMode === 'skip') {
     // Диагностика (`synth doctor`, управление миграциями): ошибку не маскируем.
     return createPostgresStorage(config);
@@ -904,6 +920,11 @@ export async function buildStorageContext(
     postgresPassword: resolvePostgresPassword({ dataDir: opts.dataDir }, env),
     // ADR-099: единый источник доверия TLS (CA/mTLS) для `sslmode=verify-full`.
     ...(opts.config.security?.tls ? { security: { tls: opts.config.security.tls } } : {}),
+    // ADR-099: bootstrap-настройки читаются до подключения к PostgreSQL.
+    ...(() => {
+      const runtime = readTlsRuntimeSettings(opts.dataDir);
+      return runtime ? { tlsRuntime: runtime } : {};
+    })(),
     ...(opts.postgresSchemaMode ? { postgresSchemaMode: opts.postgresSchemaMode } : {}),
     degradedMode: resolveDegradedMode(opts.config),
     fallbackDir: resolveStorageFallbackDir(opts.config, env, opts.home ?? null),

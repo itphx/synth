@@ -5,4 +5,5 @@ export * from './env-overrides.js';
 export * from './merge.js';
 export * from './resolve.js';
 export * from './tls.js';
+export * from './tls-runtime.js';
 export * from './proxy.js';

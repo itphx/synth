@@ -18,7 +18,54 @@ export interface TlsConfigSource {
   security?: { tls?: SecurityTlsConfig } | undefined;
 }
 
-/** Эффективная конфигурация `security.tls` (env > config.yaml). */
+/** Источник эффективного значения параметра доверия TLS. */
+export type TlsSource = 'env' | 'runtime' | 'config' | 'none';
+
+/** Клиентский материал (mTLS): сертификат + ключ — только парой. */
+export interface TlsClientMaterial {
+  certFile?: string;
+  keyFile?: string;
+}
+
+/**
+ * Runtime-настройки bootstrap-хранилища `{dataDir}/security-tls.json`.
+ * Читаются до подключения к PostgreSQL; редактируются из UI (будущий этап).
+ * В JSON — пути к PEM-файлам (кроме публичного `caPem`).
+ */
+export interface TlsRuntimeSettings {
+  caFile?: string;
+  caPem?: string;
+  rejectUnauthorized?: boolean;
+  /** Глобальный клиентский профиль (mTLS) по умолчанию. */
+  defaultClient?: TlsClientMaterial;
+  /** Per-host клиентские профили (порядок = приоритет первого совпадения). */
+  mappings?: TlsMappingSettings[];
+}
+
+/** Per-host маппинг клиентского сертификата (runtime). */
+export interface TlsMappingSettings {
+  id: string;
+  hosts: string[];
+  certFile: string;
+  keyFile: string;
+  label?: string;
+}
+
+/** Эффективный клиентский TLS-профиль (пути; чтение PEM — на стороне core/драйвера). */
+export interface TlsClientProfile {
+  /** `default` либо id маппинга. */
+  id: string;
+  /** Host-паттерны (`[]` для профиля по умолчанию). */
+  hosts: string[];
+  label?: string;
+  certFile: string;
+  keyFile: string;
+  source: TlsSource;
+  /** `true` — источник env/config (UI только показывает, не редактирует). */
+  readOnly: boolean;
+}
+
+/** Эффективная конфигурация `security.tls` (env > runtime > config.yaml). */
 export interface ResolvedTlsConfig {
   /** Путь к PEM-файлу доверенного CA (взаимоисключающ с `caPem`). */
   caFile?: string;
@@ -45,6 +92,22 @@ export interface ResolvedTlsTrust {
   rejectUnauthorized: boolean;
 }
 
+/** Эффективные клиентские профили + источники (ADR-099, per-host mTLS). */
+export interface ResolvedTlsProfiles {
+  /** Глобальный профиль по умолчанию (env/runtime/config). */
+  default?: TlsClientProfile;
+  /** Per-host маппинги (runtime; порядок сохраняется). */
+  mappings: TlsClientProfile[];
+  caFile?: string;
+  caPem?: string;
+  rejectUnauthorized: boolean;
+  sources: {
+    ca: TlsSource;
+    rejectUnauthorized: TlsSource;
+    defaultClient: TlsSource;
+  };
+}
+
 /** Env-имена секции `security.tls` (ADR-023). */
 export const TLS_ENV = {
   caFile: 'SYNTH_TLS_CA_FILE',
@@ -63,42 +126,182 @@ export function isPemContent(value: string): boolean {
 }
 
 /**
- * Сливает env и config.yaml для `security.tls` (ADR-023). Пустая строка env —
- * «не задано» (как прочие env-резолверы). `caFile` и `caPem` взаимоисключающи:
- * после слияния оба непусты → ошибка конфигурации (fail-closed, не тихий выбор).
+ * Сливает env, runtime (bootstrap) и config.yaml для `security.tls`
+ * (ADR-023): приоритет **поле-уровнево** `env > runtime > config`. Пустая
+ * строка env — «не задано». `caFile` и `caPem` взаимоисключащи: после слияния
+ * оба непусты (в т.ч. из разных источников) → ошибка конфигурации (fail-closed).
  */
 export function resolveTlsConfig(
   config: TlsConfigSource | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  runtime?: TlsRuntimeSettings,
 ): ResolvedTlsConfig {
+  const resolved = resolveTlsProfiles(config, env, runtime);
+  const result: ResolvedTlsConfig = { rejectUnauthorized: resolved.rejectUnauthorized };
+  if (resolved.caFile !== undefined) result.caFile = resolved.caFile;
+  if (resolved.caPem !== undefined) result.caPem = resolved.caPem;
+  if (resolved.default !== undefined) {
+    result.certFile = resolved.default.certFile;
+    result.keyFile = resolved.default.keyFile;
+  }
+  return result;
+}
+
+/** Значение с источником (для статуса/приоритетов). */
+function pickWithSource(
+  envValue: string | undefined,
+  runtimeValue: string | undefined,
+  configValue: string | undefined,
+): { value?: string; source: TlsSource } {
+  if (envValue !== undefined && envValue !== '') return { value: envValue, source: 'env' };
+  if (runtimeValue !== undefined && runtimeValue !== '') return { value: runtimeValue, source: 'runtime' };
+  if (configValue !== undefined && configValue !== '') return { value: configValue, source: 'config' };
+  return { source: 'none' };
+}
+
+/**
+ * Эффективные клиентские профили (mTLS) + CA/rejectUnauthorized с источниками.
+ *
+ * Приоритет поле-уровневый: `env > runtime > config`. Клиентская пара
+ * `certFile`/`keyFile` собирается по полям; неполная пара (серт без ключа или
+ * наоборот) — fail-closed: mTLS без ключа/серта не работает, а «тихий» выбор
+ * одного источника скрыл бы опечатку. Маппинги — только runtime (редактируемые).
+ */
+export function resolveTlsProfiles(
+  config: TlsConfigSource | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  runtime?: TlsRuntimeSettings,
+): ResolvedTlsProfiles {
   const e = env;
   const cfg: SecurityTlsConfig = config?.security?.tls ?? {};
+  const rt = runtime ?? {};
 
-  const pick = (envKey: string, cfgValue: string | undefined): string | undefined => {
-    const envValue = e[envKey];
-    if (envValue !== undefined && envValue !== '') return envValue;
-    return cfgValue !== undefined && cfgValue !== '' ? cfgValue : undefined;
-  };
-
-  const caFile = pick(TLS_ENV.caFile, cfg.caFile);
-  const caPem = pick(TLS_ENV.caPem, cfg.caPem);
-  if (caFile !== undefined && caPem !== undefined) {
+  const caFile = pickWithSource(e[TLS_ENV.caFile], rt.caFile, cfg.caFile);
+  const caPem = pickWithSource(e[TLS_ENV.caPem], rt.caPem, cfg.caPem);
+  if (caFile.value !== undefined && caPem.value !== undefined) {
     throw new Error(
       `[config] security.tls: 'caFile' и 'caPem' взаимоисключащи — задайте ровно один ` +
-        `источник CA (${TLS_ENV.caFile} ИЛИ ${TLS_ENV.caPem})`,
+        `источник CA (${TLS_ENV.caFile} ИЛИ ${TLS_ENV.caPem}); конфликт между источниками ` +
+        '(env/runtime/config) не разрешается автоматически',
     );
   }
+  const caSource: TlsSource = caFile.value !== undefined ? caFile.source : caPem.source;
 
-  const certFile = pick(TLS_ENV.certFile, cfg.certFile);
-  const keyFile = pick(TLS_ENV.keyFile, cfg.keyFile);
-  const rejectUnauthorized = resolveRejectUnauthorized(e[TLS_ENV.rejectUnauthorized], cfg.rejectUnauthorized);
+  const reject = resolveRejectUnauthorizedWithSource(
+    e[TLS_ENV.rejectUnauthorized],
+    rt.rejectUnauthorized,
+    cfg.rejectUnauthorized,
+  );
 
-  const resolved: ResolvedTlsConfig = { rejectUnauthorized };
-  if (caFile !== undefined) resolved.caFile = caFile;
-  if (caPem !== undefined) resolved.caPem = caPem;
-  if (certFile !== undefined) resolved.certFile = certFile;
-  if (keyFile !== undefined) resolved.keyFile = keyFile;
+  const certFile = pickWithSource(e[TLS_ENV.certFile], rt.defaultClient?.certFile, cfg.certFile);
+  const keyFile = pickWithSource(e[TLS_ENV.keyFile], rt.defaultClient?.keyFile, cfg.keyFile);
+  let defaultClient: TlsClientProfile | undefined;
+  if (certFile.value !== undefined || keyFile.value !== undefined) {
+    if (certFile.value === undefined || keyFile.value === undefined) {
+      throw new Error(
+        '[config] security.tls: mTLS требует и certFile, и keyFile (задайте оба либо ни одного; ' +
+          'неполная пара между env/runtime/config — fail-closed)',
+      );
+    }
+    const clientSource: TlsSource =
+      certFile.source === 'env' || keyFile.source === 'env'
+        ? 'env'
+        : certFile.source === 'runtime' || keyFile.source === 'runtime'
+          ? 'runtime'
+          : 'config';
+    defaultClient = {
+      id: 'default',
+      hosts: [],
+      certFile: certFile.value,
+      keyFile: keyFile.value,
+      source: clientSource,
+      readOnly: clientSource !== 'runtime',
+    };
+  }
+
+  const mappings: TlsClientProfile[] = (rt.mappings ?? []).map((mapping) => ({
+    id: mapping.id,
+    hosts: [...mapping.hosts],
+    ...(mapping.label !== undefined && mapping.label !== '' ? { label: mapping.label } : {}),
+    certFile: mapping.certFile,
+    keyFile: mapping.keyFile,
+    source: 'runtime',
+    readOnly: false,
+  }));
+
+  const resolved: ResolvedTlsProfiles = {
+    mappings,
+    rejectUnauthorized: reject.value,
+    sources: {
+      ca: caSource,
+      rejectUnauthorized: reject.source,
+      defaultClient: defaultClient?.source ?? 'none',
+    },
+  };
+  if (defaultClient !== undefined) resolved.default = defaultClient;
+  if (caFile.value !== undefined) resolved.caFile = caFile.value;
+  if (caPem.value !== undefined) resolved.caPem = caPem.value;
   return resolved;
+}
+
+/** `rejectUnauthorized` с источником; невалидный env — warn + фоллбэк ниже. */
+function resolveRejectUnauthorizedWithSource(
+  rawEnv: string | undefined,
+  runtimeValue: boolean | undefined,
+  cfgValue: boolean | undefined,
+): { value: boolean; source: TlsSource } {
+  if (rawEnv !== undefined && rawEnv !== '') {
+    const v = rawEnv.toLowerCase();
+    if (v === 'true' || v === '1') return { value: true, source: 'env' };
+    if (v === 'false' || v === '0') return { value: false, source: 'env' };
+    console.warn(
+      `[config] невалидное значение ${TLS_ENV.rejectUnauthorized}="${rawEnv}" (ожидается true/1/false/0) — игнорируется`,
+    );
+  }
+  if (runtimeValue !== undefined) return { value: runtimeValue, source: 'runtime' };
+  if (cfgValue !== undefined) return { value: cfgValue, source: 'config' };
+  return { value: true, source: 'none' };
+}
+
+/**
+ * Выбирает клиентский профиль по host: точное совпадение, `*.suffix` (поддомены)
+ * либо `*` (все хосты), регистронезависимо; **первое** совпадение в порядке
+ * маппингов, затем профиль по умолчанию, иначе `undefined` (без клиентского серта).
+ */
+export function selectTlsClientProfile(
+  profiles: Pick<ResolvedTlsProfiles, 'default' | 'mappings'>,
+  host: string | undefined,
+): TlsClientProfile | undefined {
+  const normalized = normalizeTlsHost(host);
+  if (normalized !== undefined) {
+    for (const mapping of profiles.mappings) {
+      if (mapping.hosts.some((pattern) => matchTlsHostPattern(pattern, normalized))) {
+        return mapping;
+      }
+    }
+  }
+  return profiles.default;
+}
+
+/** Матчинг одного паттерна (`host` | `*.suffix` | `*`); регистронезависимо. */
+export function matchTlsHostPattern(pattern: string, rawHost: string): boolean {
+  const host = normalizeTlsHost(rawHost);
+  if (host === undefined) return false;
+  const value = pattern.trim().toLowerCase().replace(/\.$/, '');
+  if (value === '*') return true;
+  if (value.startsWith('*.')) {
+    const suffix = value.slice(2);
+    return suffix !== '' && host.endsWith(`.${suffix}`);
+  }
+  return host === value;
+}
+
+/** Нормализует host (нижний регистр, без точки в конце и скобок IPv6). */
+export function normalizeTlsHost(rawHost: string | undefined): string | undefined {
+  if (typeof rawHost !== 'string') return undefined;
+  let host = rawHost.trim().toLowerCase().replace(/\.$/, '');
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  return host === '' ? undefined : host;
 }
 
 /**
@@ -110,8 +313,10 @@ export function resolveTlsConfig(
 export function resolveTlsTrust(
   config: TlsConfigSource | undefined,
   env: NodeJS.ProcessEnv = process.env,
+  runtime?: TlsRuntimeSettings,
 ): ResolvedTlsTrust {
-  const resolved = resolveTlsConfig(config, env);
+  const resolved = resolveTlsConfig(config, env, runtime);
+  const profiles = resolveTlsProfiles(config, env, runtime);
 
   let ca: string | undefined;
   if (resolved.caFile !== undefined) {
@@ -145,7 +350,8 @@ export function resolveTlsTrust(
     ca !== undefined ||
     resolved.certFile !== undefined ||
     resolved.keyFile !== undefined ||
-    resolved.rejectUnauthorized === false;
+    resolved.rejectUnauthorized === false ||
+    profiles.mappings.length > 0;
 
   const trust: ResolvedTlsTrust = { enabled, rejectUnauthorized: resolved.rejectUnauthorized };
   if (ca !== undefined) trust.ca = ca;
@@ -254,6 +460,11 @@ export interface PostgresSslBuildInput {
   config?: TlsConfigSource;
   /** Env для резолва `security.tls` (ADR-023). */
   env?: NodeJS.ProcessEnv;
+  /**
+   * ADR-099: runtime bootstrap-настройки TLS (`{dataDir}/security-tls.json`) —
+   * per-host клиентские профили и CA/rejectUnauthorized (env > runtime > config).
+   */
+  runtime?: TlsRuntimeSettings;
 }
 
 /** Результат построителя: значение для `pg`-конфига `ssl` (если задано). */
@@ -292,15 +503,21 @@ export function buildPostgresSslOptions(input: PostgresSslBuildInput): PostgresS
   }
   if (mode === 'disable') return { ssl: false };
 
+  // ADR-099: per-host mTLS — профиль выбирается по host БД (явный `host` либо
+  // host из DSN), затем default. CA/rejectUnauthorized — общие.
+  const profiles = resolveTlsProfiles(input.config, env, input.runtime);
+  const pgHost = input.host ?? hostFromDsn(input.connectionString);
+  const profile = selectTlsClientProfile(profiles, pgHost);
+
   if (mode === 'require') {
     // Шифрование без проверки сертификата; mTLS (сертификат клиента) — если задан.
     const ssl: Record<string, unknown> = { rejectUnauthorized: false };
-    applyClientIdentity(ssl, resolveTlsConfig(input.config, env));
+    applyClientIdentity(ssl, profile ?? {});
     return { ssl };
   }
 
   // verify-full: CA обязателен (fail-closed — не тихий фоллбэк на системное доверие).
-  const trust = resolveTlsTrust(input.config, env);
+  const trust = resolveTlsTrust(input.config, env, input.runtime);
   if (trust.ca === undefined) {
     throw new Error(
       "[config] storage.postgres.sslmode='verify-full' требует доверенный CA: задайте " +
@@ -309,7 +526,7 @@ export function buildPostgresSslOptions(input: PostgresSslBuildInput): PostgresS
     );
   }
   const ssl: Record<string, unknown> = { rejectUnauthorized: true, ca: trust.ca };
-  applyClientIdentity(ssl, trust);
+  applyClientIdentity(ssl, profile ?? {});
 
   if (
     input.connectionString === undefined &&
@@ -320,6 +537,16 @@ export function buildPostgresSslOptions(input: PostgresSslBuildInput): PostgresS
     ssl.servername = input.host;
   }
   return { ssl };
+}
+
+/** Host из строки подключения (URL-форма); невалидный DSN → `undefined`. */
+function hostFromDsn(dsn: string | undefined): string | undefined {
+  if (dsn === undefined || dsn.trim() === '') return undefined;
+  try {
+    return new URL(dsn).hostname || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -366,18 +593,3 @@ function readPemFileContent(path: string, field: string, marker: RegExp): string
   return content;
 }
 
-/**
- * Парсит `rejectUnauthorized` из env (`true`/`1`/`false`/`0`); невалидно → warn и
- * фолбэк на config (fail-soft, как прочие env-резолверы). Дефолт `true`.
- */
-function resolveRejectUnauthorized(rawEnv: string | undefined, cfgValue: boolean | undefined): boolean {
-  if (rawEnv !== undefined && rawEnv !== '') {
-    const v = rawEnv.toLowerCase();
-    if (v === 'true' || v === '1') return true;
-    if (v === 'false' || v === '0') return false;
-    console.warn(
-      `[config] невалидное значение ${TLS_ENV.rejectUnauthorized}="${rawEnv}" (ожидается true/1/false/0) — игнорируется`,
-    );
-  }
-  return cfgValue ?? true;
-}

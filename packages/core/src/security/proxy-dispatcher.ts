@@ -18,6 +18,7 @@ import { Agent, Dispatcher, ProxyAgent, Socks5ProxyAgent } from 'undici';
 import {
   NoProxyMatcher,
   isSocksProxyProtocol,
+  matchTlsHostPattern,
   proxyEntryFor,
   redactProxyUrl,
   type ProxyCredentials,
@@ -83,9 +84,23 @@ export interface EgressDispatcherTls {
   rejectUnauthorized?: boolean;
 }
 
+/** Per-host клиентский TLS-профиль (ADR-099, mTLS). */
+export interface EgressTlsProfile {
+  /** `default` либо id runtime-маппинга. */
+  id: string;
+  /** Host-паттерны (`host`, `*.suffix`, `*`); пусто — только default. */
+  hosts: string[];
+  tls: EgressDispatcherTls;
+}
+
 export interface EgressDispatcherOptions {
   proxy: ResolvedProxyConfig;
   tls?: EgressDispatcherTls;
+  /**
+   * ADR-099: per-host клиентские профили. Первый совпавший по host запроса
+   * используется для TLS к цели; нет совпадений — `tls` (default).
+   */
+  tlsProfiles?: EgressTlsProfile[];
   /** Логгер предупреждений (fallbackDirect). */
   warn?: (message: string) => void;
 }
@@ -101,18 +116,37 @@ type ViaOptions = Dispatcher.DispatchOptions & {
 export class EgressDispatcher extends Dispatcher {
   readonly #proxy: ResolvedProxyConfig;
   readonly #matcher: NoProxyMatcher;
-  readonly #direct: Agent;
+  readonly #defaultTls: EgressDispatcherTls;
+  readonly #profiles: EgressTlsProfile[];
+  /** Прямые агенты — кэш по `origin+profile.id`. */
+  readonly #directAgents = new Map<string, Agent>();
   readonly #proxies = new Map<string, Dispatcher>();
-  readonly #requestTls: EgressDispatcherTls;
   readonly #warn: (message: string) => void;
 
   constructor(options: EgressDispatcherOptions) {
     super();
     this.#proxy = options.proxy;
     this.#matcher = new NoProxyMatcher(options.proxy.noProxy);
-    this.#requestTls = options.tls ?? { rejectUnauthorized: true };
+    this.#defaultTls = options.tls ?? { rejectUnauthorized: true };
+    this.#profiles = options.tlsProfiles ?? [];
     this.#warn = options.warn ?? ((message) => console.warn(message));
-    this.#direct = new Agent({ connect: this.#connectOptions() });
+  }
+
+  /** Клиентский профиль для origin (первое совпадение маппинга, иначе default). */
+  profileFor(origin: string | URL): EgressTlsProfile {
+    const host = hostOf(origin);
+    if (host !== undefined) {
+      for (const profile of this.#profiles) {
+        if (profile.hosts.some((pattern) => matchTlsHostPattern(pattern, host))) return profile;
+      }
+    }
+    const fallback = this.#profiles.find((profile) => profile.id === 'default');
+    return fallback ?? { id: 'default', hosts: [], tls: this.#defaultTls };
+  }
+
+  /** id профиля, который будет применён к origin (для тестов/диагностики). */
+  tlsProfileIdFor(origin: string | URL): string {
+    return this.profileFor(origin).id;
   }
 
   /** Планируемый маршрут для origin (без учёта fallback). */
@@ -132,28 +166,34 @@ export class EgressDispatcher extends Dispatcher {
   dispatch(opts: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
     const reporter = (opts as ViaOptions)[EGRESS_VIA];
     const origin = opts.origin;
-    if (origin === undefined) return this.#direct.dispatch(opts, handler);
+    if (origin === undefined) return this.#directFor(undefined).dispatch(opts, handler);
 
     const url = safeUrl(origin, opts.path);
     if (this.routeFor(url ?? origin) === 'direct') {
       reporter?.('direct');
-      return this.#direct.dispatch(opts, handler);
+      return this.#directFor(url ?? origin).dispatch(opts, handler);
     }
 
     const entry = url ? proxyEntryFor(this.#proxy, url) : undefined;
     if (entry === undefined) {
       reporter?.('direct');
-      return this.#direct.dispatch(opts, handler);
+      return this.#directFor(url ?? origin).dispatch(opts, handler);
     }
 
-    const proxy = this.#proxyAgent(origin, entry.url, entry.credentials);
+    const profile = this.profileFor(url ?? origin);
+    const proxy = this.#proxyAgent(origin, entry.url, entry.credentials, profile);
     reporter?.('proxy');
     return this.#dispatchViaProxy(proxy, opts, handler, reporter, entry.url, entry.credentials !== undefined);
   }
 
-  /** TLS-опции соединения с целью (CA/mTLS из `security.tls`). */
+  /** TLS-опции соединения с целью по умолчанию (CA/mTLS из `security.tls`). */
   get requestTlsOptions(): EgressDispatcherTls {
-    return { ...this.#requestTls };
+    return { ...this.#defaultTls };
+  }
+
+  /** TLS-опции профиля для origin (для тестов/диагностики). */
+  requestTlsFor(origin: string | URL): EgressDispatcherTls {
+    return { ...this.profileFor(origin).tls };
   }
 
   async close(callback?: () => void): Promise<void> {
@@ -173,14 +213,34 @@ export class EgressDispatcher extends Dispatcher {
     return this.routeFor(origin);
   }
 
-  /** Прокси-агент для пары `origin+proxy` (кэш на время жизни процесса). */
-  #proxyAgent(origin: string | URL, proxyUrl: string, credentials?: ProxyCredentials): Dispatcher {
+  /** Прямой агент для `origin+profile` (кэш на время жизни процесса). */
+  #directFor(origin: string | URL | undefined): Agent {
+    const profile = origin === undefined ? this.profileFor('') : this.profileFor(origin);
+    const originKey = origin === undefined ? '' : typeof origin === 'string' ? origin : origin.origin;
+    const key = `${originKey}|${profile.id}`;
+    const cached = this.#directAgents.get(key);
+    if (cached) return cached;
+    const agent = new Agent({ connect: connectOptions(profile.tls) });
+    this.#directAgents.set(key, agent);
+    return agent;
+  }
+
+  /** Прокси-агент для `origin+proxy+profile` (кэш на время жизни процесса). */
+  #proxyAgent(
+    origin: string | URL,
+    proxyUrl: string,
+    credentials: ProxyCredentials | undefined,
+    profile: EgressTlsProfile,
+  ): Dispatcher {
     const authKey = credentials ? `${credentials.username}:${credentials.password.length}` : '';
-    const key = `${typeof origin === 'string' ? origin : origin.origin}|${proxyUrl}|${authKey}`;
+    const key =
+      `${typeof origin === 'string' ? origin : origin.origin}|${proxyUrl}|${authKey}|${profile.id}`;
     const cached = this.#proxies.get(key);
     if (cached) return cached;
 
     // D2b: SOCKS5 — отдельный агент undici (username/password по RFC 1929).
+    // Известное ограничение: Socks5ProxyAgent не принимает `requestTls` —
+    // TLS к цели остаётся системным (поведение прежнее).
     if (isSocksProxyProtocol(safeProtocol(proxyUrl))) {
       const socks = new Socks5ProxyAgent(proxyUrl, {
         ...(credentials ? { username: credentials.username, password: credentials.password } : {}),
@@ -193,8 +253,8 @@ export class EgressDispatcher extends Dispatcher {
     const proxyTls: ResolvedProxyTls = this.#proxy.tls ?? { rejectUnauthorized: true };
     const agent = new ProxyAgent({
       uri: proxyUrl,
-      // TLS к **цели** — доверие `security.tls` (CA/mTLS).
-      requestTls: this.#requestTls,
+      // TLS к **цели** — доверие `security.tls` выбранного профиля (CA/mTLS).
+      requestTls: profile.tls,
       // TLS/mTLS к самому прокси (`proxy.tls`); https-прокси.
       proxyTls: proxyTls as unknown as Record<string, unknown>,
       // Соединение с прокси — только таймаут; target-CA/mTLS сюда не попадают.
@@ -207,15 +267,6 @@ export class EgressDispatcher extends Dispatcher {
     });
     this.#proxies.set(key, agent);
     return agent;
-  }
-
-  #connectOptions(): Record<string, unknown> {
-    return {
-      ca: this.#requestTls.ca,
-      cert: this.#requestTls.cert,
-      key: this.#requestTls.key,
-      rejectUnauthorized: this.#requestTls.rejectUnauthorized ?? true,
-    };
   }
 
   /**
@@ -347,7 +398,7 @@ export class EgressDispatcher extends Dispatcher {
           'fallbackDirect=true → прямое соединение',
       );
       reporter?.('fallback');
-      this.#direct.dispatch(opts, handler);
+      this.#directFor(opts.origin).dispatch(opts, handler);
       return true;
     }
     const unavailable = new EgressProxyUnavailableError(
@@ -382,7 +433,8 @@ export class EgressDispatcher extends Dispatcher {
   }
 
   async #closeAll(kind: 'close' | 'destroy', err?: Error | null): Promise<void> {
-    const targets: Dispatcher[] = [this.#direct, ...this.#proxies.values()];
+    const targets: Dispatcher[] = [...this.#directAgents.values(), ...this.#proxies.values()];
+    this.#directAgents.clear();
     this.#proxies.clear();
     await Promise.allSettled(
       targets.map((target) => (kind === 'close' ? target.close() : err ? target.destroy(err) : target.destroy())),
@@ -404,6 +456,25 @@ function failedDispatchController(error: Error): Dispatcher.DispatchController {
     pause() {},
     resume() {},
   };
+}
+
+/** TLS-опции undici `Agent({ connect })` из профиля. */
+function connectOptions(tls: EgressDispatcherTls): Record<string, unknown> {
+  return {
+    ca: tls.ca,
+    cert: tls.cert,
+    key: tls.key,
+    rejectUnauthorized: tls.rejectUnauthorized ?? true,
+  };
+}
+
+/** Hostname origin/URL без исключения. */
+function hostOf(origin: string | URL): string | undefined {
+  try {
+    return (typeof origin === 'string' ? new URL(origin) : origin).hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Протокол URL без исключения. */
