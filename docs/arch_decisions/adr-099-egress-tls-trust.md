@@ -205,7 +205,9 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
     `restartRequired: true`), `DELETE` сбрасывает к config/env. **Пароль** Basic — только
     `SYNTH_PROXY_PASSWORD` (приоритетнее, UI не меняет: `PUT/DELETE /proxy/password` → 409 `CONFLICT`)
     или файл `{dataDir}/secrets/proxy-password` (0600, каталог 0700, tmp→rename); значение не
-    отдаётся, не логируется и не попадает в аудит. Валидация: `auth.type` только `basic`
+    отдаётся, не логируется и не попадает в аудит. Статус (`flat`/`saved`/`running`/`defaults`) отдаёт
+    безопасные поля `fromEnv`, `auth:{type,username}` и `tls:{caFile?,certFile?,keyFile?,hasCaPem,
+    rejectUnauthorized}` — **без** `caPem`/PEM-содержимого, пароля и userinfo. Валидация: `auth.type` только `basic`
     (`ntlm`/`negotiate` → 400 «не поддерживается»); пароль в userinfo URL в сохраняемой секции
     **запрещён** (инвариант 13); `tls` — `caFile`↔`caPem` взаимоисключающи, `certFile`+`keyFile` вместе.
     Изменения пишутся в аудит `{dataDir}/audit/security.jsonl` со `scope:'proxy'` (before/after без

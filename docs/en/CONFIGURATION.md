@@ -599,7 +599,9 @@ the check is full (DNS/CIDR per hop). The actual route is written to the egress 
 - **Application:** at the **next startup** (`restartRequired`), not live. `GET /settings/proxy` returns
   `saved` (config ← runtime ← env), `running` (the current dispatcher), `defaults`, `isOverridden`,
   `restartRequired`; the flat response fields equal `saved` (backward compatibility). The UI shows a
-  "changes take effect after a restart" banner.
+  "changes take effect after a restart" banner. Besides `noProxy`/`fromEnv`/`connectTimeoutMs`, the status
+  returns safe `auth:{type,username}` and `tls:{caFile?,certFile?,keyFile?,hasCaPem,rejectUnauthorized}` —
+  the TLS paths and the `caPem` flag, but **not** `caPem`/PEM contents and **not** the password/userinfo.
 - **Write-only password:** `PUT /settings/proxy/password` writes `{dataDir}/secrets/proxy-password`
   (0600, directory 0700, atomic tmp→rename), `DELETE` removes it; the value is never returned and never
   reaches the audit log/logs. If `SYNTH_PROXY_PASSWORD` is set, both calls → `409 CONFLICT` (the password is

@@ -597,7 +597,9 @@ hostname-правила/`exceptions` (DNS/CIDR не выполняются — �
 - **Применение:** при **следующем старте** (`restartRequired`), не live. `GET /settings/proxy` отдаёт
   `saved` (config ← runtime ← env), `running` (текущий dispatcher), `defaults`, `isOverridden`,
   `restartRequired`; плоские поля ответа = `saved` (обратная совместимость). UI показывает плашку
-  «изменения вступят после рестарта».
+  «изменения вступят после рестарта». Кроме `noProxy`/`fromEnv`/`connectTimeoutMs` статус отдаёт
+  безопасные `auth:{type,username}` и `tls:{caFile?,certFile?,keyFile?,hasCaPem,rejectUnauthorized}` —
+  TLS-пути и признак `caPem`, но **не** сам `caPem`/PEM-содержимое и **не** пароль/userinfo.
 - **Пароль write-only:** `PUT /settings/proxy/password` пишет файл `{dataDir}/secrets/proxy-password`
   (0600, каталог 0700, атомарно tmp→rename), `DELETE` — удаляет; значение никогда не возвращается и не
   попадает в аудит/логи. Если задан `SYNTH_PROXY_PASSWORD`, оба вызова → `409 CONFLICT` (пароль
