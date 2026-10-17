@@ -24,12 +24,16 @@ import {
   startEventJournalPruner,
   startWebhookDeliveryPruner,
   createStorageContextAsync,
+  createEgressPolicyResolver,
+  createEgressLogSink,
+  configureEgressRuntime,
+  startEgressLogPruner,
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
-  mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig,
+  mergeEventsConfig, mergeDecisionConfig,
 } from '../../storage/runtime-settings.js';
 import { assertInstanceDataNotTooNew } from '../../storage/instance-meta.js';
 import { applyStartupMigrations, applyPendingRestore } from '../../maintenance/startup.js';
@@ -149,7 +153,28 @@ export async function createStandaloneDeps(
     schedules: scheduleStore,
     jobs: jobStore,
     skillBundles: bundleStore,
+    securityAudit,
+    egressRequests,
   } = storageContext;
+
+  // Egress: живой резолвер политики (settings.json → config.yaml → дефолт) и
+  // журнал внешних запросов. Резолвер читает стор на каждый запрос — без
+  // стартового снимка/кэша (live-применение без рестарта).
+  const egressResolver = createEgressPolicyResolver(settingsStore, {
+    tools: config.egressConfig?.tools,
+    webhooks: config.egressConfig?.webhooks,
+    mcp: config.mcpNetworkPolicy,
+  });
+  const egressLogConfig = config.egressConfig?.log ?? { enabled: true, retentionDays: 7 };
+  const egressLog = createEgressLogSink(egressRequests, {
+    enabled: () => egressLogConfig.enabled,
+  });
+  configureEgressRuntime({ resolver: egressResolver, log: egressLog });
+  const stopEgressLogPruner = storageDegraded || !egressLogConfig.enabled
+    ? () => {}
+    : startEgressLogPruner(egressRequests, {
+        getRetentionDays: () => egressLogConfig.retentionDays,
+      });
 
   // Runtime-настройки (ADR-005): workspace из {dataDir}/settings.json приоритетнее config/env
   // Агент по умолчанию (админка «Агенты»): runtime-настройка поверх DEFAULT_AGENT_ID.
@@ -219,14 +244,9 @@ export async function createStandaloneDeps(
   const mcpManager = new McpManager();
   mcpManager.setConfig(config.mcpServers ?? {});
 
-  // ADR-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP
-  // (settings.json, админка) приоритетнее config.yaml и переживает рестарт —
-  // применяем её при старте, иначе сохранённое значение терялось бы. Слияние —
-  // единым helper'ом mergeMcpNetworkPolicy (тот же, что и в backend).
-  const runtimeMcpNetworkPolicy = await settingsStore.getMcpNetworkPolicy();
-  mcpManager.setNetworkPolicy(
-    mergeMcpNetworkPolicy(config.mcpNetworkPolicy, runtimeMcpNetworkPolicy),
-  );
+  // ADR-071 §2.3.1: политика сетевого доступа MCP резолвится при каждом
+  // подключении/probe (live; живые соединения остаются на политике коннекта).
+  mcpManager.setNetworkPolicyResolver(() => egressResolver.resolveMcp());
 
   // Парсим провайдеров из переменных окружения (в деградации — не пишем в фоллбек).
   if (!storageDegraded) await syncProvidersFromEnv(providerStore, modelStore);
@@ -240,14 +260,17 @@ export async function createStandaloneDeps(
     enabled: config.webhooksConfig?.enabled ?? false,
     maxAttempts: config.webhooksConfig?.maxAttempts ?? 5,
     timeoutMs: config.webhooksConfig?.timeoutMs ?? 10_000,
-    allowPrivateTargets: config.webhooksConfig?.allowPrivateTargets ?? false,
     deliveryRetentionDays: config.webhooksConfig?.deliveryRetentionDays ?? 30,
   };
   const webhookService = new WebhookService({
     store: webhookStore,
     deliveryStore: webhookDeliveryStore,
     eventBus,
-    config: webhooksConfig,
+    config: {
+      ...webhooksConfig,
+      // Отдельный экземпляр политики (граница доверия не смешивается с tools).
+      resolvePolicy: () => egressResolver.resolveWebhooks(),
+    },
   });
   if (!storageDegraded) webhookService.start();
   const stopWebhookDeliveryPruner = storageDegraded
@@ -705,6 +728,12 @@ export async function createStandaloneDeps(
     eventBus,
     queueManager,
     webhooksConfig,
+    // Egress: живой резолвер политики + журналы безопасности.
+    egressResolver,
+    egressLogConfig,
+    securityAudit,
+    egressRequests,
+    stopEgressLogPruner,
     webhookStore,
     webhookDeliveryStore,
     webhookService,

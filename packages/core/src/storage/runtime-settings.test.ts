@@ -174,11 +174,11 @@ describe('mergeMcpNetworkPolicy (ADR-071 §2.3.1)', () => {
   const runtime = { mode: 'allow' as const, list: ['192.168.0.0/16'] };
 
   it('полная runtime-политика приоритетнее config', () => {
-    expect(mergeMcpNetworkPolicy(config, runtime)).toEqual(runtime);
+    expect(mergeMcpNetworkPolicy(config, runtime)).toEqual({ ...runtime, exceptions: [] });
   });
 
   it('при отсутствии runtime берётся config', () => {
-    expect(mergeMcpNetworkPolicy(config, undefined)).toEqual(config);
+    expect(mergeMcpNetworkPolicy(config, undefined)).toEqual({ ...config, exceptions: [] });
   });
 
   it('при отсутствии обоих — undefined (дефолт подставляет вызывающий)', () => {

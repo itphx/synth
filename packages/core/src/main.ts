@@ -192,8 +192,12 @@ program
       schedulerConfig: synth.scheduler,
       // ADR-084: конфигурация decision-слоя микро-каскада.
       decisionConfig: synth.decision,
-      // ADR-052 (этап II): конфигурация исходящих webhooks (enabled/retry/SSRF).
+      // ADR-052 (этап II): конфигурация исходящих webhooks (enabled/retry).
       webhooksConfig: synth.webhooks,
+      // ADR-071 §2.3.1 / egress: политика сетевого доступа (config-фоллбек).
+      mcpNetworkPolicy: synth.mcp.networkPolicy,
+      // Egress: настраиваемая политика tools/webhooks + журнал внешних запросов.
+      egressConfig: synth.egress,
       defaultBackendUrl: remoteEnabled ? remoteBackendUrl : undefined,
       defaultToken: remoteEnabled && synth.remote.auth.type === 'api_key'
         ? (synth.remote.auth.apiKey || undefined)

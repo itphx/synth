@@ -40,6 +40,7 @@ const SECTION_KEYS = [
   'skillsDisabledForNewProjects',
   'skillsPolicy',
   'mcpNetworkPolicy',
+  'egress',
   'defaultAgent',
   'workspacePolicy',
   'events',
@@ -233,6 +234,26 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     async setMcpNetworkPolicy(policy: RuntimeSettingsValue<'mcpNetworkPolicy'>): Promise<void> {
       await writeSetting(conn, 'mcpNetworkPolicy', policy);
     },
+    async getEgressPolicy(scope: Parameters<SettingsPort['getEgressPolicy']>[0]) {
+      const all = await readSetting<RuntimeSettings['egress']>(conn, 'egress');
+      return all?.[scope];
+    },
+    async setEgressPolicy(
+      scope: Parameters<SettingsPort['setEgressPolicy']>[0],
+      policy: Parameters<SettingsPort['setEgressPolicy']>[1],
+    ): Promise<void> {
+      const all = (await readSetting<RuntimeSettings['egress']>(conn, 'egress')) ?? {};
+      await writeSetting(conn, 'egress', { ...all, [scope]: policy });
+    },
+    async clearEgressPolicy(scope: Parameters<SettingsPort['clearEgressPolicy']>[0]): Promise<void> {
+      const all = await readSetting<RuntimeSettings['egress']>(conn, 'egress');
+      if (!all) return;
+      const next = { ...all };
+      delete next[scope];
+      if (Object.keys(next).length > 0) await writeSetting(conn, 'egress', next);
+      else await deleteSetting(conn, 'egress');
+    },
+
     async clearMcpNetworkPolicy(): Promise<void> {
       await deleteSetting(conn, 'mcpNetworkPolicy');
     },

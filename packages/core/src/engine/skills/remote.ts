@@ -8,6 +8,8 @@ import type { SkillSource } from './types.js';
 // чтобы не дублироваться с проектными инструкциями (ADR-069).
 import { describeError, fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
 import { egressFetch } from '../../security/tls.js';
+import { resolveToolsEgressPolicy } from '../net/egress-runtime.js';
+import type { EgressPolicy } from '@itphx/synth-shared';
 import type { HostResolver } from '../mcp/network-policy.js';
 
 // Обратная совместимость: исторические импорты из `./remote.js` продолжают работать.
@@ -57,6 +59,8 @@ export interface RefreshRemoteCatalogsOptions {
   maxHops?: number;
   /** Инъекция DNS-резолвера SSRF-проверки (тесты). */
   resolveHost?: HostResolver;
+  /** Resolved egress-политика; не задана — живой резолвер. */
+  policy?: EgressPolicy;
 }
 
 export interface RefreshRemoteCatalogsResult {
@@ -166,6 +170,8 @@ export async function refreshRemoteCatalogs(
   const maxIndexBytes = opts.maxIndexBytes ?? REMOTE_INDEX_MAX_BYTES;
   const maxSkills = opts.maxSkills ?? REMOTE_MAX_SKILLS;
   const maxHops = opts.maxHops ?? REMOTE_MAX_REDIRECTS;
+  // Один снимок политики на весь проход каталогов.
+  const policy = opts.policy ?? await resolveToolsEgressPolicy();
 
   const diagnostics: SkillDiagnostic[] = [];
   const sources: SkillSource[] = [];
@@ -177,7 +183,7 @@ export async function refreshRemoteCatalogs(
     const source = buildUrlSource(opts.cacheDir, url);
     sources.push(source);
 
-    const valid = await validateRemoteUrl(url, { resolveHost: opts.resolveHost });
+    const valid = await validateRemoteUrl(url, { resolveHost: opts.resolveHost, policy });
     if ('error' in valid) {
       diagnostics.push({ level: 'error', code: 'remote', dir: source.dir, message: valid.error });
       continue;
@@ -190,6 +196,8 @@ export async function refreshRemoteCatalogs(
       maxHops,
       fetchImpl,
       resolveHost: opts.resolveHost,
+      policy,
+      scope: 'skills',
     });
     if ('error' in index) {
       diagnostics.push({
@@ -235,6 +243,8 @@ export async function refreshRemoteCatalogs(
         maxHops,
         fetchImpl,
         resolveHost: opts.resolveHost,
+        policy,
+        scope: 'skills',
       });
       if ('error' in file) {
         diagnostics.push({

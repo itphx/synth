@@ -1,7 +1,7 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { atomicWrite, AsyncLock } from '@itphx/synth-shared';
-import type { McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, McpServerToolSettings, LLMGatewayConfig, McpNetworkPolicy, SecurityConfig, ToolsPolicy, ToolsDisabledConfig, SkillsDisabledRequest, WorkspaceOutsideRootPolicy, SynthConfig, DecisionConfig } from '@itphx/synth-shared';
 import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../engine/permission/derive.js';
 import type { SettingsRepository } from './ports/settings-repository.js';
@@ -97,6 +97,8 @@ export interface RuntimeSettings {
   migrations?: Record<string, boolean>;
   /** ADR-071 §2.3.1: runtime-политика сетевого доступа пользовательских HTTP MCP. */
   mcpNetworkPolicy?: McpNetworkPolicy;
+  /** Egress-политика: runtime override для `tools`/`webhooks` (админка). */
+  egress?: Partial<Record<EgressPolicyScope, EgressPolicy | WebhooksEgressPolicy>>;
   /**
    * ADR-071 §2.6: откалиброванный chars-per-token по модели (promptChars /
    * usage.inputTokens). Используется для `estTokens`; отсутствие — дефолт 4.
@@ -192,7 +194,24 @@ export function mergeMcpNetworkPolicy(
   return {
     mode: runtime?.mode ?? base?.mode ?? 'deny',
     list: runtime?.list ?? base?.list ?? [],
+    exceptions: runtime?.exceptions ?? base?.exceptions ?? [],
   };
+}
+
+/**
+ * Egress-политика: runtime override поверх config.yaml. Runtime приоритетнее;
+ * отсутствие обоих — undefined (вызывающий подставляет встроенный дефолт).
+ */
+export function mergeEgressPolicy<T extends EgressPolicy | WebhooksEgressPolicy>(
+  base: T | undefined,
+  runtime: T | undefined,
+): T | undefined {
+  if (!runtime && !base) return undefined;
+  return {
+    mode: runtime?.mode ?? base?.mode ?? 'deny',
+    list: [...(runtime?.list ?? base?.list ?? [])],
+    exceptions: [...(runtime?.exceptions ?? base?.exceptions ?? [])],
+  } as T;
 }
 
 /**
@@ -494,6 +513,32 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.mcpNetworkPolicy;
+      return next;
+    });
+  }
+
+  /** Egress-политика скоупа (`tools`/`webhooks`), undefined — не задана. */
+  async getEgressPolicy(scope: EgressPolicyScope): Promise<EgressPolicy | WebhooksEgressPolicy | undefined> {
+    const settings = await this.load();
+    return settings.egress?.[scope];
+  }
+
+  async setEgressPolicy(scope: EgressPolicyScope, policy: EgressPolicy | WebhooksEgressPolicy): Promise<void> {
+    await this._update((current) => ({
+      ...current,
+      egress: { ...(current.egress ?? {}), [scope]: policy },
+    }));
+  }
+
+  async clearEgressPolicy(scope: EgressPolicyScope): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      if (next.egress) {
+        const egress = { ...next.egress };
+        delete egress[scope];
+        if (Object.keys(egress).length > 0) next.egress = egress;
+        else delete next.egress;
+      }
       return next;
     });
   }

@@ -10,6 +10,7 @@ import { WebhookStore } from '../../storage/webhook-store.js';
 import { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
 import { WebhookService } from '../../engine/webhooks/service.js';
 import { EventBus } from '../../events/bus.js';
+import { PRIVATE_EGRESS_POLICY } from '../../engine/net/egress-guard.js';
 
 /** Mock-auth: requireAuth пропускает и выставляет пользователя. */
 const mockAuth = {
@@ -29,7 +30,11 @@ describe('Webhooks API Routes (ADR-052, этап II)', () => {
     const app = new Hono();
     app.route(
       '/api/v2/webhooks',
-      createWebhookRoutes(mockAuth, { store, deliveryStore, service }, opts),
+      createWebhookRoutes(mockAuth, { store, deliveryStore, service }, {
+        // Обычная (deny приватных) политика по умолчанию; dev-тест передаёт `off`.
+        resolvePolicy: async () => PRIVATE_EGRESS_POLICY,
+        ...opts,
+      }),
     );
     return app;
   };
@@ -49,7 +54,12 @@ describe('Webhooks API Routes (ADR-052, этап II)', () => {
       store,
       deliveryStore,
       eventBus: new EventBus(),
-      config: { enabled: true, maxAttempts: 1, timeoutMs: 1_000, allowPrivateTargets: true },
+      config: {
+        enabled: true,
+        maxAttempts: 1,
+        timeoutMs: 1_000,
+        policy: { mode: 'off', list: [], exceptions: [] },
+      },
       fetchImpl: async () => new Response(null, { status: 200 }),
     });
   });
@@ -100,8 +110,11 @@ describe('Webhooks API Routes (ADR-052, этап II)', () => {
     expect((await postJson(app, '/api/v2/webhooks', { label: 'p', url: 'https://127.0.0.1/hook' })).status).toBe(400);
     expect((await postJson(app, '/api/v2/webhooks', { label: 'h', url: 'http://example.com/hook' })).status).toBe(400);
 
-    // allowPrivateTargets снимает ограничения.
-    const dev = makeApp({ isEnabled: () => true, allowPrivateTargets: true });
+    // `egress.webhooks.mode='off'` снимает ограничения (dev).
+    const dev = makeApp({
+      isEnabled: () => true,
+      resolvePolicy: async () => ({ mode: 'off', list: [], exceptions: [] }),
+    });
     expect((await postJson(dev, '/api/v2/webhooks', { label: 'dev', url: 'http://127.0.0.1/hook' })).status).toBe(201);
   });
 

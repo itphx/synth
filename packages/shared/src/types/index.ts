@@ -51,3 +51,5 @@ export * from './service-keys.js';
 export * from './webhooks.js';
 // ADR-092 (остаток): аудит-журнал обслуживания инстанса — re-exported from maintenance.ts
 export * from './maintenance.js';
+// Egress-политика, журнал внешних запросов и аудит security-политик
+export * from './egress.js';

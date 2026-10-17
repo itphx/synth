@@ -10,6 +10,7 @@ import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings } from '../../s
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import type { AuthKit } from '../../auth/local.js';
 import type { LLMGatewayConfig } from '@itphx/synth-shared';
+import { MemorySecurityAuditRepository } from '../../storage/memory/index.js';
 
 function createMockAuth(): AuthKit {
   return {
@@ -660,12 +661,13 @@ describe('Settings API Routes (workspace)', () => {
       });
       expect(put.status).toBe(200);
       const putBody: any = await put.json();
-      expect(putBody).toEqual({ policy: { mode: 'allow', list: ['example.com', '192.168.0.0/16'] } });
+      expect(putBody).toEqual({ policy: { mode: 'allow', list: ['example.com', '192.168.0.0/16'], exceptions: [] } });
 
       const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
       expect(await restartedStore.getMcpNetworkPolicy()).toEqual({
         mode: 'allow',
         list: ['example.com', '192.168.0.0/16'],
+        exceptions: [],
       });
     });
 
@@ -705,7 +707,7 @@ describe('Settings API Routes (workspace)', () => {
       });
       expect(res.status).toBe(200);
       expect(onMcpNetworkPolicyChange).toHaveBeenCalledTimes(1);
-      expect(onMcpNetworkPolicyChange).toHaveBeenCalledWith({ mode: 'allow', list: ['example.com'] });
+      expect(onMcpNetworkPolicyChange).toHaveBeenCalledWith({ mode: 'allow', list: ['example.com'], exceptions: [] });
     });
   });
 
@@ -1715,5 +1717,132 @@ describe('Settings API Routes (decision, ADR-084)', () => {
     expect((await app.request('/api/v2/settings/decision/metrics')).status).toBe(200);
     const del = await app.request('/api/v2/settings/decision/metrics', { method: 'DELETE' });
     expect(del.status).toBe(403);
+  });
+});
+describe('Settings API Routes — egress (настраиваемая политика)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-settings-egress-'));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeEgressApp(extra: Partial<import('./settings.js').SettingsRoutesDeps> = {}) {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: '/default/egress-test-workspace',
+      ...extra,
+    }));
+    const json = (method: string, path: string, body?: unknown) => app.request(path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+    return { app, settingsStore, json };
+  }
+
+  it('mode=off принимается для egress.webhooks и отклоняется для tools/mcp', async () => {
+    const { json } = makeEgressApp();
+    const off = { mode: 'off', list: [], exceptions: [] };
+
+    expect((await json('PUT', '/api/v2/settings/egress/webhooks', { policy: off })).status).toBe(200);
+    expect((await json('PUT', '/api/v2/settings/egress/tools', { policy: off })).status).toBe(400);
+    expect((await json('PUT', '/api/v2/settings/mcp-network-policy', { policy: off })).status).toBe(400);
+  });
+
+  it('невалидные записи политики → 400 VALIDATION_ERROR', async () => {
+    const { json } = makeEgressApp();
+    for (const rule of ['10.0.0.0/33', 'bad host', '']) {
+      const res = await json('PUT', '/api/v2/settings/egress/tools', {
+        policy: { mode: 'deny', list: [rule], exceptions: [] },
+      });
+      expect(res.status, rule || '(empty)').toBe(400);
+      expect((await res.json() as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    }
+    const badException = await json('PUT', '/api/v2/settings/egress/tools', {
+      policy: { mode: 'deny', list: [], exceptions: ['bad host'] },
+    });
+    expect(badException.status).toBe(400);
+  });
+
+  it('POST /egress/check не делает сетевой запрос и отдаёт matchedRule/addresses', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    const { json } = makeEgressApp();
+
+    const res = await json('POST', '/api/v2/settings/egress/check', {
+      scope: 'tools',
+      url: 'https://10.0.0.5/x',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      allowed: boolean;
+      reason?: string;
+      matchedRule?: string;
+      addresses?: string[];
+    };
+    expect(body.allowed).toBe(false);
+    expect(body.reason).toBeTruthy();
+    expect(body.matchedRule).toBe('10.0.0.0/8');
+    expect(body.addresses).toEqual(['10.0.0.5']);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('live: смена политики в сторе видна следующему /egress/check без пересоздания app', async () => {
+    const { json } = makeEgressApp();
+    const check = async () => (await (await json('POST', '/api/v2/settings/egress/check', {
+      scope: 'tools',
+      url: 'https://93.184.216.34/x',
+    })).json() as { allowed: boolean });
+
+    expect((await check()).allowed).toBe(true);
+    expect((await json('PUT', '/api/v2/settings/egress/tools', {
+      policy: { mode: 'allow', list: ['93.184.216.34/32'], exceptions: [] },
+    })).status).toBe(200);
+    expect((await check()).allowed).toBe(true);
+
+    expect((await json('PUT', '/api/v2/settings/egress/tools', {
+      policy: { mode: 'deny', list: ['93.184.216.34/32'], exceptions: [] },
+    })).status).toBe(200);
+    expect((await check()).allowed).toBe(false);
+  });
+
+  it('аудит: PUT и DELETE пишут before/after, actor, scope', async () => {
+    const audit = new MemorySecurityAuditRepository();
+    const { json } = makeEgressApp({ securityAudit: audit });
+    const policy = { mode: 'allow', list: ['10.0.0.0/8'], exceptions: [] };
+
+    expect((await json('PUT', '/api/v2/settings/egress/tools', { policy })).status).toBe(200);
+    expect((await json('DELETE', '/api/v2/settings/egress/tools')).status).toBe(200);
+
+    const entries = await audit.list();
+    expect(entries).toHaveLength(2);
+    expect(entries[0]!.action).toBe('reset');
+    expect(entries[0]!.scope).toBe('tools');
+    expect(entries[0]!.actor).toBe('local');
+    expect(entries[0]!.before).toEqual(policy);
+    expect(entries[0]!.after).toBeNull();
+    expect(entries[1]!.action).toBe('update');
+    expect(entries[1]!.after).toEqual(policy);
+  });
+
+  it('ошибка аудита не ломает ответ PUT', async () => {
+    const broken = {
+      append: async () => { throw new Error('audit down'); },
+      list: async () => [],
+      clear: async () => 0,
+    } as unknown as MemorySecurityAuditRepository;
+    const { json } = makeEgressApp({ securityAudit: broken });
+
+    const res = await json('PUT', '/api/v2/settings/egress/webhooks', {
+      policy: { mode: 'deny', list: [], exceptions: [] },
+    });
+    expect(res.status).toBe(200);
   });
 });

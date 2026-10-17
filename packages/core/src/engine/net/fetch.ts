@@ -14,9 +14,11 @@
  * удобные обёртки (`validateRemoteUrl`/`fetchText`) и таймаут/лимит байт.
  */
 
-import { PRIVATE_EGRESS_POLICY, checkEgressUrl, fetchWithEgressGuard, EgressBlockedError } from './egress-guard.js';
+import { checkEgressUrl, fetchWithEgressGuard, EgressBlockedError } from './egress-guard.js';
 import type { FetchLike } from './egress-guard.js';
 import type { HostResolver } from '../mcp/network-policy.js';
+import type { EgressPolicy, EgressRequestScope } from '@itphx/synth-shared';
+import { resolveToolsEgressPolicy, currentEgressLog } from './egress-runtime.js';
 
 // Обратная совместимость: SSRF-примитивы и тип транспорта жили здесь.
 export { isBlockedHost, isBlockedIp } from './egress-guard.js';
@@ -33,19 +35,20 @@ export class RemoteTimeoutError extends Error {
 export interface ValidateRemoteUrlOptions {
   /** Инъекция DNS-резолвера (тесты). */
   resolveHost?: HostResolver;
+  /** Resolved-политика; не задана — живой резолвер (settings → config → дефолт). */
+  policy?: EgressPolicy;
 }
 
 /**
- * Валидация URL удалённого источника: protocol + SSRF (литерал и **DNS-резолв
+ * Валидация URL удалённого источника: protocol + SSRF (исключения и **DNS-резолв
  * всех A/AAAA**). Ошибка/пустой резолв → `{ error }` (fail-closed).
  */
 export async function validateRemoteUrl(
   raw: string,
   options: ValidateRemoteUrlOptions = {},
 ): Promise<{ url: URL } | { error: string }> {
-  const check = await checkEgressUrl(raw, PRIVATE_EGRESS_POLICY, {
-    resolveHost: options.resolveHost,
-  });
+  const policy = options.policy ?? await resolveToolsEgressPolicy();
+  const check = await checkEgressUrl(raw, policy, { resolveHost: options.resolveHost });
   return check.allowed ? { url: check.url } : { error: check.reason };
 }
 
@@ -95,6 +98,13 @@ export interface FetchTextOptions {
   fetchImpl: FetchLike;
   /** Инъекция DNS-резолвера SSRF-проверки (тесты). */
   resolveHost?: HostResolver;
+  /** Resolved-политика; не задана — живой резолвер (settings → config → дефолт). */
+  policy?: EgressPolicy;
+  /** Источник запроса для журнала egress. */
+  scope?: EgressRequestScope;
+  sessionId?: string;
+  projectId?: string;
+  actor?: string;
 }
 
 /**
@@ -107,16 +117,22 @@ export async function fetchText(
   rawUrl: string,
   opts: FetchTextOptions,
 ): Promise<{ text: string } | { error: string }> {
+  const policy = opts.policy ?? await resolveToolsEgressPolicy();
   let res: Response;
   try {
     res = await fetchWithEgressGuard(
       rawUrl,
       { redirect: 'manual' },
       {
-        policy: PRIVATE_EGRESS_POLICY,
+        policy,
         resolveHost: opts.resolveHost,
         maxHops: opts.maxHops,
         fetchImpl: (input, init) => fetchWithTimeout(input, init ?? {}, opts.fetchImpl, opts.timeoutMs),
+        ...(opts.scope ? { scope: opts.scope } : {}),
+        ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+        ...(opts.projectId ? { projectId: opts.projectId } : {}),
+        ...(opts.actor ? { actor: opts.actor } : {}),
+        log: currentEgressLog(),
       },
     );
   } catch (err) {

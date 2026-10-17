@@ -23,10 +23,11 @@ describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
 });
 
 describe('mcpNetworkPolicySchema (ADR-071 §2.3.1)', () => {
-  it('дефолт — deny приватных диапазонов', () => {
+  it('дефолт — deny приватных диапазонов + пустые exceptions', () => {
     const policy = mcpNetworkPolicySchema.parse({});
     expect(policy.mode).toBe('deny');
     expect(policy.list).toEqual([...DEFAULT_MCP_PRIVATE_CIDRS]);
+    expect(policy.exceptions).toEqual([]);
   });
 
   it('mcpConfigSchema подставляет networkPolicy', () => {

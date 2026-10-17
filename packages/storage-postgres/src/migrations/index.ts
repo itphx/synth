@@ -10,6 +10,7 @@
  */
 
 import { MIGRATION_001_INIT } from './001-init.js';
+import { MIGRATION_002_EGRESS_AUDIT } from './002-egress-audit.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -24,6 +25,7 @@ export interface PostgresMigration {
 /** Полный набор миграций драйвера (по возрастанию версии). */
 export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 1, id: '001_init', sql: MIGRATION_001_INIT },
+  { version: 2, id: '002_egress_audit', sql: MIGRATION_002_EGRESS_AUDIT },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */

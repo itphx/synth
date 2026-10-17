@@ -17,11 +17,14 @@ function createKit() {
   };
 }
 
-async function makeApp(tmpDir: string) {
+async function makeApp(
+  tmpDir: string,
+  egress?: import('./providers.js').ProviderRoutesEgressOptions,
+) {
   const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
   const providerCache = new Map<string, ProviderConfig>();
   const app = new Hono();
-  app.route(BASE, createProviderRoutes(createKit() as never, providerStore, providerCache));
+  app.route(BASE, createProviderRoutes(createKit() as never, providerStore, providerCache, egress));
   return { app, providerStore, providerCache };
 }
 
@@ -278,6 +281,23 @@ describe('routes/providers: fetch-icon — SSRF-политика resolved-URL (P
 
     expect(res.status).toBe(400);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('отказ первичной проверки пишется в egress-журнал (scope providers, blocked)', async () => {
+    const log = vi.fn();
+    stores = await makeApp(tmpDir, { log });
+    vi.stubGlobal('fetch', vi.fn());
+
+    const res = await stores.app.request(`${BASE}/fetch-icon`, postJSON({ url: 'http://10.0.0.5/' }));
+
+    expect(res.status).toBe(400);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith(expect.objectContaining({
+      scope: 'providers',
+      status: 'blocked',
+      host: '10.0.0.5',
+      method: 'GET',
+    }));
   });
 
   it('HTML указывает на приватный/локальный адрес → отказ, приватный URL не загружается', async () => {

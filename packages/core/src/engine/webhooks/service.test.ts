@@ -7,6 +7,10 @@ import { EventBus } from '../../events/bus.js';
 import { WebhookStore } from '../../storage/webhook-store.js';
 import { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
 import { WebhookService, computeBackoffMs } from './service.js';
+import { PRIVATE_EGRESS_POLICY } from '../net/egress-guard.js';
+import { createEgressLogSink } from '../net/egress-log.js';
+import { configureEgressRuntime, resetEgressRuntime } from '../net/egress-runtime.js';
+import { MemoryEgressRequestLogRepository } from '../../storage/memory/index.js';
 import type { WebhookServiceDeps } from './service.js';
 import { verifyWebhookSignature } from './signature.js';
 
@@ -21,7 +25,7 @@ describe('WebhookService (ADR-052, этап II)', () => {
     enabled: true,
     maxAttempts: 3,
     timeoutMs: 5_000,
-    allowPrivateTargets: true,
+    policy: PRIVATE_EGRESS_POLICY,
   };
 
   const makeService = (
@@ -79,6 +83,7 @@ describe('WebhookService (ADR-052, этап II)', () => {
 
   afterEach(async () => {
     service?.stop();
+    resetEgressRuntime();
     await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -214,7 +219,7 @@ describe('WebhookService (ADR-052, этап II)', () => {
       }
       return okResponse();
     });
-    makeService(fetchImpl, { allowPrivateTargets: false }, {
+    makeService(fetchImpl, {}, {
       resolveHost: async (host) => (host === 'internal.example' ? ['10.0.0.5'] : ['93.184.216.34']),
     });
 
@@ -238,7 +243,7 @@ describe('WebhookService (ADR-052, этап II)', () => {
       if (String(input) === 'https://target.example/final') return okResponse();
       throw new Error(`unexpected: ${String(input)}`);
     });
-    makeService(fetchImpl, { allowPrivateTargets: false }, {
+    makeService(fetchImpl, {}, {
       resolveHost: async () => ['93.184.216.34'],
     });
 
@@ -255,7 +260,7 @@ describe('WebhookService (ADR-052, этап II)', () => {
     await store.create({ label: 's', url: 'https://hooks.example/hook', events: ['session.created'] }, 'u-1');
     const fetchImpl = vi.fn<FetchLike>(async () =>
       new Response(null, { status: 302, headers: { location: 'https://hooks.example/loop' } }));
-    makeService(fetchImpl, { allowPrivateTargets: false, maxAttempts: 1 }, {
+    makeService(fetchImpl, { maxAttempts: 1 }, {
       resolveHost: async () => ['93.184.216.34'],
     });
 
@@ -268,6 +273,41 @@ describe('WebhookService (ADR-052, этап II)', () => {
     expect(delivery.error).toMatch(/редирект/i);
     // 5 разрешённых хопов + начальный запрос = 6, дальше отказ.
     expect(fetchImpl).toHaveBeenCalledTimes(6);
+  });
+
+  it('пишет доставки в журнал egress (blocked и allowed, scope webhooks)', async () => {
+    const repo = new MemoryEgressRequestLogRepository();
+    configureEgressRuntime({ log: createEgressLogSink(repo, { enabled: true }) });
+
+    // Заблокированная цель: отказ до HTTP-запроса.
+    await store.create({ label: 'blocked', url: 'https://127.0.0.1/hook', events: ['session.created'] }, 'u-1');
+    const neverFetch = vi.fn<FetchLike>(async () => okResponse());
+    makeService(neverFetch);
+    bus.publish('s1', 'session.created', { n: 1 });
+    await vi.waitFor(async () => {
+      expect(await deliveryStore.list()).toHaveLength(1);
+    });
+    expect(neverFetch).not.toHaveBeenCalled();
+    const blocked = (await repo.list())[0]!;
+    expect(blocked).toMatchObject({ scope: 'webhooks', status: 'blocked', host: '127.0.0.1' });
+    expect(blocked.reason).toBeTruthy();
+
+    // Разрешённая цель: запись allowed с httpStatus.
+    await store.create({ label: 'allowed', url: 'https://93.184.216.34/hook', events: ['session.moved'] }, 'u-1');
+    service.stop();
+    makeService(vi.fn<FetchLike>(async () => okResponse()));
+    bus.publish('s1', 'session.moved', { n: 2 });
+    await vi.waitFor(async () => {
+      expect(await deliveryStore.list()).toHaveLength(2);
+    });
+    const allowed = (await repo.list())[0]!;
+    expect(allowed).toMatchObject({
+      scope: 'webhooks',
+      status: 'allowed',
+      host: '93.184.216.34',
+      httpStatus: 200,
+    });
+    expect(allowed.url).toBe('https://93.184.216.34/hook');
   });
 
   it('computeBackoffMs: экспоненциальный рост и джиттер в границах', () => {

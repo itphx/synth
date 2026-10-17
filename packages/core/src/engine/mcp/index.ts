@@ -8,6 +8,11 @@ export {
   evaluateMcpNetworkAccess,
   isIpInCidr,
   isHttpMcpConfig,
+  isLocalHostname,
+  isAddressRule,
+  hostMatchesRule,
+  findHostException,
+  findAddressException,
   normalizeIp,
   mappedIpv4,
 } from './network-policy.js';

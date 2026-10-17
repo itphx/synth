@@ -113,6 +113,8 @@ export interface StandaloneConfig {
   decisionConfig?: SynthConfig['decision'];
   /** ADR-052 (этап II): конфигурация исходящих webhooks из config.yaml `webhooks`. */
   webhooksConfig?: WebhooksConfig;
+  /** Egress: политика tools/webhooks и журнал внешних запросов из config.yaml. */
+  egressConfig?: SynthConfig['egress'];
   /**
    * Дефолтный адрес удалённого backend (гибрид, `serve --connect`/env/конфиг).
    * Нужен для авто-логина (GET /auth/status) и POST /auth/login без поля server.
@@ -435,6 +437,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // ADR-052 (этап II): остановка движка webhooks и retention-очистки доставок.
     stopWebhookService: () => deps.webhookService.stop(),
     stopWebhookDeliveryPruner: () => deps.stopWebhookDeliveryPruner(),
+    // Egress: остановка retention-очистки журнала внешних запросов.
+    stopEgressLogPruner: () => deps.stopEgressLogPruner(),
     // ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики).
     webhookStore: deps.webhookStore,
     webhookService: deps.webhookService,

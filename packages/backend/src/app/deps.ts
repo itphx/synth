@@ -6,7 +6,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   ProviderConfig, ModelConfig, ToolsDisabledConfig, WebhooksConfig,
-  SummarizationConfig, McpNetworkPolicy, DecisionConfig,
+  SummarizationConfig, DecisionConfig,
 } from '@itphx/synth-shared';
 import {
   ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
@@ -19,7 +19,9 @@ import {
   createToolRegistry, createAgentRegistry, McpManager,
   DEFAULT_AGENT_ID,
   AuditLogger, mergeLlmGatewayConfig, mergeSecurityConfig,
-  mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig,
+  mergeEventsConfig, mergeDecisionConfig,
+  createEgressPolicyResolver, createEgressLogSink,
+  configureEgressRuntime, startEgressLogPruner,
   SkillService, resolveProjectSkillSeed,
   CommandService,
   detectRuntimeDeps, syncProvidersFromEnv,
@@ -118,6 +120,8 @@ export async function createBackendDeps(
     dictionaries: dictionaryStore,
     serviceKeys: serviceApiKeyStore,
     webhooks: webhookStore,
+    securityAudit,
+    egressRequests,
     webhookDeliveries: webhookDeliveryStore,
     eventBindings: eventBindingStore,
     eventApiKeys: eventApiKeyStore,
@@ -175,17 +179,23 @@ export async function createBackendDeps(
   mcpManager.setDefaultServers(mcpMaps.defaults);
   // ADR-071 §2.4: системный мастер-флаг серверов (реестр `enabled`).
   mcpManager.setServerSystemEnabled(mcpMaps.systemEnabled);
-  // ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress).
-  // Runtime-настройка из админки (settings.json) приоритетнее config.yaml и
-  // переживает рестарт; храним в изменяемой переменной (аксессор `live`), чтобы
-  // registry-роуты видели свежее значение без рестарта. Слияние — единым
-  // helper'ом mergeMcpNetworkPolicy (тот же, что и в core).
-  const runtimeMcpNetworkPolicy = await settingsStore.getMcpNetworkPolicy();
-  let effectiveNetworkPolicy = mergeMcpNetworkPolicy(
-    config.synth.mcp.networkPolicy,
-    runtimeMcpNetworkPolicy,
-  );
-  mcpManager.setNetworkPolicy(effectiveNetworkPolicy);
+  // Egress: живой резолвер политики (settings.json → config.yaml → дефолт) и
+  // журнал внешних запросов. Резолвер читает стор на каждый запрос (live).
+  const egressResolver = createEgressPolicyResolver(settingsStore, {
+    tools: config.synth.egress.tools,
+    webhooks: config.synth.egress.webhooks,
+    mcp: config.synth.mcp.networkPolicy,
+  });
+  const egressLogConfig = config.synth.egress.log;
+  const egressLog = createEgressLogSink(egressRequests, { enabled: () => egressLogConfig.enabled });
+  configureEgressRuntime({ resolver: egressResolver, log: egressLog });
+  const stopEgressLogPruner = storageDegraded || !egressLogConfig.enabled
+    ? () => {}
+    : startEgressLogPruner(egressRequests, { getRetentionDays: () => egressLogConfig.retentionDays });
+
+  // ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов (SSRF/egress)
+  // резолвится при каждом connect/probe (live; без стартового снимка).
+  mcpManager.setNetworkPolicyResolver(() => egressResolver.resolveMcp());
 
   // Сидирование тестовых пользователей (debug mode) — до построения рантайма
   // (паритет с прежним `app.ts`: сид стоял между хранилищами и рантаймом).
@@ -204,7 +214,11 @@ export async function createBackendDeps(
     store: webhookStore,
     deliveryStore: webhookDeliveryStore,
     eventBus,
-    config: webhooksConfig,
+    config: {
+      ...webhooksConfig,
+      // Отдельный экземпляр политики (граница доверия не смешивается с tools).
+      resolvePolicy: () => egressResolver.resolveWebhooks(),
+    },
   });
   if (!storageDegraded) webhookService.start();
   // Retention-очистка журнала доставок: сразу при старте + каждые 6 ч (unref).
@@ -684,6 +698,11 @@ export async function createBackendDeps(
     defaultsStore,
     defaultWorkingDir,
     getDefaultAgentId,
+    egressResolver,
+    egressLogConfig,
+    securityAudit,
+    egressRequests,
+    stopEgressLogPruner,
     mcpManager,
     mcpRegistryStore,
     eventBus,
@@ -732,13 +751,6 @@ export async function createBackendDeps(
      * потребителями через замыкания (ADR-071 §2.3.1 / ADR-084 / ADR-089).
      */
     live: {
-      /** ADR-071 §2.3.1: эффективная политика сетевого доступа MCP. */
-      getNetworkPolicy: (): McpNetworkPolicy | undefined => effectiveNetworkPolicy,
-      /** ADR-071 §2.3.1: live-применение политики (админка → менеджер MCP). */
-      setNetworkPolicy: (policy: McpNetworkPolicy): void => {
-        effectiveNetworkPolicy = policy;
-        mcpManager.setNetworkPolicy(policy);
-      },
       /** ADR-089: runtime-настройки «События» (`enabled`/per-key лимит — роуты). */
       getEvents: (): EventsRuntimeSettings => effectiveEventsSettings,
       /** ADR-089: live-применение runtime-настроек «События» — Router/funnel/pruner. */

@@ -7,6 +7,11 @@ import {
   COMMAND_CONFLICT_MODES,
   DEFAULT_MCP_PRIVATE_CIDRS,
   DEFAULT_MCP_NETWORK_POLICY,
+  DEFAULT_EGRESS_TOOLS_POLICY,
+  DEFAULT_EGRESS_WEBHOOKS_POLICY,
+  DEFAULT_EGRESS_LOG,
+  EGRESS_POLICY_MODES,
+  WEBHOOKS_EGRESS_POLICY_MODES,
   DEFAULT_LLM_GATEWAY_RATE_LIMIT,
   DEFAULT_MAX_UPLOAD_BYTES,
   MIN_UPLOAD_BYTES,
@@ -237,6 +242,8 @@ export const mcpServerConfigSchema = z.object({
 export const mcpNetworkPolicySchema = z.object({
   mode: z.enum(MCP_NETWORK_POLICY_MODES).default(DEFAULT_MCP_NETWORK_POLICY.mode),
   list: z.array(z.string()).default([...DEFAULT_MCP_PRIVATE_CIDRS]),
+  /** Allow-правила-исключения (общий формат с `egress.*`). */
+  exceptions: z.array(z.string()).default([]),
 });
 
 export const mcpConfigSchema = z.object({
@@ -459,16 +466,48 @@ export const decisionConfigSchema = z.object({
  * - `enabled` — мастер-выключатель доставки (по умолчанию выключен);
  * - `maxAttempts` — число HTTP-попыток на доставку (экспоненциальный backoff с джиттером);
  * - `timeoutMs` — таймаут одного HTTP-запроса;
- * - `allowPrivateTargets` — разрешить http и приватные/loopback адреса (для dev;
- *   по умолчанию `false` — только https и публичные адреса, защита от SSRF);
  * - `deliveryRetentionDays` — срок хранения журнала доставок (0 — без ограничения).
+ *
+ * Политика egress (https/приватные адреса) вынесена в `egress.webhooks`
+ * (`mode: 'off'` заменяет удалённый `allowPrivateTargets`).
  */
 export const webhooksConfigSchema = z.object({
   enabled: z.boolean().default(false),
   maxAttempts: z.number().int().min(1).max(10).default(5),
   timeoutMs: z.number().int().min(1).default(10_000),
-  allowPrivateTargets: z.boolean().default(false),
   deliveryRetentionDays: z.number().int().min(0).default(30),
+});
+
+// --- Egress-политика (shared формат tools/webhooks/MCP) ---
+
+/** Общий формат политики egress (`mode` + `list` + `exceptions`). */
+export const egressPolicySchema = z.object({
+  mode: z.enum(EGRESS_POLICY_MODES).default(DEFAULT_EGRESS_TOOLS_POLICY.mode),
+  list: z.array(z.string()).default([...DEFAULT_MCP_PRIVATE_CIDRS]),
+  exceptions: z.array(z.string()).default([]),
+});
+
+/** Политика webhooks: дополнительно `off` (dev — без проверок и без https). */
+export const webhooksEgressPolicySchema = z.object({
+  mode: z.enum(WEBHOOKS_EGRESS_POLICY_MODES).default(DEFAULT_EGRESS_WEBHOOKS_POLICY.mode),
+  list: z.array(z.string()).default([...DEFAULT_MCP_PRIVATE_CIDRS]),
+  exceptions: z.array(z.string()).default([]),
+});
+
+export const egressLogConfigSchema = z.object({
+  enabled: z.boolean().default(DEFAULT_EGRESS_LOG.enabled),
+  retentionDays: z.number().int().min(0).default(DEFAULT_EGRESS_LOG.retentionDays),
+});
+
+/**
+ * `egress` — настраиваемая политика исходящих запросов (tools/webhooks) и
+ * журнал внешних запросов. `mcp.networkPolicy` остаётся отдельным ключом, но
+ * использует тот же формат (mode `deny|allow` + `exceptions`).
+ */
+export const egressConfigSchema = z.object({
+  tools: egressPolicySchema.default({}),
+  webhooks: webhooksEgressPolicySchema.default({}),
+  log: egressLogConfigSchema.default({}),
 });
 
 // --- Проектные инструкции (ADR-069) ---
@@ -762,6 +801,7 @@ export const synthConfigSchema = z.object({
   events: eventsConfigSchema.default({}),
   scheduler: schedulerConfigSchema.default({}),
   decision: decisionConfigSchema.default({}),
+  egress: egressConfigSchema.default({}),
   webhooks: webhooksConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
   router: routerConfigSchema.default({}),
@@ -797,6 +837,10 @@ export type EventsConfig = z.infer<typeof eventsConfigSchema>;
 export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
 export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
 export type WebhooksConfig = z.infer<typeof webhooksConfigSchema>;
+export type EgressPolicyConfig = z.infer<typeof egressPolicySchema>;
+export type WebhooksEgressPolicyConfig = z.infer<typeof webhooksEgressPolicySchema>;
+export type EgressLogConfig = z.infer<typeof egressLogConfigSchema>;
+export type EgressConfig = z.infer<typeof egressConfigSchema>;
 export type InstructionSourceConfig = z.infer<typeof instructionSourceConfigSchema>;
 export type InstructionsLazyConfig = z.infer<typeof instructionsLazyConfigSchema>;
 export type InstructionsFetchConfig = z.infer<typeof instructionsFetchConfigSchema>;

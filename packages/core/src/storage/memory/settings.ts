@@ -19,6 +19,9 @@
  */
 
 import type {
+  EgressPolicy,
+  EgressPolicyScope,
+  WebhooksEgressPolicy,
   McpNetworkPolicy,
   McpServerToolSettings,
   SkillsDisabledRequest,
@@ -208,6 +211,23 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearMcpNetworkPolicy(): Promise<void> {
     this._clear('mcpNetworkPolicy');
+  }
+
+  async getEgressPolicy(scope: EgressPolicyScope): Promise<EgressPolicy | WebhooksEgressPolicy | undefined> {
+    return this._settings.egress?.[scope];
+  }
+
+  async setEgressPolicy(scope: EgressPolicyScope, policy: EgressPolicy | WebhooksEgressPolicy): Promise<void> {
+    this._patch({ egress: { ...(this._settings.egress ?? {}), [scope]: policy } });
+  }
+
+  async clearEgressPolicy(scope: EgressPolicyScope): Promise<void> {
+    const egress = this._settings.egress;
+    if (!egress) return;
+    const nextEgress = { ...egress };
+    delete nextEgress[scope];
+    if (Object.keys(nextEgress).length > 0) this._patch({ egress: nextEgress });
+    else this._clear('egress');
   }
 
   async getDefaultAgent(): Promise<string | undefined> {

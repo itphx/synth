@@ -1,31 +1,32 @@
-import { PRIVATE_EGRESS_POLICY, checkEgressUrl } from '../net/egress-guard.js';
+import { checkEgressUrl } from '../net/egress-guard.js';
 import type { HostResolver } from '../mcp/network-policy.js';
+import type { EgressPolicy, WebhooksEgressPolicy } from '@itphx/synth-shared';
 
 /**
  * ADR-052 (этап II) / PROP-100: SSRF-политика исходящих webhooks.
  *
- * Переиспользует единый egress-guard (`engine/net/egress-guard.ts`): блокируются
- * loopback/private/link-local диапазоны с DNS-резолвом всех A/AAAA. Дополнительно
- * по умолчанию требуется `https`. Флаг `allowPrivateTargets` (для dev) снимает
- * оба ограничения.
+ * Переиспользует единый egress-guard (`engine/net/egress-guard.ts`): политика
+ * `egress.webhooks` (deny/allow + exceptions), DNS-резолв всех A/AAAA.
+ * `mode: 'off'` (dev) — проверок нет и `https` не требуется. `undefined`
+ * политика — fail-closed (а не «разрешено всё»).
  */
 export interface WebhookTargetCheckResult {
   allowed: boolean;
   reason?: string;
   addresses?: string[];
+  matchedRule?: string;
 }
 
 export interface WebhookTargetCheckOptions {
-  /** Разрешить http и приватные/loopback адреса (dev). */
-  allowPrivateTargets?: boolean;
+  /** Resolved-политика `egress.webhooks` (обязательна по смыслу). */
+  policy?: WebhooksEgressPolicy;
   /** Инъекция DNS-резолвера (тесты). */
   resolveHost?: HostResolver;
 }
 
 /**
- * Проверяет URL как цель webhook: схема http(s), при `allowPrivateTargets` —
- * разрешено всё; иначе обязателен `https` и адрес не в приватном диапазоне
- * (с DNS-резолвом).
+ * Проверяет URL как цель webhook: схема http(s); `off` — без ограничений;
+ * иначе обязателен `https` и адрес проходит политику (с DNS-резолвом).
  */
 export async function evaluateWebhookTarget(
   url: string,
@@ -42,16 +43,21 @@ export async function evaluateWebhookTarget(
     return { allowed: false, reason: `Недопустимая схема URL webhook: ${parsed.protocol}` };
   }
 
-  if (options.allowPrivateTargets) return { allowed: true };
+  const policy = options.policy;
+  if (!policy) {
+    return { allowed: false, reason: 'egress-политика webhooks не задана (fail-closed)' };
+  }
+  if (policy.mode === 'off') return { allowed: true };
 
   if (parsed.protocol !== 'https:') {
-    return { allowed: false, reason: 'webhook требует https (http разрешён только при allowPrivateTargets)' };
+    return { allowed: false, reason: "webhook требует https (http разрешён только при egress.webhooks.mode='off')" };
   }
 
-  const check = await checkEgressUrl(url, PRIVATE_EGRESS_POLICY, {
+  // `off` уже обработан: далее — обычная deny/allow-политика.
+  const check = await checkEgressUrl(url, policy as EgressPolicy, {
     resolveHost: options.resolveHost,
   });
   return check.allowed
-    ? { allowed: true, addresses: check.addresses }
-    : { allowed: false, reason: check.reason };
+    ? { allowed: true, addresses: check.addresses, matchedRule: check.matchedRule }
+    : { allowed: false, reason: check.reason, matchedRule: check.matchedRule };
 }

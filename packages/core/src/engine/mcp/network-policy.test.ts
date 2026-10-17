@@ -130,7 +130,8 @@ describe('evaluateMcpNetworkAccess (ADR-071 §2.3.1)', () => {
 
   it('allow разрешает только перечисленные диапазоны', async () => {
     const policy: McpNetworkPolicy = { mode: 'allow', list: ['127.0.0.0/8'] };
-    expect((await evaluateMcpNetworkAccess('http://localhost/mcp', policy, { resolveHost: resolveTo('127.0.0.1') })).allowed).toBe(true);
+    // Литеральный IP (localhost — локальное имя, блокируется политикой, если не exception).
+    expect((await evaluateMcpNetworkAccess('http://127.0.0.5/mcp', policy)).allowed).toBe(true);
     expect((await evaluateMcpNetworkAccess('http://10.0.0.5/mcp', policy)).allowed).toBe(false);
   });
 
@@ -148,8 +149,8 @@ describe('evaluateMcpNetworkAccess (ADR-071 §2.3.1)', () => {
     expect(result.allowed).toBe(false);
   });
 
-  it('undefined-политика не блокирует', async () => {
-    expect((await evaluateMcpNetworkAccess('http://10.0.0.5/mcp', undefined)).allowed).toBe(true);
+  it('undefined-политика — fail-closed', async () => {
+    expect((await evaluateMcpNetworkAccess('http://10.0.0.5/mcp', undefined)).allowed).toBe(false);
   });
 
   it('deny блокирует IPv4-mapped loopback/link-local/metadata (обход через v6)', async () => {

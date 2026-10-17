@@ -48,7 +48,7 @@ export interface McpRoutesOptions {
    * ADR-071 §2.3.1: динамический источник политики (runtime-настройка из админки).
    * Приоритетнее статической `networkPolicy`; читается на каждый запрос.
    */
-  getNetworkPolicy?: () => McpNetworkPolicy | undefined;
+  getNetworkPolicy?: () => Promise<McpNetworkPolicy | undefined>;
 }
 
 export function createMcpRegistryRoutes(
@@ -59,8 +59,8 @@ export function createMcpRegistryRoutes(
 ): Hono {
   const app = new Hono();
   const registry = options.registry;
-  const resolveNetworkPolicy = (): McpNetworkPolicy | undefined =>
-    options.getNetworkPolicy?.() ?? options.networkPolicy;
+  const resolveNetworkPolicy = async (): Promise<McpNetworkPolicy | undefined> =>
+    (options.getNetworkPolicy ? await options.getNetworkPolicy() : undefined) ?? options.networkPolicy;
 
   /** Синхронизировать конфиг менеджера из реестра — одно чтение на все карты. */
   const syncManagerConfig = async (): Promise<void> => {
@@ -97,7 +97,7 @@ export function createMcpRegistryRoutes(
     // ADR-071 §2.3.1: политика — для пользовательских HTTP-серверов; instance
     // (в т.ч. приватные сети инстанса) доверенные.
     if (origin !== 'user' || config.type === 'stdio' || !config.url) return null;
-    const policy = resolveNetworkPolicy();
+    const policy = await resolveNetworkPolicy();
     if (!policy) return null;
     const result = await evaluateMcpNetworkAccess(config.url, policy);
     if (result.allowed) return null;

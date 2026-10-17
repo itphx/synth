@@ -97,6 +97,8 @@ export interface BackendAppHandle {
   stopWebhookService: () => void;
   /** ADR-052 (этап II): остановка retention-очистки журнала доставок. */
   stopWebhookDeliveryPruner: () => void;
+  /** Egress: остановка retention-очистки журнала внешних запросов. */
+  stopEgressLogPruner: () => void;
   /**
    * Поднять HTTP-сервер (+ WebSocket /ws/events) на указанном порту.
    * Порт 0 → эфемерный; возвращает фактический порт.
@@ -302,6 +304,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       webhookService: deps.webhookService,
       stopWebhookService: () => deps.webhookService.stop(),
       stopWebhookDeliveryPruner: () => deps.stopWebhookDeliveryPruner(),
+      stopEgressLogPruner: () => deps.stopEgressLogPruner(),
       listen,
     };
   } finally {

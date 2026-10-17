@@ -94,8 +94,59 @@ describe('egress-guard: checkEgressUrl (PROP-100 дефект 1 — DNS-резо
     expect(res.allowed).toBe(false);
   });
 
-  it('undefined-политика (dev) не блокирует приватные литералы', async () => {
-    expect((await checkEgressUrl('http://127.0.0.1/x', undefined)).allowed).toBe(true);
+  it('undefined-политика — fail-closed (не «разрешено всё»)', async () => {
+    expect((await checkEgressUrl('http://127.0.0.1/x', undefined)).allowed).toBe(false);
+  });
+
+  it('exception-hostname разрешает адрес из 10.0.0.0/8', async () => {
+    const policy = {
+      mode: 'deny' as const,
+      list: ['10.0.0.0/8'],
+      exceptions: ['internal.example'],
+    };
+    const res = await checkEgressUrl('https://internal.example/x', policy, {
+      resolveHost: resolve({ 'internal.example': ['10.0.0.5'] }),
+    });
+    expect(res.allowed).toBe(true);
+    expect(res.matchedRule).toBe('internal.example');
+  });
+
+  it('exception *.suffix матчит поддомен, но не корень и не чужой суффикс', async () => {
+    const policy = {
+      mode: 'deny' as const,
+      list: ['10.0.0.0/8'],
+      exceptions: ['*.corp.example'],
+    };
+    const resolver = resolve({
+      'a.corp.example': ['10.0.0.5'],
+      'corp.example': ['10.0.0.6'],
+      'badcorp.example': ['10.0.0.7'],
+    });
+    expect((await checkEgressUrl('https://a.corp.example/x', policy, { resolveHost: resolver })).allowed).toBe(true);
+    expect((await checkEgressUrl('https://corp.example/x', policy, { resolveHost: resolver })).allowed).toBe(false);
+    expect((await checkEgressUrl('https://badcorp.example/x', policy, { resolveHost: resolver })).allowed).toBe(false);
+  });
+
+  it('без exception тот же адрес блокируется', async () => {
+    const res = await checkEgressUrl('https://internal.example/x', PRIVATE_EGRESS_POLICY, {
+      resolveHost: resolve({ 'internal.example': ['10.0.0.5'] }),
+    });
+    expect(res.allowed).toBe(false);
+    expect(res.matchedRule).toBe('10.0.0.0/8');
+  });
+
+  it('isBlockedHost/isBlockedIp: exception разрешает литеральный localhost/.local', () => {
+    const policy = {
+      mode: 'deny' as const,
+      list: ['127.0.0.0/8'],
+      exceptions: ['localhost', '*.local'],
+    };
+    expect(isBlockedHost('localhost', policy)).toBe(false);
+    expect(isBlockedHost('printer.local', policy)).toBe(false);
+    expect(isBlockedIp('127.0.0.1', { ...policy, exceptions: ['127.0.0.0/8'] })).toBe(false);
+    // Без exception — блокируется.
+    expect(isBlockedHost('localhost')).toBe(true);
+    expect(isBlockedIp('127.0.0.1')).toBe(true);
   });
 
   it('isBlockedHost/isBlockedIp — приватные литералы и локальные имена', () => {

@@ -4,8 +4,11 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolDefinition } from '@itphx/synth-shared';
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, isAbortError, signalAborted, abortedResult } from './abort.js';
-import { PRIVATE_EGRESS_POLICY, EgressBlockedError, fetchWithEgressGuard } from '../net/egress-guard.js';
+import { EgressBlockedError, fetchWithEgressGuard } from '../net/egress-guard.js';
+import type { EgressLogSink } from '../net/egress-guard.js';
 import { egressFetch } from '../../security/tls.js';
+import { resolveToolsEgressPolicy, currentEgressLog } from '../net/egress-runtime.js';
+import type { EgressPolicy } from '@itphx/synth-shared';
 import type { HostResolver } from '../mcp/network-policy.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 
@@ -133,7 +136,21 @@ function linkSignal(controller: AbortController, external?: AbortSignal): () => 
   return () => external.removeEventListener('abort', onAbort);
 }
 
-async function duckDuckGoSearch(query: string, limit: number, abortSignal?: AbortSignal, attempts = SEARCH_ATTEMPTS): Promise<SearchResult[]> {
+interface SearchEgressOptions {
+  policy: EgressPolicy;
+  log?: EgressLogSink;
+  sessionId?: string;
+  projectId?: string;
+  actor?: string;
+}
+
+async function duckDuckGoSearch(
+  query: string,
+  limit: number,
+  abortSignal?: AbortSignal,
+  egress?: SearchEgressOptions,
+  attempts = SEARCH_ATTEMPTS,
+): Promise<SearchResult[]> {
   let lastError = '';
   for (let attempt = 0; attempt < attempts; attempt++) {
     // «Стоп» пришёл между попытками — ретраи не выполняем
@@ -143,15 +160,28 @@ async function duckDuckGoSearch(query: string, limit: number, abortSignal?: Abor
     const unlink = linkSignal(controller, abortSignal);
 
     try {
-      const response = await egressFetch(DDG_SEARCH_URL, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          ...BROWSER_HEADERS,
-          'Content-Type': 'application/x-www-form-urlencoded',
+      const response = await fetchWithEgressGuard(
+        DDG_SEARCH_URL,
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            ...BROWSER_HEADERS,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: new URLSearchParams({ q: query }),
         },
-        body: new URLSearchParams({ q: query }),
-      });
+        {
+          policy: egress?.policy ?? await resolveToolsEgressPolicy(),
+          resolveHost: _hostResolver,
+          fetchImpl: egressFetch,
+          scope: 'web_search',
+          ...(egress?.log ? { log: egress.log } : {}),
+          ...(egress?.sessionId ? { sessionId: egress.sessionId } : {}),
+          ...(egress?.projectId ? { projectId: egress.projectId } : {}),
+          ...(egress?.actor ? { actor: egress.actor } : {}),
+        },
+      );
 
       const html = await response.text();
 
@@ -219,17 +249,35 @@ export function parseBingResults(html: string, limit: number): SearchResult[] {
   return results;
 }
 
-async function bingSearch(query: string, limit: number, abortSignal?: AbortSignal): Promise<SearchResult[]> {
+async function bingSearch(
+  query: string,
+  limit: number,
+  abortSignal?: AbortSignal,
+  egress?: SearchEgressOptions,
+): Promise<SearchResult[]> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
   const unlink = linkSignal(controller, abortSignal);
 
   try {
     const url = `${BING_SEARCH_URL}?q=${encodeURIComponent(query)}&count=${limit}`;
-    const response = await egressFetch(url, {
-      signal: controller.signal,
-      headers: BROWSER_HEADERS,
-    });
+    const response = await fetchWithEgressGuard(
+      url,
+      {
+        signal: controller.signal,
+        headers: BROWSER_HEADERS,
+      },
+      {
+        policy: egress?.policy ?? await resolveToolsEgressPolicy(),
+        resolveHost: _hostResolver,
+        fetchImpl: egressFetch,
+        scope: 'web_search',
+        ...(egress?.log ? { log: egress.log } : {}),
+        ...(egress?.sessionId ? { sessionId: egress.sessionId } : {}),
+        ...(egress?.projectId ? { projectId: egress.projectId } : {}),
+        ...(egress?.actor ? { actor: egress.actor } : {}),
+      },
+    );
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
@@ -308,14 +356,25 @@ export function _setWebFetchHostResolver(resolver: HostResolver | undefined): vo
  * политикой (не более MAX_REDIRECTS хопов). `redirect: 'manual'` не даёт уйти на
  * приватный адрес в обход проверки.
  */
-function fetchWithSsrfGuard(url: string, signal: AbortSignal): Promise<Response> {
+function fetchWithSsrfGuard(
+  url: string,
+  signal: AbortSignal,
+  policy: EgressPolicy,
+  extra: { log?: EgressLogSink; sessionId?: string; projectId?: string; actor?: string } = {},
+): Promise<Response> {
   return fetchWithEgressGuard(
     url,
     { signal, headers: BROWSER_HEADERS },
     {
-      policy: PRIVATE_EGRESS_POLICY,
+      policy,
       resolveHost: _hostResolver,
       maxHops: MAX_REDIRECTS,
+      fetchImpl: egressFetch,
+      scope: 'web_fetch',
+      ...(extra.log ? { log: extra.log } : {}),
+      ...(extra.sessionId ? { sessionId: extra.sessionId } : {}),
+      ...(extra.projectId ? { projectId: extra.projectId } : {}),
+      ...(extra.actor ? { actor: extra.actor } : {}),
     },
   );
 }
@@ -358,6 +417,14 @@ export const webFetchTool: ToolDefinition = {
     const restoredUrls = await Promise.all(rawUrls.map((u) => deobfuscateText(ctx, u)));
     const urls = restoredUrls.slice(0, MAX_FETCH_URLS).map(normalizeUrl);
     const timeoutMs = (params.timeout ?? 30) * 1000;
+    // Один снимок политики на весь вызов (все URL и все редиректы).
+    const policy = await resolveToolsEgressPolicy();
+    const egress = {
+      log: currentEgressLog(),
+      sessionId: ctx.sessionId,
+      projectId: typeof ctx.extra?.projectId === 'string' ? ctx.extra.projectId : undefined,
+      actor: typeof ctx.extra?.userId === 'string' ? ctx.extra.userId : undefined,
+    };
 
     const blocks: string[] = [];
 
@@ -370,7 +437,7 @@ export const webFetchTool: ToolDefinition = {
       const unlink = linkSignal(controller, ctx.abortSignal);
 
       try {
-        const response = await fetchWithSsrfGuard(url, controller.signal);
+        const response = await fetchWithSsrfGuard(url, controller.signal, policy, egress);
         clearTimeout(timer);
         unlink();
 
@@ -461,9 +528,19 @@ export const webSearchTool: ToolDefinition = {
     // ADR-036: деобфускация в точке потребления — запрос может содержать ⟦SYNTH_SECRET_N⟧
     const query = await deobfuscateText(ctx, params.query);
 
+    // Один снимок политики на весь поиск (включая fallback-провайдера).
+    const policy = await resolveToolsEgressPolicy();
+    const egress = {
+      policy,
+      log: currentEgressLog(),
+      sessionId: ctx.sessionId,
+      projectId: typeof ctx.extra?.projectId === 'string' ? ctx.extra.projectId : undefined,
+      actor: typeof ctx.extra?.userId === 'string' ? ctx.extra.userId : undefined,
+    };
+
     try {
       try {
-        const results = await duckDuckGoSearch(query, limit, ctx.abortSignal);
+        const results = await duckDuckGoSearch(query, limit, ctx.abortSignal, egress);
         if (results.length > 0) {
           return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'duckduckgo' } };
         }
@@ -472,7 +549,7 @@ export const webSearchTool: ToolDefinition = {
         if (signalAborted(ctx.abortSignal)) return abortedResult(this.name);
         // DDG заблокирован или недоступен — пробуем Bing
         try {
-          const results = await bingSearch(query, limit, ctx.abortSignal);
+          const results = await bingSearch(query, limit, ctx.abortSignal, egress);
           if (results.length > 0) {
             return { content: formatSearchResults(query, results), metadata: { query: params.query, max_results: limit, source: 'bing' } };
           }

@@ -2,24 +2,27 @@
  * PROP-100 / ADR-071 §2.3.1: единый SSRF/egress-guard исходящих запросов.
  *
  * **Одна** реализация проверки «URL/адрес допустим для исходящего запроса»:
- * схема `http(s)` → нормализация и DNS-резолв **всех** A/AAAA-записей →
- * CIDR-сверка **каждого** адреса (`evaluateMcpNetworkAccess`/`isIpInCidr`);
- * редиректы проходятся вручную (`redirect: 'manual'`) с проверкой каждого хопа.
- * Fail-closed: ошибка/пустой резолв/невалидный адрес → запрет.
+ * схема `http(s)` → hostname-исключения → нормализация и DNS-резолв **всех**
+ * A/AAAA-записей → адресные исключения → CIDR-сверка **каждого** адреса
+ * (`evaluateMcpNetworkAccess`/`isIpInCidr`); редиректы проходятся вручную
+ * (`redirect: 'manual'`) с проверкой каждого хопа. Fail-closed: отсутствие
+ * политики/ошибка/пустой резолв/невалидный адрес → запрет.
  *
- * Потребители: `engine/net/fetch.ts` (`validateRemoteUrl`/`fetchText`),
- * `engine/tools/web.ts` (`web_fetch`), `engine/webhooks/*`, backend
- * `routes/providers.ts` (`fetch-icon`). Поведение для IP-литералов не меняется
- * (литерал проверяется политикой без DNS), обход через IPv4-mapped закрыт
- * единой нормализацией `normalizeIp`.
+ * Политика приходит **resolved** от вызывающего (per-request; см.
+ * `egress-policy.ts`); `undefined` больше не означает «разрешено всё».
+ * Потребители: `engine/net/fetch.ts`, `engine/tools/web.ts`,
+ * `engine/webhooks/*`, `engine/skills/remote.ts`, `engine/context/instructions.ts`,
+ * backend `routes/providers.ts`.
  */
 
 import { isIP } from 'node:net';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
-import type { McpNetworkPolicy } from '@itphx/synth-shared';
+import type { EgressPolicy, EgressRequestScope, EgressRequestStatus } from '@itphx/synth-shared';
 import {
   evaluateMcpNetworkAccess,
+  findHostException,
   hostFromUrl,
+  isLocalHostname,
   isIpInCidr,
   normalizeIp,
 } from '../mcp/network-policy.js';
@@ -30,8 +33,8 @@ import { egressFetch } from '../../security/tls.js';
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 /**
- * Запрещённые IPv4-диапазоны (SSRF): loopback/private/link-local/CGNAT/спец.
- * `0.0.0.0/8` и `100.64.0.0/10` — усиление (не указаны явно в ADR-046).
+ * Запрещённые IPv4-диапазоны по умолчанию (SSRF): loopback/private/link-local/
+ * CGNAT/спец. Экспорт — для обратной совместимости/тестов.
  */
 const BLOCKED_V4_CIDRS: readonly string[] = [
   '0.0.0.0/8',
@@ -53,12 +56,14 @@ const BLOCKED_V6_CIDRS: readonly string[] = [
 ];
 
 /**
- * Единая политика «запрет приватных/локальных адресов» (deny по
- * `DEFAULT_MCP_PRIVATE_CIDRS`) — общая для web/webhooks/net/providers.
+ * Встроенный дефолт политики «запрет приватных/локальных адресов»
+ * (deny по `DEFAULT_MCP_PRIVATE_CIDRS`). Потребители **не** передают её
+ * «вслепую»: источник истины — resolved-политика (`egress-policy.ts`).
  */
-export const PRIVATE_EGRESS_POLICY: McpNetworkPolicy = {
+export const PRIVATE_EGRESS_POLICY: EgressPolicy = {
   mode: 'deny',
   list: [...DEFAULT_MCP_PRIVATE_CIDRS],
+  exceptions: [],
 };
 
 /** Максимум редиректов по умолчанию при ручном следовании. */
@@ -66,52 +71,67 @@ export const DEFAULT_EGRESS_MAX_HOPS = 5;
 
 /**
  * `true`, если IP-литерал входит в приватный/локальный диапазон.
- * `normalizeIp` приводит IPv4-mapped IPv6 (`::ffff:a.b.c.d`) к вложенному IPv4
- * и снимает zone-id — проверка единообразна с `isIpInCidr` (ADR-071).
+ * Без политики — прежнее поведение (встроенный список); с политикой —
+ * учитываются `exceptions` и список политики (deny/allow).
  */
-export function isBlockedIp(ip: string): boolean {
+export function isBlockedIp(ip: string, policy?: EgressPolicy): boolean {
   const normalized = normalizeIp(ip);
   if (normalized === null) return false; // не IP-литерал — прежнее поведение
-  return isIP(normalized) === 4
-    ? BLOCKED_V4_CIDRS.some((cidr) => isIpInCidr(normalized, cidr))
-    : BLOCKED_V6_CIDRS.some((cidr) => isIpInCidr(normalized, cidr));
+  if (!policy) {
+    return isIP(normalized) === 4
+      ? BLOCKED_V4_CIDRS.some((cidr) => isIpInCidr(normalized, cidr))
+      : BLOCKED_V6_CIDRS.some((cidr) => isIpInCidr(normalized, cidr));
+  }
+  if (policy.exceptions?.some((rule) => isIpInCidr(normalized, rule))) return false;
+  if (policy.mode === 'deny') {
+    if (policy.list.length === 0) return false;
+    return policy.list.some((cidr) => isIpInCidr(normalized, cidr));
+  }
+  return !policy.list.some((cidr) => isIpInCidr(normalized, cidr));
 }
 
-/** `true`, если hostname запрещён: `localhost`/`*.localhost`/`*.local`/`*.internal`/приватный IP. */
-export function isBlockedHost(rawHost: string): boolean {
+/**
+ * `true`, если hostname запрещён.
+ * Без политики — прежнее поведение (localhost/*.local/*.internal/приватный IP);
+ * с политикой — exceptions проверяются первыми, локальные имена запрещены
+ * (если не разрешены exception), IP-литералы — по списку политики.
+ */
+export function isBlockedHost(rawHost: string, policy?: EgressPolicy): boolean {
   const host = rawHost.trim().toLowerCase().replace(/\.$/, '');
   if (!host) return true;
-  if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host.endsWith('.local') || host.endsWith('.internal')) return true;
+  if (!policy) {
+    if (host === 'localhost' || host.endsWith('.localhost')) return true;
+    if (host.endsWith('.local') || host.endsWith('.internal')) return true;
+    const bare = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+    if (isIP(bare) !== 0) return isBlockedIp(bare);
+    return false;
+  }
+  if (findHostException(host, policy.exceptions)) return false;
   const bare = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
-  if (isIP(bare) !== 0) return isBlockedIp(bare);
+  if (isIP(bare) !== 0) return isBlockedIp(bare, policy);
+  if (isLocalHostname(host)) return true;
   return false;
 }
 
 export interface EgressCheckOptions {
   /** Инъекция DNS-резолвера (тесты). По умолчанию — системный `dns.lookup({all:true})`. */
   resolveHost?: HostResolver;
-  /** Требовать `https` (webhooks). */
+  /** Требовать `https` (webhooks; `false` при `egress.webhooks.mode='off'`). */
   requireHttps?: boolean;
 }
 
 export type EgressCheckResult =
-  | { allowed: true; url: URL; addresses?: string[] }
-  | { allowed: false; reason: string };
-
-/** Активна ли политика (undefined и `deny` с пустым списком — «разрешено всё»). */
-function isPolicyActive(policy: McpNetworkPolicy | undefined): boolean {
-  if (!policy) return false;
-  return !(policy.mode === 'deny' && policy.list.length === 0);
-}
+  | { allowed: true; url: URL; addresses?: string[]; matchedRule?: string }
+  | { allowed: false; reason: string; matchedRule?: string; addresses?: string[] };
 
 /**
- * Единая проверка «URL допустим для исходящего запроса»: схема + литеральный
- * хост + DNS-резолв **всех** A/AAAA + CIDR-сверка каждого адреса. Fail-closed.
+ * Единая проверка «URL допустим для исходящего запроса»: схема + hostname/
+ * адресные исключения + DNS-резолв **всех** A/AAAA + CIDR-сверка каждого адреса.
+ * Fail-closed: `policy === undefined` → запрет.
  */
 export async function checkEgressUrl(
   raw: string,
-  policy: McpNetworkPolicy | undefined,
+  policy: EgressPolicy | undefined,
   options: EgressCheckOptions = {},
 ): Promise<EgressCheckResult> {
   let parsed: URL;
@@ -129,45 +149,116 @@ export async function checkEgressUrl(
   if (options.requireHttps && parsed.protocol !== 'https:') {
     return { allowed: false, reason: `требуется https: ${raw}` };
   }
+  if (!policy) {
+    return { allowed: false, reason: 'egress-политика не задана (fail-closed)' };
+  }
 
   const host = hostFromUrl(parsed.toString());
   if (!host) return { allowed: false, reason: `не удалось выделить хост: ${raw}` };
-
-  // Быстрый литеральный отказ (localhost/.local/.internal/приватный IP) — только
-  // при активной политике, чтобы совпадать с семантикой `evaluateMcpNetworkAccess`
-  // (undefined / пустой deny-список = без ограничений).
-  if (isPolicyActive(policy) && isBlockedHost(host)) {
-    return { allowed: false, reason: `хост "${host}" запрещён (loopback/private/link-local/local): ${raw}` };
-  }
 
   const result = await evaluateMcpNetworkAccess(parsed.toString(), policy, {
     resolveHost: options.resolveHost,
   });
   if (!result.allowed) {
-    return { allowed: false, reason: result.reason ?? `адрес запрещён сетевой политикой: ${raw}` };
+    return {
+      allowed: false,
+      reason: result.reason ?? `адрес запрещён сетевой политикой: ${raw}`,
+      ...(result.matchedRule ? { matchedRule: result.matchedRule } : {}),
+      ...(result.addresses ? { addresses: result.addresses } : {}),
+    };
   }
-  return { allowed: true, url: parsed, addresses: result.addresses };
+  return { allowed: true, url: parsed, addresses: result.addresses, matchedRule: result.matchedRule };
 }
 
 /** Ошибка сетевой политики egress: URL/адрес/хоп запрещён либо превышен лимит редиректов. */
 export class EgressBlockedError extends Error {
-  constructor(message: string) {
+  /** Сработавшее правило политики (для журнала/аудита). */
+  readonly matchedRule?: string;
+
+  constructor(message: string, matchedRule?: string) {
     super(message);
     this.name = 'EgressBlockedError';
+    this.matchedRule = matchedRule;
   }
 }
 
+/** Событие журнала внешних запросов (без тел/заголовков). */
+export interface EgressLogEvent {
+  scope: EgressRequestScope;
+  host: string;
+  url: string;
+  method?: string;
+  status: EgressRequestStatus;
+  httpStatus?: number;
+  bytes?: number;
+  durationMs?: number;
+  reason?: string;
+  matchedRule?: string;
+  sessionId?: string;
+  projectId?: string;
+  actor?: string;
+}
+
+/** Приёмник журнала внешних запросов (best-effort; ошибки глотаются guard'ом). */
+export type EgressLogSink = (event: EgressLogEvent) => void | Promise<void>;
+
 export interface EgressFetchOptions {
-  /** Политика egress; `undefined`/пустой deny-список — без ограничений (dev). */
-  policy?: McpNetworkPolicy;
+  /** Resolved-политика egress (обязательна по смыслу; `undefined` → запрет). */
+  policy?: EgressPolicy;
+  /**
+   * Полностью отключить проверку (только `egress.webhooks.mode='off'`, dev).
+   * Fail-closed по умолчанию: не задано — проверка выполняется.
+   */
+  skipPolicy?: boolean;
   /** Инъекция DNS-резолвера (тесты). */
   resolveHost?: HostResolver;
   /** Требовать `https` (webhooks). */
   requireHttps?: boolean;
   /** Максимум редиректов (по умолчанию `DEFAULT_EGRESS_MAX_HOPS`). */
   maxHops?: number;
-  /** Транспорт; по умолчанию — глобальный `fetch`. */
+  /** Транспорт; по умолчанию — `egressFetch` (единое доверие TLS/CA). */
   fetchImpl?: FetchLike;
+  /** Источник запроса для журнала; без `scope` журнал не пишется. */
+  scope?: EgressRequestScope;
+  sessionId?: string;
+  projectId?: string;
+  actor?: string;
+  /** Приёмник журнала (см. `createEgressLogSink`). */
+  log?: EgressLogSink;
+  /** Источник времени (тесты). */
+  now?: () => number;
+}
+
+/** Безопасное извлечение host/url без query/userinfo (тела/заголовки не пишутся). */
+export function sanitizeEgressTarget(rawUrl: string): { host: string; url: string } {
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname;
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    const url = parsed.toString();
+    return { host, url: url.length > 2048 ? url.slice(0, 2048) : url };
+  } catch {
+    return { host: '', url: rawUrl.slice(0, 2048) };
+  }
+}
+
+async function recordEgress(options: EgressFetchOptions, event: Omit<EgressLogEvent, 'scope'>): Promise<void> {
+  if (!options.scope || !options.log) return;
+  try {
+    await options.log({
+      scope: options.scope,
+      sessionId: options.sessionId,
+      projectId: options.projectId,
+      actor: options.actor,
+      ...event,
+    });
+  } catch (err) {
+    // Best-effort: журнал не должен ломать исходящий запрос.
+    console.warn(`[egress] не удалось записать событие журнала: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**
@@ -184,18 +275,80 @@ export async function fetchWithEgressGuard(
   // ADR-099: транспорт по умолчанию — `egressFetch` (единое доверие TLS/CA),
   // а не «сырой» глобальный `fetch`.
   const fetchImpl: FetchLike = options.fetchImpl ?? egressFetch;
+  const now = options.now ?? Date.now;
+  const method = init.method ?? 'GET';
   let current = rawUrl;
+
   for (let hop = 0; hop <= maxHops; hop++) {
+    const started = now();
+    const target = sanitizeEgressTarget(current);
+    if (options.skipPolicy) {
+      // `off` (dev): проверок нет, редиректы обрабатывает транспорт.
+      const response = await fetchImpl(current, { ...init });
+      await recordEgress(options, {
+        host: target.host,
+        url: target.url,
+        method,
+        status: 'allowed',
+        httpStatus: response.status,
+        durationMs: Math.max(0, now() - started),
+      });
+      return response;
+    }
     const check = await checkEgressUrl(current, options.policy, {
       resolveHost: options.resolveHost,
       requireHttps: options.requireHttps,
     });
-    if (!check.allowed) throw new EgressBlockedError(check.reason);
+    if (!check.allowed) {
+      await recordEgress(options, {
+        host: target.host,
+        url: target.url,
+        method,
+        status: 'blocked',
+        reason: check.reason,
+        matchedRule: check.matchedRule,
+        durationMs: Math.max(0, now() - started),
+      });
+      throw new EgressBlockedError(check.reason, check.matchedRule);
+    }
 
-    const response = await fetchImpl(current, { ...init, redirect: 'manual' });
+    let response: Response;
+    try {
+      response = await fetchImpl(current, { ...init, redirect: 'manual' });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      await recordEgress(options, {
+        host: target.host,
+        url: target.url,
+        method,
+        status: 'error',
+        reason,
+        durationMs: Math.max(0, now() - started),
+      });
+      throw err;
+    }
+
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location');
-      if (!location) return response;
+      if (!location) {
+        await recordEgress(options, {
+          host: target.host,
+          url: target.url,
+          method,
+          status: 'allowed',
+          httpStatus: response.status,
+          durationMs: Math.max(0, now() - started),
+        });
+        return response;
+      }
+      await recordEgress(options, {
+        host: target.host,
+        url: target.url,
+        method,
+        status: 'allowed',
+        httpStatus: response.status,
+        durationMs: Math.max(0, now() - started),
+      });
       try {
         current = new URL(location, check.url).toString();
       } catch {
@@ -203,7 +356,28 @@ export async function fetchWithEgressGuard(
       }
       continue;
     }
+
+    const declared = response.headers.get('content-length');
+    const bytes = declared && Number.isFinite(Number(declared)) ? Number(declared) : undefined;
+    await recordEgress(options, {
+      host: target.host,
+      url: target.url,
+      method,
+      status: 'allowed',
+      httpStatus: response.status,
+      ...(bytes !== undefined ? { bytes } : {}),
+      durationMs: Math.max(0, now() - started),
+    });
     return response;
   }
-  throw new EgressBlockedError(`превышено число редиректов (${maxHops})`);
+  const target = sanitizeEgressTarget(rawUrl);
+  await recordEgress(options, {
+    host: target.host,
+    url: target.url,
+    method,
+    status: 'blocked',
+    reason: `превышено число редиректов (${maxHops})`,
+    matchedRule: 'redirect-limit',
+  });
+  throw new EgressBlockedError(`превышено число редиректов (${maxHops})`, 'redirect-limit');
 }

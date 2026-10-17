@@ -36,6 +36,8 @@ import type {
   IdentityClaimRepository,
   JobRepository,
   MaintenanceAuditRepository,
+  SecurityAuditRepository,
+  EgressRequestLogRepository,
   McpRegistryRepository,
   ProfileRepository,
   ProjectRepository,
@@ -78,6 +80,8 @@ import { WebhookDeliveryStore } from './webhook-delivery-store.js';
 import { ScheduleStore } from './schedule-store.js';
 import { JobStore } from './job-store.js';
 import { MaintenanceAuditStore } from './maintenance-audit-store.js';
+import { SecurityAuditStore } from './security-audit-store.js';
+import { EgressRequestLogStore } from './egress-request-log-store.js';
 import { FileDedupStore, MemoryDedupStore } from '../engine/events/dedup-store.js';
 import { SkillStore } from './skill-store.js';
 import { SkillBundleStore } from './skill-bundle-store.js';
@@ -102,6 +106,8 @@ import {
   MemoryIdentityClaimRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
+  MemorySecurityAuditRepository,
+  MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
   MemoryProfileRepository,
   MemoryProjectRepository,
@@ -277,6 +283,10 @@ export interface StorageContext {
   schedules: ScheduleRepository;
   jobs: JobRepository;
   maintenanceAudit: MaintenanceAuditRepository;
+  /** Аудит изменений egress/security-политик (append-only). */
+  securityAudit: SecurityAuditRepository;
+  /** Журнал внешних запросов (append-only, retention-прунер). */
+  egressRequests: EgressRequestLogRepository;
   dedup: DedupRepository;
   skills: SkillRepository;
   skillBundles: SkillBundleRepository;
@@ -477,6 +487,8 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     }),
     jobs: new JobStore({ dataDir }),
     maintenanceAudit: new MaintenanceAuditStore({ dataDir }),
+    securityAudit: new SecurityAuditStore({ dataDir }),
+    egressRequests: new EgressRequestLogStore({ dataDir }),
     // ADR-051/ADR-089: источник дедупа — in-process (default) или файловый межпроцессный.
     dedup: config.dedupStore === 'file' ? new FileDedupStore({ dataDir }) : new MemoryDedupStore(),
     skills: new SkillStore({ dataDir }),
@@ -525,6 +537,8 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     schedules: new MemoryScheduleRepository(),
     jobs: new MemoryJobRepository(),
     maintenanceAudit: new MemoryMaintenanceAuditRepository(),
+    securityAudit: new MemorySecurityAuditRepository(),
+    egressRequests: new MemoryEgressRequestLogRepository(),
     dedup: new MemoryDedupRepository(),
     skills: new MemorySkillRepository(),
     skillBundles: new MemorySkillBundleRepository(),

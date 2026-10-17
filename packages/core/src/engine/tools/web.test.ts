@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { parseDuckDuckGoResults, parseBingResults, webSearchTool, webFetchTool, _setWebFetchHostResolver } from './web.js';
+import { configureEgressRuntime, resetEgressRuntime } from '../net/egress-runtime.js';
 import type { ToolContext } from '@itphx/synth-shared';
 
 // Тестовый DNS-резолвер SSRF-проверки web_fetch: все хосты, кроме localhost,
@@ -92,6 +93,7 @@ const BING_HTML_FIXTURE = `<!DOCTYPE html>
 afterEach(() => {
   vi.unstubAllGlobals();
   _setWebFetchHostResolver(undefined);
+  resetEgressRuntime();
 });
 
 describe('parseDuckDuckGoResults', () => {
@@ -221,6 +223,46 @@ describe('webSearchTool', () => {
 });
 
 describe('webFetchTool', () => {
+  it('exception-hostname разрешает адрес из 10.0.0.0/8', async () => {
+    _setWebFetchHostResolver(async (host) => (host === 'internal.example' ? ['10.0.0.5'] : ['93.184.216.34']));
+    configureEgressRuntime({
+      resolver: {
+        resolveTools: async () => ({
+          mode: 'deny',
+          list: ['10.0.0.0/8'],
+          exceptions: ['internal.example'],
+        }),
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response('ok', {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute({ url: 'https://internal.example/x' }, makeCtx());
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('ok');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('без exception приватный адрес блокируется (fetch не вызывается)', async () => {
+    _setWebFetchHostResolver(async () => ['10.0.0.5']);
+    configureEgressRuntime({
+      resolver: {
+        resolveTools: async () => ({ mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] }),
+      },
+    });
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await webFetchTool.execute({ url: 'https://internal.example/x' }, makeCtx());
+
+    expect(result.content).toMatch(/заблокирован|blocked/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('обрабатывает несколько URL и изолирует ошибки per-URL', async () => {
     const fetchMock = vi.fn((url: string) => {
       if (url === 'https://ok.example') {

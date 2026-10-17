@@ -16,6 +16,8 @@ export interface McpNetworkCheckResult {
   reason?: string;
   /** Разрешённые/запрещённые IP, по которым принималось решение. */
   addresses?: string[];
+  /** Сработавшее правило политики (exception/CIDR из list/`local-hostname`). */
+  matchedRule?: string;
 }
 
 export type HostResolver = (host: string) => Promise<string[]>;
@@ -170,6 +172,64 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
   return false;
 }
 
+/** Локальные hostname-суффиксы: блокируются политикой (exception может разрешить). */
+const LOCAL_HOSTNAMES = ['localhost'];
+const LOCAL_HOST_SUFFIXES = ['.localhost', '.local', '.internal'];
+
+/** `true`, если hostname — локальное имя (`localhost`/`*.localhost`/`*.local`/`*.internal`). */
+export function isLocalHostname(rawHost: string): boolean {
+  const host = rawHost.trim().toLowerCase().replace(/\.$/, '');
+  if (!host) return true;
+  if (LOCAL_HOSTNAMES.includes(host)) return true;
+  if (host.endsWith('.localhost')) return true;
+  return LOCAL_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
+/** Правило-исключение задаёт CIDR/IP (а не hostname). */
+export function isAddressRule(rule: string): boolean {
+  const trimmed = rule.trim();
+  return trimmed.includes('/') || isIP(trimmed) !== 0;
+}
+
+/**
+ * Матчинг hostname-правила: точный hostname, `*.suffix` (только поддомены —
+ * сам suffix требует отдельного правила) или CIDR/IP-литерал хоста.
+ */
+export function hostMatchesRule(rawHost: string, rawRule: string): boolean {
+  const host = rawHost.trim().toLowerCase().replace(/\.$/, '');
+  const rule = rawRule.trim().toLowerCase().replace(/\.$/, '');
+  if (!host || !rule) return false;
+  if (rule.startsWith('*.')) {
+    const suffix = rule.slice(2);
+    if (!suffix) return false;
+    // `*.example.com` — поддомены, но не сам `example.com`.
+    return host.endsWith(`.${suffix}`);
+  }
+  if (isAddressRule(rule)) {
+    if (isIP(host) !== 0) return isIpInCidr(host, rule);
+    // CIDR-правило не разрешает hostname «сразу» — только по резолву.
+    return false;
+  }
+  return host === rule;
+}
+
+/** Первое hostname-исключение, матчащее хост (без DNS). */
+export function findHostException(host: string, exceptions: readonly string[] | undefined): string | undefined {
+  if (!exceptions) return undefined;
+  return exceptions.find((rule) => !isAddressRule(rule) && hostMatchesRule(host, rule));
+}
+
+/** Первое адресное (CIDR/IP) исключение, покрывающее хотя бы один resolved-адрес. */
+export function findAddressException(
+  addresses: readonly string[],
+  exceptions: readonly string[] | undefined,
+): string | undefined {
+  if (!exceptions) return undefined;
+  return exceptions.find(
+    (rule) => isAddressRule(rule) && addresses.some((address) => isIpInCidr(address, rule)),
+  );
+}
+
 /** Извлекает hostname из URL; null — некорректный URL. Скобки IPv6 снимаются. */
 export function hostFromUrl(url: string): string | null {
   try {
@@ -183,22 +243,37 @@ export function hostFromUrl(url: string): string | null {
 }
 
 /**
- * Проверяет доступность URL по политике.
- * - `deny`: запрещён, если хотя бы один resolved IP попадает в список;
- * - `allow`: запрещён, если хотя бы один resolved IP НЕ входит в список.
- * Хост-литерал IP не резолвится. Ошибка резолва → запрет.
+ * Проверяет доступность URL по политике (fail-closed).
+ *
+ * Порядок: схемный хост → hostname-исключения (без DNS) → DNS-резолв всех
+ * A/AAAA → адресные (CIDR/IP) исключения → локальные имена → основной список:
+ * - `deny`: запрещён, если хотя бы один resolved IP попадает в `list`;
+ * - `allow`: разрешён, только если **все** resolved IP входят в `list`
+ *   (или сработало exception).
+ *
+ * `policy === undefined` — ошибка конфигурации (fail-closed), а не «разрешено всё»:
+ * вызывающий обязан передать resolved-политику (конфиг-дефолт → встроенный дефолт).
  */
 export async function evaluateMcpNetworkAccess(
   url: string,
   policy: McpNetworkPolicy | undefined,
   options?: { resolveHost?: HostResolver },
 ): Promise<McpNetworkCheckResult> {
-  if (!policy) return { allowed: true };
-  if (policy.mode === 'deny' && policy.list.length === 0) return { allowed: true };
+  if (!policy) {
+    return { allowed: false, reason: 'egress-политика не задана (fail-closed)' };
+  }
 
   const host = hostFromUrl(url);
   if (!host) {
     return { allowed: false, reason: `Некорректный URL MCP-сервера: ${url}` };
+  }
+  const normalizedHost = host.trim().toLowerCase().replace(/\.$/, '');
+  const exceptions = policy.exceptions ?? [];
+
+  // Hostname-exception разрешает сразу, без DNS.
+  const hostException = findHostException(normalizedHost, exceptions);
+  if (hostException) {
+    return { allowed: true, matchedRule: hostException };
   }
 
   let addresses: string[];
@@ -216,6 +291,21 @@ export async function evaluateMcpNetworkAccess(
     return { allowed: false, reason: `Не удалось определить IP хоста "${host}"` };
   }
 
+  // Адресные исключения — после резолва (в т.ч. разрешают localhost/приватные).
+  const addressException = findAddressException(addresses, exceptions);
+  if (addressException) {
+    return { allowed: true, addresses, matchedRule: addressException };
+  }
+
+  if (isLocalHostname(normalizedHost)) {
+    return {
+      allowed: false,
+      reason: `Хост "${host}" запрещён (loopback/private/link-local/local)`,
+      addresses,
+      matchedRule: 'local-hostname',
+    };
+  }
+
   if (policy.mode === 'deny') {
     for (const address of addresses) {
       for (const cidr of policy.list) {
@@ -224,6 +314,7 @@ export async function evaluateMcpNetworkAccess(
             allowed: false,
             reason: `Адрес "${host}" (${address}) запрещён сетевой политикой (${cidr})`,
             addresses,
+            matchedRule: cidr,
           };
         }
       }
@@ -231,8 +322,10 @@ export async function evaluateMcpNetworkAccess(
     return { allowed: true, addresses };
   }
 
+  // allow с пустым списком: разрешать нечего (fail-closed).
   for (const address of addresses) {
-    if (!policy.list.some((cidr) => isIpInCidr(address, cidr))) {
+    const matched = policy.list.find((cidr) => isIpInCidr(address, cidr));
+    if (!matched) {
       return {
         allowed: false,
         reason: `Адрес "${host}" (${address}) не входит в разрешённый список сетевой политики`,

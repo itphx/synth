@@ -83,6 +83,11 @@ export {
   evaluateMcpNetworkAccess,
   isIpInCidr,
   isHttpMcpConfig,
+  isLocalHostname,
+  isAddressRule,
+  hostMatchesRule,
+  findHostException,
+  findAddressException,
   normalizeIp,
   mappedIpv4,
 } from './engine/mcp/index.js';
@@ -95,6 +100,7 @@ export {
   DEFAULT_EGRESS_MAX_HOPS,
   checkEgressUrl,
   fetchWithEgressGuard,
+  sanitizeEgressTarget,
   EgressBlockedError,
   isBlockedHost,
   isBlockedIp,
@@ -103,7 +109,36 @@ export type {
   EgressCheckResult,
   EgressCheckOptions,
   EgressFetchOptions,
+  EgressLogEvent,
+  EgressLogSink,
 } from './engine/net/egress-guard.js';
+export {
+  isValidEgressRule,
+  validateEgressPolicy,
+  createEgressPolicyResolver,
+  resolveEgressScope,
+} from './engine/net/egress-policy.js';
+export type {
+  EgressPolicyResolver,
+  EgressPolicyFallbacks,
+  EgressPolicyValidation,
+} from './engine/net/egress-policy.js';
+export {
+  configureEgressRuntime,
+  getEgressRuntime,
+  resetEgressRuntime,
+  resolveToolsEgressPolicy,
+  resolveWebhooksEgressPolicy,
+  resolveMcpEgressPolicy,
+  currentEgressLog,
+} from './engine/net/egress-runtime.js';
+export type { EgressRuntime } from './engine/net/egress-runtime.js';
+export {
+  createEgressLogSink,
+  startEgressLogPruner,
+  isEgressLogEnabled,
+} from './engine/net/egress-log.js';
+export type { EgressLogSinkOptions, EgressLogPrunerOptions } from './engine/net/egress-log.js';
 
 export {
   PermissionEvaluator,
@@ -157,6 +192,10 @@ export type {
   JobRepository,
   MaintenanceAuditRepository,
   MaintenanceAuditListOptions,
+  SecurityAuditRepository,
+  SecurityAuditListOptions,
+  EgressRequestLogRepository,
+  EgressRequestLogListOptions,
   DedupRepository,
   SecretPatternRepository,
   ProtectedPathsRepository,
@@ -193,6 +232,8 @@ export {
   MemoryScheduleRepository,
   MemoryJobRepository,
   MemoryMaintenanceAuditRepository,
+  MemorySecurityAuditRepository,
+  MemoryEgressRequestLogRepository,
   MemorySkillRepository,
   MemorySkillBundleRepository,
   MemoryContextFileRepository,
@@ -439,6 +480,11 @@ export type { JobStoreConfig, JobListOptions } from './storage/job-store.js';
 // ADR-092 (остаток): аудит-журнал обслуживания инстанса — файловая реализация порта.
 export { MaintenanceAuditStore } from './storage/maintenance-audit-store.js';
 export type { MaintenanceAuditStoreConfig } from './storage/maintenance-audit-store.js';
+// Egress: аудит изменений security-политик и журнал внешних запросов.
+export { SecurityAuditStore } from './storage/security-audit-store.js';
+export type { SecurityAuditStoreConfig } from './storage/security-audit-store.js';
+export { EgressRequestLogStore } from './storage/egress-request-log-store.js';
+export type { EgressRequestLogStoreConfig } from './storage/egress-request-log-store.js';
 // ADR-092: best-effort запись аудит-событий обслуживания из операций.
 export { recordMaintenanceAudit } from './maintenance/audit.js';
 export type { MaintenanceAuditRecord } from './maintenance/audit.js';
@@ -683,7 +729,7 @@ export { createSkillBundleRoutes } from './server/routes/skill-bundles.js';
 export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutesMessages } from './server/routes/skill-bundles.js';
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
-export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEventsConfig, mergeDecisionConfig } from './storage/runtime-settings.js';
+export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig } from './storage/runtime-settings.js';
 export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
@@ -692,6 +738,8 @@ export type { AuthKit, LocalAuthConfig } from './auth/local.js';
 export { localApiKeyFilePath, resolveOrCreateLocalApiKey } from './auth/local-key.js';
 export { createSettingsRoutes } from './server/routes/settings.js';
 export type { SettingsRoutesDeps } from './server/routes/settings.js';
+export { createAuditRoutes } from './server/routes/audit.js';
+export type { AuditRoutesDeps, AuditRoutesOptions } from './server/routes/audit.js';
 export { createDictionaryRoutes } from './server/routes/dictionaries.js';
 export type { DictionaryRoutesAuth, DictionaryRoutesOptions } from './server/routes/dictionaries.js';
 export { createProviderRoutes } from './server/routes/providers.js';

@@ -321,6 +321,24 @@ async function copySettings(src: StorageContext, dst: StorageContext, ctx: CopyC
     await _copyOne(ctx.dryRun, false, () => section.write(dst.settings, srcValue), counter);
   }
 
+  // Egress-политика (tools/webhooks): отдельные геттеры/сеттеры по скоупу.
+  for (const scope of ['tools', 'webhooks'] as const) {
+    const srcPolicy = await src.settings.getEgressPolicy(scope);
+    if (_isEmptyValue(srcPolicy)) {
+      counter.skipped += 1;
+      continue;
+    }
+    const dstPolicy = await dst.settings.getEgressPolicy(scope);
+    if (!_isEmptyValue(dstPolicy)) {
+      if (_stableJson(dstPolicy) !== _stableJson(srcPolicy)) {
+        ctx.warn(`Предупреждение: egress-политика «${scope}» уже задана в цели и отличается — не перезаписываю.`);
+      }
+      counter.skipped += 1;
+      continue;
+    }
+    await _copyOne(ctx.dryRun, false, () => dst.settings.setEgressPolicy(scope, srcPolicy!), counter);
+  }
+
   // `tokenRatios`: откалиброванный chars-per-token по модели — пер-ключ.
   const srcRatios = await src.settings.getTokenRatios();
   const dstRatios = await dst.settings.getTokenRatios();
@@ -756,6 +774,30 @@ async function copyMaintenanceAudit(src: StorageContext, dst: StorageContext, ct
   return counter;
 }
 
+/** Аудит security-политик: append-only, идентификатор — `sa_…`; исходный порядок. */
+async function copySecurityAudit(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
+  const counter: Counter = { copied: 0, skipped: 0 };
+  const entries = (await src.securityAudit.list()).slice().reverse();
+  if (entries.length === 0) return counter;
+  const existing = new Set((await dst.securityAudit.list()).map((entry) => entry.id));
+  for (const entry of entries) {
+    await _copyOne(ctx.dryRun, existing.has(entry.id), () => dst.securityAudit.append(entry), counter);
+  }
+  return counter;
+}
+
+/** Журнал внешних запросов: append-only, идентификатор — `eg_…`; исходный порядок. */
+async function copyEgressRequests(src: StorageContext, dst: StorageContext, ctx: CopyContext): Promise<Counter> {
+  const counter: Counter = { copied: 0, skipped: 0 };
+  const entries = (await src.egressRequests.list()).slice().reverse();
+  if (entries.length === 0) return counter;
+  const existing = new Set((await dst.egressRequests.list()).map((entry) => entry.id));
+  for (const entry of entries) {
+    await _copyOne(ctx.dryRun, existing.has(entry.id), () => dst.egressRequests.append(entry), counter);
+  }
+  return counter;
+}
+
 /**
  * Порядок и состав сущностей переноса. Порядок важен для ссылочной логики
  * (сессии → привязки → ключи привязок; подписки → доставки).
@@ -783,6 +825,8 @@ const ENTITY_MIGRATORS: readonly EntityMigrator[] = [
   { entity: 'mcpRegistry', copy: copyMcpRegistry },
   { entity: 'skillBundles', copy: copySkillBundles },
   { entity: 'maintenanceAudit', copy: copyMaintenanceAudit },
+  { entity: 'securityAudit', copy: copySecurityAudit },
+  { entity: 'egressRequests', copy: copyEgressRequests },
 ];
 
 /** Имена переносимых сущностей (для отчёта/тестов). */

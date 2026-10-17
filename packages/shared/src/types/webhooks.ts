@@ -70,7 +70,7 @@ export interface WebhookSubscription {
   /** Обязательная метка (уникальна глобально по инстансу, регистронезависимо). */
   label: string;
   description?: string;
-  /** Целевой URL (https; http — только при `webhooks.allowPrivateTargets`). */
+  /** Целевой URL (https; http — только при `egress.webhooks.mode: 'off'`). */
   url: string;
   /** Паттерны событий (exact или `prefix.*`); пусто — дефолтный набор. */
   events: string[];

@@ -21,6 +21,8 @@ import {
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
+  describeSecurityAuditRepository,
+  describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
   describeProfileRepository,
   describeProjectRepository,
@@ -156,6 +158,8 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeScheduleRepository('PG → ScheduleRepository', () => makePort('schedules'));
   describeJobRepository('PG → JobRepository', () => makePort('jobs'));
   describeMaintenanceAuditRepository('PG → MaintenanceAuditRepository', () => makePort('maintenanceAudit'));
+  describeSecurityAuditRepository('PG → SecurityAuditRepository', () => makePort('securityAudit'));
+  describeEgressRequestLogRepository('PG → EgressRequestLogRepository', () => makePort('egressRequests'));
 
   describeServiceKeyRepository('PG → ServiceKeyRepository', () => makePort('serviceKeys'));
   describeSSHKeyRepository('PG → SSHKeyRepository', () => makePort('sshKeys'));

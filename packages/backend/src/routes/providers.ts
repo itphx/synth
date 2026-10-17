@@ -1,35 +1,38 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { JsonStoreLike } from '@itphx/synth-core';
-import type { ProviderConfig } from '@itphx/synth-shared';
-import { DEFAULT_MCP_PRIVATE_CIDRS } from '@itphx/synth-shared';
+import type { EgressPolicy, ProviderConfig } from '@itphx/synth-shared';
 import {
   createProviderRoutes as createCoreProviderRoutes,
   checkEgressUrl,
   fetchWithEgressGuard,
+  sanitizeEgressTarget,
+  PRIVATE_EGRESS_POLICY,
 } from '@itphx/synth-core';
+import type { EgressLogSink } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 
-/**
- * Политика проверки URL провайдера для `/fetch-icon`: блокируем внутренние и
- * приватные адреса, включая DNS-резолв (переиспользуем MCP network-policy, а не
- * собственный regex-список). Помимо дефолтных приватных диапазонов исключаем
- * `0.0.0.0/8` — сохраняем прежнюю блокировку hostname `0.0.0.0`.
- */
-const PROVIDER_URL_NETWORK_POLICY = {
-  mode: 'deny' as const,
-  list: [...DEFAULT_MCP_PRIVATE_CIDRS, '0.0.0.0/8'],
-};
+/** Инъекция egress-политики/журнала для `/fetch-icon` (резолвер из deps). */
+export interface ProviderRoutesEgressOptions {
+  /** Живой резолвер `egress.tools` (per-request; без него — встроенный дефолт). */
+  resolvePolicy?: () => Promise<EgressPolicy>;
+  /** Приёмник журнала внешних запросов (scope `providers`). */
+  log?: EgressLogSink;
+}
 
 /**
  * Backend-обёртка над core-фабрикой провайдеров: добавляет только RBAC
  * (мутации — ADMIN), rate limit на тест подключения и backend-only `fetch-icon`.
+ *
+ * URL провайдера проверяется общей egress-политикой (`egress.tools`, live),
+ * без собственной копии списка приватных диапазонов.
  */
 export function createProviderRoutes(
   kit: AuthKit,
   store: JsonStoreLike<ProviderConfig>,
   providerCache: Map<string, ProviderConfig>,
+  egress: ProviderRoutesEgressOptions = {},
 ): Hono {
   const app = new Hono();
 
@@ -49,9 +52,27 @@ export function createProviderRoutes(
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
 
-    // SSRF-защита: внутренние/приватные адреса запрещены (включая DNS-резолв).
-    const networkCheck = await checkEgressUrl(origin, PROVIDER_URL_NETWORK_POLICY);
+    // SSRF-защита: resolved egress-политика (включая exceptions и DNS-резолв).
+    const policy = egress.resolvePolicy ? await egress.resolvePolicy() : PRIVATE_EGRESS_POLICY;
+    const networkCheck = await checkEgressUrl(origin, policy);
     if (!networkCheck.allowed) {
+      // Отказ до HTTP-запроса — фиксируем в журнале egress (ответ остаётся 400).
+      if (egress.log) {
+        const target = sanitizeEgressTarget(origin);
+        try {
+          await egress.log({
+            scope: 'providers',
+            host: target.host,
+            url: target.url,
+            method: 'GET',
+            status: 'blocked',
+            reason: networkCheck.reason,
+            ...(networkCheck.matchedRule ? { matchedRule: networkCheck.matchedRule } : {}),
+          });
+        } catch (err) {
+          console.warn(`[providers] egress log: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       return c.json({ error: { code: 'VALIDATION_ERROR', message: t('errors.validation.invalidUrl', undefined, c) } }, 400);
     }
 
@@ -63,7 +84,7 @@ export function createProviderRoutes(
       const resp = await fetchWithEgressGuard(iconUrl, {
         signal: controller.signal,
         headers: { Accept: 'image/*' },
-      }, { policy: PROVIDER_URL_NETWORK_POLICY });
+      }, { policy, scope: 'providers', log: egress.log });
       clearTimeout(timer);
 
       if (resp.ok && resp.headers.get('content-type')?.includes('image')) {
@@ -80,7 +101,7 @@ export function createProviderRoutes(
       const htmlResp = await fetchWithEgressGuard(origin, {
         signal: htmlController.signal,
         headers: { Accept: 'text/html' },
-      }, { policy: PROVIDER_URL_NETWORK_POLICY });
+      }, { policy, scope: 'providers', log: egress.log });
       clearTimeout(htmlTimer);
 
       if (htmlResp.ok) {
@@ -98,7 +119,7 @@ export function createProviderRoutes(
             const iconResp = await fetchWithEgressGuard(resolved, {
               signal: AbortSignal.timeout(5000),
               headers: { Accept: 'image/*' },
-            }, { policy: PROVIDER_URL_NETWORK_POLICY });
+            }, { policy, scope: 'providers', log: egress.log });
             if (iconResp.ok) {
               const buffer = await iconResp.arrayBuffer();
               const ct = iconResp.headers.get('content-type') || 'image/x-icon';

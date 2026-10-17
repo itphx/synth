@@ -5,8 +5,13 @@ import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeS
 import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
-import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO } from '@itphx/synth-shared';
+import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
+import { validateEgressPolicy } from '../../engine/net/egress-policy.js';
+import { checkEgressUrl } from '../../engine/net/egress-guard.js';
+import { evaluateWebhookTarget } from '../../engine/webhooks/network.js';
+import { evaluateMcpNetworkAccess } from '../../engine/mcp/network-policy.js';
 import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import { decisionMetrics } from '../../engine/router/decision-metrics.js';
@@ -311,6 +316,16 @@ export interface SettingsRoutesDeps {
   fallbackDecision?: Partial<DecisionRuntimeSettings>;
   /** ADR-084: вызывается после успешного PUT/DELETE /decision — live-применение. */
   onDecisionChange?: (effective: DecisionConfig) => void | Promise<void>;
+  /** Egress: дефолт `egress.tools` из config.yaml (без runtime) для GET/DELETE. */
+  fallbackEgressTools?: EgressPolicy;
+  /** Egress: дефолт `egress.webhooks` из config.yaml (без runtime) для GET/DELETE. */
+  fallbackEgressWebhooks?: WebhooksEgressPolicy;
+  /** Аудит изменений egress/security-политик (best-effort). */
+  securityAudit?: SecurityAuditRepository;
+  /** Актор (id пользователя) для записей аудита. */
+  resolveActor?: (c: { get(key: 'user'): unknown }) => string;
+  /** Live-применение egress-политики (опционально; резолвер читает стор сам). */
+  onEgressChange?: (scope: EgressPolicyScope, policy: EgressPolicy | WebhooksEgressPolicy) => void | Promise<void>;
 }
 
 /** Опции фабрики настроек (guard'ы). */
@@ -351,13 +366,17 @@ function isValidAgentId(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && AGENT_ID_REGEX.test(value.trim());
 }
 
-/** ADR-071 §2.3.1: валидна ли политика сетевого доступа MCP ({ mode, list }). */
+/**
+ * ADR-071 §2.3.1: валидна ли политика сетевого доступа MCP
+ * ({ mode: allow|deny, list, exceptions }). Формат/валидатор общий с `egress.*`
+ * (`off` для MCP недопустим).
+ */
 function isValidMcpNetworkPolicy(value: unknown): value is McpNetworkPolicy {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const p = value as Record<string, unknown>;
   if (p.mode !== 'allow' && p.mode !== 'deny') return false;
-  if (!Array.isArray(p.list) || !p.list.every((x) => typeof x === 'string' && x.trim().length > 0)) return false;
-  return true;
+  const checked = validateEgressPolicy({ ...p, exceptions: p.exceptions ?? [] });
+  return checked.ok;
 }
 
 /**
@@ -501,6 +520,44 @@ export function createSettingsRoutes(
   const settingsWriteGuard: Middleware = opts.settingsWriteGuard ?? auth.requireAuth;
   const eventsWriteGuard: Middleware = opts.eventsWriteGuard ?? settingsWriteGuard;
   const decisionWriteGuard: Middleware = opts.decisionWriteGuard ?? settingsWriteGuard;
+
+  /** Актор изменения политики (id пользователя; core без RBAC — `local`). */
+  const actorOf = (c: { get(key: 'user'): unknown }): string => {
+    if (deps.resolveActor) return deps.resolveActor(c);
+    const user = c.get('user') as { id?: unknown } | undefined;
+    return typeof user?.id === 'string' && user.id ? user.id : 'local';
+  };
+
+  /** Best-effort аудит изменения политики: ошибка записи не ломает операцию. */
+  const auditPolicy = async (
+    c: { get(key: 'user'): unknown },
+    scope: 'tools' | 'webhooks' | 'mcp',
+    action: 'update' | 'reset',
+    before: unknown,
+    after: unknown,
+  ): Promise<void> => {
+    if (!deps.securityAudit) return;
+    try {
+      await deps.securityAudit.append({
+        id: `sa_${generateId()}`,
+        ts: nowISO(),
+        actor: actorOf(c),
+        scope,
+        action,
+        source: 'runtime',
+        before,
+        after,
+        version: 1,
+      });
+    } catch (err) {
+      console.warn(`[settings] аудит политики ${scope} не записан: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const egressDefaults = (scope: EgressPolicyScope): EgressPolicy | WebhooksEgressPolicy =>
+    scope === 'tools'
+      ? (deps.fallbackEgressTools ?? DEFAULT_EGRESS_TOOLS_POLICY)
+      : (deps.fallbackEgressWebhooks ?? DEFAULT_EGRESS_WEBHOOKS_POLICY);
 
   app.get('/workspace', auth.requireAuth, async (c) => {
     const runtimeWorkspace = await deps.settingsStore.getWorkspace();
@@ -766,18 +823,116 @@ export function createSettingsRoutes(
       }, 400);
     }
 
-    await deps.settingsStore.setMcpNetworkPolicy(policy);
+    const previous = await deps.settingsStore.getMcpNetworkPolicy()
+      ?? deps.fallbackMcpNetworkPolicy
+      ?? DEFAULT_MCP_NETWORK_POLICY;
+    const normalized: McpNetworkPolicy = {
+      mode: policy.mode,
+      list: [...policy.list],
+      exceptions: [...(policy.exceptions ?? [])],
+    };
+    await deps.settingsStore.setMcpNetworkPolicy(normalized);
     // Live-применение политики сетевого доступа — McpManager переконфигурируется
     // без рестарта сервера.
-    await deps.onMcpNetworkPolicyChange?.(policy);
-    return c.json({ policy });
+    await deps.onMcpNetworkPolicyChange?.(normalized);
+    await auditPolicy(c, 'mcp', 'update', previous, normalized);
+    return c.json({ policy: normalized });
   });
 
   app.delete('/mcp-network-policy', settingsWriteGuard, async (c) => {
     const defaults = deps.fallbackMcpNetworkPolicy ?? DEFAULT_MCP_NETWORK_POLICY;
+    const previous = await deps.settingsStore.getMcpNetworkPolicy() ?? defaults;
     await deps.settingsStore.clearMcpNetworkPolicy();
     await deps.onMcpNetworkPolicyChange?.(defaults);
+    await auditPolicy(c, 'mcp', 'reset', previous, null);
     return c.json({ status: 'restored', policy: defaults, isOverridden: false, defaults });
+  });
+
+  /**
+   * Egress-политика встроенных инструментов (`egress.tools`) и webhooks
+   * (`egress.webhooks`). Runtime-значение (`settings.json`) приоритетнее
+   * config.yaml; `webhooks` поддерживает `mode: 'off'` (dev), `tools` — нет.
+   */
+  for (const scope of ['tools', 'webhooks'] as const) {
+    app.get(`/egress/${scope}`, auth.requireAuth, async (c) => {
+      const runtime = await deps.settingsStore.getEgressPolicy(scope);
+      const defaults = egressDefaults(scope);
+      return c.json({ policy: runtime ?? defaults, isOverridden: runtime !== undefined, defaults });
+    });
+
+    app.put(`/egress/${scope}`, settingsWriteGuard, async (c) => {
+      const body = await c.req.json().catch(() => ({}));
+      const raw = (body as { policy?: unknown }).policy;
+      const checked = validateEgressPolicy(raw, { allowOff: scope === 'webhooks' });
+      if (!checked.ok) {
+        return c.json({ error: { code: 'VALIDATION_ERROR', message: checked.message } }, 400);
+      }
+      const policy = checked.policy as EgressPolicy | WebhooksEgressPolicy;
+      const previous = await deps.settingsStore.getEgressPolicy(scope) ?? egressDefaults(scope);
+      await deps.settingsStore.setEgressPolicy(scope, policy);
+      await deps.onEgressChange?.(scope, policy);
+      await auditPolicy(c, scope, 'update', previous, policy);
+      return c.json({ policy });
+    });
+
+    app.delete(`/egress/${scope}`, settingsWriteGuard, async (c) => {
+      const defaults = egressDefaults(scope);
+      const previous = await deps.settingsStore.getEgressPolicy(scope) ?? defaults;
+      await deps.settingsStore.clearEgressPolicy(scope);
+      await deps.onEgressChange?.(scope, defaults);
+      await auditPolicy(c, scope, 'reset', previous, null);
+      return c.json({ status: 'restored', policy: defaults, isOverridden: false, defaults });
+    });
+  }
+
+  /**
+   * `POST /egress/check` — offline-проверка URL по политике: разбор URL + DNS +
+   * сверка. **Никакого HTTP-запроса** (защита самого эндпоинта от SSRF-зонда).
+   */
+  app.post('/egress/check', settingsWriteGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const scope = (body as { scope?: unknown }).scope;
+    const url = (body as { url?: unknown }).url;
+    if (scope !== 'tools' && scope !== 'webhooks' && scope !== 'mcp') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'scope: ожидается "tools" | "webhooks" | "mcp"' } }, 400);
+    }
+    if (typeof url !== 'string' || !url.trim()) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url: ожидается непустая строка' } }, 400);
+    }
+
+    if (scope === 'mcp') {
+      const policy = await deps.settingsStore.getMcpNetworkPolicy()
+        ?? deps.fallbackMcpNetworkPolicy
+        ?? DEFAULT_MCP_NETWORK_POLICY;
+      const result = await evaluateMcpNetworkAccess(url, policy);
+      return c.json({
+        allowed: result.allowed,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.matchedRule ? { matchedRule: result.matchedRule } : {}),
+        ...(result.addresses ? { addresses: result.addresses } : {}),
+        policy,
+      });
+    }
+
+    const policy = await deps.settingsStore.getEgressPolicy(scope) ?? egressDefaults(scope);
+    if (scope === 'webhooks') {
+      const result = await evaluateWebhookTarget(url, { policy: policy as WebhooksEgressPolicy });
+      return c.json({
+        allowed: result.allowed,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.matchedRule ? { matchedRule: result.matchedRule } : {}),
+        ...(result.addresses ? { addresses: result.addresses } : {}),
+        policy,
+      });
+    }
+    const result = await checkEgressUrl(url, policy as EgressPolicy);
+    return c.json({
+      allowed: result.allowed,
+      ...(!result.allowed ? { reason: result.reason } : {}),
+      ...(result.matchedRule ? { matchedRule: result.matchedRule } : {}),
+      ...(result.addresses ? { addresses: result.addresses } : {}),
+      policy,
+    });
   });
 
   /**

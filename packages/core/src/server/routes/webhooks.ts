@@ -5,6 +5,7 @@ import {
   webhookSubscriptionCreateSchema,
   webhookSubscriptionUpdateSchema,
 } from '@itphx/synth-shared';
+import type { WebhooksEgressPolicy } from '@itphx/synth-shared';
 import { WebhookConflictError } from '../../storage/webhook-store.js';
 import type { WebhookRepository } from '../../storage/ports/webhook-repository.js';
 import type { WebhookDeliveryRepository } from '../../storage/ports/webhook-delivery-repository.js';
@@ -55,8 +56,11 @@ export interface WebhookRoutesOptions {
   resolveUserId?: (c: Context) => string;
   /** Мастер-выключатель доставки (`webhooks.enabled`). `false` → 503 на мутации/тест. */
   isEnabled?: () => boolean;
-  /** Разрешить http/приватные адреса (`webhooks.allowPrivateTargets`). */
-  allowPrivateTargets?: boolean;
+  /**
+   * Живой резолвер политики `egress.webhooks` (deny/allow/off + exceptions).
+   * Не задан — проверка fail-closed (политика не разрешает цель).
+   */
+  resolvePolicy?: () => Promise<WebhooksEgressPolicy>;
 }
 
 const DEFAULT_MESSAGES: WebhookRouteMessages = {
@@ -99,7 +103,7 @@ export function createWebhookRoutes(
   const messages: WebhookRouteMessages = { ...DEFAULT_MESSAGES, ...opts.messages };
   const writeGuard: Middleware = opts.writeGuard ?? auth.requireAuth;
   const readGuard: Middleware = opts.readGuard ?? auth.requireAuth;
-  const allowPrivateTargets = opts.allowPrivateTargets ?? false;
+  const resolvePolicy = opts.resolvePolicy;
 
   // Мастер-выключатель (`webhooks.enabled`): по умолчанию выключено — как config default.
   const enabled = (): boolean => opts.isEnabled?.() ?? false;
@@ -125,7 +129,8 @@ export function createWebhookRoutes(
 
   /** Проверяет целевой URL политикой SSRF/https; `null` — допустим. */
   const ensureTargetAllowed = async (c: Context, url: string): Promise<Response | null> => {
-    const check = await evaluateWebhookTarget(url, { allowPrivateTargets });
+    const policy = resolvePolicy ? await resolvePolicy() : undefined;
+    const check = await evaluateWebhookTarget(url, { policy });
     if (check.allowed) return null;
     return targetForbidden(c, check.reason ?? 'Целевой URL запрещён');
   };

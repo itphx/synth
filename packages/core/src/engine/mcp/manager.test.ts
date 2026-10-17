@@ -449,6 +449,14 @@ describe('McpManager', () => {
       expect(mockClientConnect).toHaveBeenCalled();
     });
 
+    it('fail-closed: пользовательский HTTP без доступной политики не подключается', async () => {
+      manager.setConfig({ 'http-srv': { type: 'sse', url: 'http://10.0.0.5/mcp' } });
+      manager.setServerOrigins({ 'http-srv': 'user' });
+      // Ни статической политики, ни резолвера — проверять нечем.
+      await expect(manager.connectServer('http-srv')).rejects.toThrow(/egress-политика недоступна/);
+      expect(mockClientConnect).not.toHaveBeenCalled();
+    });
+
     it('probeServer блокирует пользовательский приватный HTTP при deny', async () => {
       manager.setConfig({ 'http-srv': { type: 'sse', url: 'http://10.0.0.5/mcp' } });
       manager.setServerOrigins({ 'http-srv': 'user' });

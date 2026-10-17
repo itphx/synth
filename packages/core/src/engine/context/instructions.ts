@@ -30,6 +30,7 @@ import {
 } from '../security/prompt-injection.js';
 import { expandHome, isProjectTrusted } from '../skills/trust.js';
 import { fetchText, validateRemoteUrl, type FetchLike } from '../net/fetch.js';
+import { resolveToolsEgressPolicy } from '../net/egress-runtime.js';
 import { egressFetch } from '../../security/tls.js';
 import type { HostResolver } from '../mcp/network-policy.js';
 import type { DictionaryRepository } from '../../storage/ports/dictionary-repository.js';
@@ -780,7 +781,8 @@ export class ProjectInstructionsResolver {
     source: InstructionSourceConfig,
   ): Promise<{ part: string; cacheable: boolean }> {
     const hash = createHash('sha1').update(url).digest('hex');
-    if ('error' in (await validateRemoteUrl(url, { resolveHost: this._resolveHost }))) {
+    const policy = await resolveToolsEgressPolicy();
+    if ('error' in (await validateRemoteUrl(url, { resolveHost: this._resolveHost, policy }))) {
       return { part: `url:${hash}:invalid`, cacheable: true };
     }
 
@@ -1111,7 +1113,8 @@ export class ProjectInstructionsResolver {
     url: string,
     source: InstructionSourceConfig,
   ): Promise<{ content: string; warning?: string } | { error: string }> {
-    const valid = await validateRemoteUrl(url, { resolveHost: this._resolveHost });
+    const policy = await resolveToolsEgressPolicy();
+    const valid = await validateRemoteUrl(url, { resolveHost: this._resolveHost, policy });
     if ('error' in valid) return { error: valid.error };
 
     const fetchCfg = this._config.fetch;
@@ -1130,6 +1133,8 @@ export class ProjectInstructionsResolver {
       maxHops: INSTRUCTIONS_MAX_REDIRECTS,
       fetchImpl: this._fetchImpl,
       resolveHost: this._resolveHost,
+      policy,
+      scope: 'instructions',
     });
     if ('error' in result) {
       if (cached) return { content: cached.content, warning: result.error };

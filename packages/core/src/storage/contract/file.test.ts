@@ -15,6 +15,8 @@ import {
   describeIdentityClaimRepository,
   describeJobRepository,
   describeMaintenanceAuditRepository,
+  describeSecurityAuditRepository,
+  describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
   describeProfileRepository,
   describeProjectRepository,
@@ -44,6 +46,8 @@ import { FileDedupStore } from '../../engine/events/dedup-store.js';
 import { ScheduleStore } from '../schedule-store.js';
 import { JobStore } from '../job-store.js';
 import { MaintenanceAuditStore } from '../maintenance-audit-store.js';
+import { SecurityAuditStore } from '../security-audit-store.js';
+import { EgressRequestLogStore } from '../egress-request-log-store.js';
 import { ServiceApiKeyStore } from '../service-api-key-store.js';
 import { SSHKeyStore } from '../ssh-key-store.js';
 import { WebhookStore } from '../webhook-store.js';
@@ -129,6 +133,28 @@ describe('контрактные тесты файловых реализаци�
       return {
         repo: new MaintenanceAuditStore({ dataDir: dir }),
         filePath: join(dir, 'audit', 'maintenance.jsonl'),
+      };
+    },
+  );
+
+  describeSecurityAuditRepository(
+    'SecurityAuditStore → SecurityAuditRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new SecurityAuditStore({ dataDir: dir }),
+        filePath: join(dir, 'audit', 'security.jsonl'),
+      };
+    },
+  );
+
+  describeEgressRequestLogRepository(
+    'EgressRequestLogStore → EgressRequestLogRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new EgressRequestLogStore({ dataDir: dir }),
+        filePath: join(dir, 'audit', 'egress.jsonl'),
       };
     },
   );

@@ -14,6 +14,7 @@ import {
   createGitRoutes, createSshKeyRoutes, createAgentSshKeyRoutes,
   createQueueRoutes, createMessageRoutes, createSettingsRoutes,
   createDictionaryRoutes, createMcpRoutes, createEventRoutes, createSchedulerRoutes,
+  createAuditRoutes,
   createServiceKeyRoutes, createWebhookRoutes, createSkillRoutes, createCommandRoutes,
   createSkillBundleRoutes, createSessionSkillScopeRoutes, createProjectSkillScopeRoutes,
   createSkillSettingsRoutes, createIdentityRoutes, createContextRoutes,
@@ -77,6 +78,7 @@ export function mountStandaloneRoutes(
     eventApiKeyStore, resolveAgentTemplate, schedulerService, scheduleStore, jobStore,
     identityClaimStore, modelWindowLoader, eventRouter, dataDir, defaultWorkingDir,
     commandService, bundleStore, dictionaries, maintenanceAudit,
+    egressResolver, securityAudit, egressRequests,
   } = deps;
   const serviceApiKeyStore = deps.serviceApiKeyStore;
   const {
@@ -274,6 +276,9 @@ export function mountStandaloneRoutes(
     { maxUploadBytes: config.maxUploadBytes },
   ));
 
+  // Журналы безопасности: аудит изменений политик + внешние запросы (egress).
+  app.route('/api/v2/audit', createAuditRoutes(auth, { securityAudit, egressRequests }));
+
   // Messages (batch operations)
   app.route('/api/v2/messages', createMessageRoutes(
     auth, sessionManager, () => getClient(),
@@ -339,9 +344,15 @@ export function mountStandaloneRoutes(
     })),
     // ADR-071 §2.3.1: дефолт config.yaml для GET/DELETE-сброса политики.
     fallbackMcpNetworkPolicy: config.mcpNetworkPolicy,
-    // ADR-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
-    onMcpNetworkPolicyChange: async (policy) => {
-      mcpManager.setNetworkPolicy(policy);
+    // ADR-071 §2.3.1: отдельный колбэк не нужен — `McpManager` резолвит политику
+    // из стора при каждом connect/probe (live, без стартового снимка).
+    // Egress: дефолты config.yaml для GET/DELETE-сброса + аудит изменений.
+    fallbackEgressTools: config.egressConfig?.tools,
+    fallbackEgressWebhooks: config.egressConfig?.webhooks,
+    securityAudit,
+    onEgressChange: () => {
+      // Live: резолвер/web_fetch/web_search/skills/instructions читают стор на
+      // каждую операцию — отдельная переконфигурация не нужна.
     },
     // ADR-089: дефолт config.yaml для GET/DELETE-сброса раздела «События».
     fallbackEvents: config.eventsConfig,
@@ -431,7 +442,8 @@ export function mountStandaloneRoutes(
     { store: webhookStore, deliveryStore: webhookDeliveryStore, service: webhookService },
     {
       isEnabled: () => webhooksConfig.enabled,
-      allowPrivateTargets: webhooksConfig.allowPrivateTargets,
+      // Отдельный экземпляр политики (live; граница доверия не смешивается с tools).
+      resolvePolicy: () => egressResolver.resolveWebhooks(),
     },
   ));
 

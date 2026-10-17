@@ -62,6 +62,11 @@ export type McpNetworkPolicyMode = (typeof MCP_NETWORK_POLICY_MODES)[number];
 export interface McpNetworkPolicy {
   mode: McpNetworkPolicyMode;
   list: string[];
+  /**
+   * Allow-правила-исключения (точный hostname, `*.suffix`, CIDR/IP).
+   * Проверяются первыми; формат/семантика общие с `egress.tools`/`egress.webhooks`.
+   */
+  exceptions?: string[];
 }
 
 /**
@@ -97,6 +102,7 @@ export const DEFAULT_MCP_PRIVATE_CIDRS = [
 export const DEFAULT_MCP_NETWORK_POLICY: McpNetworkPolicy = {
   mode: 'deny',
   list: [...DEFAULT_MCP_PRIVATE_CIDRS],
+  exceptions: [],
 };
 
 // --- MCP: уровни/скоуп и эффективный набор (ADR-071 §2.2/§2.4) ---

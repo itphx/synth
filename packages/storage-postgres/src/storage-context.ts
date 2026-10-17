@@ -31,6 +31,7 @@ import type { PostgresConnection } from './pool.js';
 import { latestSchemaVersion, MIGRATIONS } from './migrations/index.js';
 import { planMigrations, readSchemaVersion, runMigrations } from './migrate.js';
 import { buildContentPorts } from './ports/content.js';
+import { buildAuditPorts } from './ports/audit.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPrincipalPorts } from './ports/principals.js';
@@ -138,6 +139,7 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     ...buildPrincipalPorts(deps),
     ...buildEventPorts(deps),
     ...buildContentPorts(deps),
+    ...buildAuditPorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
     skills: file.skills,
     contextFiles: file.contextFiles,

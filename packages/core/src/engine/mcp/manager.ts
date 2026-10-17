@@ -4,7 +4,9 @@ import { ToolCapability } from '@itphx/synth-shared';
 import type { ToolRegistry } from '../tools/registry.js';
 import type { ToolContext, ToolResult } from '@itphx/synth-shared';
 import { McpClient } from './client.js';
-import { evaluateMcpNetworkAccess, isHttpMcpConfig } from './network-policy.js';
+import { evaluateMcpNetworkAccess, hostFromUrl, isHttpMcpConfig } from './network-policy.js';
+import { currentEgressLog } from '../net/egress-runtime.js';
+import { sanitizeEgressTarget } from '../net/egress-guard.js';
 import { info, warning } from '../../logger.js';
 import type { SessionManager } from '../../sessions/manager.js';
 import { ObfuscationMapStore } from '../gateway/obfuscation-map-store.js';
@@ -22,8 +24,10 @@ interface ServerEntry {
 export class McpManager {
   private _servers = new Map<string, ServerEntry>();
   private _config: Record<string, McpServerConfig> = {};
-  /** ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов (если задана). */
+  /** ADR-071 §2.3.1: политика сетевого доступа HTTP-серверов (статический fallback). */
   private _networkPolicy: McpNetworkPolicy | undefined;
+  /** Живой резолвер политики (читается при подключении/probe; live без рестарта). */
+  private _networkPolicyResolver: (() => Promise<McpNetworkPolicy>) | undefined;
   /** ADR-071 §2.5: origin серверов; сетевая политика применяется только к `user`. */
   private _serverOrigins = new Map<string, McpRegistryOrigin>();
   /** ADR-071 §2.5: trust записей реестра (builtin|community) для отображения. */
@@ -50,9 +54,22 @@ export class McpManager {
     return this._config;
   }
 
-  /** ADR-071 §2.3.1: задать политику сетевого доступа (undefined — не проверять). */
+  /**
+   * ADR-071 §2.3.1: статическая политика (fallback). `undefined` — без проверки
+   * (совместимость встраивания; домен передаёт резолвер).
+   */
   setNetworkPolicy(policy: McpNetworkPolicy | undefined): void {
     this._networkPolicy = policy;
+  }
+
+  /** Живой резолвер политики: вызывается при каждом connect/probe. */
+  setNetworkPolicyResolver(resolver: (() => Promise<McpNetworkPolicy>) | undefined): void {
+    this._networkPolicyResolver = resolver;
+  }
+
+  private async _resolveNetworkPolicy(): Promise<McpNetworkPolicy | undefined> {
+    if (this._networkPolicyResolver) return this._networkPolicyResolver();
+    return this._networkPolicy;
   }
 
   /** ADR-071 §2.5: origin серверов (instance — доверенные, user — community). */
@@ -116,14 +133,59 @@ export class McpManager {
    * проверяются (RCE-риск и приватные сети инстанса регулируются иначе).
    */
   private async _assertNetworkAllowed(name: string, config: McpServerConfig): Promise<void> {
-    if (!this._networkPolicy || !isHttpMcpConfig(config)) return;
+    if (!isHttpMcpConfig(config)) return;
+    // instance/stdio — доверенные (RCE/приватные сети инстанса регулируются иначе).
     if (this._serverOrigins.get(name) !== 'user') return;
     if (!config.url) {
       throw new Error(`MCP-сервер "${name}" (${config.type}) не содержит url`);
     }
-    const result = await evaluateMcpNetworkAccess(config.url, this._networkPolicy);
+    // Fail-closed: пользовательский HTTP/SSE-сервер без доступной политики не
+    // подключается (раньше `undefined` означал «проверять нечем — пускаем»).
+    let policy: McpNetworkPolicy;
+    try {
+      const resolved = await this._resolveNetworkPolicy();
+      if (!resolved) {
+        throw new Error('политика не задана');
+      }
+      policy = resolved;
+    } catch (err) {
+      throw new Error(
+        `MCP-сервер "${name}" не подключён: egress-политика недоступна (fail-closed): ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const started = Date.now();
+    const result = await evaluateMcpNetworkAccess(config.url, policy);
+    await this._recordEgress(config.url, result.allowed, started, result.reason, result.matchedRule);
     if (!result.allowed) {
       throw new Error(`MCP-сервер "${name}" заблокирован сетевой политикой: ${result.reason}`);
+    }
+  }
+
+  /** Журнал egress для connect/probe (best-effort; тела/заголовки не пишутся). */
+  private async _recordEgress(
+    url: string,
+    allowed: boolean,
+    started: number,
+    reason?: string,
+    matchedRule?: string,
+  ): Promise<void> {
+    const log = currentEgressLog();
+    if (!log) return;
+    const target = sanitizeEgressTarget(url);
+    try {
+      await log({
+        scope: 'mcp',
+        host: target.host || hostFromUrl(url) || '',
+        url: target.url,
+        method: 'CONNECT',
+        status: allowed ? 'allowed' : 'blocked',
+        durationMs: Math.max(0, Date.now() - started),
+        ...(reason ? { reason } : {}),
+        ...(matchedRule ? { matchedRule } : {}),
+      });
+    } catch (err) {
+      console.warn(`[egress] mcp log: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

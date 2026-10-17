@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { WebhookDelivery, WebhookSubscription } from '@itphx/synth-shared';
+import type { EgressPolicy, WebhookDelivery, WebhookSubscription, WebhooksEgressPolicy } from '@itphx/synth-shared';
 import { generateId, matchWebhookEvent, nowISO } from '@itphx/synth-shared';
 
 /**
@@ -19,7 +19,8 @@ import type { HostResolver } from '../mcp/network-policy.js';
 import type { FetchLike } from '../net/fetch.js';
 import { buildSignatureHeader } from './signature.js';
 import { evaluateWebhookTarget } from './network.js';
-import { PRIVATE_EGRESS_POLICY, EgressBlockedError, fetchWithEgressGuard } from '../net/egress-guard.js';
+import { EgressBlockedError, fetchWithEgressGuard, sanitizeEgressTarget } from '../net/egress-guard.js';
+import { currentEgressLog } from '../net/egress-runtime.js';
 import { egressFetch } from '../../security/tls.js';
 
 /** Пользовательский агент HTTP-доставки. */
@@ -46,8 +47,13 @@ export interface WebhookServiceConfig {
   maxAttempts: number;
   /** Таймаут одного HTTP-запроса, мс. */
   timeoutMs: number;
-  /** Разрешить http и приватные адреса (dev). */
-  allowPrivateTargets: boolean;
+  /**
+   * Живой резолвер политики `egress.webhooks` (читается перед каждой
+   * доставкой). Не задан — используется статическая `policy` (тесты/встраивание).
+   */
+  resolvePolicy?: () => Promise<WebhooksEgressPolicy>;
+  /** Статическая политика (fallback для тестов). */
+  policy?: WebhooksEgressPolicy;
 }
 
 export interface WebhookServiceDeps {
@@ -215,18 +221,36 @@ export class WebhookService {
     }
 
     // Defense-in-depth: SSRF-проверка перед каждой доставкой (URL мог измениться).
-    const target = await evaluateWebhookTarget(sub.url, {
-      allowPrivateTargets: this._deps.config.allowPrivateTargets,
-      resolveHost: this._deps.resolveHost,
-    });
-    if (!target.allowed) {
+    // Политика резолвится заново (live) — без стартового снимка.
+    const policy = this._deps.config.resolvePolicy
+      ? await this._deps.config.resolvePolicy()
+      : this._deps.config.policy;
+    if (!policy) {
       return this._finish(sub, {
         id: deliveryId,
         subscriptionId: sub.id,
         eventType: event.type,
         status: 'failed',
         attempts: 0,
-        error: target.reason ?? 'Цель доставки запрещена политикой',
+        error: 'egress-политика webhooks не задана (fail-closed)',
+        createdAt,
+      });
+    }
+    const target = await evaluateWebhookTarget(sub.url, {
+      policy,
+      resolveHost: this._deps.resolveHost,
+    });
+    if (!target.allowed) {
+      // Заблокированная цель (до HTTP-запроса) — фиксируем в журнале egress.
+      const reason = target.reason ?? 'Цель доставки запрещена политикой';
+      await this._recordBlocked(sub.url, reason, target.matchedRule);
+      return this._finish(sub, {
+        id: deliveryId,
+        subscriptionId: sub.id,
+        eventType: event.type,
+        status: 'failed',
+        attempts: 0,
+        error: reason,
         createdAt,
       });
     }
@@ -257,13 +281,17 @@ export class WebhookService {
             signal: controller.signal,
           },
           {
-            // Приватные/локальные цели допускаются только флагом (dev).
-            policy: this._deps.config.allowPrivateTargets ? undefined : PRIVATE_EGRESS_POLICY,
-            requireHttps: !this._deps.config.allowPrivateTargets,
+            // `off` (dev) — проверок нет; иначе deny/allow + exceptions.
+            ...(policy.mode === 'off'
+              ? { skipPolicy: true }
+              : { policy: policy as EgressPolicy, requireHttps: true }),
             resolveHost: this._deps.resolveHost,
             maxHops: MAX_REDIRECTS,
             // Проверка каждого хопа редиректа: приватный адрес — отказ без запроса.
             fetchImpl: this._fetch,
+            // Журнал egress: allowed/blocked/error, durationMs/httpStatus.
+            scope: 'webhooks',
+            log: currentEgressLog(),
           },
         );
         responseStatus = response.status;
@@ -296,6 +324,28 @@ export class WebhookService {
       ...(error ? { error } : {}),
       createdAt,
     });
+  }
+
+  /** Best-effort запись заблокированной цели в журнал egress (до HTTP-запроса). */
+  private async _recordBlocked(url: string, reason: string, matchedRule?: string): Promise<void> {
+    const log = currentEgressLog();
+    if (!log) return;
+    const target = sanitizeEgressTarget(url);
+    try {
+      await log({
+        scope: 'webhooks',
+        host: target.host,
+        url: target.url,
+        method: 'POST',
+        status: 'blocked',
+        reason,
+        ...(matchedRule ? { matchedRule } : {}),
+      });
+    } catch (err) {
+      this._logger.warn(
+        `[WebhookService] egress log: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /** Запись в журнал + отметка подписки. */

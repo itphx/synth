@@ -50,8 +50,12 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'webhooks', key: 'enabled', type: 'boolean' },
   { section: 'webhooks', key: 'maxAttempts', type: 'number' },
   { section: 'webhooks', key: 'timeoutMs', type: 'number' },
-  { section: 'webhooks', key: 'allowPrivateTargets', type: 'boolean' },
   { section: 'webhooks', key: 'deliveryRetentionDays', type: 'number' },
+  // egress (настраиваемая политика + журнал): только скалярные ключи.
+  { section: 'egress', key: 'tools.mode', type: 'string' },
+  { section: 'egress', key: 'webhooks.mode', type: 'string' },
+  { section: 'egress', key: 'log.enabled', type: 'boolean' },
+  { section: 'egress', key: 'log.retentionDays', type: 'number' },
   // decision (ADR-084)
   { section: 'decision', key: 'enabled', type: 'boolean' },
   { section: 'decision', key: 'provider', type: 'string' },
@@ -66,9 +70,13 @@ export function toSnakeCase(value: string): string {
   return value.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toUpperCase();
 }
 
-/** Полное env-имя определения: `SYNTH_<SECTION>_<KEY>`. */
+/**
+ * Полное env-имя определения: `SYNTH_<SECTION>_<KEY>`. Точки в ключе означают
+ * вложенность (`log.enabled` → `SYNTH_EGRESS_LOG_ENABLED`).
+ */
 export function envOverrideName(def: EnvOverrideDefinition): string {
-  return `SYNTH_${toSnakeCase(def.section)}_${toSnakeCase(def.key)}`;
+  const key = def.key.split('.').map(toSnakeCase).join('_');
+  return `SYNTH_${toSnakeCase(def.section)}_${key}`;
 }
 
 export type ParsedEnvValue =
@@ -138,7 +146,21 @@ export function applyEnvOverrides<T extends Record<string, unknown>>(
       current !== null && typeof current === 'object' && !Array.isArray(current)
         ? { ...(current as Record<string, unknown>) }
         : {};
-    section[def.key] = parsed.value;
+    // `key` может быть вложенным (`log.enabled`): клонируем промежуточные объекты,
+    // чтобы не мутировать defaultConfig.
+    const path = def.key.split('.');
+    let target: Record<string, unknown> = section;
+    for (let i = 0; i < path.length - 1; i += 1) {
+      const part = path[i]!;
+      const child = target[part];
+      const copy =
+        child !== null && typeof child === 'object' && !Array.isArray(child)
+          ? { ...(child as Record<string, unknown>) }
+          : {};
+      target[part] = copy;
+      target = copy;
+    }
+    target[path[path.length - 1]!] = parsed.value;
     (config as Record<string, unknown>)[def.section] = section;
   }
 

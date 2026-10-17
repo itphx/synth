@@ -1,4 +1,7 @@
 import type {
+  EgressPolicy,
+  EgressPolicyScope,
+  WebhooksEgressPolicy,
   McpNetworkPolicy,
   McpServerToolSettings,
   SkillsDisabledRequest,
@@ -75,6 +78,11 @@ export interface SettingsRepository {
   getMcpNetworkPolicy(): Promise<McpNetworkPolicy | undefined>;
   setMcpNetworkPolicy(policy: McpNetworkPolicy): Promise<void>;
   clearMcpNetworkPolicy(): Promise<void>;
+
+  /** Egress-политика встроенных инструментов / webhooks (runtime override). */
+  getEgressPolicy(scope: EgressPolicyScope): Promise<EgressPolicy | WebhooksEgressPolicy | undefined>;
+  setEgressPolicy(scope: EgressPolicyScope, policy: EgressPolicy | WebhooksEgressPolicy): Promise<void>;
+  clearEgressPolicy(scope: EgressPolicyScope): Promise<void>;
 
   getDefaultAgent(): Promise<string | undefined>;
   setDefaultAgent(id: string): Promise<void>;

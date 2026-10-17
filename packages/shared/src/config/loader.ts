@@ -56,6 +56,29 @@ async function tryReadYaml(path: string): Promise<Record<string, unknown> | null
   }
 }
 
+/**
+ * Fail-closed миграция: удалённый `webhooks.allowPrivateTargets` больше не
+ * читается. Присутствие ключа в config.yaml — warn с указанием замены
+ * (`egress.webhooks.mode: 'off'`), значение игнорируется.
+ */
+function warnLegacyKeys(fileConfig: Record<string, unknown>, env: NodeJS.ProcessEnv): void {
+  const webhooks = fileConfig.webhooks;
+  if (webhooks && typeof webhooks === 'object' && !Array.isArray(webhooks)) {
+    if (Object.prototype.hasOwnProperty.call(webhooks, 'allowPrivateTargets')) {
+      console.warn(
+        '[config] webhooks.allowPrivateTargets удалён и игнорируется — используйте ' +
+          "egress.webhooks.mode: 'off' (dev) либо список исключений egress.webhooks.exceptions",
+      );
+    }
+  }
+  if (env.SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS !== undefined) {
+    console.warn(
+      '[config] SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS удалён и игнорируется — используйте ' +
+        "SYNTH_EGRESS_WEBHOOKS_MODE=off (dev)",
+    );
+  }
+}
+
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<SynthConfig> {
   // ADR-023/ADR-071: явный путь — из опций, иначе из SYNTH_CONFIG (как в
   // findConfigPath). Без этого dev-запуск backend с cwd=synth/ не читал
@@ -71,6 +94,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Synth
       break;
     }
   }
+
+  warnLegacyKeys(fileConfig, options.env ?? process.env);
 
   const merged = deepMerge(defaultConfig as unknown as Record<string, unknown>, fileConfig);
   // ADR-023: env-оверрайды скалярных ключей вложенных секций применяются одним

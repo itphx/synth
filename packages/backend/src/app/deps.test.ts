@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_AGENT_ID } from '@itphx/synth-core';
 import type { EventsRuntimeSettings } from '@itphx/synth-core';
-import type { DecisionConfig, McpNetworkPolicy } from '@itphx/synth-shared';
+import type { DecisionConfig } from '@itphx/synth-shared';
 import { loadBackendConfig } from '../lib/app-config.js';
 import { createBackendDeps } from './deps.js';
 
@@ -102,13 +102,17 @@ describe('createBackendDeps: композиция и live-аксессоры', (
     expect(deps.live.getEvents().enabled).toBe(before.enabled);
   });
 
-  it('live.setNetworkPolicy/getNetworkPolicy: политика применяется (live-проводка)', () => {
-    const before = deps.live.getNetworkPolicy();
-    const policy: McpNetworkPolicy = { mode: 'deny', list: ['example.invalid'] };
-    deps.live.setNetworkPolicy(policy);
-    expect(deps.live.getNetworkPolicy()).toEqual(policy);
+  it('egressResolver.resolveMcp читает стор на каждый вызов (live-проводка)', async () => {
+    const before = await deps.egressResolver.resolveMcp();
+    await deps.settingsStore.setMcpNetworkPolicy({
+      mode: 'deny',
+      list: ['example.invalid'],
+      exceptions: [],
+    });
+    expect((await deps.egressResolver.resolveMcp()).list).toEqual(['example.invalid']);
 
-    if (before) deps.live.setNetworkPolicy(before);
+    await deps.settingsStore.clearMcpNetworkPolicy();
+    expect(await deps.egressResolver.resolveMcp()).toEqual(before);
   });
 
   it('live.setDecision не бросает и не ломает composition', () => {

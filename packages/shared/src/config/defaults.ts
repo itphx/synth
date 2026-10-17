@@ -1,5 +1,10 @@
 import type { SynthConfig } from './types.js';
-import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
+import {
+  DEFAULT_MCP_PRIVATE_CIDRS,
+  DEFAULT_EGRESS_TOOLS_POLICY,
+  DEFAULT_EGRESS_WEBHOOKS_POLICY,
+  DEFAULT_EGRESS_LOG,
+} from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES } from '../types/index.js';
 
 export const defaultConfig: SynthConfig = {
@@ -94,6 +99,7 @@ export const defaultConfig: SynthConfig = {
     networkPolicy: {
       mode: 'deny',
       list: [...DEFAULT_MCP_PRIVATE_CIDRS],
+      exceptions: [],
     },
   },
   tools: {
@@ -159,13 +165,27 @@ export const defaultConfig: SynthConfig = {
     escalationProvider: '',
     escalationModel: '',
   },
+  egress: {
+    // Политика встроенных инструментов: deny приватных/служебных диапазонов.
+    tools: {
+      mode: DEFAULT_EGRESS_TOOLS_POLICY.mode,
+      list: [...DEFAULT_EGRESS_TOOLS_POLICY.list],
+      exceptions: [],
+    },
+    // Политика webhooks: deny приватных + обязательный https (`off` — dev).
+    webhooks: {
+      mode: DEFAULT_EGRESS_WEBHOOKS_POLICY.mode,
+      list: [...DEFAULT_EGRESS_WEBHOOKS_POLICY.list],
+      exceptions: [],
+    },
+    // Журнал внешних запросов: включён, retention 7 дней (0 — без очистки).
+    log: { ...DEFAULT_EGRESS_LOG },
+  },
   webhooks: {
     // ADR-052 (этап II): доставка webhooks выключена по умолчанию (opt-in).
     enabled: false,
     maxAttempts: 5,
     timeoutMs: 10_000,
-    // Только https и публичные адреса; приватные/loopback — запрещены (SSRF).
-    allowPrivateTargets: false,
     deliveryRetentionDays: 30,
   },
   instructions: {

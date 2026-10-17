@@ -161,10 +161,34 @@ describe('loadConfig — env-оверрайды вложенных секций 
 
   it('читает process.env, если env не передан (реальный вызов loadConfig)', async () => {
     const path = await writeConfig(YAML);
-    vi.stubEnv('SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS', 'true');
+    vi.stubEnv('SYNTH_EGRESS_WEBHOOKS_MODE', 'off');
+    vi.stubEnv('SYNTH_EGRESS_LOG_ENABLED', 'false');
 
     const cfg = await loadConfig({ configPath: path });
-    expect(cfg.webhooks.allowPrivateTargets).toBe(true);
+    expect(cfg.egress.webhooks.mode).toBe('off');
+    expect(cfg.egress.log.enabled).toBe(false);
+  });
+
+  it('legacy webhooks.allowPrivateTargets игнорируется с warn (fail-closed)', async () => {
+    const path = await writeConfig('webhooks:\n  allowPrivateTargets: true\n');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const cfg = await loadConfig({ configPath: path });
+
+    expect((cfg.webhooks as Record<string, unknown>).allowPrivateTargets).toBeUndefined();
+    expect(cfg.egress.webhooks.mode).toBe('deny');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('egress.webhooks.mode'));
+  });
+
+  it('legacy env SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS игнорируется с warn', async () => {
+    const path = await writeConfig('{}\n');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const cfg = await loadConfig({ configPath: path, env: { SYNTH_WEBHOOKS_ALLOW_PRIVATE_TARGETS: 'true' } });
+
+    expect((cfg.webhooks as Record<string, unknown>).allowPrivateTargets).toBeUndefined();
+    expect(cfg.egress.webhooks.mode).toBe('deny');
+    expect(warn).toHaveBeenCalled();
   });
 });
 

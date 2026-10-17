@@ -19,7 +19,7 @@ import {
   createProjectPortableRoutes,
   createStorageContextAsync,
   ProjectInstructionsResolver, createInstructionsInfoResolver,
-  createSettingsRoutes, createDictionaryRoutes,
+  createSettingsRoutes, createDictionaryRoutes, createAuditRoutes as createSecurityAuditRoutes, currentEgressLog,
   createContextRoutes as createCoreContextRoutes,
   resolveProjectWorkspace,
 } from '@itphx/synth-core';
@@ -69,6 +69,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     eventIngress, eventBindingStore, eventJournal, routeRuleStore, eventApiKeyStore,
     schedulerService, scheduleStore, jobStore, webhookStore, webhookDeliveryStore, webhookService,
     webhooksConfig, eventHub, mcpManager, mcpRegistryStore, skillService, settingsStore,
+    egressResolver, securityAudit, egressRequests,
     defaultWorkingDir, patternStore, toolRegistry, gatewayAuditLogger, gatewayPayloadLogPath,
     gatewayConfig, providerLoader, modelLoader, modelWindowLoader, resolveAgentTemplate,
     identityClaimStore, live, maintenanceAudit,
@@ -176,7 +177,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }));
 
   // Providers routes
-  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache));
+  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, {
+    resolvePolicy: () => egressResolver.resolveTools(),
+    log: currentEgressLog(),
+  }));
 
   // Models routes
   app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache));
@@ -316,7 +320,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         return user?.id ?? 'unknown';
       },
       isEnabled: () => webhooksConfig.enabled,
-      allowPrivateTargets: webhooksConfig.allowPrivateTargets,
+      // Отдельный экземпляр политики (live; граница доверия не смешивается с tools).
+      resolvePolicy: () => egressResolver.resolveWebhooks(),
       messages: {
         invalid: (c) => t('errors.validation.invalidWebhook', undefined, c),
         notFound: (c) => t('errors.notFound.webhook', undefined, c),
@@ -397,8 +402,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   // MCP routes (единый реестр; legacy /servers — адаптеры над ним)
   app.route('/api/v2/mcp', createMcpRoutes(auth, mcpManager, sessionManager, {
     registry: mcpRegistryStore,
-    networkPolicy: live.getNetworkPolicy(),
-    getNetworkPolicy: () => live.getNetworkPolicy(),
+    // Политика резолвится на каждый запрос (live; исключения/режим — из стора).
+    getNetworkPolicy: () => egressResolver.resolveMcp(),
   }));
 
   // Скиллы (ADR-046 §9.1/§9.2): core-фабрика + RBAC ADMIN на запись.
@@ -620,8 +625,15 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     })),
     // ADR-071 §2.3.1: live-применение политики сетевого доступа MCP из админки.
     fallbackMcpNetworkPolicy: config.synth.mcp.networkPolicy,
-    onMcpNetworkPolicyChange: async (policy) => {
-      live.setNetworkPolicy(policy);
+    // ADR-071 §2.3.1: колбэк не нужен — `McpManager` резолвит политику из стора
+    // при каждом connect/probe (live, без стартового снимка).
+    // Egress: дефолты config.yaml для GET/DELETE-сброса + аудит изменений.
+    fallbackEgressTools: config.synth.egress.tools,
+    fallbackEgressWebhooks: config.synth.egress.webhooks,
+    securityAudit,
+    resolveActor: (c) => {
+      const user = c.get('user') as { id?: unknown } | undefined;
+      return typeof user?.id === 'string' && user.id ? user.id : 'unknown';
     },
     // ADR-089: дефолт config.yaml для GET/DELETE-сброса раздела «События».
     fallbackEvents: config.synth.events,
@@ -644,6 +656,15 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // protected-paths, events, decision) — только ADMIN (managed RBAC).
     // События/decision наследуют тот же guard (если не заданы отдельно).
     settingsWriteGuard: auth.requirePermission('ADMIN'),
+  }));
+
+  // Журналы безопасности: аудит изменений политик + внешние запросы (egress).
+  // Managed RBAC: чтение только ADMIN/AUDITOR.
+  app.route('/api/v2/audit', createSecurityAuditRoutes(auth as unknown as CoreAuthKit, {
+    securityAudit,
+    egressRequests,
+  }, {
+    readGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
   }));
 
   // Словари классификации: чтение — все авторизованные, запись/сброс — ADMIN
