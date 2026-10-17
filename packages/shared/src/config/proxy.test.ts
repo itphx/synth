@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   NoProxyMatcher,
   PROXY_PASSWORD_ENV,
@@ -598,5 +599,67 @@ describe('validateProxyConfig (сохранение runtime-override)', () => {
       expect(err).toBeInstanceOf(ProxyConfigError);
       expect((err as ProxyConfigError).code).toBe('EGRESS_PROXY_CONFIG_INVALID');
     }
+  });
+});
+
+describe('proxyStatus: поля для предзаполнения UI (redacted)', () => {
+  const CA_PEM = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
+
+  it('fromEnv/auth.username/tls-флаги есть, caPem и пароль — нет', () => {
+    const cfg = resolveProxyConfig(
+      {
+        proxy: {
+          url: 'http://user@proxy:3128',
+          fromEnv: false,
+          fallbackDirect: true,
+          connectTimeoutMs: 1234,
+          auth: { type: 'basic', username: 'user' },
+          tls: { caPem: CA_PEM, rejectUnauthorized: false },
+        },
+      },
+      { [PROXY_PASSWORD_ENV]: 'super-secret' },
+    );
+    const status = proxyStatus(cfg);
+    expect(status).toMatchObject({
+      enabled: true,
+      url: 'http://proxy:3128',
+      fromEnv: false,
+      fallbackDirect: true,
+      connectTimeoutMs: 1234,
+      auth: { type: 'basic', username: 'user' },
+      tls: {
+        hasCaPem: true,
+        rejectUnauthorized: false,
+      },
+    });
+    const json = JSON.stringify(status);
+    expect(json).not.toContain('MIIB');
+    expect(json).not.toContain('BEGIN CERTIFICATE');
+    expect(json).not.toContain('super-secret');
+    expect(json).not.toContain('user:');
+    expect(json).not.toContain('caPem');
+  });
+
+  it('tls отсутствует, если TLS к прокси не настроен', () => {
+    const status = proxyStatus(
+      resolveProxyConfig({ proxy: { url: 'http://proxy:3128', fromEnv: false } }, {}),
+    );
+    expect(status.tls).toBeUndefined();
+    expect(status.auth).toBeUndefined();
+    expect(status.fromEnv).toBe(false);
+  });
+
+  it('caFile/certFile/keyFile отдаются путями, hasCaPem=false', () => {
+    const fixtures = fileURLToPath(new URL('../../../core/src/security/__fixtures__/', import.meta.url));
+    const caFile = `${fixtures}tls-test-selfsigned.pem`;
+    const certFile = `${fixtures}tls-test-proxy-client.pem`;
+    const keyFile = `${fixtures}tls-test-proxy-client.key`;
+    const cfg = resolveProxyConfig(
+      { proxy: { url: 'http://proxy:3128', fromEnv: false, tls: { caFile, certFile, keyFile } } },
+      {},
+    );
+    const status = proxyStatus(cfg);
+    expect(status.tls).toMatchObject({ hasCaPem: false, caFile, certFile, keyFile });
+    expect(JSON.stringify(status)).not.toContain('BEGIN CERTIFICATE');
   });
 });

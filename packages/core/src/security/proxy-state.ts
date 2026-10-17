@@ -91,8 +91,18 @@ export function proxyConfigFingerprint(config: ResolvedProxyConfig | null | unde
     httpsProxy: config.httpsProxy ?? null,
     allProxy: config.allProxy ?? null,
     noProxy: [...config.noProxy].map((item) => item.toLowerCase()).sort(),
+    fromEnv: config.fromEnv,
     fallbackDirect: config.fallbackDirect,
     connectTimeoutMs: config.connectTimeoutMs,
+    auth: config.auth ? { type: config.auth.type, username: config.auth.username } : null,
+    tlsMeta: config.tlsMeta
+      ? {
+          caFile: config.tlsMeta.caFile ?? null,
+          certFile: config.tlsMeta.certFile ?? null,
+          keyFile: config.tlsMeta.keyFile ?? null,
+          hasCaPem: config.tlsMeta.hasCaPem,
+        }
+      : null,
     tls: config.tls
       ? {
           ca: config.tls.ca !== undefined ? sha256(config.tls.ca) : null,

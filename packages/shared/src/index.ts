@@ -112,6 +112,8 @@ export type {
   ResolvedProxyConfig,
   ResolvedProxyTls,
   EgressProxyStatus,
+  ProxyStatusAuth,
+  ProxyStatusTlsMeta,
   ProxyPasswordStatus,
   ProxyAuthChallenge,
   ProxyCheckResult,

@@ -105,13 +105,32 @@ export interface ResolvedProxyConfig {
   allProxy?: string;
   /** Креды Basic по полям (только если заданы). */
   credentials?: ProxyCredentialSet;
+  /** Redacted-сведения об аутентификации (username, без пароля). */
+  auth?: ProxyStatusAuth;
   /** TLS/mTLS к прокси (`ProxyAgent.proxyTls`); цель — `security.tls`. */
   tls?: ResolvedProxyTls;
+  /** Метаданные TLS-файлов для статуса/UI (пути, флаг `caPem`; без содержимого). */
+  tlsMeta?: ProxyStatusTlsMeta;
   noProxy: string[];
   fromEnv: boolean;
   /** Явный opt-in: при недоступном прокси идти напрямую (warn + via:'fallback'). */
   fallbackDirect: boolean;
   connectTimeoutMs: number;
+}
+
+/** Безопасные сведения об аутентификации прокси для статуса/UI (без пароля). */
+export interface ProxyStatusAuth {
+  type: 'basic';
+  username: string;
+}
+
+/** Метаданные TLS к прокси для статуса/UI (без PEM-содержимого). */
+export interface ProxyStatusTlsMeta {
+  caFile?: string;
+  certFile?: string;
+  keyFile?: string;
+  /** `true` — CA задан через `caPem` (сам PEM наружу не отдаётся). */
+  hasCaPem: boolean;
 }
 
 /** Read-only статус прокси для `GET /api/v2/settings/proxy` (без секретов). */
@@ -123,8 +142,13 @@ export interface EgressProxyStatus {
   httpsProxy?: string;
   allProxy?: string;
   noProxy: string[];
+  fromEnv: boolean;
   fallbackDirect: boolean;
   connectTimeoutMs: number;
+  /** Basic-аутентификация: только username (пароль не отдаётся). */
+  auth?: ProxyStatusAuth;
+  /** TLS к прокси: пути и флаг `caPem`; PEM/ключи не отдаются. */
+  tls?: ProxyStatusTlsMeta & { rejectUnauthorized: boolean };
   /** Настройка применяется при старте процесса. */
   restartRequired: true;
 }
@@ -553,6 +577,42 @@ function isProxyTlsConfigured(cfg: Partial<ProxyConfig>, env: NodeJS.ProcessEnv)
   return Object.values(PROXY_TLS_ENV).some((key) => envValue(env, key) !== undefined);
 }
 
+/**
+ * Метаданные TLS к прокси для статуса/UI: пути файлов и флаг `caPem`.
+ * Приоритет env `SYNTH_PROXY_TLS_*` > эффективный config/runtime. Содержимое
+ * PEM/ключа **не** возвращается.
+ */
+export function resolveProxyTlsMeta(
+  config: ProxyConfigSource | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): ProxyStatusTlsMeta {
+  const cfg = (config?.proxy?.tls ?? {}) as Partial<ProxyTlsConfig>;
+  const pick = (envKey: string, cfgValue: string | undefined): string | undefined => {
+    const fromEnv = envValue(env, envKey);
+    if (fromEnv !== undefined) return fromEnv;
+    return cfgValue !== undefined && cfgValue !== '' ? cfgValue : undefined;
+  };
+  const caFile = pick(PROXY_TLS_ENV.caFile, cfg.caFile);
+  const caPem = pick(PROXY_TLS_ENV.caPem, cfg.caPem);
+  const certFile = pick(PROXY_TLS_ENV.certFile, cfg.certFile);
+  const keyFile = pick(PROXY_TLS_ENV.keyFile, cfg.keyFile);
+  const meta: ProxyStatusTlsMeta = { hasCaPem: caPem !== undefined };
+  if (caFile !== undefined) meta.caFile = caFile;
+  if (certFile !== undefined) meta.certFile = certFile;
+  if (keyFile !== undefined) meta.keyFile = keyFile;
+  return meta;
+}
+
+/** Публичная redacted-форма TLS-метаданных (никогда не содержит PEM/ключей). */
+function redactedTlsMeta(meta: ProxyStatusTlsMeta | undefined): ProxyStatusTlsMeta | undefined {
+  if (!meta) return undefined;
+  const result: ProxyStatusTlsMeta = { hasCaPem: meta.hasCaPem === true };
+  if (meta.caFile !== undefined) result.caFile = meta.caFile;
+  if (meta.certFile !== undefined) result.certFile = meta.certFile;
+  if (meta.keyFile !== undefined) result.keyFile = meta.keyFile;
+  return result;
+}
+
 /** Опции резолвера `proxy`: каталог данных и runtime-override из UI/`settings.json`. */
 export interface ResolveProxyConfigOptions {
   /** Каталог данных — файл `{dataDir}/secrets/proxy-password` (инвариант 13). */
@@ -748,6 +808,12 @@ export function resolveProxyConfig(
           ? 'config'
           : 'none';
 
+  const resolvedTls = resolveProxyTls({ proxy: cfg }, env);
+  const meta = resolveProxyTlsMeta({ proxy: cfg }, env);
+  const firstCredentials = Object.values(credentials).find((value) => value !== undefined);
+  const authUsername = firstCredentials?.username
+    ?? auth?.username
+    ?? picked.map((p) => p.username).find((value) => value !== undefined);
   const resolved: ResolvedProxyConfig = {
     enabled,
     source,
@@ -756,8 +822,15 @@ export function resolveProxyConfig(
     fallbackDirect,
     connectTimeoutMs,
     // TLS/mTLS к прокси: всегда резолвим (дефолт — системное доверие).
-    tls: resolveProxyTls({ proxy: cfg }, env),
+    tls: resolvedTls,
   };
+  if (authUsername !== undefined && authUsername !== '') {
+    resolved.auth = { type: 'basic', username: authUsername };
+  }
+  if (meta.caFile !== undefined || meta.certFile !== undefined || meta.keyFile !== undefined
+    || meta.hasCaPem || resolvedTls.rejectUnauthorized === false) {
+    resolved.tlsMeta = meta;
+  }
   if (url.value !== undefined) resolved.url = url.value;
   if (httpProxy.value !== undefined) resolved.httpProxy = httpProxy.value;
   if (httpsProxy.value !== undefined) resolved.httpsProxy = httpsProxy.value;
@@ -925,6 +998,7 @@ export function proxyStatus(config: ResolvedProxyConfig | null | undefined): Egr
     enabled: resolved.enabled,
     source: resolved.source,
     noProxy: [...resolved.noProxy],
+    fromEnv: resolved.fromEnv,
     fallbackDirect: resolved.fallbackDirect,
     connectTimeoutMs: resolved.connectTimeoutMs,
     restartRequired: true,
@@ -937,5 +1011,12 @@ export function proxyStatus(config: ResolvedProxyConfig | null | undefined): Egr
   if (httpsProxy) status.httpsProxy = httpsProxy;
   const allProxy = redactProxyUrl(resolved.allProxy);
   if (allProxy) status.allProxy = allProxy;
+  if (resolved.auth && resolved.auth.username !== '') {
+    status.auth = { type: 'basic', username: resolved.auth.username };
+  }
+  const tlsMeta = redactedTlsMeta(resolved.tlsMeta);
+  if (tlsMeta) {
+    status.tls = { ...tlsMeta, rejectUnauthorized: resolved.tls?.rejectUnauthorized ?? true };
+  }
   return status;
 }

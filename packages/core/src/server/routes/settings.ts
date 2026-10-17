@@ -545,6 +545,12 @@ function sanitizeProxyForAudit(config: Partial<ProxyConfig> | undefined): Partia
     if (raw === undefined || raw === '') continue;
     copy[field] = redactProxyUrl(raw) || undefined;
   }
+  // PEM CA не пишем в аудит (содержимое сертификата; пути — можно).
+  if (copy.tls?.caPem !== undefined) {
+    const tls = { ...copy.tls };
+    delete tls.caPem;
+    copy.tls = tls;
+  }
   return copy;
 }
 

@@ -81,30 +81,58 @@ describe('GET /api/v2/settings/proxy', () => {
 
   it('плоские поля = saved (config) + saved/running/defaults/password/restartRequired', async () => {
     const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    const caPem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
     const app = createApp({
       settingsStore: store,
       dataDir: tmpDir,
-      fallbackProxy: { url: 'http://proxy.corp:3128', noProxy: ['localhost'], fromEnv: false },
+      env: { SYNTH_PROXY_PASSWORD: 'pass' },
+      fallbackProxy: {
+        url: 'http://proxy.corp:3128',
+        noProxy: ['localhost'],
+        fromEnv: false,
+        auth: { type: 'basic', username: 'user' },
+        tls: { caPem, rejectUnauthorized: false },
+      },
     });
 
     const res = await app.request('/api/v2/settings/proxy');
     expect(res.status).toBe(200);
-    const body = await json(res);
-    // Обратная совместимость: плоские поля running-формы.
+    const text = await res.text();
+    const body = JSON.parse(text) as Record<string, any>;
+    // Обратная совместимость: плоские поля saved-формы.
     expect(body).toMatchObject({
       enabled: true,
       source: 'config',
       url: 'http://proxy.corp:3128',
       noProxy: ['localhost'],
+      fromEnv: false,
       fallbackDirect: false,
       connectTimeoutMs: 10_000,
+      auth: { type: 'basic', username: 'user' },
+      tls: { hasCaPem: true, rejectUnauthorized: false },
     });
-    expect(body.saved).toMatchObject({ enabled: true, url: 'http://proxy.corp:3128' });
+    expect(body.saved).toMatchObject({
+      enabled: true,
+      url: 'http://proxy.corp:3128',
+      fromEnv: false,
+      auth: { type: 'basic', username: 'user' },
+      tls: { hasCaPem: true, rejectUnauthorized: false },
+    });
     expect(body.running).toMatchObject({ enabled: false });
-    expect(body.defaults).toMatchObject({ enabled: true, url: 'http://proxy.corp:3128' });
+    expect(body.defaults).toMatchObject({
+      enabled: true,
+      url: 'http://proxy.corp:3128',
+      fromEnv: false,
+      auth: { type: 'basic', username: 'user' },
+      tls: { hasCaPem: true, rejectUnauthorized: false },
+    });
     expect(body.isOverridden).toBe(false);
-    expect(body.password).toEqual({ source: 'none', set: false, removable: false });
+    expect(body.password).toEqual({ source: 'env', set: true, removable: false });
     expect(body.restartRequired).toBe(true);
+    expect(text).not.toContain('MIIB');
+    expect(text).not.toContain('BEGIN CERTIFICATE');
+    expect(text).not.toContain('"pass"');
+    expect(JSON.stringify(body.auth)).not.toContain('password');
   });
 
   it('runtime-override: saved.source=runtime, defaults=config, isOverridden=true', async () => {
@@ -180,44 +208,82 @@ describe('PUT/DELETE /api/v2/settings/proxy', () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('PUT persists и не применяет live; аудит before/after без пароля', async () => {
-    const app = createApp({ settingsStore: store, audit, dataDir: tmpDir });
-    const res = await app.request('/api/v2/settings/proxy', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proxy: { url: 'http://proxy:3128', noProxy: ['localhost'], fromEnv: false } }),
-    });
-    expect(res.status).toBe(200);
-    const body = await json(res);
-    expect(body.restartRequired).toBe(true);
-    expect(body.saved).toMatchObject({ enabled: true, url: 'http://proxy:3128' });
-    expect(await store.getProxySettings()).toMatchObject({ url: 'http://proxy:3128' });
-    // Live не применился.
-    expect(getEgressProxyConfig()).toBeNull();
-
-    const entries = await audit.list({ scope: 'proxy' });
-    expect(entries).toHaveLength(1);
-    expect(entries[0]).toMatchObject({ scope: 'proxy', action: 'update', source: 'runtime' });
-    expect(JSON.stringify(entries)).not.toContain('password');
-  });
-
-  it('DELETE сбрасывает runtime и пишет аудит reset', async () => {
-    await store.setProxySettings({ url: 'http://ui:3128', fromEnv: false });
+  it('PUT persists и не применяет live; аудит before/after без пароля; ответ redacted', async () => {
+    const caPem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
     const app = createApp({
       settingsStore: store,
       audit,
       dataDir: tmpDir,
+      env: { SYNTH_PROXY_PASSWORD: 'pass' },
+    });
+    const res = await app.request('/api/v2/settings/proxy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proxy: {
+          url: 'http://proxy:3128',
+          noProxy: ['localhost'],
+          fromEnv: false,
+          auth: { type: 'basic', username: 'user' },
+          tls: { caPem, rejectUnauthorized: false },
+        },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const body = JSON.parse(text) as Record<string, any>;
+    expect(body.restartRequired).toBe(true);
+    expect(body.saved).toMatchObject({
+      enabled: true,
+      url: 'http://proxy:3128',
+      fromEnv: false,
+      auth: { type: 'basic', username: 'user' },
+      tls: { hasCaPem: true, rejectUnauthorized: false },
+    });
+    expect(text).not.toContain('MIIB');
+    expect(text).not.toContain('"pass"');
+    expect(await store.getProxySettings()).toMatchObject({ url: 'http://proxy:3128' });
+    // Live не применился: running остаётся выключенным до рестарта.
+    expect(getEgressProxyConfig()).toBeNull();
+    const afterGet = await json(await app.request('/api/v2/settings/proxy'));
+    expect(afterGet.running).toMatchObject({ enabled: false });
+    expect(afterGet.saved).toMatchObject({ enabled: true, url: 'http://proxy:3128' });
+
+    const entries = await audit.list({ scope: 'proxy' });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ scope: 'proxy', action: 'update', source: 'runtime' });
+    expect(JSON.stringify(entries)).not.toContain('"pass"');
+    expect(JSON.stringify(entries)).not.toContain('MIIB');
+  });
+
+  it('DELETE сбрасывает runtime и пишет аудит reset; ответ redacted', async () => {
+    const caPem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
+    await store.setProxySettings({
+      url: 'http://ui:3128',
+      fromEnv: false,
+      auth: { type: 'basic', username: 'user' },
+      tls: { caPem, rejectUnauthorized: false },
+    });
+    const app = createApp({
+      settingsStore: store,
+      audit,
+      dataDir: tmpDir,
+      env: { SYNTH_PROXY_PASSWORD: 'pass' },
       fallbackProxy: { url: 'http://config:3128', fromEnv: false },
     });
     const res = await app.request('/api/v2/settings/proxy', { method: 'DELETE' });
     expect(res.status).toBe(200);
-    const body = await json(res);
+    const text = await res.text();
+    const body = JSON.parse(text) as Record<string, any>;
     expect(body.status).toBe('restored');
     expect(body.saved).toMatchObject({ url: 'http://config:3128' });
+    expect(text).not.toContain('MIIB');
+    expect(text).not.toContain('"pass"');
     expect(await store.getProxySettings()).toBeUndefined();
     const entries = await audit.list({ scope: 'proxy' });
     expect(entries[0]).toMatchObject({ action: 'reset', after: null });
     expect(entries[0]!.before).toMatchObject({ url: 'http://ui:3128' });
+    expect(JSON.stringify(entries)).not.toContain('MIIB');
   });
 
   it('validation: bad URL / socks: / ntlm / пароль в userinfo → 400', async () => {
