@@ -15,7 +15,11 @@ const mocks = vi.hoisted(() => ({
   saveEgressPolicy: vi.fn(),
   resetEgressPolicy: vi.fn(),
   checkEgress: vi.fn(),
-  getProxyStatus: vi.fn(),
+  getProxy: vi.fn(),
+  saveProxy: vi.fn(),
+  resetProxy: vi.fn(),
+  setProxyPassword: vi.fn(),
+  clearProxyPassword: vi.fn(),
   checkProxy: vi.fn(),
   notify: vi.fn(),
 }))
@@ -116,16 +120,34 @@ beforeEach(() => {
     allowed: true,
     policy: { mode: 'deny', list: ['10.0.0.0/8'], exceptions: [] },
   })
-  mocks.getProxyStatus.mockResolvedValue({
+  const proxyStatus = {
     enabled: true,
-    source: 'env',
+    source: 'env' as const,
     url: 'http://proxy.local:3128',
     noProxy: [],
     fallbackDirect: false,
     connectTimeoutMs: 5000,
+    restartRequired: true as const,
+  }
+  mocks.getProxy.mockResolvedValue({
+    ...proxyStatus,
+    saved: proxyStatus,
+    running: proxyStatus,
+    isOverridden: false,
+    defaults: proxyStatus,
+    password: { source: 'none', set: false, removable: false },
+  })
+  mocks.saveProxy.mockResolvedValue({ saved: proxyStatus, running: proxyStatus, restartRequired: true })
+  mocks.resetProxy.mockResolvedValue({
+    status: 'restored',
+    saved: proxyStatus,
+    defaults: proxyStatus,
+    running: proxyStatus,
     restartRequired: true,
   })
-  mocks.checkProxy.mockResolvedValue({ reachable: true, latencyMs: 10, authChallenge: 'none' })
+  mocks.setProxyPassword.mockResolvedValue({ source: 'file', set: true, removable: true })
+  mocks.clearProxyPassword.mockResolvedValue({ source: 'none', set: false, removable: false })
+  mocks.checkProxy.mockResolvedValue({ reachable: true, latencyMs: 10, usingSaved: true })
 
   useMcpStore.setState({
     toolsDisabled: null,
@@ -425,7 +447,7 @@ describe('ToolsDisabledSettings — админский tools.disabled (ADR-071 �
     const egress = container.querySelector('[data-testid="egress-tools-section"]')!
     const proxy = container.querySelector('[data-testid="proxy-status-section"]')!
     expect(proxy).not.toBeNull()
-    expect(mocks.getProxyStatus).toHaveBeenCalledTimes(1)
+    expect(mocks.getProxy).toHaveBeenCalledTimes(1)
     // Прокси-секция идёт после egress-политики.
     expect(
       egress.compareDocumentPosition(proxy) & Node.DOCUMENT_POSITION_FOLLOWING,

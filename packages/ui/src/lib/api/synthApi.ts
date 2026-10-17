@@ -108,7 +108,18 @@ export type {
   SecurityAuditListResponse,
   EgressLogListResponse,
 } from './egress'
-export type { EgressProxyStatus, ProxyCheckResult } from './proxy'
+export type {
+  ProxyAuthConfig,
+  ProxyTlsConfig,
+  ProxyConfigInput,
+  ProxySettingsResponse,
+  ProxySaveResponse,
+  ProxyResetResponse,
+  ProxyPasswordStatus,
+  ProxyStatusInfo,
+  ProxyCheckResult,
+  ProxySource,
+} from './proxy'
 export type {
   CreateEventBindingKeyInput,
   UpdateEventBindingKeyPatch,
