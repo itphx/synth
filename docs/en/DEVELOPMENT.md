@@ -103,6 +103,8 @@ storage:
   postgres: { host: 127.0.0.1, port: 5432, database: synth, user: synth }
 ```
 
+In dev, `storage.degradedMode: halt` is pinned — if the DB is unreachable the service does not start (fail-closed) and there is no silent switch to the file fallback: otherwise the file state and the DB would diverge (risk of forked data).
+
 ### Start and restart
 
 Stop the whole service (the `dev.sh` process group) — otherwise parallel writes to files will
@@ -253,6 +255,7 @@ synth/
 ├── packages/
 │   ├── shared/   → @itphx/synth-shared    # Types, Zod schemas, protocols, configuration
 │   ├── core/     → @itphx/synth-core      # Engine, CLI, HTTP API v2, MCP, FileStore
+│   ├── storage-postgres/ → @itphx/synth-storage-postgres  # Optional storage-layer DB driver (ADR-097/PROP-032)
 │   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + admin panel (Vite)
 │   ├── sdk/      → @itphx/synth-sdk       # Typed client for the public API (ADR-052)
@@ -263,7 +266,7 @@ synth/
 │   ├── standalone.sh           # Standalone from the built npm packages
 │   ├── hybrid.sh               # Local core + remote backend (hybrid)
 │   ├── publish.sh              # Publishing to npm
-│   ├── publish-packages.sh     # Idempotent publishing of the 6 packages (release)
+│   ├── publish-packages.sh     # Idempotent publishing of the 7 packages (release)
 │   ├── version-bump.sh         # Version bump
 │   ├── changelog.sh            # CHANGELOG generation (for CI release)
 │   ├── wait-npm-version.sh     # Waiting for a version to appear in npm (release)

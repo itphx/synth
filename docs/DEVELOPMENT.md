@@ -103,6 +103,8 @@ storage:
   postgres: { host: 127.0.0.1, port: 5432, database: synth, user: synth }
 ```
 
+В dev закреплён `storage.degradedMode: halt` — при недоступности БД сервис не стартует (fail-closed), тихого перехода на файловый фоллбек нет: иначе файловое состояние и БД разъедутся (риск раздвоения данных).
+
 ### Запуск и перезапуск
 
 Сервис останавливать целиком (процессная группа `dev.sh`) — иначе параллельная запись в файлы
@@ -254,6 +256,7 @@ synth/
 ├── packages/
 │   ├── shared/   → @itphx/synth-shared    # Типы, Zod-схемы, протоколы, конфигурация
 │   ├── core/     → @itphx/synth-core      # Движок, CLI, HTTP API v2, MCP, FileStore
+│   ├── storage-postgres/ → @itphx/synth-storage-postgres  # Опциональный БД-драйвер слоя хранения (ADR-097/PROP-032)
 │   ├── backend/  → @itphx/synth-backend   # Hono API Hub: OIDC, RBAC, Runner Registry
 │   ├── ui/       → @itphx/synth-ui        # React 19 SPA + админка (Vite)
 │   ├── sdk/      → @itphx/synth-sdk       # Типизированный клиент публичного API (ADR-052)

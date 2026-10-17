@@ -158,8 +158,10 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   - `projects` — нормализация `icon`/`color` **при чтении**
     (`normalizeIconKey`/`normalizeColorKey`), паритет с `ProjectStore.load`.
 - **Жизненный цикл соединения.** `createPostgresStorage` применяет/проверяет схему,
-  удерживает соединение в `StorageContext` (`close?()` закрывает пул) и **не**
-  закрывает пул сам — ресурсы освобождает домен на graceful shutdown. Контрактный
+  удерживает соединение в `StorageContext` (`close?()` закрывает пул, **дождавшись**
+  фонового прогрева кэшей `content`, зарегистрированного через опциональный
+  `PortDeps.trackBackground`) и **не** закрывает пул сам — ресурсы освобождает домен
+  на graceful shutdown. Контрактный
   suite `dispose` не вызывает, поэтому прогон чистит ресурсы в `afterEach`
   (`ctx.close()` + `DROP SCHEMA … CASCADE` + tmp-каталог).
 - **DDL.** Все таблицы/индексы заведены сразу (`001_init`): `sessions` (jsonb-поля +

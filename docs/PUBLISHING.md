@@ -106,7 +106,7 @@ helm install synth synth/synth --version <version> -f my-values.yaml
 
 Обновляет:
 1. `packages/shared/src/version.ts` — константу `SYNTH_VERSION`
-2. `packages/*/package.json` — поле `version` во всех 6 пакетах
+2. `packages/*/package.json` — поле `version` во всех 7 пакетах
 
 Единый источник версии — `SYNTH_VERSION` в `packages/shared/src/version.ts` (импортируется из `@itphx/synth-shared`).
 
@@ -301,7 +301,7 @@ GitHub — **зеркало и релизы**, а не билд-контур. Gi
 
 ## Важно: поле `repository` в package.json
 
-Для публикации в GitVerse Package Registry поле `repository` в `package.json` **должно отсутствовать**: GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 «no permission». Во всех 6 пакетах поле `repository` удалено — не добавляйте его обратно.
+Для публикации в GitVerse Package Registry поле `repository` в `package.json` **должно отсутствовать**: GitVerse при привязке пакета к репозиторию по `repository.url` проверяет права и отдаёт 403 «no permission». Во всех 7 пакетах поле `repository` удалено — не добавляйте его обратно.
 
 ## Локальная проверка перед пушем
 

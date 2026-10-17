@@ -71,6 +71,7 @@ tmp/                   # Временные файлы. Использовать
 @itphx/synth-backend │ @itphx/synth-ui     ←  импортируют core
        ↑
 @itphx/synth-sdk   ←  клиент публичного API: shared (ADR-052)
+@itphx/synth-storage-postgres  ←  опциональный БД-драйвер слоя хранения: peer-dep core (ADR-097/PROP-032)
 @itphx/synth   ←  тонкая CLI-обёртка: core + ui + shared (npm-потребители)
 ```
 
@@ -400,7 +401,7 @@ Test-инстанс — K3s (Rancher Fleet), namespace `synth`; код депл�
 
 **Внутренний аудит безопасности — обязательный гейт релиза.** Джоба `security-gate` в `release.yaml` идёт до сборки артефактов и блокирует её без записи аудита для релизуемой версии (`docs/security/releases/<version>.json`; fail-closed при неопределяемой версии, waiver-статусов нет). Она же прогоняет secret-scan дерева и всей истории (`scripts/secret-scan.mjs`) и ратчет уязвимостей зависимостей (`docs/security/policy.json`); `pnpm audit` в обычном CI остаётся report-only (этапы ужесточения — `docs/security/README.md`). Локально: `pnpm security:scan` (дерево + история), `pnpm security:gate` (гейт), `pnpm security:records` (проверка записей).
 
-Секреты: `NPM_TOKEN` (npmjs.org), `GV_TOKEN` (единый GitVerse: API, Docker/npm registry, git push), `GH_TOKEN` (GitHub-зеркало и релизы: classic PAT со scope `repo`+`write:packages`; опционально `GHCR_USER` — логин для ghcr.io). Локальная проверка перед пушем: `pnpm typecheck && pnpm lint && pnpm test`; для правок доков — `node scripts/adr-check.mjs && node scripts/docs-link-check.mjs`. Публикация (npm в 6 пакетов, Docker/Helm, релиз, токены npm 2026, `scripts/build.sh`/`publish.sh`/`version-bump.sh`) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) и скиллы `synth-build-publish`, `synth-release`.
+Секреты: `NPM_TOKEN` (npmjs.org), `GV_TOKEN` (единый GitVerse: API, Docker/npm registry, git push), `GH_TOKEN` (GitHub-зеркало и релизы: classic PAT со scope `repo`+`write:packages`; опционально `GHCR_USER` — логин для ghcr.io). Локальная проверка перед пушем: `pnpm typecheck && pnpm lint && pnpm test`; для правок доков — `node scripts/adr-check.mjs && node scripts/docs-link-check.mjs`. Публикация (npm в 7 пакетов, Docker/Helm, релиз, токены npm 2026, `scripts/build.sh`/`publish.sh`/`version-bump.sh`) — [docs/PUBLISHING.md](./docs/PUBLISHING.md) и скиллы `synth-build-publish`, `synth-release`.
 
 ## Индекс решений и предложений (ADR / PROP)
 

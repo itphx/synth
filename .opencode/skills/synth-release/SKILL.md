@@ -35,7 +35,7 @@ description: CI/CD GitVerse для Synth: workflow-файлы, секреты, �
 - **npmjs публикует версию медленно** — версия видна в реестре через 4–6 мин (автоматический
   review/репликация). Бюджет верификации в `scripts/publish-packages.sh` — 15 мин
   (`VERIFY_TIMEOUT=900`), таймаут джобы `publish-npmjs` — 30 мин. Иначе получается расклад
-  «все 6 пакетов опубликованы, а джоба срезана таймаутом».
+  «все 7 пакетов опубликованы, а джоба срезана таймаутом».
 - **Перезапуск run в GitVerse падает на `actions/upload-artifact@v4`** →
   `Failed to CreateArtifact (409) Conflict`: артефакты предыдущего прогона ещё существуют.
   Перед `POST /repos/{owner}/{repo}/actions/runs/{id}/rerun` нужно снять артефакты рана:
