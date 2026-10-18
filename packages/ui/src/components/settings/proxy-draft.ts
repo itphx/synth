@@ -33,6 +33,13 @@ export interface ProxyProfileDraft {
    * в клиентском черновике. В payload/DOM не попадает.
    */
   pendingPassword?: string;
+  /**
+   * TLS-материалы нового профиля, выбранные до первого сохранения: upload
+   * доступен только после `PUT /settings/proxy`. В payload/DOM не попадают.
+   */
+  pendingCaPem?: string;
+  pendingClientCertPem?: string;
+  pendingClientKeyPem?: string;
 }
 
 /** Правило в черновике; `key` — стабильный React-ключ (в payload не уходит). */
@@ -180,8 +187,8 @@ function tlsFromDraft(profile: ProxyProfileDraft): ProxyTlsConfig | undefined {
 
 /**
  * Черновик профиля → сохраняемая форма (пустые поля не отправляются).
- * `pendingPassword` намеренно не входит: пароль применяется отдельным
- * write-only endpoint'ом уже после сохранения профиля.
+ * `pendingPassword` и pending TLS намеренно не входят: пароль и PEM
+ * применяются отдельными write-only endpoint'ами уже после сохранения профиля.
  */
 export function profileDraftToInput(profile: ProxyProfileDraft): ProxyProfileInput {
   const input: ProxyProfileInput = {};
@@ -247,6 +254,34 @@ export function pendingProfilePasswords(
   return Object.entries(draft.profiles)
     .map(([name, profile]) => ({ name, password: profile.pendingPassword ?? '' }))
     .filter((entry) => entry.password.trim() !== '');
+}
+
+/** Отложенные TLS-материалы профиля (загружаются после `PUT /settings/proxy`). */
+export interface PendingProfileTls {
+  name: string;
+  caPem?: string;
+  certPem?: string;
+  keyPem?: string;
+}
+
+/**
+ * Профили с непустыми pending TLS-материалами — загружаются write-only
+ * endpoint'ами (`.../tls/ca`, `.../tls/client`) сразу после `PUT /settings/proxy`.
+ * Пустые поля не включаются; PEM в сохраняемую форму не попадает.
+ */
+export function pendingProfileTls(draft: ProxyDraft): PendingProfileTls[] {
+  const entries: PendingProfileTls[] = [];
+  for (const [name, profile] of Object.entries(draft.profiles)) {
+    const caPem = profile.pendingCaPem?.trim();
+    const certPem = profile.pendingClientCertPem?.trim();
+    const keyPem = profile.pendingClientKeyPem?.trim();
+    const entry: PendingProfileTls = { name };
+    if (caPem) entry.caPem = caPem;
+    if (certPem) entry.certPem = certPem;
+    if (keyPem) entry.keyPem = keyPem;
+    if (entry.caPem || entry.certPem || entry.keyPem) entries.push(entry);
+  }
+  return entries;
 }
 
 export type ProxyDraftIssue =

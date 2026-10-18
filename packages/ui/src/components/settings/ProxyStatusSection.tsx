@@ -28,6 +28,7 @@ import { ProxyRouteCheck } from './ProxyRouteCheck';
 import { ProxyRulesSection } from './ProxyRulesSection';
 import {
   pendingProfilePasswords,
+  pendingProfileTls,
   proxyDraftToInput,
   statusToDraft,
   validateProxyDraft,
@@ -243,6 +244,29 @@ export function ProxyStatusSection() {
         }
       }
 
+      // Pending TLS нового профиля: PEM загружается write-only endpoint'ами
+      // только после того, как профиль появился в saved-конфиге. Ошибка одного
+      // профиля не отменяет сохранение и остальные загрузки.
+      const tlsErrors: string[] = [];
+      let tlsChanged = false;
+      for (const { name, caPem, certPem, keyPem } of pendingProfileTls(current)) {
+        try {
+          if (caPem) {
+            const response = await synthApi.uploadProfileCa(name, caPem);
+            saved = mergeProfilePasswords(saved, response.status);
+            tlsChanged = true;
+          }
+          if (certPem && keyPem) {
+            const response = await synthApi.uploadProfileClient(name, certPem, keyPem);
+            saved = mergeProfilePasswords(saved, response.status);
+            tlsChanged = true;
+          }
+        } catch (e) {
+          const message = e instanceof Error && e.message ? e.message : 'HTTP';
+          tlsErrors.push(t('proxy.tls.pendingError', { name, error: message }));
+        }
+      }
+
       draft.setDraft(statusToDraft(saved));
       setInfo((prev) =>
         prev
@@ -251,14 +275,15 @@ export function ProxyStatusSection() {
               ...saved,
               saved,
               running: resp.running,
-              restartRequired: resp.restartRequired,
+              restartRequired: resp.restartRequired || tlsChanged,
               isOverridden: true,
               password: saved.profiles.default?.password ?? prev.password,
             }
           : prev,
       );
-      if (passwordErrors.length > 0) {
-        for (const text of passwordErrors) {
+      const errors = [...passwordErrors, ...tlsErrors];
+      if (errors.length > 0) {
+        for (const text of errors) {
           notify({ text, type: 'error', category: 'error' });
         }
       } else {

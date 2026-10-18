@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   displayProfileUrl,
   pendingProfilePasswords,
+  pendingProfileTls,
   profileDraftToInput,
   profileUsage,
   proxyDraftToInput,
@@ -225,6 +226,25 @@ describe('proxyDraftToInput — structured payload', () => {
     expect(JSON.stringify(input)).not.toContain('s3cret-value');
     expect(JSON.stringify(input)).not.toContain('pendingPassword');
   });
+
+  it('не отправляет pending TLS нового профиля', () => {
+    const draft = baseDraft();
+    draft.profiles.corp = {
+      ...draft.profiles.corp!,
+      pendingCaPem: '-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----',
+      pendingClientCertPem: '-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----',
+      pendingClientKeyPem: '-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----',
+    };
+
+    const input = proxyDraftToInput(draft);
+    const payload = JSON.stringify(input);
+
+    expect(payload).not.toContain('BEGIN CERTIFICATE');
+    expect(payload).not.toContain('BEGIN PRIVATE KEY');
+    expect(payload).not.toContain('pendingCaPem');
+    expect(payload).not.toContain('pendingClientCertPem');
+    expect(payload).not.toContain('pendingClientKeyPem');
+  });
 });
 
 describe('pendingProfilePasswords', () => {
@@ -236,6 +256,37 @@ describe('pendingProfilePasswords', () => {
     draft.profiles.blank = { ...draft.profiles.corp!, url: 'http://b:1', pendingPassword: '  ' };
 
     expect(pendingProfilePasswords(draft)).toEqual([{ name: 'corp', password: 'p1' }]);
+  });
+});
+
+describe('pendingProfileTls', () => {
+  it('возвращает только профили с непустыми pending TLS-материалами', () => {
+    expect(pendingProfileTls(baseDraft())).toEqual([]);
+
+    const draft = baseDraft();
+    draft.profiles.corp = {
+      ...draft.profiles.corp!,
+      pendingCaPem: '  -----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----  ',
+    };
+    draft.profiles.blank = {
+      ...draft.profiles.corp!,
+      url: 'http://b:1',
+      pendingCaPem: '   ',
+      pendingClientCertPem: '',
+      pendingClientKeyPem: '  ',
+    };
+    draft.profiles.mtls = {
+      ...draft.profiles.corp!,
+      url: 'http://m:1',
+      pendingCaPem: undefined,
+      pendingClientCertPem: 'CERT',
+      pendingClientKeyPem: 'KEY',
+    };
+
+    expect(pendingProfileTls(draft)).toEqual([
+      { name: 'corp', caPem: '-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----' },
+      { name: 'mtls', certPem: 'CERT', keyPem: 'KEY' },
+    ]);
   });
 });
 

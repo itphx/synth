@@ -211,10 +211,26 @@ export function ProxyProfilesSection({
     const existing = isNew ? undefined : draft.profiles[name];
     const next = applyForm(form, existing);
     if (isNew) {
-      // Пароль нового профиля принимается только после PUT /settings/proxy —
-      // запоминаем его в клиентском черновике и очищаем поле.
+      // Пароль и TLS-материалы нового профиля принимаются только после
+      // PUT /settings/proxy — запоминаем их в клиентском черновике.
       if (password.trim()) next.pendingPassword = password;
       else delete next.pendingPassword;
+
+      const hasCert = clientCertPem.trim() !== '';
+      const hasKey = clientKeyPem.trim() !== '';
+      if (hasCert !== hasKey) {
+        setFormError(t('proxy.tls.clientPairRequired'));
+        return;
+      }
+      if (caPem.trim()) next.pendingCaPem = caPem.trim();
+      else delete next.pendingCaPem;
+      if (hasCert && hasKey) {
+        next.pendingClientCertPem = clientCertPem.trim();
+        next.pendingClientKeyPem = clientKeyPem.trim();
+      } else {
+        delete next.pendingClientCertPem;
+        delete next.pendingClientKeyPem;
+      }
     }
     setDraft((prev) => {
       const profiles = { ...prev.profiles, [name]: next };
@@ -222,7 +238,14 @@ export function ProxyProfilesSection({
       const defaultProfile = profiles[prev.defaultProfile] ? prev.defaultProfile : name;
       return { ...prev, profiles, defaultProfile };
     });
-    if (isNew) setPassword('');
+    if (isNew) {
+      setPassword('');
+      setCaPem('');
+      setClientCertPem('');
+      setClientKeyPem('');
+    }
+    setTlsValidate(null);
+    setTlsError(null);
     setEditing(null);
     setFormError(null);
   };
@@ -612,101 +635,104 @@ export function ProxyProfilesSection({
         </div>
       )}
 
-      {!isNew && (
-        <>
-          {/* TLS/mTLS к прокси — пути в профиле, PEM/ключи write-only. */}
-          <div className="space-y-3 min-w-0 rounded-lg border border-border/60 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-              <div className="text-sm font-medium text-foreground">{t('proxy.tls.title')}</div>
-              {tlsMeta && (tlsMeta.caFile || tlsMeta.hasCaPem || tlsMeta.certFile) && (
-                <span
-                  data-testid="proxy-profile-tls-badge"
-                  className={cn(BADGE, 'bg-status-success/15 text-status-success')}
-                >
-                  {t('proxy.tls.badge')}
-                </span>
-              )}
+      {/* TLS/mTLS к прокси — пути в профиле, PEM/ключи write-only. */}
+      <div className="space-y-3 min-w-0 rounded-lg border border-border/60 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+          <div className="text-sm font-medium text-foreground">{t('proxy.tls.title')}</div>
+          {tlsMeta && (tlsMeta.caFile || tlsMeta.hasCaPem || tlsMeta.certFile) && (
+            <span
+              data-testid="proxy-profile-tls-badge"
+              className={cn(BADGE, 'bg-status-success/15 text-status-success')}
+            >
+              {t('proxy.tls.badge')}
+            </span>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">{t('proxy.tls.help')}</p>
+        {isNew && (
+          <p data-testid="proxy-profile-tls-pending-hint" className="text-xs text-muted-foreground">
+            {t('proxy.tls.pendingUploadHint')}
+          </p>
+        )}
+
+        <TextField
+          label={t('proxy.tls.caFile')}
+          value={form.tlsCaFile}
+          onChange={(e) => setForm((prev) => ({ ...prev, tlsCaFile: e.target.value }))}
+          placeholder="/etc/synth/proxy-ca.pem"
+          mono
+          disabled={disabled}
+          data-testid="proxy-profile-tls-ca-file"
+        />
+        <TextField
+          label={t('proxy.tls.certFile')}
+          value={form.tlsCertFile}
+          onChange={(e) => setForm((prev) => ({ ...prev, tlsCertFile: e.target.value }))}
+          placeholder="/etc/synth/proxy-client.crt"
+          mono
+          disabled={disabled}
+          data-testid="proxy-profile-tls-cert-file"
+        />
+        <TextField
+          label={t('proxy.tls.keyFile')}
+          value={form.tlsKeyFile}
+          onChange={(e) => setForm((prev) => ({ ...prev, tlsKeyFile: e.target.value }))}
+          placeholder="/etc/synth/proxy-client.key"
+          mono
+          disabled={disabled}
+          data-testid="proxy-profile-tls-key-file"
+        />
+        <ToggleField
+          label={t('proxy.tls.rejectUnauthorized')}
+          enabled={form.rejectUnauthorized}
+          onToggle={() =>
+            setForm((prev) => ({ ...prev, rejectUnauthorized: !prev.rejectUnauthorized }))
+          }
+          disabled={disabled}
+        />
+
+        <div className="space-y-2 min-w-0">
+          <div className="text-xs font-medium text-muted-foreground">{t('proxy.tls.caTitle')}</div>
+          {tlsMeta?.hasCaPem && (
+            <div data-testid="proxy-profile-tls-has-ca" className="text-xs text-status-success">
+              {t('proxy.tls.hasCa')}
             </div>
-            <p className="text-xs text-muted-foreground">{t('proxy.tls.help')}</p>
-
-            <TextField
-              label={t('proxy.tls.caFile')}
-              value={form.tlsCaFile}
-              onChange={(e) => setForm((prev) => ({ ...prev, tlsCaFile: e.target.value }))}
-              placeholder="/etc/synth/proxy-ca.pem"
-              mono
-              disabled={disabled}
-              data-testid="proxy-profile-tls-ca-file"
-            />
-            <TextField
-              label={t('proxy.tls.certFile')}
-              value={form.tlsCertFile}
-              onChange={(e) => setForm((prev) => ({ ...prev, tlsCertFile: e.target.value }))}
-              placeholder="/etc/synth/proxy-client.crt"
-              mono
-              disabled={disabled}
-              data-testid="proxy-profile-tls-cert-file"
-            />
-            <TextField
-              label={t('proxy.tls.keyFile')}
-              value={form.tlsKeyFile}
-              onChange={(e) => setForm((prev) => ({ ...prev, tlsKeyFile: e.target.value }))}
-              placeholder="/etc/synth/proxy-client.key"
-              mono
-              disabled={disabled}
-              data-testid="proxy-profile-tls-key-file"
-            />
-            <ToggleField
-              label={t('proxy.tls.rejectUnauthorized')}
-              enabled={form.rejectUnauthorized}
-              onToggle={() =>
-                setForm((prev) => ({ ...prev, rejectUnauthorized: !prev.rejectUnauthorized }))
-              }
-              disabled={disabled}
-            />
-
-            <div className="space-y-2 min-w-0">
-              <div className="text-xs font-medium text-muted-foreground">
-                {t('proxy.tls.caTitle')}
-              </div>
-              {tlsMeta?.hasCaPem && (
-                <div data-testid="proxy-profile-tls-has-ca" className="text-xs text-status-success">
-                  {t('proxy.tls.hasCa')}
-                </div>
-              )}
-              <TextArea
-                label={t('proxy.tls.caPem')}
-                value={caPem}
-                onChange={(e) => {
-                  setCaPem(e.target.value);
-                  if (tlsError) setTlsError(null);
-                }}
-                placeholder="-----BEGIN CERTIFICATE-----"
-                rows={5}
-                mono
-                disabled={tlsPending || disabled}
-                data-testid="proxy-profile-tls-ca-pem"
-              />
-              <input
-                type="file"
-                accept=".pem,.crt,.cer"
-                multiple
-                aria-label={t('proxy.tls.caLoadFile')}
-                className={FILE_INPUT}
-                disabled={tlsPending || disabled}
-                onChange={(e) => void handleTlsFiles(e, setCaPem)}
-                data-testid="proxy-profile-tls-ca-file-input"
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void validateCa()}
-                  disabled={tlsPending || disabled || !serverProfile || !caPem.trim()}
-                  data-testid="proxy-profile-tls-ca-check"
-                >
-                  {t('proxy.tls.check')}
-                </Button>
+          )}
+          <TextArea
+            label={t('proxy.tls.caPem')}
+            value={caPem}
+            onChange={(e) => {
+              setCaPem(e.target.value);
+              if (tlsError) setTlsError(null);
+            }}
+            placeholder="-----BEGIN CERTIFICATE-----"
+            rows={5}
+            mono
+            disabled={tlsPending || disabled}
+            data-testid="proxy-profile-tls-ca-pem"
+          />
+          <input
+            type="file"
+            accept=".pem,.crt,.cer"
+            multiple
+            aria-label={t('proxy.tls.caLoadFile')}
+            className={FILE_INPUT}
+            disabled={tlsPending || disabled}
+            onChange={(e) => void handleTlsFiles(e, setCaPem)}
+            data-testid="proxy-profile-tls-ca-file-input"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void validateCa()}
+              disabled={tlsPending || disabled || !caPem.trim()}
+              data-testid="proxy-profile-tls-ca-check"
+            >
+              {t('proxy.tls.check')}
+            </Button>
+            {!isNew && (
+              <>
                 <Button
                   variant="primary"
                   size="sm"
@@ -730,45 +756,49 @@ export function ProxyProfilesSection({
                 >
                   {t('proxy.tls.remove')}
                 </Button>
-              </div>
-            </div>
+              </>
+            )}
+          </div>
+        </div>
 
-            <div className="space-y-2 min-w-0 border-t border-border/60 pt-2">
-              <div className="text-xs font-medium text-muted-foreground">
-                {t('proxy.tls.clientTitle')}
-              </div>
-              <label className="block space-y-1 min-w-0">
-                <span className="text-xs text-foreground">{t('proxy.tls.clientCert')}</span>
-                <input
-                  type="file"
-                  accept=".pem,.crt,.cer"
-                  className={FILE_INPUT}
-                  disabled={tlsPending || disabled}
-                  onChange={(e) => void handleTlsFiles(e, setClientCertPem)}
-                  data-testid="proxy-profile-tls-client-cert-input"
-                />
-              </label>
-              <label className="block space-y-1 min-w-0">
-                <span className="text-xs text-foreground">{t('proxy.tls.clientKey')}</span>
-                <input
-                  type="file"
-                  accept=".pem,.key"
-                  className={FILE_INPUT}
-                  disabled={tlsPending || disabled}
-                  onChange={(e) => void handleTlsFiles(e, setClientKeyPem)}
-                  data-testid="proxy-profile-tls-client-key-input"
-                />
-              </label>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void validateClient()}
-                  disabled={tlsPending || disabled || !serverProfile}
-                  data-testid="proxy-profile-tls-client-check"
-                >
-                  {t('proxy.tls.check')}
-                </Button>
+        <div className="space-y-2 min-w-0 border-t border-border/60 pt-2">
+          <div className="text-xs font-medium text-muted-foreground">
+            {t('proxy.tls.clientTitle')}
+          </div>
+          <label className="block space-y-1 min-w-0">
+            <span className="text-xs text-foreground">{t('proxy.tls.clientCert')}</span>
+            <input
+              type="file"
+              accept=".pem,.crt,.cer"
+              className={FILE_INPUT}
+              disabled={tlsPending || disabled}
+              onChange={(e) => void handleTlsFiles(e, setClientCertPem)}
+              data-testid="proxy-profile-tls-client-cert-input"
+            />
+          </label>
+          <label className="block space-y-1 min-w-0">
+            <span className="text-xs text-foreground">{t('proxy.tls.clientKey')}</span>
+            <input
+              type="file"
+              accept=".pem,.key"
+              className={FILE_INPUT}
+              disabled={tlsPending || disabled}
+              onChange={(e) => void handleTlsFiles(e, setClientKeyPem)}
+              data-testid="proxy-profile-tls-client-key-input"
+            />
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void validateClient()}
+              disabled={tlsPending || disabled}
+              data-testid="proxy-profile-tls-client-check"
+            >
+              {t('proxy.tls.check')}
+            </Button>
+            {!isNew && (
+              <>
                 <Button
                   variant="primary"
                   size="sm"
@@ -798,50 +828,46 @@ export function ProxyProfilesSection({
                 >
                   {t('proxy.tls.remove')}
                 </Button>
-              </div>
-            </div>
-
-            {tlsValidate && (
-              <div
-                role="status"
-                data-testid="proxy-profile-tls-result"
-                className={cn(
-                  'rounded-lg p-2 text-xs',
-                  tlsValidate.ok
-                    ? 'bg-status-success/10 text-status-success'
-                    : 'bg-destructive/10 text-destructive',
-                )}
-              >
-                <div className="font-medium">
-                  {tlsValidate.ok ? t('proxy.tls.checkOk') : t('proxy.tls.checkFailed')}
-                </div>
-                {tlsValidate.errors.length > 0 && (
-                  <ul className="list-disc space-y-0.5 pl-4">
-                    {tlsValidate.errors.map((error) => (
-                      <li key={error} className="min-w-0 break-words">
-                        {error}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-            {tlsError && (
-              <div
-                role="alert"
-                data-testid="proxy-profile-tls-error"
-                className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive"
-              >
-                {tlsError}
-              </div>
+              </>
             )}
           </div>
-        </>
-      )}
+        </div>
 
-      {!serverProfile && (
-        <p className="text-xs text-muted-foreground">{t('proxy.profiles.passwordAfterSave')}</p>
-      )}
+        {tlsValidate && (
+          <div
+            role="status"
+            data-testid="proxy-profile-tls-result"
+            className={cn(
+              'rounded-lg p-2 text-xs',
+              tlsValidate.ok
+                ? 'bg-status-success/10 text-status-success'
+                : 'bg-destructive/10 text-destructive',
+            )}
+          >
+            <div className="font-medium">
+              {tlsValidate.ok ? t('proxy.tls.checkOk') : t('proxy.tls.checkFailed')}
+            </div>
+            {tlsValidate.errors.length > 0 && (
+              <ul className="list-disc space-y-0.5 pl-4">
+                {tlsValidate.errors.map((error) => (
+                  <li key={error} className="min-w-0 break-words">
+                    {error}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {tlsError && (
+          <div
+            role="alert"
+            data-testid="proxy-profile-tls-error"
+            className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive"
+          >
+            {tlsError}
+          </div>
+        )}
+      </div>
 
       <div className="flex flex-wrap items-center justify-end gap-2">
         <Button

@@ -192,6 +192,27 @@ const addNewProfile = async (
   await click(byTestId(container, 'proxy-profile-form-apply'));
 };
 
+/** Подменяет `files` у file-input и шлёт change (jsdom не умеет DataTransfer). */
+const setFileInput = async (el: HTMLElement | null, contents: string, name = 'material.pem') => {
+  expect(el).not.toBeNull();
+  const input = el as HTMLInputElement;
+  const file = { name, text: async () => contents } as unknown as File;
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await act(async () => {});
+};
+
+const serverProfileStatus = (name: string, url: string, tls?: Record<string, unknown>) => ({
+  name,
+  url,
+  legacy: false,
+  source: 'runtime' as const,
+  password: { source: 'none' as const, set: false, removable: false },
+  ...(tls ? { tls } : {}),
+});
+
 interface SavedProfileInput {
   url?: string;
   httpProxy?: string;
@@ -331,6 +352,20 @@ describe('ProxyStatusSection — статус и загрузка профиле
 });
 
 describe('ProxyStatusSection — профили (добавление/редактирование/удаление)', () => {
+  it('подсказка логина — только Basic-логин; поле пароля подписано «Password»', async () => {
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-add'));
+
+    expect(container.textContent).toContain('Basic auth username.');
+    expect(container.textContent).not.toContain('the password is set in the profile form');
+    const passwordInput = byTestId(container, 'proxy-profile-password-input') as HTMLInputElement;
+    expect(passwordInput).not.toBeNull();
+    // Метка поля — «Password» (не «New password»).
+    const passwordField = passwordInput.parentElement;
+    expect(passwordField?.textContent).toContain('Password');
+    expect(passwordField?.textContent).not.toContain('New password');
+  });
+
   it('добавляет профиль и отправляет его в saveProxy (structured payload)', async () => {
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-add'));
@@ -352,6 +387,41 @@ describe('ProxyStatusSection — профили (добавление/редак
     expect(input).not.toHaveProperty('url');
     expect(input).not.toHaveProperty('auth');
     expect(input).not.toHaveProperty('tls');
+  });
+
+  it('новый профиль: TLS-пути из формы сохраняются обычным PUT', async () => {
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-add'));
+    await act(async () => {
+      setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
+      setInputValue(
+        byTestId(container, 'proxy-profile-form-url') as HTMLInputElement,
+        'http://new.corp:8080',
+      );
+      setInputValue(
+        byTestId(container, 'proxy-profile-tls-ca-file') as HTMLInputElement,
+        '/etc/synth/ca.pem',
+      );
+      setInputValue(
+        byTestId(container, 'proxy-profile-tls-cert-file') as HTMLInputElement,
+        '/etc/synth/client.crt',
+      );
+      setInputValue(
+        byTestId(container, 'proxy-profile-tls-key-file') as HTMLInputElement,
+        '/etc/synth/client.key',
+      );
+    });
+    await click(byTestId(container, 'proxy-profile-form-apply'));
+    await click(byTestId(container, 'proxy-save'));
+
+    expect(lastSaveInput().profiles.newcorp).toEqual({
+      url: 'http://new.corp:8080',
+      tls: {
+        caFile: '/etc/synth/ca.pem',
+        certFile: '/etc/synth/client.crt',
+        keyFile: '/etc/synth/client.key',
+      },
+    });
   });
 
   it('имя профиля валидируется regex, дубликат запрещён', async () => {
@@ -703,6 +773,186 @@ describe('ProxyStatusSection — TLS профиля (write-only)', () => {
     expect(lastSaveInput().profiles.corp).toMatchObject({
       tls: { caFile: '/etc/synth/ca.pem' },
     });
+  });
+});
+
+describe('ProxyStatusSection — TLS нового профиля (pending до сохранения)', () => {
+  const PEM = '-----BEGIN CERTIFICATE-----\nNEWCA\n-----END CERTIFICATE-----';
+  const CERT = '-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----';
+  const KEY = '-----BEGIN PRIVATE KEY-----\nKEYDATA\n-----END PRIVATE KEY-----';
+
+  it('TLS-блок доступен сразу, CA ждёт Save и загружается после saveProxy', async () => {
+    const savedWithProfile = {
+      ...SAVED,
+      profiles: {
+        ...SAVED.profiles,
+        newcorp: serverProfileStatus('newcorp', 'http://new.corp:8080'),
+      },
+    };
+    const savedWithTls = {
+      ...SAVED,
+      profiles: {
+        ...SAVED.profiles,
+        newcorp: serverProfileStatus('newcorp', 'http://new.corp:8080', {
+          caFile: '/data/secrets/proxy/newcorp/ca.pem',
+          hasCaPem: true,
+          rejectUnauthorized: true,
+        }),
+      },
+    };
+    mocks.saveProxy.mockResolvedValue({
+      saved: savedWithProfile,
+      running: RUNNING,
+      restartRequired: true,
+    });
+    mocks.uploadProfileCa.mockResolvedValue({ status: savedWithTls, restartRequired: true });
+
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-add'));
+
+    // Блок TLS доступен в новом профиле; upload/remove скрыты.
+    expect(byTestId(container, 'proxy-profile-tls-ca-pem')).not.toBeNull();
+    expect(byTestId(container, 'proxy-profile-tls-ca-file-input')).not.toBeNull();
+    const certInput = byTestId(
+      container,
+      'proxy-profile-tls-client-cert-input',
+    ) as HTMLInputElement;
+    const keyInput = byTestId(container, 'proxy-profile-tls-client-key-input') as HTMLInputElement;
+    expect(certInput).not.toBeNull();
+    expect(keyInput).not.toBeNull();
+    expect(certInput.disabled).toBe(false);
+    expect(keyInput.disabled).toBe(false);
+    expect(byTestId(container, 'proxy-profile-tls-ca-upload')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-tls-ca-remove')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-tls-pending-hint')!.textContent).toContain(
+      'after the profile is saved',
+    );
+
+    await act(async () => {
+      setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
+      setInputValue(
+        byTestId(container, 'proxy-profile-form-url') as HTMLInputElement,
+        'http://new.corp:8080',
+      );
+      setInputValue(byTestId(container, 'proxy-profile-tls-ca-pem') as HTMLTextAreaElement, PEM);
+    });
+    await click(byTestId(container, 'proxy-profile-form-apply'));
+
+    // PEM остался в клиентском pending-поле, но не в DOM.
+    expect(container.textContent).not.toContain('NEWCA');
+
+    await click(byTestId(container, 'proxy-save'));
+
+    const payload = lastSaveInput();
+    expect(payload.profiles.newcorp).toEqual({ url: 'http://new.corp:8080' });
+    expect(JSON.stringify(payload)).not.toContain('NEWCA');
+    expect(JSON.stringify(payload)).not.toContain('pendingCaPem');
+
+    expect(mocks.uploadProfileCa).toHaveBeenCalledWith('newcorp', PEM);
+    expect(mocks.saveProxy.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.uploadProfileCa.mock.invocationCallOrder[0]!,
+    );
+    // Статус TLS обновлён из ответа upload.
+    expect(byTestId(container, 'proxy-profile-tls-newcorp')).not.toBeNull();
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', category: 'system' }),
+    );
+  });
+
+  it('client cert+key нового профиля уходят в uploadProfileClient после saveProxy', async () => {
+    mocks.saveProxy.mockResolvedValue({
+      saved: {
+        ...SAVED,
+        profiles: {
+          ...SAVED.profiles,
+          newcorp: serverProfileStatus('newcorp', 'http://new.corp:8080'),
+        },
+      },
+      running: RUNNING,
+      restartRequired: true,
+    });
+
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-add'));
+    await act(async () => {
+      setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
+      setInputValue(
+        byTestId(container, 'proxy-profile-form-url') as HTMLInputElement,
+        'http://new.corp:8080',
+      );
+    });
+    await setFileInput(byTestId(container, 'proxy-profile-tls-client-cert-input'), CERT);
+    await setFileInput(byTestId(container, 'proxy-profile-tls-client-key-input'), KEY);
+    await click(byTestId(container, 'proxy-profile-form-apply'));
+    await click(byTestId(container, 'proxy-save'));
+
+    expect(JSON.stringify(lastSaveInput())).not.toContain('CLIENT');
+    expect(mocks.uploadProfileClient).toHaveBeenCalledWith('newcorp', CERT, KEY);
+    expect(mocks.saveProxy.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.uploadProfileClient.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('сертификат без ключа — ошибка формы, Apply не закрывает форму', async () => {
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-add'));
+    await act(async () => {
+      setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
+      setInputValue(
+        byTestId(container, 'proxy-profile-form-url') as HTMLInputElement,
+        'http://new.corp:8080',
+      );
+    });
+    await setFileInput(byTestId(container, 'proxy-profile-tls-client-cert-input'), CERT);
+    await click(byTestId(container, 'proxy-profile-form-apply'));
+
+    expect(byTestId(container, 'proxy-profile-form-error')!.textContent).toContain(
+      'both the client certificate and the private key',
+    );
+    expect(byTestId(container, 'proxy-profile-newcorp')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-form')).not.toBeNull();
+
+    await click(byTestId(container, 'proxy-save'));
+    expect(mocks.saveProxy).not.toHaveBeenCalled();
+  });
+
+  it('ошибка загрузки TLS не отменяет сохранение и показывает причину', async () => {
+    mocks.uploadProfileCa.mockRejectedValue(new Error('mount failed'));
+    mocks.saveProxy.mockResolvedValue({
+      saved: {
+        ...SAVED,
+        profiles: {
+          ...SAVED.profiles,
+          newcorp: serverProfileStatus('newcorp', 'http://new.corp:8080'),
+        },
+      },
+      running: RUNNING,
+      restartRequired: true,
+    });
+
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-add'));
+    await act(async () => {
+      setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
+      setInputValue(
+        byTestId(container, 'proxy-profile-form-url') as HTMLInputElement,
+        'http://new.corp:8080',
+      );
+      setInputValue(byTestId(container, 'proxy-profile-tls-ca-pem') as HTMLTextAreaElement, PEM);
+    });
+    await click(byTestId(container, 'proxy-profile-form-apply'));
+    await click(byTestId(container, 'proxy-save'));
+
+    expect(mocks.saveProxy).toHaveBeenCalledTimes(1);
+    expect(byTestId(container, 'proxy-profile-newcorp')).not.toBeNull();
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'error',
+        category: 'error',
+        text: expect.stringContaining('mount failed'),
+      }),
+    );
+    expect(mocks.notify).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'success' }));
   });
 });
 
