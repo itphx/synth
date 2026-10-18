@@ -188,7 +188,8 @@ function tlsFromDraft(profile: ProxyProfileDraft): ProxyTlsConfig | undefined {
 /**
  * Черновик профиля → сохраняемая форма (пустые поля не отправляются).
  * `pendingPassword` и pending TLS намеренно не входят: пароль и PEM
- * применяются отдельными write-only endpoint'ами уже после сохранения профиля.
+ * применяются отдельными write-only endpoint'ами в рамках общего сохранения —
+ * после того как профиль создан через PUT.
  */
 export function profileDraftToInput(profile: ProxyProfileDraft): ProxyProfileInput {
   const input: ProxyProfileInput = {};

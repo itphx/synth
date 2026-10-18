@@ -192,6 +192,14 @@ const addNewProfile = async (
   await click(byTestId(container, 'proxy-profile-form-apply'));
 };
 
+/** Раскрывает свёрнутую секцию TLS/mTLS в форме профиля. */
+const openTls = async (container: HTMLElement) => {
+  const toggle = byTestId(container, 'proxy-profile-tls-toggle');
+  if (toggle?.getAttribute('aria-expanded') !== 'true') {
+    await click(toggle);
+  }
+};
+
 /** Подменяет `files` у file-input и шлёт change (jsdom не умеет DataTransfer). */
 const setFileInput = async (el: HTMLElement | null, contents: string, name = 'material.pem') => {
   expect(el).not.toBeNull();
@@ -352,18 +360,45 @@ describe('ProxyStatusSection — статус и загрузка профиле
 });
 
 describe('ProxyStatusSection — профили (добавление/редактирование/удаление)', () => {
-  it('подсказка логина — только Basic-логин; поле пароля подписано «Password»', async () => {
+  it('auth-блок нового профиля: подзаголовок, одна подпись и порядок Логин → Пароль', async () => {
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-add'));
 
-    expect(container.textContent).toContain('Basic auth username.');
-    expect(container.textContent).not.toContain('the password is set in the profile form');
-    const passwordInput = byTestId(container, 'proxy-profile-password-input') as HTMLInputElement;
-    expect(passwordInput).not.toBeNull();
-    // Метка поля — «Password» (не «New password»).
-    const passwordField = passwordInput.parentElement;
-    expect(passwordField?.textContent).toContain('Password');
-    expect(passwordField?.textContent).not.toContain('New password');
+    const auth = byTestId(container, 'proxy-profile-auth')!;
+    expect(auth).not.toBeNull();
+    const text = auth.textContent ?? '';
+    expect(text).toContain('Username / password');
+    expect(text).toContain('Basic proxy authentication.');
+    expect(text.indexOf('Username')).toBeLessThan(text.indexOf('Password'));
+
+    // Поля строго друг под другом внутри одного блока: логин, затем пароль.
+    const authInputs = [...auth.querySelectorAll('input')];
+    expect(authInputs[0]).toBe(byTestId(container, 'proxy-profile-form-username'));
+    expect(authInputs[1]).toBe(byTestId(container, 'proxy-profile-password-input'));
+
+    // Старых подписей, подсказок и статуса больше нет.
+    expect(container.textContent).not.toContain('Basic auth username.');
+    expect(container.textContent).not.toContain('The password is stored separately');
+    expect(container.textContent).not.toContain('No username set');
+    expect(byTestId(container, 'proxy-profile-password-no-username')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-status')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-set')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-clear')).toBeNull();
+  });
+
+  it('auth-блок существующего профиля: без строки «Источник», только Set/Clear', async () => {
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-edit-corp'));
+
+    const auth = byTestId(container, 'proxy-profile-auth')!;
+    expect(auth.textContent).toContain('Username / password');
+    expect(auth.textContent).toContain('Basic proxy authentication.');
+    expect(auth.textContent).not.toContain('Source');
+    expect(auth.textContent).not.toContain('not set');
+    expect(auth.textContent).not.toContain('The password is stored separately');
+    expect(byTestId(container, 'proxy-profile-password-status')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-set')).not.toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-clear')).not.toBeNull();
   });
 
   it('добавляет профиль и отправляет его в saveProxy (structured payload)', async () => {
@@ -628,7 +663,33 @@ describe('ProxyStatusSection — пароль нового профиля (по�
     );
   });
 
-  it('пароль без логина — мягкая подсказка, Apply не блокируется', async () => {
+  it('профиль, добавленный в черновик, принимает пароль в pending при редактировании', async () => {
+    mocks.saveProxy.mockResolvedValue({
+      saved: {
+        ...SAVED,
+        profiles: { ...SAVED.profiles, newcorp: profileStatus('newcorp', 'http://new.corp:8080') },
+      },
+      running: RUNNING,
+      restartRequired: true,
+    });
+    const container = await renderSection();
+    await addNewProfile(container, 'newcorp', 'http://new.corp:8080');
+    await click(byTestId(container, 'proxy-profile-edit-newcorp'));
+
+    await act(async () => {
+      setInputValue(
+        byTestId(container, 'proxy-profile-password-input') as HTMLInputElement,
+        'late-pw',
+      );
+    });
+    await click(byTestId(container, 'proxy-profile-form-apply'));
+    expect(container.textContent).not.toContain('late-pw');
+
+    await click(byTestId(container, 'proxy-save'));
+    expect(mocks.setProfilePassword).toHaveBeenCalledWith('newcorp', 'late-pw');
+  });
+
+  it('пароль без логина: отдельной подсказки нет, Apply не блокируется', async () => {
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-add'));
     await act(async () => {
@@ -640,7 +701,8 @@ describe('ProxyStatusSection — пароль нового профиля (по�
       setInputValue(byTestId(container, 'proxy-profile-password-input') as HTMLInputElement, 'pw');
     });
 
-    expect(byTestId(container, 'proxy-profile-password-no-username')).not.toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-no-username')).toBeNull();
+    expect(container.textContent).not.toContain('No username set');
     await click(byTestId(container, 'proxy-profile-form-apply'));
     expect(byTestId(container, 'proxy-profile-nologin')).not.toBeNull();
   });
@@ -660,12 +722,14 @@ describe('ProxyStatusSection — пароль профиля (write-only)', () =
     expect(mocks.setProfilePassword).toHaveBeenCalledWith('corp', 's3cret-value');
     expect(input.value).toBe('');
     expect(container.textContent).not.toContain('s3cret-value');
-    expect(byTestId(container, 'proxy-profile-password-status')!.textContent).toBe(
-      'secrets/proxy-password',
+    // Строки «Источник» больше нет; статус пароля виден по бейджу профиля.
+    expect(byTestId(container, 'proxy-profile-password-status')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-badge-corp')!.textContent).toBe(
+      'password set',
     );
   });
 
-  it('пароль из env: поле/кнопки disabled + подсказка', async () => {
+  it('пароль из env: поле/кнопки disabled + компактная заметка', async () => {
     mocks.getProxy.mockResolvedValue(
       makeInfo({
         saved: {
@@ -686,7 +750,8 @@ describe('ProxyStatusSection — пароль профиля (write-only)', () =
     expect((byTestId(container, 'proxy-profile-password-set') as HTMLButtonElement).disabled).toBe(
       true,
     );
-    expect(byTestId(container, 'proxy-profile-password-env-hint')!.textContent).toContain('corp');
+    const hint = byTestId(container, 'proxy-profile-password-env-hint')!;
+    expect(hint.textContent).toBe('Managed by the environment');
   });
 
   it('409 при задании пароля — понятный текст про env', async () => {
@@ -707,9 +772,50 @@ describe('ProxyStatusSection — пароль профиля (write-only)', () =
 });
 
 describe('ProxyStatusSection — TLS профиля (write-only)', () => {
+  it('TLS/mTLS-блок свёрнут по умолчанию; toggle разворачивает и сворачивает его', async () => {
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-edit-corp'));
+
+    const toggle = byTestId(container, 'proxy-profile-tls-toggle')!;
+    const content = byTestId(container, 'proxy-profile-tls-content')!;
+    expect(toggle.textContent).toContain('TLS/mTLS');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(content.hidden).toBe(true);
+    expect(byTestId(container, 'proxy-profile-tls-ca-pem')).not.toBeNull();
+
+    await click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(content.hidden).toBe(false);
+
+    await click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(content.hidden).toBe(true);
+  });
+
+  it('ошибка проверки TLS автоматически раскрывает свёрнутый блок', async () => {
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-edit-corp'));
+
+    const content = byTestId(container, 'proxy-profile-tls-content')!;
+    expect(content.hidden).toBe(true);
+
+    // Проверка без cert/key: jsdom позволяет нажать кнопку внутри hidden-контейнера,
+    // имитируя ошибку, возникшую при свёрнутой секции.
+    await click(byTestId(container, 'proxy-profile-tls-client-check'));
+
+    expect(byTestId(container, 'proxy-profile-tls-toggle')!.getAttribute('aria-expanded')).toBe(
+      'true',
+    );
+    expect(content.hidden).toBe(false);
+    expect(byTestId(container, 'proxy-profile-tls-error')!.textContent).toContain(
+      'Fill in the PEM fields first.',
+    );
+  });
+
   it('«Загрузить» CA валидирует PEM и вызывает uploadProfileCa; PEM не остаётся в DOM', async () => {
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-edit-corp'));
+    await openTls(container);
 
     await act(async () => {
       setInputValue(
@@ -751,6 +857,7 @@ describe('ProxyStatusSection — TLS профиля (write-only)', () => {
     );
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-edit-corp'));
+    await openTls(container);
     await click(byTestId(container, 'proxy-profile-tls-ca-remove'));
 
     expect(mocks.confirm).toHaveBeenCalledTimes(1);
@@ -760,6 +867,7 @@ describe('ProxyStatusSection — TLS профиля (write-only)', () => {
   it('rejectUnauthorized и пути TLS сохраняются в профиле при Save', async () => {
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-edit-corp'));
+    await openTls(container);
 
     await act(async () => {
       setInputValue(
@@ -781,7 +889,7 @@ describe('ProxyStatusSection — TLS нового профиля (pending до �
   const CERT = '-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----';
   const KEY = '-----BEGIN PRIVATE KEY-----\nKEYDATA\n-----END PRIVATE KEY-----';
 
-  it('TLS-блок доступен сразу, CA ждёт Save и загружается после saveProxy', async () => {
+  it('TLS-блок нового профиля свёрнут; после раскрытия CA ждёт Save и загружается после saveProxy', async () => {
     const savedWithProfile = {
       ...SAVED,
       profiles: {
@@ -810,7 +918,10 @@ describe('ProxyStatusSection — TLS нового профиля (pending до �
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-add'));
 
-    // Блок TLS доступен в новом профиле; upload/remove скрыты.
+    // Секция TLS свёрнута по умолчанию; после toggle доступна, upload/remove скрыты.
+    expect(byTestId(container, 'proxy-profile-tls-content')!.hidden).toBe(true);
+    await openTls(container);
+    expect(byTestId(container, 'proxy-profile-tls-content')!.hidden).toBe(false);
     expect(byTestId(container, 'proxy-profile-tls-ca-pem')).not.toBeNull();
     expect(byTestId(container, 'proxy-profile-tls-ca-file-input')).not.toBeNull();
     const certInput = byTestId(
@@ -874,6 +985,7 @@ describe('ProxyStatusSection — TLS нового профиля (pending до �
 
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-add'));
+    await openTls(container);
     await act(async () => {
       setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
       setInputValue(
@@ -896,6 +1008,7 @@ describe('ProxyStatusSection — TLS нового профиля (pending до �
   it('сертификат без ключа — ошибка формы, Apply не закрывает форму', async () => {
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-add'));
+    await openTls(container);
     await act(async () => {
       setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
       setInputValue(
@@ -932,6 +1045,7 @@ describe('ProxyStatusSection — TLS нового профиля (pending до �
 
     const container = await renderSection();
     await click(byTestId(container, 'proxy-profile-add'));
+    await openTls(container);
     await act(async () => {
       setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
       setInputValue(
