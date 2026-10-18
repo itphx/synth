@@ -19,6 +19,7 @@ import {
 import { ProviderIcon, describeProviderIcon, PROVIDER_RI_ICONS, PROVIDER_BRAND_NAMES } from './ProviderIcon'
 import { downscaleIconDataUrl, isOversizedIcon } from '@/lib/imageIcon'
 import { CURRENCY_OPTIONS, currencySymbol } from '@/lib/currency'
+import { useProvidersStore } from '@/stores/providersStore'
 
 interface FetchIconResult {
   icon?: string | null
@@ -62,7 +63,10 @@ export const ProvidersPanel = () => {
     setLoading(true)
     try {
       const data = await synthApi.getProviders()
-      setProviders(data.providers || [])
+      const list = data.providers || []
+      setProviders(list)
+      // Синхронизируем общий стор: селекторы провайдеров обновляются без перезагрузки.
+      useProvidersStore.getState().applyProviders(list, data.default_provider)
     } finally {
       setLoading(false)
     }
@@ -227,7 +231,7 @@ export const ProvidersPanel = () => {
                 label={t('admin.providers.url')}
                 value={form.base_url}
                 onChange={(e) => setForm({ ...form, base_url: e.target.value })}
-                placeholder="https://api.openai.com/v1"
+                placeholder="https://api.example.com/v1"
               />
             </div>
             <TextField
@@ -249,6 +253,7 @@ export const ProvidersPanel = () => {
             />
             <TextField
               label={t('admin.providers.defaultModel')}
+              tooltip={t('admin.providers.defaultModelHint')}
               value={form.default_model}
               onChange={(e) => setForm({ ...form, default_model: e.target.value })}
             />

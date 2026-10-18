@@ -27,6 +27,7 @@ import { createUpdateRoutes } from '../routes/updates.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { mergeLlmGatewayConfig, mergeSecurityConfig } from '../../storage/runtime-settings.js';
+import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { resolveProjectWorkspace } from '../fs-workspace.js';
 import type { StandaloneConfig } from '../app.js';
 import type { StandaloneDeps } from './deps.js';
@@ -86,6 +87,14 @@ export function mountStandaloneRoutes(
   } = ctx.remote;
   /** ADR-075: эффективная политика workspace вне root — live-изменяется `onWorkspacePolicyChange`. */
   let effectiveWorkspaceOutsideRootPolicy: WorkspaceOutsideRootPolicy = deps.workspaceOutsideRootPolicy;
+  /**
+   * Fallback-пара «модель по умолчанию» из config.yaml
+   * (`llm.defaultProvider` + `llm.defaultModel`) — только если заданы оба.
+   */
+  const configDefaultModel = (): DefaultModelPair | null =>
+    config.llmDefaults?.provider && config.llmDefaults?.model
+      ? { provider: config.llmDefaults.provider, model: config.llmDefaults.model }
+      : null;
   const getEventsSettings = deps.getEventsSettings;
   const setEventsSettings = deps.setEventsSettings;
   // API-заглушки для UI
@@ -168,7 +177,11 @@ export function mountStandaloneRoutes(
   ));
 
   // Providers
-  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, { testEnabled: true }));
+  app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, {
+    testEnabled: true,
+    // Дефолтный провайдер — из явной пары provider+model (runtime, fallback — config).
+    getDefaultModel: async () => (await settingsStore.getDefaultModel()) ?? configDefaultModel(),
+  }));
 
   // Models: remote-модели/провайдер читаются на каждый запрос (runtime-подключение).
   app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, {
@@ -182,6 +195,11 @@ export function mountStandaloneRoutes(
       return out;
     },
     onlyRemoteModels: () => isBlockLocalProviders() && getActiveRemoteProviderNames().size > 0,
+    // Модель по умолчанию — явная пара provider+model (runtime приоритетнее config).
+    supportSetAsDefault: true,
+    providerCache,
+    getDefaultModel: async () => (await settingsStore.getDefaultModel()) ?? configDefaultModel(),
+    setDefaultModel: (pair) => settingsStore.setDefaultModel(pair),
   }));
 
   // Agents
@@ -295,6 +313,17 @@ export function mountStandaloneRoutes(
     onWorkspacePolicyChange: (policy) => { effectiveWorkspaceOutsideRootPolicy = policy; },
     // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
     fallbackDefaultAgent: DEFAULT_AGENT_ID,
+    // Модель по умолчанию: fallback из config.yaml (пара — только если заданы оба
+    // поля); runtime-значение приоритетнее. Валидация — фактическое наличие
+    // провайдера в каталоге и модели `provider/model`.
+    fallbackDefaultModel: configDefaultModel(),
+    validateDefaultModel: async (pair) => {
+      const provider = await providerStore.load(pair.provider);
+      if (!provider) return `провайдер "${pair.provider}" не найден`;
+      const model = await modelStore.load(`${pair.provider}/${pair.model}`);
+      if (!model) return `модель "${pair.provider}/${pair.model}" не найдена`;
+      return true;
+    },
     // ADR-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
     fallbackLlmGateway: config.gatewayConfig ? {
       enabled: config.gatewayConfig.enabled,

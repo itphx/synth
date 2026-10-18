@@ -345,3 +345,42 @@ describe('routes/providers: fetch-icon — SSRF-политика resolved-URL (P
     expect(body.source).toBe('https://93.184.216.34/icon.png');
   });
 });
+
+describe('routes/providers (backend): default_provider из пары provider+model', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-providers-default-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('is_default/default_provider берутся из getDefaultModel, а не из порядка каталога', async () => {
+    const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
+    const providerCache = new Map<string, ProviderConfig>();
+    await providerStore.save('first', {
+      name: 'first', type: 'openai', baseUrl: 'http://first.local', enabled: true,
+    });
+    await providerStore.save('second', {
+      name: 'second', type: 'openai', baseUrl: 'http://second.local', enabled: true,
+    });
+
+    const app = new Hono();
+    app.route(BASE, createProviderRoutes(
+      createKit() as never,
+      providerStore,
+      providerCache,
+      {},
+      async () => ({ provider: 'second', model: 'm2' }),
+    ));
+
+    const body = await (await app.request(BASE)).json() as {
+      providers: Array<{ name: string; is_default: boolean }>;
+      default_provider: string;
+    };
+    expect(body.default_provider).toBe('second');
+    expect(body.providers.filter((p) => p.is_default).map((p) => p.name)).toEqual(['second']);
+  });
+});

@@ -92,6 +92,7 @@ export type {
   ProtectedPathsRaw,
   SessionSecretsResponse,
 } from './security'
+export type { DefaultModelPair, DefaultModelInfo } from './settings'
 export type { DictionaryEntry, DictionaryDetail } from './dictionaries'
 export type {
   LogsResponse,

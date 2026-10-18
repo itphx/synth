@@ -12,6 +12,7 @@ import type {
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
+  DefaultModelPair,
   EventsRuntimeSettings,
   LlmGatewayRuntimeSettings,
   RuntimeSettings,
@@ -88,6 +89,11 @@ export interface SettingsRepository {
   getDefaultAgent(): Promise<string | undefined>;
   setDefaultAgent(id: string): Promise<void>;
   clearDefaultAgent(): Promise<void>;
+
+  /** Модель по умолчанию инстанса — явная пара provider+model (runtime override). */
+  getDefaultModel(): Promise<DefaultModelPair | undefined>;
+  setDefaultModel(pair: DefaultModelPair): Promise<void>;
+  clearDefaultModel(): Promise<void>;
 
   getWorkspacePolicy(): Promise<WorkspaceOutsideRootPolicy | undefined>;
   setWorkspacePolicy(policy: WorkspaceOutsideRootPolicy): Promise<void>;

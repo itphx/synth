@@ -505,6 +505,10 @@ const VirtualModelRow = memo(function VirtualModelRow({
   onToggleFavorite,
   onSelect,
 }: ModelRowProps) {
+  const { t } = useI18n()
+  const favoriteLabel = isFavorite
+    ? t('chat.modelControls.removeFromFavorites')
+    : t('chat.modelControls.addToFavorites')
   return (
     <div
       onClick={onSelect}
@@ -521,7 +525,11 @@ const VirtualModelRow = memo(function VirtualModelRow({
           e.stopPropagation()
           onToggleFavorite()
         }}
-        className="shrink-0 p-0.5 opacity-0 group-hover:opacity-100 hover:text-primary transition-opacity"
+        aria-label={favoriteLabel}
+        title={favoriteLabel}
+        className={`shrink-0 p-0.5 hover:text-primary transition-opacity ${
+          isFavorite ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+        }`}
       >
         <Icon
           name={isFavorite ? 'star-fill' : 'star'}

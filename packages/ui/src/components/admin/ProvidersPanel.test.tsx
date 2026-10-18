@@ -28,6 +28,7 @@ vi.mock('@/lib/imageIcon', () => ({
 
 import { synthApi, type ProviderInfo } from '@/lib/api/synthApi'
 import { downscaleIconDataUrl } from '@/lib/imageIcon'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { ProvidersPanel } from './ProvidersPanel'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -40,7 +41,11 @@ async function renderPanel(): Promise<HTMLElement> {
   const root = createRoot(host)
   mounted.push({ host, root })
   await act(async () => {
-    root.render(<ProvidersPanel />)
+    root.render(
+      <TooltipProvider>
+        <ProvidersPanel />
+      </TooltipProvider>,
+    )
   })
   // load() в useEffect асинхронный — даём микротаскам завершиться
   await act(async () => {})
@@ -178,7 +183,7 @@ describe('ProvidersPanel: тяжёлая иконка сжимается пер�
       findButton(host, 'admin.providers.add').click()
     })
 
-    const urlInput = host.querySelector('input[placeholder="https://api.openai.com/v1"]') as HTMLInputElement
+    const urlInput = host.querySelector('input[placeholder="https://api.example.com/v1"]') as HTMLInputElement
     expect(urlInput).toBeTruthy()
     await setInputValue(urlInput, 'https://api.example.com/v1')
 
@@ -436,5 +441,23 @@ describe('ProvidersPanel: валюта провайдера', () => {
     await save(host)
 
     expect(savedCurrency()).toBe('USD')
+  })
+})
+
+describe('ProvidersPanel: модель по умолчанию провайдера', () => {
+  it('подпись и подсказка объясняют смысл fallback-модели', async () => {
+    const host = await renderPanel()
+    await act(async () => {
+      findButton(host, 'admin.providers.add').click()
+    })
+
+    // i18n в этом тесте замокан: тексты — это ключи словаря.
+    const label = Array.from(host.querySelectorAll('label')).find(
+      (l) => (l.textContent ?? '').trim() === 'admin.providers.defaultModel',
+    )
+    expect(label).toBeTruthy()
+
+    const tooltips = Array.from(host.querySelectorAll('[data-testid="settings-field-tooltip"]'))
+    expect(tooltips.some((el) => el.getAttribute('aria-label') === 'admin.providers.defaultModelHint')).toBe(true)
   })
 })

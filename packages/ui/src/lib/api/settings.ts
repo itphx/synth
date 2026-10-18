@@ -4,6 +4,19 @@ import type { ToolsDisabledConfig } from '@itphx/synth-shared'
 import type { ToolsPolicy } from '@itphx/synth-shared/types'
 import { BASE_URL, fetchJSON } from './base'
 
+/** Пара «провайдер + модель» — дефолт уровня инстанса для новых сессий. */
+export interface DefaultModelPair {
+  provider: string
+  model: string
+}
+
+/** Ответ `GET /settings/default-model`: эффективная пара и её источник. */
+export interface DefaultModelInfo {
+  defaultModel: DefaultModelPair | null
+  isOverridden: boolean
+  defaults: DefaultModelPair | null
+}
+
 export const settingsApi = {
   // --- Инструменты: политика включения (ADR-071 §2.3) ---
   async getToolsPolicyInfo(): Promise<{ policy: ToolsPolicy; isOverridden: boolean; defaults: ToolsPolicy }> {
@@ -75,5 +88,29 @@ export const settingsApi = {
       `${BASE_URL}/settings/default-agent`,
       { method: 'DELETE' },
     )
+  },
+
+  // --- Модель по умолчанию для новых сессий (админка «Модели») ---
+  /** GET /settings/default-model — эффективная пара provider+model и её источник. */
+  async getDefaultModel(): Promise<DefaultModelInfo> {
+    return fetchJSON<DefaultModelInfo>(`${BASE_URL}/settings/default-model`)
+  },
+
+  /** PUT /settings/default-model — задать пару уровня инстанса (live-применение). */
+  async setDefaultModel(defaultModel: DefaultModelPair): Promise<{ defaultModel: DefaultModelPair | null }> {
+    return fetchJSON<{ defaultModel: DefaultModelPair | null }>(`${BASE_URL}/settings/default-model`, {
+      method: 'PUT',
+      body: JSON.stringify({ provider: defaultModel.provider, model: defaultModel.model }),
+    })
+  },
+
+  /** DELETE /settings/default-model — сброс к дефолту (legacy-пара провайдера). */
+  async resetDefaultModel(): Promise<{
+    status: string
+    defaultModel: DefaultModelPair | null
+    isOverridden: boolean
+    defaults: DefaultModelPair | null
+  }> {
+    return fetchJSON(`${BASE_URL}/settings/default-model`, { method: 'DELETE' })
   },
 }

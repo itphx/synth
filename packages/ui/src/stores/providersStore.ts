@@ -15,11 +15,31 @@ interface ProvidersStore {
 
   loadProviders: () => Promise<void>
   loadModels: () => Promise<void>
+  /** Перечитать провайдеров и модели одним заходом (после мутаций каталога). */
+  refreshCatalog: () => Promise<void>
+  /** Применить свежий список провайдеров; выбор провайдера — только если он стал невалиден. */
+  applyProviders: (providers: ProviderInfo[], defaultProvider?: string) => void
+  /** Применить свежие группы моделей; выбор модели — только если он стал невалиден. */
+  applyModelGroups: (groups: ModelGroup[]) => void
   setSelectedProvider: (name: string | null) => void
   setSelectedModel: (name: string | null) => void
   toggleFavorite: (model: ModelInfo) => void
   addRecent: (model: ModelInfo) => void
   loadFavoritesFromProfile: (prefs: UserPreferences | undefined) => void
+}
+
+/**
+ * Выбор провайдера при обновлении каталога (только когда текущий невалиден/пуст):
+ * провайдер из пары default-model → провайдер с непустым `model` → первый enabled → первый.
+ */
+function pickProvider(providers: ProviderInfo[], defaultProvider?: string): string | null {
+  if (providers.length === 0) return null
+  const preferred =
+    (defaultProvider ? providers.find((p) => p.name === defaultProvider) : undefined)
+    ?? providers.find((p) => !!p.model)
+    ?? providers.find((p) => p.enabled !== false)
+    ?? providers[0]
+  return preferred?.name ?? null
 }
 
 export const useProvidersStore = create<ProvidersStore>((set, get) => ({
@@ -33,20 +53,57 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   favorites: [],
   recents: [],
 
+  applyProviders: (providers, defaultProvider) => {
+    set({ providers })
+    const current = get().selectedProviderName
+    if (current && providers.some((p) => p.name === current)) return
+    set({ selectedProviderName: pickProvider(providers, defaultProvider) })
+  },
+
+  applyModelGroups: (groups) => {
+    const allModels: ModelInfo[] = []
+    let defaultModel: ModelInfo | undefined
+    for (const g of groups) {
+      for (const m of g.models) {
+        if (!m.enabled) continue
+        allModels.push(m)
+        if (m.isDefault && !defaultModel) defaultModel = m
+      }
+    }
+    set({ modelGroups: groups, models: allModels })
+
+    // Существующий валидный выбор не перезаписываем (модель может быть задана сессией).
+    // Валидность — в паре с провайдером: одинаковое имя модели у разных провайдеров
+    // не делает текущую пару корректной.
+    const { selectedModelName, selectedProviderName } = get()
+    const selectionValid =
+      !!selectedModelName &&
+      allModels.some(
+        (m) =>
+          m.name === selectedModelName &&
+          (!selectedProviderName || m.provider === selectedProviderName),
+      )
+    if (selectionValid) return
+
+    const providerModel = selectedProviderName
+      ? allModels.find((m) => m.provider === selectedProviderName)
+      : undefined
+    const next = defaultModel ?? providerModel ?? allModels[0]
+    // Пара выставляется целиком: иначе провайдер остаётся прежним, а модель — из
+    // другого провайдера, и отправка уйдёт с неверной парой.
+    set(
+      next
+        ? { selectedModelName: next.name, selectedProviderName: next.provider }
+        : { selectedModelName: null },
+    )
+  },
+
   loadProviders: async () => {
     set({ loading: true, error: null })
     try {
       const { providers, default_provider } = await synthApi.getProviders()
-      set({ providers, loading: false })
-      if (providers.length > 0 && !get().selectedProviderName) {
-        const defaultProvider = providers.find((p) => p.name === default_provider)
-        const providerName = defaultProvider?.name || providers[0].name
-        set({ selectedProviderName: providerName })
-        const provider = providers.find((p) => p.name === providerName)
-        if (provider?.model && !get().selectedModelName) {
-          set({ selectedModelName: provider.model })
-        }
-      }
+      set({ loading: false })
+      get().applyProviders(providers, default_provider)
     } catch (e) {
       set({ loading: false, error: e instanceof Error ? e.message : 'Ошибка загрузки провайдеров' })
     }
@@ -55,28 +112,14 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   loadModels: async () => {
     try {
       const groups = await synthApi.getModels()
-      const allModels: ModelInfo[] = []
-      let defaultModel = ''
-      for (const g of groups) {
-        for (const m of g.models) {
-          if (m.enabled) {
-            allModels.push(m)
-            if (m.isDefault && !defaultModel) {
-              defaultModel = m.name
-            }
-          }
-        }
-      }
-      set({
-        modelGroups: groups,
-        models: allModels,
-      })
-      if (!get().selectedModelName && defaultModel) {
-        set({ selectedModelName: defaultModel })
-      }
+      get().applyModelGroups(groups)
     } catch (e) {
       set({ error: e instanceof Error ? e.message : 'Ошибка загрузки моделей' })
     }
+  },
+
+  refreshCatalog: async () => {
+    await Promise.all([get().loadProviders(), get().loadModels()])
   },
 
   setSelectedProvider: (name) => set({ selectedProviderName: name }),

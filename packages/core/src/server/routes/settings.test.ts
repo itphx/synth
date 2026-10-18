@@ -1846,3 +1846,148 @@ describe('Settings API Routes — egress (настраиваемая полит�
     expect(res.status).toBe(200);
   });
 });
+
+describe('Settings API Routes — default-model (явная пара provider+model)', () => {
+  let tmpDir: string;
+  const FALLBACK = '/fallback/workspace';
+  const CONFIG_PAIR = { provider: 'openai', model: 'gpt-4o' };
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-settings-default-model-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeApp(deps: Partial<Parameters<typeof createSettingsRoutes>[1]> = {}) {
+    const app = new Hono();
+    const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+    app.route('/api/v2/settings', createSettingsRoutes(createMockAuth(), {
+      settingsStore,
+      fallbackWorkspace: FALLBACK,
+      ...deps,
+    }));
+    return { app, settingsStore };
+  }
+
+  function json(method: string, body?: unknown): RequestInit {
+    return {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    };
+  }
+
+  it('GET без runtime и без config-fallback → { defaultModel: null, isOverridden: false, defaults: null }', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/default-model');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ defaultModel: null, isOverridden: false, defaults: null });
+  });
+
+  it('GET отдаёт config-fallback, пока runtime не задан', async () => {
+    const { app } = makeApp({ fallbackDefaultModel: CONFIG_PAIR });
+    const res = await app.request('/api/v2/settings/default-model');
+    expect(await res.json()).toEqual({
+      defaultModel: null,
+      isOverridden: false,
+      defaults: CONFIG_PAIR,
+    });
+  });
+
+  it('PUT сохраняет пару и переживает рестарт; GET показывает override', async () => {
+    const { app } = makeApp({ fallbackDefaultModel: CONFIG_PAIR });
+    const put = await app.request('/api/v2/settings/default-model', json('PUT', {
+      provider: '  ollama  ',
+      model: '  qwen3:8b  ',
+    }));
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ defaultModel: { provider: 'ollama', model: 'qwen3:8b' } });
+
+    const restarted = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await restarted.getDefaultModel()).toEqual({ provider: 'ollama', model: 'qwen3:8b' });
+
+    const get = await app.request('/api/v2/settings/default-model');
+    expect(await get.json()).toEqual({
+      defaultModel: { provider: 'ollama', model: 'qwen3:8b' },
+      isOverridden: true,
+      defaults: CONFIG_PAIR,
+    });
+  });
+
+  it('DELETE сбрасывает к config-fallback и снимает override', async () => {
+    const { app, settingsStore } = makeApp({ fallbackDefaultModel: CONFIG_PAIR });
+    await settingsStore.setDefaultModel({ provider: 'ollama', model: 'qwen3:8b' });
+
+    const res = await app.request('/api/v2/settings/default-model', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: 'restored',
+      defaultModel: CONFIG_PAIR,
+      isOverridden: false,
+      defaults: CONFIG_PAIR,
+    });
+    expect(await settingsStore.getDefaultModel()).toBeUndefined();
+  });
+
+  it('PUT с пустыми/отсутствующими provider или model → 400 VALIDATION_ERROR', async () => {
+    const { app, settingsStore } = makeApp();
+    for (const body of [{}, { provider: 'openai' }, { model: 'gpt-4o' }, { provider: '  ', model: 'x' }, { provider: 'x', model: '   ' }]) {
+      const res = await app.request('/api/v2/settings/default-model', json('PUT', body));
+      expect(res.status).toBe(400);
+      const parsed = await res.json() as { error: { code: string } };
+      expect(parsed.error.code).toBe('VALIDATION_ERROR');
+    }
+    expect(await settingsStore.getDefaultModel()).toBeUndefined();
+  });
+
+  it('PUT с невалидным телом (не JSON) → 400', async () => {
+    const { app } = makeApp();
+    const res = await app.request('/api/v2/settings/default-model', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{not-json',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('validateDefaultModel: строковый отказ → 400 с причиной, пара не сохраняется', async () => {
+    const { app, settingsStore } = makeApp({
+      validateDefaultModel: async () => 'провайдер "ghost" не найден',
+    });
+    const res = await app.request('/api/v2/settings/default-model', json('PUT', {
+      provider: 'ghost',
+      model: 'm1',
+    }));
+    expect(res.status).toBe(400);
+    const parsed = await res.json() as { error: { code: string; message: string } };
+    expect(parsed.error.code).toBe('VALIDATION_ERROR');
+    expect(parsed.error.message).toContain('ghost');
+    expect(await settingsStore.getDefaultModel()).toBeUndefined();
+  });
+
+  it('validateDefaultModel: false → 400 generic; true → сохраняет и вызывает onDefaultModelChange', async () => {
+    const changes: unknown[] = [];
+    const { app } = makeApp({
+      validateDefaultModel: async (pair) => pair.provider === 'openai',
+      onDefaultModelChange: (pair) => { changes.push(pair); },
+    });
+
+    const bad = await app.request('/api/v2/settings/default-model', json('PUT', {
+      provider: 'other',
+      model: 'm1',
+    }));
+    expect(bad.status).toBe(400);
+
+    const ok = await app.request('/api/v2/settings/default-model', json('PUT', {
+      provider: 'openai',
+      model: 'gpt-4o',
+    }));
+    expect(ok.status).toBe(200);
+    expect(changes).toEqual([{ provider: 'openai', model: 'gpt-4o' }]);
+
+    await app.request('/api/v2/settings/default-model', { method: 'DELETE' });
+    expect(changes).toEqual([{ provider: 'openai', model: 'gpt-4o' }, null]);
+  });
+});

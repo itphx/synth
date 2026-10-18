@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { AuthKit } from '../../auth/local.js';
-import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings } from '../../storage/runtime-settings.js';
+import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, DefaultModelPair } from '../../storage/runtime-settings.js';
 import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
@@ -312,6 +312,19 @@ export interface SettingsRoutesDeps {
   fallbackDefaultAgent?: string;
   /** Вызывается после успешного PUT /default-agent (live-применение). */
   onDefaultAgentChange?: (id: string) => void | Promise<void>;
+  /**
+   * Модель по умолчанию из config.yaml (`llm.defaultProvider` + `llm.defaultModel`)
+   * — только если заданы оба поля; иначе `null`. Fallback для GET/DELETE /default-model.
+   */
+  fallbackDefaultModel?: DefaultModelPair | null;
+  /**
+   * Проверка фактического существования пары (провайдер в каталоге + модель
+   * `provider/model`). Строка — причина отказа (400 с её текстом),
+   * `false` — общий отказ, `true` — пара валидна.
+   */
+  validateDefaultModel?: (pair: DefaultModelPair) => Promise<boolean | string>;
+  /** Вызывается после успешного PUT/DELETE /default-model (live-применение). */
+  onDefaultModelChange?: (pair: DefaultModelPair | null) => void | Promise<void>;
   /**
    * ADR-075: дефолт политики для абсолютного workspace вне `workspacesRoot`
    * (config.yaml/env), если runtime-настройка не задана. По умолчанию — `confirm`.
@@ -1701,6 +1714,77 @@ export function createSettingsRoutes(
     await deps.settingsStore.clearDefaultAgent();
     await deps.onDefaultAgentChange?.(fallback);
     return c.json({ status: 'restored', defaultAgent: fallback, isOverridden: false, defaults: fallback });
+  });
+
+  /**
+   * GET/PUT/DELETE /api/v2/settings/default-model — модель по умолчанию
+   * инстанса: **явная пара** provider+model (админка «Модели»), а не «первый
+   * провайдер в каталоге». Runtime-значение (`{dataDir}/settings.json`) приоритетнее
+   * fallback из config.yaml (`llm.defaultProvider`/`llm.defaultModel`, только если
+   * заданы оба). Используется для новых сессий (в т.ч. из внешних событий) и как
+   * `isDefault`/`default_provider` в ответах `/api/v2/models`/`/api/v2/providers`.
+   */
+  const fallbackDefaultModel = (): DefaultModelPair | null => {
+    const fallback = deps.fallbackDefaultModel;
+    if (!fallback?.provider || !fallback?.model) return null;
+    return { provider: fallback.provider, model: fallback.model };
+  };
+
+  app.get('/default-model', auth.requireAuth, async (c) => {
+    const runtime = await deps.settingsStore.getDefaultModel();
+    return c.json({
+      defaultModel: runtime ?? null,
+      isOverridden: runtime !== undefined,
+      defaults: fallbackDefaultModel(),
+    });
+  });
+
+  app.put('/default-model', settingsWriteGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const rawProvider = (body as { provider?: unknown }).provider;
+    const rawModel = (body as { model?: unknown }).model;
+    const provider = typeof rawProvider === 'string' ? rawProvider.trim() : '';
+    const model = typeof rawModel === 'string' ? rawModel.trim() : '';
+
+    if (!provider || !model) {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'provider и model обязательны (непустые строки)',
+        },
+      }, 400);
+    }
+
+    const pair: DefaultModelPair = { provider, model };
+    if (deps.validateDefaultModel) {
+      const verdict = await deps.validateDefaultModel(pair);
+      if (verdict !== true) {
+        return c.json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: typeof verdict === 'string'
+              ? verdict
+              : `провайдер "${provider}" или модель "${provider}/${model}" не найдены`,
+          },
+        }, 400);
+      }
+    }
+
+    await deps.settingsStore.setDefaultModel(pair);
+    await deps.onDefaultModelChange?.(pair);
+    return c.json({ defaultModel: pair });
+  });
+
+  app.delete('/default-model', settingsWriteGuard, async (c) => {
+    const fallback = fallbackDefaultModel();
+    await deps.settingsStore.clearDefaultModel();
+    await deps.onDefaultModelChange?.(fallback);
+    return c.json({
+      status: 'restored',
+      defaultModel: fallback,
+      isOverridden: false,
+      defaults: fallback,
+    });
   });
 
   /**

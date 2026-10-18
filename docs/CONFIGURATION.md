@@ -257,8 +257,8 @@ auth:
   # oidc: { enabled: false, issuer: "", clientId: "", clientSecret: "", redirectUri: "http://localhost:5002/auth/callback", cliClientId: "synth-cli" }
 
 llm:
-  defaultProvider: ""             # пусто — админ настраивает сам
-  defaultModel: ""
+  defaultProvider: ""             # fallback: пусто — админ настраивает сам; runtime-пара «провайдер + модель»
+  defaultModel: ""                # задаётся в UI «Модели» (`/api/v2/settings/default-model`) и приоритетнее config
   maxRetries: 3
   timeout: 60
   cache: "auto"                   # ADR-070: политика prompt-cache — auto (маркеры/ключ) | none (отключить);

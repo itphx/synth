@@ -490,6 +490,58 @@ describe('routes/models', () => {
       expect(saved?.priceSource).toBe('api');
       expect(saved?.enabled).toBe(false);
     });
+
+    it('POST /models c input_price=null очищает цену, оставляя остальные', async () => {
+      await stores.modelStore.save('p1/m-clear-one', {
+        id: 'p1/m-clear-one', name: 'm-clear-one', provider: 'p1', enabled: true,
+        inputPrice: 2, outputPrice: 3, priceSource: 'manual',
+      });
+
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m-clear-one',
+        input_price: null,
+      }));
+      expect(res.status).toBe(200);
+
+      const saved = await stores.modelStore.load('p1/m-clear-one');
+      expect(saved?.inputPrice).toBeUndefined();
+      expect(saved?.outputPrice).toBe(3);
+      expect(saved?.priceSource).toBe('manual');
+    });
+
+    it('POST /models: очистка последней цены сбрасывает priceSource', async () => {
+      await stores.modelStore.save('p1/m-clear-all', {
+        id: 'p1/m-clear-all', name: 'm-clear-all', provider: 'p1', enabled: true,
+        inputPrice: 2, priceSource: 'manual',
+      });
+
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m-clear-all',
+        input_price: null,
+      }));
+      expect(res.status).toBe(200);
+
+      const saved = await stores.modelStore.load('p1/m-clear-all');
+      expect(saved?.inputPrice).toBeUndefined();
+      expect(saved?.priceSource).toBeUndefined();
+    });
+
+    it('POST /models: camelCase-поле с null тоже очищает цену', async () => {
+      await stores.modelStore.save('p1/m-clear-camel', {
+        id: 'p1/m-clear-camel', name: 'm-clear-camel', provider: 'p1', enabled: true,
+        inputPrice: 7, priceSource: 'manual',
+      });
+
+      const res = await stores.app.request(BASE, postJSON({
+        id: 'p1/m-clear-camel',
+        inputPrice: null,
+      }));
+      expect(res.status).toBe(200);
+
+      const saved = await stores.modelStore.load('p1/m-clear-camel');
+      expect(saved?.inputPrice).toBeUndefined();
+      expect(saved?.priceSource).toBeUndefined();
+    });
   });
 });
 
@@ -524,5 +576,63 @@ describe('routes/models: RBAC (мутации/синхронизация — т�
   it('POST /fetch — 403 (requireAdmin)', async () => {
     const res = await stores.app.request(`${BASE}/fetch?provider=p1`, { method: 'POST' });
     expect(res.status).toBe(403);
+  });
+});
+
+describe('routes/models (backend): колбэки модели по умолчанию', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-models-default-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function makeDefaultApp(defaults: Parameters<typeof createModelRoutes>[5]) {
+    const modelStore = new JsonStore<ModelConfig>({ dataDir: tmpDir, subdir: 'models' });
+    const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
+    const modelCache = new Map<string, ModelConfig>();
+    const providerCache = new Map<string, ProviderConfig>();
+    await providerStore.save('p1', {
+      name: 'p1', type: 'openai', baseUrl: 'http://provider.local', enabled: true,
+    });
+    const app = new Hono();
+    app.route(BASE, createModelRoutes(
+      createKit() as never, modelStore, providerStore, modelCache, providerCache, defaults,
+    ));
+    return { app, modelStore, providerStore, modelCache, providerCache };
+  }
+
+  it('GET использует getDefaultModel для isDefault', async () => {
+    const { app, modelStore } = await makeDefaultApp({
+      getDefaultModel: () => ({ provider: 'p1', model: 'm2' }),
+    });
+    await modelStore.save('p1/m1', { id: 'p1/m1', name: 'm1', provider: 'p1', enabled: true, isDefault: true });
+    await modelStore.save('p1/m2', { id: 'p1/m2', name: 'm2', provider: 'p1', enabled: true });
+
+    const body = await (await app.request(BASE)).json() as {
+      groups: Array<{ models: Array<{ id: string; isDefault: boolean }> }>;
+    };
+    const models = body.groups.flatMap((g) => g.models);
+    expect(models.find((m) => m.id === 'p1/m1')?.isDefault).toBe(false);
+    expect(models.find((m) => m.id === 'p1/m2')?.isDefault).toBe(true);
+  });
+
+  it('set_as_default вызывает setDefaultModel после сохранения провайдера', async () => {
+    const pairs: unknown[] = [];
+    const { app } = await makeDefaultApp({
+      setDefaultModel: (pair) => { pairs.push(pair); },
+    });
+
+    const res = await app.request(BASE, postJSON({
+      id: 'p1/m3',
+      name: 'm3',
+      provider: 'p1',
+      set_as_default: true,
+    }));
+    expect(res.status).toBe(201);
+    expect(pairs).toEqual([{ provider: 'p1', model: 'm3' }]);
   });
 });

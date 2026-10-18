@@ -75,6 +75,15 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     identityClaimStore, live, maintenanceAudit,
   } = deps;
 
+  /**
+   * Fallback-пара «модель по умолчанию» из config (`llm.defaultProvider` +
+   * `llm.defaultModel`) — только если заданы оба.
+   */
+  const backendConfigDefaultModel = () =>
+    config.synth.llm.defaultProvider && config.synth.llm.defaultModel
+      ? { provider: config.synth.llm.defaultProvider, model: config.synth.llm.defaultModel }
+      : null;
+
   // API-заглушки для UI
   app.get('/api/config/themes', (c) => c.json({ themes: [] }));
 
@@ -180,10 +189,13 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   app.route('/api/v2/providers', createProviderRoutes(auth, providerStore, providerCache, {
     resolvePolicy: () => egressResolver.resolveTools(),
     log: currentEgressLog(),
-  }));
+  }, async () => (await settingsStore.getDefaultModel()) ?? backendConfigDefaultModel()));
 
   // Models routes
-  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache));
+  app.route('/api/v2/models', createModelRoutes(auth, modelStore, providerStore, modelCache, providerCache, {
+    getDefaultModel: async () => (await settingsStore.getDefaultModel()) ?? backendConfigDefaultModel(),
+    setDefaultModel: (pair) => settingsStore.setDefaultModel(pair),
+  }));
 
   // Agents routes
   app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
@@ -580,6 +592,16 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     workspacePolicyReadOnly: true,
     // Агент по умолчанию при первом развёртывании (config.yaml не задаёт — DEFAULT_AGENT_ID).
     fallbackDefaultAgent: DEFAULT_AGENT_ID,
+    // Модель по умолчанию: fallback из config (только если заданы оба поля);
+    // runtime-пара приоритетнее. Валидация — провайдер в каталоге + модель `provider/model`.
+    fallbackDefaultModel: backendConfigDefaultModel(),
+    validateDefaultModel: async (pair) => {
+      const provider = await providerStore.load(pair.provider);
+      if (!provider) return `провайдер "${pair.provider}" не найден`;
+      const model = await modelStore.load(`${pair.provider}/${pair.model}`);
+      if (!model) return `модель "${pair.provider}/${pair.model}" не найдена`;
+      return true;
+    },
     // ADR-072 Ф2: дефолты из config.yaml (без runtime) — для GET/DELETE-сброса к умолчанию.
     fallbackLlmGateway: {
       enabled: config.synth.llmGateway.enabled,

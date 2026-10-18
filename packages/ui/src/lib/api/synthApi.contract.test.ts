@@ -27,7 +27,7 @@ const EXPECTED_API_METHODS = [
   'forkRemoteProject', 'forkSession', 'getAgentDetail', 'getAgents',
   'getAllAgents', 'getAudit', 'getCommands', 'getCommitDetail',
   'getCommitLog', 'getContextFile', 'getContextFiles', 'getDebugConfig',
-  'getDecisionMetrics', 'getDecisionSettings', 'getDefaultAgentInfo', 'getDictionaries',
+  'getDecisionMetrics', 'getDecisionSettings', 'getDefaultAgentInfo', 'getDefaultModel', 'getDictionaries',
   'getDictionary', 'getDoctor', 'getEgressLog', 'getEgressPolicy', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
   'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
@@ -48,7 +48,7 @@ const EXPECTED_API_METHODS = [
   'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject',
   'putSkillFile', 'readFile', 'regenerateWebhookSecret', 'registerGitRepo',
   'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'resetContextFile',
-  'resetDecisionMetrics', 'resetDecisionSettings', 'resetDefaultAgent', 'resetDictionary',
+  'resetDecisionMetrics', 'resetDecisionSettings', 'resetDefaultAgent', 'resetDefaultModel', 'resetDictionary',
   'resetEgressPolicy', 'resetEventsSettings', 'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy',
   'resetMcpPolicy', 'resetMcpSettings', 'resetProtectedPaths', 'resetProxy', 'resetSkillsSettings',
   'resetToolsDisabled', 'resetToolsPolicy', 'restartInstance', 'resumeQueue', 'resumeSubagent',
@@ -57,7 +57,7 @@ const EXPECTED_API_METHODS = [
   'saveDebugConfig', 'saveDictionary', 'saveEgressPolicy', 'saveGatewayPatterns', 'saveLlmGatewaySettings',
   'saveMcpNetworkPolicy', 'saveMcpPolicy', 'saveMcpToolSettings', 'saveModel',
   'saveProtectedPaths', 'saveProxy', 'saveSecuritySettings', 'saveToolsDisabled', 'saveToolsPolicy',
-  'scanGitRepos', 'scheduleRestore', 'setDefaultAgent', 'setDefaultClient', 'setProfilePassword', 'setProxyPassword', 'setWorkspacePolicy', 'setWorkspaceSetting',
+  'scanGitRepos', 'scheduleRestore', 'setDefaultAgent', 'setDefaultClient', 'setDefaultModel', 'setProfilePassword', 'setProxyPassword', 'setWorkspacePolicy', 'setWorkspaceSetting',
   'stopGeneration', 'summarizeSession', 'testProvider', 'testProxyRoute', 'testWebhookSubscription',
   'toggleAgent', 'toggleContextFile', 'toggleMessage', 'unlinkAgentSshKey',
   'updateDecisionSettings', 'updateEventBindingKey', 'updateEventsSettings', 'updateMcpRegistryEntry',
@@ -70,7 +70,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (270)', () => {
+  it('набор методов совпадает с зафиксированным (273)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

@@ -69,6 +69,20 @@ export interface EventsRuntimeSettings {
  */
 export type DecisionRuntimeSettings = Partial<DecisionConfig>;
 
+/**
+ * Модель по умолчанию инстанса — явная пара `provider` + `model`.
+ *
+ * Задаётся в UI (раздел «Модели») и хранится в runtime-настройках
+ * (`{dataDir}/settings.json`, ключ `defaultModel`); config.yaml
+ * (`llm.defaultProvider`/`llm.defaultModel`) — только fallback. Используется
+ * для новых сессий (в т.ч. из внешних событий) и как признак «дефолтной»
+ * модели/провайдера в ответах `/api/v2/models`/`/api/v2/providers`.
+ */
+export interface DefaultModelPair {
+  provider: string;
+  model: string;
+}
+
 export interface RuntimeSettings {
   /** Рабочий каталог по умолчанию, заданный через UI (раздел «Проекты»). */
   workspace?: string;
@@ -106,6 +120,8 @@ export interface RuntimeSettings {
   tokenRatios?: Record<string, number>;
   /** Агент по умолчанию (админка «Агенты»); отсутствие — `DEFAULT_AGENT_ID`. */
   defaultAgent?: string;
+  /** Модель по умолчанию инстанса (админка «Модели»); отсутствие — fallback из config. */
+  defaultModel?: DefaultModelPair;
   /**
    * ADR-075: политика для абсолютного workspace вне `workspacesRoot`
    * (`confirm` | `deny`); отсутствие — значение из config.yaml/env.
@@ -563,6 +579,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.defaultAgent;
+      return next;
+    });
+  }
+
+  /** Модель по умолчанию инстанса (админка «Модели»), undefined — не задана. */
+  async getDefaultModel(): Promise<DefaultModelPair | undefined> {
+    const settings = await this.load();
+    return settings.defaultModel;
+  }
+
+  async setDefaultModel(pair: DefaultModelPair): Promise<void> {
+    await this._update((current) => ({ ...current, defaultModel: pair }));
+  }
+
+  async clearDefaultModel(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.defaultModel;
       return next;
     });
   }

@@ -32,6 +32,7 @@ import type {
 } from '@itphx/synth-shared';
 import type {
   DecisionRuntimeSettings,
+  DefaultModelPair,
   EventsRuntimeSettings,
   LlmGatewayRuntimeSettings,
   RuntimeSettings,
@@ -241,6 +242,20 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearDefaultAgent(): Promise<void> {
     this._clear('defaultAgent');
+  }
+
+  async getDefaultModel(): Promise<DefaultModelPair | undefined> {
+    return this._settings.defaultModel
+      ? structuredClone(this._settings.defaultModel)
+      : undefined;
+  }
+
+  async setDefaultModel(pair: DefaultModelPair): Promise<void> {
+    this._patch({ defaultModel: pair });
+  }
+
+  async clearDefaultModel(): Promise<void> {
+    this._clear('defaultModel');
   }
 
   async getWorkspacePolicy(): Promise<WorkspaceOutsideRootPolicy | undefined> {

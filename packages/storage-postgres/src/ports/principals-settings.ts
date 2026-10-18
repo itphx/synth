@@ -42,6 +42,7 @@ const SECTION_KEYS = [
   'mcpNetworkPolicy',
   'egress',
   'defaultAgent',
+  'defaultModel',
   'workspacePolicy',
   'events',
   'decision',
@@ -267,6 +268,16 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
     },
     async clearDefaultAgent(): Promise<void> {
       await deleteSetting(conn, 'defaultAgent');
+    },
+
+    async getDefaultModel(): Promise<RuntimeSettingsValue<'defaultModel'> | undefined> {
+      return readSetting<RuntimeSettingsValue<'defaultModel'>>(conn, 'defaultModel');
+    },
+    async setDefaultModel(pair: RuntimeSettingsValue<'defaultModel'>): Promise<void> {
+      await writeSetting(conn, 'defaultModel', pair);
+    },
+    async clearDefaultModel(): Promise<void> {
+      await deleteSetting(conn, 'defaultModel');
     },
 
     async getWorkspacePolicy(): Promise<RuntimeSettingsValue<'workspacePolicy'> | undefined> {

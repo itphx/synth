@@ -258,3 +258,67 @@ describe('routes/providers (core): num_ctx / numCtx', () => {
     expect(bad.status).toBe(400);
   });
 });
+
+describe('routes/providers (core): default_provider из явной пары provider+model', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-providers-default-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function makeListApp(getDefaultModel?: () => { provider: string; model: string } | null) {
+    const providerStore = new JsonStore<ProviderConfig>({ dataDir: tmpDir, subdir: 'providers' });
+    const providerCache = new Map<string, ProviderConfig>();
+    await providerStore.save('__remote', {
+      name: '__remote', type: 'openai', baseUrl: 'http://remote.local', enabled: true,
+    });
+    await providerStore.save('itphx', {
+      name: 'itphx', type: 'openai', baseUrl: 'http://itphx.local', enabled: true,
+    });
+    await providerStore.save('ollama', {
+      name: 'ollama', type: 'ollama', baseUrl: 'http://ollama.local', enabled: true,
+    });
+    const app = createProviderRoutes(createMockAuth(), providerStore, providerCache, {
+      testEnabled: true,
+      getDefaultModel,
+    });
+    return app;
+  }
+
+  it('is_default/default_provider — ровно провайдер из пары, не «первый»', async () => {
+    const app = await makeListApp(() => ({ provider: 'ollama', model: 'qwen3:8b' }));
+    const body = await (await app.request('/')).json() as {
+      providers: Array<{ name: string; is_default: boolean }>;
+      default_provider: string;
+    };
+
+    expect(body.default_provider).toBe('ollama');
+    expect(body.providers.filter((p) => p.is_default).map((p) => p.name)).toEqual(['ollama']);
+  });
+
+  it('пара не задана — default_provider пуст и ни один провайдер не дефолтный', async () => {
+    const app = await makeListApp(undefined);
+    const body = await (await app.request('/')).json() as {
+      providers: Array<{ name: string; is_default: boolean }>;
+      default_provider: string;
+    };
+
+    expect(body.default_provider).toBe('');
+    expect(body.providers.every((p) => p.is_default === false)).toBe(true);
+  });
+
+  it('пара указывает на несуществующего провайдера — никто не дефолтный', async () => {
+    const app = await makeListApp(() => ({ provider: 'ghost', model: 'm1' }));
+    const body = await (await app.request('/')).json() as {
+      providers: Array<{ name: string; is_default: boolean }>;
+      default_provider: string;
+    };
+
+    expect(body.default_provider).toBe('ghost');
+    expect(body.providers.every((p) => p.is_default === false)).toBe(true);
+  });
+});

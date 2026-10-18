@@ -603,12 +603,17 @@ export async function createStandaloneDeps(
     // такие сессии не имели владельца и выпадали из `listSessions({ userId })`.
     resolveOwnerId: () => 'local',
     // ADR-089: дефолтные provider/model инстанса — чтобы сессия из внешнего события
-    // (напр. Telegram-шлюз) могла ответить без ручной проставки модели
-    // (паритет с сессией без явной модели; источник — llm.defaultProvider/defaultModel).
-    resolveLlmDefaults: () => ({
-      provider: config.llmDefaults?.provider,
-      model: config.llmDefaults?.model,
-    }),
+    // (напр. Telegram-шлюз) могла ответить без ручной проставки модели.
+    // Приоритет: runtime-пара «Модели» (provider+model), затем config.yaml
+    // (llm.defaultProvider/defaultModel). Явные значения сессии — выше (funnel).
+    resolveLlmDefaults: async () => {
+      const pair = await settingsStore.getDefaultModel();
+      if (pair) return { provider: pair.provider, model: pair.model };
+      return {
+        provider: config.llmDefaults?.provider,
+        model: config.llmDefaults?.model,
+      };
+    },
     // ADR-089: агент по умолчанию инстанса — чтобы сессия из внешнего события
     // (auto-bind/bind/ephemeral) фиксировала `settings.agentRole` и UI рисовал
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка

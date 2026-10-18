@@ -1,10 +1,16 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
-import type { JsonStoreLike } from '@itphx/synth-core';
+import type { DefaultModelPair, JsonStoreLike } from '@itphx/synth-core';
 import type { ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 import { createModelRoutes as createCoreModelRoutes } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
+
+/** Колбэки модели по умолчанию инстанса (runtime-пара provider+model). */
+export interface ModelRoutesDefaultOptions {
+  getDefaultModel?: () => DefaultModelPair | null | Promise<DefaultModelPair | null>;
+  setDefaultModel?: (pair: DefaultModelPair) => void | Promise<void>;
+}
 
 /**
  * Backend-обёртка над core-фабрикой моделей: добавляет только RBAC
@@ -17,6 +23,7 @@ export function createModelRoutes(
   providerStore: JsonStoreLike<ProviderConfig>,
   modelCache: Map<string, ModelConfig>,
   providerCache: Map<string, ProviderConfig>,
+  defaults: ModelRoutesDefaultOptions = {},
 ): Hono {
   const app = new Hono();
 
@@ -32,6 +39,8 @@ export function createModelRoutes(
       fetchMiddleware: [createRateLimiter(3, 120_000)],
       providerCache,
       supportSetAsDefault: true,
+      getDefaultModel: defaults.getDefaultModel,
+      setDefaultModel: defaults.setDefaultModel,
       messages: {
         idRequired: (c) => t('errors.validation.idRequired', undefined, c),
         modelNotFound: (c) => t('errors.notFound.model', undefined, c),

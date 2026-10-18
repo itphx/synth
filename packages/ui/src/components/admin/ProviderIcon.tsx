@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Icon, type IconName } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 
@@ -52,15 +53,7 @@ export function ProviderIcon({ icon, baseUrl, size = 20, className, title }: Pro
     case 'none': {
       const faviconUrl = getFaviconUrl(baseUrl)
       if (faviconUrl) {
-        return (
-          <img
-            src={faviconUrl}
-            width={size}
-            height={size}
-            className={cn('rounded', className)}
-            alt=""
-          />
-        )
+        return <ProviderImage src={faviconUrl} size={size} className={className} />
       }
       return <span title={title}><Icon name="cpu" className={cn('text-muted-foreground', className)} style={{ width: size, height: size }} /></span>
     }
@@ -72,11 +65,10 @@ export function ProviderIcon({ icon, baseUrl, size = 20, className, title }: Pro
     // Брендовая SVG
     case 'brand':
       return (
-        <img
+        <ProviderImage
           src={`/assets/providers/${value}.svg`}
-          width={size}
-          height={size}
-          className={cn('rounded', className)}
+          size={size}
+          className={className}
           alt={value}
         />
       )
@@ -84,19 +76,46 @@ export function ProviderIcon({ icon, baseUrl, size = 20, className, title }: Pro
     // data:image/... (favicon в base64) и URL favicon
     case 'image':
     case 'url':
-      return (
-        <img
-          src={icon}
-          width={size}
-          height={size}
-          className={cn('rounded', className)}
-          alt=""
-        />
-      )
+      return <ProviderImage src={icon} size={size} className={className} alt="" />
 
     default:
       return <Icon name="cpu" className={cn('text-muted-foreground', className)} style={{ width: size, height: size }} />
   }
+}
+
+/**
+ * `<img>` иконки провайдера с фоллбеком на `cpu`: битый favicon/URL/бренд
+ * не должен оставлять в интерфейсе «сломанную картинку».
+ */
+function ProviderImage({ src, size, className, alt }: { src: string; size: number; className?: string; alt?: string }) {
+  const [failed, setFailed] = useState(false)
+
+  // Новый src — снова пробуем загрузить (иначе фоллбек «залипнет»).
+  useEffect(() => {
+    setFailed(false)
+  }, [src])
+
+  if (failed) {
+    return (
+      <Icon
+        name="cpu"
+        data-testid="provider-icon-fallback"
+        className={cn('text-muted-foreground', className)}
+        style={{ width: size, height: size }}
+      />
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      width={size}
+      height={size}
+      className={cn('rounded', className)}
+      alt={alt ?? ''}
+      onError={() => setFailed(true)}
+    />
+  )
 }
 
 export const PROVIDER_RI_ICONS: IconName[] = [

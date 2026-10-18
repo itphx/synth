@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ModelConfig, ProviderConfig, ContextSource } from '@itphx/synth-shared';
+import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { hasPriceInput, lookupContextWindow, parseCurrencyInput } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/index.js';
 
@@ -23,6 +24,47 @@ function hasAnyPrice(model: ModelConfig): boolean {
     || model.outputPrice !== undefined
     || model.cacheReadPrice !== undefined
     || model.cacheWritePrice !== undefined;
+}
+
+/** Пары snake_case/camelCase для ценовых полей модели. */
+const PRICE_FIELDS = [
+  ['input_price', 'inputPrice'],
+  ['output_price', 'outputPrice'],
+  ['cache_read_price', 'cacheReadPrice'],
+  ['cache_write_price', 'cacheWritePrice'],
+] as const;
+
+/**
+ * Значение ценового поля из body с явным null-контрактом:
+ * - поле не передано → сохранить existing;
+ * - `null` → очистить (undefined);
+ * - значение → записать.
+ *
+ * UI очищает поле ввода, отправляя `null`; `undefined` в JSON исчезает и
+ * раньше оставлял старую цену (баг «очистка не сбрасывает цену»).
+ */
+function resolvePriceField(
+  body: Record<string, unknown>,
+  snake: string,
+  camel: string,
+  existing: number | undefined,
+): number | undefined {
+  const key = snake in body ? snake : (camel in body ? camel : null);
+  if (!key) return existing;
+  const raw = body[key];
+  if (raw === null) return undefined;
+  if (raw === undefined) return existing;
+  return raw as number;
+}
+
+/** Есть ли в body хотя бы одно непустое ценовое значение (ручной ввод). */
+function hasConcretePriceInput(body: Record<string, unknown>): boolean {
+  return PRICE_FIELDS.some(([snake, camel]) => {
+    const key = snake in body ? snake : (camel in body ? camel : null);
+    if (!key) return false;
+    const raw = body[key];
+    return raw !== null && raw !== undefined;
+  });
 }
 
 /**
@@ -79,8 +121,17 @@ export interface ModelRoutesOptions {
   fetchMiddleware?: Middleware[];
   /** Кеш провайдеров: нужен для set_as_default (обновление provider.defaultModel). */
   providerCache?: Map<string, ProviderConfig>;
-  /** Поддержать `set_as_default` в POST / (backend; в core выключено). */
+  /** Поддержать `set_as_default` в POST / (core и backend; в core включено с явной runtime-парой). */
   supportSetAsDefault?: boolean;
+  /**
+   * Модель по умолчанию инстанса (явная пара provider+model). Задана —
+   * `isDefault` в GET `/` вычисляется только по ней; не задана — legacy-поведение
+   * (`ModelConfig.isDefault` / `provider.defaultModel`), чтобы не ломать
+   * существующие инсталляции.
+   */
+  getDefaultModel?: () => DefaultModelPair | null | Promise<DefaultModelPair | null>;
+  /** Записать модель по умолчанию (POST `/` с `set_as_default: true`). */
+  setDefaultModel?: (pair: DefaultModelPair) => void | Promise<void>;
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<ModelRouteMessages>;
 }
@@ -113,6 +164,8 @@ export function createModelRoutes(
   const fetchMiddleware = opts?.fetchMiddleware ?? [];
   const providerCache = opts?.providerCache;
   const supportSetAsDefault = opts?.supportSetAsDefault ?? false;
+  const getDefaultModel = opts?.getDefaultModel;
+  const setDefaultModel = opts?.setDefaultModel;
   const messages: ModelRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
 
   // POST /fetch — синхронизировать модели с провайдеров (id конфигурируются
@@ -323,6 +376,11 @@ export function createModelRoutes(
 
     const sortedProviderNames = [...groups.keys()].sort((a, b) => a.localeCompare(b, 'ru'));
 
+    // Модель по умолчанию — явная пара provider+model (runtime-настройка или
+    // config-fallback). Не задана — legacy-поведение (`isDefault` модели /
+    // `provider.defaultModel`), чтобы не ломать существующие инсталляции.
+    const defaultPair = getDefaultModel ? await getDefaultModel() : null;
+
     const result = sortedProviderNames.map((providerName) => {
       const groupModels = groups.get(providerName)!;
       const provider = providerMap.get(providerName);
@@ -342,7 +400,9 @@ export function createModelRoutes(
           provider: m.provider,
           description: m.description,
           enabled: m.enabled,
-          isDefault: m.isDefault || provider?.defaultModel === m.name,
+          isDefault: defaultPair
+            ? m.provider === defaultPair.provider && m.name === defaultPair.model
+            : (m.isDefault || provider?.defaultModel === m.name),
           contextWindow: m.contextWindow,
           contextSource: m.contextSource || 'unknown',
           maxOutputTokens: m.maxOutputTokens,
@@ -376,6 +436,27 @@ export function createModelRoutes(
     }
     const currency = resolvedCurrency.currency;
 
+    const inputPrice = resolvePriceField(body, 'input_price', 'inputPrice', existing?.inputPrice);
+    const outputPrice = resolvePriceField(body, 'output_price', 'outputPrice', existing?.outputPrice);
+    const cacheReadPrice = resolvePriceField(body, 'cache_read_price', 'cacheReadPrice', existing?.cacheReadPrice);
+    const cacheWritePrice = resolvePriceField(body, 'cache_write_price', 'cacheWritePrice', existing?.cacheWritePrice);
+
+    // `price_source: null` — явно сбросить источник. Иначе: ручной ввод цены
+    // помечает manual; очистка последней цены сбрасывает источник; очистка
+    // одного поля при остальных ценах источник не трогает.
+    const explicitSource = 'price_source' in body
+      ? body.price_source
+      : ('priceSource' in body ? body.priceSource : undefined);
+    const hasAnyPriceValue = inputPrice !== undefined
+      || outputPrice !== undefined
+      || cacheReadPrice !== undefined
+      || cacheWritePrice !== undefined;
+    const priceSource: ModelConfig['priceSource'] = explicitSource !== undefined
+      ? (explicitSource === null ? undefined : explicitSource)
+      : (hasPriceInput(body) && !hasAnyPriceValue)
+        ? undefined
+        : (hasConcretePriceInput(body) ? 'manual' : existing?.priceSource);
+
     const model: ModelConfig = {
       id: modelId,
       name: body.name || existing?.name || modelId,
@@ -388,25 +469,26 @@ export function createModelRoutes(
         : (body.contextWindow ?? existing?.contextWindow),
       contextSource: body.context_source ?? body.contextSource ?? existing?.contextSource ?? (body.context_window ? 'manual' : 'unknown'),
       maxOutputTokens: body.max_output_tokens ?? body.maxOutputTokens ?? existing?.maxOutputTokens,
-      inputPrice: body.input_price ?? body.inputPrice ?? existing?.inputPrice,
-      outputPrice: body.output_price ?? body.outputPrice ?? existing?.outputPrice,
-      cacheReadPrice: body.cache_read_price ?? body.cacheReadPrice ?? existing?.cacheReadPrice,
-      cacheWritePrice: body.cache_write_price ?? body.cacheWritePrice ?? existing?.cacheWritePrice,
-      priceSource: body.price_source ?? body.priceSource
-        ?? (hasPriceInput(body) ? 'manual' : existing?.priceSource),
+      inputPrice,
+      outputPrice,
+      cacheReadPrice,
+      cacheWritePrice,
+      priceSource,
       currency,
     };
 
     await modelStore.save(modelId, model);
     modelCache.set(modelId, model);
 
-    // set_as_default (backend): обновить провайдера и снять isDefault с остальных моделей.
-    if (supportSetAsDefault && providerCache && body.set_as_default && provider) {
+    // set_as_default: обновить провайдера (legacy) и снять isDefault с остальных
+    // моделей, затем записать явную пару provider+model в runtime-настройки —
+    // только если провайдер реально существует.
+    if (supportSetAsDefault && body.set_as_default && provider) {
       const prov = await providerStore.load(provider);
       if (prov) {
         prov.defaultModel = model.name;
         await providerStore.save(provider, prov);
-        providerCache.set(provider, prov);
+        providerCache?.set(provider, prov);
 
         // Снять isDefault с других моделей того же провайдера
         const allModels = await modelStore.list();
@@ -417,6 +499,8 @@ export function createModelRoutes(
             modelCache.set(m.id, m);
           }
         }
+
+        await setDefaultModel?.({ provider, model: model.name });
       }
     }
 

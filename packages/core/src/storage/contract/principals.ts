@@ -220,6 +220,27 @@ export function describeSettingsRepository(
       expect(await repo.getTokenRatios()).toEqual({ 'model-x': 3.5 });
     });
 
+    it('defaultModel: set/get/clear пары provider+model, независимо от других секций', async () => {
+      const { repo } = await make();
+      expect(await repo.getDefaultModel()).toBeUndefined();
+
+      await repo.setWorkspace('/tmp/ws');
+      await repo.setDefaultAgent('assistant');
+      await repo.setDefaultModel({ provider: 'openai', model: 'gpt-4o' });
+      expect(await repo.getDefaultModel()).toEqual({ provider: 'openai', model: 'gpt-4o' });
+      // Соседние секции не затронуты.
+      expect(await repo.getWorkspace()).toBe('/tmp/ws');
+      expect(await repo.getDefaultAgent()).toBe('assistant');
+
+      await repo.setDefaultModel({ provider: 'ollama', model: 'qwen3:8b' });
+      expect(await repo.getDefaultModel()).toEqual({ provider: 'ollama', model: 'qwen3:8b' });
+
+      await repo.clearDefaultModel();
+      expect(await repo.getDefaultModel()).toBeUndefined();
+      expect(await repo.getWorkspace()).toBe('/tmp/ws');
+      expect(await repo.getDefaultAgent()).toBe('assistant');
+    });
+
     it('proxy: set/get/clear runtime-override (без секретов)', async () => {
       const { repo } = await make();
       expect(await repo.getProxySettings()).toBeUndefined();

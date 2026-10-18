@@ -169,6 +169,45 @@ describe('RuntimeSettingsStore.defaultAgent', () => {
   });
 });
 
+describe('RuntimeSettingsStore.defaultModel', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-runtime-settings-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('getDefaultModel возвращает undefined, если не задана', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await store.getDefaultModel()).toBeUndefined();
+  });
+
+  it('set/getDefaultModel сохраняет пару provider+model; переживает рестарт', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setDefaultModel({ provider: 'openai', model: 'gpt-4o' });
+    expect(await store.getDefaultModel()).toEqual({ provider: 'openai', model: 'gpt-4o' });
+
+    const restarted = new RuntimeSettingsStore({ dataDir: tmpDir });
+    expect(await restarted.getDefaultModel()).toEqual({ provider: 'openai', model: 'gpt-4o' });
+  });
+
+  it('clearDefaultModel удаляет только defaultModel', async () => {
+    const store = new RuntimeSettingsStore({ dataDir: tmpDir });
+    await store.setDefaultModel({ provider: 'ollama', model: 'qwen3:8b' });
+    await store.setDefaultAgent('assistant');
+    await store.setToolsPolicy('available');
+    await store.clearDefaultModel();
+
+    const settings = await store.load();
+    expect(settings.defaultModel).toBeUndefined();
+    expect(settings.defaultAgent).toBe('assistant');
+    expect(settings.toolsPolicy).toBe('available');
+  });
+});
+
 describe('mergeMcpNetworkPolicy (ADR-071 §2.3.1)', () => {
   const config = { mode: 'deny' as const, list: ['10.0.0.0/8'] };
   const runtime = { mode: 'allow' as const, list: ['192.168.0.0/16'] };

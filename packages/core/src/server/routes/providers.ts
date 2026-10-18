@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ProviderConfig } from '@itphx/synth-shared';
+import type { DefaultModelPair } from '../../storage/runtime-settings.js';
 import { parseCurrencyInput, renderIcon } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../index.js';
 
@@ -67,6 +68,12 @@ export interface ProviderRoutesOptions {
   testGuard?: Middleware;
   /** Доп. middleware для POST /:name/test (например, rate limiter), в порядке применения. */
   testMiddleware?: Middleware[];
+  /**
+   * Модель по умолчанию инстанса (явная пара provider+model) — из неё берутся
+   * `is_default`/`default_provider` в GET `/`. Не задан/`null` — дефолтного
+   * провайдера нет (никаких «первый по порядку»).
+   */
+  getDefaultModel?: () => DefaultModelPair | null | Promise<DefaultModelPair | null>;
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<ProviderRouteMessages>;
 }
@@ -101,7 +108,10 @@ export function createProviderRoutes(
 
   app.get('/', auth.requireAuth, async (c) => {
     const providers = await store.list();
-    const defaultProvider = providers.find((p) => !p.name.startsWith('__'));
+    // Модель по умолчанию — явная пара provider+model (runtime-настройка или
+    // config-fallback), а не «первый провайдер в каталоге».
+    const pair = opts.getDefaultModel ? await opts.getDefaultModel() : null;
+    const defaultProviderName = pair?.provider ?? '';
     return c.json({
       providers: providers.map((p) => ({
         name: p.name,
@@ -109,12 +119,12 @@ export function createProviderRoutes(
         url: p.baseUrl || '',
         model: p.defaultModel || '',
         enabled: p.enabled !== false,
-        is_default: p === defaultProvider,
+        is_default: pair?.provider === p.name,
         currency: p.currency,
         num_ctx: p.numCtx,
         ...renderIcon(p.icon, p.baseUrl),
       })),
-      default_provider: defaultProvider?.name || '',
+      default_provider: defaultProviderName,
     });
   });
 

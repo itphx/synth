@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { AuthKit } from '../auth/middleware.js';
 import type { JsonStoreLike } from '@itphx/synth-core';
+import type { DefaultModelPair } from '@itphx/synth-core';
 import type { EgressPolicy, ProviderConfig } from '@itphx/synth-shared';
 import {
   createProviderRoutes as createCoreProviderRoutes,
@@ -33,6 +34,7 @@ export function createProviderRoutes(
   store: JsonStoreLike<ProviderConfig>,
   providerCache: Map<string, ProviderConfig>,
   egress: ProviderRoutesEgressOptions = {},
+  getDefaultModel?: () => DefaultModelPair | null | Promise<DefaultModelPair | null>,
 ): Hono {
   const app = new Hono();
 
@@ -150,6 +152,7 @@ export function createProviderRoutes(
       testEnabled: true,
       testGuard: kit.requireAdmin,
       testMiddleware: [createRateLimiter(5, 60_000)],
+      getDefaultModel,
       messages: {
         nameRequired: (c) => t('errors.validation.nameRequired', undefined, c),
         providerNotFound: (c) => t('errors.notFound.provider', undefined, c),

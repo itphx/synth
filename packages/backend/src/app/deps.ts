@@ -583,11 +583,16 @@ export async function createBackendDeps(
     },
     // ADR-089: дефолтные provider/model инстанса (llm.defaultProvider/defaultModel)
     // — для сессий из внешних событий (materialize ephemeral/bind), чтобы агент
-    // мог ответить без ручной простановки модели.
-    resolveLlmDefaults: () => ({
-      provider: config.synth.llm.defaultProvider,
-      model: config.synth.llm.defaultModel,
-    }),
+    // мог ответить без ручной простановки модели. Приоритет: runtime-пара
+    // «Модели» (provider+model), затем config.
+    resolveLlmDefaults: async () => {
+      const pair = await settingsStore.getDefaultModel();
+      if (pair) return { provider: pair.provider, model: pair.model };
+      return {
+        provider: config.synth.llm.defaultProvider,
+        model: config.synth.llm.defaultModel,
+      };
+    },
     // ADR-089: агент по умолчанию инстанса — чтобы сессия из внешнего события
     // (auto-bind/bind/ephemeral) фиксировала `settings.agentRole` и UI рисовал
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
