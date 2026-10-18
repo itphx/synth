@@ -37,6 +37,7 @@ import { logsApi } from './logs'
 import { egressApi } from './egress'
 import { proxyApi } from './proxy'
 import { tlsApi } from './tls'
+import { observabilityApi } from './observability'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
 
@@ -148,6 +149,17 @@ export type {
   TlsValidateResult,
 } from './tls'
 export type {
+  MetricsSource,
+  MetricsTokenSource,
+  MetricsStorageState,
+  MetricsStorageBackend,
+  MetricsTokenStatus,
+  MetricsEndpoints,
+  MetricsTokenResponse,
+  MetricsSettingsInfo,
+  MetricsStatus,
+} from './observability'
+export type {
   CreateEventBindingKeyInput,
   UpdateEventBindingKeyPatch,
   EventsSettings,
@@ -240,6 +252,7 @@ export const synthApi = {
   ...egressApi,
   ...proxyApi,
   ...tlsApi,
+  ...observabilityApi,
   ...hybridApi,
   ...instructionsApi,
 }

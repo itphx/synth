@@ -29,4 +29,15 @@ describe('SettingsModal — активная категория недоступ
     const visible = visibleFor(['ADMIN'])
     expect(resolveActiveSettingsPage(visible, 'eventsConfig')).toBe('eventsConfig')
   })
+
+  it('категория «Метрики» видна ADMIN и скрыта USER', () => {
+    expect(visibleFor(['ADMIN']).some((cat) => cat.id === 'metrics')).toBe(true)
+    expect(visibleFor(['USER']).some((cat) => cat.id === 'metrics')).toBe(false)
+    expect(visibleFor(['LEAD']).some((cat) => cat.id === 'metrics')).toBe(false)
+  })
+
+  it('«Метрики» идут сразу после «Обслуживания» в админ-блоке', () => {
+    const ids = CATEGORIES.map((cat) => cat.id)
+    expect(ids.indexOf('metrics')).toBe(ids.indexOf('maintenance') + 1)
+  })
 })
