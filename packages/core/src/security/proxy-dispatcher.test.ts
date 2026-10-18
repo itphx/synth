@@ -5,7 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { Dispatcher } from 'undici';
-import { resolveProxyConfig, type ResolvedProxyConfig } from '@itphx/synth-shared';
+import {
+  resolveProxyConfig,
+  type ProxyConfig,
+  type ResolvedProxyConfig,
+} from '@itphx/synth-shared';
 import { EgressDispatcher } from './proxy-dispatcher.js';
 import { egressFetch } from './tls.js';
 import { startFakeProxy, startFakeTarget, type FakeProxy, type FakeTarget } from '../test-helpers/fake-proxy.js';
@@ -43,6 +47,14 @@ function dispatcherFor(options: {
   );
   if (options.proxyTls) proxy.tls = { rejectUnauthorized: true, ...options.proxyTls };
   return new EgressDispatcher({ proxy, tls: options.tls });
+}
+
+/** Dispatcher из «сырой» секции `proxy` (профили/правила). */
+function profiledDispatcher(
+  proxy: Partial<ProxyConfig>,
+  env: NodeJS.ProcessEnv = {},
+): EgressDispatcher {
+  return new EgressDispatcher({ proxy: resolveProxyConfig({ proxy }, env) });
 }
 
 /** Достаёт код ошибки из цепочки `cause` (undici оборачивает dispatch-ошибки). */
@@ -514,5 +526,262 @@ describe('EgressDispatcher (ADR-099 D1)', () => {
     }
     expect(error).toBeDefined();
     expect(target.requests).toBe(0);
+  });
+});
+
+describe('EgressDispatcher: профили маршрутизации', () => {
+  it('mode=all: default-профиль для всех, правило ведёт в другой профиль', async () => {
+    const proxyDefault = await startFakeProxy({ mode: 'tunnel' });
+    const proxyLlm = await startFakeProxy({ mode: 'tunnel' });
+    const targetA = await startFakeTarget();
+    const targetB = await startFakeTarget();
+    cleanups.push(
+      () => targetA.close(),
+      () => targetB.close(),
+      () => proxyDefault.close(),
+      () => proxyLlm.close(),
+    );
+    const dispatcher = profiledDispatcher({
+      mode: 'all',
+      fromEnv: false,
+      profiles: {
+        default: { url: proxyDefault.url },
+        llm: { label: 'LLM', url: proxyLlm.url },
+      },
+      rules: [
+        {
+          id: 'r_llm',
+          hosts: [`127.0.0.1:${targetB.port}`],
+          action: 'proxy',
+          profile: 'llm',
+        },
+      ],
+    });
+    cleanups.push(() => dispatcher.close());
+
+    expect(dispatcher.proxyRouteFor(`${targetA.url}/x`)).toMatchObject({
+      action: 'proxy',
+      reason: 'default',
+      profile: 'default',
+    });
+    expect(dispatcher.proxyRouteFor(`${targetB.url}/x`)).toMatchObject({
+      action: 'proxy',
+      reason: 'rule',
+      profile: 'llm',
+    });
+    expect(dispatcher.proxyProfileFor(`${targetB.url}/x`)?.url).toBe(proxyLlm.url);
+
+    // Повторные запросы — тот же агент профиля, без смешивания.
+    for (const target of [targetA, targetB, targetA, targetB]) {
+      const res = await egressFetch(`${target.url}/x`, {}, { dispatcher });
+      expect(res.status).toBe(200);
+    }
+    // Профили не смешиваются: каждый прокси туннелирует только свой target
+    // (keep-alive переиспользует соединение — CONNECT может быть один).
+    expect([...new Set(proxyDefault.connectTargets)]).toEqual([`127.0.0.1:${targetA.port}`]);
+    expect([...new Set(proxyLlm.connectTargets)]).toEqual([`127.0.0.1:${targetB.port}`]);
+    expect(targetA.requests).toBe(2);
+    expect(targetB.requests).toBe(2);
+  });
+
+  it('правило action=direct → прямое соединение, прокси не задействован', async () => {
+    const proxy = await startFakeProxy({ mode: 'tunnel' });
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => proxy.close());
+    const dispatcher = profiledDispatcher({
+      mode: 'all',
+      fromEnv: false,
+      profiles: { default: { url: proxy.url } },
+      rules: [{ hosts: [`127.0.0.1:${target.port}`], action: 'direct' }],
+    });
+    cleanups.push(() => dispatcher.close());
+
+    const via: string[] = [];
+    const res = await egressFetch(`${target.url}/x`, {}, { dispatcher, onVia: (v) => via.push(v) });
+    expect(res.status).toBe(200);
+    expect(via).toEqual(['direct']);
+    expect(proxy.connects + proxy.absoluteRequests).toBe(0);
+    expect(dispatcher.proxyRouteFor(target.url)).toMatchObject({
+      action: 'direct',
+      reason: 'rule',
+    });
+  });
+
+  it('mode=selected: без правила — direct (no-match), с правилом — proxy', async () => {
+    const proxy = await startFakeProxy({ mode: 'tunnel' });
+    const proxied = await startFakeTarget();
+    const directTarget = await startFakeTarget();
+    cleanups.push(
+      () => proxied.close(),
+      () => directTarget.close(),
+      () => proxy.close(),
+    );
+    const dispatcher = profiledDispatcher({
+      mode: 'selected',
+      fromEnv: false,
+      profiles: { llm: { url: proxy.url } },
+      rules: [
+        {
+          hosts: [`127.0.0.1:${proxied.port}`],
+          action: 'proxy',
+          profile: 'llm',
+        },
+      ],
+    });
+    cleanups.push(() => dispatcher.close());
+
+    await egressFetch(`${proxied.url}/x`, {}, { dispatcher });
+    await egressFetch(`${directTarget.url}/x`, {}, { dispatcher });
+    expect(proxy.connects).toBe(1);
+    expect(proxied.requests).toBe(1);
+    expect(directTarget.requests).toBe(1);
+    expect(dispatcher.proxyRouteFor(directTarget.url)).toMatchObject({
+      action: 'direct',
+      reason: 'no-match',
+    });
+  });
+
+  it('профиль с собственными URL и Basic-кредами (env профиля)', async () => {
+    const expected = `Basic ${Buffer.from('user:pass', 'utf8').toString('base64')}`;
+    const proxy = await startFakeProxy({ mode: 'tunnel', requireAuth: expected });
+    const other = await startFakeProxy({ mode: 'tunnel' });
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => proxy.close(), () => other.close());
+    const dispatcher = profiledDispatcher(
+      {
+        mode: 'all',
+        fromEnv: false,
+        profiles: {
+          default: { url: other.url },
+          secure: {
+            label: 'Secure',
+            url: proxy.url,
+            auth: { type: 'basic', username: 'user' },
+          },
+        },
+        rules: [
+          { hosts: [`127.0.0.1:${target.port}`], action: 'proxy', profile: 'secure' },
+        ],
+      },
+      { SYNTH_PROXY_SECURE_PASSWORD: 'pass' },
+    );
+    cleanups.push(() => dispatcher.close());
+
+    const res = await egressFetch(`${target.url}/x`, {}, { dispatcher });
+    expect(res.status).toBe(200);
+    expect(proxy.connectAuthHeaders).toEqual([expected]);
+    expect(other.connects + other.absoluteRequests).toBe(0);
+    // Креды не утекают в описание профиля/маршрута.
+    expect(dispatcher.proxyProfileFor(target.url)?.auth).toEqual({
+      type: 'basic',
+      username: 'user',
+    });
+  });
+
+  it('noProxy выигрывает у профилей/правил', async () => {
+    const proxy = await startFakeProxy({ mode: 'tunnel' });
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => proxy.close());
+    const dispatcher = profiledDispatcher({
+      mode: 'all',
+      fromEnv: false,
+      noProxy: ['127.0.0.1'],
+      profiles: { default: { url: proxy.url } },
+      rules: [
+        { hosts: [`127.0.0.1:${target.port}`], action: 'proxy', profile: 'default' },
+      ],
+    });
+    cleanups.push(() => dispatcher.close());
+
+    const res = await egressFetch(`${target.url}/x`, {}, { dispatcher });
+    expect(res.status).toBe(200);
+    expect(proxy.connects + proxy.absoluteRequests).toBe(0);
+    expect(dispatcher.proxyRouteFor(target.url)).toMatchObject({
+      action: 'direct',
+      reason: 'no-proxy',
+    });
+  });
+
+  it('target TLS и TLS прокси независимы (профиль → proxyTls, security.tls → requestTls)', async () => {
+    const tlsTarget = createServer({ cert: TARGET_CERT, key: TARGET_KEY }, (_req, res) => {
+      res.writeHead(200);
+      res.end('tls-ok');
+    });
+    await new Promise<void>((resolve) => tlsTarget.listen(0, '127.0.0.1', () => resolve()));
+    const targetPort = (tlsTarget.address() as AddressInfo).port;
+    cleanups.push(() => new Promise<void>((resolve) => tlsTarget.close(() => resolve())));
+
+    const proxy = await startFakeProxy({
+      mode: 'tunnel',
+      tls: { key: PROXY_KEY, cert: PROXY_CERT },
+    });
+    cleanups.push(() => proxy.close());
+
+    const dispatcher = new EgressDispatcher({
+      proxy: resolveProxyConfig({
+        proxy: {
+          mode: 'all',
+          fromEnv: false,
+          profiles: {
+            default: {
+              url: `https://localhost:${proxy.port}`,
+              tls: { caPem: PROXY_CERT },
+            },
+          },
+        },
+      }),
+      tls: { ca: TARGET_CERT, rejectUnauthorized: true },
+    });
+    cleanups.push(() => dispatcher.close());
+
+    const origin = `https://127.0.0.1:${targetPort}`;
+    // TLS к прокси — из профиля, TLS к цели — из security.tls (независимы).
+    expect(dispatcher.proxyProfileFor(origin)?.tls?.ca).toBe(PROXY_CERT);
+    expect(dispatcher.requestTlsFor(origin).ca).toBe(TARGET_CERT);
+
+    const res = await egressFetch(`${origin}/x`, {}, { dispatcher });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('tls-ok');
+    expect(proxy.connects).toBe(1);
+  });
+
+  it('SOCKS5 из именованного профиля (mode=all)', async () => {
+    const socks = await startFakeSocks5Proxy();
+    const target = await startFakeTarget();
+    cleanups.push(() => target.close(), () => socks.close());
+    const dispatcher = profiledDispatcher({
+      mode: 'all',
+      fromEnv: false,
+      profiles: { default: { url: socks.url } },
+    });
+    cleanups.push(() => dispatcher.close());
+
+    const res = await egressFetch(`${target.url}/x`, {}, { dispatcher });
+    expect(res.status).toBe(200);
+    expect(socks.connections).toBe(1);
+    expect(socks.targets).toEqual([`127.0.0.1:${target.port}`]);
+  });
+
+  it('legacy-default: синтетический профиль, маршрут default, TLS из config.tls', () => {
+    const proxy = resolveProxyConfig(
+      { proxy: { url: 'http://legacy:3128', fromEnv: false } },
+      {},
+    );
+    proxy.tls = { rejectUnauthorized: false };
+    const dispatcher = new EgressDispatcher({ proxy });
+
+    expect(dispatcher.proxyRouteFor('https://example.com/x')).toMatchObject({
+      action: 'proxy',
+      reason: 'default',
+      profile: 'default',
+      proxyUrl: 'http://legacy:3128',
+    });
+    expect(dispatcher.proxyProfileFor('https://example.com/x')).toMatchObject({
+      name: 'default',
+      legacy: true,
+      tls: { rejectUnauthorized: false },
+    });
+    expect(dispatcher.routeFor('https://example.com/x')).toBe('proxy');
+    expect(dispatcher.plannedVia('https://example.com/x')).toBe('proxy');
   });
 });

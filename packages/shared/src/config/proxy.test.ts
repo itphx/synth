@@ -256,6 +256,9 @@ describe('redactProxyUrl / proxyStatus (секреты не утекают)', ()
     const status = proxyStatus({
       enabled: true,
       source: 'config',
+      mode: 'all',
+      profiles: {},
+      rules: [],
       url: 'http://user:secret@proxy:3128',
       httpProxy: 'http://user:secret@http:3128',
       noProxy: [],

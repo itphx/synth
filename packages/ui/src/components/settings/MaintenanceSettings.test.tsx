@@ -40,6 +40,9 @@ const mocks = vi.hoisted(() => ({
   cancelRestore: vi.fn(),
   listAudit: vi.fn(),
   clearAudit: vi.fn(),
+  getRestartStatus: vi.fn(),
+  restartInstance: vi.fn(),
+  getHealth: vi.fn(),
   notify: vi.fn(),
 }))
 
@@ -197,8 +200,32 @@ const VALIDATION_UPLOAD: RestoreValidation = { ...VALIDATION_OK, staged: 'upload
 
 const VALIDATION_FAIL: RestoreValidation = { ok: false, problem: 'checksum mismatch' }
 
-const AUDIT_ENTRIES: MaintenanceAuditEntry[] = [
-  {
+/** Restart: статус для режима `disabled` (default-дефолт мока). */
+const RESTART_DISABLED = {
+  supported: false,
+  mode: 'disabled' as const,
+  reason: 'SYNTH_RESTART_MODE=disabled (или не задан)',
+  startedAt: '2026-10-17T00:00:00.000Z',
+  version: '1.2.3',
+}
+
+/** Restart: статус для режима `process`. */
+const RESTART_PROCESS = {
+  supported: true,
+  mode: 'process' as const,
+  startedAt: '2026-10-17T00:00:00.000Z',
+  version: '1.2.3',
+}
+
+/** Restart: ответ 202 на POST /maintenance/restart. */
+const RESTART_RESPONSE = {
+  status: 'restarting' as const,
+  restartId: 'rst_test_1',
+  mode: 'process' as const,
+  startedAt: RESTART_PROCESS.startedAt,
+}
+
+const AUDIT_ENTRIES: MaintenanceAuditEntry[] = [  {
     id: 'ma_2',
     ts: '2026-10-16T12:30:00.000Z',
     op: 'backup.created',
@@ -240,7 +267,7 @@ async function selectOption(trigger: HTMLElement, label: string): Promise<void> 
   })
 }
 
-async function renderSettings(): Promise<HTMLElement> {
+async function renderSettings(onReload?: () => void): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -250,7 +277,7 @@ async function renderSettings(): Promise<HTMLElement> {
     root.render(
       <I18nProvider>
         <TooltipProvider>
-          <MaintenanceSettings />
+          <MaintenanceSettings onReload={onReload} />
         </TooltipProvider>
       </I18nProvider>,
     )
@@ -288,6 +315,14 @@ beforeEach(() => {
   mocks.cancelRestore.mockResolvedValue({ cancelled: true })
   mocks.listAudit.mockResolvedValue({ entries: AUDIT_ENTRIES })
   mocks.clearAudit.mockResolvedValue({ cleared: 2 })
+  mocks.getRestartStatus.mockResolvedValue(RESTART_DISABLED)
+  mocks.restartInstance.mockResolvedValue(RESTART_RESPONSE)
+  mocks.getHealth.mockResolvedValue({
+    status: 'healthy',
+    version: '1.2.3',
+    time: '2026-10-17T00:00:00.000Z',
+    startedAt: RESTART_PROCESS.startedAt,
+  })
   vi.mocked(confirm).mockResolvedValue(true)
   anchorClickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 })
@@ -613,6 +648,70 @@ describe('MaintenanceSettings — админ-раздел «Обслуживан
   })
 })
 
+describe('MaintenanceSettings — перезапуск инстанса (restart)', () => {
+  it('disabled: показывает причину и не показывает кнопку', async () => {
+    const container = await renderSettings()
+    const note = container.querySelector('[data-testid="maintenance-restart-disabled"]')
+    expect(note).toBeTruthy()
+    expect(note?.textContent).toContain('SYNTH_RESTART_MODE=disabled')
+    expect(container.querySelector('[data-testid="maintenance-restart-button"]')).toBeNull()
+  })
+
+  it('process: предупреждение о супервизоре, кнопка, confirm и POST', async () => {
+    mocks.getRestartStatus.mockResolvedValue(RESTART_PROCESS)
+    const container = await renderSettings()
+
+    const hint = container.querySelector('[data-testid="maintenance-restart-hint"]')
+    expect(hint?.textContent).toContain('external supervisor')
+
+    await clickTestId(container, 'maintenance-restart-button')
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Restart instance' }),
+    )
+    expect(mocks.restartInstance).toHaveBeenCalledOnce()
+    expect(container.querySelector('[data-testid="maintenance-restart-progress"]')).toBeTruthy()
+  })
+
+  it('poll: новый startedAt в /health → перезагрузка страницы', async () => {
+    mocks.getRestartStatus.mockResolvedValue(RESTART_PROCESS)
+    mocks.getHealth
+      .mockResolvedValueOnce({
+        status: 'healthy',
+        version: '1.2.3',
+        time: '2026-10-17T00:00:00.000Z',
+        startedAt: RESTART_PROCESS.startedAt,
+      })
+      .mockResolvedValue({
+        status: 'healthy',
+        version: '1.2.3',
+        time: '2026-10-17T00:05:00.000Z',
+        startedAt: '2026-10-17T00:05:00.000Z',
+      })
+    const onReload = vi.fn()
+    const container = await renderSettings(onReload)
+
+    await clickTestId(container, 'maintenance-restart-button')
+    expect(onReload).not.toHaveBeenCalled()
+
+    // Первый опрос (1 c) видит старый startedAt, второй — новый.
+    await vi.waitFor(() => expect(onReload).toHaveBeenCalledOnce(), { timeout: 6000 })
+  })
+
+  it('ошибка сервера (409/сеть) показывается в секции', async () => {
+    mocks.getRestartStatus.mockResolvedValue(RESTART_PROCESS)
+    mocks.restartInstance.mockRejectedValue(
+      new Error('Restart is unavailable: the instance runs without a supervisor'),
+    )
+    const container = await renderSettings()
+
+    await clickTestId(container, 'maintenance-restart-button')
+    const error = container.querySelector('[data-testid="maintenance-restart-error"]')
+    expect(error).toBeTruthy()
+    expect(error?.textContent).toContain('Restart is unavailable')
+    expect(container.querySelector('[data-testid="maintenance-restart-progress"]')).toBeNull()
+  })
+})
+
 describe('MaintenanceSettings — журнал обслуживания (ADR-092)', () => {
   it('загружает журнал и рендерит записи (операция, статус, автор, сводка details)', async () => {
     const container = await renderSettings()
@@ -753,5 +852,13 @@ describe('MaintenanceSettings — утилиты, права (ADMIN) и i18n (AD
     expect(ruDict['maintenance.backups.encryptedCli']).toBeTruthy()
     expect(enDict['maintenance.backups.metaUnavailable']).toBeTruthy()
     expect(ruDict['maintenance.backups.metaUnavailable']).toBeTruthy()
+    expect(enDict['maintenance.restart.title']).toBeTruthy()
+    expect(ruDict['maintenance.restart.title']).toBeTruthy()
+    expect(enDict['maintenance.restart.action']).toBeTruthy()
+    expect(ruDict['maintenance.restart.action']).toBeTruthy()
+    expect(enDict['maintenance.restart.mode.supervisor']).toBeTruthy()
+    expect(ruDict['maintenance.restart.mode.supervisor']).toBeTruthy()
+    expect(enDict['maintenance.restart.timeout']).toBeTruthy()
+    expect(ruDict['maintenance.restart.timeout']).toBeTruthy()
   })
 })

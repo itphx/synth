@@ -162,3 +162,151 @@ describe('proxyApi — настройки egress-прокси (ADR-099)', () => 
     })
   })
 })
+
+describe('proxyApi — профили, пароли и TLS (ADR-099)', () => {
+  it('testProxyRoute: POST /settings/proxy/test {url}, возвращает маршрут и результат', async () => {
+    const result = {
+      url: 'https://api.openai.com/v1/models',
+      route: {
+        action: 'proxy' as const,
+        via: 'proxy' as const,
+        reason: 'rule',
+        ruleId: 'r1',
+        ruleLabel: 'OpenAI',
+        profile: 'corp',
+        profileLabel: 'Corp',
+        proxyUrl: 'http://proxy.corp:3128',
+      },
+      ok: true,
+      httpStatus: 200,
+      latencyMs: 42,
+      authChallenge: 'none' as const,
+      usingSaved: true,
+      restartRequired: true,
+    }
+    fetchMock.mockResolvedValue(jsonResponse(result))
+
+    await expect(synthApi.testProxyRoute('  https://api.openai.com/v1/models  ')).resolves.toEqual(
+      result,
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/settings/proxy/test',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ url: 'https://api.openai.com/v1/models' }),
+      }),
+    )
+  })
+
+  it('setProfilePassword: PUT .../profiles/:name/password и разворачивание {password}', async () => {
+    const status = { source: 'file' as const, set: true, removable: true }
+    fetchMock.mockResolvedValue(jsonResponse({ password: status }))
+
+    await expect(synthApi.setProfilePassword('corp', 's3cret')).resolves.toEqual(status)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/settings/proxy/profiles/corp/password',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ password: 's3cret' }),
+      }),
+    )
+  })
+
+  it('clearProfilePassword: DELETE .../profiles/:name/password', async () => {
+    const status = { source: 'none' as const, set: false, removable: false }
+    fetchMock.mockResolvedValue(jsonResponse({ password: status }))
+
+    await expect(synthApi.clearProfilePassword('corp')).resolves.toEqual(status)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/settings/proxy/profiles/corp/password',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
+  it('uploadProfileCa/removeProfileCa: PUT/DELETE .../tls/ca, тело {pem}', async () => {
+    const response = { status: STATUS, restartRequired: true as const }
+    fetchMock.mockResolvedValue(jsonResponse(response))
+
+    await expect(synthApi.uploadProfileCa('corp', '-----BEGIN CERTIFICATE-----')).resolves.toEqual(
+      response,
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/settings/proxy/profiles/corp/tls/ca',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ pem: '-----BEGIN CERTIFICATE-----' }),
+      }),
+    )
+
+    await expect(synthApi.removeProfileCa('corp')).resolves.toEqual(response)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/settings/proxy/profiles/corp/tls/ca',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
+  it('uploadProfileClient/removeProfileClient: PUT/DELETE .../tls/client, cert+key', async () => {
+    const response = { status: STATUS, restartRequired: true as const }
+    fetchMock.mockResolvedValue(jsonResponse(response))
+
+    await expect(
+      synthApi.uploadProfileClient('corp', 'CERT-PEM', 'KEY-PEM'),
+    ).resolves.toEqual(response)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v2/settings/proxy/profiles/corp/tls/client',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ certPem: 'CERT-PEM', keyPem: 'KEY-PEM' }),
+      }),
+    )
+
+    await expect(synthApi.removeProfileClient('corp')).resolves.toEqual(response)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v2/settings/proxy/profiles/corp/tls/client',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
+  it('404 профиля пробрасывается со status/code', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ error: { code: 'NOT_FOUND', message: 'профиль не найден' } }, 404),
+    )
+
+    await expect(synthApi.setProfilePassword('nope', 'x')).rejects.toMatchObject({
+      status: 404,
+      code: 'NOT_FOUND',
+    })
+  })
+
+  it('saveProxy с профилями не отправляет top-level url/auth/tls', async () => {
+    const input = {
+      enabled: true,
+      mode: 'selected' as const,
+      defaultProfile: 'corp',
+      profiles: {
+        corp: { url: 'http://proxy.corp:3128', auth: { type: 'basic' as const, username: 'svc' } },
+      },
+      rules: [{ id: 'r1', hosts: ['*.example.com'], action: 'proxy' as const, profile: 'corp' }],
+      noProxy: [],
+      fromEnv: false,
+      fallbackDirect: false,
+      connectTimeoutMs: 5000,
+    }
+    fetchMock.mockResolvedValue(
+      jsonResponse({ saved: STATUS, running: STATUS, restartRequired: true }),
+    )
+
+    await synthApi.saveProxy(input)
+
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as { body: string }).body,
+    ) as Record<string, unknown>
+    expect(body).toEqual({ proxy: input })
+    expect(body.proxy).not.toHaveProperty('url')
+    expect(body.proxy).not.toHaveProperty('auth')
+    expect(body.proxy).not.toHaveProperty('tls')
+  })
+})

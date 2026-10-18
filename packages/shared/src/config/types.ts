@@ -13,7 +13,6 @@ import {
   EGRESS_POLICY_MODES,
   WEBHOOKS_EGRESS_POLICY_MODES,
   DEFAULT_LLM_GATEWAY_RATE_LIMIT,
-  DEFAULT_MAX_UPLOAD_BYTES,
   MIN_UPLOAD_BYTES,
   MAX_UPLOAD_BYTES_LIMIT,
   ToolCapability,
@@ -690,6 +689,52 @@ export const proxyTlsConfigSchema = z.object({
   rejectUnauthorized: z.boolean().optional(),
 });
 
+/** Режим маршрутизации прокси: `all` — default для всех, `selected` — только правила. */
+export const PROXY_MODES = ['all', 'selected'] as const;
+export type ProxyMode = (typeof PROXY_MODES)[number];
+
+/** Имя профиля прокси: lower-case буква, далее `[a-z0-9_-]`, длина 1..32. */
+export const PROXY_PROFILE_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
+
+export const proxyProfileNameSchema = z
+  .string()
+  .regex(PROXY_PROFILE_NAME_RE, 'имя профиля: ^[a-z][a-z0-9_-]{0,31}$');
+
+/**
+ * Именованный профиль прокси (ADR-099, per-host маршрутизация).
+ *
+ * Набор URL-полей тот же, что у top-level legacy-конфига (`url` и/или
+ * `httpProxy`/`httpsProxy`/`allProxy`); профиль обязан задавать хотя бы один URL
+ * (проверяется резолвером). `auth` — только Basic; пароль в config не хранится —
+ * env/файл: `SYNTH_PROXY_<PROFILE>_PASSWORD` / `{dataDir}/secrets/proxy/<profile>.password`
+ * (для `default` — legacy `SYNTH_PROXY_PASSWORD` / `{dataDir}/secrets/proxy-password`).
+ */
+export const proxyProfileSchema = z.object({
+  label: z.string().optional(),
+  url: z.string().optional(),
+  httpProxy: z.string().optional(),
+  httpsProxy: z.string().optional(),
+  allProxy: z.string().optional(),
+  auth: proxyAuthConfigSchema.optional(),
+  tls: proxyTlsConfigSchema.optional(),
+});
+
+/** Действие правила маршрутизации: через прокси либо напрямую. */
+export const proxyRuleActionSchema = z.enum(['proxy', 'direct']);
+
+/**
+ * Правило маршрутизации по хосту (порядок = приоритет, первое совпадение).
+ * `hosts` — exact, `.suffix` (apex+sub), `*.suffix` (sub), `host:port`, IP, CIDR, `*`.
+ * `action: direct` несовместим с `profile`.
+ */
+export const proxyRuleSchema = z.object({
+  id: z.string().min(1).optional(),
+  label: z.string().optional(),
+  hosts: z.array(z.string().min(1)).min(1),
+  action: proxyRuleActionSchema,
+  profile: proxyProfileNameSchema.optional(),
+});
+
 /**
  * ADR-099 (D1/D2a): HTTP/HTTPS-прокси единого egress-слоя.
  *
@@ -710,6 +755,17 @@ export const proxyTlsConfigSchema = z.object({
  */
 export const proxyConfigSchema = z.object({
   enabled: z.boolean().optional(),
+  /**
+   * Per-host маршрутизация: `all` — `defaultProfile` для всех, кроме `noProxy`
+   * (правила могут переопределить); `selected` — только правила, остальное напрямую.
+   */
+  mode: z.enum(PROXY_MODES).default('all'),
+  /** Профиль для `mode: all` и правил без явного `profile` (по умолчанию `default`). */
+  defaultProfile: proxyProfileNameSchema.optional(),
+  /** Именованные профили. При наличии top-level URL/auth/tls запрещены. */
+  profiles: z.record(proxyProfileNameSchema, proxyProfileSchema).optional(),
+  /** Правила маршрутизации (первое совпадение). */
+  rules: z.array(proxyRuleSchema).optional(),
   url: z.string().optional(),
   httpProxy: z.string().optional(),
   httpsProxy: z.string().optional(),
@@ -919,6 +975,10 @@ export type ProxyConfig = z.infer<typeof proxyConfigSchema>;
 export type ProxyAuthConfig = z.infer<typeof proxyAuthConfigSchema>;
 /** ADR-099 (D2a): TLS/mTLS к самому прокси. */
 export type ProxyTlsConfig = z.infer<typeof proxyTlsConfigSchema>;
+/** ADR-099: именованный профиль прокси (per-host маршрутизация). */
+export type ProxyProfileConfig = z.infer<typeof proxyProfileSchema>;
+/** ADR-099: правило маршрутизации прокси по хостам. */
+export type ProxyRuleConfig = z.infer<typeof proxyRuleSchema>;
 export type MicroFirstConfig = z.infer<typeof microFirstConfigSchema>;
 export type SynthConfig = z.infer<typeof synthConfigSchema>;
 export type PermissionConfig = z.infer<typeof permissionConfigSchema>;

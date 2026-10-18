@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
 import { t as sm } from './engine/system-messages.js';
 import { initTlsTrust } from './security/tls.js';
+import { configureRestart, resolveRestartMode, RESTART_EXIT_CODE } from './server/restart.js';
 
 const program = new Command();
 
@@ -75,6 +76,10 @@ program
   .option('--oidc-client-id <id>', 'OIDC client_id — fallback дискавери для входа в UI (гибридный режим)')
   .option('--token <key>', 'API-ключ для аутентификации на удалённом backend (гибридный режим)')
   .option('--runner', 'запустить in-process раннер')
+  .option(
+    '--restart-mode <mode>',
+    'graceful restart: disabled (по умолчанию) | process (внешний супервизор) | supervisor (dev.sh)',
+  )
   .option('--ui <path>', 'путь к собранному UI (dist)')
   .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
   .option('--safe-mode', 'безопасный режим: проектные инструкции не грузятся')
@@ -224,7 +229,7 @@ program
 
     let shuttingDown = false;
 
-    async function gracefulShutdown(signal: string): Promise<void> {
+    async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
       if (shuttingDown) return;
       shuttingDown = true;
       console.log(`\n[Shutdown] Получен сигнал ${signal}, завершаю...`);
@@ -260,11 +265,18 @@ program
         if (err) console.error('[Shutdown] WSS close error:', err);
       });
 
-      process.exit(0);
+      process.exit(exitCode);
     }
 
     process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
     process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+
+    // Restart из UI: режим — CLI-флаг > SYNTH_RESTART_MODE (bare `serve` —
+    // `disabled`); фактический рестарт — graceful shutdown с кодом 75.
+    configureRestart({
+      mode: resolveRestartMode(process.env, options.restartMode),
+      request: () => gracefulShutdown('API', RESTART_EXIT_CODE),
+    });
 
     const host = options.host || process.env.SYNTH_HOST || '0.0.0.0';
 

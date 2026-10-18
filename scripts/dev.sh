@@ -22,6 +22,12 @@ die() { echo "ОШИБКА: $*" >&2; exit 1; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SYNTH="$ROOT"
 LOGDIR="$ROOT/tmp"
+BACKEND_CHILD_FILE="$LOGDIR/backend.pid"
+CORE_CHILD_FILE="$LOGDIR/core.pid"
+
+# Restart из UI: в dev процесс завершается с кодом 75, цикл-супервизор ниже
+# поднимает его снова. Другие значения (disabled/process) — без перезапуска.
+export SYNTH_RESTART_MODE="${SYNTH_RESTART_MODE:-supervisor}"
 
 # Каталог логов — чтобы backend/UI могли читать логи сервисов (эндпоинт /api/v2/logs)
 export SYNTH_LOG_DIR="$LOGDIR"
@@ -65,6 +71,7 @@ export SYNTH_CORS_ALLOW_ALL="${SYNTH_CORS_ALLOW_ALL:-true}"
 export SYNTH_COOKIE_INSECURE="${SYNTH_COOKIE_INSECURE:-true}"
 
 mkdir -p "$LOGDIR"
+rm -f "$BACKEND_CHILD_FILE" "$CORE_CHILD_FILE"
 
 # Очистка занятых портов (если предыдущий запуск завершился некорректно)
 for p in $SYNTH_PORT $SYNTH_CORE_PORT $VITE_PORT; do
@@ -74,35 +81,45 @@ done
 
 _cleaned=false
 
+# Сигнал процессу/группе. Если процесс в отдельной группе (setsid) — бьём всю
+# группу (tsx/node — дерево процессов), иначе только сам PID (не задеть dev.sh).
+_kill_tree() {
+    local pid="${1:-}"
+    local sig="${2:-TERM}"
+    [ -n "$pid" ] || return 0
+    kill -0 "$pid" 2>/dev/null || return 0
+    local pgid script_pgid
+    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')
+    script_pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+    if [ -n "$pgid" ] && [ "$pgid" != "$script_pgid" ]; then
+        kill -"$sig" "-$pgid" 2>/dev/null || true
+    else
+        kill -"$sig" "$pid" 2>/dev/null || true
+    fi
+}
+
+# Текущий дочерний PID супервизора (файл пишется при каждом старте).
+_supervised_child() {
+    local pidfile="${1:-}"
+    [ -n "$pidfile" ] && [ -f "$pidfile" ] && cat "$pidfile" 2>/dev/null || true
+}
+
 cleanup() {
     if $_cleaned; then return; fi
     _cleaned=true
     echo ""
     echo "Остановка сервисов..."
-    for pid in $BACKEND_PID $UI_PID $CORE_PID; do
-        if [ -n "$pid" ] && kill -0 $pid 2>/dev/null; then
-            local pgid=$(ps -o pgid= -p $pid 2>/dev/null | tr -d ' ')
-            if [ -n "$pgid" ]; then
-                kill -TERM -$pgid 2>/dev/null || true
-            else
-                kill -TERM $pid 2>/dev/null || true
-            fi
-        fi
+    for pid in $BACKEND_PID $UI_PID $CORE_PID $( _supervised_child "$BACKEND_CHILD_FILE" ) $( _supervised_child "$CORE_CHILD_FILE" ); do
+        _kill_tree "$pid" TERM
     done
     sleep 3
-    for pid in $BACKEND_PID $UI_PID $CORE_PID; do
-        if [ -n "$pid" ] && kill -0 $pid 2>/dev/null; then
-            local pgid=$(ps -o pgid= -p $pid 2>/dev/null | tr -d ' ')
-            if [ -n "$pgid" ]; then
-                kill -KILL -$pgid 2>/dev/null || true
-            else
-                kill -KILL $pid 2>/dev/null || true
-            fi
-        fi
+    for pid in $BACKEND_PID $UI_PID $CORE_PID $( _supervised_child "$BACKEND_CHILD_FILE" ) $( _supervised_child "$CORE_CHILD_FILE" ); do
+        _kill_tree "$pid" KILL
     done
     for pid in $BACKEND_PID $UI_PID $CORE_PID; do
-        wait $pid 2>/dev/null || true
+        [ -n "$pid" ] && wait "$pid" 2>/dev/null || true
     done
+    rm -f "$BACKEND_CHILD_FILE" "$CORE_CHILD_FILE"
     echo ""
     echo "Логи сохранены:"
     [ -n "$BACKEND_PID" ] && echo "  backend: $LOGDIR/backend.log"
@@ -113,6 +130,38 @@ cleanup() {
 }
 
 trap cleanup EXIT INT
+
+# Супервизор: запускает команду, при exit 75 (EX_TEMPFAIL — запрос рестарта из
+# UI) поднимает её снова; любой другой код — выход (фатальная ошибка/штатное
+# завершение). Лог обнуляет вызывающий старт-хелпер; рестарты дописываются.
+_start_supervised() {
+    local name="$1"
+    local logfile="$2"
+    local pidfile="$3"
+    shift 3
+    local child code
+    while true; do
+        # Отдельная сессия/группа — чтобы cleanup гасил всё дерево процесса.
+        if command -v setsid >/dev/null 2>&1; then
+            setsid "$@" >>"$logfile" 2>&1 &
+        else
+            "$@" >>"$logfile" 2>&1 &
+        fi
+        child=$!
+        echo "$child" > "$pidfile"
+        wait "$child"
+        code=$?
+        if [ "$code" -eq 75 ]; then
+            echo "[supervisor] $name: restart requested (exit 75), перезапуск через 1 c" >>"$logfile"
+            echo ""
+            echo "[supervisor] $name: перезапуск (exit 75)"
+            sleep 1
+            continue
+        fi
+        rm -f "$pidfile"
+        return "$code"
+    done
+}
 
 start_backend() {
     echo "━━━ Synth Backend (Hono) ━━━"
@@ -140,11 +189,14 @@ start_backend() {
     }
     echo " ok"
 
-    # Запускаем tsx напрямую — минуем pnpm, чтобы избежать повторной проверки deps
-    "$SYNTH/node_modules/.bin/tsx" packages/backend/src/main.ts >>"$LOGDIR/backend.log" 2>&1 &
+    # Супервизор-цикл: code 75 из UI-restart → перезапуск (SYNTH_RESTART_MODE).
+    # Запускаем tsx напрямую — минуем pnpm, чтобы избежать повторной проверки deps.
+    _start_supervised backend "$LOGDIR/backend.log" "$BACKEND_CHILD_FILE" \
+        "$SYNTH/node_modules/.bin/tsx" packages/backend/src/main.ts &
     BACKEND_PID=$!
 
     echo "  http://$SYNTH_HOST:$SYNTH_PORT  (pid $BACKEND_PID)"
+    echo "  restart: $SYNTH_RESTART_MODE"
     echo "  лог: $LOGDIR/backend.log"
 
     # Ждём пока бэкенд поднимется (до 30 секунд)
@@ -188,10 +240,12 @@ start_core() {
     : > "$LOGDIR/core.log"
 
     pnpm --filter @itphx/synth-core build >"$LOGDIR/core.log" 2>&1
-    node packages/core/dist/main.js serve --port "$SYNTH_CORE_PORT" --data-dir "$SYNTH_DATA_DIR" >>"$LOGDIR/core.log" 2>&1 &
+    _start_supervised core "$LOGDIR/core.log" "$CORE_CHILD_FILE" \
+        node packages/core/dist/main.js serve --port "$SYNTH_CORE_PORT" --data-dir "$SYNTH_DATA_DIR" &
     CORE_PID=$!
 
     echo "  http://$SYNTH_HOST:$SYNTH_CORE_PORT  (pid $CORE_PID)"
+    echo "  restart: $SYNTH_RESTART_MODE"
     echo "  лог: $LOGDIR/core.log"
 }
 

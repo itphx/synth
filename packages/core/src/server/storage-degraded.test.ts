@@ -166,6 +166,9 @@ describe('storageHealthFields + /health (PROP-032 W5)', () => {
     expect(body.status).toBe('healthy');
     expect(body).toHaveProperty('version');
     expect(body).toHaveProperty('time');
+    // Restart: ISO старта процесса (аддитивное поле).
+    expect(typeof body.startedAt).toBe('string');
+    expect(Number.isNaN(Date.parse(String(body.startedAt)))).toBe(false);
     expect(body).not.toHaveProperty('storage');
   });
 

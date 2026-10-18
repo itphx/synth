@@ -30,6 +30,10 @@ services:
       # в .env рядом с docker-compose.yml или в окружении. Хардкод убран,
       # чтобы compose не перекрывал .env.
       - SYNTH_API_KEY=${SYNTH_API_KEY:?set SYNTH_API_KEY in .env}
+      # Restart из UI: контейнер завершается с кодом 75, Docker перезапускает
+      # его (`restart: unless-stopped` ниже). `docker run` без restart policy
+      # контейнер не поднимет — задайте `--restart` или режим `disabled`.
+      - SYNTH_RESTART_MODE=${SYNTH_RESTART_MODE:-process}
       - SYNTH_PROVIDER_OLLAMA_API_KEY=${SYNTH_PROVIDER_OLLAMA_API_KEY:-}
       # Ollama: нативный базовый URL без /v1 — type: ollama ходит на /api/chat
       # (так применяются num_ctx/options, think и инструменты).

@@ -211,8 +211,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 | Метод | Путь | RBAC | Назначение |
 |---|---|---|---|
-| GET | `/health` | — | `{status:'healthy', version, time}` |
-| GET | `/api/v2/health` | — | то же |
+| GET | `/health` | — | `{status:'healthy', version, time, startedAt}` (`startedAt` — ISO-метка старта процесса, ADR-092) |
+| GET | `/api/v2/health` | — | то же (+ блок `storage` в деградации) |
 
 ### 5.2 Hybrid — `core`
 
@@ -698,11 +698,18 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | PUT | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | `{policy}` (live-применение, persist); невалидная запись → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | Сброс к config-дефолту; `{status:"restored", policy, isOverridden:false, defaults}` + live-применение дефолта |
 | POST | `/api/v2/settings/egress/check` | ADMIN (managed) / auth (core) | Проверка URL **без выполнения запроса**: `{scope:"tools"\|"webhooks"\|"mcp", url}` → `{allowed, reason?, matchedRule?, addresses?, proxied, addressChecksActive, policy}` (разбор + DNS + сверка; для `webhooks` — требование `https`, кроме `mode:"off"`). При включённом прокси `proxied:true`, `addressChecksActive:false` — проверяются только схема и hostname-правила/`exceptions` (DNS/CIDR не выполняются) |
-| GET | `/api/v2/settings/proxy` | auth | Настройки egress-прокси (ADR-099): плоские поля **saved** (`enabled, source:"env"\|"runtime"\|"config"\|"none", url?, httpProxy?, httpsProxy?, allProxy?, noProxy, fromEnv, fallbackDirect, connectTimeoutMs, auth?:{type:"basic", username}, tls?:{caFile?, certFile?, keyFile?, hasCaPem, rejectUnauthorized}`) + `{saved, running, defaults, isOverridden, password:{source:"env"\|"file"\|"none", set, removable}, restartRequired}` (top-level `restartRequired` — вычисленный: отпечаток saved ≠ running). URL — redacted (без userinfo/секретов); **`caPem` и PEM-содержимое, пароль и userinfo не возвращаются** (для `caPem` — только `hasCaPem`), пути `caFile`/`certFile`/`keyFile` отдаются |
-| PUT | `/api/v2/settings/proxy` | ADMIN (managed) / auth (core) | Сохранить runtime-override `{proxy}` (валидация: `auth.type` только `basic` — NTLM/Negotiate **вне scope** и делегируются egress-шлюзу (ADR-099 п. 25), пароль в userinfo URL запрещён, `caFile`↔`caPem`, `certFile`+`keyFile`); **live не применяет** (нужен рестарт); невалидно → 400 `VALIDATION_ERROR`; аудит `scope:"proxy"` (before/after без пароля) → `{saved, running, restartRequired:true}` |
+| GET | `/api/v2/settings/proxy` | auth | Настройки egress-прокси (ADR-099): плоские поля **saved** (`enabled, source:"env"\|"runtime"\|"config"\|"none", mode:"all"\|"selected", defaultProfile?, profiles:{"<name>":{label?,url?,httpProxy?,httpsProxy?,allProxy?,auth?:{type:"basic",username},tls?:{caFile?,certFile?,keyFile?,hasCaPem,rejectUnauthorized},legacy,source}}, rules:[{id,label?,hosts,action:"proxy"\|"direct",profile?}], url?, httpProxy?, httpsProxy?, allProxy?, noProxy, fromEnv, fallbackDirect, connectTimeoutMs, auth?, tls?`) + `{saved, running, defaults, isOverridden, password:{source:"env"\|"file"\|"none", set, removable}, restartRequired}` (top-level `restartRequired` — вычисленный: отпечаток saved ≠ running). URL — redacted (без userinfo/секретов); **`caPem` и PEM-содержимое, пароли и userinfo не возвращаются** (для `caPem` — только `hasCaPem`; у профиля — `password:{source,set,removable}`), пути `caFile`/`certFile`/`keyFile` отдаются |
+| PUT | `/api/v2/settings/proxy` | ADMIN (managed) / auth (core) | Сохранить runtime-override `{proxy}` (валидация: `mode`/`profiles`/`rules` — имя профиля `^[a-z][a-z0-9_-]{0,31}$` и неизменяемо, `action:"direct"` без `profile`, `action:"proxy"` — существующий `profile`/`defaultProfile`, `mode:"selected"` — хотя бы одно правило, `mode:"all"` — default-профиль, host-паттерны; при `profiles` top-level URL/auth/tls запрещены; `auth.type` только `basic` — NTLM/Negotiate **вне scope** и делегируются egress-шлюзу (ADR-099 п. 25), пароль в userinfo URL запрещён, `caFile`↔`caPem`, `certFile`+`keyFile`); **live не применяет** (нужен рестарт); невалидно → 400 `VALIDATION_ERROR`; аудит `scope:"proxy"` (before/after без пароля) → `{saved, running, restartRequired:true}` |
 | DELETE | `/api/v2/settings/proxy` | ADMIN (managed) / auth (core) | Сбросить runtime-override к `config.yaml`/env; аудит `scope:"proxy"` → `{status:"restored", saved, defaults, running, restartRequired}` |
 | PUT | `/api/v2/settings/proxy/password` | ADMIN (managed) / auth (core) | Задать пароль Basic: `{password}` → файл `{dataDir}/secrets/proxy-password` (0600, каталог 0700, атомарно); значение не возвращается и не пишется в аудит; пустой пароль → 400; задан `SYNTH_PROXY_PASSWORD` → 409 `CONFLICT` → `{password:{source,set,removable}}` |
 | DELETE | `/api/v2/settings/proxy/password` | ADMIN (managed) / auth (core) | Удалить файл пароля (идемпотентно, 0600); задан `SYNTH_PROXY_PASSWORD` → 409 `CONFLICT`; аудит `scope:"proxy"` (только статус, без значения) → `{password:{source,set,removable}}` |
+| PUT | `/api/v2/settings/proxy/profiles/:name/password` | ADMIN (managed) / auth (core) | Пароль Basic **профиля**: `{password}` → `{dataDir}/secrets/proxy/<name>.password` (для `default` — legacy `secrets/proxy-password`; 0600, каталог 0700, атомарно). Нет профиля в saved-конфигурации → 404 `NOT_FOUND`; нет/пустой пароль → 400; env-пароль профиля (`SYNTH_PROXY_<NAME>_PASSWORD`) → 409 `CONFLICT`; значение не возвращается → `{password:{source,set,removable}}` |
+| DELETE | `/api/v2/settings/proxy/profiles/:name/password` | ADMIN (managed) / auth (core) | Удалить файл пароля профиля (идемпотентно); нет профиля → 404; env-пароль → 409; аудит `scope:"proxy"` (только статус) → `{password:{source,set,removable}}` |
+| PUT | `/api/v2/settings/proxy/profiles/:name/tls/ca` | ADMIN (managed) / auth (core) | CA-бандл **к прокси** для профиля: `{pem}` (1+ сертификатов) → `{dataDir}/secrets/proxy/<name>/ca.pem` (0600), в saved-конфиг пишется только `tls.caFile`; битый PEM → 400; нет профиля → 404; аудит `scope:"proxy"` → `{status, restartRequired:true}` |
+| DELETE | `/api/v2/settings/proxy/profiles/:name/tls/ca` | ADMIN (managed) / auth (core) | Удалить CA профиля (файл + `tls.caFile`/`caPem`); нет профиля → 404; аудит `scope:"proxy"` → `{status, restartRequired:true}` |
+| PUT | `/api/v2/settings/proxy/profiles/:name/tls/client` | ADMIN (managed) / auth (core) | mTLS **к прокси** для профиля: `{certPem, keyPem}` (write-only, пара) → `secrets/proxy/<name>/{client.crt,client.key}` (0600), в конфиг — пути; неполная пара/битый PEM/ключ не от серта → 400; нет профиля → 404; аудит `scope:"proxy"` → `{status, restartRequired:true}` |
+| DELETE | `/api/v2/settings/proxy/profiles/:name/tls/client` | ADMIN (managed) / auth (core) | Удалить mTLS-клиент профиля (файлы + пути в конфиге); нет профиля → 404; аудит `scope:"proxy"` → `{status, restartRequired:true}` |
+| POST | `/api/v2/settings/proxy/test` | ADMIN (managed) / auth (core) | Проверка **target URL** по saved-конфигурации: `{url}` (`http(s)`, без userinfo; иначе 400) → `{url, route:{action:"proxy"\|"direct", via, reason:"disabled"\|"no-proxy"\|"rule"\|"default"\|"no-match"\|"no-default", ruleId?, ruleLabel?, profile?, profileLabel?, proxyUrl?}, ok, httpStatus?, latencyMs, authChallenge, error?, usingSaved:true, restartRequired}`. `HEAD` без редиректов и тела; адресная политика `egress.tools` проверяется **до** запроса (отказ → `ok:false` + `route`, запрос не выполняется); TLS к цели — bootstrap `security.tls`. Не путать с `/proxy/check` (коннект к прокси) |
 | POST | `/api/v2/settings/proxy/check` | ADMIN (managed) / auth (core) | Проверка **только коннекта к прокси** (не к цели): `{url?}` → `{reachable, latencyMs, authChallenge:"Basic"\|"NTLM"\|"Negotiate"\|"none", error?, usingSaved}`; `authChallenge: NTLM\|Negotiate` — **только диагностика**: Synth эти схемы не аутентифицирует (egress-шлюз, ADR-099 п. 25). Без `url` проверяется **saved**-конфигурация (`usingSaved:true`), иначе явный прокси; TCP/TLS/SOCKS-handshake, запрос к цели не выполняется; невалидный `url` (не строка) → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/settings/tls` | auth | Статус доверия TLS (ADR-099): плоские поля `status` + `{status, saved, running, defaults, restartRequired}`; `status` — `{ca:{source,count,subjects}, rejectUnauthorized, defaultClient?:{source,certSubject?,hasKey,readOnly}, mappings:[{id,hosts,label?,certSubject?,source,readOnly}], params:{ca?:{source,caFile?,hasPem}, client?:{source,certFile?,keyFile?,readOnly}}, running?:{applied,profileIds}, saved?:{bootstrap,profileIds}}`; **PEM/ключи не возвращаются**; `source` — `env`\|`runtime`\|`config`\|`none` |
 | PUT | `/api/v2/settings/tls` | ADMIN (managed) / auth (core) | `{tls:{caFile?, caPem?, rejectUnauthorized?}}` — несекретные поля (CA-путь или PEM-бандл, взаимоисключающи; сертификаты/ключи — отдельными эндпоинтами); невалидно/неизвестное поле → 400 `VALIDATION_ERROR`; **live не применяет** → `{status, restartRequired:true}`; аудит `scope:"tls"` |
@@ -743,6 +750,15 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 > `audit/egress.jsonl` (поле `via` — `proxy`/`direct`/`fallback`). При включённом прокси адресная
 > проверка выполняется в proxied-режиме (`settings/egress/check` → `proxied`/`addressChecksActive`).
 > Провайдеры LLM в журнал egress не входят (у них свой LLM audit/payload-лог).
+
+> **Профили и правила прокси (ADR-099 п. 27).** `mode: all` — `defaultProfile` для всех хостов, кроме
+> `noProxy`; `selected` — только `rules` (остальное напрямую). Правила проверяются в порядке объявления
+> (**первое совпадение**), `noProxy` важнее правил; `action: direct` несовместим с `profile`; CIDR
+> матчится только по IP-литералу цели. `profiles`/`rules` — runtime-значение заменяет config **целиком**
+> (не поле-уровневое слияние); при заданных `profiles` top-level URL/auth/tls и env-URL запрещены.
+> Пароли и TLS-материалы профилей — write-only (`PUT/DELETE .../profiles/:name/{password,tls/ca,tls/client}`),
+> значения/PEM не возвращаются. `POST /settings/proxy/test` проверяет **цель** (в отличие от `/proxy/check` —
+> коннект к прокси) и показывает сработавший маршрут; оба работают по **saved**-конфигурации.
 
 ### 5.22 Dictionaries — `/api/v2/dictionaries` (оба)
 
@@ -1061,6 +1077,8 @@ Admin-API обслуживания инстанса: health (`synth doctor`), в
 | GET | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Отложенный запрос на восстановление `{pending}` (`PendingRestoreRequest \| null`) |
 | POST | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Спланировать восстановление: `{archive, confirm: true, safetyCopy?}` (`confirm` обязателен; `safetyCopy` по умолчанию `true`) → 201 `{pending, appliesOnNextStart: true}`; архив не прошёл проверку → 400 `VALIDATION_ERROR`; нет архива → 404 |
 | DELETE | `/api/v2/maintenance/restore` | оба | ADMIN / auth | Отменить отложенный запрос → 200 `{cancelled}` |
+| GET | `/api/v2/maintenance/restart` | оба | ADMIN / auth | Статус graceful restart (ADR-092): `{supported, mode:"disabled"\|"process"\|"supervisor", reason?, startedAt, version}`; `supported:false` — рестарт недоступен (UI не показывает кнопку) |
+| POST | `/api/v2/maintenance/restart` | оба | ADMIN / auth | Graceful restart инстанса: `{confirm: true}` (иначе 400 `VALIDATION_ERROR`) → **202** `{status:"restarting", restartId, mode, startedAt}`; процесс завершается с кодом **75** (супервизор поднимает заново); повторный вызов до выхода идемпотентен (тот же `restartId`, 202); режим `disabled` → 409 `RESTART_UNSUPPORTED`; аудит `restart.requested` (status `scheduled`, `details:{mode, restartId}`) |
 | GET | `/api/v2/maintenance/audit` | оба | ADMIN / auth | Журнал обслуживания: `{entries: MaintenanceAuditEntry[]}` («свежие первыми»); query `limit` (целое 1..500, дефолт 50) и `op` (вид операции); невалидные `limit`/`op` → 400 `VALIDATION_ERROR`; порт не подключён → пустой список (не 500) |
 | DELETE | `/api/v2/maintenance/audit` | оба | ADMIN / auth | Очистить журнал; тело `{confirm: true}` обязательно (иначе 400 `VALIDATION_ERROR`) → 200 `{cleared}`; порт не подключён → `{cleared: 0}` |
 
@@ -1082,7 +1100,7 @@ Admin-API обслуживания инстанса: health (`synth doctor`), в
 **Аудит-журнал обслуживания (ADR-092).** `MaintenanceAuditEntry` — append-only запись
 жизненного цикла: `id` (`ma_<uuid>`), `ts` (ISO-8601), `op` (`backup.created`/`backup.failed`/
 `backup.deleted`/`restore.scheduled`/`restore.cancelled`/`restore.applied`/`restore.failed`/`migrate.applied`/
-`migrate.failed`/`update.applied`/`rollback.applied`/`update.failed`/`uninstall.purge`/
+`migrate.failed`/`update.applied`/`rollback.applied`/`update.failed`/`restart.requested`/`uninstall.purge`/
 `export.created`/`import.applied`), `status` (`ok`/`failed`/`scheduled`), `actor?` (инициатор:
 `userId` при API/UI, `cli` при командной строке, `startup` при применении на старте), `version?`
 (`SYNTH_VERSION`), `details?` (поля зависят от `op`), `error?` (при `status: failed`). Записи
@@ -1098,7 +1116,9 @@ Admin-API обслуживания инстанса: health (`synth doctor`), в
 **Коды ошибок.** 400 `VALIDATION_ERROR` (невалидное тело/имя архива, отсутствие
 `confirm: true`, архив не прошёл проверку), 404 `NOT_FOUND` (нет архива/записи), 413
 `PAYLOAD_TOO_LARGE` (превышен лимит загрузки), 409 `CONFLICT` с кодом `SCHEMA_TOO_NEW`
-(данные новее версии Synth при применении миграций), 401/403 (нет кред/недостаточно прав).
+(данные новее версии Synth при применении миграций) или `RESTART_UNSUPPORTED`
+(`SYNTH_RESTART_MODE=disabled` — рестарт недоступен), 401/403 (нет кред/недостаточно прав).
+Успешный `POST /restart` — **202** (запрос принят; процесс завершится через ~50 мс).
 
 **Пример.**
 
@@ -1133,11 +1153,19 @@ curl -X DELETE http://localhost:5000/api/v2/maintenance/restore \
 # Прочитать журнал обслуживания (последние 5 записей).
 curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
   -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Перезапуск инстанса (graceful shutdown, exit 75 → супервизор поднимает процесс).
+curl http://localhost:5000/api/v2/maintenance/restart -H 'Authorization: Bearer <ADMIN_TOKEN>'
+curl -X POST http://localhost:5000/api/v2/maintenance/restart \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"confirm":true}'
 ```
 
 **UI.** Раздел «Обслуживание» (Настройки → «Обслуживание», только `ADMIN`) построен на этих
 же ручках (`packages/ui/src/components/settings/MaintenanceSettings.tsx`, API-домен
-`packages/ui/src/lib/api/maintenance.ts`). Процедуры и правила безопасности —
+`packages/ui/src/lib/api/maintenance.ts`): статус/`synth doctor`, схема и миграции, бэкапы,
+восстановление, **«Перезапуск»** (статус режима, подтверждение, оверлей и опрос `GET /health`
+до нового `startedAt`, затем reload). Процедуры и правила безопасности —
 [docs/MAINTENANCE.md](./MAINTENANCE.md).
 
 ---

@@ -109,6 +109,7 @@ ingress:
 | `backend.persistence.*` | `enabled: true`, `10Gi` | PVC для JSON-данных |
 | `backend.persistence.keepOnUninstall` | `false` | Не удалять PVC при `helm uninstall` (аннотация `helm.sh/resource-policy: keep` в манифесте релиза); для окружений, где данные нельзя терять |
 | `backend.extraEnv` | `{}` | Доп. env для backend |
+| `backend.restartMode` | `process` | Restart из UI: `process` \| `supervisor` \| `disabled` (env `SYNTH_RESTART_MODE`, см. «Перезапуск инстанса из UI») |
 | `backend.config` | `{}` | Декларативный `config.yaml` backend (монтируется в `/etc/synth`); сюда же домерживается секция `storage` из значений ниже |
 | `storage.backend` | `file` | Backend хранения (PROP-032): `file` \| `memory` \| `postgres` |
 | `storage.postgres.host` | `""` | Хост БД (при `backend: postgres`) |
@@ -148,6 +149,72 @@ ingress:
 | `installerKey.tokenKey` | `token` | Ключ внутри Secret с plaintext-токеном (для аддонов) |
 | `caCert` | `""` | PEM внутреннего CA (опционально) |
 | `extraObjects` | `[]` | Произвольные дополнительные манифесты (рендерятся как есть) |
+
+## Перезапуск инстанса из UI
+
+В админ-разделе «Обслуживание → Перезапуск» (`GET/POST /api/v2/maintenance/restart`)
+можно инициировать graceful restart инстанса: процесс завершается с кодом **75**
+(`EX_TEMPFAIL`), а поднимает его заново супервизор.
+
+- `backend.restartMode: process` (дефолт чарта) → env `SYNTH_RESTART_MODE=process`;
+  Deployment имеет `restartPolicy: Always` (дефолт Kubernetes), поэтому pod
+  перезапускается автоматически.
+- `disabled` — кнопка в UI недоступна (`GET /restart` → `supported:false`,
+  `POST /restart` → `409 RESTART_UNSUPPORTED`).
+- `supervisor` — для локального `scripts/dev.sh` (не для кластера).
+
+**Multi-replica.** Перезапускается только тот pod, который обработал запрос
+(остальные реплики продолжают работать); соединения, попавшие на него, прерываются.
+Чтобы перезапустить весь Deployment (например, после изменения `config.yaml`),
+используйте rollout:
+
+```bash
+kubectl -n synth rollout restart deployment/<release>-synth-backend
+```
+
+Запрос рестарта фиксируется в журнале обслуживания (аудит `restart.requested`).
+
+## Прокси с профилями и правилами
+
+Прокси-конфигурация (включая `mode`/`profiles`/`rules`, ADR-099 п. 27) задаётся декларативно через
+`backend.config.proxy` — чарт рендерит её в ConfigMap `config.yaml`:
+
+```yaml
+backend:
+  config:
+    proxy:
+      enabled: true
+      mode: all
+      defaultProfile: default
+      profiles:
+        default:
+          label: Corporate
+          url: http://proxy.corp:3128
+          auth: { type: basic, username: synth }
+          tls: { caFile: /etc/synth/tls/proxy-ca.pem }
+        llm:
+          label: LLM egress
+          url: https://llm-proxy.svc:8443
+          auth: { type: basic, username: synth-llm }
+      rules:
+        - id: r_openai
+          hosts: ["api.openai.com", "*.openai.com"]
+          action: proxy
+          profile: llm
+        - hosts: ["*.corp.local", "10.0.0.0/8"]
+          action: direct
+      noProxy: ["localhost", ".svc"]
+```
+
+- **Пароли** в `config.yaml` не хранятся (инвариант 13): `default` — `SYNTH_PROXY_PASSWORD`,
+  остальные профили — `SYNTH_PROXY_<NAME>_PASSWORD` (имя в верхнем регистре, `-` → `_`). Передайте их
+  через `backend.extraEnv` из существующего Secret (или задайте файл `{dataDir}/secrets/proxy/…`).
+- **TLS к прокси** — `proxy.profiles.<name>.tls` (`caFile`/`certFile`/`keyFile`): смонтируйте Secret в pod
+  (по аналогии с `security.tls.existingSecret`, `/etc/synth/tls`) и укажите пути.
+- **Применение** — при старте pod: после правки values нужен `helm upgrade` (или
+  `kubectl rollout restart`), кнопка «Перезапуск» перезапускает только текущий pod.
+- Профили/правила также редактируются в UI («Сеть» → «Прокси», runtime-override в `settings.json`/PG);
+  `config.yaml` — базовый слой, UI его перекрывает (кроме явных `SYNTH_PROXY_*`).
 
 ## Secret с секретами
 

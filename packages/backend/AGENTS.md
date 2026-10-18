@@ -23,7 +23,7 @@
 | `RequestSessionService`, `EventRouter`, `EventIngress`, `EventBindingStore`, `EventJournalStore`, `RouteRuleStore`, `EventApiKeyStore`, `IdentityClaimStore`, `ProjectRuleProvider`, `eventToMessage`, `startEventJournalPruner` | единый funnel создания сессии, приём внешних событий, API-ключи привязок, одноразовые claim-коды идентичностей, правила маршрутизации и retention-очистка журнала (ADR-089/ADR-052) |
 | `ServiceApiKeyStore`, `createServiceKeyRoutes`, `requireScope`, `checkServiceProjectProjection`, `getServiceCredential` | scoped service-key (ADR-052 этап I): реестр ключей, CRUD-роуты, scope-гейт и проектная проекция |
 | `WebhookStore`, `WebhookDeliveryStore`, `WebhookService`, `startWebhookDeliveryPruner`, `createWebhookRoutes` | исходящие webhooks (ADR-052 этап II): реестр подписок, журнал доставок, движок над `EventBus.subscribeAll`, retention-очистка и CRUD-роуты |
-| `createMaintenanceRoutes` | admin-API обслуживания инстанса (ADR-091/ADR-092): status/doctor/migrations/backups/restore |
+| `createMaintenanceRoutes` | admin-API обслуживания инстанса (ADR-091/ADR-092): status/doctor/migrations/backups/restore/restart (restart — graceful exit 75, см. `configureRestart` в `main.ts`) |
 | `createProjectPortableRoutes` | HTTP-перенос проекта (ADR-091 §6): `GET /api/v2/projects/:id/export`, `POST /api/v2/projects/import` |
 | `ScheduleStore`, `SchedulerRuleProvider`, `SchedulerService`, `createSchedulerRoutes` | расписания планировщика (ADR-051 срез / ADR-089) |
 | `QueueProcessorManager`, `enqueueUserMessage` | очередь сообщений |
@@ -41,7 +41,7 @@
 
 Локально только:
 
-- `src/app.ts` — фабрика `createBackendApp()` (фасад-композиция, ADR-095 шаг 4b) + модули `src/app/*`: `deps.ts` (сборка зависимостей: хранилища, оркестратор, событийное ядро/шедулер/webhooks, live-аксессоры), `mount-routes.ts` (весь порядок монтирования роутов), `listen.ts` (HTTP `listen` + WS `/ws/events`), `sse-events.ts` (`GET /api/v2/events`), `bootstrap.ts` (сид debug-профилей); `src/main.ts` — listen и graceful shutdown.
+- `src/app.ts` — фабрика `createBackendApp()` (фасад-композиция, ADR-095 шаг 4b) + модули `src/app/*`: `deps.ts` (сборка зависимостей: хранилища, оркестратор, событийное ядро/шедулер/webhooks, live-аксессоры), `mount-routes.ts` (весь порядок монтирования роутов), `listen.ts` (HTTP `listen` + WS `/ws/events`), `sse-events.ts` (`GET /api/v2/events`), `bootstrap.ts` (сид debug-профилей); `src/main.ts` — listen, `configureRestart` (ADR-092 п. 7: `resolveRestartMode` из `SYNTH_RESTART_MODE`, graceful shutdown → exit 75) и graceful shutdown.
 - `src/routes/*` — Hono-роутеры; `src/auth/*` — middleware, OIDC и scope-гейты service-key
   (`service-scope.ts`: `scopeGuard`/`serviceProjectProjection`); `src/events/hub.ts` — `EventHub`.
 - `src/lib/*` — `app-config` (конфиг), `defaults-store` (умолчания оформления), `i18n`.
@@ -65,7 +65,7 @@
 - Своих реализаций стораджей в backend нет — используются порты/файловые реализации из core (единый источник истины).
 - Прямой доступ роутеров к `$SYNTH_DATA_DIR` в обход порта запрещён.
 
-**Деградированный режим хранилища (PROP-032 W5, ADR-098).** При недоступности выбранного backend'а (напр. PostgreSQL) хранилище поднимается на файловом фоллбеке **строго read-only**: в `app.ts` после auth-роутов вешается `createStorageDegradedGuard` (из core `server/storage-degraded.js`): не-`ADMIN` → `503 STORAGE_DEGRADED` (доступ только администраторам), мутирующий метод (POST/PUT/PATCH/DELETE) вне allowlist → `503 STORAGE_DEGRADED_READONLY` (исключение — `/api/v2/maintenance` для ремонта); `GET`/диагностика проходят. Диагностика — `createStorageStatusRoutes` (`GET /api/v2/storage/status`: probe соединения + `recovery.restartRequired`, авто-возврата нет); `/health` и `/api/v2/health` отдают `status: 'degraded'` + блок `storage` (аддитивно к `{status, version, time}`). Фоновые писатели (миграции, сид провайдеров, шедулер, webhooks, прунеры) в деградации отключаются — иначе split-brain.
+**Деградированный режим хранилища (PROP-032 W5, ADR-098).** При недоступности выбранного backend'а (напр. PostgreSQL) хранилище поднимается на файловом фоллбеке **строго read-only**: в `app.ts` после auth-роутов вешается `createStorageDegradedGuard` (из core `server/storage-degraded.js`): не-`ADMIN` → `503 STORAGE_DEGRADED` (доступ только администраторам), мутирующий метод (POST/PUT/PATCH/DELETE) вне allowlist → `503 STORAGE_DEGRADED_READONLY` (исключение — `/api/v2/maintenance` для ремонта); `GET`/диагностика проходят. Диагностика — `createStorageStatusRoutes` (`GET /api/v2/storage/status`: probe соединения + `recovery.restartRequired`, авто-возврата нет); `/health` и `/api/v2/health` отдают `status: 'degraded'` + блок `storage` (аддитивно к `{status, version, time}`) и `startedAt` (ISO старта процесса — общий с `GET/POST /api/v2/maintenance/restart`, ADR-092: UI ждёт смены после рестарта). Фоновые писатели (миграции, сид провайдеров, шедулер, webhooks, прунеры) в деградации отключаются — иначе split-brain.
 
 ## Правила эндпоинта
 

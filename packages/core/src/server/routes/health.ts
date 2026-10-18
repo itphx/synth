@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { nowISO, SYNTH_VERSION } from '@itphx/synth-shared';
 import { storageHealthFields, type StorageDegradedInfo } from '../storage-degraded.js';
+import { getProcessStartedAt } from '../restart.js';
 
 export interface HealthRoutesOptions {
   /**
@@ -17,6 +18,8 @@ export function createHealthRoutes(opts: HealthRoutesOptions = {}): Hono {
   const health = () => ({
     ...storageHealthFields(opts.getStorageDegraded?.() ?? null),
     version: SYNTH_VERSION,
+    // Restart: ISO старта процесса — UI сравнивает до/после рестарта.
+    startedAt: getProcessStartedAt(),
     time: nowISO(),
   });
 

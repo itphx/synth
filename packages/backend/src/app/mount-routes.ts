@@ -395,6 +395,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         invalidAuditLimit: (c) => t('errors.validation.invalidAuditLimit', undefined, c),
         invalidAuditOp: (c) => t('errors.validation.invalidAuditOp', undefined, c),
         encryptedRestore: (c) => t('errors.validation.encryptedRestoreUnsupported', undefined, c),
+        restartUnsupported: (c) => t('errors.unavailable.restartUnsupported', undefined, c),
       },
     },
   ));

@@ -5,8 +5,8 @@ import type { LlmGatewayRuntimeSettings, SecurityRuntimeSettings, EventsRuntimeS
 import type { SettingsRepository } from '../../storage/ports/settings-repository.js';
 import type { ProtectedPathsRepository } from '../../storage/ports/protected-paths-repository.js';
 import type { ProtectedPathsPolicy, ProtectedPathsOverride } from '../../engine/security/protected-paths.js';
-import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ResolvedProxyConfig, SecurityTlsConfig } from '@itphx/synth-shared';
-import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO, PROXY_PASSWORD_ENV, ProxyConfigError, proxyStatus, redactProxyUrl, resolveProxyConfig, validateProxyConfig } from '@itphx/synth-shared';
+import type { McpServerToolSettings, McpToolAvailability, ToolsPolicy, McpNetworkPolicy, ToolsDisabledConfig, WorkspaceOutsideRootPolicy, DecisionConfig, EgressPolicy, EgressPolicyScope, WebhooksEgressPolicy, EgressProxyStatus, ProxyCheckResult, ProxyConfig, ProxyPasswordStatus, ProxyStatusProfile, ResolvedProxyConfig, ResolvedProxyProfile, ResolvedProxyRoute, SecurityTlsConfig } from '@itphx/synth-shared';
+import { TOOLS_POLICIES, DEFAULT_MCP_NETWORK_POLICY, DEFAULT_EGRESS_TOOLS_POLICY, DEFAULT_EGRESS_WEBHOOKS_POLICY, DEFAULT_LLM_GATEWAY_RATE_LIMIT, toolsDisabledSchema, workspacePolicySchema, ToolCapability, defaultConfig, generateId, nowISO, PROXY_PASSWORD_ENV, PROXY_PROFILE_NAME_RE, ProxyConfigError, mergeProxyConfig, proxyProfilePasswordEnv, proxyStatus, readTlsRuntimeSettings, redactProxyUrl, resolveProxyConfig, resolveProxyRoute, validateCaPem, validateClientPem, validateProxyConfig } from '@itphx/synth-shared';
 import type { SecurityAuditRepository } from '../../storage/ports/security-audit-repository.js';
 import { validateEgressPolicy } from '../../engine/net/egress-policy.js';
 import { checkEgressUrl } from '../../engine/net/egress-guard.js';
@@ -17,12 +17,21 @@ import { DEFAULT_ASK_TIMEOUT_MS } from '../../engine/permission/derive.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import { decisionMetrics } from '../../engine/router/decision-metrics.js';
 import { getEgressProxyConfig, proxyConfigFingerprint, shouldProxyUrl } from '../../security/proxy-state.js';
-import { checkProxyConnectivity } from '../../security/proxy-check.js';
+import { checkProxyConnectivity, checkProxyTarget, type ProxyTargetRouteInfo } from '../../security/proxy-check.js';
+import { buildTlsTrustProfiles } from '../../security/tls.js';
 import {
   getProxyPasswordStatus,
+  getProxyProfilePasswordStatus,
   removeProxyPasswordFile,
+  removeProxyProfilePasswordFile,
   writeProxyPasswordFile,
+  writeProxyProfilePasswordFile,
 } from '../../security/proxy-password.js';
+import {
+  proxyProfileTlsFilePath,
+  removeProxyProfileTlsFile,
+  writeProxyProfileTlsFile,
+} from '../../security/proxy-tls-secrets.js';
 import { createTlsSettingsRoutes } from './settings-tls.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
@@ -538,23 +547,124 @@ function isValidProtectedPathsOverride(value: unknown): value is { version?: num
  */
 /**
  * ADR-099: снимок секции `proxy` для аудита — без секретов. URL редактируются
- * до origin (без userinfo), пароль в `settings.json` не хранится by design.
+ * до origin (без userinfo), пароли и PEM (`caPem`) не пишутся. `mode`/
+ * `defaultProfile`/`profiles`/`rules` сохраняются: аудит показывает, какой
+ * профиль/правило добавлены или удалены.
  */
-function sanitizeProxyForAudit(config: Partial<ProxyConfig> | undefined): Partial<ProxyConfig> | null {
+function sanitizeProxyForAudit(config: Partial<ProxyConfig> | undefined): Record<string, unknown> | null {
   if (!config) return null;
-  const copy = structuredClone(config);
-  for (const field of ['url', 'httpProxy', 'httpsProxy', 'allProxy'] as const) {
-    const raw = copy[field];
-    if (raw === undefined || raw === '') continue;
-    copy[field] = redactProxyUrl(raw) || undefined;
-  }
-  // PEM CA не пишем в аудит (содержимое сертификата; пути — можно).
-  if (copy.tls?.caPem !== undefined) {
-    const tls = { ...copy.tls };
-    delete tls.caPem;
-    copy.tls = tls;
+  const copy = structuredClone(config) as Record<string, unknown>;
+  const redactUrls = (obj: Record<string, unknown>): void => {
+    for (const field of ['url', 'httpProxy', 'httpsProxy', 'allProxy'] as const) {
+      const raw = obj[field];
+      if (typeof raw !== 'string' || raw === '') continue;
+      obj[field] = redactProxyUrl(raw) || undefined;
+    }
+  };
+  const stripSecrets = (obj: Record<string, unknown>): void => {
+    // PEM CA не пишем в аудит (содержимое сертификата; пути — можно).
+    if (obj.tls && typeof obj.tls === 'object' && !Array.isArray(obj.tls)) {
+      const tls = { ...(obj.tls as Record<string, unknown>) };
+      delete tls.caPem;
+      if (Object.keys(tls).length > 0) obj.tls = tls;
+      else delete obj.tls;
+    }
+    // `auth` в конфиге — только username; пароль/креды не хранятся by design.
+    if (obj.auth && typeof obj.auth === 'object' && !Array.isArray(obj.auth)) {
+      const auth = { ...(obj.auth as Record<string, unknown>) };
+      delete auth.password;
+      obj.auth = auth;
+    }
+  };
+  redactUrls(copy);
+  stripSecrets(copy);
+  if (copy.profiles && typeof copy.profiles === 'object' && !Array.isArray(copy.profiles)) {
+    for (const profile of Object.values(copy.profiles as Record<string, unknown>)) {
+      if (!profile || typeof profile !== 'object' || Array.isArray(profile)) continue;
+      const entry = profile as Record<string, unknown>;
+      redactUrls(entry);
+      stripSecrets(entry);
+    }
   }
   return copy;
+}
+
+/** Статус профиля с источником пароля (без значения; `default` — legacy-файл/env). */
+type ProxyProfileStatusWithPassword = ProxyStatusProfile & { password: ProxyPasswordStatus };
+
+/** Read-only статус прокси с паролями профилей (без значений). */
+type EgressProxyStatusWithPasswords = Omit<EgressProxyStatus, 'profiles'> & {
+  profiles: Record<string, ProxyProfileStatusWithPassword>;
+};
+
+/** Добавляет `password: {source,set,removable}` к каждому профилю статуса. */
+async function withProfilePasswords(
+  status: EgressProxyStatus,
+  env: NodeJS.ProcessEnv,
+  dataDir: string | undefined,
+): Promise<EgressProxyStatusWithPasswords> {
+  const profiles: Record<string, ProxyProfileStatusWithPassword> = {};
+  for (const [name, profile] of Object.entries(status.profiles ?? {})) {
+    profiles[name] = {
+      ...profile,
+      password: await getProxyProfilePasswordStatus(env, dataDir, name),
+    };
+  }
+  return { ...status, profiles };
+}
+
+/** redacted-описание маршрута target-URL (без userinfo/паролей). */
+function describeProxyRoute(
+  config: ResolvedProxyConfig | null | undefined,
+  route: ResolvedProxyRoute,
+): ProxyTargetRouteInfo {
+  const info: ProxyTargetRouteInfo = {
+    action: route.action,
+    via: route.action,
+    reason: route.reason,
+  };
+  if (route.rule !== undefined) {
+    info.ruleId = route.rule.id;
+    if (route.rule.label !== undefined) info.ruleLabel = route.rule.label;
+  }
+  if (route.profile !== undefined) {
+    info.profile = route.profile;
+    const label = config?.profiles?.[route.profile]?.label;
+    if (label !== undefined && label !== '') info.profileLabel = label;
+  }
+  if (route.proxyUrl !== undefined) {
+    const proxyUrl = redactProxyUrl(route.proxyUrl);
+    if (proxyUrl) info.proxyUrl = proxyUrl;
+  }
+  return info;
+}
+
+/**
+ * Точечно правит `tls` профиля в сохраняемом runtime-объекте: legacy-default —
+ * top-level `proxy.tls`, именованный профиль — `proxy.profiles.<name>.tls`.
+ * Base должен быть клоном (merge runtime ⊕ config), чтобы не потерять
+ * profiles/rules/noProxy.
+ */
+function mutateProfileTls(
+  base: Partial<ProxyConfig>,
+  profile: Pick<ResolvedProxyProfile, 'name' | 'legacy'>,
+  mutate: (tls: Record<string, unknown>) => void,
+): void {
+  if (profile.legacy) {
+    const tls = { ...((base.tls ?? {}) as Record<string, unknown>) };
+    mutate(tls);
+    if (Object.keys(tls).length > 0) base.tls = tls as ProxyConfig['tls'];
+    else delete base.tls;
+    return;
+  }
+  const profiles = { ...(base.profiles ?? {}) };
+  const current = { ...(profiles[profile.name] ?? {}) };
+  const tls = { ...((current.tls ?? {}) as Record<string, unknown>) };
+  mutate(tls);
+  if (Object.keys(tls).length > 0) current.tls = tls as NonNullable<typeof current.tls>;
+  else delete current.tls;
+  profiles[profile.name] = current;
+  base.profiles = profiles;
 }
 
 /** `true` — runtime-override секции `proxy` задан (объект с ключами). */
@@ -603,6 +713,83 @@ export function createSettingsRoutes(
       proxyEnv,
       deps.dataDir,
     );
+
+  /**
+   * База для точечной правки runtime-override: merged config.yaml ⊕ runtime
+   * (без env — env остаётся приоритетнее и в стор не переносится). Клон, чтобы
+   * не мутировать состояние стора/fallback.
+   */
+  const rawProxyBase = async (): Promise<Partial<ProxyConfig>> =>
+    structuredClone(mergeProxyConfig(
+      deps.fallbackProxy,
+      await deps.settingsStore.getProxySettings(),
+    ));
+
+  /** Проверка конфигурации после правки (как будет резолвиться сохранённая). */
+  const validateProxyNext = async (next: Partial<ProxyConfig>): Promise<string | undefined> => {
+    try {
+      resolveApiProxy(deps.fallbackProxy, next, proxyEnv, deps.dataDir);
+      return undefined;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  };
+
+  /**
+   * Профиль в **saved**-конфигурации (что реально сохранится/сохранено), без
+   * требования успешного полного резолва: пароль профиля/TLS можно задать до
+   * того, как конфигурация станет полностью валидной (иначе bootstrap
+   * невозможен: auth.username без пароля ломал бы резолв). Иначе 404.
+   */
+  const savedProfileOf = async (
+    name: string,
+  ): Promise<
+    | { base: Partial<ProxyConfig>; profile: { name: string; legacy: boolean; tls?: ProxyConfig['tls'] } }
+    | { error: { status: 400 | 404; code: string; message: string } }
+  > => {
+    if (!PROXY_PROFILE_NAME_RE.test(name)) {
+      return {
+        error: { status: 404, code: 'NOT_FOUND', message: `профиль прокси "${name}" не найден` },
+      };
+    }
+    const base = await rawProxyBase();
+    const rawProfiles = base.profiles;
+    if (rawProfiles !== undefined && Object.keys(rawProfiles).length > 0) {
+      const profile = rawProfiles[name];
+      if (profile === undefined) {
+        return {
+          error: { status: 404, code: 'NOT_FOUND', message: `профиль прокси "${name}" не найден` },
+        };
+      }
+      return { base, profile: { name, legacy: false, ...(profile.tls ? { tls: profile.tls } : {}) } };
+    }
+    if (name !== 'default') {
+      return {
+        error: { status: 404, code: 'NOT_FOUND', message: `профиль прокси "${name}" не найден` },
+      };
+    }
+    const hasLegacyUrl = (['url', 'httpProxy', 'httpsProxy', 'allProxy'] as const).some(
+      (field) => typeof base[field] === 'string' && base[field] !== '',
+    );
+    if (!hasLegacyUrl) {
+      // URL мог прийти из env (legacy-default) — проверяем saved-резолв.
+      let saved: ResolvedProxyConfig | undefined;
+      try {
+        saved = await savedProxyConfig();
+      } catch {
+        saved = undefined;
+      }
+      if (saved?.profiles.default === undefined) {
+        return {
+          error: { status: 404, code: 'NOT_FOUND', message: `профиль прокси "${name}" не найден` },
+        };
+      }
+    }
+    return {
+      base,
+      profile: { name: 'default', legacy: true, ...(base.tls ? { tls: base.tls } : {}) },
+    };
+  };
 
   /** Актор изменения политики (id пользователя; core без RBAC — `local`). */
   const actorOf = (c: { get(key: 'user'): unknown }): string => {
@@ -1070,7 +1257,7 @@ export function createSettingsRoutes(
     const runningConfig = runningProxyConfig();
     const running = deps.getProxyStatus ? deps.getProxyStatus() : proxyStatus(runningConfig);
     const password = await getProxyPasswordStatus(proxyEnv, deps.dataDir);
-    const savedStatus = proxyStatus(saved);
+    const savedStatus = await withProfilePasswords(proxyStatus(saved), proxyEnv, deps.dataDir);
     const restartRequired = proxyConfigFingerprint(saved) !== proxyConfigFingerprint(runningConfig);
     return c.json({
       // Обратная совместимость: плоские поля = saved (эффективная конфигурация).
@@ -1178,6 +1365,194 @@ export function createSettingsRoutes(
   });
 
   /**
+   * ADR-099: пароль профиля прокси. Профиль должен существовать в **saved**
+   * конфигурации; env-пароль профиля (`SYNTH_PROXY_PASSWORD` для `default`,
+   * `SYNTH_PROXY_<NAME>_PASSWORD` для остальных) приоритетнее файла и даёт 409.
+   * Значение никогда не возвращается/не логируется; аудит — только статус.
+   */
+  app.put('/proxy/profiles/:name/password', settingsWriteGuard, async (c) => {
+    const name = c.req.param('name');
+    const found = await savedProfileOf(name);
+    if ('error' in found) return c.json({ error: found.error }, found.error.status);
+    const envKey = proxyProfilePasswordEnv(name);
+    if (proxyEnv[envKey] !== undefined && proxyEnv[envKey] !== '') {
+      return c.json({
+        error: {
+          code: 'CONFLICT',
+          message: `${envKey} задан в окружении — пароль профиля "${name}" управляется деплоем (UI не может его изменить)`,
+        },
+      }, 409);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const password = (body as { password?: unknown }).password;
+    if (typeof password !== 'string' || password.trim() === '') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'password: ожидается непустая строка' } }, 400);
+    }
+    if (!deps.dataDir) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'dataDir не задан — файл пароля недоступен' } }, 500);
+    }
+    const before = await getProxyProfilePasswordStatus(proxyEnv, deps.dataDir, name);
+    await writeProxyProfilePasswordFile(deps.dataDir, name, password);
+    const after = await getProxyProfilePasswordStatus(proxyEnv, deps.dataDir, name);
+    await auditPolicy(c, 'proxy', 'update', { profile: name, password: before }, { profile: name, password: after });
+    return c.json({ password: after });
+  });
+
+  app.delete('/proxy/profiles/:name/password', settingsWriteGuard, async (c) => {
+    const name = c.req.param('name');
+    const found = await savedProfileOf(name);
+    if ('error' in found) return c.json({ error: found.error }, found.error.status);
+    const envKey = proxyProfilePasswordEnv(name);
+    if (proxyEnv[envKey] !== undefined && proxyEnv[envKey] !== '') {
+      return c.json({
+        error: {
+          code: 'CONFLICT',
+          message: `${envKey} задан в окружении — пароль профиля "${name}" управляется деплоем (UI не может его удалить)`,
+        },
+      }, 409);
+    }
+    if (!deps.dataDir) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'dataDir не задан — файл пароля недоступен' } }, 500);
+    }
+    const before = await getProxyProfilePasswordStatus(proxyEnv, deps.dataDir, name);
+    await removeProxyProfilePasswordFile(deps.dataDir, name);
+    const after = await getProxyProfilePasswordStatus(proxyEnv, deps.dataDir, name);
+    await auditPolicy(c, 'proxy', 'reset', { profile: name, password: before }, { profile: name, password: after });
+    return c.json({ password: after });
+  });
+
+  /** Ответ TLS-мутаций: сохранённый статус (без PEM/ключей) + рестарт. */
+  const proxyTlsResponse = async (): Promise<{ status: EgressProxyStatusWithPasswords; restartRequired: true }> => {
+    const saved = await savedProxyConfig();
+    return {
+      status: await withProfilePasswords(proxyStatus(saved), proxyEnv, deps.dataDir),
+      restartRequired: true,
+    };
+  };
+
+  /**
+   * ADR-099: CA-бандл TLS/mTLS **к прокси** для профиля.
+   * `PUT` — валидировать (`validateCaPem`) и записать `{dataDir}/secrets/proxy/<name>/ca.pem`
+   * (0600/0700, атомарно), обновить только `tls.caFile` в saved runtime-конфиге.
+   * Для synthetic legacy-default (`profiles` отсутствуют) — top-level `proxy.tls`.
+   */
+  app.put('/proxy/profiles/:name/tls/ca', settingsWriteGuard, async (c) => {
+    const name = c.req.param('name');
+    const found = await savedProfileOf(name);
+    if ('error' in found) return c.json({ error: found.error }, found.error.status);
+    if (!deps.dataDir) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'dataDir не задан — TLS-материалы недоступны' } }, 500);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const pem = (body as { pem?: unknown }).pem;
+    if (typeof pem !== 'string' || pem.trim() === '') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'pem: ожидается непустой PEM-бандл (1+ сертификатов)' } }, 400);
+    }
+    try {
+      validateCaPem(pem);
+    } catch (err) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: err instanceof Error ? err.message : String(err) } }, 400);
+    }
+    const before = await rawProxyBase();
+    const next = structuredClone(before);
+    const caFile = proxyProfileTlsFilePath(deps.dataDir, name, 'ca');
+    mutateProfileTls(next, found.profile, (tls) => {
+      tls.caFile = caFile;
+      delete tls.caPem;
+    });
+    await writeProxyProfileTlsFile(deps.dataDir, name, 'ca', pem);
+    const invalid = await validateProxyNext(next);
+    if (invalid) return c.json({ error: { code: 'VALIDATION_ERROR', message: invalid } }, 400);
+    await deps.settingsStore.setProxySettings(next);
+    await auditPolicy(c, 'proxy', 'update', sanitizeProxyForAudit(before), sanitizeProxyForAudit(next));
+    return c.json(await proxyTlsResponse());
+  });
+
+  app.delete('/proxy/profiles/:name/tls/ca', settingsWriteGuard, async (c) => {
+    const name = c.req.param('name');
+    const found = await savedProfileOf(name);
+    if ('error' in found) return c.json({ error: found.error }, found.error.status);
+    if (!deps.dataDir) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'dataDir не задан — TLS-материалы недоступны' } }, 500);
+    }
+    const before = await rawProxyBase();
+    const next = structuredClone(before);
+    const managedPath = proxyProfileTlsFilePath(deps.dataDir, name, 'ca');
+    const previousTls = found.profile.tls;
+    mutateProfileTls(next, found.profile, (tls) => {
+      delete tls.caFile;
+      delete tls.caPem;
+    });
+    const invalid = await validateProxyNext(next);
+    if (invalid) return c.json({ error: { code: 'VALIDATION_ERROR', message: invalid } }, 400);
+    await removeProxyProfileTlsFile(deps.dataDir, name, 'ca', previousTls?.caFile ?? managedPath);
+    await deps.settingsStore.setProxySettings(next);
+    await auditPolicy(c, 'proxy', 'reset', sanitizeProxyForAudit(before), sanitizeProxyForAudit(next));
+    return c.json(await proxyTlsResponse());
+  });
+
+  /** `PUT/DELETE .../tls/client` — mTLS-клиент к прокси (write-only, cert↔key). */
+  app.put('/proxy/profiles/:name/tls/client', settingsWriteGuard, async (c) => {
+    const name = c.req.param('name');
+    const found = await savedProfileOf(name);
+    if ('error' in found) return c.json({ error: found.error }, found.error.status);
+    if (!deps.dataDir) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'dataDir не задан — TLS-материалы недоступны' } }, 500);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const certPem = (body as { certPem?: unknown }).certPem;
+    const keyPem = (body as { keyPem?: unknown }).keyPem;
+    if (typeof certPem !== 'string' || typeof keyPem !== 'string') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'certPem и keyPem: ожидаются PEM-строки' } }, 400);
+    }
+    try {
+      validateClientPem(certPem, keyPem);
+    } catch (err) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: err instanceof Error ? err.message : String(err) } }, 400);
+    }
+    const before = await rawProxyBase();
+    const next = structuredClone(before);
+    const certFile = proxyProfileTlsFilePath(deps.dataDir, name, 'clientCert');
+    const keyFile = proxyProfileTlsFilePath(deps.dataDir, name, 'clientKey');
+    mutateProfileTls(next, found.profile, (tls) => {
+      tls.certFile = certFile;
+      tls.keyFile = keyFile;
+    });
+    await writeProxyProfileTlsFile(deps.dataDir, name, 'clientCert', certPem);
+    await writeProxyProfileTlsFile(deps.dataDir, name, 'clientKey', keyPem);
+    const invalid = await validateProxyNext(next);
+    if (invalid) return c.json({ error: { code: 'VALIDATION_ERROR', message: invalid } }, 400);
+    await deps.settingsStore.setProxySettings(next);
+    await auditPolicy(c, 'proxy', 'update', sanitizeProxyForAudit(before), sanitizeProxyForAudit(next));
+    return c.json(await proxyTlsResponse());
+  });
+
+  app.delete('/proxy/profiles/:name/tls/client', settingsWriteGuard, async (c) => {
+    const name = c.req.param('name');
+    const found = await savedProfileOf(name);
+    if ('error' in found) return c.json({ error: found.error }, found.error.status);
+    if (!deps.dataDir) {
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: 'dataDir не задан — TLS-материалы недоступны' } }, 500);
+    }
+    const before = await rawProxyBase();
+    const next = structuredClone(before);
+    const previousTls = found.profile.tls;
+    mutateProfileTls(next, found.profile, (tls) => {
+      delete tls.certFile;
+      delete tls.keyFile;
+    });
+    const invalid = await validateProxyNext(next);
+    if (invalid) return c.json({ error: { code: 'VALIDATION_ERROR', message: invalid } }, 400);
+    const certPath = proxyProfileTlsFilePath(deps.dataDir, name, 'clientCert');
+    const keyPath = proxyProfileTlsFilePath(deps.dataDir, name, 'clientKey');
+    await removeProxyProfileTlsFile(deps.dataDir, name, 'clientCert', previousTls?.certFile ?? certPath);
+    await removeProxyProfileTlsFile(deps.dataDir, name, 'clientKey', previousTls?.keyFile ?? keyPath);
+    await deps.settingsStore.setProxySettings(next);
+    await auditPolicy(c, 'proxy', 'reset', sanitizeProxyForAudit(before), sanitizeProxyForAudit(next));
+    return c.json(await proxyTlsResponse());
+  });
+
+  /**
    * ADR-099: проверка **только коннекта к прокси** (не к цели).
    * Без явного `url` проверяется **saved**-конфигурация (эффективная с runtime/env),
    * а не running — UI видит будущую конфигурацию после рестарта (`usingSaved:true`).
@@ -1203,6 +1578,86 @@ export function createSettingsRoutes(
           ...(explicitUrl ? { url: explicitUrl } : { config }),
         });
     return c.json({ ...result, usingSaved: explicitUrl === undefined });
+  });
+
+  /**
+   * ADR-099: проверка **target URL** по saved-конфигурации (`POST /proxy/test`).
+   * Не путать с `/proxy/check` (коннект к самому прокси).
+   *
+   * - URL — `http(s)` без userinfo (иначе 400);
+   * - маршрут — `resolveProxyRoute` по saved (runtime/env), не running;
+   * - egress-политика `egress.tools` проверяется **до** запроса; при отказе
+   *   возвращается `ok:false` + `route` (запрос не выполняется);
+   * - TLS к цели — bootstrap `security.tls` (CA/mTLS-профили, ADR-099);
+   * - проверка — `HEAD` без редиректов и без тела; ответ redacted.
+   */
+  app.post('/proxy/test', settingsWriteGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const rawUrl = (body as { url?: unknown }).url;
+    if (typeof rawUrl !== 'string' || rawUrl.trim() === '') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url: ожидается непустая строка' } }, 400);
+    }
+    let target: URL;
+    try {
+      target = new URL(rawUrl.trim());
+    } catch {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url: некорректный URL' } }, 400);
+    }
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url: поддерживаются только http/https' } }, 400);
+    }
+    if (target.username !== '' || target.password !== '') {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: 'url: userinfo (логин/пароль) не допускается' } }, 400);
+    }
+
+    let saved: ResolvedProxyConfig;
+    try {
+      saved = await savedProxyConfig();
+    } catch (err) {
+      return c.json({ error: proxyValidationError(err) }, 400);
+    }
+    const restartRequired = proxyConfigFingerprint(saved) !== proxyConfigFingerprint(runningProxyConfig());
+    const route = resolveProxyRoute(saved, target);
+    const routeInfo = describeProxyRoute(saved, route);
+
+    const policy = (await deps.settingsStore.getEgressPolicy('tools'))
+      ?? egressDefaults('tools');
+    const egress = await checkEgressUrl(target.href, policy as EgressPolicy, {
+      proxied: route.action === 'proxy',
+      resolveHost: deps.resolveHost,
+    });
+    if (!egress.allowed) {
+      return c.json({
+        url: target.href,
+        route: routeInfo,
+        ok: false,
+        latencyMs: 0,
+        authChallenge: 'none',
+        error: egress.reason ? `egress: ${egress.reason}` : 'egress: запрос запрещён политикой',
+        usingSaved: true,
+        restartRequired,
+      });
+    }
+
+    let tls: ReturnType<typeof buildTlsTrustProfiles>;
+    try {
+      const runtime = deps.dataDir ? readTlsRuntimeSettings(deps.dataDir) : undefined;
+      tls = buildTlsTrustProfiles(
+        { security: { tls: deps.fallbackTls } },
+        proxyEnv,
+        runtime,
+      );
+    } catch (err) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: err instanceof Error ? err.message : String(err) } }, 400);
+    }
+
+    const result = await checkProxyTarget({
+      url: target.href,
+      config: saved,
+      tls,
+      timeoutMs: saved.connectTimeoutMs,
+    });
+    return c.json({ ...result, usingSaved: true, restartRequired });
   });
 
   /**

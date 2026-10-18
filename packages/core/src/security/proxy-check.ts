@@ -15,16 +15,21 @@ import type { Socket } from 'node:net';
 import {
   ProxyConfigError,
   defaultProxyEntry,
+  emptyResolvedProxyConfig,
   isSocksProxyProtocol,
   parseProxyUrl,
   redactProxyUrl,
+  resolveProxyRoute,
   type ParsedProxyUrl,
   type ProxyAuthChallenge,
   type ProxyCheckResult,
   type ProxyCredentials,
   type ResolvedProxyConfig,
+  type ResolvedProxyRoute,
 } from '@itphx/synth-shared';
+import { EgressDispatcher, type EgressTlsProfile } from './proxy-dispatcher.js';
 import { getEgressProxyConfig } from './proxy-state.js';
+import type { FetchLike, TlsTrust } from './tls.js';
 
 /** Зарезервированный TLD `.invalid` — гарантированно не резолвится. */
 const PROBE_TARGET = 'probe.invalid:443';
@@ -312,6 +317,285 @@ export async function checkProxyConnectivity(
       if (!settled) finish({ reachable: latencyMs > 0, authChallenge: 'none' });
     });
   });
+}
+
+/** Маршрут проверки target-URL (без секретов: proxyUrl redacted). */
+export interface ProxyTargetRouteInfo {
+  action: 'proxy' | 'direct';
+  /** Фактический путь проверки (`proxy` — через прокси, `direct` — напрямую). */
+  via: 'proxy' | 'direct';
+  /** `disabled` | `no-proxy` | `rule` | `default` | `no-match` | `no-default`. */
+  reason: string;
+  ruleId?: string;
+  ruleLabel?: string;
+  profile?: string;
+  profileLabel?: string;
+  /** URL прокси без userinfo. */
+  proxyUrl?: string;
+}
+
+/** Результат проверки **target URL** (диагностика egress-маршрута). */
+export interface ProxyTargetCheckResult {
+  url: string;
+  route: ProxyTargetRouteInfo;
+  /** `true` — транспорт получил HTTP-ответ (любой статус). */
+  ok: boolean;
+  httpStatus?: number;
+  latencyMs: number;
+  authChallenge: ProxyAuthChallenge;
+  error?: string;
+}
+
+export interface ProxyTargetCheckOptions {
+  /** Target http(s) URL; userinfo запрещён. */
+  url: string;
+  /** Сохранённая конфигурация прокси (маршрут/профили/правила). */
+  config?: ResolvedProxyConfig | null;
+  /** Доверие TLS к цели (CA/mTLS-профили). */
+  tls?: TlsTrust;
+  timeoutMs?: number;
+  /** Тестовый транспорт (иначе глобальный `fetch` + явный dispatcher). */
+  fetchImpl?: FetchLike;
+}
+
+/** Таймаут проверки по умолчанию (если в конфигурации прокси не задан). */
+const DEFAULT_TARGET_CHECK_TIMEOUT_MS = 10_000;
+
+/** Разобранный target-URL либо внятная ошибка (без эха userinfo). */
+function parseTargetUrl(raw: string): { url: URL } | { error: string } {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { error: 'url: некорректный URL' };
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return { error: `url: схема "${url.protocol.replace(/:$/, '')}" не поддерживается (http/https)` };
+  }
+  if (url.username !== '' || url.password !== '') {
+    return { error: 'url: userinfo (логин/пароль) в URL не допускается' };
+  }
+  return { url };
+}
+
+/** Redacted-описание маршрута для ответа API (без секретов). */
+function describeTargetRoute(
+  config: ResolvedProxyConfig | null | undefined,
+  route: ResolvedProxyRoute,
+): ProxyTargetRouteInfo {
+  const info: ProxyTargetRouteInfo = {
+    action: route.action,
+    via: route.action,
+    reason: route.reason,
+  };
+  if (route.rule !== undefined) {
+    info.ruleId = route.rule.id;
+    if (route.rule.label !== undefined) info.ruleLabel = route.rule.label;
+  }
+  if (route.profile !== undefined) {
+    info.profile = route.profile;
+    const label = config?.profiles?.[route.profile]?.label;
+    if (label !== undefined && label !== '') info.profileLabel = label;
+  }
+  if (route.proxyUrl !== undefined) {
+    const proxyUrl = redactProxyUrl(route.proxyUrl);
+    if (proxyUrl) info.proxyUrl = proxyUrl;
+  }
+  return info;
+}
+
+/** `code` из цепочки ошибок транспорта (undici оборачивает причины). */
+function errorCodeOf(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current; depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string') return code;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
+/** Текст ошибки без секретов: код + сообщение (прокси-URL уже без userinfo). */
+function describeCheckError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = errorCodeOf(error);
+  return code !== undefined && !message.startsWith(`${code}:`) ? `${code}: ${message}` : message;
+}
+
+/** `true` — ошибка транспорта (или её `cause`) означает ответ прокси `407`. */
+function isAuthChallengeFailure(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current; depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (code === 'EGRESS_PROXY_AUTH_REQUIRED' || code === 'EGRESS_PROXY_AUTH_FAILED') return true;
+    const message = current instanceof Error ? current.message : String(current);
+    if (/Proxy Authentication Required \(407\)|Proxy response \(407\)|\(407\)/i.test(message)) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Схема аутентификации из ошибки 407: `Proxy-Authenticate` в ошибке undici не
+ * сохраняется (CONNECT-ветка отдаёт только статус), поэтому распознаём явные
+ * упоминания и иначе считаем `Basic` (HTTP-прокси с кред-схемой).
+ */
+function authChallengeOfError(error: unknown): ProxyAuthChallenge {
+  let text = '';
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current; depth++) {
+    text += ` ${current instanceof Error ? current.message : String(current)}`;
+    current = (current as { cause?: unknown }).cause;
+  }
+  if (/ntlm/i.test(text)) return 'NTLM';
+  if (/negotiate|kerberos/i.test(text)) return 'Negotiate';
+  return 'Basic';
+}
+
+/** URL для отчёта: без userinfo (секрет не эхоится даже при ошибке валидации). */
+function displayTargetUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    url.username = '';
+    url.password = '';
+    return url.href;
+  } catch {
+    return '';
+  }
+}
+
+/** TLS-опции dispatcher'а из доверия к цели (без профилей). */
+function dispatcherTls(tls: TlsTrust | undefined): {
+  ca?: string;
+  cert?: string;
+  key?: string;
+  rejectUnauthorized: boolean;
+} {
+  return {
+    ...(tls?.ca !== undefined ? { ca: tls.ca } : {}),
+    ...(tls?.cert !== undefined ? { cert: tls.cert } : {}),
+    ...(tls?.key !== undefined ? { key: tls.key } : {}),
+    rejectUnauthorized: tls?.rejectUnauthorized ?? true,
+  };
+}
+
+/** Per-host TLS-профили цели в формате dispatcher'а. */
+function dispatcherTlsProfiles(tls: TlsTrust | undefined): EgressTlsProfile[] {
+  return (tls?.profiles ?? []).map((profile) => ({
+    id: profile.id,
+    hosts: [...profile.hosts],
+    tls: {
+      ...(profile.ca !== undefined ? { ca: profile.ca } : {}),
+      ...(profile.cert !== undefined ? { cert: profile.cert } : {}),
+      ...(profile.key !== undefined ? { key: profile.key } : {}),
+      rejectUnauthorized: profile.rejectUnauthorized,
+    },
+  }));
+}
+
+/**
+ * Проверка **target URL** (ADR-099; `POST /api/v2/settings/proxy`-диагностика):
+ * строит маршрут через `resolveProxyRoute` (disabled/noProxy/правила/default),
+ * выполняет `HEAD` без тела и без кред к цели, `redirect:'manual'`.
+ *
+ * - `ok: true` — транспорт получил любой HTTP-ответ (в т.ч. 4xx/5xx);
+ * - `ok: false` — DNS/TLS/прокси/аутентификация/таймаут (понятный `error`);
+ * - `407` — `ok:false`, `authChallenge` из ошибки (`Basic`/`NTLM`/`Negotiate`);
+ * - egress-политика сюда **не входит** — её проверяет вызывающий API до вызова.
+ *
+ * Dispatcher создаётся явно (не берётся глобальный), поэтому проверка не
+ * зависит от живого прокси-маршрута процесса; закрывается в `finally`.
+ */
+export async function checkProxyTarget(
+  options: ProxyTargetCheckOptions,
+): Promise<ProxyTargetCheckResult> {
+  const started = Date.now();
+  const parsed = parseTargetUrl(options.url);
+  if ('error' in parsed) {
+    return {
+      url: displayTargetUrl(options.url),
+      route: { action: 'direct', via: 'direct', reason: 'no-match' },
+      ok: false,
+      latencyMs: Math.max(0, Date.now() - started),
+      authChallenge: 'none',
+      error: parsed.error,
+    };
+  }
+
+  const { url } = parsed;
+  const config = options.config ?? null;
+  const route = resolveProxyRoute(config, url);
+  const routeInfo = describeTargetRoute(config, route);
+  const timeoutMs = options.timeoutMs ?? config?.connectTimeoutMs ?? DEFAULT_TARGET_CHECK_TIMEOUT_MS;
+
+  // Прямой маршрут — dispatcher с пустым прокси (изоляция от глобального
+  // dispatcher'а процесса); прокси-маршрут — сохранённая конфигурация.
+  const dispatcher = new EgressDispatcher({
+    proxy: route.action === 'proxy' && config ? config : emptyResolvedProxyConfig(),
+    tls: dispatcherTls(options.tls),
+    tlsProfiles: dispatcherTlsProfiles(options.tls),
+  });
+
+  const init = {
+    method: 'HEAD',
+    redirect: 'manual',
+    signal: AbortSignal.timeout(timeoutMs),
+    dispatcher,
+  } as unknown as RequestInit;
+
+  const impl = options.fetchImpl ?? (globalThis.fetch as FetchLike);
+  try {
+    const response = await impl(url.href, init);
+    // Тело HEAD не нужно; освобождаем сокет (best-effort).
+    void response.body?.cancel().catch(() => undefined);
+    if (response.status === 407) {
+      const challenge = parseAuthChallenge(
+        response.headers.get('proxy-authenticate') ?? undefined,
+      );
+      return {
+        url: url.href,
+        route: routeInfo,
+        ok: false,
+        httpStatus: 407,
+        latencyMs: Math.max(0, Date.now() - started),
+        authChallenge: challenge === 'none' ? 'Basic' : challenge,
+        error:
+          `Прокси ${routeInfo.proxyUrl ?? '(не задан)'} требует аутентификации (407)` +
+          (challenge === 'none' ? '' : `: ${challenge}`),
+      };
+    }
+    return {
+      url: url.href,
+      route: routeInfo,
+      ok: true,
+      httpStatus: response.status,
+      latencyMs: Math.max(0, Date.now() - started),
+      authChallenge: 'none',
+    };
+  } catch (error) {
+    const timeout =
+      (error as { name?: string } | null)?.name === 'TimeoutError' ||
+      (error as { name?: string } | null)?.name === 'AbortError' ||
+      errorCodeOf(error) === 'UND_ERR_ABORTED';
+    const authFailure = isAuthChallengeFailure(error);
+    const message = timeout
+      ? `таймаут проверки (${timeoutMs} мс)`
+      : authFailure
+        ? `Прокси ${routeInfo.proxyUrl ?? '(не задан)'} требует аутентификации (407)`
+        : describeCheckError(error);
+    return {
+      url: url.href,
+      route: routeInfo,
+      ok: false,
+      latencyMs: Math.max(0, Date.now() - started),
+      authChallenge: authFailure ? authChallengeOfError(error) : 'none',
+      error: message,
+    };
+  } finally {
+    await dispatcher.close().catch(() => undefined);
+  }
 }
 
 /** Безопасное представление проверяемого прокси (для логов/диагностики). */

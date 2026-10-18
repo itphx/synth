@@ -25,7 +25,8 @@ export type MaintenanceAuditOp =
   | 'update.failed'
   | 'uninstall.purge'
   | 'export.created'
-  | 'import.applied';
+  | 'import.applied'
+  | 'restart.requested';
 
 /** ADR-092: итог операции обслуживания. */
 export type MaintenanceAuditStatus = 'ok' | 'failed' | 'scheduled';

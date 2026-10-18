@@ -991,6 +991,72 @@ kubectl -n synth exec deploy/synth-backend -- sh -lc '
 11. *Ожидаемо:* после обновления — старт без ошибок совместимости схемы, `synth doctor` без `fail`;
     страховочная копия перед авто-миграцией — в `{dataDir}/backups/`.
 
+## Перезапуск инстанса
+
+**Цель:** применить настройки, которые читаются только при старте (TLS/CA и mTLS-профили, прокси и его
+профили/правила, пул PostgreSQL, MCP-клиенты), завершить отложенное восстановление или просто поднять
+«свежий» процесс — не заходя на хост/в кластер. Ожидаемый результат: процесс завершился штатно, супервизор
+поднял его заново, `startedAt` в `/health` изменился, `synth doctor` без `fail`.
+
+Перезапуск **не выполняется «изнутри»** процесса: `POST /api/v2/maintenance/restart {confirm:true}`
+(ADMIN) отвечает **202** `{status:'restarting', restartId, mode, startedAt}`, затем процесс делает
+graceful shutdown и завершается с кодом **75** (`EX_TEMPFAIL`), а поднимает его внешний супервизор
+([ADR-092](./arch_decisions/adr-092-instance-lifecycle-maintenance.md) п. 7). Внутрипроцессная
+переинициализация невозможна: undici-dispatcher/TLS, пул PG, MCP-клиенты, шедулер и EventHub —
+процесс-глобальные singleton'ы.
+
+1. **Что прерывается.** Активные стримы ответов LLM, выполняющиеся инструменты/ходы агента, in-flight
+   HTTP-запросы и WS/SSE-подписки на этом процессе; очередь сообщений и состояние сессий **сохраняются**
+   (они в хранилище), но незавершённый ход будет прерван и его нужно повторить. Восстановление,
+   запланированное через `POST /maintenance/restore`, применится на этом же старте (до миграций);
+   pending-миграции схемы — тоже (со страховочной копией).
+2. **Режим.** `GET /api/v2/maintenance/restart` → `{supported, mode, reason?, startedAt, version}`.
+   Режим задаётся `SYNTH_RESTART_MODE` (CLI `synth serve --restart-mode` приоритетнее env):
+   `disabled` (default — `supported:false`, `POST` → 409 `RESTART_UNSUPPORTED`), `process`
+   (выход 75; поднимает супервизор), `supervisor` (то же, но локальный `scripts/dev.sh`).
+   Неизвестное значение → `disabled` + предупреждение в лог (fail-safe).
+3. **Площадки:**
+   - **K8s (Helm-чарт):** `backend.restartMode: process` (дефолт чарта) → env `SYNTH_RESTART_MODE`;
+     Deployment имеет `restartPolicy: Always`, поэтому pod перезапускается сам. Проверка:
+     `kubectl -n synth get pods` (новый возраст pod'а), `kubectl -n synth logs deploy/synth-backend`.
+   - **Docker Compose:** `restart: unless-stopped` + `SYNTH_RESTART_MODE=process` (в compose-файле).
+     Без restart policy (`docker run`) контейнер **не** поднимется — используйте `--restart` или
+     оставьте `disabled`.
+   - **systemd:** `ExecStart=/usr/bin/synth serve --restart-mode process`, `Restart=on-failure`
+     (код 75 — «временно не могу», unit поднимается), `RestartSec=2`; проверка —
+     `systemctl status synth`, `journalctl -u synth -n 50`.
+   - **pm2:** `autorestart: true` + `SYNTH_RESTART_MODE=process`; проверка — `pm2 status`, `pm2 logs`.
+   - **dev:** `./scripts/dev.sh` ставит `SYNTH_RESTART_MODE=supervisor` и сам перезапускает процесс
+     (в `tmp/backend.log` — строка `[supervisor] … restart requested (exit 75)`).
+   - **Bare `synth serve`:** по умолчанию `disabled` — кнопка в UI недоступна; либо `--restart-mode
+     process` под своим супервизором, либо обычный `systemctl restart`.
+4. **Multi-replica.** Endpoint перезапускает **только** тот pod/процесс, который обработал запрос:
+   остальные реплики продолжают работать, соединения, попавшие на перезапускаемый pod, прерываются.
+   Перезапуск всего Deployment (например, после правки `config.yaml`/values) — раскатка:
+   ```bash
+   kubectl -n synth rollout restart deployment/<release>-synth-backend
+   kubectl -n synth rollout status  deployment/<release>-synth-backend
+   ```
+   Для Helm-релиза в целом — `helm rollback <release> <revision>` (см. «Обновление и откат»).
+5. **UI.** Настройки → «Обслуживание» → «Перезапуск»: показывает режим и предупреждение, спрашивает
+   подтверждение (активные стримы будут прерваны), после 202 показывает оверлей и опрашивает
+   `GET /health` до появления **нового** `startedAt` (до 90 с), затем перезагружает страницу. Если
+   `supported:false` — кнопки нет, показана причина.
+6. **Аудит.** Запрос пишется в `{dataDir}/audit/maintenance.jsonl`: `restart.requested`
+   (status `scheduled`, `actor`, `details:{mode, restartId}`) — **до** инициации выхода; повторный
+   вызов идемпотентен (тот же `restartId`, 202), поэтому «двойного» рестарта и двух записей нет.
+7. **Диагностика.**
+   - `409 RESTART_UNSUPPORTED` — режим `disabled`: задайте `SYNTH_RESTART_MODE`/`--restart-mode` и
+     перезапустите процесс вручную один раз (дальше — из UI).
+   - Ответ 202 есть, но сервис не вернулся — супервизор не настроен/не поднимает контейнер
+     (`docker run` без `--restart`, нет `Restart=` в systemd, `autorestart:false` в pm2);
+     код выхода в логах — 75.
+   - `startedAt` не меняется — health отвечает старый процесс (или балансировщик ведёт на другую
+     реплику); проверьте `kubectl get pods`/`systemctl status` и повторите.
+   - Изменения TLS/прокси «не применились» — проверьте `restartRequired` в `GET /settings/proxy`/
+     `/settings/tls` и что рестарт действительно произошёл (смена `startedAt`), а не был перехвачен
+     другим процессом.
+
 ## Обслуживание из UI
 
 **Цель:** выполнить эксплуатационные операции без CLI; доступно только роли ADMIN.
@@ -1030,6 +1096,11 @@ kubectl -n synth exec deploy/synth-backend -- sh -lc '
    Записи «свежие первыми»; кнопка «Обновить» перечитывает журнал, «Очистить журнал» (с
    подтверждением) удаляет все записи. *Ожидаемо:* после создания бэкапа в журнале появляется
    запись `backup.created`; журнал помогает разобрать «что, когда и кем» менялось на инстансе.
+6. **Перезапуск.** Блок «Перезапуск» показывает режим (`process`/`supervisor`/`disabled`) и причину
+   недоступности; кнопка с подтверждением вызывает `POST /maintenance/restart {confirm:true}` (202),
+   затем оверлей и опрос `GET /health` до нового `startedAt` (до 90 с) и перезагрузка страницы.
+   *Ожидаемо:* страница возвращается сама; в журнале — `restart.requested`; процедура и площадки —
+   раздел «Перезапуск инстанса» выше.
 
 ## Обслуживание по API
 
@@ -1051,6 +1122,8 @@ RBAC: managed (backend) — только `ADMIN`; core (standalone) — `require
 | `GET /api/v2/maintenance/restore` | Отложенный запрос на восстановление |
 | `POST /api/v2/maintenance/restore` | Запланировать восстановление (`{confirm:true}`) |
 | `DELETE /api/v2/maintenance/restore` | Отменить отложенный запрос |
+| `GET /api/v2/maintenance/restart` | Статус рестарта (`supported`/`mode`/`reason`/`startedAt`) |
+| `POST /api/v2/maintenance/restart` | Перезапуск (`{confirm:true}` → 202; `disabled` → 409) |
 | `GET /api/v2/maintenance/audit` | Журнал обслуживания (`limit`, `op`) |
 | `DELETE /api/v2/maintenance/audit` | Очистить журнал (`{confirm:true}`) |
 
@@ -1119,3 +1192,4 @@ curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
 - 2026-10-16 — добавлен раздел «Перенос проекта между инстансами» (`synth project export|import`, ADR-091 §6): архив без секретов, materialization с новыми id, `--merge-into`/`--dry-run`/`--yes`/`--with-workspace`, маппинг id.
 - 2026-10-16 — перенос проекта доступен по HTTP API (роуты `GET /api/v2/projects/:id/export` и `POST /api/v2/projects/import`, [API_V2.md](./API_V2.md) §5.8.1): скачивание архива и импорт multipart; `confirm` не требуется.
 - 2026-10-17 — добавлен раздел «Миграция хранилища в Kubernetes (K3s/Fleet)»: предусловия (TCP из namespace, `NOLOGIN` ≠ неверный пароль, сверка sha256 ключей SealedSecret), артефакты/деплой без бампа версии (проверка драйвера в образе резолвингом, обязательный `rollout restart`), бэкап и миграция Job'ами на PVC (`job-backup`/`job-migrate`/`job-migrate-apply`), переключение режима в `values.yaml` с `degradedMode: halt`, верификация, дефект `copyServiceKeys`/`copyEventApiKeys` (не переносятся `hash`/`prefix`) и восстановление из файлового стора, чистка PVC, откат и грабли; проверено на test-инстансе (2026-10-17).
+- 2026-10-18 — добавлен runbook «Перезапуск инстанса» (ADR-092 п. 7): graceful shutdown с exit 75, режимы `disabled|process|supervisor`, площадки (K8s/Helm, Docker Compose, systemd, pm2, `dev.sh`, bare `synth serve`), multi-replica и `kubectl rollout restart`, аудит `restart.requested`, диагностика; в «Обслуживание из UI»/«по API» добавлен блок «Перезапуск».

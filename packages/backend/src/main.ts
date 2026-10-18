@@ -5,6 +5,11 @@
 // тестах без запуска процесса.
 
 import { createBackendApp } from './app.js';
+import {
+  configureRestart,
+  resolveRestartMode,
+  RESTART_EXIT_CODE,
+} from '@itphx/synth-core';
 
 const host = process.env.SYNTH_HOST || '0.0.0.0';
 
@@ -13,7 +18,7 @@ const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager
 
 let shuttingDown = false;
 
-async function gracefulShutdown(signal: string): Promise<void> {
+async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[Shutdown] Получен сигнал ${signal}, начинаю graceful shutdown...`);
@@ -62,7 +67,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
   }
 
   console.log('[Shutdown] Завершено. Выход.');
-  process.exit(0);
+  process.exit(exitCode);
 }
 
 async function waitForStreamsDrain(): Promise<void> {
@@ -85,6 +90,14 @@ app.get('/admin/sessions/blocked', auth.requireAdmin, (c) => c.json({ sessions: 
 
 process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
 process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+
+// Restart из UI: режим — `SYNTH_RESTART_MODE` (default `disabled`; managed-деплой
+// задаёт `process` — K8s/Docker перезапускают контейнер), рестарт — graceful
+// shutdown с кодом 75. `/admin/shutdown` остаётся обычным выходом с кодом 0.
+configureRestart({
+  mode: resolveRestartMode(process.env),
+  request: () => gracefulShutdown('API', RESTART_EXIT_CODE),
+});
 
 console.log(`synth-backend starting on http://${host}:${port}`);
 console.log(`  data dir: ${dataDir}`);

@@ -18,15 +18,22 @@
 > bootstrap `{dataDir}/security-tls.json` (читается до PG), CA-бандл, `rejectUnauthorized`, default
 > mTLS-клиент и per-host `mappings` (exact/`*.suffix`/`*`, первое совпадение), тот же профиль для PG,
 > API `settings/tls*`, раздел «Сеть» (Прокси + Доверенные CA), read-only параметры config/env, аудит
-> `scope:'tls'`, применение при старте (`restartRequired`). **Вне scope (2026-10-18):** доменная
+> `scope:'tls'`, применение при старте (`restartRequired`); **(5) профили и host-правила прокси** —
+> `proxy.mode`/`proxy.profiles`/`proxy.rules` (first match, `noProxy` важнее, CIDR по IP-литералу),
+> per-profile `auth`/`tls`, пароли профилей (`SYNTH_PROXY_<NAME>_PASSWORD` / `secrets/proxy/<name>.password`),
+> TLS-материалы профилей (`secrets/proxy/<name>/`), API `/settings/proxy/profiles/:name/*`,
+> `POST /settings/proxy/test` (target-check с маршрутом), UI «профили/правила/проверка цели», legacy-
+> совместимость (п. 27). **Вне scope (2026-10-18):** доменная
 > аутентификация прокси (NTLM/Negotiate/Kerberos) **не реализуется в приложении** — делегируется
 > промежуточному egress-прокси/шлюзу (Squid/px, п. 25); SOCKS5 — **best-effort** (п. 26). **Остаток:**
-> per-host CA и несколько default-сертов, runtime-reload прокси/TLS без рестарта, пиннинг проверенного
+> runtime-reload прокси/TLS без рестарта, CA к цели через SOCKS5, per-host CA и несколько
+> default-клиентских сертов, пиннинг проверенного
 > адреса ([PROP-100](./prop-100-ssrf-dns-rebinding.md)), метрики/наблюдаемость
 > ([PROP-094](./prop-094-observability-metrics.md)), перепроверка покрытия встроенного `fetch` на Node 22.
 > Политика — **не граница безопасности**, когда доступны shell, `stdio`-MCP или внешние движки (см.
 > «Последствия»).
-> **Дата:** 2026-10-16 (адресная политика — 2026-10-17; прокси D1+D2 — 2026-10-17; runtime-UI — 2026-10-18)
+> **Дата:** 2026-10-16 (адресная политика — 2026-10-17; прокси D1+D2 — 2026-10-17; runtime-UI — 2026-10-18;
+> профили и host-правила — 2026-10-18)
 > **Обновлено:** 2026-10-17 — адресная egress-политика как часть того же слоя: `egress.tools`/
 > `egress.webhooks`, `mcp.networkPolicy` с `exceptions`, live per-request, аудит изменений и журнал
 > внешних запросов, удаление `webhooks.allowPrivateTargets`.
@@ -41,6 +48,11 @@
 > и per-host `mappings`, тот же профиль для PostgreSQL, API `settings/tls*`, аудит `scope:'tls'`.
 > **Обновлено:** 2026-10-18 — доменная аутентификация прокси (NTLM/Negotiate/Kerberos) вынесена из
 > scope: делегируется промежуточному egress-прокси (Squid/px); SOCKS5 — best-effort; см. п. 25–26.
+> **Обновлено:** 2026-10-18 — профили и host-правила прокси (п. 27): `proxy.mode`
+> (`all`/`selected`), `proxy.profiles` (per-profile URL/auth/TLS), `proxy.rules` (порядок = приоритет,
+> первое совпадение; `noProxy` важнее правил; CIDR — только по IP-литералу), пароли и TLS-материалы
+> профилей в `secrets/proxy/`, API `settings/proxy/profiles/:name/*` и `POST settings/proxy/test`,
+> UI-редактор профилей/правил и target-check, legacy-совместимость.
 > **Связано:** [PROP-088](./prop-088-http-proxy.md) (заменён/надстроен), [PROP-100](./prop-100-ssrf-dns-rebinding.md),
 > [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
 > (webhooks), [ADR-041](./adr-041-llm-error-taxonomy.md) (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md),
@@ -276,6 +288,98 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
     вкладываться в mTLS-over-SOCKS без конкретного клиента: только по требованию (custom dispatcher/
     форк `undici`).
 
+27. **Профили и host-правила прокси (2026-10-18).** Один прокси на инсталляцию — недостаточно:
+    типовой корпоративный контур требует **разные** прокси для разных направлений (LLM — через
+    LLM-egress, внутренние хосты — напрямую, партнёрские — через отдельный шлюз), часто с разными
+    кредами и клиентскими сертификатами. Поэтому секция `proxy` расширена до модели «профили +
+    правила».
+
+    **Модель.** `mode: all | selected` (default `all`), `defaultProfile` (имя профиля; при `all`
+    обязателен — иначе `default`, если он есть), `profiles.<name>` — именованный прокси
+    (`label?`, `url` и/или `httpProxy`/`httpsProxy`/`allProxy`, `auth`, `tls`), `rules[]` —
+    правила маршрутизации.
+
+    ```yaml
+    proxy:
+      enabled: true
+      mode: all                 # all — default-профиль для всех, кроме noProxy; selected — только rules
+      defaultProfile: default
+      profiles:
+        default:
+          label: Corporate
+          url: http://proxy.corp:3128
+          auth: { type: basic, username: synth }
+          tls: { caFile: /etc/synth/tls/proxy-ca.pem, rejectUnauthorized: true }
+        llm:
+          label: LLM egress
+          url: https://llm-proxy:8443
+          auth: { type: basic, username: synth-llm }
+          tls: { caFile: …, certFile: …, keyFile: … }
+      rules:
+        - id: r_openai
+          label: OpenAI
+          hosts: ["api.openai.com", "*.openai.com"]
+          action: proxy
+          profile: llm
+        - hosts: ["*.corp.local", "10.0.0.0/8"]
+          action: direct
+      noProxy: ["localhost", ".svc"]
+    ```
+
+    **Маршрут.** `enabled: false` → всё direct; `noProxy` **всегда важнее** правил; затем правила в
+    порядке объявления — **первое совпадение**; затем `mode: all` → `defaultProfile`, `mode: selected` →
+    direct (`no-match`). `action: direct` запрещает `profile` (400/ошибка конфигурации); `profile` не
+    задан → `defaultProfile`. Один резолвер (`resolveProxyRoute`) используют и транспорт, и диагностика
+    — расхождений «проверка показывает одно, трафик идёт иначе» нет.
+
+    **Паттерны `hosts`/`noProxy`.** `exact`, `.suffix` (apex **и** поддомены), `*.suffix` (только
+    поддомены), `host:port`, IP-литерал, CIDR, `*`. **CIDR матчится только по IP-литералу цели** (DNS
+    для исключений/правил не резолвится — иначе маршрут зависел бы от DNS и становился вектором
+    rebinding, ср. [PROP-100](./prop-100-ssrf-dns-rebinding.md)); `*.suffix` **не** матчит apex.
+
+    **Профиль.** Имя — `^[a-z][a-z0-9_-]{0,31}$`, **неизменяемое** (переименование = создать новый и
+    перенести правила; иначе «поехали» бы пути секретов и ссылки в правилах). URL-схемы —
+    `http`/`https`/`socks5`/`socks5h`; `auth` — только `basic` (NTLM/Negotiate — вне scope, п. 25);
+    `tls` — CA/mTLS **к прокси**, независимо от `security.tls` (доверие **к цели**): одно и то же
+    соединение имеет два независимых TLS-контекста, и клиентский серт к прокси не подменяет серт к
+    цели.
+
+    **Секреты (инвариант 13).** Пароли — не в конфиге: `default` — `SYNTH_PROXY_PASSWORD` >
+    `{dataDir}/secrets/proxy-password` (legacy-совместимость), остальные — `SYNTH_PROXY_<NAME>_PASSWORD`
+    (`<NAME>` — имя профиля в верхнем регистре, `-` → `_`) > `{dataDir}/secrets/proxy/<name>.password`
+    (0600, каталог 0700, атомарная запись). Пароли **write-only**: значения не возвращаются, не
+    логируются и не попадают в аудит; при заданном env-пароле UI-мутация → **409** (`CONFLICT`).
+    TLS-материалы профиля — `{dataDir}/secrets/proxy/<name>/{ca.pem,client.crt,client.key}` (0600); в
+    конфиг пишутся только пути, PEM/ключи наружу не отдаются.
+
+    **API.** `GET/PUT/DELETE /api/v2/settings/proxy` (профили/правила/`mode`/`defaultProfile` в
+    `saved`/`running`/`defaults`; статус профилей — redacted: URL без userinfo, username, пути TLS,
+    `hasCaPem`), `PUT/DELETE /api/v2/settings/proxy/profiles/:name/password`,
+    `PUT/DELETE /api/v2/settings/proxy/profiles/:name/tls/ca`, `PUT/DELETE
+    /api/v2/settings/proxy/profiles/:name/tls/client`, `POST /api/v2/settings/proxy/test {url}` —
+    target-check: `HEAD` без редиректов и тела, адресная политика проверяется **до** запроса, ответ
+    `{route:{action,via,reason,ruleId?,ruleLabel?,profile?,profileLabel?,proxyUrl?}, ok, httpStatus?,
+    latencyMs, authChallenge, error?, usingSaved, restartRequired}`. Ошибки: 400 (невалидный URL/
+    профиль/правило), 404 (нет профиля), 409 (env-пароль), redaction как выше.
+
+    **UI.** «Сеть» → «Прокси»: режим, таблица профилей (добавить/изменить; имя неизменяемо), правила
+    с приоритетом (порядок = first match), write-only пароль и TLS-материалы профиля, target-check
+    (показывает сработавшее правило/профиль/прокси и что проверка идёт по **saved**), плашка
+    `restartRequired` со ссылкой «Обслуживание → Перезапуск».
+
+    **Legacy.** Без `profiles`/`rules` поведение прежнее: top-level `url`/`httpProxy`/`httpsProxy`/
+    `allProxy`/`auth`/`tls` = синтетический профиль `default`; при заданных `profiles` top-level
+    URL/auth/tls **запрещены** (fail-closed — иначе два источника истины). UI при сохранении
+    конвертирует legacy-форму в `profiles.default`, сохраняя схемные поля (`httpProxy`/`httpsProxy`/
+    `allProxy`). Env `SYNTH_PROXY_URL`/`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` в режиме профилей не
+    применяются (ошибка конфигурации/400) — профили задаются в config/runtime.
+
+    **Ограничения.** Per-host маршрут работает в HTTP-транспорте (`egressFetch`/`EgressDispatcher`);
+    **git** и **stdio-MCP** получают один прокси через child-env и per-host выбирать не умеют — в
+    `mode: selected` прокси-env им **не ставится** (иначе молчаливый обход правил). SOCKS5 —
+    best-effort (п. 26). Runtime-reload по-прежнему отсутствует: изменения профилей/правил применяются
+    после рестарта. Multi-proxy mTLS — есть (у каждого профиля свой `tls`).
+
 ## Альтернативы
 
 - **`NODE_EXTRA_CA_CERTS` как основной механизм** — отклонён: процесс-глобальный, вне конфига
@@ -298,6 +402,9 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
 - **`EnvHttpProxyAgent` (undici) как готовый прокси-слой** — отклонён: не покрывает SOCKS5, CIDR и
   IP/портовые исключения `noProxy`, не даёт per-origin выбора direct/proxy и proxied-семантики
   адресной политики; оставлен только `ProxyAgent`/`Socks5ProxyAgent` как транспорт.
+- **Один прокси на инсталляцию (только top-level `proxy`)** — отклонён как недостаточный: разные
+  направления требуют разных кредов/сертификатов (LLM-egress ≠ партнёрский шлюз), а плоский `noProxy`
+  не выражает «через какой прокси»; приняты именованные профили + правила first-match (п. 27).
 - **NTLM/Negotiate/Kerberos в приложении** — **окончательно отклонено** (2026-10-18): `undici.ProxyAgent`
   не выполняет 407-challenge, нужен собственный CONNECT-цикл, нативная зависимость (`kerberos`/libkrb5),
   keytab/KDC/время/cross-realm, приёмка только с AD/KDC, рост blast radius (keytab в pod) и поддержки
@@ -322,6 +429,10 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `settings.json`/PG, переносится `storage migrate`, валидируется на записи, изменения аудируются
   (`scope:'proxy'`), пароль — write-only (файл/env), а `restartRequired` честно показывает расхождение
   saved/running.
+- (+) Профили и правила закрывают многопрокси-контур: разные прокси/креды/mTLS на разные направления,
+  «напрямую» для внутренних хостов, приоритет и `noProxy` выражены явно; маршрут и его причина
+  (`rule`/`default`/`no-proxy`/`no-match`) видны в target-check и журнале egress, так что
+  «почему этот запрос пошёл не туда» разбирается без догадок.
 - (+) Доверие TLS и mTLS настраиваются из UI (раздел «Сеть»): CA-бандл, `rejectUnauthorized`, default
   клиентский серт и per-host маппинги; параметры config/env видны read-only с источником, изменения
   аудируются (`scope:'tls'`) без PEM/ключей, `restartRequired` показывает необходимость рестарта.
@@ -339,6 +450,9 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   (`Socks5ProxyAgent` не принимает `requestTls`) — только системное доверие; https-прокси/SOCKS по
   IP-литералу требуют DNS-хоста (SNI); SOCKS5 в undici экспериментален и всегда резолвит hostname на
   прокси (best-effort, не целевой для K8s).
+- (−) Профили/правила действуют в HTTP-транспорте: git и stdio-MCP получают один прокси-env и per-host
+  маршрут не поддерживают (в `mode: selected` прокси им не ставится); CIDR-правила матчатся только по
+  IP-литералу (DNS для правил не резолвится) — для хостов по имени используйте `.suffix`/`*.suffix`.
 - (−) TLS-модель ограничена: один CA-бандл на весь egress (per-host CA нет), один default-клиент
   (несколько default-сертов нельзя), default-серт без маппинга предъявляется всем целям, включая
   PostgreSQL; TLS к прокси (`proxy.tls`) задаётся отдельно и в UI только read-only. Bootstrap
@@ -386,15 +500,24 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `packages/backend/src/routes/providers.ts`.
 - **Прокси (shared):** `packages/shared/src/config/proxy.ts` (`resolveProxyConfig`, `parseProxyUrl`,
   `redactProxyUrl`, `NoProxyMatcher`, `proxyEntryFor`/`proxyUrlFor`/`shouldProxyUrl`, `proxyStatus`,
-  `resolveProxyTls`, `validateProxyConfig`, `ProxyConfigError`, `ProxyPasswordStatus`), схемы
-  `proxyConfigSchema`/`proxyAuthConfigSchema`/`proxyTlsConfigSchema`
-  (`packages/shared/src/config/types.ts`), env `SYNTH_PROXY_*`/`SYNTH_PROXY_PASSWORD`/`SYNTH_PROXY_TLS_*`;
+  `resolveProxyTls`, `validateProxyConfig`, `ProxyConfigError`, `ProxyPasswordStatus`), **профили и
+  правила** — `resolveProxyRoute`/`defaultProxyEntry`/`resolveProxyRules`/`profileByName`,
+  `mergeProxyConfig` (runtime заменяет `profiles`/`rules` целиком, поле-уровневое — для скаляров),
+  валидатор host-паттернов (`exact`/`.suffix`/`*.suffix`/`host:port`/IP/CIDR/`*`), `proxyProfilePasswordEnv`;
+  схемы `proxyConfigSchema` (`mode`/`defaultProfile`/`profiles`/`rules`)/`proxyProfileSchema`/
+  `proxyRuleSchema`/`proxyAuthConfigSchema`/`proxyTlsConfigSchema` (`PROXY_PROFILE_NAME_RE`,
+  `PROXY_MODES`), env `SYNTH_PROXY_*`/`SYNTH_PROXY_PASSWORD`/`SYNTH_PROXY_TLS_*`;
   `EgressRequestLogEntry.via`, `SECURITY_AUDIT_SCOPES` (+`proxy`) (`packages/shared/src/types/egress.ts`).
 - **Прокси (core):** `security/proxy-dispatcher.ts` (`EgressDispatcher`, `EgressProxyUnavailableError`,
-  `EgressProxyAuthError`), `security/proxy-state.ts` (активная конфигурация, `gitProxyEnv`,
+  `EgressProxyAuthError`; per-origin выбор профиля через `resolveProxyRoute`),
+  `security/proxy-state.ts` (активная конфигурация, `gitProxyEnv`,
   `mcpProxyEnv`, `EGRESS_VIA`, `proxyConfigFingerprint`), `security/proxy-check.ts`
-  (`checkProxyConnectivity`), `security/proxy-password.ts` (файл `secrets/proxy-password`,
-  `getProxyPasswordStatus`, 0600/0700, tmp→rename), `security/proxy-startup.ts`
+  (`checkProxyConnectivity` — коннект к прокси, `checkProxyTarget`/`describeProxyRoute` — проверка
+  цели с маршрутом), `security/proxy-password.ts` (файлы `secrets/proxy-password` и
+  `secrets/proxy/<name>.password`, `getProxyPasswordStatus`/`getProxyProfilePasswordStatus`, 0600/0700,
+  tmp→rename), `security/proxy-tls-secrets.ts` (PEM профилей в `secrets/proxy/<name>/`,
+  `proxyProfileTlsFilePath`/`writeProxyProfileTlsFile`/`removeProxyProfileTlsFile`, валидация имени),
+  `security/proxy-startup.ts`
   (`applyStartupProxyConfig`); интеграция — `security/tls.ts` (`initTlsTrust` — ранний TLS/CA +
   первичный прокси, `applyEgressProxyConfig`/`configureEgressProxy` — второй шаг),
   `engine/net/egress-guard.ts` (proxied-режим, `via`), `server/routes/settings.ts`.
@@ -418,7 +541,8 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `packages/storage-postgres/src/ports/audit.ts` (`securityAudit`/`egressRequests`) и миграция
   `002-egress-audit` (таблицы `security_audit`, `egress_requests`).
 - **API:** `packages/core/src/server/routes/settings.ts` (egress и proxy: `/settings/egress/*`,
-  `/settings/proxy*`), `packages/core/src/server/routes/settings-tls.ts` (`/settings/tls`,
+  `/settings/proxy*`, `/settings/proxy/profiles/:name/{password,tls/ca,tls/client}`,
+  `/settings/proxy/test` — target-check), `packages/core/src/server/routes/settings-tls.ts` (`/settings/tls`,
   `/settings/tls/ca`, `/settings/tls/client`, `/settings/tls/mappings[/:id]`, `/settings/tls/validate`),
   `packages/core/src/server/routes/audit.ts` (`GET /api/v2/audit/security`, `GET /api/v2/audit/egress`).
 - **UI:** `components/settings/EgressPolicySection.tsx` — режим/список/исключения и «Проверить URL»;
@@ -426,10 +550,13 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `off` с предупреждением) и MCP (`NetworkPolicySection` — исключения и проверка); журналы —
   вкладки «Безопасность (политики)» и «Внешние запросы» в «Логах и аудите»
   (`SecurityAuditPanel`/`EgressLogPanel`); i18n `egress.*`/`logs.security.*`/`logs.egress.*` (ru/en).
-  Прокси — `components/settings/ProxyStatusSection.tsx` (+ `lib/api/proxy.ts`), встроена в
-  раздел «Сеть» (`NetworkSettings`): «Прокси» — редактируемая форма (enabled, URL-поля, `noProxy`,
-  `fromEnv`, `fallbackDirect`, таймаут, Basic-username, TLS-пути), write-only пароль (задать/сбросить,
-  disabled при env), статус saved/running, плашка «изменения после рестарта», «Проверить соединение»;
+  Прокси — `components/settings/ProxyStatusSection.tsx` (+ `ProxyProfilesSection.tsx`,
+  `ProxyRulesSection.tsx`, `ProxyRouteCheck.tsx`, `proxy-draft.ts`; `lib/api/proxy.ts`), встроена в
+  раздел «Сеть» (`NetworkSettings`): «Прокси» — режим (`all`/`selected`), профили (URL/`label`/Basic/
+  TLS-пути, write-only пароль и PEM профиля, имя неизменяемо), правила с приоритетом (порядок = first
+  match), `noProxy`, `fromEnv`, `fallbackDirect`, таймаут, статус saved/running, плашка «изменения
+  после рестарта» со ссылкой на «Обслуживание → Перезапуск», «Проверить соединение» (коннект к прокси)
+  и target-check (`POST /settings/proxy/test`: маршрут/правило/профиль/HTTP-статус);
   «Доверенные CA (TLS)» — `TrustedCaSection` (CA-бандл вставкой/файлом + validate, read-only параметры
   config/env с источником, default client upload, таблица маппингов, `rejectUnauthorized`, read-only
   TLS к прокси); i18n `network.*`/`proxy.*`/`tls.*`.
@@ -444,21 +571,24 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `packages/storage-postgres/src/pool-tls.test.ts`, `packages/core/src/git/git-ca.test.ts`,
   `packages/shared/src/config/resolve.test.ts`, `packages/core/src/engine/net/egress-guard.test.ts`
   (политика/журнал/аудит — тесты уровня подсистем), `packages/shared/src/config/proxy.test.ts`,
-  `packages/core/src/security/proxy-dispatcher.test.ts`/`proxy-check.test.ts`/`proxy-optin.test.ts`/
-  `proxy-startup.test.ts`, `server/routes/settings-proxy.test.ts`
+  `packages/shared/src/config/proxy-profiles.test.ts` (mode/rules/first-match/`noProxy`/CIDR/legacy/
+  валидация профилей), `packages/core/src/security/proxy-dispatcher.test.ts`/`proxy-check.test.ts`/
+  `proxy-target-check.test.ts`/`proxy-optin.test.ts`/`proxy-state.test.ts`/`proxy-startup.test.ts`,
+  `server/routes/settings-proxy.test.ts`/`settings-proxy-profiles.test.ts`/`settings-tls.test.ts`
   (fake HTTP/HTTPS-прокси, Basic/mTLS, fake SOCKS5, `no_proxy`-таблица, git env, runtime-override,
-  saved/running/`restartRequired`, пароль write-only), `shared/src/config/tls-runtime.test.ts`,
-  `security/tls-runtime.test.ts`, `server/routes/settings-tls.test.ts`,
+  saved/running/`restartRequired`, пароль write-only, профильные пароли/PEM, target-check),
+  `packages/shared/src/config/tls-runtime.test.ts`, `packages/core/src/security/tls-runtime.test.ts`,
   `packages/storage-postgres/src/pool-tls.test.ts`, UI `NetworkSettings.test.tsx`/
-  `TrustedCaSection.test.tsx`; фикстуры —
+  `TrustedCaSection.test.tsx`/`ProxyStatusSection.test.tsx`/`proxy-draft.test.ts`; фикстуры —
   `packages/core/src/security/__fixtures__/` (self-signed, `TEST ONLY`).
 - **Вне scope (не код Synth):** доменная аутентификация прокси (NTLM/Negotiate/Kerberos) —
   делегируется промежуточному egress-прокси/шлюзу (Squid `login=NEGOTIATE`, `px` для NTLM/PAC), п. 25;
   в коде только отказ `auth.type` ≠ `basic` (400/`EGRESS_PROXY_CONFIG_INVALID`). Egress gateway —
   deploy/docs (манифесты/чарт), не код приложения. 407-диагностика `Negotiate|NTLM` — следующий шаг.
-- **Нет (остаток):** `security.tls` через SOCKS5 (best-effort, п. 26), hot-reload прокси/TLS —
-  [PROP-088](./prop-088-http-proxy.md); per-host CA и несколько default-клиентских сертов — остаток
-  (одна CA-бандл-модель); пиннинг адреса (TOCTOU), в т.ч. для direct/`noProxy`-хостов —
+- **Нет (остаток):** runtime-reload прокси/TLS без рестарта ([PROP-088](./prop-088-http-proxy.md));
+  `security.tls` к **цели** через SOCKS5 (best-effort, п. 26); per-host CA и несколько default-клиентских
+  сертов (одна CA-бандл-модель на цель; per-profile TLS — только **к прокси**, п. 27); пиннинг адреса
+  (TOCTOU), в т.ч. для direct/`noProxy`-хостов —
   [PROP-100](./prop-100-ssrf-dns-rebinding.md); метрики — [PROP-094](./prop-094-observability-metrics.md);
   перепроверка покрытия встроенного `fetch` на Node 22 в CI.
 
@@ -479,4 +609,8 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `rejectUnauthorized`, default mTLS-клиент и per-host `mappings`, тот же профиль для PG, API
   `settings/tls*`, раздел «Сеть», read-only config/env, аудит `scope:'tls'`); 2026-10-18 — доменная
   аутентификация прокси (NTLM/Negotiate/Kerberos) вынесена из scope и делегирована egress-шлюзу
-  (п. 25), SOCKS5 — best-effort (п. 26).
+  (п. 25), SOCKS5 — best-effort (п. 26); 2026-10-18 — профили и host-правила прокси (п. 27):
+  `proxy.mode`/`profiles`/`rules`, first-match и `noProxy`-приоритет, CIDR по IP-литералу,
+  per-profile `auth`/`tls`, пароли/TLS-материалы профилей в `secrets/proxy/`, API
+  `settings/proxy/profiles/:name/*` и `POST settings/proxy/test` (target-check), UI-редактор
+  профилей/правил и проверка цели, legacy-конвертация в `profiles.default`.

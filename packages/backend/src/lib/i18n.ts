@@ -72,6 +72,8 @@ const en: Dictionary = {
   'errors.validation.invalidAuditOp': 'Unknown maintenance journal operation',
   'errors.validation.encryptedRestoreUnsupported':
     'The archive is encrypted — decryption is available only via the CLI (synth restore <archive.enc>); the key is not available to the server.',
+  'errors.unavailable.restartUnsupported':
+    'Restart is unavailable: the instance runs without a supervisor (SYNTH_RESTART_MODE=disabled).',
 
   // ADR-091 (этап 2): перенос проекта (экспорт/импорт)
   'errors.validation.projectImportBody': 'Invalid project import request (multipart archive file is required)',
@@ -187,6 +189,8 @@ const ru: Dictionary = {
   'errors.validation.invalidAuditOp': 'Неизвестная операция журнала обслуживания',
   'errors.validation.encryptedRestoreUnsupported':
     'Архив зашифрован — расшифровка доступна только через CLI (synth restore <archive.enc>); ключ серверу недоступен.',
+  'errors.unavailable.restartUnsupported':
+    'Рестарт недоступен: инстанс запущен без супервизора (SYNTH_RESTART_MODE=disabled).',
 
   // ADR-091 (этап 2): перенос проекта (экспорт/импорт)
   'errors.validation.projectImportBody': 'Некорректный запрос импорта проекта (нужен multipart-файл архива)',

@@ -34,7 +34,9 @@ import { checkInstanceCompatibility, InstanceDataTooNewError } from '../../stora
 import { createStorageContextAsync } from '../../storage/storage-context.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { createBackup } from '../../maintenance/backup.js';
+import { recordMaintenanceAudit } from '../../maintenance/audit.js';
 import { runDoctor } from '../../maintenance/doctor.js';
+import { getRestartStatus, requestRestart } from '../restart.js';
 import { applyStartupMigrations } from '../../maintenance/startup.js';
 import {
   cancelPendingRestore,
@@ -109,6 +111,8 @@ export interface MaintenanceRouteMessages {
   invalidAuditOp: (c: Context) => string;
   /** ADR-091: восстановление зашифрованного `.enc` через API недоступно. */
   encryptedRestore: (c: Context) => string;
+  /** Restart: режим `disabled` — рестарт с этого инстанса недоступен. */
+  restartUnsupported: (c: Context) => string;
 }
 
 export interface MaintenanceRoutesOptions {
@@ -134,6 +138,8 @@ const DEFAULT_MESSAGES: MaintenanceRouteMessages = {
   invalidAuditLimit: () => 'Некорректное значение limit (целое 1..500)',
   invalidAuditOp: () => 'Неизвестная операция журнала обслуживания',
   encryptedRestore: () => ENCRYPTED_RESTORE_PROBLEM,
+  restartUnsupported: () =>
+    'Рестарт недоступен: инстанс запущен без супервизора (SYNTH_RESTART_MODE=disabled)',
 };
 
 /** Дефолтный и максимальный размер страницы аудит-журнала (`GET /audit`). */
@@ -160,6 +166,7 @@ const MAINTENANCE_AUDIT_OPS = [
   'uninstall.purge',
   'export.created',
   'import.applied',
+  'restart.requested',
 ] as const satisfies readonly MaintenanceAuditOp[];
 
 /** Каталог архивов инстанса (`{dataDir}/backups/`). */
@@ -235,6 +242,8 @@ function _toBackupInfo(
  * | `GET /restore` | отложенный запрос на восстановление | read |
  * | `POST /restore` | спланировать восстановление (`{archive, confirm:true}`) | write |
  * | `DELETE /restore` | отменить отложенный запрос | write |
+ * | `GET /restart` | статус graceful restart (`supported`/`mode`/`reason`/`startedAt`) | read |
+ * | `POST /restart` | graceful restart (`{confirm:true}`) → 202; `disabled` → 409 | write |
  * | `GET /audit` | журнал обслуживания (`limit`, `op`) | read |
  * | `DELETE /audit` | очистить журнал (`{confirm:true}`) | write |
  *
@@ -538,6 +547,66 @@ export function createMaintenanceRoutes(
   app.delete('/restore', writeGuard, async (c) => {
     const cancelled = await cancelPendingRestore(dataDir, deps.audit);
     return c.json({ cancelled });
+  });
+
+  // GET /api/v2/maintenance/restart — статус graceful restart.
+  // `supported:false` (режим `disabled`) — UI показывает «недоступно» без кнопки.
+  app.get('/restart', readGuard, (c) => c.json(getRestartStatus()));
+
+  // POST /api/v2/maintenance/restart — graceful restart инстанса.
+  // Тело `{confirm:true}` обязательно (активные стримы будут прерваны). Процесс
+  // завершается с кодом 75 (`EX_TEMPFAIL`), перезапуск — супервизором
+  // (K8s/Docker/systemd) или `dev.sh` (режим `supervisor`). Аудит
+  // `restart.requested` (status `scheduled`) пишется до инициации; повторный
+  // вызов идемпотентен — тот же `restartId` и 202.
+  app.post('/restart', writeGuard, async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    if ((body as { confirm?: unknown }).confirm !== true) return confirmRequired(c);
+
+    const status = getRestartStatus();
+    if (!status.supported) {
+      return c.json(
+        {
+          error: {
+            code: 'RESTART_UNSUPPORTED',
+            message: messages.restartUnsupported(c),
+          },
+        },
+        409,
+      );
+    }
+
+    const outcome = await requestRestart({
+      beforeRequest: (restartId, mode) =>
+        recordMaintenanceAudit(deps.audit, {
+          op: 'restart.requested',
+          status: 'scheduled',
+          ...(userId(c) !== undefined ? { actor: userId(c) } : {}),
+          details: { mode, restartId },
+        }),
+    });
+
+    if (!outcome.accepted) {
+      return c.json(
+        {
+          error: {
+            code: 'RESTART_UNSUPPORTED',
+            message: messages.restartUnsupported(c),
+          },
+        },
+        409,
+      );
+    }
+
+    return c.json(
+      {
+        status: 'restarting',
+        restartId: outcome.restartId,
+        mode: outcome.mode,
+        startedAt: status.startedAt,
+      },
+      202,
+    );
   });
 
   // GET /api/v2/maintenance/audit — журнал обслуживания инстанса (ADR-092).

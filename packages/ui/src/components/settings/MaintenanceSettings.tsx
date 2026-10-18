@@ -17,6 +17,8 @@ import {
   type MaintenanceBackupInfo,
   type MaintenanceStatus,
   type MigrationPlan,
+  type RestartResponse,
+  type RestartStatus,
   type RestoreValidation,
 } from '@/lib/api/synthApi'
 
@@ -80,15 +82,35 @@ export function summarizeAuditDetails(details?: Record<string, unknown>): string
 /** Опции снятия архива (ADR-091). */
 type BackupOptions = { secrets: boolean; workspace: boolean; live: boolean }
 
+/** Интервал опроса `/health` после рестарта (мс). */
+export const RESTART_POLL_INTERVAL_MS = 1000
+/** Таймаут ожидания нового `startedAt` (мс). */
+export const RESTART_TIMEOUT_MS = 90_000
+
+/** Пропсы компонента (тестовая точка подмены перезагрузки страницы). */
+export interface MaintenanceSettingsProps {
+  /** Перезагрузка страницы после успешного рестарта; по умолчанию `window.location.reload()`. */
+  onReload?: () => void
+}
+
 /**
  * ADR-091/ADR-092 / ADR-072: админ-раздел «Обслуживание» — health инстанса
  * (`synth doctor`), миграции схемы данных, бэкапы и восстановление. Мутации —
  * ADMIN (guard сервера). Восстановление — офлайн-операция: `POST /restore` лишь
  * планирует её, применение — при следующем старте инстанса.
+ *
+ * Restart: `POST /maintenance/restart` → процесс завершается с кодом 75, его
+ * перезапускает супервизор (K8s/Docker/systemd) или `dev.sh`; UI ждёт новый
+ * `startedAt` в `/health` и перезагружает страницу.
  */
-export function MaintenanceSettings() {
+export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {}) {
   const { t, locale } = useI18n()
   const { notify } = useNotification()
+
+  const reloadPage = useCallback(() => {
+    if (onReload) onReload()
+    else window.location.reload()
+  }, [onReload])
 
   const [status, setStatus] = useState<MaintenanceStatus | null>(null)
   const [statusLoading, setStatusLoading] = useState(true)
@@ -122,6 +144,14 @@ export function MaintenanceSettings() {
   const [auditLoading, setAuditLoading] = useState(true)
   const [auditError, setAuditError] = useState<string | null>(null)
   const [clearingAudit, setClearingAudit] = useState(false)
+
+  // Restart инстанса (graceful shutdown, exit 75): статус режима и ожидание старта.
+  const [restartStatus, setRestartStatus] = useState<RestartStatus | null>(null)
+  const [restartLoading, setRestartLoading] = useState(true)
+  const [restartError, setRestartError] = useState<string | null>(null)
+  const [restarting, setRestarting] = useState(false)
+  const [restartRequest, setRestartRequest] = useState<RestartResponse | null>(null)
+  const restartPollRef = useRef<{ cancelled: boolean } | null>(null)
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true)
@@ -161,6 +191,19 @@ export function MaintenanceSettings() {
     }
   }, [t])
 
+  const loadRestart = useCallback(async () => {
+    setRestartLoading(true)
+    setRestartError(null)
+    try {
+      setRestartStatus(await synthApi.getRestartStatus())
+    } catch (err) {
+      setRestartStatus(null)
+      setRestartError(err instanceof Error ? err.message : t('maintenance.restart.loadError'))
+    } finally {
+      setRestartLoading(false)
+    }
+  }, [t])
+
   useEffect(() => {
     void loadStatus()
   }, [loadStatus])
@@ -173,6 +216,48 @@ export function MaintenanceSettings() {
     void loadAudit()
   }, [loadAudit])
 
+  useEffect(() => {
+    void loadRestart()
+  }, [loadRestart])
+
+  // Остановить опрос при размонтировании (иначе таймеры живут после закрытия настроек).
+  useEffect(
+    () => () => {
+      if (restartPollRef.current) restartPollRef.current.cancelled = true
+    },
+    [],
+  )
+
+  /**
+   * Ожидание старта после рестарта: опрос `/health` раз в секунду до 90 c.
+   * Успех — новый `startedAt` (отличается от значения до рестарта) → перезагрузка
+   * страницы. Пока сервер лежит, запросы падают — это нормально, продолжаем.
+   */
+  const waitForRestart = useCallback(
+    async (baseline: string) => {
+      const poll = { cancelled: false }
+      restartPollRef.current = poll
+      const deadline = Date.now() + RESTART_TIMEOUT_MS
+      while (!poll.cancelled && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, RESTART_POLL_INTERVAL_MS))
+        if (poll.cancelled) return
+        try {
+          const health = await synthApi.getHealth()
+          if (health.startedAt && health.startedAt !== baseline) {
+            reloadPage()
+            return
+          }
+        } catch {
+          // Инстанс ещё перезапускается — продолжаем опрос.
+        }
+      }
+      if (poll.cancelled) return
+      restartPollRef.current = null
+      setRestarting(false)
+      setRestartError(t('maintenance.restart.timeout'))
+    },
+    [reloadPage, t],
+  )
   /** «Проверить»: перезапускает `synth doctor` и перечитывает статус (сводка проверок). */
   const handleCheck = useCallback(async () => {
     setDoctorLoading(true)
@@ -192,6 +277,34 @@ export function MaintenanceSettings() {
       void loadStatus()
     }
   }, [t, notify, loadStatus])
+
+  /** «Перезапустить»: подтверждение → POST → ожидание нового `startedAt` → reload. */
+  const handleRestart = useCallback(async () => {
+    if (!restartStatus?.supported || restarting) return
+    const ok = await confirm({
+      title: t('maintenance.restart.confirmTitle'),
+      message: t('maintenance.restart.confirm'),
+      confirmLabel: t('maintenance.restart.action'),
+      variant: 'danger',
+      icon: 'refresh',
+    })
+    if (!ok) return
+
+    setRestartError(null)
+    try {
+      const response = await synthApi.restartInstance()
+      setRestartRequest(response)
+      setRestarting(true)
+      // Baseline — старт процесса, который сейчас завершается (ответ 202).
+      void waitForRestart(response.startedAt)
+    } catch (err) {
+      setRestartError(
+        t('maintenance.restart.error', {
+          error: err instanceof Error ? err.message : t('common.error'),
+        }),
+      )
+    }
+  }, [restartStatus, restarting, t, waitForRestart])
 
   const handleApply = useCallback(async () => {
     const ok = await confirm({
@@ -542,7 +655,87 @@ export function MaintenanceSettings() {
         )}
       </SettingsSection>
 
-      {/* 2. Схема данных и миграции */}
+      {/* 2. Перезапуск инстанса (graceful restart, exit 75) */}
+      <SettingsSection
+        title={t('maintenance.restart.title')}
+        description={t('maintenance.restart.description')}
+      >
+        {restartError && (
+          <div
+            role="alert"
+            data-testid="maintenance-restart-error"
+            className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive"
+          >
+            {restartError}
+          </div>
+        )}
+
+        {restartLoading && !restartStatus && (
+          <div className="py-3 text-center text-xs text-muted-foreground">{t('common.loading')}</div>
+        )}
+
+        {restartStatus && (
+          <>
+            <InfoField
+              label={t('maintenance.restart.mode')}
+              value={t(`maintenance.restart.mode.${restartStatus.mode}`)}
+              mono
+            />
+
+            {!restartStatus.supported ? (
+              <p
+                className="text-xs text-muted-foreground break-words"
+                data-testid="maintenance-restart-disabled"
+              >
+                {restartStatus.reason ?? t('maintenance.restart.unsupported')}
+              </p>
+            ) : (
+              <>
+                <div
+                  className="rounded-lg bg-status-warning/10 p-3 text-xs text-status-warning break-words"
+                  data-testid="maintenance-restart-hint"
+                >
+                  {restartStatus.mode === 'supervisor'
+                    ? t('maintenance.restart.hintSupervisor')
+                    : t('maintenance.restart.hintProcess')}
+                </div>
+
+                {restarting && (
+                  <div
+                    className="flex items-start gap-2 rounded-lg border border-primary/40 bg-primary/10 p-3 text-sm text-foreground min-w-0"
+                    data-testid="maintenance-restart-progress"
+                    role="status"
+                  >
+                    <Icon name="refresh" className="mt-0.5 size-4 shrink-0 animate-spin" />
+                    <span className="min-w-0 break-words">
+                      {t('maintenance.restart.inProgress')}
+                      <span className="block text-xs text-muted-foreground">
+                        {t('maintenance.restart.inProgressHint')}
+                        {restartRequest ? ` (${restartRequest.restartId})` : ''}
+                      </span>
+                    </span>
+                  </div>
+                )}
+
+                <Button
+                  variant="danger"
+                  onClick={() => void handleRestart()}
+                  disabled={restarting}
+                  data-testid="maintenance-restart-button"
+                >
+                  <Icon
+                    name="refresh"
+                    className={cn('size-3.5', restarting && 'animate-spin')}
+                  />
+                  {restarting ? t('maintenance.restart.inProgress') : t('maintenance.restart.action')}
+                </Button>
+              </>
+            )}
+          </>
+        )}
+      </SettingsSection>
+
+      {/* 3. Схема данных и миграции */}
       <SettingsSection
         title={t('maintenance.schema.title')}
         description={t('maintenance.schema.description')}
@@ -627,7 +820,7 @@ export function MaintenanceSettings() {
         )}
       </SettingsSection>
 
-      {/* 3. Бэкапы */}
+      {/* 4. Бэкапы */}
       <SettingsSection
         title={t('maintenance.backups.title')}
         description={t('maintenance.backups.description', { dataDir: status?.dataDir ?? '' })}
@@ -777,7 +970,7 @@ export function MaintenanceSettings() {
         )}
       </SettingsSection>
 
-      {/* 4. Восстановление */}
+      {/* 5. Восстановление */}
       <SettingsSection
         title={t('maintenance.restore.title')}
         description={t('maintenance.restore.description')}
@@ -954,7 +1147,7 @@ export function MaintenanceSettings() {
         )}
       </SettingsSection>
 
-      {/* 5. Журнал обслуживания (ADR-092) */}
+      {/* 6. Журнал обслуживания (ADR-092) */}
       <SettingsSection
         title={t('maintenance.audit.title')}
         description={t('maintenance.audit.description')}

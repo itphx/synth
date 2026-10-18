@@ -300,17 +300,34 @@ export type {
 } from './security/tls.js';
 // ADR-099 (D1): HTTP/HTTPS-прокси egress-слоя (dispatcher грузится динамически
 // из `security/tls.ts`, чтобы без прокси/доверия `undici` не тянулся).
-export { checkProxyConnectivity } from './security/proxy-check.js';
+export { checkProxyConnectivity, checkProxyTarget } from './security/proxy-check.js';
+export type {
+  ProxyTargetCheckOptions,
+  ProxyTargetCheckResult,
+  ProxyTargetRouteInfo,
+} from './security/proxy-check.js';
 export { applyStartupProxyConfig } from './security/proxy-startup.js';
 export type { ProxySettingsSource } from './security/proxy-startup.js';
 export {
   getProxyPasswordStatus,
+  getProxyProfilePasswordStatus,
   proxyPasswordPath,
   proxySecretsDir,
   writeProxyPasswordFile,
+  writeProxyProfilePasswordFile,
   removeProxyPasswordFile,
+  removeProxyProfilePasswordFile,
   ProxyPasswordFileError,
 } from './security/proxy-password.js';
+export {
+  PROXY_PROFILE_TLS_MATERIALS,
+  ProxyTlsSecretFileError,
+  proxyProfileSecretsDir,
+  proxyProfileTlsFilePath,
+  writeProxyProfileTlsFile,
+  removeProxyProfileTlsFile,
+} from './security/proxy-tls-secrets.js';
+export type { ProxyProfileTlsMaterial } from './security/proxy-tls-secrets.js';
 export { getEgressProxyConfig, shouldProxyUrl, proxyConfigFingerprint } from './security/proxy-state.js';
 export type { EgressProxyStatus, ResolvedProxyConfig, ProxyCheckResult, ProxyPasswordStatus } from '@itphx/synth-shared';
 // ADR-076 §T2: шифрование секретов at-rest и хранилище SSH-ключей.
@@ -489,6 +506,22 @@ export type {
   MaintenanceRoutesOptions,
   MaintenanceRouteMessages,
 } from './server/routes/maintenance.js';
+// Restart из UI: graceful shutdown с кодом 75 + статус режима.
+export {
+  configureRestart,
+  getProcessStartedAt,
+  getRestartStatus,
+  requestRestart,
+  resetRestartForTests,
+  resolveRestartMode,
+  RESTART_EXIT_CODE,
+} from './server/restart.js';
+export type {
+  ConfigureRestartOptions,
+  RestartMode,
+  RestartRequestOutcome,
+  RestartStatus,
+} from './server/restart.js';
 // ADR-091 (этап 2): HTTP-перенос проекта — скачать экспорт / импортировать архив.
 export { createProjectPortableRoutes } from './server/routes/project-portable.js';
 export type {

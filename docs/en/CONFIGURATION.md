@@ -122,7 +122,7 @@ on top of `defaults` + `config.yaml` and **below** CLI overrides: `CLI > env > c
 | `SYNTH_PROXY_NO_PROXY` | string (comma-separated list) | `proxy.noProxy` |
 | `SYNTH_PROXY_FALLBACK_DIRECT` | boolean | `proxy.fallbackDirect` |
 | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | number | `proxy.connectTimeoutMs` |
-| `SYNTH_PROXY_PASSWORD` | string (secret) | proxy Basic auth password (not stored in config) |
+| `SYNTH_PROXY_PASSWORD`, `SYNTH_PROXY_<NAME>_PASSWORD` | string (secret) | proxy Basic auth password: `default` and named profiles respectively (not stored in config) |
 | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | ADR-099: CA for the https proxy (mutually exclusive) | `proxy.tls` |
 | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | ADR-099: mTLS to the https proxy | `proxy.tls` |
 | `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | boolean | `proxy.tls.rejectUnauthorized` |
@@ -151,6 +151,7 @@ archive.
 |-----------|------------|
 | `SYNTH_BACKUP_KEY` | Backup archive encryption key (32 bytes base64 / 64 hex), ADR-091 |
 | `SYNTH_BACKUP_KEY_FILE` | Path to a file with the archive encryption key (takes precedence over `SYNTH_BACKUP_KEY`), ADR-091 |
+| `SYNTH_RESTART_MODE` | ADR-092: graceful restart from the UI — `disabled` (default) \| `process` (exit code 75, the supervisor starts it again) \| `supervisor` (local `scripts/dev.sh`). CLI `synth serve --restart-mode` takes precedence over env; an unknown value → `disabled` + warning |
 
 Example:
 
@@ -165,6 +166,38 @@ synth serve
 Object and array keys (`events.allowedSources`, `events.identityMap`,
 `events.dedupStore`, `scheduler.leaderElection`, `mcp.servers`, …) have no
 env overrides — they are set in `config.yaml` (or through the runtime API where one exists).
+
+### Instance restart (ADR-092)
+
+`POST /api/v2/maintenance/restart {confirm:true}` (ADMIN) does not restart the process "from within": it
+performs a **graceful shutdown with exit code 75** (`EX_TEMPFAIL`), and a supervisor must start the process
+again. The mode comes from `SYNTH_RESTART_MODE` (CLI `synth serve --restart-mode` takes precedence over env):
+
+| Mode | What it does | Use case |
+|---|---|---|
+| `disabled` (default) | `GET /restart` → `supported:false`, `POST` → 409 `RESTART_UNSUPPORTED` | a bare `synth serve` without a supervisor (systemd `Restart=on-failure` — separately) |
+| `process` | exits with code 75; an external supervisor restarts it | K8s (Deployment `restartPolicy: Always`), Docker (`restart: unless-stopped`), systemd (`Restart=on-failure`), pm2 |
+| `supervisor` | same, but the local `scripts/dev.sh` restarts the process | dev environment |
+
+Deployment defaults: the Helm chart — `backend.restartMode: process` (+ env `SYNTH_RESTART_MODE`), Docker
+Compose — `restart: unless-stopped` + `SYNTH_RESTART_MODE=process`, `scripts/dev.sh` — `supervisor`, a bare
+`synth serve` — `disabled`. systemd unit example:
+
+```ini
+[Service]
+ExecStart=/usr/bin/synth serve --restart-mode process
+Restart=on-failure        # code 75 means "temporarily unavailable", the unit comes back
+RestartSec=2
+```
+
+**Multi-replica:** the endpoint restarts only the process/pod that served the request; for the whole
+Deployment use `kubectl rollout restart deployment/<release>-synth-backend` (or `helm rollback`). Active
+streams and in-flight requests on the restarted process are interrupted; the request is written to the audit
+journal as `restart.requested`. The UI waits for `startedAt` in `GET /health` to change (up to 90 s), then
+reloads.
+
+`GET /health` and `GET /api/v2/health` return an additive `startedAt` field (ISO) — the process start
+timestamp.
 
 ## config.yaml
 
@@ -626,43 +659,74 @@ mcp:
     exceptions: []
 ```
 
-### Proxy (`proxy.*`, ADR-099 D1+D2)
+### Proxy (`proxy.*`, ADR-099 D1+D2; profiles and rules — item 27)
 
 An outbound HTTP/HTTPS/SOCKS5 proxy — part of the single egress layer (see also `security.tls` — trust for the
 **target** and for the https proxy, and `egress.*` — the address policy). The section is **top-level** and can
 be configured in `config.yaml`/env and **from the admin UI** (section "Network" → "Proxy"; runtime
 override, see "Configuring from the UI" in the `security.tls` section).
 It is applied **at process startup** (the `EgressDispatcher` is start-only, like TLS): saving from the UI does
-not switch the route live — a restart is required. The route is chosen **per origin**:
-`httpsProxy`/`httpProxy` by the target scheme → `allProxy` → `url`; hosts in `noProxy` go direct.
+not switch the route live — a restart is required. The route is chosen **per origin**: `noProxy` (always
+wins) → rules (`proxy.rules`, order = priority, **first match**) → `mode: all` ? `defaultProfile` : direct
+(`selected`). Inside a profile: `httpsProxy`/`httpProxy` by the target scheme → `allProxy` → `url`.
 
 | Field | Env | Purpose | Default |
 |---|---|---|---|
 | `enabled` | `SYNTH_PROXY_ENABLED` | Explicit switch. Unset — the proxy is enabled by the presence of a URL (including the standard env vars when `fromEnv`); an explicit `false` suppresses the standard env | — (auto) |
-| `url` | `SYNTH_PROXY_URL` | Common proxy `http://`/`https://`/`socks5://`/`socks5h://` (userinfo in config.yaml/env is allowed; when saving from the UI a password in the URL is **forbidden**) | — |
-| `httpProxy` / `httpsProxy` | `SYNTH_PROXY_HTTP_PROXY` / `SYNTH_PROXY_HTTPS_PROXY` | Proxy for targets by scheme (`http`/`https`); takes precedence over `allProxy`/`url` | — |
-| `allProxy` | `SYNTH_PROXY_ALL_PROXY` | Proxy for all schemes (when no scheme-specific one) | — |
-| `noProxy` | `SYNTH_PROXY_NO_PROXY` | Exceptions: `host`, `.suffix`, `*.suffix`, `host:port`, IP, CIDR (matched against the target IP literal — no DNS), `*` | `[]` |
+| `mode` | — | `all` — `defaultProfile` for everything except `noProxy` (rules override); `selected` — **only** rules, everything else direct | `all` |
+| `defaultProfile` | — | Profile name for `mode: all` and rules without `profile`; required for `mode: all` (otherwise `default`, if present) | `default` (if present) |
+| `profiles.<name>` | — | Named profile: `label`, `url` and/or `httpProxy`/`httpsProxy`/`allProxy`, `auth` (Basic), `tls` (to the proxy). Name — `^[a-z][a-z0-9_-]{0,31}$`, **immutable** | — |
+| `rules[]` | — | Rules: `{id?, label?, hosts[], action: proxy\|direct, profile?}`; `action: direct` forbids `profile`; without `profile` — `defaultProfile` | `[]` |
+| `url` | `SYNTH_PROXY_URL` | Common proxy `http://`/`https://`/`socks5://`/`socks5h://` (userinfo in config.yaml/env is allowed; when saving from the UI a password in the URL is **forbidden**). **Legacy**: without `profiles` — a synthetic `default` profile | — |
+| `httpProxy` / `httpsProxy` | `SYNTH_PROXY_HTTP_PROXY` / `SYNTH_PROXY_HTTPS_PROXY` | Proxy for targets by scheme (`http`/`https`); takes precedence over `allProxy`/`url`. **Legacy** fields (forbidden with `profiles`) | — |
+| `allProxy` | `SYNTH_PROXY_ALL_PROXY` | Proxy for all schemes (when no scheme-specific one). **Legacy** | — |
+| `noProxy` | `SYNTH_PROXY_NO_PROXY` | Exceptions (win over rules): `host`, `.suffix` (apex + subdomains), `*.suffix` (subdomains only), `host:port`, IP, CIDR (matched against the target IP literal — no DNS), `*` | `[]` |
 | `fromEnv` | — | Honour the standard `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` | `true` |
 | `fallbackDirect` | `SYNTH_PROXY_FALLBACK_DIRECT` | Explicit opt-in: go direct when the proxy is unavailable (warn + `via:'fallback'`). Auth errors (`407`) do **not** allow fallback | `false` |
 | `connectTimeoutMs` | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | Proxy connection timeout, ms | `10000` |
 | `auth.type` | — | Only `basic`; `ntlm`/`negotiate` → error/400 (**domain authentication — egress gateway**, ADR-099 item 25) | `basic` |
 | `auth.username` | — | Basic username (alternative — userinfo in the URL) | — |
-| `auth` password | `SYNTH_PROXY_PASSWORD` | Basic password: **only** the env var or the file `{dataDir}/secrets/proxy-password` (not stored in config.yaml/`settings.json`, invariant 13); the env var takes precedence over the file and blocks UI management | — |
-| `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA for the **https proxy itself** (mutually exclusive) | system trust |
+| `auth` password | `SYNTH_PROXY_PASSWORD` (profile `default`), `SYNTH_PROXY_<NAME>_PASSWORD` (others) | Basic password: **only** the env var or a file (`{dataDir}/secrets/proxy-password`, `{dataDir}/secrets/proxy/<name>.password`); not stored in config.yaml/`settings.json` (invariant 13); the env var takes precedence over the file and blocks UI management (409) | — |
+| `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA for the **https proxy itself** (mutually exclusive), per profile | system trust |
 | `tls.certFile` / `tls.keyFile` | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | mTLS to the https proxy (set together) | — |
 | `tls.rejectUnauthorized` | `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | Verify the proxy certificate | `true` |
 
 **Priority (ADR-023):** defaults ← `config.yaml proxy` ← **runtime override (UI)** ← explicit
 `SYNTH_PROXY_*`; the standard `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` apply only with `fromEnv`
-and when runtime/config did not set an explicit `enabled: false`. The merge is field-level, so the UI edits
-the config layer but **does not override the explicit deployment env**. `noProxy`:
+and when runtime/config did not set an explicit `enabled: false`. The merge is field-level (the UI edits
+the config layer but **does not override the explicit deployment env**), **except** `profiles`/`rules`:
+the runtime value replaces them **entirely** (no partial list merge). `noProxy`:
 `SYNTH_PROXY_NO_PROXY` > runtime > a non-empty `proxy.noProxy` > `NO_PROXY`.
+
+**Route resolution order:** `enabled:false` → direct; `noProxy` → direct (`no-proxy`); rules in declaration
+order, **first match** (`rule`; `action: direct` → direct, `proxy` → profile `rule.profile ?? defaultProfile`);
+`mode: selected` → direct (`no-match`); `mode: all` → `defaultProfile` (`default`). The same resolver is used
+by the transport (`egressFetch`) and by diagnostics (`POST /settings/proxy/test`), so "the check says one
+thing while the traffic does another" cannot happen.
+
+**Patterns in `hosts`/`noProxy`:** `exact`; `.suffix` — apex **and** subdomains; `*.suffix` — subdomains
+only (apex does **not** match); `host:port`; IP literal; CIDR (target IP literal only, no DNS for
+rules/exceptions); `*`.
+
+**Profile secrets (invariant 13).** The `default` password — `SYNTH_PROXY_PASSWORD` >
+`{dataDir}/secrets/proxy-password` (legacy); others — `SYNTH_PROXY_<NAME>_PASSWORD` (name upper-cased,
+`-` → `_`) > `{dataDir}/secrets/proxy/<name>.password`. Files `0600`, directories `0700`, atomic
+tmp→rename; values are **write-only** (never returned, logged or written to the audit journal). TLS
+material uploaded from the UI — `{dataDir}/secrets/proxy/<name>/{ca.pem,client.crt,client.key}` (only paths
+land in the config).
+
+**Legacy compatibility.** Without `profiles`/`rules` the behaviour is unchanged: top-level `url`/`httpProxy`/
+`httpsProxy`/`allProxy`/`auth`/`tls` = a synthetic `default` profile. With `profiles` present, top-level
+URL/auth/tls are **forbidden** (fail-closed); env `SYNTH_PROXY_URL`/`HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` are
+not applied in profile mode (a configuration error/400). On save the UI converts the legacy form into `profiles.default`, preserving the
+scheme-specific fields.
 
 **Fail-closed.** A broken URL, an unknown scheme, `enabled=true` without a URL, Basic without a password,
 `auth.type` ≠ `basic`, `proxy.tls` together with `socks5://`, `caFile`+`caPem`, `certFile` without
-`keyFile` → a configuration error (`EGRESS_PROXY_CONFIG_INVALID`) at startup and 400 `VALIDATION_ERROR` when
-saving from the UI. An unavailable proxy → `EGRESS_PROXY_UNAVAILABLE` (no silent direct); `407`/SOCKS refusal
+`keyFile`, an unknown `defaultProfile`/rule `profile`, `action: direct` with `profile`, `mode: selected`
+without rules, `mode: all` without a default profile (in `profiles`/`rules` mode), an invalid profile name → a configuration error
+(`EGRESS_PROXY_CONFIG_INVALID`) at startup and 400 `VALIDATION_ERROR` when saving from the UI. An unavailable
+proxy → `EGRESS_PROXY_UNAVAILABLE` (no silent direct); `407`/SOCKS refusal
 → `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED`.
 
 **Address policy behind a proxy** (ADR-099 item 18): for requests through the proxy only the scheme and the
@@ -672,26 +736,30 @@ the check is full (DNS/CIDR per hop). The actual route is written to the egress 
 
 #### Configuring from the UI (section "Network" → "Proxy")
 
-- **What is editable:** `enabled`, `url`/`httpProxy`/`httpsProxy`/`allProxy`, `noProxy`, `fromEnv`,
-  `fallbackDirect`, `connectTimeoutMs`, `auth.username`, `tls.*` paths. It is stored in
-  `RuntimeSettings.proxy` (`{dataDir}/settings.json`; with `storage.backend=postgres` — the `settings`
-  table, moved by `synth storage migrate`).
+- **What is editable:** `enabled`, `mode` (`all`/`selected`), `defaultProfile`, **profiles** (`label`,
+  URL fields, `auth.username`, `tls.*` paths; the profile name is immutable), **rules** (order = priority,
+  first match; `action`/`profile`/`hosts`), `noProxy`, `fromEnv`, `fallbackDirect`, `connectTimeoutMs`. A
+  single `proxy` section is stored in `RuntimeSettings.proxy` (`{dataDir}/settings.json`; with
+  `storage.backend=postgres` — the `settings` table, moved by `synth storage migrate`).
+- **Profile secrets (write-only):** password — `PUT/DELETE /settings/proxy/profiles/:name/password`
+  (`{dataDir}/secrets/proxy/<name>.password`; for `default` — legacy `secrets/proxy-password`), CA/mTLS —
+  `PUT/DELETE /settings/proxy/profiles/:name/tls/{ca,client}`
+  (`secrets/proxy/<name>/{ca.pem,client.crt,client.key}`, `0600`). With a profile env password
+  (`SYNTH_PROXY_<NAME>_PASSWORD`) a mutation → `409 CONFLICT`; PEMs/keys and passwords are **never returned**.
 - **Application:** at the **next startup** (`restartRequired`), not live. `GET /settings/proxy` returns
   `saved` (config ← runtime ← env), `running` (the current dispatcher), `defaults`, `isOverridden`,
-  `restartRequired`; the flat response fields equal `saved` (backward compatibility). The UI shows a
-  "changes take effect after a restart" banner. Besides `noProxy`/`fromEnv`/`connectTimeoutMs`, the status
-  returns safe `auth:{type,username}` and `tls:{caFile?,certFile?,keyFile?,hasCaPem,rejectUnauthorized}` —
-  the TLS paths and the `caPem` flag, but **not** `caPem`/PEM contents and **not** the password/userinfo.
-- **Write-only password:** `PUT /settings/proxy/password` writes `{dataDir}/secrets/proxy-password`
-  (0600, directory 0700, atomic tmp→rename), `DELETE` removes it; the value is never returned and never
-  reaches the audit log/logs. If `SYNTH_PROXY_PASSWORD` is set, both calls → `409 CONFLICT` (the password is
-  managed by the deployment). `GET` returns only `password: {source:'env'|'file'|'none', set, removable}`.
-- **Check:** `POST /settings/proxy/check` without `url` checks the **saved** configuration
-  (`usingSaved:true`) so the UI sees the future state; an explicit `{url}` checks a specific proxy.
-- **Audit:** changes (save/reset/password) are written to `{dataDir}/audit/security.jsonl` with
-  `scope:'proxy'` (before/after without the password, URLs redacted).
+  `restartRequired`; `profiles`/`rules` in the status are redacted (URL without userinfo, `username`, TLS
+  paths, `hasCaPem`, `password:{source,set,removable}`); the flat response fields equal `saved` (backward compatibility). The UI shows a
+  "changes take effect after a restart" banner linking to "Maintenance → Restart".
+- **Checks:** `POST /settings/proxy/check` — connectivity **to the proxy** (without `url` — against the
+  saved config, `usingSaved:true`); `POST /settings/proxy/test {url}` — a **target** check: `HEAD` without
+  redirects or a body, the address policy is evaluated **before** the request, the response contains
+  `route` (`action`/`via`/`reason`/`ruleId`/`ruleLabel`/`profile`/`profileLabel`/`proxyUrl`), `ok`,
+  `httpStatus`, `latencyMs`, `authChallenge`, `usingSaved`, `restartRequired`.
+- **Audit:** changes (save/reset/password/profile TLS) are written to `{dataDir}/audit/security.jsonl`
+  with `scope:'proxy'` (before/after without the password, URLs redacted).
 
-**RBAC:** read — `requireAuth`; save/reset, password and `check` — `settingsWriteGuard` (managed —
+**RBAC:** read — `requireAuth`; save/reset, profile secrets and checks — `settingsWriteGuard` (managed —
 `ADMIN`, core — `requireAuth`).
 
 **Limitations.** Domain proxy authentication (NTLM/Negotiate/Kerberos) is **not implemented in the
@@ -703,8 +771,9 @@ CONNECT there). An https proxy/SOCKS by IP literal requires a DNS host (SNI by I
 `proxy/check` may still report `reachable`. The built-in global `fetch` is not guaranteed (npm
 `setGlobalDispatcher` does not affect it on Node 26; on Node 22 — re-check in CI) — the paths through
 `egressFetch` are covered. There is no runtime reload without a restart. PostgreSQL is not proxied (not
-HTTP). git applies `no_proxy` via libcurl, there is no per-remote setting; `stdio` MCP receives the proxy env
-without the password.
+HTTP). git applies `no_proxy` via libcurl, there is no per-remote setting; **per-host routing is not
+supported in git/stdio MCP** (one proxy via child env; in `mode: selected` the proxy env is not set for
+them, so rules are not silently bypassed); `stdio` MCP receives the proxy env without the password.
 
 #### Corporate proxy with Kerberos/NTLM (egress gateway)
 
@@ -737,7 +806,7 @@ between Synth and it — for K8s this is the target scheme:
   [ADR-099](../arch_decisions/adr-099-egress-tls-trust.md) item 25.
 - **SOCKS5** — best-effort and not for K8s; if target mTLS is needed, use HTTP CONNECT (ADR-099 item 26).
 
-Example:
+Example (single proxy — legacy form, equivalent to `profiles.default`):
 
 ```yaml
 proxy:
@@ -759,6 +828,42 @@ proxy:
     # keyFile: "/etc/synth/tls/proxy-client.key"
     rejectUnauthorized: true
 ```
+
+Example (profiles and rules — several proxies for different destinations):
+
+```yaml
+proxy:
+  enabled: true
+  mode: all                        # all | selected
+  defaultProfile: default
+  profiles:
+    default:                       # corporate proxy for everything except noProxy
+      label: Corporate
+      url: "http://proxy.corp.example:3128"
+      auth: { type: basic, username: synth }
+      tls: { caFile: "/etc/synth/tls/proxy-ca.pem", rejectUnauthorized: true }
+    llm:                           # dedicated LLM egress with mTLS
+      label: LLM egress
+      url: "https://llm-proxy.svc:8443"
+      auth: { type: basic, username: synth-llm }
+      tls:
+        caFile: "/etc/synth/tls/llm-ca.pem"
+        certFile: "/etc/synth/tls/llm-client.crt"
+        keyFile: "/etc/synth/tls/llm-client.key"
+  rules:                           # order = priority, first match
+    - id: r_openai
+      label: OpenAI
+      hosts: ["api.openai.com", "*.openai.com"]
+      action: proxy
+      profile: llm
+    - hosts: ["*.corp.example", "10.0.0.0/8"]   # CIDR — target IP literal only
+      action: direct
+  noProxy: ["localhost", ".svc"]   # wins over any rule
+```
+
+Profile passwords live only in env/files (not shown above): `SYNTH_PROXY_PASSWORD` /
+`{dataDir}/secrets/proxy-password` for `default`, `SYNTH_PROXY_LLM_PASSWORD` /
+`{dataDir}/secrets/proxy/llm.password` for `llm`.
 
 ### At-rest secrets (`security.secretKey`, ADR-076)
 

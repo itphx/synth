@@ -246,6 +246,9 @@ export const defaultConfig: SynthConfig = {
     // ADR-099 (D1): прокси выключен по умолчанию (поведение не меняется).
     // `enabled` намеренно не задан: явный `false` в config.yaml подавляет
     // стандартные HTTP_PROXY/…, а отсутствие — позволяет включиться из env.
+    // `profiles`/`rules` намеренно не заданы: отсутствие = legacy-поведение
+    // (top-level URL + синтетический профиль `default`).
+    mode: 'all',
     noProxy: [],
     fromEnv: true,
     fallbackDirect: false,

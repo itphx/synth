@@ -5,7 +5,7 @@
 {{- $providerKeys = append $providerKeys .name -}}
 {{- end -}}
 {{- end -}}
-{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) -}}
+{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -46,6 +46,11 @@ spec:
                 name: {{ include "synth.name" . }}-env
           {{- if $needEnv }}
           env:
+            {{- /* Restart из UI: exit 75 → Deployment (restartPolicy: Always) поднимает pod. */}}
+            {{- if .Values.backend.restartMode }}
+            - name: SYNTH_RESTART_MODE
+              value: {{ .Values.backend.restartMode | quote }}
+            {{- end }}
             {{- if .Values.backend.oidc.enabled }}
             - name: SYNTH_OIDC_CLIENT_SECRET
               valueFrom:

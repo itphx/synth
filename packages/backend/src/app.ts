@@ -23,6 +23,7 @@ import { createMiddleware } from 'hono/factory';
 import { nowISO, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
   applyBootstrapServiceKeys,
+  getProcessStartedAt,
   KeyRateLimiter,
   getServiceCredential,
 } from '@itphx/synth-core';
@@ -144,7 +145,13 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // + блок storage (аддитивно к {status, version, time}). `degradedInfo`
     // заполняется после сборки контекста хранения ниже (до первого запроса).
     let degradedInfo: StorageContext['degraded'] | null = null;
-    const health = () => ({ ...storageHealthFields(degradedInfo), version: SYNTH_VERSION, time: nowISO() });
+    const health = () => ({
+      ...storageHealthFields(degradedInfo),
+      version: SYNTH_VERSION,
+      // Restart: ISO старта процесса — UI сравнивает до/после рестарта.
+      startedAt: getProcessStartedAt(),
+      time: nowISO(),
+    });
     app.get('/health', (c) => c.json(health()));
     app.get('/api/v2/health', (c) => c.json(health()));
 

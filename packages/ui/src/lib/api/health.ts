@@ -4,7 +4,7 @@ import { BASE_URL, fetchJSON } from './base'
 
 export const healthApi = {
   /** Публичный health-эндпоинт (без auth): проверка версии сервера на клиенте. */
-  async getHealth(): Promise<{ status: string; version: string; time: string }> {
+  async getHealth(): Promise<{ status: string; version: string; time: string; startedAt?: string }> {
     return fetchJSON(`${BASE_URL}/health`)
   },
 

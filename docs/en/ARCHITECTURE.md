@@ -445,20 +445,45 @@ in each subsystem. Three orthogonal parts:
    is `engine/net/egress-guard.ts` (`checkEgressUrl`/`fetchWithEgressGuard`, per-hop redirects, fail-closed).
    Changes go to `{dataDir}/audit/security.jsonl`, requests to `{dataDir}/audit/egress.jsonl`.
 3. **Proxy (configured at runtime, applied at startup).** The `proxy` section (HTTP/HTTPS/SOCKS5, Basic,
-   TLS/mTLS to the https proxy, `noProxy`) from `config.yaml`/env **or the runtime override from the admin
-   UI** (`RuntimeSettings.proxy`, `settings.json`/PG; priority `SYNTH_PROXY_*` > runtime > config) →
-   `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): per-origin direct/proxy choice,
-   fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` without a direct fallback. Application is two-step: an early
-   `initTlsTrust` (TLS/PG), then `applyStartupProxyConfig` after the storage is built and **before** deps;
-   `PUT /settings/proxy` only saves (`restartRequired`), there is no live switch. git gets the proxy via
-   child env (`http_proxy`/… through libcurl), `stdio` MCP via the child process env; PostgreSQL is not
-   proxied. **Domain proxy authentication (NTLM/Negotiate/Kerberos) is not implemented in the application** —
-   it is delegated to an intermediate egress gateway (Squid `login=NEGOTIATE` / `px`), the typical K8s scheme
-   `Synth → HTTP CONNECT → gateway → Kerberos/NTLM → corporate proxy` (ADR-099 item 25); SOCKS5 is
-   best-effort without target CA/mTLS and is not the target scheme for K8s (item 26).
+   TLS/mTLS to the https proxy, `noProxy`, **`profiles` and host `rules`**) from `config.yaml`/env **or the
+   runtime override from the admin UI** (`RuntimeSettings.proxy`, `settings.json`/PG; priority
+   `SYNTH_PROXY_*` > runtime > config) → `EgressDispatcher`
+   (`packages/core/src/security/proxy-dispatcher.ts`): per-origin route via `resolveProxyRoute` — `noProxy`
+   (wins over everything) → rules (first match) → `mode: all` ? `defaultProfile` : direct; fail-closed
+   `EGRESS_PROXY_UNAVAILABLE`, `407` without a direct fallback. **Target TLS and proxy TLS are independent:**
+   trust for the target — `security.tls` (CA/`mappings`), for the proxy — `proxy.profiles.<name>.tls`/
+   `proxy.tls` (per-profile CA/mTLS); a client cert for the proxy does not replace the cert for the target.
+   Application is two-step: an early `initTlsTrust` (TLS/PG), then `applyStartupProxyConfig` after the
+   storage is built and **before** deps; `PUT /settings/proxy` only saves (`restartRequired`), there is no
+   live switch. git gets the proxy via child env (`http_proxy`/… through libcurl), `stdio` MCP via the child
+   process env (they do not support per-host routing — one proxy; in `mode: selected` the proxy env is not
+   set for them); PostgreSQL is not proxied. **Domain proxy authentication (NTLM/Negotiate/Kerberos) is not
+   implemented in the application** — it is delegated to an intermediate egress gateway (Squid
+   `login=NEGOTIATE` / `px`), the typical K8s scheme `Synth → HTTP CONNECT → gateway → Kerberos/NTLM →
+   corporate proxy` (ADR-099 item 25); SOCKS5 is best-effort without target CA/mTLS and is not the target
+   scheme for K8s (item 26).
 
 With a proxy enabled the address policy runs in **proxied mode**: only the scheme and hostname rules are
 checked, no DNS/CIDR (the proxy resolves the address); for `noProxy` hosts the check is full. The actual
 route is written to the journal (`via`: `proxy`/`direct`/`fallback`). API — `docs/API_V2.md` §5.21
 (`settings/egress/*`, `settings/proxy*`), configuration — `docs/CONFIGURATION.md` (`egress.*`, `proxy.*`,
 `security.tls`); limitations (NTLM/Kerberos, SOCKS + target CA, IP/SNI) — ADR-099 and PROP-088.
+
+## Instance lifecycle and restart
+
+Some settings are applied only at process startup — the global undici dispatcher and TLS/CA trust
+(`security.tls`/`mappings`), the proxy (`proxy`: profiles/rules), the PostgreSQL pool, MCP clients — plus
+offline operations (the pending restore `applyPendingRestore`, automatic schema migrations). So "apply a
+setting" and "restart" are different operations: `restartRequired` shows the saved/running divergence, and
+the application is a restart.
+
+The restart is **not performed inside the process** (re-initialising process-global singletons safely is
+impossible). Contract (ADR-092): `POST /api/v2/maintenance/restart {confirm:true}` (ADMIN) → 202, a graceful
+shutdown → **exit code 75** (`EX_TEMPFAIL`), and an external supervisor starts the process again — a K8s
+Deployment (`restartPolicy: Always`), Docker (`restart: unless-stopped`), systemd
+(`Restart=on-failure`), pm2, or the local `scripts/dev.sh` (`supervisor` mode). The mode is
+`SYNTH_RESTART_MODE=disabled|process|supervisor` (default `disabled`; CLI `synth serve --restart-mode`
+takes precedence). `GET /health` and `/api/v2/health` return `startedAt` — the UI waits for it to change
+after the restart. In a multi-replica setup the endpoint restarts only the pod that served the request; for
+the whole Deployment use `kubectl rollout restart`. The request is recorded in the maintenance audit
+(`restart.requested`).

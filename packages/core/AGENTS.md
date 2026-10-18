@@ -73,10 +73,15 @@
 - **TLS runtime и профили (ADR-099).** `security/tls.ts`: `initTlsTrust` читает bootstrap
   (`tlsRuntime`/`dataDir`) до PG, строит `EgressDispatcher` с `tlsProfiles`; `getTlsStatus` — статус без
   PEM/ключей (ca count/subjects, client/mapping subjects, `running`/`saved`, `restartRequired`).
-  `security/proxy-dispatcher.ts` выбирает профиль по origin (`profileFor`), PostgreSQL —
-  `selectTlsClientProfile` по host (`storage-postgres/pool.ts`, `tlsRuntime`). API —
-  `server/routes/settings-tls.ts` (`/settings/tls*`, write-only client, mappings, validate), аудит
-  `scope:'tls'`; изменения — при следующем старте.
+  `security/proxy-dispatcher.ts` выбирает TLS-профиль по origin (`profileFor`) и прокси-маршрут через
+  `resolveProxyRoute` (ADR-099 п. 27: `mode`/`profiles`/`rules`, first match, `noProxy` важнее); PostgreSQL —
+  `selectTlsClientProfile` по host (`storage-postgres/pool.ts`, `tlsRuntime`). Профильные секреты —
+  `security/proxy-password.ts` (`secrets/proxy/<name>.password`) и `security/proxy-tls-secrets.ts`
+  (`secrets/proxy/<name>/`), диагностика — `security/proxy-check.ts`
+  (`checkProxyConnectivity` — к прокси, `checkProxyTarget`/`describeProxyRoute` — к цели с маршрутом). API —
+  `server/routes/settings-tls.ts` (`/settings/tls*`, write-only client, mappings, validate) и
+  `server/routes/settings.ts` (`/settings/proxy*`, профили/правила/`/proxy/test`), аудит
+  `scope:'tls'`/`scope:'proxy'`; изменения — при следующем старте.
 - Секреты at-rest (SSH-ключи, ADR-076) — AES-256-GCM (`security/crypto.ts`);
   мастер-ключ — `SYNTH_SECRET_KEY` > `security.secretKey` > файл
   `{dataDir}/secrets/master.key` (`0600`, каталог `0700`, создаётся при первом
@@ -194,6 +199,13 @@
   `backup`/`restore`/`migrate`/`update`/`rollback`/`uninstall`, ADR-092; порт
   `MaintenanceAuditRepository`). HTTP-фабрика — `server/routes/maintenance.ts`
   (`createMaintenanceRoutes`).
+- `server/restart.ts` — ADR-092 п. 7: graceful restart инстанса. `configureRestart` (вызов на старте
+  процесса — `main.ts`/backend `main.ts`), `resolveRestartMode` (`--restart-mode` > `SYNTH_RESTART_MODE`;
+  неизвестное → `disabled` + warn), `getRestartStatus` (`supported`/`mode`/`reason`/`startedAt`/`version`),
+  `requestRestart` (идемпотентный `rst_<uuid>`, аудит через `beforeRequest`, `setTimeout` → `process.exit(75)`;
+  `RESTART_EXIT_CODE = 75`), `getProcessStartedAt` (тот же `startedAt` в `/health`). Роуты —
+  `GET/POST /api/v2/maintenance/restart` (`server/routes/maintenance.ts`); переинициализацию
+  процесс-глобальных singleton'ов не делать — только выход.
 - `server/service-scope.ts` — ADR-052 (этап I): enforcement service-key — `requireScope(...)`
   (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkServiceProjectProjection`/
   `isProjectAllowed` (проектная проекция `allowedProjects`; это **не** RBAC), `getServiceCredential`
@@ -549,7 +561,7 @@
   FS: плоский root / workspace проекта через `getProjectWorkspace`, ADR-075),
   `createServiceKeyRoutes` (ADR-052 этап I: CRUD service-key, `writeGuard`/`readGuard`/`messages`),
   `createMaintenanceRoutes` (ADR-091/ADR-092: admin-API обслуживания — status/doctor/migrations/
-  backups/restore; `writeGuard`/`readGuard`/`messages`/`maxUploadBytes`, восстановление — офлайн).
+  backups/restore/**restart**; `writeGuard`/`readGuard`/`messages`/`maxUploadBytes`, восстановление — офлайн).
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
   `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
@@ -559,6 +571,10 @@
   `onDecisionChange`, мутации под `decisionWriteGuard`), а также `GET /settings/decision/metrics`
   (снимок `decisionMetrics`, `requireAuth`) и `DELETE /settings/decision/metrics` (сброс,
   `decisionWriteGuard`).
+  Прокси (ADR-099 п. 27) — `GET/PUT/DELETE /settings/proxy` (профили/правила/`mode`/`defaultProfile`),
+  `PUT/DELETE /settings/proxy/profiles/:name/password`, `.../tls/ca`, `.../tls/client` (профильные
+  секреты write-only, `secrets/proxy/`), `POST /settings/proxy/test` (target-check: маршрут по saved,
+  `HEAD` без редиректов, egress-политика до запроса); мутации — `settingsWriteGuard`, аудит `scope:'proxy'`.
 - **Видимость сессий/проектов (ADR-089).** Единый хелпер — `server/session-visibility.ts`
   (`isSessionVisible(session, projectStore, { userId, elevated }, projectCache?)`): `elevated`
   (ADMIN/LEAD) → всё; владелец (`ownerId ?? userId`) → да; нет владельца → да; иначе сессия

@@ -445,13 +445,19 @@ API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `do
    `engine/net/egress-guard.ts` (`checkEgressUrl`/`fetchWithEgressGuard`, редиректы per-hop, fail-closed).
    Изменения — аудит `{dataDir}/audit/security.jsonl`, запросы — журнал `{dataDir}/audit/egress.jsonl`.
 3. **Прокси (настраивается runtime, применяется при старте).** Секция `proxy` (HTTP/HTTPS/SOCKS5,
-   Basic, TLS/mTLS к https-прокси, `noProxy`) из `config.yaml`/env **или runtime-оверрайда из админ-UI**
+   Basic, TLS/mTLS к https-прокси, `noProxy`, **профили `profiles` и host-правила `rules`**) из
+   `config.yaml`/env **или runtime-оверрайда из админ-UI**
    (`RuntimeSettings.proxy`, `settings.json`/PG; приоритет `SYNTH_PROXY_*` > runtime > config) →
-   `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): per-origin выбор direct/proxy,
-   fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` без direct-фоллбека. Применение — двумя шагами: ранний
+   `EgressDispatcher` (`packages/core/src/security/proxy-dispatcher.ts`): маршрут per-origin по
+   `resolveProxyRoute` — `noProxy` (важнее всего) → правила (первое совпадение) → `mode: all` ?
+   `defaultProfile` : direct; fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` без direct-фоллбека.
+   **TLS к цели и TLS к прокси независимы:** доверие к цели — `security.tls` (CA/`mappings`), к
+   прокси — `proxy.profiles.<name>.tls`/`proxy.tls` (свой CA/mTLS у каждого профиля); клиентский
+   серт к прокси не подменяет серт к цели. Применение — двумя шагами: ранний
    `initTlsTrust` (TLS/PG), затем `applyStartupProxyConfig` после сборки хранилища и **до** deps;
    `PUT /settings/proxy` только сохраняет (`restartRequired`), live-переключения нет. git получает прокси
-   child-env (`http_proxy`/… через libcurl), `stdio`-MCP — env дочернего процесса; PostgreSQL не
+   child-env (`http_proxy`/… через libcurl), `stdio`-MCP — env дочернего процесса (per-host маршрут они
+   не поддерживают — один прокси; в `mode: selected` прокси-env им не ставится); PostgreSQL не
    проксируется. **Доменная аутентификация прокси (NTLM/Negotiate/Kerberos) в приложении не
    реализуется** — делегируется промежуточному egress-шлюзу (Squid `login=NEGOTIATE` / `px`), типовой
    K8s-схеме `Synth → HTTP CONNECT → шлюз → Kerberos/NTLM → корпоративный прокси` (ADR-099 п. 25);
@@ -462,3 +468,21 @@ hostname-правила, DNS/CIDR не выполняются (адрес рез
 проверка. Фактический маршрут пишется в журнал (`via`: `proxy`/`direct`/`fallback`). API — `docs/API_V2.md`
 §5.21 (`settings/egress/*`, `settings/proxy*`), конфиг — `docs/CONFIGURATION.md` (`egress.*`, `proxy.*`,
 `security.tls`); ограничения (NTLM/Kerberos, SOCKS + CA к цели, IP/SNI) — ADR-099 и PROP-088.
+
+## Жизненный цикл инстанса и перезапуск
+
+Часть настроек применяется только при старте процесса — глобальный undici-dispatcher и доверие TLS/CA
+(`security.tls`/`mappings`), прокси (`proxy`: профили/правила), пул PostgreSQL, MCP-клиенты; плюс
+офлайн-операции (отложенное восстановление `applyPendingRestore`, авто-миграции схемы). Поэтому
+«применить настройку» и «перезапустить» — разные операции: `restartRequired` показывает расхождение
+saved/running, а применение — рестарт.
+
+Перезапуск **не выполняется внутри процесса** (переинициализировать процесс-глобальные singleton'ы
+безопасно нельзя). Контракт (ADR-092): `POST /api/v2/maintenance/restart {confirm:true}` (ADMIN) →
+202, graceful shutdown → **exit code 75** (`EX_TEMPFAIL`), процесс поднимает внешний супервизор —
+K8s Deployment (`restartPolicy: Always`), Docker (`restart: unless-stopped`), systemd
+(`Restart=on-failure`), pm2, либо локальный `scripts/dev.sh` (режим `supervisor`). Режим —
+`SYNTH_RESTART_MODE=disabled|process|supervisor` (default `disabled`; CLI `synth serve --restart-mode`
+приоритетнее). `GET /health` и `/api/v2/health` отдают `startedAt` — UI ждёт его изменения после
+рестарта. В multi-replica endpoint перезапускает только pod, обработавший запрос; для всего Deployment —
+`kubectl rollout restart`. Запрос фиксируется в аудите обслуживания (`restart.requested`).

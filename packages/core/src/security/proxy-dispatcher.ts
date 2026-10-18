@@ -2,30 +2,40 @@
  * ADR-099 (этап D1): единый undici-dispatcher с HTTP/HTTPS-прокси.
  *
  * `EgressDispatcher` — `undici.Dispatcher`, который для каждого запроса выбирает
- * маршрут:
- * - `proxy.enabled` + `noProxy` не матчит хост → `ProxyAgent` (кэш по
- *   `origin+proxy`), иначе — прямой `Agent`;
+ * маршрут через **единую точку** `resolveProxyRoute` (shared):
+ * - `disabled` / `noProxy` / `action:'direct'`-правило / `mode:'selected'` без
+ *   правила → прямой `Agent` (target TLS);
+ * - `action:'proxy'` → `ProxyAgent` выбранного **профиля** (`profile.url`/
+ *   scheme-поля, `profile.credentials`, `proxyTls: profile.tls`), кэш —
+ *   `origin + профиль + proxy URL + auth fingerprint + target TLS profile id`;
  * - TLS-доверие к цели — `requestTls` из `security.tls` (CA/mTLS), к самому
- *   прокси — `proxyTls` (задел D2 для https-прокси/аутентификации);
+ *   прокси — `proxyTls` из профиля (для synthetic legacy-default — `config.tls`);
  * - недоступный прокси → `EgressProxyUnavailableError` (`EGRESS_PROXY_UNAVAILABLE`),
  *   без тихого direct; `fallbackDirect` — только явный opt-in с warn и
- *   `via:'fallback'`.
+ *   `via:'fallback'` (fallback идёт напрямую с target TLS профилем).
  *
  * Модуль тянет `undici` статически, поэтому `security/tls.ts` импортирует его
  * **динамически** — при конфигурации без прокси/доверия пакет не грузится.
  */
+import { createHash } from 'node:crypto';
 import { Agent, Dispatcher, ProxyAgent, Socks5ProxyAgent } from 'undici';
 import {
-  NoProxyMatcher,
   isSocksProxyProtocol,
   matchTlsHostPattern,
-  proxyEntryFor,
   redactProxyUrl,
+  resolveProxyRoute,
   type ProxyCredentials,
   type ResolvedProxyConfig,
+  type ResolvedProxyProfile,
+  type ResolvedProxyRoute,
   type ResolvedProxyTls,
 } from '@itphx/synth-shared';
-import { EGRESS_VIA, type EgressVia, type EgressViaReporter } from './proxy-state.js';
+import {
+  EGRESS_VIA,
+  proxyProfileOf,
+  type EgressVia,
+  type EgressViaReporter,
+} from './proxy-state.js';
 
 /** Ошибка недоступности прокси (fail-closed: direct молча не выполняется). */
 export class EgressProxyUnavailableError extends Error {
@@ -115,7 +125,6 @@ type ViaOptions = Dispatcher.DispatchOptions & {
  */
 export class EgressDispatcher extends Dispatcher {
   readonly #proxy: ResolvedProxyConfig;
-  readonly #matcher: NoProxyMatcher;
   readonly #defaultTls: EgressDispatcherTls;
   readonly #profiles: EgressTlsProfile[];
   /** Прямые агенты — кэш по `origin+profile.id`. */
@@ -126,7 +135,6 @@ export class EgressDispatcher extends Dispatcher {
   constructor(options: EgressDispatcherOptions) {
     super();
     this.#proxy = options.proxy;
-    this.#matcher = new NoProxyMatcher(options.proxy.noProxy);
     this.#defaultTls = options.tls ?? { rejectUnauthorized: true };
     this.#profiles = options.tlsProfiles ?? [];
     this.#warn = options.warn ?? ((message) => console.warn(message));
@@ -149,18 +157,28 @@ export class EgressDispatcher extends Dispatcher {
     return this.profileFor(origin).id;
   }
 
+  /**
+   * Маршрут для origin по единой точке shared (`resolveProxyRoute`):
+   * disabled → noProxy → первое правило → default (`mode: all`) / no-match.
+   */
+  proxyRouteFor(origin: string | URL): ResolvedProxyRoute {
+    return resolveProxyRoute(this.#proxy, origin);
+  }
+
+  /**
+   * Эффективный **прокси-профиль** для origin (не путать с `profileFor` —
+   * target TLS профиль). `undefined` — маршрут direct.
+   */
+  proxyProfileFor(origin: string | URL): ResolvedProxyProfile | undefined {
+    const route = this.proxyRouteFor(origin);
+    if (route.action !== 'proxy') return undefined;
+    return proxyProfileOf(this.#proxy, route.profile);
+  }
+
   /** Планируемый маршрут для origin (без учёта fallback). */
   routeFor(origin: string | URL): 'proxy' | 'direct' {
-    if (!this.#proxy.enabled) return 'direct';
-    let url: URL;
-    try {
-      url = typeof origin === 'string' ? new URL(origin) : origin;
-    } catch {
-      return 'direct';
-    }
-    if (proxyEntryFor(this.#proxy, url) === undefined) return 'direct';
-    const port = url.port || (url.protocol === 'https:' ? '443' : '80');
-    return this.#matcher.matches(url.hostname, port) ? 'direct' : 'proxy';
+    const route = this.proxyRouteFor(origin);
+    return route.action === 'proxy' && route.proxyUrl !== undefined ? 'proxy' : 'direct';
   }
 
   dispatch(opts: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
@@ -169,21 +187,34 @@ export class EgressDispatcher extends Dispatcher {
     if (origin === undefined) return this.#directFor(undefined).dispatch(opts, handler);
 
     const url = safeUrl(origin, opts.path);
-    if (this.routeFor(url ?? origin) === 'direct') {
+    const target = url ?? origin;
+    const route = this.proxyRouteFor(target);
+    if (route.action !== 'proxy' || route.proxyUrl === undefined) {
       reporter?.('direct');
-      return this.#directFor(url ?? origin).dispatch(opts, handler);
+      return this.#directFor(target).dispatch(opts, handler);
     }
 
-    const entry = url ? proxyEntryFor(this.#proxy, url) : undefined;
-    if (entry === undefined) {
-      reporter?.('direct');
-      return this.#directFor(url ?? origin).dispatch(opts, handler);
-    }
-
-    const profile = this.profileFor(url ?? origin);
-    const proxy = this.#proxyAgent(origin, entry.url, entry.credentials, profile);
+    // Маршрут дал имя профиля; из профиля берём TLS/mTLS к прокси (креды и URL
+    // уже выбраны резолвером маршрута по схеме цели).
+    const proxyProfile = proxyProfileOf(this.#proxy, route.profile);
+    const targetProfile = this.profileFor(target);
+    const proxy = this.#proxyAgent(
+      target,
+      proxyProfile?.name ?? route.profile ?? 'default',
+      route.proxyUrl,
+      route.credentials,
+      proxyProfile?.tls,
+      targetProfile,
+    );
     reporter?.('proxy');
-    return this.#dispatchViaProxy(proxy, opts, handler, reporter, entry.url, entry.credentials !== undefined);
+    return this.#dispatchViaProxy(
+      proxy,
+      opts,
+      handler,
+      reporter,
+      route.proxyUrl,
+      route.credentials !== undefined,
+    );
   }
 
   /** TLS-опции соединения с целью по умолчанию (CA/mTLS из `security.tls`). */
@@ -225,22 +256,39 @@ export class EgressDispatcher extends Dispatcher {
     return agent;
   }
 
-  /** Прокси-агент для `origin+proxy+profile` (кэш на время жизни процесса). */
+  /**
+   * Прокси-агент для `origin + профиль + proxy URL + auth + target TLS профиль`
+   * (кэш на время жизни процесса). Агенты разных профилей/кред/TLS не смешиваются.
+   */
   #proxyAgent(
     origin: string | URL,
+    proxyProfileName: string,
     proxyUrl: string,
     credentials: ProxyCredentials | undefined,
-    profile: EgressTlsProfile,
+    proxyTlsProfile: ResolvedProxyTls | undefined,
+    targetProfile: EgressTlsProfile,
   ): Dispatcher {
-    const authKey = credentials ? `${credentials.username}:${credentials.password.length}` : '';
-    const key =
-      `${typeof origin === 'string' ? origin : origin.origin}|${proxyUrl}|${authKey}|${profile.id}`;
+    // Auth fingerprint — хеш (не длина пароля): смена пароля той же длины
+    // не должна переиспользовать старый агент.
+    const authKey = credentials
+      ? createHash('sha256')
+          .update(`${credentials.username}:${credentials.password}`, 'utf8')
+          .digest('hex')
+      : 'anon';
+    const key = [
+      originKeyOf(origin),
+      proxyProfileName,
+      proxyUrl,
+      authKey,
+      targetProfile.id,
+    ].join('|');
     const cached = this.#proxies.get(key);
     if (cached) return cached;
 
     // D2b: SOCKS5 — отдельный агент undici (username/password по RFC 1929).
     // Известное ограничение: Socks5ProxyAgent не принимает `requestTls` —
-    // TLS к цели остаётся системным (поведение прежнее).
+    // TLS к цели остаётся системным (поведение прежнее); `profile.tls`
+    // несовместим с socks5 и отклоняется резолвером конфигурации.
     if (isSocksProxyProtocol(safeProtocol(proxyUrl))) {
       const socks = new Socks5ProxyAgent(proxyUrl, {
         ...(credentials ? { username: credentials.username, password: credentials.password } : {}),
@@ -250,12 +298,14 @@ export class EgressDispatcher extends Dispatcher {
       return socks;
     }
 
-    const proxyTls: ResolvedProxyTls = this.#proxy.tls ?? { rejectUnauthorized: true };
+    // TLS/mTLS к **прокси** — из профиля (для synthetic legacy-default это
+    // `config.tls`, уже перенесённый в профиль резолвером). Target TLS — ниже.
+    const proxyTls: ResolvedProxyTls = proxyTlsProfile ?? { rejectUnauthorized: true };
     const agent = new ProxyAgent({
       uri: proxyUrl,
       // TLS к **цели** — доверие `security.tls` выбранного профиля (CA/mTLS).
-      requestTls: profile.tls,
-      // TLS/mTLS к самому прокси (`proxy.tls`); https-прокси.
+      requestTls: targetProfile.tls,
+      // TLS/mTLS к самому прокси (профиль прокси); https-прокси.
       proxyTls: proxyTls as unknown as Record<string, unknown>,
       // Соединение с прокси — только таймаут; target-CA/mTLS сюда не попадают.
       connect: { timeout: this.#proxy.connectTimeoutMs },
@@ -492,6 +542,15 @@ function safeUrl(origin: string | URL, path: string): URL | null {
     return new URL(path, typeof origin === 'string' ? origin : origin.toString());
   } catch {
     return null;
+  }
+}
+
+/** Ключ origin для кэша агентов (`scheme://host:port`); невалидный — как есть. */
+function originKeyOf(origin: string | URL): string {
+  try {
+    return typeof origin === 'string' ? new URL(origin).origin : origin.origin;
+  } catch {
+    return typeof origin === 'string' ? origin : '';
   }
 }
 

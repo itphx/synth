@@ -165,6 +165,32 @@ export interface ListAuditOptions {
   op?: string
 }
 
+/** Режим graceful restart инстанса (restart из UI). */
+export type RestartMode = 'disabled' | 'process' | 'supervisor'
+
+/** Статус graceful restart (`GET /maintenance/restart`). */
+export interface RestartStatus {
+  /** Рестарт доступен (режим не `disabled`). */
+  supported: boolean
+  mode: RestartMode
+  /** Почему рестарт недоступен / что перезапускает процесс. */
+  reason?: string
+  /** ISO-метка старта процесса — UI ждёт её изменения после рестарта. */
+  startedAt: string
+  /** Версия пакета. */
+  version: string
+}
+
+/** Ответ на запрос рестарта (`POST /maintenance/restart`, 202). */
+export interface RestartResponse {
+  status: 'restarting'
+  /** `rst_<uuid>` — идентификатор запроса (в аудите). */
+  restartId: string
+  mode: Exclude<RestartMode, 'disabled'>
+  /** ISO-метка старта текущего процесса (до рестарта). */
+  startedAt: string
+}
+
 export const maintenanceApi = {
   // --- ADR-091/ADR-092: admin-API обслуживания инстанса ---
   /** GET /maintenance/status — сводный статус инстанса (схема/бэкапы/pending/doctor). */
@@ -266,6 +292,20 @@ export const maintenanceApi = {
   async cancelRestore(): Promise<{ cancelled: boolean }> {
     return fetchJSON<{ cancelled: boolean }>(`${BASE_URL}/maintenance/restore`, {
       method: 'DELETE',
+    })
+  },
+
+  // --- Restart инстанса из UI (graceful shutdown, exit 75) ---
+  /** GET /maintenance/restart — статус рестарта (`supported`/`mode`/`reason`/`startedAt`). */
+  async getRestartStatus(): Promise<RestartStatus> {
+    return fetchJSON<RestartStatus>(`${BASE_URL}/maintenance/restart`)
+  },
+
+  /** POST /maintenance/restart — запросить graceful restart (`{confirm:true}`). */
+  async restartInstance(): Promise<RestartResponse> {
+    return fetchJSON<RestartResponse>(`${BASE_URL}/maintenance/restart`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
     })
   },
 

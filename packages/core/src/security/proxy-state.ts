@@ -21,6 +21,7 @@ import {
   type ProxyCredentials,
   type ProxyUrlField,
   type ResolvedProxyConfig,
+  type ResolvedProxyProfile,
 } from '@itphx/synth-shared';
 
 /** Фактический маршрут запроса для журнала egress (согласовано с shared). */
@@ -68,24 +69,81 @@ function sha256(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+/** Хеши TLS-материалов профиля (PEM/ключи не раскрываются). */
+function tlsFingerprint(tls: ResolvedProxyProfile['tls']): unknown {
+  if (!tls) return null;
+  return {
+    ca: tls.ca !== undefined ? sha256(tls.ca) : null,
+    cert: tls.cert !== undefined ? sha256(tls.cert) : null,
+    key: tls.key !== undefined ? sha256(tls.key) : null,
+    rejectUnauthorized: tls.rejectUnauthorized,
+  };
+}
+
+/** Метаданные TLS-файлов (пути/флаг `caPem`; содержимого нет). */
+function tlsMetaFingerprint(meta: ResolvedProxyProfile['tlsMeta']): unknown {
+  if (!meta) return null;
+  return {
+    caFile: meta.caFile ?? null,
+    certFile: meta.certFile ?? null,
+    keyFile: meta.keyFile ?? null,
+    hasCaPem: meta.hasCaPem,
+  };
+}
+
+/** Креды профиля: имена полей/username + хеш пароля (сам пароль не попадает). */
+function credentialsFingerprint(
+  credentials: ResolvedProxyProfile['credentials'],
+): Array<[string, string, string]> {
+  if (!credentials) return [];
+  return Object.entries(credentials)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([field, value]) => [
+      field,
+      value?.username ?? '',
+      value?.password !== undefined ? sha256(value.password) : '',
+    ]);
+}
+
 /**
  * Нормализованный отпечаток конфигурации прокси для `restartRequired`:
- * маршрут/URL/noProxy/timeout/TLS/креды (пароль — только хеш). Выключенный
- * прокси и отсутствие инициализации дают одинаковый `disabled` (рестарт не нужен).
+ * `mode`/`defaultProfile`/профили (URL, auth, TLS, креды — только хеши) и
+ * правила (id/label/hosts/action/profile, порядок = приоритет). Секреты/PEM не
+ * раскрываются. Выключенный прокси и отсутствие инициализации дают одинаковый
+ * `disabled` (рестарт не нужен).
  */
 export function proxyConfigFingerprint(config: ResolvedProxyConfig | null | undefined): string {
   if (!config || !config.enabled) return 'disabled';
-  const credentials = config.credentials
-    ? Object.entries(config.credentials)
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([field, value]) => [
-          field,
-          value?.username ?? '',
-          value?.password !== undefined ? sha256(value.password) : '',
-        ])
-    : [];
+  const profiles = Object.keys(config.profiles ?? {})
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => {
+      const profile = config.profiles[name]!;
+      return {
+        name,
+        label: profile.label ?? null,
+        url: profile.url ?? null,
+        httpProxy: profile.httpProxy ?? null,
+        httpsProxy: profile.httpsProxy ?? null,
+        allProxy: profile.allProxy ?? null,
+        auth: profile.auth ? { type: profile.auth.type, username: profile.auth.username } : null,
+        tlsMeta: tlsMetaFingerprint(profile.tlsMeta),
+        tls: tlsFingerprint(profile.tls),
+        credentials: credentialsFingerprint(profile.credentials),
+      };
+    });
+  const rules = (config.rules ?? []).map((rule) => ({
+    id: rule.id,
+    label: rule.label ?? null,
+    hosts: [...rule.hosts].map((host) => host.toLowerCase()),
+    action: rule.action,
+    profile: rule.profile ?? null,
+  }));
   return JSON.stringify({
     enabled: true,
+    mode: config.mode ?? 'all',
+    defaultProfile: config.defaultProfile ?? null,
+    profiles,
+    rules,
     url: config.url ?? null,
     httpProxy: config.httpProxy ?? null,
     httpsProxy: config.httpsProxy ?? null,
@@ -95,23 +153,9 @@ export function proxyConfigFingerprint(config: ResolvedProxyConfig | null | unde
     fallbackDirect: config.fallbackDirect,
     connectTimeoutMs: config.connectTimeoutMs,
     auth: config.auth ? { type: config.auth.type, username: config.auth.username } : null,
-    tlsMeta: config.tlsMeta
-      ? {
-          caFile: config.tlsMeta.caFile ?? null,
-          certFile: config.tlsMeta.certFile ?? null,
-          keyFile: config.tlsMeta.keyFile ?? null,
-          hasCaPem: config.tlsMeta.hasCaPem,
-        }
-      : null,
-    tls: config.tls
-      ? {
-          ca: config.tls.ca !== undefined ? sha256(config.tls.ca) : null,
-          cert: config.tls.cert !== undefined ? sha256(config.tls.cert) : null,
-          key: config.tls.key !== undefined ? sha256(config.tls.key) : null,
-          rejectUnauthorized: config.tls.rejectUnauthorized,
-        }
-      : null,
-    credentials,
+    tlsMeta: tlsMetaFingerprint(config.tlsMeta),
+    tls: tlsFingerprint(config.tls),
+    credentials: credentialsFingerprint(config.credentials),
   });
 }
 
@@ -138,15 +182,67 @@ function withCredentials(url: string, credentials: ProxyCredentials | undefined)
   return `${match[1]}${user}:${pass}@${match[2]}`;
 }
 
-/** Выбор URL+кред по приоритету полей (для `*_proxy` env). */
-function pickProxyField(
+/** Synthetic legacy-default профиль из flat-полей конфигурации. */
+function legacyProxyProfileOf(config: ResolvedProxyConfig): ResolvedProxyProfile | undefined {
+  if (
+    config.url === undefined &&
+    config.httpProxy === undefined &&
+    config.httpsProxy === undefined &&
+    config.allProxy === undefined
+  ) {
+    return undefined;
+  }
+  const profile: ResolvedProxyProfile = {
+    name: 'default',
+    source: config.source === 'none' ? 'config' : config.source,
+    legacy: true,
+  };
+  if (config.url !== undefined) profile.url = config.url;
+  if (config.httpProxy !== undefined) profile.httpProxy = config.httpProxy;
+  if (config.httpsProxy !== undefined) profile.httpsProxy = config.httpsProxy;
+  if (config.allProxy !== undefined) profile.allProxy = config.allProxy;
+  if (config.credentials !== undefined) profile.credentials = config.credentials;
+  if (config.auth !== undefined) profile.auth = config.auth;
+  if (config.tls !== undefined) profile.tls = config.tls;
+  if (config.tlsMeta !== undefined) profile.tlsMeta = config.tlsMeta;
+  return profile;
+}
+
+/**
+ * Профиль прокси по имени (единая точка для dispatcher/дочерних env). Legacy-
+ * профиль (`legacy:true`) выводится из flat-полей — они остаются авторитетными
+ * (совместимость с кодом, который патчит `url`/`httpProxy`/`tls` напрямую),
+ * как в shared-резолвере маршрута.
+ */
+export function proxyProfileOf(
   config: ResolvedProxyConfig,
+  name: string | undefined,
+): ResolvedProxyProfile | undefined {
+  if (name === undefined) return undefined;
+  const profile = config.profiles?.[name];
+  if (profile?.legacy === true) {
+    const legacy = legacyProxyProfileOf(config);
+    if (legacy !== undefined) return legacy;
+  }
+  if (profile !== undefined) return profile;
+  if (name === 'default') return legacyProxyProfileOf(config);
+  return undefined;
+}
+
+/** Профиль по умолчанию (`mode: all` / env дочерних процессов). */
+function defaultProxyProfileOf(config: ResolvedProxyConfig): ResolvedProxyProfile | undefined {
+  return proxyProfileOf(config, config.defaultProfile ?? 'default');
+}
+
+/** Выбор URL+кред профиля по приоритету полей (для `*_proxy` env). */
+function pickProxyField(
+  profile: ResolvedProxyProfile,
   fields: ProxyUrlField[],
 ): { url: string; credentials?: ProxyCredentials } | undefined {
   for (const field of fields) {
-    const url = config[field];
+    const url = profile[field];
     if (url !== undefined) {
-      const credentials = config.credentials?.[field];
+      const credentials = profile.credentials?.[field];
       return credentials ? { url, credentials } : { url };
     }
   }
@@ -158,17 +254,25 @@ function pickProxyField(
  * `all_proxy`/`no_proxy` (lowercase — libcurl их понимает, включая применение
  * `no_proxy`). Basic-креды — в userinfo URL; в argv/`-c` пароль не попадает.
  * Пусто — прокси выключен (env не меняется).
+ *
+ * **Ограничение:** дочерний процесс (git) не умеет per-host маршрут прокси.
+ * Поэтому прокси-env ставится только для `mode: 'all'` (default-профиль); в
+ * `mode: 'selected'` прокси-env не выставляется вовсе — иначе git ходил бы через
+ * прокси для **всех** хостов (включая direct-правила). `no_proxy` остаётся.
  */
 export function gitProxyEnv(): Record<string, string> {
   const config = _config;
   if (!config?.enabled) return {};
   const env: Record<string, string> = {};
-  const http = pickProxyField(config, ['httpProxy', 'allProxy', 'url']);
-  const https = pickProxyField(config, ['httpsProxy', 'allProxy', 'url']);
-  const all = pickProxyField(config, ['allProxy', 'url']);
-  if (http) env.http_proxy = withCredentials(http.url, http.credentials);
-  if (https) env.https_proxy = withCredentials(https.url, https.credentials);
-  if (all) env.all_proxy = withCredentials(all.url, all.credentials);
+  if (config.mode !== 'selected') {
+    const profile = defaultProxyProfileOf(config);
+    const http = profile ? pickProxyField(profile, ['httpProxy', 'allProxy', 'url']) : undefined;
+    const https = profile ? pickProxyField(profile, ['httpsProxy', 'allProxy', 'url']) : undefined;
+    const all = profile ? pickProxyField(profile, ['allProxy', 'url']) : undefined;
+    if (http) env.http_proxy = withCredentials(http.url, http.credentials);
+    if (https) env.https_proxy = withCredentials(https.url, https.credentials);
+    if (all) env.all_proxy = withCredentials(all.url, all.credentials);
+  }
   if (config.noProxy.length > 0) env.no_proxy = config.noProxy.join(',');
   return env;
 }
@@ -178,17 +282,26 @@ export function gitProxyEnv(): Record<string, string> {
  * Учитывается whitelist SDK `getDefaultEnvironment()`: он не фильтрует
  * переданный `env` (мержит `{...defaultEnv, ...env}`), поэтому эти переменные
  * реально доезжают до сервера.
+ *
+ * **Ограничение:** как и git, MCP-сервер не умеет per-host маршрут — в
+ * `mode: 'selected'` прокси-env не выставляется (иначе все хосты пошли бы через
+ * прокси); `NO_PROXY` остаётся.
  */
 export function mcpProxyEnv(): Record<string, string> {
   const config = _config;
   if (!config?.enabled) return {};
   const env: Record<string, string> = {};
-  const http = config.httpProxy ?? config.allProxy ?? config.url;
-  const https = config.httpsProxy ?? config.allProxy ?? config.url;
-  const all = config.allProxy ?? config.url;
-  if (http) env.HTTP_PROXY = http;
-  if (https) env.HTTPS_PROXY = https;
-  if (all) env.ALL_PROXY = all;
+  if (config.mode !== 'selected') {
+    const profile = defaultProxyProfileOf(config);
+    if (profile) {
+      const http = profile.httpProxy ?? profile.allProxy ?? profile.url;
+      const https = profile.httpsProxy ?? profile.allProxy ?? profile.url;
+      const all = profile.allProxy ?? profile.url;
+      if (http) env.HTTP_PROXY = http;
+      if (https) env.HTTPS_PROXY = https;
+      if (all) env.ALL_PROXY = all;
+    }
+  }
   if (config.noProxy.length > 0) env.NO_PROXY = config.noProxy.join(',');
   return env;
 }

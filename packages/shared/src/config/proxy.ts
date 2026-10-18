@@ -15,8 +15,15 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BlockList, isIP } from 'node:net';
-import { proxyConfigSchema } from './types.js';
-import type { ProxyAuthConfig, ProxyConfig, ProxyTlsConfig } from './types.js';
+import { PROXY_PROFILE_NAME_RE, proxyConfigSchema } from './types.js';
+import type {
+  ProxyAuthConfig,
+  ProxyConfig,
+  ProxyMode,
+  ProxyProfileConfig,
+  ProxyRuleConfig,
+  ProxyTlsConfig,
+} from './types.js';
 
 /** Env-имена секции `proxy` (ADR-023). */
 export const PROXY_ENV = {
@@ -93,12 +100,57 @@ export interface ResolvedProxyTls {
   rejectUnauthorized: boolean;
 }
 
+/** Эффективный именованный профиль прокси (URL без userinfo, креды — отдельно). */
+export interface ResolvedProxyProfile {
+  name: string;
+  label?: string;
+  /** URL без userinfo (для логов/статуса/ProxyAgent `uri`). */
+  url?: string;
+  httpProxy?: string;
+  httpsProxy?: string;
+  allProxy?: string;
+  /** Креды Basic по URL-полям (только если заданы; наружу не отдаются). */
+  credentials?: ProxyCredentialSet;
+  /** Redacted-сведения об аутентификации (username, без пароля). */
+  auth?: ProxyStatusAuth;
+  /** TLS/mTLS к прокси (`ProxyAgent.proxyTls`); цель — `security.tls`. */
+  tls?: ResolvedProxyTls;
+  /** Метаданные TLS-файлов для статуса/UI (пути, флаг `caPem`; без содержимого). */
+  tlsMeta?: ProxyStatusTlsMeta;
+  /** Источник: `env`/`runtime` — legacy-default; профили — config/runtime. */
+  source: ProxyConfigOrigin;
+  /** `true` — синтетический legacy-профиль `default` (top-level URL/auth/tls). */
+  legacy: boolean;
+}
+
+/** Действие правила маршрутизации прокси. */
+export type ProxyRuleAction = 'proxy' | 'direct';
+
+/** Правило маршрутизации прокси с нормализованными хостами. */
+export interface ResolvedProxyRule {
+  /** `id` из конфига либо сгенерированный `rule-<n>`. */
+  id: string;
+  label?: string;
+  hosts: string[];
+  action: ProxyRuleAction;
+  /** Эффективный профиль (`rule.profile` либо `defaultProfile`). */
+  profile?: string;
+}
+
 /** Эффективная конфигурация прокси (после слияния env/runtime/config/defaults). */
 export interface ResolvedProxyConfig {
   enabled: boolean;
   /** Источник эффективного прокси-URL: `env` | `runtime` | `config`; `none` — прокси выключен. */
   source: 'env' | 'runtime' | 'config' | 'none';
-  /** URL без userinfo (для логов/статуса/ProxyAgent `uri`). */
+  /** Режим маршрутизации (`all` — default для всех, `selected` — только правила). */
+  mode: ProxyMode;
+  /** Профиль по умолчанию (для `mode: all` и правил без `profile`). */
+  defaultProfile?: string;
+  /** Именованные профили (в legacy-режиме — синтетический `default`). */
+  profiles: Record<string, ResolvedProxyProfile>;
+  /** Правила маршрутизации (порядок = приоритет). */
+  rules: ResolvedProxyRule[];
+  /** URL без userinfo (legacy-поля; в режиме профилей не заполняются). */
   url?: string;
   httpProxy?: string;
   httpsProxy?: string;
@@ -118,6 +170,29 @@ export interface ResolvedProxyConfig {
   connectTimeoutMs: number;
 }
 
+/** Причина решения `resolveProxyRoute` (для логов/UI). */
+export type ProxyRouteReason =
+  | 'disabled'
+  | 'no-proxy'
+  | 'rule'
+  | 'default'
+  | 'no-match'
+  | 'no-default';
+
+/** Решение маршрутизации для target-origin (единая точка для dispatcher/API-check). */
+export interface ResolvedProxyRoute {
+  action: ProxyRuleAction;
+  reason: ProxyRouteReason;
+  /** Сработавшее правило (только `reason: 'rule'`). */
+  rule?: ResolvedProxyRule;
+  /** Эффективный профиль (только `action: 'proxy'`). */
+  profile?: string;
+  /** URL прокси без userinfo. */
+  proxyUrl?: string;
+  /** Креды Basic выбранного URL (только в памяти). */
+  credentials?: ProxyCredentials;
+}
+
 /** Безопасные сведения об аутентификации прокси для статуса/UI (без пароля). */
 export interface ProxyStatusAuth {
   type: 'basic';
@@ -133,10 +208,42 @@ export interface ProxyStatusTlsMeta {
   hasCaPem: boolean;
 }
 
+/** Redacted-сведения о профиле прокси для статуса/UI (без паролей/PEM/userinfo). */
+export interface ProxyStatusProfile {
+  name: string;
+  label?: string;
+  url?: string;
+  httpProxy?: string;
+  httpsProxy?: string;
+  allProxy?: string;
+  /** Только username (пароль не отдаётся). */
+  auth?: ProxyStatusAuth;
+  /** Пути TLS-файлов и флаг `caPem`; PEM/ключи не отдаются. */
+  tls?: ProxyStatusTlsMeta & { rejectUnauthorized: boolean };
+  /** `true` — синтетический legacy-профиль `default`. */
+  legacy: boolean;
+  source: ProxyConfigOrigin;
+}
+
+/** Правило маршрутизации в статусе (без секретов). */
+export interface ProxyStatusRule {
+  id: string;
+  label?: string;
+  hosts: string[];
+  action: ProxyRuleAction;
+  profile?: string;
+}
+
 /** Read-only статус прокси для `GET /api/v2/settings/proxy` (без секретов). */
 export interface EgressProxyStatus {
   enabled: boolean;
   source: 'env' | 'runtime' | 'config' | 'none';
+  mode: ProxyMode;
+  defaultProfile?: string;
+  /** Профили (redacted: URL без userinfo, username, TLS-метаданные). */
+  profiles: Record<string, ProxyStatusProfile>;
+  /** Правила маршрутизации (порядок сохраняется). */
+  rules: ProxyStatusRule[];
   url?: string;
   httpProxy?: string;
   httpsProxy?: string;
@@ -204,6 +311,9 @@ export function emptyResolvedProxyConfig(): ResolvedProxyConfig {
   return {
     enabled: false,
     source: 'none',
+    mode: 'all',
+    profiles: {},
+    rules: [],
     noProxy: [],
     fromEnv: true,
     fallbackDirect: false,
@@ -411,6 +521,136 @@ function normalizeHost(rawHost: string): string {
   return host;
 }
 
+/** Валидное DNS-имя (метки `[a-z0-9_-]`, без пустых меток, длина ≤ 253). */
+function isValidHostname(host: string): boolean {
+  if (host === '' || host.length > 253) return false;
+  return host
+    .split('.')
+    .every((label) => /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/.test(label));
+}
+
+/**
+ * Валидирует host-паттерны правил прокси (`proxy.rules[].hosts`).
+ * Возвращает нормализованные значения (trim/lower-case/без завершающей точки).
+ *
+ * Допустимо: exact (`api.example.com`), `.suffix` (apex+sub), `*.suffix` (sub),
+ * `host:port`, IPv4/IPv6-литерал (в т.ч. `[::1]:8080`), CIDR (только по IP-литералу
+ * цели — DNS не выполняется), `*`.
+ *
+ * **Fail-closed**: невалидный паттерн — `ProxyConfigError` (а не тихий игнор),
+ * иначе опечатка в правиле молча меняет маршрут (прокси ↔ direct).
+ */
+export function validateProxyHostPatterns(
+  entries: readonly string[],
+  context = 'proxy.rules',
+): string[] {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new ProxyConfigError(`${context}.hosts: нужен хотя бы один паттерн`);
+  }
+  return entries.map((raw, index) => {
+    const where = `${context}.hosts[${index}]`;
+    if (typeof raw !== 'string') {
+      throw new ProxyConfigError(`${where}: паттерн должен быть строкой`);
+    }
+    // Завершающая точка нормализуется, но `*.` — невалидный wildcard, а не `*`.
+    const rawValue = raw.trim().toLowerCase();
+    const value =
+      rawValue !== '*' && !rawValue.endsWith('*.') ? rawValue.replace(/\.$/, '') : rawValue;
+    if (value === '') {
+      throw new ProxyConfigError(`${where}: пустой паттерн`);
+    }
+    if (/\s/.test(value)) {
+      throw new ProxyConfigError(`${where}: пробелы в паттерне "${raw}" недопустимы`);
+    }
+    if (value === '*') return value;
+
+    if (value.includes('/')) {
+      const slash = value.lastIndexOf('/');
+      const net = value.slice(0, slash);
+      const prefixRaw = value.slice(slash + 1);
+      const family = isIP(net);
+      if (family === 0) {
+        throw new ProxyConfigError(
+          `${where}: CIDR "${raw}" — сеть должна быть IP-литералом (DNS/CIDR по имени не поддерживается)`,
+        );
+      }
+      if (!/^\d{1,3}$/.test(prefixRaw)) {
+        throw new ProxyConfigError(`${where}: CIDR "${raw}" — невалидная длина префикса`);
+      }
+      const prefix = Number(prefixRaw);
+      const max = family === 4 ? 32 : 128;
+      if (prefix > max) {
+        throw new ProxyConfigError(
+          `${where}: CIDR "${raw}" — префикс должен быть 0..${max} для IPv${family}`,
+        );
+      }
+      return value;
+    }
+
+    if (value.includes('*')) {
+      if (!value.startsWith('*.') || value.slice(2) === '') {
+        throw new ProxyConfigError(
+          `${where}: невалидный wildcard "${raw}" (допустимо только "*.suffix")`,
+        );
+      }
+      const suffix = value.slice(2);
+      if (suffix.includes('*') || isIP(suffix) !== 0 || !isValidHostname(suffix)) {
+        throw new ProxyConfigError(`${where}: невалидный wildcard-суффикс "${raw}"`);
+      }
+      return value;
+    }
+
+    // IPv6 в скобках: `[::1]` либо `[::1]:8080`.
+    const bracket = /^\[([^\]]+)\](?::(\d+))?$/.exec(value);
+    if (bracket) {
+      const host = bracket[1]!;
+      if (isIP(host) !== 6) {
+        throw new ProxyConfigError(`${where}: "${raw}" — в скобках ожидается IPv6-литерал`);
+      }
+      if (bracket[2] !== undefined) assertPort(bracket[2], where, raw);
+      return value;
+    }
+
+    if (isIP(value) !== 0) return value;
+
+    if (value.startsWith('.')) {
+      const suffix = value.slice(1);
+      if (suffix === '' || isIP(suffix) !== 0 || !isValidHostname(suffix)) {
+        throw new ProxyConfigError(`${where}: невалидный суффикс "${raw}"`);
+      }
+      return value;
+    }
+
+    // `host:port` (IPv6-литералы уже обработаны выше — там двоеточий больше).
+    const colon = value.lastIndexOf(':');
+    if (colon > 0 && !value.slice(0, colon).includes(':')) {
+      const host = value.slice(0, colon);
+      const port = value.slice(colon + 1);
+      if (!/^\d+$/.test(port)) {
+        throw new ProxyConfigError(`${where}: невалидный порт в "${raw}"`);
+      }
+      assertPort(port, where, raw);
+      if (!isValidHostname(host)) {
+        throw new ProxyConfigError(`${where}: невалидный хост в "${raw}"`);
+      }
+      return value;
+    }
+
+    if (!isValidHostname(value)) {
+      throw new ProxyConfigError(`${where}: невалидный паттерн "${raw}"`);
+    }
+    return value;
+  });
+}
+
+/** Проверка диапазона порта паттерна (1..65535). */
+function assertPort(rawPort: string, where: string, rawPattern: string): void {
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new ProxyConfigError(`${where}: порт в "${rawPattern}" должен быть 1..65535`);
+  }
+}
+
 /** Непустое значение env (пустая строка — «не задано», как прочие env-резолверы). */
 function envValue(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const value = env[key];
@@ -452,24 +692,42 @@ interface PickedUrl {
   password?: string;
 }
 
-/** Читает пароль из env/файла (лениво: только если реально нужен). */
-function makePasswordResolver(env: NodeJS.ProcessEnv, dataDir: string | undefined): () => string | undefined {
+/** Env-имя пароля профиля: `default` — legacy `SYNTH_PROXY_PASSWORD`. */
+export function proxyProfilePasswordEnv(name: string): string {
+  if (name === 'default') return PROXY_PASSWORD_ENV;
+  return `SYNTH_PROXY_${name.toUpperCase().replace(/-/g, '_')}_PASSWORD`;
+}
+
+/**
+ * Путь файла пароля профиля: `default` — legacy `{dataDir}/secrets/proxy-password`,
+ * прочие — `{dataDir}/secrets/proxy/<profile>.password`.
+ */
+export function proxyProfilePasswordPath(dataDir: string, name: string): string {
+  if (name === 'default') return join(dataDir, 'secrets', 'proxy-password');
+  return join(dataDir, 'secrets', 'proxy', `${name}.password`);
+}
+
+/** Читает пароль из env/файла профиля (лениво: только если реально нужен). */
+function makeProfilePasswordResolver(
+  env: NodeJS.ProcessEnv,
+  dataDir: string | undefined,
+  name: string,
+): () => string | undefined {
   let cached: string | undefined | null = null;
   return () => {
     if (cached !== null) return cached;
-    const fromEnv = envValue(env, PROXY_PASSWORD_ENV);
+    const fromEnv = envValue(env, proxyProfilePasswordEnv(name));
     if (fromEnv !== undefined) {
       cached = fromEnv;
       return cached;
     }
-    cached = dataDir ? readProxyPasswordFile(dataDir) : undefined;
+    cached = dataDir ? readProxyPasswordFile(proxyProfilePasswordPath(dataDir, name)) : undefined;
     return cached;
   };
 }
 
-/** Файл `{dataDir}/secrets/proxy-password`; ENOENT → `undefined` (пароля нет). */
-function readProxyPasswordFile(dataDir: string): string | undefined {
-  const path = join(dataDir, 'secrets', 'proxy-password');
+/** Читает файл пароля по точному пути; ENOENT → `undefined` (пароля нет). */
+export function readProxyPasswordFile(path: string): string | undefined {
   let raw: string;
   try {
     raw = readFileSync(path, 'utf-8');
@@ -486,23 +744,91 @@ function readProxyPasswordFile(dataDir: string): string | undefined {
 const PEM_BLOCK_RE = /-----BEGIN [A-Z0-9 ]+-----/;
 
 /** Читает PEM-файл прокси-TLS; нет/не читается/не PEM → fail-closed. */
-function readProxyPemFile(path: string, field: string, marker: RegExp): string {
+function readProxyPemFile(
+  path: string,
+  field: string,
+  marker: RegExp,
+  scope = 'proxy.tls',
+): string {
   let content: string;
   try {
     content = readFileSync(path, 'utf-8');
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     throw new ProxyConfigError(
-      `[config] proxy.tls.${field}: не удалось прочитать файл "${path}": ${reason}`,
+      `[config] ${scope}.${field}: не удалось прочитать файл "${path}": ${reason}`,
     );
   }
   if (!marker.test(content)) {
     throw new ProxyConfigError(
-      `[config] proxy.tls.${field}: файл "${path}" не содержит PEM ` +
+      `[config] ${scope}.${field}: файл "${path}" не содержит PEM ` +
         `(ожидается блок "-----BEGIN ${field === 'keyFile' ? 'PRIVATE KEY' : 'CERTIFICATE'}-----")`,
     );
   }
   return content;
+}
+
+/**
+ * TLS профиля прокси: **только** config/UI (без env `SYNTH_PROXY_TLS_*`).
+ * Правила те же, что у `proxy.tls`: `caFile`↔`caPem`, `certFile`+`keyFile` парой,
+ * нечитаемый/не-PEM файл — fail-closed.
+ */
+function resolveProfileTls(
+  tls: Partial<ProxyTlsConfig> | undefined,
+  name: string,
+): { resolved: ResolvedProxyTls; meta: ProxyStatusTlsMeta; configured: boolean } {
+  const cfg = (tls ?? {}) as Partial<ProxyTlsConfig>;
+  const scope = `proxy.profiles.${name}.tls`;
+  const nonEmpty = (value: string | undefined): string | undefined =>
+    value !== undefined && value !== '' ? value : undefined;
+  const caFile = nonEmpty(cfg.caFile);
+  const caPem = nonEmpty(cfg.caPem);
+  if (caFile !== undefined && caPem !== undefined) {
+    throw new ProxyConfigError(
+      `[config] ${scope}: 'caFile' и 'caPem' взаимоисключащи — задайте ровно один источник CA`,
+    );
+  }
+  const certFile = nonEmpty(cfg.certFile);
+  const keyFile = nonEmpty(cfg.keyFile);
+  if ((certFile === undefined) !== (keyFile === undefined)) {
+    throw new ProxyConfigError(
+      `[config] ${scope}: mTLS к прокси требует и certFile, и keyFile (задайте оба либо ни одного)`,
+    );
+  }
+  const configured =
+    caFile !== undefined ||
+    caPem !== undefined ||
+    certFile !== undefined ||
+    keyFile !== undefined ||
+    cfg.rejectUnauthorized === false;
+
+  const resolved: ResolvedProxyTls = { rejectUnauthorized: cfg.rejectUnauthorized ?? true };
+  if (caFile !== undefined) {
+    resolved.ca = readProxyPemFile(caFile, 'caFile', /-----BEGIN CERTIFICATE-----/, scope);
+  } else if (caPem !== undefined) {
+    if (!PEM_BLOCK_RE.test(caPem)) {
+      throw new ProxyConfigError(
+        `[config] ${scope}.caPem: значение не содержит PEM-сертификат ` +
+          '(ожидается блок "-----BEGIN CERTIFICATE-----")',
+      );
+    }
+    resolved.ca = caPem;
+  }
+  if (certFile !== undefined && keyFile !== undefined) {
+    resolved.cert = readProxyPemFile(certFile, 'certFile', /-----BEGIN CERTIFICATE-----/, scope);
+    resolved.key = readProxyPemFile(
+      keyFile,
+      'keyFile',
+      /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/,
+      scope,
+    );
+  }
+
+  const meta: ProxyStatusTlsMeta = { hasCaPem: caPem !== undefined };
+  if (caFile !== undefined) meta.caFile = caFile;
+  if (certFile !== undefined) meta.certFile = certFile;
+  if (keyFile !== undefined) meta.keyFile = keyFile;
+  return { resolved, meta, configured };
 }
 
 /**
@@ -628,6 +954,19 @@ export interface ResolveProxyConfigOptions {
  * Поле-уровневое слияние `config.yaml proxy` и runtime-override (UI).
  * Runtime приоритетнее; пустая строка трактуется как «не задано» (как в config).
  * Вложенные `auth`/`tls` мёржатся по полям.
+ *
+ * Источник конфигурации всегда один (иначе `resolveProxyConfig` бросает «два
+ * источника»): `profiles` и legacy top-level (`url`/`httpProxy`/`httpsProxy`/
+ * `allProxy`/`auth`/`tls`) не смешиваются между base и runtime.
+ * - runtime с **непустыми** `profiles` — режим профилей: `profiles` из runtime,
+ *   legacy top-level base игнорируется (свои top-level runtime-объекта остаются —
+ *   их отклонит валидация);
+ * - runtime без `profiles`, но с legacy top-level — переключение на legacy:
+ *   `profiles` base не берутся, `rules`/`defaultProfile`/`mode` base тоже (они
+ *   относятся к исчезнувшей профильной конфигурации: правила и `defaultProfile`
+ *   ссылаются на профили, а `mode: selected` остаётся без правил); свои значения
+ *   runtime сохраняются;
+ * - runtime только с `rules`/`mode`/`defaultProfile` — `profiles` base сохраняются.
  */
 export function mergeProxyConfig(
   base: Partial<ProxyConfig> | undefined,
@@ -635,15 +974,44 @@ export function mergeProxyConfig(
 ): Partial<ProxyConfig> {
   const b = (base ?? {}) as Partial<ProxyConfig>;
   const r = (runtime ?? {}) as Partial<ProxyConfig>;
+  // Режим профилей/legacy определяется по runtime: base при смене режима не подмешивается.
+  const runtimeProfileMode = hasNonEmptyProfiles(r);
+  const runtimeLegacyMode = hasLegacyTopLevel(r);
+  // Переключение с профилей на legacy (runtime без profiles, но с top-level URL/auth/tls):
+  // структурная конфигурация base (`profiles`/`rules`/`defaultProfile`/`mode`) не
+  // переносится — иначе остаются ссылки на исчезнувшие профили или `mode: selected`
+  // без правил. Свои значения runtime сохраняются.
+  const switchToLegacy = runtimeLegacyMode && hasNonEmptyProfiles(b);
   const pickString = (key: 'url' | 'httpProxy' | 'httpsProxy' | 'allProxy'): string | undefined => {
     const value = r[key];
     if (value !== undefined && value !== '') return value;
+    if (runtimeProfileMode) return undefined;
     const fallback = b[key];
     return fallback !== undefined && fallback !== '' ? fallback : undefined;
   };
   const merged: Partial<ProxyConfig> = {};
   if (r.enabled !== undefined) merged.enabled = r.enabled;
   else if (b.enabled !== undefined) merged.enabled = b.enabled;
+  if (r.mode !== undefined) merged.mode = r.mode;
+  else if (!switchToLegacy && b.mode !== undefined) merged.mode = b.mode;
+  const runtimeDefault = r.defaultProfile !== undefined && r.defaultProfile !== '' ? r.defaultProfile : undefined;
+  const configDefault =
+    !switchToLegacy && b.defaultProfile !== undefined && b.defaultProfile !== ''
+      ? b.defaultProfile
+      : undefined;
+  const defaultProfile = runtimeDefault ?? configDefault;
+  if (defaultProfile !== undefined) merged.defaultProfile = defaultProfile;
+  // `profiles`/`rules` — не поле-уровневое слияние: runtime заменяет config целиком.
+  const profiles = runtimeProfileMode
+    ? r.profiles
+    : switchToLegacy
+      ? undefined
+      : r.profiles !== undefined
+        ? r.profiles
+        : b.profiles;
+  if (profiles !== undefined) merged.profiles = profiles;
+  const rules = r.rules !== undefined ? r.rules : switchToLegacy ? undefined : b.rules;
+  if (rules !== undefined) merged.rules = rules;
   const url = pickString('url');
   if (url !== undefined) merged.url = url;
   const httpProxy = pickString('httpProxy');
@@ -652,8 +1020,13 @@ export function mergeProxyConfig(
   if (httpsProxy !== undefined) merged.httpsProxy = httpsProxy;
   const allProxy = pickString('allProxy');
   if (allProxy !== undefined) merged.allProxy = allProxy;
-  if (r.auth !== undefined || b.auth !== undefined) merged.auth = r.auth ?? b.auth;
-  if (r.tls !== undefined || b.tls !== undefined) merged.tls = { ...(b.tls ?? {}), ...(r.tls ?? {}) };
+  const auth = runtimeProfileMode ? r.auth : (r.auth ?? b.auth);
+  if (auth !== undefined) merged.auth = auth;
+  if (runtimeProfileMode) {
+    if (r.tls !== undefined) merged.tls = r.tls;
+  } else if (r.tls !== undefined || b.tls !== undefined) {
+    merged.tls = { ...(b.tls ?? {}), ...(r.tls ?? {}) };
+  }
   if (r.noProxy !== undefined) merged.noProxy = r.noProxy;
   else if (b.noProxy !== undefined) merged.noProxy = b.noProxy;
   if (r.fromEnv !== undefined) merged.fromEnv = r.fromEnv;
@@ -663,6 +1036,30 @@ export function mergeProxyConfig(
   if (r.connectTimeoutMs !== undefined) merged.connectTimeoutMs = r.connectTimeoutMs;
   else if (b.connectTimeoutMs !== undefined) merged.connectTimeoutMs = b.connectTimeoutMs;
   return merged;
+}
+
+/** `true` — `profiles` заданы и непусты (режим профилей). */
+function hasNonEmptyProfiles(cfg: Partial<ProxyConfig> | undefined): boolean {
+  const profiles = cfg?.profiles;
+  return profiles !== undefined && Object.keys(profiles).length > 0;
+}
+
+/** `true` — задан хотя бы один непустой legacy top-level (`url`/`auth`/`tls`). */
+function hasLegacyTopLevel(cfg: Partial<ProxyConfig> | undefined): boolean {
+  if (cfg === undefined) return false;
+  if (
+    PROXY_URL_FIELDS.some((field) => {
+      const value = cfg[field];
+      return typeof value === 'string' && value !== '';
+    })
+  ) {
+    return true;
+  }
+  if (cfg.auth !== undefined) return true;
+  return (
+    cfg.tls !== undefined &&
+    Object.values(cfg.tls).some((value) => value !== undefined && value !== '')
+  );
 }
 
 /**
@@ -683,12 +1080,54 @@ export function resolveProxyConfig(
   const cfg = mergeProxyConfig(config?.proxy, options.runtime);
   const fromEnv = cfg.fromEnv ?? true;
   const empty = emptyResolvedProxyConfig();
-  const auth = validateProxyAuth(cfg.auth);
   const explicitEnv = envBoolean(envValue(env, PROXY_ENV.enabled), PROXY_ENV.enabled);
   const explicit = explicitEnv ?? cfg.enabled;
-  // Стандартные env — только при fromEnv и без явного `enabled:false`
-  // (runtime/config задают политику инстанса, env не «включает прокси обратно»).
-  const allowStandardEnv = fromEnv && explicit !== false;
+
+  const mode: ProxyMode = cfg.mode ?? 'all';
+  if (mode !== 'all' && mode !== 'selected') {
+    throw new ProxyConfigError(`proxy.mode "${String(mode)}" не поддерживается (all|selected)`);
+  }
+  const rawProfiles = cfg.profiles;
+  const hasProfiles = rawProfiles !== undefined && Object.keys(rawProfiles).length > 0;
+  const rawRules: ProxyRuleConfig[] = Array.isArray(cfg.rules) ? cfg.rules : [];
+  const structured = hasProfiles || rawRules.length > 0;
+  const runtimeProfiles = (options.runtime as Partial<ProxyConfig> | undefined)?.profiles;
+
+  // Профили и legacy top-level URL/auth/tls — два источника конфигурации: запрещено.
+  if (hasProfiles) {
+    const topLevelUrl = PROXY_URL_FIELDS.map((field) => cfg[field]).find(
+      (value) => value !== undefined && value !== '',
+    );
+    if (topLevelUrl !== undefined) {
+      throw new ProxyConfigError(
+        'proxy: при заданных proxy.profiles top-level url/httpProxy/httpsProxy/allProxy запрещены ' +
+          '(перенесите URL в профиль — иначе два источника конфигурации)',
+      );
+    }
+    const envUrl = [PROXY_ENV.url, PROXY_ENV.httpProxy, PROXY_ENV.httpsProxy, PROXY_ENV.allProxy]
+      .map((key) => envValue(env, key))
+      .find((value) => value !== undefined);
+    if (envUrl !== undefined) {
+      throw new ProxyConfigError(
+        'proxy: при заданных proxy.profiles env SYNTH_PROXY_URL/HTTP_PROXY/HTTPS_PROXY/ALL_PROXY ' +
+          'запрещены (URL задаётся только в профилях)',
+      );
+    }
+    if (hasLegacyAuth(cfg.auth)) {
+      throw new ProxyConfigError(
+        'proxy: при заданных proxy.profiles top-level proxy.auth запрещён — auth задаётся в профиле',
+      );
+    }
+    if (hasConfiguredTls(cfg.tls)) {
+      throw new ProxyConfigError(
+        'proxy: при заданных proxy.profiles top-level proxy.tls запрещён — tls задаётся в профиле ' +
+          '(env SYNTH_PROXY_TLS_* для профилей не применяется)',
+      );
+    }
+  }
+
+  // Стандартные env — только для legacy-default; профили/правила из env не читаются.
+  const allowStandardEnv = fromEnv && explicit !== false && !hasProfiles;
 
   const runtimeCfg = (options.runtime ?? {}) as Partial<ProxyConfig>;
   const originOf = (field: ProxyUrlField): ProxyConfigOrigin =>
@@ -744,37 +1183,67 @@ export function resolveProxyConfig(
     ['allProxy', allProxy],
   ];
   const picked = fields.map(([, value]) => value);
-  const urls = picked.map((p) => p.value).filter((value): value is string => value !== undefined);
-  const hasAnyUrl = urls.length > 0;
+  const legacyUrls = picked
+    .map((p) => p.value)
+    .filter((value): value is string => value !== undefined);
+  const hasLegacyUrl = legacyUrls.length > 0;
 
   // D2b: SOCKS5 — только TCP-туннель; TLS к прокси (`proxy.tls`) неприменим.
-  const anySocks = urls.some((value) => isSocksProxyProtocol(safeProtocol(value)));
-  if (anySocks && isProxyTlsConfigured(cfg, env)) {
+  const anySocks = legacyUrls.some((value) => isSocksProxyProtocol(safeProtocol(value)));
+  if (!hasProfiles && anySocks && isProxyTlsConfigured(cfg, env)) {
     throw new ProxyConfigError(
       'proxy.tls несовместим с socks5:// (TLS применяется только к http(s)-прокси); ' +
         'уберите proxy.tls или используйте http(s)-прокси',
     );
   }
 
-  let enabled: boolean;
-  if (explicit !== undefined) {
-    enabled = explicit;
-  } else {
-    // Не задано явно — прокси включается наличием URL (в т.ч. из стандартных env).
-    enabled = hasAnyUrl;
-  }
-  if (enabled && !hasAnyUrl) {
+  const hasProfileUrl =
+    hasProfiles &&
+    Object.values(rawProfiles!).some((profile) =>
+      PROXY_URL_FIELDS.some((field) => {
+        const value = profile?.[field];
+        return typeof value === 'string' && value !== '';
+      }),
+    );
+  const hasAnyUrl = hasProfiles ? hasProfileUrl : hasLegacyUrl;
+  const enabled = explicit ?? (hasAnyUrl || rawRules.length > 0);
+
+  if (enabled && !hasAnyUrl && !structured) {
+    // Legacy-поведение (без profiles/rules): fail-closed без URL.
     throw new ProxyConfigError(
       'proxy.enabled=true, но не задан URL прокси — укажите proxy.url/httpProxy/httpsProxy/allProxy ' +
         `либо ${PROXY_ENV.url} (fail-closed: тихого direct-режима нет)`,
     );
   }
 
-  // Креды: userinfo URL приоритетнее `proxy.auth`; пароль — env/файл (если не в URL).
-  // Выключенному прокси пароль не нужен — не требуем его при сохранении disable.
+  const envFallback = envBoolean(envValue(env, PROXY_ENV.fallbackDirect), PROXY_ENV.fallbackDirect);
+  const fallbackDirect = envFallback ?? cfg.fallbackDirect ?? empty.fallbackDirect;
+  const connectTimeoutMs =
+    envPositiveInt(envValue(env, PROXY_ENV.connectTimeoutMs), PROXY_ENV.connectTimeoutMs) ??
+    cfg.connectTimeoutMs ??
+    empty.connectTimeoutMs;
+
+  const origins = picked
+    .map((p) => p.origin)
+    .filter((origin): origin is ProxyConfigOrigin => origin !== undefined);
+
+  const profiles: Record<string, ResolvedProxyProfile> = hasProfiles
+    ? resolveNamedProfiles(rawProfiles!, {
+        env,
+        dataDir: options.dataDir,
+        enabled,
+        runtimeProfiles,
+      })
+    : {};
+
+  // Legacy synthetic default: top-level URL/auth/tls (+ env/стандартные env).
+  // В режиме профилей top-level TLS/env к профилям не применяются.
+  const legacyTls = resolveProxyTls({ proxy: hasProfiles ? {} : cfg }, hasProfiles ? {} : env);
+  const legacyTlsMeta = resolveProxyTlsMeta({ proxy: hasProfiles ? {} : cfg }, hasProfiles ? {} : env);
+  const auth = hasProfiles ? undefined : validateProxyAuth(cfg.auth);
   const credentials: ProxyCredentialSet = {};
-  if (enabled) {
-    const password = makePasswordResolver(env, options.dataDir);
+  if (!hasProfiles && enabled) {
+    const password = makeProfilePasswordResolver(env, options.dataDir, 'default');
     for (const [field, value] of fields) {
       if (value.value === undefined) continue;
       const username = value.username ?? auth?.username;
@@ -789,54 +1258,259 @@ export function resolveProxyConfig(
       credentials[field] = { username, password: pwd };
     }
   }
+  const firstCredentials = Object.values(credentials).find((value) => value !== undefined);
+  const authUsername =
+    firstCredentials?.username ??
+    auth?.username ??
+    picked.map((p) => p.username).find((value) => value !== undefined);
 
-  const envFallback = envBoolean(envValue(env, PROXY_ENV.fallbackDirect), PROXY_ENV.fallbackDirect);
-  const fallbackDirect = envFallback ?? cfg.fallbackDirect ?? empty.fallbackDirect;
-  const connectTimeoutMs =
-    envPositiveInt(envValue(env, PROXY_ENV.connectTimeoutMs), PROXY_ENV.connectTimeoutMs) ??
-    cfg.connectTimeoutMs ??
-    empty.connectTimeoutMs;
+  if (!hasProfiles && hasLegacyUrl) {
+    const profile: ResolvedProxyProfile = {
+      name: 'default',
+      source: origins.includes('env')
+        ? 'env'
+        : origins.includes('runtime')
+          ? 'runtime'
+          : 'config',
+      legacy: true,
+      tls: legacyTls,
+    };
+    if (url.value !== undefined) profile.url = url.value;
+    if (httpProxy.value !== undefined) profile.httpProxy = httpProxy.value;
+    if (httpsProxy.value !== undefined) profile.httpsProxy = httpsProxy.value;
+    if (allProxy.value !== undefined) profile.allProxy = allProxy.value;
+    if (Object.keys(credentials).length > 0) profile.credentials = credentials;
+    if (authUsername !== undefined && authUsername !== '') {
+      profile.auth = { type: 'basic', username: authUsername };
+    }
+    if (
+      legacyTlsMeta.caFile !== undefined ||
+      legacyTlsMeta.certFile !== undefined ||
+      legacyTlsMeta.keyFile !== undefined ||
+      legacyTlsMeta.hasCaPem ||
+      legacyTls.rejectUnauthorized === false
+    ) {
+      profile.tlsMeta = legacyTlsMeta;
+    }
+    profiles.default = profile;
+  }
 
-  const origins = picked.map((p) => p.origin).filter((origin): origin is ProxyConfigOrigin => origin !== undefined);
+  const hasLegacyTlsMeta =
+    legacyTlsMeta.caFile !== undefined ||
+    legacyTlsMeta.certFile !== undefined ||
+    legacyTlsMeta.keyFile !== undefined ||
+    legacyTlsMeta.hasCaPem ||
+    legacyTls.rejectUnauthorized === false;
+
+  let defaultProfile: string | undefined;
+  if (cfg.defaultProfile !== undefined) {
+    if (profiles[cfg.defaultProfile] === undefined) {
+      throw new ProxyConfigError(
+        `proxy.defaultProfile: профиль "${cfg.defaultProfile}" не найден ` +
+          `(есть: ${Object.keys(profiles).join(', ') || '—'})`,
+      );
+    }
+    defaultProfile = cfg.defaultProfile;
+  } else if (profiles.default !== undefined) {
+    defaultProfile = 'default';
+  } else if (mode === 'all' && structured) {
+    throw new ProxyConfigError(
+      'proxy.defaultProfile: mode=all требует default-профиль (задайте profiles.default ' +
+        'или proxy.defaultProfile)',
+    );
+  }
+
+  if (mode === 'selected' && rawRules.length === 0) {
+    throw new ProxyConfigError(
+      'proxy.rules: mode=selected требует хотя бы одно правило (иначе весь трафик — direct)',
+    );
+  }
+
+  const rules = resolveProxyRules(rawRules, profiles, defaultProfile);
+
   const source: ResolvedProxyConfig['source'] = !enabled
     ? 'none'
-    : origins.includes('env')
-      ? 'env'
-      : origins.includes('runtime')
+    : hasProfiles
+      ? runtimeProfiles !== undefined
         ? 'runtime'
-        : origins.includes('config')
-          ? 'config'
-          : 'none';
+        : 'config'
+      : origins.includes('env')
+        ? 'env'
+        : origins.includes('runtime')
+          ? 'runtime'
+          : origins.includes('config')
+            ? 'config'
+            : 'none';
 
-  const resolvedTls = resolveProxyTls({ proxy: cfg }, env);
-  const meta = resolveProxyTlsMeta({ proxy: cfg }, env);
-  const firstCredentials = Object.values(credentials).find((value) => value !== undefined);
-  const authUsername = firstCredentials?.username
-    ?? auth?.username
-    ?? picked.map((p) => p.username).find((value) => value !== undefined);
   const resolved: ResolvedProxyConfig = {
     enabled,
     source,
+    mode,
+    profiles,
+    rules,
     noProxy,
     fromEnv,
     fallbackDirect,
     connectTimeoutMs,
-    // TLS/mTLS к прокси: всегда резолвим (дефолт — системное доверие).
-    tls: resolvedTls,
   };
+  // TLS/mTLS к прокси: legacy-поле — только без профилей (профили несут свой tls).
+  if (!hasProfiles) resolved.tls = legacyTls;
+  if (defaultProfile !== undefined) resolved.defaultProfile = defaultProfile;
   if (authUsername !== undefined && authUsername !== '') {
     resolved.auth = { type: 'basic', username: authUsername };
   }
-  if (meta.caFile !== undefined || meta.certFile !== undefined || meta.keyFile !== undefined
-    || meta.hasCaPem || resolvedTls.rejectUnauthorized === false) {
-    resolved.tlsMeta = meta;
+  if (hasLegacyTlsMeta) resolved.tlsMeta = legacyTlsMeta;
+  // Legacy-поля заполняются только без `profiles` (в режиме профилей источник — profiles).
+  if (!hasProfiles) {
+    if (url.value !== undefined) resolved.url = url.value;
+    if (httpProxy.value !== undefined) resolved.httpProxy = httpProxy.value;
+    if (httpsProxy.value !== undefined) resolved.httpsProxy = httpsProxy.value;
+    if (allProxy.value !== undefined) resolved.allProxy = allProxy.value;
+    if (Object.keys(credentials).length > 0) resolved.credentials = credentials;
   }
-  if (url.value !== undefined) resolved.url = url.value;
-  if (httpProxy.value !== undefined) resolved.httpProxy = httpProxy.value;
-  if (httpsProxy.value !== undefined) resolved.httpsProxy = httpsProxy.value;
-  if (allProxy.value !== undefined) resolved.allProxy = allProxy.value;
-  if (Object.keys(credentials).length > 0) resolved.credentials = credentials;
   return resolved;
+}
+
+/** `true` — top-level `proxy.auth` задан (в режиме профилей запрещён). */
+function hasLegacyAuth(auth: ProxyAuthConfig | undefined): boolean {
+  return auth !== undefined;
+}
+
+/** `true` — top-level `proxy.tls` задан (в режиме профилей запрещён). */
+function hasConfiguredTls(tls: Partial<ProxyTlsConfig> | undefined): boolean {
+  return tls !== undefined;
+}
+
+/** Резолвит именованные профили (валидация URL/auth/паролей/TLS). */
+function resolveNamedProfiles(
+  raw: Record<string, ProxyProfileConfig>,
+  ctx: {
+    env: NodeJS.ProcessEnv;
+    dataDir: string | undefined;
+    enabled: boolean;
+    runtimeProfiles: Record<string, ProxyProfileConfig> | undefined;
+  },
+): Record<string, ResolvedProxyProfile> {
+  const result: Record<string, ResolvedProxyProfile> = {};
+  for (const [name, rawProfile] of Object.entries(raw)) {
+    if (!PROXY_PROFILE_NAME_RE.test(name)) {
+      throw new ProxyConfigError(
+        `proxy.profiles: имя "${name}" невалидно (ожидается ^[a-z][a-z0-9_-]{0,31}$)`,
+      );
+    }
+    const scope = `proxy.profiles.${name}`;
+    const profile = rawProfile ?? {};
+    const values = new Map<ProxyUrlField, ParsedProxyUrl>();
+    for (const field of PROXY_URL_FIELDS) {
+      const rawUrl = profile[field];
+      if (rawUrl === undefined || rawUrl === '') continue;
+      values.set(field, parseProxyUrl(rawUrl));
+    }
+    if (values.size === 0) {
+      throw new ProxyConfigError(
+        `${scope}: не задан URL — укажите url или httpProxy/httpsProxy/allProxy`,
+      );
+    }
+    const auth = validateProxyAuth(profile.auth, `${scope}.auth`);
+    const anySocks = [...values.values()].some((parsed) => isSocksProxyProtocol(parsed.protocol));
+    const tlsInfo = resolveProfileTls(profile.tls, name);
+    if (anySocks && tlsInfo.configured) {
+      throw new ProxyConfigError(
+        `${scope}: tls несовместим с socks5:// (TLS применяется только к http(s)-прокси)`,
+      );
+    }
+
+    const credentials: ProxyCredentialSet = {};
+    if (ctx.enabled) {
+      const password = makeProfilePasswordResolver(ctx.env, ctx.dataDir, name);
+      for (const [field, parsed] of values) {
+        const username = parsed.username ?? auth?.username;
+        if (username === undefined || username === '') continue;
+        const pwd = parsed.password ?? password();
+        if (pwd === undefined) {
+          throw new ProxyConfigError(
+            `${scope}: для пользователя "${username}" не задан пароль — укажите ` +
+              `${proxyProfilePasswordEnv(name)} или файл ` +
+              `{dataDir}/secrets/proxy/${name}.password (в config.yaml пароль не хранится)`,
+          );
+        }
+        credentials[field] = { username, password: pwd };
+      }
+    }
+
+    const resolved: ResolvedProxyProfile = {
+      name,
+      source:
+        ctx.runtimeProfiles !== undefined && ctx.runtimeProfiles[name] !== undefined
+          ? 'runtime'
+          : 'config',
+      legacy: false,
+    };
+    if (profile.label !== undefined && profile.label !== '') resolved.label = profile.label;
+    if (values.has('url')) resolved.url = values.get('url')!.href;
+    if (values.has('httpProxy')) resolved.httpProxy = values.get('httpProxy')!.href;
+    if (values.has('httpsProxy')) resolved.httpsProxy = values.get('httpsProxy')!.href;
+    if (values.has('allProxy')) resolved.allProxy = values.get('allProxy')!.href;
+    if (Object.keys(credentials).length > 0) resolved.credentials = credentials;
+    const firstCredentials = Object.values(credentials).find((value) => value !== undefined);
+    const authUsername =
+      firstCredentials?.username ??
+      auth?.username ??
+      [...values.values()].map((parsed) => parsed.username).find((value) => value !== undefined);
+    if (authUsername !== undefined && authUsername !== '') {
+      resolved.auth = { type: 'basic', username: authUsername };
+    }
+    if (tlsInfo.configured) {
+      resolved.tls = tlsInfo.resolved;
+      resolved.tlsMeta = tlsInfo.meta;
+    }
+    result[name] = resolved;
+  }
+  return result;
+}
+
+/** Резолвит правила маршрутизации: id, хосты, ссылки на профили. */
+function resolveProxyRules(
+  rawRules: readonly ProxyRuleConfig[],
+  profiles: Record<string, ResolvedProxyProfile>,
+  defaultProfile: string | undefined,
+): ResolvedProxyRule[] {
+  const seen = new Set<string>();
+  return rawRules.map((raw, index) => {
+    const scope = `proxy.rules[${index}]`;
+    const id = raw.id !== undefined && raw.id !== '' ? raw.id : `rule-${index + 1}`;
+    if (seen.has(id)) {
+      throw new ProxyConfigError(`${scope}: id "${id}" повторяется (id правил уникальны)`);
+    }
+    seen.add(id);
+    const hosts = validateProxyHostPatterns(raw.hosts, scope);
+    if (raw.action !== 'proxy' && raw.action !== 'direct') {
+      throw new ProxyConfigError(`${scope}.action: ожидается proxy|direct`);
+    }
+    if (raw.action === 'direct' && raw.profile !== undefined) {
+      throw new ProxyConfigError(
+        `${scope}: action=direct несовместим с profile (уберите profile или выберите action=proxy)`,
+      );
+    }
+    const rule: ResolvedProxyRule = { id, hosts, action: raw.action };
+    if (raw.label !== undefined && raw.label !== '') rule.label = raw.label;
+    if (raw.action === 'proxy') {
+      const profileName = raw.profile ?? defaultProfile;
+      if (profileName === undefined) {
+        throw new ProxyConfigError(
+          `${scope}: action=proxy без profile требует defaultProfile ` +
+            '(задайте profile в правиле или proxy.defaultProfile)',
+        );
+      }
+      if (profiles[profileName] === undefined) {
+        throw new ProxyConfigError(
+          `${scope}: профиль "${profileName}" не найден (есть: ${Object.keys(profiles).join(', ') || '—'})`,
+        );
+      }
+      rule.profile = profileName;
+    }
+    return rule;
+  });
 }
 
 /**
@@ -861,15 +1535,27 @@ export function validateProxyConfig(
     throw new ProxyConfigError(`proxy.${path}: ${issue?.message ?? 'невалидная структура'}`);
   }
   const config = parsed.data;
-  for (const field of PROXY_URL_FIELDS) {
-    const raw = config[field];
-    if (raw === undefined || raw === '') continue;
+
+  /** Пароль в userinfo URL — в сохраняемом объекте запрещён (инвариант 13). */
+  const assertNoUrlPassword = (raw: string | undefined, scope: string, passwordEnv: string): void => {
+    if (raw === undefined || raw === '') return;
     const url = parseProxyUrl(raw);
-    if (url.password !== undefined) {
-      throw new ProxyConfigError(
-        `proxy.${field}: пароль в URL не хранится (инвариант 13) — задайте ` +
-          'proxy.auth.username и пароль через secrets/proxy-password или SYNTH_PROXY_PASSWORD',
-      );
+    if (url.password === undefined) return;
+    throw new ProxyConfigError(
+      `${scope}: пароль в URL не хранится (инвариант 13) — задайте username и пароль ` +
+        `через ${passwordEnv} или файл в {dataDir}/secrets (в config.yaml пароль не хранится)`,
+    );
+  };
+  for (const field of PROXY_URL_FIELDS) {
+    assertNoUrlPassword(config[field], `proxy.${field}`, 'secrets/proxy-password или SYNTH_PROXY_PASSWORD');
+  }
+  for (const [name, profile] of Object.entries(config.profiles ?? {})) {
+    const passwordHint =
+      name === 'default'
+        ? `${PROXY_PASSWORD_ENV} или {dataDir}/secrets/proxy-password`
+        : `${proxyProfilePasswordEnv(name)} или {dataDir}/secrets/proxy/${name}.password`;
+    for (const field of PROXY_URL_FIELDS) {
+      assertNoUrlPassword(profile[field], `proxy.profiles.${name}.${field}`, passwordHint);
     }
   }
   const validationEnv: NodeJS.ProcessEnv = { ...env };
@@ -888,121 +1574,312 @@ export function validateProxyConfig(
 }
 
 /** Валидация `proxy.auth`: D2a — только `basic`; NTLM/Negotiate — D3/D4. */
-function validateProxyAuth(auth: ProxyAuthConfig | undefined): ProxyAuthConfig | undefined {
+function validateProxyAuth(
+  auth: ProxyAuthConfig | undefined,
+  scope = 'proxy.auth',
+): ProxyAuthConfig | undefined {
   if (auth === undefined) return undefined;
   if (auth.type !== 'basic') {
     throw new ProxyConfigError(
-      `proxy.auth.type "${auth.type}" не поддерживается (NTLM/Negotiate — этапы D3/D4); ` +
+      `${scope}.type "${auth.type}" не поддерживается (NTLM/Negotiate — этапы D3/D4); ` +
         "доступен только 'basic'",
     );
   }
   if (!auth.username) {
     throw new ProxyConfigError(
-      'proxy.auth.username обязателен для type=basic (либо задайте userinfo в URL прокси)',
+      `${scope}.username обязателен для type=basic (либо задайте userinfo в URL прокси)`,
     );
   }
   return auth;
 }
 
-/** Поле URL, выбранное для target-origin (по схеме цели). */
-function proxyFieldFor(origin: string | URL): ProxyUrlField | undefined {
-  let protocol: string;
+/** Разобранная цель маршрутизации (`http`/`https` + host/port). */
+interface ProxyTarget {
+  protocol: 'http:' | 'https:';
+  hostname: string;
+  port: number;
+}
+
+/** Разбирает origin (URL-строка/`URL`); невалидный/не-HTTP(S) → `undefined`. */
+function parseProxyTarget(origin: string | URL): ProxyTarget | undefined {
+  let parsed: URL;
   try {
-    protocol = typeof origin === 'string' ? new URL(origin).protocol : origin.protocol;
+    parsed = typeof origin === 'string' ? new URL(origin) : origin;
   } catch {
     return undefined;
   }
-  if (protocol === 'https:') return 'httpsProxy';
-  if (protocol === 'http:') return 'httpProxy';
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+  const port = parsed.port !== '' ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80;
+  return { protocol: parsed.protocol, hostname: parsed.hostname, port };
+}
+
+/** Кэш матчеров (noProxy/правила не меняются в пределах resolved-конфига). */
+const matcherCache = new WeakMap<object, NoProxyMatcher>();
+
+function cachedMatcher(key: object, entries: readonly string[] | undefined): NoProxyMatcher {
+  let matcher = matcherCache.get(key);
+  if (matcher === undefined) {
+    matcher = new NoProxyMatcher(entries);
+    matcherCache.set(key, matcher);
+  }
+  return matcher;
+}
+
+/** Поле URL профиля по схеме цели. */
+function schemeFieldFor(protocol: 'http:' | 'https:'): ProxyUrlField {
+  return protocol === 'https:' ? 'httpsProxy' : 'httpProxy';
+}
+
+/**
+ * URL профиля для схемы цели: `http(s)Proxy` → `allProxy` → `url`; креды —
+ * по выбранному полю. Используется и маршрутом, и `defaultProxyEntry`.
+ */
+function profileEntryFor(
+  profile: ResolvedProxyProfile,
+  field: ProxyUrlField,
+): { url: string; field: ProxyUrlField; credentials?: ProxyCredentials } | undefined {
+  const order: ProxyUrlField[] = [field, 'allProxy', 'url'];
+  for (const candidate of order) {
+    const value = profile[candidate];
+    if (value === undefined) continue;
+    const entry: { url: string; field: ProxyUrlField; credentials?: ProxyCredentials } = {
+      url: value,
+      field: candidate,
+    };
+    const credentials = profile.credentials?.[candidate];
+    if (credentials) entry.credentials = credentials;
+    return entry;
+  }
+  return undefined;
+}
+
+/** Legacy-профиль из flat-полей (для вручную собранных `ResolvedProxyConfig`). */
+function legacyProfileOf(config: ResolvedProxyConfig): ResolvedProxyProfile | undefined {
+  if (
+    config.url === undefined &&
+    config.httpProxy === undefined &&
+    config.httpsProxy === undefined &&
+    config.allProxy === undefined
+  ) {
+    return undefined;
+  }
+  const profile: ResolvedProxyProfile = {
+    name: 'default',
+    source: config.source === 'none' ? 'config' : config.source,
+    legacy: true,
+  };
+  if (config.url !== undefined) profile.url = config.url;
+  if (config.httpProxy !== undefined) profile.httpProxy = config.httpProxy;
+  if (config.httpsProxy !== undefined) profile.httpsProxy = config.httpsProxy;
+  if (config.allProxy !== undefined) profile.allProxy = config.allProxy;
+  if (config.credentials !== undefined) profile.credentials = config.credentials;
+  if (config.auth !== undefined) profile.auth = config.auth;
+  if (config.tls !== undefined) profile.tls = config.tls;
+  if (config.tlsMeta !== undefined) profile.tlsMeta = config.tlsMeta;
+  return profile;
+}
+
+/** Профиль по имени: из `profiles`, для `default` — фоллбэк на flat-поля. */
+function profileByName(
+  config: ResolvedProxyConfig,
+  name: string | undefined,
+): ResolvedProxyProfile | undefined {
+  if (name === undefined) return undefined;
+  const profile = config.profiles?.[name];
+  // Legacy-профиль выводится из flat-полей: они остаются авторитетными
+  // (совместимость с кодом/тестами, патчащими `url`/`httpProxy`/… напрямую).
+  if (profile?.legacy) {
+    const legacy = legacyProfileOf(config);
+    if (legacy !== undefined) return legacy;
+  }
+  if (profile !== undefined) return profile;
+  if (name === 'default') return legacyProfileOf(config);
   return undefined;
 }
 
 /**
+ * Единая точка маршрутизации прокси для target-origin (ADR-099).
+ *
+ * Порядок: `enabled:false` → всё direct; `noProxy` **всегда выигрывает**;
+ * правила (первое совпадение); затем default (`mode: all`) либо `no-match`
+ * (`mode: selected`). `action: proxy` берёт `rule.profile ?? defaultProfile`.
+ * CIDR матчится только по IP-литералу цели (DNS не выполняется).
+ */
+export function resolveProxyRoute(
+  config: ResolvedProxyConfig | null | undefined,
+  origin: string | URL,
+): ResolvedProxyRoute {
+  if (!config?.enabled) return { action: 'direct', reason: 'disabled' };
+  const target = parseProxyTarget(origin);
+  if (target === undefined) return { action: 'direct', reason: 'no-match' };
+
+  const noProxyEntries = config.noProxy ?? [];
+  const noProxy = cachedMatcher(noProxyEntries, noProxyEntries);
+  if (noProxy.matches(target.hostname, target.port)) {
+    return { action: 'direct', reason: 'no-proxy' };
+  }
+
+  const field = schemeFieldFor(target.protocol);
+  for (const rule of config.rules ?? []) {
+    const matcher = cachedMatcher(rule, rule.hosts);
+    if (!matcher.matches(target.hostname, target.port)) continue;
+    if (rule.action === 'direct') {
+      return { action: 'direct', reason: 'rule', rule };
+    }
+    const profileName = rule.profile ?? config.defaultProfile ?? 'default';
+    const profile = profileByName(config, profileName);
+    if (profile === undefined) {
+      return { action: 'direct', reason: 'no-default', rule };
+    }
+    const entry = profileEntryFor(profile, field);
+    if (entry === undefined) {
+      return { action: 'direct', reason: 'no-default', rule };
+    }
+    const route: ResolvedProxyRoute = {
+      action: 'proxy',
+      reason: 'rule',
+      rule,
+      profile: profileName,
+      proxyUrl: entry.url,
+    };
+    if (entry.credentials !== undefined) route.credentials = entry.credentials;
+    return route;
+  }
+
+  const mode: ProxyMode = config.mode ?? 'all';
+  if (mode === 'selected') return { action: 'direct', reason: 'no-match' };
+  return resolveDefaultProxyRoute(config, field);
+}
+
+/** Default-ветка маршрута (без правил/noProxy) — общая с `defaultProxyEntry`. */
+function resolveDefaultProxyRoute(
+  config: ResolvedProxyConfig,
+  field: ProxyUrlField,
+): ResolvedProxyRoute {
+  const defaultName = config.defaultProfile ?? 'default';
+  const defaultProfile = profileByName(config, defaultName);
+  if (defaultProfile === undefined) return { action: 'direct', reason: 'no-default' };
+  const entry = profileEntryFor(defaultProfile, field);
+  if (entry === undefined) return { action: 'direct', reason: 'no-default' };
+  const route: ResolvedProxyRoute = {
+    action: 'proxy',
+    reason: 'default',
+    profile: defaultName,
+    proxyUrl: entry.url,
+  };
+  if (entry.credentials !== undefined) route.credentials = entry.credentials;
+  return route;
+}
+
+/**
  * Эффективный прокси для target-origin: `{url, credentials?}` или `undefined`.
- * Выбор: `httpsProxy`/`httpProxy` по схеме → `allProxy` → общий `url`.
+ * Полностью выводится из `resolveProxyRoute` (профили/правила/noProxy).
  */
 export function proxyEntryFor(
   config: ResolvedProxyConfig,
   origin: string | URL,
 ): { url: string; credentials?: ProxyCredentials } | undefined {
-  const schemeField = proxyFieldFor(origin);
-  if (schemeField === undefined) return undefined;
-  const order: ProxyUrlField[] = [schemeField, 'allProxy', 'url'];
-  for (const field of order) {
-    const value = config[field];
-    if (value !== undefined) {
-      const credentials = config.credentials?.[field];
-      return credentials ? { url: value, credentials } : { url: value };
-    }
-  }
-  return undefined;
+  const route = resolveProxyRoute(config, origin);
+  if (route.action !== 'proxy' || route.proxyUrl === undefined) return undefined;
+  return route.credentials !== undefined
+    ? { url: route.proxyUrl, credentials: route.credentials }
+    : { url: route.proxyUrl };
 }
 
-/** Прокси по умолчанию (для диагностики/`/settings/proxy/check`). */
+/**
+ * Прокси по умолчанию (для диагностики/`/settings/proxy/check`): профиль
+ * `defaultProfile` без учёта правил; порядок полей `https → all → url → http`
+ * (как legacy-поведение). `undefined` — default-профиля/URL нет.
+ */
 export function defaultProxyEntry(
   config: ResolvedProxyConfig,
 ): { url: string; credentials?: ProxyCredentials } | undefined {
   if (!config.enabled) return undefined;
-  const order: ProxyUrlField[] = ['httpsProxy', 'allProxy', 'url', 'httpProxy'];
-  for (const field of order) {
-    const value = config[field];
-    if (value !== undefined) {
-      const credentials = config.credentials?.[field];
-      return credentials ? { url: value, credentials } : { url: value };
-    }
-  }
-  return undefined;
+  // Порядок legacy: https → all → url → http (http — фоллбэк для http-only прокси).
+  let route = resolveDefaultProxyRoute(config, 'httpsProxy');
+  if (route.action !== 'proxy') route = resolveDefaultProxyRoute(config, 'httpProxy');
+  if (route.action !== 'proxy' || route.proxyUrl === undefined) return undefined;
+  return route.credentials !== undefined
+    ? { url: route.proxyUrl, credentials: route.credentials }
+    : { url: route.proxyUrl };
 }
 
 /**
- * URL прокси для target-origin: `httpsProxy`/`httpProxy` по схеме цели, затем
- * `allProxy`, затем общий `url`. `undefined` — прокси для этой схемы нет.
+ * URL прокси для target-origin (по маршруту: профили/правила/noProxy).
+ * `undefined` — для этой цели прокси нет (direct).
  */
 export function proxyUrlFor(config: ResolvedProxyConfig, origin: string | URL): string | undefined {
-  let protocol: string;
-  try {
-    protocol = typeof origin === 'string' ? new URL(origin).protocol : origin.protocol;
-  } catch {
-    return undefined;
-  }
-  if (protocol === 'https:') return config.httpsProxy ?? config.allProxy ?? config.url;
-  if (protocol === 'http:') return config.httpProxy ?? config.allProxy ?? config.url;
-  return undefined;
+  return resolveProxyRoute(config, origin).proxyUrl;
 }
 
 /**
- * Нужно ли направлять URL через прокси: прокси включён, есть прокси для схемы
- * и хост не исключён `noProxy`. DNS/CIDR-сверка не выполняется (только host/port).
+ * Нужно ли направлять URL через прокси (маршрут `action: proxy`).
+ * DNS/CIDR-сверка не выполняется (только host/port цели).
  */
 export function shouldProxyUrl(
   config: ResolvedProxyConfig | null | undefined,
   rawUrl: string,
 ): boolean {
-  if (!config?.enabled) return false;
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    return false;
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-  if (proxyUrlFor(config, parsed) === undefined) return false;
-  const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
-  return !new NoProxyMatcher(config.noProxy).matches(parsed.hostname, port);
+  const route = resolveProxyRoute(config, rawUrl);
+  return route.action === 'proxy' && route.proxyUrl !== undefined;
 }
 
-/** Read-only статус прокси (без userinfo/секретов). */
+/** Redacted-профиль для статуса: без userinfo/паролей/PEM. */
+function redactedProfileStatus(profile: ResolvedProxyProfile): ProxyStatusProfile {
+  const result: ProxyStatusProfile = {
+    name: profile.name,
+    legacy: profile.legacy,
+    source: profile.source,
+  };
+  if (profile.label !== undefined && profile.label !== '') result.label = profile.label;
+  const url = redactProxyUrl(profile.url);
+  if (url) result.url = url;
+  const httpProxy = redactProxyUrl(profile.httpProxy);
+  if (httpProxy) result.httpProxy = httpProxy;
+  const httpsProxy = redactProxyUrl(profile.httpsProxy);
+  if (httpsProxy) result.httpsProxy = httpsProxy;
+  const allProxy = redactProxyUrl(profile.allProxy);
+  if (allProxy) result.allProxy = allProxy;
+  if (profile.auth && profile.auth.username !== '') {
+    result.auth = { type: 'basic', username: profile.auth.username };
+  }
+  const meta = redactedTlsMeta(profile.tlsMeta);
+  if (meta) {
+    result.tls = { ...meta, rejectUnauthorized: profile.tls?.rejectUnauthorized ?? true };
+  }
+  return result;
+}
+
+/** Read-only статус прокси (без userinfo/секретов/PEM). */
 export function proxyStatus(config: ResolvedProxyConfig | null | undefined): EgressProxyStatus {
   const resolved = config ?? emptyResolvedProxyConfig();
+  const profiles: Record<string, ProxyStatusProfile> = {};
+  for (const [name, profile] of Object.entries(resolved.profiles ?? {})) {
+    profiles[name] = redactedProfileStatus(profile);
+  }
+  const rules: ProxyStatusRule[] = (resolved.rules ?? []).map((rule) => {
+    const item: ProxyStatusRule = {
+      id: rule.id,
+      hosts: [...rule.hosts],
+      action: rule.action,
+    };
+    if (rule.label !== undefined && rule.label !== '') item.label = rule.label;
+    if (rule.profile !== undefined) item.profile = rule.profile;
+    return item;
+  });
   const status: EgressProxyStatus = {
     enabled: resolved.enabled,
     source: resolved.source,
+    mode: resolved.mode ?? 'all',
+    profiles,
+    rules,
     noProxy: [...resolved.noProxy],
     fromEnv: resolved.fromEnv,
     fallbackDirect: resolved.fallbackDirect,
     connectTimeoutMs: resolved.connectTimeoutMs,
     restartRequired: true,
   };
+  if (resolved.defaultProfile !== undefined) status.defaultProfile = resolved.defaultProfile;
   const url = redactProxyUrl(resolved.url);
   if (url) status.url = url;
   const httpProxy = redactProxyUrl(resolved.httpProxy);

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +7,7 @@ import type { Context, MiddlewareHandler, Next } from 'hono';
 import type { MaintenanceAuditEntry } from '@itphx/synth-shared';
 import { createMaintenanceRoutes } from './maintenance.js';
 import type { MaintenanceRoutesOptions } from './maintenance.js';
+import { configureRestart, resetRestartForTests } from '../restart.js';
 import { MemoryMaintenanceAuditRepository } from '../../storage/memory/audit.js';
 import type { MaintenanceAuditRepository } from '../../storage/ports/index.js';
 
@@ -52,6 +53,94 @@ describe('Maintenance API Routes (ADR-091/ADR-092)', () => {
 
   afterEach(async () => {
     await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  describe('RESTART — graceful restart инстанса', () => {
+    afterEach(() => {
+      resetRestartForTests();
+    });
+
+    it('GET /restart при disabled — supported:false и причина', async () => {
+      const res = await makeApp().request('/api/v2/maintenance/restart');
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        supported: boolean;
+        mode: string;
+        reason?: string;
+        startedAt: string;
+        version: string;
+      };
+      expect(body.supported).toBe(false);
+      expect(body.mode).toBe('disabled');
+      expect(body.reason).toContain('SYNTH_RESTART_MODE');
+      expect(typeof body.startedAt).toBe('string');
+      expect(body.version).toBeTruthy();
+    });
+
+    it('POST /restart при disabled — 409 RESTART_UNSUPPORTED', async () => {
+      const res = await postJson(makeApp(), '/api/v2/maintenance/restart', { confirm: true });
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        'RESTART_UNSUPPORTED',
+      );
+    });
+
+    it('POST /restart без confirm — 400 VALIDATION_ERROR', async () => {
+      configureRestart({ mode: 'process', request: () => {}, delayMs: 10_000 });
+      const res = await postJson(makeApp(), '/api/v2/maintenance/restart', {});
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+        'VALIDATION_ERROR',
+      );
+    });
+
+    it('POST /restart (process) — 202, аудит restart.requested, повтор идемпотентен', async () => {
+      const request = vi.fn();
+      configureRestart({ mode: 'process', request, delayMs: 10_000 });
+      const audit = new MemoryMaintenanceAuditRepository();
+      const app = new Hono();
+      app.route(
+        '/api/v2/maintenance',
+        createMaintenanceRoutes(passAuth, { dataDir: tmpDir, audit }, { resolveUserId: () => 'admin' }),
+      );
+
+      const first = await postJson(app, '/api/v2/maintenance/restart', { confirm: true });
+      expect(first.status).toBe(202);
+      const body = (await first.json()) as {
+        status: string;
+        restartId: string;
+        mode: string;
+        startedAt: string;
+      };
+      expect(body.status).toBe('restarting');
+      expect(body.restartId).toMatch(/^rst_/);
+      expect(body.mode).toBe('process');
+      expect(typeof body.startedAt).toBe('string');
+
+      // Аудит записан до инициации рестарта (status `scheduled`, actor, детали).
+      const entries = await audit.list({ op: 'restart.requested' });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.status).toBe('scheduled');
+      expect(entries[0]!.actor).toBe('admin');
+      expect(entries[0]!.details).toMatchObject({ mode: 'process', restartId: body.restartId });
+
+      // Повторный вызов — тот же restartId (идемпотентность).
+      const second = await postJson(app, '/api/v2/maintenance/restart', { confirm: true });
+      expect(second.status).toBe(202);
+      expect(((await second.json()) as { restartId: string }).restartId).toBe(body.restartId);
+      // Второго события аудита нет.
+      expect(await audit.list({ op: 'restart.requested' })).toHaveLength(1);
+      expect(request).not.toHaveBeenCalled();
+    });
+
+    it('GET /restart при supervisor — supported:true', async () => {
+      configureRestart({ mode: 'supervisor', request: () => {}, delayMs: 10_000 });
+      const body = (await (
+        await makeApp().request('/api/v2/maintenance/restart')
+      ).json()) as { supported: boolean; mode: string };
+      expect(body.supported).toBe(true);
+      expect(body.mode).toBe('supervisor');
+    });
   });
 
   it('GET /status — 200 и ожидаемая структура', async () => {

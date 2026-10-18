@@ -48,6 +48,8 @@ export interface FakeProxy {
   readonly absoluteRequests: number;
   /** `Proxy-Authorization` каждого CONNECT (в порядке поступления). */
   readonly connectAuthHeaders: string[];
+  /** `host:port` каждого CONNECT (в порядке поступления) — проверка маршрута. */
+  readonly connectTargets: string[];
   /** `Proxy-Authorization` каждого absolute-URI-запроса. */
   readonly absoluteAuthHeaders: string[];
   /** Subject клиентских сертификатов (mTLS), в порядке подключений. */
@@ -61,6 +63,7 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
   let connects = 0;
   let absoluteRequests = 0;
   const connectAuthHeaders: string[] = [];
+  const connectTargets: string[] = [];
   const absoluteAuthHeaders: string[] = [];
   const clientCertSubjects: string[] = [];
   const sockets = new Set<net.Socket>();
@@ -149,6 +152,7 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
     connects += 1;
     const auth = authHeaderOf(req);
     connectAuthHeaders.push(auth ?? '');
+    connectTargets.push(req.url ?? '');
     if (mode === '407' || authRejected(auth)) {
       clientSocket.end(
         `HTTP/1.1 407 Proxy Authentication Required\r\n` +
@@ -199,6 +203,9 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
     },
     get connectAuthHeaders() {
       return connectAuthHeaders;
+    },
+    get connectTargets() {
+      return connectTargets;
     },
     get absoluteAuthHeaders() {
       return absoluteAuthHeaders;

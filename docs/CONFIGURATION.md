@@ -122,7 +122,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_PROXY_NO_PROXY` | string (список через запятую) | `proxy.noProxy` |
 | `SYNTH_PROXY_FALLBACK_DIRECT` | boolean | `proxy.fallbackDirect` |
 | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | number | `proxy.connectTimeoutMs` |
-| `SYNTH_PROXY_PASSWORD` | string (секрет) | пароль Basic-аутентификации прокси (в config не хранится) |
+| `SYNTH_PROXY_PASSWORD`, `SYNTH_PROXY_<NAME>_PASSWORD` | string (секрет) | пароль Basic-аутентификации прокси: `default` и именованные профили соответственно (в config не хранится) |
 | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | ADR-099: CA к https-прокси (взаимоисключающи) | `proxy.tls` |
 | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | ADR-099: mTLS к https-прокси | `proxy.tls` |
 | `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | boolean | `proxy.tls.rejectUnauthorized` |
@@ -150,6 +150,7 @@ hex-символа). Ключ не логируется и не попадает
 |-----------|------------|
 | `SYNTH_BACKUP_KEY` | Ключ шифрования архива бэкапа (32 байта base64 / 64 hex), ADR-091 |
 | `SYNTH_BACKUP_KEY_FILE` | Путь к файлу с ключом шифрования архива (приоритетнее `SYNTH_BACKUP_KEY`), ADR-091 |
+| `SYNTH_RESTART_MODE` | ADR-092: graceful restart из UI — `disabled` (default) \| `process` (выход с кодом 75, поднимает супервизор) \| `supervisor` (локальный `scripts/dev.sh`). CLI `synth serve --restart-mode` приоритетнее env; неизвестное значение → `disabled` + предупреждение |
 
 Пример:
 
@@ -164,6 +165,36 @@ synth serve
 Ключи-объекты и массивы (`events.allowedSources`, `events.identityMap`,
 `events.dedupStore`, `scheduler.leaderElection`, `mcp.servers`, …) env-оверрайдов не
 имеют — задаются в `config.yaml` (или через runtime-API, где он есть).
+
+### Перезапуск инстанса (ADR-092)
+
+`POST /api/v2/maintenance/restart {confirm:true}` (ADMIN) не перезапускает процесс «изнутри», а
+выполняет **graceful shutdown с кодом 75** (`EX_TEMPFAIL`); поднять процесс заново должен супервизор.
+Режим — `SYNTH_RESTART_MODE` (CLI `synth serve --restart-mode` приоритетнее env):
+
+| Режим | Что делает | Для чего |
+|---|---|---|
+| `disabled` (default) | `GET /restart` → `supported:false`, `POST` → 409 `RESTART_UNSUPPORTED` | одиночный `synth serve` без супервизора (systemd `Restart=on-failure` — отдельно) |
+| `process` | выход с кодом 75; перезапускает внешний супервизор | K8s (Deployment `restartPolicy: Always`), Docker (`restart: unless-stopped`), systemd (`Restart=on-failure`), pm2 |
+| `supervisor` | то же, но локальный `scripts/dev.sh` сам поднимает процесс | dev-окружение |
+
+Деплой-дефолты: Helm-чарт — `backend.restartMode: process` (+ env `SYNTH_RESTART_MODE`), Docker Compose —
+`restart: unless-stopped` + `SYNTH_RESTART_MODE=process`, `scripts/dev.sh` — `supervisor`, bare
+`synth serve` — `disabled`. Пример systemd-юнита:
+
+```ini
+[Service]
+ExecStart=/usr/bin/synth serve --restart-mode process
+Restart=on-failure        # код 75 — «временно не могу», unit поднимется
+RestartSec=2
+```
+
+**Multi-replica:** endpoint перезапускает только тот процесс/pod, который обработал запрос; для всего
+Deployment — `kubectl rollout restart deployment/<release>-synth-backend` (или `helm rollback`).
+Активные стримы и in-flight запросы на перезапускаемом процессе прерываются; запрос пишется в аудит
+`restart.requested`. UI ждёт смены `startedAt` в `GET /health` (до 90 с), затем перезагружается.
+
+`GET /health` и `GET /api/v2/health` отдают аддитивное поле `startedAt` (ISO) — метка старта процесса.
 
 ## config.yaml
 
@@ -624,43 +655,74 @@ mcp:
     exceptions: []
 ```
 
-### Прокси (`proxy.*`, ADR-099 D1+D2)
+### Прокси (`proxy.*`, ADR-099 D1+D2, профили и правила — п. 27)
 
 Исходящий HTTP/HTTPS/SOCKS5-прокси — часть единого egress-слоя (см. также `security.tls` — доверие к
 **цели** и к https-прокси, и `egress.*` — адресная политика). Секция **top-level**; настраивается в
 `config.yaml`/env и **из админ-UI** (раздел «Сеть» → «Прокси»; runtime-override, см.
 «Настройка из UI» в разделе `security.tls`). Применение — **при
 старте процесса** (`EgressDispatcher` start-only, как TLS): сохранение из UI не переключает маршрут на
-лету, нужен рестарт. Маршрут выбирается **per-origin**: `httpsProxy`/`httpProxy` по схеме цели →
-`allProxy` → `url`; хосты из `noProxy` идут напрямую.
+лету, нужен рестарт. Маршрут выбирается **per-origin**: `noProxy` (всегда важнее) → правила
+(`proxy.rules`, порядок = приоритет, **первое совпадение**) → `mode: all` ? `defaultProfile` : direct
+(`selected`). Внутри профиля — `httpsProxy`/`httpProxy` по схеме цели → `allProxy` → `url`.
 
 | Поле | Env | Назначение | По умолчанию |
 |---|---|---|---|
 | `enabled` | `SYNTH_PROXY_ENABLED` | Явный выключатель. Не задан — прокси включается наличием URL (в т.ч. из стандартных env при `fromEnv`); явный `false` подавляет стандартные env | — (авто) |
-| `url` | `SYNTH_PROXY_URL` | Общий прокси `http://`/`https://`/`socks5://`/`socks5h://` (userinfo в config.yaml/env допускается; при сохранении из UI пароль в URL **запрещён**) | — |
-| `httpProxy` / `httpsProxy` | `SYNTH_PROXY_HTTP_PROXY` / `SYNTH_PROXY_HTTPS_PROXY` | Прокси для целей по схеме (`http`/`https`); приоритетнее `allProxy`/`url` | — |
-| `allProxy` | `SYNTH_PROXY_ALL_PROXY` | Прокси для всех схем (если нет схемного) | — |
-| `noProxy` | `SYNTH_PROXY_NO_PROXY` | Исключения: `host`, `.suffix`, `*.suffix`, `host:port`, IP, CIDR (по IP-литералу цели — DNS не резолвится), `*` | `[]` |
+| `mode` | — | `all` — `defaultProfile` для всех, кроме `noProxy` (правила переопределяют); `selected` — **только** правила, остальное напрямую | `all` |
+| `defaultProfile` | — | Имя профиля для `mode: all` и правил без `profile`; при `mode: all` обязателен (иначе `default`, если он есть) | `default` (если есть) |
+| `profiles.<name>` | — | Именованный профиль: `label`, `url` и/или `httpProxy`/`httpsProxy`/`allProxy`, `auth` (Basic), `tls` (к прокси). Имя — `^[a-z][a-z0-9_-]{0,31}$`, **неизменяемо** | — |
+| `rules[]` | — | Правила: `{id?, label?, hosts[], action: proxy\|direct, profile?}`; `action: direct` запрещает `profile`; без `profile` — `defaultProfile` | `[]` |
+| `url` | `SYNTH_PROXY_URL` | Общий прокси `http://`/`https://`/`socks5://`/`socks5h://` (userinfo в config.yaml/env допускается; при сохранении из UI пароль в URL **запрещён**). **Legacy**: без `profiles` — синтетический профиль `default` | — |
+| `httpProxy` / `httpsProxy` | `SYNTH_PROXY_HTTP_PROXY` / `SYNTH_PROXY_HTTPS_PROXY` | Прокси для целей по схеме (`http`/`https`); приоритетнее `allProxy`/`url`. **Legacy**-поля (с `profiles` запрещены) | — |
+| `allProxy` | `SYNTH_PROXY_ALL_PROXY` | Прокси для всех схем (если нет схемного). **Legacy** | — |
+| `noProxy` | `SYNTH_PROXY_NO_PROXY` | Исключения (важнее правил): `host`, `.suffix` (apex + поддомены), `*.suffix` (только поддомены), `host:port`, IP, CIDR (по IP-литералу цели — DNS не резолвится), `*` | `[]` |
 | `fromEnv` | — | Учитывать стандартные `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` | `true` |
 | `fallbackDirect` | `SYNTH_PROXY_FALLBACK_DIRECT` | Явный opt-in: при недоступном прокси идти напрямую (warn + `via:'fallback'`). Ошибки аутентификации (`407`) фоллбек **не** разрешают | `false` |
 | `connectTimeoutMs` | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | Таймаут соединения с прокси, мс | `10000` |
 | `auth.type` | — | Только `basic`; `ntlm`/`negotiate` → ошибка/400 (**доменная аутентификация — egress-шлюз**, ADR-099 п. 25) | `basic` |
 | `auth.username` | — | Пользователь Basic (альтернатива — userinfo в URL) | — |
-| `auth`-пароль | `SYNTH_PROXY_PASSWORD` | Пароль Basic: **только** env или файл `{dataDir}/secrets/proxy-password` (в config.yaml/`settings.json` не хранится, инвариант 13); env приоритетнее файла и блокирует управление из UI | — |
-| `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA к **самому** https-прокси (взаимоисключающи) | системное доверие |
+| `auth`-пароль | `SYNTH_PROXY_PASSWORD` (профиль `default`), `SYNTH_PROXY_<NAME>_PASSWORD` (остальные) | Пароль Basic: **только** env или файл (`{dataDir}/secrets/proxy-password`, `{dataDir}/secrets/proxy/<name>.password`); в config.yaml/`settings.json` не хранится (инвариант 13); env приоритетнее файла и блокирует управление из UI (409) | — |
+| `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA к **самому** https-прокси (взаимоисключающи), свой у каждого профиля | системное доверие |
 | `tls.certFile` / `tls.keyFile` | `SYNTH_PROXY_TLS_CERT_FILE` / `SYNTH_PROXY_TLS_KEY_FILE` | mTLS к https-прокси (задаются вместе) | — |
 | `tls.rejectUnauthorized` | `SYNTH_PROXY_TLS_REJECT_UNAUTHORIZED` | Проверять сертификат прокси | `true` |
 
 **Приоритет (ADR-023):** defaults ← `config.yaml proxy` ← **runtime-оверрайд (UI)** ← явные
 `SYNTH_PROXY_*`; стандартные `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` применяются только при
-`fromEnv` и если runtime/config не задали явный `enabled: false`. Слияние — поле-уровневое, то есть UI
-правит config-уровень, но **не переопределяет явный env деплоя**. `noProxy`:
+`fromEnv` и если runtime/config не задали явный `enabled: false`. Слияние — поле-уровневое (UI
+правит config-уровень, но **не переопределяет явный env деплоя**), **кроме** `profiles`/`rules`:
+runtime-значение заменяет их **целиком** (частичного мержа списков нет). `noProxy`:
 `SYNTH_PROXY_NO_PROXY` > runtime > непустой `proxy.noProxy` > `NO_PROXY`.
+
+**Порядок разрешения маршрута:** `enabled:false` → direct; `noProxy` → direct (`no-proxy`); правила в
+порядке объявления, **первое совпадение** (`rule`; `action: direct` → direct, `proxy` → профиль
+`rule.profile ?? defaultProfile`); `mode: selected` → direct (`no-match`); `mode: all` → `defaultProfile`
+(`default`). Тот же резолвер используют транспорт (`egressFetch`) и диагностика
+(`POST /settings/proxy/test`) — расхождения «проверка показывает одно, трафик идёт иначе» нет.
+
+**Паттерны `hosts`/`noProxy`:** `exact`; `.suffix` — apex **и** поддомены; `*.suffix` — только
+поддомены (apex **не** матчится); `host:port`; IP-литерал; CIDR (только по IP-литералу цели, DNS для
+правил/исключений не резолвится); `*`.
+
+**Секреты профилей (инвариант 13).** Пароль `default` — `SYNTH_PROXY_PASSWORD` >
+`{dataDir}/secrets/proxy-password` (legacy), остальных — `SYNTH_PROXY_<NAME>_PASSWORD` (имя в верхнем
+регистре, `-` → `_`) > `{dataDir}/secrets/proxy/<name>.password`. Файлы `0600`, каталоги `0700`,
+атомарная запись tmp→rename; значения **write-only** (не возвращаются, не логируются, не попадают в
+аудит). TLS-материалы профиля, загруженные из UI, — `{dataDir}/secrets/proxy/<name>/{ca.pem,client.crt,
+client.key}` (в конфиг пишутся только пути).
+
+**Legacy-совместимость.** Без `profiles`/`rules` поведение прежнее: top-level `url`/`httpProxy`/
+`httpsProxy`/`allProxy`/`auth`/`tls` = синтетический профиль `default`. При заданных `profiles`
+top-level URL/auth/tls **запрещены** (fail-closed), env `SYNTH_PROXY_URL`/`HTTP_PROXY`/`HTTPS_PROXY`/
+`ALL_PROXY` в режиме профилей не применяются (ошибка конфигурации/400). UI при сохранении конвертирует legacy-форму в
+`profiles.default`, сохраняя схемные поля.
 
 **Fail-closed.** Битый URL, неизвестная схема, `enabled=true` без URL, Basic без пароля,
 `auth.type` ≠ `basic`, `proxy.tls` вместе с `socks5://`, `caFile`+`caPem` одновременно, `certFile` без
-`keyFile` — ошибка конфигурации (`EGRESS_PROXY_CONFIG_INVALID`) на старте и 400 `VALIDATION_ERROR` при
-сохранении из UI. Недоступный прокси → `EGRESS_PROXY_UNAVAILABLE` (тихого direct нет); `407`/SOCKS-отказ
+`keyFile`, неизвестный `defaultProfile`/`profile` правила, `action: direct` с `profile`, `mode: selected`
+без правил, `mode: all` без default-профиля (в режиме `profiles`/`rules`), невалидное имя профиля — ошибка конфигурации
+(`EGRESS_PROXY_CONFIG_INVALID`) на старте и 400 `VALIDATION_ERROR` при сохранении из UI. Недоступный
+прокси → `EGRESS_PROXY_UNAVAILABLE` (тихого direct нет); `407`/SOCKS-отказ
 → `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED`.
 
 **Адресная политика при прокси** (ADR-099 п. 18): для запросов через прокси проверяются только схема и
@@ -670,27 +732,32 @@ hostname-правила/`exceptions` (DNS/CIDR не выполняются — �
 
 #### Настройка из UI (раздел «Сеть» → «Прокси»)
 
-- **Что редактируется:** `enabled`, `url`/`httpProxy`/`httpsProxy`/`allProxy`, `noProxy`, `fromEnv`,
-  `fallbackDirect`, `connectTimeoutMs`, `auth.username`, пути `tls.*`. Сохраняется в
-  `RuntimeSettings.proxy` (`{dataDir}/settings.json`; при `storage.backend=postgres` — таблица `settings`,
-  переносится `synth storage migrate`).
+- **Что редактируется:** `enabled`, `mode` (`all`/`selected`), `defaultProfile`, **профили**
+  (`label`, URL-поля, `auth.username`, пути `tls.*`; имя профиля неизменяемо), **правила** (порядок =
+  приоритет, первое совпадение; `action`/`profile`/`hosts`), `noProxy`, `fromEnv`, `fallbackDirect`,
+  `connectTimeoutMs`. Сохраняется одна секция `proxy` в `RuntimeSettings.proxy`
+  (`{dataDir}/settings.json`; при `storage.backend=postgres` — таблица `settings`, переносится
+  `synth storage migrate`).
+- **Профильные секреты (write-only):** пароль — `PUT/DELETE /settings/proxy/profiles/:name/password`
+  (файл `{dataDir}/secrets/proxy/<name>.password`; для `default` — legacy `secrets/proxy-password`),
+  CA/mTLS — `PUT/DELETE /settings/proxy/profiles/:name/tls/{ca,client}`
+  (`secrets/proxy/<name>/{ca.pem,client.crt,client.key}`, `0600`). При env-пароле профиля
+  (`SYNTH_PROXY_<NAME>_PASSWORD`) мутация → `409 CONFLICT`; PEM/ключи и пароли **не возвращаются**.
 - **Применение:** при **следующем старте** (`restartRequired`), не live. `GET /settings/proxy` отдаёт
   `saved` (config ← runtime ← env), `running` (текущий dispatcher), `defaults`, `isOverridden`,
-  `restartRequired`; плоские поля ответа = `saved` (обратная совместимость). UI показывает плашку
-  «изменения вступят после рестарта». Кроме `noProxy`/`fromEnv`/`connectTimeoutMs` статус отдаёт
-  безопасные `auth:{type,username}` и `tls:{caFile?,certFile?,keyFile?,hasCaPem,rejectUnauthorized}` —
-  TLS-пути и признак `caPem`, но **не** сам `caPem`/PEM-содержимое и **не** пароль/userinfo.
-- **Пароль write-only:** `PUT /settings/proxy/password` пишет файл `{dataDir}/secrets/proxy-password`
-  (0600, каталог 0700, атомарно tmp→rename), `DELETE` — удаляет; значение никогда не возвращается и не
-  попадает в аудит/логи. Если задан `SYNTH_PROXY_PASSWORD`, оба вызова → `409 CONFLICT` (пароль
-  управляется деплоем). `GET` отдаёт только `password: {source:'env'|'file'|'none', set, removable}`.
-- **Проверка:** `POST /settings/proxy/check` без `url` проверяет **saved**-конфигурацию (`usingSaved:true`),
-  чтобы UI видел будущее состояние; явный `{url}` проверяет конкретный прокси.
-- **Аудит:** изменения (save/reset/password) пишутся в `{dataDir}/audit/security.jsonl` со
+  `restartRequired`; `profiles`/`rules` в статусе — redacted (URL без userinfo, `username`, пути TLS,
+  `hasCaPem`, `password:{source,set,removable}`); плоские поля ответа = `saved` (обратная совместимость). UI показывает плашку
+  «изменения вступят после рестарта» со ссылкой на «Обслуживание → Перезапуск».
+- **Проверки:** `POST /settings/proxy/check` — коннект **к прокси** (без `url` — по saved,
+  `usingSaved:true`); `POST /settings/proxy/test {url}` — проверка **цели**: `HEAD` без редиректов и
+  тела, адресная политика проверяется **до** запроса, ответ содержит `route` (`action`/`via`/`reason`/
+  `ruleId`/`ruleLabel`/`profile`/`profileLabel`/`proxyUrl`), `ok`, `httpStatus`, `latencyMs`,
+  `authChallenge`, `usingSaved`, `restartRequired`.
+- **Аудит:** изменения (save/reset/password/tls профиля) пишутся в `{dataDir}/audit/security.jsonl` со
   `scope:'proxy'` (before/after без пароля, URL — redacted).
 
-**RBAC:** чтение — `requireAuth`; сохранение/сброс, пароль и `check` — `settingsWriteGuard` (managed —
-`ADMIN`, core — `requireAuth`).
+**RBAC:** чтение — `requireAuth`; сохранение/сброс, профильные секреты и проверки — `settingsWriteGuard`
+(managed — `ADMIN`, core — `requireAuth`).
 
 **Ограничения.** Доменная аутентификация прокси (NTLM/Negotiate/Kerberos) **в приложении не
 реализуется** — делегируется промежуточному egress-прокси/шлюзу (ADR-099 п. 25, см. следующий
@@ -701,8 +768,9 @@ CONNECT). https-прокси/SOCKS по IP-литералу требуют DNS-�
 `proxy/check` при этом может показать `reachable`. Встроенный глобальный `fetch` не гарантирован
 (npm-`setGlobalDispatcher` не влияет на него в Node 26; на Node 22 — перепроверка в CI) — покрыты пути
 через `egressFetch`. Runtime-reload без рестарта — нет. PostgreSQL не проксируется (не HTTP). git
-применяет `no_proxy` средствами libcurl, per-remote настройки нет; `stdio`-MCP получает прокси-env без
-пароля.
+применяет `no_proxy` средствами libcurl, per-remote настройки нет; **per-host маршрут в git/stdio-MCP
+не поддерживается** (один прокси через child-env; в `mode: selected` прокси-env им не ставится, чтобы
+не обходить правила молча); `stdio`-MCP получает прокси-env без пароля.
 
 #### Корпоративный прокси с Kerberos/NTLM (egress gateway)
 
@@ -734,7 +802,7 @@ CONNECT). https-прокси/SOCKS по IP-литералу требуют DNS-�
   п. 25.
 - **SOCKS5** — best-effort и не для K8s; если нужен target mTLS — используйте HTTP CONNECT (п. 26 ADR-099).
 
-Пример:
+Пример (один прокси — legacy-форма, эквивалент `profiles.default`):
 
 ```yaml
 proxy:
@@ -756,6 +824,42 @@ proxy:
     # keyFile: "/etc/synth/tls/proxy-client.key"
     rejectUnauthorized: true
 ```
+
+Пример (профили и правила — несколько прокси на разные направления):
+
+```yaml
+proxy:
+  enabled: true
+  mode: all                        # all | selected
+  defaultProfile: default
+  profiles:
+    default:                       # корпоративный прокси для всего, кроме noProxy
+      label: Corporate
+      url: "http://proxy.corp.example:3128"
+      auth: { type: basic, username: synth }
+      tls: { caFile: "/etc/synth/tls/proxy-ca.pem", rejectUnauthorized: true }
+    llm:                           # отдельный LLM-egress с mTLS
+      label: LLM egress
+      url: "https://llm-proxy.svc:8443"
+      auth: { type: basic, username: synth-llm }
+      tls:
+        caFile: "/etc/synth/tls/llm-ca.pem"
+        certFile: "/etc/synth/tls/llm-client.crt"
+        keyFile: "/etc/synth/tls/llm-client.key"
+  rules:                           # порядок = приоритет, первое совпадение
+    - id: r_openai
+      label: OpenAI
+      hosts: ["api.openai.com", "*.openai.com"]
+      action: proxy
+      profile: llm
+    - hosts: ["*.corp.example", "10.0.0.0/8"]   # CIDR — только по IP-литералу цели
+      action: direct
+  noProxy: ["localhost", ".svc"]   # важнее любых правил
+```
+
+Пароли профилей — только env/файл (в примере не показаны): `SYNTH_PROXY_PASSWORD` /
+`{dataDir}/secrets/proxy-password` для `default`, `SYNTH_PROXY_LLM_PASSWORD` /
+`{dataDir}/secrets/proxy/llm.password` для `llm`.
 
 ### Секреты at-rest (`security.secretKey`, ADR-076)
 

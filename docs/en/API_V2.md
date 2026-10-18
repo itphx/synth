@@ -211,8 +211,8 @@ In core the `ADMIN` column degenerates to `auth` (there are no role checks).
 
 | Method | Path | RBAC | Purpose |
 |---|---|---|---|
-| GET | `/health` | — | `{status:'healthy', version, time}` |
-| GET | `/api/v2/health` | — | same |
+| GET | `/health` | — | `{status:'healthy', version, time, startedAt}` (`startedAt` — the ISO process start timestamp, ADR-092) |
+| GET | `/api/v2/health` | — | same (+ a `storage` block when degraded) |
 
 ### 5.2 Hybrid — `core`
 
@@ -698,11 +698,18 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 | PUT | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | `{policy}` (live application, persisted); an invalid rule → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/settings/egress/webhooks` | ADMIN (managed) / auth (core) | Reset to the config default; `{status:"restored", policy, isOverridden:false, defaults}` + live application of the default |
 | POST | `/api/v2/settings/egress/check` | ADMIN (managed) / auth (core) | URL check **without performing the request**: `{scope:"tools"\|"webhooks"\|"mcp", url}` → `{allowed, reason?, matchedRule?, addresses?, proxied, addressChecksActive, policy}` (parse + DNS + matching; for `webhooks` an `https` requirement applies, except `mode:"off"`). With a proxy enabled `proxied:true`, `addressChecksActive:false` — only the scheme and hostname rules/`exceptions` are checked (no DNS/CIDR) |
-| GET | `/api/v2/settings/proxy` | auth | Egress proxy settings (ADR-099): flat **saved** fields (`enabled, source:"env"\|"runtime"\|"config"\|"none", url?, httpProxy?, httpsProxy?, allProxy?, noProxy, fromEnv, fallbackDirect, connectTimeoutMs, auth?:{type:"basic", username}, tls?:{caFile?, certFile?, keyFile?, hasCaPem, rejectUnauthorized}`) + `{saved, running, defaults, isOverridden, password:{source:"env"\|"file"\|"none", set, removable}, restartRequired}` (top-level `restartRequired` is computed: saved fingerprint ≠ running). URLs are redacted (no userinfo/secrets); **`caPem` and PEM contents, the password and userinfo are never returned** (for `caPem` only `hasCaPem`), while the `caFile`/`certFile`/`keyFile` paths are returned |
-| PUT | `/api/v2/settings/proxy` | ADMIN (managed) / auth (core) | Save the runtime override `{proxy}` (validation: `auth.type` only `basic` — NTLM/Negotiate are **out of scope** and delegated to an egress gateway (ADR-099 item 25), a password in the userinfo URL is forbidden, `caFile`↔`caPem`, `certFile`+`keyFile`); **not applied live** (a restart is required); invalid → 400 `VALIDATION_ERROR`; audit `scope:"proxy"` (before/after without the password) → `{saved, running, restartRequired:true}` |
+| GET | `/api/v2/settings/proxy` | auth | Egress proxy settings (ADR-099): flat **saved** fields (`enabled, source:"env"\|"runtime"\|"config"\|"none", mode:"all"\|"selected", defaultProfile?, profiles:{"<name>":{label?,url?,httpProxy?,httpsProxy?,allProxy?,auth?:{type:"basic",username},tls?:{caFile?,certFile?,keyFile?,hasCaPem,rejectUnauthorized},legacy,source}}, rules:[{id,label?,hosts,action:"proxy"\|"direct",profile?}], url?, httpProxy?, httpsProxy?, allProxy?, noProxy, fromEnv, fallbackDirect, connectTimeoutMs, auth?, tls?`) + `{saved, running, defaults, isOverridden, password:{source:"env"\|"file"\|"none", set, removable}, restartRequired}` (top-level `restartRequired` is computed: saved fingerprint ≠ running). URLs are redacted (no userinfo/secrets); **`caPem` and PEM contents, passwords and userinfo are never returned** (for `caPem` only `hasCaPem`; per profile — `password:{source,set,removable}`), while the `caFile`/`certFile`/`keyFile` paths are returned |
+| PUT | `/api/v2/settings/proxy` | ADMIN (managed) / auth (core) | Save the runtime override `{proxy}` (validation: `mode`/`profiles`/`rules` — the profile name is `^[a-z][a-z0-9_-]{0,31}$` and immutable, `action:"direct"` without `profile`, `action:"proxy"` — an existing `profile`/`defaultProfile`, `mode:"selected"` — at least one rule, `mode:"all"` — a default profile, host patterns; with `profiles` the top-level URL/auth/tls are forbidden; `auth.type` only `basic` — NTLM/Negotiate are **out of scope** and delegated to an egress gateway (ADR-099 item 25), a password in the userinfo URL is forbidden, `caFile`↔`caPem`, `certFile`+`keyFile`); **not applied live** (a restart is required); invalid → 400 `VALIDATION_ERROR`; audit `scope:"proxy"` (before/after without the password) → `{saved, running, restartRequired:true}` |
 | DELETE | `/api/v2/settings/proxy` | ADMIN (managed) / auth (core) | Reset the runtime override to `config.yaml`/env; audit `scope:"proxy"` → `{status:"restored", saved, defaults, running, restartRequired}` |
 | PUT | `/api/v2/settings/proxy/password` | ADMIN (managed) / auth (core) | Set the Basic password: `{password}` → the file `{dataDir}/secrets/proxy-password` (0600, directory 0700, atomic); the value is never returned and never written to the audit; an empty password → 400; `SYNTH_PROXY_PASSWORD` set → 409 `CONFLICT` → `{password:{source,set,removable}}` |
 | DELETE | `/api/v2/settings/proxy/password` | ADMIN (managed) / auth (core) | Remove the password file (idempotent, 0600); `SYNTH_PROXY_PASSWORD` set → 409 `CONFLICT`; audit `scope:"proxy"` (status only, no value) → `{password:{source,set,removable}}` |
+| PUT | `/api/v2/settings/proxy/profiles/:name/password` | ADMIN (managed) / auth (core) | **Profile** Basic password: `{password}` → `{dataDir}/secrets/proxy/<name>.password` (for `default` — the legacy `secrets/proxy-password`; 0600, directory 0700, atomic). No such profile in the saved config → 404 `NOT_FOUND`; missing/empty password → 400; a profile env password (`SYNTH_PROXY_<NAME>_PASSWORD`) → 409 `CONFLICT`; the value is never returned → `{password:{source,set,removable}}` |
+| DELETE | `/api/v2/settings/proxy/profiles/:name/password` | ADMIN (managed) / auth (core) | Remove the profile password file (idempotent); no profile → 404; env password → 409; audit `scope:"proxy"` (status only) → `{password:{source,set,removable}}` |
+| PUT | `/api/v2/settings/proxy/profiles/:name/tls/ca` | ADMIN (managed) / auth (core) | CA bundle **for the proxy** of a profile: `{pem}` (1+ certificates) → `{dataDir}/secrets/proxy/<name>/ca.pem` (0600), only `tls.caFile` is written to the saved config; broken PEM → 400; no profile → 404; audit `scope:"proxy"` → `{status, restartRequired:true}` |
+| DELETE | `/api/v2/settings/proxy/profiles/:name/tls/ca` | ADMIN (managed) / auth (core) | Remove the profile CA (file + `tls.caFile`/`caPem`); no profile → 404; audit `scope:"proxy"` → `{status, restartRequired:true}` |
+| PUT | `/api/v2/settings/proxy/profiles/:name/tls/client` | ADMIN (managed) / auth (core) | mTLS **to the proxy** for a profile: `{certPem, keyPem}` (write-only pair) → `secrets/proxy/<name>/{client.crt,client.key}` (0600), paths in the config; an incomplete pair/broken PEM/a key that does not match the cert → 400; no profile → 404; audit `scope:"proxy"` → `{status, restartRequired:true}` |
+| DELETE | `/api/v2/settings/proxy/profiles/:name/tls/client` | ADMIN (managed) / auth (core) | Remove the profile mTLS client (files + config paths); no profile → 404; audit `scope:"proxy"` → `{status, restartRequired:true}` |
+| POST | `/api/v2/settings/proxy/test` | ADMIN (managed) / auth (core) | **Target URL** check against the saved config: `{url}` (`http(s)`, no userinfo; otherwise 400) → `{url, route:{action:"proxy"\|"direct", via, reason:"disabled"\|"no-proxy"\|"rule"\|"default"\|"no-match"\|"no-default", ruleId?, ruleLabel?, profile?, profileLabel?, proxyUrl?}, ok, httpStatus?, latencyMs, authChallenge, error?, usingSaved:true, restartRequired}`. `HEAD` without redirects or a body; the `egress.tools` address policy is evaluated **before** the request (a denial → `ok:false` + `route`, no request); target TLS — the `security.tls` bootstrap. Not to be confused with `/proxy/check` (proxy connectivity) |
 | POST | `/api/v2/settings/proxy/check` | ADMIN (managed) / auth (core) | **Proxy connection check only** (not the target): `{url?}` → `{reachable, latencyMs, authChallenge:"Basic"\|"NTLM"\|"Negotiate"\|"none", error?, usingSaved}`; `authChallenge: NTLM\|Negotiate` is **diagnostics only**: Synth does not authenticate these schemes (egress gateway, ADR-099 item 25). Without `url` the **saved** configuration is checked (`usingSaved:true`), otherwise the explicit proxy; TCP/TLS/SOCKS handshake, no request to the target; an invalid `url` (not a string) → 400 `VALIDATION_ERROR` |
 | GET | `/api/v2/settings/tls` | auth | TLS trust status (ADR-099): flat `status` fields + `{status, saved, running, defaults, restartRequired}`; `status` — `{ca:{source,count,subjects}, rejectUnauthorized, defaultClient?:{source,certSubject?,hasKey,readOnly}, mappings:[{id,hosts,label?,certSubject?,source,readOnly}], params:{ca?:{source,caFile?,hasPem}, client?:{source,certFile?,keyFile?,readOnly}}, running?:{applied,profileIds}, saved?:{bootstrap,profileIds}}`; **PEM/keys are never returned**; `source` — `env`\|`runtime`\|`config`\|`none` |
 | PUT | `/api/v2/settings/tls` | ADMIN (managed) / auth (core) | `{tls:{caFile?, caPem?, rejectUnauthorized?}}` — non-secret fields (CA path or PEM bundle, mutually exclusive; certificates/keys via separate endpoints); invalid/unknown field → 400 `VALIDATION_ERROR`; **not applied live** → `{status, restartRequired:true}`; audit `scope:"tls"` |
@@ -743,6 +750,15 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 > `audit/egress.jsonl` (`via` — `proxy`/`direct`/`fallback`). With a proxy enabled the address check runs in
 > proxied mode (`settings/egress/check` → `proxied`/`addressChecksActive`).
 > LLM providers are not part of the egress journal (they have their own LLM audit/payload log).
+
+> **Proxy profiles and rules (ADR-099 item 27).** `mode: all` — `defaultProfile` for every host except
+> `noProxy`; `selected` — only `rules` (everything else direct). Rules are evaluated in declaration order
+> (**first match**), `noProxy` wins over rules; `action: direct` is incompatible with `profile`; CIDR
+> matches the target IP literal only. `profiles`/`rules` — the runtime value replaces the config **entirely**
+> (no field-level merge); with `profiles` present, top-level URL/auth/tls and env URLs are forbidden.
+> Profile passwords and TLS material are write-only (`PUT/DELETE .../profiles/:name/{password,tls/ca,tls/client}`),
+> values/PEMs are never returned. `POST /settings/proxy/test` checks the **target** (unlike `/proxy/check`,
+> which checks proxy connectivity) and shows the matched route; both use the **saved** configuration.
 
 ### 5.22 Dictionaries — `/api/v2/dictionaries` (both)
 
@@ -1060,6 +1076,8 @@ Destructive operations (applying migrations, scheduling a restore) require `{con
 | GET | `/api/v2/maintenance/restore` | both | ADMIN / auth | The pending restore request `{pending}` (`PendingRestoreRequest \| null`) |
 | POST | `/api/v2/maintenance/restore` | both | ADMIN / auth | Schedule a restore: `{archive, confirm: true, safetyCopy?}` (`confirm` is mandatory; `safetyCopy` defaults to `true`) → 201 `{pending, appliesOnNextStart: true}`; an archive that fails validation → 400 `VALIDATION_ERROR`; no archive → 404 |
 | DELETE | `/api/v2/maintenance/restore` | both | ADMIN / auth | Cancel the pending request → 200 `{cancelled}` |
+| GET | `/api/v2/maintenance/restart` | both | ADMIN / auth | Graceful restart status (ADR-092): `{supported, mode:"disabled"\|"process"\|"supervisor", reason?, startedAt, version}`; `supported:false` — restart unavailable (the UI shows no button) |
+| POST | `/api/v2/maintenance/restart` | both | ADMIN / auth | Graceful instance restart: `{confirm: true}` (otherwise 400 `VALIDATION_ERROR`) → **202** `{status:"restarting", restartId, mode, startedAt}`; the process exits with code **75** (a supervisor starts it again); a repeated call before the exit is idempotent (same `restartId`, 202); `disabled` mode → 409 `RESTART_UNSUPPORTED`; audit `restart.requested` (status `scheduled`, `details:{mode, restartId}`) |
 | GET | `/api/v2/maintenance/audit` | both | ADMIN / auth | Maintenance journal: `{entries: MaintenanceAuditEntry[]}` (newest first); query `limit` (an integer 1..500, default 50) and `op` (operation kind); invalid `limit`/`op` → 400 `VALIDATION_ERROR`; the port is not wired → an empty list (not 500) |
 | DELETE | `/api/v2/maintenance/audit` | both | ADMIN / auth | Clear the journal; the body `{confirm: true}` is mandatory (otherwise 400 `VALIDATION_ERROR`) → 200 `{cleared}`; the port is not wired → `{cleared: 0}` |
 
@@ -1082,7 +1100,7 @@ downloaded and deleted via the API, but **cannot be restored via the API**: `POS
 **Maintenance audit journal (ADR-092).** A `MaintenanceAuditEntry` is an append-only lifecycle
 record: `id` (`ma_<uuid>`), `ts` (ISO-8601), `op` (`backup.created`/`backup.failed`/
 `backup.deleted`/`restore.scheduled`/`restore.cancelled`/`restore.applied`/`restore.failed`/`migrate.applied`/
-`migrate.failed`/`update.applied`/`rollback.applied`/`update.failed`/`uninstall.purge`/
+`migrate.failed`/`update.applied`/`rollback.applied`/`update.failed`/`restart.requested`/`uninstall.purge`/
 `export.created`/`import.applied`), `status` (`ok`/`failed`/`scheduled`), `actor?` (the initiator:
 `userId` via API/UI, `cli` from the command line, `startup` when applied at start), `version?`
 (`SYNTH_VERSION`), `details?` (fields depend on `op`), `error?` (when `status: failed`). Records are
@@ -1097,7 +1115,9 @@ the `File` size and the bytes actually read — exceeding it → 413 `PAYLOAD_TO
 **Error codes.** 400 `VALIDATION_ERROR` (an invalid body/archive name, a missing `confirm: true`,
 an archive that fails validation), 404 `NOT_FOUND` (no archive/record), 413 `PAYLOAD_TOO_LARGE`
 (the upload limit is exceeded), 409 `CONFLICT` with the code `SCHEMA_TOO_NEW` (data newer than the
-Synth version when applying migrations), 401/403 (no credentials/insufficient rights).
+Synth version when applying migrations) or `RESTART_UNSUPPORTED` (`SYNTH_RESTART_MODE=disabled` —
+restart unavailable), 401/403 (no credentials/insufficient rights). A successful `POST /restart` is
+**202** (the request is accepted; the process exits in ~50 ms).
 
 **Example.**
 
@@ -1132,11 +1152,19 @@ curl -X DELETE http://localhost:5000/api/v2/maintenance/restore \
 # Read the maintenance journal (last 5 entries).
 curl 'http://localhost:5000/api/v2/maintenance/audit?limit=5' \
   -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Restart the instance (graceful shutdown, exit 75 → a supervisor starts the process again).
+curl http://localhost:5000/api/v2/maintenance/restart -H 'Authorization: Bearer <ADMIN_TOKEN>'
+curl -X POST http://localhost:5000/api/v2/maintenance/restart \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>' -H 'Content-Type: application/json' \
+  -d '{"confirm":true}'
 ```
 
 **UI.** The "Maintenance" section (Settings → "Maintenance", `ADMIN` only) is built on these same
 endpoints (`packages/ui/src/components/settings/MaintenanceSettings.tsx`, the API domain
-`packages/ui/src/lib/api/maintenance.ts`). Procedures and security rules —
+`packages/ui/src/lib/api/maintenance.ts`): status/`synth doctor`, schema and migrations, backups,
+restore, and **"Restart"** (mode status, confirmation, an overlay and polling `GET /health` until
+`startedAt` changes, then a reload). Procedures and security rules —
 [docs/MAINTENANCE.md](../MAINTENANCE.md) (in Russian).
 
 ---

@@ -15,6 +15,11 @@ backend:
   fullnameOverride: ""
   replicaCount: 1
 
+  # Restart из UI (обслуживание → «Перезапуск»): процесс завершается с кодом 75,
+  # Deployment (restartPolicy: Always — дефолт K8s) поднимает pod заново.
+  # `disabled` — кнопка в UI недоступна; `supervisor` — для внешнего супервизора.
+  restartMode: process
+
   image:
     repository: gitverse.ru/itphx/synth-backend
     # Пустой tag → подставляется .Chart.AppVersion (см. templates/backend-deployment.yaml).

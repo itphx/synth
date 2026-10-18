@@ -112,13 +112,21 @@ export type {
 export type {
   ProxyAuthConfig,
   ProxyTlsConfig,
+  ProxyProfileInput,
+  ProxyRuleInput,
   ProxyConfigInput,
   ProxySettingsResponse,
   ProxySaveResponse,
   ProxyResetResponse,
+  ProxyTlsMutationResponse,
   ProxyPasswordStatus,
+  ProxyProfileStatus,
   ProxyStatusInfo,
   ProxyCheckResult,
+  ProxyRouteInfo,
+  ProxyRouteTestResult,
+  ProxyMode,
+  ProxyStatusRule,
   ProxySource,
 } from './proxy'
 export type {
@@ -166,6 +174,9 @@ export type {
   RestoreArchiveManifest,
   RestoreValidation,
   CreateBackupOptions,
+  RestartMode,
+  RestartStatus,
+  RestartResponse,
 } from './maintenance'
 export type {
   InstructionFileStatus,
