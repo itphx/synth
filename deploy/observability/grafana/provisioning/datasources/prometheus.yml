@@ -1,0 +1,18 @@
+apiVersion: 1
+
+# Dev-источник Prometheus для Grafana (provisioning, ADR-094).
+# Дашборды выбирают источник через переменную DS_PROMETHEUS (тип datasource),
+# поэтому имя/uid здесь не жёстко зашиты в панели.
+datasources:
+  - name: Prometheus
+    uid: synth-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      # Совпадает со scrape_interval стенда — корректный $__rate_interval.
+      timeInterval: 15s
+      httpMethod: POST
+      prometheusType: Prometheus

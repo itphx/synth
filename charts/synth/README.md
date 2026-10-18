@@ -127,6 +127,17 @@ ingress:
 | `security.tls.caKey` / `certKey` / `keyKey` | `""` | Ключи внутри Secret → `security.tls.{caFile,certFile,keyFile}` (путь `/etc/synth/tls/<key>`) |
 | `security.tls.caFile` / `certFile` / `keyFile` | `""` | Явные пути внутри контейнера (когда файлы смонтированы вами) |
 | `security.tls.rejectUnauthorized` | `""` | `""` (дефолт `true`) \| `"true"` \| `"false"` → `security.tls.rejectUnauthorized` |
+| `metrics.enabled` | `false` | `GET /metrics` (ADR-094): env `SYNTH_METRICS_ENABLED=true`; выключено по умолчанию |
+| `metrics.existingSecret` / `tokenKey` | `""` / `SYNTH_METRICS_TOKEN` | Bearer-токен `/metrics` из Secret (env `SYNTH_METRICS_TOKEN`, `optional: true`) |
+| `metrics.prometheus.annotations` | `false` | Аннотации `prometheus.io/scrape`, `prometheus.io/port`, `prometheus.io/path` на pod (vanilla Prometheus) |
+| `metrics.serviceMonitor.enabled` | `false` | Объект `ServiceMonitor` (Prometheus Operator; нужны CRD) |
+| `metrics.serviceMonitor.interval` / `scrapeTimeout` | `30s` / `10s` | Параметры скрейпа ServiceMonitor |
+| `metrics.serviceMonitor.labels` | `{}` | Доп. labels ServiceMonitor (например `release: kube-prometheus-stack`) |
+| `metrics.serviceMonitor.namespaceSelector` | `{}` | `namespaceSelector` (пусто → namespace релиза) |
+| `metrics.serviceMonitor.bearerTokenSecret.name` / `key` | `""` / `""` | Bearer для скрейпа при включённом токене |
+| `grafana.dashboards.enabled` | `false` | ConfigMap с дашбордами и label `grafana_dashboard=1` (sidecar) |
+| `grafana.dashboards.folder` | `""` | Аннотация `grafana_folder` (папка в Grafana) |
+| `alerts.enabled` | `false` | `PrometheusRule` с правилами из `files/alerts/synth-rules.yaml` |
 | `ui.image.repository` | `gitverse.ru/itphx/synth-ui` | Образ UI |
 | `ui.image.tag` | `""` | Тег; пусто → `.Chart.AppVersion` |
 | `ui.imagePullSecrets` | `[]` | Секреты для приватного реестра |
@@ -149,6 +160,117 @@ ingress:
 | `installerKey.tokenKey` | `token` | Ключ внутри Secret с plaintext-токеном (для аддонов) |
 | `caCert` | `""` | PEM внутреннего CA (опционально) |
 | `extraObjects` | `[]` | Произвольные дополнительные манифесты (рендерятся как есть) |
+
+## Наблюдаемость
+
+`GET /metrics` (формат Prometheus exposition 0.0.4) отдаётся на том же порту, что и API
+(`backend.service.targetPort`), и **по умолчанию выключен** (ADR-094 п. 4). Кардинальность ограничена
+контрактом: лейблы — только `method`, `route`, `status`, `provider`, `model`, `kind`, `outcome`,
+`source`, `op`, `currency`, `backend`, `store`; SSE/WS в гистограмму длительности не попадают
+(вместо них — gauge активных стримов).
+
+Что включает какой флаг:
+
+| Значение | Эффект |
+|---|---|
+| `metrics.enabled: true` | env `SYNTH_METRICS_ENABLED=true` → `/metrics` начинает отвечать |
+| `metrics.existingSecret` + `metrics.tokenKey` | env `SYNTH_METRICS_TOKEN` из Secret (`optional: true`) → `/metrics` требует `Authorization: Bearer …` |
+| `metrics.prometheus.annotations: true` | аннотации `prometheus.io/scrape`, `prometheus.io/port`, `prometheus.io/path` на pod template |
+| `metrics.serviceMonitor.enabled: true` | объект `ServiceMonitor` (Prometheus Operator; CRD обязательны) |
+| `metrics.serviceMonitor.bearerTokenSecret` | bearer для скрейпа (обязателен, если включён токен) |
+| `grafana.dashboards.enabled: true` | ConfigMap `*-grafana-dashboards` с label `grafana_dashboard=1` (sidecar) |
+| `alerts.enabled: true` | `PrometheusRule` с правилами из `files/alerts/synth-rules.yaml` |
+
+### Вариант 1 — vanilla Prometheus по аннотациям (без CRD)
+
+```yaml
+metrics:
+  enabled: true
+  prometheus:
+    annotations: true
+```
+
+Prometheus должен вести job по `kubernetes_sd_configs` (роль pod), учитывающий `prometheus.io/*` —
+это стандартный job `kubernetes-pods` из примеров Prometheus. Значение `prometheus.io/port` берётся из
+`backend.service.targetPort` (дефолт `5000`), путь — `/metrics`.
+
+### Вариант 2 — Prometheus Operator (ServiceMonitor)
+
+```yaml
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      release: kube-prometheus-stack   # label селектора вашего Prometheus
+    namespaceSelector: {}              # пусто → namespace релиза
+```
+
+CRD `monitoring.coreos.com/v1` обязательны: при `serviceMonitor.enabled: true` без CRD установка
+упадёт (это осознанно — молчаливое отсутствие скрейпа хуже ошибки).
+
+### Вариант 3 — bearer-токен `/metrics`
+
+```bash
+kubectl -n synth create secret generic synth-metrics \
+  --from-literal=SYNTH_METRICS_TOKEN="$(openssl rand -hex 32)"
+```
+
+```yaml
+metrics:
+  enabled: true
+  existingSecret: synth-metrics
+  tokenKey: SYNTH_METRICS_TOKEN
+  serviceMonitor:
+    enabled: true
+    bearerTokenSecret:
+      name: synth-metrics
+      key: SYNTH_METRICS_TOKEN
+```
+
+`secretKeyRef` создаётся с `optional: true`: отсутствие ключа не блокирует старт pod'а. При включённом
+токене и пустом `bearerTokenSecret` скрейп получит 401 → алерт `SynthMetricsMissing`.
+
+### Вариант 4 — Grafana sidecar и алерты
+
+```yaml
+grafana:
+  dashboards:
+    enabled: true
+    label: "1"                         # label, который ищет sidecar
+    folder: Synth                      # аннотация grafana_folder (опционально)
+    labels:
+      release: kube-prometheus-stack   # чтобы ConfigMap попал в селектор sidecar'а
+alerts:
+  enabled: true
+  labels:
+    release: kube-prometheus-stack     # чтобы Prometheus выбрал PrometheusRule
+```
+
+Дашборды (`charts/synth/files/dashboards/`):
+
+| Файл | Содержимое |
+|---|---|
+| `synth-overview.json` | Готовность (`synth_ready`), HTTP RED (RPS по route, доля 5xx, p95), in-flight, uptime/build, RSS/heap/CPU/event loop lag, `{dataDir}`/записи/деградация, сессии/стримы/очередь |
+| `synth-llm.json` | запросы/ошибки/p95 по provider/model, токены по kind, ретраи, стоимость по currency, зеркало decision-метрик |
+| `synth-events-ops.json` | ingest по source/outcome, решения Router по kind, журнал, шедулер (jobs/drift), webhooks, гибрид, remote p95 |
+
+Все панели используют переменную `DS_PROMETHEUS` (datasource типа `prometheus`) — при импорте
+выберите свой источник. Правила алертов — обычный Prometheus-формат: тот же
+`files/alerts/synth-rules.yaml` подключается к vanilla Prometheus через `rule_files`.
+
+Проверка после применения:
+
+```bash
+kubectl -n synth port-forward deploy/synth-backend 5000:5000
+curl -s localhost:5000/metrics | grep -c '^synth_'        # > 0
+curl -s -o /dev/null -w '%{http_code}\n' localhost:5000/ready   # 200
+```
+
+Локальный стенд без кластера (Prometheus + Grafana + дашборды) —
+`docker-compose.observability.yml`, инструкция — `deploy/observability/README.md`.
 
 ## Перезапуск инстанса из UI
 

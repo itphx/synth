@@ -1,0 +1,42 @@
+{{- /* ADR-094: ServiceMonitor для Prometheus Operator (CRD monitoring.coreos.com/v1).
+       Только при metrics.serviceMonitor.enabled — CRD в кластере не обязательны.
+       Скрейп: GET /metrics на порту `http` Service backend. */ -}}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- $sm := .Values.metrics.serviceMonitor }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "synth.backend.fullname" . }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "synth.backend.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      scheme: http
+      interval: {{ $sm.interval }}
+      scrapeTimeout: {{ $sm.scrapeTimeout }}
+      {{- /* Токен /metrics: тот же Secret/ключ, что в env backend. Без него
+             скрейп при включённом токене получит 401. */}}
+      {{- with $sm.bearerTokenSecret }}
+      {{- if .name }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .name }}
+          key: {{ .key | default "SYNTH_METRICS_TOKEN" }}
+      {{- end }}
+      {{- end }}
+  {{- /* Пусто → namespace релиза (оператор ищет ServiceMonitor у себя). */}}
+  {{- with $sm.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

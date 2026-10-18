@@ -194,6 +194,92 @@ security:
     rejectUnauthorized: ""
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Наблюдаемость (ADR-094): GET /metrics, ServiceMonitor, дашборды Grafana, алерты.
+#
+# Метрики по умолчанию ВЫКЛЮЧЕНЫ (ADR-094 п. 4): эндпоинт появляется только при
+# `metrics.enabled: true`. Скрейп настраивается одним из двух способов (можно
+# оба): vanilla Prometheus по аннотациям prometheus.io/* или Prometheus Operator
+# через ServiceMonitor (CRD monitoring.coreos.com/v1 — не обязательны).
+#
+# Порядок включения:
+#   1) metrics.enabled: true                        → env SYNTH_METRICS_ENABLED=true;
+#   2) metrics.prometheus.annotations: true         → аннотации prometheus.io/* на pod;
+#      ИЛИ metrics.serviceMonitor.enabled: true     → объект ServiceMonitor;
+#   3) grafana.dashboards.enabled: true             → ConfigMap с дашбордами (sidecar);
+#   4) alerts.enabled: true                         → PrometheusRule с правилами.
+# Подробности и примеры — README.md чарта, раздел «Наблюдаемость».
+# ─────────────────────────────────────────────────────────────────────────────
+metrics:
+  # true → env SYNTH_METRICS_ENABLED=true у backend (GET /metrics на порту
+  # backend.service.targetPort). Включение без скрейпа безопасно: эндпоинт
+  # просто никто не читает.
+  enabled: false
+
+  # Опциональный bearer-токен /metrics (ADR-094 п. 4).
+  # Пусто → /metrics отдаётся без авторизации (штатно в кластере: доступ
+  # ограничен сетью pod'а/Ingress-политикой). Задан existingSecret →
+  # env SYNTH_METRICS_TOKEN из secretKeyRef (optional: true — отсутствие ключа
+  # в Secret не блокирует старт pod'а).
+  # ВНИМАНИЕ: при включённом токене ServiceMonitor нужно передать его в
+  # metrics.serviceMonitor.bearerTokenSecret, иначе скрейп получит 401.
+  existingSecret: ""
+  tokenKey: SYNTH_METRICS_TOKEN
+
+  prometheus:
+    # Vanilla Prometheus (без CRD): аннотации на pod template:
+    #   prometheus.io/scrape: "true"
+    #   prometheus.io/port:   "<backend.service.targetPort>"
+    #   prometheus.io/path:   "/metrics"
+    # Включайте вместе с metrics.enabled: аннотации на выключенном эндпоинте
+    # дают ложный up==0 (404) и ложные алерты.
+    annotations: false
+
+  serviceMonitor:
+    # Prometheus Operator: объект ServiceMonitor (templates/servicemonitor.yaml).
+    # Требует установленных CRD — без них рендер/установка упадут.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    # Доп. labels ServiceMonitor. Обычно нужен label селектора вашего
+    # Prometheus, например `release: kube-prometheus-stack`.
+    labels: {}
+    # namespaceSelector ServiceMonitor. Пусто → namespace релиза (оператор
+    # по умолчанию ищет ServiceMonitor в своём namespace).
+    # ServiceMonitor рядом с Prometheus в другом namespace:
+    #   namespaceSelector:
+    #     matchNames: [monitoring]
+    namespaceSelector: {}
+    # Bearer-токен скрейпа (тот же Secret/ключ, что metrics.existingSecret).
+    # Пусто → блок authorization не рендерится.
+    bearerTokenSecret:
+      name: ""
+      key: ""
+
+# Grafana: дашборды из charts/synth/files/dashboards/*.json → ConfigMap с
+# label grafana_dashboard=<label>. Подхватывается sidecar'ом Grafana
+# (kube-prometheus-stack, grafana chart с sidecar.dashboards.enabled=true).
+grafana:
+  dashboards:
+    enabled: false
+    # Значение label grafana_dashboard (sidecar ищет "1" по умолчанию).
+    label: "1"
+    # Значение аннотации grafana_folder (папка в Grafana); пусто → не рендерится.
+    folder: ""
+    # Доп. labels ConfigMap (например release: kube-prometheus-stack).
+    labels: {}
+
+# Prometheus-правила алертов (PrometheusRule, templates/prometheusrule.yaml).
+# Сами правила — files/alerts/synth-rules.yaml в формате plain YAML (groups),
+# тот же файл можно подключить к vanilla Prometheus через rule_files.
+alerts:
+  enabled: false
+  # Доп. labels PrometheusRule — нужны, чтобы Prometheus оператора выбрал
+  # правила (например release: kube-prometheus-stack).
+  labels: {}
+  # Доп. аннотации PrometheusRule (например runbook_url кластера).
+  annotations: {}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # UI — @itphx/synth-ui (React SPA) под nginx, проксирует /api /ws /auth /admin на backend.
 # ─────────────────────────────────────────────────────────────────────────────
 ui:

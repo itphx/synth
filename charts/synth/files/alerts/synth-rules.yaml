@@ -1,0 +1,306 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Synth — Prometheus-правила алертов (ADR-094).
+#
+# Формат plain Prometheus (`groups`) — подключается двумя способами:
+#   1) vanilla Prometheus: rule_files: [/etc/prometheus/rules/synth-rules.yaml];
+#   2) Prometheus Operator: чарт оборачивает этот файл в PrometheusRule
+#      (alerts.enabled: true; в spec уходит содержимое файла как есть).
+#
+# ВАЖНО про `job`: имена job'ов зависят от способа скрейпа.
+#   - docker-compose.observability.yml: job="synth" (:4300) и job="synth-backend" (:5000);
+#   - Prometheus Operator: job = "<namespace>/<service>" (например synth/synth-backend);
+#   - vanilla по аннотациям: job = имя сервиса/цели из вашего scrape_config.
+# Поэтому базовые правила используют regex `job=~".*synth.*"`. Если у вас
+# несколько инстансов Synth в одном Prometheus — сузьте regex до конкретных
+# job'ов, иначе алерт сработает по любому упавшему инстансу.
+#
+# Пороги и `for` — стартовые (осознанно консервативные). Подбирайте под SLO
+# окружения; имена метрик — контракт (ADR-094 п. 6), лейблы — только
+# method/route/status/provider/model/kind/outcome/source/op/currency/backend/store.
+# ─────────────────────────────────────────────────────────────────────────────
+groups:
+  - name: synth-availability
+    rules:
+      - alert: SynthDown
+        expr: up{job=~".*synth.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: synth
+        annotations:
+          summary: "Synth недоступен: скрейп {{ $labels.instance }} не проходит"
+          description: >-
+            Prometheus не может скрейпнуть /metrics (job={{ $labels.job }},
+            instance={{ $labels.instance }}). Проверьте pod/контейнер, логи,
+            сеть и сетевые политики; при недоступности БД смотрите
+            SynthStorageDegraded.
+
+      - alert: SynthReadyDown
+        # Основной сигнал — метрика контракта: synth_ready (gauge 0/1).
+        # 1 — приложение инициализировано и готово обслуживать трафик (/ready
+        # отдаёт 200), 0 — not ready: старт не завершён или fail-closed
+        # состояние хранилища (ADR-094 п. 3, ADR-098). Деградация БД readiness
+        # НЕ роняет — это отдельный сигнал (StorageDegraded).
+        #
+        # Опция для внешней проверки (не обязательна): blackbox_exporter с probe
+        # job на GET /ready (модуль http_2xx) и правило
+        # probe_success{job="synth-ready"} == 0 —
+        #   - job_name: synth-ready
+        #     metrics_path: /probe
+        #     params: { module: [http_2xx] }
+        #     static_configs: [{ targets: ["http://synth-backend:5000/ready"] }]
+        expr: synth_ready == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: synth
+        annotations:
+          summary: "Synth не готов обслуживать трафик (synth_ready=0)"
+          description: >-
+            /ready не готов: инициализация не завершена или fail-closed
+            состояние хранилища (ADR-094 п. 3, ADR-098). Проверьте логи старта,
+            StorageDegraded и доступность БД; pod при этом остаётся в балансировке
+            намеренно — диагностика должна быть доступна.
+
+      - alert: SynthMetricsMissing
+        expr: absent(synth_build_info)
+        for: 10m
+        labels:
+          severity: warning
+          component: synth
+        annotations:
+          summary: "Метрики Synth не поступают в Prometheus"
+          description: >-
+            Ни одной серии synth_build_info за 10 минут: /metrics выключен
+            (metrics.enabled), скрейп не настроен, токен не передан
+            (401) или не совпадает job/namespace в ServiceMonitor.
+
+  - name: synth-http
+    rules:
+      - alert: High5xxRate
+        expr: >-
+          sum(rate(synth_http_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(synth_http_requests_total[5m])), 1e-9) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+          component: http
+        annotations:
+          summary: "Доля 5xx выше 1% ({{ $value | humanizePercentage }})"
+          description: >-
+            Более 1% HTTP-ответов — 5xx за 5 минут. Смотрите логи backend,
+            synth_llm_requests_total{outcome="error"} и состояние хранилища.
+
+      - alert: High5xxRateCritical
+        expr: >-
+          sum(rate(synth_http_requests_total{status=~"5.."}[5m]))
+          / clamp_min(sum(rate(synth_http_requests_total[5m])), 1e-9) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "Доля 5xx выше 5% ({{ $value | humanizePercentage }})"
+          description: >-
+            Более 5% ответов — 5xx. Проверьте /ready, БД (StorageDegraded),
+            LLM-провайдеров (LLMProviderDown) и последний деплой.
+
+      - alert: HighLatencyP95
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le) (rate(synth_http_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: http
+        annotations:
+          summary: "p95 HTTP-латентности выше 1 с ({{ $value | humanizeDuration }})"
+          description: >-
+            p95 по всем маршрутам держится выше 1 с. SSE/WS в гистограмму не
+            входят — виновник в обычных API-запросах или LLM-вызовах
+            (см. synth_llm_duration_seconds).
+
+      - alert: HighLatencyP95Critical
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le) (rate(synth_http_request_duration_seconds_bucket[5m]))) > 3
+        for: 5m
+        labels:
+          severity: critical
+          component: http
+        annotations:
+          summary: "p95 HTTP-латентности выше 3 с ({{ $value | humanizeDuration }})"
+          description: >-
+            p95 выше 3 с — деградация обслуживания. Проверьте очередь
+            (synth_queue_pending), event loop lag и доступность провайдеров.
+
+      - alert: QueueBacklogGrowing
+        expr: synth_queue_pending > 20 and deriv(synth_queue_pending[15m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+          component: queue
+        annotations:
+          summary: "Очередь Synth растёт ({{ $value }} сообщений)"
+          description: >-
+            synth_queue_pending выше 20 и устойчиво растёт 10 минут: обработчик
+            не успевает за потоком. Проверьте зависшие ходы (synth_active_streams),
+            ошибки LLM и лимиты провайдеров.
+
+      - alert: QueueBacklogCritical
+        expr: synth_queue_pending > 200
+        for: 5m
+        labels:
+          severity: critical
+          component: queue
+        annotations:
+          summary: "Критический backlog очереди ({{ $value }})"
+          description: >-
+            Более 200 сообщений в очереди 5 минут. Пользователи ждут ответа;
+            проверьте процессор очереди, LLM-провайдеров и память процесса.
+
+  - name: synth-llm
+    rules:
+      - alert: LLMErrorRate
+        expr: >-
+          sum(rate(synth_llm_requests_total{outcome="error"}[5m]))
+          / clamp_min(sum(rate(synth_llm_requests_total[5m])), 1e-9) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: llm
+        annotations:
+          summary: "Доля ошибок LLM выше 10% ({{ $value | humanizePercentage }})"
+          description: >-
+            Более 10% вызовов LLM завершаются ошибкой. Смотрите разбивку по
+            provider/model в дашборде Synth — LLM и статусы в журнале LLM-Gateway
+            (ADR-036).
+
+      - alert: LLMProviderDown
+        expr: >-
+          sum by (provider) (rate(synth_llm_requests_total{outcome="error"}[5m]))
+          / clamp_min(sum by (provider) (rate(synth_llm_requests_total[5m])), 1e-9) > 0.9
+        for: 5m
+        labels:
+          severity: critical
+          component: llm
+        annotations:
+          summary: "Провайдер LLM {{ $labels.provider }} фактически недоступен"
+          description: >-
+            Более 90% вызовов к провайдеру {{ $labels.provider }} — ошибки.
+            Проверьте сеть/egress (ADR-099), ключ API и статус вендора;
+            переключите модель/провайдера или включите эскалацию.
+
+  - name: synth-storage
+    rules:
+      - alert: StorageDegraded
+        expr: synth_storage_degraded == 1
+        for: 1m
+        labels:
+          severity: critical
+          component: storage
+        annotations:
+          summary: "Хранилище Synth в деградированном режиме"
+          description: >-
+            Инстанс работает на файловом фоллбеке read-only (ADR-098), доступен
+            только ADMIN. Проверьте PostgreSQL (dsn/сеть/права), логи старта;
+            авто-возврата нет — нужен рестарт после устранения причины.
+
+      - alert: SynthDatadirGrowthFast
+        # DiskSpaceLow без kubelet: рост {dataDir} по метрике (ADR-094 п. 6).
+        # Порог ~1 ГиБ/сутки — стартовый, подбирайте под размер PVC.
+        expr: sum(deriv(synth_datadir_bytes[6h])) * 86400 > 1e9
+        for: 1h
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Каталог данных Synth растёт быстрее 1 ГиБ/сутки"
+          description: >-
+            Экстраполяция роста synth_datadir_bytes за 6 часов превышает
+            ~1 ГиБ/сутки. Проверьте объём сессий/сообщений, журнал событий,
+            workspace'ы и свободное место PVC (kubelet_volume_stats_available_bytes).
+
+      - alert: SynthDatadirLarge
+        # Абсолютный порог без знания размера PVC — консервативный (50 ГиБ).
+        # Для 10Gi-дефолта чарта порог нужно снизить в своём values/правилах.
+        expr: sum(synth_datadir_bytes) > 50e9
+        for: 15m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Каталог данных Synth больше 50 ГиБ"
+          description: >-
+            synth_datadir_bytes превысил 50 ГиБ — сверьтесь с ёмкостью PVC
+            (backend.persistence.size) и настройте retention (события, jobs).
+
+  - name: synth-events-ops
+    rules:
+      - alert: EventJournalGrowth
+        expr: deriv(synth_event_journal_size[6h]) * 86400 > 10000
+        for: 1h
+        labels:
+          severity: warning
+          component: events
+        annotations:
+          summary: "Журнал событий растёт быстрее 10k записей/сутки"
+          description: >-
+            synth_event_journal_size растёт быстрее 10 000 записей в сутки.
+            Проверьте поток ingest по source и retention
+            (events.journalRetentionDays); иначе журнал займёт {dataDir}.
+
+      - alert: WebhookFailures
+        expr: >-
+          sum(rate(synth_webhook_deliveries_total{outcome="error"}[10m]))
+          / clamp_min(sum(rate(synth_webhook_deliveries_total[10m])), 1e-9) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          component: webhooks
+        annotations:
+          summary: "Более 20% доставок webhooks неуспешны ({{ $value | humanizePercentage }})"
+          description: >-
+            Проверьте доступность получателя, подпись HMAC и SSRF-политику;
+            рост synth_webhook_retries_total подтверждает повторные попытки.
+            После исчерпания попыток доставка теряется (журнал deliveries).
+
+      - alert: SchedulerDrift
+        expr: synth_scheduler_drift_seconds > 60
+        for: 10m
+        labels:
+          severity: warning
+          component: scheduler
+        annotations:
+          summary: "Шедулер Synth отстаёт на {{ $value | humanizeDuration }}"
+          description: >-
+            Запуск задач отстаёт от расписания больше чем на минуту: процесс
+            перегружен, event loop блокируется или задача длится дольше
+            интервала. Проверьте synth_scheduler_jobs_total{outcome="error"}.
+
+      - alert: SchedulerDriftCritical
+        expr: synth_scheduler_drift_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+          component: scheduler
+        annotations:
+          summary: "Шедулер Synth отстаёт на {{ $value | humanizeDuration }}"
+          description: >-
+            Дрейф больше 5 минут: расписания фактически не соблюдаются.
+            Проверьте лидерство (leader election), CPU/память и зависшие задачи.
+
+  - name: synth-self
+    rules:
+      - alert: MetricsScrapeSlow
+        expr: synth_metrics_scrape_duration_seconds > 1
+        for: 10m
+        labels:
+          severity: warning
+          component: metrics
+        annotations:
+          summary: "Рендер /metrics дольше 1 с ({{ $value | humanizeDuration }})"
+          description: >-
+            Сборка экспозиции дорогая: вероятна высокая кардинальность
+            (проверьте synth_metrics_series) — нарушение контракта лейблов
+            (ADR-094 п. 5) или слишком много route/store.

@@ -1,0 +1,13 @@
+# Опциональный override: включает /metrics у контейнера `synth` из корневого
+# docker-compose.yml, НЕ меняя сам файл (ADR-094).
+#
+#   docker compose -f docker-compose.yml -f deploy/observability/synth-metrics.override.yml up -d
+#
+# Compose мержит `environment` по ключам: остальные env из основного файла
+# сохраняются. Токен здесь не задаётся — dev-стенд скрейпит /metrics без auth;
+# если включили SYNTH_METRICS_TOKEN, добавьте его так же в environment и в
+# scrape_config Prometheus (authorization Bearer).
+services:
+  synth:
+    environment:
+      - SYNTH_METRICS_ENABLED=true

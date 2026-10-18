@@ -1,0 +1,16 @@
+apiVersion: 1
+
+# Провайдер дашбордов: JSON монтируются из charts/synth/files/dashboards
+# (один источник истины с Helm-ConfigMap для sidecar, ADR-094).
+providers:
+  - name: synth
+    orgId: 1
+    folder: Synth
+    type: file
+    disableDeletion: false
+    # Перечитывать файлы: правки JSON подхватываются без рестарта Grafana.
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

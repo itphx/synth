@@ -1,0 +1,96 @@
+# Dev-стенд наблюдаемости Synth (ADR-094): Prometheus + Grafana.
+#
+# Основной docker-compose.yml НЕ меняется: стенд цепляется к его default-сети
+# (external) и скрейпит контейнер `synth` по имени сервиса.
+#
+#   # 1) основной стек (создаёт сеть synth_default)
+#   docker compose up -d
+#   # 2) стенд
+#   docker compose -f docker-compose.observability.yml up -d
+#
+# /metrics в Synth выключен по умолчанию — включите его одним из способов:
+#   a) контейнер:  docker compose -f docker-compose.yml \
+#        -f deploy/observability/synth-metrics.override.yml up -d
+#   b) dev.sh:     SYNTH_METRICS_ENABLED=true ./scripts/dev.sh
+#
+# Prometheus :9090, Grafana :3000 (admin/admin по умолчанию; анонимный просмотр включён).
+# Подробности и переменные — deploy/observability/README.md.
+name: synth-observability
+
+services:
+  prometheus:
+    # Версии пиновены (принцип «версии пинованы»); обновляйте осознанно.
+    image: prom/prometheus:v2.55.1
+    container_name: synth-prometheus
+    # Prometheus не умеет env-подстановку в конфиг: рендерим шаблон sed'ом
+    # (busybox в образе) и запускаем бинарь.
+    entrypoint:
+      - /bin/sh
+      - -c
+    command:
+      - |
+        set -eu
+        sed \
+          -e "s|__SYNTH_CORE_TARGET__|$${SYNTH_METRICS_CORE_TARGET}|g" \
+          -e "s|__SYNTH_BACKEND_TARGET__|$${SYNTH_METRICS_BACKEND_TARGET}|g" \
+          /etc/prometheus/prometheus.yml.tmpl > /etc/prometheus/prometheus.yml
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time="$${SYNTH_PROMETHEUS_RETENTION:-15d}" \
+          --web.enable-lifecycle
+    environment:
+      # Цели скрейпа: контейнер core по имени сервиса и backend на хосте.
+      - SYNTH_METRICS_CORE_TARGET=${SYNTH_METRICS_CORE_TARGET:-synth:4300}
+      - SYNTH_METRICS_BACKEND_TARGET=${SYNTH_METRICS_BACKEND_TARGET:-host.docker.internal:5000}
+      - SYNTH_PROMETHEUS_RETENTION=${SYNTH_PROMETHEUS_RETENTION:-15d}
+    ports:
+      - "${SYNTH_PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml.tmpl:ro
+      - ./charts/synth/files/alerts/synth-rules.yaml:/etc/prometheus/rules/synth-rules.yaml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # backend из dev.sh слушает на хосте (:5000) — нужен host-gateway.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - synth
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: synth-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${SYNTH_GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${SYNTH_GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      # Анонимный просмотр: удобно для dev; отключите в общем окружении.
+      - GF_AUTH_ANONYMOUS_ENABLED=${SYNTH_GRAFANA_ANONYMOUS:-true}
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/var/lib/grafana/dashboards/synth-overview.json
+    ports:
+      - "${SYNTH_GRAFANA_PORT:-3000}:3000"
+    volumes:
+      # Provisioning-каталоги (datasources + dashboards) монтируются целиком:
+      # отсутствующие подкаталоги (plugins/alerting) не создают ошибок в логах.
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Те же JSON, что поставляет чарт: один источник истины для дашбордов.
+      - ./charts/synth/files/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - synth
+
+networks:
+  # Default-сеть основного docker-compose.yml: <каталог репозитория>_default.
+  # Если у вас другой project name — задайте SYNTH_DOCKER_NETWORK
+  # (посмотреть: docker network ls).
+  synth:
+    name: ${SYNTH_DOCKER_NETWORK:-synth_default}
+    external: true
+
+volumes:
+  prometheus-data:
+  grafana-data:

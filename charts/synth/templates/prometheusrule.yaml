@@ -1,0 +1,24 @@
+{{- /* ADR-094: Prometheus-правила алертов.
+       Источник — files/alerts/synth-rules.yaml в формате plain Prometheus
+       (groups) — тот же файл подключается к vanilla Prometheus напрямую
+       (rule_files). Здесь он оборачивается в PrometheusRule (operator).
+       ВАЖНО: содержимое файла НЕ шаблонизируется Helm'ом (`.Files.Get`
+       вставляет строку как есть) — `{{ $labels.* }}` в аннотациях остаются
+       Prometheus-шаблонами. */ -}}
+{{- if .Values.alerts.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "synth.name" . }}-alerts
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    {{- with .Values.alerts.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.alerts.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- .Files.Get "files/alerts/synth-rules.yaml" | nindent 2 }}
+{{- end }}

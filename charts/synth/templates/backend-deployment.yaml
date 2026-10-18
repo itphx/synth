@@ -5,7 +5,7 @@
 {{- $providerKeys = append $providerKeys .name -}}
 {{- end -}}
 {{- end -}}
-{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode -}}
+{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode .Values.metrics.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,6 +23,14 @@ spec:
     metadata:
       labels:
         {{- include "synth.backend.selectorLabels" . | nindent 8 }}
+      {{- /* ADR-094: vanilla Prometheus без CRD — скрейп по аннотациям.
+             Включать вместе с metrics.enabled (иначе 404 → up==0). */}}
+      {{- if .Values.metrics.prometheus.annotations }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.backend.service.targetPort | quote }}
+        prometheus.io/path: "/metrics"
+      {{- end }}
     spec:
       {{- with .Values.backend.imagePullSecrets }}
       imagePullSecrets:
@@ -77,6 +85,20 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.installerKey.existingSecret | default .Values.installerKey.secretName }}
                   key: {{ .Values.installerKey.bootstrapKey }}
+            {{- end }}
+            {{- /* ADR-094: /metrics включается явно; токен — опционально из
+                   Secret (optional: true — отсутствие ключа не мешает старту). */}}
+            {{- if .Values.metrics.enabled }}
+            - name: SYNTH_METRICS_ENABLED
+              value: "true"
+            {{- if .Values.metrics.existingSecret }}
+            - name: SYNTH_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.metrics.existingSecret }}
+                  key: {{ .Values.metrics.tokenKey | default "SYNTH_METRICS_TOKEN" }}
+                  optional: true
+            {{- end }}
             {{- end }}
             {{- /* PROP-032: пароль БД — только env из Secret (в config.yaml не
                    попадает, инвариант 13). Пустой/отсутствующий ключ → core
