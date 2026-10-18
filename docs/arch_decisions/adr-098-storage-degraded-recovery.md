@@ -1,8 +1,8 @@
 # ADR-098: Деградированный режим и восстановление хранилища
 
-> **Статус:** ⚠️ Частично — реализовано: матрица fail-closed/деградация, файловый `fallbackDir`, ADMIN-only + строгий read-only, `/health` → `degraded` + `GET /api/v2/storage/status`, встроенный скилл `synth-storage-recovery`, диагностика (`doctor`); остаток: авто-возврат к БД без рестарта, `/ready` и DB-aware probes ([PROP-094](./prop-094-observability-metrics.md))
+> **Статус:** ⚠️ Частично — реализовано: матрица fail-closed/деградация, файловый `fallbackDir`, ADMIN-only + строгий read-only, `/health` → `degraded` + `GET /api/v2/storage/status`, встроенный скилл `synth-storage-recovery`, диагностика (`doctor`); остаток: авто-возврат к БД без рестарта, `/ready` и DB-aware probes ([ADR-094](./adr-094-observability-metrics.md))
 > **Дата:** 2026-10-16
-> **Связано:** [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-096](./adr-096-storage-layer.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [PROP-094](./prop-094-observability-metrics.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md), конфиг — [docs/CONFIGURATION.md](../CONFIGURATION.md).
+> **Связано:** [PROP-032](./prop-032-history-storage-postgresql.md), [ADR-096](./adr-096-storage-layer.md), [ADR-097](./adr-097-storage-provider-class.md), [ADR-091](./adr-091-backup-restore-transfer.md), [ADR-092](./adr-092-instance-lifecycle-maintenance.md), [ADR-094](./adr-094-observability-metrics.md); процедуры — [docs/MAINTENANCE.md](../MAINTENANCE.md), конфиг — [docs/CONFIGURATION.md](../CONFIGURATION.md).
 
 ## Контекст
 
@@ -50,7 +50,7 @@
 - (+) Понятный контракт: диагностируемый read-only вместо падения или молчаливой потери данных; матрица проверяема тестами.
 - (+) Единый guard и диагностический эндпоинт для standalone и managed.
 - (−) Деградация — «полурабочий» режим (только чтение, только администраторы) → нужна дисциплина «устрани причину и перезапусти».
-- (−) Авто-восстановление отсутствует; `/ready`-проба и автоматические алерты — отдельный шаг ([PROP-094](./prop-094-observability-metrics.md)).
+- (−) Авто-восстановление отсутствует; `/ready`-проба и автоматические алерты — отдельный шаг ([ADR-094](./adr-094-observability-metrics.md)).
 
 ## Статус в коде
 

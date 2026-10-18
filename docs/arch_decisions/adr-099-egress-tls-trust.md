@@ -29,7 +29,7 @@
 > runtime-reload прокси/TLS без рестарта, CA к цели через SOCKS5, per-host CA и несколько
 > default-клиентских сертов, пиннинг проверенного
 > адреса ([PROP-100](./prop-100-ssrf-dns-rebinding.md)), метрики/наблюдаемость
-> ([PROP-094](./prop-094-observability-metrics.md)), перепроверка покрытия встроенного `fetch` на Node 22.
+> ([ADR-094](./adr-094-observability-metrics.md)), перепроверка покрытия встроенного `fetch` на Node 22.
 > Политика — **не граница безопасности**, когда доступны shell, `stdio`-MCP или внешние движки (см.
 > «Последствия»).
 > **Дата:** 2026-10-16 (адресная политика — 2026-10-17; прокси D1+D2 — 2026-10-17; runtime-UI — 2026-10-18;
@@ -56,7 +56,7 @@
 > **Связано:** [PROP-088](./prop-088-http-proxy.md) (заменён/надстроен), [PROP-100](./prop-100-ssrf-dns-rebinding.md),
 > [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
 > (webhooks), [ADR-041](./adr-041-llm-error-taxonomy.md) (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md),
-> [PROP-094](./prop-094-observability-metrics.md), [ADR-023](./adr-023-configuration.md),
+> [ADR-094](./adr-094-observability-metrics.md), [ADR-023](./adr-023-configuration.md),
 > [ADR-076](./adr-076-git-repo-registry-ssh.md), [ADR-078](./adr-078-runtime-dependency-availability.md),
 > [ADR-096](./adr-096-storage-layer.md), [PROP-032](./prop-032-history-storage-postgresql.md);
 > конфиг — [docs/CONFIGURATION.md](../CONFIGURATION.md).
@@ -589,7 +589,7 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `security.tls` к **цели** через SOCKS5 (best-effort, п. 26); per-host CA и несколько default-клиентских
   сертов (одна CA-бандл-модель на цель; per-profile TLS — только **к прокси**, п. 27); пиннинг адреса
   (TOCTOU), в т.ч. для direct/`noProxy`-хостов —
-  [PROP-100](./prop-100-ssrf-dns-rebinding.md); метрики — [PROP-094](./prop-094-observability-metrics.md);
+  [PROP-100](./prop-100-ssrf-dns-rebinding.md); метрики — [ADR-094](./adr-094-observability-metrics.md);
   перепроверка покрытия встроенного `fetch` на Node 22 в CI.
 
 ## История

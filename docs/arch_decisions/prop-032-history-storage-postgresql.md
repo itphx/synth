@@ -135,7 +135,7 @@ managed-контура — не правка этого предложения, 
 ### Остаток (не реализовано)
 
 1. **CA/TLS-настройки** соединения сверх `storage.postgres.ssl` (кастомные CA, mTLS/клиентские сертификаты).
-2. **Авто-возврат к БД без рестарта** и DB-aware `/ready`-проба/метрики ([ADR-098](./adr-098-storage-degraded-recovery.md), [PROP-094](./prop-094-observability-metrics.md)).
+2. **Авто-возврат к БД без рестарта** и DB-aware `/ready`-проба/метрики ([ADR-098](./adr-098-storage-degraded-recovery.md), [ADR-094](./adr-094-observability-metrics.md)).
 3. **Документы**: эксплуатационный runbook БД-backend'а готов ([docs/MAINTENANCE.md](../MAINTENANCE.md)); портал `docs.synth.itphx.ru` — отдельно.
 4. **`kind: "storage"` в манифесте `synth.pack`** и установка сторонних драйверов — остаток [ADR-097](./adr-097-storage-provider-class.md).
 

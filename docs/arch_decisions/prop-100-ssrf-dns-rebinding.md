@@ -13,7 +13,7 @@
 > **Связано:** [ADR-099](./adr-099-egress-tls-trust.md) (единый egress-слой: адресная политика, аудит,
 > журнал), [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
 > (webhooks), [PROP-088](./prop-088-http-proxy.md) (прокси-остаток), [ADR-041](./adr-041-llm-error-taxonomy.md)
-> (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md), [PROP-094](./prop-094-observability-metrics.md)
+> (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md), [ADR-094](./adr-094-observability-metrics.md)
 > (детект ребиндинга как метрика), [AUDIT-CHECKLIST](../security/AUDIT-CHECKLIST.md) §3 п.4 «SSRF / egress».
 
 ## Контекст
@@ -113,7 +113,7 @@
 3. **Единая точка.** Один модуль-хелпер (~`engine/net/pinned-fetch.ts`) — все защищённые пути ходят только через него (принцип «новых каналов не плодить»); MCP-SDK получает его через `fetch`-опцию.
 4. **Сопутствующее — выполнено 2026-10-17:** DNS-проверка в `validateRemoteUrl` (дефект 1), `redirect: 'manual'` + per-hop для webhooks (дефект 2), policy-проверка `origin`/`resolved` в `fetch-icon` (дефект 3) — единым guard'ом `engine/net/egress-guard.ts`.
 5. **Политика и конфиг не меняются по умолчанию:** пиннинг — безопасное поведение без флага (обратной совместимости не ломает). Флаг (если понадобится) — в `egress.*` (см. открытые вопросы).
-6. **Наблюдаемость:** фиксировать в логе случай, когда резолв по тому же имени дал другой ответ, чем предыдущий (детектор попытки ребиндинга); в перспективе — счётчик в [PROP-094](./prop-094-observability-metrics.md); базовый след уже есть в журнале `audit/egress.jsonl` ([ADR-099](./adr-099-egress-tls-trust.md) п. 14).
+6. **Наблюдаемость:** фиксировать в логе случай, когда резолв по тому же имени дал другой ответ, чем предыдущий (детектор попытки ребиндинга); в перспективе — счётчик в [ADR-094](./adr-094-observability-metrics.md); базовый след уже есть в журнале `audit/egress.jsonl` ([ADR-099](./adr-099-egress-tls-trust.md) п. 14).
 
 ## Влияние на подсистемы
 
@@ -167,7 +167,7 @@
 7. **Детект и лимиты:** считать ли flip-flop инцидентом (лог/событие/алерт) и не блокировать ли имя при повторных попытках?
 8. **Наблюдаемость:** достаточно ли журнала `audit/egress.jsonl` ([ADR-099](./adr-099-egress-tls-trust.md)
    п. 14 — `status`/`reason`/`matchedRule`) для разбора, или нужна отдельная метрика/алерт в
-   [PROP-094](./prop-094-observability-metrics.md) (счётчик flip-flop)?
+   [ADR-094](./adr-094-observability-metrics.md) (счётчик flip-flop)?
 
 ## Связи
 
@@ -176,7 +176,7 @@
 - [ADR-052](./adr-052-public-api-platform.md) этап II — webhooks, политика egress цели доставки (`egress.webhooks`).
 - [PROP-088](./prop-088-http-proxy.md) — прокси реализован (D1+D2); доменная аутентификация (NTLM/Negotiate/Kerberos) — вне scope приложения (egress-шлюз, ADR-099 п. 25); в proxied-режиме адресную проверку выполняет прокси.
 - [ADR-041](./adr-041-llm-error-taxonomy.md) — ключи ошибок отказа политики.
-- [PROP-094](./prop-094-observability-metrics.md) — детект ребиндинга как метрика/алерт.
+- [ADR-094](./adr-094-observability-metrics.md) — детект ребиндинга как метрика/алерт.
 - [AUDIT-CHECKLIST](../security/AUDIT-CHECKLIST.md) §3 п.4 «SSRF / egress», [docs/security/README.md](../security/README.md) — класс уязвимостей и запись аудита.
 
 ## История
