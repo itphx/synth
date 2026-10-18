@@ -20,6 +20,7 @@ describe('defaultConfig', () => {
     expect(defaultConfig).toHaveProperty('events');
     expect(defaultConfig).toHaveProperty('scheduler');
     expect(defaultConfig).toHaveProperty('decision');
+    expect(defaultConfig).toHaveProperty('metrics');
   });
 
   it('llm.defaultProvider и llm.defaultModel — пустые строки (зона админа)', () => {
@@ -177,5 +178,9 @@ describe('defaultConfig', () => {
     expect(defaultConfig.analytics).toEqual({
       retentionDays: 400,
     });
+  });
+
+  it('metrics по умолчанию выключены (ADR-094: /metrics → 404)', () => {
+    expect(defaultConfig.metrics).toEqual({ enabled: false });
   });
 });

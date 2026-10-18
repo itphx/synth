@@ -20,12 +20,16 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { createMiddleware } from 'hono/factory';
-import { nowISO, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
   applyBootstrapServiceKeys,
-  getProcessStartedAt,
+  createHealthRoutes,
+  createHttpMetricsMiddleware,
+  createMetricsRoutes,
   KeyRateLimiter,
   getServiceCredential,
+  MetricsRegistry,
+  registerProcessMetrics,
+  resolveMetricsToken,
 } from '@itphx/synth-core';
 import type {
   EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository,
@@ -33,7 +37,7 @@ import type {
   EventJournalRepository, EventIngress, ScheduleRepository, SchedulerService,
   WebhookRepository, WebhookService, StorageContext,
 } from '@itphx/synth-core';
-import { storageHealthFields, createStorageDegradedGuard, createStorageStatusRoutes } from '@itphx/synth-core/server/storage-degraded.js';
+import { createStorageDegradedGuard, createStorageStatusRoutes } from '@itphx/synth-core/server/storage-degraded.js';
 import { loadBackendConfig } from './lib/app-config.js';
 import type { BackendConfig } from './lib/app-config.js';
 import { resolveCorsOrigin } from './lib/cors.js';
@@ -74,6 +78,10 @@ export interface BackendAppHandle {
   orchestrator: ChatOrchestrator;
   queueManager: QueueProcessorManager;
   settingsStore: SettingsRepository;
+  /** ADR-094: реестр метрик (HTTP/процесс; доменные коллекторы — отдельная задача). */
+  metrics: MetricsRegistry;
+  /** ADR-094: остановка процессных метрик (event-loop-монитор) на shutdown. */
+  stopMetrics: () => void;
   // ADR-089: ядро маршрутизации событий и единый funnel создания сессий.
   eventRouter: EventRouter;
   requestSessionService: RequestSessionService;
@@ -141,21 +149,36 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const app = new Hono();
 
     app.use(logger());
+
+    // ADR-094: метрики — реестр до middleware; при `metrics.enabled=false`
+    // ничего не собираем, `/metrics` отдаёт 404 (middleware не ставим).
+    const metricsEnabled = backendConfig.synth.metrics.enabled;
+    const metrics = new MetricsRegistry();
+    const stopProcessMetrics = metricsEnabled ? registerProcessMetrics(metrics) : null;
+    if (metricsEnabled) app.use('*', createHttpMetricsMiddleware(metrics));
+
     // CORS настраивается после загрузки конфига
 
     // Health (без auth). PROP-032 (W5): при деградации хранилища status='degraded'
     // + блок storage (аддитивно к {status, version, time}). `degradedInfo`
     // заполняется после сборки контекста хранения ниже (до первого запроса).
+    // ADR-094: `/ready` — readiness (200 и при деградации, 503 — только не готов).
     let degradedInfo: StorageContext['degraded'] | null = null;
-    const health = () => ({
-      ...storageHealthFields(degradedInfo),
-      version: SYNTH_VERSION,
-      // Restart: ISO старта процесса — UI сравнивает до/после рестарта.
-      startedAt: getProcessStartedAt(),
-      time: nowISO(),
-    });
-    app.get('/health', (c) => c.json(health()));
-    app.get('/api/v2/health', (c) => c.json(health()));
+    let initialized = false;
+    app.route('/', createHealthRoutes({
+      getStorageDegraded: () => degradedInfo ?? null,
+      getReadiness: () => ({
+        ready: initialized,
+        storage: degradedInfo ? 'degraded' : 'ok',
+      }),
+    }));
+
+    // ADR-094: `/metrics` — до auth (скрейп по сети pod'а, опциональный bearer).
+    app.route('/', createMetricsRoutes({
+      registry: metrics,
+      enabled: metricsEnabled,
+      token: metricsEnabled ? resolveMetricsToken(backendConfig.dataDir) : undefined,
+    }));
 
     // Динамический CORS origin (fail-closed): явный ORIGIN через env `SYNTH_CORS_ORIGIN`;
     // иначе явный dev-флаг `SYNTH_CORS_ALLOW_ALL=true` (отражать любой origin);
@@ -235,7 +258,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // Зависимости (stores/managers/оркестратор/событийное ядро/шедулер/webhooks).
     // Тот же контекст хранения, что собран до `auth`.
-    const deps = await createBackendDeps(backendConfig, storage);
+    const deps = await createBackendDeps(backendConfig, storage, metrics);
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, deps.profilesStore, deps.dataDir, deps.defaultsStore));
@@ -281,7 +304,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       processMessage: deps.processMessage,
       orchestrator: deps.orchestrator,
       defaultPort: backendConfig.port,
+      // ADR-094: активные WS-соединения — в streams_active (если метрики включены).
+      metrics: metricsEnabled ? metrics : undefined,
     });
+
+    // Композиция завершена — readiness переключается в ready (ADR-094).
+    initialized = true;
 
     return {
       app,
@@ -296,6 +324,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       orchestrator: deps.orchestrator,
       queueManager: deps.queueManager,
       settingsStore: deps.settingsStore,
+      // ADR-094: реестр метрик и остановка процессных коллекторов.
+      metrics,
+      stopMetrics: () => stopProcessMetrics?.stop(),
       // ADR-089: ядро событий (понадобится на этапах 5–6).
       eventRouter: deps.eventRouter,
       requestSessionService: deps.requestSessionService,

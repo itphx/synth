@@ -56,7 +56,10 @@ export function createStandaloneHttpServer(opts: StandaloneHttpServerOptions): S
         && !url.pathname.startsWith('/auth/')
         && !url.pathname.startsWith('/admin/')
         && !url.pathname.startsWith('/ws')
-        && !url.pathname.startsWith('/health')) {
+        && !url.pathname.startsWith('/health')
+        // ADR-094: `/metrics` и `/ready` — не SPA-статика (иначе index.html).
+        && !url.pathname.startsWith('/metrics')
+        && !url.pathname.startsWith('/ready')) {
         const staticResp = await staticHandler(webReq);
         if (staticResp) {
           const headers = Object.fromEntries(staticResp.headers.entries());

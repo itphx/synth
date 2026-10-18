@@ -42,7 +42,7 @@ import {
   initTlsTrust,
   applyStartupProxyConfig,
 } from '@itphx/synth-core';
-import type { DecisionAgentCandidate, EventsRuntimeSettings, StorageContext } from '@itphx/synth-core';
+import type { DecisionAgentCandidate, EventsRuntimeSettings, MetricsRegistry, StorageContext } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
 import { EventHub } from '../events/hub.js';
 import { seedDebugTestUsers } from './bootstrap.js';
@@ -102,6 +102,7 @@ export async function createBackendStorage(config: BackendConfig): Promise<Stora
 export async function createBackendDeps(
   config: BackendConfig,
   storage?: StorageContext,
+  metrics?: MetricsRegistry,
 ) {
   // Хранилища
   const dataDir = config.dataDir;
@@ -733,6 +734,8 @@ export async function createBackendDeps(
 
   return {
     dataDir,
+    // ADR-094: реестр метрик (доменные коллекторы подключаются отдельной задачей).
+    metrics,
     projectStore,
     sessionManager,
     // ADR-089: остановка sweeper'а авто-архивации ephemeral-сессий.

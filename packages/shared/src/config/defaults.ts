@@ -169,6 +169,10 @@ export const defaultConfig: SynthConfig = {
     // PROP-102: срок хранения суточных роллапов — 400 дней (<= 0 — без ограничения).
     retentionDays: 400,
   },
+  metrics: {
+    // ADR-094: экспорт Prometheus-метрик выключен по умолчанию (`GET /metrics` → 404).
+    enabled: false,
+  },
   egress: {
     // Политика встроенных инструментов: deny приватных/служебных диапазонов.
     tools: {

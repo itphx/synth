@@ -36,6 +36,7 @@ const stopHandle = (b: BackendAppHandle): void => {
   b.stopEventJournalPruner();
   b.stopWebhookService();
   b.stopWebhookDeliveryPruner();
+  b.stopMetrics();
 };
 
 describe('backend: контракт монтирования роутов (mount-routes)', () => {
@@ -44,7 +45,13 @@ describe('backend: контракт монтирования роутов (mount
 
   beforeAll(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'synth-backend-mount-'));
-    backend = await createBackendApp({ dataDir, authDebug: true });
+    backend = await createBackendApp({
+      dataDir,
+      authDebug: true,
+      // ADR-094: фиксируем выключенные метрики (иначе внешний env инстанса
+      // сделал бы проверку «серии не создаются» недетерминированной).
+      env: { SYNTH_METRICS_ENABLED: 'false' },
+    });
   });
 
   afterAll(async () => {
@@ -73,6 +80,9 @@ describe('backend: контракт монтирования роутов (mount
     const expected = [
       'GET /health',
       'GET /api/v2/health',
+      // ADR-094: readiness отделён от liveness, `/metrics` — экспорт Prometheus.
+      'GET /ready',
+      'GET /metrics',
       'GET /api/v2/openapi.json',
       // sessions — core-фабрика с prefix-guard'ом доступа
       'GET /api/v2/sessions',
@@ -129,6 +139,7 @@ describe('backend: контракт монтирования роутов (mount
     for (const path of [
       '/health',
       '/api/v2/health',
+      '/ready',
       '/api/v2/i18n/current',
       '/api/v2/i18n/translations/ru',
       '/api/v2/i18n/translations/en',
@@ -137,6 +148,20 @@ describe('backend: контракт монтирования роутов (mount
       const res = await req(path);
       expect(res.status, `публичный роут ${path}`).toBe(200);
     }
+  });
+
+  it('ADR-094: /ready публичный, /metrics при metrics.enabled=false → 404 и серии не создаются', async () => {
+    const ready = await req('/ready');
+    expect(ready.status).toBe(200);
+    const readyBody = (await ready.json()) as { status: string; storage: string };
+    expect(readyBody.status).toBe('ready');
+    expect(readyBody.storage).toBe('ok');
+
+    const res = await req('/metrics');
+    expect(res.status).toBe(404);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+    // Middleware не установлен — HTTP-серии не появились от предыдущих запросов.
+    expect(backend.metrics.render().series).toBe(0);
   });
 
   // ---------------------------------------------------------------------------
@@ -522,5 +547,53 @@ describe('backend: контракт монтирования роутов (mount
   it('managed: /api/v2/fs/workspace-root → 403 FORBIDDEN даже для ADMIN', async () => {
     const res = await req('/api/v2/fs/workspace-root', {}, ADMIN);
     expect(res.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. ADR-094: включённый экспорт метрик (env SYNTH_METRICS_ENABLED)
+// ---------------------------------------------------------------------------
+
+describe('backend: /metrics при metrics.enabled=true (ADR-094)', () => {
+  let dataDir: string;
+  let backend: BackendAppHandle;
+
+  beforeAll(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'synth-backend-metrics-'));
+    backend = await createBackendApp({
+      dataDir,
+      authDebug: true,
+      env: { SYNTH_METRICS_ENABLED: 'true' },
+    });
+  });
+
+  afterAll(async () => {
+    stopHandle(backend);
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  });
+
+  it('HTTP/процессные метрики + служебные метрики скрейпа в ответе', async () => {
+    // Запрос до скрейпа — появляется HTTP-серия с шаблоном маршрута.
+    expect((await backend.app.request('/health')).status).toBe(200);
+
+    const res = await backend.app.request('/metrics');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('text/plain; version=0.0.4; charset=utf-8');
+    expect(res.headers.get('cache-control')).toBe('no-store');
+
+    const body = await res.text();
+    expect(body).toContain('# TYPE synth_http_requests_total counter');
+    expect(body).toContain('synth_http_requests_total{method="GET",route="/health",status="200"} 1');
+    expect(body).toContain('# TYPE synth_http_request_duration_seconds histogram');
+    expect(body).toContain('# TYPE synth_http_in_flight gauge');
+    expect(body).toContain('# TYPE synth_http_streams_active gauge');
+    expect(body).toContain('# HELP synth_metrics_series');
+    expect(body).toContain('# TYPE synth_metrics_scrape_duration_seconds gauge');
+    expect(body).toContain('# TYPE synth_process_uptime_seconds gauge');
+    expect(body).toContain('# TYPE synth_build_info gauge');
+
+    // `synth_metrics_series` учитывает и собственные служебные серии скрейпа.
+    expect(body).toMatch(/synth_metrics_series \d+/);
+    expect(body).not.toContain('synth_metrics_series 0');
   });
 });

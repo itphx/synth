@@ -470,6 +470,21 @@ export const analyticsConfigSchema = z.object({
   retentionDays: z.number().int().default(400),
 });
 
+// --- Наблюдаемость: Prometheus-метрики (ADR-094) ---
+
+/**
+ * ADR-094: конфигурация экспорта метрик.
+ * - `enabled` — включает `GET /metrics` и сбор HTTP/процессных метрик
+ *   (по умолчанию выключено — контракт «эндпоинта нет, пока не включили»).
+ *
+ * Bearer-токен в конфиге **не хранится** (инвариант 13): env
+ * `SYNTH_METRICS_TOKEN` либо файл `{dataDir}/secrets/metrics-token`.
+ * Имя env совпадает с Helm-чартом (`SYNTH_METRICS_ENABLED`).
+ */
+export const metricsConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+});
+
 // --- Webhooks (ADR-052, этап II) ---
 
 /**
@@ -931,6 +946,7 @@ export const synthConfigSchema = z.object({
   scheduler: schedulerConfigSchema.default({}),
   decision: decisionConfigSchema.default({}),
   analytics: analyticsConfigSchema.default({}),
+  metrics: metricsConfigSchema.default({}),
   egress: egressConfigSchema.default({}),
   webhooks: webhooksConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
@@ -968,6 +984,8 @@ export type EventsConfig = z.infer<typeof eventsConfigSchema>;
 export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
 export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
 export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
+/** ADR-094: секция `metrics` (`enabled`). */
+export type MetricsConfig = z.infer<typeof metricsConfigSchema>;
 export type WebhooksConfig = z.infer<typeof webhooksConfigSchema>;
 export type EgressPolicyConfig = z.infer<typeof egressPolicySchema>;
 export type WebhooksEgressPolicyConfig = z.infer<typeof webhooksEgressPolicySchema>;

@@ -16,6 +16,13 @@ import type { StorageBackendKind } from '../index.js';
 import { createLocalAuth } from '../auth/local.js';
 import { RemoteConnection } from '../remote/connection.js';
 import { createHealthRoutes } from './routes/health.js';
+import { createMetricsRoutes } from './routes/metrics.js';
+import {
+  createHttpMetricsMiddleware,
+  MetricsRegistry,
+  registerProcessMetrics,
+  resolveMetricsToken,
+} from '../metrics/index.js';
 import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createRemoteProxyMiddleware } from './proxy.js';
@@ -116,6 +123,8 @@ export interface StandaloneConfig {
   decisionConfig?: SynthConfig['decision'];
   /** PROP-102: конфигурация аналитики (`analytics.retentionDays`) из config.yaml. */
   analyticsConfig?: SynthConfig['analytics'];
+  /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
+  metricsConfig?: SynthConfig['metrics'];
   /** ADR-052 (этап II): конфигурация исходящих webhooks из config.yaml `webhooks`. */
   webhooksConfig?: WebhooksConfig;
   /** Egress: политика tools/webhooks и журнал внешних запросов из config.yaml. */
@@ -239,6 +248,14 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   });
 
   app.use(logger());
+
+  // ADR-094: метрики — реестр до middleware; при `metrics.enabled=false` ничего
+  // не собираем и эндпоинт отдаёт 404 (middleware не ставим вовсе).
+  const metricsEnabled = config.metricsConfig?.enabled ?? false;
+  const metrics = new MetricsRegistry();
+  const stopProcessMetrics = metricsEnabled ? registerProcessMetrics(metrics) : null;
+  if (metricsEnabled) app.use('*', createHttpMetricsMiddleware(metrics));
+
   app.use(cors({
     origin: (_origin) => _origin || '*',
     credentials: true,
@@ -263,9 +280,26 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     getModelCache: () => deps.modelCache,
   });
 
-  // Health — без auth
-  const healthRoutes = createHealthRoutes({ getStorageDegraded: () => storage.degraded ?? null });
+  // ADR-094: readiness — приложение готово, когда композиция завершена; при
+  // деградированном хранилище остаётся 200 (`storage:'degraded'`) — иначе pod
+  // выпал бы из балансировки и потерял доступ к read-only-диагностике.
+  let initialized = false;
+  // Health — без auth; `/ready` — liveness/readiness-разделение (ADR-094).
+  const healthRoutes = createHealthRoutes({
+    getStorageDegraded: () => storage.degraded ?? null,
+    getReadiness: () => ({
+      ready: initialized,
+      storage: storage.degraded ? 'degraded' : 'ok',
+    }),
+  });
   app.route('/', healthRoutes);
+
+  // ADR-094: `/metrics` — до auth (скрейп по сети pod'а, опциональный bearer).
+  app.route('/', createMetricsRoutes({
+    registry: metrics,
+    enabled: metricsEnabled,
+    token: metricsEnabled ? resolveMetricsToken(config.dataDir) : undefined,
+  }));
 
   // Hybrid status — без auth (как health): UI опрашивает статус подключения
   // к удалённому backend до аутентификации.
@@ -354,7 +388,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     onSessionMaterialized: (owner, sessionId) => {
       wsSubscriptions.subscribeToSession(owner, sessionId);
     },
-  }, storage);
+  }, storage, metrics);
 
   // Роуты API v2 (порядок монтирования — как раньше, см. mount-routes.ts).
   mountStandaloneRoutes(app, auth, {
@@ -402,6 +436,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     // ADR-089 (standalone): нормализация legacy-владельца (UUID профиля `local`)
     // при снимке подписок `connect` — иначе такие сессии не получают подписчиков.
     localOwnerResolver: deps.localOwnerResolver,
+    // ADR-094: активные WS-соединения — в streams_active (если метрики включены).
+    metrics: metricsEnabled ? metrics : undefined,
   });
 
   const port = config.port;
@@ -420,11 +456,20 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // гоняли интервалы); запускает cli.ts через handle.startConnectionWatcher().
   const connectionWatcher = hybrid.createConnectionWatcher();
 
+  // Композиция завершена — readiness переключается в ready (ADR-094).
+  initialized = true;
+
   return {
     app,
     server,
     wss,
     port,
+    // ADR-094: реестр метрик, backend хранения и состояние деградации —
+    // для диагностики/тестов и будущих доменных коллекторов.
+    metrics,
+    storageKind: storage.kind,
+    getStorageDegraded: () => storage.degraded ?? null,
+    stopMetrics: () => stopProcessMetrics?.stop(),
     connection,
     connectRemote: hybrid.connectRemote,
     connectRemoteFromSaved: hybrid.connectRemoteFromSaved,

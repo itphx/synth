@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import type { Hono } from 'hono';
 import { enqueueUserMessage, isSessionVisible } from '@itphx/synth-core';
-import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository } from '@itphx/synth-core';
+import type { EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository, MetricsRegistry } from '@itphx/synth-core';
 import { nowISO, MessageRole, generateStreamId } from '@itphx/synth-shared';
 import type { AuthKit } from '../auth/middleware.js';
 import type { EventClient, EventHub } from '../events/hub.js';
@@ -64,6 +64,11 @@ export interface BackendListenDeps {
   orchestrator: ChatOrchestrator;
   /** Порт по умолчанию (`backendConfig.port`). */
   defaultPort: number;
+  /**
+   * ADR-094: реестр метрик (задан только при `metrics.enabled`). WS-апгрейд не
+   * проходит через Hono-middleware — активные соединения учитываются здесь.
+   */
+  metrics?: MetricsRegistry;
 }
 
 /**
@@ -137,6 +142,18 @@ export function createBackendListen(deps: BackendListenDeps) {
 
         wss.handleUpgrade(request, socket, head, (ws) => {
           const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+          // ADR-094: активное WS-соединение — в streams_active (не в гистограмме).
+          const streams = deps.metrics?.gauge(
+            'synth_http_streams_active',
+            'Number of active long-lived streams (SSE/WebSocket).',
+          );
+          streams?.inc();
+          let streamReleased = false;
+          const releaseStream = (): void => {
+            if (streamReleased) return;
+            streamReleased = true;
+            streams?.dec();
+          };
 
           const client: EventClient = {
             userId: user.id,
@@ -302,10 +319,12 @@ export function createBackendListen(deps: BackendListenDeps) {
 
           ws.on('close', () => {
             console.log(`[WS /ws/events] Disconnected: client=${clientId}`);
+            releaseStream();
             eventHub.unregisterClient(client);
           });
 
           ws.on('error', () => {
+            releaseStream();
             eventHub.unregisterClient(client);
           });
         });

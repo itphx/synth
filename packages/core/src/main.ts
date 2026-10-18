@@ -204,6 +204,8 @@ program
       decisionConfig: synth.decision,
       // PROP-102: конфигурация аналитики (retention суточных роллапов).
       analyticsConfig: synth.analytics,
+      // ADR-094: конфигурация метрик (`metrics.enabled`, env SYNTH_METRICS_ENABLED).
+      metricsConfig: synth.metrics,
       // ADR-052 (этап II): конфигурация исходящих webhooks (enabled/retry).
       webhooksConfig: synth.webhooks,
       // ADR-071 §2.3.1 / egress: политика сетевого доступа (config-фоллбек).
@@ -248,6 +250,9 @@ program
 
       // PROP-102: остановить retention-очистку роллапов аналитики.
       appHandle.stopAnalyticsRollupPruner?.();
+
+      // ADR-094: остановить процессные метрики (event-loop-монитор).
+      appHandle.stopMetrics?.();
 
       // ADR-052 (этап II): остановить движок webhooks и retention-очистку доставок.
       appHandle.stopWebhookService?.();

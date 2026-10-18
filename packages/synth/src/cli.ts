@@ -199,6 +199,9 @@ program
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
       maxUploadBytes: resolveMaxUploadBytes(synth),
       uiDistPath,
+      // ADR-094: метрики (`metrics.enabled`, env SYNTH_METRICS_ENABLED) — паритет
+      // с dev-CLI (`core/main.ts`); иначе публичный `synth serve` не видел флаг.
+      metricsConfig: synth.metrics,
       // ADR-069: конфигурация проектных инструкций (AGENTS.md); при
       // --ignore-rules/--safe-mode — выключена.
       instructionsConfig: ignoreRules ? { ...synth.instructions, enabled: false } : synth.instructions,
@@ -235,6 +238,8 @@ program
       appHandle.stopConnectionWatcher?.();
       await appHandle.disconnectRemote?.().catch(() => {});
       appHandle.remoteEventBridge?.stop();
+      // ADR-094: остановить процессные метрики (event-loop-монитор).
+      appHandle.stopMetrics?.();
 
       server.close((err: Error | undefined) => {
         if (err) console.error('[Shutdown] Server close error:', err);

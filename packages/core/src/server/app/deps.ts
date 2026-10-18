@@ -45,6 +45,7 @@ import { SkillService } from '../../engine/skills/service.js';
 import { resolveProjectSkillSeed } from '../../engine/skills/seed.js';
 import { CommandService } from '../../engine/commands/service.js';
 import { createLocalOwnerResolver, LOCAL_USER_ID } from '../local-owner.js';
+import type { MetricsRegistry } from '../../metrics/registry.js';
 import type { StandaloneConfig } from '../app.js';
 
 /**
@@ -110,6 +111,7 @@ export async function createStandaloneDeps(
   config: StandaloneConfig,
   accessors: StandaloneDepsAccessors,
   storage?: StorageContext,
+  metrics?: MetricsRegistry,
 ) {
   const storageContext = storage ?? (await createStandaloneStorage(config));
   const dataDir = config.dataDir;
@@ -750,6 +752,8 @@ export async function createStandaloneDeps(
 
   return {
     dataDir,
+    // ADR-094: реестр метрик (доменные коллекторы подключаются отдельной задачей).
+    metrics,
     settingsStore,
     // PROP-032 (W2.3): умолчания оформления из контекста хранения (паритет с backend).
     defaultsStore,

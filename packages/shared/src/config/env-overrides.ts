@@ -73,6 +73,8 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'decision', key: 'escalationModel', type: 'string' },
   // analytics (PROP-102)
   { section: 'analytics', key: 'retentionDays', type: 'number' },
+  // metrics (ADR-094): Helm ставит `SYNTH_METRICS_ENABLED` — имя должно совпадать.
+  { section: 'metrics', key: 'enabled', type: 'boolean' },
 ];
 
 /** camelCase → SNAKE_CASE (`autoBind` → `AUTO_BIND`, `ephemeralTtl` → `EPHEMERAL_TTL`). */

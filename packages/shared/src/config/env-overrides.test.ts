@@ -32,6 +32,10 @@ describe('toSnakeCase / envOverrideName (ADR-023)', () => {
     expect(envOverrideName({ section: 'scheduler', key: 'tickSec', type: 'number' })).toBe(
       'SYNTH_SCHEDULER_TICK_SEC',
     );
+    // ADR-094: имя совпадает с Helm-чартом (`SYNTH_METRICS_ENABLED`).
+    expect(envOverrideName({ section: 'metrics', key: 'enabled', type: 'boolean' })).toBe(
+      'SYNTH_METRICS_ENABLED',
+    );
   });
 
   it('реестр содержит уникальные env-имена', () => {
@@ -90,6 +94,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       webhooks: { enabled: false },
       decision: { enabled: false, provider: '', model: '', confidenceThreshold: 0.6 },
       analytics: { retentionDays: 400 },
+      metrics: { enabled: false },
     };
   }
 
@@ -106,6 +111,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_DECISION_MODEL: 'clef-flash',
       SYNTH_DECISION_CONFIDENCE_THRESHOLD: '0.9',
       SYNTH_ANALYTICS_RETENTION_DAYS: '30',
+      SYNTH_METRICS_ENABLED: 'true',
     });
 
     expect(cfg.events).toEqual({
@@ -124,6 +130,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
     });
     // PROP-102: retention суточных роллапов аналитики.
     expect(cfg.analytics).toEqual({ retentionDays: 30 });
+    // ADR-094: Helm ставит SYNTH_METRICS_ENABLED — имя env должно совпадать.
+    expect(cfg.metrics).toEqual({ enabled: true });
   });
 
   it('невалидное значение → warn + игнор, значение не меняется', () => {

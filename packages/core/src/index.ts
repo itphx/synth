@@ -903,6 +903,39 @@ export { createQueueRoutes } from './server/routes/queue.js';
 export type { QueueRoutesAuth, QueueRoutesOptions, QueueRouteMessages } from './server/routes/queue.js';
 export { createSessionRoutes } from './server/routes/sessions.js';
 export type { SessionRoutesAuth, SessionRoutesDeps, SessionRoutesOptions, SessionRouteMessages } from './server/routes/sessions.js';
+// ADR-094: наблюдаемость — мини-реестр метрик Prometheus, `/metrics`, `/ready`,
+// HTTP/процессные коллекторы. Доменные коллекторы подключаются отдельной задачей.
+export {
+  MetricsRegistry,
+  CounterMetric,
+  GaugeMetric,
+  HistogramMetric,
+  DEFAULT_HISTOGRAM_BUCKETS,
+  DEFAULT_MAX_SERIES_PER_METRIC,
+  SERIES_DROPPED_METRIC,
+  renderMetrics,
+  escapeHelp,
+  escapeLabelValue,
+  formatNumber,
+  createHttpMetricsMiddleware,
+  normalizeRouteTemplate,
+  registerProcessMetrics,
+  resolveMetricsToken,
+  metricsTokenPath,
+} from './metrics/index.js';
+export type {
+  MetricLabels,
+  MetricSnapshot,
+  MetricSnapshotSeries,
+  MetricType,
+  MetricsRegistryOptions,
+  HttpMetricsOptions,
+  ProcessMetricsHandle,
+} from './metrics/index.js';
+export { createMetricsRoutes } from './server/routes/metrics.js';
+export type { MetricsRoutesOptions } from './server/routes/metrics.js';
+export { createHealthRoutes } from './server/routes/health.js';
+export type { HealthRoutesOptions, ReadinessState } from './server/routes/health.js';
 export { createStandaloneApp } from './server/app.js';
 export type { StandaloneConfig } from './server/app.js';
 export { serializeSession, serializeMessage, serializeProject } from './server/serialize.js';

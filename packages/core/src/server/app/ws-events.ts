@@ -14,6 +14,7 @@ import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import { extractChildSessionId, extractCreatedSession } from '../../events/child-session.js';
 import { LOCAL_USER_ID } from '../local-owner.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
+import type { MetricsRegistry } from '../../metrics/registry.js';
 
 export interface EventWebSocketDeps {
   /** HTTP-сервер, на `upgrade` которого вешается обработчик. */
@@ -42,6 +43,12 @@ export interface EventWebSocketDeps {
    * авто-подписки нормализуют владельца из payload. Managed не задаёт.
    */
   localOwnerResolver?: LocalOwnerResolver;
+  /**
+   * ADR-094: реестр метрик (задан только при `metrics.enabled`). Используется для
+   * `synth_http_streams_active`: WS-апгрейд не проходит через Hono-middleware,
+   * поэтому активные соединения учитываются здесь.
+   */
+  metrics?: MetricsRegistry;
 }
 
 /** Активный WS-клиент standalone в реестре подписок (ADR-089). */
@@ -181,6 +188,18 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
 
       wss.handleUpgrade(request, socket, head, async (ws: WebSocket) => {
         const clientId = `ws-events-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        // ADR-094: активное WS-соединение — в streams_active (не в гистограмме).
+        const streams = deps.metrics?.gauge(
+          'synth_http_streams_active',
+          'Number of active long-lived streams (SSE/WebSocket).',
+        );
+        streams?.inc();
+        let streamReleased = false;
+        const releaseStream = (): void => {
+          if (streamReleased) return;
+          streamReleased = true;
+          streams?.dec();
+        };
 
         const unsubs: Array<() => void> = [];
         /** Уже подписанные сессии клиента (идемпотентность точечной подписки). */
@@ -385,6 +404,7 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
         });
 
         const cleanup = (): void => {
+          releaseStream();
           unregister?.();
           unregister = null;
           for (const unsub of unsubs) unsub();
