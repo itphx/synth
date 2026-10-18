@@ -17,8 +17,14 @@ export interface MetricsRoutesOptions {
   registry: MetricsRegistry;
   /** ADR-094: мастер-выключатель (`metrics.enabled`); `false` → 404. */
   enabled: boolean;
-  /** Ожидаемый bearer-токен; не задан — эндпоинт открыт. */
+  /** Ожидаемый bearer-токен (статический); не задан — эндпоинт открыт. */
   token?: string;
+  /**
+   * ADR-094: динамическое разрешение токена на каждый запрос. Приоритетнее
+   * `token` — позволяет UI менять токен без рестарта (файл
+   * `{dataDir}/secrets/metrics-token` читается каждый скрейп).
+   */
+  getToken?: () => string | undefined;
 }
 
 /** Сравнение токена без утечки времени: длины, затем `timingSafeEqual`. */
@@ -50,12 +56,15 @@ export function createMetricsRoutes(opts: MetricsRoutesOptions): Hono {
         404,
       );
     }
-    if (opts.token && !tokenMatches(c.req.header('Authorization'), opts.token)) {
-      return c.json(
-        { error: { code: 'UNAUTHORIZED', message: 'Неверный или отсутствующий токен /metrics' } },
-        401,
-        { 'WWW-Authenticate': 'Bearer' },
-      );
+    if (opts.enabled) {
+      const expected = opts.getToken ? opts.getToken() : opts.token;
+      if (expected && !tokenMatches(c.req.header('Authorization'), expected)) {
+        return c.json(
+          { error: { code: 'UNAUTHORIZED', message: 'Неверный или отсутствующий токен /metrics' } },
+          401,
+          { 'WWW-Authenticate': 'Bearer' },
+        );
+      }
     }
 
     const startedAt = performance.now();

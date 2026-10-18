@@ -35,4 +35,11 @@ export type { HttpMetricsOptions } from './http.js';
 export { registerProcessMetrics } from './process.js';
 export type { ProcessMetricsHandle } from './process.js';
 export { resolveMetricsToken, metricsTokenPath } from './token.js';
+export {
+  MIN_METRICS_TOKEN_LENGTH,
+  getMetricsTokenStatus,
+  writeMetricsToken,
+  removeMetricsToken,
+} from './token.js';
+export type { MetricsTokenSource, MetricsTokenStatus } from './token.js';
 export * from './collectors/index.js';

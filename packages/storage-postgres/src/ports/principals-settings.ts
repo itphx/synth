@@ -310,6 +310,16 @@ export function createPrincipalSettingsPort(conn: PostgresConnection): SettingsP
       await deleteSetting(conn, 'decision');
     },
 
+    async getMetrics(): Promise<RuntimeSettingsValue<'metrics'>> {
+      return (await readSetting<RuntimeSettingsValue<'metrics'>>(conn, 'metrics')) ?? {};
+    },
+    async setMetrics(config: RuntimeSettingsValue<'metrics'>): Promise<void> {
+      await writeSetting(conn, 'metrics', config);
+    },
+    async clearMetrics(): Promise<void> {
+      await deleteSetting(conn, 'metrics');
+    },
+
     async getProxySettings(): Promise<RuntimeSettingsValue<'proxy'> | undefined> {
       return readSetting<RuntimeSettingsValue<'proxy'>>(conn, 'proxy');
     },

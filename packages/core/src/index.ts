@@ -839,7 +839,7 @@ export type { SkillBundleRoutesDeps, SkillBundleRoutesOptions, SkillBundleRoutes
 export { createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes } from './server/routes/skill-scope.js';
 export type { SkillScopeRoutesDeps, SkillScopeRoutesOptions } from './server/routes/skill-scope.js';
 export { RuntimeSettingsStore, mergeLlmGatewayConfig, mergeSecurityConfig, mergeMcpNetworkPolicy, mergeEgressPolicy, mergeEventsConfig, mergeDecisionConfig } from './storage/runtime-settings.js';
-export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, DefaultModelPair } from './storage/runtime-settings.js';
+export type { RuntimeSettings, LlmGatewayRuntimeSettings, EventsRuntimeSettings, DecisionRuntimeSettings, MetricsRuntimeSettings, DefaultModelPair } from './storage/runtime-settings.js';
 export { estimateTokens, calibrateCharsPerToken, RATIO_EWMA_ALPHA } from './engine/context/token-ratio.js';
 export { createLocalAuth } from './auth/local.js';
 export type { AuthKit, LocalAuthConfig } from './auth/local.js';
@@ -922,6 +922,10 @@ export {
   registerProcessMetrics,
   resolveMetricsToken,
   metricsTokenPath,
+  getMetricsTokenStatus,
+  writeMetricsToken,
+  removeMetricsToken,
+  MIN_METRICS_TOKEN_LENGTH,
 } from './metrics/index.js';
 export type {
   MetricLabels,
@@ -931,9 +935,19 @@ export type {
   MetricsRegistryOptions,
   HttpMetricsOptions,
   ProcessMetricsHandle,
+  MetricsTokenSource,
+  MetricsTokenStatus,
 } from './metrics/index.js';
 export { createMetricsRoutes } from './server/routes/metrics.js';
 export type { MetricsRoutesOptions } from './server/routes/metrics.js';
+export { createMetricsSettingsRoutes, resolveMetricsEnabled, parseMetricsEnvEnabled } from './server/routes/metrics-settings.js';
+export type {
+  MetricsSettingsDeps,
+  MetricsSettingsOptions,
+  MetricsSettingsMessages,
+  MetricsSource,
+  MetricsReadiness,
+} from './server/routes/metrics-settings.js';
 // ADR-094: доменные коллекторы — проводка в `createStandaloneDeps`/`app.ts`
 // (шина сессий, сессии/очередь, хранилище, decision-слой, гибрид, readiness).
 export {

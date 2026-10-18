@@ -5,7 +5,7 @@
 // Вынесено из `app.ts` (ADR-095, шаг 4b) — «вынос по швам», без изменения поведения.
 import { isAbsolute, normalize, resolve } from 'node:path';
 import type { Hono } from 'hono';
-import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword } from '@itphx/synth-shared';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, ProjectRole, SYNTH_VERSION, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword } from '@itphx/synth-shared';
 import {
   DEFAULT_AGENT_ID, RateLimiter,
   getPublicOpenApiDocument,
@@ -22,9 +22,10 @@ import {
   ProjectInstructionsResolver, createInstructionsInfoResolver,
   createSettingsRoutes, createDictionaryRoutes, createAuditRoutes as createSecurityAuditRoutes, currentEgressLog,
   createContextRoutes as createCoreContextRoutes,
+  createMetricsSettingsRoutes,
   resolveProjectWorkspace,
 } from '@itphx/synth-core';
-import type { AuthKit as CoreAuthKit, StorageContext } from '@itphx/synth-core';
+import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext } from '@itphx/synth-core';
 import { createProjectRoutes, createProjectAccess } from '../routes/projects.js';
 import { createSessionRoutes } from '../routes/sessions.js';
 import { createMessageRoutes } from '../routes/messages.js';
@@ -54,6 +55,22 @@ export interface BackendRoutesContext {
   config: BackendConfig;
   /** Зависимости backend (`createBackendDeps`). */
   deps: BackendDeps;
+  /** ADR-094: live-состояние метрик для админ-раздела «Наблюдаемость». */
+  metrics: BackendMetricsContext;
+}
+
+/** ADR-094: live-состояние метрик (паритет с core `StandaloneMetricsContext`). */
+export interface BackendMetricsContext {
+  /** Фактический флаг старта процесса (`metricsEnabled`). */
+  runningEnabled: boolean;
+  /** Реестр метрик процесса (нет — экспорт выключен). */
+  getRegistry: () => MetricsRegistry | undefined;
+  /** Live-readiness (`GET /ready`). */
+  getReadiness: () => MetricsReadiness;
+  /** Физический backend хранения (`file`|`memory`|`postgres`). */
+  storageBackend: string;
+  /** Uptime процесса в секундах. */
+  getUptimeSec: () => number;
 }
 
 /**
@@ -690,6 +707,28 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     // События/decision наследуют тот же guard (если не заданы отдельно).
     settingsWriteGuard: auth.requirePermission('ADMIN'),
   }));
+
+  // ADR-094: админ-раздел «Наблюдаемость» — runtime `metrics.enabled` (рестарт),
+  // live-статус и bearer-токен `/metrics` (write-only, применяется сразу).
+  // Managed RBAC: чтение и мутации — только ADMIN.
+  app.route('/api/v2/settings', createMetricsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      dataDir,
+      configEnabled: config.synth.metrics.enabled,
+      runningEnabled: ctx.metrics.runningEnabled,
+      getRegistry: ctx.metrics.getRegistry,
+      getReadiness: ctx.metrics.getReadiness,
+      getStorageBackend: () => ctx.metrics.storageBackend,
+      getUptimeSec: ctx.metrics.getUptimeSec,
+      version: SYNTH_VERSION,
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: auth.requirePermission('ADMIN'),
+    },
+  ));
 
   // Журналы безопасности: аудит изменений политик + внешние запросы (egress).
   // Managed RBAC: чтение только ADMIN/AUDITOR.

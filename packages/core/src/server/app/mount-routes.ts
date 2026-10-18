@@ -6,7 +6,7 @@ import { join, isAbsolute, normalize, resolve } from 'node:path';
 import type { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import type { SecurityConfig, WorkspaceOutsideRootPolicy, ProviderConfig, ModelConfig } from '@itphx/synth-shared';
-import { DEFAULT_LLM_GATEWAY_RATE_LIMIT } from '@itphx/synth-shared';
+import { DEFAULT_LLM_GATEWAY_RATE_LIMIT, SYNTH_VERSION } from '@itphx/synth-shared';
 import {
   KeyRateLimiter, DEFAULT_AGENT_ID,
   createSessionRoutes, createProjectRoutes,
@@ -21,8 +21,11 @@ import {
   createMaintenanceRoutes, createProjectPortableRoutes,
   createAnalyticsRoutes, AnalyticsService,
   createStorageContextAsync,
+  createMetricsSettingsRoutes,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
+import type { MetricsRegistry } from '../../metrics/registry.js';
+import type { MetricsReadiness } from '../routes/metrics-settings.js';
 import { createProjectTransferRoutes } from '../routes/project-transfer.js';
 import { createUpdateRoutes } from '../routes/updates.js';
 import { ProjectInstructionsResolver, createInstructionsInfoResolver } from '../../engine/context/instructions.js';
@@ -34,6 +37,20 @@ import type { StandaloneConfig } from '../app.js';
 import type { StandaloneDeps } from './deps.js';
 import type { LocalAuthKit } from '../../auth/local.js';
 import type { RemoteBackendClient } from '../../remote/client.js';
+
+/** ADR-094: live-состояние метрик для админ-раздела «Наблюдаемость». */
+export interface StandaloneMetricsContext {
+  /** Фактический флаг старта процесса (`metricsEnabled`). */
+  runningEnabled: boolean;
+  /** Реестр метрик процесса (нет — экспорт выключен). */
+  getRegistry: () => MetricsRegistry | undefined;
+  /** Live-readiness (`GET /ready`). */
+  getReadiness: () => MetricsReadiness;
+  /** Физический backend хранения (`file`|`memory`|`postgres`). */
+  storageBackend: string;
+  /** Uptime процесса в секундах. */
+  getUptimeSec: () => number;
+}
 
 /** Ленивый доступ к состоянию гибрида (`createHybridRemoteState`). */
 export interface StandaloneRoutesRemote {
@@ -50,6 +67,11 @@ export interface StandaloneRoutesRemote {
 export interface StandaloneRoutesContext {
   config: StandaloneConfig;
   deps: StandaloneDeps;
+  /**
+   * ADR-094: live-состояние подсистемы метрик для админ-раздела
+   * «Наблюдаемость» (`/api/v2/settings/metrics*`).
+   */
+  metrics: StandaloneMetricsContext;
   remote: StandaloneRoutesRemote;
   /**
    * ADR-089: паритет с managed `EventHub.subscribeToSession` — подписка
@@ -427,6 +449,24 @@ export function mountStandaloneRoutes(
     },
     protectedPathsStore,
   }));
+
+  // ADR-094: админ-раздел «Наблюдаемость» — runtime-настройки `metrics.enabled`
+  // (применяются рестартом), live-статус и bearer-токен `/metrics` (write-only,
+  // применяется сразу). Core: чтение/мутации — `requireAuth` (single-user).
+  app.route('/api/v2/settings', createMetricsSettingsRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      settingsStore,
+      dataDir,
+      configEnabled: config.metricsConfig?.enabled ?? false,
+      runningEnabled: ctx.metrics.runningEnabled,
+      getRegistry: ctx.metrics.getRegistry,
+      getReadiness: ctx.metrics.getReadiness,
+      getStorageBackend: () => ctx.metrics.storageBackend,
+      getUptimeSec: ctx.metrics.getUptimeSec,
+      version: SYNTH_VERSION,
+    },
+  ));
 
   // Словари классификации: чтение — все аутентифицированные, запись/сброс —
   // аутентификация (в standalone достаточно --api-key, локальный режим).

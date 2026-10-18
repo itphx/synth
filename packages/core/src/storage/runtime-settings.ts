@@ -70,6 +70,17 @@ export interface EventsRuntimeSettings {
 export type DecisionRuntimeSettings = Partial<DecisionConfig>;
 
 /**
+ * ADR-094: runtime-настройки раздела «Наблюдаемость» (админка).
+ * Приоритет эффективного значения: env `SYNTH_METRICS_ENABLED` > runtime >
+ * config.yaml `metrics.enabled` > default `false`. Включает/выключает экспорт
+ * `GET /metrics` и сбор метрик; применяется при старте процесса
+ * (`restartRequired`, если runtime расходится с запущенным процессом).
+ */
+export interface MetricsRuntimeSettings {
+  enabled?: boolean;
+}
+
+/**
  * Модель по умолчанию инстанса — явная пара `provider` + `model`.
  *
  * Задаётся в UI (раздел «Модели») и хранится в runtime-настройках
@@ -131,6 +142,8 @@ export interface RuntimeSettings {
   events?: Partial<EventsRuntimeSettings>;
   /** ADR-084: runtime-настройки decision-слоя (админка). */
   decision?: DecisionRuntimeSettings;
+  /** ADR-094: runtime-настройки наблюдаемости (`metrics.enabled`). */
+  metrics?: MetricsRuntimeSettings;
   /**
    * ADR-099: runtime-override секции `proxy` (админка). Секретов не содержит:
    * пароль Basic — только `SYNTH_PROXY_PASSWORD`/`{dataDir}/secrets/proxy-password`.
@@ -651,6 +664,24 @@ export class RuntimeSettingsStore implements SettingsRepository {
     await this._update((current) => {
       const next = { ...current };
       delete next.decision;
+      return next;
+    });
+  }
+
+  /** ADR-094: runtime-настройки наблюдаемости (админка), {} — не заданы. */
+  async getMetrics(): Promise<Partial<MetricsRuntimeSettings>> {
+    const settings = await this.load();
+    return settings.metrics ?? {};
+  }
+
+  async setMetrics(config: Partial<MetricsRuntimeSettings>): Promise<void> {
+    await this._update((current) => ({ ...current, metrics: config }));
+  }
+
+  async clearMetrics(): Promise<void> {
+    await this._update((current) => {
+      const next = { ...current };
+      delete next.metrics;
       return next;
     });
   }

@@ -15,6 +15,7 @@ import type {
   DefaultModelPair,
   EventsRuntimeSettings,
   LlmGatewayRuntimeSettings,
+  MetricsRuntimeSettings,
   RuntimeSettings,
   SecurityRuntimeSettings,
 } from '../runtime-settings.js';
@@ -106,6 +107,11 @@ export interface SettingsRepository {
   getDecision(): Promise<Partial<DecisionRuntimeSettings>>;
   setDecision(config: Partial<DecisionRuntimeSettings>): Promise<void>;
   clearDecision(): Promise<void>;
+
+  /** ADR-094: runtime-настройки наблюдаемости (`metrics.enabled`). */
+  getMetrics(): Promise<Partial<MetricsRuntimeSettings>>;
+  setMetrics(config: Partial<MetricsRuntimeSettings>): Promise<void>;
+  clearMetrics(): Promise<void>;
 
   /** ADR-099: runtime-override секции `proxy` (без секретов). */
   getProxySettings(): Promise<Partial<ProxyConfig> | undefined>;

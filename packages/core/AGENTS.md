@@ -55,7 +55,10 @@
   имена `synth_*` и лейблы фиксированы, `route` — шаблон, `session_id`/`user_id`/
   сырые пути запрещены, SSE/WS вне гистограммы. `GET /metrics` — **вне** `/api/*`,
   off by default, опциональный bearer; `/ready` ≠ liveness (деградация хранилища
-  остаётся ready). Единственная точка LLM-метрик — `GatewayProvider.onCall`
+  остаётся ready). Runtime `metrics.enabled` — в UI «Метрики» (`settings.json`/PG;
+  приоритет env > runtime > config, `resolveMetricsEnabled`), применяется рестартом
+  (`restartRequired`); токен — только env/файл (`token.ts`: status/write/remove,
+  write-only из UI). Единственная точка LLM-метрик — `GatewayProvider.onCall`
   (или `createLlmCallRecorder(opts.metrics)`) — не считать вызовы в обход Gateway.
 - Permissions и режимы — только через `PermissionEvaluator`
   (`engine/permission/evaluator.ts`): `plan`/`act`/`yolo`,
@@ -185,12 +188,15 @@
   `synth_metrics_series_dropped_total`, `addCollector`), `renderer.ts` (text exposition 0.0.4,
   golden-тесты), `http.ts` (Hono-middleware: `method`/шаблон `route`/`status`, `in_flight`,
   `streams_active`; `/metrics` пропускается, SSE/WS вне гистограммы), `process.ts` (RSS/heap/CPU/
-  event loop lag/uptime/`build_info`), `token.ts` (`SYNTH_METRICS_TOKEN` → `{dataDir}/secrets/metrics-token`),
+  event loop lag/uptime/`build_info`), `token.ts` (`SYNTH_METRICS_TOKEN` → `{dataDir}/secrets/metrics-token`;
+  `getMetricsTokenStatus`/`writeMetricsToken`/`removeMetricsToken`, минимум 16 символов, атомарно `0600`),
   `collectors/*` (`bus` — turns/streams/retries/cost, `llm` — `createLlmCallRecorder` для
   `GatewayProvider.onCall`, `sessions` — 15 c, `storage` — записи/деградация 60 c и `{dataDir}` 300 c,
   `events` — ingest/decisions + журнал 5 мин, `scheduler`, `webhooks`, `hybrid`, `decision`, `ready`).
-  Роуты — `server/routes/metrics.ts` (`/metrics`: 404 при disabled, 401 при токене, `no-store`) и
-  `server/routes/health.ts` (`/health`, `/ready`). Каталог метрик — `docs/OBSERVABILITY.md`.
+  Роуты — `server/routes/metrics.ts` (`/metrics`: 404 при disabled, 401 при токене, `no-store`),
+  `server/routes/health.ts` (`/health`, `/ready`) и `server/routes/metrics-settings.ts`
+  (`createMetricsSettingsRoutes`: runtime/status/token, `resolveMetricsEnabled` — env > runtime > config > default).
+  Каталог метрик — `docs/OBSERVABILITY.md`.
 - `server/app.ts` — `createStandaloneApp`: фасад-композиция (auth/bootstrap service-key,
   middleware, вызовы вынесенных модулей, сборка хендла). ADR-095 (шаг 4a) вынес блоки
   в `server/app/*`: `deps.ts` (сборка зависимостей), `mount-routes.ts` (весь порядок
@@ -203,9 +209,9 @@
   При старте — `applyBootstrapServiceKeys` (ADR-052/O1: installer-ключи из `security.bootstrapServiceKeys`).
 - `server/routes/*` — `health`, `hybrid`, `auth`, `sessions`, `messages`, `projects`,
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
-  `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
-  `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`, `webhooks`,
-  `maintenance`, `analytics`.
+  `settings`, `metrics-settings` (ADR-094: `/settings/metrics*`), `dictionaries`, `mcp`, `skills`,
+  `commands`, `skill-bundles`, `skill-scope`, `git`, `ssh-keys`, `events`, `identities`,
+  `service-keys`, `webhooks`, `maintenance`, `analytics`.
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
@@ -520,7 +526,8 @@
   `PgMutex` драйвера через `StorageContext.locks`), `RuntimeSettingsStore`
   (`events` + `mergeEventsConfig` — runtime-настройки раздела «События» (включая `identityMap` — **override**
   поверх основного источника — привязок в `ProfileData.identities[]`), ADR-089; `decision` +
-  `mergeDecisionConfig` — runtime-настройки decision-слоя, ADR-084, включая `escalationProvider`/`escalationModel`),
+  `mergeDecisionConfig` — runtime-настройки decision-слоя, ADR-084, включая `escalationProvider`/`escalationModel`;
+  `metrics` — runtime `metrics.enabled` (ADR-094), резолв — `resolveMetricsEnabled`),
   `McpRegistryStore` (единый реестр MCP, ADR-071),
   `SkillStore`, `CommandStore`, `SkillBundleStore` (ADR-046), `SSHKeyStore`
   (`secrets/ssh-keys`, шифрование at-rest, ADR-076),

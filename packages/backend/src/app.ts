@@ -29,6 +29,7 @@ import {
   getServiceCredential,
   MetricsRegistry,
   registerProcessMetrics,
+  resolveMetricsEnabled,
   resolveMetricsToken,
   setSynthReady,
 } from '@itphx/synth-core';
@@ -151,9 +152,24 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     app.use(logger());
 
+    // PROP-032 (W2.4): единый контекст хранения — собирается до `auth`, реестр
+    // service-key (`storage.serviceKeys`) нужен резолверу `synth_svc_…`; тот же
+    // инстанс переиспользует `createBackendDeps` (в т.ч. `mcpRegistry`, который
+    // деп сидирует instance-серверами).
+    // ADR-094: контекст хранения нужен до включения метрик — runtime-настройка
+    // `metrics.enabled` (`settings.json`/PG) применяется при старте.
+    const storage = await createBackendStorage(backendConfig);
+
     // ADR-094: метрики — реестр до middleware; при `metrics.enabled=false`
     // ничего не собираем, `/metrics` отдаёт 404 (middleware не ставим).
-    const metricsEnabled = backendConfig.synth.metrics.enabled;
+    // Приоритет: env `SYNTH_METRICS_ENABLED` > runtime (`settings.json`) >
+    // config.yaml `metrics.enabled` > default false.
+    const runtimeMetrics = await storage.settings.getMetrics();
+    const metricsEnabled = resolveMetricsEnabled({
+      configEnabled: backendConfig.synth.metrics.enabled,
+      runtimeEnabled: runtimeMetrics.enabled,
+      env: process.env,
+    }).enabled;
     const metrics = new MetricsRegistry();
     const stopProcessMetrics = metricsEnabled ? registerProcessMetrics(metrics) : null;
     if (metricsEnabled) app.use('*', createHttpMetricsMiddleware(metrics));
@@ -164,7 +180,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // + блок storage (аддитивно к {status, version, time}). `degradedInfo`
     // заполняется после сборки контекста хранения ниже (до первого запроса).
     // ADR-094: `/ready` — readiness (200 и при деградации, 503 — только не готов).
-    let degradedInfo: StorageContext['degraded'] | null = null;
+    const degradedInfo: StorageContext['degraded'] | null = storage.degraded ?? null;
     let initialized = false;
     app.route('/', createHealthRoutes({
       getStorageDegraded: () => degradedInfo ?? null,
@@ -175,10 +191,11 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     }));
 
     // ADR-094: `/metrics` — до auth (скрейп по сети pod'а, опциональный bearer).
+    // Токен читается на каждый запрос — правка из UI применяется без рестарта.
     app.route('/', createMetricsRoutes({
       registry: metrics,
       enabled: metricsEnabled,
-      token: metricsEnabled ? resolveMetricsToken(backendConfig.dataDir) : undefined,
+      getToken: metricsEnabled ? () => resolveMetricsToken(backendConfig.dataDir) : undefined,
     }));
 
     // Динамический CORS origin (fail-closed): явный ORIGIN через env `SYNTH_CORS_ORIGIN`;
@@ -198,13 +215,8 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       credentials: true,
     }));
 
-    // PROP-032 (W2.4): единый контекст хранения — собирается до `auth`, реестр
-    // service-key (`storage.serviceKeys`) нужен резолверу `synth_svc_…`; тот же
-    // инстанс переиспользует `createBackendDeps` (в т.ч. `mcpRegistry`, который
-    // деп сидирует instance-серверами).
-    const storage = await createBackendStorage(backendConfig);
-    // PROP-032 (W5): состояние деградации — для health/guard/диагностики.
-    degradedInfo = storage.degraded ?? null;
+    // PROP-032 (W5): состояние деградации — для health/guard/диагностики
+    // (уже проставлено при сборке контекста выше).
     // ADR-052 (этап I): реестр service-key — резолвер ключа `synth_svc_…`
     // нужен аутентификации (паритет с core `server/app.ts`).
     const serviceApiKeyStore = storage.serviceKeys;
@@ -282,7 +294,22 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     app.route('/', createStorageStatusRoutes({ getDegraded: () => degradedInfo }));
 
     // Роуты API v2 (порядок монтирования — как раньше, см. mount-routes.ts).
-    mountBackendRoutes(app, auth, { config: backendConfig, deps });
+    mountBackendRoutes(app, auth, {
+      config: backendConfig,
+      deps,
+      // ADR-094: админ-раздел «Наблюдаемость» — running-флаг, реестр,
+      // readiness, backend хранения и uptime.
+      metrics: {
+        runningEnabled: metricsEnabled,
+        getRegistry: () => metrics,
+        getReadiness: () => ({
+          ready: initialized,
+          storage: degradedInfo ? 'degraded' : 'ok',
+        }),
+        storageBackend: storage.kind,
+        getUptimeSec: () => Math.floor(process.uptime()),
+      },
+    });
 
     // 404
     app.notFound((c) => {

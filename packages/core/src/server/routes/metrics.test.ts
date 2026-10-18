@@ -108,4 +108,31 @@ describe('createMetricsRoutes', () => {
     const app = createMetricsRoutes({ registry: new MetricsRegistry(), enabled: true, token: undefined });
     expect((await app.request('/metrics')).status).toBe(200);
   });
+
+  it('getToken читается на каждый запрос (смена без пересоздания роута)', async () => {
+    let current: string | undefined;
+    const app = createMetricsRoutes({
+      registry: new MetricsRegistry(),
+      enabled: true,
+      getToken: () => current,
+    });
+
+    expect((await app.request('/metrics')).status).toBe(200);
+    current = 'dynamic-secret';
+    expect((await app.request('/metrics')).status).toBe(401);
+    expect((await app.request('/metrics', { headers: { Authorization: 'Bearer dynamic-secret' } })).status).toBe(200);
+    current = undefined;
+    expect((await app.request('/metrics')).status).toBe(200);
+  });
+
+  it('getToken приоритетнее статического token', async () => {
+    const app = createMetricsRoutes({
+      registry: new MetricsRegistry(),
+      enabled: true,
+      token: 'static-secret',
+      getToken: () => 'dynamic-secret',
+    });
+    expect((await app.request('/metrics', { headers: { Authorization: 'Bearer static-secret' } })).status).toBe(401);
+    expect((await app.request('/metrics', { headers: { Authorization: 'Bearer dynamic-secret' } })).status).toBe(200);
+  });
 });

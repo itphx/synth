@@ -35,6 +35,7 @@ import type {
   DefaultModelPair,
   EventsRuntimeSettings,
   LlmGatewayRuntimeSettings,
+  MetricsRuntimeSettings,
   RuntimeSettings,
   SecurityRuntimeSettings,
 } from '../runtime-settings.js';
@@ -292,6 +293,18 @@ export class MemorySettingsRepository implements SettingsRepository {
 
   async clearDecision(): Promise<void> {
     this._clear('decision');
+  }
+
+  async getMetrics(): Promise<Partial<MetricsRuntimeSettings>> {
+    return structuredClone(this._settings.metrics ?? {});
+  }
+
+  async setMetrics(config: Partial<MetricsRuntimeSettings>): Promise<void> {
+    this._patch({ metrics: config });
+  }
+
+  async clearMetrics(): Promise<void> {
+    this._clear('metrics');
   }
 
   async getProxySettings(): Promise<Partial<ProxyConfig> | undefined> {

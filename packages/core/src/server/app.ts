@@ -17,6 +17,7 @@ import { createLocalAuth } from '../auth/local.js';
 import { RemoteConnection } from '../remote/connection.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createMetricsRoutes } from './routes/metrics.js';
+import { resolveMetricsEnabled } from './routes/metrics-settings.js';
 import {
   attachHybridMetrics,
   createHttpMetricsMiddleware,
@@ -254,7 +255,17 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // ADR-094: метрики — реестр до middleware; при `metrics.enabled=false` ничего
   // не собираем и эндпоинт отдаёт 404 (middleware не ставим вовсе).
-  const metricsEnabled = config.metricsConfig?.enabled ?? false;
+  // Приоритет: env `SYNTH_METRICS_ENABLED` > runtime (`settings.json`) >
+  // config.yaml `metrics.enabled` > default false. Runtime читается из
+  // контекста хранения (PG/file) до сборки deps — иначе включение из UI
+  // не применялось бы после рестарта.
+  const runtimeMetrics = await storage.settings.getMetrics();
+  const metricsBaseEnabled = config.metricsConfig?.enabled ?? false;
+  const metricsEnabled = resolveMetricsEnabled({
+    configEnabled: metricsBaseEnabled,
+    runtimeEnabled: runtimeMetrics.enabled,
+    env: process.env,
+  }).enabled;
   const metrics = new MetricsRegistry();
   const stopProcessMetrics = metricsEnabled ? registerProcessMetrics(metrics) : null;
   if (metricsEnabled) app.use('*', createHttpMetricsMiddleware(metrics));
@@ -302,10 +313,11 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   app.route('/', healthRoutes);
 
   // ADR-094: `/metrics` — до auth (скрейп по сети pod'а, опциональный bearer).
+  // Токен читается на каждый запрос — правка из UI применяется без рестарта.
   app.route('/', createMetricsRoutes({
     registry: metrics,
     enabled: metricsEnabled,
-    token: metricsEnabled ? resolveMetricsToken(config.dataDir) : undefined,
+    getToken: metricsEnabled ? () => resolveMetricsToken(config.dataDir) : undefined,
   }));
 
   // Hybrid status — без auth (как health): UI опрашивает статус подключения
@@ -413,6 +425,18 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   mountStandaloneRoutes(app, auth, {
     config,
     deps,
+    // ADR-094: админ-раздел «Наблюдаемость» — running-флаг, реестр, readiness,
+    // backend хранения и uptime; readiness читается лениво (композиция ещё идёт).
+    metrics: {
+      runningEnabled: metricsEnabled,
+      getRegistry: () => metrics,
+      getReadiness: () => ({
+        ready: initialized,
+        storage: storage.degraded ? 'degraded' : 'ok',
+      }),
+      storageBackend: storage.kind,
+      getUptimeSec: () => Math.floor(process.uptime()),
+    },
     remote: {
       getClient: () => connection.client,
       getActiveRemoteModels: () => hybrid.getActiveRemoteModels(),
