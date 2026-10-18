@@ -41,6 +41,14 @@ import {
   createStorageContextAsync,
   initTlsTrust,
   applyStartupProxyConfig,
+  attachBusMetrics,
+  startSessionMetrics,
+  startStorageMetrics,
+  registerDecisionMetrics,
+  createSchedulerMetrics,
+  createWebhookMetrics,
+  createEventMetrics,
+  startEventJournalMetrics,
 } from '@itphx/synth-core';
 import type { DecisionAgentCandidate, EventsRuntimeSettings, MetricsRegistry, StorageContext } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -249,6 +257,39 @@ export async function createBackendDeps(
   // PROP-102: пользовательские сообщения персистит процессор — мера `messages_user`.
   queueManager.setAnalytics(analytics);
 
+  // ADR-094: доменные коллекторы. `metrics` приходит только при
+  // `metrics.enabled=true` — иначе реестр остаётся пустым (`/metrics` → 404).
+  // Фоновые таймеры `unref`-ятся; остановка — `stopMetricsCollectors` на
+  // graceful shutdown (`app.ts`/`main.ts`).
+  const stopMetricsCollectors: Array<() => void> = [];
+  // ADR-094: доменные хуки (колбэки сервисов) — создаются только при включённых метриках.
+  const schedulerJobMetrics = metrics ? createSchedulerMetrics(metrics) : undefined;
+  const webhookDeliveryMetrics = metrics ? createWebhookMetrics(metrics) : undefined;
+  const eventMetrics = metrics ? createEventMetrics(metrics) : undefined;
+  if (metrics) {
+    stopMetricsCollectors.push(attachBusMetrics(metrics, eventBus));
+    stopMetricsCollectors.push(startSessionMetrics(metrics, sessionManager));
+    stopMetricsCollectors.push(
+      startStorageMetrics(metrics, {
+        sessions: fileStore,
+        projects: projectStore,
+        providers: providerStore,
+        models: modelStore,
+        agents: agentStore,
+        webhooks: webhookStore,
+        schedules: scheduleStore,
+        eventBindings: eventBindingStore,
+        eventRoutes: routeRuleStore,
+        dataDir,
+        backend: storageContext.kind,
+        degraded: () => Boolean(storageContext.degraded),
+      }),
+    );
+    stopMetricsCollectors.push(registerDecisionMetrics(metrics));
+    // ADR-094: размер журнала внешних событий (фон, раз в 5 минут).
+    stopMetricsCollectors.push(startEventJournalMetrics(metrics, eventJournal));
+  }
+
   // ADR-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
   // `whsec_…` шифруется at-rest мастер-ключом), append-only журнал доставок и
   // движок над той же шиной `EventBus`, что обслуживает сессии/SSE. Движок
@@ -259,6 +300,8 @@ export async function createBackendDeps(
     store: webhookStore,
     deliveryStore: webhookDeliveryStore,
     eventBus,
+    // ADR-094: исходящие доставки (ok/error/blocked + retries/duration).
+    onDelivery: webhookDeliveryMetrics,
     config: {
       ...webhooksConfig,
       // Отдельный экземпляр политики (граница доверия не смешивается с tools).
@@ -504,6 +547,8 @@ export async function createBackendDeps(
     journal: eventJournal,
     hooks,
     dedupStore,
+    // ADR-094: решения Router (kind; `bind` → `bound`).
+    metrics: eventMetrics,
     config: {
       allowedSources: effectiveEvents.allowedSources,
       defaultMode: effectiveEvents.defaultMode,
@@ -668,7 +713,7 @@ export async function createBackendDeps(
   });
 
   // ADR-089: ingress-точка приёма внешних событий (Этап 6).
-  const eventIngress = new EventIngress({ requestSessionService });
+  const eventIngress = new EventIngress({ requestSessionService, metrics: eventMetrics });
 
   // ADR-051 (срез) / ADR-089: планировщик публикует cron-события через ingress.
   // `start()` гейтится конфигом (`scheduler.enabled: false` — тикер не стартует),
@@ -690,6 +735,8 @@ export async function createBackendDeps(
     defaultEphemeralTtl: effectiveEvents.ephemeralTtl,
     catchUp: config.synth.scheduler.catchUp,
     jobRetentionDays: config.synth.scheduler.jobRetentionDays,
+    // ADR-094: завершённые Job (outcome + дрейф cron).
+    onJob: schedulerJobMetrics,
     // ADR-051/ADR-089/PROP-032: тикер стартует только у лидера (default —
     // AlwaysLeader). `file` — файловый лок на общем dataDir, `postgres` —
     // session-level advisory-lock драйвера (доступен только при PG-backend).
@@ -734,8 +781,10 @@ export async function createBackendDeps(
 
   return {
     dataDir,
-    // ADR-094: реестр метрик (доменные коллекторы подключаются отдельной задачей).
+    // ADR-094: реестр метрик (доменные коллекторы подключаются выше) и
+    // остановка фоновых коллекторов на graceful shutdown.
     metrics,
+    stopMetricsCollectors,
     projectStore,
     sessionManager,
     // ADR-089: остановка sweeper'а авто-архивации ephemeral-сессий.

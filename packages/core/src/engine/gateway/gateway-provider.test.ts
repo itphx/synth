@@ -14,6 +14,7 @@ import type { LLMGatewayConfig, LLMChunk, LLMResponse } from '@itphx/synth-share
 import { BaseProvider, resolveSystemPromptText, type LLMMessage, type CancellationToken } from '../../providers/base.js';
 import { ProviderError, RateLimitError } from '../../providers/exceptions.js';
 import { AuditLogger, GatewayProvider, RateLimiter } from './index.js';
+import type { LlmCallInfo } from '../../metrics/collectors/llm.js';
 
 const SK_KEY = 'sk-abcdefghijklmnopqrst';
 
@@ -24,6 +25,8 @@ class MockCaptureProvider extends BaseProvider {
   static capturedSystemPrompt: string | null = null;
   static capturedTools: Record<string, unknown>[] | null = null;
   static responseContent = 'ok';
+  /** ADR-094: имитация ошибки inner-провайдера. */
+  static chatError: Error | null = null;
   /** ADR-084: decision-путь. */
   static decideCalls = 0;
   static capturedState: unknown = null;
@@ -39,6 +42,7 @@ class MockCaptureProvider extends BaseProvider {
     MockCaptureProvider.capturedMessages = messages;
     MockCaptureProvider.capturedSystemPrompt = resolveSystemPromptText(systemPrompt) ?? null;
     MockCaptureProvider.capturedTools = tools ?? null;
+    if (MockCaptureProvider.chatError) throw MockCaptureProvider.chatError;
     return {
       content: MockCaptureProvider.responseContent,
       model: this.model,
@@ -115,6 +119,7 @@ describe('GatewayProvider (ADR-036)', () => {
     MockCaptureProvider.capturedSystemPrompt = null;
     MockCaptureProvider.capturedTools = null;
     MockCaptureProvider.responseContent = 'ok';
+    MockCaptureProvider.chatError = null;
     MockCaptureProvider.decideCalls = 0;
     MockCaptureProvider.capturedState = null;
   });
@@ -129,6 +134,7 @@ describe('GatewayProvider (ADR-036)', () => {
     rateLimiter?: RateLimiter;
     initialMap?: Record<string, string>;
     payloadLogPath?: string;
+    onCall?: (info: LlmCallInfo) => void;
   } = {}) {
     const inner = new MockCaptureProvider({ url: 'http://mock', apiKey: 'k', model: 'm' });
     const audit = new AuditLogger(join(tmpDir, 'audit.jsonl'));
@@ -143,6 +149,7 @@ describe('GatewayProvider (ADR-036)', () => {
       getAudit: () => audit,
       getRateLimiter: () => rateLimiter,
       payloadLogPath: opts.payloadLogPath,
+      onCall: opts.onCall,
       sessionId: 's1',
       userId: 'u1',
     });
@@ -391,5 +398,59 @@ describe('GatewayProvider (ADR-036)', () => {
     await gw.decide(`ключ ${SK_KEY}`, {});
 
     expect(MockCaptureProvider.capturedState).toBe(`ключ ${SK_KEY}`);
+  });
+
+  // ADR-094: `onCall` — телеметрия каждого LLM-вызова.
+  it('onCall: chat ok → outcome=ok с usage и provider/model', async () => {
+    const onCall = vi.fn<(info: LlmCallInfo) => void>();
+    const { gw } = makeGateway({ onCall });
+
+    await gw.chat([makeMessage('hi')]);
+
+    expect(onCall).toHaveBeenCalledTimes(1);
+    expect(onCall.mock.calls[0]![0]).toMatchObject({
+      provider: 'mockgw2',
+      model: 'm',
+      outcome: 'ok',
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    });
+    expect(onCall.mock.calls[0]![0]!.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('onCall: ошибка inner → outcome=error и ошибка пробрасывается', async () => {
+    const onCall = vi.fn<(info: LlmCallInfo) => void>();
+    const { gw } = makeGateway({ onCall });
+    MockCaptureProvider.chatError = new Error('boom');
+
+    await expect(gw.chat([makeMessage('hi')])).rejects.toThrow('boom');
+
+    expect(onCall).toHaveBeenCalledTimes(1);
+    expect(onCall.mock.calls[0]![0]).toMatchObject({ outcome: 'error' });
+  });
+
+  it('onCall: rate limit → outcome=rate_limited, inner НЕ вызван', async () => {
+    const rateLimiter = new RateLimiter(1, 100);
+    const onCall = vi.fn<(info: LlmCallInfo) => void>();
+    const { gw } = makeGateway({ rateLimiter, onCall });
+
+    await gw.chat([makeMessage('first')]);
+    await gw.chat([makeMessage('second')]);
+
+    expect(MockCaptureProvider.calls).toBe(1);
+    expect(onCall).toHaveBeenCalledTimes(2);
+    expect(onCall.mock.calls[1]![0]).toMatchObject({ outcome: 'rate_limited' });
+  });
+
+  it('onCall: decide ok → outcome=ok с usage decision-ответа', async () => {
+    const onCall = vi.fn<(info: LlmCallInfo) => void>();
+    const { gw } = makeGateway({ onCall });
+
+    await gw.decide({ state: 'ok' }, { q1: { type: 'noul' } });
+
+    expect(onCall).toHaveBeenCalledTimes(1);
+    expect(onCall.mock.calls[0]![0]).toMatchObject({
+      outcome: 'ok',
+      usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
+    });
   });
 });

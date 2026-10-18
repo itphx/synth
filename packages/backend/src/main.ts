@@ -9,6 +9,7 @@ import {
   configureRestart,
   resolveRestartMode,
   RESTART_EXIT_CODE,
+  setSynthReady,
 } from '@itphx/synth-core';
 
 const host = process.env.SYNTH_HOST || '0.0.0.0';
@@ -22,6 +23,10 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[Shutdown] Получен сигнал ${signal}, начинаю graceful shutdown...`);
+
+  // ADR-094: снять readiness до остановки сервера/коллекторов — скрейп в момент
+  // shutdown видит `synth_ready 0`.
+  setSynthReady(handle.metrics, 0);
 
   server.close((err) => {
     if (err) console.error('[Shutdown] Server close error:', err);
@@ -47,7 +52,8 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   // PROP-102: остановить retention-очистку роллапов аналитики.
   stopAnalyticsRollupPruner();
 
-  // ADR-094: остановить процессные метрики (event-loop-монитор).
+  // ADR-094: остановить процессные метрики и фоновые доменные коллекторы
+  // (таймеры сессий/хранилища, подписка шины, decision/journal).
   stopMetrics();
 
   // ADR-051 (срез): остановить планировщик расписаний.

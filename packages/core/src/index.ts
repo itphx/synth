@@ -947,6 +947,7 @@ export {
   startEventJournalMetrics,
   attachHybridMetrics,
   setSynthReady,
+  createLlmCallRecorder,
   normalizeRemoteOp,
   DATADIR_KINDS,
   SESSIONS_METRICS_INTERVAL_MS,
@@ -965,6 +966,8 @@ export type {
   WebhookDeliveryMetrics,
   WebhookDeliveryOutcome,
   EventMetricsHooks,
+  LlmCallInfo,
+  LlmCallOutcome,
 } from './metrics/index.js';
 export { createHealthRoutes } from './server/routes/health.js';
 export type { HealthRoutesOptions, ReadinessState } from './server/routes/health.js';

@@ -74,7 +74,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     defaultWorkingDir, patternStore, toolRegistry, gatewayAuditLogger, gatewayPayloadLogPath,
     gatewayConfig, providerLoader, modelLoader, modelWindowLoader, resolveAgentTemplate,
     identityClaimStore, live, maintenanceAudit,
-    analyticsRollups, analytics,
+    analyticsRollups, analytics, metrics,
   } = deps;
 
   /**
@@ -581,6 +581,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     gatewayPayloadLogPath,
     patternStore,
     rateLimiter: createRateLimiter(120, 60_000),
+    // ADR-094: LLM-прокси учитывается в метриках (undefined — выключено).
+    metrics,
   }));
 
   // Settings routes (runtime-настройки для UI: workspace + mcp; переиспользуем core-реализацию)

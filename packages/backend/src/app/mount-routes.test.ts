@@ -572,9 +572,14 @@ describe('backend: /metrics при metrics.enabled=true (ADR-094)', () => {
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
-  it('HTTP/процессные метрики + служебные метрики скрейпа в ответе', async () => {
+  it('HTTP/процессные метрики + доменные коллекторы в ответе', async () => {
     // Запрос до скрейпа — появляется HTTP-серия с шаблоном маршрута.
     expect((await backend.app.request('/health')).status).toBe(200);
+
+    // ADR-094: readiness переключён в ready после композиции.
+    const ready = await backend.app.request('/ready');
+    expect(ready.status).toBe(200);
+    expect((await ready.json()) as { status: string }).toMatchObject({ status: 'ready', storage: 'ok' });
 
     const res = await backend.app.request('/metrics');
     expect(res.status).toBe(200);
@@ -591,6 +596,17 @@ describe('backend: /metrics при metrics.enabled=true (ADR-094)', () => {
     expect(body).toContain('# TYPE synth_metrics_scrape_duration_seconds gauge');
     expect(body).toContain('# TYPE synth_process_uptime_seconds gauge');
     expect(body).toContain('# TYPE synth_build_info gauge');
+
+    // ADR-094: readiness и доменные коллекторы backend (bus/sessions/storage/decision/
+    // scheduler/webhooks/events) подключены при `metrics.enabled=true`.
+    expect(body).toContain('synth_ready 1');
+    expect(body).toContain('synth_storage_backend_info{backend="file"} 1');
+    expect(body).toContain('# TYPE synth_decision_calls_total counter');
+    expect(body).toContain('# TYPE synth_scheduler_jobs_total counter');
+    expect(body).toContain('# TYPE synth_webhook_deliveries_total counter');
+    expect(body).toContain('# TYPE synth_events_ingested_total counter');
+    expect(body).toContain('# TYPE synth_sessions_active gauge');
+    expect(body).toContain('# TYPE synth_queue_pending gauge');
 
     // `synth_metrics_series` учитывает и собственные служебные серии скрейпа.
     expect(body).toMatch(/synth_metrics_series \d+/);

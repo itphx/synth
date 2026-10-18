@@ -6,7 +6,7 @@ import type { SynthConfig } from '@itphx/synth-shared';
 import { createStandaloneApp } from '@itphx/synth-core/server/app.js';
 import { runSingleChat } from '@itphx/synth-core/server/chat.js';
 import { JsonStore } from '@itphx/synth-core/storage/json-store.js';
-import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust } from '@itphx/synth-core';
+import { getLastProfile, ensureProfile, resolveOrCreateLocalApiKey, initTlsTrust, setSynthReady } from '@itphx/synth-core';
 
 const require = createRequire(import.meta.url);
 
@@ -238,7 +238,10 @@ program
       appHandle.stopConnectionWatcher?.();
       await appHandle.disconnectRemote?.().catch(() => {});
       appHandle.remoteEventBridge?.stop();
-      // ADR-094: остановить процессные метрики (event-loop-монитор).
+      // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
+      // shutdown видит `synth_ready 0`.
+      setSynthReady(appHandle.metrics, 0);
+      // ADR-094: остановить процессные метрики и фоновые доменные коллекторы.
       appHandle.stopMetrics?.();
 
       server.close((err: Error | undefined) => {

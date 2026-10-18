@@ -30,6 +30,7 @@ import {
   MetricsRegistry,
   registerProcessMetrics,
   resolveMetricsToken,
+  setSynthReady,
 } from '@itphx/synth-core';
 import type {
   EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository,
@@ -78,9 +79,9 @@ export interface BackendAppHandle {
   orchestrator: ChatOrchestrator;
   queueManager: QueueProcessorManager;
   settingsStore: SettingsRepository;
-  /** ADR-094: реестр метрик (HTTP/процесс; доменные коллекторы — отдельная задача). */
+  /** ADR-094: реестр метрик (HTTP/процесс и доменные коллекторы). */
   metrics: MetricsRegistry;
-  /** ADR-094: остановка процессных метрик (event-loop-монитор) на shutdown. */
+  /** ADR-094: остановка процессных метрик и фоновых доменных коллекторов на shutdown. */
   stopMetrics: () => void;
   // ADR-089: ядро маршрутизации событий и единый funnel создания сессий.
   eventRouter: EventRouter;
@@ -257,8 +258,9 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     }));
 
     // Зависимости (stores/managers/оркестратор/событийное ядро/шедулер/webhooks).
-    // Тот же контекст хранения, что собран до `auth`.
-    const deps = await createBackendDeps(backendConfig, storage, metrics);
+    // Тот же контекст хранения, что собран до `auth`. ADR-094: реестр передаётся
+    // только при `metrics.enabled` — иначе доменные коллекторы не подключаются.
+    const deps = await createBackendDeps(backendConfig, storage, metricsEnabled ? metrics : undefined);
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, deps.profilesStore, deps.dataDir, deps.defaultsStore));
@@ -310,6 +312,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
 
     // Композиция завершена — readiness переключается в ready (ADR-094).
     initialized = true;
+    if (metricsEnabled) setSynthReady(metrics, 1);
 
     return {
       app,
@@ -324,9 +327,19 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       orchestrator: deps.orchestrator,
       queueManager: deps.queueManager,
       settingsStore: deps.settingsStore,
-      // ADR-094: реестр метрик и остановка процессных коллекторов.
+      // ADR-094: реестр метрик и остановка процессных **и** доменных коллекторов
+      // (таймеры сессий/хранилища, подписка шины, decision/journal).
       metrics,
-      stopMetrics: () => stopProcessMetrics?.stop(),
+      stopMetrics: () => {
+        stopProcessMetrics?.stop();
+        for (const stop of deps.stopMetricsCollectors) {
+          try {
+            stop();
+          } catch {
+            // Остановка метрик не должна ломать shutdown.
+          }
+        }
+      },
       // ADR-089: ядро событий (понадобится на этапах 5–6).
       eventRouter: deps.eventRouter,
       requestSessionService: deps.requestSessionService,

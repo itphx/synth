@@ -73,6 +73,9 @@ describe('createBackendDeps: композиция и live-аксессоры', (
     expect(typeof deps.stopEphemeralSweeper).toBe('function');
     expect(typeof deps.stopEventJournalPruner).toBe('function');
     expect(typeof deps.stopWebhookDeliveryPruner).toBe('function');
+    // ADR-094: без реестра метрик доменные коллекторы не подключаются (пустой список).
+    expect(deps.metrics).toBeUndefined();
+    expect(deps.stopMetricsCollectors).toEqual([]);
     expect(typeof deps.schedulerService.stop).toBe('function');
     expect(typeof deps.webhookService.stop).toBe('function');
     // Ключевые методы, на которые опираются роуты.

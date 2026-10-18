@@ -22,10 +22,12 @@ import {
   ProviderFactory,
   RateLimitError,
   RateLimiter,
+  createLlmCallRecorder,
 } from '@itphx/synth-core';
 import type {
   CancellationToken,
   LLMMessage,
+  MetricsRegistry,
   SecretPatternRepository,
 } from '@itphx/synth-core';
 
@@ -89,6 +91,11 @@ export interface LlmRoutesDeps {
   patternStore: SecretPatternRepository | null;
   /** HTTP-мидлварь лимита запросов на ключ/пользователя (необязательно). */
   rateLimiter?: ReturnType<typeof createRateLimiter>;
+  /**
+   * ADR-094: реестр метрик для учёта LLM-вызовов через прокси (`onCall`).
+   * Не задан (метрики выключены) — нулевые накладные расходы.
+   */
+  metrics?: MetricsRegistry;
 }
 
 interface ProviderErrorMapping {
@@ -257,6 +264,9 @@ export function createLlmRoutes(kit: AuthKit, deps: LlmRoutesDeps): Hono {
       getRateLimiter: () => deps.gatewayRateLimiter,
       getPatterns: patternStore ? () => patternStore.getPatterns() : undefined,
       payloadLogPath: deps.gatewayPayloadLogPath,
+      // ADR-094: метрики LLM-вызова (ok/error/rate_limited/blocked + duration/tokens);
+      // при выключенных метриках колбэк не создаётся.
+      onCall: deps.metrics ? createLlmCallRecorder(deps.metrics) : undefined,
       sessionId,
       userId: user.id,
     });
