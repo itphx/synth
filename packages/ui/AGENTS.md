@@ -191,6 +191,12 @@
 - **Журнал доставок** (`GET /:id/deliveries`, тумблер «Журнал доставок» в карточке): статус (ok/failed), `attempts`, `responseStatus`, `error`, время; при закрытии — сброс состояния.
 - Типы `WebhookSubscription`/`WebhookSubscriptionCreated`/`WebhookDelivery`/`CreateWebhookSubscriptionInput`/`UpdateWebhookSubscriptionPatch` — из `@itphx/synth-shared` (type-only); значения `DEFAULT_WEBHOOK_EVENT_PATTERNS`/`isWebhookEventPattern` — из subpath `@itphx/synth-shared/types`.
 
+## Сеть (ADR-099)
+
+- **Админ-раздел «Сеть»** (`components/settings/NetworkSettings.tsx`; категория `network`, `labelKey: settings.category.network`, `roles: ['ADMIN']` — сразу после «Безопасности»): «Прокси» (`ProxyStatusSection`) и «Доверенные CA (TLS)» (`TrustedCaSection`).
+- **Прокси** (`ProxyStatusSection`): runtime-редактор egress-прокси через `synthApi.getProxy/saveProxy/resetProxy/setProxyPassword/clearProxyPassword/checkProxy` (`GET/PUT/DELETE /settings/proxy`, `PUT/DELETE /settings/proxy/password`, `POST /settings/proxy/check`): URL, `noProxy`, Basic-логин, пароль — write-only **в той же форме под логином** (disabled/409 при `SYNTH_PROXY_PASSWORD`), статус `saved`/`running`, `restartRequired`, «Проверить соединение».
+- **TLS/CA** (`TrustedCaSection`): `synthApi.getTls/updateTls/uploadCa/removeCa/setDefaultClient/removeDefaultClient/createTlsMapping/updateTlsMapping/deleteTlsMapping/validateTls` (`GET/PUT/DELETE /settings/tls*`): CA-бандл (вставка/файл, несколько сертификатов, `validateTls`), `rejectUnauthorized`, default client cert+key (write-only; 409 при config/env), таблица per-host маппингов (exact/`*.suffix`/`*`, порядок = приоритет, первое совпадение), read-only параметры из `config.yaml`/env с пометкой источника и TLS к прокси (из `GET /settings/proxy`). Плашка `restartRequired`; PEM/ключи никогда не рендерятся.
+
 ## Обслуживание (ADR-091/ADR-092)
 
 - **Админ-раздел «Обслуживание»** (`components/settings/MaintenanceSettings.tsx`; категория `maintenance`, `labelKey: settings.category.maintenance`, icon `database-2`, `roles: ['ADMIN']` — за границей админ-блока): статус/`synth doctor`, схема данных и миграции, бэкапы и восстановление. API — домен `lib/api/maintenance.ts` (`maintenanceApi`, входит в barrel `synthApi`); типы DTO объявлены локально (бизнес-типы живут в core, тянуть core в браузерный бандл нельзя).

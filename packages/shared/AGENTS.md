@@ -93,6 +93,12 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   алиас `verify-ca`→`verify-full`), `buildPostgresSslOptions` (sslmode + CA/mTLS из `security.tls`;
   **fail-closed** `verify-full` без CA) и `findDsnTlsParams`/`DSN_TLS_PARAMS` — **TLS-параметры в
   DSN запрещены** (`pg` накладывает DSN `Object.assign`-ом поверх конфига и молча перекрывает `ssl`).
+- ADR-099 (TLS runtime): `config/tls-runtime.ts` — bootstrap `security-tls.json`
+  (`readTlsRuntimeSettings`/`writeTlsRuntimeSettings`, `writeTlsSecretFile`, каталог `secrets/tls/`,
+  0600/0700, атомарно); `config/tls.ts` — `TlsRuntimeSettings`/`TlsMappingSettings`,
+  `resolveTlsProfiles` (приоритет env > runtime > config, read-only-источники, fail-closed на неполную
+  пару/`caFile`+`caPem`), `selectTlsClientProfile`/`matchTlsHostPattern` (exact/`*.suffix`/`*`, первое
+  совпадение, default fallback), `resolveTlsTrust`/`buildPostgresSslOptions` с `runtime`.
 
 ## Схемы и типы
 

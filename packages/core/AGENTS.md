@@ -70,6 +70,13 @@
   git-CA (`git/git-service.ts`): `simpleGit({ config: ['http.sslCAInfo=…'] })` —
   env-канал `GIT_SSL_CAINFO` недоступен (`sanitizeGitEnv`/`allowEnvironment`),
   CA передаётся только пер-вызовом; `caFile` (путь), не `caPem`.
+- **TLS runtime и профили (ADR-099).** `security/tls.ts`: `initTlsTrust` читает bootstrap
+  (`tlsRuntime`/`dataDir`) до PG, строит `EgressDispatcher` с `tlsProfiles`; `getTlsStatus` — статус без
+  PEM/ключей (ca count/subjects, client/mapping subjects, `running`/`saved`, `restartRequired`).
+  `security/proxy-dispatcher.ts` выбирает профиль по origin (`profileFor`), PostgreSQL —
+  `selectTlsClientProfile` по host (`storage-postgres/pool.ts`, `tlsRuntime`). API —
+  `server/routes/settings-tls.ts` (`/settings/tls*`, write-only client, mappings, validate), аудит
+  `scope:'tls'`; изменения — при следующем старте.
 - Секреты at-rest (SSH-ключи, ADR-076) — AES-256-GCM (`security/crypto.ts`);
   мастер-ключ — `SYNTH_SECRET_KEY` > `security.secretKey` > файл
   `{dataDir}/secrets/master.key` (`0600`, каталог `0700`, создаётся при первом
