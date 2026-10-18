@@ -644,7 +644,7 @@ mcp:
 | `fromEnv` | — | Учитывать стандартные `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` | `true` |
 | `fallbackDirect` | `SYNTH_PROXY_FALLBACK_DIRECT` | Явный opt-in: при недоступном прокси идти напрямую (warn + `via:'fallback'`). Ошибки аутентификации (`407`) фоллбек **не** разрешают | `false` |
 | `connectTimeoutMs` | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | Таймаут соединения с прокси, мс | `10000` |
-| `auth.type` | — | Только `basic`; `ntlm`/`negotiate` → ошибка/400 (остаток) | `basic` |
+| `auth.type` | — | Только `basic`; `ntlm`/`negotiate` → ошибка/400 (**доменная аутентификация — egress-шлюз**, ADR-099 п. 25) | `basic` |
 | `auth.username` | — | Пользователь Basic (альтернатива — userinfo в URL) | — |
 | `auth`-пароль | `SYNTH_PROXY_PASSWORD` | Пароль Basic: **только** env или файл `{dataDir}/secrets/proxy-password` (в config.yaml/`settings.json` не хранится, инвариант 13); env приоритетнее файла и блокирует управление из UI | — |
 | `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA к **самому** https-прокси (взаимоисключающи) | системное доверие |
@@ -692,15 +692,47 @@ hostname-правила/`exceptions` (DNS/CIDR не выполняются — �
 **RBAC:** чтение — `requireAuth`; сохранение/сброс, пароль и `check` — `settingsWriteGuard` (managed —
 `ADMIN`, core — `requireAuth`).
 
-**Ограничения.** NTLM/Negotiate/Kerberos не реализованы (нужен собственный CONNECT-цикл и нативная
-зависимость; приёмка — с AD/KDC). `security.tls` к **цели** через SOCKS5 не применяется (ограничение
-`Socks5ProxyAgent` — только системное доверие). https-прокси/SOCKS по IP-литералу требуют DNS-хоста
-(SNI по IP запрещён в Node); `proxy/check` при этом может показать `reachable`. SOCKS5/SOCKS5H в undici
-экспериментальные и резолвят hostname на прокси. Встроенный глобальный `fetch` не гарантирован
+**Ограничения.** Доменная аутентификация прокси (NTLM/Negotiate/Kerberos) **в приложении не
+реализуется** — делегируется промежуточному egress-прокси/шлюзу (ADR-099 п. 25, см. следующий
+подраздел); `auth.type` ≠ `basic` → 400. `security.tls` к **цели** через SOCKS5 не применяется
+(ограничение `Socks5ProxyAgent` — только системное доверие); SOCKS5/SOCKS5H — **best-effort**,
+experimental, резолвят hostname на прокси, без target CA/mTLS, **не целевой для K8s** (там — HTTP
+CONNECT). https-прокси/SOCKS по IP-литералу требуют DNS-хоста (SNI по IP запрещён в Node);
+`proxy/check` при этом может показать `reachable`. Встроенный глобальный `fetch` не гарантирован
 (npm-`setGlobalDispatcher` не влияет на него в Node 26; на Node 22 — перепроверка в CI) — покрыты пути
 через `egressFetch`. Runtime-reload без рестарта — нет. PostgreSQL не проксируется (не HTTP). git
 применяет `no_proxy` средствами libcurl, per-remote настройки нет; `stdio`-MCP получает прокси-env без
 пароля.
+
+#### Корпоративный прокси с Kerberos/NTLM (egress gateway)
+
+Если корпоративный прокси требует доменную аутентификацию, между Synth и ним ставится промежуточный
+**egress-прокси/шлюз** — для K8s это целевая схема:
+
+```text
+[Synth] → HTTP CONNECT (Basic/mTLS/без auth) → [Squid | px] → Kerberos/NTLM → [corporate proxy] → Internet
+```
+
+- **Synth** настраивает `proxy.url` на внутренний шлюз (например `http://egress-gw.synth.svc:3128`),
+  `noProxy` — для `.svc`/кластера, опционально Basic/mTLS **до шлюза** (`proxy.auth` + `proxy.tls`).
+  `auth.type: basic` относится только к участку Synth↔шлюз.
+- **Squid (Kerberos):** upstream через `cache_peer`, аутентификация — `login=NEGOTIATE` с keytab:
+  ```squid
+  cache_peer corp-proxy.corp.local parent 3128 0 no-query default \
+             login=NEGOTIATE:svc-synth@CORP.REALM connection-auth=on
+  never_direct allow all
+  ```
+  Keytab — Secret (read-only) + `KRB5_KTNAME`; `krb5.conf` — ConfigMap; KDC доступен по NetworkPolicy
+  (TCP/UDP 88, 464), NTP обязателен. Шлюз — **отдельный Deployment/namespace** (лучше, чем sidecar):
+  keytab не попадает в pod приложения; HA/ротация/аудит — на шлюзе.
+- **`px` (px-proxy):** если нужен **NTLM**/PAC или standalone-развёртывание (Docker/VM); Kerberos — через
+  `kinit`/ccache либо конфигурацию `px` (`PX_PASSWORD` для NTLM).
+- **Почему не в приложении:** `undici.ProxyAgent` не делает 407-challenge → нужен свой CONNECT-цикл;
+  нативная зависимость (libkrb5/`kerberos`), keytab/KDC/время/cross-realm, PAC/WPAD; приёмка только с
+  AD/KDC клиента; рост blast radius (keytab в pod) и поддержки multi-arch/образов. Оценка 4–8 недель +
+  сопровождение (NTLM отдельно +1–2 недели). Детали — [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md)
+  п. 25.
+- **SOCKS5** — best-effort и не для K8s; если нужен target mTLS — используйте HTTP CONNECT (п. 26 ADR-099).
 
 Пример:
 

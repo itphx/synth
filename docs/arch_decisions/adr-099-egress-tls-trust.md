@@ -18,11 +18,11 @@
 > bootstrap `{dataDir}/security-tls.json` (читается до PG), CA-бандл, `rejectUnauthorized`, default
 > mTLS-клиент и per-host `mappings` (exact/`*.suffix`/`*`, первое совпадение), тот же профиль для PG,
 > API `settings/tls*`, раздел «Сеть» (Прокси + Доверенные CA), read-only параметры config/env, аудит
-> `scope:'tls'`, применение при старте (`restartRequired`). **Остаток:** NTLM/Negotiate/Kerberos (нужен
-> собственный CONNECT-цикл и нативная зависимость; приёмка — с AD/KDC клиента), per-host CA и несколько
-> default-сертов, `security.tls` (CA/mTLS к цели) через SOCKS5 (ограничение `Socks5ProxyAgent`),
-> runtime-reload прокси/TLS без рестарта, пиннинг проверенного адреса
-> ([PROP-100](./prop-100-ssrf-dns-rebinding.md)), метрики/наблюдаемость
+> `scope:'tls'`, применение при старте (`restartRequired`). **Вне scope (2026-10-18):** доменная
+> аутентификация прокси (NTLM/Negotiate/Kerberos) **не реализуется в приложении** — делегируется
+> промежуточному egress-прокси/шлюзу (Squid/px, п. 25); SOCKS5 — **best-effort** (п. 26). **Остаток:**
+> per-host CA и несколько default-сертов, runtime-reload прокси/TLS без рестарта, пиннинг проверенного
+> адреса ([PROP-100](./prop-100-ssrf-dns-rebinding.md)), метрики/наблюдаемость
 > ([PROP-094](./prop-094-observability-metrics.md)), перепроверка покрытия встроенного `fetch` на Node 22.
 > Политика — **не граница безопасности**, когда доступны shell, `stdio`-MCP или внешние движки (см.
 > «Последствия»).
@@ -32,13 +32,15 @@
 > внешних запросов, удаление `webhooks.allowPrivateTargets`.
 > **Обновлено:** 2026-10-17 — HTTP/HTTPS/SOCKS5-прокси (этапы D1+D2): секция `proxy`, `EgressDispatcher`,
 > Basic и mTLS к прокси, `noProxy`, proxied-режим адресной политики, `via` в журнале, git/MCP через env,
-> API `settings/proxy*`, UI; NTLM/Negotiate/Kerberos — остаток.
+> API `settings/proxy*`, UI; NTLM/Negotiate/Kerberos тогда отнесены к остатку (пересмотрено 2026-10-18, п. 25).
 > **Обновлено:** 2026-10-18 — прокси настраивается из админ-UI: runtime-override в сторе (file/PG),
 > приоритет `SYNTH_PROXY_*` > runtime > config.yaml, применение при следующем старте (`restartRequired`),
 > write-only пароль (`secrets/proxy-password`, env приоритетнее), аудит `scope:'proxy'`, `check` по saved.
 > **Обновлено:** 2026-10-18 — TLS настраивается из админ-UI (раздел «Сеть»): bootstrap
 > `security-tls.json` (до PG), приоритет `SYNTH_TLS_*` > runtime > config, CA-бандл, default mTLS-клиент
 > и per-host `mappings`, тот же профиль для PostgreSQL, API `settings/tls*`, аудит `scope:'tls'`.
+> **Обновлено:** 2026-10-18 — доменная аутентификация прокси (NTLM/Negotiate/Kerberos) вынесена из
+> scope: делегируется промежуточному egress-прокси (Squid/px); SOCKS5 — best-effort; см. п. 25–26.
 > **Связано:** [PROP-088](./prop-088-http-proxy.md) (заменён/надстроен), [PROP-100](./prop-100-ssrf-dns-rebinding.md),
 > [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 (сетевой доступ MCP), [ADR-052](./adr-052-public-api-platform.md)
 > (webhooks), [ADR-041](./adr-041-llm-error-taxonomy.md) (ключи ошибок), [ADR-036](./adr-036-llm-gateway.md),
@@ -57,9 +59,9 @@
 инструкции/скиллы по URL, update-checker, OIDC, загрузка иконок, git, PostgreSQL) решала вопрос сама.
 
 [PROP-088](./prop-088-http-proxy.md) проектировал единый **egress-слой целиком** (прокси + `no_proxy` +
-доверенные CA + аутентификация прокси/Kerberos). Прокси-часть требует внешних зависимостей и решения
-по Kerberos/NTLM; доверие TLS/CA — самая востребованная часть, не требующая прокси-транспорта, поэтому
-зафиксирована отдельным решением (этим ADR), а прокси-остаток остаётся в PROP-088.
+доверенные CA + аутентификация прокси/Kerberos). Прокси-часть реализована; **доменная аутентификация
+прокси осознанно не входит в приложение** — делегируется промежуточному egress-прокси/шлюзу (п. 25),
+PROP-088 закрыт как заменённый. Доверие TLS/CA зафиксировано отдельным решением в этом же ADR.
 
 Адресная (SSRF) политика при этом оставалась рассыпанной: у MCP — собственный `mcp.networkPolicy`, у
 webhooks — зашитый `allowPrivateTargets` плюс отдельный `evaluateWebhookTarget`, у `web_fetch`/
@@ -253,6 +255,27 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
     раздел «Сеть» (ADMIN): «Прокси» и «Доверенные CA (TLS)»; применение — при следующем старте
     (`restartRequired`).
 
+25. **Доменная аутентификация прокси — вне scope приложения (2026-10-18).** NTLM/Negotiate/Kerberos
+    **не реализуются** в Synth: `auth.type` — только `basic` (иначе 400 при сохранении из UI /
+    `EGRESS_PROXY_CONFIG_INVALID` на старте). Причины: `undici.ProxyAgent` не выполняет 407-challenge —
+    нужен собственный CONNECT-цикл; нативная зависимость (`kerberos`/libkrb5) и keytab; KDC/время/
+    cross-realm; приёмка возможна только с AD/KDC клиента; рост blast radius (keytab в pod),
+    multi-arch/образы, PAC/WPAD. Оценка 4–8 недель + постоянное сопровождение (NTLM отдельно +1–2 недели,
+    легаси). **Принятая альтернатива — промежуточный egress-прокси/шлюз:** Synth ходит в него по HTTP
+    CONNECT (Basic/mTLS/без auth), а шлюз — в корпоративный прокси по Kerberos/NTLM. Для K8s это
+    **целевая схема**: Squid умеет upstream Kerberos (`cache_peer … login=NEGOTIATE[:principal]
+    connection-auth=on`, keytab через `KRB5_KTNAME`, `never_direct allow all`); для NTLM/PAC — `px`
+    (px-proxy: NTLM/Negotiate/PAC). Keytab — в отдельном Deployment/namespace (лучше, чем sidecar), Secret
+    read-only, `krb5.conf` ConfigMap, KDC доступен по NetworkPolicy, NTP; приложение keytab не видит,
+    ротация/HA/аудит — на шлюзе. **Следующий шаг (не реализовано):** распознавать `Proxy-Authenticate:
+    Negotiate|NTLM` и отдавать отдельный код/подсказку «используйте промежуточный egress-прокси»;
+    сейчас `407` → `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED` без такой подсказки.
+26. **SOCKS5 — best-effort, не целевой для K8s.** `Socks5ProxyAgent` (user/pass RFC 1929, remote DNS,
+    экспериментальный в undici) уже реализован; **нет** доверия к цели через SOCKS (`requestTls` не
+    принимается), `proxy.tls` несовместим с `socks5://`, GSSAPI нет. Для K8s — HTTP CONNECT. Не
+    вкладываться в mTLS-over-SOCKS без конкретного клиента: только по требованию (custom dispatcher/
+    форк `undici`).
+
 ## Альтернативы
 
 - **`NODE_EXTRA_CA_CERTS` как основной механизм** — отклонён: процесс-глобальный, вне конфига
@@ -275,9 +298,12 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
 - **`EnvHttpProxyAgent` (undici) как готовый прокси-слой** — отклонён: не покрывает SOCKS5, CIDR и
   IP/портовые исключения `noProxy`, не даёт per-origin выбора direct/proxy и proxied-семантики
   адресной политики; оставлен только `ProxyAgent`/`Socks5ProxyAgent` как транспорт.
-- **NTLM/Negotiate/Kerberos сразу** — отклонено на этом этапе: `undici.ProxyAgent` не выполняет
-  407-challenge, нужен собственный CONNECT-цикл и нативная зависимость (`kerberos@7`), а приёмка
-  невозможна без AD/KDC клиента. Отдельное решение по запросу клиента с его участием в тестировании.
+- **NTLM/Negotiate/Kerberos в приложении** — **окончательно отклонено** (2026-10-18): `undici.ProxyAgent`
+  не выполняет 407-challenge, нужен собственный CONNECT-цикл, нативная зависимость (`kerberos`/libkrb5),
+  keytab/KDC/время/cross-realm, приёмка только с AD/KDC, рост blast radius (keytab в pod) и поддержки
+  multi-arch/образов. **Принято:** промежуточный egress-прокси/шлюз (Squid `login=NEGOTIATE`, `px` для
+  NTLM/PAC) — п. 25. Вариант `curl --proxy-negotiate` (внешний процесс вместо транспорта) отклонён:
+  ломает streaming, аудит, mTLS и адресную политику.
 
 ## Последствия
 
@@ -305,10 +331,14 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   движках ([PROP-050](./prop-050-external-engines-runner.md)) исходящий трафик идёт мимо guard;
   пиннинга проверенного адреса нет (TOCTOU/DNS-rebinding — [PROP-100](./prop-100-ssrf-dns-rebinding.md));
   при прокси адресную проверку выполняет прокси (п. 15).
-- (−) NTLM/Negotiate/Kerberos не реализованы (`auth.type` кроме `basic` → ошибка конфигурации);
-  `security.tls` (CA/mTLS к цели) не применяется через SOCKS5 (`Socks5ProxyAgent` не принимает
-  `requestTls`) — только системное доверие; https-прокси/SOCKS по IP-литералу требуют DNS-хоста
-  (SNI); SOCKS5 в undici экспериментален и всегда резолвит hostname на прокси.
+- (+) Доменная аутентификация прокси изолирована в egress-шлюзе: keytab не попадает в pod приложения,
+  ротация/HA/аудит — на шлюзе, приложение остаётся с простым HTTP CONNECT и Basic/mTLS до шлюза (п. 25).
+- (−) Принятый trade-off: NTLM/Negotiate/Kerberos **не поддерживаются в приложении** (`auth.type` кроме
+  `basic` → ошибка конфигурации) — нужен промежуточный egress-прокси/шлюз (Squid/px), это лишний хоп и
+  дополнительная эксплуатация. `security.tls` (CA/mTLS к цели) не применяется через SOCKS5
+  (`Socks5ProxyAgent` не принимает `requestTls`) — только системное доверие; https-прокси/SOCKS по
+  IP-литералу требуют DNS-хоста (SNI); SOCKS5 в undici экспериментален и всегда резолвит hostname на
+  прокси (best-effort, не целевой для K8s).
 - (−) TLS-модель ограничена: один CA-бандл на весь egress (per-host CA нет), один default-клиент
   (несколько default-сертов нельзя), default-серт без маппинга предъявляется всем целям, включая
   PostgreSQL; TLS к прокси (`proxy.tls`) задаётся отдельно и в UI только read-only. Bootstrap
@@ -321,7 +351,7 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   в CI). PostgreSQL не проксируется; git применяет `no_proxy` средствами libcurl, per-remote
   настройки нет; `stdio`-MCP получает env без пароля.
 - (−) TLS инициализируется при старте (без hot-reload); hot-reload прокси/TLS — остаток
-  ([PROP-088](./prop-088-http-proxy.md)); Kerberos — отдельное решение.
+  ([PROP-088](./prop-088-http-proxy.md)).
 
 ## Статус в коде
 
@@ -422,12 +452,15 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `packages/storage-postgres/src/pool-tls.test.ts`, UI `NetworkSettings.test.tsx`/
   `TrustedCaSection.test.tsx`; фикстуры —
   `packages/core/src/security/__fixtures__/` (self-signed, `TEST ONLY`).
-- **Нет (остаток):** NTLM/Negotiate/Kerberos (собственный CONNECT-цикл + нативная зависимость,
-  приёмка с AD/KDC), `security.tls` через SOCKS5, hot-reload прокси/TLS — [PROP-088](./prop-088-http-proxy.md);
-  per-host CA и несколько default-клиентских сертов — остаток (одна CA-бандл-модель);
-  пиннинг адреса (TOCTOU), в т.ч. для direct/`noProxy`-хостов — [PROP-100](./prop-100-ssrf-dns-rebinding.md);
-  метрики — [PROP-094](./prop-094-observability-metrics.md); перепроверка покрытия встроенного `fetch`
-  на Node 22 в CI.
+- **Вне scope (не код Synth):** доменная аутентификация прокси (NTLM/Negotiate/Kerberos) —
+  делегируется промежуточному egress-прокси/шлюзу (Squid `login=NEGOTIATE`, `px` для NTLM/PAC), п. 25;
+  в коде только отказ `auth.type` ≠ `basic` (400/`EGRESS_PROXY_CONFIG_INVALID`). Egress gateway —
+  deploy/docs (манифесты/чарт), не код приложения. 407-диагностика `Negotiate|NTLM` — следующий шаг.
+- **Нет (остаток):** `security.tls` через SOCKS5 (best-effort, п. 26), hot-reload прокси/TLS —
+  [PROP-088](./prop-088-http-proxy.md); per-host CA и несколько default-клиентских сертов — остаток
+  (одна CA-бандл-модель); пиннинг адреса (TOCTOU), в т.ч. для direct/`noProxy`-хостов —
+  [PROP-100](./prop-100-ssrf-dns-rebinding.md); метрики — [PROP-094](./prop-094-observability-metrics.md);
+  перепроверка покрытия встроенного `fetch` на Node 22 в CI.
 
 ## История
 
@@ -444,5 +477,6 @@ webhooks — зашитый `allowPrivateTargets` плюс отдельный `e
   `RuntimeSettings.proxy`, применение при старте, `restartRequired`, write-only пароль, аудит
   `scope:'proxy'`, API `settings/proxy*`) и TLS (bootstrap `security-tls.json` до PG, CA-бандл,
   `rejectUnauthorized`, default mTLS-клиент и per-host `mappings`, тот же профиль для PG, API
-  `settings/tls*`, раздел «Сеть», read-only config/env, аудит `scope:'tls'`); NTLM/Negotiate/Kerberos —
-  остаток.
+  `settings/tls*`, раздел «Сеть», read-only config/env, аудит `scope:'tls'`); 2026-10-18 — доменная
+  аутентификация прокси (NTLM/Negotiate/Kerberos) вынесена из scope и делегирована egress-шлюзу
+  (п. 25), SOCKS5 — best-effort (п. 26).

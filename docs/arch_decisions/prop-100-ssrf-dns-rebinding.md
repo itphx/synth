@@ -174,7 +174,7 @@
 - [ADR-099](./adr-099-egress-tls-trust.md) — единый egress-слой: адресная политика (`egress.*`/`mcp.networkPolicy`), аудит изменений, журнал запросов, правило при прокси.
 - [ADR-071](./adr-071-mcp-servers-prompt.md) §2.3.1 — дом сетевой политики MCP и её применение к HTTP-транспортам.
 - [ADR-052](./adr-052-public-api-platform.md) этап II — webhooks, политика egress цели доставки (`egress.webhooks`).
-- [PROP-088](./prop-088-http-proxy.md) — прокси реализован (D1+D2), остаток — NTLM/Negotiate/Kerberos; в proxied-режиме адресную проверку выполняет прокси.
+- [PROP-088](./prop-088-http-proxy.md) — прокси реализован (D1+D2); доменная аутентификация (NTLM/Negotiate/Kerberos) — вне scope приложения (egress-шлюз, ADR-099 п. 25); в proxied-режиме адресную проверку выполняет прокси.
 - [ADR-041](./adr-041-llm-error-taxonomy.md) — ключи ошибок отказа политики.
 - [PROP-094](./prop-094-observability-metrics.md) — детект ребиндинга как метрика/алерт.
 - [AUDIT-CHECKLIST](../security/AUDIT-CHECKLIST.md) §3 п.4 «SSRF / egress», [docs/security/README.md](../security/README.md) — класс уязвимостей и запись аудита.

@@ -451,7 +451,11 @@ in each subsystem. Three orthogonal parts:
    fail-closed `EGRESS_PROXY_UNAVAILABLE`, `407` without a direct fallback. Application is two-step: an early
    `initTlsTrust` (TLS/PG), then `applyStartupProxyConfig` after the storage is built and **before** deps;
    `PUT /settings/proxy` only saves (`restartRequired`), there is no live switch. git gets the proxy via
-   child env (`http_proxy`/… through libcurl), `stdio` MCP via the child process env; PostgreSQL is not proxied.
+   child env (`http_proxy`/… through libcurl), `stdio` MCP via the child process env; PostgreSQL is not
+   proxied. **Domain proxy authentication (NTLM/Negotiate/Kerberos) is not implemented in the application** —
+   it is delegated to an intermediate egress gateway (Squid `login=NEGOTIATE` / `px`), the typical K8s scheme
+   `Synth → HTTP CONNECT → gateway → Kerberos/NTLM → corporate proxy` (ADR-099 item 25); SOCKS5 is
+   best-effort without target CA/mTLS and is not the target scheme for K8s (item 26).
 
 With a proxy enabled the address policy runs in **proxied mode**: only the scheme and hostname rules are
 checked, no DNS/CIDR (the proxy resolves the address); for `noProxy` hosts the check is full. The actual

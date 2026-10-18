@@ -452,7 +452,10 @@ API-эндпоинты и RBAC — `docs/API_V2.md` §5.26; конфиг — `do
    `initTlsTrust` (TLS/PG), затем `applyStartupProxyConfig` после сборки хранилища и **до** deps;
    `PUT /settings/proxy` только сохраняет (`restartRequired`), live-переключения нет. git получает прокси
    child-env (`http_proxy`/… через libcurl), `stdio`-MCP — env дочернего процесса; PostgreSQL не
-   проксируется.
+   проксируется. **Доменная аутентификация прокси (NTLM/Negotiate/Kerberos) в приложении не
+   реализуется** — делегируется промежуточному egress-шлюзу (Squid `login=NEGOTIATE` / `px`), типовой
+   K8s-схеме `Synth → HTTP CONNECT → шлюз → Kerberos/NTLM → корпоративный прокси` (ADR-099 п. 25);
+   SOCKS5 — best-effort без target CA/mTLS, не целевой для K8s (п. 26).
 
 При включённом прокси адресная политика работает в **proxied-режиме**: проверяются схема и
 hostname-правила, DNS/CIDR не выполняются (адрес резолвит прокси); для хостов из `noProxy` — полная

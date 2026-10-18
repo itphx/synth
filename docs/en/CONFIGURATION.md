@@ -646,7 +646,7 @@ not switch the route live — a restart is required. The route is chosen **per o
 | `fromEnv` | — | Honour the standard `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` | `true` |
 | `fallbackDirect` | `SYNTH_PROXY_FALLBACK_DIRECT` | Explicit opt-in: go direct when the proxy is unavailable (warn + `via:'fallback'`). Auth errors (`407`) do **not** allow fallback | `false` |
 | `connectTimeoutMs` | `SYNTH_PROXY_CONNECT_TIMEOUT_MS` | Proxy connection timeout, ms | `10000` |
-| `auth.type` | — | Only `basic`; `ntlm`/`negotiate` → error/400 (remainder) | `basic` |
+| `auth.type` | — | Only `basic`; `ntlm`/`negotiate` → error/400 (**domain authentication — egress gateway**, ADR-099 item 25) | `basic` |
 | `auth.username` | — | Basic username (alternative — userinfo in the URL) | — |
 | `auth` password | `SYNTH_PROXY_PASSWORD` | Basic password: **only** the env var or the file `{dataDir}/secrets/proxy-password` (not stored in config.yaml/`settings.json`, invariant 13); the env var takes precedence over the file and blocks UI management | — |
 | `tls.caFile` / `tls.caPem` | `SYNTH_PROXY_TLS_CA_FILE` / `SYNTH_PROXY_TLS_CA_PEM` | CA for the **https proxy itself** (mutually exclusive) | system trust |
@@ -694,15 +694,48 @@ the check is full (DNS/CIDR per hop). The actual route is written to the egress 
 **RBAC:** read — `requireAuth`; save/reset, password and `check` — `settingsWriteGuard` (managed —
 `ADMIN`, core — `requireAuth`).
 
-**Limitations.** NTLM/Negotiate/Kerberos are not implemented (a custom CONNECT loop and a native dependency
-are required; acceptance — with the customer's AD/KDC). `security.tls` for the **target** is not applied
-through SOCKS5 (a `Socks5ProxyAgent` limitation — system trust only). An https proxy/SOCKS by IP literal
-requires a DNS host (SNI by IP is forbidden in Node); `proxy/check` may still report `reachable`. SOCKS5/SOCKS5H
-in undici are experimental and resolve the hostname at the proxy. The built-in global `fetch` is not
-guaranteed (npm `setGlobalDispatcher` does not affect it on Node 26; on Node 22 — re-check in CI) — the paths
-through `egressFetch` are covered. There is no runtime reload without a restart. PostgreSQL is not proxied
-(not HTTP). git applies `no_proxy` via libcurl, there is no per-remote setting; `stdio` MCP receives the
-proxy env without the password.
+**Limitations.** Domain proxy authentication (NTLM/Negotiate/Kerberos) is **not implemented in the
+application** — it is delegated to an intermediate egress proxy/gateway (ADR-099 item 25, see the next
+subsection); `auth.type` ≠ `basic` → 400. `security.tls` for the **target** is not applied through SOCKS5
+(a `Socks5ProxyAgent` limitation — system trust only); SOCKS5/SOCKS5H is **best-effort**, experimental,
+resolves the hostname at the proxy, has no target CA/mTLS and is **not the target scheme for K8s** (use HTTP
+CONNECT there). An https proxy/SOCKS by IP literal requires a DNS host (SNI by IP is forbidden in Node);
+`proxy/check` may still report `reachable`. The built-in global `fetch` is not guaranteed (npm
+`setGlobalDispatcher` does not affect it on Node 26; on Node 22 — re-check in CI) — the paths through
+`egressFetch` are covered. There is no runtime reload without a restart. PostgreSQL is not proxied (not
+HTTP). git applies `no_proxy` via libcurl, there is no per-remote setting; `stdio` MCP receives the proxy env
+without the password.
+
+#### Corporate proxy with Kerberos/NTLM (egress gateway)
+
+If the corporate proxy requires domain authentication, an intermediate **egress proxy/gateway** is placed
+between Synth and it — for K8s this is the target scheme:
+
+```text
+[Synth] → HTTP CONNECT (Basic/mTLS/no auth) → [Squid | px] → Kerberos/NTLM → [corporate proxy] → Internet
+```
+
+- **Synth** points `proxy.url` at the internal gateway (e.g. `http://egress-gw.synth.svc:3128`), sets
+  `noProxy` for `.svc`/the cluster, and optionally Basic/mTLS **to the gateway** (`proxy.auth` +
+  `proxy.tls`). `auth.type: basic` applies only to the Synth↔gateway leg.
+- **Squid (Kerberos):** upstream via `cache_peer`, authentication via `login=NEGOTIATE` with a keytab:
+  ```squid
+  cache_peer corp-proxy.corp.local parent 3128 0 no-query default \
+             login=NEGOTIATE:svc-synth@CORP.REALM connection-auth=on
+  never_direct allow all
+  ```
+  The keytab is a read-only Secret with `KRB5_KTNAME`; `krb5.conf` is a ConfigMap; the KDC must be reachable
+  via NetworkPolicy (TCP/UDP 88, 464), NTP is mandatory. The gateway is a **separate Deployment/namespace**
+  (better than a sidecar): the keytab never lands in the application pod; HA/rotation/audit live on the
+  gateway.
+- **`px` (px-proxy):** when **NTLM**/PAC or a standalone deployment (Docker/VM) is needed; Kerberos via
+  `kinit`/ccache or `px` configuration (`PX_PASSWORD` for NTLM).
+- **Why not in the application:** `undici.ProxyAgent` does not perform a 407 challenge → a custom CONNECT loop
+  is required; a native dependency (libkrb5/`kerberos`), keytab/KDC/time/cross-realm, PAC/WPAD; acceptance
+  only with the customer's AD/KDC; a larger blast radius (keytab in the pod) and multi-arch/image support.
+  Estimate 4–8 weeks + maintenance (NTLM separately +1–2 weeks). Details —
+  [ADR-099](../arch_decisions/adr-099-egress-tls-trust.md) item 25.
+- **SOCKS5** — best-effort and not for K8s; if target mTLS is needed, use HTTP CONNECT (ADR-099 item 26).
 
 Example:
 

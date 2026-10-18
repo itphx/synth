@@ -1,14 +1,15 @@
 # PROP-088: Работа через HTTP-прокси (единый egress-слой, включая аутентификацию и Kerberos)
 
 > **Статус:** ⛔ Заменено — TLS/CA, mTLS, адресная политика и **HTTP/HTTPS/SOCKS5-прокси (D1+D2 + runtime-UI)**
-> надстроены [ADR-099](./adr-099-egress-tls-trust.md) (единый egress-слой). Остаток: доменная
-> аутентификация прокси **NTLM/Negotiate/Kerberos** (нужен собственный CONNECT-цикл и нативная зависимость;
-> приёмка — с AD/KDC клиента), runtime-reload прокси/TLS без рестарта и CA/mTLS к цели через SOCKS5
-> (ограничение `Socks5ProxyAgent`).
+> надстроены [ADR-099](./adr-099-egress-tls-trust.md) (единый egress-слой). Доменная аутентификация
+> **NTLM/Negotiate/Kerberos не реализуется в приложении** (2026-10-18, ADR-099 п. 25): делегируется
+> промежуточному egress-прокси/шлюзу (Squid `login=NEGOTIATE`, px для NTLM/PAC); SOCKS5 — **best-effort**
+> (ADR-099 п. 26); остаток — только runtime-reload прокси/TLS без рестарта.
 > **Заменено/надстроено:** [ADR-099](./adr-099-egress-tls-trust.md) (2026-10-16; адресная политика —
-> 2026-10-17; прокси D1+D2 — 2026-10-17; runtime-UI — 2026-10-18) — решения о доверии TLS/CA, адресной
-> политике и прокси перенесены туда; файл оставлен как живой остаток по NTLM/Negotiate/Kerberos (номер и
-> файл стабильны, [ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §3).
+> 2026-10-17; прокси D1+D2 — 2026-10-17; runtime-UI — 2026-10-18; доменная аутентификация вне scope —
+> 2026-10-18) — решения о доверии TLS/CA, адресной политике и прокси перенесены туда; файл оставлен для
+> трассируемости, функционального остатка по доменной аутентификации нет (номер и файл стабильны,
+> [ARCH_DECISIONS.md](../ARCH_DECISIONS.md) §3).
 > **Дата:** 2026-10-01
 > **Источник:** перенесено из `AD-DRAFTS.md` (D25); **перенумеровано с PROP-083** — номер PROP-083 занят брендингом ([PROP-083](./prop-083-instance-customization-branding.md)).
 > **Связано:** [ADR-099](./adr-099-egress-tls-trust.md), [ADR-023](./adr-023-configuration.md), [ADR-036](./adr-036-llm-gateway.md), [ADR-076](./adr-076-git-repo-registry-ssh.md),
@@ -30,13 +31,15 @@
   per-origin маршрутом direct/proxy, `noProxy`, Basic и TLS/mTLS к https-прокси, proxied-режим адресной
   политики, git/MCP через env; runtime-override из админ-UI (`RuntimeSettings.proxy`, применение при
   старте, `restartRequired`, write-only пароль, аудит `scope:'proxy'`), API `settings/proxy*`.
-- **Остаётся предложением — доменная аутентификация** (этот файл): **NTLM/Negotiate/Kerberos** и
-  runtime-reload прокси/TLS. Эти пункты в ADR-099 **не вошли** и сохранены в теле ниже как остаток.
+- **Вне scope — доменная аутентификация** (этот файл): **NTLM/Negotiate/Kerberos не реализуются в
+  приложении**, делегируются egress-шлюзу ([ADR-099](./adr-099-egress-tls-trust.md) п. 25). **Остаётся
+  предложением:** только runtime-reload прокси/TLS без рестарта.
 
-**Решение (остаток):** поддержать корпоративную аутентификацию на прокси — **NTLM/Negotiate (Kerberos)**
-поверх уже реализованного CONNECT-транспорта (Basic работает). Все исходящие HTTP(S)-вызовы — провайдеры LLM,
-MCP HTTP-транспорт, `web_fetch`/`web_search`, HTTPS-git, OIDC-дискавери, гибридный обмен — уже идут через
-**общий dispatcher** (`EgressDispatcher`), поэтому расширение аутентификации не требует правок в подсистемах.
+**Решение:** в приложении доменную аутентификацию прокси **не поддерживать**; использовать промежуточный
+egress-прокси/шлюз (Squid `cache_peer … login=NEGOTIATE`, `px` для NTLM/PAC), который ходит в корпоративный
+прокси по Kerberos/NTLM, а Synth — в шлюз по HTTP CONNECT (Basic/mTLS/без auth). SOCKS5 — best-effort
+(не целевой для K8s). Все исходящие HTTP(S)-вызовы уже идут через **общий dispatcher** (`EgressDispatcher`),
+поэтому приложение не меняется — меняется топология egress.
 
 ## Контекст
 
@@ -62,8 +65,9 @@ MCP HTTP-транспорт, `web_fetch`/`web_search`, HTTPS-git, OIDC-диск�
 ### Проблема сегодня
 
 Прокси-слой реализован: единый `EgressDispatcher` выбирает маршрут per-origin, соблюдает `noProxy`, умеет
-Basic и TLS/mTLS к https-прокси, SOCKS5. Остаётся доменная аутентификация: `undici.ProxyAgent` не выполняет
-407-challenge, поэтому NTLM/Negotiate/Kerberos требуют собственного CONNECT-цикла.
+Basic и TLS/mTLS к https-прокси, SOCKS5 (best-effort). Доменная аутентификация прокси **осознанно
+делегируется egress-шлюзу** ([ADR-099](./adr-099-egress-tls-trust.md) п. 25): `undici.ProxyAgent` не
+выполняет 407-challenge, а собственная реализация Kerberos/NTLM неприемлема по стоимости и blast radius.
 
 ## Детали
 
@@ -107,11 +111,9 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
 
 - **Basic — реализовано (D2a):** `Proxy-Authorization` передаётся `token`'ом в первом CONNECT; `407` →
   `EGRESS_PROXY_AUTH_REQUIRED`/`EGRESS_PROXY_AUTH_FAILED` без direct-фоллбека. Пароль не логируется.
-- **NTLM/Negotiate (Kerberos) — остаток:** `undici.ProxyAgent` не выполняет 407-challenge, нужен собственный
-  CONNECT-цикл (повтор запроса с `Proxy-Authorization` по схеме из `Proxy-Authenticate`) и нативная
-  зависимость (`kerberos@7` для GSSAPI/SPNEGO) либо внешний helper. Приёмка невозможна без AD/KDC клиента —
-  отдельное решение по запросу клиента с его участием в тестировании. Сейчас `auth.type: 'ntlm'|'negotiate'`
-  даёт ошибку конфигурации (`EGRESS_PROXY_CONFIG_INVALID`).
+- **NTLM/Negotiate (Kerberos) — не реализуется (вне scope, ADR-099 п. 25):** `auth.type` ≠ `basic` → 400
+  при сохранении из UI / `EGRESS_PROXY_CONFIG_INVALID` на старте. Используйте промежуточный
+  egress-прокси/шлюз: Squid с `cache_peer … login=NEGOTIATE` (Kerberos) либо `px` (NTLM/Negotiate/PAC).
 
 ### Секреты и безопасность
 
@@ -159,8 +161,8 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
 
 **Остаток / известные ограничения:**
 
-- **NTLM/Negotiate/Kerberos** — нет (причина и условия приёмки — выше). Это единственная функциональная
-  дыра относительно исходного замысла PROP-088; `auth.type` кроме `basic` → 400 при сохранении.
+- **NTLM/Negotiate/Kerberos — вне scope** (делегировано egress-шлюзу, ADR-099 п. 25): это не
+  функциональная дыра, а принятое ограничение приложения; `auth.type` кроме `basic` → 400 при сохранении.
 - **Runtime-reload без рестарта** — нет: UI сохраняет override, но dispatcher пересобирается только при
   старте (`restartRequired`).
 - **SOCKS5 + https-цель:** `Socks5ProxyAgent` (undici 7.26) не принимает `requestTls` → CA/mTLS к цели из
@@ -191,8 +193,8 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
 
 Остаётся:
 
-- **Kerberos:** нативная зависимость (`kerberos@7`) / внешний SPNEGO-helper / только Basic+NTLM на первом
-  этапе? Нужны AD/KDC и участие клиента в приёмке.
+- **Egress gateway (Squid/px):** рекомендация, не код Synth — нужны ли примеры манифестов/чарта
+  (Squid `login=NEGOTIATE`, keytab Secret, `krb5.conf`, NetworkPolicy; px для NTLM/PAC) в поставке?
 - **Runtime-reload прокси/TLS:** допустима ли пересборка `EgressDispatcher` без рестарта (гонки
   процесс-глобального dispatcher'а) или оставляем start-only? Сейчас — start-only, UI-оверрайд
   применяется при следующем старте (`restartRequired`).
@@ -228,3 +230,6 @@ fail-closed (`EGRESS_PROXY_UNAVAILABLE`). Точки ходят через `egre
 - 2026-10-18 — прокси настраивается из админ-UI (runtime-override в сторе, API `GET/PUT/DELETE
   /settings/proxy`, `/password`, `check` по saved, аудит `scope:'proxy'`); «API и UI» закрыт, остаток —
   NTLM/Negotiate/Kerberos, runtime-reload и `security.tls` через SOCKS5.
+- 2026-10-18 — **принято решение**: доменная аутентификация прокси (NTLM/Negotiate/Kerberos) не
+  реализуется в приложении и делегируется промежуточному egress-прокси/шлюзу (Squid/px), ADR-099 п. 25;
+  SOCKS5 — best-effort (п. 26); функционального остатка по доменной аутентификации нет.
