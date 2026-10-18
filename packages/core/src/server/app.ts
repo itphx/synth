@@ -18,11 +18,14 @@ import { RemoteConnection } from '../remote/connection.js';
 import { createHealthRoutes } from './routes/health.js';
 import { createMetricsRoutes } from './routes/metrics.js';
 import {
+  attachHybridMetrics,
   createHttpMetricsMiddleware,
   MetricsRegistry,
   registerProcessMetrics,
   resolveMetricsToken,
+  setSynthReady,
 } from '../metrics/index.js';
+import type { RemoteRequestInfo } from '../metrics/index.js';
 import { createHybridRoutes } from './routes/hybrid.js';
 import { createAuthRoutes } from './routes/auth.js';
 import { createRemoteProxyMiddleware } from './proxy.js';
@@ -264,11 +267,15 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   // Runtime-подключение к удалённому backend (гибрид). Connection создаётся
   // всегда: без defaultBackendUrl/credentials он остаётся disconnected, а
   // пользователь логинится в UI (POST /auth/login) в рантайме.
+  // ADR-094: колбэк метрик запросов подключается ниже (после `attachHybridMetrics`);
+  // до этого — no-op (holder), т.к. реестр создаётся раньше соединения.
+  let hybridOnRequest: ((info: RemoteRequestInfo) => void) | undefined;
   const connection = new RemoteConnection({
     credentialsPath: config.remoteCredentialsPath ?? config.remoteAuth?.credentialsPath,
     timeoutMs: config.remoteTimeoutMs,
     defaultIssuer: config.remoteAuth?.issuer,
     defaultClientId: config.remoteAuth?.clientId,
+    onRequest: (info) => hybridOnRequest?.(info),
   });
 
   // Состояние гибрида: зеркала провайдеров/моделей, мост событий, статус живости,
@@ -382,13 +389,25 @@ export async function createStandaloneApp(config: StandaloneConfig) {
   const wsSubscriptions = new EventWebSocketSubscriptions();
 
   // Зависимости (stores/managers/оркестратор/событийное ядро/шедулер/webhooks).
+  // ADR-094: реестр передаётся только при `metrics.enabled` — иначе коллекторы
+  // не подключаются и `/metrics` отдаёт 404 (пустой реестр).
   const deps = await createStandaloneDeps(config, {
     getActiveRemoteProviderNames: () => hybrid.getActiveRemoteProviderNames(),
     isBlockLocalProviders: () => hybrid.isBlockLocalProviders(),
     onSessionMaterialized: (owner, sessionId) => {
       wsSubscriptions.subscribeToSession(owner, sessionId);
     },
-  }, storage, metrics);
+  }, storage, metricsEnabled ? metrics : undefined);
+
+  // ADR-094: остановка фоновых коллекторов. Гибридный gauge (`synth_hybrid_connected`)
+  // читает состояние подключения при скрейпе — accessor живёт в этой области
+  // (`connection`), поэтому подключается здесь, а не в `deps.ts`.
+  const stopMetricsCollectors: Array<() => void> = [...deps.stopMetricsCollectors];
+  if (metricsEnabled) {
+    const hybridMetrics = attachHybridMetrics(metrics, () => Boolean(connection.client));
+    hybridOnRequest = hybridMetrics.onRequest;
+    stopMetricsCollectors.push(hybridMetrics.stop);
+  }
 
   // Роуты API v2 (порядок монтирования — как раньше, см. mount-routes.ts).
   mountStandaloneRoutes(app, auth, {
@@ -458,6 +477,7 @@ export async function createStandaloneApp(config: StandaloneConfig) {
 
   // Композиция завершена — readiness переключается в ready (ADR-094).
   initialized = true;
+  if (metricsEnabled) setSynthReady(metrics, 1);
 
   return {
     app,
@@ -469,7 +489,20 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     metrics,
     storageKind: storage.kind,
     getStorageDegraded: () => storage.degraded ?? null,
-    stopMetrics: () => stopProcessMetrics?.stop(),
+    // ADR-094: остановка процессных метрик **и** фоновых доменных коллекторов
+    // (таймеры сессий/хранилища, подписка шины, decision/hybrid-коллекторы).
+    stopMetrics: () => {
+      stopProcessMetrics?.stop();
+      for (const stop of stopMetricsCollectors) {
+        try {
+          stop();
+        } catch {
+          // Остановка метрик не должна ломать shutdown.
+        }
+      }
+    },
+    /** ADR-094: только фоновые доменные коллекторы (если нужно раздельно). */
+    stopMetricsCollectors,
     connection,
     connectRemote: hybrid.connectRemote,
     connectRemoteFromSaved: hybrid.connectRemoteFromSaved,

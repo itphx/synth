@@ -9,9 +9,10 @@ import type { Message, ProviderConfig as SharedProviderConfig, Session, Reasonin
 import { lookupContextWindow } from '@itphx/synth-shared';
 import { ProviderFactory } from '../../providers/base.js';
 import type { ProviderConfig as CoreProviderConfig, BaseProvider } from '../../providers/base.js';
-import { GatewayProvider } from '../gateway/index.js';
+import { GatewayProvider, DISABLED_GATEWAY_CONFIG } from '../gateway/index.js';
 import type { ObfuscationMapStore, AuditLogger, RateLimiter } from '../gateway/index.js';
 import type { SecretPatternRepository } from '../../storage/ports/secret-pattern-repository.js';
+import type { MetricsRegistry } from '../../metrics/registry.js';
 import type { ContextOptimizer } from '../context/optimizer.js';
 import type { ModelRouter, RoutingDecision } from '../router/router.js';
 import { warning } from '../../logger.js';
@@ -57,16 +58,19 @@ export interface GatewayWrapDeps {
   gatewayAudit: AuditLogger | null;
   gatewayRateLimiter: RateLimiter | null;
   gatewayPayloadLogPath: string | undefined;
+  /** ADR-094: реестр метрик — обёртка ставится и при выключенном gateway. */
+  metrics?: MetricsRegistry;
 }
 
 /**
  * ADR-036: оборачивает провайдер в GatewayProvider с привязкой к сессии.
- * Если gateway выключен — возвращает провайдер как есть (обратная совместимость).
+ * Если gateway выключен — возвращает провайдер как есть (обратная совместимость),
+ * но при заданном реестре метрик обёртка остаётся (только учёт вызовов, ADR-094).
  */
 export function wrapWithGateway(provider: BaseProvider, session: Session, deps: GatewayWrapDeps): BaseProvider {
-  if (!deps.gatewayConfig) return provider;
+  if (!deps.gatewayConfig && !deps.metrics) return provider;
   const patternStore = deps.gatewayPatternStore;
-  return new GatewayProvider(provider, deps.gatewayConfig, {
+  return new GatewayProvider(provider, deps.gatewayConfig ?? DISABLED_GATEWAY_CONFIG, {
     getMap: () => deps.obfMapStore!.get(session.id),
     saveMap: (map) => deps.obfMapStore!.set(session.id, map),
     getAudit: () => deps.gatewayAudit!,
@@ -75,6 +79,7 @@ export function wrapWithGateway(provider: BaseProvider, session: Session, deps: 
     payloadLogPath: deps.gatewayPayloadLogPath,
     sessionId: session.id,
     userId: session.userId ?? '',
+    metrics: deps.metrics,
   });
 }
 

@@ -934,6 +934,38 @@ export type {
 } from './metrics/index.js';
 export { createMetricsRoutes } from './server/routes/metrics.js';
 export type { MetricsRoutesOptions } from './server/routes/metrics.js';
+// ADR-094: доменные коллекторы — проводка в `createStandaloneDeps`/`app.ts`
+// (шина сессий, сессии/очередь, хранилище, decision-слой, гибрид, readiness).
+export {
+  attachBusMetrics,
+  startSessionMetrics,
+  startStorageMetrics,
+  registerDecisionMetrics,
+  createSchedulerMetrics,
+  createWebhookMetrics,
+  createEventMetrics,
+  startEventJournalMetrics,
+  attachHybridMetrics,
+  setSynthReady,
+  normalizeRemoteOp,
+  DATADIR_KINDS,
+  SESSIONS_METRICS_INTERVAL_MS,
+  STORAGE_RECORDS_INTERVAL_MS,
+  STORAGE_BYTES_INTERVAL_MS,
+  EVENT_JOURNAL_INTERVAL_MS,
+} from './metrics/index.js';
+export type {
+  TurnOutcome,
+  StorageMetricsSources,
+  HybridMetricsHooks,
+  RemoteRequestInfo,
+  SchedulerJobInfo,
+  SchedulerJobMetrics,
+  WebhookDeliveryInfo,
+  WebhookDeliveryMetrics,
+  WebhookDeliveryOutcome,
+  EventMetricsHooks,
+} from './metrics/index.js';
 export { createHealthRoutes } from './server/routes/health.js';
 export type { HealthRoutesOptions, ReadinessState } from './server/routes/health.js';
 export { createStandaloneApp } from './server/app.js';

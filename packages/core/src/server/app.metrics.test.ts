@@ -1,8 +1,8 @@
 /**
  * ADR-094 (проводка standalone-core): `/ready` публичный, `/metrics` при
- * `metrics.enabled=false` → 404 и HTTP-серии не создаются; при `enabled=true`
- * скрейп отдаёт HTTP/процессные метрики, а маршрут сессии — шаблоном
- * `/api/v2/sessions/:id` (не сырым id).
+ * `metrics.enabled=false` → 404 и серии не создаются; при `enabled=true`
+ * скрейп отдаёт HTTP/процессные и доменные метрики (ready/storage/sessions/
+ * decision), а маршрут сессии — шаблоном `/api/v2/sessions/:id` (не сырым id).
  */
 import { describe, it, expect } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -44,6 +44,8 @@ describe('createStandaloneApp: ADR-094 (metrics/ready)', () => {
       const res = await app.app.request('/metrics');
       expect(res.status).toBe(404);
       expect(app.metrics.render().series).toBe(0);
+      // Доменные коллекторы не подключены — `synth_ready` не регистрируется.
+      expect(app.metrics.render().text).not.toContain('synth_ready');
     });
   });
 
@@ -63,6 +65,13 @@ describe('createStandaloneApp: ADR-094 (metrics/ready)', () => {
       expect(body).toContain('# TYPE synth_metrics_series gauge');
       expect(body).toContain('# TYPE synth_metrics_scrape_duration_seconds gauge');
       expect(body).toContain('# TYPE synth_process_uptime_seconds gauge');
+      // ADR-094: доменные коллекторы подключены (ready/storage/sessions/decision).
+      expect(body).toContain('synth_ready 1');
+      expect(body).toContain('synth_storage_backend_info{backend="memory"} 1');
+      expect(body).toContain('synth_storage_degraded 0');
+      expect(body).toContain('# TYPE synth_sessions_active gauge');
+      expect(body).toContain('# TYPE synth_decision_calls_total counter');
+      expect(body).toContain('# TYPE synth_hybrid_connected gauge');
     });
   });
 });

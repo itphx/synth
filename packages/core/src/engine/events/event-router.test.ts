@@ -437,3 +437,26 @@ describe('EventRouter (ADR-089)', () => {
     expect(entries[0]?.error).toBe('materialize failed');
   });
 });
+
+describe('EventRouter × ADR-094 (метрики решений)', () => {
+  it('record вызывает metrics.onDecision с решением (bind сохраняется как есть)', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'synth-event-router-metrics-'));
+    const bindingStore = new EventBindingStore({ dataDir: tmpDir });
+    const journal = new EventJournalStore({ dataDir: tmpDir });
+    const onDecision = vi.fn();
+    const onIngest = vi.fn();
+    const r = new EventRouter({
+      bindingStore,
+      journal,
+      metrics: { onIngest, onDecision },
+    });
+
+    const decision: RouteDecision = { kind: 'bind', agentTemplate: 'assistant', signals: ['auto-bind'] };
+    await r.record(event({ dedupKey: 'k-metrics' }), decision);
+
+    expect(onDecision).toHaveBeenCalledOnce();
+    expect(onDecision).toHaveBeenCalledWith(decision);
+    expect(onIngest).not.toHaveBeenCalled();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+});

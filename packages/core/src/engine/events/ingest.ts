@@ -7,6 +7,7 @@ import type {
   SynthEvent,
 } from '@itphx/synth-shared';
 import { nowISO } from '@itphx/synth-shared';
+import type { EventMetricsHooks } from '../../metrics/collectors/events.js';
 import type { RequestSessionService, IdentityClaimHint } from './request-session.js';
 
 /**
@@ -24,6 +25,8 @@ export interface EventIngestInput {
 
 export interface EventIngressDeps {
   requestSessionService: RequestSessionService;
+  /** ADR-094: метрики приёма (`synth_events_ingested_total{source,outcome}`). */
+  metrics?: EventMetricsHooks;
 }
 
 /**
@@ -48,9 +51,11 @@ function defaultDedupKey(input: EventIngestInput, identity: EventIdentity): stri
  */
 export class EventIngress {
   private _requestSessionService: RequestSessionService;
+  private _metrics?: EventMetricsHooks;
 
   constructor(deps: EventIngressDeps) {
     this._requestSessionService = deps.requestSessionService;
+    this._metrics = deps.metrics;
   }
 
   /** Нормализация входа в `SynthEvent` (без побочных эффектов). */
@@ -89,7 +94,25 @@ export class EventIngress {
     identityHint?: IdentityClaimHint;
   }> {
     const event = this.normalize(input);
-    const { decision, session, identityHint } = await this._requestSessionService.handleEvent(event, opts);
+    let result: Awaited<ReturnType<RequestSessionService['handleEvent']>>;
+    try {
+      result = await this._requestSessionService.handleEvent(event, opts);
+    } catch (err) {
+      // ADR-094: неуспешный приём считается в метриках и пробрасывается дальше.
+      this._reportIngest(input.source, 'error');
+      throw err;
+    }
+    this._reportIngest(input.source, 'ok');
+    const { decision, session, identityHint } = result;
     return { event, decision, session, ...(identityHint ? { identityHint } : {}) };
+  }
+
+  /** ADR-094: ошибки колбэка метрик не влияют на приём события. */
+  private _reportIngest(source: string, outcome: 'ok' | 'error'): void {
+    try {
+      this._metrics?.onIngest({ source, outcome });
+    } catch {
+      // ignore
+    }
   }
 }

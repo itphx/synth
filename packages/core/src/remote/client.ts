@@ -4,6 +4,7 @@
 
 import { RemoteError } from './types.js';
 import { CURRENCIES, type Currency } from '@itphx/synth-shared';
+import type { RemoteRequestInfo } from '../metrics/collectors/hybrid.js';
 // ADR-099: запросы к удалённому backend — через единый транспорт доверия TLS/CA.
 import { egressFetch } from '../security/tls.js';
 
@@ -22,6 +23,8 @@ export interface RemoteClientOptions {
   backendUrl: string;
   getToken: () => Promise<string | null>;
   timeoutMs?: number;
+  /** ADR-094: метрики запроса (вызывается в `finally`, включая ошибки). */
+  onRequest?: (info: RemoteRequestInfo) => void;
 }
 
 export interface RemoteAuthStatus {
@@ -81,11 +84,13 @@ export class RemoteBackendClient {
   private readonly _backendUrl: string;
   private readonly _getToken: () => Promise<string | null>;
   private readonly _timeoutMs: number;
+  private readonly _onRequest?: (info: RemoteRequestInfo) => void;
 
   constructor(options: RemoteClientOptions) {
     this._backendUrl = options.backendUrl.replace(/\/+$/, '');
     this._getToken = options.getToken;
     this._timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this._onRequest = options.onRequest;
   }
 
   async request<T>(
@@ -93,6 +98,33 @@ export class RemoteBackendClient {
     path: string,
     body?: unknown,
     opts?: RequestOptions,
+  ): Promise<T> {
+    if (!this._onRequest) {
+      return this._requestImpl<T>(method, path, body, opts);
+    }
+    const startedAt = Date.now();
+    const info: RemoteRequestInfo = { method, path, durationMs: 0 };
+    try {
+      return await this._requestImpl<T>(method, path, body, opts, info);
+    } catch (err) {
+      info.error = err instanceof Error ? err.message : String(err);
+      throw err;
+    } finally {
+      info.durationMs = Date.now() - startedAt;
+      try {
+        this._onRequest(info);
+      } catch {
+        // метрики не должны ломать запрос
+      }
+    }
+  }
+
+  private async _requestImpl<T>(
+    method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
+    path: string,
+    body?: unknown,
+    opts?: RequestOptions,
+    info?: RemoteRequestInfo,
   ): Promise<T> {
     const url = new URL(path, this._backendUrl).toString();
 
@@ -145,6 +177,7 @@ export class RemoteBackendClient {
       opts?.signal?.removeEventListener('abort', onExternalAbort);
     }
 
+    if (info) info.status = res.status;
     if (res.status === 401) {
       throw new RemoteError('Не авторизован на удалённом сервере', 'UNAUTHORIZED');
     }

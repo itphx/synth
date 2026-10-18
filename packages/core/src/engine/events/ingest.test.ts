@@ -86,4 +86,31 @@ describe('EventIngress (ADR-089)', () => {
     const res = await ingress.ingest({ source: 'ui', type: 'message' });
     expect(res.session).toBeNull();
   });
+
+  it('ADR-094: metrics.onIngest — ok при успехе, error при исключении (и проброс)', async () => {
+    const onIngest = vi.fn();
+    const onDecision = vi.fn();
+    const okService = createMockService();
+    const okIngress = new EventIngress({
+      requestSessionService: okService,
+      metrics: { onIngest, onDecision },
+    });
+
+    await okIngress.ingest({ source: 'ci', type: 'ci_event' });
+    expect(onIngest).toHaveBeenLastCalledWith({ source: 'ci', outcome: 'ok' });
+
+    const failing = {
+      handleEvent: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    } as unknown as RequestSessionService;
+    const failIngress = new EventIngress({
+      requestSessionService: failing,
+      metrics: { onIngest, onDecision },
+    });
+
+    await expect(failIngress.ingest({ source: 'telegram', type: 'message' })).rejects.toThrow('boom');
+    expect(onIngest).toHaveBeenLastCalledWith({ source: 'telegram', outcome: 'error' });
+    expect(onIngest).toHaveBeenCalledTimes(2);
+  });
 });

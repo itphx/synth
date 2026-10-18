@@ -12,6 +12,7 @@ import { computeUsageCost } from '../providers/usage.js';
 import type { LLMMessage, CancellationToken, BaseProvider, SystemPromptPayload, CachePolicy } from '../providers/base.js';
 import { ContextBuilder } from './context/builder.js';
 import { ContextOptimizer } from './context/optimizer.js';
+import type { ContextOptimizerGatewayHooks } from './context/optimizer.js';
 import type { ContextFileRepository } from '../storage/ports/context-file-repository.js';
 import { SystemPromptComposer, type ComposerContext, type ComposerInstructions, type ComposerMcpServer, type ComposerMcpServerStatus } from './context/composer.js';
 import { ProjectInstructionsResolver, type InstructionsFileInfo } from './context/instructions.js';
@@ -57,8 +58,9 @@ import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
 import type { ProtectedPathsPolicy } from './security/protected-paths.js';
-import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret } from './gateway/index.js';
+import { GatewayProvider, AuditLogger, RateLimiter, ObfuscationMapStore, obfuscateSecrets, maskSecret, DISABLED_GATEWAY_CONFIG } from './gateway/index.js';
 import type { SecretPatternRepository } from '../storage/ports/secret-pattern-repository.js';
+import type { MetricsRegistry } from '../metrics/registry.js';
 import { t as sm, i18n as i18nMeta } from './system-messages.js';
 import { runInlineShell } from './commands/inline-shell.js';
 import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
@@ -190,6 +192,11 @@ export interface OrchestratorOptions {
   gatewayAuditLogger?: AuditLogger;
   /** Хранилище кастомных regex-паттернов детекции секретов (override ?? дефолт). */
   gatewayPatternStore?: SecretPatternRepository;
+  /**
+   * ADR-094: реестр метрик — LLM-вызовы учитываются и при выключенном gateway
+   * (`synth_llm_requests_total`/`..._duration_seconds`/`..._tokens_total`).
+   */
+  metrics?: MetricsRegistry;
   /** ADR-070 §2.2: политика prompt-cache (config llm.cache). Дефолт — auto. */
   cachePolicy?: CachePolicy;
   /**
@@ -308,18 +315,8 @@ interface InstructionsTurnMemoEntry {
 /** Верхняя граница числа сессий в мемо инструкций (простая FIFO-эвикция). */
 const MAX_INSTRUCTIONS_TURN_MEMO = 256;
 
-/**
- * ADR-084: безопасный дефолт gateway-конфига для decision-провайдеров, когда
- * LLM Gateway выключен (`enabled: false` — guard no-op, без падения).
- */
-const DEFAULT_DECISION_GATEWAY_CONFIG: LLMGatewayConfig = {
-  enabled: false,
-  inputMode: 'obfuscate',
-  logPayloads: false,
-  payloadLogPath: '',
-  rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
-  audit: { enabled: true, logPath: '' },
-};
+/** ADR-084: безопасный дефолт gateway-конфига для decision-провайдеров (см. `DISABLED_GATEWAY_CONFIG`). */
+const DEFAULT_DECISION_GATEWAY_CONFIG: LLMGatewayConfig = DISABLED_GATEWAY_CONFIG;
 
 /** ADR-070 §2.5: read-only диагностика промпта для `GET /sessions/:id/prompt`. */
 export interface PromptDiagnostics {  manifest: PromptManifest;
@@ -379,6 +376,8 @@ export class ChatOrchestrator {
   private _gatewayAudit: AuditLogger | null;
   private _gatewayRateLimiter: RateLimiter | null;
   private readonly _gatewayPatternStore: SecretPatternRepository | null;
+  /** ADR-094: реестр метрик (LLM-вызовы; временные метрики подключаются приложением). */
+  private readonly _metrics: MetricsRegistry | null;
   private readonly _dataDir: string;
   /** Путь к JSONL полного лога запросов/ответов LLM (передаётся в GatewayProvider). */
   private readonly _gatewayPayloadLogPath: string | undefined;
@@ -658,19 +657,13 @@ export class ChatOrchestrator {
       this._gatewayRateLimiter = null;
     }
     this._gatewayPatternStore = options.gatewayPatternStore ?? null;
+    this._metrics = options.metrics ?? null;
 
     // ADR-036: суммаризация (ContextOptimizer) создаёт провайдера напрямую —
     // передаём ему общую gateway-обвязку, чтобы эта точка тоже была защищена.
-    this._optimizer?.setGatewayHooks(
-      gatewayConfig && this._obfMapStore && this._gatewayAudit && this._gatewayRateLimiter
-        ? {
-            config: gatewayConfig,
-            audit: this._gatewayAudit,
-            rateLimiter: this._gatewayRateLimiter,
-            obfMapStore: this._obfMapStore,
-          }
-        : null,
-    );
+    // ADR-094: при включённых метриках обвязка ставится и при выключенном gateway
+    // (учёт вызовов; guard в этом режиме no-op).
+    this._optimizer?.setGatewayHooks(this._optimizerGatewayHooks());
 
     // DictionaryStore и ProviderPool создаём всегда (нужны микро-слою и роутеру).
     // Продакшн передаёт порт; фоллбэк — файловый контекст по `dataDir`.
@@ -713,7 +706,7 @@ export class ChatOrchestrator {
     const pool = new ProviderPool(
       options.providerLoader,
       gatewayConfig ?? undefined,
-      gatewayConfig ? this._poolGatewayFactory(gatewayConfig) : undefined,
+      gatewayConfig || this._metrics ? this._poolGatewayFactory(gatewayConfig ?? DISABLED_GATEWAY_CONFIG) : undefined,
       this._decisionGatewayFactory(),
     );
     this._providerPool = pool;
@@ -750,11 +743,33 @@ export class ChatOrchestrator {
   }
 
   /**
+   * ADR-036/ADR-094: gateway-обвязка суммаризации. Задаётся при включённом
+   * gateway или при наличии реестра метрик (тогда — disabled-конфиг: guard
+   * no-op, но вызов учитывается).
+   */
+  private _optimizerGatewayHooks(): ContextOptimizerGatewayHooks | null {
+    if (!this._gatewayConfig && !this._metrics) return null;
+    const config = this._gatewayConfig ?? DISABLED_GATEWAY_CONFIG;
+    const audit = this._gatewayAudit
+      ?? new AuditLogger(join(this._dataDir, 'audit', 'llm-gateway.jsonl'));
+    const rateLimiter = this._gatewayRateLimiter
+      ?? new RateLimiter(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+    const obfMapStore = this._obfMapStore ?? new ObfuscationMapStore(this._sessionManager);
+    return {
+      config,
+      audit,
+      rateLimiter,
+      obfMapStore,
+      ...(this._metrics ? { metrics: this._metrics } : {}),
+    };
+  }
+
+  /**
    * ADR-036: фабрика gateway-обёртки для ProviderPool — единая точка (конструктор
    * и live-переключение). У пула нет сессии, поэтому карта обфускации пустая:
    * защита от утечки секретов работает, карта не персистится.
    */
-  private _poolGatewayFactory(gatewayConfig: LLMGatewayConfig): (inner: BaseProvider) => BaseProvider {
+  private _poolGatewayFactory(gatewayConfig: LLMGatewayConfig = this._gatewayConfig ?? DISABLED_GATEWAY_CONFIG): (inner: BaseProvider) => BaseProvider {
     return (inner) => new GatewayProvider(inner, gatewayConfig, {
       getMap: async () => ({}),
       saveMap: async () => {},
@@ -763,6 +778,7 @@ export class ChatOrchestrator {
       payloadLogPath: this._gatewayPayloadLogPath,
       sessionId: '',
       userId: '',
+      metrics: this._metrics ?? undefined,
     });
   }
 
@@ -788,6 +804,7 @@ export class ChatOrchestrator {
       payloadLogPath: this._gatewayPayloadLogPath,
       sessionId: '',
       userId: '',
+      metrics: this._metrics ?? undefined,
     });
   }
 
@@ -819,22 +836,15 @@ export class ChatOrchestrator {
     }
 
     // ADR-036: суммаризация (ContextOptimizer) — обновляем gateway-обвязку.
-    this._optimizer?.setGatewayHooks(
-      gatewayConfig && this._obfMapStore && this._gatewayAudit && this._gatewayRateLimiter
-        ? {
-            config: gatewayConfig,
-            audit: this._gatewayAudit,
-            rateLimiter: this._gatewayRateLimiter,
-            obfMapStore: this._obfMapStore,
-          }
-        : null,
-    );
+    this._optimizer?.setGatewayHooks(this._optimizerGatewayHooks());
 
     // ADR-036: пул кешировал провайдеров без новой обёртки — сбрасываем кеш
     // и обновляем фабрику (по образцу конструктора, с пустой картой обфускации).
     this._providerPool?.setGateway(
       gatewayConfig,
-      gatewayConfig ? this._poolGatewayFactory(gatewayConfig) : null,
+      gatewayConfig || this._metrics
+        ? this._poolGatewayFactory(gatewayConfig ?? DISABLED_GATEWAY_CONFIG)
+        : null,
     );
     // ADR-084: decision-обвязка обновляется всегда (guard активен и при выключенном gateway).
     this._providerPool?.setDecisionGatewayFactory(this._decisionGatewayFactory());
@@ -3581,6 +3591,7 @@ export class ChatOrchestrator {
         gatewayAudit: this._gatewayAudit,
         gatewayRateLimiter: this._gatewayRateLimiter,
         gatewayPayloadLogPath: this._gatewayPayloadLogPath,
+        metrics: this._metrics ?? undefined,
       },
     };
   }

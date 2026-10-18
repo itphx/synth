@@ -1,7 +1,8 @@
 /**
- * Тесты интеграции ProviderPool × LLM Gateway (ADR-036):
- * провайдер оборачивается GatewayProvider когда gateway включён,
- * и не оборачивается когда выключен/не задана фабрика.
+ * Тесты интеграции ProviderPool × LLM Gateway (ADR-036/ADR-094):
+ * провайдер оборачивается GatewayProvider когда задана фабрика обвязки
+ * (в т.ч. при `gateway.enabled=false` — обёртка нужна для метрик LLM),
+ * и не оборачивается когда фабрика не задана.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -130,7 +131,7 @@ describe('ProviderPool × LLM Gateway (ADR-036)', () => {
     expect(provider).toBeInstanceOf(GatewayProvider);
   });
 
-  it('не оборачивает провайдер когда gateway disabled', () => {
+  it('оборачивает провайдер при заданной фабрике даже когда gateway disabled (метрики)', () => {
     const pool = new ProviderPool(
       makeLoader(),
       makeGatewayConfig({ enabled: false }),
@@ -146,8 +147,9 @@ describe('ProviderPool × LLM Gateway (ADR-036)', () => {
 
     const provider = pool.getProvider('mockpool', 'mock-model');
     expect(provider).not.toBeNull();
-    expect(provider).not.toBeInstanceOf(GatewayProvider);
-    expect(provider).toBeInstanceOf(MockPoolProvider);
+    // ADR-094: обёртка держит учёт LLM-метрик, поэтому фабрика важнее флага enabled.
+    expect(provider).toBeInstanceOf(GatewayProvider);
+    expect(provider).not.toBeInstanceOf(MockPoolProvider);
   });
 
   it('не оборачивает провайдер когда фабрика не задана', () => {

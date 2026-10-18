@@ -1,6 +1,7 @@
 import type { Schedule, ScheduleJob, ScheduleJobTrigger } from '@itphx/synth-shared';
 import { generateId } from '@itphx/synth-shared';
 import type { EventIngress } from '../events/ingest.js';
+import type { SchedulerJobMetrics } from '../../metrics/collectors/scheduler.js';
 import type { ScheduleRepository } from '../../storage/ports/schedule-repository.js';
 import type { JobRepository } from '../../storage/ports/job-repository.js';
 import { AlwaysLeader } from './leader.js';
@@ -27,6 +28,8 @@ export interface SchedulerServiceDeps {
   leader?: SchedulerLeader;
   /** Источник времени (для тестов). */
   now?: () => Date;
+  /** ADR-094: колбэк метрик завершённых Job (`ok`/`error`/`skipped`). */
+  onJob?: SchedulerJobMetrics;
 }
 
 /** Дефолтный период тика, если `tickMs` не задан. */
@@ -62,6 +65,7 @@ export class SchedulerService {
   private _leader: SchedulerLeader;
   private _isLeader = false;
   private _now: () => Date;
+  private _onJob?: SchedulerJobMetrics;
   private _timer?: ReturnType<typeof setInterval>;
   private _busy = false;
   /** Защита от параллельного запуска одного расписания. */
@@ -77,6 +81,7 @@ export class SchedulerService {
     this._jobRetentionDays = deps.jobRetentionDays ?? DEFAULT_JOB_RETENTION_DAYS;
     this._leader = deps.leader ?? new AlwaysLeader();
     this._now = deps.now ?? (() => new Date());
+    this._onJob = deps.onJob;
   }
 
   /**
@@ -274,6 +279,7 @@ export class SchedulerService {
         dedupKey,
         error,
       }).catch(() => {});
+      this._reportJob('error', finished.getTime() - started.getTime(), at, trigger, started);
       try {
         const next = nextRunAt(schedule, at);
         await this._store.markRun(schedule.id, {
@@ -355,6 +361,13 @@ export class SchedulerService {
         reason: dropped ? decision.reason : undefined,
         sessionId: session?.id,
       });
+      this._reportJob(
+        dropped ? 'skipped' : 'ok',
+        finished.getTime() - started.getTime(),
+        at,
+        trigger,
+        started,
+      );
 
       const next = nextRunAt(schedule, at);
       await this._store.markRun(schedule.id, {
@@ -374,6 +387,31 @@ export class SchedulerService {
       await this._jobStore.append({ id: `job_${generateId()}`, ...job });
     } catch (err) {
       console.warn(`[scheduler] не удалось записать Job: ${errorMessage(err)}`);
+    }
+  }
+
+  /**
+   * ADR-094: метрики завершённого Job. Дрейф — только для `cron` (разница между
+   * фактическим стартом и плановым временем); `manual`/`catchup` дрейфа не имеют.
+   * Ошибки колбэка не влияют на планировщик.
+   */
+  private _reportJob(
+    status: ScheduleJob['status'],
+    durationMs: number,
+    at: Date,
+    trigger: ScheduleJobTrigger,
+    started: Date,
+  ): void {
+    if (!this._onJob) return;
+    let driftSec: number | undefined;
+    if (trigger === 'cron') {
+      const value = (started.getTime() - at.getTime()) / 1000;
+      if (Number.isFinite(value)) driftSec = value;
+    }
+    try {
+      this._onJob({ status, durationMs, ...(driftSec !== undefined ? { driftSec } : {}) });
+    } catch {
+      // метрики не должны ломать запуск
     }
   }
 }

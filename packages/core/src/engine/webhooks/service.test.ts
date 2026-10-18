@@ -7,6 +7,8 @@ import { EventBus } from '../../events/bus.js';
 import { WebhookStore } from '../../storage/webhook-store.js';
 import { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
 import { WebhookService, computeBackoffMs } from './service.js';
+import { MetricsRegistry } from '../../metrics/registry.js';
+import { createWebhookMetrics } from '../../metrics/collectors/webhooks.js';
 import { PRIVATE_EGRESS_POLICY } from '../net/egress-guard.js';
 import { createEgressLogSink } from '../net/egress-log.js';
 import { configureEgressRuntime, resetEgressRuntime } from '../net/egress-runtime.js';
@@ -319,5 +321,94 @@ describe('WebhookService (ADR-052, этап II)', () => {
     // джиттер ±20%
     expect(computeBackoffMs(1, () => 0)).toBe(800);
     expect(computeBackoffMs(1, () => 1)).toBe(1_200);
+  });
+});
+
+describe('WebhookService × ADR-094 (метрики доставок)', () => {
+  let tmpDir: string;
+  let store: WebhookStore;
+  let deliveryStore: WebhookDeliveryStore;
+  let bus: EventBus;
+
+  const okResponse = () => new Response(null, { status: 200 });
+
+  const baseConfig = {
+    enabled: true,
+    maxAttempts: 2,
+    timeoutMs: 5_000,
+    policy: PRIVATE_EGRESS_POLICY,
+  };
+
+  const makeService = (
+    fetchImpl: FetchLike,
+    onDelivery: WebhookServiceDeps['onDelivery'],
+    overrides: Partial<typeof baseConfig> = {},
+  ) => new WebhookService({
+    store,
+    deliveryStore,
+    eventBus: bus,
+    config: { ...baseConfig, ...overrides },
+    fetchImpl,
+    sleep: async () => {},
+    onDelivery,
+  });
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-webhook-metrics-'));
+    store = new WebhookStore({ dataDir: tmpDir });
+    deliveryStore = new WebhookDeliveryStore({ dataDir: tmpDir });
+    bus = new EventBus();
+  });
+
+  afterEach(async () => {
+    resetEgressRuntime();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('deliverTest: ok / error / blocked — ровно один вызов на доставку', async () => {
+    const onDelivery = vi.fn();
+
+    const okSub = await store.create({ label: 'ok', url: 'https://example.com/hook', events: ['webhook.test'] }, 'u-1');
+    const okService = makeService(async () => okResponse(), onDelivery);
+    const okDelivery = await okService.deliverTest(okSub.id);
+    expect(okDelivery?.status).toBe('ok');
+    expect(onDelivery).toHaveBeenLastCalledWith({ outcome: 'ok', attempts: 1, durationMs: expect.any(Number) });
+    expect(onDelivery).toHaveBeenCalledTimes(1);
+
+    const errSub = await store.create({ label: 'err', url: 'https://example.com/hook', events: ['webhook.test'] }, 'u-1');
+    const errService = makeService(async () => new Response(null, { status: 500 }), onDelivery);
+    const errDelivery = await errService.deliverTest(errSub.id);
+    expect(errDelivery?.status).toBe('failed');
+    expect(onDelivery).toHaveBeenLastCalledWith({ outcome: 'error', attempts: 2, durationMs: expect.any(Number) });
+    expect(onDelivery).toHaveBeenCalledTimes(2);
+
+    const blockedSub = await store.create({ label: 'blocked', url: 'https://127.0.0.1/hook', events: ['webhook.test'] }, 'u-1');
+    const blockedService = makeService(async () => okResponse(), onDelivery);
+    const blockedDelivery = await blockedService.deliverTest(blockedSub.id);
+    expect(blockedDelivery?.status).toBe('failed');
+    expect(onDelivery).toHaveBeenLastCalledWith({ outcome: 'blocked', attempts: 0, durationMs: expect.any(Number) });
+    expect(onDelivery).toHaveBeenCalledTimes(3);
+  });
+
+  it('повторы при attempts>1 попадают в synth_webhook_retries_total', async () => {
+    const registry = new MetricsRegistry();
+    const sub = await store.create({ label: 'retry', url: 'https://example.com/hook', events: ['webhook.test'] }, 'u-1');
+    let calls = 0;
+    const service = makeService(
+      async () => {
+        calls += 1;
+        return calls < 3 ? new Response(null, { status: 500 }) : okResponse();
+      },
+      createWebhookMetrics(registry),
+      { maxAttempts: 3 },
+    );
+
+    const delivery = await service.deliverTest(sub.id);
+    expect(delivery).toMatchObject({ status: 'ok', attempts: 3 });
+
+    const text = registry.render().text;
+    expect(text).toContain('synth_webhook_deliveries_total{outcome="ok"} 1');
+    expect(text).toContain('synth_webhook_retries_total 2');
+    expect(text).toContain('synth_webhook_delivery_duration_seconds_count 1');
   });
 });

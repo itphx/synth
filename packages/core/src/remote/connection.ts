@@ -17,6 +17,7 @@ import { loadCredentials, saveCredentials, listCredentials } from './credentials
 import { refreshAccessToken } from './device-flow.js';
 import { RemoteSession } from './session.js';
 import type { RemoteSessionOptions } from './session.js';
+import type { RemoteRequestInfo } from '../metrics/collectors/hybrid.js';
 
 /** Таймаут GET {server}/auth/oidc-meta по умолчанию. */
 const DEFAULT_OIDC_META_TIMEOUT_MS = 15_000;
@@ -40,6 +41,8 @@ export interface RemoteConnectionDeps {
   /** Fallback-параметры IdP, если дискавери с сервера недоступен/выключен. */
   defaultIssuer?: string;
   defaultClientId?: string;
+  /** ADR-094: метрики исходящих запросов к удалённому backend. */
+  onRequest?: (info: RemoteRequestInfo) => void;
 }
 
 export class RemoteConnection {
@@ -152,6 +155,7 @@ export class RemoteConnection {
         clientId,
         credentialsPath: this.deps.credentialsPath,
         timeoutMs: this.deps.timeoutMs,
+        onRequest: this.deps.onRequest,
       },
       username,
       password,
@@ -191,6 +195,7 @@ export class RemoteConnection {
       apiKey,
       credentialsPath: this.deps.credentialsPath,
       timeoutMs: this.deps.timeoutMs,
+      onRequest: this.deps.onRequest,
     });
 
     const user = session.user ?? (await this._fetchUserBestEffort(session));
@@ -298,6 +303,7 @@ export class RemoteConnection {
         clientId,
         credentialsPath: this.deps.credentialsPath,
         timeoutMs: this.deps.timeoutMs,
+        onRequest: this.deps.onRequest,
       } satisfies RemoteSessionOptions);
     } catch {
       return null;

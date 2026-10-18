@@ -9,6 +9,7 @@ import { loadCredentials, saveCredentials, clearCredentials } from './credential
 import { startDeviceFlow, pollDeviceToken, refreshAccessToken, passwordGrant } from './device-flow.js';
 import { RemoteError } from './types.js';
 import type { RemoteAuthType, RemoteCredentials, RemoteUser } from './types.js';
+import type { RemoteRequestInfo } from '../metrics/collectors/hybrid.js';
 
 export interface RemoteSessionOptions {
   backendUrl: string;
@@ -18,6 +19,8 @@ export interface RemoteSessionOptions {
   clientId?: string;
   credentialsPath?: string;
   timeoutMs?: number;
+  /** ADR-094: метрики исходящих запросов к удалённому backend. */
+  onRequest?: (info: RemoteRequestInfo) => void;
 }
 
 /** Информация для показа пользователю во время device flow. */
@@ -50,7 +53,8 @@ export class RemoteSession {
   private _expiresAt?: string;
   private readonly _issuer?: string;
   private readonly _clientId?: string;
-  private readonly _client: RemoteBackendClient;
+  private readonly _timeoutMs?: number;
+  private _client: RemoteBackendClient;
   private readonly _credentialsPath?: string;
 
   private constructor(
@@ -72,6 +76,7 @@ export class RemoteSession {
     this._expiresAt = expiresAt;
     this._issuer = issuer;
     this._clientId = clientId;
+    this._timeoutMs = timeoutMs;
     this._credentialsPath = credentialsPath;
     this.user = user;
     this._client = new RemoteBackendClient({
@@ -81,6 +86,21 @@ export class RemoteSession {
       getToken: () => this.getToken(),
       timeoutMs,
     });
+  }
+
+  /**
+   * ADR-094: подключить колбэк метрик исходящих запросов (клиент пересоздаётся
+   * с хуком). Без хука поведение прежнее.
+   */
+  attachRequestHook(onRequest?: (info: RemoteRequestInfo) => void): this {
+    if (!onRequest) return this;
+    this._client = new RemoteBackendClient({
+      backendUrl: this.backendUrl,
+      getToken: () => this.getToken(),
+      timeoutMs: this._timeoutMs,
+      onRequest,
+    });
+    return this;
   }
 
   /**
@@ -97,6 +117,8 @@ export class RemoteSession {
     const backendUrl = opts.backendUrl.replace(/\/+$/, '');
     const authType = opts.authType ?? 'device';
     const credentialsPath = opts.credentialsPath;
+    const finish = (session: RemoteSession): RemoteSession =>
+      session.attachRequestHook(opts.onRequest);
 
     if (authType === 'api_key') {
       if (!opts.apiKey) {
@@ -105,18 +127,18 @@ export class RemoteSession {
           'AUTH',
         );
       }
-      return new RemoteSession(backendUrl, authType, opts.apiKey, credentialsPath, opts.timeoutMs);
+      return finish(new RemoteSession(backendUrl, authType, opts.apiKey, credentialsPath, opts.timeoutMs));
     }
 
     const existing = await loadCredentials(backendUrl, credentialsPath);
 
     // Сохранённый accessToken действителен — используем как есть.
     if (existing?.accessToken && !isTokenExpired(existing.expiresAt)) {
-      return new RemoteSession(
+      return finish(new RemoteSession(
         backendUrl, authType, existing.accessToken, credentialsPath, opts.timeoutMs,
         existing.refreshToken, existing.expiresAt, opts.issuer, opts.clientId,
         existing.user,
-      );
+      ));
     }
 
     // Просрочен, но есть refreshToken — пробуем обновить.
@@ -139,11 +161,11 @@ export class RemoteSession {
           user: existing.user,
         };
         await saveCredentials(updated, credentialsPath);
-        return new RemoteSession(
+        return finish(new RemoteSession(
           backendUrl, authType, updated.accessToken, credentialsPath, opts.timeoutMs,
           updated.refreshToken, updated.expiresAt, opts.issuer, opts.clientId,
           updated.user,
-        );
+        ));
       } catch (err) {
         if (err instanceof RemoteError && err.code === 'AUTH') {
           // refresh token недействителен (invalid_grant и т.п.) — чистим и проходим device flow заново.
@@ -181,10 +203,10 @@ export class RemoteSession {
       // id_token не парсим на этом этапе — user оставляем пустым.
     };
     await saveCredentials(creds, credentialsPath);
-    return new RemoteSession(
+    return finish(new RemoteSession(
       backendUrl, authType, creds.accessToken, credentialsPath, opts.timeoutMs,
       creds.refreshToken, creds.expiresAt, opts.issuer, opts.clientId,
-    );
+    ));
   }
 
   /**
@@ -238,6 +260,7 @@ export class RemoteSession {
         backendUrl,
         getToken: async () => granted.accessToken,
         timeoutMs: opts.timeoutMs,
+        onRequest: opts.onRequest,
       });
       const status = await statusClient.getAuthStatus();
       if (status.user) {
@@ -252,7 +275,7 @@ export class RemoteSession {
       backendUrl, authType, creds.accessToken, opts.credentialsPath, opts.timeoutMs,
       creds.refreshToken, creds.expiresAt, opts.issuer, opts.clientId,
       user,
-    );
+    ).attachRequestHook(opts.onRequest);
   }
 
   getClient(): RemoteBackendClient {

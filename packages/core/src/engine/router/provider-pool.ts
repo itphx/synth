@@ -122,9 +122,12 @@ export class ProviderPool {
     this._cache.clear();
   }
 
-  /** ADR-036: если gateway включён и задана фабрика — оборачиваем провайдер. */
+  /**
+   * ADR-036/ADR-094: если задана фабрика — оборачиваем. Фабрика может быть
+   * передана и при выключенном gateway (disabled-конфиг) ради учёта метрик.
+   */
   private _applyGateway(provider: BaseProvider): BaseProvider {
-    if (this._gatewayConfig?.enabled && this._gatewayFactory) {
+    if (this._gatewayFactory) {
       return this._gatewayFactory(provider);
     }
     return provider;

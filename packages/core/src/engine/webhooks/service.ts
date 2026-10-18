@@ -13,6 +13,7 @@ interface WebhookSourceEvent {
   timestamp: string;
 }
 import type { EventBus } from '../../events/bus.js';
+import type { WebhookDeliveryMetrics, WebhookDeliveryOutcome } from '../../metrics/collectors/webhooks.js';
 import type { WebhookRepository } from '../../storage/ports/webhook-repository.js';
 import type { WebhookDeliveryRepository } from '../../storage/ports/webhook-delivery-repository.js';
 import type { HostResolver } from '../mcp/network-policy.js';
@@ -72,6 +73,8 @@ export interface WebhookServiceDeps {
   now?: () => number;
   /** Инъекция DNS-резолвера SSRF-проверки (тесты). */
   resolveHost?: HostResolver;
+  /** ADR-094: колбэк метрик завершённой доставки (ровно один раз на доставку). */
+  onDelivery?: WebhookDeliveryMetrics;
   logger?: { warn: (message: string) => void };
 }
 
@@ -227,15 +230,19 @@ export class WebhookService {
       ? await this._deps.config.resolvePolicy()
       : this._deps.config.policy;
     if (!policy) {
-      return this._finish(sub, {
-        id: deliveryId,
-        subscriptionId: sub.id,
-        eventType: event.type,
-        status: 'failed',
-        attempts: 0,
-        error: 'egress-политика webhooks не задана (fail-closed)',
-        createdAt,
-      });
+      return this._finish(
+        sub,
+        {
+          id: deliveryId,
+          subscriptionId: sub.id,
+          eventType: event.type,
+          status: 'failed',
+          attempts: 0,
+          error: 'egress-политика webhooks не задана (fail-closed)',
+          createdAt,
+        },
+        { blocked: true },
+      );
     }
     const target = await evaluateWebhookTarget(sub.url, {
       policy,
@@ -247,21 +254,27 @@ export class WebhookService {
       // Заблокированная цель (до HTTP-запроса) — фиксируем в журнале egress.
       const reason = target.reason ?? 'Цель доставки запрещена политикой';
       await this._recordBlocked(sub.url, reason, target.matchedRule);
-      return this._finish(sub, {
-        id: deliveryId,
-        subscriptionId: sub.id,
-        eventType: event.type,
-        status: 'failed',
-        attempts: 0,
-        error: reason,
-        createdAt,
-      });
+      return this._finish(
+        sub,
+        {
+          id: deliveryId,
+          subscriptionId: sub.id,
+          eventType: event.type,
+          status: 'failed',
+          attempts: 0,
+          error: reason,
+          createdAt,
+        },
+        { blocked: true },
+      );
     }
 
     const maxAttempts = Math.max(1, this._deps.config.maxAttempts);
     let attempts = 0;
     let responseStatus: number | undefined;
     let error: string | undefined;
+    /** ADR-094: блокировка SSRF/политикой (в т.ч. на хопе редиректа). */
+    let blocked = false;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       attempts = attempt;
@@ -307,7 +320,10 @@ export class WebhookService {
         responseStatus = undefined;
         error = err instanceof Error ? err.message : String(err);
         // Запрещённый хоп/цель — отказ, ретраи не помогут.
-        if (err instanceof EgressBlockedError) break;
+        if (err instanceof EgressBlockedError) {
+          blocked = true;
+          break;
+        }
       } finally {
         clearTimeout(timer);
       }
@@ -317,16 +333,20 @@ export class WebhookService {
       }
     }
 
-    return this._finish(sub, {
-      id: deliveryId,
-      subscriptionId: sub.id,
-      eventType: event.type,
-      status: error ? 'failed' : 'ok',
-      attempts,
-      ...(responseStatus !== undefined ? { responseStatus } : {}),
-      ...(error ? { error } : {}),
-      createdAt,
-    });
+    return this._finish(
+      sub,
+      {
+        id: deliveryId,
+        subscriptionId: sub.id,
+        eventType: event.type,
+        status: error ? 'failed' : 'ok',
+        attempts,
+        ...(responseStatus !== undefined ? { responseStatus } : {}),
+        ...(error ? { error } : {}),
+        createdAt,
+      },
+      blocked ? { blocked: true } : undefined,
+    );
   }
 
   /** Best-effort запись заблокированной цели в журнал egress (до HTTP-запроса). */
@@ -351,12 +371,14 @@ export class WebhookService {
     }
   }
 
-  /** Запись в журнал + отметка подписки. */
+  /** Запись в журнал + отметка подписки + метрики доставки (ADR-094). */
   private async _finish(
     sub: WebhookSubscription,
     delivery: WebhookDelivery,
+    options?: { blocked?: boolean },
   ): Promise<WebhookDelivery> {
-    const completed: WebhookDelivery = { ...delivery, completedAt: new Date(this._nowMs()).toISOString() };
+    const completedAtMs = this._nowMs();
+    const completed: WebhookDelivery = { ...delivery, completedAt: new Date(completedAtMs).toISOString() };
     try {
       await this._deps.deliveryStore.record(completed);
     } catch (err) {
@@ -370,6 +392,18 @@ export class WebhookService {
       this._logger.warn(
         `[WebhookService] не удалось обновить подписку: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+    // ADR-094: одна доставка — один вызов, включая blocked/failed/ok.
+    if (this._deps.onDelivery) {
+      const outcome: WebhookDeliveryOutcome =
+        completed.status === 'ok' ? 'ok' : options?.blocked ? 'blocked' : 'error';
+      const createdAtMs = Date.parse(completed.createdAt);
+      const durationMs = Number.isFinite(createdAtMs) ? completedAtMs - createdAtMs : 0;
+      try {
+        this._deps.onDelivery({ outcome, durationMs, attempts: completed.attempts });
+      } catch {
+        // метрики не должны ломать доставку
+      }
     }
     return completed;
   }

@@ -6,6 +6,7 @@ import { BaseProvider, ProviderFactory } from '../../providers/index.js';
 import { info, warning } from '../../logger.js';
 import { GatewayProvider, ObfuscationMapStore } from '../gateway/index.js';
 import type { AuditLogger, RateLimiter } from '../gateway/index.js';
+import type { MetricsRegistry } from '../../metrics/registry.js';
 
 export interface SummarizationResult {
   triggered: boolean;
@@ -36,6 +37,8 @@ export interface ContextOptimizerGatewayHooks {
   audit: AuditLogger;
   rateLimiter: RateLimiter;
   obfMapStore: ObfuscationMapStore;
+  /** ADR-094: реестр метрик (учёт вызовов суммаризации). */
+  metrics?: MetricsRegistry;
 }
 
 function toCoreProviderConfig(shared: SharedProviderConfig, model: string): { url: string; apiKey: string; model: string; timeout?: number; name?: string; type?: string } {
@@ -629,7 +632,7 @@ export class ContextOptimizer {
    */
   private _wrapWithGateway(provider: BaseProvider, session: Session): BaseProvider {
     const hooks = this._gatewayHooks;
-    if (!hooks || !hooks.config.enabled) return provider;
+    if (!hooks) return provider;
     return new GatewayProvider(provider, hooks.config, {
       getMap: () => hooks.obfMapStore.get(session.id),
       saveMap: (map) => hooks.obfMapStore.set(session.id, map),
@@ -637,6 +640,7 @@ export class ContextOptimizer {
       getRateLimiter: () => hooks.rateLimiter,
       sessionId: session.id,
       userId: session.userId ?? '',
+      metrics: hooks.metrics,
     });
   }
 

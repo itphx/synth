@@ -6,6 +6,8 @@ import type { RouteDecision, Session, SynthEvent } from '@itphx/synth-shared';
 import type { EventIngestInput, EventIngress } from '../events/ingest.js';
 import { ScheduleStore } from '../../storage/schedule-store.js';
 import { JobStore } from '../../storage/job-store.js';
+import { MetricsRegistry } from '../../metrics/registry.js';
+import { createSchedulerMetrics } from '../../metrics/collectors/scheduler.js';
 import { SchedulerService } from './scheduler.js';
 
 /** Мок ingress: записывает входы, не ходит в Router. */
@@ -520,5 +522,86 @@ describe('SchedulerService (ADR-051 / ADR-089)', () => {
 
     svc.stop();
     expect(leader.release).toHaveBeenCalledOnce();
+  });
+});
+
+describe('SchedulerService × ADR-094 (метрики Job)', () => {
+  let tmpDir: string;
+  let store: ScheduleStore;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-scheduler-metrics-'));
+    store = new ScheduleStore({ dataDir: tmpDir });
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('runNow (manual) → synth_scheduler_jobs_total{outcome="ok"}, без дрейфа', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    const schedule = await store.create({
+      name: 'metrics-manual',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const registry = new MetricsRegistry();
+    const onJob = vi.fn(createSchedulerMetrics(registry));
+    const { ingress, ingest } = makeIngress();
+    const svc = new SchedulerService({ scheduleStore: store, ingress, onJob, now: () => current });
+    await svc.start();
+    svc.stop();
+
+    current = new Date('2026-01-01T00:30:00Z');
+    await svc.runNow(schedule.id);
+
+    expect(ingest).toHaveBeenCalledTimes(1);
+    expect(onJob).toHaveBeenCalledTimes(1);
+    const info = onJob.mock.calls[0]![0];
+    expect(info.status).toBe('ok');
+    expect(info.driftSec).toBeUndefined();
+
+    const text = registry.render().text;
+    expect(text).toContain('synth_scheduler_jobs_total{outcome="ok"} 1');
+    // manual не задаёт дрейф — серия не создаётся.
+    expect(text).not.toMatch(/synth_scheduler_drift_seconds\s+[0-9]/);
+  });
+
+  it('cron → дрейф (факт − план) и outcome=ok; ошибка — outcome=error', async () => {
+    let current = new Date('2026-01-01T00:00:00Z');
+    await store.create({
+      name: 'metrics-cron',
+      enabled: true,
+      every: '1h',
+      target: { mode: 'bound', sessionId: 's1' },
+    });
+    const registry = new MetricsRegistry();
+    const onJob = vi.fn(createSchedulerMetrics(registry));
+    const { ingress, ingest } = makeIngress();
+    const svc = new SchedulerService({ scheduleStore: store, ingress, onJob, now: () => current });
+    await svc.start();
+    svc.stop();
+
+    // Старт на 90 с позже планового времени (01:00).
+    current = new Date('2026-01-01T01:01:30Z');
+    await svc.tick(new Date('2026-01-01T01:00:00Z'));
+
+    expect(onJob).toHaveBeenCalledTimes(1);
+    expect(onJob.mock.calls[0]![0]).toMatchObject({ status: 'ok', driftSec: 90 });
+    let text = registry.render().text;
+    expect(text).toContain('synth_scheduler_jobs_total{outcome="ok"} 1');
+    expect(text).toContain('synth_scheduler_drift_seconds 90');
+
+    // Ошибка публикации — error.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    ingest.mockRejectedValueOnce(new Error('boom'));
+    current = new Date('2026-01-01T02:00:00Z');
+    await svc.tick();
+    expect(onJob).toHaveBeenCalledTimes(2);
+    expect(onJob.mock.calls[1]![0]).toMatchObject({ status: 'error' });
+    text = registry.render().text;
+    expect(text).toContain('synth_scheduler_jobs_total{outcome="error"} 1');
   });
 });

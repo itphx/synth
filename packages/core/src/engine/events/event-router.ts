@@ -1,6 +1,7 @@
 import type { EventBinding, RouteDecision, SynthEvent } from '@itphx/synth-shared';
 import type { EventBindingRepository } from '../../storage/ports/event-binding-repository.js';
 import type { EventJournalRepository } from '../../storage/ports/event-journal-repository.js';
+import type { EventMetricsHooks } from '../../metrics/collectors/events.js';
 import type { HookBus } from '../hooks/hook-bus.js';
 import { MemoryDedupStore } from './dedup-store.js';
 import type { DedupStore } from './dedup-store.js';
@@ -26,6 +27,8 @@ export interface EventRouterDeps {
    * (single-process); `file` — межпроцессный атомарный claim на общем `dataDir`.
    */
   dedupStore?: DedupStore;
+  /** ADR-094: метрики решений (`synth_event_decisions_total{kind}`). */
+  metrics?: EventMetricsHooks;
 }
 
 const FALLBACK_EPHEMERAL_TTL = '24h';
@@ -50,6 +53,7 @@ export class EventRouter {
   private _config: EventRouterConfig;
   private _ruleProviders: RouteRuleProvider[] = [];
   private _dedupStore: DedupStore;
+  private _metrics?: EventMetricsHooks;
   /** Однократное предзаполнение dedup-кэша из журнала (общий промис). */
   private _seedPromise?: Promise<void>;
 
@@ -57,6 +61,7 @@ export class EventRouter {
     this._bindingStore = deps.bindingStore;
     this._journal = deps.journal;
     this._dedupStore = deps.dedupStore ?? new MemoryDedupStore();
+    this._metrics = deps.metrics;
     this._config = {
       allowedSources: deps.config?.allowedSources,
       defaultMode: deps.config?.defaultMode ?? FALLBACK_DEFAULT_MODE,
@@ -182,6 +187,12 @@ export class EventRouter {
       ...(meta?.keyId ? { keyId: meta.keyId } : {}),
       ...(meta?.principalId ? { principalId: meta.principalId } : {}),
     });
+    // ADR-094: решение учтено (kind `bind` нормализуется коллектором в `bound`).
+    try {
+      this._metrics?.onDecision(decision);
+    } catch {
+      // метрики не должны ломать маршрутизацию
+    }
     if (event.dedupKey) {
       try {
         await this._dedupStore.tryClaim(event.dedupKey);

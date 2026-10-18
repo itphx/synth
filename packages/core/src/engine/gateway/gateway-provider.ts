@@ -18,6 +18,25 @@ import { writePayloadLog } from './payload-logger.js';
 import type { AuditLogger } from './audit-logger.js';
 import type { RateLimiter } from './rate-limiter.js';
 import type { SecretPattern } from './secret-pattern-store.js';
+import type { MetricsRegistry } from '../../metrics/registry.js';
+import {
+  createLlmCallRecorder,
+  type LlmCallInfo,
+  type LlmCallOutcome,
+} from '../../metrics/collectors/llm.js';
+
+/**
+ * ADR-094: безопасный дефолт gateway-конфига, когда LLM Gateway выключен —
+ * обёртка нужна только для метрик (`enabled: false` = прямой вызов inner).
+ */
+export const DISABLED_GATEWAY_CONFIG: LLMGatewayConfig = {
+  enabled: false,
+  inputMode: 'obfuscate',
+  logPayloads: false,
+  payloadLogPath: '',
+  rateLimit: { userPerMinute: 60, providerPerMinute: 120 },
+  audit: { enabled: true, logPath: '' },
+};
 
 export interface GatewayProviderOptions {
   /** Загрузка карты обфускации сессии. */
@@ -32,6 +51,16 @@ export interface GatewayProviderOptions {
   payloadLogPath?: string;
   sessionId: string;
   userId: string;
+  /**
+   * ADR-094: колбэк на каждый LLM-вызов (ok/error/cancelled/rate_limited/
+   * blocked + длительность/usage). Ошибка колбэка не влияет на вызов.
+   */
+  onCall?: (info: LlmCallInfo) => void;
+  /**
+   * ADR-094: реестр метрик — если `onCall` не задан, колбэк создаётся из него
+   * (`synth_llm_requests_total`/`..._duration_seconds`/`..._tokens_total`).
+   */
+  metrics?: MetricsRegistry;
 }
 
 interface PreparedCall {
@@ -51,6 +80,7 @@ export class GatewayProvider extends BaseProvider {
   private readonly _inner: BaseProvider;
   private readonly _config: LLMGatewayConfig;
   private readonly _opts: GatewayProviderOptions;
+  private readonly _onCall?: (info: LlmCallInfo) => void;
 
   constructor(inner: BaseProvider, config: LLMGatewayConfig, opts: GatewayProviderOptions) {
     super({
@@ -68,6 +98,27 @@ export class GatewayProvider extends BaseProvider {
     this._inner = inner;
     this._config = config;
     this._opts = opts;
+    this._onCall = opts.onCall ?? (opts.metrics ? createLlmCallRecorder(opts.metrics) : undefined);
+  }
+
+  /** ADR-094: best-effort отчёт о вызове — метрики не должны ломать LLM-поток. */
+  private _reportCall(
+    outcome: LlmCallOutcome,
+    startedAt: number,
+    usage?: TokenUsage,
+  ): void {
+    if (!this._onCall) return;
+    try {
+      this._onCall({
+        provider: this.getProviderName(),
+        model: this.model,
+        outcome,
+        durationMs: performance.now() - startedAt,
+        ...(usage ? { usage } : {}),
+      });
+    } catch {
+      // ignore
+    }
   }
 
   getProviderName(): string {
@@ -81,38 +132,58 @@ export class GatewayProvider extends BaseProvider {
     stream?: boolean,
     debugCollector?: DebugCollector,
   ): Promise<LLMResponse> {
-    if (!this._config.enabled) {
-      return this._inner.chat(messages, systemPrompt, tools, stream, debugCollector);
-    }
+    const startedAt = performance.now();
+    let outcome: LlmCallOutcome = 'ok';
+    let usage: TokenUsage | undefined;
 
-    let prepared: PreparedCall | null = null;
     try {
-      prepared = await this._prepare(messages, systemPrompt, tools);
+      if (!this._config.enabled) {
+        const response = await this._inner.chat(messages, systemPrompt, tools, stream, debugCollector);
+        usage = response.usage;
+        return response;
+      }
+
+      let prepared: PreparedCall | null = null;
+      try {
+        prepared = await this._prepare(messages, systemPrompt, tools);
+      } catch (e) {
+        warning('GATEWAY', `Ошибка обфускации, вызов inner напрямую: ${this._errorMessage(e)}`);
+      }
+
+      if (prepared?.rateLimited) {
+        outcome = 'rate_limited';
+        return this._rateLimitedResponse();
+      }
+      if (prepared?.blocked) {
+        outcome = 'blocked';
+        return this._blockedResponse(prepared.blocked.message);
+      }
+
+      const effective = prepared ?? { messages, systemPrompt, tools, secretsFound: [], placeholders: [] };
+      const response = await this._inner.chat(
+        effective.messages,
+        effective.systemPrompt,
+        effective.tools,
+        stream,
+        debugCollector,
+      );
+      usage = response.usage;
+
+      await this._auditCompletion(
+        response.content,
+        response.usage,
+        effective.secretsFound,
+        effective.placeholders,
+        effective.patterns,
+      );
+      await this._logPayload(effective.messages, effective.systemPrompt, response.content, response.usage);
+      return response;
     } catch (e) {
-      warning('GATEWAY', `Ошибка обфускации, вызов inner напрямую: ${this._errorMessage(e)}`);
+      outcome = 'error';
+      throw e;
+    } finally {
+      this._reportCall(outcome, startedAt, usage);
     }
-
-    if (prepared?.rateLimited) return this._rateLimitedResponse();
-    if (prepared?.blocked) return this._blockedResponse(prepared.blocked.message);
-
-    const effective = prepared ?? { messages, systemPrompt, tools, secretsFound: [], placeholders: [] };
-    const response = await this._inner.chat(
-      effective.messages,
-      effective.systemPrompt,
-      effective.tools,
-      stream,
-      debugCollector,
-    );
-
-    await this._auditCompletion(
-      response.content,
-      response.usage,
-      effective.secretsFound,
-      effective.placeholders,
-      effective.patterns,
-    );
-    await this._logPayload(effective.messages, effective.systemPrompt, response.content, response.usage);
-    return response;
   }
 
   async *chatAsync(
@@ -122,53 +193,77 @@ export class GatewayProvider extends BaseProvider {
     debugCollector?: DebugCollector,
     cancellationToken?: CancellationToken,
   ): AsyncGenerator<LLMChunk> {
-    if (!this._config.enabled) {
-      yield* this._inner.chatAsync(messages, systemPrompt, tools, debugCollector, cancellationToken);
-      return;
-    }
+    const startedAt = performance.now();
+    let outcome: LlmCallOutcome = 'ok';
+    let usage: TokenUsage | undefined;
 
-    let prepared: PreparedCall | null = null;
     try {
-      prepared = await this._prepare(messages, systemPrompt, tools);
+      if (!this._config.enabled) {
+        for await (const chunk of this._inner.chatAsync(
+          messages,
+          systemPrompt,
+          tools,
+          debugCollector,
+          cancellationToken,
+        )) {
+          if (chunk.usage) usage = chunk.usage;
+          yield chunk;
+        }
+        return;
+      }
+
+      let prepared: PreparedCall | null = null;
+      try {
+        prepared = await this._prepare(messages, systemPrompt, tools);
+      } catch (e) {
+        warning('GATEWAY', `Ошибка обфускации, стрим напрямую: ${this._errorMessage(e)}`);
+      }
+
+      if (prepared?.rateLimited) {
+        outcome = 'rate_limited';
+        yield* this._yieldWarning(RATE_LIMIT_WARNING);
+        return;
+      }
+      if (prepared?.blocked) {
+        outcome = 'blocked';
+        yield* this._yieldWarning(prepared.blocked.message);
+        return;
+      }
+
+      const effective = prepared ?? { messages, systemPrompt, tools, secretsFound: [], placeholders: [] };
+      let accumulated = '';
+      let finalUsage: TokenUsage | undefined;
+
+      for await (const chunk of this._inner.chatAsync(
+        effective.messages,
+        effective.systemPrompt,
+        effective.tools,
+        debugCollector,
+        cancellationToken,
+      )) {
+        // Финальный чанк несёт полный накопленный контент — заменяем, а не складываем
+        // (иначе контент удваивается: delta-чанки + финальный полный).
+        accumulated = chunk.isFinal && chunk.content ? chunk.content : accumulated + chunk.content;
+        if (chunk.usage) finalUsage = chunk.usage;
+        yield chunk;
+      }
+      usage = finalUsage;
+
+      await this._auditCompletion(
+        accumulated,
+        finalUsage,
+        effective.secretsFound,
+        effective.placeholders,
+        effective.patterns,
+      );
+      await this._logPayload(effective.messages, effective.systemPrompt, accumulated, finalUsage);
     } catch (e) {
-      warning('GATEWAY', `Ошибка обфускации, стрим напрямую: ${this._errorMessage(e)}`);
+      outcome = 'error';
+      throw e;
+    } finally {
+      if (outcome === 'ok' && cancellationToken?.cancelled) outcome = 'cancelled';
+      this._reportCall(outcome, startedAt, usage);
     }
-
-    if (prepared?.rateLimited) {
-      yield* this._yieldWarning(RATE_LIMIT_WARNING);
-      return;
-    }
-    if (prepared?.blocked) {
-      yield* this._yieldWarning(prepared.blocked.message);
-      return;
-    }
-
-    const effective = prepared ?? { messages, systemPrompt, tools, secretsFound: [], placeholders: [] };
-    let accumulated = '';
-    let finalUsage: TokenUsage | undefined;
-
-    for await (const chunk of this._inner.chatAsync(
-      effective.messages,
-      effective.systemPrompt,
-      effective.tools,
-      debugCollector,
-      cancellationToken,
-    )) {
-      // Финальный чанк несёт полный накопленный контент — заменяем, а не складываем
-      // (иначе контент удваивается: delta-чанки + финальный полный).
-      accumulated = chunk.isFinal && chunk.content ? chunk.content : accumulated + chunk.content;
-      if (chunk.usage) finalUsage = chunk.usage;
-      yield chunk;
-    }
-
-    await this._auditCompletion(
-      accumulated,
-      finalUsage,
-      effective.secretsFound,
-      effective.placeholders,
-      effective.patterns,
-    );
-    await this._logPayload(effective.messages, effective.systemPrompt, accumulated, finalUsage);
   }
 
   async embed(text: string): Promise<number[]> {
@@ -187,58 +282,73 @@ export class GatewayProvider extends BaseProvider {
     questions: Record<string, DecisionQuestion>,
     opts?: { model?: string },
   ): Promise<DecisionResponse> {
-    const stateText = this._serializeState(state);
-    const synthetic: LLMMessage = {
-      id: 'decision-state',
-      role: 'user',
-      content: stateText,
-      usage: this._zeroUsage(),
-      disabled: false,
-      pinned: false,
-      branchId: 'decision',
-    };
+    const startedAt = performance.now();
+    let outcome: LlmCallOutcome = 'ok';
+    let usage: TokenUsage | undefined;
 
-    let prepared: PreparedCall | null = null;
     try {
-      prepared = await this._prepare([synthetic], undefined, undefined);
+      const stateText = this._serializeState(state);
+      const synthetic: LLMMessage = {
+        id: 'decision-state',
+        role: 'user',
+        content: stateText,
+        usage: this._zeroUsage(),
+        disabled: false,
+        pinned: false,
+        branchId: 'decision',
+      };
+
+      let prepared: PreparedCall | null = null;
+      try {
+        prepared = await this._prepare([synthetic], undefined, undefined);
+      } catch (e) {
+        warning('GATEWAY', `Ошибка обфускации decision-state, вызов inner напрямую: ${this._errorMessage(e)}`);
+      }
+
+      if (prepared?.rateLimited) {
+        outcome = 'rate_limited';
+        throw new RateLimitError();
+      }
+      if (prepared?.blocked) {
+        outcome = 'blocked';
+        throw new ProviderError(prepared.blocked.message, this.getProviderName());
+      }
+
+      const guardedText = prepared?.messages[0]?.content ?? stateText;
+      const effectiveState = this._restoreState(state, guardedText);
+
+      const response = await this._inner.decide(effectiveState, questions, opts);
+
+      const inputTokens = response.usage?.input_tokens ?? 0;
+      const outputTokens = response.usage?.output_tokens ?? 0;
+      usage = {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+      };
+      const answersJson = JSON.stringify(response.answers);
+
+      await this._auditCompletion(
+        answersJson,
+        usage,
+        prepared?.secretsFound ?? [],
+        prepared?.placeholders ?? [],
+        prepared?.patterns,
+      );
+      await this._logPayload(
+        prepared?.messages ?? [synthetic],
+        undefined,
+        answersJson,
+        usage,
+      );
+
+      return response;
     } catch (e) {
-      warning('GATEWAY', `Ошибка обфускации decision-state, вызов inner напрямую: ${this._errorMessage(e)}`);
+      if (outcome === 'ok') outcome = 'error';
+      throw e;
+    } finally {
+      this._reportCall(outcome, startedAt, usage);
     }
-
-    if (prepared?.rateLimited) throw new RateLimitError();
-    if (prepared?.blocked) {
-      throw new ProviderError(prepared.blocked.message, this.getProviderName());
-    }
-
-    const guardedText = prepared?.messages[0]?.content ?? stateText;
-    const effectiveState = this._restoreState(state, guardedText);
-
-    const response = await this._inner.decide(effectiveState, questions, opts);
-
-    const inputTokens = response.usage?.input_tokens ?? 0;
-    const outputTokens = response.usage?.output_tokens ?? 0;
-    const usage: TokenUsage = {
-      inputTokens,
-      outputTokens,
-      totalTokens: inputTokens + outputTokens,
-    };
-    const answersJson = JSON.stringify(response.answers);
-
-    await this._auditCompletion(
-      answersJson,
-      usage,
-      prepared?.secretsFound ?? [],
-      prepared?.placeholders ?? [],
-      prepared?.patterns,
-    );
-    await this._logPayload(
-      prepared?.messages ?? [synthetic],
-      undefined,
-      answersJson,
-      usage,
-    );
-
-    return response;
   }
 
   /** Сериализация `state` в текст для guard'а (строка — как есть, иначе JSON). */

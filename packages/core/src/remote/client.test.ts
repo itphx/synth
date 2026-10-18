@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { RemoteBackendClient } from './client.js';
 import type { RemoteClientOptions } from './client.js';
+import { MetricsRegistry } from '../metrics/registry.js';
+import { attachHybridMetrics } from '../metrics/collectors/hybrid.js';
 import { RemoteError } from './types.js';
 
 /** fetch-мок, висящий вечно, пока не придёт abort — имитация медленного сервера. */
@@ -223,5 +225,44 @@ describe('RemoteBackendClient', () => {
   it('isReachable: сетевая ошибка → false', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
     expect(await makeClient().isReachable()).toBe(false);
+  });
+});
+
+describe('RemoteBackendClient × ADR-094 (метрики запросов)', () => {
+  it('onRequest в finally: method/path/status/durationMs, op — нормализованный', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse([{ id: 's1' }])));
+    const registry = new MetricsRegistry();
+    const hooks = attachHybridMetrics(registry, () => true);
+    const onRequest = vi.fn(hooks.onRequest);
+    const client = makeClient({ onRequest });
+
+    await client.listSessions('proj-1');
+
+    expect(onRequest).toHaveBeenCalledOnce();
+    expect(onRequest).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'GET',
+      path: '/api/v2/sessions?project_id=proj-1',
+      status: 200,
+      durationMs: expect.any(Number),
+    }));
+
+    // Id/query не влияют на op — кардинальность ограничена.
+    const text = registry.render().text;
+    expect(text).toContain('synth_remote_request_duration_seconds_count{op="sessions"} 1');
+    expect(text).not.toContain('proj-1');
+  });
+
+  it('onRequest при ошибке: error заполнен, запрос пробрасывается', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    const onRequest = vi.fn();
+    const client = makeClient({ onRequest });
+
+    await expect(client.listSessions()).rejects.toBeInstanceOf(RemoteError);
+    expect(onRequest).toHaveBeenCalledOnce();
+    expect(onRequest.mock.calls[0]![0]).toMatchObject({
+      method: 'GET',
+      path: '/api/v2/sessions',
+      error: expect.stringContaining('Сервер недоступен'),
+    });
   });
 });

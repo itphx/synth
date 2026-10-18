@@ -6,6 +6,7 @@ import { checkForUpdatesBackground } from './update-checker.js';
 import { t as sm } from './engine/system-messages.js';
 import { initTlsTrust } from './security/tls.js';
 import { configureRestart, resolveRestartMode, RESTART_EXIT_CODE } from './server/restart.js';
+import { setSynthReady } from './metrics/collectors/ready.js';
 
 const program = new Command();
 
@@ -251,7 +252,12 @@ program
       // PROP-102: остановить retention-очистку роллапов аналитики.
       appHandle.stopAnalyticsRollupPruner?.();
 
-      // ADR-094: остановить процессные метрики (event-loop-монитор).
+      // ADR-094: снять readiness до остановки коллекторов — скрейп в момент
+      // shutdown видит `synth_ready 0`.
+      setSynthReady(appHandle.metrics, 0);
+
+      // ADR-094: остановить процессные метрики и фоновые доменные коллекторы
+      // (таймеры сессий/хранилища, подписка шины, decision/hybrid).
       appHandle.stopMetrics?.();
 
       // ADR-052 (этап II): остановить движок webhooks и retention-очистку доставок.
