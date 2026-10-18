@@ -213,6 +213,11 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 |---|---|---|---|
 | GET | `/health` | — | `{status:'healthy', version, time, startedAt}` (`startedAt` — ISO-метка старта процесса, ADR-092) |
 | GET | `/api/v2/health` | — | то же (+ блок `storage` в деградации) |
+| GET | `/ready` | — | Readiness (ADR-094): `200` `{status:'ready', storage:'ok'\|'degraded', version, startedAt, time, checks?}`; `503` `{status:'not_ready', …}` только на старте/fail-closed. Деградация хранилища **не** снимает readiness (ADR-098) |
+| GET | `/metrics` | нет / bearer-токен | Prometheus exposition 0.0.4 (ADR-094), **вне** `/api/v2`; `metrics.enabled=false` → `404 NOT_FOUND`, при заданном токене без `Authorization: Bearer …` → `401 UNAUTHORIZED`; `Content-Type: text/plain; version=0.0.4; charset=utf-8`, `Cache-Control: no-store` |
+
+Каталог метрик, лейблы, скрейп, алерты и диагностика — [OBSERVABILITY.md](./OBSERVABILITY.md);
+конфиг (`metrics.enabled`, токен) — [CONFIGURATION.md](./CONFIGURATION.md) §«Наблюдаемость».
 
 ### 5.2 Hybrid — `core`
 

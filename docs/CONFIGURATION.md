@@ -56,6 +56,8 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_DECISION_PROVIDER` | ADR-084: имя провайдера decision-типа (`decision`/`systemone`) | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | ADR-084: модель decision-слоя (напр. `clef-flash`) | `decision.model` |
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | PROP-102: срок хранения суточных роллапов аналитики, дни (`<= 0` — без ограничения) | `analytics.retentionDays` (`400`) |
+| `SYNTH_METRICS_ENABLED` | ADR-094: включить `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
+| `SYNTH_METRICS_TOKEN` | ADR-094: bearer-токен `/metrics` (приоритетнее файла `{dataDir}/secrets/metrics-token`); значение не логируется | — |
 
 **UI (Vite):**
 
@@ -134,6 +136,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | number | `analytics.retentionDays` |
+| `SYNTH_METRICS_ENABLED` | boolean | `metrics.enabled` |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, ADR-052/O1; см. ниже) |
 | `SYNTH_TLS_CA_FILE` | ADR-099: путь к PEM-файлу доверенного CA (корпоративный CA); взаимоисключающ с `SYNTH_TLS_CA_PEM` | — |
 | `SYNTH_TLS_CA_PEM` | ADR-099: PEM доверенного CA (например из Secret); взаимоисключающ с `SYNTH_TLS_CA_FILE` | — |
@@ -1208,6 +1211,37 @@ analytics:
 - **Приватность.** Роллапы агрегированы: текста сообщений, содержимого промптов,
   ключей и PII в значениях нет; дериваты (`cache_hit_rate`, `output_tps`, …)
   не персистятся, а считаются на чтении.
+
+### Наблюдаемость (`metrics.*`, ADR-094)
+
+Экспорт Prometheus-метрик и разделение liveness/readiness. Полный каталог метрик, скрейп, алерты и
+диагностика — [OBSERVABILITY.md](./OBSERVABILITY.md); основание — [ADR-094](./arch_decisions/adr-094-observability-metrics.md).
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `metrics.enabled` | Включает `GET /metrics` (тот же порт, вне `/api/v2`) и сбор HTTP/процессных/доменных метрик. `false` — эндпоинта нет (404), ничего не собирается. Env — `SYNTH_METRICS_ENABLED` | `false` |
+
+Bearer-токен в `config.yaml` **не хранится** (инвариант 13): env `SYNTH_METRICS_TOKEN` (приоритет) либо
+файл `{dataDir}/secrets/metrics-token` (читается, не создаётся; права `0600`). При заданном токене
+`/metrics` отвечает 401 без `Authorization: Bearer …`; сравнение constant-time, значение не логируется.
+
+```yaml
+metrics:
+  enabled: true
+```
+
+```bash
+# файл токена (opt-in; в кластере обычно достаточно сети/NetworkPolicy)
+install -m 600 /dev/null "$SYNTH_DATA_DIR/secrets/metrics-token"
+openssl rand -hex 32 > "$SYNTH_DATA_DIR/secrets/metrics-token"
+```
+
+- `GET /health`/`/api/v2/health` — liveness; `GET /ready` — readiness (`200`; `503` только на
+  старте/fail-closed). Деградация хранилища **не** снимает readiness (ADR-098) — она видна в
+  `synth_storage_degraded` и алерте `StorageDegraded`.
+- `/metrics` не публикуется через UI-nginx; в Helm — `metrics.enabled`, аннотации `prometheus.io/*`
+  или `ServiceMonitor`, дашборды `grafana.dashboards`, правила `alerts` ([charts/synth/README.md](../charts/synth/README.md)
+  §«Наблюдаемость»). Dev-стенд — `docker-compose.observability.yml` ([deploy/observability/README.md](../deploy/observability/README.md)).
 
 ### Гибридный режим (remote)
 

@@ -96,6 +96,34 @@ liveness/readiness, поставляемые дашборды и алерты.
 - Хранение истории метрик, доставка алертов (Alertmanager) и SLO-страница портала — вне scope: делегируются
   Prometheus/Alertmanager и порталу.
 
+## Статус в коде (2026-10-19)
+
+Реализовано:
+
+- **Реестр и exposition** — `packages/core/src/metrics/`: `registry.ts` (counter/gauge/histogram,
+  фиксированные `labelNames`, предел 2000 серий, `synth_metrics_series_dropped_total`),
+  `renderer.ts` (exposition 0.0.4, golden-тесты), `process.ts`, `token.ts`.
+- **`GET /metrics`** — `server/routes/metrics.ts`: off by default (404), опциональный bearer (401,
+  `timingSafeEqual`), `Cache-Control: no-store`; вне `/api/v2`, исключён из SPA-раздачи standalone.
+- **`GET /ready`** — `server/routes/health.ts`: 200/503, деградация хранилища остаётся ready;
+  `synth_ready` и снятие при graceful shutdown.
+- **HTTP** — middleware `metrics/http.ts`: `method`/шаблон `route`/`status`, `in_flight`,
+  `streams_active`, SSE/WS вне гистограммы, `/metrics` не учитывается.
+- **Доменные коллекторы** — LLM (`GatewayProvider.onCall`/`createLlmCallRecorder`), сессии/очередь
+  (15 с), хранилище (записи/деградация 60 с, `{dataDir}` 300 с), события (+ журнал 5 мин), шедулер,
+  webhooks, гибрид, decision-зеркало.
+- **Поставка** — Helm (`metrics.*`, `ServiceMonitor`, аннотации `prometheus.io/*`), дашборды
+  `charts/synth/files/dashboards/*.json` (overview/LLM/events-ops), правила
+  `charts/synth/files/alerts/synth-rules.yaml`, dev-стенд `docker-compose.observability.yml` +
+  `deploy/observability/`, runbook `docs/OBSERVABILITY.md`.
+- **Тесты** — реестр/рендер/http/токен/роуты, коллекторы (bus/sessions/storage/events/scheduler/
+  webhooks/hybrid/decision/llm), конфиг shared, `/ready`.
+
+Осталось (вне этого этапа): JSON-логи с `request_id`/`session_id` и редакцией секретов,
+OpenTelemetry-трейсинг, доставка алертов (Alertmanager) и SLO-страница портала. Статус ADR — по-прежнему
+`⚠️ Частично`.
+
 ## История
 
+- 2026-10-19 — реализованы метрики/ready/поставка; остаток — логи/OTel.
 - 2026-10-18 — принято из PROP-094; зафиксированы мини-реестр метрик, `/metrics` (off by default), `/ready`, контракт кардинальности, поставка алертов/дашбордов и конфиг `metrics`.

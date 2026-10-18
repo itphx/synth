@@ -65,6 +65,42 @@ home), [ADR-076](./arch_decisions/adr-076-git-repo-registry-ssh.md) (масте�
    (создать → удалить) для проверки доступа.
 5. Прочее: логи dev-запуска — `tmp/*.log`; типовые проблемы — [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
+### Метрики и готовность (`/metrics`, `/ready`)
+
+**Цель:** понять, здоров ли инстанс и готов ли он обслуживать трафик, без захода в UI. Контракт и
+каталог метрик — [OBSERVABILITY.md](./OBSERVABILITY.md); `GET /metrics` по умолчанию **выключен**
+(`metrics.enabled=false` → 404).
+
+1. **Liveness и readiness.** `GET /health` — процесс жив (в деградации `status:'degraded'`);
+   `GET /ready` — `200`, когда приложение инициализировано, и `503` только на старте/fail-closed.
+   Деградация хранилища readiness **не** снимает (ADR-094/ADR-098).
+
+   ```bash
+   curl -s -o /dev/null -w 'health=%{http_code} ' localhost:5000/health
+   curl -s -o /dev/null -w 'ready=%{http_code}\n' localhost:5000/ready
+   curl -s localhost:5000/ready | jq '{status, storage, version, startedAt}'
+   ```
+
+   *Ожидаемо:* `health=200 ready=200`, `status:"ready"`; `503`/`not_ready` — смотрите логи старта и
+   доступность БД. Standalone-core — порт `4300`.
+
+2. **Ключевые метрики** (при `SYNTH_METRICS_ENABLED=true`; при токене добавьте
+   `-H "Authorization: Bearer …"`):
+
+   ```bash
+   curl -s localhost:5000/metrics | grep -E '^synth_(ready|storage_degraded|queue_pending|http_requests_total)'
+   curl -s localhost:5000/metrics | grep -c '^synth_'      # > 0 — экспорт работает
+   ```
+
+   *Ожидаемо:* `synth_ready 1`, `synth_storage_degraded 0`, `synth_queue_pending` не растёт.
+   `synth_ready 0` — not ready; `synth_storage_degraded 1` — read-only фоллбек, доступ только ADMIN,
+   авто-возврата нет — рестарт после устранения причины (см. ADR-098).
+
+3. **404 на `/metrics`** — экспорт выключен (`metrics.enabled`/`SYNTH_METRICS_ENABLED`);
+   **401** — задан токен (`SYNTH_METRICS_TOKEN` или `{dataDir}/secrets/metrics-token`).
+   Пустые `synth_llm_*` — с момента старта не было LLM-вызовов. Подробности —
+   [OBSERVABILITY.md](./OBSERVABILITY.md) §«Диагностика».
+
 ## Бэкап
 
 **Цель:** получить проверяемый архив каталога данных; ожидаемый результат — файл `*.tar.gz` с

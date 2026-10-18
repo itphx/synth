@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
-> ⚠️ RU-версия обновлена 2026-10-18 (PROP-102, секция `analytics`); перевод отстаёт.
+> ⚠️ RU-версия обновлена 2026-10-19 (ADR-094, секция `metrics`); перевод отстаёт (PROP-102, `analytics`).
 
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
@@ -57,6 +57,8 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_CORS_ORIGIN` | CORS origin (takes precedence over the config) | — |
 | `SYNTH_DECISION_PROVIDER` | ADR-084: name of the decision-type provider (`decision`/`systemone`) | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | ADR-084: decision-layer model (e.g. `clef-flash`) | `decision.model` |
+| `SYNTH_METRICS_ENABLED` | ADR-094: enable `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
+| `SYNTH_METRICS_TOKEN` | ADR-094: bearer token for `/metrics` (takes precedence over the file `{dataDir}/secrets/metrics-token`); the value is never logged | — |
 
 **UI (Vite):**
 
@@ -1179,6 +1181,34 @@ scheduler:
   leaderElection: none
   crossProcessLocks: false
 ```
+
+### Observability (`metrics.*`, ADR-094)
+
+Prometheus metrics export and the liveness/readiness split. The full metric catalogue, scrape,
+alerts and troubleshooting — [OBSERVABILITY.md](../OBSERVABILITY.md) (RU); rationale —
+[ADR-094](../arch_decisions/adr-094-observability-metrics.md).
+
+| Field | Purpose | Default |
+|------|-----------|--------------|
+| `metrics.enabled` | Enables `GET /metrics` (same port, outside `/api/v2`) and the collection of HTTP/process/domain metrics. `false` — no endpoint (404), nothing is collected. Env — `SYNTH_METRICS_ENABLED` | `false` |
+
+The bearer token is **never stored** in `config.yaml` (invariant 13): env `SYNTH_METRICS_TOKEN`
+(takes precedence) or the file `{dataDir}/secrets/metrics-token` (read, never created; `0600`).
+With a token set, `/metrics` responds 401 without `Authorization: Bearer …`; comparison is
+constant-time and the value is never logged.
+
+```yaml
+metrics:
+  enabled: true
+```
+
+- `GET /health`/`/api/v2/health` — liveness; `GET /ready` — readiness (`200`; `503` only during
+  start-up/fail-closed). Storage degradation does **not** drop readiness (ADR-098) — it is visible as
+  `synth_storage_degraded` and the `StorageDegraded` alert.
+- `/metrics` is not published through the UI nginx; in Helm — `metrics.enabled`, `prometheus.io/*`
+  annotations or `ServiceMonitor`, dashboards `grafana.dashboards`, rules `alerts`
+  ([charts/synth/README.md](../../charts/synth/README.md) §"Наблюдаемость"). Dev stand —
+  `docker-compose.observability.yml` ([deploy/observability/README.md](../../deploy/observability/README.md)).
 
 ### Hybrid mode (remote)
 

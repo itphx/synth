@@ -71,7 +71,12 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
 - PROP-102: секция `analytics` (`retentionDays`, default `400`; `<= 0` — хранение без
   ограничения; `analyticsConfigSchema` + `AnalyticsConfig`), скалярный env-оверрайд
   `SYNTH_ANALYTICS_RETENTION_DAYS` по общему правилу секций.
-- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics` —
+- ADR-094: секция `metrics` (`enabled`, default `false`; `metricsConfigSchema` + `MetricsConfig`) —
+  мастер-выключатель `GET /metrics`; скалярный env-оверрайд `SYNTH_METRICS_ENABLED` (имя намеренно
+  совпадает с Helm-чартом). Токен в схеме **не хранится** (инвариант 13): env `SYNTH_METRICS_TOKEN` /
+  `{dataDir}/secrets/metrics-token` резолвит core (`metrics/token.ts`). Тесты — `defaults.test.ts`
+  (default `false`), `env-overrides.test.ts` (имя и применение), `types.test.ts` (схема).
+- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics`/`metrics` —
   реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
   приоритет `CLI > env > config.yaml > defaults` (ADR-023). Объектные/нескалярные ключи

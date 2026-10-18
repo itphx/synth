@@ -68,6 +68,15 @@
 
 **Деградированный режим хранилища (PROP-032 W5, ADR-098).** При недоступности выбранного backend'а (напр. PostgreSQL) хранилище поднимается на файловом фоллбеке **строго read-only**: в `app.ts` после auth-роутов вешается `createStorageDegradedGuard` (из core `server/storage-degraded.js`): не-`ADMIN` → `503 STORAGE_DEGRADED` (доступ только администраторам), мутирующий метод (POST/PUT/PATCH/DELETE) вне allowlist → `503 STORAGE_DEGRADED_READONLY` (исключение — `/api/v2/maintenance` для ремонта); `GET`/диагностика проходят. Диагностика — `createStorageStatusRoutes` (`GET /api/v2/storage/status`: probe соединения + `recovery.restartRequired`, авто-возврата нет); `/health` и `/api/v2/health` отдают `status: 'degraded'` + блок `storage` (аддитивно к `{status, version, time}`) и `startedAt` (ISO старта процесса — общий с `GET/POST /api/v2/maintenance/restart`, ADR-092: UI ждёт смены после рестарта). Фоновые писатели (миграции, сид провайдеров, шедулер, webhooks, прунеры) в деградации отключаются — иначе split-brain.
 
+**Наблюдаемость (ADR-094).** `createBackendApp` (`src/app.ts`):
+
+- **Health/readiness** — core-фабрика `createHealthRoutes({ getStorageDegraded, getReadiness })`: `/health` и `/api/v2/health` (liveness, в деградации `status:'degraded'`), `/ready` — `200` после завершения композиции, `503` только старт/fail-closed; деградация хранилища readiness **не** снимает.
+- **`/metrics`** монтируется в `app.ts` **до auth** (core `createMetricsRoutes`), вне `/api/v2`; `metricsEnabled = backendConfig.synth.metrics.enabled`, при `false` middleware не ставится и роут отдаёт 404, токен — `resolveMetricsToken(backendConfig.dataDir)`. HTTP-middleware `createHttpMetricsMiddleware` и `registerProcessMetrics` — тоже только при включении.
+- **Доменные коллекторы** строятся в `createBackendDeps(..., metricsEnabled ? metrics : undefined)` (core `deps.ts`): bus/сессии/хранилище/decision/journal; LLM-прокси получает `onCall: createLlmCallRecorder(deps.metrics)` (`src/routes/llm.ts`), сессионные вызовы учитываются `GatewayProvider` при переданной опции `metrics` у `ChatOrchestrator`.
+- **Остановка** — `handle.stopMetrics()` (процессные + доменные коллекторы) на graceful shutdown; `main.ts` до закрытия сервера ставит `setSynthReady(handle.metrics, 0)`, чтобы скрейп в момент остановки видел `synth_ready 0`.
+
+Runbook и каталог метрик — `docs/OBSERVABILITY.md`; конфиг — `docs/CONFIGURATION.md` §«Наблюдаемость».
+
 ## Правила эндпоинта
 
 - Всё API — единое дерево `/api/v2/*`; админка отличается правами, не путём.
@@ -111,7 +120,8 @@
 | `/api/v2/webhooks` | core `createWebhookRoutes` (ADR-052 этап II): CRUD подписок исходящих webhooks + журнал доставок + тест, `writeGuard`/`readGuard` = `requirePermission('ADMIN')` (webhook может утекать данные на произвольный URL), `messages` — i18n, `resolveUserId` — id из `attachUser`, `isEnabled` — мастер `webhooks.enabled` (→ 503 на мутации/тест), `allowPrivateTargets` — SSRF-политика; store `WebhookStore` (`{dataDir}/webhooks/subscriptions.json`), журнал `WebhookDeliveryStore` (`{dataDir}/webhooks/deliveries.jsonl`), движок `WebhookService` над `EventBus.subscribeAll` |
 | `/api/v2/maintenance` | core `createMaintenanceRoutes` (ADR-091/ADR-092): admin-API обслуживания инстанса — status/doctor/migrations/backups/restore/audit; `writeGuard`/`readGuard` = `requirePermission('ADMIN')` (архивы могут содержать секреты), `messages` — i18n, `maxUploadBytes` — лимит загрузки архива; восстановление — офлайн (планируется, применяется при следующем старте); `audit` — журнал обслуживания (порт `StorageContext.maintenanceAudit`, ADR-096), `GET`/`DELETE` |
 | `/api/v2/analytics` | core `createAnalyticsRoutes` (PROP-102, только чтение): `GET /summary`, `/usage`, `/activity`, `/decision`, `/prompt`, `/export`; RBAC — `resolveElevated` = ADMIN/LEAD (сквозной обзор), `resolveAuditor` = AUDITOR (чтение всех отчётов), `resolveUserId` — id из `attachUser`: обычному USER `summary`/`decision` → 403, `usage`/`activity`/`prompt` принудительно фильтруются по его оси `user`; `messages` — i18n (`errors.validation.invalidAnalytics*`, `errors.forbidden.analytics`) |
-| `/health`, `/api/v2/health` | публичные, без auth |
+| `/health`, `/api/v2/health`, `/ready` | публичные, без auth (ADR-094: `/ready` — readiness, 200/503) |
+| `/metrics` | core `createMetricsRoutes` в `app.ts` до auth, **вне** `/api/v2`: off by default (`metrics.enabled` → 404), опциональный bearer (401) |
 | `/api/v2/i18n/current`, `/api/v2/i18n/translations/ru\|en` | inline в `src/app/mount-routes.ts` |
 
 `/api/v2/{providers,models,sessions,projects,messages,queue,agents}` — тонкие обёртки над core-фабриками; `/api/v2/{fs,git,ssh-keys,settings,dictionaries}` — прямое монтирование core-фабрик с RBAC/спецификой в `opts`: общая логика в core, backend добавляет `requireAdmin`/`requirePermission`/`authorizeProject`, rate limiter и backend-only роуты (например, `models/fetch` — rate limit, `providers/fetch-icon`, `mcp-registry`). Дублировать хендлеры core нельзя.
@@ -143,6 +153,7 @@
 - Единственный LLM-эндпоинт backend — `POST /api/v2/llm/chat/completions` (OpenAI-совместимый), роутер `src/routes/llm.ts`.
 - ADR-052: на прокси навешан `scopeGuard('llm:chat')` — service-key без `llm:chat` → `403 SCOPE_REQUIRED` (проектной проекции у прокси нет).
 - Реализован на ядре: `GatewayProvider` + `ProviderFactory` + `AuditLogger`/`RateLimiter`/`SecretPatternStore`. Любой LLM-вызов — только через Gateway (ADR-036); провайдера напрямую не инстанцировать.
+- ADR-094: прокси передаёт `onCall: createLlmCallRecorder(deps.metrics)` в `GatewayProvider` (при `metrics.enabled`) — единственная точка `synth_llm_*`; не считать LLM-вызовы в обход Gateway.
 - Один `AuditLogger` и один payload-лог шарятся между оркестратором и чтением (`/api/v2/audit`, `/api/v2/logs/llm`) — не создавай вторые.
 - Runtime-тумблеры Gateway/security из UI применяются на живой оркестратор через колбэки `onLlmGatewayChange`/`onSecurityChange` в `src/app/deps.ts`.
 

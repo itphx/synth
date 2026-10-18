@@ -50,6 +50,13 @@
 - Любой LLM-вызов — через `GatewayProvider`
   (`engine/gateway/gateway-provider.ts`: guard, обфускация, rate limit, аудит);
   провайдера напрямую не дёргать (ADR-036).
+- **Наблюдаемость — контракт (ADR-094).** `metrics/*` — свой реестр без внешних
+  зависимостей (рендер exposition 0.0.4 внутри core, новых пакетов не добавлять);
+  имена `synth_*` и лейблы фиксированы, `route` — шаблон, `session_id`/`user_id`/
+  сырые пути запрещены, SSE/WS вне гистограммы. `GET /metrics` — **вне** `/api/*`,
+  off by default, опциональный bearer; `/ready` ≠ liveness (деградация хранилища
+  остаётся ready). Единственная точка LLM-метрик — `GatewayProvider.onCall`
+  (или `createLlmCallRecorder(opts.metrics)`) — не считать вызовы в обход Gateway.
 - Permissions и режимы — только через `PermissionEvaluator`
   (`engine/permission/evaluator.ts`): `plan`/`act`/`yolo`,
   `allow`/`deny`/`ask`; не хардкодить проверки в тулах (ADR-025/028/029).
@@ -174,6 +181,16 @@
 ## Карта модулей
 
 - `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, …).
+- `metrics/` — ADR-094: `registry.ts` (counter/gauge/histogram, лимит серий 2000,
+  `synth_metrics_series_dropped_total`, `addCollector`), `renderer.ts` (text exposition 0.0.4,
+  golden-тесты), `http.ts` (Hono-middleware: `method`/шаблон `route`/`status`, `in_flight`,
+  `streams_active`; `/metrics` пропускается, SSE/WS вне гистограммы), `process.ts` (RSS/heap/CPU/
+  event loop lag/uptime/`build_info`), `token.ts` (`SYNTH_METRICS_TOKEN` → `{dataDir}/secrets/metrics-token`),
+  `collectors/*` (`bus` — turns/streams/retries/cost, `llm` — `createLlmCallRecorder` для
+  `GatewayProvider.onCall`, `sessions` — 15 c, `storage` — записи/деградация 60 c и `{dataDir}` 300 c,
+  `events` — ingest/decisions + журнал 5 мин, `scheduler`, `webhooks`, `hybrid`, `decision`, `ready`).
+  Роуты — `server/routes/metrics.ts` (`/metrics`: 404 при disabled, 401 при токене, `no-store`) и
+  `server/routes/health.ts` (`/health`, `/ready`). Каталог метрик — `docs/OBSERVABILITY.md`.
 - `server/app.ts` — `createStandaloneApp`: фасад-композиция (auth/bootstrap service-key,
   middleware, вызовы вынесенных модулей, сборка хендла). ADR-095 (шаг 4a) вынес блоки
   в `server/app/*`: `deps.ts` (сборка зависимостей), `mount-routes.ts` (весь порядок
