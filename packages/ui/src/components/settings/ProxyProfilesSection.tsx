@@ -210,12 +210,19 @@ export function ProxyProfilesSection({
     }
     const existing = isNew ? undefined : draft.profiles[name];
     const next = applyForm(form, existing);
+    if (isNew) {
+      // Пароль нового профиля принимается только после PUT /settings/proxy —
+      // запоминаем его в клиентском черновике и очищаем поле.
+      if (password.trim()) next.pendingPassword = password;
+      else delete next.pendingPassword;
+    }
     setDraft((prev) => {
       const profiles = { ...prev.profiles, [name]: next };
       // Первый профиль автоматически становится default-профилем.
       const defaultProfile = profiles[prev.defaultProfile] ? prev.defaultProfile : name;
       return { ...prev, profiles, defaultProfile };
     });
+    if (isNew) setPassword('');
     setEditing(null);
     setFormError(null);
   };
@@ -502,6 +509,32 @@ export function ProxyProfilesSection({
         disabled={disabled}
         data-testid="proxy-profile-form-username"
       />
+
+      {isNew && (
+        <div className="space-y-2 min-w-0">
+          <TextField
+            label={t('proxy.password.placeholder')}
+            description={t('proxy.password.pendingHelp')}
+            type="password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              if (passwordError) setPasswordError(null);
+            }}
+            autoComplete="new-password"
+            disabled={disabled || passwordPending}
+            data-testid="proxy-profile-password-input"
+          />
+          {password.trim() !== '' && form.username.trim() === '' && (
+            <p
+              data-testid="proxy-profile-password-no-username"
+              className="text-xs text-muted-foreground"
+            >
+              {t('proxy.password.withoutUsername')}
+            </p>
+          )}
+        </div>
+      )}
 
       {formError && (
         <div

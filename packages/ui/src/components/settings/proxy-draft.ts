@@ -27,6 +27,12 @@ export interface ProxyProfileDraft {
   tlsCertFile: string;
   tlsKeyFile: string;
   rejectUnauthorized: boolean;
+  /**
+   * Пароль профиля, введённый до первого сохранения: write-only endpoint
+   * принимает его только после `PUT /settings/proxy`, поэтому значение ждёт
+   * в клиентском черновике. В payload/DOM не попадает.
+   */
+  pendingPassword?: string;
 }
 
 /** Правило в черновике; `key` — стабильный React-ключ (в payload не уходит). */
@@ -172,7 +178,11 @@ function tlsFromDraft(profile: ProxyProfileDraft): ProxyTlsConfig | undefined {
   return Object.keys(tls).length > 0 ? tls : undefined;
 }
 
-/** Черновик профиля → сохраняемая форма (пустые поля не отправляются). */
+/**
+ * Черновик профиля → сохраняемая форма (пустые поля не отправляются).
+ * `pendingPassword` намеренно не входит: пароль применяется отдельным
+ * write-only endpoint'ом уже после сохранения профиля.
+ */
 export function profileDraftToInput(profile: ProxyProfileDraft): ProxyProfileInput {
   const input: ProxyProfileInput = {};
   const label = profile.label.trim();
@@ -225,6 +235,18 @@ export function proxyDraftToInput(draft: ProxyDraft): ProxyConfigInput {
   };
   if (draft.defaultProfile) input.defaultProfile = draft.defaultProfile;
   return input;
+}
+
+/**
+ * Профили с непустым `pendingPassword` — применяются отдельными вызовами
+ * `PUT /settings/proxy/profiles/:name/password` сразу после `PUT /settings/proxy`.
+ */
+export function pendingProfilePasswords(
+  draft: ProxyDraft,
+): Array<{ name: string; password: string }> {
+  return Object.entries(draft.profiles)
+    .map(([name, profile]) => ({ name, password: profile.pendingPassword ?? '' }))
+    .filter((entry) => entry.password.trim() !== '');
 }
 
 export type ProxyDraftIssue =

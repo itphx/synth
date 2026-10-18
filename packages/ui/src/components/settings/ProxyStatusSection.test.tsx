@@ -165,6 +165,33 @@ const addHost = async (container: HTMLElement, value: string) => {
   });
 };
 
+/** Заполняет форму нового профиля и нажимает «Применить». */
+const addNewProfile = async (
+  container: HTMLElement,
+  name: string,
+  url: string,
+  options: { password?: string; username?: string } = {},
+) => {
+  await click(byTestId(container, 'proxy-profile-add'));
+  await act(async () => {
+    setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, name);
+    setInputValue(byTestId(container, 'proxy-profile-form-url') as HTMLInputElement, url);
+    if (options.username) {
+      setInputValue(
+        byTestId(container, 'proxy-profile-form-username') as HTMLInputElement,
+        options.username,
+      );
+    }
+    if (options.password) {
+      setInputValue(
+        byTestId(container, 'proxy-profile-password-input') as HTMLInputElement,
+        options.password,
+      );
+    }
+  });
+  await click(byTestId(container, 'proxy-profile-form-apply'));
+};
+
 interface SavedProfileInput {
   url?: string;
   httpProxy?: string;
@@ -405,6 +432,147 @@ describe('ProxyStatusSection — профили (добавление/редак
     await click(byTestId(container, 'proxy-profile-delete-corp'));
 
     expect(byTestId(container, 'proxy-profile-delete-error')!.textContent).toContain('rules: r1');
+  });
+});
+
+describe('ProxyStatusSection — пароль нового профиля (после сохранения)', () => {
+  const profileStatus = (name: string, url: string) => ({
+    name,
+    url,
+    legacy: false,
+    source: 'runtime' as const,
+    password: { source: 'none' as const, set: false, removable: false },
+  });
+
+  it('поле пароля в форме нового профиля; Apply держит его в черновике, Save применяет после saveProxy', async () => {
+    mocks.saveProxy.mockResolvedValue({
+      saved: {
+        ...SAVED,
+        profiles: { ...SAVED.profiles, newcorp: profileStatus('newcorp', 'http://new.corp:8080') },
+      },
+      running: RUNNING,
+      restartRequired: true,
+    });
+    const container = await renderSection();
+
+    await click(byTestId(container, 'proxy-profile-add'));
+    const passwordInput = byTestId(container, 'proxy-profile-password-input') as HTMLInputElement;
+    expect(passwordInput).not.toBeNull();
+    expect(passwordInput.type).toBe('password');
+    // Для нового профиля Set/Clear не нужны.
+    expect(byTestId(container, 'proxy-profile-password-set')).toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-clear')).toBeNull();
+
+    await act(async () => {
+      setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'newcorp');
+      setInputValue(
+        byTestId(container, 'proxy-profile-form-url') as HTMLInputElement,
+        'http://new.corp:8080',
+      );
+      setInputValue(byTestId(container, 'proxy-profile-form-username') as HTMLInputElement, 'svc');
+      setInputValue(passwordInput, 'p@ss-value');
+    });
+    await click(byTestId(container, 'proxy-profile-form-apply'));
+    expect(container.textContent).not.toContain('p@ss-value');
+
+    await click(byTestId(container, 'proxy-save'));
+
+    const input = lastSaveInput();
+    expect(input.profiles.newcorp).toEqual({
+      url: 'http://new.corp:8080',
+      auth: { type: 'basic', username: 'svc' },
+    });
+    expect(JSON.stringify(input)).not.toContain('p@ss-value');
+    expect(JSON.stringify(input)).not.toContain('pendingPassword');
+    expect(mocks.setProfilePassword).toHaveBeenCalledWith('newcorp', 'p@ss-value');
+    expect(mocks.saveProxy.mock.invocationCallOrder[0]!).toBeLessThan(
+      mocks.setProfilePassword.mock.invocationCallOrder[0]!,
+    );
+    // Пароль из ответа применяется к saved-статусу сразу (бейдж).
+    expect(byTestId(container, 'proxy-profile-password-badge-newcorp')!.textContent).toBe(
+      'password set',
+    );
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', category: 'system' }),
+    );
+  });
+
+  it('409 при применении пароля: saveProxy выполнен, профиль сохранён, показана ошибка', async () => {
+    mocks.setProfilePassword.mockRejectedValue(
+      Object.assign(new Error('conflict'), { status: 409 }),
+    );
+    mocks.saveProxy.mockResolvedValue({
+      saved: {
+        ...SAVED,
+        profiles: { ...SAVED.profiles, newcorp: profileStatus('newcorp', 'http://new.corp:8080') },
+      },
+      running: RUNNING,
+      restartRequired: true,
+    });
+    const container = await renderSection();
+    await addNewProfile(container, 'newcorp', 'http://new.corp:8080', { password: 'pw' });
+    await click(byTestId(container, 'proxy-save'));
+
+    expect(mocks.saveProxy).toHaveBeenCalledTimes(1);
+    expect(byTestId(container, 'proxy-profile-newcorp')).not.toBeNull();
+    expect(byTestId(container, 'proxy-profile-password-badge-newcorp')!.textContent).toBe(
+      'no password',
+    );
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'error',
+        category: 'error',
+        text: expect.stringContaining('environment'),
+      }),
+    );
+    expect(mocks.notify).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'success' }));
+  });
+
+  it('несколько новых профилей с паролями — применяются оба', async () => {
+    mocks.saveProxy.mockResolvedValue({
+      saved: {
+        ...SAVED,
+        profiles: {
+          ...SAVED.profiles,
+          one: profileStatus('one', 'http://one:1'),
+          two: profileStatus('two', 'http://two:2'),
+        },
+      },
+      running: RUNNING,
+      restartRequired: true,
+    });
+    const container = await renderSection();
+
+    await addNewProfile(container, 'one', 'http://one:1', { username: 'u1', password: 'p1' });
+    await addNewProfile(container, 'two', 'http://two:2', { username: 'u2', password: 'p2' });
+    await click(byTestId(container, 'proxy-save'));
+
+    expect(mocks.setProfilePassword).toHaveBeenCalledTimes(2);
+    expect(mocks.setProfilePassword).toHaveBeenCalledWith('one', 'p1');
+    expect(mocks.setProfilePassword).toHaveBeenCalledWith('two', 'p2');
+    expect(byTestId(container, 'proxy-profile-password-badge-one')!.textContent).toBe(
+      'password set',
+    );
+    expect(byTestId(container, 'proxy-profile-password-badge-two')!.textContent).toBe(
+      'password set',
+    );
+  });
+
+  it('пароль без логина — мягкая подсказка, Apply не блокируется', async () => {
+    const container = await renderSection();
+    await click(byTestId(container, 'proxy-profile-add'));
+    await act(async () => {
+      setInputValue(byTestId(container, 'proxy-profile-form-name') as HTMLInputElement, 'nologin');
+      setInputValue(
+        byTestId(container, 'proxy-profile-form-url') as HTMLInputElement,
+        'http://nologin:1',
+      );
+      setInputValue(byTestId(container, 'proxy-profile-password-input') as HTMLInputElement, 'pw');
+    });
+
+    expect(byTestId(container, 'proxy-profile-password-no-username')).not.toBeNull();
+    await click(byTestId(container, 'proxy-profile-form-apply'));
+    expect(byTestId(container, 'proxy-profile-nologin')).not.toBeNull();
   });
 });
 

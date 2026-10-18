@@ -27,6 +27,7 @@ import { ProxyProfilesSection } from './ProxyProfilesSection';
 import { ProxyRouteCheck } from './ProxyRouteCheck';
 import { ProxyRulesSection } from './ProxyRulesSection';
 import {
+  pendingProfilePasswords,
   proxyDraftToInput,
   statusToDraft,
   validateProxyDraft,
@@ -35,6 +36,11 @@ import {
 } from './proxy-draft';
 
 const BADGE = 'rounded px-1.5 py-0.5 text-[0.625rem] font-medium';
+
+const statusOf = (err: unknown): number | undefined =>
+  typeof (err as { status?: unknown })?.status === 'number'
+    ? (err as { status: number }).status
+    : undefined;
 
 /** Сохраняет пароли профилей из прежнего saved-статуса (PUT их не возвращает). */
 function mergeProfilePasswords(
@@ -131,6 +137,7 @@ function StatusSummary({ status, testId }: { status: ProxyStatusInfo; testId: st
  * Профили + маршрутизация вместо legacy-формы:
  * - режим `all`/`selected`, default-профиль, правила (порядок = приоритет);
  * - пароль и TLS/mTLS к прокси — write-only endpoint'ами, значения не видны;
+ *   пароль нового профиля применяется сразу после `PUT /settings/proxy`;
  * - legacy-плоская конфигурация синтезируется в профиль `default`;
  * - сохранение отправляет `profiles`/`rules`/`mode`/`defaultProfile`
  *   (top-level `url`/`auth`/`tls` запрещены сервером в этом режиме);
@@ -206,7 +213,36 @@ export function ProxyStatusSection() {
     try {
       const input = proxyDraftToInput(current);
       const resp = await synthApi.saveProxy(input);
-      const saved = mergeProfilePasswords(info?.saved, resp.saved);
+      let saved = mergeProfilePasswords(info?.saved, resp.saved);
+
+      // Пароли новых профилей: write-only endpoint принимает их только после
+      // того, как профиль появился в saved-конфиге. Ошибка одного профиля не
+      // отменяет сохранение остальных настроек и не блокирует другие пароли.
+      const passwordErrors: string[] = [];
+      for (const { name, password } of pendingProfilePasswords(current)) {
+        try {
+          const status = await synthApi.setProfilePassword(name, password);
+          const profile = saved.profiles?.[name];
+          if (profile) {
+            saved = {
+              ...saved,
+              profiles: { ...saved.profiles, [name]: { ...profile, password: status } },
+            };
+          }
+        } catch (e) {
+          const status = statusOf(e);
+          const message =
+            status === 409
+              ? t('proxy.password.envConflictGeneric')
+              : status === 404
+                ? t('proxy.profiles.notFound')
+                : e instanceof Error && e.message
+                  ? e.message
+                  : 'HTTP';
+          passwordErrors.push(t('proxy.password.pendingError', { name, error: message }));
+        }
+      }
+
       draft.setDraft(statusToDraft(saved));
       setInfo((prev) =>
         prev
@@ -221,7 +257,13 @@ export function ProxyStatusSection() {
             }
           : prev,
       );
-      notify({ text: t('proxy.savedToast'), type: 'success', category: 'system' });
+      if (passwordErrors.length > 0) {
+        for (const text of passwordErrors) {
+          notify({ text, type: 'error', category: 'error' });
+        }
+      } else {
+        notify({ text: t('proxy.savedToast'), type: 'success', category: 'system' });
+      }
     } catch (e) {
       notify({
         text: t('proxy.saveError', { error: e instanceof Error && e.message ? e.message : 'HTTP' }),

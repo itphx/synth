@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   displayProfileUrl,
+  pendingProfilePasswords,
   profileDraftToInput,
   profileUsage,
   proxyDraftToInput,
@@ -106,6 +107,29 @@ describe('statusToDraft — legacy и профили', () => {
     expect(Object.keys(draft.profiles)).toEqual(['corp']);
     expect(draft.defaultProfile).toBe('corp');
   });
+
+  it('не возвращает pendingPassword (он живёт только в клиентском черновике)', () => {
+    const draft = statusToDraft({
+      ...LEGACY,
+      url: undefined,
+      httpsProxy: undefined,
+      auth: undefined,
+      tls: undefined,
+      defaultProfile: 'corp',
+      profiles: {
+        corp: {
+          name: 'corp',
+          url: 'http://proxy.corp:3128',
+          auth: { type: 'basic', username: 'svc' },
+          legacy: false,
+          source: 'config',
+          password: { source: 'file', set: true, removable: true },
+        },
+      },
+    });
+
+    expect(draft.profiles.corp).not.toHaveProperty('pendingPassword');
+  });
 });
 
 describe('proxyDraftToInput — structured payload', () => {
@@ -185,6 +209,33 @@ describe('proxyDraftToInput — structured payload', () => {
     expect(payload).not.toContain('password');
     expect(payload).not.toContain('BEGIN CERTIFICATE');
     expect(payload).not.toContain('caPem');
+  });
+
+  it('не отправляет pendingPassword нового профиля и не теряет остальные поля', () => {
+    const draft = baseDraft();
+    draft.profiles.corp = { ...draft.profiles.corp!, pendingPassword: 's3cret-value' };
+
+    const input = proxyDraftToInput(draft);
+
+    expect(input.profiles?.corp).toEqual({
+      label: 'Corp',
+      url: 'http://proxy.corp:3128',
+      auth: { type: 'basic', username: 'svc' },
+    });
+    expect(JSON.stringify(input)).not.toContain('s3cret-value');
+    expect(JSON.stringify(input)).not.toContain('pendingPassword');
+  });
+});
+
+describe('pendingProfilePasswords', () => {
+  it('возвращает только непустые pending-пароли', () => {
+    expect(pendingProfilePasswords(baseDraft())).toEqual([]);
+
+    const draft = baseDraft();
+    draft.profiles.corp = { ...draft.profiles.corp!, pendingPassword: 'p1' };
+    draft.profiles.blank = { ...draft.profiles.corp!, url: 'http://b:1', pendingPassword: '  ' };
+
+    expect(pendingProfilePasswords(draft)).toEqual([{ name: 'corp', password: 'p1' }]);
   });
 });
 
