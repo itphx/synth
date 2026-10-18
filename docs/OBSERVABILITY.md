@@ -26,14 +26,19 @@
 
 `/metrics` **выключен по умолчанию** (`metrics.enabled=false`) — эндпоинта «нет», пока его не включили.
 
-| Способ | Как включить |
-|---|---|
-| `config.yaml` | `metrics.enabled: true` |
-| env | `SYNTH_METRICS_ENABLED=true` |
-| Helm | `--set metrics.enabled=true` |
-| dev (`./scripts/dev.sh`) | `SYNTH_METRICS_ENABLED=true ./scripts/dev.sh` |
+| Способ | Как включить | Применение |
+|---|---|---|
+| UI | Настройки → Администрирование → **«Метрики»**, тумблер `enabled` (runtime, `settings.json`/PG) | **после перезапуска** |
+| `config.yaml` | `metrics.enabled: true` | при старте |
+| env | `SYNTH_METRICS_ENABLED=true` | при старте |
+| Helm | `--set metrics.enabled=true` | при старте |
+| dev (`./scripts/dev.sh`) | `SYNTH_METRICS_ENABLED=true ./scripts/dev.sh` | при старте |
 
-Приоритет общий (ADR-023): CLI-флаги > `SYNTH_*` env > `config.yaml` > defaults.
+Приоритет: `SYNTH_METRICS_ENABLED` > runtime (UI/`settings.json`) > `config.yaml` > default `false`.
+Если действует env-значение, тумблер в UI заблокирован (источник `env`). Изменение `enabled`
+пересоздаёт middleware/коллекторы только при старте процесса, поэтому `restartRequired =
+effective !== running`: раздел показывает баннер и кнопку перезапуска (тот же graceful restart,
+ADR-092). Токен применяется сразу — `/metrics` читает env/файл на каждый запрос.
 
 Поведение эндпоинта:
 
@@ -54,7 +59,7 @@
 Bearer-токен в `config.yaml` **не хранится** (инвариант 13). Источники:
 
 1. env `SYNTH_METRICS_TOKEN` (приоритет);
-2. файл `{dataDir}/secrets/metrics-token` (читается, но **не создаётся** автоматически; права `0600`).
+2. файл `{dataDir}/secrets/metrics-token` (**автоматически не создаётся** — вручную или из UI «Метрики»; права `0600`).
 
 Сравнение — `timingSafeEqual` (сначала длины). Токен не логируется. В кластере обычно не нужен:
 доступ ограничен сетью pod'а и NetworkPolicy/Ingress; токен — opt-in для недоверенной сети.
@@ -66,6 +71,34 @@ openssl rand -hex 32 > "$SYNTH_DATA_DIR/secrets/metrics-token"
 curl -s -H "Authorization: Bearer $(cat "$SYNTH_DATA_DIR/secrets/metrics-token")" \
   localhost:4300/metrics | head
 ```
+
+### Раздел «Метрики» в UI
+
+Настройки → **Администрирование → «Метрики»** (EN «Metrics», только ADMIN; в core — любой
+аутентифицированный). Компонент `ObservabilitySettings`, API-домен `observabilityApi`.
+
+- **Статус** (обновляется каждые 15 с): источник и эффективное значение `enabled`, `running`,
+  `/ready` (200/503), `storage` (`ok`/`degraded`), backend хранилища, версия, uptime, объём
+  exposition (`series`, `bytes`, `droppedSeries`).
+- **Тумблер `enabled`** — runtime-override. При `restartRequired` — баннер и кнопка
+  «Перезапустить инстанс»; при источнике `env` тумблер заблокирован.
+- **Токен** — статус (`env`/файл/нет), задать/удалить (write-only, ≥16 символов, файл
+  `{dataDir}/secrets/metrics-token`, `0600`); применяется без рестарта. Если токен задан через
+  `SYNTH_METRICS_TOKEN`, операции возвращают **409 `CONFLICT`**.
+- **Подсказки**: копирование URL `/metrics`, пример `scrape_config`, ссылки на runbook и портал.
+
+### Управление из API
+
+Мутации — ADMIN (managed) / `requireAuth` (core); контракт — [API_V2.md](./API_V2.md) §5.21.
+
+| Метод/путь | Назначение |
+|---|---|
+| `GET /api/v2/settings/metrics` | `{metrics:{enabled}, defaults, isOverridden, source, running, restartRequired, token:{configured,source}, endpoints}` |
+| `PUT /api/v2/settings/metrics` | `{metrics:{enabled:boolean}}` — runtime-override (400 на не-boolean) |
+| `DELETE /api/v2/settings/metrics` | Сброс runtime к env/config/default |
+| `GET /api/v2/settings/metrics/status` | Live-снимок: `ready`, `storage`, `storageBackend`, `version`, `uptimeSec`, `exposition:{series,bytes,droppedSeries}`, `token`, `endpoints` |
+| `PUT /api/v2/settings/metrics/token` | `{token}` (≥16, write-only) → файл `0600`, применяется сразу; env-токен → 409 |
+| `DELETE /api/v2/settings/metrics/token` | Удалить файл токена (идемпотентно); env-токен → 409 |
 
 ## `/health` vs `/ready`
 
@@ -352,6 +385,9 @@ Prometheus — `:9090`, Grafana — `:3000` (папка **Synth**, три даш
 |---|---|
 | `curl /metrics` → 404 | `metrics.enabled=false` (или `SYNTH_METRICS_ENABLED` не передан контейнеру/процессу) |
 | `curl /metrics` → 401 | Задан `SYNTH_METRICS_TOKEN` или файл `{dataDir}/secrets/metrics-token`; передайте `Authorization: Bearer …` (в ServiceMonitor — `bearerTokenSecret`) |
+| В UI `restartRequired=true` | Runtime-значение `enabled` отличается от стартового (`running`): нажмите «Перезапустить инстанс» в разделе «Метрики» (или «Обслуживание»), только рестарт пересоздаёт middleware/коллекторы |
+| Тумблер `enabled` в UI заблокирован | Действует `SYNTH_METRICS_ENABLED` (источник `env`): env приоритетнее runtime; измените env/Helm и перезапустите процесс |
+| UI: задать/удалить токен → 409 | Токен задан через `SYNTH_METRICS_TOKEN` (env) — из UI не перезаписывается; меняйте env |
 | `synth_llm_*` пусто | С момента старта не было LLM-вызовов (серии создаются при первом вызове) — это нормально |
 | `synth_ready=0` | Старт не завершён или fail-closed хранилище; смотрите логи старта, `StorageDegraded`, доступность БД |
 | Растёт `synth_metrics_series_dropped_total` | Нарушен контракт лейблов или предел 2000 серий на метрику; проверьте `synth_metrics_series` и значения (`route`/`store`/`provider`/`model`) |
@@ -371,7 +407,7 @@ Prometheus — `:9090`, Grafana — `:3000` (папка **Synth**, три даш
   В кластере ограничьте доступ NetworkPolicy (только namespace Prometheus) или включите токен.
 - **Токен.** `SYNTH_METRICS_TOKEN`/`{dataDir}/secrets/metrics-token` (`0600`); сравнение
   constant-time, значение не логируется и не возвращается в ответах. В `config.yaml` не хранится
-  (инвариант 13).
+  (инвариант 13). UI пишет только файл (write-only) и не перезаписывает env-токен (409).
 - **Аудит релиза.** Контур входит в обязательный внутренний аудит: политика — [security/README.md](./security/README.md),
   чек-лист — [security/AUDIT-CHECKLIST.md](./security/AUDIT-CHECKLIST.md); запись релиза —
   `docs/security/releases/<version>.json` (ADR-094, гейт `security-gate`).

@@ -749,6 +749,12 @@ RBAC backend: write-эндпоинты (`init`/`clone`/`register`/`remove`/`fetc
 | DELETE | `/api/v2/settings/decision` | ADMIN (managed) / auth (core) | Сброс runtime-настроек к config-дефолту; `{status:"restored", decision, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/decision/metrics` | auth | Агрегатные in-memory метрики decision-слоя (ADR-084) → `{metrics, ts}`. Форма `metrics`: `{calls, handled, fallback, escalated, attempts:{primary, escalation}, rejected:{ok, low_confidence, invalid, no_answer, no_provider, error}, by_model:{"<provider>/<model>":{calls, handled, latency_ms_avg, latency_ms_max}}}`; сбрасываются при рестарте |
 | DELETE | `/api/v2/settings/decision/metrics` | ADMIN (managed) / auth (core) | Сброс накопителей метрик decision-слоя → `{metrics}` (обнулённый снимок) |
+| GET | `/api/v2/settings/metrics` | ADMIN (managed) / auth (core) | Настройки наблюдаемости (ADR-094): `{metrics:{enabled}, defaults:{enabled}, isOverridden, source:"env"\|"runtime"\|"config"\|"default", running, restartRequired, token:{configured,source:"env"\|"file"\|"none"}, endpoints:{metrics:"/metrics",ready:"/ready"}}`; приоритет `SYNTH_METRICS_ENABLED` > runtime > config > `false` |
+| PUT | `/api/v2/settings/metrics` | ADMIN (managed) / auth (core) | `{metrics:{enabled:boolean}}` — runtime-override (`settings.json`/PG); **применяется после перезапуска** (`restartRequired`); не-boolean → 400 `VALIDATION_ERROR` |
+| DELETE | `/api/v2/settings/metrics` | ADMIN (managed) / auth (core) | Сброс runtime-значения к env/config/default (ответ как у `GET`) |
+| GET | `/api/v2/settings/metrics/status` | ADMIN (managed) / auth (core) | Live-снимок: `{enabled, running, source, restartRequired, ready, storage:"ok"\|"degraded", storageBackend, version, uptimeSec, exposition:{series,bytes,droppedSeries}, token, endpoints}` |
+| PUT | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Bearer-токен `/metrics` (write-only): `{token}` (после trim ≥16 символов) → `{dataDir}/secrets/metrics-token` (`0600`, атомарно), применяется **сразу**; короткий/пустой → 400 `VALIDATION_ERROR`; токен из env → 409 `CONFLICT`; значение не возвращается |
+| DELETE | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Удалить файл токена (идемпотентно) → `{token:{configured,source}}`; токен из env → 409 `CONFLICT` |
 
 > **Адресная egress-политика (ADR-099).** `egress.tools`/`egress.webhooks`/`mcp.networkPolicy` — единый
 > формат `{mode, list, exceptions}`: `exceptions` проверяются первыми (hostname, `*.suffix`, IP/CIDR),

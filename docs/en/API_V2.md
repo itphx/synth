@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-19 (ADR-094, §5.1 `/metrics` и `/ready`); перевод отстаёт (PROP-102, §5.32 «Аналитика и отчётность»).
+> ⚠️ RU-версия обновлена 2026-10-19 (ADR-094: §5.1 `/metrics`/`/ready` и §5.21 runtime-настройки метрик); перевод отстаёт (PROP-102, §5.32 «Аналитика и отчётность»).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
@@ -751,6 +751,12 @@ Resolution of `/`-commands is performed **in core** (uniformly for the UI/CLI/hy
 | DELETE | `/api/v2/settings/decision` | ADMIN (managed) / auth (core) | Reset the runtime settings to the config default; `{status:"restored", decision, isOverridden:false, defaults}` |
 | GET | `/api/v2/settings/decision/metrics` | auth | Aggregate in-memory metrics of the decision layer (ADR-084) → `{metrics, ts}`. The `metrics` shape: `{calls, handled, fallback, escalated, attempts:{primary, escalation}, rejected:{ok, low_confidence, invalid, no_answer, no_provider, error}, by_model:{"<provider>/<model>":{calls, handled, latency_ms_avg, latency_ms_max}}}`; reset on restart |
 | DELETE | `/api/v2/settings/decision/metrics` | ADMIN (managed) / auth (core) | Reset the decision-layer metric counters → `{metrics}` (a zeroed snapshot) |
+| GET | `/api/v2/settings/metrics` | ADMIN (managed) / auth (core) | Observability settings (ADR-094): `{metrics:{enabled}, defaults:{enabled}, isOverridden, source:"env"\|"runtime"\|"config"\|"default", running, restartRequired, token:{configured,source:"env"\|"file"\|"none"}, endpoints:{metrics:"/metrics",ready:"/ready"}}`; priority `SYNTH_METRICS_ENABLED` > runtime > config > `false` |
+| PUT | `/api/v2/settings/metrics` | ADMIN (managed) / auth (core) | `{metrics:{enabled:boolean}}` — runtime override (`settings.json`/PG); **applied after a restart** (`restartRequired`); non-boolean → 400 `VALIDATION_ERROR` |
+| DELETE | `/api/v2/settings/metrics` | ADMIN (managed) / auth (core) | Reset the runtime value to env/config/default (same response as `GET`) |
+| GET | `/api/v2/settings/metrics/status` | ADMIN (managed) / auth (core) | Live snapshot: `{enabled, running, source, restartRequired, ready, storage:"ok"\|"degraded", storageBackend, version, uptimeSec, exposition:{series,bytes,droppedSeries}, token, endpoints}` |
+| PUT | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Bearer token for `/metrics` (write-only): `{token}` (trimmed length ≥16) → `{dataDir}/secrets/metrics-token` (`0600`, atomic), applied **immediately**; short/empty → 400 `VALIDATION_ERROR`; token from env → 409 `CONFLICT`; the value is never returned |
+| DELETE | `/api/v2/settings/metrics/token` | ADMIN (managed) / auth (core) | Delete the token file (idempotent) → `{token:{configured,source}}`; token from env → 409 `CONFLICT` |
 
 > **Address egress policy (ADR-099).** `egress.tools`/`egress.webhooks`/`mcp.networkPolicy` share one
 > format `{mode, list, exceptions}`: `exceptions` are checked first (hostname, `*.suffix`, IP/CIDR),

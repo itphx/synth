@@ -1192,10 +1192,18 @@ alerts and troubleshooting — [OBSERVABILITY.md](../OBSERVABILITY.md) (RU); rat
 |------|-----------|--------------|
 | `metrics.enabled` | Enables `GET /metrics` (same port, outside `/api/v2`) and the collection of HTTP/process/domain metrics. `false` — no endpoint (404), nothing is collected. Env — `SYNTH_METRICS_ENABLED` | `false` |
 
+**Runtime override.** `metrics.enabled` can be toggled in the UI: Settings → Administration →
+**“Metrics”** (runtime in `settings.json`/PG, API — `GET/PUT/DELETE /api/v2/settings/metrics`).
+Priority: `SYNTH_METRICS_ENABLED` > runtime (UI) > `config.yaml` > default `false`; with an env value
+the toggle is locked (source `env`). Middleware and collectors are created at process start, so the
+change is applied **after a restart**: the API/UI expose `restartRequired = effective !== running`.
+The token is applied immediately (read on every request).
+
 The bearer token is **never stored** in `config.yaml` (invariant 13): env `SYNTH_METRICS_TOKEN`
-(takes precedence) or the file `{dataDir}/secrets/metrics-token` (read, never created; `0600`).
-With a token set, `/metrics` responds 401 without `Authorization: Bearer …`; comparison is
-constant-time and the value is never logged.
+(takes precedence) or the file `{dataDir}/secrets/metrics-token` (created manually or from the UI,
+write-only; `0600`). With a token set, `/metrics` responds 401 without `Authorization: Bearer …`;
+comparison is constant-time and the value is never logged. If the token comes from env, UI
+write/delete operations return 409 `CONFLICT`.
 
 ```yaml
 metrics:

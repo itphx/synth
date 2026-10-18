@@ -123,7 +123,29 @@ liveness/readiness, поставляемые дашборды и алерты.
 OpenTelemetry-трейсинг, доставка алертов (Alertmanager) и SLO-страница портала. Статус ADR — по-прежнему
 `⚠️ Частично`.
 
+## Обновлено (2026-10-19)
+
+Добавлена **runtime-настройка `metrics.enabled`** без изменения контракта метрик:
+
+- UI: Настройки → Администрирование → **«Метрики»** (EN «Metrics», категория `metrics`, компонент
+  `ObservabilitySettings`): статус (`running`, `/ready`, storage, версия, uptime, `series`/`bytes`/
+  `droppedSeries`), тумблер `enabled`, write-only токен, копирование `/metrics`, пример `scrape_config`.
+- Приоритет: `SYNTH_METRICS_ENABLED` > runtime (`settings.json`/PG) > `config.yaml` > default `false`;
+  действующее env-значение блокирует тумблер в UI.
+- Применение runtime-значения — **после перезапуска** процесса (middleware/коллекторы создаются при
+  старте); API/UI отдают `restartRequired = effective !== running`, в разделе — баннер и кнопка
+  graceful restart (ADR-092).
+- Токен `/metrics` — write-only: UI пишет файл `{dataDir}/secrets/metrics-token` (`0600`, атомарно),
+  значение не возвращается, применяется сразу (читается на каждый запрос); при env
+  `SYNTH_METRICS_TOKEN` запись/удаление → 409 `CONFLICT`. В `config.yaml` токен не хранится.
+- API (ADMIN в managed, `requireAuth` в core): `GET/PUT/DELETE /api/v2/settings/metrics`,
+  `GET /api/v2/settings/metrics/status`, `PUT/DELETE /api/v2/settings/metrics/token`
+  (контракт — [docs/API_V2.md](../API_V2.md) §5.21, runbook — [docs/OBSERVABILITY.md](../OBSERVABILITY.md)).
+
+Статус остаётся `⚠️ Частично`: остаток (JSON-логи/корреляция и OpenTelemetry) не входит.
+
 ## История
 
+- 2026-10-19 — runtime `metrics.enabled` через UI «Метрики» (`settings/metrics*`, применение после рестарта), write-only токен в файл; статус — `⚠️ Частично`.
 - 2026-10-19 — реализованы метрики/ready/поставка; остаток — логи/OTel.
 - 2026-10-18 — принято из PROP-094; зафиксированы мини-реестр метрик, `/metrics` (off by default), `/ready`, контракт кардинальности, поставка алертов/дашбордов и конфиг `metrics`.

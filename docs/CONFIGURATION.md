@@ -1221,9 +1221,17 @@ analytics:
 |------|-----------|--------------|
 | `metrics.enabled` | Включает `GET /metrics` (тот же порт, вне `/api/v2`) и сбор HTTP/процессных/доменных метрик. `false` — эндпоинта нет (404), ничего не собирается. Env — `SYNTH_METRICS_ENABLED` | `false` |
 
+**Runtime-override.** `metrics.enabled` можно переключить в UI: Настройки → Администрирование →
+**«Метрики»** (runtime в `settings.json`/PG, API — `GET/PUT/DELETE /api/v2/settings/metrics`).
+Приоритет: `SYNTH_METRICS_ENABLED` > runtime (UI) > `config.yaml` > default `false`; при env-значении
+тумблер заблокирован (источник `env`). Middleware и коллекторы создаются при старте процесса, поэтому
+изменение применяется **после перезапуска**: API/UI отдают `restartRequired = effective !== running`.
+Токен применяется сразу (читается на каждый запрос).
+
 Bearer-токен в `config.yaml` **не хранится** (инвариант 13): env `SYNTH_METRICS_TOKEN` (приоритет) либо
-файл `{dataDir}/secrets/metrics-token` (читается, не создаётся; права `0600`). При заданном токене
-`/metrics` отвечает 401 без `Authorization: Bearer …`; сравнение constant-time, значение не логируется.
+файл `{dataDir}/secrets/metrics-token` (создаётся вручную или из UI write-only, права `0600`). При
+заданном токене `/metrics` отвечает 401 без `Authorization: Bearer …`; сравнение constant-time,
+значение не логируется. Если токен задан через env, UI-операции записи/удаления → 409 `CONFLICT`.
 
 ```yaml
 metrics:
