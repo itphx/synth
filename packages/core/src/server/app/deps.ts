@@ -526,6 +526,9 @@ export async function createStandaloneDeps(
     securityConfig: effectiveSecurityConfig,
     gatewayConfig,
     gatewayPatternStore: patternStore,
+    // ADR-094: реестр метрик (только при `metrics.enabled`) — LLM-вызовы
+    // сессий учитываются и при выключенном LLM Gateway.
+    metrics,
     mcpManager,
     cachePolicy: config.llmCachePolicy,
     toolsPolicy: effectiveToolsPolicy,

@@ -501,6 +501,9 @@ export async function createBackendDeps(
     gatewayAuditLogger,
     gatewayPayloadLogPath,
     gatewayPatternStore: patternStore,
+    // ADR-094: реестр метрик (только при `metrics.enabled`) — LLM-вызовы
+    // сессий учитываются и при выключенном LLM Gateway.
+    metrics,
     cachePolicy: config.synth.llm.cache,
     toolsPolicy,
     mcpPolicy,

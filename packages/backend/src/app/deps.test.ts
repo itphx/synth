@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_AGENT_ID } from '@itphx/synth-core';
+import { DEFAULT_AGENT_ID, MetricsRegistry } from '@itphx/synth-core';
 import type { EventsRuntimeSettings } from '@itphx/synth-core';
 import type { DecisionConfig } from '@itphx/synth-shared';
 import { loadBackendConfig } from '../lib/app-config.js';
@@ -116,6 +116,35 @@ describe('createBackendDeps: композиция и live-аксессоры', (
 
     await deps.settingsStore.clearMcpNetworkPolicy();
     expect(await deps.egressResolver.resolveMcp()).toEqual(before);
+  });
+
+  it('ADR-094: переданный реестр метрик доходит до оркестратора', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-backend-deps-metrics-'));
+    const saved = process.env.SYNTH_DATA_DIR;
+    process.env.SYNTH_DATA_DIR = dir;
+    try {
+      const config = await loadBackendConfig();
+      const registry = new MetricsRegistry();
+      const withMetrics = await createBackendDeps(config, undefined, registry);
+      try {
+        // Поле приватное — публичного аксессора нет; проверяем саму проводку
+        // композиции (до фикса `metrics` в конструктор не передавался).
+        const internal = withMetrics.orchestrator as unknown as {
+          _metrics: MetricsRegistry | null;
+        };
+        expect(internal._metrics).toBe(registry);
+      } finally {
+        withMetrics.schedulerService.stop();
+        withMetrics.webhookService.stop();
+        withMetrics.stopEphemeralSweeper();
+        withMetrics.stopEventJournalPruner();
+        withMetrics.stopWebhookDeliveryPruner();
+      }
+    } finally {
+      if (saved === undefined) delete process.env.SYNTH_DATA_DIR;
+      else process.env.SYNTH_DATA_DIR = saved;
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 
   it('live.setDecision не бросает и не ломает composition', () => {
