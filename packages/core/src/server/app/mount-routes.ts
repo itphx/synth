@@ -19,6 +19,7 @@ import {
   createSkillBundleRoutes, createSessionSkillScopeRoutes, createProjectSkillScopeRoutes,
   createSkillSettingsRoutes, createIdentityRoutes, createContextRoutes,
   createMaintenanceRoutes, createProjectPortableRoutes,
+  createAnalyticsRoutes, AnalyticsService,
   createStorageContextAsync,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
@@ -79,7 +80,8 @@ export function mountStandaloneRoutes(
     eventApiKeyStore, resolveAgentTemplate, schedulerService, scheduleStore, jobStore,
     identityClaimStore, modelWindowLoader, eventRouter, dataDir, defaultWorkingDir,
     commandService, bundleStore, dictionaries, maintenanceAudit,
-    egressResolver, securityAudit, egressRequests,
+    egressResolver, securityAudit, egressRequests, analyticsRollups,
+    analytics,
   } = deps;
   const serviceApiKeyStore = deps.serviceApiKeyStore;
   const {
@@ -114,6 +116,7 @@ export function mountStandaloneRoutes(
       profilesStore,
       getRemoteClient: () => getClient(),
       requestSessionService,
+      analytics,
     },
     {
       resolveDefaultAgent: getDefaultAgentId,
@@ -296,6 +299,12 @@ export function mountStandaloneRoutes(
 
   // Журналы безопасности: аудит изменений политик + внешние запросы (egress).
   app.route('/api/v2/audit', createAuditRoutes(auth, { securityAudit, egressRequests }));
+
+  // PROP-102 (волна 1): отчёты аналитики — только чтение. В standalone-режиме
+  // единственный ключ → ADMIN, поэтому `resolveElevated` по умолчанию true (сквозной обзор).
+  app.route('/api/v2/analytics', createAnalyticsRoutes(auth, {
+    service: new AnalyticsService({ repo: analyticsRollups }),
+  }));
 
   // Messages (batch operations)
   app.route('/api/v2/messages', createMessageRoutes(

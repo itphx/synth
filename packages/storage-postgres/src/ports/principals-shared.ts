@@ -13,6 +13,7 @@
  */
 
 import type { ExternalIdentity, ProfileData, Project } from '@itphx/synth-shared';
+import { jsonbParam as serializeJsonbParam } from '../json-param.js';
 import type { PostgresExecutor } from '../pool.js';
 
 /** Доменный проект. */
@@ -36,10 +37,9 @@ export function requiredIso(value: unknown): string {
   return toIso(value) ?? '';
 }
 
-/** Значение `jsonb`-параметра: JSON-строка либо `null`. */
+/** Значение `jsonb`-параметра: JSON-строка либо `null` (NUL — вычищены). */
 export function jsonbParam(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  return JSON.stringify(value);
+  return serializeJsonbParam(value);
 }
 
 /** Прочитать `jsonb`-значение ключа таблицы `settings`. */

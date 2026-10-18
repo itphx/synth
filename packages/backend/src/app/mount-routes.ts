@@ -16,6 +16,7 @@ import {
   createSessionSkillScopeRoutes, createProjectSkillScopeRoutes, createSkillSettingsRoutes,
   createIdentityRoutes,
   createMaintenanceRoutes,
+  createAnalyticsRoutes, AnalyticsService,
   createProjectPortableRoutes,
   createStorageContextAsync,
   ProjectInstructionsResolver, createInstructionsInfoResolver,
@@ -73,6 +74,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     defaultWorkingDir, patternStore, toolRegistry, gatewayAuditLogger, gatewayPayloadLogPath,
     gatewayConfig, providerLoader, modelLoader, modelWindowLoader, resolveAgentTemplate,
     identityClaimStore, live, maintenanceAudit,
+    analyticsRollups, analytics,
   } = deps;
 
   /**
@@ -150,7 +152,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   ));
 
   // Sessions routes
-  app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId, requestSessionService));
+  app.route('/api/v2/sessions', createSessionRoutes(auth, sessionManager, eventBus, queueManager, processMessage, orchestrator, eventHub, contextOptimizer, projectStore, profilesStore, getDefaultAgentId, requestSessionService, analytics));
 
   // Messages routes
   app.route('/api/v2/messages', createMessageRoutes(auth, sessionManager, contextOptimizer, eventBus, projectStore));
@@ -695,6 +697,30 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }, {
     readGuard: auth.requirePermission('ADMIN', 'AUDITOR'),
   }));
+
+  // PROP-102 (волна 1): отчёты аналитики — только чтение, данных без локализации.
+  // Managed RBAC (§7): ADMIN/LEAD — сквозной обзор; AUDITOR — чтение всех отчётов;
+  // обычный USER — принудительный фильтр оси `user` по себе (+ 403 на `decision`/`summary`).
+  app.route('/api/v2/analytics', createAnalyticsRoutes(
+    { requireAuth: auth.requireAuth },
+    { service: new AnalyticsService({ repo: analyticsRollups }) },
+    {
+      resolveElevated: (c) => auth.isAdmin(c as never) || auth.hasRole(c as never, 'LEAD'),
+      resolveAuditor: (c) => auth.hasRole(c as never, 'AUDITOR'),
+      // `attachUser` уже положил пользователя в контекст — берём его id.
+      resolveUserId: (c) => {
+        const user = c.get('user') as { id?: string } | undefined;
+        return user?.id ?? '';
+      },
+      messages: {
+        invalidPeriod: (c) => t('errors.validation.invalidAnalyticsPeriod', undefined, c),
+        invalidRange: (c) => t('errors.validation.invalidAnalyticsRange', undefined, c),
+        invalidGroupBy: (c) => t('errors.validation.invalidAnalyticsGroupBy', undefined, c),
+        invalidOption: (c) => t('errors.validation.invalidAnalyticsOption', undefined, c),
+        forbidden: (c) => t('errors.forbidden.analytics', undefined, c),
+      },
+    },
+  ));
 
   // Словари классификации: чтение — все авторизованные, запись/сброс — ADMIN
   // (тот же guard, что у users.ts). Реализация общая с core; порт — из контекста хранения.

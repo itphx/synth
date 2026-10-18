@@ -7,6 +7,7 @@
  */
 
 import type { ToolContext, ToolDefinition, ToolResult } from '@itphx/synth-shared';
+import { stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { i18n as i18nMeta, t as sm } from '../system-messages.js';
 
 /** Структурный источник локализованных security-сообщений (ContextConfig). */
@@ -99,7 +100,14 @@ export async function executeToolDef(
   }
 
   try {
-    return await toolDef.execute(parsed.data, context);
+    const result = await toolDef.execute(parsed.data, context);
+    // Единая точка санитизации вывода тулов (web_fetch/shell/read_file/…):
+    // U+0000 из внешнего мира не должен попадать в историю/`jsonb`.
+    return {
+      ...result,
+      content: typeof result.content === 'string' ? stripNullBytes(result.content) : result.content,
+      ...(result.metadata ? { metadata: stripNullBytesDeep(result.metadata) } : {}),
+    };
   } catch (execError) {
     return {
       content: sm('tool.exec_error', { tool: toolName, error: String(execError) }),

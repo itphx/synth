@@ -71,6 +71,8 @@ export const ENV_OVERRIDES: readonly EnvOverrideDefinition[] = [
   { section: 'decision', key: 'confidenceThreshold', type: 'number' },
   { section: 'decision', key: 'escalationProvider', type: 'string' },
   { section: 'decision', key: 'escalationModel', type: 'string' },
+  // analytics (PROP-102)
+  { section: 'analytics', key: 'retentionDays', type: 'number' },
 ];
 
 /** camelCase → SNAKE_CASE (`autoBind` → `AUTO_BIND`, `ephemeralTtl` → `EPHEMERAL_TTL`). */

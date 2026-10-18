@@ -27,6 +27,7 @@ import type {
   EventApiKeyRecord,
 } from '@itphx/synth-core';
 import type { PortDeps } from './deps.js';
+import { jsonbParam } from '../json-param.js';
 import {
   compact,
   isUniqueViolation,
@@ -212,8 +213,8 @@ export class PgEventRouteRepository {
         input.name ?? null,
         input.priority,
         input.enabled,
-        JSON.stringify(input.match ?? {}),
-        JSON.stringify(input.target ?? {}),
+        jsonbParam(input.match ?? {}),
+        jsonbParam(input.target ?? {}),
       ],
     );
     return toRoute(rows[0]!);

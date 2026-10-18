@@ -1,11 +1,13 @@
 import type { Session, Message, SessionSettings, Checkpoint, SessionOrigin, SessionReference, McpServerToolSettings, Project } from '@itphx/synth-shared';
 import { getForkedTitle, MessageRole } from '@itphx/synth-shared';
-import { nowISO, generateId, makeTextPart, makePart } from '@itphx/synth-shared';
+import { nowISO, generateId, makeTextPart, makePart, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import { t as sm, i18n as i18nMeta } from '../engine/system-messages.js';
 import type { SessionRepository } from '../storage/ports/session-repository.js';
 import type { ProjectRepository } from '../storage/ports/project-repository.js';
 import type { HookBus } from '../engine/hooks/hook-bus.js';
 import { mergeMcpToolSettings } from '../engine/mcp/settings.js';
+import type { ActivityMeasure, AnalyticsRecorder } from '../analytics/recorder.js';
+import { activityMeasureForMessage, sessionAxes } from '../analytics/recorder.js';
 
 /** Структурный контракт загрузки проекта (для снапшотов скоупа). */
 export type SessionProjectStoreLike = Pick<ProjectRepository, 'load'>;
@@ -25,11 +27,33 @@ export interface SessionManagerOptions {
    * (удаление). Не задана — эмиты не выполняются, поведение менеджера не меняется.
    */
   hooks?: HookBus;
+  /**
+   * PROP-102: сборщик аналитики — точка персиста сообщения инкрементирует
+   * `messages_assistant`/`messages_tool` (семейство `activity`). Не задан —
+   * запись не выполняется (поведение прежнее).
+   */
+  analytics?: AnalyticsRecorder;
 }
 
 export interface SessionTree {
   session: Session | null;
   children: SessionTree[];
+}
+
+/**
+ * Санитизация нового сообщения перед записью: PostgreSQL не принимает U+0000
+ * ни в `text`, ни в `jsonb`, поэтому NUL-байты удаляются в доменном слое —
+ * одинаково для file/memory/postgres backend'ов (история/UI тоже чистая).
+ */
+function sanitizeMessageNullBytes(message: Message): Message {
+  if (typeof message.content === 'string') message.content = stripNullBytes(message.content);
+  if (typeof message.reasoning === 'string') message.reasoning = stripNullBytes(message.reasoning);
+  if (message.parts) message.parts = stripNullBytesDeep(message.parts);
+  if (message.toolCalls) message.toolCalls = stripNullBytesDeep(message.toolCalls);
+  if (message.metadata) message.metadata = stripNullBytesDeep(message.metadata);
+  if (message.debugData) message.debugData = stripNullBytesDeep(message.debugData);
+  if (message.promptMeta) message.promptMeta = stripNullBytesDeep(message.promptMeta);
+  return message;
 }
 
 /**
@@ -199,6 +223,8 @@ export class SessionManager {
       sessionId: session.id,
       ...(data.projectId ? { projectId: data.projectId } : {}),
       ...(session.settings.agentRole ? { agent: session.settings.agentRole } : {}),
+      // PROP-102: ось `user` для сборщика `activity` — значение уже под рукой.
+      ...(session.userId ? { userId: session.userId } : {}),
     });
     return session;
   }
@@ -303,7 +329,12 @@ export class SessionManager {
     session.archivedAt = nowISO();
     session.updatedAt = nowISO();
     await this.store.save(session);
-    this._options.hooks?.emitAsync('session_end', { sessionId });
+    // PROP-102: `archived:true` отличает архив от удаления (мера `sessions_archived`).
+    this._options.hooks?.emitAsync('session_end', {
+      sessionId,
+      archived: true,
+      ...sessionAxes(session),
+    });
     return session;
   }
 
@@ -395,11 +426,154 @@ export class SessionManager {
       if (!message.parts || message.parts.length === 0) {
         message.parts = [makeTextPart(message.content)];
       }
+      sanitizeMessageNullBytes(message);
       session.messages.push(message);
       session.updatedAt = nowISO();
       await this.store.save(session);
+      // PROP-102: точка персиста сообщения — инкремент `activity`
+      // (`messages_assistant`/`messages_tool`); пользовательские сообщения
+      // персистит `QueueProcessor` (своя точка записи). Скрытые промежуточные
+      // assistant-сообщения tool-chain не считаем (паритет с `computeSessionStats`).
+      // Запись best-effort: рекордер не пробрасывает ошибки и не блокирует сохранение.
+      const measure =
+        message.metadata?.tool_chain === true ? null : activityMeasureForMessage(message.role);
+      if (measure) {
+        void this._options.analytics?.recordActivity(measure, sessionAxes(session));
+      }
       return session;
     });
+  }
+
+  /**
+   * PROP-032: точечная дозапись сообщения (без чтения/перезаписи всей истории).
+   * `id`/`seq`/`origin` назначает порт (`SessionRepository.appendMessage`),
+   * здесь — NUL-санитайзинг и best-effort аналитика (та же, что в `addMessage`).
+   */
+  async appendMessage(sessionId: string, message: Message): Promise<Message | null> {
+    sanitizeMessageNullBytes(message);
+    const saved = await this.store.appendMessage(sessionId, message);
+    if (!saved) return null;
+
+    // Черновик частичного стрима (`metadata.streaming`) — промежуточный:
+    // активность запишет финальный `updateMessage(..., { recordActivity: true })`
+    // (или сообщение останется прерванным). Иначе один и тот же ответ
+    // посчитался бы дважды — при создании черновика и при его финализации.
+    const measure =
+      saved.metadata?.tool_chain === true || saved.metadata?.streaming === true
+        ? null
+        : activityMeasureForMessage(saved.role);
+    if (measure) {
+      void this._recordAppendActivity(sessionId, measure);
+    }
+    return saved;
+  }
+
+  /**
+   * PROP-032: точечное обновление существующего сообщения (без перезаписи
+   * истории). По умолчанию аналитика не инкрементируется — нового сообщения
+   * нет. `recordActivity` нужен финализации черновика частичного стрима
+   * (шаг 2б): само сообщение уже создано `appendMessage` (там активность не
+   * писалась), поэтому финальный `updateMessage` — единственная точка учёта.
+   */
+  async updateMessage(
+    sessionId: string,
+    message: Message,
+    opts?: { recordActivity?: boolean },
+  ): Promise<Message | null> {
+    sanitizeMessageNullBytes(message);
+    const saved = await this.store.updateMessage(sessionId, message);
+    if (!saved) return null;
+
+    if (opts?.recordActivity && saved.metadata?.tool_chain !== true) {
+      const measure = activityMeasureForMessage(saved.role);
+      if (measure) {
+        void this._recordAppendActivity(sessionId, measure);
+      }
+    }
+    return saved;
+  }
+
+  /**
+   * Шаг 2б: восстановление сообщений, «зависших» после падения/рестарта.
+   *
+   * - `metadata.streaming === true` → `streaming:false`, `interrupted:true`,
+   *   `metadata.status='error'` (частичный текст остаётся в истории);
+   * - assistant с `toolCalls`, для которого хотя бы у одного `id` нет
+   *   последующего tool-сообщения с этим `toolCallId`, помечается
+   *   `disabled:true` + `metadata.interrupted:true` — `sessionMessagesToLlm`
+   *   не отдаст провайдеру assistant(tool_calls) без пары (осиротевшие
+   *   tool-сообщения он и так превращает в user-текст).
+   *
+   * Запись — одна, под `withLock`, и только если что-то изменилось.
+   * Возвращает число исправленных сообщений.
+   */
+  async recoverStreamingMessages(sessionId: string): Promise<number> {
+    return this.withLock(sessionId, async (session) => {
+      let changed = 0;
+
+      for (const message of session.messages) {
+        if (message.metadata?.streaming === true) {
+          message.metadata = {
+            ...message.metadata,
+            streaming: false,
+            interrupted: true,
+            status: 'error',
+          };
+          changed++;
+        }
+      }
+
+      for (let i = 0; i < session.messages.length; i++) {
+        const message = session.messages[i]!;
+        if (message.role !== MessageRole.ASSISTANT || !message.toolCalls || message.toolCalls.length === 0) {
+          continue;
+        }
+        const callIds = message.toolCalls
+          .map((call) => (typeof call.id === 'string' ? call.id : null))
+          .filter((id): id is string => id !== null);
+        if (callIds.length === 0) continue;
+
+        // Пары ищем только среди последующих tool-сообщений: tool обязан идти
+        // после своего assistant(tool_calls) в OpenAI-совместимой истории.
+        const laterToolIds = new Set<string>();
+        for (let j = i + 1; j < session.messages.length; j++) {
+          const candidate = session.messages[j]!;
+          if (candidate.role === MessageRole.TOOL && candidate.toolCallId) {
+            laterToolIds.add(candidate.toolCallId);
+          }
+        }
+
+        const hasOrphan = callIds.some((id) => !laterToolIds.has(id));
+        if (!hasOrphan) continue;
+        if (message.disabled === true && message.metadata?.interrupted === true) continue;
+
+        message.disabled = true;
+        message.metadata = { ...(message.metadata ?? {}), interrupted: true };
+        changed++;
+      }
+
+      if (changed > 0) {
+        session.updatedAt = nowISO();
+        await this.store.save(session);
+      }
+      return changed;
+    });
+  }
+
+  /**
+   * PROP-102: `activity` для дозаписанного сообщения. Оси `user`/`project`
+   * берутся из **метаданных** сессии (`loadLight`), а не из полной истории:
+   * запись остаётся дешёвой и best-effort — ошибки чтения/рекордера не всплывают.
+   */
+  private async _recordAppendActivity(sessionId: string, measure: ActivityMeasure): Promise<void> {
+    const analytics = this._options.analytics;
+    if (!analytics) return;
+    try {
+      const meta = await this.store.loadLight(sessionId);
+      await analytics.recordActivity(measure, sessionAxes(meta));
+    } catch {
+      // best-effort: аналитика не должна ломать персист сообщения
+    }
   }
 
   async addPendingMessage(sessionId: string, message: Message, maxPending = 5): Promise<Session | null> {
@@ -410,6 +584,7 @@ export class SessionManager {
       if (!message.parts || message.parts.length === 0) {
         message.parts = [makeTextPart(message.content)];
       }
+      sanitizeMessageNullBytes(message);
       session.pendingMessages.push(message);
       session.updatedAt = nowISO();
       await this.store.save(session);

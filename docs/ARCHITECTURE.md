@@ -188,7 +188,7 @@ flowchart LR
 ## Слой хранения (backend'ы)
 
 Физическое хранение вынесено за **доменные порты** ([ADR-096](./arch_decisions/adr-096-storage-layer.md)):
-домен работает с `StorageContext` (`packages/core/src/storage/ports/*`, 27 портов), а backend подменяем.
+домен работает с `StorageContext` (`packages/core/src/storage/ports/*`, 30 портов), а backend подменяем.
 Точка сборки — `packages/core/src/storage/storage-context.ts` (`createFileStorage`/`createMemoryStorage` +
 асинхронный каскад `createStorageContextAsync`/`buildStorageContext`); выбор — `storage.backend`
 (`file`|`memory`|`postgres`, env `SYNTH_STORAGE_BACKEND`).

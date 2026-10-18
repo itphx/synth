@@ -23,6 +23,7 @@ import {
 } from '@itphx/synth-shared';
 import type { StorageContext } from '@itphx/synth-core';
 import type { PortDeps } from './deps.js';
+import { jsonbParam } from '../json-param.js';
 import {
   compact,
   isUniqueViolation,
@@ -120,7 +121,7 @@ export class PgWebhookRepository {
           label,
           input.description ?? null,
           input.url,
-          JSON.stringify(input.events ?? []),
+          jsonbParam(input.events ?? []),
           input.enabled ?? true,
           enc,
           `${secret.slice(0, SECRET_PREFIX_VISIBLE)}…`,
@@ -158,7 +159,7 @@ export class PgWebhookRepository {
       sets.push(`url = $${params.length}`);
     }
     if (patch.events !== undefined) {
-      params.push(JSON.stringify(patch.events));
+      params.push(jsonbParam(patch.events));
       sets.push(`events = $${params.length}::jsonb`);
     }
     if (patch.enabled !== undefined) {

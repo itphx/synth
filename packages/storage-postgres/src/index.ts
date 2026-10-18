@@ -23,6 +23,7 @@ export {
   PostgresConnection,
   advisoryLockKeyToBigInt,
   loadPgModule,
+  sanitizeQueryParams,
 } from './pool.js';
 export type {
   PostgresPoolConfig,

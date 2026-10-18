@@ -32,6 +32,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
   const toggleRightPanel = useUIStore((s) => s.toggleRightPanel)
   const setSettingsDialogOpen = useUIStore((s) => s.setSettingsDialogOpen)
   const setLogsDialogOpen = useUIStore((s) => s.setLogsDialogOpen)
+  const setAnalyticsDialogOpen = useUIStore((s) => s.setAnalyticsDialogOpen)
   const centerTabs = useUIStore((s) => s.centerTabs)
   const activeCenterTabId = useUIStore((s) => s.activeCenterTabId)
   const openTab = useUIStore((s) => s.openTab)
@@ -332,7 +333,10 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           {deviceType === 'tablet' && <HybridStatusIndicator />}
           <NotificationPopup />
           <PwaInstallButton />
-          <QuickSettingsPopup onSettingsClick={onSettingsClick} />
+          <QuickSettingsPopup
+            onSettingsClick={onSettingsClick}
+            onAnalyticsClick={() => setAnalyticsDialogOpen(true)}
+          />
           {deviceType === 'tablet' && canSeeLogs && (
             <button
               onClick={() => setLogsDialogOpen(true)}
@@ -606,7 +610,10 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
         <GlobalTransportIndicator />
         <HybridStatusIndicator />
         <NotificationPopup />
-        <QuickSettingsPopup onSettingsClick={onSettingsClick} />
+        <QuickSettingsPopup
+          onSettingsClick={onSettingsClick}
+          onAnalyticsClick={() => setAnalyticsDialogOpen(true)}
+        />
 
         {(user?.roles?.includes('ADMIN') || user?.roles?.includes('AUDITOR')) && (
           <button

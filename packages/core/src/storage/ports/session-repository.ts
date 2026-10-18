@@ -1,4 +1,4 @@
-import type { Session, SessionReference } from '@itphx/synth-shared';
+import type { Message, Session, SessionReference } from '@itphx/synth-shared';
 
 /**
  * Фильтр списка сессий. Доменный параметр, а не generic-KV: будущему SQL-бэкенду
@@ -22,7 +22,36 @@ export interface SessionFilter {
  */
 export interface SessionRepository {
   load(sessionId: string): Promise<Session | null>;
+  /**
+   * Полная замена сессии, включая историю (`messages`/`pendingMessages`/
+   * `checkpoints` и прочие child-наборы). Семантика «перезаписать всё»
+   * сохраняется для импорта/ветвления/материализации; для пошаговой
+   * персистентности одного сообщения — `appendMessage`/`updateMessage`.
+   */
   save(session: Session): Promise<void>;
+  /**
+   * Точечно добавить сообщение в конец истории (без перезаписи остальных).
+   * Назначает `id` (если нет), `seq` = max(seq)+1, `origin` (если нет),
+   * обновляет `session.updatedAt`. Возвращает сохранённое сообщение или `null`,
+   * если сессии нет.
+   */
+  appendMessage(sessionId: string, message: Message): Promise<Message | null>;
+  /**
+   * Точечно обновить существующее сообщение (полная замена изменяемых полей).
+   * Цель — по `seq` (уникален в сессии), fallback по `id`. Не меняет `id`/`seq`/
+   * `createdAt` исходной записи; обновляет `session.updatedAt`. Возвращает
+   * обновлённое сообщение или `null`, если сессии/сообщения нет.
+   */
+  updateMessage(sessionId: string, message: Message): Promise<Message | null>;
+  /**
+   * Точечное чтение метаданных сессии (**без истории**): `messages`/
+   * `pendingMessages`/`checkpoints` пусты, child-таблицы не читаются. Пара к
+   * `listLight`; нужна путям записи, которым требуются только атрибуты сессии
+   * (например, оси аналитики) и нельзя читать всю историю.
+   * @future-backend — одна выборка по PK без join child-таблиц (файловая
+   * реализация всё равно разбирает JSON, но не десериализует сообщения).
+   */
+  loadLight(sessionId: string): Promise<Session | null>;
   delete(sessionId: string): Promise<void>;
   /**
    * Список сессий с фильтром; сортировка по `updatedAt` desc.

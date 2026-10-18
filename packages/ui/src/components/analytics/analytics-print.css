@@ -1,0 +1,76 @@
+/**
+ * PROP-102 §5: печатная версия отчёта. Серверного PDF нет (новых зависимостей
+ * не вводим) — «Сформировать отчёт» вызывает `window.print()`, а этот файл
+ * оставляет на странице только печатный отчёт (портал `body`), пряча SPA.
+ */
+
+.analytics-print-root {
+  display: none;
+}
+
+@media print {
+  @page {
+    margin: 12mm;
+  }
+
+  /* SPA (модалка, тосты, порталы) не печатается — только отчёт. */
+  body > :not(.analytics-print-root) {
+    display: none !important;
+  }
+
+  .analytics-print-root {
+    display: block !important;
+    color: #000;
+    background: #fff;
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.35;
+  }
+
+  .analytics-print-root h1 {
+    margin: 0 0 4pt;
+    font-size: 16pt;
+  }
+
+  .analytics-print-root h2 {
+    margin: 14pt 0 4pt;
+    font-size: 12pt;
+  }
+
+  .analytics-print-root .analytics-print-meta {
+    margin-bottom: 10pt;
+    color: #444;
+    font-size: 9pt;
+  }
+
+  .analytics-print-root table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9pt;
+  }
+
+  .analytics-print-root th,
+  .analytics-print-root td {
+    border: 1px solid #999;
+    padding: 2pt 4pt;
+    text-align: right;
+    vertical-align: top;
+  }
+
+  .analytics-print-root th:first-child,
+  .analytics-print-root td:first-child {
+    text-align: left;
+  }
+
+  .analytics-print-root thead {
+    display: table-header-group;
+  }
+
+  .analytics-print-root tr {
+    break-inside: avoid;
+  }
+
+  .analytics-print-root .analytics-print-total {
+    font-weight: 600;
+  }
+}

@@ -210,6 +210,118 @@ describe('SessionManager', () => {
     expect(overflow).toBeNull();
   });
 
+  it('addMessage удаляет U+0000 из content/parts/reasoning/toolCalls/metadata (file backend)', async () => {
+    const session = await manager.createSession({});
+    const message = {
+      ...makeMsg('a\u0000b'),
+      reasoning: 'r\u0000',
+      toolCalls: [{ id: 't1', function: { name: 'x', arguments: '{"q":"x\u0000y"}' } }],
+      metadata: { args: { text: 'm\u0000' }, list: ['l\u0000'] },
+      debugData: { note: 'd\u0000' },
+      promptMeta: { note: 'p\u0000' },
+    } as unknown as Message;
+
+    await manager.addMessage(session.id, message);
+    const loaded = await manager.getSession(session.id);
+
+    expect(loaded!.messages).toHaveLength(1);
+    expect(loaded!.messages[0]!.content).toBe('ab');
+    expect(loaded!.messages[0]!.parts[0]!.data).toBe('ab');
+    expect(loaded!.messages[0]!.reasoning).toBe('r');
+    expect(loaded!.messages[0]!.metadata).toEqual({ args: { text: 'm' }, list: ['l'] });
+    expect(loaded!.messages[0]!.debugData).toEqual({ note: 'd' });
+    expect(loaded!.messages[0]!.promptMeta).toEqual({ note: 'p' });
+    // Ни реального NUL, ни JSON-escape `\u0000` в сохранённом сообщении.
+    expect(JSON.stringify(loaded!.messages[0])).not.toContain('\\u0000');
+  });
+
+  it('addPendingMessage удаляет U+0000 из текста (file backend)', async () => {
+    const session = await manager.createSession({});
+    await manager.addPendingMessage(session.id, {
+      ...makeMsg('pending\u0000text'),
+      metadata: { note: 'n\u0000' },
+    } as unknown as Message);
+
+    const loaded = await manager.getSession(session.id);
+    expect(loaded!.pendingMessages).toHaveLength(1);
+    expect(loaded!.pendingMessages[0]!.content).toBe('pendingtext');
+    expect(loaded!.pendingMessages[0]!.metadata).toEqual({ note: 'n' });
+    expect(JSON.stringify(loaded!.pendingMessages[0])).not.toContain('\\u0000');
+  });
+
+  it('appendMessage точечно дописывает сообщение и назначает seq', async () => {
+    const session = await manager.createSession({});
+    await manager.addMessage(session.id, makeMsg('first'));
+
+    const appended = await manager.appendMessage(session.id, makeMsg('second'));
+    expect(appended).not.toBeNull();
+    expect(appended!.seq).toBe(2);
+    expect(appended!.origin).toBe('local');
+
+    const loaded = await manager.getSession(session.id);
+    expect(loaded!.messages.map((m) => m.content)).toEqual(['first', 'second']);
+    expect(loaded!.messages[1]!.seq).toBe(2);
+  });
+
+  it('appendMessage/updateMessage удаляют U+0000 (file backend)', async () => {
+    const session = await manager.createSession({});
+    await manager.addMessage(session.id, makeMsg('base'));
+
+    const appended = await manager.appendMessage(session.id, {
+      ...makeMsg('a\u0000b'),
+      metadata: { note: 'm\u0000' },
+    } as unknown as Message);
+    expect(appended!.content).toBe('ab');
+    expect(appended!.metadata).toEqual({ note: 'm' });
+
+    const updated = await manager.updateMessage(session.id, {
+      ...appended!,
+      content: 'c\u0000d',
+      parts: [makeTextPart('c\u0000d')],
+      metadata: { note: 'u\u0000' },
+    });
+    expect(updated!.content).toBe('cd');
+
+    const loaded = await manager.getSession(session.id);
+    expect(loaded!.messages[0]!.content).toBe('base');
+    expect(loaded!.messages[1]!.content).toBe('cd');
+    expect(loaded!.messages[1]!.metadata).toEqual({ note: 'u' });
+    expect(JSON.stringify(loaded)).not.toContain('\\u0000');
+  });
+
+  it('updateMessage меняет только целевое сообщение, сохраняя id/seq/createdAt', async () => {
+    const session = await manager.createSession({});
+    await manager.addMessage(session.id, makeMsg('first'));
+    await manager.addMessage(session.id, makeMsg('second'));
+
+    const before = (await manager.getSession(session.id))!;
+    const target = before.messages[1]!;
+    const updated = await manager.updateMessage(session.id, {
+      ...target,
+      content: 'second-updated',
+      parts: [makeTextPart('second-updated')],
+      metadata: { changed: true },
+    });
+
+    expect(updated).not.toBeNull();
+    expect(updated!.id).toBe(target.id);
+    expect(updated!.seq).toBe(target.seq);
+    expect(updated!.createdAt).toBe(target.createdAt);
+
+    const after = (await manager.getSession(session.id))!;
+    expect(after.messages[0]!.content).toBe('first');
+    expect(after.messages[0]!.metadata).toBeUndefined();
+    expect(after.messages[1]!.content).toBe('second-updated');
+    expect(after.messages[1]!.metadata).toEqual({ changed: true });
+  });
+
+  it('appendMessage/updateMessage несуществующей сессии/сообщения → null', async () => {
+    const session = await manager.createSession({});
+    expect(await manager.appendMessage('missing-session', makeMsg('orphan'))).toBeNull();
+    expect(await manager.updateMessage('missing-session', makeMsg('orphan'))).toBeNull();
+    expect(await manager.updateMessage(session.id, { ...makeMsg('ghost'), seq: 42 })).toBeNull();
+  });
+
   it('safeUpdate сохраняет изменения', async () => {
     const session = await manager.createSession({ title: 'Before' });
     await manager.safeUpdate(session.id, (_s) => {

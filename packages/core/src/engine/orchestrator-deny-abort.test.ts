@@ -15,6 +15,7 @@ import type { LLMMessage, CancellationToken } from '../providers/base.js';
 import type { ContextBuilder } from './context/builder.js';
 import type { PermissionConfig, ToolDefinition, Message } from '@itphx/synth-shared';
 import { generateId, MessageRole, nowISO, makeTextPart, ToolCapability } from '@itphx/synth-shared';
+import { sessionMessagesToLlm } from './orchestrator/prompt-info.js';
 
 function makeCtxBuilder(): ContextBuilder {
   return {
@@ -255,6 +256,88 @@ class MockDoomProvider extends BaseProvider {
   }
 }
 
+/**
+ * Провайдер для регресса шага 2а: 1-я итерация — текст + tool call (deny-команда,
+ * реальные команды не выполняются), 2-я — падение LLM. Пошаговая запись обязана
+ * оставить assistant(tool_calls) и tool-результат в истории до финала.
+ */
+class MockFailAfterToolProvider extends BaseProvider {
+  static calls = 0;
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    return { content: '', model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const n = MockFailAfterToolProvider.calls++;
+    if (n === 0) {
+      yield {
+        content: 'Шаг 1: проверяю команду', isFinal: true,
+        toolCalls: [{ id: 'call_f0', function: { name: 'execute_shell', arguments: JSON.stringify({ command: 'rm -rf /' }) } }],
+        model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+      return;
+    }
+    throw new Error('network fail: provider unavailable');
+  }
+
+  getProviderName(): string {
+    return 'mockfailaftertool';
+  }
+}
+
+/**
+ * Один tool call (deny-команда, реально не выполняется) → финальный текст:
+ * проверка ровно одной пары assistant(tool_calls) → tool и отсутствия дублей.
+ */
+class MockOneToolThenTextProvider extends BaseProvider {
+  static calls = 0;
+
+  async chat(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+  ): Promise<import('@itphx/synth-shared').LLMResponse> {
+    return { content: 'Готово', model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } };
+  }
+
+  async *chatAsync(
+    _messages: LLMMessage[],
+    _systemPrompt?: string,
+    _tools?: Record<string, unknown>[],
+    _debugCollector?: unknown,
+    _cancellationToken?: CancellationToken,
+  ): AsyncGenerator<import('@itphx/synth-shared').LLMChunk> {
+    const n = MockOneToolThenTextProvider.calls++;
+    if (n === 0) {
+      yield {
+        content: 'Шаг 1: проверяю команду', isFinal: true,
+        toolCalls: [{ id: 'call_o0', function: { name: 'execute_shell', arguments: JSON.stringify({ command: 'rm -rf /' }) } }],
+        model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      };
+      return;
+    }
+    yield {
+      content: 'Готово', isFinal: true,
+      model: this.model, usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+    };
+  }
+
+  getProviderName(): string {
+    return 'mockonetool';
+  }
+}
+
 /** Провайдер: всегда возвращает пустой контент без toolCalls (модель «не ответила»). */
 class MockEmptyProvider extends BaseProvider {
   async chat(
@@ -341,11 +424,15 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory.register('mockabortbefore', MockAbortBeforeFirstTokenProvider);
     ProviderFactory.register('mockdoom', MockDoomProvider);
     ProviderFactory.register('mockempty', MockEmptyProvider);
+    ProviderFactory.register('mockfailaftertool', MockFailAfterToolProvider);
+    ProviderFactory.register('mockonetool', MockOneToolThenTextProvider);
     MockDenyLoopProvider.calls = 0;
     MockAbortProvider.calls = 0;
     MockAbortNoModelProvider.calls = 0;
     MockAbortBeforeFirstTokenProvider.calls = 0;
     MockDoomProvider.calls = 0;
+    MockFailAfterToolProvider.calls = 0;
+    MockOneToolThenTextProvider.calls = 0;
   });
 
   afterEach(async () => {
@@ -355,6 +442,8 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     ProviderFactory['_providers'].delete('mockabortbefore');
     ProviderFactory['_providers'].delete('mockdoom');
     ProviderFactory['_providers'].delete('mockempty');
+    ProviderFactory['_providers'].delete('mockfailaftertool');
+    ProviderFactory['_providers'].delete('mockonetool');
   });
 
   it('deny 3+ раза: каждый deny даёт tool_call.result с объяснением политики, без «Цикл прерван»; пустой ответ модели подставлен', async () => {
@@ -393,6 +482,91 @@ describe('ChatOrchestrator: deny × doom loop + abort (баги фикса)', ()
     expect(assistant!.content.length).toBeGreaterThan(0);
     expect(assistant!.content).toContain('Could not proceed');
     expect(assistant!.metadata?.status).toBe('stopped');
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  // Шаг 2а: пошаговая запись — падение на 2-й итерации не теряет уже
+  // полученный assistant(tool_calls) и tool-результат (без ожидания финала).
+  it('падение на 2-й итерации: assistant(tool_calls) и tool-результат уже в истории', async () => {
+    const h = await makeHarness('mockfailaftertool');
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeDefined();
+
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const chainAssistant = session.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_chain === true,
+    );
+    expect(chainAssistant).toBeDefined();
+    expect(chainAssistant!.toolCalls).toHaveLength(1);
+    expect(chainAssistant!.content).toContain('Шаг 1');
+    expect(chainAssistant!.model).toBe('m');
+
+    const toolMsg = session.messages.find((m) => m.role === MessageRole.TOOL);
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.toolCallId).toBe('call_f0');
+    expect(toolMsg!.metadata?.tool_chain).toBe(true);
+    expect(toolMsg!.content).toContain('Permission denied');
+
+    // Порядок: assistant(tool_calls) → tool.
+    const assistantIdx = session.messages.indexOf(chainAssistant!);
+    const toolIdx = session.messages.indexOf(toolMsg!);
+    expect(toolIdx).toBe(assistantIdx + 1);
+
+    // Финальное сообщение — ошибка LLM (без tool_chain).
+    const finalAssistant = [...session.messages].reverse().find(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(finalAssistant?.metadata?.status).toBe('error');
+
+    // Пары для LLM целы: assistant с toolUse → парный tool, без осиротевших tool.
+    const llm = sessionMessagesToLlm(session.messages, 'developer');
+    const toolUseIdx = llm.findIndex((m) => m.role === 'assistant' && (m.toolUse?.length ?? 0) > 0);
+    expect(toolUseIdx).toBeGreaterThanOrEqual(0);
+    expect(llm[toolUseIdx + 1]).toMatchObject({ role: 'tool', toolCallId: 'call_f0' });
+    expect(llm.filter((m) => m.role === 'tool')).toHaveLength(1);
+    await rm(h.tmpDir, { recursive: true, force: true });
+  });
+
+  // Шаг 2а: обычное завершение — история ровно assistant(toolCalls) → tool →
+  // финальный assistant, без дублей; metadata финального не изменилась.
+  it('обычное завершение с одним tool call: assistant(tool_calls) → tool → финальный assistant', async () => {
+    const h = await makeHarness('mockonetool');
+    const chunks: Array<{ event: string; data: Record<string, unknown> }> = [];
+    const result = await run(h, new AbortController().signal, (event, data) => chunks.push({ event, data }));
+    expect(result.error).toBeUndefined();
+
+    const session = (await h.sessionManager.getSession(h.sessionId))!;
+    const chainAssistants = session.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_chain === true,
+    );
+    const toolMessages = session.messages.filter((m) => m.role === MessageRole.TOOL);
+    const finalAssistants = session.messages.filter(
+      (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
+    );
+    expect(chainAssistants).toHaveLength(1);
+    expect(toolMessages).toHaveLength(1);
+    expect(finalAssistants).toHaveLength(1);
+
+    const chainAssistant = chainAssistants[0]!;
+    const toolMsg = toolMessages[0]!;
+    const finalAssistant = finalAssistants[0]!;
+    expect(chainAssistant.toolCalls).toHaveLength(1);
+    expect(toolMsg.toolCallId).toBe('call_o0');
+    expect(toolMsg.metadata?.tool_name).toBe('execute_shell');
+    expect(session.messages.indexOf(toolMsg)).toBe(session.messages.indexOf(chainAssistant) + 1);
+    expect(session.messages.indexOf(finalAssistant)).toBe(session.messages.indexOf(toolMsg) + 1);
+
+    // Финальное сообщение — без tool_chain, прежние metadata сохранены.
+    expect(finalAssistant.metadata?.tool_chain).toBeUndefined();
+    expect((finalAssistant.metadata?.tool_results as unknown[])).toHaveLength(1);
+    expect(finalAssistant.metadata?.intermediate_text_blocks).toEqual([
+      { text: 'Шаг 1: проверяю команду', iteration: 0 },
+    ]);
+
+    const llm = sessionMessagesToLlm(session.messages, 'developer');
+    expect(llm.filter((m) => m.role === 'tool')).toHaveLength(1);
+    expect(llm.filter((m) => m.role === 'assistant' && (m.toolUse?.length ?? 0) === 0)).toHaveLength(1);
     await rm(h.tmpDir, { recursive: true, force: true });
   });
 
@@ -785,6 +959,14 @@ describe('ChatOrchestrator: отмена во время исполнения т
     const toolMsg = updated.messages.find((m) => m.role === MessageRole.TOOL);
     expect(toolMsg).toBeDefined();
     expect(toolMsg!.content).toContain('прерван отменой');
+    // Шаг 2а: tool-результат записан сразу (tool_chain), пара assistant(tool_calls) уже есть.
+    expect(toolMsg!.metadata?.tool_chain).toBe(true);
+    const chainAssistant = updated.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.tool_chain === true,
+    );
+    expect(chainAssistant).toBeDefined();
+    expect(chainAssistant!.toolCalls).toHaveLength(1);
+    expect(updated.messages.indexOf(toolMsg!)).toBe(updated.messages.indexOf(chainAssistant!) + 1);
     const cancelledAssistant = [...updated.messages].reverse().find(
       (m) => m.role === MessageRole.ASSISTANT && !m.metadata?.tool_chain,
     );

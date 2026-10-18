@@ -20,6 +20,7 @@ import type {
   StorageContext,
 } from '@itphx/synth-core';
 import type { PostgresExecutor } from '../pool.js';
+import { jsonbLiteral } from '../json-param.js';
 import type { PortDeps } from './deps.js';
 
 type Row = Record<string, unknown>;
@@ -30,7 +31,7 @@ function toISO(value: unknown): string {
 }
 
 function jsonParam(value: unknown): string {
-  return JSON.stringify(value ?? null);
+  return jsonbLiteral(value ?? null);
 }
 
 function toNumber(value: unknown): number | undefined {

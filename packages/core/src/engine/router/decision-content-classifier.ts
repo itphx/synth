@@ -20,6 +20,7 @@ import type {
   DecisionProviderResolver,
 } from './micro/models/decision-model.js';
 import { decideChoiceCascade } from './decision-cascade.js';
+import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 
 /** Идентификатор decision-вопроса (ответ — категория `coding|research|chat`). */
 export const DECISION_CATEGORY_QUESTION_ID = 'category';
@@ -49,13 +50,16 @@ function isContentCategory(value: string): value is ContentCategory {
 export class DecisionContentClassifier {
   private readonly _resolver: DecisionProviderResolver;
   private readonly _getConfig: () => DecisionConfigLike | undefined;
+  private readonly _analytics?: AnalyticsRecorder;
 
   constructor(
     resolver: DecisionProviderResolver,
     getConfig: () => DecisionConfigLike | undefined,
+    analytics?: AnalyticsRecorder,
   ) {
     this._resolver = resolver;
     this._getConfig = getConfig;
+    this._analytics = analytics;
   }
 
   /**
@@ -82,6 +86,7 @@ export class DecisionContentClassifier {
       ...(request.images ? { images: request.images } : {}),
       ...(request.videos ? { videos: request.videos } : {}),
       logLabel: 'классификатор',
+      ...(this._analytics ? { analytics: this._analytics } : {}),
     });
 
     if (!outcome.accepted || !outcome.label) return null;

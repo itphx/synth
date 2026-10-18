@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { generateId, generateStreamId, formatISODate, nowISO, safeJsonParse, atomicWrite, AsyncLock, pickLocalized } from './index.js';
+import { generateId, generateStreamId, formatISODate, nowISO, safeJsonParse, atomicWrite, AsyncLock, pickLocalized, stripNullBytes, stripNullBytesDeep } from './index.js';
 
 describe('generateId', () => {
   it('возвращает строку в формате timestamp-counter-random', () => {
@@ -177,5 +177,85 @@ describe('pickLocalized', () => {
   it('возвращает undefined если ни язык ни fallback не найдены', () => {
     const record: Record<string, string> = {};
     expect(pickLocalized(record, 'en')).toBeUndefined();
+  });
+});
+
+describe('stripNullBytes', () => {
+  it('удаляет реальные U+0000, остальные символы сохраняет', () => {
+    expect(stripNullBytes('a\u0000b\u0000')).toBe('ab');
+    expect(stripNullBytes('привет\u0000 мир')).toBe('привет мир');
+  });
+
+  it('не трогает литеральную последовательность «\\u0000»', () => {
+    expect(stripNullBytes('a\\u0000b')).toBe('a\\u0000b');
+  });
+
+  it('возвращает ту же строку, если NUL нет', () => {
+    const value = 'clean text';
+    expect(stripNullBytes(value)).toBe(value);
+  });
+
+  it('обрабатывает пустую строку', () => {
+    expect(stripNullBytes('')).toBe('');
+  });
+});
+
+describe('stripNullBytesDeep', () => {
+  it('рекурсивно чистит строки в массивах и plain-объектах', () => {
+    const input = {
+      content: 'a\u0000b',
+      parts: [{ type: 'text', data: 'c\u0000d' }],
+      nested: { list: ['e\u0000', 42, null] },
+    };
+    expect(stripNullBytesDeep(input)).toEqual({
+      content: 'ab',
+      parts: [{ type: 'text', data: 'cd' }],
+      nested: { list: ['e', 42, null] },
+    });
+  });
+
+  it('не трогает Date, Buffer и прочие non-plain объекты', () => {
+    const date = new Date('2025-01-15T10:30:00Z');
+    const buffer = Buffer.from('a\u0000b');
+    const map = new Map([['k', 'a\u0000b']]);
+    const input = { date, buffer, map };
+    const result = stripNullBytesDeep(input);
+    expect(result).toBe(input);
+    expect(result.date).toBe(date);
+    expect(result.buffer).toBe(buffer);
+    expect(result.map).toBe(map);
+    expect(result.buffer.toString()).toBe('a\u0000b');
+  });
+
+  it('возвращает исходное значение (ту же ссылку), если изменений нет', () => {
+    const input = { content: 'clean', parts: [{ data: 'ok' }], count: 1 };
+    expect(stripNullBytesDeep(input)).toBe(input);
+    const list = ['a', 'b'];
+    expect(stripNullBytesDeep(list)).toBe(list);
+  });
+
+  it('возвращает новую ссылку только для изменённой ветки', () => {
+    const untouched = { value: 'ok' };
+    const input = { dirty: 'a\u0000b', untouched };
+    const result = stripNullBytesDeep(input);
+    expect(result).not.toBe(input);
+    expect(result.untouched).toBe(untouched);
+    expect(result.dirty).toBe('ab');
+  });
+
+  it('не ломает null-prototype объекты', () => {
+    const input: Record<string, unknown> = Object.create(null);
+    input.value = 'a\u0000b';
+    const result = stripNullBytesDeep(input);
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(result.value).toBe('ab');
+  });
+
+  it('примитивы и null/undefined возвращает как есть', () => {
+    expect(stripNullBytesDeep(42)).toBe(42);
+    expect(stripNullBytesDeep(null)).toBeNull();
+    expect(stripNullBytesDeep(undefined)).toBeUndefined();
+    const str = 'a\u0000b';
+    expect(stripNullBytesDeep(str)).toBe('ab');
   });
 });

@@ -1,9 +1,10 @@
 /**
  * Сборка `StorageContext` PostgreSQL-драйвера (PROP-032, волна 3b-каркас).
  *
- * Контекст собирается из четырёх независимых файлов-групп
- * (`src/ports/{sessions,principals,events,content}.ts`) — по одной фабрике на
- * группу, чтобы волна реализации правила группы параллельно и без конфликтов:
+ * Контекст собирается из независимых файлов-групп портов
+ * (`src/ports/{sessions,principals,events,content,audit,analytics}.ts`) — по одной
+ * фабрике на группу, чтобы волна реализации правила группы параллельно и без
+ * конфликтов:
  *   - `buildSessionPorts(deps)`   → `sessions`;
  *   - `buildPrincipalPorts(deps)` → `projects`/`profiles`/`settings`/`defaults`/
  *     `providers`/`models`/`agents`;
@@ -12,12 +13,14 @@
  *     `webhookDeliveries`;
  *   - `buildContentPorts(deps)`   → `serviceKeys`/`sshKeys`/`mcpRegistry`/
  *     `skillBundles`/`dictionaries`/`secretPatterns`/`protectedPaths`/
- *     `maintenanceAudit`.
+ *     `maintenanceAudit`;
+ *   - `buildAuditPorts(deps)`     → `securityAudit`/`egressRequests`;
+ *   - `buildAnalyticsPorts(deps)` → `analyticsRollups` (PROP-102).
  *
- * Сейчас все четыре группы отдают заглушки `notImplementedPort`; FS/package-bound
- * порты (`skills`, `contextFiles`, `blobs`) — **файловые реализации** core
- * (контент скиллов/prompts-ролей и blob-дерево остаются на диске; ADR-091/ADR-092:
- * ФС-периметр вне портов).
+ * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
+ * `contextFiles`, `blobs`) — **файловые реализации** core (контент скиллов/
+ * prompts-ролей и blob-дерево остаются на диске; ADR-091/ADR-092: ФС-периметр
+ * вне портов).
  *
  * Осознанное исключение: драйвер в этой части **импортирует core рантаймом**
  * (`createFileStorage`), чтобы переиспользовать уже проверенные файловые
@@ -26,12 +29,17 @@
  */
 
 import { createFileStorage } from '@itphx/synth-core';
-import type { StorageContext, StorageHealth, StorageSchemaMigrationResult } from '@itphx/synth-core';
+import type {
+  StorageContext,
+  StorageHealth,
+  StorageSchemaMigrationResult,
+} from '@itphx/synth-core';
 import type { PostgresConnection } from './pool.js';
 import { latestSchemaVersion, MIGRATIONS } from './migrations/index.js';
 import { planMigrations, readSchemaVersion, runMigrations } from './migrate.js';
 import { buildContentPorts } from './ports/content.js';
 import { buildAuditPorts } from './ports/audit.js';
+import { buildAnalyticsPorts } from './ports/analytics.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
 import { buildPrincipalPorts } from './ports/principals.js';
@@ -140,6 +148,9 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     ...buildEventPorts(deps),
     ...buildContentPorts(deps),
     ...buildAuditPorts(deps),
+    // PROP-102: порт роллапов аналитики — пред-агрегированные суточные бакеты
+    // (`analytics_rollups`, миграция 003) с атомарным `ON CONFLICT … DO UPDATE`.
+    ...buildAnalyticsPorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
     skills: file.skills,
     contextFiles: file.contextFiles,

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import {
   createTmpDir,
+  describeAnalyticsRollupRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeDedupRepository,
@@ -48,6 +49,7 @@ import { JobStore } from '../job-store.js';
 import { MaintenanceAuditStore } from '../maintenance-audit-store.js';
 import { SecurityAuditStore } from '../security-audit-store.js';
 import { EgressRequestLogStore } from '../egress-request-log-store.js';
+import { AnalyticsRollupStore } from '../analytics-rollup-store.js';
 import { ServiceApiKeyStore } from '../service-api-key-store.js';
 import { SSHKeyStore } from '../ssh-key-store.js';
 import { WebhookStore } from '../webhook-store.js';
@@ -155,6 +157,17 @@ describe('контрактные тесты файловых реализаци�
       return {
         repo: new EgressRequestLogStore({ dataDir: dir }),
         filePath: join(dir, 'audit', 'egress.jsonl'),
+      };
+    },
+  );
+
+  describeAnalyticsRollupRepository(
+    'AnalyticsRollupStore → AnalyticsRollupRepository',
+    async () => {
+      const dir = await tmp();
+      return {
+        repo: new AnalyticsRollupStore({ dataDir: dir }),
+        filePath: join(dir, 'analytics', 'rollups.json'),
       };
     },
   );

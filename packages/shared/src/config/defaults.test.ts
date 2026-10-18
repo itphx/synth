@@ -172,4 +172,10 @@ describe('defaultConfig', () => {
       escalationModel: '',
     });
   });
+
+  it('analytics по умолчанию: retention суточных роллапов 400 дней (PROP-102)', () => {
+    expect(defaultConfig.analytics).toEqual({
+      retentionDays: 400,
+    });
+  });
 });

@@ -68,7 +68,10 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   `escalationProvider`/`escalationModel` — необязательный точный тир на эскалацию
   (пусто — эскалации нет), env-резолверы `SYNTH_DECISION_PROVIDER`/`SYNTH_DECISION_MODEL`;
   поле `events.decisionRouting` (decision-маршрутизация внешних событий, default `false`, ADR-084 × ADR-089).
-- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision` —
+- PROP-102: секция `analytics` (`retentionDays`, default `400`; `<= 0` — хранение без
+  ограничения; `analyticsConfigSchema` + `AnalyticsConfig`), скалярный env-оверрайд
+  `SYNTH_ANALYTICS_RETENTION_DAYS` по общему правилу секций.
+- **Env-оверрайды скалярных ключей секций** `events`/`scheduler`/`webhooks`/`decision`/`analytics` —
   реестр `ENV_OVERRIDES` (`src/config/env-overrides.ts`), применяется в `loadConfig`;
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
   приоритет `CLI > env > config.yaml > defaults` (ADR-023). Объектные/нескалярные ключи
@@ -114,6 +117,14 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (`images?`/`videos?`, задел PROP-085) (`types/decision.ts`); Zod
   `decisionQuestionSchema`/`decisionAnswerSchema`/`decisionRequestSchema`/`decisionResponseSchema`;
   per-session флаг `SessionSettings.decisionFirst` (ADR-035).
+- PROP-102: типы аналитики — `AnalyticsFamily`/`AnalyticsDimension`/`AnalyticsRollupBucket`/
+  `AnalyticsRollupQuery`/`AnalyticsRollupRow`/`AnalyticsReport`/`AnalyticsReportRow`/
+  `AnalyticsSummary`/`AnalyticsExportFormat` и реестры `ANALYTICS_FAMILIES`,
+  `ANALYTICS_DIMENSIONS`, `ANALYTICS_MEASURES_BY_FAMILY`, `ANALYTICS_DERIVED_MEASURES`
+  (`types/analytics.ts`); Zod — `analyticsFamilySchema`/`analyticsDimensionSchema`/
+  `analyticsDaySchema`/`analyticsRollupBucketSchema`/`analyticsRollupQuerySchema`/
+  `analyticsReportRowSchema`/`analyticsReportSchema`/`analyticsSummarySchema`/
+  `analyticsExportFormatSchema`.
 - ADR-089: внешняя идентичность профиля — тип `ExternalIdentity` (`provider` (префикс principalId,
   напр. `tg`) / `externalId` (числовой id источника строкой) / `username?`/`displayName?` —
   display-кэш, НЕ ключ / `linkedAt` ISO / `linkedBy?`); `ProfileData.identities?: ExternalIdentity[]`

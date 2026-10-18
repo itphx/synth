@@ -29,6 +29,7 @@ export {
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
 } from './audit.js';
+export { describeAnalyticsRollupRepository } from './analytics.js';
 
 export { describeServiceKeyRepository } from './secrets.js';
 export { describeSSHKeyRepository } from './secrets.js';

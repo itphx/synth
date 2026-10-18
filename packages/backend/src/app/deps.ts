@@ -37,6 +37,7 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   WebhookService, startWebhookDeliveryPruner,
+  AnalyticsRecorder, attachAnalyticsActivityHooks, startAnalyticsRollupPruner, sessionAxes,
   createStorageContextAsync,
   initTlsTrust,
   applyStartupProxyConfig,
@@ -153,13 +154,19 @@ export async function createBackendDeps(
     jobs: jobStore,
     skillBundles: bundleStore,
     mcpRegistry: mcpRegistryStore,
+    analyticsRollups,
   } = storageContext;
 
   // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
   const hooks = new HookBus();
+  // PROP-102: сборщик роллапов аналитики (write-path) — только через порт слоя
+  // хранения; в деградации выключен (не пишем домен в файловый фоллбек).
+  const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
   const sessionManager = new SessionManager(fileStore, {
     projectStore,
     hooks,
+    // PROP-102: точка персиста сообщений (`messages_assistant`/`messages_tool`).
+    analytics,
     // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
     systemDefaultsProvider: async () => ({
       mcpDefaultOn: await mcpRegistryStore.toDefaultServers(),
@@ -172,6 +179,21 @@ export async function createBackendDeps(
   // ADR-089: авто-архивация ephemeral-сессий по TTL (таймер `unref`).
   // Остановка — через хэндл `stopEphemeralSweeper` на graceful shutdown.
   const stopEphemeralSweeper = storageDegraded ? () => {} : startEphemeralSweeper(sessionManager);
+  // PROP-102: шов записи `activity` через hook-шину (ADR-030) + retention суточных
+  // роллапов (prune на старте и каждые 6 ч, таймер `unref`).
+  const detachAnalyticsHooks = analytics
+    ? attachAnalyticsActivityHooks(hooks, {
+        recorder: analytics,
+        resolveSessionAxes: async (sessionId) =>
+          sessionAxes(await sessionManager.getSession(sessionId)),
+      })
+    : () => {};
+  const stopAnalyticsRollupPruner =
+    storageDegraded || !analytics
+      ? () => {}
+      : startAnalyticsRollupPruner(analyticsRollups, {
+          getRetentionDays: () => config.synth.analytics.retentionDays,
+        });
 
   // ADR-036/ADR-005: паттерны секретов и runtime-настройки («workspace/mcp»,
   // умолчания оформления) — из контекста хранения (собраны выше).
@@ -223,6 +245,8 @@ export async function createBackendDeps(
 
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
+  // PROP-102: пользовательские сообщения персистит процессор — мера `messages_user`.
+  queueManager.setAnalytics(analytics);
 
   // ADR-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
   // `whsec_…` шифруется at-rest мастер-ключом), append-only журнал доставок и
@@ -399,6 +423,8 @@ export async function createBackendDeps(
     sessionManager,
     eventBus,
     hooks,
+    // PROP-102: сборщик `usage`/`decision` роллапов (write-path).
+    analytics,
     contextBuilder,
     contextConfig,
     providerLoader,
@@ -518,6 +544,8 @@ export async function createBackendDeps(
           displayName: agent.displayName,
           description: agent.description,
         })),
+      // PROP-102: персистентные decision-метрики (ось provider/model).
+      analytics,
     }),
   );
   // ADR-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
@@ -727,6 +755,12 @@ export async function createBackendDeps(
     egressLogConfig,
     securityAudit,
     egressRequests,
+    // PROP-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
+    analyticsRollups,
+    // PROP-102: write-path — сборщик роллапов (+ остановка hook-подписки и pruner'а).
+    analytics,
+    detachAnalyticsHooks,
+    stopAnalyticsRollupPruner,
     stopEgressLogPruner,
     mcpManager,
     mcpRegistryStore,

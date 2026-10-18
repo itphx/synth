@@ -18,9 +18,11 @@ import { Divider } from '@/components/ui/Divider'
 
 interface QuickSettingsPopupProps {
   onSettingsClick: () => void
+  /** PROP-102: открыть модальное окно «Аналитика и отчёты» (пункт меню пользователя). */
+  onAnalyticsClick?: () => void
 }
 
-export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps) => {
+export const QuickSettingsPopup = ({ onSettingsClick, onAnalyticsClick }: QuickSettingsPopupProps) => {
   const { t, locale: uiLocale, setLocale: setI18nLocale } = useI18n()
   const user = useAuthStore(s => s.user)
   const profile = useAuthStore(s => s.profile)
@@ -202,6 +204,18 @@ export const QuickSettingsPopup = ({ onSettingsClick }: QuickSettingsPopupProps)
             <Icon name="settings" className="size-3.5" />
             {t('auth.openSettings')}
           </button>
+          {onAnalyticsClick && (
+            <button
+              onClick={() => {
+                onAnalyticsClick()
+                setIsOpen(false)
+              }}
+              className={actionItemClass}
+            >
+              <Icon name="chart-line" className="size-3.5" />
+              {t('analytics.title')}
+            </button>
+          )}
           {user?.roles?.includes('ADMIN') && (
             <button
               onClick={() => {

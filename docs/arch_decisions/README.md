@@ -63,6 +63,7 @@
 | ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; остаток — Plugin SDK (PROP-090), пайплайны (PROP-059), остаток ADR-087 (HA/второй канал) | ⚠️ Частично | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
 | ADR-091 | Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor` | ⚠️ Частично | [adr-091-backup-restore-transfer.md](./adr-091-backup-restore-transfer.md) |
 | ADR-092 | Обслуживание инстанса — версия схемы данных, миграции и удаление | ⚠️ Частично | [adr-092-instance-lifecycle-maintenance.md](./adr-092-instance-lifecycle-maintenance.md) |
+| ADR-094 | Наблюдаемость — Prometheus-метрики, liveness/readiness и эксплуатационные алерты | ⚠️ Частично | [adr-094-observability-metrics.md](./adr-094-observability-metrics.md) |
 | ADR-097 | Класс расширения «хранилище» (storage) — контракт портов, драйверы из коробки | ⚠️ Частично | [adr-097-storage-provider-class.md](./adr-097-storage-provider-class.md) |
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098-storage-degraded-recovery.md](./adr-098-storage-degraded-recovery.md) |
 | ADR-099 | Единый egress-слой: доверие TLS/CA (mTLS, bootstrap `security-tls.json`, per-host профили, UI), адресная политика (`egress.tools`/`egress.webhooks`, `mcp.networkPolicy`) и HTTP/HTTPS/SOCKS5-прокси (`proxy.*`, Basic, `no_proxy`, proxied-режим, runtime-настройка из админ-UI, аудит и журнал); доменная аутентификация прокси (NTLM/Negotiate/Kerberos) — вне scope, делегируется egress-шлюзу | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
@@ -95,13 +96,13 @@
 | PROP-085 | Мультимодальный ввод (звук, изображения, видео): типы `Part`, blob-хранилище вложений, предобработка (ASR/OCR/кадры), UI-композер | 🧩 Предложение | [prop-085-multimodal-input.md](./prop-085-multimodal-input.md) |
 | PROP-090 | Extension API v1: манифест, загрузка, установка и активация плагинов: 4 класса (Plugin / Gateway / Add-on / контент-пак), определение Plugin (код в процессе ядра), таксономия влияния (contribution / interception / observation), единый манифест `synth.pack` (`kind`/`contracts`/`provides`), точки расширения, `@itphx/synth-plugin`, bundle-only, install/activate, trust/scan (PROP-068), плагины в managed (ADMIN: deploy-time + runtime-опция) и hybrid (allow-list + server-scoped токены) | 🧩 Предложение | [prop-090-extension-api.md](./prop-090-extension-api.md) |
 | PROP-093 | Версионирование документации: версионные подкаталоги портала + селектор (вариант A под текущий nginx-деплой) или `mike` (вариант B при GitHub Pages), тегирование `synth-docs`, политика хранения | 🧩 Предложение | [prop-093-docs-versioning.md](./prop-093-docs-versioning.md) |
-| PROP-094 | Наблюдаемость и эксплуатационные метрики: `/metrics` (Prometheus), `/ready` + раздельные probes, структурные логи (`request_id`/`session_id`, редакция секретов), SLO/алерты, sizing | 🧩 Предложение | [prop-094-observability-metrics.md](./prop-094-observability-metrics.md) |
 | PROP-096 | Фоновые сессии саб-агентов (не блокирующие основную) | 🧩 Предложение | [prop-096-background-subagent-sessions.md](./prop-096-background-subagent-sessions.md) |
 | PROP-097 | Фоновые процессы — реестр и контроль через UI | 🧩 Предложение | [prop-097-background-processes-registry.md](./prop-097-background-processes-registry.md) |
 | PROP-098 | Форсированная отправка сообщения во время хода (steering) | 🧩 Предложение | [prop-098-mid-turn-steering.md](./prop-098-mid-turn-steering.md) |
 | PROP-099 | Оптимизация потребления памяти | 🧩 Предложение | [prop-099-memory-footprint-optimization.md](./prop-099-memory-footprint-optimization.md) |
 | PROP-100 | SSRF и TOCTOU/DNS-rebinding — привязка проверенного адреса к соединению (дефекты 1–3 закрыты; остаток — пиннинг) | 🧩 Предложение | [prop-100-ssrf-dns-rebinding.md](./prop-100-ssrf-dns-rebinding.md) |
 | PROP-101 | Локальные инсталляторы и платформенная дистрибуция (Windows / macOS / Linux) | 🧩 Предложение | [prop-101-local-installers-platforms.md](./prop-101-local-installers-platforms.md) |
+| PROP-102 | Аналитика и отчётность инстанса | 🧩 Предложение | [prop-102-analytics-reports.md](./prop-102-analytics-reports.md) |
 
 ## Vision
 
@@ -131,4 +132,4 @@
 
 ---
 
-Всего документов: 91 (Решения: 37, Частично: 12, Предложения: 31, Vision: 9, Icebox: 0, Legacy: 1).
+Всего документов: 92 (Решения: 37, Частично: 13, Предложения: 31, Vision: 9, Icebox: 0, Legacy: 1).

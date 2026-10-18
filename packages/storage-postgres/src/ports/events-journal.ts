@@ -12,6 +12,7 @@
 import { randomInt } from 'node:crypto';
 import type { EventJournalEntry, IdentityClaimRecord, StorageContext } from '@itphx/synth-core';
 import type { PortDeps } from './deps.js';
+import { jsonbParam } from '../json-param.js';
 import { compact, loadCore, toIso, toIsoRequired } from './events-core.js';
 
 type SynthEvent = EventJournalEntry['event'];
@@ -99,13 +100,13 @@ export class PgEventJournalRepository {
         entry.ts,
         entry.event.source,
         entry.event.type,
-        entry.decision !== undefined ? JSON.stringify(entry.decision) : null,
+        entry.decision !== undefined ? jsonbParam(entry.decision) : null,
         entry.keyId ?? null,
-        JSON.stringify(entry.event.identity ?? {}),
+        jsonbParam(entry.event.identity ?? {}),
         entry.event.dedupKey ?? null,
         entry.error ?? null,
         entry.principalId ?? null,
-        entry.event.payload === undefined ? null : JSON.stringify(entry.event.payload),
+        entry.event.payload === undefined ? null : jsonbParam(entry.event.payload),
       ],
     );
   }

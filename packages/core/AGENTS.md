@@ -17,7 +17,8 @@
   `@itphx/synth`); **hybrid** (локальный core + удалённый backend).
 - `src/main.ts` — точка входа CLI (внутренний инструмент: `serve`, `chat`,
   `connect`, `project publish|fork`, `config`, `session`, `audit`, `update`,
-  `storage migrate` — перенос данных между backend'ами, PROP-032).
+  `storage migrate` — перенос данных между backend'ами, `analytics rebuild` —
+  бэкфилл роллапов аналитики, PROP-032/PROP-102).
   Публичный CLI `synth` — это пакет `@itphx/synth`, не core.
 
 ## Инварианты core
@@ -172,7 +173,7 @@
 
 ## Карта модулей
 
-- `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, …).
+- `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, …).
 - `server/app.ts` — `createStandaloneApp`: фасад-композиция (auth/bootstrap service-key,
   middleware, вызовы вынесенных модулей, сборка хендла). ADR-095 (шаг 4a) вынес блоки
   в `server/app/*`: `deps.ts` (сборка зависимостей), `mount-routes.ts` (весь порядок
@@ -187,7 +188,7 @@
   `project-transfer`, `project-portable`, `providers`, `models`, `agents`, `fs`, `queue`, `updates`,
   `settings`, `dictionaries`, `mcp`, `skills`, `commands`, `skill-bundles`,
   `skill-scope`, `git`, `ssh-keys`, `events`, `identities`, `service-keys`, `webhooks`,
-  `maintenance`.
+  `maintenance`, `analytics`.
 - `maintenance/*` — ADR-091/ADR-092: обслуживание инстанса. `service.ts` — сервисный слой
   admin-API/UI (список/создание бэкапов, отложенное восстановление
   `scheduleRestore`/`getPendingRestore`/`cancelPendingRestore`, сводный статус; запросы —
@@ -199,6 +200,16 @@
   `backup`/`restore`/`migrate`/`update`/`rollback`/`uninstall`, ADR-092; порт
   `MaintenanceAuditRepository`). HTTP-фабрика — `server/routes/maintenance.ts`
   (`createMaintenanceRoutes`).
+- `analytics/*` — PROP-102: аналитика и отчётность инстанса. `recorder.ts` — `AnalyticsRecorder`
+  (best-effort инкремент бакетов `usage`/`activity`/`decision` через порт `AnalyticsRollupRepository`,
+  ошибки порта не пробрасываются), `hooks.ts` — `attachAnalyticsActivityHooks` (жизненный цикл
+  сессии/инструментов/саб-агентов → `activity`), `prune.ts` — `startAnalyticsRollupPruner`
+  (retention по `analytics.retentionDays`, старт + каждые 6 ч), `service.ts` — `AnalyticsService`
+  (период/`groupBy`, чтение роллапов, дериваты), `derive.ts` — `deriveMeasures`
+  (`total_tokens`/`cache_hit_rate`/`reasoning_ratio`/`output_tps`), `export.ts` — `toCsv`/`toJson`
+  (CSV RFC 4180 + BOM + `TOTAL`), `rebuild.ts`/`rebuild-command.ts` — идемпотентный бэкфилл
+  `synth analytics rebuild` (`--from`/`--dry-run`/`--yes`; `decision` не пересобирается, `prompt` —
+  проекция на чтении). HTTP-фабрика — `server/routes/analytics.ts` (`createAnalyticsRoutes`).
 - `server/restart.ts` — ADR-092 п. 7: graceful restart инстанса. `configureRestart` (вызов на старте
   процесса — `main.ts`/backend `main.ts`), `resolveRestartMode` (`--restart-mode` > `SYNTH_RESTART_MODE`;
   неизвестное → `disabled` + warn), `getRestartStatus` (`supported`/`mode`/`reason`/`startedAt`/`version`),
@@ -452,8 +463,13 @@
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
   git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
   `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (27; `DocumentRepository<T>` —
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (30; `AnalyticsRollupRepository` — суточные роллапы аналитики, PROP-102; `DocumentRepository<T>` —
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
+  **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
+  запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
+  `origin` назначает порт, `update` целится по `seq` с fallback по `id`), `loadLight`/`listLight` —
+  метаданные без истории; семантика — часть контракта порта (`storage/contract/*`), нормализация
+  сообщений для file/memory — `storage/message-write.ts`,
   файловые реализации (объявляют `implements` портов — поведение не менялось), in-memory
   `storage/memory/*`, контрактный suite `storage/contract/*` («паспорт» порта, обязателен для любой
   реализации), `storage/storage-context.ts` — `StorageContext` (в т.ч. опциональные
@@ -562,6 +578,8 @@
   `createServiceKeyRoutes` (ADR-052 этап I: CRUD service-key, `writeGuard`/`readGuard`/`messages`),
   `createMaintenanceRoutes` (ADR-091/ADR-092: admin-API обслуживания — status/doctor/migrations/
   backups/restore/**restart**; `writeGuard`/`readGuard`/`messages`/`maxUploadBytes`, восстановление — офлайн).
+  `createAnalyticsRoutes` (PROP-102: только чтение — summary/usage/activity/decision/prompt/export;
+  RBAC через `resolveElevated`/`resolveAuditor`/`resolveUserId`, `messages` — i18n).
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
   `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки

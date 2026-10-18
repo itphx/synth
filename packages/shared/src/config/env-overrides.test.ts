@@ -89,6 +89,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       scheduler: { tickSec: 60, catchUp: 'skip' },
       webhooks: { enabled: false },
       decision: { enabled: false, provider: '', model: '', confidenceThreshold: 0.6 },
+      analytics: { retentionDays: 400 },
     };
   }
 
@@ -104,6 +105,7 @@ describe('applyEnvOverrides (ADR-023)', () => {
       SYNTH_DECISION_PROVIDER: 'systemone',
       SYNTH_DECISION_MODEL: 'clef-flash',
       SYNTH_DECISION_CONFIDENCE_THRESHOLD: '0.9',
+      SYNTH_ANALYTICS_RETENTION_DAYS: '30',
     });
 
     expect(cfg.events).toEqual({
@@ -120,6 +122,8 @@ describe('applyEnvOverrides (ADR-023)', () => {
       model: 'clef-flash',
       confidenceThreshold: 0.9,
     });
+    // PROP-102: retention суточных роллапов аналитики.
+    expect(cfg.analytics).toEqual({ retentionDays: 30 });
   });
 
   it('невалидное значение → warn + игнор, значение не меняется', () => {

@@ -53,6 +53,13 @@ const en: Dictionary = {
   'errors.forbidden.projectForbidden': 'Project is not available for this service key',
   'errors.rateLimited.serviceKey': 'Service key rate limit exceeded',
 
+  // PROP-102: отчёты аналитики (только чтение)
+  'errors.validation.invalidAnalyticsPeriod': 'Invalid period: expected a date in YYYY-MM-DD (UTC)',
+  'errors.validation.invalidAnalyticsRange': 'Period start is later than period end',
+  'errors.validation.invalidAnalyticsGroupBy': 'Invalid grouping axis (groupBy)',
+  'errors.validation.invalidAnalyticsOption': 'Invalid report parameter (report/format)',
+  'errors.forbidden.analytics': 'Insufficient permissions for this report',
+
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Invalid webhook subscription payload',
   'errors.notFound.webhook': 'Webhook subscription not found',
@@ -169,6 +176,13 @@ const ru: Dictionary = {
   'errors.forbidden.scopeRequired': 'Недостаточно прав: отсутствует требуемый scope',
   'errors.forbidden.projectForbidden': 'Проект недоступен для этого service-key',
   'errors.rateLimited.serviceKey': 'Превышен лимит запросов по service-key',
+
+  // PROP-102: отчёты аналитики (только чтение)
+  'errors.validation.invalidAnalyticsPeriod': 'Некорректный период: ожидается дата YYYY-MM-DD (UTC)',
+  'errors.validation.invalidAnalyticsRange': 'Начало периода позже конца периода',
+  'errors.validation.invalidAnalyticsGroupBy': 'Некорректная ось группировки (groupBy)',
+  'errors.validation.invalidAnalyticsOption': 'Некорректный параметр отчёта (report/format)',
+  'errors.forbidden.analytics': 'Недостаточно прав для отчёта',
 
   // ADR-052 (этап II): исходящие webhooks
   'errors.validation.invalidWebhook': 'Некорректное тело webhook-подписки',

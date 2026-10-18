@@ -6,6 +6,7 @@ import type { QueueProcessorManager } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { ContextOptimizer } from '@itphx/synth-core';
 import type { RequestSessionService } from '@itphx/synth-core';
+import type { AnalyticsRecorder } from '@itphx/synth-core';
 import {
   MessageRole,
   generateStreamId,
@@ -60,6 +61,8 @@ export function createSessionRoutes(
    * Не задан — core-фабрика использует прямой `SessionManager.createSession`.
    */
   requestSessionService?: RequestSessionService,
+  /** PROP-102: сборщик `activity` (меры `aborts`/`messages_*`) для core-фабрики. */
+  analytics?: AnalyticsRecorder,
 ): Hono {
   const app = new Hono();
   const agentRegistry = orchestrator.agentRegistry;
@@ -577,7 +580,7 @@ export function createSessionRoutes(
   // последней: статические/backend-only сегменты должны матчиться раньше.
   app.route('/', createCoreSessionRoutes(
     { requireAuth: kit.requireAuth },
-    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService },
+    { sessionManager, eventBus, queueManager, processMessage, orchestrator, contextOptimizer, projectStore, profilesStore, requestSessionService, analytics },
     {
       resolveUserId: async (c) => (await kit.getCurrentUser(c))!.id,
       resolveOwner:  async (c) => (await kit.getCurrentUser(c))!.id,

@@ -458,6 +458,18 @@ export const decisionConfigSchema = z.object({
   escalationModel: z.string().default(''),
 });
 
+// --- Аналитика и отчётность (PROP-102) ---
+
+/**
+ * PROP-102: конфигурация аналитики инстанса.
+ * - `retentionDays` — срок хранения суточных роллапов (UTC-дни): бакеты со
+ *   `day < utcDay(now) - retentionDays` удаляются прунером. `<= 0` — без
+ *   ограничения. Default — 400.
+ */
+export const analyticsConfigSchema = z.object({
+  retentionDays: z.number().int().default(400),
+});
+
 // --- Webhooks (ADR-052, этап II) ---
 
 /**
@@ -918,6 +930,7 @@ export const synthConfigSchema = z.object({
   events: eventsConfigSchema.default({}),
   scheduler: schedulerConfigSchema.default({}),
   decision: decisionConfigSchema.default({}),
+  analytics: analyticsConfigSchema.default({}),
   egress: egressConfigSchema.default({}),
   webhooks: webhooksConfigSchema.default({}),
   instructions: instructionsConfigSchema.default({}),
@@ -954,6 +967,7 @@ export type CommandsConfig = z.infer<typeof commandsConfigSchema>;
 export type EventsConfig = z.infer<typeof eventsConfigSchema>;
 export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
 export type DecisionConfig = z.infer<typeof decisionConfigSchema>;
+export type AnalyticsConfig = z.infer<typeof analyticsConfigSchema>;
 export type WebhooksConfig = z.infer<typeof webhooksConfigSchema>;
 export type EgressPolicyConfig = z.infer<typeof egressPolicySchema>;
 export type WebhooksEgressPolicyConfig = z.infer<typeof webhooksEgressPolicySchema>;

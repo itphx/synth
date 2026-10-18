@@ -2,6 +2,8 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
+> ⚠️ RU-версия обновлена 2026-10-18 (PROP-102, §5.32 «Аналитика и отчётность»); перевод отстаёт.
+
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.
 

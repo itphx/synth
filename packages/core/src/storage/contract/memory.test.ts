@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  describeAnalyticsRollupRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeDefaultsRepository,
@@ -32,6 +33,7 @@ import {
   describeWebhookRepository,
 } from './index.js';
 import {
+  MemoryAnalyticsRollupRepository,
   MemoryBlobStore,
   MemoryContextFileRepository,
   MemoryDefaultsRepository,
@@ -131,6 +133,11 @@ describe('контрактные тесты in-memory реализаций по�
   describeEgressRequestLogRepository(
     'MemoryEgressRequestLogRepository → EgressRequestLogRepository',
     async () => ({ repo: new MemoryEgressRequestLogRepository() }),
+  );
+
+  describeAnalyticsRollupRepository(
+    'MemoryAnalyticsRollupRepository → AnalyticsRollupRepository',
+    async () => ({ repo: new MemoryAnalyticsRollupRepository() }),
   );
 
   describeServiceKeyRepository('MemoryServiceKeyRepository → ServiceKeyRepository', async () => ({

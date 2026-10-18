@@ -23,6 +23,10 @@ import {
   createExternalIdentityResolver,
   startEventJournalPruner,
   startWebhookDeliveryPruner,
+  AnalyticsRecorder,
+  attachAnalyticsActivityHooks,
+  startAnalyticsRollupPruner,
+  sessionAxes,
   createStorageContextAsync,
   createEgressPolicyResolver,
   createEgressLogSink,
@@ -160,11 +164,15 @@ export async function createStandaloneDeps(
     skillBundles: bundleStore,
     securityAudit,
     egressRequests,
+    analyticsRollups,
   } = storageContext;
 
   // Egress: живой резолвер политики (settings.json → config.yaml → дефолт) и
   // журнал внешних запросов. Резолвер читает стор на каждый запрос — без
   // стартового снимка/кэша (live-применение без рестарта).
+  // PROP-102: сборщик роллапов аналитики (write-path) — только через порт слоя
+  // хранения; в деградации выключен (чтоб не писать домен в файловый фоллбек).
+  const analytics = storageDegraded ? undefined : new AnalyticsRecorder({ repo: analyticsRollups });
   const egressResolver = createEgressPolicyResolver(settingsStore, {
     tools: config.egressConfig?.tools,
     webhooks: config.egressConfig?.webhooks,
@@ -231,6 +239,9 @@ export async function createStandaloneDeps(
     mcpSettingsProvider: () => settingsStore.getMcpSettings(),
     projectStore,
     hooks,
+    // PROP-102: точка персиста сообщения инкрементирует `activity`
+    // (`messages_assistant`/`messages_tool`); пользовательские — в процессоре.
+    analytics,
     // ADR-071 §2.4 / ADR-046 §4.5: системные дефолты для сессий без проекта.
     systemDefaultsProvider: async () => ({
       mcpDefaultOn: Object.entries(config.mcpServers ?? {})
@@ -246,6 +257,23 @@ export async function createStandaloneDeps(
   // (тесты/короткоживущие процессы не держатся); остановка — на shutdown
   // через возвращаемый хэндл `stopEphemeralSweeper`.
   const stopEphemeralSweeper = storageDegraded ? () => {} : startEphemeralSweeper(sessionManager);
+  // PROP-102: шов записи `activity` через hook-шину (ADR-030): жизненный цикл
+  // сессии/инструментов/саб-агентов → инкременты роллапов. Оси `user`/`project`
+  // берутся из контекста хука либо резолвятся по id сессии.
+  const detachAnalyticsHooks = analytics
+    ? attachAnalyticsActivityHooks(hooks, {
+        recorder: analytics,
+        resolveSessionAxes: async (sessionId) =>
+          sessionAxes(await sessionManager.getSession(sessionId)),
+      })
+    : () => {};
+  // PROP-102 §8: retention суточных роллапов (сразу + каждые 6 ч, `unref`).
+  const stopAnalyticsRollupPruner =
+    storageDegraded || !analytics
+      ? () => {}
+      : startAnalyticsRollupPruner(analyticsRollups, {
+          getRetentionDays: () => config.analyticsConfig?.retentionDays ?? 400,
+        });
   const mcpManager = new McpManager();
   mcpManager.setConfig(config.mcpServers ?? {});
 
@@ -258,6 +286,9 @@ export async function createStandaloneDeps(
 
   const eventBus = new EventBus();
   const queueManager = new QueueProcessorManager();
+  // PROP-102: процессор очереди персистит пользовательские сообщения — его
+  // точка записи инкрементирует `activity.messages_user`.
+  queueManager.setAnalytics(analytics);
 
   // ADR-052 (этап II): исходящие webhooks — реестр подписок (signing-секрет
   // шифруется at-rest мастер-ключом), журнал доставок и движок над EventBus.
@@ -423,6 +454,8 @@ export async function createStandaloneDeps(
     sessionManager,
     eventBus,
     hooks,
+    // PROP-102: сборщик `usage`/`decision` роллапов (write-path).
+    analytics,
     contextBuilder,
     contextConfig,
     providerLoader,
@@ -545,6 +578,8 @@ export async function createStandaloneDeps(
           displayName: agent.displayName,
           description: agent.description,
         })),
+      // PROP-102: персистентные decision-метрики (ось provider/model).
+      analytics,
     }),
   );
   // ADR-089: резолвинг `agentTemplate` (события/правила) через `AgentRegistry`:
@@ -743,6 +778,12 @@ export async function createStandaloneDeps(
     egressLogConfig,
     securityAudit,
     egressRequests,
+    // PROP-102 (волна 1): порт пред-агрегированных роллапов аналитики — для роутов отчётов.
+    analyticsRollups,
+    // PROP-102: write-path — сборщик роллапов (+ остановка детачей hook-подписки и pruner'а).
+    analytics,
+    detachAnalyticsHooks,
+    stopAnalyticsRollupPruner,
     stopEgressLogPruner,
     webhookStore,
     webhookDeliveryStore,

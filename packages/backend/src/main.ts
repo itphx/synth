@@ -14,7 +14,7 @@ import {
 const host = process.env.SYNTH_HOST || '0.0.0.0';
 
 const handle = await createBackendApp();
-const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopScheduler, stopWebhookService, stopWebhookDeliveryPruner } = handle;
+const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopAnalyticsRollupPruner, stopScheduler, stopWebhookService, stopWebhookDeliveryPruner } = handle;
 
 let shuttingDown = false;
 
@@ -43,6 +43,9 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
 
   // ADR-089: остановить retention-очистку журнала событий.
   stopEventJournalPruner();
+
+  // PROP-102: остановить retention-очистку роллапов аналитики.
+  stopAnalyticsRollupPruner();
 
   // ADR-051 (срез): остановить планировщик расписаний.
   stopScheduler();

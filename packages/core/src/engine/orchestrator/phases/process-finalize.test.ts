@@ -2,10 +2,10 @@
  * ADR-095 (шаг 6b-1): собственные тесты эпилога `runProcessFinalize`.
  *
  * Контракты (порядок side-effect'ов и отсутствие двойных публикаций):
- *  - отмена до финального сохранения → `persistToolChain` → assistant
- *    (status=cancelled) → ровно одно `stream.cancelled`, **без** `stream.done`;
+ *  - отмена до финального сохранения → assistant (status=cancelled) → ровно
+ *    одно `stream.cancelled`, **без** `stream.done`; tool-chain уже записан
+ *    пошагово в цикле (шаг 2а) — в эпилоге его нет;
  *  - фоллбек-тексты (лимит итераций / deny / пустой ответ) и статус в `stream.done`;
- *  - `persistToolChain` идёт до сохранения финального сообщения;
  *  - quality-check/escalation (ADR-034): перевызов на fallback-модели без
  *    assistant-сообщений с toolUse, событие `message.quality_check`;
  *  - secrets в `stream.done`, `unregister` ровно один раз.
@@ -134,7 +134,6 @@ describe('runProcessFinalize', () => {
       allReasoning: [],
       allIntermediateTexts: [],
       allToolCalls: [],
-      allRawToolCalls: [],
       currentMessages: [],
       promptMeta: { agentRole: 'developer', generation: 1, expected: 'miss', cachedTokens: 0, validated: false },
       loadedTokenRatio: undefined,
@@ -164,9 +163,6 @@ describe('runProcessFinalize', () => {
       agentRegistry: null,
       optimizer: null,
       resolveMessageModel,
-      persistToolChain: vi.fn(async () => {
-        order.push('persistToolChain');
-      }) as never,
       joinAccumulatedTexts,
       estimateUsage,
       computeMessageCost: (model, usage) => {
@@ -186,7 +182,7 @@ describe('runProcessFinalize', () => {
   }
 
   describe('ветка отмены', () => {
-    it('persistToolChain → assistant(status=cancelled) → stream.cancelled, без stream.done', async () => {
+    it('assistant(status=cancelled) → stream.cancelled, без stream.done', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
       const state = makeState({ cancelledBeforeFinal: true, finalContent: '' });
@@ -194,10 +190,7 @@ describe('runProcessFinalize', () => {
       const result = await runProcessFinalize(makeArgs(sessionId), state, deps);
 
       expect(result).toEqual({});
-      expect(order).toEqual(['persistToolChain', 'saveAssistantMessage', 'unregister:stream1']);
-      expect(deps.persistToolChain).toHaveBeenCalledWith(
-        sessionId, 'stream1', 'prov', 'developer', 'm', [], [], [], [],
-      );
+      expect(order).toEqual(['saveAssistantMessage', 'unregister:stream1']);
 
       const saveCall = (deps.saveAssistantMessage as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(saveCall[1]).toBe('');           // контент отмены
@@ -259,9 +252,6 @@ describe('runProcessFinalize', () => {
         state, deps,
       );
 
-      expect(deps.persistToolChain).toHaveBeenCalledWith(
-        sessionId, 'stream1', 'prov', 'developer', 'provider-model', [], [], [], [],
-      );
       expect(published[0]!.data.model).toBe('provider-model');
     });
   });
@@ -349,13 +339,13 @@ describe('runProcessFinalize', () => {
   });
 
   describe('успешный путь', () => {
-    it('persistToolChain до saveAssistantMessage, ровно одно stream.done', async () => {
+    it('assistant сохраняется до stream.done, ровно одно stream.done', async () => {
       const sessionId = await makeSession();
       const deps = makeDeps();
 
       await runProcessFinalize(makeArgs(sessionId), makeState(), deps);
 
-      expect(order).toEqual(['persistToolChain', 'saveAssistantMessage', 'unregister:stream1']);
+      expect(order).toEqual(['saveAssistantMessage', 'unregister:stream1']);
       expect(published.map((p) => p.event)).toEqual(['stream.done']);
       expect(published[0]!.data).toMatchObject({
         stream_id: 'stream1',

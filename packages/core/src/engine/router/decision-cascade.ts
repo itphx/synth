@@ -17,6 +17,7 @@ import type {
   DecisionProviderResolver,
 } from './micro/models/decision-model.js';
 import { DecisionMetrics, decisionMetrics } from './decision-metrics.js';
+import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { info, warning } from '../../logger.js';
 
 /** Тир каскада: основной или эскалация. */
@@ -85,6 +86,11 @@ export interface DecideChoiceCascadeOptions {
   logLabel?: string;
   /** Сборщик метрик; по умолчанию — process-wide синглтон. */
   metrics?: DecisionMetrics;
+  /**
+   * PROP-102: сборщик персистентных decision-роллапов (ось `provider`/`model`) —
+   * зеркало счётчиков `decisionMetrics`. Не задан — запись не выполняется.
+   */
+  analytics?: AnalyticsRecorder;
 }
 
 /** Тир каскада с резолвнутой парой provider/model. */
@@ -189,6 +195,7 @@ export async function decideChoiceCascade(
       lastLabel: label,
     };
     metrics.recordOutcome(outcome);
+    void opts.analytics?.recordDecision(outcome);
     return outcome;
   }
 
@@ -202,6 +209,7 @@ export async function decideChoiceCascade(
     ...(last?.error !== undefined ? { lastError: last.error } : {}),
   };
   metrics.recordOutcome(outcome);
+  void opts.analytics?.recordDecision(outcome);
   return outcome;
 }
 

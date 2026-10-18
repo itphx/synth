@@ -44,6 +44,64 @@ export async function atomicWrite(
   await rename(tmpPath, targetPath);
 }
 
+// Санитизация недоверенного текста (U+0000)
+
+/**
+ * Удаляет NUL-символы (`\u0000`) из строки. PostgreSQL не принимает U+0000
+ * ни в `text` («invalid byte sequence for encoding "UTF8": 0x00»), ни в `jsonb`
+ * (`JSON.stringify` даёт escape `\u0000` → «unsupported Unicode escape
+ * sequence»), поэтому недоверенный текст (ответ модели, вывод тулов/файлов/
+ * shell/веба) чистится до записи. Остальные символы не меняются; исходная
+ * строка возвращается, если NUL-байтов нет.
+ */
+export function stripNullBytes(value: string): string {
+  return value.includes('\u0000') ? value.replace(/\u0000/g, '') : value;
+}
+
+/** Обычный объект-литерал (`{}` или `Object.create(null)`), не класс/Date/Buffer. */
+function isPlainObjectValue(value: object): value is Record<string, unknown> {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function stripNullBytesDeepInternal(value: unknown): unknown {
+  if (typeof value === 'string') return stripNullBytes(value);
+
+  if (Array.isArray(value)) {
+    let changed = false;
+    const result = value.map((item) => {
+      const next = stripNullBytesDeepInternal(item);
+      if (next !== item) changed = true;
+      return next;
+    });
+    return changed ? result : value;
+  }
+
+  // Date/Buffer/классы/Map/Set и прочие non-plain объекты не трогаем:
+  // их содержимое не является текстом домена.
+  if (typeof value === 'object' && value !== null && isPlainObjectValue(value)) {
+    let changed = false;
+    const result = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>;
+    for (const [key, item] of Object.entries(value)) {
+      const next = stripNullBytesDeepInternal(item);
+      if (next !== item) changed = true;
+      result[key] = next;
+    }
+    return changed ? result : value;
+  }
+
+  return value;
+}
+
+/**
+ * Рекурсивно удаляет NUL-байты из строк в массивах/plain-объектах.
+ * `Date`, `Buffer` и прочие non-plain объекты возвращаются как есть.
+ * Если изменений нет — возвращается исходное значение (та же ссылка).
+ */
+export function stripNullBytesDeep<T>(value: T): T {
+  return stripNullBytesDeepInternal(value) as T;
+}
+
 // Асинхронный Mutex
 
 export class AsyncLock {

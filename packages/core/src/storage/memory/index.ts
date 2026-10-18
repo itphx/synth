@@ -33,6 +33,7 @@ export { MemoryScheduleRepository, MemoryJobRepository } from './scheduler.js';
 
 export { MemoryMaintenanceAuditRepository } from './audit.js';
 export { MemorySecurityAuditRepository, MemoryEgressRequestLogRepository } from './security-audit.js';
+export { MemoryAnalyticsRollupRepository } from './analytics-rollup.js';
 
 export {
   MemorySkillRepository,

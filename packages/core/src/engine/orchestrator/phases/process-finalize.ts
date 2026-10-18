@@ -1,9 +1,9 @@
 /**
  * ADR-095 (шаг 6b-1): эпилог `_processMessage` — финализация хода после цикла
  * Tool Use: ветка отмены до финального сохранения, подстановка фоллбек-текстов,
- * quality-check/escalation (ADR-034), персистентность tool-chain, сохранение
- * финального сообщения, `stream.done`, авто-тайтл и триггеры оптимизации
- * контекста.
+ * quality-check/escalation (ADR-034), сохранение финального сообщения,
+ * `stream.done`, авто-тайтл и триггеры оптимизации контекста. Tool-chain
+ * персистится пошагово в цикле (шаг 2а), не здесь.
  *
  * Вынесено из `engine/orchestrator.ts` без изменения поведения: порядок
  * side-effect'ов, условия, тексты и события сохранены дословно. Внутренние
@@ -66,7 +66,6 @@ export interface ProcessFinalizeState {
   allReasoning: Array<{ text: string; iteration: number }>;
   allIntermediateTexts: Array<{ text: string; iteration: number }>;
   allToolCalls: Array<Record<string, unknown>>;
-  allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }>;
   currentMessages: LLMMessage[];
   promptMeta: PromptMeta;
   loadedTokenRatio: number | undefined;
@@ -76,6 +75,13 @@ export interface ProcessFinalizeState {
   providerName: string;
   effectiveAgentRole: string | undefined;
   effectiveReasoningLevel: ReasoningLevel | undefined;
+  /**
+   * Шаг 2б: черновик последней незавершённой итерации (без toolCalls). Если
+   * задан — финальное/отменённое сообщение обновляет его, а не добавляет
+   * второй assistant в историю. `null` — чанков не было или итерация
+   * завершилась tool_chain-сообщением.
+   */
+  currentDraft?: { id: string; seq: number } | null;
 }
 
 /** Зависимости эпилога `_processMessage`. */
@@ -91,17 +97,6 @@ export interface ProcessFinalizeDeps {
     provider: BaseProvider | undefined,
     session: Session,
   ) => string | undefined;
-  persistToolChain: (
-    sessionId: string,
-    streamId: string,
-    providerName: string,
-    agentRole: string | undefined,
-    finalModel: string | undefined,
-    allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }>,
-    allToolCalls: Array<Record<string, unknown>>,
-    allIntermediateTexts: Array<{ text: string; iteration: number }>,
-    allReasoning: Array<{ text: string; iteration: number }>,
-  ) => Promise<void>;
   joinAccumulatedTexts: (
     intermediateTexts: Array<{ text: string; iteration: number }>,
     current: string,
@@ -137,27 +132,22 @@ export async function runProcessFinalize(
   const { session, streamId, publishChunk, debugCollector, streamStartedAt } = args;
   const {
     cancelledBeforeFinal, lastChunkModel, provider, providerName, effectiveAgentRole,
-    allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
+    allToolCalls, allIntermediateTexts, allReasoning,
     lastIterationPromptChars, promptMeta, toolIteration, maxIterations,
     stopAfterDeny, denyStopReason, hadDeny, routingDecision, effectiveReasoningLevel,
-    currentMessages, loadedTokenRatio, finalSystemPrompt,
+    currentMessages, loadedTokenRatio, finalSystemPrompt, currentDraft,
   } = state;
   let { finalContent, finalModel, finalUsage, fallbackI18n } = state;
 
   // Отмена до финального сохранения (во время исполнения тула или до входа
-  // в итерацию): завершаем ровно как ветку отмены (persist tool-chain +
-  // stream.cancelled), а не как обычное завершение с подставленным
-  // «Не удалось выполнить запрос: ответ модели пуст».
+  // в итерацию): завершаем ровно как ветку отмены (stream.cancelled), а не
+  // как обычное завершение с подставленным «Не удалось выполнить запрос:
+  // ответ модели пуст». Завершённые итерации и их tool-результаты уже записаны
+  // пошагово (шаг 2а) — повторной персистенции tool-chain нет.
   if (cancelledBeforeFinal) {
     // Bug 2: при отмене модель могла не прийти ни в одном финальном чанке —
     // fallback на provider.model/session.settings.model для cost.
     const cancelModel = deps.resolveMessageModel(lastChunkModel, finalModel, provider, session);
-
-    await deps.persistToolChain(
-      session.id, streamId, providerName, effectiveAgentRole,
-      cancelModel,
-      allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
-    );
 
     const partialContent = deps.joinAccumulatedTexts(allIntermediateTexts, '');
 
@@ -186,6 +176,7 @@ export async function runProcessFinalize(
       },
       promptMeta,
       cancelCost,
+      currentDraft ?? undefined,
     );
 
     publishChunk('stream.cancelled', {
@@ -293,16 +284,9 @@ export async function runProcessFinalize(
     }
   }
 
-  // 7.8. Персистентность tool-chain (Вариант B): настоящие пары
-  // «assistant с toolCalls + tool-результаты» в session.messages, чтобы
-  // _sessionMessagesToLlm на следующем запросе выдавал OpenAI-совместимый
-  // диалог. Промежуточные сообщения помечаются metadata.tool_chain=true —
-  // UI их скрывает (визуализация уже есть в финальном сообщении).
-  await deps.persistToolChain(
-    session.id, streamId, providerName, effectiveAgentRole, finalModel,
-    allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
-  );
-
+  // 7.8. Tool-chain уже персистится пошагово в цикле (шаг 2а): assistant с
+  // toolCalls — сразу после ответа модели, tool-результаты — сразу после
+  // каждого тула. Здесь остаётся только финальное сообщение.
   // 8. Save final assistant message
   // ADR-070 §2.6: полная длительность прогона (включая tool-chain) и
   // стоимость по цене модели — в metadata финального сообщения и stream.done.
@@ -317,6 +301,7 @@ export async function runProcessFinalize(
     { ...(fallbackI18n ? { i18n: fallbackI18n } : {}), duration_ms: durationMs },
     promptMeta,
     messageCost,
+    currentDraft ?? undefined,
   );
 
   // ADR-071 §2.6: калибровка chars-per-token по факту (promptChars / inputTokens)

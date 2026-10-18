@@ -24,6 +24,7 @@ import {
   resolveStorageFallbackDir,
 } from '@itphx/synth-shared';
 import type {
+  AnalyticsRollupRepository,
   BlobStore,
   ContextFileRepository,
   DedupRepository,
@@ -84,6 +85,7 @@ import { MaintenanceAuditStore } from './maintenance-audit-store.js';
 import { SecurityAuditStore } from './security-audit-store.js';
 import { applyStartupProxyConfig } from '../security/proxy-startup.js';
 import { EgressRequestLogStore } from './egress-request-log-store.js';
+import { AnalyticsRollupStore } from './analytics-rollup-store.js';
 import { FileDedupStore, MemoryDedupStore } from '../engine/events/dedup-store.js';
 import { SkillStore } from './skill-store.js';
 import { SkillBundleStore } from './skill-bundle-store.js';
@@ -96,6 +98,7 @@ import { setStorageDegradedState } from '../engine/permission/storage-state.js';
 
 // ── In-memory реализации ───────────────────────────────────────────────
 import {
+  MemoryAnalyticsRollupRepository,
   MemoryBlobStore,
   MemoryContextFileRepository,
   MemoryDefaultsRepository,
@@ -289,6 +292,8 @@ export interface StorageContext {
   securityAudit: SecurityAuditRepository;
   /** Журнал внешних запросов (append-only, retention-прунер). */
   egressRequests: EgressRequestLogRepository;
+  /** PROP-102: пред-агрегированные суточные роллапы аналитики. */
+  analyticsRollups: AnalyticsRollupRepository;
   dedup: DedupRepository;
   skills: SkillRepository;
   skillBundles: SkillBundleRepository;
@@ -499,6 +504,7 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     maintenanceAudit: new MaintenanceAuditStore({ dataDir }),
     securityAudit: new SecurityAuditStore({ dataDir }),
     egressRequests: new EgressRequestLogStore({ dataDir }),
+    analyticsRollups: new AnalyticsRollupStore({ dataDir }),
     // ADR-051/ADR-089: источник дедупа — in-process (default) или файловый межпроцессный.
     dedup: config.dedupStore === 'file' ? new FileDedupStore({ dataDir }) : new MemoryDedupStore(),
     skills: new SkillStore({ dataDir }),
@@ -549,6 +555,7 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     maintenanceAudit: new MemoryMaintenanceAuditRepository(),
     securityAudit: new MemorySecurityAuditRepository(),
     egressRequests: new MemoryEgressRequestLogRepository(),
+    analyticsRollups: new MemoryAnalyticsRollupRepository(),
     dedup: new MemoryDedupRepository(),
     skills: new MemorySkillRepository(),
     skillBundles: new MemorySkillBundleRepository(),

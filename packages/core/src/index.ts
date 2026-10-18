@@ -196,6 +196,7 @@ export type {
   SecurityAuditListOptions,
   EgressRequestLogRepository,
   EgressRequestLogListOptions,
+  AnalyticsRollupRepository,
   DedupRepository,
   SecretPatternRepository,
   ProtectedPathsRepository,
@@ -234,6 +235,7 @@ export {
   MemoryMaintenanceAuditRepository,
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
+  MemoryAnalyticsRollupRepository,
   MemorySkillRepository,
   MemorySkillBundleRepository,
   MemoryContextFileRepository,
@@ -552,6 +554,46 @@ export { SecurityAuditStore } from './storage/security-audit-store.js';
 export type { SecurityAuditStoreConfig } from './storage/security-audit-store.js';
 export { EgressRequestLogStore } from './storage/egress-request-log-store.js';
 export type { EgressRequestLogStoreConfig } from './storage/egress-request-log-store.js';
+// PROP-102: файловая реализация порта пред-агрегированных роллапов аналитики.
+export { AnalyticsRollupStore, ANALYTICS_ROLLUPS_SCHEMA_VERSION } from './storage/analytics-rollup-store.js';
+export type { AnalyticsRollupStoreConfig } from './storage/analytics-rollup-store.js';
+// PROP-102 (волна 1): сервис чтения отчётов/сводки + дериваты на чтении.
+export { AnalyticsService, AnalyticsValidationError, utcDay } from './analytics/service.js';
+export type {
+  AnalyticsPeriod,
+  AnalyticsReportQuery,
+  AnalyticsSummaryQuery,
+  AnalyticsServiceOptions,
+  AnalyticsValidationReason,
+} from './analytics/service.js';
+// PROP-102 §6: серверная выгрузка отчёта CSV/JSON (только данные).
+export { toCsv, toJson } from './analytics/export.js';
+// PROP-102 (волна 1): сборщики роллапов (write-path), hook-шов `activity` и retention.
+export { AnalyticsRecorder, activityMeasureForMessage, sessionAxes } from './analytics/recorder.js';
+export type {
+  ActivityMeasure,
+  ActivityRollupInput,
+  AnalyticsAxes,
+  AnalyticsRecorderOptions,
+  DecisionMeasure,
+  DecisionRollupAttempt,
+  DecisionRollupInput,
+  UsageMeasure,
+  UsageRollupInput,
+} from './analytics/recorder.js';
+export { attachAnalyticsActivityHooks } from './analytics/hooks.js';
+export type { AnalyticsActivityAxes, AttachAnalyticsHooksDeps } from './analytics/hooks.js';
+export { analyticsRetentionCutoff, startAnalyticsRollupPruner } from './analytics/prune.js';
+export type { AnalyticsRollupPrunerOptions } from './analytics/prune.js';
+// PROP-102 §10: идемпотентный бэкфилл роллапов из истории (`synth analytics rebuild`).
+export { rebuildAnalyticsRollups } from './analytics/rebuild.js';
+export type {
+  AnalyticsRebuildOptions,
+  AnalyticsRebuildResult,
+  RebuildableFamily,
+} from './analytics/rebuild.js';
+export { runAnalyticsRebuildCommand } from './analytics/rebuild-command.js';
+export type { AnalyticsRebuildCommandOptions } from './analytics/rebuild-command.js';
 // ADR-092: best-effort запись аудит-событий обслуживания из операций.
 export { recordMaintenanceAudit } from './maintenance/audit.js';
 export type { MaintenanceAuditRecord } from './maintenance/audit.js';
@@ -807,6 +849,14 @@ export { createSettingsRoutes } from './server/routes/settings.js';
 export type { SettingsRoutesDeps } from './server/routes/settings.js';
 export { createAuditRoutes } from './server/routes/audit.js';
 export type { AuditRoutesDeps, AuditRoutesOptions } from './server/routes/audit.js';
+// PROP-102: HTTP-фабрика отчётов аналитики (только чтение) — общая для core и backend.
+export { createAnalyticsRoutes } from './server/routes/analytics.js';
+export type {
+  AnalyticsRoutesAuth,
+  AnalyticsRoutesDeps,
+  AnalyticsRoutesOptions,
+  AnalyticsRouteMessages,
+} from './server/routes/analytics.js';
 export { createDictionaryRoutes } from './server/routes/dictionaries.js';
 export type { DictionaryRoutesAuth, DictionaryRoutesOptions } from './server/routes/dictionaries.js';
 export { createProviderRoutes } from './server/routes/providers.js';

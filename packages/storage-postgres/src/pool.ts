@@ -18,6 +18,7 @@ import type { Pool as PgPool, PoolClient as PgPoolClient, QueryResultRow } from 
 import {
   buildPostgresSslOptions,
   findDsnTlsParams,
+  stripNullBytes,
   type PostgresSslMode,
   type SecurityTlsConfig,
   type TlsRuntimeSettings,
@@ -253,12 +254,33 @@ interface PgQueryable {
   query(text: string, params?: unknown[]): Promise<{ rows: unknown[] }>;
 }
 
+/**
+ * Защитная сеть драйвера: удаляет реальные U+0000 из строковых параметров
+ * запроса (PostgreSQL отвергает их в `text`/`jsonb`). `Buffer`, числа и прочие
+ * не-строки не трогаются; SQL-текст не меняется. JSON-параметры дополнительно
+ * санитизируются до `JSON.stringify` (`jsonbParam`), иначе NUL стал бы escape'ом
+ * `\u0000`, который в готовой строке уже неотличим от литеральной
+ * последовательности.
+ */
+export function sanitizeQueryParams(params?: unknown[]): unknown[] | undefined {
+  if (!params || params.length === 0) return params;
+  let changed = false;
+  const sanitized = params.map((param) => {
+    if (typeof param === 'string' && param.includes('\u0000')) {
+      changed = true;
+      return stripNullBytes(param);
+    }
+    return param;
+  });
+  return changed ? sanitized : params;
+}
+
 /** Обёртка-исполнитель над соединением с маппингом ошибок в доменные классы. */
 function wrapExecutor(client: PgQueryable): PostgresExecutor {
   return {
     async query<T extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<T[]> {
       try {
-        const result = await client.query(text, params);
+        const result = await client.query(text, sanitizeQueryParams(params));
         return result.rows as T[];
       } catch (err) {
         throw mapPgError(err);
@@ -308,7 +330,7 @@ export class PostgresConnection implements PostgresExecutor {
   async query<T extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<T[]> {
     const pool = await this.getPool();
     try {
-      const result = await pool.query<T>(text, params);
+      const result = await pool.query<T>(text, sanitizeQueryParams(params));
       return result.rows;
     } catch (err) {
       throw mapPgError(err);

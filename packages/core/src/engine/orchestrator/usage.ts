@@ -174,6 +174,97 @@ export function publishLiveUsage(
 }
 
 /**
+ * Срез одной задачи саб-агента для агрегатов (`task`-результат хода).
+ */
+interface SubagentTaskUsage {
+  childSessionId?: string;
+  usage?: TokenUsage;
+  model?: string;
+  /** Тип саб-агента (`metadata.subagent_type`) — ось `agent` роллапа. */
+  agent?: string;
+}
+
+/** Единый разбор `task`-результатов: поля `child_session_id`/`subagent_usage`/`subagent_model`. */
+function forEachSubagentTask(
+  toolResults: Array<Record<string, unknown>>,
+  callback: (entry: SubagentTaskUsage) => void,
+): void {
+  for (const raw of toolResults) {
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = raw as Record<string, unknown>;
+    if (entry.name !== 'task') continue;
+    const resultMeta = (entry.result as { metadata?: Record<string, unknown> } | undefined)?.metadata;
+    if (!resultMeta) continue;
+    const childSessionId = resultMeta.child_session_id;
+    const usage = resultMeta.subagent_usage as TokenUsage | undefined;
+    if (!childSessionId && !usage) continue;
+    callback({
+      childSessionId: typeof childSessionId === 'string' ? childSessionId : undefined,
+      usage,
+      model:
+        (resultMeta.subagent_model as string | undefined)
+        || (resultMeta.routing_model as string | undefined),
+      agent: typeof resultMeta.subagent_type === 'string' ? resultMeta.subagent_type : undefined,
+    });
+  }
+}
+
+/**
+ * PROP-102: usage саб-агентов в разбивке по моделям — для роллапа `usage`
+ * (ось `model`/`agent`). Считается тем же разбором `task`-результатов, что и
+ * `aggregateSubagentStats`, и тем же `computeCost`; группы «модель+агент+валюта»
+ * суммируются, `sessions` — число задач саб-агента в группе (для `requests`).
+ */
+export function collectSubagentUsageByModel(
+  toolResults: Array<Record<string, unknown>>,
+  computeCost: (model: string | undefined, usage: TokenUsage | undefined) => ReturnType<typeof computeUsageCost>,
+): Array<{
+  model?: string;
+  agent?: string;
+  sessions: number;
+  usage: TokenUsage;
+  costByCurrency: Record<string, number>;
+}> {
+  const groups = new Map<
+    string,
+    {
+      model?: string;
+      agent?: string;
+      sessions: number;
+      usage: TokenUsage;
+      costByCurrency: Record<string, number>;
+    }
+  >();
+
+  forEachSubagentTask(toolResults, (entry) => {
+    if (!entry.usage) return;
+    const cost = computeCost(entry.model, entry.usage);
+    const key = `${entry.model ?? ''}\u0000${entry.agent ?? ''}\u0000${cost?.currency ?? ''}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        model: entry.model,
+        agent: entry.agent,
+        sessions: 0,
+        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+        costByCurrency: {},
+      };
+      groups.set(key, group);
+    }
+    group.sessions += 1;
+    group.usage.inputTokens += entry.usage.inputTokens || 0;
+    group.usage.outputTokens += entry.usage.outputTokens || 0;
+    group.usage.totalTokens += entry.usage.totalTokens || 0;
+    group.usage.cacheReadTokens = (group.usage.cacheReadTokens ?? 0) + (entry.usage.cacheReadTokens || 0);
+    group.usage.cacheWriteTokens = (group.usage.cacheWriteTokens ?? 0) + (entry.usage.cacheWriteTokens || 0);
+    group.usage.reasoningTokens = (group.usage.reasoningTokens ?? 0) + (entry.usage.reasoningTokens || 0);
+    if (cost) group.costByCurrency[cost.currency] = (group.costByCurrency[cost.currency] || 0) + cost.costUsd;
+  });
+
+  return [...groups.values()];
+}
+
+/**
  * ADR-070 §2.6: агрегация per-message статистики сабагентов из tool-результатов
  * `task` (`result.metadata.subagent_usage`/`subagent_model`). Возвращает
  * breakdown для `metadata.subagents` финального assistant-сообщения; `cost_usd`
@@ -201,37 +292,23 @@ export function aggregateSubagentStats(
   let reasoning = 0;
   let cost = 0;
   const costByCurrency: Record<string, number> = {};
-  let found = false;
 
-  for (const raw of toolResults) {
-    if (!raw || typeof raw !== 'object') continue;
-    const entry = raw as Record<string, unknown>;
-    if (entry.name !== 'task') continue;
-    const resultMeta = (entry.result as { metadata?: Record<string, unknown> } | undefined)?.metadata;
-    if (!resultMeta) continue;
-    const childId = resultMeta.child_session_id;
-    const usage = resultMeta.subagent_usage as TokenUsage | undefined;
-    if (!childId && !usage) continue;
-
-    found = true;
+  forEachSubagentTask(toolResults, (entry) => {
     sessions += 1;
-    if (usage) {
-      input += usage.inputTokens || 0;
-      output += usage.outputTokens || 0;
-      cacheRead += usage.cacheReadTokens || 0;
-      cacheWrite += usage.cacheWriteTokens || 0;
-      reasoning += usage.reasoningTokens || 0;
-      const model = (resultMeta.subagent_model as string | undefined)
-        || (resultMeta.routing_model as string | undefined);
-      const c = computeCost(model, usage);
-      if (c) {
-        cost += c.costUsd;
-        costByCurrency[c.currency] = (costByCurrency[c.currency] || 0) + c.costUsd;
-      }
+    if (!entry.usage) return;
+    input += entry.usage.inputTokens || 0;
+    output += entry.usage.outputTokens || 0;
+    cacheRead += entry.usage.cacheReadTokens || 0;
+    cacheWrite += entry.usage.cacheWriteTokens || 0;
+    reasoning += entry.usage.reasoningTokens || 0;
+    const c = computeCost(entry.model, entry.usage);
+    if (c) {
+      cost += c.costUsd;
+      costByCurrency[c.currency] = (costByCurrency[c.currency] || 0) + c.costUsd;
     }
-  }
+  });
 
-  if (!found) return undefined;
+  if (sessions === 0) return undefined;
   return {
     sessions,
     input_tokens: input,

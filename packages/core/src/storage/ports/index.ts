@@ -60,6 +60,7 @@ export type {
   EgressRequestLogRepository,
   EgressRequestLogListOptions,
 } from './egress-request-log-repository.js';
+export type { AnalyticsRollupRepository } from './analytics-rollup-repository.js';
 export type { DedupRepository } from './dedup-repository.js';
 export type { SecretPatternRepository } from './secret-pattern-repository.js';
 export type { ProtectedPathsRepository } from './protected-paths-repository.js';

@@ -223,13 +223,20 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
 
   // Баг 1 (ADR-070 §2.6): при сбое провайдера сохраняется assistant-сообщение
   // об ошибке — иначе нет записи в истории, агрегаты сессии 0, debug теряется.
+  // Шаг 2б: частичный текст до обрыва теперь сохраняется отдельным
+  // прерванным сообщением (`interrupted/status='error'`), поэтому в истории
+  // два assistant: прерванный черновик и сообщение об ошибке.
   it('при сбое сохраняет assistant-сообщение об ошибке со status/usage/duration/cost/i18n', async () => {
     const { sessionId } = await run('mockpartial');
     const session = await sessionManager.getSession(sessionId);
     const assistants = session!.messages.filter((m) => m.role === MessageRole.ASSISTANT);
-    expect(assistants).toHaveLength(1);
+    expect(assistants).toHaveLength(2);
 
-    const assistant = assistants[0]!;
+    const interrupted = assistants.find((m) => m.metadata?.interrupted === true)!;
+    expect(interrupted).toBeDefined();
+    expect(interrupted.content).toContain('частичный ответ до обрыва');
+
+    const assistant = assistants.find((m) => m.metadata?.interrupted !== true)!;
     // content — человекочитаемая ошибка, а не частичный ответ.
     expect(assistant.content).toContain('LLM provider');
     expect(assistant.metadata?.status).toBe('error');
@@ -260,7 +267,9 @@ describe('ChatOrchestrator — ошибка LLM-стрима (провайдер
   it('сохраняет debug_data при debugEnabled', async () => {
     const { sessionId } = await run('mockpartial', { debug: true });
     const session = await sessionManager.getSession(sessionId);
-    const assistant = session!.messages.find((m) => m.role === MessageRole.ASSISTANT)!;
+    const assistant = session!.messages.find(
+      (m) => m.role === MessageRole.ASSISTANT && m.metadata?.interrupted !== true,
+    )!;
     expect(assistant).toBeDefined();
     expect(assistant.debugData).toBeDefined();
   });

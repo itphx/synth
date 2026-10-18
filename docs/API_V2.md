@@ -1171,6 +1171,119 @@ curl -X POST http://localhost:5000/api/v2/maintenance/restart \
 до нового `startedAt`, затем reload). Процедуры и правила безопасности —
 [docs/MAINTENANCE.md](./MAINTENANCE.md).
 
+### 5.32 Аналитика и отчётность — `/api/v2/analytics` (оба, PROP-102)
+
+Отчёты по **пред-агрегированным суточным роллапам** (единица — сутки UTC): сервис
+читает роллапы через доменный порт `AnalyticsRollupRepository` (ADR-096) и считает
+дериваты **на чтении**. Единая фабрика `createAnalyticsRoutes` для core и backend;
+RBAC/скоуп и i18n задаются через `opts` (`resolveElevated`/`resolveAuditor`/
+`resolveUserId`/`messages`). Поверхность — **только чтение**, мутирующих ручек нет.
+Семантика записи, источников и retention — [CONFIGURATION.md](./CONFIGURATION.md)
+§«Аналитика и отчётность»; бэкфилл — [MAINTENANCE.md](./MAINTENANCE.md)
+§«Аналитика: пересборка роллапов».
+
+| Метод | Путь | Сборка | RBAC (managed / core) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/analytics/summary` | оба | ADMIN/LEAD/AUDITOR / auth | Сводка инстанса за период: `AnalyticsSummary` (`{from, to, usage, activity, decision, costByCurrency?}`). Сквозная — обычному пользователю **403** |
+| GET | `/api/v2/analytics/usage` | оба | все (USER — свои строки) / auth | Токены, запросы, сообщения, длительность и стоимость по осям + дериваты; `AnalyticsReport` |
+| GET | `/api/v2/analytics/activity` | оба | все (USER — свои строки) / auth | Сессии/сообщения/инструменты/ошибки/ходы; сырые меры (без дериватов) |
+| GET | `/api/v2/analytics/decision` | оба | ADMIN/LEAD/AUDITOR / auth | Персистентные метрики decision-слоя (ADR-084); сквозной отчёт без оси `user` — обычному пользователю **403** |
+| GET | `/api/v2/analytics/prompt` | оба | все (USER — свои строки) / auth | Производное чтение семейства `usage`: кэш, reasoning, output tps; дефолтная группировка — `model,agent` |
+| GET | `/api/v2/analytics/export` | оба | как у отчёта-источника | Выгрузка отчёта `report=usage\|activity\|decision\|prompt` + `format=csv\|json`; `Content-Disposition: attachment` |
+
+**Параметры запроса.** `from`/`to` — границы периода **включительно**, дата
+`YYYY-MM-DD` (UTC); по умолчанию `to` — сегодня (UTC), `from` — `to` минус 29 дней
+(окно 30 дней включительно). Обе даты валидируются как реальные даты UTC; `from > to`
+→ 400. `groupBy` — оси через запятую (`day,user,project,model,agent,provider`);
+неизвестная ось → 400, дубликаты сохраняют первое вхождение; пусто/не задано — одна
+итоговая строка (`dimensions: {}`), кроме `prompt` (там дефолт `model,agent`).
+Фильтры по равенству осей — `userId`, `projectId`, `model`, `agent` (пустые значения
+игнорируются; фильтра по `provider` в query нет). `export` дополнительно принимает
+`report` и `format` (оба обязательны; неизвестное значение → 400).
+
+**Оси по семействам.** Валидация `groupBy` общая (все шесть осей), но набор реально
+записанных осей зависит от семейства; ось, которой в бакете нет, не попадает в
+`dimensions` строки (значение пустое):
+
+| Семейство | Оси бакета | Меры |
+|---|---|---|
+| `usage` | `day`, `user`, `project`, `model`, `agent` (ось `provider` поддерживается записью, в текущей проводке не передаётся) | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, `requests`, `messages`, `duration_ms` |
+| `activity` | `day`, `user`, `project` | `sessions_created`, `sessions_archived`, `messages_user`, `messages_assistant`, `messages_tool`, `tool_calls`, `errors`, `aborts`, `turns` |
+| `decision` | `day`, `provider`, `model` | `calls`, `handled`, `fallback`, `escalated`, `attempts`, `rejected` |
+| `prompt` | `day`, `user`, `project`, `model`, `agent` (проекция `usage`) | те же, что у `usage` |
+
+**Форма ответа.** `AnalyticsReport` — `{report, from, to, groupBy, rows}`; строка
+`AnalyticsReportRow` — `{dimensions, measures, costByCurrency?}`. `dimensions` —
+значения осей группировки (итоговая строка — `{}`); `measures` — суммы сырых счётчиков
+snake_case **плюс дериваты** для `usage`/`prompt`; `costByCurrency` — разбивка
+стоимости по валютам (`currency → сумма`), пустая — поле опускается. Порядок строк —
+лексикографический по осям группировки. `AnalyticsSummary` агрегирует итоги по
+периоду: `usage` (с дериватами), `activity`, `decision`, `costByCurrency?`.
+
+**Дериваты (только `usage`/`prompt`, считаются на чтении, не персистятся).**
+
+| Дериват | Формула | Нулевой знаменатель |
+|---|---|---|
+| `total_tokens` | `input_tokens + output_tokens` | — |
+| `cache_hit_rate` | `cache_read_tokens / input_tokens` | `0` |
+| `reasoning_ratio` | `reasoning_tokens / output_tokens` | `0` |
+| `output_tps` | `output_tokens / (duration_ms / 1000)` | `0` |
+
+**RBAC (managed).** `ADMIN`/`LEAD` — сквозной обзор без фильтра по себе; `AUDITOR` —
+чтение всех отчётов, включая `summary`/`decision`; обычный пользователь — сервер
+**принудительно** подставляет его `userId` в ось `user` для `usage`/`activity`/`prompt`
+(query-параметр `userId` игнорируется), а `summary`, `decision` и экспорт `decision`
+отдают **403 `FORBIDDEN`**. Экспорт приравнен к чтению: отдельного права нет; scope
+`analytics:read` для service-key не вводился (ADR-052). В core (standalone) —
+`requireAuth`, единственный ключ трактуется как ADMIN (сквозной обзор,
+`resolveUserId = 'local'`).
+
+**Запись и retention.** Роллапы пишутся best-effort на существующих швах (сохранение
+ответа, жизненный цикл сессии/инструментов через hook-шину, decision-каскад) и **не
+влияют на ход**; в деградированном режиме хранилища запись выключена. Данные
+агрегированы: текста сообщений, содержимого промптов, ключей и PII в значениях нет.
+Срок хранения — `analytics.retentionDays` (default `400`; `<= 0` — без ограничения),
+чистка — на старте и каждые 6 часов; файловый backend — `{dataDir}/analytics/rollups.json`,
+PostgreSQL — таблица `analytics_rollups` (миграция 003).
+
+**Экспорт.** Имя файла — `analytics-<report>-<from>_<to>.<format>`; CSV —
+`text/csv; charset=utf-8`, JSON — `application/json; charset=utf-8`, оба с
+`Content-Disposition: attachment; filename="…"`. CSV — RFC 4180 (запятая, `\r\n`,
+экранирование кавычками) с BOM UTF-8; колонки: оси группировки → сырые меры семейства
+(стабильный список, для `prompt` — список `usage`; прочие встреченные меры — в конце по
+алфавиту) → `cost_<валюта>` (по алфавиту) → дериваты (`usage`/`prompt`). При непустой
+группировке и непустых данных добавляется итоговая строка `TOTAL`: суммы сырых
+счётчиков и стоимостей, дериваты **пересчитываются** из просуммированных счётчиков.
+JSON — `AnalyticsReport` как есть (`JSON.stringify(…, null, 2)`). Серверных PDF/XLSX нет
+(печать — на клиенте).
+
+**Коды ошибок.** 400 `VALIDATION_ERROR` — некорректная дата (`period`), `from > to`
+(`range`), неизвестная ось `groupBy`, отсутствующий/неизвестный `report`/`format`;
+401 `UNAUTHORIZED` — нет кред; 403 `FORBIDDEN` — `summary`/`decision` (и экспорт
+`decision`) обычному пользователю.
+
+**Пример.**
+
+```bash
+# Расход за 30 дней с группировкой по пользователю и модели.
+curl 'http://localhost:5000/api/v2/analytics/usage?from=2026-09-19&to=2026-10-18&groupBy=user,model' \
+  -H 'Authorization: Bearer <TOKEN>'
+
+# Сводка инстанса (ADMIN/LEAD/AUDITOR) и метрики decision-слоя.
+curl 'http://localhost:5000/api/v2/analytics/summary?from=2026-09-19&to=2026-10-18' \
+  -H 'Authorization: Bearer <ADMIN_TOKEN>'
+
+# Выгрузка отчёта: CSV с BOM и итоговой строкой TOTAL.
+curl -OJ 'http://localhost:5000/api/v2/analytics/export?report=usage&format=csv&groupBy=day' \
+  -H 'Authorization: Bearer <TOKEN>'
+```
+
+**UI.** Модальное окно «Аналитика и отчёты» (ленивый `AnalyticsModal`, входы — меню
+пользователя и кнопка в правой панели): вкладки «Расход и стоимость», «Активность»,
+«Decision», «Кэш и эффективность», пресеты `7d`/`30d`/`90d`/`custom`, фильтры
+user/project/model/agent, кнопки CSV/JSON и печать браузера. Подробности —
+[packages/ui/AGENTS.md](../packages/ui/AGENTS.md) §«Аналитика и отчёты».
+
 ---
 
 ## 6. Источники
@@ -1186,6 +1299,7 @@ curl -X POST http://localhost:5000/api/v2/maintenance/restart \
 | SDK публичного API (ADR-052, этап III) | `packages/sdk/*` (`@itphx/synth-sdk`) |
 | Webhooks store/журнал/роуты/движок (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | Admin-API обслуживания инстанса (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
+| Аналитика и отчёты (PROP-102) | `packages/core/src/server/routes/analytics.ts`, `packages/core/src/analytics/*`, `packages/shared/src/types/analytics.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

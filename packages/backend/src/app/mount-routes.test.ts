@@ -96,6 +96,10 @@ describe('backend: контракт монтирования роутов (mount
       'GET /api/v2/maintenance/status',
       'GET /api/v2/mcp/registry',
       'GET /api/v2/audit',
+      // PROP-102: аналитика (только чтение)
+      'GET /api/v2/analytics/summary',
+      'GET /api/v2/analytics/usage',
+      'GET /api/v2/analytics/export',
       'GET /api/v2/logs/llm',
       'GET /api/v2/gateway/patterns',
       'GET /api/v2/me/identities',
@@ -176,6 +180,10 @@ describe('backend: контракт монтирования роутов (mount
     '/api/v2/admin/debug/config',
     '/api/v2/openapi.json',
     '/api/v2/events',
+    // PROP-102: аналитика — только чтение, но под requireAuth
+    '/api/v2/analytics/summary',
+    '/api/v2/analytics/usage',
+    '/api/v2/analytics/export?report=usage&format=csv',
   ];
 
   it('защищённые эндпоинты без креды → 401/403, но не 2xx', async () => {
@@ -317,6 +325,31 @@ describe('backend: контракт монтирования роутов (mount
       const auditor = await req(path, {}, AUDITOR);
       expect([401, 403], `AUDITOR на ${path} (получен ${auditor.status})`).not.toContain(auditor.status);
     }
+  });
+
+  it('PROP-102: аналитика — elevated/auditor сквозной обзор; USER → свой скоуп + 403 на сквозные', async () => {
+    // ADMIN/LEAD/AUDITOR — сквозной обзор: сводка и любые отчёты 200.
+    for (const token of [ADMIN, LEAD, AUDITOR]) {
+      expect((await req('/api/v2/analytics/summary', {}, token)).status, `summary ${token}`).toBe(200);
+      expect((await req('/api/v2/analytics/usage', {}, token)).status, `usage ${token}`).toBe(200);
+      expect((await req('/api/v2/analytics/decision', {}, token)).status, `decision ${token}`).toBe(200);
+    }
+    // Обычный USER: сводка и `decision` (сквозные, без оси user) → 403 FORBIDDEN.
+    const summary = await req('/api/v2/analytics/summary', {}, USER);
+    expect(summary.status).toBe(403);
+    expect(((await summary.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+    expect((await req('/api/v2/analytics/decision', {}, USER)).status).toBe(403);
+    // ...но собственный отчёт по себе — 200 (принудительный скоуп оси `user`).
+    expect((await req('/api/v2/analytics/usage', {}, USER)).status).toBe(200);
+    // Невалидный groupBy → 400 VALIDATION_ERROR (валидация — в сервисе).
+    const bad = await req('/api/v2/analytics/usage?groupBy=nonsense', {}, ADMIN);
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    // export: невалидный report/format → 400; корректный — 200 CSV.
+    expect((await req('/api/v2/analytics/export?report=nope&format=csv', {}, ADMIN)).status).toBe(400);
+    const csv = await req('/api/v2/analytics/export?report=usage&format=csv', {}, ADMIN);
+    expect(csv.status).toBe(200);
+    expect(csv.headers.get('content-type')).toContain('text/csv');
   });
 
   it('runtime-настройки «События»/decision: мутации только ADMIN (USER → 403)', async () => {

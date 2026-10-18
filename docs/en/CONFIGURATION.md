@@ -2,6 +2,8 @@
 
 > 🌐 **English** · [Russian](../CONFIGURATION.md)
 
+> ⚠️ RU-версия обновлена 2026-10-18 (PROP-102, секция `analytics`); перевод отстаёт.
+
 > [!NOTE]
 > The user-facing configuration guide lives in the documentation portal:
 > https://docs.synth.itphx.ru/admin/configuration/.

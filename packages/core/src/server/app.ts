@@ -114,6 +114,8 @@ export interface StandaloneConfig {
   schedulerConfig?: SynthConfig['scheduler'];
   /** ADR-084: конфигурация decision-слоя из config.yaml `decision`. */
   decisionConfig?: SynthConfig['decision'];
+  /** PROP-102: конфигурация аналитики (`analytics.retentionDays`) из config.yaml. */
+  analyticsConfig?: SynthConfig['analytics'];
   /** ADR-052 (этап II): конфигурация исходящих webhooks из config.yaml `webhooks`. */
   webhooksConfig?: WebhooksConfig;
   /** Egress: политика tools/webhooks и журнал внешних запросов из config.yaml. */
@@ -450,6 +452,8 @@ export async function createStandaloneApp(config: StandaloneConfig) {
     stopEphemeralSweeper: deps.stopEphemeralSweeper,
     // ADR-089: остановка периодической retention-очистки журнала событий.
     stopEventJournalPruner: deps.stopEventJournalPruner,
+    // PROP-102: остановка retention-очистки суточных роллапов аналитики.
+    stopAnalyticsRollupPruner: deps.stopAnalyticsRollupPruner,
     // ADR-052 (этап II): остановка движка webhooks и retention-очистки доставок.
     stopWebhookService: () => deps.webhookService.stop(),
     stopWebhookDeliveryPruner: () => deps.stopWebhookDeliveryPruner(),

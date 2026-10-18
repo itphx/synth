@@ -1,5 +1,5 @@
 import type { Message, Project, Session, ProviderConfig as SharedProviderConfig, TokenUsage, AgentDefinition, PromptMeta, PromptManifest, PromptState, PromptHistoryInfo, PromptToolDetail, ToolsPolicy, ToolsDisabledConfig, McpServerEffective, McpToolDetail, SkillsDisabledRequest, ProfileStore } from '@itphx/synth-shared';
-import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId } from '@itphx/synth-shared';
+import { MessageRole, nowISO, generateId, makeTextPart, generateStreamId, stripNullBytes, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { RouterConfig, PermissionConfig, PermissionRule, PlanMode, SessionMode, SecurityConfig, LLMGatewayConfig, ReasoningLevel, PermissionDecision, Currency, InstructionsConfig, WorkspaceOutsideRootPolicy, DecisionConfig } from '@itphx/synth-shared';
 import { join, isAbsolute, normalize, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
@@ -65,7 +65,8 @@ import { TEMPLATE_SHELL_MAX_BYTES } from './commands/template.js';
 // ADR-095 (шаг 6a): вынесенные модули оркестратора (тонкие делегации).
 import { computeMessageCost, resolveMessageModel, estimateUsage, estimatePromptChars as estimatePromptCharsFn, publishLiveUsage, aggregateSubagentStats, type PublishLiveUsageParams } from './orchestrator/usage.js';
 import { publishFsChange } from './orchestrator/fs-change.js';
-import { saveAssistantMessage, persistToolChain, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus } from './orchestrator/persistence.js';
+import { saveAssistantMessage, getAssistantSecrets, resolveAssistantStatus, joinAccumulatedTexts, type SaveAssistantMessageDeps, type AssistantMessageStatus } from './orchestrator/persistence.js';
+import { StreamMessageDraft, type StreamMessageRef } from './orchestrator/stream-persistence.js';
 import { formatLlmError, errorTypeI18n, handleLlmFailure, type LlmFailureContext } from './orchestrator/errors.js';
 import { resolveModelContextWindow, getEffectiveModel, wrapWithGateway, getProvider, routeProvider, type RouteProviderDeps } from './orchestrator/routing.js';
 import { sessionMessagesToLlm as sessionMessagesToLlmFn, buildPromptHistoryInfo as buildPromptHistoryInfoFn, lastPromptMeta as lastPromptMetaFn, instructionsMemoKey as instructionsMemoKeyFn } from './orchestrator/prompt-info.js';
@@ -75,6 +76,7 @@ import { handleSummarization as handleSummarizationFn, type SummarizationDeps } 
 import { runProcessEarly, type ProcessEarlyDeps } from './orchestrator/phases/process-early.js';
 import { runProcessFinalize, type ProcessFinalizeDeps } from './orchestrator/phases/process-finalize.js';
 import { runProcessSetup, type ProcessSetupDeps } from './orchestrator/phases/process-setup.js';
+import type { AnalyticsRecorder } from '../analytics/recorder.js';
 
 const DEFAULT_MAX_ITERATIONS = Number.POSITIVE_INFINITY;
 /** Порог заполненности контекстного окна (%), после которого публикуем context.limit_warning. */
@@ -111,6 +113,11 @@ export interface OrchestratorOptions {
    * хуки не выполняются, поведение оркестратора не меняется.
    */
   hooks?: HookBus;
+  /**
+   * PROP-102: сборщик суточных роллапов аналитики (`usage`/`decision`). Не задан —
+   * запись не выполняется, поведение оркестратора не меняется.
+   */
+  analytics?: AnalyticsRecorder;
   contextBuilder: ContextBuilder;
   providerLoader: (name: string) => SharedProviderConfig | null;
   contextOptimizer?: ContextOptimizer;
@@ -262,6 +269,13 @@ export interface OrchestratorOptions {
    * длинный прогон, когда живой cancelToken недоступен (backoff/гонка).
    */
   isCancelRequested?: (sessionId: string) => Promise<boolean>;
+  /**
+   * Шаг 2б: интервал (мс) персистентности частичного стрима. Черновик
+   * assistant-сообщения создаётся сразу при первом непустом чанке, далее
+   * обновляется не чаще интервала (или при приросте ≥4096 символов).
+   * По умолчанию 1000; в тестах — 1–5 мс.
+   */
+  streamPersistIntervalMs?: number;
 }
 
 export interface ProcessMessageResult {
@@ -400,6 +414,8 @@ export class ChatOrchestrator {
    * границе цикла Tool Use даже без живого cancelToken (backoff/гонка).
    */
   private readonly _isCancelRequested: ((sessionId: string) => Promise<boolean>) | null;
+  /** Шаг 2б: интервал персистентности частичного стрима (мс). */
+  private readonly _streamPersistIntervalMs: number;
   /** ADR-069 Фаза 1: конфиг проектных инструкций (null — выключено/не задано). */
   private readonly _instructionsConfig: InstructionsConfig | null;
   /** ADR-069 Фаза 1: резолвер merged chain `AGENTS.md` (null — выключено). */
@@ -412,6 +428,8 @@ export class ChatOrchestrator {
   /** Политика защищённых путей (СКВОЗНАЯ проверка файловых тулов + shell) — ленивая загрузка с кэшем. */
   private _protectedPaths: ProtectedPathsPolicy | null = null;
   private _protectedPathsLoaded = false;
+  /** PROP-102: сборщик роллапов аналитики (`null` — запись выключена). */
+  private readonly _analytics: AnalyticsRecorder | null;
 
   /** Публичный доступ к реестру агентов (для сериализации modeApplicable). */
   get agentRegistry(): AgentRegistry | null {
@@ -563,6 +581,7 @@ export class ChatOrchestrator {
     this._providerLoader = options.providerLoader;
     this._optimizer = options.contextOptimizer ?? null;
     this._modelPriceLoader = options.modelPriceLoader ?? null;
+    this._analytics = options.analytics ?? null;
     this._toolRegistry = options.toolRegistry ?? null;
     this._agentRegistry = options.agentRegistry ?? null;
     this._mcpManager = options.mcpManager ?? null;
@@ -617,6 +636,7 @@ export class ChatOrchestrator {
     this._getRequestSessionService = options.getRequestSessionService ?? null;
     this._isSchedulerActive = options.isSchedulerActive ?? null;
     this._isCancelRequested = options.isCancelRequested ?? null;
+    this._streamPersistIntervalMs = options.streamPersistIntervalMs ?? 1000;
 
     // ADR-036: LLM Gateway — включается только при gatewayConfig.enabled=true.
     // ObfuscationMapStore живёт в сессии, RateLimiter и AuditLogger — общие.
@@ -706,7 +726,7 @@ export class ChatOrchestrator {
       // ADR-084: decision-модель пытается перед локальной LLM; `micro_llm`
       // остаётся фоллбеком. Конфиг читается геттером — runtime-обновление
       // возможно без пересоздания модели (setDecisionConfig).
-      new DecisionModel(pool, () => this._decisionConfig ?? undefined),
+      new DecisionModel(pool, () => this._decisionConfig ?? undefined, this._analytics ?? undefined),
       new MicroLlmModel(pool),
     ];
     this._microPipeline = new MicroPipeline(microClassifier, microModels);
@@ -721,6 +741,7 @@ export class ChatOrchestrator {
       const decisionClassifier = new DecisionContentClassifier(
         pool,
         () => this._decisionConfig ?? undefined,
+        this._analytics ?? undefined,
       );
       this._router = new ModelRouter(classifier, pool, qualityChecker, options.routerConfig, decisionClassifier);
     } else {
@@ -1587,13 +1608,6 @@ export class ChatOrchestrator {
       optimizer: this._optimizer,
       resolveMessageModel: (chunkModel, finalModel, provider, session) =>
         this._resolveMessageModel(chunkModel, finalModel, provider, session),
-      persistToolChain: (
-        sessionId, streamId, providerName, agentRole, finalModel,
-        allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
-      ) => this._persistToolChain(
-        sessionId, streamId, providerName, agentRole, finalModel,
-        allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
-      ),
       joinAccumulatedTexts: (intermediateTexts, current) =>
         this._joinAccumulatedTexts(intermediateTexts, current),
       estimateUsage: (usage, promptChars, outputChars) =>
@@ -2350,7 +2364,6 @@ export class ChatOrchestrator {
       // `finalModel` ещё не обновлён (ADR-070 §2.6, Bug 2).
       let lastChunkModel: string | undefined;
       const allToolCalls: Array<Record<string, unknown>> = [];
-      const allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }> = [];
       let stopAfterDeny = false;
       let denyStopReason: string | undefined;
       /** metadata.i18n подставленного финального фоллбека (лимит итераций / deny / пустой ответ). */
@@ -2360,6 +2373,13 @@ export class ChatOrchestrator {
       /** Отмена до финального сохранения (до входа в итерацию, во время тула) —
        *  завершать обработку как отмену, а не как пустой ответ. */
       let cancelledBeforeFinal = false;
+      /**
+       * Шаг 2б: ссылка на черновик последней **незавершённой** итерации. Если
+       * итерация закончилась без toolCalls — финальное сообщение обновляет
+       * черновик (без дубля); если с toolCalls (зафиксирован как tool_chain) или
+       * чанков не было (`ref() === null`) — финал добавляется как раньше.
+       */
+      let currentDraft: StreamMessageRef | null = null;
 
       // ADR-070 §2.6: live-статистика стрима (`stream.usage`). Состояние
       // троттлинга — на поток; публикуется через publishChunk (EventBus).
@@ -2430,6 +2450,27 @@ export class ChatOrchestrator {
           );
         lastIterationPromptChars = iterationPromptChars;
 
+        // Шаг 2б: черновик частичного стрима этой итерации. Запись создаётся
+        // при первом непустом контенте/рассуждении и далее обновляется с
+        // троттлингом — стрим не блокируется.
+        const draft = new StreamMessageDraft({
+          sessionManager: this._sessionManager,
+          sessionId: session.id,
+          base: {
+            role: MessageRole.ASSISTANT,
+            origin: 'local',
+            disabled: false,
+            pinned: false,
+            hidden: false,
+            provider: providerName,
+            agentRole: effectiveAgentRole,
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+            model: this._resolveMessageModel(undefined, finalModel, provider, session),
+            metadata: { stream_id: streamId },
+          },
+          intervalMs: this._streamPersistIntervalMs,
+        });
+
         try {
           for await (const chunk of provider.chatAsync(
             currentMessages,
@@ -2439,6 +2480,12 @@ export class ChatOrchestrator {
             cancelToken,
           )) {
             if (cancelToken.cancelled) break;
+
+            // U+0000 в ответе модели/стрима ломает запись в PostgreSQL
+            // (`text`/`jsonb`), поэтому чистим чанк до накопления и публикации.
+            if (typeof chunk.content === 'string') chunk.content = stripNullBytes(chunk.content);
+            if (typeof chunk.reasoning === 'string') chunk.reasoning = stripNullBytes(chunk.reasoning);
+            if (chunk.toolCalls) chunk.toolCalls = stripNullBytesDeep(chunk.toolCalls);
 
             if (chunk.isFinal) {
               accumulatedContent = chunk.content || accumulatedContent;
@@ -2451,6 +2498,9 @@ export class ChatOrchestrator {
               iterationUsage = chunk.usage;
             }
             if (chunk.model) chunkModel = chunk.model;
+
+            // Шаг 2б: частичный стрим в историю (не блокирует цикл чанков).
+            draft.push(accumulatedContent, accumulatedReasoning, chunkModel);
 
             // ADR-070 §2.6: live-статистика. Anthropic отдаёт input/cache в
             // `message_start` (output ещё 0), а output — только в `message_delta`
@@ -2521,6 +2571,10 @@ export class ChatOrchestrator {
           const errMsg = String(e);
           warning('ORCHESTRATOR', `LLM stream error: ${errMsg}`);
 
+          // Шаг 2б: частичный текст сохраняется с interrupted/status='error',
+          // таймер останавливается; семантика handleLlmFailure не меняется.
+          await draft.abort(errMsg);
+
           this._cancellationTokens.delete(streamId);
           return this._handleLlmFailure(session.id, streamId, e, attempt, {
             debugCollector,
@@ -2545,13 +2599,8 @@ export class ChatOrchestrator {
           // поэтому fallback на provider.model/session.settings.model.
           const cancelModel = this._resolveMessageModel(chunkModel, finalModel, provider, session);
 
-          // Отмена: сохраняем уже выполненные tool-вызовы (персистентность
-          // tool-chain) — иначе timeline вызовов пропадает из истории.
-          await this._persistToolChain(
-            session.id, streamId, providerName, effectiveAgentRole,
-            cancelModel,
-            allRawToolCalls, allToolCalls, allIntermediateTexts, allReasoning,
-          );
+          // Завершённые итерации и их tool-результаты уже записаны пошагово
+          // (шаг 2а) — повторная персистенция tool-chain не нужна.
 
           // Баг: накопленный текст ВСЕХ итераций (завершённые + текущая
           // незавершённая), а не только последней. Иначе при стопе в истории
@@ -2571,6 +2620,12 @@ export class ChatOrchestrator {
           );
           const cancelCost = this._computeMessageCost(cancelModel, cancelEstimated.usage);
 
+          // Шаг 2б: останавливаем таймер/дожидаемся записи; черновик этой
+          // итерации станет финальным сообщением отмены (без дубля). Если
+          // чанков не было (`ref() === null`) — append как раньше.
+          await draft.dispose();
+          const cancelledDraft = draft.ref();
+
           // При отмене НЕ кладём allIntermediateTexts в metadata
           // (intermediate_text_blocks): они уже вошли в partialContent, иначе
           // UI (режим 'bottom') склеит их с content повторно — дубль.
@@ -2587,6 +2642,7 @@ export class ChatOrchestrator {
             },
             promptMeta,
             cancelCost,
+            cancelledDraft ?? undefined,
           );
 
           publishChunk('stream.cancelled', {
@@ -2614,13 +2670,31 @@ export class ChatOrchestrator {
         // No tool calls — final response
         if (!toolCalls || toolCalls.length === 0) {
           finalContent = accumulatedContent;
+          // Шаг 2б: дожидаемся последней записи, запоминаем черновик — финальное
+          // сообщение обновит его (не добавит второй assistant в историю).
+          await draft.flush();
+          currentDraft = draft.ref();
+          await draft.dispose();
           break;
         }
 
         if (accumulatedContent) {
           allIntermediateTexts.push({ text: accumulatedContent, iteration: toolIteration });
         }
-        allRawToolCalls.push({ iteration: toolIteration, calls: toolCalls });
+
+        // Шаг 2а/2б: сразу фиксируем assistant-сообщение итерации с toolCalls (до
+        // исполнения тулов) — падение/отмена в середине хода не должны терять
+        // уже полученный ответ модели. Черновик частичного стрима превращается
+        // в промежуточное tool_chain-сообщение (metadata заменяется целиком,
+        // streaming убирается); пара tool-сообщений пишется ниже
+        // (`_persistToolResult`) по мере готовности результатов.
+        await draft.finalize({
+          content: accumulatedContent,
+          reasoning: accumulatedReasoning || undefined,
+          toolCalls,
+          model: chunkModel ?? finalModel,
+          metadata: { stream_id: streamId, tool_chain: true },
+        });
 
         // Tool calls detected — execute them
         debugCollector.captureRawModelResponse(
@@ -2659,6 +2733,9 @@ export class ChatOrchestrator {
           } else {
             toolArgs = func.arguments || {};
           }
+          // Аргументы могли прийти из JSON-escape `\u0000` — после парсинга это
+          // уже реальный NUL в строках (ломает запись `tool_calls`/`metadata.args`).
+          toolArgs = stripNullBytesDeep(toolArgs);
 
           const resolvedToolDef = this._toolRegistry?.get(toolName);
           // ADR-071 §2.1: MCP-тул вне активных серверов сессии недоступен —
@@ -2939,6 +3016,12 @@ export class ChatOrchestrator {
               result: toolResult,
               iteration: toolIteration,
             });
+            // Шаг 2а: результат тула сразу в истории (пара к уже записанному
+            // assistant(tool_calls)) — отмена ниже не должна его потерять.
+            await this._persistToolResult(
+              session.id, streamId, providerName, effectiveAgentRole,
+              chunkModel ?? finalModel, toolName, toolArgs, tcId, toolResult,
+            );
             cancelledBeforeFinal = true;
             break;
           }
@@ -3051,6 +3134,14 @@ export class ChatOrchestrator {
             iteration: toolIteration,
           });
 
+          // Шаг 2а: сразу сохраняем tool-результат (пара к assistant(tool_calls)).
+          // До `allToolCalls.push` и state-сообщений (plan_enter/plan_exit и др.),
+          // чтобы порядок в истории был assistant(tool_calls) → tool → state.
+          await this._persistToolResult(
+            session.id, streamId, providerName, effectiveAgentRole,
+            chunkModel ?? finalModel, toolName, toolArgs, tcId, toolResult,
+          );
+
           // classify_conversation: сохраняем категорию в настройках сессии (ADR-034)
           if (toolName === 'classify_conversation' && !toolResult.isError) {
             const cat = (toolResult.metadata?.routingCategory as string) || undefined;
@@ -3145,6 +3236,11 @@ export class ChatOrchestrator {
               input: toolArgs,
               output: toolResult,
               duration: Date.now() - tcStartedMs,
+              // PROP-102: оси атрибуции активности (`tool_calls`) — значения
+              // сессии уже под рукой, подписчику не нужно её читать.
+              sessionId: session.id,
+              ...(session.userId ? { userId: session.userId } : {}),
+              ...(session.projectId ? { projectId: session.projectId } : {}),
             });
           }
 
@@ -3213,8 +3309,9 @@ export class ChatOrchestrator {
           cancelledBeforeFinal, lastChunkModel, finalModel, finalUsage, finalContent, fallbackI18n,
           hadDeny, stopAfterDeny, denyStopReason, toolIteration, maxIterations,
           lastIterationPromptChars, allReasoning, allIntermediateTexts, allToolCalls,
-          allRawToolCalls, currentMessages, promptMeta, loadedTokenRatio, routingDecision,
+          currentMessages, promptMeta, loadedTokenRatio, routingDecision,
           provider, providerName, effectiveAgentRole, effectiveReasoningLevel, finalSystemPrompt,
+          currentDraft,
         },
         this._processFinalizeDeps(),
       );
@@ -3572,40 +3669,51 @@ export class ChatOrchestrator {
       eventBus: this._eventBus,
       obfMapStore: this._obfMapStore,
       modelPriceLoader: this._modelPriceLoader,
+      analytics: this._analytics ?? undefined,
     };
   }
 
   /**
-   * Персистентность tool-chain (Вариант B): настоящие пары
-   * «assistant с toolCalls + tool-результаты» в session.messages, чтобы
-   * _sessionMessagesToLlm на следующем запросе выдавал OpenAI-совместимый
-   * диалог. Промежуточные сообщения помечаются metadata.tool_chain=true —
-   * UI их скрывает (визуализация уже есть в финальном сообщении).
-   * Вызывается и в успешном пути, и при отмене (уже выполненные итерации).
+   * Пошаговая персистентность tool-результата (шаг 2а): пишется сразу после
+   * готового результата (IPI-обёртка/ленивые инструкции уже применены),
+   * до `allToolCalls.push` и state-сообщений (`plan_enter`/`plan_exit` и др.),
+   * чтобы порядок в истории был assistant(tool_calls) → tool → state.
    */
-  private async _persistToolChain(
+  private async _persistToolResult(
     sessionId: string,
     streamId: string,
     providerName: string,
     agentRole: string | undefined,
-    finalModel: string | undefined,
-    allRawToolCalls: Array<{ iteration: number; calls: Record<string, unknown>[] }>,
-    allToolCalls: Array<Record<string, unknown>>,
-    allIntermediateTexts: Array<{ text: string; iteration: number }>,
-    allReasoning: Array<{ text: string; iteration: number }>,
+    model: string | undefined,
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+    toolCallId: string,
+    toolResult: { content: string; isError?: boolean; metadata?: Record<string, unknown> },
   ): Promise<void> {
-    return persistToolChain(
-      this._sessionManager,
-      sessionId,
-      streamId,
-      providerName,
+    await this._sessionManager.appendMessage(sessionId, {
+      id: generateId(),
+      role: MessageRole.TOOL,
+      seq: 0,
+      origin: 'local',
+      parts: [makeTextPart(toolResult.content)],
+      content: toolResult.content,
+      toolCallId,
+      createdAt: nowISO(),
+      disabled: false,
+      pinned: false,
+      hidden: false,
+      model,
+      provider: providerName,
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       agentRole,
-      finalModel,
-      allRawToolCalls,
-      allToolCalls,
-      allIntermediateTexts,
-      allReasoning,
-    );
+      metadata: {
+        ...(toolResult.metadata ?? {}),
+        stream_id: streamId,
+        tool_chain: true,
+        tool_name: toolName,
+        args: toolArgs,
+      },
+    });
   }
 
   /**
@@ -3659,6 +3767,8 @@ export class ChatOrchestrator {
      * считала её для события) — избегаем повторного `_computeMessageCost`.
      */
     precomputedCost?: ReturnType<typeof computeUsageCost>,
+    /** Шаг 2б: обновить существующий черновик частичного стрима вместо append. */
+    existing?: { id: string; seq: number },
   ): Promise<string> {
     return saveAssistantMessage(
       this._persistenceDeps(),
@@ -3682,6 +3792,7 @@ export class ChatOrchestrator {
       metadataExtra,
       promptMeta,
       precomputedCost,
+      existing,
     );
   }
 

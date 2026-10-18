@@ -17,7 +17,14 @@ import type { ObfuscationMapStore } from '../gateway/index.js';
 import { PLACEHOLDER_PATTERN } from '../gateway/index.js';
 import { validateExpected } from '../context/prompt-state.js';
 import { warning } from '../../logger.js';
-import { aggregateSubagentStats, computeMessageCost, type ModelPriceLoader } from './usage.js';
+import type { AnalyticsRecorder } from '../../analytics/recorder.js';
+import { sessionAxes } from '../../analytics/recorder.js';
+import {
+  aggregateSubagentStats,
+  collectSubagentUsageByModel,
+  computeMessageCost,
+  type ModelPriceLoader,
+} from './usage.js';
 
 /**
  * ADR-070 §2.6: статус ответа ассистента для строки статистики в UI.
@@ -113,12 +120,31 @@ export async function getAssistantSecrets(
 }
 
 /**
+ * PROP-102: есть ли в usage реальные токены (нулевой ответ не создаёт бакет).
+ */
+function hasUsageTokens(usage: TokenUsage | undefined): boolean {
+  if (!usage) return false;
+  return (
+    (usage.inputTokens || 0) > 0
+    || (usage.outputTokens || 0) > 0
+    || (usage.cacheReadTokens || 0) > 0
+    || (usage.cacheWriteTokens || 0) > 0
+    || (usage.reasoningTokens || 0) > 0
+  );
+}
+
+/**
  * Персистентность tool-chain (Вариант B): настоящие пары
  * «assistant с toolCalls + tool-результаты» в session.messages, чтобы
  * sessionMessagesToLlm на следующем запросе выдавал OpenAI-совместимый
  * диалог. Промежуточные сообщения помечаются metadata.tool_chain=true —
  * UI их скрывает (визуализация уже есть в финальном сообщении).
- * Вызывается и в успешном пути, и при отмене (уже выполненные итерации).
+ *
+ * Шаг 2а: продовый путь оркестратора больше не вызывает этот helper —
+ * сообщения пишутся пошагово (`SessionManager.appendMessage` сразу после
+ * итерации/каждого тула), чтобы падение в середине хода их не теряло.
+ * Функция сохранена как экспортируемый пакетный helper (unit-тесты,
+ * переиспользование), поведение прежнее.
  */
 export async function persistToolChain(
   sessionManager: SessionManager,
@@ -198,6 +224,14 @@ export interface SaveAssistantMessageDeps {
   eventBus: EventBus;
   obfMapStore: ObfuscationMapStore | null;
   modelPriceLoader: ModelPriceLoader | null;
+  /** PROP-102: сборщик `usage`-роллапа (не задан — запись не выполняется). */
+  analytics?: AnalyticsRecorder;
+}
+
+/** Ссылка на уже созданное сообщение (черновик частичного стрима, шаг 2б). */
+export interface ExistingMessageRef {
+  id: string;
+  seq: number;
 }
 
 /** Сигнатура `saveAssistantMessage` (для делегации/передачи колбэком). */
@@ -222,6 +256,11 @@ export type SaveAssistantMessageFn = (
   metadataExtra?: Record<string, unknown>,
   promptMeta?: PromptMeta,
   precomputedCost?: UsageCost | null,
+  /**
+   * Шаг 2б: сообщение уже создано черновиком частичного стрима — обновить его
+   * (`updateMessage`) вместо `addMessage`, чтобы в истории не было дубля.
+   */
+  existing?: ExistingMessageRef,
 ) => Promise<string>;
 
 export async function saveAssistantMessage(
@@ -252,6 +291,8 @@ export async function saveAssistantMessage(
    * считала её для события) — избегаем повторного `_computeMessageCost`.
    */
   precomputedCost?: UsageCost | null,
+  /** Шаг 2б: обновить существующий черновик вместо создания нового сообщения. */
+  existing?: ExistingMessageRef,
 ): Promise<string> {
   const sessionManager = deps.sessionManager;
   const finalContent = content;
@@ -321,9 +362,9 @@ export async function saveAssistantMessage(
   }
 
   const msg: Message = {
-    id: generateId(),
+    id: existing?.id ?? generateId(),
     role,
-    seq: 0, // filled by addMessage
+    seq: existing?.seq ?? 0, // filled by addMessage (или уже назначен черновиком)
     origin: 'local',
     parts: [makeTextPart(finalContent)],
     content: finalContent,
@@ -344,8 +385,75 @@ export async function saveAssistantMessage(
     ...(qaReason !== undefined ? { qa_reason: qaReason } : {}),
   };
 
-  await sessionManager.addMessage(sessionId, msg);
+  if (existing) {
+    // Шаг 2б: черновик частичного стрима уже в истории — заменяем его
+    // финальной версией (id/seq сохраняет порт). `recordActivity` — потому
+    // что при создании черновика активность не писалась (streaming).
+    const updated = await sessionManager.updateMessage(sessionId, msg, { recordActivity: true });
+    if (!updated) {
+      // Черновик не найден (удалён/перезаписана история) — безопасный fallback.
+      msg.id = generateId();
+      msg.seq = 0;
+      await sessionManager.addMessage(sessionId, msg);
+    }
+  } else {
+    await sessionManager.addMessage(sessionId, msg);
+  }
 
+  // PROP-102 §3: шов записи `usage` — значение уже посчитано (usage/model/cost/
+  // сабагенты). Best-effort: рекордер не пробрасывает ошибки и не блокирует ход.
+  // Числа согласованы с `computeSessionStats`: собственный usage сообщения +
+  // usage сабагентов из `metadata.subagents` (их сообщения персистятся мимо
+  // этой точки, поэтому двойного счёта нет).
+  if (deps.analytics?.enabled) {
+    try {
+      const analyticsSession = await sessionManager.getSession(sessionId);
+      const axes = sessionAxes(analyticsSession);
+      const durationMs =
+        typeof metadataExtra?.duration_ms === 'number' && Number.isFinite(metadataExtra.duration_ms)
+          ? metadataExtra.duration_ms
+          : undefined;
+      const ownCosts: Record<string, number> = {};
+      if (messageCost) ownCosts[messageCost.currency] = messageCost.costUsd;
+      const subagentGroups = toolResults && toolResults.length > 0
+        ? collectSubagentUsageByModel(
+            toolResults,
+            (m, u) => computeMessageCost(m, u, deps.modelPriceLoader),
+          )
+        : [];
+      // Собственный ответ — 1 запрос; запросы сабагентов идут в их собственных
+      // бакетах ниже (иначе `requests` удвоился бы при группировке по `user`).
+      const ownRequests = hasUsageTokens(usage) ? 1 : 0;
+
+      void deps.analytics.recordUsage({
+        ...axes,
+        ...(model ? { model } : {}),
+        ...(agentRole ? { agent: agentRole } : {}),
+        usage,
+        ...(ownRequests > 0 ? { requests: ownRequests } : {}),
+        ...(role === MessageRole.ASSISTANT ? { messages: 1 } : {}),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+        ...(Object.keys(ownCosts).length > 0 ? { costByCurrency: ownCosts } : {}),
+      });
+
+      // Usage сабагентов — отдельные бакеты по своей модели/агенту (ось
+      // `model`/`agent` не схлопывается в модель родителя).
+      for (const group of subagentGroups) {
+        void deps.analytics.recordUsage({
+          ...axes,
+          ...(group.model ? { model: group.model } : {}),
+          ...(group.agent ? { agent: group.agent } : {}),
+          usage: group.usage,
+          requests: group.sessions,
+          ...(Object.keys(group.costByCurrency).length > 0
+            ? { costByCurrency: group.costByCurrency }
+            : {}),
+        });
+      }
+    } catch {
+      // best-effort: аналитика не должна ломать сохранение сообщения
+    }
+  }
   // Accumulate session token counters and costs
   if (usage) {
     await sessionManager.withLock(sessionId, async (s) => {

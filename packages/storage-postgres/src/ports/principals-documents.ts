@@ -14,6 +14,7 @@
 import type { AgentDefinition, ModelConfig, ProviderConfig } from '@itphx/synth-shared';
 import type { DocumentRepository } from '@itphx/synth-core';
 import type { PostgresConnection } from '../pool.js';
+import { jsonbParam } from '../json-param.js';
 
 /** Документ-провайдер. */
 export type ProviderDocument = ProviderConfig;
@@ -43,7 +44,7 @@ export function createDocumentPort<T>(
       await conn.query(
         `INSERT INTO documents (kind, key, value, updated_at) VALUES ($1, $2, $3::jsonb, now())
          ON CONFLICT (kind, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
-        [kind, key, JSON.stringify(value)],
+        [kind, key, jsonbParam(value)],
       );
     },
 

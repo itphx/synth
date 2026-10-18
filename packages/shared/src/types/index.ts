@@ -53,3 +53,5 @@ export * from './webhooks.js';
 export * from './maintenance.js';
 // Egress-политика, журнал внешних запросов и аудит security-политик
 export * from './egress.js';
+// Аналитика и отчётность инстанса: суточные роллапы (PROP-102)
+export * from './analytics.js';

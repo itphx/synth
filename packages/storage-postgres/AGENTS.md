@@ -57,9 +57,11 @@ ADR-097): реализация доменных портов `StorageContext` (`
 (`packages/core/src/storage/contract/postgres.test.ts` → 56/56 против
 dev-Postgres). Проводка домена — через `storage.backend = postgres`.
 
-**Текущий статус (сводно).** Реализованы: все 27 доменных портов (группы
-`ports/*`), лёгкие выборки `@future-backend` (в т.ч. `listLight` — метаданные
-сессий без истории, `ports/sessions.ts`), координация на session-level
+**Текущий статус (сводно).** Реализованы: все 30 доменных портов (группы
+`ports/*`; включая `analyticsRollups` — PROP-102), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
+сессий без истории, `ports/sessions.ts`), точечная запись сообщений `appendMessage`/`updateMessage`
+(одна строка `messages` в транзакции под per-session advisory-локом; `save` остаётся полной заменой
+истории для импорта/ветвления), координация на session-level
 advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуживание
 (`health`-probe, `schemaMigrations` (plan/apply), `purgeSchema` — `--purge-db`),
 перенос данных между backend'ами (`synth storage migrate`) и деградированный
@@ -83,7 +85,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
 - **Схема и миграции (`migrations/*`, `migrate.ts`).** Свой контур версионирования
   (НЕ `meta.json`/ADR-092): таблица `synth_schema_migrations(version int PK, id text,
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
-  (`src/migrations/001-init.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
+  (`src/migrations/001-init.ts`, `002-egress-audit.ts`, `003-analytics-rollups.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
   в транзакции с записью версии). **Fail-closed**, если версия в БД **больше**
@@ -105,7 +107,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   **Риск пула:** удерживаемое соединение не возвращается в пул — держите не больше
   одного на процесс; `poolMax` по умолчанию 10 (`pool.ts`).
 - **Сборка контекста (`storage-context.ts` + `src/ports/*`).** Порты разложены по
-  четырём независимым файлам-группам (по одному владельцу-агенту на файл, волна
+  шести независимым файлам-группам (по одному владельцу-агенту на файл, волна
   реализации правит их параллельно и без конфликтов); каждая группа экспортирует
   одну фабрику, возвращающую свою часть `StorageContext`:
   - `ports/sessions.ts` → `buildSessionPorts(deps)` → `sessions`;
@@ -116,7 +118,12 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
     `webhooks`/`webhookDeliveries`;
   - `ports/content.ts` → `buildContentPorts(deps)` → `serviceKeys`/`sshKeys`/
     `mcpRegistry`/`skillBundles`/`dictionaries`/`secretPatterns`/`protectedPaths`/
-    `maintenanceAudit`.
+    `maintenanceAudit`;
+  - `ports/audit.ts` → `buildAuditPorts(deps)` → `securityAudit`/`egressRequests`;
+  - `ports/analytics.ts` → `buildAnalyticsPorts(deps)` → `analyticsRollups`
+    (PROP-102: таблица `analytics_rollups`, миграция 003 — PK
+    `(family, day, dimensions)`, атомарный `INSERT … ON CONFLICT … DO UPDATE`
+    с суммированием `jsonb`-мер без advisory-локов).
 
   Общий тип зависимостей — `PortDeps` (`ports/deps.ts`): `connection` (живой
   `PostgresConnection`), `dataDir`, `secretKey?`, `env?`, `systemDictionariesDir?`,
@@ -126,8 +133,9 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   `skills`/`contextFiles`/`blobs` — **файловые** реализации `createFileStorage`
   (FS/package-bound, см. исключение выше). `ports/stub.ts` (`notImplementedPort`)
   оставлен как исторический экспорт, но портами не используется.
-- **Схема — источник истины.** Правили `001-init` **на месте** (схема нигде не
-  развёрнута; версия остаётся 1, миграции `002` нет). Выравнивание по домену:
+- **Схема — источник истины.** Ранее правили `001-init` **на месте** (схема была
+  нигде не развёрнута); сейчас схема версионируется миграциями `001-init` →
+  `002-egress-audit` → `003-analytics-rollups`. Выравнивание по домену:
   - **FK без референсной целостности сняты** (каскад — в коде, как в файловой
     реализации): `event_api_keys.binding_id` (чистит `removeByBinding`) и
     `webhook_deliveries.subscription_id` (чистит `webhooks.remove` в транзакции).
@@ -148,9 +156,12 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
     `UNIQUE (session_id, seq)` сохранён как страховка порядка. `seq` —
     **позиционный**: драйвер нормализует его при записи по порядку массива
     (`1..n`), чтение — `ORDER BY session_id, seq, created_at, id` (детерминированный
-    тайбрейкер для legacy-строк). Запись сообщений и child-таблиц — **полная
+    тайбрейкер для legacy-строк). Запись сообщений и child-таблиц в `save` — **полная
     замена в транзакции** (`DELETE … WHERE session_id` + массовый `INSERT` по
     чанкам); upsert по `id` для сообщений убран (он молча схлопывал дубликаты).
+    Точечная запись (`appendMessage`/`updateMessage`) меняет одну строку `messages`
+    (`INSERT … RETURNING *` / `UPDATE … WHERE message_uid`, транзакция + advisory-лок)
+    и `sessions.updated_at`, не трогая остальную историю.
   - `session_references` — суррогатный `id text PK` + `ordinal int NOT NULL`
     (индекс `(session_id, ordinal)`); **дубликаты одной `ref_session_id`
     разрешены** (разные диапазоны), `addReference` — append, `getReferences` —
@@ -245,7 +256,7 @@ workspace) остаются file-специфичными ([ADR-091](../../docs/
   **Контрактный прогон портов** живёт в core — `packages/core/src/storage/contract/postgres.test.ts`
   (тот же гейт `SYNTH_TEST_POSTGRES_DSN`, уникальная схема на каждый `make()`,
   `vi.setConfig({ testTimeout: 30000 })` — миграции под параллельной нагрузкой):
-  проходят **все 56** блоков (27 портов).
+  проходят **все** блоки контрактного suite (30 портов; `AnalyticsRollupRepository` — 11 блоков).
   Пример: `SYNTH_TEST_POSTGRES_DSN="postgres://synth:<pw>@127.0.0.1:5432/synth_test" pnpm --filter @itphx/synth-storage-postgres test`.
 - Сборка: `pnpm --filter @itphx/synth-storage-postgres build` (`tsc -p tsconfig.build.json`);
   порядок релизной сборки — `shared → core → storage-postgres → ui → sdk → synth`

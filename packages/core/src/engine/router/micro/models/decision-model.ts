@@ -17,6 +17,7 @@ import type { MicroInput, MicroResult, MicroTaskClass } from '../types.js';
 import type { MicroModel } from './base.js';
 import { INTENT_DESCRIPTIONS, CLASSIFY_ANSWERS } from '../tasks/classify-intent.js';
 import { VALID_LABELS, ENUM_ANSWERS } from '../tasks/enum-decision.js';
+import type { AnalyticsRecorder } from '../../../../analytics/recorder.js';
 import { info } from '../../../../logger.js';
 
 /** Идентификатор decision-вопроса (ответ — метка задачи). */
@@ -64,13 +65,17 @@ export class DecisionModel implements MicroModel {
   readonly name = 'decision-classifier';
   private readonly _resolver: DecisionProviderResolver;
   private readonly _getConfig: () => DecisionConfigLike | undefined;
+  /** PROP-102: сборщик decision-роллапов (персистентные метрики ADR-084). */
+  private readonly _analytics?: AnalyticsRecorder;
 
   constructor(
     resolver: DecisionProviderResolver,
     getConfig: () => DecisionConfigLike | undefined,
+    analytics?: AnalyticsRecorder,
   ) {
     this._resolver = resolver;
     this._getConfig = getConfig;
+    this._analytics = analytics;
   }
 
   canHandle(taskClass: MicroTaskClass): boolean {
@@ -107,6 +112,7 @@ export class DecisionModel implements MicroModel {
       ...(input.images ? { images: input.images } : {}),
       ...(input.videos ? { videos: input.videos } : {}),
       logLabel: 'микро',
+      ...(this._analytics ? { analytics: this._analytics } : {}),
     });
 
     if (outcome.accepted) {

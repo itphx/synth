@@ -55,6 +55,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_CORS_ORIGIN` | CORS origin (приоритет выше конфига) | — |
 | `SYNTH_DECISION_PROVIDER` | ADR-084: имя провайдера decision-типа (`decision`/`systemone`) | `decision.provider` |
 | `SYNTH_DECISION_MODEL` | ADR-084: модель decision-слоя (напр. `clef-flash`) | `decision.model` |
+| `SYNTH_ANALYTICS_RETENTION_DAYS` | PROP-102: срок хранения суточных роллапов аналитики, дни (`<= 0` — без ограничения) | `analytics.retentionDays` (`400`) |
 
 **UI (Vite):**
 
@@ -75,7 +76,7 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 
 ### Env-оверрайды вложенных секций (ADR-023)
 
-Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision` можно задавать
+Скалярные ключи секций `events`, `scheduler`, `webhooks`, `decision`, `analytics` можно задавать
 переменными окружения — удобно для k8s (ConfigMap → env пода). Имя переменной
 собирается по правилу **`SYNTH_<SECTION>_<KEY>`**, где camelCase ключа переводится в
 SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
@@ -132,6 +133,7 @@ SNAKE_CASE: `autoBind` → `SYNTH_EVENTS_AUTO_BIND`, `ephemeralTtl` →
 | `SYNTH_DECISION_CONFIDENCE_THRESHOLD` | number | `decision.confidenceThreshold` |
 | `SYNTH_DECISION_ESCALATION_PROVIDER` | string | `decision.escalationProvider` |
 | `SYNTH_DECISION_ESCALATION_MODEL` | string | `decision.escalationModel` |
+| `SYNTH_ANALYTICS_RETENTION_DAYS` | number | `analytics.retentionDays` |
 | `SYNTH_BOOTSTRAP_SERVICE_KEYS` | JSON-массив | `security.bootstrapServiceKeys` (объектный env-оверрайд, ADR-052/O1; см. ниже) |
 | `SYNTH_TLS_CA_FILE` | ADR-099: путь к PEM-файлу доверенного CA (корпоративный CA); взаимоисключающ с `SYNTH_TLS_CA_PEM` | — |
 | `SYNTH_TLS_CA_PEM` | ADR-099: PEM доверенного CA (например из Secret); взаимоисключающ с `SYNTH_TLS_CA_FILE` | — |
@@ -370,6 +372,9 @@ decision:                         # ADR-084: decision-модели (System One: 
 > трём потребителям — микро-каскаду (`DecisionModel`), роутеру (`DecisionContentClassifier`) и
 > маршрутизации внешних событий (`DecisionRuleProvider`, ADR-089); агрегатные метрики decision-слоя
 > доступны через `GET/DELETE /api/v2/settings/decision/metrics`. Мутации в managed — ADMIN.
+
+analytics:                        # PROP-102: аналитика и отчётность инстанса
+  retentionDays: 400              # хранение суточных роллапов (UTC-дни; <= 0 — без ограничения)
 
 permission:
   rules: {}                       # гранулярные permissions: allow/deny/ask per tool
@@ -1173,6 +1178,36 @@ scheduler:
   leaderElection: none
   crossProcessLocks: false
 ```
+
+### Аналитика и отчётность (`analytics.*`, PROP-102)
+
+Секция задаёт только срок хранения **пред-агрегированных суточных роллапов**
+аналитики (единица — сутки UTC). Отчёты и их параметры — [API_V2.md](./API_V2.md)
+§5.32; пересборка роллапов из истории — [MAINTENANCE.md](./MAINTENANCE.md)
+§«Аналитика: пересборка роллапов».
+
+| Поле | Назначение | По умолчанию |
+|------|-----------|--------------|
+| `analytics.retentionDays` | Срок хранения роллапов (UTC-дни): бакеты со `day` раньше `utcDay(now − retentionDays)` удаляются прунером; `<= 0` — хранение без ограничения. Env — `SYNTH_ANALYTICS_RETENTION_DAYS` | `400` |
+
+```yaml
+analytics:
+  retentionDays: 400
+```
+
+- **Запись — best-effort и не влияет на ход.** Роллапы инкрементируются на уже
+  существующих швах (сохранение ответа, жизненный цикл сессии/инструментов через
+  hook-шину, decision-каскад); ошибки порта логируются и не пробрасываются, ход
+  агента не блокируется. В деградированном режиме хранилища (ADR-098) запись
+  выключена.
+- **Хранилище** — доменный порт `AnalyticsRollupRepository` (ADR-096): файловый
+  backend — `{dataDir}/analytics/rollups.json` (ADR-005, атомарная запись),
+  PostgreSQL — таблица `analytics_rollups` (миграция 003 драйвера).
+- **Retention.** Прунер запускается сразу при старте и далее каждые 6 часов
+  (таймер `unref`); ошибки очистки логируются и не роняют процесс.
+- **Приватность.** Роллапы агрегированы: текста сообщений, содержимого промптов,
+  ключей и PII в значениях нет; дериваты (`cache_hit_rate`, `output_tps`, …)
+  не персистятся, а считаются на чтении.
 
 ### Гибридный режим (remote)
 

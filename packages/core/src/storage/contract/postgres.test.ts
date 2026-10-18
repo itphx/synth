@@ -8,6 +8,7 @@ vi.setConfig({ testTimeout: 30000 });
 
 import {
   createTmpDir,
+  describeAnalyticsRollupRepository,
   describeBlobStore,
   describeContextFileRepository,
   describeDefaultsRepository,
@@ -160,6 +161,7 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
   describeMaintenanceAuditRepository('PG → MaintenanceAuditRepository', () => makePort('maintenanceAudit'));
   describeSecurityAuditRepository('PG → SecurityAuditRepository', () => makePort('securityAudit'));
   describeEgressRequestLogRepository('PG → EgressRequestLogRepository', () => makePort('egressRequests'));
+  describeAnalyticsRollupRepository('PG → AnalyticsRollupRepository', () => makePort('analyticsRollups'));
 
   describeServiceKeyRepository('PG → ServiceKeyRepository', () => makePort('serviceKeys'));
   describeSSHKeyRepository('PG → SSHKeyRepository', () => makePort('sshKeys'));

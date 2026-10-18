@@ -9,6 +9,11 @@
  *   - `save` — **одна транзакция**: upsert строки `sessions` + **полная замена**
  *     child-таблиц (`messages`/`session_references`/`checkpoints`/`sticky_notes`):
  *     `DELETE … WHERE session_id` + массовый `INSERT` (по чанкам);
+ *   - `appendMessage`/`updateMessage` — **точечные** операции над одной строкой
+ *     `messages` в транзакции под тем же per-session advisory-локом, без
+ *     перезаписи истории: append берёт `seq = MAX(seq)+1`, update целится по
+ *     `seq` (fallback — `id`) и не меняет `id`/`seq`/`created_at`; обе операции
+ *     обновляют `sessions.updated_at`;
  *   - `seq` сообщений — **позиционный**: при записи драйвер нормализует его по
  *     порядку массива `1..n`. Это снимает legacy-коллизию `UNIQUE (session_id, seq)`
  *     (у старых сессий у всех сообщений `seq = 0`) и делает порядок однозначным;
@@ -25,7 +30,8 @@
  *     тайбрейкером `created_at`, затем `id` (детерминированное чтение);
  *   - `listLight` — метаданные без истории (`messages`/`pendingMessages`/
  *     `checkpoints` пусты, child-таблицы не читаются): одна выборка из `sessions`
- *     тем же `WHERE`/порядком, что у `list`;
+ *     тем же `WHERE`/порядком, что у `list`; `loadLight` — та же проекция по
+ *     одному id (одна выборка по PK);
  *   - `list`/`listForUser*` сортируют `updated_at DESC`; архивированные сессии
  *     **не** отфильтровываются — это ответственность менеджера
  *     (`SessionManager.listSessions`, как и у файловой/memory реализаций);
@@ -40,11 +46,14 @@
  */
 
 import type { PostgresConnection, PostgresExecutor } from '../pool.js';
-import type { Session, SessionReference } from '@itphx/synth-shared';
+import { jsonbParam } from '../json-param.js';
+import type { Message, Session, SessionReference } from '@itphx/synth-shared';
+import { generateId, makeTextPart, nowISO } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository, StorageContext } from '@itphx/synth-core';
 import type { PortDeps } from './deps.js';
 import {
   checkpointRow,
+  deserializeMessage,
   deserializeReference,
   deserializeSession,
   deserializeSessionLight,
@@ -159,6 +168,29 @@ const MESSAGE_JSON_FIELDS: ReadonlySet<string> = new Set([
   'summary_of',
 ]);
 
+/**
+ * Колонки `messages`, которые заменяет `updateMessage`. Неизменяемые —
+ * суррогатный `message_uid` (PK), доменный `id`, `session_id`, позиционный
+ * `seq` и `created_at`: они сохраняются от исходной строки (цель ищется по
+ * `seq`, fallback по `id`).
+ */
+export const MESSAGE_MUTABLE_FIELDS = MESSAGE_FIELDS.filter(
+  (field) => field !== 'id' && field !== 'session_id' && field !== 'seq' && field !== 'created_at',
+);
+
+/** Обязательные поля сообщения: безопасные дефолты (паритет с file/memory). */
+function prepareMessage(message: Message): Message {
+  return {
+    ...message,
+    id: message.id || generateId(),
+    origin: message.origin || 'local',
+    parts: message.parts && message.parts.length > 0
+      ? message.parts
+      : [makeTextPart(message.content ?? '')],
+    createdAt: message.createdAt || nowISO(),
+  };
+}
+
 const REFERENCE_FIELDS = [
   'id',
   'session_id',
@@ -183,15 +215,16 @@ const NOTE_JSON_FIELDS: ReadonlySet<string> = new Set();
 /** Размер пакета строк в одном `INSERT` (лимит параметров протокола — 65535). */
 const INSERT_CHUNK_SIZE = 200;
 
-/** Значение для jsonb-колонки: нативный объект/массив → JSON-строка. */
-function jsonParam(value: unknown): string | null {
-  if (value === undefined || value === null) return null;
-  const json = JSON.stringify(value);
-  return json === undefined ? null : json;
+/** Значение для jsonb-колонки: нативный объект/массив → JSON-строка (NUL — вычищены). */
+export function jsonParam(value: unknown): string | null {
+  return jsonbParam(value);
 }
 
-/** Значения строки в порядке колонок (jsonb — сериализуются, `undefined` → `NULL`). */
-function rowValues(
+/**
+ * Значения строки в порядке колонок (jsonb — сериализуются, `undefined` → `NULL`).
+ * Экспортирован для unit-тестов сериализации (NUL не должен доходить до PG).
+ */
+export function rowValues(
   row: Record<string, unknown>,
   fields: readonly string[],
   jsonFields: ReadonlySet<string>,
@@ -376,6 +409,88 @@ export class PostgresSessionRepository implements SessionRepository {
     });
   }
 
+  /**
+   * Точечная дозапись сообщения (`SessionRepository.appendMessage`): одна
+   * транзакция + per-session advisory-лок (как у `save`), `seq = MAX(seq)+1`
+   * вычисляется в той же транзакции, `INSERT` одной строки, обновление
+   * `sessions.updated_at`. Остальная история не перезаписывается.
+   */
+  async appendMessage(sessionId: string, message: Message): Promise<Message | null> {
+    const prepared = prepareMessage(message);
+
+    return this._connection.withTransaction(async (tx) => {
+      await this._lockSession(tx, sessionId);
+
+      const present = await tx.query<{ present: boolean }>(
+        'SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1) AS present',
+        [sessionId],
+      );
+      if (present[0]?.present !== true) return null;
+
+      const next = await tx.query<{ seq: string | number }>(
+        'SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM messages WHERE session_id = $1',
+        [sessionId],
+      );
+      const seq = Number(next[0]?.seq ?? 1);
+
+      const row = messageRow(prepared, sessionId, seq);
+      const placeholders = MESSAGE_FIELDS.map((_, index) => `$${index + 1}`).join(', ');
+      const inserted = await tx.query<MessageRow>(
+        `INSERT INTO messages (${MESSAGE_FIELDS.join(', ')}) VALUES (${placeholders}) RETURNING *`,
+        rowValues(row, MESSAGE_FIELDS, MESSAGE_JSON_FIELDS),
+      );
+
+      await tx.query('UPDATE sessions SET updated_at = now() WHERE id = $1', [sessionId]);
+
+      const insertedRow = inserted[0];
+      return insertedRow ? deserializeMessage(insertedRow) : null;
+    });
+  }
+
+  /**
+   * Точечное обновление сообщения (`SessionRepository.updateMessage`): одна
+   * транзакция + per-session advisory-лок; цель — по `seq` (первая по
+   * `seq, created_at, id`), fallback по `id`. `message_uid`/`id`/`seq`/
+   * `created_at` исходной строки не меняются, `sessions.updated_at` обновляется.
+   */
+  async updateMessage(sessionId: string, message: Message): Promise<Message | null> {
+    const prepared = prepareMessage(message);
+    const row = messageRow(prepared, sessionId, prepared.seq);
+    const setSql = MESSAGE_MUTABLE_FIELDS
+      .map((field, index) => `${field} = $${index + 1}`)
+      .join(', ');
+    const params = rowValues(row, MESSAGE_MUTABLE_FIELDS, MESSAGE_JSON_FIELDS);
+
+    return this._connection.withTransaction(async (tx) => {
+      await this._lockSession(tx, sessionId);
+
+      const messageUid = await this._findMessageUid(tx, sessionId, prepared);
+      if (!messageUid) return null;
+
+      const updated = await tx.query<MessageRow>(
+        `UPDATE messages SET ${setSql} WHERE message_uid = $${params.length + 1} RETURNING *`,
+        [...params, messageUid],
+      );
+      await tx.query('UPDATE sessions SET updated_at = now() WHERE id = $1', [sessionId]);
+
+      const updatedRow = updated[0];
+      return updatedRow ? deserializeMessage(updatedRow) : null;
+    });
+  }
+
+  /**
+   * Метаданные сессии без истории (`SessionRepository.loadLight`): одна
+   * выборка по PK, child-таблицы не читаются.
+   */
+  async loadLight(sessionId: string): Promise<Session | null> {
+    const rows = await this._connection.query<SessionRow>(
+      'SELECT * FROM sessions WHERE id = $1',
+      [sessionId],
+    );
+    const row = rows[0];
+    return row ? deserializeSessionLight(row) : null;
+  }
+
   async delete(sessionId: string): Promise<void> {
     await this._connection.withTransaction(async (tx) => {
       await this._lockSession(tx, sessionId);
@@ -532,6 +647,36 @@ export class PostgresSessionRepository implements SessionRepository {
     for (const row of checkpoints) buckets.get(row.session_id)?.checkpoints.push(row);
     for (const row of notes) buckets.get(row.session_id)?.stickyNotes.push(row);
     return buckets;
+  }
+
+  /**
+   * `message_uid` цели `updateMessage`: сначала по `seq` (при legacy-дублях —
+   * первая по `seq, created_at, id`), затем fallback по доменному `id`.
+   */
+  private async _findMessageUid(
+    tx: PostgresExecutor,
+    sessionId: string,
+    message: Message,
+  ): Promise<string | null> {
+    if (Number.isFinite(message.seq)) {
+      const rows = await tx.query<{ message_uid: string }>(
+        'SELECT message_uid FROM messages WHERE session_id = $1 AND seq = $2 '
+          + 'ORDER BY seq, created_at, id LIMIT 1',
+        [sessionId, message.seq],
+      );
+      if (rows[0]) return rows[0].message_uid;
+    }
+
+    if (message.id) {
+      const rows = await tx.query<{ message_uid: string }>(
+        'SELECT message_uid FROM messages WHERE session_id = $1 AND id = $2 '
+          + 'ORDER BY seq, created_at, id LIMIT 1',
+        [sessionId, message.id],
+      );
+      if (rows[0]) return rows[0].message_uid;
+    }
+
+    return null;
   }
 
   /** PROP-032: per-session сериализация записи — транзакционный advisory-лок. */

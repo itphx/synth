@@ -1,8 +1,9 @@
 import { readFile, writeFile, rename, mkdir, unlink, access, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import type { Session, Message, SessionStatus, SessionSettings, Part, SessionOrigin, SessionReference, PromptState, PromptMeta } from '@itphx/synth-shared';
-import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey } from '@itphx/synth-shared';
+import { atomicWrite, safeJsonParse, AsyncLock, generateId, makeTextPart, buildContentFromParts, normalizeIconKey, normalizeColorKey, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type { SessionFilter, SessionRepository } from './ports/session-repository.js';
+import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from './message-write.js';
 
 export interface StorageConfig {
   dataDir: string;
@@ -434,22 +435,89 @@ export class FileStore implements SessionRepository {
   }
 
   async save(session: Session): Promise<void> {
-    const path = this._sessionPath(session.id);
     const lock = this._getLock(session.id);
 
     await lock.acquire();
     try {
-      await mkdir(dirname(path), { recursive: true });
-      const data = JSON.stringify(serializeSession(session), null, 2);
-      await atomicWrite(
-        (p, d) => writeFile(p, d, 'utf-8'),
-        (o, n) => rename(o, n),
-        path,
-        data,
-      );
+      await this._writeSession(session);
     } finally {
       lock.release();
     }
+  }
+
+  /**
+   * Запись сессии в файл. Вызывающий **уже держит** per-session лок: `save`
+   * берёт его сам, а точечные операции (`appendMessage`/`updateMessage`)
+   * вызывают этот помощник внутри своей критической секции (повторный
+   * `AsyncLock.acquire` не реентерабелен).
+   */
+  private async _writeSession(session: Session): Promise<void> {
+    const path = this._sessionPath(session.id);
+    await mkdir(dirname(path), { recursive: true });
+    // U+0000 несовместим с PostgreSQL-драйвером; чистим на границе порта,
+    // чтобы file/memory/postgres вели себя одинаково (контракт сессий).
+    const data = JSON.stringify(serializeSession(stripNullBytesDeep(session)), null, 2);
+    await atomicWrite(
+      (p, d) => writeFile(p, d, 'utf-8'),
+      (o, n) => rename(o, n),
+      path,
+      data,
+    );
+  }
+
+  /**
+   * Точечная дозапись сообщения (порт `SessionRepository.appendMessage`):
+   * один JSON-файл перезаписывается под тем же per-session локом, что `save`,
+   * но без полной замены истории (append в конец массива).
+   */
+  async appendMessage(sessionId: string, message: Message): Promise<Message | null> {
+    const lock = this._getLock(sessionId);
+    await lock.acquire();
+    try {
+      const session = await this.load(sessionId);
+      if (!session) return null;
+      const stored = prepareMessageForAppend(session, message);
+      session.messages.push(stored);
+      session.updatedAt = nowISO();
+      await this._writeSession(session);
+      return stored;
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Точечное обновление сообщения (порт `SessionRepository.updateMessage`):
+   * цель — по `seq`, fallback по `id`; `id`/`seq`/`createdAt` исходной записи
+   * сохраняются, остальные изменяемые поля заменяются.
+   */
+  async updateMessage(sessionId: string, message: Message): Promise<Message | null> {
+    const lock = this._getLock(sessionId);
+    await lock.acquire();
+    try {
+      const session = await this.load(sessionId);
+      if (!session) return null;
+      const index = findMessageIndex(session.messages, message);
+      if (index < 0) return null;
+      const updated = prepareMessageForUpdate(session.messages[index]!, message);
+      session.messages[index] = updated;
+      session.updatedAt = nowISO();
+      await this._writeSession(session);
+      return updated;
+    } finally {
+      lock.release();
+    }
+  }
+
+  /**
+   * Метаданные без истории (порт `SessionRepository.loadLight`). Файловая
+   * реализация всё равно разбирает JSON, но сообщения не десериализуются.
+   */
+  async loadLight(sessionId: string): Promise<Session | null> {
+    const session = await this.load(sessionId);
+    return session
+      ? { ...session, messages: [], pendingMessages: [], checkpoints: [] }
+      : null;
   }
 
   async delete(sessionId: string): Promise<void> {

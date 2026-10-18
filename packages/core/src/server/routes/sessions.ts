@@ -17,6 +17,8 @@ import type { ScopeGuardFactory, ServiceProjectProjectionGuard } from '../servic
 import { createSessionAccessGuard, createSessionAccessPredicate } from '../session-access-guard.js';
 import type { SessionAccessKind } from '../session-access-guard.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
+import type { AnalyticsRecorder } from '../../analytics/recorder.js';
+import { sessionAxes } from '../../analytics/recorder.js';
 
 const LOCAL_USER_ID = 'local';
 
@@ -49,6 +51,11 @@ export interface SessionRoutesDeps {
    * не задан — прежний прямой `SessionManager.createSession` (fallback).
    */
   requestSessionService?: RequestSessionService;
+  /**
+   * PROP-102: сборщик аналитики — меры `activity` (`aborts`) из роутов сессий.
+   * Не задан — запись не выполняется.
+   */
+  analytics?: AnalyticsRecorder;
 }
 
 /** Локализуемые сообщения: backend передаёт t(), core — русские литералы по умолчанию. */
@@ -205,6 +212,8 @@ export function createSessionRoutes(
 ): Hono {
   const app = new Hono();
   const { sessionManager, eventBus, queueManager, processMessage, orchestrator } = deps;
+  /** PROP-102: сборщик `activity` (aborts) — не задан → no-op. */
+  const analytics = deps.analytics;
   const agentRegistry = orchestrator.agentRegistry;
 
   const resolveClient = (): RemoteBackendClient | undefined => deps.getRemoteClient?.() ?? undefined;
@@ -839,6 +848,8 @@ export function createSessionRoutes(
         await sessionManager.saveSession(s);
       });
     }
+    // PROP-102: мера `activity.aborts` — на осях `user`/`project` сессии.
+    void analytics?.recordActivity('aborts', sessionAxes(session));
     return c.json({ status: 'aborted' });
   });
 

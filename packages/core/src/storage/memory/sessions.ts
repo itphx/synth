@@ -13,9 +13,9 @@
  * случайной мутации по ссылке.
  */
 
-import type { ProfileData, Project, Session, SessionReference } from '@itphx/synth-shared';
+import type { Message, ProfileData, Project, Session, SessionReference } from '@itphx/synth-shared';
 import type { CreateProfileParams, ExternalIdentity } from '@itphx/synth-shared';
-import { ProjectRole, generateId, normalizeColorKey, normalizeIconKey, nowISO } from '@itphx/synth-shared';
+import { ProjectRole, generateId, normalizeColorKey, normalizeIconKey, nowISO, stripNullBytesDeep } from '@itphx/synth-shared';
 import type {
   CreateProjectData,
   ProfileRepository,
@@ -23,6 +23,7 @@ import type {
   SessionFilter,
   SessionRepository,
 } from '../ports/index.js';
+import { findMessageIndex, prepareMessageForAppend, prepareMessageForUpdate } from '../message-write.js';
 
 /** Порт хранилища сессий поверх `Map` (семантика `FileStore`). */
 export class MemorySessionRepository implements SessionRepository {
@@ -43,7 +44,49 @@ export class MemorySessionRepository implements SessionRepository {
   }
 
   async save(session: Session): Promise<void> {
-    this._sessions.set(session.id, structuredClone(session));
+    // U+0000 несовместим с PostgreSQL-драйвером; чистим на границе порта,
+    // чтобы file/memory/postgres вели себя одинаково (контракт сессий).
+    this._sessions.set(session.id, structuredClone(stripNullBytesDeep(session)));
+  }
+
+  /**
+   * Точечная дозапись сообщения (порт `SessionRepository.appendMessage`).
+   * Операция синхронная (над `Map`) — гонок нет, лок не нужен.
+   */
+  async appendMessage(sessionId: string, message: Message): Promise<Message | null> {
+    const session = this._sessions.get(sessionId);
+    if (!session) return null;
+    const stored = prepareMessageForAppend(session, message);
+    session.messages.push(structuredClone(stored));
+    session.updatedAt = nowISO();
+    return structuredClone(stored);
+  }
+
+  /**
+   * Точечное обновление сообщения (порт `SessionRepository.updateMessage`):
+   * цель — по `seq`, fallback по `id`; неизменяемые поля исходной записи
+   * (`id`/`seq`/`createdAt`) сохраняются.
+   */
+  async updateMessage(sessionId: string, message: Message): Promise<Message | null> {
+    const session = this._sessions.get(sessionId);
+    if (!session) return null;
+    const index = findMessageIndex(session.messages, message);
+    if (index < 0) return null;
+    const updated = prepareMessageForUpdate(session.messages[index]!, message);
+    session.messages[index] = structuredClone(updated);
+    session.updatedAt = nowISO();
+    return structuredClone(updated);
+  }
+
+  /** Метаданные без истории (порт `SessionRepository.loadLight`). */
+  async loadLight(sessionId: string): Promise<Session | null> {
+    const session = this._sessions.get(sessionId);
+    if (!session) return null;
+    const clone = this._normalize(session);
+    clone.messages = [];
+    clone.pendingMessages = [];
+    clone.checkpoints = [];
+    return clone;
   }
 
   async delete(sessionId: string): Promise<void> {

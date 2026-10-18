@@ -10,6 +10,7 @@
 import type { ScheduleRunUpdate, JobListOptions, StorageContext } from '@itphx/synth-core';
 import { type Schedule, type ScheduleInput, type ScheduleJob, generateId } from '@itphx/synth-shared';
 import type { PortDeps } from './deps.js';
+import { jsonbParam } from '../json-param.js';
 import { compact, toInt, toIso, toIsoRequired } from './events-core.js';
 
 /** Часть `StorageContext`, которой владеет под-группа планировщика. */
@@ -109,9 +110,9 @@ export class PgScheduleRepository {
         input.enabled,
         input.cron ?? null,
         input.every ?? null,
-        JSON.stringify(input.target ?? {}),
+        jsonbParam(input.target ?? {}),
         input.prompt ?? null,
-        input.payload !== undefined ? JSON.stringify(input.payload) : null,
+        input.payload !== undefined ? jsonbParam(input.payload) : null,
         input.ownerId ?? null,
         input.catchUp ?? null,
         now,
@@ -142,7 +143,7 @@ export class PgScheduleRepository {
       sets.push(`every = $${params.length}`);
     }
     if (patch.target !== undefined) {
-      params.push(JSON.stringify(patch.target));
+      params.push(jsonbParam(patch.target));
       sets.push(`target = $${params.length}::jsonb`);
     }
     if (patch.prompt !== undefined) {
@@ -150,7 +151,7 @@ export class PgScheduleRepository {
       sets.push(`prompt = $${params.length}`);
     }
     if (patch.payload !== undefined) {
-      params.push(JSON.stringify(patch.payload));
+      params.push(jsonbParam(patch.payload));
       sets.push(`payload = $${params.length}::jsonb`);
     }
     if (patch.ownerId !== undefined) {
@@ -261,7 +262,7 @@ export class PgJobRepository {
         job.startedAt,
         job.finishedAt,
         job.durationMs,
-        JSON.stringify(job.target ?? {}),
+        jsonbParam(job.target ?? {}),
         job.dedupKey ?? null,
         job.decision ?? null,
         job.reason ?? null,

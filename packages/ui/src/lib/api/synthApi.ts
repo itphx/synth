@@ -32,6 +32,7 @@ import { schedulesApi } from './schedules'
 import { serviceKeysApi } from './service-keys'
 import { webhooksApi } from './webhooks'
 import { maintenanceApi } from './maintenance'
+import { analyticsApi } from './analytics'
 import { logsApi } from './logs'
 import { egressApi } from './egress'
 import { proxyApi } from './proxy'
@@ -160,6 +161,16 @@ export type {
   DecisionModelMetrics,
   DecisionMetrics,
 } from './decision'
+export type {
+  AnalyticsQuery,
+  AnalyticsExportQuery,
+  AnalyticsExportFile,
+  AnalyticsDimension,
+  AnalyticsExportFormat,
+  AnalyticsReport,
+  AnalyticsReportKind,
+  AnalyticsSummary,
+} from './analytics'
 export type { HybridStatus } from './hybrid'
 export type {
   MaintenanceStatus,
@@ -224,6 +235,7 @@ export const synthApi = {
   ...serviceKeysApi,
   ...webhooksApi,
   ...maintenanceApi,
+  ...analyticsApi,
   ...logsApi,
   ...egressApi,
   ...proxyApi,

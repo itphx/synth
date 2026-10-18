@@ -22,6 +22,7 @@ import type {
   DecisionProviderResolver,
 } from '../router/micro/models/decision-model.js';
 import { decideChoiceCascade } from '../router/decision-cascade.js';
+import type { AnalyticsRecorder } from '../../analytics/recorder.js';
 import { info } from '../../logger.js';
 import { eventToMessageText } from './request-session.js';
 import { decisionFromTarget } from './target-decision.js';
@@ -56,6 +57,8 @@ export interface DecisionRuleProviderDeps {
   getDecisionConfig: () => DecisionConfigLike | undefined;
   /** Enabled-шаблоны агентов для `criteria` decision-вопроса. */
   getAgentCandidates: () => DecisionAgentCandidate[];
+  /** PROP-102: сборщик decision-роллапов (персистентные метрики ADR-084). */
+  analytics?: AnalyticsRecorder;
 }
 
 export class DecisionRuleProvider implements RouteRuleProvider {
@@ -65,12 +68,14 @@ export class DecisionRuleProvider implements RouteRuleProvider {
   private readonly _getEventsConfig: DecisionRuleProviderDeps['getEventsConfig'];
   private readonly _getDecisionConfig: DecisionRuleProviderDeps['getDecisionConfig'];
   private readonly _getAgentCandidates: DecisionRuleProviderDeps['getAgentCandidates'];
+  private readonly _analytics?: AnalyticsRecorder;
 
   constructor(deps: DecisionRuleProviderDeps) {
     this._resolver = deps.resolver;
     this._getEventsConfig = deps.getEventsConfig;
     this._getDecisionConfig = deps.getDecisionConfig;
     this._getAgentCandidates = deps.getAgentCandidates;
+    this._analytics = deps.analytics;
   }
 
   async resolve({ event }: RouteRuleInput): Promise<RouteDecision | null> {
@@ -99,6 +104,7 @@ export class DecisionRuleProvider implements RouteRuleProvider {
       questionId: DECISION_ROUTING_QUESTION_ID,
       validate: (id) => candidates.some((c) => c.id === id),
       logLabel: 'маршрутизация события',
+      ...(this._analytics ? { analytics: this._analytics } : {}),
     });
 
     if (!outcome.accepted || !outcome.label) return null;

@@ -90,6 +90,8 @@ export interface BackendAppHandle {
   stopEphemeralSweeper: () => void;
   /** ADR-089: остановка периодической retention-очистки журнала событий. */
   stopEventJournalPruner: () => void;
+  /** PROP-102: остановка retention-очистки суточных роллапов аналитики. */
+  stopAnalyticsRollupPruner: () => void;
   /** ADR-052 (этап II): реестр подписок webhooks (для тестов/диагностики). */
   webhookStore: WebhookRepository;
   /** ADR-052 (этап II): движок исходящих webhooks. */
@@ -306,6 +308,7 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
       stopScheduler: () => deps.schedulerService.stop(),
       stopEphemeralSweeper: deps.stopEphemeralSweeper,
       stopEventJournalPruner: deps.stopEventJournalPruner,
+      stopAnalyticsRollupPruner: deps.stopAnalyticsRollupPruner,
       // ADR-052 (этап II): реестр подписок и движок webhooks + остановка на shutdown.
       webhookStore: deps.webhookStore,
       webhookService: deps.webhookService,

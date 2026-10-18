@@ -63,13 +63,13 @@ backend с JSON + атомарной записью ([ADR-005](./adr-005-json-st
 
 Модули слоя:
 
-- `storage/ports/*` — доменные порты (27) + barrel `index.ts`; `DocumentRepository<T>` — конфиг-словари.
+- `storage/ports/*` — доменные порты (30) + barrel `index.ts`; `DocumentRepository<T>` — конфиг-словари.
 - `storage/memory/*` — in-memory реализации (сессии, проекты, профили, события, секреты, контент, …).
 - `storage/contract/*` — контрактный suite («паспорт» порта); `file`- и `memory`-реализации, а также драйвер `postgres` (`storage/contract/postgres.test.ts`, гейт env `SYNTH_TEST_POSTGRES_DSN`) прогоняются им.
 - `storage/storage-context.ts` — `StorageContext` (в т.ч. опциональные `close?`/`locks?`/`health?`/`schemaMigrations?`/`purgeSchema?`/`degraded?`) + `createFileStorage`/`createMemoryStorage`/`createStorageContext` и **async-каскад** `createStorageContextAsync`/`buildStorageContext`; деградация — [ADR-098](./adr-098-storage-degraded-recovery.md).
 - `storage/file-blob-store.ts` — `FileBlobStore` (порт `BlobStore`); `storage/defaults-store.ts` —
   `DefaultsStore` (перенесён в core; backend оставляет реэкспорт).
-- **Драйвер БД** — опциональный in-tree пакет `@itphx/synth-storage-postgres` (`peer-dep` core, `pg` — optional, ленивый `import()`): реализует все 27 портов поверх SQL ([ADR-097](./adr-097-storage-provider-class.md)/[PROP-032](./prop-032-history-storage-postgresql.md)).
+- **Драйвер БД** — опциональный in-tree пакет `@itphx/synth-storage-postgres` (`peer-dep` core, `pg` — optional, ленивый `import()`): реализует все 30 портов поверх SQL ([ADR-097](./adr-097-storage-provider-class.md)/[PROP-032](./prop-032-history-storage-postgresql.md)).
 
 Точки сборки (composition root): `packages/core/src/server/app/deps.ts` → `createStandaloneStorage`
 (строится до `auth` — реестр `serviceKeys` нужен резолверу ключа); `packages/backend/src/app/deps.ts` →

@@ -34,15 +34,19 @@ import { useDevice } from '@/hooks/useDevice'
 import { useViewportHeight } from '@/hooks/useViewportHeight'
 
 /**
- * Тяжёлые модалки (настройки+админка ≈ 0.8 МБ, логи и аудит) грузятся лениво: в
- * entry-граф их код не входит, чанк подтягивается при первом открытии (и прогревается
- * в простое — см. эффект в `App`), см. `useMountedOnce`.
+ * Тяжёлые модалки (настройки+админка ≈ 0.8 МБ, логи и аудит, аналитика и
+ * отчёты) грузятся лениво: в entry-граф их код не входит, чанк подтягивается при
+ * первом открытии (и прогревается в простое — см. эффект в `App`), см.
+ * `useMountedOnce`.
  */
 const LazySettingsModal = lazy(() =>
   import('./components/settings/SettingsModal').then((m) => ({ default: m.SettingsModal })),
 )
 const LazyLogsModal = lazy(() =>
   import('./components/logviewer/LogsModal').then((m) => ({ default: m.LogsModal })),
+)
+const LazyAnalyticsModal = lazy(() =>
+  import('./components/analytics/AnalyticsModal').then((m) => ({ default: m.AnalyticsModal })),
 )
 
 function SettingsModal() {
@@ -57,6 +61,14 @@ function LogsModal() {
   return (
     <Suspense fallback={null}>
       <LazyLogsModal />
+    </Suspense>
+  )
+}
+
+function AnalyticsModal() {
+  return (
+    <Suspense fallback={null}>
+      <LazyAnalyticsModal />
     </Suspense>
   )
 }
@@ -130,8 +142,10 @@ function App() {
   const setSettingsPage = useUIStore(s => s.setSettingsPage)
   const isSettingsDialogOpen = useUIStore(s => s.isSettingsDialogOpen)
   const isLogsDialogOpen = useUIStore(s => s.isLogsDialogOpen)
+  const isAnalyticsDialogOpen = useUIStore(s => s.isAnalyticsDialogOpen)
   const settingsModalMounted = useMountedOnce(isSettingsDialogOpen)
   const logsModalMounted = useMountedOnce(isLogsDialogOpen)
+  const analyticsModalMounted = useMountedOnce(isAnalyticsDialogOpen)
   const leftPanelTab = useUIStore(s => s.leftPanelTab)
   const mobileLeftOpen = useUIStore(s => s.mobileLeftOpen)
   const mobileRightOpen = useUIStore(s => s.mobileRightOpen)
@@ -197,6 +211,7 @@ function App() {
     const warm = () => {
       void import('./components/settings/SettingsModal')
       void import('./components/logviewer/LogsModal')
+      void import('./components/analytics/AnalyticsModal')
     }
     const idle = window.requestIdleCallback?.bind(window)
     if (!idle) {
@@ -288,6 +303,7 @@ function App() {
               чтобы закрытие анимировалось; `open` управляется стором). */}
           {settingsModalMounted && <SettingsModal />}
           {logsModalMounted && <LogsModal />}
+          {analyticsModalMounted && <AnalyticsModal />}
           <EntityEditDialog />
         </TooltipProvider>
 

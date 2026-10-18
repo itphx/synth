@@ -5,6 +5,8 @@ import { t as sm } from '../engine/system-messages.js';
 import type { EventBus } from '../events/bus.js';
 import type { ContextOptimizer } from '../engine/context/optimizer.js';
 import { isLlmErrorRecoverable, LLM_MAX_ATTEMPTS, LLM_RETRY_DELAYS_MS } from '../engine/llm-error.js';
+import type { AnalyticsRecorder } from '../analytics/recorder.js';
+import { sessionAxes } from '../analytics/recorder.js';
 
 const MAX_PENDING = 5;
 
@@ -35,6 +37,12 @@ export class QueueProcessor {
   private _activeController: AbortController | null = null;
   private _backoffTimer: ReturnType<typeof setTimeout> | null = null;
   private _backoffResolver: (() => void) | null = null;
+  /**
+   * Шаг 2б: восстановление «зависших» после падения/рестарта сообщений
+   * выполняется один раз на инстанс процессора (до первой установки
+   * `currentStream`), best-effort.
+   */
+  private _streamRecoveryDone = false;
 
   constructor(
     private sessionId: string,
@@ -42,6 +50,8 @@ export class QueueProcessor {
     private eventBus: EventBus,
     private processMessage: ProcessMessageFn,
     private contextOptimizer?: ContextOptimizer,
+    /** PROP-102: сборщик аналитики — точка персиста пользовательского сообщения. */
+    private analytics?: AnalyticsRecorder,
   ) {}
 
   get isRunning(): boolean {
@@ -195,6 +205,19 @@ export class QueueProcessor {
   }
 
   private async _run(): Promise<void> {
+    // Шаг 2б: после падения/рестарта в истории могли остаться черновики
+    // частичного стрима (`metadata.streaming`) и assistant(tool_calls) без пары.
+    // Чиним один раз на инстанс процессора, до установки нового `currentStream`;
+    // сбой recovery не должен ломать очередь.
+    if (!this._streamRecoveryDone) {
+      this._streamRecoveryDone = true;
+      try {
+        await this.sessionManager.recoverStreamingMessages(this.sessionId);
+      } catch {
+        // best-effort
+      }
+    }
+
     while (!this._cancelled) {
       let session: Session | null;
 
@@ -308,6 +331,8 @@ export class QueueProcessor {
             agent_role: message.agentRole,
             metadata: message.metadata || undefined,
           });
+          // PROP-102: точка персиста пользовательского сообщения (ось `user`).
+          void this.analytics?.recordActivity('messages_user', sessionAxes(session));
         }
 
         this.eventBus.publish(this.sessionId, 'stream.start', {
@@ -526,9 +551,16 @@ export class QueueProcessor {
 export class QueueProcessorManager {
   private _processors = new Map<string, QueueProcessor>();
   private _contextOptimizer?: ContextOptimizer;
+  /** PROP-102: сборщик аналитики — прокидывается в создаваемые процессоры. */
+  private _analytics?: AnalyticsRecorder;
 
   setContextOptimizer(optimizer: ContextOptimizer): void {
     this._contextOptimizer = optimizer;
+  }
+
+  /** PROP-102: включить запись `activity` из точек персиста сообщений. */
+  setAnalytics(analytics: AnalyticsRecorder | undefined): void {
+    this._analytics = analytics;
   }
 
   createProcessor(
@@ -540,7 +572,14 @@ export class QueueProcessorManager {
     const existing = this._processors.get(sessionId);
     if (existing && existing.isRunning) return existing;
 
-    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, processMessage, this._contextOptimizer);
+    const processor = new QueueProcessor(
+      sessionId,
+      sessionManager,
+      eventBus,
+      processMessage,
+      this._contextOptimizer,
+      this._analytics,
+    );
     this._processors.set(sessionId, processor);
 
     processor.start().catch((err) => {

@@ -25,7 +25,8 @@ const EXPECTED_API_METHODS = [
   'deleteTlsMapping', 'deleteUser', 'deleteWebhookSubscription', 'downloadFile', 'enqueueMessage',
   'fetchGitRepo', 'fetchJSON', 'fetchModels', 'fetchProviderIcon',
   'forkRemoteProject', 'forkSession', 'getAgentDetail', 'getAgents',
-  'getAllAgents', 'getAudit', 'getCommands', 'getCommitDetail',
+  'getAllAgents', 'getAnalyticsActivity', 'getAnalyticsDecision', 'getAnalyticsExport', 'getAnalyticsPrompt',
+  'getAnalyticsSummary', 'getAnalyticsUsage', 'getAudit', 'getCommands', 'getCommitDetail',
   'getCommitLog', 'getContextFile', 'getContextFiles', 'getDebugConfig',
   'getDecisionMetrics', 'getDecisionSettings', 'getDefaultAgentInfo', 'getDefaultModel', 'getDictionaries',
   'getDictionary', 'getDoctor', 'getEgressLog', 'getEgressPolicy', 'getEventBindingKeys', 'getEventJournal', 'getEventRoutes',
@@ -70,7 +71,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (273)', () => {
+  it('набор методов совпадает с зафиксированным (279)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

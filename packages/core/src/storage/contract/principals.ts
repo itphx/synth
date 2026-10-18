@@ -5,7 +5,7 @@ import type {
   SessionRepository,
   SettingsRepository,
 } from '../ports/index.js';
-import { ProjectRole } from '@itphx/synth-shared';
+import { MessageRole, ProjectRole } from '@itphx/synth-shared';
 import { makeProfile, makeProject, makeSession, makeMessage } from './helpers.js';
 
 /** Паспорт порта `SessionRepository`: round-trip, список, видимость, поиск, сортировка. */
@@ -49,6 +49,166 @@ export function describeSessionRepository(
         'legacy-second',
         'legacy-third',
       ]);
+    });
+
+    it('U+0000 в сообщении не сохраняется (NUL несовместим с PostgreSQL)', async () => {
+      const { repo } = await make();
+      const message = {
+        ...makeMessage('before\u0000after'),
+        metadata: { note: 'm\u0000', nested: ['n\u0000'] },
+      };
+      await repo.save(makeSession({ id: 'nul', messages: [message] }));
+
+      const loaded = await repo.load('nul');
+      expect(loaded?.messages).toHaveLength(1);
+      expect(loaded?.messages[0]?.content).toBe('beforeafter');
+      expect(loaded?.messages[0]?.metadata).toEqual({ note: 'm', nested: ['n'] });
+      // Ни реального NUL, ни JSON-escape `\u0000` в прочитанной сессии.
+      expect(JSON.stringify(loaded)).not.toContain('\\u0000');
+    });
+
+    it('appendMessage: seq = max+1, сообщение видно в load, updatedAt обновился, соседние не тронуты', async () => {
+      const { repo } = await make();
+      const first = { ...makeMessage('first'), seq: 1 };
+      const second = { ...makeMessage('second'), seq: 2 };
+      await repo.save(makeSession({
+        id: 'append-target',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [first, second],
+      }));
+
+      // id/seq намеренно пустые: порт обязан назначить их сам.
+      const appended = await repo.appendMessage('append-target', {
+        ...makeMessage('third'),
+        id: '',
+        seq: 0,
+      });
+      expect(appended).not.toBeNull();
+      expect(appended!.id).toBeTruthy();
+      expect(appended!.seq).toBe(3);
+      expect(appended!.origin).toBe('local');
+      expect(appended!.content).toBe('third');
+
+      const loaded = await repo.load('append-target');
+      expect(loaded!.messages.map((m) => m.content)).toEqual(['first', 'second', 'third']);
+      expect(loaded!.messages[0]).toMatchObject({ id: first.id, seq: 1, content: 'first' });
+      expect(loaded!.messages[1]).toMatchObject({ id: second.id, seq: 2, content: 'second' });
+      expect(loaded!.messages[2]!.id).toBe(appended!.id);
+      expect(loaded!.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('appendMessage в несуществующую сессию → null', async () => {
+      const { repo } = await make();
+      expect(await repo.appendMessage('missing-session', makeMessage('orphan'))).toBeNull();
+    });
+
+    it('updateMessage по seq: меняется только цель, id/seq/createdAt сохраняются, updatedAt сессии обновился', async () => {
+      const { repo } = await make();
+      const first = { ...makeMessage('first'), seq: 1, metadata: { keep: true } };
+      const second = {
+        ...makeMessage('second'),
+        seq: 2,
+        createdAt: '2024-02-02T00:00:00.000Z',
+      };
+      await repo.save(makeSession({
+        id: 'update-target',
+        updatedAt: '2024-01-01T00:00:00.000Z',
+        messages: [first, second],
+      }));
+
+      const updated = await repo.updateMessage('update-target', {
+        ...makeMessage('second-updated'),
+        // Чужой id и «будущий» createdAt не должны перебить исходную запись.
+        id: 'not-the-target-id',
+        seq: 2,
+        createdAt: '2030-01-01T00:00:00.000Z',
+        role: MessageRole.ASSISTANT,
+        metadata: { changed: true },
+      });
+      expect(updated).not.toBeNull();
+      expect(updated!.id).toBe(second.id);
+      expect(updated!.seq).toBe(2);
+      expect(updated!.createdAt).toBe('2024-02-02T00:00:00.000Z');
+      expect(updated!.role).toBe(MessageRole.ASSISTANT);
+      expect(updated!.content).toBe('second-updated');
+
+      const loaded = await repo.load('update-target');
+      expect(loaded!.messages).toHaveLength(2);
+      expect(loaded!.messages[0]).toMatchObject({
+        id: first.id,
+        seq: 1,
+        content: 'first',
+        metadata: { keep: true },
+      });
+      expect(loaded!.messages[1]).toMatchObject({
+        id: second.id,
+        seq: 2,
+        content: 'second-updated',
+        metadata: { changed: true },
+      });
+      expect(loaded!.messages[1]!.createdAt).toBe('2024-02-02T00:00:00.000Z');
+      expect(loaded!.updatedAt).not.toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('updateMessage несуществующего сообщения/сессии → null', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({ id: 'update-missing', messages: [{ ...makeMessage('base'), seq: 1 }] }));
+
+      expect(await repo.updateMessage('update-missing', {
+        ...makeMessage('ghost'),
+        id: 'ghost-id',
+        seq: 99,
+      })).toBeNull();
+      expect(await repo.updateMessage('missing-session', makeMessage('ghost'))).toBeNull();
+    });
+
+    it('append/update: U+0000 в content/metadata не сохраняется', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'nul-write',
+        messages: [{ ...makeMessage('base'), seq: 1 }],
+      }));
+
+      const appended = await repo.appendMessage('nul-write', {
+        ...makeMessage('a\u0000b'),
+        metadata: { note: 'm\u0000', nested: ['n\u0000'] },
+      });
+      expect(appended).not.toBeNull();
+
+      const updated = await repo.updateMessage('nul-write', {
+        ...makeMessage('c\u0000d'),
+        seq: 1,
+        metadata: { note: 'u\u0000' },
+      });
+      expect(updated).not.toBeNull();
+
+      const loaded = await repo.load('nul-write');
+      expect(loaded!.messages).toHaveLength(2);
+      expect(loaded!.messages[0]!.content).toBe('cd');
+      expect(loaded!.messages[0]!.metadata).toEqual({ note: 'u' });
+      expect(loaded!.messages[1]!.content).toBe('ab');
+      expect(loaded!.messages[1]!.metadata).toEqual({ note: 'm', nested: ['n'] });
+      // Ни реального NUL, ни JSON-escape `\u0000` в прочитанной сессии.
+      expect(JSON.stringify(loaded)).not.toContain('\\u0000');
+    });
+
+    it('loadLight: метаданные без истории; отсутствующая → null', async () => {
+      const { repo } = await make();
+      await repo.save(makeSession({
+        id: 'light',
+        title: 'meta',
+        messages: [makeMessage('history')],
+        pendingMessages: [makeMessage('pending')],
+        checkpoints: [{ id: 'cp', sessionId: 'light', messages: [makeMessage('cp-msg')], createdAt: '2024-01-01T00:00:00.000Z' }],
+      }));
+
+      const light = await repo.loadLight('light');
+      expect(light).not.toBeNull();
+      expect(light!.title).toBe('meta');
+      expect(light!.messages).toEqual([]);
+      expect(light!.pendingMessages).toEqual([]);
+      expect(light!.checkpoints).toEqual([]);
+      expect(await repo.loadLight('missing')).toBeNull();
     });
 
     it('list не теряет записи и сортирует по updatedAt desc', async () => {

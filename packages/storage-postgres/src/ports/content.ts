@@ -81,6 +81,7 @@ import type {
   StoredDictionary,
 } from '@itphx/synth-core';
 import type { PostgresExecutor } from '../pool.js';
+import { jsonbParam } from '../json-param.js';
 import { PostgresUniqueViolationError } from '../errors.js';
 import { readSchemaVersion } from '../migrate.js';
 import type { PortDeps } from './deps.js';
@@ -161,7 +162,7 @@ function asRoles(value: unknown): GlobalRole[] {
 
 /** Параметр jsonb: сериализуем сами (pg сериализует массивы как Postgres-массивы). */
 function jsonParam(value: unknown): string {
-  return JSON.stringify(value);
+  return jsonbParam(value) ?? 'null';
 }
 
 /** Upsert ключа `settings(key, value jsonb)`. */

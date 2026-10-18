@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PostgresStorageSchemaError } from './errors.js';
 import { assertSchemaCurrent, readSchemaVersion, runMigrations } from './migrate.js';
+import { MIGRATIONS, latestSchemaVersion } from './migrations/index.js';
 import { createPostgresConnection, type PostgresConnection } from './pool.js';
 import { createPostgresStorage } from './postgres-storage.js';
 
@@ -49,9 +50,9 @@ describePg('PostgreSQL-драйвер: smoke (подключение, мигра
 
   it('применяет миграции и записывает версию схемы', async () => {
     const result = await runMigrations(conn, { schema });
-    expect(result.applied).toEqual([1]);
-    expect(result.version).toBe(1);
-    expect(await readSchemaVersion(conn, schema)).toBe(1);
+    expect(result.applied).toEqual(MIGRATIONS.map((m) => m.version));
+    expect(result.version).toBe(latestSchemaVersion(MIGRATIONS));
+    expect(await readSchemaVersion(conn, schema)).toBe(latestSchemaVersion(MIGRATIONS));
   });
 
   it('создаёт таблицы схемы (sessions/messages/… через information_schema)', async () => {
@@ -65,6 +66,7 @@ describePg('PostgreSQL-драйвер: smoke (подключение, мигра
     expect(names).toContain('messages');
     expect(names).toContain('projects');
     expect(names).toContain('service_keys');
+    expect(names).toContain('analytics_rollups');
     expect(names).toContain('synth_schema_migrations');
   });
 
@@ -72,7 +74,7 @@ describePg('PostgreSQL-драйвер: smoke (подключение, мигра
     await runMigrations(conn, { schema });
     const again = await runMigrations(conn, { schema });
     expect(again.applied).toEqual([]);
-    expect(await readSchemaVersion(conn, schema)).toBe(1);
+    expect(await readSchemaVersion(conn, schema)).toBe(latestSchemaVersion(MIGRATIONS));
   });
 
   it('fail-closed: версия схемы в БД новее ожидаемой', async () => {

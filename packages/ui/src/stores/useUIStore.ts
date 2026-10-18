@@ -103,6 +103,10 @@ interface UIStore {
   logsPage: string
   setLogsPage: (page: string) => void
 
+  /** PROP-102: модальное окно «Аналитика и отчёты» (открытие — меню пользователя / правая панель). */
+  isAnalyticsDialogOpen: boolean
+  setAnalyticsDialogOpen: (open: boolean) => void
+
   forwardMode: ForwardModeState
   enterForwardMode: (sourceSessionId: string, sourceIndices: number[], mode: 'forward' | 'merge') => void
   cancelForwardMode: () => void
@@ -253,6 +257,9 @@ export const useUIStore = create<UIStore>()(
       setLogsDialogOpen: (open) => set({ isLogsDialogOpen: open }),
       logsPage: 'core',
       setLogsPage: (page) => set({ logsPage: page }),
+
+      isAnalyticsDialogOpen: false,
+      setAnalyticsDialogOpen: (open) => set({ isAnalyticsDialogOpen: open }),
 
       forwardMode: {
         active: false,

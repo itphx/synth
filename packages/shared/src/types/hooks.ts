@@ -28,12 +28,40 @@ export interface HookResult {
   patch?: Record<string, unknown>;
 }
 
+/**
+ * PROP-102: оси атрибуции для сборщиков аналитики (`user`/`project`) — заполняются
+ * на месте эмита, где значения уже под рукой (без чтения сессии в подписчике).
+ * Необязательны: без них подписчик резолвит сессию по id (если она ещё есть).
+ */
+export interface HookAnalyticsAxes {
+  /** Владелец/пользователь сессии (`Session.userId`), ось `user`. */
+  userId?: string;
+  /** Проект сессии (`Session.projectId`), ось `project`. */
+  projectId?: string;
+}
+
 /** ADR-030: карта контекста по имени хука (минимально необходимые поля). */
 export interface HookContextMap {
   pre_tool_use: { tool: string; input: unknown; agent?: string };
-  post_tool_use: { tool: string; input: unknown; output?: unknown; duration: number };
-  session_start: { sessionId: string; projectId?: string; agent?: string };
-  session_end: { sessionId: string; summary?: string };
+  post_tool_use: {
+    tool: string;
+    input: unknown;
+    output?: unknown;
+    duration: number;
+    /** PROP-102: сессия вызова и оси атрибуции активности (ADR-030). */
+    sessionId?: string;
+    userId?: string;
+    projectId?: string;
+  };
+  session_start: { sessionId: string; projectId?: string; agent?: string; userId?: string };
+  session_end: {
+    sessionId: string;
+    summary?: string;
+    userId?: string;
+    projectId?: string;
+    /** PROP-102: сессия архивирована (а не удалена) — мера `sessions_archived`. */
+    archived?: boolean;
+  };
   plan_approved: { sessionId: string; planContent?: string };
   plan_rejected: { sessionId: string; reason?: string };
   agent_spawned: { agentId: string; agentType?: string; parentId?: string };

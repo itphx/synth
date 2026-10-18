@@ -165,6 +165,10 @@ export const defaultConfig: SynthConfig = {
     escalationProvider: '',
     escalationModel: '',
   },
+  analytics: {
+    // PROP-102: срок хранения суточных роллапов — 400 дней (<= 0 — без ограничения).
+    retentionDays: 400,
+  },
   egress: {
     // Политика встроенных инструментов: deny приватных/служебных диапазонов.
     tools: {

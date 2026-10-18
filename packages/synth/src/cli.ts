@@ -963,6 +963,47 @@ program
   });
 
 program
+  .command('analytics')
+  .description('Аналитика и отчётность инстанса (PROP-102)')
+  .addCommand(
+    new Command('rebuild')
+      .description('Идемпотентно пересобрать суточные роллапы аналитики из истории (usage/activity)')
+      .option('--from <date>', 'начало окна включительно (YYYY-MM-DD, UTC; по умолчанию — вся история)')
+      .option('--dry-run', 'рассчитать и показать сводку без записи')
+      .option('--yes', 'подтвердить перезапись агрегатов (обязательно без --dry-run)')
+      .option('--json', 'вывод сводки в JSON (включая пересчитанные бакеты)')
+      .option('--data-dir <path>', 'каталог данных')
+      .option('--config <path>', 'путь к config.yaml')
+      .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
+      .action(async (options) => {
+        const home = resolveHome(options.home);
+        const synth = await loadConfig({ configPath: options.config, home: home ?? undefined });
+        const dataDir = resolve((options.dataDir as string | undefined) || resolveDataDir(synth, undefined, home));
+        const auditPath = synth.llmGateway.audit.logPath || join(dataDir, 'audit', 'llm-gateway.jsonl');
+
+        // PROP-032: контекст под выбранный backend, закрывается в `finally` (pool PG);
+        // схема не мигрируется — это контур `synth migrate`.
+        const { runAnalyticsRebuildCommand, buildStorageContext } = await import('@itphx/synth-core');
+        const storage = await buildStorageContext({ dataDir, config: synth, env: process.env, home, postgresSchemaMode: 'skip' });
+        let code = 1;
+        try {
+          code = await runAnalyticsRebuildCommand({
+            dataDir,
+            storage,
+            from: options.from as string | undefined,
+            dryRun: !!options.dryRun,
+            yes: !!options.yes,
+            json: !!options.json,
+            auditLogPath: auditPath,
+          });
+        } finally {
+          await storage.close?.().catch(() => {});
+        }
+        if (code !== 0) process.exit(code);
+      }),
+  );
+
+program
   .command('doctor')
   .description('Проверить состояние инстанса (health, данные, ключи, провайдеры) — ADR-091')
   .option('--data-dir <path>', 'каталог данных')

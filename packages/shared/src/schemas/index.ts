@@ -8,6 +8,9 @@ import {
   PROJECT_COLOR_KEYS,
   isKnownScope,
   isWebhookEventPattern,
+  ANALYTICS_FAMILIES,
+  ANALYTICS_DIMENSIONS,
+  ANALYTICS_EXPORT_FORMATS,
 } from '../types/index.js';
 import type { GitRepoConfig, ProjectIconKey, ProjectColorKey } from '../types/index.js';
 import { ToolCapability } from '../types/tools.js';
@@ -994,3 +997,68 @@ export const scheduleJobSchema = z.object({
 });
 
 export type ScheduleJobRequest = z.infer<typeof scheduleJobSchema>;
+
+/** PROP-102: семейство роллапов аналитики (`usage`/`activity`/`decision`/`prompt`). */
+export const analyticsFamilySchema = z.enum(ANALYTICS_FAMILIES);
+/** PROP-102: ось измерения роллапа (`day`/`user`/`project`/`model`/`agent`/`provider`). */
+export const analyticsDimensionSchema = z.enum(ANALYTICS_DIMENSIONS);
+/** PROP-102: сутки UTC в формате `YYYY-MM-DD`. */
+export const analyticsDaySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** PROP-102: пред-агрегированный бакет роллапа (запись через порт хранения). */
+export const analyticsRollupBucketSchema = z.object({
+  family: analyticsFamilySchema,
+  day: analyticsDaySchema,
+  dimensions: z.record(z.string(), z.string()).default({}),
+  measures: z.record(z.string(), z.number()),
+  costByCurrency: z.record(z.string(), z.number()).optional(),
+});
+
+/** PROP-102: запрос среза/серии роллапов (только чтение). */
+export const analyticsRollupQuerySchema = z.object({
+  family: analyticsFamilySchema,
+  from: analyticsDaySchema.optional(),
+  to: analyticsDaySchema.optional(),
+  dimensions: z.record(z.string(), z.string()).optional(),
+  groupBy: z.array(analyticsDimensionSchema).optional(),
+});
+
+export type AnalyticsRollupBucketInput = z.infer<typeof analyticsRollupBucketSchema>;
+export type AnalyticsRollupQueryInput = z.infer<typeof analyticsRollupQuerySchema>;
+
+/**
+ * PROP-102: строка отчёта — оси группировки + меры (сырые счётчики и
+ * дериваты `ANALYTICS_DERIVED_MEASURES`). `costByCurrency` опускается, если пусто.
+ */
+export const analyticsReportRowSchema = z.object({
+  dimensions: z.record(z.string(), z.string()).default({}),
+  measures: z.record(z.string(), z.number()),
+  costByCurrency: z.record(z.string(), z.number()).optional(),
+});
+
+/** PROP-102: отчёт по семейству за период (только чтение, данные без i18n). */
+export const analyticsReportSchema = z.object({
+  report: analyticsFamilySchema,
+  from: analyticsDaySchema,
+  to: analyticsDaySchema,
+  groupBy: z.array(analyticsDimensionSchema),
+  rows: z.array(analyticsReportRowSchema),
+});
+
+/** PROP-102: формат выгрузки отчёта (`csv`/`json`; только данные). */
+export const analyticsExportFormatSchema = z.enum(ANALYTICS_EXPORT_FORMATS);
+
+/** PROP-102: сводка инстанса за период — агрегаты `usage`/`activity`/`decision`. */
+export const analyticsSummarySchema = z.object({
+  from: analyticsDaySchema,
+  to: analyticsDaySchema,
+  usage: z.record(z.string(), z.number()),
+  activity: z.record(z.string(), z.number()),
+  decision: z.record(z.string(), z.number()),
+  costByCurrency: z.record(z.string(), z.number()).optional(),
+});
+
+export type AnalyticsReportRowInput = z.infer<typeof analyticsReportRowSchema>;
+export type AnalyticsReportInput = z.infer<typeof analyticsReportSchema>;
+export type AnalyticsExportFormatInput = z.infer<typeof analyticsExportFormatSchema>;
+export type AnalyticsSummaryInput = z.infer<typeof analyticsSummarySchema>;
