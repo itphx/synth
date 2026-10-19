@@ -9,8 +9,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { AddressInfo, Socket } from 'node:net';
+import { fetch as undiciFetch } from 'undici';
 import { resolveProxyConfig, type ProxyConfig } from '@itphx/synth-shared';
 import { checkProxyTarget } from './proxy-check.js';
+import type { FetchLike } from './tls.js';
 import { startFakeProxy } from '../test-helpers/fake-proxy.js';
 
 const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
@@ -352,6 +354,35 @@ describe('checkProxyTarget — ошибки', () => {
     expect(userinfo.ok).toBe(false);
     expect(userinfo.error).toMatch(/userinfo/);
     expect(JSON.stringify(userinfo)).not.toContain('secret');
+  });
+});
+
+describe('checkProxyTarget — legacy handler (Node 22 / undici@7 fetch)', () => {
+  it('legacy handler + молчащий прокси → таймаут возвращается, запрос не висит', async () => {
+    const proxy = await startFakeProxy({ mode: 'silent' });
+    const target = await startRecordingTarget();
+    cleanups.push(() => target.close(), () => proxy.close());
+    const config = profiledConfig(proxy.url);
+
+    // undici@7 fetch использует legacy-handler независимо от версии Node:
+    // без style-aware обёртки ответ/ошибка теряются и `checkProxyTarget`
+    // (вместе с `dispatcher.close()`) висит навсегда.
+    const result = await Promise.race([
+      checkProxyTarget({
+        url: target.url,
+        config,
+        timeoutMs: 300,
+        fetchImpl: undiciFetch as unknown as FetchLike,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('checkProxyTarget завис на legacy handler')), 5000),
+      ),
+    ]);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/таймаут/);
+    expect(result.route).toMatchObject({ action: 'proxy', via: 'proxy' });
+    expect(proxy.connects + proxy.absoluteRequests).toBeGreaterThanOrEqual(1);
   });
 });
 

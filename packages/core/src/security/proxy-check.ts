@@ -594,7 +594,10 @@ export async function checkProxyTarget(
       error: message,
     };
   } finally {
-    await dispatcher.close().catch(() => undefined);
+    // Проверка создаёт одноразовый dispatcher: `close()` может ждать
+    // незавершённый CONNECT (прокси принял TCP, но не ответил) и не вернуться —
+    // диагностический эндпоинт завис бы. `destroy()` освобождает сокеты сразу.
+    await dispatcher.destroy().catch(() => undefined);
   }
 }
 

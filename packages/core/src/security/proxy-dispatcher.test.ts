@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import type { AddressInfo } from 'node:net';
-import type { Dispatcher } from 'undici';
+import { fetch as undiciFetch, type Dispatcher } from 'undici';
 import {
   resolveProxyConfig,
   type ProxyConfig,
@@ -66,6 +66,31 @@ function errorCode(err: unknown): string | undefined {
     current = (current as { cause?: unknown }).cause;
   }
   return undefined;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/** Ограничивает ожидание, чтобы зависший запрос падал тестом, а не вешал suite. */
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/** `close()` не должен висеть даже на сломанном коде — иначе встанет afterEach. */
+function boundedClose(dispatcher: EgressDispatcher): () => Promise<void> {
+  return () =>
+    Promise.race([dispatcher.close(), delay(1000)]).then(() => undefined);
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -783,5 +808,104 @@ describe('EgressDispatcher: профили маршрутизации', () => {
     });
     expect(dispatcher.routeFor('https://example.com/x')).toBe('proxy');
     expect(dispatcher.plannedVia('https://example.com/x')).toBe('proxy');
+  });
+});
+
+/**
+ * Регрессия: undici определяет стиль handler'а по наличию `onRequestStart`
+ * (`UnwrapHandler.unwrap`). Legacy-handler (встроенный fetch в Node 22,
+ * `undici@7` fetch) не имеет new-style методов — обёртка обязана повторять его
+ * контракт, иначе ответ/ошибка теряются и запрос висит навсегда.
+ */
+describe('EgressDispatcher: стиль handler (legacy/new-style)', () => {
+  it('legacy handler undici fetch: ответ через прокси доходит, запрос не висит', async () => {
+    const { proxy, target } = await setup();
+    const dispatcher = dispatcherFor({ proxyUrl: proxy.url });
+    cleanups.push(boundedClose(dispatcher));
+
+    // undici@7 fetch использует legacy-handler независимо от версии Node.
+    const res = await withTimeout(
+      undiciFetch(`${target.url}/legacy`, { dispatcher }),
+      2500,
+      'legacy handler: ответ через прокси не дошёл (запрос завис)',
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ok');
+    expect(proxy.connects + proxy.absoluteRequests).toBe(1);
+  });
+
+  it('legacy handler: onHeaders → onData → onComplete через прокси', async () => {
+    const { proxy, target } = await setup();
+    const dispatcher = dispatcherFor({ proxyUrl: proxy.url });
+    cleanups.push(boundedClose(dispatcher));
+
+    let status = 0;
+    let body = '';
+    const received = withTimeout(
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        dispatcher.dispatch(
+          { origin: target.url, path: '/legacy', method: 'GET' },
+          {
+            onConnect() {},
+            onHeaders(statusCode: number, _headers: unknown, _resume: () => void) {
+              status = statusCode;
+              return true;
+            },
+            onData(chunk: Buffer) {
+              body += chunk.toString();
+              return true;
+            },
+            onComplete() {
+              resolve({ status, body });
+            },
+            onError(error: Error) {
+              reject(error);
+            },
+          } as never,
+        );
+      }),
+      2500,
+      'legacy handler не получил ответ через прокси',
+    );
+
+    expect(await received).toEqual({ status: 200, body: 'ok' });
+    expect(target.requests).toBe(1);
+  });
+
+  it('new-style handler по-прежнему получает onResponseStart/onResponseEnd', async () => {
+    const { proxy, target } = await setup();
+    const dispatcher = dispatcherFor({ proxyUrl: proxy.url });
+    cleanups.push(boundedClose(dispatcher));
+
+    let status = 0;
+    let body = '';
+    const received = withTimeout(
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        dispatcher.dispatch(
+          { origin: target.url, path: '/new-style', method: 'GET' },
+          {
+            onRequestStart() {},
+            onResponseStart(_controller: Dispatcher.DispatchController, statusCode: number) {
+              status = statusCode;
+            },
+            onResponseData(_controller: Dispatcher.DispatchController, chunk: Buffer) {
+              body += chunk.toString();
+            },
+            onResponseEnd() {
+              resolve({ status, body });
+            },
+            onResponseError(_controller: Dispatcher.DispatchController, error: Error) {
+              reject(error);
+            },
+          } as never,
+        );
+      }),
+      2500,
+      'new-style handler не получил ответ через прокси',
+    );
+
+    expect(await received).toEqual({ status: 200, body: 'ok' });
+    expect(target.requests).toBe(1);
   });
 });

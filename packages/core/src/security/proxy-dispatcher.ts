@@ -333,70 +333,85 @@ export class EgressDispatcher extends Dispatcher {
     hasCredentials: boolean,
   ): boolean {
     let headersReceived = false;
+    // Контракт ошибки зависит от стиля **внутреннего** handler'а: legacy —
+    // `onError(err)`, new-style — `onResponseError(controller, err)`.
+    const newStyle = isNewStyleDispatchHandler(handler);
+    const failureStyle = newStyle ? ('response' as const) : ('error' as const);
 
-    const wrapped: Dispatcher.DispatchHandler = {
-      onRequestStart: (controller, context) => {
-        handler.onRequestStart?.(controller, context);
-      },
-      onRequestUpgrade: (controller, statusCode, headers, socket) => {
-        handler.onRequestUpgrade?.(controller, statusCode, headers, socket);
-      },
-      onResponseStart: (controller, statusCode, headers, statusMessage) => {
-        headersReceived = true;
-        handler.onResponseStart?.(controller, statusCode, headers, statusMessage);
-      },
-      onResponseData: (controller, chunk) => {
-        handler.onResponseData?.(controller, chunk);
-      },
-      onResponseEnd: (controller, trailers) => {
-        handler.onResponseEnd?.(controller, trailers);
-      },
-      onResponseError: (controller, error) => {
-        if (
-          !headersReceived &&
-          this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, hasCredentials, {
-            style: 'response',
-            controller,
-          })
-        ) {
-          return;
+    const wrapped: Dispatcher.DispatchHandler = newStyle
+      ? {
+          onRequestStart: (controller, context) => {
+            handler.onRequestStart?.(controller, context);
+          },
+          onRequestUpgrade: (controller, statusCode, headers, socket) => {
+            handler.onRequestUpgrade?.(controller, statusCode, headers, socket);
+          },
+          onResponseStart: (controller, statusCode, headers, statusMessage) => {
+            headersReceived = true;
+            handler.onResponseStart?.(controller, statusCode, headers, statusMessage);
+          },
+          onResponseData: (controller, chunk) => {
+            handler.onResponseData?.(controller, chunk);
+          },
+          onResponseEnd: (controller, trailers) => {
+            handler.onResponseEnd?.(controller, trailers);
+          },
+          onResponseError: (controller, error) => {
+            if (
+              !headersReceived &&
+              this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, hasCredentials, {
+                style: 'response',
+                controller,
+              })
+            ) {
+              return;
+            }
+            handler.onResponseError?.(controller, error);
+          },
+          onConnect: (abort) => {
+            handler.onConnect?.(abort);
+          },
+          onUpgrade: (statusCode, headers, socket) => {
+            handler.onUpgrade?.(statusCode, headers, socket);
+          },
+          onResponseStarted: () => {
+            handler.onResponseStarted?.();
+          },
+          onHeaders: (statusCode, headers, resume, statusText) => {
+            headersReceived = true;
+            return handler.onHeaders?.(statusCode, headers, resume, statusText) ?? false;
+          },
+          onData: (chunk) => {
+            return handler.onData?.(chunk) ?? true;
+          },
+          onComplete: (trailers) => {
+            handler.onComplete?.(trailers);
+          },
+          onError: (error) => {
+            if (
+              !headersReceived &&
+              this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, hasCredentials, {
+                style: 'error',
+              })
+            ) {
+              return;
+            }
+            handler.onError?.(error);
+          },
+          onBodySent: (chunkSize, totalBytesSent) => {
+            handler.onBodySent?.(chunkSize, totalBytesSent);
+          },
         }
-        handler.onResponseError?.(controller, error);
-      },
-      onConnect: (abort) => {
-        handler.onConnect?.(abort);
-      },
-      onUpgrade: (statusCode, headers, socket) => {
-        handler.onUpgrade?.(statusCode, headers, socket);
-      },
-      onResponseStarted: () => {
-        handler.onResponseStarted?.();
-      },
-      onHeaders: (statusCode, headers, resume, statusText) => {
-        headersReceived = true;
-        return handler.onHeaders?.(statusCode, headers, resume, statusText) ?? false;
-      },
-      onData: (chunk) => {
-        return handler.onData?.(chunk) ?? true;
-      },
-      onComplete: (trailers) => {
-        handler.onComplete?.(trailers);
-      },
-      onError: (error) => {
-        if (
-          !headersReceived &&
-          this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, hasCredentials, {
-            style: 'error',
-          })
-        ) {
-          return;
-        }
-        handler.onError?.(error);
-      },
-      onBodySent: (chunkSize, totalBytesSent) => {
-        handler.onBodySent?.(chunkSize, totalBytesSent);
-      },
-    };
+      : legacyWrapper(handler, {
+          onHeadersReceived: () => {
+            headersReceived = true;
+          },
+          onError: (error) =>
+            !headersReceived &&
+            this.#handleProxyFailure(error, opts, handler, reporter, proxyUrl, hasCredentials, {
+              style: 'error',
+            }),
+        });
 
     try {
       return proxy.dispatch(opts, wrapped);
@@ -405,7 +420,7 @@ export class EgressDispatcher extends Dispatcher {
       // сообщаем хендлеру в его контракте, а не проглатываем.
       if (
         this.#handleProxyFailure(err, opts, handler, reporter, proxyUrl, hasCredentials, {
-          style: 'response',
+          style: failureStyle,
         })
       ) {
         return true;
@@ -490,6 +505,75 @@ export class EgressDispatcher extends Dispatcher {
       targets.map((target) => (kind === 'close' ? target.close() : err ? target.destroy(err) : target.destroy())),
     );
   }
+}
+
+/**
+ * true — handler реализует **new-style** контракт undici (`onRequestStart`).
+ *
+ * Undici определяет стиль по наличию `onRequestStart` (`assertRequestHandler`,
+ * `UnwrapHandler.unwrap`): legacy-методы на объекте с `onRequestStart` не
+ * вызываются, а ответ приходит в `onResponseStart`. Поэтому обёртка обязана
+ * повторять стиль внутреннего handler'а, иначе legacy-ответы (встроенный fetch
+ * в Node 22, `undici@7` fetch) теряются и запрос висит.
+ */
+function isNewStyleDispatchHandler(handler: Dispatcher.DispatchHandler): boolean {
+  return typeof (handler as { onRequestStart?: unknown }).onRequestStart === 'function';
+}
+
+/** Extras legacy-протокола, которых нет в типах undici (`client-h1` их вызывает). */
+type LegacyDispatchHandler = Dispatcher.DispatchHandler & { onRequestSent?: () => void };
+
+interface LegacyWrapperHooks {
+  /** Ответ получен (legacy-аналог `headersReceived`). */
+  onHeadersReceived(): void;
+  /** `true` — ошибка уже обработана (прокси-фейл доставлен/fallback), не форвардить. */
+  onError(error: unknown): boolean;
+}
+
+/**
+ * Обёртка **только** legacy-методов для handler'ов без `onRequestStart`.
+ * Наличие любого new-style метода перевело бы handler в другой контракт
+ * (`UnwrapHandler`), поэтому их здесь нет by design.
+ */
+function legacyWrapper(
+  handler: Dispatcher.DispatchHandler,
+  hooks: LegacyWrapperHooks,
+): Dispatcher.DispatchHandler {
+  const source = handler as LegacyDispatchHandler;
+  const wrapped: LegacyDispatchHandler = {
+    onConnect: (abort) => {
+      source.onConnect?.(abort);
+    },
+    onUpgrade: (statusCode, headers, socket) => {
+      source.onUpgrade?.(statusCode, headers, socket);
+    },
+    onResponseStarted: () => {
+      source.onResponseStarted?.();
+    },
+    onHeaders: (statusCode, headers, resume, statusText) => {
+      hooks.onHeadersReceived();
+      return source.onHeaders?.(statusCode, headers, resume, statusText) ?? false;
+    },
+    onData: (chunk) => {
+      return source.onData?.(chunk) ?? true;
+    },
+    onComplete: (trailers) => {
+      source.onComplete?.(trailers);
+    },
+    onError: (error) => {
+      if (hooks.onError(error)) return;
+      source.onError?.(error);
+    },
+  };
+  if (typeof source.onBodySent === 'function') {
+    wrapped.onBodySent = (chunkSize, totalBytesSent) => {
+      source.onBodySent?.(chunkSize, totalBytesSent);
+    };
+  }
+  if (typeof source.onRequestSent === 'function') {
+    wrapped.onRequestSent = () => source.onRequestSent?.();
+  }
+  return wrapped;
 }
 
 /**
