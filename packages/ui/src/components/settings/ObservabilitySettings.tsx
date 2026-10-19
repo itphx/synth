@@ -103,6 +103,7 @@ export function ObservabilitySettings() {
 
   const [tokenInput, setTokenInput] = useState('')
   const [tokenError, setTokenError] = useState<string | null>(null)
+  const [tokenVisible, setTokenVisible] = useState(false)
   const [tokenSaving, setTokenSaving] = useState(false)
   const [tokenDeleting, setTokenDeleting] = useState(false)
 
@@ -249,6 +250,7 @@ export function ObservabilitySettings() {
     try {
       await synthApi.setToken(value)
       setTokenInput('')
+      setTokenVisible(false)
       await Promise.all([loadInfo(), loadStatus(true)])
       notify({ text: t('observability.token.saved'), type: 'success', category: 'system' })
     } catch (err) {
@@ -279,6 +281,7 @@ export function ObservabilitySettings() {
     setTokenError(null)
     try {
       await synthApi.deleteToken()
+      setTokenVisible(false)
       await Promise.all([loadInfo(), loadStatus(true)])
       notify({ text: t('observability.token.deleted'), type: 'success', category: 'system' })
     } catch (err) {
@@ -325,6 +328,7 @@ export function ObservabilitySettings() {
       .replace(/\//g, '_')
       .replace(/=+$/, '')
     setTokenInput(value)
+    setTokenVisible(true)
     setTokenError(null)
     const copied = await copy(value, t('observability.token.generatedCopied'))
     if (!copied) {
@@ -549,16 +553,17 @@ export function ObservabilitySettings() {
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end min-w-0">
           <TextField
-            type="password"
+            type={tokenVisible ? 'text' : 'password'}
             label={t('observability.token.field')}
             placeholder={t('observability.token.placeholder')}
             value={tokenInput}
             onChange={(e) => {
               setTokenInput(e.target.value)
+              setTokenVisible(false)
               setTokenError(null)
             }}
             disabled={tokenEnvLocked}
-            autoComplete="new-password"
+            autoComplete={tokenVisible ? 'off' : 'new-password'}
             mono
             containerClassName="flex-1 min-w-0"
             id="observability-token"
@@ -567,15 +572,19 @@ export function ObservabilitySettings() {
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <Button
               variant="outline"
+              size="sm"
+              className="h-9 w-9 p-0"
               onClick={() => void handleGenerateToken()}
               disabled={tokenEnvLocked || tokenSaving || tokenDeleting}
+              aria-label={t('observability.token.generate')}
+              title={t('observability.token.generate')}
               data-testid="observability-token-generate"
             >
-              <Icon name="key" className="size-3.5" />
-              {t('observability.token.generate')}
+              <Icon name="refresh" className="size-3.5" />
             </Button>
             <Button
               variant="primary"
+              className="h-9"
               onClick={() => void handleSetToken()}
               disabled={tokenEnvLocked || tokenSaving}
               data-testid="observability-token-set"
@@ -585,6 +594,7 @@ export function ObservabilitySettings() {
             </Button>
             <Button
               variant="danger"
+              className="h-9"
               onClick={() => void handleDeleteToken()}
               disabled={tokenEnvLocked || !tokenConfigured || tokenDeleting}
               data-testid="observability-token-delete"

@@ -293,21 +293,35 @@ describe('ObservabilitySettings — статус и настройки', () => {
     expect(mocks.deleteToken).toHaveBeenCalledTimes(1)
   })
 
-  it('генерирует токен, подставляет его и копирует', async () => {
+  it('генерирует токен, показывает его и копирует', async () => {
     const container = await renderSettings()
 
-    expect((byTestId(container, 'observability-token-input') as HTMLInputElement).value).toBe('')
+    const field = byTestId(container, 'observability-token-input') as HTMLInputElement
+    expect(field.value).toBe('')
+    expect(field.type).toBe('password')
+
+    const generate = byTestId(container, 'observability-token-generate') as HTMLButtonElement
+    expect(generate.getAttribute('aria-label')).toBe('Generate')
+    expect(generate.textContent).toBe('')
 
     await clickTestId(container, 'observability-token-generate')
 
     const input = byTestId(container, 'observability-token-input') as HTMLInputElement
-    expect(input.type).toBe('password')
-    expect(input.value.length).toBeGreaterThanOrEqual(16)
+    expect(input.type).toBe('text')
+    expect(input.value.length).toBe(43)
     expect(input.value).toMatch(/^[A-Za-z0-9_-]+$/)
-    expect(mocks.writeText).toHaveBeenCalledWith(input.value)
+    const generated = input.value
+    expect(mocks.writeText).toHaveBeenCalledWith(generated)
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', text: 'Token generated and copied' }),
     )
+
+    // После сохранения значение снова скрыто и поле очищено.
+    await clickTestId(container, 'observability-token-set')
+    expect(mocks.setToken).toHaveBeenCalledWith(generated)
+    const saved = byTestId(container, 'observability-token-input') as HTMLInputElement
+    expect(saved.type).toBe('password')
+    expect(saved.value).toBe('')
   })
 
   it('при недоступном clipboard предлагает скопировать токен вручную', async () => {
@@ -317,7 +331,8 @@ describe('ObservabilitySettings — статус и настройки', () => {
     await clickTestId(container, 'observability-token-generate')
 
     const input = byTestId(container, 'observability-token-input') as HTMLInputElement
-    expect(input.value.length).toBeGreaterThanOrEqual(16)
+    expect(input.type).toBe('text')
+    expect(input.value.length).toBe(43)
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', text: 'Token generated — copy it manually' }),
     )
