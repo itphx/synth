@@ -18,6 +18,7 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: apiMock }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { useAuthStore } from '@/stores/authStore'
 import { ProjectsPanel } from './ProjectsPanel'
 
@@ -33,7 +34,9 @@ async function render(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <ProjectsPanel />
+        <TooltipProvider>
+          <ProjectsPanel />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

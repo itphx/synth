@@ -90,8 +90,10 @@ export function WorkspacePolicySection() {
   if (deployment === 'managed') {
     return (
       <SettingsSection
+        id="projects-workspace-policy"
         title={t('workspace.policy.title')}
         description={t('workspace.policy.description')}
+        tooltip={t('settings.help.projects.section.projects-workspace-policy')}
       >
         <div className="text-sm text-foreground" data-testid="workspace-policy-managed">
           {t('workspace.policy.deny')}
@@ -105,8 +107,10 @@ export function WorkspacePolicySection() {
 
   return (
     <SettingsSection
+      id="projects-workspace-policy"
       title={t('workspace.policy.title')}
       description={t('workspace.policy.description')}
+      tooltip={t('settings.help.projects.section.projects-workspace-policy')}
       actions={isDefault ? <DefaultsBadge /> : undefined}
     >
       {loading ? (

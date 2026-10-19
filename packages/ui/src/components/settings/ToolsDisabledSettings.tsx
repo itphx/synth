@@ -223,7 +223,11 @@ export function ToolsDisabledSettings() {
       title={t('mcpAdmin.tools.title')}
       description={t('mcpAdmin.tools.description')}
     >
-      <SettingsSection actions={draft.isDefault ? <DefaultsBadge /> : undefined}>
+      <SettingsSection
+        id="builtin-tools-main"
+        tooltip={t('settings.help.builtinTools.section.main')}
+        actions={draft.isDefault ? <DefaultsBadge /> : undefined}
+      >
         {toolsDisabledError && (
           <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">{toolsDisabledError}</div>
         )}
@@ -362,6 +366,9 @@ export function ToolsDisabledSettings() {
           MCP управляется отдельной политикой. */}
       <PolicySettingsCard
         scope="tools"
+        id="builtin-tools-policy"
+        tooltip={t('settings.help.builtinTools.section.policy')}
+        fieldTooltip={t('settings.help.builtinTools.policy')}
         value={toolsPolicy}
         savedValue={savedToolsPolicy}
         loading={toolsPolicyLoading}
@@ -379,6 +386,7 @@ export function ToolsDisabledSettings() {
         titleKey="egress.tools.title"
         descriptionKey="egress.tools.description"
         testIdPrefix="egress-tools"
+        advanced
       />
     </SettingsPanel>
   )

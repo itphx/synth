@@ -14,7 +14,7 @@ import { confirm } from '@/lib/confirm';
 import { cn } from '@/lib/utils';
 import { Icon } from '../icon/Icon';
 import { Button } from '../ui/button';
-import { TextArea, TextField, ToggleField } from '../ui/settings';
+import { FieldTooltip, TextArea, TextField, ToggleField } from '../ui/settings';
 import {
   displayProfileUrl,
   emptyProfileDraft,
@@ -515,6 +515,7 @@ export function ProxyProfilesSection({
         disabled={!isNew || disabled}
         mono
         placeholder="corp"
+        tooltip={t('settings.help.network.profileName')}
         data-testid="proxy-profile-form-name"
       />
       <TextField
@@ -523,6 +524,7 @@ export function ProxyProfilesSection({
         onChange={(e) => setForm((prev) => ({ ...prev, label: e.target.value }))}
         placeholder={t('proxy.profiles.labelPlaceholder')}
         disabled={disabled}
+        tooltip={t('settings.help.network.profileLabel')}
         data-testid="proxy-profile-form-label"
       />
       <TextField
@@ -536,6 +538,7 @@ export function ProxyProfilesSection({
         placeholder="http://proxy.corp:3128"
         mono
         disabled={disabled}
+        tooltip={t('settings.help.network.profileUrl')}
         data-testid="proxy-profile-form-url"
       />
       {/* ADR-099 / ADR-072: единый auth-блок — логин и пароль Basic-аутентификации. */}
@@ -543,7 +546,10 @@ export function ProxyProfilesSection({
         className="space-y-2 min-w-0 rounded-lg border border-border/60 p-3"
         data-testid="proxy-profile-auth"
       >
-        <div className="text-sm font-medium text-foreground">{t('proxy.profiles.authTitle')}</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="text-sm font-medium text-foreground">{t('proxy.profiles.authTitle')}</div>
+          <FieldTooltip text={t('settings.help.network.profileAuth')} />
+        </div>
         <p className="text-xs text-muted-foreground">{t('proxy.profiles.authHelp')}</p>
 
         <TextField
@@ -552,6 +558,7 @@ export function ProxyProfilesSection({
           onChange={(e) => setForm((prev) => ({ ...prev, username: e.target.value }))}
           autoComplete="off"
           disabled={disabled}
+          tooltip={t('settings.help.network.profileUsername')}
           data-testid="proxy-profile-form-username"
         />
 
@@ -565,6 +572,7 @@ export function ProxyProfilesSection({
           }}
           autoComplete="new-password"
           disabled={disabled || passwordPending || passwordFromEnv}
+          tooltip={t('settings.help.network.profilePassword')}
           data-testid="proxy-profile-password-input"
         />
 
@@ -633,6 +641,7 @@ export function ProxyProfilesSection({
         >
           <span className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="text-sm font-medium text-foreground">{t('proxy.tls.toggle')}</span>
+            <FieldTooltip text={t('settings.help.network.profileTls')} />
             {tlsMeta && (tlsMeta.caFile || tlsMeta.hasCaPem || tlsMeta.certFile) && (
               <span
                 data-testid="proxy-profile-tls-badge"
@@ -673,6 +682,7 @@ export function ProxyProfilesSection({
             placeholder="/etc/synth/proxy-ca.pem"
             mono
             disabled={disabled}
+            tooltip={t('settings.help.network.profileTlsCaFile')}
             data-testid="proxy-profile-tls-ca-file"
           />
           <TextField
@@ -682,6 +692,7 @@ export function ProxyProfilesSection({
             placeholder="/etc/synth/proxy-client.crt"
             mono
             disabled={disabled}
+            tooltip={t('settings.help.network.profileTlsCertFile')}
             data-testid="proxy-profile-tls-cert-file"
           />
           <TextField
@@ -691,6 +702,7 @@ export function ProxyProfilesSection({
             placeholder="/etc/synth/proxy-client.key"
             mono
             disabled={disabled}
+            tooltip={t('settings.help.network.profileTlsKeyFile')}
             data-testid="proxy-profile-tls-key-file"
           />
           <ToggleField
@@ -700,6 +712,7 @@ export function ProxyProfilesSection({
               setForm((prev) => ({ ...prev, rejectUnauthorized: !prev.rejectUnauthorized }))
             }
             disabled={disabled}
+            tooltip={t('settings.help.network.profileTlsRejectUnauthorized')}
           />
 
           <div className="space-y-2 min-w-0">
@@ -722,6 +735,7 @@ export function ProxyProfilesSection({
               rows={5}
               mono
               disabled={tlsPending || disabled}
+              tooltip={t('settings.help.network.profileTlsCaPem')}
               data-testid="proxy-profile-tls-ca-pem"
             />
             <input
@@ -779,7 +793,10 @@ export function ProxyProfilesSection({
               {t('proxy.tls.clientTitle')}
             </div>
             <label className="block space-y-1 min-w-0">
-              <span className="text-xs text-foreground">{t('proxy.tls.clientCert')}</span>
+              <span className="flex items-center gap-1.5 text-xs text-foreground">
+                {t('proxy.tls.clientCert')}
+                <FieldTooltip text={t('settings.help.network.profileTlsClientCert')} />
+              </span>
               <input
                 type="file"
                 accept=".pem,.crt,.cer"
@@ -790,7 +807,10 @@ export function ProxyProfilesSection({
               />
             </label>
             <label className="block space-y-1 min-w-0">
-              <span className="text-xs text-foreground">{t('proxy.tls.clientKey')}</span>
+              <span className="flex items-center gap-1.5 text-xs text-foreground">
+                {t('proxy.tls.clientKey')}
+                <FieldTooltip text={t('settings.help.network.profileTlsClientKey')} />
+              </span>
               <input
                 type="file"
                 accept=".pem,.key"
@@ -911,7 +931,10 @@ export function ProxyProfilesSection({
       data-testid="proxy-profiles"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-        <div className="text-sm font-medium text-foreground">{t('proxy.profiles.title')}</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="text-sm font-medium text-foreground">{t('proxy.profiles.title')}</div>
+          <FieldTooltip text={t('settings.help.network.profiles')} />
+        </div>
         <Button
           variant="outline"
           size="sm"

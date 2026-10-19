@@ -1,7 +1,12 @@
 import React from 'react'
 
 import { useDevice } from '@/hooks/useDevice'
+import { useI18n } from '@/lib/i18n'
+import { useUIStore } from '@/stores/useUIStore'
 import { cn } from '@/lib/utils'
+import { Button } from '../button'
+import { Icon } from '@/components/icon/Icon'
+import { SettingsAdvancedProvider, type SettingsAdvancedContextValue } from './SettingsAdvancedContext'
 
 export interface SettingsPanelProps {
   title: string
@@ -24,12 +29,19 @@ export interface SettingsPanelProps {
 
 const CONTENT_WIDTH = 'mx-auto w-full max-w-3xl min-w-0'
 
+const HIGHLIGHT_CLASSES = ['ring-2', 'ring-ring', 'ring-offset-2', 'ring-offset-background']
+const HIGHLIGHT_MS = 1800
+const FOCUS_OFFSET_PX = 8
+
 /**
  * ADR-072: стандартный каркас панели настроек.
  *
  * Гарантирует один вертикальный скролл, фиксированную шапку и отсутствие
  * горизонтального скролла: весь контент ограничен `max-w-3xl` и центрирован,
  * вложенные элементы получают `min-w-0`/`break-words`.
+ *
+ * Здесь же — локальное раскрытие продвинутых секций: при выключенном глобальном
+ * режиме «Расширенные» в конце тела появляется кнопка «Показать дополнительные».
  */
 export function SettingsPanel({
   title,
@@ -40,9 +52,26 @@ export function SettingsPanel({
   className,
   children,
 }: SettingsPanelProps) {
+  const { t } = useI18n()
   const { deviceType } = useDevice()
   const [collapsed, setCollapsed] = React.useState(false)
   const bodyRef = React.useRef<HTMLDivElement>(null)
+
+  const showAdvancedGlobally = useUIStore((state) => state.settingsShowAdvanced)
+  const settingsFocus = useUIStore((state) => state.settingsFocus)
+  const [reveal, setReveal] = React.useState(false)
+  const [advancedCount, setAdvancedCount] = React.useState(0)
+
+  const registerAdvanced = React.useCallback(() => {
+    setAdvancedCount((count) => count + 1)
+    return () => setAdvancedCount((count) => Math.max(0, count - 1))
+  }, [])
+
+  const advancedVisible = showAdvancedGlobally || reveal
+  const advancedValue = React.useMemo<SettingsAdvancedContextValue>(
+    () => ({ visible: advancedVisible, registerAdvanced }),
+    [advancedVisible, registerAdvanced],
+  )
 
   React.useEffect(() => {
     const el = bodyRef.current
@@ -82,6 +111,40 @@ export function SettingsPanel({
     }
   }, [collapsibleHeader, deviceType])
 
+  // Фокус из поиска: прокрутка к секции внутри собственного скролл-контейнера
+  // и короткая подсветка. Если секция продвинутая и скрыта — сначала раскрываем.
+  React.useEffect(() => {
+    if (!settingsFocus?.sectionId) return
+    const body = bodyRef.current
+    if (!body) return
+
+    const target = Array.from(
+      body.querySelectorAll<HTMLElement>('[data-settings-section]'),
+    ).find((el) => el.getAttribute('data-settings-section') === settingsFocus.sectionId)
+    if (!target) {
+      if (!advancedVisible) setReveal(true)
+      return
+    }
+
+    const bodyRect = body.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+    const top = body.scrollTop + targetRect.top - bodyRect.top - FOCUS_OFFSET_PX
+    if (typeof body.scrollTo === 'function') {
+      body.scrollTo({ top, behavior: 'smooth' })
+    } else {
+      body.scrollTop = top
+    }
+
+    target.classList.add(...HIGHLIGHT_CLASSES)
+    const timer = window.setTimeout(() => {
+      target.classList.remove(...HIGHLIGHT_CLASSES)
+    }, HIGHLIGHT_MS)
+    return () => {
+      window.clearTimeout(timer)
+      target.classList.remove(...HIGHLIGHT_CLASSES)
+    }
+  }, [settingsFocus?.nonce, settingsFocus?.sectionId, advancedVisible])
+
   return (
     <div className={cn('flex flex-col h-full min-h-0', className)}>
       <header className="shrink-0 mx-auto w-full max-w-3xl flex flex-col gap-3">
@@ -118,9 +181,27 @@ export function SettingsPanel({
           collapsed ? 'mt-2' : 'mt-4',
         )}
       >
-        <div className={cn('space-y-4', CONTENT_WIDTH)}>
-          {children}
-        </div>
+        <SettingsAdvancedProvider value={advancedValue}>
+          <div className={cn('space-y-4', CONTENT_WIDTH)}>
+            {children}
+            {advancedCount > 0 && !showAdvancedGlobally && (
+              <div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-expanded={reveal}
+                  onClick={() => setReveal((value) => !value)}
+                  data-testid="settings-advanced-reveal"
+                >
+                  <Icon name={reveal ? 'arrow-up-s' : 'arrow-down-s'} className="size-4" />
+                  {reveal
+                    ? t('settings.advanced.hide')
+                    : `${t('settings.advanced.show')} (${advancedCount})`}
+                </Button>
+              </div>
+            )}
+          </div>
+        </SettingsAdvancedProvider>
       </div>
     </div>
   )

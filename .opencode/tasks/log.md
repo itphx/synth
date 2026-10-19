@@ -1454,3 +1454,32 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - **Выкат:** опубликован чарт `synth-0.11.0-3` (и `synth-gateway-telegram-0.3.2-9`, пин шлюза оставлен `0.3.2-8`); `synth-deploy` push `main` → Fleet: бандл `synth-test` 1/1, релиз №21 `synth-0.11.0-3`, backend/ui Running. Коммит `8fb890c`.
 - **Проверки:** `GET https://synth.k3s.itphx.loc/metrics` с Bearer → 200, без токена → 401; `/health` → healthy 0.11.0; `helm lint`, `helm template`, `promtool`, `docs-link-check` — зелёные.
 - **Замечания:** Grafana внешняя — JSON-дашборды импортируются вручную (`grafana.dashboards.enabled` в test не включался); `alerts.enabled` в test не включался (нет необходимости в PrometheusRule), внешний Prometheus подключает `charts/synth/files/alerts/synth-rules.yaml` через `rule_files`.
+
+## 2026-10-19 — Настройки: группировка, поиск, «Расширенные», тултипы
+
+- **Задача:** переработка окна настроек (5 пунктов: баг Select, сортировка админ-разделов, скрытие редких настроек, поиск по настройкам, стандартизация ⓘ). **Тип:** bug/feature/UI. **Исполнитель:** @orchestrator → @fixer ×10. **Результат:** PASS.
+- **Select:** попап больше не равен жёстко ширине триггера — `min-w-[var(--anchor-width)] w-max max-w-[var(--available-width)]`; в «Отладке» пункты NONE/DEBUG/INFO/WARNING/ERROR/CRITICAL видны полностью. `docs/UI-KIT.md` + EN обновлены.
+- **Навигация:** `lib/settings-catalog.ts` — 5 групп (`personal`, `Обзор`, `AI и модели`, `Интеграции`, `Эксплуатация`), 30 категорий, 306 записей каталога с ключевыми словами. Сайдбар сгруппирован, шире (w-56/w-60), добавлен `title`.
+- **Поиск:** поле в сайдбаре, поиск по категориям/секциям/полям, теги ru/en; скрытые advanced-разделы находятся, выбор автоматически включает режим «Расширенные»; переход к секции со скроллом и подсветкой. Поиск по границам слов/префиксам (без шума «тема» → «система»).
+- **Расширенные:** глобальный тумблер в шапке (persist `useUIStore.settingsShowAdvanced`) + локальная кнопка «Показать дополнительные настройки (N)» в конце панели; помечены 19 секций (routing escalation/cost/subagent/dictionaries, security patterns/protected-paths, network TLS, maintenance restore/audit, metrics token/endpoints/hints, models filters/add-manual, MCP permissions/network, skills policy/diagnostics, commands diagnostics, profile onboarding, egress tools/webhooks).
+- **Тултипы:** 262 ключа `settings.help.*` в RU+EN; ⓘ у полей и заголовков секций, строго в одной строке с заголовком; `SettingsSection tooltip`, `ModelPairSelect` получил видимые подписи «Провайдер/Модель» (убрана висящая иконка), `SettingsField` без label больше не рисует отдельную иконку.
+- **Проверки:** `pnpm --filter @itphx/synth-ui typecheck` ✅; `lint` ✅ 0 errors (27 pre-existing warnings); `test` ✅ 167 файлов / 1614 passed, 1 todo. Живой smoke в браузере: группы, поиск «отлад»/«тема», авто-включение advanced, кнопка «Показать дополнительные (4)» в Routing, дропдаун Debug, ⓘ inline.
+- **Документация:** `docs/UI-KIT.md` + EN, `packages/ui/AGENTS.md` (раздел «Новый раздел настроек»).
+- **Коммит:** не делался (по правилу — только по явной просьбе). **Остаток:** тултипы в правой панели «Сессия/Проект» (вне окна настроек) — отдельный заход; глубокий переход к конкретному полю пока скроллит к секции.
+
+## 2026-10-19 — Убран «провайдер по умолчанию» из UI
+
+- **Задача:** убрать визуальную концепцию «провайдер по умолчанию» — отдельной настройки нет, `is_default`/`default_provider` являются производными от пары «модель по умолчанию». **Тип:** UI cleanup. **Исполнитель:** @orchestrator → @fixer. **Результат:** PASS.
+- **Изменения:** `ProvidersPanel` — удалён бейдж «по умолчанию»; `providersStore.applyProviders` больше не принимает `default_provider`, `pickProvider` не предпочитает «дефолтного» провайдера; подсказка списка провайдеров переписана без «признака провайдера по умолчанию»; ключ `admin.providers.default_2` удалён.
+- **Не тронуто:** API `GET /providers` (поля остаются производными для совместимости/SDK), `remote/client.ts`, пара «модель по умолчанию» (`provider`+`model`) и fallback-модель провайдера.
+- **Проверки:** typecheck ✅, lint ✅ 0 errors, UI tests ✅ 167 файлов / 1615 passed, 1 todo; визуально бейджа в списке провайдеров нет.
+- **Коммит:** не делался.
+
+## 2026-10-19 — Настройки: сокращены избыточные подсказки
+
+- **Задача:** убрать перебор ⓘ — в «Профиле» иконки висели отдельной строкой, в блоках-реестрах подсказки дублировали шапку раздела. **Тип:** UI cleanup. **Исполнитель:** @orchestrator → @fixer. **Результат:** PASS.
+- **Структурно:** `SettingsSection` рендерит ⓘ только при наличии `title`; секция без заголовка больше не показывает одинокую иконку.
+- **Удалено:** 28 section-tooltip'ов и 14 подсказок очевидных полей; в «Профиле» оставлен только `identityClaimCode`; убраны подсказки из реестров (providers, MCP, skills, commands, events bindings/routes, service keys, webhooks, agents, SSH keys, models, maintenance audit) и простых разделов (Appearance, Notifications, Chat).
+- **Оставлено:** неочевидные поля форм создания/редактирования и неочевидные секции Routing/Security/Network/Maintenance/Metrics/Events config.
+- **Проверки:** typecheck ✅, lint ✅ 0 errors, UI tests ✅ 168 файлов / 1618 passed, 1 todo; визуально «Профиль» без висящих иконок.
+- **Коммит:** не делался.

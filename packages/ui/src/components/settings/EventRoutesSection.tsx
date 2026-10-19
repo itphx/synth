@@ -345,6 +345,7 @@ export function EventRoutesSection({ canManage = true }: { canManage?: boolean }
 
   return (
     <SettingsSection
+      id="events-routes"
       title={t('events.routes.title')}
       description={t('events.routes.description')}
       actions={

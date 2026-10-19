@@ -120,7 +120,12 @@ export const DefaultsPanel = () => {
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <SettingsSection className="sm:col-span-2" title={t('settings.appearance.themeMode.label')}>
+            <SettingsSection
+              id="defaults-theme-mode"
+              className="sm:col-span-2"
+              title={t('settings.appearance.themeMode.label')}
+              tooltip={t('settings.help.defaults.section.defaults-theme-mode')}
+            >
               <ThemeModeControl
                 value={current.themeMode}
                 onChange={(mode) => update({ themeMode: mode })}
@@ -131,10 +136,15 @@ export const DefaultsPanel = () => {
                 value={themeToPresetName(current.theme)}
                 onChange={(name) => update({ theme: name })}
                 ariaLabel={t('settings.appearance.theme.label')}
+                tooltip={t('settings.help.defaults.theme')}
               />
             </SettingsSection>
 
-            <SettingsSection title={t('settings.appearance.uiScale.label')}>
+            <SettingsSection
+              id="defaults-ui-scale"
+              title={t('settings.appearance.uiScale.label')}
+              tooltip={t('settings.help.defaults.section.defaults-ui-scale')}
+            >
               <UiScaleSlider
                 label={t('settings.appearance.uiScale.mobile')}
                 value={current.uiScaleMobile}
@@ -147,7 +157,11 @@ export const DefaultsPanel = () => {
               />
             </SettingsSection>
 
-            <SettingsSection title={t('settings.appearance.language.label')}>
+            <SettingsSection
+              id="defaults-language"
+              title={t('settings.appearance.language.label')}
+              tooltip={t('settings.help.defaults.section.defaults-language')}
+            >
               <LanguageControl
                 value={current.locale}
                 onChange={(locale) => update({ locale })}

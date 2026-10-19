@@ -55,6 +55,7 @@ vi.mock('@/stores/authStore', () => ({
 vi.mock('@/lib/confirm', () => ({ confirm: vi.fn(async () => true) }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { useUIStore } from '@/stores/useUIStore'
 import { confirm } from '@/lib/confirm'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
@@ -153,6 +154,7 @@ const setFieldValue = async (container: HTMLElement, testId: string, value: stri
 
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)

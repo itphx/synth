@@ -38,35 +38,35 @@ describe('providersStore.applyProviders', () => {
     useProvidersStore.setState({ selectedProviderName: 'b' })
     useProvidersStore.getState().applyProviders(
       [provider('a'), provider('b'), provider('c')],
-      'a',
     )
     expect(useProvidersStore.getState().selectedProviderName).toBe('b')
   })
 
-  it('сбрасывает исчезнувший выбор на провайдера из пары по умолчанию', () => {
+  it('сбрасывает исчезнувший выбор на провайдера с непустым model', () => {
     useProvidersStore.setState({ selectedProviderName: 'gone' })
-    useProvidersStore.getState().applyProviders([provider('a'), provider('b')], 'b')
+    useProvidersStore.getState().applyProviders([
+      provider('a'),
+      provider('b', { model: 'm' }),
+    ])
     expect(useProvidersStore.getState().selectedProviderName).toBe('b')
   })
 
-  it('без пары выбирает провайдера с непустым model, иначе первый enabled', () => {
+  it('выбирает провайдера с непустым model, иначе первый enabled', () => {
     useProvidersStore.getState().applyProviders(
       [provider('a', { enabled: false }), provider('b', { model: 'm' }), provider('c')],
-      '',
     )
     expect(useProvidersStore.getState().selectedProviderName).toBe('b')
 
     useProvidersStore.setState({ selectedProviderName: null })
     useProvidersStore.getState().applyProviders(
       [provider('a', { enabled: false }), provider('b'), provider('c')],
-      '',
     )
     expect(useProvidersStore.getState().selectedProviderName).toBe('b')
   })
 
   it('пустой список очищает выбор', () => {
     useProvidersStore.setState({ selectedProviderName: 'a' })
-    useProvidersStore.getState().applyProviders([], '')
+    useProvidersStore.getState().applyProviders([])
     expect(useProvidersStore.getState().selectedProviderName).toBeNull()
   })
 })

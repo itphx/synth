@@ -7,6 +7,7 @@ import { ColorPicker } from './ColorPicker'
 import { Toggle } from '../ui/Toggle'
 import { Button } from '../ui/button'
 import { SelectContent, SelectItem } from '@/components/ui/select'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { confirm } from '@/lib/confirm'
@@ -323,31 +324,34 @@ export const AgentsPanel = () => {
 
   const renderForm = () => (
     <div ref={formRef}>
-      <SettingsSection title={expanded ? t('admin.agents.edit', { id: form.id }) : t('admin.agents.new')}>
+      <SettingsSection title={expanded ? t('admin.agents.edit', { id: form.id }) : t('admin.agents.new')} id="agents-form" tooltip={t('settings.help.agents.section.agents-form')}>
         {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <TextField
             label={t('admin.agents.id')}
+            tooltip={t('settings.help.agents.id')}
             value={form.id}
             onChange={(e) => setForm({ ...form, id: normalizeAgentId(e.target.value) })}
             disabled={!!expanded}
           />
           <TextField
             label={t('admin.agents.displayName')}
+            tooltip={t('settings.help.agents.displayName')}
             value={form.display_name}
             onChange={(e) => setForm({ ...form, display_name: e.target.value })}
           />
           <div className="sm:col-span-2">
             <TextField
               label={t('admin.agents.description')}
+              tooltip={t('settings.help.agents.description')}
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
             />
           </div>
 
           {/* Agent modes (мультиклассы) */}
-          <SettingsField label={t('admin.agents.agentMode')}>
+          <SettingsField label={t('admin.agents.agentMode')} tooltip={t('settings.help.agents.agentMode')}>
             <div className="flex flex-wrap gap-2 min-w-0">
               {AGENT_MODES.map((m) => {
                 const checked = form.agent_mode.includes(m)
@@ -380,6 +384,7 @@ export const AgentsPanel = () => {
 
           <SelectField
             label={t('admin.agents.provider')}
+            tooltip={t('settings.help.agents.provider')}
             value={form.provider}
             onValueChange={(value) => setForm({ ...form, provider: value, model: form.provider !== value ? '' : form.model })}
             ariaLabel={t('admin.agents.provider')}
@@ -392,6 +397,7 @@ export const AgentsPanel = () => {
 
           <SelectField
             label={t('admin.agents.model')}
+            tooltip={t('settings.help.agents.model')}
             value={form.model}
             onValueChange={(value) => setForm({ ...form, model: value })}
             ariaLabel={t('admin.agents.model')}
@@ -404,6 +410,7 @@ export const AgentsPanel = () => {
 
           <SelectField
             label={t('admin.agents.contextFile')}
+            tooltip={t('settings.help.agents.contextFile')}
             value={form.context_file}
             onValueChange={(value) => setForm({ ...form, context_file: value })}
             ariaLabel={t('admin.agents.contextFile')}
@@ -418,6 +425,7 @@ export const AgentsPanel = () => {
           <div className="sm:col-span-2">
             <SliderField
               label={t('common.temperature')}
+              tooltip={t('settings.help.agents.temperature')}
               min={0}
               max={2}
               step={0.05}
@@ -429,6 +437,7 @@ export const AgentsPanel = () => {
 
           <NumberField
             label={t('admin.agents.topP')}
+            tooltip={t('settings.help.agents.topP')}
             min={0}
             max={1}
             step={0.01}
@@ -438,6 +447,7 @@ export const AgentsPanel = () => {
 
           <NumberField
             label={t('admin.agents.topK')}
+            tooltip={t('settings.help.agents.topK')}
             min={0}
             max={1000}
             step={1}
@@ -447,6 +457,7 @@ export const AgentsPanel = () => {
 
           <SelectField
             label={t('admin.agents.reasoning')}
+            tooltip={t('settings.help.agents.reasoning')}
             value={form.reasoning_level}
             onValueChange={(value) => setForm({ ...form, reasoning_level: value })}
             ariaLabel={t('admin.agents.reasoning')}
@@ -463,6 +474,7 @@ export const AgentsPanel = () => {
           {/* Max steps — для всех режимов, 0 = без ограничений */}
           <NumberField
             label={t('admin.agents.maxSteps')}
+            tooltip={t('settings.help.agents.maxSteps')}
             min={0}
             step={1}
             value={form.max_steps}
@@ -478,6 +490,7 @@ export const AgentsPanel = () => {
             <div className="sm:col-span-2">
               <TextArea
                 label={t('admin.agents.subagentPrompt')}
+                tooltip={t('settings.help.agents.subagentPrompt')}
                 value={form.subagent_prompt}
                 onChange={(e) => setForm({ ...form, subagent_prompt: e.target.value })}
                 rows={6}
@@ -488,7 +501,7 @@ export const AgentsPanel = () => {
         </div>
 
         {/* Capabilities */}
-        <SettingsField label={t('admin.agents.capabilities')}>
+        <SettingsField label={t('admin.agents.capabilities')} tooltip={t('settings.help.agents.capabilities')}>
           <div className="flex flex-wrap gap-1 min-w-0">
             {CAP_KEYS.map((k) => {
               const active = form.capabilities.includes(k)
@@ -513,7 +526,7 @@ export const AgentsPanel = () => {
         </SettingsField>
 
         {/* Icons */}
-        <SettingsField label={t('admin.agents.icon')}>
+        <SettingsField label={t('admin.agents.icon')} tooltip={t('settings.help.agents.icon')}>
           <div className="flex flex-wrap items-center gap-2 mb-2 min-w-0">
             {isIconName(form.icon) && <Icon name={form.icon} className="size-5 shrink-0" />}
             <span className="text-xs text-muted-foreground min-w-0 break-all">{form.icon || t('admin.agents.notSelected')}</span>
@@ -531,7 +544,7 @@ export const AgentsPanel = () => {
         </SettingsField>
 
         {/* Colors */}
-        <SettingsField label={t('admin.agents.color')}>
+        <SettingsField label={t('admin.agents.color')} tooltip={t('settings.help.agents.color')}>
           <ColorPicker value={form.color || null} onChange={(color) => setForm({ ...form, color })} />
         </SettingsField>
 
@@ -549,6 +562,7 @@ export const AgentsPanel = () => {
   )
 
   return (
+    <TooltipProvider>
     <SettingsPanel
       title={t('admin.agents.title')}
       meta={filterMode === 'subagents'
@@ -562,8 +576,10 @@ export const AgentsPanel = () => {
     >
       {defaultAgentInfo && (
         <SettingsSection
+          id="agents-default"
           title={t('admin.agents.defaultAgent.title')}
           description={t('admin.agents.defaultAgent.description')}
+          tooltip={t('settings.help.agents.section.agents-default')}
         >
           <SelectField
             value={defaultAgentDraft.draft ?? ''}
@@ -594,7 +610,7 @@ export const AgentsPanel = () => {
       )}
 
       {hasSubOrSystem && (
-        <SettingsSection>
+        <SettingsSection id="agents-filter" tooltip={t('settings.help.agents.section.agents-filter')}>
           <Tabs
             items={FILTER_MODES.map((m) => ({ value: m, label: t(`admin.agents.filter.${m}`) }))}
             value={filterMode}
@@ -615,7 +631,7 @@ export const AgentsPanel = () => {
           ))}
         </div>
       ) : (
-        <SettingsSection>
+        <SettingsSection id="agents-list">
           <div className="agents-grid grid grid-cols-1 sm:grid-cols-2 gap-3">
             {filteredAgents.map((a) => (
               <SettingsItem key={a.id} className={cn('space-y-3', !a.enabled && 'opacity-50')}>
@@ -714,5 +730,6 @@ export const AgentsPanel = () => {
       {/* ADR-076: реестр SSH-ключей per-agent (в разделе «Агенты») */}
       <SshKeysSettings />
     </SettingsPanel>
+    </TooltipProvider>
   )
 }

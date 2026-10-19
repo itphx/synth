@@ -82,9 +82,14 @@ export function McpRegistryForm({
   const { t } = useI18n()
 
   return (
-    <SettingsSection title={title}>
+    <SettingsSection
+      id="mcp-admin-form"
+      title={title}
+      tooltip={t('settings.help.mcpAdmin.section.mcp-admin-form')}
+    >
       <TextField
         label={t('mcp.serverName')}
+        tooltip={t('settings.help.mcpAdmin.serverName')}
         value={name}
         onChange={(e) => onNameChange(e.target.value)}
         disabled={editing}
@@ -93,6 +98,7 @@ export function McpRegistryForm({
 
       <TextArea
         label={t('mcp.serverDescription')}
+        tooltip={t('settings.help.mcpAdmin.serverDescription')}
         value={config.description || ''}
         onChange={(e) => onConfigChange({ description: e.target.value || undefined })}
         rows={2}
@@ -102,6 +108,7 @@ export function McpRegistryForm({
       <SelectField
         label={t('mcp.type')}
         description={typeDescription}
+        tooltip={t('settings.help.mcpAdmin.type')}
         value={config.type}
         onValueChange={(value) => onConfigChange({ type: value as McpServerConfig['type'] })}
         ariaLabel={t('mcp.type')}
@@ -117,12 +124,14 @@ export function McpRegistryForm({
         <>
           <TextField
             label={t('mcp.command')}
+            tooltip={t('settings.help.mcpAdmin.command')}
             value={config.command || ''}
             onChange={(e) => onConfigChange({ command: e.target.value })}
             placeholder="python или npx"
           />
           <TextField
             label={t('mcp.args')}
+            tooltip={t('settings.help.mcpAdmin.args')}
             value={formatArgs(config.args)}
             onChange={(e) => onConfigChange({ args: parseArgs(e.target.value) })}
             mono
@@ -140,6 +149,7 @@ export function McpRegistryForm({
             autoCapitalize="none"
             autoCorrect="off"
             label={t('mcp.env')}
+            tooltip={t('settings.help.mcpAdmin.env')}
             value={formatEnv(config.env)}
             onChange={(e) => onConfigChange({ env: parseEnv(e.target.value) })}
             rows={3}
@@ -152,6 +162,7 @@ export function McpRegistryForm({
       {config.type !== 'stdio' && (
         <TextField
           label={t('mcp.url')}
+          tooltip={t('settings.help.mcpAdmin.url')}
           value={config.url || ''}
           onChange={(e) => onConfigChange({ url: e.target.value })}
           placeholder="http://localhost:8765/mcp"

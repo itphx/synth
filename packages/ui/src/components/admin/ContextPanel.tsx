@@ -151,12 +151,17 @@ export const ContextPanel = () => {
       </SettingsSection>
 
       {showCreate && (
-        <SettingsSection title={t('admin.context.newFile')}>
+        <SettingsSection
+          id="context-new-file"
+          title={t('admin.context.newFile')}
+          tooltip={t('settings.help.context.section.context-new-file')}
+        >
           <TextField
             label={t('admin.context.fileName')}
             value={newFile.name}
             onChange={e => setNewFile({ ...newFile, name: e.target.value })}
             placeholder="ABOUT.md"
+            tooltip={t('settings.help.context.fileName')}
           />
           <TextArea
             label={t('admin.context.content')}
@@ -164,6 +169,7 @@ export const ContextPanel = () => {
             onChange={e => setNewFile({ ...newFile, content: e.target.value })}
             rows={4}
             mono
+            tooltip={t('settings.help.context.content')}
           />
           <SettingsActions
             onSave={handleCreate}
@@ -177,16 +183,22 @@ export const ContextPanel = () => {
       )}
 
       {editFile && (
-        <SettingsSection title={t('admin.context.editing', { name: editFile.name })}>
+        <SettingsSection
+          id="context-edit"
+          title={t('admin.context.editing', { name: editFile.name })}
+          tooltip={t('settings.help.context.section.context-edit')}
+        >
           <p className="text-xs text-muted-foreground min-w-0 break-words">
             {t(CATEGORY_LABEL_KEYS[editFile.category] || editFile.category)}
           </p>
           <TextArea
+            label={t('admin.context.content')}
             value={editFile.content}
             onChange={e => setEditFile({ ...editFile, content: e.target.value })}
             rows={8}
             mono
             aria-label={t('admin.context.editing', { name: editFile.name })}
+            tooltip={t('settings.help.context.editContent')}
           />
           <SettingsActions
             onSave={handleSave}

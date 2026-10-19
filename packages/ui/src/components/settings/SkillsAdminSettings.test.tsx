@@ -1,6 +1,28 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+
+// persist (zustand) в useUIStore пишет в localStorage — в Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 import React from 'react'
 import type { SkillDetail, SkillSummary } from '@itphx/synth-shared'
 
@@ -26,6 +48,8 @@ vi.mock('@/hooks/useNotification', () => ({
 }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { useUIStore } from '@/stores/useUIStore'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { SkillsAdminSettings } from './SkillsAdminSettings'
 import { useSkillsStore, EMPTY_SKILLS_DISABLED, EMPTY_SKILLS_DISABLED_FOR_NEW_PROJECTS } from '@/stores/skillsStore'
@@ -73,6 +97,7 @@ function setInputValue(el: HTMLInputElement | HTMLTextAreaElement, value: string
 
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -80,7 +105,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <SkillsAdminSettings />
+        <TooltipProvider>
+          <SkillsAdminSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

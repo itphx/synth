@@ -44,6 +44,7 @@ export function EventJournalPanel({ extraActions }: EventJournalPanelProps) {
 
   return (
     <SettingsSection
+      id="events-journal"
       title={t('events.journal.title')}
       description={t('events.journal.description')}
       actions={

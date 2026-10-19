@@ -415,6 +415,7 @@ export function ServiceKeysSettings() {
       )}
 
       <SettingsSection
+        id="service-keys-list"
         title={t('serviceKeys.listTitle')}
         description={t('serviceKeys.listDescription')}
         actions={

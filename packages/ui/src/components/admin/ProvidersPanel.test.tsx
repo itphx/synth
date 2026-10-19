@@ -118,6 +118,30 @@ describe('ProvidersPanel: поле API-ключа провайдера не пр
   })
 })
 
+describe('ProvidersPanel: провайдер не помечается как «по умолчанию»', () => {
+  it('is_default из ответа API не рендерит бейдж', async () => {
+    vi.mocked(synthApi.getProviders).mockResolvedValueOnce({
+      providers: [
+        {
+          name: 'itphx',
+          type: 'openai',
+          icon: '',
+          url: 'https://api.example.com/v1',
+          model: 'model',
+          enabled: true,
+          is_default: true,
+        },
+      ],
+      default_provider: 'itphx',
+    })
+    const host = await renderPanel()
+
+    expect(host.textContent).toContain('itphx')
+    expect(host.textContent).not.toContain('admin.providers.default_2')
+    expect(host.textContent).not.toContain('по умолчанию')
+  })
+})
+
 describe('ProvidersPanel: иконка провайдера в форме показывается человекочитаемо', () => {
   const baseProvider: ProviderInfo = {
     name: 'itphx',

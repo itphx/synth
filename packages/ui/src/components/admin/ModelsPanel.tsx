@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { confirm } from '@/lib/confirm'
 import { SelectContent, SelectItem } from '@/components/ui/select'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { Button } from '../ui/button'
 import { ProviderIcon } from './ProviderIcon'
 import { CurrencyPicker } from './CurrencyPicker'
@@ -686,6 +687,7 @@ export const ModelsPanel = () => {
   }
 
   return (
+    <TooltipProvider>
     <SettingsPanel
       title={t('admin.models.title')}
       meta={t('admin.models.count', { visible: visibleCount, total: totalModels, providers: enabledProviders.length })}
@@ -713,12 +715,15 @@ export const ModelsPanel = () => {
 
       {/* Модель по умолчанию для новых сессий: пара provider+model уровня инстанса */}
       <SettingsSection
+        id="models-default"
         title={t('admin.models.defaultModelSection')}
         description={t('admin.models.defaultModelSectionHint')}
+        tooltip={t('settings.help.models.section.models-default')}
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <SelectField
             label={t('admin.models.defaultProvider')}
+            tooltip={t('settings.help.models.defaultProvider')}
             value={pairProvider}
             onValueChange={handleDefaultProviderChange}
             ariaLabel={t('admin.models.defaultProvider')}
@@ -733,6 +738,7 @@ export const ModelsPanel = () => {
           </SelectField>
           <SelectField
             label={t('admin.models.defaultModelLabel')}
+            tooltip={t('settings.help.models.defaultModelLabel')}
             value={pairModel}
             onValueChange={handleDefaultModelChange}
             ariaLabel={t('admin.models.defaultModelLabel')}
@@ -762,9 +768,11 @@ export const ModelsPanel = () => {
       </SettingsSection>
 
       {/* Фильтры */}
-      <SettingsSection>
+      <SettingsSection id="models-filters" advanced>
         <TextField
           id="models-search"
+          label={t('admin.models.search')}
+          tooltip={t('settings.help.models.search')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder={t('admin.models.searchPlaceholder')}
@@ -773,6 +781,7 @@ export const ModelsPanel = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <SelectField
             label={t('admin.models.allProviders')}
+            tooltip={t('settings.help.models.filterProvider')}
             value={filterProvider}
             onValueChange={handleFilterProviderChange}
             ariaLabel={t('admin.models.allProviders')}
@@ -786,6 +795,7 @@ export const ModelsPanel = () => {
           </SelectField>
           <ToggleField
             label={t('admin.models.onlyEnabled')}
+            tooltip={t('settings.help.models.onlyEnabled')}
             enabled={onlyEnabled}
             onToggle={() => setOnlyEnabled((v) => !v)}
           />
@@ -802,7 +812,11 @@ export const ModelsPanel = () => {
 
       {/* Форма добавления */}
       {showAddForm && (
-        <SettingsSection title={t('admin.models.addManual')}>
+        <SettingsSection
+          id="models-add-manual"
+          title={t('admin.models.addManual')}
+          advanced
+        >
           {addError && (
             <div className="bg-status-error/10 border border-status-error/30 rounded p-2 text-xs text-status-error min-w-0 break-words">
               {addError}
@@ -811,6 +825,7 @@ export const ModelsPanel = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <SelectField
               label={t('admin.models.provider')}
+              tooltip={t('settings.help.models.provider')}
               value={addProvider}
               onValueChange={setAddProvider}
               ariaLabel={t('admin.models.provider')}
@@ -824,6 +839,7 @@ export const ModelsPanel = () => {
             </SelectField>
             <TextField
               label={t('admin.models.name')}
+              tooltip={t('settings.help.models.name')}
               value={addName}
               onChange={(e) => setAddName(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddModel()}
@@ -831,6 +847,7 @@ export const ModelsPanel = () => {
             />
             <NumberField
               label={t('admin.models.contextK')}
+              tooltip={t('settings.help.models.contextK')}
               value={addCtx}
               onChange={(e) => setAddCtx(e.target.value)}
               placeholder="128"
@@ -841,6 +858,7 @@ export const ModelsPanel = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
               <NumberField
                 label={t('admin.models.priceIn')}
+                tooltip={t('settings.help.models.priceIn')}
                 value={addInPrice}
                 onChange={(e) => setAddInPrice(e.target.value)}
                 placeholder="0.15"
@@ -850,6 +868,7 @@ export const ModelsPanel = () => {
               />
               <NumberField
                 label={t('admin.models.priceOut')}
+                tooltip={t('settings.help.models.priceOut')}
                 value={addOutPrice}
                 onChange={(e) => setAddOutPrice(e.target.value)}
                 placeholder="0.60"
@@ -938,5 +957,6 @@ export const ModelsPanel = () => {
         </div>
       )}
     </SettingsPanel>
+    </TooltipProvider>
   )
 }

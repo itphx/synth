@@ -403,6 +403,7 @@ export const McpSettings = () => {
               <SettingsItem>
                 <ToggleField
                   label={t('mcp.masterEnabled')}
+                  tooltip={t('settings.help.mcpAdmin.masterEnabled')}
                   description={t('mcp.masterEnabledDescription')}
                   enabled={editor.formEnabled}
                   onToggle={() => editor.setFormEnabled((prev) => !prev)}
@@ -411,6 +412,7 @@ export const McpSettings = () => {
               <SettingsItem>
                 <ToggleField
                   label={t('mcp.enabledByDefault')}
+                  tooltip={t('settings.help.mcpAdmin.enabledByDefault')}
                   enabled={editor.formDefault}
                   onToggle={() => editor.setFormDefault((prev) => !prev)}
                 />
@@ -445,7 +447,9 @@ export const McpSettings = () => {
       )}
 
       {/* Registry list */}
-      <SettingsSection>
+      <SettingsSection
+        id="mcp-admin-main"
+      >
         {registry && registry.length === 0 && !editor.editing && (
           <div className="text-center text-muted-foreground py-8">
             <Icon name="server" className="size-8 mx-auto mb-2 opacity-40" />
@@ -551,8 +555,10 @@ export const McpSettings = () => {
 
       {/* Доступность инструментов по режимам (W4c) */}
       <SettingsSection
+        id="mcp-admin-permissions"
         title={t('mcp.permissions.title')}
         description={t('mcp.permissions.description')}
+        advanced
       >
         {dirty && (
           <div className="p-2 rounded-lg bg-interactive-hover text-muted-foreground text-xs">
@@ -614,6 +620,9 @@ export const McpSettings = () => {
       {/* ADR-071 §2.3: глобальная политика MCP-инструментов (mcp.policy). */}
       <PolicySettingsCard
         scope="mcp"
+        id="mcp-admin-policy"
+        tooltip={t('settings.help.mcpAdmin.section.policy')}
+        fieldTooltip={t('settings.help.mcpAdmin.policy')}
         value={mcpPolicy}
         savedValue={savedMcpPolicy}
         loading={mcpPolicyLoading}
@@ -723,8 +732,11 @@ function NetworkPolicySection({
 
   return (
     <SettingsSection
+      id="mcp-admin-network"
       title={t('mcp.network.title')}
       description={t('mcp.network.description')}
+      tooltip={t('settings.help.mcpAdmin.section.mcp-admin-network')}
+      advanced
     >
       <div className="space-y-3 min-w-0" data-testid="mcp-network-policy">
         {loading && !current && (
@@ -739,6 +751,7 @@ function NetworkPolicySection({
             <SelectField
               label={t('mcp.network.mode')}
               description={current.mode === 'deny' ? t('mcp.network.denyHelp') : t('mcp.network.allowHelp')}
+              tooltip={t('settings.help.mcpAdmin.networkMode')}
               value={current.mode}
               onValueChange={(value) => draft.update({ mode: value as 'allow' | 'deny' })}
               ariaLabel={t('mcp.network.mode')}
@@ -752,6 +765,7 @@ function NetworkPolicySection({
             <ListField
               label={t('mcp.network.list')}
               description={t('egress.listHelp')}
+              tooltip={t('settings.help.mcpAdmin.networkList')}
               values={current.list}
               onChange={(list) => draft.update({ list })}
               placeholder="10.0.0.0/8"
@@ -761,6 +775,7 @@ function NetworkPolicySection({
             <ListField
               label={t('egress.exceptions')}
               description={t('egress.exceptionsHelp')}
+              tooltip={t('settings.help.mcpAdmin.networkExceptions')}
               values={current.exceptions ?? []}
               onChange={(exceptions) => draft.update({ exceptions })}
               placeholder="api.example.com"
@@ -772,6 +787,7 @@ function NetworkPolicySection({
               <TextField
                 label={t('egress.check.url')}
                 description={t('egress.check.description')}
+                tooltip={t('settings.help.mcpAdmin.networkCheckUrl')}
                 value={checkUrl}
                 onChange={(e) => {
                   setCheckUrl(e.target.value)
@@ -904,6 +920,7 @@ function ServerAvailabilityCard({
       <SettingsRow
         label={t('mcp.permissions.defaultTools')}
         description={t('mcp.permissions.defaultToolsHint')}
+        tooltip={t('settings.help.mcpAdmin.permissionsDefault')}
         control={<ModeToggles availability={entry.default} onToggle={onToggleDefault} />}
       />
 
@@ -933,6 +950,7 @@ function ServerAvailabilityCard({
                     )}
                     label={tool.name}
                     description={description}
+                    tooltip={t('settings.help.mcpAdmin.permissionsPerTool')}
                     control={
                       <ModeToggles
                         availability={effective}

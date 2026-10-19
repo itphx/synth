@@ -146,11 +146,14 @@ The iOS mode (`alignItemWithTrigger`) is **disabled** in the kit's `Select`
 (`alignItemWithTrigger={false}` on `SelectPositioner`) for a consistent compact
 dropdown on all devices and opening methods.
 
-The `SelectContent` popup width equals the width of the trigger that opened it:
-`w-[var(--anchor-width)]` (Base UI puts the anchor width into the `--anchor-width`
-CSS variable on the positioner) + `max-w-[var(--available-width)]`, so that the
-popup does not overflow a narrow viewport. Long item labels are truncated
-(`truncate` on `BaseSelect.ItemText`), so the text does not break the layout.
+The `SelectContent` popup is **at least as wide as the trigger** but grows with
+its content up to the available area: `min-w-[var(--anchor-width)] w-max
+max-w-[var(--available-width)]` (Base UI puts the anchor width into the
+`--anchor-width` CSS variable on the positioner and the available area into
+`--available-width`). A narrow trigger (for example "INFO" in Debug) therefore no
+longer clips longer items ("WARNING", "ERROR"), and the popup does not overflow a
+narrow viewport. `truncate` on `BaseSelect.ItemText` remains as a safeguard: text
+is clipped only when the item actually hits the available width.
 
 The sign-in card (`components/auth/LoginForm.tsx`) follows the floating-layer
 recipe, but on the **card** surface (`bg-card`): `rounded-xl` +

@@ -10,6 +10,7 @@ import {
   type ProtectedPathsPolicy,
 } from '@/lib/api/synthApi'
 import { Button } from '../ui/button'
+import { TooltipProvider } from '../ui/tooltip'
 import { SelectContent, SelectItem } from '../ui/select'
 import {
   DefaultsBadge,
@@ -340,14 +341,19 @@ export function SecuritySettings() {
   }
 
   return (
+    <TooltipProvider>
     <SettingsPanel title={t('gateway.title')} description={t('gateway.description')}>
       {/* Шлюз безопасности (llmGateway) */}
-      <SettingsSection>
+      <SettingsSection
+        id="security-gateway"
+        tooltip={t('settings.help.security.section.security-gateway')}
+      >
         <SettingsItem>
           <ToggleField
             label={gatewayDraft.enabled ? t('common.enabled') : t('common.disabled')}
             enabled={gatewayDraft.enabled}
             onToggle={() => gateway.update({ enabled: !gatewayDraft.enabled })}
+            tooltip={t('settings.help.security.gatewayEnabled')}
           />
         </SettingsItem>
 
@@ -357,6 +363,7 @@ export function SecuritySettings() {
             description={t('gateway.logPayloadsHelp')}
             enabled={gatewayDraft.logPayloads ?? false}
             onToggle={() => gateway.update({ logPayloads: !(gatewayDraft.logPayloads ?? false) })}
+            tooltip={t('settings.help.security.logPayloads')}
           />
         </SettingsItem>
 
@@ -368,6 +375,7 @@ export function SecuritySettings() {
               gateway.update({ inputMode: value as LlmGatewaySettings['inputMode'] })
             }
             ariaLabel={t('gateway.inputMode')}
+            tooltip={t('settings.help.security.inputMode')}
           >
             <SelectContent>
               <SelectItem value="obfuscate">{t('gateway.inputMode.obfuscate')}</SelectItem>
@@ -383,6 +391,7 @@ export function SecuritySettings() {
             inline
             min={1}
             value={gatewayDraft.rateLimit.userPerMinute}
+            tooltip={t('settings.help.security.rateLimitUser')}
             onChange={(e) =>
               gateway.update({
                 rateLimit: {
@@ -397,6 +406,7 @@ export function SecuritySettings() {
             inline
             min={1}
             value={gatewayDraft.rateLimit.providerPerMinute}
+            tooltip={t('settings.help.security.rateLimitProvider')}
             onChange={(e) =>
               gateway.update({
                 rateLimit: {
@@ -423,10 +433,15 @@ export function SecuritySettings() {
       </SettingsSection>
 
       {/* Паттерны обфускации (llmGateway) */}
-      <SettingsSection actions={!isOverridden ? <DefaultsBadge /> : undefined}>
+      <SettingsSection
+        id="security-patterns"
+        actions={!isOverridden ? <DefaultsBadge /> : undefined}
+        advanced
+      >
         <SettingsField
           label={t('gateway.patterns.title')}
           description={t('gateway.patterns.description')}
+          tooltip={t('settings.help.security.patterns')}
         >
           {patternsLoadError && (
             <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
@@ -505,9 +520,12 @@ export function SecuritySettings() {
 
       {/* Защищённые пути */}
       <SettingsSection
+        id="security-protected-paths"
         title={t('security.protectedPaths.title')}
         description={t('security.protectedPaths.description')}
+        tooltip={t('settings.help.security.section.security-protected-paths')}
         actions={!policyOverridden ? <DefaultsBadge /> : undefined}
+        advanced
       >
         <SettingsItem>
           <ToggleField
@@ -516,6 +534,7 @@ export function SecuritySettings() {
             onToggle={() =>
               setSecurity((s) => ({ ...s, protectedPaths: { enabled: !s.protectedPaths.enabled } }))
             }
+            tooltip={t('settings.help.security.protectedPathsEnabled')}
           />
         </SettingsItem>
 
@@ -526,6 +545,7 @@ export function SecuritySettings() {
             label={askTimeoutEnabled ? t('sessionSettings.askTimeoutEnabled') : t('sessionSettings.askTimeoutDisabled')}
             enabled={askTimeoutEnabled}
             onToggle={() => setAskTimeoutEnabled(!askTimeoutEnabled)}
+            tooltip={t('settings.help.security.askTimeoutEnabled')}
           />
 
           {askTimeoutEnabled && (
@@ -535,6 +555,7 @@ export function SecuritySettings() {
               value={askTimeoutSec}
               onChange={(e) => setAskTimeoutSec(e.target.value)}
               placeholder="30"
+              tooltip={t('settings.help.security.askTimeoutSeconds')}
             />
           )}
         </SettingsItem>
@@ -557,6 +578,7 @@ export function SecuritySettings() {
                 placeholder={t('security.protectedPaths.placeholder')}
                 addLabel={t('security.protectedPaths.add')}
                 removeLabel={t('security.protectedPaths.remove')}
+                tooltip={t('settings.help.security.deniedPaths')}
               />
             </SettingsItem>
             <SettingsItem>
@@ -567,6 +589,7 @@ export function SecuritySettings() {
                 placeholder={t('security.protectedPaths.placeholder')}
                 addLabel={t('security.protectedPaths.add')}
                 removeLabel={t('security.protectedPaths.remove')}
+                tooltip={t('settings.help.security.deniedPrefixes')}
               />
             </SettingsItem>
             <SettingsItem>
@@ -577,6 +600,7 @@ export function SecuritySettings() {
                 placeholder={t('security.protectedPaths.placeholder')}
                 addLabel={t('security.protectedPaths.add')}
                 removeLabel={t('security.protectedPaths.remove')}
+                tooltip={t('settings.help.security.approvalPaths')}
               />
             </SettingsItem>
             <SettingsItem>
@@ -587,6 +611,7 @@ export function SecuritySettings() {
                 placeholder={t('security.protectedPaths.placeholder')}
                 addLabel={t('security.protectedPaths.add')}
                 removeLabel={t('security.protectedPaths.remove')}
+                tooltip={t('settings.help.security.deniedCommandPrefixes')}
               />
             </SettingsItem>
           </>
@@ -608,5 +633,6 @@ export function SecuritySettings() {
         )}
       </SettingsSection>
     </SettingsPanel>
+    </TooltipProvider>
   )
 }

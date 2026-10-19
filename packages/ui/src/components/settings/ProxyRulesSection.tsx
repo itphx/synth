@@ -4,7 +4,7 @@ import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { Icon } from '../icon/Icon';
 import { Button } from '../ui/button';
-import { ListField, SelectField, TextField } from '../ui/settings';
+import { FieldTooltip, ListField, SelectField, TextField } from '../ui/settings';
 import { SelectContent, SelectItem } from '../ui/select';
 import { nextRuleKey, type ProxyDraft, type ProxyRuleDraft } from './proxy-draft';
 
@@ -146,6 +146,7 @@ export function ProxyRulesSection({ draft, setDraft, disabled = false }: ProxyRu
           }}
           placeholder="api.openai.com"
           variant="chips"
+          tooltip={t('settings.help.network.ruleHosts')}
         />
       </div>
 
@@ -155,6 +156,7 @@ export function ProxyRulesSection({ draft, setDraft, disabled = false }: ProxyRu
         onChange={(e) => setForm((prev) => ({ ...prev, label: e.target.value }))}
         placeholder={t('proxy.rules.labelPlaceholder')}
         disabled={disabled}
+        tooltip={t('settings.help.network.ruleLabel')}
         data-testid="proxy-rule-form-label"
       />
 
@@ -172,6 +174,7 @@ export function ProxyRulesSection({ draft, setDraft, disabled = false }: ProxyRu
           { value: 'direct', label: t('proxy.rules.action.direct') },
         ]}
         disabled={disabled}
+        tooltip={t('settings.help.network.ruleAction')}
         triggerTestId="proxy-rule-form-action"
       >
         <SelectContent>
@@ -187,6 +190,7 @@ export function ProxyRulesSection({ draft, setDraft, disabled = false }: ProxyRu
         onValueChange={(profile) => setForm((prev) => ({ ...prev, profile }))}
         items={profileItems}
         disabled={disabled || form.action === 'direct'}
+        tooltip={t('settings.help.network.ruleProfile')}
         triggerTestId="proxy-rule-form-profile"
       >
         <SelectContent>
@@ -236,7 +240,10 @@ export function ProxyRulesSection({ draft, setDraft, disabled = false }: ProxyRu
       data-testid="proxy-rules"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-        <div className="text-sm font-medium text-foreground">{t('proxy.rules.title')}</div>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <div className="text-sm font-medium text-foreground">{t('proxy.rules.title')}</div>
+          <FieldTooltip text={t('settings.help.network.rules')} />
+        </div>
         <Button
           variant="outline"
           size="sm"

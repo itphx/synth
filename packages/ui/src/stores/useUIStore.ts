@@ -61,6 +61,16 @@ export interface ForwardModeState {
   mode: 'forward' | 'merge'
 }
 
+/** Запрос фокуса на секцию настроек (nonce добавляет стор). */
+export interface SettingsFocusRequest {
+  categoryId: string
+  sectionId?: string
+}
+
+export interface SettingsFocusTarget extends SettingsFocusRequest {
+  nonce: number
+}
+
 interface UIStore {
   leftPanel: LeftPanelState
   rightPanel: RightPanelState
@@ -97,6 +107,12 @@ interface UIStore {
   setSettingsDialogOpen: (open: boolean) => void
   settingsPage: string
   setSettingsPage: (page: string) => void
+  /** Показывать продвинутые категории/секции в настройках (персистится). */
+  settingsShowAdvanced: boolean
+  setSettingsShowAdvanced: (value: boolean) => void
+  /** Одноразовый запрос фокуса на секцию панели (runtime, не персистится). */
+  settingsFocus: SettingsFocusTarget | null
+  focusSettings: (target: SettingsFocusRequest) => void
 
   isLogsDialogOpen: boolean
   setLogsDialogOpen: (open: boolean) => void
@@ -252,6 +268,16 @@ export const useUIStore = create<UIStore>()(
       setSettingsDialogOpen: (open) => set({ isSettingsDialogOpen: open }),
       settingsPage: 'appearance',
       setSettingsPage: (page) => set({ settingsPage: page }),
+      settingsShowAdvanced: false,
+      setSettingsShowAdvanced: (value) => set({ settingsShowAdvanced: value }),
+      settingsFocus: null,
+      focusSettings: (target) =>
+        set((state) => ({
+          settingsFocus: {
+            ...target,
+            nonce: (state.settingsFocus?.nonce ?? 0) + 1,
+          },
+        })),
 
       isLogsDialogOpen: false,
       setLogsDialogOpen: (open) => set({ isLogsDialogOpen: open }),
@@ -456,6 +482,7 @@ export const useUIStore = create<UIStore>()(
         activeCenterTabId: state.activeCenterTabId,
         collapsedProjects: [...state.collapsedProjects],
         onlyActiveProject: state.onlyActiveProject,
+        settingsShowAdvanced: state.settingsShowAdvanced,
       }),
       merge: (persisted, current) => {
         const p = persisted as Record<string, unknown> | undefined
@@ -477,6 +504,8 @@ export const useUIStore = create<UIStore>()(
           activeCenterTabId: (p?.activeCenterTabId as string | null) ?? current.activeCenterTabId,
           collapsedProjects: new Set(p?.collapsedProjects as string[] ?? []),
           onlyActiveProject: (p?.onlyActiveProject as boolean) ?? current.onlyActiveProject,
+          settingsShowAdvanced:
+            (p?.settingsShowAdvanced as boolean) ?? current.settingsShowAdvanced,
         }
       },
     }

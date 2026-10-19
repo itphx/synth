@@ -118,7 +118,10 @@ export const AppearanceSettings = () => {
       title={t('settings.appearance.title')}
       description={t('settings.appearance.description')}
     >
-      <SettingsSection title={t('settings.appearance.themeMode.label')}>
+      <SettingsSection
+        id="appearance-theme-mode"
+        title={t('settings.appearance.themeMode.label')}
+      >
         <SettingsItem>
           <ThemeModeControl
             value={current.themeMode}
@@ -136,7 +139,10 @@ export const AppearanceSettings = () => {
         </SettingsItem>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.appearance.uiScale.label')}>
+      <SettingsSection
+        id="appearance-ui-scale"
+        title={t('settings.appearance.uiScale.label')}
+      >
         <SettingsItem>
           <UiScaleControl
             value={current.uiScale}
@@ -145,7 +151,10 @@ export const AppearanceSettings = () => {
         </SettingsItem>
       </SettingsSection>
 
-      <SettingsSection title={t('settings.appearance.language.label')}>
+      <SettingsSection
+        id="appearance-language"
+        title={t('settings.appearance.language.label')}
+      >
         <SettingsItem>
           <LanguageControl
             value={current.locale}

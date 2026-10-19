@@ -12,6 +12,7 @@ import { useUIStore } from '@/stores/useUIStore';
 import { cn } from '@/lib/utils';
 import { Icon } from '../icon/Icon';
 import { Button } from '../ui/button';
+import { TooltipProvider } from '../ui/tooltip';
 import {
   ListField,
   NumberField,
@@ -393,7 +394,13 @@ export function ProxyStatusSection() {
   const profileItems = profileNames.map((name) => ({ value: name, label: name }));
 
   return (
-    <SettingsSection title={t('proxy.title')} description={t('proxy.description')}>
+    <TooltipProvider>
+    <SettingsSection
+      id="network-proxy"
+      title={t('proxy.title')}
+      description={t('proxy.description')}
+      tooltip={t('settings.help.network.section.network-proxy')}
+    >
       <div className="space-y-3 min-w-0" data-testid="proxy-status-section">
         {loading && !info && (
           <div className="text-center text-muted-foreground py-4 text-sm">
@@ -476,6 +483,7 @@ export function ProxyStatusSection() {
                   label={t('proxy.form.enabled')}
                   description={t('proxy.form.enabledHint')}
                   enabled={current.enabled}
+                  tooltip={t('settings.help.network.proxyEnabled')}
                   onToggle={() =>
                     draft.setDraft((prev) => (prev ? { ...prev, enabled: !prev.enabled } : prev))
                   }
@@ -494,6 +502,7 @@ export function ProxyStatusSection() {
                     { value: 'all', label: t('proxy.mode.all') },
                     { value: 'selected', label: t('proxy.mode.selected') },
                   ]}
+                  tooltip={t('settings.help.network.proxyMode')}
                   triggerTestId="proxy-mode-select"
                 >
                   <SelectContent>
@@ -522,6 +531,7 @@ export function ProxyStatusSection() {
                   }
                   items={profileItems}
                   disabled={profileNames.length === 0}
+                  tooltip={t('settings.help.network.proxyDefaultProfile')}
                   triggerTestId="proxy-default-profile"
                 >
                   <SelectContent>
@@ -552,12 +562,14 @@ export function ProxyStatusSection() {
                   }
                   placeholder="10.0.0.0/8"
                   variant="chips"
+                  tooltip={t('settings.help.network.proxyNoProxy')}
                 />
 
                 <ToggleField
                   label={t('proxy.form.fromEnv')}
                   description={t('proxy.form.fromEnvHelp')}
                   enabled={current.fromEnv}
+                  tooltip={t('settings.help.network.proxyFromEnv')}
                   onToggle={() =>
                     draft.setDraft((prev) => (prev ? { ...prev, fromEnv: !prev.fromEnv } : prev))
                   }
@@ -567,6 +579,7 @@ export function ProxyStatusSection() {
                   label={t('proxy.fallbackDirect')}
                   description={t('proxy.fallbackDirectHint')}
                   enabled={current.fallbackDirect}
+                  tooltip={t('settings.help.network.proxyFallbackDirect')}
                   onToggle={() =>
                     draft.setDraft((prev) =>
                       prev ? { ...prev, fallbackDirect: !prev.fallbackDirect } : prev,
@@ -590,6 +603,7 @@ export function ProxyStatusSection() {
                   value={Number.isFinite(current.connectTimeoutMs) ? current.connectTimeoutMs : 0}
                   min={1}
                   suffix="ms"
+                  tooltip={t('settings.help.network.proxyConnectTimeout')}
                   onChange={(e) =>
                     draft.setDraft((prev) =>
                       prev
@@ -642,5 +656,6 @@ export function ProxyStatusSection() {
         )}
       </div>
     </SettingsSection>
+    </TooltipProvider>
   );
 }

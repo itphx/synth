@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
+  FieldTooltip,
   SettingsActions,
   SettingsItem,
   SettingsPanel,
@@ -78,13 +79,20 @@ function DebugCategorySection({
   const current = draft.draft ?? groups
 
   return (
-    <SettingsSection title={title}>
+    <SettingsSection
+      id={`debug-${categoryKey}`}
+      title={title}
+      tooltip={t(`settings.help.debug.section.debug-${categoryKey}`)}
+    >
       {Object.entries(groups).map(([group, savedLevel]) => {
         const level = current[group] ?? savedLevel
         return (
           <SettingsItem key={group} className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <span className="text-sm font-medium min-w-0 break-words">{group}</span>
+              <span className="inline-flex min-w-0 items-center gap-1.5">
+                <span className="text-sm font-medium min-w-0 break-words">{group}</span>
+                <FieldTooltip text={t('settings.help.debug.levels')} />
+              </span>
               <span
                 className={cn(
                   'px-2 py-0.5 rounded text-[0.6875rem] font-medium',

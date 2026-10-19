@@ -7,6 +7,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
+import { TooltipProvider } from '../ui/tooltip'
 import {
   ListField,
   SelectField,
@@ -37,6 +38,8 @@ export interface EgressPolicySectionProps {
   descriptionKey: string
   /** Префикс `data-testid` для тестов. */
   testIdPrefix: string
+  /** Секция относится к продвинутым настройкам («Показать дополнительные»). */
+  advanced?: boolean
 }
 
 /**
@@ -54,9 +57,14 @@ export function EgressPolicySection({
   titleKey,
   descriptionKey,
   testIdPrefix,
+  advanced = false,
 }: EgressPolicySectionProps) {
   const { t } = useI18n()
   const { notify } = useNotification()
+
+  // Подсказки живут в словаре категории, где секция используется.
+  const helpCategory = scope === 'tools' ? 'builtinTools' : 'webhooks'
+  const help = (key: string) => `settings.help.${helpCategory}.${key}`
 
   const [policy, setPolicy] = useState<DraftPolicy | null>(null)
   const [defaults, setDefaults] = useState<DraftPolicy | null>(null)
@@ -153,7 +161,14 @@ export function EgressPolicySection({
   }
 
   return (
-    <SettingsSection title={t(titleKey)} description={t(descriptionKey)}>
+    <TooltipProvider>
+    <SettingsSection
+      id={`egress-${scope}`}
+      title={t(titleKey)}
+      description={t(descriptionKey)}
+      tooltip={t(help(`section.egress-${scope}`))}
+      advanced={advanced}
+    >
       <div className="space-y-3 min-w-0" data-testid={`${testIdPrefix}-section`}>
         {loading && !current && (
           <div className="text-center text-muted-foreground py-4 text-sm">{t('common.loading')}</div>
@@ -175,6 +190,7 @@ export function EgressPolicySection({
                 draft.setDraft((prev) => (prev ? { ...prev, mode: mode as DraftPolicy['mode'] } : prev))
               }
               ariaLabel={t('egress.mode')}
+              tooltip={t(help('egressMode'))}
               triggerTestId={`${testIdPrefix}-mode`}
             >
               <SelectContent>
@@ -202,6 +218,7 @@ export function EgressPolicySection({
               onChange={(list) => draft.setDraft((prev) => (prev ? { ...prev, list } : prev))}
               placeholder="10.0.0.0/8"
               variant="chips"
+              tooltip={t(help('egressList'))}
             />
 
             <ListField
@@ -213,6 +230,7 @@ export function EgressPolicySection({
               }
               placeholder="api.example.com"
               variant="chips"
+              tooltip={t(help('egressExceptions'))}
             />
 
             <div className="space-y-2 min-w-0 border-t border-border/60 pt-3">
@@ -233,6 +251,7 @@ export function EgressPolicySection({
                 }}
                 placeholder="https://example.com/hook"
                 mono
+                tooltip={t(help('egressCheckUrl'))}
                 data-testid={`${testIdPrefix}-check-url`}
               />
               <Button
@@ -303,5 +322,6 @@ export function EgressPolicySection({
         )}
       </div>
     </SettingsSection>
+    </TooltipProvider>
   )
 }

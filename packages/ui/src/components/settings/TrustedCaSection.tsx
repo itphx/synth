@@ -15,7 +15,9 @@ import { confirm } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
+import { TooltipProvider } from '../ui/tooltip'
 import {
+  FieldTooltip,
   ListField,
   SettingsRow,
   SettingsSection,
@@ -475,7 +477,14 @@ export function TrustedCaSection() {
   }
 
   return (
-    <SettingsSection title={t('network.tls.title')} description={t('network.tls.description')}>
+    <TooltipProvider>
+    <SettingsSection
+      id="network-tls"
+      title={t('network.tls.title')}
+      description={t('network.tls.description')}
+      tooltip={t('settings.help.network.section.network-tls')}
+      advanced
+    >
       <div className="space-y-3 min-w-0" data-testid="tls-section">
         {loading && !info && (
           <div className="text-center text-muted-foreground py-4 text-sm">{t('common.loading')}</div>
@@ -527,6 +536,7 @@ export function TrustedCaSection() {
                 enabled={info.rejectUnauthorized}
                 onToggle={() => void handleToggleReject()}
                 disabled={rejectPending}
+                tooltip={t('settings.help.network.tlsRejectUnauthorized')}
               />
 
               {info.defaultClient && (
@@ -637,8 +647,11 @@ export function TrustedCaSection() {
             {/* CA */}
             <div className="space-y-3 min-w-0 rounded-lg border border-border/60 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-                <div className="text-sm font-medium text-foreground">
-                  {t('network.tls.ca.title')}
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="text-sm font-medium text-foreground">
+                    {t('network.tls.ca.title')}
+                  </div>
+                  <FieldTooltip text={t('settings.help.network.tlsCa')} />
                 </div>
                 {caEnvReadOnly && (
                   <span
@@ -670,6 +683,7 @@ export function TrustedCaSection() {
                     rows={5}
                     mono
                     disabled={caPending}
+                    tooltip={t('settings.help.network.tlsCaPem')}
                     data-testid="tls-ca-input"
                   />
                   <input
@@ -730,8 +744,11 @@ export function TrustedCaSection() {
             {/* Default client */}
             <div className="space-y-3 min-w-0 rounded-lg border border-border/60 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-                <div className="text-sm font-medium text-foreground">
-                  {t('network.tls.client.title')}
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="text-sm font-medium text-foreground">
+                    {t('network.tls.client.title')}
+                  </div>
+                  <FieldTooltip text={t('settings.help.network.tlsClient')} />
                 </div>
                 {clientReadOnly && (
                   <span
@@ -751,8 +768,9 @@ export function TrustedCaSection() {
               ) : (
                 <>
                   <label className="block space-y-1 min-w-0">
-                    <span className="text-sm font-medium text-foreground">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                       {t('network.tls.client.cert')}
+                      <FieldTooltip text={t('settings.help.network.tlsClientCert')} />
                     </span>
                     <input
                       type="file"
@@ -764,8 +782,9 @@ export function TrustedCaSection() {
                     />
                   </label>
                   <label className="block space-y-1 min-w-0">
-                    <span className="text-sm font-medium text-foreground">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                       {t('network.tls.client.key')}
+                      <FieldTooltip text={t('settings.help.network.tlsClientKey')} />
                     </span>
                     <input
                       type="file"
@@ -826,8 +845,11 @@ export function TrustedCaSection() {
             {/* Mappings */}
             <div className="space-y-3 min-w-0 rounded-lg border border-border/60 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
-                <div className="text-sm font-medium text-foreground">
-                  {t('network.tls.mappings.title')}
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="text-sm font-medium text-foreground">
+                    {t('network.tls.mappings.title')}
+                  </div>
+                  <FieldTooltip text={t('settings.help.network.tlsMappings')} />
                 </div>
                 <Button
                   variant="outline"
@@ -939,6 +961,7 @@ export function TrustedCaSection() {
                     onChange={setMHosts}
                     placeholder="api.corp.local"
                     variant="chips"
+                    tooltip={t('settings.help.network.tlsMappingHosts')}
                   />
 
                   <TextField
@@ -946,6 +969,7 @@ export function TrustedCaSection() {
                     placeholder={t('network.tls.mappings.formLabelPlaceholder')}
                     value={mLabel}
                     onChange={(e) => setMLabel(e.target.value)}
+                    tooltip={t('settings.help.network.tlsMappingLabel')}
                     data-testid="tls-mapping-label"
                   />
 
@@ -956,8 +980,9 @@ export function TrustedCaSection() {
                   )}
 
                   <label className="block space-y-1 min-w-0">
-                    <span className="text-sm font-medium text-foreground">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                       {t('network.tls.mappings.formCert')}
+                      <FieldTooltip text={t('settings.help.network.tlsMappingCert')} />
                     </span>
                     <input
                       type="file"
@@ -968,8 +993,9 @@ export function TrustedCaSection() {
                     />
                   </label>
                   <label className="block space-y-1 min-w-0">
-                    <span className="text-sm font-medium text-foreground">
+                    <span className="flex items-center gap-1.5 text-sm font-medium text-foreground">
                       {t('network.tls.mappings.formKey')}
+                      <FieldTooltip text={t('settings.help.network.tlsMappingKey')} />
                     </span>
                     <input
                       type="file"
@@ -1068,5 +1094,6 @@ export function TrustedCaSection() {
         )}
       </div>
     </SettingsSection>
+    </TooltipProvider>
   )
 }

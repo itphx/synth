@@ -116,7 +116,10 @@ export function EventsSettings() {
 
   return (
     <SettingsPanel title={t('eventsConfig.title')} description={t('eventsConfig.description')}>
-      <SettingsSection>
+      <SettingsSection
+        id="events-config-main"
+        tooltip={t('settings.help.eventsConfig.section.events-config-main')}
+      >
         {loadError && (
           <div role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
             {loadError}

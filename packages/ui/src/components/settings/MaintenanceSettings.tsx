@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Icon } from '../icon/Icon'
 import { SelectContent, SelectItem } from '../ui/select'
-import { InfoField, SettingsPanel, SettingsSection, SelectField } from '../ui/settings'
+import { FieldTooltip, InfoField, SettingsPanel, SettingsSection, SelectField } from '../ui/settings'
 import {
   synthApi,
   type DoctorCheck,
@@ -529,32 +529,37 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
   const restorableBackups = backups.filter((backup) => !backup.encrypted)
   const pendingRestore = status?.pendingRestore ?? null
 
-  /** Строка-чекбокс опций снятия архива. */
-  const optionRow = (key: keyof BackupOptions, label: string, hint: string) => (
-    <label
+  /** Строка-чекбокс опций снятия архива; подсказка — рядом с лейблом (вне зоны клика). */
+  const optionRow = (key: keyof BackupOptions, label: string, hint: string, tooltip: string) => (
+    <div
       key={key}
-      className="flex items-start gap-2 min-w-0 cursor-pointer"
+      className="flex items-start gap-2 min-w-0"
       data-testid={`maintenance-backup-opt-${key}`}
     >
-      <input
-        type="checkbox"
-        className="mt-0.5 size-4 shrink-0 accent-primary"
-        checked={backupOpts[key]}
-        onChange={(e) => setBackupOpts((prev) => ({ ...prev, [key]: e.target.checked }))}
-      />
-      <span className="min-w-0">
-        <span className="block text-sm font-medium text-foreground break-words">{label}</span>
-        <span className="block text-xs text-muted-foreground break-words">{hint}</span>
-      </span>
-    </label>
+      <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
+        <input
+          type="checkbox"
+          className="mt-0.5 size-4 shrink-0 accent-primary"
+          checked={backupOpts[key]}
+          onChange={(e) => setBackupOpts((prev) => ({ ...prev, [key]: e.target.checked }))}
+        />
+        <span className="min-w-0">
+          <span className="block text-sm font-medium text-foreground break-words">{label}</span>
+          <span className="block text-xs text-muted-foreground break-words">{hint}</span>
+        </span>
+      </label>
+      <FieldTooltip text={tooltip} />
+    </div>
   )
 
   return (
     <SettingsPanel title={t('maintenance.title')} description={t('maintenance.description')}>
       {/* 1. Состояние инстанса */}
       <SettingsSection
+        id="maintenance-status"
         title={t('maintenance.status.title')}
         description={t('maintenance.status.description')}
+        tooltip={t('settings.help.maintenance.section.maintenance-status')}
         actions={
           <Button
             variant="outline"
@@ -657,8 +662,10 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
 
       {/* 2. Перезапуск инстанса (graceful restart, exit 75) */}
       <SettingsSection
+        id="maintenance-restart"
         title={t('maintenance.restart.title')}
         description={t('maintenance.restart.description')}
+        tooltip={t('settings.help.maintenance.section.maintenance-restart')}
       >
         {restartError && (
           <div
@@ -737,8 +744,10 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
 
       {/* 3. Схема данных и миграции */}
       <SettingsSection
+        id="maintenance-schema"
         title={t('maintenance.schema.title')}
         description={t('maintenance.schema.description')}
+        tooltip={t('settings.help.maintenance.section.maintenance-schema')}
       >
         {migrationsError && (
           <div
@@ -822,21 +831,30 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
 
       {/* 4. Бэкапы */}
       <SettingsSection
+        id="maintenance-backups"
         title={t('maintenance.backups.title')}
         description={t('maintenance.backups.description', { dataDir: status?.dataDir ?? '' })}
+        tooltip={t('settings.help.maintenance.section.maintenance-backups')}
       >
         <div className="space-y-2 min-w-0" data-testid="maintenance-backup-options">
           {optionRow(
             'secrets',
             t('maintenance.backups.optSecrets'),
             t('maintenance.backups.optSecretsHint'),
+            t('settings.help.maintenance.backupSecrets'),
           )}
           {optionRow(
             'workspace',
             t('maintenance.backups.optWorkspace'),
             t('maintenance.backups.optWorkspaceHint'),
+            t('settings.help.maintenance.backupWorkspace'),
           )}
-          {optionRow('live', t('maintenance.backups.optLive'), t('maintenance.backups.optLiveHint'))}
+          {optionRow(
+            'live',
+            t('maintenance.backups.optLive'),
+            t('maintenance.backups.optLiveHint'),
+            t('settings.help.maintenance.backupLive'),
+          )}
         </div>
 
         <Button
@@ -972,8 +990,11 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
 
       {/* 5. Восстановление */}
       <SettingsSection
+        id="maintenance-restore"
         title={t('maintenance.restore.title')}
         description={t('maintenance.restore.description')}
+        tooltip={t('settings.help.maintenance.section.maintenance-restore')}
+        advanced
       >
         <div
           role="alert"
@@ -1008,6 +1029,7 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
 
         <SelectField
           label={t('maintenance.restore.selectLabel')}
+          tooltip={t('settings.help.maintenance.restoreArchive')}
           value={restoreArchive}
           onValueChange={(value) => {
             setRestoreArchive(value)
@@ -1028,12 +1050,15 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
         </SelectField>
 
         <div className="space-y-1 min-w-0">
-          <label
-            className="text-sm font-medium text-foreground"
-            htmlFor="maintenance-restore-file"
-          >
-            {t('maintenance.restore.uploadLabel')}
-          </label>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="maintenance-restore-file"
+            >
+              {t('maintenance.restore.uploadLabel')}
+            </label>
+            <FieldTooltip text={t('settings.help.maintenance.restoreUpload')} />
+          </div>
           <input
             ref={fileInputRef}
             id="maintenance-restore-file"
@@ -1149,8 +1174,10 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
 
       {/* 6. Журнал обслуживания (ADR-092) */}
       <SettingsSection
+        id="maintenance-audit"
         title={t('maintenance.audit.title')}
         description={t('maintenance.audit.description')}
+        advanced
       >
         {auditError && (
           <div

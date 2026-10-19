@@ -159,7 +159,9 @@ export function CommandsSettings() {
         </div>
       )}
 
-      <SettingsSection>
+      <SettingsSection
+        id="commands-list"
+      >
         {commandsLoading && commands === null && (
           <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
         )}
@@ -177,8 +179,11 @@ export function CommandsSettings() {
 
       {diagnostics.length > 0 && (
         <SettingsSection
+          id="commands-diagnostics"
           title={t('commands.diagnostics.title')}
           description={t('commands.diagnostics.description')}
+          tooltip={t('settings.help.commands.section.commands-diagnostics')}
+          advanced
         >
           <ul className="space-y-1 min-w-0" data-testid="commands-diagnostics">
             {diagnostics.map((d, i) => (
@@ -195,6 +200,7 @@ export function CommandsSettings() {
       )}
 
       <SettingsSection
+        id="commands-bundles"
         title={t('commands.bundles.title')}
         description={t('commands.bundles.description')}
         actions={
@@ -220,6 +226,7 @@ export function CommandsSettings() {
             </h4>
             <TextField
               label={t('skillBundles.name')}
+              tooltip={t('settings.help.commands.name')}
               value={editor.name}
               onChange={(e) => setEditor((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
               disabled={editor.mode === 'edit'}
@@ -229,6 +236,7 @@ export function CommandsSettings() {
             />
             <TextArea
               label={t('skillBundles.description')}
+              tooltip={t('settings.help.commands.description')}
               value={editor.description}
               onChange={(e) =>
                 setEditor((prev) => (prev ? { ...prev, description: e.target.value } : prev))
@@ -240,6 +248,7 @@ export function CommandsSettings() {
             <ListField
               label={t('skillBundles.skills')}
               description={t('skillBundles.skillsHint')}
+              tooltip={t('settings.help.commands.skills')}
               values={editor.skills}
               onChange={(skills) => setEditor((prev) => (prev ? { ...prev, skills } : prev))}
               variant="chips"
@@ -249,6 +258,7 @@ export function CommandsSettings() {
             {errors.skills && <p className="text-xs text-destructive">{errors.skills}</p>}
             <TextArea
               label={t('skillBundles.instruction')}
+              tooltip={t('settings.help.commands.instruction')}
               value={editor.instruction}
               onChange={(e) =>
                 setEditor((prev) => (prev ? { ...prev, instruction: e.target.value } : prev))

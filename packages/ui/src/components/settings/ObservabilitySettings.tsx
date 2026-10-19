@@ -351,8 +351,10 @@ export function ObservabilitySettings() {
     <SettingsPanel title={t('observability.title')} description={t('observability.description')}>
       {/* 1. Состояние: источник, экспорт, readiness, хранилище, exposition */}
       <SettingsSection
+        id="metrics-status"
         title={t('observability.status.title')}
         description={t('observability.status.description')}
+        tooltip={t('settings.help.metrics.section.metrics-status')}
       >
         {statusError && (
           <div
@@ -455,8 +457,10 @@ export function ObservabilitySettings() {
 
       {/* 2. Экспорт: черновик enabled + Save/Reset + restartRequired */}
       <SettingsSection
+        id="metrics-export"
         title={t('observability.export.title')}
         description={t('observability.export.description')}
+        tooltip={t('settings.help.metrics.section.metrics-export')}
       >
         {infoError && (
           <div
@@ -500,6 +504,7 @@ export function ObservabilitySettings() {
             <ToggleField
               label={t('observability.export.enabled')}
               description={t('observability.export.enabledHint')}
+              tooltip={t('settings.help.metrics.exportEnabled')}
               enabled={currentEnabled}
               disabled={envLocked}
               onToggle={() => draft.update({ enabled: !currentEnabled })}
@@ -534,8 +539,11 @@ export function ObservabilitySettings() {
 
       {/* 3. Токен: write-only, env/файл, 409 — понятной ошибкой */}
       <SettingsSection
+        id="metrics-token"
         title={t('observability.token.title')}
         description={t('observability.token.description')}
+        tooltip={t('settings.help.metrics.section.metrics-token')}
+        advanced
       >
         <div className="space-y-1.5 min-w-0" data-testid="observability-token-status">
           <InfoField
@@ -560,6 +568,7 @@ export function ObservabilitySettings() {
           <TextField
             type={tokenVisible ? 'text' : 'password'}
             label={t('observability.token.field')}
+            tooltip={t('settings.help.metrics.tokenValue')}
             placeholder={t('observability.token.placeholder')}
             value={tokenInput}
             onChange={(e) => {
@@ -628,8 +637,11 @@ export function ObservabilitySettings() {
 
       {/* 4. Эндпоинты: /metrics (копирование), /ready, обновление статуса */}
       <SettingsSection
+        id="metrics-endpoints"
         title={t('observability.endpoints.title')}
         description={t('observability.endpoints.description')}
+        tooltip={t('settings.help.metrics.section.metrics-endpoints')}
+        advanced
       >
         <SettingsRow
           label="/metrics"
@@ -678,8 +690,11 @@ export function ObservabilitySettings() {
 
       {/* 5. Подсказки: scrape_config */}
       <SettingsSection
+        id="metrics-hints"
         title={t('observability.hints.title')}
         description={t('observability.hints.description')}
+        tooltip={t('settings.help.metrics.section.metrics-hints')}
+        advanced
       >
         <div className="space-y-2 min-w-0">
           <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">

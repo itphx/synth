@@ -5,7 +5,7 @@ import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { Icon } from '../icon/Icon';
 import { Button } from '../ui/button';
-import { TextField } from '../ui/settings';
+import { FieldTooltip, TextField } from '../ui/settings';
 
 const BADGE = 'rounded px-1.5 py-0.5 text-[0.625rem] font-medium';
 
@@ -46,7 +46,10 @@ export function ProxyRouteCheck({ disabled = false }: { disabled?: boolean }) {
 
   return (
     <div className="space-y-2 min-w-0 border-t border-border/60 pt-3" data-testid="proxy-target">
-      <div className="text-sm font-medium text-foreground">{t('proxy.target.title')}</div>
+      <div className="flex items-center gap-1.5 min-w-0">
+        <div className="text-sm font-medium text-foreground">{t('proxy.target.title')}</div>
+        <FieldTooltip text={t('settings.help.network.target')} />
+      </div>
       <p className="text-xs text-muted-foreground">{t('proxy.target.description')}</p>
 
       <div className="flex flex-wrap items-end gap-2 min-w-0">
@@ -61,6 +64,7 @@ export function ProxyRouteCheck({ disabled = false }: { disabled?: boolean }) {
           mono
           error={urlError ?? undefined}
           disabled={disabled || pending}
+          tooltip={t('settings.help.network.targetUrl')}
           containerClassName="flex-1 min-w-48"
           data-testid="proxy-target-url"
         />

@@ -39,7 +39,10 @@ export const ChatSettings = () => {
       title={t('settings.category.chat')}
       description={t('chatSettings.intermediateTextDescription')}
     >
-      <SettingsSection title={t('chatSettings.intermediateTextDisplay')}>
+      <SettingsSection
+        id="chat-intermediate-text"
+        title={t('chatSettings.intermediateTextDisplay')}
+      >
         <SettingsItem>
           <SegmentedControl<IntermediateTextDisplay>
             value={display}

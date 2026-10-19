@@ -45,6 +45,7 @@ vi.mock('@/hooks/useNotification', () => ({
 }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { ToolsDisabledSettings } from './ToolsDisabledSettings'
 import { useMcpStore } from '@/stores/mcpStore'
@@ -62,6 +63,7 @@ const TOOLS_DETAIL = [
 
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -69,7 +71,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <ToolsDisabledSettings />
+        <TooltipProvider>
+          <ToolsDisabledSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

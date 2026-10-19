@@ -68,6 +68,7 @@ vi.mock('@/lib/api/client', () => ({
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { DashboardPanel } from './DashboardPanel'
 import { SessionsPanel } from './SessionsPanel'
 import { DebugPanel } from './DebugPanel'
@@ -104,7 +105,9 @@ async function renderPanel(Panel: React.ComponentType): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <Panel />
+        <TooltipProvider>
+          <Panel />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

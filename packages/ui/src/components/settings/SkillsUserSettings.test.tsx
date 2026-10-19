@@ -14,6 +14,7 @@ vi.mock('@/lib/api/synthApi', () => ({ synthApi: mocks }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { SkillsUserSettings } from './SkillsUserSettings'
 import { useSkillsStore } from '@/stores/skillsStore'
 
@@ -60,7 +61,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <SkillsUserSettings />
+        <TooltipProvider>
+          <SkillsUserSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

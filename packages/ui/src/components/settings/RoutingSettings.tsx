@@ -109,10 +109,14 @@ export function RoutingSettings() {
       description="Запросы, которые не обработали Быстрые ответы, распределяются между моделями автоматически: стратегия выбирает модель по типу задачи (кодинг/чат/анализ), по стоимости или сочетанием. Дополнительно работает контроль качества: если ответ неуверенный или слишком короткий — запрос пересылается на fallback-модель. Если маршрутизация выключена — используется модель, выбранная в сессии."
     >
       {/* Вкл/Выкл */}
-      <SettingsSection>
+      <SettingsSection
+        id="routing-main"
+        tooltip={t('settings.help.routing.section.routing-main')}
+      >
         <SettingsItem>
           <ToggleField
             label={t('settings.category.routing')}
+            tooltip={t('settings.help.routing.enabled')}
             description={stateLabel(settings.routingEnabled)}
             enabled={settings.routingEnabled}
             onToggle={() => update({ routingEnabled: !settings.routingEnabled })}
@@ -121,9 +125,15 @@ export function RoutingSettings() {
       </SettingsSection>
 
       {/* Стратегия */}
-      <SettingsSection title={t('routing.strategy')}>
+      <SettingsSection
+        id="routing-strategy"
+        title={t('routing.strategy')}
+        tooltip={t('settings.help.routing.section.routing-strategy')}
+      >
         <SettingsItem>
           <SelectField
+            label={t('routing.strategy')}
+            tooltip={t('settings.help.routing.strategy')}
             value={settings.routingStrategy}
             onValueChange={(v) => update({ routingStrategy: v as RoutingDefaults['routingStrategy'] })}
             ariaLabel={t('routing.strategy')}
@@ -139,7 +149,11 @@ export function RoutingSettings() {
       </SettingsSection>
 
       {/* Контентная */}
-      <SettingsSection title={t('routing.content')}>
+      <SettingsSection
+        id="routing-content"
+        title={t('routing.content')}
+        tooltip={t('settings.help.routing.section.routing-content')}
+      >
         <SettingsItem>
           <ModelPairSelect
             label={t('routing.content.coding')}
@@ -151,6 +165,8 @@ export function RoutingSettings() {
             modelLabel={t('common.model')}
             onProviderChange={(v) => updateContent('coding', { provider: v, model: '' })}
             onModelChange={(v) => updateContent('coding', { model: v })}
+            providerTooltip={t('settings.help.routing.contentCodingProvider')}
+            modelTooltip={t('settings.help.routing.contentCodingModel')}
           />
         </SettingsItem>
         <SettingsItem>
@@ -164,6 +180,8 @@ export function RoutingSettings() {
             modelLabel={t('common.model')}
             onProviderChange={(v) => updateContent('chat', { provider: v, model: '' })}
             onModelChange={(v) => updateContent('chat', { model: v })}
+            providerTooltip={t('settings.help.routing.contentChatProvider')}
+            modelTooltip={t('settings.help.routing.contentChatModel')}
           />
         </SettingsItem>
         <SettingsItem>
@@ -177,15 +195,22 @@ export function RoutingSettings() {
             modelLabel={t('common.model')}
             onProviderChange={(v) => updateContent('research', { provider: v, model: '' })}
             onModelChange={(v) => updateContent('research', { model: v })}
+            providerTooltip={t('settings.help.routing.contentResearchProvider')}
+            modelTooltip={t('settings.help.routing.contentResearchModel')}
           />
         </SettingsItem>
       </SettingsSection>
 
       {/* Эскалация */}
-      <SettingsSection>
+      <SettingsSection
+        id="routing-escalation"
+        tooltip={t('settings.help.routing.section.routing-escalation')}
+        advanced
+      >
         <SettingsItem>
           <ToggleField
             label={t('routing.escalation')}
+            tooltip={t('settings.help.routing.escalation')}
             description={stateLabel(settings.routingEscalation.enabled)}
             enabled={settings.routingEscalation.enabled}
             onToggle={() => updateEscalation({ enabled: !settings.routingEscalation.enabled })}
@@ -203,9 +228,12 @@ export function RoutingSettings() {
               modelLabel={t('common.model')}
               onProviderChange={(v) => updateEscalation({ fallbackProvider: v, fallbackModel: '' })}
               onModelChange={(v) => updateEscalation({ fallbackModel: v })}
+              providerTooltip={t('settings.help.routing.escalationProvider')}
+              modelTooltip={t('settings.help.routing.escalationModel')}
             />
             <NumberField
               label={t('routing.escalation.minLength')}
+              tooltip={t('settings.help.routing.escalationMinLength')}
               min={1}
               value={settings.routingEscalation.minLength}
               onChange={(e) => updateEscalation({ minLength: Number(e.target.value) || 1 })}
@@ -215,10 +243,15 @@ export function RoutingSettings() {
       </SettingsSection>
 
       {/* Стоимость */}
-      <SettingsSection>
+      <SettingsSection
+        id="routing-cost"
+        tooltip={t('settings.help.routing.section.routing-cost')}
+        advanced
+      >
         <SettingsItem>
           <ToggleField
             label={t('routing.cost')}
+            tooltip={t('settings.help.routing.cost')}
             description={stateLabel(settings.routingCost.enabled)}
             enabled={settings.routingCost.enabled}
             onToggle={() => updateCost({ enabled: !settings.routingCost.enabled })}
@@ -236,9 +269,12 @@ export function RoutingSettings() {
               modelLabel={t('common.model')}
               onProviderChange={(v) => updateCost({ cheapProvider: v, cheapModel: '' })}
               onModelChange={(v) => updateCost({ cheapModel: v })}
+              providerTooltip={t('settings.help.routing.costProvider')}
+              modelTooltip={t('settings.help.routing.costModel')}
             />
             <NumberField
               label={t('routing.cost.threshold')}
+              tooltip={t('settings.help.routing.costThreshold')}
               min={1}
               value={settings.routingCost.maxCheapTokens}
               onChange={(e) => updateCost({ maxCheapTokens: Number(e.target.value) || 1 })}
@@ -248,10 +284,15 @@ export function RoutingSettings() {
       </SettingsSection>
 
       {/* Саб-агенты */}
-      <SettingsSection>
+      <SettingsSection
+        id="routing-subagent"
+        tooltip={t('settings.help.routing.section.routing-subagent')}
+        advanced
+      >
         <SettingsItem>
           <ToggleField
             label={t('routing.subagent')}
+            tooltip={t('settings.help.routing.subagent')}
             description={stateLabel(settings.subagentRouting.enabled)}
             enabled={settings.subagentRouting.enabled}
             onToggle={() => updateSubagent({ enabled: !settings.subagentRouting.enabled })}
@@ -261,6 +302,7 @@ export function RoutingSettings() {
           <SettingsItem>
             <SelectField
               label={t('routing.subagent.model')}
+              tooltip={t('settings.help.routing.subagentModel')}
               value={subagentModel}
               onValueChange={(value) => {
                 if (value === 'auto') {
@@ -368,7 +410,12 @@ function DictionarySection() {
 
   if (unavailable) {
     return (
-      <SettingsSection title={t('routing.dictionaries.title')}>
+      <SettingsSection
+        id="routing-dictionaries"
+        title={t('routing.dictionaries.title')}
+        tooltip={t('settings.help.routing.section.routing-dictionaries')}
+        advanced
+      >
         <p className="text-sm text-muted-foreground min-w-0 break-words">{t('routing.dictionaries.unavailable')}</p>
       </SettingsSection>
     )
@@ -379,7 +426,12 @@ function DictionarySection() {
     .sort((a, b) => categoryRank(a.category) - categoryRank(b.category))
 
   return (
-    <SettingsSection title={t('routing.dictionaries.title')}>
+    <SettingsSection
+      id="routing-dictionaries"
+      title={t('routing.dictionaries.title')}
+      tooltip={t('settings.help.routing.section.routing-dictionaries')}
+      advanced
+    >
       <SettingsItem>
         <SegmentedControl<DictionaryLanguage>
           value={language}

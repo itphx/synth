@@ -129,6 +129,7 @@ function WebhookEventsField({
         <div className="min-w-0 flex-1">
           <TextField
             label={t('webhooks.form.customPattern')}
+            tooltip={t('settings.help.webhooks.customPattern')}
             value={input}
             onChange={(e) => {
               setInput(e.target.value)
@@ -508,6 +509,7 @@ export function WebhooksSettings() {
       )}
 
       <SettingsSection
+        id="webhooks-list"
         title={t('webhooks.listTitle')}
         description={t('webhooks.listDescription')}
         actions={
@@ -1009,6 +1011,7 @@ export function WebhooksSettings() {
           titleKey="egress.webhooks.title"
           descriptionKey="egress.webhooks.description"
           testIdPrefix="egress-webhooks"
+          advanced
         />
       )}
     </SettingsPanel>

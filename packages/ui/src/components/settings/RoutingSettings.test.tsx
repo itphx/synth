@@ -45,15 +45,21 @@ vi.mock('@/lib/confirm', () => ({ confirm: vi.fn(async () => true) }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { ROUTING_DEFAULTS_KEY } from '@/lib/routingDefaults'
 import { confirm } from '@/lib/confirm'
+import { useUIStore } from '@/stores/useUIStore'
 import { RoutingSettings } from './RoutingSettings'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const roots: Array<{ root: Root; container: HTMLElement }> = []
 
-async function renderSettings(): Promise<HTMLElement> {
+async function renderSettings(options: { showAdvanced?: boolean } = {}): Promise<HTMLElement> {
+  useUIStore.setState({
+    settingsShowAdvanced: options.showAdvanced ?? true,
+    settingsFocus: null,
+  })
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -62,7 +68,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <RoutingSettings />
+        <TooltipProvider>
+          <RoutingSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })
@@ -228,5 +236,68 @@ describe('RoutingSettings — миграция на Settings UI Kit (ADR-072)', 
 
     expect(reset().disabled).toBe(false)
     expect(reset().className).toContain('border-primary')
+  })
+
+  it('advanced-секции скрыты, кнопка показывает и снова скрывает их', async () => {
+    const container = await renderSettings({ showAdvanced: false })
+
+    // Базовые секции остаются на месте.
+    expect(container.querySelector('[data-settings-section="routing-main"]')).not.toBeNull()
+    expect(container.querySelector('[data-settings-section="routing-strategy"]')).not.toBeNull()
+    expect(container.querySelector('[data-settings-section="routing-content"]')).not.toBeNull()
+
+    // Продвинутых секций нет в DOM.
+    for (const id of [
+      'routing-escalation',
+      'routing-cost',
+      'routing-subagent',
+      'routing-dictionaries',
+    ]) {
+      expect(container.querySelector(`[data-settings-section="${id}"]`)).toBeNull()
+    }
+
+    const reveal = container.querySelector(
+      '[data-testid="settings-advanced-reveal"]',
+    ) as HTMLButtonElement
+    expect(reveal).not.toBeNull()
+    expect(reveal.textContent).toContain('(4)')
+
+    await act(async () => {
+      reveal.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    for (const id of [
+      'routing-escalation',
+      'routing-cost',
+      'routing-subagent',
+      'routing-dictionaries',
+    ]) {
+      expect(container.querySelector(`[data-settings-section="${id}"]`)).not.toBeNull()
+    }
+    expect(
+      (
+        container.querySelector(
+          '[data-testid="settings-advanced-reveal"]',
+        ) as HTMLButtonElement
+      ).textContent,
+    ).toContain('Hide advanced settings')
+
+    await act(async () => {
+      ;(
+        container.querySelector(
+          '[data-testid="settings-advanced-reveal"]',
+        ) as HTMLButtonElement
+      ).dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('[data-settings-section="routing-escalation"]')).toBeNull()
+  })
+
+  it('при глобальном режиме «Расширенные» секции видны сразу без кнопки', async () => {
+    const container = await renderSettings({ showAdvanced: true })
+
+    expect(container.querySelector('[data-settings-section="routing-escalation"]')).not.toBeNull()
+    expect(container.querySelector('[data-settings-section="routing-dictionaries"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="settings-advanced-reveal"]')).toBeNull()
   })
 })

@@ -113,16 +113,22 @@ export const ProjectsPanel = () => {
         </Button>
       }
     >
-      <SettingsSection title={t('admin.projects.workspace.title')}>
+      <SettingsSection
+        id="projects-workspace"
+        title={t('admin.projects.workspace.title')}
+        tooltip={t('settings.help.projects.section.projects-workspace')}
+      >
         <div className="flex flex-wrap gap-2 min-w-0">
           <div className="flex-1 min-w-0">
             <TextField
+              label={t('admin.projects.workspace.path')}
               value={workspaceDraft}
               onChange={(e) => { setWorkspaceDraft(e.target.value); setError('') }}
               placeholder={t('admin.projects.workspace.placeholder')}
               mono
               disabled={!isAdmin}
               aria-label={t('admin.projects.workspace.title')}
+              tooltip={t('settings.help.projects.workspacePath')}
               onKeyDown={(e) => e.key === 'Enter' && handleSaveWorkspace()}
             />
           </div>
@@ -154,12 +160,18 @@ export const ProjectsPanel = () => {
       <WorkspacePolicySection />
 
       {showCreate && (
-        <SettingsSection title={t('admin.projects.new')}>
+        <SettingsSection
+          id="projects-new"
+          title={t('admin.projects.new')}
+          tooltip={t('settings.help.projects.section.projects-new')}
+        >
           <TextField
+            label={t('admin.projects.name')}
             value={name}
             onChange={(e) => { setName(e.target.value); setError('') }}
             placeholder={t('admin.projects.namePlaceholder')}
             aria-label={t('admin.projects.new')}
+            tooltip={t('settings.help.projects.newProjectName')}
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
           />
           {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}

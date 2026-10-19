@@ -27,6 +27,10 @@ export function PolicySettingsCard({
   onReset,
   isDefault,
   className,
+  tooltip,
+  fieldTooltip,
+  id,
+  advanced = false,
 }: {
   scope: 'tools' | 'mcp' | 'skills'
   value: ToolsPolicy
@@ -39,6 +43,14 @@ export function PolicySettingsCard({
   onReset?: () => void
   isDefault?: boolean
   className?: string
+  /** Подсказка-иконка (ⓘ) в заголовке секции. */
+  tooltip?: string
+  /** Подсказка-иконка (ⓘ) рядом с лейблом выбора политики. */
+  fieldTooltip?: string
+  /** Якорь секции для поиска и фокуса (`data-settings-section`). */
+  id?: string
+  /** Секция относится к продвинутым настройкам. */
+  advanced?: boolean
 }) {
   const { t } = useI18n()
   const prefix = scope === 'tools' ? 'toolsPolicy' : scope === 'mcp' ? 'mcpPolicy' : 'skillsPolicy'
@@ -46,10 +58,13 @@ export function PolicySettingsCard({
 
   return (
     <SettingsSection
+      id={id}
       className={className}
       title={t(`${prefix}.title`)}
       description={t(`${prefix}.description`)}
+      tooltip={tooltip}
       actions={isDefault ? <DefaultsBadge /> : undefined}
+      advanced={advanced}
     >
       {error && (
         <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
@@ -65,6 +80,7 @@ export function PolicySettingsCard({
         <SelectField
           label={t(`${prefix}.label`)}
           description={t(`${prefix}.help`)}
+          tooltip={fieldTooltip}
           value={value}
           onValueChange={(next) => onChange(next as ToolsPolicy)}
           ariaLabel={t(`${prefix}.label`)}

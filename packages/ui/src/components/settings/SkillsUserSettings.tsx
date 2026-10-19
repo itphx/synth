@@ -71,7 +71,9 @@ export function SkillsUserSettings() {
         <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
       )}
 
-      <SettingsSection>
+      <SettingsSection
+        id="skills-user-list"
+      >
         {skills && skills.length === 0 && (
           <div className="text-center text-muted-foreground py-8">
             <Icon name="book-open" className="size-8 mx-auto mb-2 opacity-40" />
@@ -102,7 +104,11 @@ export function SkillsUserSettings() {
       )}
 
       {selectedSkill && !selectedLoading && (
-        <SettingsSection title={t('skills.detail.title')}>
+        <SettingsSection
+          id="skills-user-detail"
+          title={t('skills.detail.title')}
+          tooltip={t('settings.help.skills.section.detail')}
+        >
           <div className="space-y-2 min-w-0" data-testid="skills-user-detail">
             <div className="flex flex-wrap items-center gap-1.5 min-w-0">
               <span className="text-sm font-medium break-words">{selectedSkill.name}</span>

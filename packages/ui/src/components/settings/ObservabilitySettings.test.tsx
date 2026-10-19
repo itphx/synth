@@ -43,6 +43,7 @@ vi.mock('@/hooks/useNotification', () => ({
 vi.mock('@/lib/confirm', () => ({ confirm: vi.fn(async () => true) }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { useUIStore } from '@/stores/useUIStore'
 import { confirm } from '@/lib/confirm'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -112,6 +113,7 @@ async function setInputValue(input: HTMLInputElement, value: string): Promise<vo
 
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)

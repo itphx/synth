@@ -34,12 +34,14 @@ export const ThemeControl: React.FC<{
   onChange: (presetName: string) => void
   label?: string
   ariaLabel?: string
-}> = ({ value, onChange, label, ariaLabel }) => (
+  tooltip?: string
+}> = ({ value, onChange, label, ariaLabel, tooltip }) => (
   <SelectField
     label={label}
     value={value}
     onValueChange={onChange}
     ariaLabel={ariaLabel}
+    tooltip={tooltip}
     items={THEME_PRESETS.map((preset) => ({ value: preset.id, label: preset.name }))}
   >
     <SelectContent>

@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
 import { ConfirmDialog } from '../ui/confirm-dialog'
+import { TooltipProvider } from '../ui/tooltip'
 import { SettingsField, SettingsSection, TextArea, TextField } from '../ui/settings'
 
 type EditorMode = 'create' | 'edit'
@@ -210,8 +211,10 @@ export function SshKeysSettings() {
   )
 
   return (
+    <TooltipProvider>
     <>
       <SettingsSection
+        id="agents-ssh-keys"
         title={t('sshKeys.title')}
         description={t('sshKeys.description')}
         actions={
@@ -244,6 +247,7 @@ export function SshKeysSettings() {
 
             <TextField
               label={t('sshKeys.name')}
+              tooltip={t('settings.help.agents.sshKeyName')}
               value={editor.name}
               onChange={(e) => setEditor((prev) => (prev ? { ...prev, name: e.target.value } : prev))}
               error={formErrors.name}
@@ -253,6 +257,7 @@ export function SshKeysSettings() {
 
             <TextArea
               label={t('sshKeys.privateKey')}
+              tooltip={t('settings.help.agents.sshKeyPrivate')}
               description={editor.mode === 'edit' ? t('sshKeys.replaceKeyHint') : undefined}
               value={editor.privateKey}
               onChange={(e) => setEditor((prev) => (prev ? { ...prev, privateKey: e.target.value } : prev))}
@@ -266,6 +271,7 @@ export function SshKeysSettings() {
 
             <TextField
               label={t('sshKeys.passphrase')}
+              tooltip={t('settings.help.agents.sshKeyPassphrase')}
               value={editor.passphrase}
               onChange={(e) => setEditor((prev) => (prev ? { ...prev, passphrase: e.target.value } : prev))}
               type="password"
@@ -406,6 +412,7 @@ export function SshKeysSettings() {
         )}
       </ConfirmDialog>
     </>
+    </TooltipProvider>
   )
 }
 

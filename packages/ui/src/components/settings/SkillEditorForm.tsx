@@ -70,6 +70,7 @@ export function SkillEditorForm({
       <TextField
         label={t('skillsAdmin.form.name')}
         description={t('skillsAdmin.form.nameHint')}
+        tooltip={t('settings.help.skillsAdmin.name')}
         value={name}
         onChange={(e) => onNameChange(e.target.value)}
         disabled={mode === 'edit'}
@@ -81,6 +82,7 @@ export function SkillEditorForm({
 
       <TextArea
         label={t('skillsAdmin.form.description')}
+        tooltip={t('settings.help.skillsAdmin.description')}
         value={description}
         onChange={(e) => onDescriptionChange(e.target.value)}
         error={errors?.description}
@@ -92,6 +94,7 @@ export function SkillEditorForm({
       <TextArea
         label={t('skillsAdmin.form.body')}
         description={t('skillsAdmin.form.bodyHint')}
+        tooltip={t('settings.help.skillsAdmin.body')}
         value={body}
         onChange={(e) => onBodyChange(e.target.value)}
         mono
@@ -115,6 +118,7 @@ export function SkillEditorForm({
               <div className="flex-1 min-w-0">
                 <TextField
                   label={t('skillsAdmin.form.filePath')}
+                  tooltip={t('settings.help.skillsAdmin.filePath')}
                   value={file.path}
                   onChange={(e) => updateFile(index, { path: e.target.value })}
                   mono
@@ -133,6 +137,7 @@ export function SkillEditorForm({
             </div>
             <TextArea
               label={t('skillsAdmin.form.fileContent')}
+              tooltip={t('settings.help.skillsAdmin.fileContent')}
               value={file.content}
               onChange={(e) => updateFile(index, { content: e.target.value })}
               mono

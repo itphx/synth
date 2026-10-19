@@ -33,6 +33,7 @@ vi.mock('@/components/ui/select', async () => {
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { DebugPanel } from './DebugPanel'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -60,7 +61,9 @@ async function renderPanel(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <DebugPanel />
+        <TooltipProvider>
+          <DebugPanel />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

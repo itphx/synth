@@ -18,6 +18,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { McpUserSettings } from './McpUserSettings'
 import { useMcpStore } from '@/stores/mcpStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -54,7 +55,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <McpUserSettings />
+        <TooltipProvider>
+          <McpUserSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

@@ -47,6 +47,7 @@ vi.mock('@/lib/api/profileService', () => ({ profileService: profileMock }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { useUIStore } from '@/stores/useUIStore'
 import { AppearanceSettings } from './AppearanceSettings'
 
@@ -63,7 +64,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <AppearanceSettings />
+        <TooltipProvider>
+          <AppearanceSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

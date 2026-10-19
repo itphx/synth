@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
 import { confirm } from '@/lib/confirm'
 import { SelectContent, SelectItem } from '@/components/ui/select'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { Button } from '../ui/button'
 import {
   SettingsActions,
@@ -66,7 +67,7 @@ export const ProvidersPanel = () => {
       const list = data.providers || []
       setProviders(list)
       // Синхронизируем общий стор: селекторы провайдеров обновляются без перезагрузки.
-      useProvidersStore.getState().applyProviders(list, data.default_provider)
+      useProvidersStore.getState().applyProviders(list)
     } finally {
       setLoading(false)
     }
@@ -194,8 +195,9 @@ export const ProvidersPanel = () => {
   }
 
   return (
-    <SettingsPanel
-      title={t('admin.providers.title')}
+    <TooltipProvider>
+      <SettingsPanel
+        title={t('admin.providers.title')}
       meta={t('admin.providers.count', { count: providers.length })}
       actions={
         <Button onClick={handleCreate}>
@@ -204,16 +206,22 @@ export const ProvidersPanel = () => {
       }
     >
       {showForm && (
-        <SettingsSection title={editName ? t('admin.providers.edit') : t('admin.providers.new')}>
+        <SettingsSection
+          id="providers-form"
+          title={editName ? t('admin.providers.edit') : t('admin.providers.new')}
+          tooltip={t('settings.help.providers.section.providers-form')}
+        >
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <TextField
               label={t('admin.providers.name')}
+              tooltip={t('settings.help.providers.name')}
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               disabled={!!editName}
             />
             <SelectField
               label={t('admin.providers.type')}
+              tooltip={t('settings.help.providers.type')}
               value={form.type}
               onValueChange={(value) => setForm({ ...form, type: value })}
               ariaLabel={t('admin.providers.type')}
@@ -229,6 +237,7 @@ export const ProvidersPanel = () => {
             <div className="sm:col-span-2">
               <TextField
                 label={t('admin.providers.url')}
+                tooltip={t('settings.help.providers.url')}
                 value={form.base_url}
                 onChange={(e) => setForm({ ...form, base_url: e.target.value })}
                 placeholder="https://api.example.com/v1"
@@ -238,6 +247,7 @@ export const ProvidersPanel = () => {
               id="admin-provider-api-key"
               name="providerApiKey"
               label={t('admin.providers.apiKey')}
+              tooltip={t('settings.help.providers.apiKey')}
               type="password"
               value={form.api_key}
               onChange={(e) => setForm({ ...form, api_key: e.target.value })}
@@ -259,6 +269,7 @@ export const ProvidersPanel = () => {
             />
             <SelectField
               label={t('admin.providers.currency')}
+              tooltip={t('settings.help.providers.currency')}
               value={form.currency}
               onValueChange={(value) => setForm({ ...form, currency: value })}
               ariaLabel={t('admin.providers.currency')}
@@ -276,12 +287,13 @@ export const ProvidersPanel = () => {
 
           <ToggleField
             label={t('admin.providers.enabled')}
+            tooltip={t('settings.help.providers.enabled')}
             enabled={form.enabled}
             onToggle={() => setForm({ ...form, enabled: !form.enabled })}
           />
 
           {/* Иконка */}
-          <SettingsField label={t('admin.providers.icon')}>
+          <SettingsField label={t('admin.providers.icon')} tooltip={t('settings.help.providers.icon')}>
             <div className="border-t border-border pt-3 space-y-2 min-w-0">
               <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
                 <div className="flex items-center gap-2 min-w-0">
@@ -413,7 +425,7 @@ export const ProvidersPanel = () => {
           <p className="py-4 text-center text-muted-foreground">{t('admin.providers.noProviders')}</p>
         </SettingsSection>
       ) : (
-        <SettingsSection>
+        <SettingsSection id="providers-list">
           {providers.map((p) => (
             <SettingsItem key={p.name} className={cn(p.enabled === false && 'opacity-50')}>
               <div className="flex flex-wrap items-center justify-between gap-3 min-w-0">
@@ -423,7 +435,6 @@ export const ProvidersPanel = () => {
                     <div className="flex flex-wrap items-center gap-2 min-w-0">
                       <span className="font-medium text-sm min-w-0 break-words">{p.name}</span>
                       <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-secondary-foreground">{p.type}</span>
-                      {p.is_default && <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-status-success/10 text-status-success">{t('admin.providers.default_2')}</span>}
                       {p.enabled === false && (
                         <span className="px-1.5 py-0.5 rounded text-[0.625rem] font-medium bg-secondary text-muted-foreground">{t('admin.providers.off')}</span>
                       )}
@@ -449,5 +460,6 @@ export const ProvidersPanel = () => {
         </SettingsSection>
       )}
     </SettingsPanel>
+    </TooltipProvider>
   )
 }

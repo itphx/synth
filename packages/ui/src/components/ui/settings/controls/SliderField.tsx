@@ -3,10 +3,13 @@ import React from 'react'
 import { Icon } from '@/components/icon/Icon'
 import { useDevice } from '@/hooks/useDevice'
 import { cn } from '@/lib/utils'
+import { FieldTooltip } from '../FieldTooltip'
 
 export interface SliderFieldProps {
   label?: string
   description?: string
+  /** Подсказка-иконка (ⓘ) рядом с лейблом. */
+  tooltip?: string
   min: number
   max: number
   step?: number
@@ -47,6 +50,7 @@ function computeSliderFill(value: number, min: number, max: number): string {
 export function SliderField({
   label,
   description,
+  tooltip,
   min,
   max,
   step,
@@ -77,19 +81,22 @@ export function SliderField({
     >
       {(label || description) && (
         <div className="min-w-0">
-          {label &&
-            (isStacked ? (
-              <p className="text-xs text-muted-foreground break-words">{label}</p>
-            ) : (
-              <span
-                className={cn(
-                  'text-xs text-muted-foreground',
-                  isFluid ? 'block truncate' : 'break-words',
-                )}
-              >
-                {label}
-              </span>
-            ))}
+          <div className="flex items-center gap-1.5 min-w-0">
+            {label &&
+              (isStacked ? (
+                <p className="text-xs text-muted-foreground break-words">{label}</p>
+              ) : (
+                <span
+                  className={cn(
+                    'text-xs text-muted-foreground',
+                    isFluid ? 'block truncate' : 'break-words',
+                  )}
+                >
+                  {label}
+                </span>
+              ))}
+            {tooltip && <FieldTooltip text={tooltip} />}
+          </div>
           {description && (
             <p className="text-xs text-muted-foreground/80 break-words">{description}</p>
           )}

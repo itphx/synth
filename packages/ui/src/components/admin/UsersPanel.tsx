@@ -145,7 +145,11 @@ export const UsersPanel = () => {
   }
 
   const renderForm = () => (
-    <SettingsSection title={expanded ? t('admin.users.editUser', { username: form.username }) : t('admin.users.newUser')}>
+    <SettingsSection
+      id="users-new"
+      title={expanded ? t('admin.users.editUser', { username: form.username }) : t('admin.users.newUser')}
+      tooltip={t('settings.help.users.section.users-new')}
+    >
       {error && <p className="text-xs text-status-error min-w-0 break-words">{error}</p>}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -154,11 +158,13 @@ export const UsersPanel = () => {
           value={form.username}
           onChange={(e) => setForm({ ...form, username: e.target.value })}
           disabled={!!expanded}
+          tooltip={t('settings.help.users.username')}
         />
         <TextField
           label={t('admin.users.displayName')}
           value={form.display_name}
           onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+          tooltip={t('settings.help.users.displayName')}
         />
         <div className="sm:col-span-2">
           <TextField
@@ -166,11 +172,12 @@ export const UsersPanel = () => {
             type="email"
             value={form.email}
             onChange={(e) => setForm({ ...form, email: e.target.value })}
+            tooltip={t('settings.help.users.email')}
           />
         </div>
       </div>
 
-      <SettingsField label={t('admin.users.roles')}>
+      <SettingsField label={t('admin.users.roles')} tooltip={t('settings.help.users.roles')}>
         <div className="flex flex-wrap gap-1.5 min-w-0">
           {ROLES.map((role) => (
             <button key={role} type="button" onClick={() => toggleRole(role)} className={cn(
@@ -187,6 +194,7 @@ export const UsersPanel = () => {
         label={t('admin.users.active')}
         enabled={form.is_active}
         onToggle={() => setForm({ ...form, is_active: !form.is_active })}
+        tooltip={t('settings.help.users.active')}
       />
 
       <TextArea
@@ -194,6 +202,7 @@ export const UsersPanel = () => {
         value={form.notes}
         onChange={(e) => setForm({ ...form, notes: e.target.value })}
         rows={3}
+        tooltip={t('settings.help.users.notes')}
       />
 
       <SettingsActions

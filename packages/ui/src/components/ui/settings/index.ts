@@ -4,6 +4,12 @@ export type { SettingsPanelProps } from './SettingsPanel'
 export { SettingsSection } from './SettingsSection'
 export type { SettingsSectionProps } from './SettingsSection'
 
+export {
+  SettingsAdvancedProvider,
+  useSettingsAdvanced,
+} from './SettingsAdvancedContext'
+export type { SettingsAdvancedContextValue } from './SettingsAdvancedContext'
+
 export { SettingsItem } from './SettingsItem'
 export type { SettingsItemProps } from './SettingsItem'
 

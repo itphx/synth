@@ -25,6 +25,7 @@ vi.hoisted(() => {
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { useNotificationStore, type NotifyCategory } from '@/stores/notificationStore'
 import { NotificationSettings } from './NotificationSettings'
 
@@ -41,7 +42,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <NotificationSettings />
+        <TooltipProvider>
+          <NotificationSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

@@ -268,7 +268,9 @@ export const ProfileSettings = () => {
       title={t('auth.profile')}
       description={t('auth.profileDescription')}
     >
-      <SettingsSection>
+      <SettingsSection
+        id="profile-main"
+      >
         <SettingsItem>
           <div className="flex flex-wrap items-center gap-4 min-w-0">
             <div
@@ -309,7 +311,9 @@ export const ProfileSettings = () => {
         </SettingsItem>
       </SettingsSection>
 
-      <SettingsSection>
+      <SettingsSection
+        id="profile-name"
+      >
         <TextField
           id="profile-username"
           label={t('auth.login')}
@@ -325,7 +329,9 @@ export const ProfileSettings = () => {
         />
       </SettingsSection>
 
-      <SettingsSection>
+      <SettingsSection
+        id="profile-contacts"
+      >
         <TextField
           id="profile-email"
           label={t('common.email')}
@@ -342,7 +348,9 @@ export const ProfileSettings = () => {
         />
       </SettingsSection>
 
-      <SettingsSection>
+      <SettingsSection
+        id="profile-team-role"
+      >
         <SelectField
           label={t('auth.teamRole')}
           value={form.team_roles[0] || 'developer'}
@@ -357,7 +365,9 @@ export const ProfileSettings = () => {
         </SelectField>
       </SettingsSection>
 
-      <SettingsSection>
+      <SettingsSection
+        id="profile-notes"
+      >
         <TextArea
           id="profile-notes"
           label={t('auth.notes')}
@@ -368,7 +378,10 @@ export const ProfileSettings = () => {
         />
       </SettingsSection>
 
-      <SettingsSection>
+      <SettingsSection
+        id="profile-onboarding"
+        advanced
+      >
         <ToggleField
           label={t('auth.interviewCompleted')}
           description={t('auth.interviewCompletedDescription')}
@@ -378,6 +391,7 @@ export const ProfileSettings = () => {
       </SettingsSection>
 
       <SettingsSection
+        id="profile-identities"
         title={t('auth.identities')}
         description={t('auth.identitiesDescription')}
       >
@@ -454,6 +468,7 @@ export const ProfileSettings = () => {
             id="profile-identity-claim-code"
             label={t('auth.identityClaimLabel')}
             description={t('auth.identityClaimDescription')}
+            tooltip={t('settings.help.profile.identityClaimCode')}
             placeholder={t('auth.identityClaimPlaceholder')}
             value={claimCode}
             mono

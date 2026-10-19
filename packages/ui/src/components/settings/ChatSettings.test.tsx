@@ -26,6 +26,7 @@ vi.hoisted(() => {
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { useUIStore } from '@/stores/useUIStore'
 import { ChatSettings } from './ChatSettings'
 
@@ -42,7 +43,9 @@ async function renderSettings(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <ChatSettings />
+        <TooltipProvider>
+          <ChatSettings />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

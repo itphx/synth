@@ -42,7 +42,9 @@ export function NotificationSettings() {
 
   return (
     <SettingsPanel title={t('notifications.title')} description={t('notifications.description')}>
-      <SettingsSection>
+      <SettingsSection
+        id="notifications-categories"
+      >
         {CATEGORIES.map((cat) => (
           <SettingsItem key={cat.id}>
             <ToggleField

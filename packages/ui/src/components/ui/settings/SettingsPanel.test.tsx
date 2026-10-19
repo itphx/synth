@@ -1,8 +1,32 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
+// persist (zustand) в useUIStore пишет в localStorage — в Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
+import { I18nProvider } from '@/lib/i18n'
+import { useUIStore } from '@/stores/useUIStore'
 import { SettingsPanel } from './SettingsPanel'
+import { SettingsSection } from './SettingsSection'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -16,7 +40,11 @@ async function renderPanel(
   const root = createRoot(host)
   mounted.push({ root, host })
   await act(async () => {
-    root.render(<SettingsPanel {...props} />)
+    root.render(
+      <I18nProvider>
+        <SettingsPanel {...props} />
+      </I18nProvider>,
+    )
   })
   return host
 }
@@ -38,6 +66,10 @@ function stubPhone() {
 function setScrollTop(el: HTMLElement, value: number) {
   Object.defineProperty(el, 'scrollTop', { value, writable: true, configurable: true })
 }
+
+beforeEach(() => {
+  useUIStore.setState({ settingsShowAdvanced: false, settingsFocus: null })
+})
 
 afterEach(async () => {
   while (mounted.length > 0) {
@@ -236,6 +268,68 @@ describe('SettingsPanel', () => {
     expect(desc.classList.contains('grid-rows-[1fr]')).toBe(true)
     // Затенение при этом работает и на десктопе.
     expect(body.getAttribute('data-scroll-shadow')).toBe('top')
+  })
+
+  it('продвинутые секции скрыты, пока не нажата локальная кнопка раскрытия', async () => {
+    const host = await renderPanel({
+      title: 'Network',
+      children: (
+        <>
+          <SettingsSection title="Main">MAIN</SettingsSection>
+          <SettingsSection advanced title="Extra">EXTRA</SettingsSection>
+        </>
+      ),
+    })
+
+    expect(host.textContent).toContain('MAIN')
+    expect(host.textContent).not.toContain('EXTRA')
+
+    const reveal = host.querySelector('[data-testid="settings-advanced-reveal"]') as HTMLButtonElement
+    expect(reveal).not.toBeNull()
+    expect(reveal.textContent).toContain('Show advanced settings (1)')
+
+    await act(async () => {
+      reveal.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(host.textContent).toContain('EXTRA')
+    expect(host.querySelector('[data-testid="settings-advanced-reveal"]')?.textContent).toContain(
+      'Hide advanced settings',
+    )
+  })
+
+  it('фокус на скрытую advanced-секцию раскрывает её и подсвечивает', async () => {
+    const host = await renderPanel({
+      title: 'Network',
+      children: (
+        <SettingsSection id="secret" advanced title="Secret">
+          SECRET
+        </SettingsSection>
+      ),
+    })
+
+    expect(host.textContent).not.toContain('SECRET')
+
+    await act(async () => {
+      useUIStore.getState().focusSettings({ categoryId: 'appearance', sectionId: 'secret' })
+    })
+    await act(async () => {})
+
+    expect(host.textContent).toContain('SECRET')
+    const section = host.querySelector('[data-settings-section="secret"]')
+    expect(section).not.toBeNull()
+    expect(section?.className).toContain('ring-2')
+  })
+
+  it('глобальный режим «Расширенные» показывает секции без локальной кнопки', async () => {
+    useUIStore.setState({ settingsShowAdvanced: true })
+    const host = await renderPanel({
+      title: 'Network',
+      children: <SettingsSection advanced title="Extra">EXTRA</SettingsSection>,
+    })
+
+    expect(host.textContent).toContain('EXTRA')
+    expect(host.querySelector('[data-testid="settings-advanced-reveal"]')).toBeNull()
   })
 
   it('collapsibleHeader=false: на теле описание не сворачивается', async () => {

@@ -18,7 +18,7 @@ interface ProvidersStore {
   /** Перечитать провайдеров и модели одним заходом (после мутаций каталога). */
   refreshCatalog: () => Promise<void>
   /** Применить свежий список провайдеров; выбор провайдера — только если он стал невалиден. */
-  applyProviders: (providers: ProviderInfo[], defaultProvider?: string) => void
+  applyProviders: (providers: ProviderInfo[]) => void
   /** Применить свежие группы моделей; выбор модели — только если он стал невалиден. */
   applyModelGroups: (groups: ModelGroup[]) => void
   setSelectedProvider: (name: string | null) => void
@@ -30,13 +30,12 @@ interface ProvidersStore {
 
 /**
  * Выбор провайдера при обновлении каталога (только когда текущий невалиден/пуст):
- * провайдер из пары default-model → провайдер с непустым `model` → первый enabled → первый.
+ * провайдер с непустым `model` → первый enabled → первый.
  */
-function pickProvider(providers: ProviderInfo[], defaultProvider?: string): string | null {
+function pickProvider(providers: ProviderInfo[]): string | null {
   if (providers.length === 0) return null
   const preferred =
-    (defaultProvider ? providers.find((p) => p.name === defaultProvider) : undefined)
-    ?? providers.find((p) => !!p.model)
+    providers.find((p) => !!p.model)
     ?? providers.find((p) => p.enabled !== false)
     ?? providers[0]
   return preferred?.name ?? null
@@ -53,11 +52,11 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   favorites: [],
   recents: [],
 
-  applyProviders: (providers, defaultProvider) => {
+  applyProviders: (providers) => {
     set({ providers })
     const current = get().selectedProviderName
     if (current && providers.some((p) => p.name === current)) return
-    set({ selectedProviderName: pickProvider(providers, defaultProvider) })
+    set({ selectedProviderName: pickProvider(providers) })
   },
 
   applyModelGroups: (groups) => {
@@ -101,9 +100,9 @@ export const useProvidersStore = create<ProvidersStore>((set, get) => ({
   loadProviders: async () => {
     set({ loading: true, error: null })
     try {
-      const { providers, default_provider } = await synthApi.getProviders()
+      const { providers } = await synthApi.getProviders()
       set({ loading: false })
-      get().applyProviders(providers, default_provider)
+      get().applyProviders(providers)
     } catch (e) {
       set({ loading: false, error: e instanceof Error ? e.message : 'Ошибка загрузки провайдеров' })
     }

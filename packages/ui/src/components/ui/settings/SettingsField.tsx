@@ -10,13 +10,13 @@ export interface SettingsFieldProps {
   error?: string
   htmlFor?: string
   required?: boolean
-  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом. */
+  /** ADR-089: подсказка-иконка (ⓘ) рядом с лейблом; без лейбла не рендерится. */
   tooltip?: string
   className?: string
   children: React.ReactNode
 }
 
-/** ADR-072: вертикальный лейбл + описание + контрол + ошибка. */
+/** ADR-072: вертикальный лейбл + описание + контрол + ошибка. Подсказка (ⓘ) — только рядом с лейблом. */
 export function SettingsField({
   label,
   description,
@@ -40,11 +40,6 @@ export function SettingsField({
           </span>
           {tooltip && <FieldTooltip text={tooltip} />}
         </label>
-      )}
-      {!label && tooltip && (
-        <div className="min-w-0">
-          <FieldTooltip text={tooltip} />
-        </div>
       )}
       {description && (
         <p className="text-xs text-muted-foreground min-w-0 break-words">{description}</p>

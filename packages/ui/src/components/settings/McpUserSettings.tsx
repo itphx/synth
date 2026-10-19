@@ -82,7 +82,10 @@ export function McpUserSettings() {
         />
       )}
 
-      <SettingsSection>
+      <SettingsSection
+        id="mcp-user-main"
+        tooltip={t('settings.help.mcp.section.main')}
+      >
         {loading && registry === null && (
           <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
         )}

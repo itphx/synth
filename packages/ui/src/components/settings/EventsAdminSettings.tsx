@@ -184,6 +184,7 @@ export function EventsAdminSettings() {
     >
       {/* Биндинги (ADR-089 §EventBinding) */}
       <SettingsSection
+        id="events-bindings"
         title={t('events.bindings.title')}
         description={t('events.bindings.description')}
         actions={

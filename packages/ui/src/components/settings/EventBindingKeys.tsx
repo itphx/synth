@@ -9,7 +9,7 @@ import { formatDateTime } from '@/lib/formatDate'
 import { cn } from '@/lib/utils'
 import { Icon } from '../icon/Icon'
 import { Button } from '../ui/button'
-import { NumberField, TextField } from '../ui/settings'
+import { FieldTooltip, NumberField, TextField } from '../ui/settings'
 
 /** Тестовый curl приёма события по ключу привязки (read-only подсказка). */
 export function buildEventIngestCurl(key: string): string {
@@ -301,6 +301,7 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
           <span className="text-xs font-medium text-foreground break-words">
             {t('events.keys.title')}
           </span>
+          <FieldTooltip text={t('settings.help.eventsAdmin.keys')} />
           <span
             className="shrink-0 rounded-full bg-interactive-hover px-1.5 py-0.5 text-[0.625rem] font-medium text-muted-foreground"
             title={t('events.keys.count', { count })}

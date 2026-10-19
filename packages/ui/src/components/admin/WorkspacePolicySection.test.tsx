@@ -37,6 +37,7 @@ vi.mock('@/hooks/useNotification', () => ({
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { WorkspacePolicySection } from './WorkspacePolicySection'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -53,7 +54,9 @@ async function renderSection(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <WorkspacePolicySection />
+        <TooltipProvider>
+          <WorkspacePolicySection />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

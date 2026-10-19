@@ -77,10 +77,11 @@ export function ModelPairSelect({
 
   const providerSelect = (
     <SelectField
+      label={compact ? undefined : providerLabel}
       value={provider}
       onValueChange={handleProviderChange}
       ariaLabel={providerAria}
-      tooltip={providerTooltip}
+      tooltip={compact ? undefined : providerTooltip}
       triggerTestId={providerTestId}
     >
       <SelectContent>
@@ -94,10 +95,11 @@ export function ModelPairSelect({
 
   const modelSelect = (
     <SelectField
+      label={compact ? undefined : modelLabel}
       value={model}
       onValueChange={onModelChange}
       ariaLabel={modelAria}
-      tooltip={modelTooltip}
+      tooltip={compact ? undefined : modelTooltip}
       triggerTestId={modelTestId}
     >
       <SelectContent>

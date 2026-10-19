@@ -13,6 +13,7 @@ vi.mock('@/lib/confirm', () => ({ confirm: confirmMock }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
 import { dict as enDict } from '@/lib/i18n/messages/en'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { DefaultsPanel } from './DefaultsPanel'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -36,7 +37,9 @@ async function renderPanel(): Promise<HTMLElement> {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <DefaultsPanel />
+        <TooltipProvider>
+          <DefaultsPanel />
+        </TooltipProvider>
       </I18nProvider>,
     )
   })

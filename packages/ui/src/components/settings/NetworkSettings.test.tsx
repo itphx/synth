@@ -1,6 +1,28 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+
+// persist (zustand) в useUIStore пишет в localStorage — в Node/vitest его нет.
+vi.hoisted(() => {
+  const data = new Map<string, string>()
+  const ls = {
+    getItem: (k: string) => data.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      data.set(k, v)
+    },
+    removeItem: (k: string) => {
+      data.delete(k)
+    },
+    clear: () => {
+      data.clear()
+    },
+  }
+  Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
+  }
+})
+
 import React from 'react'
 
 const mocks = vi.hoisted(() => ({
@@ -21,6 +43,7 @@ vi.mock('@/hooks/useNotification', () => ({
 vi.mock('@/lib/confirm', () => ({ confirm: vi.fn(async () => true) }))
 
 import { I18nProvider, useI18nStore } from '@/lib/i18n'
+import { useUIStore } from '@/stores/useUIStore'
 import { dict as enDict } from '@/lib/i18n/messages/en'
 import { dict as ruDict } from '@/lib/i18n/messages/ru'
 import { CATEGORIES, resolveActiveSettingsPage } from './SettingsModal'
@@ -42,6 +65,7 @@ const STATUS = {
 
 async function renderSettings(): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
+  useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)

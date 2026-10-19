@@ -338,7 +338,9 @@ export function SkillsAdminSettings() {
         />
       )}
 
-      <SettingsSection>
+      <SettingsSection
+        id="skills-admin-list"
+      >
         {skillsLoading && skills === null && (
           <div className="text-center text-muted-foreground py-8">{t('common.loading')}</div>
         )}
@@ -366,8 +368,10 @@ export function SkillsAdminSettings() {
 
       {/* Системные гейты, ось 1: мастер «выключить везде» */}
       <SettingsSection
+        id="skills-admin-master"
         title={t('skillsAdmin.gates.master')}
         description={t('skillsAdmin.gates.masterHint')}
+        tooltip={t('settings.help.skillsAdmin.section.skills-admin-master')}
       >
         {settingsError && !settingsGates && (
           <div role="alert" className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
@@ -390,8 +394,10 @@ export function SkillsAdminSettings() {
 
       {/* Системные гейты, ось 2: сид новых проектов */}
       <SettingsSection
+        id="skills-admin-new-projects"
         title={t('skillsAdmin.gates.newProjects')}
         description={t('skillsAdmin.gates.newProjectsHint')}
+        tooltip={t('settings.help.skillsAdmin.section.skills-admin-new-projects')}
       >
         <DisabledGroupDimension
           testIdPrefix="skills-new-projects"
@@ -419,6 +425,9 @@ export function SkillsAdminSettings() {
 
       <PolicySettingsCard
         scope="skills"
+        id="skills-admin-policy"
+        tooltip={t('settings.help.skillsAdmin.section.policy')}
+        fieldTooltip={t('settings.help.skillsAdmin.policy')}
         value={policy}
         savedValue={savedPolicy}
         loading={settingsLoading && !settingsGates}
@@ -428,13 +437,17 @@ export function SkillsAdminSettings() {
         onSave={() => void handleSavePolicy()}
         onReset={() => void handleResetPolicy()}
         isDefault={policy === DEFAULT_SKILLS_POLICY}
+        advanced
       />
 
       {/* Диагностика discovery/валидации */}
       {diagnostics.length > 0 && (
         <SettingsSection
+          id="skills-admin-diagnostics"
           title={t('skillsAdmin.diagnostics.title')}
           description={t('skillsAdmin.diagnostics.description')}
+          tooltip={t('settings.help.skillsAdmin.section.skills-admin-diagnostics')}
+          advanced
         >
           <ul className="space-y-1 min-w-0" data-testid="skills-admin-diagnostics">
             {diagnostics.map((d, i) => (

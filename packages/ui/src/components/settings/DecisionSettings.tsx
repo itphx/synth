@@ -194,7 +194,7 @@ export function DecisionSettings() {
 
   return (
     <SettingsPanel title={t('decisionConfig.title')} description={t('decisionConfig.description')}>
-      <SettingsSection>
+      <SettingsSection id="decision-config">
         {loadError && (
           <div role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
             {loadError}
@@ -283,6 +283,7 @@ export function DecisionSettings() {
 
       {/* ADR-084: read-only статистика decision-слоя — вне черновика Save/Reset. */}
       <SettingsSection
+        id="decision-metrics"
         title={t('decisionConfig.metrics')}
         description={t('decisionConfig.metricsDescription')}
         actions={
