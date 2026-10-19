@@ -1,0 +1,18 @@
+{
+  "id": "publisher",
+  "displayName": {
+    "en": "Publisher",
+    "ru": "Редактор публикаций"
+  },
+  "description": {
+    "en": "Drafts Synth announcements using the media-hub skill",
+    "ru": "Готовит черновики публикаций о Synth по skill media-hub"
+  },
+  "capabilities": [
+    "web",
+    "mcp"
+  ],
+  "icon": "newspaper",
+  "color": "--status-info",
+  "contextFile": "PUBLISHER.md"
+}
