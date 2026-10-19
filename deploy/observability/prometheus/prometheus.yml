@@ -61,15 +61,17 @@ scrape_configs:
   # и добавьте в docker-compose.observability.yml:
   #   - ../secrets/synth-test-metrics-token:/etc/prometheus/secrets/synth-test-token:ro
   #
-  # `metrics.synth.k3s.itphx.loc` — Ingress на `/metrics` backend'а test
-  # (https, scheme обязателен). Без Ingress — port-forward и target
-  # host.docker.internal:15000 (host-gateway в compose уже задан):
+  # `synth.k3s.itphx.loc` — основной host test: метрик-Ingress отдаёт
+  # `/metrics` backend'а по пути (https, scheme обязателен). Отдельного хоста
+  # `metrics.*` нет — TLS-сертификат покрывает только основной host.
+  # Без Ingress — port-forward и target host.docker.internal:15000
+  # (host-gateway в compose уже задан):
   #   kubectl -n synth port-forward svc/synth-backend 15000:5000
   # - job_name: synth-test-backend
   #   scheme: https
   #   metrics_path: /metrics
   #   static_configs:
-  #     - targets: ['metrics.synth.k3s.itphx.loc']
+  #     - targets: ['synth.k3s.itphx.loc']
   #       labels:
   #         env: test
   #         component: backend

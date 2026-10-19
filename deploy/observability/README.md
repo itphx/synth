@@ -125,7 +125,7 @@ SYNTH_DOCKER_NETWORK=myproject_default \
 |---|---|---|---|
 | `synth-dev-core` | `dev` | `core` | контейнер `synth` / `synth serve` (`:4300`) |
 | `synth-dev-backend` | `dev` | `backend` | `./scripts/dev.sh backend` или k3s (`:5000`) |
-| `synth-test-backend` (пример, закомментирован) | `test` | `backend` | Ingress `metrics.synth.k3s.itphx.loc` |
+| `synth-test-backend` (пример, закомментирован) | `test` | `backend` | Ingress `synth.k3s.itphx.loc`, путь `/metrics` |
 
 dev-job'ы включены всегда; пример test лежит в `prometheus/prometheus.yml`
 закомментированным — раскомментируйте и смонтируйте токен (см. ниже). Новое
@@ -144,9 +144,9 @@ Test — k3s, namespace `synth` (backend `synth-backend:5000`). Два спос�
 достать `/metrics`:
 
 ```bash
-# 1) Ingress на /metrics (https) — так ходит Prometheus из шаблона
+# 1) основной host, путь /metrics (https) — так ходит Prometheus из шаблона
 curl -s -H "Authorization: Bearer $SYNTH_METRICS_TOKEN" \
-  https://metrics.synth.k3s.itphx.loc/metrics | head
+  https://synth.k3s.itphx.loc/metrics | head
 
 # 2) port-forward, если Ingress не опубликован или нужен локальный стенд
 kubectl -n synth port-forward svc/synth-backend 15000:5000 &
@@ -154,11 +154,13 @@ curl -s -H "Authorization: Bearer $SYNTH_METRICS_TOKEN" \
   http://localhost:15000/metrics | head
 ```
 
-Для port-forward target в scrape_config — `host.docker.internal:15000`
-(`extra_hosts: host-gateway` в `docker-compose.observability.yml` уже задан).
-Учтите: `https`-Ingress и токен проверяются на стороне backend'а; если
-`/metrics` в test выключен (`metrics.enabled=false`) — будет 404, а не пустой
-ответ.
+`/metrics` отдаётся по основному host'у `synth.k3s.itphx.loc` отдельным метрик-Ingress,
+который ведёт напрямую на backend Service (UI-nginx этот путь не проксирует). Отдельного
+хоста `metrics.*` нет намеренно: TLS-сертификат test покрывает только основной host,
+поэтому путь `/metrics` живёт на нём же. Для port-forward target в scrape_config —
+`host.docker.internal:15000` (`extra_hosts: host-gateway` в
+`docker-compose.observability.yml` уже задан). Токен проверяется на стороне backend'а;
+если `/metrics` в test выключен (`metrics.enabled=false`) — будет 404, а не пустой ответ.
 
 ### Токен — только файлом
 
