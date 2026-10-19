@@ -1483,3 +1483,13 @@ Debug-аутентификация: Bearer `admin-key-123` → тестовый 
 - **Оставлено:** неочевидные поля форм создания/редактирования и неочевидные секции Routing/Security/Network/Maintenance/Metrics/Events config.
 - **Проверки:** typecheck ✅, lint ✅ 0 errors, UI tests ✅ 168 файлов / 1618 passed, 1 todo; визуально «Профиль» без висящих иконок.
 - **Коммит:** не делался.
+
+## 2026-10-19 — Релиз 0.11.1 и выкат на test
+
+- **Задача:** закоммитить настройки, собрать и выкатить на test. **Тип:** release/infra. **Исполнитель:** @orchestrator. **Результат:** PASS.
+- **Версия:** `./scripts/version-bump.sh patch` → `0.11.1` (7 package.json, `shared/src/version.ts`, `charts/synth/Chart.yaml`).
+- **Коммиты `synth`:** `3bfc202a feat(ui): переработка настроек — группы, поиск, расширенные и подсказки`, `998b5c8e chore: bump version to v0.11.1` (не пушились в origin).
+- **Гейт:** `pnpm build` ✅; `pnpm typecheck` ✅ 7/7; `pnpm lint` ✅ 0 errors (190 pre-existing warnings); `pnpm test` ✅ shared 463, ui 1618/1 todo, core 4440/98 skipped, storage-postgres 39/14 skipped, backend 575.
+- **Артефакты:** `synth-backend:0.11.1`, `synth-ui:0.11.1`, `synth-gateway-telegram:0.3.2` запушены в `git.itphx.ru`; чарты `synth-0.11.1-1` и `synth-gateway-telegram-0.3.2-10` опубликованы в Helm-реестр Gitea (HTTP 201, обе версии подтверждены в `index.yaml`; предупреждение curl (23) было транзиентным).
+- **Деплой:** `synth-deploy` коммит `cfedae0 release(test): synth 0.11.1-1`, push `main`; Fleet: бандлы `synth-test` и `synth-gateway-telegram` 1/1, helm-релиз `synth-test` №22 `synth-0.11.1-1` deployed, поды backend/ui на `:0.11.1` перекатились.
+- **Проверки:** `https://synth.k3s.itphx.loc/health` → `{"status":"healthy","version":"0.11.1"}`; in-cluster `/ready` → `ready`, storage `ok`; UI asset `index-DFAcYl68.js`, lazy-chunk `SettingsModal-BVR6QQ4j.js` отдаётся 200 и содержит `settings-search-input`; ошибок в логах backend нет.
