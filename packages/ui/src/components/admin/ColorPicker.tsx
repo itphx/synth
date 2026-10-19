@@ -24,7 +24,7 @@ export const ColorPicker = ({ value, onChange }: ColorPickerProps) => {
         onClick={() => onChange('')}
         data-testid="agent-color-none"
         className={cn(
-          'size-7 rounded-full border-2 flex items-center justify-center text-[0.625rem]',
+          'size-[var(--control-height)] rounded-full border-2 flex items-center justify-center text-[0.625rem]',
           !value
             ? 'border-primary'
             : 'border-border hover:border-muted-foreground',
@@ -43,7 +43,7 @@ export const ColorPicker = ({ value, onChange }: ColorPickerProps) => {
             data-testid={`agent-color-${color.key}`}
             title={t(color.labelKey)}
             className={cn(
-              'size-7 rounded-full border-2 transition-colors',
+              'size-[var(--control-height)] rounded-full border-2 transition-colors',
               value === cssVarName
                 ? 'border-primary scale-110'
                 : 'border-transparent hover:scale-105',

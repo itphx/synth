@@ -355,7 +355,7 @@ export function DirectoryPickerDialog({
                 if (e.key === 'Enter') submitNewFolder()
               }}
               placeholder={t('workspace.newFolderPlaceholder')}
-              className="flex-1 min-w-0 rounded-lg border border-border bg-background px-3 py-1.5 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+              className="flex-1 min-w-0 rounded-lg border border-border bg-background px-3 py-1 text-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
               data-testid="workspace-new-folder"
             />
             <Button

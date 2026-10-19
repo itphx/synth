@@ -326,7 +326,7 @@ export const ProvidersPanel = () => {
                     <>
                       <img src={fetchedIcon.icon} width={20} height={20} className="rounded" alt="" />
                       <span className="text-xs text-status-success">{t('admin.providers.found')}</span>
-                      <button onClick={applyFetchedIcon} className="px-2 py-0.5 rounded text-xs bg-status-success/10 text-status-success hover:bg-status-success/20">
+                      <button onClick={applyFetchedIcon} className="h-[var(--control-height)] px-2 rounded text-xs inline-flex items-center bg-status-success/10 text-status-success hover:bg-status-success/20">
                         {t('admin.providers.use')}
                       </button>
                     </>
@@ -345,7 +345,7 @@ export const ProvidersPanel = () => {
                       onClick={() => setIcon(`ri:${riName}`)}
                       title={riName}
                       className={cn(
-                        'p-1.5 rounded-md border',
+                        'size-[var(--control-height)] inline-flex items-center justify-center p-1.5 rounded-md border',
                         form.icon === `ri:${riName}`
                           ? 'border-primary bg-primary/10'
                           : 'border-border bg-surface-inset hover:bg-interactive-hover',
@@ -365,7 +365,7 @@ export const ProvidersPanel = () => {
                       onClick={() => setIcon(`brand:${brand}`)}
                       title={brand}
                       className={cn(
-                        'p-1.5 rounded-md border',
+                        'size-[var(--control-height)] inline-flex items-center justify-center p-1.5 rounded-md border',
                         form.icon === `brand:${brand}`
                           ? 'border-primary bg-primary/10'
                           : 'border-border bg-surface-inset hover:bg-interactive-hover',
@@ -401,7 +401,7 @@ export const ProvidersPanel = () => {
         )}>
           <div className="flex items-center justify-between gap-2 min-w-0">
             <span className="font-medium min-w-0 break-words">{testResult.id}</span>
-            <button onClick={() => setTestResult(null)} className="shrink-0 text-current opacity-50 hover:opacity-100" aria-label={t('common.close')}><Icon name="close" className="size-4" /></button>
+            <button onClick={() => setTestResult(null)} className="size-[var(--control-height)] inline-flex items-center justify-center shrink-0 text-current opacity-50 hover:opacity-100" aria-label={t('common.close')}><Icon name="close" className="size-4" /></button>
           </div>
           {testResult.status === 'testing' && <p className="mt-1">{t('admin.providers.testing')}</p>}
           {testResult.status === 'ok' && (
@@ -444,11 +444,11 @@ export const ProvidersPanel = () => {
                 </div>
                 <div className="flex flex-wrap items-center gap-1 shrink-0">
                   <Button variant="ghost" onClick={() => handleTest(p.name)}>{t('admin.providers.test')}</Button>
-                  <Button variant="ghost" onClick={() => handleEdit(p)} className="p-1" aria-label={t('admin.providers.edit')}><Icon name="edit-2" className="size-3.5" /></Button>
+                  <Button variant="ghost" onClick={() => handleEdit(p)} className="size-[var(--control-height)] p-0" aria-label={t('admin.providers.edit')}><Icon name="edit-2" className="size-3.5" /></Button>
                   <Button
                     variant="ghost"
                     onClick={() => handleDelete(p.name)}
-                    className="p-1 hover:bg-status-error/10 hover:text-status-error"
+                    className="size-[var(--control-height)] p-0 hover:bg-status-error/10 hover:text-status-error"
                     aria-label={t('common.delete')}
                   >
                     <Icon name="delete-bin" className="size-3.5" />

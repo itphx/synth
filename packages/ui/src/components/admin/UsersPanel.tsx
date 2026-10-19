@@ -181,7 +181,7 @@ export const UsersPanel = () => {
         <div className="flex flex-wrap gap-1.5 min-w-0">
           {ROLES.map((role) => (
             <button key={role} type="button" onClick={() => toggleRole(role)} className={cn(
-              'px-2.5 py-1 rounded text-xs transition-colors',
+              'h-[var(--control-height)] px-2.5 rounded text-xs inline-flex items-center transition-colors',
               form.roles.includes(role)
                 ? 'bg-secondary text-secondary-foreground font-medium'
                 : 'bg-muted text-muted-foreground hover:bg-interactive-hover',

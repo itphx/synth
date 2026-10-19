@@ -118,7 +118,7 @@ export const ProjectsPanel = () => {
         title={t('admin.projects.workspace.title')}
         tooltip={t('settings.help.projects.section.projects-workspace')}
       >
-        <div className="flex flex-wrap gap-2 min-w-0">
+        <div className="flex flex-wrap items-end gap-2 min-w-0">
           <div className="flex-1 min-w-0">
             <TextField
               label={t('admin.projects.workspace.path')}
@@ -218,7 +218,7 @@ export const ProjectsPanel = () => {
                 <Button
                   variant="ghost"
                   onClick={() => handleDelete(p.id, p.name)}
-                  className="shrink-0 p-1 hover:bg-status-error/10 hover:text-status-error"
+                  className="shrink-0 size-[var(--control-height)] p-0 hover:bg-status-error/10 hover:text-status-error"
                   aria-label={t('common.delete')}
                 >
                   <Icon name="delete-bin" className="size-4" />

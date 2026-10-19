@@ -166,7 +166,7 @@ export const SettingsModal = () => {
               <span className="font-medium text-sm">{t('settings.title')}</span>
               <div className="ml-auto">
                 <DialogClose
-                  className="rounded-lg p-1.5 opacity-70 transition-opacity hover:opacity-100 hover:bg-interactive-hover text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  className="inline-flex size-[var(--control-height)] items-center justify-center rounded-lg opacity-70 transition-opacity hover:opacity-100 hover:bg-interactive-hover text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                   aria-label={t('common.close')}
                 >
                   <Icon name="close" className="size-4" />
@@ -203,7 +203,7 @@ export const SettingsModal = () => {
                   placeholder={t('settings.search.placeholder')}
                   aria-label={t('settings.search.placeholder')}
                   data-testid="settings-search-input"
-                  className="h-8 w-full rounded-lg border border-input bg-background pl-8 pr-2 text-sm text-foreground placeholder:text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="h-[var(--control-height)] w-full rounded-lg border border-input bg-background pl-8 pr-2 text-sm text-foreground placeholder:text-muted-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 />
               </div>
             </div>
@@ -228,7 +228,7 @@ export const SettingsModal = () => {
                       onClick={() => openCategory(cat.id)}
                       data-testid={`settings-search-category-${cat.id}`}
                       className={cn(
-                        "flex w-full items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96] shrink-0",
+                        "flex w-full h-[var(--control-height)] items-center gap-2 px-3 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96] shrink-0",
                         activePage === cat.id
                           ? "bg-interactive-selection text-interactive-selection-foreground"
                           : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",
@@ -288,7 +288,7 @@ export const SettingsModal = () => {
                           title={t(cat.labelKey)}
                           aria-current={activePage === cat.id ? 'page' : undefined}
                           className={cn(
-                            "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96] shrink-0",
+                            "flex h-[var(--control-height)] items-center gap-2 px-3 rounded-lg text-sm text-left transition-[transform,color] duration-150 active:scale-[0.96] shrink-0",
                             activePage === cat.id
                               ? "bg-interactive-selection text-interactive-selection-foreground"
                               : "text-muted-foreground hover:bg-interactive-hover hover:text-foreground",

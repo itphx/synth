@@ -291,7 +291,7 @@ export function SshKeysSettings() {
                       <label
                         key={agent.id}
                         className={cn(
-                          'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
+                          'flex min-h-[var(--control-height)] items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
                           'transition-colors duration-150 ease-out hover:bg-interactive-hover',
                           'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
                           checked && 'bg-interactive-selection',
@@ -369,7 +369,7 @@ export function SshKeysSettings() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="shrink-0 min-h-10 min-w-10"
+                    className="shrink-0 min-h-[var(--control-height)] min-w-[var(--control-height)]"
                     onClick={() => openEdit(key)}
                     title={t('common.edit')}
                     aria-label={t('common.edit')}
@@ -380,7 +380,7 @@ export function SshKeysSettings() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="shrink-0 min-h-10 min-w-10 hover:text-destructive"
+                    className="shrink-0 min-h-[var(--control-height)] min-w-[var(--control-height)] hover:text-destructive"
                     onClick={() => setDeleteTarget(key)}
                     title={t('common.delete')}
                     aria-label={t('common.delete')}

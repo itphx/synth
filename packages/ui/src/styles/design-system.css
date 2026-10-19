@@ -409,6 +409,15 @@
   --font-family-mono: var(--font-mono);
 }
 
+/* Канон высоты контролов (ADR-072): текстовые/числовые поля, селекты и кнопки
+   панели настроек — одна высота (30px). На touch-устройствах — 40px (ADR-044).
+   Блок обычный (`@theme static`, не `@theme inline`), чтобы значения попадали в
+   `:root` и были доступны обычному CSS: `var(--control-height)`. */
+@theme static {
+  --control-height: 1.875rem; /* 30px — input/select/button в панели настроек */
+  --control-height-touch: 2.5rem; /* 40px — touch-таргеты (ADR-044) */
+}
+
 /* Agent color system using theme variables */
 @layer components {
   /* Agent color variants - each maps to theme colors */

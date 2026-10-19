@@ -39,7 +39,7 @@ export const IconPicker = ({ value, onChange }: IconPickerProps) => {
         placeholder={t('admin.iconPicker.searchPlaceholder')}
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        className="w-full px-2.5 py-1 rounded-md border bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+        className="w-full h-[var(--control-height)] px-2.5 rounded-md border bg-background text-xs focus:outline-none focus:ring-2 focus:ring-ring"
       />
       <div className="flex flex-wrap gap-1 max-h-48 overflow-y-auto">
         {filtered.map((name) => (
@@ -49,7 +49,7 @@ export const IconPicker = ({ value, onChange }: IconPickerProps) => {
             onClick={() => onChange(name)}
             title={name}
             className={cn(
-              'p-1.5 rounded-md border transition-colors',
+              'size-[var(--control-height)] inline-flex items-center justify-center p-1.5 rounded-md border transition-colors',
               value === name
                 ? 'border-primary bg-primary/10'
                 : 'border-border bg-surface-inset hover:bg-interactive-hover',

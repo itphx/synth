@@ -311,7 +311,7 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
         </div>
         <Button
           variant="outline"
-          className="min-h-10 shrink-0"
+          className="min-h-[var(--control-height)] shrink-0"
           onClick={() => {
             if (formOpen) {
               closeCreateForm()
@@ -525,7 +525,7 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="min-h-10 min-w-10"
+                          className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                           onClick={() => openEdit(key)}
                           title={t('common.edit')}
                           aria-label={t('common.edit')}
@@ -537,7 +537,7 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="min-h-10 min-w-10"
+                            className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                             onClick={() => void handleRevoke(key)}
                             disabled={pendingId === key.id}
                             title={t('events.keys.revoke')}
@@ -550,7 +550,7 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="min-h-10 min-w-10 hover:text-destructive"
+                          className="min-h-[var(--control-height)] min-w-[var(--control-height)] hover:text-destructive"
                           onClick={() => void handleDelete(key)}
                           disabled={pendingId === key.id}
                           title={t('common.delete')}
@@ -611,7 +611,7 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
             <Button
               variant="ghost"
               size="sm"
-              className="shrink-0 min-h-8 min-w-8"
+              className="shrink-0 min-h-[var(--control-height)] min-w-[var(--control-height)]"
               onClick={() => setCreated(null)}
               title={t('common.close')}
               aria-label={t('common.close')}
@@ -626,7 +626,7 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
             <Button
               variant="outline"
               size="sm"
-              className="shrink-0 min-h-10"
+              className="shrink-0 min-h-[var(--control-height)]"
               onClick={() => copy(created.key)}
               title={t('common.copy')}
               aria-label={t('common.copy')}
@@ -647,7 +647,7 @@ export function EventBindingKeys({ binding }: EventBindingKeysProps) {
           <Button
             variant="ghost"
             size="sm"
-            className="shrink-0 min-h-8 px-2"
+            className="shrink-0 min-h-[var(--control-height)] px-2"
             onClick={() => copy(curl)}
             title={t('common.copy')}
             aria-label={t('common.copy')}

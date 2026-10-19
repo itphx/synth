@@ -479,9 +479,19 @@ html.device-tablet [data-tree-node] button:not([role="switch"]):not([data-compac
   min-height: 1.75rem;
 }
 
-/* 2.2 Кнопки в модалках (DialogContent) — тапобласть ≥40px */
+/* 2.2 Кнопки в модалках (DialogContent) — тапобласть ≥40px.
+   `min-width` — иконки-кнопки остаются квадратными 40×40. */
 html.pointer-coarse [data-slot="dialog-content"] button:not([role="switch"]):not([data-compact]) {
-  min-height: 2.5rem;
+  min-height: var(--control-height-touch);
+  min-width: var(--control-height-touch);
+}
+
+/* 2.2 Поля ввода в модалках (DialogContent) — тапобласть ≥40px.
+   Исключены checkbox/radio/file (нативные) и range (слайдер — своя высота). */
+html.pointer-coarse [data-slot="dialog-content"] input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+html.pointer-coarse [data-slot="dialog-content"] textarea,
+html.pointer-coarse [data-slot="dialog-content"] [data-slot="select-trigger"] {
+  min-height: var(--control-height-touch);
 }
 
 /* Вкладка «Агенты» (настройки): карточки в одну колонку на телефоне/планшете */

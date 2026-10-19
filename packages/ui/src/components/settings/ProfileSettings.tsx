@@ -448,7 +448,7 @@ export const ProfileSettings = () => {
                   </div>
                   <Button
                     variant="ghost"
-                    className="shrink-0 min-h-10 hover:text-destructive"
+                    className="shrink-0 min-h-[var(--control-height)] hover:text-destructive"
                     onClick={() => void handleUnlinkIdentity(identity)}
                     disabled={unlinkingId === rowId}
                     data-testid={`profile-identity-unlink-${rowId}`}
@@ -490,7 +490,7 @@ export const ProfileSettings = () => {
           <div className="flex justify-end">
             <Button
               variant="outline"
-              className="min-h-10"
+              className="min-h-[var(--control-height)]"
               onClick={() => void handleClaimIdentity()}
               disabled={claiming || claimCode.trim().length === 0}
               data-testid="profile-identity-claim"

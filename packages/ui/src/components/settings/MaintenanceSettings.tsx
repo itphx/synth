@@ -563,7 +563,7 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
         actions={
           <Button
             variant="outline"
-            className="min-h-10 shrink-0"
+            className="min-h-[var(--control-height)] shrink-0"
             onClick={() => void handleCheck()}
             disabled={doctorLoading}
             data-testid="maintenance-check"
@@ -897,7 +897,7 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="min-h-10 min-w-10"
+                      className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                       onClick={() => handleDownload(backup.name)}
                       disabled={!!backup.encrypted}
                       title={
@@ -917,7 +917,7 @@ export function MaintenanceSettings({ onReload }: MaintenanceSettingsProps = {})
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="min-h-10 min-w-10 hover:text-destructive"
+                      className="min-h-[var(--control-height)] min-w-[var(--control-height)] hover:text-destructive"
                       onClick={() => void handleDelete(backup)}
                       disabled={deletingName === backup.name}
                       title={t('maintenance.backups.delete')}

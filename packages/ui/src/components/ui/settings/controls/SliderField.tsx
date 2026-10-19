@@ -133,7 +133,7 @@ export function SliderField({
             data-compact
             title={resetTitle}
             aria-label={resetTitle}
-            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
+            className="flex size-[var(--control-height)] shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
           >
             <Icon name="refresh" className="size-3.5" />
           </button>

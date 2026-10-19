@@ -578,7 +578,6 @@ export function ObservabilitySettings() {
             }}
             disabled={tokenEnvLocked}
             autoComplete={tokenVisible ? 'off' : 'new-password'}
-            className="h-8 py-1.5"
             mono
             containerClassName="flex-1 min-w-0"
             id="observability-token"
@@ -588,7 +587,7 @@ export function ObservabilitySettings() {
             <Button
               variant="outline"
               size="sm"
-              className="aspect-square px-2"
+              className="size-[var(--control-height)] shrink-0"
               onClick={() => void handleGenerateToken()}
               disabled={tokenEnvLocked || tokenSaving || tokenDeleting}
               aria-label={t('observability.token.generate')}

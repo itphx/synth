@@ -26,7 +26,7 @@ export interface ListFieldProps {
 }
 
 const INPUT_CLASSES =
-  'flex-1 min-w-0 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground ' +
+  'flex-1 min-w-0 rounded-lg border border-border bg-background px-3 py-1 text-sm text-foreground ' +
   'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
 /**
@@ -130,7 +130,7 @@ export function ListField({
         )}
 
         {variant === 'chips' && (
-          <div className="min-w-0 flex flex-wrap gap-2">
+          <div className="min-w-0 flex flex-wrap items-center gap-2">
             <input
               type="text"
               value={draft}

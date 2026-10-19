@@ -26,7 +26,7 @@ import {
 
 const BADGE = 'rounded px-1.5 py-0.5 text-[0.625rem] font-medium';
 const FILE_INPUT =
-  'block w-full min-w-0 text-xs text-muted-foreground file:mr-2 file:cursor-pointer file:rounded-lg file:border file:border-border file:bg-interactive-hover file:px-2 file:py-1 file:text-xs file:text-foreground';
+  'block w-full min-w-0 text-xs text-muted-foreground file:mr-2 file:cursor-pointer file:rounded-lg file:border file:border-border file:bg-interactive-hover file:px-2 file:py-1.5 file:text-xs file:text-foreground';
 
 interface ProfileFormState {
   name: string;

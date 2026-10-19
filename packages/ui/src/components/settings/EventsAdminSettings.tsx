@@ -382,7 +382,7 @@ export function EventsAdminSettings() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="shrink-0 min-h-10 min-w-10"
+                          className="shrink-0 min-h-[var(--control-height)] min-w-[var(--control-height)]"
                           onClick={() => openEdit(binding)}
                           title={t('common.edit')}
                           aria-label={t('common.edit')}
@@ -393,7 +393,7 @@ export function EventsAdminSettings() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="shrink-0 min-h-10 min-w-10 hover:text-destructive"
+                          className="shrink-0 min-h-[var(--control-height)] min-w-[var(--control-height)] hover:text-destructive"
                           onClick={() => void handleDelete(binding)}
                           title={t('common.delete')}
                           aria-label={t('common.delete')}

@@ -352,7 +352,7 @@ export const AgentsPanel = () => {
 
           {/* Agent modes (мультиклассы) */}
           <SettingsField label={t('admin.agents.agentMode')} tooltip={t('settings.help.agents.agentMode')}>
-            <div className="flex flex-wrap gap-2 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               {AGENT_MODES.map((m) => {
                 const checked = form.agent_mode.includes(m)
                 return (

@@ -301,14 +301,18 @@ describe('ObservabilitySettings — статус и настройки', () => {
     const field = byTestId(container, 'observability-token-input') as HTMLInputElement
     expect(field.value).toBe('')
     expect(field.type).toBe('password')
-    expect(field.className).toContain('h-8')
+    // Высота поля задаётся UI-kit'ом (ADR-072) — собственного override на 32px нет.
+    expect(field.className).not.toContain('h-8')
+    expect(field.className).not.toContain('h-[var(--control-height)]')
+    expect(field.className).not.toContain('size-[var(--control-height)]')
 
     const generate = byTestId(container, 'observability-token-generate') as HTMLButtonElement
     expect(generate.getAttribute('aria-label')).toBe('Generate')
     expect(generate.textContent).toBe('')
     expect(generate.className).not.toContain('h-8')
     expect(generate.className).not.toContain('w-8')
-    expect(generate.className).toContain('aspect-square')
+    // Иконка-кнопка — единый размер контрола 30px (--control-height).
+    expect(generate.className).toContain('size-[var(--control-height)]')
     expect(
       (byTestId(container, 'observability-token-set') as HTMLButtonElement).className,
     ).not.toContain('h-8')

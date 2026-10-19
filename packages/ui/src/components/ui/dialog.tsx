@@ -86,7 +86,7 @@ function DialogContent({
           {showCloseButton && (
             <BaseDialog.Close
               data-slot="dialog-close"
-              className="absolute top-2 right-2 rounded-lg p-1.5 opacity-70 transition-opacity hover:opacity-100 hover:bg-interactive-hover text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              className="absolute top-2 right-2 flex size-[var(--control-height)] items-center justify-center rounded-lg opacity-70 transition-opacity hover:opacity-100 hover:bg-interactive-hover text-muted-foreground hover:text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
             >
               <Icon name="close" className="size-4" />
               <span className="sr-only">{t('common.close')}</span>

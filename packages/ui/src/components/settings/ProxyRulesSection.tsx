@@ -309,6 +309,7 @@ export function ProxyRulesSection({ draft, setDraft, disabled = false }: ProxyRu
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                   onClick={() => move(index, -1)}
                   disabled={editing !== null || disabled || index === 0}
                   aria-label={t('proxy.rules.moveUp')}
@@ -319,6 +320,7 @@ export function ProxyRulesSection({ draft, setDraft, disabled = false }: ProxyRu
                 <Button
                   variant="ghost"
                   size="sm"
+                  className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                   onClick={() => move(index, 1)}
                   disabled={editing !== null || disabled || index === draft.rules.length - 1}
                   aria-label={t('proxy.rules.moveDown')}

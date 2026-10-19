@@ -143,7 +143,7 @@ function WebhookEventsField({
         </div>
         <Button
           variant="outline"
-          className="min-h-10 shrink-0"
+          className="min-h-[var(--control-height)] shrink-0"
           onClick={addPattern}
           data-testid={`${testIdPrefix}-pattern-add`}
         >
@@ -516,7 +516,7 @@ export function WebhooksSettings() {
           canManage ? (
             <Button
               variant="outline"
-              className="min-h-10 shrink-0"
+              className="min-h-[var(--control-height)] shrink-0"
               onClick={() => {
                 if (formOpen) {
                   closeCreateForm()
@@ -637,7 +637,7 @@ export function WebhooksSettings() {
               <Button
                 variant="ghost"
                 size="sm"
-                className="shrink-0 min-h-8 min-w-8"
+                className="shrink-0 min-h-[var(--control-height)] min-w-[var(--control-height)]"
                 onClick={() => setCreated(null)}
                 title={t('common.close')}
                 aria-label={t('common.close')}
@@ -653,7 +653,7 @@ export function WebhooksSettings() {
               <Button
                 variant="outline"
                 size="sm"
-                className="shrink-0 min-h-10"
+                className="shrink-0 min-h-[var(--control-height)]"
                 onClick={() => copy(created.secret)}
                 title={t('common.copy')}
                 aria-label={t('common.copy')}
@@ -673,7 +673,7 @@ export function WebhooksSettings() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="shrink-0 min-h-8 px-2"
+                  className="shrink-0 min-h-[var(--control-height)] px-2"
                   onClick={() => copy(signatureExample)}
                   title={t('common.copy')}
                   aria-label={t('common.copy')}
@@ -823,7 +823,7 @@ export function WebhooksSettings() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="min-h-10 min-w-10"
+                              className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                               onClick={() => openEdit(sub)}
                               title={t('common.edit')}
                               aria-label={t('common.edit')}
@@ -834,7 +834,7 @@ export function WebhooksSettings() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="min-h-10 min-w-10"
+                              className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                               onClick={() => void handleRegenerate(sub)}
                               disabled={pendingId === sub.id}
                               title={t('webhooks.regenerate')}
@@ -846,7 +846,7 @@ export function WebhooksSettings() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="min-h-10 min-w-10"
+                              className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                               onClick={() => void handleTest(sub)}
                               disabled={pendingId === sub.id}
                               title={t('webhooks.test')}
@@ -858,7 +858,7 @@ export function WebhooksSettings() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="min-h-10 min-w-10"
+                              className="min-h-[var(--control-height)] min-w-[var(--control-height)]"
                               onClick={() => void toggleDeliveries(sub)}
                               title={
                                 deliveriesFor === sub.id
@@ -873,7 +873,7 @@ export function WebhooksSettings() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="min-h-10 min-w-10 hover:text-destructive"
+                              className="min-h-[var(--control-height)] min-w-[var(--control-height)] hover:text-destructive"
                               onClick={() => void handleDelete(sub)}
                               disabled={pendingId === sub.id}
                               title={t('common.delete')}

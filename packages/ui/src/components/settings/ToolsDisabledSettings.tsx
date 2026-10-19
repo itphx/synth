@@ -249,7 +249,7 @@ export function ToolsDisabledSettings() {
                 <label
                   key={capability}
                   className={cn(
-                    'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
+                    'flex min-h-[var(--control-height)] items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
                     'transition-colors duration-150 ease-out hover:bg-interactive-hover',
                     'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
                     !enabled && 'bg-interactive-selection',
@@ -273,7 +273,7 @@ export function ToolsDisabledSettings() {
             {/* runtime — ядро сессии, всегда включён */}
             <label
               data-testid="tools-disabled-runtime"
-              className="flex min-h-10 items-center gap-2 rounded-lg border border-dashed border-border/60 bg-surface-inset px-2.5 py-1.5 opacity-70 cursor-not-allowed min-w-0"
+              className="flex min-h-[var(--control-height)] items-center gap-2 rounded-lg border border-dashed border-border/60 bg-surface-inset px-2.5 py-1.5 opacity-70 cursor-not-allowed min-w-0"
               title={t('mcpAdmin.tools.runtimeHint')}
             >
               <input
@@ -308,7 +308,7 @@ export function ToolsDisabledSettings() {
                   <label
                     key={tool.name}
                     className={cn(
-                      'flex min-h-10 items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
+                      'flex min-h-[var(--control-height)] items-center gap-2 rounded-lg border border-border/60 bg-surface-inset px-2.5 py-1.5 cursor-pointer min-w-0',
                       'transition-colors duration-150 ease-out hover:bg-interactive-hover',
                       'has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
                       disabledByGroup ? 'cursor-not-allowed opacity-50' : !enabled && 'bg-interactive-selection',
@@ -334,7 +334,7 @@ export function ToolsDisabledSettings() {
                 <label
                   key={tool.name}
                   data-testid={`tools-disabled-runtime-tool-${tool.name}`}
-                  className="flex min-h-10 items-center gap-2 rounded-lg border border-dashed border-border/60 bg-surface-inset px-2.5 py-1.5 opacity-60 cursor-not-allowed min-w-0"
+                  className="flex min-h-[var(--control-height)] items-center gap-2 rounded-lg border border-dashed border-border/60 bg-surface-inset px-2.5 py-1.5 opacity-60 cursor-not-allowed min-w-0"
                   title={t('mcpAdmin.tools.runtimeHint')}
                 >
                   <input type="checkbox" checked disabled className="size-4 shrink-0 accent-primary" aria-label={tool.name} />

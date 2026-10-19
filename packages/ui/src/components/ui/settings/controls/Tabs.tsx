@@ -78,7 +78,7 @@ export function Tabs({
       aria-label={ariaLabel}
       className={cn(
         'tab-scroll-container flex w-full min-w-0 items-stretch gap-1 overflow-x-auto',
-        isUnderline ? 'border-b border-border' : 'rounded-lg bg-muted p-1',
+        isUnderline ? 'border-b border-border' : 'rounded-lg bg-muted p-0',
         className,
       )}
     >
@@ -93,7 +93,7 @@ export function Tabs({
             title={item.title}
             onClick={() => onChange(item.value)}
             className={cn(
-              'flex-1 min-w-0 px-2 py-1.5 text-xs font-medium text-center leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              'flex-1 min-w-0 h-[var(--control-height)] px-2 py-1.5 text-xs font-medium text-center leading-tight transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
               isUnderline ? 'rounded-none' : 'rounded-md',
               item.title ? 'truncate' : 'break-words',
               isUnderline

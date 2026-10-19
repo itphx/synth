@@ -37,7 +37,7 @@ export function NumberField({
         {...props}
         type="number"
         className={cn(
-          'min-w-0 rounded-lg border border-border bg-background px-3 py-2 text-sm text-right text-foreground',
+          'min-w-0 rounded-lg border border-border bg-background px-3 py-1 text-sm text-right text-foreground',
           inline ? 'w-24 sm:w-24' : 'w-full sm:w-24',
           'placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
           'disabled:cursor-not-allowed disabled:opacity-50',

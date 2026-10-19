@@ -11,8 +11,10 @@ export type ButtonVariant =
 export type ButtonSize = 'sm' | 'md'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  primary: 'bg-primary text-primary-foreground hover:bg-primary/90',
-  ghost: 'text-muted-foreground hover:bg-interactive-hover hover:text-foreground',
+  // У `primary`/`ghost` бордер прозрачный: без него высота `sm` была бы 28px,
+  // а у вариантов с бордером — 30px. Канон — единая высота контрола (ADR-072).
+  primary: 'border border-transparent bg-primary text-primary-foreground hover:bg-primary/90',
+  ghost: 'border border-transparent text-muted-foreground hover:bg-interactive-hover hover:text-foreground',
   outline: 'border border-border text-foreground hover:bg-interactive-hover',
   'outline-primary': 'border border-primary text-primary hover:bg-primary/10',
   'outline-muted': 'border border-muted-foreground text-muted-foreground hover:bg-interactive-hover hover:text-foreground',
