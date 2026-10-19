@@ -304,14 +304,15 @@ describe('ObservabilitySettings — статус и настройки', () => {
     const generate = byTestId(container, 'observability-token-generate') as HTMLButtonElement
     expect(generate.getAttribute('aria-label')).toBe('Generate')
     expect(generate.textContent).toBe('')
-    expect(generate.className).toContain('h-8')
-    expect(generate.className).toContain('w-8')
-    expect((byTestId(container, 'observability-token-set') as HTMLButtonElement).className).toContain(
-      'h-8',
-    )
+    expect(generate.className).not.toContain('h-8')
+    expect(generate.className).not.toContain('w-8')
+    expect(generate.className).toContain('aspect-square')
+    expect(
+      (byTestId(container, 'observability-token-set') as HTMLButtonElement).className,
+    ).not.toContain('h-8')
     expect(
       (byTestId(container, 'observability-token-delete') as HTMLButtonElement).className,
-    ).toContain('h-8')
+    ).not.toContain('h-8')
 
     await clickTestId(container, 'observability-token-generate')
 

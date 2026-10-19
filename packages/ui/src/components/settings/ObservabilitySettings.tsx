@@ -579,7 +579,7 @@ export function ObservabilitySettings() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 w-8 p-0"
+              className="aspect-square px-2"
               onClick={() => void handleGenerateToken()}
               disabled={tokenEnvLocked || tokenSaving || tokenDeleting}
               aria-label={t('observability.token.generate')}
@@ -590,7 +590,6 @@ export function ObservabilitySettings() {
             </Button>
             <Button
               variant="primary"
-              className="h-8"
               onClick={() => void handleSetToken()}
               disabled={tokenEnvLocked || tokenSaving}
               data-testid="observability-token-set"
@@ -600,7 +599,6 @@ export function ObservabilitySettings() {
             </Button>
             <Button
               variant="danger"
-              className="h-8"
               onClick={() => void handleDeleteToken()}
               disabled={tokenEnvLocked || !tokenConfigured || tokenDeleting}
               data-testid="observability-token-delete"
