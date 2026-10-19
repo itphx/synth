@@ -7,7 +7,8 @@
 #      (alerts.enabled: true; в spec уходит содержимое файла как есть).
 #
 # ВАЖНО про `job`: имена job'ов зависят от способа скрейпа.
-#   - docker-compose.observability.yml: job="synth" (:4300) и job="synth-backend" (:5000);
+#   - docker-compose.observability.yml: job="synth-dev-core" (:4300) и
+#     job="synth-dev-backend" (:5000), окружение — лейбл env="dev";
 #   - Prometheus Operator: job = "<namespace>/<service>" (например synth/synth-backend);
 #   - vanilla по аннотациям: job = имя сервиса/цели из вашего scrape_config.
 # Поэтому базовые правила используют regex `job=~".*synth.*"`. Если у вас

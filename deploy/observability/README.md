@@ -38,8 +38,8 @@ curl -s localhost:4300/metrics | head
 
 Открыть:
 
-- Prometheus — <http://localhost:9090> (`Status → Targets`: оба job'а `UP`,
-  `Alerts`: правила загружены);
+- Prometheus — <http://localhost:9090> (`Status → Targets`: оба job'а
+  (`synth-dev-core`, `synth-dev-backend`) `UP`, `Alerts`: правила загружены);
 - Grafana — <http://localhost:3000> (по умолчанию `admin` / `admin`; анонимный
   просмотр включён, папка **Synth** с тремя дашбордами).
 
@@ -81,8 +81,9 @@ curl -s -H "Authorization: Bearer $SYNTH_METRICS_TOKEN" localhost:4300/metrics |
 ```
 
 В dev-стенде токен не настроен: если он нужен, допишите `authorization` в оба
-job'а `prometheus.yml` (Prometheus не подставляет env в конфиг — используйте
-`credentials_file` и смонтируйте файл с токеном).
+job'а `prometheus.yml` — только через `credentials_file` со смонтированным файлом
+(Prometheus не подставляет env в конфиг). Подробно — раздел
+[«Несколько окружений (dev + test)»](#несколько-окружений-dev--test).
 
 ## Цели скрейпа и сеть
 
@@ -113,6 +114,125 @@ docker network ls | grep -i synth
 SYNTH_DOCKER_NETWORK=myproject_default \
   docker compose -f docker-compose.observability.yml up -d
 ```
+
+## Несколько окружений (dev + test)
+
+Стенд — шаблон схемы **«один Prometheus, несколько окружений»**: одно окружение
+не должно «затирать» другое, поэтому окружение различается **именем job'а** и
+лейблом `env`, а роль процесса — лейблом `component`:
+
+| `job_name` | `env` | `component` | Источник |
+|---|---|---|---|
+| `synth-dev-core` | `dev` | `core` | контейнер `synth` / `synth serve` (`:4300`) |
+| `synth-dev-backend` | `dev` | `backend` | `./scripts/dev.sh backend` или k3s (`:5000`) |
+| `synth-test-backend` (пример, закомментирован) | `test` | `backend` | Ingress `metrics.synth.k3s.itphx.loc` |
+
+dev-job'ы включены всегда; пример test лежит в `prometheus/prometheus.yml`
+закомментированным — раскомментируйте и смонтируйте токен (см. ниже). Новое
+окружение добавляется так же: **новый** `job_name` вида
+`synth-<env>-<component>` и свой `env` в `static_configs.labels`. Не
+переиспользуйте dev-job'ы и не пытайтесь различить окружения через
+`external_labels`: Prometheus **не применяет** их к локальным запросам
+(`/graph`, HTTP API, дашборды) — они уходят только в remote write, federation и
+уведомления Alertmanager. Фильтрация и агрегация — строго по `env` из
+`static_configs`. Общая схема (не только dev-стенд) — в
+[docs/OBSERVABILITY.md](../../docs/OBSERVABILITY.md#несколько-окружений-в-одном-prometheus).
+
+### `/metrics` из test
+
+Test — k3s, namespace `synth` (backend `synth-backend:5000`). Два способа
+достать `/metrics`:
+
+```bash
+# 1) Ingress на /metrics (https) — так ходит Prometheus из шаблона
+curl -s -H "Authorization: Bearer $SYNTH_METRICS_TOKEN" \
+  https://metrics.synth.k3s.itphx.loc/metrics | head
+
+# 2) port-forward, если Ingress не опубликован или нужен локальный стенд
+kubectl -n synth port-forward svc/synth-backend 15000:5000 &
+curl -s -H "Authorization: Bearer $SYNTH_METRICS_TOKEN" \
+  http://localhost:15000/metrics | head
+```
+
+Для port-forward target в scrape_config — `host.docker.internal:15000`
+(`extra_hosts: host-gateway` в `docker-compose.observability.yml` уже задан).
+Учтите: `https`-Ingress и токен проверяются на стороне backend'а; если
+`/metrics` в test выключен (`metrics.enabled=false`) — будет 404, а не пустой
+ответ.
+
+### Токен — только файлом
+
+`/metrics` в test защищён bearer-токеном (`SYNTH_METRICS_TOKEN`, ADR-094),
+который лежит в SealedSecret `synth-metrics` (namespace `synth`). В конфиг
+Prometheus токен **не пишется**: распакуйте его в файл вне git и смонтируйте
+read-only.
+
+```bash
+# секреты — вне git-репозитория synth/ (инвариант 13)
+mkdir -p ../secrets
+kubectl -n synth get secret synth-metrics \
+  -o jsonpath='{.data.SYNTH_METRICS_TOKEN}' | base64 -d \
+  > ../secrets/synth-test-metrics-token
+chmod 600 ../secrets/synth-test-metrics-token
+```
+
+```yaml
+authorization:
+  type: Bearer
+  credentials_file: /etc/prometheus/secrets/synth-test-token
+```
+
+`credentials_file` — путь **внутри** контейнера Prometheus; mount добавляется в
+`docker-compose.observability.yml`:
+
+```yaml
+volumes:
+  - ../secrets/synth-test-metrics-token:/etc/prometheus/secrets/synth-test-token:ro
+```
+
+Inline `credentials:` в репозиторий не попадает (инвариант 13), а env-подстановки
+в `prometheus.yml` нет — поэтому только `credentials_file`. Тот же приём нужен
+dev-job'ам, если вы включили `SYNTH_METRICS_TOKEN` локально.
+
+### Grafana: окружение и инстанс
+
+В дашбордах (`charts/synth/files/dashboards/*.json`) три переменные:
+
+| Переменная | Label | Что выбирает |
+|---|---|---|
+| `DS_PROMETHEUS` | Prometheus | источник данных |
+| `env` | **Окружение** | `label_values(up{job=~".*synth.*"}, env)` |
+| `instance` | **Инстанс** | `label_values(up{job=~".*synth.*", env=~"$env"}, instance)` |
+
+Все запросы панелей фильтруются `env=~"$env"` и `instance=~"$instance"`; по
+умолчанию выбрано `All` (`.*`), поэтому на инстансе с одним окружением
+поведение не меняется. Значения берутся из лейблов `up`, т.е. из
+`static_configs.labels` ваших job'ов: job вне regex `.*synth.*` в списке
+окружений не появится, а job без `env` даст пустой список. Если окружения нет
+в выпадающем списке — проверьте `Status → Targets` (лейбл `env` и `up == 1`).
+
+`instance` — это `host:port` цели, он меняется при пересоздании pod'а; как
+стабильный признак среды используйте `env`, а `instance` — чтобы выбрать
+конкретную реплику внутри окружения.
+
+### Алерты при общем Prometheus
+
+Файл правил общий с чартом (`charts/synth/files/alerts/synth-rules.yaml`,
+подключён через `rule_files`). Базовые правила используют
+`up{job=~".*synth.*"}` — при нескольких окружениях это ловит любой упавший
+инстанс, а агрегаты (`sum(rate(...))`, `histogram_quantile(...)`) смешивают
+окружения. Для общего Prometheus:
+
+- сузьте `job` до конкретного окружения (`job="synth-test-backend"`) либо
+  оставьте regex, но добавьте `env` в `labels`/`annotations` правила;
+- в агрегатах группируйте по окружению: `sum by (env) (...)`,
+  `histogram_quantile(0.95, sum by (le, env) (...))` — иначе доля ошибок,
+  стоимость и p95 считаются по сумме dev+test;
+- пороги задавайте по окружностям: шумный test не должен срабатывать как
+  инцидент dev.
+
+Полный каталог метрик, лейблов, скрейпа и диагностики — в
+[docs/OBSERVABILITY.md](../../docs/OBSERVABILITY.md); здесь только dev-стенд.
 
 ## Проверка правил и алертов
 

@@ -8,12 +8,19 @@
 #
 # /metrics выключен по умолчанию (ADR-094 п. 4): перед запуском включите
 # SYNTH_METRICS_ENABLED=true (см. deploy/observability/README.md).
+#
+# Схема — «один Prometheus, несколько окружений»: окружение различается
+# job_name (`synth-<env>-<component>`) и лейблом `env` в static_configs,
+# роль процесса — лейблом `component`. Фильтровать и агрегировать нужно по
+# этим лейблам: external_labels к локальным запросам не применяются (они
+# попадают только в remote write, federation и уведомления Alertmanager).
 global:
   scrape_interval: 15s
   scrape_timeout: 10s
   evaluation_interval: 15s
   external_labels:
-    stack: synth-dev
+    # Метка инсталляции, а не окружения: окружение — в static_configs.labels.
+    stack: synth
 
 # Правила алертов — тот же файл, что уходит в чарт (plain Prometheus, не PrometheusRule).
 rule_files:
@@ -21,19 +28,51 @@ rule_files:
 
 scrape_configs:
   # Standalone-core (`synth serve` / контейнер `synth`): порт 4300.
-  - job_name: synth
+  - job_name: synth-dev-core
     metrics_path: /metrics
     static_configs:
       - targets:
           - __SYNTH_CORE_TARGET__
         labels:
+          env: dev
           component: core
 
   # Backend API Hub (`./scripts/dev.sh backend` / неймспейс k3s): порт 5000.
-  - job_name: synth-backend
+  - job_name: synth-dev-backend
     metrics_path: /metrics
     static_configs:
       - targets:
           - __SYNTH_BACKEND_TARGET__
         labels:
+          env: dev
           component: backend
+
+  # ── Пример второго окружения (test) ────────────────────────────────────
+  # Раскомментируйте, если этот же Prometheus должен собирать и test. Новое
+  # окружение — это новый job_name и свой `env`; не переиспользуйте job'ы
+  # dev и не пытайтесь различить окружения через external_labels.
+  #
+  # Токен `/metrics` в test задан через `SYNTH_METRICS_TOKEN` из SealedSecret
+  # `synth-metrics` (namespace `synth`). В конфиг токен не пишется: положите
+  # его в файл вне git-репозитория и смонтируйте в Prometheus, например
+  #   kubectl -n synth get secret synth-metrics \
+  #     -o jsonpath='{.data.SYNTH_METRICS_TOKEN}' | base64 -d \
+  #     > ../secrets/synth-test-metrics-token
+  # и добавьте в docker-compose.observability.yml:
+  #   - ../secrets/synth-test-metrics-token:/etc/prometheus/secrets/synth-test-token:ro
+  #
+  # `metrics.synth.k3s.itphx.loc` — Ingress на `/metrics` backend'а test
+  # (https, scheme обязателен). Без Ingress — port-forward и target
+  # host.docker.internal:15000 (host-gateway в compose уже задан):
+  #   kubectl -n synth port-forward svc/synth-backend 15000:5000
+  # - job_name: synth-test-backend
+  #   scheme: https
+  #   metrics_path: /metrics
+  #   static_configs:
+  #     - targets: ['metrics.synth.k3s.itphx.loc']
+  #       labels:
+  #         env: test
+  #         component: backend
+  #   authorization:
+  #     type: Bearer
+  #     credentials_file: /etc/prometheus/secrets/synth-test-token
