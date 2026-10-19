@@ -2791,9 +2791,9 @@ export const dict = {
   'maintenance.audit.cleared': 'Journal cleared: {count} removed',
   'maintenance.audit.clearError': 'Failed to clear the journal: {error}',
 
-  // --- Metrics / observability (ADR-094, admin) ---
+  // --- Metrics / observability (admin) ---
   'observability.title': 'Metrics',
-  'observability.description': 'Prometheus metrics export and instance readiness (ADR-094): state, token and the /metrics and /ready endpoints.',
+  'observability.description': 'Prometheus metrics export and instance readiness: state, token and the /metrics and /ready endpoints.',
   'observability.loadError': 'Failed to load metrics settings',
   'observability.statusError': 'Failed to load metrics state',
   'observability.status.title': 'State',
@@ -2846,6 +2846,9 @@ export const dict = {
   'observability.token.placeholder': 'Bearer token for Prometheus',
   'observability.token.set': 'Set',
   'observability.token.delete': 'Delete',
+  'observability.token.generate': 'Generate',
+  'observability.token.generatedCopied': 'Token generated and copied',
+  'observability.token.generatedManual': 'Token generated — copy it manually',
   'observability.token.required': 'Enter a token',
   'observability.token.deleteTitle': 'Delete token',
   'observability.token.deleteConfirm': 'Requests to /metrics will no longer require authorization (when export is enabled). Continue?',
@@ -2863,11 +2866,9 @@ export const dict = {
   'observability.refresh': 'Refresh status',
   'observability.refreshing': 'Refreshing...',
   'observability.hints.title': 'Hints',
-  'observability.hints.description': 'Prometheus setup and documentation.',
+  'observability.hints.description': 'Prometheus setup.',
   'observability.hints.scrape': 'Example scrape_config for Prometheus:',
   'observability.hints.copy': 'Copy config',
-  'observability.hints.docs': 'Metric and label catalogue — docs/OBSERVABILITY.md; user documentation lives on the portal.',
-  'observability.hints.docsLink': 'Open the documentation portal',
 
   'sessionCreate.project': 'Project',
 

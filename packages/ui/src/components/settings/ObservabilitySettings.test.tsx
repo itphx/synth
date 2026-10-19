@@ -164,7 +164,7 @@ afterEach(async () => {
   }
 })
 
-describe('ObservabilitySettings — статус и настройки (ADR-094)', () => {
+describe('ObservabilitySettings — статус и настройки', () => {
   it('загружает настройки и показывает состояние экспорта', async () => {
     const container = await renderSettings()
 
@@ -258,6 +258,9 @@ describe('ObservabilitySettings — статус и настройки (ADR-094)
     expect((byTestId(container, 'observability-token-set') as HTMLButtonElement).disabled).toBe(
       true,
     )
+    expect((byTestId(container, 'observability-token-generate') as HTMLButtonElement).disabled).toBe(
+      true,
+    )
     expect(byTestId(container, 'observability-token-env')).toBeTruthy()
   })
 
@@ -288,6 +291,36 @@ describe('ObservabilitySettings — статус и настройки (ADR-094)
     await clickTestId(container, 'observability-token-delete')
     expect(confirm).toHaveBeenCalled()
     expect(mocks.deleteToken).toHaveBeenCalledTimes(1)
+  })
+
+  it('генерирует токен, подставляет его и копирует', async () => {
+    const container = await renderSettings()
+
+    expect((byTestId(container, 'observability-token-input') as HTMLInputElement).value).toBe('')
+
+    await clickTestId(container, 'observability-token-generate')
+
+    const input = byTestId(container, 'observability-token-input') as HTMLInputElement
+    expect(input.type).toBe('password')
+    expect(input.value.length).toBeGreaterThanOrEqual(16)
+    expect(input.value).toMatch(/^[A-Za-z0-9_-]+$/)
+    expect(mocks.writeText).toHaveBeenCalledWith(input.value)
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', text: 'Token generated and copied' }),
+    )
+  })
+
+  it('при недоступном clipboard предлагает скопировать токен вручную', async () => {
+    mocks.writeText.mockRejectedValue(new Error('clipboard denied'))
+    const container = await renderSettings()
+
+    await clickTestId(container, 'observability-token-generate')
+
+    const input = byTestId(container, 'observability-token-input') as HTMLInputElement
+    expect(input.value.length).toBeGreaterThanOrEqual(16)
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'success', text: 'Token generated — copy it manually' }),
+    )
   })
 
   it('пустой токен не отправляется', async () => {

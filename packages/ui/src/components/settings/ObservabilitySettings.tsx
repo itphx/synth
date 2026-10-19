@@ -24,11 +24,11 @@ import {
 } from '@/lib/api/synthApi'
 import { formatBytes } from './MaintenanceSettings'
 
-/** Период фонового обновления статуса (ADR-094): состояние читается без перезагрузки. */
+/** Период фонового обновления статуса: состояние читается без перезагрузки. */
 export const STATUS_POLL_INTERVAL_MS = 15_000
 
 /**
- * Пример `scrape_config` для Prometheus (ADR-094): job `synth`, exposition на
+ * Пример `scrape_config` для Prometheus: job `synth`, exposition на
  * `/metrics`, интервал 15 c. Цели — сервис backend внутри сети инстанса.
  */
 export const SCRAPE_CONFIG = `scrape_configs:
@@ -38,11 +38,8 @@ export const SCRAPE_CONFIG = `scrape_configs:
     static_configs:
       - targets: ['synth-backend:5000']`
 
-/** Документация: каталог метрик в репозитории и пользовательский портал. */
-const DOCS_PORTAL_URL = 'https://docs.synth.itphx.ru/'
-
 /**
- * Человекочитаемый uptime процесса (ADR-094): дни/часы/минуты/секунды.
+ * Человекочитаемый uptime процесса: дни/часы/минуты/секунды.
  * Две старшие единицы — достаточно для админ-панели.
  */
 export function formatUptime(seconds: number): string {
@@ -81,7 +78,7 @@ const TOKEN_SOURCE: Record<MetricsTokenSource, string> = {
 }
 
 /**
- * ADR-094 / ADR-072: админ-раздел «Метрики» — состояние экспорта Prometheus,
+ * ADR-072: админ-раздел «Метрики» — состояние экспорта Prometheus,
  * runtime-настройка `enabled` (`GET/PUT/DELETE /settings/metrics`), write-only
  * bearer-токен и эндпоинты `/metrics`, `/ready`. Мутации — ADMIN (guard сервера).
  *
@@ -149,7 +146,7 @@ export function ObservabilitySettings() {
     void loadStatus()
   }, [loadInfo, loadStatus])
 
-  // ADR-094: статус обновляется раз в 15 c; таймер снимается на unmount.
+  // Статус обновляется раз в 15 c; таймер снимается на unmount.
   useEffect(() => {
     const timer = window.setInterval(() => {
       void loadStatus(true)
@@ -298,18 +295,46 @@ export function ObservabilitySettings() {
     }
   }, [describeTokenError, loadInfo, loadStatus, notify, t, tokenDeleting, tokenEnvLocked])
 
-  /** Копирование в буфер обмена (как в соседних разделах — `navigator.clipboard`). */
+  /** Копирование в буфер обмена; `false` — clipboard недоступен или запись не удалась. */
   const copy = useCallback(
-    (text: string) => {
-      void navigator.clipboard
-        .writeText(text)
-        .then(() => {
-          notify({ text: t('observability.copied'), type: 'success', category: 'system' })
-        })
-        .catch(() => undefined)
+    (text: string, successText?: string): Promise<boolean> => {
+      const clipboard = navigator.clipboard
+      if (!clipboard?.writeText) return Promise.resolve(false)
+      return clipboard.writeText(text).then(
+        () => {
+          notify({
+            text: successText ?? t('observability.copied'),
+            type: 'success',
+            category: 'system',
+          })
+          return true
+        },
+        () => false,
+      )
     },
     [notify, t],
   )
+
+  /** Криптостойкий bearer-токен: 32 байта → base64url без padding (43 символа). */
+  const handleGenerateToken = useCallback(async () => {
+    if (tokenEnvLocked) return
+    const bytes = new Uint8Array(32)
+    crypto.getRandomValues(bytes)
+    const value = btoa(String.fromCharCode(...bytes))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '')
+    setTokenInput(value)
+    setTokenError(null)
+    const copied = await copy(value, t('observability.token.generatedCopied'))
+    if (!copied) {
+      notify({
+        text: t('observability.token.generatedManual'),
+        type: 'success',
+        category: 'system',
+      })
+    }
+  }, [copy, notify, t, tokenEnvLocked])
 
   const currentEnabled = draft.draft?.enabled ?? false
 
@@ -539,7 +564,16 @@ export function ObservabilitySettings() {
             id="observability-token"
             data-testid="observability-token-input"
           />
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => void handleGenerateToken()}
+              disabled={tokenEnvLocked || tokenSaving || tokenDeleting}
+              data-testid="observability-token-generate"
+            >
+              <Icon name="key" className="size-3.5" />
+              {t('observability.token.generate')}
+            </Button>
             <Button
               variant="primary"
               onClick={() => void handleSetToken()}
@@ -590,7 +624,7 @@ export function ObservabilitySettings() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => copy(status?.endpoints.metrics ?? '/metrics')}
+              onClick={() => void copy(status?.endpoints.metrics ?? '/metrics')}
               aria-label={t('observability.copy')}
               data-testid="observability-copy-metrics"
             >
@@ -607,7 +641,7 @@ export function ObservabilitySettings() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => copy(status?.endpoints.ready ?? '/ready')}
+              onClick={() => void copy(status?.endpoints.ready ?? '/ready')}
               aria-label={t('observability.copy')}
               data-testid="observability-copy-ready"
             >
@@ -628,7 +662,7 @@ export function ObservabilitySettings() {
         </Button>
       </SettingsSection>
 
-      {/* 5. Подсказки: scrape_config и документация */}
+      {/* 5. Подсказки: scrape_config */}
       <SettingsSection
         title={t('observability.hints.title')}
         description={t('observability.hints.description')}
@@ -642,7 +676,7 @@ export function ObservabilitySettings() {
               variant="ghost"
               size="sm"
               className="shrink-0"
-              onClick={() => copy(SCRAPE_CONFIG)}
+              onClick={() => void copy(SCRAPE_CONFIG)}
               data-testid="observability-copy-scrape"
             >
               <Icon name="file-copy" className="size-3.5" />
@@ -655,20 +689,6 @@ export function ObservabilitySettings() {
           >
             {SCRAPE_CONFIG}
           </pre>
-        </div>
-
-        <div className="space-y-1 text-xs text-muted-foreground min-w-0">
-          <p className="break-words">{t('observability.hints.docs')}</p>
-          <a
-            href={DOCS_PORTAL_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-primary hover:underline"
-            data-testid="observability-docs-link"
-          >
-            <Icon name="external-link" className="size-3.5" />
-            {t('observability.hints.docsLink')}
-          </a>
         </div>
       </SettingsSection>
     </SettingsPanel>

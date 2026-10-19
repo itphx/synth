@@ -3101,9 +3101,9 @@ export const dict = {
   'maintenance.audit.cleared': 'Журнал очищен: удалено {count}',
   'maintenance.audit.clearError': 'Не удалось очистить журнал: {error}',
 
-  // --- Метрики / наблюдаемость (ADR-094, admin) ---
+  // --- Метрики / наблюдаемость (admin) ---
   'observability.title': 'Метрики',
-  'observability.description': 'Экспорт Prometheus-метрик и readiness инстанса (ADR-094): состояние, токен и эндпоинты /metrics и /ready.',
+  'observability.description': 'Экспорт Prometheus-метрик и readiness инстанса: состояние, токен и эндпоинты /metrics и /ready.',
   'observability.loadError': 'Не удалось загрузить настройки метрик',
   'observability.statusError': 'Не удалось загрузить состояние метрик',
   'observability.status.title': 'Состояние',
@@ -3156,6 +3156,9 @@ export const dict = {
   'observability.token.placeholder': 'Bearer-токен для Prometheus',
   'observability.token.set': 'Задать',
   'observability.token.delete': 'Удалить',
+  'observability.token.generate': 'Сгенерировать',
+  'observability.token.generatedCopied': 'Токен сгенерирован и скопирован',
+  'observability.token.generatedManual': 'Токен сгенерирован — скопируйте вручную',
   'observability.token.required': 'Введите токен',
   'observability.token.deleteTitle': 'Удалить токен',
   'observability.token.deleteConfirm': 'Запросы к /metrics перестанут требовать авторизацию (если экспорт включён). Продолжить?',
@@ -3173,11 +3176,9 @@ export const dict = {
   'observability.refresh': 'Обновить статус',
   'observability.refreshing': 'Обновление…',
   'observability.hints.title': 'Подсказки',
-  'observability.hints.description': 'Подключение Prometheus и документация.',
+  'observability.hints.description': 'Подключение Prometheus.',
   'observability.hints.scrape': 'Пример scrape_config для Prometheus:',
   'observability.hints.copy': 'Скопировать конфиг',
-  'observability.hints.docs': 'Каталог метрик и лейблов — docs/OBSERVABILITY.md; пользовательская документация — на портале.',
-  'observability.hints.docsLink': 'Открыть портал документации',
 
   'sessionCreate.project': 'Проект',
 
