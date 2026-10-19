@@ -1,0 +1,23 @@
+# API-key режим без Keycloak/OIDC: backend аутентифицирует по SYNTH_API_KEY
+# (один ключ → роль ADMIN). Ключ в values НЕ хранится — только в Secret.
+#
+# 1) Создайте Secret (имя по умолчанию — secrets.existingSecret: synth-secrets):
+#      kubectl create secret generic synth-secrets \
+#        --namespace synth \
+#        --from-literal=SYNTH_API_KEY='<api-key>'
+# 2) Установите чарт:
+#      helm install synth ./charts/synth -f charts/synth/examples/values-apikey.yaml \
+#        --namespace synth --create-namespace
+#
+# Несовместимо с backend.oidc.enabled: true — чарт падает на рендере.
+
+backend:
+  auth:
+    apiKey:
+      enabled: true
+      # Пусто → secrets.existingSecret (по умолчанию synth-secrets).
+      existingSecret: ""
+      # Ключ внутри Secret, значение попадает в env SYNTH_API_KEY.
+      secretKey: SYNTH_API_KEY
+  oidc:
+    enabled: false

@@ -105,6 +105,9 @@ ingress:
 | `backend.oidc.issuer` | `""` | Issuer IdP |
 | `backend.oidc.clientId` | `""` | Client ID |
 | `backend.oidc.redirectUri` | `""` | Redirect URI (callback) |
+| `backend.auth.apiKey.enabled` | `false` | API-key режим без OIDC: env `SYNTH_API_KEY` (роль `ADMIN`) из Secret; взаимоисключает с `backend.oidc.enabled` |
+| `backend.auth.apiKey.existingSecret` | `""` | Secret с ключом API (пусто → `secrets.existingSecret`) |
+| `backend.auth.apiKey.secretKey` | `SYNTH_API_KEY` | Ключ внутри Secret, значение → env `SYNTH_API_KEY` (`optional: false`) |
 | `backend.providers` | `[]` | Список LLM-провайдеров (`name/type/url/model/apiKey`) |
 | `backend.persistence.*` | `enabled: true`, `10Gi` | PVC для JSON-данных |
 | `backend.persistence.keepOnUninstall` | `false` | Не удалять PVC при `helm uninstall` (аннотация `helm.sh/resource-policy: keep` в манифесте релиза); для окружений, где данные нельзя терять |
@@ -400,6 +403,7 @@ namespace релиза. Имя задаётся `secrets.existingSecret` (по �
 | Ключ | Когда нужен |
 |---|---|
 | `SYNTH_OIDC_CLIENT_SECRET` | при `backend.oidc.enabled: true` |
+| `SYNTH_API_KEY` | при `backend.auth.apiKey.enabled: true` (ключ переопределяется `backend.auth.apiKey.secretKey`, Secret — `backend.auth.apiKey.existingSecret`) |
 | `SYNTH_PROVIDER_<NAME>_API_KEY` | для каждого провайдера с `apiKey: true` (`<NAME>` — name в верхнем регистре, `-` → `_`) |
 | `SYNTH_POSTGRES_PASSWORD` | при `storage.backend: postgres` — пароль БД (ключ переопределяется `storage.postgres.secretPasswordKey`, Secret — `storage.postgres.existingSecret`) |
 
@@ -421,6 +425,38 @@ sealed-secrets и т.п. Зашифрованных секретов в чарт
 > `{dataDir}/secrets/postgres-password` (внутри PVC) — fallback для схем, где
 > пароль лежит в томе, а не в Secret. Отсутствие пароля там, где он нужен,
 > приводит к ошибке подключения в логах backend, а не к молчаливой работе.
+
+## API-key режим без Keycloak
+
+Backend можно поднять без внешнего IdP: один ключ `SYNTH_API_KEY` даёт роль
+`ADMIN` (self-host, стенды и автоматизация). Ключ берётся **только из Secret**
+(`secretKeyRef`) — в `values` и ConfigMap он не попадает, `backend.extraEnv`
+для этого не нужен.
+
+`backend.auth.apiKey.enabled` и `backend.oidc.enabled` **взаимоисключающие**:
+при одновременном включении рендер чарта падает с понятной ошибкой (режимы не
+смешиваются, приоритета «кто главнее» нет).
+
+```bash
+kubectl create secret generic synth-secrets \
+  --namespace synth \
+  --from-literal=SYNTH_API_KEY='<api-key>'
+
+# из корня репозитория; при запуске из каталога чарта — -f examples/values-apikey.yaml
+helm install synth synth/synth -f charts/synth/examples/values-apikey.yaml \
+  --namespace synth --create-namespace
+```
+
+| Значение | Эффект |
+|---|---|
+| `backend.auth.apiKey.enabled: true` | env `SYNTH_API_KEY` из `secretKeyRef` (`optional: false` — pod ждёт появления Secret/ключа) |
+| `backend.auth.apiKey.existingSecret` | Secret с ключом; пусто → `secrets.existingSecret` (`synth-secrets`) |
+| `backend.auth.apiKey.secretKey` | Имя ключа внутри Secret (по умолчанию `SYNTH_API_KEY`) |
+| `backend.oidc.enabled: true` | OIDC-режим; вместе с `apiKey.enabled` — ошибка рендера |
+
+Готовые минимальные примеры без секретов: `examples/values-apikey.yaml`
+(API-key) и `examples/values-keycloak.yaml` (OIDC) — замените плейсхолдеры
+`<...>`.
 
 ## PostgreSQL как backend хранения (`storage.backend: postgres`)
 

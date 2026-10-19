@@ -63,6 +63,21 @@ backend:
     clientId: ""
     redirectUri: ""
 
+  # API-key режим (без Keycloak/OIDC): ключ → env SYNTH_API_KEY (роль ADMIN).
+  # Взаимоисключает с backend.oidc.enabled — при одновременном включении
+  # рендер чарта падает с понятной ошибкой (режимы не смешиваются).
+  # Ключ берётся ТОЛЬКО из Secret (secretKeyRef), в ConfigMap/values не попадает.
+  # existingSecret пуст → secrets.existingSecret (по умолчанию `synth-secrets`).
+  # Пример:
+  #   kubectl create secret generic synth-secrets \
+  #     --from-literal=SYNTH_API_KEY='<api-key>'
+  #   helm install synth ./charts/synth -f charts/synth/examples/values-apikey.yaml
+  auth:
+    apiKey:
+      enabled: false
+      existingSecret: ""
+      secretKey: "SYNTH_API_KEY"
+
   # Провайдеры LLM → env SYNTH_PROVIDER_<NAME>_URL/TYPE/MODEL (ConfigMap).
   # API-ключи — по имени SYNTH_PROVIDER_<NAME>_API_KEY из secrets.existingSecret.
   # apiKey: false — без ключа (env API_KEY не создаётся).

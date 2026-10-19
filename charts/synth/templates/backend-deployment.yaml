@@ -5,7 +5,14 @@
 {{- $providerKeys = append $providerKeys .name -}}
 {{- end -}}
 {{- end -}}
-{{- $needEnv := or .Values.backend.oidc.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode .Values.metrics.enabled -}}
+{{- /* API-key режим (без OIDC): ключ только из Secret → env SYNTH_API_KEY.
+       Режимы взаимоисключающие — одновременное включение apiKey и OIDC
+       роняет рендер с понятной ошибкой (а не молчаливым приоритетом). */ -}}
+{{- $authApiKey := (.Values.backend.auth | default dict).apiKey | default dict -}}
+{{- if and $authApiKey.enabled .Values.backend.oidc.enabled -}}
+{{- fail "backend.auth.apiKey.enabled и backend.oidc.enabled взаимоисключающие: включите либо API-key (SYNTH_API_KEY), либо OIDC, но не оба" -}}
+{{- end -}}
+{{- $needEnv := or .Values.backend.oidc.enabled $authApiKey.enabled $providerKeys .Values.caCert .Values.installerKey.enabled (include "synth.storage.isPostgres" .) .Values.backend.restartMode .Values.metrics.enabled -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -65,6 +72,16 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret }}
                   key: SYNTH_OIDC_CLIENT_SECRET
+            {{- end }}
+            {{- /* API-key режим: только secretKeyRef, optional=false — pod ждёт
+                   появления Secret/ключа (без ключа backend не аутентифицирует). */}}
+            {{- if $authApiKey.enabled }}
+            - name: SYNTH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $authApiKey.existingSecret | default .Values.secrets.existingSecret }}
+                  key: {{ $authApiKey.secretKey | default "SYNTH_API_KEY" }}
+                  optional: false
             {{- end }}
             {{- range .Values.backend.providers }}
             {{- if ne .apiKey false }}
