@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { createServer } from 'node:https';
 import type { Server } from 'node:https';
+import { createServer as createHttpServer } from 'node:http';
+import type { Server as HttpServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -127,6 +130,107 @@ describe('egressFetch', () => {
     const { impl, calls } = recordingFetch();
     await egressFetch('https://example.test/', undefined, { fetchImpl: impl });
     expect((calls[0]!.init as { dispatcher?: unknown } | undefined)?.dispatcher).toBeDefined();
+  });
+});
+
+/**
+ * ADR-099 (фикс egress): `fetch` и dispatcher должны быть **одного происхождения**
+ * (один пакет `undici`). Глобальный `fetch` Node — встроенный undici другой версии:
+ * его контракт диспетчера несовместим с диспетчером из `undici@7`, и ответ приходит
+ * **без заголовков** (`content-type: null`) — ломалось чтение tools/list у
+ * HTTP-MCP-серверов (ADR-071).
+ */
+describe('egressFetch: происхождение транспорта (ADR-099)', () => {
+  let httpServer: HttpServer;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    httpServer = createHttpServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', () => resolve()));
+    const addr = httpServer.address() as AddressInfo;
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+  });
+
+  beforeEach(() => {
+    _resetTlsTrustForTests();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    _resetTlsTrustForTests();
+  });
+
+  it('регресс: заданный dispatcher не теряет заголовки ответа', async () => {
+    const agent = new undici.Agent();
+    try {
+      const res = await egressFetch(`${baseUrl}/mcp`, { method: 'POST' }, { dispatcher: agent });
+      expect(res.status).toBe(200);
+      // До фикса здесь было `null`: глобальный fetch Node + чужой Dispatcher.
+      expect(res.headers.get('content-type')).toBe('application/json');
+    } finally {
+      await agent.close();
+    }
+  });
+
+  it('при заданном dispatcher используется fetch из undici, а не глобальный', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch');
+    const undiciFetch = vi.fn(async (_input: unknown, _init?: RequestInit) => new Response('ok'));
+    const loadUndici = vi.fn(async () => ({ fetch: undiciFetch }) as unknown as typeof import('undici'));
+    const dispatcher = { id: 'fake-dispatcher' };
+
+    await egressFetch('https://example.test/', undefined, { dispatcher, loadUndici });
+
+    expect(loadUndici).toHaveBeenCalledTimes(1);
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+    expect(globalFetch).not.toHaveBeenCalled();
+    const init = undiciFetch.mock.calls[0]![1] as { dispatcher?: unknown };
+    expect(init.dispatcher).toBe(dispatcher);
+  });
+
+  it('без dispatcher — глобальный fetch, undici не грузится', async () => {
+    const globalFetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ok'));
+    const loadUndici = vi.fn();
+
+    await egressFetch('https://example.test/', undefined, { loadUndici });
+
+    expect(loadUndici).not.toHaveBeenCalled();
+    expect(globalFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('deps.fetchImpl используется как раньше (dispatcher уходит в init)', async () => {
+    const { impl, calls } = recordingFetch();
+    const dispatcher = { id: 'fake-dispatcher' };
+    const loadUndici = vi.fn();
+
+    await egressFetch('https://example.test/', { method: 'POST' }, { fetchImpl: impl, dispatcher, loadUndici });
+
+    expect(loadUndici).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+    const init = calls[0]!.init as RequestInit & { dispatcher?: unknown };
+    expect(init.dispatcher).toBe(dispatcher);
+    expect(init.method).toBe('POST');
+  });
+
+  it('undici недоступен при заданном dispatcher → TlsDependencyUnavailableError', async () => {
+    await expect(
+      egressFetch(
+        'https://example.test/',
+        undefined,
+        {
+          dispatcher: { id: 'fake-dispatcher' },
+          loadUndici: async () => {
+            throw new Error('Cannot find module undici');
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(TlsDependencyUnavailableError);
   });
 });
 

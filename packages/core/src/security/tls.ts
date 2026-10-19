@@ -19,6 +19,15 @@
  * Пустая конфигурация — системное доверие, никаких эффектов (поведение не меняется).
  * Заданная конфигурация без пакета `undici` — понятная ошибка (в духе ADR-078),
  * а не тихий фоллбэк на недоверенный транспорт.
+ *
+ * ⚠️ Находка (не чинится здесь — отдельная задача): `setGlobalDispatcher` из пакета
+ * `undici@7` пишет dispatcher в слот `Symbol.for('undici.globalDispatcher.1')`, а
+ * встроенный в Node fetch (undici 8.x на Node 26) читает слот
+ * `Symbol.for('undici.globalDispatcher.2')` — **чужой** dispatcher. Значит глобальное
+ * TLS-доверие/прокси НЕ применяется к вызовам, идущим через «сырой» `globalThis.fetch`
+ * мимо `egressFetch`. На Node 22 (undici 6.x) слот был общим, поэтому там поведение
+ * другое. Решение (глобальный dispatcher для встроенного fetch / переход всех
+ * исходящих вызовов на `egressFetch`) — вне рамок этого фикса.
  */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -113,6 +122,11 @@ export interface EgressFetchDeps {
   /** Явный undici-dispatcher (тесты) — по умолчанию dispatcher доверия процесса. */
   dispatcher?: unknown;
   /**
+   * Ленивая загрузка undici (тесты на отсутствие зависимости). По умолчанию —
+   * `import('undici')`: пакет, из которого построен dispatcher доверия.
+   */
+  loadUndici?: LoadUndici;
+  /**
    * ADR-099 (D1): фактический маршрут запроса (`proxy`/`direct`/`fallback`) —
    * для журнала egress. Вызывается dispatcher'ом; без прокси не вызывается.
    */
@@ -171,6 +185,13 @@ export function buildTlsTrustProfiles(
  *
  * - доверие не сконфигурировано — no-op (undici даже не загружается);
  * - `undici` недоступен, а доверие задано — `TlsDependencyUnavailableError`.
+ *
+ * ⚠️ Находка (не чинится здесь — отдельная задача): `setGlobalDispatcher` из пакета
+ * `undici@7` пишет dispatcher в legacy-слот `Symbol.for('undici.globalDispatcher.1')`,
+ * а встроенный в Node fetch (undici 8.x) читает `Symbol.for('undici.globalDispatcher.2')`
+ * — то есть **чужой** dispatcher, и глобальное доверие/прокси к «сырому»
+ * `globalThis.fetch` не применяется. Гарантированный путь — `egressFetch`
+ * (явный dispatcher + `fetch` того же пакета `undici`).
  */
 export async function applyGlobalTlsTrust(
   trust: TlsTrust,
@@ -189,11 +210,7 @@ export async function applyGlobalTlsTrust(
     undici = await load();
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new TlsDependencyUnavailableError(
-      'security.tls/proxy задан, но пакет undici недоступен: без него нельзя применить ' +
-        'ca/cert/key/rejectUnauthorized и HTTP-прокси к исходящим https-запросам. ' +
-        `Установите undici@^7 (${reason})`,
-    );
+    throw undiciUnavailableError(reason);
   }
 
   const profiles = trust.profiles ?? [];
@@ -298,21 +315,79 @@ export async function applyEgressProxyConfig(
  * `fetch` с **явным** dispatcher доверия процесса (если задано) — не зависит от
  * глобального состояния `setGlobalDispatcher`. Без заданного доверия — обычный
  * `fetch`. Тесты инжектят `fetchImpl`/`dispatcher`.
+ *
+ * ADR-099 (фикс egress): при заданном dispatcher'е используется `fetch` из **того
+ * же** пакета `undici`, из которого dispatcher построен. Глобальный `fetch` Node —
+ * это встроенный undici другой версии (Node 22 → 6.x, Node 26 → 8.x), и его
+ * контракт диспетчера несовместим с диспетчером из `undici@7`: ответ приходит
+ * **без заголовков** (`content-type: null`). На этом ломались HTTP-MCP-серверы
+ * (ADR-071, «Unexpected content type: null») и любые потребители заголовков
+ * ответа. Dispatcher и fetch одного происхождения — заголовки на месте.
  */
 export function egressFetch(
   input: string | URL | Request,
   init?: RequestInit,
   deps: EgressFetchDeps = {},
 ): Promise<Response> {
-  const impl = deps.fetchImpl ?? (globalThis.fetch as FetchLike);
   const dispatcher = deps.dispatcher !== undefined ? deps.dispatcher : _dispatcher;
   if (dispatcher === null || dispatcher === undefined) {
+    // Диспетчер не задан — прежнее поведение: системный `fetch` без dispatcher.
+    const impl = deps.fetchImpl ?? (globalThis.fetch as FetchLike);
     return impl(input, init);
   }
   // ADR-099 (D1): при запросе фактического маршрута (`onVia`) dispatcher
   // оборачивается лёгким шимом, который передаёт колбэк в DispatchOptions.
   const effective = deps.onVia ? wrapDispatcherWithVia(dispatcher, deps.onVia) : dispatcher;
-  return impl(input, { ...(init ?? {}), dispatcher: effective } as unknown as RequestInit);
+  const requestInit = { ...(init ?? {}), dispatcher: effective } as unknown as RequestInit;
+  if (deps.fetchImpl) {
+    // Явный транспорт (тесты) — используется он; dispatcher уходит в init как раньше.
+    return deps.fetchImpl(input, requestInit);
+  }
+  // ADR-099: dispatcher задан → `fetch` из ТОГО ЖЕ пакета `undici` (иначе теряются
+  // заголовки ответа — см. докстринг выше).
+  return loadUndiciForEgress(deps).then((undici) =>
+    (undici.fetch as unknown as FetchLike)(input, requestInit),
+  );
+}
+
+/**
+ * Кэш загруженного модуля `undici` для `egressFetch` (ленивый импорт; при ошибке
+ * кэш сбрасывается, чтобы следующий вызов мог повторить попытку).
+ */
+let _undiciModule: Promise<typeof import('undici')> | null = null;
+
+/**
+ * Ленивая загрузка `undici` для `egressFetch` — пакета, из которого построен
+ * dispatcher доверия. Отсутствие пакета → `TlsDependencyUnavailableError`
+ * (ADR-078-подобно), а не тихий фоллбэк на недоверенный транспорт.
+ */
+function loadUndiciForEgress(deps: EgressFetchDeps): Promise<typeof import('undici')> {
+  if (deps.loadUndici) return safeLoadUndici(deps.loadUndici);
+  if (!_undiciModule) {
+    _undiciModule = safeLoadUndici(() => import('undici')).catch((err: unknown) => {
+      _undiciModule = null;
+      throw err;
+    });
+  }
+  return _undiciModule;
+}
+
+/** Импорт `undici` с понятной ошибкой отсутствия зависимости. */
+async function safeLoadUndici(load: LoadUndici): Promise<typeof import('undici')> {
+  try {
+    return await load();
+  } catch (err) {
+    throw undiciUnavailableError(err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** Понятная ошибка: доверие/прокси заданы, а применить их нечем (ADR-078-подобно). */
+function undiciUnavailableError(reason: string): TlsDependencyUnavailableError {
+  return new TlsDependencyUnavailableError(
+    'security.tls/proxy задан, но пакет undici недоступен: без него нельзя применить ' +
+      'ca/cert/key/rejectUnauthorized и HTTP-прокси к исходящим https-запросам. ' +
+      `Установите undici@^7 (${reason})`,
+  );
 }
 
 /**
