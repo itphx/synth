@@ -32,6 +32,56 @@
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false
+      },
+      {
+        "name": "env",
+        "label": "Окружение",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(up{job=~\".*synth.*\"}, env)",
+        "query": "label_values(up{job=~\".*synth.*\"}, env)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0,
+        "skipUrlSync": false,
+        "regex": "",
+        "options": []
+      },
+      {
+        "name": "instance",
+        "label": "Инстанс",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(up{job=~\".*synth.*\", env=~\"$env\"}, instance)",
+        "query": "label_values(up{job=~\".*synth.*\", env=~\"$env\"}, instance)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0,
+        "skipUrlSync": false,
+        "regex": "",
+        "options": []
       }
     ]
   },
@@ -74,7 +124,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_ready",
+          "expr": "synth_ready{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "ready",
           "editorMode": "code",
           "range": false,
@@ -158,7 +208,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_build_info",
+          "expr": "synth_build_info{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "{{version}} · node {{node}}",
           "editorMode": "code",
           "range": false,
@@ -222,7 +272,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_process_uptime_seconds",
+          "expr": "synth_process_uptime_seconds{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "uptime",
           "editorMode": "code",
           "range": false,
@@ -286,7 +336,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_http_in_flight",
+          "expr": "synth_http_in_flight{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "in-flight",
           "editorMode": "code",
           "range": false,
@@ -350,7 +400,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_queue_pending",
+          "expr": "synth_queue_pending{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "pending",
           "editorMode": "code",
           "range": false,
@@ -422,7 +472,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (route) (rate(synth_http_requests_total{route!=\"other\"}[$__rate_interval]))",
+          "expr": "sum by (route) (rate(synth_http_requests_total{env=~\"$env\", instance=~\"$instance\", route!=\"other\"}[$__rate_interval]))",
           "legendFormat": "{{route}}",
           "editorMode": "code",
           "range": true,
@@ -498,7 +548,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(synth_http_requests_total{status=~\"5..\"}[$__rate_interval])) / clamp_min(sum(rate(synth_http_requests_total[$__rate_interval])), 1e-9)",
+          "expr": "sum(rate(synth_http_requests_total{env=~\"$env\", instance=~\"$instance\", status=~\"5..\"}[$__rate_interval])) / clamp_min(sum(rate(synth_http_requests_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "5xx / все ответы",
           "editorMode": "code",
           "range": true,
@@ -582,7 +632,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(synth_http_request_duration_seconds_bucket{route!=\"other\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(synth_http_request_duration_seconds_bucket{env=~\"$env\", instance=~\"$instance\", route!=\"other\"}[$__rate_interval])))",
           "legendFormat": "{{route}}",
           "editorMode": "code",
           "range": true,
@@ -666,7 +716,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_sessions_active",
+          "expr": "synth_sessions_active{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "sessions active",
           "editorMode": "code",
           "range": true,
@@ -678,7 +728,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_active_streams",
+          "expr": "synth_active_streams{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "active streams",
           "editorMode": "code",
           "range": true,
@@ -690,7 +740,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_http_streams_active",
+          "expr": "synth_http_streams_active{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "http streams",
           "editorMode": "code",
           "range": true,
@@ -702,7 +752,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (outcome) (rate(synth_turns_total[$__rate_interval]))",
+          "expr": "sum by (outcome) (rate(synth_turns_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "ходы/с · {{outcome}}",
           "editorMode": "code",
           "range": true,
@@ -778,7 +828,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_process_resident_memory_bytes",
+          "expr": "synth_process_resident_memory_bytes{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "RSS",
           "editorMode": "code",
           "range": true,
@@ -790,7 +840,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_process_heap_used_bytes",
+          "expr": "synth_process_heap_used_bytes{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "heap used",
           "editorMode": "code",
           "range": true,
@@ -866,7 +916,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "rate(synth_process_cpu_seconds_total[$__rate_interval])",
+          "expr": "rate(synth_process_cpu_seconds_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval])",
           "legendFormat": "cores",
           "editorMode": "code",
           "range": true,
@@ -942,7 +992,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_node_eventloop_lag_seconds",
+          "expr": "synth_node_eventloop_lag_seconds{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "lag",
           "editorMode": "code",
           "range": true,
@@ -1026,7 +1076,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (kind) (synth_datadir_bytes)",
+          "expr": "sum by (kind) (synth_datadir_bytes{env=~\"$env\", instance=~\"$instance\"})",
           "legendFormat": "{{kind}}",
           "editorMode": "code",
           "range": true,
@@ -1102,7 +1152,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (store) (synth_store_records)",
+          "expr": "sum by (store) (synth_store_records{env=~\"$env\", instance=~\"$instance\"})",
           "legendFormat": "{{store}}",
           "editorMode": "code",
           "range": true,
@@ -1178,7 +1228,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_storage_degraded",
+          "expr": "synth_storage_degraded{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "storage",
           "editorMode": "code",
           "range": false,
@@ -1262,7 +1312,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_storage_backend_info",
+          "expr": "synth_storage_backend_info{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "{{backend}}",
           "editorMode": "code",
           "range": false,
@@ -1326,7 +1376,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_metrics_series",
+          "expr": "synth_metrics_series{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "series",
           "editorMode": "code",
           "range": false,
@@ -1390,7 +1440,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_metrics_scrape_duration_seconds",
+          "expr": "synth_metrics_scrape_duration_seconds{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "render",
           "editorMode": "code",
           "range": true,

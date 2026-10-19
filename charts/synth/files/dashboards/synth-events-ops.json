@@ -32,6 +32,56 @@
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false
+      },
+      {
+        "name": "env",
+        "label": "Окружение",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(up{job=~\".*synth.*\"}, env)",
+        "query": "label_values(up{job=~\".*synth.*\"}, env)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0,
+        "skipUrlSync": false,
+        "regex": "",
+        "options": []
+      },
+      {
+        "name": "instance",
+        "label": "Инстанс",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(up{job=~\".*synth.*\", env=~\"$env\"}, instance)",
+        "query": "label_values(up{job=~\".*synth.*\", env=~\"$env\"}, instance)",
+        "refresh": 1,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0,
+        "skipUrlSync": false,
+        "regex": "",
+        "options": []
       }
     ]
   },
@@ -74,7 +124,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_event_journal_size",
+          "expr": "synth_event_journal_size{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "journal",
           "editorMode": "code",
           "range": false,
@@ -146,7 +196,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_hybrid_connected",
+          "expr": "synth_hybrid_connected{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "hybrid",
           "editorMode": "code",
           "range": false,
@@ -230,7 +280,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_scheduler_drift_seconds",
+          "expr": "synth_scheduler_drift_seconds{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "drift",
           "editorMode": "code",
           "range": false,
@@ -302,7 +352,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum(rate(synth_webhook_retries_total[$__rate_interval]))",
+          "expr": "sum(rate(synth_webhook_retries_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "retries",
           "editorMode": "code",
           "range": true,
@@ -366,7 +416,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (source) (rate(synth_events_ingested_total[$__rate_interval]))",
+          "expr": "sum by (source) (rate(synth_events_ingested_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{source}}",
           "editorMode": "code",
           "range": true,
@@ -442,7 +492,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (outcome) (rate(synth_events_ingested_total[$__rate_interval]))",
+          "expr": "sum by (outcome) (rate(synth_events_ingested_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{outcome}}",
           "editorMode": "code",
           "range": true,
@@ -518,7 +568,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (kind) (rate(synth_event_decisions_total[$__rate_interval]))",
+          "expr": "sum by (kind) (rate(synth_event_decisions_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{kind}}",
           "editorMode": "code",
           "range": true,
@@ -594,7 +644,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_event_journal_size",
+          "expr": "synth_event_journal_size{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "journal size",
           "editorMode": "code",
           "range": true,
@@ -670,7 +720,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (outcome) (rate(synth_scheduler_jobs_total[$__rate_interval]))",
+          "expr": "sum by (outcome) (rate(synth_scheduler_jobs_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{outcome}}",
           "editorMode": "code",
           "range": true,
@@ -746,7 +796,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "synth_scheduler_drift_seconds",
+          "expr": "synth_scheduler_drift_seconds{env=~\"$env\", instance=~\"$instance\"}",
           "legendFormat": "drift",
           "editorMode": "code",
           "range": true,
@@ -830,7 +880,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "sum by (outcome) (rate(synth_webhook_deliveries_total[$__rate_interval]))",
+          "expr": "sum by (outcome) (rate(synth_webhook_deliveries_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": "{{outcome}}",
           "editorMode": "code",
           "range": true,
@@ -906,7 +956,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "rate(synth_webhook_retries_total[$__rate_interval])",
+          "expr": "rate(synth_webhook_retries_total{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval])",
           "legendFormat": "retries",
           "editorMode": "code",
           "range": true,
@@ -982,7 +1032,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(synth_webhook_delivery_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(synth_webhook_delivery_duration_seconds_bucket{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "p95",
           "editorMode": "code",
           "range": true,
@@ -1066,7 +1116,7 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, op) (rate(synth_remote_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, op) (rate(synth_remote_request_duration_seconds_bucket{env=~\"$env\", instance=~\"$instance\"}[$__rate_interval])))",
           "legendFormat": "{{op}}",
           "editorMode": "code",
           "range": true,

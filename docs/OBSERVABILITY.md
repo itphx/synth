@@ -345,6 +345,62 @@ curl -s localhost:4300/metrics | head
 Prometheus — `:9090`, Grafana — `:3000` (папка **Synth**, три дашборда). Цели/порты/сеть и диагностика —
 [deploy/observability/README.md](../deploy/observability/README.md).
 
+## Несколько окружений в одном Prometheus
+
+Один Prometheus может скрейпить dev и test одновременно. Окружение задаётся **лейблом `env`** на
+scrape-джобе, а не отдельным сервером Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: synth-dev
+    metrics_path: /metrics
+    scrape_interval: 15s
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/synth-dev-metrics-token
+    static_configs:
+      - targets: ["dev-host:4300"]
+        labels:
+          env: dev
+
+  - job_name: synth-test
+    metrics_path: /metrics
+    scrape_interval: 15s
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/synth-test-metrics-token
+    static_configs:
+      - targets: ["synth-backend.synth.svc.cluster.local:5000"]
+        labels:
+          env: test
+```
+
+Оба `job_name` попадают под `job=~".*synth.*"` — этот regex используют переменные дашбордов и
+базовые алерты. `credentials_file` — путь к файлу с токеном на хосте Prometheus (сам токен в
+`scrape_config` не пишется).
+
+`instance` по умолчанию — `host:port` цели, поэтому у pod'а/хоста он меняется при пересоздании и
+не годится как стабильный признак среды. Надёжный селектор окружения — **`env`**; `instance` нужен,
+чтобы выбрать конкретную реплику/инстанс внутри окружения.
+
+В дашбордах (`synth-overview`, `synth-llm`, `synth-events-ops`) после `DS_PROMETHEUS` добавлены
+переменные **«Окружение»** (`env`) и **«Инстанс»** (`instance`, зависит от выбранного `env`). Все
+запросы панелей фильтруются `env=~"$env"` и `instance=~"$instance"`; по умолчанию выбрано `All`
+(`.*`), поэтому на инстансе с одним окружением поведение не меняется.
+
+> **Алерты при общем Prometheus нужно делать env-aware.** Базовые правила
+> `charts/synth/files/alerts/synth-rules.yaml` рассчитаны на один инстанс: `up{job=~".*synth.*"}`
+> и агрегаты без `env` смешивают окружения: упавший dev вызовет общий `SynthDown` без указания,
+> какое окружение упало, а rates обоих окружений суммируются в один ряд.
+> Добавьте фильтр по `env` или агрегируйте с `by (env)`:
+>
+> ```promql
+> sum by (env) (rate(synth_http_requests_total{status=~"5.."}[5m]))
+>   / clamp_min(sum by (env) (rate(synth_http_requests_total[5m])), 1e-9)
+> ```
+>
+> Пороги и `for` тоже стоит держать отдельно по окружениям (dev — мягче, test — ближе к прод).
+
 ## Алерты и SLO-минимум
 
 Правила из `synth-rules.yaml` (пороги стартовые, консервативные — подбирайте под SLO окружения):
