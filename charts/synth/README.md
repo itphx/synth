@@ -309,6 +309,8 @@ alerts:
 Кратко: `env` — надёжный признак среды (dev/test), `instance` — конкретная цель (`host:port`).
 Правила алертов — обычный Prometheus-формат: тот же
 `files/alerts/synth-rules.yaml` подключается к vanilla Prometheus через `rule_files`.
+Правила env-aware: агрегаты группируются `by (env)`, и у алертов есть label `env`
+(из scrape label) — один Prometheus может собирать dev и test без смешивания.
 
 Проверка после применения:
 
