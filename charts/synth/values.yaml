@@ -238,7 +238,7 @@ metrics:
     enabled: false
     className: ""
     annotations: {}
-    # [{host: metrics.example.com, paths: [{path: /, pathType: Prefix}]}]
+    # [{host: metrics.example.com, paths: [{path: /metrics, pathType: Prefix}]}]
     hosts: []
     tls: []
 

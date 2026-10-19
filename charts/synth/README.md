@@ -260,7 +260,7 @@ metrics:
     hosts:
       - host: metrics.synth.example.com
         paths:
-          - path: /
+          - path: /metrics
             pathType: Prefix
     tls: []
 ```
