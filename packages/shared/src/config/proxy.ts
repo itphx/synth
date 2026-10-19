@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BlockList, isIP } from 'node:net';
 import { PROXY_PROFILE_NAME_RE, proxyConfigSchema } from './types.js';
+import { matchTlsHostPattern } from './tls.js';
 import type {
   ProxyAuthConfig,
   ProxyConfig,
@@ -496,7 +497,8 @@ export class NoProxyMatcher {
     if (this._all) return true;
     if (this._hosts.has(host) || this._ips.has(host)) return true;
     if (this._suffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`))) return true;
-    if (this._wildcards.some((suffix) => host.endsWith(`.${suffix}`))) return true;
+    // `*.suffix` — только поддомены; семантика шаблона общая с ADR-099-матчером.
+    if (this._wildcards.some((suffix) => matchTlsHostPattern(`*.${suffix}`, host))) return true;
     if (port !== undefined && port !== '') {
       if (this._hostPorts.has(`${host}|${String(port)}`)) return true;
     }

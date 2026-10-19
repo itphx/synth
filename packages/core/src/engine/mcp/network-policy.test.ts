@@ -3,11 +3,13 @@ import {
   ipv4ToBigInt,
   ipv6ToBigInt,
   parseCidr,
+  parseAddressRule,
   isIpInCidr,
   hostFromUrl,
   normalizeIp,
   mappedIpv4,
   evaluateMcpNetworkAccess,
+  hostMatchesRule,
   isHttpMcpConfig,
 } from './network-policy.js';
 import { DEFAULT_MCP_NETWORK_POLICY } from '@itphx/synth-shared';
@@ -191,5 +193,115 @@ describe('evaluateMcpNetworkAccess (ADR-071 §2.3.1)', () => {
     expect(isHttpMcpConfig({ type: 'stdio', command: 'node' })).toBe(false);
     expect(isHttpMcpConfig({ type: 'sse', url: 'http://x' })).toBe(true);
     expect(isHttpMcpConfig({ type: 'http', url: 'http://x' })).toBe(true);
+  });
+});
+
+describe('network-policy: исключения (ADR-071 §2.3.1)', () => {
+  const resolveTo = (address: string) => async () => [address];
+  const denyPolicy = (exceptions: string[]): McpNetworkPolicy => ({
+    mode: 'deny',
+    list: [...DEFAULT_MCP_NETWORK_POLICY.list],
+    exceptions,
+  });
+  const CLUSTER_HOST = 'synth-gateway-telegram.synth.svc.cluster.local';
+
+  it('hostname-исключение разрешает *.svc.cluster.local (аддон в кластере)', async () => {
+    const result = await evaluateMcpNetworkAccess(
+      `http://${CLUSTER_HOST}:7101/mcp`,
+      denyPolicy(['*.svc.cluster.local']),
+      { resolveHost: resolveTo('10.42.0.7') },
+    );
+    expect(result.allowed).toBe(true);
+    // Правило-исключение попадает в журнал egress (matchedRule).
+    expect(result.matchedRule).toBe('*.svc.cluster.local');
+  });
+
+  it('без исключения тот же хост блокируется (регрессия)', async () => {
+    const result = await evaluateMcpNetworkAccess(
+      `http://${CLUSTER_HOST}:7101/mcp`,
+      denyPolicy([]),
+      { resolveHost: resolveTo('10.42.0.7') },
+    );
+    expect(result.allowed).toBe(false);
+    // Блок срабатывает раньше deny-списка: `*.cluster.local` — локальное имя
+    // (mDNS-суффикс `.local`), поэтому первым срабатывает `isLocalHostname`.
+    expect(result.matchedRule).toBe('local-hostname');
+  });
+
+  it('хост без локального суффикса блокируется deny-списком', async () => {
+    const result = await evaluateMcpNetworkAccess(
+      'http://gw.synth.svc.cluster.example/mcp',
+      denyPolicy([]),
+      { resolveHost: resolveTo('10.42.0.7') },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.matchedRule).toBe('10.0.0.0/8');
+  });
+
+  it('исключение-адрес (CIDR) работает как раньше', async () => {
+    const result = await evaluateMcpNetworkAccess(
+      'http://gw.internal.example/mcp',
+      denyPolicy(['10.42.0.0/24']),
+      { resolveHost: resolveTo('10.42.0.7') },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.matchedRule).toBe('10.42.0.0/24');
+  });
+
+  it('исключение-адрес (голый IP) разрешает ровно этот адрес', async () => {
+    const result = await evaluateMcpNetworkAccess(
+      'http://gw.internal.example/mcp',
+      denyPolicy(['10.42.0.7']),
+      { resolveHost: resolveTo('10.42.0.7') },
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.matchedRule).toBe('10.42.0.7');
+
+    // Соседний адрес под исключение не попадает.
+    const other = await evaluateMcpNetworkAccess(
+      'http://gw.internal.example/mcp',
+      denyPolicy(['10.42.0.7']),
+      { resolveHost: resolveTo('10.42.0.8') },
+    );
+    expect(other.allowed).toBe(false);
+  });
+
+  it('голый IP в deny-списке блокирует адрес (было fail-open)', async () => {
+    const result = await evaluateMcpNetworkAccess(
+      'http://169.254.169.254/latest/meta-data/',
+      { mode: 'deny', list: ['169.254.169.254'], exceptions: [] },
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.matchedRule).toBe('169.254.169.254');
+  });
+
+  it('parseAddressRule: CIDR и одиночный IP → один диапазон', () => {
+    expect(parseAddressRule('10.0.0.0/8')).not.toBeNull();
+    expect(parseAddressRule('10.0.0.5')).not.toBeNull();
+    expect(parseAddressRule('::1')).not.toBeNull();
+    expect(parseAddressRule('::ffff:10.0.0.5')).not.toBeNull();
+    expect(parseAddressRule('example.com')).toBeNull();
+    expect(parseAddressRule('not-an-ip')).toBeNull();
+  });
+
+  it('isIpInCidr: одиночный IP — точный адрес, не сеть', () => {
+    expect(isIpInCidr('10.0.0.5', '10.0.0.5')).toBe(true);
+    expect(isIpInCidr('10.0.0.6', '10.0.0.5')).toBe(false);
+    expect(isIpInCidr('10.0.0.5', '10.0.0.0/8')).toBe(true);
+    // IPv4-mapped форма — тот же адрес.
+    expect(isIpInCidr('::ffff:10.0.0.5', '10.0.0.5')).toBe(true);
+    expect(isIpInCidr('::1', '::1')).toBe(true);
+    expect(isIpInCidr('::2', '::1')).toBe(false);
+    // Семейства не смешиваются.
+    expect(isIpInCidr('127.0.0.1', '::1')).toBe(false);
+  });
+
+  it('hostMatchesRule: точный хост, *.suffix и никакого «*»', () => {
+    expect(hostMatchesRule('gw.example.com', 'gw.example.com')).toBe(true);
+    expect(hostMatchesRule('gw.example.com', 'other.example.com')).toBe(false);
+    expect(hostMatchesRule('a.svc.cluster.local', '*.svc.cluster.local')).toBe(true);
+    expect(hostMatchesRule('svc.cluster.local', '*.svc.cluster.local')).toBe(false);
+    // `*` не поддерживается (fail-closed): иначе исключение разрешило бы любой хост.
+    expect(hostMatchesRule('evil.example', '*')).toBe(false);
   });
 });

@@ -651,6 +651,27 @@
   системных), дефолты — snapshot `mcpDefaultOn`; `config.enabled` — лишь сид реестра,
   не гейт), сетевой доступ — `engine/mcp/network-policy.ts`
   (на старте применяется `mergeMcpNetworkPolicy(config, runtime)`).
+- **Сетевая политика MCP (ADR-071 §2.3.1)** — `engine/mcp/network-policy.ts`
+  (`evaluateMcpNetworkAccess`) + валидатор `engine/net/egress-policy.ts`
+  (`isValidEgressRule`/`validateEgressPolicy` — общий с `egress.tools`/`egress.webhooks`).
+  Грамматика правила (`list` и `exceptions`): **точный hostname** | **`*.suffix`**
+  (только поддомены — сам suffix не матчится) | **CIDR** (`10.0.0.0/8`) |
+  **одиночный IP-литерал** (`10.0.0.5` → /32, `::1` → /128). Паттерн `*`
+  («любой хост») **недопустим** — валидатор его отвергает, а матчер
+  (`hostMatchesRule`) возвращает `false` (fail-closed): исключение не должно
+  снимать SSRF-защиту целиком. Семантика шаблона хоста — общая с ADR-099
+  (`matchTlsHostPattern` из `@itphx/synth-shared`); дублировать её в подсистемах
+  нельзя.
+  Порядок проверок: **исключение (hostname, без DNS) → резолв всех A/AAAA →
+  исключение (адресное) → `isLocalHostname` → `policy.list`**. Локальные имена
+  (`localhost`/`*.localhost`/`*.local`/`*.internal` — в т.ч. `*.svc.cluster.local`
+  в K3s) блокируются **до** `policy.list`, поэтому аддон в кластере разрешается
+  именно hostname-исключением (`*.svc.cluster.local`), а не CIDR.
+  Голый IP в `list`/`exceptions` **работает** (`parseAddressRule`: литерал ↔ CIDR
+  с полной маской; IPv4-mapped `::ffff:a.b.c.d` нормализуется как у проверяемого
+  адреса) — раньше литерал проходил валидатор, но не срабатывал никогда, и
+  deny-список вроде `['169.254.169.254']` не блокировал адрес метаданных (fail-open).
+  Пустая политика (`undefined`) — fail-closed (запрет), а не «разрешено всё».
 
 ## Тесты и запуск
 
