@@ -36,7 +36,12 @@ export const SCRAPE_CONFIG = `scrape_configs:
     metrics_path: /metrics
     scrape_interval: 15s
     static_configs:
-      - targets: ['synth-backend:5000']`
+      - targets: ['synth-backend:5000']
+    # если /metrics защищён bearer-токеном:
+    authorization:
+      type: Bearer
+      credentials: '<токен>'
+      # или: credentials_file: /etc/prometheus/synth-token`
 
 /**
  * Человекочитаемый uptime процесса: дни/часы/минуты/секунды.
@@ -564,6 +569,7 @@ export function ObservabilitySettings() {
             }}
             disabled={tokenEnvLocked}
             autoComplete={tokenVisible ? 'off' : 'new-password'}
+            className="h-8 py-1.5"
             mono
             containerClassName="flex-1 min-w-0"
             id="observability-token"
@@ -573,7 +579,7 @@ export function ObservabilitySettings() {
             <Button
               variant="outline"
               size="sm"
-              className="h-9 w-9 p-0"
+              className="h-8 w-8 p-0"
               onClick={() => void handleGenerateToken()}
               disabled={tokenEnvLocked || tokenSaving || tokenDeleting}
               aria-label={t('observability.token.generate')}
@@ -584,7 +590,7 @@ export function ObservabilitySettings() {
             </Button>
             <Button
               variant="primary"
-              className="h-9"
+              className="h-8"
               onClick={() => void handleSetToken()}
               disabled={tokenEnvLocked || tokenSaving}
               data-testid="observability-token-set"
@@ -594,7 +600,7 @@ export function ObservabilitySettings() {
             </Button>
             <Button
               variant="danger"
-              className="h-9"
+              className="h-8"
               onClick={() => void handleDeleteToken()}
               disabled={tokenEnvLocked || !tokenConfigured || tokenDeleting}
               data-testid="observability-token-delete"

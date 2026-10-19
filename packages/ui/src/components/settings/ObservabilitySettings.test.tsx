@@ -299,10 +299,19 @@ describe('ObservabilitySettings — статус и настройки', () => {
     const field = byTestId(container, 'observability-token-input') as HTMLInputElement
     expect(field.value).toBe('')
     expect(field.type).toBe('password')
+    expect(field.className).toContain('h-8')
 
     const generate = byTestId(container, 'observability-token-generate') as HTMLButtonElement
     expect(generate.getAttribute('aria-label')).toBe('Generate')
     expect(generate.textContent).toBe('')
+    expect(generate.className).toContain('h-8')
+    expect(generate.className).toContain('w-8')
+    expect((byTestId(container, 'observability-token-set') as HTMLButtonElement).className).toContain(
+      'h-8',
+    )
+    expect(
+      (byTestId(container, 'observability-token-delete') as HTMLButtonElement).className,
+    ).toContain('h-8')
 
     await clickTestId(container, 'observability-token-generate')
 
@@ -380,6 +389,10 @@ describe('ObservabilitySettings — статус и настройки', () => {
     expect(SCRAPE_CONFIG).toContain('metrics_path: /metrics')
     expect(SCRAPE_CONFIG).toContain('synth-backend:5000')
     expect(SCRAPE_CONFIG).toContain('15s')
+    expect(SCRAPE_CONFIG).toContain('authorization:')
+    expect(SCRAPE_CONFIG).toContain('type: Bearer')
+    expect(SCRAPE_CONFIG).toContain('credentials:')
+    expect(SCRAPE_CONFIG).toContain('credentials_file:')
 
     expect(mocks.notify).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'success', text: 'Copied' }),
