@@ -197,14 +197,16 @@ security:
 # Наблюдаемость (ADR-094): GET /metrics, ServiceMonitor, дашборды Grafana, алерты.
 #
 # Метрики по умолчанию ВЫКЛЮЧЕНЫ (ADR-094 п. 4): эндпоинт появляется только при
-# `metrics.enabled: true`. Скрейп настраивается одним из двух способов (можно
-# оба): vanilla Prometheus по аннотациям prometheus.io/* или Prometheus Operator
-# через ServiceMonitor (CRD monitoring.coreos.com/v1 — не обязательны).
+# `metrics.enabled: true`. Скрейп настраивается одним из способов (можно
+# несколько): vanilla Prometheus по аннотациям prometheus.io/*, Prometheus
+# Operator через ServiceMonitor (CRD monitoring.coreos.com/v1 — не обязательны)
+# или отдельный Ingress для внешнего Prometheus (metrics.ingress).
 #
 # Порядок включения:
 #   1) metrics.enabled: true                        → env SYNTH_METRICS_ENABLED=true;
 #   2) metrics.prometheus.annotations: true         → аннотации prometheus.io/* на pod;
 #      ИЛИ metrics.serviceMonitor.enabled: true     → объект ServiceMonitor;
+#      ИЛИ metrics.ingress.enabled: true            → Ingress на backend (внешний Prometheus);
 #   3) grafana.dashboards.enabled: true             → ConfigMap с дашбордами (sidecar);
 #   4) alerts.enabled: true                         → PrometheusRule с правилами.
 # Подробности и примеры — README.md чарта, раздел «Наблюдаемость».
@@ -218,12 +220,27 @@ metrics:
   # Опциональный bearer-токен /metrics (ADR-094 п. 4).
   # Пусто → /metrics отдаётся без авторизации (штатно в кластере: доступ
   # ограничен сетью pod'а/Ingress-политикой). Задан existingSecret →
-  # env SYNTH_METRICS_TOKEN из secretKeyRef (optional: true — отсутствие ключа
-  # в Secret не блокирует старт pod'а).
+  # env SYNTH_METRICS_TOKEN из secretKeyRef (optional — см. tokenOptional).
   # ВНИМАНИЕ: при включённом токене ServiceMonitor нужно передать его в
   # metrics.serviceMonitor.bearerTokenSecret, иначе скрейп получит 401.
   existingSecret: ""
   tokenKey: SYNTH_METRICS_TOKEN
+  # optional у secretKeyRef токена:
+  #   true  — отсутствие ключа в Secret не блокирует старт pod'а;
+  #   false — pod ждёт появления Secret/ключа (для внешнего Ingress с
+  #           токеном рекомендуется false).
+  tokenOptional: true
+
+  # Отдельный Ingress для внешнего Prometheus (templates/metrics-ingress.yaml).
+  # Ведёт напрямую на backend Service — UI-nginx /metrics не проксирует.
+  # Включать только вместе с metrics.enabled (иначе fail: эндпоинта нет).
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    # [{host: metrics.example.com, paths: [{path: /, pathType: Prefix}]}]
+    hosts: []
+    tls: []
 
   prometheus:
     # Vanilla Prometheus (без CRD): аннотации на pod template:

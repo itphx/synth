@@ -87,7 +87,8 @@ spec:
                   key: {{ .Values.installerKey.bootstrapKey }}
             {{- end }}
             {{- /* ADR-094: /metrics включается явно; токен — опционально из
-                   Secret (optional: true — отсутствие ключа не мешает старту). */}}
+                   Secret (optional задаётся metrics.tokenOptional: true —
+                   отсутствие ключа не мешает старту). */}}
             {{- if .Values.metrics.enabled }}
             - name: SYNTH_METRICS_ENABLED
               value: "true"
@@ -97,7 +98,7 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.metrics.existingSecret }}
                   key: {{ .Values.metrics.tokenKey | default "SYNTH_METRICS_TOKEN" }}
-                  optional: true
+                  optional: {{ .Values.metrics.tokenOptional }}
             {{- end }}
             {{- end }}
             {{- /* PROP-032: пароль БД — только env из Secret (в config.yaml не

@@ -1,0 +1,46 @@
+{{- if .Values.metrics.ingress.enabled }}
+{{- /* Эндпоинт /metrics существует только при metrics.enabled: иначе Ingress
+       вёл бы на 404. */}}
+{{- if not .Values.metrics.enabled }}
+{{- fail "metrics.ingress.enabled=true требует metrics.enabled=true: при выключенных метриках эндпоинт /metrics не существует (404)" }}
+{{- end }}
+{{- if not .Values.metrics.ingress.hosts }}
+{{- fail "metrics.ingress.enabled=true требует непустой metrics.ingress.hosts (например [{host: metrics.example.com, paths: [{path: /, pathType: Prefix}]}])" }}
+{{- end }}
+{{- /* ADR-094: отдельный Ingress напрямую на backend Service (UI-nginx /metrics
+       не проксирует). */}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ printf "%s-metrics" (include "synth.backend.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "synth.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+  {{- with .Values.metrics.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.metrics.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.metrics.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.metrics.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "synth.backend.fullname" $ }}
+                port:
+                  number: {{ $.Values.backend.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

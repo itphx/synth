@@ -128,7 +128,13 @@ ingress:
 | `security.tls.caFile` / `certFile` / `keyFile` | `""` | Явные пути внутри контейнера (когда файлы смонтированы вами) |
 | `security.tls.rejectUnauthorized` | `""` | `""` (дефолт `true`) \| `"true"` \| `"false"` → `security.tls.rejectUnauthorized` |
 | `metrics.enabled` | `false` | `GET /metrics` (ADR-094): env `SYNTH_METRICS_ENABLED=true`; выключено по умолчанию |
-| `metrics.existingSecret` / `tokenKey` | `""` / `SYNTH_METRICS_TOKEN` | Bearer-токен `/metrics` из Secret (env `SYNTH_METRICS_TOKEN`, `optional: true`) |
+| `metrics.existingSecret` / `tokenKey` | `""` / `SYNTH_METRICS_TOKEN` | Bearer-токен `/metrics` из Secret (env `SYNTH_METRICS_TOKEN`, `optional` — см. `metrics.tokenOptional`) |
+| `metrics.tokenOptional` | `true` | `optional` у `secretKeyRef` токена: `true` — отсутствие ключа не блокирует старт; `false` — pod ждёт Secret |
+| `metrics.ingress.enabled` | `false` | Отдельный Ingress напрямую на backend Service для внешнего Prometheus (только вместе с `metrics.enabled`) |
+| `metrics.ingress.className` | `""` | `ingressClassName` метрик-Ingress |
+| `metrics.ingress.annotations` | `{}` | Аннотации метрик-Ingress |
+| `metrics.ingress.hosts` | `[]` | Список `[{host, paths: [{path, pathType}]}]`; `pathType` по умолчанию `Prefix` |
+| `metrics.ingress.tls` | `[]` | `tls`-блок метрик-Ingress |
 | `metrics.prometheus.annotations` | `false` | Аннотации `prometheus.io/scrape`, `prometheus.io/port`, `prometheus.io/path` на pod (vanilla Prometheus) |
 | `metrics.serviceMonitor.enabled` | `false` | Объект `ServiceMonitor` (Prometheus Operator; нужны CRD) |
 | `metrics.serviceMonitor.interval` / `scrapeTimeout` | `30s` / `10s` | Параметры скрейпа ServiceMonitor |
@@ -174,10 +180,11 @@ ingress:
 | Значение | Эффект |
 |---|---|
 | `metrics.enabled: true` | env `SYNTH_METRICS_ENABLED=true` → `/metrics` начинает отвечать |
-| `metrics.existingSecret` + `metrics.tokenKey` | env `SYNTH_METRICS_TOKEN` из Secret (`optional: true`) → `/metrics` требует `Authorization: Bearer …` |
+| `metrics.existingSecret` + `metrics.tokenKey` | env `SYNTH_METRICS_TOKEN` из Secret (`optional` — см. `metrics.tokenOptional`) → `/metrics` требует `Authorization: Bearer …` |
 | `metrics.prometheus.annotations: true` | аннотации `prometheus.io/scrape`, `prometheus.io/port`, `prometheus.io/path` на pod template |
 | `metrics.serviceMonitor.enabled: true` | объект `ServiceMonitor` (Prometheus Operator; CRD обязательны) |
 | `metrics.serviceMonitor.bearerTokenSecret` | bearer для скрейпа (обязателен, если включён токен) |
+| `metrics.ingress.enabled: true` | отдельный Ingress напрямую на backend Service (внешний Prometheus; требует `metrics.enabled: true`) |
 | `grafana.dashboards.enabled: true` | ConfigMap `*-grafana-dashboards` с label `grafana_dashboard=1` (sidecar) |
 | `alerts.enabled: true` | `PrometheusRule` с правилами из `files/alerts/synth-rules.yaml` |
 
@@ -230,10 +237,49 @@ metrics:
       key: SYNTH_METRICS_TOKEN
 ```
 
-`secretKeyRef` создаётся с `optional: true`: отсутствие ключа не блокирует старт pod'а. При включённом
-токене и пустом `bearerTokenSecret` скрейп получит 401 → алерт `SynthMetricsMissing`.
+`secretKeyRef` создаётся с `optional: true` (по умолчанию `metrics.tokenOptional: true`): отсутствие
+ключа не блокирует старт pod'а. При `tokenOptional: false` pod ждёт появления Secret/ключа — это
+рекомендуется для внешнего Ingress с токеном. При включённом токене и пустом `bearerTokenSecret`
+скрейп получит 401 → алерт `SynthMetricsMissing`.
 
-### Вариант 4 — Grafana sidecar и алерты
+### Вариант 4 — внешний Prometheus через Ingress
+
+Отдельный Ingress ведёт **напрямую на backend Service** (`/metrics` живёт на backend; UI-nginx его не
+проксирует). Включайте вместе с `metrics.enabled` и токеном (для внешнего доступа — `tokenOptional: false`):
+
+```yaml
+metrics:
+  enabled: true
+  existingSecret: synth-metrics
+  tokenOptional: false
+  ingress:
+    enabled: true
+    className: traefik
+    annotations:
+      traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    hosts:
+      - host: metrics.synth.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+```
+
+URL скрейпа — `https://<host>/metrics` (при `tls: []` схему задаёт контроллер/аннотации; при необходимости
+добавьте `tls`-блок с Secret сертификата). Токен передаётся Prometheus через `authorization.credentials_file`:
+
+```yaml
+scrape_configs:
+  - job_name: synth
+    scheme: https
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /etc/prometheus/synth-metrics-token
+    static_configs:
+      - targets: ["metrics.synth.example.com"]
+```
+
+### Вариант 5 — Grafana sidecar и алерты
 
 ```yaml
 grafana:
@@ -258,7 +304,10 @@ alerts:
 | `synth-events-ops.json` | ingest по source/outcome, решения Router по kind, журнал, шедулер (jobs/drift), webhooks, гибрид, remote p95 |
 
 Все панели используют переменную `DS_PROMETHEUS` (datasource типа `prometheus`) — при импорте
-выберите свой источник. Правила алертов — обычный Prometheus-формат: тот же
+выберите свой источник. После выбора datasource доступны переменные **«Окружение»** (`env`) и
+**«Инстанс»** (`instance`): все запросы фильтруются `env=~"$env"` / `instance=~"$instance"`.
+Кратко: `env` — надёжный признак среды (dev/test), `instance` — конкретная цель (`host:port`).
+Правила алертов — обычный Prometheus-формат: тот же
 `files/alerts/synth-rules.yaml` подключается к vanilla Prometheus через `rule_files`.
 
 Проверка после применения:
