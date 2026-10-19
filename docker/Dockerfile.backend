@@ -1,6 +1,14 @@
 # Образ synth-backend собирается из ИСХОДНИКОВ монорепо (packages/backend),
 # чтобы Image содержал актуальный код (OIDC/Keycloak, env-провайдеры).
-FROM node:22-alpine AS build
+#
+# multi-arch (amd64/arm64): стадия сборки идёт на платформе билдера
+# (`$BUILDPLATFORM`), runtime — на целевой. В runtime-стадии нет RUN (chmod
+# перенесён в стадию сборки, COPY сохраняет права), поэтому arm64 собирается
+# на amd64-раннере без QEMU/binfmt. `${BUILDPLATFORM:-linux/amd64}` — дефолт
+# для kaniko/legacy `docker build`.
+ARG BUILDPLATFORM
+
+FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
@@ -29,6 +37,11 @@ RUN pnpm install --filter @itphx/synth-backend --filter @itphx/synth-core --filt
 # optionalDependencies (@itphx/synth-storage-postgres + pg — PROP-032).
 RUN mkdir -p /out && pnpm --filter @itphx/synth-backend deploy --prod --legacy /out/app
 
+# Права чиним здесь, на платформе билдера: файлы pnpm deploy имеют mode 770
+# (root) и под runAsUser 1000 недоступны. COPY переносит режимы как есть, поэтому
+# в целевой стадии RUN не нужен (важно для кросс-сборки arm64 без эмуляции).
+RUN chmod -R a+rX /out/app
+
 FROM node:22-alpine
 
 # OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
@@ -49,7 +62,5 @@ COPY --from=build /out/app /app
 COPY --from=build /repo/packages/backend/dist /app/dist
 
 WORKDIR /app
-# Файлы из pnpm deploy имеют mode 770 (root) — под runAsUser 1000 нет доступа.
-# Делаем читаемыми для всех (только чтение; исполняемые биты сохраняем).
-RUN chmod -R a+rX /app
+# Права (a+rX) выставлены в стадии сборки, здесь только читаем из образа.
 CMD ["node", "dist/main.js"]

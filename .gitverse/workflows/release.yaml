@@ -309,15 +309,21 @@ jobs:
   # на 0.9.0 вышло 607,4 МБ из 500). Старые теги удаляет шаг «Очистка…».
   # Docker-образ ставит @itphx/synth@<version> из npmjs (npm install -g),
   # поэтому ждём публикации npmjs — иначе гонка: kaniko не находит пакет (ETARGET)
-  # Таймаут 45 мин (было 20): kaniko стартует поздно (сначала pull образа
-  # исполнителя), а публикация идёт в ДВА реестра — gitverse.ru и ghcr.io, то есть
-  # шесть пушей на три образа. На 0.10.1 джоба упёрлась в 20 мин.
+  # Таймаут 75 мин (было 45): к amd64-пути kaniko добавлены arm64-сборки buildx
+  # (три образа) и manifest list; на 0.10.1 прежние 20 мин уже не хватало на
+  # шесть пушей в два реестра.
+  #
+  # multi-arch: amd64 собирает kaniko (как раньше, :<version>), arm64 — buildx
+  # (:<version>-arm64). Затем best-effort manifest list :<version> из
+  # -amd64/-arm64; если реестр не принимает index — остаются per-arch теги.
+  # Dockerfile'ы кросс-собираются без QEMU: builder на $BUILDPLATFORM, в target
+  # нет RUN (см. docker/Dockerfile*).
   build-docker:
     name: Docker образ
     needs: [build, publish-npmjs]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
@@ -413,6 +419,139 @@ jobs:
             --push-retry=3
             --verbosity=info
 
+      # --- arm64 + multi-arch manifest list ---
+      # buildx ставится в DOCKER_CONFIG-каталог (туда же, где config.json с
+      # авторизацией двух реестров), чтобы плагин был виден последующим шагам.
+      - name: Установка buildx (arm64/multi-arch)
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+        run: bash scripts/offline-images.sh --ensure-buildx
+
+      # arm64-образы собираются без QEMU (в целевой стадии Dockerfile нет RUN)
+      # и пушатся как :<version>-arm64 в оба реестра. Проверка запуска для чужой
+      # архитектуры пропускается, если binfmt не зарегистрирован.
+      - name: Сборка и публикация arm64 (buildx → gitverse.ru + ghcr.io)
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+        run: |
+          bash scripts/offline-images.sh \
+            --version "${{ steps.docker_tags.outputs.version }}" \
+            --platforms arm64 \
+            --push \
+            --registry-prefix gitverse.ru/itphx,ghcr.io/itphx
+
+      # Manifest list best-effort: amd64-алиас создаётся с уже опубликованного
+      # kaniko :<version>, затем :<version> перезаписывается index'ом amd64+arm64.
+      # Отказ реестра (нет поддержки index) не валит джобу — per-arch теги остаются.
+      - name: Manifest list amd64+arm64 (best-effort)
+        env:
+          DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
+        run: |
+          bash scripts/offline-images.sh \
+            --version "${{ steps.docker_tags.outputs.version }}" \
+            --platforms amd64,arm64 \
+            --manifests \
+            --registry-prefix gitverse.ru/itphx,ghcr.io/itphx || true
+
+  # --- Offline-образы для закрытого контура ---
+  #
+  # Собирает те же три образа под amd64+arm64 локально (без пушей) и складывает
+  # `docker save`-архивы (.tar.gz по умолчанию — совместимо с Docker 20.10),
+  # SHA256SUMS и manifest.json. Теги образов — gitverse.ru/itphx/<image>:<ver>-<arch>
+  # (те же, что публикует build-docker), чтобы инструкции из документации
+  # (`docker load` + `docker run gitverse.ru/itphx/...`) работали без перетегирования.
+  # Проверяет запуск контейнеров и health-эндпоинты (arm64 — если есть binfmt).
+  # Джоба идёт после build-docker: к этому моменту npm-пакет опубликован
+  # (образ synth ставит @itphx/synth из npmjs).
+  offline-images:
+    name: Offline-образы (amd64+arm64)
+    needs: [build-docker]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Определить версию
+        id: offline_version
+        run: |
+          if [ "${{ gitverse.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ needs.version-bump.outputs.version }}"
+          else
+            VERSION=$(echo "${{ gitverse.ref }}" | sed 's|refs/tags/v||')
+          fi
+          echo "version=$VERSION" >> "$GITVERSE_OUTPUT"
+
+      - name: Установка buildx
+        run: bash scripts/offline-images.sh --ensure-buildx
+
+      - name: Сборка и архивы (amd64+arm64)
+        run: |
+          bash scripts/offline-images.sh \
+            --version "${{ steps.offline_version.outputs.version }}" \
+            --platforms amd64,arm64 \
+            --registry-prefix gitverse.ru/itphx \
+            --out dist/offline/images \
+            --save
+
+      - name: Загрузить offline-образы как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-images
+          path: |
+            dist/offline/images/*.tar
+            dist/offline/images/*.tar.gz
+            dist/offline/images/*.tar.zst
+            dist/offline/images/SHA256SUMS
+            dist/offline/images/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # --- Portable-бандлы для закрытого контура ---
+  #
+  # scripts/offline-bundle.mjs собирает portable-архивы приложения (Node 22 +
+  # ripgrep + установщики) для linux-x64/darwin-x64/darwin-arm64/win-x64.
+  # Документацию в бандл НЕ вкладываем: synth-docs — отдельный Gitea-репозиторий,
+  # из GitVerse CI он не клонируется; в share/docs остаётся README со ссылкой
+  # на портал docs.synth.itphx.ru.
+  # SOURCE_DATE_EPOCH фиксирует mtime файлов — бандлы воспроизводимы.
+  offline-bundles:
+    name: Portable-бандлы (linux/darwin/win)
+    needs: [build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установка pnpm
+        run: npm install -g pnpm@latest
+
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: Сборка пакетов
+        run: pnpm build
+
+      - name: Сборка portable-бандлов
+        run: |
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) node scripts/offline-bundle.mjs \
+            --platform all \
+            --clean \
+            --out dist/offline \
+            --skip-build
+
+      - name: Загрузить бандлы как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-bundles
+          path: |
+            dist/offline/*.tar.gz
+            dist/offline/*.zip
+            dist/offline/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
   # --- GitVerse Release ---
   #
   # Почему не actions/create-release@v1: GitVerse САМ создаёт релиз для тега в
@@ -427,10 +566,10 @@ jobs:
   # и при неудаче лишь предупреждает, не роняя джобу.
   create-release:
     name: GitVerse Release
-    needs: [build, changelog, publish-npmjs]
+    needs: [build, changelog, publish-npmjs, offline-images, offline-bundles]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -455,15 +594,37 @@ jobs:
           name: synth-bundle
           path: packages/synth/dist
 
+      # Offline-артефакты — ассеты релиза: архивы образов (amd64/arm64, docker save)
+      # и portable-бандлы (linux/darwin/win). Загрузка в GitVerse сейчас может
+      # отвечать 500: publish-release.mjs обрабатывает ассеты best-effort и не
+      # роняет джобу.
+      - name: Скачать offline-образы
+        uses: actions/download-artifact@v4
+        with:
+          name: offline-images
+          path: tmp/offline-images
+
+      - name: Скачать portable-бандлы
+        uses: actions/download-artifact@v4
+        with:
+          name: offline-bundles
+          path: tmp/offline-bundles
+
       - name: Собрать тело релиза
         run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
           mkdir -p tmp
           cp changelog-partial.md tmp/release-body.md
           printf '\n## Установка\n\n' >> tmp/release-body.md
           printf '\`\`\`bash\n' >> tmp/release-body.md
-          printf 'npm install -g @itphx/synth@%s\n' "${{ steps.version.outputs.version }}" >> tmp/release-body.md
-          printf 'docker run -p 4300:4300 gitverse.ru/itphx/synth:%s\n' "${{ steps.version.outputs.version }}" >> tmp/release-body.md
+          printf 'npm install -g @itphx/synth@%s\n' "$VERSION" >> tmp/release-body.md
+          printf 'docker run -p 4300:4300 gitverse.ru/itphx/synth:%s\n' "$VERSION" >> tmp/release-body.md
           printf '\`\`\`\n' >> tmp/release-body.md
+          printf '\n## Offline / закрытый контур\n\n' >> tmp/release-body.md
+          printf 'Portable: `synth-%s-linux-x64.tar.gz`, `synth-%s-darwin-x64.tar.gz`, `synth-%s-darwin-arm64.tar.gz`, `synth-%s-win-x64.zip`.\n\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION" >> tmp/release-body.md
+          printf 'Образы: `synth`, `synth-backend`, `synth-ui` (amd64/arm64, `docker save`, `.tar.gz`).\n\n' >> tmp/release-body.md
+          printf 'Контрольные суммы — `SHA256SUMS` в ассетах релиза; документация — https://docs.synth.itphx.ru/deploy/offline/\n' >> tmp/release-body.md
 
       - name: Опубликовать релиз (тело + ассет)
         env:
@@ -473,7 +634,11 @@ jobs:
           RELEASE_BODY_FILE: tmp/release-body.md
           RELEASE_ASSET: packages/synth/dist/cli.js
           RELEASE_PRERELEASE: ${{ inputs.pre_release || false }}
-        run: node scripts/publish-release.mjs
+        run: |
+          set -euo pipefail
+          ASSETS="$(ls tmp/offline-images/*.tar* tmp/offline-bundles/*.tar.gz tmp/offline-bundles/*.zip 2>/dev/null | tr '\n' ' ' || true)"
+          echo "Offline-ассеты: $ASSETS"
+          RELEASE_ASSETS="$ASSETS" node scripts/publish-release.mjs
 
   # --- Публикация Helm-чарта ---
   # Чарт лежит в charts/synth, версия чарта = версии релиза.
@@ -532,18 +697,20 @@ jobs:
   #      docs/releases/<version>.en.md (фоллбек — русское описание, затем
   #      авто-генерация из коммитов); создание идемпотентно (есть релиз по тегу —
   #      обновляем тело);
-  #   3. ассеты best-effort (cli.js, Helm-чарт, SHA256SUMS): отсутствующий файл —
-  #      предупреждение, ошибка загрузки не валит джобу (видно в логе).
+  #   3. ассеты best-effort (cli.js, Helm-чарт, offline-образы amd64/arm64,
+  #      portable-бандлы, SHA256SUMS): отсутствующий файл — предупреждение,
+  #      ошибка загрузки не валит джобу (видно в логе). Offline-архивы приходят
+  #      из джоб offline-images/offline-bundles (needs), поэтому релиз ждёт их.
   #
   # Почему if без always(): у GitVerse выражения GitHub-совместимы, но always()
   # в этом пайплайне не используется нигде — берём проверенный паттерн `!inputs.dry_run`,
   # чтобы не сломать рабочий релизный CI. Порядок гарантирован через needs.
   publish-github:
     name: GitHub-зеркало (refs + Release)
-    needs: [build, changelog, build-docker]
+    needs: [build, changelog, build-docker, offline-images, offline-bundles]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -582,29 +749,55 @@ jobs:
           name: synth-bundle
           path: packages/synth/dist
 
+      # Offline-артефакты скачиваем в отдельные каталоги (у образов и бандлов
+      # свои SHA256SUMS — их нельзя смешивать). В tmp/assets копируются только
+      # сами архивы, SHA256SUMS ниже пересчитывается по всему каталогу.
+      - name: Скачать offline-образы
+        uses: actions/download-artifact@v4
+        with:
+          name: offline-images
+          path: tmp/offline-images
+
+      - name: Скачать portable-бандлы
+        uses: actions/download-artifact@v4
+        with:
+          name: offline-bundles
+          path: tmp/offline-bundles
+
       - name: Собрать тело релиза и базовые ассеты
         run: |
           set -euo pipefail
           mkdir -p tmp/assets
 
+          # Offline-архивы: образы (amd64/arm64) и portable-бандлы — плоским
+          # списком в tmp/assets; отсутствие каталога/файлов не блокирует релиз.
+          for f in tmp/offline-images/*.tar* tmp/offline-bundles/*.tar.gz tmp/offline-bundles/*.zip; do
+            if [ -f "$f" ]; then cp "$f" tmp/assets/; fi
+          done
+
           # Тело релиза — английское описание docs/releases/<version>.en.md
           # (фоллбек на русское описание, затем авто-генерация из коммитов).
           bash scripts/changelog.sh --lang en --out tmp/changelog-en.md
           cp tmp/changelog-en.md tmp/release-body.md
+          VERSION="${{ steps.gh_version.outputs.version }}"
           {
             printf '\n## Installation\n\n'
             printf 'CLI (npm — from npmjs.org or the GitVerse Package Registry):\n\n'
             printf '```bash\n'
-            printf 'npm install -g @itphx/synth@%s\n' "${{ steps.gh_version.outputs.version }}"
+            printf 'npm install -g @itphx/synth@%s\n' "$VERSION"
             printf '```\n\n'
             printf 'Base Docker image from the GitHub Container Registry:\n\n'
             printf '```bash\n'
-            printf 'docker pull ghcr.io/itphx/synth:%s\n' "${{ steps.gh_version.outputs.version }}"
-            printf 'docker run -p 4300:4300 ghcr.io/itphx/synth:%s\n' "${{ steps.gh_version.outputs.version }}"
+            printf 'docker pull ghcr.io/itphx/synth:%s\n' "$VERSION"
+            printf 'docker run -p 4300:4300 ghcr.io/itphx/synth:%s\n' "$VERSION"
             printf '```\n\n'
-            printf 'The primary image registry is `gitverse.ru/itphx/synth:%s`;\n' "${{ steps.gh_version.outputs.version }}"
+            printf 'The primary image registry is `gitverse.ru/itphx/synth:%s`;\n' "$VERSION"
             printf 'all three base images (`synth`, `synth-backend`, `synth-ui`) are published to\n'
             printf 'both gitverse.ru and ghcr.io (version tag only).\n'
+            printf '\n## Offline / air-gapped\n\n'
+            printf 'Portable: `synth-%s-linux-x64.tar.gz`, `synth-%s-darwin-x64.tar.gz`, `synth-%s-darwin-arm64.tar.gz`, `synth-%s-win-x64.zip`.\n\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION"
+            printf 'Images: `synth`, `synth-backend`, `synth-ui` (amd64/arm64, `docker save`, `.tar.gz`).\n\n'
+            printf 'Checksums: `SHA256SUMS` in the release assets. Documentation: https://docs.synth.itphx.ru/deploy/offline/\n'
           } >> tmp/release-body.md
 
           if [ -f packages/synth/dist/cli.js ]; then
