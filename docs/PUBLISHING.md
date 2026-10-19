@@ -248,8 +248,103 @@ node scripts/adr-check.mjs && node scripts/docs-link-check.mjs
 | `GV_TOKEN` | Единый токен GitVerse (API, Docker Registry, npm registry, git push от бота) |
 | `GH_TOKEN` | GitHub-зеркало: push refs, GitHub Release, публикация базовых образов в GHCR (classic PAT, scope `repo` + `write:packages`) |
 | `GHCR_USER` | Необязательно: логин владельца `GH_TOKEN` для `ghcr.io` (по умолчанию `itphx`) |
+| `GV_SYNTH_URL` | База API v2 инстанса Synth для события релиза (например `https://synth.k3s.itphx.loc/api/v2`) |
+| `GV_SYNTH_MEDIA_KEY` | Service-key Synth со scope `events:ingest` — приём события релиза (см. «Событие релиза для synth-media») |
 
 Префикс `GITVERSE_` запрещён в именах секретов GitVerse — использовать `GV_`.
+
+## Событие релиза для synth-media
+
+После релиза CI публикует в Synth **одно внешнее событие** — агент внутри Synth готовит черновик поста о релизе (скилл `media-hub`, подсистема `synth-media`).
+
+### Как это работает
+
+```text
+release.yaml (джоба media-event)
+        │  POST {SYNTH_URL}/api/v2/events
+        │  Authorization: Bearer <service-key, scope events:ingest>
+        │  {source: "ci", type: "release_published", payload: {…}, dedupKey: "ci:release:vX.Y.Z"}
+        ▼
+Synth: EventIngress → Router (ADR-089)
+        │  правило маршрутизации: source=ci / type=release_published → ephemeral-сессия агента
+        ▼
+Агент (publisher) по скиллу media-hub: draft_create → draft_render → draft_submit
+        ▼
+Владелец: approve / rewrite / reject в UI synth-media (публикация — за коннектором)
+```
+
+**Факты собирает CI-хук, а не агент.** Агент внутри Synth не имеет доступа к репозиторию (workspace-политика `deny`, файловые/гит-тулы требуют workspace проекта), поэтому всё нужное для текста поста приходит в `payload` события.
+
+### Скрипт `scripts/media-release-event.sh`
+
+Собирает факты релиза и публикует событие:
+
+| Источник факта | Что берётся |
+|---|---|
+| тег релиза | `--tag` / `SYNTH_RELEASE_TAG` → тег на `HEAD` → `v<версия>` из `packages/synth/package.json` |
+| предыдущий тег | список semver-тегов (`git tag --sort=-v:refname`) — соседний перед текущим |
+| описание релиза | `--changelog` → `changelog-partial.md` (артефакт джобы `changelog`) → `docs/releases/<VERSION>.md` → генерация `scripts/changelog.sh` → `CHANGELOG.md` |
+| highlights | до 7 строк из описания релиза без markdown-заголовков (вводный абзац + пункты списка) |
+| коммиты | `git log PREV..TAG --no-merges` (`sha` + `subject`), максимум 100 |
+| новые AD | файлы, добавленные в `docs/arch_decisions/` после прошлого релиза; суть и статус — из таблицы AD-индекса в `AGENTS.md` |
+
+Формат события:
+
+```json
+{
+  "source": "ci",
+  "type": "release_published",
+  "dedupKey": "ci:release:v0.11.3",
+  "payload": {
+    "kind": "release",
+    "version": "0.11.3",
+    "previousVersion": "0.10.1",
+    "tag": "v0.11.3",
+    "date": "2026-10-20",
+    "repo": "https://gitverse.ru/itphx/synth.git",
+    "highlights": ["…"],
+    "commits": [{ "sha": "…", "subject": "…" }],
+    "ads": [{ "id": "ADR-089", "title": "…", "status": "✅ Реализовано" }],
+    "changelog": "…markdown…"
+  }
+}
+```
+
+`dedupKey` привязан к **релизу**, а не к прогону: повторный запуск джобы (re-run) не создаст второе событие и вторую сессию.
+
+### Локальная проверка
+
+```bash
+# собрать событие и напечатать JSON — ничего не отправляется
+bash scripts/media-release-event.sh --dry-run
+
+# отправить в свой инстанс
+SYNTH_URL=http://localhost:5000/api/v2 \
+SYNTH_MEDIA_KEY=<service-key> \
+bash scripts/media-release-event.sh
+```
+
+Флаги: `--dry-run`, `--url`, `--key`, `--tag`, `--version`, `--changelog`, `--repo`, `--max-highlights`, `--max-commits`. Скрипт читает репозиторий и шлёт **одно** событие — ничего не коммитит и не пушит; ключ не печатается в лог (`curl -sS` без `-v`).
+
+### Секреты GitVerse
+
+| Секрет | Что положить | Где взять |
+|---|---|---|
+| `GV_SYNTH_URL` | Базовый URL API v2 инстанса, который принимает событие (например `https://synth.k3s.itphx.loc/api/v2`) | адрес стенда |
+| `GV_SYNTH_MEDIA_KEY` | Секрет service-key (`synth_svc_…`) со scope `events:ingest` | `POST /api/v2/service-keys` на нужном инстансе (секрет отдаётся один раз) |
+
+Ключи и токены **не хранятся в git**: в репозитории `synth-deploy` секретов нет, рабочие значения лежат в `secrets/` вне репозитория.
+
+### Отказоустойчивость
+
+Публикация поста **не блокирует релиз**:
+
+- джоба `media-event` идёт с `continue-on-error: true`, и ни одна джоба релиза от неё не зависит;
+- нет секретов → публикация пропускается с предупреждением, код `0`;
+- Synth недоступен или ответил не-2xx → предупреждение в лог и код `3` (джоба остаётся «мягко упавшей», релиз не срывается);
+- код `2` — только ошибка использования (неизвестный флаг).
+
+Шаг в джобе: `bash scripts/media-release-event.sh` (сложный bash вынесен в файл — особенность GitVerse, см. «Особенности GitVerse CI»).
 
 ## Релиз в GitHub-зеркале
 
