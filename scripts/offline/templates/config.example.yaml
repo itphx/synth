@@ -1,0 +1,34 @@
+# Synth — пример конфигурации для offline-дистрибутива.
+#
+# Скопируйте в <home>/config.yaml (например ~/.local/share/synth/config.yaml)
+# и измените под окружение. Значения по умолчанию рассчитаны на standalone.
+#
+# Приоритет: CLI-флаги > SYNTH_* env > этот файл > defaults (ADR-023).
+
+server:
+  host: 127.0.0.1
+  port: 4300
+
+storage:
+  # По умолчанию данные лежат в <home>/data (ADR-079).
+  # Раскомментируйте, чтобы задать явный каталог:
+  # dataDir: /var/lib/synth/data
+  backend: file
+  # workspacesRoot: /var/lib/synth/workspaces
+
+llm:
+  # LLM в offline-поставку не входит. Провайдеры настраиваются локально
+  # (UI «Провайдеры» или JSON в <dataDir>/providers/).
+  defaultProvider: ''
+  defaultModel: ''
+
+auth:
+  debugMode: false
+
+# Наблюдаемость (ADR-094): /metrics выключен по умолчанию.
+# metrics:
+#   enabled: false
+
+# Сеть/прокси (ADR-099) — при необходимости:
+# proxy:
+#   mode: off
