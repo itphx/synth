@@ -204,6 +204,14 @@ if [ "$DRY_RUN" -eq 1 ]; then
   info "Режим --dry-run: изменения не вносятся."
 fi
 
+# Проверяем конфликты ДО любых изменений, чтобы не оставить полуустановку.
+if [ -e "$LAUNCHER" ] && ! grep -qF "$LAUNCHER_MARKER" "$LAUNCHER" 2>/dev/null; then
+  die "уже существует $LAUNCHER (не launcher Synth offline-бандла). Удалите/переименуйте его или используйте --prefix."
+fi
+if [ -n "$UNIT" ] && [ -f "$UNIT" ] && ! grep -qF "$UNIT_MARKER" "$UNIT" 2>/dev/null; then
+  die "уже существует $UNIT и он создан не offline-установщиком Synth. Удалите/переименуйте его вручную."
+fi
+
 # --- системный пользователь (только Linux --system) -------------------------
 if [ "$MODE" = system ] && ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   info "создаю системного пользователя $SERVICE_USER"
@@ -220,10 +228,6 @@ fi
 run mkdir -p "$APP_DIR"
 run cp -a "$BUNDLE_DIR/." "$APP_DIR/"
 run ln -sfn "$APP_DIR" "$CURRENT"
-
-if [ -e "$LAUNCHER" ] && ! grep -qF "$LAUNCHER_MARKER" "$LAUNCHER" 2>/dev/null; then
-  die "уже существует $LAUNCHER (не launcher Synth offline-бандла). Удалите/переименуйте его или используйте --prefix."
-fi
 
 run mkdir -p "$(dirname "$LAUNCHER")"
 write_file "$LAUNCHER" <<EOF
@@ -253,10 +257,6 @@ fi
 
 # --- systemd (Linux) --------------------------------------------------------
 if [ -n "$UNIT" ]; then
-  if [ -f "$UNIT" ] && ! grep -qF "$UNIT_MARKER" "$UNIT" 2>/dev/null; then
-    die "уже существует $UNIT и он создан не offline-установщиком Synth. Удалите/переименуйте его вручную."
-  fi
-
   SERVICE_USER_LINES=""
   if [ -n "$SERVICE_USER" ]; then
     SERVICE_USER_LINES="User=$SERVICE_USER

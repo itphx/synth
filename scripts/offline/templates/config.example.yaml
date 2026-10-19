@@ -5,9 +5,10 @@
 #
 # Приоритет: CLI-флаги > SYNTH_* env > этот файл > defaults (ADR-023).
 
-server:
-  host: 127.0.0.1
+core:
+  # Порт локального core (`synth serve`). Host задаётся `--host`/`SYNTH_HOST`.
   port: 4300
+  # apiKey: ''   # лучше не хранить здесь: env SYNTH_API_KEY или {dataDir}/secrets/api-key
 
 storage:
   # По умолчанию данные лежат в <home>/data (ADR-079).

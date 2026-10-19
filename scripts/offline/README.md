@@ -51,6 +51,8 @@ node scripts/offline-bundle.mjs --platform linux-x64 \
 | `--rg-version <ver>` | версия ripgrep (по умолчанию `14.1.1`) |
 | `--rg-cache <dir>` | кэш архивов ripgrep |
 | `--rg-dir <dir>` | локальный `rg` вместо скачивания |
+| `--docs-dir <dir>` | готовая offline-документация (HTML/MD) → `share/docs/` |
+| `--clean` | очистить `--out` перед сборкой (удалить старые архивы) |
 | `--skip-build` | не запускать `pnpm build` |
 | `--source-date-epoch <s>` | фиксированный mtime для детерминизма |
 

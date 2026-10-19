@@ -61,6 +61,8 @@ const USAGE = `offline-bundle.mjs — offline-дистрибутивы Synth (po
   --rg-version <ver>        версия ripgrep (default: 14.1.1)
   --rg-cache <dir>          кэш архивов ripgrep (default: \$XDG_CACHE_HOME/synth-offline/ripgrep)
   --rg-dir <dir>            локальный rg вместо скачивания (offline)
+  --docs-dir <dir>          готовая offline-документация (HTML/MD) для share/docs
+  --clean                   очистить --out перед сборкой (удалить старые архивы)
   --skip-build              не запускать pnpm build (dist уже собран)
   --source-date-epoch <s>   фиксированный mtime для детерминированной упаковки
   -h, --help                эта справка
@@ -80,6 +82,8 @@ function parseArgs(argv) {
     rgVersion: '14.1.1',
     rgCache: null,
     rgDir: null,
+    docsDir: null,
+    clean: false,
     skipBuild: false,
     sourceDateEpoch: null,
   };
@@ -121,6 +125,12 @@ function parseArgs(argv) {
         break;
       case '--rg-dir':
         opts.rgDir = value('--rg-dir');
+        break;
+      case '--docs-dir':
+        opts.docsDir = value('--docs-dir');
+        break;
+      case '--clean':
+        opts.clean = true;
         break;
       case '--skip-build':
         opts.skipBuild = true;
@@ -601,7 +611,7 @@ function deployApp(targetDir) {
   assertNoSymlinks(targetDir);
 }
 
-function writeConfigExamples(stage) {
+function writeConfigExamples(stage, docsSource) {
   const templates = path.join(REPO_ROOT, 'scripts', 'offline', 'templates');
   const etcDir = path.join(stage, 'etc');
   ensureDir(etcDir);
@@ -610,7 +620,17 @@ function writeConfigExamples(stage) {
 
   const docsDir = path.join(stage, 'share', 'docs');
   ensureDir(docsDir);
-  copyFile(path.join(templates, 'share-README.md'), path.join(docsDir, 'README.md'));
+  if (docsSource) {
+    const resolved = path.resolve(docsSource);
+    if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
+      throw new Error(`--docs-dir не найден или не каталог: ${resolved}`);
+    }
+    fs.cpSync(resolved, docsDir, { recursive: true });
+    log(`share/docs: ${resolved}`);
+  } else {
+    copyFile(path.join(templates, 'share-README.md'), path.join(docsDir, 'README.md'));
+    log('share/docs: заглушка (передайте --docs-dir для полной offline-документации)');
+  }
 }
 
 function writeLaunchers(stage, platformKey) {
@@ -870,6 +890,10 @@ async function main() {
   }
 
   const outDir = path.resolve(opts.out);
+  if (opts.clean) {
+    log(`--clean: удаляю ${outDir}`);
+    rmrf(outDir);
+  }
   ensureDir(outDir);
   const stageRoot = path.join(outDir, '.stage');
   rmrf(stageRoot);
@@ -922,7 +946,7 @@ async function main() {
 
       writeLaunchers(stage, platformKey);
       writeInstallers(stage, platformKey);
-      writeConfigExamples(stage);
+      writeConfigExamples(stage, opts.docsDir);
       writeLicenses(stage, platformKey, nodeArtifact, rgArtifact);
 
       step('проверка симлинков и manifest');

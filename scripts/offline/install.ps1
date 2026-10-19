@@ -92,6 +92,14 @@ Write-Info "  логи:       $LogsDir"
 Write-Info "  launcher:   $Launcher"
 Write-Info "  URL:        http://127.0.0.1:$Port"
 
+$LauncherMarker = 'rem Synth offline launcher (managed by install.ps1)'
+if (Test-Path $Launcher) {
+    $existingLauncher = Get-Content $Launcher -Raw
+    if ($existingLauncher -notmatch [regex]::Escape($LauncherMarker)) {
+        throw "Уже существует $Launcher (не launcher Synth offline-бандла). Удалите/переименуйте его или используйте -Prefix."
+    }
+}
+
 function Remove-JunctionItem([string]$Path) {
     if (-not (Test-Path $Path)) { return }
     $item = Get-Item $Path -Force
@@ -148,13 +156,6 @@ try {
 
 $LauncherTarget = if (Test-Path $CurrentDir) { Join-Path $CurrentDir 'bin\synth.cmd' } else { Join-Path $AppDir 'bin\synth.cmd' }
 New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-$LauncherMarker = 'rem Synth offline launcher (managed by install.ps1)'
-if (Test-Path $Launcher) {
-    $existingLauncher = Get-Content $Launcher -Raw
-    if ($existingLauncher -notmatch [regex]::Escape($LauncherMarker)) {
-        throw "Уже существует $Launcher (не launcher Synth offline-бандла). Удалите/переименуйте его или используйте -Prefix."
-    }
-}
 $LauncherBody = @"
 @echo off
 $LauncherMarker
