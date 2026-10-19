@@ -38,9 +38,12 @@ RUN pnpm install --filter @itphx/synth-backend --filter @itphx/synth-core --filt
 RUN mkdir -p /out && pnpm --filter @itphx/synth-backend deploy --prod --legacy /out/app
 
 # Права чиним здесь, на платформе билдера: файлы pnpm deploy имеют mode 770
-# (root) и под runAsUser 1000 недоступны. COPY переносит режимы как есть, поэтому
-# в целевой стадии RUN не нужен (важно для кросс-сборки arm64 без эмуляции).
-RUN chmod -R a+rX /out/app
+# (root) и под runAsUser 1000 недоступны; второй COPY ниже кладёт поверх /app/dist
+# каталог backend dist из рабочего дерева, а COPY переносит режимы как есть — при
+# umask 002/ACL это 660 (EACCES у uid 1000 на /app/dist/main.js). Поэтому чиним
+# оба источника до COPY. В целевой стадии RUN нет (важно для кросс-сборки arm64
+# без эмуляции).
+RUN chmod -R a+rX /out/app /repo/packages/backend/dist
 
 FROM node:22-alpine
 
