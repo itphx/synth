@@ -1,7 +1,10 @@
 # ADR-030: Hooks для событий агента
 
-> **Статус:** ⚠️ Частично — реализованы hook-шина `HookBus` и эмиты жизненного цикла; Plugin SDK/загрузка плагинов ([PROP-090](./prop-090-extension-api.md)) и спецификация — нет
+> **Статус:** ⚠️ Частично — реализованы hook-шина `HookBus` и эмиты жизненного цикла; Plugin SDK/загрузка плагинов ([PROP-090](./prop-090-extension-api.md), отложен 2026-10-19), 4 эмита (`plan_rejected`/`message_received`/`callback`/`schedule_fired`) и политика `builtin` — нет
 > **Дата:** 2026-09-17
+> **Обновлено:** 2026-10-19 — остаток сведён к **Ф0 [PROP-090](./prop-090-extension-api.md) §14** (политика `builtin` +
+> недостающие эмиты) и зафиксировано, что Ф0 **не делается отдельно**: PROP-090 решением 2026-10-19 отложен целиком
+> (🧊 Icebox), фазы Ф0–Ф5 не начаты.
 > **Обновлено:** 2026-10-09 — статус уточнён до ⚠️ Частично и раздел «Статус реализации в коде» приведён
 > к фактическому состоянию (hook-шина и эмиты реализованы, Plugin SDK — нет).
 > Ранее (2026-10-08) закреплён как **фундамент** для внешних событий ([ADR-089](./adr-089-external-events-automation.md)):
@@ -95,7 +98,8 @@ export default function myPlugin(synth: SynthPlugin) {
 
 ## Статус реализации в коде
 
-**Реализовано частично:** hook-шина (`HookBus`) и эмиты жизненного цикла. Plugin SDK и загрузка плагинов — не реализованы.
+**Реализовано частично:** hook-шина (`HookBus`) и эмиты жизненного цикла. Plugin SDK и загрузка плагинов — не реализованы;
+эмитится 11 из 15 объявленных хуков.
 
 ### Реализовано
 
@@ -113,9 +117,13 @@ export default function myPlugin(synth: SynthPlugin) {
 
 ### Остаток (не реализовано)
 
+Остаток ADR-030 сводится к **Ф0 [PROP-090](./prop-090-extension-api.md) §14** (политика `builtin` + недостающие эмиты)
+и самому Plugin SDK. Ф0 **не делается отдельно**: решением 2026-10-19 [PROP-090](./prop-090-extension-api.md) отложен
+целиком (🧊 Icebox) — фазы Ф0–Ф5 не начаты; при возврате PROP-090 в работу Ф0 идёт первым шагом.
+
 - **Plugin SDK и загрузка плагинов** — отсутствуют: нет `SynthPlugin`, `synth.hooks.on(...)`, конфига/загрузчика и публичной точки регистрации внешних обработчиков (спецификация — [PROP-090](./prop-090-extension-api.md), зонтик — [ADR-086](./adr-086-extensibility-plugins-editions.md)).
-- **Неэмитируемые хуки** — `plan_rejected`, `message_received`, `callback`, `schedule_fired` объявлены в `HookName`, но нигде не эмитятся.
-- **Политика `builtin`** — флаг `builtin` хранится в регистрации, но политики снятия (защита обработчиков ядра от внешних плагинов) нет: `off` снимает любой обработчик.
+- **Неэмитируемые хуки (Ф0 PROP-090)** — `plan_rejected`, `message_received`, `callback`, `schedule_fired` объявлены в `HookName`, но нигде не эмитятся. Эмитятся 11 из 15: `pre_tool_use`, `post_tool_use`, `session_start`, `session_end`, `plan_approved`, `permission_denied`, `agent_spawned`/`agent_completed`/`agent_failed`, `session_requested`, `external_event`.
+- **Политика `builtin` (Ф0 PROP-090)** — флаг `builtin` хранится в регистрации, но политики снятия (защита обработчиков ядра от внешних плагинов) нет: `off` снимает любой обработчик (`packages/core/src/engine/hooks/hook-bus.ts` — комментарий «Builtin-обработчики тоже снимаются (политика — позже)»).
 - **Неполные контексты** — `session_end` эмитится без `summary`/`usage`; в ветке жёсткого сбоя `agent_failed` не заполняет `retries`.
 - **Конфиг/API/UI/аудит хуков** — отсутствуют.
 
@@ -131,6 +139,6 @@ ADR-030 — **фундамент** событийной модели Synth: hook
 - [ADR-086](./adr-086-extensibility-plugins-editions.md) «Классы расширений» — add-on'ы
   и gateway-события (External API/hooks как точки расширения).
 - [PROP-090](./prop-090-extension-api.md) «Extension API v1» — загрузчик/манифест (`synth.pack`) и регистрация
-  внешних обработчиков над hook-шиной (spec Extension API; вынесен из ADR-086).
+  внешних обработчиков над hook-шиной (spec Extension API; вынесен из ADR-086; отложен 2026-10-19 — 🧊 Icebox).
 - [ADR-087](./adr-087-gateways.md) «Шлюзы (gateways)» — класс Gateway; hook `message_received`.
 

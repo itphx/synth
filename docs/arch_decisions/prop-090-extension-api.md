@@ -1,8 +1,12 @@
 # PROP-090: Extension API v1 — плагины, точки расширения и загрузчик
 
-> **Статус:** 🧩 Предложение — Extension API v1: плагины, точки расширения, загрузчик, манифест `synth.pack`, trust/scan
-> **Решение до:** 2026-11-14
+> **Статус:** 🧊 Icebox — Extension API v1: плагины, точки расширения, загрузчик, манифест `synth.pack`, trust/scan.
+> **Решение 2026-10-19 — отложено целиком:** фазы Ф0–Ф5 **не начаты** (в коде Synth нет ни `PluginHost`, ни
+> `@itphx/synth-plugin`, ни `plugins.lock.json`/`plugins.json`, ни `/api/v2/plugins*`, ни CLI `synth plugin *`);
+> срок `Решение до: 2026-11-14` **снят** — новая дата назначается при возврате в работу.
 > **Дата:** 2026-10-12
+> **Обновлено:** 2026-10-19 — зафиксировано решение об отложении (🧊 Icebox): Ф0 (политика `builtin` + 4 эмита
+> [ADR-030](./adr-030-hooks-agent-events.md)) не делается отдельно и переносится в остаток PROP-090.
 > **Источник:** вынесено из зонтика [ADR-086](./adr-086-extensibility-plugins-editions.md) — Extension API
 > проектировался там как первый из четырёх столпов (плагины, editions, contribution flow, add-on'ы);
 > здесь он выделен в отдельный AD и детализирован.
@@ -42,6 +46,12 @@ trust-уровни, install-policy, статический сканер, quarant
 trust/scan/install-policy и подчиняется тем же инвариантам (permissions через `PermissionEvaluator`, LLM через
 `GatewayProvider`, хранилище через `FileStore`).
 
+> **Вердикт по сроку — 2026-10-19: отложено целиком (🧊 Icebox).** Ни одна из фаз Ф0–Ф5 не начата: в коде Synth нет
+> ни `PluginHost`, ни `@itphx/synth-plugin`, ни `plugins.lock.json`/`plugins.json`, ни `/api/v2/plugins*`, ни CLI
+> `synth plugin *`. Ф0 (политика `builtin` + недостающие эмиты — [ADR-030](./adr-030-hooks-agent-events.md))
+> **не делается отдельно** и переносится в остаток PROP-090: при возврате в работу Ф0 идёт первым шагом.
+> Спецификация ниже сохраняется как есть — она остаётся основой решения, когда PROP-090 вернётся в работу.
+
 ## Контекст
 
 Расширить Synth сегодня можно только форком ядра. При этом **фундамент уже есть**: hook-шина `HookBus`
@@ -57,7 +67,8 @@ runtime-настроек `GET/PUT/DELETE /api/v2/settings/<x>` + guard + live-ap
 **Чего нет:** Plugin SDK `SynthPlugin`, конфига/загрузчика плагинов, публичной точки регистрации внешних
 обработчиков и install/activate-механизма. Остаток [ADR-030](./adr-030-hooks-agent-events.md): нет политики
 `builtin` (любой может снять builtin-обработчик через `off`), часть хуков (`plan_rejected`, `message_received`,
-`callback`, `schedule_fired`) объявлена, но не эмитится.
+`callback`, `schedule_fired`) объявлена, но не эмитится. Обе позиции входят в **Ф0 (§14)**, который по решению
+2026-10-19 не делается отдельно — PROP-090 отложен целиком.
 
 **Почему не берём модель «всё в одном процессе без изоляции».** Сторонний JS-код в процессе ядра получает
 доступ ко всем internals (сессии, `FileStore`, `GatewayProvider`, permissions). Это ломает инварианты
@@ -466,6 +477,9 @@ install/enable/disable/update/remove/policy — ADMIN (managed) / владеле
 
 ## 14. Фазы реализации
 
+**Статус фаз (2026-10-19): не начаты.** PROP-090 отложен целиком (🧊 Icebox); фазы ниже сохраняются как план
+возврата в работу — порядок и содержание не меняются.
+
 - **Ф0 — предпосылки.** Остаток [ADR-030](./adr-030-hooks-agent-events.md): политика `builtin` (защита
   builtin-обработчиков от снятия) и недостающие эмиты (`plan_rejected`, `message_received`, `callback`,
   `schedule_fired`); конфиг включённых плагинов ([ADR-023](./adr-023-configuration.md)). Кода плагинов ещё нет.
@@ -520,7 +534,7 @@ UI-slot отложен — часть расширений (панели) пок
 
 - [ADR-086](./adr-086-extensibility-plugins-editions.md) — зонтик «Классы расширений»; PROP-090 — вынесенный детальный Extension API.
 - [ADR-087](./adr-087-gateways.md) — класс Gateway (внешний сервис-транспорт): отдельный от Plugin/Add-on класс, единый манифест `synth.pack`.
-- [ADR-030](./adr-030-hooks-agent-events.md) — hook-шина: фундамент точки `hooks`; остаток (политика `builtin`, эмиты) — предпосылка Ф0.
+- [ADR-030](./adr-030-hooks-agent-events.md) — hook-шина: фундамент точки `hooks`; остаток (политика `builtin`, эмиты) — предпосылка Ф0 (в Ф0 не делается отдельно — см. §14).
 - [ADR-038](./adr-038-npm-packages.md) — npm-пакеты: `@itphx/synth-plugin` и распространение плагинов.
 - [ADR-046](./adr-046-skills-and-slash-commands.md) — скиллы/команды: точки `skills`/`commands`.
 - [PROP-068](./prop-068-skills-agents-registry.md) — trust/scan/install-policy/quarantine/lock/audit: переиспользуемая инфраструктура.
@@ -534,3 +548,7 @@ UI-slot отложен — часть расширений (панели) пок
 - [PROP-082](./prop-082-full-images-deployment.md) — flavor-образы: бандлы плагинов в образе (managed deploy-time).
 - [PROP-077](./prop-077-runtime-toolchain.md) — executor/toolchain: размещение и запуск в managed.
 - [PROP-088](./prop-088-http-proxy.md) — egress: сетевые вызовы плагинов.
+
+## История
+
+- 2026-10-19 — решение по сроку: **отложено целиком** (🧊 Icebox); фазы Ф0–Ф5 не начаты, срок `Решение до: 2026-11-14` снят; Ф0 (политика `builtin` + 4 эмита [ADR-030](./adr-030-hooks-agent-events.md)) не делается отдельно и переносится в остаток PROP-090.

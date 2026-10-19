@@ -2,6 +2,9 @@
 
 > **Статус:** ⚠️ Частично — Telegram-шлюз реализован и **мультитенантен** («несколько ботов → несколько сред», `tenants.json`); HA через leader election, webhook-транспорт и второй канал — нет
 > **Дата:** 2026-10-01
+> **Обновлено:** 2026-10-19 — уточнена доставка наружу: в модели публикации внешним Add-on'ом отправку в канал
+> выполняет **агент через MCP-инструменты шлюза**, а не ядро (поток и риск approve-gate — [ADR-089](./adr-089-external-events-automation.md));
+> «стриминг ответа наружу» остатком ADR-087 **не является** — он закрыт на стороне шлюза (live-стриминг `stream.chunk` → правки сообщения).
 > **Обновлено:** 2026-10-14 — **возрождён как действующий AD**: класс **Gateway** выделен в отдельный класс
 > расширений (наряду с Plugin / Add-on / контент-паком, [ADR-086](./adr-086-extensibility-plugins-editions.md));
 > весь материал Telegram-шлюза перенесён сюда из [ADR-086](./adr-086-extensibility-plugins-editions.md)
@@ -51,9 +54,14 @@ Gateway — **не** подвид Add-on'а и **не** Plugin: это само�
 - **Приём (внешний мир → Synth).** Нормализация входящих сообщений/нажатий в **внешние события** →
   `POST /api/v2/events` ([ADR-089](./adr-089-external-events-automation.md): `Event`/`Binding`/`Router`).
 - **Доставка наружу (Synth → внешний мир).** SSE-`watcher` на `GET /api/v2/events` → `sendMessage` по
-  `stream.done` (фоллбек `message.added`/`stream.error`).
+  `stream.done` (фоллбек `message.added`/`stream.error`). Живая доставка (правки сообщения по `stream.chunk`,
+  rich-черновики) — на стороне шлюза; ядро отдаёт поток событий, форматирование и отправку делает шлюз.
 - **MCP-часть (Synth → шлюз).** MCP-инструменты шлюза: отправка/редактирование сообщений, уведомления,
   inline-кнопки, вложения.
+- **Публикация в канал — силами агента (модель Add-on, 2026-10-19).** Внешний Add-on ([ADR-086](./adr-086-extensibility-plugins-editions.md))
+  публикует в канал **MCP-инструментами шлюза**: агент в сессии отправляет сообщение сам (после approve человека),
+  ядро в доставку не вмешивается. Полный поток (событие CI → Router → черновик → approve → `draft_approved` → Router →
+  сессия агента → отправка через MCP шлюза) и зафиксированный риск approve-gate — [ADR-089](./adr-089-external-events-automation.md) «Слои и границы».
 - **Binding чат↔сессия.** Привязка `chatKey`/`threadKey` ↔ сессия/проект; режимы `bound`/`ephemeral`/`queue`
   ([ADR-089](./adr-089-external-events-automation.md)).
 - **Идентичность.** Маппинг внешнего отправителя → профиль/RBAC + **claim-flow** (одноразовый код подтверждения);
@@ -76,7 +84,8 @@ Gateway к мессенджерам — эталонный шлюз; реали�
   ([ADR-089](./adr-089-external-events-automation.md): `Event`/`Binding`/`Router`); транспорт — Telegram
   `getUpdates` (**long-polling**), нормализация → `POST /api/v2/events`.
 - **Выход (Synth → шлюз → чат):** SSE `GET /api/v2/events` (watcher) → `sendMessage` по `stream.done`
-  (фоллбек `message.added`/`stream.error`).
+  (фоллбек `message.added`/`stream.error`) — автоматическая доставка ответа сессии; явная публикация
+  по команде агента идёт через MCP-инструменты шлюза (§3, модель Add-on).
 - **Маппинг identity** (пользователь мессенджера → профиль/RBAC), **секреты ботов** (at-rest по модели
   [ADR-076](./adr-076-git-repo-registry-ssh.md)), **дедуп/идемпотентность**, **вложения** (→ [PROP-085](./prop-085-multimodal-input.md)).
 - **Привязки `Binding`** (чат/тред/топик ↔ сессия/проект) и права — по [ADR-089](./adr-089-external-events-automation.md).
