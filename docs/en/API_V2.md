@@ -293,7 +293,7 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 | POST | `/api/v2/sessions/:id/fork` | both | auth | Fork; `{message_id?, message_index?, title?}` → 201 |
 | GET | `/api/v2/sessions/:id/children` | both | auth | Child sessions |
 | GET | `/api/v2/sessions/:id/tree` | both | auth | Session tree |
-| GET | `/api/v2/sessions/:id/export` | backend | auth | Full Session export (internal format) |
+| GET | `/api/v2/sessions/:id/export` | backend | auth | Session export (internal format, camelCase — the publish/fork format is unchanged). The route is registered **after** the prefix-guard (`app.use('/:id')`/`app.use('/:id/*')`), so **access to the session is decided by the single guard** — there are no access checks in the handler (invariant 16). The Gateway obfuscation map (ADR-036) is a **separate privilege**, decided by the route-level guard `createSessionExportGuard`: the **full export** (`obfuscationMap` and `messages[].metadata.secrets` included) goes to the **session owner** (`ownerId ?? userId`), `ADMIN` and `AUDITOR` (the same privilege set as `GET /:id/secrets`); other readers of the session (a project member `VIEWER`/`EDITOR`, a project owner who does not own the session, `LEAD`) get **200 with a cleaned body** (no map, the rest of the conversation is carried over unchanged; the stripping is done on a copy, the stored session is not modified); no read access → 403 `FORBIDDEN`; no session → 404 `NOT_FOUND`; rate limit 10/60 s → 429 `RATE_LIMITED` |
 | POST | `/api/v2/sessions/import` | backend | auth | Import a session from an export → 201 |
 | GET | `/api/v2/sessions/:id/status` | both | auth | `{blocked, pending_count, processor_running}` |
 | POST | `/api/v2/sessions/:id/prompt` | both | auth | Enqueue a message, return an **SSE stream** |
@@ -321,8 +321,9 @@ configuration (`metrics.enabled`, token) — [CONFIGURATION.md](./CONFIGURATION.
 
 > `SessionSettings` for MCP/skills (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session overrides (a single switch); `mcpDefaultOn`/`skillsDefaultOn` — a **snapshot** of the defaults (`project.defaultOn`/the system default) at session creation time, set by the system, not overwritten by a change of the project default; `undefined` — legacy mode (see the scope endpoints in §5.17.2).
 > **Visibility of `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **all** sessions; otherwise — own personal ones **plus** sessions of projects the user is a member of (the project `owner` or any `members`, any role). A session **without an owner** is visible (parity with access by id). Personal sessions of other users are not visible. `?project_id=` filters on top of this visibility.
-> **Access by id — all `:id` routes of the resource (ADR-089).** A single prefix-guard `server/session-access-guard.ts` (mounted on `/:id` and `/:id/*` together with `requireAuth`; the access kind `read`/`write` is derived from the HTTP method), rule: `ADMIN`/`LEAD` — reading **and** mutating someone else's session are allowed (a deliberate product decision; pinned by the matrix `routes/session-idor-matrix.test.ts`); the session owner / a session without an owner — everything; a member of the session's project: **read** (`GET`/`HEAD`) — any role, including `VIEWER`, **mutation** — `OWNER`/`EDITOR` (`canEditProjectContent`); a foreign user → `403 FORBIDDEN`; a missing session → `404 NOT_FOUND`. Codes are consistent across the whole resource (for a foreign user any `:id` route returns `403`); explicit exceptions: `GET /:id/mcp` — owner|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR`. List helper — `server/session-visibility.ts` (`isSessionVisible`), scan — `FileStore.listForUserScope`.
+> **Access by id — all `:id` routes of the resource (ADR-089).** A single prefix-guard `server/session-access-guard.ts` (mounted on `/:id` and `/:id/*` together with `requireAuth`; the access kind `read`/`write` is derived from the HTTP method), rule: `ADMIN`/`LEAD` — reading **and** mutating someone else's session are allowed (a deliberate product decision; pinned by the matrix `routes/session-idor-matrix.test.ts`); the session owner / a session without an owner — everything; a member of the session's project: **read** (`GET`/`HEAD`) — any role, including `VIEWER`, **mutation** — `OWNER`/`EDITOR` (`canEditProjectContent`); a foreign user → `403 FORBIDDEN`; a missing session → `404 NOT_FOUND`. Codes are consistent across the whole resource (for a foreign user any `:id` route returns `403`); explicit exceptions: `GET /:id/mcp` — owner|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR`, `GET /:id/export` — the route is **under** the guard (it decides access to the session), while the obfuscation map is a separate privilege of the route-level guard: owner|`ADMIN`|`AUDITOR` (other readers get 200 with a cleaned body; ADR-091 §6). List helper — `server/session-visibility.ts` (`isSessionVisible`), scan — `FileStore.listForUserScope`.
 > **Service-key scope (ADR-052):** `GET /` and `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages` — `sessions:read`. With a non-empty `allowedProjects`, the project projection is checked against the session's `project_id`, otherwise `403 PROJECT_FORBIDDEN`.
+> **The instance storage context.** The project export/import (`GET /api/v2/projects/:id/export`, `POST /api/v2/projects/import`) go through the instance storage context (`StorageContext`, ADR-096), not through their own file context — on `storage.backend=postgres` the database projects are visible (the spec — §5.8.1).
 > **Reliable Stop — `POST /api/v2/sessions/:id/abort` (ADR-005).** The route sets a **persistent** `SessionStatus.cancelRequested` flag (+ `cancelRequestedAt`) under the session lock — that is why the cancellation also fires when `currentStream`/the cancel token is not yet set (a session in the queue, in backoff, between Tool Use iterations), where the previous `orchestrator.cancel` was a no-op. With a live stream, a graceful `orchestrator.cancel` is additionally invoked (publishes `stream.cancelled`, keeps the partial response); then `QueueProcessorManager.requestStop` interrupts backoff/the active LLM call and ends the loop (`_handleStopRequest`: clearing `pendingMessages`, releasing `blocked`/the flag, `stream.cancelled` exactly once — without duplicating the graceful branch). If there is no processor, the flag is cleared so that the next run is not falsely cancelled. The response is `{status:'aborted'}`; without a session — 404. In a serialized session (`GET /api/v2/sessions/:id`) the `status` field contains `cancel_requested` (bool) and `cancel_requested_at` (ISO|null). The hybrid branch (a remote session) delegates to `remoteClient.abortSession`.
 
 ### 5.6 Messages — `/api/v2/messages`
@@ -378,7 +379,15 @@ Moving a project between Synth instances: download a self-contained
 `createProjectPortableRoutes`, serves core and backend; the work lives in the core
 (`packages/core/src/projects/portable.ts`). The archive contains `manifest.json`
 (sha256 entries), `project.json`, and `sessions/<id>.json`; optionally `workspace/**`.
-**The archive contains no secrets** (keys, tokens, credentials, `secrets/` are not included).
+**By default the archive contains no secrets** (keys, tokens, credentials, `secrets/` are not
+included), and when the session payloads are packed the **Gateway obfuscation map** (ADR-036) is
+stripped: `obfuscation_map` at the session level and `metadata.secrets` — **recursively, anywhere in the
+payload**, i.e. for every carrier of session messages (`messages[]`, `pendingMessages[]`,
+`checkpoints[].messages[]`) — a project archive does not carry away other
+members’ secrets. The opt-in `?withSecrets=true` is allowed for **`ADMIN`/`LEAD` only** (in core —
+the local owner); the issuance is recorded in the maintenance audit journal (`export.created`,
+detail `withSecrets: true`), and such an archive is **a secret itself**. The import accepts a map
+when one is present, so an archive produced with the privileged opt-in imports correctly.
 
 Import is **materialization** (ADR-089, invariant 15): a **new** `projectId` and new
 sessions are created (source id → new id in `idMap`), not via the `session.requested`
@@ -386,9 +395,14 @@ funnel. `mergeInto` imports sessions into an existing project. The core notifies
 (`onSessionCreated` → owner subscription, ADR-089 invariant 18). Operations are recorded
 in the maintenance audit journal (`export.created`/`import.applied`, ADR-092).
 
+**The instance storage context.** The export and the import go through the instance
+`StorageContext` (ADR-096), not through their own file context: on `storage.backend=postgres`
+downloading the archive used to return 404 for every database project, while the import went
+into the file store (split-brain).
+
 | Method | Path | Build | RBAC (managed / core) | Purpose |
 |---|---|---|---|---|
-| GET | `/api/v2/projects/:id/export` | both | auth / owner·member·LEAD·ADMIN | Download a portable archive (streaming): `Content-Type: application/gzip`, `Content-Disposition: attachment; filename="<slug>.synth-project.tar.gz"`, `Content-Length`; query `withWorkspace=true` (by default no `workspace/**`); no project → 404 `NOT_FOUND`; no read right → 403 `FORBIDDEN` |
+| GET | `/api/v2/projects/:id/export` | both | auth / owner·member·LEAD·ADMIN | Download a portable archive (streaming): `Content-Type: application/gzip`, `Content-Disposition: attachment; filename="<slug>.synth-project.tar.gz"`, `Content-Length`; query `withWorkspace=true` (by default no `workspace/**`) and `withSecrets=true` (`ADMIN`/`LEAD` only, in core — the local owner; by default the obfuscation map is stripped); no project → 404 `NOT_FOUND`; no read right → 403 `FORBIDDEN` |
 | POST | `/api/v2/projects/import` | both | auth / any role (with `mergeInto` — owner·EDITOR·LEAD·ADMIN) | Import an archive (multipart) → 201 `{projectId, sessionsImported, messagesImported, workspaceRestored, idMap}` |
 
 **`POST /import`** — `multipart/form-data`: `file` (the archive, required), `name`
@@ -404,9 +418,25 @@ compatibility. Success → 201 `ImportProjectResult`; a colliding new project na
 `content-length`, the `File` size, and the bytes actually read — exceeding it → 413
 `PAYLOAD_TOO_LARGE`.
 
+**Unpacked-volume limits.** The import is limited not only by the size of the uploaded file but also by the
+**unpacked** volume of the archive (protection against archive bombs): `DEFAULT_PROJECT_IMPORT_LIMITS` —
+**100 000 entries**, **128 MiB** per entry, **2 GiB** in total
+(`packages/core/src/projects/portable.ts`). The check runs **while the archive is being read**: the
+per-entry limit is compared against the tar header **before** the content is buffered, the total limit against
+the sum of the declared sizes, the entry count against the counter — so exceeding them **aborts the parsing**
+instead of stating a fact after the unpacking. Exceeding → **400 `VALIDATION_ERROR`** with the code
+`invalid-archive` (the existing code, no new one was introduced); the limits can be overridden
+programmatically through `ImportProjectOptions.limits`.
+
+**Export/import asymmetry.** The project export is **not** limited by the unpacked-volume limit — the
+archive is streamed to disk, there is nothing to unpack there; the **import** is limited. The
+**instance backup restore** path (`synth restore`, `POST /api/v2/maintenance/restore`) is a different
+artifact with its own size policy and is **not** limited by these limits.
+
 **Error codes.** 400 `VALIDATION_ERROR` (a broken/corrupted archive, a sha256 mismatch,
-an unsafe path in the archive, a workspace restore error, a non-multipart body, or a missing
-`file`), 404 `NOT_FOUND` (no project or no `mergeInto` target), 409 `CONFLICT` (the project
+an unsafe path in the archive, an unsafe path in `workspace/**` — a symlink on the path or a
+realpath-containment violation, fail-closed, a workspace restore error, a non-multipart body, or a missing
+`file`, exceeding the unpacked-volume limits), 404 `NOT_FOUND` (no project or no `mergeInto` target), 409 `CONFLICT` (the project
 name is taken), 413 `PAYLOAD_TOO_LARGE` (the limit is exceeded), 401/403 (no credentials/no
 project read or edit right). Sources — `packages/core/src/server/routes/project-portable.ts`,
 `packages/core/src/projects/portable.ts`.
@@ -595,16 +625,18 @@ Errors — in the shared shape `{ error: { error, code } }`.
 
 | Method | Path | RBAC (backend / core) | Purpose |
 |---|---|---|---|
-| POST | `/api/v2/git/scan` | auth | `{projectId}` → `{repos}` (git detection over the workspace, up to 3 levels) |
+| POST | `/api/v2/git/scan` | read / auth | `{projectId}` → `{repos}` (git detection over the workspace, up to 3 levels) |
 | POST | `/api/v2/git/repos/init` | write / auth | `{projectId, path, defaultBranch?, name?, sshKeyId?}` → 201 `RepoStatus`; registers an entry |
 | POST | `/api/v2/git/repos/clone` | write / auth | `{projectId, url, path?, branch?, name?, sshKeyId?}` → 201 `RepoStatus`; an SSH URL without a key → 400 `git.ssh_key_required`; a taken path → 409 `git.repo_exists` |
 | POST | `/api/v2/git/repos/register` | write / auth | `{projectId, path, name?, url?, type?, defaultBranch?, sshKeyId?}` → 200 `GitRepoConfig` (upsert by `id`/`path`) |
 | POST | `/api/v2/git/repos/remove` | write / auth | `{projectId, id?\|path?, deleteLocal?}` → `{removed, deletedLocal}` (deleting the local directory — `deleteLocal`) |
 | POST | `/api/v2/git/repos/fetch` | write / auth | `{projectId, id?\|path?}` → `{path, lastFetch}`; an SSH URL without a key → 400 `git.ssh_key_required` |
-| GET | `/api/v2/git/log` | auth | `?project_id=&repo_path=&max_count=` → `{commits}` |
-| GET | `/api/v2/git/commit` | auth | `?project_id=&repo_path=&hash=` → `{commit}` |
+| GET | `/api/v2/git/log` | read / auth | `?project_id=&repo_path=&max_count=` → `{commits}` |
+| GET | `/api/v2/git/commit` | read / auth | `?project_id=&repo_path=&hash=` → `{commit}` |
 
-Backend RBAC: write endpoints (`init`/`clone`/`register`/`remove`/`fetch`) — owner/EDITOR/LEAD/ADMIN (`canEditProjectContent`), otherwise 403; read (`scan`/`log`/`commit`) — any authenticated user. Core (standalone) — `requireAuth`.
+Backend RBAC: write endpoints (`init`/`clone`/`register`/`remove`/`fetch`) — owner/EDITOR/LEAD/ADMIN (`canEditProjectContent`), otherwise 403; read (`scan`/`log`/`commit`) — the **read** right on the project: owner/project member/`LEAD`/`ADMIN` (`canReadProject`), otherwise 403. The check is a **boundary** guard (`projectGuard('read'|'write')` in the core factory `createGitRoutes`), i.e. **before** the handler; there are no access checks inside the handlers (invariant 16). Core (standalone) — `requireAuth` (standalone has no per-project rights).
+
+> **Behaviour change (managed).** A request for a **non-existent** `projectId` in `/api/v2/git/*` now answers **403 instead of 404** — fail-closed, no existence disclosure (like the FS routes). Previously the read routes (`scan`/`log`/`commit`) did not check access at all and allowed reading another project’s git data by its id.
 
 ### 5.15.1 Agent SSH keys — `/api/v2/ssh-keys`, `/api/v2/agents/:agentId/ssh-keys` (both, ADR-076)
 

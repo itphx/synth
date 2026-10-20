@@ -318,6 +318,70 @@ function checkAuthMatrix(policy) {
 }
 
 /**
+ * Severity, на которых построен ратчет: именно они блокируют релиз
+ * (см. docs/security/README.md — «ратчет опирается только на critical/high,
+ * а moderate/low в записи — информационные»).
+ */
+const BLOCKING_SEVERITIES = new Set(['critical', 'high']);
+
+/**
+ * Прямые runtime-зависимости пакетов воркспейса: `dependencies` (уезжают в релиз).
+ * `devDependencies` (инструментарий сборки) в поставляемые артефакты не входят,
+ * поэтому прямыми не считаются.
+ *
+ * Источник — `pnpm list -r --depth 0 --json` (тот же pnpm, что и в `pnpm audit`):
+ * список пакетов воркспейса и их прямые зависимости — без угадывания путей.
+ * `projectsByPrefix` сопоставляет префикс импортера из отчёта `pnpm audit`
+ * (`packages__backend`) с пакетом воркспейса (`packages/backend`): префиксы берутся
+ * из самого отчёта, кодирование пути в отчёте проверяется на факте (ключ есть в `byPrefix`).
+ */
+function readWorkspaceDeps() {
+  const res = sh('pnpm', ['list', '-r', '--depth', '0', '--json']);
+  if (res.code !== 0 || !res.stdout.trim().startsWith('[')) {
+    return { error: `pnpm list -r --depth 0 --json не отдал список пакетов воркспейса (exit ${res.code})${res.error ? `: ${res.error}` : ''}` };
+  }
+  let projects;
+  try {
+    projects = JSON.parse(res.stdout);
+  } catch (err) {
+    return { error: `pnpm list -r --depth 0 --json не разобран: ${err.message}` };
+  }
+  const runtime = new Set();
+  const projectsByPrefix = new Map();
+  for (const p of projects ?? []) {
+    const dir = relative(ROOT, p.path ?? '') || '.';
+    const runtimeDeps = new Set(Object.keys(p.dependencies ?? {}));
+    for (const d of runtimeDeps) runtime.add(d);
+    // pnpm печатает импортер в отчёте audit, заменяя '/' на '__' ('packages/backend' → 'packages__backend').
+    projectsByPrefix.set(dir.split('/').join('__'), { runtimeDeps });
+  }
+  return { runtime, projectsByPrefix };
+}
+
+/**
+ * Прямая зависимость — модуль, стоящий в пути `pnpm audit` сразу за импортером:
+ * `<импортер>><зависимость>`. Два и более `>` — транзитивная зависимость.
+ *
+ * Прежняя проверка искала пути БЕЗ разделителя `>`; в отчёте pnpm audit таких нет
+ * (любой путь начинается с импортера и содержит хотя бы один `>`), поэтому список
+ * прямых уязвимых модулей всегда был пустым, а `failOnDirect` не мог сработать никогда.
+ *
+ * Прямой считается runtime-зависимость пакета воркспейса: dev-зависимости (инструментарий
+ * сборки) в поставляемые артефакты не входят и релиз не блокируют.
+ */
+function isDirectDependency(path, deps) {
+  const parts = String(path).split('>');
+  if (parts.length !== 2) return false;
+  const [importer, moduleName] = parts;
+  if (!importer || !moduleName) return false;
+  const project = deps.projectsByPrefix.get(importer);
+  if (project) return project.runtimeDeps.has(moduleName);
+  // Импортер не сопоставлен с пакетом воркспейса (сменился формат префиксов в отчёте) —
+  // сверяемся с объединением прямых зависимостей всех пакетов воркспейса.
+  return deps.runtime.has(moduleName);
+}
+
+/**
  * Ратчет уязвимостей зависимостей («не хуже зафиксированного пола»).
  * Пол и правила — в `policy.dependencies`; разбор старых уязвимостей ведётся записями
  * аудита (`exceptions[]` с `dueRelease`), а не молчаливым `continue-on-error`.
@@ -357,7 +421,35 @@ function checkDependencies(policy) {
   }
   const counts = data.metadata?.vulnerabilities ?? {};
   const advisories = Object.values(data.advisories ?? {});
-  const direct = advisories.filter((a) => (a.findings ?? []).some((f) => (f.paths ?? []).some((p) => !String(p).includes('>'))));
+  const deps = readWorkspaceDeps();
+  if (deps.error) {
+    return {
+      status: 'fail',
+      detail: deps.error,
+      command,
+      remedy:
+        'установить зависимости (pnpm install --frozen-lockfile) — без списка прямых зависимостей ' +
+        'гейт не может отличить уязвимость в прямой зависимости от транзитивной',
+    };
+  }
+  // Прямые уязвимости — те, что блокируют релиз (critical/high) и сидят в ПРЯМОЙ
+  // runtime-зависимости пакета воркспейса.
+  const direct = advisories.filter(
+    (a) =>
+      BLOCKING_SEVERITIES.has(a.severity) &&
+      (a.findings ?? []).some((f) => (f.paths ?? []).some((p) => isDirectDependency(p, deps))),
+  );
+  // Префиксы импортеров выводятся из самого отчёта — контроль, что формат путей не поехал.
+  const importerPrefixes = new Set();
+  for (const a of advisories) {
+    for (const f of a.findings ?? []) {
+      for (const p of f.paths ?? []) {
+        const first = String(p).split('>')[0];
+        if (first) importerPrefixes.add(first);
+      }
+    }
+  }
+  const unmappedPrefixes = [...importerPrefixes].filter((prefix) => !deps.projectsByPrefix.has(prefix));
   const critical = counts.critical ?? 0;
   const high = counts.high ?? 0;
   const newCritical = critical - (baseline.critical ?? 0);
@@ -371,7 +463,8 @@ function checkDependencies(policy) {
   }
   const detail =
     `профиль ратчета «${profileName}»: critical ${critical}/${baseline.critical}, high ${high}/${baseline.high}, ` +
-    `moderate ${counts.moderate ?? 0}, low ${counts.low ?? 0} (прямых уязвимых модулей: ${direct.length})`;
+    `moderate ${counts.moderate ?? 0}, low ${counts.low ?? 0} (прямых уязвимых модулей: ${direct.length}; ` +
+    `прямые = critical/high в runtime-зависимостях воркспейса)`;
   if (problems.length) {
     return {
       status: 'fail',
@@ -386,13 +479,20 @@ function checkDependencies(policy) {
     status: 'pass',
     detail,
     command,
-    warnings:
-      critical + high > 0
+    warnings: [
+      ...(critical + high > 0
         ? [
-            `принято по записи аудита: ${critical} critical + ${high} high (все транзитивные; разбор — в exceptions[])`,
+            `принято по записи аудита: ${critical} critical + ${high} high (все вне прямых runtime-зависимостей; разбор — в exceptions[])`,
             `профиль «${profileName}»: ${profile.note ?? '—'}`,
           ]
-        : [],
+        : []),
+      ...(unmappedPrefixes.length
+        ? [
+            `в отчёте pnpm audit есть префиксы импортеров, не сопоставленные с пакетами воркспейса: ${unmappedPrefixes.join(', ')} — ` +
+            'прямые зависимости для них определены по объединению прямых зависимостей всех пакетов',
+          ]
+        : []),
+    ],
   };
 }
 

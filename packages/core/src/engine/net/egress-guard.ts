@@ -13,6 +13,11 @@
  * Потребители: `engine/net/fetch.ts`, `engine/tools/web.ts`,
  * `engine/webhooks/*`, `engine/skills/remote.ts`, `engine/context/instructions.ts`,
  * backend `routes/providers.ts`.
+ *
+ * Список заблокированных диапазонов — **один на весь проект**:
+ * `DEFAULT_MCP_PRIVATE_CIDRS` (`@itphx/synth-shared`); он же — дефолт
+ * `egress.tools`/`egress.webhooks`/`mcp.networkPolicy`. Локальных копий списка
+ * в модуле нет: иначе политика и guard разойдутся.
  */
 
 import { isIP } from 'node:net';
@@ -41,32 +46,10 @@ import { shouldProxyUrl } from '../../security/proxy-state.js';
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 /**
- * Запрещённые IPv4-диапазоны по умолчанию (SSRF): loopback/private/link-local/
- * CGNAT/спец. Экспорт — для обратной совместимости/тестов.
- */
-const BLOCKED_V4_CIDRS: readonly string[] = [
-  '0.0.0.0/8',
-  '10.0.0.0/8',
-  '100.64.0.0/10',
-  '127.0.0.0/8',
-  '169.254.0.0/16',
-  '172.16.0.0/12',
-  '192.168.0.0/16',
-];
-
-/** Запрещённые IPv6-диапазоны: unspecified, loopback, ULA, link-local, multicast. */
-const BLOCKED_V6_CIDRS: readonly string[] = [
-  '::/128',
-  '::1/128',
-  'fc00::/7',
-  'fe80::/10',
-  'ff00::/8',
-];
-
-/**
- * Встроенный дефолт политики «запрет приватных/локальных адресов»
- * (deny по `DEFAULT_MCP_PRIVATE_CIDRS`). Потребители **не** передают её
- * «вслепую»: источник истины — resolved-политика (`egress-policy.ts`).
+ * Встроенный дефолт политики «запрет служебных/приватных адресов»
+ * (deny по `DEFAULT_MCP_PRIVATE_CIDRS` — общему каноническому списку из
+ * `@itphx/synth-shared`). Потребители **не** передают её «вслепую»: источник
+ * истины — resolved-политика (`egress-policy.ts`).
  */
 export const PRIVATE_EGRESS_POLICY: EgressPolicy = {
   mode: 'deny',
@@ -78,17 +61,21 @@ export const PRIVATE_EGRESS_POLICY: EgressPolicy = {
 export const DEFAULT_EGRESS_MAX_HOPS = 5;
 
 /**
- * `true`, если IP-литерал входит в приватный/локальный диапазон.
- * Без политики — прежнее поведение (встроенный список); с политикой —
- * учитываются `exceptions` и список политики (deny/allow).
+ * `true`, если IP-литерал входит в запрещённый диапазон.
+ *
+ * **Единый источник истины** — `DEFAULT_MCP_PRIVATE_CIDRS` (`@itphx/synth-shared`):
+ * тот же список, что и дефолты `egress.tools`/`egress.webhooks`/`mcp.networkPolicy`.
+ * Локальных копий списка в модуле нет.
+ *
+ * - без политики — встроенный канонический список (fallback; в рантайме политика
+ *   всегда передаётся, `checkEgressUrl` при `policy === undefined` fail-closed);
+ * - с политикой — учитываются `exceptions` и список политики (deny/allow).
  */
 export function isBlockedIp(ip: string, policy?: EgressPolicy): boolean {
   const normalized = normalizeIp(ip);
   if (normalized === null) return false; // не IP-литерал — прежнее поведение
   if (!policy) {
-    return isIP(normalized) === 4
-      ? BLOCKED_V4_CIDRS.some((cidr) => isIpInCidr(normalized, cidr))
-      : BLOCKED_V6_CIDRS.some((cidr) => isIpInCidr(normalized, cidr));
+    return DEFAULT_MCP_PRIVATE_CIDRS.some((cidr) => isIpInCidr(normalized, cidr));
   }
   if (policy.exceptions?.some((rule) => isIpInCidr(normalized, rule))) return false;
   if (policy.mode === 'deny') {
@@ -100,9 +87,10 @@ export function isBlockedIp(ip: string, policy?: EgressPolicy): boolean {
 
 /**
  * `true`, если hostname запрещён.
- * Без политики — прежнее поведение (localhost/*.local/*.internal/приватный IP);
- * с политикой — exceptions проверяются первыми, локальные имена запрещены
- * (если не разрешены exception), IP-литералы — по списку политики.
+ * Без политики — встроенный канонический список (`localhost`/`*.local`/
+ * `*.internal` + `DEFAULT_MCP_PRIVATE_CIDRS`); с политикой — exceptions
+ * проверяются первыми, локальные имена запрещены (если не разрешены
+ * exception), IP-литералы — по списку политики.
  */
 export function isBlockedHost(rawHost: string, policy?: EgressPolicy): boolean {
   const host = rawHost.trim().toLowerCase().replace(/\.$/, '');

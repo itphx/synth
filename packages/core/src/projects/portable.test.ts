@@ -1,6 +1,6 @@
 // ADR-091 (этап 2): тесты портативного экспорта/импорта проекта на tmp-каталогах.
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -11,7 +11,13 @@ import { createFileStorage } from '../storage/storage-context.js';
 import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { readFileFromTarGz, readTarGz, writeTarGz, type ArchiveSource } from '../maintenance/archive.js';
+import { buildBombArchive } from '../test-helpers/archive-bomb.js';
 import { ProjectPortableError, exportProject, importProject } from './portable.js';
+
+/** Реальный секрет в карте обфускации сессии (плейсхолдер → значение). */
+const REAL_SECRET = 'sk-live-DO-NOT-LEAK';
+const PLACEHOLDER = '⟦SYNTH_SECRET_1⟧';
+
 
 /** Сообщение для фикстуры. */
 function _msg(id: string, content: string, refSessionId?: string): Message {
@@ -70,6 +76,28 @@ async function makeProject(dataDir: string, name: string): Promise<Fixture> {
   const manager = new SessionManager(storage.sessions, { projectStore: storage.projects });
   const s1 = await manager.createSession({ title: 'Сессия 1', icon: 'chat', color: 'a1', projectId: project.id });
   s1.messages = [_msg('m1', 'привет')];
+  // Карта обфускации LLM Gateway + раскрытые значения плейсхолдера в
+  // metadata сообщения (ADR-036) — секреты, которые не должны уезжать в
+  // портативный архив проекта по умолчанию (security-фикс 0.11.3).
+  s1.obfuscationMap = { [PLACEHOLDER]: REAL_SECRET };
+  s1.messages[0]!.metadata = { secrets: { [PLACEHOLDER]: REAL_SECRET } };
+  // Чекпоинт — снимок истории с ТЕМ ЖЕ секретом в metadata сообщения
+  // (регресс: раньше `stripSessionSecrets` чистил только `messages[]`, и карта
+  // с реальными значениями плейсхолдеров уезжала из инстанса в архиве проекта
+  // вместе с `checkpoints[].messages[]`).
+  s1.checkpoints = [
+    {
+      id: 'cp1',
+      sessionId: s1.id,
+      messages: [
+        {
+          ..._msg('cm1', 'снимок истории'),
+          metadata: { secrets: { [PLACEHOLDER]: REAL_SECRET } },
+        },
+      ],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
+  ];
   s1.todos = [{ id: 't1', content: 'сделать', status: 'pending', priority: 'high' }];
   s1.status = { blocked: 'processor-1', blockedAt: '2026-01-01T00:00:00.000Z', cancelRequested: true };
   await manager.saveSession(s1);
@@ -113,7 +141,10 @@ async function craftArchive(
 }
 
 /** Манифест экспорта проекта для подделки. */
-function craftManifest(entries: Array<{ path: string; size: number; sha256: string }>): Buffer {
+function craftManifest(
+  entries: Array<{ path: string; size: number; sha256: string }>,
+  overrides: Partial<{ withWorkspace: boolean; sessions: number }> = {},
+): Buffer {
   return Buffer.from(
     JSON.stringify({
       tool: 'synth-project-export',
@@ -124,9 +155,26 @@ function craftManifest(entries: Array<{ path: string; size: number; sha256: stri
       sessions: 0,
       withWorkspace: false,
       entries,
+      ...overrides,
     }),
     'utf-8',
   );
+}
+
+/** Читает все файлы архива (путь → содержимое). */
+async function readArchiveFiles(archive: string): Promise<Map<string, string>> {
+  const files = new Map<string, string>();
+  await readTarGz(archive, (entry) => {
+    if (entry.type === 'file') files.set(entry.path, entry.content.toString('utf-8'));
+  });
+  return files;
+}
+
+/** Тексты payload'ов сессий из архива. */
+function sessionPayloads(files: Map<string, string>): string[] {
+  return [...files.entries()]
+    .filter(([path]) => path.startsWith('sessions/') && path.endsWith('.json'))
+    .map(([, content]) => content);
 }
 
 describe('portable export/import проекта (ADR-091)', () => {
@@ -282,6 +330,48 @@ describe('portable export/import проекта (ADR-091)', () => {
     expect(['invalid-archive', 'checksum-mismatch']).toContain((error as ProjectPortableError).code);
   });
 
+  it('archive-«бомба»: заявленный объём записи превышает лимит → invalid-archive, ничего не создано', async () => {
+    // Заголовок записи обещает 1 ГиБ, а в архиве — 8 байт: разбор обязан
+    // оборваться на заголовке, не распаковывая содержимое.
+    const bomb = join(tmpDir, 'bomb.synth-project.tar.gz');
+    await writeFile(bomb, buildBombArchive(1024 * 1024 * 1024));
+
+    const dst = join(tmpDir, 'bomb-dst');
+    const error = await importProject({ dataDir: dst, archive: bomb, yes: true }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ProjectPortableError);
+    expect((error as ProjectPortableError).code).toBe('invalid-archive');
+    expect((error as ProjectPortableError).message).toMatch(/лимиты импорта/);
+
+    const dstStorage = createFileStorage({ dataDir: dst });
+    expect(await dstStorage.projects.list()).toHaveLength(0);
+    expect(await dstStorage.sessions.list()).toHaveLength(0);
+  });
+
+  it('лимиты импорта переопределяются через options (fail-closed по умолчанию)', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+    const exported = await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir });
+
+    // Суммарный объём меньше реального архива → отказ.
+    const tooSmall = await importProject({
+      dataDir: join(tmpDir, 'limit-dst'),
+      archive: exported.path,
+      yes: true,
+      limits: { maxTotalBytes: 16 },
+    }).catch((err: unknown) => err);
+    expect(tooSmall).toBeInstanceOf(ProjectPortableError);
+    expect((tooSmall as ProjectPortableError).code).toBe('invalid-archive');
+    expect((tooSmall as ProjectPortableError).message).toMatch(/лимиты импорта/);
+
+    // С теми же лимитами, но с запасом — импорт проходит (лимит не мешает).
+    const ok = await importProject({
+      dataDir: join(tmpDir, 'limit-ok-dst'),
+      archive: exported.path,
+      yes: true,
+      limits: { maxTotalBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024 },
+    });
+    expect(ok.sessionsImported).toBeGreaterThan(0);
+  });
+
   it('sha256 в манифесте не совпадает → checksum-mismatch', async () => {
     const archive = await craftArchive(
       tmpDir,
@@ -332,6 +422,97 @@ describe('portable export/import проекта (ADR-091)', () => {
     expect(files.some((f) => f.path === 'secrets' || f.path.startsWith('secrets/'))).toBe(false);
     expect(files.some((f) => f.path === 'master.key' || f.path.endsWith('/master.key'))).toBe(false);
     expect(files.some((f) => f.content.includes('TOPSECRETVALUE'))).toBe(false);
+  });
+
+  it('security-фикс 0.11.3: по умолчанию карта обфускации и metadata.secrets вырезаны из payload сессий', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+
+    const exported = await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir });
+    const files = await readArchiveFiles(exported.path);
+    const payloads = sessionPayloads(files);
+
+    expect(payloads.length).toBe(2);
+    for (const payload of payloads) {
+      // Ни camelCase (переносимый payload), ни snake_case (файловое хранилище).
+      expect(payload).not.toContain('obfuscationMap');
+      expect(payload).not.toContain('obfuscation_map');
+      // Реальные значения плейсхолдеров в metadata сообщения.
+      expect(payload).not.toContain(REAL_SECRET);
+      expect(payload).not.toContain('"secrets"');
+    }
+  });
+
+  it('регресс: карта обфускации и metadata.secrets вырезаны и из checkpoints[].messages[]', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+
+    const exported = await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir });
+    const files = await readArchiveFiles(exported.path);
+
+    const sessionFile = [...files.entries()]
+      .find(([path]) => path === `sessions/${fixture.sessionIds[0]}.json`);
+    expect(sessionFile).toBeDefined();
+    const payload = JSON.parse(sessionFile![1]) as {
+      obfuscationMap?: unknown;
+      checkpoints?: Array<{ messages?: Array<{ metadata?: Record<string, unknown> }> }>;
+    };
+    // Карта обфускации убрана из payload сессии.
+    expect(payload.obfuscationMap).toBeUndefined();
+    // Секрет в снимке истории (чекпоинте) убран — а сам чекпоинт сохранён.
+    expect(payload.checkpoints).toHaveLength(1);
+    expect(payload.checkpoints![0]!.messages).toHaveLength(1);
+    expect(payload.checkpoints![0]!.messages![0]!.metadata?.secrets).toBeUndefined();
+    expect(sessionFile![1]).not.toContain(REAL_SECRET);
+  });
+
+  it('security-фикс 0.11.3: --with-secrets возвращает карту обфускации; факт — в аудите export.created', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+    const audit = new MemoryMaintenanceAuditRepository();
+
+    const exported = await exportProject({
+      dataDir: src,
+      projectId: fixture.projectId,
+      out: tmpDir,
+      withSecrets: true,
+      audit,
+      actor: 'cli',
+    });
+
+    const files = await readArchiveFiles(exported.path);
+    const payloads = sessionPayloads(files);
+    expect(payloads.some((p) => p.includes(REAL_SECRET))).toBe(true);
+    expect(payloads.some((p) => p.includes('obfuscationMap'))).toBe(true);
+
+    const created = (await audit.list()).find((e) => e.op === 'export.created');
+    expect(created?.details?.withSecrets).toBe(true);
+  });
+
+  it('security-фикс 0.11.3: в аудите export.created без opt-in — withSecrets=false', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+    const audit = new MemoryMaintenanceAuditRepository();
+
+    await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir, audit, actor: 'cli' });
+
+    const created = (await audit.list()).find((e) => e.op === 'export.created');
+    expect(created?.details?.withSecrets).toBe(false);
+  });
+
+  it('импорт архива с картой обфускации (привилегированный opt-in) — карта восстанавливается', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+    const exported = await exportProject({
+      dataDir: src,
+      projectId: fixture.projectId,
+      out: tmpDir,
+      withSecrets: true,
+    });
+
+    const dst = join(tmpDir, 'secrets-dst');
+    await mkdir(dst, { recursive: true });
+    const result = await importProject({ dataDir: dst, archive: exported.path, yes: true });
+
+    const sessions = await new SessionManager(createFileStorage({ dataDir: dst }).sessions)
+      .listSessions({ projectId: result.projectId });
+    const withMap = sessions.find((s) => s.obfuscationMap);
+    expect(withMap?.obfuscationMap?.[PLACEHOLDER]).toBe(REAL_SECRET);
   });
 
   it('сессии с origin remote не экспортируются (счётчик/предупреждение)', async () => {
@@ -399,6 +580,102 @@ describe('portable export/import проекта (ADR-091)', () => {
     const dst2Project = await dst2Storage.projects.load(result2.projectId);
     expect(dst2Project?.workspace).toBeUndefined();
     await expect(stat(join(dst2, 'workspaces'))).rejects.toThrow();
+  });
+
+  it('security-фикс 0.11.3 (R3): запись workspace через симлинк в каталоге отклоняется, файл вне workspace не создан', async () => {
+    const dst = join(tmpDir, 'symlink-dir-dst');
+    await mkdir(dst, { recursive: true });
+    const dstStorage = createFileStorage({ dataDir: dst });
+    const target = dstStorage.projects.create('Target', 'local');
+    target.workspace = 'ws-target';
+    await dstStorage.projects.save(target);
+
+    // Каталог вне workspace + симлинк на него внутри workspace.
+    const outsideDir = join(tmpDir, 'outside-dir');
+    await mkdir(outsideDir, { recursive: true });
+    const wsDir = join(dst, 'workspaces', 'ws-target');
+    await mkdir(wsDir, { recursive: true });
+    await symlink(outsideDir, join(wsDir, 'escape'));
+
+    const payload = 'PWNED';
+    const archive = await craftArchive(
+      tmpDir,
+      [
+        { path: 'project.json', content: '{}' },
+        { path: 'workspace/escape/pwned.txt', content: payload },
+      ],
+      craftManifest(
+        [
+          { path: 'project.json', size: 2, sha256: createHash('sha256').update('{}').digest('hex') },
+          {
+            path: 'workspace/escape/pwned.txt',
+            size: payload.length,
+            sha256: createHash('sha256').update(payload).digest('hex'),
+          },
+        ],
+        { withWorkspace: true },
+      ),
+    );
+
+    const error = await importProject({
+      dataDir: dst,
+      archive,
+      mergeInto: target.id,
+      withWorkspace: true,
+      yes: true,
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(ProjectPortableError);
+    expect((error as ProjectPortableError).code).toBe('invalid-archive');
+    // Файл ВНЕ workspace не создан.
+    await expect(stat(join(outsideDir, 'pwned.txt'))).rejects.toThrow();
+  });
+
+  it('security-фикс 0.11.3 (R3): симлинк в качестве финальной цели отклоняется', async () => {
+    const dst = join(tmpDir, 'symlink-file-dst');
+    await mkdir(dst, { recursive: true });
+    const dstStorage = createFileStorage({ dataDir: dst });
+    const target = dstStorage.projects.create('Target', 'local');
+    target.workspace = 'ws-target';
+    await dstStorage.projects.save(target);
+
+    const outsideDir = join(tmpDir, 'outside-file');
+    await mkdir(outsideDir, { recursive: true });
+    const wsDir = join(dst, 'workspaces', 'ws-target');
+    await mkdir(wsDir, { recursive: true });
+    await symlink(join(outsideDir, 'target.txt'), join(wsDir, 'link.txt'));
+
+    const payload = 'PWNED';
+    const archive = await craftArchive(
+      tmpDir,
+      [
+        { path: 'project.json', content: '{}' },
+        { path: 'workspace/link.txt', content: payload },
+      ],
+      craftManifest(
+        [
+          { path: 'project.json', size: 2, sha256: createHash('sha256').update('{}').digest('hex') },
+          {
+            path: 'workspace/link.txt',
+            size: payload.length,
+            sha256: createHash('sha256').update(payload).digest('hex'),
+          },
+        ],
+        { withWorkspace: true },
+      ),
+    );
+
+    const error = await importProject({
+      dataDir: dst,
+      archive,
+      mergeInto: target.id,
+      withWorkspace: true,
+      yes: true,
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(ProjectPortableError);
+    expect((error as ProjectPortableError).code).toBe('invalid-archive');
+    await expect(stat(join(outsideDir, 'target.txt'))).rejects.toThrow();
   });
 
   it('конфликт имён: авто-имя получает суффикс, явное --name → project-name-conflict', async () => {

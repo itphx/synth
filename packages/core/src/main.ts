@@ -550,6 +550,10 @@ projectCmd
   .argument('<projectId>', 'ID локального проекта')
   .option('--out <path>', 'путь к архиву или каталогу (по умолчанию — текущий каталог)')
   .option('--with-workspace', 'включить рабочий каталог проекта (workspace/)')
+  .option(
+    '--with-secrets',
+    'включить секреты сессий (карта обфускации LLM Gateway) — архив становится секретом',
+  )
   .option('--config <path>', 'путь к config.yaml')
   .option('--data-dir <path>', 'каталог данных')
   .option('--home <path>', 'локальный home-каталог (config/data/profiles/credentials)')
@@ -567,6 +571,9 @@ projectCmd
         projectId,
         out: options.out as string | undefined,
         withWorkspace: !!options.withWorkspace,
+        // security-фикс 0.11.3: секреты сессий (карта обфускации) — только явным
+        // opt-in; факт фиксируется в аудите `export.created`.
+        withSecrets: !!options.withSecrets,
         workspacesRoot: options.dataDir ? join(dataDir, 'workspaces') : resolveWorkspacesRoot(synth, undefined, home),
         audit: storage.maintenanceAudit,
         storage,
@@ -579,6 +586,7 @@ projectCmd
       console.log(`  записей: ${result.entries}`);
       console.log(`  размер: ${result.bytes} Б`);
       console.log(`  workspace: ${result.withWorkspace ? 'да' : 'нет'}`);
+      console.log(`  секреты сессий: ${options.withSecrets ? 'да' : 'нет'}`);
     } catch (err) {
       console.error(`Ошибка экспорта: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);

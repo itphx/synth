@@ -54,6 +54,43 @@ export class ArchivePathError extends Error {
   }
 }
 
+/**
+ * Превышен лимит разбора архива (число записей / размер одной записи /
+ * суммарный распакованный объём) — защита от archive-бомб: fail-closed, разбор
+ * обрывается **до** буферизации очередной записи.
+ */
+export class ArchiveLimitError extends Error {
+  /** Какая именно граница превышена. */
+  readonly limit: 'entries' | 'entry-size' | 'total-size';
+  /** Значение границы (байты/штуки). */
+  readonly limitValue: number;
+  /** Фактическое значение (что получилось). */
+  readonly actual: number;
+
+  constructor(limit: 'entries' | 'entry-size' | 'total-size', limitValue: number, actual: number) {
+    super(`Превышен лимит архива (${limit}): ${actual} > ${limitValue}`);
+    this.name = 'ArchiveLimitError';
+    this.limit = limit;
+    this.limitValue = limitValue;
+    this.actual = actual;
+  }
+}
+
+/**
+ * Лимиты разбора архива (fail-closed). Проверяются **в момент чтения**:
+ * содержимое записи буферизуется целиком, поэтому лимит одной записи
+ * проверяется по заголовку ДО чтения данных, а суммарный — по сумме размеров
+ * заголовков (объявленный размер tar совпадает с фактическим).
+ */
+export interface ReadTarGzOptions {
+  /** Максимум записей в архиве (файлы + каталоги). */
+  maxEntries?: number;
+  /** Максимум размера одной записи (байты). */
+  maxEntryBytes?: number;
+  /** Максимум суммарного распакованного объёма (байты). */
+  maxTotalBytes?: number;
+}
+
 /** Дополнительные параметры записи архива. */
 export interface WriteTarGzExtra {
   /** Колбэк на каждую записанную исходную запись (файл/каталог). */
@@ -401,11 +438,13 @@ export interface ReadTarGzEntry {
 /**
  * Потоково разбирает tar.gz; `onEntry` вызывается для файлов и каталогов.
  * Симлинки/hardlink и прочие типы пропускаются. Небезопасный путь →
- * `ArchivePathError`.
+ * `ArchivePathError`; превышение лимитов (`options`) → `ArchiveLimitError`
+ * (проверка — по заголовку записи, до буферизации её содержимого).
  */
 export async function readTarGz(
   archivePath: string,
   onEntry: (entry: ReadTarGzEntry) => Promise<void> | void,
+  options: ReadTarGzOptions = {},
 ): Promise<void> {
   const source = createReadStream(archivePath);
   const gunzip = createGunzip();
@@ -415,12 +454,30 @@ export async function readTarGz(
   gunzip.on('error', () => {});
   source.pipe(gunzip);
   const reader = new BlockReader(gunzip);
+  const maxEntries = options.maxEntries;
+  const maxEntryBytes = options.maxEntryBytes;
+  const maxTotalBytes = options.maxTotalBytes;
+  let entries = 0;
+  let totalBytes = 0;
 
   try {
     for (;;) {
       const block = await reader.readExact(BLOCK_SIZE);
       if (!block || _isZeroBlock(block)) break;
       const header = _parseHeader(block);
+
+      // Лимиты — ДО чтения содержимого записи (содержимое буферизуется целиком).
+      entries += 1;
+      if (maxEntries !== undefined && entries > maxEntries) {
+        throw new ArchiveLimitError('entries', maxEntries, entries);
+      }
+      if (maxEntryBytes !== undefined && header.size > maxEntryBytes) {
+        throw new ArchiveLimitError('entry-size', maxEntryBytes, header.size);
+      }
+      totalBytes += header.size;
+      if (maxTotalBytes !== undefined && totalBytes > maxTotalBytes) {
+        throw new ArchiveLimitError('total-size', maxTotalBytes, totalBytes);
+      }
 
       let content: Buffer = EMPTY;
       const padding = _padSize(header.size);
@@ -451,10 +508,18 @@ export async function listTarGz(
 }
 
 /** Читает один файл из архива (для манифеста); нет файла → `null`. */
-export async function readFileFromTarGz(archivePath: string, path: string): Promise<Buffer | null> {
+export async function readFileFromTarGz(
+  archivePath: string,
+  path: string,
+  options: ReadTarGzOptions = {},
+): Promise<Buffer | null> {
   let found: Buffer | null = null;
-  await readTarGz(archivePath, (entry) => {
-    if (found === null && entry.type === 'file' && entry.path === path) found = entry.content;
-  });
+  await readTarGz(
+    archivePath,
+    (entry) => {
+      if (found === null && entry.type === 'file' && entry.path === path) found = entry.content;
+    },
+    options,
+  );
   return found;
 }

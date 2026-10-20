@@ -45,6 +45,10 @@ const PLATFORMS = {
 
 const ALL_PLATFORMS = ['linux-x64', 'darwin-x64', 'darwin-arm64', 'win-x64'];
 
+/** Имя внутреннего файла сумм бандла (совпадает у производителя и потребителей:
+ *  scripts/offline/install.sh, install.ps1, smoke-test.sh). */
+const INNER_SUMS_NAME = 'files.sha256';
+
 const USAGE = `offline-bundle.mjs — offline-дистрибутивы Synth (portable)
 
 Использование:
@@ -728,6 +732,40 @@ function dirStats(root) {
   return { files, bytes };
 }
 
+/**
+ * Внутренний файл сумм бандла — sha256 КАЖДОГО файла (рекурсивно).
+ *
+ * Формат стандартный (как у `sha256sum`): `<sha256>  <относительный путь>`,
+ * поэтому проверяется и `sha256sum -c files.sha256`, и `shasum -a 256 -c files.sha256`.
+ * Пути — со слэшем `/` (независимо от ОС сборки).
+ *
+ * Исключения: сам `files.sha256` и `manifest.json` (манифест пишется позже и
+ * содержит sha256 files.sha256 — иначе получился бы цикл).
+ *
+ * Зачем: `manifest.json` описывает верхний уровень (sha256 только для файлов
+ * верхнего уровня, для каталогов — счётчики), а установщик обязан проверять
+ * целостность ВСЕГО бандла, а не только установщиков.
+ */
+async function writeInnerChecksums(stage) {
+  const entries = walk(stage).sort((a, b) => a.rel.localeCompare(b.rel));
+  const lines = [];
+  for (const entry of entries) {
+    if (entry.type !== 'file') continue;
+    const rel = entry.rel.split(path.sep).join('/');
+    if (rel === INNER_SUMS_NAME || rel === 'manifest.json') continue;
+    lines.push(`${await sha256File(path.join(stage, entry.rel))}  ${rel}`);
+  }
+  const file = path.join(stage, INNER_SUMS_NAME);
+  fs.writeFileSync(file, `${lines.join('\n')}\n`, 'utf8');
+  try {
+    fs.chmodSync(file, 0o644);
+  } catch {
+    /* Windows */
+  }
+  log(`files.sha256: ${lines.length} файл(ов)`);
+  return file;
+}
+
 async function writeManifest(stage, meta) {
   const entries = fs.readdirSync(stage, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
   const files = [];
@@ -767,6 +805,7 @@ async function writeManifest(stage, meta) {
     files,
     notes: [
       'manifest.json не входит в собственный список файлов; SHA256SUMS лежит рядом с архивом.',
+      'files.sha256 — sha256 каждого файла бандла (без manifest.json и самого files.sha256); проверяется sha256sum -c.',
       'Установка: см. install.sh (Linux/macOS) или install.ps1 (Windows).',
     ],
   };
@@ -952,6 +991,8 @@ async function main() {
       step('проверка симлинков и manifest');
       assertNoSymlinks(stage);
       normalizePermissions(stage);
+      // files.sha256 — до манифеста: манифест хранит sha256 самого files.sha256.
+      await writeInnerChecksums(stage);
       const manifest = await writeManifest(stage, {
         bundleName,
         synthVersion: version,

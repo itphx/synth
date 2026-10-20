@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   buildPostgresSslOptions,
@@ -21,7 +21,7 @@ import {
   writeTlsSecretFile,
 } from './tls-runtime.js';
 
-const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
+const FIX_DIR = fileURLToPath(new URL('../../../core/src/security/__fixtures__/', import.meta.url));
 const CA_PEM = await readFile(join(FIX_DIR, 'tls-test-selfsigned.pem'), 'utf-8');
 const CA_KEY = await readFile(join(FIX_DIR, 'tls-test-selfsigned.key'), 'utf-8');
 const CLIENT_CERT = await readFile(join(FIX_DIR, 'tls-test-proxy-client.pem'), 'utf-8');

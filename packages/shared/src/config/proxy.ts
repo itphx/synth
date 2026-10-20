@@ -1520,8 +1520,9 @@ function resolveProxyRules(
  *
  * Схема (`proxyConfigSchema`) + полный резолв (URL/схемы, `noProxy`, только
  * `auth.type=basic`, `tls` caFile↔caPem, cert+key, пароль из env/файла).
- * Дополнительно **запрещает пароль в userinfo URL** — в `settings.json`/PG
- * секреты не хранятся (инвариант 13), пароль задаётся отдельным endpoint'ом.
+ * Дополнительно **запрещает пароль в userinfo URL** и **пароль в теле запроса**
+ * (`auth.password`) — в `settings.json`/PG секреты не хранятся (инвариант 13),
+ * пароль задаётся отдельным endpoint'ом.
  * `SYNTH_PROXY_*`/стандартные env намеренно игнорируются, чтобы валидировать
  * именно сохраняемый объект (пароль из `SYNTH_PROXY_PASSWORD`/файла остаётся).
  */
@@ -1537,6 +1538,40 @@ export function validateProxyConfig(
     throw new ProxyConfigError(`proxy.${path}: ${issue?.message ?? 'невалидная структура'}`);
   }
   const config = parsed.data;
+
+  /**
+   * Пароль в теле запроса (инвариант 13): пароль прокси задаётся только env или
+   * файлом в `{dataDir}/secrets/`. Поле `auth.password` НЕ входит в контракт
+   * `proxy.auth` (`proxyAuthConfigSchema`), поэтому Zod его молча вырезает — клиент
+   * получил бы «200 OK» и решил, что пароль применён. Поэтому проверяем **сырой**
+   * вход и отвечаем явной ошибкой (fail-closed), а не полагаемся на вырезание.
+   */
+  const assertNoAuthPassword = (raw: unknown, scope: string, passwordHint: string): void => {
+    if (!raw || typeof raw !== 'object') return;
+    const auth = (raw as { auth?: unknown }).auth;
+    if (!auth || typeof auth !== 'object') return;
+    const value = (auth as { password?: unknown }).password;
+    if (value === undefined || value === null || value === '') return;
+    throw new ProxyConfigError(
+      `${scope}: пароль не хранится в настройках (инвариант 13) — задайте его через ` +
+        `${passwordHint} (в теле запроса пароль не принимается)`,
+    );
+  };
+  assertNoAuthPassword(
+    input,
+    'proxy.auth',
+    `${PROXY_PASSWORD_ENV} или {dataDir}/secrets/proxy-password`,
+  );
+  const rawProfiles = (input as { profiles?: unknown } | null | undefined)?.profiles;
+  if (rawProfiles && typeof rawProfiles === 'object' && !Array.isArray(rawProfiles)) {
+    for (const [name, profile] of Object.entries(rawProfiles as Record<string, unknown>)) {
+      const passwordHint =
+        name === 'default'
+          ? `${PROXY_PASSWORD_ENV} или {dataDir}/secrets/proxy-password`
+          : `${proxyProfilePasswordEnv(name)} или {dataDir}/secrets/proxy/${name}.password`;
+      assertNoAuthPassword(profile, `proxy.profiles.${name}.auth`, passwordHint);
+    }
+  }
 
   /** Пароль в userinfo URL — в сохраняемом объекте запрещён (инвариант 13). */
   const assertNoUrlPassword = (raw: string | undefined, scope: string, passwordEnv: string): void => {

@@ -15,6 +15,8 @@ import {
 } from './loader.js';
 import { resolveSkillRule } from '../permission/evaluator.js';
 import { missingCapabilities } from './scope.js';
+import type { FetchLike } from '../net/fetch.js';
+import type { HostResolver } from '../mcp/network-policy.js';
 import type { DiscoveredSkill, LoadedSkill, SkillCatalogOptions, SkillScanResult } from './types.js';
 
 export interface SkillServiceOptions {
@@ -30,6 +32,13 @@ export interface SkillServiceOptions {
   home?: string;
   store?: SkillRepository;
   registry?: SkillRegistry;
+  /**
+   * Подменяемый транспорт загрузки удалённых каталогов (тесты). Не задан —
+   * `egressFetch` (ADR-099: единое доверие TLS/CA), т.е. поведение прежнее.
+   */
+  fetchImpl?: FetchLike;
+  /** Инъекция DNS-резолвера SSRF-проверки удалённых каталогов (тесты). */
+  resolveHost?: HostResolver;
 }
 
 export interface SkillListOptions {
@@ -48,6 +57,8 @@ export class SkillService {
   private readonly _toolsets: Record<string, readonly string[]>;
   private readonly _urls: readonly string[];
   private readonly _cacheDir: string;
+  private readonly _fetchImpl: FetchLike | undefined;
+  private readonly _resolveHost: HostResolver | undefined;
   private _remoteDiagnostics: SkillDiagnostic[] = [];
   private _remoteRefresh: Promise<void> | null = null;
 
@@ -56,6 +67,8 @@ export class SkillService {
     this._toolsets = opts.toolsets ?? {};
     this._urls = opts.urls ?? [];
     this._cacheDir = join(opts.dataDir, 'skills-cache');
+    this._fetchImpl = opts.fetchImpl;
+    this._resolveHost = opts.resolveHost;
     this._registry = opts.registry ?? new SkillRegistry({
       // ADR-046 §9.5: встроенный skill-creator (объявлен в коде, без ассетов).
       builtin: buildBuiltinSkills({ dataDir: opts.dataDir }),
@@ -103,6 +116,8 @@ export class SkillService {
     const { diagnostics } = await refreshRemoteCatalogs({
       urls: this._urls,
       cacheDir: this._cacheDir,
+      ...(this._fetchImpl ? { fetchImpl: this._fetchImpl } : {}),
+      ...(this._resolveHost ? { resolveHost: this._resolveHost } : {}),
     });
     this._remoteDiagnostics = diagnostics;
     this.reload();

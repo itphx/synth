@@ -134,6 +134,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     { requireAuth: auth.requireAuth },
     {
       dataDir,
+      // PROP-032: экспорт/импорт проекта работают через контекст хранения
+      // инстанса (иначе — свой файловый контекст, а на `backend=postgres`
+      // проект не найден бы).
+      storage: deps.storageContext,
       getProject: (id) => projectStore.load(id),
       canRead: async (c, projectId) => {
         const user = await auth.getCurrentUser(c);
@@ -147,6 +151,12 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         const project = await projectStore.load(projectId);
         return project ? projectAccess.canEditProjectContent(c, project, user.id) : false;
       },
+      // security-фикс 0.11.3: экспорт проекта по умолчанию БЕЗ секретов сессий
+      // (карта обфускации LLM Gateway + `metadata.secrets`). Явный opt-in
+      // `?withSecrets=true` — только elevated (ADMIN/LEAD): архив проекта
+      // содержит сессии других участников, а карта обфускации — это секрет.
+      canExportSecrets: (c) =>
+        auth.isAdmin(c as never) || auth.hasRole(c as never, 'LEAD'),
       audit: maintenanceAudit,
       maxUploadBytes: config.maxUploadBytes,
       resolveOwnerId: (c) => {
@@ -231,7 +241,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
 
   // Git routes (ADR-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
   // (init/clone/register/remove/fetch) требуют прав на изменение контента
-  // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — requireAuth.
+  // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — права
+  // чтения проекта (owner/участник/LEAD/ADMIN). Проверка — граничный guard
+  // core-фабрики (ADR-089, инвариант 16): без неё любой аутентифицированный
+  // читал бы git-данные чужого проекта по его id.
   app.route('/api/v2/git', createGitRoutes(auth, projectStore, config.workspacesRoot, {
     sshKeyStore,
     authorizeProject: async (c, projectId) => {
@@ -240,6 +253,13 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       const project = await projectStore.load(projectId);
       if (!project) return false;
       return projectAccess.canEditProjectContent(c, project, user.id);
+    },
+    authorizeRead: async (c, projectId) => {
+      const user = await auth.getCurrentUser(c);
+      if (!user) return false;
+      const project = await projectStore.load(projectId);
+      if (!project) return false;
+      return projectAccess.canReadProject(c, project, user.id);
     },
   }));
 

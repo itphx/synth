@@ -24,6 +24,12 @@ export interface SettingsPanelProps {
    */
   collapsibleHeader?: boolean
   className?: string
+  /**
+   * Ссылка на тело панели — скролл-контейнер (ADR-072: единственный вертикальный
+   * скролл панели). Нужна содержимому, которому этот элемент требуется как
+   * scroll-элемент (виртуализированные списки).
+   */
+  scrollRef?: React.RefObject<HTMLElement | null>
   children: React.ReactNode
 }
 
@@ -41,7 +47,7 @@ const FOCUS_OFFSET_PX = 8
  * вложенные элементы получают `min-w-0`/`break-words`.
  *
  * Здесь же — локальное раскрытие продвинутых секций: при выключенном глобальном
- * режиме «Расширенные» в конце тела появляется кнопка «Показать дополнительные».
+ * режиме «Расширенные» в шапке появляется кнопка «Показать дополнительные».
  */
 export function SettingsPanel({
   title,
@@ -50,12 +56,23 @@ export function SettingsPanel({
   actions,
   collapsibleHeader = true,
   className,
+  scrollRef,
   children,
 }: SettingsPanelProps) {
   const { t } = useI18n()
   const { deviceType } = useDevice()
+  const isPhone = deviceType === 'phone'
   const [collapsed, setCollapsed] = React.useState(false)
   const bodyRef = React.useRef<HTMLDivElement>(null)
+
+  // Тело панели — и скролл-контейнер, и (по запросу) внешняя ссылка на него.
+  const setBodyRef = React.useCallback(
+    (el: HTMLDivElement | null) => {
+      bodyRef.current = el
+      if (scrollRef) scrollRef.current = el
+    },
+    [scrollRef],
+  )
 
   const showAdvancedGlobally = useUIStore((state) => state.settingsShowAdvanced)
   const settingsFocus = useUIStore((state) => state.settingsFocus)
@@ -68,6 +85,15 @@ export function SettingsPanel({
   }, [])
 
   const advancedVisible = showAdvancedGlobally || reveal
+  // Кнопка раскрытия продвинутых секций — в шапке панели: она должна быть
+  // видна без прокрутки к концу содержимого (внизу её хоронили таблицы).
+  const showAdvancedReveal = advancedCount > 0 && !showAdvancedGlobally
+  // Полная формулировка кнопки раскрытия. На телефоне сама кнопка компактная
+  // (иконка + счётчик), поэтому формулировка живёт в `title`/`aria-label` —
+  // доступное имя остаётся прежним.
+  const revealLabel = reveal
+    ? t('settings.advanced.hide')
+    : `${t('settings.advanced.show')} (${advancedCount})`
   const advancedValue = React.useMemo<SettingsAdvancedContextValue>(
     () => ({ visible: advancedVisible, registerAdvanced }),
     [advancedVisible, registerAdvanced],
@@ -148,9 +174,52 @@ export function SettingsPanel({
   return (
     <div className={cn('flex flex-col h-full min-h-0', className)}>
       <header className="shrink-0 mx-auto w-full max-w-3xl flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-3 min-w-0">
-          <h2 className="text-lg font-semibold text-foreground min-w-0 break-words">{title}</h2>
-          {actions && <div className="shrink-0 flex items-center gap-2">{actions}</div>}
+        <div
+          className={cn(
+            'min-w-0',
+            // Телефон: заголовок — отдельной строкой во всю ширину, действия —
+            // ниже и по правому краю. В одну строку заголовок сжимается
+            // и рвётся посреди слова («Мод / ели»).
+            isPhone ? 'flex flex-col gap-2' : 'flex items-start justify-between gap-3',
+          )}
+        >
+          <h2
+            className={cn(
+              'text-lg font-semibold text-foreground min-w-0',
+              // На телефоне перенос только по словам: слово не разрывается.
+              isPhone ? 'break-normal' : 'break-words',
+            )}
+          >
+            {title}
+          </h2>
+          {(showAdvancedReveal || actions) && (
+            <div
+              className={cn(
+                'min-w-0 flex flex-wrap items-center justify-end gap-2',
+                isPhone && 'w-full',
+              )}
+            >
+              {showAdvancedReveal && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-expanded={reveal}
+                  onClick={() => setReveal((value) => !value)}
+                  data-testid="settings-advanced-reveal"
+                  title={isPhone ? revealLabel : undefined}
+                  aria-label={isPhone ? revealLabel : undefined}
+                >
+                  <Icon name={reveal ? 'arrow-up-s' : 'arrow-down-s'} className="size-4" />
+                  {isPhone
+                    ? `(${advancedCount})`
+                    : reveal
+                      ? t('settings.advanced.hide')
+                      : `${t('settings.advanced.show')} (${advancedCount})`}
+                </Button>
+              )}
+              {actions}
+            </div>
+          )}
         </div>
         {description && (
           <div
@@ -175,7 +244,7 @@ export function SettingsPanel({
       </header>
 
       <div
-        ref={bodyRef}
+        ref={setBodyRef}
         className={cn(
           'settings-scroll-container flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain transition-[margin] duration-200 ease-out motion-reduce:transition-none',
           collapsed ? 'mt-2' : 'mt-4',
@@ -184,22 +253,6 @@ export function SettingsPanel({
         <SettingsAdvancedProvider value={advancedValue}>
           <div className={cn('space-y-4', CONTENT_WIDTH)}>
             {children}
-            {advancedCount > 0 && !showAdvancedGlobally && (
-              <div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-expanded={reveal}
-                  onClick={() => setReveal((value) => !value)}
-                  data-testid="settings-advanced-reveal"
-                >
-                  <Icon name={reveal ? 'arrow-up-s' : 'arrow-down-s'} className="size-4" />
-                  {reveal
-                    ? t('settings.advanced.hide')
-                    : `${t('settings.advanced.show')} (${advancedCount})`}
-                </Button>
-              </div>
-            )}
           </div>
         </SettingsAdvancedProvider>
       </div>

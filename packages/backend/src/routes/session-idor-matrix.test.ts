@@ -26,7 +26,17 @@
  *    Явные исключения (не «проектное» правило, задокументированы в коде):
  *    - `/:id/mcp` — владелец сессии|ADMIN (ADR-071 §2.4): настройка MCP-скоупа
  *      сессии, не проектные данные;
- *    - `/:id/secrets` — ADMIN|AUDITOR (карта обфускации).
+ *    - `/:id/secrets` — ADMIN|AUDITOR (карта обфускации);
+ *    - `/:id/export` — маршрут ПОД prefix-guard'ом (доступ к сессии решает он,
+ *      отдельного правила в обработчике нет — инвариант 16), привилегия карты
+ *      обфускации — route-level guard core (`createSessionExportGuard`):
+ *      владелец сессии|ADMIN|AUDITOR получают полный экспорт
+ *      (с картой обфускации LLM Gateway и `messages[].metadata.secrets` — тот
+ *      же набор привилегий, что у `GET /:id/secrets`); прочие ЧИТАТЕЛИ сессии
+ *      (участник проекта VIEWER/EDITOR, владелец проекта, LEAD) — 200 с
+ *      ОЧИЩЕННЫМ экспортом (секретов в ответе нет, разговор переносится —
+ *      publish/fork не ломается); без доступа на чтение → 403
+ *      (security-фикс 0.11.3).
  *
  *    Поведение LEAD/ADMIN (мутация чужих сессий) — осознанное решение, НЕ менялось.
  */
@@ -146,7 +156,15 @@ const MATRIX: Row[] = [
   row('sessions', 'GET', '/:id/secrets', {
     owner: 403, viewer: 403, editor: 403, projectOwner: 403, lead: 403, admin: 200, auditor: 200,
   }),
-  row('sessions', 'GET', '/:id/export'),
+  // security-фикс 0.11.3: экспорт сессии — доступ на ЧТЕНИЕ + различие по
+  // привилегии. Читатели сессии (участник проекта VIEWER/EDITOR, владелец
+  // проекта, LEAD) получают 200 с ОЧИЩЕННЫМ ответом (без карты обфускации
+  // `obfuscationMap` и `messages[].metadata.secrets`); полный экспорт с картой —
+  // владельцу сессии, ADMIN и AUDITOR (тот же набор привилегий, что у
+  // `GET /:id/secrets`); без доступа на чтение (посторонний) → 403.
+  // Матрица фиксирует КОДЫ доступа; очистку ответа проверяет
+  // `sessions-access.test.ts`.
+  row('sessions', 'GET', '/:id/export', { auditor: 200 }),
   row('sessions', 'POST', '/:id/debug-system-message'),
   row('sessions', 'GET', '/:id/optimization'),
   row('sessions', 'PATCH', '/:id/optimization'),

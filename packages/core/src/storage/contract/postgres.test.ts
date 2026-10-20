@@ -70,6 +70,19 @@ const describePg = DSN ? describe : describe.skip;
 /** Аннотация `string` намеренная — `import()` не резолвится на этапе типов (опциональный пакет). */
 const POSTGRES_DRIVER_PACKAGE: string = '@itphx/synth-storage-postgres';
 
+/**
+ * Прогрев драйвера на уровне модуля (только при живом DSN — без него весь
+ * файл пропускается): `loadDriver()` ниже вызывается из тестов, и без
+ * прогрева загрузка модуля ложится на бюджет первого теста контракта
+ * (под нагрузкой — десятки секунд вместо миллисекунд). Top-level await не
+ * подчиняется `testTimeout`/`hookTimeout`. `.catch()` обязателен: драйвер
+ * опционален, его отсутствие не должно ронять файл (код под тестом
+ * классифицирует это как ошибку зависимости — fail-closed).
+ */
+if (DSN) {
+  await import(POSTGRES_DRIVER_PACKAGE).catch(() => undefined);
+}
+
 /** Минимальный локальный контракт драйвера (типы пакета не резолвятся статически). */
 interface PostgresDriverModule {
   createPostgresStorage(config: Record<string, unknown>): Promise<StorageContext>;

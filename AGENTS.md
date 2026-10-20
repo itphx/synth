@@ -112,10 +112,10 @@ synth storage migrate --to postgres|file  # перенос данных инст
 synth analytics rebuild [--from <date>] [--dry-run|--yes]  # идемпотентная пересборка суточных роллапов аналитики (PROP-102)
 ```
 
-**Перенос проекта между инстансами** (ADR-091 §6, без секретов; materialization с новыми id):
+**Перенос проекта между инстансами** (ADR-091 §6, по умолчанию без секретов — карта обфускации Gateway вырезается, `--with-secrets` только ADMIN/LEAD; materialization с новыми id):
 
 ```bash
-synth project export <projectId> [--out <file|dir>] [--with-workspace]        # портативный экспорт проекта
+synth project export <projectId> [--out <file|dir>] [--with-workspace] [--with-secrets]  # портативный экспорт проекта (--with-secrets — только ADMIN/LEAD)
 synth project import <archive> [--name <name>] [--merge-into <projectId>] \
   [--with-workspace] [--dry-run|--yes]                                        # импорт (без --dry-run и --yes — отказ)
 ```

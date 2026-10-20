@@ -4,7 +4,6 @@ import { useAuthStore } from '@/stores/authStore'
 import { useI18n } from '@/lib/i18n'
 import { Icon } from '@/components/icon/Icon'
 import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
-import { useDevice } from '@/hooks/useDevice'
 import { ContextTab } from './ContextTab'
 import { ReferencesTab } from './ReferencesTab'
 import { SecretsTab } from './SecretsTab'
@@ -51,9 +50,6 @@ export const RightPanel: React.FC = () => {
   const centerTabs = useUIStore(s => s.centerTabs)
   const activeCenterTabId = useUIStore(s => s.activeCenterTabId)
   const user = useAuthStore((s) => s.user)
-  const setAnalyticsDialogOpen = useUIStore((s) => s.setAnalyticsDialogOpen)
-  const { deviceType } = useDevice()
-  const touch = deviceType !== 'desktop'
   const activeTab = centerTabs.find((t) => t.id === activeCenterTabId)
   const sessionId = activeTab?.data?.sessionId
 
@@ -103,20 +99,8 @@ export const RightPanel: React.FC = () => {
         <div data-tab-row className="flex w-full rounded-lg border border-sidebar-border overflow-hidden">
           {firstRow.map(renderTab)}
         </div>
-        <div className="flex items-center gap-1">
-          <div data-tab-row className="flex flex-1 rounded-lg border border-sidebar-border overflow-hidden">
-            {secondRow.map(renderTab)}
-          </div>
-          {/* PROP-102: вход в «Аналитику и отчёты» из правой панели (не вкладка). */}
-          <button
-            type="button"
-            onClick={() => setAnalyticsDialogOpen(true)}
-            title={t('analytics.title')}
-            aria-label={t('analytics.title')}
-            className={`flex shrink-0 items-center justify-center rounded-lg border border-sidebar-border text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground ${touch ? 'h-10 w-10' : 'h-8 w-8'}`}
-          >
-            <Icon name="chart-line" className="h-4 w-4" />
-          </button>
+        <div data-tab-row className="flex w-full rounded-lg border border-sidebar-border overflow-hidden">
+          {secondRow.map(renderTab)}
         </div>
       </div>
       <div className="flex-1 min-h-0">

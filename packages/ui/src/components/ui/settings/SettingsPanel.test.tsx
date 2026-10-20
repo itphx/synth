@@ -176,7 +176,7 @@ describe('SettingsPanel', () => {
     expect(text.classList.contains('overflow-hidden')).toBe(true)
   })
 
-  it('meta виден при сворачивании шапки, actions — в одной строке с заголовком', async () => {
+  it('meta виден при сворачивании шапки, actions — под заголовком (телефон)', async () => {
     stubPhone()
     const host = await renderPanel({
       title: 'Network',
@@ -191,11 +191,11 @@ describe('SettingsPanel', () => {
     const action = host.querySelector('button') as HTMLButtonElement
     expect(meta.textContent).toBe('2 servers')
 
-    // actions — сосед h2 в flex-строке, а не под заголовком.
+    // На телефоне заголовок занимает отдельную строку, действия — ниже.
     const row = h2.parentElement as HTMLElement
     expect(row.classList.contains('flex')).toBe(true)
-    expect(row.classList.contains('items-start')).toBe(true)
-    expect(row.classList.contains('justify-between')).toBe(true)
+    expect(row.classList.contains('flex-col')).toBe(true)
+    expect(row.classList.contains('justify-between')).toBe(false)
     expect(action.parentElement?.parentElement).toBe(row)
     expect(row.contains(meta)).toBe(false)
 
@@ -214,6 +214,74 @@ describe('SettingsPanel', () => {
     expect(meta.classList.contains('grid-rows-[0fr]')).toBe(false)
     expect(meta.classList.contains('opacity-0')).toBe(false)
     expect(host.textContent).toContain('ACTION')
+  })
+
+  it('на десктопе заголовок и actions — в одной строке', async () => {
+    const host = await renderPanel({
+      title: 'Network',
+      description: 'Configure networking',
+      meta: '2 servers',
+      actions: <button>ACTION</button>,
+      children: <div>CONTENT</div>,
+    })
+
+    const h2 = host.querySelector('h2') as HTMLElement
+    const action = host.querySelector('button') as HTMLButtonElement
+    const row = h2.parentElement as HTMLElement
+    expect(row.classList.contains('flex')).toBe(true)
+    expect(row.classList.contains('items-start')).toBe(true)
+    expect(row.classList.contains('justify-between')).toBe(true)
+    expect(row.classList.contains('flex-col')).toBe(false)
+    expect(action.parentElement?.parentElement).toBe(row)
+  })
+
+  it('телефон: заголовок не рвётся посреди слова, кнопка раскрытия компактная, но доступное имя прежнее', async () => {
+    stubPhone()
+    const host = await renderPanel({
+      title: 'Модели',
+      actions: <button>ACTION</button>,
+      children: (
+        <>
+          <SettingsSection title="Main">MAIN</SettingsSection>
+          <SettingsSection advanced title="Extra">EXTRA</SettingsSection>
+        </>
+      ),
+    })
+
+    const h2 = host.querySelector('h2') as HTMLElement
+    // Заголовок — отдельной строкой, перенос только по словам.
+    expect(h2.parentElement!.classList.contains('flex-col')).toBe(true)
+    expect(h2.classList.contains('break-normal')).toBe(true)
+    expect(h2.classList.contains('break-words')).toBe(false)
+
+    const reveal = host.querySelector('[data-testid="settings-advanced-reveal"]') as HTMLButtonElement
+    expect(reveal).not.toBeNull()
+    // Компактно: иконка + счётчик, полной формулировки в тексте нет.
+    expect(reveal.textContent).toContain('(1)')
+    expect(reveal.textContent).not.toContain('Show advanced settings')
+    // Полная формулировка — в title и aria-label: доступное имя прежнее.
+    expect(reveal.getAttribute('aria-label')).toBe('Show advanced settings (1)')
+    expect(reveal.getAttribute('title')).toBe('Show advanced settings (1)')
+    // Кнопка — в шапке панели.
+    expect((host.querySelector('header') as HTMLElement).contains(reveal)).toBe(true)
+  })
+
+  it('десктоп: кнопка раскрытия — с полной формулировкой в тексте', async () => {
+    const host = await renderPanel({
+      title: 'Модели',
+      children: (
+        <>
+          <SettingsSection title="Main">MAIN</SettingsSection>
+          <SettingsSection advanced title="Extra">EXTRA</SettingsSection>
+        </>
+      ),
+    })
+
+    const reveal = host.querySelector('[data-testid="settings-advanced-reveal"]') as HTMLButtonElement
+    expect(reveal.textContent).toContain('Show advanced settings (1)')
+    // На десктопе подпись дублируется текстом — лишних атрибутов нет.
+    expect(reveal.getAttribute('aria-label')).toBeNull()
+    expect(reveal.getAttribute('title')).toBeNull()
   })
 
   it('стандарт шапки: счётчики (meta) идут после описания и не сворачиваются', async () => {
@@ -287,6 +355,9 @@ describe('SettingsPanel', () => {
     const reveal = host.querySelector('[data-testid="settings-advanced-reveal"]') as HTMLButtonElement
     expect(reveal).not.toBeNull()
     expect(reveal.textContent).toContain('Show advanced settings (1)')
+    // Кнопка — в шапке панели: её видно без прокрутки к концу содержимого.
+    const header = host.querySelector('header') as HTMLElement
+    expect(header.contains(reveal)).toBe(true)
 
     await act(async () => {
       reveal.dispatchEvent(new MouseEvent('click', { bubbles: true }))

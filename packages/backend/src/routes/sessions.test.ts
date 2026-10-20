@@ -620,8 +620,13 @@ describe('Session API Routes', () => {
       expect(created).toHaveLength(0);
     });
 
-    it('проект участника (VIEWER) → 201 (чтение-уровень доступа к проекту)', async () => {
-      const { app, projectStore } = createTestApp(tmpDir);
+    // Инвариант 21: read-уровень доступа к проекту НЕ расширяет права на изменение.
+    // Импорт сессии В ПРОЕКТ — это ЗАПИСЬ (сессия привязывается к проекту и его
+    // workspace), поэтому нужен уровень «редактирование контента проекта»
+    // (`canEditProjectContent`: owner / EDITOR / LEAD / ADMIN). VIEWER-участник
+    // получает 403 FORBIDDEN, и сессия не создаётся.
+    it('проект участника (VIEWER) → 403 (импорт в проект — запись, а не чтение)', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
       const project = projectStore.create('Shared', 'someone-else');
       project.members['test-user'] = 'viewer' as never;
       await projectStore.save(project);
@@ -631,7 +636,44 @@ describe('Session API Routes', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: 'X', import: { project_id: project.id } }),
       });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+      // Сессия не создана.
+      const created = (await sessionManager.listSessions({ userId: 'test-user' })).filter(
+        (s) => s.title === 'X',
+      );
+      expect(created).toHaveLength(0);
+    });
+
+    // Тот же инвариант с другой стороны: право записи в проект импорт даёт.
+    // Участник с ролью EDITOR и владелец проекта получают 201, и сессия
+    // действительно создана и привязана к целевому проекту.
+    it('проект участника (EDITOR) и проект владельца → 201 (есть право записи)', async () => {
+      const { app, sessionManager, projectStore } = createTestApp(tmpDir);
+      const memberProject = projectStore.create('Shared', 'someone-else');
+      memberProject.members['test-user'] = 'editor' as never;
+      await projectStore.save(memberProject);
+      const ownProject = projectStore.create('Own', 'test-user');
+      await projectStore.save(ownProject);
+
+      for (const project of [memberProject, ownProject]) {
+        const res = await app.request('/api/v2/sessions/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: 'X', import: { project_id: project.id } }),
+        });
+        expect(res.status).toBe(201);
+        const body: any = await res.json();
+        expect(body.project_id).toBe(project.id);
+        // Сессия создана и привязана к проекту.
+        const stored = await sessionManager.getSession(body.id);
+        expect(stored?.projectId).toBe(project.id);
+        expect(stored?.title).toBe('X');
+      }
+      const created = (await sessionManager.listSessions({ userId: 'test-user' })).filter(
+        (s) => s.title === 'X',
+      );
+      expect(created).toHaveLength(2);
     });
   });
 

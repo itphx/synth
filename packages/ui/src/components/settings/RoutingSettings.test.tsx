@@ -261,6 +261,9 @@ describe('RoutingSettings — миграция на Settings UI Kit (ADR-072)', 
     ) as HTMLButtonElement
     expect(reveal).not.toBeNull()
     expect(reveal.textContent).toContain('(4)')
+    // Кнопка раскрытия — в шапке панели: её видно без прокрутки к концу.
+    const header = container.querySelector('header') as HTMLElement
+    expect(header.contains(reveal)).toBe(true)
 
     await act(async () => {
       reveal.dispatchEvent(new MouseEvent('click', { bubbles: true }))

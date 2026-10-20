@@ -969,14 +969,14 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
   {
     id: 'models.filterProvider',
     categoryId: 'models',
-    sectionId: 'models-filters',
+    sectionId: 'models-filters-advanced',
     labelKey: 'admin.models.allProviders',
     keywords: ['filter', 'provider', 'фильтр', 'провайдер'],
   },
   {
     id: 'models.onlyEnabled',
     categoryId: 'models',
-    sectionId: 'models-filters',
+    sectionId: 'models-filters-advanced',
     labelKey: 'admin.models.onlyEnabled',
     keywords: ['enabled', 'filter', 'включённые', 'фильтр'],
   },

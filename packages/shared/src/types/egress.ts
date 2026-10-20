@@ -13,6 +13,11 @@
  * Литеральные `localhost`/`*.localhost`/`*.local`/`*.internal` и приватные IP
  * блокируются самой политикой (дефолтный `list`), а не отдельным зашитым списком;
  * exception может их разрешить.
+ *
+ * Дефолтный `list` — **общий канонический список** `DEFAULT_MCP_PRIVATE_CIDRS`
+ * (`types/mcp.ts`): он же — дефолт `mcp.networkPolicy` и встроенный fallback
+ * `engine/net/egress-guard.ts`. Списков «заблокированных адресов» в коде больше
+ * нет, поэтому расширять блокировки нужно только этот список.
  */
 
 import { DEFAULT_MCP_PRIVATE_CIDRS } from './mcp.js';
@@ -50,14 +55,20 @@ export interface EgressLogConfig {
   retentionDays: number;
 }
 
-/** Дефолтная политика встроенных инструментов: deny приватных диапазонов. */
+/**
+ * Дефолтная политика встроенных инструментов: deny служебных диапазонов
+ * (`DEFAULT_MCP_PRIVATE_CIDRS` — общий канонический список, см. `types/mcp.ts`).
+ */
 export const DEFAULT_EGRESS_TOOLS_POLICY: EgressPolicy = {
   mode: 'deny',
   list: [...DEFAULT_MCP_PRIVATE_CIDRS],
   exceptions: [],
 };
 
-/** Дефолтная политика webhooks: deny приватных диапазонов + обязательный https. */
+/**
+ * Дефолтная политика webhooks: deny служебных диапазонов (тот же общий список)
+ * + обязательный https.
+ */
 export const DEFAULT_EGRESS_WEBHOOKS_POLICY: WebhooksEgressPolicy = {
   mode: 'deny',
   list: [...DEFAULT_MCP_PRIVATE_CIDRS],

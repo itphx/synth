@@ -258,6 +258,12 @@
   (вид `read`/`write` из HTTP-метода). Один факт нарушения → один код (`403`), нет сессии → `404`;
   read/write-разграничение ролей проекта живёт в ОДНОЙ точке, а не в обработчиках. Матрица —
   `packages/backend/src/routes/session-idor-matrix.test.ts`.
+- `server/session-export-guard.ts` — ADR-036 (security-фикс 0.11.3): route-level guard экспорта
+  сессии `createSessionExportGuard` — резолвит сессию, решает привилегию карты обфускации
+  (полный экспорт — владелец|`ADMIN`|`AUDITOR`; остальным читателям — очищенный) и кладёт решение в
+  контекст Hono (`SESSION_EXPORT_CONTEXT_KEY`, чтение — `getSessionExportDecision`); `isSessionExportPath` —
+  признак маршрута экспорта (роль аудита — читатель сессии именно там). Доступ (403/404) решает
+  prefix-guard, в обработчике проверок доступа нет (инвариант 16).
 - `server/session-visibility.ts` — ADR-089: `isSessionVisible` (+ `SessionOwnerCtx`) —
   единое правило видимости сессии в списке (elevated/владелец/ownerless/проект-участие).
 - `server/routes/identities.ts` — `createIdentityRoutes` (ADR-089): идентичности текущего
@@ -617,7 +623,10 @@
   хуки. Гибридные ветки активны только при переданном optional-dep
   (`getRemoteClient`). Публичные типы — в `src/index.ts`. Существующие фабрики:
   `createSettingsRoutes`, `createDictionaryRoutes`, `createProviderRoutes`,
-  `createModelRoutes`, `createSessionRoutes`, `createGitRoutes`,
+  `createModelRoutes`, `createSessionRoutes`,
+  `createGitRoutes` (ADR-076: доступ к проекту — граничный guard ДО обработчика:
+  `authorizeRead` — чтение git-данных (`scan`/`log`/`commit`), `authorizeProject` —
+  изменение реестра/репозиториев; отказ — 403 `FORBIDDEN`, ADR-089/инвариант 16),
   `createSshKeyRoutes`, `createAgentSshKeyRoutes`, `createFsRoutes` (project-aware
   FS: плоский root / workspace проекта через `getProjectWorkspace`, ADR-075),
   `createServiceKeyRoutes` (ADR-052 этап I: CRUD service-key, `writeGuard`/`readGuard`/`messages`),

@@ -11,6 +11,7 @@ import type { WebhookRepository } from '../../storage/ports/webhook-repository.j
 import type { WebhookDeliveryRepository } from '../../storage/ports/webhook-delivery-repository.js';
 import type { WebhookService } from '../../engine/webhooks/service.js';
 import { evaluateWebhookTarget } from '../../engine/webhooks/network.js';
+import type { HostResolver } from '../../engine/mcp/network-policy.js';
 import { shouldProxyUrl } from '../../security/proxy-state.js';
 
 /**
@@ -62,6 +63,11 @@ export interface WebhookRoutesOptions {
    * Не задан — проверка fail-closed (политика не разрешает цель).
    */
   resolvePolicy?: () => Promise<WebhooksEgressPolicy>;
+  /**
+   * Инъекция DNS-резолвера SSRF-проверки цели (тесты). Не задан — живой
+   * системный резолвер (`dns.lookup`), т.е. поведение по умолчанию прежнее.
+   */
+  resolveHost?: HostResolver;
 }
 
 const DEFAULT_MESSAGES: WebhookRouteMessages = {
@@ -131,7 +137,11 @@ export function createWebhookRoutes(
   /** Проверяет целевой URL политикой SSRF/https; `null` — допустим. */
   const ensureTargetAllowed = async (c: Context, url: string): Promise<Response | null> => {
     const policy = resolvePolicy ? await resolvePolicy() : undefined;
-    const check = await evaluateWebhookTarget(url, { policy, proxied: shouldProxyUrl(url) });
+    const check = await evaluateWebhookTarget(url, {
+      policy,
+      resolveHost: opts.resolveHost,
+      proxied: shouldProxyUrl(url),
+    });
     if (check.allowed) return null;
     return targetForbidden(c, check.reason ?? 'Целевой URL запрещён');
   };

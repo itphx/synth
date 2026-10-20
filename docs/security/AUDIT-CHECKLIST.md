@@ -28,8 +28,14 @@ node scripts/secret-scan.mjs --list-allowlists          # что подавля�
 ```
 
 Ожидаемо: `ЧИСТО — находок нет`, `findings_count: 0`, `suppressed_count` — только подтверждённые
-фикстуры (7 на 0.10.2), каждая с описанием в `.gitleaks.toml`. Просканировано: рабочее дерево +
-вся история (`commits`: добавленные строки; `blobs`: уникальные объекты).
+фикстуры (7 на 0.10.2, 35 на 0.11.3 — счётчик растёт вместе с числом тест-фикстур в дереве),
+каждая с описанием в `.gitleaks.toml`. Просканировано: рабочее дерево +
+вся история (`commits`: добавленные строки; `blobs`: уникальные объекты) — **за вычетом
+исключений**, перечисленных в `docs/security/README.md` («Что сканирует secret-scan и что
+из него исключено»): каталоги `node_modules/`, `.git/`, `dist/`, `build/`, `coverage/`,
+`.pnpm-store/`, `tmp/`, файлы `pnpm-lock.yaml`/`package-lock.json`/`yarn.lock`, `*.min.js`,
+`*.snap`. Исключения — не «слепое пятно»: проверено 2026-10-20, что в них не было ни одного
+файла с секретами, а `pnpm-lock.yaml` просканирован со снятым пропуском — 0 находок.
 Репозиторий зеркалируется на GitHub — **история считается публичной**.
 Находка → проверить, реальный ли это секрет: реальный — ротация и блокировка релиза (см. `SECURITY.md`),
 ложный — точечная запись в `.gitleaks.toml` (`path` + конкретный маркер, не файл целиком).
@@ -83,7 +89,7 @@ pnpm install --frozen-lockfile
 pnpm audit --json | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).metadata.vulnerabilities))'
 ```
 
-Ожидаемо для активного профиля ратчета (`post-upgrade`, с 2026-10-15): `critical 0`, `high 39`,
+Ожидаемо для активного профиля ратчета (`post-upgrade`, с 2026-10-20): `critical 0`, `high 31`,
 прямых уязвимых модулей 0. Канонические пороги — `policy.dependencies.profiles[policy.dependencies.profile].baseline`.
 Новые critical/high → апгрейд до `patched_versions`, либо исключение в записи (`exceptions[]` с
 `owner` и `dueRelease`), либо **блокировка релиза**.
@@ -94,9 +100,9 @@ node scripts/security-gate.mjs --only dependencies --skip-tests   # ровно �
 ```
 
 Апгрейды `@modelcontextprotocol/sdk ≥ 1.31.0` (`1.32.1`) и `simple-git 4.x` (`4.0.2`) внесены 2026-10-15 —
-профиль ратчета в `policy.json` переключён на `post-upgrade`, `baseline` уточнён фактом
-(`critical 0`, `high 39`). Меняя пороги, правьте `policy.dependencies.profile`/`profiles` (историю
-состояний оставляйте в `profiles`).
+профиль ратчета в `policy.json` переключён на `post-upgrade`; после апгрейда `hono`/`ws`/`undici`/`js-yaml`
+2026-10-20 `baseline` уточнён фактом (`critical 0`, `high 31`). Меняя пороги, правьте
+`policy.dependencies.profile`/`profiles` (историю состояний оставляйте в `profiles`).
 
 ## 5. Baseline CI
 

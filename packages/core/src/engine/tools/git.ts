@@ -7,7 +7,7 @@ import type { ToolDefinition, ToolContext, ToolResult } from '@itphx/synth-share
 import { resolvePath, validateInputPath, isSymlinkEscape, isInsideReal, pathEscapesWorkspaceResult } from './path-utils.js';
 import { deobfuscateArgs } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
-import { resolveRepoGitEnv } from './git-ssh.js';
+import { resolveRepoGitEnv, resolveProjectRepoEntry } from './git-ssh.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
 import type { SystemMessageKey } from '../system-messages.js';
 
@@ -108,6 +108,145 @@ function gitBinaryMissingResult(name: string, cwd: string): ToolResult {
   };
 }
 
+/**
+ * Значения параметров git-тулов, попадающие в argv, проверяются ДО запуска git.
+ *
+ * Git запускается без shell (`execFile` + массив argv), поэтому классическая
+ * shell-инъекция невозможна — но значение, попавшее в argv отдельным элементом,
+ * может оказаться НЕ аргументом, а git-флагом: `commit: "--output=/tmp/x"`
+ * превращает `git diff` в писателя произвольного файла, `--ext-diff`/`--textconv`
+ * запускают внешнюю команду, а `remote: "https://attacker.example/x"` уводит
+ * push на произвольный хост. Значение приходит от модели, а модель может быть
+ * направлена недоверенным содержимым (файл, документ, веб-страница) — значит
+ * это расширение полномочий агента.
+ *
+ * Две линии защиты:
+ *  1) allowlist формы значения (не может выразить флаг);
+ *  2) явный запрет опасных опций (остаётся в силе, если allowlist ослабят).
+ */
+const GIT_REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/@+-]*$/;
+
+/** Имя remote: буквы/цифры и `._-` — без `/`, `:`, `@` (URL невозможен). */
+const GIT_REMOTE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Явно запрещённые опции git: произвольная запись файла (`--output`), запуск
+ * внешних команд (`--ext-diff`, `--textconv`, `--exec`), принудительные
+ * refspec-операции (`--mirror`, `--force`, `--delete`) и прочие.
+ */
+const FORBIDDEN_GIT_OPTIONS = new Set([
+  '--output',
+  '--ext-diff',
+  '--textconv',
+  '--no-index',
+  '--exec',
+  '--upload-pack',
+  '--receive-pack',
+  '--force',
+  '--force-with-lease',
+  '--mirror',
+  '--all',
+  '--prune',
+  '--delete',
+  '--orphan',
+  '--detach',
+  '--set-upstream',
+  '--push-option',
+]);
+
+/** Тип значения параметра git-тула (определяет allowlist). */
+export type GitValueKind = 'ref' | 'branch' | 'remote';
+
+/**
+ * Проверяет значение параметра git-тула. `null` — значение допустимо, иначе
+ * причина отказа (без префикса с именем параметра).
+ */
+export function validateGitValue(value: string, kind: GitValueKind): string | null {
+  if (!value) return 'must not be empty';
+
+  // Значение, начинающееся с `-`, git прочитает как опцию — запрещаем явно.
+  if (value.startsWith('-')) {
+    const option = value.split('=', 1)[0] ?? value;
+    if (FORBIDDEN_GIT_OPTIONS.has(option)) {
+      return `the git option "${option}" is not allowed here`;
+    }
+    return 'must not start with "-" (git would read it as an option)';
+  }
+
+  // Refspec (`src:dst`) — не имя ветки: mirror-push, удаление ветки на remote.
+  if (kind !== 'remote' && value.includes(':')) {
+    return 'must be a plain name, not a refspec (":" is not allowed)';
+  }
+
+  const pattern = kind === 'remote' ? GIT_REMOTE_PATTERN : GIT_REF_PATTERN;
+  if (!pattern.test(value)) {
+    return kind === 'remote'
+      ? 'must be a remote name (letters, digits, ".", "_", "-") — a URL is not allowed'
+      : 'must be a commit/branch name (letters, digits, ".", "_", "/", "@", "+", "-")';
+  }
+  return null;
+}
+
+/** Отказ по значению параметра — через существующий механизм ошибок тула. */
+function gitArgError(tool: string, issues: string): ToolResult {
+  return {
+    content: sm('tool.args_error', { tool, issues }),
+    isError: true,
+    metadata: { i18n: i18nMeta('tool.args_error', { tool, issues }) },
+  };
+}
+
+/** Сравнение URL репозитория: хвостовой `/` и `.git` несущественны. */
+function sameGitUrl(a: string, b: string): boolean {
+  const normalize = (url: string): string => url.trim().replace(/\/+$/, '').replace(/\.git$/i, '');
+  return normalize(a) === normalize(b);
+}
+
+/**
+ * ADR-076: проверка remote для сетевых git-тулов (`git_push`/`git_pull`).
+ *
+ * Remote обязан существовать в репозитории И указывать на репозиторий,
+ * зарегистрированный в проекте (`project.repos`) — иначе содержимое репозитория
+ * можно выгрузить на произвольный хост в обход egress-адресной политики
+ * (ADR-099): git-дочерние процессы через неё не идут. `null` — remote корректен.
+ */
+async function resolveRegistryRemote(
+  ctx: ToolContext,
+  cwd: string,
+  remote: string,
+  mode: 'push' | 'pull',
+): Promise<string | null> {
+  const lookup = await resolveProjectRepoEntry(ctx, cwd);
+  if (lookup.kind === 'no_project') {
+    return 'the session has no project — the remote cannot be verified against the project registry (ADR-076)';
+  }
+  if (lookup.kind === 'not_registered') {
+    return 'the repository is not registered in the project — register it first (ADR-076)';
+  }
+  const registeredUrl = lookup.url;
+  if (!registeredUrl) {
+    return 'the repository is registered in the project without a URL — there is no configured remote';
+  }
+
+  let url = '';
+  try {
+    const { stdout } = await runGit(
+      mode === 'push' ? ['remote', 'get-url', '--push', remote] : ['remote', 'get-url', remote],
+      cwd,
+      ctx.abortSignal,
+    );
+    url = stdout.trim().split('\n')[0]?.trim() ?? '';
+  } catch (err: unknown) {
+    if (isBinaryMissing(err)) return 'the git binary is not available in the environment';
+    url = '';
+  }
+  if (!url) return `remote "${remote}" is not configured in the repository`;
+  if (!sameGitUrl(url, registeredUrl)) {
+    return `remote "${remote}" does not point to the repository registered for the project`;
+  }
+  return null;
+}
+
 export const gitStatusTool: ToolDefinition = {
   name: 'git_status',
   description: 'Show the working tree status — current branch, staged/unstaged changes, untracked files.',
@@ -153,7 +292,7 @@ export const gitDiffTool: ToolDefinition = {
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
     staged: z.boolean().optional().describe('Show staged changes (default: false)'),
-    commit: z.string().optional().describe('Compare with specific commit hash'),
+    commit: z.string().optional().describe('Compare with specific commit hash (a commit/branch name — not a git option)'),
   }),
   capabilities: [ToolCapability.GIT_READ],
   async execute(args, ctx) {
@@ -167,8 +306,19 @@ export const gitDiffTool: ToolDefinition = {
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
 
+    // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
+    // Пустая строка — как и раньше, просто не попадает в argv.
+    if (params.commit) {
+      const commitError = validateGitValue(params.commit, 'ref');
+      if (commitError) return gitArgError(this.name, `commit: ${commitError}`);
+    }
+
     try {
-      const diffArgs = ['diff', '--no-color'];
+      // `--` перед commit НЕ ставим: в `git diff` он переключает разбор на
+      // pathspec (`git diff -- <rev>` — уже не ревизия, а путь). Защита — allowlist.
+      // `--no-ext-diff`/`--no-textconv` — внешние diff-драйверы и textconv
+      // (в т.ч. из `.gitattributes` недоверенного репозитория) не запускаются.
+      const diffArgs = ['diff', '--no-color', '--no-ext-diff', '--no-textconv'];
       if (params.staged) diffArgs.push('--staged');
       if (params.commit) diffArgs.push(params.commit);
 
@@ -288,8 +438,9 @@ export const gitPushTool: ToolDefinition = {
   parameters: z.object({
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
-    remote: z.string().optional().default('origin').describe('Remote name (default: origin)'),
-    branch: z.string().optional().describe('Branch name to push (default: current branch)'),
+    remote: z.string().optional().default('origin')
+      .describe('Remote name (default: origin). Must be a remote configured in the repository and registered in the project (ADR-076) — a URL is not allowed'),
+    branch: z.string().optional().describe('Branch name to push (default: current branch). A plain branch name — a refspec is not allowed'),
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
@@ -303,6 +454,26 @@ export const gitPushTool: ToolDefinition = {
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
 
+    // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
+
+    const remote = restored.remote ?? 'origin';
+    const branch = restored.branch;
+
+    // Значения от модели не должны стать флагом git (`--force`) или refspec
+    // (`+refs/heads/*:refs/heads/*` — mirror-push, `:refs/heads/x` — удаление ветки).
+    const remoteError = validateGitValue(remote, 'remote');
+    if (remoteError) return gitArgError(this.name, `remote: ${remoteError}`);
+    if (branch) {
+      const branchError = validateGitValue(branch, 'branch');
+      if (branchError) return gitArgError(this.name, `branch: ${branchError}`);
+    }
+
+    // ADR-076: remote обязан быть зарегистрирован в проекте — иначе push ушёл бы
+    // на произвольный хост (обход egress-адресной политики, ADR-099).
+    const registryError = await resolveRegistryRemote(ctx, cwd, remote, 'push');
+    if (registryError) return gitArgError(this.name, `remote: ${registryError}`);
+
     // ADR-076 §T6: SSH-окружение по реестру проекта (сетевой тул).
     const ssh = await resolveRepoGitEnv(ctx, cwd);
     if (ssh.error) {
@@ -313,12 +484,11 @@ export const gitPushTool: ToolDefinition = {
       };
     }
 
-    // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
-    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
-
     try {
-      const pushArgs = ['push', restored.remote ?? 'origin'];
-      if (restored.branch) pushArgs.push(restored.branch);
+      // `--` перед remote: git push/pull принимают его как конец опций, поэтому
+      // remote/branch не могут быть прочитаны как флаги; смысл команды тот же.
+      const pushArgs = ['push', '--', remote];
+      if (branch) pushArgs.push(branch);
 
       const { stdout, stderr } = await runGit(pushArgs, cwd, ctx.abortSignal, ssh.env);
       return {
@@ -346,8 +516,9 @@ export const gitPullTool: ToolDefinition = {
   parameters: z.object({
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
-    remote: z.string().optional().default('origin').describe('Remote name (default: origin)'),
-    branch: z.string().optional().describe('Branch name to pull (default: current tracking branch)'),
+    remote: z.string().optional().default('origin')
+      .describe('Remote name (default: origin). Must be a remote configured in the repository and registered in the project (ADR-076) — a URL is not allowed'),
+    branch: z.string().optional().describe('Branch name to pull (default: current tracking branch). A plain branch name — a refspec is not allowed'),
   }),
   capabilities: [ToolCapability.GIT_WRITE],
   async execute(args, ctx) {
@@ -361,6 +532,25 @@ export const gitPullTool: ToolDefinition = {
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
 
+    // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
+    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
+
+    const remote = restored.remote ?? 'origin';
+    const branch = restored.branch;
+
+    // Значения от модели не должны стать флагом git или refspec'ом.
+    const remoteError = validateGitValue(remote, 'remote');
+    if (remoteError) return gitArgError(this.name, `remote: ${remoteError}`);
+    if (branch) {
+      const branchError = validateGitValue(branch, 'branch');
+      if (branchError) return gitArgError(this.name, `branch: ${branchError}`);
+    }
+
+    // ADR-076: remote обязан быть зарегистрирован в проекте — иначе pull ушёл бы
+    // на произвольный хост (обход egress-адресной политики, ADR-099).
+    const registryError = await resolveRegistryRemote(ctx, cwd, remote, 'pull');
+    if (registryError) return gitArgError(this.name, `remote: ${registryError}`);
+
     // ADR-076 §T6: SSH-окружение по реестру проекта (сетевой тул).
     const ssh = await resolveRepoGitEnv(ctx, cwd);
     if (ssh.error) {
@@ -371,12 +561,10 @@ export const gitPullTool: ToolDefinition = {
       };
     }
 
-    // ADR-036: деобфускация в точке потребления — remote/branch могут содержать ⟦SYNTH_SECRET_N⟧
-    const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; remote?: string; branch?: string };
-
     try {
-      const pullArgs = ['pull', restored.remote ?? 'origin'];
-      if (restored.branch) pullArgs.push(restored.branch);
+      // `--` перед remote: конец опций — remote/branch не читаются как флаги.
+      const pullArgs = ['pull', '--', remote];
+      if (branch) pullArgs.push(branch);
 
       const { stdout, stderr } = await runGit(pullArgs, cwd, ctx.abortSignal, ssh.env);
       return {
@@ -404,7 +592,7 @@ export const gitCheckoutTool: ToolDefinition = {
   parameters: z.object({
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
-    target: z.string().describe('Branch name or commit hash to checkout'),
+    target: z.string().describe('Branch name or commit hash to checkout (not a git option)'),
     create_branch: z.boolean().optional().default(false).describe('Create a new branch before checkout (-b flag)'),
   }),
   capabilities: [ToolCapability.GIT_WRITE],
@@ -422,7 +610,13 @@ export const gitCheckoutTool: ToolDefinition = {
     // ADR-036: деобфускация в точке потребления — target может содержать ⟦SYNTH_SECRET_N⟧
     const restored = (await deobfuscateArgs(ctx, params)) as { path?: string; repo_path?: string; target: string; create_branch?: boolean };
 
+    // Значение от модели не должно стать флагом git (`-f`, `-B`, `--orphan`).
+    const targetError = validateGitValue(restored.target, 'ref');
+    if (targetError) return gitArgError(this.name, `target: ${targetError}`);
+
     try {
+      // `--` перед target НЕ ставим: в `git checkout` он означает «восстановить
+      // пути», а не «вот ветка» (`git checkout -- <branch>` — pathspec, не ветка).
       const checkoutArgs = ['checkout'];
       if (restored.create_branch) checkoutArgs.push('-b');
       checkoutArgs.push(restored.target);
@@ -517,7 +711,7 @@ export const gitShowTool: ToolDefinition = {
   parameters: z.object({
     path: z.string().optional().describe('Path to the git repository (absolute or relative to the working directory; defaults to working directory)'),
     repo_path: z.string().optional().describe('Repository path relative to the project workspace (must stay inside it; "." — workspace root)'),
-    object: z.string().optional().default('HEAD').describe('Object name — commit hash, tag or branch (default: HEAD)'),
+    object: z.string().optional().default('HEAD').describe('Object name — commit hash, tag or branch (default: HEAD). Not a git option'),
     stat: z.boolean().optional().default(true).describe('Show diffstat summary (default: true)'),
   }),
   capabilities: [ToolCapability.GIT_READ],
@@ -532,10 +726,18 @@ export const gitShowTool: ToolDefinition = {
     const cwd = resolveGitCwd(params, ctx);
     if (typeof cwd !== 'string') return cwd;
 
+    // Значение от модели не должно стать флагом git (`--output=…`, `--ext-diff`).
+    const object = params.object ?? 'HEAD';
+    const objectError = validateGitValue(object, 'ref');
+    if (objectError) return gitArgError(this.name, `object: ${objectError}`);
+
     try {
-      const showArgs = ['show'];
+      // `--` перед object НЕ ставим: в `git show` он переключает разбор на
+      // pathspec (`git show -- <obj>` — уже не объект, а путь). Защита — allowlist.
+      // `--no-ext-diff`/`--no-textconv` — внешние diff-драйверы и textconv не запускаются.
+      const showArgs = ['show', '--no-ext-diff', '--no-textconv'];
       if (params.stat) showArgs.push('--stat');
-      showArgs.push(params.object ?? 'HEAD');
+      showArgs.push(object);
 
       const { stdout, stderr } = await runGit(showArgs, cwd, ctx.abortSignal);
       if (stderr) {

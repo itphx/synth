@@ -5,11 +5,24 @@ import { join } from 'node:path';
 import { SkillService } from './service.js';
 import { urlCacheDir } from './discovery.js';
 import { SkillStore, type UpdateSkillMarkdownInput } from '../../storage/skill-store.js';
+import type { HostResolver } from '../mcp/network-policy.js';
 
 let root: string;
 
+/**
+ * Герметичность: ни DNS, ни HTTP в сеть не ходят.
+ * - `resolveHost` — инъекция DNS-резолвера (шов SSRF-проверки);
+ * - `fetchImpl` — инъекция транспорта (шов загрузки каталога);
+ * - глобальный `fetch` — «ловушка»: любой обход шва уронит тест.
+ */
+const PUBLIC_ADDRESS = '93.184.216.34';
+const resolveHostStub: HostResolver = async () => [PUBLIC_ADDRESS];
+
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'synth-skills-service-'));
+  vi.stubGlobal('fetch', () => {
+    throw new Error('network forbidden: удалённые каталоги грузятся только через fetchImpl');
+  });
 });
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
@@ -144,9 +157,14 @@ describe('SkillService — skills.urls (ADR-046 §4.2/§4.3)', () => {
     const fetchMock = vi.fn(() => {
       throw new Error('network forbidden');
     });
-    vi.stubGlobal('fetch', fetchMock);
 
-    new SkillService({ dataDir: join(root, 'data'), urls: [URL_BASE], home: join(root, 'home') });
+    new SkillService({
+      dataDir: join(root, 'data'),
+      urls: [URL_BASE],
+      home: join(root, 'home'),
+      fetchImpl: fetchMock,
+      resolveHost: resolveHostStub,
+    });
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -159,9 +177,14 @@ describe('SkillService — skills.urls (ADR-046 §4.2/§4.3)', () => {
       }
       return new Response('---\nname: r1\ndescription: d\n---\n\nBody\n', { status: 200 });
     });
-    vi.stubGlobal('fetch', fetchMock);
 
-    const service = new SkillService({ dataDir, urls: [URL_BASE], home: join(root, 'home') });
+    const service = new SkillService({
+      dataDir,
+      urls: [URL_BASE],
+      home: join(root, 'home'),
+      fetchImpl: fetchMock,
+      resolveHost: resolveHostStub,
+    });
     const reloadSpy = vi.spyOn(service, 'reload');
 
     await service.refreshRemote();
@@ -181,9 +204,14 @@ describe('SkillService — skills.urls (ADR-046 §4.2/§4.3)', () => {
       }
       return new Response('---\nname: r1\ndescription: d\n---\n\nBody\n', { status: 200 });
     });
-    vi.stubGlobal('fetch', fetchMock);
 
-    const service = new SkillService({ dataDir, urls: [URL_BASE], home: join(root, 'home') });
+    const service = new SkillService({
+      dataDir,
+      urls: [URL_BASE],
+      home: join(root, 'home'),
+      fetchImpl: fetchMock,
+      resolveHost: resolveHostStub,
+    });
     await Promise.all([service.refreshRemote(), service.refreshRemote()]);
 
     // index.json + SKILL.md, а не 2×(index+skill)
@@ -192,17 +220,29 @@ describe('SkillService — skills.urls (ADR-046 §4.2/§4.3)', () => {
 
   it('refreshRemote без urls — no-op, сеть не дёргается', async () => {
     const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    const service = new SkillService({ dataDir: join(root, 'data'), home: join(root, 'home') });
+    const service = new SkillService({
+      dataDir: join(root, 'data'),
+      home: join(root, 'home'),
+      fetchImpl: fetchMock,
+      resolveHost: resolveHostStub,
+    });
     await service.refreshRemote();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('ошибка сети диагностируется, не роняя сервис', async () => {
     const dataDir = join(root, 'data');
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    const fetchMock = vi.fn(async () => {
+      throw new Error('offline');
+    });
 
-    const service = new SkillService({ dataDir, urls: [URL_BASE], home: join(root, 'home') });
+    const service = new SkillService({
+      dataDir,
+      urls: [URL_BASE],
+      home: join(root, 'home'),
+      fetchImpl: fetchMock,
+      resolveHost: resolveHostStub,
+    });
     await service.refreshRemote();
 
     const { diagnostics } = await service.list();
@@ -213,9 +253,17 @@ describe('SkillService — skills.urls (ADR-046 §4.2/§4.3)', () => {
     const dataDir = join(root, 'data');
     const cacheDir = urlCacheDir(join(dataDir, 'skills-cache'), URL_BASE);
     await writeSkill(cacheDir, 'keep');
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+    const fetchMock = vi.fn(async () => {
+      throw new Error('offline');
+    });
 
-    const service = new SkillService({ dataDir, urls: [URL_BASE], home: join(root, 'home') });
+    const service = new SkillService({
+      dataDir,
+      urls: [URL_BASE],
+      home: join(root, 'home'),
+      fetchImpl: fetchMock,
+      resolveHost: resolveHostStub,
+    });
     await service.refreshRemote();
 
     expect(await readFile(join(cacheDir, 'keep', 'SKILL.md'), 'utf-8')).toContain('keep');

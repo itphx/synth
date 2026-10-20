@@ -8,10 +8,12 @@ interface CurrencyPickerProps {
   /** Валюта модели; может отсутствовать — тогда показывается валюта провайдера/доллар. */
   value?: string
   onChange: (currency: Currency) => void
+  /** Дополнительные классы кнопки (например, touch-размер на телефоне). */
+  className?: string
 }
 
 /** Компактная кнопка валюты с поповером выбора (RUB/USD/CNY). */
-export function CurrencyPicker({ value, onChange }: CurrencyPickerProps) {
+export function CurrencyPicker({ value, onChange, className }: CurrencyPickerProps) {
   const { t } = useI18n()
   const active = normalizeCurrency(value)
 
@@ -22,7 +24,10 @@ export function CurrencyPicker({ value, onChange }: CurrencyPickerProps) {
           type="button"
           aria-label={t('admin.models.currency')}
           title={t('admin.models.currency')}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border text-[0.625rem] leading-none text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+          className={cn(
+            'flex h-5 w-5 shrink-0 items-center justify-center rounded border border-border text-[0.625rem] leading-none text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring',
+            className,
+          )}
         >
           {currencySymbol(value)}
         </button>

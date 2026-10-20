@@ -1,6 +1,6 @@
 // ADR-091 (этап 2): тесты HTTP-переноса проекта (экспорт/импорт) на tmp-каталогах.
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -13,7 +13,14 @@ import type {
 } from './project-portable.js';
 import { createFileStorage } from '../../storage/storage-context.js';
 import { SessionManager } from '../../sessions/manager.js';
+import { MemoryMaintenanceAuditRepository } from '../../storage/memory/index.js';
+import { readTarGz } from '../../maintenance/archive.js';
+import { buildBombArchive } from '../../test-helpers/archive-bomb.js';
 import { exportProject } from '../../projects/portable.js';
+
+/** Реальный секрет в карте обфускации сессии (плейсхолдер → значение). */
+const REAL_SECRET = 'sk-live-DO-NOT-LEAK';
+const PLACEHOLDER = '⟦SYNTH_SECRET_1⟧';
 
 /** Mock-auth: requireAuth пропускает запрос (для проверки самих роутов). */
 const passAuth = {
@@ -58,8 +65,45 @@ describe('Project Portable API Routes (ADR-091 §6)', () => {
     const project = storage.projects.create(name, 'local');
     await storage.projects.save(project);
     const manager = new SessionManager(storage.sessions, { projectStore: storage.projects });
-    await manager.createSession({ title: 'Сессия 1', projectId: project.id });
+    const session = await manager.createSession({ title: 'Сессия 1', projectId: project.id });
+    // Карта обфускации LLM Gateway + раскрытые значения плейсхолдера в
+    // metadata сообщения (ADR-036) — секреты, не должны уезжать в архив
+    // проекта по умолчанию (security-фикс 0.11.3).
+    session.obfuscationMap = { [PLACEHOLDER]: REAL_SECRET };
+    session.messages = [
+      {
+        id: 'm1',
+        role: 'assistant' as never,
+        seq: 1,
+        origin: 'local',
+        parts: [],
+        content: 'ответ',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { secrets: { [PLACEHOLDER]: REAL_SECRET } },
+      } as never,
+    ];
+    await manager.saveSession(session);
     return project.id;
+  };
+
+  /** Тексты payload'ов сессий из архива (gzip-байты). */
+  const sessionPayloads = async (bytes: Buffer): Promise<string[]> => {
+    const out: string[] = [];
+    const tmp = join(tmpDir, `read-${Math.random().toString(36).slice(2)}.tar.gz`);
+    await writeFile(tmp, bytes);
+    try {
+      await readTarGz(tmp, (entry) => {
+        if (entry.type === 'file' && entry.path.startsWith('sessions/') && entry.path.endsWith('.json')) {
+          out.push(entry.content.toString('utf-8'));
+        }
+      });
+    } finally {
+      await rm(tmp, { force: true });
+    }
+    return out;
   };
 
   /** Экспортирует проект в файл внутри tmp-каталога теста и возвращает байты. */
@@ -123,6 +167,66 @@ describe('Project Portable API Routes (ADR-091 §6)', () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
   });
 
+  describe('security-фикс 0.11.3: секреты сессий в архиве проекта', () => {
+    it('GET /:id/export (по умолчанию) — архив БЕЗ карты обфускации и metadata.secrets', async () => {
+      const id = await makeProject('No Secrets');
+      const res = await makeApp().request(`/api/v2/projects/${id}/export`);
+      expect(res.status).toBe(200);
+
+      const payloads = await sessionPayloads(Buffer.from(await res.arrayBuffer()));
+      expect(payloads.length).toBeGreaterThan(0);
+      for (const payload of payloads) {
+        expect(payload).not.toContain('obfuscationMap');
+        expect(payload).not.toContain('obfuscation_map');
+        expect(payload).not.toContain(REAL_SECRET);
+        expect(payload).not.toContain('"secrets"');
+      }
+    });
+
+    it('GET /:id/export?withSecrets=true — непривилегированный инициатор → 403', async () => {
+      const id = await makeProject('Opt-in denied');
+      const res = await makeApp({ canExportSecrets: () => false }).request(
+        `/api/v2/projects/${id}/export?withSecrets=true`,
+      );
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+    });
+
+    it('GET /:id/export?withSecrets=true — без `canExportSecrets` → 403 (fail-closed)', async () => {
+      const id = await makeProject('Opt-in default');
+      const res = await makeApp().request(`/api/v2/projects/${id}/export?withSecrets=true`);
+      expect(res.status).toBe(403);
+    });
+
+    it('GET /:id/export?withSecrets=true — привилегированный инициатор → 200, секреты в архиве, аудит с withSecrets=true', async () => {
+      const id = await makeProject('Opt-in allowed');
+      const audit = new MemoryMaintenanceAuditRepository();
+      const res = await makeApp({ canExportSecrets: () => true, audit }).request(
+        `/api/v2/projects/${id}/export?withSecrets=true`,
+      );
+      expect(res.status).toBe(200);
+
+      const payloads = await sessionPayloads(Buffer.from(await res.arrayBuffer()));
+      expect(payloads.some((p) => p.includes(REAL_SECRET))).toBe(true);
+      expect(payloads.some((p) => p.includes('obfuscationMap'))).toBe(true);
+
+      const created = (await audit.list()).find((e) => e.op === 'export.created');
+      expect(created?.details?.withSecrets).toBe(true);
+    });
+
+    it('GET /:id/export (по умолчанию) — аудит с withSecrets=false', async () => {
+      const id = await makeProject('Audit default');
+      const audit = new MemoryMaintenanceAuditRepository();
+      const res = await makeApp({ canExportSecrets: () => true, audit }).request(
+        `/api/v2/projects/${id}/export`,
+      );
+      expect(res.status).toBe(200);
+
+      const created = (await audit.list()).find((e) => e.op === 'export.created');
+      expect(created?.details?.withSecrets).toBe(false);
+    });
+  });
+
   it('POST /import — 201, проект и сессии созданы', async () => {
     const id = await makeProject('Source');
     const bytes = await exportBytes(id);
@@ -178,6 +282,21 @@ describe('Project Portable API Routes (ADR-091 §6)', () => {
     });
     expect(res.status).toBe(413);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  it('POST /import — archive-«бомба» (распакованный объём сверх лимита) → 400 VALIDATION_ERROR', async () => {
+    // Сжатый архив маленький, а распакованный — гигабайты: лимит импорта
+    // обрывает разбор (до буферизации содержимого записи).
+    const app = makeApp();
+    const res = await app.request('/api/v2/projects/import', {
+      method: 'POST',
+      body: archiveForm(buildBombArchive(1024 * 1024 * 1024)),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    // Проекты не созданы.
+    const storage = createFileStorage({ dataDir: tmpDir });
+    expect(await storage.projects.list()).toHaveLength(0);
   });
 
   it('POST /import — mergeInto без canEdit → 403', async () => {

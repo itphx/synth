@@ -12,6 +12,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { useAuthStore } from '@/stores/authStore'
 import { confirm } from '@/lib/confirm'
 import { QuickSettingsPopup } from '../auth/QuickSettingsPopup'
+import { AnalyticsButton } from './AnalyticsButton'
 import { NotificationPopup } from './NotificationPopup'
 import { GlobalTransportIndicator } from './GlobalTransportIndicator'
 import { HybridStatusIndicator } from './HybridStatusIndicator'
@@ -332,6 +333,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
           <GlobalTransportIndicator />
           {deviceType === 'tablet' && <HybridStatusIndicator />}
           <NotificationPopup />
+          <AnalyticsButton />
           <PwaInstallButton />
           <QuickSettingsPopup
             onSettingsClick={onSettingsClick}
@@ -610,6 +612,7 @@ export const Header = ({ onSettingsClick }: HeaderProps) => {
         <GlobalTransportIndicator />
         <HybridStatusIndicator />
         <NotificationPopup />
+        <AnalyticsButton />
         <QuickSettingsPopup
           onSettingsClick={onSettingsClick}
           onAnalyticsClick={() => setAnalyticsDialogOpen(true)}

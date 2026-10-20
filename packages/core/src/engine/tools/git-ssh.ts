@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import type { Project, ToolContext } from '@itphx/synth-shared';
+import type { GitRepoConfig, Project, ToolContext } from '@itphx/synth-shared';
 import { normalizeGitRepoConfig } from '@itphx/synth-shared';
 import type { SessionManager } from '../../sessions/manager.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
@@ -95,6 +95,65 @@ function resolveProjectDir(project: Project, workspacesRoot?: string): string | 
   return workspacesRoot ? resolve(workspacesRoot, project.workspace) : undefined;
 }
 
+/**
+ * ADR-076: запись реестра `project.repos` для каталога `cwd` — по относительному
+ * пути от корня workspace проекта. `cwd` вне workspace → записи нет.
+ */
+function findRepoEntry(project: Project, cwd: string, workspacesRoot?: string): GitRepoConfig | null {
+  const projectDir = resolveProjectDir(project, workspacesRoot);
+  if (!projectDir) return null;
+
+  const rel = relative(projectDir, resolve(cwd));
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+  const relPath = normalizeRelPath(rel);
+
+  for (const raw of project.repos ?? []) {
+    const normalized = normalizeGitRepoConfig(raw);
+    if (normalized && normalizeRelPath(normalized.path) === relPath) return normalized;
+  }
+  return null;
+}
+
+/**
+ * Результат поиска записи реестра git-репозиториев проекта для каталога `cwd`.
+ * - `entry` — запись найдена (URL может отсутствовать — репозиторий заведён локально);
+ * - `no_project` — у сессии нет проекта (реестра нет);
+ * - `not_registered` — проект есть, но каталог в реестре не зарегистрирован.
+ */
+export type ProjectRepoLookup =
+  | { kind: 'entry'; entry: GitRepoConfig; url?: string }
+  | { kind: 'no_project' }
+  | { kind: 'not_registered' };
+
+/**
+ * ADR-076: запись реестра `project.repos` для каталога `cwd`.
+ * Нужен сетевым git-тулам (`git_push`/`git_pull`): remote обязан указывать на
+ * репозиторий, зарегистрированный в проекте, — иначе содержимое репозитория
+ * можно выгрузить на произвольный хост (git-дочерние процессы не идут через
+ * egress-политику, ADR-099).
+ */
+export async function resolveProjectRepoEntry(ctx: ToolContext, cwd: string): Promise<ProjectRepoLookup> {
+  const extra = ctx.extra as GitSshExtra | undefined;
+  if (!extra?.sessionManager || !extra?.projectStore) return { kind: 'no_project' };
+
+  const sessionId = ctx.sessionId || extra.sessionId;
+  if (!sessionId) return { kind: 'no_project' };
+
+  let project: Project | null = null;
+  try {
+    const session = await extra.sessionManager.getSession(sessionId);
+    if (!session?.projectId) return { kind: 'no_project' };
+    project = await extra.projectStore.load(session.projectId);
+  } catch {
+    return { kind: 'no_project' };
+  }
+  if (!project) return { kind: 'no_project' };
+
+  const entry = findRepoEntry(project, cwd, extra.workspacesRoot);
+  if (!entry) return { kind: 'not_registered' };
+  return { kind: 'entry', entry, url: entry.url };
+}
+
 export async function resolveRepoGitEnv(ctx: ToolContext, cwd: string): Promise<RepoGitEnvResult> {
   const extra = ctx.extra as GitSshExtra | undefined;
   if (!extra?.sshKeyStore) return { cleanup: noopCleanup };
@@ -112,23 +171,7 @@ export async function resolveRepoGitEnv(ctx: ToolContext, cwd: string): Promise<
   }
   if (!project) return { cleanup: noopCleanup };
 
-  const projectDir = resolveProjectDir(project, extra.workspacesRoot);
-  if (!projectDir) return { cleanup: noopCleanup };
-
-  const rel = relative(projectDir, resolve(cwd));
-  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    return { cleanup: noopCleanup };
-  }
-  const relPath = normalizeRelPath(rel);
-
-  let entry: { path: string; sshKeyId?: string } | null = null;
-  for (const raw of project.repos ?? []) {
-    const normalized = normalizeGitRepoConfig(raw);
-    if (normalized && normalizeRelPath(normalized.path) === relPath) {
-      entry = normalized;
-      break;
-    }
-  }
+  const entry = findRepoEntry(project, cwd, extra.workspacesRoot);
   if (!entry?.sshKeyId) return { cleanup: noopCleanup };
 
   let revealed: { privateKey: string; passphrase?: string } | null;
