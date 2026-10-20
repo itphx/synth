@@ -18,6 +18,69 @@ export * from './schemas/index.js';
 export * from './protocols/index.js';
 export * from './utils/index.js';
 export * from './skills/frontmatter.js';
+// ADR-086/PROP-090: контракт манифеста расширения `synth.pack` (типы + zod).
+export {
+  PACK_KINDS,
+  PACK_TYPES,
+  PACK_NAME_REGEX,
+  PACK_VERSION_REGEX,
+  PACK_HOST_RANGE_REGEX,
+  PACK_AGENT_MODES,
+  packKindSchema,
+  packTypeSchema,
+  packNameSchema,
+  packVersionSchema,
+  packHostSchema,
+  packMcpProvideSchema,
+  packSkillMetadataSchema,
+  packSkillProvideSchema,
+  packAgentProvideSchema,
+  packPipelineProvideSchema,
+  packMcpProvidesSchema,
+  packProvidesSchema,
+  packManifestSchema,
+  isPackHostRange,
+  normalizePackProvides,
+  validatePackManifest,
+} from './types/pack.js';
+export type {
+  PackKind,
+  PackType,
+  PackManifest,
+  PackProvides,
+  PackAgentProvide,
+  PackSkillProvide,
+  PackMcpProvide,
+  PackPipelineProvide,
+  PackAgentMode,
+} from './types/pack.js';
+// ADR-051/PROP-059: контракт пайплайна (определение, шаг, состояние, экземпляр).
+export {
+  pipelineStepKindSchema,
+  eventMatchSchema,
+  pipelineArtifactSchema,
+  pipelineStepSchema,
+  pipelineErrorPolicySchema,
+  pipelineDefinitionSchema,
+  pipelineInstanceStatusSchema,
+  pipelineStepStatusSchema,
+  pipelineStepStateSchema,
+  pipelineTriggerSchema,
+  pipelineInstanceSchema,
+} from './types/pipeline.js';
+export type {
+  PipelineStepKind,
+  EventMatch,
+  PipelineArtifact,
+  PipelineStep,
+  PipelineErrorPolicy,
+  PipelineDefinition,
+  PipelineInstanceStatus,
+  PipelineStepStatus,
+  PipelineStepState,
+  PipelineTrigger,
+  PipelineInstance,
+} from './types/pipeline.js';
 export { SYNTH_VERSION } from './version.js';
 export * from './model-metadata.js';
 
