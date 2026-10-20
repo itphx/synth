@@ -3,11 +3,12 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { SessionManager, EventBus, QueueProcessorManager, ChatOrchestrator, ContextOptimizer, RequestSessionService } from '../../index.js';
+import type { SessionTree } from '../../sessions/manager.js';
 import { MessageRole, SESSION_MODES, generateStreamId, nowISO, sessionUpdateSchema, createResolveAuthorName, PROJECT_ICON_KEYS, PROJECT_COLOR_KEYS, isProjectIconKey, isProjectColorKey } from '@itphx/synth-shared';
 import type { Message, Session } from '@itphx/synth-shared';
 import type { ProfileStore } from '@itphx/synth-shared';
 import { enqueueUserMessage, sseEventStream, DEFAULT_AGENT_ID, SubagentResumeError, computeSessionStats } from '../../index.js';
-import { serializeSession, serializeMessage } from '../serialize.js';
+import { serializeSession, serializeMessage, redactSessionSecretValues } from '../serialize.js';
 import type { ProjectStoreLike } from '../../storage/project-store.js';
 import { isRemoteRef, toLocalId, toRemoteRef, toRemote, mergeItems, remoteErrorToHttp } from '../../remote/aggregate.js';
 import { RemoteError } from '../../remote/types.js';
@@ -146,6 +147,21 @@ export interface SessionRoutesOptions {
    * сессий (`GET /`) и доступ по id. Managed не задаёт (id реальные).
    */
   localOwnerResolver?: LocalOwnerResolver;
+  /**
+   * ADR-036: право видеть РЕАЛЬНЫЕ значения секретов в обычном чтении сессии
+   * (`GET /`, `GET /:id`, `GET /:id/messages` → `messages[].metadata.secrets`).
+   *
+   * Значения секретов — привилегия читателя, а не «свойство ответа»: по
+   * умолчанию (политика не задана) реальные значения видит только ВЛАДЕЛЕЦ
+   * сессии (`ownerId ?? userId` === текущий пользователь) — fail-closed.
+   * Standalone (один локальный пользователь, `resolveUserId` → `local`)
+   * поведение прежнее: владелец видит свои значения.
+   *
+   * Backend задаёт правило явно: владелец сессии + `ADMIN`/`AUDITOR` (тот же
+   * набор привилегий, что у `GET /:id/secrets`); остальным читателям
+   * (участник проекта, `LEAD` без владения) значения вычищаются.
+   */
+  canRevealSecrets?: (c: Context, session: Session) => boolean | Promise<boolean>;
 }
 
 const DEFAULT_MESSAGES: SessionRouteMessages = {
@@ -278,6 +294,44 @@ export function createSessionRoutes(
   }
 
   /**
+   * ADR-036: право раскрыть реальные значения секретов читателю сессии.
+   *
+   * Политика задаётся backend'ом (`opts.canRevealSecrets`); дефолт — только
+   * владелец сессии (fail-closed). Проверка — здесь, в ОДНОЙ точке: обработчики
+   * только форматируют ответ по решению (инвариант 16 — правило не дублируется
+   * между guard'ом и обработчиком).
+   */
+  const resolveCanRevealSecrets = async (
+    c: Context,
+    session: Session,
+    userId?: string,
+  ): Promise<boolean> => {
+    if (opts.canRevealSecrets) return (await opts.canRevealSecrets(c, session)) === true;
+    const owner = session.ownerId ?? session.userId;
+    if (!owner) return false;
+    const uid = userId ?? (await resolveUserId(c));
+    if (owner === uid) return true;
+    // ADR-089 (standalone): legacy-владелец (UUID профиля `local`) — локальный.
+    if (opts.localOwnerResolver && (await opts.localOwnerResolver.isLocalOwner(owner))) {
+      return await opts.localOwnerResolver.isLocalOwner(uid);
+    }
+    return false;
+  };
+
+  /**
+   * ADR-036: сериализация сессии ДЛЯ ОТВЕТА — реальные значения секретов
+   * (`messages[].metadata.secrets`) отдаются только читателю с правом
+   * раскрытия; остальным — тот же разговор без значений (ключи-плейсхолдеры
+   * остаются, клиент показывает «значение скрыто»).
+   *
+   * Очистка — на КОПИИ ответа: сохранённая сессия не мутируется.
+   */
+  const serializeForReader = async (c: Context, session: Session, userId?: string) => {
+    const canReveal = await resolveCanRevealSecrets(c, session, userId);
+    return serializeSession(session, { agentRegistry, redactSecrets: !canReveal });
+  };
+
+  /**
    * Локальная фильтрация списка по project_id. remote-ref (`remote:<uuid>`)
    * фильтровать локально нельзя — его обрабатывает remote-ветка/вызывающая сторона.
    */
@@ -308,7 +362,7 @@ export function createSessionRoutes(
     }
 
     if (!hasRemoteGetter) {
-      return c.json(filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry })));
+      return c.json(await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId))));
     }
 
     const remoteClient = resolveClient();
@@ -319,7 +373,7 @@ export function createSessionRoutes(
     }
 
     if (!remoteClient) {
-      return c.json(filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry })));
+      return c.json(await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId))));
     }
 
     try {
@@ -329,7 +383,9 @@ export function createSessionRoutes(
       }
       // Локальные сериализуем в DTO ДО объединения — иначе в merged-список
       // попадут сырые Session (camelCase) рядом с remote-DTO (snake_case).
-      const localDto = filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry }));
+      const localDto = await Promise.all(
+        filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId)),
+      );
       const remote = (await remoteClient.listSessions(projectId)) as Array<Record<string, unknown>>;
       return c.json(mergeItems(localDto, remote));
     } catch (err) {
@@ -337,7 +393,9 @@ export function createSessionRoutes(
       if (err instanceof RemoteError) {
         console.warn(`[hybrid] удалённый backend недоступен (${err.code}): ${err.message}`);
         if (projectId && isRemoteRef(projectId)) return c.json([]);
-        return c.json(filterByProject(sessions, projectId).map((s) => serializeSession(s, { agentRegistry })));
+        return c.json(
+          await Promise.all(filterByProject(sessions, projectId).map((s) => serializeForReader(c, s, userId))),
+        );
       }
       throw err;
     }
@@ -440,7 +498,8 @@ export function createSessionRoutes(
     }
     const readonlyDenied = serviceProjectProjection(c, session.projectId);
     if (readonlyDenied) return readonlyDenied;
-    return c.json(serializeSession(session, { agentRegistry }));
+    // ADR-036: реальные значения секретов — только читателю с правом раскрытия.
+    return c.json(await serializeForReader(c, session));
   });
 
   app.patch('/:id', auth.requireAuth, scoped('sessions:prompt'), async (c) => {
@@ -770,8 +829,11 @@ export function createSessionRoutes(
     }
     const messagesDenied = serviceProjectProjection(c, session.projectId);
     if (messagesDenied) return messagesDenied;
+    // ADR-036: тот же носитель секретов, что и в `GET /:id` — право раскрытия
+    // то же (решается в одной точке — `resolveCanRevealSecrets`).
+    const canReveal = await resolveCanRevealSecrets(c, session);
     return c.json({
-      messages: session.messages.map((m, i) => serializeMessage(m, i)),
+      messages: session.messages.map((m, i) => serializeMessage(m, i, { redactSecrets: !canReveal })),
       session_id: session.id,
     });
   });
@@ -959,12 +1021,27 @@ export function createSessionRoutes(
 
   app.get('/:id/children', auth.requireAuth, async (c) => {
     const children = await sessionManager.getChildren(c.req.param('id'));
-    return c.json(children.map((s) => serializeSession(s, { agentRegistry })));
+    // ADR-036: у детей своя привилегия раскрытия (владелец — свой).
+    return c.json(await Promise.all(children.map((s) => serializeForReader(c, s))));
   });
 
   app.get('/:id/tree', auth.requireAuth, async (c) => {
     const tree = await sessionManager.getSessionTree(c.req.param('id'));
-    return c.json(tree);
+    // ADR-036: дерево отдаёт СЫРЫЕ сессии — значения секретов вычищаются
+    // на копии (та же привилегия раскрытия, что и в `GET /:id`).
+    const redactNode = async (node: SessionTree): Promise<SessionTree> => {
+      const session = node.session;
+      let visible = session;
+      if (session) {
+        const canReveal = await resolveCanRevealSecrets(c, session);
+        visible = canReveal ? session : redactSessionSecretValues(session);
+      }
+      return {
+        session: visible,
+        children: await Promise.all(node.children.map(redactNode)),
+      };
+    };
+    return c.json(await redactNode(tree));
   });
 
   app.post('/:id/fork', chainMiddleware([auth.requireAuth, ...forkMiddleware]), async (c) => {

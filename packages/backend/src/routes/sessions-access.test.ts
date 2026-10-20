@@ -34,6 +34,7 @@ const USERS: Record<string, MockUser> = {
   owner: { id: 'owner', username: 'owner', roles: ['USER'] } as MockUser,
   other: { id: 'other', username: 'other', roles: ['USER'] } as MockUser,
   member: { id: 'member', username: 'member', roles: ['USER'] } as MockUser,
+  editor: { id: 'editor', username: 'editor', roles: ['USER'] } as MockUser,
   projectOwner: { id: 'projectOwner', username: 'projectOwner', roles: ['USER'] } as MockUser,
   admin: { id: 'admin', username: 'admin', roles: ['ADMIN'] } as MockUser,
   lead: { id: 'lead', username: 'lead', roles: ['LEAD'] } as MockUser,
@@ -517,9 +518,15 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
     });
 
     it('security-фикс 0.11.3: очищенный экспорт импортируется без потерь (round-trip)', async () => {
+      // ИЗМЕНЕНО (security-фикс 0.11.3, Дефект 2): импорт сессии В ПРОЕКТ —
+      // запись в проект (инвариант 21), поэтому нужен уровень «редактирование
+      // контента проекта». Раньше Round-trip делал VIEWER-участник — это было
+      // возможно только потому, что гейт импорта требовал права ЧТЕНИЯ проекта.
+      // Теперь участник с правом записи (EDITOR) — round-trip сохранён, а
+      // VIEWER получает 403 (см. describe 'POST /import').
       const { app, sessionManager, projectStore } = await makeApp();
       const project = projectStore.create('P', 'owner');
-      project.members['member'] = 'viewer' as never;
+      project.members['member'] = 'editor' as never;
       await projectStore.save(project);
       const session = await sessionManager.createSession({
         title: 'shared', ownerId: 'owner', userId: 'owner', projectId: project.id,
@@ -568,6 +575,188 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       const { app } = await makeApp();
       const res = await app.request('/api/v2/sessions/nope/export', { headers: auth('owner') });
       expect(res.status).toBe(404);
+    });
+  });
+
+  /**
+   * Импорт сессии В ПРОЕКТ — это ЗАПИСЬ в проект (инвариант 21: read-уровень
+   * доступа не расширяет права на изменение). Поэтому нужен уровень
+   * «редактирование контента проекта» (`canEditProjectContent`: owner /
+   * EDITOR / LEAD / ADMIN) — тот же, что у импорта проекта целиком. VIEWER
+   * участник проекта получает 403.
+   */
+  describe('POST /import (импорт сессии в проект)', () => {
+    async function seedProjectWithRoles() {
+      const { app, sessionManager, projectStore } = await makeApp();
+      const project = projectStore.create('P', 'owner');
+      project.members['member'] = 'viewer' as never;
+      project.members['editor'] = 'editor' as never;
+      await projectStore.save(project);
+      const source = await sessionManager.createSession({ title: 'S', ownerId: 'owner', userId: 'owner' });
+      return { app, sessionManager, projectStore, project, source };
+    }
+
+    const payload = (projectId: string) => JSON.stringify({
+      title: 'imported',
+      import: { project_id: projectId },
+      messages: [],
+    });
+
+    it('VIEWER-участник проекта → 403 (импорт в проект — запись)', async () => {
+      const { app, sessionManager, project } = await seedProjectWithRoles();
+
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: auth('member'),
+        body: payload(project.id),
+      });
+      expect(res.status).toBe(denied);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('FORBIDDEN');
+      // Сессия не создана.
+      const sessions = await sessionManager.listSessions({ userId: 'member' });
+      expect(sessions).toHaveLength(0);
+    });
+
+    it('EDITOR-участник / владелец проекта / ADMIN → 201', async () => {
+      const { app, sessionManager, project } = await seedProjectWithRoles();
+
+      for (const u of ['editor', 'owner', 'admin']) {
+        const res = await app.request('/api/v2/sessions/import', {
+          method: 'POST',
+          headers: auth(u),
+          body: payload(project.id),
+        });
+        expect(res.status, u).toBe(201);
+        const created = (await res.json()) as { id: string; project_id: string };
+        expect(created.project_id, u).toBe(project.id);
+        const stored = await sessionManager.getSession(created.id);
+        expect(stored?.projectId, u).toBe(project.id);
+      }
+    });
+
+    it('посторонний (не участник проекта) → 403', async () => {
+      const { app, project } = await seedProjectWithRoles();
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: auth('other'),
+        body: payload(project.id),
+      });
+      expect(res.status).toBe(denied);
+    });
+
+    it('без целевого прое��та — импорт в личные сессии работает (проект не задан)', async () => {
+      const { app } = await seedProjectWithRoles();
+      const res = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: auth('member'),
+        body: JSON.stringify({ title: 'personal', messages: [] }),
+      });
+      expect(res.status).toBe(201);
+    });
+  });
+
+  /**
+   * ADR-036: реальные значения секретов (`messages[].metadata.secrets`) —
+   * привилегия читателя, а не свойство ответа. Владелец сессии видит свои
+   * значения (UI раскрывает плейсхолдер инлайн), остальные читатели (участник
+   * проекта, LEAD без владения) — тот же разговор, но без значений.
+   */
+  describe('обычное чтение сессии (GET /:id): реальные значения секретов', () => {
+    async function seedSharedSession() {
+      const { app, sessionManager, projectStore } = await makeApp();
+      const project = projectStore.create('P', 'owner');
+      project.members['member'] = 'viewer' as never;
+      await projectStore.save(project);
+      const session = await sessionManager.createSession({
+        title: 'shared', ownerId: 'owner', userId: 'owner', projectId: project.id,
+      });
+      session.obfuscationMap = { [PLACEHOLDER]: REAL_SECRET };
+      session.messages = [{
+        id: 'm1',
+        role: MessageRole.ASSISTANT,
+        seq: 1,
+        origin: 'local',
+        parts: [],
+        content: 'ответ с секретом',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { secrets: { [PLACEHOLDER]: REAL_SECRET } },
+      } as never];
+      await sessionManager.saveSession(session);
+      return { app, sessionManager, session };
+    }
+
+    type ReadBody = {
+      messages?: Array<{ content?: string; metadata?: { secrets?: Record<string, string> } }>;
+    };
+
+    it('участник проекта (VIEWER) → 200, но реальных значений в ответе нет', async () => {
+      const { app, session } = await seedSharedSession();
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('member') });
+      expect(res.status).toBe(ok);
+      const body = (await res.json()) as ReadBody;
+      expect(JSON.stringify(body)).not.toContain(REAL_SECRET);
+      // Ключи-плейсхолдеры сохранены — клиент показывает «значение скрыто».
+      expect(body.messages?.[0]?.metadata?.secrets).toEqual({ [PLACEHOLDER]: '' });
+      // Разговор цел.
+      expect(body.messages?.[0]?.content).toBe('ответ с секретом');
+    });
+
+    it('владелец сессии → реальные значения на месте (UI раскрывает плейсхолдер)', async () => {
+      const { app, session } = await seedSharedSession();
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('owner') });
+      expect(res.status).toBe(ok);
+      const body = (await res.json()) as ReadBody;
+      expect(body.messages?.[0]?.metadata?.secrets).toEqual({ [PLACEHOLDER]: REAL_SECRET });
+    });
+
+    it('ADMIN → реальные значения (тот же набор привилегий, что у GET /:id/secrets)', async () => {
+      const { app, session } = await seedSharedSession();
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('admin') });
+      expect(res.status).toBe(ok);
+      const body = (await res.json()) as ReadBody;
+      expect(body.messages?.[0]?.metadata?.secrets).toEqual({ [PLACEHOLDER]: REAL_SECRET });
+    });
+
+    it('LEAD без владения → 200, но реальных значений нет', async () => {
+      const { app, session } = await seedSharedSession();
+
+      const res = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('lead') });
+      expect(res.status).toBe(ok);
+      const body = (await res.json()) as ReadBody;
+      expect(JSON.stringify(body)).not.toContain(REAL_SECRET);
+    });
+
+    it('чтение НЕ мутирует сохранённую сессию', async () => {
+      const { app, sessionManager, session } = await seedSharedSession();
+
+      await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('member') });
+      await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('owner') });
+
+      const stored = await sessionManager.getSession(session.id);
+      expect(stored?.messages[0]?.metadata?.secrets).toEqual({ [PLACEHOLDER]: REAL_SECRET });
+      expect(stored?.obfuscationMap).toEqual({ [PLACEHOLDER]: REAL_SECRET });
+    });
+
+    it('список сессий и GET /:id/messages — те же правила', async () => {
+      const { app, session } = await seedSharedSession();
+
+      const list = await app.request('/api/v2/sessions', { headers: auth('member') });
+      expect(list.status).toBe(ok);
+      expect(JSON.stringify(await list.json())).not.toContain(REAL_SECRET);
+
+      const messages = await app.request(`/api/v2/sessions/${session.id}/messages`, { headers: auth('member') });
+      expect(messages.status).toBe(ok);
+      expect(JSON.stringify(await messages.json())).not.toContain(REAL_SECRET);
+
+      const ownerMessages = await app.request(`/api/v2/sessions/${session.id}/messages`, { headers: auth('owner') });
+      expect(ownerMessages.status).toBe(ok);
+      expect(JSON.stringify(await ownerMessages.json())).toContain(REAL_SECRET);
     });
   });
 });

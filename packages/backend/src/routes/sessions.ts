@@ -346,9 +346,15 @@ export function createSessionRoutes(
       }
       // Безопасность: импорт привязывает сессию к проекту и выдаёт агенту его
       // workspace — без проверки доступа к проекту получается IDOR (чтение/запись
-      // файлов чужого проекта). Требуем доступ по единому правилу проекта
-      // (owner/участник/LEAD/ADMIN) — тот же `createProjectAccess`, что у project-роутов.
-      if (!canReadProject(c as Parameters<typeof kit.isAdmin>[0], existing, user.id)) {
+      // файлов чужого проекта).
+      //
+      // Импорт сессии В ПРОЕКТ — это ЗАПИСЬ в проект (инвариант 21: read-уровень
+      // доступа не расширяет права на изменение), поэтому нужен уровень
+      // «редактирование контента проекта» (`canEditProjectContent`: owner /
+      // EDITOR / LEAD / ADMIN) — тот же, что у импорта проекта целиком
+      // (`core/server/routes/project-portable.ts`, `deps.canEdit`). Участник с
+      // ролью VIEWER получает 403.
+      if (!canEditProjectContent(c as Parameters<typeof kit.isAdmin>[0], existing, user.id)) {
         return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
       }
     }
@@ -690,6 +696,21 @@ export function createSessionRoutes(
       mergeMiddleware: [mergeRateLimit],
       enableSessionEvents: false,
       resolveDefaultAgent,
+      // ADR-036: право видеть РЕАЛЬНЫЕ значения секретов (плейсхолдер → значение)
+      // в обычном чтении сессии (`GET /sessions/:id`, `GET /sessions/:id/messages`,
+      // список сессий): владелец сессии + `ADMIN`/`AUDITOR` — тот же набор
+      // привилегий, что у `GET /:id/secrets` и у полного экспорта сессии
+      // (`createSessionExportGuard`). Остальным читателям (участник проекта
+      // VIEWER/EDITOR, владелец проекта, LEAD без владения) значения
+      // вычищаются из ответа — ключи-плейсхолдеры остаются.
+      canRevealSecrets: async (c, session) => {
+        const user = await kit.getCurrentUser(c);
+        if (!user) return false;
+        const ctx = c as Parameters<typeof kit.isAdmin>[0];
+        if (typeof kit.isAdmin === 'function' && kit.isAdmin(ctx)) return true;
+        if (typeof kit.hasRole === 'function' && kit.hasRole(ctx, 'AUDITOR')) return true;
+        return (session.ownerId ?? session.userId) === user.id;
+      },
       // ADR-052 (этап I): scope-гейт и проектная проекция service-key (i18n-403).
       scopeGuard,
       serviceProjectProjection,

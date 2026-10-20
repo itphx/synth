@@ -69,6 +69,17 @@ interface RouteError {
   code: string;
 }
 
+/**
+ * Ключ контекста Hono: id проекта, РАЗРЕШЁННЫЙ граничным guard'ом.
+ *
+ * Единственный источник id проекта для обработчиков (ADR-089, инвариант 16):
+ * guard резолвит id ОДИН раз и кладёт его в контекст; обработчик берёт id
+ * ТОЛЬКО отсюда. Если бы обработчик читал id из тела сам, guard и обработчик
+ * могли бы разрешить РАЗНЫЕ проекты — доступ проверен по одному, а действие
+ * выполнено по другому (IDOR).
+ */
+export const GIT_PROJECT_ID_CONTEXT_KEY = 'gitProjectId';
+
 /** Вход upsert записи реестра (merge с существующей по `id`/`path`). */
 interface RegisterInput {
   id?: string;
@@ -177,20 +188,47 @@ export function createGitRoutes(
   }
 
   /**
-   * id проекта из запроса: query (`project_id` — read-эндпоинты) либо тело
-   * (`projectId` — write/scan). Если id не извлекся — его разбирает и валидирует
-   * обработчик (400/404), проверять нечего.
+   * id проекта запроса — ЕДИНЫЙ резолвер (query `project_id` либо тело
+   * `projectId`).
+   *
+   * Расхождение (в query один id, в теле — другой) НЕ разрешается в пользу
+   * тела: запрос неоднозначен → `ambiguous` (fail-closed, 403): ни один проект
+   * не авторизуется и ни один не затрагивается.
    */
-  async function resolveProjectId(c: Context): Promise<string | undefined> {
+  async function resolveProjectId(c: Context): Promise<{ id?: string; ambiguous: boolean }> {
     const fromQuery = c.req.query('project_id');
-    if (fromQuery) return fromQuery;
+    let fromBody: string | undefined;
     try {
       const body = (await c.req.json()) as { projectId?: unknown } | null;
       const id = body?.projectId;
-      return typeof id === 'string' && id.length > 0 ? id : undefined;
+      fromBody = typeof id === 'string' && id.length > 0 ? id : undefined;
     } catch {
-      return undefined;
+      fromBody = undefined;
     }
+    if (fromQuery && fromBody && fromQuery !== fromBody) return { ambiguous: true, id: undefined };
+    return { id: fromQuery ?? fromBody, ambiguous: false };
+  }
+
+  /**
+   * id проекта, РАЗРЕШЁННЫЙ guard'ом (из контекста) — единственный источник
+   * для обработчика. Guard не разрешил id → обработчик обязан отказать
+   * (fail-closed), а не взять id из тела: иначе guard и обработчик разошлись
+   * бы по проекту (IDOR).
+   */
+  function authorizedProjectId(c: Context): string {
+    const id = c.get(GIT_PROJECT_ID_CONTEXT_KEY as never) as string | undefined;
+    if (!id) {
+      throw { error: 'Не указан проект', code: 'VALIDATION_ERROR' } satisfies RouteError;
+    }
+    return id;
+  }
+
+  /** Единый ответ об отказе в доступе к проекту (формат git-роутов). */
+  function forbidden(c: Context): Response {
+    return c.json(
+      { error: { error: 'Доступ к проекту запрещён', code: 'FORBIDDEN' } satisfies RouteError },
+      403,
+    );
   }
 
   /**
@@ -200,21 +238,29 @@ export function createGitRoutes(
    * `read` — эндпоинты чтения git-данных (`scan`/`log`/`commit`): право чтения
    * проекта. `write` — эндпоинты изменения реестра/репозиториев: право на
    * изменение контента проекта. Отказ — 403 `FORBIDDEN` (fail-closed).
+   *
+   * Разрешённый id кладётся в контекст (`GIT_PROJECT_ID_CONTEXT_KEY`) —
+   * обработчик работает только с ним (см. `authorizedProjectId`).
    */
   const projectGuard = (kind: 'read' | 'write'): MiddlewareHandler => async (c, next) => {
-    const projectId = await resolveProjectId(c);
-    if (!projectId) return next();
+    const { id, ambiguous } = await resolveProjectId(c);
+    if (ambiguous) {
+      // Два разных id проекта в одном запросе — неоднозначный запрос: не
+      // авторизуем ни один проект (fail-closed).
+      return forbidden(c);
+    }
+    if (!id) {
+      // id не извлёкся — проверять нечего; обработчик обязан отказать сам
+      // (400/404), взять id из тела он больше не может.
+      return next();
+    }
+    c.set(GIT_PROJECT_ID_CONTEXT_KEY as never, id as never);
     const authorize = kind === 'read'
       ? (opts.authorizeRead ?? opts.authorizeProject)
       : opts.authorizeProject;
     if (!authorize) return next();
-    const allowed = await authorize(c, projectId).catch(() => false);
-    if (!allowed) {
-      return c.json(
-        { error: { error: 'Доступ к проекту запрещён', code: 'FORBIDDEN' } satisfies RouteError },
-        403,
-      );
-    }
+    const allowed = await authorize(c, id).catch(() => false);
+    if (!allowed) return forbidden(c);
     return next();
   };
 
@@ -274,8 +320,8 @@ export function createGitRoutes(
   // POST /api/v2/git/scan
   app.post('/scan', auth.requireAuth, projectGuard('read'), async (c) => {
     try {
-      const body = gitScanBodySchema.parse(await c.req.json());
-      const project = await loadProject(body.projectId);
+      gitScanBodySchema.parse(await c.req.json());
+      const project = await loadProject(authorizedProjectId(c));
       const wsPath = await resolveWorkspace(project);
       const repos = await gitService.scanWorkspace(wsPath);
       return c.json({ repos });
@@ -289,7 +335,7 @@ export function createGitRoutes(
   app.post('/repos/init', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitInitBodySchema.parse(await c.req.json());
-      const project = await loadProject(body.projectId);
+      const project = await loadProject(authorizedProjectId(c));
       const wsPath = await resolveWorkspace(project);
       const ssh = await resolveSshEnv(body.sshKeyId);
       try {
@@ -319,7 +365,7 @@ export function createGitRoutes(
   app.post('/repos/clone', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitCloneBodySchema.parse(await c.req.json());
-      const project = await loadProject(body.projectId);
+      const project = await loadProject(authorizedProjectId(c));
       const wsPath = await resolveWorkspace(project);
 
       const relPath = body.path || deriveRepoName(body.url);
@@ -362,7 +408,7 @@ export function createGitRoutes(
   app.post('/repos/register', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitReposRegisterBodySchema.parse(await c.req.json());
-      const project = await loadProject(body.projectId);
+      const project = await loadProject(authorizedProjectId(c));
       const wsPath = await resolveWorkspace(project);
       // Валидация containment: абсолютный/выходящий путь → 400 git.repo_path_invalid.
       resolveRepoPath(wsPath, body.path);
@@ -387,7 +433,7 @@ export function createGitRoutes(
   app.post('/repos/remove', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitReposRemoveBodySchema.parse(await c.req.json());
-      const project = await loadProject(body.projectId);
+      const project = await loadProject(authorizedProjectId(c));
 
       const repos = normalizeRepos(project);
       const removed = findRepo(repos, body.id, body.path);
@@ -418,7 +464,7 @@ export function createGitRoutes(
   app.post('/repos/fetch', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitReposFetchBodySchema.parse(await c.req.json());
-      const project = await loadProject(body.projectId);
+      const project = await loadProject(authorizedProjectId(c));
 
       const repos = normalizeRepos(project);
       const entry = findRepo(repos, body.id, body.path);
@@ -459,7 +505,7 @@ export function createGitRoutes(
         repo_path: c.req.query('repo_path') || '',
         max_count: c.req.query('max_count'),
       });
-      const project = await loadProject(query.project_id);
+      const project = await loadProject(authorizedProjectId(c));
       const wsPath = await resolveWorkspace(project);
       const commits = await gitService.getLog(wsPath, query.repo_path, query.max_count || 30);
       return c.json({ commits });
@@ -477,7 +523,7 @@ export function createGitRoutes(
         repo_path: c.req.query('repo_path') || '',
         hash: c.req.query('hash'),
       });
-      const project = await loadProject(query.project_id);
+      const project = await loadProject(authorizedProjectId(c));
       const wsPath = await resolveWorkspace(project);
       const commit = await gitService.getCommitDetail(wsPath, query.repo_path, query.hash);
       return c.json({ commit });

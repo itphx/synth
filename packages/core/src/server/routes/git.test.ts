@@ -206,3 +206,130 @@ describe('Git API Routes (ADR-076 §T3)', () => {
     expect(body.error.code).toBe('git.repo_path_invalid');
   });
 });
+
+/**
+ * IDOR (security-фикс 0.11.3, регресс): граничный guard и обработчик должны
+ * разрешать ОДИН И ТОТ ЖЕ id проекта.
+ *
+ * Раньше guard брал id из query (`project_id`), а обработчик — из тела
+ * (`projectId`): `POST /git/scan?project_id=<свой>` с телом
+ * `{"projectId":"<чужой>"}` проходил проверку доступа по СВОЕМУ проекту, а
+ * обработчик читал (и менял) ЧУЖОЙ. Теперь id резолвится один раз (в guard'е),
+ * кладётся в контекст, а обработчик берёт id ТОЛЬКО оттуда.
+ */
+describe('Git API Routes: единый источник id проекта (IDOR)', () => {
+  let root: string;
+  let dataDir: string;
+  let workspacesRoot: string;
+  let ownProjectId: string;
+  let foreignProjectId: string;
+  let projectStore: ProjectStore;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'synth-git-idor-'));
+    dataDir = join(root, 'data');
+    workspacesRoot = join(root, 'workspaces');
+    await mkdir(join(workspacesRoot, 'own'), { recursive: true });
+    await mkdir(join(workspacesRoot, 'foreign'), { recursive: true });
+    projectStore = new ProjectStore({ dataDir });
+    const own = projectStore.create('Own', 'caller', { workspace: 'own' });
+    const foreign = projectStore.create('Foreign', 'stranger', { workspace: 'foreign' });
+    ownProjectId = own.id;
+    foreignProjectId = foreign.id;
+    await projectStore.save(own);
+    await projectStore.save(foreign);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** Доступ есть только к СВОЕМУ проекту (эмуляция backend RBAC). */
+  function makeApp() {
+    const app = new Hono();
+    const allowed = async (_c: unknown, id: string) => id === ownProjectId;
+    app.route('/api/v2/git', createGitRoutes(
+      { requireAuth: passAuth },
+      projectStore,
+      workspacesRoot,
+      { authorizeProject: allowed, authorizeRead: allowed },
+    ));
+    return app;
+  }
+
+  function post(app: Hono, path: string, body: unknown, query?: string) {
+    return app.request(`/api/v2/git${path}${query ? `?${query}` : ''}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('read-роут: query-проект и проект из тела различаются → 403, чужой проект не тронут', async () => {
+    const app = makeApp();
+    const res = await post(app, '/scan', { projectId: foreignProjectId }, `project_id=${ownProjectId}`);
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: { error: string; code: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+    expect(body.error.error).toMatch(/Доступ к проекту запрещён/);
+    // Чужой проект не изменён (scan ничего не пишет — реестр пуст).
+    expect((await projectStore.load(foreignProjectId))?.repos ?? []).toHaveLength(0);
+  });
+
+  it('write-роуты: query-проект и проект из тела различаются → 403, чужой проект НЕ изменён', async () => {
+    const app = makeApp();
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['/repos/register', { path: 'vendor/lib' }],
+      ['/repos/init', { path: 'repo' }],
+      ['/repos/clone', { url: 'https://example.com/x.git', path: 'x' }],
+      ['/repos/remove', { path: 'vendor/lib' }],
+      ['/repos/fetch', { path: 'vendor/lib' }],
+    ];
+    for (const [path, extra] of cases) {
+      const res = await post(app, path, { projectId: foreignProjectId, ...extra }, `project_id=${ownProjectId}`);
+      expect(res.status, path).toBe(403);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code, path).toBe('FORBIDDEN');
+      // Реестр ЧУЖОГО проекта не тронут (иначе guard и обработчик разошлись).
+      expect((await projectStore.load(foreignProjectId))?.repos ?? [], path).toHaveLength(0);
+      // И СВОЙ проект не тронут — запрос отклонён целиком.
+      expect((await projectStore.load(ownProjectId))?.repos ?? [], path).toHaveLength(0);
+    }
+  });
+
+  it('write-роут: id только в теле (без query) — работает, guard проверяет именно его', async () => {
+    const app = makeApp();
+    const checked: string[] = [];
+    const app2 = new Hono();
+    app2.route('/api/v2/git', createGitRoutes(
+      { requireAuth: passAuth },
+      projectStore,
+      workspacesRoot,
+      {
+        authorizeProject: async (_c, id) => { checked.push(id); return id === ownProjectId; },
+      },
+    ));
+    const res = await post(app2, '/repos/register', { projectId: ownProjectId, path: 'vendor/lib' });
+    expect(res.status).toBe(200);
+    // Guard разрешил id ИЗ ТЕЛА — обработчик работал с тем же id.
+    expect(checked).toEqual([ownProjectId]);
+    expect((await projectStore.load(ownProjectId))?.repos).toHaveLength(1);
+    expect(app).toBeDefined();
+  });
+
+  it('совпадающие query и тело → запрос обрабатывается (id один и тот же)', async () => {
+    const app = makeApp();
+    const res = await post(app, '/repos/register', { projectId: ownProjectId, path: 'vendor/lib' }, `project_id=${ownProjectId}`);
+    expect(res.status).toBe(200);
+    expect((await projectStore.load(ownProjectId))?.repos).toHaveLength(1);
+  });
+
+  it('id не извлечётся (нет ни в query, ни в теле) → 400, проект не задет', async () => {
+    const app = makeApp();
+    const res = await post(app, '/repos/register', { path: 'vendor/lib' });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect((await projectStore.load(ownProjectId))?.repos ?? []).toHaveLength(0);
+  });
+});

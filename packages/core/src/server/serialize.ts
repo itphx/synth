@@ -8,11 +8,66 @@ export interface SerializeAgentRegistry {
 
 export interface SerializeSessionOptions {
   agentRegistry?: SerializeAgentRegistry | null;
+  /**
+   * ADR-036: убрать РЕАЛЬНЫЕ значения секретов из `metadata.secrets`
+   * (плейсхолдер → значение) в ответе. Ключи-плейсхолдеры сохраняются —
+   * клиент по ним показывает «значение скрыто» (UI, ADR-036).
+   *
+   * Значения по умолчанию отдаются: право видеть реальные секреты — привилегия
+   * читателя, её решает вызывающий (см. `canRevealSecrets` в роутах сессий).
+   */
+  redactSecrets?: boolean;
+}
+
+/**
+ * ADR-036: копия `metadata` сообщения БЕЗ реальных значений секретов.
+ *
+ * Убираются только значения (`{ '⟦SYNTH_SECRET_1⟧': 'sk-…' }` →
+ * `{ '⟦SYNTH_SECRET_1⟧': '' }`); ключи-плейсхолдеры остаются — по ним клиент
+ * понимает, что в тексте есть секрет, и показывает его скрытым. Остальные
+ * поля `metadata` (в т.ч. `tool_results`) не трогаются.
+ *
+ * Исходный объект НЕ мутируется (очистка — на ответе, сохранённая сессия
+ * остаётся как есть).
+ */
+function redactSecretValues(metadata: Message['metadata']): Record<string, unknown> | null {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const secrets = metadata.secrets;
+  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) return metadata;
+  const cleared: Record<string, string> = {};
+  for (const key of Object.keys(secrets as Record<string, unknown>)) cleared[key] = '';
+  return { ...metadata, secrets: cleared };
+}
+
+/** Опции сериализации одного сообщения. */
+export interface SerializeMessageOptions {
+  /** ADR-036: убрать реальные значения секретов из `metadata.secrets`. */
+  redactSecrets?: boolean;
+}
+
+/**
+ * ADR-036: копия СЫРОЙ сессии без реальных значений секретов.
+ *
+ * Для ответов, где сессия отдаётся не в DTO (`serializeSession`), а объектом
+ * `Session` (например, дерево сессий `GET /:id/tree`). Значения секретов
+ * убираются, ключи-плейсхолдеры остаются; исходная сессия не мутируется.
+ */
+export function redactSessionSecretValues(session: Session): Session {
+  const redact = (m: Message): Message => ({
+    ...m,
+    metadata: redactSecretValues(m.metadata) ?? undefined,
+  });
+  return {
+    ...session,
+    messages: session.messages.map(redact),
+    pendingMessages: session.pendingMessages.map(redact),
+  };
 }
 
 export function serializeSession(session: Session, opts?: SerializeSessionOptions) {
   const agentId = session.settings.agentRole;
   const agent = agentId && opts?.agentRegistry ? opts.agentRegistry.get(agentId) : undefined;
+  const messageOpts: SerializeMessageOptions = { redactSecrets: opts?.redactSecrets === true };
   return {
     id: session.id,
     origin: 'local' as const,
@@ -30,8 +85,8 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
     user_id: session.userId || null,
     owner_id: session.ownerId || null,
     project_id: session.projectId || null,
-    messages: session.messages.map((m, i) => serializeMessage(m, i)),
-    pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i)),
+    messages: session.messages.map((m, i) => serializeMessage(m, i, messageOpts)),
+    pending_messages: session.pendingMessages.map((m, i) => serializeMessage(m, i, messageOpts)),
     pending_count: session.pendingMessages.length,
     current_stream: session.currentStream
       ? {
@@ -82,7 +137,7 @@ export function serializeSession(session: Session, opts?: SerializeSessionOption
   };
 }
 
-export function serializeMessage(msg: Message, index: number) {
+export function serializeMessage(msg: Message, index: number, opts?: SerializeMessageOptions) {
   return {
     index,
     id: msg.id,
@@ -126,7 +181,8 @@ export function serializeMessage(msg: Message, index: number) {
         }
       : null,
     timestamp: msg.createdAt,
-    metadata: msg.metadata || null,
+    /** ADR-036: реальные значения секретов — только читателю с правом раскрытия. */
+    metadata: opts?.redactSecrets ? redactSecretValues(msg.metadata) : msg.metadata || null,
     source: msg.source || null,
     tool_calls: (msg.metadata?.tool_results as Array<Record<string, unknown>>) || msg.toolCalls || null,
     tool_call_id: msg.toolCallId || null,
