@@ -644,7 +644,7 @@ jobs:
           printf '\n## Offline / закрытый контур\n\n' >> tmp/release-body.md
           printf 'Portable: `synth-%s-linux-x64.tar.gz`, `synth-%s-darwin-x64.tar.gz`, `synth-%s-darwin-arm64.tar.gz`, `synth-%s-win-x64.zip`.\n\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION" >> tmp/release-body.md
           printf 'Образы: `synth`, `synth-backend`, `synth-ui` (amd64/arm64, `docker save`, `.tar.gz`).\n\n' >> tmp/release-body.md
-          printf 'Контрольные суммы — `SHA256SUMS` в ассетах релиза; документация — https://docs.synth.itphx.ru/deploy/offline/\n' >> tmp/release-body.md
+          printf 'Контрольные суммы — `SHA256SUMS` в ассетах релиза; документация — https://docs.synth.itphx.ru/offline/\n' >> tmp/release-body.md
 
       - name: Опубликовать релиз (тело + ассет)
         env:
@@ -820,7 +820,7 @@ jobs:
             printf '\n## Offline / air-gapped\n\n'
             printf 'Portable: `synth-%s-linux-x64.tar.gz`, `synth-%s-darwin-x64.tar.gz`, `synth-%s-darwin-arm64.tar.gz`, `synth-%s-win-x64.zip`.\n\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION"
             printf 'Images: `synth`, `synth-backend`, `synth-ui` (amd64/arm64, `docker save`, `.tar.gz`).\n\n'
-            printf 'Checksums: `SHA256SUMS` in the release assets. Documentation: https://docs.synth.itphx.ru/deploy/offline/\n'
+            printf 'Checksums: `SHA256SUMS` in the release assets. Documentation: https://docs.synth.itphx.ru/offline/\n'
           } >> tmp/release-body.md
 
           if [ -f packages/synth/dist/cli.js ]; then
