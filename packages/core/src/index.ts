@@ -778,14 +778,15 @@ export {
   listTarGz,
   readFileFromTarGz,
   ArchivePathError,
+  ArchiveLimitError,
 } from './maintenance/archive.js';
-export type { ArchiveEntryMeta, ArchiveSource, ReadTarGzEntry } from './maintenance/archive.js';
+export type { ArchiveEntryMeta, ArchiveSource, ReadTarGzEntry, ReadTarGzOptions } from './maintenance/archive.js';
 export { createBackup, runBackupCommand, computeContentChecksum, safetyCopyPath } from './maintenance/backup.js';
 export type { BackupManifest, CreateBackupOptions, BackupCommandOptions, SafetyCopyKind } from './maintenance/backup.js';
 export { restoreBackup, runRestoreCommand, BackupChecksumError } from './maintenance/restore.js';
 export type { RestoreOptions, RestoreCommandOptions } from './maintenance/restore.js';
 // ADR-091 (этап 2): портативный экспорт/импорт проекта (`synth project export|import`).
-export { exportProject, importProject, ProjectPortableError } from './projects/portable.js';
+export { exportProject, importProject, ProjectPortableError, DEFAULT_PROJECT_IMPORT_LIMITS } from './projects/portable.js';
 export type {
   ExportProjectOptions,
   ExportProjectResult,
@@ -794,6 +795,7 @@ export type {
   ProjectExportEntry,
   ProjectExportManifest,
   ProjectPortableErrorCode,
+  ProjectImportLimits,
 } from './projects/portable.js';
 export { SkillStore } from './storage/skill-store.js';
 export type { SkillStoreConfig, CreateSkillInput, UpdateSkillMarkdownInput } from './storage/skill-store.js';

@@ -60,6 +60,7 @@ import { serializeProject } from '../server/serialize.js';
 import { LOCAL_USER_ID } from '../server/local-owner.js';
 import { buildSessionExport, resolveLocalWorkspace, walkDir } from '../remote/transfer.js';
 import {
+  ArchiveLimitError,
   ArchivePathError,
   readFileFromTarGz,
   readTarGz,
@@ -174,6 +175,12 @@ export interface ImportProjectOptions {
   yes?: boolean;
   /** Корень локальных workspace (по умолчанию `{dataDir}/workspaces`). */
   workspacesRoot?: string;
+  /**
+   * Лимиты распакованного объёма импорта (ADR-091): число записей, размер одной
+   * записи, суммарный объём. Не заданы — `DEFAULT_PROJECT_IMPORT_LIMITS`.
+   * Проверяются в момент чтения архива (fail-closed).
+   */
+  limits?: Partial<ProjectImportLimits>;
   /** Владелец новых проекта/сессий (standalone — `local`). */
   ownerId?: string;
   /** ADR-092: аудит-журнал обслуживания (best-effort). */
@@ -204,6 +211,46 @@ export interface ImportProjectResult {
   /** Маппинг старый id → новый id (по импортированным сессиям). */
   idMap: Record<string, string>;
 }
+
+/**
+ * Лимиты распакованного объёма при импорте портативного архива (ADR-091) —
+ * защита от archive-бомб (архив-«бомба» распаковывается в гигабайты и
+ * исчерпывает память/диск инстанса).
+ *
+ * Обоснование значений:
+ *
+ * - `maxEntries = 100_000` — реальный проект (workspace с `node_modules`) укладывается
+ *   в десятки тысяч файлов; 100k — с запасом, но ограничивает накладные расходы
+ *   (манифест + карта собранных записей) и время разбора;
+ * - `maxEntryBytes = 128 МиБ` — потолок для ОДНОГО файла (веса модели, видео);
+ *   содержимое записи читается в память целиком, поэтому лимит заметно ниже
+ *   суммарного (пик ≈ 2 × этот лимит из-за промежуточного буфера чтения);
+ * - `maxTotalBytes = 2 ГиБ` — суммарный распакованный объём архива: столько
+ *   реально занимает большой проект с workspace и историей сессий. Это же верхняя
+ *   граница расхода RAM/диска одного импорта (содержимое собирается в память перед
+ *   записью в workspace). Проект больше — переносится частями или лимит поднимается
+ *   явно через `ImportProjectOptions.limits`.
+ *
+ * Проверки выполняются **в момент чтения** архива (`readTarGz`): лимит одной записи
+ * сверяется по заголовку ДО буферизации содержимого, суммарный — по сумме размеров
+ * заголовков. Поэтому превышение обрывает разбор, а не констатирует факт после
+ * распаковки.
+ */
+export interface ProjectImportLimits {
+  /** Максимум записей в архиве (файлы + каталоги). */
+  maxEntries: number;
+  /** Максимум размера одной записи (байты). */
+  maxEntryBytes: number;
+  /** Максимум суммарного распакованного объёма (байты). */
+  maxTotalBytes: number;
+}
+
+/** Лимиты импорта по умолчанию (см. `ProjectImportLimits`). */
+export const DEFAULT_PROJECT_IMPORT_LIMITS: ProjectImportLimits = {
+  maxEntries: 100_000,
+  maxEntryBytes: 128 * 1024 * 1024,
+  maxTotalBytes: 2 * 1024 * 1024 * 1024,
+};
 
 /** sha256 файла потоково (без чтения целиком в память). */
 function _hashFile(absPath: string): Promise<string> {
@@ -433,12 +480,24 @@ async function _exportProject(opts: ExportProjectOptions): Promise<ExportProject
   }
 }
 
-/** Читает и валидирует манифест архива проекта (ADR-091). */
-async function _readManifest(archive: string): Promise<ProjectExportManifest> {
+/**
+ * Читает и валидирует манифест архива проекта (ADR-091).
+ *
+ * Чтение идёт с теми же лимитами, что и импорт (`ProjectImportLimits`): превышение
+ * лимита распакованного объёма — `invalid-archive` (fail-closed), архив не
+ * распаковывается целиком.
+ */
+async function _readManifest(
+  archive: string,
+  limits: ProjectImportLimits,
+): Promise<ProjectExportManifest> {
   let buffer: Buffer | null;
   try {
-    buffer = await readFileFromTarGz(archive, 'manifest.json');
+    buffer = await readFileFromTarGz(archive, 'manifest.json', limits);
   } catch (err) {
+    if (err instanceof ArchiveLimitError) {
+      throw new ProjectPortableError('invalid-archive', `Архив превышает лимиты импорта: ${err.message}`);
+    }
     throw new ProjectPortableError('invalid-archive', `Не удалось прочитать архив: ${_errMsg(err)}`);
   }
   if (!buffer) {
@@ -471,11 +530,13 @@ async function _readManifest(archive: string): Promise<ProjectExportManifest> {
  * Проверяет контрольные суммы архива и собирает нужные файлы (project.json,
  * sessions/**, workspace/**) за один проход. Несовпадение sha256 или отсутствие
  * файла из манифеста → `checksum-mismatch`; повреждённый/небезопасный архив →
- * `invalid-archive`.
+ * `invalid-archive`; превышение лимитов распакованного объёма → `invalid-archive`
+ * (fail-closed: разбор обрывается в момент чтения, а не после распаковки).
  */
 async function _verifyArchive(
   archive: string,
   manifest: ProjectExportManifest,
+  limits: ProjectImportLimits,
 ): Promise<Map<string, Buffer>> {
   const expected = new Map<string, string>();
   for (const entry of manifest.entries) {
@@ -487,27 +548,34 @@ async function _verifyArchive(
   const collected = new Map<string, Buffer>();
   const seen = new Set<string>();
   try {
-    await readTarGz(archive, (entry) => {
-      if (entry.type !== 'file' || entry.path === 'manifest.json') return;
-      const want = expected.get(entry.path);
-      if (want) {
-        const got = createHash('sha256').update(entry.content).digest('hex');
-        if (got !== want) {
-          throw new ProjectPortableError('checksum-mismatch', `Контрольная сумма не совпадает: ${entry.path}`);
+    await readTarGz(
+      archive,
+      (entry) => {
+        if (entry.type !== 'file' || entry.path === 'manifest.json') return;
+        const want = expected.get(entry.path);
+        if (want) {
+          const got = createHash('sha256').update(entry.content).digest('hex');
+          if (got !== want) {
+            throw new ProjectPortableError('checksum-mismatch', `Контрольная сумма не совпадает: ${entry.path}`);
+          }
+          seen.add(entry.path);
         }
-        seen.add(entry.path);
-      }
-      if (
-        entry.path === 'project.json'
-        || entry.path.startsWith('sessions/')
-        || entry.path === 'workspace'
-        || entry.path.startsWith('workspace/')
-      ) {
-        collected.set(entry.path, entry.content);
-      }
-    });
+        if (
+          entry.path === 'project.json'
+          || entry.path.startsWith('sessions/')
+          || entry.path === 'workspace'
+          || entry.path.startsWith('workspace/')
+        ) {
+          collected.set(entry.path, entry.content);
+        }
+      },
+      limits,
+    );
   } catch (err) {
     if (err instanceof ProjectPortableError) throw err;
+    if (err instanceof ArchiveLimitError) {
+      throw new ProjectPortableError('invalid-archive', `Архив превышает лимиты импорта: ${err.message}`);
+    }
     if (err instanceof ArchivePathError) {
       throw new ProjectPortableError('invalid-archive', `Небезопасный путь в архиве: ${err.path}`);
     }
@@ -528,7 +596,8 @@ async function _verifyArchive(
  * сессии; `mergeInto` импортирует сессии в существующий проект. Без `--dry-run`
  * и без `--yes` — отказ (`confirmation-required`).
  *
- * @throws ProjectPortableError `invalid-archive`/`checksum-mismatch` — битый архив;
+ * @throws ProjectPortableError `invalid-archive`/`checksum-mismatch` — битый архив
+ *   (в т.ч. превышение лимитов распакованного объёма — `ProjectImportLimits`);
  *   `project-not-found` — нет проекта для `mergeInto`; `project-name-conflict` —
  *   явное имя занято; `confirmation-required` — нет подтверждения.
  */
@@ -566,9 +635,11 @@ async function _importProject(opts: ImportProjectOptions): Promise<ImportProject
   const withWorkspace = !!opts.withWorkspace;
   const workspacesRoot = opts.workspacesRoot ? resolve(opts.workspacesRoot) : join(dataDir, 'workspaces');
   const ownerId = opts.ownerId ?? LOCAL_USER_ID;
+  // Лимиты распакованного объёма (ADR-091): fail-closed, проверка в момент чтения.
+  const limits: ProjectImportLimits = { ...DEFAULT_PROJECT_IMPORT_LIMITS, ...(opts.limits ?? {}) };
 
-  const manifest = await _readManifest(archive);
-  const collected = await _verifyArchive(archive, manifest);
+  const manifest = await _readManifest(archive, limits);
+  const collected = await _verifyArchive(archive, manifest, limits);
 
   const projectBuffer = collected.get('project.json');
   if (!projectBuffer) {

@@ -15,6 +15,7 @@ import { createFileStorage } from '../../storage/storage-context.js';
 import { SessionManager } from '../../sessions/manager.js';
 import { MemoryMaintenanceAuditRepository } from '../../storage/memory/index.js';
 import { readTarGz } from '../../maintenance/archive.js';
+import { buildBombArchive } from '../../test-helpers/archive-bomb.js';
 import { exportProject } from '../../projects/portable.js';
 
 /** Реальный секрет в карте обфускации сессии (плейсхолдер → значение). */
@@ -281,6 +282,21 @@ describe('Project Portable API Routes (ADR-091 §6)', () => {
     });
     expect(res.status).toBe(413);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  it('POST /import — archive-«бомба» (распакованный объём сверх лимита) → 400 VALIDATION_ERROR', async () => {
+    // Сжатый архив маленький, а распакованный — гигабайты: лимит импорта
+    // обрывает разбор (до буферизации содержимого записи).
+    const app = makeApp();
+    const res = await app.request('/api/v2/projects/import', {
+      method: 'POST',
+      body: archiveForm(buildBombArchive(1024 * 1024 * 1024)),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('VALIDATION_ERROR');
+    // Проекты не созданы.
+    const storage = createFileStorage({ dataDir: tmpDir });
+    expect(await storage.projects.list()).toHaveLength(0);
   });
 
   it('POST /import — mergeInto без canEdit → 403', async () => {

@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  ArchiveLimitError,
   ArchivePathError,
   listFilesForArchive,
   listTarGz,
@@ -12,6 +14,7 @@ import {
   readTarGz,
   writeTarGz,
 } from './archive.js';
+import { rawTarHeader, tarContent } from '../test-helpers/archive-bomb.js';
 
 describe('archive (tar.gz ustar)', () => {
   let tmpDir: string;
@@ -161,5 +164,112 @@ describe('archive (tar.gz ustar)', () => {
     expect(dirEntry?.size).toBe(0);
     const info = await stat(archive);
     expect(info.size).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Сырой ustar-заголовок с ЗАЯВЛЕННЫМ размером записи: позволяет собрать
+ * archive-«бомбу» (заголовок обещает гигабайты, а данных в архиве — килобайты).
+ */
+
+describe('archive: лимиты разбора (защита от archive-бомб)', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-archive-limits-'));
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('лимит одной записи: превышение отсекается по заголовку, содержимое не буферизуется', async () => {
+    // Заголовок объявляет 1 ГиБ, а в архиве — 8 байт данных.
+    const header = rawTarHeader('workspace/huge.bin', 1024 * 1024 * 1024);
+    const archive = join(tmpDir, 'bomb.tar.gz');
+    await writeFile(archive, gzipSync(Buffer.concat([header, tarContent(Buffer.alloc(8))])));
+
+    const seen: string[] = [];
+    let caught: unknown;
+    try {
+      await readTarGz(archive, (entry) => { seen.push(entry.path); }, { maxEntryBytes: 1024 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ArchiveLimitError);
+    expect((caught as ArchiveLimitError).limit).toBe('entry-size');
+    expect((caught as ArchiveLimitError).limitValue).toBe(1024);
+    // Ключевое: обработчик не вызван — содержимое огромной записи не буферизовалось.
+    expect(seen).toEqual([]);
+    // Файл архива на диске при этом маленький — распаковать его не успели.
+    expect((await stat(archive)).size).toBeLessThan(64 * 1024);
+  });
+
+  it('лимит числа записей: превышение обрывает разбор', async () => {
+    const archive = join(tmpDir, 'many.tar.gz');
+    await writeFile(archive, gzipSync(Buffer.concat([
+      rawTarHeader('a.txt', 1),
+      tarContent(Buffer.from('a')),
+      rawTarHeader('b.txt', 1),
+      tarContent(Buffer.from('b')),
+      rawTarHeader('c.txt', 1),
+      tarContent(Buffer.from('c')),
+    ])));
+
+    let caught: unknown;
+    try {
+      await readTarGz(archive, () => {}, { maxEntries: 2 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ArchiveLimitError);
+    expect((caught as ArchiveLimitError).limit).toBe('entries');
+  });
+
+  it('лимит суммарного объёма: превышение обрывает разбор', async () => {
+    const archive = join(tmpDir, 'total.tar.gz');
+    await writeFile(archive, gzipSync(Buffer.concat([
+      rawTarHeader('a.bin', 100),
+      tarContent(Buffer.alloc(100)),
+      rawTarHeader('b.bin', 100),
+      tarContent(Buffer.alloc(100)),
+    ])));
+
+    let caught: unknown;
+    try {
+      await readTarGz(archive, () => {}, { maxTotalBytes: 150 });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ArchiveLimitError);
+    expect((caught as ArchiveLimitError).limit).toBe('total-size');
+    expect((caught as ArchiveLimitError).actual).toBe(200);
+  });
+
+  it('в пределах лимитов архив читается как обычно', async () => {
+    const archive = join(tmpDir, 'ok.tar.gz');
+    await writeFile(archive, gzipSync(Buffer.concat([
+      rawTarHeader('a.txt', 5),
+      tarContent(Buffer.from('hello')),
+    ])));
+
+    const seen: string[] = [];
+    await readTarGz(archive, (entry) => { seen.push(entry.path); }, {
+      maxEntries: 10,
+      maxEntryBytes: 1024,
+      maxTotalBytes: 4096,
+    });
+    expect(seen).toEqual(['a.txt']);
+  });
+
+  it('readFileFromTarGz тоже ограничен (манифест читается в тех же рамках)', async () => {
+    const archive = join(tmpDir, 'manifest-bomb.tar.gz');
+    await writeFile(archive, gzipSync(Buffer.concat([
+      rawTarHeader('manifest.json', 1024 * 1024 * 1024),
+      tarContent(Buffer.alloc(8)),
+    ])));
+
+    await expect(readFileFromTarGz(archive, 'manifest.json', { maxEntryBytes: 1024 })).rejects
+      .toBeInstanceOf(ArchiveLimitError);
   });
 });
