@@ -25,6 +25,8 @@ import {
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
+  describePackRepository,
+  describePipelineRepository,
   describeProfileRepository,
   describeProjectRepository,
   describeProtectedPathsRepository,
@@ -186,4 +188,8 @@ describePg('контрактные тесты PostgreSQL-драйвера (ун�
 
   describeBlobStore('PG → BlobStore (file-backed)', () => makePort('blobs'));
   describeDefaultsRepository('PG → DefaultsRepository', () => makePort('defaults'));
+
+  // ADR-051/PROP-059 + ADR-086 §5: переходно файловые порты драйвера.
+  describePipelineRepository('PG → PipelineRepository (file-backed)', () => makePort('pipelines'));
+  describePackRepository('PG → PackRepository (file-backed)', () => makePort('packs'));
 });

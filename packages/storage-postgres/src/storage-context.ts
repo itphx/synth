@@ -155,5 +155,12 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     skills: file.skills,
     contextFiles: file.contextFiles,
     blobs: file.blobs,
+    // ADR-051/PROP-059 (пайплайны) и ADR-086 §5 (реестр установок пакетов) —
+    // переходно файловые (тот же FS/package-bound класс портов, что и выше):
+    // SQL-реализация этих двух портов в драйвере ещё не заведена, домен к ним
+    // ещё не подключён (PROP-090 отложен). Контрактный suite проходит и на них
+    // (файловая реализация core), поэтому поведение backend'ов совпадает.
+    pipelines: file.pipelines,
+    packs: file.packs,
   };
 }

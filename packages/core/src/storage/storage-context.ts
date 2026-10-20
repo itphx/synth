@@ -41,6 +41,8 @@ import type {
   SecurityAuditRepository,
   EgressRequestLogRepository,
   McpRegistryRepository,
+  PackRepository,
+  PipelineRepository,
   ProfileRepository,
   ProjectRepository,
   ProtectedPathsRepository,
@@ -89,6 +91,8 @@ import { AnalyticsRollupStore } from './analytics-rollup-store.js';
 import { FileDedupStore, MemoryDedupStore } from '../engine/events/dedup-store.js';
 import { SkillStore } from './skill-store.js';
 import { SkillBundleStore } from './skill-bundle-store.js';
+import { FilePipelineStore } from './file-pipeline-store.js';
+import { FilePackStore } from './file-pack-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
@@ -114,6 +118,8 @@ import {
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
+  MemoryPackRepository,
+  MemoryPipelineRepository,
   MemoryProfileRepository,
   MemoryProjectRepository,
   MemoryProtectedPathsRepository,
@@ -300,6 +306,10 @@ export interface StorageContext {
   contextFiles: ContextFileRepository;
   sshKeys: SSHKeyRepository;
   blobs: BlobStore;
+  /** ADR-051/PROP-059: определения и экземпляры пайплайнов. */
+  pipelines: PipelineRepository;
+  /** ADR-086 §5: реестр установок пакетов расширений. */
+  packs: PackRepository;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -519,6 +529,11 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
       env: config.env,
     }),
     blobs: new FileBlobStore({ root: dataDir }),
+    // ADR-051/PROP-059: пайплайны — определения (`pipelines/definitions.json`)
+    // и экземпляры (`pipelines/instances.json`).
+    pipelines: new FilePipelineStore({ dataDir }),
+    // ADR-086 §5: реестр установок пакетов расширений (`packs.json`).
+    packs: new FilePackStore({ dataDir }),
   };
 }
 
@@ -562,6 +577,8 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     contextFiles: new MemoryContextFileRepository(),
     sshKeys: new MemorySSHKeyRepository(),
     blobs: new MemoryBlobStore(),
+    pipelines: new MemoryPipelineRepository(),
+    packs: new MemoryPackRepository(),
   };
 }
 

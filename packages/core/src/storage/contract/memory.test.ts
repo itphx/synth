@@ -18,6 +18,8 @@ import {
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
+  describePackRepository,
+  describePipelineRepository,
   describeProfileRepository,
   describeProjectRepository,
   describeProtectedPathsRepository,
@@ -50,6 +52,8 @@ import {
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
+  MemoryPackRepository,
+  MemoryPipelineRepository,
   MemoryProfileRepository,
   MemoryProjectRepository,
   MemoryProtectedPathsRepository,
@@ -198,6 +202,16 @@ describe('контрактные тесты in-memory реализаций по�
   describeDefaultsRepository('MemoryDefaultsRepository → DefaultsRepository', async () => ({
     repo: new MemoryDefaultsRepository(),
   }));
+
+  // ADR-051/PROP-059: пайплайны (определения + экземпляры).
+  describePipelineRepository('MemoryPipelineRepository → PipelineRepository', async () => ({
+    repo: new MemoryPipelineRepository(),
+  }));
+
+  // ADR-086 §5: реестр установок пакетов расширений.
+  describePackRepository('MemoryPackRepository → PackRepository', async () => ({
+    repo: new MemoryPackRepository(),
+  }));
 });
 
 /** Специфика memory-реализаций: изоляция экземпляров и замороженные дефолты. */
@@ -231,5 +245,36 @@ describe('memory-реализации: изоляция экземпляров',
     const loaded = await repo.load('s1');
     (loaded as { title?: string }).title = 'mutated';
     expect((await repo.load('s1'))?.title).toBe('original');
+  });
+
+  it('два репозитория пайплайнов не делят данные', async () => {
+    const a = new MemoryPipelineRepository();
+    const b = new MemoryPipelineRepository();
+    await a.saveDefinition({
+      id: 'p1',
+      name: 'p1',
+      steps: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(await b.listDefinitions()).toEqual([]);
+    expect(await b.getDefinition('p1')).toBeNull();
+  });
+
+  it('два реестра пакетов не делят данные', async () => {
+    const a = new MemoryPackRepository();
+    const b = new MemoryPackRepository();
+    await a.save({
+      name: 'pack',
+      version: '1.0.0',
+      kind: 'pack',
+      status: 'active',
+      requiresApproval: false,
+      provides: { agents: [], skills: [], mcp: [], pipelines: [] },
+      installedAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(await b.list()).toEqual([]);
+    expect(await b.get('pack')).toBeNull();
   });
 });

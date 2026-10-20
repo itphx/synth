@@ -21,6 +21,7 @@ const PORT_KEYS = [
   'eventBindings', 'eventRoutes', 'eventJournal', 'identityClaims', 'webhooks',
   'webhookDeliveries', 'schedules', 'jobs', 'maintenanceAudit', 'dedup', 'skills', 'skillBundles',
   'contextFiles', 'sshKeys', 'blobs',
+  'pipelines', 'packs',
 ] as const satisfies readonly (keyof StorageContext)[];
 
 describe('StorageContext (PROP-032, W2.3)', () => {

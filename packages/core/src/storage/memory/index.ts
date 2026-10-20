@@ -41,6 +41,9 @@ export {
   MemoryContextFileRepository,
   MemoryBlobStore,
   MemorySSHKeyRepository,
+  // ADR-051/PROP-059 + ADR-086 §5: пайплайны и реестр установок пакетов.
+  MemoryPipelineRepository,
+  MemoryPackRepository,
 } from './content.js';
 
 // PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — общий generic-порт.

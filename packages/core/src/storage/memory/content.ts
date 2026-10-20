@@ -31,10 +31,18 @@ import { SSHKeyStoreError } from '../ssh-key-store.js';
 import type {
   BlobStore,
   ContextFileRepository,
+  PackInstallation,
+  PackRepository,
+  PipelineDefinitionRecord,
+  PipelineInstanceFilter,
+  PipelineInstanceRecord,
+  PipelineRepository,
   SSHKeyRepository,
   SkillBundleRepository,
   SkillRepository,
 } from '../ports/index.js';
+import { resolvePipelineInstanceLimit } from '../ports/pipeline-repository.js';
+import { resolveCreatedAt, resolveUpdatedAt } from '../record-timestamps.js';
 
 /** Проверка имени скилла/bundle (1–64, `^[a-z0-9]+(-[a-z0-9]+)*$`). */
 function assertSkillName(name: string, kind = 'скилла'): void {
@@ -499,5 +507,109 @@ export class MemorySSHKeyRepository implements SSHKeyRepository {
     return record.passphrase === undefined
       ? { privateKey: record.privateKey }
       : { privateKey: record.privateKey, passphrase: record.passphrase };
+  }
+}
+
+/**
+ * Порт пайплайнов (определения + экземпляры) поверх `Map`
+ * (ADR-051/PROP-059, реализация — `FilePipelineStore`).
+ *
+ * Семантика повторяет файловую реализацию: upsert определения по `id`
+ * (`createdAt` сохраняется, `updatedAt` монотонно обновляется), детерминированный
+ * порядок определений (по `id`), выборка экземпляров «свежие первыми» с
+ * фильтрами `pipelineId`/`status` и потолком `limit`.
+ * Возвращаемые записи — копии (`structuredClone`), как в остальных memory-портах.
+ */
+export class MemoryPipelineRepository implements PipelineRepository {
+  private readonly _definitions = new Map<string, PipelineDefinitionRecord>();
+  private readonly _instances = new Map<string, PipelineInstanceRecord>();
+
+  async saveDefinition(def: PipelineDefinitionRecord): Promise<void> {
+    const stored = this._definitions.get(def.id);
+    this._definitions.set(def.id, {
+      ...structuredClone(def),
+      createdAt: resolveCreatedAt(stored?.createdAt, def.createdAt),
+      updatedAt: resolveUpdatedAt(stored?.updatedAt, def.updatedAt),
+    });
+  }
+
+  async getDefinition(id: string): Promise<PipelineDefinitionRecord | null> {
+    const record = this._definitions.get(id);
+    return record ? structuredClone(record) : null;
+  }
+
+  async listDefinitions(): Promise<PipelineDefinitionRecord[]> {
+    return [...this._definitions.values()]
+      .map((d) => structuredClone(d))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }
+
+  async deleteDefinition(id: string): Promise<boolean> {
+    return this._definitions.delete(id);
+  }
+
+  async saveInstance(instance: PipelineInstanceRecord): Promise<void> {
+    const stored = this._instances.get(instance.id);
+    this._instances.set(instance.id, {
+      ...structuredClone(instance),
+      createdAt: resolveCreatedAt(stored?.createdAt, instance.createdAt),
+      updatedAt: resolveUpdatedAt(stored?.updatedAt, instance.updatedAt),
+    });
+  }
+
+  async getInstance(id: string): Promise<PipelineInstanceRecord | null> {
+    const record = this._instances.get(id);
+    return record ? structuredClone(record) : null;
+  }
+
+  async listInstances(filter?: PipelineInstanceFilter): Promise<PipelineInstanceRecord[]> {
+    const filtered = [...this._instances.values()].filter(
+      (i) =>
+        (filter?.pipelineId === undefined || i.pipelineId === filter.pipelineId) &&
+        (filter?.status === undefined || i.status === filter.status),
+    );
+    // Свежие первыми (`createdAt` убыв.), тайбрейкер — `id`.
+    const sorted = [...filtered].sort((a, b) => {
+      const diff = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+      if (diff !== 0 && !Number.isNaN(diff)) return diff;
+      return a.id.localeCompare(b.id);
+    });
+    return sorted.slice(0, resolvePipelineInstanceLimit(filter?.limit)).map((i) => structuredClone(i));
+  }
+}
+
+/**
+ * Порт реестра установок пакетов расширений поверх `Map`
+ * (ADR-086 §5, реализация — `FilePackStore`).
+ *
+ * Семантика повторяет файловую реализацию: upsert по имени пакета
+ * (`installedAt` сохраняется, `updatedAt` обновляется), детерминированный
+ * порядок списка (по имени), удаление — `true`/`false`.
+ */
+export class MemoryPackRepository implements PackRepository {
+  private readonly _packs = new Map<string, PackInstallation>();
+
+  async save(pack: PackInstallation): Promise<void> {
+    const stored = this._packs.get(pack.name);
+    this._packs.set(pack.name, {
+      ...structuredClone(pack),
+      installedAt: resolveCreatedAt(stored?.installedAt, pack.installedAt),
+      updatedAt: resolveUpdatedAt(stored?.updatedAt, pack.updatedAt),
+    });
+  }
+
+  async get(name: string): Promise<PackInstallation | null> {
+    const record = this._packs.get(name);
+    return record ? structuredClone(record) : null;
+  }
+
+  async list(): Promise<PackInstallation[]> {
+    return [...this._packs.values()]
+      .map((p) => structuredClone(p))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async delete(name: string): Promise<boolean> {
+    return this._packs.delete(name);
   }
 }

@@ -72,3 +72,22 @@ export type { ContextFileRepository } from './context-file-repository.js';
 export type { SSHKeyRepository } from './ssh-key-repository.js';
 export type { BlobStore } from './blob-store.js';
 export type { DefaultsRepository, AppearanceDefaults } from './defaults-repository.js';
+// ADR-051/PROP-059: пайплайны (определения + экземпляры).
+export type {
+  PipelineRepository,
+  PipelineDefinitionRecord,
+  PipelineInstanceRecord,
+  PipelineInstanceFilter,
+} from './pipeline-repository.js';
+export {
+  PIPELINE_INSTANCE_DEFAULT_LIMIT,
+  PIPELINE_INSTANCE_MAX_LIMIT,
+  resolvePipelineInstanceLimit,
+} from './pipeline-repository.js';
+// ADR-086 §5: реестр установок пакетов расширений.
+export type {
+  PackRepository,
+  PackInstallation,
+  PackInstallationProvides,
+  PackInstallationStatus,
+} from './pack-repository.js';
