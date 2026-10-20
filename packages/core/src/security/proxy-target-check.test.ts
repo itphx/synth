@@ -14,6 +14,7 @@ import { resolveProxyConfig, type ProxyConfig } from '@itphx/synth-shared';
 import { checkProxyTarget } from './proxy-check.js';
 import type { FetchLike } from './tls.js';
 import { startFakeProxy } from '../test-helpers/fake-proxy.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 
 const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
 const TARGET_CERT = readFileSync(join(FIX_DIR, 'tls-test-selfsigned.pem'), 'utf-8');
@@ -85,8 +86,7 @@ async function startRecordingTarget(
       return headers;
     },
     async close() {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeTestServer(server, { sockets });
     },
   };
 }
@@ -283,7 +283,7 @@ describe('checkProxyTarget — ошибки', () => {
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
     const port = (server.address() as AddressInfo).port;
-    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    cleanups.push(() => closeTestServer(server));
 
     const result = await checkProxyTarget({
       url: `https://127.0.0.1:${port}/`,
@@ -302,7 +302,7 @@ describe('checkProxyTarget — ошибки', () => {
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
     const port = (server.address() as AddressInfo).port;
-    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    cleanups.push(() => closeTestServer(server));
 
     const result = await checkProxyTarget({
       url: `https://127.0.0.1:${port}/`,

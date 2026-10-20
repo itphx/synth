@@ -4,6 +4,7 @@
  */
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
+import { closeTestServer } from './close-server.js';
 
 export interface FakeSocks5Options {
   /** Требовать user/pass (метод 0x02); иначе — no-auth (0x00). */
@@ -175,8 +176,7 @@ export async function startFakeSocks5Proxy(options: FakeSocks5Options = {}): Pro
       return targets;
     },
     async close() {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeTestServer(server, { sockets });
     },
   };
 }

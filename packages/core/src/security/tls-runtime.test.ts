@@ -18,6 +18,7 @@ import {
   initTlsTrust,
 } from './tls.js';
 import { EgressDispatcher } from './proxy-dispatcher.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 
 const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
 const CA_PEM = await readFile(join(FIX_DIR, 'tls-test-selfsigned.pem'), 'utf-8');
@@ -213,7 +214,7 @@ describe('EgressDispatcher: mTLS к цели по host', () => {
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeTestServer(server);
   });
 
   it('для совпавшего host отправляется клиентский сертификат', async () => {

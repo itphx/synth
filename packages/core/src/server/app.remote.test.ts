@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
 import { createStandaloneApp, injectRemoteProvider } from './app.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 import { createLocalAuth, type ServerUserPayload } from '../auth/local.js';
 import { JsonStore } from '../storage/json-store.js';
 import { clearRemoteTokenProviders } from '../providers/remote.js';
@@ -469,7 +470,7 @@ describe('createStandaloneApp: WS /ws/events send_message с remote-рефом (
       port,
       close: async () => {
         await handle.disconnectRemote?.().catch(() => {});
-        await new Promise<void>((resolve) => handle.server.close(() => resolve()));
+        await closeTestServer(handle.server);
         await rm(dir, { recursive: true, force: true }).catch(() => {});
       },
     };
@@ -647,7 +648,7 @@ describe('createStandaloneApp: WS /ws/events аутентификация чер
       port,
       close: async () => {
         await handle.disconnectRemote?.().catch(() => {});
-        await new Promise<void>((resolve) => handle.server.close(() => resolve()));
+        await closeTestServer(handle.server);
         await rm(dir, { recursive: true, force: true }).catch(() => {});
       },
     };

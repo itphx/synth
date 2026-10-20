@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 import { extractUser, extractUserFromTokens, OidcClient } from './oidc.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 
 describe('oidc extractUser', () => {
   it('берёт роли из realm_access id_token (ADMIN)', () => {
@@ -107,7 +108,7 @@ describe('OidcClient: проверка issuer и audience', () => {
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeTestServer(server);
   });
 
   /** Подписать JWT с заданными issuer/audience (роль admin в realm_access). */

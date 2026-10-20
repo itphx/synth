@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import type { Server } from 'node:http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBackendApp } from '../app.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 import type { BackendAppHandle } from '../app.js';
 
 const USER = 'user-key-456';
@@ -42,10 +43,7 @@ describe('createBackendListen: HTTP + WebSocket /ws/events', () => {
     backend.stopWebhookDeliveryPruner();
     for (const ws of sockets) ws.close();
     wss.close();
-    await new Promise<void>((resolve) => {
-      (server as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
-      server.close(() => resolve());
-    });
+    await closeTestServer(server);
     await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 

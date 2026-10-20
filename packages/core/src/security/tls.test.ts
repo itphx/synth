@@ -14,6 +14,7 @@ import {
   _resetTlsTrustForTests,
 } from './tls.js';
 import type { FetchLike } from './tls.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 
 // Публичный сертификат фикстуры: самоподписанный, помечен «TEST ONLY».
 const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
@@ -149,7 +150,7 @@ describe('интеграция с node:https (self-signed)', () => {
   });
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await closeTestServer(server);
   });
 
   beforeEach(() => {
