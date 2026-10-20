@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createSessionRoutes } from './sessions.js';
@@ -34,6 +34,7 @@ const USERS: Record<string, MockUser> = {
   owner: { id: 'owner', username: 'owner', roles: ['USER'] } as MockUser,
   other: { id: 'other', username: 'other', roles: ['USER'] } as MockUser,
   member: { id: 'member', username: 'member', roles: ['USER'] } as MockUser,
+  projectOwner: { id: 'projectOwner', username: 'projectOwner', roles: ['USER'] } as MockUser,
   admin: { id: 'admin', username: 'admin', roles: ['ADMIN'] } as MockUser,
   lead: { id: 'lead', username: 'lead', roles: ['LEAD'] } as MockUser,
   auditor: { id: 'auditor', username: 'auditor', roles: ['AUDITOR'] } as MockUser,
@@ -53,7 +54,15 @@ function createMockKit() {
   };
   return {
     requireAuth,
-    requirePermission: () => requireAuth,
+    // Ролевой guard — как в backend (`requirePermission('ADMIN','AUDITOR')`).
+    requirePermission: (...roles: string[]) => async (c: Context, next: Next) => {
+      const user = userFromHeader(c.req.header('Authorization'));
+      if (!user || !roles.some((r) => user.roles.includes(r))) {
+        return c.json({ error: { code: 'FORBIDDEN', message: 'no' } }, 403);
+      }
+      c.set('user', user);
+      await next();
+    },
     getCurrentUser: async (c: Context) => userFromHeader(c.req.header('Authorization')),
     isAdmin: (c: { get(key: 'user'): unknown }): boolean => {
       const u = c.get('user') as MockUser | undefined;
@@ -178,6 +187,115 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       for (const message of body.messages ?? []) {
         expect((message.metadata as Record<string, unknown> | undefined)?.secrets).toBeUndefined();
       }
+    });
+
+    it('владелец проекта (не владелец сессии) → 200 с очищенным экспортом, разговор цел', async () => {
+      const { app, sessionManager, projectStore } = await makeApp();
+      const project = projectStore.create('P', 'projectOwner');
+      await projectStore.save(project);
+      const session = await sessionManager.createSession({
+        title: 'shared', ownerId: 'owner', userId: 'owner', projectId: project.id,
+      });
+      session.obfuscationMap = { [PLACEHOLDER]: REAL_SECRET };
+      session.messages = [{
+        id: 'm1',
+        role: MessageRole.ASSISTANT,
+        seq: 1,
+        origin: 'local',
+        parts: [],
+        content: 'ответ с секретом',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { secrets: { [PLACEHOLDER]: REAL_SECRET } },
+      } as never];
+      await sessionManager.saveSession(session);
+
+      const res = await app.request(`/api/v2/sessions/${session.id}/export`, { headers: auth('projectOwner') });
+      expect(res.status).toBe(ok);
+      const body = (await res.json()) as {
+        obfuscationMap?: unknown;
+        messages?: Array<{ content?: string; metadata?: Record<string, unknown> }>;
+      };
+      expect(body.obfuscationMap).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain(REAL_SECRET);
+      expect(body.messages?.[0]?.content).toBe('ответ с секретом');
+    });
+
+    it('rate limit 10/60 c → 429 (11-й запрос владельца)', async () => {
+      const { app, id } = await seedOwnedSession();
+
+      for (let i = 0; i < 10; i++) {
+        const res = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth('owner') });
+        expect(res.status, `запрос ${i + 1}`).toBe(ok);
+      }
+      const limited = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth('owner') });
+      expect(limited.status).toBe(429);
+    });
+
+    it('prefix-guard отклоняет ДО обработчика: посторонний всегда получает 403 (даже за rate limit)', async () => {
+      // Доказательство, что маршрут покрыт общим prefix-guard'ом: решение о
+      // доступе принимается guard'ом (404/403), а не кодом маршрута.
+      const { app, id } = await seedOwnedSession();
+
+      for (let i = 0; i < 12; i++) {
+        const res = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth('other') });
+        expect(res.status, `запрос ${i + 1}`).toBe(denied);
+      }
+    });
+  });
+
+  describe('структура маршрута экспорта (инвариант 16)', () => {    it('маршрут экспорта зарегистрирован ПОСЛЕ prefix-guard\'а', async () => {
+      const src = await readFile(new URL('./sessions.ts', import.meta.url), 'utf-8');
+      const guardIdx = src.indexOf("app.use('/:id/*'");
+      const exportIdx = src.indexOf("app.get('/:id/export'");
+      expect(guardIdx, 'prefix-guard не найден').toBeGreaterThan(-1);
+      expect(exportIdx, 'маршрут экспорта не найден').toBeGreaterThan(-1);
+      expect(exportIdx, 'экспорт обязан быть зарегистрирован ПОСЛЕ guard\'а')
+        .toBeGreaterThan(guardIdx);
+    });
+
+    it('в обработчике экспорта нет копии правила доступа', async () => {
+      const src = await readFile(new URL('./sessions.ts', import.meta.url), 'utf-8');
+      const start = src.indexOf("app.get('/:id/export'");
+      expect(start).toBeGreaterThan(-1);
+      const end = src.indexOf('\n  });', start);
+      expect(end).toBeGreaterThan(start);
+      const block = src.slice(start, end);
+      // Решение о доступе — в guard'е; в обработчике остаётся только формат.
+      expect(block).not.toContain('FORBIDDEN');
+      expect(block).not.toContain('sessionAccessPredicate');
+      expect(block).not.toContain('canRead');
+    });
+  });
+
+  describe('роль AUDITOR: область исключения (инвариант 16)', () => {
+    it('AUDITOR — читатель сессии ТОЛЬКО на маршруте экспорта; остальные `:id`-маршруты → 403', async () => {
+      // Исключение в prefix-guard'е — path-scoped: `AUDITOR` проходит как
+      // читатель только на `GET /:id/export` (где ему и так доступна карта
+      // обфускации любой сессии через `GET /:id/secrets`). На всех прочих
+      // `:id`-маршрутах правило не меняется.
+      const { app, id } = await seedOwnedSession();
+
+      const forbiddenForAuditor = [
+        '/:id', '/:id/messages', '/:id/notes', '/:id/optimization', '/:id/mcp',
+      ];
+      for (const path of forbiddenForAuditor) {
+        const url = `/api/v2/sessions/${id}${path.slice('/:id'.length)}`;
+        const res = await app.request(url, { headers: auth('auditor') });
+        expect(res.status, `AUDITOR ${path}`).toBe(denied);
+      }
+
+      // `/:id/secrets` — отдельный ролевой эндпоинт (`ADMIN`/`AUDITOR`), 200.
+      const secrets = await app.request(`/api/v2/sessions/${id}/secrets`, { headers: auth('auditor') });
+      expect(secrets.status).toBe(ok);
+
+      // `/:id/export` — единственный маршрут, где AUDITOR читает чужую сессию.
+      const exportRes = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth('auditor') });
+      expect(exportRes.status).toBe(ok);
+      const body = (await exportRes.json()) as { obfuscationMap?: Record<string, string> };
+      expect(body.obfuscationMap).toEqual({ [PLACEHOLDER]: REAL_SECRET });
     });
   });
 

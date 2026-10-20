@@ -457,6 +457,19 @@ export type {
   SessionAccessPredicateOptions,
   SessionAccessMessages,
 } from './server/session-access-guard.js';
+// ADR-036: привилегия карты обфускации при экспорте сессии — route-level guard
+// (решение — в контексте Hono, в обработчике проверок доступа нет).
+export {
+  createSessionExportGuard,
+  getSessionExportDecision,
+  isSessionExportPath,
+  SESSION_EXPORT_CONTEXT_KEY,
+} from './server/session-export-guard.js';
+export type {
+  SessionExportGuardOptions,
+  SessionExportDecision,
+  SessionExportMessages,
+} from './server/session-export-guard.js';
 export { createServiceKeyRoutes } from './server/routes/service-keys.js';
 export type {
   ServiceKeyRoutesAuth,

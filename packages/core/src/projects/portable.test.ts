@@ -11,6 +11,7 @@ import { createFileStorage } from '../storage/storage-context.js';
 import { MemoryMaintenanceAuditRepository } from '../storage/memory/index.js';
 import type { MaintenanceAuditRepository } from '../storage/ports/maintenance-audit-repository.js';
 import { readFileFromTarGz, readTarGz, writeTarGz, type ArchiveSource } from '../maintenance/archive.js';
+import { buildBombArchive } from '../test-helpers/archive-bomb.js';
 import { ProjectPortableError, exportProject, importProject } from './portable.js';
 
 /** Реальный секрет в карте обфускации сессии (плейсхолдер → значение). */
@@ -80,6 +81,23 @@ async function makeProject(dataDir: string, name: string): Promise<Fixture> {
   // портативный архив проекта по умолчанию (security-фикс 0.11.3).
   s1.obfuscationMap = { [PLACEHOLDER]: REAL_SECRET };
   s1.messages[0]!.metadata = { secrets: { [PLACEHOLDER]: REAL_SECRET } };
+  // Чекпоинт — снимок истории с ТЕМ ЖЕ секретом в metadata сообщения
+  // (регресс: раньше `stripSessionSecrets` чистил только `messages[]`, и карта
+  // с реальными значениями плейсхолдеров уезжала из инстанса в архиве проекта
+  // вместе с `checkpoints[].messages[]`).
+  s1.checkpoints = [
+    {
+      id: 'cp1',
+      sessionId: s1.id,
+      messages: [
+        {
+          ..._msg('cm1', 'снимок истории'),
+          metadata: { secrets: { [PLACEHOLDER]: REAL_SECRET } },
+        },
+      ],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
+  ];
   s1.todos = [{ id: 't1', content: 'сделать', status: 'pending', priority: 'high' }];
   s1.status = { blocked: 'processor-1', blockedAt: '2026-01-01T00:00:00.000Z', cancelRequested: true };
   await manager.saveSession(s1);
@@ -312,6 +330,48 @@ describe('portable export/import проекта (ADR-091)', () => {
     expect(['invalid-archive', 'checksum-mismatch']).toContain((error as ProjectPortableError).code);
   });
 
+  it('archive-«бомба»: заявленный объём записи превышает лимит → invalid-archive, ничего не создано', async () => {
+    // Заголовок записи обещает 1 ГиБ, а в архиве — 8 байт: разбор обязан
+    // оборваться на заголовке, не распаковывая содержимое.
+    const bomb = join(tmpDir, 'bomb.synth-project.tar.gz');
+    await writeFile(bomb, buildBombArchive(1024 * 1024 * 1024));
+
+    const dst = join(tmpDir, 'bomb-dst');
+    const error = await importProject({ dataDir: dst, archive: bomb, yes: true }).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(ProjectPortableError);
+    expect((error as ProjectPortableError).code).toBe('invalid-archive');
+    expect((error as ProjectPortableError).message).toMatch(/лимиты импорта/);
+
+    const dstStorage = createFileStorage({ dataDir: dst });
+    expect(await dstStorage.projects.list()).toHaveLength(0);
+    expect(await dstStorage.sessions.list()).toHaveLength(0);
+  });
+
+  it('лимиты импорта переопределяются через options (fail-closed по умолчанию)', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+    const exported = await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir });
+
+    // Суммарный объём меньше реального архива → отказ.
+    const tooSmall = await importProject({
+      dataDir: join(tmpDir, 'limit-dst'),
+      archive: exported.path,
+      yes: true,
+      limits: { maxTotalBytes: 16 },
+    }).catch((err: unknown) => err);
+    expect(tooSmall).toBeInstanceOf(ProjectPortableError);
+    expect((tooSmall as ProjectPortableError).code).toBe('invalid-archive');
+    expect((tooSmall as ProjectPortableError).message).toMatch(/лимиты импорта/);
+
+    // С теми же лимитами, но с запасом — импорт проходит (лимит не мешает).
+    const ok = await importProject({
+      dataDir: join(tmpDir, 'limit-ok-dst'),
+      archive: exported.path,
+      yes: true,
+      limits: { maxTotalBytes: 64 * 1024 * 1024, maxEntryBytes: 8 * 1024 * 1024 },
+    });
+    expect(ok.sessionsImported).toBeGreaterThan(0);
+  });
+
   it('sha256 в манифесте не совпадает → checksum-mismatch', async () => {
     const archive = await craftArchive(
       tmpDir,
@@ -380,6 +440,28 @@ describe('portable export/import проекта (ADR-091)', () => {
       expect(payload).not.toContain(REAL_SECRET);
       expect(payload).not.toContain('"secrets"');
     }
+  });
+
+  it('регресс: карта обфускации и metadata.secrets вырезаны и из checkpoints[].messages[]', async () => {
+    const fixture = await makeProject(src, 'Проект A');
+
+    const exported = await exportProject({ dataDir: src, projectId: fixture.projectId, out: tmpDir });
+    const files = await readArchiveFiles(exported.path);
+
+    const sessionFile = [...files.entries()]
+      .find(([path]) => path === `sessions/${fixture.sessionIds[0]}.json`);
+    expect(sessionFile).toBeDefined();
+    const payload = JSON.parse(sessionFile![1]) as {
+      obfuscationMap?: unknown;
+      checkpoints?: Array<{ messages?: Array<{ metadata?: Record<string, unknown> }> }>;
+    };
+    // Карта обфускации убрана из payload сессии.
+    expect(payload.obfuscationMap).toBeUndefined();
+    // Секрет в снимке истории (чекпоинте) убран — а сам чекпоинт сохранён.
+    expect(payload.checkpoints).toHaveLength(1);
+    expect(payload.checkpoints![0]!.messages).toHaveLength(1);
+    expect(payload.checkpoints![0]!.messages![0]!.metadata?.secrets).toBeUndefined();
+    expect(sessionFile![1]).not.toContain(REAL_SECRET);
   });
 
   it('security-фикс 0.11.3: --with-secrets возвращает карту обфускации; факт — в аудите export.created', async () => {
