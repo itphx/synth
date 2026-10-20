@@ -25,6 +25,7 @@ import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as undici from 'undici';
 import { McpClient } from './client.js';
 import { applyGlobalTlsTrust, _resetTlsTrustForTests } from '../../security/tls.js';
+import { closeTestServer } from '../../test-helpers/close-server.js';
 
 // Публичный сертификат фикстуры (самоподписанный, «TEST ONLY») — нужен, чтобы
 // включить dispatcher доверия процесса (как на инстансе с настроенным TLS/прокси).
@@ -85,7 +86,7 @@ describe('McpClient: Streamable HTTP через egress-транспорт (ADR-0
 
   afterAll(async () => {
     if (!httpServer) return;
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await closeTestServer(httpServer);
   });
 
   beforeEach(async () => {

@@ -14,6 +14,7 @@ import { EgressDispatcher } from './proxy-dispatcher.js';
 import { egressFetch } from './tls.js';
 import { startFakeProxy, startFakeTarget, type FakeProxy, type FakeTarget } from '../test-helpers/fake-proxy.js';
 import { startFakeSocks5Proxy } from '../test-helpers/fake-socks5-proxy.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 
 const FIX_DIR = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__');
 const PROXY_CERT = readFileSync(join(FIX_DIR, 'tls-test-proxy.pem'), 'utf-8');
@@ -195,7 +196,7 @@ describe('EgressDispatcher (ADR-099 D1)', () => {
     });
     await new Promise<void>((resolve) => tlsServer.listen(0, '127.0.0.1', () => resolve()));
     const tlsPort = (tlsServer.address() as AddressInfo).port;
-    cleanups.push(() => new Promise<void>((resolve) => tlsServer.close(() => resolve())));
+    cleanups.push(() => closeTestServer(tlsServer));
 
     const proxy = await startFakeProxy({ mode: 'tunnel' });
     cleanups.push(() => proxy.close());
@@ -341,7 +342,7 @@ describe('EgressDispatcher (ADR-099 D1)', () => {
     });
     await new Promise<void>((resolve) => tlsTarget.listen(0, '127.0.0.1', () => resolve()));
     const targetPort = (tlsTarget.address() as AddressInfo).port;
-    cleanups.push(() => new Promise<void>((resolve) => tlsTarget.close(() => resolve())));
+    cleanups.push(() => closeTestServer(tlsTarget));
 
     const proxy = await startFakeProxy({
       mode: 'tunnel',
@@ -513,7 +514,7 @@ describe('EgressDispatcher (ADR-099 D1)', () => {
     });
     await new Promise<void>((resolve) => tlsTarget.listen(0, '127.0.0.1', () => resolve()));
     const targetPort = (tlsTarget.address() as AddressInfo).port;
-    cleanups.push(() => new Promise<void>((resolve) => tlsTarget.close(() => resolve())));
+    cleanups.push(() => closeTestServer(tlsTarget));
 
     const socks = await startFakeSocks5Proxy();
     cleanups.push(() => socks.close());
@@ -734,7 +735,7 @@ describe('EgressDispatcher: профили маршрутизации', () => {
     });
     await new Promise<void>((resolve) => tlsTarget.listen(0, '127.0.0.1', () => resolve()));
     const targetPort = (tlsTarget.address() as AddressInfo).port;
-    cleanups.push(() => new Promise<void>((resolve) => tlsTarget.close(() => resolve())));
+    cleanups.push(() => closeTestServer(tlsTarget));
 
     const proxy = await startFakeProxy({
       mode: 'tunnel',

@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { MessageRole, nowISO } from '@itphx/synth-shared';
 import { createStandaloneApp } from './app.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 import { FileStore, SessionManager } from '../index.js';
 import { prepareChildSession } from '../engine/tools/task/fork.js';
 import type { TaskExtra } from '../engine/tools/task/types.js';
@@ -40,10 +41,7 @@ async function startApp(): Promise<{ app: StandaloneApp; port: number; dir: stri
     app.stopScheduler?.();
     app.stopEphemeralSweeper?.();
     app.stopEventJournalPruner?.();
-    await new Promise<void>((resolve) => {
-      (app.server as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
-      app.server.close(() => resolve());
-    });
+    await closeTestServer(app.server);
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   };
 

@@ -36,6 +36,7 @@ import type { BusEvent, LLMChunk, LLMResponse } from '@itphx/synth-shared';
 import { MessageRole } from '@itphx/synth-shared';
 import { syncProjectToRemote, forkProjectToLocal, REMOTE_PREFIX } from '@itphx/synth-core/remote';
 import { createBackendApp } from '../app.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 import type { BackendAppHandle } from '../app.js';
 
 const LOCAL_API_KEY = 'local-key';
@@ -76,10 +77,7 @@ class FakeProvider extends BaseProvider {
 }
 
 function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve) => {
-    server.closeAllConnections?.();
-    server.close(() => resolve());
-  });
+  return closeTestServer(server);
 }
 
 describe('Гибридный режим: локальный core + реальный backend (интеграция)', () => {

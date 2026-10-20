@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { createStandaloneApp } from './app.js';
+import { closeTestServer } from '../test-helpers/close-server.js';
 
 const API_KEY = 'events-visibility-key';
 
@@ -36,10 +37,7 @@ async function startApp(): Promise<{ app: StandaloneApp; port: number; close: ()
     app.stopScheduler?.();
     app.stopEphemeralSweeper?.();
     app.stopEventJournalPruner?.();
-    await new Promise<void>((resolve) => {
-      (app.server as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
-      app.server.close(() => resolve());
-    });
+    await closeTestServer(app.server);
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   };
 

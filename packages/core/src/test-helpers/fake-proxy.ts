@@ -15,6 +15,7 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
+import { closeTestServer } from './close-server.js';
 
 export type FakeProxyMode = 'tunnel' | '407' | '502' | 'close' | 'silent';
 
@@ -67,6 +68,8 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
   const absoluteAuthHeaders: string[] = [];
   const clientCertSubjects: string[] = [];
   const sockets = new Set<net.Socket>();
+  /** Upstream-соединения туннеля (прокси → цель): их тоже нужно оборвать. */
+  const upstreams = new Set<net.Socket>();
 
   const authHeaderOf = (req: http.IncomingMessage): string | undefined => {
     const raw = req.headers['proxy-authorization'];
@@ -183,10 +186,16 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
       upstream.pipe(clientSocket);
       clientSocket.pipe(upstream);
     });
+    upstreams.add(upstream);
+    upstream.on('close', () => upstreams.delete(upstream));
     upstream.on('error', () => {
       clientSocket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n');
     });
     clientSocket.on('error', () => upstream.destroy());
+    // Клиентский сокет закрылся (в т.ч. без 'error' — например, undici отказался
+    // от попытки CONNECT): туннель окончен, upstream надо оборвать. Иначе он
+    // «висит» на цели, и её `close()` уже не завершается.
+    clientSocket.on('close', () => upstream.destroy());
   });
 
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
@@ -214,8 +223,10 @@ export async function startFakeProxy(options: FakeProxyOptions = {}): Promise<Fa
       return clientCertSubjects;
     },
     async close() {
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // Рвём соединения в обоих направлениях: входящие (клиент → прокси) и
+      // upstream (прокси → цель). Иначе цель остаётся с живым keep-alive-сокетом
+      // и её `close()` не завершается.
+      await closeTestServer(server, { sockets: [...sockets, ...upstreams] });
     },
   };
 }
@@ -242,10 +253,18 @@ export interface FakeTarget {
 
 export async function startFakeTarget(): Promise<FakeTarget> {
   let requests = 0;
+  const sockets = new Set<net.Socket>();
   const server = http.createServer((_req, res) => {
     requests += 1;
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('ok');
+  });
+  // Keep-alive-сокет клиента (undici-агент) держит соединение открытым:
+  // без явного обрыва `server.close()` не вызывает callback — хук `afterEach`
+  // виснет (в CI — «Hook timed out in 10000ms»).
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const address = server.address() as AddressInfo;
@@ -256,7 +275,7 @@ export async function startFakeTarget(): Promise<FakeTarget> {
       return requests;
     },
     async close() {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await closeTestServer(server, { sockets });
     },
   };
 }
