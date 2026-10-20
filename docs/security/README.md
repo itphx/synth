@@ -104,7 +104,15 @@ git tag -a v0.10.2 -m "Release v0.10.2" && git push --follow-tags
 | Профиль (`policy.dependencies.profile`) | Пороги | Когда действует |
 |---|---|---|
 | `pre-upgrade` (историческое) | `critical ≤ 3`, `high ≤ 42`, `failOnDirect: true` | до апгрейдов `@modelcontextprotocol/sdk ≥ 1.31.0` и `simple-git 4.x`; профиль не активен |
-| `post-upgrade` (**сейчас**, с 2026-10-15) | `critical 0`, `high 39`, `failOnDirect: true` | после апгрейдов `@modelcontextprotocol/sdk 1.29.0 → 1.32.1`, `simple-git 3.36.0 → 4.0.2` (+ транзитивный `proxy-addr 2.0.7 → 2.0.8`). Пороги — факт по `pnpm audit --json` (critical 0, high 39, moderate 48, low 12, прямых 0): сняты 3 critical (proxy-addr, simple-git, @simple-git/argv-parser) и 3 high (сам sdk + два simple-git), остаток high — транзитивные патч-уровня |
+| `post-upgrade` (**сейчас**, с 2026-10-20) | `critical 0`, `high 31`, `failOnDirect: true` | после апгрейдов `@modelcontextprotocol/sdk 1.29.0 → 1.32.1`, `simple-git 3.36.0 → 4.0.2` (+ транзитивный `proxy-addr 2.0.7 → 2.0.8`) и прямых runtime-зависимостей `hono 4.12.21 → 4.13.13`, `ws 8.20.1 → 8.22.0`, `undici 7.26.0 → 7.30.1`, `js-yaml 4.1.1 → 4.3.2`. Пороги — факт по `pnpm audit --json` (critical 0, high 31, moderate 24, low 6, прямых 0): остаток high — транзитивные патч-уровня (brace-expansion 15, fast-uri 7, js-yaml 3, nanoid 2, vite/postcss/ip-address/source-map-js по 1) |
+
+**Что считается «прямой» уязвимостью.** Модуль стоит в пути `pnpm audit` сразу за импортером
+(`<пакет>><зависимость>`; два и более `>` — транзитивная зависимость) **и** объявлен в
+`dependencies` (не `devDependencies`) хотя бы одного пакета воркспейса. Блокируют только
+`critical`/`high` — ровно те severity, на которых построен ратчет (см. «Остаточные риски»);
+`moderate`/`low` — информационные. `devDependencies` (инструментарий сборки, напр. `vite` в
+`packages/ui`) в поставляемые артефакты не входят и релиз не блокируют, но остаются в счётчиках
+и в разборе записи аудита.
 
 Переключатель — `policy.dependencies.profile` (поле `profileSwitch` описывает, **кто** и **когда**
 его двигает). Ослабление/усиление ратчета видно в диффе и не может быть сделано незаметно.
@@ -132,6 +140,39 @@ node scripts/security-gate.mjs --lint-records
 → `--ref refs/tags/vX.Y.Z` (в CI — `${{ gitverse.ref }}` при push тега) → `--from-package` (только
 локально). Если версии нет или ref не тег — `exit 2`: релиз с неопределённой версией не собирается
 (тихого фоллбэка на `packages/synth/package.json` нет намеренно — в CI он проверил бы не ту версию).
+
+## Что сканирует secret-scan (и что из него исключено)
+
+Авторитетный сканер — `scripts/secret-scan.mjs` (без внешних зависимостей; он же в CI-джобе
+`secret-scan` и в гейте `scripts/security-gate.mjs`). Покрытие:
+
+* **рабочее дерево** — отслеживаемые файлы + новые незакоммиченные (`--others --exclude-standard`);
+* **история коммитов** — все когда-либо добавленные строки (`git log -p --unified=0`);
+* **история blob-ов** — каждый уникальный blob истории (`git rev-list --all --objects`);
+* 15 встроенных regex-правил (`node scripts/secret-scan.mjs --list-rules`), allowlist — `.gitleaks.toml`.
+
+**Allowlist — пара «путь + известный dummy-маркер»**: условия блока объединяются через И,
+поэтому подавляются только конкретные известные заглушки, а реальный секрет, случайно
+попавший в тот же файл, остаётся находкой. Исключение — ровно два блока, подавляемые
+**строго по пути** (path-only by design): `packages/core/src/security/__fixtures__/tls-test-selfsigned.key`,
+`…/tls-test-proxy.key`, `…/tls-test-proxy-client.key`. Они целиком состоят из ключевого
+материала фикстур, а настоящий PEM-ключ имеет тот же заголовок `-----BEGIN PRIVATE KEY-----`,
+поэтому маркер не отличил бы фикстуру от реального ключа. Каталог `__fixtures__/` содержит
+только материал фикстур (3 файла `.key` + 3 `.pem`, production-кода нет), подавление
+ограничено конкретными файлами; правило `private-key` не отключается.
+
+**Исключения из сканирования** (жёстко заданы в `shouldSkipPath`, `scripts/secret-scan.mjs`):
+
+| Исключение | Почему | Проверено 2026-10-20 |
+|---|---|---|
+| каталоги `node_modules/`, `.git/`, `dist/`, `build/`, `coverage/`, `.pnpm-store/`, `tmp/` | артефакты сборки/зависимостей и временные файлы — не содержимое репозитория | в дереве и во всей истории — 0 файлов (`tmp/` — в `.gitignore`) |
+| `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock` | машинно-генерируемые lock-файлы зависимостей | `pnpm-lock.yaml` просканирован со снятым пропуском: 0 находок (текущий файл + 26 blob-ов истории); gitleaks 8.30.1 на его содержимом — тоже 0 находок |
+| `*.min.js`, `*.snap` | минифицированные сборки и снапшоты тестов | в дереве — 0 файлов |
+
+Пропуск lock-файлов, снапшотов и каталогов сборки оставлен как снижение шума: проверено,
+что секретов в них нет. Оговорка про gitleaks: запущенный вручную, он трактует глобальный
+allowlist иначе — пропускает файл целиком по совпадению `paths`, не проверяя `regexes` того же
+блока; на CI и гейт это не влияет, там работает `scripts/secret-scan.mjs`.
 
 ## Остаточные риски (осознанные)
 
