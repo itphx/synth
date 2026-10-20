@@ -563,6 +563,42 @@ describe('validateProxyConfig (сохранение runtime-override)', () => {
     );
   });
 
+  it('пароль в теле запроса (auth.password) запрещён (инвариант 13)', () => {
+    // top-level: пароль прокси — только env/файл, поле не принимается.
+    expect(() =>
+      validateProxyConfig(
+        { url: 'http://proxy:3128', auth: { type: 'basic', username: 'user', password: 'p' } },
+        { [PROXY_PASSWORD_ENV]: 'pass' },
+      ),
+    ).toThrow(/пароль не хранится в настройках/);
+    // профиль: подсказка указывает на env/файл именно этого профиля.
+    expect(() =>
+      validateProxyConfig(
+        {
+          mode: 'all',
+          defaultProfile: 'corp',
+          profiles: {
+            corp: { url: 'http://proxy:3128', auth: { type: 'basic', username: 'u', password: 'p' } },
+          },
+        },
+        { SYNTH_PROXY_CORP_PASSWORD: 'pass' },
+      ),
+    ).toThrow(/SYNTH_PROXY_CORP_PASSWORD/);
+  });
+
+  it('auth.password: значение не попадает в текст ошибки', () => {
+    try {
+      validateProxyConfig(
+        { url: 'http://proxy:3128', auth: { type: 'basic', username: 'user', password: 'top-secret' } },
+        { [PROXY_PASSWORD_ENV]: 'pass' },
+      );
+      throw new Error('expected');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProxyConfigError);
+      expect((err as Error).message).not.toContain('top-secret');
+    }
+  });
+
   it('username без пароля (нет env/файла) → ошибка; с env → ok', () => {
     const input = {
       url: 'http://proxy:3128',

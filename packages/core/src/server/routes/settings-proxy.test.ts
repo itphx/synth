@@ -340,6 +340,37 @@ describe('PUT/DELETE /api/v2/settings/proxy', () => {
     expect(ok.status).toBe(200);
     expect(JSON.stringify(await store.getProxySettings())).not.toContain('"pass"');
   });
+
+  it('auth.password в теле → 400; настройки не изменились (инвариант 13)', async () => {
+    await store.setProxySettings({ url: 'http://saved:3128', fromEnv: false });
+    const app = createApp({
+      settingsStore: store,
+      dataDir: tmpDir,
+      env: { SYNTH_PROXY_PASSWORD: 'pass' },
+    });
+
+    const res = await app.request('/api/v2/settings/proxy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        proxy: {
+          url: 'http://proxy:3128',
+          fromEnv: false,
+          auth: { type: 'basic', username: 'user', password: 'top-secret' },
+        },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    const body = JSON.parse(text) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(String(body.error.message)).toMatch(/пароль не хранится в настройках/);
+    // Значение пароля не echoed и не попало в settings.json.
+    expect(text).not.toContain('top-secret');
+    expect(await store.getProxySettings()).toMatchObject({ url: 'http://saved:3128' });
+    const raw = await readFile(join(tmpDir, 'settings.json'), 'utf-8');
+    expect(raw).not.toContain('top-secret');
+  });
 });
 
 describe('PUT/DELETE /api/v2/settings/proxy/password', () => {
