@@ -9,7 +9,7 @@ import { synthApi } from './synthApi'
  * метода: при осознанном добавлении/удалении методa тест обновляется руками.
  */
 const EXPECTED_API_METHODS = [
-  'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'applyMigrations', 'auditRevealed',
+  'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'applyMigrations', 'approvePack', 'auditRevealed',
   'backupDownloadUrl', 'batchMessages', 'browseWorkspaceRoot', 'cancelQueueRetry', 'cancelRestore',
   'cancelSummarization', 'checkEgress', 'checkProxy',
   'checkUpdate', 'claimIdentity', 'clearAudit', 'clearProfilePassword', 'clearProxyPassword', 'clearQueue', 'clearSession',
@@ -33,7 +33,8 @@ const EXPECTED_API_METHODS = [
   'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
   'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMigrations', 'getModels',
-  'getMyIdentities', 'getOptimization', 'getPendingRestore', 'getProject', 'getProjectMcp',
+  'getMyIdentities', 'getOptimization', 'getPack', 'getPacks', 'getPendingRestore',
+  'getPipelineInstances', 'getPipelines', 'getProject', 'getProjectMcp',
   'getProjectSkills', 'getProjectStats', 'getProjects', 'getProtectedPaths',
   'getProviders', 'getProxy', 'getRestartStatus', 'getScheduleJobs', 'getSchedules', 'getSecurityAudit', 'getSecuritySettings',
   'getServiceKey', 'getServiceKeyScopes', 'getServiceKeys', 'getSession',
@@ -60,7 +61,7 @@ const EXPECTED_API_METHODS = [
   'saveProtectedPaths', 'saveProxy', 'saveSecuritySettings', 'saveToolsDisabled', 'saveToolsPolicy',
   'scanGitRepos', 'scheduleRestore', 'setDefaultAgent', 'setDefaultClient', 'setDefaultModel', 'setEnabled', 'setProfilePassword', 'setProxyPassword', 'setToken', 'setWorkspacePolicy', 'setWorkspaceSetting',
   'status', 'stopGeneration', 'summarizeSession', 'testProvider', 'testProxyRoute', 'testWebhookSubscription',
-  'toggleAgent', 'toggleContextFile', 'toggleMessage', 'unlinkAgentSshKey',
+  'toggleAgent', 'toggleContextFile', 'toggleMessage', 'uninstallPack', 'unlinkAgentSshKey',
   'updateDecisionSettings', 'updateEventBindingKey', 'updateEventsSettings', 'updateMcpRegistryEntry',
   'updateOptimization', 'updateProject', 'updateProjectMcp', 'updateProjectSkills',
   'updateProvider', 'updateSchedule', 'updateServiceKey', 'updateSession',
@@ -71,7 +72,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (285)', () => {
+  it('набор методов совпадает с зафиксированным (291)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

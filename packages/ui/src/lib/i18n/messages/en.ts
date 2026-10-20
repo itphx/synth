@@ -130,6 +130,7 @@ export const dict = {
 
   'settings.category.security': 'Security',
   'settings.category.network': 'Network',
+  'settings.category.addons': 'Addons',
   'gateway.title': 'Security gateway',
   'gateway.description': 'Independent protection layer for LLM traffic: secrets (API keys, tokens, emails) are obfuscated to ⟦SYNTH_SECRET_N⟧ placeholders before sending to the model and revealed only at consumption points. Value reveal in the UI is audit-logged.',
   'toolsPolicy.title': 'Built-in tools policy',
@@ -3243,6 +3244,67 @@ export const dict = {
   'settings.help.debug.section.debug-ai': 'Log levels for AI providers and models; includes every group except the service ones.',
   'settings.help.debug.section.debug-service': 'Instance service groups: routes, storage, WebSocket, and the debug output itself.',
   'settings.help.debug.levels': 'NONE — off, DEBUG — verbose, INFO — regular events, WARNING — problems, ERROR — errors only.',
+
+  // --- Addons (ADR-086 §5, ADR-051/PROP-059) ---
+  'addons.title': 'Addons',
+  'addons.description':
+    'Extension packages installed in this instance and the pipelines they bring. A package that grants capabilities waits for administrator approval: its agents, skills, MCP servers and pipelines appear in the instance only after the confirmation.',
+  'addons.forbidden': 'Administrator rights are required to view this section.',
+  'addons.packs.title': 'Extension packages',
+  'addons.packs.description':
+    'Installed packages: version, class, status and what the package delivered to the instance. Removing a package also removes the artifacts it delivered.',
+  'addons.packs.count': '{count, plural, one {# package} other {# packages}}',
+  'addons.packs.empty': 'No extension packages installed',
+  'addons.packs.loadError': 'Failed to load extension packages: {error}',
+  'addons.packs.status.active': 'active',
+  'addons.packs.status.pending_approval': 'awaiting approval',
+  'addons.packs.status.disabled': 'disabled',
+  'addons.packs.pendingBadge': 'approval required',
+  'addons.packs.pendingHint':
+    '{count, plural, one {# package is} other {# packages are}} awaiting administrator approval',
+  'addons.packs.approve': 'Approve installation',
+  'addons.packs.approveConfirmTitle': 'Approve package installation',
+  'addons.packs.approveConfirm':
+    'Install the package "{name}": its agents, skills, MCP servers and pipelines will be added to the instance.',
+  'addons.packs.approved': 'Package {name} approved and installed',
+  'addons.packs.approveError': 'Failed to approve the package {name}: {error}',
+  'addons.packs.remove': 'Remove',
+  'addons.packs.removeConfirmTitle': 'Remove package',
+  'addons.packs.removeConfirm':
+    'Remove the package "{name}"? The agents, skills, MCP servers, pipelines and routing rules it delivered will be removed from the instance.',
+  'addons.packs.removed': 'Package {name} removed',
+  'addons.packs.removeError': 'Failed to remove the package {name}: {error}',
+  'addons.packs.installedAt': 'Installed',
+  'addons.packs.provides.agents': 'Agent roles',
+  'addons.packs.provides.skills': 'Skills',
+  'addons.packs.provides.mcp': 'MCP servers',
+  'addons.packs.provides.pipelines': 'Pipelines',
+  'addons.pipelines.title': 'Pipelines',
+  'addons.pipelines.description':
+    'Pipeline definitions are delivered by extension packages; runs are created by the router when a triggering event arrives.',
+  'addons.pipelines.definitions': 'Definitions',
+  'addons.pipelines.instances': 'Runs',
+  'addons.pipelines.empty': 'No pipelines in this instance',
+  'addons.pipelines.instancesEmpty': 'No pipeline runs',
+  'addons.pipelines.loadError': 'Failed to load pipelines: {error}',
+  'addons.pipelines.filter.pipeline': 'Pipeline',
+  'addons.pipelines.filter.status': 'Status',
+  'addons.pipelines.filter.all': 'All',
+  'addons.pipelines.instanceStatus.pending': 'pending',
+  'addons.pipelines.instanceStatus.running': 'running',
+  'addons.pipelines.instanceStatus.waiting': 'waiting',
+  'addons.pipelines.instanceStatus.done': 'completed',
+  'addons.pipelines.instanceStatus.failed': 'failed',
+  'addons.pipelines.instanceStatus.cancelled': 'cancelled',
+  'addons.pipelines.currentStep': 'Current step',
+  'addons.pipelines.steps': 'Steps',
+  'addons.pipelines.attempts': 'Attempts',
+  'addons.pipelines.createdAt': 'Created',
+  'addons.pipelines.installedBy': 'Installed from package',
+  'settings.help.addons.section.addons-packs':
+    'Registry of packages installed in the instance. A package awaiting approval has not delivered its artifacts yet — approving installs them.',
+  'settings.help.addons.section.addons-pipelines':
+    'Pipeline definitions delivered by packages and their runs: status, current step and attempt count.',
 
   // --- PWA ---
   'pwa.updateAvailable': 'A new app version is available',

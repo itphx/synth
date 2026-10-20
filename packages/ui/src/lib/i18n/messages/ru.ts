@@ -129,6 +129,7 @@ export const dict = {
 
   'settings.category.security': 'Безопасность',
   'settings.category.network': 'Сеть',
+  'settings.category.addons': 'Аддоны',
   'gateway.title': 'Шлюз безопасности',
   'gateway.description': 'Независимый слой защиты LLM-трафика: секреты (API-ключи, токены, email) обфусцируются до плейсхолдеров ⟦SYNTH_SECRET_N⟧ перед отправкой в модель и раскрываются только в точках потребления. Раскрытие значений в интерфейсе логируется в аудит.',
   'toolsPolicy.title': 'Политика встроенных инструментов',
@@ -3553,6 +3554,67 @@ export const dict = {
   'settings.help.debug.section.debug-ai': 'Уровни логирования AI-провайдеров и моделей; сюда попадают все группы, кроме служебных.',
   'settings.help.debug.section.debug-service': 'Служебные группы инстанса: маршруты, хранилище, WebSocket и сам отладочный вывод.',
   'settings.help.debug.levels': 'NONE — выключено, DEBUG — подробно, INFO — обычные события, WARNING — проблемы, ERROR — только ошибки.',
+
+  // --- Аддоны (ADR-086 §5, ADR-051/PROP-059) ---
+  'addons.title': 'Аддоны',
+  'addons.description':
+    'Пакеты расширений, установленные в этом инстансе, и принесённые ими пайплайны. Пакет, выдающий capability-гранты, ждёт подтверждения администратора: его агенты, скиллы, MCP-серверы и пайплайны появляются в инстансе только после подтверждения.',
+  'addons.forbidden': 'Для просмотра раздела нужны права администратора.',
+  'addons.packs.title': 'Пакеты расширений',
+  'addons.packs.description':
+    'Установленные пакеты: версия, класс, статус и что пакет поставил в инстанс. Снятие пакета удаляет и поставленные им артефакты.',
+  'addons.packs.count': '{count, plural, one {# пакет} few {# пакета} many {# пакетов}}',
+  'addons.packs.empty': 'Пакеты расширений не установлены',
+  'addons.packs.loadError': 'Не удалось загрузить пакеты расширений: {error}',
+  'addons.packs.status.active': 'активен',
+  'addons.packs.status.pending_approval': 'ждёт подтверждения',
+  'addons.packs.status.disabled': 'отключён',
+  'addons.packs.pendingBadge': 'требует подтверждения',
+  'addons.packs.pendingHint':
+    '{count, plural, one {# пакет ждёт} few {# пакета ждут} many {# пакетов ждут}} подтверждения администратора',
+  'addons.packs.approve': 'Подтвердить установку',
+  'addons.packs.approveConfirmTitle': 'Подтверждение установки пакета',
+  'addons.packs.approveConfirm':
+    'Установить пакет «{name}»: его агенты, скиллы, MCP-серверы и пайплайны будут добавлены в инстанс.',
+  'addons.packs.approved': 'Пакет {name} подтверждён и установлен',
+  'addons.packs.approveError': 'Не удалось подтвердить пакет {name}: {error}',
+  'addons.packs.remove': 'Удалить',
+  'addons.packs.removeConfirmTitle': 'Снятие пакета',
+  'addons.packs.removeConfirm':
+    'Снять пакет «{name}»? Агенты, скиллы, MCP-серверы, пайплайны и порождённые им правила маршрутизации будут удалены из инстанса.',
+  'addons.packs.removed': 'Пакет {name} снят',
+  'addons.packs.removeError': 'Не удалось снять пакет {name}: {error}',
+  'addons.packs.installedAt': 'Установлен',
+  'addons.packs.provides.agents': 'Роли агентов',
+  'addons.packs.provides.skills': 'Скиллы',
+  'addons.packs.provides.mcp': 'MCP-серверы',
+  'addons.packs.provides.pipelines': 'Пайплайны',
+  'addons.pipelines.title': 'Пайплайны',
+  'addons.pipelines.description':
+    'Определения пайплайнов приходят из пакетов расширений; прогоны создаёт роутер по событию-триггеру.',
+  'addons.pipelines.definitions': 'Определения',
+  'addons.pipelines.instances': 'Прогоны',
+  'addons.pipelines.empty': 'В инстансе нет пайплайнов',
+  'addons.pipelines.instancesEmpty': 'Прогонов пайплайнов нет',
+  'addons.pipelines.loadError': 'Не удалось загрузить пайплайны: {error}',
+  'addons.pipelines.filter.pipeline': 'Пайплайн',
+  'addons.pipelines.filter.status': 'Статус',
+  'addons.pipelines.filter.all': 'Все',
+  'addons.pipelines.instanceStatus.pending': 'ожидает',
+  'addons.pipelines.instanceStatus.running': 'выполняется',
+  'addons.pipelines.instanceStatus.waiting': 'ждёт события',
+  'addons.pipelines.instanceStatus.done': 'завершён',
+  'addons.pipelines.instanceStatus.failed': 'ошибка',
+  'addons.pipelines.instanceStatus.cancelled': 'отменён',
+  'addons.pipelines.currentStep': 'Текущий шаг',
+  'addons.pipelines.steps': 'Шаги',
+  'addons.pipelines.attempts': 'Попытки',
+  'addons.pipelines.createdAt': 'Создан',
+  'addons.pipelines.installedBy': 'Установлен из пакета',
+  'settings.help.addons.section.addons-packs':
+    'Реестр пакетов, установленных в инстансе. Пакет, ждущий подтверждения, ещё не поставил артефакты — подтверждение выполняет установку.',
+  'settings.help.addons.section.addons-pipelines':
+    'Определения пайплайнов, принесённые пакетами, и их прогоны: статус, текущий шаг и число попыток.',
 
   // --- PWA ---
   'pwa.updateAvailable': 'Доступна новая версия приложения',

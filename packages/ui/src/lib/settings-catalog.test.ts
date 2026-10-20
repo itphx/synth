@@ -65,4 +65,15 @@ describe('settings-catalog — searchSettings', () => {
     const entryIds = result.entries.map((entry) => entry.id)
     expect(entryIds).not.toContain('notifications.system')
   })
+
+  it('находит админ-раздел «Аддоны» по названию и синонимам', () => {
+    const byName = searchSettings(t, 'addons')
+    expect(byName.categories.map((category) => category.id)).toContain('addons')
+
+    const bySynonym = searchSettings(tRu, 'пакеты')
+    expect(bySynonym.categories.map((category) => category.id)).toContain('addons')
+
+    const byPipeline = searchSettings(tRu, 'пайплайны')
+    expect(byPipeline.entries.map((entry) => entry.id)).toContain('addons.pipelines')
+  })
 })

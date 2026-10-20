@@ -31,6 +31,7 @@ import { EventsSettings } from "./EventsSettings"
 import { DecisionSettings } from "./DecisionSettings"
 import { ServiceKeysSettings } from "./ServiceKeysSettings"
 import { WebhooksSettings } from "./WebhooksSettings"
+import { AddonsSettings } from "./AddonsSettings"
 import { MaintenanceSettings } from "./MaintenanceSettings"
 import { ObservabilitySettings } from "./ObservabilitySettings"
 import { DashboardPanel } from "../admin/DashboardPanel"
@@ -323,6 +324,7 @@ export const SettingsModal = () => {
             {activePage === "decisionConfig" && <DecisionSettings />}
             {activePage === "serviceKeys" && <ServiceKeysSettings />}
             {activePage === "webhooks" && <WebhooksSettings />}
+            {activePage === "addons" && <AddonsSettings />}
             {activePage === "maintenance" && <MaintenanceSettings />}
             {activePage === "metrics" && <ObservabilitySettings />}
             {activePage === "security" && <SecuritySettings />}

@@ -65,7 +65,7 @@ afterEach(async () => {
 })
 
 describe('Icon — реестр имён', () => {
-  it('newspaper (агент publisher) и pencil (агент title) — валидные имена реестра', () => {
+  it('newspaper (агент publisher из пакета synth-media) и pencil (агент title) — валидные имена реестра', () => {
     expect(isIconName('newspaper')).toBe(true)
     expect(isIconName('pencil')).toBe(true)
   })

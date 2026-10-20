@@ -261,6 +261,23 @@ export const SETTINGS_CATEGORIES: SettingsCategoryMeta[] = [
     advanced: true,
     keywords: ['keys', 'service', 'api', 'ключи', 'сервисные ключи'],
   },
+  {
+    id: 'addons',
+    group: 'adminIntegrations',
+    labelKey: 'settings.category.addons',
+    icon: 'rocket',
+    roles: ['ADMIN'],
+    keywords: [
+      'addons',
+      'packs',
+      'extensions',
+      'pipelines',
+      'аддоны',
+      'пакеты',
+      'расширения',
+      'пайплайны',
+    ],
+  },
 
   // Эксплуатация.
   {
@@ -1856,6 +1873,48 @@ export const SETTINGS_CATALOG: SettingsCatalogEntry[] = [
     labelKey: 'serviceKeys.form.expiresAt',
     keywords: ['expiry', 'date', 'срок', 'дата'],
     advanced: true,
+  },
+  {
+    id: 'addons.packs',
+    categoryId: 'addons',
+    sectionId: 'addons-packs',
+    labelKey: 'addons.packs.title',
+    keywords: ['addons', 'packs', 'extensions', 'аддоны', 'пакеты', 'расширения'],
+  },
+  {
+    id: 'addons.packs.approve',
+    categoryId: 'addons',
+    sectionId: 'addons-packs',
+    labelKey: 'addons.packs.approve',
+    keywords: ['approve', 'install', 'подтвердить', 'установка', 'одобрение'],
+  },
+  {
+    id: 'addons.packs.remove',
+    categoryId: 'addons',
+    sectionId: 'addons-packs',
+    labelKey: 'addons.packs.remove',
+    keywords: ['remove', 'uninstall', 'удалить', 'снять'],
+  },
+  {
+    id: 'addons.pipelines',
+    categoryId: 'addons',
+    sectionId: 'addons-pipelines',
+    labelKey: 'addons.pipelines.title',
+    keywords: ['pipelines', 'runs', 'пайплайны', 'прогоны', 'автоматы'],
+  },
+  {
+    id: 'addons.pipelines.definitions',
+    categoryId: 'addons',
+    sectionId: 'addons-pipelines',
+    labelKey: 'addons.pipelines.definitions',
+    keywords: ['definitions', 'определения', 'пайплайны'],
+  },
+  {
+    id: 'addons.pipelines.instances',
+    categoryId: 'addons',
+    sectionId: 'addons-pipelines',
+    labelKey: 'addons.pipelines.instances',
+    keywords: ['runs', 'instances', 'прогоны', 'экземпляры'],
   },
 
   // admin ops

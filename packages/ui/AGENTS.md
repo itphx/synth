@@ -192,6 +192,15 @@
 - **Журнал доставок** (`GET /:id/deliveries`, тумблер «Журнал доставок» в карточке): статус (ok/failed), `attempts`, `responseStatus`, `error`, время; при закрытии — сброс состояния.
 - Типы `WebhookSubscription`/`WebhookSubscriptionCreated`/`WebhookDelivery`/`CreateWebhookSubscriptionInput`/`UpdateWebhookSubscriptionPatch` — из `@itphx/synth-shared` (type-only); значения `DEFAULT_WEBHOOK_EVENT_PATTERNS`/`isWebhookEventPattern` — из subpath `@itphx/synth-shared/types`.
 
+## Аддоны (ADR-086 §5, ADR-051/PROP-059)
+
+- **Админ-раздел «Аддоны»** (`components/settings/AddonsSettings.tsx`; категория `addons`, `labelKey: settings.category.addons`, icon `rocket`, `roles: ['ADMIN']` — за границей админ-блока, рядом с «Сервисными ключами»): реестр установленных **пакетов расширений** (`synth.pack`) и пайплайны инстанса. API — два доменных модуля: `lib/api/packs.ts` (`packsApi`: `getPacks`/`getPack`/`approvePack`/`uninstallPack` → `/api/v2/packs*`) и `lib/api/pipelines.ts` (`pipelinesApi`: `getPipelines`/`getPipelineInstances` → `/api/v2/pipelines*`); оба входят в barrel `synthApi`, DTO объявлены **локально** (core-типы в браузерный бандл не тащим).
+- **Правда чтения:** в core — `requireAuth`, в managed (backend) — **ADMIN** (реестр инстанса, как service-keys/webhooks). Одобрение и снятие — только ADMIN (guard сервера); UI прячет кнопки мутаций для не-ADMIN, 403 читается понятной ошибкой (`addons.forbidden`).
+- **Секция «Пакеты расширений»:** список установок (имя, версия, `kind`, статус, дата установки, что поставил — роли/скиллы/MCP/пайплайны списком). Пакет в статусе `pending_approval` **явно выделен** (рамка/фон `status-warning` + бейдж «требует подтверждения») и получает кнопку **«Подтвердить установку»** → `approvePack` (фактическая установка артефактов пакета). Активный пакет — кнопка **«Удалить»** → `uninstallPack` (удаляет поставленные пакетом артефакты, включая порождённые правила маршрутизации). Обе мутации — через `confirm()` + `ConfirmDialog`; после успеха список перечитывается.
+- **Секция «Пайплайны»:** вкладки «Определения» (id, имя, версия, число шагов, дата) и «Прогоны» (id, `pipelineId`, статус-бейдж, текущий шаг, попытки, дата); фильтры по пайплайну и по статусу экземпляра (`pending`/`running`/`waiting`/`done`/`failed`/`cancelled`).
+- **Провенанс.** По решению владельца в обычных списках (сессии/агенты/скиллы) показывается **только имя аддона/пакета**; подробности — в этом разделе. Пакеты приносят артефакты без поля-провенанса в чужих DTO, поэтому единственное место, где провенанс доступен из API, — `PipelineDefinition.installedBy.pack` (в списке пайплайнов показывается **только имя пакета**). Новых полей в чужих DTO не выдумываем.
+- i18n — `addons.*` + `settings.category.addons` + `settings.help.addons.*` (ru/en). Тесты — `AddonsSettings.test.tsx`, `synthApi.packs.test.ts`.
+
 ## Сеть (ADR-099)
 
 - **Админ-раздел «Сеть»** (`components/settings/NetworkSettings.tsx`; категория `network`, `labelKey: settings.category.network`, `roles: ['ADMIN']` — сразу после «Безопасности»): «Прокси» (`ProxyStatusSection`) и «Доверенные CA (TLS)» (`TrustedCaSection`).

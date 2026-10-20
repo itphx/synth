@@ -40,6 +40,8 @@ import { tlsApi } from './tls'
 import { observabilityApi } from './observability'
 import { hybridApi } from './hybrid'
 import { instructionsApi } from './instructions'
+import { packsApi } from './packs'
+import { pipelinesApi } from './pipelines'
 
 export type { EntityOrigin } from './common'
 export type {
@@ -215,6 +217,25 @@ export type { ToolsPolicy } from '@itphx/synth-shared/types'
 // ADR-071 §2.3: `ToolsPolicy` — общий контракт `@itphx/synth-shared/types`
 // (импортирован и реэкспортирован выше).
 export type { FileEntry, DirectoryListResult, FileReadResult } from '@itphx/synth-shared'
+export type {
+  PackInstallationStatus,
+  PackProvides,
+  PackInstallation,
+  PacksListResponse,
+  PackApprovalResult,
+} from './packs'
+export type {
+  PipelineInstanceStatus,
+  PipelineStepStatus,
+  PipelineStep,
+  PipelineDefinition,
+  PipelineStepState,
+  PipelineTrigger,
+  PipelineInstance,
+  PipelineInstanceFilter,
+  PipelinesListResponse,
+  PipelineInstancesListResponse,
+} from './pipelines'
 
 export const synthApi = {
   fetchJSON,
@@ -255,4 +276,6 @@ export const synthApi = {
   ...observabilityApi,
   ...hybridApi,
   ...instructionsApi,
+  ...packsApi,
+  ...pipelinesApi,
 }
