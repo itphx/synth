@@ -30,10 +30,16 @@ spec:
     metadata:
       labels:
         {{- include "synth.backend.selectorLabels" . | nindent 8 }}
+      {{- /* Метка сборки в pod-шаблоне — триггер раскатки. App-версия образа
+             не меняется между сборками (меняется только номер сборки), поэтому
+             без этой аннотации пересборка образа с тем же тегом НЕ приводила бы
+             к пересозданию пода — Helm не видит изменения в pod-шаблоне. Версия
+             чарта меняется при каждой публикации → rollout происходит. */}}
+      annotations:
+        synth.io/build: {{ .Chart.Version | quote }}
       {{- /* ADR-094: vanilla Prometheus без CRD — скрейп по аннотациям.
              Включать вместе с metrics.enabled (иначе 404 → up==0). */}}
       {{- if .Values.metrics.prometheus.annotations }}
-      annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: {{ .Values.backend.service.targetPort | quote }}
         prometheus.io/path: "/metrics"

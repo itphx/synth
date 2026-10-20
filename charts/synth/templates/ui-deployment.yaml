@@ -15,6 +15,11 @@ spec:
     metadata:
       labels:
         {{- include "synth.ui.selectorLabels" . | nindent 8 }}
+      {{- /* Триггер раскатки: app-версия образа не меняется между сборками,
+             меняется только номер сборки — без этой аннотации пересборка с тем
+             же тегом не пересоздавала бы под. */}}
+      annotations:
+        synth.io/build: {{ .Chart.Version | quote }}
     spec:
       {{- with .Values.ui.imagePullSecrets }}
       imagePullSecrets:

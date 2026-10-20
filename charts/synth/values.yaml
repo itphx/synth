@@ -396,7 +396,9 @@ secrets:
 installerKey:
   enabled: false
   label: addon-installer
-  scopes: ["addons:install"]
+  # Установщику нужны оба scope: addons:install — MCP-реестр и скиллы,
+  # automation:install — установка пакетов расширений (роли, пайплайны).
+  scopes: ["addons:install", "automation:install"]
   roles: []                 # доступ дают scopes; роль повышать не нужно
   # Secret: если existingSecret пуст — чарт создаёт Secret со сгенерированным токеном
   # (стабильным между `helm upgrade`); иначе используется существующий Secret,
