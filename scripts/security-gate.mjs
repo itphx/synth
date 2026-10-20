@@ -12,7 +12,8 @@
  *                        версии: схема, статус, обязательные проверки, известные исключения
  *                        с обязательным follow-up; отпечаток записи попадает в evidence;
  *   3. `auth-matrix`   — негативная матрица авторизации сессий присутствует и проходит
- *                        (команда из политики, вывод парсится: минимум N тестов);
+ *                        (команда из политики; счётчики берутся из JSON-отчёта vitest:
+ *                        минимум N тестов, ноль упавших — иначе блокировка);
  *   4. `secret-scan`   — `scripts/secret-scan.mjs` чист на рабочем дереве и на истории.
  *
  * Исключений «через порог» нет: запись аудита для релизуемой версии обязательна и должна быть
@@ -32,7 +33,7 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
 const argv = process.argv.slice(2);
@@ -62,6 +63,9 @@ const POLICY_PATH = resolve(ROOT, get('--policy', 'docs/security/policy.json'));
 
 const line = (s = '') => process.stdout.write(`${s}\n`);
 const rel = (p) => relative(ROOT, p) || p;
+
+/** Снимает ANSI-последовательности (цветной вывод терминала в логе джобы нечитаем). */
+const stripAnsi = (s) => String(s).replace(/\u001b\[[0-9;]*m/g, '');
 
 /**
  * Определение релизуемой версии. Порядок: `--version` (в CI — вывод version-bump при
@@ -300,21 +304,70 @@ function checkAuthMatrix(policy) {
       warnings: ['--skip-tests: фактический прогон негативной матрицы не выполнен — это НЕ полноценное подтверждение'],
     };
   }
-  const command = cfg.command ?? `pnpm --filter @itphx/synth-backend exec vitest run ${files.map((f) => f.replace(/^packages\/backend\//, '')).join(' ')}`;
+  const relFiles = files.map((f) => f.replace(/^packages\/backend\//, '')).join(' ');
+  // Разбор вывода идёт по JSON-отчёту vitest, а не по человекочитаемой сводке:
+  // формат сводки зависит от репортера, цветов и версии vitest, и её разбор
+  // однажды уже сломал релизный прогон (на раннере сводка не распарсилась —
+  // гейт упал, хотя тесты прошли). JSON-отчёт — машинный контракт: счётчики
+  // тестов и признак успеха приходят полями.
+  const reportPath = resolve(ROOT, 'tmp/security/auth-matrix-report.json');
+  mkdirSync(dirname(reportPath), { recursive: true });
+  rmSync(reportPath, { force: true });
+  const base = cfg.command ?? `pnpm --filter @itphx/synth-backend exec vitest run ${relFiles}`;
+  // Путь к отчёту — абсолютный: `pnpm exec` выполняется в каталоге пакета, и
+  // относительный путь уехал бы в packages/backend/ вместо каталога гейта.
+  const command = `${base} --reporter=json --outputFile=${reportPath}`;
   const res = sh('bash', ['-c', command]);
   const output = `${res.stdout}\n${res.stderr}`;
   if (res.code !== 0) {
-    return { status: 'fail', detail: `негативная матрица упала (exit ${res.code})`, command, output: output.slice(-4000) };
+    return {
+      status: 'fail',
+      detail: `негативная матрица упала (exit ${res.code})`,
+      command,
+      output: output.slice(-4000),
+      remedy: 'прогнать команду выше локально и исправить упавшую проверку',
+    };
   }
-  const m = /Tests\s+(?:\d+ failed \|\s*)?(\d+) passed/.exec(output);
-  const passed = m ? Number(m[1]) : null;
-  if (passed === null) {
-    return { status: 'fail', detail: 'не удалось разобрать вывод vitest (ожидалась строка «Tests  N passed»)', command, output: output.slice(-4000) };
+  let report;
+  try {
+    report = JSON.parse(readFileSync(reportPath, 'utf8'));
+  } catch (err) {
+    return {
+      status: 'fail',
+      detail: `JSON-отчёт vitest не прочитан (${err.message}) — счётчики проверок неизвестны`,
+      command,
+      output: output.slice(-4000),
+      remedy: 'проверить, что vitest пишет отчёт по --outputFile и что путь доступен для записи',
+    };
+  }
+  const passed = Number(report?.numPassedTests);
+  const failed = Number(report?.numFailedTests);
+  if (!Number.isFinite(passed)) {
+    return {
+      status: 'fail',
+      detail: 'в JSON-отчёте vitest нет счётчика numPassedTests — формат отчёта неожиданный',
+      command,
+      output: output.slice(-4000),
+    };
+  }
+  if (Number.isFinite(failed) && failed > 0) {
+    return {
+      status: 'fail',
+      detail: `в негативной матрице упало тестов: ${failed} (пройдено ${passed})`,
+      command,
+      output: output.slice(-4000),
+      remedy: 'исправить упавшую негативную проверку — ослабление матрицы блокирует релиз',
+    };
   }
   if (passed < minTests) {
     return { status: 'fail', detail: `негативных проверок ${passed} < минимальных ${minTests} (матрица усечена?)`, command, output: output.slice(-2000) };
   }
-  return { status: 'pass', detail: `негативная матрица пройдена: ${passed} проверок (минимум ${minTests})`, command, testsPassed: passed };
+  return {
+    status: 'pass',
+    detail: `негативная матрица пройдена: ${passed} проверок (минимум ${minTests})`,
+    command,
+    testsPassed: passed,
+  };
 }
 
 /**
@@ -662,6 +715,19 @@ const runCheck = (id, title, fn) => {
   line(`[${icon}] ${id}: ${result.detail}`);
   for (const w of result.warnings ?? []) line(`        ! ${w}`);
   if (result.remedy) line(`        → что делать: ${result.remedy}`);
+  // Провал блокирующей проверки обязан читаться из лога джобы: раньше вывод
+  // команды сохранялся, но не печатался и вырезался из evidence — разбор
+  // требовал локального прогона. Печатаем хвост вывода (без ANSI).
+  if (result.status !== 'pass' && result.output) {
+    const tail = stripAnsi(result.output)
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .slice(-30);
+    if (tail.length) {
+      line('        --- вывод команды (хвост) ---');
+      for (const l of tail) line(`        ${l}`);
+    }
+  }
 };
 
 const ALL_CHECKS = [
