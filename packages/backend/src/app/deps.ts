@@ -164,6 +164,9 @@ export async function createBackendDeps(
     skillBundles: bundleStore,
     mcpRegistry: mcpRegistryStore,
     analyticsRollups,
+    // ADR-051/PROP-059: реестр пайплайнов; ADR-086 §5: реестр установок пакетов.
+    pipelines: pipelineStore,
+    packs: packStore,
   } = storageContext;
 
   // ADR-030: ядровая шина хуков — общий инстанс для SessionManager и оркестратора.
@@ -819,6 +822,10 @@ export async function createBackendDeps(
     stopEgressLogPruner,
     mcpManager,
     mcpRegistryStore,
+    // ADR-051/PROP-059: порт реестра пайплайнов (определения + экземпляры).
+    pipelines: pipelineStore,
+    // ADR-086 §5: порт реестра установок пакетов расширений.
+    packs: packStore,
     eventBus,
     queueManager,
     webhookStore,

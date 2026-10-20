@@ -169,6 +169,12 @@ export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
 // PROP-032 (W2.1): доменные порты слоя хранения + файловая реализация BlobStore.
 export { FileBlobStore } from './storage/file-blob-store.js';
 export type { FileBlobStoreConfig } from './storage/file-blob-store.js';
+// ADR-051/PROP-059: файловая реализация порта пайплайнов.
+export { FilePipelineStore } from './storage/file-pipeline-store.js';
+export type { FilePipelineStoreConfig } from './storage/file-pipeline-store.js';
+// ADR-086 §5: файловая реализация порта реестра установок пакетов.
+export { FilePackStore } from './storage/file-pack-store.js';
+export type { FilePackStoreConfig } from './storage/file-pack-store.js';
 export type {
   SessionRepository,
   SessionFilter,
@@ -209,6 +215,15 @@ export type {
   DefaultsRepository,
   AppearanceDefaults,
   DocumentRepository,
+  // ADR-051/PROP-059: пайплайны; ADR-086 §5: реестр установок пакетов.
+  PipelineRepository,
+  PipelineDefinitionRecord,
+  PipelineInstanceRecord,
+  PipelineInstanceFilter,
+  PackRepository,
+  PackInstallation,
+  PackInstallationProvides,
+  PackInstallationStatus,
 } from './storage/ports/index.js';
 // PROP-032 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
 export {
@@ -241,6 +256,9 @@ export {
   MemoryContextFileRepository,
   MemoryBlobStore,
   MemorySSHKeyRepository,
+  // ADR-051/PROP-059: пайплайны; ADR-086 §5: реестр установок пакетов.
+  MemoryPipelineRepository,
+  MemoryPackRepository,
 } from './storage/memory/index.js';
 // PROP-032 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
@@ -439,6 +457,7 @@ export type {
 } from './storage/service-api-key-store.js';
 export {
   requireScope,
+  requireScopeOrAdminRole,
   checkServiceProjectProjection,
   checkProjectAccess,
   getServiceCredential,
@@ -893,6 +912,26 @@ export type {
   SchedulerRoutesOptions,
   SchedulerRouteMessages,
 } from './server/routes/schedules.js';
+// ADR-051/PROP-059: API пайплайнов (определения/экземпляры/ручной запуск).
+export { createPipelinesRoutes } from './server/routes/pipelines.js';
+export type {
+  PipelinesRoutesAuth,
+  PipelinesRoutesDeps,
+  PipelinesRoutesOptions,
+  PipelinesRouteMessages,
+} from './server/routes/pipelines.js';
+// ADR-086 §5: установка пакетов расширений и реестр установок.
+export { createPacksRoutes } from './server/routes/packs.js';
+export type {
+  PacksRoutesAuth,
+  PacksRoutesDeps,
+  PacksRoutesOptions,
+  PacksRouteMessages,
+  PackSkillsPort,
+  PackRoleFiles,
+  PackAgentsPort,
+  PackInstallResult,
+} from './server/routes/packs.js';
 export { createIdentityRoutes } from './server/routes/identities.js';
 export type {
   IdentityRoutesAuth,

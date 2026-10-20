@@ -22,6 +22,7 @@ import {
   createAnalyticsRoutes, AnalyticsService,
   createStorageContextAsync,
   createMetricsSettingsRoutes,
+  createPacksRoutes, createPipelinesRoutes,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -103,7 +104,7 @@ export function mountStandaloneRoutes(
     identityClaimStore, modelWindowLoader, eventRouter, dataDir, defaultWorkingDir,
     commandService, bundleStore, dictionaries, maintenanceAudit,
     egressResolver, securityAudit, egressRequests, analyticsRollups,
-    analytics,
+    analytics, pipelines, packs,
   } = deps;
   const serviceApiKeyStore = deps.serviceApiKeyStore;
   const {
@@ -519,10 +520,31 @@ export function mountStandaloneRoutes(
     },
   ));
 
+  // ADR-051/PROP-059: API пайплайнов — определения (ставит установщик пакета),
+  // экземпляры и ручной запуск. Standalone — дефолтные guard'ы (`requireAuth`).
+  app.route('/api/v2/pipelines', createPipelinesRoutes(auth, { pipelines }));
+
+  // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
+  // реестр установок. Standalone — `requireAuth` (single-user) + scope-гейт
+  // `automation:install` для service-key (ADR-052).
+  app.route('/api/v2/packs', createPacksRoutes(
+    auth,
+    {
+      packs,
+      pipelines,
+      skills: skillService,
+      mcpRegistry: deps.mcpRegistryStore,
+      agents: agentStore,
+      roleFiles: deps.contextFiles,
+      routes: routeRuleStore,
+      registerAgent: (agent) => agentRegistry.register(agent),
+      unregisterAgent: (id) => agentRegistry.unregister(id),
+    },
+  ));
+
   // ADR-052 (этап I): CRUD service-key (`synth_svc_…`) — scoped-ключи инстанса.
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
   app.route('/api/v2/service-keys', createServiceKeyRoutes(auth, { store: serviceApiKeyStore }));
-
   // ADR-052 (этап II): подписки на исходящие webhooks (CRUD + журнал + тест).
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
   app.route('/api/v2/webhooks', createWebhookRoutes(

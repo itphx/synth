@@ -175,6 +175,11 @@ export async function createStandaloneDeps(
     securityAudit,
     egressRequests,
     analyticsRollups,
+    // ADR-051/PROP-059: реестр пайплайнов; ADR-086 §5: реестр установок пакетов.
+    pipelines: pipelineStore,
+    packs: packStore,
+    // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
+    mcpRegistry: mcpRegistryStore,
   } = storageContext;
 
   // Egress: живой резолвер политики (settings.json → config.yaml → дефолт) и
@@ -861,6 +866,12 @@ export async function createStandaloneDeps(
     skillService,
     bundleStore,
     commandService,
+    // ADR-051/PROP-059: порт реестра пайплайнов (определения + экземпляры).
+    pipelines: pipelineStore,
+    // ADR-086 §5: порт реестра установок пакетов расширений.
+    packs: packStore,
+    // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
+    mcpRegistryStore,
     orchestrator,
     processMessage,
     eventBindingStore,

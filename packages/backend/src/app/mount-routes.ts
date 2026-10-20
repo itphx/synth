@@ -23,6 +23,7 @@ import {
   createSettingsRoutes, createDictionaryRoutes, createAuditRoutes as createSecurityAuditRoutes, currentEgressLog,
   createContextRoutes as createCoreContextRoutes,
   createMetricsSettingsRoutes,
+  createPacksRoutes, createPipelinesRoutes,
   resolveProjectWorkspace,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext } from '@itphx/synth-core';
@@ -43,7 +44,7 @@ import { createGatewayPatternsRoutes } from '../routes/gateway-patterns.js';
 import { createLlmRoutes } from '../routes/llm.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { scopeGuard, serviceProjectProjection } from '../auth/service-scope.js';
-import { requireAdminOrScope } from '../auth/guards.js';
+import { requireAdminOrScope, requireAdminRoleOrScope } from '../auth/guards.js';
 import { t, getTranslations } from '../lib/i18n.js';
 import type { AuthKit } from '../auth/middleware.js';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -92,6 +93,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     gatewayConfig, providerLoader, modelLoader, modelWindowLoader, resolveAgentTemplate,
     identityClaimStore, live, maintenanceAudit,
     analyticsRollups, analytics, metrics,
+    pipelines, packs,
   } = deps;
 
   /**
@@ -315,6 +317,49 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       scopeGuard,
       serviceProjectProjection,
       resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
+    },
+  ));
+
+  // ADR-051/PROP-059: API пайплайнов — определения (ставит установщик пакета),
+  // экземпляры и ручной запуск. Чтение — ADMIN (реестр автоматов инстанса),
+  // ручной запуск — ADMIN или service-key со scope `automation:install`.
+  app.route('/api/v2/pipelines', createPipelinesRoutes(
+    { requireAuth: auth.requireAuth },
+    { pipelines },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: requireAdminRoleOrScope('automation:install'),
+      scopeGuard,
+    },
+  ));
+
+  // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
+  // реестр установок. Managed RBAC: установка — ADMIN или service-key со
+  // scope `automation:install`; одобрение и снятие — **только ADMIN** (снимают
+  // чужие артефакты инстанса).
+  app.route('/api/v2/packs', createPacksRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      packs,
+      pipelines,
+      skills: skillService,
+      mcpRegistry: mcpRegistryStore,
+      agents: agentStore,
+      roleFiles: contextConfig,
+      routes: routeRuleStore,
+      registerAgent: (agent) => agentRegistry.register(agent),
+      unregisterAgent: (id) => agentRegistry.unregister(id),
+      resolveUserId: (c) => {
+        const user = c.get('user') as { id?: string } | undefined;
+        return user?.id;
+      },
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: requireAdminRoleOrScope('automation:install'),
+      approveGuard: auth.requirePermission('ADMIN'),
+      uninstallGuard: auth.requirePermission('ADMIN'),
+      scopeGuard,
     },
   ));
 
