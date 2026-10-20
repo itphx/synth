@@ -69,9 +69,12 @@ const originalGetBoundingClientRect = Element.prototype.getBoundingClientRect
 const originalOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
 const originalOffsetWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
 
-const isListScroll = (el: Element) => (el as HTMLElement).getAttribute?.('data-testid') === 'models-scroll'
-const mockWidth = (el: Element) => (isListScroll(el) ? 800 : 600)
-const mockHeight = (el: Element) => (isListScroll(el) ? 560 : 33)
+// Скролл-контейнер списка моделей — тело панели настроек (ADR-072: один
+// вертикальный скролл, у таблицы своего скролла нет). Виртуализатор меряет
+// именно его, поэтому телу панели в mock достаётся высота окна (560).
+const isScroller = (el: Element) => (el as HTMLElement).classList?.contains('settings-scroll-container')
+const mockWidth = (el: Element) => (isScroller(el) ? 800 : 600)
+const mockHeight = (el: Element) => (isScroller(el) ? 560 : 33)
 
 function mockLayout() {
   Element.prototype.getBoundingClientRect = function (this: Element): DOMRect {
@@ -98,9 +101,12 @@ function restoreLayout() {
   if (originalOffsetWidth) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', originalOffsetWidth)
 }
 
-async function renderPanel(): Promise<HTMLElement> {
+async function renderPanel(opts: { showAdvanced?: boolean } = {}): Promise<HTMLElement> {
   useI18nStore.setState({ locale: 'en', dictionary: enDict, loadingLocale: null })
-  useUIStore.setState({ settingsShowAdvanced: true, settingsFocus: null })
+  useUIStore.setState({
+    settingsShowAdvanced: opts.showAdvanced ?? true,
+    settingsFocus: null,
+  })
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -395,6 +401,175 @@ describe('ModelsPanel: модель по умолчанию', () => {
     })
     await act(async () => {})
     expect(apiMock.setDefaultModel).not.toHaveBeenCalled()
+  })
+})
+
+describe('ModelsPanel: базовые элементы (поиск, добавление) и один скролл', () => {
+  it('поиск и «Добавить модель» видны без раскрытия дополнительных настроек', async () => {
+    const container = await renderPanel({ showAdvanced: false })
+
+    expect(container.querySelector('#models-search')).toBeTruthy()
+    expect(container.querySelector('[data-testid="models-add-button"]')).toBeTruthy()
+    // Дополнительные фильтры — под тумблером.
+    expect(container.querySelector('[data-settings-section="models-filters-advanced"]')).toBeNull()
+  })
+
+  it('кнопка раскрытия дополнительных настроек — в шапке панели, до таблицы', async () => {
+    const container = await renderPanel({ showAdvanced: false })
+
+    const reveal = container.querySelector(
+      '[data-testid="settings-advanced-reveal"]',
+    ) as HTMLButtonElement
+    expect(reveal).toBeTruthy()
+    const header = container.querySelector('header') as HTMLElement
+    expect(header.contains(reveal)).toBe(true)
+
+    const table = container.querySelector('[data-testid="models-scroll"]') as HTMLElement
+    expect(
+      reveal.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('раскрытие дополнительных настроек открывает фильтры списка', async () => {
+    const container = await renderPanel({ showAdvanced: false })
+    const reveal = container.querySelector(
+      '[data-testid="settings-advanced-reveal"]',
+    ) as HTMLButtonElement
+
+    await act(async () => {
+      reveal.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('[data-settings-section="models-filters-advanced"]')).toBeTruthy()
+  })
+
+  it('таблица — последний элемент тела панели и не создаёт второго скролла', async () => {
+    const container = await renderPanel()
+
+    const table = container.querySelector('[data-testid="models-scroll"]') as HTMLElement
+    expect(table).toBeTruthy()
+    // У таблицы нет собственного скролл-контейнера (ADR-072: скроллится тело).
+    expect(table.className).not.toContain('overflow-auto')
+    expect(table.className).not.toContain('overflow-y-')
+    expect(table.className).not.toContain('max-h-')
+
+    const body = container.querySelector('.settings-scroll-container') as HTMLElement
+    const content = body.firstElementChild as HTMLElement
+    expect(content.lastElementChild).toBe(table)
+  })
+
+  it('таблица виртуализируется: в DOM только окно строк, а не весь список', async () => {
+    const models = Array.from({ length: 200 }, (_, i) => ({
+      id: `virt/m${i}`,
+      name: `virt-model-${i}`,
+      provider: 'virt',
+      enabled: true,
+      isDefault: false,
+    }))
+    apiMock.getModels.mockResolvedValue([
+      { provider: { name: 'virt', type: 'openai', icon: '', defaultModel: '' }, models },
+    ])
+
+    const container = await renderPanel()
+    // Крупная группа свёрнута — раскрываем её.
+    const toggle = container.querySelector('button[aria-label="virt"]') as HTMLButtonElement
+    await act(async () => {
+      toggle.click()
+    })
+
+    const rowCount = container.querySelectorAll('input[placeholder="in"]').length
+    expect(rowCount).toBeGreaterThan(0)
+    expect(rowCount).toBeLessThan(200)
+  })
+})
+
+describe('ModelsPanel: телефон — карточка вместо таблицы', () => {
+  const originalMatchMedia = window.matchMedia
+
+  /** Эмулируем зону «телефон» (≤768px) для `useDevice`/`useMediaQuery`. */
+  const mockPhoneViewport = () => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('max-width: 768px'),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia
+  }
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia
+  })
+
+  it('строка перестраивается в карточку: все поля и все действия доступны', async () => {
+    mockPhoneViewport()
+    const container = await renderPanel()
+
+    // Фиксированной ширины таблицы на телефоне нет — карточка тянется по месту.
+    const table = container.querySelector('[data-testid="models-scroll"]') as HTMLElement
+    const tableBody = table.firstElementChild as HTMLElement
+    expect(tableBody.className).not.toContain('min-w-[35rem]')
+
+    // Строка — карточка (колонка), а не строка таблицы.
+    const card = [...container.querySelectorAll('[data-testid="models-virtual-list"] [data-index] > div')]
+      .find((el) => el.querySelector('input[placeholder="in"]')) as HTMLElement
+    expect(card).toBeTruthy()
+    expect(card.className).toContain('flex-col')
+
+    // Контекст и все четыре цены — на месте.
+    expect(container.querySelector('input[type="number"]')).toBeTruthy()
+    for (const placeholder of ['in', 'out', 'cr', 'cw']) {
+      expect(container.querySelector(`input[placeholder="${placeholder}"]`)).toBeTruthy()
+    }
+    // Подписи полей (смысл цены без тултипа) и тумблер включения.
+    expect(container.textContent).toContain('Context')
+    expect(container.textContent).toContain('Prices /1M')
+    expect(container.textContent).toContain('ON')
+    // Действия строки: «по умолчанию» (пушпин) и удаление.
+    expect(container.querySelector('button[aria-label="Make default model"]')).toBeTruthy()
+    const del = container.querySelector('button[aria-label="Delete model"]') as HTMLElement
+    expect(del).toBeTruthy()
+    // Touch-таргет ≥40px (ADR-044, --control-height-touch).
+    expect(del.className).toContain('control-height-touch')
+  })
+
+  it('на телефоне шапка — компактная легенда, горизонтального скролла нет', async () => {
+    mockPhoneViewport()
+    const container = await renderPanel()
+
+    const table = container.querySelector('[data-testid="models-scroll"]') as HTMLElement
+    // У таблицы и её содержимого нет ни собственного скролла, ни overflow.
+    expect(table.className).not.toContain('overflow')
+    expect(table.firstElementChild!.className).not.toContain('overflow')
+    // Шапка колонок остаётся sticky и перечисляет поля карточки.
+    const header = table.querySelector('div.sticky') as HTMLElement
+    expect(header).toBeTruthy()
+    expect(header.className).toContain('sticky')
+    expect(header.textContent).toContain('Model')
+    expect(header.textContent).toContain('Context')
+    expect(header.textContent).toContain('Prices /1M')
+  })
+
+  it('на десктопе раскладка не меняется: та же таблица с фиксированной шириной', async () => {
+    const container = await renderPanel()
+
+    const table = container.querySelector('[data-testid="models-scroll"]') as HTMLElement
+    const tableBody = table.firstElementChild as HTMLElement
+    expect(tableBody.className).toContain('min-w-[35rem]')
+
+    // Строка — обычная строка таблицы (не карточка).
+    const row = [...container.querySelectorAll('[data-testid="models-virtual-list"] [data-index] > div')]
+      .find((el) => el.querySelector('input[placeholder="in"]')) as HTMLElement
+    expect(row).toBeTruthy()
+    expect(row.className).toContain('flex')
+    expect(row.className).not.toContain('flex-col')
+    // Шапка — прежние шесть колонок.
+    const header = table.querySelector('div.sticky') as HTMLElement
+    expect(header.className).toContain('px-4')
+    expect(header.querySelectorAll('span').length).toBe(6)
   })
 })
 

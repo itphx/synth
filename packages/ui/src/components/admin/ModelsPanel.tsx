@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { synthApi, type DefaultModelPair, type ModelGroup, type ModelInfo } from '@/lib/api/synthApi'
 import { Icon } from '@/components/icon/Icon'
 import { cn } from '@/lib/utils'
 import { useI18n } from '@/lib/i18n'
+import { useDevice } from '@/hooks/useDevice'
 import { confirm } from '@/lib/confirm'
 import { SelectContent, SelectItem } from '@/components/ui/select'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -32,6 +33,17 @@ type EditingPrices = Record<string, {
 /** Группа крупнее порога стартует свёрнутой — не строим тысячи строк DOM сразу. */
 const LARGE_GROUP_THRESHOLD = 50
 
+/**
+ * Оценки высоты строк виртуального списка (px) — до замера ResizeObserver'ом.
+ * На телефоне строка модели — карточка (название / контекст+вкл / цены),
+ * поэтому она заметно выше табличной строки.
+ */
+const MODEL_ROW_HEIGHT = 33
+const PHONE_MODEL_ROW_HEIGHT = 168
+const GROUP_ROW_HEIGHT = 48
+const PHONE_GROUP_ROW_HEIGHT = 64
+const SPACER_ROW_HEIGHT = 8
+
 type ProviderGroup = ModelGroup['provider']
 
 /** Плоский список для виртуализации: заголовок группы / строка модели / отступ. */
@@ -42,6 +54,11 @@ type ModelListItem =
 
 export const ModelsPanel = () => {
   const { t, locale } = useI18n()
+  // Телефон (≤768px): таблица моделей не помещается в ширину панели, поэтому
+  // строка перестраивается в карточку (ADR-044). Планшет и десктоп —
+  // без изменений: те же колонки, тот же порядок, те же ширины.
+  const { deviceType } = useDevice()
+  const isPhone = deviceType === 'phone'
   // Кэш стора: если модели уже загружены где-то в приложении — показываем сразу,
   // без скелетона, и обновляем в фоне.
   const cachedGroups = useProvidersStore((s) => s.modelGroups)
@@ -59,8 +76,16 @@ export const ModelsPanel = () => {
   // `collapsedGroups` — явно свёрнутые (для маленьких групп).
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
-  // Список моделей — собственный скролл-контейнер с виртуализацией.
-  const listScrollRef = useRef<HTMLDivElement>(null)
+  // Список моделей — виртуализированный. Скролл-контейнер — тело панели
+  // настроек (ADR-072: один вертикальный скролл), поэтому у таблицы нет
+  // собственного `overflow`/`max-h`.
+  const tableRef = useRef<HTMLDivElement>(null)
+  const virtualListRef = useRef<HTMLDivElement>(null)
+  // Скролл-контейнер панели (тело) — его отдаёт `SettingsPanel` через проп.
+  const scrollRef = useRef<HTMLElement | null>(null)
+  // Смещение виртуального списка относительно тела панели: строки позиционируются
+  // от его начала, а не от начала скролл-контейнера.
+  const [scrollMargin, setScrollMargin] = useState(0)
   const [defaultModel, setDefaultModel] = useState<DefaultModelPair | null>(null)
   const [defaultsPair, setDefaultsPair] = useState<DefaultModelPair | null>(null)
   const [isOverridden, setIsOverridden] = useState(false)
@@ -457,19 +482,63 @@ export const ModelsPanel = () => {
     }
   })
 
+  // Скролл-элемент виртуализатора — тело панели настроек: таблица не создаёт
+  // второго вертикального скролла (ADR-072), а список остаётся виртуализированным.
+  const getScrollElement = useCallback(() => scrollRef.current, [])
+
   const virtualizer = useVirtualizer({
     count: items.length,
-    getScrollElement: () => listScrollRef.current,
+    getScrollElement,
     estimateSize: (i) =>
-      items[i].kind === 'group' ? 48 : items[i].kind === 'model' ? 33 : 8,
+      items[i].kind === 'group'
+        ? (isPhone ? PHONE_GROUP_ROW_HEIGHT : GROUP_ROW_HEIGHT)
+        : items[i].kind === 'model'
+          ? (isPhone ? PHONE_MODEL_ROW_HEIGHT : MODEL_ROW_HEIGHT)
+          : SPACER_ROW_HEIGHT,
     overscan: 8,
     getItemKey: (i) => items[i].key,
+    scrollMargin,
   })
 
+  // Смещение списка внутри тела панели: строки виртуального списка отсчитываются
+  // от его начала, а не от начала скролл-контейнера.
+  const syncScrollMargin = useCallback(() => {
+    const list = virtualListRef.current
+    const scroller = scrollRef.current
+    if (!list || !scroller) return
+    const margin =
+      list.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+    setScrollMargin((prev) => (Math.abs(prev - margin) < 1 ? prev : margin))
+  }, [])
+
+  useLayoutEffect(() => {
+    syncScrollMargin()
+  })
+
+  // Содержимое над списком меняет высоту (баннеры, секции, форма добавления) —
+  // пересчитываем смещение, иначе строки «уезжают» относительно скролла.
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current
+    if (!scroller || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => syncScrollMargin())
+    observer.observe(scroller)
+    const content = scroller.firstElementChild
+    if (content) observer.observe(content)
+    return () => observer.disconnect()
+  }, [syncScrollMargin])
+
   // Смена фильтров/поиска — показываем начало списка (иначе окно «уезжает»).
+  const filtersInitRef = useRef(true)
   useEffect(() => {
-    const el = listScrollRef.current
-    if (el) el.scrollTop = 0
+    if (filtersInitRef.current) {
+      filtersInitRef.current = false
+      return
+    }
+    const scroller = scrollRef.current
+    const table = tableRef.current
+    if (!scroller || !table) return
+    scroller.scrollTop +=
+      table.getBoundingClientRect().top - scroller.getBoundingClientRect().top
   }, [search, filterProvider, onlyEnabled])
 
   const enabledProviders = groups.filter((g) => g.models.length > 0)
@@ -489,7 +558,10 @@ export const ModelsPanel = () => {
     <div className="flex flex-wrap items-center gap-3 border-b bg-muted/30 px-4 py-3 min-w-0">
       <button
         onClick={() => toggleGroup(item.provider.name, item.collapsed)}
-        className="p-0.5 hover:bg-muted rounded transition-colors shrink-0"
+        className={cn(
+          'p-0.5 hover:bg-muted rounded transition-colors shrink-0',
+          isPhone && 'h-[var(--control-height-touch)] w-[var(--control-height-touch)] flex items-center justify-center',
+        )}
         aria-label={item.provider.name}
       >
         <Icon
@@ -516,7 +588,10 @@ export const ModelsPanel = () => {
       <button
         onClick={() => handleFetch(item.provider.name)}
         disabled={fetching !== null}
-        className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-muted hover:bg-interactive-hover disabled:opacity-50 shrink-0"
+        className={cn(
+          'flex items-center gap-1 px-2 py-1 rounded text-xs bg-muted hover:bg-interactive-hover disabled:opacity-50 shrink-0',
+          isPhone && 'h-[var(--control-height-touch)] px-3',
+        )}
       >
         <Icon
           name="refresh"
@@ -525,6 +600,112 @@ export const ModelsPanel = () => {
         {t('admin.models.refresh')}
       </button>
     </div>
+  )
+
+  /** Контекстное окно — одинаковый инпут в обеих раскладках. */
+  const renderContextInput = (model: ModelInfo) => (
+    <input
+      type="number"
+      min="0"
+      step="1000"
+      value={model.context_window ?? ''}
+      onChange={(e) => handleContextEdit(model, e.target.value)}
+      onFocus={(e) => e.target.select()}
+      className={cn(
+        'w-full text-center bg-background border rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring tabular-nums',
+        isPhone && 'h-[var(--control-height-touch)]',
+        model.context_source === 'reference' && 'italic text-muted-foreground',
+      )}
+      title={model.context_window
+        ? t('admin.models.contextTitle', {
+            k: (model.context_window / 1000).toFixed(0),
+            source: model.context_source === 'reference'
+              ? t('admin.models.contextRef')
+              : model.context_source === 'api'
+                ? t('admin.models.contextApi')
+                : model.context_source === 'manual'
+                  ? t('admin.models.contextManual')
+                  : '',
+          })
+        : ''}
+    />
+  )
+
+  /** Одно из ценовых полей (вход / выход / чтение кэша / запись кэша). */
+  const renderPriceInput = (
+    model: ModelInfo,
+    placeholder: string,
+    value: string,
+    onChange: (value: string) => void,
+    title: string,
+  ) => (
+    <input
+      type="number"
+      min="0"
+      step="0.01"
+      placeholder={placeholder}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onFocus={() => !editingPrices[model.id] && startEditPrice(model)}
+      className={cn(
+        'text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring',
+        isPhone ? 'w-full min-w-0 h-[var(--control-height-touch)]' : 'w-[calc(50%-0.125rem)]',
+      )}
+      title={title}
+    />
+  )
+
+  /** Тумблер «Вкл/Выкл» — одинаков в обеих раскладках (на телефоне — touch-размер). */
+  const renderEnabledButton = (model: ModelInfo) => (
+    <button
+      onClick={() => toggleEnabled(model)}
+      className={cn(
+        'rounded text-[0.625rem] font-medium transition-colors cursor-pointer',
+        isPhone ? 'h-[var(--control-height-touch)] min-w-[3.25rem] px-3' : 'px-2 py-0.5',
+        model.enabled
+          ? 'bg-status-success/10 text-status-success hover:bg-status-success/20'
+          : 'bg-secondary text-muted-foreground hover:bg-interactive-hover',
+      )}
+      title={model.enabled ? t('admin.models.disableModel') : t('admin.models.enableModel')}
+    >
+      {model.enabled ? t('common.on').toUpperCase() : t('common.off').toUpperCase()}
+    </button>
+  )
+
+  /** Пушпин «модель по умолчанию». */
+  const renderDefaultButton = (model: ModelInfo, pinLabel: string) => (
+    <button
+      onClick={() => setAsDefault(model)}
+      disabled={!model.enabled}
+      className={cn(
+        'rounded transition-colors',
+        isPhone ? 'h-[var(--control-height-touch)] w-[var(--control-height-touch)] flex items-center justify-center shrink-0' : 'p-0.5',
+        model.isDefault
+          ? 'text-primary hover:text-primary/80'
+          : 'text-muted-foreground/30 hover:text-primary/70',
+        !model.enabled && 'disabled:opacity-30 disabled:cursor-default',
+      )}
+      aria-label={pinLabel}
+      title={pinLabel}
+    >
+      <Icon name="pushpin" className="size-3.5" />
+    </button>
+  )
+
+  /** Удаление модели. */
+  const renderDeleteButton = (model: ModelInfo) => (
+    <Button
+      variant="ghost"
+      onClick={() => handleDelete(model.id)}
+      className={cn(
+        'text-muted-foreground/40 hover:bg-status-error/10 hover:text-status-error',
+        isPhone ? 'h-[var(--control-height-touch)] w-[var(--control-height-touch)] p-0 shrink-0' : 'p-0.5',
+      )}
+      aria-label={t('admin.models.deleteModel')}
+      title={t('admin.models.deleteModel')}
+    >
+      <Icon name="delete-bin" className="size-3.5" />
+    </Button>
   )
 
   const renderModelRow = (item: Extract<ModelListItem, { kind: 'model' }>) => {
@@ -556,30 +737,7 @@ export const ModelsPanel = () => {
 
         {/* Контекстное окно */}
         <div className="w-20 shrink-0 text-center">
-          <input
-            type="number"
-            min="0"
-            step="1000"
-            value={model.context_window ?? ''}
-            onChange={(e) => handleContextEdit(model, e.target.value)}
-            onFocus={(e) => e.target.select()}
-            className={cn(
-              'w-full text-center bg-background border rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-ring tabular-nums',
-              model.context_source === 'reference' && 'italic text-muted-foreground',
-            )}
-            title={model.context_window
-              ? t('admin.models.contextTitle', {
-                  k: (model.context_window / 1000).toFixed(0),
-                  source: model.context_source === 'reference'
-                    ? t('admin.models.contextRef')
-                    : model.context_source === 'api'
-                      ? t('admin.models.contextApi')
-                      : model.context_source === 'manual'
-                        ? t('admin.models.contextManual')
-                        : '',
-                })
-              : ''}
-          />
+          {renderContextInput(model)}
         </div>
 
         {/* Цены */}
@@ -589,98 +747,153 @@ export const ModelsPanel = () => {
             onChange={(next) => setCurrency(model, next)}
           />
           <div className="flex flex-1 flex-wrap gap-1">
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="in"
-              value={editing?.inputPrice ?? model.input_price ?? ''}
-              onChange={(e) => updatePriceField(model.id, 'inputPrice', e.target.value)}
-              onFocus={() => !editing && startEditPrice(model)}
-              className="w-[calc(50%-0.125rem)] text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-              title={formatPrice(model.input_price, currency) || t('admin.models.priceInTitle')}
-            />
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="out"
-              value={editing?.outputPrice ?? model.output_price ?? ''}
-              onChange={(e) => updatePriceField(model.id, 'outputPrice', e.target.value)}
-              onFocus={() => !editing && startEditPrice(model)}
-              className="w-[calc(50%-0.125rem)] text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-              title={formatPrice(model.output_price, currency) || t('admin.models.priceOutTitle')}
-            />
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="cr"
-              value={editing?.cacheReadPrice ?? model.cache_read_price ?? ''}
-              onChange={(e) => updatePriceField(model.id, 'cacheReadPrice', e.target.value)}
-              onFocus={() => !editing && startEditPrice(model)}
-              className="w-[calc(50%-0.125rem)] text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-              title={formatPrice(model.cache_read_price, currency) || t('admin.models.priceCrTitle')}
-            />
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="cw"
-              value={editing?.cacheWritePrice ?? model.cache_write_price ?? ''}
-              onChange={(e) => updatePriceField(model.id, 'cacheWritePrice', e.target.value)}
-              onFocus={() => !editing && startEditPrice(model)}
-              className="w-[calc(50%-0.125rem)] text-center bg-background border rounded px-1 py-1 text-[0.625rem] focus:outline-none focus:ring-1 focus:ring-ring"
-              title={formatPrice(model.cache_write_price, currency) || t('admin.models.priceCwTitle')}
-            />
+            {renderPriceInput(
+              model,
+              'in',
+              editing?.inputPrice ?? model.input_price ?? '',
+              (value) => updatePriceField(model.id, 'inputPrice', value),
+              formatPrice(model.input_price, currency) || t('admin.models.priceInTitle'),
+            )}
+            {renderPriceInput(
+              model,
+              'out',
+              editing?.outputPrice ?? model.output_price ?? '',
+              (value) => updatePriceField(model.id, 'outputPrice', value),
+              formatPrice(model.output_price, currency) || t('admin.models.priceOutTitle'),
+            )}
+            {renderPriceInput(
+              model,
+              'cr',
+              editing?.cacheReadPrice ?? model.cache_read_price ?? '',
+              (value) => updatePriceField(model.id, 'cacheReadPrice', value),
+              formatPrice(model.cache_read_price, currency) || t('admin.models.priceCrTitle'),
+            )}
+            {renderPriceInput(
+              model,
+              'cw',
+              editing?.cacheWritePrice ?? model.cache_write_price ?? '',
+              (value) => updatePriceField(model.id, 'cacheWritePrice', value),
+              formatPrice(model.cache_write_price, currency) || t('admin.models.priceCwTitle'),
+            )}
           </div>
         </div>
 
         {/* Включено / Выключено */}
         <div className="w-[4.375rem] shrink-0 flex justify-center">
-          <button
-            onClick={() => toggleEnabled(model)}
-            className={cn(
-              'px-2 py-0.5 rounded text-[0.625rem] font-medium transition-colors cursor-pointer',
-              model.enabled
-                ? 'bg-status-success/10 text-status-success hover:bg-status-success/20'
-                : 'bg-secondary text-muted-foreground hover:bg-interactive-hover'
-            )}
-            title={model.enabled ? t('admin.models.disableModel') : t('admin.models.enableModel')}
-          >
-            {model.enabled ? t('common.on').toUpperCase() : t('common.off').toUpperCase()}
-          </button>
+          {renderEnabledButton(model)}
         </div>
 
         {/* По умолчанию (пара provider+model инстанса) */}
         <div className="w-10 shrink-0 flex justify-center">
-          <button
-            onClick={() => setAsDefault(model)}
-            disabled={!model.enabled}
-            className={cn(
-              'p-0.5 rounded transition-colors',
-              model.isDefault
-                ? 'text-primary hover:text-primary/80'
-                : 'text-muted-foreground/30 hover:text-primary/70',
-              !model.enabled && 'disabled:opacity-30 disabled:cursor-default',
-            )}
-            aria-label={pinLabel}
-            title={pinLabel}
-          >
-            <Icon name="pushpin" className="size-3.5" />
-          </button>
+          {renderDefaultButton(model, pinLabel)}
         </div>
 
         {/* Удалить */}
         <div className="w-8 shrink-0 flex justify-center">
-          <Button
-            variant="ghost"
-            onClick={() => handleDelete(model.id)}
-            className="p-0.5 text-muted-foreground/40 hover:bg-status-error/10 hover:text-status-error"
-            title={t('admin.models.deleteModel')}
-          >
-            <Icon name="delete-bin" className="size-3.5" />
-          </Button>
+          {renderDeleteButton(model)}
+        </div>
+      </div>
+    )
+  }
+
+  /**
+   * Телефон: та же строка, но перестроенная в карточку — название и действия
+   * на первой строке, контекст/вкл — на второй, цены — на третьей. Все поля
+   * и все действия остаются на экране: горизонтального скролла нет (ADR-072).
+   */
+  const renderModelRowPhone = (item: Extract<ModelListItem, { kind: 'model' }>) => {
+    const { model, provider } = item
+    const editing = editingPrices[model.id]
+    const currency = model.currency ?? provider.currency
+    const pinLabel = !model.enabled
+      ? t('admin.models.enableToDefault')
+      : model.isDefault
+        ? t('admin.models.defaultModelTitle')
+        : t('admin.models.makeDefault')
+    return (
+      <div className="flex flex-col gap-2 px-3 py-2 border-b border-dashed bg-surface-inset hover:bg-interactive-hover text-sm">
+        {/* Название модели + действия */}
+        <div className="flex items-center gap-1 min-w-0">
+          <ProviderIcon
+            icon={provider.icon}
+            size={14}
+            className="shrink-0"
+          />
+          <span className={cn('font-medium truncate min-w-0 flex-1', !model.enabled && 'opacity-50')}>
+            {model.name}
+          </span>
+          {renderDefaultButton(model, pinLabel)}
+          {renderDeleteButton(model)}
+        </div>
+
+        {/* Контекстное окно + включение */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="shrink-0 text-[0.6875rem] text-muted-foreground">
+            {t('admin.models.context')}
+          </span>
+          <div className="w-24 shrink-0">{renderContextInput(model)}</div>
+          <span className="ml-auto shrink-0 text-[0.6875rem] text-muted-foreground">
+            {t('admin.models.enabledCol')}
+          </span>
+          {renderEnabledButton(model)}
+        </div>
+
+        {/* Цены: подписи полей сохраняют смысл ввода/выхода без тултипа */}
+        <div className="flex items-end gap-2 min-w-0">
+          <span className="shrink-0 text-[0.6875rem] text-muted-foreground">
+            {t('admin.models.prices')}
+          </span>
+          <CurrencyPicker
+            value={currency}
+            onChange={(next) => setCurrency(model, next)}
+            className="h-[var(--control-height-touch)] w-[var(--control-height-touch)]"
+          />
+          <div className="flex-1 min-w-0">
+            <div className="grid grid-cols-4 gap-1 mb-0.5">
+              <span className="truncate text-center text-[0.5625rem] text-muted-foreground">
+                {t('admin.models.priceInShort')}
+              </span>
+              <span className="truncate text-center text-[0.5625rem] text-muted-foreground">
+                {t('admin.models.priceOutShort')}
+              </span>
+              <span className="truncate text-center text-[0.5625rem] text-muted-foreground">
+                {t('admin.models.priceCrShort')}
+              </span>
+              <span className="truncate text-center text-[0.5625rem] text-muted-foreground">
+                {t('admin.models.priceCwShort')}
+              </span>
+            </div>
+            <div className="grid grid-cols-4 gap-1">
+              {renderPriceInput(
+                model,
+                'in',
+                editing?.inputPrice ?? model.input_price ?? '',
+                (value) => updatePriceField(model.id, 'inputPrice', value),
+                formatPrice(model.input_price, currency) || t('admin.models.priceInTitle'),
+              )}
+              {renderPriceInput(
+                model,
+                'out',
+                editing?.outputPrice ?? model.output_price ?? '',
+                (value) => updatePriceField(model.id, 'outputPrice', value),
+                formatPrice(model.output_price, currency) || t('admin.models.priceOutTitle'),
+              )}
+              {renderPriceInput(
+                model,
+                'cr',
+                editing?.cacheReadPrice ?? model.cache_read_price ?? '',
+                (value) => updatePriceField(model.id, 'cacheReadPrice', value),
+                formatPrice(model.cache_read_price, currency) || t('admin.models.priceCrTitle'),
+              )}
+              {renderPriceInput(
+                model,
+                'cw',
+                editing?.cacheWritePrice ?? model.cache_write_price ?? '',
+                (value) => updatePriceField(model.id, 'cacheWritePrice', value),
+                formatPrice(model.cache_write_price, currency) || t('admin.models.priceCwTitle'),
+              )}
+            </div>
+          </div>
         </div>
       </div>
     )
@@ -691,6 +904,7 @@ export const ModelsPanel = () => {
     <SettingsPanel
       title={t('admin.models.title')}
       meta={t('admin.models.count', { visible: visibleCount, total: totalModels, providers: enabledProviders.length })}
+      scrollRef={scrollRef}
       actions={
         <Button
           onClick={() => handleFetch()}
@@ -701,6 +915,32 @@ export const ModelsPanel = () => {
         </Button>
       }
     >
+      {/* Поиск и добавление — базовые элементы панели: видны без раскрытия
+          дополнительных настроек и стоят первыми (владелец: «перенести вверх»). */}
+      <SettingsSection id="models-filters">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <TextField
+            id="models-search"
+            label={t('admin.models.search')}
+            tooltip={t('settings.help.models.search')}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t('admin.models.searchPlaceholder')}
+            aria-label={t('admin.models.searchPlaceholder')}
+            containerClassName="min-w-0 flex-1"
+          />
+          <Button
+            variant="outline"
+            onClick={() => setShowAddForm(true)}
+            className="shrink-0 border-dashed hover:border-solid hover:bg-muted"
+            data-testid="models-add-button"
+          >
+            <Icon name="add" className="size-3.5" />
+            {t('admin.models.add')}
+          </Button>
+        </div>
+      </SettingsSection>
+
       {/* Сообщения */}
       {fetchMsg && (
         <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3 text-sm text-status-success min-w-0 break-words">
@@ -767,17 +1007,8 @@ export const ModelsPanel = () => {
         </div>
       </SettingsSection>
 
-      {/* Фильтры */}
-      <SettingsSection id="models-filters" advanced>
-        <TextField
-          id="models-search"
-          label={t('admin.models.search')}
-          tooltip={t('settings.help.models.search')}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t('admin.models.searchPlaceholder')}
-          aria-label={t('admin.models.searchPlaceholder')}
-        />
+      {/* Дополнительные фильтры списка */}
+      <SettingsSection id="models-filters-advanced" advanced>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <SelectField
             label={t('admin.models.allProviders')}
@@ -800,22 +1031,14 @@ export const ModelsPanel = () => {
             onToggle={() => setOnlyEnabled((v) => !v)}
           />
         </div>
-        <Button
-          variant="outline"
-          onClick={() => setShowAddForm(true)}
-          className="border-dashed hover:border-solid hover:bg-muted"
-        >
-          <Icon name="add" className="size-3.5" />
-          {t('admin.models.add')}
-        </Button>
       </SettingsSection>
 
-      {/* Форма добавления */}
+      {/* Форма добавления — открывается кнопкой «Добавить модель», поэтому
+          не «дополнительная»: секция монтируется только по клику. */}
       {showAddForm && (
         <SettingsSection
           id="models-add-manual"
           title={t('admin.models.addManual')}
-          advanced
         >
           {addError && (
             <div className="bg-status-error/10 border border-status-error/30 rounded p-2 text-xs text-status-error min-w-0 break-words">
@@ -913,23 +1136,35 @@ export const ModelsPanel = () => {
           </p>
         </SettingsSection>
       ) : (
-        // Собственный скролл-контейнер списка: виртуализация + sticky-шапка колонок.
+        // Таблица без собственного скролла: вертикальный скролл — тело панели
+        // (ADR-072). Шапка колонок — sticky относительно тела панели.
         <div
-          ref={listScrollRef}
+          ref={tableRef}
           data-testid="models-scroll"
-          className="max-h-[60vh] min-h-[12rem] overflow-auto overscroll-contain rounded-lg border border-border"
+          className="min-w-0 rounded-lg border border-border"
         >
-          <div className="min-w-[35rem]">
-            {/* Шапка колонок — одна на всю таблицу */}
-            <div className="sticky top-0 z-10 flex gap-2 px-4 py-2 text-[0.6875rem] font-medium text-muted-foreground border-b bg-muted">
-              <span className="flex-1 min-w-0 pl-1">{t('admin.models.model')}</span>
-              <span className="w-20 shrink-0 text-center">{t('admin.models.context')}</span>
-              <span className="w-[8.75rem] shrink-0 text-center">{t('admin.models.prices')}</span>
-              <span className="w-[4.375rem] shrink-0 text-center">{t('admin.models.enabledCol')}</span>
-              <span className="w-10 shrink-0 text-center">{t('admin.models.defaultCol')}</span>
-              <span className="w-8 shrink-0" />
-            </div>
+          <div className={cn(!isPhone && 'min-w-[35rem]')}>
+            {/* Шапка колонок — одна на всю таблицу. На телефоне колонки
+                перестроены в карточку, поэтому шапка — компактная легенда. */}
+            {isPhone ? (
+              <div className="sticky top-0 z-10 flex items-center gap-2 rounded-t-lg px-3 py-2 text-[0.6875rem] font-medium text-muted-foreground border-b bg-muted">
+                <span className="flex-1 min-w-0 truncate">{t('admin.models.model')}</span>
+                <span className="min-w-0 shrink truncate text-right">
+                  {t('admin.models.context')} · {t('admin.models.prices')} · {t('admin.models.enabledCol')}
+                </span>
+              </div>
+            ) : (
+              <div className="sticky top-0 z-10 flex gap-2 rounded-t-lg px-4 py-2 text-[0.6875rem] font-medium text-muted-foreground border-b bg-muted">
+                <span className="flex-1 min-w-0 pl-1">{t('admin.models.model')}</span>
+                <span className="w-20 shrink-0 text-center">{t('admin.models.context')}</span>
+                <span className="w-[8.75rem] shrink-0 text-center">{t('admin.models.prices')}</span>
+                <span className="w-[4.375rem] shrink-0 text-center">{t('admin.models.enabledCol')}</span>
+                <span className="w-10 shrink-0 text-center">{t('admin.models.defaultCol')}</span>
+                <span className="w-8 shrink-0" />
+              </div>
+            )}
             <div
+              ref={virtualListRef}
               data-testid="models-virtual-list"
               className="relative"
               style={{ height: virtualizer.getTotalSize() }}
@@ -942,12 +1177,12 @@ export const ModelsPanel = () => {
                     data-index={vItem.index}
                     ref={virtualizer.measureElement}
                     className="absolute left-0 top-0 w-full"
-                    style={{ transform: `translateY(${vItem.start}px)` }}
+                    style={{ transform: `translateY(${vItem.start - scrollMargin}px)` }}
                   >
                     {item.kind === 'group'
                       ? renderGroupHeader(item)
                       : item.kind === 'model'
-                        ? renderModelRow(item)
+                        ? (isPhone ? renderModelRowPhone(item) : renderModelRow(item))
                         : null}
                   </div>
                 )
