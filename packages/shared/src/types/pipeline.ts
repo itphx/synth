@@ -47,6 +47,15 @@ export const pipelineArtifactSchema = z.object({
   id: z.string().optional(),
   /** Источник артефакта (путь/ссылка/идентификатор предыдущего шага). */
   from: z.string().optional(),
+  /** Источник события, породившего артефакт (для артефакта-события). */
+  source: z.string().optional(),
+  /** Тип события, породившего артефакт (для артефакта-события). */
+  type: z.string().optional(),
+  /**
+   * Данные артефакта (напр. payload события, которым шаг продвинул автомат).
+   * Именно это «содержимое» получает следующий шаг пайплайна.
+   */
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 export type PipelineArtifact = z.infer<typeof pipelineArtifactSchema>;
 
@@ -159,6 +168,8 @@ export const pipelineTriggerSchema = z.object({
   type: z.string().optional(),
   /** Ключ дедупликации (повторное событие не создаёт новый экземпляр). */
   dedupKey: z.string().optional(),
+  /** Payload события, породившего (продвинувшего) автомат. */
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 export type PipelineTrigger = z.infer<typeof pipelineTriggerSchema>;
 
@@ -179,6 +190,12 @@ export const pipelineInstanceSchema = z.object({
   currentStep: z.string().optional(),
   /** Число попыток перезапуска. */
   attempts: z.number().int().min(0),
+  /**
+   * Payload исходного события-триггера (неизменяемый). Актуальный payload
+   * продвижения лежит в `trigger.payload` — он перезаписывается на каждом
+   * гейте, а этот — хранит исходный.
+   */
+  payload: z.record(z.string(), z.unknown()).optional(),
   /** Текст ошибки экземпляра. */
   error: z.string().optional(),
   /** ISO-время создания. */

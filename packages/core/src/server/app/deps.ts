@@ -18,6 +18,7 @@ import {
   EventRouter, RequestSessionService, EventIngress, eventToMessage,
   ProjectRuleProvider, DecisionRuleProvider,
   type DecisionAgentCandidate,
+  PipelineTracker,
   SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
   WebhookService,
   createExternalIdentityResolver,
@@ -657,6 +658,10 @@ export async function createStandaloneDeps(
     getIdentityMap: () => effectiveEventsSettings.identityMap,
     localUserId: 'local',
   });
+  // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — состояние
+  // автомата публикации живёт в ядре (решение владельца), add-on отдаёт
+  // артефакт по id. Трекер работает через порт `storage.pipelines`.
+  const pipelineTracker = new PipelineTracker({ repository: pipelineStore });
   const requestSessionService = new RequestSessionService({
     sessionManager,
     eventRouter,
@@ -709,6 +714,9 @@ export async function createStandaloneDeps(
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
     // «Агенты» (`getDefaultAgentId`) поверх `DEFAULT_AGENT_ID`.
     resolveDefaultAgent: getDefaultAgentId,
+    // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — решение с
+    // `pipeline: {id, step}` продвигает автомат пайплайна; учёт best-effort.
+    pipelineTracker,
     // ADR-089: standalone-паритет с managed — уведомляем WS-хаб (`/ws/events`) о
     // материализованной сессии **до** доставки события, чтобы клиенты владельца,
     // подключённые раньше, получали её события (иначе подписка-снимок при

@@ -641,6 +641,18 @@ export type {
   RequestSessionServiceDeps,
   LlmDefaults,
 } from './engine/events/request-session.js';
+// ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — состояние
+// автомата публикации в ядре, артефакт шага — по id.
+export { PipelineTracker } from './engine/events/pipeline-tracker.js';
+export { pipelineTriggerPayload, pipelineStepArtifact } from './engine/events/pipeline-tracker.js';
+export type {
+  PipelineTrackerDeps,
+  PipelineTrackInput,
+  PipelineTrackedInstance,
+  PipelineEventArtifact,
+  PipelineEventTrigger,
+  PipelineEventStepState,
+} from './engine/events/pipeline-tracker.js';
 export type {
   EventDelivery,
   EventDeliveryContext,

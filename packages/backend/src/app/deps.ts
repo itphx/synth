@@ -33,6 +33,7 @@ import {
   applyPendingRestore,
   EventRouter, RequestSessionService, EventIngress, eventToMessage,
   ProjectRuleProvider, DecisionRuleProvider,
+  PipelineTracker,
   SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
   createExternalIdentityResolver,
   startEventJournalPruner,
@@ -619,6 +620,10 @@ export async function createBackendDeps(
     profiles: profilesStore,
     getIdentityMap: () => effectiveEventsSettings.identityMap,
   });
+  // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — состояние
+  // автомата публикации живёт в ядре (решение владельца), add-on отдаёт
+  // артефакт по id. Трекер работает через порт `storage.pipelines`.
+  const pipelineTracker = new PipelineTracker({ repository: pipelineStore });
   const requestSessionService = new RequestSessionService({
     sessionManager,
     eventRouter,
@@ -678,6 +683,9 @@ export async function createBackendDeps(
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
     // «Агенты» (`getDefaultAgentId`) поверх `DEFAULT_AGENT_ID`.
     resolveDefaultAgent: getDefaultAgentId,
+    // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — решение с
+    // `pipeline: {id, step}` продвигает автомат пайплайна; учёт best-effort.
+    pipelineTracker,
     // ADR-089: UI-событие после материализации внешнего события.
     publish: (type, sessionId, data) => eventBus.publish(sessionId, type, data),
     deliver: async (sessionId, event, mode, context) => {
