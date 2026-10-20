@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentRoutes } from './agents.js';
 import { JsonStore } from '@itphx/synth-core';
 import type { AgentDefinition } from '@itphx/synth-shared';
-import { AgentRegistry, DEFAULT_AGENT_ID } from '@itphx/synth-core';
+import { AgentRegistry, DEFAULT_AGENT_ID, ContextConfig } from '@itphx/synth-core';
 
 function createMockKit() {
   return {
@@ -23,10 +23,14 @@ function createMockKit() {
 let tmpDir: string;
 let store: JsonStore<AgentDefinition>;
 
-function createTestApp(agentRegistry?: AgentRegistry, getDefaultAgentId?: () => string | Promise<string>) {
+function createTestApp(
+  agentRegistry?: AgentRegistry,
+  getDefaultAgentId?: () => string | Promise<string>,
+  contextFiles?: ContextConfig,
+) {
   const app = new Hono();
   const kit = createMockKit();
-  const routes = createAgentRoutes(kit as any, store, agentRegistry, getDefaultAgentId);
+  const routes = createAgentRoutes(kit as any, store, agentRegistry, getDefaultAgentId, contextFiles);
   app.route('/api/v2/agents', routes);
   return app;
 }
@@ -234,5 +238,44 @@ describe('Agent API Routes — default_agent', () => {
     const res = await app.request('/api/v2/agents/all');
     const body: any = await res.json();
     expect(body.default_agent).toBe('developer');
+  });
+});
+
+/**
+ * ADR-046/ADR-089: managed-обёртка передаёт порт файлов контекста в core-фабрику —
+ * ролевой промпт агента доставляется по HTTP (файл роли в `{dataDir}/context/roles`).
+ */
+describe('Agent API Routes — ролевой промпт (managed)', () => {
+  let contextConfig: ContextConfig;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-agents-test-'));
+    store = new JsonStore<AgentDefinition>({ dataDir: tmpDir, subdir: 'agents' });
+    contextConfig = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('POST /agents с role_prompt пишет файл роли и принимает groups', async () => {
+    const app = createTestApp(undefined, undefined, contextConfig);
+    const res = await app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'bankassist',
+        display_name: 'Банковский ассистент',
+        role_prompt: 'РОЛЬ БАНКОВСКОГО АССИСТЕНТА',
+        groups: ['finance'],
+      }),
+    });
+    expect(res.status).toBe(201);
+    const agent: any = await res.json();
+    expect(agent.role).toEqual({ file: 'BANKASSIST.md', written: true, replaced: false });
+    expect(agent.groups).toEqual(['finance']);
+
+    const rolePath = join(contextConfig.userRolesDir, 'BANKASSIST.md');
+    expect(await readFile(rolePath, 'utf-8')).toBe('РОЛЬ БАНКОВСКОГО АССИСТЕНТА');
   });
 });

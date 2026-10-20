@@ -228,7 +228,11 @@ export function mountStandaloneRoutes(
   }));
 
   // Agents
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
+  // ADR-046/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
+  // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, {
+    roleFiles: deps.contextFiles,
+  }));
 
   // FS (ADR-075: гарантированный корень workspace + мягкая политика путей вне root)
   // project-aware: с `project_id` база — workspace проекта (fallback на root/default).

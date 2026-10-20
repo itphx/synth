@@ -442,6 +442,20 @@ project read or edit right). Sources — `packages/core/src/server/routes/projec
 | DELETE | `/api/v2/agents/:id` | both | ADMIN / auth | Delete custom / reset built-in |
 | PATCH | `/api/v2/agents/:id/enabled` | backend | ADMIN | `{enabled}` |
 
+> **Agent role prompt (ADR-046/ADR-089).** `POST /api/v2/agents` accepts an optional `role_prompt`
+> (alias `rolePrompt`) field — the **content** of the role prompt (not a path). The role file is
+> written to `{dataDir}/context/roles/<contextFile>` (the agent's `contextFile`, otherwise
+> `<AGENT_ID_UPPER>.md`) and takes priority over the built-in `prompts/roles/` (resolution —
+> `getRolePrompt`). The write is atomic (tmp → rename); an already existing file with different
+> content is overwritten (explicit install/update) — the fact is reported in the response
+> (`role: {file, written, replaced}`) and in the `AGENTS` log. The permission is the same as for
+> agent creation (managed — ADMIN, standalone — auth). The role content is not stored in the agent
+> definition: the agent refers to the file via `contextFile`.
+> **Agent groups (ADR-046 §6.2).** Optional `groups` field (array of strings) — skill binding via
+> `metadata.synth.groups`; priority `body → existing → builtin`, empty/duplicate/non-string items
+> are dropped. The field is returned by `GET /agents/all` (`groups`) and in the `POST /agents`
+> response.
+
 ### 5.12 Files — `/api/v2/fs`
 
 | Method | Path | Build | RBAC | Purpose |

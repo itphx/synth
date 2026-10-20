@@ -855,6 +855,9 @@ export async function createStandaloneDeps(
     contextOptimizer,
     toolRegistry,
     agentRegistry,
+    // ADR-046/ADR-089: порт файлов контекста — запись ролевого промпта агента
+    // вместе с агентом (`POST /api/v2/agents`, поле `role_prompt`).
+    contextFiles: contextConfig,
     skillService,
     bundleStore,
     commandService,

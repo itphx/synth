@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentRoutes } from './agents.js';
 import { JsonStore } from '../../storage/json-store.js';
+import { ContextConfig } from '../../engine/context/config.js';
 import { DEFAULT_AGENT_ID } from '../../engine/agents/index.js';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import type { AuthKit } from '../../auth/local.js';
@@ -167,5 +168,192 @@ describe('Agent API Routes — CRUD (core superset)', () => {
     expect(reset.status).toBe(200);
     expect((await reset.json() as any).status).toBe('reset');
     expect(await store.load('assistant')).toBeNull();
+  });
+});
+
+/**
+ * ADR-046/ADR-089: приём ролевого промпта агента вместе с агентом
+ * (`role_prompt` в теле POST) и групп агента (`groups`).
+ *
+ * Роль пишется портом файлов контекста в `{dataDir}/context/roles/<contextFile>`
+ * и имеет приоритет над системным `prompts/roles/` (резолв — `getRolePrompt`).
+ */
+describe('Agent API Routes — ролевой промпт и группы', () => {
+  let tmpDir: string;
+  let store: JsonStore<AgentDefinition>;
+  let contextConfig: ContextConfig;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-agents-role-'));
+    store = new JsonStore<AgentDefinition>({ dataDir: tmpDir, subdir: 'agents' });
+    contextConfig = new ContextConfig({ userDataDir: join(tmpDir, 'context') });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  function createTestApp(withRoleFiles = true) {
+    const app = new Hono();
+    app.route('/api/v2/agents', createAgentRoutes(createMockAuth(), store, undefined, undefined, {
+      ...(withRoleFiles ? { roleFiles: contextConfig } : {}),
+    }));
+    return app;
+  }
+
+  async function postAgent(app: Hono, body: Record<string, unknown>) {
+    return app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('POST /agents с role_prompt создаёт агента и пишет файл роли', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'analyst2',
+      display_name: 'Аналитик 2',
+      role_prompt: 'РОЛЬ АНАЛИТИКА 2',
+    });
+    expect(res.status).toBe(201);
+
+    const body: any = await res.json();
+    expect(body.id).toBe('analyst2');
+    expect(body.role).toEqual({ file: 'ANALYST2.md', written: true, replaced: false });
+
+    // Файл роли лежит в userRolesDir под дефолтным именем (<ID_UPPER>.md).
+    const rolePath = join(contextConfig.userRolesDir, 'ANALYST2.md');
+    expect(await readFile(rolePath, 'utf-8')).toBe('РОЛЬ АНАЛИТИКА 2');
+
+    // Агент сохранён; контент роли в определение агента не попадает.
+    const stored = await store.load('analyst2');
+    expect(stored?.id).toBe('analyst2');
+    expect((stored as any).rolePrompt).toBeUndefined();
+  });
+
+  it('POST /agents без role_prompt не создаёт файл роли (поведение прежнее)', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, { id: 'plain', display_name: 'Без роли' });
+    expect(res.status).toBe(201);
+
+    const body: any = await res.json();
+    expect(body.role).toBeUndefined();
+
+    // Каталог ролей не создан вовсе — ничего не «протекает» наружу.
+    await expect(readdir(contextConfig.userRolesDir)).rejects.toThrow();
+  });
+
+  it('POST /agents с пустым role_prompt не создаёт файл роли', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, { id: 'empty_role', role_prompt: '   ' });
+    expect(res.status).toBe(201);
+    await expect(readdir(contextConfig.userRolesDir)).rejects.toThrow();
+  });
+
+  it('POST /agents принимает groups и возвращает их в ответе и в реестре', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'grouped',
+      display_name: 'Групповой',
+      groups: ['writers', 'reviewers'],
+    });
+    expect(res.status).toBe(201);
+
+    const body: any = await res.json();
+    expect(body.groups).toEqual(['writers', 'reviewers']);
+
+    const stored = await store.load('grouped');
+    expect(stored?.groups).toEqual(['writers', 'reviewers']);
+
+    const list: any = await (await app.request('/api/v2/agents/all')).json();
+    expect(list.agents.find((a: any) => a.id === 'grouped').groups).toEqual(['writers', 'reviewers']);
+  });
+
+  it('POST /agents: groups нормализуются (пустые/дубли/не-строки отбрасываются)', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'grouped2',
+      groups: ['a', '  ', 'a', 42, ' b '],
+    });
+    expect(res.status).toBe(201);
+    const body: any = await res.json();
+    expect(body.groups).toEqual(['a', 'b']);
+  });
+
+  it('POST /agents без groups сохраняет ранее заданные группы', async () => {
+    const app = createTestApp();
+    await postAgent(app, { id: 'grouped3', groups: ['keep'] });
+    const res = await postAgent(app, { id: 'grouped3', display_name: 'Обновлён' });
+    expect(res.status).toBe(200);
+    const body: any = await res.json();
+    expect(body.groups).toEqual(['keep']);
+  });
+
+  it('POST /agents перезаписывает существующий файл роли (явная установка)', async () => {
+    const app = createTestApp();
+    await postAgent(app, { id: 'rewritable', role_prompt: 'РОЛЬ ВЕРСИЯ 1' });
+    const res = await postAgent(app, { id: 'rewritable', role_prompt: 'РОЛЬ ВЕРСИЯ 2' });
+    expect(res.status).toBe(200);
+
+    const body: any = await res.json();
+    expect(body.role).toEqual({ file: 'REWRITABLE.md', written: true, replaced: true });
+
+    const rolePath = join(contextConfig.userRolesDir, 'REWRITABLE.md');
+    expect(await readFile(rolePath, 'utf-8')).toBe('РОЛЬ ВЕРСИЯ 2');
+
+    // Атомарность: временных файлов в каталоге ролей не осталось.
+    const files = await readdir(contextConfig.userRolesDir);
+    expect(files).toEqual(['REWRITABLE.md']);
+  });
+
+  it('POST /agents с собственным context_file пишет роль под этим именем', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'customfile',
+      context_file: 'CUSTOM_ROLE.md',
+      role_prompt: 'РОЛЬ ПО ИМЕНИ',
+    });
+    expect(res.status).toBe(201);
+
+    const body: any = await res.json();
+    expect(body.role).toEqual({ file: 'CUSTOM_ROLE.md', written: true, replaced: false });
+    expect(await readFile(join(contextConfig.userRolesDir, 'CUSTOM_ROLE.md'), 'utf-8')).toBe('РОЛЬ ПО ИМЕНИ');
+  });
+
+  it('доставленный файл роли перекрывает системный prompts/roles/', async () => {
+    const app = createTestApp();
+
+    // Системная роль без override — из prompts/roles/ASSISTANT.ru.md.
+    const systemRole = contextConfig.getRolePrompt('assistant', undefined, 'ru');
+    expect(systemRole).toContain('[ROLE: ASSISTANT]');
+
+    await postAgent(app, { id: 'assistant', role_prompt: 'ПОЛЬЗОВАТЕЛЬСКАЯ РОЛЬ АССИСТЕНТА' });
+
+    // После доставки роли резолв берёт пользовательский файл.
+    expect(contextConfig.getRolePrompt('assistant', undefined, 'ru')).toBe('ПОЛЬЗОВАТЕЛЬСКАЯ РОЛЬ АССИСТЕНТА');
+    expect(contextConfig.getRolePrompt('assistant', 'ASSISTANT.md', 'ru')).toBe('ПОЛЬЗОВАТЕЛЬСКАЯ РОЛЬ АССИСТЕНТА');
+  });
+
+  it('без порта файлов контекста role_prompt даёт 500 и агент не создаётся', async () => {
+    const app = createTestApp(false);
+    const res = await postAgent(app, { id: 'no_store', role_prompt: 'РОЛЬ' });
+    expect(res.status).toBe(500);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('INTERNAL_ERROR');
+    expect(await store.load('no_store')).toBeNull();
+  });
+
+  it('context_file с путём отклоняется (роль пишется только внутрь каталога ролей)', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, {
+      id: 'evil',
+      context_file: '../../secrets/evil.md',
+      role_prompt: 'РОЛЬ',
+    });
+    expect(res.status).toBe(400);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    expect(await store.load('evil')).toBeNull();
   });
 });

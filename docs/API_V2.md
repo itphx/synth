@@ -440,6 +440,18 @@ sha256, небезопасный путь в архиве, ошибка восс
 | DELETE | `/api/v2/agents/:id` | оба | ADMIN / auth | Удалить custom / сбросить built-in |
 | PATCH | `/api/v2/agents/:id/enabled` | backend | ADMIN | `{enabled}` |
 
+> **Ролевой промпт агента (ADR-046/ADR-089).** `POST /api/v2/agents` принимает необязательное
+> поле `role_prompt` (алиас `rolePrompt`) — **содержимое** ролевого промпта (не путь). Файл роли
+> пишется в `{dataDir}/context/roles/<contextFile>` (`contextFile` агента, иначе `<ID_АГЕНТА_UPPER>.md`)
+> и имеет приоритет над системным `prompts/roles/` (резолв — `getRolePrompt`). Запись атомарная
+> (tmp → rename); уже существовавший файл с другим содержимым перезаписывается (явная установка) —
+> факт отражается в ответе (`role: {file, written, replaced}`) и в логе `AGENTS`. Право — то же, что на
+> создание агента (managed — ADMIN, standalone — auth). Контент роли в определение агента не
+> сохраняется: агент ссылается на файл через `contextFile`.
+> **Группы агента (ADR-046 §6.2).** Необязательное поле `groups` (массив строк) — привязка скиллов
+> по `metadata.synth.groups`; приоритет `body → existing → builtin`, пустые/дубли/не-строки отбрасываются.
+> Поле возвращается в `GET /agents/all` (`groups`) и в ответе `POST /agents`.
+
 ### 5.12 Файлы — `/api/v2/fs`
 
 | Метод | Путь | Сборка | RBAC | Назначение |

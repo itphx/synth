@@ -217,7 +217,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }));
 
   // Agents routes
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
+  // ADR-046/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
+  // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, contextConfig));
 
   // Context routes (глобальные identity-файлы; админ-мутации)
   app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig));

@@ -864,7 +864,13 @@ export type { ProviderRoutesAuth, ProviderRoutesOptions, ProviderRouteMessages }
 export { createModelRoutes } from './server/routes/models.js';
 export type { ModelRoutesAuth, ModelRoutesOptions, ModelRouteMessages } from './server/routes/models.js';
 export { createAgentRoutes } from './server/routes/agents.js';
-export type { AgentRoutesAuth, AgentRoutesOptions, AgentRouteMessages } from './server/routes/agents.js';
+export type {
+  AgentRoutesAuth,
+  AgentRoutesOptions,
+  AgentRouteMessages,
+  AgentRoleFiles,
+  AgentRoleResult,
+} from './server/routes/agents.js';
 export { createMcpRoutes } from './server/routes/mcp.js';
 export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
 export { createEventRoutes } from './server/routes/events.js';
