@@ -11,6 +11,15 @@ import { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
 import { WebhookService } from '../../engine/webhooks/service.js';
 import { EventBus } from '../../events/bus.js';
 import { PRIVATE_EGRESS_POLICY } from '../../engine/net/egress-guard.js';
+import type { HostResolver } from '../../engine/mcp/network-policy.js';
+
+/**
+ * Герметичность: DNS не ходит в сеть — резолвер подставляется явно.
+ * Публичный адрес — цель разрешена политикой; приватный — отклонена.
+ */
+const PUBLIC_ADDRESS = '93.184.216.34';
+const resolvePublicHost: HostResolver = async () => [PUBLIC_ADDRESS];
+const resolvePrivateHost: HostResolver = async () => ['10.0.0.5'];
 
 /** Mock-auth: requireAuth пропускает и выставляет пользователя. */
 const mockAuth = {
@@ -33,6 +42,8 @@ describe('Webhooks API Routes (ADR-052, этап II)', () => {
       createWebhookRoutes(mockAuth, { store, deliveryStore, service }, {
         // Обычная (deny приватных) политика по умолчанию; dev-тест передаёт `off`.
         resolvePolicy: async () => PRIVATE_EGRESS_POLICY,
+        // DNS не ходит в сеть — резолвер детерминирован.
+        resolveHost: resolvePublicHost,
         ...opts,
       }),
     );
@@ -61,6 +72,8 @@ describe('Webhooks API Routes (ADR-052, этап II)', () => {
         policy: { mode: 'off', list: [], exceptions: [] },
       },
       fetchImpl: async () => new Response(null, { status: 200 }),
+      // DNS не ходит в сеть — резолвер детерминирован (доставка проверяет цель).
+      resolveHost: resolvePublicHost,
     });
   });
 
@@ -116,6 +129,23 @@ describe('Webhooks API Routes (ADR-052, этап II)', () => {
       resolvePolicy: async () => ({ mode: 'off', list: [], exceptions: [] }),
     });
     expect((await postJson(dev, '/api/v2/webhooks', { label: 'dev', url: 'http://127.0.0.1/hook' })).status).toBe(201);
+  });
+
+  it('POST / — SSRF: хост, резолвящийся в приватный адрес, отклоняется (DNS не ходит в сеть)', async () => {
+    const app = makeApp({ isEnabled: () => true, resolveHost: resolvePrivateHost });
+    const res = await postJson(app, '/api/v2/webhooks', {
+      label: 'dns-private',
+      url: 'https://internal.example/hook',
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+    // Отказ именно по адресу из резолвера, а не «по сети не дошли».
+    expect(body.error.message).toContain('10.0.0.5');
+
+    // Тот же хост с публичным адресом — создаётся (проверка адресная, не по имени).
+    const ok = makeApp({ isEnabled: () => true });
+    expect((await postJson(ok, '/api/v2/webhooks', { label: 'dns-public', url: 'https://internal.example/hook' })).status).toBe(201);
   });
 
   it('мастер-выключатель: мутации/тест → 503, чтение — 200', async () => {

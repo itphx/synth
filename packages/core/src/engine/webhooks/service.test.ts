@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FetchLike } from '../net/fetch.js';
+import type { HostResolver } from '../mcp/network-policy.js';
 import { EventBus } from '../../events/bus.js';
 import { WebhookStore } from '../../storage/webhook-store.js';
 import { WebhookDeliveryStore } from '../../storage/webhook-delivery-store.js';
@@ -15,6 +16,15 @@ import { configureEgressRuntime, resetEgressRuntime } from '../net/egress-runtim
 import { MemoryEgressRequestLogRepository } from '../../storage/memory/index.js';
 import type { WebhookServiceDeps } from './service.js';
 import { verifyWebhookSignature } from './signature.js';
+
+/**
+ * Герметичность: DNS не ходит в сеть — резолвер подставляется явно.
+ * Публичный адрес — цель разрешена политикой; приватный — отклонена.
+ */
+const PUBLIC_ADDRESS = '93.184.216.34';
+const PRIVATE_ADDRESS = '10.0.0.5';
+/** Резолвер по умолчанию: любой хост — публичный адрес (сеть не используется). */
+const resolvePublicHost: HostResolver = async () => [PUBLIC_ADDRESS];
 
 describe('WebhookService (ADR-052, этап II)', () => {
   let tmpDir: string;
@@ -43,6 +53,8 @@ describe('WebhookService (ADR-052, этап II)', () => {
       fetchImpl,
       // backoff без реальных пауз
       sleep: async () => {},
+      // DNS не ходит в сеть — резолвер детерминирован (по умолчанию — публичный адрес).
+      resolveHost: resolvePublicHost,
       ...deps,
     });
     service.start();
@@ -222,7 +234,7 @@ describe('WebhookService (ADR-052, этап II)', () => {
       return okResponse();
     });
     makeService(fetchImpl, {}, {
-      resolveHost: async (host) => (host === 'internal.example' ? ['10.0.0.5'] : ['93.184.216.34']),
+      resolveHost: async (host) => (host === 'internal.example' ? [PRIVATE_ADDRESS] : [PUBLIC_ADDRESS]),
     });
 
     bus.publish('s1', 'session.created', {});
@@ -231,6 +243,8 @@ describe('WebhookService (ADR-052, этап II)', () => {
     });
     const delivery = (await deliveryStore.list())[0]!;
     expect(delivery.status).toBe('failed');
+    // Отказ — по адресу из резолвера (DNS не ходит в сеть), а не «по имени».
+    expect(delivery.error).toContain(PRIVATE_ADDRESS);
     // Приватный хоп не запрашивается: был только исходный запрос.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain('https://internal.example/secret');
@@ -293,6 +307,8 @@ describe('WebhookService (ADR-052, этап II)', () => {
     const blocked = (await repo.list())[0]!;
     expect(blocked).toMatchObject({ scope: 'webhooks', status: 'blocked', host: '127.0.0.1' });
     expect(blocked.reason).toBeTruthy();
+    // Отказ — по адресу, а не «по имени хоста».
+    expect(blocked.reason).toContain('127.0.0.1');
 
     // Разрешённая цель: запись allowed с httpStatus.
     await store.create({ label: 'allowed', url: 'https://93.184.216.34/hook', events: ['session.moved'] }, 'u-1');
@@ -343,6 +359,7 @@ describe('WebhookService × ADR-094 (метрики доставок)', () => {
     fetchImpl: FetchLike,
     onDelivery: WebhookServiceDeps['onDelivery'],
     overrides: Partial<typeof baseConfig> = {},
+    deps: Partial<WebhookServiceDeps> = {},
   ) => new WebhookService({
     store,
     deliveryStore,
@@ -351,6 +368,9 @@ describe('WebhookService × ADR-094 (метрики доставок)', () => {
     fetchImpl,
     sleep: async () => {},
     onDelivery,
+    // DNS не ходит в сеть — резолвер детерминирован (по умолчанию — публичный адрес).
+    resolveHost: resolvePublicHost,
+    ...deps,
   });
 
   beforeEach(async () => {
