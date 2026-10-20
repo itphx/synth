@@ -34,6 +34,21 @@ run() {
 
 need_value() { [ $# -ge 2 ] && [ -n "${2:-}" ] || die "опция $1 требует значение"; }
 
+# Каталог из аргумента: только абсолютный путь без управляющих символов
+# (те же правила, что в install.sh) — иначе путь собирается из частей и
+# «rm -rf» может уйти за пределы каталога установки.
+validate_dir_arg() {
+  local name=$1 value=$2
+  [ -n "$value" ] || die "$name требует непустое значение"
+  case "$value" in
+    /*) ;;
+    *) die "$name должен быть абсолютным путём: '$value'" ;;
+  esac
+  if printf '%s' "$value" | LC_ALL=C grep -q '[[:cntrl:]]'; then
+    die "$name содержит управляющие символы (перевод строки/таб) — недопустимо"
+  fi
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --user) MODE=user; shift ;;
@@ -64,6 +79,13 @@ OS=$(uname -s)
 [ "$OS" = Linux ] || [ "$OS" = Darwin ] || die "неподдерживаемая ОС: $OS"
 if [ "$MODE" = system ] && [ "$OS" != Linux ]; then
   die "--system поддерживается только на Linux"
+fi
+
+if [ -n "$PREFIX" ]; then
+  validate_dir_arg "--prefix" "$PREFIX"
+fi
+if [ -n "$SYNTH_HOME" ]; then
+  validate_dir_arg "--home" "$SYNTH_HOME"
 fi
 
 if [ "$OS" = Linux ]; then
@@ -172,7 +194,13 @@ if [ -L "$CURRENT" ] || [ -d "$CURRENT" ]; then
         esac
       fi
     else
-      rm -rf "$CURRENT"
+      # Каталог версии (не symlink) — удаляем только если он внутри префикса.
+      if [ -d "$CURRENT" ]; then
+        case "$(cd "$CURRENT" 2>/dev/null && pwd -P)" in
+          "$(cd "$PREFIX" 2>/dev/null && pwd -P)"/*) rm -rf "$CURRENT" ;;
+          *) warn "каталог $CURRENT находится вне каталога установки ($PREFIX) — не удаляю" ;;
+        esac
+      fi
     fi
   fi
 fi
@@ -193,6 +221,13 @@ if [ "$PURGE" -eq 1 ]; then
   case "$SYNTH_HOME" in
     ''|/|"$HOME"|"${HOME%/}")
       die "отказ удалять данные: недопустимый home '$SYNTH_HOME' (укажите конкретный --home)" ;;
+  esac
+  # Верхнеуровневый каталог (/etc, /usr, /var …) удалять нельзя: home —
+  # это каталог данных инстанса, а не корень раздела.
+  HOME_CANON=$(cd "$SYNTH_HOME" 2>/dev/null && pwd -P) || HOME_CANON=$SYNTH_HOME
+  case "${HOME_CANON%/}" in
+    /*/*) ;;
+    *) die "отказ удалять данные: '$HOME_CANON' — верхнеуровневый каталог (укажите --home с подкаталогом)" ;;
   esac
   info "удаляю данные: $SYNTH_HOME"
   run rm -rf "$SYNTH_HOME"
