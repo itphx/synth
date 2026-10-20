@@ -276,7 +276,7 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 | POST | `/api/v2/sessions/:id/fork` | оба | auth | Форк; `{message_id?, message_index?, title?}` → 201 |
 | GET | `/api/v2/sessions/:id/children` | оба | auth | Дочерние сессии |
 | GET | `/api/v2/sessions/:id/tree` | оба | auth | Дерево сессий |
-| GET | `/api/v2/sessions/:id/export` | backend | auth | Полный экспорт Session (внутренний формат) |
+| GET | `/api/v2/sessions/:id/export` | backend | auth | Экспорт Session (внутренний формат, camelCase — формат publish/fork не изменён). Доступ — **по праву на чтение сессии**; карта обфускации Gateway (ADR-036) — отдельная привилегия: **полный экспорт** (`obfuscationMap` и `messages[].metadata.secrets` включены) — **владельцу сессии** (`ownerId ?? userId`), `ADMIN` и `AUDITOR` (тот же набор привилегий, что у `GET /:id/secrets`); прочие читатели сессии (участник проекта `VIEWER`/`EDITOR`, владелец проекта, не владеющий сессией, `LEAD`) — **200 с очищенным телом** (карты нет, весь остальной разговор переносится без изменений; очистка — на копии, сохранённая сессия не меняется); нет доступа на чтение сессии → 403 `FORBIDDEN`; сессии нет → 404 `NOT_FOUND`; rate limit 10/60 c → 429 `RATE_LIMITED` |
 | POST | `/api/v2/sessions/import` | backend | auth | Импорт сессии из экспорта → 201 |
 | GET | `/api/v2/sessions/:id/status` | оба | auth | `{blocked, pending_count, processor_running}` |
 | POST | `/api/v2/sessions/:id/prompt` | оба | auth | Поставить сообщение в очередь, вернуть **SSE-стрим** |
@@ -304,8 +304,9 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 
 > `SessionSettings` MCP/скиллов (ADR-071 §2.4 / ADR-046): `mcpServers`/`mcpDisabledServers`, `skills`/`skillsDisabled` — session-overrides (один тумблер); `mcpDefaultOn`/`skillsDefaultOn` — **снапшот** дефолтов (`project.defaultOn`/системного дефолта) на момент создания сессии, задаётся системой, не перезаписывается сменой дефолта проекта; `undefined` — legacy-режим (см. scope-endpoint'ы §5.17.2).
 > **Видимость `GET /api/v2/sessions` (ADR-089).** `ADMIN`/`LEAD` — **все** сессии; иначе — свои личные **плюс** сессии проектов, участником которых является пользователь (`owner` проекта или любой `members`, любая роль). Сессия **без владельца** видна (паритет с доступом по id). Личные сессии других пользователей не видны. `?project_id=` фильтрует поверх этой видимости.
-> **Доступ по id — все `:id`-маршруты ресурса (ADR-089).** Единый prefix-guard `server/session-access-guard.ts` (вешается на `/:id` и `/:id/*` вместе с `requireAuth`; вид доступа `read`/`write` выводится из HTTP-метода), правило: `ADMIN`/`LEAD` — чтение **и** мутация чужой сессии разрешены (осознанное решение продукта; зафиксировано матрицей `routes/session-idor-matrix.test.ts`); владелец сессии / сессия без владельца — всё; участник проекта сессии: **чтение** (`GET`/`HEAD`) — любая роль, включая `VIEWER`, **мутация** — `OWNER`/`EDITOR` (`canEditProjectContent`); чужой пользователь → `403 FORBIDDEN`; несуществующая сессия → `404 NOT_FOUND`. Коды согласованы по всему ресурсу (для чужого на любом `:id`-маршруте — `403`); явные исключения: `GET /:id/mcp` — владелец|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR`. Хелпер списка — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
+> **Доступ по id — все `:id`-маршруты ресурса (ADR-089).** Единый prefix-guard `server/session-access-guard.ts` (вешается на `/:id` и `/:id/*` вместе с `requireAuth`; вид доступа `read`/`write` выводится из HTTP-метода), правило: `ADMIN`/`LEAD` — чтение **и** мутация чужой сессии разрешены (осознанное решение продукта; зафиксировано матрицей `routes/session-idor-matrix.test.ts`); владелец сессии / сессия без владельца — всё; участник проекта сессии: **чтение** (`GET`/`HEAD`) — любая роль, включая `VIEWER`, **мутация** — `OWNER`/`EDITOR` (`canEditProjectContent`); чужой пользователь → `403 FORBIDDEN`; несуществующая сессия → `404 NOT_FOUND`. Коды согласованы по всему ресурсу (для чужого на любом `:id`-маршруте — `403`); явные исключения: `GET /:id/mcp` — владелец|`ADMIN` (ADR-071 §2.4), `GET /:id/secrets` — `ADMIN`|`AUDITOR`, `GET /:id/export` — доступ по праву на чтение сессии, но карта обфускации — привилегия владельца|`ADMIN`|`AUDITOR` (остальным читателям — 200 с очищенным телом; ADR-091 §6). Хелпер списка — `server/session-visibility.ts` (`isSessionVisible`), скан — `FileStore.listForUserScope`.
 > **Scope service-key (ADR-052):** `GET /` и `GET /:id` — `sessions:read`; `POST /` — `sessions:create`; `PATCH /:id`, `DELETE /:id`, `POST /:id/prompt` — `sessions:prompt`; `GET /:id/prompt|status|stats|messages` — `sessions:read`. При непустом `allowedProjects` проектная проекция проверяется по `project_id` сессии, иначе `403 PROJECT_FORBIDDEN`.
+> **Контекст хранения инстанса.** Экспорт/импорт проекта (`GET /api/v2/projects/:id/export`, `POST /api/v2/projects/import`) идут через контекст хранения инстанса (`StorageContext`, ADR-096), а не через собственный файловый контекст — на `storage.backend=postgres` видны БД-проекты (спека — §5.8.1).
 > **Надёжный «Стоп» — `POST /api/v2/sessions/:id/abort` (ADR-005).** Роут ставит **персистентный** флаг `SessionStatus.cancelRequested` (+ `cancelRequestedAt`) под локом сессии — поэтому отмена срабатывает и когда `currentStream`/cancel-token ещё не установлены (сессия в очереди, в backoff, между итерациями Tool Use), где прежний `orchestrator.cancel` был no-op. При живом стриме дополнительно вызывается graceful `orchestrator.cancel` (публикует `stream.cancelled`, сохраняет частичный ответ); затем `QueueProcessorManager.requestStop` прерывает backoff/активный LLM-вызов и завершает цикл (`_handleStopRequest`: очистка `pendingMessages`, снятие `blocked`/флага, `stream.cancelled` ровно один раз — без дубля graceful-ветки). Если обработчика нет, флаг снимается, чтобы следующий запуск не отменился ложно. Ответ — `{status:'aborted'}`; без сессии — 404. В сериализованной сессии (`GET /api/v2/sessions/:id`) поле `status` содержит `cancel_requested` (bool) и `cancel_requested_at` (ISO|null). Гибридная ветка (удалённая сессия) делегирует `remoteClient.abortSession`.
 
 ### 5.6 Messages — `/api/v2/messages`
@@ -361,7 +362,14 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 `createProjectPortableRoutes` для core и backend; работа — в ядре
 (`packages/core/src/projects/portable.ts`). Архив содержит `manifest.json`
 (sha256-записи), `project.json` и `sessions/<id>.json`; опционально `workspace/**`.
-**Секретов в архиве нет** (ключи, токены, credentials, `secrets/` не попадают).
+**По умолчанию секретов в архиве нет** (ключи, токены, credentials, `secrets/` не попадают), и
+при упаковке session-payload'ов **вырезается карта обфускации LLM Gateway** (ADR-036):
+`obfuscation_map` на уровне сессии и `messages[].metadata.secrets` на уровне сообщения
+(соответствие «плейсхолдер → реальный секрет») — архив проекта не вывозит секреты других
+участников. Opt-in `?withSecrets=true` — **только** для `ADMIN`/`LEAD` (в core — локального
+владельца); выдача фиксируется в аудите обслуживания (`export.created`, деталь
+`withSecrets: true`), и такой архив — **сам секрет**. Импорт карту принимает, если она в архиве
+есть, — архив, собранный с привилегированным opt-in, импортируется корректно.
 
 Импорт — **materialization** (ADR-089, инвариант 15): создаётся **новый** `projectId`
 и новые сессии (источник id → новый id в `idMap`), не через funnel `session.requested`.
@@ -369,9 +377,14 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 (`onSessionCreated` → подписка владельца, ADR-089 инвариант 18). Операции фиксируются
 в аудит-журнале обслуживания (`export.created`/`import.applied`, ADR-092).
 
+**Контекст хранения инстанса.** Экспорт и импорт идут через `StorageContext` инстанса
+(ADR-096), а не через собственный файловый контекст: на `storage.backend=postgres`
+скачивание архива раньше отдавало 404 для всех БД-проектов, а импорт уходил в файловое
+хранилище (split-brain).
+
 | Метод | Путь | Сборка | RBAC (managed / core) | Назначение |
 |---|---|---|---|---|
-| GET | `/api/v2/projects/:id/export` | оба | auth / owner·участник·LEAD·ADMIN | Скачать портативный архив (стриминг): `Content-Type: application/gzip`, `Content-Disposition: attachment; filename="<slug>.synth-project.tar.gz"`, `Content-Length`; query `withWorkspace=true` (по умолчанию без `workspace/**`); нет проекта → 404 `NOT_FOUND`; нет права чтения → 403 `FORBIDDEN` |
+| GET | `/api/v2/projects/:id/export` | оба | auth / owner·участник·LEAD·ADMIN | Скачать портативный архив (стриминг): `Content-Type: application/gzip`, `Content-Disposition: attachment; filename="<slug>.synth-project.tar.gz"`, `Content-Length`; query `withWorkspace=true` (по умолчанию без `workspace/**`) и `withSecrets=true` (только `ADMIN`/`LEAD`, в core — локальный владелец; по умолчанию карта обфускации вырезана); нет проекта → 404 `NOT_FOUND`; нет права чтения → 403 `FORBIDDEN` |
 | POST | `/api/v2/projects/import` | оба | auth / любая роль (в `mergeInto` — owner·EDITOR·LEAD·ADMIN) | Импортировать архив (multipart) → 201 `{projectId, sessionsImported, messagesImported, workspaceRestored, idMap}` |
 
 **`POST /import`** — `multipart/form-data`: `file` (архив, обязательно), `name`
@@ -388,7 +401,8 @@ RBAC-колонка: `—` — без auth, `auth` — любой аутенти
 `PAYLOAD_TOO_LARGE`.
 
 **Коды ошибок.** 400 `VALIDATION_ERROR` (битый/повреждённый архив, несовпадение
-sha256, небезопасный путь в архиве, ошибка восстановления workspace, не-multipart тело или
+sha256, небезопасный путь в архиве, небезопасный путь в `workspace/**` — симлинк на пути
+или realpath-контейнмент, fail-closed, ошибка восстановления workspace, не-multipart тело или
 отсутствие `file`), 404 `NOT_FOUND` (нет проекта или цели `mergeInto`), 409 `CONFLICT`
 (имя проекта занято), 413 `PAYLOAD_TOO_LARGE` (превышен лимит), 401/403 (нет кред/нет права
 чтения или редактирования проекта). Источники — `packages/core/src/server/routes/project-portable.ts`,
