@@ -1,6 +1,6 @@
 {
   "schema": "synth.security.policy/v1",
-  "updated": "2026-10-15",
+  "updated": "2026-10-20",
   "recordDir": "docs/security/releases",
   "requiredCheckIds": ["secret-scan", "auth-matrix", "ci-baseline", "dependencies", "security-review"],
   "authMatrix": {
@@ -33,9 +33,9 @@
         "note": "ИСТОРИЧЕСКОЕ состояние до апгрейдов (2026-10-16, pnpm audit --json): 3 critical + 42 high (moderate ~48, low ~12–13 — база advisory дрейфует, для ратчета не важны); все 45 critical+high — транзитивные, у всех 15 затронутых модулей есть patched_versions. Действовало до апгрейда sdk/simple-git; профиль не активен."
       },
       "post-upgrade": {
-        "baseline": { "critical": 0, "high": 39 },
+        "baseline": { "critical": 0, "high": 31 },
         "failOnDirect": true,
-        "note": "АКТИВНЫЙ профиль с 2026-10-15 (факт, `pnpm audit --json` после апгрейдов): critical 0, high 39, moderate 48, low 12, прямых уязвимых модулей 0. Снято: critical proxy-addr GHSA-jqcg-44mw-7w3h (proxy-addr 2.0.8), critical GHSA-x6jw-m9v5-85vh (simple-git 4.0.2), critical GHSA-v5rq-49vh-5v5c (@simple-git/argv-parser 2.0.1), high GHSA-6qxp-vccf-f47h (@modelcontextprotocol/sdk 1.32.1), high GHSA-858h-whjf-mvg5 (simple-git). Остаток high 39 — транзитивные патч-уровня (undici 6, brace-expansion 15, fast-uri 7, js-yaml 3, nanoid 2, hono/vite/ws/postcss/source-map-js/ip-address по 1), все с patched_versions и вне прямых зависимостей; падение порогов — отдельной волной апгрейдов."
+        "note": "АКТИВНЫЙ профиль с 2026-10-20 (факт, `pnpm audit --json` после апгрейда hono/ws/undici/js-yaml): critical 0, high 31, moderate 24, low 6, прямых уязвимых модулей 0 (прямые = critical/high в прямых runtime-зависимостях воркспейса). Снято 8 high: hono 1123999 (4.12.21 → 4.13.13), ws 1123259 (8.20.1 → 8.22.0), undici 1121187/1121244/1121247/1130718/1240041/1240050 (7.26.0 → 7.30.1). Остаток high 31 — транзитивные патч-уровня, все с patched_versions: brace-expansion 15, fast-uri 7, js-yaml 3 (экземпляр 4.1.1, зафиксированный @redocly/openapi-core в devDep-цепочке ui; прямые экземпляры 4.3.2 чисты), nanoid 2, vite 1, postcss 1, ip-address 1, source-map-js 1. Уточнение про vite: это ПРЯМАЯ зависимость packages/ui, но devDependencies (инструментарий сборки) — в поставляемые артефакты не входит и релиз не блокирует; там же moderate/low (dompurify, @hono/node-server) — информационные. Формулировка «все остальные — вне прямых зависимостей» верна для runtime-зависимостей; для dev-зависимостей (vite) — нет. Падение порогов — отдельной волной апгрейдов."
       }
     }
   }
