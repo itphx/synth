@@ -85,7 +85,7 @@ actionable-предложений не входит; Ф0 (политика `buil
 | [PROP-055](./arch_decisions/prop-055-instance-exchange.md) | Обмен между инстансами Synth | 🧩 Предложение (vision) | идемпотентный upsert/дельта, peer-auth, live-сессии |
 | [PROP-057](./arch_decisions/prop-057-loop-engine.md) | Loop Engine и Loop Design Wizard | 🧩 Предложение (vision) | outer loop, Verification Rubric; включает PROP-031 |
 | [PROP-058](./arch_decisions/prop-058-service-agents-council.md) | Служебные агенты и консилиум (Council) | 🧩 Предложение (vision) | panel/consensus/debate/verifier/judge |
-| [PROP-059](./arch_decisions/prop-059-pipeline-automation.md) | Pipeline Automation | 🧩 Предложение (vision) | цепочки loops, HITL, мониторинг; остаток ADR-051 |
+| [PROP-059](./arch_decisions/prop-059-pipeline-automation.md) | Pipeline Automation | 🧩 Предложение (vision) | **база реализована** ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)): объект пайплайна, экземпляры, гейты через события, артефакт = payload события; остаток — движок шагов (PROP-057), rollback/exit, мониторинг-дашборд |
 | [PROP-060](./arch_decisions/prop-060-multi-contour-bridge.md) | Мультиконтурная архитектура (Contour Bridge) | 🧩 Предложение (vision) | шлюз между контурами, обезличивание, аудит |
 | [PROP-061](./arch_decisions/prop-061-llm-security-layers.md) | Многослойная безопасность LLM | 🧩 Предложение (vision) | сканеры, лимиты, HITL, неизменяемый аудит |
 | [PROP-063](./arch_decisions/prop-063-user-learning-metrics.md) | Обучение пользователя и метрики | 🧩 Предложение (vision) | анализ сессий, дашборд без рейтингов |
@@ -116,13 +116,13 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-018](./arch_decisions/adr-018-session-engine-selection.md) | Выбор AI-движка на уровне сессии | ✅ поле/плумбинг | механика движков (EngineManager/адаптеры) → PROP-050 |
 | [ADR-030](./arch_decisions/adr-030-hooks-agent-events.md) | Hooks для событий агента | ⚠️ Частично | Plugin SDK/загрузка плагинов → PROP-090 |
 | [ADR-046](./arch_decisions/adr-046-skills-and-slash-commands.md) | Скиллы и slash-команды | ✅ Фазы 1–3 | install/trust/подписи и backend-админка каталога → PROP-068 |
-| [ADR-051](./arch_decisions/adr-051-scheduler-pipelines.md) | Шедулер | ⚠️ Частично | пайплайны → PROP-059, размещение в гибриде, K8s Lease/PG advisory lock |
-| [ADR-086](./arch_decisions/adr-086-extensibility-plugins-editions.md) | Расширяемость (зонтик) | ⚠️ Частично | Plugin SDK → PROP-090, editions, contribution flow |
+| [ADR-051](./arch_decisions/adr-051-scheduler-pipelines.md) | Шедулер | ⚠️ Частично | пайплайны реализованы как декларация + учёт прогона ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)); остаток — движок шагов (PROP-057), rollback/дашборд (PROP-059), размещение в гибриде, K8s Lease/PG advisory lock |
+| [ADR-086](./arch_decisions/adr-086-extensibility-plugins-editions.md) | Расширяемость (зонтик) | ⚠️ Частично | доставка пакета расширения реализована ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)); остаток — Plugin SDK → PROP-090, каталог/trust пакетов → PROP-068, editions, contribution flow |
 | [ADR-087](./arch_decisions/adr-087-gateways.md) | Шлюзы (gateways) | ⚠️ Частично | HA/leader election, webhook-транспорт, второй канал |
 | [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | Наблюдаемость: `/metrics`, `/ready`, дашборды и алерты | ⚠️ Частично | JSON-логи с `request_id`/`session_id`, OpenTelemetry-трейсинг, Alertmanager/SLO-страница (остальное — в коде) |
 | [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) | Единый egress-слой: TLS/CA (mTLS, per-host профили) + адресная политика + прокси (config/UI) | ⚠️ Частично | Kerberos/NTLM — вне scope → egress-шлюз (п. 25), SOCKS5 — best-effort (п. 26); hot-reload прокси/TLS → PROP-088, пиннинг адреса → PROP-100, метрики → ADR-094, per-host CA и несколько default-сертов, перепроверка встроенного `fetch` на Node 22 |
 
-Итого: ADR — 50 (из них 38 со статусом `✅ Реализовано` и 12 со статусом `⚠️ Частично`, в т.ч. 5 —
+Итого: ADR — 51 (из них 39 со статусом `✅ Реализовано` и 12 со статусом `⚠️ Частично`, в т.ч. 5 —
 «принятое ядро + остаток-предложение»: 030, 051, 086, 087, 099), предложений — 40 (30 actionable + 1 icebox + 9 vision),
 legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 12 файлов — ADR-018, ADR-030, ADR-046,
 ADR-051, ADR-086, ADR-087, ADR-091, ADR-092, ADR-094, ADR-097, ADR-098, ADR-099 (сводка — [arch_decisions/README.md](./arch_decisions/README.md)).

@@ -1351,6 +1351,67 @@ user/project/model/agent, кнопки CSV/JSON и печать браузера
 
 ---
 
+### 5.33 Пакеты расширений — `/api/v2/packs` (оба, ADR-100)
+
+Реестр **установок пакетов расширения** (манифест `synth.pack`, ADR-086 §5) и установка
+пакета **одной операцией**. Единая фабрика `createPacksRoutes` для core и backend;
+RBAC/скоуп и i18n задаются через `opts` (`readGuard`/`writeGuard`/`approveGuard`/
+`uninstallGuard`/`scopeGuard`/`messages`). Хранилище — порт `PackRepository`
+(`{dataDir}/packs.json`).
+
+Порядок установки (идемпотентный upsert по имени пакета): **скиллы** → **MCP-запись реестра**
+(`origin: 'instance'`, `enabledByDefault: true`) → **агенты** (роль `{dataDir}/context/roles/<file>`
+пишется **до** агента — fail-closed) → **определения пайплайнов** → **правила маршрутизации**,
+порождённые из шагов с `waitsFor` (`match = waitsFor`,
+`target = {mode: 'ephemeral', agentTemplate, pipeline: {id, step}}`).
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/packs` | оба | ADMIN / auth | Список установок `{packs}`: имя, версия, `kind`, `status` (`active\|pending_approval\|disabled`), `requiresApproval`, `provides` (id'ы агентов/скиллов/MCP/пайплайнов), `installedBy` |
+| GET | `/api/v2/packs/:name` | оба | ADMIN / auth | Одна установка (включая сырой манифест и файлы пакета) |
+| POST | `/api/v2/packs` | оба | ADMIN **или** scope `automation:install` | Установка: тело `{manifest, files}` (манифест + карта файлов пакета). Некорректный манифест → 400 `VALIDATION_ERROR` со списком `problems`; нехватка файлов → 400. → **201** `{installed: true, requiresApproval: false, name, version, provides}`; пакет с capability-грантами → **202** `{installed: false, requiresApproval: true, …}` (фактическая установка **не** выполняется) |
+| POST | `/api/v2/packs/:name/approve` | оба | **только ADMIN** | Одобрение пакета в статусе `pending_approval` → 200 `{installed: true, …}`; нет записи → 404; статус не `pending_approval` → 409 `CONFLICT` |
+| DELETE | `/api/v2/packs/:name` | оба | **только ADMIN** | Снятие установки вместе с поставленными артефактами (агент + роль, скилл, MCP-запись, определение пайплайна, порождённые правила) → 204; идемпотентно (нет пакета — тоже 204) |
+
+**Одобрение.** Пакет требует подтверждения администратора, если он выдаёт агенту непустые
+`capabilities`, объявляет пайплайны (порождаемые правила маршрутизации) или расписания. Ответ
+**202** — не ошибка: фактическую установку выполняет `POST /api/v2/packs/:name/approve` (по
+сохранённым в реестре манифесту и файлам — обойти проверку целостности манифеста нельзя).
+
+**Скоупы (ADR-052).** Зонутный `automation:install` — установщик пакетов расширений: агенты и их
+ролевые промпты, пайплайны, порождаемые пакетом правила маршрутизации и расписания (на
+ресурсных гейтах заменяет `routes:write`/`schedules:write`; `addons:install` создание агентов
+**не** открывает). Гейты: `requireScopeOrAdminRole` (core), `requireAdminRoleOrScope` (backend).
+Одобрение и снятие — только роль ADMIN (они снимают чужие артефакты инстанса).
+
+### 5.34 Пайплайны — `/api/v2/pipelines` (оба, ADR-100/ADR-051)
+
+Пайплайн в ядре — **декларация + учёт прогона** (собственного движка шагов нет — PROP-057).
+Единая фабрика `createPipelinesRoutes`; хранилище — порт `PipelineRepository`
+(`{dataDir}/pipelines/definitions.json` и `{dataDir}/pipelines/instances.json`).
+**Определения этот роут не создаёт** — их ставит установщик пакета расширения
+(`POST /api/v2/packs`); обойти проверку целостности манифеста `synth.pack` нельзя.
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/pipelines` | оба | ADMIN / auth | Определения пайплайнов инстанса `{pipelines}` (шаги, `onError`, `maxAttempts`, `ttl`, провенанс `installedBy`) |
+| GET | `/api/v2/pipelines/instances` | оба | ADMIN / auth | Экземпляры прогонов `{instances}`; фильтры `pipelineId`, `status` (`pending\|running\|waiting\|done\|failed\|cancelled`), `limit` (дефолт 100, максимум 1000); неизвестный `status` → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/pipelines/instances/:instanceId` | оба | ADMIN / auth | Один экземпляр (состояния шагов, `currentStep`, `attempts`, `trigger`) |
+| GET | `/api/v2/pipelines/:id` | оба | ADMIN / auth | Одно определение; нет → 404 `NOT_FOUND` |
+| POST | `/api/v2/pipelines/:id/instances` | оба | ADMIN **или** scope `automation:install` | **Ручной** запуск экземпляра (проверка/отладка; основной запуск — по событию): тело `{trigger?, payload?}` → 201; нет определения → 404 |
+
+**Семантика автомата.** Первый шаг с `waitsFor` — **триггер**: совпавшее событие создаёт
+экземпляр; последующие шаги с `waitsFor` — **гейты**: событие означает «предыдущий шаг завершён
+и подтверждён человеком» — автомат продвигается в существующем экземпляре. **Артефакт между
+шагами = payload события** (например `{draftId}`) — он сохраняется в артефакте шага и в
+`trigger.payload`; следующий шаг получает его оттуда. Учёт ведёт funnel (ADR-089): решение
+Router'а несёт `pipeline: {id, step}`, трекер создаёт/продвигает экземпляр.
+
+**UI.** Раздел «Аддоны» (Настройки → Администрирование, категория `addons`, роль ADMIN):
+реестр пакетов (одобрение и снятие) и «Пайплайны» — определения и прогоны с фильтрами.
+
+---
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -1365,6 +1426,7 @@ user/project/model/agent, кнопки CSV/JSON и печать браузера
 | Webhooks store/журнал/роуты/движок (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | Admin-API обслуживания инстанса (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
 | Аналитика и отчёты (PROP-102) | `packages/core/src/server/routes/analytics.ts`, `packages/core/src/analytics/*`, `packages/shared/src/types/analytics.ts` |
+| Пакеты расширений и пайплайны (ADR-100) | `packages/core/src/server/routes/packs.ts`, `packages/core/src/server/routes/pipelines.ts`, `packages/core/src/engine/events/pipeline-tracker.ts`, `packages/core/src/storage/ports/pack-repository.ts`, `packages/core/src/storage/ports/pipeline-repository.ts`, `packages/shared/src/types/pack.ts`, `packages/shared/src/types/pipeline.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

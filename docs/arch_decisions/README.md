@@ -50,6 +50,7 @@
 | ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; вне объёма — Plugin SDK (PROP-090, отложен 2026-10-19), пайплайны (PROP-059), HA/второй канал (ADR-087) | ✅ Реализовано | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
 | ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096-storage-layer.md](./adr-096-storage-layer.md) |
+| ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ✅ Реализовано | [adr-100-extension-packs-pipelines.md](./adr-100-extension-packs-pipelines.md) |
 
 ## Частично
 
@@ -132,4 +133,4 @@
 
 ---
 
-Всего документов: 92 (Решения: 38, Частично: 12, Предложения: 30, Vision: 9, Icebox: 1, Legacy: 1).
+Всего документов: 93 (Решения: 39, Частично: 12, Предложения: 30, Vision: 9, Icebox: 1, Legacy: 1).

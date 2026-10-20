@@ -1,11 +1,13 @@
 # ADR-051: Шедулер и пайплайны (облегчённый n8n)
 
-> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через ADR-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection` — `none`/`file`/`postgres`, `scheduler.crossProcessLocks`; default OFF), в т.ч. PG advisory-lock лидер-выбор (PROP-032); пайплайны (PROP-059), размещение в гибриде, K8s Lease и разные dataDir на реплику — нет
+> **Статус:** ⚠️ Частично — реализованы минимальный срез (cron/interval-источник `schedule_fired` через ADR-089, идентичность сообщений `Scheduler`), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск (rate limit) и мульти-инстанс (`events.dedupStore`, `scheduler.leaderElection` — `none`/`file`/`postgres`, `scheduler.crossProcessLocks`; default OFF), в т.ч. PG advisory-lock лидер-выбор (PROP-032); **пайплайны реализованы как декларация + учёт прогона** (объект, экземпляры, гейты через события, артефакт = payload события — [ADR-100](./adr-100-extension-packs-pipelines.md)); собственный движок шагов (PROP-057), rollback/exit-стратегия и мониторинг-дашборд (PROP-059), размещение в гибриде, K8s Lease и разные dataDir на реплику — нет
 > **Дата:** 2026-09-16
+> **Обновлено:** 2026-10-20 — **пайплайны в ядре реализованы** (декларация в пакете расширения, экземпляры, триггер/гейты по событиям, артефакт = payload события) — вынесено в [ADR-100](./adr-100-extension-packs-pipelines.md); этот AD остаётся владельцем шедулера и запуска по расписанию.
 > **Источник:** перенесено из `AD-DRAFTS.md` (D6, идея 6 + Roadmap Фаза 2; прототип
 > `~/dev/aic/t11/synth/app/scheduler.py`).
 > **Связано:** [ADR-030](./adr-030-hooks-agent-events.md), [ADR-017](./adr-017-api-v2-hono.md),
 > [ADR-042](./adr-042-hybrid-mode.md), [ADR-089](./adr-089-external-events-automation.md),
+> [ADR-100](./adr-100-extension-packs-pipelines.md),
 > [PROP-059](./prop-059-pipeline-automation.md), [PROP-057](./prop-057-loop-engine.md).
 
 **Решение:** ввести `SchedulerService` — планировщик запуска промптов и циклов по расписанию:
@@ -102,9 +104,41 @@ Job-история, catch-up и принудительный (force) запус�
 
 Что осталось (следующие задачи):
 
-- **Пайплайны** (PROP-059) — композиция шагов поверх расписаний.
+- **Пайплайны** — база реализована (декларация + учёт прогона, [ADR-100](./adr-100-extension-packs-pipelines.md));
+  остаток — собственный **движок шагов** (loop'и, верификация, termination guards —
+  [PROP-057](./prop-057-loop-engine.md)), rollback/exit-стратегия и мониторинг-дашборд
+  ([PROP-059](./prop-059-pipeline-automation.md)), автоматическое закрытие шага по факту окончания хода.
 - Где живёт планировщик в гибриде (сервер vs локальный core, ADR-042).
 - **Мульти-инстанс/идемпотентность** — см. раздел «Технический долг» ниже.
+
+### Пайплайны в ядре (реализовано, ADR-100)
+
+Пайплайн в ядре — это **декларация + учёт состояния прогона**, а не отдельный движок шагов.
+Подробное решение — [ADR-100](./adr-100-extension-packs-pipelines.md); здесь — что важно для
+шедулера и маршрутизации:
+
+- **Объект.** Порт `PipelineRepository` (`packages/core/src/storage/ports/pipeline-repository.ts`):
+  определения (`PipelineDefinitionRecord` — шаги, `onError`, `maxAttempts`, `ttl`, провенанс
+  `installedBy`) и **экземпляры** (`PipelineInstanceRecord` — статус
+  `pending|running|waiting|done|failed|cancelled`, состояния шагов, `currentStep`, `attempts`);
+  файлы — `{dataDir}/pipelines/definitions.json` и `{dataDir}/pipelines/instances.json`.
+  Определения **ставит установщик пакета расширения** (`POST /api/v2/packs`) — в обход проверки
+  целостности манифеста `synth.pack` их не создать.
+- **API.** `GET /api/v2/pipelines` (определения), `GET /api/v2/pipelines/:id`,
+  `GET /api/v2/pipelines/instances` (фильтры `pipelineId`/`status`/`limit`),
+  `GET /api/v2/pipelines/instances/:id`, `POST /api/v2/pipelines/:id/instances` (ручной запуск;
+  scope `automation:install`).
+- **Семантика автомата.** Первый шаг с `waitsFor` — **триггер**: совпавшее событие создаёт
+  экземпляр. Последующие шаги с `waitsFor` — **гейты**: событие означает «предыдущий шаг завершён
+  и подтверждён человеком» — автомат продвигается в существующем экземпляре.
+- **Артефакт между шагами = payload события** (например `{draftId}`): payload сохраняется в
+  артефакте шага и в `trigger.payload`; следующий шаг получает его оттуда.
+- **Учёт ведёт funnel** (ADR-089): решение Router'а несёт `pipeline: {id, step}`, трекер
+  (`engine/events/pipeline-tracker.ts`) создаёт/продвигает экземпляр; шаг закрывается при
+  следующем событии пайплайна (хука «ход завершён» на уровне funnel нет — ограничение зафиксировано
+  в коде).
+- **Что не реализовано:** собственный движок шагов (PROP-057), rollback/exit-стратегия и
+  мониторинг-дашборд (PROP-059), автоматическое закрытие шага по факту окончания хода.
 
 ### Job-история, catch-up и force-запуск
 
@@ -226,7 +260,14 @@ advisory-локом), а также решение для разных dataDir �
   через который шедулер «стреляет» запусками (D6 → ADR-089).
 - [ADR-030](./adr-030-hooks-agent-events.md) «Hooks для событий агента» — событийные триггеры и фундамент.
 - [PROP-059](./prop-059-pipeline-automation.md) «Pipeline Automation» — композиция шагов поверх шедулера (D14).
+- [ADR-100](./adr-100-extension-packs-pipelines.md) «Пакет расширения и пайплайн в ядре» — объект пайплайна, экземпляры, триггер/гейты, артефакт = payload события; установка пакета расширения как источник определений.
 - [PROP-057](./prop-057-loop-engine.md) «Loop Engine» — исполняемая единица, запускаемая по расписанию (D12).
 - [ADR-017](./adr-017-api-v2-hono.md) «API v2» — CRUD-роуты расписаний.
 - [ADR-042](./adr-042-hybrid-mode.md) «Гибридный режим» — размещение планировщика.
 - [PROP-054](./prop-054-kanban-backlog.md) «Kanban-доска, backlog» — задачи как цель запуска по расписанию (D9).
+
+## История
+
+- 2026-10-20 — пайплайны: база реализована (декларация + экземпляры + гейты по событиям), решение вынесено в [ADR-100](./adr-100-extension-packs-pipelines.md); остаток — движок шагов (PROP-057) и rollback/дашборд (PROP-059).
+- 2026-10-12 — добавлены мульти-инстанс-механизмы: семы (`DedupStore`), выбор лидера (`SchedulerLeader`), межпроцессная сериализация `ScheduleStore` (`FileMutex`).
+- 2026-10-02 — добавлены Job-история, catch-up и force-запуск.
