@@ -992,6 +992,7 @@ export { serializeSession, serializeMessage, serializeProject } from './server/s
 export {
   GatewayProvider,
   ObfuscationMapStore,
+  stripSessionSecrets,
   AuditLogger,
   RateLimiter,
   runInputGuard,

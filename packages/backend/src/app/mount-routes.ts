@@ -132,6 +132,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     { requireAuth: auth.requireAuth },
     {
       dataDir,
+      // PROP-032: экспорт/импорт проекта работают через контекст хранения
+      // инстанса (иначе — свой файловый контекст, а на `backend=postgres`
+      // проект не найден бы).
+      storage: deps.storageContext,
       getProject: (id) => projectStore.load(id),
       canRead: async (c, projectId) => {
         const user = await auth.getCurrentUser(c);
@@ -145,6 +149,12 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
         const project = await projectStore.load(projectId);
         return project ? projectAccess.canEditProjectContent(c, project, user.id) : false;
       },
+      // security-фикс 0.11.3: экспорт проекта по умолчанию БЕЗ секретов сессий
+      // (карта обфускации LLM Gateway + `metadata.secrets`). Явный opt-in
+      // `?withSecrets=true` — только elevated (ADMIN/LEAD): архив проекта
+      // содержит сессии других участников, а карта обфускации — это секрет.
+      canExportSecrets: (c) =>
+        auth.isAdmin(c as never) || auth.hasRole(c as never, 'LEAD'),
       audit: maintenanceAudit,
       maxUploadBytes: config.maxUploadBytes,
       resolveOwnerId: (c) => {

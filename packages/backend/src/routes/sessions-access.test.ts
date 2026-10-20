@@ -20,10 +20,15 @@ import { createSessionRoutes } from './sessions.js';
 import { SessionManager, FileStore, EventBus, ProjectStore } from '@itphx/synth-core';
 import type { ChatOrchestrator } from '@itphx/synth-core';
 import type { User } from '@itphx/synth-shared';
+import { MessageRole } from '@itphx/synth-shared';
 
 interface MockUser extends User {
   roles: string[];
 }
+
+/** Реальный секрет в карте обфускации сессии (плейсхолдер → значение). */
+const REAL_SECRET = 'sk-live-DO-NOT-LEAK';
+const PLACEHOLDER = '⟦SYNTH_SECRET_1⟧';
 
 const USERS: Record<string, MockUser> = {
   owner: { id: 'owner', username: 'owner', roles: ['USER'] } as MockUser,
@@ -31,6 +36,7 @@ const USERS: Record<string, MockUser> = {
   member: { id: 'member', username: 'member', roles: ['USER'] } as MockUser,
   admin: { id: 'admin', username: 'admin', roles: ['ADMIN'] } as MockUser,
   lead: { id: 'lead', username: 'lead', roles: ['LEAD'] } as MockUser,
+  auditor: { id: 'auditor', username: 'auditor', roles: ['AUDITOR'] } as MockUser,
 };
 
 function userFromHeader(header: string | undefined): MockUser | null {
@@ -81,7 +87,7 @@ async function makeApp() {
     { createProcessor: vi.fn(), isRunning: vi.fn().mockReturnValue(false) } as never,
     processMessage,
     orchestrator as unknown as ChatOrchestrator,
-    { subscribeToSession: vi.fn(), unsubscribeFromSession: vi.fn() } as never,
+    { subscribeToSession: vi.fn().mockResolvedValue(undefined), unsubscribeFromSession: vi.fn() } as never,
     undefined,
     projectStore,
     undefined,
@@ -103,7 +109,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  /** Сессия, принадлежащая 'owner'. */
+  /** Сессия, принадлежащая 'owner' (с картой обфускации и секретом в metadata). */
   async function seedOwnedSession() {
     const { app, sessionManager } = await makeApp();
     const session = await sessionManager.createSession({
@@ -111,6 +117,25 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       ownerId: 'owner',
       userId: 'owner',
     });
+    // ADR-036: карта обфускации сессии + реальные значения плейсхолдеров в
+    // metadata сообщения — именно то, что не должно утекать через экспорт.
+    session.obfuscationMap = { [PLACEHOLDER]: REAL_SECRET };
+    session.messages = [
+      {
+        id: 'm1',
+        role: MessageRole.ASSISTANT,
+        seq: 1,
+        origin: 'local',
+        parts: [],
+        content: 'ответ с секретом',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { secrets: { [PLACEHOLDER]: REAL_SECRET } },
+      } as never,
+    ];
+    await sessionManager.saveSession(session);
     return { app, sessionManager, id: session.id };
   }
 
@@ -118,7 +143,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
   const ok = 200;
 
   describe('GET /:id/export', () => {
-    it('чужой USER → 403, владелец/ADMIN/LEAD → 200', async () => {
+    it('владелец/ADMIN/LEAD → 200; чужая сессия → 403', async () => {
       const { app, id } = await seedOwnedSession();
 
       const foreign = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth('other') });
@@ -128,6 +153,30 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
       for (const u of ['owner', 'admin', 'lead']) {
         const res = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth(u) });
         expect(res.status, u).toBe(ok);
+      }
+    });
+
+    it('security-фикс 0.11.3: владелец/ADMIN/AUDITOR → полный экспорт (с картой обфускации)', async () => {
+      const { app, id } = await seedOwnedSession();
+
+      for (const u of ['owner', 'admin', 'auditor']) {
+        const res = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth(u) });
+        expect(res.status, u).toBe(ok);
+        const body = (await res.json()) as { obfuscationMap?: Record<string, string> };
+        // Карта обфускации — реальные значения плейсхолдеров.
+        expect(body.obfuscationMap, u).toEqual({ [PLACEHOLDER]: REAL_SECRET });
+      }
+    });
+
+    it('security-фикс 0.11.3: LEAD (не владелец) → 200, но экспорт ОЧИЩЕН (без карты)', async () => {
+      const { app, id } = await seedOwnedSession();
+
+      const res = await app.request(`/api/v2/sessions/${id}/export`, { headers: auth('lead') });
+      expect(res.status).toBe(ok);
+      const body = (await res.json()) as { obfuscationMap?: unknown; messages?: Array<{ metadata?: unknown }> };
+      expect(body.obfuscationMap).toBeUndefined();
+      for (const message of body.messages ?? []) {
+        expect((message.metadata as Record<string, unknown> | undefined)?.secrets).toBeUndefined();
       }
     });
   });
@@ -288,7 +337,7 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
   });
 
   describe('проектная видимость', () => {
-    it('участник проекта открывает сессию проекта (200), посторонний → 403', async () => {
+    it('участник проекта читает сессию проекта (200), посторонний → 403', async () => {
       const { app, sessionManager, projectStore } = await makeApp();
       const project = projectStore.create('P', 'owner');
       project.members['member'] = 'viewer' as never;
@@ -297,11 +346,102 @@ describe('Session access control для backend-only роутов (ADR-089, IDOR
         title: 'shared', ownerId: 'owner', userId: 'owner', projectId: project.id,
       });
 
-      const memberRes = await app.request(`/api/v2/sessions/${session.id}/export`, { headers: auth('member') });
+      const memberRes = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('member') });
       expect(memberRes.status).toBe(ok);
 
-      const outsiderRes = await app.request(`/api/v2/sessions/${session.id}/export`, { headers: auth('other') });
+      const outsiderRes = await app.request(`/api/v2/sessions/${session.id}`, { headers: auth('other') });
       expect(outsiderRes.status).toBe(denied);
+    });
+
+    it('security-фикс 0.11.3: экспорт сессии проекта — участник получает 200 БЕЗ секретов', async () => {
+      // ИЗМЕНЕНО (security-фикс 0.11.3, уточнение правила): участник проекта
+      // (VIEWER) по-прежнему имеет ДОСТУП НА ЧТЕНИЕ сессии, поэтому экспорт
+      // доступен (200) — но ответ ОЧИЩЕН: без `obfuscationMap` и без
+      // `messages[].metadata.secrets`. Раньше (до фикса) участник получал
+      // полный экспорт с ЧУЖИМИ секретами.
+      const { app, sessionManager, projectStore } = await makeApp();
+      const project = projectStore.create('P', 'owner');
+      project.members['member'] = 'viewer' as never;
+      await projectStore.save(project);
+      const session = await sessionManager.createSession({
+        title: 'shared', ownerId: 'owner', userId: 'owner', projectId: project.id,
+      });
+      session.obfuscationMap = { [PLACEHOLDER]: REAL_SECRET };
+      session.messages = [{
+        id: 'm1',
+        role: MessageRole.ASSISTANT,
+        seq: 1,
+        origin: 'local',
+        parts: [],
+        content: 'ответ с секретом',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { secrets: { [PLACEHOLDER]: REAL_SECRET } },
+      } as never];
+      await sessionManager.saveSession(session);
+
+      const memberRes = await app.request(`/api/v2/sessions/${session.id}/export`, { headers: auth('member') });
+      expect(memberRes.status).toBe(ok);
+      const body = (await memberRes.json()) as {
+        obfuscationMap?: unknown;
+        messages?: Array<{ content?: string; metadata?: unknown }>;
+      };
+      // Ни карты обфускации, ни реальных значений плейсхолдеров в metadata.
+      expect(body.obfuscationMap).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain(REAL_SECRET);
+      for (const message of body.messages ?? []) {
+        expect((message.metadata as Record<string, unknown> | undefined)?.secrets).toBeUndefined();
+      }
+      // Переносимый разговор при этом цел — экспорт остаётся payload'ом переноса.
+      expect(body.messages?.[0]?.content).toBe('ответ с секретом');
+    });
+
+    it('security-фикс 0.11.3: очищенный экспорт импортируется без потерь (round-trip)', async () => {
+      const { app, sessionManager, projectStore } = await makeApp();
+      const project = projectStore.create('P', 'owner');
+      project.members['member'] = 'viewer' as never;
+      await projectStore.save(project);
+      const session = await sessionManager.createSession({
+        title: 'shared', ownerId: 'owner', userId: 'owner', projectId: project.id,
+      });
+      session.obfuscationMap = { [PLACEHOLDER]: REAL_SECRET };
+      session.messages = [{
+        id: 'm1',
+        role: MessageRole.ASSISTANT,
+        seq: 1,
+        origin: 'local',
+        parts: [],
+        content: 'ответ с секретом',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        disabled: false,
+        pinned: false,
+        hidden: false,
+        metadata: { secrets: { [PLACEHOLDER]: REAL_SECRET } },
+      } as never];
+      await sessionManager.saveSession(session);
+
+      // Участник проекта забирает очищенный экспорт.
+      const exported = await app.request(`/api/v2/sessions/${session.id}/export`, { headers: auth('member') });
+      expect(exported.status).toBe(ok);
+      const payload = (await exported.json()) as Record<string, unknown>;
+
+      // Импортирует его обратно (publish/fork-сценарий) — импорт принимает
+      // очищенный payload.
+      const imported = await app.request('/api/v2/sessions/import', {
+        method: 'POST',
+        headers: auth('member'),
+        body: JSON.stringify(payload),
+      });
+      expect(imported.status).toBe(201);
+
+      const created = (await imported.json()) as { id: string };
+      const local = (await sessionManager.getSession(created.id))!;
+      expect(local.obfuscationMap).toBeUndefined();
+      expect(local.messages).toHaveLength(1);
+      expect(local.messages[0]?.content).toBe('ответ с секретом');
+      expect(JSON.stringify(local)).not.toContain(REAL_SECRET);
     });
   });
 

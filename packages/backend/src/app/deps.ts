@@ -784,6 +784,9 @@ export async function createBackendDeps(
 
   return {
     dataDir,
+    // PROP-032: контекст хранения инстанса — для операций, которым нужен
+    // целиком (напр. портативный экспорт/импорт проекта, ADR-091).
+    storageContext,
     // ADR-094: реестр метрик (доменные коллекторы подключаются выше) и
     // остановка фоновых коллекторов на graceful shutdown.
     metrics,

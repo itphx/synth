@@ -190,11 +190,19 @@ export function mountStandaloneRoutes(
   // загрузить архив). Standalone — дефолтные guard'ы (`requireAuth`); доступ к
   // проекту одного пользователя отдельно не ограничиваем. `onSessionCreated` —
   // ускоритель подписки WS-хаба владельца (`local`) на импортированные сессии.
+  // `canExportSecrets` — standalone: единственный локальный пользователь владеет
+  // всеми локальными сущностями, поэтому привилегированный opt-in
+  // `?withSecrets=true` разрешён ему (security-фикс 0.11.3).
   app.route('/api/v2/projects', createProjectPortableRoutes(
     auth,
     {
       dataDir,
+      // PROP-032: экспорт/импорт проекта работают через контекст хранения
+      // инстанса (иначе — свой файловый контекст, а на `backend=postgres`
+      // проект не найден бы).
+      storage: deps.storageContext,
       getProject: (id) => projectStore.load(id),
+      canExportSecrets: () => true,
       audit: maintenanceAudit,
       maxUploadBytes: config.maxUploadBytes,
       onSessionCreated: (sessionId, ownerId) => { ctx.subscribeWsSession?.(ownerId, sessionId); },

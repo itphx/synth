@@ -6,8 +6,10 @@
 //
 // Единая фабрика для core (standalone) и backend (managed): RBAC задаётся
 // `opts.readGuard`/`opts.writeGuard` (core-дефолт — `requireAuth`) и хуками
-// `deps.canRead`/`deps.canEdit`; локализация — `deps.messages`. Секретов в архиве
-// нет (см. `portable.ts`); содержимое и пути архивов не логируются.
+// `deps.canRead`/`deps.canEdit`; локализация — `deps.messages`. Секретов в
+// архиве по умолчанию нет (см. `portable.ts`): ни `secrets/`, ни карта
+// обфускации сессий, ни `messages[].metadata.secrets`; содержимое и пути
+// архивов не логируются.
 //
 // Импорт — **materialization** (ADR-089, инвариант 15): создаются новый `projectId`
 // и новые сессии через `SessionManager.createSession`, не через funnel
@@ -29,6 +31,7 @@ import type { createMiddleware } from 'hono/factory';
 import { DEFAULT_MAX_UPLOAD_BYTES, slugifyWorkspaceName } from '@itphx/synth-shared';
 import type { Project } from '@itphx/synth-shared';
 import type { MaintenanceAuditRepository } from '../../storage/ports/index.js';
+import type { StorageContext } from '../../storage/storage-context.js';
 import { LOCAL_USER_ID } from '../local-owner.js';
 import { exportProject, importProject, ProjectPortableError } from '../../projects/portable.js';
 
@@ -51,6 +54,14 @@ const PORTABLE_TMP_PREFIX = 'project-portable-';
 export interface ProjectPortableRoutesDeps {
   /** Каталог данных инстанса (`$SYNTH_DATA_DIR`). */
   dataDir: string;
+  /**
+   * PROP-032: контекст хранения инстанса (`StorageContext`). Без него
+   * `exportProject`/`importProject` собирают СВОЙ файловый контекст по
+   * `dataDir` — на инстансе с `storage.backend=postgres` экспорт/импорт тогда
+   * видят не тот бэкенд (проект не найден / импорт уходит в файловое хранилище).
+   * Managed/standalone — контекст процесса; тесты — не задают (файловый дефолт).
+   */
+  storage?: StorageContext;
   /** Резолв проекта по id (null → 404). */
   getProject: (projectId: string) => Promise<Project | null>;
   /**
@@ -58,6 +69,15 @@ export interface ProjectPortableRoutesDeps {
    * Не задан — доступ уже обеспечен guard'ом (standalone, один пользователь).
    */
   canRead?: (c: Context, projectId: string) => Promise<boolean> | boolean;
+  /**
+   * Для `GET /:id/export?withSecrets=true`: право на экспорт **секретов** сессий
+   * (карта обфускации LLM Gateway + `messages[].metadata.secrets`).
+   * Managed — только elevated (ADMIN/LEAD); standalone — локальный владелец
+   * (единственный пользователь инстанса). Не задан — opt-in запрещён
+   * (fail-closed): архив проекта содержит сессии других участников, а карта
+   * обфускации — это секрет (security-фикс 0.11.3).
+   */
+  canExportSecrets?: (c: Context) => Promise<boolean> | boolean;
   /** Для `POST /import` с `mergeInto`: право редактирования целевого проекта. */
   canEdit?: (c: Context, projectId: string) => Promise<boolean> | boolean;
   /** ADR-092: аудит-журнал обслуживания (`export.created`/`import.applied`, best-effort). */
@@ -135,7 +155,7 @@ function _boolField(formData: FormData, key: string): boolean {
  *
  * | Метод/путь | Назначение | Guard |
  * |---|---|---|
- * | `GET /:id/export` | скачать портативный архив проекта (`?withWorkspace=true`) | read + `canRead` |
+ * | `GET /:id/export` | скачать портативный архив проекта (`?withWorkspace=true`, `?withSecrets=true`) | read + `canRead` (+ `canExportSecrets` для `withSecrets`) |
  * | `POST /import` | импортировать архив (multipart `file`) | write |
  *
  * `POST /import` принимает поля multipart: `file` (обязательно), `name`,
@@ -200,11 +220,24 @@ export function createProjectPortableRoutes(
   // Экспорт во временный файл, стриминг и удаление файла в `finally`; дескриптор
   // открыт заранее (`open(...).createReadStream()`), поэтому `rm` не гонится со
   // стримом — на POSIX данные живут, пока открыт fd.
+  //
+  // СЕКРЕТЫ (security-фикс 0.11.3): по умолчанию архив БЕЗ секретов сессий
+  // (карта обфускации `obfuscationMap` и `messages[].metadata.secrets`).
+  // Явная опция `?withSecrets=true` вернёт их — только привилегированному
+  // инициатору (`deps.canExportSecrets`: managed — ADMIN/LEAD, standalone —
+  // локальный владелец); иначе 403 FORBIDDEN. Факт включается в аудит
+  // `export.created` (`details.withSecrets`).
   app.get('/:id/export', readGuard, async (c) => {
     const id = c.req.param('id');
     const project = await deps.getProject(id);
     if (!project) return notFound(c);
     if (deps.canRead && !(await deps.canRead(c, id))) return forbidden(c);
+
+    const withSecrets = _boolQuery(c, 'withSecrets') || _boolQuery(c, 'with_secrets');
+    if (withSecrets) {
+      const allowed = deps.canExportSecrets ? await deps.canExportSecrets(c) : false;
+      if (!allowed) return forbidden(c);
+    }
 
     const outPath = join(dataDir, 'tmp', `${PORTABLE_TMP_PREFIX}${randomUUID()}.synth-project.tar.gz`);
     try {
@@ -213,6 +246,8 @@ export function createProjectPortableRoutes(
         projectId: id,
         out: outPath,
         withWorkspace: _boolQuery(c, 'withWorkspace') || _boolQuery(c, 'with_workspace'),
+        withSecrets,
+        storage: deps.storage,
         audit: deps.audit,
         actor: actor(c),
       });
@@ -290,6 +325,7 @@ export function createProjectPortableRoutes(
         withWorkspace: _boolField(formData, 'withWorkspace'),
         yes: true,
         ownerId,
+        storage: deps.storage,
         audit: deps.audit,
         actor: actor(c),
         onSessionCreated: deps.onSessionCreated

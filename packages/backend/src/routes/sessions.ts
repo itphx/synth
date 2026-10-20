@@ -25,6 +25,7 @@ import {
   createSessionAccessGuard,
   createSessionAccessPredicate,
   createSessionRoutes as createCoreSessionRoutes,
+  stripSessionSecrets,
 } from '@itphx/synth-core';
 import { t } from '../lib/i18n.js';
 import type { EventHub } from '../events/hub.js';
@@ -41,6 +42,13 @@ import { createProjectAccess } from './projects.js';
  * RBAC: core-фабрика параметризуется `resolveUserId`/`resolveOwner`/`resolveAuthor`,
  * `canAccess` (владелец|ADMIN) и EventHub-хуками; remote/hybrid-ветки отключены
  * (getRemoteClient не передаётся). `GET /:id/events` на backend не регистрируется.
+ *
+ * Исключения из общего prefix-guard'а (собственные правила, роуты зарегистрированы
+ * до guard'а): `/:id/mcp` (владелец|ADMIN, ADR-071 §2.4), `/:id/secrets`
+ * (ADMIN|AUDITOR — карта обфускации) и `/:id/export` (security-фикс 0.11.3:
+ * читатели сессии получают экспорт БЕЗ секретов — очищенный `obfuscationMap`
+ * и `messages[].metadata.secrets`; полный экспорт с картой — владельцу сессии,
+ * ADMIN и AUDITOR; без доступа на чтение — 403).
  */
 export function createSessionRoutes(
   kit: AuthKit,
@@ -225,26 +233,64 @@ export function createSessionRoutes(
     return c.json({ sessionId: session.id, secrets: session.obfuscationMap ?? {} });
   });
 
-  // Единый prefix-guard ресурса сессий: вешается ПОСЛЕ `/:id/mcp` и `/:id/secrets`
-  // (у них собственные задокументированные правила) и покрывает экспорт, отладку,
-  // оптимизацию, заметки и все core-маршруты (core-фабрика регистрируется с
-  // registerAccessGuard:false — иначе был бы второй источник правил). `/import`
-  // пропускается через guard.skipForId (статический сегмент, не сессия).
-  app.use('/:id', kit.requireAuth, sessionAccessGuard as never);
-  app.use('/:id/*', kit.requireAuth, sessionAccessGuard as never);
-
   // GET /api/v2/sessions/:id/export — полный экспорт сессии для переноса между
   // мирами (publish/fork). Внутренний формат: объект Session (camelCase) из
   // SessionManager — история сообщений, todos, настройки, заметки, ссылки,
   // чекпоинты, план-флаг и карта обфускации. Не публичный DTO.
-  // Доступ проверяет prefix-guard выше (владелец/elevated/роль в проекте).
+  //
+  // ПРАВИЛО (security-фикс 0.11.3): экспорт переносит СЕКРЕТЫ — карту обфускации
+  // LLM Gateway (`obfuscationMap`: плейсхолдер → РЕАЛЬНЫЙ секрет) и реальные
+  // значения плейсхолдеров в `messages[].metadata.secrets` (ADR-036). Поэтому
+  // доступ к экспорту — как к чтению сессии, а ответ зависит от привилегии:
+  //
+  // - **владелец сессии** (`ownerId ?? userId` === текущий пользователь) →
+  //   полный экспорт с картой: это его собственные секреты, он и так может
+  //   раскрыть их в UI кликом;
+  // - **ADMIN / AUDITOR** → полный экспорт с картой: тот же набор привилегий,
+  //   что у `GET /:id/secrets` (роль аудита инстанса);
+  // - **прочие читатели сессии** (участник проекта VIEWER/EDITOR, владелец
+  //   проекта, который не владеет сессией, LEAD) → 200, но ответ **очищен**:
+  //   без `obfuscationMap` и без `messages[].metadata.secrets`. Переносится
+  //   разговор, который этот пользователь и так видит в UI, — но не чужие
+  //   секреты (смысл «выгрузки секретов» не теряется, а publish/fork не ломается:
+  //   форк чужой сессии в проекте остаётся рабочим);
+  // - **нет доступа на чтение** (посторонний) → 403 FORBIDDEN.
+  //
+  // Очистка — на КОПИИ: сохранённая сессия не мутируется. Формат ответа не
+  // меняется (тот же объект Session), очищенный экспорт остаётся валидным
+  // payload'ом переноса — импорт его принимает.
   app.get('/:id/export', kit.requireAuth, exportRateLimit, async (c) => {
     const session = await sessionManager.getSession(c.req.param('id'));
     if (!session) {
       return c.json({ error: { code: 'NOT_FOUND', message: t('errors.notFound.session', undefined, c) } }, 404);
     }
-    return c.json(session);
+    const user = (await kit.getCurrentUser(c))!;
+    const ctx = c as Parameters<typeof kit.isAdmin>[0];
+    const owner = session.ownerId ?? session.userId;
+    const isOwner = !!owner && owner === user.id;
+    const isAdmin = typeof kit.isAdmin === 'function' && kit.isAdmin(ctx);
+    const isAuditor = typeof kit.hasRole === 'function' && kit.hasRole(ctx, 'AUDITOR');
+    const isLead = typeof kit.hasRole === 'function' && kit.hasRole(ctx, 'LEAD');
+    // Право чтения — как у prefix-guard'а (владелец|ADMIN|LEAD|проектное
+    // чтение) + AUDITOR (роль аудита инстанса, как у `GET /:id/secrets`).
+    const canRead = isAdmin || isLead || isAuditor
+      || (await sessionAccessPredicate(session, c, user.id, 'read'));
+    if (!canRead) {
+      return c.json({ error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } }, 403);
+    }
+    // Полный экспорт (с картой обфускации) — владельцу и роли аудита.
+    const withSecrets = isOwner || isAdmin || isAuditor;
+    return c.json(withSecrets ? session : stripSessionSecrets(session));
   });
+
+  // Единый prefix-guard ресурса сессий: вешается ПОСЛЕ `/:id/mcp`, `/:id/secrets`
+  // и `/:id/export` (у них собственные задокументированные правила) и покрывает
+  // отладку, оптимизацию, заметки и все core-маршруты (core-фабрика
+  // регистрируется с registerAccessGuard:false — иначе был бы второй источник
+  // правил). `/import` пропускается через guard.skipForId (статический сегмент,
+  // не сессия).
+  app.use('/:id', kit.requireAuth, sessionAccessGuard as never);
+  app.use('/:id/*', kit.requireAuth, sessionAccessGuard as never);
 
   // POST /api/v2/sessions/import — создать сессию из экспорта другой сессии
   // (перенос истории между мирами). Тело: объект экспорта + import.project_id
