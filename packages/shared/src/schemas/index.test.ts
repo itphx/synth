@@ -342,6 +342,42 @@ describe('schedule schemas (ADR-051 / ADR-089)', () => {
     expect(eventRouteTargetSchema.safeParse({ mode: 'other' }).success).toBe(false);
   });
 
+  it('eventRouteTargetSchema: pipeline допустим в ephemeral/bind и отвергается в bound/queue', () => {
+    const pipeline = { id: 'pl_1', step: 'publish' };
+    const ephemeral = eventRouteTargetSchema.safeParse({ mode: 'ephemeral', ttl: '30m', pipeline });
+    expect(ephemeral.success).toBe(true);
+    expect(ephemeral.success && ephemeral.data.mode === 'ephemeral' && ephemeral.data.pipeline).toEqual(pipeline);
+
+    const bind = eventRouteTargetSchema.safeParse({ mode: 'bind', agentTemplate: 'a', pipeline });
+    expect(bind.success).toBe(true);
+    expect(bind.success && bind.data.mode === 'bind' && bind.data.pipeline).toEqual(pipeline);
+
+    // В `bound`/`queue` сессия фиксирована — ссылка на шаг пайплайна недопустима
+    // и **отвергается** (строгий вариант: лишние поля не игнорируются молча).
+    expect(eventRouteTargetSchema.safeParse({ mode: 'bound', sessionId: 's1', pipeline }).success).toBe(false);
+    expect(eventRouteTargetSchema.safeParse({ mode: 'queue', sessionId: 's1', pipeline }).success).toBe(false);
+    expect(eventRouteTargetSchema.safeParse({ mode: 'bound', sessionId: 's1', extra: 1 }).success).toBe(false);
+  });
+
+  it('eventRouteTargetSchema: pipeline требует непустые id/step', () => {
+    expect(
+      eventRouteTargetSchema.safeParse({ mode: 'ephemeral', pipeline: { id: '', step: 'publish' } }).success,
+    ).toBe(false);
+    expect(
+      eventRouteTargetSchema.safeParse({ mode: 'ephemeral', pipeline: { id: 'pl_1', step: '' } }).success,
+    ).toBe(false);
+    expect(
+      eventRouteTargetSchema.safeParse({ mode: 'bind', pipeline: { id: 'pl_1', step: 'publish' } }).success,
+    ).toBe(true);
+  });
+
+  it('eventRouteTargetSchema: сериализация/парсинг pipeline round-trip', () => {
+    const target = { mode: 'ephemeral' as const, ttl: '30m', pipeline: { id: 'pl_1', step: 'publish' } };
+    const parsed = eventRouteTargetSchema.parse(target);
+    expect(parsed).toEqual(target);
+    expect(JSON.parse(JSON.stringify(parsed))).toEqual(target);
+  });
+
   it('scheduleInputSchema: enabled по умолчанию true, ровно один триггер', () => {
     const parsed = scheduleInputSchema.safeParse({
       name: 'job',

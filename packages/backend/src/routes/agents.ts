@@ -4,6 +4,7 @@ import type { JsonStoreLike } from '@itphx/synth-core';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import { createAgentRoutes as createCoreAgentRoutes } from '@itphx/synth-core';
 import type { AgentRegistry, ContextFileRepository } from '@itphx/synth-core';
+import { requireAdminRoleOrScope } from '../auth/guards.js';
 import { t } from '../lib/i18n.js';
 
 /**
@@ -14,6 +15,11 @@ import { t } from '../lib/i18n.js';
  * `contextFiles` — порт файлов контекста: запись ролевого промпта агента
  * вместе с агентом (ADR-046/ADR-089, поле `role_prompt` в теле POST).
  * Роль пишется тем же guard'ом, что и создание агента (ADMIN).
+ *
+ * ADR-052: запись агентов (создание + ролевой промпт) — «роль ADMIN **или**
+ * scope `automation:install`» (зонтичный скоуп установщика пакетов
+ * расширений). Guard `requireAdminRoleOrScope` учитывает и роль ADMIN в
+ * service-key, и scope — прежние права не отбираются, новые добавляются.
  */
 export function createAgentRoutes(
   kit: AuthKit,
@@ -30,7 +36,7 @@ export function createAgentRoutes(
     agentRegistry,
     getDefaultAgentId,
     {
-      writeGuard: kit.requireAdmin,
+      writeGuard: requireAdminRoleOrScope('automation:install'),
       allGuard: kit.requireAdmin,
       detailGuard: kit.requireAdmin,
       roleFiles: contextFiles,

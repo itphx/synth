@@ -357,3 +357,80 @@ describe('Agent API Routes — ролевой промпт и группы', () 
     expect(await store.load('evil')).toBeNull();
   });
 });
+
+/**
+ * ADR-052: запись агентов (создание + ролевой промпт) — гейт
+ * «scope `automation:install` (установщик пакетов расширений) **или** роль
+ * ADMIN»; для интерактивных кред — no-op (доступ определяет `writeGuard`).
+ *
+ * Регресс-инвариант: `addons:install` (зонтичный скоуп MCP/скиллов) **не**
+ * открывает создание агентов.
+ */
+describe('Agent API Routes — scope-гейт записи (ADR-052)', () => {
+  let tmpDir: string;
+  let store: JsonStore<AgentDefinition>;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-core-agents-scope-'));
+    store = new JsonStore<AgentDefinition>({ dataDir: tmpDir, subdir: 'agents' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  /** Приложение с service-key в контексте (scope-гейт срабатывает по нему). */
+  function createScopedApp(cred?: { roles: string[]; scopes: string[] }) {
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      if (cred) {
+        c.set('serviceKey' as never, {
+          keyId: 'svk_1',
+          label: 'installer',
+          roles: cred.roles,
+          scopes: cred.scopes,
+        } as never);
+      }
+      await next();
+    });
+    app.route('/api/v2/agents', createAgentRoutes(createMockAuth(), store));
+    return app;
+  }
+
+  const postAgent = (app: Hono, body: Record<string, unknown>) =>
+    app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+  it('service-key со scope automation:install → агент создан', async () => {
+    const app = createScopedApp({ roles: ['USER'], scopes: ['automation:install'] });
+    const res = await postAgent(app, { id: 'installed', display_name: 'Установленный' });
+    expect(res.status).toBe(201);
+    expect((await store.load('installed'))?.id).toBe('installed');
+  });
+
+  it('service-key с ролью ADMIN (без scope) → агент создан (прежние права)', async () => {
+    const app = createScopedApp({ roles: ['ADMIN'], scopes: [] });
+    const res = await postAgent(app, { id: 'byadmin', display_name: 'От админа' });
+    expect(res.status).toBe(201);
+    expect((await store.load('byadmin'))?.id).toBe('byadmin');
+  });
+
+  it('service-key со scope addons:install → 403 SCOPE_REQUIRED (права не расширились)', async () => {
+    const app = createScopedApp({ roles: ['USER'], scopes: ['addons:install'] });
+    const res = await postAgent(app, { id: 'nope', display_name: 'Не установленный' });
+    expect(res.status).toBe(403);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('SCOPE_REQUIRED');
+    expect(await store.load('nope')).toBeNull();
+  });
+
+  it('интерактивные креды (без service-key) — no-op: агент создан', async () => {
+    const app = createScopedApp();
+    const res = await postAgent(app, { id: 'interactive', display_name: 'Интерактив' });
+    expect(res.status).toBe(201);
+    expect((await store.load('interactive'))?.id).toBe('interactive');
+  });
+});

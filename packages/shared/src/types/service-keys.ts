@@ -9,6 +9,11 @@ import type { GlobalRole } from './index.js';
 /**
  * Семейства скоупов с wildcard-поддержкой. Глобальный `*` намеренно не вводится
  * (ADR-052; каталог — `docs/API_V2.md` §1): `events:*` покрывает все `events:*`, но не `bindings:*`.
+ *
+ * `automation` в семейства **не** входит: `automation:install` — зонтичный скоуп
+ * установки пакета расширений, а не ресурсное семейство. Wildcard `automation:*`
+ * не вводится намеренно — иначе он молча покрывал бы будущие `automation:*`-скоупы
+ * (напр. запуск/удаление), не связанные с установкой пакета.
  */
 export const SERVICE_SCOPE_FAMILIES = [
   'events',
@@ -27,6 +32,11 @@ export type ServiceScopeFamily = (typeof SERVICE_SCOPE_FAMILIES)[number];
  * - `llm:chat` — LLM-прокси (роут без проектного измерения);
  * - `addons:install` — зонтичный скоуп installer-ключа: установка/обновление
  *   MCP-реестра и скиллов (PROP-090 installer);
+ * - `automation:install` — зонтичный скоуп **установщика пакетов расширений**:
+ *   агенты и их ролевые промпты, пайплайны, а также порождаемые пакетом
+ *   правила маршрутизации и расписания. Для установщика пакета заменяет
+ *   `addons:install`, `routes:write` и `schedules:write` (см. `SERVICE_SCOPE_SETS`);
+ *   `addons:install` при этом **не** открывает создание агентов;
  * - `users:read` — чтение пользователей/идентичностей машинной кредой
  *   (консент-сервисы аддонов).
  */
@@ -46,10 +56,32 @@ export const SERVICE_SCOPES = [
   'schedules:write',
   'llm:chat',
   'addons:install',
+  'automation:install',
   'users:read',
 ] as const;
 
 export type ServiceScope = (typeof SERVICE_SCOPES)[number];
+
+/**
+ * ADR-052: «любой из»-наборы скоупов для гейтов, где зонтичный
+ * `automation:install` (установщик пакета) заменяет ресурсный скоуп.
+ *
+ * Это единственное место, где выражено «замещение»: guard проверяет, что
+ * покрыт **хотя бы один** элемент набора. `routes:write`/`schedules:write`
+ * остаются самостоятельными (правка чужих правил/расписаний), а
+ * `automation:install` — доступ установщика пакета к тем же точкам.
+ */
+export const SERVICE_SCOPE_SETS = {
+  /** Запись правил маршрутизации: `routes:write` или установщик пакета. */
+  routesWrite: ['routes:write', 'automation:install'],
+  /** Запись расписаний: `schedules:write` или установщик пакета. */
+  schedulesWrite: ['schedules:write', 'automation:install'],
+  /** Установка агентов и их ролевых промптов: установщик пакета. */
+  agentsWrite: ['automation:install'],
+} as const;
+
+/** Набор скоупов «достаточно любого из» (см. `SERVICE_SCOPE_SETS`). */
+export type ServiceScopeSet = (typeof SERVICE_SCOPE_SETS)[keyof typeof SERVICE_SCOPE_SETS];
 
 /**
  * `true`, если строка — известный скоуп: элемент каталога либо wildcard
@@ -79,6 +111,19 @@ export function hasServiceScope(granted: readonly string[], required: string): b
   if (idx <= 0 || idx === required.length - 1) return false;
   const family = required.slice(0, idx);
   return granted.includes(`${family}:*`);
+}
+
+/**
+ * Проверка «достаточно любого из»: покрыт **хотя бы один** элемент `required`
+ * (точное совпадение или wildcard-семейство, `hasServiceScope`). Пустой
+ * `required` ничего не открывает (fail-closed).
+ */
+export function hasAnyServiceScope(
+  granted: readonly string[],
+  required: readonly string[],
+): boolean {
+  if (!Array.isArray(granted) || !Array.isArray(required) || required.length === 0) return false;
+  return required.some((scope) => hasServiceScope(granted, scope));
 }
 
 /**

@@ -9,8 +9,32 @@ import { JsonStore } from '@itphx/synth-core';
 import type { AgentDefinition } from '@itphx/synth-shared';
 import { AgentRegistry, DEFAULT_AGENT_ID, ContextConfig } from '@itphx/synth-core';
 
-function createMockKit() {
+/**
+ * Мок AuthKit: в реальном backend пользователь кладётся в контекст
+ * **глобальным** middleware (`app.use('*', auth.attachUser)` — `src/app.ts:255`),
+ * а guard'ы (`requireAdmin`/`requireAdminRoleOrScope`) только читают
+ * `c.get('user')`/`c.get('serviceKey')`. Мок повторяет именно это: `attachUser`
+ * ставит пользователя, guard'ы — читают. Иначе guard, не вызывающий
+ * `requireAuth` (например `requireAdminRoleOrScope`), увидел бы пустой
+ * контекст и вернул 401 вместо ожидаемого кода.
+ */
+function createMockKit(scopes?: string[], keyRoles: string[] = ['USER']) {
+  const attachUser = async (c: Context, next: Next) => {
+    if (scopes) {
+      c.set('user', { id: 'service:svc1', username: 'installer', roles: keyRoles });
+      c.set('serviceKey', {
+        keyId: 'service:svc1',
+        label: 'installer',
+        roles: keyRoles,
+        scopes,
+      });
+    } else {
+      c.set('user', { id: 'admin', username: 'admin', roles: ['ADMIN'] });
+    }
+    await next();
+  };
   return {
+    attachUser,
     requireAuth: async (_c: Context, next: Next) => {
       await next();
     },
@@ -27,10 +51,12 @@ function createTestApp(
   agentRegistry?: AgentRegistry,
   getDefaultAgentId?: () => string | Promise<string>,
   contextFiles?: ContextConfig,
+  kit = createMockKit(),
 ) {
   const app = new Hono();
-  const kit = createMockKit();
   const routes = createAgentRoutes(kit as any, store, agentRegistry, getDefaultAgentId, contextFiles);
+  // Как в реальном backend: пользователь кладётся в контекст глобально.
+  app.use('*', kit.attachUser);
   app.route('/api/v2/agents', routes);
   return app;
 }
@@ -277,5 +303,57 @@ describe('Agent API Routes — ролевой промпт (managed)', () => {
 
     const rolePath = join(contextConfig.userRolesDir, 'BANKASSIST.md');
     expect(await readFile(rolePath, 'utf-8')).toBe('РОЛЬ БАНКОВСКОГО АССИСТЕНТА');
+  });
+});
+
+/**
+ * ADR-052: запись агентов (создание + ролевой промпт) — «роль ADMIN **или**
+ * scope `automation:install`» (зонтичный скоуп установщика пакетов расширений).
+ *
+ * Регресс-инвариант: `addons:install` (зонтичный скоуп MCP/скиллов) **не**
+ * открывает создание агентов; ключ с ролью ADMIN сохраняет прежние права.
+ */
+describe('Agent API Routes — scope-гейт записи (ADR-052)', () => {
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'synth-agents-scope-'));
+    store = new JsonStore<AgentDefinition>({ dataDir: tmpDir, subdir: 'agents' });
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  const postAgent = (app: Hono, id: string) =>
+    app.request('/api/v2/agents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, display_name: id }),
+    });
+
+  it('service-key со scope automation:install → 201 (установщик пакета)', async () => {
+    const app = createTestApp(undefined, undefined, undefined, createMockKit(['automation:install']));
+    const res = await postAgent(app, 'installed');
+    expect(res.status).toBe(201);
+  });
+
+  it('service-key со scope addons:install → 403 SCOPE_REQUIRED (права не расширились)', async () => {
+    const app = createTestApp(undefined, undefined, undefined, createMockKit(['addons:install']));
+    const res = await postAgent(app, 'nope');
+    expect(res.status).toBe(403);
+    const body: any = await res.json();
+    expect(body.error.code).toBe('SCOPE_REQUIRED');
+    expect(await store.load('nope')).toBeNull();
+  });
+
+  it('service-key с ролью ADMIN (без scope) → 201 (прежние права не отобраны)', async () => {
+    const app = createTestApp(undefined, undefined, undefined, createMockKit([], ['ADMIN']));
+    const res = await postAgent(app, 'byadmin');
+    expect(res.status).toBe(201);
+  });
+
+  it('интерактивный ADMIN → 201', async () => {
+    const app = createTestApp();
+    const res = await postAgent(app, 'interactive');
+    expect(res.status).toBe(201);
   });
 });

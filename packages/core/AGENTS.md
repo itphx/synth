@@ -110,7 +110,11 @@
   + синтетический пользователь + `scopes`/`allowedProjects`; enforcement — `requireScope`/
   `checkServiceProjectProjection` (`server/service-scope.ts`), **не** через permission-слой тулов (тот
   роль-оси не имеет, ADR-029). Каталог scope включает зонтичный `addons:install` (установка
-  аддонов: MCP-реестр/скиллы) и `users:read`. Провижининг installer-ключа — `security.bootstrapServiceKeys`
+  аддонов: MCP-реестр/скиллы), зонтичный `automation:install` (установщик **пакетов
+  расширений**: агенты и их ролевые промпты, пайплайны, а также порождаемые пакетом
+  правила маршрутизации и расписания — наборы «любой из» в
+  `SERVICE_SCOPE_SETS`: `routesWrite`/`schedulesWrite`/`agentsWrite`; `addons:install`
+  создание агентов **не** открывает) и `users:read`. Провижининг installer-ключа — `security.bootstrapServiceKeys`
   (config) / env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (JSON) → `applyBootstrapServiceKeys` при старте.
 - Создание сессии — через единый funnel `RequestSessionService`
   (`engine/events/request-session.ts`): явный запрос — `direct`, внешнее событие —
@@ -241,7 +245,10 @@
   `GET/POST /api/v2/maintenance/restart` (`server/routes/maintenance.ts`); переинициализацию
   процесс-глобальных singleton'ов не делать — только выход.
 - `server/service-scope.ts` — ADR-052 (этап I): enforcement service-key — `requireScope(...)`
-  (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkServiceProjectProjection`/
+  (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `requireScopeOrAdminRole(...)`
+  (тот же гейт, но service-key проходит и по **роли ADMIN** среди выданных ролей — зонтичный
+  `automation:install` не отбирает прежние права ключа с ролью ADMIN; интерактив — no-op),
+  `checkServiceProjectProjection`/
   `isProjectAllowed` (проектная проекция `allowedProjects`; это **не** RBAC), `getServiceCredential`
   (`serviceKey` из контекста), типы `ScopeGuardFactory`/`ServiceProjectProjectionGuard`. Прежние имена
   `checkProjectAccess`/`ProjectGuard` оставлены `@deprecated`-алиасами — в коде и доках использовать новые.
@@ -275,6 +282,8 @@
   и уникальна глобально (дубль → 409 `CONFLICT`). ADR-052: scope-гейты на роутах
   (`events:ingest`, `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`)
   и проектная проекция через `scopeGuard`/`serviceProjectProjection` (core-дефолты — `requireScope`/`checkServiceProjectProjection`).
+  Запись правил маршрутизации — `SERVICE_SCOPE_SETS.routesWrite` (`routes:write` **или**
+  `automation:install` — достаточно любого из двух).
 - `server/routes/service-keys.ts` — `createServiceKeyRoutes` (ADR-052 этап I): CRUD service-key
   инстанса (`GET/POST /api/v2/service-keys`, `GET /scopes` — каталог scope'ов/семейств/ролей из shared,
   `GET/PATCH/DELETE /:id`, `POST /:id/revoke`),
@@ -460,11 +469,15 @@
   затем `chatKey`; роли не несёт) → профиль по `parsePrincipalId` (`identities`, + роли профиля);
   `getIdentityMap` — геттер для live-обновления runtime-настройки; без кэша),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
-  `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
+  `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`; в цели
+  `ephemeral`/`bind` — необязательное поле `pipeline: {id, step}` («ссылка на шаг
+  пайплайна: эта сессия — шаг `step` пайплайна `id`») — **семантическое** поле
+  (учёт экземпляров пайплайна и гейты), в `bound`/`queue` отвергается схемой),
   `DecisionRuleProvider` (`decision-rule-provider.ts`, ADR-084: decision-шаг после project-правил при
   `events.decisionRouting`, fail-safe → `null`; на успехе — лог `info('DECISION', …)` с агентом/уверенностью/
   порогом/моделью/latency, промахи — `warning` с latency; мета `confidence`/`signals` уезжает в решение),
-  `target-decision.ts` (`decisionFromTarget` — единый маппинг цели, приклеивает `confidence`/`signals`),
+  `target-decision.ts` (`decisionFromTarget` — единый маппинг цели, приклеивает `confidence`/`signals`;
+  `pipeline` прокидывается в решение),
   `EventDelivery` (`run`/`defer` + необязательный `EventDeliveryContext {roles, linked}`), `credential.ts` (`EventKeyCredential` — контекст машинной
   аутентификации по API-ключу привязки: `keyId`/`bindingId`/`rateLimitPerMinute`, задел `scopes`/`principalId`),
   `key-rate-limiter.ts` (`KeyRateLimiter` — in-memory fixed-window 60 c per-key, ADR-089/ADR-052),
@@ -606,6 +619,9 @@
   RBAC через `resolveElevated`/`resolveAuditor`/`resolveUserId`, `messages` — i18n).
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
   `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).
+  `createAgentRoutes` — опция `scopeGuard` для записи агентов (ADR-052; дефолт —
+  `requireScopeOrAdminRole`): достаточно любого из `SERVICE_SCOPE_SETS.agentsWrite`
+  (сейчас — `automation:install`) **или** роли ADMIN у ключа.
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и

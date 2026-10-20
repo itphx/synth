@@ -55,14 +55,29 @@
 ключ) scope-гейт — no-op (запрос пропускается). Каталог scope: `events:ingest`,
 `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`,
 `sessions:create|read|prompt`, `schedules:read|write`, `llm:chat`, `addons:install`,
-`users:read` + wildcard-семейства
+`automation:install`, `users:read` + wildcard-семейства
 `events:*`, `bindings:*`, `keys:*`, `routes:*`, `sessions:*`, `schedules:*`
-(глобального `*` нет). Отдельно: на части роутов (запись реестра MCP, запись
+(глобального `*` нет; `automation` в wildcard-семейства **не** входит — wildcard
+`automation:*` намеренно не вводится, иначе он молча покрывал бы будущие
+`automation:*`-скоупы, не связанные с установкой пакета). Отдельно: на части роутов (запись реестра MCP, запись
 скиллов, чтение админского user-API) scope работает как альтернатива роли ADMIN
 («ADMIN **или** scope», см. §5.14/§5.16/§5.17). Проектная проекция `allowedProjects`: если у ключа задан
 непустой список, доступны только входящие в него проекты — применяется в sessions,
 events/bindings и schedules (иначе `403 PROJECT_FORBIDDEN`); пусто/отсутствует —
 политика инстанса. Точки применения scope по роутам — в §5.5, §5.26, §5.27, §5.23.
+
+**Зонтичный scope `automation:install` (ADR-052).** Scope установщика пакетов
+расширений: агенты и их ролевые промпты, пайплайны, а также порождаемые пакетом
+правила маршрутизации и расписания. Там, где пакет пишет свои артефакты,
+`automation:install` — **альтернатива** ресурсному scope: достаточно **любого**
+из пары (`routes:write` **или** `automation:install` для правил маршрутизации,
+`schedules:write` **или** `automation:install` для расписаний; для записи
+агентов — только `automation:install`). `addons:install` при этом создание
+агентов **не** открывает. На роутах записи агентов guard «роль ADMIN **или**
+scope» (`requireAdminRoleOrScope`) учитывает **и** роль `ADMIN` среди ролей
+ключа — зонтичный scope ничего не отбирает (в отличие от `requireAdminOrScope`,
+где для service-key проверяются **только** scope'ы). Точные наборы —
+`SERVICE_SCOPE_SETS` (`packages/shared/src/types/service-keys.ts`).
 
 Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 
@@ -435,10 +450,21 @@ sha256, небезопасный путь в архиве, ошибка восс
 |---|---|---|---|---|
 | GET | `/api/v2/agents/all` | оба | ADMIN / auth | Все агенты (админка) |
 | GET | `/api/v2/agents` | оба | auth / auth | Только primary-агенты |
-| POST | `/api/v2/agents` | оба | ADMIN / auth | Создать/обновить |
+| POST | `/api/v2/agents` | оба | ADMIN или scope `automation:install` / auth | Создать/обновить |
 | GET | `/api/v2/agents/:id` | backend | ADMIN | Агент + builtin/override |
-| DELETE | `/api/v2/agents/:id` | оба | ADMIN / auth | Удалить custom / сбросить built-in |
-| PATCH | `/api/v2/agents/:id/enabled` | backend | ADMIN | `{enabled}` |
+| DELETE | `/api/v2/agents/:id` | оба | ADMIN или scope `automation:install` / auth | Удалить custom / сбросить built-in |
+| PATCH | `/api/v2/agents/:id/enabled` | backend | ADMIN или scope `automation:install` | `{enabled}` |
+
+> **Запись агентов — «роль ADMIN **или** scope `automation:install`» (ADR-052).**
+> Зонтичный scope установщика пакетов расширений: агент вместе с ролевым
+> промптом — часть пакета. Guard — `requireAdminRoleOrScope('automation:install')`:
+> для service-key достаточно **любого** из двух (scope `automation:install`
+> **или** роль `ADMIN` среди ролей ключа — прежние права ключа с ролью ADMIN
+> не отбираются); для интерактивных кред требуется роль `ADMIN`
+> (401 `UNAUTHORIZED` без аутентификации, 403 `FORBIDDEN` без роли, 403
+> `SCOPE_REQUIRED` — у service-key без scope и без роли ADMIN). В core
+> (standalone) интерактивный доступ — `auth`, service-key — тот же scope **или**
+> роль ADMIN. Scope `addons:install` создание агентов **не** открывает.
 
 > **Ролевой промпт агента (ADR-046/ADR-089).** `POST /api/v2/agents` принимает необязательное
 > поле `role_prompt` (алиас `rolePrompt`) — **содержимое** ролевого промпта (не путь). Файл роли
@@ -835,7 +861,7 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 | POST | `/api/v2/events/bindings/:id/keys/:keyId/revoke` | оба | LEAD/ADMIN | Мягкий отзыв ключа (проставляет `revokedAt`; идемпотентно) → 200 `EventBindingApiKey`; нет ключа → 404 `NOT_FOUND`. Отозванный ключ перестаёт резолвиться (`resolveBySecret` → `null`) |
 | DELETE | `/api/v2/events/bindings/:id/keys/:keyId` | оба | LEAD/ADMIN | Удалить API-ключ → 204; нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/events/routes` | оба | auth | Список правил маршрутизации `{rules}` (`EventRouteRule[]`) |
-| POST | `/api/v2/events/routes` | оба | LEAD/ADMIN | Upsert правила (`eventRouteRuleUpsertSchema`): `{id?, name?, priority?, enabled?, match, target}`; `match` — AND по заполненным `source`/`type`/`chatKey`/`threadKey`/`principalId`/`label`/`keywords` (пустой-невалидный не матчит); `target` — `bound`/`queue` (`sessionId`), `ephemeral` (`agentTemplate?`/`project?`/`ttl?`) или `bind` (ADR-089 auto-bind: `agentTemplate?`/`project?` — закрепить чат/тред за новой сессией). По `id` — обновление → 200, иначе создание → 201. Валидация: `bound`/`queue` с несуществующей сессией → 400, непустой `agentTemplate` без enabled-агента → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/events/routes` | оба | LEAD/ADMIN | Upsert правила (`eventRouteRuleUpsertSchema`): `{id?, name?, priority?, enabled?, match, target}`; `match` — AND по заполненным `source`/`type`/`chatKey`/`threadKey`/`principalId`/`label`/`keywords` (пустой-невалидный не матчит); `target` — `bound`/`queue` (`sessionId`), `ephemeral` (`agentTemplate?`/`project?`/`ttl?`) или `bind` (ADR-089 auto-bind: `agentTemplate?`/`project?` — закрепить чат/тред за новой сессией); в `ephemeral`/`bind` допустимо необязательное поле `pipeline?: {id, step}` — **ссылка на шаг пайплайна: эта сессия — шаг `step` пайплайна `id`** (в `bound`/`queue` поле отвергается — 400 `VALIDATION_ERROR`). По `id` — обновление → 200, иначе создание → 201. Валидация: `bound`/`queue` с несуществующей сессией → 400, непустой `agentTemplate` без enabled-агента → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/events/routes/:id` | оба | LEAD/ADMIN | Удалить правило → 204; нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/events/journal` | оба | auth | Последние записи журнала решений `{entries}`; `?limit=` (default 50, cap 500) |
 
@@ -846,7 +872,11 @@ rate limit (120/мин); мутации привязок/правил/ключе
 чтение ключей привязки — LEAD/ADMIN, остальное чтение — `requireAuth`; в core — единый `requireAuth`.
 **Scope service-key (ADR-052):** `POST /` — `events:ingest`; `GET /` (SSE) и `GET /journal` —
 `events:watch`; список/мутации привязок — `bindings:read`/`bindings:write`; ключи привязок —
-`keys:read`/`keys:write`; правила — `routes:read`/`routes:write`. Если у ключа задан
+`keys:read`/`keys:write`; правила — `routes:read`/`routes:write`. Запись правил
+маршрутизации (`POST`/`DELETE /routes`) доступна service-key с `routes:write`
+**или** `automation:install` (зонтичный scope установщика пакетов расширений —
+достаточно **любого** из двух; в managed scope-гейт действует **сверх**
+ролевого гейта — ключу дополнительно нужна роль `LEAD`/`ADMIN`). Если у ключа задан
 `allowedProjects`, проектная проекция применяется к правилам/привязкам с проектным измерением
 (иначе `403 PROJECT_FORBIDDEN`). Привязки/ключи приёма по binding-key (`synth_evt_…`) — отдельная
 модель (не service-key).
@@ -867,6 +897,14 @@ API-ключи привязок (`EventBindingApiKey`, `{dataDir}/events/api-key
 декларативных правил срабатывает `DecisionRuleProvider` (ADR-084): успешное решение несёт
 `confidence` и `signals` (`decision-rules`, `agent:<id>`, `model:<p/m>`, `latency:<ms>ms`) — они
 попадают в `decision` ответа и запись журнала `GET /api/v2/events/journal`.
+**Ссылка на шаг пайплайна (`pipeline`).** В цели правила (`ephemeral`/`bind`) допустимо
+необязательное поле `pipeline?: { id, step }` — «ссылка на шаг пайплайна: эта сессия —
+шаг `step` пайплайна `id`». Ссылка **семантическая**, а не диагностическая: на ней
+строится учёт экземпляров пайплайна и гейты (напр. правило по событию
+`draft_approved` — гейт «после approve»). Она прокидывается в решение Router'а
+(`decision.pipeline`) и в журнал решений. В целях `bound`/`queue` сессия
+фиксирована, поэтому поле там **отвергается** (400 `VALIDATION_ERROR`), а не
+игнорируется.
 Цепочка обработки и журнал — `docs/ARCHITECTURE.md` («Внешние события и хуки»), ADR-089.
 
 > `POST /api/v2/sessions` теперь идёт через единый funnel `RequestSessionService`
@@ -884,7 +922,11 @@ backend). Срабатывание не создаёт сессию
 (`POST /:id/run`) — только ADMIN (`writeGuard = requireAdmin`); `run` дополнительно
 под rate limit 10/60 c (`runMiddleware`). В core (standalone) — единый `requireAuth`
 на все методы. **Scope service-key (ADR-052):** `schedules:read` (чтение и `GET /:id/jobs`),
-`schedules:write` (`POST`/`PUT`/`DELETE`/`POST /:id/run`); проектная проекция — по цели
+`schedules:write` (`POST`/`PUT`/`DELETE`/`POST /:id/run`); запись расписаний доступна
+service-key с `schedules:write` **или** `automation:install` (зонтичный scope
+установщика пакетов расширений — достаточно **любого** из двух: расписание,
+порождаемое пакетом, пишется его установщиком; в managed scope-гейт действует
+**сверх** ролевого гейта — ключу дополнительно нужна роль `ADMIN`); проектная проекция — по цели
 расписания (`bound`/`queue` → проект сессии, `ephemeral` → `project`).
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |

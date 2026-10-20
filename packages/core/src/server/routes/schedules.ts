@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
-import { scheduleInputSchema } from '@itphx/synth-shared';
+import { scheduleInputSchema, SERVICE_SCOPE_SETS } from '@itphx/synth-shared';
 import type { ScheduleInputRequest } from '@itphx/synth-shared';
 import type { ScheduleRepository } from '../../storage/ports/schedule-repository.js';
 import type { JobRepository } from '../../storage/ports/job-repository.js';
@@ -131,7 +131,9 @@ export function createSchedulerRoutes(
   });
 
   // POST /api/v2/schedules — создание расписания.
-  app.post('/', writeGuard, scoped('schedules:write'), async (c) => {
+  // ADR-052: зонтичный `automation:install` (установщик пакета) — альтернатива
+  // `schedules:write` (достаточно любого из двух).
+  app.post('/', writeGuard, scoped(...SERVICE_SCOPE_SETS.schedulesWrite), async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();
@@ -155,7 +157,7 @@ export function createSchedulerRoutes(
   });
 
   // PUT /api/v2/schedules/:id — обновление расписания.
-  app.put('/:id', writeGuard, scoped('schedules:write'), async (c) => {
+  app.put('/:id', writeGuard, scoped(...SERVICE_SCOPE_SETS.schedulesWrite), async (c) => {
     const id = c.req.param('id');
 
     let body: unknown;
@@ -183,7 +185,7 @@ export function createSchedulerRoutes(
   });
 
   // DELETE /api/v2/schedules/:id — удаление расписания.
-  app.delete('/:id', writeGuard, scoped('schedules:write'), async (c) => {
+  app.delete('/:id', writeGuard, scoped(...SERVICE_SCOPE_SETS.schedulesWrite), async (c) => {
     const removed = await deps.scheduleStore.remove(c.req.param('id'));
     if (!removed) return notFound(c);
     return c.body(null, 204);
@@ -206,7 +208,7 @@ export function createSchedulerRoutes(
 
   // POST /api/v2/schedules/:id/run — принудительный запуск (force, в т.ч.
   // выключенного расписания). `runMiddleware` — дополнительный слой (rate limit).
-  app.post('/:id/run', runGuard, scoped('schedules:write'), ...(opts.runMiddleware ?? []), async (c) => {
+  app.post('/:id/run', runGuard, scoped(...SERVICE_SCOPE_SETS.schedulesWrite), ...(opts.runMiddleware ?? []), async (c) => {
     const id = c.req.param('id');
     // ADR-052: проектная проекция — цель существующего расписания.
     const existing = await deps.scheduleStore.get(id);

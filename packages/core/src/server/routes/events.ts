@@ -8,6 +8,7 @@ import {
   eventIngestSchema,
   eventKeyIngestSchema,
   eventRouteRuleUpsertSchema,
+  SERVICE_SCOPE_SETS,
 } from '@itphx/synth-shared';
 import type { EventBinding } from '@itphx/synth-shared';
 import type { EventIngress } from '../../engine/events/ingest.js';
@@ -472,7 +473,9 @@ export function createEventRoutes(
   });
 
   // POST /api/v2/events/routes — upsert правила (по `id` — обновление, иначе создание).
-  app.post('/routes', writeGuard, scoped('routes:write'), async (c) => {
+  // ADR-052: зонтичный `automation:install` (установщик пакета) — альтернатива
+  // `routes:write` (достаточно любого из двух).
+  app.post('/routes', writeGuard, scoped(...SERVICE_SCOPE_SETS.routesWrite), async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();
@@ -511,7 +514,7 @@ export function createEventRoutes(
   });
 
   // DELETE /api/v2/events/routes/:id — удаление правила.
-  app.delete('/routes/:id', writeGuard, scoped('routes:write'), async (c) => {
+  app.delete('/routes/:id', writeGuard, scoped(...SERVICE_SCOPE_SETS.routesWrite), async (c) => {
     const removed = await deps.routeRuleStore.remove(c.req.param('id'));
     if (!removed) {
       return c.json({ error: { code: 'NOT_FOUND', message: messages.ruleNotFound(c) } }, 404);

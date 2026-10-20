@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import type { AgentDefinition } from '@itphx/synth-shared';
+import { SERVICE_SCOPE_SETS } from '@itphx/synth-shared';
 import type { JsonStoreLike } from '../../storage/json-store.js';
 import type { ContextFileRepository } from '../../storage/ports/context-file-repository.js';
 import {
@@ -10,6 +11,8 @@ import {
   DEFAULT_AGENT_ID,
 } from '../../engine/agents/index.js';
 import type { AgentRegistry } from '../../engine/agents/index.js';
+import { requireScopeOrAdminRole } from '../service-scope.js';
+import type { ScopeGuardFactory } from '../service-scope.js';
 import { info, warning } from '../../logger.js';
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на createMiddleware). */
@@ -55,6 +58,14 @@ export interface AgentRoutesOptions {
   allGuard?: Middleware;
   /** Guard для GET /:id (backend — requireAdmin, core — requireAuth). */
   detailGuard?: Middleware;
+  /**
+   * ADR-052: scope-гейт service-key для записи агентов (создание + ролевой
+   * промпт + удаление/отключение). Достаточно любого из
+   * `SERVICE_SCOPE_SETS.agentsWrite` — сейчас это зонтичный `automation:install`
+   * (установщик пакетов расширений). Дефолт — `requireScopeOrAdminRole`:
+   * для интерактивных кред — no-op, для service-key — scope **или** роль ADMIN.
+   */
+  scopeGuard?: ScopeGuardFactory;
   /** Переопределение сообщений (backend — i18n). */
   messages?: Partial<AgentRouteMessages>;
   /**
@@ -198,6 +209,8 @@ export function createAgentRoutes(
   const writeGuard = opts?.writeGuard ?? auth.requireAuth;
   const allGuard = opts?.allGuard ?? auth.requireAuth;
   const detailGuard = opts?.detailGuard ?? auth.requireAuth;
+  // ADR-052: scope-гейт записи агентов (установщик пакета — `automation:install`).
+  const scoped = opts?.scopeGuard ?? requireScopeOrAdminRole;
   const messages: AgentRouteMessages = { ...DEFAULT_MESSAGES, ...opts?.messages };
 
   const fields = (a: AgentDefinition) => AGENT_FIELDS(a, BUILTIN_IDS.has(a.id));
@@ -237,7 +250,9 @@ export function createAgentRoutes(
   });
 
   // Создать/обновить агента (custom или override builtin)
-  app.post('/', writeGuard, async (c) => {
+  // ADR-052: для service-key — scope `automation:install` (установщик пакета)
+  // или роль ADMIN; интерактивные креды — no-op.
+  app.post('/', writeGuard, scoped(...SERVICE_SCOPE_SETS.agentsWrite), async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const id = body.id?.trim();
     if (!id) {
@@ -311,7 +326,7 @@ export function createAgentRoutes(
   });
 
   // Удалить custom / сбросить built-in (override)
-  app.delete('/:id', writeGuard, async (c) => {
+  app.delete('/:id', writeGuard, scoped(...SERVICE_SCOPE_SETS.agentsWrite), async (c) => {
     const id = c.req.param('id');
     const isBuiltin = BUILTIN_IDS.has(id);
     const exists = await agentStore.exists(id);
@@ -335,7 +350,7 @@ export function createAgentRoutes(
   });
 
   // Переключить enabled (override builtin или custom)
-  app.patch('/:id/enabled', writeGuard, async (c) => {
+  app.patch('/:id/enabled', writeGuard, scoped(...SERVICE_SCOPE_SETS.agentsWrite), async (c) => {
     const id = c.req.param('id');
     const body = await c.req.json().catch(() => ({}));
     const enabled = body.enabled ?? true;

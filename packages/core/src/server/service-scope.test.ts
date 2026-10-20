@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { Hono } from 'hono';
 import { GlobalRole } from '@itphx/synth-shared';
-import { requireScope, checkProjectAccess, isProjectAllowed, getServiceCredential } from './service-scope.js';
+import {
+  requireScope,
+  requireScopeOrAdminRole,
+  checkProjectAccess,
+  isProjectAllowed,
+  getServiceCredential,
+} from './service-scope.js';
 import type { ServiceKeyCredential } from '../storage/service-api-key-store.js';
 
 const baseCredential: ServiceKeyCredential = {
@@ -49,6 +55,55 @@ describe('requireScope (ADR-052)', () => {
     const app = makeApp({ ...baseCredential, scopes: ['events:*'] });
     expect((await app.request('/family')).status).toBe(200);
     expect((await app.request('/watch')).status).toBe(200);
+  });
+});
+
+describe('requireScopeOrAdminRole (ADR-052)', () => {
+  /** Приложение с гейтом «scope или роль ADMIN». */
+  function makeAdminApp(cred?: ServiceKeyCredential) {
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      if (cred) c.set('serviceKey' as never, cred as never);
+      await next();
+    });
+    app.get('/agents', requireScopeOrAdminRole('automation:install'), (c) => c.json({ ok: true }));
+    app.get('/routes', requireScopeOrAdminRole('routes:write', 'automation:install'), (c) => c.json({ ok: true }));
+    return app;
+  }
+
+  it('без serviceKey — пропускает (интерактивные креды не ограничиваются)', async () => {
+    const app = makeAdminApp();
+    expect((await app.request('/agents')).status).toBe(200);
+    expect((await app.request('/routes')).status).toBe(200);
+  });
+
+  it('service-key со scope automation:install → 200', async () => {
+    const app = makeAdminApp({ ...baseCredential, scopes: ['automation:install'] });
+    expect((await app.request('/agents')).status).toBe(200);
+    expect((await app.request('/routes')).status).toBe(200);
+  });
+
+  it('service-key с ролью ADMIN проходит и без scope (прежние права не отбираются)', async () => {
+    const app = makeAdminApp({ ...baseCredential, roles: [GlobalRole.ADMIN], scopes: [] });
+    expect((await app.request('/agents')).status).toBe(200);
+    expect((await app.request('/routes')).status).toBe(200);
+  });
+
+  it('service-key без scope и без роли ADMIN → 403 SCOPE_REQUIRED', async () => {
+    const app = makeAdminApp({ ...baseCredential, scopes: ['addons:install'] });
+    const denied = await app.request('/agents');
+    expect(denied.status).toBe(403);
+    const body = await denied.json() as { error: { code: string } };
+    expect(body.error.code).toBe('SCOPE_REQUIRED');
+  });
+
+  it('«любой из»: routes:write открывает запись правил, automation:install — тоже', async () => {
+    const byRoute = makeAdminApp({ ...baseCredential, scopes: ['routes:write'] });
+    expect((await byRoute.request('/routes')).status).toBe(200);
+    const byInstall = makeAdminApp({ ...baseCredential, scopes: ['automation:install'] });
+    expect((await byInstall.request('/routes')).status).toBe(200);
+    const byAddons = makeAdminApp({ ...baseCredential, scopes: ['addons:install'] });
+    expect((await byAddons.request('/routes')).status).toBe(403);
   });
 });
 
