@@ -292,12 +292,20 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
 
     const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async (_s, _m, signal, publish) => {
       return new Promise((resolve) => {
-        signal.addEventListener('abort', () => {
+        const gracefulCancel = () => {
           // Имитация graceful-отмены оркестратором: он публикует stream.cancelled
           // и возвращает {} (успешная ветка снимет currentStream).
           publish('stream.cancelled', { stream_id: 'orchestrator', content: 'partial', status: 'cancelled' });
           resolve({});
-        }, { once: true });
+        };
+        // Корректный потребитель AbortSignal: УЖЕ аборченный сигнал не
+        // выстрелит событие 'abort' позднему подписчику — проверяем флаг и
+        // завершаемся сразу, иначе промис повиснет навсегда.
+        if (signal.aborted) {
+          gracefulCancel();
+          return;
+        }
+        signal.addEventListener('abort', gracefulCancel, { once: true });
       });
     });
 
@@ -316,6 +324,50 @@ describe('QueueProcessor — «Стоп» (requestStop / cancelRequested)', () =
     expect(s!.status.blocked).toBeUndefined();
     expect(s!.currentStream).toBeUndefined();
     expect(s!.status.cancelRequested).toBeUndefined();
+    expect(events.some((e) => e.type === 'queue.stalled')).toBe(false);
+  });
+
+  it('гонка: «Стоп» в окне между Phase 1 и Phase 2 не теряется (requestStop до старта LLM-вызова)', async () => {
+    const { sessionId } = await enqueue();
+    const events = collectEvents(eventBus, sessionId);
+
+    let processMessageCalled = false;
+
+    const processor = new QueueProcessor(sessionId, sessionManager, eventBus, async () => {
+      processMessageCalled = true;
+      return {};
+    });
+
+    // Триггер гонки: `stream.start` публикуется ВНУТРИ Phase 1 — до создания
+    // контроллера в Phase 2. Вызываем «Стоп» прямо из обработчика события:
+    // запрос попадает ровно в уязвимое окно (детерминированно, без угадывания
+    // таймингов). Раньше здесь запрос «Стоп» ТЕРЯЛСЯ: `abort()` уходил в
+    // пустоту (`_activeController` ещё не создан), и LLM-вызов уходил до конца.
+    const unsubscribe = eventBus.subscribe(sessionId, (event) => {
+      if (event.type === 'stream.start') processor.requestStop();
+    });
+
+    await processor.start();
+    unsubscribe();
+
+    // Стоп не потерян: LLM-вызов не стартовал вовсе (контроллер аборчен до
+    // вызова — потребитель получил бы уже aborted-сигнал).
+    expect(processMessageCalled).toBe(false);
+
+    // Ровно один stream.cancelled — его публикует обработчик остановки.
+    const cancelled = events.filter((e) => e.type === 'stream.cancelled');
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]!.data).toMatchObject({ status: 'cancelled' });
+
+    // Сессия полностью разблокирована, очередь очищена.
+    const s = await sessionManager.getSession(sessionId);
+    expect(s!.pendingMessages).toHaveLength(0);
+    expect(s!.status.blocked).toBeUndefined();
+    expect(s!.currentStream).toBeUndefined();
+    expect(s!.status.cancelRequested).toBeUndefined();
+    expect(s!.status.cancelRequestedAt).toBeUndefined();
+    // Гонка: после отмены не должен публиковаться queue.stalled (иначе UI
+    // мигает панелью «Обработка остановлена»).
     expect(events.some((e) => e.type === 'queue.stalled')).toBe(false);
   });
 

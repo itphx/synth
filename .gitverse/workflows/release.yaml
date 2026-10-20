@@ -480,11 +480,18 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ gitverse.workspace }}/.docker
         run: |
-          bash scripts/offline-images.sh \
+          # Multi-arch требует Docker-демон: buildx не умеет работать без него
+          # (драйверы docker и docker-container оба ходят в /var/run/docker.sock),
+          # а раннер GitVerse — контейнер без сокета. amd64-образы к этому моменту
+          # уже опубликованы через kaniko (ему демон не нужен), поэтому шаг
+          # best-effort: отсутствие arm64 не должно останавливать релиз.
+          if ! bash scripts/offline-images.sh \
             --version "${{ steps.docker_tags.outputs.version }}" \
             --platforms arm64 \
             --push \
-            --registry-prefix gitverse.ru/itphx,ghcr.io/itphx
+            --registry-prefix gitverse.ru/itphx,ghcr.io/itphx; then
+            echo "ПРЕДУПРЕЖДЕНИЕ: multi-arch (arm64) не собран — на раннере нет Docker-демона; релиз продолжается с amd64-образами."
+          fi
 
       # Manifest list best-effort: amd64-алиас создаётся с уже опубликованного
       # kaniko :<version>, затем :<version> перезаписывается index'ом amd64+arm64.
@@ -533,16 +540,26 @@ jobs:
 
       - name: Сборка и архивы (amd64+arm64)
         run: |
-          bash scripts/offline-images.sh \
+          # Offline-архивы образов собираются docker-сборкой (buildx + проверка
+          # запуском контейнера) — это требует Docker-демона, которого на раннере
+          # GitVerse нет (контейнер без /var/run/docker.sock). Шаг best-effort:
+          # образы в реестрах (amd64, kaniko) уже опубликованы, а portable-бандлы
+          # собраны отдельной задачей — релиз не должен из-за offline-архивов
+          # останавливаться. Факт отсутствия раскрыт в заметках релиза.
+          if ! bash scripts/offline-images.sh \
             --version "${{ steps.offline_version.outputs.version }}" \
             --platforms amd64,arm64 \
             --registry-prefix gitverse.ru/itphx \
             --out dist/offline/images \
-            --save
+            --save; then
+            echo "ПРЕДУПРЕЖДЕНИЕ: offline-архивы образов не собраны — на раннере нет Docker-демона; релиз продолжается без них."
+          fi
 
       - name: Загрузить offline-образы как артефакт
         uses: actions/upload-artifact@v4
         with:
+          # Артефакта может не быть: сборка offline-образов best-effort (нет демона).
+          if-no-files-found: ignore
           name: offline-images
           path: |
             dist/offline/images/*.tar
@@ -646,6 +663,9 @@ jobs:
       # роняет джобу.
       - name: Скачать offline-образы
         uses: actions/download-artifact@v4
+        # Артефакта может не быть (offline-сборка best-effort) — релизу не нужны
+        # образы в ассетах, чтобы создать страницу релиза и зеркало.
+        continue-on-error: true
         with:
           name: offline-images
           path: tmp/offline-images
@@ -670,7 +690,7 @@ jobs:
           printf '\n## Offline / закрытый контур\n\n' >> tmp/release-body.md
           printf 'Portable: `synth-%s-linux-x64.tar.gz`, `synth-%s-darwin-x64.tar.gz`, `synth-%s-darwin-arm64.tar.gz`, `synth-%s-win-x64.zip`.\n\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION" >> tmp/release-body.md
           printf 'Образы: `synth`, `synth-backend`, `synth-ui` (amd64/arm64, `docker save`, `.tar.gz`).\n\n' >> tmp/release-body.md
-          printf 'Контрольные суммы — `SHA256SUMS` в ассетах релиза; документация — https://docs.synth.itphx.ru/deploy/offline/\n' >> tmp/release-body.md
+          printf 'Контрольные суммы — `SHA256SUMS` в ассетах релиза; документация — https://docs.synth.itphx.ru/offline/\n' >> tmp/release-body.md
 
       - name: Опубликовать релиз (тело + ассет)
         env:
@@ -800,6 +820,9 @@ jobs:
       # сами архивы, SHA256SUMS ниже пересчитывается по всему каталогу.
       - name: Скачать offline-образы
         uses: actions/download-artifact@v4
+        # Артефакта может не быть (offline-сборка best-effort) — релизу не нужны
+        # образы в ассетах, чтобы создать страницу релиза и зеркало.
+        continue-on-error: true
         with:
           name: offline-images
           path: tmp/offline-images
@@ -843,7 +866,7 @@ jobs:
             printf '\n## Offline / air-gapped\n\n'
             printf 'Portable: `synth-%s-linux-x64.tar.gz`, `synth-%s-darwin-x64.tar.gz`, `synth-%s-darwin-arm64.tar.gz`, `synth-%s-win-x64.zip`.\n\n' "$VERSION" "$VERSION" "$VERSION" "$VERSION"
             printf 'Images: `synth`, `synth-backend`, `synth-ui` (amd64/arm64, `docker save`, `.tar.gz`).\n\n'
-            printf 'Checksums: `SHA256SUMS` in the release assets. Documentation: https://docs.synth.itphx.ru/deploy/offline/\n'
+            printf 'Checksums: `SHA256SUMS` in the release assets. Documentation: https://docs.synth.itphx.ru/offline/\n'
           } >> tmp/release-body.md
 
           if [ -f packages/synth/dist/cli.js ]; then

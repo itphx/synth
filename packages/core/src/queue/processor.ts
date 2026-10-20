@@ -91,6 +91,10 @@ export class QueueProcessor {
    * абортится. Очистку pending/blocked/currentStream/флага выполняет `_run`
    * (`_handleStopRequest`) — так гарантируется, что состояние сессии снимается
    * под локом и только один раз.
+   *
+   * Запрос не теряется: если «Стоп» пришёл в окне между границей цикла и
+   * стартом LLM-вызова (Phase 1 пишет сессию — окно реальное), `_run`
+   * перепроверяет `_shouldStop` перед вызовом и LLM-вызов не запускает вовсе.
    */
   requestStop(): void {
     this._stopRequested = true;
@@ -361,7 +365,31 @@ export class QueueProcessor {
       try {
         // Phase 2 — вызов LLM через processMessage
         const abortController = new AbortController();
+
+        // «Стоп» мог прийти в окне между границей цикла (проверка выше) и
+        // стартом LLM-вызова: Phase 1 пишет сессию (файл) и публикует
+        // `message.added`/`stream.start` — окно реальное и достаточное, чтобы
+        // попасть под нагрузкой. Раньше запрос «Стоп» здесь ТЕРЯЛСЯ: флаг
+        // `_stopRequested` выставлялся, но `abort()` уходил в пустоту
+        // (`_activeController` ещё не создан), и LLM-вызов уходил до конца,
+        // хотя пользователь уже нажал «Стоп». Теперь запрос не теряем:
+        // контроллер абортим, сам вызов НЕ запускаем — остановку разберёт цикл
+        // на своей границе (`_handleStopRequest`: чистит очередь/blocked/
+        // currentStream/флаг и публикует `stream.cancelled` ровно один раз).
+        if (this._shouldStop(session)) {
+          abortController.abort();
+          continue;
+        }
+
         this._activeController = abortController;
+
+        // Микро-окно между проверкой выше и вызовом: если «Стоп» успел прийти
+        // в этот момент — сигнал, который получит processMessage, уже aborted
+        // (поздний подписчик не увидит событие 'abort' — потребитель обязан
+        // проверять `signal.aborted`).
+        if (this._shouldStop(session)) {
+          abortController.abort();
+        }
 
         const result = await this.processMessage(
           session!,
