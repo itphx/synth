@@ -357,7 +357,15 @@
 - `engine/file-signature.ts` — ADR-069 (R5) / ADR-046: `filesSignature`/`dirsSignature`
   (`id:floor(mtimeMs):size`, отсутствующий кандидат — маркер `!`) для ленивой инвалидации
   кэшей (общий со скиллами).
-- `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
+- `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация;
+  `createAgentRegistry(toolRegistry, overridesDir)` — встроенные агенты + merge с файловым
+  каталогом `{dataDir}/agents`; `registerStoredAgents(registry, agents)` — регистрация
+  агентов из **стора** (ADR-096) в реестр при старте (merge как в `GET /api/v2/agents`:
+  override встроенного выигрывает, custom регистрируется, `isOverridden: true`). Нужно,
+  потому что при `storage.backend=postgres` стор агентов — БД, а `createAgentRegistry`
+  читает только каталог: без этого агент, поставленный пакетом расширения (ADR-086),
+  после рестарта не резолвился в Router (`agentTemplate` → `null`, сессия не создавалась).
+  Вызывается в `server/app/deps.ts` и `backend/app/deps.ts` (обе сборки — async).
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
 - `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (ADR-046);
   гейты уровней (system/project/session) — `scope.ts` (`resolveSkillAvailability`,

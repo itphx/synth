@@ -13,7 +13,7 @@ import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  DEFAULT_AGENT_ID,
+  DEFAULT_AGENT_ID, registerStoredAgents,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventRouter, RequestSessionService, EventIngress, eventToMessage,
   ProjectRuleProvider, DecisionRuleProvider,
@@ -440,6 +440,20 @@ export async function createStandaloneDeps(
 
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
+
+  // ADR-096/PROP-032 + ADR-086 §5: агенты из **стора** — в реестр при старте.
+  // `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`,
+  // а при `storage.backend=postgres` стор агентов — это БД: агент, поставленный
+  // пакетом расширения, после рестарта не попадал в реестр → Router не
+  // резолвил `agentTemplate` (`resolveAgentTemplate` → `null`) и сессия не
+  // создавалась. Merge — как в `GET /api/v2/agents` (override выигрывает).
+  try {
+    registerStoredAgents(agentRegistry, await agentStore.list());
+  } catch (err) {
+    console.warn(
+      `[agents] не удалось загрузить агентов из стора: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   // ADR-046: сервис скиллов — discovery (instance/project/config.paths) + запись
   // instance-дерева + каталог в промпт и тул `skill`.
