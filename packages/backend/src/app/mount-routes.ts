@@ -237,7 +237,10 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
 
   // Git routes (ADR-076 §T4): core-фабрика + managed RBAC. Write-эндпоинты
   // (init/clone/register/remove/fetch) требуют прав на изменение контента
-  // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — requireAuth.
+  // проекта (owner/EDITOR/LEAD/ADMIN); read-only (scan/log/commit) — права
+  // чтения проекта (owner/участник/LEAD/ADMIN). Проверка — граничный guard
+  // core-фабрики (ADR-089, инвариант 16): без неё любой аутентифицированный
+  // читал бы git-данные чужого проекта по его id.
   app.route('/api/v2/git', createGitRoutes(auth, projectStore, config.workspacesRoot, {
     sshKeyStore,
     authorizeProject: async (c, projectId) => {
@@ -246,6 +249,13 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       const project = await projectStore.load(projectId);
       if (!project) return false;
       return projectAccess.canEditProjectContent(c, project, user.id);
+    },
+    authorizeRead: async (c, projectId) => {
+      const user = await auth.getCurrentUser(c);
+      if (!user) return false;
+      const project = await projectStore.load(projectId);
+      if (!project) return false;
+      return projectAccess.canReadProject(c, project, user.id);
     },
   }));
 

@@ -1,6 +1,7 @@
 // ADR-076 §T4: backend монтирует core-фабрику git-роутов с managed-RBAC.
-// Проверяем: non-editor → 403, owner/EDITOR/LEAD/ADMIN → запись разрешена,
-// read-only (scan/log/commit) legacy-поведение не сломано.
+// Проверяем: non-editor → 403, owner/EDITOR/LEAD/ADMIN → запись разрешена;
+// read-эндпоинты (`scan/log/commit`) — право ЧТЕНИЯ проекта (участник/owner/
+// LEAD/ADMIN), чужой USER → 403 (ADR-089, инвариант 16).
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, MiddlewareHandler } from 'hono';
@@ -94,7 +95,7 @@ describe('Git API Routes (ADR-076 §T4, backend)', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  /** Монтирует core-фабрику так же, как `app.ts` (authorizeProject через createProjectAccess). */
+  /** Монтирует core-фабрику так же, как `app.ts` (authorizeProject/authorizeRead через createProjectAccess). */
   function makeApp(user: User | null) {
     const kit = makeKit(user);
     const access = createProjectAccess(kit as unknown as AuthKit);
@@ -107,6 +108,13 @@ describe('Git API Routes (ADR-076 §T4, backend)', () => {
         const project = await projectStore.load(id);
         if (!project) return false;
         return access.canEditProjectContent(c, project, current.id);
+      },
+      authorizeRead: async (c, id) => {
+        const current = await kit.getCurrentUser(c);
+        if (!current) return false;
+        const project = await projectStore.load(id);
+        if (!project) return false;
+        return access.canReadProject(c, project, current.id);
       },
     }));
     return app;
@@ -175,17 +183,45 @@ describe('Git API Routes (ADR-076 §T4, backend)', () => {
     expect(saved?.repos?.[0]).toMatchObject({ path: 'app', url: `file://${bare}` });
   });
 
-  it('legacy scan/log/commit не сломаны', async () => {
+  it('read (scan/log/commit): чужой USER → 403 (проект ему не виден)', async () => {
+    // Проект принадлежит 'admin'; 'developer' — обычный USER, не участник.
     const app = makeApp(makeUser('developer', ['USER']));
 
     const scan = await post(app, '/scan', { projectId });
+    expect(scan.status).toBe(403);
+    const log = await app.request(`/api/v2/git/log?project_id=${projectId}`);
+    expect(log.status).toBe(403);
+    const commit = await app.request(`/api/v2/git/commit?project_id=${projectId}&hash=abc`);
+    expect(commit.status).toBe(403);
+  });
+
+  it('read (scan/log/commit): участник проекта (VIEWER) → доступ разрешён', async () => {
+    const project = (await projectStore.load(projectId))!;
+    project.members = { ...project.members, developer: ProjectRole.VIEWER };
+    await projectStore.save(project);
+
+    const app = makeApp(makeUser('developer', ['USER']));
+    const scan = await post(app, '/scan', { projectId });
     expect(scan.status).toBe(200);
     expect((await scan.json() as { repos: unknown[] }).repos).toEqual([]);
-
-    // log/commit по не-git workspace → 404 (legacy NOT_FOUND).
+    // log/commit по не-git workspace → 404 (legacy NOT_FOUND), а не 403.
     const log = await app.request(`/api/v2/git/log?project_id=${projectId}`);
     expect(log.status).toBe(404);
     const commit = await app.request(`/api/v2/git/commit?project_id=${projectId}&hash=abc`);
     expect(commit.status).toBe(404);
+  });
+
+  it('read (scan): owner и LEAD/ADMIN → доступ разрешён', async () => {
+    const owner = makeApp(makeUser('admin', ['ADMIN']));
+    expect((await post(owner, '/scan', { projectId })).status).toBe(200);
+
+    const lead = makeApp(makeUser('lead', ['LEAD']));
+    expect((await post(lead, '/scan', { projectId })).status).toBe(200);
+  });
+
+  it('неаутентифицированный на read → 403', async () => {
+    const app = makeApp(null);
+    expect((await post(app, '/scan', { projectId })).status).toBe(403);
+    expect((await app.request(`/api/v2/git/log?project_id=${projectId}`)).status).toBe(403);
   });
 });

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { Hono } from 'hono';
-import type { Context } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import type { createMiddleware } from 'hono/factory';
 import { ZodError } from 'zod';
 import type { GitRepoConfig, Project } from '@itphx/synth-shared';
@@ -47,8 +47,21 @@ export interface GitRoutesOptions {
   sshKeyStore?: SSHKeyRepository;
   /** Guard на write-эндпоинты; по умолчанию — `requireAuth`. */
   writeGuard?: Middleware;
-  /** Проверка доступа к проекту (managed RBAC); `false` → 403. */
+  /**
+   * Проверка доступа к проекту для WRITE-эндпоинтов (managed RBAC);
+   * `false` → 403. Не задана — проверки нет (standalone: один пользователь).
+   */
   authorizeProject?: (c: Context, projectId: string) => Promise<boolean>;
+  /**
+   * Проверка доступа к проекту для READ-эндпоинтов (`scan`/`log`/`commit`);
+   * `false` → 403. Управ — owner/участник проекта/`LEAD`/`ADMIN`
+   * (ADR-089, `canReadProject`).
+   *
+   * Не задана — берётся `authorizeProject` (строже: чтение требует прав на
+   * изменение контента). Не заданы оба — проверки нет (standalone: один
+   * пользователь инстанса, доступ к проекту не разграничивается).
+   */
+  authorizeRead?: (c: Context, projectId: string) => Promise<boolean>;
 }
 
 interface RouteError {
@@ -163,11 +176,47 @@ export function createGitRoutes(
     return wsAbs;
   }
 
-  async function ensureAuthorized(c: Context, projectId: string): Promise<void> {
-    if (!opts.authorizeProject) return;
-    const allowed = await opts.authorizeProject(c, projectId);
-    if (!allowed) throw { error: 'Доступ к проекту запрещён', code: 'FORBIDDEN' } satisfies RouteError;
+  /**
+   * id проекта из запроса: query (`project_id` — read-эндпоинты) либо тело
+   * (`projectId` — write/scan). Если id не извлекся — его разбирает и валидирует
+   * обработчик (400/404), проверять нечего.
+   */
+  async function resolveProjectId(c: Context): Promise<string | undefined> {
+    const fromQuery = c.req.query('project_id');
+    if (fromQuery) return fromQuery;
+    try {
+      const body = (await c.req.json()) as { projectId?: unknown } | null;
+      const id = body?.projectId;
+      return typeof id === 'string' && id.length > 0 ? id : undefined;
+    } catch {
+      return undefined;
+    }
   }
+
+  /**
+   * ГРАНИЧНАЯ проверка доступа к проекту (ADR-089, инвариант 16): выполняется
+   * ДО обработчика, правило — в одной точке (внутри обработчиков проверок нет).
+   *
+   * `read` — эндпоинты чтения git-данных (`scan`/`log`/`commit`): право чтения
+   * проекта. `write` — эндпоинты изменения реестра/репозиториев: право на
+   * изменение контента проекта. Отказ — 403 `FORBIDDEN` (fail-closed).
+   */
+  const projectGuard = (kind: 'read' | 'write'): MiddlewareHandler => async (c, next) => {
+    const projectId = await resolveProjectId(c);
+    if (!projectId) return next();
+    const authorize = kind === 'read'
+      ? (opts.authorizeRead ?? opts.authorizeProject)
+      : opts.authorizeProject;
+    if (!authorize) return next();
+    const allowed = await authorize(c, projectId).catch(() => false);
+    if (!allowed) {
+      return c.json(
+        { error: { error: 'Доступ к проекту запрещён', code: 'FORBIDDEN' } satisfies RouteError },
+        403,
+      );
+    }
+    return next();
+  };
 
   /** SSH-окружение по `sshKeyId`: без id — пусто; нет ключа — 404; сбой env — 400. */
   async function resolveSshEnv(
@@ -223,7 +272,7 @@ export function createGitRoutes(
   }
 
   // POST /api/v2/git/scan
-  app.post('/scan', auth.requireAuth, async (c) => {
+  app.post('/scan', auth.requireAuth, projectGuard('read'), async (c) => {
     try {
       const body = gitScanBodySchema.parse(await c.req.json());
       const project = await loadProject(body.projectId);
@@ -237,11 +286,10 @@ export function createGitRoutes(
   });
 
   // POST /api/v2/git/repos/init
-  app.post('/repos/init', auth.requireAuth, writeGuard, async (c) => {
+  app.post('/repos/init', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitInitBodySchema.parse(await c.req.json());
       const project = await loadProject(body.projectId);
-      await ensureAuthorized(c, body.projectId);
       const wsPath = await resolveWorkspace(project);
       const ssh = await resolveSshEnv(body.sshKeyId);
       try {
@@ -268,11 +316,10 @@ export function createGitRoutes(
   });
 
   // POST /api/v2/git/repos/clone
-  app.post('/repos/clone', auth.requireAuth, writeGuard, async (c) => {
+  app.post('/repos/clone', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitCloneBodySchema.parse(await c.req.json());
       const project = await loadProject(body.projectId);
-      await ensureAuthorized(c, body.projectId);
       const wsPath = await resolveWorkspace(project);
 
       const relPath = body.path || deriveRepoName(body.url);
@@ -312,11 +359,10 @@ export function createGitRoutes(
   });
 
   // POST /api/v2/git/repos/register
-  app.post('/repos/register', auth.requireAuth, writeGuard, async (c) => {
+  app.post('/repos/register', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitReposRegisterBodySchema.parse(await c.req.json());
       const project = await loadProject(body.projectId);
-      await ensureAuthorized(c, body.projectId);
       const wsPath = await resolveWorkspace(project);
       // Валидация containment: абсолютный/выходящий путь → 400 git.repo_path_invalid.
       resolveRepoPath(wsPath, body.path);
@@ -338,11 +384,10 @@ export function createGitRoutes(
   });
 
   // POST /api/v2/git/repos/remove
-  app.post('/repos/remove', auth.requireAuth, writeGuard, async (c) => {
+  app.post('/repos/remove', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitReposRemoveBodySchema.parse(await c.req.json());
       const project = await loadProject(body.projectId);
-      await ensureAuthorized(c, body.projectId);
 
       const repos = normalizeRepos(project);
       const removed = findRepo(repos, body.id, body.path);
@@ -370,11 +415,10 @@ export function createGitRoutes(
   });
 
   // POST /api/v2/git/repos/fetch
-  app.post('/repos/fetch', auth.requireAuth, writeGuard, async (c) => {
+  app.post('/repos/fetch', auth.requireAuth, writeGuard, projectGuard('write'), async (c) => {
     try {
       const body = gitReposFetchBodySchema.parse(await c.req.json());
       const project = await loadProject(body.projectId);
-      await ensureAuthorized(c, body.projectId);
 
       const repos = normalizeRepos(project);
       const entry = findRepo(repos, body.id, body.path);
@@ -408,7 +452,7 @@ export function createGitRoutes(
   });
 
   // GET /api/v2/git/log
-  app.get('/log', auth.requireAuth, async (c) => {
+  app.get('/log', auth.requireAuth, projectGuard('read'), async (c) => {
     try {
       const query = gitLogQuerySchema.parse({
         project_id: c.req.query('project_id'),
@@ -426,7 +470,7 @@ export function createGitRoutes(
   });
 
   // GET /api/v2/git/commit
-  app.get('/commit', auth.requireAuth, async (c) => {
+  app.get('/commit', auth.requireAuth, projectGuard('read'), async (c) => {
     try {
       const query = gitCommitQuerySchema.parse({
         project_id: c.req.query('project_id'),

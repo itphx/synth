@@ -147,6 +147,46 @@ describe('Git API Routes (ADR-076 §T3)', () => {
     expect(res.status).toBe(403);
   });
 
+  it('read-роуты: authorizeRead → false → 403 (граничный guard, ADR-089)', async () => {
+    const app = makeApp({ authorizeRead: async () => false });
+    for (const res of [
+      await post(app, '/scan', { projectId }),
+      await app.request(`/api/v2/git/log?project_id=${projectId}`),
+      await app.request(`/api/v2/git/commit?project_id=${projectId}&hash=abc`),
+    ]) {
+      expect(res.status).toBe(403);
+      const body = await res.json() as { error: { error: string; code: string } };
+      expect(body.error.code).toBe('FORBIDDEN');
+      expect(body.error.error).toMatch(/Доступ к проекту запрещён/);
+    }
+  });
+
+  it('read-роуты: authorizeRead → true → доступ разрешён (прав на запись не требуется)', async () => {
+    const app = makeApp({
+      authorizeRead: async () => true,
+      authorizeProject: async () => false,
+    });
+    expect((await post(app, '/scan', { projectId })).status).toBe(200);
+    // log/commit по не-git workspace → 404 (legacy NOT_FOUND), а не 403.
+    expect((await app.request(`/api/v2/git/log?project_id=${projectId}`)).status).toBe(404);
+    expect((await app.request(`/api/v2/git/commit?project_id=${projectId}&hash=abc`)).status).toBe(404);
+  });
+
+  it('read-роуты без authorizeRead → используется authorizeProject (строже, fail-closed)', async () => {
+    const denied = makeApp({ authorizeProject: async () => false });
+    expect((await post(denied, '/scan', { projectId })).status).toBe(403);
+    expect((await denied.request(`/api/v2/git/log?project_id=${projectId}`)).status).toBe(403);
+
+    const allowed = makeApp({ authorizeProject: async () => true });
+    expect((await post(allowed, '/scan', { projectId })).status).toBe(200);
+  });
+
+  it('без guard-опций проверки нет (standalone: один пользователь инстанса)', async () => {
+    const app = makeApp();
+    expect((await post(app, '/scan', { projectId })).status).toBe(200);
+    expect((await app.request(`/api/v2/git/log?project_id=${projectId}`)).status).toBe(404);
+  });
+
   it('scan находит склонированный репозиторий', async () => {
     const app = makeApp();
     const bare = await createBareRepo(root);

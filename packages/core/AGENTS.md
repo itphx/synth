@@ -603,7 +603,7 @@
   (`getRemoteClient`). Публичные типы — в `src/index.ts`. Существующие фабрики:
   `createSettingsRoutes`, `createDictionaryRoutes`, `createProviderRoutes`,
   `createModelRoutes`, `createSessionRoutes`,
-  `createModelRoutes`, `createSessionRoutes`, `createGitRoutes`,
+  `createGitRoutes` (ADR-076: доступ к проекту — граничный guard ДО обработчика:
   `authorizeRead` — чтение git-данных (`scan`/`log`/`commit`), `authorizeProject` —
   изменение реестра/репозиториев; отказ — 403 `FORBIDDEN`, ADR-089/инвариант 16),
   `createSshKeyRoutes`, `createAgentSshKeyRoutes`, `createFsRoutes` (project-aware
