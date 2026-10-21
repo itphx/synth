@@ -116,16 +116,16 @@ ADR-018 и ADR-046 — принятые ADR со смешанным статус
 | [ADR-018](./arch_decisions/adr-018-session-engine-selection.md) | Выбор AI-движка на уровне сессии | ✅ поле/плумбинг | механика движков (EngineManager/адаптеры) → PROP-050 |
 | [ADR-030](./arch_decisions/adr-030-hooks-agent-events.md) | Hooks для событий агента | ⚠️ Частично | Plugin SDK/загрузка плагинов → PROP-090 |
 | [ADR-046](./arch_decisions/adr-046-skills-and-slash-commands.md) | Скиллы и slash-команды | ✅ Фазы 1–3 | install/trust/подписи и backend-админка каталога → PROP-068 |
-| [ADR-051](./arch_decisions/adr-051-scheduler-pipelines.md) | Шедулер | ⚠️ Частично | пайплайны реализованы как декларация + учёт прогона ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)); **движок пайплайна — [ADR-101](./arch_decisions/adr-101-pipeline-engine.md)** (Э1–Э7); остаток — rollback/дашборд (PROP-059), размещение в гибриде, K8s Lease/PG advisory lock |
+| [ADR-051](./arch_decisions/adr-051-scheduler-pipelines.md) | Шедулер | ⚠️ Частично | пайплайны реализованы как декларация + учёт прогона ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)); **движок пайплайна — [ADR-101](./arch_decisions/adr-101-pipeline-engine.md)** (реализован); остаток — rollback/дашборд (PROP-059), размещение в гибриде, K8s Lease/PG advisory lock |
 | [ADR-086](./arch_decisions/adr-086-extensibility-plugins-editions.md) | Расширяемость (зонтик) | ⚠️ Частично | доставка пакета расширения реализована ([ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md)); остаток — Plugin SDK → PROP-090, каталог/trust пакетов → PROP-068, editions, contribution flow |
 | [ADR-087](./arch_decisions/adr-087-gateways.md) | Шлюзы (gateways) | ⚠️ Частично | HA/leader election, webhook-транспорт, второй канал |
 | [ADR-094](./arch_decisions/adr-094-observability-metrics.md) | Наблюдаемость: `/metrics`, `/ready`, дашборды и алерты | ⚠️ Частично | JSON-логи с `request_id`/`session_id`, OpenTelemetry-трейсинг, Alertmanager/SLO-страница (остальное — в коде) |
 | [ADR-099](./arch_decisions/adr-099-egress-tls-trust.md) | Единый egress-слой: TLS/CA (mTLS, per-host профили) + адресная политика + прокси (config/UI) | ⚠️ Частично | Kerberos/NTLM — вне scope → egress-шлюз (п. 25), SOCKS5 — best-effort (п. 26); hot-reload прокси/TLS → PROP-088, пиннинг адреса → PROP-100, метрики → ADR-094, per-host CA и несколько default-сертов, перепроверка встроенного `fetch` на Node 22 |
-| [ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md) | Поставка пакета расширения `synth.pack` + пайплайн в ядре | ⚠️ Частично | поставка пакета (контракт, валидация, установка одной операцией, одобрение администратора, реестр, провенанс) — в силе; «пайплайн = декларация + учёт прогона» заменён [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (`PipelineTracker` — промежуточная реализация) |
-| [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) | Pipeline Engine: пайплайн как второй движок | ⚠️ Частично | решение принято 2026-10-21; в работе Э1 (контракты `shared`); остаток — Э2–Э7: порты хранилища, движок и виды шагов, журнал и наблюдаемость, API/права/проектная привязка, UI и редактор (`@xyflow/react`); план этапов — `.opencode/tasks/log.md` |
+| [ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md) | Поставка пакета расширения `synth.pack` + пайплайн в ядре | ⚠️ Частично | поставка пакета (контракт, валидация, установка одной операцией, одобрение администратора, реестр, провенанс) — в силе; «пайплайн = декларация + учёт прогона» заменён [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (движок **реализован**; `PipelineTracker` — промежуточная реализация: остаётся рабочим и устаревает) |
 
-Итого: ADR — 52 (из них 38 со статусом `✅ Реализовано` и 14 со статусом `⚠️ Частично`, в т.ч. 5 —
+Итого: ADR — 52 (из них 39 со статусом `✅ Реализовано` и 13 со статусом `⚠️ Частично`, в т.ч. 5 —
 «принятое ядро + остаток-предложение»: 030, 051, 086, 087, 099), предложений — 40 (30 actionable + 1 icebox + 9 vision),
-legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 14 файлов — ADR-018, ADR-030, ADR-046,
-ADR-051, ADR-086, ADR-087, ADR-091, ADR-092, ADR-094, ADR-097, ADR-098, ADR-099, ADR-100, ADR-101
-(сводка — [arch_decisions/README.md](./arch_decisions/README.md)).
+legacy — 1. Раздел «Частично» в сгенерированном индексе содержит 13 файлов — ADR-018, ADR-030, ADR-046,
+ADR-051, ADR-086, ADR-087, ADR-091, ADR-092, ADR-094, ADR-097, ADR-098, ADR-099, ADR-100
+(сводка — [arch_decisions/README.md](./arch_decisions/README.md)). ADR-101 (движок пайплайнов) — `✅ Реализовано`,
+в разделе «Частично» не значится (индекс — [arch_decisions/README.md](./arch_decisions/README.md)).

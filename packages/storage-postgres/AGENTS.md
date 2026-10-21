@@ -53,12 +53,14 @@ ADR-097): реализация доменных портов `StorageContext` (`
 
 Волна **3a — инфраструктура драйвера** (готова): пул/подключение, схема БД и
 миграции, сборка контекста. Волна **3b — порты** (готова): все доменные порты
-`StorageContext` реализованы поверх SQL и проходят контрактный suite
+`StorageContext` реализованы и проходят контрактный suite
 (`packages/core/src/storage/contract/postgres.test.ts` → 56/56 против
 dev-Postgres). Проводка домена — через `storage.backend = postgres`.
 
-**Текущий статус (сводно).** Реализованы: все 30 доменных портов (группы
-`ports/*`; включая `analyticsRollups` — PROP-102), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
+**Текущий статус (сводно).** Реализованы: все 34 доменных порта (группы
+`ports/*`; включая `analyticsRollups` — PROP-102 и `projectPipelines`/`pipelineRuns` —
+ADR-101, SQL-реализация поверх `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
+`pipeline_run_events`), лёгкие выборки `@future-backend` (в т.ч. `listLight`/`loadLight` — метаданные
 сессий без истории, `ports/sessions.ts`), точечная запись сообщений `appendMessage`/`updateMessage`
 (одна строка `messages` в транзакции под per-session advisory-локом; `save` остаётся полной заменой
 истории для импорта/ветвления), координация на session-level
@@ -85,7 +87,8 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
 - **Схема и миграции (`migrations/*`, `migrate.ts`).** Свой контур версионирования
   (НЕ `meta.json`/ADR-092): таблица `synth_schema_migrations(version int PK, id text,
   applied_at timestamptz)` в схеме драйвера. SQL-миграции — **inline TS-строки**
-  (`src/migrations/001-init.ts`, `002-egress-audit.ts`, `003-analytics-rollups.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
+  (`src/migrations/001-init.ts`, `002-egress-audit.ts`, `003-analytics-rollups.ts`,
+  `004-pipeline-engine.ts`, `005-pipeline-provenance.ts`) — `tsc` эмитит их в `dist`, шаги копирования SQL не нужны.
   `runMigrations(conn, { schema })`: `CREATE SCHEMA IF NOT EXISTS` → advisory-лок
   (`synth:migrate:<schema>`) → применение по возрастанию версии (каждая миграция —
   в транзакции с записью версии). **Fail-closed**, если версия в БД **больше**
@@ -107,7 +110,7 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
   **Риск пула:** удерживаемое соединение не возвращается в пул — держите не больше
   одного на процесс; `poolMax` по умолчанию 10 (`pool.ts`).
 - **Сборка контекста (`storage-context.ts` + `src/ports/*`).** Порты разложены по
-  шести независимым файлам-группам (по одному владельцу-агенту на файл, волна
+  семи независимым файлам-группам (по одному владельцу-агенту на файл, волна
   реализации правит их параллельно и без конфликтов); каждая группа экспортирует
   одну фабрику, возвращающую свою часть `StorageContext`:
   - `ports/sessions.ts` → `buildSessionPorts(deps)` → `sessions`;
@@ -124,15 +127,21 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
     (PROP-102: таблица `analytics_rollups`, миграция 003 — PK
     `(family, day, dimensions)`, атомарный `INSERT … ON CONFLICT … DO UPDATE`
     с суммированием `jsonb`-мер без advisory-локов).
+  - `ports/pipelines.ts` → `buildPipelinePorts(deps)` → `projectPipelines`/`pipelineRuns`
+    (ADR-101: таблицы `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/
+    `pipeline_run_events`, миграция 004 — миграций данных нет, схема версионируется
+    как обычно; `installed_by` добавлен миграцией 005, идемпотентной).
 
   Общий тип зависимостей — `PortDeps` (`ports/deps.ts`): `connection` (живой
   `PostgresConnection`), `dataDir`, `secretKey?`, `env?`, `systemDictionariesDir?`,
   `contextUserDataDir?`. `buildPostgresStorageContext` собирает контекст как
   `{ kind:'postgres', ...buildSessionPorts, ...buildPrincipalPorts,
-  ...buildEventPorts, ...buildContentPorts, skills/contextFiles/blobs, close }`;
+  ...buildEventPorts, ...buildContentPorts, ...buildAuditPorts, ...buildAnalyticsPorts,
+  ...buildPipelinePorts, skills/contextFiles/blobs, pipelines, packs, close }`;
   `skills`/`contextFiles`/`blobs` — **файловые** реализации `createFileStorage`
-  (FS/package-bound, см. исключение выше). `ports/stub.ts` (`notImplementedPort`)
-  оставлен как исторический экспорт, но портами не используется.
+  (FS/package-bound, см. исключение выше); `pipelines`/`packs` (ADR-100/ADR-086 §5) —
+  тоже **файловые** (SQL-реализации этих портов в драйвере пока нет). `ports/stub.ts`
+  (`notImplementedPort`) оставлен как исторический экспорт, но портами не используется.
 - **Схема — источник истины.** Ранее правили `001-init` **на месте** (схема была
   нигде не развёрнута); сейчас схема версионируется миграциями `001-init` →
   `002-egress-audit` → `003-analytics-rollups`. Выравнивание по домену:
@@ -171,6 +180,15 @@ advisory-локах (`PgMutex`/`PgLeader`, `StorageContext.locks`), обслуж
     гарантирует инвариант и закрывает гонку.
   - `projects` — нормализация `icon`/`color` **при чтении**
     (`normalizeIconKey`/`normalizeColorKey`), паритет с `ProjectStore.load`.
+  - `pipeline_specs`/`pipeline_versions`/`pipeline_runs`/`pipeline_run_events` (ADR-101,
+    миграция 004) — FK нет: удаление пайплайна чистит его версии **в коде** (паритет
+    с файловой реализацией), прогоны удалению пайплайна не подвержены вовсе;
+    `pipeline_versions` — иммутабельные снимки опубликованных спецификаций, ключ
+    `(pipeline_id, version)`; `pipeline_runs.spec` — **снимок** спецификации на момент
+    запуска (прогон самодостаточен и переживает удаление пайплайна);
+    `pipeline_run_events.seq bigserial` — порядок добавления в журнал (append-only);
+    провенанс установки — колонка `pipeline_specs.installed_by jsonb` (`{pack, version}`,
+    nullable), добавлена **идемпотентной** миграцией 005.
 - **Жизненный цикл соединения.** `createPostgresStorage` применяет/проверяет схему,
   удерживает соединение в `StorageContext` (`close?()` закрывает пул, **дождавшись**
   фонового прогрева кэшей `content`, зарегистрированного через опциональный

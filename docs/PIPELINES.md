@@ -1,19 +1,21 @@
-# Пайплайны — как устроено сейчас и как будет устроено (Spec)
+# Пайплайны — формат и устройство (Spec)
 
-> **Назначение:** «как устроено сейчас, точно и полно» — формат, поля, семантика (класс **Spec** по
+> **Назначение:** «как устроено, точно и полно» — формат, поля, семантика (класс **Spec** по
 > [ARCH_DECISIONS.md](./ARCH_DECISIONS.md) §1). Решение — в
 > [ADR-101](./arch_decisions/adr-101-pipeline-engine.md) (пайплайн как второй движок);
 > поставка расширений — в [ADR-100](./arch_decisions/adr-100-extension-packs-pipelines.md);
 > остаток (rollback/exit-стратегия, дашборд, отдельное хранилище артефактов) —
 > [PROP-059](./arch_decisions/prop-059-pipeline-automation.md).
 >
-> **Статус документа:** описывает переходное состояние — часть I «сейчас» соответствует коду
-> (ADR-100), часть II «будет» — целевая форма по ADR-101 (реализация по этапам Э1–Э7; план этапов и
-> критерии приёмки — в журнале задач `.opencode/tasks/log.md`).
+> **Статус документа:** часть I — **legacy-контур ADR-100** («декларация + учёт прогона»), он
+> остаётся рабочим; часть II — **движок пайплайнов по ADR-101, реализован** (этапы Э1–Э7 закрыты
+> 2026-10-21): контракты, порты хранения, движок и виды шагов, журнал и наблюдаемость, выходы,
+> HTTP-контур с правами и UI (вкладка «Пайплайны», страницы пайплайна и прогона, визуальный
+> редактор). План этапов и критерии приёмки — в журнале задач (`.opencode/tasks/log.md`).
 
 ---
 
-## Часть I. Сейчас (ADR-100): декларация + учёт прогона
+## Часть I. Legacy-контур (ADR-100): декларация + учёт прогона
 
 ### 1.1. Что лежит в коде
 
@@ -50,15 +52,19 @@ HTTP-контракт — [API_V2.md](./API_V2.md) §5.33–§5.34.
 5. `onError: 'retry'|'rollback'` и `maxAttempts` объявлены в контракте, но **не исполняются**.
 6. `PipelineTracker` — промежуточная реализация; она уходит в замену движку.
 
+Ограничения 1–6 снимает **движок пайплайнов (ADR-101, часть II)**: шаг закрывается по факту хода,
+у шага своя локальная история и поля `prompt`/`skill`, есть переходы и версии спецификации,
+пайплайн принадлежит проекту, ретраи/таймауты исполняются, а `PipelineTracker` заменён движком.
+
 ---
 
-## Часть II. Будет (ADR-101): Pipeline Engine
+## Часть II. Движок пайплайнов (ADR-101): Pipeline Engine — реализовано (Э1–Э7)
 
 ### 2.1. Модель исполнения
 
 ```
 PipelineSpec (pipelineId@version)
-        │  trigger: PipelineTrigger
+        │  trigger: PipelineRunTrigger
         ▼
    PipelineEngine ──► шаг 1 ──► шаг 2 ──► … ──► exit
         │                │         │
@@ -83,7 +89,8 @@ JSON/YAML — **источник истины**; IR — собственный, 
 > `PipelineRunEvent`) + валидатор графа `validatePipelineSpec` (список проблем строками).
 > Имена в коде: узлы — `nodes`, выходы — `exits` (массив), `vars` — карта «имя → путь»
 > (`branch: 'trigger.payload.branch'`); тип триггера — `PipelineRunTrigger` (имя
-> `PipelineTrigger` занято legacy-контрактом ADR-100 в `types/pipeline.ts`, он заменяется в Э2–Э3).
+> `PipelineTrigger` занято legacy-контрактом ADR-100 в `types/pipeline.ts` — он остаётся в коде:
+> legacy-контур §5.34 API работает и показывается в разделе «Аддоны»).
 
 ```yaml
 id: pr-pipeline
@@ -134,7 +141,8 @@ exits:
 ### 2.3. Вход (`PipelineRunTrigger`)
 
 В коде — `PipelineRunTrigger` (`pipelineRunTriggerSchema`): имя `PipelineTrigger`
-занято legacy-контрактом ADR-100 (`types/pipeline.ts`), он заменяется в Э2–Э3.
+занято legacy-контрактом ADR-100 (`types/pipeline.ts`) — legacy-контур остаётся рабочим
+(§5.34 API, раздел «Аддоны» в UI), поэтому имена не пересекаются.
 
 ```ts
 interface PipelineRunTrigger {
@@ -152,7 +160,7 @@ interface PipelineRunTrigger {
 interface StepResult {
   status: 'ok' | 'failed' | 'skipped' | 'awaiting_human';
   output?: Record<string, unknown>;
-  artifacts?: Array<{ kind: string; id?: string; from?: string; payload?: Record<string, unknown> }>;
+  artifacts?: Array<{ kind: string; id?: string; from?: string; source?: string; type?: string; payload?: Record<string, unknown> }>;
   error?: { code: string; message: string };
   startedAt?: string; finishedAt?: string; durationMs?: number;
   attempt: number;
@@ -170,7 +178,7 @@ interface StepResult {
 
 > **Реализовано (Э4.2):** исполнители видов `tool`, `script` и `human` —
 > `packages/core/src/engine/pipelines/executors/` (`tool-step.ts`, `script-step.ts`,
-> `human-step.ts`). Исполнитель вида `agent` — Э4.3.
+> `human-step.ts`). Исполнитель вида `agent` — Э4.3 (реализован, см. ниже).
 >
 > - `tool` — инструмент берётся из реестра или из контекста шага (§2.5.1), перед
 >   вызовом проверяется право (§2.7); результат тула → `StepResult{status:'ok',
@@ -518,7 +526,7 @@ const exits = [
 | Режим | Путь доставки |
 |---|---|
 | standalone | SSE `GET /api/v2/events` (глобальная подписка `subscribeAll`) + WS `/ws/events` (клиент подписывается на инстансный канал) |
-| managed (backend) | `EventHub` — watch-all клиенты: `ADMIN`/`LEAD` и service-key (ADR-052); обычный `USER` per-session событий прогонов **не получает** — прогон здесь инстансный админ-ресурс (права уточняются в Э6) |
+| managed (backend) | `EventHub` — watch-all клиенты: `ADMIN`/`LEAD` и service-key (ADR-052); обычный `USER` per-session событий прогонов **не получает** — прогон здесь инстансный админ-ресурс (права определены в Э6: чтение/изменение — по правилам проекта, §2.15) |
 
 Новых транспортных каналов не заводится (инвариант 6): UI подписывается на тот же
 `/ws/events`/SSE, что и остальные события.
@@ -531,7 +539,7 @@ const exits = [
 >
 > **Реализовано (Э4.1–Э4.2):** контекст шага (`step-context.ts`), permission-обёртка
 > (`permissions.ts`), помощники гейтов (`gate.ts`) и исполнители видов `tool`/`script`/`human`
-> (`executors/`). Исполнитель вида `agent` — Э4.3.
+> (`executors/`). Исполнитель вида `agent` — Э4.3 (реализован).
 >
 > **Реализовано (Э4.3/Э4.3b):** исполнитель вида `agent` (`executors/agent-step.ts`) —
 > свой Tool-Use-цикл внутри движка.
@@ -578,7 +586,8 @@ const engine = new PipelineEngine({
 ```
 
 **Исполнители шагов** — контракт `StepExecutor` (`{ kind, execute(ctx) }`); подбираются по виду
-узла (`kind`). Реализованы (Э4.2) виды `tool`/`script`/`human` (`executors/`); `agent` — Э4.3.
+узла (`kind`). Реализованы все четыре вида: `tool`/`script`/`human` (Э4.2) и `agent` (Э4.3,
+`executors/agent-step.ts`).
 Исполнитель возвращает либо `StepResult`, либо исход-гейт (`StepOutcome`) — паузу с
 данными для оператора. Если исполнитель для вида узла не зарегистрирован, а узел —
 `human`, гейт обрабатывает сам движок (обратная совместимость с Э3).
@@ -637,10 +646,9 @@ const engine = new PipelineEngine({
 Коды сохраняются и на уровне прогона — по ним видно, **почему** прогон встал или упал.
 
 **Точки выхода.** `PipelineExitHandler` (`handle(ctx)`) — точка расширения; по умолчанию no-op
-(`NoopPipelineExitHandler`). В Э3 выходы **не исполнялись**: движок фиксировал сработавшие выходы
-в журнале (`run.finished.exits`) и отдавал контекст обработчикам. С **Э5** подключён реальный
-обработчик — `createPipelineExitHandler` (`engine/pipelines/exits.ts`): сессия/файл/шлюз/none,
-с правилами containment'а файла (ADR-075) и санитизацией наружу (ADR-101 §9, §2.10.1).
+(`NoopPipelineExitHandler`). Выходы **исполняются** — подключён реальный обработчик
+`createPipelineExitHandler` (`engine/pipelines/exits.ts`): сессия/файл/шлюз/none, с правилами
+containment'а файла (ADR-075) и санитизацией наружу (ADR-101 §9, §2.10.1).
 
 **Ретраи, таймауты, отмена.** `node.retry.max` (попыток = `1 + max`) и `node.retry.backoffSec`
 (пауза между попытками); `node.timeoutSec` — таймаут шага (`pipeline.step_timeout`). `AbortSignal`
@@ -663,10 +671,13 @@ const engine = new PipelineEngine({
 размер массивов (как в трекере ADR-089). Прогон несёт **снимок спецификации** — он самодостаточен
 (удаление пайплайна не делает прогон нечитаемым).
 
-**Коды ошибок движка:** `pipeline.not_found`, `pipeline.not_published`, `pipeline.invalid_spec`,
-`pipeline.loop_limit`, `pipeline.cancelled`, `pipeline.executor_missing`, `pipeline.gate_rejected`,
-`pipeline.gate_timeout`, `pipeline.step_failed`, `pipeline.step_timeout`, `pipeline.run_not_found`,
-`pipeline.invalid_state`.
+**Коды ошибок движка** (`PIPELINE_ERROR_CODES`, `engine/pipelines/types.ts`): `pipeline.not_found`,
+`pipeline.not_published`, `pipeline.invalid_spec`, `pipeline.loop_limit`, `pipeline.cancelled`,
+`pipeline.executor_missing`, `pipeline.gate_rejected`, `pipeline.gate_timeout`, `pipeline.step_failed`,
+`pipeline.step_timeout`, `pipeline.run_not_found`, `pipeline.invalid_state`, `pipeline.tool_not_found`,
+`pipeline.tool_failed`, `pipeline.script_failed`, `permission.denied`, `pipeline.agent_unavailable`,
+`pipeline.provider_not_found`, `pipeline.llm_failed`, `pipeline.llm_unrecoverable`,
+`pipeline.agent_iterations`.
 
 ### 2.14. Что переиспользуется из ядра
 
@@ -691,7 +702,8 @@ const engine = new PipelineEngine({
 | Шаблон инстанса | `/api/v2/pipeline-templates*` | список шаблонов и инстанцирование в проект |
 
 Пути **не пересекаются** с legacy-контуром ADR-100 (`/api/v2/pipelines*`, §5.34 API) — тот
-остаётся рабочим до перевода UI (Э7).
+остаётся рабочим (удаления не планируется); UI переведён на новый контур (Э7), legacy-определения
+по-прежнему показываются в разделе «Аддоны».
 
 **Права (ADR-089 §5.5/§5.8, инвариант 21).**
 
@@ -720,8 +732,23 @@ const engine = new PipelineEngine({
 (`{dataDir}/pipelines/{runs.json,run-events.jsonl}`); при `storage.backend=postgres` — драйвер
 `@itphx/synth-storage-postgres` (PROP-032).
 
-**UI.** Экран пайплайнов/прогонов и визуальный редактор — **Э7** (ADR-101); до него работает
-только API.
+#### UI (Э7)
+
+| Экран | Где | Что делает |
+|---|---|---|
+| Вкладка «Пайплайны» | `packages/ui/src/components/panels/left-panel/PipelinesTab.tsx` (левая панель, `leftPanel.tab.pipelines`) | дерево «проект → пайплайн» с проектным скоупом (закреплённый блок «Текущий проект» + сворачиваемые «Другие проекты (N)», `useActiveProject`); клик по пайплайну — center-tab `pipeline`, по прогону — `pipeline-run`; кнопки записи скрыты без права изменения содержимого проекта (`VIEWER` читает) |
+| Страница пайплайна | `packages/ui/src/components/pipelines/PipelineTab.tsx` (center-tab `pipeline`) | имя/описание, провенанс, черновик и опубликованная версия (read-only — `PipelineSpecView`), действия «Сохранить черновик»/«Опубликовать»/«Запустить прогон»/«Удалить», список прогонов с фильтром по статусу; черновик правится **визуально** или в JSON-режиме |
+| Страница прогона | `packages/ui/src/components/pipelines/PipelineRunTab.tsx` (center-tab `pipeline-run`) | заголовок и статус прогона, текущий узел, версия, тайминги, журнал событий, **HITL-действия** «Одобрить»/«Отклонить» (только при `awaiting_human`) и отмена активного прогона |
+| Визуальный редактор | `packages/ui/src/components/pipelines/editor/` (`@xyflow/react`) | канвас, палитра узлов `agent`/`script`/`tool`/`human`, инспектор полей по виду узла, редактор условий переходов, добавление/удаление/перестановка узлов, рисование рёбер; переключатель «Визуальный / JSON» и кнопка «Проверить» (`validatePipelineSpec`) — невалидная спецификация на сервер не уходит; **выходы пайплайна правятся в JSON-режиме** |
+
+**IR — `PipelineSpec`**, а не формат React Flow: JSON/YAML — источник истины, редактор — один из
+клиентов. Адаптер IR↔граф (`specToFlow`/`flowToSpec`) — чистый модуль без React, round-trip без
+потерь. Атрибуция React Flow не скрывается (лицензия).
+
+**Живой прогон** — по событиям `pipeline.run.*` инстансного канала шины (§2.12.3):
+`stores/transportStore.ts` разбирает их **до** проверки `sid` (у прогона нет сессии), стор
+`stores/pipelinesStore.ts` (`applyRunEvent`) обновляет детали прогона; второй транспорт не
+заводим (ADR-024/ADR-089, инвариант 6).
 
 ---
 
@@ -731,7 +758,7 @@ const engine = new PipelineEngine({
 |---|---|
 | Loop Engine (loop'и, верификация, termination guards) | [PROP-057](./arch_decisions/prop-057-loop-engine.md) — вне объёма, не трогаем |
 | Rollback/exit-стратегия, мониторинг-дашборд, отдельное хранилище артефактов | [PROP-059](./arch_decisions/prop-059-pipeline-automation.md) — остаётся там |
-| Визуальный редактор | `@xyflow/react` (зависимость разрешена владельцем); **IR — `PipelineSpec`**, формат React Flow не является источником истины |
+| Визуальный редактор | `@xyflow/react` (зависимость разрешена владельцем; **реализован, Э7**); **IR — `PipelineSpec`**, формат React Flow не является источником истины |
 | Plugin SDK, каталог пакетов, trust | [PROP-090](./arch_decisions/prop-090-extension-api.md), [PROP-068](./arch_decisions/prop-068-skills-agents-registry.md) |
 
 ---

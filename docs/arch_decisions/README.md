@@ -50,6 +50,7 @@
 | ADR-089 | Платформа внешних событий: ядро Event/Binding/Router, единый funnel `RequestSessionService`, ingress/API (bindings, keys, journal)/UI, источник ADR-051 (cron), API-ключи привязок (label/лимит/revoke + per-key rate limit), retention журнала, runtime-настройки «События», auto-bind (`events.autoBind`); ADR-052 ✅ (этапы I–IV: binding-key, service-key + scopes + `allowedProjects`, webhooks, public-OpenAPI + SDK, перевод шлюза); первый add-on — Telegram-шлюз — реализован; вне объёма — Plugin SDK (PROP-090, отложен 2026-10-19), пайплайны (PROP-059), HA/второй канал (ADR-087) | ✅ Реализовано | [adr-089-external-events-automation.md](./adr-089-external-events-automation.md) |
 | ADR-095 | Декомпозиция god-объектов — «вынос по швам» | ✅ Реализовано | [adr-095-god-object-decomposition.md](./adr-095-god-object-decomposition.md) |
 | ADR-096 | Единый слой хранения — доменные порты с взаимозаменяемыми backend'ами | ✅ Реализовано | [adr-096-storage-layer.md](./adr-096-storage-layer.md) |
+| ADR-101 | Pipeline Engine: пайплайн как второй движок рядом с оркестратором | ✅ Реализовано | [adr-101-pipeline-engine.md](./adr-101-pipeline-engine.md) |
 
 ## Частично
 
@@ -58,7 +59,7 @@
 | ADR-018 | Выбор AI-движка на уровне сессии (выбор движка персистится, механика — в работе) | ⚠️ Частично | [adr-018-session-engine-selection.md](./adr-018-session-engine-selection.md) |
 | ADR-030 | Hooks для событий агента: hook-шина `HookBus` + эмиты жизненного цикла (`session_requested`, `external_event`); Plugin SDK и загрузка плагинов (PROP-090 — отложен 2026-10-19), 4 эмита (`plan_rejected`/`message_received`/`callback`/`schedule_fired`) и политика `builtin` (Ф0 PROP-090) — нет | ⚠️ Частично | [adr-030-hooks-agent-events.md](./adr-030-hooks-agent-events.md) |
 | ADR-046 | Скиллы и slash-команды: формат `SKILL.md`, discovery, progressive disclosure, core-тул `skill`, команды/bundles, scope-API, UI; Фаза 3 — trust-гейт проектных команд, inline shell, `skills.urls` read-only, внешние каталоги, builtin `skill-creator`; остаток — install/trust/подписи/`lock.json` и backend-админка каталога (PROP-068) | ⚠️ Частично | [adr-046-skills-and-slash-commands.md](./adr-046-skills-and-slash-commands.md) |
-| ADR-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (ADR-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны (PROP-059) и размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ Частично | [adr-051-scheduler-pipelines.md](./adr-051-scheduler-pipelines.md) |
+| ADR-051 | Шедулер: `SchedulerService` (cron/interval) + источник `schedule_fired` через Router (ADR-089), Job-история (`JobStore`), catch-up (`skip`/`once`), force-запуск, API/UI расписаний и истории; пайплайны вынесены в ADR-100/ADR-101 (движок реализован), размещение в гибриде — нет; мульти-инстанс — семы file-based (default OFF) | ⚠️ Частично | [adr-051-scheduler-pipelines.md](./adr-051-scheduler-pipelines.md) |
 | ADR-086 | Расширяемость Synth (зонтик «Классы расширений»): Plugin (PROP-090), **Gateway** (ADR-087), Add-on, контент-паки (PROP-068), Editions, Contribution flow; единый манифест `synth.pack`; первый add-on/gateway — Telegram-шлюз — реализован и мультитенантен; Plugin SDK/editions/contribution — нет | ⚠️ Частично | [adr-086-extensibility-plugins-editions.md](./adr-086-extensibility-plugins-editions.md) |
 | ADR-087 | **Шлюзы (gateways)** — отдельный класс расширений (внешний сервис-транспорт внешний мир ↔ Synth, двусторонний обмен): контракт (приём через `POST /api/v2/events`, доставка наружу через SSE-watcher, MCP-часть, Binding, identity/claim-flow, allowlist, вложения, дедуп, прокси/egress, секреты at-rest); Telegram-шлюз (`addons/synth-gateway-telegram`) реализован и **мультитенантен** («несколько ботов → несколько сред», `tenants.json`); публикация в канал — агентом через MCP шлюза (ADR-089); HA через leader election, webhook-транспорт, второй канал — нет | ⚠️ Частично | [adr-087-gateways.md](./adr-087-gateways.md) |
 | ADR-091 | Бэкап, восстановление и диагностика инстанса — свой контур `backup`/`restore`/`doctor` | ⚠️ Частично | [adr-091-backup-restore-transfer.md](./adr-091-backup-restore-transfer.md) |
@@ -68,7 +69,6 @@
 | ADR-098 | Деградированный режим и восстановление хранилища | ⚠️ Частично | [adr-098-storage-degraded-recovery.md](./adr-098-storage-degraded-recovery.md) |
 | ADR-099 | Единый egress-слой: доверие TLS/CA (mTLS, bootstrap `security-tls.json`, per-host профили, UI), адресная политика (`egress.tools`/`egress.webhooks`, `mcp.networkPolicy`) и HTTP/HTTPS/SOCKS5-прокси (`proxy.*`, Basic, `no_proxy`, proxied-режим, runtime-настройка из админ-UI, аудит и журнал); доменная аутентификация прокси (NTLM/Negotiate/Kerberos) — вне scope, делегируется egress-шлюзу | ⚠️ Частично | [adr-099-egress-tls-trust.md](./adr-099-egress-tls-trust.md) |
 | ADR-100 | Пакет расширения и пайплайн в ядре: единый контракт доставки (`synth.pack`) и учёт прогонов | ⚠️ Частично | [adr-100-extension-packs-pipelines.md](./adr-100-extension-packs-pipelines.md) |
-| ADR-101 | Pipeline Engine: пайплайн как второй движок рядом с оркестратором | ⚠️ Частично | [adr-101-pipeline-engine.md](./adr-101-pipeline-engine.md) |
 
 ## Предложения
 
@@ -134,4 +134,4 @@
 
 ---
 
-Всего документов: 94 (Решения: 38, Частично: 14, Предложения: 30, Vision: 9, Icebox: 1, Legacy: 1).
+Всего документов: 94 (Решения: 39, Частично: 13, Предложения: 30, Vision: 9, Icebox: 1, Legacy: 1).
