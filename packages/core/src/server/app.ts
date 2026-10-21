@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
-import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig, PostgresStorageConfig } from '@itphx/synth-shared';
+import type { PermissionConfig, PlanMode, McpServerConfig, SecurityConfig, LLMGatewayConfig, ToolsPolicy, ToolsDisabledConfig, McpNetworkPolicy, SkillsConfig, CommandsConfig, InstructionsConfig, WorkspaceOutsideRootPolicy, WebhooksConfig, SynthConfig, PostgresStorageConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import {
   applyBootstrapServiceKeys,
   KeyRateLimiter,
@@ -129,6 +129,13 @@ export interface StandaloneConfig {
   analyticsConfig?: SynthConfig['analytics'];
   /** ADR-094: конфигурация метрик (`metrics.enabled`) из config.yaml/env. */
   metricsConfig?: SynthConfig['metrics'];
+  /**
+   * PROP-077: эффективная секция `execution` (режим исполнения + параметры
+   * удалённого исполнителя). Не задана — `inline` (прежнее поведение).
+   * Секция — **параметр запуска** (инвариант 24): смена режима — только
+   * рестартом процесса.
+   */
+  executionConfig?: ResolvedExecutionConfig;
   /** ADR-052 (этап II): конфигурация исходящих webhooks из config.yaml `webhooks`. */
   webhooksConfig?: WebhooksConfig;
   /** Egress: политика tools/webhooks и журнал внешних запросов из config.yaml. */

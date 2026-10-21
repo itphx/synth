@@ -11,8 +11,10 @@ import type {
 import {
   ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
   resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir,
+  resolveExecutionConfig,
   readTlsRuntimeSettings,
 } from '@itphx/synth-shared';
+import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -49,7 +51,7 @@ import {
   createWebhookMetrics,
   createEventMetrics,
   startEventJournalMetrics,
-  InlineExecutionPort,
+  createExecutionPortForConfig,
 } from '@itphx/synth-core';
 import type { DecisionAgentCandidate, EventsRuntimeSettings, MetricsRegistry, StorageContext } from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -112,6 +114,11 @@ export async function createBackendDeps(
   config: BackendConfig,
   storage?: StorageContext,
   metrics?: MetricsRegistry,
+  /**
+   * PROP-077: эффективная секция `execution` (режим исполнения + параметры
+   * удалённого исполнителя). Не задана — резолвится из конфигу инстанса.
+   */
+  executionConfig?: ResolvedExecutionConfig,
 ) {
   // Хранилища
   const dataDir = config.dataDir;
@@ -468,7 +475,8 @@ export async function createBackendDeps(
   // запуска процесса (инвариант 24), поэтому порт собирается здесь, при старте.
   // Тот же порт получают оркестратор (тулы, inline-shell, детект зависимостей)
   // и резолвер проектных инструкций.
-  const executionPort = new InlineExecutionPort();
+  const execution = executionConfig ?? resolveExecutionConfig(config.synth, process.env);
+  const executionPort = await createExecutionPortForConfig(execution);
 
   const orchestrator = new ChatOrchestrator({
     sessionManager,

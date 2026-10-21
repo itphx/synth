@@ -2598,8 +2598,8 @@ export const dict = {
   'profile.updated': 'Профиль обновлён ({fields}).',
 
   // --- Исполнение (PROP-077) ---
-  'execution.remote_not_supported': 'Удалённый режим исполнения (execution.mode=remote) пока недоступен: сервис-исполнитель ещё не реализован (PROP-077, шаг 7). Используйте execution.mode=inline.',
   'execution.remote_url_required': 'Удалённый режим исполнения (execution.mode=remote) требует хотя бы один адрес исполнителя (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
+  'execution.remote_unavailable': 'Удалённый режим исполнения (execution.mode=remote) недоступен: {reason}',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',

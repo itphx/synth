@@ -151,10 +151,10 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     const backendConfig = await loadBackendConfig({ configPath: opts.configPath });
 
     // PROP-077: топология исполнения — параметр запуска (инвариант 24). Fail-closed:
-    // неверный `mode`/`failMode` — ошибка; `remote` (удалённый исполнитель — шаг 7
-    // плана PROP-077) — старт прерывается, а не «молча уходит в inline».
+    // неверный `mode`/`failMode` — ошибка; `remote` без адресов/пакета исполнителя/
+    // читаемого токена — старт прерывается, а не «молча уходит в inline».
     const execution = resolveExecutionConfig(backendConfig.synth, process.env);
-    const executionCheck = checkExecutionMode(execution);
+    const executionCheck = await checkExecutionMode(execution);
     if (!executionCheck.ok) {
       throw new Error(executionCheck.message);
     }
@@ -283,7 +283,12 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
     // Зависимости (stores/managers/оркестратор/событийное ядро/шедулер/webhooks).
     // Тот же контекст хранения, что собран до `auth`. ADR-094: реестр передаётся
     // только при `metrics.enabled` — иначе доменные коллекторы не подключаются.
-    const deps = await createBackendDeps(backendConfig, storage, metricsEnabled ? metrics : undefined);
+    const deps = await createBackendDeps(
+      backendConfig,
+      storage,
+      metricsEnabled ? metrics : undefined,
+      execution,
+    );
 
     // Auth routes (после profilesStore)
     app.route('/auth', createAuthRoutes(auth, backendConfig.auth, deps.profilesStore, deps.dataDir, deps.defaultsStore));

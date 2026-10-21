@@ -68,7 +68,9 @@
   ADR-005); писать в `$SYNTH_DATA_DIR` в обход порта нельзя.
 - Исполнение агентских команд — **только через порт** `ExecutionPort` (`execution/ports`), а не
   прямым `execFile`; реализация по умолчанию — `InlineExecutionPort` (в процессе), удалённая —
-  шаг 7 плана PROP-077. Шов внедрения — `ctx.extra.executionPort` (`resolveExecutionPort(ctx)`);
+  шаг 7b плана PROP-077 (пакет `@itphx/synth-executor`, динамический `import()`). Выбор
+  реализации — `execution/factory.ts` (`createExecutionPortForConfig`) при старте процесса;
+  шов внедрения — `ctx.extra.executionPort` (`resolveExecutionPort(ctx)`);
   не-туловые точки (резолвер проектных инструкций, детект зависимостей, inline-shell) берут
   тот же порт через композицию. Вне порта остаются операции, не относящиеся к агентским
   командам: `simple-git` (`git/git-service.ts` — clone/fetch/init с SSH/CA-окружением), MCP
@@ -192,16 +194,31 @@
 ## Карта модулей
 
 - `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, …).
-- `execution/` — PROP-077 (шаги 1, 3): порт исполнения команд и проверка режима при старте —
+- `execution/` — PROP-077 (шаги 1, 3, 7b): порт исполнения команд, выбор реализации по
+  режиму и проверка режима при старте —
   `ports/execution-port.ts`
   (`ExecutionPort`, `ExecRequest`, `ExecResult`, `ExecCommand` — union `shell`/`argv`,
   `ExecutionError`, `DEFAULT_MAX_OUTPUT_BYTES`), `inline-execution-port.ts`
   (`InlineExecutionPort` — исполнение в процессе поверх `execFile`), `contract/`
-  (контрактный suite порта — обязателен для любой реализации, как `storage/contract/`),
-  `tool-port.ts` (`resolveExecutionPort(ctx)` — шов: берёт порт из `ctx.extra.executionPort`,
-  иначе inline-фоллбэк), `startup.ts` (`checkExecutionMode`/`assertExecutionModeSupported` —
-  fail-closed при старте: `mode: remote` без адресов → «требуется хотя бы один адрес исполнителя»,
-  с адресами → «удалённый исполнитель ещё не реализован», шаг 7 плана PROP-077).
+  (контрактный suite порта — обязателен для любой реализации, как `storage/contract/`;
+  общий набор проверок + блоки `describeInlineOnlyExecutionChecks`/`describeRemoteOnlyExecutionChecks`
+  — разделение намеренное: у remote `cwd` обязан лежать в workspace исполнителя, у inline
+  такого ограничения нет), `remote.ts` (загрузчик удалённого порта: **динамический `import()`
+  по строке-константе** `'@itphx/synth-executor/client'` + локальный интерфейс модуля +
+  каст — по образцу драйвера хранилища в `storage/storage-context.ts`; чтение токена из
+  файла по `execution.remote.tokenSecret` — **fail-closed**, значение токена не логируется
+  и не попадает в текст ошибок; `RemoteExecutionUnavailableError` — отдельный класс),
+  `factory.ts` (`createExecutionPortForConfig` — выбор порта по режиму: `inline` →
+  `InlineExecutionPort`, `remote` → удалённый порт; экземпляр на каждый вызов, без
+  process-глобальных синглтонов), `tool-port.ts` (`resolveExecutionPort(ctx)` — шов: берёт
+  порт из `ctx.extra.executionPort`, иначе inline-фоллбэк), `startup.ts`
+  (`checkExecutionMode`/`assertExecutionModeSupported` — **async**, fail-closed при старте:
+  `mode: remote` без адресов → «требуется хотя бы один адрес исполнителя»; с адресами, но
+  без пакета исполнителя или без читаемого токена → «удалённый режим недоступен» с
+  технической причиной). Пакет `@itphx/synth-executor` объявлен в `optionalDependencies`
+  core и подключается **динамическим `import()`** (fail-closed: нет пакета/токена/адресов →
+  старт прерывается, а не «молча уходит в inline» — тихий возврат означал бы, что оператор
+  запросил удалённое исполнение, а получил локальное).
 - `metrics/` — ADR-094: `registry.ts` (counter/gauge/histogram, лимит серий 2000,
   `synth_metrics_series_dropped_total`, `addCollector`), `renderer.ts` (text exposition 0.0.4,
   golden-тесты), `http.ts` (Hono-middleware: `method`/шаблон `route`/`status`, `in_flight`,

@@ -295,8 +295,8 @@ export const ENGINE_MESSAGE_KEYS = [
   'profile.save_error',
   'profile.updated',
   // --- Исполнение (PROP-077) ---
-  'execution.remote_not_supported',
   'execution.remote_url_required',
+  'execution.remote_unavailable',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -585,8 +585,8 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'profile.save_error': ["error"],
   'profile.updated': ["fields"],
   // --- Исполнение (PROP-077) ---
-  'execution.remote_not_supported': [],
   'execution.remote_url_required': [],
+  'execution.remote_unavailable': ["reason"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

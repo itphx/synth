@@ -83,6 +83,7 @@
     "typescript": "^5.8.0"
   },
   "optionalDependencies": {
+    "@itphx/synth-executor": "workspace:*",
     "@itphx/synth-storage-postgres": "workspace:*"
   }
 }

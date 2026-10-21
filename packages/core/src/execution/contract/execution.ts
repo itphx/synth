@@ -1,9 +1,9 @@
 /**
- * Контрактный suite порта исполнения (PROP-077, шаг 1).
+ * Контрактный suite порта исполнения (PROP-077, шаги 1 и 7b).
  *
  * «Паспорт» порта — по образцу портов хранения (`storage/contract/`): один
- * набор проверок на ЛЮБУЮ реализацию (`InlineExecutionPort` сейчас,
- * `RemoteExecutionPort` — на шаге 7). Проверяется:
+ * набор проверок на ЛЮБУЮ реализацию (`InlineExecutionPort` — в процессе,
+ * удалённый порт — HTTP к исполнителю). Проверяется:
  *
  *   - разделение stdout/stderr и код завершения;
  *   - обе формы команды: shell-строка и argv без shell;
@@ -15,15 +15,46 @@
  *   - отсутствующий бинарник (`ENOENT`);
  *   - `durationMs` заполнен.
  *
+ * ## Что различается между реализациями
+ *
+ * **Содержательное различие remote-режима — containment `cwd`:** у удалённого
+ * исполнителя `cwd` обязан лежать внутри его workspace (иначе команда не
+ * запускается вовсе — `EWORKSPACE`), а у inline-реализации такого ограничения
+ * нет вовсе. Поэтому проверки `cwd` разделены:
+ *
+ * - общий suite — `cwd` **внутри** границ реализации (каталог даёт harness);
+ * - `describeInlineOnlyExecutionChecks` — ТОЛЬКО inline: `cwd` вне рабочего
+ *   каталога проекта исполняется (локального ограничения нет);
+ * - `describeRemoteOnlyExecutionChecks` — ТОЛЬКО remote: `cwd` вне workspace
+ *   исполнителя → отказ (containment — граница безопасности).
+ *
  * Для удалённой реализации каталог из `cwd` должен быть виден исполнителю
  * (общий том workspace) — контракт это предполагает.
  */
 
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { ExecutionError, type ExecutionPort } from '../ports/index.js';
+
+/**
+ * Окружение реализации порта для прогона контракта.
+ *
+ * - `port` — сам порт;
+ * - `cwd` — каталог для проверок `cwd`; обязан быть валиден для реализации
+ *   (для удалённого исполнителя — внутри его workspace);
+ * - `cwdOutside` — каталог **вне** границ реализации (для remote-проверок
+ *   containment'а; для inline — просто каталог вне рабочего каталога проекта);
+ * - `dispose` — освобождение ресурсов реализации (опционально).
+ */
+export interface ExecutionPortHarness {
+  port: ExecutionPort;
+  cwd: string;
+  cwdOutside?: string;
+  dispose?: () => Promise<void>;
+}
+
+/** Фабрика реализации для прогона контракта. */
+export type ExecutionPortHarnessFactory = () => Promise<ExecutionPortHarness>;
 
 /** Ошибка исполнения, снятая с промиса (для проверки полей). */
 async function captureError(promise: Promise<unknown>): Promise<ExecutionError> {
@@ -36,14 +67,12 @@ async function captureError(promise: Promise<unknown>): Promise<ExecutionError> 
 }
 
 /**
- * Паспорт порта `ExecutionPort`.
+ * Паспорт порта `ExecutionPort` — общий набор проверок для любой реализации.
+ *
  * @param name имя реализации (для `describe`)
  * @param make фабрика реализации (+ опциональный `dispose`)
  */
-export function describeExecutionPort(
-  name: string,
-  make: () => Promise<{ port: ExecutionPort; dispose?: () => Promise<void> }>,
-): void {
+export function describeExecutionPort(name: string, make: ExecutionPortHarnessFactory): void {
   describe(name, () => {
     it('shell: stdout/stderr раздельно, exitCode 0, durationMs заполнен', async () => {
       const { port } = await make();
@@ -80,14 +109,9 @@ export function describeExecutionPort(
     });
 
     it('cwd — команда выполняется в указанном каталоге', async () => {
-      const { port } = await make();
-      const dir = await mkdtemp(join(tmpdir(), 'synth-exec-cwd-'));
-      try {
-        const res = await port.execute({ command: { kind: 'shell', command: 'pwd' }, cwd: dir });
-        expect(res.stdout.trim()).toBe(await realpath(dir));
-      } finally {
-        await rm(dir, { recursive: true, force: true });
-      }
+      const { port, cwd } = await make();
+      const res = await port.execute({ command: { kind: 'shell', command: 'pwd' }, cwd });
+      expect(res.stdout.trim()).toBe(await realpath(cwd));
     });
 
     it('env — переменные запроса видны процессу, базовое окружение наследуется', async () => {
@@ -145,6 +169,54 @@ export function describeExecutionPort(
       expect(err).toBeInstanceOf(ExecutionError);
       expect(err.reason).toBe('spawn_failed');
       expect(err.code).toBe('ENOENT');
+    });
+  });
+}
+
+/**
+ * Проверки, применимые **ТОЛЬКО к inline-реализации** (исполнение в процессе
+ * control plane).
+ *
+ * У inline нет границы workspace: команда исполняется в любом каталоге, даже
+ * за пределами рабочего каталога проекта. Для удалённого исполнителя это
+ * запрещено (containment) — проверка вынесена в
+ * `describeRemoteOnlyExecutionChecks`.
+ */
+export function describeInlineOnlyExecutionChecks(
+  name: string,
+  make: ExecutionPortHarnessFactory,
+): void {
+  describe(`${name} — только inline`, () => {
+    it('cwd вне рабочего каталога проекта — команда исполняется (ограничения нет)', async () => {
+      const { port, cwdOutside } = await make();
+      const dir = cwdOutside ?? (await realpath('/tmp'));
+      const res = await port.execute({ command: { kind: 'shell', command: 'pwd' }, cwd: dir });
+      expect(res.stdout.trim()).toBe(await realpath(dir));
+    });
+  });
+}
+
+/**
+ * Проверки, применимые **ТОЛЬКО к удалённому исполнителю** (PROP-077, шаг 7b).
+ *
+ * Containment `cwd` — граница безопасности исполнителя: команда вне его
+ * workspace не запускается вовсе (протокольная причина `cwd_outside_workspace`,
+ * клиент переносит её как `reason: 'spawn_failed'` с кодом `EWORKSPACE`).
+ */
+export function describeRemoteOnlyExecutionChecks(
+  name: string,
+  make: ExecutionPortHarnessFactory,
+): void {
+  describe(`${name} — только remote`, () => {
+    it('cwd вне workspace исполнителя — отказ (EWORKSPACE), команда не запускается', async () => {
+      const { port, cwdOutside } = await make();
+      const dir = cwdOutside ?? (await realpath('/tmp'));
+      const err = await captureError(
+        port.execute({ command: { kind: 'shell', command: 'pwd' }, cwd: dir }),
+      );
+      expect(err).toBeInstanceOf(ExecutionError);
+      expect(err.reason).toBe('spawn_failed');
+      expect(err.code).toBe('EWORKSPACE');
     });
   });
 }

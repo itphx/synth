@@ -363,10 +363,10 @@ export const SYSTEM_MESSAGES = {
   'profile.updated': 'Profile updated ({fields}).',
 
   // --- Исполнение (PROP-077) ---
-  'execution.remote_not_supported':
-    'Remote execution mode (execution.mode=remote) is not available yet: the executor service is not implemented (PROP-077, step 7). Use execution.mode=inline.',
   'execution.remote_url_required':
     'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
+  'execution.remote_unavailable':
+    'Remote execution mode (execution.mode=remote) is unavailable: {reason}',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

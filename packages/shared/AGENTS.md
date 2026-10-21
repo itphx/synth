@@ -165,8 +165,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (причина `system`/`project`/`session`).
 - ADR-030/ADR-089: `event.ingested`, `event.routed.*`, `event.binding.not_found`,
   `event.source_not_allowed`, `event.duplicate`, `hook.blocked`.
-- PROP-077: `execution.remote_not_supported`, `execution.remote_url_required` — fail-closed на
-  старте при `execution.mode=remote` (удалённый исполнитель — шаг 7 плана PROP-077).
+- PROP-077: `execution.remote_url_required`, `execution.remote_unavailable` (`{reason}`) —
+  fail-closed на старте при `execution.mode=remote` (удалённый исполнитель — шаг 7b плана
+  PROP-077: пакет исполнителя недоступен / токен не читается).
 
 ## Тесты и сборка
 

@@ -43,7 +43,7 @@ import {
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
-import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
+import { createExecutionPortForConfig } from '../../execution/factory.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig,
@@ -498,8 +498,9 @@ export async function createStandaloneDeps(
 
   // PROP-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
   // запуска процесса (инвариант 24), поэтому порт собирается здесь, при
-  // старте, и не переинициализируется на лету.
-  const executionPort = new InlineExecutionPort();
+  // старте, и не переинициализируется на лету. Выбор режима — фабрика
+  // `execution/factory.ts` (`remote` → удалённый порт, fail-closed).
+  const executionPort = await createExecutionPortForConfig(config.executionConfig);
 
   const orchestrator = new ChatOrchestrator({
     sessionManager,

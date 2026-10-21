@@ -60,12 +60,19 @@ async function buildCliStorage(
  * PROP-077: режим исполнения — **параметр запуска** (инвариант 24: смена режима
  * — только рестартом). Fail-closed:
  * - неизвестное значение `mode`/`failMode` (env/CLI/config) — ошибка с текстом;
- * - `remote` на этом шаге не реализован (шаг 7 плана PROP-077) — старт
- *   прерывается с понятным сообщением, а не «молча уходит в inline».
+ * - `remote` без адресов исполнителей — «требуется хотя бы один адрес»;
+ * - `remote` без пакета исполнителя / без читаемого токена — «удалённый режим
+ *   недоступен» (старт прерывается, а не «молча уходит в inline»).
  *
  * `inline` (дефолт) — прежнее поведение, ничего не меняется.
+ *
+ * @returns эффективная секция `execution` — её же получает сборка приложения
+ *          (порт исполнения собирается по этому режиму).
  */
-function assertExecutionStartup(synth: SynthConfig, cliMode?: string): void {
+async function resolveExecutionStartup(
+  synth: SynthConfig,
+  cliMode?: string,
+): Promise<ResolvedExecutionConfig> {
   let execution: ResolvedExecutionConfig;
   try {
     execution = resolveExecutionConfig(synth, process.env, { mode: cliMode });
@@ -73,11 +80,12 @@ function assertExecutionStartup(synth: SynthConfig, cliMode?: string): void {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   }
-  const check = checkExecutionMode(execution);
+  const check = await checkExecutionMode(execution);
   if (!check.ok) {
     console.error(check.message);
     process.exit(1);
   }
+  return execution;
 }
 
 program
@@ -147,8 +155,8 @@ program
     });
 
     // PROP-077: топология исполнения (параметр запуска) — fail-closed на
-    // неверном `mode` и на `remote` (удалённый исполнитель — шаг 7 плана).
-    assertExecutionStartup(synth, options.executionMode);
+    // неверном `mode` и на недоступном удалённом исполнителе.
+    const execution = await resolveExecutionStartup(synth, options.executionMode);
 
     const dataDir = resolveDataDir(synth, undefined, home);
     // ADR-099: доверие TLS/CA — до первого исходящего запроса (гибрид/обновления).
@@ -203,6 +211,9 @@ program
       fallbackDir: resolveStorageFallbackDir(synth, process.env, home),
       workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
+      // PROP-077: режим исполнения и параметры удалённого исполнителя —
+      // порт собирается по ним (параметр запуска, инвариант 24).
+      executionConfig: execution,
       maxUploadBytes: resolveMaxUploadBytes(synth),
       uiDistPath: uiPath,
       permissionConfig: synth.permission,
