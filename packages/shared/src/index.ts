@@ -54,6 +54,38 @@ export type {
   PackPipelineProvide,
   PackAgentMode,
 } from './types/pack.js';
+// PROP-068 §3/§12: контракт индекса каталога расширений (`format: 1`) —
+// канонический документ, карточка записи и tolerant-парсер форм индекса.
+export {
+  CATALOG_INDEX_FORMAT,
+  CATALOG_TRUST_LEVELS,
+  CATALOG_SOURCES,
+  CATALOG_UNKNOWN_LICENSE,
+  CATALOG_DEFAULT_SKILL_CATEGORY,
+  CATALOG_UNKNOWN_VERSION,
+  catalogLocalizedTextSchema,
+  catalogTrustLevelSchema,
+  catalogSourceSchema,
+  catalogTimestampSchema,
+  catalogVersionSchema,
+  catalogEntrySchema,
+  catalogCategorySchema,
+  catalogLabelSchema,
+  catalogIndexSchema,
+  isCatalogSkillEntry,
+  isCatalogIndexDocument,
+  parseCatalogEntries,
+} from './types/catalog.js';
+export type {
+  CatalogLocalizedText,
+  CatalogTrustLevel,
+  CatalogSource,
+  CatalogVersion,
+  CatalogEntry,
+  CatalogCategory,
+  CatalogLabel,
+  CatalogIndex,
+} from './types/catalog.js';
 // ADR-051/PROP-059: контракт пайплайна (определение, шаг, состояние, экземпляр).
 export {
   pipelineStepKindSchema,

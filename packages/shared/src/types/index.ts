@@ -57,6 +57,8 @@ export * from './egress.js';
 export * from './analytics.js';
 // ADR-086/PROP-090: единый манифест расширения `synth.pack` — типы и zod-схемы
 export * from './pack.js';
+// PROP-068 §3/§12: контракт индекса каталога расширений (format: 1) — типы, zod-схемы, tolerant-парсер
+export * from './catalog.js';
 // ADR-051/PROP-059: контракт пайплайна (определение, шаг, экземпляр)
 export * from './pipeline.js';
 // ADR-101: контракты пайплайна как второго движка (спецификация, узлы,

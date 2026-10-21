@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   isBlockedHost,
-  parseRemoteIndex,
   refreshRemoteCatalogs,
+  resolveCatalogSkillPath,
   resolveRemoteIndexUrl,
   resolveSkillFileUrl,
   safeCacheDirName,
@@ -26,6 +28,18 @@ afterEach(async () => {
 });
 
 const URL_BASE = 'https://example.com/skills';
+
+/**
+ * Фикстура — канонический индекс каталога расширений (`format: 1`) с записями
+ * **всех пяти классов** (`plugin`/`gateway`/`addon`/`pack`/`storage`).
+ * Лежит рядом с тестом (конвенция `__fixtures__`).
+ */
+const FIXTURE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '__fixtures__',
+  'catalog-index-format1.json',
+);
+const CATALOG_FIXTURE = readFileSync(FIXTURE_PATH, 'utf-8');
 
 /**
  * Герметичный DNS-резолвер теста (seam `resolveHost`): без реальной сети.
@@ -116,32 +130,68 @@ describe('validateRemoteUrl / isBlockedHost — SSRF-guard (ADR-046 §4.2)', () 
   });
 });
 
-describe('parseRemoteIndex — tolerant-parse', () => {
-  it('массив записей', () => {
-    const res = parseRemoteIndex(JSON.stringify([{ name: 'a' }, { name: 'b', path: 'dir/b' }]));
-    expect(res).toEqual({ entries: [{ name: 'a' }, { name: 'b', path: 'dir/b' }] });
+describe('resolveCatalogSkillPath — путь скилла внутри каталога', () => {
+  it('extra.path — явный путь', () => {
+    expect(
+      resolveCatalogSkillPath({
+        name: 'demo',
+        kind: 'pack',
+        packType: 'skills',
+        version: '1.0.0',
+        description: { ru: 'Демо', en: 'Demo' },
+        license: 'MIT',
+        category: 'skills',
+        trust_level: 'community',
+        identifier: 'acme/demo',
+        source: 'registry',
+        screenshots: [],
+        tags: [],
+        versions: [],
+        extra: { path: 'skills/demo' },
+      }),
+    ).toBe('skills/demo');
   });
 
-  it('{ skills: [...] }', () => {
-    const res = parseRemoteIndex(JSON.stringify({ skills: [{ name: 'a', description: 'x' }] }));
-    expect(res).toEqual({ entries: [{ name: 'a' }] });
+  it('фрагмент identifier после #', () => {
+    expect(
+      resolveCatalogSkillPath({
+        name: 'demo',
+        kind: 'pack',
+        packType: 'skills',
+        version: '1.0.0',
+        description: { ru: 'Демо', en: 'Demo' },
+        license: 'MIT',
+        category: 'skills',
+        trust_level: 'community',
+        identifier: 'acme/repo#skills/demo',
+        source: 'registry',
+        screenshots: [],
+        tags: [],
+        versions: [],
+        extra: {},
+      }),
+    ).toBe('skills/demo');
   });
 
-  it('невалидные записи пропускаются, не роняя разбор', () => {
-    const res = parseRemoteIndex(JSON.stringify([
-      { name: 'ok' },
-      { name: '' },
-      { path: 'only-path' },
-      'str',
-      42,
-      null,
-    ]));
-    expect(res).toEqual({ entries: [{ name: 'ok' }] });
-  });
-
-  it('некорректный JSON / неверный корень → ошибка', () => {
-    expect('error' in parseRemoteIndex('{oops')).toBe(true);
-    expect('error' in parseRemoteIndex(JSON.stringify({ nope: [] }))).toBe(true);
+  it('без пути — undefined (loader возьмёт имя записи)', () => {
+    expect(
+      resolveCatalogSkillPath({
+        name: 'demo',
+        kind: 'pack',
+        packType: 'skills',
+        version: '1.0.0',
+        description: { ru: 'Демо', en: 'Demo' },
+        license: 'MIT',
+        category: 'skills',
+        trust_level: 'community',
+        identifier: 'acme/repo',
+        source: 'registry',
+        screenshots: [],
+        tags: [],
+        versions: [],
+        extra: {},
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -344,5 +394,214 @@ describe('refreshRemoteCatalogs (мок сети)', () => {
     expect(await readFile(join(sourceDir, 'ok', 'SKILL.md'), 'utf-8')).toBe(skillFile('ok'));
     expect(await readFile(join(sourceDir, 'stale', 'SKILL.md'), 'utf-8')).toBe('old-stale');
     expect(res.diagnostics.some((d) => d.code === 'read-error' && d.skill === 'stale')).toBe(true);
+  });
+});
+
+describe('refreshRemoteCatalogs — канонический каталог расширений (format: 1)', () => {
+  it('из индекса с записями всех классов скачиваются только скиллы', async () => {
+    const fetchImpl = vi.fn(async (input: string) => {
+      if (input.endsWith('/index.json')) return new Response(CATALOG_FIXTURE, { status: 200 });
+      if (input.endsWith('/skills/review/SKILL.md')) {
+        return new Response(skillFile('acme-skill-pack'), { status: 200 });
+      }
+      return new Response('not found', { status: 404 });
+    });
+
+    const res = await refreshRemoteCatalogs({
+      urls: [URL_BASE],
+      cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
+      fetchImpl: fetchImpl as unknown as FetchLike,
+    });
+
+    // Индекс + ровно один SKILL.md (запись-скилл); прочие классы не трогаются.
+    expect(res.diagnostics).toEqual([]);
+    const requested = fetchImpl.mock.calls.map((call) => call[0] as string);
+    expect(requested).toEqual([
+      `${URL_BASE}/index.json`,
+      `${URL_BASE}/skills/review/SKILL.md`,
+    ]);
+
+    const cache = urlCacheDir(root, URL_BASE);
+    expect(await readFile(join(cache, 'acme-skill-pack', 'SKILL.md'), 'utf-8'))
+      .toBe(skillFile('acme-skill-pack'));
+    // Каталоги записей других классов не создаются.
+    await expect(readFile(join(cache, 'acme-plugin', 'SKILL.md'), 'utf-8')).rejects.toThrow();
+  });
+
+  it('путь скилла берётся из identifier (owner/repo#path)', async () => {
+    const index = JSON.stringify({
+      format: 1,
+      title: { ru: 'Каталог', en: 'Catalog' },
+      description: { ru: 'Каталог', en: 'Catalog' },
+      generated_at: '2026-10-21T06:00:00Z',
+      metadata: { categories: {} },
+      plugins: [
+        {
+          name: 'acme-pack',
+          kind: 'pack',
+          packType: 'skills',
+          version: '1.0.0',
+          description: { ru: 'Пак', en: 'Pack' },
+          license: 'MIT',
+          category: 'skills',
+          trust_level: 'community',
+          identifier: 'acme/repo#skills/demo',
+          source: 'github',
+          versions: [],
+          extra: {},
+        },
+      ],
+    });
+    const fetchImpl = vi.fn(async (input: string) => {
+      if (input.endsWith('/index.json')) return new Response(index, { status: 200 });
+      return new Response(skillFile('acme-pack'), { status: 200 });
+    });
+
+    const res = await refreshRemoteCatalogs({
+      urls: [URL_BASE],
+      cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
+      fetchImpl: fetchImpl as unknown as FetchLike,
+    });
+
+    expect(res.diagnostics).toEqual([]);
+    const requested = fetchImpl.mock.calls.map((call) => call[0] as string);
+    expect(requested).toContain(`${URL_BASE}/skills/demo/SKILL.md`);
+  });
+
+  it('превышение лимита записей — обрабатываются первые', async () => {
+    const index = JSON.stringify({
+      format: 1,
+      plugins: [
+        {
+          name: 'first',
+          kind: 'pack',
+          packType: 'skills',
+          version: '1.0.0',
+          description: { ru: 'Первый', en: 'First' },
+          license: 'MIT',
+          category: 'skills',
+          trust_level: 'community',
+          identifier: 'acme/first',
+          source: 'github',
+          versions: [],
+          extra: {},
+        },
+        {
+          name: 'second',
+          kind: 'pack',
+          packType: 'skills',
+          version: '1.0.0',
+          description: { ru: 'Второй', en: 'Second' },
+          license: 'MIT',
+          category: 'skills',
+          trust_level: 'community',
+          identifier: 'acme/second',
+          source: 'github',
+          versions: [],
+          extra: {},
+        },
+      ],
+    });
+    const fetchImpl = vi.fn(async (input: string) => {
+      if (input.endsWith('/index.json')) return new Response(index, { status: 200 });
+      return new Response(skillFile('x'), { status: 200 });
+    });
+
+    const res = await refreshRemoteCatalogs({
+      urls: [URL_BASE],
+      cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
+      fetchImpl: fetchImpl as unknown as FetchLike,
+      maxSkills: 1,
+    });
+
+    expect(res.diagnostics.some((d) => d.code === 'remote' && /обрабатываются первые 1/.test(d.message)))
+      .toBe(true);
+    const requested = fetchImpl.mock.calls.map((call) => call[0] as string);
+    expect(requested).toEqual([`${URL_BASE}/index.json`, `${URL_BASE}/first/SKILL.md`]);
+  });
+
+  it('пустой индекс — пустой результат, без исключений', async () => {
+    const fetchImpl = vi.fn(async (input: string) => {
+      if (input.endsWith('/index.json')) return new Response('[]', { status: 200 });
+      return new Response('not found', { status: 404 });
+    });
+
+    const res = await refreshRemoteCatalogs({
+      urls: [URL_BASE],
+      cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
+      fetchImpl: fetchImpl as unknown as FetchLike,
+    });
+
+    expect(res.diagnostics).toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('битый JSON → диагностика, сеть не дёргается дальше', async () => {
+    const fetchImpl = vi.fn(async () => new Response('{oops', { status: 200 }));
+
+    const res = await refreshRemoteCatalogs({
+      urls: [URL_BASE],
+      cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
+      fetchImpl: fetchImpl as unknown as FetchLike,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.diagnostics.some((d) => d.code === 'remote' && /некорректный JSON/.test(d.message)))
+      .toBe(true);
+  });
+
+  it('мусор в корне (не каталог) → диагностика', async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ nope: [] }), { status: 200 }));
+
+    const res = await refreshRemoteCatalogs({
+      urls: [URL_BASE],
+      cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
+      fetchImpl: fetchImpl as unknown as FetchLike,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(res.diagnostics.some((d) => d.code === 'remote' && /ожидается каталог расширений/.test(d.message)))
+      .toBe(true);
+  });
+
+  it('записи других классов каталога не превращаются в скиллы', async () => {
+    const index = JSON.stringify({
+      format: 1,
+      plugins: [
+        {
+          name: 'acme-plugin',
+          kind: 'plugin',
+          version: '1.0.0',
+          description: { ru: 'Плагин', en: 'Plugin' },
+          license: 'MIT',
+          category: 'plugins',
+          trust_level: 'community',
+          identifier: 'acme/plugin',
+          source: 'github',
+          versions: [],
+          extra: {},
+        },
+      ],
+    });
+    const fetchImpl = vi.fn(async (input: string) => {
+      if (input.endsWith('/index.json')) return new Response(index, { status: 200 });
+      return new Response('not found', { status: 404 });
+    });
+
+    const res = await refreshRemoteCatalogs({
+      urls: [URL_BASE],
+      cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
+      fetchImpl: fetchImpl as unknown as FetchLike,
+    });
+
+    expect(res.diagnostics).toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,0 +1,108 @@
+{
+  "format": 1,
+  "title": {
+    "ru": "Каталог расширений Synth",
+    "en": "Synth extension catalog"
+  },
+  "description": {
+    "ru": "Индекс каталога расширений: пример документа формата 1 (все пять классов)",
+    "en": "Extension catalog index: a format 1 document sample (all five kinds)"
+  },
+  "generated_at": "2026-10-21T06:00:00Z",
+  "metadata": {
+    "categories": {
+      "skills": {
+        "title": {
+          "ru": "Скиллы",
+          "en": "Skills"
+        },
+        "order": 1
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "acme-skill-pack",
+      "kind": "pack",
+      "packType": "skills",
+      "version": "1.2.0",
+      "description": {
+        "ru": "Пакет скиллов для ревью кода",
+        "en": "A skill pack for code review"
+      },
+      "license": "Apache-2.0",
+      "category": "skills",
+      "trust_level": "verified",
+      "identifier": "acme/skill-pack#skills/review",
+      "source": "github",
+      "versions": [],
+      "extra": {
+        "path": "skills/review"
+      }
+    },
+    {
+      "name": "acme-plugin",
+      "kind": "plugin",
+      "version": "0.4.1",
+      "description": {
+        "ru": "Плагин с кодом в процессе ядра",
+        "en": "A plugin running in the core process"
+      },
+      "license": "MIT",
+      "category": "plugins",
+      "trust_level": "trusted",
+      "identifier": "acme/plugin",
+      "source": "github",
+      "versions": [],
+      "extra": {}
+    },
+    {
+      "name": "acme-gateway",
+      "kind": "gateway",
+      "version": "1.0.0",
+      "description": {
+        "ru": "Шлюз внешнего транспорта",
+        "en": "An external transport gateway"
+      },
+      "license": "MIT",
+      "category": "plugins",
+      "trust_level": "community",
+      "identifier": "acme/gateway",
+      "source": "npm",
+      "versions": [],
+      "extra": {}
+    },
+    {
+      "name": "acme-addon",
+      "kind": "addon",
+      "version": "2.1.0",
+      "description": {
+        "ru": "Внешний аддон",
+        "en": "An external add-on"
+      },
+      "license": "MIT",
+      "category": "plugins",
+      "trust_level": "community",
+      "identifier": "acme/addon",
+      "source": "npm",
+      "versions": [],
+      "extra": {}
+    },
+    {
+      "name": "acme-storage",
+      "kind": "storage",
+      "version": "0.9.0",
+      "description": {
+        "ru": "Драйвер слоя хранения",
+        "en": "A storage backend driver"
+      },
+      "license": "Apache-2.0",
+      "category": "plugins",
+      "trust_level": "community",
+      "identifier": "acme/storage",
+      "source": "npm",
+      "versions": [],
+      "extra": {}
+    }
+  ]
+}
