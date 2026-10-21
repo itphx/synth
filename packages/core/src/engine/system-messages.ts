@@ -375,6 +375,11 @@ export const SYSTEM_MESSAGES = {
   'pipeline.step_timeout': 'Step "{node}" timed out after {timeoutSec}s',
   'pipeline.run_not_found': 'Pipeline run "{id}" not found',
   'pipeline.invalid_state': 'Pipeline run "{id}" cannot be resumed (status: {status})',
+  'pipeline.tool_not_found': 'Tool "{tool}" for step "{node}" is not registered',
+  'pipeline.tool_failed': 'Tool "{tool}" of step "{node}" failed: {error}',
+  'pipeline.script_failed': 'Command of step "{node}" exited with code {code}: {error}',
+  'pipeline.script_no_command': 'Step "{node}" has no command to run',
+  'pipeline.permission_denied': 'Step "{node}" was denied for tool "{tool}": {reason}',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

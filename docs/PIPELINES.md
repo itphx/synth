@@ -163,10 +163,59 @@ interface StepResult {
 
 | Вид | Исполнение | Границы |
 |---|---|---|
-| `agent` | свой Tool-Use-цикл внутри движка; LLM — **только** через `GatewayProvider` (ADR-036) | промпт — через `SystemPromptComposer`/`ContextBuilder` (ADR-070, контракт сужается до минимального «session-like» интерфейса); проектные инструкции — резолвер ADR-069; MCP-скоуп — по проекту (ADR-071) |
-| `tool` | через `ToolRegistry` + `executeToolDef` (`engine/tools/tool-execution.ts`) | тот же permission-слой, что у сессий |
+| `agent` | свой Tool-Use-цикл внутри движка; LLM — **только** через `GatewayProvider` (ADR-036) | промпт — через `SystemPromptComposer`/`ContextBuilder` (ADR-070, контракт сужен до минимального «session-like» интерфейса — §2.5.1); проектные инструкции — резолвер ADR-069; MCP-скоуп — по проекту (ADR-071) |
+| `tool` | через `ToolRegistry` + `executeToolDef` (`engine/tools/tool-execution.ts`) | тот же permission-слой, что у сессий (§2.7) |
 | `script` | только через shell-policy (не голой `child_process`) | protected paths и правила `definitions/*.json` действуют |
 | `human` | HITL-гейт: прогон **ставится на паузу**, ждёт действия человека; есть таймаут | наблюдателя-сессии нет → действия берутся из ролей проекта/владельца |
+
+> **Реализовано (Э4.2):** исполнители видов `tool`, `script` и `human` —
+> `packages/core/src/engine/pipelines/executors/` (`tool-step.ts`, `script-step.ts`,
+> `human-step.ts`). Исполнитель вида `agent` — Э4.3.
+>
+> - `tool` — инструмент берётся из реестра или из контекста шага (§2.5.1), перед
+>   вызовом проверяется право (§2.7); результат тула → `StepResult{status:'ok',
+>   output:{content, isError, metadata}}`, ошибка тула → `failed`
+>   (`pipeline.tool_failed`), инструмент не зарегистрирован →
+>   `pipeline.tool_not_found`;
+> - `script` — команда (`node.command` + `node.args`, аргументы экранируются)
+>   исполняется **только** через shell-тул `execute_shell` с той же
+>   permission-проверкой; ненулевой код выхода → `failed`
+>   (`pipeline.script_failed`, код выхода в сообщении), stdout/stderr → в `output`;
+> - `human` — вопрос оператору (`node.prompt`/`node.title`), прогон встаёт на
+>   паузу; **активный таймаут** `node.timeoutSec` — таймер в процессе ядра,
+>   по истечении шаг `failed` с `pipeline.gate_timeout` (§2.13).
+
+### 2.5.1. Контекст шага
+
+Шаг пайплайна — **не сессия**, но работает в том же окружении. Контекст шага
+собирается **один раз на шаг** и передаётся исполнителю:
+`PipelineEngine.buildStepContext(ctx)` → `buildPipelineStepContext`
+(`packages/core/src/engine/pipelines/step-context.ts`).
+
+| Часть | Источник | Правило |
+|---|---|---|
+| Проект | `spec.projectId` / `projectId` прогона → порт проектов (ADR-096) | проекта может не быть — шаг работает без проектного контекста (не ошибка) |
+| Рабочий каталог | `project.workspace` (ADR-075) | каталог **не создаётся молча** (provisioning — `engine/workspace-provision.ts`); нет workspace → `workspaceReady: false` |
+| Режим | `spec.mode` (`plan`/`act`/`yolo`) | режим permission-слоя (ADR-025), **не** `sessionMode` сессии |
+| Инструменты | `ToolRegistry` (встроенные) + MCP-тулы активных серверов | доступность — общий `computeToolAvailability` (ADR-070 §2.9.1): режим, capabilities агента, зависимости окружения, гейт `workspace` |
+| MCP-скоуп | система + проект (ADR-071) | без сессионного снапшота — `resolveMcpProjectScope` (`engine/mcp/scope.ts`) |
+| Проектные инструкции | резолвер ADR-069 (`engine/context/instructions.ts`) | резолв от имени проекта; без рабочего каталога инструкций нет |
+| Каталог скиллов | ADR-046 (`engine/skills/catalog.ts`) | уровень system/project; сессионного слоя нет |
+| Агент шага | `node.agent` → `AgentRegistry` | его `capabilities` участвуют в отборе тулов |
+
+**Гейт `workspace` (ADR-075).** Рабочего каталога нет → `workspaceReady: false`,
+и file/shell/git-тулы помечаются недоступными с причиной `workspace` — тем же
+механизмом, что у сессий (`engine/permission/availability.ts`). Состав
+дефинишенов при этом **постоянен** (ADR-070 §2.9): тулы не выбрасываются,
+недоступность кодируется причиной (`mode`/`role`/`dependency`/`workspace`).
+
+**Суженный контракт Composer'а (ADR-101 §10).** Промпт агентского шага собирается
+тем же `SystemPromptComposer` (ADR-070), но контракт сессии сужен до
+`ComposerSessionLike = Pick<Session, 'settings' | 'promptStates' | 'projectId'>`
+(`engine/context/composer.ts`): Composer читает только роль агента, язык,
+override системного промпта, состояние промпта per-agent и привязку к проекту.
+Обычная `Session` остаётся структурно совместимой — совместимость гарантирована
+компилятором (`Pick` от реального типа `Session`), а не соглашением.
 
 ### 2.6. Условия переходов
 
@@ -221,6 +270,50 @@ interface StepResult {
 - Пайплайн **не обходит** permission-слой: тот же `PermissionEvaluator`, те же правила per-tool и
   per-pattern.
 
+#### 2.7.1. Permission-обёртка пайплайна
+
+> **Реализовано (Э4.2):** `packages/core/src/engine/pipelines/permissions.ts` —
+> `checkPipelineToolPermission(check, deps)` → `{action:'allow'|'deny'|'ask', reason?,
+> matchedRule?, messageId?, params?}`. Обёртка **не** содержит своих правил: она
+> вызывает `PermissionEvaluator.check()` с теми же входными данными, что и
+> сессия.
+
+| Параметр permission-слоя | Значение для пайплайна | Почему |
+|---|---|---|
+| `sessionMode` | `spec.mode` (`plan`/`act`/`yolo`) | режим пайплайна объявляется спецификацией (ADR-025) |
+| `planMode` | `auto` | цикла plan→build в пайплайне нет — ветка `strict` (план должен быть утверждён) не срабатывает никогда; режимная рестрикция `plan` (write/edit/git-write запрещены) остаётся включённой |
+| `planApproved` | `true` | спецификация опубликована — шаг выполняется в рамках утверждённого плана |
+| `workingDir` | рабочий каталог проекта (ADR-075) | тот же, что у сессий проекта |
+| `workspaceReady` | `workspaceReady` контекста шага | гейт `workspace` (ADR-075) |
+| `shellPolicy` / `protectedPaths` / `runtimeDeps` | из инъектированных зависимостей | те же объекты, что у сессий (`definitions/*.json`, ADR-078/ADR-099) |
+
+> ⚠️ `planMode: 'off'` использовать **нельзя**: в ядре `isPlanRestricted()`
+> (ADR-025) трактует `'off'` как «планирование отключено полностью» — режимная
+> рестрикция `plan` при этом тоже выключается, и режим пайплайна `plan` перестал бы
+> запрещать запись (ADR-025/ADR-070 §2.9.1). Значение `auto` даёт то же отсутствие
+> цикла plan→build при сохранённой смысле режима.
+
+Три исхода проверки разведены по разным ветвям движка:
+
+| Исход | Что делает шаг |
+|---|---|
+| `allow` | инструмент исполняется (для `script` — команда уходит в shell-тул `execute_shell`) |
+| `deny` | шаг `failed` с кодом **`permission.denied`** (причина — в сообщении); обхода нет |
+| `ask` | **эскалация в гейт**: прогон встаёт на паузу (`awaiting_human`), в журнал пишется `gate.awaiting` с видом `tool_approval` (инструмент, аргументы, причина). Одобрение оператора (`resume({approved:true})`) даёт инструменту право исполняться: узел исполняется заново, но permission-проверка **не** повторяется (право считается выданным) |
+
+#### 2.7.2. Эскалация `ask` → human-гейт
+
+Наблюдателя-сессии у пайплайна нет, поэтому «спросить пользователя» нельзя:
+решение `ask` превращается в **гейт** — паузу прогона с данными для оператора.
+Механика гейта общая для обоих видов (§2.13):
+
+- `tool_approval` — эскалация `ask`-политики permission-слоя (инструмент, аргументы, причина);
+- `human` — вопрос human-шага (`node.prompt`/`node.title`).
+
+Оба вида гейта ставят прогон в `awaiting_human` и ждут `resume()`; отличаются они
+только данными для оператора и тем, что именно происходит при одобрении
+(для `tool_approval` — повторный вызов инструмента, для `human` — выход гейта).
+
 ### 2.8. Версии
 
 - Спецификация версионируется: `draft` редактируется, `published` — **неизменяемая** версия.
@@ -235,6 +328,32 @@ interface StepResult {
   владелец/проект, тайминги).
 - **События прогона** — шаг начался/завершился, переход по ребру, ожидание человека, падение.
 - Прецедент в репо: `scheduler/jobs.jsonl`, `webhooks/deliveries.jsonl`, `audit/maintenance.jsonl`.
+
+#### 2.9.1. Где хранятся данные гейта
+
+> **Реализовано (Э4.2):** данные гейта живут **в журнале прогона** — событие
+> `gate.awaiting` (append-only, порт `PipelineRunRepository.appendEvent`). Контракт
+> записи прогона при этом **не меняется** и миграция схемы хранилища не нужна.
+
+Событие `gate.awaiting` несёт payload гейта:
+
+| Поле | Смысл |
+|---|---|
+| `node` | узел, на котором прогон встал на паузу |
+| `kind` | вид гейта: `tool_approval` (эскалация `ask`) или `human` (вопрос human-шага) |
+| `toolName`, `args` | инструмент и его аргументы (для `tool_approval`) |
+| `question`, `title` | вопрос и заголовок (для `human`) |
+| `timeoutSec` | таймаут ожидания оператора |
+| `reason` | причина эскалации (решение permission-слоя) |
+
+Payload проходит общую санитизацию журнала (§2.12, инвариант 13): ключи, похожие на
+секреты, вырезаются; глубина/длина/размер массивов ограничены. Поэтому журнал —
+**аудит** гейта, а не источник аргументов для повторного вызова: при `resume` узел
+исполняется заново из спецификации (её снимок лежит в записи прогона), а аргументы
+инструмента берутся из `node.toolArgs` прогона.
+
+При `resume` движок читает последнее событие `gate.awaiting` прогона — это и есть
+источник «вида гейта» для продолжения.
 
 ### 2.10. Выход пайплайна
 
@@ -263,6 +382,10 @@ interface StepResult {
 > **Реализовано (Э3):** `packages/core/src/engine/pipelines/` — движок, условия, маппинг,
 > планировщик переходов, журнал прогона. Публичный API: `PipelineEngine`
 > (`packages/core/src/index.ts`).
+>
+> **Реализовано (Э4.1–Э4.2):** контекст шага (`step-context.ts`), permission-обёртка
+> (`permissions.ts`), помощники гейтов (`gate.ts`) и исполнители видов `tool`/`script`/`human`
+> (`executors/`). Исполнитель вида `agent` — Э4.3.
 
 **Движок** — `PipelineEngine`, второй оркестратор рядом с `ChatOrchestrator`. Знает только про
 порты слоя хранения (ADR-096) и исполнителей шагов — ни HTTP, ни сессий, ни очереди.
@@ -276,21 +399,87 @@ const engine = new PipelineEngine({ pipelines, runs, executors, exits?, logger?,
 // запуск: берётся опубликованная версия (version? — конкретная, иначе последняя)
 const run = await engine.run({ pipelineId, version?, trigger, projectId?, signal? });
 
-// продолжение после HITL-паузы
+// продолжение после HITL-паузы (с узла паузы)
 const resumed = await engine.resume(run.id, { approved: true, output?, comment? });
 ```
 
-**Исполнители шагов** — контракт `StepExecutor` (`{ kind, execute(ctx) }`); подбираются по виду
-узла (`kind`). В Э3 реализаций видов нет (Э4: `agent`/`script`/`tool`); `human` обрабатывает сам
-движок (HITL-гейт). Контекст шага — `StepExecutionContext`: `runId`/`pipelineId`/`version`/`node`/
-`spec`/`projectId?`/`trigger`/`input`/`vars`/`prev?`/`signal`/`attempt`/`mode`.
+```ts
+// исполнители шагов (Э4.2) — регистрируются по виду узла
+import {
+  createToolStepExecutor,
+  createScriptStepExecutor,
+  createHumanStepExecutor,
+} from '@itphx/synth-core';
 
-**HITL-пауза и возобновление.** Узел `human` → прогон `awaiting_human`, в журнал `gate.awaiting`,
-`run()` возвращает управление. `resume(runId, {approved, output?, comment?})`: результат гейта
-становится `StepResult` (`ok`/`failed`, отклонение — `pipeline.gate_rejected`), дальше — обычный
-цикл; состояние прогона и «текущий узел» восстанавливаются из записи прогона. Таймаут ожидания
-человека (`node.timeoutSec`) проверяется **по времени ожидания** — детерминированно и переживает
-рестарт процесса (`pipeline.gate_timeout`).
+const engine = new PipelineEngine({
+  pipelines,
+  runs,
+  executors: [
+    createToolStepExecutor({ toolRegistry, permissions: { permissionConfig, shellPolicy } }),
+    createScriptStepExecutor({ toolRegistry, permissions: { permissionConfig, shellPolicy } }),
+    createHumanStepExecutor(),
+  ],
+});
+```
+
+**Исполнители шагов** — контракт `StepExecutor` (`{ kind, execute(ctx) }`); подбираются по виду
+узла (`kind`). Реализованы (Э4.2) виды `tool`/`script`/`human` (`executors/`); `agent` — Э4.3.
+Исполнитель возвращает либо `StepResult`, либо исход-гейт (`StepOutcome`) — паузу с
+данными для оператора. Если исполнитель для вида узла не зарегистрирован, а узел —
+`human`, гейт обрабатывает сам движок (обратная совместимость с Э3).
+
+Контекст шага — `StepExecutionContext`: `runId`/`pipelineId`/`version`/`node`/`spec`/
+`projectId?`/`trigger`/`input`/`vars`/`prev?`/`signal`/`attempt`/`mode` + `step?`
+(контекст шага, §2.5.1), `gateDecision?` (решение оператора при повторном
+исполнении узла после `resume`) и `onGateTimeout?` (обработчик активного таймаута
+гейта).
+
+**Контекст шага** (Э4.1) — `buildPipelineStepContext`
+(`packages/core/src/engine/pipelines/step-context.ts`): проект, рабочий каталог, режим пайплайна,
+инструменты, MCP-скоуп (система + проект), проектные инструкции, каталог скиллов и агент шага.
+Движок отдаёт его исполнителю через `PipelineEngine.buildStepContext(ctx)`. Зависимости —
+опциональные поля `PipelineEngineDeps` (`projectStore`, `toolRegistry`, `mcpManager`,
+`instructionsResolver`, `agentRegistry`, `skillsCatalog`): те же объекты, что собраны в
+`server/app/deps.ts`. Модуль не знает про HTTP/сессии/очередь; отсутствие проекта или рабочего
+каталога — не ошибка (контекст без проектной части, file/shell/git-тулы недоступны с причиной
+`workspace`). Подробно — §2.5.1.
+
+**Гейт: пауза на любом узле.** Прогон может встать на паузу **на любом узле**: исполнитель
+возвращает исход-гейт (`StepGateOutcome` — либо вопрос human-шага `human`, либо эскалация
+`ask`-политики `tool_approval`, §2.7.2). Движок сохраняет текущий узел в записи прогона,
+пишет в журнал `gate.awaiting` с данными гейта (§2.9.1), ставит статус прогона
+`awaiting_human` и **возвращает управление** вызывающему.
+
+> **Реализовано (Э4.2):** исход-гейт — расширение уровня ядра (`StepOutcome` в
+> `engine/pipelines/types.ts`); контракт `StepResult` в `@itphx/synth-shared` (ADR-101 §3)
+> не менялся.
+
+**Возобновление (`resume`).** `resume(runId, {approved, output?, comment?})` продолжает прогон
+**с того узла, на котором он встал на паузу**:
+
+| Решение | Гейт `tool_approval` | Гейт `human` |
+|---|---|---|
+| `approved: true` | узел исполняется **заново**, но право на инструмент считается **выданным** (permission-проверка не повторяется); цикл продолжается из результата вызова инструмента | результат шага = выход гейта (`output`) + комментарий оператора; цикл продолжается |
+| `approved: false` | результат шага = `failed` с кодом **`pipeline.gate_rejected`**; дальше — обычный цикл (переход по условиям, иначе прогон падает) | то же |
+
+Узел при возобновлении исполняется заново с решением оператора в контексте шага
+(`ctx.gateDecision`) — это переживает рестарт процесса: состояние прогона, «текущий
+узел» и снимок спецификации восстанавливаются из записи прогона, а номер попытки — из
+журнала (`node.started`).
+
+**Активный таймаут гейта.** Ожидание оператора ограничено `node.timeoutSec`. Таймер
+живёт **в процессе** ядра (`setTimeout` + `unref`, `engine/pipelines/gate.ts`): по истечении
+шаг проваливается с кодом **`pipeline.gate_timeout`**, а движок продолжает прогон по
+условиям перехода (или завершает его, если перехода нет). Таймер закрытого гейта
+игнорируется (проверка по токену гейта) — уже завершённый прогон он не портит.
+
+Дополнительно таймаут ожидания проверяется **по времени ожидания** (при `resume`):
+детерминированно и переживает рестарт процесса, когда активного таймера уже нет
+(`pipeline.gate_timeout`).
+
+**Коды ошибок гейтов:** `pipeline.gate_rejected` (решение человека — отказ),
+`pipeline.gate_timeout` (истекло ожидание), `permission.denied` (отказ permission-слоя).
+Коды сохраняются и на уровне прогона — по ним видно, **почему** прогон встал или упал.
 
 **Точки выхода.** `PipelineExitHandler` (`handle(ctx)`) — точка расширения; по умолчанию no-op
 (`NoopPipelineExitHandler`). В Э3 выходы **не исполняются**: движок фиксирует сработавшие выходы

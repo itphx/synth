@@ -2611,6 +2611,11 @@ export const dict = {
   'pipeline.step_timeout': 'Истёк таймаут шага «{node}» ({timeoutSec} с)',
   'pipeline.run_not_found': 'Прогон пайплайна «{id}» не найден',
   'pipeline.invalid_state': 'Прогон пайплайна «{id}» нельзя возобновить (статус: {status})',
+  'pipeline.tool_not_found': 'Инструмент «{tool}» для шага «{node}» не зарегистрирован',
+  'pipeline.tool_failed': 'Инструмент «{tool}» шага «{node}» завершился ошибкой: {error}',
+  'pipeline.script_failed': 'Команда шага «{node}» завершилась с кодом {code}: {error}',
+  'pipeline.script_no_command': 'У шага «{node}» нет команды для запуска',
+  'pipeline.permission_denied': 'Шаг «{node}» отклонён по правам на инструмент «{tool}»: {reason}',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',

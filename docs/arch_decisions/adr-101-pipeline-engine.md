@@ -106,8 +106,39 @@
   таймауты шага, HITL-пауза (`awaiting_human`) и возобновление (`resume`), отмена через `AbortSignal`,
   журнал прогона (append-only, санитизация payload'а от секретов). Исполнители видов шагов — Э4;
   выходы пайплайна — только фиксируются (точка расширения `PipelineExitHandler` — Э5).
-- **Осталось:** Э4–Э7 — виды шагов, журнал и наблюдаемость (метрики `synth_pipeline_*`, события
-  `pipeline.run.*` в шине), API/права/проектная привязка, UI и визуальный редактор (`@xyflow/react`).
+- **Сделано (Э4.1):** контекст шага — `packages/core/src/engine/pipelines/step-context.ts`
+  (`buildPipelineStepContext`): проект (порт проектов), рабочий каталог (ADR-075; каталог не
+  создаётся молча, нет workspace → `workspaceReady: false` и file/shell/git-тулы недоступны с
+  причиной `workspace`), режим пайплайна (ADR-025), инструменты (`ToolRegistry` + MCP-тулы,
+  доступность — общий `computeToolAvailability`, ADR-070 §2.9.1), MCP-скоуп по системе и проекту
+  без сессионного снапшота (`resolveMcpProjectScope`, ADR-071), проектные инструкции (ADR-069),
+  каталог скиллов system/project (ADR-046) и агент шага (`AgentRegistry`). Контракт Composer'а
+  сужен до `ComposerSessionLike = Pick<Session, 'settings' | 'promptStates' | 'projectId'>`
+  (`engine/context/composer.ts`) — обычная `Session` остаётся структурно совместимой.
+  Исполнители видов шагов — Э4.2/Э4.3.
+- **Сделано (Э4.2):** permission-обёртка пайплайна (`engine/pipelines/permissions.ts` —
+  `checkPipelineToolPermission` поверх `PermissionEvaluator.check()`; режим пайплайна идёт как
+  `sessionMode`, `planApproved: true`; `deny` → шаг `failed` с `permission.denied`, `ask` →
+  эскалация в гейт) и исполнители видов `tool`/`script`/`human`
+  (`engine/pipelines/executors/`): `tool` — через `executeToolDef`, `script` — только через
+  shell-тул `execute_shell` (не голый `child_process`), `human` — пауза с вопросом и
+  **активным таймаутом** (`node.timeoutSec`, таймер в процессе с `unref`; по истечении шаг
+  `failed` с `pipeline.gate_timeout`). Общая механика гейта: исполнитель может встать на
+  паузу **на любом узле** (исход-гейт `StepOutcome` — расширение уровня ядра, контракт
+  `StepResult` в `shared` не менялся); движок пишет `gate.awaiting` с данными гейта (в
+  журнале, контракт записей и схема хранилища не менялись), ставит `awaiting_human` и
+  возвращает управление. `resume()` продолжает прогон **с узла паузы**: одобрение
+  `tool_approval` — повторный вызов инструмента с выданным правом, одобрение `human` —
+  выход гейта, отклонение — `failed` с `pipeline.gate_rejected`.
+- **Осталось:**
+  - **Э4.3** — исполнитель вида `agent` (свой Tool-Use-цикл в движке; LLM — только через
+    `GatewayProvider`, ADR-036; промпт — через `SystemPromptComposer`, ADR-070);
+  - **Э5** — журнал и наблюдаемость (метрики `synth_pipeline_*`, события `pipeline.run.*` в
+    шине), исполнение выходов пайплайна (`PipelineExitHandler` — пока no-op);
+  - **Э6** — API/права/проектная привязка (HTTP-роуты пайплайнов, роли, привязка к
+    проекту);
+  - **Э7** — UI и визуальный редактор (`@xyflow/react`) + актуализация `AGENTS.md`
+    (корневого и пакетных) — требует согласования владельцем.
   План этапов — в журнале задач (`.opencode/tasks/log.md`), формат и устройство — в
   [docs/PIPELINES.md](../PIPELINES.md).
 

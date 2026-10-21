@@ -307,6 +307,11 @@ export const ENGINE_MESSAGE_KEYS = [
   'pipeline.step_timeout',
   'pipeline.run_not_found',
   'pipeline.invalid_state',
+  'pipeline.tool_not_found',
+  'pipeline.tool_failed',
+  'pipeline.script_failed',
+  'pipeline.script_no_command',
+  'pipeline.permission_denied',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -607,6 +612,11 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'pipeline.step_timeout': ["node","timeoutSec"],
   'pipeline.run_not_found': ["id"],
   'pipeline.invalid_state': ["id","status"],
+  'pipeline.tool_not_found': ["tool","node"],
+  'pipeline.tool_failed': ["node","tool","error"],
+  'pipeline.script_failed': ["node","code","error"],
+  'pipeline.script_no_command': ["node"],
+  'pipeline.permission_denied': ["node","tool","reason"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */
