@@ -52,4 +52,8 @@ export { describeDefaultsRepository } from './misc.js';
 export { describePipelineRepository } from './pipeline-repository.contract.js';
 export { describePackRepository } from './pack-repository.contract.js';
 
+// ADR-101 (Pipeline Engine): спецификации пайплайнов, прогоны и журнал выполнения.
+export { describeProjectPipelineRepository } from './project-pipeline-repository.contract.js';
+export { describePipelineRunRepository } from './pipeline-run-repository.contract.js';
+
 export { createTmpDir, makeSession, makeMessage, makeProject, makeProfile } from './helpers.js';

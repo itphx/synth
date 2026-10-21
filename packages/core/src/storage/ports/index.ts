@@ -91,3 +91,25 @@ export type {
   PackInstallationProvides,
   PackInstallationStatus,
 } from './pack-repository.js';
+// ADR-101 (Pipeline Engine): спецификации пайплайнов (черновик + опубликованные
+// версии), прогоны и журнал выполнения. Не путать с legacy-портом ADR-100 выше —
+// он заменяется на Э3.
+export type {
+  ProjectPipelineRepository,
+  PipelineRecord,
+  PipelineVersionRecord,
+  PipelineScope,
+  PipelineFilter,
+} from './project-pipeline-repository.js';
+export type {
+  PipelineRunRepository,
+  PipelineRunRecord,
+  PipelineRunEventRecord,
+  PipelineRunFilter,
+  PipelineRunEventListOptions,
+} from './pipeline-run-repository.js';
+export {
+  COLLECTION_LIMIT_DEFAULT,
+  COLLECTION_LIMIT_MAX,
+  resolveCollectionLimit,
+} from './collection-limit.js';

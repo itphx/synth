@@ -15,7 +15,8 @@
  *     `skillBundles`/`dictionaries`/`secretPatterns`/`protectedPaths`/
  *     `maintenanceAudit`;
  *   - `buildAuditPorts(deps)`     → `securityAudit`/`egressRequests`;
- *   - `buildAnalyticsPorts(deps)` → `analyticsRollups` (PROP-102).
+ *   - `buildAnalyticsPorts(deps)` → `analyticsRollups` (PROP-102);
+ *   - `buildPipelinePorts(deps)`  → `projectPipelines`/`pipelineRuns` (ADR-101).
  *
  * Все доменные порты реализованы поверх SQL; FS/package-bound порты (`skills`,
  * `contextFiles`, `blobs`) — **файловые реализации** core (контент скиллов/
@@ -42,6 +43,7 @@ import { buildAuditPorts } from './ports/audit.js';
 import { buildAnalyticsPorts } from './ports/analytics.js';
 import type { CoreSyncDeps, PortDeps } from './ports/deps.js';
 import { buildEventPorts } from './ports/events.js';
+import { buildPipelinePorts } from './ports/pipelines.js';
 import { buildPrincipalPorts } from './ports/principals.js';
 import { buildSessionPorts } from './ports/sessions.js';
 import { createPostgresLocks } from './locks.js';
@@ -151,6 +153,10 @@ export function buildPostgresStorageContext(opts: BuildPostgresContextOptions): 
     // PROP-102: порт роллапов аналитики — пред-агрегированные суточные бакеты
     // (`analytics_rollups`, миграция 003) с атомарным `ON CONFLICT … DO UPDATE`.
     ...buildAnalyticsPorts(deps),
+    // ADR-101: спецификации пайплайнов, прогоны и журнал выполнения
+    // (`pipeline_specs`/`pipeline_versions`/`pipeline_runs`/`pipeline_run_events`,
+    // миграция 004).
+    ...buildPipelinePorts(deps),
     // FS/package-bound порты: остаются файловыми (см. шапку модуля).
     skills: file.skills,
     contextFiles: file.contextFiles,

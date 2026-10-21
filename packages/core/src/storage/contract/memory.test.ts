@@ -20,7 +20,9 @@ import {
   describeMcpRegistryRepository,
   describePackRepository,
   describePipelineRepository,
+  describePipelineRunRepository,
   describeProfileRepository,
+  describeProjectPipelineRepository,
   describeProjectRepository,
   describeProtectedPathsRepository,
   describeScheduleRepository,
@@ -54,7 +56,9 @@ import {
   MemoryMcpRegistryRepository,
   MemoryPackRepository,
   MemoryPipelineRepository,
+  MemoryPipelineRunRepository,
   MemoryProfileRepository,
+  MemoryProjectPipelineRepository,
   MemoryProjectRepository,
   MemoryProtectedPathsRepository,
   MemoryScheduleRepository,
@@ -211,6 +215,20 @@ describe('контрактные тесты in-memory реализаций по�
   // ADR-086 §5: реестр установок пакетов расширений.
   describePackRepository('MemoryPackRepository → PackRepository', async () => ({
     repo: new MemoryPackRepository(),
+  }));
+
+  // ADR-101: спецификации пайплайнов (черновик + опубликованные версии).
+  describeProjectPipelineRepository(
+    'MemoryProjectPipelineRepository → ProjectPipelineRepository',
+    async () => ({
+      repo: new MemoryProjectPipelineRepository(),
+    }),
+  );
+
+  // ADR-101: прогоны пайплайнов и журнал выполнения (append-only).
+  describePipelineRunRepository('MemoryPipelineRunRepository → PipelineRunRepository', async () => ({
+    repo: new MemoryPipelineRunRepository(),
+    pipelines: new MemoryProjectPipelineRepository(),
   }));
 });
 

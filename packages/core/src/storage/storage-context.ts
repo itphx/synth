@@ -43,7 +43,9 @@ import type {
   McpRegistryRepository,
   PackRepository,
   PipelineRepository,
+  PipelineRunRepository,
   ProfileRepository,
+  ProjectPipelineRepository,
   ProjectRepository,
   ProtectedPathsRepository,
   ScheduleRepository,
@@ -93,6 +95,8 @@ import { SkillStore } from './skill-store.js';
 import { SkillBundleStore } from './skill-bundle-store.js';
 import { FilePipelineStore } from './file-pipeline-store.js';
 import { FilePackStore } from './file-pack-store.js';
+import { FileProjectPipelineStore } from './file-project-pipeline-store.js';
+import { FilePipelineRunStore } from './file-pipeline-run-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
@@ -120,7 +124,9 @@ import {
   MemoryMcpRegistryRepository,
   MemoryPackRepository,
   MemoryPipelineRepository,
+  MemoryPipelineRunRepository,
   MemoryProfileRepository,
+  MemoryProjectPipelineRepository,
   MemoryProjectRepository,
   MemoryProtectedPathsRepository,
   MemoryScheduleRepository,
@@ -310,6 +316,13 @@ export interface StorageContext {
   pipelines: PipelineRepository;
   /** ADR-086 §5: реестр установок пакетов расширений. */
   packs: PackRepository;
+  /**
+   * ADR-101: спецификации пайплайнов (черновик + опубликованные версии).
+   * Не путать с `pipelines` выше — legacy-декларации ADR-100 (заменяются на Э3).
+   */
+  projectPipelines: ProjectPipelineRepository;
+  /** ADR-101: прогоны пайплайнов и журнал выполнения (append-only). */
+  pipelineRuns: PipelineRunRepository;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -534,6 +547,11 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
     pipelines: new FilePipelineStore({ dataDir }),
     // ADR-086 §5: реестр установок пакетов расширений (`packs.json`).
     packs: new FilePackStore({ dataDir }),
+    // ADR-101: спецификации пайплайнов (`pipelines/pipelines.json` +
+    // `pipelines/versions.json`) и прогоны (`pipelines/runs.json` +
+    // append-only `pipelines/run-events.jsonl`).
+    projectPipelines: new FileProjectPipelineStore({ dataDir }),
+    pipelineRuns: new FilePipelineRunStore({ dataDir }),
   };
 }
 
@@ -579,6 +597,8 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     blobs: new MemoryBlobStore(),
     pipelines: new MemoryPipelineRepository(),
     packs: new MemoryPackRepository(),
+    projectPipelines: new MemoryProjectPipelineRepository(),
+    pipelineRuns: new MemoryPipelineRunRepository(),
   };
 }
 

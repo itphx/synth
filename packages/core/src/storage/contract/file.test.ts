@@ -21,7 +21,9 @@ import {
   describeMcpRegistryRepository,
   describePackRepository,
   describePipelineRepository,
+  describePipelineRunRepository,
   describeProfileRepository,
+  describeProjectPipelineRepository,
   describeProjectRepository,
   describeProtectedPathsRepository,
   describeScheduleRepository,
@@ -67,6 +69,8 @@ import { ProtectedPathsStore } from '../../engine/security/protected-paths-store
 import { FileBlobStore } from '../file-blob-store.js';
 import { FilePipelineStore } from '../file-pipeline-store.js';
 import { FilePackStore } from '../file-pack-store.js';
+import { FileProjectPipelineStore } from '../file-project-pipeline-store.js';
+import { FilePipelineRunStore } from '../file-pipeline-run-store.js';
 
 /** Мастер-ключ для шифрующих хранилищ (base64, 32 байта) — файл master.key не создаётся. */
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -246,6 +250,23 @@ describe('контрактные тесты файловых реализаци�
   describePackRepository('FilePackStore → PackRepository', async () => ({
     repo: new FilePackStore({ dataDir: await tmp() }),
   }));
+
+  // ADR-101: спецификации пайплайнов (черновик + опубликованные версии).
+  describeProjectPipelineRepository(
+    'FileProjectPipelineStore → ProjectPipelineRepository',
+    async () => ({
+      repo: new FileProjectPipelineStore({ dataDir: await tmp() }),
+    }),
+  );
+
+  // ADR-101: прогоны пайплайнов и журнал выполнения (append-only).
+  describePipelineRunRepository('FilePipelineRunStore → PipelineRunRepository', async () => {
+    const dir = await tmp();
+    return {
+      repo: new FilePipelineRunStore({ dataDir: dir }),
+      pipelines: new FileProjectPipelineStore({ dataDir: dir }),
+    };
+  });
 });
 
 // `DefaultsRepository` реализуется в backend (`DefaultsStore`) — его контрактный

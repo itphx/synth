@@ -12,6 +12,7 @@
 import { MIGRATION_001_INIT } from './001-init.js';
 import { MIGRATION_002_EGRESS_AUDIT } from './002-egress-audit.js';
 import { MIGRATION_003_ANALYTICS_ROLLUPS } from './003-analytics-rollups.js';
+import { MIGRATION_004_PIPELINE_ENGINE } from './004-pipeline-engine.js';
 
 /** Одна версионированная SQL-миграция. */
 export interface PostgresMigration {
@@ -28,6 +29,7 @@ export const MIGRATIONS: readonly PostgresMigration[] = [
   { version: 1, id: '001_init', sql: MIGRATION_001_INIT },
   { version: 2, id: '002_egress_audit', sql: MIGRATION_002_EGRESS_AUDIT },
   { version: 3, id: '003_analytics_rollups', sql: MIGRATION_003_ANALYTICS_ROLLUPS },
+  { version: 4, id: '004_pipeline_engine', sql: MIGRATION_004_PIPELINE_ENGINE },
 ];
 
 /** Последняя (ожидаемая) версия схемы. */
