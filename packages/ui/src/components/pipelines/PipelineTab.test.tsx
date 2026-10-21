@@ -213,6 +213,15 @@ async function renderTab(): Promise<HTMLElement> {
 const action = (container: HTMLElement, name: string): HTMLElement | null =>
   container.querySelector(`[data-action="${name}"]`)
 
+/** Ввод текста в textarea (контролируемый React-инпут — через нативный сеттер). */
+async function setTextareaValue(el: HTMLTextAreaElement, value: string): Promise<void> {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!
+  await act(async () => {
+    setter.call(el, value)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 beforeEach(() => {
   mocks.getProjectPipeline.mockResolvedValue(DETAIL)
   mocks.getProjectPipelines.mockResolvedValue([DETAIL.pipeline])
@@ -363,6 +372,61 @@ describe('PipelineTab — действия', () => {
       description: 'Release pipeline',
       spec: SPEC,
     })
+  })
+
+  it('JSON-режим: очищенный `id` (серверное поле) не блокирует сохранение', async () => {
+    const container = await renderTab()
+
+    // Переключение на JSON-режим правки черновика.
+    await act(async () => {
+      ;(action(container, 'view-json') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    expect(textarea, 'поле JSON-режима').toBeTruthy()
+    const spec = JSON.parse(textarea.value)
+    delete spec.id
+    await setTextareaValue(textarea, JSON.stringify(spec, null, 2))
+
+    await act(async () => {
+      ;(action(container, 'save-draft') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    // UI не добавляет собственных требований к серверным полям — запрос уходит.
+    expect(mocks.updateProjectPipeline).toHaveBeenCalledTimes(1)
+    const body = mocks.updateProjectPipeline.mock.calls[0][2] as { spec: Record<string, unknown> }
+    expect(body.spec).not.toHaveProperty('id')
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['pipelines.draftSaved'], type: 'success' }),
+    )
+  })
+
+  it('JSON-режим: невалидная спецификация на сервер не уходит', async () => {
+    const container = await renderTab()
+
+    await act(async () => {
+      ;(action(container, 'view-json') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    const spec = JSON.parse(textarea.value)
+    spec.nodes = []
+    await setTextareaValue(textarea, JSON.stringify(spec, null, 2))
+
+    await act(async () => {
+      ;(action(container, 'save-draft') as HTMLButtonElement).click()
+    })
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(mocks.updateProjectPipeline).not.toHaveBeenCalled()
+    expect(mocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: enDict['pipelines.saveBlocked'], type: 'error' }),
+    )
   })
 
   it('удаление — после подтверждения закрывает вкладку', async () => {

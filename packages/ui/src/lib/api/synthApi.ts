@@ -248,6 +248,7 @@ export type {
   PipelineRunDetail,
   PipelineTemplate,
   PipelineSpecBody,
+  PipelineSpecInput,
   PipelineRunStartBody,
   PipelineRunResumeBody,
   PipelineTemplateInstantiateBody,

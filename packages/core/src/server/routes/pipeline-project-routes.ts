@@ -198,6 +198,40 @@ const RUN_RECORD_POLL_MS = 5;
 // ────────────────────────────── Схемы тел ──────────────────────────────
 
 /**
+ * Серверные поля спецификации: их проставляет сервер (ADR-101, Э6).
+ *
+ * Пустая строка в них означает «не задано»: клиент (например, диалог
+ * создания) может прислать `id: ''` — сервер всё равно подставит своё
+ * значение, поэтому такое тело не должно падать в 400.
+ */
+const SERVER_MANAGED_SPEC_FIELDS = ['id', 'projectId'] as const;
+
+/**
+ * Спецификация тела без пустых серверных полей: `id`/`projectId` с пустой
+ * строкой — «не задано» (остальные поля валидируются строго).
+ */
+function withoutEmptyServerFields(spec: unknown): unknown {
+  if (!spec || typeof spec !== 'object' || Array.isArray(spec)) return spec;
+  const source = spec as Record<string, unknown>;
+  const cleaned: Record<string, unknown> = { ...source };
+  for (const field of SERVER_MANAGED_SPEC_FIELDS) {
+    if (cleaned[field] === '') delete cleaned[field];
+  }
+  return cleaned;
+}
+
+/**
+ * Схема спецификации в теле: серверные поля (`id`/`version`/`status`/
+ * `projectId`) необязательны — их проставляет сервер.
+ */
+const pipelineSpecBodySchema = pipelineSpecSchema.partial({
+  id: true,
+  version: true,
+  status: true,
+  projectId: true,
+});
+
+/**
  * Тело создания/правки пайплайна: спецификация целиком.
  *
  * Сервер управляет полями `id`/`version`/`status`/`projectId` — они
@@ -210,7 +244,7 @@ const pipelineBodySchema = z.object({
   /** Описание пайплайна. */
   description: z.string().optional(),
   /** Спецификация пайплайна (ADR-101, `PipelineSpec`). */
-  spec: pipelineSpecSchema.partial({ id: true, version: true, status: true, projectId: true }),
+  spec: z.preprocess(withoutEmptyServerFields, pipelineSpecBodySchema),
 });
 
 /** Тело запуска прогона. */

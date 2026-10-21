@@ -244,6 +244,90 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       expect(body.error.problems.join(' ')).toContain('missing');
     });
 
+    it('POST /projects/:id/pipelines — пустой `spec.id` (серверное поле) не роняет тело в 400', async () => {
+      const { app } = createHarness({ projects });
+
+      // Клиент (диалог создания) может прислать `id: ''` — серверное поле
+      // «не задано»: сервер всё равно проставляет своё значение.
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Релизы',
+          spec: { ...spec(), id: '', version: 1, status: 'draft', projectId: 'proj-1' },
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.pipeline.id).toMatch(/^pl_/);
+      expect(body.pipeline.draft.id).toBe(body.pipeline.id);
+      expect(body.pipeline.draft.projectId).toBe('proj-1');
+    });
+
+    it('POST /projects/:id/pipelines — клиентский `spec.id` игнорируется (серверный)', async () => {
+      const { app } = createHarness({ projects });
+
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec({ id: 'abc' }) }),
+      });
+
+      expect(res.status).toBe(201);
+      const body: any = await res.json();
+      expect(body.pipeline.id).toMatch(/^pl_/);
+      expect(body.pipeline.id).not.toBe('abc');
+      expect(body.pipeline.draft.id).toBe(body.pipeline.id);
+    });
+
+    it('POST /projects/:id/pipelines — 400 на структурно невалидной спецификации (nodes: [])', async () => {
+      const { app } = createHarness({ projects });
+
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: { ...spec(), id: '', nodes: [] } }),
+      });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.join(' ')).toContain('узел');
+    });
+
+    it('POST /projects/:id/pipelines — 400 на семантически невалидной спецификации (узел «agent» без «agent»)', async () => {
+      const { app } = createHarness({ projects });
+
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spec: { ...spec(), id: '', nodes: [{ id: 'step-1', kind: 'agent' }] },
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.join(' ')).toContain('agent');
+    });
+
+    it('POST /projects/:id/pipelines — 400 без спецификации', async () => {
+      const { app } = createHarness({ projects });
+
+      const res = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Релизы' }),
+      });
+
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.problems.length).toBeGreaterThan(0);
+    });
+
     it('GET /projects/:id/pipelines — список пайплайнов проекта', async () => {
       const { app } = createHarness({ projects });
 
@@ -291,6 +375,31 @@ describe('Pipeline project routes (ADR-101, Э6)', () => {
       expect(body.pipeline.name).toBe('Релизы v2');
       expect(body.pipeline.draftVersion).toBe(1);
       expect(body.pipeline.draft.nodes[0].title).toBe('Согласовать v2');
+    });
+
+    it('PUT /projects/:id/pipelines/:pid — пустой `spec.id` (JSON-режим) не роняет запрос в 400', async () => {
+      const { app } = createHarness({ projects });
+      const created = await app.request('/api/v2/projects/proj-1/pipelines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spec: spec() }),
+      });
+      const { pipeline } = (await created.json()) as any;
+
+      // Пользователь очистил `id` в JSON-режиме редактора: серверное поле
+      // «не задано» — сервер подставляет своё значение.
+      const res = await app.request(`/api/v2/projects/proj-1/pipelines/${pipeline.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spec: { ...spec(), id: '', version: 1, status: 'draft' },
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      expect(body.pipeline.draft.id).toBe(pipeline.id);
+      expect(body.pipeline.draft.projectId).toBe('proj-1');
     });
 
     it('POST /projects/:id/pipelines/:pid/publish — версия растёт, опубликованная неизменяема', async () => {

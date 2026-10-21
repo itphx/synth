@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 
 import { useI18n } from '@/lib/i18n'
 import { synthApi } from '@/lib/api/synthApi'
-import type { ProjectData, ProjectPipeline, PipelineSpec } from '@/lib/api/synthApi'
+import type { ProjectData, ProjectPipeline, PipelineSpecInput } from '@/lib/api/synthApi'
 import { useNotification } from '@/hooks/useNotification'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
 
@@ -39,14 +39,12 @@ export function CreatePipelineDialog({
     setBusy(true)
     setError(null)
     try {
-      const spec: PipelineSpec = {
-        id: '',
+      // Серверные поля (`id`/`version`/`status`/`projectId`) проставляет сервер —
+      // в теле создания их нет.
+      const spec: PipelineSpecInput = {
         name: trimmed,
         ...(description.trim() ? { description: description.trim() } : {}),
-        version: 1,
-        status: 'draft',
         mode: 'plan',
-        projectId: project.id,
         nodes: [{ id: 'step-1', kind: 'agent', title: trimmed, agent: 'assistant' }],
         exits: [{ kind: 'none' }],
       }

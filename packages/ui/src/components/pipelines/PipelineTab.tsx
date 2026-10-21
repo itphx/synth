@@ -7,6 +7,7 @@ import type {
   PipelineRunRecord,
   PipelineRunStatus,
   PipelineSpec,
+  PipelineSpecInput,
   ProjectPipelineDetail,
 } from '@/lib/api/synthApi'
 import { pipelineSpecSchema, validatePipelineSpec } from '@itphx/synth-shared/types'
@@ -41,13 +42,39 @@ interface DraftValidation {
 }
 
 /**
+ * Схема спецификации **в теле запроса**: серверные поля (`id`/`version`/
+ * `status`/`projectId`) проставляет сервер — клиент не обязан их присылать
+ * (в JSON-режиме пользователь может очистить `id`, и это не ошибка).
+ */
+const pipelineSpecInputSchema = pipelineSpecSchema.partial({
+  id: true,
+  version: true,
+  status: true,
+  projectId: true,
+})
+
+/**
+ * Пустая строка в серверном поле (`id`/`projectId`) — «не задано»: сервер
+ * такие значения всё равно перезаписывает своим (то же правило, что на
+ * сервере — `POST/PUT /projects/:id/pipelines`).
+ */
+function withoutEmptyServerFields(spec: PipelineSpecInput): PipelineSpecInput {
+  const { id, projectId, ...rest } = spec
+  return {
+    ...rest,
+    ...(id ? { id } : {}),
+    ...(projectId ? { projectId } : {}),
+  }
+}
+
+/**
  * Проверка черновика: сначала структура (`pipelineSpecSchema`), затем
  * семантика графа (`validatePipelineSpec` — ссылки переходов, поля по виду
  * узла, выходы). Невалидная спецификация на сервер не уходит.
  */
-function validateDraftSpec(spec: PipelineSpec | null): DraftValidation {
+function validateDraftSpec(spec: PipelineSpecInput | null): DraftValidation {
   if (!spec) return { ok: false, problems: ['spec: нет спецификации'] }
-  const parsed = pipelineSpecSchema.safeParse(spec)
+  const parsed = pipelineSpecInputSchema.safeParse(withoutEmptyServerFields(spec))
   if (!parsed.success) {
     return {
       ok: false,
@@ -56,7 +83,13 @@ function validateDraftSpec(spec: PipelineSpec | null): DraftValidation {
       ),
     }
   }
-  const result = validatePipelineSpec(spec)
+  // Семантике графа серверные поля не нужны — подставляем значения по умолчанию.
+  const result = validatePipelineSpec({
+    ...parsed.data,
+    id: parsed.data.id ?? '',
+    version: parsed.data.version ?? 1,
+    status: parsed.data.status ?? 'draft',
+  })
   return result.ok ? { ok: true, problems: [] } : { ok: false, problems: result.problems }
 }
 
@@ -128,10 +161,10 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
   const runs = runsByPipeline[pipelineId] ?? []
 
   /** Спецификация черновика для сохранения (JSON-режим — из текста). */
-  const currentDraftSpec = (): { spec?: PipelineSpec; error?: string } => {
+  const currentDraftSpec = (): { spec?: PipelineSpecInput; error?: string } => {
     if (viewMode === 'json') {
       try {
-        return { spec: JSON.parse(draftJson) as PipelineSpec }
+        return { spec: JSON.parse(draftJson) as PipelineSpecInput }
       } catch (err) {
         return { error: err instanceof Error ? err.message : String(err) }
       }

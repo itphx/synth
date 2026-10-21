@@ -141,13 +141,24 @@ export interface PipelineTemplate {
 // ─────────────── Тела запросов ───────────────
 
 /**
+ * Спецификация **в теле запроса**: серверные поля (`id`/`version`/`status`/
+ * `projectId`) проставляет сервер — присылать их не нужно (а пустая строка
+ * в них означает «не задано» и сервером игнорируется).
+ */
+export type PipelineSpecInput = Omit<
+  PipelineSpec,
+  'id' | 'version' | 'status' | 'projectId'
+> &
+  Partial<Pick<PipelineSpec, 'id' | 'version' | 'status' | 'projectId'>>
+
+/**
  * Тело создания/правки пайплайна: спецификация целиком. Серверные поля
  * (`id`/`version`/`status`/`projectId`) проставляются на сервере.
  */
 export interface PipelineSpecBody {
   name?: string
   description?: string
-  spec: PipelineSpec
+  spec: PipelineSpecInput
 }
 
 /** Тело запуска прогона (по умолчанию — последняя опубликованная версия). */
