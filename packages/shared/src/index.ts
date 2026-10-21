@@ -81,6 +81,47 @@ export type {
   PipelineTrigger,
   PipelineInstance,
 } from './types/pipeline.js';
+// ADR-101: контракты пайплайна как второго движка (спецификация, узлы,
+// условные переходы, триггер прогона, результат узла, прогон, журнал).
+export {
+  PIPELINE_MODES,
+  pipelineModeSchema,
+  pipelineNodeKindSchema,
+  pipelineExitKindSchema,
+  pipelineConditionOpSchema,
+  jsonSchemaLikeSchema,
+  pipelineConditionSchema,
+  pipelineSpecEdgeSchema,
+  pipelineSpecNodeSchema,
+  pipelineExitSchema,
+  pipelineSpecSchema,
+  pipelineRunTriggerSchema,
+  pipelineStepResultSchema,
+  pipelineRunStatusSchema,
+  pipelineRunSchema,
+  pipelineRunEventTypeSchema,
+  pipelineRunEventSchema,
+  validatePipelineSpec,
+} from './types/pipeline-engine.js';
+export type {
+  PipelineMode,
+  PipelineNodeKind,
+  PipelineExitKind,
+  PipelineConditionOp,
+  JsonSchemaLike,
+  PipelineCondition,
+  PipelineTransition,
+  PipelineNode,
+  PipelineExit,
+  PipelineSpec,
+  PipelineRunTrigger,
+  StepResult,
+  PipelineRunStatus,
+  PipelineRun,
+  PipelineRunEventType,
+  PipelineRunEvent,
+  PipelineSpecValidationResult,
+} from './types/pipeline-engine.js';
 export { SYNTH_VERSION } from './version.js';
 export * from './model-metadata.js';
 
