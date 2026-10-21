@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema } from './types.js';
+import { mcpServerConfigSchema, toolsConfigSchema, mcpNetworkPolicySchema, mcpConfigSchema, skillsConfigSchema, instructionsConfigSchema, instructionSourceConfigSchema, metricsConfigSchema, executionConfigSchema } from './types.js';
 import { DEFAULT_MCP_PRIVATE_CIDRS } from '../types/index.js';
 
 describe('mcpServerConfigSchema (ADR-071 §2.2)', () => {
@@ -161,5 +161,55 @@ describe('instructionsConfigSchema (ADR-069)', () => {
     expect(parsed.maxChars).toBe(40_000);
     expect(parsed.excludeProjects).toEqual(['remote:p1']);
     expect(parsed.sources).toHaveLength(1);
+  });
+});
+
+describe('executionConfigSchema (PROP-077)', () => {
+  it('дефолты: mode=inline, remote без адресов, 30 с, fail-closed', () => {
+    const parsed = executionConfigSchema.parse({});
+    expect(parsed.mode).toBe('inline');
+    expect(parsed.remote.url).toEqual([]);
+    expect(parsed.remote.timeoutMs).toBe(30_000);
+    expect(parsed.remote.failMode).toBe('fail');
+    expect(parsed.remote.tokenSecret).toBe('');
+    expect(parsed.remote.concurrency).toBeUndefined();
+  });
+
+  it('принимает список адресов исполнителей и параметры remote', () => {
+    const parsed = executionConfigSchema.parse({
+      mode: 'remote',
+      remote: {
+        url: ['http://synth-executor:8080'],
+        timeoutMs: 60_000,
+        concurrency: 4,
+        failMode: 'inline-fallback',
+        tokenSecret: '/var/synth/secrets/executor-token',
+      },
+    });
+    expect(parsed.mode).toBe('remote');
+    expect(parsed.remote.url).toEqual(['http://synth-executor:8080']);
+    expect(parsed.remote.timeoutMs).toBe(60_000);
+    expect(parsed.remote.concurrency).toBe(4);
+    expect(parsed.remote.failMode).toBe('inline-fallback');
+    expect(parsed.remote.tokenSecret).toBe('/var/synth/secrets/executor-token');
+  });
+
+  it('fail-closed: неизвестный mode отклоняется схемой', () => {
+    expect(executionConfigSchema.safeParse({ mode: 'inlne' }).success).toBe(false);
+  });
+
+  it('fail-closed: неизвестный failMode отклоняется схемой', () => {
+    expect(
+      executionConfigSchema.safeParse({ remote: { failMode: 'fallback' } }).success,
+    ).toBe(false);
+  });
+
+  it('нечисловые/неположительные значения отклоняются', () => {
+    expect(
+      executionConfigSchema.safeParse({ remote: { timeoutMs: 0 } }).success,
+    ).toBe(false);
+    expect(
+      executionConfigSchema.safeParse({ remote: { concurrency: 0 } }).success,
+    ).toBe(false);
   });
 });

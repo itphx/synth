@@ -7,16 +7,23 @@
  * `dependency` — слой доступности сообщает об этом модели и UI.
  *
  * Модуль листовой: не импортирует permission/evaluator (иначе цикл) — только
- * `node:child_process`. Детекция кэшируется на уровне модуля (одноразовый
+ * порт исполнения. Детекция кэшируется на уровне модуля (одноразовый
  * пробинг на процесс), `resetRuntimeDepsCache()` — для тестов.
+ *
+ * PROP-077: пробинг идёт через порт исполнения (inline — то же `execFile`,
+ * что и раньше; в split-режиме — исполнитель, у которого свой toolchain).
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
+import type { ExecutionPort } from '../../execution/ports/index.js';
 
 const PROBE_TIMEOUT_MS = 3_000;
+
+/**
+ * Лимит буфера вывода пробы — прежний дефолт `execFile` (1 МБ). Сохраняем
+ * дословно: смена лимита изменила бы fail-open-семантику пробы.
+ */
+const PROBE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export type RuntimeDependency = 'git' | 'rg' | 'sh';
 
@@ -73,10 +80,21 @@ export function isRuntimeDepAvailable(deps: RuntimeDeps | undefined, dep: Runtim
  * Пробинг одного бинарника: `bin --version`. `ENOENT` → false (нет бинарника);
  * любая прочая ошибка (таймаут, ненулевой код выхода, EACCES) → true (fail-open,
  * не блокируем тул из-за неоднозначной ошибки).
+ *
+ * PROP-077: `execution` — порт исполнения; не задан — inline (прежнее поведение).
  */
-export async function probeBinary(bin: string, args: string[] = ['--version']): Promise<boolean> {
+export async function probeBinary(
+  bin: string,
+  args: string[] = ['--version'],
+  execution?: ExecutionPort,
+): Promise<boolean> {
+  const port = execution ?? new InlineExecutionPort();
   try {
-    await execFileAsync(bin, args, { timeout: PROBE_TIMEOUT_MS });
+    await port.execute({
+      command: { kind: 'argv', file: bin, args },
+      timeoutMs: PROBE_TIMEOUT_MS,
+      maxOutputBytes: PROBE_MAX_OUTPUT_BYTES,
+    });
     return true;
   } catch (err) {
     return (err as { code?: unknown } | null)?.code !== 'ENOENT';
@@ -88,13 +106,17 @@ let cache: Promise<RuntimeDeps> | undefined;
 /**
  * Детекция всех зависимостей параллельно. Промис кэшируется на уровне модуля:
  * повторные вызовы возвращают тот же промис (дедупликация пробинга).
+ *
+ * Порт исполнения берётся из первого вызова: режим исполнения — параметр
+ * запуска процесса (инвариант 24), сменить его «на лету» нельзя.
  */
-export function detectRuntimeDeps(): Promise<RuntimeDeps> {
+export function detectRuntimeDeps(execution?: ExecutionPort): Promise<RuntimeDeps> {
   if (!cache) {
+    const port = execution ?? new InlineExecutionPort();
     cache = Promise.all([
-      probeBinary(RUNTIME_DEP_COMMAND.git),
-      probeBinary(RUNTIME_DEP_COMMAND.rg),
-      probeBinary(RUNTIME_DEP_COMMAND.sh),
+      probeBinary(RUNTIME_DEP_COMMAND.git, ['--version'], port),
+      probeBinary(RUNTIME_DEP_COMMAND.rg, ['--version'], port),
+      probeBinary(RUNTIME_DEP_COMMAND.sh, ['--version'], port),
     ]).then(([git, rg, sh]) => ({ git, rg, sh }));
   }
   return cache;

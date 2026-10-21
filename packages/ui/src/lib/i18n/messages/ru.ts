@@ -2628,6 +2628,10 @@ export const dict = {
   'pipeline.llm_failed': 'Шаг «{node}» завершился ошибкой LLM ({type})',
   'pipeline.llm_unrecoverable': 'Шаг «{node}» завершился ошибкой LLM ({type}), повтор не поможет',
 
+  // --- Исполнение (PROP-077) ---
+  'execution.remote_url_required': 'Удалённый режим исполнения (execution.mode=remote) требует хотя бы один адрес исполнителя (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
+  'execution.remote_unavailable': 'Удалённый режим исполнения (execution.mode=remote) недоступен: {reason}',
+
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',
   'sshKeys.description': 'SSH-ключи per-agent для git-операций. Приватные ключи и парольные фразы шифруются at-rest и не отображаются после сохранения.',

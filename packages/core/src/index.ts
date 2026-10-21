@@ -66,6 +66,43 @@ export type { StoredDictionary, DictionaryLanguage } from './engine/router/index
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
 export { createToolRegistry, ToolRegistry } from './engine/tools/index.js';
+// PROP-077 (шаг 1): порт исполнения команд — интерфейс домена + реализации.
+// Домен (тулы shell/rg/git, inline-shell, детект зависимостей) ходит в порт,
+// а не в `execFile` напрямую: физический исполнитель взаимозаменяем
+// (inline — в процессе; remote — отдельный сервис, шаг 7 плана).
+export {
+  ExecutionError,
+  isExecutionPort,
+  DEFAULT_MAX_OUTPUT_BYTES,
+  DEFAULT_SHELL_BINARY,
+} from './execution/ports/index.js';
+export type {
+  ExecutionPort,
+  ExecRequest,
+  ExecResult,
+  ExecCommand,
+  ExecFailureReason,
+  ExecutionErrorInit,
+} from './execution/ports/index.js';
+export { InlineExecutionPort } from './execution/inline-execution-port.js';
+export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.js';
+// PROP-077 (шаг 7b): выбор порта по режиму `execution.mode` — фабрика
+// (`inline` → InlineExecutionPort, `remote` → удалённый порт из пакета
+// `@itphx/synth-executor`, динамический `import()`, fail-closed).
+export { createExecutionPortForConfig } from './execution/factory.js';
+export {
+  createRemoteExecutionPortFromConfig,
+  isExecutorPackageAvailable,
+  readExecutorToken,
+  RemoteExecutionUnavailableError,
+} from './execution/remote.js';
+// PROP-077 (шаг 3): проверка режима исполнения при старте процесса.
+export { checkExecutionMode, assertExecutionModeSupported } from './execution/startup.js';
+export type {
+  ExecutionStartupCheck,
+  ExecutionStartupIssue,
+  ExecutionEnvironmentProbe,
+} from './execution/startup.js';
 export {
   detectRuntimeDeps,
   resetRuntimeDepsCache,

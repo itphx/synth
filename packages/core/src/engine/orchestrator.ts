@@ -54,6 +54,8 @@ import type { HookBus } from './hooks/hook-bus.js';
 import type { RequestSessionService } from './events/request-session.js';
 
 import { ALL_RUNTIME_DEPS_AVAILABLE, RUNTIME_DEP_BINARY, TOOL_RUNTIME_DEP, type RuntimeDeps } from './tools/runtime-deps.js';
+import { InlineExecutionPort } from '../execution/inline-execution-port.js';
+import type { ExecutionPort } from '../execution/ports/index.js';
 import { getToolTrust } from './security/trust.js';
 import { detectPromptInjection, applyPolicy, wrapContent, buildWarnLine, type InjectionPolicy } from './security/prompt-injection.js';
 import { loadProtectedPaths } from './security/protected-paths.js';
@@ -228,6 +230,12 @@ export interface OrchestratorOptions {
    */
   runtimeDeps?: RuntimeDeps;
   /**
+   * PROP-077: порт исполнения команд. Не задан — inline-реализация (исполнение
+   * в процессе, прежнее поведение). Задаётся при сборке приложения: режим
+   * исполнения — параметр запуска, а не runtime-настройка (инвариант 24).
+   */
+  executionPort?: ExecutionPort;
+  /**
    * ADR-071 §2.6: chars-per-token модели из runtime-настроек (калибровка).
    * Не задан/нет значения — дефолт `DEFAULT_CHARS_PER_TOKEN`.
    */
@@ -395,6 +403,12 @@ export class ChatOrchestrator {
   private _skillsDisabled: SkillsDisabledRequest;
   /** ADR-070 §2.9.1: доступность внешних программ окружения (runtime-изменяемая). */
   private _runtimeDeps: RuntimeDeps;
+  /**
+   * PROP-077: порт исполнения команд (inline по умолчанию; в split-режиме —
+   * удалённый исполнитель). Режим — параметр запуска процесса, поэтому порт
+   * задаётся при сборке приложения и не переинициализируется на лету.
+   */
+  private readonly _executionPort: ExecutionPort;
   /** ADR-071 §2.6: загрузчик chars-per-token модели (калибровка). */
   private readonly _tokenRatioLoader: ((model: string) => Promise<number | undefined>) | undefined;
   /** ADR-071 §2.6: сохранение калибровки chars-per-token после ответа. */
@@ -628,6 +642,8 @@ export class ChatOrchestrator {
     this._skillsDisabled = options.skillsDisabled ?? { categories: [], groups: [], skills: [] };
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — fail-open по умолчанию.
     this._runtimeDeps = options.runtimeDeps ?? { ...ALL_RUNTIME_DEPS_AVAILABLE };
+    // PROP-077: порт исполнения — inline по умолчанию (прежнее поведение).
+    this._executionPort = options.executionPort ?? new InlineExecutionPort();
     this._tokenRatioLoader = options.tokenRatioLoader;
     this._onTokenRatioCalibrated = options.onTokenRatioCalibrated;
     this._skillRuntime = options.skillRuntime ?? null;
@@ -683,6 +699,10 @@ export class ChatOrchestrator {
             trustedProjectDirs: options.instructionsTrustedProjectDirs,
             // ADR-069 R3: workspace внутри workspacesRoot доверяется автоматически.
             workspacesRoot: this._workspacesRoot,
+            // PROP-077: `git rev-parse` (корень merged chain) — через тот же
+            // порт исполнения, что и тулы; иначе в split-режиме поиск корня
+            // репозитория шёл бы в control plane, а не в исполнителя.
+            execution: this._executionPort,
           })
         : null;
     // ADR-069 Фаза 2b: lazy-загрузчик подкаталогов (те же словарь/политики, что
@@ -1455,7 +1475,7 @@ export class ChatOrchestrator {
           isError: true,
         };
       }
-      const exec = await runInlineShell({ command, workingDir, abortSignal: signal });
+      const exec = await runInlineShell({ command, workingDir, abortSignal: signal, execution: this._executionPort });
       this._eventBus.publish(session.id, 'command.inline_shell', {
         session_id: session.id,
         command,
@@ -3013,6 +3033,9 @@ export class ChatOrchestrator {
                   // в permission-слой саб-агента (enforce `dependency`) и его
                   // `[НЕДОСТУПНЫЕ ТУЛЫ]`.
                   runtimeDeps: this._runtimeDeps,
+                  // PROP-077: порт исполнения команд — тулы (shell/rg/git)
+                  // ходят в него вместо прямого `execFile`.
+                  executionPort: this._executionPort,
                   // ADR-075: гейт `workspace` наследуется саб-агентом —
                   // его permission-слой не даёт обойти отсутствие рабочего каталога.
                   workspaceReady,

@@ -387,6 +387,12 @@ export const SYSTEM_MESSAGES = {
     'Step "{node}" has no LLM provider configured (provider: "{provider}")',
   'pipeline.llm_failed': 'Step "{node}" failed: LLM error ({type})',
   'pipeline.llm_unrecoverable': 'Step "{node}" failed: LLM error ({type}) is not recoverable',
+
+  // --- Исполнение (PROP-077) ---
+  'execution.remote_url_required':
+    'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
+  'execution.remote_unavailable':
+    'Remote execution mode (execution.mode=remote) is unavailable: {reason}',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

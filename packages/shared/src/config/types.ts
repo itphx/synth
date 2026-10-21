@@ -118,6 +118,68 @@ export const storageConfigSchema = z.object({
   maxUploadBytes: z.number().int().min(MIN_UPLOAD_BYTES).max(MAX_UPLOAD_BYTES_LIMIT).optional(),
 });
 
+// --- Исполнение (PROP-077) ---
+
+/**
+ * PROP-077: топология исполнения — переключатель запуска (`execution.mode`).
+ *
+ * - `inline` (дефолт) — исполнение в процессе backend'а (прежнее поведение,
+ *   all-in-one образ);
+ * - `remote` — отдельные исполнители (`RemoteExecutionPort` + сервис-исполнитель,
+ *   шаг 7 плана PROP-077).
+ *
+ * Секция — **параметр запуска**, а не runtime-настройка: смена режима — только
+ * рестартом процесса (инвариант 24 — process-глобальные решения не
+ * переинициализируются на лету). Значение `mode` — **fail-closed**: неизвестное
+ * явное значение (опечатка `inlne`) валит старт, а не молча выбирает дефолт
+ * (как `storage.backend`).
+ */
+export const EXECUTION_MODES = ['inline', 'remote'] as const;
+export type ExecutionMode = (typeof EXECUTION_MODES)[number];
+
+/**
+ * Поведение при недоступном исполнителе:
+ * - `fail` (дефолт) — fail-closed: инструмент недоступен с явной причиной;
+ * - `inline-fallback` — backend исполняет команду сам; **только явной настройкой**
+ *   (в managed-контуре это обход изоляции).
+ */
+export const EXECUTION_FAIL_MODES = ['fail', 'inline-fallback'] as const;
+export type ExecutionFailMode = (typeof EXECUTION_FAIL_MODES)[number];
+
+/**
+ * Таймаут exec-вызова по умолчанию (30 с — как у нынешних тулов: shell/search/git).
+ * Больший лимит для shell (до 120 с) — свойство тула, не конфига.
+ */
+export const DEFAULT_EXECUTION_TIMEOUT_MS = 30_000;
+
+/**
+ * Параметры удалённого исполнителя (`execution.remote`).
+ *
+ * - `url` — **список** адресов исполнителей (K8s Service `synth-executor`,
+ *   `http://…`); пусто при `mode: remote` → fail-closed на старте;
+ * - `timeoutMs` — таймаут exec-вызова;
+ * - `concurrency` — лимит одновременных exec-вызовов на backend; не задан —
+ *   число CPU процесса;
+ * - `failMode` — поведение при недоступном исполнителе;
+ * - `tokenSecret` — **путь/ссылка** на токен исполнителя, НЕ значение
+ *   (инвариант 13): сам токен — `synth_exec_…` и живёт в Secret/файле.
+ */
+export const executionRemoteConfigSchema = z.object({
+  url: z.array(z.string()).default([]),
+  timeoutMs: z.number().int().min(1).default(DEFAULT_EXECUTION_TIMEOUT_MS),
+  /** Лимит одновременных exec-вызовов; не задан — число CPU процесса. */
+  concurrency: z.number().int().min(1).optional(),
+  failMode: z.enum(EXECUTION_FAIL_MODES).default('fail'),
+  /** Путь/ссылка на токен исполнителя (НЕ значение — инвариант 13). */
+  tokenSecret: z.string().default(''),
+});
+
+/** PROP-077: секция `execution` — топология исполнения (параметр запуска). */
+export const executionConfigSchema = z.object({
+  mode: z.enum(EXECUTION_MODES).default('inline'),
+  remote: executionRemoteConfigSchema.default({}),
+});
+
 export const authConfigSchema = z.object({
   debugMode: z.boolean().default(false),
   apiKey: z.string().optional(),
@@ -927,6 +989,7 @@ export const remoteConfigSchema = z.object({
 export const synthConfigSchema = z.object({
   server: serverConfigSchema.default({}),
   storage: storageConfigSchema.default({}),
+  execution: executionConfigSchema.default({}),
   auth: authConfigSchema.default({}),
   llm: llmConfigSchema.default({}),
   core: coreConfigSchema.default({}),
@@ -963,6 +1026,10 @@ export type ServerConfig = z.infer<typeof serverConfigSchema>;
 export type StorageConfig = z.infer<typeof storageConfigSchema>;
 /** PROP-032: параметры PostgreSQL-backend (`storage.postgres`). */
 export type PostgresStorageConfig = z.infer<typeof postgresStorageConfigSchema>;
+/** PROP-077: секция `execution` — топология исполнения. */
+export type ExecutionConfig = z.infer<typeof executionConfigSchema>;
+/** PROP-077: параметры удалённого исполнителя (`execution.remote`). */
+export type ExecutionRemoteConfig = z.infer<typeof executionRemoteConfigSchema>;
 export type AuthConfig = z.infer<typeof authConfigSchema>;
 export type LLMConfig = z.infer<typeof llmConfigSchema>;
 export type CoreConfig = z.infer<typeof coreConfigSchema>;

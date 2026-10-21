@@ -81,6 +81,18 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   имя `SYNTH_<SECTION>_<KEY>` (camelCase→SNAKE_CASE), невалидное значение → warn + игнор;
   приоритет `CLI > env > config.yaml > defaults` (ADR-023). Объектные/нескалярные ключи
   (`events.identityMap`, `events.dedupStore`, `mcp.servers`, …) остаются в config.yaml.
+- PROP-077: секция `execution` — **переключатель топологии исполнения** (`mode`:
+  `inline`|`remote`; `remote.url`/`remote.timeoutMs`/`remote.concurrency`/`remote.failMode`/
+  `remote.tokenSecret`); Zod `executionConfigSchema` + `ExecutionConfig`/`ExecutionMode`/
+  `ExecutionFailMode` (`config/types.ts`), дефолты — `config/defaults.ts`, резолвер
+  `resolveExecutionConfig`/`resolveExecutionMode` (`config/execution.ts`). Env (ровно эти):
+  `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL` (список через запятую),
+  `SYNTH_EXECUTION_TOKEN` (путь/ссылка на токен, НЕ значение — инвариант 13),
+  `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`, `SYNTH_EXECUTION_FAIL_MODE`;
+  CLI `--execution-mode` (core `main.ts`). Приоритет — CLI > env > config.yaml > дефолт
+  (ADR-023); **fail-closed** на неизвестном `mode`/`failMode` (как `storage.backend`);
+  `remote.concurrency` по умолчанию — число CPU процесса. Секция — **параметр запуска**
+  (инвариант 24): смена режима — только рестартом.
 - PROP-032 (слой хранения, ADR-096/ADR-097): секция `storage` — `backend`
   (`file`|`memory`|`postgres`, резолвер `resolveStorageBackend` + env
   `SYNTH_STORAGE_BACKEND`, **fail-closed** на неизвестном явном значении), `postgres`
@@ -177,6 +189,9 @@ defaults ← yaml ← overrides), `resolve.ts` (env-резолверы, `ensureD
   (причина `system`/`project`/`session`).
 - ADR-030/ADR-089: `event.ingested`, `event.routed.*`, `event.binding.not_found`,
   `event.source_not_allowed`, `event.duplicate`, `hook.blocked`.
+- PROP-077: `execution.remote_url_required`, `execution.remote_unavailable` (`{reason}`) —
+  fail-closed на старте при `execution.mode=remote` (удалённый исполнитель — шаг 7b плана
+  PROP-077: пакет исполнителя недоступен / токен не читается).
 
 ## Тесты и сборка
 

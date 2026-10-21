@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# publish.sh — публикация всех 7 npm-пакетов Synth в реестры
+# publish.sh — публикация всех 8 npm-пакетов Synth в реестры
 #
 # 1. Выполняет сборку (build.sh) если не собрано
 # 2. Проверяет авторизацию в npm
 # 3. Публикует пакеты в строгом порядке зависимостей:
-#    shared → core → storage-postgres → ui → backend → sdk → synth
+#    shared → core → executor → storage-postgres → ui → backend → sdk → synth
 #
 # Использование:
 #   ./publish.sh                          — сборка + публикация (оба реестра)
@@ -55,8 +55,9 @@ for arg in "$@"; do
 done
 
 # Порядок публикации строго по иерархии зависимостей:
-# shared ← core ← backend, ui ← shared, sdk ← shared, storage-postgres ← core (peer), synth ← core+ui+shared
-PACKAGES=(shared core storage-postgres ui backend sdk synth)
+# shared ← core ← backend, ui ← shared, sdk ← shared, storage-postgres ← core (peer),
+# executor ← core (peer) + shared, synth ← core+ui+shared
+PACKAGES=(shared core executor storage-postgres ui backend sdk synth)
 
 # Имя npm-пакета по каталогу
 pkg_name() {

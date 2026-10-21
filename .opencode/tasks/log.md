@@ -2,6 +2,64 @@
 
 > Архив: `log.1.md` (по 2026-08-31), `log.2.md` (2026-08-31 — 2026-09-16), `log.3.md` (2026-09-17 — 2026-10-07).
 
+## 2026-10-21 — PROP-082/PROP-077: шаги 4, 7a, 7b — flavor'ы dev/devops, пакет исполнителя, подключение к core
+- **Задача:** шаг 4 плана PROP-082 (flavor'ы `dev`/`devops`) и шаги 7a–7b плана PROP-077 (пакет исполнителя и его подключение к core) — по решению пользователя: упаковка исполнителя **отдельным пакетом по образцу слоя хранения**, транспорт — **HTTP/1.1 + JSON**.
+- **Тип:** feature / infra
+- **Исполнитель:** @orchestrator → @fixer ×6 (образы; решение в доках; пакет; подключение; релизная обвязка; проверка и починка) → @fixer (коммиты)
+- **Результат:** PASS
+- **Где:** worktree `/mnt/data/Agent/dev/Synth/wt-execution-port`, ветка `feature/execution-port`.
+- **Принятые решения:**
+  - **Упаковка — по образцу слоя хранения** (ADR-096/097): `@itphx/synth-executor` — отдельный in-tree пакет, `dependencies` — shared, `peerDependencies` — core, импорт типов только `import type`, runtime-импорт core — точечный (переиспользование `InlineExecutionPort`, чтобы семантика исполнения в воркере не разошлась с control plane); контрактный suite — **в core**; core подключает пакет **динамическим `import()`** по `execution.mode=remote` (строковая константа — как у драйвера БД, чтобы не зациклилась сборка), fail-closed; намеренный цикл `core ↔ executor` — как `core ↔ storage-postgres`.
+  - **Транспорт — HTTP/1.1 + JSON**: `POST /exec`, `GET /capabilities` (рукопожатие версии протокола), `GET /health`; bearer `synth_exec_…` только из Secret; TLS — через `egressFetch` (ADR-099), своих агентов нет.
+  - **Containment `cwd` — на исполнителе** (fail-closed, symlink-aware): без него удалённый порт — выполнение команд в произвольном каталоге. Отличие зафиксировано в контракте: `inline-only` (cwd вне каталога проекта исполняется) и `remote-only` (cwd вне workspace → `EWORKSPACE`).
+  - **Токен** — только путь/ссылка (`execution.remote.tokenSecret`), значение читается из файла и не логируется (инвариант 13).
+  - **Fail-closed снят у `remote`**: режим разрешён, только если пакет доступен и токен читается; иначе — `execution.remote_unavailable`. Детект бинарников (ADR-078) идёт **в окружение исполнителя** — через порт.
+  - **Образы:** flavor `core` (all-in-one: control plane + toolchain) — 101,6 МБ; `dev` — 320,1 МБ; `devops` — 508,5 МБ; slim — 63,8 МБ (не изменился). Upstream-поставки с пином+sha256, MCP-серверы tier 4 — с npm-integrity.
+  - Найдено и зафиксировано: `docker` в debian-ветке невозможен без демона (fail-closed); `terraform` → симлинк на OpenTofu; `buildah` в контейнере требует `SYS_ADMIN`/`SYS_RESOURCE`/`/dev/fuse`/`--isolation=chroot` — в типовом pod'е сборка образов из сессии не работает; kaniko не задаёт `BUILDPLATFORM`/`TARGETPLATFORM`, поэтому явный `--platform` в flavor-стадии уронил бы CI-сборку.
+- **Проверки:** `pnpm typecheck` — 0 ошибок; `pnpm lint` — 0 errors; `pnpm test` — 7427 passed, 0 failed (core 4592, executor 39, ui 1632, backend 599, shared 502, storage-postgres 39, sdk 24); `adr-check`/`docs-link-check` — 0 ошибок; сборки образов slim/core/dev/devops — успешно, toolchain и MCP-серверы проверены, backend отвечает `/health` 200.
+- **Коммиты:** `929ca1a2` (A — feat: flavor-образы dev и devops с toolchain, шаг 4), `6d08c26a` (B — feat: пакет @itphx/synth-executor, шаг 7a), `dc080944` (C — feat: подключение удалённого исполнителя в core и backend, шаг 7b), `0eb86600` (D — build: релизная обвязка восьмого пакета), `2d3e4f29` (E — docs: восьмой пакет и режим remote в архитектуре и справочниках), `36c12c1b` (F — fix(ci): убран дубль ключа if-no-files-found в загрузке offline-образов), этот (журнал).
+- **Осталось:** 7c — Helm `executor.*` (Deployment/Service/пул), RWX-том workspace, токен в Secret, `NetworkPolicy`; 7d — метрики `synth_executor_*` и `/metrics` исполнителя, runbook переключения топологии; шаг 5 — flavor'ы `browser`/`full` (debian) и образ worker'а `synth-executor`; шаг 6 — CI: QEMU/binfmt для arm64 flavor'ов, теги `:core`, smoke-тесты образов, `scripts/docker-cleanup.mjs` под новый репозиторий.
+
+## 2026-10-21 — PROP-077, шаг 3: секция `execution` в конфиге (переключатель топологии)
+- **Задача:** шаг 3 плана PROP-077 — секция `execution` в конфигурации: `mode`/`remote.*`, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed.
+- **Тип:** feature
+- **Исполнитель:** @orchestrator → @fixer ×2 (реализация; доки и проверки) → @fixer (коммит)
+- **Результат:** PASS
+- **Где:** worktree `/mnt/data/Agent/dev/Synth/wt-execution-port`, ветка `feature/execution-port`.
+- **Принятые решения:**
+  - Секция `execution` в `config.yaml` **необязательна**: дефолт `inline` — прежнее поведение, обратная совместимость (существующие установки не затронуты).
+  - Дефолты: `mode: inline`, `remote.url: []`, `remote.timeoutMs: 30000`, `remote.concurrency` = число CPU процесса (`availableParallelism()`), `remote.failMode: fail`, `remote.tokenSecret: ''`.
+  - Приоритет — CLI-флаг > env > `config.yaml` > дефолт (ADR-023); env-имена ровно шесть: `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL`, `SYNTH_EXECUTION_TOKEN`, `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`, `SYNTH_EXECUTION_FAIL_MODE`.
+  - **Fail-closed на трёх уровнях:** неверный `mode`/`failMode` → ошибка конфигурации (как `storage.backend`); `mode: remote` без адресов → «требуется хотя бы один адрес исполнителя»; `mode: remote` с адресами → «удалённый исполнитель ещё не реализован» (шаг 7). Заглушки «молча уйти в inline» нет.
+  - Токен — только путь/ссылка, не значение (инвариант 13); тексты — через `shared/i18n` (ADR-041), ключи `execution.remote_url_required`/`execution.remote_not_supported`.
+  - Секция — параметр запуска, не runtime-настройка: смена режима — только рестартом (инвариант 24).
+- **Проверки:** `pnpm typecheck` — 0 ошибок; `pnpm lint` — 0 errors (191 pre-existing warnings); `pnpm test` — 7357 passed, 0 failed (node v26; в CI — node 22); `adr-check`/`docs-link-check` — 0 ошибок.
+- **Осталось:** шаг 7 — executor-сервис, `RemoteExecutionPort` (HTTP через `egressFetch`, ADR-099; bearer `synth_exec_…`), токен в Secret, чарт `executor.*` (Deployment/Service/пул), RWX-том workspace, фаза 1 матрицы (`execute_shell`/`grep_files`/`python`); шаги 4–6 — flavor'ы `dev`/`devops`/`browser`/`full`, образ worker'а `synth-executor`, CI (QEMU/binfmt, теги `:core`, smoke-тесты); шаг 10 — метрики `synth_executor_*`; шаг 12 — volume/`fsGroup` и документация.
+
+## 2026-10-21 — PROP-077/PROP-082, шаги 1–2: порт исполнения и all-in-one образ (flavor `core`)
+- **Задача:** «С чего начнём реализацию?» → по плану PROP-077/PROP-082 — шаг 1 (порт `ExecutionPort`) и шаг 2 (мультистадийный образ с flavor `core`).
+- **Тип:** feature / refactor / infra
+- **Исполнитель:** @orchestrator → @fixer ×3 (порт; добивка шага 1; образы) → @fixer (коммиты)
+- **Результат:** PASS
+- **Где:** worktree `/mnt/data/Agent/dev/Synth/wt-execution-port`, ветка `feature/execution-port`.
+- **Принятые решения:**
+  - Команда в порте — **дискриминированный union** `{kind:'shell'}` | `{kind:'argv'}` (не строка): в коде есть `sh -c` и прямой argv без shell; строкой пришлось бы либо потерять различие, либо получить инъекцию в argv-пути. `stdin` не реализован.
+  - Неуспешный код выхода — **ошибкой** `ExecutionError` (`reason:'nonzero_exit'`), а не полем результата: так дословно сохраняется текст «Command failed: …», который видит модель; `ExecResult.exitCode` у успеха всегда `0`.
+  - Ошибка типизирована (`reason`/`code`/`stdout`/`stderr`/`killed`/`signal`/`truncated`/`durationMs`), исходное `name` сохраняется → распознавание `AbortError` не сломано.
+  - Два лимита вывода разведены: `maxOutputBytes` (10 МБ, порт — как прежний `maxBuffer`) и обрезка на уровне тула (shell 100 КБ, git 20 КБ, rg 200 строк).
+  - Шов внедрения — существующий `ctx.extra.executionPort` (`resolveExecutionPort(ctx)`), без process-глобальных синглтонов (инвариант 24); порт по умолчанию — `InlineExecutionPort`.
+  - Швы `project-context.ts` и `context/instructions.ts` закрыты в этом шаге — иначе в split-режиме они поедут в control plane мимо исполнителя.
+  - Вне порта остаются `simple-git` (`git/git-service.ts`), MCP stdio (`engine/mcp/client.ts`), обслуживание — фазы 2–3 плана.
+  - Образ: стадия `core` (all-in-one: control plane + toolchain) с `RUN` в целевой архитектуре; стадия `slim` — последняя и **без `RUN`**, поэтому дефолтная сборка не меняется и arm64 slim собирается без QEMU.
+  - arm64 для flavor'ов — **per-arch** (вариант A): требует QEMU/binfmt на раннере (шаг 6, CI).
+  - Найдено: kaniko v1.24.0 не задаёт `BUILDPLATFORM`/`TARGETPLATFORM` → явный `--platform` в flavor-стадии уронил бы CI-сборку; стадия `core` оставлена без него.
+  - Найдено: `${var:+word}` некорректно разбирается в busybox ash (alpine) — таблицы тиров разбираются через `sed`/`tr`.
+  - Найдено: в `node:22-alpine` uid/gid 1000 заняты пользователем `node` → отдельная учётка не создаётся, каталоги принадлежат 1000:1000.
+  - Замеры: slim — 63,8 МБ, core — 101,6 МБ (оценка «~200 МБ» в PROP-082 была завышена вдвое — исправлена).
+  - Регрессия slim проверена сравнением file-manifest'ов (8422 файла) и config старого/нового Dockerfile — идентичны (различаются только `/etc/hostname` и `/etc/hosts`, которые подставляет рантайм контейнера).
+- **Проверки:** `pnpm typecheck` — 0 ошибок; `pnpm lint` — 0 ошибок; `pnpm test` — 7320 passed, 0 failed (node v26; в CI — node 22, расхождений не проявилось); `adr-check`/`docs-link-check` — 0 ошибок; сборки образов slim/core — успешно, smoke-проверки toolchain'а — все 17 бинарников на месте, backend отвечает `/health` 200.
+- **Осталось:** шаг 3 — секция `execution` в конфиге (env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed); шаги 4–5 — flavor'ы `dev`/`devops`/`browser`/`full` и образ worker'а `synth-executor` (для debian-ветки — решение по `yq`: в apt это python-реализация, CLI несовместим с Go-вариантом, и по `pip` в debian); шаг 6 — CI (QEMU/binfmt, теги `:core`, smoke-тесты, `scripts/docker-cleanup.mjs` под новые репозитории); шаг 7 — executor-сервис, `RemoteExecutionPort`, чарт `executor.*`, RWX-том workspace; шаг 10 — метрики `synth_executor_*`; шаг 12 — volume/`fsGroup` под HOME-кэши и документация.
+
 ## 2026-10-21 — PROP-077/PROP-082: проработка двух топологий развёртывания (отдельные контейнеры-исполнители vs all-in-one)
 - **Задача:** «Нужно проработать prop с отдельными контейнерами воркерами / экзекьюторами, а также с большим контейнером All-in-one». Решение пользователя: расширить PROP-077 и PROP-082, объём — полный цикл.
 - **Тип:** design / docs

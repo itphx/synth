@@ -1,11 +1,12 @@
 import { Command } from 'commander';
-import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
-import type { SynthConfig } from '@itphx/synth-shared';
+import { loadConfig, resolveDataDir, resolvePort, resolveDefaultWorkspace, resolveWorkspacesRoot, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveHome, resolveProfilesPath, resolveCredentialsPath, resolveIgnoreRules, resolveMaxUploadBytes, resolveExecutionConfig, ensureDataDir, defaultConfig, SYNTH_VERSION } from '@itphx/synth-shared';
+import type { SynthConfig, ResolvedExecutionConfig } from '@itphx/synth-shared';
 import { join, resolve } from 'node:path';
 import { checkForUpdatesBackground } from './update-checker.js';
 import { t as sm } from './engine/system-messages.js';
 import { initTlsTrust } from './security/tls.js';
 import { configureRestart, resolveRestartMode, RESTART_EXIT_CODE } from './server/restart.js';
+import { checkExecutionMode } from './execution/startup.js';
 import { setSynthReady } from './metrics/collectors/ready.js';
 
 const program = new Command();
@@ -55,6 +56,38 @@ async function buildCliStorage(
   });
 }
 
+/**
+ * PROP-077: режим исполнения — **параметр запуска** (инвариант 24: смена режима
+ * — только рестартом). Fail-closed:
+ * - неизвестное значение `mode`/`failMode` (env/CLI/config) — ошибка с текстом;
+ * - `remote` без адресов исполнителей — «требуется хотя бы один адрес»;
+ * - `remote` без пакета исполнителя / без читаемого токена — «удалённый режим
+ *   недоступен» (старт прерывается, а не «молча уходит в inline»).
+ *
+ * `inline` (дефолт) — прежнее поведение, ничего не меняется.
+ *
+ * @returns эффективная секция `execution` — её же получает сборка приложения
+ *          (порт исполнения собирается по этому режиму).
+ */
+async function resolveExecutionStartup(
+  synth: SynthConfig,
+  cliMode?: string,
+): Promise<ResolvedExecutionConfig> {
+  let execution: ResolvedExecutionConfig;
+  try {
+    execution = resolveExecutionConfig(synth, process.env, { mode: cliMode });
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+  const check = await checkExecutionMode(execution);
+  if (!check.ok) {
+    console.error(check.message);
+    process.exit(1);
+  }
+  return execution;
+}
+
 program
   .name('synth')
   .description('Synth Core — автономный AI-движок')
@@ -80,6 +113,10 @@ program
   .option(
     '--restart-mode <mode>',
     'graceful restart: disabled (по умолчанию) | process (внешний супервизор) | supervisor (dev.sh)',
+  )
+  .option(
+    '--execution-mode <mode>',
+    'топология исполнения: inline (по умолчанию) | remote (PROP-077; удалённый исполнитель ещё не реализован)',
   )
   .option('--ui <path>', 'путь к собранному UI (dist)')
   .option('--ignore-rules', 'не грузить проектные инструкции (AGENTS.md) — нейтральная сессия')
@@ -116,6 +153,10 @@ program
       home: home ?? undefined,
       overrides,
     });
+
+    // PROP-077: топология исполнения (параметр запуска) — fail-closed на
+    // неверном `mode` и на недоступном удалённом исполнителе.
+    const execution = await resolveExecutionStartup(synth, options.executionMode);
 
     const dataDir = resolveDataDir(synth, undefined, home);
     // ADR-099: доверие TLS/CA — до первого исходящего запроса (гибрид/обновления).
@@ -170,6 +211,9 @@ program
       fallbackDir: resolveStorageFallbackDir(synth, process.env, home),
       workspacesRoot: resolveWorkspacesRoot(synth, undefined, home),
       defaultWorkingDir: resolveDefaultWorkspace(synth, undefined, home),
+      // PROP-077: режим исполнения и параметры удалённого исполнителя —
+      // порт собирается по ним (параметр запуска, инвариант 24).
+      executionConfig: execution,
       maxUploadBytes: resolveMaxUploadBytes(synth),
       uiDistPath: uiPath,
       permissionConfig: synth.permission,

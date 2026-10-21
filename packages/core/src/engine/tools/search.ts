@@ -5,6 +5,8 @@ import { resolvePath, validateInputPath, isSymlinkEscape, pathEscapesWorkspaceRe
 import { deobfuscateText } from './obfuscation.js';
 import { isAborted, abortedResult } from './abort.js';
 import { t as sm, i18n as i18nMeta } from '../system-messages.js';
+import { resolveExecutionPort } from '../../execution/tool-port.js';
+import { DEFAULT_MAX_OUTPUT_BYTES, type ExecutionError } from '../../execution/ports/index.js';
 
 export const grepFilesTool: ToolDefinition = {
   name: 'grep_files',
@@ -32,10 +34,6 @@ export const grepFilesTool: ToolDefinition = {
     const pattern = await deobfuscateText(ctx, params.pattern);
 
     try {
-      const { execFile } = await import('node:child_process');
-      const { promisify } = await import('node:util');
-      const execFileAsync = promisify(execFile);
-
       const rgArgs = ['--line-number', '--no-heading', '--color', 'never', '-n'];
 
       if (params.include) {
@@ -46,11 +44,15 @@ export const grepFilesTool: ToolDefinition = {
 
       rgArgs.push(pattern, searchDir);
 
-      const { stdout } = await execFileAsync('rg', rgArgs, {
-        timeout: 30_000,
+      // PROP-077: исполнение — через порт (inline-реализация повторяет
+      // прежний `execFile('rg', …)`: argv без shell, таймаут 30 с,
+      // maxBuffer 10 МБ, базовое окружение — `process.env`).
+      const { stdout } = await resolveExecutionPort(ctx).execute({
+        command: { kind: 'argv', file: 'rg', args: rgArgs },
+        timeoutMs: 30_000,
         // «Стоп» (toolAbortController.abort) убивает процесс SIGTERM
         signal: ctx.abortSignal,
-        maxBuffer: 10 * 1024 * 1024,
+        maxOutputBytes: DEFAULT_MAX_OUTPUT_BYTES,
       });
 
       const lines = stdout.split('\n').filter(Boolean);
@@ -70,7 +72,7 @@ export const grepFilesTool: ToolDefinition = {
     } catch (err: unknown) {
       // Прерывание по «Стоп» — единый маркер отмены, не «ошибка поиска»
       if (isAborted(ctx)) return abortedResult(this.name);
-      const execError = err as { code?: number; stderr?: string };
+      const execError = err as ExecutionError;
       if (execError.code === 1) {
         return { content: sm('search.no_matches'), metadata: { pattern: params.pattern, matches: 0 } };
       }

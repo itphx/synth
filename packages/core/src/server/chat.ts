@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import type { SynthConfig, InstructionsConfig } from '@itphx/synth-shared';
-import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, readTlsRuntimeSettings } from '@itphx/synth-shared';
+import { resolveDefaultWorkspace, resolveWorkspacesRoot, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveExecutionConfig, readTlsRuntimeSettings } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -15,6 +15,7 @@ import type { Message } from '@itphx/synth-shared';
 import { MessageRole, nowISO, generateId, makeTextPart } from '@itphx/synth-shared';
 import { mergeSecurityConfig } from '../storage/runtime-settings.js';
 import { DEFAULT_AGENT_ID } from '../engine/agents/index.js';
+import { createExecutionPortForConfig } from '../execution/factory.js';
 import { SkillService } from '../engine/skills/service.js';
 import { CommandService, isLocalCommandStatus } from '../engine/commands/service.js';
 
@@ -202,6 +203,11 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
   const effectiveSecurityConfig = mergeSecurityConfig(options.config.security, runtimeSecurity);
 
   // ADR-046: сервис скиллов + slash-команд (резолвинг в core до LLM).
+  // PROP-077: порт исполнения команд — по режиму `execution.mode`
+  // (`inline` — исполнение в процессе, `remote` — удалённый исполнитель).
+  const executionPort = await createExecutionPortForConfig(
+    resolveExecutionConfig(options.config, process.env),
+  );
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -233,7 +239,8 @@ async function _runSingleChat(options: SingleChatOptions, storage: StorageContex
     // ADR-069 Фаза 2a: project-trust гейт инструкций (config.skills.trustedProjectDirs).
     instructionsTrustedProjectDirs: options.config.skills?.trustedProjectDirs,
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
-    runtimeDeps: await detectRuntimeDeps(),
+    runtimeDeps: await detectRuntimeDeps(executionPort),
+    executionPort,
   });
 
   // ADR-089: CLI-чат поднимает менеджер сам, вне `createStandaloneApp`, поэтому

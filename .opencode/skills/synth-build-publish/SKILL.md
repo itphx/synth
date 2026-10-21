@@ -9,7 +9,7 @@ description: Сборка и публикация Synth: build.sh, publish.sh, v
 
 | Скрипт | Назначение |
 |--------|------------|
-| `build.sh` | Полная сборка: shared → core → storage-postgres → ui → sdk → synth. Опции: `--clean`, `--check`, `--docker`, `--docker-tag=X` |
+| `build.sh` | Полная сборка: shared → core → executor → storage-postgres → ui → sdk → synth. Опции: `--clean`, `--check`, `--docker`, `--docker-tag=X` |
 | `publish.sh` | Публикация в npm. Опции: `--dry-run`, `--no-build`, `--registry=both\|npmjs\|gitverse`, `--docker` |
 | `version-bump.sh` | Bump версии: `./version-bump.sh patch\|minor\|major\|X.Y.Z`. Обновляет `version.ts` + все `package.json` |
 | `dev.sh` | Dev-запуск: backend (:5000) + UI (:5002). Аргументы: `backend\|ui\|core\|all` |
@@ -21,20 +21,22 @@ description: Сборка и публикация Synth: build.sh, publish.sh, v
 
 При bump-е версии обновляются:
 1. `packages/shared/src/version.ts` — константа `SYNTH_VERSION`
-2. `packages/*/package.json` — поле `version` во всех 7 пакетах
+2. `packages/*/package.json` — поле `version` во всех 8 пакетах
 
 Все hardcoded строки версии в коде заменены на импорт `SYNTH_VERSION` из `@itphx/synth-shared`.
 
 ## Публикация npm
 
-Публикуются **все 7 пакетов** монорепозитория в строгом порядке зависимостей:
+Публикуются **все 8 пакетов** монорепозитория в строгом порядке зависимостей:
 
 ```
-shared → core → storage-postgres → ui → backend → sdk → synth
+shared → core → executor → storage-postgres → ui → backend → sdk → synth
 ```
 
-Порядок задан иерархией зависимостей: `sdk` (`@itphx/synth-sdk`, клиент публичного API, ADR-052) —
-тонкий пакет над `shared`; публикуется перед `synth`.
+Порядок задан иерархией зависимостей: `executor` (`@itphx/synth-executor`, исполнитель
+агентских команд, PROP-077; `peer-dep` core) публикуется после `core`; `sdk`
+(`@itphx/synth-sdk`, клиент публичного API, ADR-052) — тонкий пакет над `shared`;
+публикуется перед `synth`.
 
 Для публикации используется **`pnpm publish`** (а не `npm publish`), т.к. он автоматически переписывает `workspace:*` в зависимостях на фактические версии workspace-пакетов.
 

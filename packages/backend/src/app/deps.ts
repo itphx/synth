@@ -11,8 +11,10 @@ import type {
 import {
   ensureDataDir, parsePrincipalId, resolveDefaultWorkspace, resolveSecretKey, resolveStorageBackend,
   resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir,
+  resolveExecutionConfig,
   readTlsRuntimeSettings,
 } from '@itphx/synth-shared';
+import type { ResolvedExecutionConfig } from '@itphx/synth-shared';
 import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
@@ -60,6 +62,8 @@ import {
   createPipelineMetrics,
   toCoreProviderConfig,
   ProviderFactory,
+  // PROP-077: порт исполнения команд (inline/remote).
+  createExecutionPortForConfig,
 } from '@itphx/synth-core';
 import type {
   DecisionAgentCandidate,
@@ -129,6 +133,11 @@ export async function createBackendDeps(
   config: BackendConfig,
   storage?: StorageContext,
   metrics?: MetricsRegistry,
+  /**
+   * PROP-077: эффективная секция `execution` (режим исполнения + параметры
+   * удалённого исполнителя). Не задана — резолвится из конфигу инстанса.
+   */
+  executionConfig?: ResolvedExecutionConfig,
 ) {
   // Хранилища
   const dataDir = config.dataDir;
@@ -498,15 +507,28 @@ export async function createBackendDeps(
     bundleStore,
   });
 
+  // PROP-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
+  // запуска процесса (инвариант 24), поэтому порт собирается здесь, при старте.
+  // Тот же порт получают оркестратор (тулы, inline-shell, детект зависимостей)
+  // и резолвер проектных инструкций.
+  const execution = executionConfig ?? resolveExecutionConfig(config.synth, process.env);
+  const executionPort = await createExecutionPortForConfig(execution);
+
   // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
   // старте, fail-open при ошибке. Общий для оркестратора и движка пайплайнов
   // (контекст шага, ADR-101 §10).
-  const runtimeDeps = await detectRuntimeDeps();
+  //
+  // PROP-077: проба бинарников идёт **через порт исполнения** — в split-режиме
+  // они ищутся в окружении исполнителя. Порт передаётся здесь: кэш детекции
+  // модульный, порт берётся из первого вызова (fail-closed в remote-режиме).
+  const runtimeDeps = await detectRuntimeDeps(executionPort);
 
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
     hooks,
+    // PROP-077: порт исполнения команд (inline — исполнение в процессе).
+    executionPort,
     // PROP-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     contextBuilder,
@@ -551,7 +573,8 @@ export async function createBackendDeps(
     // ADR-046 §4.5: системный hard-gate скиллов (runtime-настройка).
     skillsDisabled,
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
-    runtimeDeps,
+    // Проба бинарников — через тот же порт исполнения (PROP-077).
+    runtimeDeps: await detectRuntimeDeps(executionPort),
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
@@ -986,6 +1009,9 @@ export async function createBackendDeps(
     bundleStore,
     commandService,
     orchestrator,
+    // PROP-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
+    // (резолвер проектных инструкций берёт его для `git rev-parse`).
+    executionPort,
     processMessage,
     eventBindingStore,
     eventApiKeyStore,

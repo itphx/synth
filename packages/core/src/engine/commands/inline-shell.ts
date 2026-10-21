@@ -1,7 +1,5 @@
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
+import { InlineExecutionPort } from '../../execution/inline-execution-port.js';
+import type { ExecutionError, ExecutionPort } from '../../execution/ports/index.js';
 
 /**
  * ADR-046 §7.4: исполнение inline shell (`` !`cmd` ``) шаблонной команды.
@@ -10,6 +8,9 @@ const execFileAsync = promisify(execFile);
  * ADR-029) и аудит делает вызывающая сторона (оркестратор). Параметры процесса
  * зеркалят тул `execute_shell`: `sh -c`, timeout 30 c, maxBuffer 10 MB,
  * `signal` сессии для «Стоп».
+ *
+ * PROP-077: исполнение — через порт (`execution`); по умолчанию — inline с
+ * прежними параметрами.
  */
 export const INLINE_SHELL_TIMEOUT_MS = 30_000;
 
@@ -27,6 +28,8 @@ export interface InlineShellOptions {
   workingDir: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  /** Порт исполнения (PROP-077). Не задан — inline-реализация. */
+  execution?: ExecutionPort;
 }
 
 /**
@@ -35,19 +38,21 @@ export interface InlineShellOptions {
  * `tool.empty_output`). Ошибка процесса/ненулевой код/отмена — `isError: true`.
  */
 export async function runInlineShell(opts: InlineShellOptions): Promise<InlineShellExecution> {
+  const port = opts.execution ?? new InlineExecutionPort();
   try {
-    const { stdout, stderr } = await execFileAsync('sh', ['-c', opts.command], {
+    const { stdout, stderr } = await port.execute({
+      command: { kind: 'shell', command: opts.command, shell: 'sh' },
       cwd: opts.workingDir,
-      timeout: opts.timeoutMs ?? INLINE_SHELL_TIMEOUT_MS,
+      timeoutMs: opts.timeoutMs ?? INLINE_SHELL_TIMEOUT_MS,
       signal: opts.abortSignal,
-      maxBuffer: INLINE_SHELL_MAX_BUFFER,
-      env: { ...process.env, HOME: process.env.HOME || '/root' },
+      maxOutputBytes: INLINE_SHELL_MAX_BUFFER,
+      env: { HOME: process.env.HOME || '/root' },
     });
     let output = stdout ?? '';
     if (stderr) output += (output ? '\n--- stderr ---\n' : '') + stderr;
     return { output, isError: false, exitCode: 0 };
   } catch (err: unknown) {
-    const execError = err as { stdout?: string; stderr?: string; code?: number; message?: string };
+    const execError = err as ExecutionError;
     let output = execError.stdout ?? '';
     if (execError.stderr) output += (output ? '\n--- stderr ---\n' : '') + execError.stderr;
     if (!output) output = execError.message ?? '';

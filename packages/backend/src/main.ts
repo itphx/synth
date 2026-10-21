@@ -14,7 +14,15 @@ import {
 
 const host = process.env.SYNTH_HOST || '0.0.0.0';
 
-const handle = await createBackendApp();
+// PROP-077: fail-closed на старте (неверный `execution.mode` или `remote` —
+// удалённый исполнитель ещё не реализован, шаг 7 плана) — с понятным текстом.
+let handle: Awaited<ReturnType<typeof createBackendApp>>;
+try {
+  handle = await createBackendApp();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
 const { app, dataDir, port, config, auth, eventHub, queueManager, sessionManager, stopEphemeralSweeper, stopEventJournalPruner, stopAnalyticsRollupPruner, stopScheduler, stopWebhookService, stopWebhookDeliveryPruner, stopMetrics } = handle;
 
 let shuttingDown = false;

@@ -56,6 +56,7 @@ import {
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
+import { createExecutionPortForConfig } from '../../execution/factory.js';
 import {
   mergeLlmGatewayConfig, mergeSecurityConfig,
   mergeEventsConfig, mergeDecisionConfig,
@@ -527,16 +528,31 @@ export async function createStandaloneDeps(
     bundleStore,
   });
 
+  // PROP-077: порт исполнения команд. Режим (`inline`/`remote`) — параметр
+  // запуска процесса (инвариант 24), поэтому порт собирается здесь, при
+  // старте, и не переинициализируется на лету. Выбор режима — фабрика
+  // `execution/factory.ts` (`remote` → удалённый порт, fail-closed).
+  const executionPort = await createExecutionPortForConfig(config.executionConfig);
+
   // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
   // старте, fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы
   // первый же запрос видел корректную доступность. Общий для оркестратора и
   // движка пайплайнов (контекст шага, ADR-101 §10).
-  const runtimeDeps = await detectRuntimeDeps();
+  //
+  // PROP-077: проба бинарников идёт **через порт исполнения** — в split-режиме
+  // они ищутся в окружении исполнителя. Порт передаётся здесь: кэш детекции
+  // модульный, порт берётся из первого вызова (fail-closed в remote-режиме).
+  const runtimeDeps = await detectRuntimeDeps(executionPort);
 
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
     hooks,
+    // PROP-077: порт исполнения команд (inline — исполнение в процессе;
+    // режим — параметр запуска, инвариант 24). Тот же порт получает и
+    // детект внешних зависимостей (ниже) — иначе они смотрели бы в разные
+    // места окружения.
+    executionPort,
     // PROP-102: сборщик `usage`/`decision` роллапов (write-path).
     analytics,
     contextBuilder,
@@ -577,7 +593,8 @@ export async function createStandaloneDeps(
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте,
     // fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы первый
     // же запрос видел корректную доступность.
-    runtimeDeps,
+    // Проба бинарников — через тот же порт исполнения (PROP-077).
+    runtimeDeps: await detectRuntimeDeps(executionPort),
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
@@ -1009,6 +1026,9 @@ export async function createStandaloneDeps(
     // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
     mcpRegistryStore,
     orchestrator,
+    // PROP-077: порт исполнения — тот же инстанс, что у оркестратора и тулов
+    // (резолвер проектных инструкций берёт его для `git rev-parse`).
+    executionPort,
     processMessage,
     eventBindingStore,
     eventApiKeyStore,

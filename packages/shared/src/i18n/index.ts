@@ -317,6 +317,9 @@ export const ENGINE_MESSAGE_KEYS = [
   'pipeline.provider_not_found',
   'pipeline.llm_failed',
   'pipeline.llm_unrecoverable',
+  // --- Исполнение (PROP-077) ---
+  'execution.remote_url_required',
+  'execution.remote_unavailable',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -626,6 +629,9 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'pipeline.provider_not_found': ["node","provider"],
   'pipeline.llm_failed': ["node","type"],
   'pipeline.llm_unrecoverable': ["node","type"],
+  // --- Исполнение (PROP-077) ---
+  'execution.remote_url_required': [],
+  'execution.remote_unavailable': ["reason"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

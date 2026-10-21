@@ -269,7 +269,7 @@ synth/
 │   ├── standalone.sh           # Standalone from the built npm packages
 │   ├── hybrid.sh               # Local core + remote backend (hybrid)
 │   ├── publish.sh              # Publishing to npm
-│   ├── publish-packages.sh     # Idempotent publishing of the 7 packages (release)
+│   ├── publish-packages.sh     # Idempotent publishing of the 8 packages (release)
 │   ├── version-bump.sh         # Version bump
 │   ├── changelog.sh            # CHANGELOG generation (for CI release)
 │   ├── wait-npm-version.sh     # Waiting for a version to appear in npm (release)

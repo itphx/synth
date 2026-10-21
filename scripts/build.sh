@@ -5,11 +5,12 @@
 # Собирает все пакеты монорепозитория в production-режиме:
 #   1. @itphx/synth-shared            — типы, схемы, утилиты (фундамент)
 #   2. @itphx/synth-core              — движок, провайдеры, HTTP API, CLI
-#   3. @itphx/synth-storage-postgres  — опциональный БД-драйвер слоя хранения (ADR-097/PROP-032)
-#   4. @itphx/synth-ui                — React SPA (Vite production build)
-#   5. @itphx/synth-sdk               — типизированный клиент публичного API (ADR-052)
-#   6. @itphx/synth                   — npm-пакет: бандл CLI + UI + промпты
-#   7. Docker-образ                   — (опционально) сборка контейнера
+#   3. @itphx/synth-executor          — исполнитель агентских команд (PROP-077)
+#   4. @itphx/synth-storage-postgres  — опциональный БД-драйвер слоя хранения (ADR-097/PROP-032)
+#   5. @itphx/synth-ui                — React SPA (Vite production build)
+#   6. @itphx/synth-sdk               — типизированный клиент публичного API (ADR-052)
+#   7. @itphx/synth                   — npm-пакет: бандл CLI + UI + промпты
+#   8. Docker-образ                   — (опционально) сборка контейнера
 #
 # Результат: packages/synth/dist/cli.js (исполняемый бандл)
 #            packages/synth/ui/            (статическая сборка UI)
@@ -96,7 +97,7 @@ echo "━━━ Synth: сборка ━━━"
 echo ""
 
 # Проверка окружения
-echo "[1/8] Проверка окружения..."
+echo "[1/9] Проверка окружения..."
 
 if ! command -v node &>/dev/null; then
     die "Node.js не установлен. Требуется версия >= 22."
@@ -125,13 +126,13 @@ echo ""
 
 # Очистка (опционально)
 if $CLEAN; then
-    echo "[2/8] Очистка предыдущей сборки..."
+    echo "[2/9] Очистка предыдущей сборки..."
     cd "$SYNTH" || die "Не удалось перейти в $SYNTH"
     pnpm clean 2>/dev/null || true
     echo "  готово"
     echo ""
 else
-    echo "[2/8] Установка зависимостей..."
+    echo "[2/9] Установка зависимостей..."
     cd "$SYNTH" || die "Не удалось перейти в $SYNTH"
     pnpm install --frozen-lockfile 2>&1 | tail -1
     echo "  готово"
@@ -139,37 +140,43 @@ else
 fi
 
 # Сборка @itphx/synth-shared
-echo "[3/8] Сборка @itphx/synth-shared..."
+echo "[3/9] Сборка @itphx/synth-shared..."
 pnpm --filter @itphx/synth-shared build || die "Сборка @itphx/synth-shared не удалась"
 echo "  готово"
 echo ""
 
 # Сборка @itphx/synth-core
-echo "[4/8] Сборка @itphx/synth-core..."
+echo "[4/9] Сборка @itphx/synth-core..."
 pnpm --filter @itphx/synth-core build || die "Сборка @itphx/synth-core не удалась"
 echo "  готово"
 echo ""
 
+# Сборка @itphx/synth-executor (исполнитель агентских команд; зависит от типов core)
+echo "[5/9] Сборка @itphx/synth-executor..."
+pnpm --filter @itphx/synth-executor build || die "Сборка @itphx/synth-executor не удалась"
+echo "  готово"
+echo ""
+
 # Сборка @itphx/synth-storage-postgres (опциональный БД-драйвер; зависит от типов core)
-echo "[5/8] Сборка @itphx/synth-storage-postgres..."
+echo "[6/9] Сборка @itphx/synth-storage-postgres..."
 pnpm --filter @itphx/synth-storage-postgres build || die "Сборка @itphx/synth-storage-postgres не удалась"
 echo "  готово"
 echo ""
 
 # Сборка @itphx/synth-ui
-echo "[6/8] Сборка @itphx/synth-ui..."
+echo "[7/9] Сборка @itphx/synth-ui..."
 pnpm --filter @itphx/synth-ui build || die "Сборка @itphx/synth-ui не удалась"
 echo "  готово"
 echo ""
 
 # Сборка @itphx/synth-sdk
-echo "[7/8] Сборка @itphx/synth-sdk..."
+echo "[8/9] Сборка @itphx/synth-sdk..."
 pnpm --filter @itphx/synth-sdk build || die "Сборка @itphx/synth-sdk не удалась"
 echo "  готово"
 echo ""
 
 # Сборка @itphx/synth
-echo "[8/8] Сборка @itphx/synth..."
+echo "[9/9] Сборка @itphx/synth..."
 pnpm --filter @itphx/synth build || die "Сборка @itphx/synth не удалась"
 
 SYNTH_DIST="$SYNTH/packages/synth/dist/cli.js"

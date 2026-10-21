@@ -893,6 +893,8 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       trustedProjectDirs: config.synth.skills.trustedProjectDirs,
       // ADR-069 R3: авто-trust workspace внутри workspacesRoot (managed-каталоги).
       workspacesRoot: config.workspacesRoot,
+      // PROP-077: `git rev-parse` — через порт исполнения (тот же, что у тулов).
+      execution: deps.executionPort,
     }),
     config.synth.instructions,
   );

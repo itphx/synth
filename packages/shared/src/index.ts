@@ -180,6 +180,26 @@ export { defaultConfig, loadConfig } from './config/index.js';
 export { resolveDataDir, resolvePort, resolveWorkspacesRoot, resolveDefaultWorkspace, resolveWorkspaceOutsideRootPolicy, resolveSecretKey, resolveStorageBackend, resolvePostgresConfig, resolvePostgresPassword, resolveDegradedMode, resolveStorageFallbackDir, resolveIgnoreRules, resolveHome, resolveProfilesPath, resolveCredentialsPath, ensureDataDir, createDefaultConfig, resolveDeployMode, findConfigPath, defaultConfigPath, ensureConfigFile, ensureFirstRun, resolveDecisionProvider, resolveDecisionModel, resolveMaxUploadBytes } from './config/index.js';
 export type { StorageBackend, ResolvedPostgresConfig } from './config/index.js';
 export { applyEnvOverrides, envOverrideName, toSnakeCase, parseEnvValue, ENV_OVERRIDES } from './config/index.js';
+// PROP-077: секция `execution` — топология исполнения (переключатель запуска).
+export {
+  resolveExecutionConfig,
+  resolveExecutionMode,
+  defaultExecutionConcurrency,
+  parseExecutionUrlList,
+  isExecutionMode,
+  isExecutionFailMode,
+  EXECUTION_ENV,
+  EXECUTION_MODE_CLI_FLAG,
+} from './config/index.js';
+export type {
+  ExecutionConfig,
+  ExecutionRemoteConfig,
+  ExecutionMode,
+  ExecutionFailMode,
+  ResolvedExecutionConfig,
+  ResolvedExecutionRemoteConfig,
+  ExecutionCliOverride,
+} from './config/index.js';
 // ADR-099: резолверы доверия TLS/CA (`security.tls`).
 export {
   resolveTlsConfig,
