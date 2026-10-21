@@ -54,6 +54,19 @@ const en: Dictionary = {
   'errors.forbidden.projectForbidden': 'Project is not available for this service key',
   'errors.rateLimited.serviceKey': 'Service key rate limit exceeded',
 
+  // ADR-101 (Э6): пайплайны проекта, прогоны, шаблоны инстанса
+  'errors.notFound.pipeline': 'Pipeline not found',
+  'errors.notFound.pipelineRun': 'Pipeline run not found',
+  'errors.notFound.pipelineTemplate': 'Pipeline template not found',
+  'errors.validation.invalidPipelineBody': 'Invalid pipeline request payload',
+  'errors.validation.invalidPipelineSpec': 'Invalid pipeline specification',
+  'errors.validation.projectIdRequired': 'projectId is required',
+  'errors.conflict.pipelineNotPublished': 'The pipeline has no published version',
+  'errors.conflict.pipelineInvalidState': 'The run is not waiting for a human decision',
+  'errors.conflict.pipelineNothingToPublish': 'There is no draft to publish',
+  'errors.conflict.pipelineRunFinished': 'The run is already finished',
+  'errors.conflict.pipelineTemplateUnsupported': 'The template cannot be instantiated as a pipeline',
+
   // PROP-102: отчёты аналитики (только чтение)
   'errors.validation.invalidAnalyticsPeriod': 'Invalid period: expected a date in YYYY-MM-DD (UTC)',
   'errors.validation.invalidAnalyticsRange': 'Period start is later than period end',
@@ -178,6 +191,19 @@ const ru: Dictionary = {
   'errors.forbidden.scopeRequired': 'Недостаточно прав: отсутствует требуемый scope',
   'errors.forbidden.projectForbidden': 'Проект недоступен для этого service-key',
   'errors.rateLimited.serviceKey': 'Превышен лимит запросов по service-key',
+
+  // ADR-101 (Э6): пайплайны проекта, прогоны, шаблоны инстанса
+  'errors.notFound.pipeline': 'Пайплайн не найден',
+  'errors.notFound.pipelineRun': 'Прогон пайплайна не найден',
+  'errors.notFound.pipelineTemplate': 'Шаблон пайплайна не найден',
+  'errors.validation.invalidPipelineBody': 'Некорректное тело запроса пайплайна',
+  'errors.validation.invalidPipelineSpec': 'Некорректная спецификация пайплайна',
+  'errors.validation.projectIdRequired': 'Не указан projectId',
+  'errors.conflict.pipelineNotPublished': 'У пайплайна нет опубликованной версии',
+  'errors.conflict.pipelineInvalidState': 'Прогон не ожидает решения человека',
+  'errors.conflict.pipelineNothingToPublish': 'Нет черновика для публикации',
+  'errors.conflict.pipelineRunFinished': 'Прогон уже завершён',
+  'errors.conflict.pipelineTemplateUnsupported': 'Шаблон нельзя инстанцировать в пайплайн',
 
   // PROP-102: отчёты аналитики (только чтение)
   'errors.validation.invalidAnalyticsPeriod': 'Некорректный период: ожидается дата YYYY-MM-DD (UTC)',

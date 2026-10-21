@@ -2,7 +2,7 @@
 
 > 🌐 **English** · [Russian](../API_V2.md)
 
-> ⚠️ RU-версия обновлена 2026-10-20 (ADR-052: scope `automation:install` и поле `pipeline` в цели правила маршрутизации — §1, §5.11, §5.26, §5.27 — перевод синхронизирован); перевод отстаёт (PROP-102, §5.32 «Аналитика и отчётность»).
+> ⚠️ RU-версия обновлена 2026-10-21 (ADR-101, Э6: §5.35 «Пайплайны проекта, прогоны и шаблоны» — новый контур пайплайнов; §5.34 помечен как устаревающий); перевод отстаёт (PROP-102 §5.32 «Аналитика и отчётность», §5.33 «Пакеты расширений», §5.34 «Пайплайны» — ADR-100).
 
 > The canonical source of truth for the Synth HTTP/WS contract, assembled **from the code**
 > (ADR-017). General conventions (style, ports, process, storage) — in the root `AGENTS.md`.

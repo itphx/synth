@@ -1418,6 +1418,10 @@ RBAC/скоуп и i18n задаются через `opts` (`readGuard`/`writeGu
 
 ### 5.34 Пайплайны — `/api/v2/pipelines` (оба, ADR-100/ADR-051)
 
+> ⚠️ **ADR-100, устаревает.** Новые эндпоинты пайплайнов (спецификации, версии, прогоны,
+> журнал, шаблоны инстанса) — **§5.35**. Старые эндпоинты этого раздела **остаются
+> рабочими** до перевода UI на новый контур (Э7, ADR-101); удаления не планируется.
+
 Пайплайн в ядре — **декларация + учёт прогона** (собственного движка шагов в этих эндпоинтах нет).
 Целевая модель — «пайплайн как второй движок» ([ADR-101](./arch_decisions/adr-101-pipeline-engine.md),
 реализуется по этапам Э1–Э7; формат — [docs/PIPELINES.md](./PIPELINES.md)): контракт и роуты этого
@@ -1446,6 +1450,83 @@ Router'а несёт `pipeline: {id, step}`, трекер создаёт/про�
 **UI.** Раздел «Аддоны» (Настройки → Администрирование, категория `addons`, роль ADMIN):
 реестр пакетов (одобрение и снятие) и «Пайплайны» — определения и прогоны с фильтрами.
 
+### 5.35 Пайплайны проекта, прогоны и шаблоны — `/api/v2/projects/:id/pipelines*`, `/api/v2/pipeline-runs*`, `/api/v2/pipeline-templates*` (оба, ADR-101 Э6)
+
+Модель «пайплайн как второй движок» ([ADR-101](./arch_decisions/adr-101-pipeline-engine.md),
+формат и устройство — [docs/PIPELINES.md](./PIPELINES.md)): **пайплайн проекта** (`scope:'project'`) со
+спецификацией-черновиком и неизменяемыми опубликованными версиями, **прогон** (самодостаточная
+запись со снимком спецификации + журнал выполнения) и **шаблон инстанса** (источник для
+инстанцирования). Единая фабрика `createPipelineProjectRoutes` для core и backend; хранилище —
+порты `ProjectPipelineRepository` и `PipelineRunRepository` (ADR-096), источник шаблонов —
+legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `scope:'instance'` нового порта.
+
+Пути **не пересекаются** с legacy-контуром §5.34 (`/api/v2/pipelines*`): там — «декларация + учёт»
+(ADR-100), здесь — движок со спецификациями, версиями и журналом (ADR-101). Старые эндпоинты
+остаются рабочими до перевода UI (Э7), новые — основной контур пайплайнов.
+
+**Права (ADR-089 §5.5/§5.8, инвариант 21).**
+
+| Действие | Право |
+|---|---|
+| Чтение пайплайнов и прогонов | право **чтения** проекта: владелец, участник проекта (любая роль, в т.ч. `VIEWER`), `LEAD`, `ADMIN` |
+| Изменение (создание, правка, публикация, удаление, запуск, HITL) | право **изменения содержимого** проекта: `OWNER`, `EDITOR`, `LEAD`, `ADMIN`; `VIEWER` читает, но не мутирует |
+| Шаблоны инстанса (список) и инстанцирование | **ADMIN** (managed); core — `requireAuth` (single-user). Инстанцирование дополнительно требует права изменения содержимого целевого проекта |
+| service-key (ADR-052) | мутации — scope `automation:install` (или роль `ADMIN` у ключа) **и** проектная проекция `allowedProjects` (иначе `403 PROJECT_FORBIDDEN`); без scope — `403 SCOPE_REQUIRED`. Чтение scope-гейта не имеет — только права проекта |
+
+Проверка доступа — **на границе** (guard), а не в обработчике (инвариант 16): guard резолвит
+проект или прогон один раз и кладёт сущность в контекст; в обработчиках проверок доступа нет.
+Нет проекта → `404`; нет прав → `403`; пайплайн чужого проекта под чужим id → `404` (в этом
+проекте такого ресурса нет).
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/projects/:id/pipelines` | оба | право чтения проекта | Пайплайны проекта `{pipelines}`: id, имя, `scope`, `projectId`, `draftVersion`, `publishedVersion?`, `installedBy?`, черновик `draft` |
+| POST | `/api/v2/projects/:id/pipelines` | оба | право изменения проекта (+ `automation:install` для service-key) | Создать пайплайн: тело `{name?, description?, spec}` — спецификация `PipelineSpec`; сервер проставляет `id`/`version`/`status`/`projectId` → **201** `{pipeline}`; невалидная спецификация → 400 `VALIDATION_ERROR` со списком `problems` |
+| GET | `/api/v2/projects/:id/pipelines/:pid` | оба | право чтения проекта | `{pipeline, published, versions}` — черновик, опубликованная версия и список версий |
+| PUT | `/api/v2/projects/:id/pipelines/:pid` | оба | право изменения проекта | Сохранить черновик: тело `{name?, description?, spec}` → 200 `{pipeline}`; версия при этом **не** меняется (публикация — отдельный шаг) |
+| DELETE | `/api/v2/projects/:id/pipelines/:pid` | оба | право изменения проекта | Удалить пайплайн и его версии → **204**; прогоны **остаются** (прогон самодостаточен) |
+| POST | `/api/v2/projects/:id/pipelines/:pid/publish` | оба | право изменения проекта | Опубликовать черновик: неизменяемая версия `publishedVersion`, черновик переезжает на следующую версию → 200 `{pipeline, published}`; повторная публикация без изменений идемпотентна (версии не плодит); черновика нет → 409 `CONFLICT` |
+| GET | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право чтения проекта | Прогоны пайплайна `{runs}`; фильтры `status` (`pending`/`running`/`awaiting_human`/`done`/`failed`/`cancelled`), `limit` (дефолт 100, максимум 1000); неизвестный `status` → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право изменения проекта | Запуск прогона: тело `{trigger?, version?}` (по умолчанию — последняя опубликованная версия, триггер `manual`) → **201** `{run}`; прогон идёт **в фоне** — клиент следит по событиям `pipeline.run.*`; опубликованной версии нет → 409 `pipeline.not_published` |
+| GET | `/api/v2/pipeline-runs/:runId` | оба | право чтения проекта прогона | Прогон и журнал `{run, events}` (события: `run.started`/`node.started`/`node.finished`/`edge.taken`/`gate.awaiting`/`run.finished`/`run.failed`); `limit` — последние N событий (дефолт 200, максимум 1000) |
+| POST | `/api/v2/pipeline-runs/:runId/resume` | оба | право изменения проекта прогона | HITL-решение человека: тело `{approved, output?, comment?}` → 200 `{run}`; прогон не ждёт решения → 409 `pipeline.invalid_state` |
+| POST | `/api/v2/pipeline-runs/:runId/cancel` | оба | право изменения проекта прогона | Отмена прогона → 200 `{run}` (статус `cancelled`); прогон уже завершён → 409 `CONFLICT` |
+| GET | `/api/v2/pipeline-templates` | оба | **ADMIN** / auth | Шаблоны инстанса `{templates}`: `format` (`adr-100` — legacy-определение пакета, `adr-101` — запись `scope:'instance'`), `name`, `version`, `installedBy?`, `steps` (legacy) или `spec` |
+| POST | `/api/v2/pipeline-templates/:tid/instantiate` | оба | **ADMIN** / auth + право изменения целевого проекта | Инстанцировать шаблон в проект: тело `{projectId, name?}` → **201** `{pipeline}` (черновик, `draftVersion: 1`, провенанс `installedBy` сохраняется); шаблон не конвертируется → 409 `PIPELINE_TEMPLATE_UNSUPPORTED` со списком `problems`; нет шаблона или проекта → 404 |
+
+**Коды ошибок раздела:** `UNAUTHORIZED` (401), `FORBIDDEN` (403 — права проекта), `SCOPE_REQUIRED`
+(403 — service-key без `automation:install`), `PROJECT_FORBIDDEN` (403 — service-key вне
+`allowedProjects`), `NOT_FOUND` (404), `VALIDATION_ERROR` (400, со списком `problems`), `CONFLICT`
+(409 — публиковать нечего / прогон завершён), `pipeline.not_published` (409),
+`pipeline.invalid_state` (409), `PIPELINE_TEMPLATE_UNSUPPORTED` (409).
+
+**Ошибка прогона.** `run.error` — текст ошибки; **машиночитаемый код** причины — в журнале прогона
+(`run.failed.payload.code`: `pipeline.gate_rejected`, `pipeline.gate_timeout`,
+`pipeline.step_failed`, `pipeline.step_timeout`, `pipeline.cancelled`, `pipeline.loop_limit`,
+`permission.denied`).
+
+**Конвертация legacy-определений (ADR-100 → шаблон ADR-101).** Определение пакета
+(`provides.pipelines[]`, legacy-реестр `{dataDir}/pipelines/definitions.json`) — источник шаблонов;
+миграции данных нет: конвертация выполняется **на лету при инстанцировании**
+(`legacyDefinitionToPipelineSpec`):
+
+- шаг `agent` → узел `agent`: `id`, `agent`, `title?`, `skill?`, `prompt?`, `timeoutSec?`
+  переносятся как есть;
+- шаг `loop` **не конвертируется** (Loop Engine вне объёма, PROP-057) — шаблон с такими шагами
+  не инстанцируется: `409 PIPELINE_TEMPLATE_UNSUPPORTED` со списком проблем;
+- шаг без поля `agent` — не конвертируется (узел `agent` требует агента) — та же 409;
+- `waitsFor` **не переносится**: в ADR-101 триггер задаётся при запуске прогона, а HITL-гейт
+  выражается узлом `human` — его добавляет владелец пайплайна в черновике;
+- выход пайплайна при инстанцировании — `none` (выходы задаются вручную).
+
+**Хранилище.** Черновики и версии — порт `ProjectPipelineRepository`
+(`{dataDir}/pipelines/{pipelines,versions}.json`), прогоны и журнал — `PipelineRunRepository`
+(`{dataDir}/pipelines/{runs.json,run-events.jsonl}`); при `storage.backend=postgres` — драйвер
+`@itphx/synth-storage-postgres` (PROP-032).
+
+**UI.** Экран пайплайнов/прогонов и визуальный редактор — **Э7** (ADR-101); до него работает
+только API.
+
 ---
 
 ## 6. Источники
@@ -1463,6 +1544,7 @@ Router'а несёт `pipeline: {id, step}`, трекер создаёт/про�
 | Admin-API обслуживания инстанса (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
 | Аналитика и отчёты (PROP-102) | `packages/core/src/server/routes/analytics.ts`, `packages/core/src/analytics/*`, `packages/shared/src/types/analytics.ts` |
 | Пакеты расширений и пайплайны (ADR-100) | `packages/core/src/server/routes/packs.ts`, `packages/core/src/server/routes/pipelines.ts`, `packages/core/src/engine/events/pipeline-tracker.ts`, `packages/core/src/storage/ports/pack-repository.ts`, `packages/core/src/storage/ports/pipeline-repository.ts`, `packages/shared/src/types/pack.ts`, `packages/shared/src/types/pipeline.ts` |
+| Пайплайны проекта, прогоны и шаблоны (ADR-101, Э6) | `packages/core/src/server/routes/pipeline-project-routes.ts`, `packages/core/src/engine/pipelines/*`, `packages/core/src/storage/ports/project-pipeline-repository.ts`, `packages/core/src/storage/ports/pipeline-run-repository.ts`, `packages/shared/src/types/pipeline-engine.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

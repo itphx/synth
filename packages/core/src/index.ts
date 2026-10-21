@@ -231,6 +231,7 @@ export type {
   PipelineRecord,
   PipelineVersionRecord,
   PipelineScope,
+  PipelineProvenance,
   PipelineFilter,
   PipelineRunRepository,
   PipelineRunRecord,
@@ -1044,6 +1045,17 @@ export type {
   PipelinesRoutesOptions,
   PipelinesRouteMessages,
 } from './server/routes/pipelines.js';
+// ADR-101 (Э6): API пайплайнов проекта, прогонов, HITL и шаблонов инстанса.
+export {
+  createPipelineProjectRoutes,
+  legacyDefinitionToPipelineSpec,
+} from './server/routes/pipeline-project-routes.js';
+export type {
+  PipelineProjectRoutesAuth,
+  PipelineProjectRoutesDeps,
+  PipelineProjectRoutesOptions,
+  PipelineProjectRouteMessages,
+} from './server/routes/pipeline-project-routes.js';
 // ADR-086 §5: установка пакетов расширений и реестр установок.
 export { createPacksRoutes } from './server/routes/packs.js';
 export type {

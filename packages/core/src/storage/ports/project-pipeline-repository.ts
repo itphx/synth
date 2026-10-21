@@ -21,7 +21,8 @@ import type { PipelineSpec } from '@itphx/synth-shared';
  * ## Контракт (ADR-096) — «паспорт» порта, общий для всех backend'ов
  *
  * - `savePipeline` — **upsert по `id`**: `createdAt` записи не перезаписывается,
- *   `updatedAt` обновляется (монотонно не убывает);
+ *   `updatedAt` обновляется (монотонно не убывает); `installedBy` (провенанс
+ *   установки) переносится как обычное поле записи;
  * - `listPipelines` — детерминированный порядок (по `id`), фильтры
  *   `scope`/`projectId` — по «И»;
  * - `deletePipeline` — `true`, если запись была удалена, иначе `false`;
@@ -40,6 +41,21 @@ import type { PipelineSpec } from '@itphx/synth-shared';
 
 /** Область пайплайна: `instance` — шаблон инстанса, `project` — пайплайн проекта. */
 export type PipelineScope = 'instance' | 'project';
+
+/**
+ * Провенанс установки (ADR-101 §2.11, ADR-100): каким пакетом расширения
+ * принесён пайплайн (шаблон) и в какой версии.
+ *
+ * Форма — та же, что у legacy-определения ADR-100
+ * (`PipelineDefinitionRecord.installedBy`): переход с legacy-реестра на
+ * шаблоны инстанса не теряет провенанс.
+ */
+export interface PipelineProvenance {
+  /** Имя пакета расширения (`synth.pack`, ADR-086 §5). */
+  pack: string;
+  /** Версия пакета. */
+  version: string;
+}
 
 /**
  * Пайплайн (черновик + счётчики версий).
@@ -67,6 +83,12 @@ export interface PipelineRecord {
   draftVersion: number;
   /** Номер опубликованной версии (если публикация была). */
   publishedVersion?: number;
+  /**
+   * Провенанс: каким пакетом расширения принесён шаблон (ADR-101 §2.11).
+   * Заполняется при инстанцировании шаблона в пайплайн проекта; у пайплайна,
+   * созданного вручную, — отсутствует.
+   */
+  installedBy?: PipelineProvenance;
   /** ISO-время создания записи (иммутабельно). */
   createdAt: string;
   /** ISO-время последней записи (монотонно не убывает). */

@@ -24,6 +24,7 @@ import {
   createContextRoutes as createCoreContextRoutes,
   createMetricsSettingsRoutes,
   createPacksRoutes, createPipelinesRoutes,
+  createPipelineProjectRoutes,
   resolveProjectWorkspace,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext } from '@itphx/synth-core';
@@ -350,6 +351,49 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       readGuard: auth.requirePermission('ADMIN'),
       writeGuard: requireAdminRoleOrScope('automation:install'),
       scopeGuard,
+    },
+  ));
+
+  // ADR-101 (Э6): пайплайны проекта (черновик/публикация), прогоны и журнал,
+  // HITL-действия и шаблоны инстанса (инстанцирование в проект).
+  // Права — по правилам проекта (ADR-089 §5.5/§5.8): читать — владелец/
+  // участник/LEAD/ADMIN, изменять — OWNER/EDITOR/LEAD/ADMIN (VIEWER читает,
+  // но не мутирует — инвариант 21). Шаблоны инстанса — ADMIN.
+  app.route('/api/v2', createPipelineProjectRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      pipelines: deps.storageContext.projectPipelines,
+      runs: deps.storageContext.pipelineRuns,
+      engine: deps.pipelineEngine,
+      projects: projectStore,
+      templates: pipelines,
+    },
+    {
+      writeGuard: auth.requireAuth,
+      adminGuard: auth.requirePermission('ADMIN'),
+      canReadProject: async (c, project, userId) =>
+        projectAccess.canReadProject(c as never, project, userId),
+      canEditProject: async (c, project, userId) =>
+        projectAccess.canEditProjectContent(c as never, project, userId),
+      getCurrentUserId: async (c) => (await auth.getCurrentUser(c))?.id ?? '',
+      scopeGuard,
+      serviceProjectProjection,
+      messages: {
+        pipelineNotFound: (c) => t('errors.notFound.pipeline', undefined, c),
+        runNotFound: (c) => t('errors.notFound.pipelineRun', undefined, c),
+        projectNotFound: (c) => t('errors.notFound.project', undefined, c),
+        templateNotFound: (c) => t('errors.notFound.pipelineTemplate', undefined, c),
+        forbidden: (c) => t('auth.forbidden', undefined, c),
+        invalidBody: (c) => t('errors.validation.invalidPipelineBody', undefined, c),
+        invalidSpec: (c) => t('errors.validation.invalidPipelineSpec', undefined, c),
+        notPublished: (c) => t('errors.conflict.pipelineNotPublished', undefined, c),
+        invalidState: (c) => t('errors.conflict.pipelineInvalidState', undefined, c),
+        nothingToPublish: (c) => t('errors.conflict.pipelineNothingToPublish', undefined, c),
+        runFinished: (c) => t('errors.conflict.pipelineRunFinished', undefined, c),
+        templateNotInstantiable: (c) =>
+          t('errors.conflict.pipelineTemplateUnsupported', undefined, c),
+        projectIdRequired: (c) => t('errors.validation.projectIdRequired', undefined, c),
+      },
     },
   ));
 

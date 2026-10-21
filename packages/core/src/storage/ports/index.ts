@@ -99,6 +99,7 @@ export type {
   PipelineRecord,
   PipelineVersionRecord,
   PipelineScope,
+  PipelineProvenance,
   PipelineFilter,
 } from './project-pipeline-repository.js';
 export type {

@@ -23,6 +23,7 @@ import {
   createStorageContextAsync,
   createMetricsSettingsRoutes,
   createPacksRoutes, createPipelinesRoutes,
+  createPipelineProjectRoutes,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -531,6 +532,21 @@ export function mountStandaloneRoutes(
   // ADR-051/PROP-059: API пайплайнов — определения (ставит установщик пакета),
   // экземпляры и ручной запуск. Standalone — дефолтные guard'ы (`requireAuth`).
   app.route('/api/v2/pipelines', createPipelinesRoutes(auth, { pipelines }));
+
+  // ADR-101 (Э6): пайплайны проекта (черновик/публикация), прогоны и журнал,
+  // HITL-действия и шаблоны инстанса (инстанцирование в проект).
+  // Standalone — дефолтные guard'ы (`requireAuth`); права на проект в
+  // standalone не разграничиваются (единственный пользователь инстанса).
+  app.route('/api/v2', createPipelineProjectRoutes(
+    auth,
+    {
+      pipelines: deps.storageContext.projectPipelines,
+      runs: deps.storageContext.pipelineRuns,
+      engine: deps.pipelineEngine,
+      projects: projectStore,
+      templates: pipelines,
+    },
+  ));
 
   // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
   // реестр установок. Standalone — `requireAuth` (single-user) + scope-гейт
