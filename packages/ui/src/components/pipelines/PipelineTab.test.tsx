@@ -22,6 +22,55 @@ vi.hoisted(() => {
   if (typeof window !== 'undefined') {
     Object.defineProperty(window, 'localStorage', { value: ls, configurable: true })
   }
+
+  // Редактор пайплайна (React Flow) в jsdom: нужен ResizeObserver (замер
+  // узлов), getBBox (подпись ребра), DOMMatrixReadOnly (трансформация
+  // viewport) и ненулевые offsetWidth/offsetHeight (размеры узлов).
+  class ResizeObserverStub {
+    private callback: (entries: unknown[], observer: unknown) => void
+    constructor(callback: (entries: unknown[], observer: unknown) => void) {
+      this.callback = callback
+    }
+    observe(target: Element): void {
+      queueMicrotask(() => {
+        this.callback(
+          [
+            {
+              target,
+              contentRect: { width: 240, height: 76, top: 0, left: 0, right: 240, bottom: 76 },
+            },
+          ],
+          this,
+        )
+      })
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', { value: ResizeObserverStub, configurable: true })
+  if (typeof window !== 'undefined') {
+    Object.defineProperty(window, 'ResizeObserver', { value: ResizeObserverStub, configurable: true })
+    Object.defineProperty(window.SVGElement.prototype, 'getBBox', {
+      value: () => ({ x: 0, y: 0, width: 10, height: 10 }),
+      configurable: true,
+    })
+    class DOMMatrixReadOnlyStub {
+      m22 = 1
+      constructor() {}
+    }
+    Object.defineProperty(window, 'DOMMatrixReadOnly', {
+      value: DOMMatrixReadOnlyStub,
+      configurable: true,
+    })
+    Object.defineProperty(window.HTMLElement.prototype, 'offsetWidth', {
+      configurable: true,
+      get: () => 240,
+    })
+    Object.defineProperty(window.HTMLElement.prototype, 'offsetHeight', {
+      configurable: true,
+      get: () => 76,
+    })
+  }
 })
 
 const mocks = vi.hoisted(() => ({
@@ -221,8 +270,9 @@ describe('PipelineTab — права на действия (ADR-101, Э7)', () =
     expect(action(container, 'publish')).toBeNull()
     expect(action(container, 'start-run')).toBeNull()
     expect(action(container, 'delete')).toBeNull()
-    // режим правки JSON тоже скрыт
-    expect(container.textContent ?? '').not.toContain('JSON')
+    // Переключатель режима правки (канвас ↔ JSON) тоже скрыт.
+    expect(action(container, 'view-json')).toBeNull()
+    expect(action(container, 'view-visual')).toBeNull()
   })
 })
 

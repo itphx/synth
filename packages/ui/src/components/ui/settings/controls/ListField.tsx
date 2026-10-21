@@ -23,6 +23,8 @@ export interface ListFieldProps {
   variant?: ListFieldVariant
   /** Текст пустого состояния. */
   emptyText?: string
+  /** Поле read-only (правки запрещены — например, нет прав на содержимое). */
+  disabled?: boolean
 }
 
 const INPUT_CLASSES =
@@ -44,6 +46,7 @@ export function ListField({
   removeLabel,
   variant = 'list',
   emptyText,
+  disabled = false,
 }: ListFieldProps) {
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
@@ -86,6 +89,7 @@ export function ListField({
                 <input
                   type="text"
                   value={value}
+                  disabled={disabled}
                   onChange={(e) => updateAt(index, e.target.value)}
                   className={cn(INPUT_CLASSES, 'font-mono')}
                 />
@@ -93,6 +97,7 @@ export function ListField({
                   variant="ghost"
                   size="sm"
                   className="shrink-0"
+                  disabled={disabled}
                   onClick={() => removeAt(index)}
                 >
                   {resolvedRemove}
@@ -103,6 +108,7 @@ export function ListField({
               variant="outline"
               size="sm"
               className="shrink-0 self-start"
+              disabled={disabled}
               onClick={addRow}
             >
               {resolvedAdd}
@@ -119,6 +125,7 @@ export function ListField({
                 <button
                   type="button"
                   aria-label={`${resolvedRemove} ${value}`}
+                  disabled={disabled}
                   onClick={() => removeAt(index)}
                   className="shrink-0 rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
@@ -134,6 +141,7 @@ export function ListField({
             <input
               type="text"
               value={draft}
+              disabled={disabled}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -144,7 +152,7 @@ export function ListField({
               placeholder={placeholder}
               className={INPUT_CLASSES}
             />
-            <Button variant="outline" size="sm" className="shrink-0" onClick={add}>
+            <Button variant="outline" size="sm" className="shrink-0" disabled={disabled} onClick={add}>
               {resolvedAdd}
             </Button>
           </div>

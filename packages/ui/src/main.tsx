@@ -5,6 +5,7 @@ import { ThemeSystemProvider } from "./contexts/ThemeSystemContext"
 import { I18nProvider, initializeLocale } from "./lib/i18n"
 import { initDeviceClasses } from "./lib/device"
 import "react-toastify/dist/ReactToastify.css"
+import "@xyflow/react/dist/style.css"
 import "./styles/index.css"
 
 initializeLocale()

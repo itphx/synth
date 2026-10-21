@@ -9,6 +9,7 @@ import type {
   PipelineSpec,
   ProjectPipelineDetail,
 } from '@/lib/api/synthApi'
+import { pipelineSpecSchema, validatePipelineSpec } from '@itphx/synth-shared/types'
 import { useUIStore, type CenterTab } from '@/stores/useUIStore'
 import { useProjectsStore } from '@/stores/projectsStore'
 import { useAuthStore } from '@/stores/authStore'
@@ -18,6 +19,7 @@ import { useNotification } from '@/hooks/useNotification'
 import { confirm } from '@/lib/confirm'
 import { formatRelativeTime } from '@/lib/formatDate'
 import { PipelineSpecView } from './PipelineSpecView'
+import { PipelineEditor } from './editor/PipelineEditor'
 
 /** Статусы прогона — фильтр списка (ADR-101 §2.9). */
 const RUN_STATUSES: PipelineRunStatus[] = [
@@ -29,6 +31,35 @@ const RUN_STATUSES: PipelineRunStatus[] = [
   'cancelled',
 ]
 
+/** Режим правки черновика: канвас или JSON (ADR-101, Э7.2). */
+type DraftViewMode = 'visual' | 'json'
+
+/** Итог проверки спецификации (структура + семантика графа). */
+interface DraftValidation {
+  ok: boolean
+  problems: string[]
+}
+
+/**
+ * Проверка черновика: сначала структура (`pipelineSpecSchema`), затем
+ * семантика графа (`validatePipelineSpec` — ссылки переходов, поля по виду
+ * узла, выходы). Невалидная спецификация на сервер не уходит.
+ */
+function validateDraftSpec(spec: PipelineSpec | null): DraftValidation {
+  if (!spec) return { ok: false, problems: ['spec: нет спецификации'] }
+  const parsed = pipelineSpecSchema.safeParse(spec)
+  if (!parsed.success) {
+    return {
+      ok: false,
+      problems: parsed.error.issues.map(
+        (issue) => `${issue.path.join('.') || 'spec'}: ${issue.message}`,
+      ),
+    }
+  }
+  const result = validatePipelineSpec(spec)
+  return result.ok ? { ok: true, problems: [] } : { ok: false, problems: result.problems }
+}
+
 /**
  * Страница пайплайна проекта (ADR-101, Э7).
  *
@@ -36,9 +67,9 @@ const RUN_STATUSES: PipelineRunStatus[] = [
  * версию, даёт действия «Сохранить черновик» / «Опубликовать» / «Запустить прогон» /
  * «Удалить» и список прогонов с фильтром по статусу.
  *
- * **Редактора спецификации пока нет** (Э7.2 — `@xyflow/react`): спецификация
- * показана структурно (`PipelineSpecView` — точка расширения под канвас) и
- * редактируется в JSON-режиме (переходный способ задать спецификацию руками).
+ * Черновик правится **визуально** (канвас `@xyflow/react`, Э7.2) или в JSON-режиме
+ * (альтернативный способ правки — для отладки и точных правок). Опубликованная
+ * версия — всегда read-only (`PipelineSpecView`).
  */
 export function PipelineTab({ tab }: { tab: CenterTab }) {
   const { t } = useI18n()
@@ -64,9 +95,11 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [viewMode, setViewMode] = useState<'structure' | 'json'>('structure')
+  const [viewMode, setViewMode] = useState<DraftViewMode>('visual')
+  const [draftSpec, setDraftSpec] = useState<PipelineSpec | null>(null)
   const [draftJson, setDraftJson] = useState('')
   const [jsonError, setJsonError] = useState<string | null>(null)
+  const [validation, setValidation] = useState<DraftValidation | null>(null)
   const [statusFilter, setStatusFilter] = useState<PipelineRunStatus | ''>('')
 
   const reload = useCallback(async () => {
@@ -75,6 +108,7 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
     try {
       const result = await synthApi.getProjectPipeline(projectId, pipelineId)
       setDetail(result)
+      setDraftSpec(result.pipeline.draft ?? null)
       setDraftJson(result.pipeline.draft ? JSON.stringify(result.pipeline.draft, null, 2) : '')
       setError(null)
     } catch (err) {
@@ -93,15 +127,38 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
 
   const runs = runsByPipeline[pipelineId] ?? []
 
+  /** Спецификация черновика для сохранения (JSON-режим — из текста). */
+  const currentDraftSpec = (): { spec?: PipelineSpec; error?: string } => {
+    if (viewMode === 'json') {
+      try {
+        return { spec: JSON.parse(draftJson) as PipelineSpec }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+    return { spec: draftSpec ?? undefined }
+  }
+
+  /** Проверка графа: структура + семантика (`validatePipelineSpec`). */
+  const runValidation = (): DraftValidation => {
+    const { spec, error } = currentDraftSpec()
+    if (error) return { ok: false, problems: [error] }
+    return validateDraftSpec(spec ?? null)
+  }
+
   const saveDraft = async () => {
     if (!detail) return
-    let spec: PipelineSpec
-    try {
-      spec = JSON.parse(draftJson) as PipelineSpec
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setJsonError(message)
+    const { spec, error } = currentDraftSpec()
+    if (error || !spec) {
+      setJsonError(error ?? null)
       notify({ text: t('pipelines.invalidJson'), type: 'error', category: 'error' })
+      return
+    }
+    // Невалидная спецификация на сервер не уходит (сервер вернул бы 400).
+    const check = validateDraftSpec(spec)
+    setValidation(check)
+    if (!check.ok) {
+      notify({ text: t('pipelines.saveBlocked'), type: 'error', category: 'error' })
       return
     }
     setJsonError(null)
@@ -121,6 +178,36 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
     } finally {
       setBusy(false)
     }
+  }
+
+  /** Кнопка «Проверить» — только проверка, без отправки на сервер. */
+  const validateDraft = () => {
+    const check = runValidation()
+    setValidation(check)
+    notify({
+      text: check.ok ? t('pipelines.validateOk') : t('pipelines.validateFailed'),
+      type: check.ok ? 'success' : 'error',
+      category: check.ok ? 'system' : 'error',
+    })
+  }
+
+  /** Переключение режима правки: JSON ↔ канвас (спецификация синхронизируется). */
+  const switchViewMode = (mode: DraftViewMode) => {
+    if (mode === viewMode) return
+    if (mode === 'json') {
+      setDraftJson(draftSpec ? JSON.stringify(draftSpec, null, 2) : '')
+    } else {
+      try {
+        const parsed = JSON.parse(draftJson) as PipelineSpec
+        setDraftSpec(parsed)
+        setJsonError(null)
+      } catch (err) {
+        setJsonError(err instanceof Error ? err.message : String(err))
+        notify({ text: t('pipelines.invalidJson'), type: 'error', category: 'error' })
+        return
+      }
+    }
+    setViewMode(mode)
   }
 
   const publish = async () => {
@@ -244,6 +331,14 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
               {t('pipelines.saveDraft')}
             </button>
             <button
+              onClick={validateDraft}
+              disabled={busy}
+              data-action="validate"
+              className="rounded bg-interactive px-2 py-1 text-xs text-foreground hover:bg-interactive-hover transition-colors disabled:opacity-50"
+            >
+              {t('pipelines.validate')}
+            </button>
+            <button
               onClick={() => void publish()}
               disabled={busy}
               data-action="publish"
@@ -273,30 +368,33 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
 
       <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4">
         <section className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t('pipelines.draft')}
             </h2>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setViewMode('structure')}
-                className={`rounded px-2 py-0.5 text-[0.65rem] ${viewMode === 'structure' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-interactive-hover'}`}
-              >
-                {t('pipelines.viewStructure')}
-              </button>
-              {canEdit && (
+            {canEdit && (
+              <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setViewMode('json')}
+                  onClick={() => switchViewMode('visual')}
+                  data-action="view-visual"
+                  className={`rounded px-2 py-0.5 text-[0.65rem] ${viewMode === 'visual' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-interactive-hover'}`}
+                >
+                  {t('pipelines.editor.viewVisual')}
+                </button>
+                <button
+                  onClick={() => switchViewMode('json')}
+                  data-action="view-json"
                   className={`rounded px-2 py-0.5 text-[0.65rem] ${viewMode === 'json' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-interactive-hover'}`}
                 >
                   {t('pipelines.viewJson')}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
-          {viewMode === 'structure' || !canEdit ? (
-            <PipelineSpecView spec={pipeline.draft} />
-          ) : (
+
+          {!pipeline.draft ? (
+            <p className="text-xs text-muted-foreground">{t('pipelines.noDraft')}</p>
+          ) : viewMode === 'json' && canEdit ? (
             <div className="flex flex-col gap-1">
               <textarea
                 value={draftJson}
@@ -305,6 +403,42 @@ export function PipelineTab({ tab }: { tab: CenterTab }) {
                 className="min-h-[16rem] w-full resize-y rounded border border-border bg-card p-2 font-mono text-xs text-foreground outline-none"
               />
               {jsonError && <p className="text-xs text-destructive">{jsonError}</p>}
+            </div>
+          ) : (
+            <PipelineEditor
+              key={`${projectId}:${pipelineId}:${pipeline.draftVersion}`}
+              spec={draftSpec ?? pipeline.draft}
+              resetKey={`${pipeline.draftVersion}:${pipeline.updatedAt}`}
+              onChange={setDraftSpec}
+              readOnly={!canEdit}
+            />
+          )}
+
+          {validation && (
+            <div
+              data-testid="pipeline-validation"
+              className={`rounded-lg border px-2 py-1.5 ${
+                validation.ok
+                  ? 'border-status-success/30 bg-status-success/10'
+                  : 'border-destructive/30 bg-destructive/10'
+              }`}
+            >
+              <p
+                className={`text-xs font-medium ${
+                  validation.ok ? 'text-status-success' : 'text-destructive'
+                }`}
+              >
+                {validation.ok ? t('pipelines.validateOk') : t('pipelines.problems')}
+              </p>
+              {!validation.ok && (
+                <ul className="mt-1 flex flex-col gap-0.5">
+                  {validation.problems.map((problem, index) => (
+                    <li key={index} className="text-[0.65rem] text-destructive">
+                      {problem}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </section>
