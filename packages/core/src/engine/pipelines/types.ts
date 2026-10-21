@@ -18,10 +18,12 @@ import type {
   PipelineSpec,
   StepResult,
 } from '@itphx/synth-shared';
+import type { BaseProvider } from '../../providers/base.js';
 import type {
   PipelineRunRepository,
   ProjectPipelineRepository,
 } from '../../storage/ports/index.js';
+import type { SystemPromptComposer } from '../context/composer.js';
 import type { PipelineStepContext, PipelineStepContextDeps } from './step-context.js';
 
 /**
@@ -40,6 +42,12 @@ import type { PipelineStepContext, PipelineStepContextDeps } from './step-contex
  * нет в реестре), `pipeline.tool_failed` (тул вернул ошибку), `pipeline.script_failed`
  * (команда завершилась с ненулевым кодом) и `permission.denied` (отказ
  * permission-слоя — эскалация `ask` уходит в human-гейт, а `deny` валит шаг).
+ *
+ * Э4.3 (исполнитель вида `agent`) добавил: `pipeline.agent_unavailable`
+ * (LLM-контур не настроен — нет сборщика системного промпта),
+ * `pipeline.provider_not_found` (провайдер шага не собран), `pipeline.llm_failed`
+ * (ошибка LLM-вызова, повтор возможен) и `pipeline.llm_unrecoverable`
+ * (ошибка LLM-вызова, повтор не поможет — auth/model/context-length).
  */
 export const PIPELINE_ERROR_CODES = [
   'pipeline.not_found',
@@ -58,6 +66,10 @@ export const PIPELINE_ERROR_CODES = [
   'pipeline.tool_failed',
   'pipeline.script_failed',
   'permission.denied',
+  'pipeline.agent_unavailable',
+  'pipeline.provider_not_found',
+  'pipeline.llm_failed',
+  'pipeline.llm_unrecoverable',
 ] as const;
 
 /** Код ошибки движка пайплайнов (см. `PIPELINE_ERROR_CODES`). */
@@ -78,6 +90,49 @@ export class PipelineEngineError extends Error {
     this.name = 'PipelineEngineError';
     this.code = code;
   }
+}
+
+/**
+ * Дефолтные `provider`/`model` инстанса для шага пайплайна (ADR-089).
+ *
+ * Тот же seam, что у funnel'а сессий (`deps.resolveLlmDefaults`): источник
+ * задаёт потребитель — standalone core (`llm.defaultProvider`/`llm.defaultModel`),
+ * managed backend — свой. Пустые поля трактуются как «не задано».
+ */
+export interface PipelineLlmDefaults {
+  /** Имя провайдера инстанса. */
+  provider?: string;
+  /** Имя модели инстанса. */
+  model?: string;
+}
+
+/**
+ * LLM-контур шага (ADR-101 §4) — то, что нужно исполнителю вида `agent`.
+ *
+ * Прокидывается **движком** в `StepExecutionContext.llm` из
+ * `PipelineEngineDeps`: шаг не знает, откуда взялся провайдер (конфиг,
+ * роутер, реестр моделей) — это забота точки сборки. Единственная
+ * разрешённая точка LLM-вызова — `GatewayProvider` (ADR-036), поэтому
+ * резолвер обязан вернуть провайдер **уже обёрнутым** в gateway.
+ */
+export interface PipelineStepLlmRuntime {
+  /** Сборщик системного промпта (ADR-070) — единственная точка сборки. */
+  composer: SystemPromptComposer;
+  /**
+   * Провайдер шага (обёрнут в `GatewayProvider`, ADR-036).
+   *
+   * Резолвер получает контекст шага: режим, агент и вход могут влиять на
+   * выбор модели. `null`/`undefined` — провайдер не настроен (шаг падает с
+   * `pipeline.provider_not_found`).
+   */
+  resolveProvider: (
+    ctx: StepExecutionContext,
+  ) => Promise<BaseProvider | null> | BaseProvider | null;
+  /**
+   * Дефолтные `provider`/`model` инстанса (ADR-089) — диагностика шага и
+   * сообщение об ошибке. Провайдер собирает `resolveProvider`.
+   */
+  resolveLlmDefaults?: () => PipelineLlmDefaults | Promise<PipelineLlmDefaults>;
 }
 
 /**
@@ -119,6 +174,12 @@ export interface StepExecutionContext {
    * кладётся в контекст — исполнители берут из него инструменты и окружение.
    */
   step?: PipelineStepContext;
+  /**
+   * LLM-контур шага (ADR-101 §4): сборщик системного промпта и резолвер
+   * провайдера. Задаётся **движком** из `PipelineEngineDeps`; не задан —
+   * исполнитель вида `agent` падает с `pipeline.agent_unavailable`.
+   */
+  llm?: PipelineStepLlmRuntime;
   /**
    * Решение оператора по гейту (ADR-101 §6). Задаётся **только** при повторном
    * исполнении узла после `resume`: исполнитель не запрашивает гейт заново, а
@@ -290,6 +351,25 @@ export interface PipelineEngineDeps extends PipelineStepContextDeps {
   logger?: PipelineEngineLogger;
   /** Пауза между попытками ретрая (в тестах — мгновенная). */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Сборщик системного промпта шага (ADR-070) — для исполнителя вида
+   * `agent`. Не задан — agent-шаги падают с `pipeline.agent_unavailable`.
+   */
+  composer?: SystemPromptComposer | null;
+  /**
+   * Провайдер LLM-вызова шага (ADR-036) — **обёрнутый в `GatewayProvider`**.
+   *
+   * Резолвер получает контекст шага (режим/агент/вход): модель может
+   * зависеть от узла. `null` — провайдер не настроен.
+   */
+  resolveProvider?: (
+    ctx: StepExecutionContext,
+  ) => Promise<BaseProvider | null> | BaseProvider | null;
+  /**
+   * Дефолтные `provider`/`model` инстанса (ADR-089) — тот же seam, что у
+   * funnel'а сессий.
+   */
+  resolveLlmDefaults?: () => PipelineLlmDefaults | Promise<PipelineLlmDefaults>;
 }
 
 /** Опции запуска прогона. */

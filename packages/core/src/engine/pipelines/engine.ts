@@ -66,6 +66,7 @@ import {
   type PipelineGate,
   type PipelineGateDecision,
   type PipelineRunOptions,
+  type PipelineStepLlmRuntime,
   type StepExecutionContext,
   type StepExecutor,
   type StepOutcome,
@@ -121,6 +122,11 @@ const NON_RETRYABLE_ERROR_CODES = new Set<string>([
   'pipeline.gate_rejected',
   'pipeline.gate_timeout',
   'permission.denied',
+  // Э4.3: agent-шаг без LLM-контура/провайдера и невосполнимая ошибка LLM —
+  // повтор не изменит исход.
+  'pipeline.agent_unavailable',
+  'pipeline.provider_not_found',
+  'pipeline.llm_unrecoverable',
 ]);
 
 /**
@@ -143,6 +149,8 @@ export class PipelineEngine {
   private _gateSeq = 0;
   /** Зависимости сборки контекста шага (ADR-101 §10) — опциональные. */
   private readonly _stepContextDeps: PipelineEngineDeps;
+  /** LLM-контур шага (ADR-101 §4) — прокидывается в контекст исполнения. */
+  private readonly _llm: PipelineStepLlmRuntime | undefined;
 
   constructor(deps: PipelineEngineDeps) {
     this._pipelines = deps.pipelines;
@@ -154,6 +162,16 @@ export class PipelineEngine {
     this._exitHandlers = deps.exits ?? [];
     this._sleep = deps.sleep ?? defaultSleep;
     this._stepContextDeps = deps;
+    // ADR-101 §4: LLM-контур шага собирается один раз (движок не знает, откуда
+    // берётся провайдер — это забота точки сборки). Без композитора agent-шаги
+    // падают с `pipeline.agent_unavailable`.
+    this._llm = deps.composer
+      ? {
+          composer: deps.composer,
+          resolveProvider: deps.resolveProvider ?? (() => null),
+          ...(deps.resolveLlmDefaults ? { resolveLlmDefaults: deps.resolveLlmDefaults } : {}),
+        }
+      : undefined;
     this._logger = deps.logger ?? {
       info: (group, message) => logInfo(group, message),
       warning: (group, message) => logWarning(group, message),
@@ -601,12 +619,13 @@ export class PipelineEngine {
       ...(gateDecision ? { gateDecision } : {}),
     };
 
+    const withLlm = this._llm ? { llm: this._llm } : {};
     try {
       const step = await buildPipelineStepContext(ctx, this._stepContextDeps);
-      return { ...ctx, step };
+      return { ...ctx, step, ...withLlm };
     } catch {
       // Контекст шага — вспомогательный: его отсутствие не роняет шаг.
-      return ctx;
+      return { ...ctx, ...withLlm };
     }
   }
 

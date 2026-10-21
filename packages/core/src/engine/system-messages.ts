@@ -380,6 +380,13 @@ export const SYSTEM_MESSAGES = {
   'pipeline.script_failed': 'Command of step "{node}" exited with code {code}: {error}',
   'pipeline.script_no_command': 'Step "{node}" has no command to run',
   'pipeline.permission_denied': 'Step "{node}" was denied for tool "{tool}": {reason}',
+  // --- Исполнитель agent-шага (ADR-101 §4) ---
+  'pipeline.agent_unavailable':
+    'Step "{node}" cannot run an agent: the LLM runtime is not configured (no prompt composer)',
+  'pipeline.provider_not_found':
+    'Step "{node}" has no LLM provider configured (provider: "{provider}")',
+  'pipeline.llm_failed': 'Step "{node}" failed: LLM error ({type})',
+  'pipeline.llm_unrecoverable': 'Step "{node}" failed: LLM error ({type}) is not recoverable',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

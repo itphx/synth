@@ -2616,6 +2616,12 @@ export const dict = {
   'pipeline.script_failed': 'Команда шага «{node}» завершилась с кодом {code}: {error}',
   'pipeline.script_no_command': 'У шага «{node}» нет команды для запуска',
   'pipeline.permission_denied': 'Шаг «{node}» отклонён по правам на инструмент «{tool}»: {reason}',
+  'pipeline.agent_unavailable':
+    'Шаг «{node}» не может выполниться агентом: LLM-контур не настроен (нет сборщика системного промпта)',
+  'pipeline.provider_not_found':
+    'У шага «{node}» не настроен LLM-провайдер (провайдер: «{provider}»)',
+  'pipeline.llm_failed': 'Шаг «{node}» завершился ошибкой LLM ({type})',
+  'pipeline.llm_unrecoverable': 'Шаг «{node}» завершился ошибкой LLM ({type}), повтор не поможет',
 
   // --- SSH-ключи: UI раздела «Агенты» (ADR-076, T8) ---
   'sshKeys.title': 'SSH-ключи',

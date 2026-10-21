@@ -312,6 +312,11 @@ export const ENGINE_MESSAGE_KEYS = [
   'pipeline.script_failed',
   'pipeline.script_no_command',
   'pipeline.permission_denied',
+  // --- Исполнитель agent-шага (ADR-101 §4, Э4.3) ---
+  'pipeline.agent_unavailable',
+  'pipeline.provider_not_found',
+  'pipeline.llm_failed',
+  'pipeline.llm_unrecoverable',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -617,6 +622,10 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'pipeline.script_failed': ["node","code","error"],
   'pipeline.script_no_command': ["node"],
   'pipeline.permission_denied': ["node","tool","reason"],
+  'pipeline.agent_unavailable': ["node"],
+  'pipeline.provider_not_found': ["node","provider"],
+  'pipeline.llm_failed': ["node","type"],
+  'pipeline.llm_unrecoverable': ["node","type"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

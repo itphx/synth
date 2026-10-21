@@ -137,6 +137,11 @@ export interface PipelineStepContext {
   workspaceReady: boolean;
   /** Режим пайплайна (`plan`/`act`/`yolo`) — применяет permission-слой (ADR-025). */
   mode: PipelineMode;
+  /**
+   * Язык шага (`ru`/`en`) — резолвер проектных инструкций и сборка
+   * системного промпта (ADR-070). По умолчанию — `ru`.
+   */
+  language: string;
   /** Агент шага (`node.agent` → реестр агентов); `undefined` — агент не задан/не найден. */
   agent?: AgentDefinition;
   /** Все тулы шага: встроенные + MCP активных серверов (постоянный список, ADR-070 §2.9). */
@@ -208,6 +213,7 @@ export async function buildPipelineStepContext(
     ...(workspace ? { workspace } : {}),
     workspaceReady,
     mode,
+    language: deps.language ?? 'ru',
     ...(agent ? { agent } : {}),
     tools,
     availableTools,

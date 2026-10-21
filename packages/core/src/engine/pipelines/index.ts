@@ -15,7 +15,7 @@
  * - `permissions.ts` — permission-обёртка пайплайна (ADR-025/ADR-029);
  * - `gate.ts` — общие помощники гейтов (пауза, таймаут, решение оператора);
  * - `step-context.ts` — контекст шага (проект/workspace/режим/тулы/MCP);
- * - `executors/` — исполнители видов шага (`tool`/`script`/`human`);
+ * - `executors/` — исполнители видов шага (`tool`/`script`/`human`/`agent`);
  * - `engine.ts` — `PipelineEngine`.
  */
 export { PipelineEngine } from './engine.js';
@@ -40,10 +40,13 @@ export {
 } from './gate.js';
 export {
   buildShellCommand,
+  buildStepUserMessage,
   buildToolContext,
+  createAgentStepExecutor,
   createHumanStepExecutor,
   createScriptStepExecutor,
   createToolStepExecutor,
+  executeAgentStep,
   executeScriptStep,
   executeToolStep,
   findTool,
@@ -52,6 +55,8 @@ export {
   stepWorkingDir,
 } from './executors/index.js';
 export type {
+  AgentStepExecutorOptions,
+  AgentStepState,
   PipelineToolLookup,
   ScriptStepExecutorOptions,
   ToolStepExecutorOptions,
@@ -82,8 +87,10 @@ export type {
   PipelineGate,
   PipelineGateDecision,
   PipelineGateKind,
+  PipelineLlmDefaults,
   PipelinePathContext,
   PipelineRunOptions,
+  PipelineStepLlmRuntime,
   StepExecutionContext,
   StepExecutor,
   StepGateOutcome,
