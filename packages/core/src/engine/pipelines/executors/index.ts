@@ -31,12 +31,15 @@ export {
 export {
   buildStepUserMessage,
   createAgentStepExecutor,
+  DEFAULT_MAX_AGENT_ITERATIONS,
   executeAgentStep,
 } from './agent-step.js';
 export type { AgentStepExecutorOptions, AgentStepState } from './agent-step.js';
 
 export {
   buildToolContext,
+  checkStepToolPermission,
+  executeStepTool,
   findTool,
   stepWorkingDir,
 } from './common.js';

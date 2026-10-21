@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { ToolCapability } from '@itphx/synth-shared';
-import type { LLMResponse, PipelineNode, ToolDefinition } from '@itphx/synth-shared';
+import type { LLMResponse, PipelineNode, ToolContext, ToolDefinition } from '@itphx/synth-shared';
 
 import type {
   BaseProvider,
@@ -88,13 +88,36 @@ function makeComposer(
 }
 
 /** Инструмент шага. */
-function makeTool(name: string): ToolDefinition {
+function makeTool(
+  name: string,
+  execute: ToolDefinition['execute'] = async () => ({ content: 'ок' }),
+): ToolDefinition {
   return {
     name,
     description: `тул ${name}`,
     parameters: z.object({ value: z.string().optional() }),
     capabilities: [ToolCapability.SEARCH],
-    execute: async () => ({ content: 'ок' }),
+    execute,
+  };
+}
+
+/** Ответ модели с вызовом тула (OpenAI-формат). */
+function toolCallResponse(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+): LLMResponse {
+  return {
+    content: '',
+    model: 'mock-model',
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+    toolCalls: [
+      {
+        id,
+        type: 'function',
+        function: { name, arguments: JSON.stringify(args) },
+      },
+    ],
   };
 }
 
@@ -411,5 +434,381 @@ describe('исполнитель agent-шага (ADR-101 §4, Э4.3a)', () => {
     } finally {
       await rm(userDataDir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * Tool-Use-цикл агентского шага (ADR-101 §4, Э4.3b).
+ *
+ * Проверяются: исполнение вызова тула и результат в локальной истории,
+ * отказ по правам (`deny`) — модель видит отказ и цикл продолжается,
+ * эскалация `ask` → гейт и её закрытие решением оператора (одобрение →
+ * вызов с выданным правом, отказ → вызов не исполняется), лимит итераций,
+ * отмена и отсутствие полных выводов тулов в выходе шага.
+ */
+describe('Tool-Use-цикл agent-шага (ADR-101 §4, Э4.3b)', () => {
+  /** Провайдер: первый ответ — с вызовом тула, дальше — финальный ответ. */
+  function makeToolThenFinal(
+    toolCall: LLMResponse,
+    finalText = 'готово',
+  ): { provider: BaseProvider; calls: ProviderCall[] } {
+    let n = 0;
+    return makeProvider(() => {
+      n += 1;
+      return n === 1 ? toolCall : okResponse(finalText);
+    });
+  }
+
+  it('ответ с вызовом тула → тул выполнен, результат в локальной истории, второй вызов LLM даёт финал', async () => {
+    const execute = vi.fn(async (_args: unknown, _ctx: ToolContext) => ({ content: 'результат тула' }));
+    const tool = makeTool('noop', execute);
+    const { provider, calls } = makeToolThenFinal(
+      toolCallResponse('call_1', 'noop', { value: 'x' }),
+    );
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({ toolRegistry: { get: () => tool } });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    expect(outcome.status).toBe('ok');
+    expect(outcome.output?.text).toBe('готово');
+    // Тул вызван один раз, с аргументами модели.
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[0]).toEqual({ value: 'x' });
+    // Два LLM-вызова: первый — с вызовом, второй — с результатом в истории.
+    expect(calls).toHaveLength(2);
+    const toolMessages = (calls[1]?.messages ?? []).filter((msg) => msg.role === 'tool');
+    expect(toolMessages).toHaveLength(1);
+    expect(toolMessages[0]?.content).toBe('результат тула');
+    // Результат парный к вызову (по id) — провайдеры требуют пару.
+    expect(toolMessages[0]?.toolCallId).toBe('call_1');
+    // Сводка вызовов — имя и признак ошибки.
+    expect(outcome.output?.toolCalls).toEqual([{ name: 'noop', isError: false }]);
+  });
+
+  it('deny → тул не выполняется, модель видит отказ, цикл продолжается', async () => {
+    const execute = vi.fn(async (_args: unknown, _ctx: ToolContext) => ({ content: 'ок' }));
+    const tool = makeTool('noop', execute);
+    const { provider, calls } = makeToolThenFinal(
+      toolCallResponse('call_1', 'noop', { value: 'x' }),
+    );
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({
+      toolRegistry: { get: () => tool },
+      permissions: { permissionConfig: { rules: { noop: 'deny' }, askTimeoutMs: 1000 } },
+    });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    // Отказ не валит шаг: модель увидела отказ и продолжила.
+    expect(outcome.status).toBe('ok');
+    expect(outcome.output?.text).toBe('готово');
+    expect(execute).not.toHaveBeenCalled();
+    // Отказ виден модели в истории.
+    const toolMessages = (calls[1]?.messages ?? []).filter((msg) => msg.role === 'tool');
+    expect(toolMessages).toHaveLength(1);
+    expect(toolMessages[0]?.content).toContain('Permission denied');
+    expect(outcome.output?.toolCalls).toEqual([{ name: 'noop', isError: true }]);
+  });
+
+  it('ask → пауза-гейт с именем тула и аргументами; после одобрения тул исполняется с выданным правом', async () => {
+    const execute = vi.fn(async (_args: unknown, _ctx: ToolContext) => ({ content: 'результат тула' }));
+    const tool = makeTool('noop', execute);
+    const { provider } = makeToolThenFinal(toolCallResponse('call_1', 'noop', { value: 'x' }));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({
+      toolRegistry: { get: () => tool },
+      permissions: { permissionConfig: { rules: { noop: 'ask' }, askTimeoutMs: 1000 } },
+    });
+
+    // Первый проход — эскалация: пауза-гейт.
+    const paused = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(isStepGateOutcome(paused)).toBe(true);
+    if (!isStepGateOutcome(paused)) return;
+    expect(paused.gate.kind).toBe('tool_approval');
+    expect(paused.gate.nodeId).toBe('step1');
+    expect(paused.gate.toolName).toBe('noop');
+    expect(paused.gate.args).toEqual({ value: 'x' });
+    expect(paused.gate.question).toContain('noop');
+    // До одобрения тул не вызывается.
+    expect(execute).not.toHaveBeenCalled();
+
+    // Возобновление: одобрение оператора — вызов исполняется с правом.
+    // Узел исполняется заново (ADR-101 §2.13) — модель снова просит тул.
+    const { provider: providerResumed } = makeToolThenFinal(
+      toolCallResponse('call_1', 'noop', { value: 'x' }),
+    );
+    const resumed = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => providerResumed },
+        gateDecision: { approved: true },
+        gate: {
+          kind: 'tool_approval',
+          nodeId: 'step1',
+          toolName: 'noop',
+          args: { value: 'x' },
+        },
+      }),
+    );
+
+    expect(isStepGateOutcome(resumed)).toBe(false);
+    if (isStepGateOutcome(resumed)) return;
+    expect(resumed.status).toBe('ok');
+    expect(execute).toHaveBeenCalledTimes(1);
+    // Повторная эскалация `ask` не блокирует: право выдано оператором.
+    expect(resumed.output?.text).toBe('готово');
+  });
+
+  it('одобрение без данных гейта закрывает первую эскалацию ask', async () => {
+    const execute = vi.fn(async (_args: unknown, _ctx: ToolContext) => ({ content: 'ок' }));
+    const tool = makeTool('noop', execute);
+    const { provider } = makeToolThenFinal(toolCallResponse('call_1', 'noop', { value: 'x' }));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({
+      toolRegistry: { get: () => tool },
+      permissions: { permissionConfig: { rules: { noop: 'ask' }, askTimeoutMs: 1000 } },
+    });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+        gateDecision: { approved: true },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    expect(outcome.status).toBe('ok');
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('resume с отклонением → тул не выполняется, цикл продолжается', async () => {
+    const execute = vi.fn(async (_args: unknown, _ctx: ToolContext) => ({ content: 'ок' }));
+    const tool = makeTool('noop', execute);
+    const { provider, calls } = makeToolThenFinal(
+      toolCallResponse('call_1', 'noop', { value: 'x' }),
+    );
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({
+      toolRegistry: { get: () => tool },
+      permissions: { permissionConfig: { rules: { noop: 'ask' }, askTimeoutMs: 1000 } },
+    });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+        gateDecision: { approved: false, comment: 'не надо' },
+        gate: {
+          kind: 'tool_approval',
+          nodeId: 'step1',
+          toolName: 'noop',
+          args: { value: 'x' },
+        },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    // Отказ оператора не валит шаг: модель видит отказ и отвечает.
+    expect(outcome.status).toBe('ok');
+    expect(execute).not.toHaveBeenCalled();
+    const toolMessages = (calls[1]?.messages ?? []).filter((msg) => msg.role === 'tool');
+    expect(toolMessages).toHaveLength(1);
+    expect(toolMessages[0]?.content.length).toBeGreaterThan(0);
+    expect(outcome.output?.toolCalls).toEqual([{ name: 'noop', isError: true }]);
+  });
+
+  it('одобрение оператора не обходит deny-политику, если данные гейта неизвестны', async () => {
+    const execute = vi.fn(async (_args: unknown, _ctx: ToolContext) => ({ content: 'ок' }));
+    const tool = makeTool('noop', execute);
+    const { provider } = makeToolThenFinal(toolCallResponse('call_1', 'noop', { value: 'x' }));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({
+      toolRegistry: { get: () => tool },
+      permissions: { permissionConfig: { rules: { noop: 'deny' }, askTimeoutMs: 1000 } },
+    });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+        // Решение оператора есть, данных гейта нет — отказ по политике прав
+        // всё равно действует.
+        gateDecision: { approved: true },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    expect(outcome.status).toBe('ok');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('одобрение относится только к одобренному вызову: другие аргументы — новая эскалация', async () => {
+    const execute = vi.fn(async (_args: unknown, _ctx: ToolContext) => ({ content: 'ок' }));
+    const tool = makeTool('noop', execute);
+    const { provider } = makeProvider(() => toolCallResponse('call_1', 'noop', { value: 'other' }));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({
+      toolRegistry: { get: () => tool },
+      permissions: { permissionConfig: { rules: { noop: 'ask' }, askTimeoutMs: 1000 } },
+    });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+        gateDecision: { approved: true },
+        gate: {
+          kind: 'tool_approval',
+          nodeId: 'step1',
+          toolName: 'noop',
+          args: { value: 'x' },
+        },
+      }),
+    );
+
+    // Одобрение было на другой вызов — нужен новый гейт.
+    expect(isStepGateOutcome(outcome)).toBe(true);
+    if (!isStepGateOutcome(outcome)) return;
+    expect(outcome.gate.toolName).toBe('noop');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('превышение лимита итераций → шаг failed с pipeline.agent_iterations', async () => {
+    const execute = vi.fn(async (_args: unknown, _ctx: ToolContext) => ({ content: 'ок' }));
+    const tool = makeTool('noop', execute);
+    // Модель бесконечно просит один и тот же тул.
+    const { provider, calls } = makeProvider(() => toolCallResponse('call_1', 'noop', {}));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({
+      toolRegistry: { get: () => tool },
+      maxIterations: 3,
+    });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error?.code).toBe('pipeline.agent_iterations');
+    expect(outcome.error?.message).toBeTruthy();
+    // Ровно по лимиту итераций.
+    expect(calls).toHaveLength(3);
+  });
+
+  it('отмена в ходе цикла прерывает шаг (без зависания)', async () => {
+    const controller = new AbortController();
+    const tool = makeTool('noop', async () => {
+      controller.abort();
+      return { content: 'ок' };
+    });
+    const { provider } = makeProvider(() => toolCallResponse('call_1', 'noop', {}));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({ toolRegistry: { get: () => tool } });
+
+    const pending = executor.execute(
+      makeCtx(makeNode(), {
+        signal: controller.signal,
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    const outcome = await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error('шаг не прервался')), 2000),
+      ),
+    ]);
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error?.code).toBe('pipeline.cancelled');
+  });
+
+  it('в output нет полных выводов тулов и секретов', async () => {
+    const secret = 'SUPER-SECRET-VALUE';
+    const tool = makeTool('noop', async () => ({ content: `вывод тула: ${secret}` }));
+    const { provider } = makeToolThenFinal(toolCallResponse('call_1', 'noop', {}));
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({ toolRegistry: { get: () => tool } });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    expect(outcome.status).toBe('ok');
+    const serialized = JSON.stringify(outcome.output);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain('вывод тула');
+    // В выходе — текст, расход и сводка вызовов (имя + признак ошибки).
+    expect(Object.keys(outcome.output ?? {}).sort()).toEqual(['text', 'toolCalls', 'usage']);
+    expect(outcome.output?.toolCalls).toEqual([{ name: 'noop', isError: false }]);
+  });
+
+  it('без инфраструктуры инструментов шаг падает с pipeline.agent_unavailable (без падения процесса)', async () => {
+    const { provider } = makeToolThenFinal(toolCallResponse('call_1', 'noop', {}));
+    const { composer } = makeComposer();
+    // Ни реестра инструментов, ни контекста шага — исполнять вызовы нечем.
+    const executor = createAgentStepExecutor();
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error?.code).toBe('pipeline.agent_unavailable');
+  });
+
+  it('тул, которого нет в реестре, не роняет шаг: модель получает отказ и продолжает', async () => {
+    const { provider, calls } = makeToolThenFinal(
+      toolCallResponse('call_1', 'unknown_tool', {}),
+    );
+    const { composer } = makeComposer();
+    const executor = createAgentStepExecutor({
+      toolRegistry: { get: () => undefined },
+      permissions: { permissionConfig: { rules: {}, askTimeoutMs: 1000 } },
+    });
+
+    const outcome = await executor.execute(
+      makeCtx(makeNode(), {
+        step: makeStepContext(),
+        llm: { composer, resolveProvider: () => provider },
+      }),
+    );
+
+    expect(isStepGateOutcome(outcome)).toBe(false);
+    if (isStepGateOutcome(outcome)) return;
+    expect(outcome.status).toBe('ok');
+    const toolMessages = (calls[1]?.messages ?? []).filter((msg) => msg.role === 'tool');
+    expect(toolMessages).toHaveLength(1);
   });
 });

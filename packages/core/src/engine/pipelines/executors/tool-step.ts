@@ -21,10 +21,14 @@
 import type { StepResult } from '@itphx/synth-shared';
 
 import { t } from '../../system-messages.js';
-import { executeToolDef } from '../../tools/tool-execution.js';
-import { checkPipelineToolPermission, type PipelinePermissionDeps } from '../permissions.js';
+import type { PipelinePermissionDeps } from '../permissions.js';
 import type { StepExecutionContext, StepExecutor, StepOutcome } from '../types.js';
-import { buildToolContext, findTool, stepWorkingDir, type PipelineToolLookup } from './common.js';
+import {
+  checkStepToolPermission,
+  executeStepTool,
+  findTool,
+  type PipelineToolLookup,
+} from './common.js';
 
 /** Опции исполнителя tool-шага. */
 export interface ToolStepExecutorOptions {
@@ -71,20 +75,12 @@ export async function executeToolStep(
     }
   } else {
     const toolDef = findTool(ctx, opts.toolRegistry, toolName);
-    const workingDir = stepWorkingDir(ctx);
-    const permission = checkPipelineToolPermission(
-      {
-        toolName,
-        params: args,
-        workingDir,
-        ...(toolDef ? { capabilities: toolDef.capabilities } : {}),
-        mode: ctx.mode,
-        ...(ctx.step ? { workspaceReady: ctx.step.workspaceReady } : {}),
-        ...(ctx.step?.agent?.capabilities
-          ? { agentCapabilities: ctx.step.agent.capabilities }
-          : {}),
-      },
+    const permission = checkStepToolPermission(
+      ctx,
       opts.permissions,
+      toolName,
+      args,
+      toolDef?.capabilities,
     );
 
     if (permission.action === 'deny') {
@@ -118,8 +114,7 @@ export async function executeToolStep(
     }));
   }
 
-  const toolContext = buildToolContext(ctx, stepWorkingDir(ctx));
-  const result = await executeToolDef(toolDef, args, toolContext, toolName);
+  const result = await executeStepTool(ctx, toolDef, toolName, args);
 
   if (result.isError) {
     return failed(ctx, 'pipeline.tool_failed', t('pipeline.tool_failed', {

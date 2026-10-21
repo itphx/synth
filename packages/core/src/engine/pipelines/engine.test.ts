@@ -594,6 +594,43 @@ describe('PipelineEngine', () => {
     );
   });
 
+  it('эскалация ask: одобрение оператора передаёт исполнителю данные гейта (инструмент и аргументы)', async () => {
+    const seen: Array<{ toolName?: string; args?: Record<string, unknown> }> = [];
+    // Исполнитель: первый проход — эскалация ask, второй (после resume) —
+    // применяет решение оператора (одобрение) к тому же вызову.
+    let first = true;
+    const askExecutor: StepExecutor = {
+      kind: 'tool',
+      execute: async (ctx: StepExecutionContext) => {
+        if (first) {
+          first = false;
+          return {
+            kind: 'gate',
+            gate: {
+              kind: 'tool_approval',
+              nodeId: ctx.node.id,
+              toolName: 'noop',
+              args: { value: 'x' },
+            },
+          };
+        }
+        seen.push({ ...(ctx.gate?.toolName ? { toolName: ctx.gate.toolName } : {}), ...(ctx.gate?.args ? { args: ctx.gate.args } : {}) });
+        return { status: 'ok', attempt: ctx.attempt, output: { approved: ctx.gateDecision?.approved } };
+      },
+    };
+
+    const { engine } = await setup(spec([{ id: 'ask', kind: 'tool', tool: 'noop' }]), [askExecutor]);
+
+    const paused = await engine.run({ pipelineId: 'p1', trigger });
+    expect(paused.status).toBe('awaiting_human');
+
+    const resumed = await engine.resume(paused.id, { approved: true });
+
+    expect(resumed.status).toBe('done');
+    // Данные гейта восстановлены из журнала прогона и переданы исполнителю.
+    expect(seen).toEqual([{ toolName: 'noop', args: { value: 'x' } }]);
+  });
+
   it('human-исполнитель: одобрение оператора превращается в результат шага', async () => {
     const { engine } = await setup(
       spec([

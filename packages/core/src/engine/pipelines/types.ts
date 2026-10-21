@@ -48,6 +48,9 @@ import type { PipelineStepContext, PipelineStepContextDeps } from './step-contex
  * `pipeline.provider_not_found` (провайдер шага не собран), `pipeline.llm_failed`
  * (ошибка LLM-вызова, повтор возможен) и `pipeline.llm_unrecoverable`
  * (ошибка LLM-вызова, повтор не поможет — auth/model/context-length).
+ *
+ * Э4.3b (Tool-Use-цикл агентского шага) добавил: `pipeline.agent_iterations`
+ * (исчерпан лимит итераций Tool-Use-цикла — модель не привела к ответу).
  */
 export const PIPELINE_ERROR_CODES = [
   'pipeline.not_found',
@@ -70,6 +73,7 @@ export const PIPELINE_ERROR_CODES = [
   'pipeline.provider_not_found',
   'pipeline.llm_failed',
   'pipeline.llm_unrecoverable',
+  'pipeline.agent_iterations',
 ] as const;
 
 /** Код ошибки движка пайплайнов (см. `PIPELINE_ERROR_CODES`). */
@@ -186,6 +190,14 @@ export interface StepExecutionContext {
    * применяет решение оператора (одобрение/отклонение).
    */
   gateDecision?: PipelineGateDecision;
+  /**
+   * Данные гейта, на котором прогон стоял (ADR-101 §6): восстанавливаются
+   * движком из журнала прогона (`gate.awaiting`) при `resume`.
+   *
+   * Исполнитель использует их, чтобы применить решение оператора **к тому же**
+   * вызову инструмента (имя + аргументы), а не к произвольному.
+   */
+  gate?: PipelineGate;
   /**
    * Обработчик активного таймаута гейта (ADR-101 §6): исполнитель, у которого
    * гейт имеет `timeoutSec`, по истечении времени вызывает колбэк с готовым

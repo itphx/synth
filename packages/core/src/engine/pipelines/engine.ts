@@ -127,6 +127,9 @@ const NON_RETRYABLE_ERROR_CODES = new Set<string>([
   'pipeline.agent_unavailable',
   'pipeline.provider_not_found',
   'pipeline.llm_unrecoverable',
+  // Э4.3b: исчерпан лимит итераций Tool-Use-цикла — модель зациклилась на
+  // вызовах тулов; повтор узла повторит тот же цикл.
+  'pipeline.agent_iterations',
 ]);
 
 /**
@@ -338,6 +341,9 @@ export class PipelineEngine {
       gateDecision: decision,
       startAttempt: attempt,
       gateToken,
+      // Данные гейта (инструмент/аргументы) — из журнала прогона: решение
+      // оператора применяется к тому же вызову (ADR-101 §6).
+      gate: await this._lastGate(runId, node.id),
     });
     if (isStepGateOutcome(outcome)) {
       // Исполнитель запросил гейт снова — пауза продлевается.
@@ -520,14 +526,19 @@ export class PipelineEngine {
     state: RunState,
     node: PipelineNode,
     signal: AbortSignal,
-    opts?: { gateDecision?: PipelineGateDecision; startAttempt?: number; gateToken?: string },
+    opts?: {
+      gateDecision?: PipelineGateDecision;
+      startAttempt?: number;
+      gateToken?: string;
+      gate?: PipelineGate;
+    },
   ): Promise<StepOutcome> {
     const executor = this._executors.get(node.kind);
     const maxAttempts = 1 + Math.max(0, node.retry?.max ?? 0);
     let attempt = opts?.startAttempt !== undefined ? opts.startAttempt - 1 : 0;
     let outcome: StepOutcome | undefined;
 
-    const baseCtx = await this._buildStepContext(state, node, opts?.gateDecision);
+    const baseCtx = await this._buildStepContext(state, node, opts?.gateDecision, opts?.gate);
     const gateToken = opts?.gateToken ?? this._nextGateToken();
 
     for (;;) {
@@ -596,6 +607,7 @@ export class PipelineEngine {
     state: RunState,
     node: PipelineNode,
     gateDecision?: PipelineGateDecision,
+    gate?: PipelineGate,
   ): Promise<StepExecutionContext> {
     const trigger = state.record.trigger ?? { kind: 'manual' };
     const ctx: StepExecutionContext = {
@@ -617,6 +629,7 @@ export class PipelineEngine {
       attempt: 1,
       mode: state.spec.mode,
       ...(gateDecision ? { gateDecision } : {}),
+      ...(gate ? { gate } : {}),
     };
 
     const withLlm = this._llm ? { llm: this._llm } : {};
@@ -946,6 +959,41 @@ export class PipelineEngine {
       (event) => event.type === 'node.started' && event.payload?.node === nodeId,
     ).length;
   }
+
+  /**
+   * Данные последнего гейта узла (по журналу) — что именно прогон ждал.
+   *
+   * Читаются из события `gate.awaiting`: переживают перезапуск процесса и
+   * дают исполнителю понять, к какому вызову относится решение оператора
+   * (инструмент + аргументы). Данные журнала **санитизированы** (ADR-101
+   * §2.9) — секреты в них вырезаны.
+   */
+  private async _lastGate(runId: string, nodeId: string): Promise<PipelineGate | undefined> {
+    const events = await this._runs.listEvents(runId);
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      const event = events[i]!;
+      if (event.type !== 'gate.awaiting') continue;
+      const payload = event.payload ?? {};
+      if (payload.node !== nodeId) continue;
+      const kind = payload.kind === 'human' ? 'human' : 'tool_approval';
+      return {
+        kind,
+        nodeId,
+        ...(typeof payload.toolName === 'string' ? { toolName: payload.toolName } : {}),
+        ...(isPlainRecord(payload.args) ? { args: payload.args } : {}),
+        ...(typeof payload.question === 'string' ? { question: payload.question } : {}),
+        ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
+        ...(typeof payload.timeoutSec === 'number' ? { timeoutSec: payload.timeoutSec } : {}),
+        ...(typeof payload.reason === 'string' ? { reason: payload.reason } : {}),
+      };
+    }
+    return undefined;
+  }
+}
+
+/** Обычный объект (не массив и не `null`). */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**
