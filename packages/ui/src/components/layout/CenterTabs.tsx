@@ -30,6 +30,9 @@ const TAB_ICONS: Record<CenterTab['type'], string> = {
   'file-viewer': 'file-3',
   'file-editor': 'edit-2',
   'commit-detail': 'git-commit',
+  // ADR-101 (Э7): пайплайн и прогон пайплайна.
+  pipeline: 'links-line',
+  'pipeline-run': 'time',
 }
 
 /**
@@ -74,6 +77,16 @@ function TabTooltipLabel({ tab }: { tab: CenterTab }) {
     return projectName
       ? t('center.tabTooltip.commitDetail', { title: tab.title, project: projectName })
       : t('center.tabTooltip.noProject.commitDetail', { title: tab.title })
+  }
+  if (tab.type === 'pipeline') {
+    return projectName
+      ? t('center.tabTooltip.pipeline', { title: tab.title, project: projectName })
+      : t('center.tabTooltip.noProject.pipeline', { title: tab.title })
+  }
+  if (tab.type === 'pipeline-run') {
+    return projectName
+      ? t('center.tabTooltip.pipelineRun', { title: tab.title, project: projectName })
+      : t('center.tabTooltip.noProject.pipelineRun', { title: tab.title })
   }
   return projectName
     ? t('center.tabTooltip.fileEditor', { title: tab.title, project: projectName })

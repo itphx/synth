@@ -9,6 +9,7 @@ import { useUIStore } from './useUIStore'
 import { usePermissionStore, PERMISSION_ASK_TIMEOUT_MS } from './permissionStore'
 import { useSkillsStore } from './skillsStore'
 import { useInstructionsStore } from './instructionsStore'
+import { usePipelinesStore } from './pipelinesStore'
 import type { TransportMode } from './useUIStore'
 import type { StreamDoneMetadata, MessageData, MessageStatus, CostBreakdown } from './chatStore'
 import { synthApi } from '@/lib/api/synthApi'
@@ -95,6 +96,16 @@ export function createDispatcher(): EventDispatcher {
     try {
     const type = event.type
     const payload = (event.data || event) as Record<string, unknown>
+
+    // ADR-101 §2.12.3: события прогона пайплайна (`pipeline.run.*`) публикуются
+    // в **инстансный** канал шины — у них нет сессии (`sessionId` = 'instance'
+    // или пусто). Обрабатываем ДО проверки `sid`, иначе они отбрасывались бы
+    // как «бессессионные» (инвариант 6: новых транспортных каналов не заводим).
+    if (type.startsWith('pipeline.')) {
+      usePipelinesStore.getState().applyRunEvent(payload)
+      return
+    }
+
     const sid = (event.sessionId as string)
       || (event.session_id as string)
       || (payload.session_id as string)

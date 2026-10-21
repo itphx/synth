@@ -29,7 +29,7 @@ interface RightPanelState {
 /** Ключ-обёртка сворачивания блока «Другие проекты» в левой панели (Files/Git). */
 export const OTHER_PROJECTS_COLLAPSE_KEY = '__others__'
 
-export type CenterTabType = 'chat' | 'file-viewer' | 'file-editor' | 'commit-detail'
+export type CenterTabType = 'chat' | 'file-viewer' | 'file-editor' | 'commit-detail' | 'pipeline' | 'pipeline-run'
 
 export interface CenterTab {
   id: string
@@ -41,6 +41,10 @@ export interface CenterTab {
     projectId?: string
     commitHash?: string
     repoPath?: string
+    /** ADR-101: id пайплайна проекта (вкладка «Пайплайн»). */
+    pipelineId?: string
+    /** ADR-101: id прогона пайплайна (вкладка «Прогон»). */
+    runId?: string
   }
   editingState?: 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 }
