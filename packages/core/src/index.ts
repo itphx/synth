@@ -84,6 +84,9 @@ export type {
 } from './execution/ports/index.js';
 export { InlineExecutionPort } from './execution/inline-execution-port.js';
 export { resolveExecutionPort, EXECUTION_PORT_KEY } from './execution/tool-port.js';
+// PROP-077 (шаг 3): проверка режима исполнения при старте процесса.
+export { checkExecutionMode, assertExecutionModeSupported } from './execution/startup.js';
+export type { ExecutionStartupCheck, ExecutionStartupIssue } from './execution/startup.js';
 export {
   detectRuntimeDeps,
   resetRuntimeDepsCache,

@@ -192,13 +192,16 @@
 ## Карта модулей
 
 - `main.ts` — CLI/точка входа (`serve`, `chat`, `connect`, `project publish|fork`, `secrets rotate`, `analytics rebuild`, …).
-- `execution/` — PROP-077 (шаг 1): порт исполнения команд — `ports/execution-port.ts`
+- `execution/` — PROP-077 (шаги 1, 3): порт исполнения команд и проверка режима при старте —
+  `ports/execution-port.ts`
   (`ExecutionPort`, `ExecRequest`, `ExecResult`, `ExecCommand` — union `shell`/`argv`,
   `ExecutionError`, `DEFAULT_MAX_OUTPUT_BYTES`), `inline-execution-port.ts`
   (`InlineExecutionPort` — исполнение в процессе поверх `execFile`), `contract/`
   (контрактный suite порта — обязателен для любой реализации, как `storage/contract/`),
   `tool-port.ts` (`resolveExecutionPort(ctx)` — шов: берёт порт из `ctx.extra.executionPort`,
-  иначе inline-фоллбэк).
+  иначе inline-фоллбэк), `startup.ts` (`checkExecutionMode`/`assertExecutionModeSupported` —
+  fail-closed при старте: `mode: remote` без адресов → «требуется хотя бы один адрес исполнителя»,
+  с адресами → «удалённый исполнитель ещё не реализован», шаг 7 плана PROP-077).
 - `metrics/` — ADR-094: `registry.ts` (counter/gauge/histogram, лимит серий 2000,
   `synth_metrics_series_dropped_total`, `addCollector`), `renderer.ts` (text exposition 0.0.4,
   golden-тесты), `http.ts` (Hono-middleware: `method`/шаблон `route`/`status`, `in_flight`,

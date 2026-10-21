@@ -361,6 +361,12 @@ export const SYSTEM_MESSAGES = {
   'profile.user_unavailable': 'Error: the session has no owner — profile update is unavailable',
   'profile.save_error': 'Error saving the profile: {error}',
   'profile.updated': 'Profile updated ({fields}).',
+
+  // --- Исполнение (PROP-077) ---
+  'execution.remote_not_supported':
+    'Remote execution mode (execution.mode=remote) is not available yet: the executor service is not implemented (PROP-077, step 7). Use execution.mode=inline.',
+  'execution.remote_url_required':
+    'Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

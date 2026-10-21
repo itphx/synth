@@ -2,11 +2,13 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { SynthConfig } from './types.js';
 import { defaultConfig } from './defaults.js';
 import { defaultConfig as defaultsModule } from './defaults.js';
+import { defaultExecutionConcurrency } from './execution.js';
 
 describe('defaultConfig', () => {
   it('содержит все обязательные секции', () => {
     expect(defaultConfig).toHaveProperty('server');
     expect(defaultConfig).toHaveProperty('storage');
+    expect(defaultConfig).toHaveProperty('execution');
     expect(defaultConfig).toHaveProperty('auth');
     expect(defaultConfig).toHaveProperty('llm');
     expect(defaultConfig).toHaveProperty('core');
@@ -121,6 +123,15 @@ describe('defaultConfig', () => {
     expect(defaultConfig.storage.postgres).toEqual({});
     expect(defaultConfig.storage.degradedMode).toBe('fallback-file');
     expect(defaultConfig.storage.fallbackDir).toBe('');
+  });
+
+  it('execution по умолчанию: inline, без адресов, 30 с, fail, concurrency = число CPU (PROP-077)', () => {
+    expect(defaultConfig.execution.mode).toBe('inline');
+    expect(defaultConfig.execution.remote.url).toEqual([]);
+    expect(defaultConfig.execution.remote.timeoutMs).toBe(30_000);
+    expect(defaultConfig.execution.remote.failMode).toBe('fail');
+    expect(defaultConfig.execution.remote.tokenSecret).toBe('');
+    expect(defaultConfig.execution.remote.concurrency).toBe(defaultExecutionConcurrency());
   });
 
   it('summarization.promptFile == SUMMARIZER', () => {

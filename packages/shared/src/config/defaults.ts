@@ -6,6 +6,8 @@ import {
   DEFAULT_EGRESS_LOG,
 } from '../types/index.js';
 import { DEFAULT_MAX_UPLOAD_BYTES } from '../types/index.js';
+import { DEFAULT_EXECUTION_TIMEOUT_MS } from './types.js';
+import { defaultExecutionConcurrency } from './execution.js';
 
 export const defaultConfig: SynthConfig = {
   server: {
@@ -26,6 +28,25 @@ export const defaultConfig: SynthConfig = {
     defaultWorkspace: '',
     workspaceOutsideRoot: '',
     maxUploadBytes: DEFAULT_MAX_UPLOAD_BYTES,
+  },
+  execution: {
+    // PROP-077: топология исполнения — параметр запуска (инвариант 24: смена
+    // режима — только рестартом). `inline` — исполнение в процессе (прежнее
+    // поведение); `remote` — отдельные исполнители (шаг 7 плана PROP-077).
+    mode: 'inline',
+    remote: {
+      // Список адресов исполнителей; пусто при `remote` → fail-closed на старте.
+      url: [],
+      // Таймаут exec-вызова (30 с — как у нынешних тулов).
+      timeoutMs: DEFAULT_EXECUTION_TIMEOUT_MS,
+      // Лимит одновременных exec-вызовов — число CPU процесса.
+      concurrency: defaultExecutionConcurrency(),
+      // Fail-closed при недоступности исполнителя; inline-fallback — только
+      // явной настройкой.
+      failMode: 'fail',
+      // Путь/ссылка на токен исполнителя (НЕ значение — инвариант 13).
+      tokenSecret: '',
+    },
   },
   auth: {
     debugMode: false,

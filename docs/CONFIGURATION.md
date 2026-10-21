@@ -58,6 +58,12 @@ CLI-флаги > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_ANALYTICS_RETENTION_DAYS` | PROP-102: срок хранения суточных роллапов аналитики, дни (`<= 0` — без ограничения) | `analytics.retentionDays` (`400`) |
 | `SYNTH_METRICS_ENABLED` | ADR-094: включить `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer-токен `/metrics` (приоритетнее файла `{dataDir}/secrets/metrics-token`); значение не логируется | — |
+| `SYNTH_EXECUTION_MODE` | PROP-077: топология исполнения — `inline` (по умолчанию) \| `remote` (шаг 7 плана PROP-077; пока fail-closed на старте) | `inline` |
+| `SYNTH_EXECUTION_REMOTE_URL` | PROP-077: список адресов исполнителей (через запятую) | — |
+| `SYNTH_EXECUTION_TOKEN` | PROP-077: путь/ссылка на токен исполнителя (НЕ значение, инвариант 13) | — |
+| `SYNTH_EXECUTION_TIMEOUT_MS` | PROP-077: таймаут exec-вызова, мс | `30000` |
+| `SYNTH_EXECUTION_CONCURRENCY` | PROP-077: лимит одновременных exec-вызовов | число CPU процесса |
+| `SYNTH_EXECUTION_FAIL_MODE` | PROP-077: поведение при недоступном исполнителе (`fail`/`inline-fallback`) | `fail` |
 
 **UI (Vite):**
 
@@ -255,6 +261,20 @@ storage:
                                   # managed — deny); SYNTH_WORKSPACE_OUTSIDE_ROOT
   maxUploadBytes: 104857600       # лимит загрузки файла /api/v2/fs/upload, байт (>=1024, <=2 ГиБ);
                                   # не задано — 100 МиБ; SYNTH_MAX_UPLOAD_BYTES
+
+execution:                         # PROP-077: топология исполнения (параметр запуска, инвариант 24)
+  mode: "inline"                  # inline (по умолчанию) | remote; SYNTH_EXECUTION_MODE;
+                                  # CLI-флаг --execution-mode важнее env; неверное значение — fail-closed
+  remote:
+    url: []                       # список адресов исполнителей; SYNTH_EXECUTION_REMOTE_URL (через запятую);
+                                  # пусто при mode=remote — fail-closed на старте
+    timeoutMs: 30000              # таймаут exec-вызова; SYNTH_EXECUTION_TIMEOUT_MS
+    concurrency: 8                # лимит одновременных exec-вызовов; SYNTH_EXECUTION_CONCURRENCY
+                                  # (дефолт — число CPU процесса)
+    failMode: "fail"              # fail (fail-closed) | inline-fallback (только явной настройкой);
+                                  # SYNTH_EXECUTION_FAIL_MODE
+    tokenSecret: ""               # путь/ссылка на токен исполнителя (НЕ значение — инвариант 13);
+                                  # SYNTH_EXECUTION_TOKEN
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
@@ -474,6 +494,56 @@ remote:                           # гибридный режим: локаль�
 - `halt` — старт останавливается с внятной ошибкой (`STORAGE_UNAVAILABLE`).
 
 **Fail-closed** (фоллбек **не** применяется независимо от `degradedMode`): ошибка конфигурации/кред (`STORAGE_POSTGRES_CONFIG_INVALID`), отсутствие зависимости (`…DEPENDENCY_MISSING`, нет `pg`), незагружаемый пакет-драйвер (`STORAGE_BACKEND_UNAVAILABLE`), схема БД новее драйвера (`…SCHEMA_TOO_NEW`). Деградация охватывает **отказ БД** (сеть/класс `08`/`57P0x`, auth-ошибка сервера, `…SCHEMA_OUTDATED` — лечится `synth migrate`, прочие runtime-ошибки). Авто-возврата к БД **нет** — только рестарт после восстановления соединения ([ADR-098](./arch_decisions/adr-098-storage-degraded-recovery.md)); процедуры — [MAINTENANCE.md](./MAINTENANCE.md).
+
+### Исполнение (топология) (`execution.*`, PROP-077)
+
+Секция `execution` — **переключатель топологии исполнения**: где выполняются команды агентских
+тулов (`execute_shell`, `grep_files`, git-тулы). Это **параметр запуска**, а не runtime-настройка:
+смена режима — только рестартом процесса (инвариант 24). Спецификация — [PROP-077](./arch_decisions/prop-077-runtime-toolchain.md).
+
+| Поле | Тип / значения | Дефолт | Env | Смысл |
+|---|---|---|---|---|
+| `execution.mode` | `inline` \| `remote` | `inline` | `SYNTH_EXECUTION_MODE` | Топология: `inline` — исполнение в процессе backend'а (all-in-one, прежнее поведение); `remote` — отдельные исполнители |
+| `execution.remote.url` | список адресов | `[]` | `SYNTH_EXECUTION_REMOTE_URL` (через запятую) | Адреса исполнителей (K8s Service `synth-executor`, `http://…`); пусто при `remote` → fail-closed на старте |
+| `execution.remote.timeoutMs` | число | `30000` | `SYNTH_EXECUTION_TIMEOUT_MS` | Таймаут exec-вызова (30 с — как у нынешних тулов; больший лимит shell — свойство тула, не конфига) |
+| `execution.remote.concurrency` | число | число CPU процесса | `SYNTH_EXECUTION_CONCURRENCY` | Лимит одновременных exec-вызовов на backend; превышение → очередь |
+| `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | `SYNTH_EXECUTION_FAIL_MODE` | Поведение при недоступном исполнителе: `fail` — fail-closed (инструмент недоступен с явной причиной); `inline-fallback` — backend исполняет команду сам (**только явной настройкой**) |
+| `execution.remote.tokenSecret` | путь/ссылка | — | `SYNTH_EXECUTION_TOKEN` | **Путь/ссылка на токен, НЕ значение** (инвариант 13). Сам токен — `synth_exec_…`, живёт в Secret/файле |
+
+**Приоритет** ([ADR-023](./arch_decisions/adr-023-configuration.md)): CLI-флаг `--execution-mode inline|remote` >
+env `SYNTH_EXECUTION_*` > `config.yaml` > дефолт. Резолвер — `resolveExecutionConfig`
+(`@itphx/synth-shared/config`).
+
+**Fail-closed** (как `storage.backend`): неизвестное **явное** значение `mode` (опечатка `inlne`) или
+`failMode` — ошибка конфигурации, а не тихий выбор дефолта:
+
+```text
+[config] невалидное значение SYNTH_EXECUTION_MODE="inlne": ожидается одно из 'inline', 'remote'
+[config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
+```
+
+**Текущее состояние реализации (шаг 3 плана PROP-077).** Реализован только режим `inline` —
+прежнее поведение, ничего не меняется. Режим `remote` (удалённый исполнитель) — **шаг 7** плана
+PROP-077, поэтому на этом шаге он **fail-closed на старте** (процесс не поднимается, а не «молча
+уходит в inline»):
+
+| Ситуация | Что видит оператор |
+|---|---|
+| `mode: remote`, список `remote.url` пуст | `Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).` |
+| `mode: remote`, адреса заданы | `Remote execution mode (execution.mode=remote) is not available yet: the executor service is not implemented (PROP-077, step 7). Use execution.mode=inline.` |
+
+Пример `config.yaml`:
+
+```yaml
+execution:
+  mode: "inline"                   # inline (по умолчанию) | remote (шаг 7 PROP-077; пока fail-closed)
+  remote:
+    url: []                        # список адресов исполнителей (через запятую — env SYNTH_EXECUTION_REMOTE_URL)
+    timeoutMs: 30000               # SYNTH_EXECUTION_TIMEOUT_MS
+    concurrency: 8                 # SYNTH_EXECUTION_CONCURRENCY (дефолт — число CPU процесса)
+    failMode: "fail"               # fail (fail-closed) | inline-fallback; SYNTH_EXECUTION_FAIL_MODE
+    tokenSecret: ""                # путь/ссылка на токен исполнителя (НЕ значение!); SYNTH_EXECUTION_TOKEN
+```
 
 ### Доверие TLS и mTLS исходящих соединений (`security.tls`, ADR-099)
 

@@ -22,6 +22,7 @@ import { logger } from 'hono/logger';
 import { createMiddleware } from 'hono/factory';
 import {
   applyBootstrapServiceKeys,
+  checkExecutionMode,
   createHealthRoutes,
   createHttpMetricsMiddleware,
   createMetricsRoutes,
@@ -33,6 +34,7 @@ import {
   resolveMetricsToken,
   setSynthReady,
 } from '@itphx/synth-core';
+import { resolveExecutionConfig } from '@itphx/synth-shared';
 import type {
   EventBus, SessionManager, QueueProcessorManager, ChatOrchestrator, ProjectRepository,
   SettingsRepository, EventRouter, RequestSessionService, EventBindingRepository,
@@ -147,6 +149,15 @@ export async function createBackendApp(opts: CreateBackendAppOptions = {}): Prom
   try {
     // Конфигурация
     const backendConfig = await loadBackendConfig({ configPath: opts.configPath });
+
+    // PROP-077: топология исполнения — параметр запуска (инвариант 24). Fail-closed:
+    // неверный `mode`/`failMode` — ошибка; `remote` (удалённый исполнитель — шаг 7
+    // плана PROP-077) — старт прерывается, а не «молча уходит в inline».
+    const execution = resolveExecutionConfig(backendConfig.synth, process.env);
+    const executionCheck = checkExecutionMode(execution);
+    if (!executionCheck.ok) {
+      throw new Error(executionCheck.message);
+    }
 
     const app = new Hono();
 

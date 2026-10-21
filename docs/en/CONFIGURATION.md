@@ -59,6 +59,12 @@ CLI flags > env vars (SYNTH_*) > config.yaml > defaults
 | `SYNTH_DECISION_MODEL` | ADR-084: decision-layer model (e.g. `clef-flash`) | `decision.model` |
 | `SYNTH_METRICS_ENABLED` | ADR-094: enable `GET /metrics` (Prometheus exposition 0.0.4); `false` → 404 | `metrics.enabled` (`false`) |
 | `SYNTH_METRICS_TOKEN` | ADR-094: bearer token for `/metrics` (takes precedence over the file `{dataDir}/secrets/metrics-token`); the value is never logged | — |
+| `SYNTH_EXECUTION_MODE` | PROP-077: execution topology — `inline` (default) \| `remote` (PROP-077 plan step 7; currently fail-closed at startup) | `inline` |
+| `SYNTH_EXECUTION_REMOTE_URL` | PROP-077: executor address list (comma-separated) | — |
+| `SYNTH_EXECUTION_TOKEN` | PROP-077: path/reference to the executor token (NOT a value, invariant 13) | — |
+| `SYNTH_EXECUTION_TIMEOUT_MS` | PROP-077: exec-call timeout, ms | `30000` |
+| `SYNTH_EXECUTION_CONCURRENCY` | PROP-077: limit of concurrent exec calls | process CPU count |
+| `SYNTH_EXECUTION_FAIL_MODE` | PROP-077: behaviour when the executor is unavailable (`fail`/`inline-fallback`) | `fail` |
 
 **UI (Vite):**
 
@@ -257,6 +263,20 @@ storage:
                                   # managed — deny); SYNTH_WORKSPACE_OUTSIDE_ROOT
   maxUploadBytes: 104857600       # file upload limit for /api/v2/fs/upload, bytes (>=1024, <=2 GiB);
                                   # unset — 100 MiB; SYNTH_MAX_UPLOAD_BYTES
+
+execution:                         # PROP-077: execution topology (startup parameter, invariant 24)
+  mode: "inline"                  # inline (default) | remote; SYNTH_EXECUTION_MODE;
+                                  # the --execution-mode CLI flag wins over env; an unknown value is fail-closed
+  remote:
+    url: []                       # executor address list; SYNTH_EXECUTION_REMOTE_URL (comma-separated);
+                                  # empty with mode=remote — fail-closed at startup
+    timeoutMs: 30000              # exec-call timeout; SYNTH_EXECUTION_TIMEOUT_MS
+    concurrency: 8                # limit of concurrent exec calls; SYNTH_EXECUTION_CONCURRENCY
+                                  # (default — process CPU count)
+    failMode: "fail"              # fail (fail-closed) | inline-fallback (only with an explicit setting);
+                                  # SYNTH_EXECUTION_FAIL_MODE
+    tokenSecret: ""               # path/reference to the executor token (NOT a value — invariant 13);
+                                  # SYNTH_EXECUTION_TOKEN
 
 auth:
   debugMode: false                # SYNTH_AUTH_DEBUG
@@ -473,6 +493,57 @@ If `postgres` is selected but the DB is unreachable at startup, the behaviour is
 - `halt` — startup stops with a clear error (`STORAGE_UNAVAILABLE`).
 
 **Fail-closed** (the fallback is **not** applied regardless of `degradedMode`): a configuration/credentials error (`STORAGE_POSTGRES_CONFIG_INVALID`), a missing dependency (`…DEPENDENCY_MISSING`, no `pg`), a driver package that cannot be loaded (`STORAGE_BACKEND_UNAVAILABLE`), a DB schema newer than the driver (`…SCHEMA_TOO_NEW`). Degradation covers a **DB failure** (network/class `08`/`57P0x`, a server auth error, `…SCHEMA_OUTDATED` — fixed by `synth migrate`, other runtime errors). There is **no** auto-return to the DB — only a restart after the connection is restored ([ADR-098](../arch_decisions/adr-098-storage-degraded-recovery.md)); procedures — [MAINTENANCE.md](../MAINTENANCE.md).
+
+### Execution topology (`execution.*`, PROP-077)
+
+The `execution` section is the **execution topology switch**: where the commands of agent tools
+(`execute_shell`, `grep_files`, git tools) are executed. It is a **startup parameter**, not a runtime
+setting: switching the mode requires a process restart (invariant 24). The specification —
+[PROP-077](../arch_decisions/prop-077-runtime-toolchain.md).
+
+| Field | Type / values | Default | Env | Meaning |
+|---|---|---|---|---|
+| `execution.mode` | `inline` \| `remote` | `inline` | `SYNTH_EXECUTION_MODE` | Topology: `inline` — execution inside the backend process (all-in-one, the previous behaviour); `remote` — separate executors |
+| `execution.remote.url` | list of addresses | `[]` | `SYNTH_EXECUTION_REMOTE_URL` (comma-separated) | Executor addresses (K8s Service `synth-executor`, `http://…`); empty with `remote` → fail-closed at startup |
+| `execution.remote.timeoutMs` | number | `30000` | `SYNTH_EXECUTION_TIMEOUT_MS` | Exec-call timeout (30 s — as with the current tools; the longer shell limit is a tool property, not a config one) |
+| `execution.remote.concurrency` | number | process CPU count | `SYNTH_EXECUTION_CONCURRENCY` | Limit of concurrent exec calls on the backend; exceeding it queues the call |
+| `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | `SYNTH_EXECUTION_FAIL_MODE` | Behaviour when the executor is unavailable: `fail` — fail-closed (the tool is unavailable with an explicit reason); `inline-fallback` — the backend runs the command itself (**only with an explicit setting**) |
+| `execution.remote.tokenSecret` | path/reference | — | `SYNTH_EXECUTION_TOKEN` | **A path/reference to the token, NOT the value** (invariant 13). The token itself is `synth_exec_…` and lives in a Secret/file |
+
+**Priority** ([ADR-023](../arch_decisions/adr-023-configuration.md)): CLI flag `--execution-mode inline|remote` >
+env `SYNTH_EXECUTION_*` > `config.yaml` > default. Resolver — `resolveExecutionConfig`
+(`@itphx/synth-shared/config`).
+
+**Fail-closed** (as for `storage.backend`): an unknown **explicit** `mode` value (a typo such as `inlne`) or
+`failMode` — a configuration error, not a silent fallback to the default:
+
+```text
+[config] невалидное значение SYNTH_EXECUTION_MODE="inlne": ожидается одно из 'inline', 'remote'
+[config] невалидное значение --execution-mode="inlne": ожидается одно из 'inline', 'remote'
+```
+
+**Current implementation state (step 3 of the PROP-077 plan).** Only the `inline` mode is implemented —
+the previous behaviour, nothing changes. The `remote` mode (a remote executor) is **step 7** of the
+PROP-077 plan, so at this step it is **fail-closed at startup** (the process does not start rather than
+"silently falling back to inline"):
+
+| Situation | What the operator sees |
+|---|---|
+| `mode: remote`, empty `remote.url` list | `Remote execution mode (execution.mode=remote) requires at least one executor address (execution.remote.url / SYNTH_EXECUTION_REMOTE_URL).` |
+| `mode: remote`, addresses are set | `Remote execution mode (execution.mode=remote) is not available yet: the executor service is not implemented (PROP-077, step 7). Use execution.mode=inline.` |
+
+`config.yaml` example:
+
+```yaml
+execution:
+  mode: "inline"                   # inline (default) | remote (PROP-077 step 7; currently fail-closed)
+  remote:
+    url: []                        # executor address list (comma-separated — env SYNTH_EXECUTION_REMOTE_URL)
+    timeoutMs: 30000               # SYNTH_EXECUTION_TIMEOUT_MS
+    concurrency: 8                 # SYNTH_EXECUTION_CONCURRENCY (default — process CPU count)
+    failMode: "fail"               # fail (fail-closed) | inline-fallback; SYNTH_EXECUTION_FAIL_MODE
+    tokenSecret: ""                # path/reference to the executor token (NOT a value!); SYNTH_EXECUTION_TOKEN
+```
 
 ### TLS and mTLS trust for outbound connections (`security.tls`, ADR-099)
 

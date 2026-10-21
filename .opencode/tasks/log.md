@@ -2,6 +2,22 @@
 
 > Архив: `log.1.md` (по 2026-08-31), `log.2.md` (2026-08-31 — 2026-09-16), `log.3.md` (2026-09-17 — 2026-10-07).
 
+## 2026-10-21 — PROP-077, шаг 3: секция `execution` в конфиге (переключатель топологии)
+- **Задача:** шаг 3 плана PROP-077 — секция `execution` в конфигурации: `mode`/`remote.*`, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed.
+- **Тип:** feature
+- **Исполнитель:** @orchestrator → @fixer ×2 (реализация; доки и проверки) → @fixer (коммит)
+- **Результат:** PASS
+- **Где:** worktree `/mnt/data/Agent/dev/Synth/wt-execution-port`, ветка `feature/execution-port`.
+- **Принятые решения:**
+  - Секция `execution` в `config.yaml` **необязательна**: дефолт `inline` — прежнее поведение, обратная совместимость (существующие установки не затронуты).
+  - Дефолты: `mode: inline`, `remote.url: []`, `remote.timeoutMs: 30000`, `remote.concurrency` = число CPU процесса (`availableParallelism()`), `remote.failMode: fail`, `remote.tokenSecret: ''`.
+  - Приоритет — CLI-флаг > env > `config.yaml` > дефолт (ADR-023); env-имена ровно шесть: `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL`, `SYNTH_EXECUTION_TOKEN`, `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`, `SYNTH_EXECUTION_FAIL_MODE`.
+  - **Fail-closed на трёх уровнях:** неверный `mode`/`failMode` → ошибка конфигурации (как `storage.backend`); `mode: remote` без адресов → «требуется хотя бы один адрес исполнителя»; `mode: remote` с адресами → «удалённый исполнитель ещё не реализован» (шаг 7). Заглушки «молча уйти в inline» нет.
+  - Токен — только путь/ссылка, не значение (инвариант 13); тексты — через `shared/i18n` (ADR-041), ключи `execution.remote_url_required`/`execution.remote_not_supported`.
+  - Секция — параметр запуска, не runtime-настройка: смена режима — только рестартом (инвариант 24).
+- **Проверки:** `pnpm typecheck` — 0 ошибок; `pnpm lint` — 0 errors (191 pre-existing warnings); `pnpm test` — 7357 passed, 0 failed (node v26; в CI — node 22); `adr-check`/`docs-link-check` — 0 ошибок.
+- **Осталось:** шаг 7 — executor-сервис, `RemoteExecutionPort` (HTTP через `egressFetch`, ADR-099; bearer `synth_exec_…`), токен в Secret, чарт `executor.*` (Deployment/Service/пул), RWX-том workspace, фаза 1 матрицы (`execute_shell`/`grep_files`/`python`); шаги 4–6 — flavor'ы `dev`/`devops`/`browser`/`full`, образ worker'а `synth-executor`, CI (QEMU/binfmt, теги `:core`, smoke-тесты); шаг 10 — метрики `synth_executor_*`; шаг 12 — volume/`fsGroup` и документация.
+
 ## 2026-10-21 — PROP-077/PROP-082, шаги 1–2: порт исполнения и all-in-one образ (flavor `core`)
 - **Задача:** «С чего начнём реализацию?» → по плану PROP-077/PROP-082 — шаг 1 (порт `ExecutionPort`) и шаг 2 (мультистадийный образ с flavor `core`).
 - **Тип:** feature / refactor / infra

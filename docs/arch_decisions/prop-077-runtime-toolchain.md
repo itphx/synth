@@ -4,7 +4,7 @@
 > **Решение до:** 2026-11-14
 > **Дата:** 2026-10-21
 > **Источник:** переработано 2026-10-21 (проработка двух топологий развёртывания: отдельные контейнеры-исполнители vs all-in-one)
-> **Ближайший шаг:** порт исполнения + all-in-one образ — [PROP-082](./prop-082-full-images-deployment.md); flavor'ы образов — там же.
+> **Ближайший шаг:** шаг 7 плана реализации — executor-сервис и `RemoteExecutionPort` (см. «Порядок реализации»); образы worker'а и публикация flavor'ов — [PROP-082](./prop-082-full-images-deployment.md) (шаги 4–6).
 
 **Решение:** инструментальное окружение исполнения (toolchain) и сам механизм исполнения команд
 выносятся из процесса backend'а в **отдельный сервис-исполнитель (executor/worker)** — это
@@ -73,8 +73,11 @@ suite на обе. Топология выбирается **одним пара
 
 ## Режим исполнения в конфигурации
 
-Секция `execution` — **новая**; в репозитории её нет (ни в `packages/shared/src/config/types.ts`,
-ни в `packages/shared/src/config/defaults.ts`, ни в `packages/backend/config.yaml:1`). Состав:
+Секция `execution` — **реализована (шаг 3 плана реализации)**: Zod-схема `executionConfigSchema` и
+типы `ExecutionConfig`/`ExecutionMode`/`ExecutionFailMode` (`packages/shared/src/config/types.ts`),
+дефолты — `packages/shared/src/config/defaults.ts`, резолверы `resolveExecutionConfig`/
+`resolveExecutionMode` (`packages/shared/src/config/execution.ts`). В `config.yaml` секция
+**необязательна** (дефолт `inline` — прежнее поведение). Состав:
 
 | Поле | Тип / значения | Дефолт | Смысл |
 |---|---|---|---|
@@ -85,18 +88,39 @@ suite на обе. Топология выбирается **одним пара
 | `execution.remote.failMode` | `fail` \| `inline-fallback` | `fail` | Поведение при недоступном исполнителе. **`fail` — fail-closed**: инструмент недоступен с явной причиной (`unavailable(dependency)`-подобный статус), fallback на локальное исполнение — только явной настройкой. |
 | `execution.remote.tokenSecret` | путь/ссылка на токен | — | **Путь/ссылка, не значение** (инвариант 13): путь к файлу с токеном или `existingSecret`/`tokenKey` (как у `security.tls` в чарте). Сам токен — `synth_exec_…` (формат по образцу service-key, `packages/core/src/storage/service-api-key-store.ts:19`). |
 
-Env-имена (по одному на поле): `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL`,
-`SYNTH_EXECUTION_TOKEN`, `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`,
+Фактические дефолты (как в `packages/shared/src/config/defaults.ts`): `mode: inline`,
+`remote.url: []`, `remote.timeoutMs: 30000`, `remote.concurrency` — число CPU процесса
+(`availableParallelism()`), `remote.failMode: fail`, `remote.tokenSecret: ''` (пусто).
+
+Env-имена (по одному на поле; **зафиксированы и реализованы**): `SYNTH_EXECUTION_MODE`,
+`SYNTH_EXECUTION_REMOTE_URL` (список через запятую), `SYNTH_EXECUTION_TOKEN` (путь/ссылка на
+токен, НЕ значение — инвариант 13), `SYNTH_EXECUTION_TIMEOUT_MS`, `SYNTH_EXECUTION_CONCURRENCY`,
 `SYNTH_EXECUTION_FAIL_MODE`. Приоритет — CLI-флаг > env > `config.yaml` > дефолт
 ([ADR-023](./adr-023-configuration.md)).
 
 CLI-флаг: `--execution-mode inline|remote` (рядом с `--restart-mode`,
-`packages/core/src/main.ts:81`); в managed этот флаг задаётся через env/ConfigMap чарта
+`packages/core/src/main.ts:106`; **реализован**); в managed этот флаг задаётся через env/ConfigMap чарта
 (`charts/synth/templates/backend-deployment.yaml:59`), в standalone/local — через `config.yaml` или env.
 
 `failMode: inline-fallback` — **явная** настройка, не дефолт: она означает, что при недоступности
 исполнителя backend исполнит команду сам (в своём окружении, со своим toolchain). Это удобно для
 миграции и для dev, но в managed-контуре это обход изоляции — включать только осознанно.
+
+**Текущее состояние реализации (шаг 3).** Реализован только режим `inline` — прежнее поведение,
+ничего не меняется. Режим `remote` (удалённый исполнитель) — **шаг 7** плана реализации, поэтому
+на этом шаге он **fail-closed на старте**: процесс не поднимается, а не «молча уходит в inline».
+Проверка — `checkExecutionMode`/`assertExecutionModeSupported`
+(`packages/core/src/execution/startup.ts`); вызывается при старте core (`packages/core/src/main.ts`)
+и backend (`packages/backend/src/app.ts`).
+
+| Ситуация | Что видит оператор |
+|---|---|
+| неверный `mode`/`failMode` (CLI/env/config) | `[config] невалидное значение SYNTH_EXECUTION_MODE="inlne": ожидается одно из 'inline', 'remote'` — **ошибка конфигурации**, а не тихий выбор дефолта |
+| `mode: remote`, `remote.url` пуст | «требуется хотя бы один адрес исполнителя» (`execution.remote.url` / `SYNTH_EXECUTION_REMOTE_URL`) |
+| `mode: remote`, адреса заданы | «удалённый исполнитель ещё не реализован» (шаг 7 плана PROP-077) |
+
+Тексты последних двух — через ключи `shared/i18n` (`execution.remote_url_required`/
+`execution.remote_not_supported`, ADR-041).
 
 ## Контракт исполнения (порт)
 
@@ -502,7 +526,9 @@ backend'а. Данные не затронуты (workspace — тот же то
 | Секреты в чарте — только из Secret (`SYNTH_POSTGRES_PASSWORD`, `SYNTH_METRICS_TOKEN`, `SYNTH_BOOTSTRAP_SERVICE_KEYS`, `SYNTH_API_KEY`), в ConfigMap/values — никаких значений | `charts/synth/templates/backend-deployment.yaml:79`, `:100`, `:113`, `:125` |
 | Наблюдаемость: реестр с лимитом 2000 серий, рендер 0.0.4, `/metrics` (404/401/`no-store`), `/health` + `/ready`; метрик **очереди/занятости исполнителей нет** | `packages/core/src/metrics/registry.ts:19`, `:27`; `packages/core/src/server/routes/metrics.ts:52`, `:56`, `:63`, `:82`; `packages/core/src/server/routes/health.ts:63`, `:65` |
 | `synth_sessions_active` / `synth_queue_pending` — про сессии и очередь **сообщений**, не про исполнение | `packages/core/src/metrics/collectors/sessions.ts:26`, `:30` |
-| Секция `execution`, порт `ExecutionPort`, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, токен `synth_exec_…`, метрики `synth_executor_*`, образ `synth-executor` — **нет в репозитории** | — |
+| Порт исполнения: `ExecutionPort` + `InlineExecutionPort` + контрактный suite (шаг 1) | `packages/core/src/execution/ports/execution-port.ts:1`, `packages/core/src/execution/inline-execution-port.ts:1`, `packages/core/src/execution/contract/execution.ts:1` |
+| Секция `execution` в конфиге, env `SYNTH_EXECUTION_*`, CLI `--execution-mode`, fail-closed на старте (шаг 3) | `packages/shared/src/config/execution.ts:1`, `packages/shared/src/config/types.ts:178`, `packages/shared/src/config/defaults.ts:32`, `packages/core/src/execution/startup.ts:1`, `packages/core/src/main.ts:110` |
+| `RemoteExecutionPort`, токен `synth_exec_…`, метрики `synth_executor_*`, образ `synth-executor` — **нет в репозитории** (шаг 7 и далее) | — |
 | Слой хранения — образец портов: 30 доменных портов, контрактный suite, `createFileStorage`/`createMemoryStorage`/`createPostgresStorage`/`createStorageContextAsync`/`buildStorageContext` | `packages/core/src/storage/ports/`, `packages/core/src/storage/contract/index.ts:1`, `packages/core/src/storage/storage-context.ts:467`, `:529`, `:599`, `:847`, `:917` |
 | Ограничения >1 реплики: файловая БД не масштабируется; RWO PVC; `FileMutex` (эксклюзивный `mkdir` + stale-takeover) работает только на общем FS; `scheduler.leaderElection: none`, `crossProcessLocks: false` (в PG — `PgMutex`/`PgLeader`) | `charts/synth/values.yaml:11`, `:45`; `packages/core/src/storage/file-mutex.ts:33`, `:48`; `packages/core/src/storage/mutex.ts:7`; `packages/shared/src/config/defaults.ts:155` |
 | Рестарт инстанса — graceful shutdown с exit code 75, режимы `disabled`/`process`/`supervisor` | `packages/core/src/server/restart.ts:20`, `:23`; `packages/core/src/main.ts:81` |
@@ -667,3 +693,4 @@ Split-топология технически возможна и при одн�
 
 - 2026-10-21 — переработано: split-топология (control plane + отдельные контейнеры-исполнители) как предмет PROP-077, единый переключатель `execution.mode`, порт `ExecutionPort`, all-in-one вынесен в PROP-082.
 - 2026-10-21 — шаг 1: порт исполнения реализован (union shell/argv вместо строки, типизированная ExecutionError, inline-реализация + контрактный suite); эскиз порта уточнён.
+- 2026-10-21 — шаг 3: секция `execution` в конфиге (mode/remote.*, env SYNTH_EXECUTION_*, CLI --execution-mode, fail-closed); `remote` — fail-closed до шага 7.
