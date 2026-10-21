@@ -13,9 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_AGENT_ID, MetricsRegistry } from '@itphx/synth-core';
 import type { EventsRuntimeSettings } from '@itphx/synth-core';
-import type { DecisionConfig } from '@itphx/synth-shared';
+import type { AgentDefinition, DecisionConfig } from '@itphx/synth-shared';
 import { loadBackendConfig } from '../lib/app-config.js';
-import { createBackendDeps } from './deps.js';
+import { createBackendDeps, createBackendStorage } from './deps.js';
 
 type Deps = Awaited<ReturnType<typeof createBackendDeps>>;
 
@@ -157,5 +157,103 @@ describe('createBackendDeps: композиция и live-аксессоры', (
       escalationModel: '',
     };
     expect(() => deps.live.setDecision(decision)).not.toThrow();
+  });
+});
+
+/**
+ * ADR-096/PROP-032 + ADR-086 §5: при `storage.backend=postgres` стор агентов —
+ * БД, а `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`.
+ * Агент, поставленный пакетом расширения, после рестарта процесса не попадал
+ * в реестр → Router не резолвил `agentTemplate` → сессия не создавалась.
+ */
+describe('createBackendDeps: агенты из стора попадают в реестр', () => {
+  function agent(id: string, extra: Partial<AgentDefinition> = {}): AgentDefinition {
+    return {
+      id,
+      displayName: id,
+      capabilities: [],
+      enabled: true,
+      isOverridden: true,
+      ...extra,
+    };
+  }
+
+  it('агент, записанный только в стор, регистрируется в agentRegistry', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-backend-deps-agents-'));
+    const savedDataDir = process.env.SYNTH_DATA_DIR;
+    const savedBackend = process.env.SYNTH_STORAGE_BACKEND;
+    process.env.SYNTH_DATA_DIR = dir;
+    // Стор агентов — не файловый каталог (как при postgres).
+    process.env.SYNTH_STORAGE_BACKEND = 'memory';
+    try {
+      const config = await loadBackendConfig();
+      const storage = await createBackendStorage(config);
+      await storage.agents.save('publisher', agent('publisher', {
+        displayName: 'Publisher',
+        contextFile: 'PUBLISHER.md',
+        agentMode: ['primary'],
+      }));
+
+      const deps = await createBackendDeps(config, storage);
+      try {
+        const stored = deps.agentRegistry.get('publisher');
+        expect(stored).toBeDefined();
+        expect(stored!.displayName).toBe('Publisher');
+        expect(stored!.isOverridden).toBe(true);
+        // Резолвер `agentTemplate` (ADR-089) отдаёт агента — Router создаст сессию.
+        expect(deps.resolveAgentTemplate('publisher')).toBe('publisher');
+      } finally {
+        deps.schedulerService.stop();
+        deps.webhookService.stop();
+        deps.stopEphemeralSweeper();
+        deps.stopEventJournalPruner();
+        deps.stopWebhookDeliveryPruner();
+      }
+    } finally {
+      if (savedDataDir === undefined) delete process.env.SYNTH_DATA_DIR;
+      else process.env.SYNTH_DATA_DIR = savedDataDir;
+      if (savedBackend === undefined) delete process.env.SYNTH_STORAGE_BACKEND;
+      else process.env.SYNTH_STORAGE_BACKEND = savedBackend;
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  it('запись из стора с id встроенного агента перекрывает встроенное определение', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'synth-backend-deps-agents-'));
+    const savedDataDir = process.env.SYNTH_DATA_DIR;
+    const savedBackend = process.env.SYNTH_STORAGE_BACKEND;
+    process.env.SYNTH_DATA_DIR = dir;
+    process.env.SYNTH_STORAGE_BACKEND = 'memory';
+    try {
+      const config = await loadBackendConfig();
+      const storage = await createBackendStorage(config);
+      await storage.agents.save('assistant', agent('assistant', {
+        displayName: 'Мой ассистент',
+        contextFile: 'MY_ASSISTANT.md',
+      }));
+
+      const deps = await createBackendDeps(config, storage);
+      try {
+        const merged = deps.agentRegistry.get('assistant');
+        expect(merged).toBeDefined();
+        expect(merged!.displayName).toBe('Мой ассистент');
+        expect(merged!.contextFile).toBe('MY_ASSISTANT.md');
+        expect(merged!.isOverridden).toBe(true);
+        // Поля, которых нет в записи из стора, у встроенного сохраняются.
+        expect(merged!.icon).toBeDefined();
+      } finally {
+        deps.schedulerService.stop();
+        deps.webhookService.stop();
+        deps.stopEphemeralSweeper();
+        deps.stopEventJournalPruner();
+        deps.stopWebhookDeliveryPruner();
+      }
+    } finally {
+      if (savedDataDir === undefined) delete process.env.SYNTH_DATA_DIR;
+      else process.env.SYNTH_DATA_DIR = savedDataDir;
+      if (savedBackend === undefined) delete process.env.SYNTH_STORAGE_BACKEND;
+      else process.env.SYNTH_STORAGE_BACKEND = savedBackend;
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 });

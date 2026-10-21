@@ -7,7 +7,7 @@ export { SessionManager } from './sessions/manager.js';
 export { parseTtl, startEphemeralSweeper, DEFAULT_EPHEMERAL_SWEEP_INTERVAL_MS } from './sessions/ephemeral.js';
 export { computeSessionStats, MAX_SUBAGENT_DEPTH } from './sessions/stats.js';
 export type { SessionStatsDeps } from './sessions/stats.js';
-export { EventBus, sseEventStream } from './events/bus.js';
+export { EventBus, INSTANCE_EVENT_CHANNEL, sseEventStream } from './events/bus.js';
 export { extractChildSessionId, extractCreatedSession } from './events/child-session.js';
 export type { CreatedSessionTarget } from './events/child-session.js';
 export { HookBus, HOOK_ASYNC_TIMEOUT_MS } from './engine/hooks/index.js';
@@ -51,6 +51,8 @@ export { DebugCollector } from './debug.js';
 export { ContextConfig, ContextBuilder, isInterviewCompleted } from './engine/context/index.js';
 export { ContextOptimizer } from './engine/context/index.js';
 export type { BuildSystemPromptParams, ContextBuilderOptions, SummarizationResult, SlidingWindowResult } from './engine/context/index.js';
+// ADR-101 §10: суженный «session-like» контракт Composer'а (шаг пайплайна — не сессия).
+export type { ComposerSessionLike } from './engine/context/index.js';
 
 export { ChatOrchestrator } from './engine/orchestrator.js';
 export type { OrchestratorOptions, ProcessMessageResult, ModelPricing } from './engine/orchestrator.js';
@@ -59,7 +61,7 @@ export type { SubagentResumeDeps, SubagentResumeOptions, SubagentResumeResult, S
 export { SUBAGENT_MAX_ATTEMPTS, SUBAGENT_RETRY_DELAYS_MS } from './engine/tools/task.js';
 export type { SubagentRetryConfig, SubagentRunConfig } from './engine/tools/task.js';
 
-export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker, DictionaryStore, DICTIONARY_LANGUAGES, DICTIONARY_MAX_KEYWORDS, DICTIONARY_MAX_TOOLS } from './engine/router/index.js';
+export { ModelRouter, ContentClassifier, ProviderPool, QualityChecker, DictionaryStore, toCoreProviderConfig, DICTIONARY_LANGUAGES, DICTIONARY_MAX_KEYWORDS, DICTIONARY_MAX_TOOLS } from './engine/router/index.js';
 export type { StoredDictionary, DictionaryLanguage } from './engine/router/index.js';
 export type { RoutingRequest, RoutingDecision, ContentCategory, ClassifyRequest, ClassifyResult, QualityCheckInput, QualityCheckResult } from './engine/router/index.js';
 
@@ -74,10 +76,10 @@ export {
   TOOL_RUNTIME_DEP,
 } from './engine/tools/runtime-deps.js';
 export type { RuntimeDeps, RuntimeDependency } from './engine/tools/runtime-deps.js';
-export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID } from './engine/agents/index.js';
+export { createAgentRegistry, AgentRegistry, loadSystemAgentDefinitions, normalizeAgentModes, isModeApplicable, DEFAULT_AGENT_ID, registerStoredAgents } from './engine/agents/index.js';
 export { McpClient, McpManager } from './engine/mcp/index.js';
 export type { McpToolDef, McpToolResult } from './engine/mcp/index.js';
-export { resolveMcpScope } from './engine/mcp/index.js';
+export { resolveMcpScope, resolveMcpProjectScope } from './engine/mcp/index.js';
 export type { McpScopeServer, McpScopeSession, McpScopeDecision } from './engine/mcp/index.js';
 export {
   evaluateMcpNetworkAccess,
@@ -169,6 +171,12 @@ export type { JsonStoreConfig, JsonStoreLike } from './storage/json-store.js';
 // PROP-032 (W2.1): доменные порты слоя хранения + файловая реализация BlobStore.
 export { FileBlobStore } from './storage/file-blob-store.js';
 export type { FileBlobStoreConfig } from './storage/file-blob-store.js';
+// ADR-051/PROP-059: файловая реализация порта пайплайнов.
+export { FilePipelineStore } from './storage/file-pipeline-store.js';
+export type { FilePipelineStoreConfig } from './storage/file-pipeline-store.js';
+// ADR-086 §5: файловая реализация порта реестра установок пакетов.
+export { FilePackStore } from './storage/file-pack-store.js';
+export type { FilePackStoreConfig } from './storage/file-pack-store.js';
 export type {
   SessionRepository,
   SessionFilter,
@@ -209,6 +217,27 @@ export type {
   DefaultsRepository,
   AppearanceDefaults,
   DocumentRepository,
+  // ADR-051/PROP-059: пайплайны; ADR-086 §5: реестр установок пакетов.
+  PipelineRepository,
+  PipelineDefinitionRecord,
+  PipelineInstanceRecord,
+  PipelineInstanceFilter,
+  PackRepository,
+  PackInstallation,
+  PackInstallationProvides,
+  PackInstallationStatus,
+  // ADR-101 (Pipeline Engine): спецификации пайплайнов, прогоны, журнал.
+  ProjectPipelineRepository,
+  PipelineRecord,
+  PipelineVersionRecord,
+  PipelineScope,
+  PipelineProvenance,
+  PipelineFilter,
+  PipelineRunRepository,
+  PipelineRunRecord,
+  PipelineRunEventRecord,
+  PipelineRunFilter,
+  PipelineRunEventListOptions,
 } from './storage/ports/index.js';
 // PROP-032 (W2.2): in-memory реализации портов хранения (второй backend за единым слоем).
 export {
@@ -241,6 +270,12 @@ export {
   MemoryContextFileRepository,
   MemoryBlobStore,
   MemorySSHKeyRepository,
+  // ADR-051/PROP-059: пайплайны; ADR-086 §5: реестр установок пакетов.
+  MemoryPipelineRepository,
+  MemoryPackRepository,
+  // ADR-101: спецификации пайплайнов, прогоны и журнал выполнения.
+  MemoryProjectPipelineRepository,
+  MemoryPipelineRunRepository,
 } from './storage/memory/index.js';
 // PROP-032 (W2.4): generic-реализация конфигурационных словарей (провайдеры/модели/агенты).
 export { MemoryDocumentRepository } from './storage/memory/document-repository.js';
@@ -439,6 +474,7 @@ export type {
 } from './storage/service-api-key-store.js';
 export {
   requireScope,
+  requireScopeOrAdminRole,
   checkServiceProjectProjection,
   checkProjectAccess,
   getServiceCredential,
@@ -635,6 +671,18 @@ export type {
   RequestSessionServiceDeps,
   LlmDefaults,
 } from './engine/events/request-session.js';
+// ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — состояние
+// автомата публикации в ядре, артефакт шага — по id.
+export { PipelineTracker } from './engine/events/pipeline-tracker.js';
+export { pipelineTriggerPayload, pipelineStepArtifact } from './engine/events/pipeline-tracker.js';
+export type {
+  PipelineTrackerDeps,
+  PipelineTrackInput,
+  PipelineTrackedInstance,
+  PipelineEventArtifact,
+  PipelineEventTrigger,
+  PipelineEventStepState,
+} from './engine/events/pipeline-tracker.js';
 export type {
   EventDelivery,
   EventDeliveryContext,
@@ -879,7 +927,13 @@ export type { ProviderRoutesAuth, ProviderRoutesOptions, ProviderRouteMessages }
 export { createModelRoutes } from './server/routes/models.js';
 export type { ModelRoutesAuth, ModelRoutesOptions, ModelRouteMessages } from './server/routes/models.js';
 export { createAgentRoutes } from './server/routes/agents.js';
-export type { AgentRoutesAuth, AgentRoutesOptions, AgentRouteMessages } from './server/routes/agents.js';
+export type {
+  AgentRoutesAuth,
+  AgentRoutesOptions,
+  AgentRouteMessages,
+  AgentRoleFiles,
+  AgentRoleResult,
+} from './server/routes/agents.js';
 export { createMcpRoutes } from './server/routes/mcp.js';
 export type { McpRoutesAuth, McpRoutesDeps, McpRouteMessages } from './server/routes/mcp.js';
 export { createEventRoutes } from './server/routes/events.js';
@@ -895,6 +949,87 @@ export {
   publicErrorSchema,
 } from './server/openapi/public-openapi.js';
 export type { PublicError } from './server/openapi/public-openapi.js';
+// ADR-101 (Pipeline Engine): движок пайплайнов (второй движок рядом с оркестратором).
+export {
+  PipelineEngine,
+  PipelineEngineError,
+  NoopPipelineExitHandler,
+  PIPELINE_ERROR_CODES,
+  buildPipelineStepContext,
+  buildShellCommand,
+  buildStepUserMessage,
+  buildToolContext,
+  checkPipelineToolPermission,
+  createAgentStepExecutor,
+  createHumanStepExecutor,
+  createPipelineExitHandler,
+  createScriptStepExecutor,
+  createToolStepExecutor,
+  evaluateCondition,
+  executeAgentStep,
+  executeScriptStep,
+  executeToolStep,
+  findTool,
+  gateDecisionResult,
+  gateRejectedResult,
+  gateTimeoutResult,
+  humanGate,
+  humanStepExecutor,
+  isStepGateOutcome,
+  nextNodeId,
+  MAX_PIPELINE_TRANSITIONS,
+  resolveSpecVars,
+  resolveStepInput,
+  resolvePathValue,
+  resolvePipelinePath,
+  sanitizeRecord,
+  sanitizeTrigger,
+  sanitizeValue,
+  SHELL_TOOL_NAME,
+  startGateTimeout,
+  stepWorkingDir,
+} from './engine/pipelines/index.js';
+export type {
+  AgentStepExecutorOptions,
+  AgentStepState,
+  ConditionContext,
+  PipelineAgentRegistryLike,
+  PipelineEngineDeps,
+  PipelineEngineLogger,
+  PipelineErrorCode,
+  PipelineEventPublisher,
+  PipelineExitContext,
+  PipelineExitDeps,
+  PipelineExitEventBusLike,
+  PipelineExitHandler,
+  PipelineExitIngressLike,
+  PipelineExitSessionManagerLike,
+  PipelineGate,
+  PipelineGateDecision,
+  PipelineGateKind,
+  PipelineInstructionsResolverLike,
+  PipelineLlmDefaults,
+  PipelineMcpManagerLike,
+  PipelinePermissionDecision,
+  PipelinePermissionDeps,
+  PipelinePathContext,
+  PipelineProjectStoreLike,
+  PipelineRunOptions,
+  PipelineSkillsCatalogLike,
+  PipelineStepContext,
+  PipelineStepContextDeps,
+  PipelineStepLlmRuntime,
+  PipelineToolLookup,
+  PipelineToolPermissionCheck,
+  PipelineToolRegistryLike,
+  PlannerContext,
+  ScriptStepExecutorOptions,
+  StepExecutionContext,
+  StepExecutor,
+  StepGateOutcome,
+  StepOutcome,
+  ToolStepExecutorOptions,
+} from './engine/pipelines/index.js';
 export { createSchedulerRoutes } from './server/routes/schedules.js';
 export type {
   SchedulerRoutesAuth,
@@ -902,6 +1037,37 @@ export type {
   SchedulerRoutesOptions,
   SchedulerRouteMessages,
 } from './server/routes/schedules.js';
+// ADR-051/PROP-059: API пайплайнов (определения/экземпляры/ручной запуск).
+export { createPipelinesRoutes } from './server/routes/pipelines.js';
+export type {
+  PipelinesRoutesAuth,
+  PipelinesRoutesDeps,
+  PipelinesRoutesOptions,
+  PipelinesRouteMessages,
+} from './server/routes/pipelines.js';
+// ADR-101 (Э6): API пайплайнов проекта, прогонов, HITL и шаблонов инстанса.
+export {
+  createPipelineProjectRoutes,
+  legacyDefinitionToPipelineSpec,
+} from './server/routes/pipeline-project-routes.js';
+export type {
+  PipelineProjectRoutesAuth,
+  PipelineProjectRoutesDeps,
+  PipelineProjectRoutesOptions,
+  PipelineProjectRouteMessages,
+} from './server/routes/pipeline-project-routes.js';
+// ADR-086 §5: установка пакетов расширений и реестр установок.
+export { createPacksRoutes } from './server/routes/packs.js';
+export type {
+  PacksRoutesAuth,
+  PacksRoutesDeps,
+  PacksRoutesOptions,
+  PacksRouteMessages,
+  PackSkillsPort,
+  PackRoleFiles,
+  PackAgentsPort,
+  PackInstallResult,
+} from './server/routes/packs.js';
 export { createIdentityRoutes } from './server/routes/identities.js';
 export type {
   IdentityRoutesAuth,
@@ -973,6 +1139,12 @@ export {
   createSchedulerMetrics,
   createWebhookMetrics,
   createEventMetrics,
+  createPipelineMetrics,
+  normalizePipelineRunStatus,
+  normalizePipelineStepOutcome,
+  normalizePipelineNodeKind,
+  normalizePipelineGateKind,
+  normalizePipelineTriggerSource,
   startEventJournalMetrics,
   attachHybridMetrics,
   setSynthReady,
@@ -983,6 +1155,9 @@ export {
   STORAGE_RECORDS_INTERVAL_MS,
   STORAGE_BYTES_INTERVAL_MS,
   EVENT_JOURNAL_INTERVAL_MS,
+  PIPELINE_RUN_DURATION_BUCKETS,
+  PIPELINE_STEP_DURATION_BUCKETS,
+  PIPELINE_WAIT_DURATION_BUCKETS,
 } from './metrics/index.js';
 export type {
   TurnOutcome,
@@ -995,6 +1170,12 @@ export type {
   WebhookDeliveryMetrics,
   WebhookDeliveryOutcome,
   EventMetricsHooks,
+  PipelineGateMetricKind,
+  PipelineMetricsHooks,
+  PipelineNodeMetricKind,
+  PipelineRunMetricStatus,
+  PipelineStepMetricOutcome,
+  PipelineTriggerMetricSource,
   LlmCallInfo,
   LlmCallOutcome,
 } from './metrics/index.js';

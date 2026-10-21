@@ -103,19 +103,33 @@ export interface EventBindingApiKeyCreated extends EventBindingApiKey {
 }
 
 /**
+ * ADR-089: ссылка на шаг пайплайна — «эта сессия — шаг `step` пайплайна `id`».
+ *
+ * Ссылка живёт в цели правила маршрутизации (`ephemeral`/`bind`) и прокидывается
+ * в решение Router'а: на ней строится учёт экземпляров пайплайна и гейты
+ * (напр. правило по событию `draft_approved` — это гейт «после approve»).
+ */
+export interface PipelineRef {
+  /** id пайплайна (определения/экземпляра). */
+  id: string;
+  /** id шага внутри пайплайна. */
+  step: string;
+}
+
+/**
  * ADR-089: цель правила маршрутизации (та же семантика, что у
  * `EventBinding`/`ScheduleTarget`).
  */
 export type EventRouteTarget =
   | { mode: 'bound'; sessionId: string }
-  | { mode: 'ephemeral'; agentTemplate?: string; project?: string; ttl?: string }
+  | { mode: 'ephemeral'; agentTemplate?: string; project?: string; ttl?: string; pipeline?: PipelineRef }
   | { mode: 'queue'; sessionId: string }
   /**
    * ADR-089 (auto-bind): правило закрепляет внешний адрес события
    * (`chatKey`/`threadKey`) за сессией — Router создаёт `EventBinding`
    * (`mode='bound'`) при первой доставке.
    */
-  | { mode: 'bind'; agentTemplate?: string; project?: string };
+  | { mode: 'bind'; agentTemplate?: string; project?: string; pipeline?: PipelineRef };
 
 /** ADR-089: условие срабатывания правила (AND по заполненным полям). */
 export interface EventRouteMatch {
@@ -160,7 +174,7 @@ export interface RouteDecisionMeta {
 /** ADR-089: вариант решения Router без меты (дискриминант `kind`). */
 type RouteDecisionKind =
   | { kind: 'bound'; sessionId: string }
-  | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string }
+  | { kind: 'ephemeral'; agentTemplate: string; ttl: string; project?: string; pipeline?: PipelineRef }
   | { kind: 'queue'; owner: string; reason: string }
   | { kind: 'drop'; reason: string; audited: true }
   /**
@@ -170,9 +184,17 @@ type RouteDecisionKind =
    * при `events.autoBind` и наличии `identity.chatKey|threadKey`, либо правило
    * с целью `mode: 'bind'`.
    */
-  | { kind: 'bind'; agentTemplate: string; project?: string };
+  | { kind: 'bind'; agentTemplate: string; project?: string; pipeline?: PipelineRef };
 
-/** ADR-089: решение Router — куда направить событие (или отложить/отбросить). */
+/**
+ * ADR-089: решение Router — куда направить событие (или отложить/отбросить).
+ *
+ * `pipeline` (ссылка на шаг пайплайна) — **семантическое** поле решения, а не
+ * диагностическая мета: оно задано только у вариантов `ephemeral`/`bind`
+ * (там, где решение порождает сессию) и потому живёт в вариантах
+ * `RouteDecisionKind`, а не в `RouteDecisionMeta` (мета — диагностика:
+ * `confidence`/`signals`).
+ */
 export type RouteDecision = RouteDecisionKind & RouteDecisionMeta;
 
 /** ADR-089: инициатор запроса на сессию. */

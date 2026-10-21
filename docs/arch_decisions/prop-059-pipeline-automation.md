@@ -1,10 +1,14 @@
 # PROP-059: Pipeline Automation
 
-> **Статус:** 🧩 Предложение (vision) — Pipeline Automation: цепочки loops, артефакты между шагами, rollback, HITL, мониторинг
+> **Статус:** 🧩 Предложение (vision) — Pipeline Automation: цепочки loops, артефакты между шагами, rollback, HITL, мониторинг; **база пайплайна в ядре реализована** (декларация, экземпляры, гейты через события, артефакт = payload события — [ADR-100](./adr-100-extension-packs-pipelines.md)); **ядро пайплайна (движок, контракты, журнал, переходы) принимается как [ADR-101](./adr-101-pipeline-engine.md)**; здесь остаётся остаток — rollback/exit-стратегия, мониторинг-дашборд, отдельное хранилище артефактов
 > **Дата:** 2026-10-08
+> **Обновлено:** 2026-10-21 — ядро пайплайна (движок, контракты, журнал, переходы, версии, выход, привязка к проекту) принимается как [ADR-101](./adr-101-pipeline-engine.md); здесь остаётся остаток — rollback/exit-стратегия, мониторинг-дашборд, отдельное хранилище артефактов.
+> **Обновлено:** 2026-10-20 — реализованная часть вынесена в [ADR-100](./adr-100-extension-packs-pipelines.md): объект пайплайна, экземпляры, триггер/гейты по событиям, артефакт = payload события; здесь остаётся остаток (движок шагов, rollback, дашборд).
 > **Источник:** перенесено из `AD-DRAFTS.md` (D14; черновик 2026-09-16); Roadmap Фаза 1; доклад
 > Яндекс Браузера (обоснование).
 > **Связано:** [ADR-030](./adr-030-hooks-agent-events.md), [ADR-051](./adr-051-scheduler-pipelines.md),
+> [ADR-100](./adr-100-extension-packs-pipelines.md),
+> [ADR-101](./adr-101-pipeline-engine.md),
 > [PROP-057](./prop-057-loop-engine.md), [PROP-058](./prop-058-service-agents-council.md),
 > [PROP-063](./prop-063-user-learning-metrics.md), [ADR-089](./adr-089-external-events-automation.md).
 
@@ -85,16 +89,28 @@ deploy). Согласуется с HITL в [PROP-061](./prop-061-llm-security-la
 
 ## Статус реализации в коде
 
-**Не реализовано.** Проверено по репозиторию (grep по `packages/**`, исключая `dist/` и `node_modules/`):
+**База реализована, остаток — нет.** Проверено по репозиторию (grep по `packages/**`, исключая `dist/` и `node_modules/`):
 
-- Компонентов Pipeline (схема, Runner, артефакты между шагами, rollback, HITL, дашборд) в Synth нет.
+- **Реализовано** ([ADR-100](./adr-100-extension-packs-pipelines.md)): объект пайплайна в ядре —
+  порт `PipelineRepository` (определения + экземпляры, `{dataDir}/pipelines/{definitions,instances}.json`),
+  API `GET /api/v2/pipelines*` и ручной запуск `POST /api/v2/pipelines/:id/instances`; определения
+  приходят **пакетом расширения** (`provides.pipelines` манифеста `synth.pack`), установка — одна
+  операция `POST /api/v2/packs`; правило маршрутизации, порождённое из шага с `waitsFor`, несёт
+  `pipeline: {id, step}`; учёт экземпляров ведёт funnel (`engine/events/pipeline-tracker.ts`);
+  семантика: **первый** шаг с `waitsFor` — триггер, последующие — гейты; **артефакт между шагами =
+  payload события**.
+- **Не реализовано:** собственный движок шагов (loop'и, верификация, termination guards —
+  [PROP-057](./prop-057-loop-engine.md)); rollback/exit-стратегия и мониторинг-дашборд (этот
+  документ); автоматическое закрытие шага по факту окончания хода (хука «ход завершён» на уровне
+  funnel нет — шаг закрывается следующим событием пайплайна); отдельное хранилище артефактов
+  (артефакт = значимая часть payload события, без секретов).
 - В коде есть только `MicroPipeline` (`packages/core/src/engine/router/micro/`) — это micro-слой
-  ([ADR-035](./adr-035-micro-model-first.md)), **не** инженерные пайплайны. Других совпадений на
-  `pipeline` вне тестов нет.
-- Шедулер отсутствует ([ADR-051](./adr-051-scheduler-pipelines.md)); Loop Engine отсутствует
-  ([PROP-057](./prop-057-loop-engine.md)).
-- В UI есть заглушка вкладки «Шедулер» (`packages/ui/src/components/panels/RightPanel.tsx`,
-  `rightPanel.scheduler.placeholder`), пайплайнов нет.
+  ([ADR-035](./adr-035-micro-model-first.md)), **не** инженерные пайплайны.
+- UI: раздел «Аддоны» → «Пайплайны» (`packages/ui/src/components/settings/AddonsSettings.tsx`) —
+  определения и прогоны с фильтрами по пайплайну/статусу.
+
+Эталон: add-on `synth-media` — пакет с пайплайном публикации (`draft` по событию `ci/release_published`
+→ `publish` по `synth-media/draft_approved`).
 
 ## Открытые вопросы
 
@@ -109,6 +125,12 @@ deploy). Согласуется с HITL в [PROP-061](./prop-061-llm-security-la
 ## Связи
 
 - [PROP-057](./prop-057-loop-engine.md) «Loop Engine» — строительные блоки пайплайна (Loops).
+- [ADR-100](./adr-100-extension-packs-pipelines.md) «Пакет расширения и пайплайн в ядре» — **реализованная база**:
+  объект пайплайна, экземпляры, триггер/гейты по событиям, артефакт = payload события; установка пакета
+  расширения как источник определений.
+- [ADR-101](./adr-101-pipeline-engine.md) «Pipeline Engine: пайплайн как второй движок» — **ядро пайплайна**
+  (движок, контракты, версии, переходы, журнал, выход, привязка к проекту); формат —
+  [docs/PIPELINES.md](../PIPELINES.md).
 - [ADR-051](./adr-051-scheduler-pipelines.md) «Шедулер и пайплайны» — запуск по расписанию; тесно
   связанный слой (граница между расписанием и композицией шагов).
 - [ADR-089](./adr-089-external-events-automation.md) «Внешние события и автоматизация» — запуск по
@@ -118,3 +140,21 @@ deploy). Согласуется с HITL в [PROP-061](./prop-061-llm-security-la
 - [PROP-061](./prop-061-llm-security-layers.md) «Многослойная безопасность LLM» — HITL перед опасными
   действиями.
 - [PROP-063](./prop-063-user-learning-metrics.md) «Обучение пользователя и метрики» — метрики пайплайнов.
+
+## Обновлено (2026-10-21)
+
+- **Ядро пайплайна принимается как [ADR-101](./adr-101-pipeline-engine.md)** — «пайплайн как второй
+  движок»: движок `PipelineEngine` рядом с оркестратором, шаг — не сессия, единый конверт входа/выхода
+  (`PipelineTrigger`/`StepResult`), виды шага (`agent`/`script`/`tool`/`human`), условные переходы
+  структурированным DSL (без `eval`), режим разрешений пайплайна с эскалацией `ask` → HITL,
+  версионирование спецификации (`draft`/`published`, ссылка `pipelineId@version`), журнал прогона
+  (append-only), выход `session|file|gateway|none`, привязка к проекту и шаблоны из пакетов расширений.
+  Формат и детали — [docs/PIPELINES.md](../PIPELINES.md).
+- **Здесь остаётся остаток:** rollback/exit-стратегия на уровне цепочки, мониторинг-дашборд, отдельное
+  хранилище артефактов между шагами. Loop Engine ([PROP-057](./prop-057-loop-engine.md)) — вне объёма
+  обоих документов.
+
+## История
+
+- 2026-10-21 — ядро пайплайна (движок, контракты, журнал, переходы) принято как [ADR-101](./adr-101-pipeline-engine.md); здесь остаётся rollback/дашборд/хранилище артефактов.
+- 2026-10-20 — реализованная часть (объект пайплайна, экземпляры, гейты, артефакт = payload события) вынесена в [ADR-100](./adr-100-extension-packs-pipelines.md); здесь остаётся остаток — движок шагов, rollback, дашборд.

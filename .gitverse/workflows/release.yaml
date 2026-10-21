@@ -244,6 +244,52 @@ jobs:
           name: changelog
           path: changelog-partial.md
 
+  # --- Событие релиза для synth-media (ADR-089) ---
+  #
+  # Джоба публикует в Synth ОДНО внешнее событие {source: ci, type: release_published}
+  # с фактами релиза (версия, тег, highlights, коммиты, новые AD, changelog) — агент
+  # внутри Synth по скиллу media-hub готовит черновик поста о релизе.
+  #
+  # Факты собирает CI-хук scripts/media-release-event.sh: агент внутри Synth НЕ имеет
+  # доступа к репозиторию (workspace-политика deny, файловые/гит-тулы требуют
+  # workspace проекта), поэтому всё нужное для текста поста уходит в payload события.
+  # Скрипт только читает репозиторий и шлёт одно событие: ничего не коммитит и не пушит.
+  #
+  # Публикация поста НЕ блокирует релиз:
+  #   * секреты не заданы → публикация пропускается с предупреждением (код 0);
+  #   * ошибка отправки (Synth недоступен / не-2xx) → предупреждение и код 3,
+  #     который гасится continue-on-error этой джобы.
+  # Ни от одной джобы релиза media-event не зависит — его падение ничего не ломает.
+  #
+  # Секреты GitVerse (префикс GV_, т.к. GITVERSE_ запрещён):
+  #   GV_SYNTH_URL       — базовый URL API v2 инстанса Synth (…/api/v2);
+  #   GV_SYNTH_MEDIA_KEY — service-key со scope events:ingest.
+  # Ключ не попадает в лог: curl -sS без -v, заголовок Authorization не печатается.
+  media-event:
+    name: Событие релиза (synth-media)
+    needs: [changelog]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Полная история и теги: нужны PREV..HEAD, предыдущий тег и новые AD-файлы.
+          fetch-depth: 0
+
+      - name: Скачать CHANGELOG
+        uses: actions/download-artifact@v4
+        with:
+          name: changelog
+
+      - name: Опубликовать событие релиза в Synth
+        env:
+          SYNTH_URL: ${{ secrets.GV_SYNTH_URL }}
+          SYNTH_MEDIA_KEY: ${{ secrets.GV_SYNTH_MEDIA_KEY }}
+          SYNTH_RELEASE_TAG: ${{ gitverse.ref }}
+        run: bash scripts/media-release-event.sh
+
   # --- Публикация npm ---
   # Таймаут 30 мин (было 10): npm отдаёт опубликованную версию с задержкой
   # 4–6 мин (автоматический review/репликация), и 6 пакетов + верификация в

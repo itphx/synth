@@ -41,7 +41,13 @@ export {
   MemoryContextFileRepository,
   MemoryBlobStore,
   MemorySSHKeyRepository,
+  // ADR-051/PROP-059 + ADR-086 §5: пайплайны и реестр установок пакетов.
+  MemoryPipelineRepository,
+  MemoryPackRepository,
 } from './content.js';
+
+// ADR-101 (Pipeline Engine): спецификации пайплайнов, прогоны и журнал выполнения.
+export { MemoryProjectPipelineRepository, MemoryPipelineRunRepository } from './pipelines.js';
 
 // PROP-032 (W2.4): конфигурационные словари (провайдеры/модели/агенты) — общий generic-порт.
 export { MemoryDocumentRepository } from './document-repository.js';

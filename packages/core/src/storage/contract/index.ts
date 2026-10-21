@@ -48,4 +48,12 @@ export { describeProtectedPathsRepository } from './content.js';
 export { describeBlobStore } from './misc.js';
 export { describeDefaultsRepository } from './misc.js';
 
+// ADR-051/PROP-059 (пайплайны) и ADR-086 §5 (реестр установок пакетов).
+export { describePipelineRepository } from './pipeline-repository.contract.js';
+export { describePackRepository } from './pack-repository.contract.js';
+
+// ADR-101 (Pipeline Engine): спецификации пайплайнов, прогоны и журнал выполнения.
+export { describeProjectPipelineRepository } from './project-pipeline-repository.contract.js';
+export { describePipelineRunRepository } from './pipeline-run-repository.contract.js';
+
 export { createTmpDir, makeSession, makeMessage, makeProject, makeProfile } from './helpers.js';

@@ -294,6 +294,29 @@ export const ENGINE_MESSAGE_KEYS = [
   'profile.user_unavailable',
   'profile.save_error',
   'profile.updated',
+  // --- Движок пайплайнов (ADR-101) ---
+  'pipeline.not_found',
+  'pipeline.not_published',
+  'pipeline.invalid_spec',
+  'pipeline.loop_limit',
+  'pipeline.cancelled',
+  'pipeline.executor_missing',
+  'pipeline.gate_rejected',
+  'pipeline.gate_timeout',
+  'pipeline.step_failed',
+  'pipeline.step_timeout',
+  'pipeline.run_not_found',
+  'pipeline.invalid_state',
+  'pipeline.tool_not_found',
+  'pipeline.tool_failed',
+  'pipeline.script_failed',
+  'pipeline.script_no_command',
+  'pipeline.permission_denied',
+  // --- Исполнитель agent-шага (ADR-101 §4, Э4.3) ---
+  'pipeline.agent_unavailable',
+  'pipeline.provider_not_found',
+  'pipeline.llm_failed',
+  'pipeline.llm_unrecoverable',
 ] as const;
 
 export type EngineMessageKey = (typeof ENGINE_MESSAGE_KEYS)[number];
@@ -581,6 +604,28 @@ export const ENGINE_MESSAGE_PARAMS: Record<EngineMessageKey, readonly string[]> 
   'profile.user_unavailable': [],
   'profile.save_error': ["error"],
   'profile.updated': ["fields"],
+  // --- Движок пайплайнов (ADR-101) ---
+  'pipeline.not_found': ["id"],
+  'pipeline.not_published': ["id"],
+  'pipeline.invalid_spec': ["problems"],
+  'pipeline.loop_limit': ["limit"],
+  'pipeline.cancelled': [],
+  'pipeline.executor_missing': ["kind"],
+  'pipeline.gate_rejected': ["node"],
+  'pipeline.gate_timeout': ["node","timeoutSec"],
+  'pipeline.step_failed': ["node","error"],
+  'pipeline.step_timeout': ["node","timeoutSec"],
+  'pipeline.run_not_found': ["id"],
+  'pipeline.invalid_state': ["id","status"],
+  'pipeline.tool_not_found': ["tool","node"],
+  'pipeline.tool_failed': ["node","tool","error"],
+  'pipeline.script_failed': ["node","code","error"],
+  'pipeline.script_no_command': ["node"],
+  'pipeline.permission_denied': ["node","tool","reason"],
+  'pipeline.agent_unavailable': ["node"],
+  'pipeline.provider_not_found': ["node","provider"],
+  'pipeline.llm_failed': ["node","type"],
+  'pipeline.llm_unrecoverable': ["node","type"],
 };
 
 /** Достаёт имена {param}-плейсхолдеров из шаблона. Уникальные, в порядке появления. */

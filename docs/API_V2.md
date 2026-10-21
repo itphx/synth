@@ -55,14 +55,29 @@
 ключ) scope-гейт — no-op (запрос пропускается). Каталог scope: `events:ingest`,
 `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`,
 `sessions:create|read|prompt`, `schedules:read|write`, `llm:chat`, `addons:install`,
-`users:read` + wildcard-семейства
+`automation:install`, `users:read` + wildcard-семейства
 `events:*`, `bindings:*`, `keys:*`, `routes:*`, `sessions:*`, `schedules:*`
-(глобального `*` нет). Отдельно: на части роутов (запись реестра MCP, запись
+(глобального `*` нет; `automation` в wildcard-семейства **не** входит — wildcard
+`automation:*` намеренно не вводится, иначе он молча покрывал бы будущие
+`automation:*`-скоупы, не связанные с установкой пакета). Отдельно: на части роутов (запись реестра MCP, запись
 скиллов, чтение админского user-API) scope работает как альтернатива роли ADMIN
 («ADMIN **или** scope», см. §5.14/§5.16/§5.17). Проектная проекция `allowedProjects`: если у ключа задан
 непустой список, доступны только входящие в него проекты — применяется в sessions,
 events/bindings и schedules (иначе `403 PROJECT_FORBIDDEN`); пусто/отсутствует —
 политика инстанса. Точки применения scope по роутам — в §5.5, §5.26, §5.27, §5.23.
+
+**Зонтичный scope `automation:install` (ADR-052).** Scope установщика пакетов
+расширений: агенты и их ролевые промпты, пайплайны, а также порождаемые пакетом
+правила маршрутизации и расписания. Там, где пакет пишет свои артефакты,
+`automation:install` — **альтернатива** ресурсному scope: достаточно **любого**
+из пары (`routes:write` **или** `automation:install` для правил маршрутизации,
+`schedules:write` **или** `automation:install` для расписаний; для записи
+агентов — только `automation:install`). `addons:install` при этом создание
+агентов **не** открывает. На роутах записи агентов guard «роль ADMIN **или**
+scope» (`requireAdminRoleOrScope`) учитывает **и** роль `ADMIN` среди ролей
+ключа — зонтичный scope ничего не отбирает (в отличие от `requireAdminOrScope`,
+где для service-key проверяются **только** scope'ы). Точные наборы —
+`SERVICE_SCOPE_SETS` (`packages/shared/src/types/service-keys.ts`).
 
 Debug-пользователи (`SYNTH_AUTH_DEBUG=true`):
 
@@ -465,10 +480,33 @@ sha256, небезопасный путь в архиве, небезопасн�
 |---|---|---|---|---|
 | GET | `/api/v2/agents/all` | оба | ADMIN / auth | Все агенты (админка) |
 | GET | `/api/v2/agents` | оба | auth / auth | Только primary-агенты |
-| POST | `/api/v2/agents` | оба | ADMIN / auth | Создать/обновить |
+| POST | `/api/v2/agents` | оба | ADMIN или scope `automation:install` / auth | Создать/обновить |
 | GET | `/api/v2/agents/:id` | backend | ADMIN | Агент + builtin/override |
-| DELETE | `/api/v2/agents/:id` | оба | ADMIN / auth | Удалить custom / сбросить built-in |
-| PATCH | `/api/v2/agents/:id/enabled` | backend | ADMIN | `{enabled}` |
+| DELETE | `/api/v2/agents/:id` | оба | ADMIN или scope `automation:install` / auth | Удалить custom / сбросить built-in |
+| PATCH | `/api/v2/agents/:id/enabled` | backend | ADMIN или scope `automation:install` | `{enabled}` |
+
+> **Запись агентов — «роль ADMIN **или** scope `automation:install`» (ADR-052).**
+> Зонтичный scope установщика пакетов расширений: агент вместе с ролевым
+> промптом — часть пакета. Guard — `requireAdminRoleOrScope('automation:install')`:
+> для service-key достаточно **любого** из двух (scope `automation:install`
+> **или** роль `ADMIN` среди ролей ключа — прежние права ключа с ролью ADMIN
+> не отбираются); для интерактивных кред требуется роль `ADMIN`
+> (401 `UNAUTHORIZED` без аутентификации, 403 `FORBIDDEN` без роли, 403
+> `SCOPE_REQUIRED` — у service-key без scope и без роли ADMIN). В core
+> (standalone) интерактивный доступ — `auth`, service-key — тот же scope **или**
+> роль ADMIN. Scope `addons:install` создание агентов **не** открывает.
+
+> **Ролевой промпт агента (ADR-046/ADR-089).** `POST /api/v2/agents` принимает необязательное
+> поле `role_prompt` (алиас `rolePrompt`) — **содержимое** ролевого промпта (не путь). Файл роли
+> пишется в `{dataDir}/context/roles/<contextFile>` (`contextFile` агента, иначе `<ID_АГЕНТА_UPPER>.md`)
+> и имеет приоритет над системным `prompts/roles/` (резолв — `getRolePrompt`). Запись атомарная
+> (tmp → rename); уже существовавший файл с другим содержимым перезаписывается (явная установка) —
+> факт отражается в ответе (`role: {file, written, replaced}`) и в логе `AGENTS`. Право — то же, что на
+> создание агента (managed — ADMIN, standalone — auth). Контент роли в определение агента не
+> сохраняется: агент ссылается на файл через `contextFile`.
+> **Группы агента (ADR-046 §6.2).** Необязательное поле `groups` (массив строк) — привязка скиллов
+> по `metadata.synth.groups`; приоритет `body → existing → builtin`, пустые/дубли/не-строки отбрасываются.
+> Поле возвращается в `GET /agents/all` (`groups`) и в ответе `POST /agents`.
 
 ### 5.12 Файлы — `/api/v2/fs`
 
@@ -855,7 +893,7 @@ Real-time — SSE `GET /api/v2/events` и WS `/ws/events` (см. §3). Приё�
 | POST | `/api/v2/events/bindings/:id/keys/:keyId/revoke` | оба | LEAD/ADMIN | Мягкий отзыв ключа (проставляет `revokedAt`; идемпотентно) → 200 `EventBindingApiKey`; нет ключа → 404 `NOT_FOUND`. Отозванный ключ перестаёт резолвиться (`resolveBySecret` → `null`) |
 | DELETE | `/api/v2/events/bindings/:id/keys/:keyId` | оба | LEAD/ADMIN | Удалить API-ключ → 204; нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/events/routes` | оба | auth | Список правил маршрутизации `{rules}` (`EventRouteRule[]`) |
-| POST | `/api/v2/events/routes` | оба | LEAD/ADMIN | Upsert правила (`eventRouteRuleUpsertSchema`): `{id?, name?, priority?, enabled?, match, target}`; `match` — AND по заполненным `source`/`type`/`chatKey`/`threadKey`/`principalId`/`label`/`keywords` (пустой-невалидный не матчит); `target` — `bound`/`queue` (`sessionId`), `ephemeral` (`agentTemplate?`/`project?`/`ttl?`) или `bind` (ADR-089 auto-bind: `agentTemplate?`/`project?` — закрепить чат/тред за новой сессией). По `id` — обновление → 200, иначе создание → 201. Валидация: `bound`/`queue` с несуществующей сессией → 400, непустой `agentTemplate` без enabled-агента → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/events/routes` | оба | LEAD/ADMIN | Upsert правила (`eventRouteRuleUpsertSchema`): `{id?, name?, priority?, enabled?, match, target}`; `match` — AND по заполненным `source`/`type`/`chatKey`/`threadKey`/`principalId`/`label`/`keywords` (пустой-невалидный не матчит); `target` — `bound`/`queue` (`sessionId`), `ephemeral` (`agentTemplate?`/`project?`/`ttl?`) или `bind` (ADR-089 auto-bind: `agentTemplate?`/`project?` — закрепить чат/тред за новой сессией); в `ephemeral`/`bind` допустимо необязательное поле `pipeline?: {id, step}` — **ссылка на шаг пайплайна: эта сессия — шаг `step` пайплайна `id`** (в `bound`/`queue` поле отвергается — 400 `VALIDATION_ERROR`). По `id` — обновление → 200, иначе создание → 201. Валидация: `bound`/`queue` с несуществующей сессией → 400, непустой `agentTemplate` без enabled-агента → 400 `VALIDATION_ERROR` |
 | DELETE | `/api/v2/events/routes/:id` | оба | LEAD/ADMIN | Удалить правило → 204; нет записи → 404 `NOT_FOUND` |
 | GET | `/api/v2/events/journal` | оба | auth | Последние записи журнала решений `{entries}`; `?limit=` (default 50, cap 500) |
 
@@ -866,7 +904,11 @@ rate limit (120/мин); мутации привязок/правил/ключе
 чтение ключей привязки — LEAD/ADMIN, остальное чтение — `requireAuth`; в core — единый `requireAuth`.
 **Scope service-key (ADR-052):** `POST /` — `events:ingest`; `GET /` (SSE) и `GET /journal` —
 `events:watch`; список/мутации привязок — `bindings:read`/`bindings:write`; ключи привязок —
-`keys:read`/`keys:write`; правила — `routes:read`/`routes:write`. Если у ключа задан
+`keys:read`/`keys:write`; правила — `routes:read`/`routes:write`. Запись правил
+маршрутизации (`POST`/`DELETE /routes`) доступна service-key с `routes:write`
+**или** `automation:install` (зонтичный scope установщика пакетов расширений —
+достаточно **любого** из двух; в managed scope-гейт действует **сверх**
+ролевого гейта — ключу дополнительно нужна роль `LEAD`/`ADMIN`). Если у ключа задан
 `allowedProjects`, проектная проекция применяется к правилам/привязкам с проектным измерением
 (иначе `403 PROJECT_FORBIDDEN`). Привязки/ключи приёма по binding-key (`synth_evt_…`) — отдельная
 модель (не service-key).
@@ -887,6 +929,14 @@ API-ключи привязок (`EventBindingApiKey`, `{dataDir}/events/api-key
 декларативных правил срабатывает `DecisionRuleProvider` (ADR-084): успешное решение несёт
 `confidence` и `signals` (`decision-rules`, `agent:<id>`, `model:<p/m>`, `latency:<ms>ms`) — они
 попадают в `decision` ответа и запись журнала `GET /api/v2/events/journal`.
+**Ссылка на шаг пайплайна (`pipeline`).** В цели правила (`ephemeral`/`bind`) допустимо
+необязательное поле `pipeline?: { id, step }` — «ссылка на шаг пайплайна: эта сессия —
+шаг `step` пайплайна `id`». Ссылка **семантическая**, а не диагностическая: на ней
+строится учёт экземпляров пайплайна и гейты (напр. правило по событию
+`draft_approved` — гейт «после approve»). Она прокидывается в решение Router'а
+(`decision.pipeline`) и в журнал решений. В целях `bound`/`queue` сессия
+фиксирована, поэтому поле там **отвергается** (400 `VALIDATION_ERROR`), а не
+игнорируется.
 Цепочка обработки и журнал — `docs/ARCHITECTURE.md` («Внешние события и хуки»), ADR-089.
 
 > `POST /api/v2/sessions` теперь идёт через единый funnel `RequestSessionService`
@@ -904,7 +954,11 @@ backend). Срабатывание не создаёт сессию
 (`POST /:id/run`) — только ADMIN (`writeGuard = requireAdmin`); `run` дополнительно
 под rate limit 10/60 c (`runMiddleware`). В core (standalone) — единый `requireAuth`
 на все методы. **Scope service-key (ADR-052):** `schedules:read` (чтение и `GET /:id/jobs`),
-`schedules:write` (`POST`/`PUT`/`DELETE`/`POST /:id/run`); проектная проекция — по цели
+`schedules:write` (`POST`/`PUT`/`DELETE`/`POST /:id/run`); запись расписаний доступна
+service-key с `schedules:write` **или** `automation:install` (зонтичный scope
+установщика пакетов расширений — достаточно **любого** из двух: расписание,
+порождаемое пакетом, пишется его установщиком; в managed scope-гейт действует
+**сверх** ролевого гейта — ключу дополнительно нужна роль `ADMIN`); проектная проекция — по цели
 расписания (`bound`/`queue` → проект сессии, `ephemeral` → `project`).
 
 | Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
@@ -1329,6 +1383,153 @@ user/project/model/agent, кнопки CSV/JSON и печать браузера
 
 ---
 
+### 5.33 Пакеты расширений — `/api/v2/packs` (оба, ADR-100)
+
+Реестр **установок пакетов расширения** (манифест `synth.pack`, ADR-086 §5) и установка
+пакета **одной операцией**. Единая фабрика `createPacksRoutes` для core и backend;
+RBAC/скоуп и i18n задаются через `opts` (`readGuard`/`writeGuard`/`approveGuard`/
+`uninstallGuard`/`scopeGuard`/`messages`). Хранилище — порт `PackRepository`
+(`{dataDir}/packs.json`).
+
+Порядок установки (идемпотентный upsert по имени пакета): **скиллы** → **MCP-запись реестра**
+(`origin: 'instance'`, `enabledByDefault: true`) → **агенты** (роль `{dataDir}/context/roles/<file>`
+пишется **до** агента — fail-closed) → **определения пайплайнов** → **правила маршрутизации**,
+порождённые из шагов с `waitsFor` (`match = waitsFor`,
+`target = {mode: 'ephemeral', agentTemplate, pipeline: {id, step}}`).
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/packs` | оба | ADMIN / auth | Список установок `{packs}`: имя, версия, `kind`, `status` (`active\|pending_approval\|disabled`), `requiresApproval`, `provides` (id'ы агентов/скиллов/MCP/пайплайнов), `installedBy` |
+| GET | `/api/v2/packs/:name` | оба | ADMIN / auth | Одна установка (включая сырой манифест и файлы пакета) |
+| POST | `/api/v2/packs` | оба | ADMIN **или** scope `automation:install` | Установка: тело `{manifest, files}` (манифест + карта файлов пакета). Некорректный манифест → 400 `VALIDATION_ERROR` со списком `problems`; нехватка файлов → 400. → **201** `{installed: true, requiresApproval: false, name, version, provides}`; пакет с capability-грантами → **202** `{installed: false, requiresApproval: true, …}` (фактическая установка **не** выполняется) |
+| POST | `/api/v2/packs/:name/approve` | оба | **только ADMIN** | Одобрение пакета в статусе `pending_approval` → 200 `{installed: true, …}`; нет записи → 404; статус не `pending_approval` → 409 `CONFLICT` |
+| DELETE | `/api/v2/packs/:name` | оба | **только ADMIN** | Снятие установки вместе с поставленными артефактами (агент + роль, скилл, MCP-запись, определение пайплайна, порождённые правила) → 204; идемпотентно (нет пакета — тоже 204) |
+
+**Одобрение.** Пакет требует подтверждения администратора, если он выдаёт агенту непустые
+`capabilities`, объявляет пайплайны (порождаемые правила маршрутизации) или расписания. Ответ
+**202** — не ошибка: фактическую установку выполняет `POST /api/v2/packs/:name/approve` (по
+сохранённым в реестре манифесту и файлам — обойти проверку целостности манифеста нельзя).
+
+**Скоупы (ADR-052).** Зонутный `automation:install` — установщик пакетов расширений: агенты и их
+ролевые промпты, пайплайны, порождаемые пакетом правила маршрутизации и расписания (на
+ресурсных гейтах заменяет `routes:write`/`schedules:write`; `addons:install` создание агентов
+**не** открывает). Гейты: `requireScopeOrAdminRole` (core), `requireAdminRoleOrScope` (backend).
+Одобрение и снятие — только роль ADMIN (они снимают чужие артефакты инстанса).
+
+### 5.34 Пайплайны — `/api/v2/pipelines` (оба, ADR-100/ADR-051)
+
+> ⚠️ **ADR-100, устаревает.** Новые эндпоинты пайплайнов (спецификации, версии, прогоны,
+> журнал, шаблоны инстанса) — **§5.35**. Старые эндпоинты этого раздела **остаются
+> рабочими** (UI уже переведён на новый контур — ADR-101 §5.35); удаления не планируется.
+
+Пайплайн в этом разделе — **декларация + учёт прогона** (собственного движка шагов в этих эндпоинтах нет).
+Целевая модель — «пайплайн как второй движок» ([ADR-101](./arch_decisions/adr-101-pipeline-engine.md),
+**реализована**; формат — [docs/PIPELINES.md](./PIPELINES.md)): контракт и роуты этого раздела
+расширены (спецификации, версии, журнал прогона, проектная привязка) — **§5.35**; контракт этого
+legacy-раздела остаётся действующим.
+Единая фабрика `createPipelinesRoutes`; хранилище — порт `PipelineRepository`
+(`{dataDir}/pipelines/definitions.json` и `{dataDir}/pipelines/instances.json`).
+**Определения этот роут не создаёт** — их ставит установщик пакета расширения
+(`POST /api/v2/packs`); обойти проверку целостности манифеста `synth.pack` нельзя.
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/pipelines` | оба | ADMIN / auth | Определения пайплайнов инстанса `{pipelines}` (шаги, `onError`, `maxAttempts`, `ttl`, провенанс `installedBy`) |
+| GET | `/api/v2/pipelines/instances` | оба | ADMIN / auth | Экземпляры прогонов `{instances}`; фильтры `pipelineId`, `status` (`pending\|running\|waiting\|done\|failed\|cancelled`), `limit` (дефолт 100, максимум 1000); неизвестный `status` → 400 `VALIDATION_ERROR` |
+| GET | `/api/v2/pipelines/instances/:instanceId` | оба | ADMIN / auth | Один экземпляр (состояния шагов, `currentStep`, `attempts`, `trigger`) |
+| GET | `/api/v2/pipelines/:id` | оба | ADMIN / auth | Одно определение; нет → 404 `NOT_FOUND` |
+| POST | `/api/v2/pipelines/:id/instances` | оба | ADMIN **или** scope `automation:install` | **Ручной** запуск экземпляра (проверка/отладка; основной запуск — по событию): тело `{trigger?, payload?}` → 201; нет определения → 404 |
+
+**Семантика автомата.** Первый шаг с `waitsFor` — **триггер**: совпавшее событие создаёт
+экземпляр; последующие шаги с `waitsFor` — **гейты**: событие означает «предыдущий шаг завершён
+и подтверждён человеком» — автомат продвигается в существующем экземпляре. **Артефакт между
+шагами = payload события** (например `{draftId}`) — он сохраняется в артефакте шага и в
+`trigger.payload`; следующий шаг получает его оттуда. Учёт ведёт funnel (ADR-089): решение
+Router'а несёт `pipeline: {id, step}`, трекер создаёт/продвигает экземпляр.
+
+**UI.** Раздел «Аддоны» (Настройки → Администрирование, категория `addons`, роль ADMIN):
+реестр пакетов (одобрение и снятие) и «Пайплайны» — определения и прогоны с фильтрами.
+
+### 5.35 Пайплайны проекта, прогоны и шаблоны — `/api/v2/projects/:id/pipelines*`, `/api/v2/pipeline-runs*`, `/api/v2/pipeline-templates*` (оба, ADR-101 Э6)
+
+Модель «пайплайн как второй движок» ([ADR-101](./arch_decisions/adr-101-pipeline-engine.md),
+формат и устройство — [docs/PIPELINES.md](./PIPELINES.md)): **пайплайн проекта** (`scope:'project'`) со
+спецификацией-черновиком и неизменяемыми опубликованными версиями, **прогон** (самодостаточная
+запись со снимком спецификации + журнал выполнения) и **шаблон инстанса** (источник для
+инстанцирования). Единая фабрика `createPipelineProjectRoutes` для core и backend; хранилище —
+порты `ProjectPipelineRepository` и `PipelineRunRepository` (ADR-096), источник шаблонов —
+legacy-реестр `PipelineRepository` (ADR-100) **плюс** записи `scope:'instance'` нового порта.
+
+Пути **не пересекаются** с legacy-контуром §5.34 (`/api/v2/pipelines*`): там — «декларация + учёт»
+(ADR-100), здесь — движок со спецификациями, версиями и журналом (ADR-101). Старые эндпоинты
+остаются рабочими (legacy-контур, ADR-100), **UI уже переведён на новый контур** — новые эндпоинты
+основной контур пайплайнов.
+
+**Права (ADR-089 §5.5/§5.8, инвариант 21).**
+
+| Действие | Право |
+|---|---|
+| Чтение пайплайнов и прогонов | право **чтения** проекта: владелец, участник проекта (любая роль, в т.ч. `VIEWER`), `LEAD`, `ADMIN` |
+| Изменение (создание, правка, публикация, удаление, запуск, HITL) | право **изменения содержимого** проекта: `OWNER`, `EDITOR`, `LEAD`, `ADMIN`; `VIEWER` читает, но не мутирует |
+| Шаблоны инстанса (список) и инстанцирование | **ADMIN** (managed); core — `requireAuth` (single-user). Инстанцирование дополнительно требует права изменения содержимого целевого проекта |
+| service-key (ADR-052) | мутации — scope `automation:install` (или роль `ADMIN` у ключа) **и** проектная проекция `allowedProjects` (иначе `403 PROJECT_FORBIDDEN`); без scope — `403 SCOPE_REQUIRED`. Чтение scope-гейта не имеет — только права проекта |
+
+Проверка доступа — **на границе** (guard), а не в обработчике (инвариант 16): guard резолвит
+проект или прогон один раз и кладёт сущность в контекст; в обработчиках проверок доступа нет.
+Нет проекта → `404`; нет прав → `403`; пайплайн чужого проекта под чужим id → `404` (в этом
+проекте такого ресурса нет).
+
+| Метод | Путь | Сборка | RBAC (managed) | Назначение / req-resp |
+|---|---|---|---|---|
+| GET | `/api/v2/projects/:id/pipelines` | оба | право чтения проекта | Пайплайны проекта `{pipelines}`: id, имя, `scope`, `projectId`, `draftVersion`, `publishedVersion?`, `installedBy?`, черновик `draft` |
+| POST | `/api/v2/projects/:id/pipelines` | оба | право изменения проекта (+ `automation:install` для service-key) | Создать пайплайн: тело `{name?, description?, spec}` — спецификация `PipelineSpec`; сервер проставляет `id`/`version`/`status`/`projectId` → **201** `{pipeline}`; невалидная спецификация → 400 `VALIDATION_ERROR` со списком `problems` |
+| GET | `/api/v2/projects/:id/pipelines/:pid` | оба | право чтения проекта | `{pipeline, published, versions}` — черновик, опубликованная версия и список версий |
+| PUT | `/api/v2/projects/:id/pipelines/:pid` | оба | право изменения проекта | Сохранить черновик: тело `{name?, description?, spec}` → 200 `{pipeline}`; версия при этом **не** меняется (публикация — отдельный шаг) |
+| DELETE | `/api/v2/projects/:id/pipelines/:pid` | оба | право изменения проекта | Удалить пайплайн и его версии → **204**; прогоны **остаются** (прогон самодостаточен) |
+| POST | `/api/v2/projects/:id/pipelines/:pid/publish` | оба | право изменения проекта | Опубликовать черновик: неизменяемая версия `publishedVersion`, черновик переезжает на следующую версию → 200 `{pipeline, published}`; повторная публикация без изменений идемпотентна (версии не плодит); черновика нет → 409 `CONFLICT` |
+| GET | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право чтения проекта | Прогоны пайплайна `{runs}`; фильтры `status` (`pending`/`running`/`awaiting_human`/`done`/`failed`/`cancelled`), `limit` (дефолт 100, максимум 1000); неизвестный `status` → 400 `VALIDATION_ERROR` |
+| POST | `/api/v2/projects/:id/pipelines/:pid/runs` | оба | право изменения проекта | Запуск прогона: тело `{trigger?, version?}` (по умолчанию — последняя опубликованная версия, триггер `manual`) → **201** `{run}`; прогон идёт **в фоне** — клиент следит по событиям `pipeline.run.*`; опубликованной версии нет → 409 `pipeline.not_published` |
+| GET | `/api/v2/pipeline-runs/:runId` | оба | право чтения проекта прогона | Прогон и журнал `{run, events}` (события: `run.started`/`node.started`/`node.finished`/`edge.taken`/`gate.awaiting`/`run.finished`/`run.failed`); `limit` — последние N событий (дефолт 200, максимум 1000) |
+| POST | `/api/v2/pipeline-runs/:runId/resume` | оба | право изменения проекта прогона | HITL-решение человека: тело `{approved, output?, comment?}` → 200 `{run}`; прогон не ждёт решения → 409 `pipeline.invalid_state` |
+| POST | `/api/v2/pipeline-runs/:runId/cancel` | оба | право изменения проекта прогона | Отмена прогона → 200 `{run}` (статус `cancelled`); прогон уже завершён → 409 `CONFLICT` |
+| GET | `/api/v2/pipeline-templates` | оба | **ADMIN** / auth | Шаблоны инстанса `{templates}`: `format` (`adr-100` — legacy-определение пакета, `adr-101` — запись `scope:'instance'`), `name`, `version`, `installedBy?`, `steps` (legacy) или `spec` |
+| POST | `/api/v2/pipeline-templates/:tid/instantiate` | оба | **ADMIN** / auth + право изменения целевого проекта | Инстанцировать шаблон в проект: тело `{projectId, name?}` → **201** `{pipeline}` (черновик, `draftVersion: 1`, провенанс `installedBy` сохраняется); шаблон не конвертируется → 409 `PIPELINE_TEMPLATE_UNSUPPORTED` со списком `problems`; нет шаблона или проекта → 404 |
+
+**Коды ошибок раздела:** `UNAUTHORIZED` (401), `FORBIDDEN` (403 — права проекта), `SCOPE_REQUIRED`
+(403 — service-key без `automation:install`), `PROJECT_FORBIDDEN` (403 — service-key вне
+`allowedProjects`), `NOT_FOUND` (404), `VALIDATION_ERROR` (400, со списком `problems`), `CONFLICT`
+(409 — публиковать нечего / прогон завершён), `pipeline.not_published` (409),
+`pipeline.invalid_state` (409), `PIPELINE_TEMPLATE_UNSUPPORTED` (409).
+
+**Ошибка прогона.** `run.error` — текст ошибки; **машиночитаемый код** причины — в журнале прогона
+(`run.failed.payload.code`: `pipeline.gate_rejected`, `pipeline.gate_timeout`,
+`pipeline.step_failed`, `pipeline.step_timeout`, `pipeline.cancelled`, `pipeline.loop_limit`,
+`permission.denied`).
+
+**Конвертация legacy-определений (ADR-100 → шаблон ADR-101).** Определение пакета
+(`provides.pipelines[]`, legacy-реестр `{dataDir}/pipelines/definitions.json`) — источник шаблонов;
+миграции данных нет: конвертация выполняется **на лету при инстанцировании**
+(`legacyDefinitionToPipelineSpec`):
+
+- шаг `agent` → узел `agent`: `id`, `agent`, `title?`, `skill?`, `prompt?`, `timeoutSec?`
+  переносятся как есть;
+- шаг `loop` **не конвертируется** (Loop Engine вне объёма, PROP-057) — шаблон с такими шагами
+  не инстанцируется: `409 PIPELINE_TEMPLATE_UNSUPPORTED` со списком проблем;
+- шаг без поля `agent` — не конвертируется (узел `agent` требует агента) — та же 409;
+- `waitsFor` **не переносится**: в ADR-101 триггер задаётся при запуске прогона, а HITL-гейт
+  выражается узлом `human` — его добавляет владелец пайплайна в черновике;
+- выход пайплайна при инстанцировании — `none` (выходы задаются вручную).
+
+**Хранилище.** Черновики и версии — порт `ProjectPipelineRepository`
+(`{dataDir}/pipelines/{pipelines,versions}.json`), прогоны и журнал — `PipelineRunRepository`
+(`{dataDir}/pipelines/{runs.json,run-events.jsonl}`); при `storage.backend=postgres` — драйвер
+`@itphx/synth-storage-postgres` (PROP-032).
+
+**UI.** Экран пайплайнов/прогонов и визуальный редактор **реализованы** (ADR-101 §5.35): вкладка
+«Пайплайны», страницы пайплайна и прогона, HITL-действия, редактор `@xyflow/react`.
+
+---
+
 ## 6. Источники
 
 | Компонент | Файл |
@@ -1343,6 +1544,8 @@ user/project/model/agent, кнопки CSV/JSON и печать браузера
 | Webhooks store/журнал/роуты/движок (ADR-052) | `packages/core/src/storage/webhook-store.ts`, `packages/core/src/storage/webhook-delivery-store.ts`, `packages/core/src/server/routes/webhooks.ts`, `packages/core/src/engine/webhooks/*` |
 | Admin-API обслуживания инстанса (ADR-091/ADR-092) | `packages/core/src/server/routes/maintenance.ts`, `packages/core/src/maintenance/*` |
 | Аналитика и отчёты (PROP-102) | `packages/core/src/server/routes/analytics.ts`, `packages/core/src/analytics/*`, `packages/shared/src/types/analytics.ts` |
+| Пакеты расширений и пайплайны (ADR-100) | `packages/core/src/server/routes/packs.ts`, `packages/core/src/server/routes/pipelines.ts`, `packages/core/src/engine/events/pipeline-tracker.ts`, `packages/core/src/storage/ports/pack-repository.ts`, `packages/core/src/storage/ports/pipeline-repository.ts`, `packages/shared/src/types/pack.ts`, `packages/shared/src/types/pipeline.ts` |
+| Пайплайны проекта, прогоны и шаблоны (ADR-101, Э6) | `packages/core/src/server/routes/pipeline-project-routes.ts`, `packages/core/src/engine/pipelines/*`, `packages/core/src/storage/ports/project-pipeline-repository.ts`, `packages/core/src/storage/ports/pipeline-run-repository.ts`, `packages/shared/src/types/pipeline-engine.ts` |
 | EventHub | `packages/backend/src/events/hub.ts` |
 | Rate limiter | `packages/backend/src/middleware/rate-limiter.ts` |
 | Core standalone app + SSE/WS | `packages/core/src/server/app.ts` |

@@ -15,6 +15,7 @@ import { parseTtl } from '../../sessions/ephemeral.js';
 import type { EventBindingRepository } from '../../storage/ports/event-binding-repository.js';
 import type { HookBus } from '../hooks/hook-bus.js';
 import type { EventRouter } from './event-router.js';
+import type { PipelineTracker } from './pipeline-tracker.js';
 import type { EventDelivery, EventDeliveryContext } from './types.js';
 import { resolveEffectiveRoles } from './identity-roles.js';
 
@@ -138,6 +139,17 @@ export interface RequestSessionServiceDeps {
    * Вызывается в `handleEvent`; результат уходит в ответ ingest'а.
    */
   issueIdentityClaim?: (event: SynthEvent) => Promise<IdentityClaimHint | null>;
+  /**
+   * ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059). Решение Router'а
+   * с `pipeline: {id, step}` означает «событие `waitsFor` продвинуло автомат
+   * пайплайна `id` к шагу `step`» — трекер ведёт экземпляр (создание либо
+   * продвижение) в ядре, а add-on отдаёт артефакт по id.
+   *
+   * Учёт — **best-effort** (как `onSessionMaterialized`): ошибка записи
+   * экземпляра не ломает доставку события. Не задан — состояние пайплайнов
+   * не ведётся (прежнее поведение).
+   */
+  pipelineTracker?: PipelineTracker;
 }
 
 /**
@@ -154,6 +166,16 @@ export function eventToMessageText(event: SynthEvent): string {
   }
   const serialized = JSON.stringify(payload);
   return typeof serialized === 'string' ? serialized : '';
+}
+
+/**
+ * ADR-089: ссылка на шаг пайплайна из решения Router'а. Поле есть только у
+ * решений `ephemeral`/`bind` (там, где решение порождает сессию); в
+ * `bound`/`queue` его нет (его отвергает схема цели) — поэтому проверяем
+ * наличие поля, а не обращаемся к нему напрямую.
+ */
+function pipelineRefOf(decision: RouteDecision): { id: string; step: string } | undefined {
+  return 'pipeline' in decision ? decision.pipeline : undefined;
 }
 
 /**
@@ -291,6 +313,7 @@ export class RequestSessionService {
   private _identityMap?: Record<string, string>;
   private _onSessionMaterialized?: (session: Session) => void | Promise<void>;
   private _issueIdentityClaim?: (event: SynthEvent) => Promise<IdentityClaimHint | null>;
+  private _pipelineTracker?: PipelineTracker;
 
   constructor(deps: RequestSessionServiceDeps) {
     this._sessionManager = deps.sessionManager;
@@ -311,6 +334,7 @@ export class RequestSessionService {
     this._identityMap = deps.identityMap;
     this._onSessionMaterialized = deps.onSessionMaterialized;
     this._issueIdentityClaim = deps.issueIdentityClaim;
+    this._pipelineTracker = deps.pipelineTracker;
   }
 
   /**
@@ -477,6 +501,7 @@ export class RequestSessionService {
       // линковки идентичности отправителя владельца переустанавливаем (машинный
       // `service:<keyId>` или пустой → человек). «Чужую человеческую» не трогаем.
       await this._maybeReassignOwner(session, event);
+      await this._trackPipeline(decision, event, session.id);
       await this._deliver(session.id, event, 'run', context);
       return session;
     }
@@ -493,6 +518,9 @@ export class RequestSessionService {
       });
       // ADR-089: подписываем клиентов владельца на новую сессию до доставки.
       await this._onSessionMaterialized?.(session);
+      // ADR-089/ADR-051: шаг пайплайна — учёт экземпляра (до доставки:
+      // состояние автомата фиксируется до старта хода агента).
+      await this._trackPipeline(decision, event, session.id);
       await this._deliver(session.id, event, 'run', context);
       return session;
     }
@@ -513,6 +541,7 @@ export class RequestSessionService {
           // ADR-089 (claim-flow): привязка уже создана предыдущим событием —
           // владельца переустанавливаем так же, как в `bound` (до доставки).
           await this._maybeReassignOwner(existingSession, event);
+          await this._trackPipeline(decision, event, existingSession.id);
           await this._deliver(existingSession.id, event, 'run', context);
           return existingSession;
         }
@@ -537,6 +566,8 @@ export class RequestSessionService {
       });
       // ADR-089: подписываем клиентов владельца на новую сессию до доставки.
       await this._onSessionMaterialized?.(session);
+      // ADR-089/ADR-051: шаг пайплайна — учёт экземпляра.
+      await this._trackPipeline(decision, event, session.id);
       await this._deliver(session.id, event, 'run', context);
       return session;
     }
@@ -544,12 +575,40 @@ export class RequestSessionService {
     if (decision.kind === 'queue') {
       const session = await this._sessionManager.getSession(decision.owner);
       if (!session) return null;
+      await this._trackPipeline(decision, event, session.id);
       await this._deliver(session.id, event, 'defer', context);
       return session;
     }
 
     // drop
     return null;
+  }
+
+  /**
+   * ADR-089/ADR-051: учёт экземпляра пайплайна для решения с
+   * `pipeline: {id, step}` (PROP-059). Ссылка на шаг есть только у решений
+   * `ephemeral`/`bind` — там, где решение порождает сессию; в `bound`/`queue`
+   * поля нет (его отвергает схема цели).
+   *
+   * Best-effort (как `onSessionMaterialized`): ошибка учёта экземпляра
+   * **не** ломает доставку события — логируется и продолжается.
+   */
+  private async _trackPipeline(
+    decision: RouteDecision,
+    event: SynthEvent,
+    sessionId: string | undefined,
+  ): Promise<void> {
+    const tracker = this._pipelineTracker;
+    if (!tracker || !sessionId) return;
+    const ref = pipelineRefOf(decision);
+    if (!ref) return;
+    try {
+      await tracker.track({ pipeline: ref, event, sessionId });
+    } catch (err) {
+      console.warn(
+        `[RequestSessionService] учёт экземпляра пайплайна «${ref.id}» не удался: ${String(err)}`,
+      );
+    }
   }
 
   /**

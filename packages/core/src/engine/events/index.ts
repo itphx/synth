@@ -8,6 +8,16 @@ export { ProjectRuleProvider } from './project-rule-provider.js';
 export { DecisionRuleProvider, DECISION_ROUTING_QUESTION_ID } from './decision-rule-provider.js';
 export type { DecisionAgentCandidate, DecisionRuleProviderDeps } from './decision-rule-provider.js';
 export { decisionFromTarget } from './target-decision.js';
+export { PipelineTracker } from './pipeline-tracker.js';
+export { pipelineTriggerPayload, pipelineStepArtifact } from './pipeline-tracker.js';
+export type {
+  PipelineTrackerDeps,
+  PipelineTrackInput,
+  PipelineTrackedInstance,
+  PipelineEventArtifact,
+  PipelineEventTrigger,
+  PipelineEventStepState,
+} from './pipeline-tracker.js';
 export type {
   EventDelivery,
   EventDeliveryContext,

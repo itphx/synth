@@ -12,6 +12,7 @@ import type { RemoteConnection } from '../../remote/connection.js';
 import type { LocalAuthKit } from '../../auth/local.js';
 import { isRemoteRef, toLocalId } from '../../remote/aggregate.js';
 import { extractChildSessionId, extractCreatedSession } from '../../events/child-session.js';
+import { INSTANCE_EVENT_CHANNEL } from '../../events/bus.js';
 import { LOCAL_USER_ID } from '../local-owner.js';
 import type { LocalOwnerResolver } from '../local-owner.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -256,6 +257,10 @@ export function attachEventWebSocket(deps: EventWebSocketDeps): WebSocketServer 
           for (const s of allSessions) {
             subscribe(s.id);
           }
+          // ADR-101: инстансные события (прогон пайплайна) — прогон не сессия,
+          // поэтому per-session подписки его не касаются. Клиент подписывается на
+          // инстансный канал шины (в гибриде его покрывает `subscribeAll`).
+          subscribe(INSTANCE_EVENT_CHANNEL);
           // ADR-089: сессии, материализованные funnel'ом (`RequestSessionService`)
           // ПОСЛЕ этого снимка, доставляются точечной подпиской владельца —
           // `onSessionMaterialized` → `subscribeToSession`.

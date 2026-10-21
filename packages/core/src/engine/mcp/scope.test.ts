@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { resolveMcpScope, type McpScopeServer } from './scope.js';
+import { resolveMcpProjectScope, resolveMcpScope, type McpScopeServer } from './scope.js';
 
 function server(
   name: string,
@@ -132,5 +132,42 @@ describe('resolveMcpScope (ADR-071 §2.4)', () => {
     );
     expect(result).toHaveLength(2);
     expect(result.map((d) => d.name).sort()).toEqual(['community', 'sys']);
+  });
+});
+
+/**
+ * ADR-101 §10: проектный скоуп MCP — без сессионного слоя (у шага пайплайна
+ * нет сессии): системный мастер + проектный hard-gate.
+ */
+describe('resolveMcpProjectScope (ADR-101 §10)', () => {
+  it('проект разрешает сервер, система включена → enabled (без сессионного сида)', () => {
+    const result = resolveMcpProjectScope(
+      [server('community', { origin: 'user' })],
+      { enabled: ['community'], defaultOn: [] },
+    );
+    expect(byName(result, 'community')).toMatchObject({ level: 'project', enabled: true });
+    expect(byName(result, 'community').reason).toBeUndefined();
+  });
+
+  it('сервер вне проекта → project_disabled', () => {
+    const result = resolveMcpProjectScope(
+      [server('community', { origin: 'user' })],
+      { enabled: ['other'], defaultOn: [] },
+    );
+    expect(byName(result, 'community')).toMatchObject({ enabled: false, reason: 'project_disabled' });
+  });
+
+  it('системный мастер выключен → system_disabled (приоритет выше проектного)', () => {
+    const result = resolveMcpProjectScope(
+      [server('community', { origin: 'user', systemEnabled: false })],
+      { enabled: ['community'], defaultOn: [] },
+    );
+    expect(byName(result, 'community')).toMatchObject({ enabled: false, reason: 'system_disabled' });
+  });
+
+  it('без проектного скоупа (legacy) → системно-включённые серверы доступны', () => {
+    const result = resolveMcpProjectScope([server('sys'), server('off', { systemEnabled: false })], null);
+    expect(byName(result, 'sys')).toMatchObject({ enabled: true });
+    expect(byName(result, 'off')).toMatchObject({ enabled: false, reason: 'system_disabled' });
   });
 });

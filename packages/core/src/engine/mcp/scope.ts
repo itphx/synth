@@ -94,3 +94,30 @@ export function resolveMcpScope(
     };
   });
 }
+
+/**
+ * ADR-071 §2.4: эффективный набор MCP-серверов **проекта** — без сессионного
+ * слоя (сессионного снапшота нет: у шага пайплайна нет сессии, ADR-101 §1).
+ *
+ * Модель per-item та же: системный мастер (`systemEnabled`) → проектный
+ * hard-gate (`project.enabled`) → «включён» (проект разрешил сервер). Сессионные
+ * `enabled`/`disabled`/`defaultOn` **не участвуют**: проектного скоупа шага
+ * достаточно, чтобы решить, какие серверы проекту доступны.
+ *
+ * Логика не дублируется — считается тем же `resolveMcpScope`:
+ * - проектный скоуп задан → сессионным «включением» считается проектный
+ *   allow-list (`project.enabled`), сида/`opt-out` сессии нет;
+ * - проектного скоупа нет (legacy) → гейт не задан, доступны все
+ *   системно-включённые серверы.
+ */
+export function resolveMcpProjectScope(
+  servers: McpScopeServer[],
+  project: ProjectMcpSettings | null | undefined,
+): McpScopeDecision[] {
+  if (!project) {
+    // Проектного скоупа нет (legacy) — гейт не задан: доступны все
+    // системно-включённые серверы (сессионного слоя у шага нет).
+    return resolveMcpScope(servers, null, { enabled: servers.map((server) => server.name) });
+  }
+  return resolveMcpScope(servers, project, { enabled: project.enabled });
+}

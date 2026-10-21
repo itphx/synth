@@ -19,7 +19,11 @@ import {
   describeSecurityAuditRepository,
   describeEgressRequestLogRepository,
   describeMcpRegistryRepository,
+  describePackRepository,
+  describePipelineRepository,
+  describePipelineRunRepository,
   describeProfileRepository,
+  describeProjectPipelineRepository,
   describeProjectRepository,
   describeProtectedPathsRepository,
   describeScheduleRepository,
@@ -63,6 +67,10 @@ import { ContextConfig } from '../../engine/context/config.js';
 import { SecretPatternStore } from '../../engine/gateway/secret-pattern-store.js';
 import { ProtectedPathsStore } from '../../engine/security/protected-paths-store.js';
 import { FileBlobStore } from '../file-blob-store.js';
+import { FilePipelineStore } from '../file-pipeline-store.js';
+import { FilePackStore } from '../file-pack-store.js';
+import { FileProjectPipelineStore } from '../file-project-pipeline-store.js';
+import { FilePipelineRunStore } from '../file-pipeline-run-store.js';
 
 /** Мастер-ключ для шифрующих хранилищ (base64, 32 байта) — файл master.key не создаётся. */
 const MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
@@ -231,6 +239,33 @@ describe('контрактные тесты файловых реализаци�
   describeBlobStore('FileBlobStore → BlobStore', async () => {
     const dir = await tmp();
     return { repo: new FileBlobStore({ root: join(dir, 'blobs') }) };
+  });
+
+  // ADR-051/PROP-059: пайплайны (определения + экземпляры).
+  describePipelineRepository('FilePipelineStore → PipelineRepository', async () => ({
+    repo: new FilePipelineStore({ dataDir: await tmp() }),
+  }));
+
+  // ADR-086 §5: реестр установок пакетов расширений.
+  describePackRepository('FilePackStore → PackRepository', async () => ({
+    repo: new FilePackStore({ dataDir: await tmp() }),
+  }));
+
+  // ADR-101: спецификации пайплайнов (черновик + опубликованные версии).
+  describeProjectPipelineRepository(
+    'FileProjectPipelineStore → ProjectPipelineRepository',
+    async () => ({
+      repo: new FileProjectPipelineStore({ dataDir: await tmp() }),
+    }),
+  );
+
+  // ADR-101: прогоны пайплайнов и журнал выполнения (append-only).
+  describePipelineRunRepository('FilePipelineRunStore → PipelineRunRepository', async () => {
+    const dir = await tmp();
+    return {
+      repo: new FilePipelineRunStore({ dataDir: dir }),
+      pipelines: new FileProjectPipelineStore({ dataDir: dir }),
+    };
   });
 });
 

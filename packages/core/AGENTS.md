@@ -36,7 +36,26 @@
   (`storage/file-blob-store.ts`, порт `BlobStore`), `DefaultsStore` (`storage/defaults-store.ts`),
   `ChatOrchestrator`
   (`engine/orchestrator.ts`), `SessionManager` (`sessions/manager.ts`),
-  `QueueProcessorManager` (`queue/processor.ts`), `EventBus` (`events/bus.ts`).
+  `QueueProcessorManager` (`queue/processor.ts`), `EventBus` (`events/bus.ts`),
+  `INSTANCE_EVENT_CHANNEL` (`events/bus.ts` — инстансный канал шины, ADR-101).
+- **Пайплайны (ADR-101).** Публичные экспорты `src/index.ts`: движок
+  (`PipelineEngine`, `PipelineEngineError`, `PIPELINE_ERROR_CODES`) и точки расширения
+  (`StepExecutor`/`StepOutcome`/`StepGateOutcome`, `PipelineExitHandler`,
+  `NoopPipelineExitHandler`, `createPipelineExitHandler`); исполнители шагов
+  (`createToolStepExecutor`/`createScriptStepExecutor`/`createHumanStepExecutor`/
+  `createAgentStepExecutor` + `executeToolStep`/`executeScriptStep`/`executeAgentStep`);
+  контекст и правила шага (`buildPipelineStepContext`, `checkPipelineToolPermission`,
+  `evaluateCondition`, `resolveStepInput`, `resolveSpecVars`, `resolvePipelinePath`,
+  `nextNodeId`, `MAX_PIPELINE_TRANSITIONS`, `sanitizeRecord`/`sanitizeTrigger`/
+  `sanitizeValue`, `buildShellCommand`, `buildStepUserMessage`, `buildToolContext`,
+  `findTool`, `stepWorkingDir`, гейт-хелперы `humanGate`/`gateDecisionResult`/
+  `gateRejectedResult`/`gateTimeoutResult`/`startGateTimeout`/`isStepGateOutcome`);
+  HTTP-фабрики (`createPipelineProjectRoutes` + `legacyDefinitionToPipelineSpec`,
+  `createPipelinesRoutes`, `createPacksRoutes`); порты и типы хранения
+  (`ProjectPipelineRepository`/`PipelineRunRepository` + их записи, файловые и
+  in-memory реализации); метрики (`createPipelineMetrics` + нормализаторы лейблов и
+  корзины `PIPELINE_*_DURATION_BUCKETS`); провайдерский seam `toCoreProviderConfig`
+  (`engine/router/index.ts` — конфиг провайдера для движка вне сессий).
 - Движок stateless: история и состояние — на бэкенде; движок получает историю +
   новое сообщение + контекст (ADR-022).
 - История для LLM формируется только через `ChatOrchestrator._sessionMessagesToLlm`
@@ -106,11 +125,22 @@
   (`engine/llm-error.ts`); строки движка — по ключам `shared/i18n` (ADR-041).
 - События сессии — локальный `EventBus`; UI слушает через EventHub/TransportClient
   (`/ws/events`) с SSE-фоллбеком (ADR-008/009/024).
+- **Инстансный канал событий (ADR-101).** Прогон пайплайна — не сессия, поэтому его события
+  `pipeline.run.*` публикуются в **инстансный канал** той же шины
+  (`EventBus.publishInstance`, канал `INSTANCE_EVENT_CHANNEL = 'instance'`, `events/bus.ts`): их
+  видят глобальные подписчики (SSE-хаб `GET /api/v2/events`, watch-all клиенты managed-хаба
+  `EventHub`, движок исходящих webhooks), а per-session подписки — нет. Новых транспортных
+  каналов не заводим (инвариант 6); предупреждение «EVENT LOST» для инстансных событий не
+  печатается.
 - Машинный доступ внешних сервисов — через **service-key** (ADR-052 этап I): `ServiceApiKeyStore`
   + синтетический пользователь + `scopes`/`allowedProjects`; enforcement — `requireScope`/
   `checkServiceProjectProjection` (`server/service-scope.ts`), **не** через permission-слой тулов (тот
   роль-оси не имеет, ADR-029). Каталог scope включает зонтичный `addons:install` (установка
-  аддонов: MCP-реестр/скиллы) и `users:read`. Провижининг installer-ключа — `security.bootstrapServiceKeys`
+  аддонов: MCP-реестр/скиллы), зонтичный `automation:install` (установщик **пакетов
+  расширений**: агенты и их ролевые промпты, пайплайны, а также порождаемые пакетом
+  правила маршрутизации и расписания — наборы «любой из» в
+  `SERVICE_SCOPE_SETS`: `routesWrite`/`schedulesWrite`/`agentsWrite`; `addons:install`
+  создание агентов **не** открывает) и `users:read`. Провижининг installer-ключа — `security.bootstrapServiceKeys`
   (config) / env `SYNTH_BOOTSTRAP_SERVICE_KEYS` (JSON) → `applyBootstrapServiceKeys` при старте.
 - Создание сессии — через единый funnel `RequestSessionService`
   (`engine/events/request-session.ts`): явный запрос — `direct`, внешнее событие —
@@ -192,7 +222,10 @@
   `getMetricsTokenStatus`/`writeMetricsToken`/`removeMetricsToken`, минимум 16 символов, атомарно `0600`),
   `collectors/*` (`bus` — turns/streams/retries/cost, `llm` — `createLlmCallRecorder` для
   `GatewayProvider.onCall`, `sessions` — 15 c, `storage` — записи/деградация 60 c и `{dataDir}` 300 c,
-  `events` — ingest/decisions + журнал 5 мин, `scheduler`, `webhooks`, `hybrid`, `decision`, `ready`).
+  `events` — ingest/decisions + журнал 5 мин, `scheduler`, `webhooks`, `hybrid`, `decision`, `ready`,
+  `pipelines` — `createPipelineMetrics`: `synth_pipeline_*` (ADR-101 — прогоны/шаги/длительности/
+  HITL-ожидания; лейблы только `status`/`source`/`kind`/`outcome`, id прогонов и узлов в лейблах нет —
+  значения приводятся к конечным наборам, неизвестное → `other`; ошибка метрик не влияет на прогон)).
   Роуты — `server/routes/metrics.ts` (`/metrics`: 404 при disabled, 401 при токене, `no-store`),
   `server/routes/health.ts` (`/health`, `/ready`) и `server/routes/metrics-settings.ts`
   (`createMetricsSettingsRoutes`: runtime/status/token, `resolveMetricsEnabled` — env > runtime > config > default).
@@ -241,7 +274,10 @@
   `GET/POST /api/v2/maintenance/restart` (`server/routes/maintenance.ts`); переинициализацию
   процесс-глобальных singleton'ов не делать — только выход.
 - `server/service-scope.ts` — ADR-052 (этап I): enforcement service-key — `requireScope(...)`
-  (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `checkServiceProjectProjection`/
+  (scope-гейт рядом с `requirePermission`; для интерактивных кред — no-op), `requireScopeOrAdminRole(...)`
+  (тот же гейт, но service-key проходит и по **роли ADMIN** среди выданных ролей — зонтичный
+  `automation:install` не отбирает прежние права ключа с ролью ADMIN; интерактив — no-op),
+  `checkServiceProjectProjection`/
   `isProjectAllowed` (проектная проекция `allowedProjects`; это **не** RBAC), `getServiceCredential`
   (`serviceKey` из контекста), типы `ScopeGuardFactory`/`ServiceProjectProjectionGuard`. Прежние имена
   `checkProjectAccess`/`ProjectGuard` оставлены `@deprecated`-алиасами — в коде и доках использовать новые.
@@ -281,6 +317,8 @@
   и уникальна глобально (дубль → 409 `CONFLICT`). ADR-052: scope-гейты на роутах
   (`events:ingest`, `events:watch`, `bindings:read|write`, `keys:read|write`, `routes:read|write`)
   и проектная проекция через `scopeGuard`/`serviceProjectProjection` (core-дефолты — `requireScope`/`checkServiceProjectProjection`).
+  Запись правил маршрутизации — `SERVICE_SCOPE_SETS.routesWrite` (`routes:write` **или**
+  `automation:install` — достаточно любого из двух).
 - `server/routes/service-keys.ts` — `createServiceKeyRoutes` (ADR-052 этап I): CRUD service-key
   инстанса (`GET/POST /api/v2/service-keys`, `GET /scopes` — каталог scope'ов/семейств/ролей из shared,
   `GET/PATCH/DELETE /:id`, `POST /:id/revoke`),
@@ -315,6 +353,16 @@
 - `server/fs-workspace.ts` — резолв workspace проекта для FS-роутов
   (`resolveProjectWorkspace`, ADR-075) и детект бинарных файлов (`isTextFile`).
 - `engine/orchestrator.ts` — `ChatOrchestrator` (цикл LLM + Tool Use); опциональная зависимость `isCancelRequested` (персистентный флаг сессии) останавливает многоитерационный Tool Use (верх `while (toolIteration < maxIterations)`), когда живой cancelToken недоступен. ADR-095 (шаг 6a): самостоятельные методы вынесены в `engine/orchestrator/*` (`usage`, `fs-change`, `errors`, `persistence`, `routing`, `prompt-info`, `commands`, `debug`, `summarization`) — класс делегирует через тонкие обёртки/`*Deps()`-геттеры; (шаг 6b-1): из `_processMessage` вынесены фазы `engine/orchestrator/phases/*` — `process-early.ts` (системные сообщения, `/`-команды, micro-first), `process-setup.ts` (подготовка запроса: провайдер → MCP → state → Composer → тулы), `process-finalize.ts` (эпилог: отмена/фоллбеки/quality-check+escalation/персист/`stream.done`/авто-тайтл); в `_processMessage` остались пролог-скаляры, тело цикла Tool Use и его обработчики. Сборка промпта (ADR-070): `getPromptInfo(session)` → `PromptDiagnostics` (manifest + `history` + `promptState` активного агента + `lastPromptMeta` + `toolsDetail`), `_buildPromptHistoryInfo` зеркалит `_sessionMessagesToLlm`; state-сообщения (`syncStateMessages`) превращаются в синтетические user-сообщения `<system-state>`; `promptStates[agentKey]` читается/пишется по generation, `_cachePolicy` (`llm.cache`) уезжает в `SystemPromptPayload`; `_filterToolsByMode` удалён — список тулов постоянен.
+  **Seam-методы для движка пайплайнов (ADR-101):** `getComposer()` — тот же инстанс
+  `SystemPromptComposer`, что у сессий (промпт агентского шага собирается той же
+  подсистемой — иначе разойдутся блоки, политики и кэш-маркеры);
+  `getInstructionsResolver()` — резолвер проектных инструкций ADR-069 (политика
+  trust/dedup/лимиты общие; `null` — инструкции инстанса выключены);
+  `wrapProviderWithGateway(provider)` — общая обвязка провайдера в `GatewayProvider`
+  (ADR-036) для движков вне сессии — инвариант «любой LLM-вызов через gateway» сохраняется.
+  Шаг пайплайна — не сессия, поэтому он работает с суженным контрактом Composer'а
+  `ComposerSessionLike = Pick<Session, 'settings' | 'promptStates' | 'projectId'>`
+  (`engine/context/composer.ts`) — обычная `Session` структурно совместима.
 - `engine/gateway/*` — `GatewayProvider`, guard'ы, обфускация, аудит, rate limit; `decide()` — не-chat
   decision-вызов (ADR-084: guard/обфускация `state`, тот же `_prepare`/аудит, что у chat-путей).
   `SystemPromptPayload` (`stablePrefix`/`cacheKey`/`cachePolicy`, ADR-070) проходит через Gateway в
@@ -354,7 +402,15 @@
 - `engine/file-signature.ts` — ADR-069 (R5) / ADR-046: `filesSignature`/`dirsSignature`
   (`id:floor(mtimeMs):size`, отсутствующий кандидат — маркер `!`) для ленивой инвалидации
   кэшей (общий со скиллами).
-- `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация.
+- `engine/agents/*` — `AgentRegistry`, определения агентов, режимы, нормализация;
+  `createAgentRegistry(toolRegistry, overridesDir)` — встроенные агенты + merge с файловым
+  каталогом `{dataDir}/agents`; `registerStoredAgents(registry, agents)` — регистрация
+  агентов из **стора** (ADR-096) в реестр при старте (merge как в `GET /api/v2/agents`:
+  override встроенного выигрывает, custom регистрируется, `isOverridden: true`). Нужно,
+  потому что при `storage.backend=postgres` стор агентов — БД, а `createAgentRegistry`
+  читает только каталог: без этого агент, поставленный пакетом расширения (ADR-086),
+  после рестарта не резолвился в Router (`agentTemplate` → `null`, сессия не создавалась).
+  Вызывается в `server/app/deps.ts` и `backend/app/deps.ts` (обе сборки — async).
 - `engine/mcp/*` — `McpClient`/`McpManager`, настройки MCP.
 - `engine/skills/*` — discovery/реестр/каталог/загрузка/CRUD скиллов (ADR-046);
   гейты уровней (system/project/session) — `scope.ts` (`resolveSkillAvailability`,
@@ -420,6 +476,43 @@
   (`on/off/emit/emitAsync`, priority, `sync`/`async`, `builtin`), отдельная от
   session-`EventBus`; эмиты `pre_tool_use`/`post_tool_use`/`plan_approved`/
   `permission_denied`/`agent_spawned|completed|failed`/`session_start|end`.
+- `engine/pipelines/*` — ADR-101: **второй движок** рядом с `ChatOrchestrator`
+  (шаг пайплайна ≠ сессия; движок сам по себе не знает про HTTP/сессии/очередь).
+  `engine.ts` — `PipelineEngine`: цикл прогона по опубликованной версии спецификации,
+  выбор следующего узла (`planner.ts`: условные переходы по порядку → линейный переход,
+  лимит `MAX_PIPELINE_TRANSITIONS`), условия (`condition.ts` — структурированный DSL
+  `{path, op, value}`, fail-soft, без `eval`), маппинг входа шага (`mapping.ts`),
+  пути (`paths.ts`), санитизация payload'а журнала (`payload.ts`), ретраи/таймауты шага,
+  HITL-пауза (`awaiting_human`) и возобновление (`resume`), отмена через `AbortSignal`.
+  `step-context.ts` — контекст шага (`buildPipelineStepContext`: проект, workspace,
+  режим пайплайна, инструменты, MCP-скоуп, проектные инструкции, скиллы, агент шага);
+  `permissions.ts` — permission-обёртка (`checkPipelineToolPermission` поверх
+  `PermissionEvaluator.check()`; `ask` → гейт); `gate.ts` — помощники гейта и активный
+  таймаут; `exits.ts` — `createPipelineExitHandler` (выходы `session`/`file`/`gateway`/
+  `none`, containment файла по workspace, ADR-075); `types.ts` — `StepExecutor`/
+  `StepOutcome`/`StepGateOutcome`. Исполнители — `executors/`: `tool-step.ts`
+  (через `executeToolDef`), `script-step.ts` (только через shell-тул `execute_shell`),
+  `human-step.ts` (HITL-вопрос с таймаутом), `agent-step.ts` (**свой Tool-Use-цикл внутри
+  движка**: LLM — только через `GatewayProvider`; `ask` → гейт `tool_approval` →
+  `resume` применяет одобрение к тому же вызову), `common.ts` (общая «проверка права +
+  вызов тула»). Точки расширения: `StepExecutor` (по виду узла), `PipelineExitHandler`,
+  зависимости `PipelineEngineDeps` (`projectStore`/`toolRegistry`/`mcpManager`/
+  `instructionsResolver`/`agentRegistry`/`skillsCatalog`/`exits`/`metrics`) — глобальных
+  синглтонов нет, сборка — в `server/app/deps.ts` (standalone) и `backend/app/deps.ts`
+  (managed).
+- `server/routes/pipeline-project-routes.ts` — ADR-101 (Э6): `createPipelineProjectRoutes`
+  — единая фабрика (core + backend) для трёх контуров: пайплайны проекта
+  (`/projects/:id/pipelines*` — создание, правка черновика, публикация неизменяемой
+  версии, удаление), прогоны (`/pipeline-runs/:runId*` — заголовок + журнал, HITL
+  `resume`, отмена `cancel`) и шаблоны инстанца (`/pipeline-templates*` — список и
+  инстанцирование в проект). `legacyDefinitionToPipelineSpec` — конвертация
+  legacy-определения ADR-100 в `PipelineSpec` **на лету при инстанцировании** (шаги
+  `agent` → узлы `agent`; шаги `loop` не конвертируются — 409
+  `PIPELINE_TEMPLATE_UNSUPPORTED`; миграций данных нет). Права — по правилам проекта
+  (ADR-089 §5.5/§5.8): чтение — право чтения, запись — право изменения содержимого
+  (инвариант 21); шаблоны — ADMIN; service-key — scope `automation:install` + проекция
+  `allowedProjects`. Проверка доступа — **на границе** (guard), в обработчиках её нет
+  (инвариант 16).
 - `engine/events/*` — ADR-089: `EventRouter` (`allowedSources` → dedup → `EventBinding`
   → `RouteRuleProvider` → фоллбек: при `autoBind` и `identity.chatKey|threadKey` — `{kind:'bind'}`
   (auto-bind, `signals:['auto-bind']`), иначе по `defaultMode`: `bound` → `drop no_route`,
@@ -466,11 +559,15 @@
   затем `chatKey`; роли не несёт) → профиль по `parsePrincipalId` (`identities`, + роли профиля);
   `getIdentityMap` — геттер для live-обновления runtime-настройки; без кэша),
   `EventIngress` (ingest/нормализация), `RouteRuleProvider` (seam),
-  `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`),
+  `ProjectRuleProvider` (правила `match` → `target` из `RouteRuleStore`; в цели
+  `ephemeral`/`bind` — необязательное поле `pipeline: {id, step}` («ссылка на шаг
+  пайплайна: эта сессия — шаг `step` пайплайна `id`») — **семантическое** поле
+  (учёт экземпляров пайплайна и гейты), в `bound`/`queue` отвергается схемой),
   `DecisionRuleProvider` (`decision-rule-provider.ts`, ADR-084: decision-шаг после project-правил при
   `events.decisionRouting`, fail-safe → `null`; на успехе — лог `info('DECISION', …)` с агентом/уверенностью/
   порогом/моделью/latency, промахи — `warning` с latency; мета `confidence`/`signals` уезжает в решение),
-  `target-decision.ts` (`decisionFromTarget` — единый маппинг цели, приклеивает `confidence`/`signals`),
+  `target-decision.ts` (`decisionFromTarget` — единый маппинг цели, приклеивает `confidence`/`signals`;
+  `pipeline` прокидывается в решение),
   `EventDelivery` (`run`/`defer` + необязательный `EventDeliveryContext {roles, linked}`), `credential.ts` (`EventKeyCredential` — контекст машинной
   аутентификации по API-ключу привязки: `keyId`/`bindingId`/`rateLimitPerMinute`, задел `scopes`/`principalId`),
   `key-rate-limiter.ts` (`KeyRateLimiter` — in-memory fixed-window 60 c per-key, ADR-089/ADR-052),
@@ -492,7 +589,7 @@
   `0700` + `SSH_ASKPASS_REQUIRE=force`, `env_failed`). ADR-099: доверие CA для
   git-over-https — `simpleGit({ config: ['http.sslCAInfo=<path>'] })` из
   `gitCaConfig()` (путь берётся из уже инициализированного `initTlsTrust`).
-- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (30; `AnalyticsRollupRepository` — суточные роллапы аналитики, PROP-102; `DocumentRepository<T>` —
+- `storage/` — **слой хранения (ADR-096):** доменные порты `storage/ports/*` (34; `AnalyticsRollupRepository` — суточные роллапы аналитики, PROP-102; `DocumentRepository<T>` —
   конфиг-словари `providers`/`models`/`agents`; методы под SQL-выборки помечены `@future-backend`),
   **`SessionRepository`: `save` — полная замена истории, `appendMessage`/`updateMessage` — точечная
   запись одного сообщения** (пошаговая персистентность оркестратора без перезаписи истории; `seq`/`id`/
@@ -506,14 +603,22 @@
   `createStorageContext` (`@deprecated`) и **async-каскад** `createStorageContextAsync`/`buildStorageContext`
   (backend по `storage.backend`, env `SYNTH_STORAGE_BACKEND`),
   `storage/file-blob-store.ts` (`FileBlobStore`, порт `BlobStore`), `storage/defaults-store.ts`
-  (`DefaultsStore` — перенесён из backend, там реэкспорт). Точка сборки standalone —
+  (`DefaultsStore` — перенесён из backend, там реэкспорт). Пайплайны ADR-101 — отдельные порты:
+  `storage/ports/project-pipeline-repository.ts` (`ProjectPipelineRepository` — черновик пайплайна
+  + журнал опубликованных версий; `scope` = `project`|`instance`, `installedBy` — провенанс пакета) и
+  `storage/ports/pipeline-run-repository.ts` (`PipelineRunRepository` — заголовки прогонов +
+  append-only журнал); файловые реализации — `storage/file-project-pipeline-store.ts`
+  (`{dataDir}/pipelines/{pipelines,versions}.json`) и `storage/file-pipeline-run-store.ts`
+  (`{dataDir}/pipelines/{runs.json,run-events.jsonl}`), in-memory — `storage/memory/pipelines.ts`;
+  контрактные suite — `storage/contract/{project-pipeline-repository,pipeline-run-repository}.contract.ts`.
+  Точка сборки standalone —
   `createStandaloneStorage` (`server/app/deps.ts`, строится до `auth`: реестр `serviceKeys` нужен
   резолверу ключа). Опциональный БД-драйвер (ADR-097/ADR-096, PROP-032) — отдельный in-tree пакет
   `@itphx/synth-storage-postgres` (`createPostgresStorage(config): Promise<StorageContext>`), объявлен
   в `optionalDependencies` core и подключается динамическим `import()` по `storage.backend === 'postgres'`
   (`pg` — optional у драйвера, core его рантаймом не тянет); драйвер применяет/проверяет схему и
   **удерживает соединение в `StorageContext`** — `close?()` закрывает пул, ресурсы освобождает домен;
-  **все порты реализованы** (по группам `src/ports/*`: `sessions`/`principals`/`events`/`content`),
+  **все порты реализованы** (по группам `src/ports/*`: `sessions`/`principals`/`events`/`content`/`audit`/`analytics`/`pipelines`),
   координация — `StorageContext.locks` (`PgMutex`/`PgLeader`, scheduler `leaderElection: postgres`).
   **Деградированный режим** (ADR-098): недоступность БД → файловый фоллбек строго read-only
   (`createStorageContextAsync` публикует состояние в `engine/permission/storage-state.ts`), HTTP-guard и
@@ -615,6 +720,20 @@
   RBAC через `resolveElevated`/`resolveAuditor`/`resolveUserId`, `messages` — i18n).
   `createSessionRoutes`/`createEventRoutes`/`createSchedulerRoutes` принимают опции
   `scopeGuard`/`serviceProjectProjection` (ADR-052; core-дефолты — `requireScope`/`checkServiceProjectProjection`).
+  `createAgentRoutes` — опция `scopeGuard` для записи агентов (ADR-052; дефолт —
+  `requireScopeOrAdminRole`): достаточно любого из `SERVICE_SCOPE_SETS.agentsWrite`
+  (сейчас — `automation:install`) **или** роли ADMIN у ключа.
+  `createPipelineProjectRoutes` (ADR-101) — **паттерн граничных guard'ов**: доступ
+  проверяется на границе, в обработчиках проверок нет (инвариант 16). Два guard'а
+  различают вид доступа по HTTP-методу и резолвят ресурс **один раз**:
+  `projectGuard('read'|'write')` — проект по `:id` (чтение — право чтения, запись —
+  право изменения содержимого; `VIEWER` читает, но не мутирует — инвариант 21) и
+  `runGuard('read'|'write')` — прогон по `:runId` (владелец/участник проекта, к
+  которому принадлежит прогон). Guard кладёт разобранный ресурс в контекст Hono
+  (`guardedProject`/`guardedRun`), обработчик только читает; нет ресурса → 404, нет
+  прав → 403, чужой ресурс под чужим id → 404. Шаблоны инстанца — отдельный
+  `adminGuard` (ADMIN), инстанцирование дополнительно требует право изменения
+  целевого проекта.
   `createSettingsRoutes` (ADR-089/ADR-084): `GET/PUT/DELETE /settings/events` — runtime-настройки
   раздела «События» (`fallbackEvents` из config, `onEventsChange` — live-применение,
   мутации под `eventsWriteGuard`; core — `requireAuth`, backend — ADMIN) и
@@ -660,6 +779,27 @@
   системных), дефолты — snapshot `mcpDefaultOn`; `config.enabled` — лишь сид реестра,
   не гейт), сетевой доступ — `engine/mcp/network-policy.ts`
   (на старте применяется `mergeMcpNetworkPolicy(config, runtime)`).
+- **Сетевая политика MCP (ADR-071 §2.3.1)** — `engine/mcp/network-policy.ts`
+  (`evaluateMcpNetworkAccess`) + валидатор `engine/net/egress-policy.ts`
+  (`isValidEgressRule`/`validateEgressPolicy` — общий с `egress.tools`/`egress.webhooks`).
+  Грамматика правила (`list` и `exceptions`): **точный hostname** | **`*.suffix`**
+  (только поддомены — сам suffix не матчится) | **CIDR** (`10.0.0.0/8`) |
+  **одиночный IP-литерал** (`10.0.0.5` → /32, `::1` → /128). Паттерн `*`
+  («любой хост») **недопустим** — валидатор его отвергает, а матчер
+  (`hostMatchesRule`) возвращает `false` (fail-closed): исключение не должно
+  снимать SSRF-защиту целиком. Семантика шаблона хоста — общая с ADR-099
+  (`matchTlsHostPattern` из `@itphx/synth-shared`); дублировать её в подсистемах
+  нельзя.
+  Порядок проверок: **исключение (hostname, без DNS) → резолв всех A/AAAA →
+  исключение (адресное) → `isLocalHostname` → `policy.list`**. Локальные имена
+  (`localhost`/`*.localhost`/`*.local`/`*.internal` — в т.ч. `*.svc.cluster.local`
+  в K3s) блокируются **до** `policy.list`, поэтому аддон в кластере разрешается
+  именно hostname-исключением (`*.svc.cluster.local`), а не CIDR.
+  Голый IP в `list`/`exceptions` **работает** (`parseAddressRule`: литерал ↔ CIDR
+  с полной маской; IPv4-mapped `::ffff:a.b.c.d` нормализуется как у проверяемого
+  адреса) — раньше литерал проходил валидатор, но не срабатывал никогда, и
+  deny-список вроде `['169.254.169.254']` не блокировал адрес метаданных (fail-open).
+  Пустая политика (`undefined`) — fail-closed (запрет), а не «разрешено всё».
 
 ## Тесты и запуск
 

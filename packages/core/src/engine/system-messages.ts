@@ -361,6 +361,32 @@ export const SYSTEM_MESSAGES = {
   'profile.user_unavailable': 'Error: the session has no owner — profile update is unavailable',
   'profile.save_error': 'Error saving the profile: {error}',
   'profile.updated': 'Profile updated ({fields}).',
+
+  // --- Движок пайплайнов (ADR-101) ---
+  'pipeline.not_found': 'Pipeline "{id}" not found',
+  'pipeline.not_published': 'Pipeline "{id}" has no published version',
+  'pipeline.invalid_spec': 'Invalid pipeline specification: {problems}',
+  'pipeline.loop_limit': 'Pipeline run stopped: transition limit ({limit}) exceeded',
+  'pipeline.cancelled': 'Pipeline run cancelled',
+  'pipeline.executor_missing': 'No executor registered for step kind "{kind}"',
+  'pipeline.gate_rejected': 'Step "{node}" was rejected by a human',
+  'pipeline.gate_timeout': 'Waiting for step "{node}" timed out after {timeoutSec}s',
+  'pipeline.step_failed': 'Step "{node}" failed: {error}',
+  'pipeline.step_timeout': 'Step "{node}" timed out after {timeoutSec}s',
+  'pipeline.run_not_found': 'Pipeline run "{id}" not found',
+  'pipeline.invalid_state': 'Pipeline run "{id}" cannot be resumed (status: {status})',
+  'pipeline.tool_not_found': 'Tool "{tool}" for step "{node}" is not registered',
+  'pipeline.tool_failed': 'Tool "{tool}" of step "{node}" failed: {error}',
+  'pipeline.script_failed': 'Command of step "{node}" exited with code {code}: {error}',
+  'pipeline.script_no_command': 'Step "{node}" has no command to run',
+  'pipeline.permission_denied': 'Step "{node}" was denied for tool "{tool}": {reason}',
+  // --- Исполнитель agent-шага (ADR-101 §4) ---
+  'pipeline.agent_unavailable':
+    'Step "{node}" cannot run an agent: the LLM runtime is not configured (no prompt composer)',
+  'pipeline.provider_not_found':
+    'Step "{node}" has no LLM provider configured (provider: "{provider}")',
+  'pipeline.llm_failed': 'Step "{node}" failed: LLM error ({type})',
+  'pipeline.llm_unrecoverable': 'Step "{node}" failed: LLM error ({type}) is not recoverable',
 } as const satisfies Record<SystemMessageKey, string>;
 
 export type SystemMessageKey = EngineMessageKey;

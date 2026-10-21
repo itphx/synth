@@ -4,6 +4,18 @@ import { nowISO } from '@itphx/synth-shared';
 type EventHandler = (event: BusEvent) => void;
 
 /**
+ * ADR-101: канал **инстансных** событий — событий, которые не принадлежат
+ * сессии (прогон пайплайна, фоновая задача инстанса).
+ *
+ * Публикуются в **ту же** шину, но в отдельный канал: их видят глобальные
+ * подписчики (`subscribeAll` — SSE-хаб `GET /api/v2/events`, watch-all
+ * клиенты managed-хаба `EventHub`, движок исходящих webhooks), а per-session
+ * подписки их не касаются. Новый транспортный канал при этом не заводится
+ * (ADR-024/ADR-089, инвариант 6).
+ */
+export const INSTANCE_EVENT_CHANNEL = 'instance';
+
+/**
  * SessionEventBus — async pub/sub для событий сессии (ADR-009).
  * Каждый подписчик получает все события сессии через callback.
  */
@@ -45,6 +57,28 @@ export class EventBus {
   }
 
   publish(sessionId: string, type: EventType, data: Record<string, unknown> = {}): void {
+    this._publish(sessionId, type, data, true);
+  }
+
+  /**
+   * Публикация **инстансного** события (не сессионного) — ADR-101: прогон
+   * пайплайна. Доставляется глобальным подписчикам (`subscribeAll`).
+   *
+   * Предупреждение «EVENT LOST» не печатается: у инстансных событий
+   * per-session подписчиков нет по построению, отсутствие глобальных
+   * подписчиков — нормальное состояние (никто не смотрит в UI).
+   */
+  publishInstance(type: EventType, data: Record<string, unknown> = {}): void {
+    this._publish(INSTANCE_EVENT_CHANNEL, type, data, false);
+  }
+
+  /** Общая публикация события в шину (сессионный или инстансный канал). */
+  private _publish(
+    sessionId: string,
+    type: EventType,
+    data: Record<string, unknown>,
+    warnIfNoSubscribers: boolean,
+  ): void {
     const event: BusEvent = {
       type,
       sessionId,
@@ -55,7 +89,9 @@ export class EventBus {
     const handlers = this._subscribers.get(sessionId);
     const hasGlobal = this._globalSubscribers.size > 0;
     if (!handlers && !hasGlobal) {
-      console.warn(`[EventBus] publish ${type} for ${sessionId.slice(0, 8)}: 0 subscribers — EVENT LOST`);
+      if (warnIfNoSubscribers) {
+        console.warn(`[EventBus] publish ${type} for ${sessionId.slice(0, 8)}: 0 subscribers — EVENT LOST`);
+      }
       return;
     }
 

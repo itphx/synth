@@ -106,3 +106,47 @@ export function createAgentRegistry(
 
   return registry;
 }
+
+/**
+ * Регистрация агентов из **стора** (порт `DocumentRepository<AgentDefinition>`,
+ * ADR-096) в реестр — семантика merge та же, что в `GET /api/v2/agents`
+ * (`server/routes/agents.ts`, `resolveAgents`):
+ *
+ * - запись с id встроенного агента **перекрывает** встроенное определение
+ *   (поля, которых нет в записи, у встроенного сохраняются);
+ * - custom-агент (id вне встроенных) регистрируется как есть;
+ * - в обоих случаях `isOverridden: true`.
+ *
+ * Зачем: `createAgentRegistry` читает **только файловый каталог** `overridesDir`
+ * (`{dataDir}/agents/*.json`), а стор агентов при `storage.backend=postgres`
+ * (ADR-096/PROP-032) — это **БД**, а не файлы. Поэтому агент, поставленный
+ * пакетом расширения (ADR-086 §5, `POST /api/v2/packs`), после рестарта
+ * процесса не попадал в реестр: Router не резолвил `agentTemplate`
+ * (`resolveAgentTemplate` → `null`), и сессия не создавалась.
+ *
+ * Идемпотентна и безопасна при файловом хранилище: там каталог и стор — одно
+ * и то же, merge поверх уже смерженного определения даёт тот же результат
+ * (повторная регистрация ничего не меняет).
+ *
+ * Edge-случаи: запись без `id` (или с не-строковым `id`) — пропускается;
+ * не-объект/битая запись — пропускается; пустой список — no-op; повторный
+ * вызов с тем же списком — без изменений.
+ */
+export function registerStoredAgents(
+  registry: AgentRegistry,
+  agents: readonly AgentDefinition[],
+): void {
+  if (!Array.isArray(agents)) return;
+  for (const stored of agents) {
+    if (!stored || typeof stored !== 'object') continue;
+    const id = (stored as AgentDefinition).id;
+    if (typeof id !== 'string' || !id) continue; // запись без id — не агент
+    const current = registry.get(id);
+    // Встроенный агент: stored перекрывает текущее (уже смерженное) определение.
+    // Custom-агент: current отсутствует — регистрируем как есть.
+    const merged: AgentDefinition = current
+      ? { ...current, ...stored, id, isOverridden: true }
+      : { ...stored, id, isOverridden: true };
+    registry.register(merged);
+  }
+}

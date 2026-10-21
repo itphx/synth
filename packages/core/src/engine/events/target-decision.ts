@@ -6,6 +6,11 @@ import type { EventRouteTarget, RouteDecision, RouteDecisionMeta } from '@itphx/
  * `queue` (по умолчанию `'target'`); `confidence`/`signals` — диагностическая
  * мета (ADR-084), приклеивается к решению во всех ветвях, если задана.
  * Обратная совместимость: без меты поведение прежнее.
+ *
+ * `pipeline` (ссылка на шаг пайплайна) прокидывается в решение для целей
+ * `ephemeral`/`bind` — там, где решение порождает сессию. В `bound`/`queue`
+ * сессия фиксирована, поля в цели нет (его отвергает схема), поэтому в
+ * решении оно тоже не появляется.
  */
 export function decisionFromTarget(
   target: EventRouteTarget,
@@ -28,6 +33,7 @@ export function decisionFromTarget(
       kind: 'bind',
       agentTemplate: target.agentTemplate ?? '',
       ...(target.project ? { project: target.project } : {}),
+      ...(target.pipeline ? { pipeline: target.pipeline } : {}),
       ...meta,
     };
   }
@@ -36,6 +42,7 @@ export function decisionFromTarget(
     agentTemplate: target.agentTemplate ?? '',
     ttl: target.ttl ?? defaultEphemeralTtl,
     ...(target.project ? { project: target.project } : {}),
+    ...(target.pipeline ? { pipeline: target.pipeline } : {}),
     ...meta,
   };
 }

@@ -6,6 +6,8 @@ import { ChatTab } from '../chat/ChatTab'
 import { FileViewerTab } from '../chat/FileViewerTab'
 import { FileEditorTab } from '../chat/FileEditorTab'
 import { CommitDetailTab } from '../chat/CommitDetailTab'
+import { PipelineTab } from '../pipelines/PipelineTab'
+import { PipelineRunTab } from '../pipelines/PipelineRunTab'
 
 function EmptyState() {
   const { t } = useI18n()
@@ -48,6 +50,11 @@ export function CenterPanel() {
         return <FileEditorTab tab={activeTab} />
       case 'commit-detail':
         return <CommitDetailTab tab={activeTab} />
+      // ADR-101 (Э7): страницы пайплайна и прогона.
+      case 'pipeline':
+        return <PipelineTab tab={activeTab} />
+      case 'pipeline-run':
+        return <PipelineRunTab tab={activeTab} />
       default:
         return <EmptyState />
     }

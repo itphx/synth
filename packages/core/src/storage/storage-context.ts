@@ -41,7 +41,11 @@ import type {
   SecurityAuditRepository,
   EgressRequestLogRepository,
   McpRegistryRepository,
+  PackRepository,
+  PipelineRepository,
+  PipelineRunRepository,
   ProfileRepository,
+  ProjectPipelineRepository,
   ProjectRepository,
   ProtectedPathsRepository,
   ScheduleRepository,
@@ -89,6 +93,10 @@ import { AnalyticsRollupStore } from './analytics-rollup-store.js';
 import { FileDedupStore, MemoryDedupStore } from '../engine/events/dedup-store.js';
 import { SkillStore } from './skill-store.js';
 import { SkillBundleStore } from './skill-bundle-store.js';
+import { FilePipelineStore } from './file-pipeline-store.js';
+import { FilePackStore } from './file-pack-store.js';
+import { FileProjectPipelineStore } from './file-project-pipeline-store.js';
+import { FilePipelineRunStore } from './file-pipeline-run-store.js';
 import { ContextConfig } from '../engine/context/config.js';
 import { SSHKeyStore } from './ssh-key-store.js';
 import { FileBlobStore } from './file-blob-store.js';
@@ -114,7 +122,11 @@ import {
   MemorySecurityAuditRepository,
   MemoryEgressRequestLogRepository,
   MemoryMcpRegistryRepository,
+  MemoryPackRepository,
+  MemoryPipelineRepository,
+  MemoryPipelineRunRepository,
   MemoryProfileRepository,
+  MemoryProjectPipelineRepository,
   MemoryProjectRepository,
   MemoryProtectedPathsRepository,
   MemoryScheduleRepository,
@@ -300,6 +312,17 @@ export interface StorageContext {
   contextFiles: ContextFileRepository;
   sshKeys: SSHKeyRepository;
   blobs: BlobStore;
+  /** ADR-051/PROP-059: определения и экземпляры пайплайнов. */
+  pipelines: PipelineRepository;
+  /** ADR-086 §5: реестр установок пакетов расширений. */
+  packs: PackRepository;
+  /**
+   * ADR-101: спецификации пайплайнов (черновик + опубликованные версии).
+   * Не путать с `pipelines` выше — legacy-декларации ADR-100 (заменяются на Э3).
+   */
+  projectPipelines: ProjectPipelineRepository;
+  /** ADR-101: прогоны пайплайнов и журнал выполнения (append-only). */
+  pipelineRuns: PipelineRunRepository;
 }
 
 /** Параметры сборки слоя хранения (общие для file/memory). */
@@ -519,6 +542,16 @@ export function createFileStorage(config: StorageContextConfig): StorageContext 
       env: config.env,
     }),
     blobs: new FileBlobStore({ root: dataDir }),
+    // ADR-051/PROP-059: пайплайны — определения (`pipelines/definitions.json`)
+    // и экземпляры (`pipelines/instances.json`).
+    pipelines: new FilePipelineStore({ dataDir }),
+    // ADR-086 §5: реестр установок пакетов расширений (`packs.json`).
+    packs: new FilePackStore({ dataDir }),
+    // ADR-101: спецификации пайплайнов (`pipelines/pipelines.json` +
+    // `pipelines/versions.json`) и прогоны (`pipelines/runs.json` +
+    // append-only `pipelines/run-events.jsonl`).
+    projectPipelines: new FileProjectPipelineStore({ dataDir }),
+    pipelineRuns: new FilePipelineRunStore({ dataDir }),
   };
 }
 
@@ -562,6 +595,10 @@ export function createMemoryStorage(config: Partial<StorageContextConfig> = {}):
     contextFiles: new MemoryContextFileRepository(),
     sshKeys: new MemorySSHKeyRepository(),
     blobs: new MemoryBlobStore(),
+    pipelines: new MemoryPipelineRepository(),
+    packs: new MemoryPackRepository(),
+    projectPipelines: new MemoryProjectPipelineRepository(),
+    pipelineRuns: new MemoryPipelineRunRepository(),
   };
 }
 

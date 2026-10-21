@@ -6,11 +6,14 @@ import { useAdaptiveIcons } from '@/hooks/useAdaptiveIcons'
 import { ProjectsTab } from './left-panel/ProjectsTab'
 import { FilesTab } from './left-panel/FilesTab'
 import { GitTab } from './left-panel/GitTab'
+import { PipelinesTab } from './left-panel/PipelinesTab'
 
 const LEFT_TABS = [
   { id: 'projects' as const, icon: 'folder-3' as const, labelKey: 'leftPanel.tab.projects' },
   { id: 'files' as const, icon: 'file-text' as const, labelKey: 'leftPanel.tab.files' },
   { id: 'git' as const, icon: 'git-branch' as const, labelKey: 'leftPanel.tab.git' },
+  // ADR-101 (Э7): пайплайны проекта (дерево проект → пайплайн).
+  { id: 'pipelines' as const, icon: 'links-line' as const, labelKey: 'leftPanel.tab.pipelines' },
 ]
 
 // ---- LeftPanel ----
@@ -53,6 +56,7 @@ export const LeftPanel: React.FC = () => {
         {leftPanelTab === 'projects' && <ProjectsTab />}
         {leftPanelTab === 'files' && <FilesTab />}
         {leftPanelTab === 'git' && <GitTab />}
+        {leftPanelTab === 'pipelines' && <PipelinesTab />}
       </div>
     </div>
   )

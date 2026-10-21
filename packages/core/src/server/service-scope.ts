@@ -1,6 +1,6 @@
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
-import { hasServiceScope } from '@itphx/synth-shared';
+import { hasAnyServiceScope, hasServiceScope, GlobalRole } from '@itphx/synth-shared';
 import type { ServiceKeyCredential } from '../storage/service-api-key-store.js';
 
 /**
@@ -10,6 +10,9 @@ import type { ServiceKeyCredential } from '../storage/service-api-key-store.js';
  * permission-слоя тулов: роль-оси тот by design не имеет). Интерактивные креды
  * (OIDC/API-key/cookie) scopes не ограничиваются: если `serviceKey` в контексте
  * нет — middleware пропускает запрос.
+ *
+ * `requireScopeOrAdminRole` — тот же гейт, но service-key проходит и по роли
+ * ADMIN среди выданных ролей (см. docstring функции).
  */
 
 /** Тип middleware, совпадающий с core/backend AuthKit (оба на `createMiddleware`). */
@@ -43,18 +46,50 @@ export function requireScope(...required: string[]): Middleware {
   return createMiddleware(async (c, next) => {
     const cred = getServiceCredential(c as unknown as Context);
     if (cred && !required.some((scope) => hasServiceScope(cred.scopes, scope))) {
-      return c.json(
-        {
-          error: {
-            code: 'SCOPE_REQUIRED',
-            message: `Недостаточно прав: требуется scope ${required.join(' | ')}`,
-          },
-        },
-        403,
-      );
+      return scopeRequired(c, required);
     }
     await next();
   });
+}
+
+/**
+ * ADR-052: гейт «scope **или** роль ADMIN» — для service-key.
+ *
+ * Отличие от `requireScope`: service-key проходит не только по scope'у, но и
+ * по **роли ADMIN** среди выданных ролей (`roles` ключа — решение
+ * администратора). Это сохраняет права, которые до введения зонтичных
+ * scope'ов давала роль ADMIN (напр. создание агентов в managed-режиме), и не
+ * ослабляет ничего сверх перечисленного.
+ *
+ * Интерактивные креды — no-op (как `requireScope`): в core ролевых проверок
+ * на этих роутах нет, доступ определяет `writeGuard` (`requireAuth`).
+ */
+export function requireScopeOrAdminRole(...required: string[]): Middleware {
+  return createMiddleware(async (c, next) => {
+    const cred = getServiceCredential(c as unknown as Context);
+    if (cred && !hasAnyServiceScope(cred.scopes, required) && !hasAdminRole(cred)) {
+      return scopeRequired(c, required);
+    }
+    await next();
+  });
+}
+
+/** `true`, если у ключа среди выданных ролей есть ADMIN. */
+function hasAdminRole(cred: Pick<ServiceKeyCredential, 'roles'>): boolean {
+  return Array.isArray(cred.roles) && cred.roles.includes(GlobalRole.ADMIN);
+}
+
+/** 403 SCOPE_REQUIRED с перечислением требуемых scope'ов. */
+function scopeRequired(c: Context, required: readonly string[]): Response {
+  return c.json(
+    {
+      error: {
+        code: 'SCOPE_REQUIRED',
+        message: `Недостаточно прав: требуется scope ${required.join(' | ')}`,
+      },
+    },
+    403,
+  );
 }
 
 /**

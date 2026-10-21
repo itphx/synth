@@ -55,3 +55,10 @@ export * from './maintenance.js';
 export * from './egress.js';
 // Аналитика и отчётность инстанса: суточные роллапы (PROP-102)
 export * from './analytics.js';
+// ADR-086/PROP-090: единый манифест расширения `synth.pack` — типы и zod-схемы
+export * from './pack.js';
+// ADR-051/PROP-059: контракт пайплайна (определение, шаг, экземпляр)
+export * from './pipeline.js';
+// ADR-101: контракты пайплайна как второго движка (спецификация, узлы,
+// переходы, триггер, результат узла, прогон, журнал) — re-exported from pipeline-engine.ts
+export * from './pipeline-engine.js';

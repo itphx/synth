@@ -6,6 +6,9 @@
 > расширений (наряду с Plugin / Add-on / контент-паком, [ADR-086](./adr-086-extensibility-plugins-editions.md));
 > весь материал Telegram-шлюза перенесён сюда из [ADR-086](./adr-086-extensibility-plugins-editions.md)
 > (там дубликатов больше нет).
+> **Обновлено:** 2026-10-19 — уточнена доставка наружу: в модели публикации внешним Add-on'ом отправку в канал
+> выполняет **агент через MCP-инструменты шлюза**, а не ядро (поток и риск approve-gate — [ADR-089](./adr-089-external-events-automation.md));
+> «стриминг ответа наружу» остатком ADR-087 **не является** — он закрыт на стороне шлюза (live-стриминг `stream.chunk` → правки сообщения).
 > **Связано:** [ADR-086](./adr-086-extensibility-plugins-editions.md) (зонтик «Классы расширений»),
 > [PROP-090](./prop-090-extension-api.md) (Plugin / классы расширений), [ADR-089](./adr-089-external-events-automation.md)
 > (Event/Binding/Router, identity/claim-flow), [ADR-030](./adr-030-hooks-agent-events.md) (hooks),

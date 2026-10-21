@@ -1,7 +1,8 @@
 import { createMiddleware } from 'hono/factory';
 import type { Context } from 'hono';
 import { getServiceCredential } from '@itphx/synth-core';
-import { hasServiceScope } from '@itphx/synth-shared';
+import { hasAnyServiceScope, hasServiceScope } from '@itphx/synth-shared';
+import { GlobalRole } from '@itphx/synth-shared/types';
 import { t } from '../lib/i18n.js';
 
 /**
@@ -50,6 +51,48 @@ export function requireAdminOrScope(...scopes: string[]) {
     const cred = getServiceCredential(c as unknown as Context);
     if (cred) {
       if (!scopes.some((scope) => hasServiceScope(cred.scopes, scope))) {
+        return scopeDenied(c as unknown as Context);
+      }
+      await next();
+      return;
+    }
+    if (!isAuthenticated(c)) {
+      return c.json(
+        { error: { code: 'UNAUTHORIZED', message: t('auth.unauthorized', undefined, c) } },
+        401,
+      );
+    }
+    if (!isAdmin(c)) {
+      return c.json(
+        { error: { code: 'FORBIDDEN', message: t('auth.forbidden', undefined, c) } },
+        403,
+      );
+    }
+    await next();
+  });
+}
+
+/**
+ * Guard «scope **или** роль ADMIN»:
+ * - service-key → проходит, если у него есть хотя бы один из `scopes`
+ *   (`403 SCOPE_REQUIRED` иначе) **или** среди выданных ролей есть `ADMIN`
+ *   (роль ключа — явное решение администратора, и до введения зонтичных
+ *   scope'ов именно она давала доступ к таким операциям);
+ * - интерактивные креды (cookie/debug/OIDC/API-key/локальный ключ) → требуем
+ *   роль ADMIN: нет аутентификации → `401 UNAUTHORIZED`, аутентифицирован без
+ *   роли → `403 FORBIDDEN` (семантика HTTP; раньше оба случая склеивались в 403).
+ *
+ * Отличие от `requireAdminOrScope`: там для service-key проверяются **только**
+ * scope'ы (роль ADMIN ключа не учитывается) — здесь учитывается, чтобы
+ * зонтичный scope не отбирал права у ключей с ролью ADMIN.
+ */
+export function requireAdminRoleOrScope(...scopes: string[]) {
+  return createMiddleware(async (c, next) => {
+    const cred = getServiceCredential(c as unknown as Context);
+    if (cred) {
+      const hasScope = hasAnyServiceScope(cred.scopes, scopes);
+      const adminKey = Array.isArray(cred.roles) && cred.roles.includes(GlobalRole.ADMIN);
+      if (!hasScope && !adminKey) {
         return scopeDenied(c as unknown as Context);
       }
       await next();

@@ -22,6 +22,8 @@ import {
   createAnalyticsRoutes, AnalyticsService,
   createStorageContextAsync,
   createMetricsSettingsRoutes,
+  createPacksRoutes, createPipelinesRoutes,
+  createPipelineProjectRoutes,
 } from '../../index.js';
 import type { StorageContext } from '../../index.js';
 import type { MetricsRegistry } from '../../metrics/registry.js';
@@ -103,7 +105,7 @@ export function mountStandaloneRoutes(
     identityClaimStore, modelWindowLoader, eventRouter, dataDir, defaultWorkingDir,
     commandService, bundleStore, dictionaries, maintenanceAudit,
     egressResolver, securityAudit, egressRequests, analyticsRollups,
-    analytics,
+    analytics, pipelines, packs,
   } = deps;
   const serviceApiKeyStore = deps.serviceApiKeyStore;
   const {
@@ -236,7 +238,11 @@ export function mountStandaloneRoutes(
   }));
 
   // Agents
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
+  // ADR-046/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
+  // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, {
+    roleFiles: deps.contextFiles,
+  }));
 
   // FS (ADR-075: гарантированный корень workspace + мягкая политика путей вне root)
   // project-aware: с `project_id` база — workspace проекта (fallback на root/default).
@@ -523,10 +529,46 @@ export function mountStandaloneRoutes(
     },
   ));
 
+  // ADR-051/PROP-059: API пайплайнов — определения (ставит установщик пакета),
+  // экземпляры и ручной запуск. Standalone — дефолтные guard'ы (`requireAuth`).
+  app.route('/api/v2/pipelines', createPipelinesRoutes(auth, { pipelines }));
+
+  // ADR-101 (Э6): пайплайны проекта (черновик/публикация), прогоны и журнал,
+  // HITL-действия и шаблоны инстанса (инстанцирование в проект).
+  // Standalone — дефолтные guard'ы (`requireAuth`); права на проект в
+  // standalone не разграничиваются (единственный пользователь инстанса).
+  app.route('/api/v2', createPipelineProjectRoutes(
+    auth,
+    {
+      pipelines: deps.storageContext.projectPipelines,
+      runs: deps.storageContext.pipelineRuns,
+      engine: deps.pipelineEngine,
+      projects: projectStore,
+      templates: pipelines,
+    },
+  ));
+
+  // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
+  // реестр установок. Standalone — `requireAuth` (single-user) + scope-гейт
+  // `automation:install` для service-key (ADR-052).
+  app.route('/api/v2/packs', createPacksRoutes(
+    auth,
+    {
+      packs,
+      pipelines,
+      skills: skillService,
+      mcpRegistry: deps.mcpRegistryStore,
+      agents: agentStore,
+      roleFiles: deps.contextFiles,
+      routes: routeRuleStore,
+      registerAgent: (agent) => agentRegistry.register(agent),
+      unregisterAgent: (id) => agentRegistry.unregister(id),
+    },
+  ));
+
   // ADR-052 (этап I): CRUD service-key (`synth_svc_…`) — scoped-ключи инстанса.
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
   app.route('/api/v2/service-keys', createServiceKeyRoutes(auth, { store: serviceApiKeyStore }));
-
   // ADR-052 (этап II): подписки на исходящие webhooks (CRUD + журнал + тест).
   // Standalone — дефолтные guard'ы (`requireAuth`); managed backend передаст RBAC (ADMIN).
   app.route('/api/v2/webhooks', createWebhookRoutes(

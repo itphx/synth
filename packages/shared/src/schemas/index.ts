@@ -854,23 +854,40 @@ export const scheduleTargetSchema = z.discriminatedUnion('mode', [
 ]);
 
 /**
+ * ADR-089: ссылка на шаг пайплайна — «эта сессия — шаг `step` пайплайна `id`».
+ * Допустима только в целях `ephemeral`/`bind` (там, где решение порождает
+ * сессию); в `bound`/`queue` сессия фиксирована — поле там отвергается.
+ */
+export const pipelineRefSchema = z.object({
+  id: z.string().min(1),
+  step: z.string().min(1),
+});
+
+/**
  * ADR-089: цель правила маршрутизации — дискриминированный союз по `mode`
  * (семантика та же, что у `scheduleTargetSchema`).
+ *
+ * `pipeline` (ссылка на шаг пайплайна) допустим только в `ephemeral`/`bind`;
+ * в `bound`/`queue` сессия фиксирована, поэтому варианты **строгие**
+ * (`.strict()`): лишние поля (в т.ч. `pipeline`) там **отвергаются**, а не
+ * игнорируются — иначе ошибка конфигурации правила проходила бы молча.
  */
 export const eventRouteTargetSchema = z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('bound'), sessionId: z.string().min(1) }),
+  z.object({ mode: z.literal('bound'), sessionId: z.string().min(1) }).strict(),
   z.object({
     mode: z.literal('ephemeral'),
     agentTemplate: z.string().optional(),
     project: z.string().optional(),
     ttl: z.string().optional(),
+    pipeline: pipelineRefSchema.optional(),
   }),
-  z.object({ mode: z.literal('queue'), sessionId: z.string().min(1) }),
+  z.object({ mode: z.literal('queue'), sessionId: z.string().min(1) }).strict(),
   // ADR-089 (auto-bind): цель закрепляет внешний адрес за сессией (binding создаёт Router).
   z.object({
     mode: z.literal('bind'),
     agentTemplate: z.string().optional(),
     project: z.string().optional(),
+    pipeline: pipelineRefSchema.optional(),
   }),
 ]);
 

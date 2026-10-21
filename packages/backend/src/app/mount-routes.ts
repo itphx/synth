@@ -23,6 +23,8 @@ import {
   createSettingsRoutes, createDictionaryRoutes, createAuditRoutes as createSecurityAuditRoutes, currentEgressLog,
   createContextRoutes as createCoreContextRoutes,
   createMetricsSettingsRoutes,
+  createPacksRoutes, createPipelinesRoutes,
+  createPipelineProjectRoutes,
   resolveProjectWorkspace,
 } from '@itphx/synth-core';
 import type { AuthKit as CoreAuthKit, MetricsReadiness, MetricsRegistry, StorageContext } from '@itphx/synth-core';
@@ -43,7 +45,7 @@ import { createGatewayPatternsRoutes } from '../routes/gateway-patterns.js';
 import { createLlmRoutes } from '../routes/llm.js';
 import { createRateLimiter } from '../middleware/rate-limiter.js';
 import { scopeGuard, serviceProjectProjection } from '../auth/service-scope.js';
-import { requireAdminOrScope } from '../auth/guards.js';
+import { requireAdminOrScope, requireAdminRoleOrScope } from '../auth/guards.js';
 import { t, getTranslations } from '../lib/i18n.js';
 import type { AuthKit } from '../auth/middleware.js';
 import type { BackendConfig } from '../lib/app-config.js';
@@ -92,6 +94,7 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
     gatewayConfig, providerLoader, modelLoader, modelWindowLoader, resolveAgentTemplate,
     identityClaimStore, live, maintenanceAudit,
     analyticsRollups, analytics, metrics,
+    pipelines, packs,
   } = deps;
 
   /**
@@ -227,7 +230,9 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
   }));
 
   // Agents routes
-  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId));
+  // ADR-046/ADR-089: ролевой промпт агента (`role_prompt` в теле POST)
+  // пишется портом файлов контекста — `{dataDir}/context/roles/<contextFile>`.
+  app.route('/api/v2/agents', createAgentRoutes(auth, agentStore, agentRegistry, getDefaultAgentId, contextConfig));
 
   // Context routes (глобальные identity-файлы; админ-мутации)
   app.route('/api/v2/context', createContextFileRoutes(auth, contextConfig));
@@ -333,6 +338,92 @@ export function mountBackendRoutes(app: Hono, auth: AuthKit, ctx: BackendRoutesC
       scopeGuard,
       serviceProjectProjection,
       resolveSessionProject: async (id) => (await sessionManager.getSession(id))?.projectId,
+    },
+  ));
+
+  // ADR-051/PROP-059: API пайплайнов — определения (ставит установщик пакета),
+  // экземпляры и ручной запуск. Чтение — ADMIN (реестр автоматов инстанса),
+  // ручной запуск — ADMIN или service-key со scope `automation:install`.
+  app.route('/api/v2/pipelines', createPipelinesRoutes(
+    { requireAuth: auth.requireAuth },
+    { pipelines },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: requireAdminRoleOrScope('automation:install'),
+      scopeGuard,
+    },
+  ));
+
+  // ADR-101 (Э6): пайплайны проекта (черновик/публикация), прогоны и журнал,
+  // HITL-действия и шаблоны инстанса (инстанцирование в проект).
+  // Права — по правилам проекта (ADR-089 §5.5/§5.8): читать — владелец/
+  // участник/LEAD/ADMIN, изменять — OWNER/EDITOR/LEAD/ADMIN (VIEWER читает,
+  // но не мутирует — инвариант 21). Шаблоны инстанса — ADMIN.
+  app.route('/api/v2', createPipelineProjectRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      pipelines: deps.storageContext.projectPipelines,
+      runs: deps.storageContext.pipelineRuns,
+      engine: deps.pipelineEngine,
+      projects: projectStore,
+      templates: pipelines,
+    },
+    {
+      writeGuard: auth.requireAuth,
+      adminGuard: auth.requirePermission('ADMIN'),
+      canReadProject: async (c, project, userId) =>
+        projectAccess.canReadProject(c as never, project, userId),
+      canEditProject: async (c, project, userId) =>
+        projectAccess.canEditProjectContent(c as never, project, userId),
+      getCurrentUserId: async (c) => (await auth.getCurrentUser(c))?.id ?? '',
+      scopeGuard,
+      serviceProjectProjection,
+      messages: {
+        pipelineNotFound: (c) => t('errors.notFound.pipeline', undefined, c),
+        runNotFound: (c) => t('errors.notFound.pipelineRun', undefined, c),
+        projectNotFound: (c) => t('errors.notFound.project', undefined, c),
+        templateNotFound: (c) => t('errors.notFound.pipelineTemplate', undefined, c),
+        forbidden: (c) => t('auth.forbidden', undefined, c),
+        invalidBody: (c) => t('errors.validation.invalidPipelineBody', undefined, c),
+        invalidSpec: (c) => t('errors.validation.invalidPipelineSpec', undefined, c),
+        notPublished: (c) => t('errors.conflict.pipelineNotPublished', undefined, c),
+        invalidState: (c) => t('errors.conflict.pipelineInvalidState', undefined, c),
+        nothingToPublish: (c) => t('errors.conflict.pipelineNothingToPublish', undefined, c),
+        runFinished: (c) => t('errors.conflict.pipelineRunFinished', undefined, c),
+        templateNotInstantiable: (c) =>
+          t('errors.conflict.pipelineTemplateUnsupported', undefined, c),
+        projectIdRequired: (c) => t('errors.validation.projectIdRequired', undefined, c),
+      },
+    },
+  ));
+
+  // ADR-086 §5: установка пакетов расширений (скиллы/MCP/агенты/пайплайны) и
+  // реестр установок. Managed RBAC: установка — ADMIN или service-key со
+  // scope `automation:install`; одобрение и снятие — **только ADMIN** (снимают
+  // чужие артефакты инстанса).
+  app.route('/api/v2/packs', createPacksRoutes(
+    { requireAuth: auth.requireAuth },
+    {
+      packs,
+      pipelines,
+      skills: skillService,
+      mcpRegistry: mcpRegistryStore,
+      agents: agentStore,
+      roleFiles: contextConfig,
+      routes: routeRuleStore,
+      registerAgent: (agent) => agentRegistry.register(agent),
+      unregisterAgent: (id) => agentRegistry.unregister(id),
+      resolveUserId: (c) => {
+        const user = c.get('user') as { id?: string } | undefined;
+        return user?.id;
+      },
+    },
+    {
+      readGuard: auth.requirePermission('ADMIN'),
+      writeGuard: requireAdminRoleOrScope('automation:install'),
+      approveGuard: auth.requirePermission('ADMIN'),
+      uninstallGuard: auth.requirePermission('ADMIN'),
+      scopeGuard,
     },
   ));
 

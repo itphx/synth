@@ -9,17 +9,17 @@ import { synthApi } from './synthApi'
  * метода: при осознанном добавлении/удалении методa тест обновляется руками.
  */
 const EXPECTED_API_METHODS = [
-  'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'applyMigrations', 'auditRevealed',
-  'backupDownloadUrl', 'batchMessages', 'browseWorkspaceRoot', 'cancelQueueRetry', 'cancelRestore',
+  'addMcpRegistryEntry', 'addSessionReference', 'addStickyNote', 'applyMigrations', 'approvePack', 'auditRevealed',
+  'backupDownloadUrl', 'batchMessages', 'browseWorkspaceRoot', 'cancelPipelineRun', 'cancelQueueRetry', 'cancelRestore',
   'cancelSummarization', 'checkEgress', 'checkProxy',
   'checkUpdate', 'claimIdentity', 'clearAudit', 'clearProfilePassword', 'clearProxyPassword', 'clearQueue', 'clearSession',
   'clearWorkspacePolicy', 'cloneGitRepo', 'createAgentSshKey', 'createBackup', 'createDirectory',
-  'createEventBindingKey', 'createEventRoute', 'createProject', 'createProvider',
+  'createEventBindingKey', 'createEventRoute', 'createProject', 'createProjectPipeline', 'createProvider',
   'createSchedule', 'createServiceKey', 'createSession', 'createSkill',
   'createSkillBundle', 'createSshKey', 'createTlsMapping', 'createUser', 'createWebhookSubscription',
   'deleteAgent', 'deleteBackup', 'deleteContextFile', 'deleteEntry', 'deleteEventBinding',
   'deleteEventBindingKey', 'deleteEventRoute', 'deleteMcpRegistryEntry', 'deleteMessage',
-  'deleteModel', 'deleteMyIdentity', 'deleteProject', 'deleteProvider',
+  'deleteModel', 'deleteMyIdentity', 'deleteProject', 'deleteProjectPipeline', 'deleteProvider',
   'deleteSchedule', 'deleteServiceKey', 'deleteSession', 'deleteSkill',
   'deleteSkillBundle', 'deleteSkillFile', 'deleteSshKey', 'deleteStickyNote',
   'deleteTlsMapping', 'deleteToken', 'deleteUser', 'deleteWebhookSubscription', 'downloadFile', 'enqueueMessage',
@@ -33,8 +33,9 @@ const EXPECTED_API_METHODS = [
   'getEventsSettings', 'getGatewayPatterns', 'getHealth', 'getHybridStatus',
   'getLlmGatewaySettingsInfo', 'getLlmPayloads', 'getLogs', 'getMcpNetworkPolicyInfo',
   'getMcpPolicyInfo', 'getMcpRegistry', 'getMcpToolSettings', 'getMigrations', 'getModels',
-  'getMyIdentities', 'getOptimization', 'getPendingRestore', 'getProject', 'getProjectMcp',
-  'getProjectSkills', 'getProjectStats', 'getProjects', 'getProtectedPaths',
+  'getMyIdentities', 'getOptimization', 'getPack', 'getPacks', 'getPendingRestore',
+  'getPipelineInstances', 'getPipelineRun', 'getPipelineTemplates', 'getPipelines', 'getProject', 'getProjectMcp',
+  'getProjectPipeline', 'getProjectPipelines', 'getProjectSkills', 'getProjectStats', 'getProjects', 'getProtectedPaths',
   'getProviders', 'getProxy', 'getRestartStatus', 'getScheduleJobs', 'getSchedules', 'getSecurityAudit', 'getSecuritySettings',
   'getServiceKey', 'getServiceKeyScopes', 'getServiceKeys', 'getSession',
   'getSessionInstructions', 'getSessionMcpEffective', 'getSessionMessages', 'getSessionPrompt',
@@ -44,25 +45,25 @@ const EXPECTED_API_METHODS = [
   'getSkillsSettings', 'getStatus', 'getStickyNotes', 'getTls', 'getToolsDisabledInfo', 'getToolsPolicyInfo',
   'getUser', 'getUsers', 'getWebhookDeliveries', 'getWebhookSubscription',
   'getWebhookSubscriptions', 'getWorkspacePolicy', 'getWorkspaceRoot', 'getWorkspaceSetting',
-  'initGitRepo', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings',
-  'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
-  'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject',
+  'initGitRepo', 'instantiatePipelineTemplate', 'listAgentSshKeys', 'listAudit', 'listBackups', 'listDirectory', 'listEventBindings',
+  'listPipelineRuns', 'listSshKeys', 'mergeMessages', 'mkdirWorkspaceRoot', 'moveEntry',
+  'patchSessionMode', 'pinMessage', 'probeMcpServer', 'publishProject', 'publishProjectPipeline',
   'putSkillFile', 'readFile', 'regenerateWebhookSecret', 'registerGitRepo',
   'reloadSkills', 'removeCa', 'removeDefaultClient', 'removeGitRepo', 'removeProfileCa', 'removeProfileClient', 'removeSessionReference', 'reset', 'resetContextFile',
   'resetDecisionMetrics', 'resetDecisionSettings', 'resetDefaultAgent', 'resetDefaultModel', 'resetDictionary',
   'resetEgressPolicy', 'resetEventsSettings', 'resetGatewayPatterns', 'resetLlmGatewaySettings', 'resetMcpNetworkPolicy',
   'resetMcpPolicy', 'resetMcpSettings', 'resetProtectedPaths', 'resetProxy', 'resetSkillsSettings',
-  'resetToolsDisabled', 'resetToolsPolicy', 'restartInstance', 'resumeQueue', 'resumeSubagent',
+  'resetToolsDisabled', 'resetToolsPolicy', 'restartInstance', 'resumePipelineRun', 'resumeQueue', 'resumeSubagent',
   'retryMessage', 'retryQueueNow', 'returnQueue', 'revokeEventBindingKey',
   'revokeServiceKey', 'runSchedule', 'saveAgent', 'saveContextFile',
   'saveDebugConfig', 'saveDictionary', 'saveEgressPolicy', 'saveGatewayPatterns', 'saveLlmGatewaySettings',
   'saveMcpNetworkPolicy', 'saveMcpPolicy', 'saveMcpToolSettings', 'saveModel',
   'saveProtectedPaths', 'saveProxy', 'saveSecuritySettings', 'saveToolsDisabled', 'saveToolsPolicy',
-  'scanGitRepos', 'scheduleRestore', 'setDefaultAgent', 'setDefaultClient', 'setDefaultModel', 'setEnabled', 'setProfilePassword', 'setProxyPassword', 'setToken', 'setWorkspacePolicy', 'setWorkspaceSetting',
+  'scanGitRepos', 'scheduleRestore', 'setDefaultAgent', 'setDefaultClient', 'setDefaultModel', 'setEnabled', 'setProfilePassword', 'setProxyPassword', 'setToken', 'setWorkspacePolicy', 'setWorkspaceSetting', 'startPipelineRun',
   'status', 'stopGeneration', 'summarizeSession', 'testProvider', 'testProxyRoute', 'testWebhookSubscription',
-  'toggleAgent', 'toggleContextFile', 'toggleMessage', 'unlinkAgentSshKey',
+  'toggleAgent', 'toggleContextFile', 'toggleMessage', 'uninstallPack', 'unlinkAgentSshKey',
   'updateDecisionSettings', 'updateEventBindingKey', 'updateEventsSettings', 'updateMcpRegistryEntry',
-  'updateOptimization', 'updateProject', 'updateProjectMcp', 'updateProjectSkills',
+  'updateOptimization', 'updateProject', 'updateProjectMcp', 'updateProjectPipeline', 'updateProjectSkills',
   'updateProvider', 'updateSchedule', 'updateServiceKey', 'updateSession',
   'updateSessionMcp', 'updateSessionSkills', 'updateSkill', 'updateSkillBundle',
   'updateSkillsSettings', 'updateSshKey', 'updateStickyNote', 'updateTls', 'updateTlsMapping', 'updateUser',
@@ -71,7 +72,7 @@ const EXPECTED_API_METHODS = [
 ] as const
 
 describe('synthApi contract (ADR-095)', () => {
-  it('набор методов совпадает с зафиксированным (285)', () => {
+  it('набор методов совпадает с зафиксированным (304)', () => {
     expect(Object.keys(synthApi).sort()).toEqual([...EXPECTED_API_METHODS])
   })
 

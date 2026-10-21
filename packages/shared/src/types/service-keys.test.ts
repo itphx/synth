@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   SERVICE_SCOPES,
   SERVICE_SCOPE_FAMILIES,
+  SERVICE_SCOPE_SETS,
   isKnownScope,
   hasServiceScope,
+  hasAnyServiceScope,
 } from './service-keys.js';
 import {
   serviceApiKeySchema,
@@ -16,8 +18,8 @@ describe('service-key scopes (ADR-052)', () => {
   it('каталог скоупов и семейства непусты и согласованы', () => {
     expect(SERVICE_SCOPES.length).toBeGreaterThan(0);
     // Каждый скоуп либо из wildcard-семейства, либо из «одиночного» пространства
-    // (без wildcard-семейства): llm:chat, addons:install, users:read.
-    const standaloneNamespaces = ['llm', 'addons', 'users'];
+    // (без wildcard-семейства): llm:chat, addons:install, automation:install, users:read.
+    const standaloneNamespaces = ['llm', 'addons', 'automation', 'users'];
     for (const scope of SERVICE_SCOPES) {
       const family = scope.split(':')[0] ?? '';
       expect(
@@ -31,20 +33,26 @@ describe('service-key scopes (ADR-052)', () => {
     expect(isKnownScope('events:ingest')).toBe(true);
     expect(isKnownScope('llm:chat')).toBe(true);
     expect(isKnownScope('addons:install')).toBe(true);
+    expect(isKnownScope('automation:install')).toBe(true);
     expect(isKnownScope('users:read')).toBe(true);
     expect(isKnownScope('events:*')).toBe(true);
     expect(isKnownScope('schedules:*')).toBe(true);
+    // Зонтичный скоуп не образует wildcard-семейства: `automation:*` неизвестен.
+    expect(isKnownScope('automation:*')).toBe(false);
     expect(isKnownScope('bogus:read')).toBe(false);
     expect(isKnownScope('events:')).toBe(false);
     expect(isKnownScope('*')).toBe(false);
     expect(isKnownScope('')).toBe(false);
   });
 
-  it('hasServiceScope: одиночные скоупы вне семейств (addons/users)', () => {
+  it('hasServiceScope: одиночные скоупы вне семейств (addons/automation/users)', () => {
     expect(hasServiceScope(['addons:install'], 'addons:install')).toBe(true);
+    expect(hasServiceScope(['automation:install'], 'automation:install')).toBe(true);
     expect(hasServiceScope(['users:read'], 'users:read')).toBe(true);
-    // Нет wildcard-семейств addons/users — точечные скоупы не покрываются ничем иным.
+    // Нет wildcard-семейств addons/automation/users — точечные скоупы не покрываются ничем иным.
     expect(hasServiceScope(['events:*'], 'addons:install')).toBe(false);
+    expect(hasServiceScope(['events:*'], 'automation:install')).toBe(false);
+    expect(hasServiceScope(['addons:install'], 'automation:install')).toBe(false);
     expect(hasServiceScope(['addons:install'], 'users:read')).toBe(false);
   });
 
@@ -65,6 +73,29 @@ describe('service-key scopes (ADR-052)', () => {
     expect(hasServiceScope(['events:*'], 'events:*')).toBe(true);
     expect(hasServiceScope(['events:ingest'], 'events:*')).toBe(false);
     expect(hasServiceScope(['*'], 'events:ingest')).toBe(false);
+  });
+});
+
+/**
+ * ADR-052: «любой из»-наборы и зонтичный скоуп `automation:install`
+ * (установщик пакетов расширений).
+ */
+describe('hasAnyServiceScope / SERVICE_SCOPE_SETS (ADR-052)', () => {
+  it('hasAnyServiceScope: достаточно любого из набора', () => {
+    expect(hasAnyServiceScope(['routes:write'], ['routes:write', 'automation:install'])).toBe(true);
+    expect(hasAnyServiceScope(['automation:install'], ['routes:write', 'automation:install'])).toBe(true);
+    expect(hasAnyServiceScope(['addons:install'], ['routes:write', 'automation:install'])).toBe(false);
+    // Wildcard-семейство покрывает свой элемент набора.
+    expect(hasAnyServiceScope(['routes:*'], ['routes:write', 'automation:install'])).toBe(true);
+    // Пустой набор ничего не открывает (fail-closed).
+    expect(hasAnyServiceScope(['routes:write'], [])).toBe(false);
+    expect(hasAnyServiceScope([], ['routes:write', 'automation:install'])).toBe(false);
+  });
+
+  it('SERVICE_SCOPE_SETS: зонтичный automation:install замещает ресурсные скоупы', () => {
+    expect(SERVICE_SCOPE_SETS.routesWrite).toEqual(['routes:write', 'automation:install']);
+    expect(SERVICE_SCOPE_SETS.schedulesWrite).toEqual(['schedules:write', 'automation:install']);
+    expect(SERVICE_SCOPE_SETS.agentsWrite).toEqual(['automation:install']);
   });
 });
 

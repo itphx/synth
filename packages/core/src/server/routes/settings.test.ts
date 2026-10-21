@@ -690,6 +690,66 @@ describe('Settings API Routes (workspace)', () => {
       expect(badList.status).toBe(400);
     });
 
+    it('PUT принимает hostname-исключение (*.suffix) и сохраняет его', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          policy: {
+            mode: 'deny',
+            list: ['10.0.0.0/8'],
+            exceptions: ['  *.svc.cluster.local  '],
+          },
+        }),
+      });
+      expect(res.status).toBe(200);
+      const body: any = await res.json();
+      // Исключение сохраняется нормализованным (trim).
+      expect(body.policy).toEqual({
+        mode: 'deny',
+        list: ['10.0.0.0/8'],
+        exceptions: ['*.svc.cluster.local'],
+      });
+
+      // Политика переживает рестарт.
+      const restartedStore = new RuntimeSettingsStore({ dataDir: tmpDir });
+      expect(await restartedStore.getMcpNetworkPolicy()).toEqual({
+        mode: 'deny',
+        list: ['10.0.0.0/8'],
+        exceptions: ['*.svc.cluster.local'],
+      });
+    });
+
+    it('PUT отклоняет мусорное исключение точным сообщением (не обобщённым)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'deny', list: [], exceptions: ['bad host'] } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.code).toBe('VALIDATION_ERROR');
+      expect(body.error.message).toBe(
+        'policy: невалидная запись "bad host" (ожидается hostname, *.suffix, CIDR или IP)',
+      );
+    });
+
+    it('PUT отклоняет «*» в исключениях (fail-closed: исключение не разрешает любой хост)', async () => {
+      const { app } = createTestApp(tmpDir, FALLBACK);
+      const res = await app.request('/api/v2/settings/mcp-network-policy', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ policy: { mode: 'deny', list: [], exceptions: ['*'] } }),
+      });
+      expect(res.status).toBe(400);
+      const body: any = await res.json();
+      expect(body.error.message).toBe(
+        'policy: невалидная запись "*" (ожидается hostname, *.suffix, CIDR или IP)',
+      );
+    });
+
     it('PUT вызывает onMcpNetworkPolicyChange (live-применение)', async () => {
       const app = new Hono();
       const settingsStore = new RuntimeSettingsStore({ dataDir: tmpDir });

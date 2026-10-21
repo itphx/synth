@@ -414,16 +414,26 @@ function isValidAgentId(value: unknown): value is string {
 }
 
 /**
- * ADR-071 §2.3.1: валидна ли политика сетевого доступа MCP
+ * ADR-071 §2.3.1: валидация политики сетевого доступа MCP
  * ({ mode: allow|deny, list, exceptions }). Формат/валидатор общий с `egress.*`
- * (`off` для MCP недопустим).
+ * (`off` для MCP недопустим). Возвращает **точное** сообщение об ошибке —
+ * как `egress.tools`/`egress.webhooks` (не общий текст про формат).
  */
-function isValidMcpNetworkPolicy(value: unknown): value is McpNetworkPolicy {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const p = value as Record<string, unknown>;
-  if (p.mode !== 'allow' && p.mode !== 'deny') return false;
-  const checked = validateEgressPolicy({ ...p, exceptions: p.exceptions ?? [] });
-  return checked.ok;
+function validateMcpNetworkPolicy(
+  value: unknown,
+): { ok: true; policy: McpNetworkPolicy } | { ok: false; message: string } {
+  const checked = validateEgressPolicy(value);
+  if (!checked.ok) return { ok: false, message: checked.message };
+  // `validateEgressPolicy` без `allowOff` допускает только deny|allow.
+  const policy = checked.policy as EgressPolicy;
+  return {
+    ok: true,
+    policy: {
+      mode: policy.mode,
+      list: [...policy.list],
+      exceptions: [...policy.exceptions],
+    },
+  };
 }
 
 /**
@@ -1095,31 +1105,28 @@ export function createSettingsRoutes(
 
   app.put('/mcp-network-policy', settingsWriteGuard, async (c) => {
     const body = await c.req.json().catch(() => ({}));
-    const policy = (body as { policy?: unknown }).policy;
+    const raw = (body as { policy?: unknown }).policy;
 
-    if (!isValidMcpNetworkPolicy(policy)) {
+    const checked = validateMcpNetworkPolicy(raw);
+    if (!checked.ok) {
       return c.json({
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'policy: ожидается { mode: "allow" | "deny", list: string[] }',
+          message: checked.message,
         },
       }, 400);
     }
+    const policy = checked.policy;
 
     const previous = await deps.settingsStore.getMcpNetworkPolicy()
       ?? deps.fallbackMcpNetworkPolicy
       ?? DEFAULT_MCP_NETWORK_POLICY;
-    const normalized: McpNetworkPolicy = {
-      mode: policy.mode,
-      list: [...policy.list],
-      exceptions: [...(policy.exceptions ?? [])],
-    };
-    await deps.settingsStore.setMcpNetworkPolicy(normalized);
+    await deps.settingsStore.setMcpNetworkPolicy(policy);
     // Live-применение политики сетевого доступа — McpManager переконфигурируется
     // без рестарта сервера.
-    await deps.onMcpNetworkPolicyChange?.(normalized);
-    await auditPolicy(c, 'mcp', 'update', previous, normalized);
-    return c.json({ policy: normalized });
+    await deps.onMcpNetworkPolicyChange?.(policy);
+    await auditPolicy(c, 'mcp', 'update', previous, policy);
+    return c.json({ policy });
   });
 
   app.delete('/mcp-network-policy', settingsWriteGuard, async (c) => {

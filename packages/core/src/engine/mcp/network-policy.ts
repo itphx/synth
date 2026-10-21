@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { matchTlsHostPattern } from '@itphx/synth-shared';
 import type { McpNetworkPolicy, McpServerConfig } from '@itphx/synth-shared';
 
 /**
@@ -144,15 +145,38 @@ export function parseCidr(cidr: string): CidrRange | null {
 }
 
 /**
- * Входит ли IP в CIDR.
+ * Разбор адресного правила в диапазон: CIDR (`10.0.0.0/8`) **или** одиночный
+ * IP-литерал (`10.0.0.5` → /32, `::1` → /128). `null` — не адресное правило.
+ *
+ * Одиночный IP равнозначен CIDR с полной маской. Раньше такой литерал проходил
+ * валидатор (`isValidEgressRule`), но не срабатывал никогда (`parseCidr`
+ * требовал `/`): deny-список не блокировал адрес (fail-open), а exception
+ * молча игнорировался. Здесь литерал приводится к тому же диапазону, что и CIDR.
+ */
+export function parseAddressRule(rule: string): CidrRange | null {
+  const trimmed = rule.trim();
+  if (trimmed.includes('/')) return parseCidr(trimmed);
+  // `normalizeIp` снимает zone-id и приводит IPv4-mapped (`::ffff:a.b.c.d`) к
+  // вложенному IPv4 — правило и проверяемый адрес нормализуются одинаково.
+  const literal = normalizeIp(trimmed);
+  if (literal === null) return null;
+  const v4 = isIP(literal) === 4;
+  const ipInt = v4 ? ipv4ToBigInt(literal) : ipv6ToBigInt(literal);
+  if (ipInt === null) return null;
+  const mask = v4 ? 0xffffffffn : (1n << 128n) - 1n;
+  return { v4, base: ipInt, mask };
+}
+
+/**
+ * Входит ли IP в адресное правило (CIDR или одиночный IP-литерал).
  *
  * Версии сравниваются в своём семействе, но IPv4-mapped IPv6 проверяется в
  * **обоих**: `::ffff:127.0.0.1` матчится и с `127.0.0.0/8` (по вложенному IPv4),
  * и с `::ffff:0:0/96` (по полной v6-форме). Обычный (не mapped) IPv4 в v6-диапазоны
  * не попадает — семейства по-прежнему не смешиваются.
  */
-export function isIpInCidr(ip: string, cidr: string): boolean {
-  const range = parseCidr(cidr);
+export function isIpInCidr(ip: string, rule: string): boolean {
+  const range = parseAddressRule(rule);
   if (!range) return false;
 
   const normalized = normalizeIp(ip);
@@ -194,23 +218,27 @@ export function isAddressRule(rule: string): boolean {
 /**
  * Матчинг hostname-правила: точный hostname, `*.suffix` (только поддомены —
  * сам suffix требует отдельного правила) или CIDR/IP-литерал хоста.
+ *
+ * Семантика шаблона — общая с host-паттернами `security.tls` (ADR-099,
+ * `matchTlsHostPattern`): дублирующая логика не разводится по подсистемам.
+ * Паттерн `*` («любой хост») намеренно **не** поддерживается — fail-closed:
+ * иначе исключение (`exceptions`) разрешило бы любой адрес.
  */
 export function hostMatchesRule(rawHost: string, rawRule: string): boolean {
   const host = rawHost.trim().toLowerCase().replace(/\.$/, '');
   const rule = rawRule.trim().toLowerCase().replace(/\.$/, '');
   if (!host || !rule) return false;
   if (rule.startsWith('*.')) {
-    const suffix = rule.slice(2);
-    if (!suffix) return false;
     // `*.example.com` — поддомены, но не сам `example.com`.
-    return host.endsWith(`.${suffix}`);
+    return matchTlsHostPattern(rule, host);
   }
   if (isAddressRule(rule)) {
     if (isIP(host) !== 0) return isIpInCidr(host, rule);
     // CIDR-правило не разрешает hostname «сразу» — только по резолву.
     return false;
   }
-  return host === rule;
+  if (rule === '*') return false;
+  return matchTlsHostPattern(rule, host);
 }
 
 /** Первое hostname-исключение, матчащее хост (без DNS). */

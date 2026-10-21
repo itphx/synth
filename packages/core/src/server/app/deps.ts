@@ -13,11 +13,12 @@ import {
   SessionManager, EventBus, QueueProcessorManager,
   ContextBuilder, ContextOptimizer, ChatOrchestrator,
   enqueueUserMessage, createToolRegistry, createAgentRegistry, McpManager,
-  DEFAULT_AGENT_ID,
+  DEFAULT_AGENT_ID, registerStoredAgents,
   detectRuntimeDeps, HookBus, startEphemeralSweeper,
   EventRouter, RequestSessionService, EventIngress, eventToMessage,
   ProjectRuleProvider, DecisionRuleProvider,
   type DecisionAgentCandidate,
+  PipelineTracker,
   SchedulerRuleProvider, SchedulerService, AlwaysLeader, FileLeader,
   WebhookService,
   createExternalIdentityResolver,
@@ -40,6 +41,18 @@ import {
   createEgressLogSink,
   configureEgressRuntime,
   startEgressLogPruner,
+  // ADR-101 (Э5): движок пайплайнов, исполнители шагов, обработчики выходов.
+  PipelineEngine,
+  createToolStepExecutor,
+  createScriptStepExecutor,
+  createHumanStepExecutor,
+  createAgentStepExecutor,
+  createPipelineExitHandler,
+  createPipelineMetrics,
+  toCoreProviderConfig,
+  ProviderFactory,
+  type BaseProvider,
+  type PipelinePermissionDeps,
   type StorageContext,
 } from '../../index.js';
 import { syncProvidersFromEnv } from '../../providers/sync-from-env.js';
@@ -175,6 +188,11 @@ export async function createStandaloneDeps(
     securityAudit,
     egressRequests,
     analyticsRollups,
+    // ADR-051/PROP-059: реестр пайплайнов; ADR-086 §5: реестр установок пакетов.
+    pipelines: pipelineStore,
+    packs: packStore,
+    // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
+    mcpRegistry: mcpRegistryStore,
   } = storageContext;
 
   // Egress: живой резолвер политики (settings.json → config.yaml → дефолт) и
@@ -435,6 +453,20 @@ export async function createStandaloneDeps(
   const toolRegistry = createToolRegistry();
   const agentRegistry = createAgentRegistry(toolRegistry, join(dataDir, 'agents'));
 
+  // ADR-096/PROP-032 + ADR-086 §5: агенты из **стора** — в реестр при старте.
+  // `createAgentRegistry` читает только файловый каталог `{dataDir}/agents`,
+  // а при `storage.backend=postgres` стор агентов — это БД: агент, поставленный
+  // пакетом расширения, после рестарта не попадал в реестр → Router не
+  // резолвил `agentTemplate` (`resolveAgentTemplate` → `null`) и сессия не
+  // создавалась. Merge — как в `GET /api/v2/agents` (override выигрывает).
+  try {
+    registerStoredAgents(agentRegistry, await agentStore.list());
+  } catch (err) {
+    console.warn(
+      `[agents] не удалось загрузить агентов из стора: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   // ADR-046: сервис скиллов — discovery (instance/project/config.paths) + запись
   // instance-дерева + каталог в промпт и тул `skill`.
   const skillService = new SkillService({
@@ -495,6 +527,12 @@ export async function createStandaloneDeps(
     bundleStore,
   });
 
+  // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
+  // старте, fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы
+  // первый же запрос видел корректную доступность. Общий для оркестратора и
+  // движка пайплайнов (контекст шага, ADR-101 §10).
+  const runtimeDeps = await detectRuntimeDeps();
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -539,7 +577,7 @@ export async function createStandaloneDeps(
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте,
     // fail-open при ошибке. Пробинг идёт до сборки оркестратора, чтобы первый
     // же запрос видел корректную доступность.
-    runtimeDeps: await detectRuntimeDeps(),
+    runtimeDeps,
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
@@ -652,6 +690,22 @@ export async function createStandaloneDeps(
     getIdentityMap: () => effectiveEventsSettings.identityMap,
     localUserId: 'local',
   });
+  // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — состояние
+  // автомата публикации живёт в ядре (решение владельца), add-on отдаёт
+  // артефакт по id. Трекер работает через порт `storage.pipelines`.
+  const pipelineTracker = new PipelineTracker({ repository: pipelineStore });
+  // ADR-089: дефолтные `provider`/`model` инстанса — общий seam для funnel'а
+  // сессий и движка пайплайнов (ADR-101): приоритет — runtime-пара «Модели»
+  // (provider+model), затем config.yaml (llm.defaultProvider/defaultModel).
+  // Явные значения сессии/выхода — выше (funnel/выход `session`).
+  const resolveLlmDefaults = async (): Promise<{ provider?: string; model?: string }> => {
+    const pair = await settingsStore.getDefaultModel();
+    if (pair) return { provider: pair.provider, model: pair.model };
+    return {
+      provider: config.llmDefaults?.provider,
+      model: config.llmDefaults?.model,
+    };
+  };
   const requestSessionService = new RequestSessionService({
     sessionManager,
     eventRouter,
@@ -691,19 +745,15 @@ export async function createStandaloneDeps(
     // (напр. Telegram-шлюз) могла ответить без ручной проставки модели.
     // Приоритет: runtime-пара «Модели» (provider+model), затем config.yaml
     // (llm.defaultProvider/defaultModel). Явные значения сессии — выше (funnel).
-    resolveLlmDefaults: async () => {
-      const pair = await settingsStore.getDefaultModel();
-      if (pair) return { provider: pair.provider, model: pair.model };
-      return {
-        provider: config.llmDefaults?.provider,
-        model: config.llmDefaults?.model,
-      };
-    },
+    resolveLlmDefaults,
     // ADR-089: агент по умолчанию инстанса — чтобы сессия из внешнего события
     // (auto-bind/bind/ephemeral) фиксировала `settings.agentRole` и UI рисовал
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
     // «Агенты» (`getDefaultAgentId`) поверх `DEFAULT_AGENT_ID`.
     resolveDefaultAgent: getDefaultAgentId,
+    // ADR-089/ADR-051: учёт экземпляров пайплайна (PROP-059) — решение с
+    // `pipeline: {id, step}` продвигает автомат пайплайна; учёт best-effort.
+    pipelineTracker,
     // ADR-089: standalone-паритет с managed — уведомляем WS-хаб (`/ws/events`) о
     // материализованной сессии **до** доставки события, чтобы клиенты владельца,
     // подключённые раньше, получали её события (иначе подписка-снимок при
@@ -762,6 +812,92 @@ export async function createStandaloneDeps(
 
   // ADR-089: ingress-точка приёма внешних событий (Этап 6).
   const eventIngress = new EventIngress({ requestSessionService, metrics: eventMetrics });
+
+  // ADR-101 (Э5): движок пайплайнов — второй движок рядом с оркестратором
+  // (ADR-101 §1). Собирается в точке сборки (никаких глобальных синглтонов):
+  // шаг пайплайна не сессия, но окружение то же — порты хранилища (ADR-096),
+  // permission-слой (ADR-029), промпт (ADR-070), Gateway (ADR-036).
+  //
+  // HTTP-роутов у движка нет (Э6): он живёт в `deps` и используется
+  // вызывающим кодом (запуск прогона/возобновление — Э6).
+  const pipelinePermissions: PipelinePermissionDeps = {
+    permissionConfig: config.permissionConfig,
+    runtimeDeps,
+  };
+  // ADR-036/ADR-101: провайдер шага — **всегда** через `GatewayProvider`
+  // (обёртка оркестратора: та же точка, что у пула провайдеров). Провайдер
+  // не кэшируется — обёртка подхватывает live-конфиг LLM Gateway.
+  const resolvePipelineProvider = async (): Promise<BaseProvider | null> => {
+    try {
+      const defaults = await resolveLlmDefaults();
+      const providerName = defaults.provider?.trim();
+      if (!providerName) return null;
+      const sharedConfig = providerLoader(providerName);
+      if (!sharedConfig) return null;
+      const coreConfig = toCoreProviderConfig(
+        sharedConfig,
+        defaults.model?.trim() || sharedConfig.defaultModel || '',
+      );
+      return orchestrator.wrapProviderWithGateway(
+        ProviderFactory.create(providerName, coreConfig),
+      );
+    } catch {
+      // Провайдер не собран — шаг упадёт с `pipeline.provider_not_found`.
+      return null;
+    }
+  };
+  const pipelineWorkspacesRoot = config.workspacesRoot ?? join(dataDir, 'workspaces');
+  const pipelineEngine = new PipelineEngine({
+    // ADR-096: порты спецификаций пайплайнов и прогонов — из контекста хранения.
+    pipelines: storageContext.projectPipelines,
+    runs: storageContext.pipelineRuns,
+    // ADR-101 §4: исполнители видов шага (tool/script/human/agent).
+    executors: [
+      createToolStepExecutor({ toolRegistry, permissions: pipelinePermissions }),
+      createScriptStepExecutor({ toolRegistry, permissions: pipelinePermissions }),
+      createHumanStepExecutor(),
+      createAgentStepExecutor({ toolRegistry, permissions: pipelinePermissions }),
+    ],
+    // ADR-101 §9: выходы пайплайна — сессия/файл/шлюз/none.
+    exits: [
+      createPipelineExitHandler({
+        sessionManager,
+        projectStore,
+        eventBus,
+        ingress: eventIngress,
+        workspacesRoot: pipelineWorkspacesRoot,
+        resolveLlmDefaults,
+        // ADR-089: владелец сессии, созданной выходом, — человек-владелец
+        // инстанса (standalone — `local`); у проекта — владелец проекта.
+        resolveOwnerId: () => 'local',
+        // ADR-089/инвариант 18: хабы подписывают владельца сами — уведомляем
+        // WS-хаб standalone о материализованной сессии.
+        onSessionMaterialized: async (session) => {
+          const owner = await localOwnerResolver.normalizeOwner(
+            session.ownerId ?? session.userId,
+          );
+          if (owner) await accessors.onSessionMaterialized?.(owner, session.id);
+        },
+      }),
+    ],
+    // ADR-101 §2.12: инстансные события прогона (новая шина не заводится).
+    eventBus,
+    // ADR-094: метрики прогонов (`synth_pipeline_*`).
+    metrics: metrics ? createPipelineMetrics(metrics) : undefined,
+    // ADR-101 §4/ADR-070: промпт шага — тем же сборщиком, что у сессий.
+    composer: orchestrator.getComposer(),
+    resolveProvider: resolvePipelineProvider,
+    resolveLlmDefaults,
+    // ADR-101 §10: контекст шага — те же объекты, что собраны для сессий.
+    projectStore,
+    toolRegistry,
+    mcpManager,
+    instructionsResolver: orchestrator.getInstructionsResolver(),
+    agentRegistry,
+    skillsCatalog: skillService,
+    runtimeDeps,
+    workspacesRoot: pipelineWorkspacesRoot,
+  });
 
   // ADR-051 (срез) / ADR-089: планировщик публикует cron-события через ingress.
   // `start()` гейтится конфигом; остановка — на shutdown (`stopScheduler`).
@@ -858,9 +994,20 @@ export async function createStandaloneDeps(
     contextOptimizer,
     toolRegistry,
     agentRegistry,
+    // ADR-046/ADR-089: порт файлов контекста — запись ролевого промпта агента
+    // вместе с агентом (`POST /api/v2/agents`, поле `role_prompt`).
+    contextFiles: contextConfig,
     skillService,
     bundleStore,
     commandService,
+    // ADR-051/PROP-059: порт реестра пайплайнов (определения + экземпляры).
+    pipelines: pipelineStore,
+    // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).
+    pipelineEngine,
+    // ADR-086 §5: порт реестра установок пакетов расширений.
+    packs: packStore,
+    // ADR-071 §2.5: единый реестр MCP-серверов (установщик пакета пишет в него).
+    mcpRegistryStore,
     orchestrator,
     processMessage,
     eventBindingStore,

@@ -116,6 +116,22 @@ export interface ComposerMcpServer {
 }
 
 /**
+ * ADR-101 §10: минимальный «session-like» контракт Composer'а.
+ *
+ * Composer читает из сессии ровно три вещи:
+ * - `settings` — роль агента (`agentRole`), язык (`language`) и override
+ *   системного промпта (`systemPrompt`);
+ * - `promptStates` — состояние промпта per-agent (`generation`, ADR-070 §2.4);
+ * - `projectId` — привязка к проекту (блок `session.info`, ADR-040).
+ *
+ * Тип построен через `Pick` от **реального** типа `Session`: совместимость
+ * обычной сессии с Composer'ом гарантирована компилятором, а не соглашением.
+ * Шаг пайплайна — не сессия (ADR-101 §1), поэтому исполнителю шага достаточно
+ * этого контракта, а не всей сессии.
+ */
+export type ComposerSessionLike = Pick<Session, 'settings' | 'promptStates' | 'projectId'>;
+
+/**
  * ADR-069 §3.3/§11: результат резолва проектных инструкций для блока
  * `instructions` (тир `context`, order 15). Резолвит оркестратор (нужны
  * workspace/модель), Composer только вставляет блок.
@@ -128,7 +144,11 @@ export interface ComposerInstructions {
 }
 
 export interface ComposerContext {
-  session: Session;
+  /**
+   * Сессия (или её «session-like» подобие — ADR-101 §10). Composer читает
+   * только `settings`/`promptStates`/`projectId`.
+   */
+  session: ComposerSessionLike;
   /** Определение агента из реестра (ADR-070 §2.7). */
   agentDef?: AgentDefinition;
   /** Эффективная роль агента (message.agentRole || session.settings.agentRole). */
@@ -772,7 +792,7 @@ export class SystemPromptComposer {
    * каталог и ограничения. Перенесён из `ChatOrchestrator._buildSessionContextPrompt`.
    */
   private _buildSessionContext(
-    session: Session,
+    session: ComposerSessionLike,
     workingDir: string,
     project: Project | null,
     lang: string,

@@ -353,6 +353,100 @@ describe('Events API Routes (ADR-089)', () => {
     expect((await again.json() as { error: { code: string } }).error.code).toBe('NOT_FOUND');
   });
 
+  // --- ADR-052: scope-гейт записи правил (зонтичный `automation:install`) ---
+
+  /** Приложение с service-key в контексте (scope-гейт срабатывает по нему). */
+  function scopedApp(cred: { roles: string[]; scopes: string[] }) {
+    const app = new Hono();
+    app.use('*', async (c, next) => {
+      c.set('serviceKey' as never, {
+        keyId: 'svk_1',
+        label: 'installer',
+        roles: cred.roles,
+        scopes: cred.scopes,
+      } as never);
+      await next();
+    });
+    app.route(
+      '/api/v2/events',
+      createEventRoutes(
+        createMockAuth(),
+        { ingress: createIngress({ kind: 'drop', reason: 'no_route', audited: true }, null), bindingStore, apiKeyStore, journal, routeRuleStore },
+        {},
+      ),
+    );
+    return app;
+  }
+
+  const postRoute = (app: Hono, target: unknown) =>
+    app.request('/api/v2/events/routes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ match: { source: 'ci' }, target }),
+    });
+
+  it('POST /routes — service-key со scope routes:write → 201', async () => {
+    const app = scopedApp({ roles: ['USER'], scopes: ['routes:write'] });
+    const res = await postRoute(app, { mode: 'ephemeral', agentTemplate: '' });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /routes — service-key со scope automation:install → 201 (зонтичный скоуп)', async () => {
+    const app = scopedApp({ roles: ['USER'], scopes: ['automation:install'] });
+    const res = await postRoute(app, { mode: 'ephemeral', agentTemplate: '' });
+    expect(res.status).toBe(201);
+  });
+
+  it('POST /routes — service-key со scope addons:install → 403 SCOPE_REQUIRED (права не расширились)', async () => {
+    const app = scopedApp({ roles: ['USER'], scopes: ['addons:install'] });
+    const res = await postRoute(app, { mode: 'ephemeral', agentTemplate: '' });
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('SCOPE_REQUIRED');
+  });
+
+  it('POST /routes — интерактивные креды (без service-key) — no-op: 201', async () => {
+    const app = makeApp(createIngress({ kind: 'drop', reason: 'no_route', audited: true }, null));
+    const res = await postRoute(app, { mode: 'ephemeral', agentTemplate: '' });
+    expect(res.status).toBe(201);
+  });
+
+  // --- ADR-089: ссылка на шаг пайплайна в цели правила ---
+
+  it('POST /routes — цель с pipeline (ephemeral/bind) принимается и сохраняется', async () => {
+    const app = makeApp(createIngress({ kind: 'drop', reason: 'no_route', audited: true }, null));
+
+    const ephemeral = await postRoute(app, {
+      mode: 'ephemeral',
+      agentTemplate: '',
+      pipeline: { id: 'pl_1', step: 'publish' },
+    });
+    expect(ephemeral.status).toBe(201);
+    const ephemeralRule = await ephemeral.json() as { target: { pipeline?: { id: string; step: string } } };
+    expect(ephemeralRule.target.pipeline).toEqual({ id: 'pl_1', step: 'publish' });
+
+    const bind = await postRoute(app, {
+      mode: 'bind',
+      agentTemplate: '',
+      pipeline: { id: 'pl_1', step: 'publish' },
+    });
+    expect(bind.status).toBe(201);
+    const bindRule = await bind.json() as { target: { pipeline?: { id: string; step: string } } };
+    expect(bindRule.target.pipeline).toEqual({ id: 'pl_1', step: 'publish' });
+  });
+
+  it('POST /routes — pipeline в bound-цели отвергается (400 VALIDATION_ERROR)', async () => {
+    const app = makeApp(createIngress({ kind: 'drop', reason: 'no_route', audited: true }, null));
+    const res = await postRoute(app, {
+      mode: 'bound',
+      sessionId: 's-1',
+      pipeline: { id: 'pl_1', step: 'publish' },
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('VALIDATION_ERROR');
+  });
+
   it('GET /journal — записи и лимит', async () => {
     for (let i = 0; i < 3; i += 1) {
       await journal.record({

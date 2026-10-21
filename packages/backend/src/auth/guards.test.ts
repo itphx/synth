@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Hono } from 'hono';
 import type { Context, Next } from 'hono';
 import { createSkillRoutes } from '@itphx/synth-core';
-import { requireAdminOrScope } from './guards.js';
+import { requireAdminOrScope, requireAdminRoleOrScope } from './guards.js';
 
 interface MockUser {
   id: string;
@@ -113,5 +113,100 @@ describe('requireAdminOrScope — 401 без аутентификации (ADR-0
     const res = await call();
     expect(res.status).toBe(401);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('UNAUTHORIZED');
+  });
+});
+
+/**
+ * ADR-052: guard «роль ADMIN **или** scope» (`requireAdminRoleOrScope`).
+ *
+ * Отличие от `requireAdminOrScope`: у service-key учитывается **и** роль ADMIN
+ * среди выданных ролей — зонтичный scope не отбирает прежние права ключа с
+ * ролью ADMIN. Интерактивные креды — по-прежнему требуют роль ADMIN
+ * (401 без аутентификации, 403 без роли).
+ */
+describe('requireAdminRoleOrScope — ADMIN или scope (ADR-052)', () => {
+  const app = new Hono();
+
+  // Мок глобального `attachUser` (как в реальном backend, `src/app.ts:255`):
+  // пользователь и service-key кладутся в контекст, guard'ы только читают.
+  app.use('*', async (c: Context, next: Next) => {
+    const header = c.req.header('Authorization');
+    if (header === 'Bearer svc-install') {
+      c.set('user', { id: 'service:svc1', username: 'installer', roles: ['USER'] });
+      c.set('serviceKey', {
+        keyId: 'service:svc1',
+        label: 'installer',
+        roles: ['USER'],
+        scopes: ['automation:install'],
+      });
+    } else if (header === 'Bearer svc-admin') {
+      c.set('user', { id: 'service:svc2', username: 'installer-admin', roles: ['ADMIN'] });
+      c.set('serviceKey', {
+        keyId: 'service:svc2',
+        label: 'installer-admin',
+        roles: ['ADMIN'],
+        scopes: [],
+      });
+    } else if (header === 'Bearer svc-plain') {
+      c.set('user', { id: 'service:svc3', username: 'plain', roles: ['USER'] });
+      c.set('serviceKey', {
+        keyId: 'service:svc3',
+        label: 'plain',
+        roles: ['USER'],
+        scopes: [],
+      });
+    } else if (header === 'Bearer admin') {
+      c.set('user', { id: 'admin', username: 'admin', roles: ['ADMIN'] });
+    } else if (header === 'Bearer dev') {
+      c.set('user', { id: 'dev', username: 'dev', roles: ['USER'] });
+    }
+    await next();
+  });
+
+  app.post('/guard', requireAdminRoleOrScope('automation:install'), (c) => c.json({ ok: true }));
+
+  const post = (auth?: string): Promise<Response> =>
+    Promise.resolve(app.request('/guard', {
+      method: 'POST',
+      headers: auth ? { Authorization: auth } : {},
+    }));
+
+  it('service-key со scope из списка → 200', async () => {
+    const res = await post('Bearer svc-install');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('service-key с ролью ADMIN и без scope → 200 (прежние права не отбираются)', async () => {
+    const res = await post('Bearer svc-admin');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('service-key без scope и без роли ADMIN → 403 SCOPE_REQUIRED', async () => {
+    const res = await post('Bearer svc-plain');
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('SCOPE_REQUIRED');
+  });
+
+  it('интерактивный пользователь без роли ADMIN → 403 FORBIDDEN', async () => {
+    const res = await post('Bearer dev');
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('FORBIDDEN');
+  });
+
+  it('интерактивный ADMIN → 200', async () => {
+    const res = await post('Bearer admin');
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('анонимный запрос → 401 UNAUTHORIZED', async () => {
+    const res = await post();
+    expect(res.status).toBe(401);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe('UNAUTHORIZED');
   });
 });

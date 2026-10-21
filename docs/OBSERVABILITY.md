@@ -222,6 +222,27 @@ Probes Helm: liveness — `/health` (или `/ready` с большим `failureT
 | `synth_decision_attempts_total` | counter | Попытки (primary + escalation) |
 | `synth_decision_rejected_total` | counter | Отклонённые попытки |
 
+### Пайплайны
+
+Метрики движка пайплайнов (ADR-101). Лейблы — только контрактные (`status`/`source`/`kind`/`outcome`);
+идентификаторов прогона/узла/сессии в лейблах нет — значения приведены к конечным наборам (неизвестное →
+`other`), поэтому кардинальность серий ограничена. Ошибка метрик не влияет на прогон.
+
+| Метрика | Тип | Лейблы | Смысл / обновление |
+|---|---|---|---|
+| `synth_pipeline_runs_total` | counter | `status` (`done`/`failed`/`cancelled`) | Завершённые прогоны пайплайна; на завершении прогона |
+| `synth_pipeline_runs_started_total` | counter | `source` (`user`/`gateway`/`schedule`/`tool`/`webhook`/`manual`) | Запуски прогонов по виду триггера; на старте прогона |
+| `synth_pipeline_run_duration_seconds` | histogram | `status` (как у `synth_pipeline_runs_total`) | Длительность завершённого прогона (корзины 0.5…3600 с) |
+| `synth_pipeline_steps_total` | counter | `kind` (`agent`/`script`/`tool`/`human`), `outcome` (`ok`/`failed`/`skipped`) | Завершённые шаги по виду узла и исходу |
+| `synth_pipeline_step_duration_seconds` | histogram | `kind` (`agent`/`script`/`tool`/`human`) | Длительность шага (корзины 0.1…900 с) |
+| `synth_pipeline_human_waits_total` | counter | `kind` (`human`/`tool_approval`) | Прогоны, вставшие на ожидание решения человека (HITL-гейт) |
+| `synth_pipeline_human_wait_duration_seconds` | histogram | — | Длительность ожидания, закрытого решением оператора (корзины 1…21600 с); истечение таймаута гейта не измеряется |
+
+Прогон, вставший на ожидание человека, `synth_pipeline_runs_total` **не** увеличивает: счётчик
+завершённых прогонов пополняется только терминальным исходом. Шаг, вставший на гейт, в
+`synth_pipeline_steps_total` тоже не попадает — он учитывается, когда завершится (после решения
+оператора).
+
 ### Служебные (self-metrics)
 
 | Метрика | Тип | Лейблы | Смысл |
@@ -448,6 +469,7 @@ scrape_configs:
 | Тумблер `enabled` в UI заблокирован | Действует `SYNTH_METRICS_ENABLED` (источник `env`): env приоритетнее runtime; измените env/Helm и перезапустите процесс |
 | UI: задать/удалить токен → 409 | Токен задан через `SYNTH_METRICS_TOKEN` (env) — из UI не перезаписывается; меняйте env |
 | `synth_llm_*` пусто | С момента старта не было LLM-вызовов (серии создаются при первом вызове) — это нормально |
+| `synth_pipeline_*` пусто | С момента старта не было прогонов пайплайнов (серии создаются при первом прогоне) — это нормально; детали прогона — в его журнале и в событиях `pipeline.run.*` (ADR-101), в метриках id прогонов нет |
 | `synth_ready=0` | Старт не завершён или fail-closed хранилище; смотрите логи старта, `StorageDegraded`, доступность БД |
 | Растёт `synth_metrics_series_dropped_total` | Нарушен контракт лейблов или предел 2000 серий на метрику; проверьте `synth_metrics_series` и значения (`route`/`store`/`provider`/`model`) |
 | `synth_storage_degraded=1` | Инстанс на файловом read-only фоллбеке (ADR-098): проверьте PostgreSQL (dsn/сеть/права); авто-возврата нет — рестарт после устранения причины; доступ только ADMIN |

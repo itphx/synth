@@ -604,6 +604,17 @@ All three share one format: `{mode, list: string[], exceptions: string[]}`.
 
 **Semantics.**
 
+- Rule grammar (the same for `list` and `exceptions`): **exact hostname** | **`*.suffix`**
+  (subdomains only — the suffix itself does not match) | **CIDR** (`10.0.0.0/8`) |
+  **a single IP literal** (`10.0.0.5` → /32, `::1` → /128). The `*` pattern ("any host") is
+  **not allowed**: the validator rejects it, and a `*` rule in `exceptions` allows no host at all
+  (fail-closed) — otherwise a single exception would lift the whole SSRF protection.
+- Check order: **exception (hostname, no DNS) → resolve all A/AAAA → exception (address) → local
+  name (`localhost`/`*.localhost`/`*.local`/`*.internal`) → `list`**. Local names are blocked
+  **before** `list`, so an MCP add-on in a cluster (K3s: `*.svc.cluster.local`) must be allowed by a
+  hostname exception (`*.svc.cluster.local`), not by a CIDR.
+- A single IP in `list`/`exceptions` **works** and is equivalent to a CIDR with a full mask;
+  IPv4-mapped addresses (`::ffff:10.0.0.5`) are normalized the same way as the checked address.
 - `exceptions` are allow rules and are checked **first**: exact hostname, `*.suffix`, IP/CIDR. A hostname
   rule allows immediately; an address rule — by resolution.
 - `deny` — block when **at least one** resolved address is in `list`; `allow` — permit only when **all**
@@ -632,6 +643,9 @@ format and validator; only user HTTP/SSE servers (`origin:'user'`) are checked �
 registry and when connecting; `origin:'instance'` and `stdio` servers are not checked, and there is no
 per-project policy. The resolved address is not pinned (TOCTOU/DNS-rebinding —
 [PROP-100](../arch_decisions/prop-100-ssrf-dns-rebinding.md)).
+Example: an HTTP MCP add-on in K3s (`synth-gateway-telegram.synth.svc.cluster.local`) — the name ends with
+`.local`, so it is blocked by the local-name check; allow it with the hostname exception
+`exceptions: ["*.svc.cluster.local"]` (not a CIDR — a hostname exception matches before resolution).
 
 **Out of scope.** LLM providers are not written to the egress journal (they have their own LLM
 audit/payload log, ADR-036). With an HTTP/HTTPS/SOCKS5 proxy enabled
@@ -660,7 +674,7 @@ mcp:
   networkPolicy:                  # a separate key, the same format
     mode: "deny"
     list: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.169.254/32"]
-    exceptions: []
+    exceptions: []                # e.g. ["*.svc.cluster.local"] — allow an MCP add-on in a cluster
 ```
 
 ### Proxy (`proxy.*`, ADR-099 D1+D2; profiles and rules — item 27)
