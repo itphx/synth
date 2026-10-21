@@ -5,8 +5,13 @@
 #   build — сборка монорепо (платформа билдера, `$BUILDPLATFORM`);
 #   core  — flavor `core`: all-in-one = control plane + toolchain
 #           (hard deps + tier 0). Здесь ЕСТЬ `RUN` (установка пакетов);
+#   dev   — flavor `dev`: core + tier 1 + tier 4 + БД-клиенты + buildah;
+#   devops— flavor `devops`: dev + tier 2 + диаг + docker CLI;
 #   slim  — control plane без toolchain'а. ПОСЛЕДНЯЯ стадия: сборка без
 #           `--target` даёт ровно этот образ (регрессия slim недопустима).
+#
+# Flavor'ы `dev`/`devops` — alpine-ветка. Debian-ветка (`browser`/`full`,
+# шаг 5) добавляется отдельными стадиями и НЕ входит в этот файл сейчас.
 #
 # multi-arch (amd64/arm64) для slim: стадия сборки идёт на платформе билдера
 # (`$BUILDPLATFORM`), runtime — на целевой. В runtime-стадии нет RUN (chmod
@@ -123,6 +128,69 @@ COPY --from=build /repo/packages/backend/dist /app/dist
 WORKDIR /app
 # Права (a+rX) выставлены в стадии сборки, здесь только читаем из образа.
 CMD ["node", "dist/main.js"]
+
+# ------------------------------------------------------------------------------
+# flavor `dev` — core + tier 1 + tier 4 + БД-клиенты + buildah (PROP-082)
+# ------------------------------------------------------------------------------
+#
+# Состав (PROP-082, «Flavor-матрица»):
+#   * core            — hard deps + tier 0 + control plane (наследуется);
+#   * tier 1          — сборка: make/gcc/g++/musl-dev/python3-dev/pkgconf/
+#                       patch/diffutils/git-lfs/rsync;
+#   * tier 4          — MCP-серверы github/gitea/gitverse/gitlab (npm, пин
+#                       версии + integrity);
+#   * БД-клиенты      — sqlite3/psql/redis-cli/mysql-client;
+#   * buildah         — сборка образов из сессии (в контейнере требует
+#                       user namespaces / --isolation=chroot — см. шапку
+#                       docker/install-buildah.sh).
+#
+# Стадия наследует `core`, поэтому HOME=/home/synth, PYTHONUSERBASE и
+# PIP_CACHE_DIR (кэши на volume) приходят из неё без повторов.
+FROM core AS dev
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Backend (dev)"
+LABEL org.opencontainers.image.description="Synth backend all-in-one: control plane + toolchain (hard deps, tier 0-1, tier 4 MCP servers, DB clients, buildah)."
+
+# Скрипты distro-aware и идемпотентны: apk/apt пропускают уже
+# установленное, интерактива нет. Каталог с удаляется в конце стадии.
+COPY docker/install-lib.sh docker/install-tier-1.sh docker/install-db-clients.sh \
+     docker/install-buildah.sh docker/install-tier-4.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-1.sh; \
+    sh /tmp/synth-install/install-db-clients.sh; \
+    sh /tmp/synth-install/install-buildah.sh
+# npm-слой (tier 4) отдельным RUN: смена состава MCP-серверов не должна
+# инвалидировать слои с системными пакетами.
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-4.sh; \
+    rm -rf /tmp/synth-install
+
+# ------------------------------------------------------------------------------
+# flavor `devops` — dev + tier 2 + диаг + docker CLI (PROP-082)
+# ------------------------------------------------------------------------------
+#
+# devops ⊃ dev: наследует всю toolchain'у `dev` и добавляет инфраструктурный
+# тир (kubectl/helm/kustomize/ansible/opentofu/yamllint/shellcheck/hadolint),
+# диагностические утилиты (dig/nc/traceroute/lsof/ss) и docker CLI.
+#
+# docker — ТОЛЬКО CLI: демона в образе нет, `docker.sock` не пробрасывается
+# ни в одном flavor'е (PROP-082, «Две топологии развёртывания»).
+FROM dev AS devops
+
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Backend (devops)"
+LABEL org.opencontainers.image.description="Synth backend all-in-one: control plane + toolchain (hard deps, tier 0-2, tier 4 MCP servers, DB clients, buildah, diag tools, docker CLI)."
+
+COPY docker/install-lib.sh docker/install-tier-2.sh docker/install-diag.sh \
+     docker/install-docker-cli.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-tier-2.sh; \
+    sh /tmp/synth-install/install-diag.sh; \
+    sh /tmp/synth-install/install-docker-cli.sh; \
+    rm -rf /tmp/synth-install
 
 # ------------------------------------------------------------------------------
 # slim — control plane без toolchain'а (последняя стадия = цель по умолчанию)
