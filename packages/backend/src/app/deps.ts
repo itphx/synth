@@ -50,8 +50,25 @@ import {
   createWebhookMetrics,
   createEventMetrics,
   startEventJournalMetrics,
+  // ADR-101 (Э5): движок пайплайнов, исполнители шагов, обработчики выходов.
+  PipelineEngine,
+  createToolStepExecutor,
+  createScriptStepExecutor,
+  createHumanStepExecutor,
+  createAgentStepExecutor,
+  createPipelineExitHandler,
+  createPipelineMetrics,
+  toCoreProviderConfig,
+  ProviderFactory,
 } from '@itphx/synth-core';
-import type { DecisionAgentCandidate, EventsRuntimeSettings, MetricsRegistry, StorageContext } from '@itphx/synth-core';
+import type {
+  DecisionAgentCandidate,
+  EventsRuntimeSettings,
+  MetricsRegistry,
+  StorageContext,
+  BaseProvider,
+  PipelinePermissionDeps,
+} from '@itphx/synth-core';
 import type { BackendConfig } from '../lib/app-config.js';
 import { EventHub } from '../events/hub.js';
 import { seedDebugTestUsers } from './bootstrap.js';
@@ -481,6 +498,11 @@ export async function createBackendDeps(
     bundleStore,
   });
 
+  // ADR-070 §2.9.1/ADR-101: зависимости окружения (git/rg/sh) — детекция при
+  // старте, fail-open при ошибке. Общий для оркестратора и движка пайплайнов
+  // (контекст шага, ADR-101 §10).
+  const runtimeDeps = await detectRuntimeDeps();
+
   const orchestrator = new ChatOrchestrator({
     sessionManager,
     eventBus,
@@ -529,7 +551,7 @@ export async function createBackendDeps(
     // ADR-046 §4.5: системный hard-gate скиллов (runtime-настройка).
     skillsDisabled,
     // ADR-070 §2.9.1: зависимости окружения (git/rg/sh) — детекция при старте.
-    runtimeDeps: await detectRuntimeDeps(),
+    runtimeDeps,
     // ADR-071 §2.6: калибровка chars-per-token по модели (runtime-настройки).
     tokenRatioLoader: (model) => settingsStore.getTokenRatio(model),
     onTokenRatioCalibrated: (model, ratio) => settingsStore.setTokenRatio(model, ratio),
@@ -638,6 +660,17 @@ export async function createBackendDeps(
   // автомата публикации живёт в ядре (решение владельца), add-on отдаёт
   // артефакт по id. Трекер работает через порт `storage.pipelines`.
   const pipelineTracker = new PipelineTracker({ repository: pipelineStore });
+  // ADR-089: дефолтные `provider`/`model` инстанса — общий seam для funnel'а
+  // сессий и движка пайплайнов (ADR-101): приоритет — runtime-пара «Модели»
+  // (provider+model), затем config.yaml (llm.defaultProvider/defaultModel).
+  const resolveLlmDefaults = async (): Promise<{ provider?: string; model?: string }> => {
+    const pair = await settingsStore.getDefaultModel();
+    if (pair) return { provider: pair.provider, model: pair.model };
+    return {
+      provider: config.synth.llm.defaultProvider,
+      model: config.synth.llm.defaultModel,
+    };
+  };
   const requestSessionService = new RequestSessionService({
     sessionManager,
     eventRouter,
@@ -684,14 +717,7 @@ export async function createBackendDeps(
     // — для сессий из внешних событий (materialize ephemeral/bind), чтобы агент
     // мог ответить без ручной простановки модели. Приоритет: runtime-пара
     // «Модели» (provider+model), затем config.
-    resolveLlmDefaults: async () => {
-      const pair = await settingsStore.getDefaultModel();
-      if (pair) return { provider: pair.provider, model: pair.model };
-      return {
-        provider: config.synth.llm.defaultProvider,
-        model: config.synth.llm.defaultModel,
-      };
-    },
+    resolveLlmDefaults,
     // ADR-089: агент по умолчанию инстанса — чтобы сессия из внешнего события
     // (auto-bind/bind/ephemeral) фиксировала `settings.agentRole` и UI рисовал
     // бейдж агента (паритет с `POST /api/v2/sessions`). Источник — админка
@@ -742,6 +768,90 @@ export async function createBackendDeps(
 
   // ADR-089: ingress-точка приёма внешних событий (Этап 6).
   const eventIngress = new EventIngress({ requestSessionService, metrics: eventMetrics });
+
+  // ADR-101 (Э5): движок пайплайнов — второй движок рядом с оркестратором
+  // (ADR-101 §1). Собирается в точке сборки (никаких глобальных синглтонов):
+  // шаг пайплайна не сессия, но окружение то же — порты хранилища (ADR-096),
+  // permission-слой (ADR-029), промпт (ADR-070), Gateway (ADR-036).
+  //
+  // HTTP-роутов у движка нет (Э6): он живёт в `deps` и используется
+  // вызывающим кодом (запуск прогона/возобновление — Э6).
+  const pipelinePermissions: PipelinePermissionDeps = {
+    permissionConfig: config.synth.permission,
+    runtimeDeps,
+  };
+  // ADR-036/ADR-101: провайдер шага — **всегда** через `GatewayProvider`
+  // (обёртка оркестратора: та же точка, что у пула провайдеров). Провайдер
+  // не кэшируется — обёртка подхватывает live-конфиг LLM Gateway.
+  const resolvePipelineProvider = async (): Promise<BaseProvider | null> => {
+    try {
+      const defaults = await resolveLlmDefaults();
+      const providerName = defaults.provider?.trim();
+      if (!providerName) return null;
+      const sharedConfig = providerLoader(providerName);
+      if (!sharedConfig) return null;
+      const coreConfig = toCoreProviderConfig(
+        sharedConfig,
+        defaults.model?.trim() || sharedConfig.defaultModel || '',
+      );
+      return orchestrator.wrapProviderWithGateway(
+        ProviderFactory.create(providerName, coreConfig),
+      );
+    } catch {
+      // Провайдер не собран — шаг упадёт с `pipeline.provider_not_found`.
+      return null;
+    }
+  };
+  const pipelineEngine = new PipelineEngine({
+    // ADR-096: порты спецификаций пайплайнов и прогонов — из контекста хранения.
+    pipelines: storageContext.projectPipelines,
+    runs: storageContext.pipelineRuns,
+    // ADR-101 §4: исполнители видов шага (tool/script/human/agent).
+    executors: [
+      createToolStepExecutor({ toolRegistry, permissions: pipelinePermissions }),
+      createScriptStepExecutor({ toolRegistry, permissions: pipelinePermissions }),
+      createHumanStepExecutor(),
+      createAgentStepExecutor({ toolRegistry, permissions: pipelinePermissions }),
+    ],
+    // ADR-101 §9: выходы пайплайна — сессия/файл/шлюз/none.
+    exits: [
+      createPipelineExitHandler({
+        sessionManager,
+        projectStore,
+        eventBus,
+        ingress: eventIngress,
+        workspacesRoot: config.workspacesRoot,
+        resolveLlmDefaults,
+        // ADR-089: владелец сессии, созданной выходом, — владелец проекта
+        // прогона (резолвится в обработчике выхода). Без проекта владельца нет:
+        // сессия инстансная (видима ADMIN/LEAD) — права уточняются в Э6.
+        onSessionMaterialized: (session) => {
+          const owner = session.ownerId || session.userId;
+          if (!owner) return;
+          void eventHub.subscribeToSession(owner, session.id).catch((e: unknown) =>
+            console.warn('subscribeToSession failed:', e),
+          );
+        },
+      }),
+    ],
+    // ADR-101 §2.12: инстансные события прогона (новая шина не заводится).
+    eventBus,
+    // ADR-094: метрики прогонов (`synth_pipeline_*`).
+    metrics: metrics ? createPipelineMetrics(metrics) : undefined,
+    // ADR-101 §4/ADR-070: промпт шага — тем же сборщиком, что у сессий.
+    composer: orchestrator.getComposer(),
+    resolveProvider: resolvePipelineProvider,
+    resolveLlmDefaults,
+    // ADR-101 §10: контекст шага — те же объекты, что собраны для сессий.
+    projectStore,
+    toolRegistry,
+    mcpManager,
+    instructionsResolver: orchestrator.getInstructionsResolver(),
+    agentRegistry,
+    skillsCatalog: skillService,
+    runtimeDeps,
+    workspacesRoot: config.workspacesRoot,
+  });
 
   // ADR-051 (срез) / ADR-089: планировщик публикует cron-события через ingress.
   // `start()` гейтится конфигом (`scheduler.enabled: false` — тикер не стартует),
@@ -849,6 +959,8 @@ export async function createBackendDeps(
     mcpRegistryStore,
     // ADR-051/PROP-059: порт реестра пайплайнов (определения + экземпляры).
     pipelines: pipelineStore,
+    // ADR-101 (Э5): движок пайплайнов (второй движок) — HTTP-роутов нет (Э6).
+    pipelineEngine,
     // ADR-086 §5: порт реестра установок пакетов расширений.
     packs: packStore,
     eventBus,
