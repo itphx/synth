@@ -33,7 +33,23 @@
           "en": "Featured"
         }
       }
-    }
+    },
+    "sources": [
+      {
+        "id": "official",
+        "label": "Synth",
+        "trust_level": "builtin",
+        "enabled_by_default": true
+      },
+      {
+        "id": "anthropics",
+        "label": "Anthropic",
+        "repo": "anthropics/skills",
+        "subpath": "skills",
+        "trust_level": "trusted",
+        "enabled_by_default": false
+      }
+    ]
   },
   "plugins": [
     {
@@ -61,6 +77,7 @@
       "category": "skills",
       "trust_level": "verified",
       "identifier": "acme/skill-pack#skills/review",
+      "path": "skills/review",
       "minSynth": ">=0.9.0",
       "source": "github",
       "versions": [

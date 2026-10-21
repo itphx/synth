@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { CatalogEntry } from '@itphx/synth-shared';
 import {
   isBlockedHost,
   refreshRemoteCatalogs,
@@ -16,6 +17,30 @@ import {
   type FetchLike,
 } from './remote.js';
 import { buildUrlSource, urlCacheDir } from './discovery.js';
+
+/**
+ * Базовая карточка записи каталога для тестов резолва пути (все поля формы
+ * `catalogEntrySchema`).
+ */
+function catalogEntry(overrides: Partial<CatalogEntry> = {}): CatalogEntry {
+  return {
+    name: 'demo',
+    kind: 'pack',
+    packType: 'skills',
+    version: '1.0.0',
+    description: { ru: 'Демо', en: 'Demo' },
+    license: 'MIT',
+    category: 'skills',
+    trust_level: 'community',
+    identifier: 'acme/demo',
+    source: 'registry',
+    screenshots: [],
+    tags: [],
+    versions: [],
+    extra: {},
+    ...overrides,
+  };
+}
 
 let root: string;
 
@@ -192,6 +217,46 @@ describe('resolveCatalogSkillPath — путь скилла внутри кат�
         extra: {},
       }),
     ).toBeUndefined();
+  });
+
+  it('явное поле path — приоритет над extra.path и фрагментом identifier', () => {
+    expect(
+      resolveCatalogSkillPath(
+        catalogEntry({
+          path: 'packs/demo',
+          extra: { path: 'legacy/demo' },
+          identifier: 'acme/repo#skills/demo',
+        }),
+      ),
+    ).toBe('packs/demo');
+  });
+
+  it('приоритет: path → extra.path → фрагмент identifier → имя записи', () => {
+    // 1. Явное поле карточки (каноническая форма).
+    expect(resolveCatalogSkillPath(catalogEntry({ path: 'packs/demo' }))).toBe('packs/demo');
+    // 2. extra.path — legacy-формы и прежние карточки.
+    expect(resolveCatalogSkillPath(catalogEntry({ extra: { path: 'legacy/demo' } }))).toBe('legacy/demo');
+    // 3. Фрагмент identifier после '#'.
+    expect(resolveCatalogSkillPath(catalogEntry({ identifier: 'acme/repo#skills/demo' }))).toBe(
+      'skills/demo',
+    );
+    // 4. Ничего нет — loader берёт имя записи как путь.
+    const withoutPath = catalogEntry({ name: 'demo' });
+    expect(resolveCatalogSkillPath(withoutPath)).toBeUndefined();
+    expect(
+      resolveSkillFileUrl(new URL('https://example.com/skills/index.json'), {
+        name: withoutPath.name,
+        path: resolveCatalogSkillPath(withoutPath),
+      })?.toString(),
+    ).toBe('https://example.com/skills/demo/SKILL.md');
+  });
+
+  it('legacy-формы (extra.path) работают как раньше', () => {
+    // Запись, разобранная tolerant-парсером: путь лежит и в path, и в extra.path.
+    expect(
+      resolveCatalogSkillPath(catalogEntry({ path: 'dir/beta', extra: { path: 'dir/beta' } })),
+    ).toBe('dir/beta');
+    expect(resolveCatalogSkillPath(catalogEntry({ extra: { path: 'dir/beta' } }))).toBe('dir/beta');
   });
 });
 
@@ -435,7 +500,7 @@ describe('refreshRemoteCatalogs — канонический каталог ра
       title: { ru: 'Каталог', en: 'Catalog' },
       description: { ru: 'Каталог', en: 'Catalog' },
       generated_at: '2026-10-21T06:00:00Z',
-      metadata: { categories: {} },
+      metadata: { categories: {}, sources: [] },
       plugins: [
         {
           name: 'acme-pack',
@@ -468,6 +533,53 @@ describe('refreshRemoteCatalogs — канонический каталог ра
     expect(res.diagnostics).toEqual([]);
     const requested = fetchImpl.mock.calls.map((call) => call[0] as string);
     expect(requested).toContain(`${URL_BASE}/skills/demo/SKILL.md`);
+  });
+
+  it('путь скилла берётся из явного поля path (вендоренный контент пака)', async () => {
+    const index = JSON.stringify({
+      format: 1,
+      title: { ru: 'Каталог', en: 'Catalog' },
+      description: { ru: 'Каталог', en: 'Catalog' },
+      generated_at: '2026-10-21T06:00:00Z',
+      metadata: { categories: {}, sources: [] },
+      plugins: [
+        {
+          name: 'acme-pack',
+          kind: 'pack',
+          packType: 'skills',
+          version: '1.0.0',
+          description: { ru: 'Пак', en: 'Pack' },
+          license: 'MIT',
+          category: 'skills',
+          trust_level: 'community',
+          identifier: 'acme/repo',
+          path: 'packs/acme/skills/demo',
+          source: 'github',
+          versions: [],
+          extra: {},
+        },
+      ],
+    });
+    const fetchImpl = vi.fn(async (input: string) => {
+      if (input.endsWith('/index.json')) return new Response(index, { status: 200 });
+      return new Response(skillFile('acme-pack'), { status: 200 });
+    });
+
+    const res = await refreshRemoteCatalogs({
+      urls: [URL_BASE],
+      cacheDir: root,
+      resolveHost: PUBLIC_RESOLVER,
+      fetchImpl: fetchImpl as unknown as FetchLike,
+    });
+
+    expect(res.diagnostics).toEqual([]);
+    const requested = fetchImpl.mock.calls.map((call) => call[0] as string);
+    expect(requested).toEqual([
+      `${URL_BASE}/index.json`,
+      `${URL_BASE}/packs/acme/skills/demo/SKILL.md`,
+    ]);
+    const cache = urlCacheDir(root, URL_BASE);
+    expect(await readFile(join(cache, 'acme-pack', 'SKILL.md'), 'utf-8')).toBe(skillFile('acme-pack'));
   });
 
   it('превышение лимита записей — обрабатываются первые', async () => {

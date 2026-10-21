@@ -44,6 +44,10 @@ export {
  * записи других классов (`plugin`/`gateway`/`addon`/`storage` и пакеты других
  * `packType`) игнорируются.
  *
+ * Путь скилла внутри каталога: явное поле `path` карточки (каноническая форма,
+ * контент-паки вендорены в каталоге) → `extra.path` (legacy-формы) →
+ * фрагмент `identifier` после `#` → имя записи.
+ *
  * Сеть: только `http:`/`https:`; блокируются loopback/private/link-local/ULA,
  * `*.local`/`*.internal` и IPv4-mapped IPv6 (SSRF-guard, проверяются исходный URL
  * и каждый редирект, см. `validateRemoteUrl`). Ошибки не фатальны: отдаются диагностикой, старый кэш
@@ -110,11 +114,15 @@ interface RemoteIndexEntry {
  * Путь скилла внутри каталога (относительно базового URL индекса).
  *
  * Порядок источников:
- * 1. `extra.path` — явный путь в каталоге (legacy-формы и карточки каталога);
- * 2. фрагмент `identifier` после `#` (устойчивый id `owner/repo#path`);
- * 3. иначе — undefined (loader возьмёт имя записи как путь).
+ * 1. `path` — явное поле карточки (каноническая форма: путь к вендоренному
+ *    контенту, `kind: 'pack'`);
+ * 2. `extra.path` — legacy-формы и прежние карточки (`{ skills: [...] }`);
+ * 3. фрагмент `identifier` после `#` (устойчивый id `owner/repo#path`);
+ * 4. иначе — undefined (loader возьмёт имя записи как путь).
  */
 export function resolveCatalogSkillPath(entry: CatalogEntry): string | undefined {
+  const explicit = entry.path?.trim();
+  if (explicit) return explicit;
   const extra = entry.extra;
   const extraPath = extra && typeof extra === 'object' ? extra['path'] : undefined;
   if (typeof extraPath === 'string' && extraPath.trim().length > 0) return extraPath.trim();

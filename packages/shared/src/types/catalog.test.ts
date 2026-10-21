@@ -14,6 +14,7 @@ import {
   parseCatalogEntries,
   catalogEntrySchema,
   catalogIndexSchema,
+  catalogSourceAdapterSchema,
 } from './catalog.js';
 
 /**
@@ -51,6 +52,30 @@ describe('Индекс каталога расширений — канонич�
     expect(parsed.data.generated_at).toBe('2026-10-21T06:00:00Z');
     expect(parsed.data.metadata.categories.skills?.title.ru).toBe('Скиллы');
     expect(parsed.data.metadata.labels?.featured?.title.en).toBe('Featured');
+    expect(parsed.data.metadata.sources.map((source) => source.id)).toEqual([
+      'official',
+      'anthropics',
+    ]);
+  });
+
+  it('требует metadata.sources — индекс без перечня каталогов невалиден', () => {
+    const fixture = FIXTURE as { metadata: Record<string, unknown> };
+    const { sources: _sources, ...metadata } = fixture.metadata;
+    const parsed = catalogIndexSchema.safeParse({ ...fixture, metadata });
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    expect(parsed.error.issues.some((issue) => issue.path.join('.') === 'metadata.sources')).toBe(true);
+  });
+
+  it('сохраняет явный path карточки (вендоренный контент пака)', () => {
+    const parsed = catalogEntrySchema.safeParse({ ...BASE_ENTRY, path: 'packs/acme' });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.path).toBe('packs/acme');
+  });
+
+  it('отвергает пустой path карточки', () => {
+    expect(catalogEntrySchema.safeParse({ ...BASE_ENTRY, path: '' }).success).toBe(false);
   });
 
   it('применяет дефолты к записи (screenshots/tags/versions/extra)', () => {
@@ -130,6 +155,7 @@ describe('parseCatalogEntries — tolerant-парсер трёх форм', () =
     expect(skill.packType).toBe('skills');
     expect(skill.trust_level).toBe('verified');
     expect(skill.identifier).toBe('acme/skill-pack#skills/review');
+    expect(skill.path).toBe('skills/review');
     expect(isCatalogSkillEntry(skill)).toBe(true);
     expect(entries.slice(1).some((entry) => isCatalogSkillEntry(entry))).toBe(false);
   });
@@ -158,6 +184,25 @@ describe('parseCatalogEntries — tolerant-парсер трёх форм', () =
     expect(entries[1]!.identifier).toBe('dir/beta');
     expect(entries[1]!.extra['path']).toBe('dir/beta');
     expect(entries.every((entry) => isCatalogSkillEntry(entry))).toBe(true);
+  });
+
+  it('legacy-путь кладётся и в поле path, и в extra.path', () => {
+    const entries = parseCatalogEntries([
+      { name: 'beta', path: 'dir/beta' },
+      { name: 'gamma', path: 'dir/gamma' },
+    ]);
+    expect(entries[0]!.path).toBe('dir/beta');
+    expect(entries[0]!.extra['path']).toBe('dir/beta');
+    // Форма `{ skills: [...] }` — тот же маппинг пути.
+    const legacy = parseCatalogEntries({
+      skills: [{ name: 'alpha', path: 'nested/alpha' }],
+    });
+    expect(legacy[0]!.path).toBe('nested/alpha');
+    expect(legacy[0]!.extra['path']).toBe('nested/alpha');
+    // Без пути — поля нет.
+    const withoutPath = parseCatalogEntries([{ name: 'delta' }]);
+    expect(withoutPath[0]!.path).toBeUndefined();
+    expect(withoutPath[0]!.extra['path']).toBeUndefined();
   });
 
   it('пропускает битые записи, не бросая исключений', () => {
@@ -230,6 +275,60 @@ describe('isCatalogIndexDocument — узнавание корня докуме�
     expect(isCatalogIndexDocument({ nope: [] })).toBe(false);
     expect(isCatalogIndexDocument('html')).toBe(false);
     expect(isCatalogIndexDocument({ format: 2, plugins: [] })).toBe(false);
+  });
+});
+
+describe('Каталог-адаптер источника (metadata.sources[], PROP-068 §3)', () => {
+  it('принимает корректную запись адаптера', () => {
+    const parsed = catalogSourceAdapterSchema.safeParse({
+      id: 'anthropics',
+      label: 'Anthropic',
+      repo: 'anthropics/skills',
+      subpath: 'skills',
+      trust_level: 'trusted',
+      enabled_by_default: false,
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('принимает минимальную запись адаптера (id/label/trust_level)', () => {
+    const parsed = catalogSourceAdapterSchema.safeParse({
+      id: 'official',
+      label: 'Synth',
+      trust_level: 'builtin',
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    expect(parsed.data.enabled_by_default).toBeUndefined();
+  });
+
+  it('отвергает битые записи адаптера', () => {
+    // Пустой id/label.
+    expect(
+      catalogSourceAdapterSchema.safeParse({ id: '', label: 'X', trust_level: 'trusted' }).success,
+    ).toBe(false);
+    expect(
+      catalogSourceAdapterSchema.safeParse({ id: 'x', label: '', trust_level: 'trusted' }).success,
+    ).toBe(false);
+    // Нет обязательного trust_level.
+    expect(catalogSourceAdapterSchema.safeParse({ id: 'x', label: 'X' }).success).toBe(false);
+    // Неизвестный уровень доверия (`agent-created` — только для записей агентов).
+    expect(
+      catalogSourceAdapterSchema.safeParse({
+        id: 'x',
+        label: 'X',
+        trust_level: 'agent-created',
+      }).success,
+    ).toBe(false);
+    // enabled_by_default — булево.
+    expect(
+      catalogSourceAdapterSchema.safeParse({
+        id: 'x',
+        label: 'X',
+        trust_level: 'trusted',
+        enabled_by_default: 'yes',
+      }).success,
+    ).toBe(false);
   });
 });
 

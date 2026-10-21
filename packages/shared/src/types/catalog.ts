@@ -16,6 +16,12 @@
  * Локализация: RU — канонический язык, EN — зеркало; обе строки обязательны
  * в канонической форме (`description`, `title`, категории/метки).
  *
+ * Ключевые поля канонической формы:
+ * - `metadata.sources[]` — перечень каталогов-адаптеров верхнего уровня
+ *   (PROP-068 §3), **обязателен**; не путать с полем записи `source`;
+ * - `plugins[].path` — путь внутри каталога к вендоренному контенту
+ *   (`kind: 'pack'`); legacy-формы кладут его и в `path`, и в `extra.path`.
+ *
  * Модуль browser-safe (`zod` + локальные типы), в UI-бандл `node:*` не попадает.
  */
 import { z } from 'zod';
@@ -51,10 +57,42 @@ export const CATALOG_TRUST_LEVELS = ['builtin', 'verified', 'trusted', 'communit
 export type CatalogTrustLevel = (typeof CATALOG_TRUST_LEVELS)[number];
 export const catalogTrustLevelSchema = z.enum(CATALOG_TRUST_LEVELS);
 
-/** Источник/адаптер происхождения записи (PROP-068 §3.1). */
+/**
+ * Источник/адаптер происхождения записи (PROP-068 §3.1).
+ *
+ * Это **канал доставки конкретной записи** (`versions[].source.type = 'npm'`),
+ * а не перечень каталогов верхнего уровня — см. `catalogSourceAdapterSchema`.
+ */
 export const CATALOG_SOURCES = ['npm', 'github', 'helm', 'builtin', 'registry'] as const;
 export type CatalogSource = (typeof CATALOG_SOURCES)[number];
 export const catalogSourceSchema = z.enum(CATALOG_SOURCES);
+
+/**
+ * Каталог-адаптер верхнего уровня (`metadata.sources[]`, PROP-068 §3) —
+ * список каталогов, чьи записи попали в индекс, с их дефолтами доверия и
+ * включения.
+ *
+ * ⚠️ **Не путать с полем записи `source`** (`CatalogSource` =
+ * `npm|github|helm|builtin|registry`): `source` у записи — *канал доставки этой
+ * записи* (`versions[].source.type`), а `metadata.sources[]` — *каталоги-адаптеры*,
+ * из которых индекс собра (репозиторий/подкаталог + уровень доверия +
+ * «включён по умолчанию»).
+ */
+export const catalogSourceAdapterSchema = z.object({
+  /** Идентификатор каталога-адаптера (`official`, `anthropics`, …). */
+  id: z.string().min(1),
+  /** Человекочитаемое название каталога. */
+  label: z.string().min(1),
+  /** Уровень доверия каталога по умолчанию (PROP-068 §4.1). */
+  trust_level: catalogTrustLevelSchema,
+  /** Включён ли каталог по умолчанию (PROP-068 §3). */
+  enabled_by_default: z.boolean().optional(),
+  /** Репозиторий-источник (`owner/repo`). */
+  repo: z.string().min(1).optional(),
+  /** Подкаталог в репозитории (внутри `repo`). */
+  subpath: z.string().min(1).optional(),
+});
+export type CatalogSourceAdapter = z.infer<typeof catalogSourceAdapterSchema>;
 
 /** Метка времени в формате ISO-8601 (UTC или со смещением). */
 const CATALOG_ISO_DATETIME_RE =
@@ -123,6 +161,17 @@ export const catalogEntrySchema = z
     trust_level: catalogTrustLevelSchema,
     /** Устойчивый id записи (`owner/repo#path`, `url/<sha>`). */
     identifier: z.string().min(1),
+    /**
+     * Путь внутри каталога к вендоренному контенту (для `kind: 'pack'`).
+     *
+     * Контент-паки **вендорены в каталоге** (гибридная модель каталога,
+     * PROP-068 §3): запись явно указывает, где лежит её контент, чтобы
+     * загрузчику не приходилось выводить путь из `identifier`/имени.
+     * Необязателен: у записей других классов пути внутри каталога нет, а в
+     * legacy-формах (`{ skills: [...] }`) путь кладут и в это поле, и в
+     * `extra.path` (обратная совместимость).
+     */
+    path: z.string().min(1).optional(),
     /** Минимальная версия Synth (semver-range) — как `host` в манифесте. */
     minSynth: packHostSchema.optional(),
     /** Источник/адаптер происхождения записи. */
@@ -154,6 +203,9 @@ export type CatalogLabel = z.infer<typeof catalogLabelSchema>;
  * - `title`/`description` — локализованные (RU канонический, EN зеркало);
  * - `generated_at` — момент сборки индекса (ISO-8601), база freshness-watchdog;
  * - `metadata.categories` — категории витрины, `metadata.labels` — метки;
+ * - `metadata.sources` — **обязательный** перечень каталогов-адаптеров, чьи
+ *   записи попали в индекс (PROP-068 §3): без него документ не является
+ *   полноценным индексом (fail-closed к §3);
  * - `plugins` — записи каталога (все классы расширений).
  */
 export const catalogIndexSchema = z.object({
@@ -171,6 +223,13 @@ export const catalogIndexSchema = z.object({
     categories: z.record(z.string(), catalogCategorySchema),
     /** Метки: ключ → заголовок. */
     labels: z.record(z.string(), catalogLabelSchema).optional(),
+    /**
+     * Каталоги-адаптеры, из которых собран индекс (PROP-068 §3) — обязательны.
+     *
+     * Не путать с полем записи `source` (`CatalogSource`): там — канал доставки
+     * конкретной записи, здесь — перечень каталогов верхнего уровня.
+     */
+    sources: z.array(catalogSourceAdapterSchema),
   }),
   /** Записи каталога расширений. */
   plugins: z.array(catalogEntrySchema),
@@ -265,6 +324,8 @@ function skillLikeEntry(raw: unknown): CatalogEntry | null {
 
   const extra: Record<string, unknown> = isRecord(raw.extra) ? { ...raw.extra } : {};
   // Путь внутри каталога — для загрузчика скиллов (`<base>/<path>/SKILL.md`).
+  // Кладём и в поле `path` (канонический контракт), и в `extra.path`
+  // (обратная совместимость с прежним поведением загрузчика).
   if (path) extra.path = path;
 
   const repositoryUrl = isRecord(raw.repository)
@@ -292,6 +353,7 @@ function skillLikeEntry(raw: unknown): CatalogEntry | null {
     category,
     trust_level: 'community',
     identifier,
+    ...(path ? { path } : {}),
     ...(minSynthRange && minSynthRange.success ? { minSynth: minSynthRange.data } : {}),
     source: 'registry',
     versions: versions.success ? versions.data : [],
