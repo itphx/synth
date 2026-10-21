@@ -743,7 +743,8 @@ containment'а файла (ADR-075) и санитизацией наружу (AD
 
 **IR — `PipelineSpec`**, а не формат React Flow: JSON/YAML — источник истины, редактор — один из
 клиентов. Адаптер IR↔граф (`specToFlow`/`flowToSpec`) — чистый модуль без React, round-trip без
-потерь. Атрибуция React Flow не скрывается (лицензия).
+потерь. Атрибуция React Flow скрыта (`proOptions={{ hideAttribution: true }}`) — решение владельца
+продукта; MIT-лицензия это допускает.
 
 **Живой прогон** — по событиям `pipeline.run.*` инстансного канала шины (§2.12.3):
 `stores/transportStore.ts` разбирает их **до** проверки `sid` (у прогона нет сессии), стор

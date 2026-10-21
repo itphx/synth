@@ -302,6 +302,10 @@ export function PipelineEditor({
           nodes={graph.nodes}
           edges={graph.edges}
           nodeTypes={NODE_TYPES}
+          // Атрибуция React Flow скрыта — решение владельца продукта
+          // (MIT-лицензия это допускает). Плашка рисуется вне потока
+          // (`position: absolute`), поэтому вёрстка канваса не меняется.
+          proOptions={{ hideAttribution: true }}
           onNodesChange={handleNodesChange}
           onEdgesChange={handleEdgesChange}
           onConnect={handleConnect}

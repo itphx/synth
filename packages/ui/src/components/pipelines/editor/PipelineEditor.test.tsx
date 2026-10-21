@@ -6,6 +6,8 @@
  *   появился на канвасе и попал в спецификацию;
  * - инспектор: правка поля шага — спецификация изменилась;
  * - ребро: новое ребро между узлами — в спецификации появился условный переход;
+ * - атрибуция React Flow скрыта (`proOptions.hideAttribution`) — плашки
+ *   `.react-flow__attribution` в DOM нет, канвас и узлы на месте;
  * - страница пайплайна (PipelineTab): «Проверить» показывает проблемы
  *   невалидной спецификации (`validatePipelineSpec`) и пустой список для
  *   валидной; «Сохранить черновик» уходит в `updateProjectPipeline` с той же
@@ -413,12 +415,16 @@ describe('PipelineEditor — переходы: новое ребро', () => {
 })
 
 describe('PipelineEditor — атрибуция React Flow', () => {
-  it('бренд React Flow виден: атрибуция не скрывается', async () => {
+  it('атрибуция скрыта: плашки React Flow в DOM нет, канвас на месте', async () => {
     const { container } = await renderEditor(SPEC)
 
+    // Решение владельца продукта: атрибуция скрыта (MIT это допускает).
     const attribution = container.querySelector('.react-flow__attribution')
-    expect(attribution).toBeTruthy()
-    expect(attribution?.textContent ?? '').toContain('React Flow')
+    expect(attribution).toBeNull()
+
+    // Скрытие не ломает вёрстку канваса: обёртка и узлы на месте.
+    expect(container.querySelector('.react-flow')).toBeTruthy()
+    expect(container.querySelector('[data-node-id="step-1"]')).toBeTruthy()
   })
 })
 
