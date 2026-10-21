@@ -5,7 +5,7 @@
 > **Дата:** 2026-10-21
 > **Источник:** переработано 2026-10-21 (проработка двух топологий развёртывания: all-in-one vs отдельные контейнеры-исполнители)
 > **Согласовано:** Debian для `browser`/`full`; `buildah` вместо `kaniko`; docker — только CLI (без socket); `lite` → `core`.
-> **Ближайший шаг:** flavor `core` + all-in-one образ → затем split-топология (PROP-077).
+> **Ближайший шаг:** flavor'ы `dev`/`devops` (шаг 4) и `browser`/`full` (шаг 5) → затем split-топология (PROP-077).
 
 **Решение:** развёртывание Synth описывается **двумя топологиями одной конфигурации**. По умолчанию (`execution.mode: inline`) работает **all-in-one** — один контейнер, в котором рядом живут control plane (backend), toolchain (набор инструментов для агентских тулов) и рантайм исполнителя. Вторая топология (`execution.mode: remote`) — **split**: control plane без toolchain'а (`synth-backend:<v>`) плюс отдельные контейнеры-исполнители (`synth-executor:<v>-<flavor>`). Переключатель — **параметр запуска** (секция `execution` в `config.yaml`, env `SYNTH_EXECUTION_MODE`, CLI `--execution-mode`), смена топологии — только перезапуск процесса. Исполнитель и all-in-one образ — **один и тот же код**: он умеет работать и отдельным сервисом, и локально внутри backend'а; различает их только порт исполнения `ExecutionPort` (в репозитории пока отсутствует — см. «Дельта», п. 1). Split-топология, доверенная граница backend → исполнитель, S3 и жизненный цикл worker'ов — предмет [PROP-077](./prop-077-runtime-toolchain.md); здесь фиксируются all-in-one, flavor-матрица образов и единая модель переключения.
 
@@ -113,7 +113,30 @@ Env-имена: `SYNTH_EXECUTION_MODE`, `SYNTH_EXECUTION_REMOTE_URL`, `SYNTH_EXE
 | **browser** | debian | hard deps + tier 0 + tier 1 + tier 3 + playwright-MCP + diag | ~1.8 ГБ | `synth-backend:<v>-browser` |
 | **full** | debian | всё перечисленное (tier 2–4 + БД + diag + docker + buildah) | ~2.5–3 ГБ | `synth-backend:<v>-full` |
 
-Размеры — **оценки**, а не измерения: в репозитории нет замеров размеров образов с toolchain'ом (замеры есть только для базовых: `docker/Dockerfile:14` — слой `npm install -g` ≈280 МБ).
+Размеры — для остальных flavor'ов **оценки**, а не измерения (замеры есть только для базовых: `docker/Dockerfile:14` — слой `npm install -g` ≈280 МБ). Для flavor'а `core` замеры сделаны (шаг 2; node 22.23.3 / alpine 3.24): `synth-backend:<v>` (slim) — **63,8 МБ** (content), `synth-backend:<v>-core` — **101,6 МБ** (content; +37,8 МБ на toolchain, слой `apk add` ≈105 МБ несжатых).
+
+### Flavor `core`: точный состав (реализовано, шаг 2)
+
+Образ `synth-backend:<v>-core` — all-in-one: control plane (тот же `node dist/main.js`, что и в `slim`) + toolchain. Сборка — `docker build -f docker/Dockerfile.backend --target core`.
+
+| Группа | Состав |
+|---|---|
+| hard deps | `git`, `ripgrep`, `python3` (+`pip`, `venv`), `openssh-client`, `ca-certificates` |
+| tier 0 | `bash`, `curl`, `jq`, `yq`, `unzip`/`zip`, `xz`, `zstd`, GNU `coreutils`/`findutils`/`grep`/`sed`/`gawk`, `less`, `tree`, `openssl` |
+
+Список пакетов — **один на тир**, без дублей между дистрибутивами; расхождение имён зафиксировано в скриптах (`docker/install-hard-deps.sh`, `docker/install-tier-0.sh` + общий `docker/install-lib.sh`, который сам выбирает `apk`/`apt` по базе; POSIX `sh`, `set -eu`, идемпотентно, без интерактива):
+
+| Пакет | alpine (`apk`) | debian (`apt`) |
+|---|---|---|
+| `git`, `ripgrep`, `python3`, `ca-certificates` | те же | те же |
+| `pip` | `py3-pip` | `python3-pip` |
+| `venv` | `python3` — отдельного пакета venv нет, в `python3` входит `ensurepip` | `python3-venv` |
+| `openssh-client` | `openssh-client` (виртуальное имя → `openssh-client-default`) | `openssh-client` |
+| `xz` | `xz` | `xz-utils` |
+| `yq` | `yq` — Go-реализация mikefarah/yq (v4) | `yq` — python-реализация kislyuk/yq, **CLI несовместим**; для debian-ветки (`browser`/`full`) нужен пин Go-варианта (PROP-068) |
+| остальные tier 0 | те же | те же |
+
+Python-окружение в flavor-стадии: `HOME=/home/synth`, `PYTHONUSERBASE=/home/synth/.local`, `PIP_CACHE_DIR=/home/synth/.cache/pip`; каталоги принадлежат **uid 1000** — в базовом `node:22-alpine` этот uid уже занят пользователем `node`, второй аккаунт с uid 1000 создать нельзя, поэтому отдельная учётная запись не заводится (важен uid: под `runAsUser: 1000` каталоги writable). `HOME` по умолчанию `/root` при `runAsUser: 1000` не writable. В `slim` ничего не меняется. Volume под кэши + `fsGroup` в чарте/compose — шаги 7/12.
 
 ### Образы worker'ов (`synth-executor:<v>-<flavor>`)
 
@@ -146,10 +169,31 @@ worker:  toolchain-слои (common/build/mcp/browser/full) ─► worker-runtim
 
 **Ограничение из текущих Dockerfile'ов, которое прямо влияет на flavor'ы.** Сегодня в runtime-стадии **нет ни одного `RUN`** — всё, что требует исполнения кода, делается в builder-стадии; именно это позволяет собирать arm64-образ на amd64-раннере без QEMU/binfmt (`docker/Dockerfile:21-24`, `docker/Dockerfile.backend:5-8`). Для flavor'ов это правило не всегда выполнимо: `kubectl`/`helm`/`terraform`/`playwright` — **архитектурно-зависимые** бинарники, их нельзя ставить в builder-стадию `$BUILDPLATFORM` и переносить `COPY --from` в целевую стадию.
 
-Отсюда два допустимых пути (решение — в «Открытые вопросы»):
+Отсюда два допустимых пути:
 
 - **per-arch сборка** flavor'ов (buildx/kaniko под целевую платформу, QEMU/binfmt обязателен) — тогда в целевой стадии `RUN` разрешён;
 - **отказ от «no RUN» для flavor'ов** и сборка arm64 только под arm64 — тогда образы `browser`/`full`/`devops` не появятся в multi-arch.
+
+### Реализация шага 2: стадии `docker/Dockerfile.backend`
+
+```text
+build  (--platform=$BUILDPLATFORM)  — сборка монорепо, pnpm deploy, chmod
+core   (целевая платформа, с RUN)  — all-in-one: control plane + toolchain
+slim   (целевая платформа, без RUN) — control plane без toolchain'а; ПОСЛЕДНЯЯ
+                                       стадия ⇒ сборка без --target даёт ровно
+                                       прежний slim-образ
+```
+
+`--target core` — all-in-one образ; `--target slim` — control plane. Стадия `core` копирует приложение из `build` (JS/архитектурно-независимо) и добавляет слои toolchain'а.
+
+**Решение по arm64 — вариант A: per-arch сборка flavor'ов.** Flavor-стадия содержит `RUN` (установка пакетов) и потому собирается под целевую архитектуру; arm64-сборка flavor'а требует QEMU/binfmt на раннере. Обоснование:
+
+1. `core` — основной публикуемый flavor; отказ от arm64 (вариант B) оставил бы arm64-пользователей без all-in-one — это функциональный пробел (невозможен inline-режим с toolchain'ом), а не только публикационная особенность;
+2. все пакеты `core` есть в alpine-репозиториях для обеих архитектур — цена эмуляции ограничена одним слоем `apk add` (+1–3 мин на QEMU);
+3. путь `slim` не меняется: в нём по-прежнему нет ни одного `RUN`, поэтому multi-arch slim продолжает собираться на amd64-раннере без QEMU — релиз slim не регрессирует, эмуляция нужна только flavor'ам;
+4. требование к CI становится явным: регистрация QEMU/binfmt на раннере (или нативный arm64-раннер) — шаг 6; без неё публикация flavor'а для arm64 деградирует до amd64-only (best-effort, как сегодня arm64-slim), но релиз не ломается.
+
+Техническая деталь: явный `--platform=${TARGETPLATFORM}` в flavor-стадии **недопустим** — kaniko автоматические ARG-платформы не задаёт (проверено на kaniko v1.24.0: `BUILDPLATFORM` и `TARGETPLATFORM` пустые), а kaniko — amd64-билдер в CI. Стадия `core` оставлена **без явного `--platform`**: под buildx она собирается под `$TARGETPLATFORM`, под kaniko — под его собственный arch. Синтаксис `${BUILDPLATFORM:-linux/amd64}` в стадии `build` сохранён (дефолт для kaniko/legacy `docker build`).
 
 Сейчас amd64 собирает kaniko, arm64 — buildx, затем best-effort manifest-list перезаписывает тег (`.gitverse/workflows/release.yaml:377-390`, `.gitverse/workflows/release.yaml:433-448`, `.gitverse/workflows/release.yaml:453-461`).
 
@@ -240,7 +284,7 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 
 1. **Порт исполнения** `ExecutionPort.execute(req) → ExecResult` (`req`: `{ command, cwd, env?, timeoutMs?, stdin? }`; `ExecResult`: `{ stdout, stderr, exitCode, truncated, durationMs }`) + реализации `InlineExecutionPort` (обёртка над текущими in-process вызовами: `packages/core/src/engine/tools/shell.ts:45`, `packages/core/src/engine/tools/search.ts:49`, `packages/core/src/engine/tools/git.ts:30`, `packages/core/src/git/git-service.ts:132`) и `RemoteExecutionPort`. Рефакторинг **без изменения поведения**; контрактный suite по образцу слоя хранения (`packages/core/src/storage/contract/index.ts`).
 2. **Секция `execution`** в конфиге: `packages/shared/src/config/types.ts` + `defaults.ts` + `resolve.ts` — `mode`, `remote.url`, `remote.timeoutMs`, `remote.concurrency`, `remote.failMode`, `remote.tokenSecret`; env `SYNTH_EXECUTION_*`; CLI-флаг `--execution-mode`; **fail-closed** на неизвестном `mode` (образец — `packages/shared/src/config/resolve.ts:283-306`); значение токена в конфиге не хранится (инвариант 13).
-3. **Multistage Dockerfile** с flavor-таргетами (`slim`/`core`/`dev`/`devops`/`browser`/`full`) и distro-aware скриптами тиров `docker/install-tier-N.sh` (единый список пакетов на тир, выбор `apk`/`apt`).
+3. **Multistage Dockerfile** с flavor-таргетами (`slim`/`core`/`dev`/`devops`/`browser`/`full`) и distro-aware скриптами тиров `docker/install-tier-N.sh` (единый список пакетов на тир, выбор `apk`/`apt`). *Шаг 2 (сделано): `docker/Dockerfile.backend` (стадии `build`/`core`/`slim`), `docker/install-hard-deps.sh`, `docker/install-tier-0.sh`, `docker/install-lib.sh`; flavor'ы `dev`/`devops`/`browser`/`full` — шаги 4–5.*
 4. **All-in-one образ** `synth-backend:<v>-<flavor>`: control plane + toolchain + рантайм исполнителя в одном контейнере; исполнитель — отдельный процесс с собственным `HOME`/env/лимитами.
 5. **Образ worker'а** `synth-executor:<v>-<flavor>`: toolchain-слои без node-приложения и без UI; entrypoint — рантайм исполнителя (PROP-077).
 6. **Реестры и публикация**: лёгкие flavor'ы — в `gitverse.ru`/`ghcr.io` (только версионные теги), тяжёлые (`dev`/`devops`/`browser`/`full`) — в Docker Hub; расширить `scripts/docker-cleanup.mjs` на новые репозитории; `imagePullSecrets` для backend'а и worker'а.
@@ -261,6 +305,7 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 - **docker в образе** — только CLI, **без** `docker.sock`.
 - **Инструмент сборки образов** — `buildah` (rootless) вместо `kaniko`; CI-билдер переводится на `buildah`.
 - **Судьба `slim`** — не сворачивается: это базовый образ control plane без toolchain'а (`synth-backend:<v>`).
+- **Per-arch vs «no RUN»** — **вариант A**: per-arch сборка flavor'ов (целевая стадия с `RUN`), arm64 требует QEMU/binfmt на раннере; `slim` остаётся multi-arch без эмуляции. Реализовано в `docker/Dockerfile.backend` (шаг 2), требование к CI — шаг 6.
 
 **Открыто:**
 
@@ -271,7 +316,6 @@ Managed-деплой сегодня — **одна** реплика backend'а, 
 - **Кастомные образы и доверие к ним** — кто может подменить toolchain (digest'ы, подпись, admission-проверка) — референс PROP-068 и «Изоляция/квоты» в PROP-077.
 - **Отдельный ли репозиторий/пакет для `synth-executor`** — код исполнителя в монорепо `packages/core` (образ собирается из исходников, как `docker/Dockerfile.backend:18`) или отдельный пакет/репозиторий с own release-циклом?
 - **Взаимодействие с PROP-068 (trust/scan)** — как бинари, запечённые в образ (MCP-серверы, tier-инструменты), проходят регистрацию/сканирование реестра скиллов и агентов?
-- **Per-arch vs «no RUN»** — какой из двух путей multistage-сборки берём для flavor'ов с архитектурно-зависимыми бинарниками (см. «Multistage-сборка»): per-arch сборка с QEMU или отказ от amd64→arm64 для тяжёлых flavor'ов?
 
 ## Зависимости
 
@@ -338,3 +382,4 @@ Split-топология технически возможна и при одн�
 ## История
 
 - 2026-10-21 — переработано: all-in-one образ (control plane + toolchain + исполнитель), образы worker'ов, flavor-матрица и единый переключатель топологии `execution.mode` (PROP-077).
+- 2026-10-21 — шаг 2: multistage `docker/Dockerfile.backend` (стадии `build`/`core`/`slim`), distro-aware скрипты тиров, flavor `core` (hard deps + tier 0) — решение по arm64: **вариант A** (per-arch, QEMU/binfmt для flavor'ов; `slim` без `RUN` — multi-arch без эмуляции).

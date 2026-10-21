@@ -1,11 +1,30 @@
 # Образ synth-backend собирается из ИСХОДНИКОВ монорепо (packages/backend),
 # чтобы Image содержал актуальный код (OIDC/Keycloak, env-провайдеры).
 #
-# multi-arch (amd64/arm64): стадия сборки идёт на платформе билдера
+# Стадии (PROP-082, «Multistage-сборка»):
+#   build — сборка монорепо (платформа билдера, `$BUILDPLATFORM`);
+#   core  — flavor `core`: all-in-one = control plane + toolchain
+#           (hard deps + tier 0). Здесь ЕСТЬ `RUN` (установка пакетов);
+#   slim  — control plane без toolchain'а. ПОСЛЕДНЯЯ стадия: сборка без
+#           `--target` даёт ровно этот образ (регрессия slim недопустима).
+#
+# multi-arch (amd64/arm64) для slim: стадия сборки идёт на платформе билдера
 # (`$BUILDPLATFORM`), runtime — на целевой. В runtime-стадии нет RUN (chmod
 # перенесён в стадию сборки, COPY сохраняет права), поэтому arm64 собирается
 # на amd64-раннере без QEMU/binfmt. `${BUILDPLATFORM:-linux/amd64}` — дефолт
 # для kaniko/legacy `docker build`.
+#
+# Архитектурное ограничение для flavor'ов (решение A — PROP-082):
+# установка пакетов требует `RUN` в ЦЕЛЕВОЙ архитектуре, поэтому стадия
+# `core` собирается под целевую платформу, и arm64-сборка flavor'а требует
+# QEMU/binfmt на раннере. Стадия `core` намеренно БЕЗ явного `--platform`:
+#   * buildx — стадия без `--platform` собирается под $TARGETPLATFORM ✓;
+#   * kaniko — kaniko автоматические ARG-платформы НЕ задаёт (проверено на
+#     kaniko v1.24.0: BUILDPLATFORM и TARGETPLATFORM пустые), а kaniko —
+#     amd64-билдер в CI, и он собирает под свой собственный arch.
+# Явный `--platform=${TARGETPLATFORM}` поставил бы kaniko-сборку в fail-closed
+# (пустое значение), а дефолт `linux/amd64` сломал бы нативную arm64-сборку.
+# Для slim-стадии поведение не меняется: там по-прежнему нет ни одного `RUN`.
 ARG BUILDPLATFORM
 
 FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS build
@@ -23,7 +42,7 @@ COPY . .
 # `@itphx/synth-storage-postgres` — опциональный БД-драйвер слоя хранения
 # (PROP-032/ADR-097), обязательный для `storage.backend=postgres`. Его нужно и
 # установить, и собрать: `pnpm deploy` переносит workspace-пакеты по их `files`
-# (только `dist`), поэтому непособранный пакет уехал бы в образ без кода.
+# (только `dist`), поэтому непособанный пакет уехал бы в образ без кода.
 # `--prod`/`--legacy` (ниже) optional-зависимости не выкидывают; `--no-optional`
 # использовать нельзя.
 RUN pnpm install --filter @itphx/synth-backend --filter @itphx/synth-core --filter @itphx/synth-shared --filter @itphx/synth-storage-postgres \
@@ -45,7 +64,75 @@ RUN mkdir -p /out && pnpm --filter @itphx/synth-backend deploy --prod --legacy /
 # без эмуляции).
 RUN chmod -R a+rX /out/app /repo/packages/backend/dist
 
-FROM node:22-alpine
+# ------------------------------------------------------------------------------
+# flavor `core` — all-in-one: control plane + toolchain (PROP-082)
+# ------------------------------------------------------------------------------
+#
+# Toolchain: hard deps (git, ripgrep, python3 + pip + venv, openssh-client,
+# ca-certificates) + tier 0 (bash, curl, jq, yq, unzip/zip, xz, zstd, GNU
+# coreutils/findutils/grep/sed/gawk, less, tree, openssl). Состав зафиксирован
+# в PROP-082; списки пакетов — в docker/install-hard-deps.sh и
+# docker/install-tier-0.sh (distro-aware: один список на тир, выбор apk/apt).
+FROM node:22-alpine AS core
+
+# OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
+# репозиторием-источником (иначе GitHub Packages не показывает связь и
+# унаследованные права доступа). Для GitVerse-сборки (kaniko) метки инертны.
+LABEL org.opencontainers.image.source="https://github.com/itphx/synth"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.title="Synth Backend (core)"
+LABEL org.opencontainers.image.description="Synth backend all-in-one: control plane (OIDC/RBAC, runner registry, LLM proxy) + toolchain (hard deps + tier 0)."
+
+ENV NODE_ENV=production
+ENV SYNTH_DATA_DIR=/var/synth/data
+ENV SYNTH_PORT=5000
+
+# Toolchain. Скрипты distro-aware и идемпотентны: apk/apt пропускают уже
+# установленное, интерактива нет.
+COPY docker/install-lib.sh docker/install-hard-deps.sh docker/install-tier-0.sh /tmp/synth-install/
+RUN set -eux; \
+    sh /tmp/synth-install/install-hard-deps.sh; \
+    sh /tmp/synth-install/install-tier-0.sh; \
+    rm -rf /tmp/synth-install
+
+# Каталоги пользователя uid 1000 и его HOME. Причина: чарт запускает backend
+# с runAsUser: 1000 (charts/synth/values.yaml), а HOME по умолчанию /root —
+# не writable, из-за чего `pip install --user` и кэши python падают с EACCES.
+#
+# В базовом образе node:22-alpine uid/gid 1000 уже заняты пользователем
+# `node` (busybox adduser не даёт создать второго владельца uid 1000), поэтому
+# отдельная учётная запись не создаётся — важен сам uid: каталоги принадлежат
+# 1000:1000, и процесс под runAsUser: 1000 пишет в них без правки.
+RUN set -eux; \
+    mkdir -p /home/synth/.cache/pip /home/synth/.local /var/synth/data; \
+    chown -R 1000:1000 /home/synth /var/synth/data
+
+# Python-окружение и кэши (PROP-082, «Python-окружение и кэши»): HOME,
+# PYTHONUSERBASE и PIP_CACHE_DIR указывают в каталоги uid 1000 — при запуске
+# от runAsUser: 1000 они writable, а кэш pip переживает перезапуск контейнера,
+# если каталог смонтирован на volume (volume + fsGroup — шаг 7/12).
+ENV HOME=/home/synth
+ENV PYTHONUSERBASE=/home/synth/.local
+ENV PIP_CACHE_DIR=/home/synth/.cache/pip
+
+COPY --from=build /out/app /app
+
+# Скомпилированный код backend поверх pnpm deploy.
+COPY --from=build /repo/packages/backend/dist /app/dist
+
+WORKDIR /app
+# Права (a+rX) выставлены в стадии сборки, здесь только читаем из образа.
+CMD ["node", "dist/main.js"]
+
+# ------------------------------------------------------------------------------
+# slim — control plane без toolchain'а (последняя стадия = цель по умолчанию)
+# ------------------------------------------------------------------------------
+#
+# Содержимое стадии — ровно то, что было до появления flavor'ов: ни одного
+# `RUN`, только COPY/ENV/LABEL/CMD. Поэтому образ `synth-backend:<v>` не
+# меняется ни байтом по составу и продолжает собираться под arm64 на
+# amd64-раннере без QEMU/binfmt.
+FROM node:22-alpine AS slim
 
 # OCI-метки: org.opencontainers.image.source связывает пакет в GHCR с
 # репозиторием-источником (иначе GitHub Packages не показывает связь и
